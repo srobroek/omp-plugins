@@ -55,9 +55,12 @@ def build() -> tuple[str, str]:
             "changelog-path": "CHANGELOG.md",
             # The version lives in the plugin manifest; `scripts/build-catalog.py`
             # then aggregates all of them into the catalog OMP actually reads.
-            "extra-files": [
-                {"type": "json", "path": f"{name}/.omp-plugin/plugin.json", "jsonpath": "$.version"}
-            ],
+            #
+            # `extra-files` paths are resolved relative to the PACKAGE directory, not
+            # the repository root. A repo-root-relative path here silently doubles the
+            # prefix (`safety/safety/.omp-plugin/plugin.json`) and the bump lands in a
+            # file that does not exist.
+            "extra-files": [{"type": "json", "path": ".omp-plugin/plugin.json", "jsonpath": "$.version"}],
         }
         for name in versions
     }

@@ -48,7 +48,7 @@
       "extra-files": [
         {
           "type": "json",
-          "path": "architecture/.omp-plugin/plugin.json",
+          "path": ".omp-plugin/plugin.json",
           "jsonpath": "$.version"
         }
       ]
@@ -60,7 +60,7 @@
       "extra-files": [
         {
           "type": "json",
-          "path": "authoring/.omp-plugin/plugin.json",
+          "path": ".omp-plugin/plugin.json",
           "jsonpath": "$.version"
         }
       ]
@@ -72,7 +72,7 @@
       "extra-files": [
         {
           "type": "json",
-          "path": "backend/.omp-plugin/plugin.json",
+          "path": ".omp-plugin/plugin.json",
           "jsonpath": "$.version"
         }
       ]
@@ -84,7 +84,7 @@
       "extra-files": [
         {
           "type": "json",
-          "path": "beads/.omp-plugin/plugin.json",
+          "path": ".omp-plugin/plugin.json",
           "jsonpath": "$.version"
         }
       ]
@@ -96,7 +96,7 @@
       "extra-files": [
         {
           "type": "json",
-          "path": "build/.omp-plugin/plugin.json",
+          "path": ".omp-plugin/plugin.json",
           "jsonpath": "$.version"
         }
       ]
@@ -108,7 +108,7 @@
       "extra-files": [
         {
           "type": "json",
-          "path": "chezmoi/.omp-plugin/plugin.json",
+          "path": ".omp-plugin/plugin.json",
           "jsonpath": "$.version"
         }
       ]
@@ -120,7 +120,7 @@
       "extra-files": [
         {
           "type": "json",
-          "path": "coexistence/.omp-plugin/plugin.json",
+          "path": ".omp-plugin/plugin.json",
           "jsonpath": "$.version"
         }
       ]
@@ -132,7 +132,7 @@
       "extra-files": [
         {
           "type": "json",
-          "path": "data/.omp-plugin/plugin.json",
+          "path": ".omp-plugin/plugin.json",
           "jsonpath": "$.version"
         }
       ]
@@ -144,7 +144,7 @@
       "extra-files": [
         {
           "type": "json",
-          "path": "debate/.omp-plugin/plugin.json",
+          "path": ".omp-plugin/plugin.json",
           "jsonpath": "$.version"
         }
       ]
@@ -156,7 +156,7 @@
       "extra-files": [
         {
           "type": "json",
-          "path": "delivery/.omp-plugin/plugin.json",
+          "path": ".omp-plugin/plugin.json",
           "jsonpath": "$.version"
         }
       ]
@@ -168,7 +168,7 @@
       "extra-files": [
         {
           "type": "json",
-          "path": "dep-update/.omp-plugin/plugin.json",
+          "path": ".omp-plugin/plugin.json",
           "jsonpath": "$.version"
         }
       ]
@@ -180,7 +180,7 @@
       "extra-files": [
         {
           "type": "json",
-          "path": "docs/.omp-plugin/plugin.json",
+          "path": ".omp-plugin/plugin.json",
           "jsonpath": "$.version"
         }
       ]
@@ -192,7 +192,7 @@
       "extra-files": [
         {
           "type": "json",
-          "path": "eli5/.omp-plugin/plugin.json",
+          "path": ".omp-plugin/plugin.json",
           "jsonpath": "$.version"
         }
       ]
@@ -204,7 +204,7 @@
       "extra-files": [
         {
           "type": "json",
-          "path": "find-tools/.omp-plugin/plugin.json",
+          "path": ".omp-plugin/plugin.json",
           "jsonpath": "$.version"
         }
       ]
@@ -216,7 +216,7 @@
       "extra-files": [
         {
           "type": "json",
-          "path": "go/.omp-plugin/plugin.json",
+          "path": ".omp-plugin/plugin.json",
           "jsonpath": "$.version"
         }
       ]
@@ -228,7 +228,7 @@
       "extra-files": [
         {
           "type": "json",
-          "path": "infrastructure/.omp-plugin/plugin.json",
+          "path": ".omp-plugin/plugin.json",
           "jsonpath": "$.version"
         }
       ]
@@ -240,7 +240,7 @@
       "extra-files": [
         {
           "type": "json",
-          "path": "ops/.omp-plugin/plugin.json",
+          "path": ".omp-plugin/plugin.json",
           "jsonpath": "$.version"
         }
       ]
@@ -252,7 +252,7 @@
       "extra-files": [
         {
           "type": "json",
-          "path": "orchestration/.omp-plugin/plugin.json",
+          "path": ".omp-plugin/plugin.json",
           "jsonpath": "$.version"
         }
       ]
@@ -264,7 +264,7 @@
       "extra-files": [
         {
           "type": "json",
-          "path": "project/.omp-plugin/plugin.json",
+          "path": ".omp-plugin/plugin.json",
           "jsonpath": "$.version"
         }
       ]
@@ -276,7 +276,7 @@
       "extra-files": [
         {
           "type": "json",
-          "path": "python/.omp-plugin/plugin.json",
+          "path": ".omp-plugin/plugin.json",
           "jsonpath": "$.version"
         }
       ]
@@ -288,7 +288,7 @@
       "extra-files": [
         {
           "type": "json",
-          "path": "quality/.omp-plugin/plugin.json",
+          "path": ".omp-plugin/plugin.json",
           "jsonpath": "$.version"
         }
       ]
@@ -300,7 +300,7 @@
       "extra-files": [
         {
           "type": "json",
-          "path": "research/.omp-plugin/plugin.json",
+          "path": ".omp-plugin/plugin.json",
           "jsonpath": "$.version"
         }
       ]
@@ -312,7 +312,7 @@
       "extra-files": [
         {
           "type": "json",
-          "path": "review/.omp-plugin/plugin.json",
+          "path": ".omp-plugin/plugin.json",
           "jsonpath": "$.version"
         }
       ]
@@ -324,7 +324,7 @@
       "extra-files": [
         {
           "type": "json",
-          "path": "rust/.omp-plugin/plugin.json",
+          "path": ".omp-plugin/plugin.json",
           "jsonpath": "$.version"
         }
       ]
@@ -336,7 +336,7 @@
       "extra-files": [
         {
           "type": "json",
-          "path": "safety/.omp-plugin/plugin.json",
+          "path": ".omp-plugin/plugin.json",
           "jsonpath": "$.version"
         }
       ]
@@ -348,7 +348,7 @@
       "extra-files": [
         {
           "type": "json",
-          "path": "session/.omp-plugin/plugin.json",
+          "path": ".omp-plugin/plugin.json",
           "jsonpath": "$.version"
         }
       ]
@@ -360,7 +360,7 @@
       "extra-files": [
         {
           "type": "json",
-          "path": "shell/.omp-plugin/plugin.json",
+          "path": ".omp-plugin/plugin.json",
           "jsonpath": "$.version"
         }
       ]
@@ -372,7 +372,7 @@
       "extra-files": [
         {
           "type": "json",
-          "path": "terraform/.omp-plugin/plugin.json",
+          "path": ".omp-plugin/plugin.json",
           "jsonpath": "$.version"
         }
       ]
@@ -384,7 +384,7 @@
       "extra-files": [
         {
           "type": "json",
-          "path": "toolchain/.omp-plugin/plugin.json",
+          "path": ".omp-plugin/plugin.json",
           "jsonpath": "$.version"
         }
       ]
@@ -396,7 +396,7 @@
       "extra-files": [
         {
           "type": "json",
-          "path": "typescript/.omp-plugin/plugin.json",
+          "path": ".omp-plugin/plugin.json",
           "jsonpath": "$.version"
         }
       ]
@@ -408,7 +408,7 @@
       "extra-files": [
         {
           "type": "json",
-          "path": "whats-new/.omp-plugin/plugin.json",
+          "path": ".omp-plugin/plugin.json",
           "jsonpath": "$.version"
         }
       ]
