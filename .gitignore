@@ -1,0 +1,17 @@
+# macOS
+.DS_Store
+
+# Python bytecode from scripts/
+__pycache__/
+*.py[cod]
+
+# Editor and tool state
+.vscode/
+.idea/
+*.swp
+
+# OMP and Claude plugin install state, written when this repo is added as a
+# local marketplace source during testing
+omp-plugins.lock.json
+installed_plugins.json
+node_modules/

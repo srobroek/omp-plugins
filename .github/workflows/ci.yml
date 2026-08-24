@@ -1,0 +1,43 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      # OMP identifies a skill, agent, rule, or command by its bare `name` and keeps
+      # the first match across every source, so a duplicate name silently shadows the
+      # other plugin. `omp plugin doctor` only inspects one installed plugin, so this
+      # repository-wide check has no native equivalent.
+      - name: Capability name collisions
+        run: python3 scripts/check-duplicate-names.py
+
+      - name: Catalog JSON is parseable
+        run: |
+          for f in .omp-plugin/marketplace.json .claude-plugin/marketplace.json; do
+            if [ -f "$f" ]; then
+              python3 -c "import json,sys; json.load(open('$f')); print('$f ok')"
+            fi
+          done
+
+      - name: Plugin manifests are parseable
+        run: |
+          found=0
+          while IFS= read -r -d '' f; do
+            python3 -c "import json,sys; json.load(open('$f'))" || exit 1
+            found=$((found + 1))
+          done < <(find . -path ./node_modules -prune -o -name plugin.json -print0)
+          echo "checked $found plugin manifest(s)"
+
+      - name: Prose gate
+        run: uvx slopvac README.md --profile normal
