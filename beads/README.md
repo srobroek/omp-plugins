@@ -16,7 +16,6 @@ Install this plugin in any repository that has a `.beads/` directory.
 
 ## Rules
 
-`beads-index` is always applied and lists the rest; every other rule is fetched on demand
 through `rule://<name>`.
 
 | Rule | Covers |
@@ -34,7 +33,6 @@ through `rule://<name>`.
 
 ## Notes
 
-The rule bodies carry the sync-hook policy from the legacy package, including the Dolt-first
-ordering and the JSONL-over-git fallback. Those hooks were Claude and Codex session-event
-scripts; OMP has no equivalent event, so the policy is documented here and the hooks
-themselves did not migrate.
+Sync policy lives in the rule bodies, with `bd config` as the mechanism
+(Dolt-first, one detached push per session, JSONL-over-git as fallback).
+Claude and Codex session-event hooks did not migrate.

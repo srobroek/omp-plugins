@@ -129,7 +129,7 @@
     },
     {
       "name": "project",
-      "description": "Project lifecycle: brownfield onboarding, license selection, goal writing, and user journeys.",
+      "description": "Project lifecycle: brownfield onboarding, license selection, and user journeys.",
       "source": "./project",
       "version": "0.1.0",
       "category": "productivity"

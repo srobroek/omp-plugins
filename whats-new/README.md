@@ -12,7 +12,6 @@ Research breaking changes, deprecations, and new features between the version in
 
 | Name | When |
 |------|------|
-| `whats-new-index` | Always-apply pointer at the skill |
 
 ## Agents
 

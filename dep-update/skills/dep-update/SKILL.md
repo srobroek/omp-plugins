@@ -13,17 +13,17 @@ TRIGGER
 
 ## Workflow
 
-1. `skill://dep-update/scripts/detect.py [dir]` -- enumerates deps as `ecosystem<TAB>name<TAB>version`.
+1. Run the `dep_scan` tool (params: `path`, optional `offline_fixture_dir`) -- it
+   enumerates deps and classifies every bump. For rust and go, use the endpoints in
+   `skill://dep-update/references/recipes.md`.
 2. If `.project-setup/answers.toml` exists, read the baseline pins from
    `[module.lang-python]` / `[module.lang-ts]` (keys in `skill://dep-update/references/recipes.md`).
    Absent file or section → continue silently on lockfile data alone.
-3. `skill://dep-update/scripts/research.py [dir]` -- queries PyPI/npm, classifies each bump, emits
-   JSON-lines. For rust and go, use the endpoints in `skill://dep-update/references/recipes.md`.
-4. Run the CVE scanners below.
-5. For MINOR-CHECK and MAJOR-ADVISORY, fetch changelog prose in the order given
+3. Run the CVE scanners below.
+4. For MINOR-CHECK and MAJOR-ADVISORY, fetch changelog prose in the order given
    in `skill://dep-update/references/recipes.md` and cite every source by URL or git tag.
-6. Present the plan, then run the apply loop.
-7. Summarize: N applied, M skipped, K advisory majors, J CVEs needing action.
+5. Present the plan, then run the apply loop.
+6. Summarize: N applied, M skipped, K advisory majors, J CVEs needing action.
 
 ## Plan format
 

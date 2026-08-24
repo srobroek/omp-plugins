@@ -7,10 +7,9 @@ description: Run and report a final local verification pass. Use when asked to v
 
 ## Preferred Flow
 
-1. Prefer project-native commands (`just verify`, `make verify`,
-   `package.json` scripts, `Makefile`/`justfile` targets,
-   language-specific quality skills).
-2. Otherwise run `skill://verify/scripts/verify.sh`.
+1. Prefer project-native quality skills when the change is language-scoped
+   (`typescript-quality`, `python-quality`, `go-quality`, `rust-quality`).
+2. For a final readiness pass, call `verify_repo`.
 3. Report what ran, what was skipped, and what failed.
 4. Distinguish environment gaps from real code or test failures.
 5. If the repo is polyglot, explain which checks were selected and why.
@@ -21,11 +20,4 @@ description: Run and report a final local verification pass. Use when asked to v
 - Keep the report concrete: command, exit code, failure summary.
 - Never silently swallow failures -- report every non-zero exit.
 - This is a final readiness pass, not a replacement for focused language
-  quality skills such as `typescript-quality`, `python-quality`, `go-quality`,
-  or `rust-quality`.
-
-## Scripts
-
-| Script | Purpose |
-|--------|---------|
-| `skill://verify/scripts/verify.sh` | Polyglot verify runner (detects languages, runs checks) |
+  quality skills.

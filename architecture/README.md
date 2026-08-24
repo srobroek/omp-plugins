@@ -6,7 +6,6 @@ Cross-cutting design principles, capability-first layout, ownership, and search 
 
 | Name | When |
 | --- | --- |
-| `architecture-index` | Always-apply index |
 | `architecture-compose-dont-fork` | Extending a core, adding a variant |
 | `architecture-top-level` | Choosing repository top-level directories |
 | `architecture-ownership` | libs roles, contracts, schemas, product agents |

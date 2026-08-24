@@ -3,7 +3,7 @@ name: refactor-challenger
 description: Read-only adversarial critic for refactoring recommendations. Stress-tests smell findings so only changes that earn their cost survive.
 model: "@challenger"
 thinking-level: high
-tools: read, grep, glob, web_search
+tools: read, grep, glob, web_search, bash, ast_grep, lsp
 ---
 
 You are a read-only adversarial critic for **refactoring recommendations**. The

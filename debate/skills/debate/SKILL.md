@@ -5,7 +5,7 @@ description: Use when stress-testing an architectural decision, technology choic
 
 # Debate
 
-Analyze and debate: **$ARGUMENTS**
+Analyze and debate the topic from the user request.
 
 Start by running Phase 0 to sharpen the topic (three questions in one call). Use the `grill-me` skill when it is installed (upstream `mattpocock/skills`); if unavailable, ask the Phase 0 context questions inline. A well-formed topic makes a better debate.
 

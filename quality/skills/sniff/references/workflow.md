@@ -55,15 +55,15 @@ than the whole repo, resolve it before detecting the stack. LOAD
 1. an explicit, deduplicated **file list** (drop deleted/binary/generated/vendored),
 2. a **base ref** when the target is a diff/commit/range/branch/PR,
 3. a **materialization** decision -- operate **in place** (working tree, module,
-   files) or **check the ref out into a throwaway git worktree** (commit, range,
-   branch, PR) so tools read the code as it is at that ref.
+   files) or **check the ref out via `isolated: true` / a Worktrunk lease**
+   (commit, range, branch, PR) so tools read the code as it is at that ref.
 
 Echo the resolved file list (or count + sample) so the user confirms scope before
 any tool runs. Every later step operates on this file list (and, for ref targets,
-inside the worktree). Whole-repo runs skip this step.
+inside the isolated checkout). Whole-repo runs skip this step.
 
 **Report:** the target kind, resolved file count, base ref (if any), and whether
-a worktree was created.
+an isolated checkout was created.
 
 ## Step 1 -- Reduce file set & detect stack
 
@@ -252,7 +252,7 @@ none).
    confirmation and use the computed default.)
 
 When you fan out: build each Brief from `skill://sniff/references/scout-brief.md` -- pass the
-**resolved target file list** (and the worktree path, for ref targets) as the
+**resolved target file list** (and the isolated checkout path, for ref targets) as the
 Scope so each agent reads only the target. The language-reference field MUST be
 `skill://sniff/references/languages/<lang>.md` (or the installed skill's absolute
 path to that file), because the agent's cwd is the target repository. Collect
@@ -266,7 +266,7 @@ see) plus **verifying/contextualizing** the handed findings -- NOT re-running
 clippy/ruff/eslint. Re-running wastes a compile and risks a *different*
 (config-blind) invocation than Step 3 used. Only ask a hound to run a tool itself
 when Step 3 did **not** cover it for that language (e.g. quick mode skipped it,
-or a tool became available only inside the worktree).
+or a tool became available only inside the isolated checkout).
 
 Every finding must cite a specific `file:line`. No guessing.
 
@@ -287,8 +287,8 @@ where the field is blank or the URL only appears in surrounding prose is
 incomplete. Findings with no catalog analogue (e.g. a pure runtime bug, a
 tool-specific lint) say "--" explicitly rather than being left ambiguous.
 
-Use the baked catalog as the index. Fetch the full technique page (via the
-web-fetch/fetcher tool) **only** when a finding needs step-by-step mechanics the
+Use the baked catalog as the index. Fetch the full technique page (via native
+`read` on the URL) **only** when a finding needs step-by-step mechanics the
 index summary does not give. Do not fetch on every finding.
 
 ## Step 6 -- Adversarial pass (pragmatism filter)

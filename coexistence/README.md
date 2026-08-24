@@ -7,5 +7,4 @@ stolen checkout rather than fighting for it.
 
 | Name | When |
 | --- | --- |
-| `coexistence-index` | Always-apply index. |
 | `coexistence-worktree` | Shared repo, interference, unexpected branch switch. |

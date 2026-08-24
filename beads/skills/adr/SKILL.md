@@ -112,11 +112,9 @@ re-superseding it per release destroys that.
 Never edit a file under `docs/adr/`. It is regenerated from its bead on the next
 commit and the edit is destroyed. Edit the bead.
 
-A `PreToolUse` guard enforces that rather than trusting a banner: it denies a
-`Write`, `Edit`, or Codex `apply_patch` to a generated ADR and names the bead plus
-the command to use.
-Only files carrying the generated marker are denied, so a hand-authored ADR in a
-repository that does not run the renderer stays editable.
+OMP injects this via the `beads-adr-generated-guard` TTSR rule (advisory,
+not abort): the file is regenerated from the bead. Hand-authored ADRs stay
+editable.
 
 ## Installing the hook
 

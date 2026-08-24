@@ -11,12 +11,20 @@ Audit agent configuration surfaces for issues, then apply R1-R7 rewrites to fix 
 
 1. **Lint scan**: Run `agnix --show-fixes` on config directories. Categorize findings as real errors, false positives, or auto-fixable.
 2. **Hook efficiency**: Count hooks per event type. Flag unconditional Bash hooks, duplicate references, prompt-type hooks doing pure string checks.
-3. **Duplication scan**: Cross-reference CLAUDE.md, rules, hooks, and skills. Flag policies stated in 2+ places, and rules that hooks enforce mechanically.
-4. **Stale file detection**: Empty rule files, unreferenced agent files, outdated memory entries, empty directories.
-5. **Token budget**: Identify always-loaded rules without glob scoping. Flag files exceeding 5KB. Suggest lazy-loading candidates.
-6. **Bootstrap leakage**: Global/bootstrap skills that are present as project-local copies when they should remain global.
-7. **AGENTS.md minimality**: Root `AGENTS.md` should stay minimal when APM owns detail; scoped `AGENTS.md` files should be path-specific.
-8. **Claude rules scope**: Claude rules should not duplicate large global content.
+3. **Duplication scan**: Cross-reference `AGENTS.md`, rules, skills, and agent
+   definitions. Flag policies stated in 2+ places, and rules that tools enforce
+   mechanically. The native `<domain-rules>` listing already renders every rule
+   name + description; always-apply indexes that duplicate it are waste.
+4. **Stale file detection**: Empty rule files, unreferenced agent files, outdated
+   memory entries, empty directories.
+5. **Token budget**: Identify always-apply rules that should be rulebook or TTSR
+   instead. Flag files exceeding 5KB. Suggest lazy-loading candidates.
+6. **Bootstrap leakage**: Global/bootstrap skills that are present as project-local
+   copies when they should remain global.
+7. **AGENTS.md minimality**: Root `AGENTS.md` should stay a thin context file;
+   scoped `AGENTS.md` files should be path-specific.
+8. **Rule buckets**: Sort each rule as alwaysApply, rulebook (`globs` / on-demand),
+   or TTSR (`condition` + `scope`). Do not dump large global content into alwaysApply.
 
 ## Phase 2 -- Optimize (fix issues)
 

@@ -12,7 +12,6 @@ Classify lockfile/manifest dependencies by semver safety and apply patch/minor b
 
 | Name | When |
 |------|------|
-| `dep-update-index` | Always-apply pointer at the skill |
 
 ## Agents
 

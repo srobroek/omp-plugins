@@ -8,7 +8,6 @@ Does not tell the agent to prefer `rg`/`fd`/`eza`/`bat` in bash: OMP routes thos
 
 | Name | When |
 | --- | --- |
-| `toolchain-index` | Always-apply index. |
 | `toolchain-stack-defaults` | Stack, package manager, task runner, deps. |
 | `toolchain-frontend` | Frontend framework / state. |
 | `toolchain-infrastructure` | Infra tool choice. |

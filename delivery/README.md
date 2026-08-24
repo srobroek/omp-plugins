@@ -12,6 +12,5 @@ Commit/push cadence, git workflow (branch, ship, merge proof, beads merge-queue 
 
 | Name | When |
 | --- | --- |
-| `delivery-index` | Always-apply index. |
 | `delivery-cadence` | Continuous atomic commit and push. |
 | `delivery-git-workflow` | Branching, PRs, landing proof, GW-1/GW-2. |

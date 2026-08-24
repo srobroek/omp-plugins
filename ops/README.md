@@ -11,5 +11,4 @@ Telemetry agents and toolchain cache hygiene.
 
 ## Rules
 
-- `ops-index` (always-apply)
 - `ops-toolchain-cache-policy` — shared caches, worktree-local output, eviction knobs

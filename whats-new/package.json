@@ -3,5 +3,9 @@
   "version": "0.1.0",
   "description": "Research breaking changes, deprecations, and new features between two versions.",
   "private": true,
-  "omp": {}
+  "omp": {
+    "extensions": [
+      "./extensions/version-gap-tool.ts"
+    ]
+  }
 }

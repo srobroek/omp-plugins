@@ -245,18 +245,6 @@
         }
       ]
     },
-    "orchestration": {
-      "release-type": "simple",
-      "component": "orchestration",
-      "changelog-path": "CHANGELOG.md",
-      "extra-files": [
-        {
-          "type": "json",
-          "path": ".omp-plugin/plugin.json",
-          "jsonpath": "$.version"
-        }
-      ]
-    },
     "project": {
       "release-type": "simple",
       "component": "project",

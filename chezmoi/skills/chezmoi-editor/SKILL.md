@@ -7,6 +7,7 @@ description: Edits chezmoi-managed dotfiles at their authoritative source. Use w
 
 Use this skill when a task changes files managed by chezmoi. Resolve the managed
 source first; do not edit the rendered live target as the durable fix.
+The `chezmoi-guard` extension blocks edits to live chezmoi targets and reminds you to apply after source edits.
 
 ## Workflow
 

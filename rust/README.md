@@ -12,7 +12,6 @@ None.
 
 ## Rules
 
-Always-apply index: `rust-index`. On-demand (`rule://<name>`):
 
 - `rust-crate-boundaries` — crate splits, facades, adapters
 - `rust-domain-modeling` — thiserror, UUID v5, serde newtypes
@@ -23,3 +22,4 @@ Always-apply index: `rust-index`. On-demand (`rule://<name>`):
 - `rust-workspace` — workspace lints and layered tests
 - `rust-errors` — wire error-code registry and audit
 - `rust-tauri` — Tauri v2 bundles, updater, WebDriver
+- `rust-tauri-mcp-bridge` — driving a running Tauri app over the MCP bridge

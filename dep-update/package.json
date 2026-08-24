@@ -3,5 +3,9 @@
   "version": "0.1.0",
   "description": "Classify dependency updates by semver safety and produce a cited upgrade plan.",
   "private": true,
-  "omp": {}
+  "omp": {
+    "extensions": [
+      "./extensions/dep-scan-tool.ts"
+    ]
+  }
 }

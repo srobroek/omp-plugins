@@ -12,7 +12,6 @@ Discover and vet reusable skills, agents, and MCP servers. Surfaces are OMP-nati
 
 | Name | When |
 |------|------|
-| `find-tools-index` | Always-apply pointer at the skill |
 
 ## Agents
 

@@ -13,4 +13,3 @@ Implementation and mechanical-execution agents.
 
 ## Rules
 
-- `build-index` (always-apply) — empty rulebook; agents only

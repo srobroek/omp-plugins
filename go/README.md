@@ -12,5 +12,4 @@ Go language steering and the `go-quality` check skill.
 
 | Name | When |
 |------|------|
-| `go-index` | Always-apply index of this plugin's rulebook. |
 | `go-language` | Writing or reviewing Go sources (`**/*.go`). |

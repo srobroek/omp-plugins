@@ -79,7 +79,7 @@ audit fails stays `status: draft`.
 ## New journey
 
 1. Allocate the next free `J<n>` id (check INDEX.md; ids are never reused).
-2. Draft from `'/Users/sjors/.claude/skills/journey-init/templates/journey.template.md'`:
+2. Draft from `skill://journey-init/templates/journey.template.md`:
    - Steps are interface-agnostic user actions with observable `Expect:`
      assertions. Add `Expect (negative):` wherever trust depends on
      something NOT happening (no silent writes, no data loss).

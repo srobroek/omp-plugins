@@ -8,8 +8,7 @@ globs: ["**/.beads/**"]
 
 MUST Let the bd CLI own initialization and generated integration: bootstrap
   with `bd init --init-if-missing --skip-hooks`, then verify with
-  `bd where`, `bd setup claude --check`, `bd setup codex --check`, and
-  `bd hooks list`.
+  `bd where` and `bd hooks list`.
 GOTCHA Plain `bd init` repoints `core.hooksPath` at `.beads/hooks` and copies
   the hooks it displaces into it: 18 binaries, 349 MB, where the displaced path
   is a corporate hook bundle. On arm64 macOS the copies are not executable, so
@@ -19,12 +18,8 @@ GOTCHA Plain `bd init` repoints `core.hooksPath` at `.beads/hooks` and copies
 GOTCHA `bd init` derives a Dolt remote from `git remote origin` on its own.
   Where that database already exists it fails with `can't create database
   <prefix>; database exists`, leaving `.beads` without its `config.yaml`.
-MUST Repair an existing project's runtime integration with product commands:
-  `bd setup claude --project` and `bd setup codex`.
 MUST Use `bd hooks install --beads` only when the active project chose the
   product Git-hook bundle.
-NOT Copies of product lifecycle hooks, managed instruction blocks, skill, or
-  Git-hook shims in APM.
 DEFAULT Project setup follows the repository's Beads version; global setup is
   for repositories that do not install project integration, not redundancy.
 NOT `bd preflight` as an application quality gate -- Beads 1.1.0 hard-codes

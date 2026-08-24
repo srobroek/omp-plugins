@@ -9,7 +9,6 @@ Session continuity: recover prior work and hand over in-flight work.
 
 ## Rules
 
-- `session-index` — always-apply index (no topic rules)
 
 ## Agents
 

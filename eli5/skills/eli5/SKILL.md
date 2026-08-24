@@ -5,7 +5,7 @@ description: Explain a topic at five depth levels from metaphor to frontier. Use
 
 # ELI5
 
-Explain this topic: **$ARGUMENTS**
+Explain the topic from the user request.
 
 ## Staging
 

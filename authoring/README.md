@@ -13,4 +13,3 @@ Author and audit agentic assets (skills, rules, agents).
 
 | Name | When |
 |------|------|
-| `authoring-index` | Always-apply index (no additional topic rules) |

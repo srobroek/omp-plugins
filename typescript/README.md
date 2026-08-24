@@ -8,7 +8,6 @@ TypeScript and React architecture conventions, opinionated tooling defaults, and
 
 ## Rules
 
-- `typescript-index` — always-on index of the rulebook below.
 - `typescript-component-layout` — one layout primitive, slot props, barrels.
 - `typescript-state-data` — server vs client state, query facade, error seam.
 - `typescript-contract-boundary` — generated bindings, dispatch, envelope unwrap.

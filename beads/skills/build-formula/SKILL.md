@@ -62,8 +62,7 @@ that *pours* formulas instead.
 
 3. **LOAD a reference only when its step comes up** -- see the table below.
 
-4. **Verify before shipping.** Assert every selection against `bd mol pour --dry-run`, including
-   all-options-off. `scripts/assert-formula.py` runs the mechanical ones.
+4. **Verify before shipping.** Assert every selection, including all-options-off, with the `bd_formula_check` tool.
 
 ## Reference → when
 

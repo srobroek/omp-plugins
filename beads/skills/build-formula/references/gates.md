@@ -76,8 +76,7 @@ There is **no daemon**. Three patterns exist and no more:
 | Cron | `*/5 * * * * cd /path/to/repo && bd gate check` |
 | Agent hook | At session start, or after PR operations |
 
-`bd hooks` installs git hooks only; the Claude and Codex integrations install `SessionStart` to
-`bd prime` only. **Decide the runner before designing a non-`human` gate**, or it is decoration.
+`bd hooks` installs git hooks only; no agent-session runner installs gate execution. **Decide the runner before designing a non-`human` gate**, or it is decoration.
 
 `bd gate check --escalate` marks failed `gh:*` gates for attention -- that is what makes a CI-bounce path
 work.

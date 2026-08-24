@@ -86,8 +86,10 @@ def check_rule(path: Path, plugin: str, fail: list[str]) -> str | None:
             fail.append(f"{path}: `{key}:` is empty, which the fallback parser drops (use flow YAML)")
 
     if stem == f"{plugin}-index":
-        if not always:
-            fail.append(f"{path}: the index rule must set alwaysApply: true")
+        # OMP natively renders every rulebook rule as `- name (globs): description`
+        # in the system prompt's domain-rules block, so an always-apply index that
+        # lists the same rules is injected twice: pure token waste. Verified live.
+        fail.append(f"{path}: always-apply index duplicates the native domain-rules listing; delete it")
         return None
     return stem
 
@@ -150,23 +152,11 @@ def main() -> int:
         if not (plugin / "README.md").is_file():
             fail.append(f"{name}: missing README.md")
 
-        rules = sorted(plugin.glob("rules/*.md"))
-        listed = []
-        for path in rules:
+        for path in sorted(plugin.glob("rules/*.md")):
             counts["rules"] += 1
             got = check_rule(path, name, fail)
             if got:
-                listed.append(got)
                 seen.setdefault(("rule", got), []).append(str(path.relative_to(REPO)))
-
-        index = plugin / "rules" / f"{name}-index.md"
-        if rules and not index.is_file():
-            fail.append(f"{name}: has rules but no {name}-index.md always-apply index")
-        elif index.is_file():
-            body = index.read_text(encoding="utf-8", errors="replace")
-            for rule in listed:
-                if rule not in body:
-                    fail.append(f"{index}: does not mention rule {rule!r}")
 
         for path in sorted(plugin.glob("agents/*.md")):
             counts["agents"] += 1

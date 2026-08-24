@@ -12,7 +12,6 @@ Stress-test an architectural decision, technology choice, or feature proposal fr
 
 | Name | When |
 |------|------|
-| `debate-index` | Always-apply pointer at the skill |
 
 ## Agents
 

@@ -40,9 +40,8 @@ Honor whatever the user supplies; only discover the rest.
 
 ## Workflow
 
-1. **Resolve the target and its kind.** If named, use it. Otherwise run
-   `skill://whats-new/scripts/detect.py [dir]` with Python 3.11 or newer (it uses the standard
-   library's `tomllib`) to list declared dependencies. If `detect.py` returns
+1. **Resolve the target and its kind.** If named, use it. Otherwise run the
+   `version_gap_scan` tool to list declared dependencies. If it returns
    more than one equally plausible candidate, list them and ask.
    Decide: versioned software or service/stream.
 
@@ -84,6 +83,6 @@ Honor whatever the user supplies; only discover the rest.
 
 | Script | Purpose |
 |--------|---------|
-| `skill://whats-new/scripts/detect.py` | No-network enumeration of declared dependencies + pinned versions across ecosystems. |
+| `version_gap_scan` tool | No-network enumeration of declared dependencies + pinned versions across ecosystems. |
 
 For everything network-facing use the commands in `skill://whats-new/references/recipes.md`.

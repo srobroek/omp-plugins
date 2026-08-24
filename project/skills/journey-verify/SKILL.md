@@ -10,7 +10,7 @@ directory is normative; read it plus `README.md` (config) and the target
 `journey.md` files first.
 
 Formula templates and their copy helper live in this skill's directory:
-`'/Users/sjors/.claude/skills/journey-verify/formulas/*.formula.toml'` and `'/Users/sjors/.claude/skills/journey-verify/scripts/install_formulas.py'`.
+`skill://journey-verify/formulas/*.formula.toml` and `skill://journey-verify/scripts/install_formulas.py`.
 
 ## Beads formula provisioning
 

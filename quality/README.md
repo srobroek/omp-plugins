@@ -23,5 +23,4 @@ Smell audit, local verification, mechanical quality gates, and browser-verificat
 
 | Name | When |
 |------|------|
-| `quality-index` | Always-apply index |
 | `quality-browser-verification` | Browser-visible layout/interaction/rendering/state changes |

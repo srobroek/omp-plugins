@@ -15,7 +15,7 @@ two URL shapes the site actually uses:
 
 **Hybrid index + fetch:** this file is the index. When a finding needs the full
 step-by-step mechanics (numbered steps, before/after), fetch the specific
-technique's page URL with the web-fetch / fetcher tool. Do **not** fetch on every
+technique's page URL with native `read` on the URL. Do **not** fetch on every
 finding -- the index is enough to name and justify most fixes. Do not paste large
 verbatim copies of the site's prose into reports; cite the URL.
 

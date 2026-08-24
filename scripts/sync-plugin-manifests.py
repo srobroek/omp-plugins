@@ -55,12 +55,7 @@ PLUGINS: dict[str, tuple[str, str]] = {
     "research": ("productivity", "Investigation agents and bulk repository-packing recipes."),
     "project": (
         "productivity",
-        "Project lifecycle: brownfield onboarding, license selection, goal writing, and user journeys.",
-    ),
-    "orchestration": (
-        "productivity",
-        "Multi-agent orchestration over a durable beads DAG, merge-queue shepherding, "
-        "and a GitHub webhook sensor.",
+        "Project lifecycle: brownfield onboarding, license selection, and user journeys.",
     ),
     "beads": ("productivity", "Beads issue tracking: dependency DAGs, formulas, and decisions recorded as beads."),
     "toolchain": ("development", "Toolchain defaults, tools-versus-scripts layout, and pragmatic output rules."),
@@ -76,10 +71,7 @@ PLUGINS: dict[str, tuple[str, str]] = {
     "debate": ("productivity", "Stress-test a decision from both sides before committing."),
 }
 
-# `orchestration` ships its files but stays out of the catalog until `orchestrate`
-# itself lands: an entry pointing at a directory holding only the webhook sensor
-# would install something that cannot do its job.
-UNPUBLISHED = {"orchestration"}
+UNPUBLISHED: set[str] = set()
 
 
 def main() -> int:

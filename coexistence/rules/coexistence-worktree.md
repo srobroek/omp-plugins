@@ -26,16 +26,16 @@ Interference:
 - An actor interferes when it repeatedly overwrites your edits, deletes your
   in-progress files, or otherwise prevents you from making progress -- not
   when it merely touches the same repo.
-- On interference, proactively move to your own Worktrunk checkout
-  (`wt switch --create <branch> --base <base>`) if you were not already in
-  one, carry your work along, and continue there. Do not fight for the shared
-  checkout.
+- On interference, do not fight for the shared checkout. Humans and parallel
+  human checkouts stay on Worktrunk (`wt switch --create <branch> --base <base>`).
+  Agents move to an isolated task checkout (`isolated: true`) and continue there.
 
 Branch switched underneath you:
 
 - A branch switch you did not perform is usually two agents conflicting over
   one checkout. Do not panic and never switch back -- that only plays branch
   ping-pong with the other agent.
-- Instead: create a fresh Worktrunk checkout, cherry-pick your commits onto
-  it (stash-and-apply any uncommitted work), and continue from there. Leave
-  the contested checkout to the other agent.
+- Instead: agents create a fresh isolated checkout (`isolated: true`); humans
+  create a fresh Worktrunk checkout. Cherry-pick your commits onto it
+  (stash-and-apply any uncommitted work), and continue from there. Leave
+  the contested checkout to the other actor.

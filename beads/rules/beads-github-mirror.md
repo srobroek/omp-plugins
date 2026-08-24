@@ -59,8 +59,8 @@ MUST Pull by ref (`bd github pull <ref>`) when refreshing the issue a bead
   step.
 DEFAULT Push at a handoff boundary, where publishing local bead state is the
   point, and where the direction is safe: a push cannot clobber local work.
-NOT Any `bd github` verb on a per-tool-call hook. The cheapest is about 1s, an
-  order of magnitude over the whole PreToolUse budget.
+NOT Any `bd github` verb on a per-tool-call gate. The cheapest is about 1s, an
+  order of magnitude over any per-call budget.
 DEFAULT `task beads:{status,push,pull,pull-all,sync,preview}` wraps these with
   the token supplied per invocation. `beads:pull` refuses a bare call, so the
   slow path has to be named.

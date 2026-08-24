@@ -3,5 +3,9 @@
   "version": "0.1.0",
   "description": "Beads issue tracking: dependency DAGs, formulas, and decisions recorded as beads.",
   "private": true,
-  "omp": {}
+  "omp": {
+    "extensions": [
+      "./extensions/formula-check-tool.ts"
+    ]
+  }
 }

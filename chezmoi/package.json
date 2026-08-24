@@ -3,5 +3,9 @@
   "version": "0.1.0",
   "description": "Edit chezmoi-managed dotfiles at their authoritative source.",
   "private": true,
-  "omp": {}
+  "omp": {
+    "extensions": [
+      "./extensions/chezmoi-guard.ts"
+    ]
+  }
 }

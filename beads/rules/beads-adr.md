@@ -84,11 +84,9 @@ THE GENERATED FILE
 | Numbering | creation order among closed decisions, not the bead id |
 | Written by | the `render-adrs` pre-commit hook, from `bd export` |
 
-NOT Edit a file under `docs/adr/`. It is regenerated from its bead on the next
-  commit and the edit is destroyed. Edit the bead. A `PreToolUse` guard denies the
-  write and names the bead, because a banner inside a file cannot prevent the edit
-  it warns about -- the agent has already decided to write by the time it reads
-  one.
+NOT Edit a file under `docs/adr/`. Generated ADRs there are written by
+  tooling and regenerated from the decision bead; the edit is destroyed.
+  Edit the bead (`bd update <id>`), not the file.
 NOT A CI job that renders from `bd dolt pull`. `refs/dolt/data` is versioned
   independently of git commits, so it is not pinned to the commit under test, and
   the beads doctrine forbids sync from any lifecycle hook.

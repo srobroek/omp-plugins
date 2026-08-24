@@ -1,11 +1,9 @@
 # project
 
-Project lifecycle plugin: brownfield onboarding, license selection, goal writing, and user journeys.
 
 ## Skills
 
 - `brownfield-project` — retrofit an existing repository with agentic tooling
-- `goal-writer` — structure a vague goal into measurable exit conditions
 - `license-picker` — select an OSI-approved license from constraints
 - `journey-init` — scaffold a `user-journeys` directory
 - `journey-write` — author or amend journeys from feature evidence
@@ -21,4 +19,3 @@ Project lifecycle plugin: brownfield onboarding, license selection, goal writing
 
 ## Rules
 
-- `project-index` — always-apply pointer to the skills and agents above

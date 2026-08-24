@@ -4,7 +4,7 @@ Sniff audits the whole repo or a **bounded slice**. Resolving a target is two
 independent decisions, composed -- never a flat target→process matrix:
 
 1. **Where does the code live?** → resolve the target to a *file set* + a
-   *base ref* (if any), and decide **in-place vs. worktree** materialization.
+   *base ref* (if any), and decide **in-place vs. isolated checkout** materialization.
 2. **How does each tool scope to it?** → each tool has an *analysis class*
    (see `tooling.md`) that decides whether file-scoping is honest, lossy, or
    wrong.
@@ -23,10 +23,10 @@ shares one file list and (when relevant) one checkout.
 | **Module / dir** | "the auth module", "src/parser/" | glob the subtree | -- | in place |
 | **File(s)** | "sniff foo.py" | explicit paths | -- | in place |
 | **Working tree** | "my changes", "uncommitted" | `git diff --name-only` + `--staged` + untracked (`git ls-files --others --exclude-standard`) | `HEAD` | in place |
-| **Commit** | "commit abc123", "last commit" | `git show --name-only --pretty=format: <sha>` | `<sha>^` | worktree (recommended) |
-| **Commit range / branch compare** | "since main", "last 3 commits" | `git diff --name-only <base>...<head>` | `<base>` | worktree at head (recommended) |
-| **Branch** | "sniff branch feature-x" | `git diff --name-only <base>...<branch>` | merge-base with default branch | worktree |
-| **PR** | "PR #42", a PR URL | `gh pr diff <n> --name-only` | PR base ref | worktree |
+| **Commit** | "commit abc123", "last commit" | `git show --name-only --pretty=format: <sha>` | `<sha>^` | isolated checkout (recommended) |
+| **Commit range / branch compare** | "since main", "last 3 commits" | `git diff --name-only <base>...<head>` | `<base>` | isolated checkout at head (recommended) |
+| **Branch** | "sniff branch feature-x" | `git diff --name-only <base>...<branch>` | merge-base with default branch | isolated checkout |
+| **PR** | "PR #42", a PR URL | `gh pr diff <n> --name-only` | PR base ref | isolated checkout |
 
 **A language/area filter composes with any other kind** -- apply it as an
 intersection on that kind's file set. "the Rust in this PR" = the PR file set
@@ -71,46 +71,37 @@ Echo first-party counts even on whole-repo runs ("231 .py → 26 first-party aft
 dropping archive/") so the user sees what was excluded. Findings in a generated
 file recommend edits a regenerator will overwrite -- never include them.
 
-### In-place vs. worktree -- why it matters
+### In-place vs. isolated checkout -- why it matters
 
 - **In-place** (working tree, module, files): the code you want to read is
   already the current checkout. Operate directly, scope tools to the file list.
-- **Worktree** (commit, range, branch, PR): the ref's code may **not** match the
-  current tree (you could be on a different branch). Reading the current tree
-  would analyze the *wrong* file contents, and build-based tools (clippy,
+- **Isolated checkout** (commit, range, branch, PR): the ref's code may **not**
+  match the current tree (you could be on a different branch). Reading the current
+  tree would analyze the *wrong* file contents, and build-based tools (clippy,
   golangci-lint, `tsc`, `vue-tsc`) would resolve the wrong state. Materialize the
-  ref into a throwaway worktree so tools see the code **as it is at that ref**,
-  with that ref's own config files:
+  ref via OMP task isolation (`isolated: true`) or a Worktrunk lease so tools see
+  the code **as it is at that ref**, with that ref's own config files.
 
-  ```sh
-  # commit / branch / range head:
-  git worktree add --detach <tmpdir> <ref>
-  # PR (fetch head, then worktree it):
-  git fetch origin pull/<n>/head:sniff-pr-<n> && git worktree add <tmpdir> sniff-pr-<n>
-  # ... run the whole workflow with cwd = <tmpdir> ...
-  git worktree remove <tmpdir>            # always clean up; prune branch for PR
-  ```
-
-  Run tool probe, detection, and reading **inside** the worktree. Handle these
-  four worktree realities or the run silently analyzes the wrong thing:
+  Run tool probe, detection, and reading **inside** the isolated checkout. Handle
+  these realities or the run silently analyzes the wrong thing:
 
   - **Resolve before you enter.** Compute the changed-file list and base ref from
-    the MAIN checkout *first*; a detached worktree may not resolve every short
-    SHA. Inside the worktree, address refs by full SHA or the captured base ref.
+    the MAIN checkout *first*; a detached isolated tree may not resolve every short
+    SHA. Inside it, address refs by full SHA or the captured base ref.
   - **Don't rely on cwd persistence.** Agent harnesses may reset cwd between tool
-    calls and `/tmp` can be GC'd. Capture `<tmpdir>` as an **absolute literal**
-    and pass it explicitly to every command (e.g. `semgrep ... <tmpdir>/<file>`);
-    re-check the path exists before each tool run. (This is the same trap as the
-    skill-relative asset path -- always absolutize.)
-  - **A fresh worktree has NO installed dependencies.** Build/import-aware tools
-    (`pyright`, `mypy`, `tsc`, `vue-tsc`) will emit import-resolution errors that
-    are environment artifacts, not smells. Either run `uv sync` / `npm ci` inside
-    the worktree first, or treat type-checker import errors as a coverage gap and
-    skip them -- never report `reportMissingImports`-class noise as findings.
-  - If `git worktree` is unavailable or the repo is shallow, fall back to in-place
+    calls. Capture the isolated path as an **absolute literal** and pass it
+    explicitly to every command (e.g. `semgrep ... <tmpdir>/<file>`); re-check the
+    path exists before each tool run. (This is the same trap as the skill-relative
+    asset path -- always absolutize.)
+  - **A fresh isolated checkout has NO installed dependencies.** Build/import-aware
+    tools (`pyright`, `mypy`, `tsc`, `vue-tsc`) will emit import-resolution errors
+    that are environment artifacts, not smells. Either run `uv sync` / `npm ci`
+    inside the checkout first, or treat type-checker import errors as a coverage
+    gap and skip them -- never report `reportMissingImports`-class noise as findings.
+  - If isolation is unavailable or the repo is shallow, fall back to in-place
     diff-scoping and note the reduced fidelity.
 
-  Offer the worktree path; if the user prefers a quick in-place diff (and is on
+  Offer the isolated path; if the user prefers a quick in-place diff (and is on
   the right branch), honor that -- it is faster and usually fine for same-branch
   commit ranges.
 
@@ -220,20 +211,20 @@ scope -- proceed?") rather than silently editing beyond what the user asked for.
 
 ## Dependencies
 
-- `git` -- required for working-tree / commit / range / branch / worktree targets.
+- `git` -- required for working-tree / commit / range / branch / isolated targets.
 - `gh` -- required for PR targets (`gh pr diff`, `gh pr view`).
 - If a repo is not a git repo, only whole-repo / module / file targets apply.
   If `gh` is absent, ask for the PR's branch/base and fall back to range mode.
 
 ## Examples
 
-- *"sniff PR #128"* → worktree the PR head → `gh pr diff 128 --name-only` = 6
+- *"sniff PR #128"* → isolate the PR head → `gh pr diff 128 --name-only` = 6
   files (4 TS, 2 `.proto`) → detect TS + Protobuf → eslint on the 4 TS files;
   `buf breaking --against ".git#ref=<base>,subdir=<proto-dir>"` on the protos → **breaking-change section
   headlined**, then TS smells → global dead-code skipped + noted → plan covers
   only those 6 files.
 - *"sniff the parser module"* → in place, `src/parser/**` → Rust → clippy on the
   crate, filter to `src/parser/` paths → one bloodhound → scoped mini-audit.
-- *"sniff since main"* → worktree at `HEAD` → `git diff --name-only main...HEAD`
+- *"sniff since main"* → isolate at `HEAD` → `git diff --name-only main...HEAD`
   → per-language local tools scoped; breaking-change vs. `main` if contracts
   changed; global analyses skipped + noted.

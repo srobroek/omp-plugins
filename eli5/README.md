@@ -12,7 +12,6 @@ Explain a topic at five depth levels from metaphor to frontier.
 
 | Name | When |
 |------|------|
-| `eli5-index` | Always-apply pointer at the skill |
 
 ## Agents
 

@@ -5,7 +5,6 @@
   "omp": {
     "extensions": [
       "./extensions/close-keywords.ts",
-      "./extensions/package-investigate.ts",
       "./extensions/quality-edit-advisory.ts"
     ]
   },

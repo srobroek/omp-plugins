@@ -16,7 +16,7 @@ in their actual constraints, and provides implementation steps.
 - User is setting up a new open-source repo and hasn't selected a license
 - User mentions relicensing or license migration
 - A quick factual question about license mechanics, per-file headers, or CLA
-  setup (skip the interview; LOAD /Users/sjors/.claude/skills/license-picker/references/framework.md and answer directly)
+  setup (skip the interview; LOAD skill://license-picker/references/framework.md and answer directly)
 
 ## Workflow
 
@@ -51,7 +51,7 @@ Ask (these determine copyleft strength):
 
 ### Phase 3: Recommend
 
-Based on answers, LOAD /Users/sjors/.claude/skills/license-picker/references/decision-matrix.md and follow the decision
+Based on answers, LOAD skill://license-picker/references/decision-matrix.md and follow the decision
 logic. Present:
 
 - The recommended license with SPDX identifier
@@ -61,7 +61,7 @@ logic. Present:
 
 **Push back** if the user's stated principle contradicts their stated constraints
 (e.g., "I want reciprocity" + "I want zero friction" -- those conflict; surface
-it). LOAD /Users/sjors/.claude/skills/license-picker/references/common-contradictions.md for named contradiction patterns.
+it). LOAD skill://license-picker/references/common-contradictions.md for named contradiction patterns.
 
 ### Phase 4: Validate
 
@@ -72,7 +72,7 @@ Before finalizing:
    LGPL, flag it)
 3. If the project is embedded: confirm no dynamic-linker requirements
 4. If templates/scaffolding: warn about output contamination if copyleft selected
-5. Check ecosystem norms -- LOAD /Users/sjors/.claude/skills/license-picker/references/ecosystem-norms.md and validate the
+5. Check ecosystem norms -- LOAD skill://license-picker/references/ecosystem-norms.md and validate the
    recommendation against the relevant language section
 
 ### Phase 5: Implement
@@ -100,4 +100,4 @@ Offer to execute (with user confirmation):
 - If the user already has a license and asks about changing: check for external
   contributors first (git log for non-bot/non-owner authors). If present, warn
   about consent requirements.
-- LOAD /Users/sjors/.claude/skills/license-picker/references/decision-matrix.md for consistency -- don't freeform the recommendation.
+- LOAD skill://license-picker/references/decision-matrix.md for consistency -- don't freeform the recommendation.

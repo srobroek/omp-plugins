@@ -10,9 +10,9 @@ order: investigate, interview, scaffold. Never skip the interview -- detected
 facts are proposals, the user decides.
 
 Templates and the helper script live in this skill's directory:
-`'/Users/sjors/.claude/skills/journey-init/templates/FORMAT.md'`, `'/Users/sjors/.claude/skills/journey-init/templates/README.template.md'`,
-`'/Users/sjors/.claude/skills/journey-init/templates/journey.template.md'`, `'/Users/sjors/.claude/skills/journey-init/templates/run.template.md'`,
-`'/Users/sjors/.claude/skills/journey-init/scripts/journeys.py'`.
+`skill://journey-init/templates/FORMAT.md`, `skill://journey-init/templates/README.template.md`,
+`skill://journey-init/templates/journey.template.md`, `skill://journey-init/templates/run.template.md`,
+`skill://journey-init/scripts/journeys.py`.
 
 ## Phase 1 -- Investigate the repo
 
@@ -71,11 +71,11 @@ not cover is an open question in your report -- never guess it.
 
 ## Phase 3 -- Scaffold
 
-1. Create the journeys directory. Copy `'/Users/sjors/.claude/skills/journey-init/templates/FORMAT.md'` verbatim AND
-   `'/Users/sjors/.claude/skills/journey-init/scripts/journeys.py'` into it -- the
+1. Create the journeys directory. Copy `skill://journey-init/templates/FORMAT.md` verbatim AND
+   `skill://journey-init/scripts/journeys.py` into it -- the
    helper travels with the repo so every future skill and validator invokes
    `<journeys-dir>/journeys.py`, never a path inside an installed skill.
-2. Write `README.md` from `'/Users/sjors/.claude/skills/journey-init/templates/README.template.md'` with frontmatter
+2. Write `README.md` from `skill://journey-init/templates/README.template.md` with frontmatter
    and all sections filled from phases 1 to 2 -- real launch commands, real doc
    pointers, real intent-evidence locations. Delete placeholder text.
 3. Generate the index:

@@ -82,14 +82,6 @@ function parseSelection(text: string): Set<string> {
 }
 
 function selectedLanguages(root: string): Set<string> {
-	const selection = join(root, ".agents/hooks/quality-languages");
-	if (existsSync(selection)) {
-		try {
-			return parseSelection(readFileSync(selection, "utf8"));
-		} catch {
-			return new Set();
-		}
-	}
 	const override = process.env.AGENTIC_QUALITY_LANGS ?? "";
 	if (override) return parseSelection(override);
 	const found = new Set<string>();

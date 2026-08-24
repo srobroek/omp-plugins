@@ -48,7 +48,7 @@ Run in order. Full procedure is in `skill://sniff/references/workflow.md` -- LOA
 
 1. **Resolve target & detect stack.** If user did not name a target, STOP and ask.
    LOAD `skill://sniff/references/targeting.md`: resolve to an explicit file list + base ref, decide
-   in-place vs. worktree checkout, and confirm scope. Detect every language/format
+   in-place vs. isolated checkout (`isolated: true` / Worktrunk lease), and confirm scope. Detect every language/format
    present in the target and map each to `skill://sniff/references/languages/index.md`.
 2. **Probe & propose the full tool set (mandatory blocking checkpoint, interactive runs).**
    Run `skill://sniff/scripts/install-tools.sh --probe`, enumerate every viable tool per detected

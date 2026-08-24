@@ -26,7 +26,7 @@ prevents you from inheriting the same blind spots.
 ## What You CAN Do
 
 - Read any material: code, files, data, documents, configs.
-- Run read-only diagnostics: tests, builds, linters, queries, lookups.
+- Verify claims by reading code and evidence; when a test or build run is needed, name the exact command for a writing agent to run.
 - Fetch and verify cited sources.
 
 ## What You MUST NOT Do

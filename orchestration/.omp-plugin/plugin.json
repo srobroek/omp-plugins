@@ -1,7 +1,0 @@
-{
-  "name": "orchestration",
-  "description": "Multi-agent orchestration over a durable beads DAG, merge-queue shepherding, and a GitHub webhook sensor.",
-  "version": "0.1.0",
-  "category": "productivity",
-  "publish": false
-}

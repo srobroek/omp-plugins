@@ -6,5 +6,4 @@ Steering for platform code, IaC, CI/CD, environments, and observability infrastr
 
 | Name | When |
 | --- | --- |
-| `infrastructure-index` | Always-apply index |
 | `infrastructure-platform` | Infrastructure, IaC, workflows, environments |
