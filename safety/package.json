@@ -1,0 +1,14 @@
+{
+  "name": "@srobroek/safety",
+  "private": true,
+  "type": "module",
+  "omp": {
+    "extensions": [
+      "./extensions/close-keywords.ts",
+      "./extensions/package-investigate.ts",
+      "./extensions/quality-edit-advisory.ts"
+    ]
+  },
+  "version": "0.1.0",
+  "description": "Defence-in-depth advisories for destructive commands, attribution, and remote execution."
+}

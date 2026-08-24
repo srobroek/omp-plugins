@@ -1,0 +1,84 @@
+formula = "mol-worker-onboard"
+description = "static preamble a spawned worker runs before touching {{bead}}"
+type = "workflow"
+
+[vars.bead]
+required = true
+description = "the bead this worker was told to claim"
+
+[vars.role]
+required = true
+description = "the role label this worker pulls on"
+
+[vars.needs_worktree]
+default = "true"
+description = "false for read-only or artifact-only work that writes no repo files"
+
+[[steps]]
+id = "claim-bead"
+title = "claim {{bead}} from the {{role}} queue"
+type = "task"
+priority = 0
+labels = ["onboard", "phase:start"]
+description = """
+bd ready --parent <owner> --label agent:{{role}} --claim --json
+
+A worker discovers its work by claiming a bead, never from a handle passed in
+the prompt. The claim is a database operation and needs no worktree. If it
+returns nothing, the work was taken: report NO_WORK and exit rather than
+widening the filter.
+"""
+
+[[steps]]
+id = "resolve-worktree"
+title = "resolve the worktree from the claimed bead"
+type = "task"
+needs = ["claim-bead"]
+condition = "{{needs_worktree}}"
+labels = ["onboard", "phase:start"]
+description = """
+Read metadata.worktree off the claimed bead. That is the only authoritative
+source: wt vars are per-branch and unreadable until you are already inside.
+
+Absent metadata.worktree on git-evidence work is a provisioning failure. Report
+it; never create your own worktree.
+"""
+
+[[steps]]
+id = "verify-ownership"
+title = "verify the worktree agrees it belongs to {{bead}}"
+type = "task"
+needs = ["claim-bead", "resolve-worktree"]
+condition = "{{needs_worktree}}"
+labels = ["onboard", "phase:start"]
+description = """
+wt -C <worktree> step eval '{{ vars.bead }}' --format json
+
+The result must equal the claimed bead id. A mismatch means the path belongs to
+another actor and writing into it corrupts their work: stop and report. Always
+--format json, and slice from the first brace -- wt prints a schema banner ahead
+of the payload.
+"""
+
+[[steps]]
+id = "confirm-scope"
+title = "read the scope and acceptance criteria on {{bead}}"
+type = "task"
+needs = ["claim-bead"]
+labels = ["onboard", "phase:start"]
+description = """
+The bead carries the brief. Read its description, comments, and scope metadata
+before the first edit. Work outside the stamped scope is what collides with a
+sibling worker.
+"""
+
+[[steps]]
+id = "begin-work"
+title = "begin work on {{bead}}"
+type = "task"
+needs = ["confirm-scope", "verify-ownership"]
+labels = ["onboard", "phase:start"]
+description = """
+All preconditions hold: bead claimed, worktree resolved and cross-verified,
+scope understood. Only now edit files.
+"""

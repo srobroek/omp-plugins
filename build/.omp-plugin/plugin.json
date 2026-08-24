@@ -1,0 +1,6 @@
+{
+  "name": "build",
+  "description": "Implementation agents: builder, high-effort builder, operator, external-repo worker.",
+  "version": "0.1.0",
+  "category": "development"
+}

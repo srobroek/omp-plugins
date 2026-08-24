@@ -1,0 +1,332 @@
+# build-formula — the formula that builds a formula.
+#
+# Pour this when authoring a new bd formula. Each step is a decision or an
+# assertion that the formula-under-construction must survive, in the order that
+# catches mistakes soonest.
+#
+# Usage:
+#   bd mol pour build-formula --var name=<formula-name> --var kind=<reusable|adhoc>
+#   bd mol wisp build-formula --var name=<x> --var kind=adhoc      # throwaway
+#
+# Authoring notes for this file itself, all probed on bd 1.1.0:
+#   - `condition = "{{var}}"` filters a step; a filtered step's gate bead goes too.
+#   - EVERY step's `needs` names at least one UNCONDITIONAL step. A step whose
+#     entire needs list is filtered loses all sequencing and becomes ready
+#     immediately, with no error. That is the anchor rule.
+#   - `pattern`/`enum` on vars are parsed and never enforced. Validate in prose.
+#   - {{var}} substitutes in title/description/notes only.
+
+formula = "build-formula"
+description = "author and verify the bd formula {{name}}"
+type = "workflow"
+
+[vars.name]
+required = true
+description = "the formula being authored; also its filename stem"
+
+[vars.kind]
+default = "reusable"
+description = "reusable (package-shipped, versioned) or adhoc (project-local, throwaway)"
+
+[vars.has_optional_steps]
+default = "true"
+description = "does the formula have stages that only some runs want"
+
+[vars.has_gates]
+default = "true"
+description = "does it have human approvals or external waits"
+
+[vars.has_external_gate]
+default = "false"
+description = "does it wait on CI or a PR (gh:run / gh:pr) rather than only a human"
+
+[vars.is_composed]
+default = "false"
+description = "does it use extends"
+
+[vars.ships_in_package]
+default = "true"
+description = "is it distributed by an APM package rather than written straight into .beads/formulas"
+
+# ---------------------------------------------------------------------------
+# 1. Shape — the gate that stops wasted work
+# ---------------------------------------------------------------------------
+
+[[steps]]
+id = "shape-check"
+title = "confirm {{name}} is formula-shaped"
+type = "task"
+priority = 1
+labels = ["build-formula", "phase:design"]
+description = """
+Answer before writing any TOML: could a human draw this DAG before the run starts?
+
+A formula is a fixed DAG cooked once and instantiated many times. Steps are decided
+at COOK time, so anything whose step count depends on the run is not a formula.
+
+NOT formula-shaped, stop here and write a skill instead:
+  - drain-until-empty loops over a runtime-discovered set
+  - the next step depends on the previous step's output
+  - a probe/action decision table (that is judgement)
+
+Record the answer in this bead's notes. If the answer is no, close this molecule
+with the reason and stop.
+"""
+[steps.metadata]
+execution_skill = "beads.build-formula"
+
+[[steps]]
+id = "spine"
+title = "draw the mandatory spine of {{name}}"
+type = "task"
+needs = ["shape-check"]
+labels = ["build-formula", "phase:design"]
+description = """
+List only the steps that exist on EVERY run, in order, with one `needs` edge each.
+Nothing optional yet. This spine is what every optional stage will anchor to.
+
+Name each step id in kebab-case. Ids are the override key and the gate-bead
+suffix, so they are a contract — pick them deliberately.
+"""
+
+# ---------------------------------------------------------------------------
+# 2. Optional stages and the anchor rule
+# ---------------------------------------------------------------------------
+
+[[steps]]
+id = "conditions"
+title = "add optional stages to {{name}} with condition"
+type = "task"
+needs = ["spine"]
+condition = "{{has_optional_steps}}"
+labels = ["build-formula", "phase:design", "topic:condition"]
+description = """
+Guard each optional stage with `condition = "{{want_x}}"` and declare
+`[vars.want_x] default = "false"`, so an unflagged pour yields the baseline.
+
+For mutually exclusive routes use the equality form and TWO DISTINCT IDS:
+    condition = "{{mode}} == local"
+    condition = "{{mode}} == remote"
+Never model a route by overriding one step in a child — override drops the step's
+gate AND its condition, silently.
+
+`condition` is undocumented but real. Truthy: true/True/TRUE/1/yes/on.
+"""
+
+[[steps]]
+id = "anchor-audit"
+title = "apply the anchor rule to every join in {{name}}"
+type = "task"
+needs = ["spine", "conditions"]
+priority = 1
+labels = ["build-formula", "phase:design", "topic:anchor"]
+description = """
+THE highest-value step in this molecule. For every step, check that `needs`
+contains at least one UNCONDITIONAL step.
+
+A step whose entire needs list is filtered out does NOT fall back to an earlier
+step. It loses all sequencing, keeps only a parent-child edge, and becomes
+immediately ready. The pour reports no error.
+
+Fix by either:
+  a) naming the last mandatory step alongside the optional ones, or
+  b) inserting a mandatory no-op join step.
+
+Write the list of joins and their anchors into this bead's notes. The verify step
+asserts against that list.
+"""
+
+# ---------------------------------------------------------------------------
+# 3. Gates
+# ---------------------------------------------------------------------------
+
+[[steps]]
+id = "gates"
+title = "declare the gates of {{name}}"
+type = "task"
+needs = ["spine", "anchor-audit"]
+condition = "{{has_gates}}"
+labels = ["build-formula", "phase:design", "topic:gates"]
+description = """
+Make every human decision a gated step, not a prose instruction:
+
+    [steps.gate]
+    type = "human"
+
+`[steps.gate]` must be a TOML table. Valid types: human | timer | gh:run | gh:pr.
+`bead` is dead (multi-rig routing removed) — never use it. An unrecognised type is
+accepted at cook, poured as an open gate, and then SKIPPED by `bd gate check`,
+so it waits forever.
+
+A gated step pours TWO beads: the step and `Gate: <type>` with id
+<formula>.gate-<step-id>.
+"""
+
+[[steps]]
+id = "gate-runner"
+title = "name what runs bd gate check for {{name}}"
+type = "task"
+needs = ["gates"]
+condition = "{{has_external_gate}}"
+priority = 1
+labels = ["build-formula", "phase:design", "topic:gates"]
+description = """
+There is NO daemon. A timer/gh:run/gh:pr gate closes only when something runs
+`bd gate check`. Pick one and record it here:
+  - a CI step
+  - a cron entry: */5 * * * * cd <repo> && bd gate check
+  - an agent session hook
+
+Without a named runner the gate is decoration and the molecule stalls forever.
+`bd gate check --escalate` marks failed gh:* gates for attention.
+
+Note also: `bd ready --gated` returns a molecule only when the gate is closed AND
+every other predecessor is closed. A dispatcher must poll `bd ready` too.
+"""
+
+# ---------------------------------------------------------------------------
+# 4. Fields and composition
+# ---------------------------------------------------------------------------
+
+[[steps]]
+id = "fields"
+title = "add labels, metadata, and priority to {{name}}"
+type = "task"
+needs = ["spine", "gates"]
+labels = ["build-formula", "phase:author"]
+description = """
+All of labels/metadata/priority/assignee/description/notes survive cook.
+
+  labels    two per optional step: a family label and a specific one, so both
+            "every optional step" and "this one" are queryable
+  metadata  routing hints. Check bd's documented five keys before inventing one:
+            execution_agent_type | execution_suggested_model |
+            execution_reasoning_effort | execution_mode | execution_parallel_group
+  priority  gates and irreversible steps above routine ones
+  notes     PERSISTENT per-step info. Ephemeral chatter belongs on a wisp.
+
+SUBSTITUTION GAP: {{var}} is substituted in title, description and notes ONLY.
+labels, assignee and metadata keep the literal braces. Never put a var in them.
+"""
+
+[[steps]]
+id = "compose"
+title = "wire extends for {{name}}"
+type = "task"
+needs = ["fields"]
+condition = "{{is_composed}}"
+labels = ["build-formula", "phase:author", "topic:extends"]
+description = """
+`extends = ["parent"]` is a LIST; a bare string fails.
+
+Four traps:
+  1. A child CANNOT delete a parent step. Override replaces; there is no remove.
+     So a baseline must be a true minimum and everything else additive.
+  2. Overriding a step DROPS its [steps.gate] and its condition. Repeat both.
+  3. Diamond composition fails: two parents sharing a base -> duplicate id.
+  4. A fragment whose needs points at a parent step fails standalone.
+"""
+
+# ---------------------------------------------------------------------------
+# 5. Write, then verify
+# ---------------------------------------------------------------------------
+
+[[steps]]
+id = "write"
+title = "write {{name}}.formula.toml"
+type = "task"
+needs = ["fields", "compose"]
+labels = ["build-formula", "phase:author"]
+description = """
+Filename stem IS the reference: bd resolves by stem, not by the `formula` key
+inside the file. Name the file for the reference you emit.
+
+Location:
+  reusable, package-shipped  ->  the owning APM package, installed into .beads/formulas/
+  adhoc, project-local       ->  <repo>/.beads/formulas/ directly
+
+Search order, earlier shadows later: resolved-beads-dir, <checkout>/.beads/formulas,
+~/.beads/formulas, $GT_ROOT/.beads/formulas.
+
+Declare `phase = "vapor"` at top level if this is one-time work whose trace does
+not matter.
+"""
+
+[[steps]]
+id = "cook-validate"
+title = "validate {{name}} with bd cook"
+type = "task"
+needs = ["write"]
+priority = 1
+labels = ["build-formula", "phase:verify"]
+description = """
+    bd cook <name> --dry-run
+    bd cook <name> --var <each required var>
+
+Use COOK, never pour, to diagnose. `bd mol pour` collapses every formula error
+into "not found as formula or proto ID" — the file exists and pour says it does
+not. In a composed set one broken fragment poisons every consumer with that
+message, naming the wrong formula.
+
+Do NOT verify a composed formula with `bd formula show`: it prints only the
+child's own steps (Steps (1) for a formula that pours 4 beads).
+"""
+
+[[steps]]
+id = "verify-selections"
+title = "assert every selection of {{name}} against pour --dry-run"
+type = "task"
+needs = ["cook-validate"]
+priority = 1
+labels = ["build-formula", "phase:verify"]
+description = """
+For EVERY selection you support, including all-options-off:
+
+  1 step count matches expectation
+  2 every declared needs edge present after pour
+  3 every step with a declared needs has >=1 blocks edge   <- the anchor rule
+  4 Gate: bead count and ids
+  5 every gate type in human|timer|gh:run|gh:pr
+  6 any redeclared step still carries its parent gate and condition
+  7 mutually exclusive routes yield exactly one surviving step
+  8 the all-options-off selection is a valid fully-sequenced DAG
+  9 a vapor formula warns on pour and succeeds on wisp
+ 10 no labels/assignee/metadata value contains "{{" after pour
+
+Assertion 3 catches the silent failure that costs the most. Read the poured beads,
+not the formula.
+"""
+
+[[steps]]
+id = "author-signoff"
+title = "sign off {{name}}"
+type = "task"
+needs = ["verify-selections"]
+labels = ["build-formula", "phase:verify"]
+description = "Human confirmation that the assertions above ran and passed."
+[steps.gate]
+type = "human"
+
+[[steps]]
+id = "ship"
+title = "ship {{name}}"
+type = "task"
+needs = ["author-signoff"]
+condition = "{{ships_in_package}}"
+labels = ["build-formula", "phase:ship"]
+description = """
+Add the formula to its owning package, wire the install path, and add the
+selection assertions to that package's test suite so a future edit cannot
+silently drop a gate or an anchor.
+"""
+
+[[steps]]
+id = "done"
+title = "{{name}} complete"
+type = "task"
+needs = ["author-signoff", "ship"]
+labels = ["build-formula"]
+description = """
+Close-out. Note that closing the last child does NOT close the molecule root —
+check `bd epic close-eligible`.
+"""

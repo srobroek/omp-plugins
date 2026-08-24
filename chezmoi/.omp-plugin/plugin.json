@@ -1,0 +1,6 @@
+{
+  "name": "chezmoi",
+  "description": "Edit chezmoi-managed dotfiles at their authoritative source.",
+  "version": "0.1.0",
+  "category": "productivity"
+}

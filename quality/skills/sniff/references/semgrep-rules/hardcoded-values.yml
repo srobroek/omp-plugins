@@ -1,0 +1,108 @@
+# Sniff — hardcoded-value smell rules for semgrep.
+#
+# AST-aware replacement for a grep pattern bank: these match string/number
+# LITERALS in code positions that signal a hardcoded value, while ignoring
+# constants, enums, and test files (where fixed values are expected). Run with:
+#
+#   semgrep --config "$SNIFF_SKILL_DIR/references/semgrep-rules/hardcoded-values.yml" --json <files>
+#
+# Tune per repo: add paths to `paths.exclude` for generated/vendored trees.
+# These are heuristics surfaced for human judgment, not auto-fixes. Credential
+# detection is intentionally NOT here — use the secrets-scan package (gitleaks/
+# trufflehog) for that; these rules only flag obvious connection-string shapes.
+
+rules:
+  - id: hardcoded-ip-address
+    languages: [generic]
+    severity: INFO
+    message: >-
+      Hardcoded IP address. Move to config/env unless this is a documented
+      loopback or reserved-range default.
+    pattern-regex: '(?<![\d.])((25[0-5]|2[0-4]\d|1?\d?\d)\.){3}(25[0-5]|2[0-4]\d|1?\d?\d)(?![\d.])'
+    paths:
+      exclude:
+        - "*_test.*"
+        - "*.test.*"
+        - "test/**"
+        - "tests/**"
+        - "**/testdata/**"
+        - "**/*.md"
+
+  - id: hardcoded-http-url
+    languages: [generic]
+    severity: INFO
+    message: >-
+      Hardcoded http(s) URL. Externalize endpoints to config/env so they are not
+      baked into the build.
+    pattern-regex: 'https?://[A-Za-z0-9._~:/?#@!$&%*+,;=-]+'
+    paths:
+      exclude:
+        - "*_test.*"
+        - "*.test.*"
+        - "test/**"
+        - "tests/**"
+        - "**/testdata/**"
+        - "**/*.md"
+        - "**/*.txt"
+
+  - id: hardcoded-absolute-path
+    languages: [generic]
+    severity: INFO
+    message: >-
+      Hardcoded absolute filesystem path. Prefer a configurable base dir or a
+      temp-dir API; absolute paths break portability and tests.
+    pattern-regex: '["''](/(home|users|usr|opt|var|etc|tmp)/[^"''\n]+|[A-Za-z]:\\\\[^"''\n]+)["'']'
+    paths:
+      exclude:
+        - "*_test.*"
+        - "*.test.*"
+        - "test/**"
+        - "tests/**"
+        - "**/testdata/**"
+
+  - id: hardcoded-connection-string
+    languages: [generic]
+    severity: WARNING
+    message: >-
+      Connection-string-shaped literal. Move to config/env; if it embeds
+      credentials, run the secrets-scan package (gitleaks/trufflehog).
+    pattern-regex: '\b(postgres|postgresql|mysql|mongodb(\+srv)?|redis|amqp|jdbc:[a-z]+)://[^\s"'']+'
+    paths:
+      exclude:
+        - "*_test.*"
+        - "test/**"
+        - "tests/**"
+        - "**/testdata/**"
+        - "**/*.md"
+
+  - id: debug-print-left-in
+    languages: [python, go, javascript, typescript, ruby, java]
+    severity: INFO
+    message: >-
+      Debug print statement may be left in production code. Use the project's
+      logger at an appropriate level, or remove.
+    pattern-either:
+      - pattern: print($...ARGS)
+      - pattern: console.log($...ARGS)
+      - pattern: console.debug($...ARGS)
+      - pattern: fmt.Println($...ARGS)
+    paths:
+      exclude:
+        - "*_test.*"
+        - "*.test.*"
+        - "test/**"
+        - "tests/**"
+        - "**/cmd/**"
+        - "**/scripts/**"
+
+  - id: tracked-tech-debt-marker
+    languages: [generic]
+    severity: INFO
+    message: >-
+      Tech-debt marker (TODO/FIXME/HACK/XXX). Catalog it; a marker without a
+      tracking reference tends to rot.
+    pattern-regex: '\b(TODO|FIXME|HACK|XXX|BUG)\b'
+    paths:
+      exclude:
+        - "**/*.md"
+        - "**/CHANGELOG*"

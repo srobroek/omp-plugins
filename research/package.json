@@ -1,0 +1,7 @@
+{
+  "name": "@srobroek/research",
+  "version": "0.1.0",
+  "description": "Investigation agents and bulk repository-packing recipes.",
+  "private": true,
+  "omp": {}
+}

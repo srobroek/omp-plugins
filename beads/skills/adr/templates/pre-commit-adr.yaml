@@ -1,0 +1,59 @@
+# ADR renderer + decision gate — fragment for .pre-commit-config.yaml.
+#
+# project-setup merges these `repos:` entries into a project's
+# .pre-commit-config.yaml and vendors render_adrs.py into the repo (e.g.
+# .pre-commit-hooks/), then rewrites the `entry:` path below to point at the
+# vendored script. `entry:` cannot reference apm_modules/, which is not present
+# in a consuming repository.
+#
+# Install the shim once per repository:
+#
+#     prek install --git-dir .git
+#
+# `--git-dir` is required wherever core.hooksPath points outside the repository
+# (a corporate secret scanner, for instance). Bare `prek install` refuses in that
+# case and suggests unsetting core.hooksPath, which would disable the scanner.
+# Verified: with the prek shim in .git/hooks/pre-commit, both layers still run --
+# prek runs these hooks and the system hook still blocks a planted secret.
+#
+# WHY PRE-COMMIT AND NOT CI. The bead is written during the work and lives in the
+# local Dolt store; it is not pushed yet, and refs/dolt/data is versioned
+# independently of git commits, so CI has no notion of "the database as of this
+# commit". Pre-commit is where the data is. A read of the local store needs no
+# sync authority, unlike `bd dolt pull`, which the beads doctrine forbids from
+# any lifecycle hook.
+#
+# THIS HOOK WRITES. Every other hook in a typical config is read-only, so note
+# the mechanic: prek FAILS a commit when a hook modifies a tracked file and
+# leaves it unstaged, and silently omits a newly written untracked one. The
+# renderer therefore stages what it writes, which is what makes the ADR file land
+# in the same commit as the work that motivated the decision.
+repos:
+  - repo: local
+    hooks:
+      - id: render-adrs
+        name: render ADR files from decision beads
+        description: >-
+          Projects every CLOSED beads `decision` bead into
+          docs/adr/NNNN-title.md. The bead is the record; the file is the
+          readable copy for anyone without beads installed, and for PR review.
+          Deferred (proposed) and open (being drafted) decisions are skipped --
+          publishing either would announce a choice nobody has settled. Exits 0
+          with no database, no `bd`, or no decisions.
+        entry: .pre-commit-hooks/render_adrs.py
+        language: script
+        pass_filenames: false
+        always_run: true
+
+      - id: bd-lint-decisions
+        name: decision beads state a rationale and a rejected alternative
+        description: >-
+          `bd lint` enforces `## Decision`, `## Rationale`, and
+          `## Alternatives Considered` on a decision bead and exits 1 when one is
+          missing. An ADR without a rejected alternative is a description, not a
+          decision, so this is the gate that matters. Native to bd -- its own
+          help text omits the decision type, but the rules are enforced.
+        entry: bash -c 'command -v bd >/dev/null || exit 0; bd lint --type decision --status all'
+        language: system
+        pass_filenames: false
+        always_run: true

@@ -1,0 +1,6 @@
+{
+  "name": "typescript",
+  "description": "TypeScript rules: contract boundaries, type safety and validation, component layout, build tooling, testing, and a TypeScript review skill.",
+  "version": "0.1.0",
+  "category": "language"
+}

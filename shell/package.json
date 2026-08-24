@@ -1,0 +1,7 @@
+{
+  "name": "@srobroek/shell",
+  "version": "0.1.0",
+  "description": "Shell rules: strict mode, quoting, portability, and POSIX-versus-bash choices.",
+  "private": true,
+  "omp": {}
+}

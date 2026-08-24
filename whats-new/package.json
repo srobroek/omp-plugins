@@ -1,0 +1,7 @@
+{
+  "name": "@srobroek/whats-new",
+  "version": "0.1.0",
+  "description": "Research breaking changes, deprecations, and new features between two versions.",
+  "private": true,
+  "omp": {}
+}

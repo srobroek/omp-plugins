@@ -1,0 +1,417 @@
+{
+  "$schema": "https://raw.githubusercontent.com/googleapis/release-please/main/schemas/config.json",
+  "separate-pull-requests": false,
+  "tag-separator": "--",
+  "include-component-in-tag": true,
+  "changelog-sections": [
+    {
+      "type": "feat",
+      "section": "Features"
+    },
+    {
+      "type": "fix",
+      "section": "Bug Fixes"
+    },
+    {
+      "type": "perf",
+      "section": "Performance"
+    },
+    {
+      "type": "refactor",
+      "section": "Refactors"
+    },
+    {
+      "type": "docs",
+      "section": "Documentation"
+    },
+    {
+      "type": "chore",
+      "section": "Chores",
+      "hidden": true
+    },
+    {
+      "type": "test",
+      "section": "Tests",
+      "hidden": true
+    },
+    {
+      "type": "ci",
+      "section": "CI/CD",
+      "hidden": true
+    }
+  ],
+  "packages": {
+    "architecture": {
+      "release-type": "simple",
+      "component": "architecture",
+      "changelog-path": "CHANGELOG.md",
+      "extra-files": [
+        {
+          "type": "json",
+          "path": "architecture/.omp-plugin/plugin.json",
+          "jsonpath": "$.version"
+        }
+      ]
+    },
+    "authoring": {
+      "release-type": "simple",
+      "component": "authoring",
+      "changelog-path": "CHANGELOG.md",
+      "extra-files": [
+        {
+          "type": "json",
+          "path": "authoring/.omp-plugin/plugin.json",
+          "jsonpath": "$.version"
+        }
+      ]
+    },
+    "backend": {
+      "release-type": "simple",
+      "component": "backend",
+      "changelog-path": "CHANGELOG.md",
+      "extra-files": [
+        {
+          "type": "json",
+          "path": "backend/.omp-plugin/plugin.json",
+          "jsonpath": "$.version"
+        }
+      ]
+    },
+    "beads": {
+      "release-type": "simple",
+      "component": "beads",
+      "changelog-path": "CHANGELOG.md",
+      "extra-files": [
+        {
+          "type": "json",
+          "path": "beads/.omp-plugin/plugin.json",
+          "jsonpath": "$.version"
+        }
+      ]
+    },
+    "build": {
+      "release-type": "simple",
+      "component": "build",
+      "changelog-path": "CHANGELOG.md",
+      "extra-files": [
+        {
+          "type": "json",
+          "path": "build/.omp-plugin/plugin.json",
+          "jsonpath": "$.version"
+        }
+      ]
+    },
+    "chezmoi": {
+      "release-type": "simple",
+      "component": "chezmoi",
+      "changelog-path": "CHANGELOG.md",
+      "extra-files": [
+        {
+          "type": "json",
+          "path": "chezmoi/.omp-plugin/plugin.json",
+          "jsonpath": "$.version"
+        }
+      ]
+    },
+    "coexistence": {
+      "release-type": "simple",
+      "component": "coexistence",
+      "changelog-path": "CHANGELOG.md",
+      "extra-files": [
+        {
+          "type": "json",
+          "path": "coexistence/.omp-plugin/plugin.json",
+          "jsonpath": "$.version"
+        }
+      ]
+    },
+    "data": {
+      "release-type": "simple",
+      "component": "data",
+      "changelog-path": "CHANGELOG.md",
+      "extra-files": [
+        {
+          "type": "json",
+          "path": "data/.omp-plugin/plugin.json",
+          "jsonpath": "$.version"
+        }
+      ]
+    },
+    "debate": {
+      "release-type": "simple",
+      "component": "debate",
+      "changelog-path": "CHANGELOG.md",
+      "extra-files": [
+        {
+          "type": "json",
+          "path": "debate/.omp-plugin/plugin.json",
+          "jsonpath": "$.version"
+        }
+      ]
+    },
+    "delivery": {
+      "release-type": "simple",
+      "component": "delivery",
+      "changelog-path": "CHANGELOG.md",
+      "extra-files": [
+        {
+          "type": "json",
+          "path": "delivery/.omp-plugin/plugin.json",
+          "jsonpath": "$.version"
+        }
+      ]
+    },
+    "dep-update": {
+      "release-type": "simple",
+      "component": "dep-update",
+      "changelog-path": "CHANGELOG.md",
+      "extra-files": [
+        {
+          "type": "json",
+          "path": "dep-update/.omp-plugin/plugin.json",
+          "jsonpath": "$.version"
+        }
+      ]
+    },
+    "docs": {
+      "release-type": "simple",
+      "component": "docs",
+      "changelog-path": "CHANGELOG.md",
+      "extra-files": [
+        {
+          "type": "json",
+          "path": "docs/.omp-plugin/plugin.json",
+          "jsonpath": "$.version"
+        }
+      ]
+    },
+    "eli5": {
+      "release-type": "simple",
+      "component": "eli5",
+      "changelog-path": "CHANGELOG.md",
+      "extra-files": [
+        {
+          "type": "json",
+          "path": "eli5/.omp-plugin/plugin.json",
+          "jsonpath": "$.version"
+        }
+      ]
+    },
+    "find-tools": {
+      "release-type": "simple",
+      "component": "find-tools",
+      "changelog-path": "CHANGELOG.md",
+      "extra-files": [
+        {
+          "type": "json",
+          "path": "find-tools/.omp-plugin/plugin.json",
+          "jsonpath": "$.version"
+        }
+      ]
+    },
+    "go": {
+      "release-type": "simple",
+      "component": "go",
+      "changelog-path": "CHANGELOG.md",
+      "extra-files": [
+        {
+          "type": "json",
+          "path": "go/.omp-plugin/plugin.json",
+          "jsonpath": "$.version"
+        }
+      ]
+    },
+    "infrastructure": {
+      "release-type": "simple",
+      "component": "infrastructure",
+      "changelog-path": "CHANGELOG.md",
+      "extra-files": [
+        {
+          "type": "json",
+          "path": "infrastructure/.omp-plugin/plugin.json",
+          "jsonpath": "$.version"
+        }
+      ]
+    },
+    "ops": {
+      "release-type": "simple",
+      "component": "ops",
+      "changelog-path": "CHANGELOG.md",
+      "extra-files": [
+        {
+          "type": "json",
+          "path": "ops/.omp-plugin/plugin.json",
+          "jsonpath": "$.version"
+        }
+      ]
+    },
+    "orchestration": {
+      "release-type": "simple",
+      "component": "orchestration",
+      "changelog-path": "CHANGELOG.md",
+      "extra-files": [
+        {
+          "type": "json",
+          "path": "orchestration/.omp-plugin/plugin.json",
+          "jsonpath": "$.version"
+        }
+      ]
+    },
+    "project": {
+      "release-type": "simple",
+      "component": "project",
+      "changelog-path": "CHANGELOG.md",
+      "extra-files": [
+        {
+          "type": "json",
+          "path": "project/.omp-plugin/plugin.json",
+          "jsonpath": "$.version"
+        }
+      ]
+    },
+    "python": {
+      "release-type": "simple",
+      "component": "python",
+      "changelog-path": "CHANGELOG.md",
+      "extra-files": [
+        {
+          "type": "json",
+          "path": "python/.omp-plugin/plugin.json",
+          "jsonpath": "$.version"
+        }
+      ]
+    },
+    "quality": {
+      "release-type": "simple",
+      "component": "quality",
+      "changelog-path": "CHANGELOG.md",
+      "extra-files": [
+        {
+          "type": "json",
+          "path": "quality/.omp-plugin/plugin.json",
+          "jsonpath": "$.version"
+        }
+      ]
+    },
+    "research": {
+      "release-type": "simple",
+      "component": "research",
+      "changelog-path": "CHANGELOG.md",
+      "extra-files": [
+        {
+          "type": "json",
+          "path": "research/.omp-plugin/plugin.json",
+          "jsonpath": "$.version"
+        }
+      ]
+    },
+    "review": {
+      "release-type": "simple",
+      "component": "review",
+      "changelog-path": "CHANGELOG.md",
+      "extra-files": [
+        {
+          "type": "json",
+          "path": "review/.omp-plugin/plugin.json",
+          "jsonpath": "$.version"
+        }
+      ]
+    },
+    "rust": {
+      "release-type": "simple",
+      "component": "rust",
+      "changelog-path": "CHANGELOG.md",
+      "extra-files": [
+        {
+          "type": "json",
+          "path": "rust/.omp-plugin/plugin.json",
+          "jsonpath": "$.version"
+        }
+      ]
+    },
+    "safety": {
+      "release-type": "simple",
+      "component": "safety",
+      "changelog-path": "CHANGELOG.md",
+      "extra-files": [
+        {
+          "type": "json",
+          "path": "safety/.omp-plugin/plugin.json",
+          "jsonpath": "$.version"
+        }
+      ]
+    },
+    "session": {
+      "release-type": "simple",
+      "component": "session",
+      "changelog-path": "CHANGELOG.md",
+      "extra-files": [
+        {
+          "type": "json",
+          "path": "session/.omp-plugin/plugin.json",
+          "jsonpath": "$.version"
+        }
+      ]
+    },
+    "shell": {
+      "release-type": "simple",
+      "component": "shell",
+      "changelog-path": "CHANGELOG.md",
+      "extra-files": [
+        {
+          "type": "json",
+          "path": "shell/.omp-plugin/plugin.json",
+          "jsonpath": "$.version"
+        }
+      ]
+    },
+    "terraform": {
+      "release-type": "simple",
+      "component": "terraform",
+      "changelog-path": "CHANGELOG.md",
+      "extra-files": [
+        {
+          "type": "json",
+          "path": "terraform/.omp-plugin/plugin.json",
+          "jsonpath": "$.version"
+        }
+      ]
+    },
+    "toolchain": {
+      "release-type": "simple",
+      "component": "toolchain",
+      "changelog-path": "CHANGELOG.md",
+      "extra-files": [
+        {
+          "type": "json",
+          "path": "toolchain/.omp-plugin/plugin.json",
+          "jsonpath": "$.version"
+        }
+      ]
+    },
+    "typescript": {
+      "release-type": "simple",
+      "component": "typescript",
+      "changelog-path": "CHANGELOG.md",
+      "extra-files": [
+        {
+          "type": "json",
+          "path": "typescript/.omp-plugin/plugin.json",
+          "jsonpath": "$.version"
+        }
+      ]
+    },
+    "whats-new": {
+      "release-type": "simple",
+      "component": "whats-new",
+      "changelog-path": "CHANGELOG.md",
+      "extra-files": [
+        {
+          "type": "json",
+          "path": "whats-new/.omp-plugin/plugin.json",
+          "jsonpath": "$.version"
+        }
+      ]
+    }
+  }
+}

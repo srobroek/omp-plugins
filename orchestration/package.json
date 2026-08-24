@@ -1,0 +1,7 @@
+{
+  "name": "@srobroek/orchestration",
+  "version": "0.1.0",
+  "description": "Multi-agent orchestration over a durable beads DAG, merge-queue shepherding, and a GitHub webhook sensor.",
+  "private": true,
+  "omp": {}
+}

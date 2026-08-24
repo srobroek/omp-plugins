@@ -1,0 +1,7 @@
+{
+  "name": "@srobroek/authoring",
+  "version": "0.1.0",
+  "description": "Author and audit agentic assets: skills, rules, agents, and steering.",
+  "private": true,
+  "omp": {}
+}

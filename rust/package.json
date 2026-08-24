@@ -1,0 +1,7 @@
+{
+  "name": "@srobroek/rust",
+  "version": "0.1.0",
+  "description": "Rust rules: crate boundaries, domain modeling, error and persistence patterns, workspace and Tauri layout, and a Rust review skill.",
+  "private": true,
+  "omp": {}
+}

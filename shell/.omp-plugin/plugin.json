@@ -1,0 +1,6 @@
+{
+  "name": "shell",
+  "description": "Shell rules: strict mode, quoting, portability, and POSIX-versus-bash choices.",
+  "version": "0.1.0",
+  "category": "language"
+}

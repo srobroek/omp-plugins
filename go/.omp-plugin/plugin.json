@@ -1,0 +1,6 @@
+{
+  "name": "go",
+  "description": "Go rules: module layout, error wrapping, table-driven tests, and a Go review skill.",
+  "version": "0.1.0",
+  "category": "language"
+}

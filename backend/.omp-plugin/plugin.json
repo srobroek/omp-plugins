@@ -1,0 +1,6 @@
+{
+  "name": "backend",
+  "description": "Backend rules: API contracts, background jobs, and service boundaries.",
+  "version": "0.1.0",
+  "category": "development"
+}

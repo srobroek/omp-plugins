@@ -1,0 +1,6 @@
+{
+  "name": "python",
+  "description": "Python rules: uv-managed projects, typing, pytest layout, and a Python review skill.",
+  "version": "0.1.0",
+  "category": "language"
+}

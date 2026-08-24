@@ -1,0 +1,7 @@
+{
+  "name": "@srobroek/project",
+  "version": "0.1.0",
+  "description": "Project lifecycle: brownfield onboarding, license selection, goal writing, and user journeys.",
+  "private": true,
+  "omp": {}
+}

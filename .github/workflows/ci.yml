@@ -22,22 +22,28 @@ jobs:
       - name: Capability name collisions
         run: python3 scripts/check-duplicate-names.py
 
-      - name: Catalog JSON is parseable
-        run: |
-          for f in .omp-plugin/marketplace.json .claude-plugin/marketplace.json; do
-            if [ -f "$f" ]; then
-              python3 -c "import json,sys; json.load(open('$f')); print('$f ok')"
-            fi
-          done
+      # The silent failures: a rule with no description lands in no bucket, a
+      # frontmatter name that disagrees with its filename is not the identity OMP
+      # uses, and a re-shipped bundled agent name shadows the bundled definition.
+      - name: Capability discovery contract
+        run: python3 scripts/check-contract.py
 
-      - name: Plugin manifests are parseable
+      # The catalog is a release artifact, not a hand-maintained file: OMP reads
+      # `plugins[].version` from it, while release-please bumps only the per-plugin
+      # manifests it is pointed at. This catches a catalog that drifted from them.
+      - name: Catalog matches the plugin manifests
+        run: python3 scripts/build-catalog.py --check
+
+      - name: release-please config covers every plugin
+        run: python3 scripts/build-release-config.py --check
+
+      - name: Plugin manifests are current
         run: |
-          found=0
-          while IFS= read -r -d '' f; do
-            python3 -c "import json,sys; json.load(open('$f'))" || exit 1
-            found=$((found + 1))
-          done < <(find . -path ./node_modules -prune -o -name plugin.json -print0)
-          echo "checked $found plugin manifest(s)"
+          python3 scripts/sync-plugin-manifests.py
+          git diff --exit-code -- '*/.omp-plugin/plugin.json'
+
+      # `uvx` is not preinstalled on GitHub runners.
+      - uses: astral-sh/setup-uv@v5
 
       - name: Prose gate
         run: uvx slopvac README.md --profile normal

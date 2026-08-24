@@ -1,0 +1,22 @@
+{
+	"name": "@srobroek/release-queue-watch-runtime",
+	"version": "0.1.0",
+	"private": true,
+	"type": "module",
+	"engines": {
+		"node": ">=20"
+	},
+	"packageManager": "pnpm@11.22.0",
+	"bin": {
+		"release-queue-watch": "./bin/release-queue-watch.js"
+	},
+	"scripts": {
+		"start": "node ./bin/release-queue-watch.js",
+		"test": "node --test",
+		"check": "node --test"
+	},
+	"dependencies": {
+		"@octokit/webhooks": "^14.2.0",
+		"octokit": "^5.0.5"
+	}
+}

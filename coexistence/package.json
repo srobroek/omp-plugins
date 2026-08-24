@@ -1,0 +1,7 @@
+{
+  "name": "@srobroek/coexistence",
+  "version": "0.1.0",
+  "description": "Coexistence policy for parallel checkouts and concurrent agents.",
+  "private": true,
+  "omp": {}
+}

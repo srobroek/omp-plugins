@@ -1,0 +1,6 @@
+{
+  "name": "ops",
+  "description": "Operational telemetry and toolchain cache policy: metrics reading and log digests.",
+  "version": "0.1.0",
+  "category": "devops"
+}

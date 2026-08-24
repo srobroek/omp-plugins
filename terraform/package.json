@@ -1,0 +1,7 @@
+{
+  "name": "@srobroek/terraform",
+  "version": "0.1.0",
+  "description": "Terraform rules: module structure, provider and state layout, and plan review.",
+  "private": true,
+  "omp": {}
+}
