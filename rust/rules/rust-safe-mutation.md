@@ -1,7 +1,6 @@
 ---
 name: rust-safe-mutation
 description: When implementing plan/approve/apply flows, TOCTOU CAS freshness, path traversal checks, or mutation audit trails in Rust.
-globs: ["**/*.rs", "**/Cargo.toml"]
 ---
 
 # Rust Safe Mutation

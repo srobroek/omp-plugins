@@ -1,7 +1,6 @@
 ---
 name: typescript-styling-theming
 description: Two-layer CSS tokens, data-theme theming, density axis, component variant naming
-globs: ["**/*.ts","**/*.tsx","**/*.mts","**/*.cts","**/*.js","**/*.jsx","**/*.mjs","**/*.cjs","**/package.json","**/tsconfig*.json"]
 ---
 
 # TypeScript Styling & Theming

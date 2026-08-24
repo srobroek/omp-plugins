@@ -22,7 +22,7 @@ Create a durable recovery prompt that `catchup` can read before doing fresh disc
    - Update statuses of beads whose state changed this session (`bd update <id> --status <status>`; close finished ones with `bd close`).
    - Add a closing comment on each active bead summarizing exactly where work stopped (`bd comment <id> "..."`).
    - Run `bd dolt push`; tolerate failure or "no remote" offline -- never block the handover on it.
-5. Invoke skill://handover/scripts/new-handover.py to scaffold the file in `~/.local/state/agentic-tools/handovers/`. Pass `--task` when a spec id, issue id, or user-stated task is known; otherwise let the script use the branch. In beads repos, pass `--beads <id1>,<id2>` with the active bead IDs; the script then emits the narrative-only layout.
+5. Invoke the `new_handover` tool to scaffold the file in `~/.local/state/agentic-tools/handovers/`. Pass `task` when a spec id, issue id, or user-stated task is known; otherwise let the tool use the branch. In beads repos, pass `beads` as `<id1>,<id2>` with the active bead IDs; the tool then emits the narrative-only layout.
 6. Replace the older handover for the same project/worktree/branch.
 7. Verify the written file exists and is readable.
 8. Tell the user where the handover was written and what the next session should load first.
@@ -55,4 +55,4 @@ When structuring the handover file, LOAD skill://handover/references/template.md
 
 ## Scripts
 
-`skill://handover/scripts/new-handover.py` creates the shared handover directory, generates the filename and frontmatter, and writes the required markdown sections with user-private permissions where supported. `--beads <id1>,<id2>` records the active bead IDs in frontmatter and switches the body to the narrative-only beads layout. If the script is unavailable, create the same file contract manually.
+The `new_handover` tool creates the shared handover directory, generates the filename and frontmatter, and writes the required markdown sections with user-private permissions where supported. `beads` as `<id1>,<id2>` records the active bead IDs in frontmatter and switches the body to the narrative-only beads layout. If the tool is unavailable, create the same file contract manually.

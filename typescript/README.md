@@ -17,3 +17,9 @@ TypeScript and React architecture conventions, opinionated tooling defaults, and
 - `typescript-testing` — test pyramid, conformance, Playwright, drift gate.
 
 No agents.
+
+## Tools
+
+Registered by this plugin's extension modules:
+
+- `typescript_quality`

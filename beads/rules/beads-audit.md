@@ -1,7 +1,6 @@
 ---
 name: beads-audit
 description: When to record an explicit bd audit entry for a semantic event rather than relying on automatic field auditing.
-globs: ["**/.beads/**"]
 ---
 
 # Beads Semantic Audit and Reporting

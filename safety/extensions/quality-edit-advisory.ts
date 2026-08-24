@@ -56,14 +56,14 @@ type Pending = { files: string[]; lines: number };
 
 const pending = new Map<string, Pending>();
 
-function envInt(name: string, fallback: number): number {
+export function envInt(name: string, fallback: number): number {
 	const raw = process.env[name];
 	if (!raw) return fallback;
 	const n = Number.parseInt(raw, 10);
 	return Number.isFinite(n) ? n : fallback;
 }
 
-function findRepoRoot(start: string): string | null {
+export function findRepoRoot(start: string): string | null {
 	try {
 		let dir = resolve(start);
 		while (true) {
@@ -77,11 +77,11 @@ function findRepoRoot(start: string): string | null {
 	}
 }
 
-function parseSelection(text: string): Set<string> {
+export function parseSelection(text: string): Set<string> {
 	return new Set(text.replaceAll(",", " ").split(/\s+/).filter(Boolean));
 }
 
-function selectedLanguages(root: string): Set<string> {
+export function selectedLanguages(root: string): Set<string> {
 	const override = process.env.AGENTIC_QUALITY_LANGS ?? "";
 	if (override) return parseSelection(override);
 	const found = new Set<string>();
@@ -91,7 +91,7 @@ function selectedLanguages(root: string): Set<string> {
 	return found;
 }
 
-function languageEnabled(language: string, selected: Set<string>): boolean {
+export function languageEnabled(language: string, selected: Set<string>): boolean {
 	if (selected.has("all")) return true;
 	if (language === "ts") {
 		return selected.has("ts") || selected.has("javascript") || selected.has("typescript");
@@ -99,20 +99,17 @@ function languageEnabled(language: string, selected: Set<string>): boolean {
 	return selected.has(language);
 }
 
-function languageForFile(path: string): string | undefined {
+export function languageForFile(path: string): string | undefined {
 	const name = basename(path);
 	if (name in FILENAME_LANGUAGES) return FILENAME_LANGUAGES[name];
 	return EXTENSION_LANGUAGES[extname(path)];
 }
 
-function precommitCovered(root: string): Set<string> {
+export function precommitCovered(root: string): Set<string> {
 	const configName = [".pre-commit-config.yaml", ".pre-commit-config.yml"].find((n) =>
 		existsSync(join(root, n)),
 	);
 	if (!configName) return new Set();
-	// Skip the git hooks-path probe (subprocess). If a config exists, treat
-	// named checkers as coverage — a false skip of advice is safer than a
-	// throwing bash-adjacent subprocess on every edit.
 	let text = "";
 	try {
 		text = readFileSync(join(root, configName), "utf8").toLowerCase();
@@ -126,7 +123,7 @@ function precommitCovered(root: string): Set<string> {
 	return covered;
 }
 
-function editedFiles(input: Record<string, unknown>): string[] {
+export function editedFiles(input: Record<string, unknown>): string[] {
 	for (const key of ["file_path", "path"] as const) {
 		const value = input[key];
 		if (typeof value === "string" && value) return [value];
@@ -138,7 +135,7 @@ function editedFiles(input: Record<string, unknown>): string[] {
 	return [];
 }
 
-function changedLineCount(input: Record<string, unknown>): number {
+export function changedLineCount(input: Record<string, unknown>): number {
 	for (const key of ["new_string", "content", "out"] as const) {
 		const value = input[key];
 		if (typeof value === "string" && value) return value.split("\n").length || 1;
@@ -146,7 +143,7 @@ function changedLineCount(input: Record<string, unknown>): number {
 	return 1;
 }
 
-function stateDir(root: string): string {
+export function stateDir(root: string): string {
 	const digest = createHash("sha256").update(root).digest("hex").slice(0, 16);
 	return join(process.env.TMPDIR || tmpdir(), `agentic-quality-advisory-${digest}`);
 }
@@ -180,6 +177,10 @@ function prepend(
 	return { content: [{ type: "text", text: banner }, ...event.content] };
 }
 
+export function resetQualityAdvisoryForTests(): void {
+	pending.clear();
+}
+
 export default function qualityEditAdvisory(pi: ExtensionAPI): void {
 	pi.on("tool_call", (event) => {
 		try {
@@ -203,7 +204,6 @@ export default function qualityEditAdvisory(pi: ExtensionAPI): void {
 			pending.delete(event.toolCallId);
 
 			const root = findRepoRoot(cwdOf({ ...event, input: event.input ?? {}, toolName: event.toolName } as ExtensionToolCallEvent) || process.cwd());
-			// cwd is not on tool_result; use process.cwd / HOME as last resort
 			const repo = findRepoRoot(process.cwd()) ?? findRepoRoot(homedir());
 			const base = root ?? repo;
 			if (!base) return;

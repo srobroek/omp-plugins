@@ -25,8 +25,6 @@ PLUGINS: dict[str, tuple[str, str]] = {
         "Rust rules: crate boundaries, domain modeling, error and persistence patterns, "
         "workspace and Tauri layout, and a Rust review skill.",
     ),
-    "shell": ("language", "Shell rules: strict mode, quoting, portability, and POSIX-versus-bash choices."),
-    "terraform": ("language", "Terraform rules: module structure, provider and state layout, and plan review."),
     "typescript": (
         "language",
         "TypeScript rules: contract boundaries, type safety and validation, component layout, "
@@ -35,14 +33,12 @@ PLUGINS: dict[str, tuple[str, str]] = {
     # --- topic plugins ---
     "backend": ("development", "Backend rules: API contracts, background jobs, and service boundaries."),
     "infrastructure": ("devops", "Infrastructure rules for provisioning, environments, and operational surface."),
-    "data": ("data", "Data rules: pipeline shape, schema evolution, and storage boundaries."),
     "architecture": (
         "development",
         "Architecture rules: module boundaries, compose-don't-fork, project structure, "
         "component promotion, and structural-search routing.",
     ),
     "delivery": ("devops", "Delivery and git-workflow rules, plus a pull-request review agent."),
-    "docs": ("documentation", "Product-spec and documentation-process rules for specs/ and .specify/ assets."),
     "authoring": ("productivity", "Author and audit agentic assets: skills, rules, agents, and steering."),
     "quality": (
         "development",
@@ -50,16 +46,13 @@ PLUGINS: dict[str, tuple[str, str]] = {
         "mechanical diff review, and browser-verification discipline.",
     ),
     "ops": ("devops", "Operational telemetry and toolchain cache policy: metrics reading and log digests."),
-    "review": ("development", "Deep review agents: thorough code review and adversarial challenge."),
     "build": ("development", "Implementation agents: builder, high-effort builder, operator, external-repo worker."),
-    "research": ("productivity", "Investigation agents and bulk repository-packing recipes."),
     "project": (
         "productivity",
         "Project lifecycle: brownfield onboarding, license selection, and user journeys.",
     ),
     "beads": ("productivity", "Beads issue tracking: dependency DAGs, formulas, and decisions recorded as beads."),
     "toolchain": ("development", "Toolchain defaults, tools-versus-scripts layout, and pragmatic output rules."),
-    "coexistence": ("productivity", "Coexistence policy for parallel checkouts and concurrent agents."),
     "safety": ("security", "Defence-in-depth advisories for destructive commands, attribution, and remote execution."),
     "chezmoi": ("productivity", "Edit chezmoi-managed dotfiles at their authoritative source."),
     "session": ("productivity", "Session continuity: recover prior work and hand over in-flight work."),

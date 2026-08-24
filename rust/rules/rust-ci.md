@@ -1,7 +1,6 @@
 ---
 name: rust-ci
 description: When authoring Rust GitHub Actions CI, rust-cache keys, required-check gates, or supply-chain attestation.
-globs: ["**/*.rs", "**/Cargo.toml", "**/.github/workflows/*"]
 ---
 
 # Rust CI Defaults (GitHub Actions)

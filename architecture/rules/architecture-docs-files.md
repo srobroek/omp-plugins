@@ -1,7 +1,6 @@
 ---
 name: architecture-docs-files
 description: When inferring architecture or stack, or creating durable project knowledge files under docs/.
-globs: ["docs/**"]
 ---
 
 Store durable project knowledge under `docs/` and read those files before

@@ -1,7 +1,6 @@
 ---
 name: beads-composition
 description: Choosing an execution shape: ad hoc issue, epic, formula, poured molecule, bond, or wisp.
-globs: ["**/.beads/**"]
 ---
 
 # Beads Formulas, Molecules, Bonds, and Wisps

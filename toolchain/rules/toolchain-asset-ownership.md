@@ -1,7 +1,6 @@
 ---
 name: toolchain-asset-ownership
 description: When adding or changing agentic assets — where OMP config, plugins, and discovery live.
-globs: ["**/*"]
 ---
 
 # Agentic asset ownership

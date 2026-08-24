@@ -1,7 +1,6 @@
 ---
 name: typescript-component-layout
 description: React page layout primitive, scroll containment, named slot props, barrel deprecation ledger
-globs: ["**/*.ts","**/*.tsx","**/*.mts","**/*.cts","**/*.js","**/*.jsx","**/*.mjs","**/*.cjs"]
 ---
 
 # TypeScript Component & Layout

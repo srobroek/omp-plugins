@@ -51,20 +51,6 @@
       "category": "productivity"
     },
     {
-      "name": "coexistence",
-      "description": "Coexistence policy for parallel checkouts and concurrent agents.",
-      "source": "./coexistence",
-      "version": "0.1.0",
-      "category": "productivity"
-    },
-    {
-      "name": "data",
-      "description": "Data rules: pipeline shape, schema evolution, and storage boundaries.",
-      "source": "./data",
-      "version": "0.1.0",
-      "category": "data"
-    },
-    {
       "name": "debate",
       "description": "Stress-test a decision from both sides before committing.",
       "source": "./debate",
@@ -84,13 +70,6 @@
       "source": "./dep-update",
       "version": "0.1.0",
       "category": "development"
-    },
-    {
-      "name": "docs",
-      "description": "Product-spec and documentation-process rules for specs/ and .specify/ assets.",
-      "source": "./docs",
-      "version": "0.1.0",
-      "category": "documentation"
     },
     {
       "name": "eli5",
@@ -149,20 +128,6 @@
       "category": "development"
     },
     {
-      "name": "research",
-      "description": "Investigation agents and bulk repository-packing recipes.",
-      "source": "./research",
-      "version": "0.1.0",
-      "category": "productivity"
-    },
-    {
-      "name": "review",
-      "description": "Deep review agents: thorough code review and adversarial challenge.",
-      "source": "./review",
-      "version": "0.1.0",
-      "category": "development"
-    },
-    {
       "name": "rust",
       "description": "Rust rules: crate boundaries, domain modeling, error and persistence patterns, workspace and Tauri layout, and a Rust review skill.",
       "source": "./rust",
@@ -182,20 +147,6 @@
       "source": "./session",
       "version": "0.1.0",
       "category": "productivity"
-    },
-    {
-      "name": "shell",
-      "description": "Shell rules: strict mode, quoting, portability, and POSIX-versus-bash choices.",
-      "source": "./shell",
-      "version": "0.1.0",
-      "category": "language"
-    },
-    {
-      "name": "terraform",
-      "description": "Terraform rules: module structure, provider and state layout, and plan review.",
-      "source": "./terraform",
-      "version": "0.1.0",
-      "category": "language"
     },
     {
       "name": "toolchain",

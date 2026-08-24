@@ -1,7 +1,6 @@
 ---
 name: architecture-top-level
 description: When choosing or changing repository top-level directories or capability-first layout.
-globs: ["**/*"]
 ---
 
 Prefer these top-level directories when the project shape needs them:

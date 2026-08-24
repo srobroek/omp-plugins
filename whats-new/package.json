@@ -3,9 +3,12 @@
   "version": "0.1.0",
   "description": "Research breaking changes, deprecations, and new features between two versions.",
   "private": true,
+  "dependencies": {
+    "smol-toml": "1.6.1"
+  },
   "omp": {
     "extensions": [
-      "./extensions/version-gap-tool.ts"
+      "./dist/version-gap-tool.js"
     ]
   }
 }

@@ -19,3 +19,9 @@
 
 ## Rules
 
+## Tools
+
+Registered by this plugin's extension modules:
+
+- `journey_install_formulas`
+- `journeys_index`

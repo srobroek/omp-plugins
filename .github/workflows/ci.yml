@@ -42,6 +42,28 @@ jobs:
           python3 scripts/sync-plugin-manifests.py
           git diff --exit-code -- '*/.omp-plugin/plugin.json'
 
+      - uses: oven-sh/setup-bun@v2
+
+      # Every extension module must at least parse and bundle. Plugins that declare
+      # real `dependencies` ship committed `dist/` bundles (git installs run no
+      # install step on the consumer's machine); this fails when a bundle is stale.
+      - name: Extension modules parse
+        run: |
+          status=0
+          while IFS= read -r f; do
+            bun build --target=bun "$f" --outdir /tmp/extcheck --external '@oh-my-pi/*' >/dev/null || { echo "FAIL $f"; status=1; }
+          done < <(git ls-files '*/extensions/*.ts' | grep -v '\.test\.ts$')
+          exit $status
+
+      - name: Extension bundles are current
+        run: python3 scripts/build-extensions.py --check
+
+      - name: Extension tests
+        run: |
+          while IFS= read -r d; do
+            (cd "$d/.." && bun test extensions/) || exit 1
+          done < <(git ls-files '*/extensions/*.test.ts' | xargs -rn1 dirname | sort -u)
+
       # `uvx` is not preinstalled on GitHub runners.
       - uses: astral-sh/setup-uv@v5
 

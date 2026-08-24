@@ -1,7 +1,0 @@
-{
-  "name": "@srobroek/docs",
-  "version": "0.1.0",
-  "description": "Product-spec and documentation-process rules for specs/ and .specify/ assets.",
-  "private": true,
-  "omp": {}
-}

@@ -36,7 +36,7 @@ The `chezmoi-guard` extension blocks edits to live chezmoi targets and reminds y
 
 ## Scripts
 
-- Status and diff: `skill://chezmoi-editor/scripts/status.sh`.
+- Status and diff: `chezmoi_status` tool.
 
 ## References
 

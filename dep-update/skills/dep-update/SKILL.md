@@ -50,15 +50,14 @@ name: old → new (PATCH|MINOR)  [cite]
 Apply? [Y/n]
 ```
 
-On `Y`: `skill://dep-update/scripts/apply.py <ecosystem> <name> <new_version> [project-dir]`.
+On `Y`: run the `dep_apply` tool (`ecosystem`, `name`, `version`, optional `path`).
 On `n`: record as skipped and move on.
 
 MUST confirm every bump on its own `[Y/n]` -- no global yes-to-all, no batching.
 MUST keep majors, rust, and go out of the loop: named, cited, stopped (FR-014).
 NOT writing `.project-setup/answers.toml` or `sources.toml` -- the project-setup
 runner owns those; this skill only reads them.
-NOT importing the runner SDK (`sdk.py`) -- stdlib only (`urllib`, `json`,
-`tomllib`/`tomli`), matching `whats-new`.
+NOT importing a Python SDK -- native TypeScript tools only.
 MUST report coverage as observed: ecosystems detected, lockfiles read, scanners
 that ran, scanners that were absent. An unrun scanner never reads as clean.
 
@@ -81,15 +80,14 @@ into the same ruff confirm. Unparseable YAML → print the manual change instead
 Guard each with `command -v`; missing → report "scanner not available:
 `<name>`" plus the install hint. Never install a scanner.
 
-## Scripts
+## Tools
 
-| Script | Purpose | Exit |
-|--------|---------|------|
-| `skill://dep-update/scripts/detect.py [dir]` | Enumerate deps and pinned versions, no network. | 0 |
-| `skill://dep-update/scripts/research.py [dir]` | Query PyPI/npm, classify, emit JSON-lines. Per-dep `status`: OK, CURRENT, UNRESOLVABLE (404/auth/network -- skill continues), DISCONFIRMED (all PyPI files yanked). `DEP_UPDATE_FIXTURE_DIR` stubs the registry. | 0 |
-| `skill://dep-update/scripts/apply.py <eco> <name> <ver> [dir]` | Apply one bump via the package manager, then verify the manifest. Absent package manager → prints the manual command. | 0 applied/skipped · 1 post-apply version mismatch · 2 bad arguments |
+| Tool | Purpose |
+|------|---------|
+| `dep_scan` | Enumerate deps, query PyPI/npm, classify bumps. Optional `offline_fixture_dir` / `DEP_UPDATE_FIXTURE_DIR`. |
+| `dep_apply` | Apply one bump via the package manager, then verify the manifest. |
 
-`skill://dep-update/references/recipes.md` holds what the scripts do not: the go-proxy and
+`skill://dep-update/references/recipes.md` holds what the tools do not: the go-proxy and
 crates.io endpoints, the advisory-only apply commands, the changelog fetch
 order, and the `answers.toml` key names.
 

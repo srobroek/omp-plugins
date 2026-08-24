@@ -1,7 +1,6 @@
 ---
 name: architecture-structural-search
 description: When navigating symbols, searching by AST shape, or applying structure-aware codemods (replaces Serena).
-globs: ["**/*"]
 ---
 
 Structural, symbol-aware navigation uses the `lsp` tool (`definition`, `references`, `hover`, `symbols`).

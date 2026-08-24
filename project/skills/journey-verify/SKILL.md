@@ -9,16 +9,15 @@ Coordinate validation of one or more journeys. `FORMAT.md` in the journeys
 directory is normative; read it plus `README.md` (config) and the target
 `journey.md` files first.
 
-Formula templates and their copy helper live in this skill's directory:
-`skill://journey-verify/formulas/*.formula.toml` and `skill://journey-verify/scripts/install_formulas.py`.
+Formula templates live in this skill's directory:
+`skill://journey-verify/formulas/*.formula.toml`.
 
 ## Beads formula provisioning
 
-When the repository contains `.beads/`, run
-`python3` on `skill://journey-verify/scripts/install_formulas.py` with `<repo-root>`
-before validation. The helper copies the package-owned formulas into
+When the repository contains `.beads/`, run the `journey_install_formulas` tool
+with `repoRoot` before validation. The helper copies the package-owned formulas into
 `.beads/formulas/` and leaves identical copies unchanged. If a destination
-differs, stop and ask before rerunning with `--force`.
+differs, stop and ask before rerunning with `force`.
 
 Use `journey-step-agentic-verification` when the result needs no human gate.
 Use `journey-step-human-verification` when a human must approve the triaged
@@ -56,8 +55,8 @@ the rest run in parallel.
 3. **Promotion.** A `draft` journey may become `active` only when every
    step passed AND its Known gaps are all user-confirmed; note the
    promotion in the run file. Otherwise leave `status` untouched.
-4. **Reindex once** per wave: `python3 <journeys-dir>/journeys.py index
-   <journeys-dir>` (the helper lives in the journeys directory), then lint.
+4. **Reindex once** per wave: `journeys_index` command `index` (or
+   `python3 <journeys-dir>/journeys.py index <journeys-dir>` when using the copied helper), then lint.
 5. **Commit** journeys-dir changes as
    `journey(J<id>): validate v<version> — <result>` -- unless the caller or
    repo workflow forbids committing; then leave uncommitted and say so.

@@ -1,7 +1,0 @@
-{
-  "name": "@srobroek/data",
-  "version": "0.1.0",
-  "description": "Data rules: pipeline shape, schema evolution, and storage boundaries.",
-  "private": true,
-  "omp": {}
-}

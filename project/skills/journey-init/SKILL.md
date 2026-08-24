@@ -74,11 +74,11 @@ not cover is an open question in your report -- never guess it.
 1. Create the journeys directory. Copy `skill://journey-init/templates/FORMAT.md` verbatim AND
    `skill://journey-init/scripts/journeys.py` into it -- the
    helper travels with the repo so every future skill and validator invokes
-   `<journeys-dir>/journeys.py`, never a path inside an installed skill.
+   `<journeys-dir>/journeys.py`, never a path inside an installed skill. In-harness, the `journeys_index` tool is the native equivalent.
 2. Write `README.md` from `skill://journey-init/templates/README.template.md` with frontmatter
    and all sections filled from phases 1 to 2 -- real launch commands, real doc
    pointers, real intent-evidence locations. Delete placeholder text.
-3. Generate the index:
+3. Generate the index: `journeys_index` with command `index`, or
    `python3 <journeys-dir>/journeys.py index <journeys-dir>`.
 4. If reporter is `local`, create `TRACKER.md` with a `# Journey findings`
    heading and nothing else.
@@ -92,5 +92,5 @@ not cover is an open question in your report -- never guess it.
   (monorepos: ask which app the journeys belong to; one journeys dir per
   product, not per package).
 - The scaffold must be immediately lintable:
-  `python3 <journeys-dir>/journeys.py lint <journeys-dir>` exits 0 on a fresh
+  `journeys_index` command `lint`, or `python3 <journeys-dir>/journeys.py lint <journeys-dir>` exits 0 on a fresh
   scaffold (no journeys yet).

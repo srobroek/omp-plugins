@@ -23,3 +23,9 @@ None.
 - `rust-errors` — wire error-code registry and audit
 - `rust-tauri` — Tauri v2 bundles, updater, WebDriver
 - `rust-tauri-mcp-bridge` — driving a running Tauri app over the MCP bridge
+
+## Tools
+
+Registered by this plugin's extension modules:
+
+- `rust_quality`

@@ -1,7 +1,6 @@
 ---
 name: typescript-contract-boundary
 description: Frontend IPC/API generated bindings, dispatch seam, envelope unwrap, conformance test, mock fidelity
-globs: ["**/*.ts","**/*.tsx","**/*.mts","**/*.cts","**/*.js","**/*.jsx","**/*.mjs","**/*.cjs"]
 ---
 
 # TypeScript Contract Boundary

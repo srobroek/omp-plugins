@@ -1,7 +1,6 @@
 ---
 name: architecture-component-promotion
 description: When adding or promoting UI components, design-system code, or shared primitives into libs/ui.
-globs: ["apps/**/components/**", "apps/**/ui/**", "libs/ui/**"]
 ---
 
 Keep components local to an app; move shared primitives and design-system code

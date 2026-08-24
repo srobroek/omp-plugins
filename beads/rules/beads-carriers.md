@@ -1,7 +1,6 @@
 ---
 name: beads-carriers
 description: Which carrier holds a decision and what makes it authoritative: comments, decision beads, wisps, artifacts.
-globs: ["**/.beads/**"]
 ---
 
 # Beads carriers: comments, decision beads, wisps, artifacts

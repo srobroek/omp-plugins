@@ -1,7 +1,6 @@
 ---
 name: beads-setup
 description: Initialising beads in a repository and verifying the install.
-globs: ["**/.beads/**"]
 ---
 
 # Beads Setup

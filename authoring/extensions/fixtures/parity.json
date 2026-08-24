@@ -1,0 +1,132 @@
+{
+  "architecture/rules/architecture-component-promotion.md": [],
+  "architecture/rules/architecture-compose-dont-fork.md": [],
+  "architecture/rules/architecture-docs-files.md": [],
+  "architecture/rules/architecture-ownership.md": [],
+  "architecture/rules/architecture-structural-search.md": [],
+  "architecture/rules/architecture-top-level.md": [],
+  "authoring/rules/research-repomix-recipes.md": [],
+  "authoring/skills/audit-steering/SKILL.md": [],
+  "authoring/skills/omp-extension-safety/SKILL.md": [],
+  "authoring/skills/omp-plugin-authoring/SKILL.md": [],
+  "authoring/skills/omp-surface-choice/SKILL.md": [],
+  "authoring/skills/write-agentic/SKILL.md": [],
+  "backend/rules/backend-api-contracts.md": [],
+  "backend/rules/backend-background-jobs.md": [],
+  "backend/rules/backend-runtime.md": [],
+  "beads/rules/beads-adr-generated-guard.md": [],
+  "beads/rules/beads-adr.md": [],
+  "beads/rules/beads-audit.md": [],
+  "beads/rules/beads-carriers.md": [],
+  "beads/rules/beads-composition.md": [],
+  "beads/rules/beads-coordination.md": [],
+  "beads/rules/beads-core.md": [],
+  "beads/rules/beads-github-mirror.md": [],
+  "beads/rules/beads-lifecycle.md": [],
+  "beads/rules/beads-orchestration-doctrine.md": [],
+  "beads/rules/beads-setup.md": [],
+  "beads/skills/adr/SKILL.md": [
+    "W6"
+  ],
+  "beads/skills/build-formula/SKILL.md": [
+    "W6"
+  ],
+  "build/agents/builder-high.md": [],
+  "build/agents/builder.md": [],
+  "build/agents/external-repo-worker.md": [],
+  "build/agents/operator.md": [],
+  "chezmoi/skills/chezmoi-editor/SKILL.md": [],
+  "debate/skills/debate/SKILL.md": [],
+  "delivery/agents/pr-reviewer.md": [],
+  "delivery/rules/delivery-cadence.md": [],
+  "delivery/rules/delivery-draft-pr-advisory.md": [],
+  "delivery/rules/delivery-git-workflow.md": [],
+  "dep-update/skills/dep-update/SKILL.md": [
+    "W6"
+  ],
+  "eli5/skills/eli5/SKILL.md": [],
+  "find-tools/skills/find-tools/SKILL.md": [],
+  "go/rules/go-language.md": [],
+  "go/skills/go-quality/SKILL.md": [],
+  "infrastructure/rules/infrastructure-platform.md": [],
+  "infrastructure/rules/infrastructure-tfstate-guard.md": [],
+  "infrastructure/rules/terraform-language.md": [],
+  "ops/agents/data-metrics-summarizer.md": [],
+  "ops/agents/maintenance-metrics-reader.md": [],
+  "ops/rules/ops-toolchain-cache-policy.md": [],
+  "project/agents/journey-scribe.md": [
+    "E1"
+  ],
+  "project/agents/journey-validator.md": [
+    "E1"
+  ],
+  "project/skills/brownfield-project/SKILL.md": [
+    "W6"
+  ],
+  "project/skills/journey-campaign/SKILL.md": [
+    "W6"
+  ],
+  "project/skills/journey-consolidate/SKILL.md": [],
+  "project/skills/journey-init/SKILL.md": [
+    "W6"
+  ],
+  "project/skills/journey-verify/SKILL.md": [],
+  "project/skills/journey-verify-changed/SKILL.md": [],
+  "project/skills/journey-write/SKILL.md": [
+    "W6"
+  ],
+  "project/skills/license-picker/SKILL.md": [
+    "W6"
+  ],
+  "python/rules/python-language.md": [],
+  "python/skills/python-quality/SKILL.md": [],
+  "quality/agents/adversarial-challenger.md": [],
+  "quality/agents/bloodhound.md": [],
+  "quality/agents/docs-guard.md": [],
+  "quality/agents/lint-guard.md": [],
+  "quality/agents/refactor-challenger.md": [],
+  "quality/agents/reviewer-mechanics.md": [],
+  "quality/rules/quality-browser-verification.md": [],
+  "quality/skills/sniff/SKILL.md": [
+    "W6"
+  ],
+  "quality/skills/verify/SKILL.md": [],
+  "rust/rules/rust-ci.md": [],
+  "rust/rules/rust-contract-boundary.md": [],
+  "rust/rules/rust-crate-boundaries.md": [],
+  "rust/rules/rust-domain-modeling.md": [],
+  "rust/rules/rust-errors.md": [],
+  "rust/rules/rust-persistence.md": [],
+  "rust/rules/rust-safe-mutation.md": [],
+  "rust/rules/rust-tauri-mcp-bridge.md": [],
+  "rust/rules/rust-tauri.md": [],
+  "rust/rules/rust-workspace.md": [],
+  "rust/skills/rust-quality/SKILL.md": [],
+  "safety/rules/srobroek-attribution-guard.md": [],
+  "safety/rules/srobroek-bash-indirection-guard.md": [],
+  "safety/rules/srobroek-git-force-push-advisory.md": [],
+  "safety/rules/srobroek-package-investigate.md": [],
+  "safety/rules/srobroek-remote-exec-guard.md": [],
+  "safety/rules/srobroek-sudo-destructive-advisory.md": [],
+  "session/skills/catchup/SKILL.md": [],
+  "session/skills/handover/SKILL.md": [],
+  "toolchain/rules/coexistence-worktree.md": [],
+  "toolchain/rules/shell-language.md": [],
+  "toolchain/rules/toolchain-asset-ownership.md": [],
+  "toolchain/rules/toolchain-frontend.md": [],
+  "toolchain/rules/toolchain-infrastructure.md": [],
+  "toolchain/rules/toolchain-languages.md": [],
+  "toolchain/rules/toolchain-pragmatic.md": [],
+  "toolchain/rules/toolchain-quality-observability.md": [],
+  "toolchain/rules/toolchain-stack-defaults.md": [],
+  "toolchain/rules/toolchain-tools-scripts.md": [],
+  "typescript/rules/typescript-build-tooling.md": [],
+  "typescript/rules/typescript-component-layout.md": [],
+  "typescript/rules/typescript-contract-boundary.md": [],
+  "typescript/rules/typescript-state-data.md": [],
+  "typescript/rules/typescript-styling-theming.md": [],
+  "typescript/rules/typescript-testing.md": [],
+  "typescript/rules/typescript-type-safety.md": [],
+  "typescript/skills/typescript-quality/SKILL.md": [],
+  "whats-new/skills/whats-new/SKILL.md": []
+}

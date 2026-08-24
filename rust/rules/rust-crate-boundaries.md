@@ -1,7 +1,6 @@
 ---
 name: rust-crate-boundaries
 description: When splitting crates, laying out a Rust monorepo workspace, writing lib.rs facades, or extracting IO from a domain crate.
-globs: ["**/*.rs", "**/Cargo.toml"]
 ---
 
 # Rust Crate Boundaries

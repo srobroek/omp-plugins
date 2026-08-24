@@ -1,27 +1,7 @@
 import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
+import { applyBump, researchProject, type BumpRecord } from "./lib";
 
-/**
- * dep_scan: the deterministic half of the dep-update skill.
- *
- * Wraps skills/dep-update/scripts/research.py, which itself runs detect.py against
- * the project directory: enumerate declared dependencies (no network), query each
- * registry, classify the bump. The scripts stay authoritative; this tool only
- * replaces the invocation choreography that used to live in SKILL.md prose.
- *
- * Read-only: nothing is applied. The apply loop stays interactive in the skill.
- */
-
-const SCRIPT = new URL("../skills/dep-update/scripts/research.py", import.meta.url).pathname;
-const TIMEOUT_MS = 120_000;
-
-interface BumpRecord {
-	ecosystem: string;
-	name: string;
-	installed: string;
-	latest: string;
-	class: string;
-	status: string;
-}
+export { classify, detectProject, normalizeVersion, parseRequirement, queryRegistry } from "./lib";
 
 export default function depScanTool(pi: ExtensionAPI): void {
 	const z = pi.zod;
@@ -41,51 +21,22 @@ export default function depScanTool(pi: ExtensionAPI): void {
 				.describe("DEP_UPDATE_FIXTURE_DIR: read registry responses from fixture files instead of the network"),
 		}),
 		approval: "read",
-		async execute(_id, params, signal, _onUpdate, ctx) {
+		async execute(_id, params, _signal, _onUpdate, ctx) {
 			const dir = params.path ?? ctx.cwd;
-			const env: Record<string, string> = { ...process.env } as Record<string, string>;
-			if (params.offline_fixture_dir) env.DEP_UPDATE_FIXTURE_DIR = params.offline_fixture_dir;
-
 			try {
-				const proc = Bun.spawn(["python3", SCRIPT, dir], {
-					cwd: dir,
-					env,
-					stdout: "pipe",
-					stderr: "pipe",
-					signal,
-				});
-				const timer = setTimeout(() => proc.kill(), TIMEOUT_MS);
-				const [stdout, stderr] = await Promise.all([
-					new Response(proc.stdout).text(),
-					new Response(proc.stderr).text(),
-				]);
-				const exit = await proc.exited;
-				clearTimeout(timer);
-
+				const { exit, records, stderr } = await researchProject(dir, params.offline_fixture_dir);
 				if (exit !== 0) {
 					return {
-						content: [{ type: "text" as const, text: `dep_scan failed (exit ${exit}):\n${stderr.trim()}` }],
-						details: { exit, stderr: stderr.trim() },
+						content: [{ type: "text" as const, text: `dep_scan failed (exit ${exit}):\n${stderr}` }],
+						details: { exit, stderr },
 					};
 				}
-
-				const records: BumpRecord[] = [];
-				for (const line of stdout.split("\n")) {
-					const trimmed = line.trim();
-					if (!trimmed) continue;
-					try {
-						records.push(JSON.parse(trimmed) as BumpRecord);
-					} catch {
-						// non-JSON noise line; ignore
-					}
-				}
-
-				const upgradable = records.filter((r) => r.status === "OK");
+				const upgradable = records.filter((r: BumpRecord) => r.status === "OK");
 				const byClass = new Map<string, BumpRecord[]>();
 				for (const r of upgradable) {
-					const bucket = byClass.get(r.class) ?? [];
+					const bucket = byClass.get(r.class ?? "") ?? [];
 					bucket.push(r);
-					byClass.set(r.class, bucket);
+					byClass.set(r.class ?? "", bucket);
 				}
 				const order = ["PATCH-SAFE", "MINOR-CHECK", "MAJOR-ADVISORY"];
 				const lines: string[] = [];
@@ -97,7 +48,6 @@ export default function depScanTool(pi: ExtensionAPI): void {
 				const skipped = records.length - upgradable.length;
 				lines.push(`-- ${upgradable.length} upgradable, ${skipped} current/unresolvable --`);
 				if (stderr.trim()) lines.push(stderr.trim());
-
 				return {
 					content: [{ type: "text" as const, text: lines.join("\n") }],
 					details: { records, summary: { upgradable: upgradable.length, skipped } },
@@ -106,6 +56,35 @@ export default function depScanTool(pi: ExtensionAPI): void {
 				const message = error instanceof Error ? error.message : String(error);
 				return {
 					content: [{ type: "text" as const, text: `dep_scan error: ${message}` }],
+					details: { error: message },
+				};
+			}
+		},
+	});
+
+	pi.registerTool({
+		name: "dep_apply",
+		label: "Apply Dependency Bump",
+		description:
+			"Apply one confirmed dependency bump via the ecosystem package manager (uv/pnpm/npm/yarn/bun). " +
+			"Cargo and go print an advisory command only. One bump per call.",
+		parameters: z.object({
+			ecosystem: z.string().describe("pypi, npm, cargo, or go"),
+			name: z.string().describe("Package name"),
+			version: z.string().describe("Target version to pin"),
+			path: z.string().optional().describe("Project root; defaults to session cwd"),
+		}),
+		async execute(_id, params, _signal, _onUpdate, ctx) {
+			try {
+				const result = await applyBump(params.ecosystem, params.name, params.version, params.path ?? ctx.cwd);
+				return {
+					content: [{ type: "text" as const, text: result.text }],
+					details: { exit: result.exit },
+				};
+			} catch (error) {
+				const message = error instanceof Error ? error.message : String(error);
+				return {
+					content: [{ type: "text" as const, text: `dep_apply error: ${message}` }],
 					details: { error: message },
 				};
 			}

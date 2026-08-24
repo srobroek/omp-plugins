@@ -1,7 +1,6 @@
 ---
 name: beads-lifecycle
 description: Bead status transitions and gate beads: when to open, block, defer, or close, and how blocking waits work.
-globs: ["**/.beads/**"]
 ---
 
 # Beads Lifecycle and Gates

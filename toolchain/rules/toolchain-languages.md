@@ -1,7 +1,6 @@
 ---
 name: toolchain-languages
 description: When picking per-language libraries or test/lint tools that the language itself does not imply.
-globs: ["**/*"]
 ---
 
 # Per-Language Library And Tool Defaults

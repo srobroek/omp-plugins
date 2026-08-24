@@ -16,3 +16,5 @@ Does not tell the agent to prefer `rg`/`fd`/`eza`/`bat` in bash: OMP routes thos
 | `toolchain-tools-scripts` | `scripts/` and `tools/`. |
 | `toolchain-pragmatic` | Produced-artifact register. |
 | `toolchain-asset-ownership` | OMP vs chezmoi vs marketplace. |
+| `coexistence-worktree` | Concurrent agents/humans, interference, branch stolen. |
+| `shell-language` | Shell portability, quoting, command safety. |

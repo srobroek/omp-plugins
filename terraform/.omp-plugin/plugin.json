@@ -1,6 +1,0 @@
-{
-  "name": "terraform",
-  "description": "Terraform rules: module structure, provider and state layout, and plan review.",
-  "version": "0.1.0",
-  "category": "language"
-}

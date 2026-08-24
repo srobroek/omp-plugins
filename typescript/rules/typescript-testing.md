@@ -1,7 +1,6 @@
 ---
 name: typescript-testing
 description: Frontend test pyramid, jsdom shims, IPC DI override, conformance test, Playwright split, CI drift gate
-globs: ["**/*.ts","**/*.tsx","**/*.mts","**/*.cts","**/*.js","**/*.jsx","**/*.mjs","**/*.cjs","**/package.json","**/tsconfig*.json"]
 ---
 
 # TypeScript Testing

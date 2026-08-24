@@ -1,7 +1,6 @@
 ---
 name: toolchain-pragmatic
 description: When producing code, comments, or written artifacts — economy, no in-artifact justification, comment discipline.
-globs: ["**/*"]
 ---
 
 # Pragmatic Working Style

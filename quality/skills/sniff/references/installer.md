@@ -4,12 +4,12 @@ How sniff handles tool availability. The contract: **tools are always optional,
 never auto-installed, never sudo.** Missing tools become reported coverage gaps,
 not errors.
 
-The script `scripts/install-tools.sh` does the mechanical work; this doc is the
+The tool `sniff_install_tools` does the mechanical work; this doc is the
 agent's playbook for using it.
 
 ## First-run / step-2 sequence
 
-1. **Probe.** `scripts/install-tools.sh --probe`. It prints, per bundle, which
+1. **Probe.** `sniff_install_tools` with mode `probe`. It prints, per bundle, which
    tools are installed and which are missing (with an install hint each).
 2. **Propose the full set; the user deselects.** Do not dump raw probe output
    and ask "install all?", and do not offer depth tiers (lean/full/custom) --
@@ -27,7 +27,7 @@ agent's playbook for using it.
    ```
    Pull the overlap/gap facts from `references/tooling.md`.
 3. **Install every default-on tool the user doesn't deselect.**
-   `install-tools.sh --install <bundle>...` or `--all`. Use `--dry-run` first if
+   `sniff_install_tools` mode `install` with `bundles` or `all`. Use `dryRun` first if
    the user wants to see commands.
 4. **Proceed regardless.** If the user declines an install, continue with what
    is present and list the gaps in the final report's coverage note.

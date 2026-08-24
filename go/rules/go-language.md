@@ -1,7 +1,6 @@
 ---
 name: go-language
 description: When writing or reviewing Go binaries, packages, domain boundaries, CLIs, configuration, routing, RPC, SQL, tests, or tooling.
-globs: ["**/*.go"]
 ---
 
 # Go

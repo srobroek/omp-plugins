@@ -1,6 +1,0 @@
-{
-  "name": "coexistence",
-  "description": "Coexistence policy for parallel checkouts and concurrent agents.",
-  "version": "0.1.0",
-  "category": "productivity"
-}

@@ -13,3 +13,9 @@ Session continuity: recover prior work and hand over in-flight work.
 ## Agents
 
 None.
+
+## Tools
+
+Registered by this plugin's extension modules:
+
+- `new_handover`

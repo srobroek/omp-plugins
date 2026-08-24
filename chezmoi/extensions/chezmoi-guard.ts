@@ -28,7 +28,10 @@ const cache: Cache = {
 const pendingSourceEdits = new Map<string, string[]>();
 let lastReminderAt = 0;
 
-function spawnChezmoi(args: string[]): string | null {
+let testSpawn: ((args: string[]) => string | null) | null = null;
+
+export function spawnChezmoi(args: string[]): string | null {
+	if (testSpawn) return testSpawn(args);
 	try {
 		const proc = Bun.spawnSync(["chezmoi", ...args], {
 			stdout: "pipe",
@@ -42,7 +45,30 @@ function spawnChezmoi(args: string[]): string | null {
 	}
 }
 
-function lexicalAbs(target: string, cwd: string): string {
+export function setChezmoiSpawnForTests(fn: ((args: string[]) => string | null) | null): void {
+	testSpawn = fn;
+}
+
+export function resetChezmoiGuardForTests(): void {
+	cache.managed = null;
+	cache.sourceDir = null;
+	cache.sourceDirResolved = false;
+	pendingSourceEdits.clear();
+	lastReminderAt = 0;
+	testSpawn = null;
+}
+
+export function seedChezmoiCacheForTests(managed: Set<string> | null, sourceDir: string | null): void {
+	cache.managed = managed;
+	cache.sourceDir = sourceDir;
+	cache.sourceDirResolved = true;
+}
+
+export function setLastReminderAtForTests(ms: number): void {
+	lastReminderAt = ms;
+}
+
+export function lexicalAbs(target: string, cwd: string): string {
 	let expanded = target.startsWith("~") ? homedir() + target.slice(1) : target;
 	if (!isAbsolute(expanded)) expanded = resolve(cwd, expanded);
 	const parts: string[] = [];
@@ -57,13 +83,13 @@ function lexicalAbs(target: string, cwd: string): string {
 	return "/" + parts.join("/");
 }
 
-function under(child: string, parent: string): boolean {
+export function under(child: string, parent: string): boolean {
 	if (!parent) return false;
 	const rel = relative(parent, child);
 	return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
 }
 
-function editedFiles(input: Record<string, unknown>): string[] {
+export function editedFiles(input: Record<string, unknown>): string[] {
 	for (const key of ["file_path", "path"] as const) {
 		const value = input[key];
 		if (typeof value === "string" && value.length > 0) return [value];
@@ -75,7 +101,7 @@ function editedFiles(input: Record<string, unknown>): string[] {
 	return [];
 }
 
-function sedInplacePaths(command: string): string[] {
+export function sedInplacePaths(command: string): string[] {
 	if (!SED_INPLACE.test(command)) return [];
 	const tokens = command.split(/\s+/).filter(Boolean);
 	const out: string[] = [];
@@ -86,13 +112,13 @@ function sedInplacePaths(command: string): string[] {
 	return out;
 }
 
-function shouldInspect(abs: string, cwd: string): boolean {
+export function shouldInspect(abs: string, cwd: string): boolean {
 	if (!under(abs, homedir())) return false;
 	if (under(abs, cwd)) return false;
 	return true;
 }
 
-function loadManaged(): Set<string> | null {
+export function loadManaged(): Set<string> | null {
 	if (cache.managed) return cache.managed;
 	const out = spawnChezmoi(["managed", "--path-style=absolute"]);
 	if (out === null) return null;
@@ -105,7 +131,7 @@ function loadManaged(): Set<string> | null {
 	return set;
 }
 
-function loadSourceDir(): string | null {
+export function loadSourceDir(): string | null {
 	if (cache.sourceDirResolved) return cache.sourceDir;
 	const out = spawnChezmoi(["source-path"]);
 	cache.sourceDirResolved = true;
@@ -123,7 +149,7 @@ function refreshIfSourceEdit(abs: string): void {
 	if (source && under(abs, source)) cache.managed = null;
 }
 
-function considerPath(abs: string, cwd: string): { block: true; reason: string } | undefined {
+export function considerPath(abs: string, cwd: string): { block: true; reason: string } | undefined {
 	if (!shouldInspect(abs, cwd)) return;
 	const sourceDir = loadSourceDir();
 	if (sourceDir && under(abs, sourceDir)) {
@@ -160,6 +186,22 @@ function prepend(
 }
 
 export default function chezmoiGuard(pi: ExtensionAPI): void {
+	const z = pi.zod;
+	pi.registerTool({
+		name: "chezmoi_status",
+		label: "Chezmoi status and diff",
+		description: "Run chezmoi status and chezmoi diff; return both (read-only).",
+		parameters: z.object({}),
+		approval: "read",
+		execute: async () => {
+			const result = chezmoiStatusReport();
+			return {
+				content: [{ type: "text", text: result.text }],
+				details: { ok: result.ok },
+			};
+		},
+	});
+
 	pi.on("tool_call", (event) => {
 		try {
 			const cwd =
@@ -214,3 +256,30 @@ export default function chezmoiGuard(pi: ExtensionAPI): void {
 		}
 	});
 }
+
+export function chezmoiStatusReport(): { ok: boolean; text: string } {
+	const capture = (args: string[]): string | null => {
+		if (testSpawn) return testSpawn(args);
+		try {
+			const proc = Bun.spawnSync(["chezmoi", ...args], {
+				stdout: "pipe",
+				stderr: "pipe",
+				timeout: SUBPROCESS_TIMEOUT_MS,
+			});
+			const out = new TextDecoder().decode(proc.stdout);
+			const err = new TextDecoder().decode(proc.stderr);
+			if (proc.exitCode !== 0 && !out.trim() && !err.trim()) return null;
+			return [out, err].filter(Boolean).join("\n");
+		} catch {
+			return null;
+		}
+	};
+	const status = capture(["status"]);
+	const diff = capture(["diff"]);
+	if (status === null && diff === null) {
+		return { ok: false, text: "chezmoi not available or both commands failed" };
+	}
+	const parts = [status ?? "(chezmoi status failed)", "", diff ?? "(chezmoi diff failed)"];
+	return { ok: true, text: parts.join("\n") };
+}
+

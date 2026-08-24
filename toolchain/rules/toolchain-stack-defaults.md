@@ -1,7 +1,6 @@
 ---
 name: toolchain-stack-defaults
 description: When choosing or changing a project stack, package manager, task runner, or adding a dependency.
-globs: ["**/*"]
 ---
 
 # Toolchain Stack Defaults

@@ -1,6 +1,0 @@
-{
-  "name": "data",
-  "description": "Data rules: pipeline shape, schema evolution, and storage boundaries.",
-  "version": "0.1.0",
-  "category": "data"
-}

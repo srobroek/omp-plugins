@@ -13,3 +13,10 @@ Author and audit agentic assets (skills, rules, agents).
 
 | Name | When |
 |------|------|
+| `research-repomix-recipes` | Bulk context packing with Repomix |
+
+## Tools
+
+Registered by this plugin's extension modules:
+
+- `agentic_lint`

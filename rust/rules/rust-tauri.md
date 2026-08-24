@@ -1,7 +1,6 @@
 ---
 name: rust-tauri
 description: When building Tauri v2 desktop apps — bundles, release-please, updater, signing, or WebDriver E2E.
-globs: ["**/*.rs", "**/Cargo.toml"]
 ---
 
 # Tauri (v2) App Defaults

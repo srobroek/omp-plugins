@@ -59,6 +59,16 @@ def plugin_dirs() -> list[Path]:
     ]
 
 
+# Rules adopted from rolled-up plugins keep their historical names: rule identity is
+# the filename, and renaming would break every rule:// reference and shadow record.
+# The names stay globally unique, which is the real invariant. New rules in the
+# owning plugin still take that plugin's prefix.
+ADOPTED_PREFIXES = {
+    "toolchain": ("coexistence-", "shell-"),
+    "infrastructure": ("terraform-",),
+    "authoring": ("research-",),
+}
+
 def check_rule(path: Path, plugin: str, fail: list[str]) -> str | None:
     """Validate one rule file; return its name when it is a usable non-index rule."""
     parsed = split_frontmatter(path)
@@ -71,7 +81,8 @@ def check_rule(path: Path, plugin: str, fail: list[str]) -> str | None:
     name = fields.get("name")
     if name != stem:
         fail.append(f"{path}: frontmatter name {name!r} != filename stem {stem!r} (identity is the filename)")
-    if not stem.startswith(f"{plugin}-") and not stem.startswith("srobroek-"):
+    allowed = (f"{plugin}-", "srobroek-", *ADOPTED_PREFIXES.get(plugin, ()))
+    if not stem.startswith(allowed):
         fail.append(f"{path}: filename is not plugin-prefixed, so it can collide across plugins")
 
     always = fields.get("alwaysApply", "").lower() == "true"

@@ -13,3 +13,9 @@ Python language steering and the `python-quality` check skill.
 | Name | When |
 |------|------|
 | `python-language` | Writing or reviewing Python sources (`**/*.py`). |
+
+## Tools
+
+Registered by this plugin's extension modules:
+
+- `python_quality`

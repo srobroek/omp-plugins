@@ -1,7 +1,6 @@
 ---
 name: toolchain-tools-scripts
 description: When adding or editing repo automation, scripts/, tools/, justfiles, mise, or moon.
-globs: ["scripts/**", "tools/**", "justfile", "Justfile", "Taskfile.yml", "Makefile", "mise.toml", ".moon/**"]
 ---
 
 # Tools And Scripts

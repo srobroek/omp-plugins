@@ -113,30 +113,6 @@
         }
       ]
     },
-    "coexistence": {
-      "release-type": "simple",
-      "component": "coexistence",
-      "changelog-path": "CHANGELOG.md",
-      "extra-files": [
-        {
-          "type": "json",
-          "path": ".omp-plugin/plugin.json",
-          "jsonpath": "$.version"
-        }
-      ]
-    },
-    "data": {
-      "release-type": "simple",
-      "component": "data",
-      "changelog-path": "CHANGELOG.md",
-      "extra-files": [
-        {
-          "type": "json",
-          "path": ".omp-plugin/plugin.json",
-          "jsonpath": "$.version"
-        }
-      ]
-    },
     "debate": {
       "release-type": "simple",
       "component": "debate",
@@ -164,18 +140,6 @@
     "dep-update": {
       "release-type": "simple",
       "component": "dep-update",
-      "changelog-path": "CHANGELOG.md",
-      "extra-files": [
-        {
-          "type": "json",
-          "path": ".omp-plugin/plugin.json",
-          "jsonpath": "$.version"
-        }
-      ]
-    },
-    "docs": {
-      "release-type": "simple",
-      "component": "docs",
       "changelog-path": "CHANGELOG.md",
       "extra-files": [
         {
@@ -281,30 +245,6 @@
         }
       ]
     },
-    "research": {
-      "release-type": "simple",
-      "component": "research",
-      "changelog-path": "CHANGELOG.md",
-      "extra-files": [
-        {
-          "type": "json",
-          "path": ".omp-plugin/plugin.json",
-          "jsonpath": "$.version"
-        }
-      ]
-    },
-    "review": {
-      "release-type": "simple",
-      "component": "review",
-      "changelog-path": "CHANGELOG.md",
-      "extra-files": [
-        {
-          "type": "json",
-          "path": ".omp-plugin/plugin.json",
-          "jsonpath": "$.version"
-        }
-      ]
-    },
     "rust": {
       "release-type": "simple",
       "component": "rust",
@@ -332,30 +272,6 @@
     "session": {
       "release-type": "simple",
       "component": "session",
-      "changelog-path": "CHANGELOG.md",
-      "extra-files": [
-        {
-          "type": "json",
-          "path": ".omp-plugin/plugin.json",
-          "jsonpath": "$.version"
-        }
-      ]
-    },
-    "shell": {
-      "release-type": "simple",
-      "component": "shell",
-      "changelog-path": "CHANGELOG.md",
-      "extra-files": [
-        {
-          "type": "json",
-          "path": ".omp-plugin/plugin.json",
-          "jsonpath": "$.version"
-        }
-      ]
-    },
-    "terraform": {
-      "release-type": "simple",
-      "component": "terraform",
       "changelog-path": "CHANGELOG.md",
       "extra-files": [
         {

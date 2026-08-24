@@ -3,9 +3,12 @@
   "version": "0.1.0",
   "description": "Classify dependency updates by semver safety and produce a cited upgrade plan.",
   "private": true,
+  "dependencies": {
+    "smol-toml": "1.6.1"
+  },
   "omp": {
     "extensions": [
-      "./extensions/dep-scan-tool.ts"
+      "./dist/dep-scan-tool.js"
     ]
   }
 }

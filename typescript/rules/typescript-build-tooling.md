@@ -1,7 +1,6 @@
 ---
 name: typescript-build-tooling
 description: TypeScript monorepo pnpm workspace, tsconfig layering, ESLint flat config, formatter gate, CI check chain
-globs: ["**/*.ts","**/*.tsx","**/*.mts","**/*.cts","**/*.js","**/*.jsx","**/*.mjs","**/*.cjs","**/package.json","**/tsconfig*.json"]
 ---
 
 # TypeScript Build & Tooling

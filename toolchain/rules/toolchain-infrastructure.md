@@ -1,7 +1,6 @@
 ---
 name: toolchain-infrastructure
 description: When choosing Terraform, CDK, Kubernetes, or Helm for infrastructure.
-globs: ["**/*"]
 ---
 
 # Infrastructure Defaults

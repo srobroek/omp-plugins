@@ -1,7 +1,6 @@
 ---
 name: typescript-state-data
 description: React server vs client state, QueryState facade, error normalization, IPC fetch seam
-globs: ["**/*.ts","**/*.tsx","**/*.mts","**/*.cts","**/*.js","**/*.jsx","**/*.mjs","**/*.cjs"]
 ---
 
 # TypeScript State & Data

@@ -1,7 +1,6 @@
 ---
 name: delivery-git-workflow
 description: When branching, shipping, creating a PR, merging, or proving work landed — git workflow policy (GW-n).
-globs: ["**/*"]
 ---
 
 # Git Workflow

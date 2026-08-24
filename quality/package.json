@@ -5,7 +5,8 @@
   "private": true,
   "omp": {
     "extensions": [
-      "./extensions/verify-repo-tool.ts"
+      "./extensions/verify-repo-tool.ts",
+      "./extensions/sniff-install-tool.ts"
     ]
   }
 }

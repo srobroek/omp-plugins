@@ -16,3 +16,9 @@ Research breaking changes, deprecations, and new features between the version in
 ## Agents
 
 None.
+
+## Tools
+
+Registered by this plugin's extension modules:
+
+- `version_gap_scan`

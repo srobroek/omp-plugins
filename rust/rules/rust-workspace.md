@@ -1,7 +1,6 @@
 ---
 name: rust-workspace
 description: When setting Cargo workspace lints, workspace.dependencies, feature-gated dev surfaces, or layered Rust tests.
-globs: ["**/*.rs", "**/Cargo.toml"]
 ---
 
 # Rust Workspace Defaults

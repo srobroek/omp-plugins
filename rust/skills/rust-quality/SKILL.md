@@ -5,9 +5,6 @@ description: Use to run Rust format, lint, and test checks with the project tool
 
 # Rust Quality
 
-## Scripts
+Use the `rust_quality` tool (`mode: "check" | "fix"`, optional `path`). Check runs cargo fmt --check, cargo clippy --all-targets --all-features -- -D warnings, then cargo test. Fix runs cargo fmt only. Missing cargo is skipped.
 
-| Script | Purpose |
-|--------|---------|
-| `skill://rust-quality/scripts/check.sh` | Run all checks. `--help` for the exact order. |
-| `skill://rust-quality/scripts/fix.sh` | Apply formatting only (cargo fmt). |
+Read failures as the project's actual toolchain output; do not invent extra linters.

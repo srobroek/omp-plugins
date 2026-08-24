@@ -1,7 +1,6 @@
 ---
 name: architecture-compose-dont-fork
 description: When extending a subsystem, adding a new case or variant, or editing a generic core.
-globs: ["**/*"]
 ---
 
 Add new behavior or a new case (provider/strategy/backend) by composing on top of

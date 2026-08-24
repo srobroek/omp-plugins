@@ -1,7 +1,0 @@
-{
-  "name": "@srobroek/review",
-  "version": "0.1.0",
-  "description": "Deep review agents: thorough code review and adversarial challenge.",
-  "private": true,
-  "omp": {}
-}

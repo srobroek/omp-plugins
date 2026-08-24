@@ -36,3 +36,9 @@ through `rule://<name>`.
 Sync policy lives in the rule bodies, with `bd config` as the mechanism
 (Dolt-first, one detached push per session, JSONL-over-git as fallback).
 Claude and Codex session-event hooks did not migrate.
+
+## Tools
+
+Registered by this plugin's extension modules:
+
+- `bd_formula_check`

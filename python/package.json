@@ -3,5 +3,9 @@
   "version": "0.1.0",
   "description": "Python rules: uv-managed projects, typing, pytest layout, and a Python review skill.",
   "private": true,
-  "omp": {}
+  "omp": {
+    "extensions": [
+      "./extensions/python-quality-tool.ts"
+    ]
+  }
 }

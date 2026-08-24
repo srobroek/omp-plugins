@@ -1,7 +1,6 @@
 ---
 name: backend-api-contracts
 description: When editing API boundaries, schemas, generated clients, event contracts, or owner-local contracts.
-globs: ["services/api/**", "services/graphql/**", "services/rpc/**", "services/webhooks/**", "schemas/**", "**/contracts/**"]
 ---
 
 Use owner-local `contracts/` for private deployable-specific boundaries.

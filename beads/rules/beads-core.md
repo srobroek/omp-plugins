@@ -1,7 +1,6 @@
 ---
 name: beads-core
 description: Core bd contract: claiming, field taxonomy, routing, dependencies, sync authority, JSONL-over-git fallback, and database maintenance. Read when tracking work in a repo that has .beads/.
-globs: ["**/.beads/**"]
 ---
 
 # Beads (bd)

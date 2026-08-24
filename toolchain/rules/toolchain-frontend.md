@@ -1,7 +1,6 @@
 ---
 name: toolchain-frontend
 description: When choosing a frontend framework, UI kit, or client/server state library.
-globs: ["**/*"]
 ---
 
 # Frontend Defaults

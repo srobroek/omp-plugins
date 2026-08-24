@@ -1,7 +1,6 @@
 ---
 name: rust-errors
 description: When defining Rust wire error-code registries, edge mappers, rich error envelopes, or append-only audit rows.
-globs: ["**/*.rs", "**/Cargo.toml"]
 ---
 
 # Rust Error & Audit Model

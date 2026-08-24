@@ -1,7 +1,6 @@
 ---
 name: rust-contract-boundary
 description: When generating Rust bindings, guarding codegen drift, pinning IPC invoke names, or choosing wire casing.
-globs: ["**/*.rs", "**/Cargo.toml"]
 ---
 
 # Rust Contract Boundary

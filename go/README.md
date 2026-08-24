@@ -13,3 +13,9 @@ Go language steering and the `go-quality` check skill.
 | Name | When |
 |------|------|
 | `go-language` | Writing or reviewing Go sources (`**/*.go`). |
+
+## Tools
+
+Registered by this plugin's extension modules:
+
+- `go_quality`

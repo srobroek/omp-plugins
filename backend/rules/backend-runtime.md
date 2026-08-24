@@ -1,7 +1,6 @@
 ---
 name: backend-runtime
 description: When editing services, functions, workers, runtime-owned assets, prompts, evals, or deployable ownership.
-globs: ["services/**", "functions/**", "workers/**"]
 ---
 
 Use this for services, functions, workers, API boundaries, background work, runtime-owned assets, prompts, evals, and deployable ownership.

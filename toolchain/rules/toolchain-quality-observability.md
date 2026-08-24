@@ -1,7 +1,6 @@
 ---
 name: toolchain-quality-observability
 description: When adding logging, tracing, or security scanners to a service or worker.
-globs: ["**/*"]
 ---
 
 # Quality And Observability Defaults

@@ -1,7 +1,6 @@
 ---
 name: beads-adr
 description: Recording an architecture decision as a decision bead, and when a choice is hard-to-reverse enough to need one.
-globs: ["**/.beads/**"]
 ---
 
 # Architecture decision records

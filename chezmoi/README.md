@@ -26,3 +26,9 @@ The legacy chezmoi-sync hook's ignore-list behaviour was not ported.
 ## Agents
 
 None.
+
+## Tools
+
+Registered by this plugin's extension modules:
+
+- `chezmoi_status`

@@ -5,9 +5,6 @@ description: Use to run TypeScript or JavaScript format, lint, and type-check co
 
 # TypeScript Quality
 
-## Scripts
+Use the `typescript_quality` tool (`mode: "check" | "fix"`, optional `path`). Check runs biome (or eslint) then tsc --noEmit via the first available runner (pnpm, bun, npx, then global). Fix runs biome check --write. Missing package.json or tools are skipped.
 
-| Script | Purpose |
-|--------|---------|
-| `skill://typescript-quality/scripts/check.sh` | Run Biome format/lint and TypeScript type checks. `--help` for the exact runner-selection order. |
-| `skill://typescript-quality/scripts/fix.sh` | Apply mechanical fixes only (biome check --write). |
+Read failures as the project's actual toolchain output; do not invent extra linters.

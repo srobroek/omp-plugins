@@ -16,3 +16,10 @@ Classify lockfile/manifest dependencies by semver safety and apply patch/minor b
 ## Agents
 
 None.
+
+## Tools
+
+Registered by this plugin's extension modules:
+
+- `dep_apply`
+- `dep_scan`

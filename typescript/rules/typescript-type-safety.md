@@ -1,7 +1,6 @@
 ---
 name: typescript-type-safety
 description: Generated-union exhaustive maps, satisfies allow-lists, trust-boundary validation, typed message catalog
-globs: ["**/*.ts","**/*.tsx","**/*.mts","**/*.cts","**/*.js","**/*.jsx","**/*.mjs","**/*.cjs"]
 ---
 
 # TypeScript Type Safety & Validation

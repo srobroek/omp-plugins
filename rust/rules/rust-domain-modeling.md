@@ -1,7 +1,6 @@
 ---
 name: rust-domain-modeling
 description: When defining Rust error enums, newtypes, deterministic UUID v5 identities, or serde-transparent wrappers.
-globs: ["**/*.rs", "**/Cargo.toml"]
 ---
 
 # Rust Domain Modeling

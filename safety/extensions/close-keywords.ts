@@ -48,13 +48,13 @@ function separatorAt(text: string, pos: number): string | null {
 	return null;
 }
 
-function normalizeLine(line: string): string {
+export function normalizeLine(line: string): string {
 	const out: string[] = [];
 	let pos = 0;
 	const end = line.length;
 	while (pos < end) {
 		const last = out.length ? out[out.length - 1] : "";
-		const atBoundary = !last || !( /[A-Za-z0-9_]$/.test(last) );
+		const atBoundary = !last || !(/[A-Za-z0-9_]$/.test(last));
 		const word = atBoundary ? matchAt(WORD, line, pos) : null;
 		if (word === null) {
 			out.push(line[pos]);
@@ -89,11 +89,11 @@ function normalizeLine(line: string): string {
 	return out.join("");
 }
 
-function normalize(text: string): string {
+export function normalize(text: string): string {
 	return text.split("\n").map(normalizeLine).join("\n");
 }
 
-function shellSegments(command: string): string[][] {
+export function shellSegments(command: string): string[][] {
 	const segments: string[][] = [[]];
 	let current = "";
 	let quote: "'" | '"' | null = null;
@@ -140,13 +140,13 @@ function shellSegments(command: string): string[][] {
 	return segments;
 }
 
-function extractBody(command: string): string {
+export function extractBody(command: string): string {
 	let body = "";
 	for (const segment of shellSegments(command)) {
 		let commandStart = 0;
 		while (commandStart < segment.length && segment[commandStart].includes("=")) {
 			const name = segment[commandStart].split("=", 1)[0];
-			if (!name || !( /[A-Za-z_]/.test(name[0]) )) break;
+			if (!name || !(/[A-Za-z_]/.test(name[0]))) break;
 			if (![...name].every((c) => /[A-Za-z0-9_]/.test(c))) break;
 			commandStart += 1;
 		}
@@ -172,21 +172,17 @@ function extractBody(command: string): string {
 	return body;
 }
 
-function replaceLastBody(command: string, next: string): string | null {
+export function replaceLastBody(command: string, next: string): string | null {
 	const flags = [/\s--body=/, /\s-b=/, /\s--body\s+/, /\s-b\s+/, /\s-b(?=["'])/];
 	let last = -1;
-	let kind = "";
 	for (const flag of flags) {
 		const re = new RegExp(flag.source, "g");
 		let m: RegExpExecArray | null;
 		while ((m = re.exec(command))) {
 			last = m.index + m[0].length;
-			kind = m[0];
 		}
 	}
 	if (last < 0) return null;
-	// Replace the value token after the last flag. Conservative: only rewrite
-	// when the original body is a contiguous quoted or unquoted span we can find.
 	const rest = command.slice(last);
 	const quoted = rest.match(/^("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|\S+)/);
 	if (!quoted) return null;

@@ -1,7 +1,6 @@
 ---
 name: rust-persistence
 description: When designing Rust SQLite/sqlx repositories, numbered migrations, CAS-in-transaction updates, or embed-macro rebuilds.
-globs: ["**/*.rs", "**/Cargo.toml"]
 ---
 
 # Rust Persistence Defaults

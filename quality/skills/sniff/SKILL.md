@@ -25,7 +25,7 @@ answered. These are blocking gates, not preferences.
      ask for it. Kinds **compose** -- "the Rust in this PR" = PR target filtered to `.rs`.
    Do **not** assume whole repo.
 2. **Which tools?** After resolving the target, run
-   `skill://sniff/scripts/install-tools.sh --probe`. Propose the full thorough tool set --
+   `sniff_install_tools` (mode `probe`). Propose the full thorough tool set --
    every viable tool for **each detected target** -- as a tiered table (default-on
    pre-selected ON, opt-in shown OFF with reason), and **wait**. "go" = install every
    missing default-on tool and run all. A missing default-on tool is an install, or a
@@ -38,7 +38,7 @@ record gaps.
 This SKILL is a router. Load the referenced file for each step; do not inline its content.
 
 **Skill dir vs. target dir.** Tools run with cwd = the *target* repo, but this skill's
-shipped assets live under `skill://sniff/` (`scripts/`, `references/semgrep-rules/`).
+shipped assets live under `skill://sniff/` (`references/semgrep-rules/`).
 Read those via `skill://sniff/<path>`. When a tool needs a filesystem path (semgrep
 `--config`), resolve the installed skill directory once and pass an absolute path.
 
@@ -51,7 +51,7 @@ Run in order. Full procedure is in `skill://sniff/references/workflow.md` -- LOA
    in-place vs. isolated checkout (`isolated: true` / Worktrunk lease), and confirm scope. Detect every language/format
    present in the target and map each to `skill://sniff/references/languages/index.md`.
 2. **Probe & propose the full tool set (mandatory blocking checkpoint, interactive runs).**
-   Run `skill://sniff/scripts/install-tools.sh --probe`, enumerate every viable tool per detected
+   Run `sniff_install_tools` (mode `probe`), enumerate every viable tool per detected
    language as a tiered table. **Stop and wait.** Non-interactive runs skip the prompt.
    See `skill://sniff/references/tooling.md` + `skill://sniff/references/installer.md`.
    - **2.5. Inventory project lint config FIRST.** Before running any tool, find and read

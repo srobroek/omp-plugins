@@ -5,9 +5,6 @@ description: Use to run Python format, lint, type-check, and test commands with 
 
 # Python Quality
 
-## Scripts
+Use the `python_quality` tool (`mode: "check" | "fix"`, optional `path`). Check runs ruff check + ruff format --check, pyright when installed, pytest when installed and pyproject.toml or tests/ exists. Fix runs ruff check --fix and ruff format. Missing binaries are skipped.
 
-| Script | Purpose |
-|--------|---------|
-| `scripts/check.sh` | Run all checks. `--help` for the exact order. |
-| `scripts/fix.sh` | Apply mechanical fixes only (ruff check --fix, ruff format). |
+Read failures as the project's actual toolchain output; do not invent extra linters.

@@ -1,7 +1,6 @@
 ---
 name: delivery-cadence
 description: When committing, pushing, or stopping work — continuous atomic commit/push cadence; never leave unpushed local work.
-globs: ["**/*"]
 ---
 
 # Delivery Cadence

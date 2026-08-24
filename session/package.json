@@ -3,5 +3,9 @@
   "version": "0.1.0",
   "description": "Session continuity: recover prior work and hand over in-flight work.",
   "private": true,
-  "omp": {}
+  "omp": {
+    "extensions": [
+      "./extensions/handover-tool.ts"
+    ]
+  }
 }

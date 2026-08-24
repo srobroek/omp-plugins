@@ -1,7 +1,6 @@
 ---
 name: python-language
 description: When writing or reviewing Python layout, services, domain code, framework boundaries, tooling, tests, linting, or typing.
-globs: ["**/*.py"]
 ---
 
 # Python

@@ -3,5 +3,9 @@
   "version": "0.1.0",
   "description": "Go rules: module layout, error wrapping, table-driven tests, and a Go review skill.",
   "private": true,
-  "omp": {}
+  "omp": {
+    "extensions": [
+      "./extensions/go-quality-tool.ts"
+    ]
+  }
 }
