@@ -19,7 +19,7 @@
   "rust": "0.5.1",
   "safety": "0.4.1",
   "session": "1.0.1",
-  "speckit": "0.5.2",
+  "speckit": "0.5.3",
   "toolchain": "0.3.0",
   "typescript": "0.3.0",
   "whats-new": "0.3.0"
