@@ -65,6 +65,7 @@ PLUGINS: dict[str, tuple[str, str]] = {
     "dep-update": ("development", "Classify dependency updates by semver safety and produce a cited upgrade plan."),
     "eli5": ("productivity", "Explain a topic at five depth levels, from metaphor to frontier."),
     "debate": ("productivity", "Stress-test a decision from both sides before committing."),
+    "session": ("productivity", "Resume a prior agent session from its own transcript, newest turns first."),
 }
 
 UNPUBLISHED: set[str] = set()
