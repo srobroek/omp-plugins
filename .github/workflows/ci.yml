@@ -44,9 +44,20 @@ jobs:
 
       - uses: oven-sh/setup-bun@v2
 
-      # Every extension module must at least parse and bundle. Plugins that declare
-      # real `dependencies` ship committed `dist/` bundles (git installs run no
-      # install step on the consumer's machine); this fails when a bundle is stale.
+      # Plugins that declare real `dependencies` need node_modules present before
+      # their sources can resolve imports; the committed dist/ bundles cover the
+      # consumer machines, but this runner builds from source.
+      - name: Install plugin dependencies
+        run: |
+          while IFS= read -r pkg; do
+            if python3 -c "import json,sys; sys.exit(0 if json.load(open('$pkg')).get('dependencies') else 1)"; then
+              (cd "$(dirname "$pkg")" && bun install --silent)
+            fi
+          done < <(git ls-files '*/package.json')
+
+      # Every extension module must at least parse and bundle. Committed dist/
+      # bundles must match a fresh build (git installs run no install step on the
+      # consumer's machine); the check fails when a bundle is stale.
       - name: Extension modules parse
         run: |
           status=0
