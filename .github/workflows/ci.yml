@@ -13,7 +13,7 @@ jobs:
 
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.13"
+          python-version: "3.14"
 
       # OMP identifies a skill, agent, rule, or command by its bare `name` and keeps
       # the first match across every source, so a duplicate name silently shadows the
