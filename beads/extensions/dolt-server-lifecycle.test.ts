@@ -3,7 +3,13 @@ import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { backendNotice, classifyBackend, readBackend, shouldStopServer } from "./dolt-server-lifecycle.ts";
+import {
+	backendNotice,
+	classifyBackend,
+	pidAlive,
+	readBackend,
+	shouldStopServer,
+} from "./dolt-server-lifecycle.ts";
 
 const emptyEnv = {} as NodeJS.ProcessEnv;
 const stopEnv = { BEADS_STOP_SERVER_ON_EXIT: "1" } as NodeJS.ProcessEnv;
@@ -119,5 +125,25 @@ describe("shouldStopServer", () => {
 	test("only an exact opt-in counts", () => {
 		expect(shouldStopServer("per-project", { BEADS_STOP_SERVER_ON_EXIT: "true" } as NodeJS.ProcessEnv)).toBe(false);
 		expect(shouldStopServer("per-project", { BEADS_STOP_SERVER_ON_EXIT: "0" } as NodeJS.ProcessEnv)).toBe(false);
+	});
+});
+
+describe("pidAlive", () => {
+	test("this process is alive", () => {
+		expect(pidAlive(process.pid)).toBe(true);
+	});
+
+	test("pid 1 is alive and not ours, so EPERM must read as alive", () => {
+		// The discriminator for the error branch: signal 0 against init raises EPERM
+		// rather than ESRCH. Reading EPERM as dead would report a live server stopped.
+		expect(pidAlive(1)).toBe(true);
+	});
+
+	test("a reaped pid is dead", async () => {
+		const proc = Bun.spawn(["true"], { stdout: "ignore", stderr: "ignore" });
+		const pid = proc.pid;
+		await proc.exited;
+		// Bun has reaped it, so the pid holds no process and no zombie.
+		expect(pidAlive(pid)).toBe(false);
 	});
 });

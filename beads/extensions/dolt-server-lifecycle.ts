@@ -103,12 +103,44 @@ export function shouldStopServer(backend: Backend, env: NodeJS.ProcessEnv = proc
 	return backend === "per-project" && env[STOP_ON_EXIT] === "1";
 }
 
-/** Stop the project's server, returning what bd said. */
-async function stopServer(cwd: string): Promise<string> {
+/**
+ * Whether a pid is still live.
+ *
+ * Signal 0 tests existence without delivering a signal. `EPERM` means the process
+ * exists but belongs to another user, so only `ESRCH` proves it is gone.
+ */
+export function pidAlive(pid: number): boolean {
+	try {
+		process.kill(pid, 0);
+		return true;
+	} catch (error) {
+		return (error as NodeJS.ErrnoException).code === "EPERM";
+	}
+}
+
+/** The server pid this project recorded, when the value is usable. */
+async function serverPid(cwd: string): Promise<number | undefined> {
+	const raw = await fs.readFile(path.join(cwd, ".beads", "dolt-server.pid"), "utf8").catch(() => "");
+	const pid = Number.parseInt(raw.trim(), 10);
+	return Number.isSafeInteger(pid) && pid > 0 ? pid : undefined;
+}
+
+/**
+ * Stop the project's server and report what actually happened.
+ *
+ * `bd dolt stop` cannot be taken at its word: on a shared server it prints
+ * `Dolt server stopped.` while the process keeps running. The pid recorded before
+ * the call is the only thing that settles it.
+ */
+async function stopServer(cwd: string): Promise<{ said: string; verdict: string }> {
+	const before = await serverPid(cwd);
 	const proc = Bun.spawn(["bd", "dolt", "stop"], { cwd, stdout: "pipe", stderr: "pipe" });
 	const [out, err] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text()]);
 	await proc.exited;
-	return `${out}${err}`.trim();
+	const said = `${out}${err}`.trim();
+
+	if (before === undefined) return { said, verdict: "unverifiable: no pid recorded before the call" };
+	return { said, verdict: pidAlive(before) ? `still running: pid ${before} survived the stop` : `stopped: pid ${before} exited` };
 }
 
 export default function beadsDoltLifecycle(pi: ExtensionAPI): void {
@@ -142,10 +174,9 @@ export default function beadsDoltLifecycle(pi: ExtensionAPI): void {
 		try {
 			const { backend } = await readBackend(ctx.cwd);
 			if (!shouldStopServer(backend)) return;
-			const said = await stopServer(ctx.cwd);
-			// Reported rather than trusted: the shared server's stop lies, and a
-			// per-project stop should say it flushed before exiting.
-			pi.logger.info("beads dolt server stop requested", { said });
+			const { said, verdict } = await stopServer(ctx.cwd);
+			// The verdict comes from the pid, not from what bd printed.
+			pi.logger.info("beads dolt server stop", { verdict, said });
 		} catch (error) {
 			pi.logger.error("beads server stop failed", {
 				error: error instanceof Error ? error.message : String(error),
