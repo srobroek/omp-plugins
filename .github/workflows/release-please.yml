@@ -1,5 +1,20 @@
 name: release-please
 
+# Maintains a release PR from Conventional Commits and tags releases on merge.
+#
+# TOKEN: the release PR is authored with the publish GitHub App
+# (vars.RELEASE_APP_CLIENT_ID + secrets.RELEASE_APP_PRIVATE_KEY), NOT the default
+# GITHUB_TOKEN. GitHub does not trigger workflows from GITHUB_TOKEN commits, so
+# bot-authored release PRs sit at action_required and need a manual run approval
+# per cycle. App-authored commits trigger CI normally, so the release PR
+# self-satisfies its checks. Same pattern as srobroek/agentic-packages.
+#
+# Artifact freshness: release-please bumps each plugin's
+# .omp-plugin/plugin.json version but OMP reads plugins[].version from the two
+# top-level catalogs, and the dep-bearing plugins ship committed dist/ bundles.
+# The sync step regenerates catalogs and bundles on the release branch so the
+# drift gates in ci.yml pass on the release PR itself.
+
 on:
   push:
     branches: [main]
@@ -11,33 +26,50 @@ permissions:
 jobs:
   release:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
-      - uses: googleapis/release-please-action@v4
-        id: release
+      - name: Mint release-app token
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
+          client-id: ${{ vars.RELEASE_APP_CLIENT_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+
+      - name: Run release-please
+        id: release
+        uses: googleapis/release-please-action@v4
+        with:
+          token: ${{ steps.app-token.outputs.token }}
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
 
-      # OMP compares `plugins[].version` in the top-level catalog, while
-      # release-please only bumps the per-plugin manifests it is pointed at. The
-      # catalog is therefore regenerated and pushed onto the release PR branch.
-      - uses: actions/checkout@v4
-        if: steps.release.outputs.prs_created == 'true'
+      # Checkout the release branch with the App token persisted, so the sync
+      # commit below also triggers CI on the PR.
+      - name: Checkout release branch
+        if: ${{ steps.release.outputs.prs_created == 'true' }}
+        uses: actions/checkout@v4
         with:
           ref: ${{ fromJSON(steps.release.outputs.pr).headBranchName }}
+          token: ${{ steps.app-token.outputs.token }}
 
-      - uses: actions/setup-python@v5
-        if: steps.release.outputs.prs_created == 'true'
+      - name: Set up Python
+        if: ${{ steps.release.outputs.prs_created == 'true' }}
+        uses: actions/setup-python@v5
         with:
           python-version: "3.13"
 
-      - name: Regenerate catalog on the release branch
-        if: steps.release.outputs.prs_created == 'true'
+      - name: Set up Bun
+        if: ${{ steps.release.outputs.prs_created == 'true' }}
+        uses: oven-sh/setup-bun@v2
+
+      - name: Sync catalogs and extension bundles on the release branch
+        if: ${{ steps.release.outputs.prs_created == 'true' }}
         run: |
           python3 scripts/build-catalog.py
+          python3 scripts/build-extensions.py
           if ! git diff --quiet; then
-            git config user.name "github-actions[bot]"
-            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-            git commit -am "chore: sync marketplace catalog versions"
+            git config user.name "release-app[bot]"
+            git config user.email "release-app[bot]@users.noreply.github.com"
+            git commit -am "chore: sync catalogs and extension bundles"
             git push
           fi
