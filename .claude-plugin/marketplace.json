@@ -33,7 +33,7 @@
       "name": "beads",
       "description": "Beads issue tracking: dependency DAGs, formulas, and decisions recorded as beads.",
       "source": "./beads",
-      "version": "0.2.0",
+      "version": "0.3.0",
       "category": "productivity"
     },
     {
@@ -61,7 +61,7 @@
       "name": "delivery",
       "description": "Delivery and git-workflow rules, plus a pull-request review agent.",
       "source": "./delivery",
-      "version": "0.2.0",
+      "version": "0.3.0",
       "category": "devops"
     },
     {
