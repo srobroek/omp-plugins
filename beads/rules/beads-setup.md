@@ -7,7 +7,9 @@ description: Initialising beads in a repository and verifying the install.
 
 MUST Let the bd CLI own initialization and generated integration: bootstrap
   with `bd init --init-if-missing --skip-hooks --server`, then verify with
-  `bd where` and `bd hooks list`.
+  `bd where` and `bd hooks list`. A `bd init` that omits `--skip-hooks` or a
+  server flag draws one advisory from the `bd-init-advisory` extension; nothing
+  is blocked, because both flags are contextual.
 DEFAULT Init in server mode even where a repository looks single-agent:
 
 - embedded resolves by walking up from the working directory,
