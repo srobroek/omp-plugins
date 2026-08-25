@@ -1,6 +1,6 @@
 {
   "name": "@srobroek/typescript",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "TypeScript rules: contract boundaries, type safety and validation, component layout, build tooling, testing, and a TypeScript review skill.",
   "private": true,
   "omp": {
