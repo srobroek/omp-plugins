@@ -5,7 +5,7 @@ description: "Storage backend choice and its coordination consequences: embedded
 
 # Beads storage mode
 
-Every fact below was measured against bd 1.1.2 and dolt 2.3.1.
+These facts come from measurements against bd 1.1.2 and dolt 2.3.1.
 
 ## The two modes
 
@@ -44,6 +44,12 @@ DEFAULT Where server mode is unavailable, aim every call at the run's checkout
   queue, or `already claimed by <actor>`.
 
 ## Choose a server layout
+
+MUST Default to server mode on every new project, including one that looks
+  single-agent. A repository's future is not knowable at init: isolation gets
+  enabled, a worktree appears, subagents start running. Embedded forks silently in
+  all three, and the retrofit costs a backup, a fresh checkout, and a restore
+  rather than a flag.
 
 DEFAULT Prefer a per-project server (`bd init --server`):
 
@@ -109,8 +115,8 @@ GOTCHA `bd init` also installs harness integration:
 - `.agents/` and `.codex/`,
 - four added lines in `.gitignore`.
 
-Review that before committing, in a repository that deliberately carries none of
-it.
+In a repository that deliberately carries none of it, review that before
+committing.
 
 ## Lifecycle
 
@@ -123,9 +129,9 @@ DEFAULT Leave auto-start on, which is the default. Both layouts start on demand
   without `bd dolt start`. An isolated agent cannot reliably start a server, so
   with auto-start off every call fails until something else starts one.
 
-DEFAULT Expect no idle timeout, and no config key for one. Beads removed its idle
-  monitor along with the daemon infrastructure. A started server runs until
-  something stops it, or until the machine restarts.
+DEFAULT A started server runs until something stops it, or until the machine
+  restarts. Beads removed its idle monitor along with the daemon infrastructure,
+  and the config surface exposes no key to reinstate one.
 
 DEFAULT Stop a per-project server freely. `bd dolt stop` reports `Flushed working
   set for N database(s) before server stop`, the process exits, and the next read
@@ -135,5 +141,15 @@ GOTCHA Do not trust the stop message on the shared server. Verify with the pid
   file, or `bd dolt status`.
 
 DEFAULT Where an orchestrator or systemd owns the process, set
-  `dolt.auto-start: false`. `bd dolt status` then probes the endpoint and reports
-  `running (external)`, rather than looking for a pid file.
+  `dolt.auto-start: false`. That switches what `bd dolt status` reports:
+
+| Condition | Report |
+| --- | --- |
+| auto-start on | `running`, with a PID |
+| auto-start off, server up | `running (external)`, with host, port and database |
+| auto-start off, server down | `not reachable (external)` |
+
+GOTCHA With auto-start off, `bd dolt status` reads the endpoint, not the pid file.
+  Deleting `dolt-server.pid` under a live server changed nothing: it still reported
+  `running (external)`. So the report survives a lost pid file, and a stale pid file
+  cannot fake a server that stopped.
