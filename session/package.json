@@ -1,0 +1,11 @@
+{
+  "name": "@srobroek/session",
+  "version": "0.1.0",
+  "description": "Resume a prior agent session from its own transcript, newest turns first.",
+  "private": true,
+  "omp": {
+    "extensions": [
+      "./extensions/resume-session-tool.ts"
+    ]
+  }
+}

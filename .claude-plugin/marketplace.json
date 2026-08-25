@@ -142,6 +142,13 @@
       "category": "security"
     },
     {
+      "name": "session",
+      "description": "Resume a prior agent session from its own transcript, newest turns first.",
+      "source": "./session",
+      "version": "0.1.0",
+      "category": "productivity"
+    },
+    {
       "name": "speckit",
       "description": "SpecKit workflow: spec-driven setup, bugfix flow, tasks.md protection, and PR title discipline.",
       "source": "./speckit",
