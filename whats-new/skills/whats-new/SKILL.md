@@ -72,7 +72,7 @@ Honor whatever the user supplies; only discover the rest.
 
 ## Steering
 
-- **Report, don't upgrade.** Never edit manifests, bump versions, or run installers.
+- **Report, don't upgrade** -- enforced by the `report-only-gate` extension.
 - **Programmatic over manual.** Catch yourself reading a rendered registry page → stop and use the matching recipe.
 - **Cover the whole span.** Every intermediate version (software) or the full window (service) -- not just the endpoints.
 - **Classification is heuristic.** A `feat:`/`fix:`/`!` prefix is a signal, not ground truth; read the diff for load-bearing changes.

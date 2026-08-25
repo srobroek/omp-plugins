@@ -1679,10 +1679,10 @@ ${stderr}` }],
   });
 }
 export {
-  classify,
-  depScanTool as default,
-  detectProject,
-  normalizeVersion,
+  queryRegistry,
   parseRequirement,
-  queryRegistry
+  normalizeVersion,
+  detectProject,
+  depScanTool as default,
+  classify
 };

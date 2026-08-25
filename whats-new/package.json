@@ -8,7 +8,8 @@
   },
   "omp": {
     "extensions": [
-      "./dist/version-gap-tool.js"
+      "./dist/version-gap-tool.js",
+      "./dist/report-only-gate.js"
     ]
   }
 }

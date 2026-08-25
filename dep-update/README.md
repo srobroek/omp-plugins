@@ -8,6 +8,12 @@ Classify lockfile/manifest dependencies by semver safety and apply patch/minor b
 |------|------|
 | `dep-update` | Upgrade dependencies, check outdated packages |
 
+## Extensions
+
+- `fixture-write-gate` — blocks `edit`/`write` of `.project-setup/answers.toml`
+  and `.project-setup/sources.toml` at any depth. The project-setup runner owns
+  those fixtures; this plugin only reads them for baseline pins and drift notes.
+
 ## Rules
 
 | Name | When |
