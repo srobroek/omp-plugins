@@ -56,7 +56,7 @@ jobs:
         if: ${{ steps.release.outputs.prs_created == 'true' }}
         uses: actions/setup-python@v5
         with:
-          python-version: "3.13"
+          python-version: "3.14"
 
       - name: Set up Bun
         if: ${{ steps.release.outputs.prs_created == 'true' }}

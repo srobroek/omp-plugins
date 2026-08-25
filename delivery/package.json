@@ -3,5 +3,7 @@
   "version": "0.1.0",
   "description": "Delivery and git-workflow rules, plus a pull-request review agent.",
   "private": true,
-  "omp": {}
+  "omp": {
+    "extensions": ["./extensions/unpushed-work-advisory.ts"]
+  }
 }

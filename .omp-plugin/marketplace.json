@@ -12,168 +12,168 @@
       "name": "architecture",
       "description": "Architecture rules: module boundaries, compose-don't-fork, project structure, component promotion, and structural-search routing.",
       "source": "./architecture",
-      "version": "0.1.0",
+      "version": "0.2.0",
       "category": "development"
     },
     {
       "name": "authoring",
       "description": "Author and audit agentic assets: skills, rules, agents, and steering.",
       "source": "./authoring",
-      "version": "0.1.0",
+      "version": "0.2.0",
       "category": "productivity"
     },
     {
       "name": "backend",
       "description": "Backend rules: API contracts, background jobs, and service boundaries.",
       "source": "./backend",
-      "version": "0.1.0",
+      "version": "0.2.0",
       "category": "development"
     },
     {
       "name": "beads",
       "description": "Beads issue tracking: dependency DAGs, formulas, and decisions recorded as beads.",
       "source": "./beads",
-      "version": "0.1.0",
+      "version": "0.3.0",
       "category": "productivity"
     },
     {
       "name": "build",
       "description": "Implementation agents: builder, high-effort builder, operator, external-repo worker.",
       "source": "./build",
-      "version": "0.1.0",
+      "version": "0.2.0",
       "category": "development"
     },
     {
       "name": "chezmoi",
       "description": "Edit chezmoi-managed dotfiles at their authoritative source.",
       "source": "./chezmoi",
-      "version": "0.1.0",
+      "version": "0.2.0",
       "category": "productivity"
     },
     {
       "name": "debate",
       "description": "Stress-test a decision from both sides before committing.",
       "source": "./debate",
-      "version": "0.1.0",
+      "version": "0.2.0",
       "category": "productivity"
     },
     {
       "name": "delivery",
       "description": "Delivery and git-workflow rules, plus a pull-request review agent.",
       "source": "./delivery",
-      "version": "0.1.0",
+      "version": "0.3.0",
       "category": "devops"
     },
     {
       "name": "dep-update",
       "description": "Classify dependency updates by semver safety and produce a cited upgrade plan.",
       "source": "./dep-update",
-      "version": "0.1.0",
+      "version": "0.2.0",
       "category": "development"
     },
     {
       "name": "eli5",
       "description": "Explain a topic at five depth levels, from metaphor to frontier.",
       "source": "./eli5",
-      "version": "0.1.0",
+      "version": "0.2.0",
       "category": "productivity"
     },
     {
       "name": "find-tools",
       "description": "Discover and vet skills, agents, MCP servers, and plugins across real registries.",
       "source": "./find-tools",
-      "version": "0.1.0",
+      "version": "0.2.0",
       "category": "productivity"
     },
     {
       "name": "go",
       "description": "Go rules: module layout, error wrapping, table-driven tests, and a Go review skill.",
       "source": "./go",
-      "version": "0.1.0",
+      "version": "0.2.0",
       "category": "language"
     },
     {
       "name": "infrastructure",
       "description": "Infrastructure rules for provisioning, environments, and operational surface.",
       "source": "./infrastructure",
-      "version": "0.1.0",
+      "version": "0.2.0",
       "category": "devops"
     },
     {
       "name": "ops",
       "description": "Operational telemetry and toolchain cache policy: metrics reading and log digests.",
       "source": "./ops",
-      "version": "0.1.0",
+      "version": "0.2.0",
       "category": "devops"
     },
     {
       "name": "project",
       "description": "Project lifecycle: brownfield onboarding, license selection, and user journeys.",
       "source": "./project",
-      "version": "0.1.0",
+      "version": "0.2.0",
       "category": "productivity"
     },
     {
       "name": "python",
       "description": "Python rules: uv-managed projects, typing, pytest layout, and a Python review skill.",
       "source": "./python",
-      "version": "0.1.0",
+      "version": "0.2.0",
       "category": "language"
     },
     {
       "name": "quality",
       "description": "Quality gates: code-smell auditing, final verification, lint and docs adjudication, mechanical diff review, and browser-verification discipline.",
       "source": "./quality",
-      "version": "0.1.0",
+      "version": "0.2.0",
       "category": "development"
     },
     {
       "name": "rust",
       "description": "Rust rules: crate boundaries, domain modeling, error and persistence patterns, workspace and Tauri layout, and a Rust review skill.",
       "source": "./rust",
-      "version": "0.1.0",
+      "version": "0.2.0",
       "category": "language"
     },
     {
       "name": "safety",
       "description": "Defence-in-depth advisories for destructive commands, attribution, and remote execution.",
       "source": "./safety",
-      "version": "0.1.0",
+      "version": "0.2.0",
       "category": "security"
     },
     {
       "name": "session",
       "description": "Session continuity: recover prior work and hand over in-flight work.",
       "source": "./session",
-      "version": "0.1.0",
+      "version": "0.2.0",
       "category": "productivity"
     },
     {
       "name": "speckit",
       "description": "SpecKit workflow: spec-driven setup, bugfix flow, tasks.md protection, and PR title discipline.",
       "source": "./speckit",
-      "version": "0.1.0",
+      "version": "0.2.0",
       "category": "development"
     },
     {
       "name": "toolchain",
       "description": "Toolchain defaults, tools-versus-scripts layout, and pragmatic output rules.",
       "source": "./toolchain",
-      "version": "0.1.0",
+      "version": "0.2.0",
       "category": "development"
     },
     {
       "name": "typescript",
       "description": "TypeScript rules: contract boundaries, type safety and validation, component layout, build tooling, testing, and a TypeScript review skill.",
       "source": "./typescript",
-      "version": "0.1.0",
+      "version": "0.2.0",
       "category": "language"
     },
     {
       "name": "whats-new",
       "description": "Research breaking changes, deprecations, and new features between two versions.",
       "source": "./whats-new",
-      "version": "0.1.0",
+      "version": "0.2.0",
       "category": "productivity"
     }
   ]
