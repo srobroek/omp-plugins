@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.4.0](https://github.com/srobroek/omp-plugins/compare/safety--v0.3.0...safety--v0.4.0) (2026-08-25)
+
+
+### Features
+
+* **safety:** refuse creating a worktree under /tmp ([#21](https://github.com/srobroek/omp-plugins/issues/21)) ([8f2c4ea](https://github.com/srobroek/omp-plugins/commit/8f2c4ea240d3f34cbfdb7a70a5805705431f243a))
+
+
+### Bug Fixes
+
+* **safety:** exempt the reviewed cleanup idiom from the indirection guard ([#17](https://github.com/srobroek/omp-plugins/issues/17)) ([6eda715](https://github.com/srobroek/omp-plugins/commit/6eda7158e57ae4d3d46f323a27ac4d1ff5e82deb))
+
 ## [0.3.0](https://github.com/srobroek/omp-plugins/compare/safety--v0.2.0...safety--v0.3.0) (2026-08-25)
 
 
