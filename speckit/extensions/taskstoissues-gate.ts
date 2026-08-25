@@ -138,12 +138,43 @@ function isBannedToken(token: string): boolean {
  * are the argv words after the executable (already segment- or argv-scoped by
  * the caller); quoting does not matter here - argv is argv.
  */
+const SHELLS: Record<string, true> = { sh: true, bash: true, zsh: true, dash: true, ksh: true };
+
 function isBannedResolvedCommand(executable: string, args: readonly string[]): boolean {
 	if (isBannedToken(executable)) return true;
 	const base = executable.split("/").pop() ?? executable;
 	if (executable === "specify" || base === "specify") {
 		for (const arg of args) {
 			if (SPECIFY_BANNED[arg] === true) return true;
+		}
+	}
+	// sh -c SCRIPT hands its operand to a child SHELL: unlike env -S, separators
+	// execute, so recurse with the shell parser. -c rides in option clusters
+	// (bash -lc, zsh -fc), and `--` ends options with the script as the first
+	// operand. A mention stays a mention: `sh -c 'echo speckit-taskstoissues'`
+	// resolves to echo and passes.
+	if (SHELLS[base] === true) {
+		let sawC = false;
+		for (let i = 0; i < args.length; i++) {
+			const arg = args[i] as string;
+			if (arg === "--") {
+				const operand = args[i + 1];
+				if (sawC && operand !== undefined && isBannedInvocation(tokenize(operand))) return true;
+				break;
+			}
+			if (/^[-+][A-Za-z]+$/.test(arg)) {
+				// Only a DASH cluster carries -c command-string mode; +c unsets the
+				// option (zsh) or errors (bash) - either way the operand is a
+				// script FILE, and filenames are out of the gate's scope.
+				if (arg.startsWith("-") && arg.slice(1).includes("c")) sawC = true;
+				// -o/-O (bash/zsh/ksh set options) consume the next arg as a value,
+				// also when trailing a cluster (-lo posix).
+				if (/[oO]$/.test(arg)) i++;
+				continue;
+			}
+			if (arg.startsWith("-") || arg.startsWith("+")) continue; // long option, none carry the script
+			if (sawC && isBannedInvocation(tokenize(arg))) return true;
+			break;
 		}
 	}
 	return false;
