@@ -142,13 +142,6 @@
       "category": "security"
     },
     {
-      "name": "session",
-      "description": "Session continuity: recover prior work and hand over in-flight work.",
-      "source": "./session",
-      "version": "0.3.0",
-      "category": "productivity"
-    },
-    {
       "name": "speckit",
       "description": "SpecKit workflow: spec-driven setup, bugfix flow, tasks.md protection, and PR title discipline.",
       "source": "./speckit",

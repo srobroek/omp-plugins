@@ -269,18 +269,6 @@
         }
       ]
     },
-    "session": {
-      "release-type": "simple",
-      "component": "session",
-      "changelog-path": "CHANGELOG.md",
-      "extra-files": [
-        {
-          "type": "json",
-          "path": ".omp-plugin/plugin.json",
-          "jsonpath": "$.version"
-        }
-      ]
-    },
     "speckit": {
       "release-type": "simple",
       "component": "speckit",
