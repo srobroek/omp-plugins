@@ -13,7 +13,7 @@ Smell audit, local verification, mechanical quality gates, and browser-verificat
 
 | Name | Role | Model |
 |------|------|-------|
-| `bloodhound` | Read-only per-language smell detector (spawned by sniff) | `@architect` |
+| `bloodhound` | Read-only per-language smell detector (spawned by sniff) | `@slow` |
 | `refactor-challenger` | Adversarial critic of sniff findings | `@challenger` |
 | `lint-guard` | Triage lint reports; `LINT-GUARD … PASS\|WARN\|BLOCK` | `@smol` |
 | `docs-guard` | Doc-lint gate; `DOCS-GUARD … next=` | `@smol` |
