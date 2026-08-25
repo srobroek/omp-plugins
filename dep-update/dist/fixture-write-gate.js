@@ -39,9 +39,9 @@ function fixtureWriteGate(pi) {
   });
 }
 export {
-  targetPaths,
-  isFixturePath,
-  fixtureWriteGate as default,
+  DENY_REASON,
   decideToolCall,
-  DENY_REASON
+  fixtureWriteGate as default,
+  isFixturePath,
+  targetPaths
 };
