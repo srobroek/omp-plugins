@@ -5,6 +5,7 @@
   "private": true,
   "omp": {
     "extensions": [
+      "./extensions/main-branch-gate.ts",
       "./extensions/unpushed-work-advisory.ts"
     ]
   }

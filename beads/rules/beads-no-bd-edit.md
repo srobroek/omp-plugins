@@ -1,7 +1,7 @@
 ---
 name: beads-no-bd-edit
 description: bd edit shells out to $EDITOR and blocks a non-interactive agent.
-condition: ["\\bbd\\s+(?:-C\\s+\\S+\\s+)?edit\\b(?![^\\n]*--help)"]
+condition: ["(?m)(?:^|[;|&]\\s*)bd(?:\\s+-C\\s+\\S+)?\\s+edit\\b(?![^\\n]*--help)"]
 scope: "tool:bash"
 interruptMode: always
 ---
@@ -16,3 +16,7 @@ Use the flag forms, which write the same fields without a terminal:
 - `bd label add <id> <label>`
 
 `bd edit --help` and `bd help edit` stay allowed. This rule catches only the interactive form.
+
+The condition is anchored to command position — start of a line, or after `;`, `|`,
+or `&` — because the token stream includes quoted text. Unanchored, `git commit -m
+'bd edit docs'` fired this rule and blocked the commit.

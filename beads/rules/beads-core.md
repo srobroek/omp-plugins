@@ -202,7 +202,7 @@ GITHUB MIRROR -- see [rule://beads-github-mirror]rule://beads-github-mirror
 SESSION CLOSE (when beads were touched)
 MUST File remaining and discovered work as beads, and close what is finished
   with a factual `--reason` -- the residual-context and gate obligations at
-  close are enforced by beads-close-checks-gates, and held claims are reported
+  close are in rule://beads-lifecycle, and held claims are reported
   by session-beads-lifecycle.
 MUST Verify landed work by content per GW-3 (git-workflow steering).
 DEFAULT Git commit/push follows delivery steering; sync per SYNC rules above.

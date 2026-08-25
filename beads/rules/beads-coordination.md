@@ -13,9 +13,10 @@ MUST Pass the bead id in the spawn prompt so the worker claims it
 SWARMS
 MUST Use an epic or poured molecule and its dependency edges as the work DAG;
   a swarm marker does not create tasks, workers, claims, or another state store.
-MUST Run `bd swarm validate <root> --json` during recovery and before close-out;
-  graph construction and structural changes are covered by
-  beads-swarm-validate-graph, which also carries the `swarmable=false` contract.
+MUST Run `bd swarm validate <root> --json` after graph construction, after each
+  structural change, during recovery, and before close-out.
+MUST Stop on `swarmable=false`; inspect warnings because external dependencies,
+  disconnected nodes, multiple endpoints, and empty graphs may remain warnings.
 MUST Dispatch epic work with `bd ready --parent <epic> --unassigned --json`
   and molecule work with `bd ready --mol <molecule> --unassigned --json`; never
   dispatch from an unscoped repository-wide ready query.

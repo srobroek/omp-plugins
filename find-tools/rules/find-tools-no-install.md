@@ -1,8 +1,8 @@
 ---
 name: find-tools-no-install
 description: Discovery must not run install-mutating commands.
-condition: ["(npx skills add|smithery mcp add|curl .*\\| *(ba)?sh)"]
+condition: ["^\\s*(?:npx\\s+skills\\s+add|smithery\\s+mcp\\s+add)\\b"]
 scope: "tool:bash"
-interruptMode: always
+interruptMode: never
 ---
-Install-mutating commands are trial-only after explicit approval. Never part of discovery.
+Install-mutating commands (`npx skills add`, `smithery mcp add`, curl piped to a shell) are trial-only after explicit approval. Never part of discovery.

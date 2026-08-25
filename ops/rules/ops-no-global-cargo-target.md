@@ -1,8 +1,8 @@
 ---
 name: ops-no-global-cargo-target
 description: A global Cargo target directory breaks per-repository build isolation; Worktrunk owns one target dir per repository.
-condition: ["\\bCARGO_TARGET_DIR\\b", "\\[build\\][^\\[]{0,200}target-dir"]
-scope: "tool:bash, tool:edit(**/*.{toml,yml,yaml}), tool:write(**/*.{toml,yml,yaml})"
+condition: ["target-dir", "\\bCARGO_TARGET_DIR\\b"]
+scope: "tool:edit(**/.cargo/config.toml), tool:write(**/.cargo/config.toml), tool:edit(**/.github/workflows/*), tool:write(**/.github/workflows/*), tool:edit(**/.{bashrc,zshrc,profile,bash_profile}), tool:write(**/.{bashrc,zshrc,profile,bash_profile})"
 interruptMode: never
 ---
 Cargo final and link output is deliberately absent from the shared cache policy.

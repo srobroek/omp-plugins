@@ -15,7 +15,11 @@ LIFECYCLE
 | issue replaced | `bd supersede <old> --with <new>`; do not close without the replacement link. |
 | implementation complete | Close with a factual `--reason`; use `--suggest-next` or molecule continuation only when the caller owns dispatch. |
 | residual work exists | Create a `discovered-from` bead before closing the source issue. |
-MUST NOT force-close a gated issue (enforced by beads-close-checks-gates).
+MUST NOT force-close a gated issue: `bd show <id>` names what still blocks it and
+  `bd gate check` resolves the automatic gates (timer, `gh:run`, `gh:pr`, bead).
+  A force-close is allowed only after an explicit human decision recorded on the
+  issue. `bd close` on a gate bead itself is refused by the `bd-close-gate`
+  extension; see rule://beads-gate-close.
 DEFAULT Use `bd set-state` for an independent operational dimension whose
   transitions need event history; status, assignee, dependencies, and gates
   remain their structured authorities.

@@ -6,7 +6,7 @@ interruptMode: never
 astCondition:
   - "exec($$$ARGS)"
   - "execSync($$$ARGS)"
-  - "spawn($A)"
+  - "spawn(\"$A\")"
 ---
 This applies to extension modules -- the files OMP loads through
 `package.json` `omp.extensions`. An extension's inputs are tool arguments and
@@ -28,8 +28,10 @@ A genuine shell feature (a pipeline, a glob) goes through an explicit
 string handed to `exec`.
 
 Pattern shape: `exec`/`execSync` match at any arity because both are
-shell-only. `spawn` matches at arity one only, so the sanctioned
-`spawn(cmd, argv, opts)` stays silent. Receiver calls (`re.exec(line)`,
+shell-only. `spawn` matches a single string literal only (`spawn("…")`), so
+`spawn(cmd, argv, opts)` and `spawn(["cmd", …])` stay silent. ast-grep cannot
+express a template-literal-only `spawn(\`…\`)` without also matching arrays;
+template-string spawn is accepted breadth. Receiver calls (`re.exec(line)`,
 `Bun.spawnSync(argv)`) are structurally different and never match.
 
 Rest of the extension contract: `skill://omp-extension-safety`.

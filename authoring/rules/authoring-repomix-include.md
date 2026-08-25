@@ -1,7 +1,7 @@
 ---
 name: authoring-repomix-include
 description: Prefer --include when packing with repomix; a bare pack carries the whole tree.
-condition: ["\\brepomix\\b(?![^\\n]*--include)"]
+condition: ["\\brepomix\\b(?![^\\n]*--include)(?![^\\n]*--stdout)(?![^\\n]*--remote)"]
 scope: "tool:bash"
 interruptMode: never
 ---
