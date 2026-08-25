@@ -9,4 +9,4 @@ The native `browser` tool already prefers `tab.observe()` over screenshots. Read
 - Batch extraction per page load rather than one round trip per field.
 - Target elements by accessibility ref or a stable selector, never vague visible text.
 - Report findings, not raw page dumps.
-- Never guess credentials.
+- Credential handling is enforced by `rule://quality-no-credential-guessing`.

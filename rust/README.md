@@ -24,6 +24,8 @@ None.
 - `rust-tauri` — Tauri v2 bundles, updater, WebDriver
 - `rust-tauri-mcp-bridge` — driving a running Tauri app over the MCP bridge
 - `rust-cargo-install-advisory` — `cargo install` compiles from source (TTSR)
+- `rust-no-canonicalize` — `canonicalize` defeats a lexical containment check (TTSR)
+- `rust-rustflags-linker` — a linker in `RUSTFLAGS` invalidates the rust-cache key (TTSR)
 
 ## Tools
 

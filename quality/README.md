@@ -25,6 +25,7 @@ Smell audit, local verification, mechanical quality gates, and browser-verificat
 | Name | When |
 |------|------|
 | `quality-browser-verification` | Browser-visible layout/interaction/rendering/state changes |
+| `quality-no-credential-guessing` | Advisory on filling a password/OTP/secret field (TTSR) |
 
 ## Tools
 

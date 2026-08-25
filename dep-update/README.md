@@ -18,6 +18,7 @@ Classify lockfile/manifest dependencies by semver safety and apply patch/minor b
 
 | Name | When |
 |------|------|
+| `dep-update-no-scanner-install` | Advisory on persistently installing a CVE scanner (TTSR) |
 
 ## Agents
 

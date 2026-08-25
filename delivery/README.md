@@ -13,4 +13,5 @@ Commit/push cadence, git workflow (branch, ship, merge proof, beads merge-queue 
 | Name | When |
 | --- | --- |
 | `delivery-cadence` | Continuous atomic commit and push. |
-| `delivery-git-workflow` | Branching, PRs, landing proof, GW-1/GW-2. |
+| `delivery-git-workflow` | Branching, PRs, beads merge-queue linkage, GW-1/GW-2. |
+| `delivery-landing-proof` | Proving work landed from the PR record (TTSR). |

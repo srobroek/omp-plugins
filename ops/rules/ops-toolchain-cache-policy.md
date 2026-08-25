@@ -18,8 +18,8 @@ pre-commit/Ruff, golangci-lint, Gradle, NuGet, Trivy, and Restic.
 MUST Maven keeps its native user-level `~/.m2/repository`; no portable
   directory-only environment variable exists across supported Maven versions.
 MUST Cargo final/link output is absent from this policy. Worktrunk creates one
-  absolute `dirname(git-common-dir)/target` per repository.
-NOT Set `CARGO_TARGET_DIR` or a global Cargo `[build].target-dir`.
+  absolute `dirname(git-common-dir)/target` per repository. Redirecting it into a
+  machine-global directory is refused by `rule://ops-no-global-cargo-target`.
 
 ## Bounded, not just shared
 
@@ -28,7 +28,7 @@ MUST A shared cache still grows unbounded without eviction -- that is the trap
   floor (default 25 GiB, `CACHE_POLICY_FLOOR_GIB`) evict regenerable sccache
   and Go build-cache output, then stop when above the floor.
 NOT Evict module/package DOWNLOAD stores (pnpm store, go-modules, uv wheels, npm)
-  under pressure. Only report if compiler-cache eviction is insufficient.
+  under pressure -- enforced by `rule://ops-download-store-not-evictable`.
 
 ## Worktree output
 
