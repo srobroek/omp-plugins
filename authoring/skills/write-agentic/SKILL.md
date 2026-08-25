@@ -17,9 +17,7 @@ One workflow for three asset kinds. Pick the template, author at source, lint.
 
 ## Workflow
 
-1. MUST Edit the authoritative source (APM package repo). Never generated runtime
-   copies: `.agents/skills`, `.claude/agents`, `.claude/rules`, compiled
-   `AGENTS.md`/`CLAUDE.md`.
+1. MUST Edit the authoritative source (APM package repo).
 2. Gather only what the repo cannot answer: purpose, trigger boundaries and
    non-triggers, install target, script/reference needs, external overlap.
 3. LOAD the matching template and follow it exactly.

@@ -14,11 +14,13 @@
   "infrastructure": "0.1.0",
   "ops": "0.1.0",
   "project": "0.1.0",
+  "project-setup": "0.1.0",
   "python": "0.1.0",
   "quality": "0.1.0",
   "rust": "0.1.0",
   "safety": "0.1.0",
   "session": "0.1.0",
+  "speckit": "0.1.0",
   "toolchain": "0.1.0",
   "typescript": "0.1.0",
   "whats-new": "0.1.0"

@@ -99,8 +99,6 @@ MUST Scripts and hooks parsing bd output set `BD_JSON_ENVELOPE=1` and read
 DEFAULT Non-interactive contexts export `BD_NO_PAGER=1 BD_NON_INTERACTIVE=1`.
 
 SYNC
-MUST `bd dolt pull`/`push` only with explicit sync authority from user,
-  repo config, or orchestrator; `git push` does not sync `refs/dolt/data`.
 DEFAULT Local: no routine pull; one push at orchestrator handoff.
 DEFAULT Cross-machine: one pull before fan-out, one push after updates.
 NOT `bd import` of issues.jsonl by hand -- `bd dolt pull` is the sync path,
@@ -176,9 +174,6 @@ MUST On a stale-skip warning at session start, commit a fresh export before
   next export would overwrite what a peer committed.
 
 MAINTENANCE (trimming a grown database)
-MUST Never run `bd prune`, `bd purge`, or `bd flatten` unprompted. All three are
-  irreversible, and flatten discards EVERY Dolt commit. Preview with `--dry-run`,
-  report the numbers, and let the user decide.
 GOTCHA Deleting rows does not shrink storage. Commit history is the bulk: measured
   on a live repo, 207 beads occupied 311 MB of which the `bd export --all` payload
   was 2.8 MB, `.dolt/noms/` (every historical row version) 199 MB, and

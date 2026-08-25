@@ -1,0 +1,20 @@
+schema_version = "1.0"
+
+[meta]
+repository = "github.com/your-org/your-repo"
+author = "Sjors Robroek"
+
+[module]
+id = "codex-config"
+name = "Codex project config"
+version = "1.2.0"  # x-release-please-version
+description = "Scaffold a project-scoped .codex/config.toml with override guidance."
+default_enabled = false
+reconcile = false
+
+[order]
+after = ["dirs-scaffold"]
+
+[[steps]]
+id = "write"
+kind = "python"

@@ -1,0 +1,106 @@
+schema_version = "1.0"
+
+[meta]
+repository = "github.com/your-org/your-repo"
+author = "Sjors Robroek"
+
+[module]
+id = "package-add"
+name = "Add monorepo package"
+version = "1.3.0"  # x-release-please-version
+description = "Create a new package directory inside a monorepo with path-traversal guards. Optionally resolves and writes a per-package manifest and workspace entry via Tier-2 resolver."
+default_enabled = false
+reconcile = false
+
+[order]
+
+[[inputs]]
+key = "name"
+type = "string"
+prompt = "Package name (plain name, no path separators or '..')"
+default = ""
+required = true
+
+[[inputs]]
+key = "lang"
+type = "choice"
+prompt = "Package language"
+choices = ["ts", "python", "go", "rust"]
+default = "ts"
+required = true
+
+[[inputs]]
+key = "dir"
+type = "string"
+prompt = "Parent packages directory (relative to project root)"
+default = "packages"
+required = false
+
+[[inputs]]
+key = "resolve_stack"
+type = "bool"
+prompt = "Resolve and write a per-package manifest with aligned version pins?"
+default = false
+required = false
+
+# Go language version for a generated go.mod (lang=go only). Bare major.minor
+# per go.mod convention; empty = a current default (not a frozen literal).
+[[inputs]]
+key = "go_version"
+type = "string"
+prompt = "Go version for the go.mod 'go' directive (e.g. 1.23), if lang=go?"
+default = ""
+required = false
+
+# --- Tier-2 resolver steps (only when resolve_stack == true) ---
+
+# G6 — agent step aligns the new package's pins with already-frozen sibling pins
+# (via all_answers) and emits aligned_pins decision. Only at init; on reproduce
+# the frozen decision is replayed zero-network.
+[[steps]]
+id = "resolve"
+kind = "agent"
+steering = "steering/resolve.md"
+when = "resolve_stack == true"
+
+# Hard gate: human reviews the aligned pin table before any manifest is written.
+# init_only: on plain reproduce the frozen decision is already consented; gate
+# auto-proceeds so the manifest write replays byte-identically. CI must pass
+# --allow-stack-write to write the manifest at init.
+[[steps]]
+id = "pins"
+kind = "gate"
+hardness = "hard"
+allow_flag = "allow-stack-write"
+init_only = true
+when = "resolve_stack == true"
+message = "Aligned package pins (agent-resolved):\n{decision}\nWrite the package manifest with these pins?"
+
+# Write the per-package manifest (pyproject.toml / package.json / go.mod / Cargo.toml).
+# write-once: existing file is skipped (reconcile=false).
+[[steps]]
+id = "manifest"
+kind = "python"
+when = "resolve_stack == true"
+
+# --- Core dir-creation step (always runs) ---
+
+[[steps]]
+id = "add"
+kind = "python"
+
+# --- Workspace-edit gate (always offered after dir creation) ---
+
+# Soft gate: offers the root-workspace-manifest edit. CI can skip with
+# --no-workspace-manifest-edit; declined → workspace-edit skipped, dir+manifest intact.
+[[steps]]
+id = "workspace-edit-gate"
+kind = "gate"
+hardness = "soft"
+skip_flag = "no-workspace-manifest-edit"
+message = "Register the new package in the root workspace manifest?\n{decision}"
+
+# Append the new member to the root workspace manifest.
+[[steps]]
+id = "workspace-edit"
+kind = "python"

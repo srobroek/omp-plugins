@@ -1,0 +1,20 @@
+schema_version = "1.0"
+
+[meta]
+repository = "github.com/srobroek/project-setup"
+author = "Sjors Robroek"
+
+[module]
+id = "worktreeinclude-write"
+name = ".worktreeinclude"
+version = "1.1.0"  # x-release-please-version
+description = "Write a .worktreeinclude listing small config/secret files that should be copied into git worktrees. Reads .gitignore to distinguish copyable small-file patterns (.env, .envrc, config/secrets.json) from large directory patterns (node_modules/, .venv/, target/) that should be excluded."
+default_enabled = false
+reconcile = false
+
+[order]
+after = ["gitignore-generate"]
+
+[[steps]]
+id = "write"
+kind = "python"

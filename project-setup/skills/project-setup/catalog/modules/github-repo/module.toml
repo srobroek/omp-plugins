@@ -1,0 +1,70 @@
+schema_version = "1.0"
+
+[meta]
+repository = "github.com/your-org/your-repo"
+author = "Sjors Robroek"
+
+[module]
+id = "github-repo"
+name = "GitHub repository"
+version = "1.2.0"  # x-release-please-version
+description = "Create a GitHub repository and wire the origin remote via gh or gh-api.py."
+default_enabled = false
+reconcile = false
+
+[order]
+after = ["git-init"]
+
+[[inputs]]
+key = "create_repo"
+type = "bool"
+prompt = "Create a GitHub repository for this project?"
+default = true
+required = false
+
+[[inputs]]
+key = "public"
+type = "bool"
+prompt = "Make the repository public? (default: private)"
+default = false
+required = false
+
+[[inputs]]
+key = "org"
+type = "string"
+prompt = "GitHub organisation or user to create the repository under"
+default = ""
+required = false
+
+[[inputs]]
+key = "project_name"
+type = "string"
+prompt = "Repository name"
+default = ""
+required = false
+
+[[inputs]]
+key = "description"
+type = "string"
+prompt = "Repository description (optional)"
+default = ""
+required = false
+
+# G3 — public-repo-creation confirm (spec 004). HARD gate, fires ONLY when
+# public == true (private creation is reversible + low-stakes, so the gate is
+# `when`-dropped from the plan). CI must pass --allow-public-repo to create a
+# public repo; otherwise it SAFE-skips and the python step prints the manual
+# `gh` command. A declined gate blocks the create step below (gate-blocking apply).
+[[steps]]
+id = "confirm-public"
+kind = "gate"
+hardness = "hard"
+allow_flag = "allow-public-repo"
+when = "public == true"
+message = """Create a PUBLIC GitHub repository — it is world-visible and the name is claimed immediately (irreversible). Details:
+{decision}
+Proceed only if the org/name are correct."""
+
+[[steps]]
+id = "create"
+kind = "python"

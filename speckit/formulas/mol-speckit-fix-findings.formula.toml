@@ -1,0 +1,44 @@
+# mol-speckit-fix-findings -- the review/QA/security finding loop, bonded onto a
+# running feature molecule.
+#
+# Requires the `fix-findings` spec-kit community extension
+# (/speckit.fix-findings.run). Without it the run step names a skill that does not
+# exist.
+#
+# Bond it onto the step whose review produced the findings:
+#   bd mol bond mol-speckit-fix-findings <feature-root-id> --var feature=<NNN-slug>
+#
+# The `mol-` prefix in the filename is load-bearing: `bd mol bond` resolves a
+# formula name only when it is prefixed, and formulas resolve by filename stem.
+#
+# WHY THE LOOP IS ONE STEP, NOT A STEP LIST: /speckit.fix-findings.run iterates
+# internally and caps itself at 5 iterations, and a `needs` cycle is rejected at
+# pour ("adding dependency would create a cycle"), so a fixed step list cannot
+# express a loop of unknown length. The loop lives inside the command; this formula
+# gives it a bead to hang its outcome on and a second step that decides whether the
+# cap was reached.
+formula = "mol-speckit-fix-findings"
+description = "Fix findings on {{feature}}: run the capped analyze-and-fix loop, then confirm the finding set is empty or bond another pass"
+type = "workflow"
+
+[vars.feature]
+required = true
+pattern = "^[0-9]{3}-[a-z0-9-]+$"
+
+[[steps]]
+id = "fix-findings-run"
+title = "fix findings {{feature}}"
+type = "task"
+labels = ["speckit:subprocess", "sub:fix-findings"]
+description = "Run /speckit.fix-findings.run: iteratively analyze and fix spec findings. The extension caps itself at 5 iterations. Record the iteration count and the surviving finding list on this bead; per-iteration chatter rides a [wisp:worklog] wisp linked relates-to this step. Requires the fix-findings extension."
+
+[steps.metadata]
+skill_hints = "speckit.fix-findings.run"
+
+[[steps]]
+id = "fix-findings-verdict"
+title = "fix findings verdict {{feature}}"
+type = "task"
+needs = ["fix-findings-run"]
+labels = ["speckit:subprocess", "sub:fix-findings"]
+description = "Read the finding set the run step left. Empty: close with the count. Non-empty because the 5-iteration cap was hit: bond a second mol-speckit-fix-findings onto the same root rather than reopening the run step, so each pass keeps its own iteration count. A finding that survives two passes is a spec problem, not a fix problem -- route it to mol-speckit-iterate."

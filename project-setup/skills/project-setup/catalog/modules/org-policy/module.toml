@@ -1,0 +1,30 @@
+schema_version = "1.0"
+
+[meta]
+repository = "github.com/your-org/your-repo"
+author = "Sjors Robroek"
+
+[module]
+id = "org-policy"
+name = "Org-convention overlay"
+version = "1.2.0"  # x-release-please-version
+description = "Apply mandatory org conventions to a scaffolded project. Reads a pinned org policy manifest (from the fetched org source), maps frozen answers against org policy, and applies only the org-mandated overrides. Default-disabled; enable when an org source is pinned in sources.toml."
+default_enabled = false
+reconcile = false
+
+[[steps]]
+id = "resolve"
+kind = "agent"
+steering = "steering/resolve.md"
+
+[[steps]]
+id = "overrides"
+kind = "gate"
+hardness = "hard"
+allow_flag = "allow-org-policy"
+init_only = true
+message = "Org-policy overrides (org-mandated):\n{decision}\nApply these overrides?"
+
+[[steps]]
+id = "apply"
+kind = "python"

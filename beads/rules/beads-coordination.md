@@ -42,8 +42,6 @@ MUST Recover a stale holder by checking slot state, recorded anchors, remote
   heartbeat, timeout, or automatic stale-holder recovery.
 
 SYNC BOUNDARIES
-NOT Run `bd dolt pull` or `bd dolt push` from runtime, Git, task, subagent, or
-  workflow lifecycle hooks.
 DEFAULT Use one authority-aware pull before cross-machine claims or fan-out and
   one authority-aware push after durable updates at machine handoff.
 MUST When authority is absent, record the pending sync and report the exact

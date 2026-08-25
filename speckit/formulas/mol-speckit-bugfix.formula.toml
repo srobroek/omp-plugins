@@ -1,0 +1,57 @@
+# mol-speckit-bugfix -- a defect in implemented code, traced back to the spec
+# artifacts that allowed it, bonded onto the feature molecule that shipped it.
+#
+# Requires the `bugfix` spec-kit community extension (/speckit.bugfix.report,
+# /speckit.bugfix.patch, /speckit.bugfix.verify). Without it all three steps name a
+# skill that does not exist. The `speckit-bugfix` skill in this package routes to
+# the same commands and is the entry point for a fix too small to pour.
+#
+# Bond it onto the feature molecule the defect belongs to:
+#   bd mol bond mol-speckit-bugfix <feature-root-id> --var feature=<NNN-slug>
+#
+# The `mol-` prefix in the filename is load-bearing: `bd mol bond` resolves a
+# formula name only when it is prefixed, and formulas resolve by filename stem.
+#
+# THE PATCH<-VERIFY BACK EDGE IS NOT A `needs` EDGE. A cycle is rejected at pour
+# ("adding dependency would create a cycle"), so verify sends work back at runtime
+# by reopening the patch bead rather than by an edge the formula declares. The
+# reopen is the loop, and the patch bead's comment thread is its history.
+formula = "mol-speckit-bugfix"
+description = "Bugfix on {{feature}}: report the defect against its spec artifacts, patch them, verify consistency, and send inconsistent work back to patch"
+type = "workflow"
+
+[vars.feature]
+required = true
+pattern = "^[0-9]{3}-[a-z0-9-]+$"
+
+[[steps]]
+id = "bugfix-report"
+title = "bugfix report {{feature}}"
+type = "bug"
+labels = ["speckit:subprocess", "sub:bugfix"]
+description = "Run /speckit.bugfix.report: capture the defect and trace it back to the spec, plan, and task beads that allowed it. The trace is the deliverable -- a bug with no artifact named is a bug that will recur. Requires the bugfix extension."
+
+[steps.metadata]
+skill_hints = "speckit.bugfix.report"
+
+[[steps]]
+id = "bugfix-patch"
+title = "bugfix patch {{feature}}"
+type = "task"
+needs = ["bugfix-report"]
+labels = ["speckit:subprocess", "sub:bugfix"]
+description = "Run /speckit.bugfix.patch: surgically update the spec, plan, and task beads the report named. Never write specs/{{feature}}/tasks.md; amend task beads instead. Requires the bugfix extension. On a reopen from bugfix-verify, comment which inconsistency this pass addresses before claiming, so the thread reads as a history rather than one overwritten state."
+
+[steps.metadata]
+skill_hints = "speckit.bugfix.patch"
+
+[[steps]]
+id = "bugfix-verify"
+title = "bugfix verify {{feature}}"
+type = "task"
+needs = ["bugfix-patch"]
+labels = ["speckit:subprocess", "sub:bugfix"]
+description = "Run /speckit.bugfix.verify: check the patch is consistent across every artifact. Inconsistent: send it back with `bd update <bugfix-patch-id> --status open`, comment what is inconsistent, and leave this step open. Consistent: close with the artifact list checked. Requires the bugfix extension."
+
+[steps.metadata]
+skill_hints = "speckit.bugfix.verify"

@@ -1,0 +1,27 @@
+schema_version = "1.0"
+
+[meta]
+repository = "github.com/your-org/your-repo"
+author = "Sjors Robroek"
+
+[module]
+id = "quality-hooks"
+name = "Quality hook languages"
+version = "1.3.0"  # x-release-please-version
+description = "Write .agents/hooks/quality-languages from the quality_languages input list."
+default_enabled = false
+reconcile = true
+
+[order]
+after = ["dirs-scaffold"]
+
+[[inputs]]
+key = "quality_languages"
+type = "list"
+prompt = "Languages for the agent before-commit quality hook (e.g. ts, python)"
+default = []
+required = false
+
+[[steps]]
+id = "write"
+kind = "python"

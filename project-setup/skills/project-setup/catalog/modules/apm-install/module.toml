@@ -1,0 +1,56 @@
+schema_version = "1.0"
+
+[meta]
+repository = "github.com/your-org/your-repo"
+author = "Sjors Robroek"
+
+[module]
+id = "apm-install"
+name = "APM install and compile"
+version = "1.2.0"  # x-release-please-version
+description = "Install APM package primitives and compile Codex/Claude steering."
+default_enabled = false
+reconcile = false
+
+[order]
+after = ["dirs-scaffold", "precommit-setup"]
+
+[[inputs]]
+key = "agentic_packages"
+type = "string"
+prompt = "APM package locator(s) to install, e.g. <pkg>@<your-marketplace> or <pkg>@<your-marketplace>@<version> (version optional; latest if omitted; leave blank to install nothing)"
+default = ""
+required = false
+
+[[inputs]]
+key = "marketplace"
+type = "string"
+prompt = "APM marketplace to install from (leave blank if none / pure scaffolding)"
+default = ""
+required = false
+
+[[inputs]]
+key = "compile_claude"
+type = "bool"
+prompt = "Also compile Claude steering (in addition to Codex)?"
+default = true
+required = false
+
+# G2 — consolidated dependency-install approval (spec 004). HARD gate, the
+# supply-chain checkpoint: it lists every package to be installed (each runs
+# arbitrary code/hooks/MCP) so a human can eyeball for typosquats before one
+# batched confirm. CI must pass --allow-install; otherwise it SAFE-skips the
+# install and the python step prints the manual `apm install …` command.
+# Renders ONLY the user-selected packages via {decision} — no baseline list.
+[[steps]]
+id = "confirm-install"
+kind = "gate"
+hardness = "hard"
+allow_flag = "allow-install"
+message = """Install APM packages — each runs arbitrary code, hooks, and MCP servers. Review for typosquats before approving.
+
+{decision}"""
+
+[[steps]]
+id = "install"
+kind = "python"

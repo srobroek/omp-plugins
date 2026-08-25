@@ -1,0 +1,7 @@
+
+  - repo: https://github.com/tekwizely/pre-commit-golang
+    rev: v1.0.0-rc.1
+    hooks:
+      - id: go-fmt
+      - id: golangci-lint
+        stages: [pre-push]

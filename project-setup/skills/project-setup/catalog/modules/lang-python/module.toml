@@ -1,0 +1,99 @@
+schema_version = "1.0"
+
+[meta]
+repository = "github.com/your-org/your-repo"
+author = "Sjors Robroek"
+
+[module]
+id = "lang-python"
+name = "Python language overlay"
+version = "1.4.0"  # x-release-please-version
+description = "Add Python tooling (uv, ruff, pytest) to a scaffolded project. Appends Python .gitignore entries and ruff pre-commit hooks."
+default_enabled = false
+reconcile = true
+
+[order]
+after = ["gitignore-generate", "precommit-setup"]
+
+# Identity inputs — the agent supplies the SAME project name/description it gave
+# core-identity (FrozenInputs is per-module, so each module that needs identity
+# declares its own copy; agents-md follows the same pattern). project_name drives
+# `uv init --name` and the src/<name>/ package; description fills pyproject.
+[[inputs]]
+key = "project_name"
+type = "string"
+prompt = "Project / package name (kebab or snake; the importable package uses the snake form)?"
+default = ""
+required = true
+
+[[inputs]]
+key = "description"
+type = "string"
+prompt = "One-line project description (written into pyproject)?"
+default = ""
+required = false
+
+[[inputs]]
+key = "python_version"
+type = "string"
+prompt = "Python version to target?"
+default = "3.13"
+required = false
+
+[[inputs]]
+key = "framework"
+type = "string"
+prompt = "Framework (optional, e.g. fastapi, django, flask — leave empty for none)?"
+default = ""
+required = false
+
+# pinned_deps / dev_deps / ruff_version are normally produced by the `resolve`
+# agent step (steering/resolve.md) and folded in via answers_to_persist, which
+# runs AFTER answer resolution and therefore overrides anything supplied here.
+# They are also declared as optional inputs so a pre-resolving agent (or a
+# scripted --answers run) can supply exact name@version pins directly without
+# the live resolve step. Empty by default → no deps written (the resolve step,
+# if it runs, fills them).
+[[inputs]]
+key = "pinned_deps"
+type = "list"
+prompt = "Pinned runtime dependencies (name@version), if pre-resolved"
+default = []
+required = false
+
+[[inputs]]
+key = "dev_deps"
+type = "list"
+prompt = "Pinned dev dependencies (name@version), if pre-resolved"
+default = []
+required = false
+
+[[inputs]]
+key = "ruff_version"
+type = "string"
+prompt = "Pinned ruff version, if pre-resolved"
+default = ""
+required = false
+
+[[steps]]
+id = "resolve"
+kind = "agent"
+steering = "steering/resolve.md"
+
+# G6 — agent-decision review (spec 004). HARD gate: the agent researched + picked
+# these pins (model judgment, not determinism), so a human consents before the
+# deterministic write turns them into a frozen, replayed supply-chain artifact.
+# init_only: on plain reproduce the frozen decision is already consented, so the
+# gate auto-proceeds (no prompt, write replays byte-identical); only --refresh
+# re-arms it. CI must pass --allow-stack-write to perform the write at init.
+[[steps]]
+id = "pins"
+kind = "gate"
+hardness = "hard"
+allow_flag = "allow-stack-write"
+init_only = true
+message = "Python stack decision (agent-resolved, registry-verified):\n{decision}\nWrite pyproject.toml + dev tooling with these EXACT pins?"
+
+[[steps]]
+id = "write"
+kind = "python"

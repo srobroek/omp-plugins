@@ -1,0 +1,67 @@
+# mol-speckit-refine -- a spec.md edit propagated downstream, bonded onto the
+# feature molecule whose spec changed.
+#
+# Requires the `refine` spec-kit community extension (/speckit.refine.diff,
+# .update, .propagate, .status). Without it all four steps name a skill that does
+# not exist.
+#
+# Bond it onto the feature molecule whose spec.md is being edited:
+#   bd mol bond mol-speckit-refine <feature-root-id> --var feature=<NNN-slug>
+#
+# The `mol-` prefix in the filename is load-bearing: `bd mol bond` resolves a
+# formula name only when it is prefixed, and formulas resolve by filename stem.
+#
+# refine versus iterate: refine edits spec.md and pushes the change down to plan and
+# tasks. iterate changes the approved approach and rebuilds the artifacts from it.
+# A spec wording or requirement correction is refine; a decision reversal is
+# iterate.
+formula = "mol-speckit-refine"
+description = "Refine {{feature}}'s spec: diff the change, update spec.md, propagate to plan and tasks, then confirm the artifacts are in sync"
+type = "workflow"
+
+[vars.feature]
+required = true
+pattern = "^[0-9]{3}-[a-z0-9-]+$"
+
+[[steps]]
+id = "refine-diff"
+title = "refine diff {{feature}}"
+type = "task"
+labels = ["speckit:subprocess", "sub:refine"]
+description = "Run /speckit.refine.diff: show what changed in spec.md and predict the downstream impact on plan and task beads. Requires the refine extension."
+
+[steps.metadata]
+skill_hints = "speckit.refine.diff"
+
+[[steps]]
+id = "refine-update"
+title = "refine update {{feature}}"
+type = "task"
+needs = ["refine-diff"]
+labels = ["speckit:subprocess", "sub:refine"]
+description = "Run /speckit.refine.update: edit specs/{{feature}}/spec.md in place against the new requirement or feedback. Requires the refine extension."
+
+[steps.metadata]
+skill_hints = "speckit.refine.update"
+
+[[steps]]
+id = "refine-propagate"
+title = "refine propagate {{feature}}"
+type = "task"
+needs = ["refine-update"]
+labels = ["speckit:subprocess", "sub:refine"]
+description = "Run /speckit.refine.propagate: push the spec change into plan.md and the task beads under the feature's implement step. Never write specs/{{feature}}/tasks.md; amend task beads instead. Requires the refine extension."
+
+[steps.metadata]
+skill_hints = "speckit.refine.propagate"
+
+[[steps]]
+id = "refine-status"
+title = "refine status {{feature}}"
+type = "task"
+needs = ["refine-propagate"]
+labels = ["speckit:subprocess", "sub:refine"]
+description = "Run /speckit.refine.status: confirm spec, plan, and tasks are in sync and name any artifact still stale. A stale artifact here means propagate missed it -- reopen refine-propagate rather than closing this step with the drift recorded. Requires the refine extension."
+
+[steps.metadata]
+skill_hints = "speckit.refine.status"

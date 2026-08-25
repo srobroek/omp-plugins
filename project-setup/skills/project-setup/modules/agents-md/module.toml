@@ -1,0 +1,84 @@
+schema_version = "1.0"
+
+[meta]
+repository = "github.com/your-org/your-repo"
+author = "Sjors Robroek"
+
+[module]
+id = "agents-md"
+name = "AGENTS.md skeleton"
+version = "1.1.0"  # x-release-please-version
+description = "Write a skeleton AGENTS.md. Single and monorepo layouts use separate verbatim templates with PROJECT_NAME and ORG substituted."
+default_enabled = true
+reconcile = true
+
+[order]
+after = ["dirs-scaffold"]
+requires = ["core-identity"]
+
+[[inputs]]
+key = "layout"
+type = "choice"
+prompt = "Project layout"
+choices = ["single", "monorepo"]
+default = "single"
+required = false
+
+[[inputs]]
+key = "project_name"
+type = "string"
+prompt = "Project name"
+required = true
+
+# Same one-line description supplied to core-identity; fills the AGENTS.md
+# PROJECT DESCRIPTION placeholder instead of leaving a TODO comment.
+[[inputs]]
+key = "description"
+type = "string"
+prompt = "One-line project description (for the AGENTS.md header)"
+default = ""
+required = false
+
+[[inputs]]
+key = "org"
+type = "string"
+prompt = "GitHub owner / organisation"
+required = false
+
+[[inputs]]
+key = "architecture_md"
+type = "string"
+required = false
+default = ""
+
+[[inputs]]
+key = "agent_editable_globs"
+type = "list"
+required = false
+default = []
+
+[[steps]]
+id = "write"
+kind = "python"
+
+[[steps]]
+id = "resolve-arch"
+kind = "agent"
+steering = "steering/resolve-arch.md"
+
+# G — hard gate: the agent authored this section (model judgment); a human
+# consents before the splice writes it into AGENTS.md (which steers every
+# future agent in the repo). init_only: on plain reproduce the frozen decision
+# is already consented, so the gate auto-proceeds; only --refresh re-arms it.
+# CI must pass --allow-arch-write to perform the splice at init.
+[[steps]]
+id = "arch-gate"
+kind = "gate"
+hardness = "hard"
+allow_flag = "allow-arch-write"
+init_only = true
+message = "Architecture section for AGENTS.md (agent-authored):\n{decision}\nWrite this section to AGENTS.md?"
+
+[[steps]]
+id = "splice"
+kind = "python"

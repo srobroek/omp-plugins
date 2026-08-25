@@ -221,6 +221,18 @@
         }
       ]
     },
+    "project-setup": {
+      "release-type": "simple",
+      "component": "project-setup",
+      "changelog-path": "CHANGELOG.md",
+      "extra-files": [
+        {
+          "type": "json",
+          "path": ".omp-plugin/plugin.json",
+          "jsonpath": "$.version"
+        }
+      ]
+    },
     "python": {
       "release-type": "simple",
       "component": "python",
@@ -272,6 +284,18 @@
     "session": {
       "release-type": "simple",
       "component": "session",
+      "changelog-path": "CHANGELOG.md",
+      "extra-files": [
+        {
+          "type": "json",
+          "path": ".omp-plugin/plugin.json",
+          "jsonpath": "$.version"
+        }
+      ]
+    },
+    "speckit": {
+      "release-type": "simple",
+      "component": "speckit",
       "changelog-path": "CHANGELOG.md",
       "extra-files": [
         {

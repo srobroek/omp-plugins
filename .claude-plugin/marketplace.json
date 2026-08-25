@@ -114,6 +114,13 @@
       "category": "productivity"
     },
     {
+      "name": "project-setup",
+      "description": "Scaffold a new project or repository: interview, module catalog, and a native repo-state scan.",
+      "source": "./project-setup",
+      "version": "0.1.0",
+      "category": "productivity"
+    },
+    {
       "name": "python",
       "description": "Python rules: uv-managed projects, typing, pytest layout, and a Python review skill.",
       "source": "./python",
@@ -147,6 +154,13 @@
       "source": "./session",
       "version": "0.1.0",
       "category": "productivity"
+    },
+    {
+      "name": "speckit",
+      "description": "SpecKit workflow: spec-driven setup, bugfix flow, tasks.md protection, and PR title discipline.",
+      "source": "./speckit",
+      "version": "0.1.0",
+      "category": "development"
     },
     {
       "name": "toolchain",

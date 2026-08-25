@@ -1,0 +1,71 @@
+schema_version = "1.0"
+
+[meta]
+repository = "github.com/your-org/your-repo"
+author = "Sjors Robroek"
+
+[module]
+id = "stack-adr"
+name = "Stack decision record"
+version = "1.3.0"  # x-release-please-version
+description = "Write a human-readable STACK.md (or ADR) from frozen stack decisions, and run a reproduce-only staleness advisory for pinned deps."
+# opt-in (spec 012 Decision J amended 2026-06-28): the stack record's value is tied
+# to a lang-* resolver, so it is enabled alongside a resolver rather than for bare
+# greenfield projects. Keeps the minimal-core default footprint (6-core parity contract).
+default_enabled = false
+reconcile = true
+
+[order]
+after = ["lang-python", "lang-ts"]
+
+[[inputs]]
+key = "format"
+type = "choice"
+prompt = "Output format for the stack decision record"
+choices = ["simple", "adr"]
+default = "simple"
+required = false
+
+[[inputs]]
+key = "adr_path"
+type = "string"
+prompt = "ADR file path (derived at init; leave blank)"
+required = false
+default = ""
+
+[[inputs]]
+key = "written_at"
+type = "string"
+prompt = "Date the stack decision was recorded (derived at init; leave blank)"
+required = false
+default = ""
+
+[[steps]]
+id = "write"
+kind = "python"
+
+# staleness: runs ONLY in reproduce mode (reproduce_only=true). In init mode the
+# pins were just researched and verified; a redundant freshness check at init is
+# noise with no value. In reproduce mode the agent probes PyPI/npm for CVEs and
+# hard deprecations and emits a message advisory — NO answers_to_persist (FR-012).
+[[steps]]
+id = "staleness"
+kind = "agent"
+steering = "steering/staleness.md"
+reproduce_only = true
+
+# staleness-gate: informational (never blocks) + init_only (auto-proceeds at init
+# because the agent never ran, so there is nothing to show).
+# Together with reproduce_only on the agent step this is the "reproduce-only
+# advisory pair" idiom: agent skips at init, gate auto-proceeds at init; agent
+# runs at reproduce, gate prints advisory and auto-proceeds (spec 012 FR-011).
+# Message is STATIC — not {decision} — because FR-012 forbids answers_to_persist
+# from the staleness step, so {decision} composition cannot be used (plan.md
+# Phase 3 note). The advisory text surfaces via the agent step's io.notify
+# output before the gate fires.
+[[steps]]
+id = "staleness-gate"
+kind = "gate"
+hardness = "informational"
+init_only = true
+message = "Stack staleness advisory (see above). Proceeding."

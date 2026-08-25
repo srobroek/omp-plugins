@@ -1,0 +1,43 @@
+# mol-speckit-iterate -- an approved-intent change, bonded onto a running feature molecule.
+#
+# Requires the `iterate` spec-kit community extension (/speckit.iterate.define,
+# /speckit.iterate.apply). Without it both steps name a skill that does not exist.
+#
+# Bond it onto the molecule whose approach changed:
+#   bd mol bond mol-speckit-iterate <feature-root-id> --var feature=<NNN-slug>
+#
+# The `mol-` prefix in the filename is load-bearing: `bd mol bond` resolves a
+# formula name only when it is prefixed, and formulas resolve by filename stem.
+#
+# Bond joins root-to-root as a sibling subtree and cannot rewire an inherited
+# step's `needs`, so the bonding side owns the join edge -- this file declares no
+# `needs` pointing outside itself, which is also what lets it cook standalone.
+formula = "mol-speckit-iterate"
+description = "Iterate on {{feature}}: define the change against current spec state, then apply it to every artifact implement relies on"
+type = "workflow"
+
+[vars.feature]
+required = true
+pattern = "^[0-9]{3}-[a-z0-9-]+$"
+
+[[steps]]
+id = "iterate-define"
+title = "iterate define {{feature}}"
+type = "task"
+labels = ["speckit:subprocess", "sub:iterate"]
+description = "Run /speckit.iterate.define: analyze the change request against current spec state and implementation progress, and write a reviewable iteration plan. Record on this bead why the approved approach changed -- the DECISIONS table makes an iteration a decision-producing phase. Requires the iterate extension."
+
+[steps.metadata]
+skill_hints = "speckit.iterate.define"
+execution_mode = "interactive"
+
+[[steps]]
+id = "iterate-apply"
+title = "iterate apply {{feature}}"
+type = "task"
+needs = ["iterate-define"]
+labels = ["speckit:subprocess", "sub:iterate"]
+description = "Run /speckit.iterate.apply: update spec.md, plan.md, and the task beads under the feature's implement step so implementation restarts from the iterated state. Never write specs/{{feature}}/tasks.md; create or amend task beads instead. Requires the iterate extension."
+
+[steps.metadata]
+skill_hints = "speckit.iterate.apply"

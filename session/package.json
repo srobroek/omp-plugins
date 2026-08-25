@@ -5,7 +5,8 @@
   "private": true,
   "omp": {
     "extensions": [
-      "./extensions/handover-tool.ts"
+      "./extensions/handover-tool.ts",
+      "./extensions/handover-select-tool.ts"
     ]
   }
 }

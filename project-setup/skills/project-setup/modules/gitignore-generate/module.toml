@@ -1,0 +1,35 @@
+schema_version = "1.0"
+
+[meta]
+repository = "github.com/your-org/your-repo"
+author = "Sjors Robroek"
+
+[module]
+id = "gitignore-generate"
+name = "Gitignore"
+version = "1.2.0"  # x-release-please-version
+description = "Compose a .gitignore from vendored CC0 github/gitignore templates plus a project-specific custom block. Optionally fetches additional templates on demand."
+default_enabled = true
+reconcile = true
+
+[order]
+after = ["dirs-scaffold"]
+
+[[inputs]]
+key = "templates"
+type = "multichoice"
+prompt = "Which .gitignore base templates to include?"
+choices = ["macos", "linux", "windows", "jetbrains", "vscode", "vim", "backup", "patch", "gpg"]
+default = ["macos", "linux", "windows", "jetbrains", "vscode", "vim", "backup", "patch", "gpg"]
+required = false
+
+[[inputs]]
+key = "dynamic_fetch"
+type = "bool"
+prompt = "Fetch additional templates from github/gitignore on demand? (requires network)"
+default = false
+required = false
+
+[[steps]]
+id = "write"
+kind = "python"

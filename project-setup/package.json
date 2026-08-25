@@ -1,0 +1,11 @@
+{
+  "name": "@srobroek/project-setup",
+  "version": "0.1.0",
+  "description": "Scaffold a new project or repository: interview, module catalog, and a native repo-state scan.",
+  "private": true,
+  "omp": {
+    "extensions": [
+      "./extensions/project-setup-scan.ts"
+    ]
+  }
+}

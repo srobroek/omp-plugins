@@ -1,0 +1,334 @@
+# speckit-feature -- the SpecKit phase spine as a beads molecule.
+#
+# Install: copy this file into <repo>/.beads/formulas/ (or ~/.beads/formulas/).
+# Pour one molecule per feature:
+#   bd mol pour speckit-feature --var feature=<NNN-slug>
+#
+# Authoring gotchas (verified against bd 1.1.0):
+#   - [steps.gate] must be a TOML table, not a string.
+#   - Unknown keys are silently dropped; after editing, verify with
+#     `bd formula show speckit-feature --json`.
+#   - Step `type` accepts only task|bug|feature|epic|chore. Do NOT use
+#     `epic` inside a molecule: pour rejects epic->task blocking deps
+#     ("epics can only block other epics"). Plain tasks parent child beads
+#     fine (hierarchical IDs), so `implement` is a task.
+formula = "speckit-feature"
+description = "SpecKit feature workflow for {{feature}}: specify through retro with human approval gates"
+type = "workflow"
+
+[vars.feature]
+required = true
+pattern = "^[0-9]{3}-[a-z0-9-]+$"
+
+# Human approval, or explicit permission to proceed without one.
+#
+# Default "no" keeps the three approvals in the DAG, which is what an interactive run
+# wants. Pour with --var autonomous=yes ONLY when the operator has said the run may
+# proceed unattended; the gate steps are then filtered out and the DAG runs to
+# completion.
+#
+# This exists because the alternative is a dead molecule. `bd gate check` does not
+# see a human gate (it reports "Checked 0 gates"), so an unattended run reaches
+# clarify-approval, finds `bd ready` empty, and stalls there permanently -- eight
+# steps before implement. The first user of this package hit exactly that.
+#
+# Skipping a gate does not mean skipping its judgement. Each gate step's description
+# names what a human would have been asked, and the autonomous path requires
+# recording that as findings on the step's bead before closing it. An unattended run
+# that produces no note where a gate stood has not satisfied the gate, it has
+# discarded it.
+[vars.autonomous]
+required = false
+default = "no"
+
+# Whether the agent-assign extension is installed.
+#
+# `assign`, `validate`, and `implement` are all /speckit.agent-assign.* commands, so
+# without that extension those three steps name skills that do not exist -- which is
+# exactly what the first end-to-end run hit. Default "yes" because the formula was
+# built around this chain; pour with --var agent_assign=no when the extension is
+# absent, and the three steps drop out.
+#
+# Dropping them does NOT provide another way to implement. It removes the steps that
+# would have failed, so the molecule reflects what can actually run: work the task
+# beads under the implement step directly. `verify-tasks` anchors on `analyze` so the
+# verification half of the DAG survives either way.
+[vars.agent_assign]
+required = false
+default = "yes"
+
+[[steps]]
+id = "specify"
+title = "specify {{feature}}"
+type = "task"
+description = "Run /speckit.specify to create specs/{{feature}}/spec.md. PRECONDITION: the /speckit.* skills come from spec-kit and its extensions, which this package does not ship -- run the speckit-setup skill first. Without it 14 of these 26 steps name a skill that does not exist, and the mandatory agent-assign chain (assign -> validate -> execute) is unreachable."
+
+[steps.metadata]
+skill_hints = "speckit.specify"
+
+[[steps]]
+id = "clarify"
+title = "clarify {{feature}}"
+type = "task"
+needs = ["specify"]
+description = "Run /speckit.clarify (interactive). Carry each open question on its own escalation wisp (bd create \"[wisp:escalation] <step-id>: <q>\" --ephemeral --wisp-type escalation, linked relates-to this step); encode every answer into spec.md, then burn the wisp. The spec is the durable record."
+
+[steps.metadata]
+skill_hints = "speckit.clarify"
+execution_mode = "interactive"
+
+[[steps]]
+id = "clarify-approval"
+title = "clarify approval {{feature}}"
+type = "task"
+needs = ["clarify"]
+description = "Human sign-off on the clarified spec. Close the gate only after the user approves interactively. Nudge a stalled gate with a ping wisp; only bd gate resolve closes the gate."
+
+condition = "{{autonomous}} == no"
+[steps.gate]
+type = "human"
+
+[[steps]]
+id = "plan"
+title = "plan {{feature}}"
+type = "task"
+needs = ["clarify", "clarify-approval"]
+description = "Run /speckit.plan to produce plan.md and design artifacts."
+
+[steps.metadata]
+skill_hints = "speckit.plan"
+
+[[steps]]
+id = "checklist"
+title = "checklist {{feature}}"
+type = "task"
+needs = ["tasks"]
+description = "Run /speckit.checklist (interactive requirements-quality gate)."
+
+[steps.metadata]
+skill_hints = "speckit.checklist"
+execution_mode = "interactive"
+
+[[steps]]
+id = "tasks"
+title = "tasks {{feature}}"
+type = "task"
+needs = ["plan"]
+description = "Run /speckit.tasks, then create the task breakdown as child beads of the implement step (bd create --parent <implement-id> --spec-id {{feature}}). Never write specs/{{feature}}/tasks.md; the write is denied."
+
+[steps.metadata]
+skill_hints = "speckit.tasks"
+
+[[steps]]
+id = "critique"
+title = "critique {{feature}}"
+type = "task"
+needs = ["checklist"]
+description = "Run /speckit.critique.run (mandatory plan + task quality gate). Parallel with security-review."
+
+[steps.metadata]
+skill_hints = "speckit.critique.run"
+
+[[steps]]
+id = "security-review"
+title = "security review {{feature}}"
+type = "task"
+needs = ["checklist"]
+description = "Run /speckit.security-review.plan (mandatory security review of plan/tasks). Parallel with critique."
+
+[steps.metadata]
+skill_hints = "speckit.security-review.plan"
+
+[[steps]]
+id = "analyze"
+title = "analyze {{feature}}"
+type = "task"
+needs = ["critique", "security-review"]
+description = "Run /speckit.analyze (interactive cross-artifact risk analysis). Task state comes from bd list --spec {{feature}}, not tasks.md. Carry unresolved findings on escalation wisps and encode the resolution into spec.md or plan.md before burning them."
+
+[steps.metadata]
+skill_hints = "speckit.analyze"
+execution_mode = "interactive"
+
+[[steps]]
+id = "analyze-approval"
+title = "analyze approval {{feature}}"
+type = "task"
+needs = ["analyze"]
+description = "Human sign-off on analysis findings. Close the gate only after the user approves interactively. Nudge a stalled gate with a ping wisp; only bd gate resolve closes the gate."
+
+condition = "{{autonomous}} == no"
+[steps.gate]
+type = "human"
+
+[[steps]]
+id = "assign"
+title = "agent assign {{feature}}"
+type = "task"
+needs = ["analyze", "analyze-approval"]
+condition = "{{agent_assign}} == yes"
+description = "Run /speckit.agent-assign.assign to map implementation task beads to agents."
+
+[steps.metadata]
+skill_hints = "speckit.agent-assign.assign"
+
+[[steps]]
+id = "validate"
+title = "validate assignments {{feature}}"
+type = "task"
+needs = ["assign"]
+condition = "{{agent_assign}} == yes"
+description = "Run /speckit.agent-assign.validate to confirm every assigned agent exists."
+
+[steps.metadata]
+skill_hints = "speckit.agent-assign.validate"
+
+[[steps]]
+id = "implement"
+title = "implement {{feature}}"
+type = "task"
+needs = ["validate"]
+condition = "{{agent_assign}} == yes"
+description = "Run /speckit.agent-assign.execute. Implementation task beads are children of this step; work them via bd ready -> bd update <id> --claim -> bd close <id> --reason. Per-file progress and retries ride a [wisp:worklog] gc_report wisp linked relates-to this step; the step thread keeps the outcome only."
+
+[steps.metadata]
+skill_hints = "speckit.agent-assign.execute"
+
+[[steps]]
+id = "verify-tasks"
+title = "verify tasks {{feature}}"
+type = "task"
+needs = ["analyze", "implement"]
+labels = ["agent:speckit-verify"]
+description = "Spawn the speckit-verify agent (mode: tasks) for phantom-completion detection; writes verify-tasks-report.md."
+
+[steps.metadata]
+execution_agent_type = "speckit-verify"
+execution_agent_mode = "tasks"
+execution_mode = "subagent"
+
+[[steps]]
+id = "verify"
+title = "verify {{feature}}"
+type = "task"
+needs = ["verify-tasks"]
+labels = ["agent:speckit-verify"]
+description = "Spawn the speckit-verify agent (mode: requirements) to validate code against spec.md; writes verify-report.md."
+
+[steps.metadata]
+execution_agent_type = "speckit-verify"
+execution_agent_mode = "requirements"
+execution_mode = "subagent"
+
+[[steps]]
+id = "verify-signoff"
+title = "verify sign-off {{feature}}"
+type = "task"
+needs = ["verify"]
+description = "Final human sign-off on the verification reports. Close the gate only after the user approves interactively. Nudge a stalled gate with a ping wisp; only bd gate resolve closes the gate."
+
+condition = "{{autonomous}} == no"
+[steps.gate]
+type = "human"
+
+[[steps]]
+id = "review"
+title = "review {{feature}}"
+type = "task"
+needs = ["verify", "verify-signoff"]
+description = "Run /speckit.review.run (full review cycle); route findings through fix-findings. Multi-dimension or cross-model review: create one review-wisp shell per dimension plus a blocks edge from the downstream step to each, before spawning any reviewer."
+
+[steps.metadata]
+skill_hints = "speckit.review.run"
+
+[[steps]]
+id = "qa"
+title = "qa {{feature}}"
+type = "task"
+needs = ["review"]
+description = "Run /speckit.qa.run; failures route through fix-findings."
+
+[steps.metadata]
+skill_hints = "speckit.qa.run"
+
+[[steps]]
+id = "code-review"
+title = "code review {{feature}}"
+type = "task"
+needs = ["qa"]
+description = "Run /speckit.review.code as a subagent. Parallel with security-review-post."
+
+[steps.metadata]
+skill_hints = "speckit.review.code"
+execution_mode = "subagent"
+
+[[steps]]
+id = "security-review-post"
+title = "post-implementation security review {{feature}}"
+type = "task"
+needs = ["qa"]
+description = "Run /speckit.security-review.branch as a subagent. Parallel with code-review."
+
+[steps.metadata]
+skill_hints = "speckit.security-review.branch"
+execution_mode = "subagent"
+
+[[steps]]
+id = "cleanup"
+title = "cleanup {{feature}}"
+type = "task"
+needs = ["code-review", "security-review-post"]
+description = "Run /speckit.cleanup (post-implementation quality gate) on the main thread."
+
+[steps.metadata]
+skill_hints = "speckit.cleanup"
+
+[[steps]]
+id = "sync-drift"
+title = "sync drift {{feature}}"
+type = "task"
+needs = ["cleanup"]
+labels = ["agent:speckit-sync"]
+description = "Spawn the speckit-sync agent (scope: drift) to detect spec/implementation drift. Parallel with sync-conflicts."
+
+[steps.metadata]
+execution_agent_type = "speckit-sync"
+execution_agent_scope = "drift"
+execution_mode = "subagent"
+
+[[steps]]
+id = "sync-conflicts"
+title = "sync conflicts {{feature}}"
+type = "task"
+needs = ["cleanup"]
+labels = ["agent:speckit-sync"]
+description = "Spawn the speckit-sync agent (scope: conflicts) to detect inter-spec contradictions. Parallel with sync-drift."
+
+[steps.metadata]
+execution_agent_type = "speckit-sync"
+execution_agent_scope = "conflicts"
+execution_mode = "subagent"
+
+[[steps]]
+id = "retro"
+title = "retro {{feature}}"
+type = "task"
+needs = ["sync-drift", "sync-conflicts"]
+description = "Run /speckit.retro.run."
+
+[steps.metadata]
+skill_hints = "speckit.retro.run"
+
+[[steps]]
+id = "docs-update"
+title = "documentation update {{feature}}"
+type = "task"
+needs = ["retro"]
+description = "Update user-facing documentation for the shipped feature on the main thread."
+
+[[steps]]
+id = "final-checkpoint"
+title = "final checkpoint {{feature}}"
+type = "task"
+needs = ["docs-update"]
+description = "Final commit + tag (git, no extension), then close out the molecule (bd dolt push)."

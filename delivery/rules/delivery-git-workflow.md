@@ -9,7 +9,6 @@ LEGEND: Rules carry stable IDs (GW-n).
 
 Branching:
 
-- Never start new work on main/master; create or reuse a feature branch.
 - Reuse an existing branch/worktree only when it was created for this task.
 
 Shipping (choose one, confirm if ambiguous):

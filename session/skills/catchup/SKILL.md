@@ -10,8 +10,8 @@ Recover the current project state from an existing handover before rebuilding co
 ## Workflow
 
 1. Identify the live context: repo root, current branch, worktree path, user-stated target, and fresh `git status`/dirty state when available. Check for beads: `bd where` exits 0 when a beads workspace is active; if `bd` is not installed or `bd where` fails, skip every beads step below.
-2. Search handover locations in order: explicit repo-local untracked-state conventions, then `~/.local/state/agentic-tools/handovers/`. Include project, branch, worktree, feature/spec id, and recent timestamp signals.
-3. Choose the best candidate: filter by filename and YAML frontmatter first; for ranking and tie-breaking, LOAD skill://catchup/references/selection.md. If multiple plausible candidates remain, ask the user to choose.
+2. Call `handover_select` with the project slug (and cwd when known). Use `skill://catchup/references/selection.md` only for post-rank judgment (ask-user, branch mismatch, placeholder, missing repo_root).
+3. If multiple plausible candidates remain after ranking, ask the user to choose.
 4. Read the selected handover fully before planning or editing. Treat its Next Session Prompt and explicit recovery instructions as the high-priority starting point, then verify them against current state.
 5. Beads repos only -- read live task state alongside the handover:
    - `bd ready --json` for claimable work and `bd list --status in_progress --json` for claimed work.
@@ -27,7 +27,6 @@ Recover the current project state from an existing handover before rebuilding co
 - In beads repos, beads is the source of truth for task status; never restate a handover's task status as current without checking the bead.
 - Beads steps degrade silently: if `bd` is missing or `bd where` fails, catchup behaves exactly as in a non-beads repo.
 - Use `--json` on bd commands whose output you parse; set `BD_JSON_ENVELOPE=1` only in scripts that need the stable enveloped schema.
-- Never commit handover files; they are ephemeral local state.
 - Use memory only after handovers and live repo evidence, and label memory-derived facts unless verified locally.
 - Load minimal repo-local steering before acting on the selected handover.
 - Resolve repo-relative paths from the handover against the current verified checkout; surface recorded/current root mismatches before editing.

@@ -1,0 +1,62 @@
+schema_version = "1.0"
+
+[meta]
+repository = "github.com/your-org/your-repo"
+author = "Sjors Robroek"
+
+[module]
+id = "lang-rust"
+name = "Rust language overlay"
+version = "1.2.0"  # x-release-please-version
+description = "Add Rust tooling (cargo, rustfmt, clippy) to a scaffolded project. Appends Rust .gitignore entries and pre-commit-rust hooks."
+default_enabled = false
+reconcile = true
+
+[order]
+after = ["gitignore-generate", "precommit-setup"]
+
+# Identity input — the agent supplies the SAME project name it gave core-identity.
+# project_name is passed to `cargo init --name` so the crate name matches the
+# answer rather than the directory name (which may be a temp or differently-cased path).
+[[inputs]]
+key = "project_name"
+type = "string"
+prompt = "Project / crate name (passed to cargo init --name)?"
+default = ""
+required = true
+
+[[inputs]]
+key = "crate_kind"
+type = "string"
+prompt = "Crate kind (optional, e.g. bin, lib — leave empty for default cargo init)?"
+default = ""
+required = false
+
+[[inputs]]
+key = "workspace"
+type = "bool"
+prompt = "Initialize as a cargo workspace?"
+default = false
+required = false
+
+[[steps]]
+id = "write"
+kind = "python"
+
+# G4 — external-generator-run confirm (spec 004). SOFT gate: cargo init reaches
+# the filesystem and may create/overwrite files, but the user already opted into
+# the overlay, so it proceeds by default; --no-external-generators flips it to skip.
+# Ordered AFTER the deterministic `write` so a declined gate (gate-blocked) skips
+# ONLY the trailing `scaffold` step — the config files (rust-toolchain.toml,
+# clippy.toml, rustfmt.toml, .gitignore, pre-commit hooks) are already written.
+# workspace=true: scaffold is a no-op (Cargo.toml written deterministically in write).
+[[steps]]
+id = "run-generator"
+kind = "gate"
+hardness = "soft"
+skip_flag = "no-external-generators"
+message = "Run the external cargo init generator (may create/overwrite project files). The deterministic config files are already written — declining skips only the generator."
+
+[[steps]]
+id = "scaffold"
+kind = "python"

@@ -1,0 +1,53 @@
+schema_version = "1.0"
+
+[meta]
+repository = "github.com/your-org/your-repo"
+author = "Sjors Robroek"
+
+[module]
+id = "env-example"
+name = ".env.example from stack"
+version = "1.3.0"  # x-release-please-version
+description = "Derive .env.example from the resolved stack (framework_python / framework_ts / extra_env_hints). Agent maps the stack to a structured env_keys list; python step writes placeholder-only .env.example. Hard-refuses any placeholder that looks like a real credential."
+default_enabled = false
+reconcile = true
+
+[order]
+after = ["lang-python", "lang-ts"]
+
+[[inputs]]
+key = "framework_python"
+type = "string"
+prompt = "Python framework (leave blank if not applicable)"
+required = false
+default = ""
+
+[[inputs]]
+key = "framework_ts"
+type = "string"
+prompt = "TypeScript/JS framework (leave blank if not applicable)"
+required = false
+default = ""
+
+[[inputs]]
+key = "extra_env_hints"
+type = "string"
+prompt = "Extra env var names to include (comma-separated, e.g. STRIPE_API_KEY, SENDGRID_API_KEY)"
+required = false
+default = ""
+
+[[steps]]
+id = "resolve"
+kind = "agent"
+steering = "steering/resolve.md"
+
+[[steps]]
+id = "preview"
+kind = "gate"
+hardness = "soft"
+init_only = true
+message = "Env vars for .env.example (agent-derived):\n{decision}\nWrite .env.example with these placeholder keys?"
+
+[[steps]]
+id = "write"
+kind = "python"

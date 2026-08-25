@@ -1,0 +1,56 @@
+exclude: '^(\.specify/|specs/)'
+
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: check-added-large-files
+      - id: check-json
+      - id: check-toml
+      - id: check-yaml
+      - id: check-merge-conflict
+      - id: check-case-conflict
+      - id: check-shebang-scripts-are-executable
+      - id: check-executable-has-shebang
+      - id: detect-private-key
+      - id: end-of-file-fixer
+      - id: trailing-whitespace
+
+  - repo: https://github.com/shellcheck-py/shellcheck-py
+    rev: v0.10.0.1
+    hooks:
+      - id: shellcheck
+
+  # Secret scan runs at PRE-PUSH (not every commit) over the commits being
+  # pushed. Tool-agnostic: fires on any tool's `git push` once the framework is
+  # installed (Step 5b). gitleaks is the de-facto pre-commit secrets scanner.
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.24.3
+    hooks:
+      - id: gitleaks
+        name: gitleaks (secret scan, pre-push)
+        stages: [pre-push]
+
+  - repo: https://github.com/crate-ci/typos
+    rev: v1.32.0
+    hooks:
+      - id: typos
+        args: [--force-exclude]
+
+  - repo: https://github.com/alexander-bauer/cocogitto-pre-commit
+    rev: v0.1.0
+    hooks:
+      - id: cocogitto-verify
+        stages: [commit-msg]
+
+  # Distribute GitHub close keywords across a comma-list so every issue closes
+  # (GitHub only binds the keyword to the FIRST issue in a list). Vendored from
+  # the hooks-close-keywords package into .pre-commit-hooks/ (Step 5b).
+  - repo: local
+    hooks:
+      - id: normalize-close-keywords
+        name: normalize GitHub close keywords (commit-msg)
+        language: script
+        entry: .pre-commit-hooks/commit-msg-rewrite.sh
+        stages: [commit-msg]
+        always_run: true

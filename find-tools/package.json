@@ -3,5 +3,9 @@
   "version": "0.1.0",
   "description": "Discover and vet skills, agents, MCP servers, and plugins across real registries.",
   "private": true,
-  "omp": {}
+  "omp": {
+    "extensions": [
+      "./extensions/find-tools-scan-tool.ts"
+    ]
+  }
 }

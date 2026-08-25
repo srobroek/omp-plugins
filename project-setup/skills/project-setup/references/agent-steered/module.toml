@@ -1,0 +1,40 @@
+schema_version = "1.0"
+
+[meta]
+repository = "github.com/example/example-modules"
+author = "Example Author"
+
+[module]
+id          = "agent-steered"
+name        = "Agent-Steered Example"
+version     = "1.0.0"
+description = "Demonstrator: one python step + one agent step. Shows how to declare a Tier-2 agent step with a steering doc. NOT a real module — lives in examples/, not modules/."
+reconcile   = false
+# default_enabled is intentionally absent — this is not a bundled module.
+
+[[inputs]]
+key      = "project_type"
+type     = "choice"
+prompt   = "What kind of project is this?"
+choices  = ["library", "service", "cli"]
+default  = "library"
+required = false
+
+[[inputs]]
+key      = "description"
+type     = "text"
+prompt   = "Brief project description (used by the agent to craft the README)."
+default  = ""
+required = false
+
+# Step 1 — python (Tier-1): scaffold the directory layout deterministically.
+[[steps]]
+id   = "scaffold"
+kind = "python"
+
+# Step 2 — agent (Tier-2): draft the README using the steering doc as brief.
+# The runner passes this step to a Tier-2 LLM agent; module.py does NOT handle it.
+[[steps]]
+id       = "draft-readme"
+kind     = "agent"
+steering = "steering/decide.md"

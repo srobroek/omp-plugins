@@ -1,0 +1,81 @@
+schema_version = "1.0"
+
+[meta]
+repository = "github.com/your-org/your-repo"
+author = "Sjors Robroek"
+
+[module]
+id = "core-identity"
+name = "Core project identity"
+version = "1.2.0"  # x-release-please-version
+description = "Capture the project's identity answers (name, org, layout, license, etc.). No filesystem work — this module is the upstream input provider for all other modules."
+default_enabled = true
+reconcile = false
+
+[order]
+# core-identity is the upstream root; no requires/after.
+
+[[inputs]]
+key = "project_name"
+type = "string"
+prompt = "Project name"
+required = true
+
+[[inputs]]
+key = "org"
+type = "string"
+prompt = "GitHub owner / organisation"
+required = false
+
+[[inputs]]
+key = "description"
+type = "string"
+prompt = "Short project description"
+required = false
+
+[[inputs]]
+key = "layout"
+type = "choice"
+prompt = "Project layout"
+choices = ["single", "monorepo"]
+default = "single"
+required = false
+
+[[inputs]]
+key = "license"
+type = "choice"
+prompt = "License"
+choices = ["apache-2.0", "mit"]
+default = "apache-2.0"
+required = false
+
+[[inputs]]
+key = "public"
+type = "bool"
+prompt = "Public repository?"
+default = false
+required = false
+
+[[inputs]]
+key = "create_repo"
+type = "bool"
+prompt = "Create GitHub repository?"
+default = true
+required = false
+
+[[inputs]]
+key = "init_git"
+type = "bool"
+prompt = "Initialise git?"
+default = true
+required = false
+
+[[steps]]
+# No-op confirmation step. core-identity has no filesystem work; the runner
+# persists user answers itself. This step exists so:
+#   1. The [[steps]] array is non-empty (contract requirement).
+#   2. Downstream modules can declare requires=["core-identity"] for ordering.
+# The step simply validates that the frozen inputs are readable and emits an
+# empty files_written result.
+id = "record"
+kind = "python"

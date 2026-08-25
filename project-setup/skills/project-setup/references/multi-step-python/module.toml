@@ -1,0 +1,35 @@
+schema_version = "1.0"
+
+[meta]
+repository = "github.com/example/example-modules"
+author = "Example Author"
+
+[module]
+id          = "multi-step-python"
+name        = "Multi-Step Python Example"
+version     = "1.0.0"
+description = "Demonstrator: two python steps (scaffold + configure) showing STEP_HANDLERS dispatch. NOT a real module — lives in examples/, not modules/."
+reconcile   = true
+# default_enabled is intentionally absent — this is not a bundled module.
+
+[[inputs]]
+key     = "project_name"
+type    = "string"
+prompt  = "Project name?"
+default = "my-project"
+required = false
+
+[[inputs]]
+key     = "enable_ci"
+type    = "bool"
+prompt  = "Enable CI configuration?"
+default = false
+required = false
+
+[[steps]]
+id   = "scaffold"
+kind = "python"
+
+[[steps]]
+id   = "configure"
+kind = "python"

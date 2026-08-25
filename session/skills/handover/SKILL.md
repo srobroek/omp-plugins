@@ -39,7 +39,6 @@ MUST Include Blockers, Verification / Commands, Runtime State, and Avoid / Do No
 MUST Before handing off, commit and push completed work to its remote branch -- a handover is not a substitute for pushing. Never leave completed work only as uncommitted local state, especially in a disposable (`/tmp`) worktree.
 MUST Record exact file paths and next steps, not vague summaries.
 MUST Do not store secrets, tokens, or raw credential values.
-MUST Never commit handover files -- they are ephemeral local state.
 DEFAULT Include a short Summary section with 2-4 factual bullets.
 DEFAULT Use repo-relative plain paths for files inside the repo; absolute paths for repo root, worktree metadata, and external local-state paths.
 DEFAULT Include task-local user corrections or latest explicit instructions in Decisions when they affect continuation.
