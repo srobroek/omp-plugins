@@ -6,6 +6,7 @@ import {
 	candidates,
 	clip,
 	commitInfo,
+	EXACT_TIERS,
 	estimateTokens,
 	isDirty,
 	listWorktrees,
@@ -67,20 +68,35 @@ export interface Row {
 export function branchLabel(meta: Pick<SessionMeta, "branch" | "branchTier">, worktree: Worktree | undefined): string {
 	const now = worktree?.detached ? "detached" : (worktree?.branch ?? "");
 	if (!meta.branch) return now ? `? [worktree now on ${now}]` : "?";
-	const suffix = meta.branchTier === "observed" ? "" : " (inferred)";
+	const suffix = meta.branchTier && EXACT_TIERS[meta.branchTier] ? "" : " (inferred)";
 	if (now && now !== meta.branch) return `${meta.branch}${suffix} [worked-on → worktree now on ${now}]`;
 	return `${meta.branch}${suffix}`;
 }
 
-export function renderRow(row: Row, index: number, now: number): string[] {
+/**
+ * The shortest prefix length at which every listed id is distinct, floored at 8.
+ *
+ * Session ids are UUIDv7, so sessions started close together share a long
+ * leading run; printing a colliding prefix would hand the user an id that
+ * `mode: "read"` then has to refuse as ambiguous.
+ */
+export function idPrefixLength(ids: string[], floor = 8): number {
+	const longest = Math.max(floor, ...ids.map((id) => id.length));
+	for (let length = floor; length < longest; length += 1) {
+		if (new Set(ids.map((id) => id.slice(0, length))).size === ids.length) return length;
+	}
+	return longest;
+}
+
+export function renderRow(row: Row, index: number, now: number, idLength = 8): string[] {
 	const { meta } = row;
 	const flags: string[] = [];
 	if (meta.compactions > 0) flags.push(`compacted×${meta.compactions}`);
 	if (meta.continuedFrom > 0) flags.push("continued");
 	if (meta.exitReason) flags.push(`exit:${meta.exitReason}`);
 	const lines = [
-		`${String(index).padStart(2)}. ${meta.id.slice(0, 8)}  ${relativeTime(meta.lastActiveMs, now)}` +
-			`  (${absoluteTime(meta.lastActiveMs)})  ${meta.turnCount} turns` +
+		`${String(index).padStart(2)}. ${meta.id.slice(0, idLength)}  ${relativeTime(meta.lastActiveMs, now)}` +
+			`  (${absoluteTime(meta.lastActiveMs)})  ${meta.turnCount} turn${meta.turnCount === 1 ? "" : "s"}` +
 			`  ${(meta.bytes / 1024).toFixed(0)}KB${flags.length > 0 ? `  ${flags.join(" ")}` : ""}`,
 		`    branch: ${branchLabel(meta, row.worktree)}`,
 		`    worktree: ${worktreeLabel(row.worktree)} — ${meta.cwd}`,
@@ -151,7 +167,8 @@ export function renderList(cwd: string, options: ListOptions): { text: string; c
 			"Nothing to resume. Say so and ask what to work on instead — do not guess a session.",
 		);
 	} else {
-		shown.forEach((row, index) => out.push(...renderRow(row, index + 1, now), ""));
+		const idLength = idPrefixLength(shown.map((row) => row.meta.id));
+		shown.forEach((row, index) => out.push(...renderRow(row, index + 1, now, idLength), ""));
 		if (rows.length > shown.length) out.push(`(${rows.length - shown.length} older session(s) not shown; raise \`limit\`)`);
 		const activity = renderGitActivity(family, project);
 		if (options.git !== false && activity.length > 0) out.push("", ...activity);
@@ -255,7 +272,7 @@ export function renderRead(transcript: Transcript, options: ReadOptions): string
 
 	const out = [
 		"# Session resume context",
-		`session: ${meta.id}  |  branch: ${meta.branch || "?"}${meta.branchTier && meta.branchTier !== "observed" ? " (inferred)" : ""}  |  turns: ${total}`,
+		`session: ${meta.id}  |  branch: ${meta.branch || "?"}${meta.branchTier && !EXACT_TIERS[meta.branchTier] ? " (inferred)" : ""}  |  turns: ${total}`,
 		`cwd: ${meta.cwd || "?"}`,
 	];
 	if (meta.title) out.push(`title: ${meta.title}`);

@@ -4,7 +4,7 @@ import { appendFileSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type FixtureSession, writeSpillDir, writeStore } from "./fixtures";
-import {
+import resumeSessionTool, {
 	absoluteTime,
 	branchLabel,
 	relativeTime,
@@ -154,20 +154,25 @@ describe("unit: formatting", () => {
 });
 
 describe("unit: branch recovery", () => {
-	test("git output outranks a command, and the last sighting wins", () => {
+	test("a confirmed switch outranks status output, which outranks a bare command", () => {
 		const tracker = new BranchTracker();
 		tracker.offer("git checkout -b feat/early", "created");
 		expect(tracker.get()).toEqual({ branch: "feat/early", tier: "created" });
-		tracker.offer("Switched to a new branch 'feat/real'", "observed");
-		expect(tracker.get()).toEqual({ branch: "feat/real", tier: "observed" });
-		tracker.offer("git checkout other", "mentioned"); // weaker tier must not win
-		expect(tracker.get()?.branch).toBe("feat/real");
+		tracker.offer("On branch some/other\nYour branch is up to date with 'origin/some/other'", "status");
+		expect(tracker.get()).toEqual({ branch: "some/other", tier: "status" });
+		tracker.offer("Switched to a new branch 'feat/real'", "switched");
+		expect(tracker.get()).toEqual({ branch: "feat/real", tier: "switched" });
+		// Status output describes whatever directory ran it — possibly a sibling
+		// worktree — so it must never displace this session's own switch.
+		tracker.offer("On branch main", "status");
+		tracker.offer("git checkout other", "mentioned");
+		expect(tracker.get()).toEqual({ branch: "feat/real", tier: "switched" });
 	});
 
 	test("multi-segment names survive and refs/heads is stripped", () => {
-		const observed = new BranchTracker();
-		observed.offer("branch 'feat/a/b' set up to track origin/feat/a/b", "observed");
-		expect(observed.get()?.branch).toBe("feat/a/b");
+		const tracked = new BranchTracker();
+		tracked.offer("branch 'feat/a/b' set up to track origin/feat/a/b", "switched");
+		expect(tracked.get()).toEqual({ branch: "feat/a/b", tier: "switched" });
 		const push = new BranchTracker();
 		push.offer("dgit push origin refs/heads/release/1.2", "mentioned");
 		expect(push.get()?.branch).toBe("release/1.2");
@@ -217,7 +222,7 @@ describe("unit: transcript parsing", () => {
 
 	test("branch comes from git's own output, not the command", () => {
 		const { root } = fixtureStore([shipped]);
-		expect(parseTranscript(storeFiles(root)[0]).meta).toMatchObject({ branch: "feat/csv", branchTier: "observed" });
+		expect(parseTranscript(storeFiles(root)[0]).meta).toMatchObject({ branch: "feat/csv", branchTier: "switched" });
 	});
 
 	test("the newest todo board is the plan state", () => {
@@ -326,13 +331,13 @@ describe("integration: worktrees", () => {
 
 	test("branchLabel reports drift when the checkout moved on", () => {
 		const worktree = { path: "/repo/wt", head: "sha", branch: "main", detached: false, isMain: false };
-		expect(branchLabel({ branch: "feat/csv", branchTier: "observed" }, worktree)).toBe(
+		expect(branchLabel({ branch: "feat/csv", branchTier: "switched" }, worktree)).toBe(
 			"feat/csv [worked-on → worktree now on main]",
 		);
-		expect(branchLabel({ branch: "main", branchTier: "observed" }, worktree)).toBe("main");
+		expect(branchLabel({ branch: "main", branchTier: "switched" }, worktree)).toBe("main");
 		expect(branchLabel({ branch: "feat/x", branchTier: "created" }, undefined)).toBe("feat/x (inferred)");
 		expect(branchLabel({ branch: "", branchTier: null }, worktree)).toBe("? [worktree now on main]");
-		expect(branchLabel({ branch: "feat/x", branchTier: "observed" }, { ...worktree, detached: true })).toBe(
+		expect(branchLabel({ branch: "feat/x", branchTier: "switched" }, { ...worktree, detached: true })).toBe(
 			"feat/x [worked-on → worktree now on detached]",
 		);
 	});
@@ -403,6 +408,23 @@ describe("integration: list mode", () => {
 		const text = list(fixtureStore([]).home, repo.main);
 		expect(text).toContain("No prior sessions recorded");
 		expect(text).toContain("do not guess a session");
+	});
+
+	test("colliding ids are printed long enough to stay usable", () => {
+		const repo = repoWithWorktree();
+		const { home } = fixtureStore([
+			{ ...shipped, cwd: repo.main, stem: "2026-08-24T09-00-00-000Z_01a0382f-37e9-7000-9795-a883afa2a01b" },
+			{ ...shipped, cwd: repo.main, stem: "2026-08-24T09-00-00-000Z_01a0382f-76b6-7000-a37c-3ade9b7ca8df" },
+		]);
+		const text = list(home, repo.main);
+		expect(text).toContain("01a0382f-3");
+		expect(text).toContain("01a0382f-7");
+	});
+
+	test("a one-turn session is not reported as '1 turns'", () => {
+		const repo = repoWithWorktree();
+		const { home } = fixtureStore([{ ...shipped, cwd: repo.main, entries: [{ kind: "user", text: "only" }] }]);
+		expect(list(home, repo.main)).toContain("1 turn ");
 	});
 
 	test("every window reports its own token cost", () => {
@@ -501,5 +523,68 @@ describe("integration: session resolution", () => {
 		const { root } = fixtureStore([shipped]);
 		const file = storeFiles(root)[0];
 		expect(resolveSession("/nowhere", { file })).toEqual({ file });
+	});
+});
+
+describe("integration: tool registration", () => {
+	function fakePi(): { pi: Record<string, unknown>; captured: Record<string, unknown> } {
+		const chain: Record<string, unknown> = {};
+		const self = () => chain;
+		chain.string = self;
+		chain.number = self;
+		chain.boolean = self;
+		chain.optional = self;
+		chain.describe = self;
+		chain.object = self;
+		chain.enum = self;
+		const captured: Record<string, unknown> = {};
+		return { pi: { zod: chain, registerTool: (d: Record<string, unknown>) => Object.assign(captured, d), on: () => {} }, captured };
+	}
+
+	type Execute = (
+		id: string,
+		params: Record<string, unknown>,
+		signal: undefined,
+		onUpdate: undefined,
+		ctx: { cwd: string },
+	) => Promise<{ content: { type: string; text: string }[]; details: Record<string, unknown> }>;
+
+	test("the extension registers a read-approval resume_session tool", () => {
+		const { pi, captured } = fakePi();
+		resumeSessionTool(pi as never);
+		expect(captured.name).toBe("resume_session");
+		expect(captured.approval).toBe("read");
+		expect(typeof captured.execute).toBe("function");
+	});
+
+	test("both modes run end to end through execute", async () => {
+		const repo = repoWithWorktree();
+		const { home } = fixtureStore([{ ...shipped, cwd: repo.main }]);
+		const { pi, captured } = fakePi();
+		resumeSessionTool(pi as never);
+		const execute = captured.execute as Execute;
+
+		const listed = await withHome(home, () => execute("1", { mode: "list", path: repo.main }, undefined, undefined, { cwd: repo.main }));
+		expect(listed.details).toMatchObject({ mode: "list", sessions: 1 });
+		expect(listed.content[0].text).toContain("Wire the export path");
+
+		const id = (listed.details.ids as string[])[0];
+		const read = await withHome(home, () =>
+			execute("2", { mode: "read", session: id, path: repo.main }, undefined, undefined, { cwd: repo.main }),
+		);
+		expect(read.details).toMatchObject({ mode: "read", branch: "feat/csv", branchTier: "switched", turns: 4 });
+		expect(read.content[0].text).toContain("## Latest plan / todo state");
+	});
+
+	test("an unresolvable session reports the problem instead of throwing", async () => {
+		const repo = repoWithWorktree();
+		const { home } = fixtureStore([{ ...shipped, cwd: repo.main }]);
+		const { pi, captured } = fakePi();
+		resumeSessionTool(pi as never);
+		const result = await withHome(home, () =>
+			(captured.execute as Execute)("3", { mode: "read", session: "zzzz", path: repo.main }, undefined, undefined, { cwd: repo.main }),
+		);
+		expect(result.content[0].text).toContain("no session under");
+		expect(result.details.error).toBeDefined();
 	});
 });

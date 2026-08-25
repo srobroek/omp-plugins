@@ -158,13 +158,16 @@ export function repoRoot(cwd: string): string {
 // Branch recovery
 //
 // No record carries a git branch, so the branch a session worked on has to be
-// recovered from what it ran. Signals are tiered: git's own output is ground
-// truth, an explicit branch-creating command is next, and a bare checkout or
-// push argument is weakest. The last match in the strongest available tier wins,
-// because a session ends on the branch it last moved to.
+// recovered from what it ran, and the signals are not equally trustworthy. Only
+// a switch confirmation states that THIS session moved onto a branch. Status
+// output is genuine git output but describes whatever directory the command ran
+// in, which for an orchestrating session may be a sibling worktree. A bare
+// command is weaker still: it may have failed. The latest sighting in the
+// strongest tier available wins, because a session ends on the branch it last
+// moved to.
 // ---------------------------------------------------------------------------
 
-export type BranchTier = "observed" | "created" | "mentioned";
+export type BranchTier = "switched" | "status" | "created" | "mentioned";
 
 /**
  * `git` here tolerates global options before the subcommand (`git -C dir …`,
@@ -173,12 +176,8 @@ export type BranchTier = "observed" | "created" | "mentioned";
 const GIT = String.raw`\b[a-z]*git(?:\s+-{1,2}[\w-]+(?:[= ]\S+)?)*\s+`;
 
 const BRANCH_PATTERNS: Record<BranchTier, RegExp[]> = {
-	observed: [
-		/Switched to (?:a new )?branch '([^']+)'/g,
-		/^On branch (\S+)$/gm,
-		/^branch '([^']+)' set up to track/gm,
-		/Your branch is (?:up to date with|ahead of) '[^'/]+\/([^']+)'/g,
-	],
+	switched: [/Switched to (?:a new )?branch '([^']+)'/g, /^branch '([^']+)' set up to track/gm],
+	status: [/^On branch (\S+)$/gm, /Your branch is (?:up to date with|ahead of) '[^'/]+\/([^']+)'/g],
 	created: [
 		new RegExp(`${GIT}worktree\\s+add\\b[^\\n;&|]*?\\s-b\\s+(\\S+)`, "g"),
 		new RegExp(`${GIT}(?:checkout|switch)\\s+(?:-b|-c|-B)\\s+(\\S+)`, "g"),
@@ -189,7 +188,15 @@ const BRANCH_PATTERNS: Record<BranchTier, RegExp[]> = {
 	],
 };
 
-const TIER_RANK: Record<BranchTier, number> = { observed: 3, created: 2, mentioned: 1 };
+/** Tiers below this are labelled `(inferred)`: git never confirmed them. */
+export const EXACT_TIERS: Record<BranchTier, boolean> = {
+	switched: true,
+	status: true,
+	created: false,
+	mentioned: false,
+};
+
+const TIER_RANK: Record<BranchTier, number> = { switched: 4, status: 3, created: 2, mentioned: 1 };
 const NOT_A_BRANCH: Record<string, true> = {
 	HEAD: true,
 	"--": true,
@@ -439,7 +446,11 @@ export function parseTranscript(file: string, includeThinking = false): Transcri
 				trace.result = clip(oneLine(textOf(message.content)), 240);
 				trace.isError = message.isError === true;
 			}
-			if (message.toolName === "bash") branch.offer(textOf(message.content), "observed");
+			if (message.toolName === "bash") {
+				const output = textOf(message.content);
+				branch.offer(output, "switched");
+				branch.offer(output, "status");
+			}
 			if (message.toolName === "todo") {
 				// The todo result carries the whole board, so the newest one is the
 				// authoritative plan state; reconstructing it from ops is not needed.
