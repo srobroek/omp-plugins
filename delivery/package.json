@@ -1,9 +1,11 @@
 {
   "name": "@srobroek/delivery",
-  "version": "0.1.0",
+  "version": "0.3.0",
   "description": "Delivery and git-workflow rules, plus a pull-request review agent.",
   "private": true,
   "omp": {
-    "extensions": ["./extensions/unpushed-work-advisory.ts"]
+    "extensions": [
+      "./extensions/unpushed-work-advisory.ts"
+    ]
   }
 }
