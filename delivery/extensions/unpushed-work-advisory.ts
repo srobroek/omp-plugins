@@ -167,6 +167,11 @@ export type PorcelainStatus = {
  * escaped by `core.quotePath`. A rename or copy entry is followed by one extra
  * field holding the pre-rename path; both sides are recorded so an agent edit
  * to either name still attributes.
+ *
+ * Untracked paths are recorded alongside modified ones: a file the agent just
+ * created is the clearest case of uncommitted work, and attribution — not the
+ * tracked/untracked axis — is what keeps a human's own new files out of the
+ * advisory.
  */
 export function parsePorcelain(out: string): PorcelainStatus {
 	const fields = out.split("\0");
@@ -195,6 +200,7 @@ export function parsePorcelain(out: string): PorcelainStatus {
 
 		if (xy === "??") {
 			untracked += 1;
+			dirtyPaths.push(path);
 			continue;
 		}
 		if (xy === "  ") continue;
@@ -210,7 +216,8 @@ export function parsePorcelain(out: string): PorcelainStatus {
 }
 
 /**
- * Intersect dirty tracked paths with what the agent wrote this session.
+ * Intersect dirty paths — modified, staged, and untracked — with what the agent
+ * wrote this session.
  *
  * `hasGitDir` guarantees `cwd` is the repository root, so porcelain's
  * repo-relative paths and the recorded absolute paths share one space with no
@@ -329,12 +336,13 @@ export function formatAdvisory(
 		const total = totalChangedLines(stats);
 		const summary = total > 0 ? `, ~${total} changed line(s)` : "";
 		parts.push(
-			`${agentDirty.length} file(s) you edited this session are uncommitted on branch ` +
+			`${agentDirty.length} file(s) you wrote this session are uncommitted on branch ` +
 				`${status.branch}${summary}: ${listing}${more}. ` +
 				`Commit your own finished work, grouped by unit of functionality: if these files span ` +
 				`more than one self-contained change, make a separate commit per change with its own ` +
 				`message rather than one mixed commit. Name the paths explicitly ` +
-				`(\`git commit <paths> -m ...\`) and stage nothing else in this tree. Say nothing ` +
+				`(\`git add <paths>\`, then \`git commit <paths> -m ...\`) and stage nothing else in ` +
+				`this tree. Say nothing ` +
 				`about files you did not write — they are not yours to commit, count, or mention. ` +
 				`Leave a chunk uncommitted if it is genuinely unfinished, and say so.`,
 		);

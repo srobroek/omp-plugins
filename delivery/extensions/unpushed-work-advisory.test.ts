@@ -50,7 +50,7 @@ describe("parsePorcelain", () => {
 		);
 		expect(s.branch).toBe("feature");
 		expect(s.ahead).toBe(2);
-		expect(s.dirtyPaths).toEqual(["src/a.ts"]);
+		expect(s.dirtyPaths).toEqual(["src/a.ts", "scratch"]);
 		expect(s.untracked).toBe(1);
 	});
 
@@ -77,10 +77,21 @@ describe("parsePorcelain", () => {
 		expect(s.dirtyPaths).toEqual(["docs/a file.md"]);
 	});
 
-	test("untracked alone never advises", () => {
+	test("untracked files a human created never advise", () => {
 		const s = parsePorcelain(porcelain("## main", "?? foo", "?? bar", "?? baz", "?? qux"));
 		expect(agentAuthoredDirty(s, "/repo", new Set())).toEqual([]);
 		expect(shouldAdvise([], 0, 0)).toBe(false);
+	});
+
+	test("untracked files the agent created attribute and advise", () => {
+		const s = parsePorcelain(porcelain("## main", "?? a.ts", "?? b.ts", "?? c.ts", "?? human.ts"));
+		const mine = agentAuthoredDirty(
+			s,
+			"/repo",
+			new Set(["/repo/a.ts", "/repo/b.ts", "/repo/c.ts"]),
+		);
+		expect(mine.sort()).toEqual(["a.ts", "b.ts", "c.ts"]);
+		expect(shouldAdvise(mine, 0, 0)).toBe(true);
 	});
 });
 
