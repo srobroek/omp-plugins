@@ -3,6 +3,7 @@ import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
+import beadsDoltLifecycle from "./dolt-server-lifecycle.ts";
 import {
 	backendNotice,
 	classifyBackend,
@@ -145,5 +146,30 @@ describe("pidAlive", () => {
 		await proc.exited;
 		// Bun has reaped it, so the pid holds no process and no zombie.
 		expect(pidAlive(pid)).toBe(false);
+	});
+});
+
+describe("cross-instance once-guard", () => {
+	test("two module instances emit exactly one storage-mode notice", async () => {
+		// Two load paths (install + link, or install + settings extensions entry)
+		// instantiate the module twice; the notice must still appear once.
+		delete (globalThis as Record<symbol, unknown>)[Symbol.for("com.srobroek.beads.storage-mode.reported")];
+		const cwd = await repo({ "metadata.json": '{"dolt_mode":"embedded"}' });
+		const sent: unknown[] = [];
+		const handlers: Array<(event: unknown, ctx: unknown) => Promise<void>> = [];
+		const pi = {
+			on: (name: string, handler: (event: unknown, ctx: unknown) => Promise<void>) => {
+				if (name === "session_start") handlers.push(handler);
+			},
+			sendMessage: (message: unknown) => {
+				sent.push(message);
+			},
+			logger: { error: () => {} },
+		};
+		beadsDoltLifecycle(pi as never);
+		beadsDoltLifecycle(pi as never);
+		for (const handler of handlers) await handler({}, { cwd });
+		expect(handlers.length).toBe(2);
+		expect(sent.length).toBe(1);
 	});
 });

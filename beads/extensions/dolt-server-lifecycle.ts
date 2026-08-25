@@ -143,12 +143,20 @@ async function stopServer(cwd: string): Promise<{ said: string; verdict: string 
 	return { said, verdict: pidAlive(before) ? `still running: pid ${before} survived the stop` : `stopped: pid ${before} exited` };
 }
 
-export default function beadsDoltLifecycle(pi: ExtensionAPI): void {
-	let reported = false;
+/**
+ * Process-global once-guard. A per-instance flag is not enough: when the plugin
+ * is momentarily reachable through two load paths (marketplace install plus a
+ * dev link, or an install plus a settings.json extensions entry), the module is
+ * instantiated twice and each instance fires its own notice. Keyed on
+ * globalThis so every instance shares one flag; observed live on 2026-08-25.
+ */
+const REPORTED_KEY = Symbol.for("com.srobroek.beads.storage-mode.reported");
 
+export default function beadsDoltLifecycle(pi: ExtensionAPI): void {
 	pi.on("session_start", async (_event, ctx: ExtensionContext) => {
-		if (reported) return;
-		reported = true;
+		const holder = globalThis as { [REPORTED_KEY]?: boolean };
+		if (holder[REPORTED_KEY]) return;
+		holder[REPORTED_KEY] = true;
 		try {
 			const { backend, tracked } = await readBackend(ctx.cwd);
 			const notice = backendNotice(backend, tracked);
