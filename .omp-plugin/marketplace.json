@@ -19,7 +19,7 @@
       "name": "authoring",
       "description": "Author and audit agentic assets: skills, rules, agents, and steering.",
       "source": "./authoring",
-      "version": "1.1.1",
+      "version": "1.1.2",
       "category": "productivity"
     },
     {
@@ -33,7 +33,7 @@
       "name": "beads",
       "description": "Beads issue tracking: dependency DAGs, formulas, and decisions recorded as beads.",
       "source": "./beads",
-      "version": "0.6.1",
+      "version": "0.6.2",
       "category": "productivity"
     },
     {
@@ -61,7 +61,7 @@
       "name": "delivery",
       "description": "Delivery and git-workflow rules, plus a pull-request review agent.",
       "source": "./delivery",
-      "version": "0.6.1",
+      "version": "0.6.2",
       "category": "devops"
     },
     {
@@ -124,7 +124,7 @@
       "name": "quality",
       "description": "Quality gates: code-smell auditing, final verification, lint and docs adjudication, mechanical diff review, and browser-verification discipline.",
       "source": "./quality",
-      "version": "0.5.1",
+      "version": "0.5.2",
       "category": "development"
     },
     {
@@ -152,7 +152,7 @@
       "name": "speckit",
       "description": "SpecKit workflow: spec-driven setup, bugfix flow, tasks.md protection, and PR title discipline.",
       "source": "./speckit",
-      "version": "0.5.1",
+      "version": "0.5.2",
       "category": "development"
     },
     {
