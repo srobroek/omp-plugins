@@ -34,6 +34,12 @@ jobs:
           python-version: "3.14"
 
       - uses: oven-sh/setup-bun@v2
+        with:
+          # Pinned: build-extensions.py --check byte-compares committed dist/
+          # bundles against a fresh build, so the CI bun MUST match the bun that
+          # built the committed bundles. Bump together with a dist rebuild
+          # (renovate-dist rebuilds automatically on renovate branches).
+          bun-version: "1.3.14"
 
       - name: Rebuild extension bundles
         run: |
