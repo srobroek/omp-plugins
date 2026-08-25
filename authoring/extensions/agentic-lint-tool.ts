@@ -104,6 +104,62 @@ export function splitFrontmatter(text: string): [Record<string, string>, string]
 	return [fm, parts[2] ?? ""];
 }
 
+/**
+ * Frontmatter that only parses after lenient repair.
+ *
+ * omp tries strict YAML, and on failure retries with `quoteAmbiguousPlainScalars`
+ * before giving up on a `key: value` line matcher. Measured: a description holding
+ * an unquoted `": "` fails strict parse, and the repair pass recovers the whole
+ * document -- a block-sequence `condition` beside it still arrives intact. So omp
+ * itself is unharmed, and this is NOT an error.
+ *
+ * What does break is every strict consumer. Vale rejects its compiled rule and
+ * lints NOTHING, which slopvac reports as UNCHECKED, so prose gates silently pass
+ * on a file nobody checked. A loader passing `repair: false` reads an empty value
+ * for the same key.
+ */
+export function frontmatterDefects(text: string): Triple[] {
+	if (!text.startsWith("---")) return [];
+	const parts = splitOnceTripleDash(text);
+	const block = parts[1];
+	if (parts.length < 3 || block === undefined) return [];
+
+	try {
+		Bun.YAML.parse(block);
+		return [];
+	} catch (error) {
+		const reason = (error instanceof Error ? error.message : String(error)).split("\n")[0];
+		return [
+			[
+				"WARN",
+				"W13",
+				`frontmatter needs lenient repair to parse (${reason}) — omp recovers it, but strict consumers do not: vale lints nothing and slopvac reports UNCHECKED. Quote the value.`,
+			],
+		];
+	}
+}
+
+/**
+ * Filesystem paths that only resolve on the machine that wrote them.
+ *
+ * Not every absolute path is a defect. `/tmp/...`, `/dev/null` and `/usr/bin/env`
+ * are absolute by necessity and correct on any host, so flagging "absolute" would
+ * reject portable shell snippets. The defect is a MACHINE-SPECIFIC root:
+ *
+ * - a home directory on any OS, so `/home/...` and `C:\Users\...` count as much as
+ *   the macOS `/Users/...`
+ * - any Windows drive path, since the drive letter is a property of one machine
+ *
+ * `~/` stays allowed: it is the portable way to say the same thing.
+ */
+export function hostSpecificPaths(body: string): string[] {
+	const homes = /(?<![\w.:/~-])\/(?:Users|home)\/[A-Za-z0-9._-]+(?:\/[A-Za-z0-9._-]+)*/g;
+	const rootHome = /(?<![\w.:/~-])\/root\/[A-Za-z0-9._-]+(?:\/[A-Za-z0-9._-]+)*/g;
+	const windows = /\b[A-Za-z]:[\\/](?:[A-Za-z0-9._-]+[\\/])*[A-Za-z0-9._-]*/g;
+	const hits = [...body.matchAll(homes), ...body.matchAll(rootHome), ...body.matchAll(windows)].map(m => m[0]);
+	return [...new Set(hits)];
+}
+
 export function parseXlint(text: string): [Set<string>, string] {
 	if (!text.startsWith("---")) return [new Set(), ""];
 	const parts = splitOnceTripleDash(text);
@@ -179,6 +235,9 @@ export function lint(path: string): Triple[] {
 	if (allowedCodes.size > 0 && !overrideReason) {
 		raw.push(["ERROR", "E9", "x-lint.allow declared without a reason field"]);
 	}
+
+	// Applies to every kind, rules included: a dropped condition breaks any of them.
+	raw.push(...frontmatterDefects(text));
 
 	if (kind === "skill" || kind === "agent" || kind === "pointer") {
 		const desc = fm.description ?? "";
@@ -262,6 +321,12 @@ export function lint(path: string): Triple[] {
 		const rel = m[1] ?? "";
 		const target = resolve(dirname(path), rel);
 		if (!existsSync(target)) err("E8", `broken link: ${rel}`);
+	}
+
+	// Deliberately NOT blankCodeSpans: a baked host path is normally cited inside
+	// backticks, which is exactly where it must still be caught.
+	for (const m of hostSpecificPaths(body)) {
+		err("E12", `machine-specific path '${m}' — cite assets as skill://<name>/<path> or use ~/, this dies on another machine`);
 	}
 
 	const seen: Record<string, number> = {};
