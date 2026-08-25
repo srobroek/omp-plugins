@@ -1,6 +1,6 @@
 {
   "name": "@srobroek/delivery",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "description": "Delivery and git-workflow rules, plus a pull-request review agent.",
   "private": true,
   "omp": {
