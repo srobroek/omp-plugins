@@ -5,11 +5,11 @@
     "": {
       "name": "@srobroek/dep-update",
       "dependencies": {
-        "smol-toml": "1.6.1",
+        "smol-toml": "1.8.0",
       },
     },
   },
   "packages": {
-    "smol-toml": ["smol-toml@1.6.1", "", {}, "sha512-dWUG8F5sIIARXih1DTaQAX4SsiTXhInKf1buxdY9DIg4ZYPZK5nGM1VRIYmEbDbsHt7USo99xSLFu5Q1IqTmsg=="],
+    "smol-toml": ["smol-toml@1.8.0", "", {}, "sha512-kCZr2V3ch9i00x8zXRhjUNVcjG9ijES5dDudkXvUVCT5QlJNQWElSJdZqyPemffHoLNUYwOcou0Fy+ojN0uHSQ=="],
   }
 }

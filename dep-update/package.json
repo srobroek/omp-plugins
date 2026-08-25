@@ -4,7 +4,7 @@
   "description": "Classify dependency updates by semver safety and produce a cited upgrade plan.",
   "private": true,
   "dependencies": {
-    "smol-toml": "1.6.1"
+    "smol-toml": "1.8.0"
   },
   "omp": {
     "extensions": [
