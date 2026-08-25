@@ -1,6 +1,6 @@
 {
   "name": "architecture",
   "description": "Architecture rules: module boundaries, compose-don't-fork, project structure, component promotion, and structural-search routing.",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "category": "development"
 }

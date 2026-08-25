@@ -1,6 +1,6 @@
 {
   "name": "dep-update",
   "description": "Classify dependency updates by semver safety and produce a cited upgrade plan.",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "category": "development"
 }
