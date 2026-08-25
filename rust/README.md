@@ -23,9 +23,14 @@ None.
 - `rust-errors` — wire error-code registry and audit
 - `rust-tauri` — Tauri v2 bundles, updater, WebDriver
 - `rust-tauri-mcp-bridge` — driving a running Tauri app over the MCP bridge
+- `rust-cargo-install-advisory` — `cargo install` compiles from source (TTSR)
 
 ## Tools
 
 Registered by this plugin's extension modules:
 
 - `rust_quality`
+
+## Extensions
+
+- `migration-edit-gate` — blocks edits to a committed migration; the latest one in the directory stays editable

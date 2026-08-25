@@ -5,7 +5,8 @@
   "private": true,
   "omp": {
     "extensions": [
-      "./extensions/rust-quality-tool.ts"
+      "./extensions/rust-quality-tool.ts",
+      "./extensions/migration-edit-gate.ts"
     ]
   }
 }

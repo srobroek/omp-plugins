@@ -16,7 +16,7 @@ failure-mode conventions live in the language plugins.
 - Coverage: `cargo llvm-cov nextest --lcov`.
 - Dependency gate: `cargo deny check` (advisories, bans, licenses, sources).
 - Install dev/CI tools with `taiki-e/install-action`, falling back to
-  `cargo binstall`. `cargo install` in CI compiles from source every run.
+  `cargo binstall` -- enforced by `rust-cargo-install-advisory`.
 
 ## TypeScript
 

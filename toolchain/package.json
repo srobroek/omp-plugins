@@ -3,5 +3,10 @@
   "version": "0.2.0",
   "description": "Toolchain defaults, tools-versus-scripts layout, and pragmatic output rules.",
   "private": true,
-  "omp": {}
+  "omp": {
+    "extensions": [
+      "./extensions/dep-manifest-advisory.ts",
+      "./extensions/prefer-tools-advisory.ts"
+    ]
+  }
 }
