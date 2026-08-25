@@ -47,7 +47,7 @@ jobs:
       # commit below also triggers CI on the PR.
       - name: Checkout release branch
         if: ${{ steps.release.outputs.prs_created == 'true' }}
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           ref: ${{ fromJSON(steps.release.outputs.pr).headBranchName }}
           token: ${{ steps.app-token.outputs.token }}
