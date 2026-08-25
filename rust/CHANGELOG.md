@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.3.0](https://github.com/srobroek/omp-plugins/compare/rust--v0.2.0...rust--v0.3.0) (2026-08-25)
+
+
+### Features
+
+* **speckit:** recover spec-modes rule lost in the docs rollup ([84c01b8](https://github.com/srobroek/omp-plugins/commit/84c01b85067a877cd2ab4d20c0bfeca88934aa0d))
+* **toolchain,rust:** advisories and migration gate ([31485e9](https://github.com/srobroek/omp-plugins/commit/31485e9d950974bea2ae1e6869c426dc4b7ad9d6))
+
 ## [0.2.0](https://github.com/srobroek/omp-plugins/compare/rust--v0.1.0...rust--v0.2.0) (2026-08-25)
 
 

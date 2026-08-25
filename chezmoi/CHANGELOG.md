@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.3.0](https://github.com/srobroek/omp-plugins/compare/chezmoi--v0.2.0...chezmoi--v0.3.0) (2026-08-25)
+
+
+### Features
+
+* **authoring,chezmoi:** lint reminder, repomix TTSR, secret commit gate ([90b8c58](https://github.com/srobroek/omp-plugins/commit/90b8c5817c69c845282a04e042be60c2b2992136))
+* **speckit:** recover spec-modes rule lost in the docs rollup ([84c01b8](https://github.com/srobroek/omp-plugins/commit/84c01b85067a877cd2ab4d20c0bfeca88934aa0d))
+
 ## [0.2.0](https://github.com/srobroek/omp-plugins/compare/chezmoi--v0.1.0...chezmoi--v0.2.0) (2026-08-25)
 
 

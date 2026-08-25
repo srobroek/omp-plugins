@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.4.0](https://github.com/srobroek/omp-plugins/compare/delivery--v0.3.0...delivery--v0.4.0) (2026-08-25)
+
+
+### Features
+
+* **speckit:** recover spec-modes rule lost in the docs rollup ([84c01b8](https://github.com/srobroek/omp-plugins/commit/84c01b85067a877cd2ab4d20c0bfeca88934aa0d))
+
+
+### Bug Fixes
+
+* **delivery:** attribute unpushed commits to the session that made them ([a215a38](https://github.com/srobroek/omp-plugins/commit/a215a38e9139a0c77012f1608ff4c71457c7f67b))
+* **delivery:** attribute unpushed commits to the session; summarise per-file diffs ([0ae7a0f](https://github.com/srobroek/omp-plugins/commit/0ae7a0f874e262d0f54cb75ada173e1a11a5be35))
+* **delivery:** attribute untracked files the agent created ([5c3b985](https://github.com/srobroek/omp-plugins/commit/5c3b985fa0237ac831b530748c0e5df79e823313))
+* **delivery:** attribute untracked files the agent created ([daf6654](https://github.com/srobroek/omp-plugins/commit/daf66543cb4b6556b3de7bbf5c457989940efe4e))
+
+
+### Documentation
+
+* **steering:** own commit/push policy in git rules; ban narrating foreign state ([ccef816](https://github.com/srobroek/omp-plugins/commit/ccef816ac76cf318d5c4871919953ba6b2989eef))
+
 ## [0.3.0](https://github.com/srobroek/omp-plugins/compare/delivery--v0.2.0...delivery--v0.3.0) (2026-08-25)
 
 
