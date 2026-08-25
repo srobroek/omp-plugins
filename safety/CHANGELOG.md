@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.1](https://github.com/srobroek/omp-plugins/compare/safety--v0.4.0...safety--v0.4.1) (2026-08-25)
+
+
+### Bug Fixes
+
+* **ttsr:** audit wave - retire and re-anchor the blocking rules ([a6ae591](https://github.com/srobroek/omp-plugins/commit/a6ae5911aa0ece0e8af982a43040ae8515970d3a))
+
 ## [0.4.0](https://github.com/srobroek/omp-plugins/compare/safety--v0.3.0...safety--v0.4.0) (2026-08-25)
 
 

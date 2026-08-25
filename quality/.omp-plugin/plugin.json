@@ -1,6 +1,6 @@
 {
   "name": "quality",
   "description": "Quality gates: code-smell auditing, final verification, lint and docs adjudication, mechanical diff review, and browser-verification discipline.",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "category": "development"
 }
