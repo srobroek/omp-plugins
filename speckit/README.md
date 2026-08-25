@@ -40,7 +40,9 @@ the repo's `.beads/formulas/`.
 | PreToolUse Skill advisory on `speckit.implement` | TTSR `speckit-implement-deprecated`. |
 | PreToolUse Bash `gh pr create\|edit` changelog reminder | TTSR `speckit-pr-title`. |
 | UserPromptSubmit / UserPromptExpansion / PreToolUse:Skill dispatcher (`speckit_instructions.py` table) | `alwaysApply` rule `speckit-workflow` (static contract + command routing table). Per-command fire-at-invoke injection does not exist in OMP; the table is always-loaded instead. |
-| `taskstoissues` deny | Same always-apply rule (NOT run that command). |
+| `taskstoissues` deny | TTSR `speckit-no-taskstoissues` (`interruptMode: always`). |
+| Gate resolved with `bd close` instead of `bd gate resolve` | TTSR `speckit-gate-close` (`interruptMode: always`). Gate bead ids carry no marker, so it fires on intent-revealing shapes only. |
+| `bd create` without `--spec-id` | TTSR `speckit-spec-id` (`interruptMode: never`). |
 
 ## What did not survive
 

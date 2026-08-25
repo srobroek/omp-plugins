@@ -14,9 +14,6 @@ NOT Invoke deprecated `/speckit.implement`; route through the agent-assign chain
   (assign -> validate -> execute) and work the molecule steps. `speckit-basic`
   has no such chain: its `implement` step works the task beads under it directly.
 NOT Proceed with open questions, unresolved gaps, or unapproved intent changes.
-NOT Run `/speckit.taskstoissues` (or `speckit-taskstoissues`): it converts
-  tasks.md into GitHub issues — a second task tracker. Link an existing issue
-  with `bd update <id> --external-ref gh-<number>` instead.
 
 SETUP
 MUST Copy every `formulas/*.formula.toml` from this plugin into `.beads/formulas/`
@@ -25,7 +22,8 @@ MUST Copy every `formulas/*.formula.toml` from this plugin into `.beads/formulas
 DEFAULT Without a beads workspace, preserve upstream SpecKit artifact behavior.
 
 SPEC IDENTITY
-MUST Set `--spec-id <NNN-slug>` on every bead a spec produces.
+MUST Set `--spec-id <NNN-slug>` on every bead a spec produces (`bd create`
+  omissions are flagged by `speckit-spec-id`).
 
 MOLECULE PER FEATURE
 MUST Pour one molecule per spec dir. Profiles: `speckit-basic` (10),
@@ -54,7 +52,7 @@ MUST Resolve a human gate with `bd gate resolve <gate-id>` then `bd close <step-
 NOT Wait on a human gate in an unattended run — pour `--var autonomous=yes`.
 MUST When a gate was skipped that way, record on the preceding step what a
   reviewer would have been asked.
-NOT `bd close <gate-id>` to resolve a gate.
+NOT `bd close <gate-id>` to resolve a gate (see `speckit-gate-close`).
 
 COMMAND ROUTING (was the dispatcher table)
 - constitution / roadmap.write: project-scoped; do not pour a molecule.
