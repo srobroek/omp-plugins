@@ -12,7 +12,6 @@
 
 * **delivery:** attribute unpushed commits to the session that made them ([a215a38](https://github.com/srobroek/omp-plugins/commit/a215a38e9139a0c77012f1608ff4c71457c7f67b))
 * **delivery:** attribute unpushed commits to the session; summarise per-file diffs ([0ae7a0f](https://github.com/srobroek/omp-plugins/commit/0ae7a0f874e262d0f54cb75ada173e1a11a5be35))
-* **delivery:** attribute untracked files the agent created ([5c3b985](https://github.com/srobroek/omp-plugins/commit/5c3b985fa0237ac831b530748c0e5df79e823313))
 * **delivery:** attribute untracked files the agent created ([daf6654](https://github.com/srobroek/omp-plugins/commit/daf66543cb4b6556b3de7bbf5c457989940efe4e))
 
 
