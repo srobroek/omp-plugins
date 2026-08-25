@@ -82,12 +82,12 @@ function reportOnlyGate(pi) {
   });
 }
 export {
-  targetPaths,
-  isDependencyFile,
-  disarmsGate,
-  reportOnlyGate as default,
-  decideToolCall,
-  createState,
+  DENY_REASON,
   armsGate,
-  DENY_REASON
+  createState,
+  decideToolCall,
+  reportOnlyGate as default,
+  disarmsGate,
+  isDependencyFile,
+  targetPaths
 };
