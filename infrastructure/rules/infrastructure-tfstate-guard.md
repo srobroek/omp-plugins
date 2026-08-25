@@ -1,7 +1,7 @@
 ---
 name: infrastructure-tfstate-guard
 description: Never hand-edit Terraform state; require terraform state subcommands with a backup.
-condition: ["(?i)terraform\\s+state\\s+(rm|mv|push)", "(?i)\\.tfstate"]
+condition: ["(?i)terraform\\s+state\\s+(rm|mv|push)"]
 scope: "tool:bash, tool:edit(**/*.tfstate*), tool:write(**/*.tfstate*)"
 interruptMode: never
 ---

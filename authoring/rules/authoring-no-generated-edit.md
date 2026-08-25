@@ -1,7 +1,10 @@
 ---
 name: authoring-no-generated-edit
 description: Abort edits to generated agent runtime copies.
-condition: ["(\\.agents/skills|\\.claude/agents|\\.claude/rules|/AGENTS\\.md|/CLAUDE\\.md)"]
+condition:
+  - "(?:^|[\\s\"'/])\\.agents(?:/|$)"
+  - "(?:^|[\\s\"'])(?:\\./)?AGENTS\\.md(?:$|[\\s\"':])"
+  - "(?:^|[\\s\"'])(?:\\./)?CLAUDE\\.md(?:$|[\\s\"':])"
 scope: "tool:edit, tool:write"
 interruptMode: always
 ---

@@ -2,7 +2,7 @@
 name: rust-rustflags-linker
 description: Selecting a linker through RUSTFLAGS invalidates the rust-cache key; set it per-target in .cargo/config.toml.
 condition: ["RUSTFLAGS[^\\n]{0,60}(?:linker|link-arg)"]
-scope: "tool:bash, tool:edit(**/*.{toml,yml,yaml}), tool:write(**/*.{toml,yml,yaml})"
+scope: "tool:edit(**/.github/workflows/*), tool:write(**/.github/workflows/*)"
 interruptMode: never
 ---
 `Swatinem/rust-cache` hashes `RUSTFLAGS` into its cache key, so adding a linker

@@ -2,7 +2,7 @@
 name: rust-cargo-install-advisory
 description: cargo install compiles the tool from source; in CI that is a full uncached build before your build starts.
 condition: ["\\bcargo\\s+install\\b(?![^\\n]*--help)"]
-scope: "tool:bash, tool:edit(**/.github/workflows/*), tool:write(**/.github/workflows/*)"
+scope: "tool:edit(**/.github/workflows/*), tool:write(**/.github/workflows/*)"
 interruptMode: never
 ---
 

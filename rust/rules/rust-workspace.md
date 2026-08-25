@@ -9,6 +9,7 @@ description: When setting Cargo workspace lints, workspace.dependencies, feature
 
 - Lints: `[workspace.lints]`; members inherit via `[lints] workspace = true`.
   Clippy `all` + `pedantic` at `warn`; CI: `-D warnings`. Per-crate overrides marked `// LINT(crate): reason`.
+- Containment: `clippy.toml` `disallowed-methods` must list `std::fs::canonicalize` and `std::path::Path::canonicalize`. Both follow symlinks and junctions, so a lexically-under-root path can resolve outside the root and pass a containment check. Normalize lexically and `lstat` instead. Human path print / dedup stays a clippy allow with a reason.
 - Dependencies: all semver ranges in `[workspace.dependencies]`; members use `{ workspace = true }`.
   Don't pin patch-level without a known breakage (link it). Bump once per workspace.
 - Dev dependencies: in the crate that uses them. `tests-common` lib only when multiple crates share
