@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.0.0](https://github.com/srobroek/omp-plugins/compare/authoring--v0.3.0...authoring--v1.0.0) (2026-08-25)
+
+
+### ⚠ BREAKING CHANGES
+
+* the session plugin no longer exists; unlink it locally.
+
+### Features
+
+* remove the session plugin ([bc4049d](https://github.com/srobroek/omp-plugins/commit/bc4049d520d5bd72c1e1551ec49aa9a516c33c8c))
+* **rules:** mechanize nine steering clauses as TTSR rules ([539efc0](https://github.com/srobroek/omp-plugins/commit/539efc02a153a2fddeab8d4bd2fee6ada30e7040))
+
 ## [0.3.0](https://github.com/srobroek/omp-plugins/compare/authoring--v0.2.0...authoring--v0.3.0) (2026-08-25)
 
 

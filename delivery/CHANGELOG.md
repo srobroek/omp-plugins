@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.0](https://github.com/srobroek/omp-plugins/compare/delivery--v0.4.0...delivery--v0.5.0) (2026-08-25)
+
+
+### Features
+
+* **rules:** mechanize nine steering clauses as TTSR rules ([539efc0](https://github.com/srobroek/omp-plugins/commit/539efc02a153a2fddeab8d4bd2fee6ada30e7040))
+
 ## [0.4.0](https://github.com/srobroek/omp-plugins/compare/delivery--v0.3.0...delivery--v0.4.0) (2026-08-25)
 
 
