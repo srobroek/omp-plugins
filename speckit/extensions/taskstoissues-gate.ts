@@ -163,7 +163,10 @@ function isBannedResolvedCommand(executable: string, args: readonly string[]): b
 				break;
 			}
 			if (/^[-+][A-Za-z]+$/.test(arg)) {
-				if (arg.includes("c")) sawC = true;
+				// Only a DASH cluster carries -c command-string mode; +c unsets the
+				// option (zsh) or errors (bash) - either way the operand is a
+				// script FILE, and filenames are out of the gate's scope.
+				if (arg.startsWith("-") && arg.slice(1).includes("c")) sawC = true;
 				// -o/-O (bash/zsh/ksh set options) consume the next arg as a value,
 				// also when trailing a cluster (-lo posix).
 				if (/[oO]$/.test(arg)) i++;

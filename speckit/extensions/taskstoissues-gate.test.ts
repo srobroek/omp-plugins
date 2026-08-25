@@ -157,6 +157,8 @@ describe("wrapper grammars resolve the real command slot", () => {
 		"bash -- -c speckit-taskstoissues",
 		"bash -o posix -c 'echo speckit-taskstoissues'",
 		"bash --norc speckit-taskstoissues",
+		"bash +c speckit-taskstoissues",
+		"zsh +o posix -c 'echo speckit-taskstoissues'",
 		"bash --rcfile x speckit-taskstoissues",
 		"env -S 'echo speckit-taskstoissues'",
 		"env -S 'sudo echo speckit-taskstoissues'",
