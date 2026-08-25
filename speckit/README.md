@@ -40,7 +40,7 @@ the repo's `.beads/formulas/`.
 | PreToolUse Skill advisory on `speckit.implement` | TTSR `speckit-implement-deprecated`. |
 | PreToolUse Bash `gh pr create\|edit` changelog reminder | Retired: `delivery-draft-pr-advisory` owns `gh pr create`, and the title-is-the-changelog line is prose in `delivery-git-workflow`. Two advisories on one command was noise. |
 | UserPromptSubmit / UserPromptExpansion / PreToolUse:Skill dispatcher (`speckit_instructions.py` table) | `alwaysApply` rule `speckit-workflow` (static contract + command routing table). Per-command fire-at-invoke injection does not exist in OMP; the table is always-loaded instead. |
-| `taskstoissues` deny | TTSR `speckit-no-taskstoissues` (`interruptMode: always`). |
+| `taskstoissues` deny | `extensions/taskstoissues-gate.ts` owns bash (argv). TTSR `speckit-no-taskstoissues` is slash-form only (`interruptMode: always`). |
 | Gate resolved with `bd close` instead of `bd gate resolve` | Moved to the beads plugin, which owns `bd gate`: TTSR `beads-gate-close` plus the `bd-close-gate` extension. |
 | `bd create` without `--spec-id` | Retired as a contextual false positive; spec linkage is prose in `speckit-workflow`. |
 
