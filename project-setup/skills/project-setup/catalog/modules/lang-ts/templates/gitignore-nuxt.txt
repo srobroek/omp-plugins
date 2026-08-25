@@ -1,4 +1,0 @@
-
-# Nuxt extras
-.nitro
-.data

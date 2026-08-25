@@ -114,13 +114,6 @@
       "category": "productivity"
     },
     {
-      "name": "project-setup",
-      "description": "Scaffold a new project or repository: interview, module catalog, and a native repo-state scan.",
-      "source": "./project-setup",
-      "version": "0.1.0",
-      "category": "productivity"
-    },
-    {
       "name": "python",
       "description": "Python rules: uv-managed projects, typing, pytest layout, and a Python review skill.",
       "source": "./python",

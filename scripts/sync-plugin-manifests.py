@@ -55,10 +55,6 @@ PLUGINS: dict[str, tuple[str, str]] = {
         "development",
         "SpecKit workflow: spec-driven setup, bugfix flow, tasks.md protection, and PR title discipline.",
     ),
-    "project-setup": (
-        "productivity",
-        "Scaffold a new project or repository: interview, module catalog, and a native repo-state scan.",
-    ),
     "beads": ("productivity", "Beads issue tracking: dependency DAGs, formulas, and decisions recorded as beads."),
     "toolchain": ("development", "Toolchain defaults, tools-versus-scripts layout, and pragmatic output rules."),
     "safety": ("security", "Defence-in-depth advisories for destructive commands, attribution, and remote execution."),
