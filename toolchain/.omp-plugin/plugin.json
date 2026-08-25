@@ -1,6 +1,6 @@
 {
   "name": "toolchain",
   "description": "Toolchain defaults, tools-versus-scripts layout, and pragmatic output rules.",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "category": "development"
 }

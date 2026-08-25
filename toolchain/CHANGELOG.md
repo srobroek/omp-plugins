@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.3.0](https://github.com/srobroek/omp-plugins/compare/toolchain--v0.2.0...toolchain--v0.3.0) (2026-08-25)
+
+
+### Features
+
+* **speckit:** recover spec-modes rule lost in the docs rollup ([84c01b8](https://github.com/srobroek/omp-plugins/commit/84c01b85067a877cd2ab4d20c0bfeca88934aa0d))
+* **toolchain,rust:** advisories and migration gate ([31485e9](https://github.com/srobroek/omp-plugins/commit/31485e9d950974bea2ae1e6869c426dc4b7ad9d6))
+
+
+### Bug Fixes
+
+* **delivery:** attribute unpushed commits to the session that made them ([a215a38](https://github.com/srobroek/omp-plugins/commit/a215a38e9139a0c77012f1608ff4c71457c7f67b))
+
+
+### Documentation
+
+* **steering:** own commit/push policy in git rules; ban narrating foreign state ([ccef816](https://github.com/srobroek/omp-plugins/commit/ccef816ac76cf318d5c4871919953ba6b2989eef))
+
 ## [0.2.0](https://github.com/srobroek/omp-plugins/compare/toolchain--v0.1.0...toolchain--v0.2.0) (2026-08-25)
 
 
