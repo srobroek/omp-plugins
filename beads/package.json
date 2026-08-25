@@ -6,7 +6,8 @@
   "omp": {
     "extensions": [
       "./extensions/formula-check-tool.ts",
-      "./extensions/bd-actor-gate.ts"
+      "./extensions/bd-actor-gate.ts",
+      "./extensions/dolt-server-lifecycle.ts"
     ]
   }
 }
