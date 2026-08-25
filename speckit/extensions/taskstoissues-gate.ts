@@ -15,7 +15,32 @@ export const DENY_REASON =
 
 const SEPARATOR: Record<string, true> = { ";": true, "&": true, "|": true, "(": true, ")": true };
 
-const TRANSPARENT_PREFIX: Record<string, true> = { command: true, env: true, sudo: true };
+/**
+ * Wrappers that hand off to another command, with enough of each grammar to
+ * find the real command slot: which short options consume a following value,
+ * and `--` as end-of-options. Unknown options are treated as valueless, which
+ * errs toward checking a later token (conservative for detection, and an
+ * unmodeled `-x value` wrapper shape at worst checks `value` for an exact
+ * banned name - never a quoted string, so mentions stay safe).
+ */
+const WRAPPER_VALUE_OPTS: Record<string, Record<string, true>> = {
+	sudo: {
+		"-u": true, "-g": true, "-p": true, "-h": true, "-C": true, "-D": true, "-R": true, "-T": true, "-U": true,
+		"--user": true, "--group": true, "--prompt": true, "--host": true, "--chdir": true, "--role": true,
+		"--type": true, "--other-user": true, "--command-timeout": true, "--close-from": true,
+	},
+	doas: { "-u": true, "-C": true, "-a": true },
+	env: { "-u": true, "-C": true, "-S": true, "-P": true, "--unset": true, "--chdir": true, "--split-string": true },
+	command: {},
+	nice: { "-n": true, "--adjustment": true },
+	ionice: { "-c": true, "-n": true, "-p": true, "--class": true, "--classdata": true, "--pid": true },
+	nohup: {},
+	setsid: {},
+	stdbuf: { "-i": true, "-o": true, "-e": true, "--input": true, "--output": true, "--error": true },
+	time: { "-f": true, "-o": true, "--format": true, "--output": true },
+	builtin: {},
+	exec: { "-a": true },
+};
 
 const ENV_ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*=/;
 
@@ -44,16 +69,24 @@ export function extractCommand(input: Record<string, unknown>): string {
  * same words inside a quoted --title/--reason/-m. Duplicated from the delivery
  * plugin because plugins install independently.
  */
-export function tokenize(command: string): string[] {
-	const out: string[] = [];
+export interface Token {
+	text: string;
+	/** Any part of the token was quoted: a mention, not something the agent typed as a command name. */
+	quoted: boolean;
+}
+
+export function tokenize(command: string): Token[] {
+	const out: Token[] = [];
 	let cur = "";
 	let started = false;
+	let sawQuote = false;
 	let quote: '"' | "'" | null = null;
 	const flush = (): void => {
 		if (started) {
-			out.push(cur);
+			out.push({ text: cur, quoted: sawQuote });
 			cur = "";
 			started = false;
+			sawQuote = false;
 		}
 	};
 	for (let i = 0; i < command.length; i++) {
@@ -69,6 +102,7 @@ export function tokenize(command: string): string[] {
 		if (ch === '"' || ch === "'") {
 			quote = ch;
 			started = true;
+			sawQuote = true;
 			continue;
 		}
 		if (ch === "\\" && i + 1 < command.length) {
@@ -83,7 +117,7 @@ export function tokenize(command: string): string[] {
 		}
 		if (SEPARATOR[ch] === true) {
 			flush();
-			out.push(ch);
+			out.push({ text: ch, quoted: false });
 			continue;
 		}
 		cur += ch;
@@ -93,28 +127,135 @@ export function tokenize(command: string): string[] {
 	return out;
 }
 
-function isBannedInvocation(tokens: string[]): boolean {
-	let atCommand = true;
-	for (let i = 0; i < tokens.length; i++) {
-		const token = tokens[i] as string;
-		if (SEPARATOR[token] === true) {
-			atCommand = true;
+function isBannedToken(token: string): boolean {
+	const base = token.split("/").pop() ?? token;
+	return BANNED_COMMAND[token] === true || BANNED_COMMAND[base] === true;
+}
+
+/**
+ * The one place command-slot semantics live: the resolved executable is banned,
+ * or it is `specify` and a following argument names the banned command. `args`
+ * are the argv words after the executable (already segment- or argv-scoped by
+ * the caller); quoting does not matter here - argv is argv.
+ */
+function isBannedResolvedCommand(executable: string, args: readonly string[]): boolean {
+	if (isBannedToken(executable)) return true;
+	const base = executable.split("/").pop() ?? executable;
+	if (executable === "specify" || base === "specify") {
+		for (const arg of args) {
+			if (SPECIFY_BANNED[arg] === true) return true;
+		}
+	}
+	return false;
+}
+
+/**
+ * env -S splits its value into argv WORDS: quotes group words, but shell
+ * separators are ordinary arguments, and nothing after the command word
+ * executes. So resolve the command slot in argv mode - peel wrapper chains and
+ * assignments from the front, check exactly one word - and never shell-parse:
+ * `env -S 'echo ; speckit-taskstoissues'` runs echo with two literal args.
+ */
+function isBannedSplitString(value: string): boolean {
+	const words = tokenize(value)
+		.map(token => token.text)
+		.filter(word => word.length > 0);
+	let wrapper: Record<string, true> | undefined;
+	let optionsEnded = false;
+	for (let i = 0; i < words.length; i++) {
+		const word = words[i] as string;
+		if (ENV_ASSIGNMENT.test(word)) continue;
+		if (wrapper !== undefined && !optionsEnded && word.startsWith("-")) {
+			if (word === "--") optionsEnded = true;
+			else if (wrapper === WRAPPER_VALUE_OPTS.env && word.startsWith("--split-string=")) {
+				if (isBannedSplitString(word.slice("--split-string=".length))) return true;
+			} else if (wrapper === WRAPPER_VALUE_OPTS.env && (word === "-S" || word === "--split-string")) {
+				const value = words[i + 1];
+				if (value !== undefined && isBannedSplitString(value)) return true;
+				i++;
+			} else if (wrapper[word] === true) i++;
 			continue;
 		}
-		if (!atCommand) continue;
-		if (TRANSPARENT_PREFIX[token] === true || ENV_ASSIGNMENT.test(token)) continue;
-		atCommand = false;
-
-		const base = token.split("/").pop() ?? token;
-		if (BANNED_COMMAND[token] === true || BANNED_COMMAND[base] === true) return true;
-
-		if (token === "specify" || base === "specify") {
-			for (let j = i + 1; j < tokens.length; j++) {
-				const arg = tokens[j] as string;
-				if (SEPARATOR[arg] === true) break;
-				if (SPECIFY_BANNED[arg] === true) return true;
-			}
+		const base = word.split("/").pop() ?? word;
+		const nextWrapper = WRAPPER_VALUE_OPTS[word] ?? WRAPPER_VALUE_OPTS[base];
+		if (nextWrapper !== undefined) {
+			wrapper = nextWrapper;
+			optionsEnded = false;
+			continue;
 		}
+		return isBannedResolvedCommand(word, words.slice(i + 1));
+	}
+	return false;
+}
+
+/**
+ * Walk one command line. At each command slot, peel wrapper chains
+ * (sudo/env/nice/...) by their own option grammars until the real executable
+ * token is found, and check only that token (plus specify subcommand args).
+ * Arguments - quoted or not - are never checked: `sudo echo
+ * speckit-taskstoissues` passes, `sudo -u root speckit-taskstoissues` blocks,
+ * and a QUOTED name in the command slot (`sudo 'speckit-taskstoissues'`) still
+ * blocks because the shell would execute it.
+ */
+function isBannedInvocation(tokens: Token[]): boolean {
+	let i = 0;
+	while (i < tokens.length) {
+		// Find the command slot for this segment.
+		while (i < tokens.length && SEPARATOR[(tokens[i] as Token).text] === true && !(tokens[i] as Token).quoted) i++;
+		let optionsEnded = false;
+		let wrapper: Record<string, true> | undefined;
+		while (i < tokens.length) {
+			const { text: token, quoted } = tokens[i] as Token;
+			if (SEPARATOR[token] === true && !quoted) break; // empty segment
+			if (!quoted && ENV_ASSIGNMENT.test(token)) {
+				i++;
+				continue;
+			}
+			// A partially-quoted --split-string='...' still carries argv in its
+			// value; quoting is tokenization, not semantics. The value is a whole
+			// nested command line (it can itself start with a wrapper), so recurse.
+			if (wrapper === WRAPPER_VALUE_OPTS.env && token.startsWith("--split-string=")) {
+				if (isBannedSplitString(token.slice("--split-string=".length))) return true;
+				i++;
+				continue;
+			}
+			if (wrapper !== undefined && !optionsEnded && !quoted && token.startsWith("-")) {
+				if (token === "--") optionsEnded = true;
+				else if (wrapper[token] === true) {
+					// env -S VALUE splits into argv words (wrapper chains resolve,
+					// shell separators do not execute), so check in argv mode.
+					if (wrapper === WRAPPER_VALUE_OPTS.env && (token === "-S" || token === "--split-string")) {
+						const value = tokens[i + 1] as Token | undefined;
+						if (value !== undefined && isBannedSplitString(value.text)) return true;
+					}
+					i++; // option value follows
+				}
+				i++;
+				continue;
+			}
+			const base = token.split("/").pop() ?? token;
+			const nextWrapper = quoted ? undefined : (WRAPPER_VALUE_OPTS[token] ?? WRAPPER_VALUE_OPTS[base]);
+			if (nextWrapper !== undefined) {
+				wrapper = nextWrapper;
+				optionsEnded = false;
+				i++;
+				continue;
+			}
+			// The command slot: collect this segment's remaining argv (quoting
+			// matters for tokenization, not argv semantics) and apply the one
+			// shared resolved-command check.
+			const args: string[] = [];
+			for (let j = i + 1; j < tokens.length; j++) {
+				const arg = tokens[j] as Token;
+				if (SEPARATOR[arg.text] === true && !arg.quoted) break;
+				args.push(arg.text);
+			}
+			if (isBannedResolvedCommand(token, args)) return true;
+			break;
+		}
+		// Skip the rest of this segment.
+		while (i < tokens.length && !(SEPARATOR[(tokens[i] as Token).text] === true && !(tokens[i] as Token).quoted)) i++;
+		i++;
 	}
 	return false;
 }
