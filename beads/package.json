@@ -7,6 +7,7 @@
     "extensions": [
       "./extensions/formula-check-tool.ts",
       "./extensions/bd-actor-gate.ts",
+      "./extensions/bd-close-gate.ts",
       "./extensions/dolt-server-lifecycle.ts",
       "./extensions/session-beads-lifecycle.ts"
     ]
