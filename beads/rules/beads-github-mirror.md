@@ -30,14 +30,8 @@ DEFAULT Treat the mismatch as an upstream gap rather than per-issue toil: it
   both, or keep mirrored issues out of label-driven workflows.
 
 CONFIG
-MUST Set `github.repo` to the BARE repository name. `owner/repo` there produces
-  a 404 on every pull, because bd joins it to `github.owner` and requests
-  `owner/owner/repo` -- and `bd github status` still reports
-  `Status: ✓ Configured` while that happens, so the status check does not catch
-  it (verified 2026-07-28).
-MUST Set `github.owner`, not `github.org`. Only the former is read, so a
-  workspace carrying just `github.org` reports `github.owner is not configured`
-  even with a valid token.
+MUST Set `github.repo` to the BARE repository name and the owner under
+  `github.owner` (both enforced by beads-github-repo-bare-name).
 DEFAULT `bd github status` is local-only (about half a second) and names the
   missing key, so gate automation on it before spending a network call.
 

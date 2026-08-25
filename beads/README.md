@@ -35,7 +35,9 @@ through `rule://<name>`.
 
 Sync policy lives in the rule bodies, with `bd config` as the mechanism
 (Dolt-first, one detached push per session, JSONL-over-git as fallback).
-Claude and Codex session-event hooks did not migrate.
+Claude and Codex session-event hooks did not migrate; the `session-beads-lifecycle`
+extension covers the session boundaries instead -- unresolved gates and the previous
+session's detached-push verdict at start, held claims at close.
 
 ## Tools
 

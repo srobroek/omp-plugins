@@ -10,7 +10,6 @@ MUST Use bd for all task tracking when the repo has `.beads/` (`bd where`
   succeeds); do not use TaskCreate or markdown task lists.
 DEFAULT SpecKit artifacts (spec.md/plan.md) stay the source for WHAT to build;
   beads tracks execution state, not requirements.
-NOT `bd edit` -- opens $EDITOR and blocks the agent; use `bd update` flags.
 
 MEMORY
 DEFAULT `bd remember "insight" --key <slug>` for repo-scoped durable facts any
@@ -130,9 +129,9 @@ MUST Detach rather than block. A first push of a never-synced database uploads
   on that.
 MUST Close the feedback loop when detaching. A detached process cannot report to
   the session that spawned it, and a silently failed push is the worst outcome
-  here: state looks published while sitting on one machine. The push writes a
-  verdict to `.beads/last-push.log`; the next session reports a failure it finds
-  there and consumes the file so a stale verdict is not re-reported.
+  here: state looks published while sitting on one machine. The push writes its
+  verdict to `.beads/last-push.log`, which the session-beads-lifecycle extension
+  reports and consumes at the next session start.
 DEFAULT Check before pushing: the probe is `git push --dry-run`, which runs the
   same pre-push path while transferring nothing. Three outcomes, and the
   difference matters -- goes through, rejected at pre-push, or no answer
@@ -169,9 +168,8 @@ DEFAULT Trust the importer's resolution: newer `updated_at` wins, ties keep
   ids in the file for the importer to resolve.
 NOT `--allow-stale` unless deliberately restoring an older snapshot -- it
   overwrites newer local state.
-MUST On a stale-skip warning at session start, commit a fresh export before
-  pulling peer changes: the committed file is behind the local database, so the
-  next export would overwrite what a peer committed.
+MUST On a stale-skip warning, commit a fresh export before pulling peer changes
+  (advised by session-beads-lifecycle when the warning is visible in-session).
 
 MAINTENANCE (trimming a grown database)
 GOTCHA Deleting rows does not shrink storage. Commit history is the bulk: measured
@@ -200,10 +198,10 @@ GITHUB MIRROR -- see [rule://beads-github-mirror]rule://beads-github-mirror
   for config keys, per-verb cost, and the label-overwrite constraint.
 
 SESSION CLOSE (when beads were touched)
-MUST File beads for remaining/discovered work, close finished with `--reason`.
-MUST Before closing a bead whose work continues elsewhere, write residual
-  context onto it (`bd comments add`: approach, tricky spots, failure triage) --
-  the bead is the handover, not PR bodies.
+MUST File remaining and discovered work as beads, and close what is finished
+  with a factual `--reason` -- the residual-context and gate obligations at
+  close are enforced by beads-close-checks-gates, and held claims are reported
+  by session-beads-lifecycle.
 MUST Verify landed work by content per GW-3 (git-workflow steering).
 DEFAULT Git commit/push follows delivery steering; sync per SYNC rules above.
 
