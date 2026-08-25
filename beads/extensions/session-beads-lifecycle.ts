@@ -184,6 +184,25 @@ export function lastPushNotice(contents: string): string | undefined {
 }
 
 /**
+ * Project memories, which are the one part of bd's context an omp rule cannot
+ * carry: they are per-repository and written at runtime by `bd remember`.
+ *
+ * `bd prime --memories-only` rather than `bd prime`: the full output is a 4.6 KB
+ * command reference that `rule://beads-core` and its siblings already own, and
+ * re-stating it every session would duplicate a contract we control with one we
+ * do not. The preamble line is bd's advice to its own hook host and is dropped.
+ */
+export function memoriesNotice(stdout: string): string | undefined {
+	const body = stdout
+		.split("\n")
+		.filter(line => !line.startsWith("[bd prime]"))
+		.join("\n")
+		.trim();
+	if (body.length === 0 || body.includes("No memories stored")) return undefined;
+	return body;
+}
+
+/**
  * The stale-skip warning, from either shape bd reports it in.
  *
  * Only a real import produces this: `--dry-run` reports every row as `created`
@@ -383,6 +402,13 @@ async function gateAdvisory(cwd: string): Promise<string | undefined> {
 	return formatGateAdvisory(gates, outcome);
 }
 
+/** Stored memories for this workspace, or nothing when there are none. */
+async function memoryAdvisory(cwd: string): Promise<string | undefined> {
+	const primed = await runBd(cwd, ["prime", "--memories-only"]);
+	if (primed === undefined) return undefined;
+	return memoriesNotice(primed);
+}
+
 /** Text blocks of a tool result, joined. */
 function resultText(event: ExtensionToolResultEvent): string {
 	let text = "";
@@ -405,9 +431,11 @@ export default function sessionBeadsLifecycle(pi: ExtensionAPI): void {
 		try {
 			const dir = beadsDir(ctx?.cwd ?? process.cwd());
 			if (dir === undefined) return;
-			const notices = [consumeLastPush(dir), await gateAdvisory(ctx.cwd)].filter(
-				(notice): notice is string => notice !== undefined,
-			);
+			const notices = [
+				consumeLastPush(dir),
+				await memoryAdvisory(ctx.cwd),
+				await gateAdvisory(ctx.cwd),
+			].filter((notice): notice is string => notice !== undefined);
 			if (notices.length === 0) return;
 			// A message rather than `ctx.ui.notify`: the agent runs the commands this
 			// is about, and a UI notification reaches neither it nor a --print session.
@@ -420,6 +448,28 @@ export default function sessionBeadsLifecycle(pi: ExtensionAPI): void {
 			});
 		} catch (error) {
 			pi.logger.error("beads session-start check failed", {
+				error: error instanceof Error ? error.message : String(error),
+			});
+		}
+	});
+
+	// Compaction drops what a rule cannot restore. Rules are re-injected with the
+	// system prompt, so only the runtime state needs replaying, and only that.
+	pi.on("auto_compaction_end", async (_event, ctx: ExtensionContext) => {
+		try {
+			const cwd = ctx?.cwd ?? process.cwd();
+			if (beadsDir(cwd) === undefined) return;
+			const memories = await memoryAdvisory(cwd);
+			if (memories === undefined) return;
+			pi.sendMessage({
+				customType: "com.srobroek.beads.session-lifecycle",
+				content: memories,
+				display: true,
+				attribution: "user",
+				triggerTurn: false,
+			});
+		} catch (error) {
+			pi.logger.error("beads post-compaction memory refresh failed", {
 				error: error instanceof Error ? error.message : String(error),
 			});
 		}

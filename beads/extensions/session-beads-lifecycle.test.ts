@@ -11,6 +11,7 @@ import sessionBeadsLifecycle, {
 	heldClaims,
 	isBdWrite,
 	lastPushNotice,
+	memoriesNotice,
 	parseTrailingJson,
 	readBeads,
 	readCheckOutcome,
@@ -170,6 +171,38 @@ describe("lastPushNotice", () => {
 	});
 });
 
+describe("memoriesNotice", () => {
+	/** `bd prime --memories-only` on a workspace with nothing stored, verbatim. */
+	const EMPTY = [
+		"[bd prime] If this output is truncated by your host, read the full persisted hook output before continuing.",
+		"",
+		"# Beads Persistent Memories",
+		"",
+		'No memories stored. Use `bd remember "insight"` to add one.',
+		"",
+	].join("\n");
+
+	test("an empty store says nothing", () => {
+		expect(memoriesNotice(EMPTY)).toBeUndefined();
+		expect(memoriesNotice("")).toBeUndefined();
+	});
+
+	test("stored memories survive, without bd's advice to its hook host", () => {
+		const text = memoriesNotice(
+			`[bd prime] If this output is truncated by your host, read the full persisted hook output.\n\n# Beads Persistent Memories\n\n- Dolt server mode is the default here.\n`,
+		)!;
+		expect(text).toContain("Dolt server mode is the default here.");
+		expect(text).not.toContain("[bd prime]");
+	});
+
+	test("the full command reference is never what this injects", () => {
+		// Guard against a future switch to bare `bd prime`: rule://beads-core owns
+		// the command contract, and duplicating it is the cost this avoids.
+		const text = memoriesNotice("# Beads Persistent Memories\n\n- one insight\n")!;
+		expect(text).not.toContain("Essential Commands");
+	});
+});
+
 describe("staleSkipNotice", () => {
 	test("ids from the json envelope", () => {
 		const output = JSON.stringify({
@@ -320,9 +353,21 @@ describe("integration", () => {
 		return { handlers, logged };
 	};
 
-	test("registers both boundaries and the bash watcher", () => {
+	test("registers both boundaries, the compaction refresh, and the bash watcher", () => {
 		const { handlers } = wire();
-		expect(Object.keys(handlers).sort()).toEqual(["session_start", "session_stop", "tool_result", "turn_start"]);
+		expect(Object.keys(handlers).sort()).toEqual([
+			"auto_compaction_end",
+			"session_start",
+			"session_stop",
+			"tool_result",
+			"turn_start",
+		]);
+	});
+
+	test("a non-beads cwd produces no post-compaction message", async () => {
+		const { handlers, logged } = wire();
+		await handlers.auto_compaction_end![0]!({}, { cwd: "/nonexistent-repo" });
+		expect(logged).toEqual([]);
 	});
 
 	test("a stale-skip import result is advised in band, once", () => {
