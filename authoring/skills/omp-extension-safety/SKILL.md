@@ -20,12 +20,11 @@ NOT Treat `tool_result` as fail-closed — it is not. Prefer it for advisory inj
 
 ## Timers
 
-MUST Use `ctx.setInterval` / `ctx.setTimeout`. They contain throws and clear on `session_shutdown`.
-NOT Raw `setInterval`/`setTimeout` callbacks that throw crash the **whole session** (`uncaughtException`).
+MUST Schedule through `ctx` — enforced by `rule://authoring-extension-ctx-timers`.
 
 ## Subprocess
 
-MUST Argv arrays, never shell strings.
+MUST Argv arrays — enforced by `rule://authoring-extension-argv-exec`.
 MUST Explicit timeout.
 MUST Cache expensive results.
 MUST Prefilter first — never spawn on unrelated calls.

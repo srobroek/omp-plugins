@@ -52,7 +52,7 @@ MUST Resolve a human gate with `bd gate resolve <gate-id>` then `bd close <step-
 NOT Wait on a human gate in an unattended run — pour `--var autonomous=yes`.
 MUST When a gate was skipped that way, record on the preceding step what a
   reviewer would have been asked.
-NOT `bd close <gate-id>` to resolve a gate (see `speckit-gate-close`).
+NOT `bd close <gate-id>` to resolve a gate — enforced by `rule://beads-gate-close`.
 
 COMMAND ROUTING (was the dispatcher table)
 - constitution / roadmap.write: project-scoped; do not pour a molecule.

@@ -30,6 +30,7 @@ through `rule://<name>`.
 | `beads-audit` | Explicit `bd audit record` entries for semantic events. |
 | `beads-github-mirror` | Mirroring beads out to GitHub issues. |
 | `beads-adr` | Architecture decisions as decision beads. |
+| `beads-gate-close` | A gate bead is resolved, never closed (TTSR, plus the `bd-close-gate` extension). |
 
 ## Notes
 
@@ -38,6 +39,20 @@ Sync policy lives in the rule bodies, with `bd config` as the mechanism
 Claude and Codex session-event hooks did not migrate; the `session-beads-lifecycle`
 extension covers the session boundaries instead -- unresolved gates and the previous
 session's detached-push verdict at start, held claims at close.
+
+## Extensions
+
+- `bd-close-gate` — blocks a `bash` call that runs `bd close` on a gate bead. It
+  resolves the literal ids on the command line through `bd show --json`, replaying
+  the command's own `-C`/`--db` and the call's cwd so the same database answers.
+  Fails open: variable ids, an id-less `bd close`, and an unreachable database all
+  allow the call.
+- `bd-actor-gate` — blocks a claim made without `BEADS_ACTOR`, and advises on other
+  mutating `bd` commands that lack it.
+- `session-beads-lifecycle` — reports at the session boundaries: unresolved gates and
+  the previous session's detached-push verdict at start, held claims at close.
+- `dolt-server-lifecycle` — reports once when a beads repository is on the embedded
+  backend, and optionally stops that project's server at session end.
 
 ## Tools
 

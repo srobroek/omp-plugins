@@ -1,6 +1,6 @@
 {
   "name": "@srobroek/infrastructure",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Infrastructure rules for provisioning, environments, and operational surface.",
   "private": true,
   "omp": {}

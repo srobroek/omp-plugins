@@ -59,7 +59,6 @@ PLUGINS: dict[str, tuple[str, str]] = {
     "toolchain": ("development", "Toolchain defaults, tools-versus-scripts layout, and pragmatic output rules."),
     "safety": ("security", "Defence-in-depth advisories for destructive commands, attribution, and remote execution."),
     "chezmoi": ("productivity", "Edit chezmoi-managed dotfiles at their authoritative source."),
-    "session": ("productivity", "Session continuity: recover prior work and hand over in-flight work."),
     # --- standalone plugins ---
     "find-tools": ("productivity", "Discover and vet skills, agents, MCP servers, and plugins across real registries."),
     "whats-new": ("productivity", "Research breaking changes, deprecations, and new features between two versions."),

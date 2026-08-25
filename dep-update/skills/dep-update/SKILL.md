@@ -78,7 +78,8 @@ into the same ruff confirm. Unparseable YAML → print the manual change instead
 | any       | `osv-scanner` (supplemental)                  | https://google.github.io/osv-scanner/                 |
 
 Guard each with `command -v`; missing → report "scanner not available:
-`<name>`" plus the install hint. Never install a scanner.
+`<name>`" plus the install hint. Ephemeral runners and the ban on persistent
+scanner installs are enforced by `rule://dep-update-no-scanner-install`.
 
 ## Tools
 

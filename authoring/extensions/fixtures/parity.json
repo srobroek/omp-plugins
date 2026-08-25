@@ -108,8 +108,6 @@
   "safety/rules/srobroek-package-investigate.md": [],
   "safety/rules/srobroek-remote-exec-guard.md": [],
   "safety/rules/srobroek-sudo-destructive-advisory.md": [],
-  "session/skills/catchup/SKILL.md": [],
-  "session/skills/handover/SKILL.md": [],
   "toolchain/rules/coexistence-worktree.md": [],
   "toolchain/rules/shell-language.md": [],
   "toolchain/rules/toolchain-asset-ownership.md": [],

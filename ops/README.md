@@ -12,3 +12,5 @@ Telemetry agents and toolchain cache hygiene.
 ## Rules
 
 - `ops-toolchain-cache-policy` — shared caches, worktree-local output, eviction knobs
+- `ops-no-global-cargo-target` — a global Cargo target dir breaks per-repository isolation (TTSR)
+- `ops-download-store-not-evictable` — download stores are not reclaimable build caches (TTSR)

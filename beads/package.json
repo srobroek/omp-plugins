@@ -1,12 +1,13 @@
 {
   "name": "@srobroek/beads",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Beads issue tracking: dependency DAGs, formulas, and decisions recorded as beads.",
   "private": true,
   "omp": {
     "extensions": [
       "./extensions/formula-check-tool.ts",
       "./extensions/bd-actor-gate.ts",
+      "./extensions/bd-close-gate.ts",
       "./extensions/dolt-server-lifecycle.ts",
       "./extensions/session-beads-lifecycle.ts"
     ]

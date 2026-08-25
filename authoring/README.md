@@ -15,6 +15,8 @@ Author and audit agentic assets (skills, rules, agents).
 |------|------|
 | `research-repomix-recipes` | Bulk context packing with Repomix |
 | `authoring-repomix-include` | Advisory on a `repomix` command with no `--include` |
+| `authoring-extension-ctx-timers` | Raw `setTimeout`/`setInterval` in an extension module (TTSR) |
+| `authoring-extension-argv-exec` | Shell-string `exec`/`spawn` in an extension module (TTSR) |
 
 ## Extensions
 
