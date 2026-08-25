@@ -1,6 +1,6 @@
 {
   "name": "rust",
   "description": "Rust rules: crate boundaries, domain modeling, error and persistence patterns, workspace and Tauri layout, and a Rust review skill.",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "category": "language"
 }

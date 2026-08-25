@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.0](https://github.com/srobroek/omp-plugins/compare/beads--v0.4.0...beads--v0.5.0) (2026-08-25)
+
+
+### Features
+
+* **beads:** own the gate-close guard, and make it watertight ([7663271](https://github.com/srobroek/omp-plugins/commit/7663271c1ff654e47897a96e72e60e2d8db75d47))
+
 ## [0.4.0](https://github.com/srobroek/omp-plugins/compare/beads--v0.3.0...beads--v0.4.0) (2026-08-25)
 
 

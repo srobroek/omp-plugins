@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.0](https://github.com/srobroek/omp-plugins/compare/quality--v0.3.0...quality--v0.4.0) (2026-08-25)
+
+
+### Features
+
+* **rules:** mechanize nine steering clauses as TTSR rules ([539efc0](https://github.com/srobroek/omp-plugins/commit/539efc02a153a2fddeab8d4bd2fee6ada30e7040))
+
 ## [0.3.0](https://github.com/srobroek/omp-plugins/compare/quality--v0.2.0...quality--v0.3.0) (2026-08-25)
 
 
