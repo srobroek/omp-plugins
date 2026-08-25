@@ -71,5 +71,9 @@ skip for docs, tests, CI, and no-behavior refactors.
 
 Session cadence:
 
-MUST GW-1: commit all tracked changes before ending a session.
-MUST GW-2: push all committed work before ending -- commits on an unpushed branch may be lost.
+MUST GW-1: before ending a session, commit the changes you made, in atomic
+units -- one commit per self-contained chunk, each with its own message.
+NOT GW-1 is not "commit the working tree". Never stage or commit files you did
+not change; see `rule://delivery-cadence`.
+MUST GW-2: push work you committed before ending -- commits on an unpushed
+branch may be lost. Commits you did not author are reported, not pushed.
