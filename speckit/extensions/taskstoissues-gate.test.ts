@@ -8,12 +8,12 @@ import taskstoissuesGate, {
 } from "./taskstoissues-gate.ts";
 
 describe("tokenize", () => {
-	test("keeps a quoted title as one token", () => {
+	test("keeps a quoted title as one token and marks it quoted", () => {
 		expect(tokenize("bd create --title 'port speckit-taskstoissues deny'")).toEqual([
-			"bd",
-			"create",
-			"--title",
-			"port speckit-taskstoissues deny",
+			{ text: "bd", quoted: false },
+			{ text: "create", quoted: false },
+			{ text: "--title", quoted: false },
+			{ text: "port speckit-taskstoissues deny", quoted: true },
 		]);
 	});
 });
@@ -90,4 +90,53 @@ describe("register", () => {
 		taskstoissuesGate(fakePi as never);
 		expect(handlers.tool_call?.[0]?.({ toolName: "bash", input: null })).toBeUndefined();
 	});
+});
+
+describe("wrapper grammars resolve the real command slot", () => {
+	const blocked = [
+		"sudo -u root speckit-taskstoissues",
+		"env -i speckit-taskstoissues",
+		"env PATH=/x speckit-taskstoissues",
+		"command -- speckit-taskstoissues",
+		"command speckit-taskstoissues",
+		"nohup speckit-taskstoissues &",
+		"nice -n 10 speckit-taskstoissues",
+		"exec -a innocent speckit-taskstoissues",
+		"sudo -u root env -i speckit-taskstoissues",
+		"sudo -u root specify run /speckit.taskstoissues",
+		"sudo 'speckit-taskstoissues'",
+		"stdbuf -o L speckit-taskstoissues",
+		"specify run '/speckit.taskstoissues'",
+		"env -S 'speckit-taskstoissues'",
+		"env -S 'speckit-taskstoissues --now' HOME=/tmp",
+		"env --split-string='speckit-taskstoissues --now'",
+		"env -S 'sudo -u root speckit-taskstoissues'",
+		"env -S 'specify run /speckit.taskstoissues'",
+		"sudo env -S 'specify run /speckit.taskstoissues'",
+		"env -S 'env -i speckit-taskstoissues'",
+	];
+	for (const cmd of blocked) {
+		test(`blocks: ${cmd}`, () => {
+			expect(isTaskstoissuesInvocation(cmd)).toBe(true);
+		});
+	}
+	const allowed = [
+		"sudo echo speckit-taskstoissues",
+		"env printf speckit-taskstoissues",
+		"sudo -u root grep speckit-taskstoissues notes.md",
+		"sudo -u root grep 'speckit-taskstoissues' notes.md",
+		"sudo cat speckit-taskstoissues.log",
+		"env -i bd create --title 'port speckit-taskstoissues deny'",
+		"sudo -u root echo done; bd create --title 'speckit-taskstoissues'",
+		"nice -n 10 rg speckit-taskstoissues",
+		"env -S 'echo speckit-taskstoissues'",
+		"env -S 'sudo echo speckit-taskstoissues'",
+		"env -S 'echo ; speckit-taskstoissues'",
+		"env -S 'echo speckit-taskstoissues | cat'",
+	];
+	for (const cmd of allowed) {
+		test(`passes: ${cmd}`, () => {
+			expect(isTaskstoissuesInvocation(cmd)).toBe(false);
+		});
+	}
 });
