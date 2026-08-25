@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.5.3](https://github.com/srobroek/omp-plugins/compare/speckit--v0.5.2...speckit--v0.5.3) (2026-08-25)
+
+
+### Bug Fixes
+
+* **speckit:** model wrapper long options in the command-slot resolver ([323e1d6](https://github.com/srobroek/omp-plugins/commit/323e1d67cbdea1b161a61babdfaff6340b2dd4ec))
+* **speckit:** resolve wrapper chains to the real command slot in taskstoissues-gate ([b9ed0cc](https://github.com/srobroek/omp-plugins/commit/b9ed0cce33c39366292d3772559486b6bbd81f8e))
+* **speckit:** resolve wrapper chains to the real command slot in taskstoissues-gate ([01bbca9](https://github.com/srobroek/omp-plugins/commit/01bbca93b562eb07e5d626409f43adeb277005e9))
+
 ## [0.5.2](https://github.com/srobroek/omp-plugins/compare/speckit--v0.5.1...speckit--v0.5.2) (2026-08-25)
 
 
