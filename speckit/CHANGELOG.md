@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.5.4](https://github.com/srobroek/omp-plugins/compare/speckit--v0.5.3...speckit--v0.5.4) (2026-08-25)
+
+
+### Bug Fixes
+
+* **speckit:** +c is not command-string mode ([3f31edf](https://github.com/srobroek/omp-plugins/commit/3f31edf9110b82e4633b4cf9efab613795675706))
+* **speckit:** resolve child-shell -c scripts in the command-slot resolver ([fe9603f](https://github.com/srobroek/omp-plugins/commit/fe9603fc66e8bf9180ae580991e147496dc9dbed))
+* **speckit:** resolve child-shell -c scripts in the command-slot resolver ([113bba9](https://github.com/srobroek/omp-plugins/commit/113bba909ee85ab569867fc84dbff3873e4b7f34))
+
 ## [0.5.3](https://github.com/srobroek/omp-plugins/compare/speckit--v0.5.2...speckit--v0.5.3) (2026-08-25)
 
 
