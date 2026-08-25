@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.0](https://github.com/srobroek/omp-plugins/compare/delivery--v0.2.0...delivery--v0.3.0) (2026-08-25)
+
+
+### Features
+
+* **beads,delivery:** claim-without-actor gate and unpushed-work stop advisory ([6d68bf2](https://github.com/srobroek/omp-plugins/commit/6d68bf2d9a5d570a9facbad2b2a31823f14fa43e))
+
 ## [0.2.0](https://github.com/srobroek/omp-plugins/compare/delivery--v0.1.0...delivery--v0.2.0) (2026-08-25)
 
 
