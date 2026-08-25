@@ -24,16 +24,20 @@ const SEPARATOR: Record<string, true> = { ";": true, "&": true, "|": true, "(": 
  * banned name - never a quoted string, so mentions stay safe).
  */
 const WRAPPER_VALUE_OPTS: Record<string, Record<string, true>> = {
-	sudo: { "-u": true, "-g": true, "-p": true, "-h": true, "-C": true, "-D": true, "-R": true, "-T": true, "-U": true },
+	sudo: {
+		"-u": true, "-g": true, "-p": true, "-h": true, "-C": true, "-D": true, "-R": true, "-T": true, "-U": true,
+		"--user": true, "--group": true, "--prompt": true, "--host": true, "--chdir": true, "--role": true,
+		"--type": true, "--other-user": true, "--command-timeout": true, "--close-from": true,
+	},
 	doas: { "-u": true, "-C": true, "-a": true },
-	env: { "-u": true, "-C": true, "-S": true, "-P": true },
+	env: { "-u": true, "-C": true, "-S": true, "-P": true, "--unset": true, "--chdir": true, "--split-string": true },
 	command: {},
-	nice: { "-n": true },
-	ionice: { "-c": true, "-n": true, "-p": true },
+	nice: { "-n": true, "--adjustment": true },
+	ionice: { "-c": true, "-n": true, "-p": true, "--class": true, "--classdata": true, "--pid": true },
 	nohup: {},
 	setsid: {},
-	stdbuf: { "-i": true, "-o": true, "-e": true },
-	time: { "-f": true, "-o": true },
+	stdbuf: { "-i": true, "-o": true, "-e": true, "--input": true, "--output": true, "--error": true },
+	time: { "-f": true, "-o": true, "--format": true, "--output": true },
 	builtin: {},
 	exec: { "-a": true },
 };
@@ -163,7 +167,13 @@ function isBannedSplitString(value: string): boolean {
 		if (ENV_ASSIGNMENT.test(word)) continue;
 		if (wrapper !== undefined && !optionsEnded && word.startsWith("-")) {
 			if (word === "--") optionsEnded = true;
-			else if (wrapper[word] === true) i++;
+			else if (wrapper === WRAPPER_VALUE_OPTS.env && word.startsWith("--split-string=")) {
+				if (isBannedSplitString(word.slice("--split-string=".length))) return true;
+			} else if (wrapper === WRAPPER_VALUE_OPTS.env && (word === "-S" || word === "--split-string")) {
+				const value = words[i + 1];
+				if (value !== undefined && isBannedSplitString(value)) return true;
+				i++;
+			} else if (wrapper[word] === true) i++;
 			continue;
 		}
 		const base = word.split("/").pop() ?? word;
@@ -214,7 +224,7 @@ function isBannedInvocation(tokens: Token[]): boolean {
 				else if (wrapper[token] === true) {
 					// env -S VALUE splits into argv words (wrapper chains resolve,
 					// shell separators do not execute), so check in argv mode.
-					if (wrapper === WRAPPER_VALUE_OPTS.env && token === "-S") {
+					if (wrapper === WRAPPER_VALUE_OPTS.env && (token === "-S" || token === "--split-string")) {
 						const value = tokens[i + 1] as Token | undefined;
 						if (value !== undefined && isBannedSplitString(value.text)) return true;
 					}
