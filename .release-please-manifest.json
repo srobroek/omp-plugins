@@ -17,7 +17,7 @@
   "python": "0.3.0",
   "quality": "0.3.0",
   "rust": "0.3.0",
-  "safety": "0.3.0",
+  "safety": "0.4.0",
   "session": "0.3.0",
   "speckit": "0.3.0",
   "toolchain": "0.3.0",
