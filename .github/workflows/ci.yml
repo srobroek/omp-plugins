@@ -76,7 +76,7 @@ jobs:
           done < <(git ls-files '*/extensions/*.test.ts' | xargs -rn1 dirname | sort -u)
 
       # `uvx` is not preinstalled on GitHub runners.
-      - uses: astral-sh/setup-uv@v5
+      - uses: astral-sh/setup-uv@v10.0.1
 
       - name: Prose gate
         run: uvx slopvac README.md --profile normal
