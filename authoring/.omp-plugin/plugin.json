@@ -1,6 +1,6 @@
 {
   "name": "authoring",
   "description": "Author and audit agentic assets: skills, rules, agents, and steering.",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "category": "productivity"
 }
