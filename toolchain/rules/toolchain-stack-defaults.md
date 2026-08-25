@@ -8,11 +8,11 @@ description: When choosing or changing a project stack, package manager, task ru
 Keep existing project choices unless the current task is explicitly about setup,
 migration, or standardization.
 
-Prefer pnpm over npm/yarn, uv over pip/poetry, mise over nvm/pyenv, just/task
-over make.
+New projects: bun over npm/yarn, uv over pip/poetry, mise over nvm/pyenv, just
+over make. Reaching for a legacy tool in a tree already configured for the
+modern one is enforced by `prefer-tools-advisory`.
 
-Dependencies: add via the package manager CLI (not manifest edits), defaulting
-to the latest compatible version.
+Dependencies: enforced by `dep-manifest-advisory`.
 
 Treat `just`, `mise`, and `moon` as independent setup choices:
 

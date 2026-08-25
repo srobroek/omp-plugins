@@ -1245,7 +1245,7 @@ ${stderr}` }],
   });
 }
 export {
-  versionGapTool as default,
+  parseRequirement,
   detectProject,
-  parseRequirement
+  versionGapTool as default
 };

@@ -37,12 +37,4 @@ Interference:
   human checkouts stay on Worktrunk (`wt switch --create <branch> --base <base>`).
   Agents move to an isolated task checkout (`isolated: true`) and continue there.
 
-Branch switched underneath you:
-
-- A branch switch you did not perform is usually two agents conflicting over
-  one checkout. Do not panic and never switch back -- that only plays branch
-  ping-pong with the other agent.
-- Instead: agents create a fresh isolated checkout (`isolated: true`); humans
-  create a fresh Worktrunk checkout. Cherry-pick your commits onto it
-  (stash-and-apply any uncommitted work), and continue from there. Leave
-  the contested checkout to the other actor.
+Branch switched underneath you: enforced by `coexistence-branch-advisory`.

@@ -13,10 +13,9 @@ MUST Pass the bead id in the spawn prompt so the worker claims it
 SWARMS
 MUST Use an epic or poured molecule and its dependency edges as the work DAG;
   a swarm marker does not create tasks, workers, claims, or another state store.
-MUST Run `bd swarm validate <root> --json` after graph construction, after each
-  structural change, during recovery, and before close-out.
-MUST Stop on `swarmable=false`; inspect warnings because external dependencies,
-  disconnected nodes, multiple endpoints, and empty graphs may remain warnings.
+MUST Run `bd swarm validate <root> --json` during recovery and before close-out;
+  graph construction and structural changes are covered by
+  beads-swarm-validate-graph, which also carries the `swarmable=false` contract.
 MUST Dispatch epic work with `bd ready --parent <epic> --unassigned --json`
   and molecule work with `bd ready --mol <molecule> --unassigned --json`; never
   dispatch from an unscoped repository-wide ready query.
@@ -31,10 +30,8 @@ NOT Create a swarm for an ordinary delegated task or merely to make the epic
 MERGE SLOT
 MUST Use the project database's single merge slot only to serialize integration;
   approval order remains in the workflow, and human approval remains a gate.
-MUST Acquire atomically without `--wait` using one stable holder identity;
-  stop and report when another holder owns the slot.
-NOT Treat Beads 1.1.0 waiters as a FIFO queue: `--wait` records an advisory
-  waiter but does not block, transfer ownership, or remove stale waiters.
+MUST Acquire atomically using one stable holder identity (`--wait` and its
+  waiter semantics are enforced by beads-merge-slot-never-wait).
 MUST Recheck approval and integration anchors after acquisition, then release
   with the same explicit `--holder` value after recording the merge outcome.
 MUST Recover a stale holder by checking slot state, recorded anchors, remote

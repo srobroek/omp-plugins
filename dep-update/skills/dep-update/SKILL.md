@@ -55,8 +55,8 @@ On `n`: record as skipped and move on.
 
 MUST confirm every bump on its own `[Y/n]` -- no global yes-to-all, no batching.
 MUST keep majors, rust, and go out of the loop: named, cited, stopped (FR-014).
-NOT writing `.project-setup/answers.toml` or `sources.toml` -- the project-setup
-runner owns those; this skill only reads them.
+NOT writing `.project-setup/answers.toml` or `sources.toml` -- enforced by the
+`fixture-write-gate` extension.
 NOT importing a Python SDK -- native TypeScript tools only.
 MUST report coverage as observed: ecosystems detected, lockfiles read, scanners
 that ran, scanners that were absent. An unrun scanner never reads as clean.

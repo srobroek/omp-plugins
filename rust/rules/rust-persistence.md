@@ -9,7 +9,7 @@ description: When designing Rust SQLite/sqlx repositories, numbered migrations, 
 - Isolate persistence in its own crate behind a thin handle owning the connection pool.
 - State transitions: atomic CAS inside a transaction (`UPDATE … WHERE state = expected`);
   zero rows → distinguish not-found vs CAS-failed by re-reading. No SELECT-then-write on a bare pool.
-- Migrations: numbered, append-only, embedded; never edit a committed migration.
+- Migrations: numbered, embedded, append-only -- enforced by `migration-edit-gate`.
 - Migration prefix collision gotcha: parallel branches each grabbing the next number collide --
   add a CI duplicate-prefix guard.
 - Embed macro gotcha: a new migration file goes unapplied until the crate recompiles.

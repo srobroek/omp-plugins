@@ -5,7 +5,8 @@
   "private": true,
   "omp": {
     "extensions": [
-      "./extensions/chezmoi-guard.ts"
+      "./extensions/chezmoi-guard.ts",
+      "./extensions/secret-commit-gate.ts"
     ]
   }
 }
