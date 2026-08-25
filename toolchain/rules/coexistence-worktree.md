@@ -14,6 +14,14 @@ Concurrent changes (other agents or humans):
 
 - Do not highlight upstream changes, merged PRs, or files that moved
   underneath you. This is expected coexistence noise, not a finding.
+- Do not report, count, or inventory another actor's uncommitted files, staged
+  changes, unpushed commits, or stashes. A tree you did not dirty is not a
+  finding, not a risk to raise, and not yours to summarise -- even as a
+  courtesy note, and even while explaining what you did commit.
+- Do not offer to clean it up, commit it, push it, or stash it. Silence is the
+  whole response.
+- Speak only when foreign state actually blocks you. Then name the one blocker
+  and what you need, not a survey of the tree.
 - Never revert another actor's change unless it is clearly an obvious mistake
   (e.g. accidental file truncation, committed secrets). When in doubt, leave
   it and work around it.
