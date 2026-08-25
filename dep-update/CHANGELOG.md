@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.5.1](https://github.com/srobroek/omp-plugins/compare/dep-update--v0.5.0...dep-update--v0.5.1) (2026-08-25)
+
+
+### Bug Fixes
+
+* **speckit:** retire the spec-id TTSR as a contextual false positive ([f292cca](https://github.com/srobroek/omp-plugins/commit/f292ccac9deb988459859ee1836aaa99deb36317))
+* **speckit:** retire the spec-id TTSR as a contextual false positive ([76caeec](https://github.com/srobroek/omp-plugins/commit/76caeec135b0b1943b6df551578cd6b6e7facd1b))
+
 ## [0.5.0](https://github.com/srobroek/omp-plugins/compare/dep-update--v0.4.0...dep-update--v0.5.0) (2026-08-25)
 
 

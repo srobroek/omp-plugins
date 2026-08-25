@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.1](https://github.com/srobroek/omp-plugins/compare/infrastructure--v0.3.0...infrastructure--v0.3.1) (2026-08-25)
+
+
+### Bug Fixes
+
+* **ttsr:** audit wave - loosen the advisory rules and move canonicalize to clippy ([72d5cd1](https://github.com/srobroek/omp-plugins/commit/72d5cd15d167c21a8a153012af2acec7c0362309))
+
 ## [0.3.0](https://github.com/srobroek/omp-plugins/compare/infrastructure--v0.2.0...infrastructure--v0.3.0) (2026-08-25)
 
 

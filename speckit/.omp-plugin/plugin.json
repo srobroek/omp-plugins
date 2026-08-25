@@ -1,6 +1,6 @@
 {
   "name": "speckit",
   "description": "SpecKit workflow: spec-driven setup, bugfix flow, tasks.md protection, and PR title discipline.",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "category": "development"
 }
