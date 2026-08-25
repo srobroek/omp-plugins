@@ -30,16 +30,12 @@
 
 ### Features
 
-* **authoring:** lint machine-specific paths and unrepairable frontmatter ([2803c30](https://github.com/srobroek/omp-plugins/commit/2803c30b780c763c039ce2f753b8e4174b83aa74))
 * **authoring:** lint machine-specific paths and unrepairable frontmatter ([a456af3](https://github.com/srobroek/omp-plugins/commit/a456af3e109c44d1ad1dfbed2078b0a0b8202ccd))
-* **beads:** guard the two bd commands that strand or overwrite a run ([309f154](https://github.com/srobroek/omp-plugins/commit/309f1545ff2a2316c05ce254d23037ef869d571d))
 * **beads:** guard the two bd commands that strand or overwrite a run ([3d8e6ec](https://github.com/srobroek/omp-plugins/commit/3d8e6ecbea321aa6007ee2760a5237e93413d731))
-* **beads:** make an agent triage the pre-existing problems it runs into ([a124a79](https://github.com/srobroek/omp-plugins/commit/a124a79d2b3fff29d7540817e620f7f9b62509f3))
 * **beads:** make an agent triage the pre-existing problems it runs into ([93cc493](https://github.com/srobroek/omp-plugins/commit/93cc49318936aecea664925d28b42b87a6e227a4))
 * **beads:** make server mode the documented init default ([67a8530](https://github.com/srobroek/omp-plugins/commit/67a85309edfa48de61b922a3f91f1b89ca03be3c))
 * **beads:** refresh project memories at session start and after compaction ([477ded9](https://github.com/srobroek/omp-plugins/commit/477ded972309014ebe1e1a3db82b77cce0738259))
 * **beads:** session lifecycle extension + four TTSR guards ([9300c07](https://github.com/srobroek/omp-plugins/commit/9300c07a5847262c2870dad5bf368fdc106db5d6))
-* **beads:** steer storage mode and manage the Dolt server under omp ([bb9ff4e](https://github.com/srobroek/omp-plugins/commit/bb9ff4ecbdddfe3e07d459257a728bcb39a562c6))
 * **beads:** steer storage mode and manage the Dolt server under omp ([0c0249d](https://github.com/srobroek/omp-plugins/commit/0c0249ddd6d7fb879f558ed290a440fdc4791d53))
 * **speckit:** recover spec-modes rule lost in the docs rollup ([84c01b8](https://github.com/srobroek/omp-plugins/commit/84c01b85067a877cd2ab4d20c0bfeca88934aa0d))
 

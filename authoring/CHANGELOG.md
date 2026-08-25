@@ -34,7 +34,6 @@
 ### Features
 
 * **authoring,chezmoi:** lint reminder, repomix TTSR, secret commit gate ([90b8c58](https://github.com/srobroek/omp-plugins/commit/90b8c5817c69c845282a04e042be60c2b2992136))
-* **authoring:** lint machine-specific paths and unrepairable frontmatter ([2803c30](https://github.com/srobroek/omp-plugins/commit/2803c30b780c763c039ce2f753b8e4174b83aa74))
 * **authoring:** lint machine-specific paths and unrepairable frontmatter ([a456af3](https://github.com/srobroek/omp-plugins/commit/a456af3e109c44d1ad1dfbed2078b0a0b8202ccd))
 * **speckit:** recover spec-modes rule lost in the docs rollup ([84c01b8](https://github.com/srobroek/omp-plugins/commit/84c01b85067a877cd2ab4d20c0bfeca88934aa0d))
 
