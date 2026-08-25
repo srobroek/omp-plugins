@@ -150,10 +150,14 @@ describe("pidAlive", () => {
 });
 
 describe("cross-instance once-guard", () => {
+	const REPORTED = Symbol.for("com.srobroek.beads.storage-mode.reported");
+	afterEach(() => {
+		delete (globalThis as Record<symbol, unknown>)[REPORTED];
+	});
+
 	test("two module instances emit exactly one storage-mode notice", async () => {
 		// Two load paths (install + link, or install + settings extensions entry)
 		// instantiate the module twice; the notice must still appear once.
-		delete (globalThis as Record<symbol, unknown>)[Symbol.for("com.srobroek.beads.storage-mode.reported")];
 		const cwd = await repo({ "metadata.json": '{"dolt_mode":"embedded"}' });
 		const sent: unknown[] = [];
 		const handlers: Array<(event: unknown, ctx: unknown) => Promise<void>> = [];
