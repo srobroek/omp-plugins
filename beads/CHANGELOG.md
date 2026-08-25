@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.6.2](https://github.com/srobroek/omp-plugins/compare/beads--v0.6.1...beads--v0.6.2) (2026-08-25)
+
+
+### Bug Fixes
+
+* **beads:** judge a pre-existing problem by scope, not by difficulty ([47bd49c](https://github.com/srobroek/omp-plugins/commit/47bd49cd79f9d151dde4bac6301c2d3b4bfa6f21))
+* **changelog:** drop the entries my merge strategy duplicated ([525b7b1](https://github.com/srobroek/omp-plugins/commit/525b7b11dbe4c6dd85ff6073d916f6b3090bf5ff))
+
 ## [0.6.1](https://github.com/srobroek/omp-plugins/compare/beads--v0.6.0...beads--v0.6.1) (2026-08-25)
 
 

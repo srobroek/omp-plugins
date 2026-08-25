@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.5.2](https://github.com/srobroek/omp-plugins/compare/speckit--v0.5.1...speckit--v0.5.2) (2026-08-25)
+
+
+### Bug Fixes
+
+* **speckit:** argv-parse taskstoissues instead of regex FP ([ee1b1ef](https://github.com/srobroek/omp-plugins/commit/ee1b1ef31fb717354177d9a60d95fba9f5bb94e7))
+* **speckit:** argv-parse taskstoissues instead of regex FP ([a71bb32](https://github.com/srobroek/omp-plugins/commit/a71bb32c23c9b5e5dea06bad75136e6cc8c48512))
+
 ## [0.5.1](https://github.com/srobroek/omp-plugins/compare/speckit--v0.5.0...speckit--v0.5.1) (2026-08-25)
 
 

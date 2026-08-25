@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.2](https://github.com/srobroek/omp-plugins/compare/quality--v0.5.1...quality--v0.5.2) (2026-08-25)
+
+
+### Bug Fixes
+
+* **quality:** move bloodhound off the duplicate [@architect](https://github.com/architect) role ([#37](https://github.com/srobroek/omp-plugins/issues/37)) ([7c722dd](https://github.com/srobroek/omp-plugins/commit/7c722ddadb6d118686678a70b5e8b87e71adaa04))
+
 ## [0.5.1](https://github.com/srobroek/omp-plugins/compare/quality--v0.5.0...quality--v0.5.1) (2026-08-25)
 
 
