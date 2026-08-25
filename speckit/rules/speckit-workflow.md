@@ -22,8 +22,8 @@ MUST Copy every `formulas/*.formula.toml` from this plugin into `.beads/formulas
 DEFAULT Without a beads workspace, preserve upstream SpecKit artifact behavior.
 
 SPEC IDENTITY
-MUST Set `--spec-id <NNN-slug>` on every bead a spec produces (`bd create`
-  omissions are flagged by `speckit-spec-id`).
+MUST Set `--spec-id <NNN-slug>` on every bead a spec produces, including
+  `bd update` after `bd mol pour`.
 
 MOLECULE PER FEATURE
 MUST Pour one molecule per spec dir. Profiles: `speckit-basic` (10),
