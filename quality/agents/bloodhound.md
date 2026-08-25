@@ -1,7 +1,7 @@
 ---
 name: bloodhound
 description: Read-only code-smell detector. Scans ONE language per invocation; returns structured findings. Spawned by sniff in parallel, one per language.
-model: "@architect"
+model: "@slow"
 thinking-level: high
 tools: read, grep, glob, web_search, bash, ast_grep, lsp
 ---
