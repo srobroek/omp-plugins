@@ -5,6 +5,7 @@
   "private": true,
   "omp": {
     "extensions": [
+      "./extensions/agentic-lint-reminder.ts",
       "./extensions/agentic-lint-tool.ts"
     ]
   }

@@ -17,6 +17,13 @@ This plugin does not assume a source-tree path.
   when a call targets the chezmoi source dir. Any uncertainty (missing binary,
   unmanaged path, timeout, spawn error) allows the call. After a successful
   source-dir edit, it prepends a `chezmoi apply` reminder (once per 10 minutes).
+- `secret-commit-gate` — blocks a `bash` `git commit` that stages a plaintext
+  credential into the chezmoi source tree. `SECRET_NAMES` in the module holds the
+  name patterns. A `.tmpl` renders its value from the vault at apply time, and an
+  `encrypted_` file is already encrypted. Neither trips the gate, and neither does
+  repository tooling outside the source dir. It follows `-C <dir>` and `cd`, and
+  `-a` adds tracked modifications to what it inspects. Any uncertainty (missing
+  binary, no chezmoi source, git failure) allows the commit.
 
 The legacy chezmoi-sync hook's ignore-list behaviour was not ported.
 

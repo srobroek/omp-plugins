@@ -16,9 +16,9 @@ repomix caches nothing, so a second pack costs the same as the first.
 | read it without writing a file | `repomix . --stdout` |
 | pack another repository | `repomix --remote <url> --remote-branch <ref>` |
 
-Reach for `--include` first: scoping to code cut output 81 percent against a
-whole-repo pack. Prefer semantic symbol tools and targeted search for a single
-lookup, and a pack only when a task needs many files at once.
+Prefer semantic symbol tools and targeted search for a single lookup, and a pack
+only when a task needs many files at once. Scoping a pack with `--include` is
+enforced by `authoring-repomix-include`.
 
 Decide `--compress` per language. It saved 21 percent on this repository and 0
 percent on markdown and JSON. It grew 197 files of 4,107.
