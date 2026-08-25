@@ -4,7 +4,7 @@
   "description": "Research breaking changes, deprecations, and new features between two versions.",
   "private": true,
   "dependencies": {
-    "smol-toml": "1.6.1"
+    "smol-toml": "1.8.0"
   },
   "omp": {
     "extensions": [
