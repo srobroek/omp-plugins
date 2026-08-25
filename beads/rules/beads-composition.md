@@ -1,6 +1,6 @@
 ---
 name: beads-composition
-description: Choosing an execution shape: ad hoc issue, epic, formula, poured molecule, bond, or wisp.
+description: "Choosing an execution shape: ad hoc issue, epic, formula, poured molecule, bond, or wisp."
 ---
 
 # Beads Formulas, Molecules, Bonds, and Wisps

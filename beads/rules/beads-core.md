@@ -1,6 +1,6 @@
 ---
 name: beads-core
-description: Core bd contract: claiming, field taxonomy, routing, dependencies, sync authority, JSONL-over-git fallback, and database maintenance. Read when tracking work in a repo that has .beads/.
+description: "Core bd contract: claiming, field taxonomy, routing, dependencies, sync authority, JSONL-over-git fallback, and database maintenance. Read when tracking work in a repo that has .beads/."
 ---
 
 # Beads (bd)
@@ -147,9 +147,11 @@ DEFAULT Prefer bd's own `export.auto` (throttled export after every write).
   `export.git-add: true` does not actually stage the file, and throttling lets
   export lag the database at the moment of commit -- stage `.beads/issues.jsonl`
   yourself when committing in a JSONL-over-git repo.
-GOTCHA `bd config set export.auto true` writes a FLAT `export.auto:` key beside
-  the nested `export:` block, so nothing reads it and auto-export silently never
-  fires. Nest it by hand under `export:` in `.beads/config.yaml`.
+GOTCHA `bd config set export.auto true` appends a FLAT `export.auto:` key rather
+  than nesting it under `export:`. The flat key does work: measured, it produced
+  an identical `.beads/issues.jsonl` to a hand-nested block, while an
+  unconfigured repository produced none. Note that `bd config get export.auto`
+  reports `true` for either carrier, so it cannot tell you which one is in force.
 
 JSONL OVER GIT (fallback where `bd dolt push` cannot run)
 DEFAULT Off. Exists for repos where the native push cannot run -- it writes

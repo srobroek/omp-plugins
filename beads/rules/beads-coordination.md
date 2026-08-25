@@ -1,6 +1,6 @@
 ---
 name: beads-coordination
-description: Swarms and merge slots: building the work DAG, validating it, and serialising integration across concurrent agents.
+description: "Swarms and merge slots: building the work DAG, validating it, and serialising integration across concurrent agents."
 ---
 
 # Beads Swarms and Merge Slots

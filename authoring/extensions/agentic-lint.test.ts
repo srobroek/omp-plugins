@@ -5,7 +5,9 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import agenticLintTool, {
 	detectKind,
+	frontmatterDefects,
 	hasRulesContract,
+	hostSpecificPaths,
 	lint,
 	parseXlint,
 	splitFrontmatter,
@@ -563,5 +565,72 @@ describe("python/ts finding-code parity", () => {
 			}
 		}
 		expect(mismatches).toEqual([]);
+	});
+});
+
+describe("frontmatterDefects", () => {
+	const codes = (text: string): string[] => frontmatterDefects(text).map((t) => t[1]);
+	const sev = (text: string): string[] => frontmatterDefects(text).map((t) => t[0]);
+
+	test("valid yaml with a flow array is clean", () => {
+		expect(codes('---\nname: x\ncondition: ["\\\\bfoo\\\\b"]\n---\nbody')).toEqual([]);
+	});
+
+	test("an unquoted colon needs repair, so it warns rather than errors", () => {
+		// Found in seven shipped rules. omp recovers it via quoteAmbiguousPlainScalars,
+		// so the rule still fires -- proven with a live three-rule probe. The casualty
+		// is vale, which lints nothing and lets prose gates pass unchecked.
+		const text = "---\nname: x\ndescription: Core contract: claiming and routing.\n---\nbody";
+		expect(codes(text)).toEqual(["W13"]);
+		expect(sev(text)).toEqual(["WARN"]);
+	});
+
+	test("quoting that same value fixes it", () => {
+		expect(codes('---\nname: x\ndescription: "Core contract: claiming and routing."\n---\nbody')).toEqual([]);
+	});
+
+	test("a block sequence is not a defect on its own", () => {
+		// Measured: a rule whose condition is a block sequence fires normally, and it
+		// still fires when the frontmatter also needs repair. Flagging it would be
+		// inventing a problem.
+		expect(codes("---\nname: x\nglobs:\n  - '**/*.ts'\n---\nbody")).toEqual([]);
+	});
+
+	test("a block sequence beside a repaired scalar reports only the repair", () => {
+		const text = "---\ndescription: bad: colon\ncondition:\n  - '\\bfoo\\b'\n---\nbody";
+		expect(codes(text)).toEqual(["W13"]);
+	});
+
+	test("only array-valued keys are checked", () => {
+		expect(codes("---\nname: x\nsomelist:\n  - a\n---\nbody")).toEqual([]);
+	});
+
+	test("a file with no frontmatter is clean", () => {
+		expect(codes("# just a heading\n")).toEqual([]);
+	});
+});
+
+describe("hostSpecificPaths", () => {
+	test("home directories on any OS are flagged", () => {
+		expect(hostSpecificPaths("see /Users/sjors/dev/repo/file.md")).toEqual(["/Users/sjors/dev/repo/file.md"]);
+		expect(hostSpecificPaths("see /home/runner/work/x")).toEqual(["/home/runner/work/x"]);
+		expect(hostSpecificPaths("see C:\\Users\\sjors\\dev")).toEqual(["C:\\Users\\sjors\\dev"]);
+	});
+
+	test("portable absolute paths are not defects", () => {
+		// The false positive that killed the first version of this check: a scratch
+		// dir in a shell snippet is absolute by necessity and correct anywhere.
+		expect(hostSpecificPaths("mkdir -p /tmp/agentic/external-repos && cd /tmp/agentic")).toEqual([]);
+		expect(hostSpecificPaths("2>/dev/null and /usr/bin/env bash and /etc/hosts")).toEqual([]);
+		expect(hostSpecificPaths("under /var/folders/ab/cd")).toEqual([]);
+	});
+
+	test("tilde and scheme URLs stay allowed", () => {
+		expect(hostSpecificPaths("~/personal/dev/repo and ~/.omp/agent")).toEqual([]);
+		expect(hostSpecificPaths("https://example.com/a/b/c and skill://write-docs/x.md")).toEqual([]);
+	});
+
+	test("duplicates collapse", () => {
+		expect(hostSpecificPaths("/home/a/b then /home/a/b again")).toEqual(["/home/a/b"]);
 	});
 });

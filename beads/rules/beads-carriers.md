@@ -1,6 +1,6 @@
 ---
 name: beads-carriers
-description: Which carrier holds a decision and what makes it authoritative: comments, decision beads, wisps, artifacts.
+description: "Which carrier holds a decision and what makes it authoritative: comments, decision beads, wisps, artifacts."
 ---
 
 # Beads carriers: comments, decision beads, wisps, artifacts

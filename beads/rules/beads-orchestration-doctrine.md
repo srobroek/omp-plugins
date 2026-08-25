@@ -1,6 +1,6 @@
 ---
 name: beads-orchestration-doctrine
-description: Cross-package doctrine for multi-agent beads runs: claim as contract, wisps, links, labels, and gates.
+description: "Cross-package doctrine for multi-agent beads runs: claim as contract, wisps, links, labels, and gates."
 ---
 
 # Beads Orchestration Doctrine -- claim⟺contract, wisps, links, labels, gates

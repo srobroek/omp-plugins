@@ -1,6 +1,6 @@
 ---
 name: beads-github-mirror
-description: Mirroring beads out to GitHub issues: config keys, per-verb cost, and the label-overwrite constraint.
+description: "Mirroring beads out to GitHub issues: config keys, per-verb cost, and the label-overwrite constraint."
 ---
 
 # Beads GitHub Mirror
