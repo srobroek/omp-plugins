@@ -109,6 +109,7 @@ describe("wrapper grammars resolve the real command slot", () => {
 		"sudo --user root speckit-taskstoissues",
 		"sudo --group wheel speckit-taskstoissues",
 		"sudo --user=root speckit-taskstoissues",
+		"sudo --group=staff speckit-taskstoissues",
 		"env --split-string 'speckit-taskstoissues'",
 		"env -S 'env -S \"speckit-taskstoissues\"'",
 		"specify run '/speckit.taskstoissues'",
