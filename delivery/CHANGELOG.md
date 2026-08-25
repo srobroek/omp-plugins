@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.0](https://github.com/srobroek/omp-plugins/compare/delivery--v0.5.0...delivery--v0.6.0) (2026-08-25)
+
+
+### Features
+
+* **session:** revive session plugin with resume-session skill ([af9251e](https://github.com/srobroek/omp-plugins/commit/af9251e4f4a7b36163d228373b76c21035813eba))
+
 ## [0.5.0](https://github.com/srobroek/omp-plugins/compare/delivery--v0.4.0...delivery--v0.5.0) (2026-08-25)
 
 

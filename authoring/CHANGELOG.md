@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.1.0](https://github.com/srobroek/omp-plugins/compare/authoring--v1.0.0...authoring--v1.1.0) (2026-08-25)
+
+
+### Features
+
+* **session:** revive session plugin with resume-session skill ([af9251e](https://github.com/srobroek/omp-plugins/commit/af9251e4f4a7b36163d228373b76c21035813eba))
+
 ## [1.0.0](https://github.com/srobroek/omp-plugins/compare/authoring--v0.3.0...authoring--v1.0.0) (2026-08-25)
 
 
