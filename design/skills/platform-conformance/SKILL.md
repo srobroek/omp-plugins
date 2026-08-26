@@ -31,7 +31,9 @@ TRIGGER
    | web | `web-design-guidelines` |
 
 2. For current web practice, prefer the CLI, which needs NO plugin install:
-   `npx --yes modern-web-guidance@latest search "<topic>"`, then `retrieve`. It needs network.
+   `npx --yes modern-web-guidance@latest search "<topic>"` returns ids, then
+   `npx --yes modern-web-guidance@latest retrieve "<id,id>"` takes them comma-separated.
+   Neither is a bare command. It needs network.
    -> baseline support and current APIs cited from the tool, not from memory.
 3. Check the routed platform skill is in your available skills BEFORE loading it. Reading a
    `skill://` path that does not exist throws `Unknown skill`. -> present: LOAD and follow.

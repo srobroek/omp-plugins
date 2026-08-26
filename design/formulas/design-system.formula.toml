@@ -197,7 +197,7 @@ labels = ["design", "phase:tokens"]
 description = """
 Run an independent schema gate over the authored source, separate from the build
 engine that consumes it:
-  npx --yes --package=@design-token-kit/cli dtokens check --scope schema 'tokens/**/*.json'
+  find tokens -type f -name '*.json' -print0 | xargs -0 npx --yes --package=@design-token-kit/cli dtokens check --scope schema
 It exits 2 on findings. Fix the source, never the checker. A build that succeeds
 on malformed source has only hidden the problem one layer down, which is why this
 gate is its own bead and runs before any artifact is generated.

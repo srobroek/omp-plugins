@@ -110,18 +110,21 @@ level first, then at page level. Page-first development is the named anti-patter
 Layered DTCG under `tokens/**/*.json` is the canonical machine source. DESIGN.md holds
 authored intent and a linted projection of that source.
 
-DESIGN.md is not the compiler input. `npx --yes @google/design.md export --format dtcg`
-resolves aliases, flattens colors to sRGB, and drops the component, theme, and density tiers.
+DESIGN.md is not the compiler input. `npx --yes @google/design.md export "$(git rev-parse
+--show-toplevel)/DESIGN.md" --format dtcg` resolves aliases, flattens colors to sRGB, and
+drops the component, theme, and density tiers.
 
 ```bash
 npx --yes @google/design.md lint "$(git rev-parse --show-toplevel)/DESIGN.md"
-npx --yes --package=@design-token-kit/cli dtokens check --scope schema 'tokens/**/*.json'
+find tokens -type f -name '*.json' -print0 \
+  | xargs -0 npx --yes --package=@design-token-kit/cli dtokens check --scope schema
 npx --yes --package=@terrazzo/cli tz build
 ```
 
 Never let a bare bin name be the spec. Naming the package covers `@google/design.md`,
 whose bins are `design.md` and `designmd`. The last two need `--package`: a bare
 `dtokens` resolves an unrelated package, and a bare `tz` resolves a package with no bin.
+`dtokens` expands no glob, so enumerate the token files and pass each as its own argument.
 
 Terrazzo is the single build authority. A second builder would create a second artifact
 authority. Details in `skills/design-system-audit/references/token-pipeline.md`.

@@ -31,8 +31,11 @@ TRIGGER
      quoted URL, JSON node targets, `--include` and `--exclude`, and exits non-zero,
      which the MCP scanner cannot do because it takes one page. Two caveats bind it:
      it drives a real Chrome through ChromeDriver, so run
-     `npx --yes browser-driver-manager install chrome` first or pass an explicit
-     `--chromedriver-path`. Measured without that, it exits 2 on "This version of
+     `npx --yes browser-driver-manager install chrome`, then `eval "$(npx --yes
+     browser-driver-manager which)"`, and pass `--chrome-path "$CHROME_TEST_PATH"` with
+     `--chromedriver-path "$CHROMEDRIVER_TEST_PATH"`. Installing alone is not enough: it
+     downloads the pair and puts neither on axe's path. Measured without them, it exits 2 on
+     "This version of
      ChromeDriver only supports Chrome version 152. Current browser version is
      151.0.7922.174", having tested nothing at all.
      And because that environment failure also exits non-zero, a non-zero exit does NOT by

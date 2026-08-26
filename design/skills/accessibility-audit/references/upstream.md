@@ -31,12 +31,20 @@ either: `npx --yes` resolves it on demand and caches it. Pass `--package`, becau
 npx --yes --package=@axe-core/cli axe "<url>" --stdout --exit
 ```
 
-It drives a real Chrome through ChromeDriver, and the two must match. Install the matched
-pair first, or pass an explicit `--chromedriver-path`:
+It drives a real Chrome through ChromeDriver, and the two must match. Installing the pair is
+not sufficient: the manager downloads them and puts neither on axe's path, so read the paths
+back and pass both.
 
 ```
 npx --yes browser-driver-manager install chrome
+eval "$(npx --yes browser-driver-manager which)"
+npx --yes --package=@axe-core/cli axe "<url>" --stdout --exit \
+  --chrome-path "$CHROME_TEST_PATH" \
+  --chromedriver-path "$CHROMEDRIVER_TEST_PATH"
 ```
+
+`which` takes no positional argument and prints `KEY="value"` lines, which is why `eval`
+sets both variables.
 
 Measured without that step, the run exits 2 having tested nothing:
 

@@ -70,8 +70,7 @@ removed the seven chrome findings, because those nodes were not rendered either.
 
 ```js
 const rendered = (el) =>
-  el.checkVisibility?.({ checkVisibilityCSS: true,
-                         contentVisibilityAuto: true }) !== false
+  el.checkVisibility?.({ checkVisibilityCSS: true }) !== false
   && el.getClientRects().length > 0;
 const hits = (sel) => all(sel).filter(rendered);
 ```
@@ -83,11 +82,18 @@ instead of skipping it when the method is absent.
 
 NOT `checkOpacity: true`. An `opacity: 0` element still generates boxes, still receives
 pointer events, and is still reachable by keyboard, so it is a real target. Discarding it
-would hide the finding rather than measure it. `visibility: hidden` and
-`content-visibility: hidden` are the opposite case and both remove hit-testing, which is
-why `checkVisibilityCSS` and `contentVisibilityAuto` stay on. An interactive element whose
-computed `opacity` is 0 while it remains focusable is its own defect: report it as an
-invisible focusable control, separately from target size.
+would hide the finding rather than measure it. An interactive element whose computed
+`opacity` is 0 while it remains focusable is its own defect: report it as an invisible
+focusable control, separately from target size.
+
+NOT `contentVisibilityAuto: true` either, for a different reason. It returns false for an
+off-screen `content-visibility: auto` subtree whose rendering is merely SKIPPED, not
+suppressed. Those controls render as soon as they scroll into view, so filtering them here
+means they never reach a target-size or style check at all. Scroll a candidate into view,
+then measure it.
+
+`visibility: hidden` is the case that stays filtered: it removes hit-testing outright, which
+is why `checkVisibilityCSS` remains on.
 
 **Rendered but zero area: ambiguous, never discarded on area.** The element has a rect
 and it measures 0x0. Its border box is not its target: the hit area can come from a
@@ -242,24 +248,28 @@ which property is transitioned and still returns when no `transitionend` ever
 fires:
 
 ```js
-const stable = (el, prop, ms = 50, runs = 3) => new Promise((res) => {
-  let prev = null, same = 0;
-  const tick = () => {
-    const v = getComputedStyle(el).getPropertyValue(prop);
-    same = v === prev ? same + 1 : 0;
-    prev = v;
-    if (same >= runs) return res(v);
-    setTimeout(tick, ms);
-  };
-  tick();
-});
-// await stable(document.activeElement, 'box-shadow')
+const stable = (el, prop, ms = 50, runs = 3, timeout = 2000) =>
+  new Promise((res) => {
+    const deadline = Date.now() + timeout;
+    let prev = null, same = 0;
+    const tick = () => {
+      const v = getComputedStyle(el).getPropertyValue(prop);
+      same = v === prev ? same + 1 : 0;
+      prev = v;
+      if (same >= runs) return res({ value: v, settled: true });
+      if (Date.now() > deadline) return res({ value: v, settled: false });
+      setTimeout(tick, ms);
+    };
+    tick();
+  });
+// const { value, settled } = await stable(document.activeElement, 'box-shadow')
 ```
 
-The `cap` and the poll both terminate on their own, so neither hangs the pass on a
-state that never transitions. Read `transitionDuration` and `transitionProperty`
-beside the ring values, so the report states the settle time it waited for instead
-of an unexplained sleep.
+The deadline is load-bearing: without it a continuously animated property never reaches
+`same >= runs` and the pass hangs. A `settled: false` result is itself reportable, because a
+property still moving after two seconds is an animation that never rests rather than a
+transition to wait on. Read `transitionDuration` and `transitionProperty` beside the ring
+values, so the report states the settle time it waited for instead of an unexplained sleep.
 
 A focus indicator exists only when `outlineStyle !== 'none'` with a non-zero
 width, or `boxShadow` differs between the unfocused read and the SETTLED focused

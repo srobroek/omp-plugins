@@ -13,10 +13,13 @@ Commands only. The `accessibility-scanner`, `storybook`, `wire-dsl`, and `excali
 servers are routed by `rule://design-tool-ladder` and called as tools, not spawned as
 processes, so they carry no invocation to record here.
 
-## Never let a bare bin name be the spec
+## Never infer a package from a bin name
 
 `npx` resolves its first non-flag argument as a package spec unless `--package` names one.
-Two forms are safe, and the difference between them is the whole mechanism.
+A bare name is safe only where the table below records that the package and the bin do
+coincide, as `playwright` and `storybook` do. Never assume it from the bin alone: three
+verified counter-cases are below. Two forms are always safe, and the difference between them
+is the whole mechanism.
 
 Form 1, name the PACKAGE as the spec. npx then runs that package's bin, whatever it is
 called:
@@ -62,8 +65,10 @@ argument that a CLI may read as the working directory. Where a real shell variab
 wanted, derive it in the same line, as the `git rev-parse` form below does, or guard it with
 `${target:?set target}`.
 
-Quote the DTCG glob for the opposite reason: an unquoted `tokens/**/*.json` is expanded by
-the shell rather than by the tool.
+The DTCG glob is the exception: do NOT quote it. `dtokens` does not expand a glob itself, and
+a quoted `'tokens/**/*.json'` reaches it literally and fails with
+`Check failed: File not found: "tokens/**/*.json"`. Enumerate the token files with the
+harness `glob` tool, then pass each path as its own quoted argument.
 
 ## Verification and measurement
 
@@ -72,10 +77,28 @@ the shell rather than by the tool.
 | `impeccable` | `impeccable` 3.6.0 | `npx --yes impeccable detect "<target>" --json` | coarse rendered-UI defect scan over 59 detector rules | corroborating signal only; never instead of driving the surface, because findings carry `"line": 0` |
 | `test-storybook` | `@storybook/test-runner` 0.24.4 | `npx --yes --package=@storybook/test-runner test-storybook --url http://localhost:6006 --json --outputFile sb.json --failOnConsole` | executes every story as a test against a running dev server | prefer `vitest` on Vite-powered frameworks, where the Vitest addon supersedes this runner |
 | `axe` | `@axe-core/cli` 4.13.0 | `npx --yes --package=@axe-core/cli axe "<url>" --stdout --exit` | multi-URL accessibility gate that exits non-zero | only when a process exit is the requirement; the `accessibility-scanner` MCP is the primary route and puts no ChromeDriver in the path |
-| `browser-driver-manager` | `browser-driver-manager` 2.0.1 | `npx --yes browser-driver-manager install chrome` | installs a matched Chrome and ChromeDriver pair | required before the axe gate, unless you pass an explicit `--chromedriver-path` |
+| `browser-driver-manager` | `browser-driver-manager` 2.0.1 | `npx --yes browser-driver-manager install chrome` | downloads a matched Chrome and ChromeDriver pair | it only downloads them. It puts neither on axe's path, so pass them yourself or the version skew it exists to prevent still happens. See the mapping below |
 | `motionlint` | `motionlint` 0.2.1 | `npx --yes motionlint audit "<url>" --json audit.json --ci` | primary motion measurement: duration scoring and a reduced-motion sweep | leads over reading CSS by hand, because it measures what shipped |
 | `playwright` | `playwright` 1.62.1 | `npx --yes playwright install chromium` | the one-time Chromium download MotionLint drives | first MotionLint run only |
-| `lighthouse` | `lighthouse` 13.4.1 | `npx --yes lighthouse "<url>"` | performance, PWA, and SEO categories on a URL | `lighthouse-mcp` is dropped as a duplicate of this CLI |
+| `lighthouse` | `lighthouse` 13.4.1 | `npx --yes lighthouse "<url>"` | its five categories: accessibility, best-practices, performance, seo, agentic-browsing | `lighthouse-mcp` is dropped as a duplicate of this CLI. There is no PWA category in 13.4.1 |
+
+### Give axe a matched Chrome and ChromeDriver
+
+`browser-driver-manager which` prints `KEY="value"` lines, so `eval` sets both paths in the
+current shell. Take no positional argument: bare `which` reads the environment file the
+install wrote, and both paths are absolute.
+
+```bash
+npx --yes browser-driver-manager install chrome
+eval "$(npx --yes browser-driver-manager which)"
+npx --yes --package=@axe-core/cli axe "<url>" --stdout --exit \
+  --chrome-path "$CHROME_TEST_PATH" \
+  --chromedriver-path "$CHROMEDRIVER_TEST_PATH"
+```
+
+Without those two flags the gate runs against whatever ChromeDriver it finds first, and a
+version mismatch exits non-zero having tested nothing, which reads exactly like a real
+accessibility failure.
 
 ## Token pipeline
 
@@ -83,8 +106,8 @@ the shell rather than by the tool.
 |---|---|---|---|---|
 | `design.md` | `@google/design.md` 0.4.0 | `npx --yes @google/design.md lint "$(git rev-parse --show-toplevel)/DESIGN.md"` | gates the authored artifact; exits 1 on errors | always derive the path: a bare `DESIGN.md` resolves against the session cwd and exits 2 with "not found" when the cwd is not the file's directory |
 | `design.md` | same | `npx --yes @google/design.md diff "<before>" "<after>"` | review gate on a DESIGN.md edit; exits 1 when the after file carries more errors or warnings | use on every edit to an existing file, where `lint` alone cannot say whether the edit made it worse |
-| `design.md` | same | `npx --yes @google/design.md export --format dtcg` | one-time bootstrap of DTCG tokens for a repo that has none | never as the compiler input: the export is lossy, so layered `tokens/**/*.json` stays canonical. Writes to stdout, so a file needs redirection |
-| `dtokens` | `@design-token-kit/cli` 1.8.0 | `npx --yes --package=@design-token-kit/cli dtokens check --scope schema 'tokens/**/*.json'` | independent DTCG schema gate; exits 2 on findings | runs BEFORE the build, because a build that succeeds on malformed source has only hidden the problem one layer down |
+| `design.md` | same | `npx --yes @google/design.md export "$(git rev-parse --show-toplevel)/DESIGN.md" --format dtcg` | one-time bootstrap of DTCG tokens for a repo that has none | the FILE argument is positional and required: without it the command prints usage and emits nothing. Never the compiler input, because the export is lossy, so layered `tokens/**/*.json` stays canonical. Writes to stdout, so a file needs redirection |
+| `dtokens` | `@design-token-kit/cli` 1.8.0 | `npx --yes --package=@design-token-kit/cli dtokens check --scope schema "<file>" ...` | independent DTCG schema gate; exits 2 on findings | runs BEFORE the build, because a build that succeeds on malformed source has only hidden the problem one layer down. It expands no glob, so enumerate the token files first and pass each as its own argument |
 | `tz` | `@terrazzo/cli` 2.7.1 | `npx --yes --package=@terrazzo/cli tz build` | the single build authority: CSS custom properties, theme and density selectors, typed JS with a `.d.ts` | never alongside a second builder. Two engines means two artifact authorities |
 
 ## Storybook lifecycle
@@ -103,10 +126,28 @@ and no `--package` is needed.
 
 | bin | npm package | invocation | what it is for | when to use it rather than the alternative |
 |---|---|---|---|---|
-| `modern-web-guidance` | `modern-web-guidance` 0.0.185 | `npx --yes modern-web-guidance@latest search "<topic>"` | current web-platform practice and baseline support, cited from the tool | prefer it over the `modern-web-guidance` plugin, because the CLI needs no install. It needs network; `--offline` works only once the package is cached |
-| none | `wireloom` 0.7.0 | `npm install wireloom` | renders a `wireloom` fenced block to self-contained inline SVG | a project dependency rather than an `npx` run, because the package ships a library and NO bin, so a build step or script calls it |
+| `modern-web-guidance` | `modern-web-guidance` 0.0.185 | `npx --yes modern-web-guidance@latest search "<topic>"`, then `npx --yes modern-web-guidance@latest retrieve "<id,id>"` | current web-platform practice and baseline support, cited from the tool | prefer it over the `modern-web-guidance` plugin, because the CLI needs no install. `search` returns ids and `retrieve` takes them comma-separated; neither is a bare command. It needs network |
+| none | `wireloom` 0.7.0 | `npm install wireloom` | installs the renderer, which exports `parse` and `render` | a project dependency rather than an `npx` run, because the package ships a library and NO bin. Installing renders nothing: a script must call `render` and write the SVG. See the render step below |
 | `python3` | none | `python3 -m http.server "<port>" --bind 127.0.0.1` | serves a prototype so it can be driven rather than read | always for an interactive artifact. `--bind 127.0.0.1` keeps it off the network |
-| `superdesign` | `@superdesign/cli` 0.13.0 | `npx --yes @superdesign/cli@latest` | hosted concept exploration | last resort, and only after the user confirms the account: it needs an authenticated login, and image and video generation consumes credits |
+| `superdesign` | `@superdesign/cli` 0.13.0 | `npx --yes @superdesign/cli@latest create-project` | hosted concept exploration; the command prints the canvas URL | last resort, and only after the user confirms the account. With no subcommand it prints help and produces nothing. Run `login` first; `iterate-design-draft` continues an existing draft. Image and video generation consumes credits |
+
+### Render a wireloom block to SVG
+
+`render(id, source, options?)` returns `Promise<{ svg: string }>`, so the call is async and
+nothing is written until a script writes it. `parse(source)` alone returns the AST and emits
+no SVG.
+
+```js
+import { readFile, writeFile } from "node:fs/promises";
+import { render } from "wireloom";
+
+const source = await readFile("wireframe.wireloom", "utf8");
+const { svg } = await render("wireframe", source);
+await writeFile("wireframe.svg", svg);
+```
+
+An invalid source throws `WireloomError` carrying the line and column, so a thrown error is
+a grammar fault rather than a missing dependency.
 
 ## Workspace
 

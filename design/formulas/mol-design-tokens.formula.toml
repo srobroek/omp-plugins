@@ -119,7 +119,7 @@ needs = ["author-token-tiers"]
 labels = ["design", "design:subprocess", "sub:tokens"]
 description = """
 Three commands in this order, each a separate gate on a separate thing:
-  npx --yes --package=@design-token-kit/cli dtokens check --scope schema 'tokens/**/*.json'
+  find tokens -type f -name '*.json' -print0 | xargs -0 npx --yes --package=@design-token-kit/cli dtokens check --scope schema
   npx --yes --package=@terrazzo/cli tz build
   a project contrast script over the generated pairs
 The schema check exits 2 on findings; fix the source, never the checker. Terrazzo

@@ -121,7 +121,8 @@ el.style.position = '';                     // restore, always
 document.documentElement.scrollWidth;       // expect the fix again: 375
 ```
 
-Record all three numbers: broken, fixed, re-broken. Two reads that never move are
+Record all three numbers in the order the snippet reads them: fixed, re-broken, restored.
+Two reads that never move are
 indistinguishable from a fix that does nothing. Always clear the override, because the
 ablation mutates the live DOM every later probe reads.
 

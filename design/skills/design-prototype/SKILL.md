@@ -35,10 +35,10 @@ TRIGGER
    path is reported.
 3. SERVE it whenever it is interactive, rather than handing over a file path. A clickable
    prototype judged by reading its source is not judged at all.
-   -> `hub` op `start`, name `prototype`, `python3 -m http.server <port> --bind 127.0.0.1`
+   -> `hub` op `start`, name `prototype`, `python3 -m http.server "<port>" --bind 127.0.0.1`
    with `cwd` set to the artifact's directory, and `ready = { "port": <port> }`.
    -> SELF-CHECK before reporting, because this is the step that silently does not happen:
-   fetch your own URL and report the status, `curl -s -o /dev/null -w '%{http_code}'
+   fetch your own URL and report the status, `curl -sS -o /dev/null -w '%{http_code}'
    "http://127.0.0.1:<port>/<file>"`. A 200 is the only proof it ran. With no status line,
    report NOT SERVED plus the blocker, the absolute file path, and the one-line command a
    human runs from that directory. Never report a URL you did not fetch.

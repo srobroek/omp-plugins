@@ -24,18 +24,20 @@ MUST Check at COMPONENT level before page level. A component-level failure is sm
 | RECONCILE | same tool as the failing assertion | re-run of that assertion only | re-running the whole suite after a one-line fix |
 
 These external routes are in scope wherever the owning skill names them. Each does
-something `browser` cannot, so none of them is a phase violation. This is the whole
-catalog: a tool absent from it is a miss.
+something `browser` cannot, so none of them is a phase violation. This table covers every
+verification, measurement, build, and workspace command. A verification tool absent from it
+is a miss. Artifact producers a skill routes on its own, `xd://generate_image` and
+`inspect_image` among them, are named by that skill rather than here.
 
 | tool | what it is for | when to use it rather than the alternative |
 |---|---|---|
 | `impeccable detect` | coarse rendered-UI defect scan | corroborating signal only; its findings carry `"line": 0`, so never as located evidence. The lead runs it, since the reviewers have no shell |
 | `accessibility-scanner` MCP | primary accessibility measurement: WCAG 2.2 engine, gradient contrast | over the axe CLI, because it runs in-process with no ChromeDriver to skew |
 | `@axe-core/cli` | multi-URL accessibility gate with a process exit | only when a non-zero exit is the requirement, which the MCP scanner cannot give |
-| `browser-driver-manager` | matched Chrome and ChromeDriver pair | before the axe gate, unless an explicit `--chromedriver-path` is passed |
+| `browser-driver-manager` | matched Chrome and ChromeDriver pair | before the axe gate. It only downloads them: read the paths with `which` and pass `--chrome-path` and `--chromedriver-path` |
 | `motionlint audit` | primary motion measurement: score and reduced-motion sweep | over reading CSS by hand, because it measures what shipped |
 | `playwright install chromium` | the Chromium MotionLint drives | first MotionLint run only |
-| `lighthouse` | performance, PWA, and SEO categories on a URL | instead of `lighthouse-mcp`, which duplicates it |
+| `lighthouse` | accessibility, best-practices, performance, seo, agentic-browsing categories | instead of `lighthouse-mcp`, which duplicates it. There is no PWA category |
 | `storybook dev` | story index, prop manifest, and the one-story route | the default: keep it running rather than rebuilding per check |
 | `storybook build` | static emit of the routes that framework serves | only when no server should outlive the turn |
 | `storybook doctor` | configuration health report | before blaming a route for a config fault |
