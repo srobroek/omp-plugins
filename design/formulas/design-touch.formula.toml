@@ -99,7 +99,7 @@ description = """
 Run skill://design-md. Add or update only the token entries this touch changed;
 do not rewrite unrelated sections. Every {group.token} reference must resolve.
 Unknowns belong under Known Gaps. TODO or TO_FILL is invalid. Gate the result
-with: npx @google/design.md lint DESIGN.md
+with: npx --yes @google/design.md lint "$(git rev-parse --show-toplevel)/DESIGN.md"
 """
 
 [steps.metadata]

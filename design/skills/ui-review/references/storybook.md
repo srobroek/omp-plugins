@@ -49,9 +49,15 @@ the run:
 
 ```
 hub op=start name=storybook
-  npx storybook dev -p 6006 --ci --no-open --quiet --disable-telemetry
-  ready = { "port": 6006, "log": "Storybook.*started", "timeout": 120 }
+  npx --yes storybook dev -p 6006 --ci --no-open --quiet --disable-telemetry
+  ready = { "port": 6006, "timeout": 240 }
 ```
+
+Gate readiness on the PORT, never on a log pattern. Storybook 10.5.10 prints
+`storybook v10.5.10` and then a manifest line, and never the word "started", so a
+`log` condition waits out the whole timeout while the server is already serving. When both
+`log` and `port` are supplied, BOTH must pass, so one stale pattern hides a working server.
+Allow 240 seconds: a cold Vite dependency scan takes minutes.
 
 Three reasons this beats rebuilding. It recompiles on change, so a fix costs no rebuild. The
 process is project-scoped and outlives the turn, so `hub op=start` once serves every
@@ -71,7 +77,7 @@ Build instead of serving only when running a server is pointless or impossible: 
 sandbox with no free port, or a single artifact read with no follow-up. Otherwise the server
 wins, because every fix after a static build costs a full rebuild.
 
-`npx --yes storybook build -o "<dir>"` emits, under `<dir>`, the routes that framework serves.
+`npx --yes storybook build -o "<dir>"` emits, under that directory, the routes that framework serves.
 Measured on React: `index.json`, `manifests/components.json`, `manifests/docs.json`, and
 `manifests/components.html`. A build cannot add a route the dev server withholds for that
 framework, so a Vue project still yields no components manifest.
@@ -80,6 +86,31 @@ Adding `--test` speeds the build and DROPS the docs artifacts: `index.json` and
 `manifests/components.json` remain, while `manifests/docs.json` and
 `manifests/components.html` are absent. Use `--test` for running stories as tests, and a
 plain build for reading documentation.
+
+## What lands on disk
+
+`storybook dev` serves from memory and writes nothing durable, but it is not side-effect
+free. It populates two disposable caches, `node_modules/.cache/storybook/` and
+`node_modules/.vite/`. And a crash or a debug run writes a `*.log` into the CALLER's working
+directory rather than a temp dir: measured, one run left `debug-storybook.log` in an
+unrelated repository, which had to be removed by hand. Run it from the project, and check
+for a stray log before reporting done.
+
+`storybook build` defaults to `storybook-static/` when `-o` is omitted, so pass `-o` whenever
+the location matters. The `.gitignore` that `storybook init` generates lists exactly
+`storybook-static` and `*.log`, which corroborates both outputs.
+
+## What persists
+
+Two layers, and only one of them is durable.
+
+**The source is the durable design record.** Components, stories, and tokens are ordinary
+committed files. The `stories` glob in `.storybook/main.ts`, for example
+`["../src/**/*.mdx", "../src/**/*.stories.@(js|jsx|mjs|ts|tsx)"]`, IS the registry: any
+matching file is discovered on every start. Nothing is ever re-added.
+
+**The local view is disposable.** It is memory plus the caches above, and one command
+regenerates it.
 
 ## The manifests are the primary agent surface
 
@@ -141,6 +172,18 @@ the ARIA, computed-style, and viewport probes from `skill://ui-review/references
 to it. This is Component Driven verification: a component-level failure is smaller to
 locate than the same failure found on an assembled page.
 
+MUST Scope every probe to `#storybook-root`. The story root is not the document root: the
+frame also holds Storybook's hidden fallback chrome, marked `sb-preparing-story`,
+`sb-preparing-docs`, `sb-nopreview`, and `sb-errordisplay`. Measured on one story at 1440,
+`button,input,select,a[href]` returned 28 unscoped against 21 scoped, and
+`querySelectorAll('table')` returned 2 on a page with one table.
+
+That breaks measurement and interaction differently. Unscoped, the target-size probe
+reported 7 controls under 24x24, every one of them 0x0 and from the chrome; scoped, it
+reported none. Unscoped, `querySelector('table tbody tr button')` resolved the chrome's
+placeholder prop table first, so a click timed out after 8000ms against a 0x0 element while
+reporting a plausible `matches 15 element(s)`.
+
 Execute every story:
 
 ```
@@ -155,7 +198,7 @@ wrong code rather than failing safely.
 It picks up accessibility checks when `@storybook/addon-a11y` is installed. On Vite-powered
 frameworks it is superseded by the Vitest addon, so prefer `vitest` there.
 
-`npx storybook doctor` reports configuration health.
+`npx --yes storybook doctor` reports configuration health.
 
 ## Composition, for Component Driven stages two and three
 
@@ -190,7 +233,7 @@ the component source and its type declaration is the fallback authority.
 
 ## Setting Storybook up where none exists
 
-Never install it unprompted. When the user wants it, run `npx storybook ai setup`. It
+Never install it unprompted. When the user wants it, run `npx --yes storybook ai setup`. It
 analyses the actual codebase and emits project-specific instructions: read providers,
 global CSS, portals, and data-fetching patterns; configure decorators, global styles, and
 framework providers in `preview.tsx`; ensure portal roots exist in the preview DOM;
@@ -215,6 +258,12 @@ from the real codebase, which prose cannot.
   for speed.
 - Curate with the implicit `manifest` tag. Exclude a story or a whole file with
   `tags: ['!manifest']`.
+- Wrap a CONTROLLED component in a state holder, never args alone. A component taking a
+  value plus an `onChange` renders every field from args and then rejects every keystroke,
+  because nothing writes the value back. That reads as a broken control rather than as a
+  story defect, and it is the failure a page-level state story hits first. Give the story a
+  decorator or wrapper holding real state, and verify by typing into a field and reading the
+  value back.
 
 ## Documentation retrieval
 

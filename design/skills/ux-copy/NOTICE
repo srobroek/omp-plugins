@@ -12,10 +12,13 @@ This skill is vendored, in modified form, from:
 The full licence text is in the LICENSE file beside this one, copied from the upstream
 repository root at https://raw.githubusercontent.com/anthropics/knowledge-work-plugins/main/LICENSE
 
-The upstream repository ships no NOTICE file of its own, checked at
+Upstream declares NO copyright holder, so none is reproduced here. Its LICENSE is the
+unfilled Apache boilerplate, with the bracketed `[yyyy] [name of copyright owner]`
+placeholder left in place. It also ships no NOTICE file of its own, checked at
 https://raw.githubusercontent.com/anthropics/knowledge-work-plugins/main/NOTICE which
 returns 404. Apache-2.0 section 4(d) therefore imposes no attribution notices to
-reproduce. This file records the provenance anyway.
+reproduce. This file records the provenance regardless, so a later reader need not
+re-derive it.
 
 The vendored SKILL.md has been modified. Apache-2.0 section 4(b) requires that modified
 files carry prominent notice of the change, and the file does: a comment block below its

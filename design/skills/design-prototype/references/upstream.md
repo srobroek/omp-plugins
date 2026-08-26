@@ -1,8 +1,10 @@
 # Upstream routes for design-prototype
 
 Every upstream is an entry in the `srobroek-omp` catalog, so a missing skill is one command
-away and the agent can run it. Marketplace install runs no package manager, so nothing here
-arrives as a dependency of `@srobroek/design`; each is an explicit install.
+away, and that command is the USER's to run. OMP discovers plugins at session startup, so an
+install applies from the NEXT session and never rescues the current one. Marketplace install
+runs no package manager, so nothing here arrives as a dependency of `@srobroek/design`; each
+is an explicit install.
 
 | Upstream skill | Repo | Install |
 |---|---|---|
@@ -28,8 +30,10 @@ The other three install one skill each, which is unusually clean.
   is the ONLY working Wire DSL route: the upstream repository has no plugin manifest and
   its one skill-shaped file is a bare `.md`, so a catalog entry would install cleanly and
   contribute nothing. Verified empirically.
-- The `excalidraw` MCP server ships in the separate `diagram` package, because plugin MCP
-  tools are session-global and a diagramming canvas serves any architecture or flow work.
+- The `excalidraw` MCP server ships in the SEPARATE `diagram` package, not this one, because
+  plugin MCP tools are session-global and a diagramming canvas serves any architecture or
+  flow work. Get it with `omp plugin install diagram@srobroek-omp`. Installing `design`
+  alone does NOT provide it, so that row stays unreachable until you do.
 
 MCP servers connect at session startup only. One unreachable when the session began stays
 unreachable until the user runs `/mcp reconnect <name>`; an agent cannot reconnect it.

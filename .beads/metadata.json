@@ -1,0 +1,7 @@
+{
+  "database": "dolt",
+  "backend": "dolt",
+  "dolt_mode": "server",
+  "dolt_database": "omp_plugins",
+  "project_id": "a64a8ef8-0812-4bc0-ad7c-697f4c1b1b85"
+}

@@ -7,23 +7,52 @@ UI and UX design for OMP:
 - browser-driven verification
 - independent critique
 
-Install alongside the `beads` plugin. The formulas assume a beads workspace.
+## Install
+
+```bash
+omp plugin marketplace add srobroek/omp-plugins
+omp plugin install design@srobroek-omp
+```
+
+From a clone of this repository, link the directory instead:
+
+```bash
+omp plugin link <path-to-repo>/design
+```
+
+Install the `beads` plugin too: the formulas assume a beads workspace.
+
+Either carrier applies from the NEXT session, because OMP discovers plugins at startup.
+
+## Usage
+
+In that next session, the eleven skills load, the five rules are listed, and
+`ui-ux-specialist` is spawnable. Confirm the package registered:
+
+```bash
+omp plugin list
+```
+
+A marketplace install appears there as `design@srobroek-omp (0.1.0)`. `omp plugin doctor`
+reports a `✔ plugin:@srobroek/design` line for a linked directory only, and a
+`⚠ … not an omp plugin` line means that directory's rules and agents are silently absent.
 
 ## Skills
 
 The wrapper skills route to the upstream skills below. When an upstream is absent, the
-wrapper stops and prints the install command. Three skills are not wrappers: `ui-review`
-is implemented here, and `wireloom` and `ux-copy` are vendored, so all three ship with
-this package.
+wrapper stops and prints the install command. Four are not wrappers: `design-overview` and
+`ui-review` are implemented here, and `wireloom` and `ux-copy` are vendored, so all four ship
+with this package.
 
 | Skill | Implementation or route | Use when |
 |---|---|---|
-| `design-system-audit` | routes to `ss-tokens`, `ui-ux-pro-max`, `ss-score` | Report the tokens, scales, and primitives that exist |
-| `design-md` | routes to `create-design-md` | Author and lint repo-root DESIGN.md |
+| `design-system-audit` | routes to `ss-lint` and `ss-review` to audit, `ss-tokens` to generate, plus `ui-ux-pro-max` and `ss-score` | Report the tokens, scales, and primitives that exist |
+| `design-overview` | local | Report which design skills, agents, and upstreams this session actually has |
+| `design-md` | routes to `create-design-md`, which needs a repository or URL to extract from | Author and lint repo-root DESIGN.md |
 | `ui-review` | local, drives OMP `browser` | Drive a real surface and measure it |
-| `accessibility-audit` | routes to `accessibility`; also the `accessibility-scanner` server and the `@axe-core/cli` gate | Check WCAG 2.2 AA with measured values |
+| `accessibility-audit` | the `accessibility-scanner` server measures; `accessibility` covers criteria; the `@axe-core/cli` gate is the fallback | Check WCAG 2.2 AA with measured values |
 | `platform-conformance` | routes to eight `*-design-guidelines` and `modern-web-guidance` | Check vendor conventions per platform |
-| `motion-design` | routes to `ss-motion`; also the `motionlint` CLI | Set durations, easings, reduced-motion branches |
+| `motion-design` | the `motionlint` CLI measures; `ss-motion` authors React `motion.X` only | Set durations, easings, reduced-motion branches |
 | `ui-microcopy` | routes to vendored `ux-copy` | Write interface copy, errors, empty states |
 | `design-prototype` | routes by fidelity to five upstreams and two servers | Produce a wireframe, prototype, mockup, or deck |
 | `wireloom` | vendored, MIT | Render a wireframe as inline SVG inside Markdown |
@@ -82,17 +111,21 @@ level first, then at page level. Page-first development is the named anti-patter
 Layered DTCG under `tokens/**/*.json` is the canonical machine source. DESIGN.md holds
 authored intent and a linted projection of that source.
 
-DESIGN.md is not the compiler input. `design.md export --format dtcg` resolves aliases,
-flattens colors to sRGB, and drops the component, theme, and density tiers.
+DESIGN.md is not the compiler input. `npx --yes @google/design.md export "$(git rev-parse
+--show-toplevel)/DESIGN.md" --format dtcg` resolves aliases, flattens colors to sRGB, and
+drops the component, theme, and density tiers.
 
 ```bash
-npx --yes @google/design.md lint DESIGN.md
-npx --yes --package=@design-token-kit/cli dtokens check --scope schema 'tokens/**/*.json'
+npx --yes @google/design.md lint "$(git rev-parse --show-toplevel)/DESIGN.md"
+find tokens -type f -name '*.json' -print0 \
+  | xargs -0 npx --yes --package=@design-token-kit/cli dtokens check --scope schema
 npx --yes --package=@terrazzo/cli tz build
 ```
 
-Pass `--package` for the last two. The bare bin name `dtokens` resolves an unrelated npm
-package, and the bare name `tz` resolves a package with no bin.
+Never let a bare bin name be the spec. Naming the package covers `@google/design.md`,
+whose bins are `design.md` and `designmd`. The last two need `--package`: a bare
+`dtokens` resolves an unrelated package, and a bare `tz` resolves a package with no bin.
+`dtokens` expands no glob, so enumerate the token files and pass each as its own argument.
 
 Terrazzo is the single build authority. A second builder would create a second artifact
 authority. Details in `skills/design-system-audit/references/token-pipeline.md`.
@@ -150,14 +183,21 @@ bondable formulas take it.
 | `mol-design-responsive` | 4 | 0 | Running a reflow and target-size pass |
 | `mol-design-motion` | 4 | 0 | Running a motion and reduced-motion pass |
 
+Pour a tier, then bond a sub-process molecule onto the root id the pour prints:
+
 ```bash
-bd mol pour design-surface --var surface=/settings --var scope=src/settings/
-bd mol bond mol-design-iterate <node-id> --var surface=/settings --var node=<node-id>
+export BEADS_ACTOR=you
+root=$(bd mol pour design-touch --var surface=/settings --var scope=src/settings/ \
+  | sed -n 's/.*Root issue: //p')
+bd mol bond mol-design-iterate "$root" --var surface=/settings --var node="$root" --var round=2
 ```
+
+`bd` rejects a mutating command when `BEADS_ACTOR` is unset, and `bd mol bond` takes the
+formula name and the target id as two positional arguments.
 
 ## Relationship to the bundled designer agent
 
-OMP bundles a `designer` agent, which remains the cheap path for a small self-contained UI
+OMP bundles a `designer` agent, which stays the right choice for a small self-contained UI
 edit. This package ships no agent named `designer`, because discovery is first-wins and
 merges no frontmatter.
 
@@ -170,7 +210,7 @@ Each topic has one first-choice asset, so routing stays consistent.
 
 | Topic | Winner |
 |---|---|
-| Design workflow and anti-slop | `impeccable`, 59 executable detector rules |
+| Design workflow and anti-slop | `impeccable`; its detector is a coarse signal, not located evidence |
 | Design system and tokens | `ss-tokens` |
 | DESIGN.md artifact | `create-design-md` |
 | Accessibility, web | `accessibility` |
@@ -183,6 +223,20 @@ Each topic has one first-choice asset, so routing stays consistent.
 | Current web practice | `modern-web-guidance` |
 | Token build | Terrazzo |
 | Browser-driven verification | `ui-review`, on OMP `browser` |
+
+The detector claims 59 executable rules. Measured on a fixture carrying about ten
+seeded defects:
+
+| Observation | Value |
+|---|---|
+| Exit code | 2 |
+| Findings returned | 4, one an exact duplicate |
+| Location on each finding | `"line": 0` |
+| File attributed | the HTML file, though two defects lived in the CSS |
+| Seeded defects caught | 3 of 10 |
+
+Treat each finding as a coarse signal, and corroborate it by driving the surface. It
+is never located evidence, and never a stand-in for driving the surface.
 
 No skill routes to two `impeccable` commands:
 
@@ -207,12 +261,12 @@ A second asset joins a winner only when its output stands alone.
 
 ## Packages in this marketplace
 
-Install one with `omp plugin install <name>@srobroek-omp`.
+Install one with `omp plugin install "<name>@srobroek-omp"`.
 
 | Entry | Source | Brings |
 |---|---|---|
 | `impeccable` | `git-subdir`, path `plugin` | `impeccable` |
-| `styleseed` | `github` | `ss-tokens`, `ss-motion`, `ss-score`, and 20 more |
+| `styleseed` | `github` | `ss-lint`, `ss-review`, `ss-tokens`, `ss-motion`, `ss-score`, and 18 more |
 | `ui-skills` | `github` | `create-design-md`, and 6 more |
 | `platform-design-skills` | `github` | the eight `*-design-guidelines` |
 | `web-quality-skills` | `github` | `accessibility`, and 5 more |
@@ -225,7 +279,10 @@ Install one with `omp plugin install <name>@srobroek-omp`.
 
 Two entries need `git-subdir`, because a subdirectory holds the plugin root:
 
-- `impeccable` keeps its plugin under `plugin/`.
+- `impeccable` keeps its plugin under `plugin/`. Inside that root its one skill sits at
+  `./skills/impeccable/`, which the plugin's own manifest declares as `"skills": "./skills/"`.
+  No `.agent` or `.agents` directory exists in the installed plugin. Its two version numbers
+  disagree: the npm CLI reports 3.6.0 while the plugin manifest reads 4.1.2.
 - `frontend-slides` keeps its plugin under `plugins/frontend-slides/`. Discovery does not
   resolve the bare `SKILL.md` at its repository root.
 
@@ -235,8 +292,15 @@ the entries above.
 
 Skill granularity is the whole plugin. Discovery resolves
 `<plugin-root>/skills/<name>/SKILL.md`, and neither a lone skill directory nor a bare
-`skills/` container satisfies that path. `git-subdir` does not narrow an entry to one
-skill, so some good skills stay out.
+`skills/` container satisfies that path. `git-subdir` narrows an entry to a subdirectory
+holding a plugin root, never to one skill, so an entry arrives whole.
+
+Measured: installing all eleven entries puts 133 `SKILL.md` files on disk under 104
+distinct names, to reach the ten these wrappers route to. The 29-file gap is duplication.
+`styleseed` ships all 23 `ss-*` skills twice, under `skills/` and again under
+`engine/.claude/skills/`, and `ui-ux-pro-max` ships its set twice as well. Name collisions
+resolve first-wins with no diagnostic of any kind, so `ss-learn` loses that race: it
+installs, and is then unavailable.
 
 | Prerequisite | Entry |
 |---|---|
@@ -271,28 +335,35 @@ general-purpose servers.
 | `wire-dsl` | Wire DSL rendered to SVG, PNG, and PDF |
 | `storybook` | Seven tools over the CSF index, when Storybook ran at session start |
 
-## CLI tools
+## CLI packages these skills invoke
 
-`npx` fetches each one per run. Where the bin name differs from the package name, pass
-`--package`, or npx resolves a different package.
+`npx` resolves each package on demand and caches it, so none becomes a project dependency
+and a first run may reach the network. Every version and license below was read from the
+npm registry. The exact invocations, the `--package` rule, and the output flags each tool
+needs live in `skills/ui-review/references/tools.md`.
 
-| Invocation | npm package | License |
+| npm package | Version | License |
 |---|---|---|
-| `npx --yes impeccable detect <target> --json` | `impeccable` 3.6.0 | Apache-2.0 |
-| `npx --yes storybook dev`, `build`, `doctor` | `storybook` 10.5.10 | MIT |
-| `npx --yes --package=@storybook/test-runner test-storybook` | `@storybook/test-runner` 0.24.4 | MIT |
-| `npx --yes --package=@axe-core/cli axe <urls>` | `@axe-core/cli` 4.13.0 | MPL-2.0 |
-| `npx --yes motionlint audit <url>` | `motionlint` 0.2.1 | MIT |
-| `npx --yes lighthouse <url>` | `lighthouse` 13.4.1 | Apache-2.0 |
-| `npx --yes @google/design.md lint` | `@google/design.md` 0.4.0 | Apache-2.0 |
-| `npx --yes --package=@design-token-kit/cli dtokens` | `@design-token-kit/cli` 1.8.0 | Apache-2.0 |
-| `npx --yes --package=@terrazzo/cli tz build` | `@terrazzo/cli` 2.7.1 | MIT |
+| `impeccable` | 3.6.0 | Apache-2.0 |
+| `storybook` | 10.5.10 | MIT |
+| `@storybook/test-runner` | 0.24.4 | MIT |
+| `@axe-core/cli` | 4.13.0 | MPL-2.0 |
+| `motionlint` | 0.2.1 | MIT |
+| `lighthouse` | 13.4.1 | Apache-2.0 |
+| `@google/design.md` | 0.4.0 | Apache-2.0 |
+| `@design-token-kit/cli` | 1.8.0 | Apache-2.0 |
+| `@terrazzo/cli` | 2.7.1 | MIT |
+| `modern-web-guidance` | 0.0.185 | Apache-2.0 |
+| `browser-driver-manager` | 2.0.1 | MIT |
+| `playwright` | 1.62.1 | Apache-2.0 |
+| `@superdesign/cli` | 0.13.0 | MIT |
+| `wireloom` | 0.7.0 | MIT |
 
 ## Considered and not included
 
 | Asset | Reason |
 |---|---|
-| `educlopez/ui-craft` | `impeccable` carries 59 executable rules against 43, and owns a workflow. The UI Craft score names no location |
+| `educlopez/ui-craft` | `impeccable` owns a workflow rather than a review pass. Its detector claims 59 rules against 43, but neither names a location: the UI Craft score names none, and impeccable's findings carry `"line": 0` |
 | `Owl-Listener/designer-skills` | MIT and good. Three wanted skills sit in two entries carrying 41 skills, and `git-subdir` cannot narrow that |
 | `Wire-DSL/wire-dsl` | Contributes no discoverable skill. Survives as an MCP server |
 | `StardockCorp/Wireloom` | Contributes no discoverable skill. Survives as a vendored skill |
@@ -327,9 +398,11 @@ Excluded on license:
 | `wickedev/wyreframe` | GPL-3.0 |
 | `superdesigndev/superdesign`, the application | AGPL |
 
-## Licenses
+## License
 
-Three tiers govern each upstream:
+Apache-2.0 governs this package.
+
+Three tiers govern each upstream it advertises:
 
 | Evidence | This package may |
 |---|---|
@@ -339,7 +412,3 @@ Three tiers govern each upstream:
 
 The `excalidraw` server in the `diagram` package sits in the middle tier. This package
 vendors no GPL, AGPL, LGPL, or CC-BY-NC content.
-
-## License
-
-Apache-2.0

@@ -151,7 +151,7 @@ Run skill://design-md. Write repo-root DESIGN.md from the GROUND registry:
 frontmatter tokens (colors, typography, spacing, radii, elevation, optional
 motion) then Scope and Intent through Known Gaps. Every {group.token} must
 resolve. Unknowns go under Known Gaps. TODO or TO_FILL is invalid. Gate the
-result with: npx @google/design.md lint DESIGN.md
+result with: npx --yes @google/design.md lint "$(git rev-parse --show-toplevel)/DESIGN.md"
 """
 
 [steps.metadata]
@@ -266,8 +266,10 @@ labels = ["design", "phase:critique"]
 description = """
 Spawn design-critic (read-only) in the SAME parallel batch as
 audit-accessibility, never after it. Run skill://ui-review as critique on
-{{surface}}, plus the deterministic detector pass: npx impeccable detect
-<target> --json for located findings. Verdict PASS, PARTIAL, or FAIL with named
+{{surface}}. Add npx --yes impeccable detect "{{surface}}" --json as a COARSE
+corroborating signal only: its findings carry "line": 0, so they are not located
+evidence and never substitute for driving the surface. Corroborate each entry by
+driving {{surface}} and cite that location. Verdict PASS, PARTIAL, or FAIL with named
 evidence. Do not edit files, and do not question the user: the lead owns the
 conversation. A self-review by whoever wrote the UI shares its blind spots,
 which is why this is a child rather than a self-check.

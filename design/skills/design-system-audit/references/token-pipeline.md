@@ -6,32 +6,39 @@ Layered DTCG JSON under `tokens/**/*.json` is the canonical machine source. DESI
 the authored intent and rationale artifact, and a linted projection of that source. It is
 NOT the compiler input.
 
-The reason is concrete. `npx @google/design.md export --format dtcg` is lossy three ways:
+The reason is concrete. `npx --yes @google/design.md export "$(git rev-parse
+--show-toplevel)/DESIGN.md" --format dtcg` is lossy three ways:
 it resolves references into values rather than preserving the alias graph, it serialises
 colours as sRGB component objects rather than the authored colour space, and it emits one
 flat file with no component, theme, or density tiers. Closing that gap would need a
 project-owned adapter, which this package does not ship and must not imply exists.
 
-Use `export --format dtcg` for exactly one thing: bootstrapping a project that has no
-tokens at all. Label it lossy when you do.
+Use `export` for exactly one thing: bootstrapping a project that has no tokens at all.
+Label it lossy when you do. The FILE argument is positional and required; without it the
+command prints usage and emits nothing.
 
 ## The chain
 
 ```bash
-# Gate the authored artifact. Exit 1 on errors. The package owns the bin, so plain npx works.
-npx --yes @google/design.md lint DESIGN.md
+# Gate the authored artifact. Exit 1 on errors. Safe with no --package because the spec
+# names the scoped package: its bins are `design.md` and `designmd`, so they do NOT match.
+npx --yes @google/design.md lint "$(git rev-parse --show-toplevel)/DESIGN.md"
 
 # Independent DTCG schema gate. `--package` is REQUIRED: the bare bin name `dtokens`
 # resolves an unrelated `dtokens` package on npm, not this one.
-npx --yes --package=@design-token-kit/cli dtokens check --scope schema 'tokens/**/*.json'
+find tokens -type f -name '*.json' -print0 \
+  | xargs -0 npx --yes --package=@design-token-kit/cli dtokens check --scope schema
 
 # Build CSS custom properties, mode selectors, and typed JS. `--package` is REQUIRED:
 # the bare name `tz` resolves the npm package `tz`, which ships no bin at all.
 npx --yes --package=@terrazzo/cli tz build
 ```
 
-Quote the glob. An unquoted `tokens/**/*.json` is expanded by the shell, not by the tool,
-and the two disagree on recursion.
+Do NOT pass a glob. `dtokens` expands none itself, so a quoted `'tokens/**/*.json'` reaches
+it literally and fails with `File not found`, while an unquoted one leaves recursion to the
+shell. Enumerate the files and pass each as its own argument. Quote every substituted path
+for the opposite reason: a literal `<repo>` is shell redirection.
+`skill://ui-review/references/tools.md` is the authority on all three forms.
 
 ## One tool per job
 
@@ -93,7 +100,10 @@ first paint, and verify with `skill://ui-review` computed styles. No build tool 
 the absence of a flash or the correctness of cascade precedence; only driving the surface
 can.
 
-This package ships no cascade-tracing script, and a route naming a relative path such as
-`scripts/cdp.mjs` would run whatever the target repository keeps there. Do not add one.
-Reach cascade origin through `skill://ui-review`, which drives the page you already have
-open and has raw Puppeteer access.
+This package ships no cascade-origin route. `skill://ui-review` reads computed styles, which
+answers what a property resolved to but never which rule won or where that rule lives. So
+report an override you cannot attribute as unattributed, and name the property and selector
+you measured.
+
+Do NOT invent a route to close that gap. In particular, a command naming a relative path
+such as `scripts/cdp.mjs` would run whatever the target repository happens to keep there.

@@ -113,8 +113,10 @@ labels = ["design", "design:subprocess", "sub:iterate"]
 description = """
 Spawn design-critic (read-only) in the SAME parallel batch as reaudit, never
 after it. Critique only what round {{round}} changed on {{surface}}, using
-skill://ui-review as critique plus npx impeccable detect <target> --json for
-located findings. Brief it with the changed file paths, the route, the viewport
+skill://ui-review as critique. Add npx --yes impeccable detect "{{surface}}" --json as a
+COARSE corroborating signal only: its findings carry "line": 0, so they are not
+located evidence and never substitute for driving the surface. Corroborate each entry
+by driving {{surface}}. Brief it with the changed file paths, the route, the viewport
 widths, and the token paths: it shares no context with the lead.
 
 Verdict PASS, PARTIAL, or FAIL with named evidence. Do not edit files, and do not
