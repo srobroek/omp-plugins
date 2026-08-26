@@ -5,10 +5,9 @@
  * Codex JSON wiring that never fires under omp.
  *
  * At session start, report once when a beads repository is on the embedded backend.
- * Embedded resolves a PATH, so any harness that isolates work by copying the
- * checkout hands each agent its own database: measured on a 54-bead project, a plain
- * `cp -R` produced a fully writable copy whose creates and claims never reached the
- * original. Nothing errors, which is what makes it worth saying out loud.
+ * Embedded resolves a PATH, so a copied checkout or a clone gets its own database.
+ * A linked git worktree does not: bd finds the primary checkout's store unaided.
+ * The pin that works is `BEADS_DIR=<run>/.beads` set once; children inherit it.
  *
  * At session end, optionally stop a per-project server. Stopping is safe -- bd
  * flushes the working set first and the next read auto-starts a fresh process -- but
@@ -80,16 +79,18 @@ export async function readBackend(cwd: string): Promise<{ backend: Backend; trac
  * The advice for a backend, or `undefined` when there is nothing worth saying.
  *
  * Only `embedded` earns a notice. A repository with no `.beads` has no claims to
- * split, and both server layouts already survive a copy.
+ * split. Server layouts survive a copy, but they are not the first remedy.
  */
 export function backendNotice(backend: Backend, tracked: boolean): string | undefined {
 	if (!tracked || backend !== "embedded") return undefined;
 	return [
 		"beads is on the embedded backend, which resolves by walking up from the working directory.",
-		"Any harness that isolates work by copying the checkout gives each agent its own database:",
-		"claims stop excluding each other, and comments and closures never reach the run.",
-		"Fix with `bd init --server` on a new project, a backup-and-restore migration on this one,",
-		"or by aiming every call at the run's checkout with `bd -C <repo>`.",
+		"A copied checkout or a clone gets its own database: claims stop excluding each other, and comments and closures never reach the run.",
+		"A linked git worktree does not: bd resolves the primary checkout's database unaided.",
+		"Fix by exporting `BEADS_DIR=<run>/.beads` once wherever the run starts; every child process inherits it.",
+		"Unpinned, a read from a directory with no `.beads/` reports `No active beads workspace found`.",
+		"Do not pin per call: that pin has to be right on every call, and `BEADS_DIR` is set once.",
+		"Switching this project to `--server` is an export, a re-init and a restore, not a flag, and it buys a pid-file lifecycle nobody owns.",
 	].join(" ");
 }
 

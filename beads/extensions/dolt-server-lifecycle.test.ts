@@ -88,7 +88,7 @@ describe("readBackend", () => {
 
 describe("backendNotice", () => {
 	test("only embedded earns a notice", () => {
-		expect(backendNotice("embedded", true)).toContain("bd init --server");
+		expect(backendNotice("embedded", true)).toContain("BEADS_DIR");
 		expect(backendNotice("per-project", true)).toBeUndefined();
 		expect(backendNotice("shared", true)).toBeUndefined();
 	});
@@ -99,10 +99,14 @@ describe("backendNotice", () => {
 		expect(backendNotice("embedded", false)).toBeUndefined();
 	});
 
-	test("the notice names the consequence, not just the flag", () => {
+	test("the notice names the pin that works, not a per-call pin or a server first", () => {
 		const notice = backendNotice("embedded", true) ?? "";
 		expect(notice).toContain("claims stop excluding each other");
-		expect(notice).toContain("bd -C");
+		expect(notice).toContain("BEADS_DIR=<run>/.beads");
+		expect(notice).toContain("linked git worktree");
+		expect(notice).toContain("No active beads workspace found");
+		expect(notice).not.toContain("bd -C");
+		expect(notice).not.toMatch(/Fix with `bd init --server`/);
 	});
 });
 
