@@ -1,6 +1,6 @@
 {
   "name": "@srobroek/session",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Resume a prior agent session from its own transcript, newest turns first.",
   "private": true,
   "omp": {

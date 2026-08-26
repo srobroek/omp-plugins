@@ -1,0 +1,503 @@
+# design-system -- the largest design tier: establishing or rebuilding a design
+# system, not one surface inside an existing one.
+#
+# Install: copy this file into <repo>/.beads/formulas/ (or ~/.beads/formulas/).
+# Pour one molecule per system:
+#   bd mol pour design-system --var surface=<route> --var scope=<paths>
+#
+# 22 steps, 3 human gates. No `mol-` prefix: that prefix is what `bd mol bond`
+# resolves, and this tier is poured, not bonded.
+#
+# PRECONDITION: the skill:// and agent names here ship in the @srobroek/design
+# package. Install it first, or every step names a capability that does not exist.
+#
+# A superset of design-surface. It keeps the three interrogation gates, the
+# Component Driven staging, and the parallel critique-and-a11y pair, and adds the
+# five things a system needs that a surface does not: a token pipeline spine
+# (author layered DTCG, gate the schema, build the artifacts), a theme and density
+# matrix pass, a contrast gate over the generated pairs, a primitive inventory and
+# construction pass, and a documentation pass.
+#
+# THE TOKEN SPINE AND THE PRIMITIVE PASS RUN IN PARALLEL after the artifacts are
+# built: the theme matrix and the contrast gate do not block enumerating and
+# building primitives, and both halves rejoin at verify-components. That is real
+# parallelism, not padding.
+#
+# CANONICALITY, DECIDED: layered DTCG under tokens/**/*.json is the canonical
+# machine source. DESIGN.md is the authored-intent artifact and a linted
+# projection of it, never the compiler input, because design.md export --format
+# dtcg is lossy three ways -- it resolves references into values instead of
+# preserving the alias graph, serialises colours as sRGB components instead of the
+# authored colour space, and emits one flat file with no component, theme, or
+# density tiers.
+#
+# Every join names at least one unconditional step, so a step whose whole `needs`
+# list is filtered keeps its parent edge and becomes ready rather than stranded.
+formula = "design-system"
+description = "Establish or rebuild the design system for {{scope}}: ground and grill, token pipeline, theme and density matrix, contrast gate, primitives, staged build, verify, parallel critique and a11y, document, human approval"
+type = "workflow"
+
+[vars.surface]
+required = true
+description = "route or URL the agent drives during VERIFY"
+
+[vars.scope]
+required = true
+description = "paths the work may touch"
+
+[vars.platform]
+default = "web"
+description = "web uses browser; any other value uses computer for native desktop"
+
+# Accepted for interface parity with design-touch and design-surface, and it
+# conditions no step here. This tier has no optional DESIGN.md: document-system is
+# unconditional, because establishing a system without its authored-intent
+# artifact is not establishing a system. Pour design-surface when the DESIGN.md
+# write is the optional part.
+[vars.want_design_md]
+default = "false"
+description = "accepted for parity with the other two tiers; inert here because document-system is unconditional"
+
+[vars.system_absent]
+default = "false"
+description = "true when design-system-audit returned ABSENT or PARTIAL, so establishing the scales needs human approval"
+
+[vars.want_fix_round]
+default = "false"
+description = "true when RECONCILE leaves work that needs one more deliberate fix pass before the approval gate"
+
+[vars.themes]
+default = "light,dark"
+description = "comma-separated theme axis; every named theme must define the full raw token set"
+
+[vars.density]
+default = "comfortable"
+description = "comma-separated density axis; the first value is the default density"
+
+[[steps]]
+id = "ground-system"
+title = "GROUND what already exists, and the stack"
+type = "task"
+priority = 1
+labels = ["design", "phase:ground"]
+description = """
+Run skill://design-system-audit across {{scope}}. Inventory every token carrier,
+scale, primitive, and theme mechanism already present, plus the raw literals that
+bypass them. Record the registry on this bead. Verdict PRESENT, PARTIAL, or
+ABSENT; ABSENT or PARTIAL means pour with system_absent=true. Rebuilding is not
+starting over: anything already load-bearing constrains the new system.
+
+Detect the stack from evidence, never from a default: package.json dependencies,
+pubspec.yaml, a *.xcodeproj or Package.swift, composer.json, or app.json plus a
+react-native dependency. Record which marker was found. When nothing is
+detectable, ask at the INTENT gate rather than assuming. Platform is
+{{platform}}.
+"""
+
+[steps.metadata]
+skill_hints = "design-system-audit"
+
+[[steps]]
+id = "grill-intent"
+title = "INTENT gate: grill the user about the system"
+type = "task"
+needs = ["ground-system"]
+labels = ["design", "phase:gate"]
+description = """
+Interrogate the user before specifying anything. Number each question, give a
+recommended answer with it, ask the whole current frontier as one batch, then
+wait. A question that depends on another still-open question belongs to a later
+round.
+
+Establish, and record every answer on this bead: product type (SaaS,
+e-commerce, portfolio, dashboard, tool, productivity, or hybrid); target audience
+and usage context; style keywords; the stack GROUND detected, confirmed rather
+than assumed; the scope edges inside {{scope}}; the observable state that counts
+as done; and three 1-10 dials -- variance (centred and minimal through bold and
+asymmetric), motion (subtle micro-interactions through complex choreography), and
+density (spacious through dense dashboard). Confirm the theme axis {{themes}} and
+the density axis {{density}} are the ones the product actually needs.
+
+Never ask what a tool could answer. In an unattended run do not stall: record
+what a reviewer would have been asked and the recommended answers, then proceed.
+Only bd gate resolve closes the gate.
+"""
+
+[steps.gate]
+type = "human"
+timeout = "72h"
+
+[[steps]]
+id = "grill-system"
+title = "SYSTEM gate: approve the scales this system introduces"
+type = "task"
+needs = ["ground-system"]
+condition = "{{system_absent}}"
+labels = ["design", "phase:gate"]
+description = """
+GROUND returned ABSENT or PARTIAL, so this run will establish scales that did not
+exist. Ask the user to approve each axis before any token is authored: the colour
+ramp shape, the type scale and its ratio, the spacing scale and its base, the
+radius set, the elevation set, and whether a fluid type scale is wanted at all.
+Introducing a scale is a system decision the agent must not take alone.
+
+In an unattended run record what a reviewer would have been asked and the
+recommended answers, then proceed with the most conservative option, which is
+extending whatever GROUND already found rather than replacing it. Only bd gate
+resolve closes the gate.
+"""
+
+[steps.gate]
+type = "human"
+timeout = "72h"
+
+[[steps]]
+id = "specify-system"
+title = "SPECIFY the system contract"
+type = "task"
+needs = ["ground-system", "grill-intent", "grill-system"]
+labels = ["design", "phase:specify"]
+description = """
+Write the system contract from the INTENT answers, not from taste. Name the token
+tiers and their files: foundation.json, semantic.json, component/*.json,
+themes/*.json, density/*.json under tokens/ inside {{scope}}. Tier names are
+project convention, not DTCG semantics, so state them explicitly. Name the theme
+axis {{themes}} and the density axis {{density}} and how each maps to a selector.
+Name the primitive set the system must ship. Pin the source format to DTCG Format
+Module 2025.10.
+
+ground-system and grill-intent are named unconditionally so this step stays
+reachable when system_absent is false.
+"""
+
+[[steps]]
+id = "author-tokens"
+title = "author layered DTCG under tokens/"
+type = "task"
+needs = ["specify-system"]
+labels = ["design", "phase:build", "phase:tokens"]
+description = """
+Author the tiers the contract names, as DTCG JSON under tokens/**/*.json inside
+{{scope}}: foundation.json for raw values, semantic.json for intent-named
+aliases, component/*.json for component-scoped tokens, themes/*.json per theme in
+{{themes}}, density/*.json per value in {{density}}. Preserve the alias graph:
+semantic tiers reference foundation tokens rather than repeating their values.
+
+Author colours in the intended colour space and never pre-convert to sRGB, for
+example {"$type":"color","$value":{"colorSpace":"oklch","components":[0.62,0.16,250],"alpha":1}}.
+This layered source is canonical; DESIGN.md is a projection of it, authored later.
+"""
+
+[[steps]]
+id = "check-token-schema"
+title = "gate the token source against the DTCG schema"
+type = "task"
+needs = ["author-tokens"]
+labels = ["design", "phase:tokens"]
+description = """
+Run an independent schema gate over the authored source, separate from the build
+engine that consumes it:
+  npx --yes --package=@design-token-kit/cli dtokens check --scope schema 'tokens/**/*.json'
+It exits 2 on findings. Fix the source, never the checker. A build that succeeds
+on malformed source has only hidden the problem one layer down, which is why this
+gate is its own bead and runs before any artifact is generated.
+"""
+
+[[steps]]
+id = "build-token-artifacts"
+title = "build the token artifacts"
+type = "task"
+needs = ["check-token-schema"]
+labels = ["design", "phase:tokens"]
+description = """
+Run: npx --yes --package=@terrazzo/cli tz build
+Terrazzo is the single build authority. It emits CSS custom properties on :root,
+the per-theme and per-density selectors, and typed JS with a .d.ts whose
+keyof Tokens supplies the token-name union, so a bad token name fails typecheck.
+
+Never hand-edit a generated artifact, and never add a second builder or a second
+TypeScript generator: two engines means two artifact authorities. Add a project
+CI drift gate that byte-compares each generated artifact, because no build engine
+provides one.
+"""
+
+[[steps]]
+id = "matrix-theme-density"
+title = "complete the theme and density matrix"
+type = "task"
+needs = ["build-token-artifacts"]
+labels = ["design", "phase:tokens"]
+description = """
+Assert every theme in {{themes}} defines the full raw token set, and every value
+in {{density}} resolves for every theme. Terrazzo generates the permutation
+matrix but asserts no completeness requirement, so this is project policy and
+needs its own check. Assert the fallback selector too: a theme value missing at
+runtime must land on a defined default, not on an unset custom property.
+
+Runtime theming stays a browser concern. Apply data-theme alongside
+prefers-color-scheme, read a synchronous boot cache before first paint, and
+confirm the applied values with skill://ui-review computed styles: no build tool
+can prove the absence of a flash or the correct cascade precedence.
+"""
+
+[[steps]]
+id = "check-contrast"
+title = "contrast gate over the generated pairs"
+type = "task"
+needs = ["matrix-theme-density"]
+labels = ["design", "phase:tokens"]
+description = """
+Gate contrast over the generated foreground and background pairs, for every theme
+in {{themes}} crossed with every value in {{density}}. Thresholds: 4.5:1 for body
+text, 3:1 for UI boundaries and large text. Use colorjs.io
+foreground.contrast(background, "WCAG21"); it ships no bin, so this is a
+project-owned script.
+
+This gate exists because the DESIGN.md linter is not one: its contrast-ratio rule
+warns only below 4.5:1, only on component backgroundColor and textColor pairs,
+with no 3:1 UI-boundary rule and no theme-wide matrix. Record every failing pair
+with its measured ratio and its required ratio.
+"""
+
+[[steps]]
+id = "inventory-primitives"
+title = "inventory the primitives the system must ship"
+type = "task"
+needs = ["specify-system"]
+labels = ["design", "phase:build"]
+description = """
+Enumerate the primitive set from the system contract: which primitives already
+exist and are load-bearing, which exist but bypass the tokens, and which are
+missing entirely. Runs in parallel with the token spine, because enumerating
+primitives needs the contract, not the built artifacts.
+
+For each surviving primitive read its documented property set from
+manifests/components.json when a Storybook exists, or from the component source
+and its types otherwise. Record the inventory with a keep, migrate, or build
+disposition per primitive.
+"""
+
+[[steps]]
+id = "build-primitives"
+title = "BUILD stage 1: the primitives, in isolation"
+type = "task"
+needs = ["inventory-primitives", "build-token-artifacts"]
+labels = ["design", "phase:build"]
+description = """
+Component Driven stage one. Build or migrate each primitive from the inventory on
+its own, in isolation, starting small. Every primitive covers all nine states:
+default, hover, focus-visible, active, disabled, loading, empty, error,
+selected.
+
+Every colour comes from a token and every spacing value from the scale; the built
+artifacts exist by now, so a raw literal here is a mistake, not a shortcut.
+Verify each property against manifests/components.json or the component source
+before using it, including plausible-sounding ones such as shadow or size; a
+story name does not reflect a property name. Rename with lsp, never text
+substitution. Bond mol-design-component onto this step per primitive that needs
+its own bead.
+"""
+
+[[steps]]
+id = "build-composition"
+title = "BUILD stage 2: compose the primitives"
+type = "task"
+needs = ["build-primitives"]
+labels = ["design", "phase:build"]
+description = """
+Component Driven stage two. Compose the primitives into larger components,
+increasing complexity gradually. Compose only what stage one already covers; a
+composition built on an unfinished primitive relocates the failure upward, which
+is the cost this staging exists to avoid.
+"""
+
+[[steps]]
+id = "build-pages"
+title = "BUILD stage 3: assemble pages with mock data"
+type = "task"
+needs = ["build-composition"]
+labels = ["design", "phase:build"]
+description = """
+Component Driven stage three. Assemble {{surface}} from the composite components,
+using mock data to simulate the hard-to-reach states and the edge cases: empty
+collections, long strings, missing images, permission-denied, partial failure,
+and the loading and error states real data will not reproduce on demand. Mock
+data is what makes those states reachable at all, so do not defer them to
+integration. Page-first development is the named anti-pattern; this step is
+third for that reason.
+"""
+
+[[steps]]
+id = "integrate-data"
+title = "BUILD stage 4: integrate real data and logic"
+type = "task"
+needs = ["build-pages"]
+labels = ["design", "phase:build"]
+description = """
+Component Driven stage four. Connect data and business logic so {{surface}} meets
+the real backend. Every state the mock data reached must still be reachable with
+real data, or the state has been lost rather than integrated. Record which states
+are now driven by real responses and which remain mock-only.
+"""
+
+[[steps]]
+id = "verify-components"
+title = "VERIFY the primitives at component level"
+type = "task"
+needs = ["build-primitives", "check-contrast"]
+labels = ["design", "phase:verify"]
+description = """
+Run skill://ui-review against each primitive in isolation, before anything
+page-level is verified, because a component-level failure is smaller and more
+precise to locate. Drive the real component: browser when {{platform}} is web,
+computer otherwise. Where a Storybook exists, render the isolated story at
+iframe.html?id=<storyId>; otherwise use a scratch harness page.
+
+Evidence order is fixed: ARIA snapshot first, computed styles second, screenshot
+last. Widths 1440, 768, 375. Assert all nine states per primitive, and assert the
+computed values resolve to the generated tokens for every theme in {{themes}}.
+This is where the token spine and the primitive pass rejoin.
+"""
+
+[steps.metadata]
+skill_hints = "ui-review"
+
+[[steps]]
+id = "verify-surface"
+title = "VERIFY {{surface}} at page level"
+type = "task"
+needs = ["integrate-data", "verify-components"]
+labels = ["design", "phase:verify"]
+description = """
+Run skill://ui-review against {{surface}} only after verify-components passed.
+Evidence order is fixed: ARIA snapshot first, computed styles second, screenshot
+last. Widths 1440, 768, 375. Walk the compositions, then the page itself. Every
+claim carries a named citation; an unwitnessed state is not verified. A reflow or
+target-size problem bonds mol-design-responsive onto this step.
+"""
+
+[steps.metadata]
+skill_hints = "ui-review"
+
+[[steps]]
+id = "critique-visual"
+title = "CRITIQUE visual and UX"
+type = "task"
+needs = ["verify-surface"]
+labels = ["design", "phase:critique"]
+description = """
+Spawn design-critic (read-only) in the SAME parallel batch as
+audit-accessibility, never after it. Run skill://ui-review as critique on
+{{surface}} and on the primitive set, plus the deterministic detector pass:
+npx impeccable detect <target> --json for located findings. Verdict PASS,
+PARTIAL, or FAIL with named evidence. Do not edit files, and do not question the
+user: the lead owns the conversation. A self-review by whoever built the system
+shares its blind spots.
+"""
+
+[steps.metadata]
+skill_hints = "ui-review"
+execution_agent_type = "design-critic"
+execution_mode = "subagent"
+
+[[steps]]
+id = "audit-accessibility"
+title = "AUDIT WCAG 2.2 AA"
+type = "task"
+needs = ["verify-surface"]
+labels = ["design", "phase:critique"]
+description = """
+Spawn a11y-auditor (read-only) in the SAME parallel batch as critique-visual,
+never after it. Run skill://accessibility-audit on {{surface}} and on the
+primitive set. Verdict PASS, PARTIAL, or FAIL, and every finding carries its WCAG
+2.2 criterion number, the measured value, the required value, and the selector.
+Do not edit files, and do not question the user. A MAJOR verdict bonds
+mol-design-a11y onto this step.
+"""
+
+[steps.metadata]
+skill_hints = "accessibility-audit"
+execution_agent_type = "a11y-auditor"
+execution_mode = "subagent"
+
+[[steps]]
+id = "reconcile-findings"
+title = "RECONCILE critique and a11y findings"
+type = "task"
+needs = ["critique-visual", "audit-accessibility"]
+labels = ["design", "phase:reconcile"]
+description = """
+Reconcile both verdicts yourself. Fix every FAIL and every agreed PARTIAL inside
+{{scope}}. A finding that traces to a token rather than a component is fixed in
+the token source and rebuilt, never patched in generated CSS. Re-verify only the
+changed assertion, never the whole walk, and leave a citation per re-run. Do not
+accept a child verdict you cannot reproduce: report it as unreproduced rather
+than dropping it silently. Findings needing their own triage loop bond
+mol-design-fix-findings onto this step.
+"""
+
+[[steps]]
+id = "fix-round"
+title = "one more fix pass on the system"
+type = "task"
+needs = ["reconcile-findings"]
+condition = "{{want_fix_round}}"
+labels = ["design", "phase:reconcile"]
+description = """
+A deliberate second pass over what RECONCILE left, when that is cheaper than
+another molecule. Fix inside {{scope}} only, re-verify only the changed
+assertion, and record what changed since the previous round along with the round
+number. Anything still unresolved after this pass is an intent problem, not a fix
+problem: bond mol-design-iterate rather than adding a third pass here.
+"""
+
+[[steps]]
+id = "document-system"
+title = "document the system and write DESIGN.md"
+type = "task"
+needs = ["reconcile-findings", "fix-round"]
+labels = ["design", "phase:document"]
+description = """
+Run skill://design-md. Write repo-root DESIGN.md as the authored-intent artifact:
+frontmatter tokens (colors, typography, spacing, radii, elevation, optional
+motion) then Scope and Intent through Known Gaps. Every {group.token} must
+resolve. Unknowns go under Known Gaps. TODO or TO_FILL is invalid. Token values
+must appear literally, because static analysis cannot read a file that maps over
+a token object.
+
+Also record: the tier files and what each owns, the theme axis {{themes}} and the
+density axis {{density}} with their selectors, the primitive inventory with its
+dispositions, and which artifacts are generated and by what command. State that
+tokens/**/*.json is canonical and DESIGN.md is a projection. Gate the result
+with: npx @google/design.md lint DESIGN.md
+Review a change to it with: npx @google/design.md diff before after
+
+reconcile-findings is named unconditionally so this step stays reachable when
+want_fix_round is false.
+"""
+
+[steps.metadata]
+skill_hints = "design-md"
+
+[[steps]]
+id = "system-approval"
+title = "ACCEPT gate: human approval of the system"
+type = "task"
+needs = ["document-system"]
+labels = ["design", "phase:gate"]
+description = """
+Present the whole chain for approval: the schema gate result, the theme and
+density matrix, the contrast gate with every measured ratio, the primitive
+inventory, the component-level and page-level evidence, both child verdicts, and
+DESIGN.md. Then grill the user: is the system accepted as the project's
+authority, and is another iteration wanted. Number each question and give a
+recommended answer with it.
+
+In an unattended run do not stall: record on this bead what a reviewer would have
+been asked and the recommended answers, then proceed. Only bd gate resolve closes
+the gate. Another round bonds mol-design-iterate onto this step.
+"""
+
+[steps.gate]
+type = "human"
+timeout = "72h"

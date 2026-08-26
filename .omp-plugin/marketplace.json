@@ -37,6 +37,13 @@
       "category": "productivity"
     },
     {
+      "name": "browser-tools",
+      "description": "Cross-engine browser coverage and Chrome performance tracing over MCP.",
+      "source": "./browser-tools",
+      "version": "0.1.0",
+      "category": "development"
+    },
+    {
       "name": "build",
       "description": "Implementation agents: builder, high-effort builder, operator, external-repo worker.",
       "source": "./build",
@@ -70,6 +77,20 @@
       "source": "./dep-update",
       "version": "0.5.1",
       "category": "development"
+    },
+    {
+      "name": "design",
+      "description": "UI and UX design: system audit, DESIGN.md, browser verification, accessibility, tokens, and Component Driven build.",
+      "source": "./design",
+      "version": "0.1.0",
+      "category": "development"
+    },
+    {
+      "name": "diagram",
+      "description": "Interactive diagramming and architecture-sketching canvas over MCP.",
+      "source": "./diagram",
+      "version": "0.1.0",
+      "category": "productivity"
     },
     {
       "name": "eli5",
@@ -175,6 +196,140 @@
       "source": "./whats-new",
       "version": "0.3.0",
       "category": "productivity"
+    },
+    {
+      "name": "impeccable",
+      "description": "End-to-end design workflow and deterministic anti-slop detection, with 59 executable rules over rendered UI.",
+      "source": {
+        "source": "git-subdir",
+        "url": "https://github.com/pbakaus/impeccable.git",
+        "path": "plugin",
+        "ref": "main"
+      },
+      "version": "0.1.0",
+      "category": "development",
+      "license": "Apache-2.0"
+    },
+    {
+      "name": "styleseed",
+      "description": "Design tokens, motion tokens, and a deterministic artifact-contract scorer with file-and-line findings.",
+      "source": {
+        "source": "github",
+        "repo": "bitjaru/styleseed",
+        "ref": "main"
+      },
+      "version": "0.1.0",
+      "category": "development",
+      "license": "MIT"
+    },
+    {
+      "name": "ui-skills",
+      "description": "Authoring a DESIGN.md artifact, plus baseline UI and metadata fixing skills.",
+      "source": {
+        "source": "github",
+        "repo": "ibelick/ui-skills",
+        "ref": "main"
+      },
+      "version": "0.1.0",
+      "category": "development",
+      "license": "MIT"
+    },
+    {
+      "name": "platform-design-skills",
+      "description": "Vendor design guidelines for iOS, iPadOS, macOS, watchOS, visionOS, tvOS, Android, and Web.",
+      "source": {
+        "source": "github",
+        "repo": "ehmo/platform-design-skills",
+        "ref": "main"
+      },
+      "version": "0.1.0",
+      "category": "development",
+      "license": "MIT"
+    },
+    {
+      "name": "web-quality-skills",
+      "description": "Web accessibility auditing, plus performance, SEO, and best-practice skills.",
+      "source": {
+        "source": "github",
+        "repo": "addyosmani/web-quality-skills",
+        "ref": "main"
+      },
+      "version": "0.1.0",
+      "category": "development",
+      "license": "MIT"
+    },
+    {
+      "name": "ui-ux-pro-max",
+      "description": "Product-wide visual direction and design-system exploration with a local catalog search.",
+      "source": {
+        "source": "github",
+        "repo": "nextlevelbuilder/ui-ux-pro-max-skill",
+        "ref": "main"
+      },
+      "version": "0.1.0",
+      "category": "development",
+      "license": "MIT"
+    },
+    {
+      "name": "modern-web-guidance",
+      "description": "Current web platform practice and baseline support, retrieved rather than recalled.",
+      "source": {
+        "source": "github",
+        "repo": "GoogleChrome/modern-web-guidance",
+        "ref": "main"
+      },
+      "version": "0.1.0",
+      "category": "development",
+      "license": "Apache-2.0"
+    },
+    {
+      "name": "effective-html",
+      "description": "Self-contained HTML wireframes, clickable prototypes, diagrams, and plan artifacts.",
+      "source": {
+        "source": "github",
+        "repo": "plannotator/effective-html",
+        "ref": "main"
+      },
+      "version": "0.1.0",
+      "category": "development",
+      "license": "MIT"
+    },
+    {
+      "name": "frontend-slides",
+      "description": "Zero-dependency fixed 16:9 HTML presentation decks with PDF and PPT conversion.",
+      "source": {
+        "source": "git-subdir",
+        "url": "https://github.com/zarazhangrui/frontend-slides.git",
+        "path": "plugins/frontend-slides",
+        "ref": "main"
+      },
+      "version": "0.1.0",
+      "category": "productivity",
+      "license": "MIT"
+    },
+    {
+      "name": "web-asset-generator",
+      "description": "Generates and validates favicon sets, app icons, and social images, and wires framework metadata.",
+      "source": {
+        "source": "github",
+        "repo": "alonw0/web-asset-generator",
+        "ref": "main"
+      },
+      "version": "0.1.0",
+      "category": "development",
+      "license": "MIT"
+    },
+    {
+      "name": "superdesign",
+      "description": "Hosted design concept exploration. Requires an authenticated account and consumes credits.",
+      "source": {
+        "source": "github",
+        "repo": "superdesigndev/superdesign-skill",
+        "ref": "main"
+      },
+      "version": "0.1.0",
+      "category": "development",
+      "license": "MIT"
     }
   ]
 }

@@ -1,0 +1,131 @@
+# mol-design-motion -- a motion and reduced-motion pass, bonded onto the step whose
+# review found the problem.
+#
+# Bond it onto that verify or critique step, so the first child is ready
+# immediately:
+#   bd mol bond mol-design-motion <target-id> --var surface=<route> --var node=<node-id>
+#
+# 4 steps, no human gate. The `mol-` prefix in the filename is load-bearing: bond
+# resolves a formula name only when it is prefixed, and formulas resolve by
+# filename stem.
+#
+# PRECONDITION: the skill:// names here ship in the @srobroek/design package. The
+# scoring step needs npx and a Chromium install on first run.
+#
+# THE THRESHOLD IS FIXED AT 200ms AND EVERY TRANSFORM ANIMATION. A
+# prefers-reduced-motion branch is required for every transition over 200ms and for
+# every transform animation regardless of duration, because a short transform still
+# moves content across the viewport and that is what triggers vestibular symptoms.
+# Duration alone is the wrong test, which is why both conditions are named.
+#
+# Bond joins root-to-root as a sibling subtree and cannot rewire an inherited
+# step's `needs`, so the bonding side owns the join edge and this file declares no
+# `needs` pointing outside itself, which is also what lets it cook standalone.
+formula = "mol-design-motion"
+description = "Motion and reduced-motion pass on {{surface}} for node {{node}}: inventory every transition and animation, branch every one over 200ms and every transform, verify both media states, score deterministically"
+type = "workflow"
+
+[vars.surface]
+required = true
+description = "route or URL the agent drives in both motion preference states"
+
+[vars.node]
+required = true
+description = "id of the design node bead whose review found the motion problem"
+
+[[steps]]
+id = "inventory-motion"
+title = "INVENTORY every transition and animation on {{surface}}"
+type = "task"
+labels = ["design", "design:subprocess", "sub:motion"]
+description = """
+Enumerate every piece of motion on {{surface}}: CSS transitions, CSS animations,
+scroll-driven and view-transition effects, and anything a JS animation library
+drives. Use skill://ui-review computed styles for the measurement, because a
+screenshot cannot report a duration, and read the source for library-driven motion
+that computed styles do not expose.
+
+Record per entry: the selector, the animated property, the measured duration in ms,
+the easing, whether it repeats, and whether the animated property is a transform.
+Then mark each entry REQUIRES BRANCH or EXEMPT against the two conditions:
+duration over 200ms, or the property is a transform at any duration. Both
+conditions are independent, so a 120ms transform is REQUIRES BRANCH.
+
+Also record whether the duration is a raw ms literal or a motion token, because a
+literal here is a token-system finding as well as a motion one.
+"""
+
+[steps.metadata]
+skill_hints = "ui-review, motion-design"
+
+[[steps]]
+id = "branch-reduced-motion"
+title = "BRANCH every REQUIRES BRANCH entry on prefers-reduced-motion"
+type = "task"
+needs = ["inventory-motion"]
+labels = ["design", "design:subprocess", "sub:motion"]
+description = """
+Run skill://motion-design. Add a prefers-reduced-motion branch for every entry
+INVENTORY marked REQUIRES BRANCH, inside the scope node {{node}} declared. The
+reduced branch removes the movement and keeps the meaning: cross-fade or
+instant-change instead of translate, scale, or parallax, and keep any state change
+the motion was communicating.
+
+Never delete motion outright to satisfy the branch, and never reduce the default
+path instead of branching it: both change the report without giving the
+non-reduced user the designed experience. Never leave a repeating animation
+unbranched. Every duration comes from a motion token, not a ms literal; a literal
+INVENTORY found is migrated here or reported as a token gap.
+
+Record per entry: the file changed, the reduced behaviour, and the token the
+duration now reads from.
+"""
+
+[steps.metadata]
+skill_hints = "motion-design"
+
+[[steps]]
+id = "verify-motion"
+title = "VERIFY {{surface}} in both motion preference states"
+type = "task"
+needs = ["branch-reduced-motion"]
+labels = ["design", "design:subprocess", "sub:motion"]
+description = """
+Run skill://ui-review against {{surface}} twice: once with prefers-reduced-motion
+no-preference and once with reduce. Emulating the media feature is the whole test,
+so assert which state each measurement was taken in; a single-state run cannot
+detect a missing branch.
+
+Evidence order is fixed: ARIA snapshot first, computed styles second, screenshot
+last. Per branched entry assert the reduced state removes the movement, and assert
+the state change the motion communicated still happens. Per EXEMPT entry re-measure
+the duration and confirm it is still at or under 200ms and still not a transform:
+an exemption is a measurement, not a label. Confirm no branch changed the
+non-reduced path.
+"""
+
+[steps.metadata]
+skill_hints = "ui-review"
+
+[[steps]]
+id = "score-motion"
+title = "SCORE the motion pass deterministically"
+type = "task"
+needs = ["verify-motion"]
+labels = ["design", "design:subprocess", "sub:motion"]
+description = """
+Add a deterministic pass over the agent's own reading, because a judgement about
+motion quality is exactly the kind of claim that needs an independent located
+finding:
+  npx playwright install chromium
+  npx motionlint audit <url> --json audit.json --ci
+It needs the Chromium install on first run and a reachable URL, so where
+{{surface}} is not reachable as a URL, record the step as not run rather than
+reporting a score it did not produce.
+
+Report the entry table with its final state: selector, property, duration,
+transform yes or no, branched or EXEMPT with the reason, and the token the duration
+reads from. Then report the motionlint findings against it, and reconcile any
+disagreement rather than picking the friendlier number. Surviving failures bond
+another mol-design-motion rather than reopening this one.
+"""

@@ -1,0 +1,157 @@
+# mol-design-tokens -- establish or migrate a token system, bonded off an ABSENT or
+# PARTIAL verdict from skill://design-system-audit.
+#
+# Bond it onto the step that returned that verdict, normally a GROUND or SYSTEM
+# gate step, so the first child is ready immediately:
+#   bd mol bond mol-design-tokens <target-id> --var surface=<route> --var node=<node-id>
+#
+# 5 steps, 1 human gate. The `mol-` prefix in the filename is load-bearing: bond
+# resolves a formula name only when it is prefixed, and formulas resolve by
+# filename stem.
+#
+# PRECONDITION: the skill:// names here ship in the @srobroek/design package. The
+# CLI steps need npx and network access on first run.
+#
+# THE HUMAN GATE IS NOT OPTIONAL HERE. Introducing a scale sets the vocabulary
+# every later component is forced to speak, and the agent cannot un-introduce one
+# later without a migration. That makes it a system decision the agent must not
+# take alone, which is why approve-scale sits between the inventory and the first
+# authored token rather than after the build.
+#
+# WHEN TO POUR design-system INSTEAD: this molecule establishes tokens for work
+# already under way. A project whose whole task is the system wants the
+# design-system tier, which carries the theme and density matrix, the primitive
+# inventory, and the documentation pass this molecule deliberately omits.
+#
+# Bond joins root-to-root as a sibling subtree and cannot rewire an inherited
+# step's `needs`, so the bonding side owns the join edge and this file declares no
+# `needs` pointing outside itself, which is also what lets it cook standalone.
+formula = "mol-design-tokens"
+description = "Establish or migrate the token system for node {{node}}: inventory the gap, get the scales approved, author layered DTCG, gate and build, migrate the literals"
+type = "workflow"
+
+[vars.surface]
+required = true
+description = "route or URL used to confirm the migrated tokens resolve at runtime"
+
+[vars.node]
+required = true
+description = "id of the design node bead whose audit returned ABSENT or PARTIAL"
+
+[[steps]]
+id = "inventory-token-gap"
+title = "INVENTORY what exists and what is missing"
+type = "task"
+labels = ["design", "design:subprocess", "sub:tokens"]
+description = """
+Read the ABSENT or PARTIAL verdict on node {{node}} and turn it into a gap list.
+Run skill://design-system-audit again if the verdict predates the current tree.
+Record three lists: token carriers that already exist and are load-bearing;
+carriers that exist but are bypassed by raw literals; and axes with nothing at all
+behind them.
+
+Scan for the literals that will need migrating: raw hex and other colour
+literals, raw millisecond durations, and hardcoded spacing values, each with its
+file and line. PARTIAL is the common case and it constrains everything downstream:
+an existing scale is extended, never replaced, unless the user says otherwise at
+the gate.
+"""
+
+[steps.metadata]
+skill_hints = "design-system-audit"
+
+[[steps]]
+id = "approve-scale"
+title = "SYSTEM gate: approve the scales before any token is authored"
+type = "task"
+needs = ["inventory-token-gap"]
+labels = ["design", "design:subprocess", "sub:tokens", "phase:gate"]
+description = """
+Present the gap list and ask the user to approve each axis this molecule would
+introduce: the colour ramp shape, the type scale and its ratio, the spacing scale
+and its base, the radius set, the elevation set, the motion durations, and whether
+a fluid type scale is wanted at all. Number each question and give a recommended
+answer with it, then wait.
+
+State plainly which existing conventions would be extended and which would be
+replaced, because replacement is the expensive answer and the user is the one who
+gets to choose it. Introducing a scale is a system decision the agent must not
+take alone: that is why this gate precedes authoring rather than following the
+build.
+
+In an unattended run do not stall: record what a reviewer would have been asked
+and the recommended answers, then proceed with the most conservative option, which
+is extending what INVENTORY found. Only bd gate resolve closes the gate.
+"""
+
+[steps.gate]
+type = "human"
+timeout = "72h"
+
+[[steps]]
+id = "author-token-tiers"
+title = "AUTHOR the layered DTCG source"
+type = "task"
+needs = ["inventory-token-gap", "approve-scale"]
+labels = ["design", "design:subprocess", "sub:tokens"]
+description = """
+Author only the approved axes, as DTCG JSON under tokens/**/*.json: foundation
+tier for raw values, semantic tier for intent-named aliases, component tier for
+component-scoped tokens, plus a file per theme and per density the project needs.
+Preserve the alias graph: semantic tokens reference foundation tokens rather than
+repeating their values.
+
+Author colours in the intended colour space and never pre-convert to sRGB, for
+example {"$type":"color","$value":{"colorSpace":"oklch","components":[0.62,0.16,250],"alpha":1}}.
+Pin the source format to DTCG Format Module 2025.10, which is a Final Community
+Group Report and W3C Candidate Recommendation: it is stable enough to build on and
+it is not a W3C Standard, so do not call it one. This layered source is canonical.
+
+inventory-token-gap is named unconditionally alongside the gate so this step keeps
+its parent edge.
+"""
+
+[[steps]]
+id = "build-and-check-tokens"
+title = "GATE the schema, build the artifacts, gate the contrast"
+type = "task"
+needs = ["author-token-tiers"]
+labels = ["design", "design:subprocess", "sub:tokens"]
+description = """
+Three commands in this order, each a separate gate on a separate thing:
+  npx --yes --package=@design-token-kit/cli dtokens check --scope schema 'tokens/**/*.json'
+  npx --yes --package=@terrazzo/cli tz build
+  a project contrast script over the generated pairs
+The schema check exits 2 on findings; fix the source, never the checker. Terrazzo
+is the single build authority and emits the CSS custom properties, the theme and
+density selectors, and typed JS with a .d.ts whose keyof Tokens gives the
+token-name union. Never add a second builder: two engines means two artifact
+authorities.
+
+Contrast thresholds are 4.5:1 for body text and 3:1 for UI boundaries and large
+text, measured with colorjs.io foreground.contrast(background, "WCAG21") over
+every generated pair in every theme. Record each measured ratio against its
+required ratio. Never hand-edit a generated artifact.
+"""
+
+[[steps]]
+id = "adopt-tokens"
+title = "MIGRATE the literals in scope onto the tokens"
+type = "task"
+needs = ["build-and-check-tokens"]
+labels = ["design", "design:subprocess", "sub:tokens"]
+description = """
+Replace the literals INVENTORY found with token references, inside the scope node
+{{node}} declared and no wider. Rename with lsp, never text substitution. A
+literal with no token to migrate onto is reported, not invented: that is a new
+axis and it needs the gate.
+
+Confirm the result on the real surface, because generated CSS can be correct and
+still not apply: run skill://ui-review against {{surface}} and assert with
+computed styles that every var(--token) resolves and that the theme selector wins
+the cascade. Report the migrated count, the surviving literal count with file and
+line, and every unresolved custom property.
+"""
+
+[steps.metadata]
+skill_hints = "ui-review"

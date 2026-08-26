@@ -1,0 +1,7 @@
+{
+  "name": "@srobroek/design",
+  "version": "0.1.0",
+  "description": "UI and UX design: system audit, DESIGN.md, browser verification, accessibility, tokens, and Component Driven build.",
+  "private": true,
+  "omp": {}
+}

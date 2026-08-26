@@ -1,6 +1,6 @@
 {
   "name": "@srobroek/speckit",
-  "version": "0.5.1",
+  "version": "0.5.4",
   "description": "SpecKit workflow: spec-driven setup, bugfix flow, tasks.md protection, and PR title discipline.",
   "private": true,
   "omp": {

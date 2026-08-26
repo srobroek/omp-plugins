@@ -1,0 +1,139 @@
+{
+  "$comment": "Third-party plugins advertised in the srobroek-omp catalog. scripts/build-catalog.py appends these after the local packages. Every source object below was verified against the upstream repository tree: a `github` source means the repository ROOT is the plugin root, and `git-subdir` means the plugin root is a subdirectory. `ref` is pinned to the default branch and `sha` is deliberately unset, because a sha forces a full clone and no drift mechanism exists in the install path. A catalog entry is an advertisement, not a dependency: marketplace install runs no package manager, so each of these is a separate explicit install.",
+  "plugins": [
+    {
+      "name": "impeccable",
+      "description": "End-to-end design workflow and deterministic anti-slop detection, with 59 executable rules over rendered UI.",
+      "version": "0.1.0",
+      "category": "development",
+      "license": "Apache-2.0",
+      "source": {
+        "source": "git-subdir",
+        "url": "https://github.com/pbakaus/impeccable.git",
+        "path": "plugin",
+        "ref": "main"
+      }
+    },
+    {
+      "name": "styleseed",
+      "description": "Design tokens, motion tokens, and a deterministic artifact-contract scorer with file-and-line findings.",
+      "version": "0.1.0",
+      "category": "development",
+      "license": "MIT",
+      "source": {
+        "source": "github",
+        "repo": "bitjaru/styleseed",
+        "ref": "main"
+      }
+    },
+    {
+      "name": "ui-skills",
+      "description": "Authoring a DESIGN.md artifact, plus baseline UI and metadata fixing skills.",
+      "version": "0.1.0",
+      "category": "development",
+      "license": "MIT",
+      "source": {
+        "source": "github",
+        "repo": "ibelick/ui-skills",
+        "ref": "main"
+      }
+    },
+    {
+      "name": "platform-design-skills",
+      "description": "Vendor design guidelines for iOS, iPadOS, macOS, watchOS, visionOS, tvOS, Android, and Web.",
+      "version": "0.1.0",
+      "category": "development",
+      "license": "MIT",
+      "source": {
+        "source": "github",
+        "repo": "ehmo/platform-design-skills",
+        "ref": "main"
+      }
+    },
+    {
+      "name": "web-quality-skills",
+      "description": "Web accessibility auditing, plus performance, SEO, and best-practice skills.",
+      "version": "0.1.0",
+      "category": "development",
+      "license": "MIT",
+      "source": {
+        "source": "github",
+        "repo": "addyosmani/web-quality-skills",
+        "ref": "main"
+      }
+    },
+    {
+      "name": "ui-ux-pro-max",
+      "description": "Product-wide visual direction and design-system exploration with a local catalog search.",
+      "version": "0.1.0",
+      "category": "development",
+      "license": "MIT",
+      "source": {
+        "source": "github",
+        "repo": "nextlevelbuilder/ui-ux-pro-max-skill",
+        "ref": "main"
+      }
+    },
+    {
+      "name": "modern-web-guidance",
+      "description": "Current web platform practice and baseline support, retrieved rather than recalled.",
+      "version": "0.1.0",
+      "category": "development",
+      "license": "Apache-2.0",
+      "source": {
+        "source": "github",
+        "repo": "GoogleChrome/modern-web-guidance",
+        "ref": "main"
+      }
+    },
+    {
+      "name": "effective-html",
+      "description": "Self-contained HTML wireframes, clickable prototypes, diagrams, and plan artifacts.",
+      "version": "0.1.0",
+      "category": "development",
+      "license": "MIT",
+      "source": {
+        "source": "github",
+        "repo": "plannotator/effective-html",
+        "ref": "main"
+      }
+    },
+    {
+      "name": "frontend-slides",
+      "description": "Zero-dependency fixed 16:9 HTML presentation decks with PDF and PPT conversion.",
+      "version": "0.1.0",
+      "category": "productivity",
+      "license": "MIT",
+      "source": {
+        "source": "git-subdir",
+        "url": "https://github.com/zarazhangrui/frontend-slides.git",
+        "path": "plugins/frontend-slides",
+        "ref": "main"
+      }
+    },
+    {
+      "name": "web-asset-generator",
+      "description": "Generates and validates favicon sets, app icons, and social images, and wires framework metadata.",
+      "version": "0.1.0",
+      "category": "development",
+      "license": "MIT",
+      "source": {
+        "source": "github",
+        "repo": "alonw0/web-asset-generator",
+        "ref": "main"
+      }
+    },
+    {
+      "name": "superdesign",
+      "description": "Hosted design concept exploration. Requires an authenticated account and consumes credits.",
+      "version": "0.1.0",
+      "category": "development",
+      "license": "MIT",
+      "source": {
+        "source": "github",
+        "repo": "superdesigndev/superdesign-skill",
+        "ref": "main"
+      }
+    }
+  ]
+}

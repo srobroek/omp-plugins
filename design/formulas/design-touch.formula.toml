@@ -1,0 +1,176 @@
+# design-touch -- the smallest design tier: a scoped change inside a design system
+# that already exists.
+#
+# Install: copy this file into <repo>/.beads/formulas/ (or ~/.beads/formulas/).
+# Pour one molecule per scoped change:
+#   bd mol pour design-touch --var surface=<route> --var scope=<paths>
+#
+# 8 steps, 1 human gate. No `mol-` prefix: that prefix is what `bd mol bond`
+# resolves, and this tier is poured, not bonded.
+#
+# PRECONDITION: the skill:// and agent names here ship in the @srobroek/design
+# package. Install it first, or every step names a capability that does not exist.
+#
+# WHY NO COMPONENT DRIVEN STAGING: staging exists to make a failure smaller to
+# locate across a component/composition/page stack. A single-component touch has
+# no stack, so the staging steps would be three empty beads. Pour design-surface
+# instead the moment the change spans more than one primitive.
+#
+# Every join names at least one unconditional step, so a step whose whole `needs`
+# list is filtered keeps its parent edge and becomes ready rather than stranded:
+# `verify-surface` names `build-states` alongside the conditional
+# `update-design-md` for exactly that reason.
+formula = "design-touch"
+description = "Scoped design touch on {{surface}} inside {{scope}}: ground, build every state, verify, one combined review, reconcile, human approval"
+type = "workflow"
+
+[vars.surface]
+required = true
+description = "route or URL the agent drives during VERIFY"
+
+[vars.scope]
+required = true
+description = "paths the work may touch"
+
+[vars.platform]
+default = "web"
+description = "web uses browser; any other value uses computer for native desktop"
+
+[vars.want_design_md]
+default = "false"
+description = "true when this touch introduces a token or scale value that repo-root DESIGN.md must record"
+
+[[steps]]
+id = "ground-system"
+title = "GROUND the system this touch sits in"
+type = "task"
+priority = 1
+labels = ["design", "phase:ground"]
+description = """
+Run skill://design-system-audit on {{scope}}. Read the token files, the scales,
+and the 5-10 existing components nearest {{surface}}. Record the discovered
+registry on this bead so later steps cite it instead of guessing. Verdict
+PRESENT, PARTIAL, or ABSENT. Never invent a token a search could find. Platform
+is {{platform}}. ABSENT or PARTIAL means this tier is the wrong one: bond
+mol-design-tokens, or pour design-system, rather than establishing a scale here.
+"""
+
+[steps.metadata]
+skill_hints = "design-system-audit"
+
+[[steps]]
+id = "specify-touch"
+title = "SPECIFY the touch to {{surface}}"
+type = "task"
+needs = ["ground-system"]
+labels = ["design", "phase:specify"]
+description = """
+Name the change to {{surface}} and the exact tokens and primitives it consumes,
+each cited from the GROUND registry. State the observable condition that counts
+as done. State the scope edge: what inside {{scope}} this touch may not alter.
+Verify every component property against manifests/components.json or the
+component source before naming it; a property that sounds plausible is not a
+property.
+"""
+
+[[steps]]
+id = "build-states"
+title = "BUILD every state for {{surface}}"
+type = "task"
+needs = ["specify-touch"]
+labels = ["design", "phase:build"]
+description = """
+Implement the touch inside {{scope}}. Cover all nine states: default, hover,
+focus-visible, active, disabled, loading, empty, error, selected. Every colour
+comes from a token and every spacing value from the scale. Rename tokens and
+components with lsp, never text substitution. Use skill://ui-microcopy for copy,
+skill://motion-design for motion, skill://platform-conformance for {{platform}}
+conventions.
+"""
+
+[[steps]]
+id = "update-design-md"
+title = "record the touched tokens in DESIGN.md"
+type = "task"
+needs = ["build-states"]
+condition = "{{want_design_md}}"
+labels = ["design", "phase:build"]
+description = """
+Run skill://design-md. Add or update only the token entries this touch changed;
+do not rewrite unrelated sections. Every {group.token} reference must resolve.
+Unknowns belong under Known Gaps. TODO or TO_FILL is invalid. Gate the result
+with: npx @google/design.md lint DESIGN.md
+"""
+
+[steps.metadata]
+skill_hints = "design-md"
+
+[[steps]]
+id = "verify-surface"
+title = "VERIFY {{surface}} on real viewports"
+type = "task"
+needs = ["build-states", "update-design-md"]
+labels = ["design", "phase:verify"]
+description = """
+Run skill://ui-review against {{surface}}. Drive the real surface: browser when
+{{platform}} is web, computer otherwise. Evidence order is fixed: ARIA snapshot
+first, computed styles second, screenshot last. Widths 1440, 768, 375. Every
+state from BUILD gets a named citation; an unwitnessed state is not verified.
+build-states is named unconditionally so this step stays reachable when
+want_design_md is false.
+"""
+
+[steps.metadata]
+skill_hints = "ui-review"
+
+[[steps]]
+id = "review-combined"
+title = "REVIEW visual, UX, and WCAG 2.2 AA together"
+type = "task"
+needs = ["verify-surface"]
+labels = ["design", "phase:critique"]
+description = """
+One read-only review pass over {{surface}}, because a single-component touch does
+not earn two parallel reviewers. Run skill://ui-review as critique, then
+skill://accessibility-audit for WCAG 2.2 AA. Emit two separate verdicts, each
+PASS, PARTIAL, or FAIL with named ARIA or computed-style evidence, so a visual
+PASS never launders an accessibility FAIL. Do not edit files here. A MAJOR
+accessibility finding bonds mol-design-a11y onto this step.
+"""
+
+[steps.metadata]
+skill_hints = "ui-review, accessibility-audit"
+execution_mode = "subagent"
+
+[[steps]]
+id = "reconcile-findings"
+title = "RECONCILE the review findings"
+type = "task"
+needs = ["review-combined"]
+labels = ["design", "phase:reconcile"]
+description = """
+Fix every FAIL and every agreed PARTIAL inside {{scope}}. Re-verify only the
+changed assertion, never the whole walk, and leave a citation per re-run. Do not
+accept a finding you cannot reproduce: report it as unreproduced rather than
+dropping it silently. A finding needing more than one pass bonds
+mol-design-fix-findings onto this step.
+"""
+
+[[steps]]
+id = "touch-approval"
+title = "human approval for the touch to {{surface}}"
+type = "task"
+needs = ["reconcile-findings"]
+labels = ["design", "phase:gate"]
+description = """
+Present the VERIFY evidence and both review verdicts for {{surface}}, then grill
+the user: what still reads wrong, and is the done condition from SPECIFY met.
+Number each question and give a recommended answer with it. In an unattended run
+do not stall: record on this bead what a reviewer would have been asked and what
+the recommended answers were, then proceed. Only bd gate resolve closes the gate.
+Another round of visual intent bonds mol-design-iterate onto this step.
+"""
+
+[steps.gate]
+type = "human"
+timeout = "72h"

@@ -1,0 +1,130 @@
+# mol-design-responsive -- a reflow and target-size pass, bonded onto the step whose
+# verification found the problem.
+#
+# Bond it onto that verify or critique step, so the first child is ready
+# immediately:
+#   bd mol bond mol-design-responsive <target-id> --var surface=<route> --var node=<node-id>
+#
+# 4 steps, no human gate. The `mol-` prefix in the filename is load-bearing: bond
+# resolves a formula name only when it is prefixed, and formulas resolve by
+# filename stem.
+#
+# PRECONDITION: the skill:// names here ship in the @srobroek/design package.
+#
+# THE FOURTH WIDTH IS NOT DECORATIVE. The design widths are 1440, 768, and 375, and
+# a surface can pass all three and still fail WCAG 2.2 SC 1.4.10 Reflow, which is
+# specified at 320 CSS px. 375 is a phone; 320 is the conformance requirement. Both
+# are measured here.
+#
+# Bond joins root-to-root as a sibling subtree and cannot rewire an inherited
+# step's `needs`, so the bonding side owns the join edge and this file declares no
+# `needs` pointing outside itself, which is also what lets it cook standalone.
+formula = "mol-design-responsive"
+description = "Reflow and target-size pass on {{surface}} for node {{node}}: measure 1440, 768, 375 and 320 CSS px for SC 1.4.10, measure the 24 by 24 CSS px minimum for SC 2.5.8, fix, re-measure"
+type = "workflow"
+
+[vars.surface]
+required = true
+description = "route or URL the agent drives at each width"
+
+[vars.node]
+required = true
+description = "id of the design node bead whose verification found the reflow or target-size problem"
+
+[[steps]]
+id = "measure-reflow"
+title = "MEASURE reflow at 1440, 768, 375, and 320 CSS px"
+type = "task"
+labels = ["design", "design:subprocess", "sub:responsive"]
+description = """
+Run skill://ui-review against {{surface}} at four widths: the three design widths
+1440, 768, and 375, plus 320 CSS px, which is what WCAG 2.2 SC 1.4.10 Reflow is
+specified at. Evidence order is fixed: ARIA snapshot first, computed styles
+second, screenshot last.
+
+At 320 CSS px assert the conformance requirement itself: content reflows into one
+column with no loss of information or functionality, and no two-dimensional
+scrolling. Two-dimensional scrolling means scrolling in the block direction AND
+the inline direction to read one piece of content; the exception is content whose
+usage genuinely requires it, such as a data table, a map, or a diagram, and that
+exception is claimed per element with its reason rather than assumed.
+
+Record per width and per failing element: the selector, the measured overflow or
+clipped dimension in CSS px, and what became unreachable. Vertical scrolling alone
+is not a failure. Check the usual causes: a fixed pixel width, a min-width, a
+non-wrapping flex row, an unconstrained image, and a table that cannot collapse.
+"""
+
+[steps.metadata]
+skill_hints = "ui-review"
+
+[[steps]]
+id = "measure-target-size"
+title = "MEASURE target size against the 24 by 24 CSS px minimum"
+type = "task"
+labels = ["design", "design:subprocess", "sub:responsive"]
+description = """
+Measure every pointer target on {{surface}} against WCAG 2.2 SC 2.5.8 Target Size
+(Minimum): 24 by 24 CSS px, at every width from MEASURE reflow, since a target can
+meet it at 1440 and shrink below it at 375. Use skill://ui-review computed styles
+for the measurement; a screenshot cannot give a CSS px box.
+
+Record per target: the selector or accessible name, the measured width and height
+in CSS px, and the required 24. Then apply the exceptions deliberately rather than
+by default, and claim each with its reason: spacing, where a 24 CSS px circle
+centred on the target overlaps no other target's circle; inline targets inside a
+sentence; a target whose size is set by the user agent and not modified; and an
+equivalent control elsewhere on the same page that does meet the minimum. Also
+record targets that pass 2.5.8 but sit under 44 by 44 CSS px, as a note rather
+than a failure: 2.5.5 Target Size (Enhanced) is AAA and is not what this pass
+gates on.
+"""
+
+[steps.metadata]
+skill_hints = "ui-review"
+
+[[steps]]
+id = "fix-reflow-and-targets"
+title = "FIX the reflow and target-size failures"
+type = "task"
+needs = ["measure-reflow", "measure-target-size"]
+labels = ["design", "design:subprocess", "sub:responsive"]
+description = """
+Fix every failure both measurement steps recorded, inside the scope node {{node}}
+declared. Fix at the level the cause lives: a fixed width in a primitive is fixed
+in the primitive, not overridden per page, and a target that is too small because
+of a spacing token is fixed in the token source and rebuilt.
+
+Never fix reflow by hiding content at narrow widths, and never fix a target by
+removing it: both satisfy the measurement while removing the functionality the
+criterion exists to protect. Never fix a target-size failure with a transparent
+overlay that grows the hit area without growing the visible control unless the
+spacing exception genuinely applies, and record it as an exception when it does.
+Record per fix: the criterion number, the file changed, and the value the fix is
+expected to measure.
+"""
+
+[[steps]]
+id = "reverify-widths"
+title = "RE-MEASURE only the elements that changed"
+type = "task"
+needs = ["fix-reflow-and-targets"]
+labels = ["design", "design:subprocess", "sub:responsive"]
+description = """
+Run skill://ui-review against {{surface}} restricted to the elements FIX touched,
+at 1440, 768, 375, and 320 CSS px. Never re-walk the whole surface: node {{node}}
+already carries the evidence for everything untouched.
+
+Re-measure in CSS px and record the new value against the required value per
+element: 320 for reflow, 24 by 24 for target size. A fix asserted without a
+measurement is not verified. Check what a fix can break: making a row wrap at 320
+can push a target under 24 CSS px at 375, and growing a target can create the
+overlap that voids another target's spacing exception, so re-measure both criteria
+for every element either fix touched. Report elements now passing, elements still
+failing with their measured values, and every exception claimed with its reason.
+Surviving failures bond another mol-design-responsive rather than reopening this
+one.
+"""
+
+[steps.metadata]
+skill_hints = "ui-review"

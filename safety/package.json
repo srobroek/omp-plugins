@@ -8,6 +8,6 @@
       "./extensions/quality-edit-advisory.ts"
     ]
   },
-  "version": "0.4.0",
+  "version": "0.4.2",
   "description": "Defence-in-depth advisories for destructive commands, attribution, and remote execution."
 }
