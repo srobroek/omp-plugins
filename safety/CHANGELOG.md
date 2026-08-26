@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.4.2](https://github.com/srobroek/omp-plugins/compare/safety--v0.4.1...safety--v0.4.2) (2026-08-26)
+
+
+### Bug Fixes
+
+* **safety:** anchor the bash guards in command position, and add a corpus ([7c67cee](https://github.com/srobroek/omp-plugins/commit/7c67cee796cfce17458a358b74f290c87fef2d35))
+* **safety:** anchor the bash guards in command position, and add a rule corpus ([c726d5b](https://github.com/srobroek/omp-plugins/commit/c726d5b019bdc2eb3360c1e537308ce1b07fcbfd))
+
 ## [0.4.1](https://github.com/srobroek/omp-plugins/compare/safety--v0.4.0...safety--v0.4.1) (2026-08-25)
 
 
