@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -49,44 +50,86 @@ def manifests() -> list[dict[str, object]]:
     return found
 
 
+# Every source kind OMP's resolver accepts, mapped to the fields it requires as
+# non-empty strings. `npm` is absent deliberately: OMP throws on it.
+SOURCE_REQUIRED_FIELDS = {
+    "github": ("repo",),
+    "git-subdir": ("url", "path"),
+    "url": ("url",),
+}
+
+# OMP addresses a plugin as `<name>@<marketplace>`, so a name carrying `@`, whitespace,
+# or a path separator is unaddressable.
+NAME_PATTERN = re.compile(r"^[a-z0-9][a-z0-9._-]*$")
+
+
+def _fail(message: str) -> None:
+    raise SystemExit(f"{THIRD_PARTY.name}: {message}")
+
+
+def _require_string(entry_name: str, container: dict[str, object], field: str, label: str) -> None:
+    value = container.get(field)
+    if not isinstance(value, str) or not value.strip():
+        _fail(f"{entry_name!r} {label} `{field}` must be a non-empty string, got {value!r}")
+
+
 def third_party() -> list[dict[str, object]]:
     """Validated third-party catalog entries, or none when the file is absent.
 
-    An absent file is not an error: a fresh checkout that advertises nothing third-party
+    An ABSENT file is not an error: a fresh checkout that advertises nothing third-party
     still builds a valid catalog of local packages.
+
+    A PRESENT file must be well formed. Treating a malformed one as empty would silently
+    republish the catalog without every advertised entry, which reads as a successful
+    build and removes plugins consumers install by name.
     """
     if not THIRD_PARTY.is_file():
         return []
 
-    data = json.loads(THIRD_PARTY.read_text(encoding="utf-8"))
-    entries = data.get("plugins", [])
+    try:
+        data = json.loads(THIRD_PARTY.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as err:
+        _fail(f"is not valid JSON: {err}")
+    if not isinstance(data, dict):
+        _fail(f"must contain a JSON object, got {type(data).__name__}")
+    if "plugins" not in data:
+        # `data.get("plugins", [])` would make a typo here look like an empty advertisement
+        # list and quietly drop every entry.
+        _fail("is missing the `plugins` key; remove the file to advertise nothing")
+    entries = data["plugins"]
     if not isinstance(entries, list):
-        raise SystemExit(f"{THIRD_PARTY.name}: `plugins` must be a list")
+        _fail(f"`plugins` must be a list, got {type(entries).__name__}")
 
     seen: set[str] = set()
-    for entry in entries:
+    for position, entry in enumerate(entries):
+        if not isinstance(entry, dict):
+            _fail(f"entry {position} must be an object, got {type(entry).__name__}")
+
         name = entry.get("name")
-        if not name:
-            raise SystemExit(f"{THIRD_PARTY.name}: an entry is missing `name`")
-        # OMP compares `plugins[].version` when deciding upgradability, so an entry
-        # without one is invisible to that comparer. Fail the build instead.
-        if not entry.get("version"):
-            raise SystemExit(f"{THIRD_PARTY.name}: {name!r} is missing `version`")
+        if not isinstance(name, str) or not name.strip():
+            _fail(f"entry {position} needs a non-empty string `name`")
+        if not NAME_PATTERN.match(name):
+            _fail(f"{name!r} is not addressable as `<name>@<marketplace>`")
         if name in seen:
-            raise SystemExit(f"{THIRD_PARTY.name}: duplicate entry {name!r}")
+            _fail(f"duplicate entry {name!r}")
         seen.add(name)
+
+        _require_string(name, entry, "description", "entry")
+        # OMP compares `plugins[].version` when deciding upgradability, so an entry
+        # without one is invisible to that comparer.
+        _require_string(name, entry, "version", "entry")
 
         source = entry.get("source")
         if not isinstance(source, dict):
-            raise SystemExit(f"{THIRD_PARTY.name}: {name!r} needs a `source` object")
+            _fail(f"{name!r} needs a `source` object, got {type(source).__name__}")
         kind = source.get("source")
-        if kind not in VALID_SOURCE_KINDS:
-            # `npm` throws inside OMP's resolver; reject it here where the error is legible.
-            raise SystemExit(f"{THIRD_PARTY.name}: {name!r} has unsupported source kind {kind!r}")
-        if kind == "github" and not source.get("repo"):
-            raise SystemExit(f"{THIRD_PARTY.name}: {name!r} github source needs `repo`")
-        if kind == "git-subdir" and not (source.get("url") and source.get("path")):
-            raise SystemExit(f"{THIRD_PARTY.name}: {name!r} git-subdir source needs `url` and `path`")
+        if kind not in SOURCE_REQUIRED_FIELDS:
+            _fail(
+                f"{name!r} has unsupported source kind {kind!r}; "
+                f"expected one of {sorted(SOURCE_REQUIRED_FIELDS)}"
+            )
+        for field in SOURCE_REQUIRED_FIELDS[kind]:
+            _require_string(name, source, field, f"{kind} source")
 
     return entries
 
