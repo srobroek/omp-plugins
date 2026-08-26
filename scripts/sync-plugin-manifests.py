@@ -66,9 +66,27 @@ PLUGINS: dict[str, tuple[str, str]] = {
     "eli5": ("productivity", "Explain a topic at five depth levels, from metaphor to frontier."),
     "debate": ("productivity", "Stress-test a decision from both sides before committing."),
     "session": ("productivity", "Resume a prior agent session from its own transcript, newest turns first."),
+    "design": (
+        "development",
+        "UI and UX design: system audit, DESIGN.md, browser verification, accessibility, tokens, and Component Driven build.",
+    ),
+    "browser-tools": ("development", "Cross-engine browser coverage and Chrome performance tracing over MCP."),
+    "diagram": ("productivity", "Interactive diagramming and architecture-sketching canvas over MCP."),
 }
 
 UNPUBLISHED: set[str] = set()
+
+# Manifest keys this script does NOT own. A plugin authors these in its own
+# `.omp-plugin/plugin.json` and they survive every regeneration, exactly as `version`
+# does. Without this list the wholesale rewrite below would silently drop them, and the
+# `git diff` drift gate would then report the loss as an unexplained hand-edit.
+#
+# `mcpServers` is the one that matters today: it is a first-class plugin component, so it
+# belongs to the package rather than to this generator. OMP loads plugin MCP tools into
+# ONE flat session-global registry, so a server declared by a plugin loads for every
+# session in any project that installs it. That is why general-purpose servers live in
+# `browser-tools` and `diagram` rather than in `design`.
+PRESERVED_MANIFEST_KEYS = ("mcpServers",)
 
 
 def main() -> int:
@@ -78,14 +96,18 @@ def main() -> int:
         manifest_path = manifest_dir / "plugin.json"
 
         version = "0.1.0"
+        preserved: dict[str, object] = {}
         if manifest_path.exists():
-            version = json.loads(manifest_path.read_text(encoding="utf-8")).get("version", version)
+            existing = json.loads(manifest_path.read_text(encoding="utf-8"))
+            version = existing.get("version", version)
+            preserved = {key: existing[key] for key in PRESERVED_MANIFEST_KEYS if key in existing}
 
         manifest = {
             "name": name,
             "description": description,
             "version": version,
             "category": category,
+            **preserved,
         }
         if name in UNPUBLISHED:
             manifest["publish"] = False
