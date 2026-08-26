@@ -89,6 +89,18 @@
         }
       ]
     },
+    "browser-tools": {
+      "release-type": "simple",
+      "component": "browser-tools",
+      "changelog-path": "CHANGELOG.md",
+      "extra-files": [
+        {
+          "type": "json",
+          "path": ".omp-plugin/plugin.json",
+          "jsonpath": "$.version"
+        }
+      ]
+    },
     "build": {
       "release-type": "simple",
       "component": "build",
@@ -140,6 +152,30 @@
     "dep-update": {
       "release-type": "simple",
       "component": "dep-update",
+      "changelog-path": "CHANGELOG.md",
+      "extra-files": [
+        {
+          "type": "json",
+          "path": ".omp-plugin/plugin.json",
+          "jsonpath": "$.version"
+        }
+      ]
+    },
+    "design": {
+      "release-type": "simple",
+      "component": "design",
+      "changelog-path": "CHANGELOG.md",
+      "extra-files": [
+        {
+          "type": "json",
+          "path": ".omp-plugin/plugin.json",
+          "jsonpath": "$.version"
+        }
+      ]
+    },
+    "diagram": {
+      "release-type": "simple",
+      "component": "diagram",
       "changelog-path": "CHANGELOG.md",
       "extra-files": [
         {

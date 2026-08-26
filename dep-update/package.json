@@ -1,6 +1,6 @@
 {
   "name": "@srobroek/dep-update",
-  "version": "0.5.0",
+  "version": "0.5.1",
   "description": "Classify dependency updates by semver safety and produce a cited upgrade plan.",
   "private": true,
   "dependencies": {
