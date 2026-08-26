@@ -1,0 +1,30 @@
+wireloom
+========
+
+This skill is vendored, in modified form, from:
+
+  Project:     Wireloom
+  Repository:  https://github.com/StardockCorp/Wireloom
+  Source path: .claude/skills/wireloom.md
+  Copied:      2026-08-26
+  Licence:     MIT License, Copyright (c) 2026 Brad Wardell
+
+The full licence text is in the LICENSE file beside this one, copied from
+https://raw.githubusercontent.com/StardockCorp/Wireloom/main/LICENSE
+
+The MIT licence requires that the copyright notice and permission notice appear in all
+copies or substantial portions of the software. The LICENSE file satisfies that, and the
+vendored SKILL.md records its provenance and its modifications in a comment block below
+its frontmatter.
+
+Why vendored rather than advertised as a catalog entry: upstream ships the skill as a bare
+markdown file at `.claude/skills/wireloom.md`. OMP discovers skills at
+`<plugin-root>/skills/<name>/SKILL.md`, so an entry pointing at that repository installs
+without error and contributes no skill. Vendoring is the only route that makes it
+reachable, and the permissive licence allows it.
+
+The grammar is NOT vendored. It is a 44,558-byte file at the upstream repository root, and
+the skill cites it by raw URL so it tracks the tool rather than going stale here.
+
+The renderer itself is the `wireloom` npm package, MIT, installed with
+`npm install wireloom`. It is not vendored either.

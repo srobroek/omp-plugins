@@ -1,0 +1,350 @@
+# design-surface -- the middle design tier: a whole surface, built bottom-up under
+# Component Driven staging.
+#
+# Install: copy this file into <repo>/.beads/formulas/ (or ~/.beads/formulas/).
+# Pour one molecule per surface:
+#   bd mol pour design-surface --var surface=<route> --var scope=<paths>
+#
+# 15 steps, 3 human gates. No `mol-` prefix: that prefix is what `bd mol bond`
+# resolves, and this tier is poured, not bonded.
+#
+# PRECONDITION: the skill:// and agent names here ship in the @srobroek/design
+# package. Install it first, or every step names a capability that does not exist.
+#
+# This tier carries the retired mol-design-node forward and adds what that file
+# lacked: the three interrogation gates, Component Driven staging, and an optional
+# fix round. The six phases are unchanged -- GROUND, SPECIFY, BUILD, VERIFY,
+# CRITIQUE, RECONCILE -- and BUILD is now four staged steps rather than one.
+#
+# BUILD IS BOTTOM-UP, PER https://www.componentdriven.org/ : one component at a
+# time in isolation with its states, then composition, then pages with mock data
+# for hard-to-reach states, then integration with real data. Page-first
+# development is the named anti-pattern. Verification follows the same order,
+# because a component-level failure is smaller to locate than a page-level one.
+#
+# Every join names at least one unconditional step, so a step whose whole `needs`
+# list is filtered keeps its parent edge and becomes ready rather than stranded.
+# `specify-intent` names ground-system and grill-intent alongside the conditional
+# grill-system and write-design-md; `visual-approval` names reconcile-findings
+# alongside the conditional fix-round, which is what keeps the final gate
+# reachable when want_fix_round is false.
+formula = "design-surface"
+description = "Six-phase design surface {{surface}} inside {{scope}}: ground and grill, specify, build bottom-up, verify, parallel critique and a11y, reconcile, human approval"
+type = "workflow"
+
+[vars.surface]
+required = true
+description = "route or URL the agent drives during VERIFY"
+
+[vars.scope]
+required = true
+description = "paths the work may touch"
+
+[vars.platform]
+default = "web"
+description = "web uses browser; any other value uses computer for native desktop"
+
+[vars.want_design_md]
+default = "false"
+description = "true when this surface must write or update repo-root DESIGN.md"
+
+# Set from the GROUND verdict, not guessed up front: true when
+# skill://design-system-audit returns ABSENT or PARTIAL, so the run must ask a
+# human before establishing a scale or a token. Introducing a scale is a system
+# decision the agent does not take alone.
+[vars.system_absent]
+default = "false"
+description = "true when design-system-audit returned ABSENT or PARTIAL, so establishing a scale needs human approval"
+
+# Set after RECONCILE, when the reconciled result still needs a deliberate pass
+# rather than another whole molecule. Default false keeps the DAG short; the
+# final gate stays reachable either way because it also names reconcile-findings.
+[vars.want_fix_round]
+default = "false"
+description = "true when RECONCILE leaves work that needs one more deliberate fix pass before the approval gate"
+
+[[steps]]
+id = "ground-system"
+title = "GROUND existing tokens, primitives, and the stack"
+type = "task"
+priority = 1
+labels = ["design", "phase:ground"]
+description = """
+Run skill://design-system-audit on {{scope}}. Read the token files, the scales,
+the primitives, and 5-10 existing components. Record the discovered registry on
+this bead so later steps cite it instead of guessing. Verdict PRESENT, PARTIAL,
+or ABSENT; ABSENT or PARTIAL means pour with system_absent=true. Never invent a
+token a search could find.
+
+Detect the stack from evidence, never from a default: package.json dependencies,
+pubspec.yaml, a *.xcodeproj or Package.swift, composer.json, or app.json plus a
+react-native dependency. Record which marker was found. When nothing is
+detectable, ask at the INTENT gate rather than assuming: a hardcoded default
+silently misroutes every later recommendation. Platform is {{platform}}.
+"""
+
+[steps.metadata]
+skill_hints = "design-system-audit"
+
+[[steps]]
+id = "grill-intent"
+title = "INTENT gate: grill the user about {{surface}}"
+type = "task"
+needs = ["ground-system"]
+labels = ["design", "phase:gate"]
+description = """
+Interrogate the user before specifying anything. Number each question, give a
+recommended answer with it, ask the whole current frontier as one batch, then
+wait. A question that depends on another still-open question belongs to a later
+round.
+
+Establish, and record every answer on this bead: product type (SaaS,
+e-commerce, portfolio, dashboard, tool, productivity, or hybrid); target audience
+and usage context; style keywords; the stack GROUND detected, confirmed rather
+than assumed; the scope edges inside {{scope}}; the observable state that counts
+as done; and three 1-10 dials -- variance (centred and minimal through bold and
+asymmetric), motion (subtle micro-interactions through complex choreography), and
+density (spacious through dense dashboard).
+
+Never ask what a tool could answer. In an unattended run do not stall: record
+what a reviewer would have been asked and the recommended answers, then proceed.
+Only bd gate resolve closes the gate.
+"""
+
+[steps.gate]
+type = "human"
+timeout = "72h"
+
+[[steps]]
+id = "grill-system"
+title = "SYSTEM gate: approve establishing a scale or token"
+type = "task"
+needs = ["ground-system"]
+condition = "{{system_absent}}"
+labels = ["design", "phase:gate"]
+description = """
+GROUND returned ABSENT or PARTIAL, so this run would have to invent part of the
+system. Ask the user whether establishing that scale or token set is approved,
+and which existing convention it should follow. That is a system decision the
+agent must not take alone.
+
+Approved and small: continue here. Approved and large: bond mol-design-tokens
+onto this step, or pour design-system instead of continuing this surface. In an
+unattended run record what a reviewer would have been asked, then proceed with
+the most conservative option, which is extending an existing scale rather than
+introducing a new one. Only bd gate resolve closes the gate.
+"""
+
+[steps.gate]
+type = "human"
+timeout = "72h"
+
+[[steps]]
+id = "write-design-md"
+title = "write or update DESIGN.md"
+type = "task"
+needs = ["ground-system"]
+condition = "{{want_design_md}}"
+labels = ["design", "phase:specify"]
+description = """
+Run skill://design-md. Write repo-root DESIGN.md from the GROUND registry:
+frontmatter tokens (colors, typography, spacing, radii, elevation, optional
+motion) then Scope and Intent through Known Gaps. Every {group.token} must
+resolve. Unknowns go under Known Gaps. TODO or TO_FILL is invalid. Gate the
+result with: npx @google/design.md lint DESIGN.md
+"""
+
+[steps.metadata]
+skill_hints = "design-md"
+
+[[steps]]
+id = "specify-intent"
+title = "SPECIFY intent and constraints for {{surface}}"
+type = "task"
+needs = ["ground-system", "grill-intent", "grill-system", "write-design-md"]
+labels = ["design", "phase:specify"]
+description = """
+State intent and constraints for {{surface}} inside {{scope}}, from the INTENT
+answers rather than from taste. Name the component inventory this surface needs
+and which of those already exist. If DESIGN.md exists, cite its tokens;
+otherwise cite the GROUND registry. Do not invent tokens.
+
+ground-system and grill-intent are named unconditionally so this step stays
+reachable when system_absent and want_design_md are both false.
+"""
+
+[[steps]]
+id = "build-components"
+title = "BUILD stage 1: one component at a time, in isolation"
+type = "task"
+needs = ["specify-intent"]
+labels = ["design", "phase:build"]
+description = """
+Component Driven stage one. Build each component from the SPECIFY inventory on
+its own, in isolation, starting small. Every component covers all nine states:
+default, hover, focus-visible, active, disabled, loading, empty, error,
+selected.
+
+Every colour comes from a token and every spacing value from the scale. Verify
+each component property against manifests/components.json or the component
+source before using it, including plausible-sounding ones such as shadow or
+size; a story name does not reflect a property name. Rename with lsp, never
+text substitution. Use skill://ui-microcopy for copy, skill://motion-design for
+motion, skill://platform-conformance for {{platform}} conventions. Bond
+mol-design-component onto this step for any primitive that needs its own bead.
+"""
+
+[[steps]]
+id = "build-composition"
+title = "BUILD stage 2: compose the components"
+type = "task"
+needs = ["build-components"]
+labels = ["design", "phase:build"]
+description = """
+Component Driven stage two. Compose the stage-one components into larger
+components, increasing complexity gradually. Compose only what stage one already
+covers; a composition built on an unfinished primitive relocates the failure
+upward, which is the cost this staging exists to avoid. Reuse before adding: a
+second variant of an existing composition beats a new one.
+"""
+
+[[steps]]
+id = "build-pages"
+title = "BUILD stage 3: assemble pages with mock data"
+type = "task"
+needs = ["build-composition"]
+labels = ["design", "phase:build"]
+description = """
+Component Driven stage three. Assemble {{surface}} from the composite
+components, using mock data to simulate the hard-to-reach states and the edge
+cases: empty collections, long strings, missing images, permission-denied,
+partial failure, and the loading and error states real data will not reproduce
+on demand. Mock data is what makes those states reachable at all, so do not
+defer them to integration.
+"""
+
+[[steps]]
+id = "integrate-data"
+title = "BUILD stage 4: integrate real data and logic"
+type = "task"
+needs = ["build-pages"]
+labels = ["design", "phase:build"]
+description = """
+Component Driven stage four. Connect data and business logic so {{surface}}
+meets the real backend. Every state the mock data reached must still be
+reachable with real data, or the state has been lost rather than integrated.
+Record which states are now driven by real responses and which remain
+mock-only.
+"""
+
+[[steps]]
+id = "verify-surface"
+title = "VERIFY {{surface}}, component level before page level"
+type = "task"
+needs = ["integrate-data"]
+labels = ["design", "phase:verify"]
+description = """
+Run skill://ui-review against {{surface}}. Drive the real surface: browser when
+{{platform}} is web, computer otherwise. Evidence order is fixed: ARIA snapshot
+first, computed styles second, screenshot last. Widths 1440, 768, 375.
+
+Verify at component level BEFORE page level, because a component-level failure
+is smaller and more precise to locate than a page-level one. Walk the stage-one
+components in isolation first, then the compositions, then {{surface}} itself.
+Every claim carries a named citation; an unwitnessed state is not verified.
+"""
+
+[steps.metadata]
+skill_hints = "ui-review"
+
+[[steps]]
+id = "critique-visual"
+title = "CRITIQUE visual and UX"
+type = "task"
+needs = ["verify-surface"]
+labels = ["design", "phase:critique"]
+description = """
+Spawn design-critic (read-only) in the SAME parallel batch as
+audit-accessibility, never after it. Run skill://ui-review as critique on
+{{surface}}, plus the deterministic detector pass: npx impeccable detect
+<target> --json for located findings. Verdict PASS, PARTIAL, or FAIL with named
+evidence. Do not edit files, and do not question the user: the lead owns the
+conversation. A self-review by whoever wrote the UI shares its blind spots,
+which is why this is a child rather than a self-check.
+"""
+
+[steps.metadata]
+skill_hints = "ui-review"
+execution_agent_type = "design-critic"
+execution_mode = "subagent"
+
+[[steps]]
+id = "audit-accessibility"
+title = "AUDIT WCAG 2.2 AA"
+type = "task"
+needs = ["verify-surface"]
+labels = ["design", "phase:critique"]
+description = """
+Spawn a11y-auditor (read-only) in the SAME parallel batch as critique-visual,
+never after it. Run skill://accessibility-audit on {{surface}}. Verdict PASS,
+PARTIAL, or FAIL, and every finding carries its WCAG 2.2 criterion number, the
+measured value, the required value, and the selector. Do not edit files, and do
+not question the user. A MAJOR verdict bonds mol-design-a11y onto this step.
+"""
+
+[steps.metadata]
+skill_hints = "accessibility-audit"
+execution_agent_type = "a11y-auditor"
+execution_mode = "subagent"
+
+[[steps]]
+id = "reconcile-findings"
+title = "RECONCILE critique and a11y findings"
+type = "task"
+needs = ["critique-visual", "audit-accessibility"]
+labels = ["design", "phase:reconcile"]
+description = """
+Reconcile both verdicts yourself. Fix every FAIL and every agreed PARTIAL inside
+{{scope}}. Re-verify only the changed assertion, never the whole walk, and leave
+a citation per re-run. Do not accept a child verdict you cannot reproduce:
+report it as unreproduced rather than dropping it silently. Findings needing
+their own triage loop bond mol-design-fix-findings onto this step.
+"""
+
+[[steps]]
+id = "fix-round"
+title = "one more fix pass on {{surface}}"
+type = "task"
+needs = ["reconcile-findings"]
+condition = "{{want_fix_round}}"
+labels = ["design", "phase:reconcile"]
+description = """
+A deliberate second pass over what RECONCILE left, when that is cheaper than
+another molecule. Fix inside {{scope}} only, re-verify only the changed
+assertion, and record what changed since the previous round along with the round
+number. Anything still unresolved after this pass is an intent problem, not a
+fix problem: bond mol-design-iterate rather than adding a third pass here.
+"""
+
+[[steps]]
+id = "visual-approval"
+title = "ACCEPT gate: human visual approval for {{surface}}"
+type = "task"
+needs = ["reconcile-findings", "fix-round"]
+labels = ["design", "phase:gate"]
+description = """
+Present the VERIFY evidence and both child verdicts for {{surface}}, then grill
+the user: is the reconciled result accepted, or is another iteration wanted.
+Number each question and give a recommended answer with it. Report the iteration
+number and what changed since the previous round.
+
+reconcile-findings is named unconditionally so this gate stays reachable when
+want_fix_round is false. In an unattended run do not stall: record on this bead
+what a reviewer would have been asked and the recommended answers, then proceed.
+Only bd gate resolve closes the gate. Another round bonds mol-design-iterate
+onto this step.
+"""
+
+[steps.gate]
+type = "human"
+timeout = "72h"

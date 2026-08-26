@@ -1,0 +1,123 @@
+# mol-design-component -- build ONE primitive in isolation to full state coverage.
+# Component Driven stage one, as its own molecule.
+#
+# Bond it onto the build step that needs the primitive:
+#   bd mol bond mol-design-component <target-id> --var surface=<route> --var node=<node-id> --var component=<Name>
+#
+# 4 steps, no human gate. The `mol-` prefix in the filename is load-bearing: bond
+# resolves a formula name only when it is prefixed, and formulas resolve by
+# filename stem.
+#
+# PRECONDITION: the skill:// names here ship in the @srobroek/design package.
+#
+# WHY ONE COMPONENT PER MOLECULE: https://www.componentdriven.org/ builds one
+# component at a time in isolation, and pinpoints bugs at the component level
+# because it is less work and more precise than testing screens. Bond one of these
+# per primitive rather than widening the var to a list: a molecule covering four
+# components cannot report that three passed.
+#
+# Bond joins root-to-root as a sibling subtree and cannot rewire an inherited
+# step's `needs`, so the bonding side owns the join edge and this file declares no
+# `needs` pointing outside itself, which is also what lets it cook standalone.
+formula = "mol-design-component"
+description = "Build {{component}} in isolation for node {{node}}: enumerate its real props and nine states, build it, verify at component level before anything composes it"
+type = "workflow"
+
+[vars.surface]
+required = true
+description = "route or URL where {{component}} will eventually be used; drives the composition check, not the isolation walk"
+
+[vars.node]
+required = true
+description = "id of the design node bead whose build step needs this primitive"
+
+[vars.component]
+required = true
+description = "name of the single primitive this molecule builds"
+
+[[steps]]
+id = "spec-component-states"
+title = "SPECIFY the real props and nine states of {{component}}"
+type = "task"
+labels = ["design", "design:subprocess", "sub:component"]
+description = """
+Establish what {{component}} actually is before building it. Read its documented
+property set from http://localhost:6006/manifests/components.json when a
+Storybook exists, or from the component source and its types otherwise: the prop
+names, types, required flags, defaults, and the import statement. Do not assume a
+property from a naming convention or from another library's API, including
+plausible-sounding ones such as shadow or size, and do not trust a story name to
+reflect a property name. Where a needed property is undocumented, ask rather than
+inventing one.
+
+Then enumerate what each of the nine states means for {{component}} specifically:
+default, hover, focus-visible, active, disabled, loading, empty, error, selected.
+A state that is genuinely not applicable is recorded as not applicable with the
+reason, which is different from being forgotten. Cite the tokens from node
+{{node}} that each state consumes.
+"""
+
+[steps.metadata]
+skill_hints = "design-system-audit"
+
+[[steps]]
+id = "build-component-isolated"
+title = "BUILD {{component}} in isolation"
+type = "task"
+needs = ["spec-component-states"]
+labels = ["design", "design:subprocess", "sub:component"]
+description = """
+Build {{component}} on its own, with no page and no sibling component around it.
+Implement every one of the nine states SPECIFY kept. Every colour comes from a
+token and every spacing value from the scale, cited from node {{node}}; a raw
+literal here propagates into every future consumer.
+
+Where a Storybook exists, add one story per state and one concept per story: a
+single story demonstrating five sizes and variants at once is the named
+anti-pattern. Put a JSDoc description and @summary above the component export and
+above each story, and document every prop, because that is what an agent
+receives. Use skill://ui-microcopy for any copy and skill://motion-design for any
+transition.
+"""
+
+[[steps]]
+id = "verify-component-states"
+title = "VERIFY {{component}} at component level"
+type = "task"
+needs = ["build-component-isolated"]
+labels = ["design", "design:subprocess", "sub:component"]
+description = """
+Run skill://ui-review against {{component}} in isolation, BEFORE anything
+composes it. Where a Storybook exists, render each story at
+http://localhost:6006/iframe.html?id=<storyId>; otherwise drive a scratch harness
+page holding only {{component}}.
+
+Evidence order is fixed: ARIA snapshot first, computed styles second, screenshot
+last. Widths 1440, 768, 375. Assert every one of the nine states SPECIFY kept,
+each with a named citation, and assert the computed values resolve to the tokens
+rather than to literals. A state asserted without evidence is not verified. Run
+skill://accessibility-audit on the isolated component too: focus-visible,
+disabled, and error each carry criteria that are cheaper to fix here than inside a
+page.
+"""
+
+[steps.metadata]
+skill_hints = "ui-review, accessibility-audit"
+
+[[steps]]
+id = "component-verdict"
+title = "VERDICT on {{component}} before it composes"
+type = "task"
+needs = ["verify-component-states"]
+labels = ["design", "design:subprocess", "sub:component"]
+description = """
+Report per state: verified with its citation, not applicable with its reason, or
+failing with its measured value. Report the final prop set and the import
+statement a consumer needs, so composition does not re-derive them.
+
+PASS releases {{component}} for composition into {{surface}}. Anything failing
+stays here: composing on an unfinished primitive relocates the failure upward into
+a page, where it costs more to locate, which is the entire reason this molecule
+runs first. State explicitly that {{component}} has not been verified in
+composition, because component-level PASS is not page-level PASS.
+"""

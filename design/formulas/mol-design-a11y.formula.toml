@@ -1,0 +1,126 @@
+# mol-design-a11y -- a WCAG 2.2 AA remediation loop, bonded off a MAJOR verdict
+# from a11y-auditor.
+#
+# Bond it onto the audit step that returned MAJOR, so the first child is ready
+# immediately:
+#   bd mol bond mol-design-a11y <target-id> --var surface=<route> --var node=<node-id>
+# Add --var round=<n> when this is not the first remediation pass.
+#
+# 4 steps, no human gate. The `mol-` prefix in the filename is load-bearing: bond
+# resolves a formula name only when it is prefixed, and formulas resolve by
+# filename stem.
+#
+# PRECONDITION: the skill:// names here ship in the @srobroek/design package.
+#
+# EVERY FINDING CARRIES THREE NUMBERS: its WCAG 2.2 criterion number, the measured
+# value, and the required value. A finding recorded as "contrast too low" cannot be
+# re-measured by anyone else, cannot be proved fixed, and cannot be triaged against
+# another finding. That is why the shape is fixed at triage rather than left to the
+# reporter.
+#
+# Bond joins root-to-root as a sibling subtree and cannot rewire an inherited
+# step's `needs`, so the bonding side owns the join edge and this file declares no
+# `needs` pointing outside itself, which is also what lets it cook standalone.
+formula = "mol-design-a11y"
+description = "WCAG 2.2 AA remediation pass {{round}} on {{surface}} from node {{node}}: triage each finding to its criterion, remediate the MAJORs, re-measure only those criteria"
+type = "workflow"
+
+[vars.surface]
+required = true
+description = "route or URL the agent drives when measuring and re-measuring"
+
+[vars.node]
+required = true
+description = "id of the design node bead whose a11y audit returned MAJOR"
+
+[vars.round]
+default = "2"
+description = "pass number; 2 is the first remediation pass after the node's own audit"
+
+[[steps]]
+id = "triage-a11y-findings"
+title = "TRIAGE each finding to its WCAG 2.2 criterion"
+type = "task"
+labels = ["design", "design:subprocess", "sub:a11y"]
+description = """
+Read the MAJOR verdict on node {{node}} and normalise every finding to the same
+five fields, with no exceptions: the WCAG 2.2 success criterion number and name,
+for example 1.4.3 Contrast (Minimum); the selector or accessible name of the
+element; the measured value; the required value; and the conformance level, A or
+AA. A finding missing any of those five is not triaged yet.
+
+Re-measure rather than trusting the report: run skill://accessibility-audit
+against {{surface}} and confirm each finding still reproduces at the current head.
+A finding that does not reproduce is marked UNREPRODUCED with what was tried and
+carried to the verdict step, never dropped and never quietly downgraded.
+
+Classify what remains as MAJOR or MINOR. Any AA failure is MAJOR. Order the MAJORs
+by how many elements each affects, because a token-level contrast failure and a
+single mislabelled button are not the same size of fix.
+"""
+
+[steps.metadata]
+skill_hints = "accessibility-audit"
+
+[[steps]]
+id = "remediate-major"
+title = "REMEDIATE every MAJOR criterion failure"
+type = "task"
+needs = ["triage-a11y-findings"]
+labels = ["design", "design:subprocess", "sub:a11y"]
+description = """
+Fix every MAJOR from TRIAGE, and only those, inside the scope node {{node}}
+declared. Fix the cause at the level it lives: a contrast failure traced to a
+token is fixed in the token source and rebuilt, never patched in generated CSS or
+overridden per component. A missing accessible name is fixed in the component, not
+by adding aria-label at every callsite.
+
+Never satisfy a criterion by removing the feature that failed it, and never
+suppress an audit rule to make a finding disappear: both change the report without
+changing the barrier. Record per fix: the criterion number, the file changed, and
+the value the fix is expected to measure.
+"""
+
+[[steps]]
+id = "reverify-criteria"
+title = "RE-MEASURE only the criteria that were remediated"
+type = "task"
+needs = ["remediate-major"]
+labels = ["design", "design:subprocess", "sub:a11y"]
+description = """
+Run skill://accessibility-audit against {{surface}} restricted to the criteria
+REMEDIATE touched, plus skill://ui-review for the computed-style and ARIA evidence
+each measurement needs. Never re-walk the whole audit: node {{node}} already
+carries the evidence for every criterion this pass did not touch.
+
+Evidence order is fixed: ARIA snapshot first, computed styles second, screenshot
+last. Widths 1440, 768, 375 where the criterion is width-sensitive. Record the new
+measured value against the required value per criterion; a remediation asserted
+without a re-measurement is not verified. Check the neighbours a fix can break:
+raising a contrast ratio can lower another pair in the same theme, and adding a
+focus style can break 2.4.11 focus-not-obscured.
+"""
+
+[steps.metadata]
+skill_hints = "accessibility-audit, ui-review"
+
+[[steps]]
+id = "a11y-verdict"
+title = "VERDICT on remediation pass {{round}}"
+type = "task"
+needs = ["reverify-criteria"]
+labels = ["design", "design:subprocess", "sub:a11y"]
+description = """
+Report per criterion, in a table: criterion number and name, level, measured value
+before, measured value after, required value, and status. Four lists, each
+explicit and none merged: criteria now passing; criteria still failing; MINORs
+recorded and deliberately not fixed; and UNREPRODUCED findings with what was
+tried. An empty list is stated as empty rather than omitted.
+
+Surviving failures bond another mol-design-a11y with round incremented, rather
+than reopening this one, so each pass keeps its own measurements. A criterion that
+survives two passes is a design problem rather than a remediation problem: route
+it to mol-design-iterate, because the fix needs a change of intent the user has to
+approve. Never report AA conformance for {{surface}} from this molecule: it
+measured the criteria it touched, not all of them.
+"""

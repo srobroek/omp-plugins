@@ -1,0 +1,176 @@
+# mol-design-iterate -- an approved change of visual intent, bonded onto a finished
+# design node for another round.
+#
+# Bond it onto the step whose result was accepted-but-changed, normally the
+# approval gate of a design-touch, design-surface, or design-system molecule:
+#   bd mol bond mol-design-iterate <target-id> --var surface=<route> --var node=<node-id>
+# Add --var round=<n> to name the round in every title.
+#
+# 6 steps, 2 human gates. The `mol-` prefix in the filename is load-bearing: bond
+# resolves a formula name only when it is prefixed, and formulas resolve by
+# filename stem.
+#
+# PRECONDITION: the skill:// and agent names here ship in the @srobroek/design
+# package.
+#
+# WHY A BONDED MOLECULE RATHER THAN A LOOP: a formula DAG is acyclic and a `needs`
+# cycle is rejected at pour, so iteration cannot be expressed as an edge back to an
+# earlier step. Each round is one bonded molecule. Bond joins root-to-root as a
+# sibling subtree and cannot rewire an inherited step's `needs`, so the bonding
+# side owns the join edge and this file declares no `needs` pointing outside
+# itself, which is also what lets it cook standalone.
+#
+# ONLY THE CHANGED ASSERTION IS RE-VERIFIED. A full re-walk of a surface that
+# already passed costs the same as the first walk and proves nothing new; every
+# step below says so, because the temptation to re-run everything is what makes
+# iteration expensive enough to skip.
+formula = "mol-design-iterate"
+description = "Iterate round {{round}} on {{surface}} from node {{node}}: regrill the changed intent, revise, re-verify only what changed, re-critique, re-audit, re-approve"
+type = "workflow"
+
+[vars.surface]
+required = true
+description = "route or URL the agent drives when re-verifying"
+
+[vars.node]
+required = true
+description = "id of the design node bead this round iterates on"
+
+[vars.round]
+default = "2"
+description = "round number; 2 is the first iteration after the original node"
+
+[[steps]]
+id = "regrill"
+title = "REGRILL round {{round}}: what the previous round got wrong"
+type = "task"
+labels = ["design", "design:subprocess", "sub:iterate"]
+description = """
+Interrogate the user about what round {{round}} minus one got wrong on
+{{surface}}. Number each question, give a recommended answer with it, ask the
+whole current frontier as one batch, then wait.
+
+Establish, and record on this bead: which specific assertions the previous round
+got wrong, whether the miss is intent or execution, which of the three dials
+(variance, motion, density) moved and to what value, and what observable state
+counts as done this round. A change of intent is what earns an iteration; a
+change of execution belongs in mol-design-fix-findings instead, so classify
+before revising. Read node {{node}} for the previous round's evidence rather than
+asking the user to restate it.
+
+In an unattended run do not stall: record what a reviewer would have been asked
+and the recommended answers, then proceed. Only bd gate resolve closes the gate.
+"""
+
+[steps.gate]
+type = "human"
+timeout = "72h"
+
+[[steps]]
+id = "revise"
+title = "REVISE {{surface}} for round {{round}}"
+type = "task"
+needs = ["regrill"]
+labels = ["design", "design:subprocess", "sub:iterate"]
+description = """
+Apply only the change REGRILL established. Use skill://ui-microcopy for copy,
+skill://motion-design for motion, skill://platform-conformance for platform
+conventions, and cite the token for every value. Touch nothing the previous round
+already got right: an unrequested improvement smuggled into an iteration is a
+change no one approved.
+
+Record on this bead what changed since round {{round}} minus one, file by file,
+and which assertions from node {{node}} that change invalidates. That list is the
+input to reverify, so it is not optional narration.
+"""
+
+[[steps]]
+id = "reverify"
+title = "REVERIFY only the assertions round {{round}} changed"
+type = "task"
+needs = ["revise"]
+labels = ["design", "design:subprocess", "sub:iterate"]
+description = """
+Run skill://ui-review against {{surface}}, restricted to the assertions REVISE
+listed as invalidated. Never re-walk the whole surface: node {{node}} already
+carries the evidence for everything this round did not touch, and re-running it
+proves nothing new.
+
+Evidence order is fixed: ARIA snapshot first, computed styles second, screenshot
+last. Widths 1440, 768, 375, and only for the assertions in scope. Verify at
+component level before page level. Cite each re-run.
+"""
+
+[steps.metadata]
+skill_hints = "ui-review"
+
+[[steps]]
+id = "recritique"
+title = "RECRITIQUE round {{round}} on {{surface}}"
+type = "task"
+needs = ["reverify"]
+labels = ["design", "design:subprocess", "sub:iterate"]
+description = """
+Spawn design-critic (read-only) in the SAME parallel batch as reaudit, never
+after it. Critique only what round {{round}} changed on {{surface}}, using
+skill://ui-review as critique plus npx impeccable detect <target> --json for
+located findings. Brief it with the changed file paths, the route, the viewport
+widths, and the token paths: it shares no context with the lead.
+
+Verdict PASS, PARTIAL, or FAIL with named evidence. Do not edit files, and do not
+question the user.
+"""
+
+[steps.metadata]
+skill_hints = "ui-review"
+execution_agent_type = "design-critic"
+execution_mode = "subagent"
+
+[[steps]]
+id = "reaudit"
+title = "REAUDIT WCAG 2.2 AA for round {{round}}"
+type = "task"
+needs = ["reverify"]
+labels = ["design", "design:subprocess", "sub:iterate"]
+description = """
+Spawn a11y-auditor (read-only) in the SAME parallel batch as recritique, never
+after it. Run skill://accessibility-audit over only what round {{round}} changed
+on {{surface}}. A revision can break a criterion the previous round passed, which
+is why this runs every round rather than once.
+
+Verdict PASS, PARTIAL, or FAIL, and every finding carries its WCAG 2.2 criterion
+number, the measured value, the required value, and the selector. Do not edit
+files, and do not question the user.
+"""
+
+[steps.metadata]
+skill_hints = "accessibility-audit"
+execution_agent_type = "a11y-auditor"
+execution_mode = "subagent"
+
+[[steps]]
+id = "reapprove"
+title = "REAPPROVE round {{round}} of {{surface}}"
+type = "task"
+needs = ["recritique", "reaudit"]
+labels = ["design", "design:subprocess", "sub:iterate"]
+description = """
+Reconcile both verdicts yourself first; do not accept a child verdict you cannot
+reproduce, and report anything unreproduced rather than dropping it. Then present
+round {{round}} for approval: state the round number, what changed since the
+previous round, and the re-verified assertions with their citations. Say
+explicitly which assertions were NOT re-verified and that node {{node}} carries
+their evidence, so the user is approving a delta knowingly.
+
+Grill the user: is round {{round}} accepted, or is another round wanted. Number
+each question and give a recommended answer with it. Another round bonds a
+further mol-design-iterate with round incremented, rather than reopening this
+one, so each round keeps its own evidence.
+
+In an unattended run do not stall: record what a reviewer would have been asked
+and the recommended answers, then proceed. Only bd gate resolve closes the gate.
+"""
+
+[steps.gate]
+type = "human"
+timeout = "72h"

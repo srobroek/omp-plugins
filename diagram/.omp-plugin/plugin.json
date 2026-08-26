@@ -1,0 +1,15 @@
+{
+  "name": "diagram",
+  "description": "Interactive diagramming and architecture-sketching canvas over MCP.",
+  "version": "0.1.0",
+  "category": "productivity",
+  "mcpServers": {
+    "excalidraw": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@mcp-demos/excalidraw-server"
+      ]
+    }
+  }
+}

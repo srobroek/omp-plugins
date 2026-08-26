@@ -1,0 +1,118 @@
+# mol-design-fix-findings -- the critique and accessibility finding loop, bonded
+# onto the step whose review produced the findings.
+#
+# Bond it onto that review or reconcile step, not onto the molecule root, so the
+# first child is ready immediately:
+#   bd mol bond mol-design-fix-findings <target-id> --var surface=<route> --var node=<node-id>
+# Add --var round=<n> when this is not the first pass.
+#
+# 4 steps, no human gate. The `mol-` prefix in the filename is load-bearing: bond
+# resolves a formula name only when it is prefixed, and formulas resolve by
+# filename stem.
+#
+# PRECONDITION: the skill:// and agent names here ship in the @srobroek/design
+# package.
+#
+# WHY TRIAGE IS ITS OWN STEP: fixing every finding in verdict order spends the
+# same effort on a 3.9:1 contrast failure and on a two-pixel misalignment. MAJOR
+# and MINOR are separated first so the MAJORs get fixed and the MINORs get
+# recorded rather than silently absorbed.
+#
+# Bond joins root-to-root as a sibling subtree and cannot rewire an inherited
+# step's `needs`, so the bonding side owns the join edge and this file declares no
+# `needs` pointing outside itself, which is also what lets it cook standalone.
+formula = "mol-design-fix-findings"
+description = "Fix findings pass {{round}} on {{surface}} from node {{node}}: triage MAJOR against MINOR, fix the MAJORs, re-verify only changed assertions, report what did not reproduce"
+type = "workflow"
+
+[vars.surface]
+required = true
+description = "route or URL the agent drives when re-verifying"
+
+[vars.node]
+required = true
+description = "id of the design node bead whose review produced these findings"
+
+[vars.round]
+default = "2"
+description = "pass number; 2 is the first dedicated fix pass after the node's own reconcile step"
+
+[[steps]]
+id = "triage-findings"
+title = "TRIAGE the findings from node {{node}} as MAJOR or MINOR"
+type = "task"
+labels = ["design", "design:subprocess", "sub:fix-findings"]
+description = """
+Read every finding the design-critic and a11y-auditor verdicts on node {{node}}
+left. Classify each as MAJOR or MINOR and record the classification with its
+reason, so the split is reviewable rather than implicit.
+
+MAJOR: any WCAG 2.2 AA failure; a state from the nine that is missing, broken, or
+unreachable; a value that bypasses the token system; a control that cannot be
+reached or operated by keyboard; copy that misstates what an action does. MINOR:
+everything whose fix is taste rather than correctness.
+
+Reproduce each finding before classifying it. A finding you cannot reproduce is
+neither MAJOR nor MINOR: mark it UNREPRODUCED with what you tried, and carry it
+to the verdict step. Never drop it, and never classify it MINOR to make it go
+away.
+"""
+
+[[steps]]
+id = "fix-majors"
+title = "FIX every MAJOR finding on {{surface}}"
+type = "task"
+needs = ["triage-findings"]
+labels = ["design", "design:subprocess", "sub:fix-findings"]
+description = """
+Fix every MAJOR from TRIAGE, and only those. Stay inside the scope node {{node}}
+declared. A finding that traces to a token rather than a component is fixed in
+the token source and rebuilt, never patched in generated CSS. Use
+skill://ui-microcopy for copy findings, skill://motion-design for motion
+findings, skill://accessibility-audit to confirm the criterion a fix is meant to
+satisfy.
+
+Record per MAJOR: the file changed, and which assertion from node {{node}} the
+change invalidates. Leave the MINORs recorded and unfixed; batching them into an
+unrequested cleanup is how a fix pass turns into a redesign.
+"""
+
+[[steps]]
+id = "reverify-changed"
+title = "REVERIFY only the assertions the fixes changed"
+type = "task"
+needs = ["fix-majors"]
+labels = ["design", "design:subprocess", "sub:fix-findings"]
+description = """
+Run skill://ui-review against {{surface}}, restricted to the assertions FIX
+listed as invalidated. Never re-walk the whole surface: node {{node}} already
+carries the evidence for everything untouched.
+
+Evidence order is fixed: ARIA snapshot first, computed styles second, screenshot
+last. Widths 1440, 768, 375, and only for the assertions in scope. Verify at
+component level before page level. For an accessibility fix, re-measure the
+criterion and record its number, the new measured value, and the required value:
+a fix asserted without a measurement is not verified.
+"""
+
+[steps.metadata]
+skill_hints = "ui-review"
+
+[[steps]]
+id = "findings-verdict"
+title = "VERDICT on pass {{round}} of the findings from node {{node}}"
+type = "task"
+needs = ["reverify-changed"]
+labels = ["design", "design:subprocess", "sub:fix-findings"]
+description = """
+Report four lists, each explicit and none merged: MAJORs fixed with their
+re-verification citations; MAJORs that survived this pass; MINORs recorded and
+deliberately not fixed; and UNREPRODUCED findings with what was tried. An empty
+list is stated as empty rather than omitted.
+
+Surviving MAJORs bond another mol-design-fix-findings with round incremented,
+rather than reopening this one, so each pass keeps its own evidence. A MAJOR that
+survives two passes is an intent problem, not a fix problem: route it to
+mol-design-iterate. An UNREPRODUCED finding goes back to whoever raised it, never
+into the fixed list.
+"""
