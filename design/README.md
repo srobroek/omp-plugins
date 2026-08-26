@@ -14,8 +14,7 @@ omp plugin marketplace add srobroek/omp-plugins
 omp plugin install design@srobroek-omp
 ```
 
-From a clone of this repository, link the directory instead, which is what the repository
-root README requires for every plugin here:
+From a clone of this repository, link the directory instead:
 
 ```bash
 omp plugin link <path-to-repo>/design
@@ -31,11 +30,12 @@ In that next session, the ten skills load, the five rules are listed, and
 `ui-ux-specialist` is spawnable. Confirm the package registered:
 
 ```bash
-omp plugin doctor
+omp plugin list
 ```
 
-A `✔ plugin:@srobroek/design` line means the skills, rules, and agents all resolved. A
-`⚠ … not an omp plugin` line means the rules and agents are silently absent.
+A marketplace install appears there as `design@srobroek-omp (0.1.0)`. `omp plugin doctor`
+reports a `✔ plugin:@srobroek/design` line for a linked directory only, and a
+`⚠ … not an omp plugin` line means that directory's rules and agents are silently absent.
 
 ## Skills
 
