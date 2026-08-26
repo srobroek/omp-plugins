@@ -26,7 +26,7 @@ Either carrier applies from the NEXT session, because OMP discovers plugins at s
 
 ## Usage
 
-In that next session, the ten skills load, the five rules are listed, and
+In that next session, the eleven skills load, the five rules are listed, and
 `ui-ux-specialist` is spawnable. Confirm the package registered:
 
 ```bash
@@ -40,13 +40,14 @@ reports a `✔ plugin:@srobroek/design` line for a linked directory only, and a
 ## Skills
 
 The wrapper skills route to the upstream skills below. When an upstream is absent, the
-wrapper stops and prints the install command. Three skills are not wrappers: `ui-review`
-is implemented here, and `wireloom` and `ux-copy` are vendored, so all three ship with
-this package.
+wrapper stops and prints the install command. Four are not wrappers: `design-overview` and
+`ui-review` are implemented here, and `wireloom` and `ux-copy` are vendored, so all four ship
+with this package.
 
 | Skill | Implementation or route | Use when |
 |---|---|---|
 | `design-system-audit` | routes to `ss-lint` and `ss-review` to audit, `ss-tokens` to generate, plus `ui-ux-pro-max` and `ss-score` | Report the tokens, scales, and primitives that exist |
+| `design-overview` | local | Report which design skills, agents, and upstreams this session actually has |
 | `design-md` | routes to `create-design-md`, which needs a repository or URL to extract from | Author and lint repo-root DESIGN.md |
 | `ui-review` | local, drives OMP `browser` | Drive a real surface and measure it |
 | `accessibility-audit` | the `accessibility-scanner` server measures; `accessibility` covers criteria; the `@axe-core/cli` gate is the fallback | Check WCAG 2.2 AA with measured values |
