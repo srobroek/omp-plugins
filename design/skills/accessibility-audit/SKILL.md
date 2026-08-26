@@ -23,10 +23,11 @@ TRIGGER
    - interactive single-page investigation: the `accessibility-scanner` MCP server. It runs
      the axe-core WCAG 2.2 engine, scrolls before scanning so lazy content is covered,
      resolves contrast over gradients, and returns a selector, a criterion, and a fix link.
-   - explicit-URL CI gate: `npx --yes --package=@axe-core/cli axe <urls> --stdout --exit`.
-     The bin is `axe`, not the package name, so pass `--package`. It takes multiple URLs,
-     JSON node targets, `--include` and `--exclude`, and exits non-zero. The MCP scanner is
-     single-page and cannot be a process-exit gate.
+   - explicit-URL CI gate: `npx --yes --package=@axe-core/cli axe "<url>" ["<url>"...] --stdout --exit`.
+     Quote every substituted URL: a query string carries `&` and `?`, which an unquoted
+     argument hands to the shell. The bin is `axe`, not the package name, so pass `--package`.
+     It takes multiple URLs, JSON node targets, `--include` and `--exclude`, and exits
+     non-zero. The MCP scanner is single-page and cannot be a process-exit gate.
 2. Check the routed skill name is in your available skills BEFORE loading it. Reading a
    `skill://` path that does not exist throws `Unknown skill`. -> present: LOAD and follow.
    Absent: STOP, emit the install command from

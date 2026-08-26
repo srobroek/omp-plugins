@@ -118,12 +118,15 @@ Pass `--package` on that last one. An unrelated `test-storybook` package exists 
 Route support differs by framework, measured on Storybook 10.5.10 with
 `@storybook/addon-mcp` installed in both a React and a Vue project. `index.json`,
 `iframe.html`, and `manifests/docs.json` serve on both. `manifests/components.json` serves
-on React and returns 404 on Vue, because `react-docgen` builds it. Where it is absent, take
-prop truth from the rendered Autodocs `ArgTypes` block, which all ten frameworks support.
+on React and returns 404 on Vue, because `@storybook/react` generates that payload and no
+Vue framework package does. Where it is absent, take prop truth from the rendered Autodocs
+`ArgTypes` block, which all ten frameworks support, or from the component source.
 
 A static build is the exception, for a CI job or a one-shot read. `npx --yes storybook build
--o <dir>` emits all four routes; adding `--test` drops `manifests/docs.json` and the
-debugger page.
+-o "<dir>"` emits the routes that framework serves, measured on React as all four. Adding
+`--test` drops `manifests/docs.json` and the debugger page. A static build cannot add a
+route the dev server does not serve for that framework, so Vue still yields no components
+manifest.
 
 MCP servers connect at session startup, and an agent cannot reconnect one. When this
 package starts Storybook itself, the MCP tools stay unavailable. Details in

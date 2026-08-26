@@ -71,8 +71,10 @@ Build instead of serving only when running a server is pointless or impossible: 
 sandbox with no free port, or a single artifact read with no follow-up. Otherwise the server
 wins, because every fix after a static build costs a full rebuild.
 
-`npx --yes storybook build -o <dir>` emits `index.json`, `manifests/components.json`,
-`manifests/docs.json`, and `manifests/components.html` under `<dir>`.
+`npx --yes storybook build -o "<dir>"` emits, under `<dir>`, the routes that framework serves.
+Measured on React: `index.json`, `manifests/components.json`, `manifests/docs.json`, and
+`manifests/components.html`. A build cannot add a route the dev server withholds for that
+framework, so a Vue project still yields no components manifest.
 
 Adding `--test` speeds the build and DROPS the docs artifacts: `index.json` and
 `manifests/components.json` remain, while `manifests/docs.json` and

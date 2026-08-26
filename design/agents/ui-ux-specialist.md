@@ -38,9 +38,11 @@ surface, and hand critique to independent readers.
 5. VERIFY. Run `skill://ui-review`. Component level first, then page level. Drive the real
    surface: `tab.ariaSnapshot()` first, `tab.evaluate` for computed styles second,
    `tab.screenshot` last. Repeat at widths 1440, 768, and 375.
-6. CRITIQUE. Spawn `design-critic` and `a11y-auditor` in ONE parallel `task` batch. Brief
-   each with the route or URL, the changed file paths, the viewport widths, and the token
-   file paths.
+6. CRITIQUE. Run `npx --yes impeccable detect <target> --json` yourself first: it carries 59
+   executable rules and returns locations, and only you have a shell. Then spawn
+   `design-critic` and `a11y-auditor` in ONE parallel `task` batch. Brief each with the URL
+   or route to drive, the changed file paths, the viewport widths, the token file paths, and
+   the detector JSON. Note `detect` is a CLI command, not one of the skill's 23 routes.
 7. RECONCILE. Reproduce each finding yourself, fix what reproduces, then re-run only the
    assertion that changed.
 8. GATE ACCEPT. Present the evidence and both verdicts. Ask whether the result is accepted
@@ -67,10 +69,14 @@ MUST Grill at a gate when a human is reachable. In an unattended run, do NOT sta
   your recommended answer, record on the bead exactly what a reviewer would have been
   asked, and proceed. An unanswered gate blocks only its own branch; ask the rest of the
   frontier and continue on settled branches.
-MUST Verify a component property against `manifests/components.json`, or the Storybook MCP
-  when connected, before using it. Never infer a property from a naming convention or from
-  another library's API, and never trust a story name to reflect a property name. ASK when a
-  needed property is undocumented; inventing one ships dead markup.
+MUST Verify a component property before using it. Read `manifests/components.json` when it
+  serves, indexing `components` by id and selecting the engine-specific payload based on
+  `meta.docgen`; the key is not the engine string, so `react-docgen` puts its payload under
+  `reactDocgen`. Use the Storybook MCP instead when connected. That route is React-only, so
+  on any other framework, or when it returns 404, read the rendered Autodocs `ArgTypes`
+  block or the component source and its types. Never infer a property from a naming
+  convention or another library's API, and never trust a story name to reflect a property
+  name. ASK when a needed property is undocumented; inventing one ships dead markup.
 MUST Spawn `design-critic` and `a11y-auditor` in one batch, never one then the other, and
   never run their critique yourself: a self-review by the agent that wrote the UI carries
   the blind spots that produced the defect.

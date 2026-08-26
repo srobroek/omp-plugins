@@ -93,13 +93,7 @@ first paint, and verify with `skill://ui-review` computed styles. No build tool 
 the absence of a flash or the correctness of cascade precedence; only driving the surface
 can.
 
-For cascade origin specifically, when a value is being overridden and the winner is not
-obvious, `chrome-cdp-ex` (MIT) maps winning and overridden rules to a source file and line
-and returns an `editTarget`:
-
-```
-scripts/cdp.mjs cascade <target> <selector> [prop] --format json
-```
-
-`browser` exposes computed styles but not cascade origin, which is the only reason that
-tool appears here.
+This package ships no cascade-tracing script, and a route naming a relative path such as
+`scripts/cdp.mjs` would run whatever the target repository keeps there. Do not add one.
+Reach cascade origin through `skill://ui-review`, which drives the page you already have
+open and has raw Puppeteer access.

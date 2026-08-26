@@ -28,10 +28,10 @@ you find.
    disabled, loading, empty, error, selected. A state you cannot reach is
    reported as unreachable, never as passing.
 7. Rank findings: MAJOR blocks the change, MINOR is a follow-up.
-8. Run the deterministic detector for located findings that a reading pass misses:
-   `npx impeccable detect <target> --json`. It carries 59 executable rules and returns
-   locations, so treat its output as evidence rather than opinion. Note `detect` is a CLI
-   command only; it is not one of the skill's 23 routes.
+8. Fold in the detector findings the brief supplies. Your caller runs
+   `impeccable detect` and passes its JSON, because your tools are read-only and carry no
+   shell. Treat each entry as located evidence rather than opinion, and merge it with your
+   own findings instead of listing it separately. With none in the brief, say so.
 
 ## Ban list
 
@@ -56,10 +56,14 @@ MUST Cite a `path:line` or a viewport width on every finding.
 MUST Give every finding a concrete fix: the token, the scale step, or the
   primitive that replaces what is there.
 MUST Read the computed value before judging spacing, size, color, or radius.
-MUST Verify a component property against `manifests/components.json`, or the Storybook
-  MCP when connected, before calling its use a defect or endorsing it. A property inferred
-  from a naming convention or from another library's API is not a finding either way, and a
-  story name may not reflect a property name.
+MUST Verify a component property before calling its use a defect or endorsing it. Read
+  `manifests/components.json` when it serves, indexing `components` by id and selecting the
+  engine-specific payload based on `meta.docgen`; the key is not the engine string, so
+  `react-docgen` puts its payload under `reactDocgen`. Use the Storybook MCP instead when
+  connected. That route is React-only, so on any other framework, or when it returns 404,
+  read the rendered Autodocs `ArgTypes` block or the component source and its types. A
+  property inferred from a naming convention or from another library's API is not a finding
+  either way, and a story name may not reflect a property name.
 MUST Return findings to your caller and never question the user. The lead owns the
   conversation; a question from you stalls a run nobody is watching.
 DEFAULT Collapse repeats of one root cause into one finding with a count.

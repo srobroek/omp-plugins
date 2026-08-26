@@ -20,7 +20,7 @@ TRIGGER
    - `ss-motion` for authoring durations, easings, and motion tokens. The winner.
    - MotionLint for a deterministic scored pass over a running surface:
      `npx playwright install chromium` once, then
-     `npx motionlint audit <url> --json audit.json --ci`.
+     `npx --yes motionlint audit "<url>" --json audit.json --ci`.
 2. Check `ss-motion` is in your available skills BEFORE loading it. Reading a
    `skill://` path that does not exist throws `Unknown skill`. -> present: LOAD and follow.
    Absent: STOP, emit the install command from

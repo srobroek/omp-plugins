@@ -15,7 +15,7 @@ plus `styleseed` itself. `skill://design-system-audit` routes to `ss-tokens` and
 
 ```
 npx playwright install chromium
-npx motionlint audit <url> --json audit.json --ci
+npx --yes motionlint audit "<url>" --json audit.json --ci
 ```
 
 MIT. The Chromium install is a one-time prerequisite. `motionlint mcp` exists and is

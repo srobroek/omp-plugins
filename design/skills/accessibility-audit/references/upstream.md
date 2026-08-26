@@ -21,7 +21,7 @@ The axe CLI needs no install either, because `npx --yes` fetches it per run. Pas
 `--package`, because the package `@axe-core/cli` installs a bin named `axe`:
 
 ```
-npx --yes --package=@axe-core/cli axe <url> [<url>...] --stdout --exit
+npx --yes --package=@axe-core/cli axe "<url>" ["<url>"...] --stdout --exit
 ```
 
 `@axe-core/cli` is 4.13.0, MPL-2.0, with a LICENSE file. This package advertises it as a
