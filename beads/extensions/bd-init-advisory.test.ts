@@ -18,8 +18,8 @@ describe("findInitInvocations", () => {
 	});
 
 	test("flags are collected, `--flag=value` reduced to the name", () => {
-		expect(findInitInvocations("bd init --init-if-missing --skip-hooks --server")).toEqual([
-			{ flags: ["--init-if-missing", "--skip-hooks", "--server"] },
+		expect(findInitInvocations("bd init --init-if-missing --skip-hooks")).toEqual([
+			{ flags: ["--init-if-missing", "--skip-hooks"] },
 		]);
 		expect(findInitInvocations("bd init --prefix=bdp")).toEqual([{ flags: ["--prefix"] }]);
 	});
@@ -33,15 +33,15 @@ describe("findInitInvocations", () => {
 	});
 
 	test("command position: after a separator, after a newline, behind env or sudo", () => {
-		expect(findInitInvocations("bd where && bd init --server")).toEqual([
-			{ flags: ["--server"] },
+		expect(findInitInvocations("bd where && bd init --skip-hooks")).toEqual([
+			{ flags: ["--skip-hooks"] },
 		]);
 		expect(findInitInvocations("cd /repo\nbd init")).toEqual([{ flags: [] }]);
 		expect(findInitInvocations("BEADS_ACTOR=omp/main/s1 bd init")).toEqual([{ flags: [] }]);
 		expect(findInitInvocations("sudo bd init")).toEqual([{ flags: [] }]);
-		expect(findInitInvocations("bd init; bd init --server")).toEqual([
+		expect(findInitInvocations("bd init; bd init --skip-hooks")).toEqual([
 			{ flags: [] },
-			{ flags: ["--server"] },
+			{ flags: ["--skip-hooks"] },
 		]);
 	});
 
@@ -55,7 +55,7 @@ describe("findInitInvocations", () => {
 			"man bd init",
 			"cat docs/beads.md | rg 'bd init'",
 			"bd create --title 'bd init notes' -t task",
-			"echo bd init --server > /tmp/notes",
+			"echo bd init --skip-hooks > /tmp/notes",
 		]) {
 			expect(findInitInvocations(command)).toEqual([]);
 		}
@@ -69,22 +69,19 @@ describe("findInitInvocations", () => {
 });
 
 describe("missingInitFlags", () => {
-	test("both flags missing", () => {
-		expect(missingInitFlags([])).toEqual({ server: true, skipHooks: true });
-		expect(missingInitFlags(["--init-if-missing"])).toEqual({ server: true, skipHooks: true });
+	test("skip-hooks missing", () => {
+		expect(missingInitFlags([])).toEqual({ skipHooks: true });
+		expect(missingInitFlags(["--init-if-missing"])).toEqual({ skipHooks: true });
 	});
 
-	test("one flag present names only the other", () => {
-		expect(missingInitFlags(["--server"])).toEqual({ server: false, skipHooks: true });
-		expect(missingInitFlags(["--shared-server"])).toEqual({ server: false, skipHooks: true });
-		expect(missingInitFlags(["--skip-hooks"])).toEqual({ server: true, skipHooks: false });
+	test("a leftover server flag does not silence the skip-hooks advisory", () => {
+		expect(missingInitFlags(["--server"])).toEqual({ skipHooks: true });
+		expect(missingInitFlags(["--shared-server"])).toEqual({ skipHooks: true });
 	});
 
-	test("the correct form says nothing — the two retired rules each blocked it", () => {
-		expect(missingInitFlags(["--server", "--skip-hooks"])).toBeUndefined();
-		expect(
-			missingInitFlags(["--init-if-missing", "--skip-hooks", "--shared-server"]),
-		).toBeUndefined();
+	test("the correct form says nothing", () => {
+		expect(missingInitFlags(["--skip-hooks"])).toBeUndefined();
+		expect(missingInitFlags(["--init-if-missing", "--skip-hooks"])).toBeUndefined();
 	});
 
 	test("--help initialises nothing", () => {
@@ -94,39 +91,31 @@ describe("missingInitFlags", () => {
 });
 
 describe("initAdvisory", () => {
-	test("names both flags and both reasons when both are missing", () => {
-		const text = initAdvisory({ server: true, skipHooks: true });
-		expect(text).toContain("--server");
-		expect(text).toContain("--shared-server");
+	test("names skip-hooks, BEADS_DIR, and the measured fork", () => {
+		const text = initAdvisory({ skipHooks: true });
 		expect(text).toContain("--skip-hooks");
+		expect(text).toContain("BEADS_DIR");
 		expect(text).toContain("core.hooksPath");
-		expect(text).toContain("embeddeddolt");
-		expect(text).toContain("both flags");
+		expect(text).toContain("No active beads workspace found");
+		expect(text).toContain("copied 54-bead database");
 		expect(text).toContain("rule://beads-setup");
-	});
-
-	test("a partial invocation is not lectured about what it already did", () => {
-		const server = initAdvisory({ server: true, skipHooks: false });
-		expect(server).toContain("embeddeddolt");
-		expect(server).not.toContain("core.hooksPath");
-
-		const hooks = initAdvisory({ server: false, skipHooks: true });
-		expect(hooks).toContain("core.hooksPath");
-		expect(hooks).not.toContain("embeddeddolt");
+		expect(text).toContain("bd init --init-if-missing --skip-hooks");
+		expect(text).not.toContain("--server");
+		expect(text).not.toContain("--shared-server");
 	});
 });
 
 describe("decideBdInit", () => {
-	test("advises a real init that omits a flag", () => {
+	test("advises a real init that omits --skip-hooks", () => {
 		expect(decideBdInit("bd init")).toContain("bd init advisory");
-		expect(decideBdInit("bd init --skip-hooks")).toContain("embeddeddolt");
-		expect(decideBdInit("bd -C /tmp/repo init --server")).toContain("core.hooksPath");
+		expect(decideBdInit("bd init")).toContain("BEADS_DIR");
+		expect(decideBdInit("bd -C /tmp/repo init")).toContain("core.hooksPath");
 	});
 
 	test("silent on the correct form, on --help, and on every mention", () => {
 		for (const command of [
-			"bd init --init-if-missing --skip-hooks --server",
-			"bd init --skip-hooks --shared-server",
+			"bd init --init-if-missing --skip-hooks",
+			"bd init --skip-hooks",
 			"bd init --help",
 			"echo how to bd init a repo",
 			"rg 'bd init' beads/",
@@ -142,7 +131,7 @@ describe("decideBdInit", () => {
 	});
 
 	test("the first advisable invocation in a chain wins", () => {
-		expect(decideBdInit("bd init --server --skip-hooks && bd init")).toContain("both flags");
+		expect(decideBdInit("bd init --skip-hooks && bd init")).toContain("omits `--skip-hooks`");
 	});
 });
 

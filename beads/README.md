@@ -50,11 +50,13 @@ session's detached-push verdict at start, held claims at close.
 - `bd-actor-gate` — blocks a claim made without `BEADS_ACTOR`, and advises on other
   mutating `bd` commands that lack it.
 - `bd-init-advisory` — advises once per session when a real `bd init` omits
-  `--skip-hooks` or a server flag, reading argv at command position so a mention
-  (`echo`, `rg`, `git log --grep`, `man bd init`) says nothing. Blocks nothing:
-  both flags depend on repository state the token stream cannot see. It replaces
-  the `beads-init-skip-hooks` and `beads-init-prefer-server` rules, which fought
-  each other and blocked the correct `bd init --server --skip-hooks`.
+  `--skip-hooks`, reading argv at command position so a mention (`echo`, `rg`,
+  `git log --grep`, `man bd init`) says nothing. Blocks nothing: the flag
+  depends on repository state the token stream cannot see. The same message
+  tells the reader to export `BEADS_DIR` to the run's `.beads` directory so a
+  worktree or copied checkout reaches one database. It replaces the
+  `beads-init-skip-hooks` and `beads-init-prefer-server` rules, which fought
+  each other and blocked the correct `bd init --init-if-missing --skip-hooks`.
 - `session-beads-lifecycle` — reports at the session boundaries: unresolved gates and
   the previous session's detached-push verdict at start, held claims at close.
 - `dolt-server-lifecycle` — reports once when a beads repository is on the embedded
