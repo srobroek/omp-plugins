@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.7.0](https://github.com/srobroek/omp-plugins/compare/beads--v0.6.2...beads--v0.7.0) (2026-08-26)
+
+
+### Features
+
+* **beads:** report a failing check the agent never mentioned ([65635c5](https://github.com/srobroek/omp-plugins/commit/65635c570e6aa70cff5e17ce4015a92b5f51a2b4))
+* **beads:** report a failing check the agent never mentioned ([46d3d52](https://github.com/srobroek/omp-plugins/commit/46d3d52ecd2b7bb460ab346f4c2a5a08c5586ef6))
+
 ## [0.6.2](https://github.com/srobroek/omp-plugins/compare/beads--v0.6.1...beads--v0.6.2) (2026-08-25)
 
 
