@@ -11,6 +11,19 @@ Defence-in-depth advisories and small extension guards.
 - `srobroek-remote-exec-guard`
 - `srobroek-sudo-destructive-advisory`
 
+The two blocking guards, `srobroek-bash-indirection-guard` and `srobroek-remote-exec-guard`, share a
+corpus: `bun test rules/` scores every case against the `condition` read out of the rule's own
+frontmatter, in both encodings a live buffer carries (the bash tool's argument JSON, and the bare
+command). Point it at another checkout of the rules to compare two versions on one corpus:
+
+```
+GUARD_RULE_DIR=/tmp/before bun test rules/
+```
+
+Both guards match only a bash tool call's streaming arguments. Assistant prose, thinking text, other
+tools' arguments, and tool *results* are unreachable, so a guard that appeared to fire on output the
+agent read back actually fired on a later bash argument that quoted it.
+
 ## Extensions
 
 - `close-keywords` — rewrite `gh pr create|edit --body` so close-keywords apply to every issue in a list

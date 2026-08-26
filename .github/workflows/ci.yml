@@ -81,6 +81,16 @@ jobs:
             (cd "$d/.." && bun test extensions/) || exit 1
           done < <(git ls-files '*/extensions/*.test.ts' | xargs -rn1 dirname | sort -u)
 
+      # A rule's `condition` is a regex with no compiler and no type check: the only
+      # thing that catches a false positive is a corpus. These tests read the
+      # condition straight out of the rule's frontmatter, so a regex edit that
+      # reintroduces a known false positive fails here.
+      - name: Rule corpus tests
+        run: |
+          while IFS= read -r d; do
+            (cd "$d/.." && bun test rules/) || exit 1
+          done < <(git ls-files '*/rules/*.test.ts' | xargs -rn1 dirname | sort -u)
+
       # `uvx` is not preinstalled on GitHub runners.
       - uses: astral-sh/setup-uv@v10.0.1
 
