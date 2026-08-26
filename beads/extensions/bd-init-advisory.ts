@@ -6,16 +6,16 @@
  * a bash command, so both fired on `echo how to bd init a repo`, `rg 'bd init'`,
  * `git log --grep='bd init'` and `man bd init` — and on each other's correct form.
  * skip-hooks demanded `--skip-hooks`, prefer-server demanded a server flag, and
- * the invocation this estate actually wants, `bd init --server --skip-hooks`, was
- * blocked by skip-hooks' sibling anyway. Verified live 2026-08-25.
+ * the invocation this estate actually wants, `bd init --init-if-missing --skip-hooks`
+ * plus an exported `BEADS_DIR`, was blocked by skip-hooks' sibling anyway.
+ * Verified live 2026-08-25.
  *
  * Two things follow. Argv is the only honest trigger: a mention inside a quoted
  * string, a `--grep` pattern, or another program's arguments is not an
  * invocation, so this reads the `bd` at command position, its verb, and its
  * flags. And the wrongness is contextual — an already-initialised repository,
- * hooks the project deliberately manages, an embedded database chosen for a
- * checkout that is never copied — so this is advice: `bd init` always proceeds,
- * and the advisory speaks at most once per process.
+ * hooks the project deliberately manages — so this is advice: `bd init` always
+ * proceeds, and the advisory speaks at most once per process.
  *
  * Command position is per line as well as per separator: `cd /repo\nbd init` is a
  * real invocation. The cost is that a `bd init` line inside a heredoc body reads
@@ -38,9 +38,6 @@ const SEPARATOR: Record<string, true> = { ";": true, "&": true, "|": true, "(": 
 
 /** `NAME=value bd init`: an environment prefix is not the command. */
 const ENV_ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*=/;
-
-/** Either flag answers the embedded-fork problem; neither implies the other. */
-const SERVER_FLAGS: Record<string, true> = { "--server": true, "--shared-server": true };
 
 /** `--help` prints; it initialises nothing. */
 const HELP_FLAGS: Record<string, true> = { "--help": true, "-h": true };
@@ -100,44 +97,41 @@ export function findInitInvocations(command: string): InitInvocation[] {
 	return out;
 }
 
-export type MissingFlags = { server: boolean; skipHooks: boolean };
+export type MissingFlags = { skipHooks: true };
 
 /**
  * What this invocation leaves out, or `undefined` when there is nothing to say:
- * a `--help` run, or both flags already present.
+ * a `--help` run, or `--skip-hooks` already present.
  */
 export function missingInitFlags(flags: string[]): MissingFlags | undefined {
 	if (flags.some(flag => HELP_FLAGS[flag] === true)) return;
-	const server = !flags.some(flag => SERVER_FLAGS[flag] === true);
-	const skipHooks = !flags.includes("--skip-hooks");
-	if (!server && !skipHooks) return;
-	return { server, skipHooks };
+	if (flags.includes("--skip-hooks")) return;
+	return { skipHooks: true };
 }
 
-const SERVER_ADVICE =
-	"`--server` (one server for this project) or `--shared-server` (one per machine): " +
-	"plain `bd init` creates an embedded database under `.beads/embeddeddolt/` that " +
-	"resolves by walking up from the working directory, so any harness isolating work " +
-	"by copying the checkout gets a second, writable database, and that copy's claims, " +
-	"comments and closures never reach the run. Measured: a copied 54-bead database " +
-	"accepted `create` and `--claim` with none of it reaching the original.";
+const BEADS_DIR_ADVICE =
+	"Whatever starts a run must export `BEADS_DIR` to that run's `.beads` " +
+	"directory so every child process inherits the pin. That is what makes a " +
+	"worktree or a copied checkout read and write the run's database. Unpinned, " +
+	"a read from a directory with no `.beads/` reports `No active beads " +
+	"workspace found`, and a copied checkout can resolve a personal database " +
+	"instead (`$HOME/.beads` exists on this machine). Something must own the " +
+	"pin: a harness that copies a checkout without setting it still splits the " +
+	"database. Measured: a copied 54-bead database accepted `create` and " +
+	"`--claim` with none of it reaching the original.";
 
 const SKIP_HOOKS_ADVICE =
 	"`--skip-hooks` wherever hooks are already managed: plain `bd init` repoints " +
 	"`core.hooksPath` and copies ~349MB of hooks, which is broken on arm64.";
 
-export function initAdvisory(missing: MissingFlags): string {
-	const advice: string[] = [];
-	if (missing.server) advice.push(SERVER_ADVICE);
-	if (missing.skipHooks) advice.push(SKIP_HOOKS_ADVICE);
+export function initAdvisory(_missing: MissingFlags): string {
 	return (
 		`bd init advisory — nothing was blocked, and this speaks once per session. ` +
-		`This \`bd init\` omits ${advice.length === 2 ? "both flags" : "a flag"} this estate ` +
-		`normally wants. ${advice.join(" ")} The full form is ` +
-		"`bd init --init-if-missing --skip-hooks --server` (rule://beads-setup). Both are " +
-		"contextual, so decide rather than re-run blind: an already-initialised repository, " +
-		"hooks the project deliberately owns, or a single-agent checkout that is never " +
-		"copied can each make the plainer form the right call."
+		`This \`bd init\` omits \`--skip-hooks\`. ${SKIP_HOOKS_ADVICE} ${BEADS_DIR_ADVICE} ` +
+		`The full form is \`bd init --init-if-missing --skip-hooks\` ` +
+		`(rule://beads-setup). Both the flag and the pin are contextual, so decide ` +
+		`rather than re-run blind: an already-initialised repository or hooks the ` +
+		`project deliberately owns can each make the plainer form the right call.`
 	);
 }
 

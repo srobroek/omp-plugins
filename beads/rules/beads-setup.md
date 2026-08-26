@@ -6,19 +6,22 @@ description: Initialising beads in a repository and verifying the install.
 # Beads Setup
 
 MUST Let the bd CLI own initialization and generated integration: bootstrap
-  with `bd init --init-if-missing --skip-hooks --server`, then verify with
-  `bd where` and `bd hooks list`. A `bd init` that omits `--skip-hooks` or a
-  server flag draws one advisory from the `bd-init-advisory` extension; nothing
-  is blocked, because both flags are contextual.
-DEFAULT Init in server mode even where a repository looks single-agent:
-
-- embedded resolves by walking up from the working directory,
-- so anything that copies the checkout gives each copy its own database, whether
-  that is isolation, a worktree, or a subagent,
-- and the retrofit needs a backup, a fresh checkout, and a restore, because bd
-  refuses init over existing data.
-
-The price is one dolt process per project. See rule://beads-storage-mode.
+  with `bd init --init-if-missing --skip-hooks`, then verify with
+  `bd where` and `bd hooks list`. A `bd init` that omits `--skip-hooks` draws
+  one advisory from the `bd-init-advisory` extension; nothing is blocked,
+  because the flag is contextual.
+MUST Whatever starts a run export `BEADS_DIR` to that run's `.beads` directory,
+  so every child process inherits the pin. That is what makes a worktree or a
+  copied checkout read and write the run's database.
+GOTCHA Unpinned, a read from a directory with no `.beads/` reports
+  `No active beads workspace found`, and a copied checkout can resolve a
+  personal database instead. `$HOME/.beads` exists on this machine.
+GOTCHA Something must own the pin. A harness that copies a checkout without
+  setting `BEADS_DIR` still splits the database. Measured: a copied 54-bead
+  database accepted `create` and `--claim` with none of it reaching the original.
+NOT A Dolt server flag as the remedy for worktrees or copied checkouts. Pin
+  `BEADS_DIR`. Server mode is a different layout with its own lifecycle; see
+  rule://beads-storage-mode.
 
 GOTCHA `bd init` derives a Dolt remote from `git remote origin` on its own.
   Where that database already exists it fails with `can't create database
