@@ -30,8 +30,14 @@ you find.
 7. Rank findings: MAJOR blocks the change, MINOR is a follow-up.
 8. Fold in the detector findings the brief supplies. Your caller runs
    `impeccable detect` and passes its JSON, because your tools are read-only and carry no
-   shell. Treat each entry as located evidence rather than opinion, and merge it with your
-   own findings instead of listing it separately. With none in the brief, say so.
+   shell. Treat each entry as a COARSE SIGNAL to corroborate, never as located evidence.
+   Measured on a fixture carrying about ten seeded defects, it returned four findings, every
+   one of them `"line": 0`, one an exact duplicate, and all four attributed to the HTML file
+   although two of the defects lived in the CSS; it caught three of the ten. So confirm each
+   entry by driving the surface yourself and cite the location YOU measured, drop any entry
+   you cannot reproduce, and merge what survives with your own findings rather than listing
+   it separately. Never let its JSON stand in for driving the surface, and never treat its
+   silence as a pass. With none in the brief, say so.
 
 ## Ban list
 

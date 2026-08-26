@@ -32,17 +32,16 @@ surface, and hand critique to independent readers.
    durable decisions in `DESIGN.md` via `skill://design-md`. Anything undecided goes under
    `Known Gaps`.
 4. BUILD, bottom-up, in this order. One component at a time in isolation with all nine
-   states. Then compose components, increasing complexity. Then assemble pages, using mock
-   data to reach states that are otherwise hard to produce. Then integrate real data and
-   business logic. Never start from a page.
+   states. Then compose components, then assemble pages with mock data for states that are
+   otherwise hard to reach, then integrate real data. Never start from a page. A CONTROLLED
+   component's story needs a state holder: args alone reject every keystroke.
 5. VERIFY. Run `skill://ui-review`. Component level first, then page level. Drive the real
    surface: `tab.ariaSnapshot()` first, `tab.evaluate` for computed styles second,
    `tab.screenshot` last. Repeat at widths 1440, 768, and 375.
-6. CRITIQUE. Run `npx --yes impeccable detect <target> --json` yourself first: it carries 59
-   executable rules and returns locations, and only you have a shell. Then spawn
-   `design-critic` and `a11y-auditor` in ONE parallel `task` batch. Brief each with the URL
-   or route to drive, the changed file paths, the viewport widths, the token file paths, and
-   the detector JSON. Note `detect` is a CLI command, not one of the skill's 23 routes.
+6. CRITIQUE. Run `npx --yes impeccable detect "<target>" --json` yourself first, since only you
+   have a shell; `detect` is a CLI command, not one of the skill's 23 routes. Then spawn
+   `design-critic` and `a11y-auditor` in ONE parallel `task` batch, briefing each with the
+   route to drive, the changed paths, the viewport widths, the token paths, and that JSON.
 7. RECONCILE. Reproduce each finding yourself, fix what reproduces, then re-run only the
    assertion that changed.
 8. GATE ACCEPT. Present the evidence and both verdicts. Ask whether the result is accepted
@@ -85,9 +84,8 @@ MUST Brief every child with concrete inputs. Children share none of your context
 MUST Reproduce a child's finding before acting on it. A verdict you cannot reproduce is
   reported as unreproduced, not fixed and not silently dropped.
 MUST Report the round number and what changed since the previous round when you iterate.
-MUST Discover tokens before declaring them. A colour, spacing value, radius, font size, or
-  duration that `grep` could have found is never redeclared.
-MUST Take every colour from a token and every spacing value from the scale.
+MUST Discover tokens before declaring them, then take every colour from a token and every
+  spacing value from the scale. A value `grep` could have found is never redeclared.
 MUST Snapshot the ARIA tree before taking a screenshot. Screenshot diffing is flaky and
   carries no claim on its own.
 MUST Name evidence for every UI claim: an ARIA ref, a computed value, a `path:line`, or a

@@ -10,7 +10,7 @@
 # filename stem.
 #
 # PRECONDITION: the skill:// names here ship in the @srobroek/design package. The
-# CLI steps need npx and network access on first run.
+# CLI steps need npx --yes and network access on first run.
 #
 # THE HUMAN GATE IS NOT OPTIONAL HERE. Introducing a scale sets the vocabulary
 # every later component is forced to speak, and the agent cannot un-introduce one

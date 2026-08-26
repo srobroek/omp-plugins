@@ -17,9 +17,16 @@ in a repository with no design-source connector:
   3. Replaced the slash-command "Usage" block, which read `/ux-copy $ARGUMENTS`, with
      skill invocation, because this is loaded as a skill and takes no argument string.
   4. Rewrote the frontmatter description to this repository's contract: under 25 words,
-     third person, no em-dash.
-All substantive guidance below, being the principles, copy patterns, voice and tone,
-output template, and tips, is upstream's and is unchanged.
+     third person, no em-dash. Dropped upstream's `argument-hint` key, which belongs to the
+     slash-command form removed in change 3.
+  5. Replaced all six em-dashes with a comma or a colon, because this repository forbids
+     them in authored prose. Four sit inside the guidance text below. In the same line, one
+     first-person phrase became impersonal: "helps me match your tone" reads "helps match
+     your tone", since a skill has no first person.
+The GUIDANCE itself is upstream's and unaltered: the five principles, every copy pattern,
+the voice and tone list, the output template's structure, and all three tips carry their
+original meaning. Changes 4 and 5 are punctuation and voice only, and no advice was added,
+removed, or reversed.
 -->
 
 # UX Copy

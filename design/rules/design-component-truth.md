@@ -1,7 +1,7 @@
 ---
 name: design-component-truth
 description: Verify a component's props against its documentation before use; never infer a prop from a naming convention.
-globs: ["**/*.{tsx,jsx,vue,svelte}"]
+globs: ["**/*.{tsx,jsx,ts,js,vue,svelte,astro,mdx}"]
 ---
 
 Prop hallucination is its own failure mode. A plausible-sounding prop such as

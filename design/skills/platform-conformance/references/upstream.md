@@ -23,9 +23,9 @@ The skills are Markdown content with no runtime prerequisite.
 ## modern-web-guidance
 
 Apache-2.0 with a LICENSE file. It also installs `chrome-extensions`, which no wrapper
-here routes to. Its own workflow runs `npx -y modern-web-guidance@latest search` and
-`retrieve`, so it needs network access for the npm package, with an `npx --offline`
-fallback when the package is already cached.
+here routes to. Its own workflow runs `npx --yes modern-web-guidance@latest search "<topic>"`
+and `retrieve`, so it needs network access for the npm package, with an
+`npx --yes --offline` fallback when the package is already cached.
 
 It answers a different question from the eight above. They cover platform convention;
 this covers whether a web API or pattern is current and widely supported.

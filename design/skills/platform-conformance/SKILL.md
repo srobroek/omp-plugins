@@ -30,17 +30,30 @@ TRIGGER
    | Android | `android-design-guidelines` |
    | web | `web-design-guidelines` |
 
-2. Add `modern-web-guidance` for current web platform practice, which is a separate
-   question from convention conformance. -> baseline support and current APIs cited.
-3. Check the routed name is in your available skills BEFORE loading it. Reading a
+2. For current web practice, prefer the CLI, which needs NO plugin install:
+   `npx --yes modern-web-guidance@latest search "<topic>"`, then `retrieve`. It needs network.
+   -> baseline support and current APIs cited from the tool, not from memory.
+3. Check the routed platform skill is in your available skills BEFORE loading it. Reading a
    `skill://` path that does not exist throws `Unknown skill`. -> present: LOAD and follow.
-   Absent: STOP, emit the install command from
-   `skill://platform-conformance/references/upstream.md`, and run it. Platform guidance
-   restated from memory is the failure this skill exists to prevent.
-4. Detect the platform from repository markers rather than asking: `package.json`
+   Absent: do NOT improvise. Platform guidance restated from memory is the failure this
+   skill exists to prevent. Instead report the gap, name the install command from
+   `skill://platform-conformance/references/upstream.md`, and ASK the user to run it. An
+   install applies from the NEXT session, because OMP discovers plugins at startup, so never
+   install and retry within this one. The eight platform skills are prose and have no npm
+   package, so no CLI substitutes for them.
+4. Detect the ecosystem from repository markers rather than asking: `package.json`
    dependencies, `pubspec.yaml`, `*.xcodeproj` or `Package.swift`, `composer.json`, or
-   `app.json` plus a `react-native` dependency. -> the platform is stated with the marker
-   that proved it. ASK only when nothing is detectable.
+   `app.json` plus a `react-native` dependency. -> the ecosystem is stated with the marker
+   that proved it.
+5. Narrow the ecosystem to ONE of the eight route targets, because no marker in step 4
+   does that on its own. `Package.swift` proves Swift, never which Apple OS.
+   -> read the deployment target: `platforms:` in `Package.swift`, or
+   `*_DEPLOYMENT_TARGET` build settings in an `.xcodeproj`. For `package.json`, a `next`,
+   `vite`, `astro`, or `react-dom` dependency implies web. ASK when the evidence still
+   names two or more targets, and NEVER pick the most common one silently.
+6. Handle a repository carrying markers for several ecosystems, which is normal in a
+   monorepo. -> judge one target per pass, name the subtree each marker came from, and ASK
+   which the user means when the request does not say.
 
 ## Rules
 

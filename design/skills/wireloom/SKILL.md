@@ -58,6 +58,9 @@ TRIGGER
 MUST Lock indentation to 2 or 4 spaces for the whole file. Tabs are a parse error.
 MUST Read the grammar at the URL above rather than recalling primitive names. The widget
   set is versioned and a remembered name is a stale name.
+MUST Report the grammar as unread when the fetch fails, and mark every primitive you used
+  as unverified. It is not vendored here, so no network means no authority: emit the block,
+  then name what you could not confirm. A silent guess is the failure mode.
 DEFAULT One `window` root per block. A second screen is a second block.
 NOT Describe the layout in prose instead of emitting the block. Agents default to prose or
   ASCII art unless told otherwise, which is the failure this skill exists to prevent.

@@ -10,7 +10,7 @@
 # filename stem.
 #
 # PRECONDITION: the skill:// names here ship in the @srobroek/design package. The
-# scoring step needs npx and a Chromium install on first run.
+# scoring step needs npx --yes and a Chromium install on first run.
 #
 # THE THRESHOLD IS FIXED AT 200ms AND EVERY TRANSFORM ANIMATION. A
 # prefers-reduced-motion branch is required for every transition over 200ms and for
@@ -117,8 +117,8 @@ description = """
 Add a deterministic pass over the agent's own reading, because a judgement about
 motion quality is exactly the kind of claim that needs an independent located
 finding:
-  npx playwright install chromium
-  npx motionlint audit <url> --json audit.json --ci
+  npx --yes playwright install chromium
+  npx --yes motionlint audit "{{surface}}" --json audit.json --ci
 It needs the Chromium install on first run and a reachable URL, so where
 {{surface}} is not reachable as a URL, record the step as not run rather than
 reporting a score it did not produce.

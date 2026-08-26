@@ -388,8 +388,10 @@ labels = ["design", "phase:critique"]
 description = """
 Spawn design-critic (read-only) in the SAME parallel batch as
 audit-accessibility, never after it. Run skill://ui-review as critique on
-{{surface}} and on the primitive set, plus the deterministic detector pass:
-npx impeccable detect <target> --json for located findings. Verdict PASS,
+{{surface}} and on the primitive set. Add npx --yes impeccable detect "{{surface}}"
+--json as a COARSE corroborating signal only: its findings carry "line": 0, so they
+are not located evidence and never substitute for driving the surface. Corroborate
+each entry by driving the surface and cite that location. Verdict PASS,
 PARTIAL, or FAIL with named evidence. Do not edit files, and do not question the
 user: the lead owns the conversation. A self-review by whoever built the system
 shares its blind spots.
@@ -469,8 +471,8 @@ Also record: the tier files and what each owns, the theme axis {{themes}} and th
 density axis {{density}} with their selectors, the primitive inventory with its
 dispositions, and which artifacts are generated and by what command. State that
 tokens/**/*.json is canonical and DESIGN.md is a projection. Gate the result
-with: npx @google/design.md lint DESIGN.md
-Review a change to it with: npx @google/design.md diff before after
+with: npx --yes @google/design.md lint "$(git rev-parse --show-toplevel)/DESIGN.md"
+Review a change to it with: npx --yes @google/design.md diff "<before>" "<after>"
 
 reconcile-findings is named unconditionally so this step stays reachable when
 want_fix_round is false.
