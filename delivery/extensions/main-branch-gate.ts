@@ -198,19 +198,28 @@ export function findCommitInvocations(command: string): CommitInvocation[] {
 	let sequential: { chdir: string | null; unknown: boolean } = { chdir: null, unknown: false };
 	/** Inside a pipeline every segment is its own shell, so no `cd` here may escape it. */
 	let inPipeline = false;
+	/** A `cd` whose success decided which side of a `||` ran: a later `&&` rejoins both. */
+	let pendingBranchDependent = false;
 	const subshells: {
 		chdir: string | null;
 		chdirUnknown: boolean;
 		sequential: { chdir: string | null; unknown: boolean };
 		inPipeline: boolean;
+		pendingBranchDependent: boolean;
 	}[] = [];
 	const revert = (): void => {
 		chdir = sequential.chdir;
 		chdirUnknown = sequential.unknown;
 	};
-	/** Leave a pipeline or a line: discard any `cd` it made, then set the new baseline. */
+	/**
+	 * Leave a pipeline or a sequential boundary, then set the new baseline. A `cd` whose
+	 * success chose which side of an earlier `||` ran leaves the directory branch-dependent
+	 * from here on, because both paths reach whatever follows.
+	 */
 	const endSegment = (): void => {
 		if (inPipeline) revert();
+		if (pendingBranchDependent) chdirUnknown = true;
+		pendingBranchDependent = false;
 		inPipeline = false;
 		sequential = { chdir, unknown: chdirUnknown };
 	};
@@ -222,8 +231,9 @@ export function findCommitInvocations(command: string): CommitInvocation[] {
 			const token = tokens[i] as string;
 			if (SEPARATOR[token] === true) {
 				if (token === "(") {
-					subshells.push({ chdir, chdirUnknown, sequential, inPipeline });
+					subshells.push({ chdir, chdirUnknown, sequential, inPipeline, pendingBranchDependent });
 					inPipeline = false;
+					pendingBranchDependent = false;
 					sequential = { chdir, unknown: chdirUnknown };
 				} else if (token === ")") {
 					const outer = subshells.pop();
@@ -232,12 +242,22 @@ export function findCommitInvocations(command: string): CommitInvocation[] {
 						chdirUnknown = outer.chdirUnknown;
 						sequential = outer.sequential;
 						inPipeline = outer.inPipeline;
+						pendingBranchDependent = outer.pendingBranchDependent;
 					}
-				} else if (token === "|") {
+				} else if (token === "|" || token === "&") {
+					// Each pipeline segment and a background job run in their own shell, so a `cd`
+					// in one definitively does not reach what follows.
 					revert();
-					inPipeline = true;
-				} else if (token === "||" || token === "&") {
-					// After `||` the `cd` either never ran or failed; `&` backgrounds it.
+					inPipeline = token === "|";
+				} else if (token === "||") {
+					// This segment runs only when the left side failed, so a `cd` there did not take
+					// effect and the directory here is the baseline. What the outcome leaves open is
+					// everything AFTER this segment, which both paths reach. Accumulate rather than
+					// assign: in `cd d || false || true` the first `||` already reverted the
+					// directory, so the second sees no move and would clear the flag that the
+					// first `cd` earned.
+					pendingBranchDependent ||=
+						chdir !== sequential.chdir || chdirUnknown !== sequential.unknown;
 					revert();
 					inPipeline = false;
 				} else endSegment();

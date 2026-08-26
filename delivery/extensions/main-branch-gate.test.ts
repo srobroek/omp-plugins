@@ -139,11 +139,53 @@ describe("findCommitInvocations", () => {
 	});
 
 	test("after || the cd either never ran or failed, and & backgrounds it", () => {
+		// This commit runs only when the `cd` failed, so it runs in the baseline directory.
 		expect(findCommitInvocations("cd /repo || git commit -m x")).toEqual([
 			{ repoDir: null, dryRun: false, chdir: null, chdirUnknown: false },
 		]);
 		expect(findCommitInvocations("cd /repo & git commit -m x")).toEqual([
 			{ repoDir: null, dryRun: false, chdir: null, chdirUnknown: false },
+		]);
+	});
+
+	// AND-OR lists are left-associative: `cd dir || true && git commit` commits in `dir`
+	// when the cd succeeded and in the old directory when it did not, so neither can be
+	// asserted statically.
+	test("a cd before || makes the directory branch-dependent, so unknown", () => {
+		expect(findCommitInvocations("cd /feature || true && git commit -m x")).toEqual([
+			{ repoDir: null, dryRun: false, chdir: null, chdirUnknown: true },
+		]);
+		// Without a `cd` in that segment there is nothing branch-dependent to record.
+		expect(findCommitInvocations("test -d /x || true && git commit -m y")).toEqual([
+			{ repoDir: null, dryRun: false, chdir: null, chdirUnknown: false },
+		]);
+	});
+
+	// `;` and a newline start a new list but keep the cwd, so they rejoin both paths of an
+	// earlier `||` exactly as `&&` does.
+	test("a cd before || stays branch-dependent across ; and a newline", () => {
+		for (const command of [
+			"cd /feature || true && git commit -m x",
+			"cd /feature || true; git commit -m x",
+			"cd /feature || true\ngit commit -m x",
+		]) {
+			expect(findCommitInvocations(command)).toEqual([
+				{ repoDir: null, dryRun: false, chdir: null, chdirUnknown: true },
+			]);
+		}
+	});
+
+	test("a later absolute cd re-establishes the directory", () => {
+		expect(findCommitInvocations("cd /a || true; cd /b && git commit -m x")).toEqual([
+			{ repoDir: null, dryRun: false, chdir: "/b", chdirUnknown: false },
+		]);
+	});
+
+	// A chained `||` must not clear what the first one earned: if the `cd` succeeded, every
+	// later RHS is skipped and the commit runs in that directory.
+	test("pending branch-dependence survives a chained ||", () => {
+		expect(findCommitInvocations("cd /feature || false || true; git commit -m x")).toEqual([
+			{ repoDir: null, dryRun: false, chdir: null, chdirUnknown: true },
 		]);
 	});
 
@@ -290,6 +332,22 @@ describe("decideCommit", () => {
 		setGitRunForTests(run);
 		expect(decideCommit("cd - && git -C /trunk commit -m x", "/session", {})?.block).toBe(true);
 		expect(calls.map(c => c.cwd)).toEqual(["/trunk"]);
+	});
+
+	// `cd dir || true && git commit` reaches the commit on both paths with different
+	// directories, so reading either one would decide it on a runtime outcome.
+	test("a branch-dependent cd reads no repository", () => {
+		const { run, calls } = fakeGit({ "/session": "main", "/feature": "feat/x" });
+		setGitRunForTests(run);
+		expect(decideCommit("cd /feature || true && git commit -m x", "/session", {})).toBeUndefined();
+		expect(calls).toEqual([]);
+	});
+
+	test("an immediate || commit is read against the baseline", () => {
+		const { run, calls } = fakeGit({ "/session": "main", "/feature": "feat/x" });
+		setGitRunForTests(run);
+		expect(decideCommit("cd /feature || git commit -m x", "/session", {})?.block).toBe(true);
+		expect(calls.map(c => c.cwd)).toEqual(["/session"]);
 	});
 
 	test("blocks the second of two commits when only that repo is on main", () => {
