@@ -1,6 +1,6 @@
 ---
 name: beads-storage-mode
-description: "Storage backend choice and its coordination consequences: embedded is single-writer and per-checkout, server mode survives a filesystem copy, and migrating between them is a backup and restore rather than a flag. Read before enabling isolation or worktrees against a beads repo."
+description: "Storage backend choice and its coordination consequences: embedded resolves a path, a copied checkout forks the database, a linked git worktree does not, and BEADS_DIR is the pin that works. Read before enabling isolation or worktrees against a beads repo."
 ---
 
 # Beads storage mode
@@ -22,6 +22,26 @@ MUST Decide isolation from the resolution mechanism:
 - Embedded resolves a PATH, so a copied checkout resolves a second database.
 - Server mode resolves a HOST AND PORT, which copying cannot change.
 
+## Pin the run's database first
+
+MUST Export `BEADS_DIR=<run>/.beads` once, wherever the run starts. Child
+  processes inherit it. That export is the remedy that works on an existing
+  embedded project.
+
+GOTCHA Without the pin, bd walks up from the working directory. Measured: from a
+  directory that holds no `.beads/`, a pinned `bd list` returned the run's
+  beads, and the same read unpinned reported `No active beads workspace found`.
+  Two concurrent writers from different working directories both landed theirs
+  in one embedded store when a parent set `BEADS_DIR`.
+
+DEFAULT A linked git worktree needs no pin. Measured: five live worktrees, none
+  holding `.beads/`, every one reading the primary checkout's beads through
+  `bd where`. Only a copied checkout, or a clone, needs `BEADS_DIR`.
+
+NOT A per-call pin (`bd -C <repo>`). It has to be right on every call, nothing
+  enforces it, and a parent sets `BEADS_DIR` once. `srobroek/omp-orchestrate`
+  retired that pin for that reason.
+
 ## What embedded costs under isolation
 
 GOTCHA A plain `cp -R` of an embedded `.beads` yields a working, independent
@@ -38,25 +58,33 @@ MUST Assume that copy-based isolation splits the run. Nothing errors, and nothin
 - comments, statuses and closures never reach the intended run,
 - two agents can hold one bead, each believing it won.
 
-DEFAULT Where server mode is unavailable, aim every call at the run's checkout
-  with `bd -C <run repo>`. Two verbs survive concurrent processes with exactly one
-  winner, `bd update --claim` and `bd ready --claim`. The loser sees an empty
-  queue, or `already claimed by <actor>`.
+DEFAULT Two verbs survive concurrent processes with exactly one winner,
+  `bd update --claim` and `bd ready --claim`. The loser sees an empty queue, or
+  `already claimed by <actor>`. That holds only when every process uses one
+  store.
 
-## Choose a server layout
+## Server mode is not the first remedy
 
-MUST Default to server mode on every new project, including one that looks
-  single-agent. A repository's future is not knowable at init: isolation gets
-  enabled, a worktree appears, subagents start running. Embedded forks silently in
-  all three, and the retrofit costs a backup, a fresh checkout, and a restore
-  rather than a flag.
+NOT `bd init --server` as the default answer to a copied checkout. Server mode
+  survives a copy because it resolves a host and port. It also buys a lifecycle
+  keyed on `.beads/dolt-server.pid`. bd answers "is a server running?" from that
+  file rather than from the port. Any tool that removes the file starts a rival.
+  Measured: nine consecutive `database is locked by another dolt process`
+  refusals in one log, and 29 `dolt sql-server` processes on one machine, of
+  which 23 served directories that no longer existed.
 
-DEFAULT Prefer a per-project server (`bd init --server`):
+GOTCHA A container in its own network namespace cannot reach a loopback-bound
+  Dolt server at any address. Embedded Dolt sync then fails under that network.
+
+DEFAULT Keep an existing embedded project. Pin `BEADS_DIR`. Reach for server
+  mode only when many writers on one machine must share a store without
+  inheriting an environment, and something outside bd owns the process.
+
+DEFAULT Prefer a per-project server (`bd init --server`) over `--shared-server`
+  when you do take that path:
 
 - its blast radius is one project,
-- its lifecycle is manageable,
-- `.beads/` carries its own `dolt-server.{pid,port,lock,log}`, so the repository
-  owns a discoverable, disposable server.
+- `.beads/` carries its own `dolt-server.{pid,port,lock,log}`.
 
 DEFAULT Reach for `--shared-server` when one machine hosts many projects, and N
   idle processes are the objection. It gives one server, one fixed port, and one
@@ -88,26 +116,27 @@ GOTCHA The config key is FLAT (`dolt.shared-server: true`), not nested under a
 
 NOT Setting `BEADS_DOLT_SHARED_SERVER=1` alone to switch modes. With
   `metadata.json` still pinning `embedded`, bd announces the shared server and
-  then fails with `database "<name>" not found on Dolt server`. The server holds a
-  different data directory than the one the embedded engine wrote.
+  then fails with `database "<name>" not found on Dolt server`. The server holds
+  a different data directory than the one the embedded engine wrote.
 
 ## Migrate an existing project
 
-MUST Migrate by backup and restore into a FRESH project. Never re-run init in
-  place: bd refuses `bd init` over existing data on purpose.
+MUST Treat a mode switch as an export, a re-init and a restore, not a flag. The
+  prefix lives in the database, not in the repository, so supply `--prefix` by
+  hand. Never re-run init in place: bd refuses `bd init` over existing data on
+  purpose.
 
 ```bash
 bd backup init /path/to/backup && bd backup sync   # in the existing project
-bd init --server --skip-hooks                      # in a FRESH checkout
+bd init --server --skip-hooks --prefix <prefix>    # in a FRESH checkout
 bd backup restore --force /path/to/backup
 ```
 
 DEFAULT Override that refusal with the `--destroy-token` form. See
   `bd help init-safety`.
 
-DEFAULT Expect the target to start empty until the restore runs. Server mode reads
-  a different data directory than the one embedded wrote. Verified end to end on a
-  real 6.8 MB project: 54 beads before, 54 after.
+DEFAULT Expect the target to start empty until the restore runs. Server mode
+  reads a different data directory than the one embedded wrote.
 
 GOTCHA `bd init` also installs harness integration:
 
@@ -150,6 +179,6 @@ DEFAULT Where an orchestrator or systemd owns the process, set
 | auto-start off, server down | `not reachable (external)` |
 
 GOTCHA With auto-start off, `bd dolt status` reads the endpoint, not the pid file.
-  Deleting `dolt-server.pid` under a live server changed nothing: it still reported
-  `running (external)`. So the report survives a lost pid file, and a stale pid file
-  cannot fake a server that stopped.
+  Deleting `dolt-server.pid` under a live server changed nothing: it still
+  reported `running (external)`. So the report survives a lost pid file, and a
+  stale pid file cannot fake a server that stopped.
