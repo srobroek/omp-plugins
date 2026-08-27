@@ -16,9 +16,11 @@
  * The escape hatch is deliberate. Local commits on main are sanctioned when the
  * user asks or the repository has no PR flow (rule://delivery-git-workflow), and
  * the rule this replaces could be re-armed per `ttsr.repeatMode` whereas a gate
- * blocks every attempt. `DELIVERY_ALLOW_MAIN_COMMIT=1`, in the environment or
- * inline on the command, makes that decision explicit and auditable instead of
- * unavailable. This is advisory-strength, not a security boundary.
+ * blocks every attempt. `DELIVERY_ALLOW_MAIN_COMMIT=1` in the ENVIRONMENT, either
+ * on the bash call or in the session, makes that decision explicit and auditable
+ * instead of unavailable. Nothing written in the command grants it: matching that
+ * text let a commit message disable the gate. This is advisory-strength, not a
+ * security boundary.
  */
 import { resolve } from "node:path";
 
@@ -244,36 +246,58 @@ export type CommitInvocation = {
  * produced a SILENT permit, so `-C` and the bash call's `cwd` are the only directories read.
  */
 export function findCommitInvocations(command: string): CommitInvocation[] {
-	const out = scanInvocations(command, false);
-	// A substitution runs commands the quote-aware scan reads as data. Which substitutions are
-	// inert cannot be decided here: a quoted here-document delimiter makes its body inert while
-	// an unquoted one does not, a stray apostrophe in a body or a comment is literal text yet
-	// poisons quote tracking, and a backtick nests through backslashes. So any `$(` or backtick
-	// triggers a SECOND scan with quotes neutralised, and its results are APPENDED.
+	const out = scanInvocations(command);
+	// A substitution runs commands the quote-aware scan reads as data, and which substitutions
+	// are inert cannot be decided here: a quoted here-document delimiter makes its body inert
+	// while an unquoted one does not, an apostrophe in a body or a comment is literal text yet
+	// poisons quote tracking, and a backtick nests through backslashes.
 	//
-	// Additive is the whole point. An earlier version REPLACED the first scan with the lossy
-	// one, and that pass split `git com'mit'` into two words, deleted an empty `-C` operand so
-	// the flag swallowed the verb, and promoted `--dry-run` out of a message into an option.
-	// Each turned a commit the first scan saw plainly into one it missed. Appending can only
-	// add a block.
+	// So no attempt is made to read inside one. When the command holds a substitution AND names
+	// git, one candidate is APPENDED aimed at the call's cwd, and the ordinary branch decision
+	// applies to it. On a feature branch that allows the call; on a protected one it blocks.
 	//
-	// The cost is a visible false positive: prose carrying a backtick and the words of a commit,
-	// such as a `bd comment` quoting this gate's own message, is blocked. Retry it as two calls,
-	// or rephrase. That trade is deliberate, because the alternative is clearing a commit that
-	// nobody read.
-	if (command.includes("$(") || command.includes("`")) {
-		for (const found of scanInvocations(command.replace(/["']/g, " ").replace(/\\*`/g, ";"), true))
-			out.push(found);
-	}
+	// The condition is the command-word prefilter, never a literal `commit`: quoting splits a
+	// verb without changing argv, so `"$(git com'mit' -m x)"` carries no such word.
+	//
+	// Appended unconditionally, not only when the scan found nothing. `git commit --dry-run -m
+	// "$(git commit -m x)"` yields one dry-run invocation from the outer command, and the real
+	// nested commit would be skipped along with it. The outer `--dry-run` says nothing about
+	// what the substitution runs, so the candidate is never dry.
+	//
+	// KNOWN GAP, accepted. A `-C /elsewhere` inside the substitution is invisible, so from a
+	// feature cwd `echo "$(git -C /protected commit -m x)"` is allowed. Blocking every
+	// substitution regardless of branch closes it, and was tried: it refuses `echo "$(git
+	// status)"` on any branch, which is not this gate's job and makes it the kind of control
+	// people switch off. This module fails open wherever it cannot see (no work tree, detached
+	// HEAD, no git binary), and an unreadable substitution is that same case.
+	//
+	// An earlier version re-scanned with quotes stripped instead. That lossy pass weakened
+	// decisions the first scan had made correctly, splitting `git com'mit'` into two words,
+	// deleting an empty `-C` operand so the flag swallowed the verb, and promoting `--dry-run`
+	// out of a message. Appending a candidate cannot weaken anything.
+	//
+	// THE COST, stated exactly, because an earlier comment here understated it. The predicate is
+	// "any substitution anywhere" AND "the word git anywhere", so ON A PROTECTED BRANCH every
+	// git-naming command containing a substitution is refused, whatever either part is doing:
+	// `echo "$(date)"; git status`, `git log --format="$(cat f)"`, and `git diff | grep
+	// "$(cat pat)"` all block. Only a command with no substitution, or none naming git, gets
+	// through. On a feature branch none of this applies.
+	//
+	// Narrowing it means deciding which substitutions matter, which is the parser problem this
+	// function exists to avoid: reading `$(` to the next `)` mis-ends on `$(f "x)y"; git commit)`
+	// and permits it, and reading to end of command changes nothing. Every narrowing tried in
+	// this file became a permit, so the breadth stands until someone measures a safe cut.
+	//
+	// The remedy is per-call: drop the substitution, or run the git command by itself.
+	if ((command.includes("$(") || command.includes("`")) && PREFILTER.test(command))
+		out.push({ repoDir: null, dryRun: false });
 	return out;
 }
 
 /**
- * One pass over the command. `neutralised` marks the fallback, whose tokens lost their quoting,
- * so it may never conclude `--dry-run`: that word can be message data promoted by the very
- * transform that made this pass possible.
+ * One pass over the command, quoting respected.
  */
-function scanInvocations(command: string, neutralised: boolean): CommitInvocation[] {
+function scanInvocations(command: string): CommitInvocation[] {
 	const out: CommitInvocation[] = [];
 	const tokens = tokenize(command);
 	const isSep = (t: Token | undefined): boolean =>
@@ -310,7 +334,7 @@ function scanInvocations(command: string, neutralised: boolean): CommitInvocatio
 			if (arg.text.startsWith("-") && arg.text !== "-") {
 				const eq = arg.text.indexOf("=");
 				const name = eq === -1 ? arg.text : arg.text.slice(0, eq);
-				if (name === "--dry-run" && !neutralised) dryRun = true;
+				if (name === "--dry-run") dryRun = true;
 				if (eq === -1 && verb === null && PRE_VERB_VALUE_FLAGS[name] === true) {
 					const value = tokens[j + 1];
 					if (value !== undefined && !isSep(value)) {
@@ -347,18 +371,24 @@ export function currentBranch(cwd: string): string | null {
 	}
 }
 
-export function denyReason(branch: string): string {
+export function denyReason(branch: string, readDir: string): string {
 	return (
-		`blocked by delivery (work lands on a branch, never on ${branch}): the directory this ` +
-		`commit was read against has \`${branch}\` checked out. Create or switch to a feature ` +
-		"branch first (`git switch -c <type>/<slug>`, or `git switch <existing>` when the " +
-		"branch was made for this task), then commit there and open a PR.\n\n" +
-		"If the commit targets a DIFFERENT repository, that one is what to check. A `cd` in the " +
-		"command is NOT followed, so the branch above was read in the bash call's own working " +
-		"directory. Inferring it from a `cd` cleared commits onto protected branches, because " +
-		"the walker cannot tell a `cd` that ran from one that did not. Name the repository " +
-		"instead: pass the bash tool's `cwd`, or use an absolute `git -C <path> commit`. Both " +
-		"are read directly.\n\n" +
+		`blocked by delivery (work lands on a branch, never on ${branch}): \`${readDir}\` has ` +
+		`\`${branch}\` checked out. Create or switch to a feature branch first (\`git switch -c ` +
+		"<type>/<slug>`, or `git switch <existing>` when the branch was made for this task), " +
+		"then commit there and open a PR.\n\n" +
+		"If this command writes no commit of its own, a SUBSTITUTION is why it was stopped. " +
+		"This gate does not read inside `$(...)` or backticks, so on a protected branch it " +
+		"treats any command naming git that also contains one as a possible commit. Which " +
+		"remedy applies depends on where the substitution sits. When it is UNRELATED to the " +
+		"git command, as in `echo \"$(date)\"; git status`, send it as a separate call and the " +
+		"git command alone then passes. When it is PART of the git command, as in `git log " +
+		"--format=\"$(cat f)\"`, splitting changes nothing and the substitution itself has to " +
+		"go: read the value in one call, then pass the result literally in the next.\n\n" +
+		"If the commit was meant for a DIFFERENT repository, name it: pass the bash tool's " +
+		"`cwd`, or use an absolute `git -C <path> commit`. Both are read directly. A `cd` in " +
+		"the command is NOT followed, because the walker cannot tell a `cd` that ran from one " +
+		"that did not, and inferring it cleared commits onto protected branches.\n\n" +
 		`Only when the user explicitly asked for a commit on ${branch}, in a repository with ` +
 		`no PR flow or under an instruction to land directly, set \`${ALLOW_ENV}=1\` in the ` +
 		"ENVIRONMENT, either on the bash call or in the session. There is no command-text " +
@@ -378,11 +408,11 @@ export function decideCommit(
 		if (invocation.dryRun) continue;
 		// `-C` is the only directory the command states outright, so it is the only one applied.
 		// A `cd` is not followed, for the reasons on `findCommitInvocations`.
-		const target =
-			invocation.repoDir === null ? cwd : resolve(cwd, invocation.repoDir);
+		const target = invocation.repoDir === null ? cwd : resolve(cwd, invocation.repoDir);
 		const branch = currentBranch(target);
 		if (branch === null) continue;
-		if (PROTECTED_BRANCHES[branch] === true) return { block: true, reason: denyReason(branch) };
+		if (PROTECTED_BRANCHES[branch] === true)
+			return { block: true, reason: denyReason(branch, target) };
 	}
 	return;
 }

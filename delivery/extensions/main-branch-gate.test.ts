@@ -225,10 +225,11 @@ describe("findCommitInvocations", () => {
 		expect(findCommitInvocations(quoted)).toEqual([]);
 	});
 
-	// The deliberate cost of the additive pass. The same prose with a BACKTICK in it triggers a
-	// second scan with quotes neutralised, which reads the quoted words as a command. Blocking
-	// here is visible and retryable, by sending the prose without backticks or as two calls;
-	// the alternative is clearing a commit hidden in a substitution that nobody read.
+	// The deliberate cost. A backtick anywhere in a command that also names git appends a
+	// candidate, and prose quoting this gate's own message does both. It only matters on a
+	// protected branch, where the remedy is removing the backticks and `$(`: splitting into
+	// separate calls does NOT help, because each is scanned the same way and the prose travels
+	// with it. The alternative is clearing a commit hidden in a substitution that nobody read.
 	test("prose carrying a backtick is blocked, and that is the trade", () => {
 		const quoted = [
 			"bd comment omp-x --message '",
@@ -287,9 +288,9 @@ describe("decideCommit", () => {
 	});
 
 	// The same prose with a BACKTICK is blocked, because a backtick may open a substitution and
-	// the additive scan cannot tell prose from one. Visible and retryable: drop the backticks or
-	// send the prose as its own call. The alternative is clearing a commit hidden in a
-	// substitution, which nobody would see.
+	// nothing short of a shell parser tells prose from one. The remedy is dropping the backticks;
+	// resending the same text as a separate call does NOT help, because it is scanned identically.
+	// The alternative is clearing a commit hidden in a substitution, which nobody would see.
 	test("the same prose with a backtick is refused, deliberately", () => {
 		const { run } = fakeGit({ "/work": "main" });
 		setGitRunForTests(run);
@@ -451,9 +452,12 @@ describe("decideCommit", () => {
 });
 
 describe("denyReason", () => {
-	test("names the branch, the fix, the target-repo route, and the override", () => {
-		const reason = denyReason("main");
+	test("names the branch, the directory read, the fix, and the override", () => {
+		const reason = denyReason("main", "/some/repo");
 		expect(reason).toContain("main");
+		// The directory whose branch was actually read. Claiming it was the bash call's cwd was
+		// false whenever `-C` selected another repository.
+		expect(reason).toContain("/some/repo");
 		expect(reason).toContain("git switch -c");
 		// The route that actually works when the commit targets another repository.
 		expect(reason).toContain("cwd");
@@ -461,6 +465,147 @@ describe("denyReason", () => {
 		expect(reason).toContain("DELIVERY_ALLOW_MAIN_COMMIT=1");
 		// It must not advertise a command-text form, which no longer exists.
 		expect(reason).toContain("ENVIRONMENT");
+	});
+
+	test("a -C target is named, not the call's cwd", () => {
+		const { run } = fakeGit({ "/work": "feature", "/protected": "main" });
+		setGitRunForTests(run);
+		const decision = decideCommit("git -C /protected commit -m x", "/work", {});
+		expect(decision?.block).toBe(true);
+		expect(decision?.reason).toContain("/protected");
+		expect(decision?.reason).not.toContain("bash call's own working");
+	});
+});
+
+describe("a commit inside a substitution", () => {
+	test("blocks on a protected branch", () => {
+		const { run, calls } = fakeGit({ "/protected": "main" });
+		setGitRunForTests(run);
+		expect(decideCommit('echo "$(git commit -m x)"', "/protected", {})?.block).toBe(true);
+		// Only the call's own directory is ever read. Nothing inside the substitution is followed,
+		// and the candidate the substitution adds targets this same directory.
+		const probed = calls.map(c => c.cwd);
+		expect(probed.filter(d => d !== "/protected")).toEqual([]);
+		expect(probed.length).toBeGreaterThan(0);
+	});
+
+	// The FULL cost, asserted so nobody understates it again. The predicate is any substitution
+	// plus the word git, neither needing anything to do with the other, so on a protected branch
+	// ordinary read-only git work is refused whenever a substitution rides along.
+	test("on a protected branch, any git command with any substitution is refused", () => {
+		for (const command of [
+			'echo "$(date)"; git status',
+			'git log --format="$(cat f)"',
+			'git diff | grep "$(cat pat)"',
+			"echo 'the `git` tool'; git branch",
+		]) {
+			const { run } = fakeGit({ "/protected": "main" });
+			setGitRunForTests(run);
+			expect(decideCommit(command, "/protected", {})?.block, command).toBe(true);
+		}
+	});
+
+	// The two ways through, which are the whole of the remedy: no substitution, or no git word.
+	test("dropping either half clears it", () => {
+		for (const command of ['echo "$(date)"', "git status", "git log --format=%h"]) {
+			const { run } = fakeGit({ "/protected": "main" });
+			setGitRunForTests(run);
+			expect(decideCommit(command, "/protected", {}), command).toBeUndefined();
+		}
+	});
+
+	// None of that reaches a feature branch, which is where work belongs.
+	test("the same commands are untouched on a feature branch", () => {
+		for (const command of ['echo "$(date)"; git status', 'git log --format="$(cat f)"']) {
+			const { run } = fakeGit({ "/feature": "feature" });
+			setGitRunForTests(run);
+			expect(decideCommit(command, "/feature", {}), command).toBeUndefined();
+		}
+	});
+
+	// A blocked `git status` is baffling without this: the message must name the substitution.
+	// It must also give the RIGHT remedy, which differs by where the substitution sits.
+	test("the reason explains the substitution and both remedies", () => {
+		const { run } = fakeGit({ "/protected": "main" });
+		setGitRunForTests(run);
+		const reason = decideCommit('echo "$(date)"; git status', "/protected", {})?.reason ?? "";
+		expect(reason).toContain("SUBSTITUTION");
+		// Separate call, for a substitution unrelated to the git command.
+		expect(reason).toContain("separate call");
+		// Removing it, for one that is part of the git command, where splitting cannot help.
+		expect(reason).toContain("splitting changes nothing");
+	});
+
+	// Both remedies are asserted to actually clear the block, not merely described.
+	test("each remedy works on the case it is offered for", () => {
+		// Unrelated substitution: sending the git command by itself passes.
+		const first = fakeGit({ "/protected": "main" });
+		setGitRunForTests(first.run);
+		expect(decideCommit("git status", "/protected", {})).toBeUndefined();
+
+		// Substitution inside the git command: splitting is NOT enough, which is why the
+		// message does not offer it here.
+		const second = fakeGit({ "/protected": "main" });
+		setGitRunForTests(second.run);
+		expect(decideCommit('git log --format="$(cat f)"', "/protected", {})?.block).toBe(true);
+
+		// Replacing the substitution with the value read earlier is what clears it.
+		const third = fakeGit({ "/protected": "main" });
+		setGitRunForTests(third.run);
+		expect(decideCommit('git log --format="%h %s"', "/protected", {})).toBeUndefined();
+	});
+
+	// The boundary that keeps this a main-branch gate. Blocking every substitution regardless
+	// of branch was tried, and it refuses `echo "$(git status)"` on a feature branch: not this
+	// gate's job, and the kind of control people switch off.
+	test("is allowed on a feature branch", () => {
+		const { run } = fakeGit({ "/feature": "feature" });
+		setGitRunForTests(run);
+		expect(decideCommit('echo "$(git commit -m x)"', "/feature", {})).toBeUndefined();
+		expect(decideCommit('echo "$(git status)"', "/feature", {})).toBeUndefined();
+		expect(decideCommit("git log --format=\"$(cat f)\"", "/feature", {})).toBeUndefined();
+	});
+
+	test("an outer --dry-run does not cover the nested commit", () => {
+		// The outer command writes nothing, but the substitution runs a real commit. Appending
+		// the candidate only when the scan found nothing left this permitted on main.
+		const { run } = fakeGit({ "/protected": "main" });
+		setGitRunForTests(run);
+		const command = 'git commit --dry-run -m "$(git commit -m x)"';
+		expect(findCommitInvocations(command)).toEqual([
+			{ repoDir: null, dryRun: true },
+			{ repoDir: null, dryRun: false },
+		]);
+		expect(decideCommit(command, "/protected", {})?.block).toBe(true);
+	});
+
+	test("a verb split by quoting inside the substitution still counts", () => {
+		// There is no literal `commit` in this text, which is why the condition is the command
+		// word alone rather than the verb.
+		const { run } = fakeGit({ "/protected": "main" });
+		setGitRunForTests(run);
+		expect(decideCommit("echo \"$(git com'mit' -m x)\"", "/protected", {})?.block).toBe(true);
+	});
+
+	// The accepted gap, asserted so a future change to it is deliberate. A `-C` inside the
+	// substitution is invisible, so from a safe cwd this is allowed. Closing it means blocking
+	// every substitution on every branch, which the test above rejects.
+	test("a -C inside the substitution is not seen, and that gap is accepted", () => {
+		const { run } = fakeGit({ "/feature": "feature", "/protected": "main" });
+		setGitRunForTests(run);
+		expect(
+			decideCommit('echo "$(git -C /protected commit -m x)"', "/feature", {}),
+		).toBeUndefined();
+	});
+
+	test("the override still clears it", () => {
+		const { run } = fakeGit({ "/protected": "main" });
+		setGitRunForTests(run);
+		expect(
+			decideCommit('echo "$(git commit -m x)"', "/protected", {
+				DELIVERY_ALLOW_MAIN_COMMIT: "1",
+			}),
+		).toBeUndefined();
 	});
 });
 
