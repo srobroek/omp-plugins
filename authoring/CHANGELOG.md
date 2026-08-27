@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.2.0](https://github.com/srobroek/omp-plugins/compare/authoring--v1.1.2...authoring--v1.2.0) (2026-08-27)
+
+
+### Features
+
+* add design plugin with routed third-party skills and MCP packages ([325fc4c](https://github.com/srobroek/omp-plugins/commit/325fc4c8721b213b5f3c5cc0119cc8be48670165))
+
 ## [1.1.2](https://github.com/srobroek/omp-plugins/compare/authoring--v1.1.1...authoring--v1.1.2) (2026-08-25)
 
 

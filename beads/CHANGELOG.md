@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.8.0](https://github.com/srobroek/omp-plugins/compare/beads--v0.7.0...beads--v0.8.0) (2026-08-27)
+
+
+### Features
+
+* add design plugin with routed third-party skills and MCP packages ([325fc4c](https://github.com/srobroek/omp-plugins/commit/325fc4c8721b213b5f3c5cc0119cc8be48670165))
+
+
+### Bug Fixes
+
+* **beads:** name BEADS_DIR as the storage-mode remedy ([#51](https://github.com/srobroek/omp-plugins/issues/51)) ([7e03f63](https://github.com/srobroek/omp-plugins/commit/7e03f637b857498124c637d01b4a6622d2bd3053))
+* **beads:** pin BEADS_DIR for every checkout shape, as an absolute path ([#53](https://github.com/srobroek/omp-plugins/issues/53)) ([ecfc640](https://github.com/srobroek/omp-plugins/commit/ecfc64080ae2f854d74c9d08913d858ed98e0225))
+* **beads:** pin BEADS_DIR instead of a Dolt server for worktrees ([#50](https://github.com/srobroek/omp-plugins/issues/50)) ([7aebccf](https://github.com/srobroek/omp-plugins/commit/7aebccf86a7b3498e39a5af9b98344fd2190c9f9))
+
 ## [0.7.0](https://github.com/srobroek/omp-plugins/compare/beads--v0.6.2...beads--v0.7.0) (2026-08-26)
 
 

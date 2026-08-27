@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.7.0](https://github.com/srobroek/omp-plugins/compare/delivery--v0.6.2...delivery--v0.7.0) (2026-08-27)
+
+
+### Features
+
+* add design plugin with routed third-party skills and MCP packages ([325fc4c](https://github.com/srobroek/omp-plugins/commit/325fc4c8721b213b5f3c5cc0119cc8be48670165))
+
+
+### Bug Fixes
+
+* **delivery:** only command-slot git tokens count as invocations ([#52](https://github.com/srobroek/omp-plugins/issues/52)) ([cae7e6f](https://github.com/srobroek/omp-plugins/commit/cae7e6f4dad420f0ea13d91e8ac709dd5cc15cfa))
+* **delivery:** read the branch of the repository the commit actually targets ([13899c6](https://github.com/srobroek/omp-plugins/commit/13899c6d464020278c71c340e9f57795d8dcdaaa))
+* **delivery:** restore cd tracking, reconciled with the command-slot rule ([#54](https://github.com/srobroek/omp-plugins/issues/54)) ([a9f9b7e](https://github.com/srobroek/omp-plugins/commit/a9f9b7ef281994abf012979b856ff3de37dcbad2))
+* **delivery:** treat a branch-dependent cd as unknowable ([01a0942](https://github.com/srobroek/omp-plugins/commit/01a094263de845faae77094ba119e84198551235))
+
 ## [0.6.2](https://github.com/srobroek/omp-plugins/compare/delivery--v0.6.1...delivery--v0.6.2) (2026-08-25)
 
 
