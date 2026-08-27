@@ -6,8 +6,11 @@
  *
  * At session start, report once when a beads repository is on the embedded backend.
  * Embedded resolves a PATH, so a copied checkout or a clone gets its own database.
- * A linked git worktree does not: bd finds the primary checkout's store unaided.
- * The pin that works is `BEADS_DIR=<run>/.beads` set once; children inherit it.
+ * A linked git worktree resolves the primary's store unaided, and still gets the pin, so
+ * nobody has to remember which checkout shape they are in.
+ * The pin that works is `BEADS_DIR` holding the ABSOLUTE path of the run's `.beads`, set
+ * once; children inherit it. A relative value resolves against each process's own working
+ * directory, which is the failure the pin exists to prevent.
  *
  * At session end, optionally stop a per-project server. Stopping is safe -- bd
  * flushes the working set first and the next read auto-starts a fresh process -- but
@@ -86,8 +89,8 @@ export function backendNotice(backend: Backend, tracked: boolean): string | unde
 	return [
 		"beads is on the embedded backend, which resolves by walking up from the working directory.",
 		"A copied checkout or a clone gets its own database: claims stop excluding each other, and comments and closures never reach the run.",
-		"A linked git worktree does not: bd resolves the primary checkout's database unaided.",
-		"Fix by exporting `BEADS_DIR=<run>/.beads` once wherever the run starts; every child process inherits it.",
+		"A linked git worktree resolves the primary checkout's database unaided, and still gets the pin: no checkout shape is exempt.",
+		"Fix by exporting `BEADS_DIR` as the ABSOLUTE path of the run's `.beads`, once wherever the run starts; every child process inherits it. A relative value resolves against each process's own working directory.",
 		"Unpinned, a read from a directory with no `.beads/` reports `No active beads workspace found`.",
 		"Do not pin per call: that pin has to be right on every call, and `BEADS_DIR` is set once.",
 		"Switching this project to `--server` is an export, a re-init and a restore, not a flag, and it buys a pid-file lifecycle nobody owns.",

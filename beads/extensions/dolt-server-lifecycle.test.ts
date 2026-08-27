@@ -102,7 +102,12 @@ describe("backendNotice", () => {
 	test("the notice names the pin that works, not a per-call pin or a server first", () => {
 		const notice = backendNotice("embedded", true) ?? "";
 		expect(notice).toContain("claims stop excluding each other");
-		expect(notice).toContain("BEADS_DIR=<run>/.beads");
+		// ABSOLUTE is the load-bearing word. A relative value resolves against each process's
+		// own working directory, which is the failure the pin exists to prevent, so the notice
+		// must not offer the shorter form.
+		expect(notice).toContain("BEADS_DIR");
+		expect(notice).toContain("ABSOLUTE path");
+		expect(notice).not.toContain("BEADS_DIR=<run>/.beads");
 		expect(notice).toContain("linked git worktree");
 		expect(notice).toContain("No active beads workspace found");
 		expect(notice).not.toContain("bd -C");
