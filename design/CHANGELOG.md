@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.1](https://github.com/srobroek/omp-plugins/compare/design--v0.2.0...design--v0.2.1) (2026-08-27)
+
+
+### Bug Fixes
+
+* **design:** surface absent upstreams at GROUND, not at the step that needs one ([8427f20](https://github.com/srobroek/omp-plugins/commit/8427f2098ec7b8d62245f16f4c9d7bdc22d05d75))
+
 ## [0.2.0](https://github.com/srobroek/omp-plugins/compare/design--v0.1.0...design--v0.2.0) (2026-08-27)
 
 
