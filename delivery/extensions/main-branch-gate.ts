@@ -63,9 +63,21 @@ const PRE_VERB_VALUE_FLAGS: Record<string, true> = {
 };
 
 /**
- * Cheap reject before tokenizing. It looks for the command word ONLY, never the verb: quoting
- * can split a verb without changing argv, so `git com'mit' -m x` carries no literal `commit`
- * and a verb-aware prefilter returned early on a real commit.
+ * A RAW-TEXT test on the whole command string, with no notion of command position: it asks only
+ * whether `git` or `dgit` occurs between word boundaries. Any non-word character delimits, so a
+ * hyphen, slash or dot counts and `/opt/git-notes.txt` matches; quoted prose, a comment, and a
+ * filename all satisfy it. It never means a command is being run.
+ *
+ * Deliberately not verb-aware. Quoting can split a verb without changing argv, so
+ * `git com'mit' -m x` carries no literal `commit`, and requiring one returned early on a real
+ * commit.
+ *
+ * TWO USES, and only the first is free. In `decideCommit` it is a cheap reject before
+ * tokenizing, where over-matching costs one wasted pass. In `findCommitInvocations` it is half
+ * the condition for appending a synthetic candidate, which is POLICY-BEARING: over-matching
+ * there blocks the call on a protected branch. So `echo 'the git tool'; echo "$(date)"` is
+ * refused on main, with no git command anywhere in it. Anyone loosening this regex is changing
+ * what gets blocked, not just what gets tokenized.
  */
 const PREFILTER = /\bd?git\b/;
 
@@ -125,7 +137,7 @@ export type Token = {
  * Words and separators, with quoting recorded. A quoted region is inert here: finding where a
  * substitution inside one ENDS needs a real parser, so nothing tries. `findCommitInvocations`
  * covers that case without reading it, by appending one candidate when the command both holds a
- * substitution AND names git.
+ * substitution AND matches `PREFILTER`.
  */
 export function tokenize(command: string): Token[] {
 	const out: Token[] = [];
@@ -253,12 +265,14 @@ export function findCommitInvocations(command: string): CommitInvocation[] {
 	// while an unquoted one does not, an apostrophe in a body or a comment is literal text yet
 	// poisons quote tracking, and a backtick nests through backslashes.
 	//
-	// So no attempt is made to read inside one. When the command holds a substitution AND names
-	// git, one candidate is APPENDED aimed at the call's cwd, and the ordinary branch decision
-	// applies to it. On a feature branch that allows the call; on a protected one it blocks.
+	// So no attempt is made to read inside one. When the command holds a substitution and
+	// `PREFILTER` matches, one candidate is APPENDED aimed at the call's cwd, and the ordinary
+	// branch decision applies to it. On a feature branch that allows the call; on a protected one
+	// it blocks.
 	//
-	// The condition is the command-word prefilter, never a literal `commit`: quoting splits a
-	// verb without changing argv, so `"$(git com'mit' -m x)"` carries no such word.
+	// `PREFILTER` and not a literal `commit`, because quoting splits a verb without changing
+	// argv, so `"$(git com'mit' -m x)"` carries no such word. Read that regex for what it does
+	// and does not imply; every paraphrase of it written here has so far been wrong.
 	//
 	// Appended unconditionally, not only when the scan found nothing. `git commit --dry-run -m
 	// "$(git commit -m x)"` yields one dry-run invocation from the outer command, and the real
@@ -277,14 +291,18 @@ export function findCommitInvocations(command: string): CommitInvocation[] {
 	// deleting an empty `-C` operand so the flag swallowed the verb, and promoting `--dry-run`
 	// out of a message. Appending a candidate cannot weaken anything.
 	//
-	// THE COST, stated exactly, because two earlier comments here got it wrong. This candidate
-	// is appended when the command holds a substitution AND names git, neither half needing
-	// anything to do with the other, so ON A PROTECTED BRANCH a git-naming command containing a
-	// substitution is refused whatever either part is doing: `echo "$(date)"; git status`,
-	// `git log --format="$(cat f)"`, and `git diff | grep "$(cat pat)"` all block. Dropping
-	// either half AVOIDS THIS CANDIDATE, which is not the same as passing the gate: a plain
-	// `git commit -m x` has no substitution and still blocks, on the scan above. On a feature
-	// branch none of this applies.
+	// THE COST, stated exactly, because three earlier comments here got it wrong. This candidate
+	// is appended when the command holds a substitution AND `PREFILTER` (`\bd?git\b`) hits its raw
+	// text. That second half is NOT a command: prose, a comment, or a path satisfies it, so
+	// `echo 'the git tool'; echo "$(date)"` gets a candidate with no git command present.
+	//
+	// Neither half needs anything to do with the other, so ON A PROTECTED BRANCH any such
+	// command is refused whatever either part is doing: `echo "$(date)"; git status`,
+	// `git log --format="$(cat f)"`, and `dgit push origin b && echo "$(date)"` all block.
+	//
+	// Dropping either half AVOIDS THIS CANDIDATE, which is not the same as passing the gate: a
+	// plain `git commit -m x` has no substitution and still blocks, on the scan above. On a
+	// feature branch none of this applies.
 	//
 	// Narrowing it means deciding which substitutions matter, which is the parser problem this
 	// function exists to avoid: reading `$(` to the next `)` mis-ends on `$(f "x)y"; git commit)`
@@ -384,12 +402,15 @@ export function denyReason(branch: string, readDir: string): string {
 		"then commit there and open a PR.\n\n" +
 		"If this command writes no commit of its own, a SUBSTITUTION is why it was stopped. " +
 		"This gate does not read inside `$(...)` or backticks, so on a protected branch it " +
-		"treats any command naming git that also contains one as a possible commit. Which " +
-		"remedy applies depends on where the substitution sits. When it is UNRELATED to the " +
-		"git command, as in `echo \"$(date)\"; git status`, send it as a separate call and the " +
-		"git command alone then passes. When it is PART of the git command, as in `git log " +
-		"--format=\"$(cat f)\"`, splitting changes nothing and the substitution itself has to " +
-		"go: read the value in one call, then pass the result literally in the next.\n\n" +
+		"refuses any command that contains one and also mentions `git` or `dgit` anywhere in its " +
+		"text. Anywhere means anywhere: prose, a comment, or a path counts, so this can fire " +
+		"with no git command present at all.\n\n" +
+		"Which remedy applies depends on where the substitution sits. When it is UNRELATED to " +
+		"any git work, as in `echo \"$(date)\"; git status`, send the two parts as separate " +
+		"calls. When it is PART of the git command, as in `git log --format=\"$(cat f)\"`, " +
+		"splitting changes nothing and the substitution itself has to go: read the value in one " +
+		"call, then pass the result literally in the next. When the mention is only prose, " +
+		"rewrite it without backticks or `$(`.\n\n" +
 		"If the commit was meant for a DIFFERENT repository, name it: pass the bash tool's " +
 		"`cwd`, or use an absolute `git -C <path> commit`. Both are read directly. A `cd` in " +
 		"the command is NOT followed, because the walker cannot tell a `cd` that ran from one " +

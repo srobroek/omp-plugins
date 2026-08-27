@@ -163,11 +163,11 @@ describe("findCommitInvocations", () => {
 		}
 	});
 
-	// A substitution appends ONE candidate when the command also names git, without reading
-	// inside it. Deciding which substitutions are inert cannot be done here: a stray apostrophe
-	// in a here-document body or a comment is literal text yet poisons quote tracking, and a
-	// backtick nests through backslashes. Every shape below names git, so each yields a
-	// candidate whatever the quoting does to it.
+	// A substitution appends ONE candidate when `PREFILTER` also matches the raw text,
+	// without reading inside it. Deciding which substitutions are inert cannot be done here: a
+	// stray apostrophe in a here-document body or a comment is literal text yet poisons quote
+	// tracking, and a backtick nests through backslashes. Every shape below satisfies both halves,
+	// so each yields a candidate whatever the quoting does to it.
 	test("a substitution yields a candidate however it is quoted or escaped", () => {
 		for (const command of [
 			'printf "%s" "$(git commit -m x)"',
@@ -187,20 +187,43 @@ describe("findCommitInvocations", () => {
 		}
 	});
 
-	// BOTH halves are required, and dropping either only avoids THIS candidate. Comments here
-	// twice claimed one half alone, and once implied that avoiding it meant passing the gate.
-	test("the candidate needs a substitution and the word git, both", () => {
-		// Substitution, no git word: nothing appended.
+	// BOTH halves are required, and dropping either only avoids THIS candidate. Comments here got
+	// this wrong four times: twice claiming one half alone, once implying that avoiding the
+	// candidate meant passing the gate, and once calling the second half a COMMAND WORD when
+	// `PREFILTER` is a raw-text match that prose, comments and paths satisfy.
+	test("the candidate needs a substitution and a raw git/dgit word match, both", () => {
+		// Substitution, no word match: nothing appended.
 		expect(findCommitInvocations('echo "$(date)"')).toEqual([]);
-		// Git word, no substitution: nothing appended, and nothing found by the scan either.
+		// Word match, no substitution: nothing appended, and nothing found by the scan either.
 		expect(findCommitInvocations("git status")).toEqual([]);
+		expect(findCommitInvocations("dgit push origin b")).toEqual([]);
 		// Both halves: one candidate, from a command that commits nothing.
 		expect(findCommitInvocations('echo "$(date)"; git status')).toEqual([
 			{ repoDir: null, dryRun: false },
 		]);
+		// `dgit` matches as readily as `git`, so a push beside an unrelated substitution counts.
+		expect(findCommitInvocations('dgit push origin b && echo "$(date)"')).toEqual([
+			{ repoDir: null, dryRun: false },
+		]);
+		// The match is RAW TEXT, not command position. None of these run git at all, and each
+		// still yields a candidate: quoted prose, a comment, and a path.
+		for (const command of [
+			"echo 'the git tool is handy'; echo \"$(date)\"",
+			"echo 'we push with dgit'; echo \"$(date)\"",
+			'echo hi # git is nice\necho "$(date)"',
+			'cat /opt/git-notes.txt; echo "$(date)"',
+		]) {
+			expect(findCommitInvocations(command), command).toEqual([
+				{ repoDir: null, dryRun: false },
+			]);
+		}
+		// A near miss that must NOT match: the word has to stand alone.
+		expect(findCommitInvocations('echo "$(date)"; legit --help')).toEqual([]);
 		// Avoiding the candidate is NOT passing the gate. This has no substitution, so no
 		// candidate is appended, yet the scan finds the commit on its own.
 		expect(findCommitInvocations("git commit -m x")).toEqual([{ repoDir: null, dryRun: false }]);
+		// And `dgit` commits are real commits to the scan, substitution or not.
+		expect(findCommitInvocations("dgit commit -m x")).toEqual([{ repoDir: null, dryRun: false }]);
 	});
 
 	// Appending may never WEAKEN what the quote-aware scan saw plainly. Each of these was a
@@ -242,11 +265,12 @@ describe("findCommitInvocations", () => {
 		expect(findCommitInvocations(quoted)).toEqual([]);
 	});
 
-	// The deliberate cost. A backtick anywhere in a command that also names git appends a
-	// candidate, and prose quoting this gate's own message does both. It only matters on a
-	// protected branch, where the remedy is removing the backticks and `$(`: splitting into
-	// separate calls does NOT help, because each is scanned the same way and the prose travels
-	// with it. The alternative is clearing a commit hidden in a substitution that nobody read.
+	// The deliberate cost. A backtick anywhere in a command that `PREFILTER` also matches appends
+	// a candidate, and prose quoting this gate's own message does both. It
+	// only matters on a protected branch, where the remedy is removing the backticks and `$(`:
+	// splitting into separate calls does NOT help, because each is scanned the same way and the
+	// prose travels with it. The alternative is clearing a commit hidden in a substitution that
+	// nobody read.
 	test("prose carrying a backtick is blocked, and that is the trade", () => {
 		const quoted = [
 			"bd comment omp-x --message '",
@@ -318,8 +342,8 @@ describe("decideCommit", () => {
 	});
 
 	// The prefilter used to require a literal `commit` in the raw text, so a verb split by
-	// quoting returned early and a real commit on a protected branch went through. It now looks
-	// for the command word alone.
+	// quoting returned early and a real commit on a protected branch went through. `PREFILTER`
+	// now omits the verb entirely.
 	test("a verb split by quoting still reaches the branch check", () => {
 		for (const command of ["git com'mit' -m x", 'git "commit" -m x', "git co''mmit -m x"]) {
 			const { run, calls } = fakeGit({ "/work": "main" });
@@ -507,14 +531,22 @@ describe("a commit inside a substitution", () => {
 	});
 
 	// The FULL cost, asserted so nobody understates it again. The predicate is any substitution
-	// plus the word git, neither needing anything to do with the other, so on a protected branch
-	// ordinary read-only git work is refused whenever a substitution rides along.
-	test("on a protected branch, any git command with any substitution is refused", () => {
+	// plus a `PREFILTER` match, neither needing anything to do with the other, so on a protected
+	// branch ordinary read-only work is refused whenever a substitution rides along.
+	test("on a protected branch, any PREFILTER match with any substitution is refused", () => {
 		for (const command of [
 			'echo "$(date)"; git status',
 			'git log --format="$(cat f)"',
 			'git diff | grep "$(cat pat)"',
 			"echo 'the `git` tool'; git branch",
+			// The wrapper this repository pushes with satisfies the predicate identically.
+			'dgit push origin feat/x && echo "$(date)"',
+			// NO git command at all. `PREFILTER` reads raw text, so a mention in quoted prose, a
+			// comment, or a filename is enough to refuse the call on a protected branch.
+			"echo 'the git tool is handy'; echo \"$(date)\"",
+			"echo 'we push with dgit'; echo \"$(date)\"",
+			'echo hi # git is nice\necho "$(date)"',
+			'cat /opt/git-notes.txt; echo "$(date)"',
 		]) {
 			const { run } = fakeGit({ "/protected": "main" });
 			setGitRunForTests(run);
@@ -522,13 +554,18 @@ describe("a commit inside a substitution", () => {
 		}
 	});
 
-	// The two ways through, which are the whole of the remedy: no substitution, or no git word.
-	test("dropping either half clears it", () => {
+	// Dropping either half avoids the CANDIDATE. These clear the gate as well, but only because
+	// none of them is a commit: `git commit -m x` drops the substitution half and still blocks.
+	test("dropping either half avoids the candidate", () => {
 		for (const command of ['echo "$(date)"', "git status", "git log --format=%h"]) {
 			const { run } = fakeGit({ "/protected": "main" });
 			setGitRunForTests(run);
 			expect(decideCommit(command, "/protected", {}), command).toBeUndefined();
 		}
+		// The distinction that matters: no substitution, still blocked, on the ordinary scan.
+		const { run } = fakeGit({ "/protected": "main" });
+		setGitRunForTests(run);
+		expect(decideCommit("git commit -m x", "/protected", {})?.block).toBe(true);
 	});
 
 	// None of that reaches a feature branch, which is where work belongs.
