@@ -217,8 +217,20 @@ describe("findCommitInvocations", () => {
 				{ repoDir: null, dryRun: false },
 			]);
 		}
-		// A near miss that must NOT match: the word has to stand alone.
-		expect(findCommitInvocations('echo "$(date)"; legit --help')).toEqual([]);
+		// Near misses that must NOT match: `\b` needs a boundary on BOTH sides, and a word
+		// character on either side removes one. `legit` and `digit` embed the letters without a
+		// preceding boundary, and `gitx` lacks a following one.
+		for (const command of [
+			'echo "$(date)"; legit --help',
+			'echo "$(date)"; digit --help',
+			'echo "$(date)"; gitx --help',
+		]) {
+			expect(findCommitInvocations(command), command).toEqual([]);
+		}
+		// But a hyphen IS a boundary, which is easy to misread as a near miss.
+		expect(findCommitInvocations('cat my-git.log; echo "$(date)"')).toEqual([
+			{ repoDir: null, dryRun: false },
+		]);
 		// Avoiding the candidate is NOT passing the gate. This has no substitution, so no
 		// candidate is appended, yet the scan finds the commit on its own.
 		expect(findCommitInvocations("git commit -m x")).toEqual([{ repoDir: null, dryRun: false }]);
@@ -634,8 +646,8 @@ describe("a commit inside a substitution", () => {
 	});
 
 	test("a verb split by quoting inside the substitution still counts", () => {
-		// There is no literal `commit` in this text, which is why the condition is the command
-		// word alone rather than the verb.
+		// There is no literal `commit` in this text, which is why the condition is a `PREFILTER`
+		// match on the raw string rather than the verb.
 		const { run } = fakeGit({ "/protected": "main" });
 		setGitRunForTests(run);
 		expect(decideCommit("echo \"$(git com'mit' -m x)\"", "/protected", {})?.block).toBe(true);
