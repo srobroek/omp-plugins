@@ -115,6 +115,18 @@ describe("findCommitInvocations", () => {
 			expect(findCommitInvocations(command)).toEqual([]);
 		}
 	});
+
+	test("a quoted operand that spans a newline is not a commit", () => {
+		const quoted = [
+			"bd comment omp-x --message '",
+			"blocked by delivery (work lands on a branch, never on main): the repository this commit",
+			"targets has `main` checked out. A later git commit verb in this prose is not an invocation.",
+			"git commit -m x",
+			"'",
+		].join("\n");
+		expect(findCommitInvocations(quoted)).toEqual([]);
+	});
+
 });
 
 describe("currentBranch", () => {
@@ -148,6 +160,26 @@ describe("decideCommit", () => {
 		);
 		expect(decideCommit("git commit -m x", "/other", {})?.block).toBe(true);
 	});
+
+	test("quoted git commit verb in another command is allowed on main", () => {
+		const { run, calls } = fakeGit({ "/work": "main" });
+		setGitRunForTests(run);
+		const quoted = [
+			"bd comment omp-x --message '",
+			"the repository this commit targets has `main` checked out.",
+			"git commit -m x",
+			"'",
+		].join("\n");
+		expect(decideCommit(quoted, "/work", {})).toBeUndefined();
+		expect(calls).toEqual([]);
+	});
+
+	test("a genuine commit on main is still refused", () => {
+		const { run } = fakeGit({ "/work": "main" });
+		setGitRunForTests(run);
+		expect(decideCommit("git commit -m x", "/work", {})?.block).toBe(true);
+	});
+
 
 	test("allows a feature branch", () => {
 		const { run } = fakeGit({ "/work": "fix/ttsr-audit" });

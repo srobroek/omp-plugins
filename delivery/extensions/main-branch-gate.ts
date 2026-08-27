@@ -118,6 +118,15 @@ export function tokenize(command: string): string[] {
 			continue;
 		}
 		if (/\s/.test(ch)) {
+			// An unquoted newline is a command separator. Splitting first would
+			// close a quote at the line break, so a later `git commit` inside
+			// that quote would look like a real invocation.
+			if (ch === "\n" || ch === "\r") {
+				flush();
+				out.push("\n");
+				if (ch === "\r" && command[i + 1] === "\n") i++;
+				continue;
+			}
 			flush();
 			continue;
 		}
@@ -143,52 +152,50 @@ export type CommitInvocation = {
 /**
  * Every real `git`/`dgit` commit in the command.
  *
- * Command position is per line as well as per separator, because a multi-line
- * script commits from line two as readily as from line one. Successive `-C`
+ * Command position is per separator, including an unquoted newline. A quoted
+ * operand that contains a git verb is not an invocation. Successive `-C`
  * options are folded the way git folds them: each is relative to the last.
  */
 export function findCommitInvocations(command: string): CommitInvocation[] {
 	const out: CommitInvocation[] = [];
-	for (const line of command.split(/\r?\n/)) {
-		const tokens = tokenize(line);
-		let atCommand = true;
-		for (let i = 0; i < tokens.length; i++) {
-			const token = tokens[i] as string;
-			if (SEPARATOR[token] === true) {
-				atCommand = true;
+	const tokens = tokenize(command);
+	let atCommand = true;
+	for (let i = 0; i < tokens.length; i++) {
+		const token = tokens[i] as string;
+		if (SEPARATOR[token] === true || token === "\n") {
+			atCommand = true;
+			continue;
+		}
+		if (!atCommand) continue;
+		if (TRANSPARENT_PREFIX[token] === true || ENV_ASSIGNMENT.test(token)) continue;
+		atCommand = false;
+		if (GIT_COMMANDS[token] !== true) continue;
+
+		let repoDir: string | null = null;
+		let verb: string | null = null;
+		let dryRun = false;
+		let j = i + 1;
+		for (; j < tokens.length; j++) {
+			const arg = tokens[j] as string;
+			if (SEPARATOR[arg] === true || arg === "\n") break;
+			if (arg.startsWith("-") && arg !== "-") {
+				const eq = arg.indexOf("=");
+				const name = eq === -1 ? arg : arg.slice(0, eq);
+				if (name === "--dry-run") dryRun = true;
+				if (eq === -1 && verb === null && PRE_VERB_VALUE_FLAGS[name] === true) {
+					const value = tokens[j + 1];
+					if (value !== undefined && SEPARATOR[value] !== true && value !== "\n") {
+						if (name === "-C") repoDir = repoDir === null ? value : resolve(repoDir, value);
+						j++;
+					}
+				}
 				continue;
 			}
-			if (!atCommand) continue;
-			if (TRANSPARENT_PREFIX[token] === true || ENV_ASSIGNMENT.test(token)) continue;
-			atCommand = false;
-			if (GIT_COMMANDS[token] !== true) continue;
-
-			let repoDir: string | null = null;
-			let verb: string | null = null;
-			let dryRun = false;
-			let j = i + 1;
-			for (; j < tokens.length; j++) {
-				const arg = tokens[j] as string;
-				if (SEPARATOR[arg] === true) break;
-				if (arg.startsWith("-") && arg !== "-") {
-					const eq = arg.indexOf("=");
-					const name = eq === -1 ? arg : arg.slice(0, eq);
-					if (name === "--dry-run") dryRun = true;
-					if (eq === -1 && verb === null && PRE_VERB_VALUE_FLAGS[name] === true) {
-						const value = tokens[j + 1];
-						if (value !== undefined && SEPARATOR[value] !== true) {
-							if (name === "-C") repoDir = repoDir === null ? value : resolve(repoDir, value);
-							j++;
-						}
-					}
-					continue;
-				}
-				if (verb === null) verb = arg.toLowerCase();
-			}
-			i = j;
-			atCommand = true;
-			if (verb === "commit") out.push({ repoDir, dryRun });
+			if (verb === null) verb = arg.toLowerCase();
 		}
+		i = j;
+		atCommand = SEPARATOR[tokens[j] as string] === true || tokens[j] === "\n";
+		if (verb === "commit") out.push({ repoDir, dryRun });
 	}
 	return out;
 }
