@@ -1,5 +1,3 @@
-import { homedir } from "node:os";
-
 import { afterEach, describe, expect, test } from "bun:test";
 
 import mainBranchGate, {
@@ -9,6 +7,7 @@ import mainBranchGate, {
 	extractCommand,
 	findCommitInvocations,
 	type GitRun,
+	hasHiddenSubstitution,
 	setGitRunForTests,
 	tokenize,
 } from "./main-branch-gate.ts";
@@ -174,12 +173,19 @@ describe("findCommitInvocations", () => {
 	});
 
 	// A backslash inside single quotes is a literal character in bash, not an escape. Treating
-	// it as one loses the closing quote and mis-tracks everything after it.
-	test("a backslash in single quotes does not swallow the closing quote", () => {
-		// The quoted operand ends at its own quote, so this is one printf and no invocation.
-		expect(findCommitInvocations("printf '%s\\' ; echo done")).toEqual([]);
-		// With the tracking wrong, the region stayed open and the later commit was missed.
-		expect(findCommitInvocations("printf '%s\\' ; git commit -m x").length).toBe(1);
+	// it as one consumed the closing quote, so everything after stayed "inside single quotes"
+	// and a substitution that follows was never seen as executable.
+	test("a backslash in single quotes does not hide a later substitution", () => {
+		// These exercise the detector directly, which is the path the escape bug lived on.
+		expect(hasHiddenSubstitution("printf '%s\\' \"$(git commit -m x)\"")).toBe(true);
+		expect(hasHiddenSubstitution("printf '%s\\' \"`git commit -m x`\"")).toBe(true);
+		// A single-quoted substitution stays inert, so nothing is executable and none is found.
+		expect(hasHiddenSubstitution("printf '%s' '$(git commit -m x)'")).toBe(false);
+
+		// End to end, the commit those substitutions carry is reported.
+		expect(findCommitInvocations("printf '%s\\' \"$(git commit -m x)\"").length).toBe(1);
+		expect(findCommitInvocations("printf '%s\\' \"`git commit -m x`\"").length).toBe(1);
+		expect(findCommitInvocations("printf '%s' '$(git commit -m x)'")).toEqual([]);
 	});
 
 	// The FP class that made the old TTSR block real work: the words are in the
