@@ -124,8 +124,8 @@ export type Token = {
 /**
  * Words and separators, with quoting recorded. A quoted region is inert here: finding where a
  * substitution inside one ENDS needs a real parser, so nothing tries. `findCommitInvocations`
- * covers that case without reading it, by appending one candidate whenever the command holds a
- * substitution at all.
+ * covers that case without reading it, by appending one candidate when the command both holds a
+ * substitution AND names git.
  */
 export function tokenize(command: string): Token[] {
 	const out: Token[] = [];
@@ -277,19 +277,23 @@ export function findCommitInvocations(command: string): CommitInvocation[] {
 	// deleting an empty `-C` operand so the flag swallowed the verb, and promoting `--dry-run`
 	// out of a message. Appending a candidate cannot weaken anything.
 	//
-	// THE COST, stated exactly, because an earlier comment here understated it. The predicate is
-	// "any substitution anywhere" AND "the word git anywhere", so ON A PROTECTED BRANCH every
-	// git-naming command containing a substitution is refused, whatever either part is doing:
-	// `echo "$(date)"; git status`, `git log --format="$(cat f)"`, and `git diff | grep
-	// "$(cat pat)"` all block. Only a command with no substitution, or none naming git, gets
-	// through. On a feature branch none of this applies.
+	// THE COST, stated exactly, because two earlier comments here got it wrong. This candidate
+	// is appended when the command holds a substitution AND names git, neither half needing
+	// anything to do with the other, so ON A PROTECTED BRANCH a git-naming command containing a
+	// substitution is refused whatever either part is doing: `echo "$(date)"; git status`,
+	// `git log --format="$(cat f)"`, and `git diff | grep "$(cat pat)"` all block. Dropping
+	// either half AVOIDS THIS CANDIDATE, which is not the same as passing the gate: a plain
+	// `git commit -m x` has no substitution and still blocks, on the scan above. On a feature
+	// branch none of this applies.
 	//
 	// Narrowing it means deciding which substitutions matter, which is the parser problem this
 	// function exists to avoid: reading `$(` to the next `)` mis-ends on `$(f "x)y"; git commit)`
 	// and permits it, and reading to end of command changes nothing. Every narrowing tried in
 	// this file became a permit, so the breadth stands until someone measures a safe cut.
 	//
-	// The remedy is per-call: drop the substitution, or run the git command by itself.
+	// The remedy depends on where the substitution sits, and `denyReason` states both. One
+	// UNRELATED to the git command is fixed by sending it as a separate call. One that is PART
+	// of the git command survives that, and has to be replaced by its value.
 	if ((command.includes("$(") || command.includes("`")) && PREFILTER.test(command))
 		out.push({ repoDir: null, dryRun: false });
 	return out;

@@ -163,10 +163,11 @@ describe("findCommitInvocations", () => {
 		}
 	});
 
-	// Any substitution appends ONE candidate, without reading inside it. Deciding which
-	// substitutions are inert cannot be done here: a stray apostrophe in a here-document body or
-	// a comment is literal text yet poisons quote tracking, and a backtick nests through
-	// backslashes. So every shape below yields a candidate, whatever the quoting does to it.
+	// A substitution appends ONE candidate when the command also names git, without reading
+	// inside it. Deciding which substitutions are inert cannot be done here: a stray apostrophe
+	// in a here-document body or a comment is literal text yet poisons quote tracking, and a
+	// backtick nests through backslashes. Every shape below names git, so each yields a
+	// candidate whatever the quoting does to it.
 	test("a substitution yields a candidate however it is quoted or escaped", () => {
 		for (const command of [
 			'printf "%s" "$(git commit -m x)"',
@@ -184,6 +185,22 @@ describe("findCommitInvocations", () => {
 		]) {
 			expect(findCommitInvocations(command).length, command).toBeGreaterThanOrEqual(1);
 		}
+	});
+
+	// BOTH halves are required, and dropping either only avoids THIS candidate. Comments here
+	// twice claimed one half alone, and once implied that avoiding it meant passing the gate.
+	test("the candidate needs a substitution and the word git, both", () => {
+		// Substitution, no git word: nothing appended.
+		expect(findCommitInvocations('echo "$(date)"')).toEqual([]);
+		// Git word, no substitution: nothing appended, and nothing found by the scan either.
+		expect(findCommitInvocations("git status")).toEqual([]);
+		// Both halves: one candidate, from a command that commits nothing.
+		expect(findCommitInvocations('echo "$(date)"; git status')).toEqual([
+			{ repoDir: null, dryRun: false },
+		]);
+		// Avoiding the candidate is NOT passing the gate. This has no substitution, so no
+		// candidate is appended, yet the scan finds the commit on its own.
+		expect(findCommitInvocations("git commit -m x")).toEqual([{ repoDir: null, dryRun: false }]);
 	});
 
 	// Appending may never WEAKEN what the quote-aware scan saw plainly. Each of these was a
