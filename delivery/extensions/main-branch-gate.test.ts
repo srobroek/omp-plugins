@@ -437,6 +437,44 @@ describe("integration", () => {
 		expect(calls.map(c => c.cwd)).toEqual(["/main-repo"]);
 	});
 
+	// Without this the override is reachable only by relaunching the session with the flag,
+	// which clears every commit rather than the one the user authorised. Structured tool input
+	// is safe to trust where command text is not: a message body cannot forge a field.
+	test("the bash call's own env grants the override for that call", () => {
+		const { run, calls } = fakeGit({ "/main-repo": "main" });
+		setGitRunForTests(run);
+		const [handler] = register();
+
+		expect(
+			handler?.({
+				toolName: "bash",
+				toolCallId: "c2",
+				input: {
+					command: "git commit -m x",
+					cwd: "/main-repo",
+					env: { DELIVERY_ALLOW_MAIN_COMMIT: "1" },
+				},
+			}),
+		).toBeUndefined();
+		expect(calls).toEqual([]);
+	});
+
+	test("an unrelated or falsy call env leaves the block in place", () => {
+		const { run } = fakeGit({ "/main-repo": "main" });
+		setGitRunForTests(run);
+		const [handler] = register();
+
+		for (const env of [{ SOMETHING_ELSE: "1" }, { DELIVERY_ALLOW_MAIN_COMMIT: "0" }, null]) {
+			expect(
+				handler?.({
+					toolName: "bash",
+					toolCallId: "c3",
+					input: { command: "git commit -m x", cwd: "/main-repo", env },
+				}),
+			).toEqual(expect.objectContaining({ block: true }));
+		}
+	});
+
 	test("ignores other tools and empty input", () => {
 		const { run, calls } = fakeGit({ "/main-repo": "main" });
 		setGitRunForTests(run);

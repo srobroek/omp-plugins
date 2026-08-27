@@ -350,14 +350,16 @@ export function denyReason(branch: string): string {
 		`commit was read against has \`${branch}\` checked out. Create or switch to a feature ` +
 		"branch first (`git switch -c <type>/<slug>`, or `git switch <existing>` when the " +
 		"branch was made for this task), then commit there and open a PR.\n\n" +
-		"If the commit targets a DIFFERENT repository, that one is what to check. A `cd` in " +
-		"the command string is NOT parsed, so the branch above was read in the bash call's own " +
-		"working directory. Pass the bash tool's `cwd` for the target repository, or name it " +
-		"with an absolute `git -C <path> commit`, and re-issue. Both are read correctly.\n\n" +
+		"If the commit targets a DIFFERENT repository, that one is what to check. A `cd` the " +
+		"gate can resolve is followed, so the branch above may already come from it. For a " +
+		"target it cannot resolve, name the repository unambiguously: pass the bash tool's " +
+		"`cwd`, or use an absolute `git -C <path> commit`. Both are read directly, with no " +
+		"guessing about shell control flow.\n\n" +
 		`Only when the user explicitly asked for a commit on ${branch}, in a repository with ` +
 		`no PR flow or under an instruction to land directly, set \`${ALLOW_ENV}=1\` in the ` +
-		"ENVIRONMENT and re-issue. There is no command-text form: a commit message mentioning " +
-		"that flag used to disable this gate, so nothing in the command grants it."
+		"ENVIRONMENT, either on the bash call or in the session. There is no command-text " +
+		"form: a commit message mentioning that flag used to disable this gate, so nothing " +
+		"written in the command grants it."
 	);
 }
 
@@ -394,7 +396,16 @@ export default function mainBranchGate(pi: ExtensionAPI): void {
 				typeof event.input.cwd === "string" && event.input.cwd
 					? event.input.cwd
 					: process.cwd();
-			return decideCommit(command, cwd);
+			// The bash call's own environment counts, layered over the process environment.
+			// Without it the override is reachable only by relaunching the session with the flag
+			// set, which disables the gate for every commit rather than the one the user
+			// authorised. Structured tool input is safe to trust here in a way command text is
+			// not: a commit message or a here-document body cannot forge a field.
+			const callEnv =
+				typeof event.input.env === "object" && event.input.env !== null
+					? (event.input.env as NodeJS.ProcessEnv)
+					: undefined;
+			return decideCommit(command, cwd, callEnv ? { ...process.env, ...callEnv } : process.env);
 		} catch {
 			return;
 		}
