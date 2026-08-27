@@ -1,5 +1,3 @@
-import { homedir } from "node:os";
-
 import { afterEach, describe, expect, test } from "bun:test";
 
 import mainBranchGate, {
@@ -43,7 +41,7 @@ describe("extractCommand", () => {
 
 describe("tokenize", () => {
 	test("a quoted message stays one token", () => {
-		expect(tokenize("git commit -m 'fix main bug'")).toEqual([
+		expect(tokenize("git commit -m 'fix main bug'").map(t => t.text)).toEqual([
 			"git",
 			"commit",
 			"-m",
@@ -55,128 +53,413 @@ describe("tokenize", () => {
 describe("findCommitInvocations", () => {
 	test("plain commit", () => {
 		expect(findCommitInvocations("git commit -m 'chore: x'")).toEqual([
-			{ repoDir: null, dryRun: false, chdir: null, chdirUnknown: false },
+			{ repoDir: null, dryRun: false },
 		]);
 	});
 
 	test("dgit is the same command shape", () => {
 		expect(findCommitInvocations("dgit commit -m x")).toEqual([
-			{ repoDir: null, dryRun: false, chdir: null, chdirUnknown: false },
+			{ repoDir: null, dryRun: false },
 		]);
 	});
 
 	test("-C names the target repository, and repeats fold", () => {
 		expect(findCommitInvocations("git -C /repo commit -m x")).toEqual([
-			{ repoDir: "/repo", dryRun: false, chdir: null, chdirUnknown: false },
+			{ repoDir: "/repo", dryRun: false },
 		]);
 		expect(findCommitInvocations("git -C /repo -C sub commit -m x")).toEqual([
-			{ repoDir: "/repo/sub", dryRun: false, chdir: null, chdirUnknown: false },
+			{ repoDir: "/repo/sub", dryRun: false },
 		]);
 	});
 
 	test("pre-verb value options do not swallow the verb", () => {
 		expect(findCommitInvocations("git -c user.name=x commit -m y")).toEqual([
-			{ repoDir: null, dryRun: false, chdir: null, chdirUnknown: false },
+			{ repoDir: null, dryRun: false },
 		]);
+		// This previously asserted `repoDir: null` and nothing else, which WAS the silent permit:
+		// the commit lands in `/r` while the gate reads the call's own cwd. Neither flag names a
+		// directory this gate can check, so the invocation is marked instead.
 		expect(findCommitInvocations("git --git-dir /r/.git --work-tree /r commit -m y")).toEqual([
-			{ repoDir: null, dryRun: false, chdir: null, chdirUnknown: false },
+			{ repoDir: null, dryRun: false, retargeted: true },
+		]);
+		// The `=` form is the one that escaped entirely: it never reached the value-flag branch.
+		expect(findCommitInvocations("git --git-dir=/r/.git commit -m y")).toEqual([
+			{ repoDir: null, dryRun: false, retargeted: true },
+		]);
+		// `-c` and `--namespace` do not move the working tree, so they stay unmarked.
+		expect(findCommitInvocations("git --namespace ns commit -m y")).toEqual([
+			{ repoDir: null, dryRun: false },
 		]);
 	});
 
 	test("--dry-run is recorded", () => {
 		expect(findCommitInvocations("git commit --dry-run")).toEqual([
-			{ repoDir: null, dryRun: true, chdir: null, chdirUnknown: false },
+			{ repoDir: null, dryRun: true },
 		]);
 	});
 
 	test("command position: chained, multi-line, env-prefixed", () => {
 		expect(findCommitInvocations("git add . && git commit -m x")).toEqual([
-			{ repoDir: null, dryRun: false, chdir: null, chdirUnknown: false },
+			{ repoDir: null, dryRun: false },
 		]);
 		expect(findCommitInvocations("cd /repo\ngit commit -m x")).toEqual([
-			{ repoDir: null, dryRun: false, chdir: "/repo", chdirUnknown: false },
+			{ repoDir: null, dryRun: false },
 		]);
 		expect(findCommitInvocations("GIT_AUTHOR_NAME=x git commit -m y")).toEqual([
-			{ repoDir: null, dryRun: false, chdir: null, chdirUnknown: false },
+			{ repoDir: null, dryRun: false },
 		]);
 		expect(findCommitInvocations("git commit -m a; git -C /r commit -m b")).toEqual([
-			{ repoDir: null, dryRun: false, chdir: null, chdirUnknown: false },
-			{ repoDir: "/r", dryRun: false, chdir: null, chdirUnknown: false },
+			{ repoDir: null, dryRun: false },
+			{ repoDir: "/r", dryRun: false },
 		]);
 	});
 
-	// The false positive this tracking exists to fix: the commit lands in the repository
-	// `cd` reached, not in the directory the session happened to start in.
-	test("cd carries forward across &&, ;, and a newline", () => {
+	// ACCEPTED FALSE BLOCK, not an oversight. A function definition body is scanned, so
+	// `f() { git commit ...; }` is refused on a protected branch although defining a function
+	// commits nothing. Allowing it would require proving `f` is never called, and the two shapes
+	// below are INDISTINGUISHABLE to this walker: the second really does commit. Deciding
+	// between them needs the kind of shell inference that produced silent permits three times in
+	// this file, so the visible refusal stands.
+	test("a function definition is scanned, deliberately", () => {
+		const definition = "f() { git commit --allow-empty -m x; }";
+		expect(findCommitInvocations(definition)).toEqual([{ repoDir: null, dryRun: false }]);
+		expect(findCommitInvocations(`${definition}; f`)).toEqual([{ repoDir: null, dryRun: false }]);
+	});
+
+	// SILENT PERMIT, found by review. Bash keeps an escaped quote inside the argument, but the
+	// tokenizer closed the string on it, read the real closing quote as an opener, and swallowed
+	// the separator and the commit after it. Nothing was reported and the commit landed.
+	test("an escaped quote does not swallow the commit after it", () => {
+		expect(findCommitInvocations('echo "x\\"y"; git commit -m x')).toEqual([
+			{ repoDir: null, dryRun: false },
+		]);
+		expect(findCommitInvocations('echo "x\\\\"; git commit -m x')).toEqual([
+			{ repoDir: null, dryRun: false },
+		]);
+		expect(findCommitInvocations('echo "\\$HOME"; git commit -m x')).toEqual([
+			{ repoDir: null, dryRun: false },
+		]);
+		// A backslash inside SINGLE quotes is literal in bash, so nothing is escaped there.
+		expect(findCommitInvocations("echo 'x\\'; git commit -m x")).toEqual([
+			{ repoDir: null, dryRun: false },
+		]);
+		// And a genuinely quoted commit stays inert.
+		expect(findCommitInvocations('echo "git commit -m x"')).toEqual([]);
+	});
+
+	// A here-document body is DATA. Scanning it refused `cat <<EOF` with a commit in the body,
+	// and an apostrophe in a body used to poison quote tracking through the delimiter and hide a
+	// real commit after it, which was a silent permit.
+	test("a here-document body is not scanned as commands", () => {
+		expect(findCommitInvocations("cat <<EOF\ngit commit -m x\nEOF")).toEqual([]);
+		expect(findCommitInvocations("cat <<'EOF'\ngit commit -m x\nEOF")).toEqual([]);
+		// `<<-` strips leading TABS from the closing delimiter, and only tabs.
+		expect(findCommitInvocations("cat <<-EOF\ngit commit -m x\n\tEOF")).toEqual([]);
+		// A spaced delimiter does not close a plain heredoc, so the body continues.
+		expect(findCommitInvocations("cat <<EOF\n  EOF\ngit commit -m x\nEOF")).toEqual([]);
+		// Commands after the body, and on the operator's own line, still run.
+		expect(findCommitInvocations("cat <<EOF\ndata\nEOF\ngit commit -m x")).toEqual([
+			{ repoDir: null, dryRun: false },
+		]);
+		expect(findCommitInvocations("cat <<EOF && git commit -m x\ndata\nEOF")).toEqual([
+			{ repoDir: null, dryRun: false },
+		]);
+		// The permit this closes: the apostrophe no longer reaches the tokenizer at all.
+		expect(findCommitInvocations("cat <<EOF\nit is o'clock\nEOF\ngit commit -m x")).toEqual([
+			{ repoDir: null, dryRun: false },
+		]);
+		// `<<<` is a here-STRING whose operand is an ordinary word, so it is left alone.
+		expect(findCommitInvocations("cat <<< hello; git commit -m x")).toEqual([
+			{ repoDir: null, dryRun: false },
+		]);
+	});
+
+	// SILENT PERMIT, found by review. A shell prefix assignment never reaches the call's
+	// environment, so `GIT_DIR=... git commit` retargeted the commit invisibly.
+	test("a retargeting prefix assignment marks the invocation", () => {
+		expect(findCommitInvocations("GIT_DIR=/r/.git git commit -m x")).toEqual([
+			{ repoDir: null, dryRun: false, retargeted: true },
+		]);
+		expect(findCommitInvocations("GIT_WORK_TREE=/r git commit -m x")).toEqual([
+			{ repoDir: null, dryRun: false, retargeted: true },
+		]);
+		expect(findCommitInvocations("env GIT_DIR=/r/.git git commit -m x")).toEqual([
+			{ repoDir: null, dryRun: false, retargeted: true },
+		]);
+		// An unrelated assignment changes nothing.
+		expect(findCommitInvocations("GIT_AUTHOR_NAME=x git commit -m y")).toEqual([
+			{ repoDir: null, dryRun: false },
+		]);
+		// The prefix applies to ITS command only, so it must not leak past a separator.
+		expect(findCommitInvocations("GIT_DIR=/r/.git echo hi; git commit -m x")).toEqual([
+			{ repoDir: null, dryRun: false },
+		]);
+	});
+
+	// SILENT PERMITS the FIRST here-document implementation introduced, all four found by review.
+	// Skipping text is the dangerous direction: anything wrongly skipped may hold a real commit,
+	// so every uncertainty now falls back to NOT skipping.
+	test("only a real here-document skips a body", () => {
+		// `<<<` is a here-STRING. Reached at its second `<`, the old test saw `<<` followed by a
+		// non-`<` and skipped a body that does not exist.
+		expect(findCommitInvocations("cat <<< EOF\ngit commit -m x\nEOF")).toEqual([
+			{ repoDir: null, dryRun: false },
+		]);
+		// A `<<` inside a comment is text, not a redirection.
+		expect(findCommitInvocations(": # <<EOF\ngit commit -m x\nEOF")).toEqual([
+			{ repoDir: null, dryRun: false },
+		]);
+		// An arithmetic shift shares the spelling, so the delimiter must look like a shell name.
+		expect(findCommitInvocations("((1 << 1))\ngit commit -m x\n1")).toEqual([
+			{ repoDir: null, dryRun: false },
+		]);
+		// `<<\EOF` quotes the delimiter, so the backslash is not part of the name. Keeping it made
+		// the terminator unmatchable and the body ran to the end of the string.
+		expect(findCommitInvocations("cat <<\\EOF\npayload\nEOF\ngit commit -m x")).toEqual([
+			{ repoDir: null, dryRun: false },
+		]);
+	});
+
+	// Bodies are QUEUED per line and consumed in operator order. Recursing on the rest of the
+	// operator line consumed the first body and then re-read the second as commands.
+	test("every here-document queued on one line gets its own body", () => {
+		expect(
+			findCommitInvocations("cat <<A <<B\nx\nA\ngit commit -m x\nB\ngit commit -m y"),
+		).toEqual([{ repoDir: null, dryRun: false }]);
+		expect(findCommitInvocations("cat <<A <<B\nx\nA\ny\nB\ngit commit -m x")).toEqual([
+			{ repoDir: null, dryRun: false },
+		]);
+	});
+
+	// A backslash before a newline is a LINE CONTINUATION: bash removes both and joins the words.
+	// Appending the newline split the verb into a token nothing matched.
+	test("a line continuation joins the word it splits", () => {
+		expect(findCommitInvocations("git com\\\nmit -m x")).toEqual([
+			{ repoDir: null, dryRun: false },
+		]);
+		expect(findCommitInvocations('git "com\\\nmit" -m x')).toEqual([
+			{ repoDir: null, dryRun: false },
+		]);
+	});
+
+	// A CRLF body left `\r` on every line, so the terminator never matched and the body ran to
+	// the end of the string, swallowing the commit after it.
+	test("a CRLF here-document terminates", () => {
+		expect(findCommitInvocations("cat <<EOF\r\nx\r\nEOF\r\ngit commit -m x")).toEqual([
+			{ repoDir: null, dryRun: false },
+		]);
+	});
+
+	// An unquoted `#` at the start of a word begins a comment, so a commented commit does not
+	// run. Mid-word it is literal.
+	test("a comment is not a command", () => {
+		expect(findCommitInvocations("# git commit -m x")).toEqual([]);
+		expect(findCommitInvocations("echo hi # git commit -m x")).toEqual([]);
+		expect(findCommitInvocations("echo hi # nothing\ngit commit -m x")).toEqual([
+			{ repoDir: null, dryRun: false },
+		]);
+		// Mid-word and quoted forms are ordinary text.
+		expect(findCommitInvocations("git commit -m a#b")).toEqual([
+			{ repoDir: null, dryRun: false },
+		]);
+		expect(findCommitInvocations('git commit -m "# x"')).toEqual([
+			{ repoDir: null, dryRun: false },
+		]);
+	});
+
+	// A selector AFTER the verb is an operand, not an option, so a message carrying one is an
+	// ordinary commit rather than a retarget.
+	test("a selector after the verb is message text", () => {
+		expect(findCommitInvocations("git commit -m --git-dir=/tmp/other")).toEqual([
+			{ repoDir: null, dryRun: false },
+		]);
+		expect(findCommitInvocations("git --git-dir=/tmp/other commit -m x")).toEqual([
+			{ repoDir: null, dryRun: false, retargeted: true },
+		]);
+	});
+
+	// SILENT PERMIT at the decision level. A retargeted commit lands in another repository, so
+	// probing the call's own cwd cleared it. Nothing is read now, on any branch, because none of
+	// these names a working directory this gate can check.
+	test("a retargeted commit is refused without reading anything", () => {
+		for (const [command, env] of [
+			["git --git-dir=/protected/.git commit --allow-empty -m x", {}],
+			["git --work-tree=/protected commit --allow-empty -m x", {}],
+			["GIT_DIR=/protected/.git git commit --allow-empty -m x", {}],
+			["git commit --allow-empty -m x", { GIT_DIR: "/protected/.git" }],
+			["git commit --allow-empty -m x", { GIT_WORK_TREE: "/protected" }],
+			["git commit --allow-empty -m x", { GIT_COMMON_DIR: "/protected/.git" }],
+		] as Array<[string, Record<string, string>]>) {
+			const { run, calls } = fakeGit({ "/feature": "feature", "/protected": "main" });
+			setGitRunForTests(run);
+			// `/feature` is safe, which is exactly why reading it was wrong.
+			const decision = decideCommit(command, "/feature", env);
+			expect(decision?.block, command).toBe(true);
+			expect(decision?.reason, command).toContain("pointed at another repository");
+			expect(calls, command).toEqual([]);
+		}
+	});
+
+	test("an empty target variable is not a retarget", () => {
+		const { run } = fakeGit({ "/feature": "feature" });
+		setGitRunForTests(run);
+		expect(decideCommit("git commit --allow-empty -m x", "/feature", { GIT_DIR: "" })).toBeUndefined();
+	});
+
+	test("a retargeted dry run still writes nothing, so it passes", () => {
+		const { run } = fakeGit({ "/feature": "feature" });
+		setGitRunForTests(run);
+		expect(
+			decideCommit("git --git-dir=/protected/.git commit --dry-run -m x", "/feature", {}),
+		).toBeUndefined();
+	});
+
+	// A `cd` is not followed, whatever separator carries it. Three attempts to infer the
+	// directory from one each produced silent permits: the gate read a directory the commit
+	// never ran in and cleared a commit on a protected branch. Every shape below therefore
+	// reports the same thing, and the caller states the repository with `cwd` or `-C`.
+	test("no cd shape moves the repository the gate reads", () => {
 		for (const command of [
 			"cd /repo && git commit -m x",
 			"cd /repo; git commit -m x",
 			"cd /repo\ngit commit -m x",
 			"cd /repo && cd sub && git commit -m x",
+			"cd /missing; git commit -m x",
+			"true || cd /feature && git commit -m x",
+			"cd /feature && true & git commit -m x",
+			"{ cd /protected && git commit -m x; }",
+			"for d in a; do cd /protected; git commit -m x; done",
+			"pushd /x && git commit -m x",
+			"cd - && git commit -m x",
+			"cd $TARGET && git commit -m x",
+			"cd && git commit -m x",
 		]) {
-			const [only] = findCommitInvocations(command);
-			expect(only?.chdir).toBe(command.includes("sub") ? "/repo/sub" : "/repo");
+			expect(findCommitInvocations(command), command).toEqual([
+				{ repoDir: null, dryRun: false },
+			]);
 		}
 	});
 
-	// Each pipeline segment is its own shell, so git runs where the pipeline started.
-	test("a cd inside a pipeline does not reach the commit", () => {
-		expect(findCommitInvocations("cd /repo | git commit -m x")).toEqual([
-			{ repoDir: null, dryRun: false, chdir: null, chdirUnknown: false },
-		]);
-		// The leak worth naming: `cd` on the right of a pipeline must not survive the `;`.
-		expect(findCommitInvocations("cd /a | cd /b ; git commit -m x")).toEqual([
-			{ repoDir: null, dryRun: false, chdir: null, chdirUnknown: false },
-		]);
-		// The same leak with a git command opening the pipeline, which the scan used to skip.
-		expect(findCommitInvocations("git status | cd /b ; git commit -m x")).toEqual([
-			{ repoDir: null, dryRun: false, chdir: null, chdirUnknown: false },
-		]);
-		// A cd from an earlier line DID take effect, so a later pipeline inherits it.
-		expect(findCommitInvocations("cd /repo\necho x | git commit -m y")).toEqual([
-			{ repoDir: null, dryRun: false, chdir: "/repo", chdirUnknown: false },
-		]);
-	});
-
-	test("after || the cd either never ran or failed, and & backgrounds it", () => {
-		expect(findCommitInvocations("cd /repo || git commit -m x")).toEqual([
-			{ repoDir: null, dryRun: false, chdir: null, chdirUnknown: false },
-		]);
-		expect(findCommitInvocations("cd /repo & git commit -m x")).toEqual([
-			{ repoDir: null, dryRun: false, chdir: null, chdirUnknown: false },
-		]);
-	});
-
-	test("a subshell restores the directory it inherited", () => {
-		expect(findCommitInvocations("(cd /repo && git commit -m x)")).toEqual([
-			{ repoDir: null, dryRun: false, chdir: "/repo", chdirUnknown: false },
-		]);
-		expect(findCommitInvocations("(cd /repo) && git commit -m x")).toEqual([
-			{ repoDir: null, dryRun: false, chdir: null, chdirUnknown: false },
-		]);
-	});
-
-	// `cd -` returns to a directory only the live shell remembers, so holding the previous
-	// one would judge the commit against a repository it never ran in.
-	test("an unresolvable cd is marked unknown, not guessed", () => {
-		expect(findCommitInvocations("cd /repo && cd - && git commit -m x")).toEqual([
-			{ repoDir: null, dryRun: false, chdir: "/repo", chdirUnknown: true },
-		]);
-		expect(findCommitInvocations("cd $TARGET && git commit -m x")).toEqual([
-			{ repoDir: null, dryRun: false, chdir: null, chdirUnknown: true },
-		]);
-	});
-
-	test("bare cd goes to HOME, which is a real directory", () => {
-		const [only] = findCommitInvocations("cd && git commit -m x");
-		expect(only?.chdir).toBe(homedir());
-		expect(only?.chdirUnknown).toBe(false);
-	});
-
-	test("-C resolves against the cd, matching git", () => {
+	test("-C is the one directory the command states, so it is the one applied", () => {
 		expect(findCommitInvocations("cd /repo && git -C sub commit -m x")).toEqual([
-			{ repoDir: "sub", dryRun: false, chdir: "/repo", chdirUnknown: false },
+			{ repoDir: "sub", dryRun: false },
 		]);
+		expect(findCommitInvocations("git -C /abs commit -m x")).toEqual([
+			{ repoDir: "/abs", dryRun: false },
+		]);
+		// Quoting removes syntax meaning, not argv meaning: this still honours `-C`.
+		expect(findCommitInvocations("git '-C' /abs commit -m x")).toEqual([
+			{ repoDir: "/abs", dryRun: false },
+		]);
+		// A quoted operand is not an operator, so the scan does not stop at it.
+		expect(findCommitInvocations("git -C '&&' commit -m x")).toEqual([
+			{ repoDir: "&&", dryRun: false },
+		]);
+	});
+
+	test("a quoted command name still runs, so it counts", () => {
+		expect(findCommitInvocations("'git' commit -m x")).toEqual([
+			{ repoDir: null, dryRun: false },
+		]);
+	});
+
+	// Quoting splits a verb without changing argv, so the raw text carries no literal `commit`.
+	// The walker always saw these; the prefilter in `decideCommit` is where the bug lived, so
+	// that assertion is below in the decideCommit suite.
+	test("a verb split by quoting is still a commit", () => {
+		for (const command of ["git com'mit' -m x", 'git "commit" -m x', "git co''mmit -m x"]) {
+			expect(findCommitInvocations(command), command).toEqual([
+				{ repoDir: null, dryRun: false },
+			]);
+		}
+	});
+
+	// A substitution appends ONE candidate when `PREFILTER` also matches the raw text,
+	// without reading inside it. Deciding which substitutions are inert cannot be done here: a
+	// stray apostrophe in a here-document body or a comment is literal text yet poisons quote
+	// tracking, and a backtick nests through backslashes. Every shape below satisfies both halves,
+	// so each yields a candidate whatever the quoting does to it.
+	test("a substitution yields a candidate however it is quoted or escaped", () => {
+		for (const command of [
+			'printf "%s" "$(git commit -m x)"',
+			"printf '%s' \"$(\ngit commit -m x\n)\"",
+			"printf '%s' \"$(printf ')'; git commit -m x)\"",
+			"echo \"`git commit -m x`\"",
+			"echo `git commit -m x`",
+			"echo $(git commit -m x)",
+			// The escape shapes that defeated a quote-aware detector.
+			"printf '%s\\' \"$(git commit -m x)\"",
+			"echo `echo \\`git commit -m x\\``",
+			"cat <<EOF\n'$(git commit -m x)\nEOF",
+			// A reserved word must not consume the command slot inside the substitution.
+			'echo "$(if :; then git commit -m x; fi)"',
+		]) {
+			expect(findCommitInvocations(command).length, command).toBeGreaterThanOrEqual(1);
+		}
+	});
+
+	// BOTH halves are required, and dropping either only avoids THIS candidate. Comments here got
+	// this wrong four times: twice claiming one half alone, once implying that avoiding the
+	// candidate meant passing the gate, and once calling the second half a COMMAND WORD when
+	// `PREFILTER` is a raw-text match that prose, comments and paths satisfy.
+	test("the candidate needs a substitution and a raw git/dgit word match, both", () => {
+		// Substitution, no word match: nothing appended.
+		expect(findCommitInvocations('echo "$(date)"')).toEqual([]);
+		// Word match, no substitution: nothing appended, and nothing found by the scan either.
+		expect(findCommitInvocations("git status")).toEqual([]);
+		expect(findCommitInvocations("dgit push origin b")).toEqual([]);
+		// Both halves: one candidate, from a command that commits nothing.
+		expect(findCommitInvocations('echo "$(date)"; git status')).toEqual([
+			{ repoDir: null, dryRun: false },
+		]);
+		// `dgit` matches as readily as `git`, so a push beside an unrelated substitution counts.
+		expect(findCommitInvocations('dgit push origin b && echo "$(date)"')).toEqual([
+			{ repoDir: null, dryRun: false },
+		]);
+		// The match is RAW TEXT, not command position. None of these run git at all, and each
+		// still yields a candidate: quoted prose, a comment, and a path.
+		for (const command of [
+			"echo 'the git tool is handy'; echo \"$(date)\"",
+			"echo 'we push with dgit'; echo \"$(date)\"",
+			'echo hi # git is nice\necho "$(date)"',
+			'cat /opt/git-notes.txt; echo "$(date)"',
+		]) {
+			expect(findCommitInvocations(command), command).toEqual([
+				{ repoDir: null, dryRun: false },
+			]);
+		}
+		// Near misses that must NOT match: `\b` needs a boundary on BOTH sides, and a word
+		// character on either side removes one. `legit` and `digit` embed the letters without a
+		// preceding boundary, and `gitx` lacks a following one.
+		for (const command of [
+			'echo "$(date)"; legit --help',
+			'echo "$(date)"; digit --help',
+			'echo "$(date)"; gitx --help',
+		]) {
+			expect(findCommitInvocations(command), command).toEqual([]);
+		}
+		// But a hyphen IS a boundary, which is easy to misread as a near miss.
+		expect(findCommitInvocations('cat my-git.log; echo "$(date)"')).toEqual([
+			{ repoDir: null, dryRun: false },
+		]);
+		// Avoiding the candidate is NOT passing the gate. This has no substitution, so no
+		// candidate is appended, yet the scan finds the commit on its own.
+		expect(findCommitInvocations("git commit -m x")).toEqual([{ repoDir: null, dryRun: false }]);
+		// And `dgit` commits are real commits to the scan, substitution or not.
+		expect(findCommitInvocations("dgit commit -m x")).toEqual([{ repoDir: null, dryRun: false }]);
+	});
+
+	// Appending may never WEAKEN what the quote-aware scan saw plainly. Each of these was a
+	// silent permit in the version that replaced that scan with a quote-stripped one instead of
+	// adding to it. The lossy pass is gone, and these hold the property that replaced it.
+	test("appending never removes a commit the scan found", () => {
+		// `--dry-run` here is message data that the quote-stripping pass promotes to an option.
+		const promoted = findCommitInvocations('git commit -m "document --dry-run $(date)"');
+		expect(promoted.some(c => !c.dryRun)).toBe(true);
+		// An empty `-C` operand disappears when quotes go, letting the flag swallow the verb.
+		expect(findCommitInvocations('git -C "" commit -m "$(date)"').length).toBeGreaterThanOrEqual(1);
+		// A verb split across adjacent quoted fragments.
+		expect(findCommitInvocations("git com'mit' -m x; echo \"$(date)\"").length).toBeGreaterThanOrEqual(1);
 	});
 
 	// The FP class that made the old TTSR block real work: the words are in the
@@ -198,11 +481,27 @@ describe("findCommitInvocations", () => {
 		const quoted = [
 			"bd comment omp-x --message '",
 			"blocked by delivery (work lands on a branch, never on main): the repository this commit",
-			"targets has `main` checked out. A later git commit verb in this prose is not an invocation.",
+			"targets has main checked out. A later git commit verb in this prose is not an invocation.",
 			"git commit -m x",
 			"'",
 		].join("\n");
 		expect(findCommitInvocations(quoted)).toEqual([]);
+	});
+
+	// The deliberate cost. A backtick anywhere in a command that `PREFILTER` also matches appends
+	// a candidate, and prose quoting this gate's own message does both. It
+	// only matters on a protected branch, where the remedy is removing the backticks and `$(`:
+	// splitting into separate calls does NOT help, because each is scanned the same way and the
+	// prose travels with it. The alternative is clearing a commit hidden in a substitution that
+	// nobody read.
+	test("prose carrying a backtick is blocked, and that is the trade", () => {
+		const quoted = [
+			"bd comment omp-x --message '",
+			"targets has `main` checked out.",
+			"git commit -m x",
+			"'",
+		].join("\n");
+		expect(findCommitInvocations(quoted).length).toBeGreaterThanOrEqual(1);
 	});
 
 });
@@ -244,12 +543,37 @@ describe("decideCommit", () => {
 		setGitRunForTests(run);
 		const quoted = [
 			"bd comment omp-x --message '",
-			"the repository this commit targets has `main` checked out.",
+			"the repository this commit targets has main checked out.",
 			"git commit -m x",
 			"'",
 		].join("\n");
 		expect(decideCommit(quoted, "/work", {})).toBeUndefined();
 		expect(calls).toEqual([]);
+	});
+
+	// The same prose with a BACKTICK is blocked, because a backtick may open a substitution and
+	// nothing short of a shell parser tells prose from one. The remedy is dropping the backticks;
+	// resending the same text as a separate call does NOT help, because it is scanned identically.
+	// The alternative is clearing a commit hidden in a substitution, which nobody would see.
+	test("the same prose with a backtick is refused, deliberately", () => {
+		const { run } = fakeGit({ "/work": "main" });
+		setGitRunForTests(run);
+		const quoted = ["bd comment omp-x --message '", "has `main` checked out.", "git commit -m x", "'"].join(
+			"\n",
+		);
+		expect(decideCommit(quoted, "/work", {})?.block).toBe(true);
+	});
+
+	// The prefilter used to require a literal `commit` in the raw text, so a verb split by
+	// quoting returned early and a real commit on a protected branch went through. `PREFILTER`
+	// now omits the verb entirely.
+	test("a verb split by quoting still reaches the branch check", () => {
+		for (const command of ["git com'mit' -m x", 'git "commit" -m x', "git co''mmit -m x"]) {
+			const { run, calls } = fakeGit({ "/work": "main" });
+			setGitRunForTests(run);
+			expect(decideCommit(command, "/work", {})?.block, command).toBe(true);
+			expect(calls.map(c => c.cwd), command).toEqual(["/work"]);
+		}
 	});
 
 	test("a genuine commit on main is still refused", () => {
@@ -285,43 +609,40 @@ describe("decideCommit", () => {
 		expect(calls.map(c => c.cwd)).toEqual(["/work/sub"]);
 	});
 
-	// The reported false positive, end to end. The session sits in a repository on main and
-	// the commit targets a sibling on a feature branch, which the gate blocked while saying
-	// it had read the branch in the repository the commit targets.
-	test("cd decides which repository is read", () => {
-		const { run, calls } = fakeGit({ "/session": "main", "/sibling": "feat/design-plugin" });
-		setGitRunForTests(run);
-		expect(decideCommit("cd /sibling && git commit -m x", "/session", {})).toBeUndefined();
-		expect(calls.map(c => c.cwd)).toEqual(["/sibling"]);
+	// The gate reads the directory it is GIVEN. A `cd` does not move it, in either direction:
+	// it neither clears a commit on a protected branch nor redirects one away from it.
+	test("a cd never moves the repository that is read", () => {
+		for (const command of [
+			"cd /sibling && git commit -m x",
+			"cd /sibling; git commit -m x",
+			"cd /sibling | git commit -m x",
+			"cd - && git commit -m x",
+			"pushd /sibling && git commit -m x",
+		]) {
+			const { run, calls } = fakeGit({ "/session": "main", "/sibling": "feat/x" });
+			setGitRunForTests(run);
+			expect(decideCommit(command, "/session", {})?.block, command).toBe(true);
+			expect(calls.map(c => c.cwd), command).toEqual(["/session"]);
+		}
 	});
 
-	test("cd into a repository on main still blocks", () => {
-		const { run } = fakeGit({ "/session": "feat/x", "/trunk": "main" });
-		setGitRunForTests(run);
-		expect(decideCommit("cd /trunk && git commit -m x", "/session", {})?.block).toBe(true);
-	});
+	// So the caller states the repository instead, by the two routes the message names.
+	test("cwd and an absolute -C are the routes that work", () => {
+		const first = fakeGit({ "/session": "main", "/sibling": "feat/x" });
+		setGitRunForTests(first.run);
+		expect(decideCommit("git commit -m x", "/sibling", {})).toBeUndefined();
+		expect(first.calls.map(c => c.cwd)).toEqual(["/sibling"]);
 
-	test("a pipeline cd leaves the session directory in force", () => {
-		const { run, calls } = fakeGit({ "/session": "main", "/sibling": "feat/x" });
-		setGitRunForTests(run);
-		expect(decideCommit("cd /sibling | git commit -m x", "/session", {})?.block).toBe(true);
-		expect(calls.map(c => c.cwd)).toEqual(["/session"]);
-	});
+		const second = fakeGit({ "/session": "main", "/sibling": "feat/x" });
+		setGitRunForTests(second.run);
+		expect(decideCommit("git -C /sibling commit -m x", "/session", {})).toBeUndefined();
+		expect(second.calls.map(c => c.cwd)).toEqual(["/sibling"]);
 
-	// An unresolvable `cd` means no directory can be named, so the gate reads none rather
-	// than deciding the commit on a repository it never ran in.
-	test("an unresolvable cd reads no repository", () => {
-		const { run, calls } = fakeGit({ "/session": "main" });
-		setGitRunForTests(run);
-		expect(decideCommit("cd - && git commit -m x", "/session", {})).toBeUndefined();
-		expect(calls).toEqual([]);
-	});
-
-	test("an absolute -C still decides after an unresolvable cd", () => {
-		const { run, calls } = fakeGit({ "/session": "feat/x", "/trunk": "main" });
-		setGitRunForTests(run);
-		expect(decideCommit("cd - && git -C /trunk commit -m x", "/session", {})?.block).toBe(true);
-		expect(calls.map(c => c.cwd)).toEqual(["/trunk"]);
+		// And an absolute `-C` onto a protected branch still blocks.
+		const third = fakeGit({ "/session": "feat/x", "/trunk": "main" });
+		setGitRunForTests(third.run);
+		expect(decideCommit("git -C /trunk commit -m x", "/session", {})?.block).toBe(true);
+		expect(third.calls.map(c => c.cwd)).toEqual(["/trunk"]);
 	});
 
 	test("blocks the second of two commits when only that repo is on main", () => {
@@ -352,20 +673,36 @@ describe("decideCommit", () => {
 		expect(decideCommit("git commit -m x", "/work", {})).toBeUndefined();
 	});
 
-	test("the explicit override lifts it, from the environment or inline", () => {
+	test("the override comes from the environment, never from the command text", () => {
 		const { run, calls } = fakeGit({ "/work": "main" });
 		setGitRunForTests(run);
 		expect(
 			decideCommit("git commit -m x", "/work", { DELIVERY_ALLOW_MAIN_COMMIT: "1" }),
-		).toBeUndefined();
-		expect(
-			decideCommit("DELIVERY_ALLOW_MAIN_COMMIT=1 git commit -m x", "/work", {}),
 		).toBeUndefined();
 		expect(calls).toEqual([]);
 
 		expect(
 			decideCommit("git commit -m x", "/work", { DELIVERY_ALLOW_MAIN_COMMIT: "0" })?.block,
 		).toBe(true);
+	});
+
+	// Every one of these switched the gate off through text alone. A commit message explaining
+	// this gate contains exactly that prose, and a comment or here-document body is data the
+	// shell never executes, so no scan of the command can authorise soundly.
+	test("no command text grants the override", () => {
+		for (const command of [
+			"DELIVERY_ALLOW_MAIN_COMMIT=1 git commit -m x",
+			"git commit -m 'DELIVERY_ALLOW_MAIN_COMMIT=1'",
+			'git commit -m "set DELIVERY_ALLOW_MAIN_COMMIT=1 to override"',
+			'"DELIVERY_ALLOW_MAIN_COMMIT=1" git commit -m x',
+			"git commit -m x # ; DELIVERY_ALLOW_MAIN_COMMIT=1 git commit",
+			"git commit -F - <<'EOF'\nfix: mention DELIVERY_ALLOW_MAIN_COMMIT=1 here\nEOF",
+			"export DELIVERY_ALLOW_MAIN_COMMIT=1 && git commit -m x",
+		]) {
+			const { run } = fakeGit({ "/work": "main" });
+			setGitRunForTests(run);
+			expect(decideCommit(command, "/work", {})?.block, command).toBe(true);
+		}
 	});
 
 	test("the prefilter keeps unrelated commands away from the seam", () => {
@@ -379,12 +716,173 @@ describe("decideCommit", () => {
 });
 
 describe("denyReason", () => {
-	test("names the branch, the fix, the evidence, and the override", () => {
-		const reason = denyReason("main");
+	test("names the branch, the directory read, the fix, and the override", () => {
+		const reason = denyReason("main", "/some/repo");
 		expect(reason).toContain("main");
+		// The directory whose branch was actually read. Claiming it was the bash call's cwd was
+		// false whenever `-C` selected another repository.
+		expect(reason).toContain("/some/repo");
 		expect(reason).toContain("git switch -c");
-		expect(reason).toContain("git branch --show-current");
+		// The route that actually works when the commit targets another repository.
+		expect(reason).toContain("cwd");
+		expect(reason).toContain("git -C");
 		expect(reason).toContain("DELIVERY_ALLOW_MAIN_COMMIT=1");
+		// It must not advertise a command-text form, which no longer exists.
+		expect(reason).toContain("ENVIRONMENT");
+	});
+
+	test("a -C target is named, not the call's cwd", () => {
+		const { run } = fakeGit({ "/work": "feature", "/protected": "main" });
+		setGitRunForTests(run);
+		const decision = decideCommit("git -C /protected commit -m x", "/work", {});
+		expect(decision?.block).toBe(true);
+		expect(decision?.reason).toContain("/protected");
+		expect(decision?.reason).not.toContain("bash call's own working");
+	});
+});
+
+describe("a commit inside a substitution", () => {
+	test("blocks on a protected branch", () => {
+		const { run, calls } = fakeGit({ "/protected": "main" });
+		setGitRunForTests(run);
+		expect(decideCommit('echo "$(git commit -m x)"', "/protected", {})?.block).toBe(true);
+		// Only the call's own directory is ever read. Nothing inside the substitution is followed,
+		// and the candidate the substitution adds targets this same directory.
+		const probed = calls.map(c => c.cwd);
+		expect(probed.filter(d => d !== "/protected")).toEqual([]);
+		expect(probed.length).toBeGreaterThan(0);
+	});
+
+	// The FULL cost, asserted so nobody understates it again. The predicate is any substitution
+	// plus a `PREFILTER` match, neither needing anything to do with the other, so on a protected
+	// branch ordinary read-only work is refused whenever a substitution rides along.
+	test("on a protected branch, any PREFILTER match with any substitution is refused", () => {
+		for (const command of [
+			'echo "$(date)"; git status',
+			'git log --format="$(cat f)"',
+			'git diff | grep "$(cat pat)"',
+			"echo 'the `git` tool'; git branch",
+			// The wrapper this repository pushes with satisfies the predicate identically.
+			'dgit push origin feat/x && echo "$(date)"',
+			// NO git command at all. `PREFILTER` reads raw text, so a mention in quoted prose, a
+			// comment, or a filename is enough to refuse the call on a protected branch.
+			"echo 'the git tool is handy'; echo \"$(date)\"",
+			"echo 'we push with dgit'; echo \"$(date)\"",
+			'echo hi # git is nice\necho "$(date)"',
+			'cat /opt/git-notes.txt; echo "$(date)"',
+		]) {
+			const { run } = fakeGit({ "/protected": "main" });
+			setGitRunForTests(run);
+			expect(decideCommit(command, "/protected", {})?.block, command).toBe(true);
+		}
+	});
+
+	// Dropping either half avoids the CANDIDATE. These clear the gate as well, but only because
+	// none of them is a commit: `git commit -m x` drops the substitution half and still blocks.
+	test("dropping either half avoids the candidate", () => {
+		for (const command of ['echo "$(date)"', "git status", "git log --format=%h"]) {
+			const { run } = fakeGit({ "/protected": "main" });
+			setGitRunForTests(run);
+			expect(decideCommit(command, "/protected", {}), command).toBeUndefined();
+		}
+		// The distinction that matters: no substitution, still blocked, on the ordinary scan.
+		const { run } = fakeGit({ "/protected": "main" });
+		setGitRunForTests(run);
+		expect(decideCommit("git commit -m x", "/protected", {})?.block).toBe(true);
+	});
+
+	// None of that reaches a feature branch, which is where work belongs.
+	test("the same commands are untouched on a feature branch", () => {
+		for (const command of ['echo "$(date)"; git status', 'git log --format="$(cat f)"']) {
+			const { run } = fakeGit({ "/feature": "feature" });
+			setGitRunForTests(run);
+			expect(decideCommit(command, "/feature", {}), command).toBeUndefined();
+		}
+	});
+
+	// A blocked `git status` is baffling without this: the message must name the substitution.
+	// It must also give the RIGHT remedy, which differs by where the substitution sits.
+	test("the reason explains the substitution and both remedies", () => {
+		const { run } = fakeGit({ "/protected": "main" });
+		setGitRunForTests(run);
+		const reason = decideCommit('echo "$(date)"; git status', "/protected", {})?.reason ?? "";
+		expect(reason).toContain("SUBSTITUTION");
+		// Separate call, for a substitution unrelated to the git command.
+		expect(reason).toContain("separate call");
+		// Removing it, for one that is part of the git command, where splitting cannot help.
+		expect(reason).toContain("splitting changes nothing");
+	});
+
+	// Both remedies are asserted to actually clear the block, not merely described.
+	test("each remedy works on the case it is offered for", () => {
+		// Unrelated substitution: sending the git command by itself passes.
+		const first = fakeGit({ "/protected": "main" });
+		setGitRunForTests(first.run);
+		expect(decideCommit("git status", "/protected", {})).toBeUndefined();
+
+		// Substitution inside the git command: splitting is NOT enough, which is why the
+		// message does not offer it here.
+		const second = fakeGit({ "/protected": "main" });
+		setGitRunForTests(second.run);
+		expect(decideCommit('git log --format="$(cat f)"', "/protected", {})?.block).toBe(true);
+
+		// Replacing the substitution with the value read earlier is what clears it.
+		const third = fakeGit({ "/protected": "main" });
+		setGitRunForTests(third.run);
+		expect(decideCommit('git log --format="%h %s"', "/protected", {})).toBeUndefined();
+	});
+
+	// The boundary that keeps this a main-branch gate. Blocking every substitution regardless
+	// of branch was tried, and it refuses `echo "$(git status)"` on a feature branch: not this
+	// gate's job, and the kind of control people switch off.
+	test("is allowed on a feature branch", () => {
+		const { run } = fakeGit({ "/feature": "feature" });
+		setGitRunForTests(run);
+		expect(decideCommit('echo "$(git commit -m x)"', "/feature", {})).toBeUndefined();
+		expect(decideCommit('echo "$(git status)"', "/feature", {})).toBeUndefined();
+		expect(decideCommit("git log --format=\"$(cat f)\"", "/feature", {})).toBeUndefined();
+	});
+
+	test("an outer --dry-run does not cover the nested commit", () => {
+		// The outer command writes nothing, but the substitution runs a real commit. Appending
+		// the candidate only when the scan found nothing left this permitted on main.
+		const { run } = fakeGit({ "/protected": "main" });
+		setGitRunForTests(run);
+		const command = 'git commit --dry-run -m "$(git commit -m x)"';
+		expect(findCommitInvocations(command)).toEqual([
+			{ repoDir: null, dryRun: true },
+			{ repoDir: null, dryRun: false },
+		]);
+		expect(decideCommit(command, "/protected", {})?.block).toBe(true);
+	});
+
+	test("a verb split by quoting inside the substitution still counts", () => {
+		// There is no literal `commit` in this text, which is why the condition is a `PREFILTER`
+		// match on the raw string rather than the verb.
+		const { run } = fakeGit({ "/protected": "main" });
+		setGitRunForTests(run);
+		expect(decideCommit("echo \"$(git com'mit' -m x)\"", "/protected", {})?.block).toBe(true);
+	});
+
+	// The accepted gap, asserted so a future change to it is deliberate. A `-C` inside the
+	// substitution is invisible, so from a safe cwd this is allowed. Closing it means blocking
+	// every substitution on every branch, which the test above rejects.
+	test("a -C inside the substitution is not seen, and that gap is accepted", () => {
+		const { run } = fakeGit({ "/feature": "feature", "/protected": "main" });
+		setGitRunForTests(run);
+		expect(
+			decideCommit('echo "$(git -C /protected commit -m x)"', "/feature", {}),
+		).toBeUndefined();
+	});
+
+	test("the override still clears it", () => {
+		const { run } = fakeGit({ "/protected": "main" });
+		setGitRunForTests(run);
+		expect(
+			decideCommit('echo "$(git commit -m x)"', "/protected", {
+				DELIVERY_ALLOW_MAIN_COMMIT: "1",
+			}),
+		).toBeUndefined();
 	});
 });
 
@@ -415,6 +913,44 @@ describe("integration", () => {
 			}),
 		).toEqual(expect.objectContaining({ block: true }));
 		expect(calls.map(c => c.cwd)).toEqual(["/main-repo"]);
+	});
+
+	// Without this the override is reachable only by relaunching the session with the flag,
+	// which clears every commit rather than the one the user authorised. Structured tool input
+	// is safe to trust where command text is not: a message body cannot forge a field.
+	test("the bash call's own env grants the override for that call", () => {
+		const { run, calls } = fakeGit({ "/main-repo": "main" });
+		setGitRunForTests(run);
+		const [handler] = register();
+
+		expect(
+			handler?.({
+				toolName: "bash",
+				toolCallId: "c2",
+				input: {
+					command: "git commit -m x",
+					cwd: "/main-repo",
+					env: { DELIVERY_ALLOW_MAIN_COMMIT: "1" },
+				},
+			}),
+		).toBeUndefined();
+		expect(calls).toEqual([]);
+	});
+
+	test("an unrelated or falsy call env leaves the block in place", () => {
+		const { run } = fakeGit({ "/main-repo": "main" });
+		setGitRunForTests(run);
+		const [handler] = register();
+
+		for (const env of [{ SOMETHING_ELSE: "1" }, { DELIVERY_ALLOW_MAIN_COMMIT: "0" }, null]) {
+			expect(
+				handler?.({
+					toolName: "bash",
+					toolCallId: "c3",
+					input: { command: "git commit -m x", cwd: "/main-repo", env },
+				}),
+			).toEqual(expect.objectContaining({ block: true }));
+		}
 	});
 
 	test("ignores other tools and empty input", () => {
