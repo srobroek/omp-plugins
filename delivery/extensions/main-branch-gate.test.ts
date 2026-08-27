@@ -43,7 +43,7 @@ describe("extractCommand", () => {
 
 describe("tokenize", () => {
 	test("a quoted message stays one token", () => {
-		expect(tokenize("git commit -m 'fix main bug'")).toEqual([
+		expect(tokenize("git commit -m 'fix main bug'").map(t => t.text)).toEqual([
 			"git",
 			"commit",
 			"-m",
@@ -55,128 +55,131 @@ describe("tokenize", () => {
 describe("findCommitInvocations", () => {
 	test("plain commit", () => {
 		expect(findCommitInvocations("git commit -m 'chore: x'")).toEqual([
-			{ repoDir: null, dryRun: false, chdir: null, chdirUnknown: false },
+			{ repoDir: null, dryRun: false },
 		]);
 	});
 
 	test("dgit is the same command shape", () => {
 		expect(findCommitInvocations("dgit commit -m x")).toEqual([
-			{ repoDir: null, dryRun: false, chdir: null, chdirUnknown: false },
+			{ repoDir: null, dryRun: false },
 		]);
 	});
 
 	test("-C names the target repository, and repeats fold", () => {
 		expect(findCommitInvocations("git -C /repo commit -m x")).toEqual([
-			{ repoDir: "/repo", dryRun: false, chdir: null, chdirUnknown: false },
+			{ repoDir: "/repo", dryRun: false },
 		]);
 		expect(findCommitInvocations("git -C /repo -C sub commit -m x")).toEqual([
-			{ repoDir: "/repo/sub", dryRun: false, chdir: null, chdirUnknown: false },
+			{ repoDir: "/repo/sub", dryRun: false },
 		]);
 	});
 
 	test("pre-verb value options do not swallow the verb", () => {
 		expect(findCommitInvocations("git -c user.name=x commit -m y")).toEqual([
-			{ repoDir: null, dryRun: false, chdir: null, chdirUnknown: false },
+			{ repoDir: null, dryRun: false },
 		]);
 		expect(findCommitInvocations("git --git-dir /r/.git --work-tree /r commit -m y")).toEqual([
-			{ repoDir: null, dryRun: false, chdir: null, chdirUnknown: false },
+			{ repoDir: null, dryRun: false },
 		]);
 	});
 
 	test("--dry-run is recorded", () => {
 		expect(findCommitInvocations("git commit --dry-run")).toEqual([
-			{ repoDir: null, dryRun: true, chdir: null, chdirUnknown: false },
+			{ repoDir: null, dryRun: true },
 		]);
 	});
 
 	test("command position: chained, multi-line, env-prefixed", () => {
 		expect(findCommitInvocations("git add . && git commit -m x")).toEqual([
-			{ repoDir: null, dryRun: false, chdir: null, chdirUnknown: false },
+			{ repoDir: null, dryRun: false },
 		]);
 		expect(findCommitInvocations("cd /repo\ngit commit -m x")).toEqual([
-			{ repoDir: null, dryRun: false, chdir: "/repo", chdirUnknown: false },
+			{ repoDir: null, dryRun: false },
 		]);
 		expect(findCommitInvocations("GIT_AUTHOR_NAME=x git commit -m y")).toEqual([
-			{ repoDir: null, dryRun: false, chdir: null, chdirUnknown: false },
+			{ repoDir: null, dryRun: false },
 		]);
 		expect(findCommitInvocations("git commit -m a; git -C /r commit -m b")).toEqual([
-			{ repoDir: null, dryRun: false, chdir: null, chdirUnknown: false },
-			{ repoDir: "/r", dryRun: false, chdir: null, chdirUnknown: false },
+			{ repoDir: null, dryRun: false },
+			{ repoDir: "/r", dryRun: false },
 		]);
 	});
 
-	// The false positive this tracking exists to fix: the commit lands in the repository
-	// `cd` reached, not in the directory the session happened to start in.
-	test("cd carries forward across &&, ;, and a newline", () => {
+	// A `cd` is not followed, whatever separator carries it. Three attempts to infer the
+	// directory from one each produced silent permits: the gate read a directory the commit
+	// never ran in and cleared a commit on a protected branch. Every shape below therefore
+	// reports the same thing, and the caller states the repository with `cwd` or `-C`.
+	test("no cd shape moves the repository the gate reads", () => {
 		for (const command of [
 			"cd /repo && git commit -m x",
 			"cd /repo; git commit -m x",
 			"cd /repo\ngit commit -m x",
 			"cd /repo && cd sub && git commit -m x",
+			"cd /missing; git commit -m x",
+			"true || cd /feature && git commit -m x",
+			"cd /feature && true & git commit -m x",
+			"{ cd /protected && git commit -m x; }",
+			"for d in a; do cd /protected; git commit -m x; done",
+			"pushd /x && git commit -m x",
+			"cd - && git commit -m x",
+			"cd $TARGET && git commit -m x",
+			"cd && git commit -m x",
 		]) {
-			const [only] = findCommitInvocations(command);
-			expect(only?.chdir).toBe(command.includes("sub") ? "/repo/sub" : "/repo");
+			expect(findCommitInvocations(command), command).toEqual([
+				{ repoDir: null, dryRun: false },
+			]);
 		}
 	});
 
-	// Each pipeline segment is its own shell, so git runs where the pipeline started.
-	test("a cd inside a pipeline does not reach the commit", () => {
-		expect(findCommitInvocations("cd /repo | git commit -m x")).toEqual([
-			{ repoDir: null, dryRun: false, chdir: null, chdirUnknown: false },
-		]);
-		// The leak worth naming: `cd` on the right of a pipeline must not survive the `;`.
-		expect(findCommitInvocations("cd /a | cd /b ; git commit -m x")).toEqual([
-			{ repoDir: null, dryRun: false, chdir: null, chdirUnknown: false },
-		]);
-		// The same leak with a git command opening the pipeline, which the scan used to skip.
-		expect(findCommitInvocations("git status | cd /b ; git commit -m x")).toEqual([
-			{ repoDir: null, dryRun: false, chdir: null, chdirUnknown: false },
-		]);
-		// A cd from an earlier line DID take effect, so a later pipeline inherits it.
-		expect(findCommitInvocations("cd /repo\necho x | git commit -m y")).toEqual([
-			{ repoDir: null, dryRun: false, chdir: "/repo", chdirUnknown: false },
-		]);
-	});
-
-	test("after || the cd either never ran or failed, and & backgrounds it", () => {
-		expect(findCommitInvocations("cd /repo || git commit -m x")).toEqual([
-			{ repoDir: null, dryRun: false, chdir: null, chdirUnknown: false },
-		]);
-		expect(findCommitInvocations("cd /repo & git commit -m x")).toEqual([
-			{ repoDir: null, dryRun: false, chdir: null, chdirUnknown: false },
-		]);
-	});
-
-	test("a subshell restores the directory it inherited", () => {
-		expect(findCommitInvocations("(cd /repo && git commit -m x)")).toEqual([
-			{ repoDir: null, dryRun: false, chdir: "/repo", chdirUnknown: false },
-		]);
-		expect(findCommitInvocations("(cd /repo) && git commit -m x")).toEqual([
-			{ repoDir: null, dryRun: false, chdir: null, chdirUnknown: false },
-		]);
-	});
-
-	// `cd -` returns to a directory only the live shell remembers, so holding the previous
-	// one would judge the commit against a repository it never ran in.
-	test("an unresolvable cd is marked unknown, not guessed", () => {
-		expect(findCommitInvocations("cd /repo && cd - && git commit -m x")).toEqual([
-			{ repoDir: null, dryRun: false, chdir: "/repo", chdirUnknown: true },
-		]);
-		expect(findCommitInvocations("cd $TARGET && git commit -m x")).toEqual([
-			{ repoDir: null, dryRun: false, chdir: null, chdirUnknown: true },
-		]);
-	});
-
-	test("bare cd goes to HOME, which is a real directory", () => {
-		const [only] = findCommitInvocations("cd && git commit -m x");
-		expect(only?.chdir).toBe(homedir());
-		expect(only?.chdirUnknown).toBe(false);
-	});
-
-	test("-C resolves against the cd, matching git", () => {
+	test("-C is the one directory the command states, so it is the one applied", () => {
 		expect(findCommitInvocations("cd /repo && git -C sub commit -m x")).toEqual([
-			{ repoDir: "sub", dryRun: false, chdir: "/repo", chdirUnknown: false },
+			{ repoDir: "sub", dryRun: false },
 		]);
+		expect(findCommitInvocations("git -C /abs commit -m x")).toEqual([
+			{ repoDir: "/abs", dryRun: false },
+		]);
+		// Quoting removes syntax meaning, not argv meaning: this still honours `-C`.
+		expect(findCommitInvocations("git '-C' /abs commit -m x")).toEqual([
+			{ repoDir: "/abs", dryRun: false },
+		]);
+		// A quoted operand is not an operator, so the scan does not stop at it.
+		expect(findCommitInvocations("git -C '&&' commit -m x")).toEqual([
+			{ repoDir: "&&", dryRun: false },
+		]);
+	});
+
+	// A substitution inside double quotes executes, and finding where it ends needs a parser:
+	// a `)` behind a quote or a backslash closes it early. So the scan re-runs with quotes
+	// neutralised, which over-detects rather than missing a real commit.
+	test("a commit hidden in a double-quoted substitution is found", () => {
+		expect(findCommitInvocations('printf "%s" "$(git commit -m x)"').length).toBe(1);
+		expect(findCommitInvocations("printf '%s' \"$(\ngit commit -m x\n)\"").length).toBe(1);
+		expect(findCommitInvocations("printf '%s' \"$(printf ')'; git commit -m x)\"").length).toBe(1);
+		expect(findCommitInvocations('echo "`git commit -m x`"').length).toBe(1);
+		// Single quotes are inert, so nothing executes and nothing is reported.
+		expect(findCommitInvocations("printf '%s' '$(git commit -m x)'")).toEqual([]);
+	});
+
+	test("a quoted command name still runs, so it counts", () => {
+		expect(findCommitInvocations("'git' commit -m x")).toEqual([
+			{ repoDir: null, dryRun: false },
+		]);
+	});
+
+	// An unquoted backtick is not a separator, so the commit inside it never reached command
+	// position and went unseen.
+	test("an unquoted backtick substitution is found", () => {
+		expect(findCommitInvocations("echo `git commit -m x`").length).toBe(1);
+		expect(findCommitInvocations("echo $(git commit -m x)").length).toBe(1);
+	});
+
+	// A backslash inside single quotes is a literal character in bash, not an escape. Treating
+	// it as one loses the closing quote and mis-tracks everything after it.
+	test("a backslash in single quotes does not swallow the closing quote", () => {
+		// The quoted operand ends at its own quote, so this is one printf and no invocation.
+		expect(findCommitInvocations("printf '%s\\' ; echo done")).toEqual([]);
+		// With the tracking wrong, the region stayed open and the later commit was missed.
+		expect(findCommitInvocations("printf '%s\\' ; git commit -m x").length).toBe(1);
 	});
 
 	// The FP class that made the old TTSR block real work: the words are in the
@@ -285,43 +288,40 @@ describe("decideCommit", () => {
 		expect(calls.map(c => c.cwd)).toEqual(["/work/sub"]);
 	});
 
-	// The reported false positive, end to end. The session sits in a repository on main and
-	// the commit targets a sibling on a feature branch, which the gate blocked while saying
-	// it had read the branch in the repository the commit targets.
-	test("cd decides which repository is read", () => {
-		const { run, calls } = fakeGit({ "/session": "main", "/sibling": "feat/design-plugin" });
-		setGitRunForTests(run);
-		expect(decideCommit("cd /sibling && git commit -m x", "/session", {})).toBeUndefined();
-		expect(calls.map(c => c.cwd)).toEqual(["/sibling"]);
+	// The gate reads the directory it is GIVEN. A `cd` does not move it, in either direction:
+	// it neither clears a commit on a protected branch nor redirects one away from it.
+	test("a cd never moves the repository that is read", () => {
+		for (const command of [
+			"cd /sibling && git commit -m x",
+			"cd /sibling; git commit -m x",
+			"cd /sibling | git commit -m x",
+			"cd - && git commit -m x",
+			"pushd /sibling && git commit -m x",
+		]) {
+			const { run, calls } = fakeGit({ "/session": "main", "/sibling": "feat/x" });
+			setGitRunForTests(run);
+			expect(decideCommit(command, "/session", {})?.block, command).toBe(true);
+			expect(calls.map(c => c.cwd), command).toEqual(["/session"]);
+		}
 	});
 
-	test("cd into a repository on main still blocks", () => {
-		const { run } = fakeGit({ "/session": "feat/x", "/trunk": "main" });
-		setGitRunForTests(run);
-		expect(decideCommit("cd /trunk && git commit -m x", "/session", {})?.block).toBe(true);
-	});
+	// So the caller states the repository instead, by the two routes the message names.
+	test("cwd and an absolute -C are the routes that work", () => {
+		const first = fakeGit({ "/session": "main", "/sibling": "feat/x" });
+		setGitRunForTests(first.run);
+		expect(decideCommit("git commit -m x", "/sibling", {})).toBeUndefined();
+		expect(first.calls.map(c => c.cwd)).toEqual(["/sibling"]);
 
-	test("a pipeline cd leaves the session directory in force", () => {
-		const { run, calls } = fakeGit({ "/session": "main", "/sibling": "feat/x" });
-		setGitRunForTests(run);
-		expect(decideCommit("cd /sibling | git commit -m x", "/session", {})?.block).toBe(true);
-		expect(calls.map(c => c.cwd)).toEqual(["/session"]);
-	});
+		const second = fakeGit({ "/session": "main", "/sibling": "feat/x" });
+		setGitRunForTests(second.run);
+		expect(decideCommit("git -C /sibling commit -m x", "/session", {})).toBeUndefined();
+		expect(second.calls.map(c => c.cwd)).toEqual(["/sibling"]);
 
-	// An unresolvable `cd` means no directory can be named, so the gate reads none rather
-	// than deciding the commit on a repository it never ran in.
-	test("an unresolvable cd reads no repository", () => {
-		const { run, calls } = fakeGit({ "/session": "main" });
-		setGitRunForTests(run);
-		expect(decideCommit("cd - && git commit -m x", "/session", {})).toBeUndefined();
-		expect(calls).toEqual([]);
-	});
-
-	test("an absolute -C still decides after an unresolvable cd", () => {
-		const { run, calls } = fakeGit({ "/session": "feat/x", "/trunk": "main" });
-		setGitRunForTests(run);
-		expect(decideCommit("cd - && git -C /trunk commit -m x", "/session", {})?.block).toBe(true);
-		expect(calls.map(c => c.cwd)).toEqual(["/trunk"]);
+		// And an absolute `-C` onto a protected branch still blocks.
+		const third = fakeGit({ "/session": "feat/x", "/trunk": "main" });
+		setGitRunForTests(third.run);
+		expect(decideCommit("git -C /trunk commit -m x", "/session", {})?.block).toBe(true);
+		expect(third.calls.map(c => c.cwd)).toEqual(["/trunk"]);
 	});
 
 	test("blocks the second of two commits when only that repo is on main", () => {

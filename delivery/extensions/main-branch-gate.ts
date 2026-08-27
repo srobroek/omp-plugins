@@ -20,8 +20,7 @@
  * inline on the command, makes that decision explicit and auditable instead of
  * unavailable. This is advisory-strength, not a security boundary.
  */
-import { homedir } from "node:os";
-import { isAbsolute, resolve } from "node:path";
+import { resolve } from "node:path";
 
 import type { ExtensionAPI, ExtensionToolCallEvent } from "@oh-my-pi/pi-coding-agent";
 
@@ -106,27 +105,44 @@ export function extractCommand(input: Record<string, unknown>): string {
 	if (typeof input.cmd === "string") return input.cmd;
 	return "";
 }
+export type Token = {
+	text: string;
+	/**
+	 * Any part of this word arrived inside quotes, so it is an operand however it reads.
+	 * `git -C '&&' commit` passed `&&` as a directory, and an untyped scan stopped there as
+	 * though it were the operator, emitting no invocation at all.
+	 */
+	quoted: boolean;
+};
 
 /**
- * Shell-ish tokenizer: enough to tell a git invocation from the same words inside
- * a quoted commit message. Duplicated rather than shared with the beads plugin's
- * copy because plugins install independently and depend on nothing but the host.
+ * Words and separators, with quoting recorded. A quoted region is inert here: finding where a
+ * substitution inside one ENDS needs a real parser, so `hasHiddenSubstitution` handles that
+ * case conservatively instead.
  */
-export function tokenize(command: string): string[] {
-	const out: string[] = [];
+export function tokenize(command: string): Token[] {
+	const out: Token[] = [];
 	let cur = "";
 	let started = false;
-	let quote: '"' | "'" | null = null;
+	let wasQuoted = false;
+	let quote: string | null = null;
 	const flush = (): void => {
-		if (started) {
-			out.push(cur);
-			cur = "";
-			started = false;
-		}
+		if (started) out.push({ text: cur, quoted: wasQuoted });
+		cur = "";
+		started = false;
+		wasQuoted = false;
 	};
 	for (let i = 0; i < command.length; i++) {
 		const ch = command[i] as string;
-		if (quote) {
+		if (quote === "'") {
+			if (ch === quote) quote = null;
+			else {
+				cur += ch;
+				started = true;
+			}
+			continue;
+		}
+		if (quote === '"') {
 			if (ch === quote) quote = null;
 			else {
 				cur += ch;
@@ -137,21 +153,23 @@ export function tokenize(command: string): string[] {
 		if (ch === '"' || ch === "'") {
 			quote = ch;
 			started = true;
+			wasQuoted = true;
 			continue;
 		}
 		if (ch === "\\" && i + 1 < command.length) {
 			cur += command[i + 1] as string;
 			started = true;
+			wasQuoted = true;
 			i++;
 			continue;
 		}
 		if (/\s/.test(ch)) {
-			// An unquoted newline is a command separator. Splitting first would
-			// close a quote at the line break, so a later `git commit` inside
-			// that quote would look like a real invocation.
+			// An unquoted newline is a command separator. Splitting the command on newlines
+			// first would close a quote at the break, so a `git commit` inside that quote
+			// would look like a real invocation.
 			if (ch === "\n" || ch === "\r") {
 				flush();
-				out.push("\n");
+				out.push({ text: "\n", quoted: false });
 				if (ch === "\r" && command[i + 1] === "\n") i++;
 				continue;
 			}
@@ -160,15 +178,13 @@ export function tokenize(command: string): string[] {
 		}
 		if (SEPARATOR[ch] === true) {
 			flush();
-			// `&&` and `||` must not read as `&` and `|`: only the doubled forms keep a `cd`
-			// in the same shell, and the single forms put the next command back in the
-			// directory the pipeline or background job inherited.
+			// `&&` and `||` must not read as `&` and `|`.
 			if ((ch === "&" || ch === "|") && command[i + 1] === ch) {
-				out.push(ch + ch);
+				out.push({ text: ch + ch, quoted: false });
 				i++;
 				continue;
 			}
-			out.push(ch);
+			out.push({ text: ch, quoted: false });
 			continue;
 		}
 		cur += ch;
@@ -178,152 +194,124 @@ export function tokenize(command: string): string[] {
 	return out;
 }
 
+/**
+ * Whether a substitution the walker cannot see through is present.
+ *
+ * Two shapes qualify. A `$(` or a backtick inside DOUBLE quotes executes, and treating the
+ * quoted region as inert hides the commit in it. An UNQUOTED backtick also hides one, because
+ * the backtick is not a separator, so `` echo `git commit -m x` `` leaves the commit off
+ * command position. An unquoted `$(` needs no help: the `(` is already a separator.
+ *
+ * Finding where a substitution ENDS does not work, which is why this only answers the
+ * question. A `)` behind a quote or a backslash closes it early, so
+ * `$(printf ')'; git commit -m x)` truncates before the commit. The caller re-scans instead,
+ * which over-detects, and over-detection blocks visibly rather than clearing a commit nobody
+ * read.
+ */
+export function hasHiddenSubstitution(command: string): boolean {
+	let quote: string | null = null;
+	for (let i = 0; i < command.length; i++) {
+		const ch = command[i] as string;
+		// A backslash escapes outside quotes and inside double quotes. Inside SINGLE quotes it
+		// is a literal character, so consuming the next one there loses the closing quote.
+		if (ch === "\\" && quote !== "'" && i + 1 < command.length) {
+			i++;
+			continue;
+		}
+		if (quote !== null) {
+			if (ch === quote) quote = null;
+			else if (quote === '"' && (ch === "`" || (ch === "$" && command[i + 1] === "(")))
+				return true;
+			continue;
+		}
+		if (ch === "`") return true;
+		if (ch === '"' || ch === "'") quote = ch;
+	}
+	return false;
+}
+
 export type CommitInvocation = {
 	/** Repository the commit targets, relative to the bash call's cwd. */
 	repoDir: string | null;
 	/** `--dry-run` writes no commit, so the branch does not matter. */
 	dryRun: boolean;
-	/** Directory `cd` reached, relative to the bash cwd; `null` means that cwd itself. */
-	chdir: string | null;
-	/**
-	 * A `cd` whose destination cannot be named: `cd -`, or a target built from a variable.
-	 * Distinct from `chdir: null`, which names a real directory. Reading some other
-	 * directory instead would either block a commit that was never on a protected branch
-	 * or pass one that was, so the gate declines to guess.
-	 */
-	chdirUnknown: boolean;
 };
 
 /**
  * Every real `git`/`dgit` commit in the command.
  *
- * Command position is per separator, including an unquoted newline. A quoted
- * operand that contains a git verb is not an invocation. Successive `-C`
- * options are folded the way git folds them: each is relative to the last.
+ * Command position is per separator, including an unquoted newline. A quoted operand that
+ * contains a git verb is not an invocation, which is why this walks ONE token stream rather
+ * than splitting on newlines: a quoted operand may span one. Successive `-C` options are
+ * folded the way git folds them, each relative to the last.
  *
- * A `cd` in the command moves the repository the commit lands in, so it is
- * tracked the same way. Without it `cd repo && git commit` was judged against
- * the session's own directory, which blocked commits to a feature branch in a
- * sibling repository and pointed the caller at the override for the wrong
- * reason.
+ * A `cd` in the command is NOT followed. Inferring the directory from one was tried three
+ * times and reverted each time. The walker cannot tell a `cd` that ran from one that did not:
+ * a failed `cd` before `;` leaves the shell where it was, `||` may skip it, `&` backgrounds
+ * the list it belongs to, and a `cd` inside a brace group, a loop, a comment or a
+ * here-document body is invisible or inert. `pushd`, `eval` and a function can move the
+ * directory with no `cd` token at all.
  *
- * Only `&&`, `;`, and a newline carry a `cd` forward. Each side of a pipeline runs
- * in its own shell, so `cd repo | git commit` commits in the directory the
- * pipeline inherited; after `||` the `cd` either never ran or failed; and `&`
- * backgrounds it. Those three revert to the directory in force at the last
- * sequential boundary, and a subshell restores what it inherited.
+ * Each of those produced a SILENT permit: the gate read a directory the commit never ran in
+ * and cleared a commit on a protected branch. Blocking safe work is visible and retryable,
+ * so the gate reads the directory it is given and names the two ways to state another one.
+ * Telling them apart needs a typed lexer and a command grammar, which is a shell parser.
  */
 export function findCommitInvocations(command: string): CommitInvocation[] {
+	// A substitution inside double quotes executes, and this walker cannot find where it ends.
+	// Re-scan with every quote turned into a space: that reveals the commit, at the cost of
+	// reading some quoted prose as a command. Over-detection blocks visibly; missing a real
+	// invocation clears a commit nobody read.
+	// Quotes become spaces; a backtick becomes `;` so the command inside it reaches command
+	// position. `$(` already leaves a `(`, which is a separator.
+	const scanned = hasHiddenSubstitution(command)
+		? command.replace(/["']/g, " ").replace(/`/g, ";")
+		: command;
 	const out: CommitInvocation[] = [];
-	// Restored from 13899c6, whose cd tracking a later commit overwrote, and reconciled with
-	// the command-slot fix that landed after it. That fix removed the per-line split, because
-	// a quoted operand may span a newline, so this walks ONE token stream and treats a `\n`
-	// token as the sequential separator the old outer loop got for free.
-	let chdir: string | null = null;
-	/** A `cd` this walker cannot resolve, so no directory may be read for the commit. */
-	let chdirUnknown = false;
-	/** State at the last `&&`, `;`, or newline: what a pipeline or a failed `cd` inherits. */
-	let sequential: { chdir: string | null; unknown: boolean } = { chdir: null, unknown: false };
-	/** Inside a pipeline every segment is its own shell, so no `cd` here may escape it. */
-	let inPipeline = false;
-	const subshells: {
-		chdir: string | null;
-		chdirUnknown: boolean;
-		sequential: { chdir: string | null; unknown: boolean };
-		inPipeline: boolean;
-	}[] = [];
-	const revert = (): void => {
-		chdir = sequential.chdir;
-		chdirUnknown = sequential.unknown;
-	};
-	/** Leave a pipeline or a line: discard any `cd` it made, then set the new baseline. */
-	const endSegment = (): void => {
-		if (inPipeline) revert();
-		inPipeline = false;
-		sequential = { chdir, unknown: chdirUnknown };
-	};
-	const tokens = tokenize(command);
+	const tokens = tokenize(scanned);
+	const isSep = (t: Token | undefined): boolean =>
+		t !== undefined && !t.quoted && (SEPARATOR[t.text] === true || t.text === "\n");
 	let atCommand = true;
 	for (let i = 0; i < tokens.length; i++) {
-		const token = tokens[i] as string;
-		if (SEPARATOR[token] === true || token === "\n") {
-			if (token === "(") {
-				subshells.push({ chdir, chdirUnknown, sequential, inPipeline });
-				inPipeline = false;
-				sequential = { chdir, unknown: chdirUnknown };
-			} else if (token === ")") {
-				const outer = subshells.pop();
-				if (outer !== undefined) {
-					chdir = outer.chdir;
-					chdirUnknown = outer.chdirUnknown;
-					sequential = outer.sequential;
-					inPipeline = outer.inPipeline;
-				}
-			} else if (token === "|") {
-				revert();
-				inPipeline = true;
-			} else if (token === "||" || token === "&") {
-				// After `||` the `cd` either never ran or failed; `&` backgrounds it.
-				revert();
-				inPipeline = false;
-			} else endSegment();
+		const token = tokens[i] as Token;
+		if (isSep(token)) {
 			atCommand = true;
 			continue;
 		}
 		if (!atCommand) continue;
-		if (TRANSPARENT_PREFIX[token] === true || ENV_ASSIGNMENT.test(token)) continue;
+		if (TRANSPARENT_PREFIX[token.text] === true || ENV_ASSIGNMENT.test(token.text)) continue;
 		atCommand = false;
-		if (token === "cd") {
-			const target = tokens[i + 1];
-			const bare = target === undefined || SEPARATOR[target] === true || target === "\n";
-			if (bare) {
-				// Bare `cd` goes to HOME, which is a real directory and often a git repository.
-				chdir = homedir();
-				chdirUnknown = false;
-				continue;
-			}
-			const dir = target as string;
-			i++;
-			if (dir === "-" || dir.startsWith("-") || dir.includes("$") || dir.includes("`")) {
-				// `cd -` returns to a directory only the live shell remembers, and a target built
-				// from a variable is not resolvable here either.
-				chdirUnknown = true;
-				continue;
-			}
-			const expanded = dir === "~" || dir.startsWith("~/") ? resolve(homedir(), dir.slice(2)) : dir;
-			chdir = chdir === null || chdirUnknown ? expanded : resolve(chdir, expanded);
-			chdirUnknown = chdirUnknown && !isAbsolute(expanded);
-			continue;
-		}
-		if (GIT_COMMANDS[token] !== true) continue;
+		// Quoting removes SYNTAX meaning, not argv meaning: `'git' commit` runs git, so command
+		// identity ignores it. Only `isSep` consults `quoted`.
+		if (GIT_COMMANDS[token.text] !== true) continue;
 
 		let repoDir: string | null = null;
 		let verb: string | null = null;
 		let dryRun = false;
 		let j = i + 1;
 		for (; j < tokens.length; j++) {
-			const arg = tokens[j] as string;
-			if (SEPARATOR[arg] === true || arg === "\n") break;
-			if (arg.startsWith("-") && arg !== "-") {
-				const eq = arg.indexOf("=");
-				const name = eq === -1 ? arg : arg.slice(0, eq);
+			const arg = tokens[j] as Token;
+			if (isSep(arg)) break;
+			if (arg.text.startsWith("-") && arg.text !== "-") {
+				const eq = arg.text.indexOf("=");
+				const name = eq === -1 ? arg.text : arg.text.slice(0, eq);
 				if (name === "--dry-run") dryRun = true;
 				if (eq === -1 && verb === null && PRE_VERB_VALUE_FLAGS[name] === true) {
 					const value = tokens[j + 1];
-					if (value !== undefined && SEPARATOR[value] !== true && value !== "\n") {
-						if (name === "-C") repoDir = repoDir === null ? value : resolve(repoDir, value);
+					if (value !== undefined && !isSep(value)) {
+						if (name === "-C")
+							repoDir = repoDir === null ? value.text : resolve(repoDir, value.text);
 						j++;
 					}
 				}
 				continue;
 			}
-			if (verb === null) verb = arg.toLowerCase();
+			if (verb === null) verb = arg.text.toLowerCase();
 		}
-		// Step back so the outer loop lands ON the separator the scan stopped at, letting it
-		// make its own cwd and command-position transition. Skipping it leaked a `cd` from a
-		// pipeline segment into the sequential baseline.
+		// Step back so the outer loop lands ON the separator the scan stopped at, letting it make
+		// its own command-position transition.
 		i = j - 1;
-		if (verb === "commit") out.push({ repoDir, dryRun, chdir, chdirUnknown });
+		if (verb === "commit") out.push({ repoDir, dryRun });
 	}
 	return out;
 }
@@ -350,11 +338,12 @@ export function denyReason(branch: string): string {
 		`commit was read against has \`${branch}\` checked out. Create or switch to a feature ` +
 		"branch first (`git switch -c <type>/<slug>`, or `git switch <existing>` when the " +
 		"branch was made for this task), then commit there and open a PR.\n\n" +
-		"If the commit targets a DIFFERENT repository, that one is what to check. A `cd` the " +
-		"gate can resolve is followed, so the branch above may already come from it. For a " +
-		"target it cannot resolve, name the repository unambiguously: pass the bash tool's " +
-		"`cwd`, or use an absolute `git -C <path> commit`. Both are read directly, with no " +
-		"guessing about shell control flow.\n\n" +
+		"If the commit targets a DIFFERENT repository, that one is what to check. A `cd` in the " +
+		"command is NOT followed, so the branch above was read in the bash call's own working " +
+		"directory. Inferring it from a `cd` cleared commits onto protected branches, because " +
+		"the walker cannot tell a `cd` that ran from one that did not. Name the repository " +
+		"instead: pass the bash tool's `cwd`, or use an absolute `git -C <path> commit`. Both " +
+		"are read directly.\n\n" +
 		`Only when the user explicitly asked for a commit on ${branch}, in a repository with ` +
 		`no PR flow or under an instruction to land directly, set \`${ALLOW_ENV}=1\` in the ` +
 		"ENVIRONMENT, either on the bash call or in the session. There is no command-text " +
@@ -372,13 +361,10 @@ export function decideCommit(
 	if (!PREFILTER.test(command)) return;
 	for (const invocation of findCommitInvocations(command)) {
 		if (invocation.dryRun) continue;
-		// An absolute `-C` names the repository outright, so an unresolvable `cd` cannot
-		// change which one is read. Otherwise the target depends on that `cd`, and reading
-		// some other directory would decide this commit on evidence from elsewhere.
-		const repoDir = invocation.repoDir;
-		if (invocation.chdirUnknown && (repoDir === null || !isAbsolute(repoDir))) continue;
-		const base = invocation.chdir === null ? cwd : resolve(cwd, invocation.chdir);
-		const target = repoDir === null ? base : resolve(base, repoDir);
+		// `-C` is the only directory the command states outright, so it is the only one applied.
+		// A `cd` is not followed, for the reasons on `findCommitInvocations`.
+		const target =
+			invocation.repoDir === null ? cwd : resolve(cwd, invocation.repoDir);
 		const branch = currentBranch(target);
 		if (branch === null) continue;
 		if (PROTECTED_BRANCHES[branch] === true) return { block: true, reason: denyReason(branch) };
