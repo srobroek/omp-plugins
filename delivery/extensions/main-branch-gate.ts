@@ -65,7 +65,22 @@ const PRE_VERB_VALUE_FLAGS: Record<string, true> = {
 const PREFILTER = /\bd?git\b[\s\S]{0,400}?\bcommit\b/;
 
 const ALLOW_ENV = "DELIVERY_ALLOW_MAIN_COMMIT";
-const ALLOW_INLINE = /(?:^|[\s;&|])DELIVERY_ALLOW_MAIN_COMMIT=1(?![\w-])/;
+
+/**
+ * The override is honoured from the ENVIRONMENT only. There is deliberately no form that
+ * reads the command text.
+ *
+ * A regex over the raw command granted it to any text with whitespace before the flag, so
+ * `git commit -m "set DELIVERY_ALLOW_MAIN_COMMIT=1 to override"` disabled the gate, and a
+ * commit explaining this gate contains exactly that prose. Two narrower scans were tried and
+ * both failed: quotes had to be tracked, because bash reads a quoted assignment as a command
+ * name, and then a `#` comment or a here-document body carrying `; FLAG=1 git commit`
+ * authorised the real commit that came before it. Recognising an assignment soundly needs
+ * comment and here-document grammar, which is a shell parser.
+ *
+ * Authorising on text that only LOOKS like an assignment is worse than requiring the
+ * environment, because it turns a commit message into a way to switch the gate off.
+ */
 
 export type GitRun = (argv: string[], cwd: string) => { exitCode: number; stdout: string };
 
@@ -331,15 +346,18 @@ export function currentBranch(cwd: string): string | null {
 
 export function denyReason(branch: string): string {
 	return (
-		`blocked by delivery (work lands on a branch, never on ${branch}): the repository ` +
-		`this commit targets has \`${branch}\` checked out. Create or switch to a feature ` +
+		`blocked by delivery (work lands on a branch, never on ${branch}): the directory this ` +
+		`commit was read against has \`${branch}\` checked out. Create or switch to a feature ` +
 		"branch first (`git switch -c <type>/<slug>`, or `git switch <existing>` when the " +
-		"branch was made for this task), then commit there and open a PR. The branch was " +
-		"read with `git branch --show-current` in that repository, not guessed from the " +
-		"commit message. If the user explicitly asked for a commit on " +
-		`${branch} — a repository with no PR flow, or an instruction to land directly — ` +
-		`say so and re-issue with \`${ALLOW_ENV}=1\` set inline on the command or in the ` +
-		"environment."
+		"branch was made for this task), then commit there and open a PR.\n\n" +
+		"If the commit targets a DIFFERENT repository, that one is what to check. A `cd` in " +
+		"the command string is NOT parsed, so the branch above was read in the bash call's own " +
+		"working directory. Pass the bash tool's `cwd` for the target repository, or name it " +
+		"with an absolute `git -C <path> commit`, and re-issue. Both are read correctly.\n\n" +
+		`Only when the user explicitly asked for a commit on ${branch}, in a repository with ` +
+		`no PR flow or under an instruction to land directly, set \`${ALLOW_ENV}=1\` in the ` +
+		"ENVIRONMENT and re-issue. There is no command-text form: a commit message mentioning " +
+		"that flag used to disable this gate, so nothing in the command grants it."
 	);
 }
 
@@ -348,7 +366,7 @@ export function decideCommit(
 	cwd: string = process.cwd(),
 	env: NodeJS.ProcessEnv = process.env,
 ): { block: true; reason: string } | undefined {
-	if (env[ALLOW_ENV] === "1" || ALLOW_INLINE.test(command)) return;
+	if (env[ALLOW_ENV] === "1") return;
 	if (!PREFILTER.test(command)) return;
 	for (const invocation of findCommitInvocations(command)) {
 		if (invocation.dryRun) continue;

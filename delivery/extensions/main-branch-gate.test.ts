@@ -352,20 +352,36 @@ describe("decideCommit", () => {
 		expect(decideCommit("git commit -m x", "/work", {})).toBeUndefined();
 	});
 
-	test("the explicit override lifts it, from the environment or inline", () => {
+	test("the override comes from the environment, never from the command text", () => {
 		const { run, calls } = fakeGit({ "/work": "main" });
 		setGitRunForTests(run);
 		expect(
 			decideCommit("git commit -m x", "/work", { DELIVERY_ALLOW_MAIN_COMMIT: "1" }),
-		).toBeUndefined();
-		expect(
-			decideCommit("DELIVERY_ALLOW_MAIN_COMMIT=1 git commit -m x", "/work", {}),
 		).toBeUndefined();
 		expect(calls).toEqual([]);
 
 		expect(
 			decideCommit("git commit -m x", "/work", { DELIVERY_ALLOW_MAIN_COMMIT: "0" })?.block,
 		).toBe(true);
+	});
+
+	// Every one of these switched the gate off through text alone. A commit message explaining
+	// this gate contains exactly that prose, and a comment or here-document body is data the
+	// shell never executes, so no scan of the command can authorise soundly.
+	test("no command text grants the override", () => {
+		for (const command of [
+			"DELIVERY_ALLOW_MAIN_COMMIT=1 git commit -m x",
+			"git commit -m 'DELIVERY_ALLOW_MAIN_COMMIT=1'",
+			'git commit -m "set DELIVERY_ALLOW_MAIN_COMMIT=1 to override"',
+			'"DELIVERY_ALLOW_MAIN_COMMIT=1" git commit -m x',
+			"git commit -m x # ; DELIVERY_ALLOW_MAIN_COMMIT=1 git commit",
+			"git commit -F - <<'EOF'\nfix: mention DELIVERY_ALLOW_MAIN_COMMIT=1 here\nEOF",
+			"export DELIVERY_ALLOW_MAIN_COMMIT=1 && git commit -m x",
+		]) {
+			const { run } = fakeGit({ "/work": "main" });
+			setGitRunForTests(run);
+			expect(decideCommit(command, "/work", {})?.block, command).toBe(true);
+		}
 	});
 
 	test("the prefilter keeps unrelated commands away from the seam", () => {
@@ -379,12 +395,16 @@ describe("decideCommit", () => {
 });
 
 describe("denyReason", () => {
-	test("names the branch, the fix, the evidence, and the override", () => {
+	test("names the branch, the fix, the target-repo route, and the override", () => {
 		const reason = denyReason("main");
 		expect(reason).toContain("main");
 		expect(reason).toContain("git switch -c");
-		expect(reason).toContain("git branch --show-current");
+		// The route that actually works when the commit targets another repository.
+		expect(reason).toContain("cwd");
+		expect(reason).toContain("git -C");
 		expect(reason).toContain("DELIVERY_ALLOW_MAIN_COMMIT=1");
+		// It must not advertise a command-text form, which no longer exists.
+		expect(reason).toContain("ENVIRONMENT");
 	});
 });
 
