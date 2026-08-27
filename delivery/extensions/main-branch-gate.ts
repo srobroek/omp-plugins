@@ -20,7 +20,8 @@
  * inline on the command, makes that decision explicit and auditable instead of
  * unavailable. This is advisory-strength, not a security boundary.
  */
-import { resolve } from "node:path";
+import { homedir } from "node:os";
+import { isAbsolute, resolve } from "node:path";
 
 import type { ExtensionAPI, ExtensionToolCallEvent } from "@oh-my-pi/pi-coding-agent";
 
@@ -31,7 +32,19 @@ const PROTECTED_BRANCHES: Record<string, true> = { main: true, master: true };
 /** `dgit` is the Git Defender wrapper this estate uses to reach github.com. */
 const GIT_COMMANDS: Record<string, true> = { dgit: true, git: true };
 
-const SEPARATOR: Record<string, true> = { ";": true, "&": true, "|": true, "(": true, ")": true };
+/**
+ * Command separators. `&&` and `||` are listed beside the single forms because the walker
+ * treats them differently: only `&&`, `;`, and a newline keep a `cd` in the same shell.
+ */
+const SEPARATOR: Record<string, true> = {
+	";": true,
+	"&": true,
+	"&&": true,
+	"|": true,
+	"||": true,
+	"(": true,
+	")": true,
+};
 
 /** Words that may stand before `git` and leave it at command position. */
 const TRANSPARENT_PREFIX: Record<string, true> = { command: true, env: true, sudo: true };
@@ -132,6 +145,14 @@ export function tokenize(command: string): string[] {
 		}
 		if (SEPARATOR[ch] === true) {
 			flush();
+			// `&&` and `||` must not read as `&` and `|`: only the doubled forms keep a `cd`
+			// in the same shell, and the single forms put the next command back in the
+			// directory the pipeline or background job inherited.
+			if ((ch === "&" || ch === "|") && command[i + 1] === ch) {
+				out.push(ch + ch);
+				i++;
+				continue;
+			}
 			out.push(ch);
 			continue;
 		}
@@ -147,6 +168,15 @@ export type CommitInvocation = {
 	repoDir: string | null;
 	/** `--dry-run` writes no commit, so the branch does not matter. */
 	dryRun: boolean;
+	/** Directory `cd` reached, relative to the bash cwd; `null` means that cwd itself. */
+	chdir: string | null;
+	/**
+	 * A `cd` whose destination cannot be named: `cd -`, or a target built from a variable.
+	 * Distinct from `chdir: null`, which names a real directory. Reading some other
+	 * directory instead would either block a commit that was never on a protected branch
+	 * or pass one that was, so the gate declines to guess.
+	 */
+	chdirUnknown: boolean;
 };
 
 /**
@@ -155,20 +185,101 @@ export type CommitInvocation = {
  * Command position is per separator, including an unquoted newline. A quoted
  * operand that contains a git verb is not an invocation. Successive `-C`
  * options are folded the way git folds them: each is relative to the last.
+ *
+ * A `cd` in the command moves the repository the commit lands in, so it is
+ * tracked the same way. Without it `cd repo && git commit` was judged against
+ * the session's own directory, which blocked commits to a feature branch in a
+ * sibling repository and pointed the caller at the override for the wrong
+ * reason.
+ *
+ * Only `&&`, `;`, and a newline carry a `cd` forward. Each side of a pipeline runs
+ * in its own shell, so `cd repo | git commit` commits in the directory the
+ * pipeline inherited; after `||` the `cd` either never ran or failed; and `&`
+ * backgrounds it. Those three revert to the directory in force at the last
+ * sequential boundary, and a subshell restores what it inherited.
  */
 export function findCommitInvocations(command: string): CommitInvocation[] {
 	const out: CommitInvocation[] = [];
+	// Restored from 13899c6, whose cd tracking a later commit overwrote, and reconciled with
+	// the command-slot fix that landed after it. That fix removed the per-line split, because
+	// a quoted operand may span a newline, so this walks ONE token stream and treats a `\n`
+	// token as the sequential separator the old outer loop got for free.
+	let chdir: string | null = null;
+	/** A `cd` this walker cannot resolve, so no directory may be read for the commit. */
+	let chdirUnknown = false;
+	/** State at the last `&&`, `;`, or newline: what a pipeline or a failed `cd` inherits. */
+	let sequential: { chdir: string | null; unknown: boolean } = { chdir: null, unknown: false };
+	/** Inside a pipeline every segment is its own shell, so no `cd` here may escape it. */
+	let inPipeline = false;
+	const subshells: {
+		chdir: string | null;
+		chdirUnknown: boolean;
+		sequential: { chdir: string | null; unknown: boolean };
+		inPipeline: boolean;
+	}[] = [];
+	const revert = (): void => {
+		chdir = sequential.chdir;
+		chdirUnknown = sequential.unknown;
+	};
+	/** Leave a pipeline or a line: discard any `cd` it made, then set the new baseline. */
+	const endSegment = (): void => {
+		if (inPipeline) revert();
+		inPipeline = false;
+		sequential = { chdir, unknown: chdirUnknown };
+	};
 	const tokens = tokenize(command);
 	let atCommand = true;
 	for (let i = 0; i < tokens.length; i++) {
 		const token = tokens[i] as string;
 		if (SEPARATOR[token] === true || token === "\n") {
+			if (token === "(") {
+				subshells.push({ chdir, chdirUnknown, sequential, inPipeline });
+				inPipeline = false;
+				sequential = { chdir, unknown: chdirUnknown };
+			} else if (token === ")") {
+				const outer = subshells.pop();
+				if (outer !== undefined) {
+					chdir = outer.chdir;
+					chdirUnknown = outer.chdirUnknown;
+					sequential = outer.sequential;
+					inPipeline = outer.inPipeline;
+				}
+			} else if (token === "|") {
+				revert();
+				inPipeline = true;
+			} else if (token === "||" || token === "&") {
+				// After `||` the `cd` either never ran or failed; `&` backgrounds it.
+				revert();
+				inPipeline = false;
+			} else endSegment();
 			atCommand = true;
 			continue;
 		}
 		if (!atCommand) continue;
 		if (TRANSPARENT_PREFIX[token] === true || ENV_ASSIGNMENT.test(token)) continue;
 		atCommand = false;
+		if (token === "cd") {
+			const target = tokens[i + 1];
+			const bare = target === undefined || SEPARATOR[target] === true || target === "\n";
+			if (bare) {
+				// Bare `cd` goes to HOME, which is a real directory and often a git repository.
+				chdir = homedir();
+				chdirUnknown = false;
+				continue;
+			}
+			const dir = target as string;
+			i++;
+			if (dir === "-" || dir.startsWith("-") || dir.includes("$") || dir.includes("`")) {
+				// `cd -` returns to a directory only the live shell remembers, and a target built
+				// from a variable is not resolvable here either.
+				chdirUnknown = true;
+				continue;
+			}
+			const expanded = dir === "~" || dir.startsWith("~/") ? resolve(homedir(), dir.slice(2)) : dir;
+			chdir = chdir === null || chdirUnknown ? expanded : resolve(chdir, expanded);
+			chdirUnknown = chdirUnknown && !isAbsolute(expanded);
+			continue;
+		}
 		if (GIT_COMMANDS[token] !== true) continue;
 
 		let repoDir: string | null = null;
@@ -193,9 +304,11 @@ export function findCommitInvocations(command: string): CommitInvocation[] {
 			}
 			if (verb === null) verb = arg.toLowerCase();
 		}
-		i = j;
-		atCommand = SEPARATOR[tokens[j] as string] === true || tokens[j] === "\n";
-		if (verb === "commit") out.push({ repoDir, dryRun });
+		// Step back so the outer loop lands ON the separator the scan stopped at, letting it
+		// make its own cwd and command-position transition. Skipping it leaked a `cd` from a
+		// pipeline segment into the sequential baseline.
+		i = j - 1;
+		if (verb === "commit") out.push({ repoDir, dryRun, chdir, chdirUnknown });
 	}
 	return out;
 }
@@ -239,7 +352,13 @@ export function decideCommit(
 	if (!PREFILTER.test(command)) return;
 	for (const invocation of findCommitInvocations(command)) {
 		if (invocation.dryRun) continue;
-		const target = invocation.repoDir === null ? cwd : resolve(cwd, invocation.repoDir);
+		// An absolute `-C` names the repository outright, so an unresolvable `cd` cannot
+		// change which one is read. Otherwise the target depends on that `cd`, and reading
+		// some other directory would decide this commit on evidence from elsewhere.
+		const repoDir = invocation.repoDir;
+		if (invocation.chdirUnknown && (repoDir === null || !isAbsolute(repoDir))) continue;
+		const base = invocation.chdir === null ? cwd : resolve(cwd, invocation.chdir);
+		const target = repoDir === null ? base : resolve(base, repoDir);
 		const branch = currentBranch(target);
 		if (branch === null) continue;
 		if (PROTECTED_BRANCHES[branch] === true) return { block: true, reason: denyReason(branch) };

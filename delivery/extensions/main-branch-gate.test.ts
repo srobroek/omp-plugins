@@ -1,3 +1,5 @@
+import { homedir } from "node:os";
+
 import { afterEach, describe, expect, test } from "bun:test";
 
 import mainBranchGate, {
@@ -53,51 +55,127 @@ describe("tokenize", () => {
 describe("findCommitInvocations", () => {
 	test("plain commit", () => {
 		expect(findCommitInvocations("git commit -m 'chore: x'")).toEqual([
-			{ repoDir: null, dryRun: false },
+			{ repoDir: null, dryRun: false, chdir: null, chdirUnknown: false },
 		]);
 	});
 
 	test("dgit is the same command shape", () => {
-		expect(findCommitInvocations("dgit commit -m x")).toEqual([{ repoDir: null, dryRun: false }]);
+		expect(findCommitInvocations("dgit commit -m x")).toEqual([
+			{ repoDir: null, dryRun: false, chdir: null, chdirUnknown: false },
+		]);
 	});
 
 	test("-C names the target repository, and repeats fold", () => {
 		expect(findCommitInvocations("git -C /repo commit -m x")).toEqual([
-			{ repoDir: "/repo", dryRun: false },
+			{ repoDir: "/repo", dryRun: false, chdir: null, chdirUnknown: false },
 		]);
 		expect(findCommitInvocations("git -C /repo -C sub commit -m x")).toEqual([
-			{ repoDir: "/repo/sub", dryRun: false },
+			{ repoDir: "/repo/sub", dryRun: false, chdir: null, chdirUnknown: false },
 		]);
 	});
 
 	test("pre-verb value options do not swallow the verb", () => {
 		expect(findCommitInvocations("git -c user.name=x commit -m y")).toEqual([
-			{ repoDir: null, dryRun: false },
+			{ repoDir: null, dryRun: false, chdir: null, chdirUnknown: false },
 		]);
 		expect(findCommitInvocations("git --git-dir /r/.git --work-tree /r commit -m y")).toEqual([
-			{ repoDir: null, dryRun: false },
+			{ repoDir: null, dryRun: false, chdir: null, chdirUnknown: false },
 		]);
 	});
 
 	test("--dry-run is recorded", () => {
 		expect(findCommitInvocations("git commit --dry-run")).toEqual([
-			{ repoDir: null, dryRun: true },
+			{ repoDir: null, dryRun: true, chdir: null, chdirUnknown: false },
 		]);
 	});
 
 	test("command position: chained, multi-line, env-prefixed", () => {
 		expect(findCommitInvocations("git add . && git commit -m x")).toEqual([
-			{ repoDir: null, dryRun: false },
+			{ repoDir: null, dryRun: false, chdir: null, chdirUnknown: false },
 		]);
 		expect(findCommitInvocations("cd /repo\ngit commit -m x")).toEqual([
-			{ repoDir: null, dryRun: false },
+			{ repoDir: null, dryRun: false, chdir: "/repo", chdirUnknown: false },
 		]);
 		expect(findCommitInvocations("GIT_AUTHOR_NAME=x git commit -m y")).toEqual([
-			{ repoDir: null, dryRun: false },
+			{ repoDir: null, dryRun: false, chdir: null, chdirUnknown: false },
 		]);
 		expect(findCommitInvocations("git commit -m a; git -C /r commit -m b")).toEqual([
-			{ repoDir: null, dryRun: false },
-			{ repoDir: "/r", dryRun: false },
+			{ repoDir: null, dryRun: false, chdir: null, chdirUnknown: false },
+			{ repoDir: "/r", dryRun: false, chdir: null, chdirUnknown: false },
+		]);
+	});
+
+	// The false positive this tracking exists to fix: the commit lands in the repository
+	// `cd` reached, not in the directory the session happened to start in.
+	test("cd carries forward across &&, ;, and a newline", () => {
+		for (const command of [
+			"cd /repo && git commit -m x",
+			"cd /repo; git commit -m x",
+			"cd /repo\ngit commit -m x",
+			"cd /repo && cd sub && git commit -m x",
+		]) {
+			const [only] = findCommitInvocations(command);
+			expect(only?.chdir).toBe(command.includes("sub") ? "/repo/sub" : "/repo");
+		}
+	});
+
+	// Each pipeline segment is its own shell, so git runs where the pipeline started.
+	test("a cd inside a pipeline does not reach the commit", () => {
+		expect(findCommitInvocations("cd /repo | git commit -m x")).toEqual([
+			{ repoDir: null, dryRun: false, chdir: null, chdirUnknown: false },
+		]);
+		// The leak worth naming: `cd` on the right of a pipeline must not survive the `;`.
+		expect(findCommitInvocations("cd /a | cd /b ; git commit -m x")).toEqual([
+			{ repoDir: null, dryRun: false, chdir: null, chdirUnknown: false },
+		]);
+		// The same leak with a git command opening the pipeline, which the scan used to skip.
+		expect(findCommitInvocations("git status | cd /b ; git commit -m x")).toEqual([
+			{ repoDir: null, dryRun: false, chdir: null, chdirUnknown: false },
+		]);
+		// A cd from an earlier line DID take effect, so a later pipeline inherits it.
+		expect(findCommitInvocations("cd /repo\necho x | git commit -m y")).toEqual([
+			{ repoDir: null, dryRun: false, chdir: "/repo", chdirUnknown: false },
+		]);
+	});
+
+	test("after || the cd either never ran or failed, and & backgrounds it", () => {
+		expect(findCommitInvocations("cd /repo || git commit -m x")).toEqual([
+			{ repoDir: null, dryRun: false, chdir: null, chdirUnknown: false },
+		]);
+		expect(findCommitInvocations("cd /repo & git commit -m x")).toEqual([
+			{ repoDir: null, dryRun: false, chdir: null, chdirUnknown: false },
+		]);
+	});
+
+	test("a subshell restores the directory it inherited", () => {
+		expect(findCommitInvocations("(cd /repo && git commit -m x)")).toEqual([
+			{ repoDir: null, dryRun: false, chdir: "/repo", chdirUnknown: false },
+		]);
+		expect(findCommitInvocations("(cd /repo) && git commit -m x")).toEqual([
+			{ repoDir: null, dryRun: false, chdir: null, chdirUnknown: false },
+		]);
+	});
+
+	// `cd -` returns to a directory only the live shell remembers, so holding the previous
+	// one would judge the commit against a repository it never ran in.
+	test("an unresolvable cd is marked unknown, not guessed", () => {
+		expect(findCommitInvocations("cd /repo && cd - && git commit -m x")).toEqual([
+			{ repoDir: null, dryRun: false, chdir: "/repo", chdirUnknown: true },
+		]);
+		expect(findCommitInvocations("cd $TARGET && git commit -m x")).toEqual([
+			{ repoDir: null, dryRun: false, chdir: null, chdirUnknown: true },
+		]);
+	});
+
+	test("bare cd goes to HOME, which is a real directory", () => {
+		const [only] = findCommitInvocations("cd && git commit -m x");
+		expect(only?.chdir).toBe(homedir());
+		expect(only?.chdirUnknown).toBe(false);
+	});
+
+	test("-C resolves against the cd, matching git", () => {
+		expect(findCommitInvocations("cd /repo && git -C sub commit -m x")).toEqual([
+			{ repoDir: "sub", dryRun: false, chdir: "/repo", chdirUnknown: false },
 		]);
 	});
 
@@ -205,6 +283,45 @@ describe("decideCommit", () => {
 		setGitRunForTests(run);
 		expect(decideCommit("git -C sub commit -m x", "/work", {})?.block).toBe(true);
 		expect(calls.map(c => c.cwd)).toEqual(["/work/sub"]);
+	});
+
+	// The reported false positive, end to end. The session sits in a repository on main and
+	// the commit targets a sibling on a feature branch, which the gate blocked while saying
+	// it had read the branch in the repository the commit targets.
+	test("cd decides which repository is read", () => {
+		const { run, calls } = fakeGit({ "/session": "main", "/sibling": "feat/design-plugin" });
+		setGitRunForTests(run);
+		expect(decideCommit("cd /sibling && git commit -m x", "/session", {})).toBeUndefined();
+		expect(calls.map(c => c.cwd)).toEqual(["/sibling"]);
+	});
+
+	test("cd into a repository on main still blocks", () => {
+		const { run } = fakeGit({ "/session": "feat/x", "/trunk": "main" });
+		setGitRunForTests(run);
+		expect(decideCommit("cd /trunk && git commit -m x", "/session", {})?.block).toBe(true);
+	});
+
+	test("a pipeline cd leaves the session directory in force", () => {
+		const { run, calls } = fakeGit({ "/session": "main", "/sibling": "feat/x" });
+		setGitRunForTests(run);
+		expect(decideCommit("cd /sibling | git commit -m x", "/session", {})?.block).toBe(true);
+		expect(calls.map(c => c.cwd)).toEqual(["/session"]);
+	});
+
+	// An unresolvable `cd` means no directory can be named, so the gate reads none rather
+	// than deciding the commit on a repository it never ran in.
+	test("an unresolvable cd reads no repository", () => {
+		const { run, calls } = fakeGit({ "/session": "main" });
+		setGitRunForTests(run);
+		expect(decideCommit("cd - && git commit -m x", "/session", {})).toBeUndefined();
+		expect(calls).toEqual([]);
+	});
+
+	test("an absolute -C still decides after an unresolvable cd", () => {
+		const { run, calls } = fakeGit({ "/session": "feat/x", "/trunk": "main" });
+		setGitRunForTests(run);
+		expect(decideCommit("cd - && git -C /trunk commit -m x", "/session", {})?.block).toBe(true);
+		expect(calls.map(c => c.cwd)).toEqual(["/trunk"]);
 	});
 
 	test("blocks the second of two commits when only that repo is on main", () => {
