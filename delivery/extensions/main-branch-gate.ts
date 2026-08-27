@@ -123,8 +123,9 @@ export type Token = {
 
 /**
  * Words and separators, with quoting recorded. A quoted region is inert here: finding where a
- * substitution inside one ENDS needs a real parser, so `findCommitInvocations` handles that with
- * a second, additive pass instead.
+ * substitution inside one ENDS needs a real parser, so nothing tries. `findCommitInvocations`
+ * covers that case without reading it, by appending one candidate whenever the command holds a
+ * substitution at all.
  */
 export function tokenize(command: string): Token[] {
 	const out: Token[] = [];

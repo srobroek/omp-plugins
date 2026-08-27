@@ -163,12 +163,11 @@ describe("findCommitInvocations", () => {
 		}
 	});
 
-
-	// Any substitution triggers a second, ADDITIVE pass with quotes neutralised. Deciding which
+	// Any substitution appends ONE candidate, without reading inside it. Deciding which
 	// substitutions are inert cannot be done here: a stray apostrophe in a here-document body or
 	// a comment is literal text yet poisons quote tracking, and a backtick nests through
-	// backslashes. So every one is scanned, and over-detection only adds a block.
-	test("a substitution is scanned however it is quoted or escaped", () => {
+	// backslashes. So every shape below yields a candidate, whatever the quoting does to it.
+	test("a substitution yields a candidate however it is quoted or escaped", () => {
 		for (const command of [
 			'printf "%s" "$(git commit -m x)"',
 			"printf '%s' \"$(\ngit commit -m x\n)\"",
@@ -187,9 +186,10 @@ describe("findCommitInvocations", () => {
 		}
 	});
 
-	// The additive pass may never WEAKEN what the first scan saw plainly. Each of these was a
-	// silent permit when the lossy pass replaced the first one instead of adding to it.
-	test("the fallback never removes a commit the first scan found", () => {
+	// Appending may never WEAKEN what the quote-aware scan saw plainly. Each of these was a
+	// silent permit in the version that replaced that scan with a quote-stripped one instead of
+	// adding to it. The lossy pass is gone, and these hold the property that replaced it.
+	test("appending never removes a commit the scan found", () => {
 		// `--dry-run` here is message data that the quote-stripping pass promotes to an option.
 		const promoted = findCommitInvocations('git commit -m "document --dry-run $(date)"');
 		expect(promoted.some(c => !c.dryRun)).toBe(true);
