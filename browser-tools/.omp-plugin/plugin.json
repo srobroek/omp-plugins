@@ -1,7 +1,7 @@
 {
   "name": "browser-tools",
   "description": "Cross-engine browser coverage and Chrome performance tracing over MCP.",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "category": "development",
   "mcpServers": {
     "chrome-devtools": {

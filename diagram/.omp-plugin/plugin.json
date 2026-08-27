@@ -1,7 +1,7 @@
 {
   "name": "diagram",
   "description": "Interactive diagramming and architecture-sketching canvas over MCP.",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "category": "productivity",
   "mcpServers": {
     "excalidraw": {

@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.0](https://github.com/srobroek/omp-plugins/compare/quality--v0.5.2...quality--v0.6.0) (2026-08-27)
+
+
+### Features
+
+* add design plugin with routed third-party skills and MCP packages ([325fc4c](https://github.com/srobroek/omp-plugins/commit/325fc4c8721b213b5f3c5cc0119cc8be48670165))
+
 ## [0.5.2](https://github.com/srobroek/omp-plugins/compare/quality--v0.5.1...quality--v0.5.2) (2026-08-25)
 
 

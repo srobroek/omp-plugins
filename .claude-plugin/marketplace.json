@@ -19,7 +19,7 @@
       "name": "authoring",
       "description": "Author and audit agentic assets: skills, rules, agents, and steering.",
       "source": "./authoring",
-      "version": "1.1.2",
+      "version": "1.2.0",
       "category": "productivity"
     },
     {
@@ -33,14 +33,14 @@
       "name": "beads",
       "description": "Beads issue tracking: dependency DAGs, formulas, and decisions recorded as beads.",
       "source": "./beads",
-      "version": "0.7.0",
+      "version": "0.8.0",
       "category": "productivity"
     },
     {
       "name": "browser-tools",
       "description": "Cross-engine browser coverage and Chrome performance tracing over MCP.",
       "source": "./browser-tools",
-      "version": "0.1.0",
+      "version": "0.2.0",
       "category": "development"
     },
     {
@@ -68,28 +68,28 @@
       "name": "delivery",
       "description": "Delivery and git-workflow rules, plus a pull-request review agent.",
       "source": "./delivery",
-      "version": "0.6.2",
+      "version": "0.7.0",
       "category": "devops"
     },
     {
       "name": "dep-update",
       "description": "Classify dependency updates by semver safety and produce a cited upgrade plan.",
       "source": "./dep-update",
-      "version": "0.5.1",
+      "version": "0.6.0",
       "category": "development"
     },
     {
       "name": "design",
       "description": "UI and UX design: system audit, DESIGN.md, browser verification, accessibility, tokens, and Component Driven build.",
       "source": "./design",
-      "version": "0.1.0",
+      "version": "0.2.0",
       "category": "development"
     },
     {
       "name": "diagram",
       "description": "Interactive diagramming and architecture-sketching canvas over MCP.",
       "source": "./diagram",
-      "version": "0.1.0",
+      "version": "0.2.0",
       "category": "productivity"
     },
     {
@@ -103,7 +103,7 @@
       "name": "find-tools",
       "description": "Discover and vet skills, agents, MCP servers, and plugins across real registries.",
       "source": "./find-tools",
-      "version": "0.3.1",
+      "version": "0.4.0",
       "category": "productivity"
     },
     {
@@ -117,14 +117,14 @@
       "name": "infrastructure",
       "description": "Infrastructure rules for provisioning, environments, and operational surface.",
       "source": "./infrastructure",
-      "version": "0.3.1",
+      "version": "0.4.0",
       "category": "devops"
     },
     {
       "name": "ops",
       "description": "Operational telemetry and toolchain cache policy: metrics reading and log digests.",
       "source": "./ops",
-      "version": "0.5.1",
+      "version": "0.6.0",
       "category": "devops"
     },
     {
@@ -145,35 +145,35 @@
       "name": "quality",
       "description": "Quality gates: code-smell auditing, final verification, lint and docs adjudication, mechanical diff review, and browser-verification discipline.",
       "source": "./quality",
-      "version": "0.5.2",
+      "version": "0.6.0",
       "category": "development"
     },
     {
       "name": "rust",
       "description": "Rust rules: crate boundaries, domain modeling, error and persistence patterns, workspace and Tauri layout, and a Rust review skill.",
       "source": "./rust",
-      "version": "0.5.1",
+      "version": "0.6.0",
       "category": "language"
     },
     {
       "name": "safety",
       "description": "Defence-in-depth advisories for destructive commands, attribution, and remote execution.",
       "source": "./safety",
-      "version": "0.4.2",
+      "version": "0.5.0",
       "category": "security"
     },
     {
       "name": "session",
       "description": "Resume a prior agent session from its own transcript, newest turns first.",
       "source": "./session",
-      "version": "1.0.1",
+      "version": "1.1.0",
       "category": "productivity"
     },
     {
       "name": "speckit",
       "description": "SpecKit workflow: spec-driven setup, bugfix flow, tasks.md protection, and PR title discipline.",
       "source": "./speckit",
-      "version": "0.5.4",
+      "version": "0.6.0",
       "category": "development"
     },
     {

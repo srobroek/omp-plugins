@@ -1,6 +1,6 @@
 {
   "name": "find-tools",
   "description": "Discover and vet skills, agents, MCP servers, and plugins across real registries.",
-  "version": "0.3.1",
+  "version": "0.4.0",
   "category": "productivity"
 }

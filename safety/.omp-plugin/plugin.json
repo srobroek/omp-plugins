@@ -1,6 +1,6 @@
 {
   "name": "safety",
   "description": "Defence-in-depth advisories for destructive commands, attribution, and remote execution.",
-  "version": "0.4.2",
+  "version": "0.5.0",
   "category": "security"
 }
