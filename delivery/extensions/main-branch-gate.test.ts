@@ -196,6 +196,88 @@ describe("findCommitInvocations", () => {
 		]);
 	});
 
+	// SILENT PERMITS the FIRST here-document implementation introduced, all four found by review.
+	// Skipping text is the dangerous direction: anything wrongly skipped may hold a real commit,
+	// so every uncertainty now falls back to NOT skipping.
+	test("only a real here-document skips a body", () => {
+		// `<<<` is a here-STRING. Reached at its second `<`, the old test saw `<<` followed by a
+		// non-`<` and skipped a body that does not exist.
+		expect(findCommitInvocations("cat <<< EOF\ngit commit -m x\nEOF")).toEqual([
+			{ repoDir: null, dryRun: false },
+		]);
+		// A `<<` inside a comment is text, not a redirection.
+		expect(findCommitInvocations(": # <<EOF\ngit commit -m x\nEOF")).toEqual([
+			{ repoDir: null, dryRun: false },
+		]);
+		// An arithmetic shift shares the spelling, so the delimiter must look like a shell name.
+		expect(findCommitInvocations("((1 << 1))\ngit commit -m x\n1")).toEqual([
+			{ repoDir: null, dryRun: false },
+		]);
+		// `<<\EOF` quotes the delimiter, so the backslash is not part of the name. Keeping it made
+		// the terminator unmatchable and the body ran to the end of the string.
+		expect(findCommitInvocations("cat <<\\EOF\npayload\nEOF\ngit commit -m x")).toEqual([
+			{ repoDir: null, dryRun: false },
+		]);
+	});
+
+	// Bodies are QUEUED per line and consumed in operator order. Recursing on the rest of the
+	// operator line consumed the first body and then re-read the second as commands.
+	test("every here-document queued on one line gets its own body", () => {
+		expect(
+			findCommitInvocations("cat <<A <<B\nx\nA\ngit commit -m x\nB\ngit commit -m y"),
+		).toEqual([{ repoDir: null, dryRun: false }]);
+		expect(findCommitInvocations("cat <<A <<B\nx\nA\ny\nB\ngit commit -m x")).toEqual([
+			{ repoDir: null, dryRun: false },
+		]);
+	});
+
+	// A backslash before a newline is a LINE CONTINUATION: bash removes both and joins the words.
+	// Appending the newline split the verb into a token nothing matched.
+	test("a line continuation joins the word it splits", () => {
+		expect(findCommitInvocations("git com\\\nmit -m x")).toEqual([
+			{ repoDir: null, dryRun: false },
+		]);
+		expect(findCommitInvocations('git "com\\\nmit" -m x')).toEqual([
+			{ repoDir: null, dryRun: false },
+		]);
+	});
+
+	// A CRLF body left `\r` on every line, so the terminator never matched and the body ran to
+	// the end of the string, swallowing the commit after it.
+	test("a CRLF here-document terminates", () => {
+		expect(findCommitInvocations("cat <<EOF\r\nx\r\nEOF\r\ngit commit -m x")).toEqual([
+			{ repoDir: null, dryRun: false },
+		]);
+	});
+
+	// An unquoted `#` at the start of a word begins a comment, so a commented commit does not
+	// run. Mid-word it is literal.
+	test("a comment is not a command", () => {
+		expect(findCommitInvocations("# git commit -m x")).toEqual([]);
+		expect(findCommitInvocations("echo hi # git commit -m x")).toEqual([]);
+		expect(findCommitInvocations("echo hi # nothing\ngit commit -m x")).toEqual([
+			{ repoDir: null, dryRun: false },
+		]);
+		// Mid-word and quoted forms are ordinary text.
+		expect(findCommitInvocations("git commit -m a#b")).toEqual([
+			{ repoDir: null, dryRun: false },
+		]);
+		expect(findCommitInvocations('git commit -m "# x"')).toEqual([
+			{ repoDir: null, dryRun: false },
+		]);
+	});
+
+	// A selector AFTER the verb is an operand, not an option, so a message carrying one is an
+	// ordinary commit rather than a retarget.
+	test("a selector after the verb is message text", () => {
+		expect(findCommitInvocations("git commit -m --git-dir=/tmp/other")).toEqual([
+			{ repoDir: null, dryRun: false },
+		]);
+		expect(findCommitInvocations("git --git-dir=/tmp/other commit -m x")).toEqual([
+			{ repoDir: null, dryRun: false, retargeted: true },
+		]);
+	});
+
 	// SILENT PERMIT at the decision level. A retargeted commit lands in another repository, so
 	// probing the call's own cwd cleared it. Nothing is read now, on any branch, because none of
 	// these names a working directory this gate can check.

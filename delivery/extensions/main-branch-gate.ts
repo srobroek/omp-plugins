@@ -93,6 +93,13 @@ const PRE_VERB_VALUE_FLAGS: Record<string, true> = {
  */
 const PREFILTER = /\bd?git\b/;
 
+/**
+ * A here-document delimiter must look like a shell name. This is a SAFETY guard, not tidiness:
+ * skipping text can hide a real commit, so `1 << 1` must not be read as a here-document just
+ * because an arithmetic shift shares the operator spelling.
+ */
+const HEREDOC_DELIMITER = /^[A-Za-z_][A-Za-z0-9_]*$/;
+
 const ALLOW_ENV = "DELIVERY_ALLOW_MAIN_COMMIT";
 
 /**
@@ -157,6 +164,9 @@ export function tokenize(command: string): Token[] {
 	let started = false;
 	let wasQuoted = false;
 	let quote: string | null = null;
+	// Here-document bodies queued by operators on the current line, consumed in order once that
+	// line ends. `cat <<A <<B` queues two.
+	const pending: Array<{ delimiter: string; stripTabs: boolean }> = [];
 	const flush = (): void => {
 		if (started) out.push({ text: cur, quoted: wasQuoted });
 		cur = "";
@@ -173,11 +183,19 @@ export function tokenize(command: string): Token[] {
 			}
 			continue;
 		}
+		// A backslash before a newline is a LINE CONTINUATION: bash removes both and joins the
+		// words, inside double quotes and outside them alike. Appending the newline instead split
+		// `git com\<newline>mit` into a token no verb matched, so the commit was never reported.
+		if (ch === "\\" && (command[i + 1] === "\n" || (command[i + 1] === "\r" && command[i + 2] === "\n"))) {
+			i += command[i + 1] === "\r" ? 2 : 1;
+			started = true;
+			continue;
+		}
 		if (quote === '"') {
 			// Inside double quotes a backslash escapes only these, and bash keeps it literal
 			// otherwise. Missing this closed the string on `\"`, so the real closing quote read as
 			// an opener and swallowed the separator and the commit after it: a silent permit.
-			if (ch === "\\" && i + 1 < command.length && /["$`\\\n]/.test(command[i + 1] as string)) {
+			if (ch === "\\" && i + 1 < command.length && /["$`\\]/.test(command[i + 1] as string)) {
 				cur += command[i + 1] as string;
 				started = true;
 				i++;
@@ -199,16 +217,23 @@ export function tokenize(command: string): Token[] {
 		if (ch === "\\" && i + 1 < command.length) {
 			cur += command[i + 1] as string;
 			started = true;
-			wasQuoted = true;
+			// NOT `wasQuoted`: a backslash removes syntax meaning exactly as quotes do, and
+			// `g\it commit` runs git, so command identity must still see this word.
 			i++;
 			continue;
 		}
 		// A here-document body is DATA, not commands. Without this the body's newlines reset
-		// command position and its lines were scanned as a shell: `cat <<EOF` with a commit in
-		// the body was refused, and the deny message then blamed a substitution that was not
-		// there. `<<<` is a here-STRING, whose operand is an ordinary word, so it is left alone.
-		if (ch === "<" && command[i + 1] === "<" && command[i + 2] !== "<") {
-			flush();
+		// command position and its lines were scanned as a shell.
+		//
+		// Skipping text is the DANGEROUS direction here: text wrongly skipped may hold a real
+		// commit. So every uncertainty falls back to NOT skipping, which at worst scans data and
+		// over-blocks. Three guards, each closing a permit an earlier version had:
+		//   - `<<<` is a here-STRING. Reached at its SECOND `<`, the old test saw `<<` followed by
+		//     a non-`<` and skipped a body that does not exist, hiding the commit after it.
+		//   - `1 << 1` is an arithmetic shift, so the delimiter must look like a delimiter: a
+		//     shell name. `1` is not one.
+		//   - a `<<` inside a `#` comment is text, handled by the comment branch below.
+		if (ch === "<" && command[i + 1] === "<" && command[i + 2] !== "<" && command[i - 1] !== "<") {
 			let k = i + 2;
 			// Only `<<-` strips indentation from the closing delimiter, and only TABS.
 			const stripTabs = command[k] === "-";
@@ -223,44 +248,37 @@ export function tokenize(command: string): Token[] {
 					else delimiter += d;
 					continue;
 				}
+				// `<<\EOF` quotes the delimiter exactly as `<<'EOF'` does, so the backslash is not
+				// part of the name. Keeping it made the terminator unmatchable, and the body then
+				// ran to the end of the string and swallowed a real commit after it.
+				if (d === "\\" && k + 1 < command.length) {
+					delimiter += command[k + 1] as string;
+					k++;
+					continue;
+				}
 				if (d === '"' || d === "'") {
 					delimiterQuote = d;
 					continue;
 				}
-				if (/[\s;&|)]/.test(d)) break;
+				if (/[\s;&|<>()]/.test(d)) break;
 				delimiter += d;
 			}
-			if (delimiter === "") {
+			if (HEREDOC_DELIMITER.test(delimiter)) {
+				// QUEUED, not consumed here. `cat <<A <<B` has two bodies, in operator order,
+				// after the line ends. Recursing on the rest of the line consumed only the first
+				// and then re-read the second body as commands.
+				pending.push({ delimiter, stripTabs });
+				flush();
 				i = k - 1;
 				continue;
 			}
-			const lineEnd = command.indexOf("\n", k);
-			// The rest of the operator's own line still holds commands, so scan that slice on its
-			// own, then skip the body entirely. An unterminated body runs to the end of the
-			// string, which is what bash sees too.
-			for (const token of tokenize(command.slice(k, lineEnd === -1 ? command.length : lineEnd)))
-				out.push(token);
-			if (lineEnd === -1) {
-				i = command.length;
-				continue;
-			}
-			out.push({ text: "\n", quoted: false });
-			let pos = lineEnd + 1;
-			for (;;) {
-				const next = command.indexOf("\n", pos);
-				const line = command.slice(pos, next === -1 ? command.length : next);
-				// `<<` needs the delimiter line EXACTLY; `<<-` allows leading tabs only. Trailing
-				// whitespace never counts, so trimming both ends would end the body too early.
-				if ((stripTabs ? line.replace(/^\t+/, "") : line) === delimiter) {
-					i = (next === -1 ? command.length : next) - 1;
-					break;
-				}
-				if (next === -1) {
-					i = command.length;
-					break;
-				}
-				pos = next + 1;
-			}
+			// Not a here-document. Fall through and let `<` tokenize as ordinary text.
+		}
+		// An unquoted `#` at the START of a word begins a comment. Mid-word it is literal, as in
+		// `foo#bar`. Without this, `# <<EOF` started a body skip that hid the commit after it.
+		if (ch === "#" && !started) {
+			const lineEnd = command.indexOf("\n", i);
+			i = (lineEnd === -1 ? command.length : lineEnd) - 1;
 			continue;
 		}
 		if (/\s/.test(ch)) {
@@ -271,6 +289,33 @@ export function tokenize(command: string): Token[] {
 				flush();
 				out.push({ text: "\n", quoted: false });
 				if (ch === "\r" && command[i + 1] === "\n") i++;
+				// Every body queued on this line begins now, in order.
+				if (pending.length > 0) {
+					let pos = i + 1;
+					for (const { delimiter, stripTabs } of pending) {
+						for (;;) {
+							const next = command.indexOf("\n", pos);
+							const raw = command.slice(pos, next === -1 ? command.length : next);
+							// A CRLF body leaves `\r` on every line, which made the terminator
+							// unmatchable and ran the body to the end of the string.
+							const line = raw.endsWith("\r") ? raw.slice(0, -1) : raw;
+							// `<<` needs the delimiter line EXACTLY; `<<-` allows leading tabs
+							// only. Trailing whitespace never counts, so trimming both ends would
+							// end the body early.
+							if ((stripTabs ? line.replace(/^\t+/, "") : line) === delimiter) {
+								pos = next === -1 ? command.length : next + 1;
+								break;
+							}
+							if (next === -1) {
+								pos = command.length;
+								break;
+							}
+							pos = next + 1;
+						}
+					}
+					pending.length = 0;
+					i = pos - 1;
+				}
 				continue;
 			}
 			flush();
@@ -456,7 +501,12 @@ function scanInvocations(command: string): CommitInvocation[] {
 				// `.git` outside its tree all break the guess. Both `=` and space forms count,
 				// and the `=` form previously fell through here entirely, so the commit was
 				// checked against the call's own cwd and a protected commit went through.
-				if (name === "--git-dir" || name === "--work-tree") retargeted = true;
+				//
+				// PRE-VERB only. These are git's own options, so after the verb the same text is
+				// an operand: `git commit -m --git-dir=/tmp/other` is a message, and treating it
+				// as a selector refused an ordinary commit.
+				if (verb === null && (name === "--git-dir" || name === "--work-tree"))
+					retargeted = true;
 				if (eq === -1 && verb === null && PRE_VERB_VALUE_FLAGS[name] === true) {
 					const value = tokens[j + 1];
 					if (value !== undefined && !isSep(value)) {
@@ -552,7 +602,11 @@ export function decideCommit(
 	env: NodeJS.ProcessEnv = process.env,
 ): { block: true; reason: string } | undefined {
 	if (env[ALLOW_ENV] === "1") return;
-	if (!PREFILTER.test(command)) return;
+	// Tested on the raw string AND with backslashes removed. A backslash removes syntax meaning
+	// without changing argv, so `g\it commit` runs git while the raw text carries no `git` for the
+	// regex to find, and this cheap reject cleared a real commit on a protected branch. Stripping
+	// can only ADD matches, so the extra test is one-sided.
+	if (!PREFILTER.test(command) && !PREFILTER.test(command.replace(/\\/g, ""))) return;
 	// `GIT_DIR`, `GIT_WORK_TREE` and `GIT_COMMON_DIR` in the CALL's environment retarget every
 	// git command in it, exactly as the flags do, and are just as unreadable from here.
 	const envSelector = TARGET_ENV.find(name => env[name] !== undefined && env[name] !== "");
