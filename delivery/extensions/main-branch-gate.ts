@@ -60,8 +60,12 @@ const PRE_VERB_VALUE_FLAGS: Record<string, true> = {
 	"--work-tree": true,
 };
 
-/** Cheap prefilter: never tokenize or spawn for a command that cannot commit. */
-const PREFILTER = /\bd?git\b[\s\S]{0,400}?\bcommit\b/;
+/**
+ * Cheap reject before tokenizing. It looks for the command word ONLY, never the verb: quoting
+ * can split a verb without changing argv, so `git com'mit' -m x` carries no literal `commit`
+ * and a verb-aware prefilter returned early on a real commit.
+ */
+const PREFILTER = /\bd?git\b/;
 
 const ALLOW_ENV = "DELIVERY_ALLOW_MAIN_COMMIT";
 
@@ -117,8 +121,8 @@ export type Token = {
 
 /**
  * Words and separators, with quoting recorded. A quoted region is inert here: finding where a
- * substitution inside one ENDS needs a real parser, so `hasHiddenSubstitution` handles that
- * case conservatively instead.
+ * substitution inside one ENDS needs a real parser, so `findCommitInvocations` handles that with
+ * a second, additive pass instead.
  */
 export function tokenize(command: string): Token[] {
 	const out: Token[] = [];
@@ -195,41 +199,29 @@ export function tokenize(command: string): Token[] {
 }
 
 /**
- * Whether a substitution the walker cannot see through is present.
- *
- * Two shapes qualify. A `$(` or a backtick inside DOUBLE quotes executes, and treating the
- * quoted region as inert hides the commit in it. An UNQUOTED backtick also hides one, because
- * the backtick is not a separator, so `` echo `git commit -m x` `` leaves the commit off
- * command position. An unquoted `$(` needs no help: the `(` is already a separator.
- *
- * Finding where a substitution ENDS does not work, which is why this only answers the
- * question. A `)` behind a quote or a backslash closes it early, so
- * `$(printf ')'; git commit -m x)` truncates before the commit. The caller re-scans instead,
- * which over-detects, and over-detection blocks visibly rather than clearing a commit nobody
- * read.
+ * Shell reserved words and grouping that INTRODUCE a command rather than being one. They leave
+ * the command slot open, so `if :; then git commit; fi` and `{ git commit; }` are seen.
  */
-export function hasHiddenSubstitution(command: string): boolean {
-	let quote: string | null = null;
-	for (let i = 0; i < command.length; i++) {
-		const ch = command[i] as string;
-		// A backslash escapes outside quotes and inside double quotes. Inside SINGLE quotes it
-		// is a literal character, so consuming the next one there loses the closing quote.
-		if (ch === "\\" && quote !== "'" && i + 1 < command.length) {
-			i++;
-			continue;
-		}
-		if (quote !== null) {
-			if (ch === quote) quote = null;
-			else if (quote === '"' && (ch === "`" || (ch === "$" && command[i + 1] === "(")))
-				return true;
-			continue;
-		}
-		if (ch === "`") return true;
-		if (ch === '"' || ch === "'") quote = ch;
-	}
-	return false;
-}
-
+const RESERVED_WORD: Record<string, true> = {
+	"!": true,
+	"{": true,
+	"}": true,
+	case: true,
+	do: true,
+	done: true,
+	elif: true,
+	else: true,
+	esac: true,
+	fi: true,
+	for: true,
+	if: true,
+	in: true,
+	select: true,
+	then: true,
+	time: true,
+	until: true,
+	while: true,
+};
 export type CommitInvocation = {
 	/** Repository the commit targets, relative to the bash call's cwd. */
 	repoDir: string | null;
@@ -248,27 +240,42 @@ export type CommitInvocation = {
  * A `cd` in the command is NOT followed. Inferring the directory from one was tried three
  * times and reverted each time. The walker cannot tell a `cd` that ran from one that did not:
  * a failed `cd` before `;` leaves the shell where it was, `||` may skip it, `&` backgrounds
- * the list it belongs to, and a `cd` inside a brace group, a loop, a comment or a
- * here-document body is invisible or inert. `pushd`, `eval` and a function can move the
- * directory with no `cd` token at all.
- *
- * Each of those produced a SILENT permit: the gate read a directory the commit never ran in
- * and cleared a commit on a protected branch. Blocking safe work is visible and retryable,
- * so the gate reads the directory it is given and names the two ways to state another one.
- * Telling them apart needs a typed lexer and a command grammar, which is a shell parser.
+ * the list it belongs to, and `pushd` moves the directory with no `cd` token at all. Each
+ * produced a SILENT permit, so `-C` and the bash call's `cwd` are the only directories read.
  */
 export function findCommitInvocations(command: string): CommitInvocation[] {
-	// A substitution inside double quotes executes, and this walker cannot find where it ends.
-	// Re-scan with every quote turned into a space: that reveals the commit, at the cost of
-	// reading some quoted prose as a command. Over-detection blocks visibly; missing a real
-	// invocation clears a commit nobody read.
-	// Quotes become spaces; a backtick becomes `;` so the command inside it reaches command
-	// position. `$(` already leaves a `(`, which is a separator.
-	const scanned = hasHiddenSubstitution(command)
-		? command.replace(/["']/g, " ").replace(/`/g, ";")
-		: command;
+	const out = scanInvocations(command, false);
+	// A substitution runs commands the quote-aware scan reads as data. Which substitutions are
+	// inert cannot be decided here: a quoted here-document delimiter makes its body inert while
+	// an unquoted one does not, a stray apostrophe in a body or a comment is literal text yet
+	// poisons quote tracking, and a backtick nests through backslashes. So any `$(` or backtick
+	// triggers a SECOND scan with quotes neutralised, and its results are APPENDED.
+	//
+	// Additive is the whole point. An earlier version REPLACED the first scan with the lossy
+	// one, and that pass split `git com'mit'` into two words, deleted an empty `-C` operand so
+	// the flag swallowed the verb, and promoted `--dry-run` out of a message into an option.
+	// Each turned a commit the first scan saw plainly into one it missed. Appending can only
+	// add a block.
+	//
+	// The cost is a visible false positive: prose carrying a backtick and the words of a commit,
+	// such as a `bd comment` quoting this gate's own message, is blocked. Retry it as two calls,
+	// or rephrase. That trade is deliberate, because the alternative is clearing a commit that
+	// nobody read.
+	if (command.includes("$(") || command.includes("`")) {
+		for (const found of scanInvocations(command.replace(/["']/g, " ").replace(/\\*`/g, ";"), true))
+			out.push(found);
+	}
+	return out;
+}
+
+/**
+ * One pass over the command. `neutralised` marks the fallback, whose tokens lost their quoting,
+ * so it may never conclude `--dry-run`: that word can be message data promoted by the very
+ * transform that made this pass possible.
+ */
+function scanInvocations(command: string, neutralised: boolean): CommitInvocation[] {
 	const out: CommitInvocation[] = [];
-	const tokens = tokenize(scanned);
+	const tokens = tokenize(command);
 	const isSep = (t: Token | undefined): boolean =>
 		t !== undefined && !t.quoted && (SEPARATOR[t.text] === true || t.text === "\n");
 	let atCommand = true;
@@ -279,7 +286,15 @@ export function findCommitInvocations(command: string): CommitInvocation[] {
 			continue;
 		}
 		if (!atCommand) continue;
-		if (TRANSPARENT_PREFIX[token.text] === true || ENV_ASSIGNMENT.test(token.text)) continue;
+		// A reserved word introduces a command rather than being one, so it leaves the slot open.
+		// Without this, `if :; then git commit; fi` and `for d in a; do git commit; done` hid the
+		// commit behind `then` and `do`.
+		if (
+			TRANSPARENT_PREFIX[token.text] === true ||
+			RESERVED_WORD[token.text] === true ||
+			ENV_ASSIGNMENT.test(token.text)
+		)
+			continue;
 		atCommand = false;
 		// Quoting removes SYNTAX meaning, not argv meaning: `'git' commit` runs git, so command
 		// identity ignores it. Only `isSep` consults `quoted`.
@@ -295,7 +310,7 @@ export function findCommitInvocations(command: string): CommitInvocation[] {
 			if (arg.text.startsWith("-") && arg.text !== "-") {
 				const eq = arg.text.indexOf("=");
 				const name = eq === -1 ? arg.text : arg.text.slice(0, eq);
-				if (name === "--dry-run") dryRun = true;
+				if (name === "--dry-run" && !neutralised) dryRun = true;
 				if (eq === -1 && verb === null && PRE_VERB_VALUE_FLAGS[name] === true) {
 					const value = tokens[j + 1];
 					if (value !== undefined && !isSep(value)) {

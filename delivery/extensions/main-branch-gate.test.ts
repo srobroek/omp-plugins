@@ -7,7 +7,6 @@ import mainBranchGate, {
 	extractCommand,
 	findCommitInvocations,
 	type GitRun,
-	hasHiddenSubstitution,
 	setGitRunForTests,
 	tokenize,
 } from "./main-branch-gate.ts";
@@ -147,45 +146,57 @@ describe("findCommitInvocations", () => {
 		]);
 	});
 
-	// A substitution inside double quotes executes, and finding where it ends needs a parser:
-	// a `)` behind a quote or a backslash closes it early. So the scan re-runs with quotes
-	// neutralised, which over-detects rather than missing a real commit.
-	test("a commit hidden in a double-quoted substitution is found", () => {
-		expect(findCommitInvocations('printf "%s" "$(git commit -m x)"').length).toBe(1);
-		expect(findCommitInvocations("printf '%s' \"$(\ngit commit -m x\n)\"").length).toBe(1);
-		expect(findCommitInvocations("printf '%s' \"$(printf ')'; git commit -m x)\"").length).toBe(1);
-		expect(findCommitInvocations('echo "`git commit -m x`"').length).toBe(1);
-		// Single quotes are inert, so nothing executes and nothing is reported.
-		expect(findCommitInvocations("printf '%s' '$(git commit -m x)'")).toEqual([]);
-	});
-
 	test("a quoted command name still runs, so it counts", () => {
 		expect(findCommitInvocations("'git' commit -m x")).toEqual([
 			{ repoDir: null, dryRun: false },
 		]);
 	});
 
-	// An unquoted backtick is not a separator, so the commit inside it never reached command
-	// position and went unseen.
-	test("an unquoted backtick substitution is found", () => {
-		expect(findCommitInvocations("echo `git commit -m x`").length).toBe(1);
-		expect(findCommitInvocations("echo $(git commit -m x)").length).toBe(1);
+	// Quoting splits a verb without changing argv, so the raw text carries no literal `commit`.
+	// The walker always saw these; the prefilter in `decideCommit` is where the bug lived, so
+	// that assertion is below in the decideCommit suite.
+	test("a verb split by quoting is still a commit", () => {
+		for (const command of ["git com'mit' -m x", 'git "commit" -m x', "git co''mmit -m x"]) {
+			expect(findCommitInvocations(command), command).toEqual([
+				{ repoDir: null, dryRun: false },
+			]);
+		}
 	});
 
-	// A backslash inside single quotes is a literal character in bash, not an escape. Treating
-	// it as one consumed the closing quote, so everything after stayed "inside single quotes"
-	// and a substitution that follows was never seen as executable.
-	test("a backslash in single quotes does not hide a later substitution", () => {
-		// These exercise the detector directly, which is the path the escape bug lived on.
-		expect(hasHiddenSubstitution("printf '%s\\' \"$(git commit -m x)\"")).toBe(true);
-		expect(hasHiddenSubstitution("printf '%s\\' \"`git commit -m x`\"")).toBe(true);
-		// A single-quoted substitution stays inert, so nothing is executable and none is found.
-		expect(hasHiddenSubstitution("printf '%s' '$(git commit -m x)'")).toBe(false);
 
-		// End to end, the commit those substitutions carry is reported.
-		expect(findCommitInvocations("printf '%s\\' \"$(git commit -m x)\"").length).toBe(1);
-		expect(findCommitInvocations("printf '%s\\' \"`git commit -m x`\"").length).toBe(1);
-		expect(findCommitInvocations("printf '%s' '$(git commit -m x)'")).toEqual([]);
+	// Any substitution triggers a second, ADDITIVE pass with quotes neutralised. Deciding which
+	// substitutions are inert cannot be done here: a stray apostrophe in a here-document body or
+	// a comment is literal text yet poisons quote tracking, and a backtick nests through
+	// backslashes. So every one is scanned, and over-detection only adds a block.
+	test("a substitution is scanned however it is quoted or escaped", () => {
+		for (const command of [
+			'printf "%s" "$(git commit -m x)"',
+			"printf '%s' \"$(\ngit commit -m x\n)\"",
+			"printf '%s' \"$(printf ')'; git commit -m x)\"",
+			"echo \"`git commit -m x`\"",
+			"echo `git commit -m x`",
+			"echo $(git commit -m x)",
+			// The escape shapes that defeated a quote-aware detector.
+			"printf '%s\\' \"$(git commit -m x)\"",
+			"echo `echo \\`git commit -m x\\``",
+			"cat <<EOF\n'$(git commit -m x)\nEOF",
+			// A reserved word must not consume the command slot inside the substitution.
+			'echo "$(if :; then git commit -m x; fi)"',
+		]) {
+			expect(findCommitInvocations(command).length, command).toBeGreaterThanOrEqual(1);
+		}
+	});
+
+	// The additive pass may never WEAKEN what the first scan saw plainly. Each of these was a
+	// silent permit when the lossy pass replaced the first one instead of adding to it.
+	test("the fallback never removes a commit the first scan found", () => {
+		// `--dry-run` here is message data that the quote-stripping pass promotes to an option.
+		const promoted = findCommitInvocations('git commit -m "document --dry-run $(date)"');
+		expect(promoted.some(c => !c.dryRun)).toBe(true);
+		// An empty `-C` operand disappears when quotes go, letting the flag swallow the verb.
+		expect(findCommitInvocations('git -C "" commit -m "$(date)"').length).toBeGreaterThanOrEqual(1);
+		// A verb split across adjacent quoted fragments.
+		expect(findCommitInvocations("git com'mit' -m x; echo \"$(date)\"").length).toBeGreaterThanOrEqual(1);
 	});
 
 	// The FP class that made the old TTSR block real work: the words are in the
@@ -207,11 +218,25 @@ describe("findCommitInvocations", () => {
 		const quoted = [
 			"bd comment omp-x --message '",
 			"blocked by delivery (work lands on a branch, never on main): the repository this commit",
-			"targets has `main` checked out. A later git commit verb in this prose is not an invocation.",
+			"targets has main checked out. A later git commit verb in this prose is not an invocation.",
 			"git commit -m x",
 			"'",
 		].join("\n");
 		expect(findCommitInvocations(quoted)).toEqual([]);
+	});
+
+	// The deliberate cost of the additive pass. The same prose with a BACKTICK in it triggers a
+	// second scan with quotes neutralised, which reads the quoted words as a command. Blocking
+	// here is visible and retryable, by sending the prose without backticks or as two calls;
+	// the alternative is clearing a commit hidden in a substitution that nobody read.
+	test("prose carrying a backtick is blocked, and that is the trade", () => {
+		const quoted = [
+			"bd comment omp-x --message '",
+			"targets has `main` checked out.",
+			"git commit -m x",
+			"'",
+		].join("\n");
+		expect(findCommitInvocations(quoted).length).toBeGreaterThanOrEqual(1);
 	});
 
 });
@@ -253,12 +278,37 @@ describe("decideCommit", () => {
 		setGitRunForTests(run);
 		const quoted = [
 			"bd comment omp-x --message '",
-			"the repository this commit targets has `main` checked out.",
+			"the repository this commit targets has main checked out.",
 			"git commit -m x",
 			"'",
 		].join("\n");
 		expect(decideCommit(quoted, "/work", {})).toBeUndefined();
 		expect(calls).toEqual([]);
+	});
+
+	// The same prose with a BACKTICK is blocked, because a backtick may open a substitution and
+	// the additive scan cannot tell prose from one. Visible and retryable: drop the backticks or
+	// send the prose as its own call. The alternative is clearing a commit hidden in a
+	// substitution, which nobody would see.
+	test("the same prose with a backtick is refused, deliberately", () => {
+		const { run } = fakeGit({ "/work": "main" });
+		setGitRunForTests(run);
+		const quoted = ["bd comment omp-x --message '", "has `main` checked out.", "git commit -m x", "'"].join(
+			"\n",
+		);
+		expect(decideCommit(quoted, "/work", {})?.block).toBe(true);
+	});
+
+	// The prefilter used to require a literal `commit` in the raw text, so a verb split by
+	// quoting returned early and a real commit on a protected branch went through. It now looks
+	// for the command word alone.
+	test("a verb split by quoting still reaches the branch check", () => {
+		for (const command of ["git com'mit' -m x", 'git "commit" -m x', "git co''mmit -m x"]) {
+			const { run, calls } = fakeGit({ "/work": "main" });
+			setGitRunForTests(run);
+			expect(decideCommit(command, "/work", {})?.block, command).toBe(true);
+			expect(calls.map(c => c.cwd), command).toEqual(["/work"]);
+		}
 	});
 
 	test("a genuine commit on main is still refused", () => {
