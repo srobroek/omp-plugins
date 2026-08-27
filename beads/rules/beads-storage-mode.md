@@ -1,6 +1,6 @@
 ---
 name: beads-storage-mode
-description: "Storage backend choice and its coordination consequences: embedded resolves a path, a copied checkout forks the database, a linked git worktree does not, and BEADS_DIR is the pin that works. Read before enabling isolation or worktrees against a beads repo."
+description: "Storage backend choice and its coordination consequences: embedded resolves a path, a copied checkout forks the database, and an absolute BEADS_DIR is the pin every checkout shape needs. Read before enabling isolation or worktrees against a beads repo."
 ---
 
 # Beads storage mode
@@ -24,7 +24,8 @@ MUST Decide isolation from the resolution mechanism:
 
 ## Pin the run's database first
 
-MUST Export `BEADS_DIR=<run>/.beads` once, wherever the run starts. Child
+MUST Export `BEADS_DIR` as the absolute path of the run's `.beads`, wherever
+  the run starts. Child
   processes inherit it. That export is the remedy that works on an existing
   embedded project.
 
@@ -34,9 +35,14 @@ GOTCHA Without the pin, bd walks up from the working directory. Measured: from a
   Two concurrent writers from different working directories both landed theirs
   in one embedded store when a parent set `BEADS_DIR`.
 
-DEFAULT A linked git worktree needs no pin. Measured: five live worktrees, none
-  holding `.beads/`, every one reading the primary checkout's beads through
-  `bd where`. Only a copied checkout, or a clone, needs `BEADS_DIR`.
+MUST Pin every checkout shape, with no exemption. A worktree, a clone and a copy
+  all get the same export, so nobody has to remember which kind they are in.
+
+FACT A linked git worktree resolves the primary checkout's database unaided: five
+  live worktrees, none holding `.beads/`, every one reading its beads through
+  `bd where`. That is why the pin is cheap there, and not a reason to skip it.
+  Skipping depends on bd's resolution behavior and on the worktree holding no
+  `.beads/`, while the pin depends on neither.
 
 NOT A per-call pin (`bd -C <repo>`). It has to be right on every call, nothing
   enforces it, and a parent sets `BEADS_DIR` once. `srobroek/omp-orchestrate`
