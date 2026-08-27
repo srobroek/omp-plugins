@@ -34,8 +34,14 @@ const PROTECTED_BRANCHES: Record<string, true> = { main: true, master: true };
 const GIT_COMMANDS: Record<string, true> = { dgit: true, git: true };
 
 /**
- * Command separators. `&&` and `||` are listed beside the single forms because the walker
- * treats them differently: only `&&`, `;`, and a newline keep a `cd` in the same shell.
+ * Tokens that end a command and return the walker to command position. All are equivalent for
+ * that purpose: an earlier design distinguished them to decide whether a `cd` stayed in the same
+ * shell, and that tracking was deleted for producing silent permits, so nothing now depends on
+ * which separator was seen.
+ *
+ * The doubled forms are listed because `tokenize` emits `&&` and `||` as single tokens, so they
+ * would not match the single-character entries. An unquoted newline is a separator too, but it
+ * is recognised in `isSep` rather than here, since the tokenizer emits it as its own token.
  */
 const SEPARATOR: Record<string, true> = {
 	";": true,
