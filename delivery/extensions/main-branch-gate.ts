@@ -53,6 +53,12 @@ const SEPARATOR: Record<string, true> = {
 	")": true,
 };
 
+/**
+ * Environment names that point git at another repository. Set on the bash call or in the session,
+ * they retarget every git command in it, and none of them names a directory this gate can read.
+ */
+const TARGET_ENV = ["GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR"];
+
 /** Words that may stand before `git` and leave it at command position. */
 const TRANSPARENT_PREFIX: Record<string, true> = { command: true, env: true, sudo: true };
 
@@ -168,6 +174,15 @@ export function tokenize(command: string): Token[] {
 			continue;
 		}
 		if (quote === '"') {
+			// Inside double quotes a backslash escapes only these, and bash keeps it literal
+			// otherwise. Missing this closed the string on `\"`, so the real closing quote read as
+			// an opener and swallowed the separator and the commit after it: a silent permit.
+			if (ch === "\\" && i + 1 < command.length && /["$`\\\n]/.test(command[i + 1] as string)) {
+				cur += command[i + 1] as string;
+				started = true;
+				i++;
+				continue;
+			}
 			if (ch === quote) quote = null;
 			else {
 				cur += ch;
@@ -186,6 +201,66 @@ export function tokenize(command: string): Token[] {
 			started = true;
 			wasQuoted = true;
 			i++;
+			continue;
+		}
+		// A here-document body is DATA, not commands. Without this the body's newlines reset
+		// command position and its lines were scanned as a shell: `cat <<EOF` with a commit in
+		// the body was refused, and the deny message then blamed a substitution that was not
+		// there. `<<<` is a here-STRING, whose operand is an ordinary word, so it is left alone.
+		if (ch === "<" && command[i + 1] === "<" && command[i + 2] !== "<") {
+			flush();
+			let k = i + 2;
+			// Only `<<-` strips indentation from the closing delimiter, and only TABS.
+			const stripTabs = command[k] === "-";
+			if (stripTabs) k++;
+			while (k < command.length && /[ \t]/.test(command[k] as string)) k++;
+			let delimiter = "";
+			let delimiterQuote: string | null = null;
+			for (; k < command.length; k++) {
+				const d = command[k] as string;
+				if (delimiterQuote !== null) {
+					if (d === delimiterQuote) delimiterQuote = null;
+					else delimiter += d;
+					continue;
+				}
+				if (d === '"' || d === "'") {
+					delimiterQuote = d;
+					continue;
+				}
+				if (/[\s;&|)]/.test(d)) break;
+				delimiter += d;
+			}
+			if (delimiter === "") {
+				i = k - 1;
+				continue;
+			}
+			const lineEnd = command.indexOf("\n", k);
+			// The rest of the operator's own line still holds commands, so scan that slice on its
+			// own, then skip the body entirely. An unterminated body runs to the end of the
+			// string, which is what bash sees too.
+			for (const token of tokenize(command.slice(k, lineEnd === -1 ? command.length : lineEnd)))
+				out.push(token);
+			if (lineEnd === -1) {
+				i = command.length;
+				continue;
+			}
+			out.push({ text: "\n", quoted: false });
+			let pos = lineEnd + 1;
+			for (;;) {
+				const next = command.indexOf("\n", pos);
+				const line = command.slice(pos, next === -1 ? command.length : next);
+				// `<<` needs the delimiter line EXACTLY; `<<-` allows leading tabs only. Trailing
+				// whitespace never counts, so trimming both ends would end the body too early.
+				if ((stripTabs ? line.replace(/^\t+/, "") : line) === delimiter) {
+					i = (next === -1 ? command.length : next) - 1;
+					break;
+				}
+				if (next === -1) {
+					i = command.length;
+					break;
+				}
+				pos = next + 1;
+			}
 			continue;
 		}
 		if (/\s/.test(ch)) {
@@ -243,11 +318,17 @@ const RESERVED_WORD: Record<string, true> = {
 	until: true,
 	while: true,
 };
+
 export type CommitInvocation = {
 	/** Repository the commit targets, relative to the bash call's cwd. */
 	repoDir: string | null;
 	/** `--dry-run` writes no commit, so the branch does not matter. */
 	dryRun: boolean;
+	/**
+	 * `--git-dir` or `--work-tree` sent this commit to a repository no directory here describes.
+	 * Reading the call's cwd would clear a commit landing elsewhere, so it is refused instead.
+	 */
+	retargeted?: boolean;
 };
 
 /**
@@ -332,22 +413,27 @@ function scanInvocations(command: string): CommitInvocation[] {
 	const isSep = (t: Token | undefined): boolean =>
 		t !== undefined && !t.quoted && (SEPARATOR[t.text] === true || t.text === "\n");
 	let atCommand = true;
+	// A shell prefix assignment applies to the command that follows it in the same simple
+	// command, so `GIT_DIR=/other/.git git commit` retargets that commit. It arrives as a
+	// transparent token, never in the call's environment, so it has to be tracked here.
+	let prefixRetarget = false;
 	for (let i = 0; i < tokens.length; i++) {
 		const token = tokens[i] as Token;
 		if (isSep(token)) {
 			atCommand = true;
+			prefixRetarget = false;
 			continue;
 		}
 		if (!atCommand) continue;
 		// A reserved word introduces a command rather than being one, so it leaves the slot open.
 		// Without this, `if :; then git commit; fi` and `for d in a; do git commit; done` hid the
 		// commit behind `then` and `do`.
-		if (
-			TRANSPARENT_PREFIX[token.text] === true ||
-			RESERVED_WORD[token.text] === true ||
-			ENV_ASSIGNMENT.test(token.text)
-		)
+		if (ENV_ASSIGNMENT.test(token.text)) {
+			const name = token.text.slice(0, token.text.indexOf("="));
+			if (TARGET_ENV.includes(name)) prefixRetarget = true;
 			continue;
+		}
+		if (TRANSPARENT_PREFIX[token.text] === true || RESERVED_WORD[token.text] === true) continue;
 		atCommand = false;
 		// Quoting removes SYNTAX meaning, not argv meaning: `'git' commit` runs git, so command
 		// identity ignores it. Only `isSep` consults `quoted`.
@@ -356,6 +442,7 @@ function scanInvocations(command: string): CommitInvocation[] {
 		let repoDir: string | null = null;
 		let verb: string | null = null;
 		let dryRun = false;
+		let retargeted = prefixRetarget;
 		let j = i + 1;
 		for (; j < tokens.length; j++) {
 			const arg = tokens[j] as Token;
@@ -364,6 +451,12 @@ function scanInvocations(command: string): CommitInvocation[] {
 				const eq = arg.text.indexOf("=");
 				const name = eq === -1 ? arg.text : arg.text.slice(0, eq);
 				if (name === "--dry-run") dryRun = true;
+				// `--git-dir` and `--work-tree` point git at another repository, and neither is
+				// a working directory this gate can read: a bare repo, a linked worktree, or a
+				// `.git` outside its tree all break the guess. Both `=` and space forms count,
+				// and the `=` form previously fell through here entirely, so the commit was
+				// checked against the call's own cwd and a protected commit went through.
+				if (name === "--git-dir" || name === "--work-tree") retargeted = true;
 				if (eq === -1 && verb === null && PRE_VERB_VALUE_FLAGS[name] === true) {
 					const value = tokens[j + 1];
 					if (value !== undefined && !isSep(value)) {
@@ -379,7 +472,10 @@ function scanInvocations(command: string): CommitInvocation[] {
 		// Step back so the outer loop lands ON the separator the scan stopped at, letting it make
 		// its own command-position transition.
 		i = j - 1;
-		if (verb === "commit") out.push({ repoDir, dryRun });
+		// The flag is only PRESENT when set, so an ordinary invocation stays two fields wide and
+		// the many `toEqual` assertions over this shape keep saying what they meant.
+		if (verb === "commit")
+			out.push(retargeted ? { repoDir, dryRun, retargeted: true } : { repoDir, dryRun });
 	}
 	return out;
 }
@@ -406,11 +502,13 @@ export function denyReason(branch: string, readDir: string): string {
 		`\`${branch}\` checked out. Create or switch to a feature branch first (\`git switch -c ` +
 		"<type>/<slug>`, or `git switch <existing>` when the branch was made for this task), " +
 		"then commit there and open a PR.\n\n" +
-		"If this command writes no commit of its own, a SUBSTITUTION is why it was stopped. " +
-		"This gate does not read inside `$(...)` or backticks, so on a protected branch it " +
-		"refuses any command that contains one and also mentions `git` or `dgit` anywhere in its " +
-		"text. Anywhere means anywhere: prose, a comment, or a path counts, so this can fire " +
-		"with no git command present at all.\n\n" +
+		"If this command writes no commit of its own, something in its TEXT read as one anyway. " +
+		"The usual cause is a SUBSTITUTION: this gate does not read inside `$(...)` or backticks, " +
+		"so on a protected branch it refuses any command containing one that also mentions `git` " +
+		"or `dgit` anywhere in its text. Anywhere means anywhere: prose, a comment, or a path " +
+		"counts, so this can fire with no git command present at all. A function definition body " +
+		"is scanned too, since a definition and a definition followed by a call cannot be told " +
+		"apart here.\n\n" +
 		"Which remedy applies depends on where the substitution sits. When it is UNRELATED to " +
 		"any git work, as in `echo \"$(date)\"; git status`, send the two parts as separate " +
 		"calls. When it is PART of the git command, as in `git log --format=\"$(cat f)\"`, " +
@@ -429,6 +527,25 @@ export function denyReason(branch: string, readDir: string): string {
 	);
 }
 
+/**
+ * A commit was pointed at another repository by `--git-dir`, `--work-tree`, or the matching
+ * environment variables. Nothing was read: none of those names a working directory this gate can
+ * check, so reading the call's own cwd would clear a commit that lands elsewhere.
+ */
+export function retargetReason(selector: string): string {
+	return (
+		"blocked by delivery (work lands on a branch, never on main/master): this commit is " +
+		`pointed at another repository by \`${selector}\`, and that is not a working directory ` +
+		"this gate can read. A bare repository, a linked worktree, or a `.git` outside its own " +
+		"tree each break the guess, so NOTHING was read and no branch was checked.\n\n" +
+		"Name the repository in a form that is read directly: pass the bash tool's `cwd`, or " +
+		"use an absolute `git -C <path> commit`. Then the branch is knowable and an ordinary " +
+		"commit on a feature branch passes.\n\n" +
+		`Only when the user explicitly asked for a commit on a protected branch set \`${ALLOW_ENV}=1\` ` +
+		"in the ENVIRONMENT, either on the bash call or in the session."
+	);
+}
+
 export function decideCommit(
 	command: string,
 	cwd: string = process.cwd(),
@@ -436,8 +553,15 @@ export function decideCommit(
 ): { block: true; reason: string } | undefined {
 	if (env[ALLOW_ENV] === "1") return;
 	if (!PREFILTER.test(command)) return;
+	// `GIT_DIR`, `GIT_WORK_TREE` and `GIT_COMMON_DIR` in the CALL's environment retarget every
+	// git command in it, exactly as the flags do, and are just as unreadable from here.
+	const envSelector = TARGET_ENV.find(name => env[name] !== undefined && env[name] !== "");
 	for (const invocation of findCommitInvocations(command)) {
 		if (invocation.dryRun) continue;
+		if (invocation.retargeted === true)
+			return { block: true, reason: retargetReason("--git-dir/--work-tree") };
+		if (envSelector !== undefined)
+			return { block: true, reason: retargetReason(envSelector) };
 		// `-C` is the only directory the command states outright, so it is the only one applied.
 		// A `cd` is not followed, for the reasons on `findCommitInvocations`.
 		const target = invocation.repoDir === null ? cwd : resolve(cwd, invocation.repoDir);

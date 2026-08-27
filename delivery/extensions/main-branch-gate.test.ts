@@ -76,7 +76,18 @@ describe("findCommitInvocations", () => {
 		expect(findCommitInvocations("git -c user.name=x commit -m y")).toEqual([
 			{ repoDir: null, dryRun: false },
 		]);
+		// This previously asserted `repoDir: null` and nothing else, which WAS the silent permit:
+		// the commit lands in `/r` while the gate reads the call's own cwd. Neither flag names a
+		// directory this gate can check, so the invocation is marked instead.
 		expect(findCommitInvocations("git --git-dir /r/.git --work-tree /r commit -m y")).toEqual([
+			{ repoDir: null, dryRun: false, retargeted: true },
+		]);
+		// The `=` form is the one that escaped entirely: it never reached the value-flag branch.
+		expect(findCommitInvocations("git --git-dir=/r/.git commit -m y")).toEqual([
+			{ repoDir: null, dryRun: false, retargeted: true },
+		]);
+		// `-c` and `--namespace` do not move the working tree, so they stay unmarked.
+		expect(findCommitInvocations("git --namespace ns commit -m y")).toEqual([
 			{ repoDir: null, dryRun: false },
 		]);
 	});
@@ -101,6 +112,124 @@ describe("findCommitInvocations", () => {
 			{ repoDir: null, dryRun: false },
 			{ repoDir: "/r", dryRun: false },
 		]);
+	});
+
+	// ACCEPTED FALSE BLOCK, not an oversight. A function definition body is scanned, so
+	// `f() { git commit ...; }` is refused on a protected branch although defining a function
+	// commits nothing. Allowing it would require proving `f` is never called, and the two shapes
+	// below are INDISTINGUISHABLE to this walker: the second really does commit. Deciding
+	// between them needs the kind of shell inference that produced silent permits three times in
+	// this file, so the visible refusal stands.
+	test("a function definition is scanned, deliberately", () => {
+		const definition = "f() { git commit --allow-empty -m x; }";
+		expect(findCommitInvocations(definition)).toEqual([{ repoDir: null, dryRun: false }]);
+		expect(findCommitInvocations(`${definition}; f`)).toEqual([{ repoDir: null, dryRun: false }]);
+	});
+
+	// SILENT PERMIT, found by review. Bash keeps an escaped quote inside the argument, but the
+	// tokenizer closed the string on it, read the real closing quote as an opener, and swallowed
+	// the separator and the commit after it. Nothing was reported and the commit landed.
+	test("an escaped quote does not swallow the commit after it", () => {
+		expect(findCommitInvocations('echo "x\\"y"; git commit -m x')).toEqual([
+			{ repoDir: null, dryRun: false },
+		]);
+		expect(findCommitInvocations('echo "x\\\\"; git commit -m x')).toEqual([
+			{ repoDir: null, dryRun: false },
+		]);
+		expect(findCommitInvocations('echo "\\$HOME"; git commit -m x')).toEqual([
+			{ repoDir: null, dryRun: false },
+		]);
+		// A backslash inside SINGLE quotes is literal in bash, so nothing is escaped there.
+		expect(findCommitInvocations("echo 'x\\'; git commit -m x")).toEqual([
+			{ repoDir: null, dryRun: false },
+		]);
+		// And a genuinely quoted commit stays inert.
+		expect(findCommitInvocations('echo "git commit -m x"')).toEqual([]);
+	});
+
+	// A here-document body is DATA. Scanning it refused `cat <<EOF` with a commit in the body,
+	// and an apostrophe in a body used to poison quote tracking through the delimiter and hide a
+	// real commit after it, which was a silent permit.
+	test("a here-document body is not scanned as commands", () => {
+		expect(findCommitInvocations("cat <<EOF\ngit commit -m x\nEOF")).toEqual([]);
+		expect(findCommitInvocations("cat <<'EOF'\ngit commit -m x\nEOF")).toEqual([]);
+		// `<<-` strips leading TABS from the closing delimiter, and only tabs.
+		expect(findCommitInvocations("cat <<-EOF\ngit commit -m x\n\tEOF")).toEqual([]);
+		// A spaced delimiter does not close a plain heredoc, so the body continues.
+		expect(findCommitInvocations("cat <<EOF\n  EOF\ngit commit -m x\nEOF")).toEqual([]);
+		// Commands after the body, and on the operator's own line, still run.
+		expect(findCommitInvocations("cat <<EOF\ndata\nEOF\ngit commit -m x")).toEqual([
+			{ repoDir: null, dryRun: false },
+		]);
+		expect(findCommitInvocations("cat <<EOF && git commit -m x\ndata\nEOF")).toEqual([
+			{ repoDir: null, dryRun: false },
+		]);
+		// The permit this closes: the apostrophe no longer reaches the tokenizer at all.
+		expect(findCommitInvocations("cat <<EOF\nit is o'clock\nEOF\ngit commit -m x")).toEqual([
+			{ repoDir: null, dryRun: false },
+		]);
+		// `<<<` is a here-STRING whose operand is an ordinary word, so it is left alone.
+		expect(findCommitInvocations("cat <<< hello; git commit -m x")).toEqual([
+			{ repoDir: null, dryRun: false },
+		]);
+	});
+
+	// SILENT PERMIT, found by review. A shell prefix assignment never reaches the call's
+	// environment, so `GIT_DIR=... git commit` retargeted the commit invisibly.
+	test("a retargeting prefix assignment marks the invocation", () => {
+		expect(findCommitInvocations("GIT_DIR=/r/.git git commit -m x")).toEqual([
+			{ repoDir: null, dryRun: false, retargeted: true },
+		]);
+		expect(findCommitInvocations("GIT_WORK_TREE=/r git commit -m x")).toEqual([
+			{ repoDir: null, dryRun: false, retargeted: true },
+		]);
+		expect(findCommitInvocations("env GIT_DIR=/r/.git git commit -m x")).toEqual([
+			{ repoDir: null, dryRun: false, retargeted: true },
+		]);
+		// An unrelated assignment changes nothing.
+		expect(findCommitInvocations("GIT_AUTHOR_NAME=x git commit -m y")).toEqual([
+			{ repoDir: null, dryRun: false },
+		]);
+		// The prefix applies to ITS command only, so it must not leak past a separator.
+		expect(findCommitInvocations("GIT_DIR=/r/.git echo hi; git commit -m x")).toEqual([
+			{ repoDir: null, dryRun: false },
+		]);
+	});
+
+	// SILENT PERMIT at the decision level. A retargeted commit lands in another repository, so
+	// probing the call's own cwd cleared it. Nothing is read now, on any branch, because none of
+	// these names a working directory this gate can check.
+	test("a retargeted commit is refused without reading anything", () => {
+		for (const [command, env] of [
+			["git --git-dir=/protected/.git commit --allow-empty -m x", {}],
+			["git --work-tree=/protected commit --allow-empty -m x", {}],
+			["GIT_DIR=/protected/.git git commit --allow-empty -m x", {}],
+			["git commit --allow-empty -m x", { GIT_DIR: "/protected/.git" }],
+			["git commit --allow-empty -m x", { GIT_WORK_TREE: "/protected" }],
+			["git commit --allow-empty -m x", { GIT_COMMON_DIR: "/protected/.git" }],
+		] as Array<[string, Record<string, string>]>) {
+			const { run, calls } = fakeGit({ "/feature": "feature", "/protected": "main" });
+			setGitRunForTests(run);
+			// `/feature` is safe, which is exactly why reading it was wrong.
+			const decision = decideCommit(command, "/feature", env);
+			expect(decision?.block, command).toBe(true);
+			expect(decision?.reason, command).toContain("pointed at another repository");
+			expect(calls, command).toEqual([]);
+		}
+	});
+
+	test("an empty target variable is not a retarget", () => {
+		const { run } = fakeGit({ "/feature": "feature" });
+		setGitRunForTests(run);
+		expect(decideCommit("git commit --allow-empty -m x", "/feature", { GIT_DIR: "" })).toBeUndefined();
+	});
+
+	test("a retargeted dry run still writes nothing, so it passes", () => {
+		const { run } = fakeGit({ "/feature": "feature" });
+		setGitRunForTests(run);
+		expect(
+			decideCommit("git --git-dir=/protected/.git commit --dry-run -m x", "/feature", {}),
+		).toBeUndefined();
 	});
 
 	// A `cd` is not followed, whatever separator carries it. Three attempts to infer the
