@@ -53,10 +53,25 @@ registry on this bead so later steps cite it instead of guessing. Verdict
 PRESENT, PARTIAL, or ABSENT. Never invent a token a search could find. Platform
 is {{platform}}. ABSENT or PARTIAL means this tier is the wrong one: bond
 mol-design-tokens, or pour design-system, rather than establishing a scale here.
+
+Run skill://design-overview FIRST and record its Gaps section on this bead: every
+absent upstream skill with the install command that supplies it. A wrapper whose
+upstream is missing STOPS when it is reached, so an unrecorded gap strands this
+molecule later rather than here.
+
+This tier has no INTENT gate: specify-touch follows GROUND directly and the only
+human gate is touch-approval at the end. So there is nowhere later to raise a
+missing plugin, and this step handles it. update-design-md is conditional on
+{{want_design_md}}; when that is set and its upstream is absent, report the
+install command and leave THIS bead open rather than starting specify-touch.
+Everything downstream needs this step, so the molecule waits instead of walking
+six steps to fail at update-design-md. A plugin reaches an agent in the NEXT
+session, so the wait is unavoidable and belongs here, where nothing is built yet.
+Record every other gap for the reader without blocking on it.
 """
 
 [steps.metadata]
-skill_hints = "design-system-audit"
+skill_hints = "design-overview, design-system-audit"
 
 [[steps]]
 id = "specify-touch"
