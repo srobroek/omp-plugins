@@ -1017,10 +1017,10 @@ class Detector {
   }
   async scanPython() {
     for (const lock of ["uv.lock", "poetry.lock"]) {
-      const data2 = await this.readToml(lock);
-      if (!data2)
+      const data = await this.readToml(lock);
+      if (!data)
         continue;
-      const pkgs = data2.package;
+      const pkgs = data.package;
       if (Array.isArray(pkgs)) {
         for (const entry of pkgs) {
           if (!entry || typeof entry !== "object")
