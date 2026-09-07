@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.1](https://github.com/srobroek/omp-plugins/compare/toolchain--v0.3.0...toolchain--v0.3.1) (2026-09-07)
+
+
+### Bug Fixes
+
+* **toolchain:** reserve unit tests for meaningful logic ([512f80d](https://github.com/srobroek/omp-plugins/commit/512f80df866f2dfc9fc5fb77ee534de47011f496))
+
 ## [0.3.0](https://github.com/srobroek/omp-plugins/compare/toolchain--v0.2.0...toolchain--v0.3.0) (2026-08-25)
 
 
