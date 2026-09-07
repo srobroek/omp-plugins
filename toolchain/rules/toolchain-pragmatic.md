@@ -50,3 +50,18 @@ Code comments:
   restatement of what the code does, and not a defence of why it is written this
   way.
 - No broad prose, narrated steps, or banners. A stale comment is worse than none.
+
+Testing:
+- NOT Add unit tests for configuration, prose or text files, declarative
+  manifests, simple scripts, or trivial behavior whose failure is exposed by a
+  parser, linter, syntax check, render, or smoke run.
+- MUST Verify those artifacts with the narrowest applicable parser, linter,
+  syntax check, render, or smoke command.
+- MUST Add unit tests only for executable application or library logic when the
+  test protects meaningful observable behavior, a boundary, an invariant, a
+  transition, precedence, or a real error.
+- DEFAULT Exercise scripts through their real command surface. Unit-test a
+  script only when it contains reusable decision logic that a smoke run cannot
+  localize.
+- NOT Add a test solely for coverage, changed-line count, field forwarding,
+  copied defaults, wiring, or the claim that a change has tests.
