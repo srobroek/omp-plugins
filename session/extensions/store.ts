@@ -11,10 +11,44 @@
  * schema this module relies on.
  */
 import { execFileSync } from "node:child_process";
-import { closeSync, existsSync, openSync, readdirSync, readFileSync, readSync, realpathSync, statSync } from "node:fs";
+import { closeSync, constants, existsSync, fstatSync, openSync, opendirSync, readSync, realpathSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, join } from "node:path";
 
+
+const MAX_TRANSCRIPT_BYTES = 64 * 1024 * 1024;
+const MAX_STORE_ENTRIES = 20_000;
+const MAX_LIST_BYTES = 256 * 1024 * 1024;
+
+export function checkListingSize(files: string[]): void {
+	let bytes = 0;
+	for (const file of files) {
+		bytes += statSync(file).size;
+		if (bytes > MAX_LIST_BYTES) throw new Error(`Matching transcripts exceed ${MAX_LIST_BYTES} bytes. Use mode "read" with an explicit \`file\` or archive older sessions; listing metadata was not omitted.`);
+	}
+}
+
+function readRegular(file: string, limit: number, prefix = false): Buffer {
+	const fd = openSync(file, constants.O_RDONLY | constants.O_NONBLOCK);
+	try {
+		const stat = fstatSync(fd);
+		if (!stat.isFile()) throw new Error(`Transcript must be a regular file: ${file}`);
+		if (!prefix && stat.size > limit) {
+			throw new Error(`Transcript exceeds ${limit} bytes: ${file} (${stat.size} bytes). Export a smaller transcript file and use \`file\`; no metadata was omitted.`);
+		}
+		const buffer = Buffer.alloc(Math.min(stat.size, limit) + (prefix ? 0 : 1));
+		let bytes = 0;
+		while (bytes < buffer.length) {
+			const n = readSync(fd, buffer, bytes, buffer.length - bytes, null);
+			if (!n) break;
+			bytes += n;
+		}
+		if (!prefix && bytes === buffer.length) throw new Error(`Transcript changed while being read: ${file}. Retry after the session stops writing; no partial metadata was returned.`);
+		return buffer.subarray(0, bytes);
+	} finally {
+		closeSync(fd);
+	}
+}
 /** ~4 chars per token for an English/code mix. Reported cost is uncached: the
  * window is generated fresh on every call, so none of it is a cache hit. */
 export function estimateTokens(text: string): number {
@@ -43,6 +77,9 @@ export function sessionsRoot(profile?: string, env: NodeJS.ProcessEnv = process.
 	// ignores a relocated HOME, which both tests and `HOME`-scoped runs rely on.
 	const config = join(env.HOME || homedir(), env.PI_CONFIG_DIR ?? ".omp");
 	const name = profile ?? env.OMP_PROFILE ?? env.PI_PROFILE;
+	if (name && (name === "." || name === ".." || /[/\\\0]/.test(name))) {
+		throw new Error("profile must be a single profile name, not a path; use `file` for an explicit transcript.");
+	}
 	return name ? join(config, "profiles", name, "agent", "sessions") : join(config, "agent", "sessions");
 }
 
@@ -344,16 +381,7 @@ export interface HeadInfo {
 export function readHead(file: string, maxBytes = 16 * 1024): HeadInfo | null {
 	let window: string;
 	try {
-		const length = Math.min(statSync(file).size, maxBytes);
-		if (length === 0) return null;
-		const buffer = Buffer.alloc(length);
-		const fd = openSync(file, "r");
-		try {
-			readSync(fd, buffer, 0, length, 0);
-		} finally {
-			closeSync(fd);
-		}
-		window = buffer.toString("utf8");
+		window = readRegular(file, maxBytes, true).toString("utf8");
 	} catch {
 		return null;
 	}
@@ -394,12 +422,11 @@ export function readHead(file: string, maxBytes = 16 * 1024): HeadInfo | null {
  * than record-shaped. Thinking blocks are dropped unless asked for: they are the
  * bulk of the bytes and rarely the evidence needed.
  *
- * The whole file is read: the largest real transcript on record (21 MB, 6.2k
- * records) parses in ~40 ms, so windowing the read would buy nothing and would
- * make the turn count a guess.
+ * Reads regular files up to 64 MiB; larger files fail explicitly rather than
+ * dropping branch, compaction, or todo metadata.
  */
 export function parseTranscript(file: string, includeThinking = false): Transcript {
-	const raw = readFileSync(file, "utf8");
+	const raw = readRegular(file, MAX_TRANSCRIPT_BYTES).toString("utf8");
 	const head = readHead(file);
 	const turns: Turn[] = [];
 	const pendingTools = new Map<string, ToolTrace>();
@@ -465,8 +492,7 @@ export function parseTranscript(file: string, includeThinking = false): Transcri
 							}),
 						),
 					}));
-					const usable = rebuilt.filter((phase) => phase.tasks.length > 0);
-					if (usable.length > 0) todoPhases = usable;
+					todoPhases = rebuilt.filter((phase) => phase.tasks.length > 0);
 				}
 			}
 			continue;
@@ -556,19 +582,26 @@ export function parseTranscript(file: string, includeThinking = false): Transcri
 export function storeFiles(root: string): string[] {
 	if (!existsSync(root)) return [];
 	const out: string[] = [];
-	for (const entry of readdirSync(root, { withFileTypes: true })) {
-		if (!entry.isDirectory()) continue;
-		const dir = join(root, entry.name);
-		let children: string[];
-		try {
-			children = readdirSync(dir);
-		} catch {
-			continue;
+	let scanned = 0;
+	const check = () => {
+		if (++scanned > MAX_STORE_ENTRIES) throw new Error(`Session store exceeds ${MAX_STORE_ENTRIES} entries: ${root}. Use an explicit transcript \`file\` or archive older sessions.`);
+	};
+	const dirs = opendirSync(root);
+	try {
+		for (let entry = dirs.readSync(); entry; entry = dirs.readSync()) {
+			check();
+			if (!entry.isDirectory()) continue;
+			const dir = join(root, entry.name);
+			let children;
+			try { children = opendirSync(dir); } catch { continue; }
+			try {
+				for (let child = children.readSync(); child; child = children.readSync()) {
+					check();
+					if (child.isFile() && child.name.endsWith(".jsonl")) out.push(join(dir, child.name));
+				}
+			} finally { children.closeSync(); }
 		}
-		for (const child of children) {
-			if (child.endsWith(".jsonl")) out.push(join(dir, child));
-		}
-	}
+	} finally { dirs.closeSync(); }
 	return out;
 }
 

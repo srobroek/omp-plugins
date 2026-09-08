@@ -3,7 +3,7 @@ import { execFileSync } from "node:child_process";
 import { appendFileSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { type FixtureSession, writeSpillDir, writeStore } from "./fixtures";
+import { type FixtureSession, renderSession, writeSpillDir, writeStore } from "./fixtures";
 import resumeSessionTool, {
 	absoluteTime,
 	branchLabel,
@@ -240,6 +240,22 @@ describe("unit: transcript parsing", () => {
 		expect(phases[0]).toEqual({ name: "New", tasks: [{ content: "fresh", status: "in_progress" }] });
 	});
 
+	test.each([{ phases: [] }, { phases: [{ name: "Cleared", tasks: [] }] }])("an empty latest board clears current tasks: %j", ({ phases }) => {
+		const { root } = fixtureStore([
+			{
+				...shipped,
+				entries: [
+					{ kind: "todo", phases: [{ name: "Old", tasks: [{ content: "obsolete", status: "pending" }] }] },
+					{ kind: "todo", phases },
+				],
+			},
+		]);
+		const transcript = parseTranscript(storeFiles(root)[0]);
+		expect(transcript.todoPhases).toEqual([]);
+		expect(renderRead(transcript, {})).not.toContain("## Latest plan / todo state");
+		expect(renderRead(transcript, {})).not.toContain("obsolete");
+	});
+
 	test("left off is the last assistant prose, not the last record", () => {
 		const { root } = fixtureStore([shipped]);
 		expect(parseTranscript(storeFiles(root)[0]).meta.leftOff).toBe("Writer landed; the CLI flag is still open.");
@@ -462,16 +478,21 @@ describe("integration: read mode", () => {
 		expect(renderRead(transcript, { offset: 99 })).toContain("No turns at offset 99");
 	});
 
-	test("maxChars stops on a turn boundary and always emits one turn", () => {
+	test("maxChars refuses oversized turns and stops on complete boundaries", () => {
 		const { root } = fixtureStore([
 			{
 				...shipped,
 				entries: Array.from({ length: 5 }, (_, i) => ({ kind: "assistant" as const, text: `${"x".repeat(400)}${i}` })),
 			},
 		]);
-		const text = renderRead(parseTranscript(storeFiles(root)[0]), { turns: 5, maxChars: 1 });
+		const transcript = parseTranscript(storeFiles(root)[0]);
+		const refused = renderRead(transcript, { turns: 5, maxChars: 1 });
+		expect(refused).toContain("Increase max_chars");
+		expect(refused).not.toContain("### [");
+		const text = renderRead(transcript, { turns: 5, maxChars: 600 });
 		expect(text.match(/^### \[/gm)).toHaveLength(1);
-		expect(text).toContain("window: turns 5..5 of 5");
+		expect(text).toContain(`${"x".repeat(400)}4`);
+		expect(text.split("## Recent turns (newest first)\n")[1].split("\n\n---")[0].length).toBeLessThanOrEqual(600);
 	});
 
 	test("renderTurn shows tool calls with an error marker", () => {
@@ -524,6 +545,40 @@ describe("integration: session resolution", () => {
 		const file = storeFiles(root)[0];
 		expect(resolveSession("/nowhere", { file })).toEqual({ file });
 	});
+
+	test.each(["collision", "explicit file"])("paging preserves the selected transcript: %s", (selection) => {
+		const repo = repoWithWorktree();
+		const { home } = fixtureStore([
+			{ ...shipped, cwd: repo.main, stem: "2026-08-24T09-00-00Z_dddddddd-1111-7000-8888-000000000001" },
+			{ ...shipped, cwd: repo.main, stem: "2026-08-24T09-00-00Z_dddddddd-2222-7000-8888-000000000002" },
+		]);
+		const external = join(tmp("resume-export-"), 'selected "transcript".jsonl');
+		writeFileSync(external, renderSession(shipped));
+		withHome(home, () => {
+			const selected = resolveSession(repo.main, selection === "collision"
+				? { session: "dddddddd-1111", path: repo.main, worktrees: false }
+				: { file: external });
+			if ("error" in selected) throw new Error(selected.error);
+			const transcript = parseTranscript(selected.file);
+			const text = renderRead(transcript, { turns: 1, maxChars: 2000, includeThinking: true });
+			const paging = text.match(/resume_session mode="read" file=("(?:\\.|[^"\\])*") offset=(\d+) turns=(\d+) max_chars=(\d+) include_thinking=(true|false)/);
+			expect(paging).not.toBeNull();
+			const next = resolveSession("/unrelated-project", {
+				file: JSON.parse(paging![1]),
+				profile: "unrelated-profile",
+			});
+			expect(next).toEqual(selected);
+			if ("error" in next) throw new Error(next.error);
+			const older = renderRead(parseTranscript(next.file, paging![5] === "true"), {
+				offset: Number(paging![2]),
+				turns: Number(paging![3]),
+				maxChars: Number(paging![4]),
+				includeThinking: paging![5] === "true",
+			});
+			expect(older).toContain("window: turns 3..3 of 4");
+			expect(older).toContain("STOP.");
+		});
+	});
 });
 
 describe("integration: tool registration", () => {
@@ -538,7 +593,7 @@ describe("integration: tool registration", () => {
 		chain.object = self;
 		chain.enum = self;
 		const captured: Record<string, unknown> = {};
-		return { pi: { zod: chain, registerTool: (d: Record<string, unknown>) => Object.assign(captured, d), on: () => {} }, captured };
+		return { pi: { zod: chain, registerTool: (d: Record<string, unknown>) => Object.assign(captured, d), on: () => { } }, captured };
 	}
 
 	type Execute = (
