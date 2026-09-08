@@ -40,6 +40,7 @@ class ProseGateChecks(unittest.TestCase):
                 result = CliRunner().invoke(
                     cli.main,
                     [str(ascii_path), str(emoji_path), "--profile", "normal", "--format", "json"],
+                    catch_exceptions=False,
                 )
             # Click's output mixes stdout and stderr; only stdout is the JSON report.
             # Replay captured diagnostics rather than hiding upstream warnings.
