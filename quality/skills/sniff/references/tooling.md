@@ -140,7 +140,7 @@ bounded targets.
 
 ### scc -- LOC + complexity estimate, very fast
 - **Dimensions:** triage/hotspot ranking (size × complexity), not smells.
-- **Class:** local -- scope to the file list.
+- **Class:** local -- scope LOC and complexity estimates to the file list.
 - **Invocation:** `scc --by-file --format json .`
 - **Overlap:** none; used in step 1/triage to aim deeper passes.
 

@@ -84,7 +84,7 @@ The lead requests approval at three gates:
 
 `design-surface` and `design-system` each declare all three gates.
 
-Unresolved intent, new scales, and acceptance require explicit approval. Unattended
+Unresolved intent, new scales, and acceptance need explicit approval. Unattended
 runs record unanswered questions and remain blocked on those branches.
 
 `grill-system` and `fix-round` are always present and evaluate runtime evidence.
@@ -93,8 +93,8 @@ When no decision or further fix is necessary, they record N/A.
 `want_design_md` is a pour-time option. Enable it only for requested documentation
 with available upstream tooling. A missing requested upstream requires approval to omit it.
 
-BUILD follows Component Driven methodology, bottom-up, per
-`https://www.componentdriven.org/`:
+BUILD follows [Component Driven](https://www.componentdriven.org/) methodology,
+working from components up to pages:
 
 | Stage | Requirement |
 |---|---|
@@ -220,7 +220,7 @@ independent critique.
 
 ## First-choice assets
 
-Each topic has one first-choice asset, so routing stays consistent.
+Use the first-choice asset for each topic:
 
 | Topic | First choice |
 |---|---|
@@ -347,7 +347,7 @@ general-purpose servers.
 |---|---|
 | `accessibility-scanner` | axe-core WCAG 2.2 engine, contrast over gradients, fix links |
 | `wire-dsl` | Wire DSL rendered to SVG, PNG, and PDF |
-| `storybook` | Seven tools over the CSF index, when Storybook ran at session start |
+| `storybook` | If Storybook ran at session start: seven tools over the CSF index |
 
 ## CLI packages these skills invoke
 

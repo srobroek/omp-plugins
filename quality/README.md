@@ -1,6 +1,6 @@
 # quality
 
-Audit code smells and verify changes locally with quality gates and browser-verification guidance.
+Audit code for smells. Verify changes locally with quality gates and browser-verification guidance.
 
 ## Skills
 
@@ -33,6 +33,8 @@ The plugin's extension modules register:
 - `sniff_install_tools`
 - `verify_repo`
 
-`verify_repo` reports incomplete verification when no checks run or a detected workflow lacks a prerequisite. Failed discovery or checks return `ok: false`; `complete` distinguishes missing coverage from executed failures. Install JavaScript executables before verification; the tool never downloads them.
+`verify_repo` reports incomplete verification when no checks run or a detected workflow lacks a prerequisite. Failed discovery or checks return `ok: false`; `complete` distinguishes missing coverage from executed failures.
+
+Before verification, install JavaScript executables; the tool never downloads them.
 
 `sniff_install_tools` reports unsuccessful installation when a command fails or a requested tool has no supported installer. Probe and list report inventory, not verification success.

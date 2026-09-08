@@ -8,7 +8,7 @@ The tool matches sessions to repositories using each transcript's recorded `cwd`
 
 ## Skills
 
-- `resume-session`: resume a prior session with two STOP gates. The user chooses the session, then confirms before work restarts.
+- `resume-session`: resume a prior session with two STOP gates. First, the user chooses the session. Before work restarts, the user confirms.
 
 ## Tools
 
@@ -20,7 +20,7 @@ The `resume-session-tool` extension registers the read-only `resume_session` too
 
 Rows appear newest-first and contain:
 
-- Session id, lengthened beyond eight characters when ids collide.
+- Session id. When ids collide, the tool lengthens them beyond eight characters.
 - Last-active timestamp, turn count, and size.
 - `compacted`/`continued`/`exit` flags.
 - Worked-on branch and drift against that worktree's checked-out branch.
@@ -51,7 +51,13 @@ minimum required budget without emitting a partial turn.
 
 Reads accept only regular files no larger than 64 MiB. Listings scan at most 20,000 directory entries and 256 MiB of matching transcripts. Output is limited to 1,000,000 characters.
 
-Exceeding a bound produces an actionable error rather than silently dropping metadata. Depending on the bound, use a smaller exported transcript with `file`, reduce output windows, or archive older sessions. Listing order uses parsed last-active timestamps, not filesystem time.
+Exceeding a bound produces an actionable error rather than silently dropping metadata. Depending on the bound:
+
+- Use a smaller exported transcript with `file`.
+- Reduce output windows.
+- Archive older sessions.
+
+Listing order uses parsed last-active timestamps, not filesystem time.
 
 ### Branch inference
 

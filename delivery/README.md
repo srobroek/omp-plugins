@@ -1,27 +1,20 @@
 # delivery
 
-Git delivery workflows and commit guards for OMP.
-
-The plugin covers:
-
-- Commit and push cadence.
-- Branching, shipping, and merge proof.
-- Beads merge-queue linkage.
-- A branch-first commit gate.
-- Read-only pull-request review through `pr-reviewer`.
+This plugin provides Git workflows for OMP, with guards for commits and reminders about work that needs pushing.
+Its rules cover when to deliver changes and how to prove they landed. It also links work to the beads merge queue.
 
 ## Agents
 
 | Name | When |
 | --- | --- |
-| `pr-reviewer` | Review a pull request; returns `VERDICT:` only. |
+| `pr-reviewer` | Reviews a pull request without changing it. Returns `VERDICT:` only. |
 
 ## Rules
 
 | Name | When |
 | --- | --- |
-| `delivery-cadence` | Continuous atomic commit and push. |
-| `delivery-git-workflow` | Branching, PRs, GW-3 landing proof, beads merge-queue linkage, GW-1/GW-2. |
+| `delivery-cadence` | Keeping commits atomic. Pushing finished work continuously. |
+| `delivery-git-workflow` | Working with branches and PRs. Proving a landing under GW-3. Linking beads to the merge queue. Following GW-1/GW-2. |
 | `delivery-draft-pr-advisory` | `gh pr create` without `--draft` (TTSR). |
 
 ## Extensions
@@ -30,9 +23,10 @@ The plugin covers:
 
 Blocks a `git`/`dgit` commit whose target repository has `main` or `master` checked out. It reads `git branch --show-current` in that repository, not the commit message.
 
-The gate allows the call when git cannot name a branch. It also allows a standalone `--dry-run` commit option, not the same text used as an option value or a path after `--`.
+When git cannot name a branch, the gate allows the call. With `--dry-run` as a standalone commit option, the gate also allows the call. That exception excludes option values and paths after `--`.
 
-For a user-authorized exception, set `DELIVERY_ALLOW_MAIN_COMMIT=1` in the process environment or as an assignment prefix on the actual commit invocation. Message or echo text does not enable the override. The override records the exception; it does not replace host approval.
+For a user-authorized exception, set `DELIVERY_ALLOW_MAIN_COMMIT=1` in the process environment or as an assignment prefix on the commit invocation.
+Message or echo text does not enable the override. The override records the exception. Host approval is still required.
 
 Directory checks are preflight observations, not atomic guarantees. Dynamic shell state remains outside this advisory-strength gate.
 
