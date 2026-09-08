@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.3](https://github.com/srobroek/omp-plugins/compare/build--v0.3.2...build--v0.3.3) (2026-09-08)
+
+
+### Refactors
+
+* retire redundant agents and repair role routing ([#66](https://github.com/srobroek/omp-plugins/issues/66)) ([1a8dbb2](https://github.com/srobroek/omp-plugins/commit/1a8dbb24f127dfcbacb624857459a36a918ca4e6))
+
 ## [0.3.2](https://github.com/srobroek/omp-plugins/compare/build--v0.3.1...build--v0.3.2) (2026-09-08)
 
 

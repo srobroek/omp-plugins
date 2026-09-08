@@ -1,6 +1,6 @@
 {
   "name": "build",
   "description": "Execution agents: operator and external-repo worker.",
-  "version": "0.3.2",
+  "version": "0.3.3",
   "category": "development"
 }

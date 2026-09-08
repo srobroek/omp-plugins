@@ -1,5 +1,16 @@
 # Changelog
 
+## [1.0.0](https://github.com/srobroek/omp-plugins/compare/find-tools--v0.4.1...find-tools--v1.0.0) (2026-09-08)
+
+
+### ⚠ BREAKING CHANGES
+
+* Drop support for APM formats and sidecar agent contracts.
+
+### Features
+
+* retire APM formats and add staged lint ([#68](https://github.com/srobroek/omp-plugins/issues/68)) ([07996f1](https://github.com/srobroek/omp-plugins/commit/07996f115baddbe4261ce6892100238bff2310bd))
+
 ## [0.4.1](https://github.com/srobroek/omp-plugins/compare/find-tools--v0.4.0...find-tools--v0.4.1) (2026-09-08)
 
 
