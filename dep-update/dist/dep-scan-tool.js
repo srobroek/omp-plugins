@@ -1216,7 +1216,8 @@ async function detectProject(target) {
 function normalizeVersion(raw) {
   if (typeof raw !== "string")
     return null;
-  const match = VERSION_HEAD.exec(raw.replace(/^v/, ""));
+  const version = raw.replace(/^={1,2}(?=\d+(?:\.\d+){0,2}$)/, "");
+  const match = VERSION_HEAD.exec(version.replace(/^v/, ""));
   if (!match)
     return null;
   return [Number(match[1]), Number(match[2] || 0), Number(match[3] || 0)];
@@ -1557,12 +1558,15 @@ async function runPm(command, root, options) {
       options.signal?.removeEventListener("abort", abort);
       proc.stdout?.destroy();
       proc.stderr?.destroy();
-      resolve({ code, log: [
-        `==> ${command.join(" ")}`,
-        Buffer.concat(chunks).toString("utf8"),
-        stopped && `${stopped}; partial dependency changes may remain. Inspect manifests and lockfiles before retrying.`
-      ].filter(Boolean).join(`
-`) });
+      resolve({
+        code,
+        log: [
+          `==> ${command.join(" ")}`,
+          Buffer.concat(chunks).toString("utf8"),
+          stopped && `${stopped}; partial dependency changes may remain. Inspect manifests and lockfiles before retrying.`
+        ].filter(Boolean).join(`
+`)
+      });
     };
     const stop = (reason) => {
       if (stopped || settled)

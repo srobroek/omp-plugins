@@ -33,6 +33,7 @@ Package-manager runs stop after 120 seconds or 64 KiB of combined output. Cancel
 
 The detector reads root language manifests. Python also reads `uv.lock` or `poetry.lock` before falling back to declarations.
 Node lockfiles select the package manager; the detector does not read their resolved versions.
+The detector recognizes numeric equality pins such as `==1.2.3` and `=1.2.3`. It does not resolve version ranges.
 
 The detector does not scan:
 

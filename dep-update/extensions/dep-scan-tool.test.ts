@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 const zod = {
@@ -76,6 +76,26 @@ describe("unit: fixture registry", () => {
 		expect(record.latest).toBe("2.32.3");
 	});
 
+	test.each([
+		["pypi", "==1.0.0", "MAJOR-ADVISORY"],
+		["npm", "=1.0.0", "MAJOR-ADVISORY"],
+		["pypi", "==2.0.0", "CURRENT"],
+		["pypi", "==1.*", "MINOR-CHECK"],
+		["pypi", ">=1.0.0", "MINOR-CHECK"],
+	])("%s classifies %s without treating ranges as resolved versions", async (ecosystem, installed, expected) => {
+		const fixtures = tmp();
+		try {
+			const response = ecosystem === "pypi"
+				? { info: { version: "2.0.0" }, releases: { "2.0.0": [{ yanked: false }] } }
+				: { "dist-tags": { latest: "2.0.0" }, versions: { "2.0.0": {} } };
+			writeFileSync(join(fixtures, `${ecosystem}_example.json`), JSON.stringify(response));
+			const record = await queryRegistry(ecosystem, "example", installed, fixtures);
+			expect(record.class).toBe(expected);
+		} finally {
+			rmSync(fixtures, { recursive: true, force: true });
+		}
+	});
+
 	test("yanked is disconfirmed", async () => {
 		const fixtures = tmp();
 		writeFileSync(
@@ -102,7 +122,7 @@ describe("integration: dep_scan", () => {
 			registerTool: (d: Record<string, unknown>) => {
 				if (d.name === "dep_scan") Object.assign(captured, d);
 			},
-			on: () => {},
+			on: () => { },
 		};
 		depScanTool(fakePi as never);
 		const execute = captured.execute as (
@@ -138,7 +158,7 @@ describe("integration: dep_apply", () => {
 			registerTool: (d: Record<string, unknown>) => {
 				if (d.name === "dep_apply") Object.assign(captured, d);
 			},
-			on: () => {},
+			on: () => { },
 		};
 		depScanTool(fakePi as never);
 		const execute = captured.execute as (
@@ -162,9 +182,11 @@ describe("integration: dep_apply", () => {
 	});
 	test("headless and denied confirmation stop before dependency execution", async () => {
 		const captured: Record<string, unknown> = {};
-		depScanTool({ zod, registerTool: (d: Record<string, unknown>) => {
-			if (d.name === "dep_apply") Object.assign(captured, d);
-		} } as never);
+		depScanTool({
+			zod, registerTool: (d: Record<string, unknown>) => {
+				if (d.name === "dep_apply") Object.assign(captured, d);
+			}
+		} as never);
 		const execute = captured.execute as (
 			id: string, params: Record<string, unknown>, signal: undefined, update: undefined,
 			ctx: { cwd: string; hasUI: boolean; ui: { confirm: (title: string, message: string) => Promise<boolean> } },
