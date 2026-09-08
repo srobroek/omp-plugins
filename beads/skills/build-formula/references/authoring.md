@@ -111,20 +111,19 @@ A `phase = "vapor"` formula still pours, with a warning
 (`recommends vapor phase … Consider using: bd mol wisp`). Assert that warning.
 
 Disposition of a finished molecule -- `promote`, `squash`, `burn` -- is steering, not authoring; see
-`beads.composition.context.md`. The one authoring-relevant trap: `bd mol squash` **deletes children** by
+`rule://beads-composition`. The one authoring-relevant trap: `bd mol squash` **deletes children** by
 default, so a formula whose per-step trail must survive cannot rely on squash to preserve it.
 
 ## Persistent versus ephemeral
 
-Not this skill's subject. The carrier doctrine (bead comment vs `decision` bead vs message wisp vs
-artifact), the promotion rule, and the wisp TTL classes are steering, and they apply to all beads work
-rather than to formula authoring:
+Not this skill's subject. The carrier doctrine, promotion rule, and wisp TTL classes are steering, and
+they apply to all beads work rather than to formula authoring:
 
-- `beads.orchestration-doctrine.context.md` -- wisps, links, labels, gates
-- `beads.composition.context.md` -- the execution-shape table and promote/squash/burn dispositions
+- `rule://beads-carriers` -- carrier authority and lifecycle
+- `rule://beads-orchestration-doctrine` -- wisps, links, labels, and gates
+- `rule://beads-composition` -- execution shapes and promote/squash/burn disposition
 
-(The carrier doctrine itself ships in the `orchestrate` package, which is the wrong layer --
-`beads` is usable without `orchestrate` but not the reverse. See `ACTIONS.md` 6b.2.)
+The orchestration package maps its run model onto these Beads carriers; it does not redefine them.
 
 The one formula-authoring consequence: **`notes` is durable, so ephemeral chatter does not belong in a
 step's `notes`.** Put it on a wisp. `notes` is also the only durable field that accepts `{{var}}`, which

@@ -1,6 +1,6 @@
 ---
 name: brownfield-project
-description: Retrofit an existing repository into APM-managed agentic tooling. Use when onboarding or repairing a brownfield repo that needs agents, skills, or hooks added.
+description: Retrofit an existing repository into OMP-managed agentic tooling. Use when onboarding or repairing a brownfield repo that needs agents, skills, or hooks added.
 ---
 
 # Brownfield Project

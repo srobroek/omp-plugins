@@ -48,7 +48,7 @@ NOT Ship an always-apply index listing the plugin's rules. OMP already renders e
 MUST Discover only `<root>/<name>/SKILL.md`. No deeper nesting.
 DEFAULT `plugin.json` `skills` arrays remap when the default tree is wrong.
 MUST Bodies cite assets as `skill://<name>/<path>`. Never absolute paths.
-NOT APM-compiled bodies that bake host paths — they die on any other machine.
+NOT Bodies that bake host paths; they die on any other machine.
 
 ## Catalog and release
 

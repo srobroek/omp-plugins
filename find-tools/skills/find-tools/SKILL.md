@@ -1,6 +1,6 @@
 ---
 name: find-tools
-description: Discover and vet reusable skills, agents, MCP servers, and APM packages. Use when asked to find a capability or decide to adopt, reject, or build.
+description: Discover and vet reusable skills, agents, MCP servers, and OMP plugins. Use when asked to find a capability or decide to adopt, reject, or build.
 ---
 
 # Find Tools
