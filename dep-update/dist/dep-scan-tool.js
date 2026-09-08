@@ -885,8 +885,8 @@ var FETCH_TIMEOUT_MS = 1e4;
 var REQ_SPLIT = /[\[<>=!~;\s]/;
 var REQ_NAME = /^[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?$/;
 var GEM = /^\s*gem\s+(['"])([^'"]+)\1(?:\s*,\s*(['"])([^'"]*)\3)?/;
-var VERSION_HEAD = /^(\d+)(?:\.(\d+))?(?:\.(\d+))?/;
-var PRERELEASE = /(a|b|rc|alpha|beta|dev|post)[\d.]/i;
+var NODE_VERSION = /^=?v?(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-((?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*))*))?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/;
+var PYTHON_VERSION = /^(?:={1,2})?v?(\d+)(?:\.(\d+))?(?:\.(\d+))?(?:[-_.]?(a|b|rc|alpha|beta|pre|preview)[-_.]?\d*)?(?:[-_.]?post[-_.]?\d*)?(?:[-_.]?(dev)[-_.]?\d*)?(?:\+[a-z0-9]+(?:[-_.][a-z0-9]+)*)?$/i;
 var PROTECTED_NAME = /^\.project-setup|answers\.toml|sources\.toml/;
 function isFile(path) {
   try {
@@ -1213,21 +1213,24 @@ async function detectProject(target) {
   return { ok: true, exit: 0, rows: detector.rows, stderr: notes.join(`
 `) };
 }
-function normalizeVersion(raw) {
+function normalizeVersion(raw, ecosystem = "npm") {
   if (typeof raw !== "string")
     return null;
-  const version = raw.replace(/^={1,2}(?=\d+(?:\.\d+){0,2}$)/, "");
-  const match = VERSION_HEAD.exec(version.replace(/^v/, ""));
-  if (!match)
+  const match = (ecosystem === "pypi" ? PYTHON_VERSION : NODE_VERSION).exec(raw);
+  if (!match || match[0] !== raw)
     return null;
-  return [Number(match[1]), Number(match[2] || 0), Number(match[3] || 0)];
+  const version = [Number(match[1]), Number(match[2] || 0), Number(match[3] || 0)];
+  return version.every(Number.isSafeInteger) ? version : null;
 }
-function isPrerelease(raw) {
-  return typeof raw === "string" && PRERELEASE.test(raw);
+function isPrerelease(raw, ecosystem = "npm") {
+  if (typeof raw !== "string" || !normalizeVersion(raw, ecosystem))
+    return false;
+  const match = (ecosystem === "pypi" ? PYTHON_VERSION : NODE_VERSION).exec(raw);
+  return Boolean(match[4] || ecosystem === "pypi" && match[5]);
 }
-function classify(installed, latest) {
-  const cur = normalizeVersion(installed);
-  const lat = normalizeVersion(latest);
+function classify(installed, latest, ecosystem = "npm") {
+  const cur = normalizeVersion(installed, ecosystem);
+  const lat = normalizeVersion(latest, ecosystem);
   if (cur === null || lat === null)
     return "UNRESOLVABLE";
   if (cur[0] === lat[0] && cur[1] === lat[1] && cur[2] === lat[2])
@@ -1240,15 +1243,15 @@ function classify(installed, latest) {
     return "PATCH-SAFE";
   return "CURRENT";
 }
-function pickStable(latest, installed, versions) {
-  if (!isPrerelease(latest) || isPrerelease(installed))
+function pickStable(latest, installed, versions, ecosystem = "npm") {
+  if (!isPrerelease(latest, ecosystem) || isPrerelease(installed, ecosystem))
     return latest;
-  const stable = versions.filter((v) => typeof v === "string" && !isPrerelease(v) && normalizeVersion(v));
+  const stable = versions.filter((v) => !isPrerelease(v, ecosystem) && normalizeVersion(v, ecosystem));
   if (!stable.length)
     return latest;
   stable.sort((a, b) => {
-    const na = normalizeVersion(a);
-    const nb = normalizeVersion(b);
+    const na = normalizeVersion(a, ecosystem);
+    const nb = normalizeVersion(b, ecosystem);
     return nb[0] - na[0] || nb[1] - na[1] || nb[2] - na[2];
   });
   return stable[0];
@@ -1324,8 +1327,8 @@ async function queryRegistry(ecosystem, name, installed, fixtureDir, signal) {
       result.reason = `registry fetch not implemented for ${ecosystem} (advisory-only)`;
       return result;
     }
-    latest = pickStable(latest, installed, candidates);
-    const verdict = classify(installed, latest);
+    latest = pickStable(latest, installed, candidates, ecosystem);
+    const verdict = classify(installed, latest, ecosystem);
     result.latest = latest;
     result.status = verdict === "CURRENT" || verdict === "UNRESOLVABLE" ? verdict : "OK";
     if (verdict === "UNRESOLVABLE") {

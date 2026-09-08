@@ -9,8 +9,8 @@ export const FETCH_TIMEOUT_MS = 10_000;
 const REQ_SPLIT = /[\[<>=!~;\s]/;
 const REQ_NAME = /^[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?$/;
 const GEM = /^\s*gem\s+(['"])([^'"]+)\1(?:\s*,\s*(['"])([^'"]*)\3)?/;
-const VERSION_HEAD = /^(\d+)(?:\.(\d+))?(?:\.(\d+))?/;
-const PRERELEASE = /(a|b|rc|alpha|beta|dev|post)[\d.]/i;
+const NODE_VERSION = /^=?v?(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-((?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*))*))?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/;
+const PYTHON_VERSION = /^(?:={1,2})?v?(\d+)(?:\.(\d+))?(?:\.(\d+))?(?:[-_.]?(a|b|rc|alpha|beta|pre|preview)[-_.]?\d*)?(?:[-_.]?post[-_.]?\d*)?(?:[-_.]?(dev)[-_.]?\d*)?(?:\+[a-z0-9]+(?:[-_.][a-z0-9]+)*)?$/i;
 const PROTECTED_NAME = /^\.project-setup|answers\.toml|sources\.toml/;
 
 export type DepRow = [string, string, string];
@@ -357,21 +357,23 @@ export async function detectProject(target: string): Promise<{
 	return { ok: true, exit: 0, rows: detector.rows, stderr: notes.join("\n") };
 }
 
-export function normalizeVersion(raw: unknown): [number, number, number] | null {
+export function normalizeVersion(raw: unknown, ecosystem = "npm"): [number, number, number] | null {
 	if (typeof raw !== "string") return null;
-	const version = raw.replace(/^={1,2}(?=\d+(?:\.\d+){0,2}$)/, "");
-	const match = VERSION_HEAD.exec(version.replace(/^v/, ""));
-	if (!match) return null;
-	return [Number(match[1]), Number(match[2] || 0), Number(match[3] || 0)];
+	const match = (ecosystem === "pypi" ? PYTHON_VERSION : NODE_VERSION).exec(raw);
+	if (!match || match[0] !== raw) return null;
+	const version: [number, number, number] = [Number(match[1]), Number(match[2] || 0), Number(match[3] || 0)];
+	return version.every(Number.isSafeInteger) ? version : null;
 }
 
-export function isPrerelease(raw: unknown): boolean {
-	return typeof raw === "string" && PRERELEASE.test(raw);
+export function isPrerelease(raw: unknown, ecosystem = "npm"): boolean {
+	if (typeof raw !== "string" || !normalizeVersion(raw, ecosystem)) return false;
+	const match = (ecosystem === "pypi" ? PYTHON_VERSION : NODE_VERSION).exec(raw)!;
+	return Boolean(match[4] || (ecosystem === "pypi" && match[5]));
 }
 
-export function classify(installed: string, latest: string): string {
-	const cur = normalizeVersion(installed);
-	const lat = normalizeVersion(latest);
+export function classify(installed: string, latest: string, ecosystem = "npm"): string {
+	const cur = normalizeVersion(installed, ecosystem);
+	const lat = normalizeVersion(latest, ecosystem);
 	if (cur === null || lat === null) return "UNRESOLVABLE";
 	if (cur[0] === lat[0] && cur[1] === lat[1] && cur[2] === lat[2]) return "CURRENT";
 	if (lat[0] > cur[0]) return "MAJOR-ADVISORY";
@@ -380,13 +382,13 @@ export function classify(installed: string, latest: string): string {
 	return "CURRENT";
 }
 
-export function pickStable(latest: string, installed: string, versions: string[]): string {
-	if (!isPrerelease(latest) || isPrerelease(installed)) return latest;
-	const stable = versions.filter((v) => typeof v === "string" && !isPrerelease(v) && normalizeVersion(v));
+export function pickStable(latest: string, installed: string, versions: string[], ecosystem = "npm"): string {
+	if (!isPrerelease(latest, ecosystem) || isPrerelease(installed, ecosystem)) return latest;
+	const stable = versions.filter((v) => !isPrerelease(v, ecosystem) && normalizeVersion(v, ecosystem));
 	if (!stable.length) return latest;
 	stable.sort((a, b) => {
-		const na = normalizeVersion(a)!;
-		const nb = normalizeVersion(b)!;
+		const na = normalizeVersion(a, ecosystem)!;
+		const nb = normalizeVersion(b, ecosystem)!;
 		return nb[0] - na[0] || nb[1] - na[1] || nb[2] - na[2];
 	});
 	return stable[0];
@@ -475,8 +477,8 @@ export async function queryRegistry(
 			result.reason = `registry fetch not implemented for ${ecosystem} (advisory-only)`;
 			return result;
 		}
-		latest = pickStable(latest, installed, candidates);
-		const verdict = classify(installed, latest);
+		latest = pickStable(latest, installed, candidates, ecosystem);
+		const verdict = classify(installed, latest, ecosystem);
 		result.latest = latest;
 		result.status = verdict === "CURRENT" || verdict === "UNRESOLVABLE" ? verdict : "OK";
 		if (verdict === "UNRESOLVABLE") {

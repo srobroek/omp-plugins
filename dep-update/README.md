@@ -38,7 +38,19 @@ After 120 seconds or 64 KiB of combined output, the tool stops the package manag
 The detector reads manifests at the project root. For Python, it checks `uv.lock` or `poetry.lock` first. If neither supplies the version, it uses declarations.
 For Node, lockfiles select the package manager. The detector does not read resolved versions from those lockfiles.
 
-The detector recognizes versions pinned with `==` or `=`, such as `==1.2.3` and `=1.2.3`. It does not resolve version ranges.
+The scanner requires a complete version:
+
+- Node: three release numbers, such as `1.2.3`, with an optional `v` or `=` prefix.
+- Python: one to three release numbers, with an optional `==` or `=` prefix.
+- Node suffixes: SemVer prerelease and build identifiers.
+- Python suffixes: pre, post, dev, and local identifiers.
+
+The scanner rejects ranges and wildcards. For Node, it also rejects partial versions such as `1` or `1.2`.
+For Python, it rejects epochs and versions with more than three release numbers.
+
+Bump classes compare release numbers only. If those numbers match, the result is `CURRENT`, even if suffixes differ.
+This is not a full PEP 440 comparator.
+
 The scanner labels unresolved versions `UNRESOLVABLE` and excludes them from upgrade recommendations.
 Before choosing a bump, resolve the installed version.
 

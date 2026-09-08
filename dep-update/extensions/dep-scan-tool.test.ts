@@ -10,6 +10,7 @@ const zod = {
 	object: (shape: unknown) => shape,
 };
 import depScanTool, { classify, detectProject, normalizeVersion, parseRequirement, queryRegistry } from "./dep-scan-tool";
+import { isPrerelease, pickStable } from "./lib";
 
 function tmp(): string {
 	return mkdtempSync(join(tmpdir(), "dep-scan-"));
@@ -19,7 +20,9 @@ describe("unit: versions", () => {
 	test("normalizeVersion", () => {
 		expect(normalizeVersion("1.2.3")).toEqual([1, 2, 3]);
 		expect(normalizeVersion("v1.2.3")).toEqual([1, 2, 3]);
-		expect(normalizeVersion("1.2")).toEqual([1, 2, 0]);
+		expect(normalizeVersion("1.2")).toBeNull();
+		expect(normalizeVersion("1.2", "pypi")).toEqual([1, 2, 0]);
+		expect(normalizeVersion("==1.2", "pypi")).toEqual([1, 2, 0]);
 		expect(normalizeVersion("not-a-version")).toBeNull();
 	});
 
@@ -29,6 +32,31 @@ describe("unit: versions", () => {
 		expect(classify("1.2.3", "2.0.0")).toBe("MAJOR-ADVISORY");
 		expect(classify("1.2.3", "1.2.3")).toBe("CURRENT");
 		expect(classify("not-a-version", "1.2.3")).toBe("UNRESOLVABLE");
+	});
+
+	test.each([
+		"1.x", "1.X", "1.*", "1.2.x", "1", "1.2", "1.2.3.4",
+		"1.2.3 || 2.0.0", "1.2.3 <2.0.0", "1.2.3, <2.0.0",
+		"1.2.3 - 2.0.0", "1.2.3garbage", "1.2.3\n", "==1.2.3",
+		"01.2.3", "1.2.3-01", "1.2.3-", "1.2.3+",
+	])("rejects the complete unresolved Node input %j on either side", (version) => {
+		expect(normalizeVersion(version)).toBeNull();
+		expect(classify(version, "2.0.0")).toBe("UNRESOLVABLE");
+		expect(classify("1.0.0", version)).toBe("UNRESOLVABLE");
+	});
+
+	test("exact prereleases and build metadata remain parseable, not ranges", () => {
+		expect(normalizeVersion("1.2.3-beta.1+build.5")).toEqual([1, 2, 3]);
+		expect(normalizeVersion("1.2.3-2.0.0")).toEqual([1, 2, 3]);
+		expect(normalizeVersion("==1.2rc1", "pypi")).toEqual([1, 2, 0]);
+		expect(isPrerelease("1.2.3-preview")).toBe(true);
+		expect(isPrerelease("1.2.3+beta.1")).toBe(false);
+		expect(isPrerelease("1.2rc1", "pypi")).toBe(true);
+		expect(isPrerelease("1.2.dev1", "pypi")).toBe(true);
+		expect(isPrerelease("1.2.post1", "pypi")).toBe(false);
+		expect(pickStable("2.0.0-preview", "1.0.0", ["2.x", "1.1.0", "2.0.0-preview"])).toBe("1.1.0");
+		expect(pickStable("2.0.0-preview", "1.0.0-beta.1", ["1.1.0", "2.0.0-preview"])).toBe("2.0.0-preview");
+		expect(pickStable("2.0rc1", "1.0", ["2.*", "1.1", "2.0rc1"], "pypi")).toBe("1.1");
 	});
 
 	test("parseRequirement extras", () => {
@@ -80,6 +108,16 @@ describe("unit: fixture registry", () => {
 		["pypi", "==1.0.0", "MAJOR-ADVISORY"],
 		["npm", "=1.0.0", "MAJOR-ADVISORY"],
 		["pypi", "==2.0.0", "CURRENT"],
+		["pypi", "=1.0.0", "MAJOR-ADVISORY"],
+		["pypi", "==1.0", "MAJOR-ADVISORY"],
+		["pypi", "1", "MAJOR-ADVISORY"],
+		["pypi", "==1.0rc1", "MAJOR-ADVISORY"],
+		["npm", "==1.0.0", "UNRESOLVABLE"],
+		["npm", "1.0rc1", "UNRESOLVABLE"],
+		["pypi", "1.x", "UNRESOLVABLE"],
+		["pypi", "1.0 - 2.0", "UNRESOLVABLE"],
+		["pypi", "==1.0,!=1.0.1", "UNRESOLVABLE"],
+		["pypi", "1.0garbage", "UNRESOLVABLE"],
 		["pypi", "==1.*", "UNRESOLVABLE"],
 		["pypi", ">=1.0.0", "UNRESOLVABLE"],
 	])("%s classifies %s without treating ranges as resolved versions", async (ecosystem, installed, expected) => {
@@ -92,6 +130,26 @@ describe("unit: fixture registry", () => {
 			const record = await queryRegistry(ecosystem, "example", installed, fixtures);
 			expect(record.class).toBe(expected);
 			expect(record.status).toBe(expected === "UNRESOLVABLE" || expected === "CURRENT" ? expected : "OK");
+		} finally {
+			rmSync(fixtures, { recursive: true, force: true });
+		}
+	});
+
+	test.each(["npm", "node"])("%s unresolved declarations cannot become recommended OK upgrades", async (ecosystem) => {
+		const fixtures = tmp();
+		try {
+			writeFileSync(join(fixtures, `${ecosystem}_example.json`), JSON.stringify({
+				"dist-tags": { latest: "1.1.0" }, versions: { "1.1.0": {} },
+			}));
+			for (const installed of ["1.x", "1.*", "1", "1.0", "1.0.0 || 2.0.0", "1.0.0 - 2.0.0"]) {
+				const record = await queryRegistry(ecosystem, "example", installed, fixtures);
+				expect(record.status).toBe("UNRESOLVABLE");
+				expect(record.class).toBe("UNRESOLVABLE");
+				expect(record.reason).toContain("Exact versions are required");
+			}
+			const exact = await queryRegistry(ecosystem, "example", "1.0.0", fixtures);
+			expect(exact.status).toBe("OK");
+			expect(exact.class).toBe("MINOR-CHECK");
 		} finally {
 			rmSync(fixtures, { recursive: true, force: true });
 		}
