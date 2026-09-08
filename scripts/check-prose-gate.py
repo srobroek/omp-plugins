@@ -7,6 +7,7 @@ from types import SimpleNamespace
 import importlib.util
 import json
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -40,8 +41,11 @@ class ProseGateChecks(unittest.TestCase):
                     cli.main,
                     [str(ascii_path), str(emoji_path), "--profile", "normal", "--format", "json"],
                 )
+            # Click's output mixes stdout and stderr; only stdout is the JSON report.
+            # Replay captured diagnostics rather than hiding upstream warnings.
+            sys.stderr.write(result.stderr)
             self.assertIn(result.exit_code, (0, 1), result.output + repr(result.exception))
-            documents = json.loads(result.output)["documents"]
+            documents = json.loads(result.stdout)["documents"]
             by_path = {document["path"]: document for document in documents}
             self.assertEqual(set(by_path), {str(ascii_path), str(emoji_path)})
             for document in documents:
