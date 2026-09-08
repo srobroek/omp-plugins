@@ -34,33 +34,27 @@ agent's playbook for using it.
 
 ## Bundles
 
-| Bundle | Tools | When |
-|--------|-------|------|
-| `core` | semgrep, lizard, scc | Always useful; the cross-language floor |
-| `dup` | jscpd | Only for languages without native dup (Python, SQL, configs) |
-| `security` | trivy, checkov, gitleaks | When IaC/containers/secrets are in scope |
-| `rust` | clippy (rustup), cargo-machete | Rust repos |
-| `go` | golangci-lint | Go repos |
-| `python` | ruff, vulture, pylint, mypy, pyright | Python repos (ruff is primary; pylint adds design smells, mypy/pyright type smells -- pick whichever the repo configures) |
-| `js-ts` | eslint, knip, biome | JS/TS repos (project-local -- see note) |
-| `shell` | shellcheck, shfmt | Shell scripts |
-| `sql` | sqlfluff | SQL |
-| `css` | stylelint | CSS/SCSS (project-local) |
-| `data` | yamllint, taplo, check-jsonschema | YAML/TOML/JSON |
-| `api` | spectral, buf | OpenAPI / Protobuf / GraphQL |
-| `infra` | hadolint, tflint, actionlint, kube-linter | Dockerfile / Terraform / CI / k8s |
-| `docs` | markdownlint-cli2, lychee | Markdown |
+Use `sniff_install_tools` with `{"mode":"list"}` for current bundle membership
+and install commands. Bundle names: `core`, `dup`, `security`, `rust`, `go`,
+`python`, `js-ts`, `shell`, `sql`, `css`, `data`, `api`, `infra`, `docs`.
+
+After approval, for example, call with
+`{"mode":"install","bundles":["infra"],"path":"<repo-root>"}`.
+`{"mode":"install","bundles":["infra"],"dryRun":true}` prints commands only.
+Bundle installs cover every member, including opt-ins: obtain approval for the
+whole bundle or install only individually approved tools using the listed
+commands. Do not use `all:true` unless all bundles were explicitly approved.
 
 ## Package managers
 
-The script tries, in order of fit: `brew`, `pipx` (or `uv tool` if pipx is
-absent), `npm -g`, `cargo`, `rustup`. If none is present for a tool, it prints
-the manual install command and moves on. It never calls sudo.
+The native tool prefers mise when available; `noMise:true` disables that route.
+Its fallback uses the tool's supported manager (`brew`, `pipx` / `uv tool`,
+`npm`, `cargo`, `rustup`, or `go`). Unavailable installs are reported; never sudo.
 
 ## Project-local tools
 
 `eslint`, `knip`, `biome`, `stylelint` are JS ecosystem tools that belong in the
-**repo's own** `devDependencies`, pinned with the project. The script does **not**
+**repo's own** `devDependencies`, pinned with the project. The native tool does **not**
 install them globally; it reports them and prints the `npm i -D ...` line to run
 inside the repo. Run them via `npx` so the project's config and plugin versions
 apply.

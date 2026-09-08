@@ -1,8 +1,44 @@
-import { describe, expect, test } from "bun:test";
-import { mkdtempSync } from "node:fs";
+import { expect, test } from "bun:test";
+import { chmodSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import goQualityTool, { runGoQuality } from "./go-quality-tool.ts";
+
+test("missing project cannot report successful verification or repair", () => {
+ const dir = mkdtempSync(join(tmpdir(), "go-quality-"));
+ try {
+  for (const mode of ["check", "fix"] as const) {
+   const report = runGoQuality(mode, dir);
+   expect(report.ok).toBe(false);
+   expect(report.complete).toBe(false);
+  }
+ } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test("missing requested tools and command failures cannot pass", () => {
+ const dir = mkdtempSync(join(tmpdir(), "go-quality-"));
+ try {
+  const bin = join(dir, "bin"); mkdirSync(bin);
+  writeFileSync(join(dir, "go.mod"), 'module example.test\n');
+  const which = join(bin, "which");
+  writeFileSync(which, '#!/bin/sh\n[ -x "' + bin + '/$1" ]\n'); chmodSync(which, 0o755);
+  const invoke = () => {
+   const source = `import goQualityTool, { runGoQuality } from ${JSON.stringify(import.meta.dir + "/go-quality-tool.ts")}; console.log(JSON.stringify(runGoQuality("check", ${JSON.stringify(dir)})));`;
+   const proc = Bun.spawnSync([process.execPath, "-e", source], { env: { ...process.env, PATH: bin }, stdout: "pipe", stderr: "pipe", timeout: 10000 });
+   expect(proc.exitCode).toBe(0);
+   return JSON.parse(proc.stdout.toString());
+  };
+  expect(invoke().ok).toBe(false);
+  const tool = join(bin, "gofmt");
+  writeFileSync(tool, "#!/bin/sh\nexit 0\n"); chmodSync(tool, 0o755);
+  const partial = invoke();
+  expect(partial.ok).toBe(false); expect(partial.complete).toBe(false);
+  writeFileSync(tool, "#!/bin/sh\necho failure >&2\nexit 7\n");
+  const failed = invoke();
+  expect(failed.ok).toBe(false);
+  expect(failed.steps.some((step: { status: string }) => step.status === "fail")).toBe(true);
+ } finally { rmSync(dir, { recursive: true, force: true }); }
+});
 
 function fakeZod(): { zod: unknown } {
 	const chain: Record<string, unknown> = {};
@@ -15,44 +51,6 @@ function fakeZod(): { zod: unknown } {
 	return { zod: chain };
 }
 
-describe("runGoQuality unit", () => {
-	test("empty dir skips all steps cleanly", () => {
-		const dir = mkdtempSync(join(tmpdir(), "goq-"));
-		const report = runGoQuality("check", dir);
-		expect(report.ok).toBe(true);
-		expect(report.steps.every((s) => s.status === "skip")).toBe(true);
-	});
-
-	test("fix mode only reports gofmt", () => {
-		const dir = mkdtempSync(join(tmpdir(), "goq-"));
-		const report = runGoQuality("fix", dir);
-		expect(report.steps.every((s) => s.name.includes("gofmt"))).toBe(true);
-	});
-});
-
-describe("go_quality integration", () => {
-	test("execute check against empty dir", async () => {
-		const captured: Record<string, unknown> = {};
-		const fakePi = {
-			...fakeZod(),
-			registerTool: (d: Record<string, unknown>) => Object.assign(captured, d),
-			on: () => {},
-		};
-		goQualityTool(fakePi as never);
-		expect(captured.name).toBe("go_quality");
-		const dir = mkdtempSync(join(tmpdir(), "goq-int-"));
-		const execute = captured.execute as (
-			id: string,
-			params: { mode: "check" | "fix"; path?: string },
-			signal: undefined,
-			onUpdate: undefined,
-			ctx: { cwd: string },
-		) => Promise<{ content: { type: string; text: string }[]; details: { ok: boolean; steps: unknown[] } }>;
-		const result = await execute("t1", { mode: "check", path: dir }, undefined, undefined, { cwd: dir });
-		expect(result.content[0]?.type).toBe("text");
-		expect(result.details.ok).toBe(true);
-		expect(Array.isArray(result.details.steps)).toBe(true);
-	});
 
 	test("missing path returns structured error", async () => {
 		const captured: Record<string, unknown> = {};
@@ -79,4 +77,3 @@ describe("go_quality integration", () => {
 		expect(result.details.ok).toBe(false);
 		expect(result.details.error).toBe("missing_path");
 	});
-});

@@ -162,11 +162,11 @@ describe("decideToolCall", () => {
 
 describe("integration", () => {
 	const wire = () => {
-		const handlers: Record<string, Array<(e: Record<string, unknown>) => unknown>> = {};
+		const handlers: Record<string, Array<(e: Record<string, unknown>, ctx?: { cwd: string }) => unknown>> = {};
 		migrationEditGate({
 			zod: {},
 			registerTool: () => {},
-			on: (event: string, handler: (e: Record<string, unknown>) => unknown) => {
+			on: (event: string, handler: (e: Record<string, unknown>, ctx?: { cwd: string }) => unknown) => {
 				(handlers[event] ??= []).push(handler);
 			},
 		} as never);
@@ -191,6 +191,17 @@ describe("integration", () => {
 				input: { path: join(root, "migrations", "0002_add.sql"), content: "SELECT 2;" },
 			}),
 		).toBeUndefined();
+	});
+
+	test("relative migration edits use session and input cwd", () => {
+		const root = repo(["0001_init.sql", "0002_add.sql"]);
+		const handler = wire().tool_call![0]!;
+		expect(handler({ toolName: "write", input: { path: "migrations/0001_init.sql" } }, { cwd: root }))
+			.toEqual(expect.objectContaining({ block: true }));
+		expect(handler({ toolName: "write", input: { cwd: root, path: "migrations/0001_init.sql" } }, { cwd: "/tmp" }))
+			.toEqual(expect.objectContaining({ block: true }));
+		expect(handler({ toolName: "constructor", input: { path: "migrations/0001_init.sql" } }, { cwd: root }))
+			.toBeUndefined();
 	});
 
 	test("handler swallows malformed events", () => {

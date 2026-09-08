@@ -14,6 +14,7 @@ export type StepResult = {
 
 export type QualityReport = {
 	ok: boolean;
+	complete: boolean;
 	cwd: string;
 	mode: QualityMode;
 	steps: StepResult[];
@@ -37,8 +38,8 @@ function run(
 		});
 		return {
 			exitCode: proc.exitCode,
-			stdout: proc.stdout.toString(),
-			stderr: proc.stderr.toString(),
+			stdout: proc.stdout.toString().slice(0, 16_384),
+			stderr: proc.stderr.toString().slice(0, 16_384),
 		};
 	} catch (err) {
 		return {
@@ -76,21 +77,10 @@ function record(
 	});
 }
 
-type Runner = "pnpm" | "bun" | "npx" | "global";
-
-function pickRunner(): Runner | null {
-	if (have("pnpm")) return "pnpm";
-	if (have("bun")) return "bun";
-	if (have("npx")) return "npx";
-	if (have("biome") || have("tsc") || have("eslint")) return "global";
-	return null;
-}
-
-function wrap(runner: Runner, argv: string[]): string[] {
-	if (runner === "pnpm") return ["pnpm", "exec", ...argv];
-	if (runner === "bun") return ["bunx", ...argv];
-	if (runner === "npx") return ["npx", "--yes", ...argv];
-	return argv;
+function installed(bin: string, cwd: string): string | null {
+	const local = join(cwd, "node_modules", ".bin", bin);
+	if (existsSync(local)) return local;
+	return have(bin) ? bin : null;
 }
 
 export function runTypescriptQuality(mode: QualityMode, cwd: string): QualityReport {
@@ -99,54 +89,28 @@ export function runTypescriptQuality(mode: QualityMode, cwd: string): QualityRep
 		steps.push({ name: "biome", status: "skip", detail: "no package.json" });
 		steps.push({ name: "tsc", status: "skip", detail: "no package.json" });
 		steps.push({ name: "eslint", status: "skip", detail: "no package.json" });
-		return { ok: true, cwd, mode, steps };
+		return { ok: false, complete: false, cwd, mode, steps };
 	}
 
-	const runner = pickRunner();
-	if (!runner) {
-		steps.push({
-			name: "biome/eslint/tsc",
-			status: "skip",
-			detail: "no pnpm/bun/npx or global biome/eslint/tsc",
-		});
-		return { ok: true, cwd, mode, steps };
-	}
-
-	const biomeAvail = runner !== "global" || have("biome");
-	const tscAvail = runner !== "global" || have("tsc");
-	const eslintAvail = have("eslint");
-
-	if (mode === "fix") {
-		if (biomeAvail) {
-			record(steps, "biome check --write", run(wrap(runner, ["biome", "check", "--write", "."]), cwd));
-		} else {
-			steps.push({ name: "biome check --write", status: "skip", detail: "biome not available" });
-		}
-		if (!biomeAvail && eslintAvail) {
-			record(steps, "eslint --fix", run(wrap(runner, ["eslint", ".", "--fix"]), cwd));
-		} else if (!biomeAvail) {
-			steps.push({ name: "eslint --fix", status: "skip", detail: "eslint not available" });
-		}
+	const biome = installed("biome", cwd);
+	const eslint = installed("eslint", cwd);
+	const tsc = installed("tsc", cwd);
+	const lint = biome ?? eslint;
+	if (lint) {
+		const args = biome
+			? ["check", ...(mode === "fix" ? ["--write"] : []), "."]
+			: [".", ...(mode === "fix" ? ["--fix"] : [])];
+		record(steps, biome ? "biome" : "eslint", run([lint, ...args], cwd));
 	} else {
-		if (biomeAvail) {
-			record(steps, "biome check", run(wrap(runner, ["biome", "check", "."]), cwd));
-		} else {
-			steps.push({ name: "biome check", status: "skip", detail: "biome not available" });
-			if (eslintAvail) {
-				record(steps, "eslint", run(wrap(runner, ["eslint", "."]), cwd));
-			} else {
-				steps.push({ name: "eslint", status: "skip", detail: "eslint not available" });
-			}
-		}
-		if (tscAvail) {
-			record(steps, "tsc --noEmit", run(wrap(runner, ["tsc", "--noEmit"]), cwd));
-		} else {
-			steps.push({ name: "tsc --noEmit", status: "skip", detail: "tsc not available" });
-		}
+		steps.push({ name: "biome/eslint", status: "skip", detail: "no installed biome or eslint" });
 	}
-
-	const ok = steps.every((s) => s.status !== "fail");
-	return { ok, cwd, mode, steps };
+	if (mode === "check") {
+		if (tsc) record(steps, "tsc --noEmit", run([tsc, "--noEmit"], cwd));
+		else steps.push({ name: "tsc --noEmit", status: "skip", detail: "no installed tsc" });
+	}
+	const complete = steps.length > 0 && steps.every((s) => s.status !== "skip");
+	const ok = complete && steps.every((s) => s.status === "pass");
+	return { ok, complete, cwd, mode, steps };
 }
 
 export default function typescriptQualityTool(pi: ExtensionAPI): void {
@@ -155,7 +119,7 @@ export default function typescriptQualityTool(pi: ExtensionAPI): void {
 		name: "typescript_quality",
 		label: "TypeScript quality",
 		description:
-			"Run biome/eslint and tsc (check) or biome --write (fix). Missing tools and missing package.json are skipped.",
+			"Run installed biome/eslint and tsc (check) or biome/eslint fixes (fix), without downloads. Missing projects or tools produce incomplete, unsuccessful reports.",
 		parameters: z.object({
 			mode: z.enum(["check", "fix"]).describe("check: biome/eslint + tsc --noEmit; fix: biome check --write"),
 			path: z.string().optional().describe("Project cwd; defaults to session cwd"),

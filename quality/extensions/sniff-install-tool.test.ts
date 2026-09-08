@@ -1,27 +1,10 @@
-import { afterAll, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { describe, expect, test } from "bun:test";
+import { runSniffInstall } from "./sniff-install-tool.ts";
+import { chmodSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import sniffInstallTool, { runSniffInstall } from "./sniff-install-tool.ts";
 
-const temps: string[] = [];
 
-afterAll(() => {
-	for (const d of temps) rmSync(d, { recursive: true, force: true });
-});
-
-function fakeZod(): { zod: unknown } {
-	const chain: Record<string, unknown> = {};
-	const self = () => chain;
-	chain.string = self;
-	chain.optional = self;
-	chain.describe = self;
-	chain.object = self;
-	chain.enum = self;
-	chain.array = self;
-	chain.boolean = self;
-	return { zod: chain };
-}
 
 describe("runSniffInstall", () => {
 	test("list mode enumerates every bundle", () => {
@@ -72,49 +55,29 @@ describe("runSniffInstall", () => {
 		expect(result.report).toContain('unknown bundle "nope"');
 	});
 
-	test(
-		"dry-run install core prints commands without requiring success",
-		() => {
-			const dir = mkdtempSync(join(tmpdir(), "sniff-install-"));
-			temps.push(dir);
-			const result = runSniffInstall({
-				mode: "install",
-				bundles: ["core"],
-				dryRun: true,
-				noMise: true,
-				cwd: dir,
-			});
-			expect(result.ok).toBe(true);
-			expect(result.report).toContain("(dry run — no changes will be made)");
-			expect(result.report).toContain("[core]");
-		},
-		20_000,
-	);
+	test("prototype names are not bundle names", () => {
+		for (const bundle of ["constructor", "toString", "__proto__"]) {
+			expect(runSniffInstall({ mode: "install", bundles: [bundle] }).ok).toBe(false);
+		}
+	});
+
 });
 
-describe("sniff_install_tools integration", () => {
-	test("registers and execute list mode", async () => {
-		const captured: {
-			name?: string;
-			execute?: (
-				id: string,
-				params: { mode?: string },
-				signal: undefined,
-				onUpdate: undefined,
-				ctx: { cwd: string },
-			) => Promise<{ content: Array<{ type: string; text: string }>; details: { ok: boolean } }>;
-		} = {};
-		const fakePi = {
-			...fakeZod(),
-			registerTool: (d: typeof captured) => Object.assign(captured, d),
-			on: () => {},
-		};
-		sniffInstallTool(fakePi as never);
-		expect(captured.name).toBe("sniff_install_tools");
-		const dir = mkdtempSync(join(tmpdir(), "sniff-int-"));
-		temps.push(dir);
-		const out = await captured.execute!("id", { mode: "list" }, undefined, undefined, { cwd: dir });
-		expect(out.details.ok).toBe(true);
-		expect(out.content[0]?.text).toContain("[core]");
-	});
+test("failed installer exits are not successful installation", () => {
+	const dir = mkdtempSync(join(tmpdir(), "sniff-fake-"));
+	try {
+		symlinkSync("/bin/sh", join(dir, "sh"));
+		const mise = join(dir, "mise");
+		writeFileSync(mise, "#!/bin/sh\necho installation-failed >&2\nexit 7\n");
+		chmodSync(mise, 0o755);
+		const source = `import { runSniffInstall } from ${JSON.stringify(import.meta.dir + "/sniff-install-tool.ts")}; console.log(JSON.stringify(runSniffInstall({ mode: "install", bundles: ["core"], cwd: ${JSON.stringify(dir)} })));`;
+		const proc = Bun.spawnSync([process.execPath, "-e", source], { env: { ...process.env, PATH: dir }, stdout: "pipe", stderr: "pipe", timeout: 10000 });
+		expect(proc.exitCode).toBe(0);
+		const result = JSON.parse(proc.stdout.toString());
+		expect(result.ok).toBe(false);
+		expect(result.report).toContain("exit 7");
+	} finally {
+		rmSync(dir, { recursive: true, force: true });
+	}
 });
+

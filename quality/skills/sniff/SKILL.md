@@ -9,10 +9,11 @@ Audit code for smells and non-idiomatic patterns, then produce a prioritized,
 adversarially-vetted refactoring plan. Advisory by default -- code is edited
 **only** on explicit user approval (see step 7).
 
-## ⛔ STOP -- two questions before you touch the code
+## Approval gates
 
-Do NOT detect the stack, run a tool, or dispatch a `bloodhound` until BOTH are
-answered. These are blocking gates, not preferences.
+Target resolution, stack detection, configuration reads, and read-only availability
+probes are allowed before tool-set approval. Do not install tools, run substantive
+scans, or dispatch a `bloodhound` until target and tool-set approval are established.
 
 1. **Which target?** If the user did not explicitly name one, ask in **two steps**:
    - **Step 1a -- pick the target KIND.** Offer every time:
@@ -31,9 +32,9 @@ answered. These are blocking gates, not preferences.
    missing default-on tool and run all. A missing default-on tool is an install, or a
    recorded coverage gap if the user declines.
 
-Only exception: a **non-interactive** run (CI / sub-agent with no user to ask). Then
-skip the prompts, use the named target or whole-repo, proceed with installed tools, and
-record gaps.
+For a **non-interactive** run, use the target and installed tool set explicitly
+authorized by the user or delegated brief; record gaps and never install tools.
+Missing scope or tool-set authorization remains blocked; unavailability is not consent.
 
 This SKILL is a router. Load the referenced file for each step; do not inline its content.
 
@@ -52,9 +53,9 @@ Run in order. Full procedure is in `skill://sniff/references/workflow.md` -- LOA
    present in the target and map each to `skill://sniff/references/languages/index.md`.
 2. **Probe & propose the full tool set (mandatory blocking checkpoint, interactive runs).**
    Run `sniff_install_tools` (mode `probe`), enumerate every viable tool per detected
-   language as a tiered table. **Stop and wait.** Non-interactive runs skip the prompt.
+   language as a tiered table. **Stop and wait** unless the brief already authorizes that set.
    See `skill://sniff/references/tooling.md` + `skill://sniff/references/installer.md`.
-   - **2.5. Inventory project lint config FIRST.** Before running any tool, find and read
+   - **2.5. Inventory project lint config FIRST.** Before substantive scans, find and read
      every config that governs it. **Honor it** -- a rule the project disabled is advisory
      at most, never a regression. See `skill://sniff/references/workflow.md` Step 2.5.
 3. **Tool-driven detection.** For each detected language, run installed tools per

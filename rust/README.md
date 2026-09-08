@@ -4,35 +4,29 @@ Rust crate, workspace, and quality conventions for OMP.
 
 ## Skills
 
-- `rust-quality` — cargo fmt, clippy, and test checks (`skill://rust-quality/scripts/check.sh`, `skill://rust-quality/scripts/fix.sh`).
-
-## Agents
-
-None.
+- `rust-quality`: cargo fmt, clippy, and test checks through `rust_quality`.
 
 ## Rules
 
-
-- `rust-crate-boundaries` — crate splits, facades, adapters
-- `rust-domain-modeling` — thiserror, UUID v5, serde newtypes
-- `rust-contract-boundary` — generated bindings and wire casing
-- `rust-safe-mutation` — plan/approve/apply and CAS
-- `rust-ci` — rust-cache, ci-gate, attestation
-- `rust-persistence` — sqlx, migrations, transactional CAS
-- `rust-workspace` — workspace lints and layered tests
-- `rust-errors` — wire error-code registry and audit
-- `rust-tauri` — Tauri v2 bundles, updater, WebDriver
-- `rust-tauri-mcp-bridge` — driving a running Tauri app over the MCP bridge
-- `rust-cargo-install-advisory` — `cargo install` compiles from source (TTSR)
-- `rust-no-canonicalize` — `canonicalize` defeats a lexical containment check (TTSR)
-- `rust-rustflags-linker` — a linker in `RUSTFLAGS` invalidates the rust-cache key (TTSR)
+- `rust-crate-boundaries`: crate splits, facades, adapters.
+- `rust-domain-modeling`: thiserror, UUID v5, serde newtypes.
+- `rust-contract-boundary`: generated bindings and wire casing.
+- `rust-safe-mutation`: plan/approve/apply and CAS.
+- `rust-ci`: rust-cache, ci-gate, attestation.
+- `rust-persistence`: sqlx, migrations, transactional CAS.
+- `rust-workspace`: workspace lints and layered tests.
+- `rust-errors`: wire error-code registry and audit.
+- `rust-tauri`: Tauri v2 bundles, updater, WebDriver.
+- `rust-tauri-mcp-bridge`: driving a running Tauri app over the MCP bridge.
+- `rust-cargo-install-advisory`: `cargo install` compiles from source (TTSR).
+- `rust-rustflags-linker`: a linker in `RUSTFLAGS` invalidates the rust-cache key (TTSR).
 
 ## Tools
 
-Registered by this plugin's extension modules:
+The plugin's extension modules register `rust_quality`.
 
-- `rust_quality`
+Missing projects or requested tools produce `ok: false, complete: false`; skipped checks are not a PASS.
 
 ## Extensions
 
-- `migration-edit-gate` — blocks edits to a committed migration; the latest one in the directory stays editable
+- `migration-edit-gate`: blocks edits to a committed migration; the latest one in the directory stays editable.

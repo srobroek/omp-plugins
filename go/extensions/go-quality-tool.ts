@@ -14,6 +14,7 @@ export type StepResult = {
 
 export type QualityReport = {
 	ok: boolean;
+	complete: boolean;
 	cwd: string;
 	mode: QualityMode;
 	steps: StepResult[];
@@ -37,8 +38,8 @@ function run(
 		});
 		return {
 			exitCode: proc.exitCode,
-			stdout: proc.stdout.toString(),
-			stderr: proc.stderr.toString(),
+			stdout: proc.stdout.toString().slice(0, 16_384),
+			stderr: proc.stderr.toString().slice(0, 16_384),
 		};
 	} catch (err) {
 		return {
@@ -69,7 +70,7 @@ export function runGoQuality(mode: QualityMode, cwd: string): QualityReport {
 			steps.push({ name: "golangci-lint", status: "skip", detail: "no go.mod" });
 			steps.push({ name: "go test", status: "skip", detail: "no go.mod" });
 		}
-		return { ok: true, cwd, mode, steps };
+		return { ok: false, complete: false, cwd, mode, steps };
 	}
 
 
@@ -145,8 +146,9 @@ export function runGoQuality(mode: QualityMode, cwd: string): QualityReport {
 		}
 	}
 
-	const ok = steps.every((s) => s.status !== "fail");
-	return { ok, cwd, mode, steps };
+	const complete = steps.length > 0 && steps.every((s) => s.status !== "skip");
+	const ok = complete && steps.every((s) => s.status === "pass");
+	return { ok, complete, cwd, mode, steps };
 }
 
 export default function goQualityTool(pi: ExtensionAPI): void {
@@ -155,7 +157,7 @@ export default function goQualityTool(pi: ExtensionAPI): void {
 		name: "go_quality",
 		label: "Go quality",
 		description:
-			"Run Go format/lint/test (check) or gofmt -w (fix). Missing binaries are skipped.",
+			"Run Go format/lint/test (check) or gofmt -w (fix). Missing projects or requested tools produce incomplete, unsuccessful reports.",
 		parameters: z.object({
 			mode: z.enum(["check", "fix"]).describe("check: gofmt -l, golangci-lint, go test; fix: gofmt -w"),
 			path: z.string().optional().describe("Project cwd; defaults to session cwd"),

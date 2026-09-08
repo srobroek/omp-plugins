@@ -80,29 +80,27 @@ in prose, config, or dependency lists.
 Then identify every language and format present in the reduced set and the config
 that governs each (e.g. `Cargo.toml`, `go.mod`, `tsconfig.json`, `pyproject.toml`,
 `.eslintrc*`, `.golangci.yml`, `.tflint.hcl`, and `.editorconfig` for
-indent/line-length). A format counts as **detected** only if it carries
-logic/contract/config a language doc targets -- pure-data JSON, prose Markdown,
-and a metadata-only `package.json` (no JS/TS source) are NOT a detected stack.
-Use `references/languages/index.md` to map each detected language to its doc.
+indent/line-length). Use `references/languages/index.md` to determine supported
+targets from the reduced first-party files, then load each matching doc.
+Config, data, contracts, infrastructure, and Markdown are first-class targets;
+a metadata-only `package.json` detects JSON, not JS/TS without JS/TS source.
 
-**Empty-set early-exit (do NOT skip).** If reduction leaves no files in a
-sniffable *source* language -- a docs-only / config-only / tooling-only target, or
-a pure-deletion diff -- **STOP and report** e.g. "target reduced to N config/
-generated files, no source code in scope -- nothing to sniff." Do **not** fall
-back to whole-repo (that violates the chosen scope), and do **not** analyze
-generated/tooling files to manufacture findings. This is the most common
-fresh-agent trap on chore/migration/docs-only diffs.
+**Empty-set early-exit (do NOT skip).** STOP only when the reduced set contains
+no supported first-party target (for example, a pure-deletion diff or only
+excluded vendor/generated files). Report the exclusions and unsupported files.
+Do not fall back to whole-repo or analyze excluded files to manufacture findings.
+Config-only and docs-only targets supported by the index continue to Step 2's
+explicit scope/tool approval; detection does not authorize scans or installation.
 
 **Report:** first-party file count (with what was excluded), the detected stack,
 and which language docs you will use.
 
 ## Step 2 -- Probe and offer tools
 
-**Non-interactive runs (no user to prompt -- CI, a sub-agent, an automated
-invocation): never install and never block on a menu.** Run `--probe`, use the
-tools that are already usable, and record every missing tool as a coverage gap.
-The install menu below is interactive-only. (A tool reported `SHIM`/unrunnable by
-the probe counts as missing -- do not try to use it.)
+**Non-interactive runs:** probe without installing. Proceed only within the
+scope and tool set explicitly delegated by the user or an authorized parent.
+If either is missing, report the unresolved approval and stop before scanning.
+Record missing or `SHIM`/unrunnable tools as coverage gaps; do not use them.
 
 The interactive flow -- **mandatory, blocking checkpoint. Do NOT begin detection
 (Step 3) until the user has confirmed the tool set.** The model is **propose the
@@ -110,7 +108,7 @@ full thorough set, user deselects** -- NOT "pick a depth" and NOT "the installed
 tools looked adequate". Every viable tool for the detected stack is pre-selected
 ON by default; the user trims, they don't opt in.
 
-1. Run `scripts/install-tools.sh --probe`.
+1. Run `sniff_install_tools` with `{"mode":"probe"}`.
 2. **Enumerate EVERY viable tool for each detected TARGET** -- this means every
    programming language AND every config/format/contract/infra target present:
    Terraform, Dockerfile, Kubernetes manifests, CI workflows, OpenAPI, GraphQL,
@@ -137,10 +135,14 @@ ON by default; the user trims, they don't opt in.
      JS/TS complexity+dup, so lizard/jscpd add nothing here").
 4. **STOP and wait.** Default action if the user just says "go" = install every
    missing **default-on** tool and run the full set. The user may deselect any
-   ("skip type-coverage") or enable an opt-in ("add cargo-udeps"). Install with
-   `install-tools.sh --install <bundle>...`. **Never auto-install without the
-   confirmation; never silently drop a default-on tool.** If the user declines an
-   install, proceed without it and record the **coverage gap** in the report.
+   ("skip type-coverage") or enable an opt-in ("add cargo-udeps").
+   Use `sniff_install_tools` with `{"mode":"list"}` to inspect bundle membership;
+   install an entirely approved bundle with
+   `{"mode":"install","bundles":["<bundle>"],"path":"<repo-root>"}`.
+   A bundle installs ALL members, including opt-ins: for a subset use only the
+   individually approved install commands from the list (see `installer.md`).
+   **Never auto-install without confirmation or silently drop a default-on
+   tool.** A declined install becomes a reported coverage gap.
 
 **Report:** the resolved tool set per language (on / opt-in-skipped / gap), so the
 coverage section is honest about what ran. If you reach Step 3 without having
@@ -248,8 +250,9 @@ none).
 2. **Show the proposed plan** -- e.g. `Rust 29k LOC/141 files → 3 hounds (core /
    cli / gui); Vue+TS 7k/63 → 1 hound`. State the file/LOC basis.
 3. **Let the user adjust** -- more/fewer hounds, a different split, or "just
-   inline it". Accept their change; then spawn. (Non-interactive runs skip the
-   confirmation and use the computed default.)
+   inline it". Accept their change; then spawn. Unattended runs may use the
+   computed split only when the delegated task authorizes fan-out; otherwise
+   read inline.
 
 When you fan out: build each Brief from `skill://sniff/references/scout-brief.md` -- pass the
 **resolved target file list** (and the isolated checkout path, for ref targets) as the

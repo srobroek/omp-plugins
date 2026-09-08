@@ -1,56 +1,41 @@
-import { describe, expect, test } from "bun:test";
-import { mkdtempSync } from "node:fs";
+import { expect, test } from "bun:test";
+import { chmodSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import rustQualityTool, { runRustQuality } from "./rust-quality-tool.ts";
+import { runRustQuality } from "./rust-quality-tool.ts";
 
-function fakeZod(): { zod: unknown } {
-	const chain: Record<string, unknown> = {};
-	const self = () => chain;
-	chain.string = self;
-	chain.optional = self;
-	chain.describe = self;
-	chain.object = self;
-	chain.enum = self;
-	return { zod: chain };
-}
-
-describe("runRustQuality unit", () => {
-	test("empty dir skips all steps cleanly", () => {
-		const dir = mkdtempSync(join(tmpdir(), "rsq-"));
-		const report = runRustQuality("check", dir);
-		expect(report.ok).toBe(true);
-		expect(report.steps.every((s) => s.status === "skip")).toBe(true);
-	});
-
-	test("fix mode only cargo fmt", () => {
-		const dir = mkdtempSync(join(tmpdir(), "rsq-"));
-		const report = runRustQuality("fix", dir);
-		expect(report.steps.every((s) => s.name.includes("fmt"))).toBe(true);
-	});
+test("missing project cannot report successful verification or repair", () => {
+ const dir = mkdtempSync(join(tmpdir(), "rust-quality-"));
+ try {
+  for (const mode of ["check", "fix"] as const) {
+   const report = runRustQuality(mode, dir);
+   expect(report.ok).toBe(false);
+   expect(report.complete).toBe(false);
+  }
+ } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
-describe("rust_quality integration", () => {
-	test("execute check against empty dir", async () => {
-		const captured: Record<string, unknown> = {};
-		const fakePi = {
-			...fakeZod(),
-			registerTool: (d: Record<string, unknown>) => Object.assign(captured, d),
-			on: () => {},
-		};
-		rustQualityTool(fakePi as never);
-		expect(captured.name).toBe("rust_quality");
-		const dir = mkdtempSync(join(tmpdir(), "rsq-int-"));
-		const execute = captured.execute as (
-			id: string,
-			params: { mode: "check" | "fix"; path?: string },
-			signal: undefined,
-			onUpdate: undefined,
-			ctx: { cwd: string },
-		) => Promise<{ content: { type: string; text: string }[]; details: { ok: boolean; steps: unknown[] } }>;
-		const result = await execute("t1", { mode: "check", path: dir }, undefined, undefined, { cwd: dir });
-		expect(result.content[0]?.type).toBe("text");
-		expect(result.details.ok).toBe(true);
-		expect(Array.isArray(result.details.steps)).toBe(true);
-	});
+test("missing requested tools and command failures cannot pass", () => {
+ const dir = mkdtempSync(join(tmpdir(), "rust-quality-"));
+ try {
+  const bin = join(dir, "bin"); mkdirSync(bin);
+  writeFileSync(join(dir, "Cargo.toml"), '[package]\nname="fixture"\nversion="0.0.0"\n');
+  const which = join(bin, "which");
+  writeFileSync(which, '#!/bin/sh\n[ -x "' + bin + '/$1" ]\n'); chmodSync(which, 0o755);
+  const invoke = () => {
+   const source = `import { runRustQuality } from ${JSON.stringify(import.meta.dir + "/rust-quality-tool.ts")}; console.log(JSON.stringify(runRustQuality("check", ${JSON.stringify(dir)})));`;
+   const proc = Bun.spawnSync([process.execPath, "-e", source], { env: { ...process.env, PATH: bin }, stdout: "pipe", stderr: "pipe", timeout: 10000 });
+   expect(proc.exitCode).toBe(0);
+   return JSON.parse(proc.stdout.toString());
+  };
+  expect(invoke().ok).toBe(false);
+  const tool = join(bin, "cargo");
+  writeFileSync(tool, "#!/bin/sh\nexit 0\n"); chmodSync(tool, 0o755);
+  const partial = invoke();
+  expect(partial.ok).toBe(true);
+  writeFileSync(tool, "#!/bin/sh\necho failure >&2\nexit 7\n");
+  const failed = invoke();
+  expect(failed.ok).toBe(false);
+  expect(failed.steps.some((step: { status: string }) => step.status === "fail")).toBe(true);
+ } finally { rmSync(dir, { recursive: true, force: true }); }
 });
