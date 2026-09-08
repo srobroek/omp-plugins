@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.1.2](https://github.com/srobroek/omp-plugins/compare/session--v1.1.1...session--v1.1.2) (2026-09-08)
+
+
+### Bug Fixes
+
+* **session:** stream bounded handoffs from native session stores ([#73](https://github.com/srobroek/omp-plugins/issues/73)) ([b910e8b](https://github.com/srobroek/omp-plugins/commit/b910e8b2785356dd5f8d7173ea72bfb33d5a3e99))
+
 ## [Unreleased]
 
 ### Changed

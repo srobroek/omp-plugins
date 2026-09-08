@@ -21,7 +21,7 @@
   "quality": "1.0.0",
   "rust": "0.6.1",
   "safety": "0.5.1",
-  "session": "1.1.1",
+  "session": "1.1.2",
   "speckit": "0.6.1",
   "toolchain": "0.3.2",
   "typescript": "0.3.1",
