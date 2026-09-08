@@ -3,7 +3,7 @@
 
 Subcommands:
   index <journeys-dir>              Regenerate INDEX.md from journey files.
-  lint  <journeys-dir>              Validate structure; exit 1 on errors.
+  lint  <journeys-dir>              Validate structure, not semantic readiness.
   prune <journeys-dir> --keep N     Prune runs/ to the newest N per journey
                                     (dry-run unless --yes).
 
@@ -55,6 +55,34 @@ def parse_frontmatter(text: str) -> dict:
     return {}  # unterminated frontmatter
 
 
+def safe_path(path: Path) -> None:
+    absolute = path.absolute()
+    for parent in [*reversed(absolute.parents), absolute]:
+        if parent.is_symlink():
+            raise ValueError(f"unsafe symlink: {parent}")
+
+
+def safe_journey_paths(root: Path) -> None:
+    safe_path(root)
+    safe_path(root / "INDEX.md")
+    safe_path(root / "TRACKER.md")
+    for directory in root.iterdir():
+        safe_path(directory)
+        if not directory.is_dir():
+            continue
+        safe_path(directory / "journey.md")
+        runs = directory / "runs"
+        safe_path(runs)
+        if not runs.exists():
+            continue
+        if not runs.is_dir():
+            raise ValueError(f"not a runs directory: {runs}")
+        for run in runs.glob("*.md"):
+            safe_path(run)
+            if not run.is_file():
+                raise ValueError(f"not a run file: {run}")
+
+
 def journey_dirs(root: Path) -> list[Path]:
     return sorted(d for d in root.iterdir() if d.is_dir() and (d / "journey.md").exists())
 
@@ -83,6 +111,7 @@ def open_findings(root: Path) -> dict:
 
 
 def cmd_index(root: Path) -> int:
+    safe_journey_paths(root)
     rows = []
     findings = open_findings(root)
     for jdir in journey_dirs(root):
@@ -189,6 +218,7 @@ def lint_journey(jdir: Path, errors: list[str], seen_ids: dict) -> None:
 
 
 def cmd_lint(root: Path) -> int:
+    safe_journey_paths(root)
     errors: list[str] = []
     seen: dict = {}
     dirs = journey_dirs(root)
@@ -198,13 +228,22 @@ def cmd_lint(root: Path) -> int:
         lint_journey(jdir, errors, seen)
     for err in errors:
         print(f"ERROR {err}")
-    print(f"lint: {len(dirs)} journeys, {len(errors)} errors")
+    print(f"structural lint: {len(dirs)} journeys, {len(errors)} errors; semantic readiness not assessed")
     return 1 if errors else 0
 
 
-def cmd_prune(root: Path, keep: int, yes: bool) -> int:
+def cmd_prune(root: Path, keep: int, yes: bool, journey: str | None = None) -> int:
+    if type(keep) is not int or keep < 0 or keep > 9007199254740991:
+        print("keep must be a finite nonnegative safe integer", file=sys.stderr)
+        return 2
+    safe_journey_paths(root)
     doomed: list[Path] = []
-    for jdir in journey_dirs(root):
+    dirs = journey_dirs(root)
+    selected = dirs if journey is None else [jdir for jdir in dirs if jdir.name == journey]
+    if journey is not None and len(selected) != 1:
+        print(f"unknown journey directory: {journey}", file=sys.stderr)
+        return 2
+    for jdir in selected:
         runs = sorted((jdir / "runs").glob("*.md")) if (jdir / "runs").is_dir() else []
         doomed.extend(runs[:-keep] if keep else runs)
     for path in doomed:
@@ -224,16 +263,21 @@ def main(argv: list[str] | None = None) -> int:
         if name == "prune":
             p.add_argument("--keep", type=int, default=20)
             p.add_argument("--yes", action="store_true")
+            p.add_argument("--journey", help="selected journey directory name; omit only for an explicitly authorized directory-wide prune")
     args = ap.parse_args(argv)
-    root = args.journeys_dir.resolve()
+    root = args.journeys_dir.absolute()
     if not root.is_dir():
         print(f"not a directory: {root}", file=sys.stderr)
         return 2
-    if args.cmd == "index":
-        return cmd_index(root)
-    if args.cmd == "lint":
-        return cmd_lint(root)
-    return cmd_prune(root, args.keep, args.yes)
+    try:
+        if args.cmd == "index":
+            return cmd_index(root)
+        if args.cmd == "lint":
+            return cmd_lint(root)
+        return cmd_prune(root, args.keep, args.yes, args.journey)
+    except (OSError, ValueError) as exc:
+        print(f"ERROR {exc}", file=sys.stderr)
+        return 2
 
 
 if __name__ == "__main__":
