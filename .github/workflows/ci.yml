@@ -21,7 +21,7 @@ jobs:
 
       - name: Install cargo-binstall
         if: ${{ github.event_name == 'pull_request' }}
-        uses: cargo-bins/cargo-binstall@b87425ea559687bec77e281e9b271aa1367b624 # v1.23.0
+        uses: cargo-bins/cargo-binstall@b874e25ea559687bec77e281e9b271aa1367b624 # v1.23.0
 
       - name: Install agnix
         if: ${{ github.event_name == 'pull_request' }}
