@@ -42,6 +42,10 @@ jobs:
           export GIT_INDEX_FILE="$index"
           git read-tree HEAD
           ./scripts/check-agnix-staged.sh
+
+      - name: Agnix hook regression cases
+        if: ${{ github.event_name == 'pull_request' }}
+        run: python3 scripts/test-agnix-hook.py
       # OMP identifies a skill, agent, rule, or command by its bare `name` and keeps
       # the first match across every source, so a duplicate name silently shadows the
       # other plugin. `omp plugin doctor` only inspects one installed plugin, so this
