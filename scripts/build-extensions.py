@@ -18,9 +18,11 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import shutil
 import subprocess
 import sys
 from pathlib import Path
+from tempfile import TemporaryDirectory
 
 REPO = Path(__file__).resolve().parent.parent
 
@@ -36,55 +38,72 @@ def plugins_with_deps() -> list[Path]:
 
 def sources(plugin: Path) -> list[Path]:
     data = json.loads((plugin / "package.json").read_text(encoding="utf-8"))
-    entries = data.get("omp", {}).get("extensions", [])
+    omp = data.get("omp", {})
+    if not isinstance(omp, dict) or not isinstance(omp.get("extensions", []), list):
+        raise ValueError(f"{plugin}: omp.extensions must be a list")
     out = []
-    for entry in entries:
-        # Both shapes are valid inputs: ./extensions/foo.ts (source) or ./dist/foo.js
-        # (already-wired bundle output whose source sits in extensions/).
-        name = Path(entry).stem
-        src = plugin / "extensions" / f"{name}.ts"
-        if src.is_file():
-            out.append(src)
+    for entry in omp.get("extensions", []):
+        if not isinstance(entry, str):
+            raise ValueError(f"{plugin}: unsupported extension entry {entry!r}")
+        path = Path(entry)
+        if (
+            path.is_absolute()
+            or len(path.parts) != 2
+            or (path.parts[0], path.suffix) not in {("extensions", ".ts"), ("dist", ".js")}
+            or not path.stem
+        ):
+            raise ValueError(f"{plugin}: unsupported extension entry {entry!r}")
+        src = plugin / "extensions" / f"{path.stem}.ts"
+        if not src.is_file():
+            raise ValueError(f"{plugin}: missing source for {entry!r}: {src}")
+        if src in out:
+            raise ValueError(f"{plugin}: duplicate extension source {src}")
+        out.append(src)
     return out
 
 
 def bundle(plugin: Path, write: bool) -> list[str]:
+    try:
+        declared = sources(plugin)
+    except (ValueError, OSError) as err:
+        return [str(err)]
+    if not declared:
+        return []
     problems: list[str] = []
-    subprocess.run(
-        ["bun", "install", "--silent"],
-        cwd=plugin,
-        check=True,
-        capture_output=True,
-        timeout=300,
-    )
-    for src in sources(plugin):
-        out_name = f"{src.stem}.js"
-        committed = plugin / "dist" / out_name
-        result = subprocess.run(
-            [
-                "bun", "build", "--target=bun", str(src),
-                "--outdir", str(plugin / ("dist" if write else ".dist-check")),
-                "--external", "@oh-my-pi/*",
-            ],
-            cwd=plugin,
-            capture_output=True,
-            text=True,
-            timeout=300,
-        )
-        if result.returncode != 0:
-            problems.append(f"{src}: bun build failed: {result.stderr.strip()[:200]}")
-            continue
+    with TemporaryDirectory(prefix="omp-dist-check-") as temporary:
+        working = plugin
         if not write:
-            fresh = plugin / ".dist-check" / out_name
-            if not committed.is_file():
-                problems.append(f"{committed.relative_to(REPO)}: missing; run scripts/build-extensions.py")
-            elif hashlib.sha256(committed.read_bytes()).digest() != hashlib.sha256(fresh.read_bytes()).digest():
-                problems.append(f"{committed.relative_to(REPO)}: stale; run scripts/build-extensions.py")
-    check_dir = plugin / ".dist-check"
-    if check_dir.is_dir():
-        for f in check_dir.iterdir():
-            f.unlink()
-        check_dir.rmdir()
+            working = Path(temporary) / plugin.name
+            shutil.copytree(
+                plugin, working,
+                ignore=shutil.ignore_patterns("node_modules", "dist", ".dist-check", ".git"),
+            )
+        subprocess.run(
+            ["bun", "install", "--frozen-lockfile", "--silent"],
+            cwd=working, check=True, capture_output=True, timeout=300,
+        )
+        for src in declared:
+            out_name = f"{src.stem}.js"
+            committed = plugin / "dist" / out_name
+            result = subprocess.run(
+                [
+                    "bun", "build", "--target=bun", str(working / src.relative_to(plugin)),
+                    "--outdir", str(working / "dist"),
+                    "--external", "@oh-my-pi/*",
+                ],
+                cwd=working, capture_output=True, text=True, timeout=300,
+            )
+            if result.returncode != 0:
+                problems.append(f"{src}: bun build failed: {result.stderr.strip()[:200]}")
+                continue
+            fresh = working / "dist" / out_name
+            if not fresh.is_file():
+                problems.append(f"{src}: bun build produced no {out_name}")
+            elif not write:
+                if not committed.is_file():
+                    problems.append(f"{committed}: missing; run scripts/build-extensions.py")
+                elif hashlib.sha256(committed.read_bytes()).digest() != hashlib.sha256(fresh.read_bytes()).digest():
+                    problems.append(f"{committed}: stale; run scripts/build-extensions.py")
     return problems
 
 
@@ -100,9 +119,13 @@ def main() -> int:
 
     problems: list[str] = []
     for plugin in targets:
-        problems += bundle(plugin, write=not args.check)
-        if not args.check:
-            print(f"bundled {plugin.name}: {[s.name for s in sources(plugin)]}")
+        try:
+            plugin_problems = bundle(plugin, write=not args.check)
+        except (OSError, ValueError, subprocess.SubprocessError) as err:
+            plugin_problems = [f"{plugin}: {err}"]
+        problems += plugin_problems
+        if not args.check and not plugin_problems:
+            print(f"bundled {plugin.name}")
 
     if problems:
         for p in problems:
