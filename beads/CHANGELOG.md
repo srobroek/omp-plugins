@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.1](https://github.com/srobroek/omp-plugins/compare/beads--v1.0.0...beads--v1.0.1) (2026-09-08)
+
+
+### Bug Fixes
+
+* **beads:** accept null empty gate lists ([#70](https://github.com/srobroek/omp-plugins/issues/70)) ([2b09895](https://github.com/srobroek/omp-plugins/commit/2b0989599a69f379ef02ca61678a6d75ae0d82ad))
+
 ## [1.0.0](https://github.com/srobroek/omp-plugins/compare/beads--v0.8.1...beads--v1.0.0) (2026-09-08)
 
 
