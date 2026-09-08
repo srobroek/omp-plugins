@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
+# Install this hook with ./scripts/install-agnix-hooks.sh.
 set -euo pipefail
 
 repo_root="$(git rev-parse --show-toplevel)"
-cd "$repo_root"
 
 same_hook() {
 	local candidate="$1"
@@ -15,7 +15,7 @@ same_hook() {
 	cmp -s -- "$candidate" "$current"
 }
 
-# Activation records the previous hook path in local Git config. If no path was
+# Installation records the previous hook path in worktree Git config. If no path was
 # configured, preserve the conventional common .git/hooks/pre-commit, including
 # linked worktrees whose per-worktree git dir has no hooks directory.
 previous_hooks="$(git config --get agnix.previousHooksPath || true)"
