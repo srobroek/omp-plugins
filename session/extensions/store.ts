@@ -1,56 +1,45 @@
-/**
- * Reading the OMP session store.
- *
- * `history://<id>` cannot address these sessions: it resolves only agents
- * registered in the *current* process, so a persisted top-level session from a
- * previous `omp` run is invisible to it. Reading the raw store is therefore
- * required — but the output is rendered as a normalized transcript (turn-shaped,
- * newest-first), never as a jsonl dump.
- *
- * See ../skills/resume-session/references/transcript-format.md for the record
- * schema this module relies on.
- */
+/** Selective handoffs from persisted top-level sessions, using native read-only APIs. */
 import { execFileSync } from "node:child_process";
-import { closeSync, constants, existsSync, fstatSync, openSync, opendirSync, readSync, realpathSync, statSync } from "node:fs";
+import { type Dir, type Dirent, existsSync, opendirSync, readdirSync, realpathSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, join } from "node:path";
+import type { FileEntry } from "@oh-my-pi/pi-coding-agent/session/session-entries";
+import { listSessionsReadOnly } from "@oh-my-pi/pi-coding-agent/session/session-listing";
+import { visitEntriesFromFileStream } from "@oh-my-pi/pi-coding-agent/session/session-loader";
+import { FileSessionStorage } from "@oh-my-pi/pi-coding-agent/session/session-storage";
 
+interface FileSnapshot {
+	size: number;
+	mtimeMs: number;
+	ctimeMs: number;
+}
+function isMissingFile(error: unknown): boolean {
+	if (typeof error !== "object" || error === null) return false;
+	const candidate = error as { code?: unknown };
+	return candidate.code === "ENOENT";
+}
+function snapshotFile(file: string): FileSnapshot {
+	const info = statSync(file);
+	if (!info.isFile()) throw new Error(`Transcript must be a regular file: ${file}`);
+	return { size: info.size, mtimeMs: info.mtimeMs, ctimeMs: info.ctimeMs };
+}
 
-const MAX_TRANSCRIPT_BYTES = 64 * 1024 * 1024;
-const MAX_STORE_ENTRIES = 20_000;
-const MAX_LIST_BYTES = 256 * 1024 * 1024;
-
-export function checkListingSize(files: string[]): void {
-	let bytes = 0;
-	for (const file of files) {
-		bytes += statSync(file).size;
-		if (bytes > MAX_LIST_BYTES) throw new Error(`Matching transcripts exceed ${MAX_LIST_BYTES} bytes. Use mode "read" with an explicit \`file\` or archive older sessions; listing metadata was not omitted.`);
+function assertUnchanged(file: string, before: FileSnapshot): void {
+	const after = snapshotFile(file);
+	if (after.size !== before.size || after.mtimeMs !== before.mtimeMs || after.ctimeMs !== before.ctimeMs) {
+		throw new Error(
+			`Transcript changed while being read: ${file}. Retry after the session stops writing; no partial result was returned.`,
+		);
 	}
 }
 
-function readRegular(file: string, limit: number, prefix = false): Buffer {
-	const fd = openSync(file, constants.O_RDONLY | constants.O_NONBLOCK);
-	try {
-		const stat = fstatSync(fd);
-		if (!stat.isFile()) throw new Error(`Transcript must be a regular file: ${file}`);
-		if (!prefix && stat.size > limit) {
-			throw new Error(`Transcript exceeds ${limit} bytes: ${file} (${stat.size} bytes). Export a smaller transcript file and use \`file\`; no metadata was omitted.`);
-		}
-		const buffer = Buffer.alloc(Math.min(stat.size, limit) + (prefix ? 0 : 1));
-		let bytes = 0;
-		while (bytes < buffer.length) {
-			const n = readSync(fd, buffer, bytes, buffer.length - bytes, null);
-			if (!n) break;
-			bytes += n;
-		}
-		if (!prefix && bytes === buffer.length) throw new Error(`Transcript changed while being read: ${file}. Retry after the session stops writing; no partial metadata was returned.`);
-		return buffer.subarray(0, bytes);
-	} finally {
-		closeSync(fd);
-	}
+function throwIfAborted(signal?: AbortSignal): void {
+	if (!signal?.aborted) return;
+	if (signal.reason instanceof Error) throw signal.reason;
+	throw new DOMException("The operation was aborted", "AbortError");
 }
-/** ~4 chars per token for an English/code mix. Reported cost is uncached: the
- * window is generated fresh on every call, so none of it is a cache hit. */
+
+/** Approximate text tokens for handoff-size reporting, not provider cache metrics. */
 export function estimateTokens(text: string): number {
 	return Math.ceil(text.length / 4);
 }
@@ -133,9 +122,10 @@ export function listWorktrees(project: string): Worktree[] {
 				isMain: false,
 				prunable: false,
 			};
-		} else if (!current) {
 			continue;
-		} else if (line.startsWith("HEAD ")) {
+		}
+		if (!current) continue;
+		if (line.startsWith("HEAD ")) {
 			current.head = line.slice("HEAD ".length);
 		} else if (line.startsWith("branch ")) {
 			const ref = line.slice("branch ".length);
@@ -324,6 +314,8 @@ export interface SessionMeta {
 export interface Transcript {
 	meta: SessionMeta;
 	turns: Turn[];
+	/** Global chronological index of the first retained turn. */
+	windowStart: number;
 	todoPhases: TodoPhase[];
 	/** Turn indices a compaction landed after, so the render can mark the gap. */
 	compactionAfter: number[];
@@ -372,201 +364,414 @@ export interface HeadInfo {
 	continuedFrom: number;
 }
 
+interface LegacyTitleRecord {
+	type: "title";
+	title?: unknown;
+	updatedAt?: unknown;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function boundedBytes(value: number, fallback: number): number {
+	return Number.isFinite(value) ? Math.max(0, Math.floor(value)) : fallback;
+}
+
 /**
  * Identity from the leading records only: the `title` header (rewritten in
  * place, which is what its `pad` field is for, so `updatedAt` is the live
  * last-active time) and the `session` record that names the cwd. Returns null
  * when no `session` record is in the window — the file is not a usable session.
  */
-export function readHead(file: string, maxBytes = 16 * 1024): HeadInfo | null {
-	let window: string;
+export async function readHead(file: string, maxBytes = 16 * 1024): Promise<HeadInfo | null> {
+	let snapshot: FileSnapshot;
 	try {
-		window = readRegular(file, maxBytes, true).toString("utf8");
-	} catch {
-		return null;
+		snapshot = snapshotFile(file);
+	} catch (error) {
+		if (isMissingFile(error)) return null;
+		throw error;
 	}
 	const info: HeadInfo = {
-		id: basename(file).replace(/\.jsonl$/, "").replace(/^[^_]*_/, ""),
+		id: basename(file)
+			.replace(/\.jsonl$/, "")
+			.replace(/^[^_]*_/, ""),
 		cwd: "",
 		title: "",
 		updatedAtMs: null,
 		startedAtMs: null,
 		continuedFrom: 0,
 	};
-	// Identity records lead the file; a truncated final line of the window is
-	// expected, not a defect, so a parse failure just skips that line.
-	for (const line of window.split("\n").slice(0, 12)) {
-		if (!line.startsWith("{")) continue;
-		let record: Record<string, unknown>;
-		try {
-			record = JSON.parse(line);
-		} catch {
-			continue;
-		}
-		if (record.type === "title") {
-			if (typeof record.title === "string") info.title = record.title;
-			info.updatedAtMs = parseTimestamp(record.updatedAt);
-		} else if (record.type === "session") {
-			if (typeof record.cwd === "string") info.cwd = record.cwd;
-			if (typeof record.id === "string") info.id = record.id;
-			info.startedAtMs = parseTimestamp(record.timestamp);
-			if (Array.isArray(record.previousSessionFiles)) info.continuedFrom = record.previousSessionFiles.length;
-		}
+	const limit = boundedBytes(maxBytes, 16 * 1024);
+	const titleSlot = await visitEntriesFromFileStream(
+		file,
+		(entry: FileEntry | LegacyTitleRecord) => {
+			if (!isRecord(entry)) return;
+			if (entry.type === "title") {
+				if (typeof entry.title === "string") info.title = entry.title;
+				info.updatedAtMs = parseTimestamp(entry.updatedAt);
+				return;
+			}
+			if (entry.type !== "session") return;
+			if (typeof entry.cwd === "string") info.cwd = entry.cwd;
+			if (typeof entry.id === "string") info.id = entry.id;
+			info.startedAtMs = parseTimestamp(entry.timestamp);
+			if (Array.isArray(entry.previousSessionFiles)) info.continuedFrom = entry.previousSessionFiles.length;
+			if (typeof entry.title === "string") info.title = entry.title;
+		},
+		{
+			maxBytes: limit,
+		},
+	);
+	if (titleSlot) {
+		if (typeof titleSlot.title === "string") info.title = titleSlot.title;
+		info.updatedAtMs = parseTimestamp(titleSlot.updatedAt);
 	}
+	assertUnchanged(file, snapshot);
 	return info.cwd ? info : null;
 }
 
 /**
  * Parse one transcript into turns. `toolResult` records are folded into the
  * assistant turn that called them, so a window is conversation-shaped rather
- * than record-shaped. Thinking blocks are dropped unless asked for: they are the
- * bulk of the bytes and rarely the evidence needed.
+ * than record-shaped. Thinking blocks are dropped unless asked for: they are
+ * the bulk of the bytes and rarely the evidence needed.
  *
- * Reads regular files up to 64 MiB; larger files fail explicitly rather than
- * dropping branch, compaction, or todo metadata.
+ * The native visitor streams each pass from a bounded file snapshot. The first
+ * pass computes exact filtered metadata; the second retains only the requested
+ * turn window and tool ids belonging to that window.
  */
-export function parseTranscript(file: string, includeThinking = false): Transcript {
-	const raw = readRegular(file, MAX_TRANSCRIPT_BYTES).toString("utf8");
-	const head = readHead(file);
+interface ParsedTurn {
+	turn: Turn;
+	toolCalls: Array<{ id: string; trace: ToolTrace }>;
+	branchCommands: string[];
+}
+
+interface ScanState {
+	head: HeadInfo;
+	lastMs: number | null;
+	turnCount: number;
+	leftOff: string;
+	branch: BranchTracker;
+	todoPhases: TodoPhase[];
+	exitReason: string;
+	compactions: number;
+	compactionAfter: number[];
+	compactionSummaries: string[];
+}
+
+function newScanState(file: string): ScanState {
+	return {
+		head: {
+			id: basename(file)
+				.replace(/\.jsonl$/, "")
+				.replace(/^[^_]*_/, ""),
+			cwd: "",
+			title: "",
+			updatedAtMs: null,
+			startedAtMs: null,
+			continuedFrom: 0,
+		},
+		lastMs: null,
+		turnCount: 0,
+		leftOff: "",
+		branch: new BranchTracker(),
+		todoPhases: [],
+		exitReason: "",
+		compactions: 0,
+		compactionAfter: [],
+		compactionSummaries: [],
+	};
+}
+
+function updateHead(state: ScanState, record: Record<string, unknown>): void {
+	if (record.type === "title") {
+		if (typeof record.title === "string") state.head.title = record.title;
+		state.head.updatedAtMs = parseTimestamp(record.updatedAt);
+		return;
+	}
+	if (record.type !== "session") return;
+	if (typeof record.cwd === "string") state.head.cwd = record.cwd;
+	if (typeof record.id === "string") state.head.id = record.id;
+	state.head.startedAtMs = parseTimestamp(record.timestamp);
+	if (Array.isArray(record.previousSessionFiles)) state.head.continuedFrom = record.previousSessionFiles.length;
+	if (typeof record.title === "string") state.head.title = record.title;
+}
+
+function updateLastTimestamp(state: ScanState, record: Record<string, unknown>): void {
+	const timestamp = parseTimestamp(record.timestamp);
+	if (timestamp !== null && (state.lastMs === null || timestamp > state.lastMs)) state.lastMs = timestamp;
+}
+
+function parseTurn(record: Record<string, unknown>, includeThinking: boolean): ParsedTurn | null {
+	if (record.type !== "message" || !isRecord(record.message)) return null;
+	const message = record.message;
+	if (message.role !== "user" && message.role !== "assistant") return null;
+	const parts: string[] = [];
+	const tools: ToolTrace[] = [];
+	const toolCalls: Array<{ id: string; trace: ToolTrace }> = [];
+	const branchCommands: string[] = [];
+	if (typeof message.content === "string") {
+		parts.push(message.content);
+	} else if (Array.isArray(message.content)) {
+		for (const block of message.content) {
+			if (!isRecord(block)) continue;
+			if (block.type === "text" && typeof block.text === "string") {
+				parts.push(block.text);
+			} else if (block.type === "thinking" && includeThinking && typeof block.thinking === "string") {
+				parts.push(`[thinking] ${block.thinking}`);
+			} else if (block.type === "toolCall") {
+				const name = typeof block.name === "string" ? block.name : "?";
+				const trace: ToolTrace = {
+					name,
+					brief: typeof block.intent === "string" && block.intent ? oneLine(block.intent) : briefArgs(block.arguments),
+					result: "",
+					isError: false,
+				};
+				const argumentsRecord = isRecord(block.arguments) ? block.arguments : undefined;
+				const command = typeof argumentsRecord?.command === "string" ? argumentsRecord.command : undefined;
+				if (name === "bash" && command) branchCommands.push(command);
+				tools.push(trace);
+				if (typeof block.id === "string") toolCalls.push({ id: block.id, trace });
+			}
+		}
+	}
+
+	const text = parts.join("\n").trim();
+	if (text === "" && tools.length === 0) return null;
+	return {
+		turn: {
+			role: message.role,
+			timestampMs: parseTimestamp(record.timestamp),
+			text,
+			tools,
+		},
+		toolCalls,
+		branchCommands,
+	};
+}
+
+function applyTodoResult(state: ScanState, message: Record<string, unknown>): void {
+	if (message.toolName !== "todo" || !isRecord(message.details) || !Array.isArray(message.details.phases)) return;
+	const phases: TodoPhase[] = [];
+	for (const phase of message.details.phases) {
+		if (!isRecord(phase)) continue;
+		const tasks: TodoTask[] = [];
+		if (Array.isArray(phase.tasks)) {
+			for (const task of phase.tasks) {
+				if (!isRecord(task)) continue;
+				tasks.push({
+					content: typeof task.content === "string" ? task.content : "",
+					status: typeof task.status === "string" ? task.status : "",
+				});
+			}
+		}
+		if (tasks.length > 0) phases.push({ name: typeof phase.name === "string" ? phase.name : "", tasks });
+	}
+	state.todoPhases = phases;
+}
+
+function applyToolResult(
+	state: ScanState | undefined,
+	message: Record<string, unknown>,
+	pendingTools?: Map<string, ToolTrace>,
+): void {
+	const toolCallId = String(message.toolCallId ?? "");
+	const trace = pendingTools?.get(toolCallId);
+	if (trace) {
+		trace.result = clip(oneLine(textOf(message.content)), 240);
+		trace.isError = message.isError === true;
+	}
+	if (!state) return;
+	if (message.toolName === "bash") {
+		const output = textOf(message.content);
+		state.branch.offer(output, "switched");
+		state.branch.offer(output, "status");
+	}
+	applyTodoResult(state, message);
+}
+
+function applyToolBranches(state: ScanState, parsed: ParsedTurn): void {
+	for (const command of parsed.branchCommands) {
+		state.branch.offer(command, "created");
+		state.branch.offer(command, "mentioned");
+	}
+}
+
+function scanRecord(state: ScanState, value: unknown, includeThinking: boolean): void {
+	if (!isRecord(value)) return;
+	updateHead(state, value);
+	updateLastTimestamp(state, value);
+
+	if (value.type === "compaction") {
+		state.compactions += 1;
+		state.compactionAfter.push(state.turnCount);
+		if (typeof value.shortSummary === "string" && value.shortSummary) {
+			state.compactionSummaries.push(oneLine(clip(value.shortSummary, 400)));
+		}
+		return;
+	}
+	if (value.type === "custom" && value.customType === "session_exit") {
+		const data = isRecord(value.data) ? value.data : undefined;
+		const kind = typeof data?.kind === "string" ? data.kind : "";
+		const reason = typeof data?.reason === "string" ? data.reason : "";
+		state.exitReason = [kind, reason].filter(Boolean).join("/");
+		return;
+	}
+	if (value.type !== "message" || !isRecord(value.message)) return;
+	const message = value.message;
+	if (message.role === "toolResult") {
+		applyToolResult(state, message);
+		return;
+	}
+	const parsed = parseTurn(value, includeThinking);
+	if (!parsed) return;
+	applyToolBranches(state, parsed);
+	state.turnCount += 1;
+	if (parsed.turn.role === "assistant" && parsed.turn.text) state.leftOff = oneLine(parsed.turn.text);
+}
+
+function applyTitleSlot(state: ScanState, titleSlot: { title?: string; updatedAt: string } | undefined): void {
+	if (!titleSlot) return;
+	if (typeof titleSlot.title === "string") state.head.title = titleSlot.title;
+	const updatedAt = parseTimestamp(titleSlot.updatedAt);
+	if (updatedAt !== null) {
+		state.head.updatedAtMs = updatedAt;
+		if (state.lastMs === null || updatedAt > state.lastMs) state.lastMs = updatedAt;
+	}
+}
+
+async function scanMetadataPass(
+	file: string,
+	snapshot: FileSnapshot,
+	includeThinking: boolean,
+	signal?: AbortSignal,
+): Promise<ScanState> {
+	throwIfAborted(signal);
+	const state = newScanState(file);
+	const titleSlot = await visitEntriesFromFileStream(
+		file,
+		(entry) => {
+			throwIfAborted(signal);
+			scanRecord(state, entry, includeThinking);
+		},
+		{
+			maxBytes: snapshot.size,
+			shouldContinue: () => {
+				throwIfAborted(signal);
+				return true;
+			},
+		},
+	);
+	throwIfAborted(signal);
+	applyTitleSlot(state, titleSlot);
+	assertUnchanged(file, snapshot);
+	return state;
+}
+
+async function collectWindowPass(
+	file: string,
+	snapshot: FileSnapshot,
+	includeThinking: boolean,
+	start: number,
+	end: number,
+	signal?: AbortSignal,
+): Promise<Turn[]> {
+	throwIfAborted(signal);
 	const turns: Turn[] = [];
 	const pendingTools = new Map<string, ToolTrace>();
-	const branch = new BranchTracker();
-	let todoPhases: TodoPhase[] = [];
-	let lastMs: number | null = head?.updatedAtMs ?? null;
-	let exitReason = "";
-	let compactions = 0;
-	const compactionAfter: number[] = [];
-	const compactionSummaries: string[] = [];
-
-	for (const line of raw.split("\n")) {
-		if (!line.startsWith("{")) continue;
-		let record: Record<string, unknown>;
-		try {
-			record = JSON.parse(line);
-		} catch {
-			continue;
-		}
-		const ts = parseTimestamp(record.timestamp);
-		if (ts !== null && (lastMs === null || ts > lastMs)) lastMs = ts;
-
-		if (record.type === "compaction") {
-			compactions += 1;
-			compactionAfter.push(turns.length);
-			const summary = typeof record.shortSummary === "string" ? record.shortSummary : "";
-			if (summary) compactionSummaries.push(oneLine(clip(summary, 400)));
-			continue;
-		}
-		if (record.type === "custom" && record.customType === "session_exit") {
-			const data = record.data as { reason?: string; kind?: string } | undefined;
-			exitReason = [data?.kind, data?.reason].filter(Boolean).join("/");
-			continue;
-		}
-		if (record.type !== "message") continue;
-
-		const message = record.message as Record<string, unknown> | undefined;
-		if (!message) continue;
-		const role = message.role;
-
-		if (role === "toolResult") {
-			const trace = pendingTools.get(String(message.toolCallId ?? ""));
-			if (trace) {
-				trace.result = clip(oneLine(textOf(message.content)), 240);
-				trace.isError = message.isError === true;
+	let filteredIndex = 0;
+	await visitEntriesFromFileStream(
+		file,
+		(entry) => {
+			throwIfAborted(signal);
+			if (!isRecord(entry)) return;
+			if (entry.type !== "message" || !isRecord(entry.message)) return;
+			const message = entry.message;
+			if (message.role === "toolResult") {
+				applyToolResult(undefined, message, pendingTools);
+				return;
 			}
-			if (message.toolName === "bash") {
-				const output = textOf(message.content);
-				branch.offer(output, "switched");
-				branch.offer(output, "status");
-			}
-			if (message.toolName === "todo") {
-				// The todo result carries the whole board, so the newest one is the
-				// authoritative plan state; reconstructing it from ops is not needed.
-				const phases = (message.details as { phases?: unknown } | undefined)?.phases;
-				if (Array.isArray(phases)) {
-					const rebuilt = (phases as Record<string, unknown>[]).map((phase) => ({
-						name: typeof phase.name === "string" ? phase.name : "",
-						tasks: (Array.isArray(phase.tasks) ? (phase.tasks as Record<string, unknown>[]) : []).map(
-							(task) => ({
-								content: typeof task.content === "string" ? task.content : "",
-								status: typeof task.status === "string" ? task.status : "",
-							}),
-						),
-					}));
-					todoPhases = rebuilt.filter((phase) => phase.tasks.length > 0);
-				}
-			}
-			continue;
-		}
-
-		if (role !== "user" && role !== "assistant") continue; // developer/system noise
-
-		const tools: ToolTrace[] = [];
-		const parts: string[] = [];
-		const content = message.content;
-		if (typeof content === "string") {
-			parts.push(content);
-		} else if (Array.isArray(content)) {
-			for (const block of content) {
-				if (!block || typeof block !== "object") continue;
-				const b = block as Record<string, unknown>;
-				if (b.type === "text" && typeof b.text === "string") {
-					parts.push(b.text);
-				} else if (b.type === "thinking" && includeThinking && typeof b.thinking === "string") {
-					parts.push(`[thinking] ${b.thinking}`);
-				} else if (b.type === "toolCall") {
-					const name = typeof b.name === "string" ? b.name : "?";
-					const trace: ToolTrace = {
-						name,
-						brief: typeof b.intent === "string" && b.intent ? oneLine(b.intent) : briefArgs(b.arguments),
-						result: "",
-						isError: false,
-					};
-					tools.push(trace);
-					if (typeof b.id === "string") pendingTools.set(b.id, trace);
-					const command = (b.arguments as { command?: unknown } | undefined)?.command;
-					if (name === "bash" && typeof command === "string") {
-						branch.offer(command, "created");
-						branch.offer(command, "mentioned");
-					}
-				}
-			}
-		}
-
-		turns.push({ role, timestampMs: ts, text: parts.join("\n").trim(), tools });
-	}
-
-	// Turns with neither prose nor a tool call are protocol artefacts; rendering
-	// them would spend the window budget on nothing.
-	const kept = turns.filter((turn) => turn.text !== "" || turn.tools.length > 0);
-	let leftOff = "";
-	for (let i = kept.length - 1; i >= 0; i -= 1) {
-		if (kept[i].role === "assistant" && kept[i].text) {
-			leftOff = oneLine(kept[i].text);
-			break;
-		}
-	}
-	const best = branch.get();
-
-	return {
-		meta: {
-			id: head?.id ?? basename(file).replace(/\.jsonl$/, ""),
-			file,
-			cwd: head?.cwd ?? "",
-			title: head?.title ?? "",
-			lastActiveMs: lastMs,
-			turnCount: kept.length,
-			branch: best?.branch ?? "",
-			branchTier: best?.tier ?? null,
-			leftOff,
-			exitReason,
-			compactions,
-			bytes: raw.length,
-			continuedFrom: head?.continuedFrom ?? 0,
+			const parsed = parseTurn(entry, includeThinking);
+			if (!parsed) return;
+			const index = filteredIndex++;
+			if (index < start || index >= end) return;
+			turns.push(parsed.turn);
+			for (const { id, trace } of parsed.toolCalls) pendingTools.set(id, trace);
 		},
-		turns: kept,
-		todoPhases,
-		compactionAfter,
-		compactionSummaries,
+		{
+			maxBytes: snapshot.size,
+			shouldContinue: () => {
+				throwIfAborted(signal);
+				return true;
+			},
+		},
+	);
+	throwIfAborted(signal);
+	assertUnchanged(file, snapshot);
+	return turns;
+}
+
+function toMeta(file: string, snapshot: FileSnapshot, state: ScanState): SessionMeta {
+	const best = state.branch.get();
+	const headTime = state.head.updatedAtMs;
+	const lastActiveMs =
+		state.lastMs === null ? headTime : headTime === null ? state.lastMs : Math.max(state.lastMs, headTime);
+	return {
+		id: state.head.id,
+		file,
+		cwd: state.head.cwd,
+		title: state.head.title,
+		lastActiveMs,
+		turnCount: state.turnCount,
+		branch: best?.branch ?? "",
+		branchTier: best?.tier ?? null,
+		leftOff: state.leftOff,
+		exitReason: state.exitReason,
+		compactions: state.compactions,
+		bytes: snapshot.size,
+		continuedFrom: state.head.continuedFrom,
+	};
+}
+
+function requestedWindow(
+	count: number,
+	window: { offset?: number; turns?: number } | undefined,
+): { start: number; end: number } {
+	const rawOffset = window?.offset ?? 0;
+	const rawTurns = window?.turns ?? 8;
+	const offset = Number.isFinite(rawOffset) ? Math.max(0, Math.floor(rawOffset)) : 0;
+	const turns = Number.isFinite(rawTurns) && rawTurns > 0 ? Math.max(1, Math.floor(rawTurns)) : 8;
+	const end = Math.max(0, count - offset);
+	return { start: Math.max(0, end - turns), end };
+}
+
+export async function scanTranscriptMeta(file: string, signal?: AbortSignal): Promise<SessionMeta> {
+	const snapshot = snapshotFile(file);
+	const state = await scanMetadataPass(file, snapshot, false, signal);
+	return toMeta(file, snapshot, state);
+}
+
+export async function parseTranscript(
+	file: string,
+	includeThinking = false,
+	window?: { offset?: number; turns?: number },
+	signal?: AbortSignal,
+): Promise<Transcript> {
+	const snapshot = snapshotFile(file);
+	const state = await scanMetadataPass(file, snapshot, includeThinking, signal);
+	const page = requestedWindow(state.turnCount, window);
+	const turns =
+		page.start < page.end ? await collectWindowPass(file, snapshot, includeThinking, page.start, page.end, signal) : [];
+	throwIfAborted(signal);
+	assertUnchanged(file, snapshot);
+	return {
+		meta: toMeta(file, snapshot, state),
+		turns,
+		windowStart: page.start,
+		todoPhases: state.todoPhases,
+		compactionAfter: state.compactionAfter,
+		compactionSummaries: state.compactionSummaries,
 	};
 }
 
@@ -582,26 +787,28 @@ export function parseTranscript(file: string, includeThinking = false): Transcri
 export function storeFiles(root: string): string[] {
 	if (!existsSync(root)) return [];
 	const out: string[] = [];
-	let scanned = 0;
-	const check = () => {
-		if (++scanned > MAX_STORE_ENTRIES) throw new Error(`Session store exceeds ${MAX_STORE_ENTRIES} entries: ${root}. Use an explicit transcript \`file\` or archive older sessions.`);
-	};
 	const dirs = opendirSync(root);
 	try {
 		for (let entry = dirs.readSync(); entry; entry = dirs.readSync()) {
-			check();
 			if (!entry.isDirectory()) continue;
 			const dir = join(root, entry.name);
-			let children;
-			try { children = opendirSync(dir); } catch { continue; }
+			let children: Dir;
+			try {
+				children = opendirSync(dir);
+			} catch {
+				continue;
+			}
 			try {
 				for (let child = children.readSync(); child; child = children.readSync()) {
-					check();
 					if (child.isFile() && child.name.endsWith(".jsonl")) out.push(join(dir, child.name));
 				}
-			} finally { children.closeSync(); }
+			} finally {
+				children.closeSync();
+			}
 		}
-	} finally { dirs.closeSync(); }
+	} finally {
+		dirs.closeSync();
+	}
 	return out;
 }
 
@@ -629,21 +836,25 @@ export function pathKeys(path: string): string[] {
 	return keys;
 }
 
-/**
- * Store files whose recorded `cwd` is one of `accept`.
- *
- * Matching on the recorded cwd rather than on a reversed directory-name encoding
- * is what makes this worktree-safe: the store's `<escaped-cwd>` directory names
- * are lossy (`~/tmp` and `/tmp` both flatten toward `-tmp`-shaped names), while
- * the `session` record states the cwd outright.
- */
-export function candidates(root: string, accept: Set<string>): Candidate[] {
+/** Match native session metadata against accepted worktree paths, not encoded directory names. */
+export async function candidates(root: string, accept: Set<string>): Promise<Candidate[]> {
+	if (!existsSync(root)) return [];
 	const out: Candidate[] = [];
-	for (const file of storeFiles(root)) {
-		const head = readHead(file);
-		if (!head) continue;
-		if (!pathKeys(head.cwd).some((key) => accept.has(key))) continue;
-		out.push({ file, head });
+	const storage = new FileSessionStorage();
+	let directories: Dirent[];
+	try {
+		directories = readdirSync(root, { withFileTypes: true });
+	} catch {
+		return [];
+	}
+	for (const directory of directories) {
+		if (!directory.isDirectory()) continue;
+		const sessions = await listSessionsReadOnly(join(root, directory.name), storage);
+		for (const session of sessions) {
+			if (!pathKeys(session.cwd).some((key) => accept.has(key))) continue;
+			const head = await readHead(session.path);
+			if (head) out.push({ file: session.path, head });
+		}
 	}
 	return out;
 }
