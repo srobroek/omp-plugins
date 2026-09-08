@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.6.1](https://github.com/srobroek/omp-plugins/compare/quality--v0.6.0...quality--v0.6.1) (2026-09-08)
+
+
+### Bug Fixes
+
+* **ci:** reject stale packages and incomplete checker runs ([8274c02](https://github.com/srobroek/omp-plugins/commit/8274c02e6e1af64adb7f6524e7ebabe830d26356))
+* correct plugin discovery, safety checks, and workflow contracts ([bfaa850](https://github.com/srobroek/omp-plugins/commit/bfaa850be719d7b79ac2245f2092be838673dd5d))
+* **verification:** report missing checks and use installed toolchains ([58ce78a](https://github.com/srobroek/omp-plugins/commit/58ce78a4c86f855182c10bcb1a7aa1a6a8c8c563))
+
+
+### Documentation
+
+* clarify plugin safety and usage contracts ([f147fba](https://github.com/srobroek/omp-plugins/commit/f147fbaa08ddae1f5d745defd613b2d33ece4d61))
+
 ## [0.6.0](https://github.com/srobroek/omp-plugins/compare/quality--v0.5.2...quality--v0.6.0) (2026-08-27)
 
 

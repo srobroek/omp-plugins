@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.3.1](https://github.com/srobroek/omp-plugins/compare/go--v0.3.0...go--v0.3.1) (2026-09-08)
+
+
+### Bug Fixes
+
+* correct plugin discovery, safety checks, and workflow contracts ([bfaa850](https://github.com/srobroek/omp-plugins/commit/bfaa850be719d7b79ac2245f2092be838673dd5d))
+* **verification:** report missing checks and use installed toolchains ([58ce78a](https://github.com/srobroek/omp-plugins/commit/58ce78a4c86f855182c10bcb1a7aa1a6a8c8c563))
+
 ## [0.3.0](https://github.com/srobroek/omp-plugins/compare/go--v0.2.0...go--v0.3.0) (2026-08-25)
 
 

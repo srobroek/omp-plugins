@@ -1,5 +1,19 @@
 # Changelog
 
+## [1.1.1](https://github.com/srobroek/omp-plugins/compare/session--v1.1.0...session--v1.1.1) (2026-09-08)
+
+
+### Bug Fixes
+
+* **ci:** reject stale packages and incomplete checker runs ([8274c02](https://github.com/srobroek/omp-plugins/commit/8274c02e6e1af64adb7f6524e7ebabe830d26356))
+* correct plugin discovery, safety checks, and workflow contracts ([bfaa850](https://github.com/srobroek/omp-plugins/commit/bfaa850be719d7b79ac2245f2092be838673dd5d))
+* **session:** bound transcript reads and preserve paging identity ([d87e0b5](https://github.com/srobroek/omp-plugins/commit/d87e0b5b9e319af5d8b2eea9e105d94dc80fdab0))
+
+
+### Documentation
+
+* clarify plugin safety and usage contracts ([f147fba](https://github.com/srobroek/omp-plugins/commit/f147fbaa08ddae1f5d745defd613b2d33ece4d61))
+
 ## [1.1.0](https://github.com/srobroek/omp-plugins/compare/session--v1.0.1...session--v1.1.0) (2026-08-27)
 
 

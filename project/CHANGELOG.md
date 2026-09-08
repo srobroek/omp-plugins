@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.3.1](https://github.com/srobroek/omp-plugins/compare/project--v0.3.0...project--v0.3.1) (2026-09-08)
+
+
+### Bug Fixes
+
+* correct plugin discovery, safety checks, and workflow contracts ([bfaa850](https://github.com/srobroek/omp-plugins/commit/bfaa850be719d7b79ac2245f2092be838673dd5d))
+* **project:** bind consolidation and pruning to approved journeys ([1e2d95d](https://github.com/srobroek/omp-plugins/commit/1e2d95df04c351a2ce4e14ca74861402c5df7f4d))
+
 ## [0.3.0](https://github.com/srobroek/omp-plugins/compare/project--v0.2.0...project--v0.3.0) (2026-08-25)
 
 

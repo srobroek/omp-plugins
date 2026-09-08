@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.3.1](https://github.com/srobroek/omp-plugins/compare/chezmoi--v0.3.0...chezmoi--v0.3.1) (2026-09-08)
+
+
+### Bug Fixes
+
+* **chezmoi:** inspect actual commit candidates in the effective context ([0873e6b](https://github.com/srobroek/omp-plugins/commit/0873e6b6d12ebacafebb01a228f76de18e79ccef))
+* correct plugin discovery, safety checks, and workflow contracts ([bfaa850](https://github.com/srobroek/omp-plugins/commit/bfaa850be719d7b79ac2245f2092be838673dd5d))
+
+
+### Documentation
+
+* clarify plugin safety and usage contracts ([f147fba](https://github.com/srobroek/omp-plugins/commit/f147fbaa08ddae1f5d745defd613b2d33ece4d61))
+
 ## [0.3.0](https://github.com/srobroek/omp-plugins/compare/chezmoi--v0.2.0...chezmoi--v0.3.0) (2026-08-25)
 
 

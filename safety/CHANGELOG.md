@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.5.1](https://github.com/srobroek/omp-plugins/compare/safety--v0.5.0...safety--v0.5.1) (2026-09-08)
+
+
+### Bug Fixes
+
+* **ci:** reject stale packages and incomplete checker runs ([8274c02](https://github.com/srobroek/omp-plugins/commit/8274c02e6e1af64adb7f6524e7ebabe830d26356))
+* correct plugin discovery, safety checks, and workflow contracts ([bfaa850](https://github.com/srobroek/omp-plugins/commit/bfaa850be719d7b79ac2245f2092be838673dd5d))
+* **safety:** preserve literal command data and session boundaries ([7eed995](https://github.com/srobroek/omp-plugins/commit/7eed99586480a9e0dd852c32ecd512f349187c3a))
+
+
+### Documentation
+
+* clarify plugin safety and usage contracts ([f147fba](https://github.com/srobroek/omp-plugins/commit/f147fbaa08ddae1f5d745defd613b2d33ece4d61))
+
 ## [0.5.0](https://github.com/srobroek/omp-plugins/compare/safety--v0.4.2...safety--v0.5.0) (2026-08-27)
 
 

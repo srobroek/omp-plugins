@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.3.2](https://github.com/srobroek/omp-plugins/compare/toolchain--v0.3.1...toolchain--v0.3.2) (2026-09-08)
+
+
+### Bug Fixes
+
+* correct plugin discovery, safety checks, and workflow contracts ([bfaa850](https://github.com/srobroek/omp-plugins/commit/bfaa850be719d7b79ac2245f2092be838673dd5d))
+* **packaging:** preserve released design and toolchain versions ([dcbc9ab](https://github.com/srobroek/omp-plugins/commit/dcbc9ab10b4ce5364a3a5942d083e2f96267b2ae))
+* **toolchain:** reserve unit tests for meaningful logic ([512f80d](https://github.com/srobroek/omp-plugins/commit/512f80df866f2dfc9fc5fb77ee534de47011f496))
+
+
+### Refactors
+
+* **workflows:** remove forced handoffs and clarify capability ownership ([3ce7513](https://github.com/srobroek/omp-plugins/commit/3ce751337ad10128cac01535fe8779ea83899885))
+
 ## [0.3.1](https://github.com/srobroek/omp-plugins/compare/toolchain--v0.3.0...toolchain--v0.3.1) (2026-09-07)
 
 

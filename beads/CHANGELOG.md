@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.8.1](https://github.com/srobroek/omp-plugins/compare/beads--v0.8.0...beads--v0.8.1) (2026-09-08)
+
+
+### Bug Fixes
+
+* **beads:** isolate lifecycle state and preserve failure evidence ([999c9c8](https://github.com/srobroek/omp-plugins/commit/999c9c837a582a50e29b909eafd6acaa0a76b2d9))
+* **ci:** reject stale packages and incomplete checker runs ([8274c02](https://github.com/srobroek/omp-plugins/commit/8274c02e6e1af64adb7f6524e7ebabe830d26356))
+* correct plugin discovery, safety checks, and workflow contracts ([bfaa850](https://github.com/srobroek/omp-plugins/commit/bfaa850be719d7b79ac2245f2092be838673dd5d))
+
+
+### Documentation
+
+* clarify plugin safety and usage contracts ([f147fba](https://github.com/srobroek/omp-plugins/commit/f147fbaa08ddae1f5d745defd613b2d33ece4d61))
+
 ## [0.8.0](https://github.com/srobroek/omp-plugins/compare/beads--v0.7.0...beads--v0.8.0) (2026-08-27)
 
 

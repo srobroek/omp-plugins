@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.3.1](https://github.com/srobroek/omp-plugins/compare/architecture--v0.3.0...architecture--v0.3.1) (2026-09-08)
+
+
+### Bug Fixes
+
+* correct plugin discovery, safety checks, and workflow contracts ([bfaa850](https://github.com/srobroek/omp-plugins/commit/bfaa850be719d7b79ac2245f2092be838673dd5d))
+
+
+### Refactors
+
+* **workflows:** remove forced handoffs and clarify capability ownership ([3ce7513](https://github.com/srobroek/omp-plugins/commit/3ce751337ad10128cac01535fe8779ea83899885))
+
 ## [0.3.0](https://github.com/srobroek/omp-plugins/compare/architecture--v0.2.0...architecture--v0.3.0) (2026-08-25)
 
 
