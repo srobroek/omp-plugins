@@ -72,10 +72,8 @@ export function detectKind(path: string): string {
 	const n = basename(path);
 	if (n.startsWith("template-")) return "template";
 	if (n === "SKILL.md") return "skill";
-	if (n.endsWith(".agent.md") || basename(dirname(path)) === "agents") return "agent";
+	if (basename(dirname(path)) === "agents") return "agent";
 	if (basename(dirname(path)) === "rules" || n === "RULES.md") return "rule";
-	if (n.endsWith(".instructions.md")) return "pointer";
-	if (n.endsWith(".context.md")) return "context";
 	return "unknown";
 }
 
@@ -186,24 +184,6 @@ export function parseXlint(text: string): [Set<string>, string] {
 	return [codes, reason];
 }
 
-export function hasRulesContract(path: string, fm: Record<string, string>): boolean {
-	const name = (fm.name ?? "").trim() || (basename(path).split(".")[0] ?? "");
-	const rulesDir = join(dirname(dirname(path)), "rules");
-	const candidates = [name];
-	const tier = /^(.*)-(low|medium|high|xhigh)$/.exec(name);
-	if (tier?.[1]) candidates.push(tier[1]);
-	for (const cand of candidates) {
-		try {
-			const data = JSON.parse(
-				readFileSync(join(rulesDir, `${cand}.rules.json`), "utf8"),
-			) as { completion?: unknown; authority?: unknown };
-			return Boolean(data.completion) || Boolean(data.authority);
-		} catch {
-			continue;
-		}
-	}
-	return false;
-}
 
 export function lint(path: string): Triple[] {
 	const raw: Triple[] = [];
@@ -271,14 +251,13 @@ export function lint(path: string): Triple[] {
 		}
 	}
 
-	if (kind === "skill" || kind === "agent" || kind === "pointer") {
+	if (kind === "skill" || kind === "agent") {
 		const desc = fm.description ?? "";
 		if (!desc) {
 			err("E1", "missing frontmatter description");
 		} else {
-			const cap = kind === "pointer" ? 15 : 25;
 			const wc = words(desc);
-			if (wc > cap) err("E1", `description ${wc}w > ${cap}w cap for ${kind}`);
+			if (wc > 25) err("E1", `description ${wc}w > 25w cap for ${kind}`);
 			const descContent = desc.replace(YAML_SCALAR_PREFIX, "").trim();
 			if (descContent && descContent.length < 20) {
 				err("E1", `description too short (${descContent.length} chars < 20 minimum)`);
@@ -312,22 +291,20 @@ export function lint(path: string): Triple[] {
 	}
 
 	if (kind === "agent") {
-		if (!hasRulesContract(path, fm)) {
-			if (!/^#+\s*Output|^OUTPUT/m.test(body)) {
-				err(
-					"E5",
-					"agent has no Output contract section (and no .apm/rules/<name>.rules.json)",
-				);
-			} else {
-				if (!CAPS_ENUM.test(body)) {
-					warn("W5", "no CAPS verdict enum (PASS|FAIL style) found in output contract");
-				}
-				if (!/\bCAP\b|\b\d+\s*w(ords)?\b|≤\s*\d+/.test(body)) {
-					err("E5", "output contract has no word cap");
-				}
-				if (!/never reprint|paths? only|path:line/i.test(body)) {
-					warn("W5", "no no-reprint rule in output contract");
-				}
+		if (!/^#+\s*Output|^OUTPUT/m.test(body)) {
+			err(
+				"E5",
+				"agent has no Output contract section",
+			);
+		} else {
+			if (!CAPS_ENUM.test(body)) {
+				warn("W5", "no CAPS verdict enum (PASS|FAIL style) found in output contract");
+			}
+			if (!/\bCAP\b|\b\d+\s*w(ords)?\b|≤\s*\d+/.test(body)) {
+				err("E5", "output contract has no word cap");
+			}
+			if (!/never reprint|paths? only|path:line/i.test(body)) {
+				warn("W5", "no no-reprint rule in output contract");
 			}
 		}
 	}
@@ -335,19 +312,12 @@ export function lint(path: string): Triple[] {
 	const nLines = lines.filter((line) => line.trim()).length;
 	const caps: Record<string, number> = {
 		skill: 70,
-		context: 60,
-		pointer: 10,
 		agent: 90,
 	};
 	if (kind in caps && nLines > (caps[kind] ?? 0)) {
 		warn("W6", `${nLines} non-empty lines > ${caps[kind]} target for ${kind}`);
 	}
 
-	if (kind === "pointer") {
-		if (!/\]\(\.\.\/context\/.*\.context\.md\)/.test(body)) {
-			err("E7", "pointer does not link a ../context/*.context.md file");
-		}
-	}
 
 	for (const m of blankCodeSpans(body).matchAll(/\]\((?!https?:\/\/)([^)#]+)\)/g)) {
 		const rel = m[1] ?? "";

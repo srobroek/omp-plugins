@@ -19,7 +19,7 @@ EXECUTION SHAPES
 | local health check, patrol, or single-coordinator release | wisp; promote findings and squash only when the outcome matters |
 DEFAULT Store repository workflows under `.beads/formulas/`; user formulas are
   personal only, and package-specific formulas stay versioned in the owning
-  APM package rather than the Beads setup or policy package.
+  OMP plugin rather than the Beads setup or policy package.
 MUST Validate formula source with `bd cook`, never `bd formula show`: show prints
   only a child formula's own steps, and pour reports every formula error as
   "not found as formula or proto ID". Assert composed output with

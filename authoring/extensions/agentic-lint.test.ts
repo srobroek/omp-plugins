@@ -5,12 +5,11 @@ import { dirname, join } from "node:path";
 import agenticLintTool, {
 	detectKind,
 	frontmatterDefects,
-	hasRulesContract,
+	splitFrontmatter,
 	hostSpecificPaths,
 	lint,
 	main,
 	parseXlint,
-	splitFrontmatter,
 	type Triple,
 } from "./agentic-lint-tool.ts";
 
@@ -190,14 +189,11 @@ describe("parseXlint", () => {
 	});
 });
 
-describe("detectKind / splitFrontmatter / hasRulesContract", () => {
+describe("detectKind / splitFrontmatter", () => {
 	test("detectKind by filename and parent", () => {
 		expect(detectKind("/x/SKILL.md")).toBe("skill");
 		expect(detectKind("/x/template-skill.md")).toBe("template");
-		expect(detectKind("/x/foo.agent.md")).toBe("agent");
 		expect(detectKind("/x/agents/reviewer.md")).toBe("agent");
-		expect(detectKind("/x/rules.instructions.md")).toBe("pointer");
-		expect(detectKind("/x/rules.context.md")).toBe("context");
 		expect(detectKind("/x/readme.md")).toBe("unknown");
 	});
 
@@ -209,17 +205,6 @@ describe("detectKind / splitFrontmatter / hasRulesContract", () => {
 		expect(splitFrontmatter("nope")[0]).toEqual({});
 	});
 
-	test("hasRulesContract reads sibling rules json", () => {
-		const dir = tmpDir();
-		const agents = join(dir, "agents");
-		const rules = join(dir, "rules");
-		mkdirSync(agents, { recursive: true });
-		mkdirSync(rules, { recursive: true });
-		writeFileSync(join(rules, "reviewer.rules.json"), JSON.stringify({ completion: true }));
-		const path = write(agents, "reviewer.md", "---\nname: reviewer\n---\n");
-		expect(hasRulesContract(path, { name: "reviewer" })).toBe(true);
-		expect(hasRulesContract(path, { name: "missing" })).toBe(false);
-	});
 });
 
 describe("override mechanism", () => {
@@ -335,46 +320,6 @@ MUST do something specific and verifiable.
 	});
 });
 
-describe("pointer shape", () => {
-	function pointer(dir: string, frontmatter: string): string {
-		mkdirSync(join(dir, "context"), { recursive: true });
-		writeFileSync(join(dir, "context", "rules.context.md"), "# Rules\n");
-		return write(
-			join(dir, "instructions"),
-			"rules.instructions.md",
-			`---
-description: Route to the detailed rules.
-${frontmatter}---
-
-Read [rules](../context/rules.context.md).
-`,
-		);
-	}
-
-	test("unconditional pointer may omit apply to", () => {
-		const findings = lint(pointer(tmpDir(), ""));
-		expect(findings.filter((f) => f[0] === "ERROR")).toEqual([]);
-	});
-
-	test("scoped pointer may include apply to", () => {
-		const findings = lint(pointer(tmpDir(), 'applyTo: "**/*.py"\n'));
-		expect(findings.filter((f) => f[0] === "ERROR")).toEqual([]);
-	});
-
-	test("pointer still requires context link", () => {
-		const path = write(
-			tmpDir(),
-			"rules.instructions.md",
-			`---
-description: Route to the detailed rules.
----
-
-Rules are documented elsewhere.
-`,
-		);
-		expect(lint(path).some(([sev, code]) => sev === "ERROR" && code === "E7")).toBe(true);
-	});
-});
 
 describe("main exit code via execute", () => {
 	test("overridden only exits 0", async () => {
@@ -488,15 +433,6 @@ MUST do something.
 		).not.toContain("W10");
 	});
 
-	test("w10 not applied to context", () => {
-		const musts = Array.from({ length: 20 }, (_, i) => `MUST do step ${i}.`).join("\n");
-		const p = write(tmpDir(), "rules.context.md", `# dense context\n\n${musts}\n`);
-		expect(
-			lint(p)
-				.filter((f) => f[0] === "WARN")
-				.map((f) => f[1]),
-		).not.toContain("W10");
-	});
 
 	test("w11 description with use when", () => {
 		const content = SKILL_BASE.replaceAll("{name}", "triggered-skill")
@@ -546,7 +482,8 @@ description: Manages isolated operations without any trigger phrase.
 
 PASS|FAIL verdict. CAP 100 words. Never reprint paths only.
 `;
-		const p = write(tmpDir(), "my-agent.agent.md", content);
+		const dir = tmpDir();
+		const p = write(dir, "agents/my-agent.md", content);
 		expect(
 			lint(p)
 				.filter((f) => f[0] === "WARN")

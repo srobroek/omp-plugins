@@ -10,9 +10,9 @@ TRIGGER
 + "should this be a formula or a skill?"
 + a formula pours the wrong step count, or a step runs before its predecessor
 + adding optional stages, gates, or `extends` to an existing formula
-- claiming, closing, commenting, or labelling day-to-day → `beads.context.md`
-- disposing of a finished molecule (promote/squash/burn) → `beads.composition.context.md`
-- coordinating live agents, wisp grammar, decision records → `beads.orchestration-doctrine.context.md`
+- claiming, closing, commenting, or labelling day-to-day → `rule://beads-core`
+- disposing of a finished molecule (promote/squash/burn) → `rule://beads-composition`
+- coordinating live agents, wisp grammar, decision records → `rule://beads-orchestration-doctrine`
 
 ## Boundary with steering
 

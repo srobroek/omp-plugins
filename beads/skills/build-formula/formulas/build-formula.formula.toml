@@ -46,7 +46,7 @@ description = "does it use extends"
 
 [vars.ships_in_package]
 default = "true"
-description = "is it distributed by an APM package rather than written straight into .beads/formulas"
+description = "is it distributed by an OMP plugin rather than written straight into .beads/formulas"
 
 # ---------------------------------------------------------------------------
 # 1. Shape — the gate that stops wasted work
@@ -242,7 +242,7 @@ Filename stem IS the reference: bd resolves by stem, not by the `formula` key
 inside the file. Name the file for the reference you emit.
 
 Location:
-  reusable, package-shipped  ->  the owning APM package, installed into .beads/formulas/
+  reusable, package-shipped  ->  the owning OMP plugin, installed into .beads/formulas/
   adhoc, project-local       ->  <repo>/.beads/formulas/ directly
 
 Search order, earlier shadows later: resolved-beads-dir, <checkout>/.beads/formulas,

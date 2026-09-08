@@ -32,10 +32,11 @@ a restated copy of the conventions, which drifts from the enforced version.
 
 ## R6: File Size
 
-`agentic_lint` sets the per-kind caps (skill 70, context 60,
-pointer 10, agent 90 non-empty lines). Split files with two distinct topics,
-routing + detail content, or multiple independent tables. Compress by merging
-similar rules, removing redundant explanations, and tightening table cells.
+`agentic_lint` warns when skills exceed 70 or agents exceed 90 non-empty lines.
+Keep rules concise and move supporting detail into one-level references. Split
+files with two distinct topics, routing + detail content, or multiple independent
+tables. Compress by merging similar rules, removing redundant explanations, and
+tightening table cells.
 
 ## R7: Progressive Disclosure
 

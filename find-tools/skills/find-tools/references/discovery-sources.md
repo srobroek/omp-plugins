@@ -16,7 +16,6 @@ Call `find_tools_scan` with the capability query. It reports the seven surfaces 
 
 - Glama, PulseMCP, MCP.Directory, SkillsGate — HTML aggregators that overlap the Official MCP Registry and Smithery.
 - Awesome-list READMEs — prose, scrape-only, high recall and low precision.
-- `apm marketplace` — legacy inventory check only while APM packages still exist; never the primary surface.
 
 ## Install-mutating commands
 

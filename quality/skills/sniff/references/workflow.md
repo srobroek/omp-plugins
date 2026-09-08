@@ -69,7 +69,7 @@ an isolated checkout was created.
 
 First, **reduce the file set -- on EVERY target, including whole-repo.** Apply the
 file-set reduction in `references/targeting.md` (drop committed vendored/build/
-tool dirs like `archive/`, `node_modules/`, `apm_modules/`, `.specify/`, `target/`;
+tool dirs like `archive/`, `node_modules/`, `.omp/plugins/`, `.specify/`, `target/`;
 drop generated files by header marker / lockfile name / `linguist-generated`;
 drop binaries). `.gitignore` does not cover committed vendor/generated trees, so
 this step is required even when the user said "the whole repo". Echo first-party

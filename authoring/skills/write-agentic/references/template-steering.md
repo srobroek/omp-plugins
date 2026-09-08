@@ -1,47 +1,59 @@
 # Steering Template
 
-Two files. The pointer is always-loaded -- every word there is paid each
-session. The context loads on demand.
+Native OMP rules are standalone Markdown files discovered from plugin `rules/*.md`
+or project `.omp/rules/*.md`. OMP reads each rule directly.
 
-## Pointer -- `.apm/instructions/NN-<name>.instructions.md`
+Choose exactly one runtime surface:
+
+## Rulebook rule
+
+Use for guidance the model should discover by description and read on demand.
 
 ```markdown
 ---
-description: <≤15 words>
-# Omit applyTo for unconditional instructions compiled into global context.
-applyTo: "<optional glob — include only for genuinely file-scoped rules>"
+name: <plugin>-<topic>
+description: <when this rule is relevant, ≤25 words>
+globs: ["<optional/file-glob>"]
 ---
 
-For <topic list, ≤12 words>, read [<name>](../context/<name>.context.md).
+<rule body>
 ```
 
-NN prefix = load order band: 0x meta/style · 1x toolchain · 2x-3x structure ·
-4x workflow · 5x domain · 7x language/docs · 8x tools.
+`description` places the rule in `<domain-rules>`; `globs` label the listing but
+do not select rulebook content automatically. Read it with `rule://<name>`.
 
-## Context -- `.apm/context/<name>.context.md`
+## Always-apply rule
+
+Use for unconditional guidance that belongs in every session.
 
 ```markdown
-# <Topic>
+---
+name: <plugin>-<topic>
+alwaysApply: true
+---
 
-<AREA-1>
-MUST <hard rule>
-DEFAULT <default>
-
-<AREA-2>
-ASK <confirm with user>
-| situation | choice |
-|---|---|
-| <observable condition> | <decision> |
+<rule body>
 ```
 
-## Rules
+OMP injects the body into the system prompt and keeps it addressable through
+`rule://<name>`.
 
-MUST Decisions and gotchas only -- never explain what a well-known tool is or why
-  a choice is right. The choice IS the content.
-MUST One home per fact: if another steering file owns it, delegate with one line
-  ("see steering-x") -- never restate.
-MUST No hedges: every rule uses MUST, DEFAULT, ASK, or NOT + an observable condition.
-DEFAULT Target ≤50 lines context, ≤6 lines pointer.
-DEFAULT Omit `applyTo` for unconditional instructions; scope file-specific rules
-  with the narrowest truthful glob.
-NOT Rationale paragraphs, aphorisms, scope disclaimers, command catalogs.
+## TTSR rule
+
+Use for guidance that must be injected when prose or a tool stream matches a
+regex or AST pattern.
+
+```markdown
+---
+name: <plugin>-<topic>
+condition: ["\\b<regex>\\b"]
+scope: "tool:<name>(<file-glob>)"
+interruptMode: never
+---
+
+<rule body>
+```
+
+Use `astCondition: ["<ast-grep-pattern>"]` for structural edit/write matches.
+TTSR rules take precedence over rulebook and always-apply buckets when the
+condition registers successfully. Keep `name` equal to the filename stem.

@@ -3,8 +3,8 @@
 # project-setup merges these `repos:` entries into a project's
 # .pre-commit-config.yaml and vendors render_adrs.py into the repo (e.g.
 # .pre-commit-hooks/), then rewrites the `entry:` path below to point at the
-# vendored script. `entry:` cannot reference apm_modules/, which is not present
-# in a consuming repository.
+# vendored script. `entry:` must point at that repository-local path; consuming
+# repositories do not share this plugin's module tree.
 #
 # Install the shim once per repository:
 #
