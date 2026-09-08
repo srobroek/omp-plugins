@@ -250,21 +250,24 @@ describe("unit: transcript parsing", () => {
 		expect(phases[0]).toEqual({ name: "New", tasks: [{ content: "fresh", status: "in_progress" }] });
 	});
 
-	test("an empty latest board clears current tasks", async () => {
-		const { root } = fixtureStore([
-			{
-				...shipped,
-				entries: [
-					{ kind: "todo", phases: [{ name: "Old", tasks: [{ content: "obsolete", status: "pending" }] }] },
-					{ kind: "todo", phases: [] },
-				],
-			},
-		]);
-		const transcript = await parseTranscript(storeFiles(root)[0]);
-		expect(transcript.todoPhases).toEqual([]);
-		expect(renderRead(transcript, {})).not.toContain("## Latest plan / todo state");
-		expect(renderRead(transcript, {})).not.toContain("obsolete");
-	});
+	test.each([{ phases: [] }, { phases: [{ name: "Cleared", tasks: [] }] }])(
+		"an empty latest board clears current tasks: %j",
+		async ({ phases }) => {
+			const { root } = fixtureStore([
+				{
+					...shipped,
+					entries: [
+						{ kind: "todo", phases: [{ name: "Old", tasks: [{ content: "obsolete", status: "pending" }] }] },
+						{ kind: "todo", phases: phases.map((phase) => ({ name: phase.name, tasks: [...phase.tasks] })) },
+					],
+				},
+			]);
+			const transcript = await parseTranscript(storeFiles(root)[0]);
+			expect(transcript.todoPhases).toEqual([]);
+			expect(renderRead(transcript, {})).not.toContain("## Latest plan / todo state");
+			expect(renderRead(transcript, {})).not.toContain("obsolete");
+		},
+	);
 
 	test("left off is the last assistant prose, not the last record", async () => {
 		const { root } = fixtureStore([shipped]);
