@@ -10,11 +10,75 @@ import subprocess
 import sys
 import tempfile
 import time
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
+from xml.etree import ElementTree
 
 
-def run(argv: list[str], root: Path, timeout: int) -> None:
-    subprocess.run(argv, cwd=root, check=True, timeout=timeout)
+def validate_includes(includes: object) -> list[str]:
+    if not isinstance(includes, list) or not includes:
+        raise ValueError("Explicit nonempty source include patterns are required")
+    patterns = []
+    for item in includes:
+        if not isinstance(item, str):
+            raise TypeError("Source include patterns must be strings")
+        for pattern in item.split(","):
+            pattern = pattern.strip()
+            path = pattern.lstrip("!")
+            parts = path.split("/")
+            if (
+                not path
+                or path.startswith(("/", "-"))
+                or PureWindowsPath(path).drive
+                or "\\" in path
+                or "\0" in path
+                or ".." in parts
+                or any(any(char in part for char in "{}()") for part in parts[:-1])
+            ):
+                raise ValueError(f"Unsafe source include pattern: {pattern!r}")
+            patterns.append(pattern)
+    if not any(not pattern.startswith("!") for pattern in patterns):
+        raise ValueError("At least one positive source include pattern is required")
+    return patterns
+
+
+def write_status(path: Path, value: dict) -> None:
+    handle, temporary = tempfile.mkstemp(prefix=".context-status-", dir=path.parent)
+    try:
+        with os.fdopen(handle, "w") as stream:
+            stream.write(json.dumps(value) + "\n")
+        os.replace(temporary, path)
+    finally:
+        Path(temporary).unlink(missing_ok=True)
+
+
+def validate_pack(path: Path, root: Path) -> None:
+    document = ElementTree.parse(path)
+    files = (
+        document.findall("./files/file") if document.getroot().tag == "repomix" else []
+    )
+    if not files:
+        raise ValueError(
+            "Repomix produced no safe source files; retaining previous XML"
+        )
+    for file in files:
+        name = file.get("path", "")
+        source = root / name
+        if (
+            not name
+            or Path(name).is_absolute()
+            or PureWindowsPath(name).drive
+            or ".." in Path(name).parts
+            or not source.resolve().is_relative_to(root)
+            or not source.is_file()
+            or source.resolve() == root / ".omp/mcp.json"
+        ):
+            raise ValueError(f"Unsafe packed source path: {name!r}")
+
+
+def run(
+    argv: list[str], root: Path, timeout: int, env: dict[str, str] | None = None
+) -> None:
+    subprocess.run(argv, cwd=root, check=True, timeout=timeout, env=env)
 
 
 def main() -> int:
@@ -46,7 +110,12 @@ def main() -> int:
         with os.fdopen(fd, "w") as stream:
             stream.write(str(os.getpid()))
         status = output / "context-status.json"
-        status.write_text(json.dumps({"state": "STALE", "started": time.time()}) + "\n")
+        write_status(status, {"state": "STALE", "started": time.time()})
+        includes = validate_includes(config["repomix_include"])
+        for child in output.rglob("*"):
+            if child.is_symlink():
+                raise ValueError(f"Refusing symlinked Graphify output: {child}")
+        graph_env = {**os.environ, "GRAPHIFY_OUT": str(output)}
         graph_args = [*config["graphify"], "extract", ".", "--no-cluster"]
         if config.get("docs_backend"):
             graph_args += [
@@ -59,35 +128,44 @@ def main() -> int:
             ]
         else:
             graph_args += ["--code-only"]
-        run(graph_args, root, config["timeout"])
+        run(graph_args, root, config["timeout"], graph_env)
         run(
             [*config["graphify"], "cluster-only", ".", "--no-label", "--no-viz"],
             root,
             config["timeout"],
+            graph_env,
         )
-        if config["repomix_include"]:
-            handle, temporary = tempfile.mkstemp(
-                prefix=".repomix-", suffix=".xml", dir=root
+        graph = output / "graph.json"
+        if graph.is_symlink() or not graph.is_file():
+            raise ValueError("Graphify did not produce the project graph.json")
+        handle, temporary = tempfile.mkstemp(
+            prefix=".repomix-", suffix=".xml", dir=root
+        )
+        os.close(handle)
+        try:
+            run(
+                [
+                    *config["repomix"],
+                    ".",
+                    "--config",
+                    ".omp/repomix.json",
+                    "--include",
+                    ",".join(includes),
+                    "--ignore",
+                    ".omp/mcp.json",
+                    "--style",
+                    "xml",
+                    "--parsable-style",
+                    "--output",
+                    temporary,
+                ],
+                root,
+                config["timeout"],
             )
-            os.close(handle)
-            try:
-                run(
-                    [
-                        *config["repomix"],
-                        ".",
-                        "--config",
-                        ".omp/repomix.json",
-                        "--include",
-                        ",".join(config["repomix_include"]),
-                        "--output",
-                        temporary,
-                    ],
-                    root,
-                    config["timeout"],
-                )
-                os.replace(temporary, root / "repomix.xml")
-            finally:
-                Path(temporary).unlink(missing_ok=True)
+            validate_pack(Path(temporary), root)
+            os.replace(temporary, root / "repomix.xml")
+        finally:
+            Path(temporary).unlink(missing_ok=True)
         head = subprocess.run(
             ["git", "rev-parse", "HEAD"],
             cwd=root,
@@ -95,16 +173,14 @@ def main() -> int:
             text=True,
             check=False,
         )
-        status.write_text(
-            json.dumps(
-                {
-                    "state": "CURRENT",
-                    "head": head.stdout.strip() if head.returncode == 0 else None,
-                    "completed": time.time(),
-                    "docs_indexed": bool(config.get("docs_backend")),
-                }
-            )
-            + "\n"
+        write_status(
+            status,
+            {
+                "state": "CURRENT",
+                "head": head.stdout.strip() if head.returncode == 0 else None,
+                "completed": time.time(),
+                "docs_indexed": bool(config.get("docs_backend")),
+            },
         )
         print("Context refreshed: graphify-out/graph.json and repomix.xml")
         return 0
@@ -115,7 +191,13 @@ def main() -> int:
 if __name__ == "__main__":
     try:
         raise SystemExit(main())
-    except (OSError, ValueError, subprocess.SubprocessError) as exc:
+    except (
+        OSError,
+        ValueError,
+        TypeError,
+        ElementTree.ParseError,
+        subprocess.SubprocessError,
+    ) as exc:
         print(
             f"Context refresh FAILED; existing output is not proof of freshness: {exc}",
             file=sys.stderr,

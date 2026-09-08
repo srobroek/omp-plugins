@@ -16,6 +16,7 @@ import tempfile
 from pathlib import Path
 
 import tomlkit
+from context import validate_includes
 from ruamel.yaml import YAML
 
 STAGES = ["post-commit", "post-checkout", "post-merge"]
@@ -36,6 +37,7 @@ EXCLUDES = [
     "**/.git/**",
     "**/.beads/**",
     ".omp/context.py",
+    ".omp/mcp.json",
     ".agents/skills/graphify/**",
     "graphify-out/**",
     "repomix.xml",
@@ -104,6 +106,8 @@ def main() -> int:
         )
     if not 10 <= args.timeout <= 1800:
         raise ValueError("Timeout must be between 10 and 1800 seconds")
+    if args.action == "apply" or args.include:
+        args.include = validate_includes(args.include)
     git_root = subprocess.run(
         ["git", "rev-parse", "--show-toplevel"],
         cwd=root,
@@ -185,12 +189,6 @@ def main() -> int:
     print(json.dumps(plan, indent=2))
     if args.action == "inspect":
         return 0
-    if not args.include or any(
-        not item.strip() or item.startswith("-") for item in args.include
-    ):
-        raise ValueError(
-            "Apply requires explicit nonempty --include patterns for the source snapshot"
-        )
     if not args.notes:
         raise ValueError(
             "Apply requires --notes with evidence-derived project instructions"
@@ -271,7 +269,7 @@ def main() -> int:
         (
             ".omp/repomix.json",
             {
-                "output": {"style": "xml", "tokenBudget": 40000},
+                "output": {"style": "xml", "parsableStyle": True, "tokenBudget": 40000},
                 "security": {"enableSecurityCheck": True},
                 "ignore": {
                     "useGitignore": True,
