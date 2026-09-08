@@ -26,6 +26,12 @@ import resumeSessionTool, {
 	worktreeLabel,
 } from "./resume-session-tool";
 import {
+	__resetDirsFromEnvForTests,
+	getActiveProfile,
+	getAgentDir,
+	normalizeProfileName,
+} from "@oh-my-pi/pi-utils/dirs";
+import {
 	BranchTracker,
 	briefArgs,
 	candidates,
@@ -44,8 +50,8 @@ function tmp(prefix: string): string {
 }
 
 /**
- * A fixture store laid out exactly as the harness lays out the real one, so the
- * full list/read path can run against it by pointing HOME at `home`.
+ * A fixture store laid out exactly as the harness lays it out, rooted at the
+ * explicit native agent directory used by `withHome`.
  */
 function fixtureStore(sessions: FixtureSession[]): { home: string; root: string } {
 	const home = tmp("resume-home-");
@@ -54,27 +60,31 @@ function fixtureStore(sessions: FixtureSession[]): { home: string; root: string 
 	writeStore(root, sessions);
 	return { home, root };
 }
-
-/** `sessionsRoot` reads the environment, so full-path tests relocate HOME. */
+/**
+ * A fixture store rooted at an explicit native agent directory. This avoids
+ * relying on HOME changes after pi-utils/dirs has cached its resolver.
+ */
 async function withHome<T>(home: string, run: () => T | Promise<T>): Promise<T> {
-	const previous = {
-		home: process.env.HOME,
-		config: process.env.PI_CONFIG_DIR,
-		omp: process.env.OMP_PROFILE,
-		pi: process.env.PI_PROFILE,
-	};
-	process.env.HOME = home;
+	const keys = ["PI_CODING_AGENT_DIR", "PI_CONFIG_DIR", "OMP_PROFILE", "PI_PROFILE", "XDG_DATA_HOME"] as const;
+	const previous = Object.fromEntries(keys.map((key) => [key, process.env[key]])) as Record<
+		(typeof keys)[number],
+		string | undefined
+	>;
+	process.env.PI_CODING_AGENT_DIR = join(home, "agent");
 	process.env.PI_CONFIG_DIR = ".";
 	delete process.env.OMP_PROFILE;
 	delete process.env.PI_PROFILE;
+	delete process.env.XDG_DATA_HOME;
+	__resetDirsFromEnvForTests();
 	try {
 		return await run();
 	} finally {
-		process.env.HOME = previous.home;
-		if (previous.config === undefined) delete process.env.PI_CONFIG_DIR;
-		else process.env.PI_CONFIG_DIR = previous.config;
-		if (previous.omp !== undefined) process.env.OMP_PROFILE = previous.omp;
-		if (previous.pi !== undefined) process.env.PI_PROFILE = previous.pi;
+		for (const key of keys) {
+			const value = previous[key];
+			if (value === undefined) delete process.env[key];
+			else process.env[key] = value;
+		}
+		__resetDirsFromEnvForTests();
 	}
 }
 
@@ -161,11 +171,54 @@ describe("unit: formatting", () => {
 		expect(briefArgs(undefined)).toBe("");
 	});
 
-	test("sessionsRoot honours config dir and profile like the harness", () => {
-		expect(sessionsRoot(undefined, {})).toMatch(/\.omp\/agent\/sessions$/);
-		expect(sessionsRoot(undefined, { PI_CONFIG_DIR: ".ompx" })).toMatch(/\.ompx\/agent\/sessions$/);
-		expect(sessionsRoot("work", {})).toMatch(/\.omp\/profiles\/work\/agent\/sessions$/);
-		expect(sessionsRoot(undefined, { OMP_PROFILE: "alt" })).toMatch(/profiles\/alt\/agent\/sessions$/);
+	test("sessionsRoot follows native active and read-only profile stores", async () => {
+		if (process.platform !== "linux" && process.platform !== "darwin") return;
+		const xdg = tmp("resume-xdg-");
+		const previous = {
+			agent: process.env.PI_CODING_AGENT_DIR,
+			config: process.env.PI_CONFIG_DIR,
+			omp: process.env.OMP_PROFILE,
+			pi: process.env.PI_PROFILE,
+			xdg: process.env.XDG_DATA_HOME,
+		};
+		try {
+			delete process.env.PI_CODING_AGENT_DIR;
+			process.env.PI_CONFIG_DIR = ".";
+			delete process.env.OMP_PROFILE;
+			delete process.env.PI_PROFILE;
+			process.env.XDG_DATA_HOME = xdg;
+			mkdirSync(join(xdg, "omp"), { recursive: true });
+			__resetDirsFromEnvForTests();
+			expect(getActiveProfile()).toBeUndefined();
+			expect(sessionsRoot()).toBe(join(xdg, "omp", "sessions"));
+
+			process.env.OMP_PROFILE = "active";
+			mkdirSync(join(xdg, "omp", "profiles", "active"), { recursive: true });
+			mkdirSync(join(xdg, "omp", "profiles", "other"), { recursive: true });
+			__resetDirsFromEnvForTests();
+
+			expect(getActiveProfile()).toBe("active");
+			expect(sessionsRoot()).toBe(join(xdg, "omp", "profiles", "active", "sessions"));
+			const beforeAgent = getAgentDir();
+			expect(sessionsRoot("other")).toBe(join(xdg, "omp", "profiles", "other", "sessions"));
+			expect(getActiveProfile()).toBe("active");
+			expect(getAgentDir()).toBe(beforeAgent);
+			expect(sessionsRoot("default")).toBe(join(xdg, "omp", "sessions"));
+			expect(normalizeProfileName(" other ")).toBe("other");
+		} finally {
+			if (previous.agent === undefined) delete process.env.PI_CODING_AGENT_DIR;
+			else process.env.PI_CODING_AGENT_DIR = previous.agent;
+			if (previous.config === undefined) delete process.env.PI_CONFIG_DIR;
+			else process.env.PI_CONFIG_DIR = previous.config;
+			if (previous.omp === undefined) delete process.env.OMP_PROFILE;
+			else process.env.OMP_PROFILE = previous.omp;
+			if (previous.pi === undefined) delete process.env.PI_PROFILE;
+			else process.env.PI_PROFILE = previous.pi;
+			if (previous.xdg === undefined) delete process.env.XDG_DATA_HOME;
+			else process.env.XDG_DATA_HOME = previous.xdg;
+			__resetDirsFromEnvForTests();
+			rmSync(xdg, { recursive: true, force: true });
+		}
 	});
 });
 

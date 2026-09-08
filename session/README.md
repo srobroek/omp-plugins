@@ -39,7 +39,9 @@ The handoff includes the latest task board. An empty board clears earlier tasks.
 
 ## Native integration
 
-The plugin uses OMP's `listSessionsReadOnly` and `visitEntriesFromFileStream` APIs. Exact metadata requires a streaming scan. A second pass retains only the requested turns and their tool results.
+The plugin uses OMP's `listSessionsReadOnly` and `visitEntriesFromFileStream` APIs. It asks native `getSessionsDir()` for the active store. That helper follows the default profile or the active named profile. It also follows the platform's existing XDG data-root rules. In default mode, a non-profile `PI_CODING_AGENT_DIR` value supplies the agent directory. The ordinary default is `~/.omp/agent/sessions`. If the native resolver finds `$XDG_DATA_HOME/omp`, the default store is `$XDG_DATA_HOME/omp/sessions`. Named profiles use their native profile-specific stores. This documentation does not duplicate the resolver's profile path rules.
+
+Use the optional `profile` argument to select a profile for read-only discovery. It wins over `OMP_PROFILE` and `PI_PROFILE`. It does not activate a profile or mutate global directory state. Native helpers normalize profile names. An explicit `file` can read an older or exported transcript outside the active store. Discovery does not automatically scan or migrate legacy and XDG stores together.
 
 The tool never opens a session writer or resolves image blobs. It does not preserve the old prompt cache. Its purpose is to limit how much old context enters the fresh conversation.
 

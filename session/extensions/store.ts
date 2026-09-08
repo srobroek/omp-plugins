@@ -1,12 +1,14 @@
 /** Selective handoffs from persisted top-level sessions, using native read-only APIs. */
 import { execFileSync } from "node:child_process";
 import { type Dir, type Dirent, existsSync, opendirSync, readdirSync, realpathSync, statSync } from "node:fs";
-import { homedir } from "node:os";
 import { basename, join } from "node:path";
-import type { FileEntry } from "@oh-my-pi/pi-coding-agent/session/session-entries";
-import { listSessionsReadOnly } from "@oh-my-pi/pi-coding-agent/session/session-listing";
-import { visitEntriesFromFileStream } from "@oh-my-pi/pi-coding-agent/session/session-loader";
-import { FileSessionStorage } from "@oh-my-pi/pi-coding-agent/session/session-storage";
+import { getActiveProfile, getProfileRootDir, getSessionsDir, normalizeProfileName } from "@oh-my-pi/pi-utils";
+import {
+	FileSessionStorage,
+	listSessionsReadOnly,
+	visitEntriesFromFileStream,
+	type FileEntry,
+} from "@oh-my-pi/pi-coding-agent";
 
 interface FileSnapshot {
 	size: number;
@@ -56,20 +58,27 @@ export function oneLine(text: string): string {
 }
 
 /**
- * Where the store lives: `<config>/agent/sessions`, or
- * `<config>/profiles/<profile>/agent/sessions` under a named profile. The
- * harness resolves the config root as `$HOME/${PI_CONFIG_DIR:-.omp}` and takes
- * the profile from `$OMP_PROFILE`/`$PI_PROFILE`; this mirrors that.
+ * Resolve the native active store, or a named profile's store without
+ * activating it. Native XDG profile roots are selected only once their
+ * profile-specific directory exists; that is the resolver's migration boundary.
  */
-export function sessionsRoot(profile?: string, env: NodeJS.ProcessEnv = process.env): string {
-	// POSIX `$HOME` first: `os.homedir()` reads the passwd entry under Bun and so
-	// ignores a relocated HOME, which both tests and `HOME`-scoped runs rely on.
-	const config = join(env.HOME || homedir(), env.PI_CONFIG_DIR ?? ".omp");
-	const name = profile ?? env.OMP_PROFILE ?? env.PI_PROFILE;
-	if (name && (name === "." || name === ".." || /[/\\\0]/.test(name))) {
-		throw new Error("profile must be a single profile name, not a path; use `file` for an explicit transcript.");
+export function sessionsRoot(profile?: string): string {
+	if (profile === undefined) return getSessionsDir();
+
+	const normalized = normalizeProfileName(profile);
+	if (normalized === getActiveProfile()) return getSessionsDir();
+
+	const profileRoot = getProfileRootDir(normalized);
+	if (process.platform === "linux" || process.platform === "darwin") {
+		const xdgDataHome = process.env.XDG_DATA_HOME;
+		if (xdgDataHome) {
+			const xdgProfileRoot = join(xdgDataHome, "omp", ...(normalized ? ["profiles", normalized] : []));
+			try {
+				if (existsSync(xdgProfileRoot)) return join(xdgProfileRoot, "sessions");
+			} catch {}
+		}
 	}
-	return name ? join(config, "profiles", name, "agent", "sessions") : join(config, "agent", "sessions");
+	return getSessionsDir(join(profileRoot, "agent"));
 }
 
 export interface Worktree {

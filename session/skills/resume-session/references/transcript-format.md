@@ -14,25 +14,31 @@ The extension uses these public OMP APIs:
 
 The plugin adds worktree matching, branch evidence, and handoff formatting. Native `history://` serves agent transcripts from the registry and artifact directories. It does not discover arbitrary top-level sessions.
 
-## Store locations
+## Store selection
 
-The default store is:
+Session discovery calls native `getSessionsDir()`. It does not use one hard-coded root. The default profile normally stores sessions here:
 
 ```text
 ~/.omp/agent/sessions/<encoded-cwd>/<timestamp>_<uuid>.jsonl
 ```
 
-A directory beside each transcript holds spilled tool output:
+On Linux, the native resolver uses `$XDG_DATA_HOME/omp/sessions` when that data root already exists:
 
 ```text
-~/.omp/agent/sessions/<encoded-cwd>/<timestamp>_<uuid>/
+$XDG_DATA_HOME/omp/sessions/<encoded-cwd>/<timestamp>_<uuid>.jsonl
 ```
 
-Discovery examines transcript files inside each project directory. It does not descend into artifact directories.
+In default mode, `PI_CODING_AGENT_DIR` selects `<override>/sessions`. The override does not combine with the XDG data root. A named active profile uses its native profile-specific store. This reference does not duplicate native profile path rules.
 
-`PI_CONFIG_DIR` overrides `.omp`. A named profile uses `<config>/profiles/<name>/agent/sessions`. The explicit `profile` argument takes precedence over `OMP_PROFILE` and `PI_PROFILE`.
+A directory beside each transcript holds spilled tool output. It follows the same selected store:
 
-Encoded directory names can collide. Match the `cwd` in session metadata instead of reversing that encoding. Accept both the literal path and its filesystem-resolved spelling.
+```text
+<selected-store>/<encoded-cwd>/<timestamp>_<uuid>/
+```
+
+Discovery examines transcript files inside each project directory. It does not descend into artifact directories. It does not automatically scan legacy and XDG stores together. It does not migrate sessions between stores.
+
+Use the optional `profile` argument to select a profile for read-only discovery. It wins over `OMP_PROFILE` and `PI_PROFILE`. It does not activate a profile or mutate global directory state. Native helpers normalize profile names. An explicit `file` may read an older or exported transcript outside the active store.
 
 ## Identity and titles
 
