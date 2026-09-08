@@ -1,7 +1,16 @@
 import { describe, expect, test } from "bun:test";
 import * as zod from "@oh-my-pi/omptype/zod";
 import { execFileSync } from "node:child_process";
-import { appendFileSync, mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from "node:fs";
+import {
+	appendFileSync,
+	mkdirSync,
+	mkdtempSync,
+	realpathSync,
+	rmSync,
+	statSync,
+	symlinkSync,
+	writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type FixtureSession, renderSession, writeSpillDir, writeStore } from "./fixtures";
@@ -333,11 +342,17 @@ describe("unit: store enumeration", () => {
 	});
 
 	test("pathKeys accepts both spellings of a symlinked directory", () => {
-		const real = tmp("resume-real-");
-		expect(pathKeys(real)).toContain(real);
-		// macOS hands out /var/folders paths that resolve under /private.
-		expect(pathKeys(real).length).toBeGreaterThanOrEqual(1);
-		expect(pathKeys("/definitely/not/here")).toEqual(["/definitely/not/here"]);
+		const parent = tmp("resume-symlink-");
+		const realDirectory = join(parent, "real");
+		const symlink = join(parent, "link");
+		mkdirSync(realDirectory);
+		symlinkSync(realDirectory, symlink, "dir");
+		try {
+			expect(pathKeys(symlink)).toEqual(expect.arrayContaining([symlink, realpathSync(realDirectory)]));
+			expect(pathKeys("/definitely/not/here")).toEqual(["/definitely/not/here"]);
+		} finally {
+			rmSync(parent, { recursive: true, force: true });
+		}
 	});
 
 	test("a missing store is empty, not an error", () => {
