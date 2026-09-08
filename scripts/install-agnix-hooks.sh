@@ -14,12 +14,20 @@ fi
 # Worktree config keeps one checkout from changing another checkout's hooks.
 git config extensions.worktreeConfig true
 
-if ! previous_hooks="$(git config --get core.hooksPath 2>/dev/null)"; then
-	previous_hooks="$(git rev-parse --git-common-dir)/hooks"
+if ! current_hooks="$(git config --path --get core.hooksPath 2>/dev/null)"; then
+	current_hooks="$(git rev-parse --git-common-dir)/hooks"
 fi
+case "$current_hooks" in
+/*) current_hooks_dir="$current_hooks" ;;
+*) current_hooks_dir="$repo_root/$current_hooks" ;;
+esac
+current_hook="$current_hooks_dir/pre-commit"
 
-if ! git config --worktree --get agnix.previousHooksPath >/dev/null 2>&1; then
-	git config --worktree agnix.previousHooksPath "$previous_hooks"
+if [[ "$current_hooks_dir" == "$hooks_dir" ]] ||
+	{ [[ -f "$current_hook" ]] && cmp -s -- "$current_hook" "$hook"; }; then
+	:
+else
+	git config --worktree agnix.previousHooksPath "$current_hooks"
 fi
 
 git config --worktree core.hooksPath .githooks
