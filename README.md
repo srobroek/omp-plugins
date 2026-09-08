@@ -62,6 +62,16 @@ omp -p 'read rule://beads-core'
 A rule from an uninstalled plugin answers `No such rule` and lists the rules that did load,
 which is the same evidence in the negative.
 
+## Developer hook setup
+
+After cloning or creating a worktree, run:
+
+```sh
+./scripts/install-agnix-hooks.sh
+```
+
+The installer preserves the previous hooks path and all existing hooks. The tracked `pre-commit` wrapper runs agnix against the staged index before each commit. Git does not install tracked hooks automatically when you clone.
+
 ## Generated files
 
 Three generators own the files below, so do not hand-edit them. CI fails when a committed copy drifts.

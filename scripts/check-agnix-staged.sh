@@ -32,15 +32,24 @@ is_agentic_path() {
 
 staged_paths=()
 config_changed=0
+diff_args=(git diff --cached --name-status -z --no-renames --diff-filter=ACMDT)
+if [[ -n "${AGNIX_DIFF_BASE:-}" ]]; then
+	if ! diff_base="$(git rev-parse --verify "${AGNIX_DIFF_BASE}^{commit}")"; then
+		printf 'invalid AGNIX_DIFF_BASE: %s\n' "$AGNIX_DIFF_BASE" >&2
+		exit 1
+	fi
+	diff_args+=("$diff_base")
+fi
+diff_args+=(--)
 while IFS= read -r -d '' status && IFS= read -r -d '' path; do
-	is_ignored_path "$path" && continue
-	is_agentic_path "$path" || continue
 	if [[ "$path" == ".agnix.toml" || "$status" == "D" ]]; then
 		config_changed=1
 		continue
 	fi
+	is_ignored_path "$path" && continue
+	is_agentic_path "$path" || continue
 	staged_paths+=("$path")
-done < <(git diff --cached --name-status -z --no-renames --diff-filter=ACMDT --)
+done < <("${diff_args[@]}")
 
 if ((config_changed)); then
 	staged_paths=()
