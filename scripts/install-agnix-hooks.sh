@@ -29,7 +29,6 @@ case "$current_hooks" in
 /*) current_hooks_dir="$current_hooks" ;;
 *) current_hooks_dir="$repo_root/$current_hooks" ;;
 esac
-current_hook="$current_hooks_dir/pre-commit"
 
 installer_active=0
 recorded_hooks_dir="$(git config --worktree --get agnix.hooksPath 2>/dev/null || true)"
