@@ -130,7 +130,8 @@ check("README documents every skill", not undocumented_skills, f"missing={undocu
 with TemporaryDirectory(prefix="omp-catalog-probe-") as temporary:
     probe = Path(temporary)
     (probe / "scripts").mkdir()
-    shutil.copy2(REPO / "scripts" / "build-catalog.py", probe / "scripts" / "build-catalog.py")
+    for script in ("build-catalog.py", "sync-plugin-manifests.py"):
+        shutil.copy2(REPO / "scripts" / script, probe / "scripts" / script)
     for manifest in REPO.glob("*/.omp-plugin/plugin.json"):
         target = probe / manifest.relative_to(REPO)
         target.parent.mkdir(parents=True, exist_ok=True)

@@ -27,17 +27,32 @@ from tempfile import TemporaryDirectory
 REPO = Path(__file__).resolve().parent.parent
 
 
-def plugins_with_deps() -> list[Path]:
+def plugins_with_deps(check: bool = False) -> list[Path]:
     found = []
-    for pkg in sorted(REPO.glob("*/package.json")):
-        data = json.loads(pkg.read_text(encoding="utf-8"))
-        if data.get("dependencies"):
-            found.append(pkg.parent)
+    candidates = {pkg.parent for pkg in REPO.glob("*/package.json")}
+    candidates.update(path.parent.parent for path in REPO.glob("*/.omp-plugin/plugin.json"))
+    for plugin in sorted(candidates):
+        data = json.loads((plugin / "package.json").read_text(encoding="utf-8"))
+        if not isinstance(data, dict):
+            raise ValueError(f"{plugin}: package.json must be an object")
+        dependencies = data.get("dependencies", {})
+        if not isinstance(dependencies, dict):
+            raise ValueError(f"{plugin}: dependencies must be an object")
+        declared = sources(plugin)
+        if check and dependencies:
+            for src in declared:
+                bundle_path = plugin / "dist" / f"{src.stem}.js"
+                if not bundle_path.is_file():
+                    raise ValueError(f"{plugin}: missing bundle {bundle_path}")
+        if dependencies:
+            found.append(plugin)
     return found
 
 
 def sources(plugin: Path) -> list[Path]:
     data = json.loads((plugin / "package.json").read_text(encoding="utf-8"))
+    if not isinstance(data, dict):
+        raise ValueError(f"{plugin}: package.json must be an object")
     omp = data.get("omp", {})
     if not isinstance(omp, dict) or not isinstance(omp.get("extensions", []), list):
         raise ValueError(f"{plugin}: omp.extensions must be a list")
@@ -53,9 +68,13 @@ def sources(plugin: Path) -> list[Path]:
             or not path.stem
         ):
             raise ValueError(f"{plugin}: unsupported extension entry {entry!r}")
+        if data.get("dependencies") and path.parts[0] != "dist":
+            raise ValueError(f"{plugin}: dependency plugin extension {entry!r} must point to packaged dist/*.js")
         src = plugin / "extensions" / f"{path.stem}.ts"
         if not src.is_file():
             raise ValueError(f"{plugin}: missing source for {entry!r}: {src}")
+        if path.parts[0] == "dist" and not data.get("dependencies") and not (plugin / path).is_file():
+            raise ValueError(f"{plugin}: missing bundle for {entry!r}")
         if src in out:
             raise ValueError(f"{plugin}: duplicate extension source {src}")
         out.append(src)
@@ -112,7 +131,11 @@ def main() -> int:
     parser.add_argument("--check", action="store_true", help="verify committed bundles are current")
     args = parser.parse_args()
 
-    targets = plugins_with_deps()
+    try:
+        targets = plugins_with_deps(check=args.check)
+    except (ValueError, OSError) as err:
+        print(f"FAIL: {err}", file=sys.stderr)
+        return 1
     if not targets:
         print("no plugin declares dependencies; nothing to bundle")
         return 0

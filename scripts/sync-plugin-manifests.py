@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Synchronize generated manifest fields while preserving plugin-owned metadata.
 
-`--check` compares both artifacts without creating or modifying files.
+`--check` compares generated artifacts without creating or modifying files.
 """
 
 from __future__ import annotations
@@ -89,9 +89,16 @@ def load_object(path: Path) -> dict[str, object]:
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--check", action="store_true", help="verify both generated manifests without writing")
+    parser.add_argument("--check", action="store_true", help="verify generated manifests and linked MCP configs without writing")
     args = parser.parse_args()
     problems: list[str] = []
+    discovered = {
+        path.parent.parent.name for path in REPO.glob("*/.omp-plugin/plugin.json")
+    } | {path.parent.name for path in REPO.glob("*/package.json")}
+    unregistered = discovered - set(PLUGINS)
+    if unregistered:
+        print(f"FAIL: unregistered plugin directories: {sorted(unregistered)}", file=sys.stderr)
+        return 1
     for name, (category, description) in PLUGINS.items():
         manifest_path = REPO / name / ".omp-plugin" / "plugin.json"
         package_path = REPO / name / "package.json"
@@ -117,7 +124,13 @@ def main() -> int:
             package.setdefault("omp", {})
             if not isinstance(package["omp"], dict):
                 raise ValueError(f"{package_path}: omp must be an object")
-            for path, value in ((manifest_path, manifest), (package_path, package)):
+            artifacts = [(manifest_path, manifest), (package_path, package)]
+            if "mcpServers" in manifest:
+                servers = manifest["mcpServers"]
+                if not isinstance(servers, dict):
+                    raise ValueError(f"{manifest_path}: mcpServers must be an object")
+                artifacts.append((REPO / name / ".mcp.json", {"mcpServers": servers}))
+            for path, value in artifacts:
                 expected = json.dumps(value, indent=2) + "\n"
                 if args.check:
                     if not path.is_file() or path.read_text(encoding="utf-8") != expected:
@@ -131,7 +144,7 @@ def main() -> int:
         for problem in problems:
             print(f"FAIL: {problem}", file=sys.stderr)
         return 1
-    print(f"{'PASS: checked' if args.check else 'wrote'} {len(PLUGINS)} plugin manifest(s) and package.json file(s)")
+    print(f"{'PASS: checked' if args.check else 'wrote'} {len(PLUGINS)} plugin manifests and packages, plus declared linked MCP configs")
     return 0
 
 

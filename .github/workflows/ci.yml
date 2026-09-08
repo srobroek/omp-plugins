@@ -45,13 +45,6 @@ jobs:
         run: |
           python3 scripts/sync-plugin-manifests.py --check
 
-      - name: Catalog and capability negative checks
-        run: |
-          python3 scripts/check-catalog-validation.py
-          python3 scripts/check-design-structure.py
-          python3 scripts/check-mcp-servers.py
-          python3 scripts/test-checker-contracts.py
-
       - uses: oven-sh/setup-bun@v2
         with:
           # Pinned: build-extensions.py --check byte-compares committed dist/
@@ -70,6 +63,15 @@ jobs:
               (cd "$(dirname "$pkg")" && bun install --frozen-lockfile --silent)
             fi
           done < <(git ls-files '*/package.json')
+
+      - name: Shipped asset metadata and trigger syntax
+        run: bun scripts/check-agentic-metadata.ts
+      - name: Catalog and capability negative checks
+        run: |
+          python3 scripts/check-catalog-validation.py
+          python3 scripts/check-design-structure.py
+          python3 scripts/check-mcp-servers.py
+          python3 scripts/test-checker-contracts.py
 
       # Every extension module must at least parse and bundle. Committed dist/
       # bundles must match a fresh build (git installs run no install step on the
