@@ -1,9 +1,9 @@
 import { describe, expect, test } from "bun:test";
+import { spawnSync } from "node:child_process";
 import closeKeywords, {
 	extractBody,
 	normalize,
 	replaceLastBody,
-	shellSegments,
 } from "./close-keywords.ts";
 
 type Handler = (event: Record<string, unknown>) => unknown;
@@ -43,7 +43,7 @@ describe("normalize close-keyword lists", () => {
 	});
 });
 
-describe("extractBody / replaceLastBody / shellSegments", () => {
+describe("extractBody / replaceLastBody", () => {
 	test("extracts --body and -b forms", () => {
 		expect(extractBody("gh pr create --body 'Fixes #1, #2'")).toBe("Fixes #1, #2");
 		expect(extractBody("gh pr edit --body=Fixes\\ #1")).toBe("Fixes #1");
@@ -55,12 +55,6 @@ describe("extractBody / replaceLastBody / shellSegments", () => {
 		expect(next).toBe("gh pr create --title t --body 'new'");
 	});
 
-	test("shellSegments splits operators", () => {
-		expect(shellSegments("echo a && gh pr create --body x")).toEqual([
-			["echo", "a"],
-			["gh", "pr", "create", "--body", "x"],
-		]);
-	});
 });
 
 describe("close-keywords integration", () => {
@@ -111,4 +105,29 @@ describe("close-keywords integration", () => {
 			}),
 		).toBeUndefined();
 	});
+});
+
+test("rewritten literal bodies remain data in a real shell and leave later bodies alone", () => {
+	const body = "Fixes #1, #2; it's $(printf INJECTED >&2) `printf BACKTICK >&2`";
+	const quote = (text: string) => `'${text.replaceAll("'", "'\\''")}'`;
+	const command = `gh pr create -b old --body=${quote(body)}; gh issue edit 3 --body 'unrelated'`;
+	const { handlers, pi } = fakePi();
+	closeKeywords(pi as never);
+	const result = handlers.tool_call[0]({
+		toolName: "bash", input: { command },
+	}) as { input: { command: string } };
+	const run = spawnSync("timeout", ["5s", "bash", "-c",
+		`gh() { printf '%s\\0' "$@"; }; ${result.input.command}`], { encoding: "utf8" });
+	expect(run.status).toBe(0);
+	expect(run.stderr).toBe("");
+	expect(run.stdout.split("\0")).toEqual([
+		"pr", "create", "-b", "old", `--body=${normalize(body)}`,
+		"issue", "edit", "3", "--body", "unrelated", "",
+	]);
+});
+
+test("body-valued option arguments and shell expansions are not reinterpreted", () => {
+	expect(extractBody("gh pr create --body 'Fixes #1, #2' --title '--body'")).toBe("Fixes #1, #2");
+	expect(replaceLastBody('gh pr create --body "$BODY"', "other")).toBeNull();
+	expect(replaceLastBody("gh pr create --body 'unterminated", "other")).toBeNull();
 });

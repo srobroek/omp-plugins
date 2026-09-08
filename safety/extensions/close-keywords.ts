@@ -29,9 +29,7 @@ const SEPARATORS = [
 	/^[^\S\n]*,[^\S\n]*/,
 ];
 
-const GH_PR = /(?:^[^\S\n]*|[;&|][^\S\n]*)gh[^\S\n]+pr[^\S\n]+(?:create|edit)(?:\s|$)/m;
 const MAX_COMMAND_LENGTH = 64_000;
-const OPERATORS = new Set([";", "&&", "||", "&", "|", "\n"]);
 
 function matchAt(pattern: RegExp, text: string, pos: string | number): string | null {
 	const slice = typeof pos === "number" ? text.slice(pos) : pos;
@@ -93,103 +91,100 @@ export function normalize(text: string): string {
 	return text.split("\n").map(normalizeLine).join("\n");
 }
 
-export function shellSegments(command: string): string[][] {
-	const segments: string[][] = [[]];
-	let current = "";
-	let quote: "'" | '"' | null = null;
-	const flushToken = () => {
-		if (current !== "") {
-			segments[segments.length - 1].push(current);
-			current = "";
-		}
-	};
-	for (let i = 0; i < command.length; i++) {
-		const ch = command[i];
-		if (quote) {
-			if (ch === quote) quote = null;
-			else if (ch === "\\" && quote === '"' && i + 1 < command.length) current += command[++i];
-			else current += ch;
+type Token = { value: string; start: number; end: number };
+
+// Only literal shell words are eligible. Unsupported shell syntax is never rewritten.
+function literalSegments(command: string): Token[][] | null {
+	const segments: Token[][] = [[]];
+	let i = 0;
+	while (i < command.length) {
+		if (" \t\r".includes(command[i])) { i++; continue; }
+		if (";&|\n".includes(command[i])) {
+			const ch = command[i++];
+			if ((ch === "&" || ch === "|") && command[i] === ch) i++;
+			segments.push([]);
 			continue;
 		}
-		if (ch === "'" || ch === '"') {
-			quote = ch;
-			continue;
-		}
-		if (ch === "\\" && i + 1 < command.length) {
-			current += command[++i];
-			continue;
-		}
-		if (ch === " " || ch === "\t" || ch === "\r") {
-			flushToken();
-			continue;
-		}
-		if (ch === ";" || ch === "&" || ch === "|" || ch === "\n") {
-			flushToken();
-			let op = ch;
-			if ((ch === "&" || ch === "|") && command[i + 1] === ch) {
-				op += command[++i];
+		const start = i;
+		let value = "";
+		let quote: string | null = null;
+		while (i < command.length) {
+			const ch = command[i];
+			if (!quote && " \t\r;&|\n".includes(ch)) break;
+			if (ch === "'" && quote !== '"') { quote = quote ? null : "'"; i++; continue; }
+			if (ch === '"' && quote !== "'") { quote = quote ? null : '"'; i++; continue; }
+			if (quote !== "'" && ch === "\\") {
+				const next = command[i + 1];
+				if (next === undefined) return null;
+				if (quote === '"' && !'$`"\\\n'.includes(next)) {
+					value += ch; i++; continue;
+				}
+				if (next !== "\n") value += next;
+				i += 2;
+				continue;
 			}
-			if (OPERATORS.has(op) || [...op].every((c) => ";&|\n".includes(c))) {
-				segments.push([]);
-			}
-			continue;
+			if (quote !== "'" && ("$`".includes(ch) || (!quote && ("()<>*?{}[]~".includes(ch) || (ch === "#" && i === start))))) return null;
+			value += ch;
+			i++;
 		}
-		current += ch;
+		if (quote) return null;
+		segments[segments.length - 1].push({ value, start, end: i });
 	}
-	flushToken();
 	return segments;
 }
 
-export function extractBody(command: string): string {
-	let body = "";
-	for (const segment of shellSegments(command)) {
-		let commandStart = 0;
-		while (commandStart < segment.length && segment[commandStart].includes("=")) {
-			const name = segment[commandStart].split("=", 1)[0];
-			if (!name || !(/[A-Za-z_]/.test(name[0]))) break;
-			if (![...name].every((c) => /[A-Za-z0-9_]/.test(c))) break;
-			commandStart += 1;
-		}
-		if (segment[commandStart] !== "gh" || segment[commandStart + 1] !== "pr") continue;
-		if (segment[commandStart + 2] !== "create" && segment[commandStart + 2] !== "edit") continue;
-		const tokens = segment.slice(commandStart + 3);
-		let candidate = "";
-		for (let index = 0; index < tokens.length; index++) {
-			const token = tokens[index];
-			if (token === "--") break;
-			if (token === "--body" || token === "-b") {
-				candidate = index + 1 < tokens.length ? tokens[index + 1] : "";
-			} else if (token.startsWith("--body=")) {
-				candidate = token.slice("--body=".length);
-			} else if (token.startsWith("-b=")) {
-				candidate = token.slice("-b=".length);
-			} else if (token.startsWith("-b") && !token.startsWith("--")) {
-				candidate = token.slice(2);
+
+function bodySpan(command: string): Token | null {
+	const segments = literalSegments(command);
+	if (!segments) return null;
+	let selected: Token | null = null;
+	for (const segment of segments) {
+		let start = 0;
+		while (/^[A-Za-z_][A-Za-z0-9_]*=/.test(segment[start]?.value ?? "")) start++;
+		if (segment[start]?.value !== "gh" || segment[start + 1]?.value !== "pr" ||
+			!["create", "edit"].includes(segment[start + 2]?.value ?? "")) continue;
+		selected = null;
+		for (let i = start + 3; i < segment.length; i++) {
+			const token = segment[i];
+			if (token.value === "--") break;
+			if (token.value === "--body" || token.value === "-b") {
+				selected = segment[++i] ?? null;
+			} else {
+				if (["--title", "-t", "--base", "-B", "--head", "-H", "--repo", "-R",
+					"--reviewer", "-r", "--assignee", "-a", "--label", "-l", "--project", "-p",
+					"--milestone", "-m", "--body-file", "-F", "--template", "-T",
+					"--add-assignee", "--remove-assignee", "--add-label", "--remove-label",
+					"--add-project", "--remove-project", "--add-reviewer", "--remove-reviewer"].includes(token.value)) {
+					i++;
+					continue;
+				}
+				const prefix = token.value.startsWith("--body=") ? "--body=" :
+					token.value.startsWith("-b=") ? "-b=" :
+					token.value.startsWith("-b") && !token.value.startsWith("--") ? "-b" : null;
+				if (prefix) {
+					// Replace the entire word, keeping the flag literal even when originally quoted.
+					selected = { ...token, value: token.value.slice(prefix.length) };
+				}
 			}
 		}
-		body = candidate;
 	}
-	return body;
+	return selected;
+}
+
+export function extractBody(command: string): string {
+	return bodySpan(command)?.value ?? "";
 }
 
 export function replaceLastBody(command: string, next: string): string | null {
-	const flags = [/\s--body=/, /\s-b=/, /\s--body\s+/, /\s-b\s+/, /\s-b(?=["'])/];
-	let last = -1;
-	for (const flag of flags) {
-		const re = new RegExp(flag.source, "g");
-		let m: RegExpExecArray | null;
-		while ((m = re.exec(command))) {
-			last = m.index + m[0].length;
-		}
-	}
-	if (last < 0) return null;
-	const rest = command.slice(last);
-	const quoted = rest.match(/^("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|\S+)/);
-	if (!quoted) return null;
-	const escaped = next.includes("'")
-		? `"${next.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`
-		: `'${next}'`;
-	return command.slice(0, last) + escaped + rest.slice(quoted[0].length);
+	const span = bodySpan(command);
+	if (!span) return null;
+	const raw = command.slice(span.start, span.end);
+	const token = literalSegments(raw)?.[0]?.[0]?.value ?? "";
+	const prefix = token !== span.value
+		? token.slice(0, token.length - span.value.length)
+		: "";
+	const escaped = `'${next.replaceAll("'", "'\\''")}'`;
+	return command.slice(0, span.start) + prefix + escaped + command.slice(span.end);
 }
 
 function commandOf(event: ExtensionToolCallEvent): string {
@@ -205,7 +200,6 @@ export default function closeKeywords(pi: ExtensionAPI): void {
 			const command = commandOf(event);
 			if (!command || command.length > MAX_COMMAND_LENGTH) return;
 			if (!command.includes("gh") || !command.includes("pr")) return;
-			if (!GH_PR.test(command)) return;
 			const body = extractBody(command);
 			if (!body) return;
 			const fixed = normalize(body);

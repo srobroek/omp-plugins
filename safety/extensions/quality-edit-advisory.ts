@@ -1,7 +1,5 @@
-import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join, basename, extname, resolve } from "node:path";
-import { homedir, tmpdir } from "node:os";
 
 import type { ExtensionAPI, ExtensionToolCallEvent, ExtensionToolResultEvent } from "@oh-my-pi/pi-coding-agent";
 
@@ -52,9 +50,8 @@ const SUGGESTIONS: Record<string, string> = {
 
 const EDIT_TOOLS = new Set(["edit", "write", "ast_edit"]);
 
-type Pending = { files: string[]; lines: number };
-
-const pending = new Map<string, Pending>();
+type Pending = { files: string[]; lines: number; cwd: string };
+type Counters = { files: Set<string>; lines: number; last: number };
 
 export function envInt(name: string, fallback: number): number {
 	const raw = process.env[name];
@@ -143,18 +140,6 @@ export function changedLineCount(input: Record<string, unknown>): number {
 	return 1;
 }
 
-export function stateDir(root: string): string {
-	const digest = createHash("sha256").update(root).digest("hex").slice(0, 16);
-	return join(process.env.TMPDIR || tmpdir(), `agentic-quality-advisory-${digest}`);
-}
-
-function readInt(path: string): number {
-	try {
-		return Number.parseInt(readFileSync(path, "utf8").trim(), 10) || 0;
-	} catch {
-		return 0;
-	}
-}
 
 function cwdOf(event: ExtensionToolCallEvent): string {
 	const raw = event.input.cwd;
@@ -177,11 +162,13 @@ function prepend(
 	return { content: [{ type: "text", text: banner }, ...event.content] };
 }
 
-export function resetQualityAdvisoryForTests(): void {
-	pending.clear();
-}
-
 export default function qualityEditAdvisory(pi: ExtensionAPI): void {
+	const pending = new Map<string, Pending>();
+	const counters = new Map<string, Counters>();
+	pi.on("session_start", () => {
+		pending.clear();
+		counters.clear();
+	});
 	pi.on("tool_call", (event) => {
 		try {
 			if (!EDIT_TOOLS.has(event.toolName)) return;
@@ -190,6 +177,7 @@ export default function qualityEditAdvisory(pi: ExtensionAPI): void {
 			pending.set(event.toolCallId, {
 				files,
 				lines: changedLineCount(event.input),
+				cwd: cwdOf(event),
 			});
 		} catch {
 			return;
@@ -202,33 +190,21 @@ export default function qualityEditAdvisory(pi: ExtensionAPI): void {
 			const rec = pending.get(event.toolCallId);
 			if (!rec) return;
 			pending.delete(event.toolCallId);
+			if (event.isError) return;
 
-			const root = findRepoRoot(cwdOf({ ...event, input: event.input ?? {}, toolName: event.toolName } as ExtensionToolCallEvent) || process.cwd());
-			const repo = findRepoRoot(process.cwd()) ?? findRepoRoot(homedir());
-			const base = root ?? repo;
+			const base = findRepoRoot(rec.cwd);
 			if (!base) return;
 
 			const selected = selectedLanguages(base);
 			if (!selected.size) return;
 
-			const directory = stateDir(base);
-			mkdirSync(directory, { recursive: true });
-			const filesState = join(directory, "files");
-			const linesState = join(directory, "lines");
-			const lastAdvice = join(directory, "last-advice");
-
-			const known = new Set<string>();
-			if (existsSync(filesState)) {
-				for (const line of readFileSync(filesState, "utf8").split("\n")) {
-					if (line.trim()) known.add(line);
-				}
-			}
+			const state = counters.get(base) ?? { files: new Set<string>(), lines: 0, last: 0 };
+			counters.set(base, state);
+			const known = state.files;
 			for (const f of rec.files) known.add(f);
-			writeFileSync(filesState, [...known].sort().join("\n") + "\n");
-
-			const totalLines = readInt(linesState) + rec.lines;
-			writeFileSync(linesState, `${totalLines}\n`);
-			const last = readInt(lastAdvice);
+			state.lines += rec.lines;
+			const totalLines = state.lines;
+			const last = state.last;
 
 			const lineThreshold = envInt("AGENTIC_QUALITY_ADVISORY_LINES", 120);
 			const fileThreshold = envInt("AGENTIC_QUALITY_ADVISORY_FILES", 5);
@@ -260,11 +236,7 @@ export default function qualityEditAdvisory(pi: ExtensionAPI): void {
 			let shown = preview.slice(0, 10).join(", ");
 			if (preview.length > 10) shown += `, +${preview.length - 10} more`;
 
-			try {
-				writeFileSync(lastAdvice, `${now}\n`);
-			} catch {
-				/* ignore */
-			}
+			state.last = now;
 
 			const langs = [...byLanguage.keys()].sort().join(", ");
 			const text =
