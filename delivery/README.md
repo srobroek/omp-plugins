@@ -1,6 +1,14 @@
 # delivery
 
-Commit/push cadence, git workflow (branch, ship, merge proof, beads merge-queue linkage), a branch-first commit gate, and the read-only `pr-reviewer` agent.
+Git delivery workflows and commit guards for OMP.
+
+The plugin covers:
+
+- Commit and push cadence.
+- Branching, shipping, and merge proof.
+- Beads merge-queue linkage.
+- A branch-first commit gate.
+- Read-only pull-request review through `pr-reviewer`.
 
 ## Agents
 
@@ -18,11 +26,21 @@ Commit/push cadence, git workflow (branch, ship, merge proof, beads merge-queue 
 
 ## Extensions
 
-- `main-branch-gate` — blocks a `git`/`dgit` commit whose target repository has
-  main or master checked out, reading `git branch --show-current` there rather
-  than reading the commit message. Fails open when git cannot name a branch;
-  `--dry-run` and `DELIVERY_ALLOW_MAIN_COMMIT=1` are allowed. It replaces
-  `delivery-no-work-on-main`, which blocked `git commit -m 'fix main bug'` and
-  missed every commit whose message did not mention the branch.
-- `unpushed-work-advisory` — at a session stop, reports the agent's own
-  uncommitted files and unpushed commits.
+### `main-branch-gate`
+
+Blocks a `git`/`dgit` commit whose target repository has `main` or `master` checked out. It reads `git branch --show-current` in that repository, not the commit message.
+
+The gate allows the call when git cannot name a branch. It also allows a standalone `--dry-run` commit option, not the same text used as an option value or a path after `--`.
+
+For a user-authorized exception, set `DELIVERY_ALLOW_MAIN_COMMIT=1` in the process environment or as an assignment prefix on the actual commit invocation. Message or echo text does not enable the override. The override records the exception; it does not replace host approval.
+
+Directory checks are preflight observations, not atomic guarantees. Dynamic shell state remains outside this advisory-strength gate.
+
+### `unpushed-work-advisory`
+
+At session stop, reports dirty paths this extension instance observed touched and unpushed commits since its repository baseline.
+
+Path-level counts include pre-existing or concurrent edits in the same file.
+Before staging, inspect staged and unstaged hunks for ownership. A touched path is not permission to stage or commit the whole file.
+
+A SHA range likewise does not establish authorship. The reminder grants no authority to commit or publish.

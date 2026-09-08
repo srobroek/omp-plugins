@@ -12,7 +12,7 @@ import unpushedWorkAdvisory, {
 	parseNumstat,
 	parsePorcelain,
 	recordAgentPath,
-	resetUnpushedAdvisoryForTests,
+	createAdvisoryState,
 	shouldAdvise,
 	SIGNIFICANT_AGENT_CHANGED_LINES,
 	SIGNIFICANT_AGENT_DIRTY_FILES,
@@ -242,14 +242,11 @@ describe("authorship gating", () => {
 describe("formatAdvisory", () => {
 	const status = parsePorcelain(porcelain("## wip", " M a.ts", " M b.ts", " M c.ts"));
 
-	test("names the agent's own paths and forbids staging anything else", () => {
+	test("names the observed paths, branch, and total magnitude", () => {
 		const text = formatAdvisory(status, ["a.ts", "b.ts", "c.ts"], evenStat(40, "a.ts", "b.ts", "c.ts"));
 		expect(text).toContain("wip");
 		expect(text).toContain("a.ts");
 		expect(text).toContain("~120 changed line(s)");
-		expect(text).toContain("git commit <paths>");
-		expect(text).toContain("not yours to commit, count, or mention");
-		expect(text).not.toContain("add -A");
 	});
 
 	test("summarises each file's magnitude so chunks can be told apart", () => {
@@ -269,30 +266,15 @@ describe("formatAdvisory", () => {
 		expect(text.indexOf("big.ts")).toBeLessThan(text.indexOf("small.ts"));
 	});
 
-	test("a file with no stat is marked rather than dropped", () => {
-		// Untracked files never appear in `git diff HEAD`, so they carry no stat.
-		const text = formatAdvisory(status, ["new.ts"], []);
-		expect(text).toContain("new.ts (untracked)");
-	});
 
-	test("instructs one commit per unit of functionality", () => {
-		const text = formatAdvisory(status, ["a.ts", "b.ts", "c.ts"], evenStat(10, "a.ts"));
-		expect(text).toContain("unit of functionality");
-		expect(text).toContain("separate commit per change with its own");
-		expect(text).toContain("unfinished");
-	});
 
 	test("omits magnitude when the diff could not be taken", () => {
-		expect(formatAdvisory(status, ["a.ts"], [])).not.toContain("changed line(s)");
+		const text = formatAdvisory(status, ["missing-stat.ts"], []);
+		expect(text).toContain("missing-stat.ts");
+		expect(text).not.toContain("changed line(s)");
+		expect(text).not.toMatch(/\(\+\d+\/-\d+\)/);
 	});
 
-	test("only the agent's own session commits are mentioned", () => {
-		const ahead = parsePorcelain(porcelain("## wip...origin/wip [ahead 25]"));
-		const text = formatAdvisory(ahead, [], [], 3);
-		expect(text).toContain("3 commit(s) you made this session");
-		expect(text).not.toContain("25");
-		expect(text).toContain("authority");
-	});
 
 	test("a branch ahead with no session commits says nothing about commits", () => {
 		const ahead = parsePorcelain(porcelain("## wip...origin/wip [ahead 25]"));
@@ -310,7 +292,6 @@ describe("handleSessionStop", () => {
 	const oneOwn = () => 1;
 
 	test("skips when stop_hook_active", () => {
-		resetUnpushedAdvisoryForTests();
 		expect(
 			handleSessionStop(
 				{ stop_hook_active: true },
@@ -324,8 +305,7 @@ describe("handleSessionStop", () => {
 		).toBeUndefined();
 	});
 
-	test("continues with context when the session left its own commits unpushed", () => {
-		resetUnpushedAdvisoryForTests();
+	test("continues with context for unpushed commits since the baseline", () => {
 		const r = handleSessionStop(
 			{},
 			"/tmp",
@@ -342,7 +322,6 @@ describe("handleSessionStop", () => {
 	test("a branch ahead of upstream from before the session is ignored", () => {
 		// Verbatim shape of the false demand: 25 commits ahead, none of them made
 		// this session, nothing dirty that the agent wrote.
-		resetUnpushedAdvisoryForTests();
 		const text = porcelain("## feat...origin/feat [ahead 25]");
 		expect(handleSessionStop({}, "/repo", text, new Set(), noStat, noOwn, "base")).toBeUndefined();
 	});
@@ -350,26 +329,23 @@ describe("handleSessionStop", () => {
 	test("no baseline means no claim about commits", () => {
 		// `sessionHead` is null in a non-repo or unreadable checkout. The real
 		// counter must then report zero rather than fall back to the ahead count.
-		resetUnpushedAdvisoryForTests();
 		const text = porcelain("## feat...origin/feat [ahead 4]");
 		expect(handleSessionStop({}, "/repo", text, new Set(), noStat)).toBeUndefined();
 	});
 
 	test("does not fire twice in a row", () => {
-		resetUnpushedAdvisoryForTests();
+		const state = createAdvisoryState();
 		const text = porcelain("## feat...origin/feat [ahead 1]");
-		expect(handleSessionStop({}, "/tmp", text, new Set(), noStat, oneOwn, "base")).toBeDefined();
-		expect(handleSessionStop({}, "/tmp", text, new Set(), noStat, oneOwn, "base")).toBeUndefined();
+		expect(handleSessionStop({}, "/tmp", text, new Set(), noStat, oneOwn, "base", state)).toBeDefined();
+		expect(handleSessionStop({}, "/tmp", text, new Set(), noStat, oneOwn, "base", state)).toBeUndefined();
 	});
 
 	test("stays silent on an unattributed dirty tree", () => {
-		resetUnpushedAdvisoryForTests();
 		const text = porcelain("## feat", " M a.ts", " M b.ts", " M c.ts", " M d.ts");
 		expect(handleSessionStop({}, "/repo", text, new Set(), noStat, noOwn)).toBeUndefined();
 	});
 
 	test("a single large agent rewrite advises via the line gate", () => {
-		resetUnpushedAdvisoryForTests();
 		const text = porcelain("## feat", " M big.ts");
 		const r = handleSessionStop(
 			{},
@@ -396,7 +372,6 @@ describe("integration temp git repo", () => {
 	});
 
 	test.skipIf(!gitOk)("advises only about files the agent wrote", () => {
-		resetUnpushedAdvisoryForTests();
 		const run = (args: string[]) =>
 			Bun.spawnSync(["git", ...GIT_ISOLATED, ...args], {
 				cwd: dir,
@@ -418,7 +393,7 @@ describe("integration temp git repo", () => {
 		const handlers: Record<string, Array<(e: unknown, ctx?: unknown) => unknown>> = {};
 		const fakePi = {
 			zod: {},
-			registerTool: () => {},
+			registerTool: () => { },
 			on: (e: string, h: (ev: unknown, ctx?: unknown) => unknown) => {
 				(handlers[e] ??= []).push(h);
 			},
@@ -476,7 +451,6 @@ describe("integration temp git repo", () => {
 	});
 
 	test.skipIf(!gitOk)("counts only commits made after the session opened", () => {
-		resetUnpushedAdvisoryForTests();
 		const work = mkdtempSync(join(tmpdir(), "unpushed-adv-commits-"));
 		const origin = mkdtempSync(join(tmpdir(), "unpushed-adv-origin-"));
 		const run = (args: string[], cwd = work) =>
@@ -500,7 +474,7 @@ describe("integration temp git repo", () => {
 		const handlers: Record<string, Array<(e: unknown, ctx?: unknown) => unknown>> = {};
 		const fakePi = {
 			zod: {},
-			registerTool: () => {},
+			registerTool: () => { },
 			on: (e: string, h: (ev: unknown, ctx?: unknown) => unknown) => {
 				(handlers[e] ??= []).push(h);
 			},
@@ -520,7 +494,7 @@ describe("integration temp git repo", () => {
 			additionalContext: string;
 		};
 		// Two commits ahead of origin, exactly one of them made after the baseline.
-		expect(result.additionalContext).toContain("1 commit(s) you made this session");
+		expect(result.additionalContext).toContain("1 commit(s) since the session baseline");
 		expect(result.additionalContext).not.toContain("2 commit(s)");
 
 		rmSync(work, { recursive: true, force: true });

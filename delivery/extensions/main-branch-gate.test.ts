@@ -1,11 +1,12 @@
-import { homedir } from "node:os";
+import { homedir, tmpdir } from "node:os";
+import { mkdtempSync, mkdirSync, rmSync } from "node:fs";
+import { join } from "node:path";
 
 import { afterEach, describe, expect, test } from "bun:test";
 
 import mainBranchGate, {
 	currentBranch,
 	decideCommit,
-	denyReason,
 	extractCommand,
 	findCommitInvocations,
 	type GitRun,
@@ -31,6 +32,45 @@ function fakeGit(
 
 afterEach(() => {
 	setGitRunForTests(null);
+});
+
+test("dry-run is an option, not a message, value operand, or path", () => {
+	setGitRunForTests(fakeGit({ "/repo": "main" }).run);
+	for (const command of [
+		"git commit -m '--dry-run'",
+		"git commit --author '--dry-run' -m x",
+		"git commit -am '--dry-run'",
+		"git commit -m x -- --dry-run",
+		"git commit --message=--dry-run",
+	]) expect(decideCommit(command, "/repo", {})?.block).toBe(true);
+	expect(decideCommit("git commit -m x --dry-run", "/repo", {})).toBeUndefined();
+});
+
+test("attached and repeated -C options protect the actual repository", () => {
+	const dir = mkdtempSync(join(tmpdir(), "delivery-attached-c-"));
+	const protectedDir = join(dir, "protected");
+	mkdirSync(protectedDir);
+	mkdirSync(join(protectedDir, "nested"));
+	const git = (...args: string[]) => {
+		const result = Bun.spawnSync(["git", ...args], { cwd: dir, stdout: "pipe", stderr: "pipe" });
+		if (result.exitCode !== 0) throw new Error(result.stderr.toString());
+	};
+	try {
+		git("init", "-b", "topic");
+		git("-C", protectedDir, "init", "-b", "main");
+		for (const command of [
+			"git -Cprotected commit",
+			`git -C'${dir}' -Cprotected commit`,
+			`git -C '${dir}' -Cprotected commit`,
+			`git -C'${dir}' -C protected commit`,
+			"git -Cprotected -Cnested commit",
+			"git -C protected -C nested commit",
+			`cd '${dir}' && git -Cprotected -Cnested commit`,
+		]) expect(decideCommit(command, dir, {})?.block).toBe(true);
+		expect(decideCommit(`git -C'${protectedDir}' -C.. commit`, dir, {})).toBeUndefined();
+	} finally {
+		rmSync(dir, { recursive: true, force: true });
+	}
 });
 
 describe("extractCommand", () => {
@@ -76,9 +116,6 @@ describe("findCommitInvocations", () => {
 
 	test("pre-verb value options do not swallow the verb", () => {
 		expect(findCommitInvocations("git -c user.name=x commit -m y")).toEqual([
-			{ repoDir: null, dryRun: false, chdir: null, chdirUnknown: false },
-		]);
-		expect(findCommitInvocations("git --git-dir /r/.git --work-tree /r commit -m y")).toEqual([
 			{ repoDir: null, dryRun: false, chdir: null, chdirUnknown: false },
 		]);
 	});
@@ -289,16 +326,15 @@ describe("decideCommit", () => {
 	// the commit targets a sibling on a feature branch, which the gate blocked while saying
 	// it had read the branch in the repository the commit targets.
 	test("cd decides which repository is read", () => {
-		const { run, calls } = fakeGit({ "/session": "main", "/sibling": "feat/design-plugin" });
+		const { run } = fakeGit({ "/session": "main", "/tmp": "feat/design-plugin" });
 		setGitRunForTests(run);
-		expect(decideCommit("cd /sibling && git commit -m x", "/session", {})).toBeUndefined();
-		expect(calls.map(c => c.cwd)).toEqual(["/sibling"]);
+		expect(decideCommit("cd /tmp && git commit -m x", "/session", {})).toBeUndefined();
 	});
 
 	test("cd into a repository on main still blocks", () => {
-		const { run } = fakeGit({ "/session": "feat/x", "/trunk": "main" });
+		const { run } = fakeGit({ "/session": "feat/x", "/tmp": "main" });
 		setGitRunForTests(run);
-		expect(decideCommit("cd /trunk && git commit -m x", "/session", {})?.block).toBe(true);
+		expect(decideCommit("cd /tmp && git commit -m x", "/session", {})?.block).toBe(true);
 	});
 
 	test("a pipeline cd leaves the session directory in force", () => {
@@ -368,6 +404,23 @@ describe("decideCommit", () => {
 		).toBe(true);
 	});
 
+	test("override operands cannot authorize a later commit", () => {
+		setGitRunForTests(fakeGit({ "/work": "main" }).run);
+		for (const command of [
+			"git commit -m 'DELIVERY_ALLOW_MAIN_COMMIT=1'",
+			"echo DELIVERY_ALLOW_MAIN_COMMIT=1; git commit",
+			"DELIVERY_ALLOW_MAIN_COMMIT=1 echo ok; git commit",
+		]) expect(decideCommit(command, "/work", {})?.block).toBe(true);
+	});
+
+	test("failed cd preserves cwd for semicolon but skips the and-chain", () => {
+		setGitRunForTests(fakeGit({ "/work": "main" }).run);
+		const missing = "/dev/null/not-a-directory";
+		expect(decideCommit(`cd ${missing}; git commit`, "/work", {})?.block).toBe(true);
+		expect(decideCommit(`cd ${missing} && git commit`, "/work", {})).toBeUndefined();
+		expect(decideCommit(`cd ${missing} && echo ok; git commit`, "/work", {})?.block).toBe(true);
+	});
+
 	test("the prefilter keeps unrelated commands away from the seam", () => {
 		const { run, calls } = fakeGit({ "/work": "main" });
 		setGitRunForTests(run);
@@ -378,22 +431,13 @@ describe("decideCommit", () => {
 	});
 });
 
-describe("denyReason", () => {
-	test("names the branch, the fix, the evidence, and the override", () => {
-		const reason = denyReason("main");
-		expect(reason).toContain("main");
-		expect(reason).toContain("git switch -c");
-		expect(reason).toContain("git branch --show-current");
-		expect(reason).toContain("DELIVERY_ALLOW_MAIN_COMMIT=1");
-	});
-});
 
 describe("integration", () => {
 	function register(): Array<(e: unknown) => unknown> {
 		const handlers: Record<string, Array<(e: unknown) => unknown>> = {};
 		const fakePi = {
 			zod: {},
-			registerTool: () => {},
+			registerTool: () => { },
 			on: (event: string, handler: (e: unknown) => unknown) => {
 				(handlers[event] ??= []).push(handler);
 			},

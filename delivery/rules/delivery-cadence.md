@@ -18,23 +18,22 @@ elapsed time or accumulated volume.
   unrelated changes into a single mixed commit because they happen to be dirty
   at the same moment.
 - Order dependent chunks so each commit leaves the tree working.
-- Leave a chunk uncommitted only when it is genuinely unfinished, and say so.
+- Leave unfinished or uncertain-ownership work uncommitted, and report it.
 
 ## Commit only your own work
 
-MUST Commit only files you changed in this session. Name them explicitly:
-`git commit <paths> -m ...`.
+MUST Inspect staged and unstaged diffs before staging. Identify your own finished
+hunks and preserve unrelated index and working-tree changes.
 
-NOT `git add -A`, `git add .`, `git commit -a`, or any other whole-tree
-sweep. A repository you are working in may hold a human's in-flight edits,
-another agent's work, staged changes mid-migration, and generated files. None
-of it is yours to author a commit for.
+MUST Commit only owned, finished hunks. A touched file can include pre-existing
+or concurrent edits; touching it does not establish ownership of the whole file.
 
-NOT Commit or stage a file merely because it is dirty. Dirty is not a claim of
-ownership; only having changed it is.
+NOT Use whole-path staging or `git commit <paths> -m ...` unless every included
+change is owned and finished and the resulting commit excludes unrelated work.
 
-NOT Interpret a session-stop reminder about uncommitted files as authority to
-commit anything beyond the files it names.
+NOT `git add -A`, `git add .`, `git commit -a`, or any other whole-tree sweep.
+
+NOT Treat a session-stop reminder as authority to stage, commit, or publish.
 
 ## Pushing
 

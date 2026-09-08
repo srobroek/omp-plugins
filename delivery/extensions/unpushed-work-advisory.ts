@@ -6,7 +6,7 @@ import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
 const TIMEOUT_MS = 2000;
 
 /**
- * Volume at which the advisory speaks up about the agent's own uncommitted work.
+ * Volume at which the advisory speaks up about dirty paths touched this session.
  *
  * Neither number defines when a commit is *due* — a finished atomic chunk is due
  * immediately, whatever its size. These only decide when staying silent stops
@@ -22,7 +22,7 @@ export const SIGNIFICANT_AGENT_DIRTY_FILES = 3;
 export const SIGNIFICANT_AGENT_CHANGED_LINES = 80;
 
 /**
- * Tools whose results identify a file the agent itself wrote. Membership is
+ * Tools whose successful results identify a touched file. Membership is
  * tested with `=== true`, never for truthiness: a bare `WRITING_TOOLS[name]`
  * check would accept `"constructor"` through the prototype chain, the same bug
  * class that took a session's bash tool down entirely.
@@ -35,24 +35,14 @@ const WRITING_TOOLS: Record<string, true> = { write: true, edit: true };
  */
 const NON_FILE_SCHEME = /^[a-z][a-z0-9+.-]*:\/\//i;
 
-let lastFired = false;
-let agentPaths = new Set<string>();
+export type AdvisoryState = {
+	lastFired: boolean;
+	agentPaths: Set<string>;
+	sessionHead: string | null;
+};
 
-/**
- * `HEAD` as it stood when the session opened, or `null` when it is unknowable.
- *
- * This is what makes unpushed commits attributable. Without it the advisory can
- * only report a raw `ahead` count, which conflates the agent's commits with a
- * human's pre-existing local work and produces a demand to push someone else's
- * history. `null` means the baseline could not be read, and the advisory then
- * says nothing about commits at all rather than guessing.
- */
-let sessionHead: string | null = null;
-
-export function resetUnpushedAdvisoryForTests(): void {
-	lastFired = false;
-	agentPaths = new Set();
-	sessionHead = null;
+export function createAdvisoryState(): AdvisoryState {
+	return { lastFired: false, agentPaths: new Set(), sessionHead: null };
 }
 
 export function revParseHead(cwd: string): string | null {
@@ -71,14 +61,7 @@ export function revParseHead(cwd: string): string | null {
 	}
 }
 
-/**
- * Commits created since `base`, capped by how far the branch is ahead.
- *
- * The cap is what keeps the number honest: `base..HEAD` counts every commit made
- * this session, `ahead` counts every commit missing from upstream, and only the
- * overlap is both the agent's work and unpushed. A session that pushed as it
- * went therefore reports nothing.
- */
+/** Count commits since the baseline, capped by ahead; this does not identify their author. */
 export function sessionCommitsUnpushed(cwd: string, base: string | null, ahead: number): number {
 	if (base === null || ahead <= 0) return 0;
 	try {
@@ -146,8 +129,8 @@ export function extractWrittenPaths(
 	return out;
 }
 
-/** Record one agent-authored path, resolved absolute, ignoring non-file URIs. */
-export function recordAgentPath(cwd: string, raw: string, into: Set<string> = agentPaths): void {
+/** Record one touched path, resolved absolute, ignoring non-file URIs. */
+export function recordAgentPath(cwd: string, raw: string, into: Set<string>): void {
 	if (!raw || NON_FILE_SCHEME.test(raw)) return;
 	into.add(resolve(cwd, raw));
 }
@@ -216,8 +199,8 @@ export function parsePorcelain(out: string): PorcelainStatus {
 }
 
 /**
- * Intersect dirty paths — modified, staged, and untracked — with what the agent
- * wrote this session.
+ * Intersect dirty paths — modified, staged, and untracked — with paths touched
+ * this session. Path observation establishes no ownership of individual hunks.
  *
  * `hasGitDir` guarantees `cwd` is the repository root, so porcelain's
  * repo-relative paths and the recorded absolute paths share one space with no
@@ -227,7 +210,7 @@ export function parsePorcelain(out: string): PorcelainStatus {
 export function agentAuthoredDirty(
 	status: PorcelainStatus,
 	cwd: string,
-	authored: Set<string> = agentPaths,
+	authored: Set<string>,
 ): string[] {
 	const hits = new Set<string>();
 	for (const path of status.dirtyPaths) {
@@ -267,9 +250,9 @@ export function totalChangedLines(stats: FileStat[]): number {
 }
 
 /**
- * Per-file diff stat for the agent's own files, staged and unstaged.
+ * Per-file diff stat for touched paths, staged and unstaged.
  *
- * Scoped to `paths` so a human's concurrent edits never appear in the summary.
+ * Counts include concurrent edits in the same file; they do not identify authorship.
  * Returns an empty list when the diff cannot be taken — a repository with no
  * commits yet, for instance — leaving the file-count gate as the only signal.
  */
@@ -305,10 +288,8 @@ export function shouldAdvise(
 /**
  * Render the advisory, largest change first.
  *
- * The per-file `+added/-deleted` summary is what makes the atomicity judgment
- * possible: it is the shape of the work, not its content. Content diffs are
- * deliberately excluded — the agent authored these edits, and pasting them at
- * every stop would cost unbounded tokens to tell it what it already knows.
+ * Per-file counts show magnitude, not ownership or atomicity. Hunk inspection
+ * remains necessary before staging.
  */
 export function formatAdvisory(
 	status: PorcelainStatus,
@@ -329,30 +310,31 @@ export function formatAdvisory(
 		const listing = shown
 			.map(path => {
 				const stat = byPath.get(path);
-				return stat ? `${path} (+${stat.added}/-${stat.deleted})` : `${path} (untracked)`;
+				return stat ? `${path} (+${stat.added}/-${stat.deleted})` : `${path} (diff stat unavailable)`;
 			})
 			.join(", ");
 		const more = ranked.length > shown.length ? `, +${ranked.length - shown.length} more` : "";
 		const total = totalChangedLines(stats);
 		const summary = total > 0 ? `, ~${total} changed line(s)` : "";
 		parts.push(
-			`${agentDirty.length} file(s) you wrote this session are uncommitted on branch ` +
+			`${agentDirty.length} file(s) touched this session are uncommitted on branch ` +
 				`${status.branch}${summary}: ${listing}${more}. ` +
-				`Commit your own finished work, grouped by unit of functionality: if these files span ` +
-				`more than one self-contained change, make a separate commit per change with its own ` +
-				`message rather than one mixed commit. Name the paths explicitly ` +
-				`(\`git add <paths>\`, then \`git commit <paths> -m ...\`) and stage nothing else in ` +
-				`this tree. Say nothing ` +
-				`about files you did not write — they are not yours to commit, count, or mention. ` +
-				`Leave a chunk uncommitted if it is genuinely unfinished, and say so.`,
+				`These paths and counts can include pre-existing or concurrent human edits; they do not ` +
+				`establish hunk ownership. Inspect both staged and unstaged diffs before staging, ` +
+				`identify your own finished hunks, and preserve unrelated staged and working-tree changes. ` +
+				`Group only owned, finished hunks into atomic commits when repository/user authority permits. ` +
+				`Do not stage or commit whole paths merely because they appear here. Leave unfinished or ` +
+				`uncertain-ownership work uncommitted and report it. This reminder grants no authority ` +
+				`to commit or publish.`,
 		);
 	}
 
 	if (ownUnpushed > 0) {
 		parts.push(
-			`${ownUnpushed} commit(s) you made this session are unpushed on ${status.branch}. ` +
-				`Push them so the work survives this checkout, unless a repository or user ` +
-				`instruction withholds that authority — then say so.`,
+			`${ownUnpushed} commit(s) since the session baseline are unpushed on ${status.branch}. ` +
+				`This range does not establish authorship: concurrent human commits may be included. ` +
+				`Inspect ownership and repository/user authority before proposing a push; this advisory ` +
+				`does not grant approval to publish.`,
 		);
 	}
 
@@ -383,20 +365,21 @@ export function handleSessionStop(
 	event: SessionStopEvent,
 	cwd: string,
 	statusText: string | null,
-	authored: Set<string> = agentPaths,
+	authored: Set<string>,
 	diffStat: (cwd: string, paths: string[]) => FileStat[] = agentDiffStat,
 	ownCommits: (cwd: string, base: string | null, ahead: number) => number = sessionCommitsUnpushed,
-	base: string | null = sessionHead,
+	base: string | null = null,
+	state: AdvisoryState = createAdvisoryState(),
 ): { continue: true; additionalContext: string } | undefined {
 	if (event.stop_hook_active === true || event.stopHookActive === true) return;
-	if (lastFired) return;
+	if (state.lastFired) return;
 	if (!statusText) return;
 	const status = parsePorcelain(statusText);
 	const agentDirty = agentAuthoredDirty(status, cwd, authored);
 	const stats = diffStat(cwd, agentDirty);
 	const ownUnpushed = ownCommits(cwd, base, status.ahead);
 	if (!shouldAdvise(agentDirty, totalChangedLines(stats), ownUnpushed)) return;
-	lastFired = true;
+	state.lastFired = true;
 	return {
 		continue: true,
 		additionalContext: formatAdvisory(status, agentDirty, stats, ownUnpushed),
@@ -404,44 +387,53 @@ export function handleSessionStop(
 }
 
 export default function unpushedWorkAdvisory(pi: ExtensionAPI): void {
+	const states = new Map<string, AdvisoryState>();
+	const stateFor = (cwd: string): AdvisoryState => {
+		let state = states.get(cwd);
+		if (!state) {
+			state = createAdvisoryState();
+			state.sessionHead = hasGitDir(cwd) ? revParseHead(cwd) : null;
+			states.set(cwd, state);
+		}
+		return state;
+	};
 	pi.on("session_start", (_event, ctx) => {
-		lastFired = false;
-		agentPaths = new Set();
+		states.clear();
+		stateFor(resolve(ctx?.cwd ?? process.cwd()));
+	});
+	pi.on("turn_start", () => {
+		for (const state of states.values()) state.lastFired = false;
+	});
+	pi.on("tool_call", (event, ctx) => {
+		if (WRITING_TOOLS[event.toolName] !== true &&
+			(event.toolName !== "bash" || typeof event.input.command !== "string" ||
+				!/\bd?git\b[\s\S]*\bcommit\b/.test(event.input.command))) return;
 		try {
-			const cwd = ctx?.cwd ?? process.cwd();
-			sessionHead = hasGitDir(cwd) ? revParseHead(cwd) : null;
+			const cwd = resolve(typeof event.input.cwd === "string" && event.input.cwd
+				? event.input.cwd : ctx?.cwd || process.cwd());
+			stateFor(cwd);
 		} catch {
-			sessionHead = null;
+			// Advisory observation must never block a tool.
 		}
 	});
-
-	// Only the fired-once latch resets per turn. Authorship must accumulate
-	// across the whole session: a file edited in turn 1 and left uncommitted is
-	// still the agent's work at a stop in turn 9.
-	pi.on("turn_start", () => {
-		lastFired = false;
-	});
-
-	// `tool_result`, not `tool_call`: it reports what actually landed (via
-	// `isError`), and it is advisory rather than fail-closed, so a bug in path
-	// extraction costs attribution instead of blocking every edit in the session.
 	pi.on("tool_result", (event, ctx: { cwd?: string }) => {
 		try {
-			const cwd = ctx?.cwd || process.cwd();
+			const cwd = resolve(typeof event.input?.cwd === "string" && event.input.cwd
+				? event.input.cwd : ctx?.cwd || process.cwd());
+			const state = stateFor(cwd);
 			const paths = extractWrittenPaths(event.toolName, event.isError, event.input, event.details);
-			for (const path of paths) recordAgentPath(cwd, path);
+			for (const path of paths) recordAgentPath(cwd, path, state.agentPaths);
 		} catch {
 			// Attribution is best-effort and must never disturb a tool result.
 		}
-		return;
 	});
-
 	pi.on("session_stop", (event: SessionStopEvent, ctx: { cwd?: string }) => {
 		try {
-			const cwd = ctx?.cwd || process.cwd();
+			const cwd = resolve(ctx?.cwd || process.cwd());
 			if (!hasGitDir(cwd)) return;
-			const text = gitStatusPorcelain(cwd);
-			return handleSessionStop(event, cwd, text);
+			const state = stateFor(cwd);
+			return handleSessionStop(event, cwd, gitStatusPorcelain(cwd), state.agentPaths,
+				agentDiffStat, sessionCommitsUnpushed, state.sessionHead, state);
 		} catch {
 			return;
 		}
