@@ -7,8 +7,6 @@
 
 * **session:** stream bounded handoffs from native session stores ([#73](https://github.com/srobroek/omp-plugins/issues/73)) ([b910e8b](https://github.com/srobroek/omp-plugins/commit/b910e8b2785356dd5f8d7173ea72bfb33d5a3e99))
 
-## [Unreleased]
-
 ### Changed
 
 * reframe `resume_session` as a selective fresh-session context handoff with
