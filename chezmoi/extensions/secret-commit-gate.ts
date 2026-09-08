@@ -1,8 +1,9 @@
+import { accessSync, constants, statSync } from "node:fs";
 import { basename } from "node:path";
 
 import type { ExtensionAPI, ExtensionToolCallEvent } from "@oh-my-pi/pi-coding-agent";
 
-import { lexicalAbs, loadSourceDir } from "./chezmoi-guard.ts";
+import { lexicalAbs, loadSourceDir, shellWords } from "./chezmoi-guard.ts";
 
 /**
  * Block a `git commit` in the chezmoi repository when a staged source file is
@@ -12,6 +13,9 @@ import { lexicalAbs, loadSourceDir } from "./chezmoi-guard.ts";
  * sanctioned way is either a `.tmpl` that reads the value from 1Password at apply
  * time or an `encrypted_` file, and neither trips this gate. Anything else with a
  * credential name is a plaintext secret about to enter git history.
+ *
+ * This is a preflight read, not an atomic guard: the filesystem and index may
+ * change before the shell runs. Only literal directory changes are resolved.
  */
 
 /** A local `git` read cannot reach the network, so this bounds a hung binary, not a fetch. */
@@ -59,7 +63,7 @@ const SECRET_NAMES: RegExp[] = [
 ];
 
 /** Shell separators that end one command. `2>&1` fragments cannot contain `commit`, so they fall out. */
-const SEGMENTS = /\|\||&&|[;&|\n]/;
+const SEGMENTS = /^(?:\|\||&&|[;&|\n])$/;
 
 /** Git global options that consume the following token, so a `commit` after one is not the subcommand. */
 const VALUE_OPTIONS: Record<string, true> = {
@@ -130,7 +134,14 @@ function unquote(token: string): string {
 	return (first === '"' || first === "'") && token.at(-1) === first ? token.slice(1, -1) : token;
 }
 
-export type CommitCall = { cwd: string; all: boolean };
+export type CommitCall = { cwd: string; all: boolean; paths?: string[] };
+
+const COMMIT_VALUES: Record<string, true> = {
+	"-m": true, "--message": true, "-F": true, "--file": true,
+	"-C": true, "--reuse-message": true, "-c": true, "--reedit-message": true,
+	"--author": true, "--date": true, "--cleanup": true, "-t": true,
+	"--template": true, "--trailer": true, "--fixup": true, "--squash": true,
+};
 
 /**
  * The `git commit` calls in a shell command line, each with the directory it runs
@@ -140,19 +151,55 @@ export type CommitCall = { cwd: string; all: boolean };
 export function gitCommits(command: string, cwd: string): CommitCall[] {
 	const out: CommitCall[] = [];
 	let here = cwd;
-	for (const segment of command.split(SEGMENTS)) {
-		const tokens = segment.split(/\s+/).filter(Boolean);
-		if (tokens.length === 0) continue;
+	let sequential = cwd;
+	let inPipeline = false;
+	let failedCd = false;
+	let skipAnd = false;
+	const segments: { tokens: string[]; separator: string }[] = [{ tokens: [], separator: "" }];
+	for (const word of shellWords(command)) {
+		if (SEGMENTS.test(word)) segments.push({ tokens: [], separator: word });
+		else segments[segments.length - 1]!.tokens.push(word);
+	}
+	for (const { tokens, separator } of segments) {
+		if (separator === "&&" && (failedCd || skipAnd)) skipAnd = true;
+		else if (separator === ";" || separator === "\n" || separator === "||") skipAnd = false;
+		failedCd = false;
+		if (separator === "|") {
+			here = sequential;
+			inPipeline = true;
+		} else if (separator === "||" || separator === "&") {
+			here = sequential;
+			inPipeline = false;
+		} else {
+			if (inPipeline) here = sequential;
+			inPipeline = false;
+			sequential = here;
+		}
+		if (tokens.length === 0 || skipAnd) continue;
 
 		if (tokens[0] === "cd") {
 			const target = tokens[1];
 			// A `$var` or command substitution names a directory only the shell knows.
-			if (target && !/[$`]/.test(target)) here = lexicalAbs(unquote(target), here);
+			if (target && !/[$`]/.test(target)) {
+				const destination = lexicalAbs(unquote(target), here);
+				try {
+					if (!statSync(destination).isDirectory()) {
+						failedCd = true;
+						continue;
+					}
+					accessSync(destination, constants.X_OK);
+					here = destination;
+				} catch {
+					failedCd = true;
+				}
+			}
 			continue;
 		}
 
-		const start = tokens.indexOf("git");
-		if (start === -1) continue;
+		let start = 0;
+		while (tokens[start] && (/^[A-Za-z_][A-Za-z0-9_]*=/.test(tokens[start]!) ||
+			["env", "command", "exec", "--"].includes(tokens[start]!))) start++;
+		if (!["git", "dgit"].includes(basename(tokens[start] ?? ""))) continue;
 
 		let where = here;
 		let index = start + 1;
@@ -179,9 +226,38 @@ export function gitCommits(command: string, cwd: string): CommitCall[] {
 		}
 
 		if (tokens[index] !== "commit") continue;
-		const rest = tokens.slice(index + 1);
-		const all = rest.some((t) => t === "--all" || /^-[a-zA-Z]*a/.test(t));
-		out.push({ cwd: where, all });
+		const rest = tokens.slice(index + 1).map(unquote);
+		let all = false;
+		let boundary = false;
+		let uncertain = false;
+		const paths: string[] = [];
+		for (let i = 0; i < rest.length; i++) {
+			const arg = rest[i]!;
+			if (!boundary && arg === "--") { boundary = true; continue; }
+			if (!boundary && arg.startsWith("-")) {
+				if (arg === "--dry-run") { uncertain = true; break; }
+				if (arg.startsWith("--pathspec-from-file") || arg === "--interactive" ||
+					arg === "--patch" || arg === "-p" || arg === "--include" || arg === "-i") {
+					uncertain = true; break;
+				}
+				if (COMMIT_VALUES[arg] === true) { i++; continue; }
+				if (arg === "--all") all = true;
+				if (/^-[^-]/.test(arg)) {
+					for (let k = 1; k < arg.length; k++) {
+						if (COMMIT_VALUES[`-${arg[k]}`] === true) {
+							if (k === arg.length - 1) i++;
+							break;
+						}
+						if (arg[k] === "a") all = true;
+						if (arg[k] === "i" || arg[k] === "p") uncertain = true;
+					}
+				}
+				continue;
+			}
+			if (/[$`*?[\]]/.test(arg) || arg.startsWith(":")) uncertain = true;
+			paths.push(arg);
+		}
+		if (!uncertain) out.push({ cwd: where, all, ...(paths.length ? { paths } : {}) });
 	}
 	return out;
 }
@@ -228,15 +304,28 @@ export function secretStagedPaths(staged: string[], prefix: string): string[] {
 	return out;
 }
 
-/**
- * Paths a commit would carry: the index, plus tracked modifications when `-a` is
- * passed. Read from the repository root, so the names are root-relative whatever
- * `diff.relative` is set to.
- */
-export function committedPaths(top: string, all: boolean): string[] {
-	const staged = spawnGit(["-C", top, "diff", "--cached", "--name-only"]) ?? "";
-	const tracked = all ? (spawnGit(["-C", top, "diff", "--name-only"]) ?? "") : "";
-	return `${staged}\n${tracked}`.split("\n").map((line) => line.trim());
+/** Root-relative, NUL-delimited candidate names; null means Git could not establish them. */
+export function committedPaths(top: string, all: boolean, paths: string[] = [], cwd = top): string[] | null {
+	const scope = paths.length ? ["--", ...paths] : [];
+	const args = ["--literal-pathspecs", "-C", paths.length ? cwd : top];
+	let output: string | null;
+	if (!all && paths.length === 0) {
+		output = spawnGit([...args, "diff", "--cached", "--no-relative", "--no-renames",
+			"--diff-filter=d", "--name-only", "-z"]);
+	} else {
+		output = spawnGit([...args, "diff", "--no-relative", "--no-renames",
+			"--diff-filter=d", "--name-only", "-z", "HEAD", ...scope]);
+		if (output === null) {
+			// An unborn repository has no HEAD: its tracked, present files are additions.
+			if (spawnGit([...args, "rev-parse", "--verify", "HEAD"]) !== null) return null;
+			const tracked = spawnGit([...args, "ls-files", "--cached", "--full-name", "-z", ...scope]);
+			const deleted = spawnGit([...args, "ls-files", "--deleted", "--full-name", "-z", ...scope]);
+			if (tracked === null || deleted === null) return null;
+			const removed = new Set(deleted.split("\0"));
+			return [...new Set(tracked.split("\0").filter(path => path !== "" && !removed.has(path)))];
+		}
+	}
+	return output === null ? null : output.split("\0").filter(path => path !== "");
 }
 
 export const SECRET_ADVICE =
@@ -247,14 +336,16 @@ export const SECRET_ADVICE =
 	"file commits cleanly. Unstage the file, convert it, then commit.";
 
 export function decideCommit(command: string, cwd: string): { block: true; reason: string } | undefined {
-	if (!/\bcommit\b/.test(command) || !/\bgit\b/.test(command)) return;
+	if (!/\bcommit\b/.test(command) || !/\bd?git\b/.test(command)) return;
 	const chezmoi = chezmoiRepo();
 	if (!chezmoi) return;
 	for (const call of gitCommits(command, cwd)) {
 		// git answers where the commit lands, so a symlinked path still compares equal.
 		const top = spawnGit(["-C", call.cwd, "rev-parse", "--show-toplevel"]);
 		if (top === null || top.trim() !== chezmoi.top) continue;
-		const offenders = secretStagedPaths(committedPaths(chezmoi.top, call.all), chezmoi.prefix);
+		const candidates = committedPaths(chezmoi.top, call.all, call.paths, call.cwd);
+		if (candidates === null) continue;
+		const offenders = secretStagedPaths(candidates, chezmoi.prefix);
 		if (offenders.length > 0) {
 			return {
 				block: true,

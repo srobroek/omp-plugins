@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { join } from "node:path";
+import { mkdtempSync, writeFileSync, rmSync, unlinkSync, mkdirSync } from "node:fs";
+import { tmpdir } from "node:os";
 
 import { resetChezmoiGuardForTests, seedChezmoiCacheForTests } from "./chezmoi-guard.ts";
 import secretCommitGate, {
@@ -26,12 +28,12 @@ afterEach(() => {
 function seedRepo(staged: string[], tracked: string[] = []): void {
 	seedChezmoiCacheForTests(null, SOURCE);
 	setGitSpawnForTests((args) => {
-		const dir = args[1] ?? "";
+		const dir = args[args.indexOf("-C") + 1] ?? "";
 		// git fails outside a repository, which is how another cwd is recognised.
 		if (args.includes("--show-toplevel")) return dir.startsWith(ROOT) ? `${ROOT}\n` : null;
 		if (args.includes("--show-prefix")) return "dotfiles/\n";
-		if (args.includes("--cached")) return `${staged.join("\n")}\n`;
-		if (args.includes("--name-only")) return `${tracked.join("\n")}\n`;
+		if (args.includes("--cached")) return `${staged.join("\0")}\0`;
+		if (args.includes("--name-only")) return `${[...new Set([...staged, ...tracked])].join("\0")}\0`;
 		return "";
 	});
 }
@@ -63,7 +65,12 @@ describe("gitCommits", () => {
 	});
 
 	test("cd is followed across segments", () => {
-		expect(gitCommits(`cd ${ROOT} && git commit -m x`, ELSEWHERE)).toEqual([{ cwd: ROOT, all: false }]);
+		const dir = mkdtempSync(join(tmpdir(), "secret-cd-"));
+		try {
+			expect(gitCommits(`cd '${dir}' && git commit -m x`, ELSEWHERE)).toEqual([{ cwd: dir, all: false }]);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
 		expect(gitCommits("cd $DIR && git commit", ELSEWHERE)).toEqual([{ cwd: ELSEWHERE, all: false }]);
 	});
 
@@ -179,7 +186,7 @@ describe("decideCommit", () => {
 		setGitSpawnForTests((args) => {
 			if (args.includes("--show-toplevel")) return "/private/tmp/chezmoi\n";
 			if (args.includes("--show-prefix")) return "dotfiles/\n";
-			if (args.includes("--cached")) return "dotfiles/private_dot_env\n";
+			if (args.includes("--cached")) return "dotfiles/private_dot_env\0";
 			return "";
 		});
 		expect(decideCommit("git commit -m x", "/tmp/chezmoi")?.block).toBe(true);
@@ -229,4 +236,74 @@ describe("integration", () => {
 		expect(handler({ toolName: "bash", input: {} }, { cwd: ROOT })).toBeUndefined();
 		expect(handler({ toolName: "bash", input: { command: "git commit" } }, {})).toBeUndefined();
 	});
+});
+
+test("real Git candidates honor paths, worktree content, deletions, and NUL filenames", () => {
+	const dir = mkdtempSync(join(tmpdir(), "secret-candidates-"));
+	const git = (...args: string[]) => {
+		const result = Bun.spawnSync(["git", "-c", "core.hooksPath=/dev/null",
+			"-c", "commit.gpgsign=false", ...args], { cwd: dir, stdout: "pipe", stderr: "pipe" });
+		if (result.exitCode !== 0) throw new Error(result.stderr.toString());
+	};
+	try {
+		git("init", "-b", "topic");
+		git("config", "user.name", "Test");
+		git("config", "user.email", "test@example.invalid");
+		mkdirSync(join(dir, "odd\nname"));
+		writeFileSync(join(dir, "safe"), "base\n");
+		writeFileSync(join(dir, "odd\nname", "private_dot_env"), "old\n");
+		git("add", ".");
+		git("commit", "-m", "base");
+		seedChezmoiCacheForTests(null, dir);
+		writeFileSync(join(dir, "safe"), "changed\n");
+		writeFileSync(join(dir, "odd\nname", "private_dot_env"), "new\n");
+		expect(decideCommit("git commit -m x -- 'odd\nname/private_dot_env'", dir)?.block).toBe(true);
+		expect(decideCommit("git commit -am x", dir)?.block).toBe(true);
+		git("add", ".");
+		expect(decideCommit("git commit -m x -- safe", dir)).toBeUndefined();
+		expect(decideCommit("git commit -m x", dir)?.block).toBe(true);
+		unlinkSync(join(dir, "odd\nname", "private_dot_env"));
+		expect(decideCommit("git commit -am x", dir)).toBeUndefined();
+		expect(decideCommit("git commit -m x -- 'odd\nname/private_dot_env'", dir)).toBeUndefined();
+		git("add", "-u");
+		expect(decideCommit("git commit -m x", dir)).toBeUndefined();
+	} finally {
+		rmSync(dir, { recursive: true, force: true });
+	}
+});
+
+test("literal shell cwd keeps secrets guarded after failed and pipeline-local cd", () => {
+	const dir = mkdtempSync(join(tmpdir(), "secret-shell-"));
+	const other = join(dir, "other");
+	mkdirSync(other);
+	const git = (...args: string[]) => {
+		const result = Bun.spawnSync(["git", ...args], { cwd: dir, stdout: "pipe", stderr: "pipe" });
+		if (result.exitCode !== 0) throw new Error(result.stderr.toString());
+	};
+	try {
+		git("init", "-b", "topic");
+		writeFileSync(join(dir, "private_dot_env"), "SYNTHETIC_SECRET=not-a-credential\n");
+		git("add", "private_dot_env");
+		git("-C", other, "init", "-b", "topic");
+		seedChezmoiCacheForTests(null, dir);
+		for (const command of [
+			"cd missing || git commit",
+			"cd missing; git commit",
+			"cd missing && cd other || git commit",
+			"cd other | cat; git commit",
+			"printf x | cd other; git commit",
+			"cd other | git commit",
+		]) {
+			// Replace git with a shell function: observe the real cwd without committing.
+			const observed = Bun.spawnSync(["bash", "-c", `git() { pwd; }; ${command}`],
+				{ cwd: dir, stdout: "pipe", stderr: "pipe" });
+			expect(observed.stdout.toString().trim()).toBe(dir);
+			expect(gitCommits(command, dir)).toEqual([{ cwd: dir, all: false }]);
+			expect(decideCommit(command, dir)?.block).toBe(true);
+		}
+		expect(decideCommit("cd other && git commit", dir)).toBeUndefined();
+		expect(decideCommit("cd missing && git commit", dir)).toBeUndefined();
+	} finally {
+		rmSync(dir, { recursive: true, force: true });
+	}
 });

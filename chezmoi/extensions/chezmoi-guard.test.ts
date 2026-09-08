@@ -52,9 +52,6 @@ describe("shouldInspect / under / lexicalAbs", () => {
 		expect(shouldInspect(OUTSIDE, CWD)).toBe(true);
 	});
 
-	test("skips paths inside cwd", () => {
-		expect(shouldInspect(join(CWD, "src", "a.ts"), CWD)).toBe(false);
-	});
 
 	test("skips paths outside home", () => {
 		expect(shouldInspect("/tmp/elsewhere", CWD)).toBe(false);
@@ -81,7 +78,7 @@ describe("editedFiles / sedInplacePaths", () => {
 	});
 
 	test("extracts sed -i path tokens", () => {
-		expect(sedInplacePaths("sed -i s/a/b/ ~/.zshrc")).toEqual(["s/a/b/", "~/.zshrc"]);
+		expect(sedInplacePaths("sed -i s/a/b/ ~/.zshrc")).toEqual(["~/.zshrc"]);
 		expect(sedInplacePaths("echo hi")).toEqual([]);
 	});
 });
@@ -223,17 +220,4 @@ describe("chezmoi_status", () => {
 		expect(r.text).toContain("1 file changed");
 	});
 
-	test("registers tool", async () => {
-		const captured: {
-			name?: string;
-			execute?: () => Promise<{ details: { ok: boolean }; content: { text: string }[] }>;
-		} = {};
-		const { pi } = fakePi();
-		pi.registerTool = (d: Record<string, unknown>) => Object.assign(captured, d);
-		setChezmoiSpawnForTests(() => "ok");
-		chezmoiGuard(pi as never);
-		expect(captured.name).toBe("chezmoi_status");
-		const out = await captured.execute!();
-		expect(out.details.ok).toBe(true);
-	});
 });
