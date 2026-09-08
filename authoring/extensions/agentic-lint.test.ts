@@ -1,19 +1,18 @@
 import { afterAll, describe, expect, test } from "bun:test";
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
 import agenticLintTool, {
 	detectKind,
 	frontmatterDefects,
 	hasRulesContract,
 	hostSpecificPaths,
 	lint,
+	main,
 	parseXlint,
 	splitFrontmatter,
 	type Triple,
 } from "./agentic-lint-tool.ts";
-import parity from "./fixtures/parity.json";
 
 const temps: string[] = [];
 
@@ -62,7 +61,7 @@ function registerTool(): Registered {
 	const fakePi = {
 		...fakeZod(),
 		registerTool: (d: Registered) => Object.assign(tools, d),
-		on: () => {},
+		on: () => { },
 	};
 	agenticLintTool(fakePi as never);
 	return tools;
@@ -100,6 +99,53 @@ description: {desc}
 
 {body}
 `;
+
+describe("bounded frontmatter and directory traversal", () => {
+	test("embedded separators remain YAML values", () => {
+		const text = '---\nname: example\ndescription: "Use when a --- separator appears."\ncondition: "a---b"\n---\nBody';
+		expect(frontmatterDefects(text)).toEqual([]);
+		expect(splitFrontmatter(text)).toEqual([
+			{ name: "example", description: '"Use when a --- separator appears."', condition: '"a---b"' },
+			"\nBody",
+		]);
+		expect(splitFrontmatter("---not-frontmatter\nname: example\n---\nBody")).toEqual([
+			{}, "---not-frontmatter\nname: example\n---\nBody",
+		]);
+	});
+
+	test("directory links neither loop nor lint outside files", async () => {
+		const root = tmpDir();
+		const outside = tmpDir();
+		write(root, "rules/example.md", "---\ndescription: A valid discoverable rule\n---\nBody");
+		write(outside, "SKILL.md", "---\nmalformed: [\n---\nBody");
+		symlinkSync(root, join(root, "loop"), "dir");
+		symlinkSync(outside, join(root, "outside"), "dir");
+		const tool = registerTool();
+		const result = await tool.execute!("id", { paths: [root] });
+		expect(result.details.ok).toBe(true);
+		expect(result.content[0]?.text).not.toContain(outside);
+		const linked = await tool.execute!("id", { paths: [join(root, "outside")] });
+		expect(linked.details.ok).toBe(false);
+	});
+});
+
+describe("code examples are exempt from local link validation", () => {
+	test.each(["inline", "fenced"])("keeps prose links checked around %s code after astral text", (kind) => {
+		const example = kind === "inline" ? "`[example](example-missing.md)`"
+			: "```markdown\n[example](example-missing.md)\n```";
+		const path = write(tmpDir(), "SKILL.md", [
+			"---", "name: link-probe", "description: Check local links in instructions.", "---",
+			"# Link probe", "\u{1F4A1}".repeat(200),
+			"[before](before-missing.md)", example, "[after](after-missing.md)",
+		].join("\n"));
+		const broken = lint(path).filter((finding) => finding[1] === "E8");
+		expect(broken).toHaveLength(2);
+		const messages = broken.map((finding) => finding[2]).join("\n");
+		expect(messages).toContain("before-missing.md");
+		expect(messages).toContain("after-missing.md");
+		expect(messages).not.toContain("example-missing.md");
+	});
+});
 
 describe("parseXlint", () => {
 	test("no xlint", () => {
@@ -550,23 +596,6 @@ PASS|FAIL verdict. CAP 100 words. Never reprint paths only.
 	});
 });
 
-describe("python/ts finding-code parity", () => {
-	test("codes match baked python fixture", () => {
-		const repoRoot = join(fileURLToPath(new URL(".", import.meta.url)), "../..");
-		const expected = parity as Record<string, string[]>;
-		const mismatches: string[] = [];
-		for (const [rel, pyCodes] of Object.entries(expected)) {
-			const tsCodes = lint(join(repoRoot, rel))
-				.map((f) => f[1])
-				.sort();
-			const a = [...pyCodes].sort();
-			if (JSON.stringify(tsCodes) !== JSON.stringify(a)) {
-				mismatches.push(`${rel}: py=${JSON.stringify(a)} ts=${JSON.stringify(tsCodes)}`);
-			}
-		}
-		expect(mismatches).toEqual([]);
-	});
-});
 
 describe("frontmatterDefects", () => {
 	const codes = (text: string): string[] => frontmatterDefects(text).map((t) => t[1]);
@@ -576,13 +605,10 @@ describe("frontmatterDefects", () => {
 		expect(codes('---\nname: x\ncondition: ["\\\\bfoo\\\\b"]\n---\nbody')).toEqual([]);
 	});
 
-	test("an unquoted colon needs repair, so it warns rather than errors", () => {
-		// Found in seven shipped rules. omp recovers it via quoteAmbiguousPlainScalars,
-		// so the rule still fires -- proven with a live three-rule probe. The casualty
-		// is vale, which lints nothing and lets prose gates pass unchecked.
+	test("malformed YAML is an error for strict consumers", () => {
 		const text = "---\nname: x\ndescription: Core contract: claiming and routing.\n---\nbody";
-		expect(codes(text)).toEqual(["W13"]);
-		expect(sev(text)).toEqual(["WARN"]);
+		expect(codes(text)).toEqual(["E13"]);
+		expect(sev(text)).toEqual(["ERROR"]);
 	});
 
 	test("quoting that same value fixes it", () => {
@@ -598,7 +624,7 @@ describe("frontmatterDefects", () => {
 
 	test("a block sequence beside a repaired scalar reports only the repair", () => {
 		const text = "---\ndescription: bad: colon\ncondition:\n  - '\\bfoo\\b'\n---\nbody";
-		expect(codes(text)).toEqual(["W13"]);
+		expect(codes(text)).toEqual(["E13"]);
 	});
 
 	test("only array-valued keys are checked", () => {
@@ -633,4 +659,18 @@ describe("hostSpecificPaths", () => {
 	test("duplicates collapse", () => {
 		expect(hostSpecificPaths("/home/a/b then /home/a/b again")).toEqual(["/home/a/b"]);
 	});
+});
+
+test("rule discovery and syntax failures exit nonzero without rejecting valid TTSR", () => {
+	const dir = tmpDir();
+	for (const metadata of ["", "condition: '['", "astCondition: 42", "description: bad: yaml"]) {
+		const path = write(dir, "rules/bad.md", `---\n${metadata}\n---\nMUST Keep contracts.`);
+		expect(main([path]).exitCode).toBe(1);
+	}
+	for (const metadata of ["description: Ordinary rule", "alwaysApply: true", "condition: '(?ii)foo'", "condition: 'src/**/*.ts'", "astCondition: 'foo($A)'"]) {
+		const path = write(dir, "rules/good.md", `---\n${metadata}\n---\nMUST Keep contracts.`);
+		expect(main([path]).exitCode).toBe(0);
+	}
+	const unclosed = write(dir, "rules/unclosed.md", "---\ndescription: unclosed");
+	expect(main([unclosed]).exitCode).toBe(1);
 });

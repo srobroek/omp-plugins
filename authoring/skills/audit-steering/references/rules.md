@@ -2,9 +2,9 @@
 
 ## R1: Frontmatter
 
-Every file must have YAML frontmatter with a `description` field. Third
-person, present tense. For skills: be specific about triggers -- mention
-keywords the user might say.
+Skills and agents require YAML frontmatter with a `description`. Ordinary
+rules need a description, `alwaysApply: true`, or a TTSR trigger. Skill
+descriptions name the phrases that trigger invocation.
 
 ## R2: Language
 
@@ -20,7 +20,7 @@ keywords the user might say.
 ## R4: Template
 
 `write-agentic` owns the per-kind format contract and enforces it with
-`scripts/lint.py`. Audit against its templates (`references/template-skill.md`,
+`agentic_lint`. Audit against its templates (`references/template-skill.md`,
 `template-steering.md`, `template-agent.md`) and run its linter -- never against
 a restated copy of the conventions, which drifts from the enforced version.
 
@@ -32,7 +32,7 @@ a restated copy of the conventions, which drifts from the enforced version.
 
 ## R6: File Size
 
-`write-agentic`'s `lint.py` sets the per-kind caps (skill 70, context 60,
+`agentic_lint` sets the per-kind caps (skill 70, context 60,
 pointer 10, agent 90 non-empty lines). Split files with two distinct topics,
 routing + detail content, or multiple independent tables. Compress by merging
 similar rules, removing redundant explanations, and tightening table cells.
