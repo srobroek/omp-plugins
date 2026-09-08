@@ -19,7 +19,7 @@
       "name": "authoring",
       "description": "Author and audit agentic assets: skills, rules, agents, and steering.",
       "source": "./authoring",
-      "version": "1.3.0",
+      "version": "2.0.0",
       "category": "productivity"
     },
     {
@@ -33,7 +33,7 @@
       "name": "beads",
       "description": "Beads issue tracking: dependency DAGs, formulas, and decisions recorded as beads.",
       "source": "./beads",
-      "version": "0.8.1",
+      "version": "1.0.0",
       "category": "productivity"
     },
     {
@@ -47,7 +47,7 @@
       "name": "build",
       "description": "Execution agents: operator and external-repo worker.",
       "source": "./build",
-      "version": "0.3.2",
+      "version": "0.3.3",
       "category": "development"
     },
     {
@@ -68,7 +68,7 @@
       "name": "delivery",
       "description": "Delivery and git-workflow rules, plus a pull-request review agent.",
       "source": "./delivery",
-      "version": "0.7.2",
+      "version": "0.7.3",
       "category": "devops"
     },
     {
@@ -103,7 +103,7 @@
       "name": "find-tools",
       "description": "Discover and vet skills, agents, MCP servers, and plugins across real registries.",
       "source": "./find-tools",
-      "version": "0.4.1",
+      "version": "1.0.0",
       "category": "productivity"
     },
     {
@@ -131,7 +131,7 @@
       "name": "project",
       "description": "Project lifecycle: brownfield onboarding, license selection, and user journeys.",
       "source": "./project",
-      "version": "0.4.0",
+      "version": "1.0.0",
       "category": "productivity"
     },
     {
@@ -145,7 +145,7 @@
       "name": "quality",
       "description": "Quality gates: code-smell auditing, final verification, lint and docs adjudication, and browser-verification discipline.",
       "source": "./quality",
-      "version": "0.6.1",
+      "version": "1.0.0",
       "category": "development"
     },
     {
