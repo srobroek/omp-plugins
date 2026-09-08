@@ -79,6 +79,7 @@ export function beadsDir(cwd: string): string | undefined {
 export function parseTrailingJson(stdout: string): unknown {
 	const text = stdout.trim();
 	if (!text) return undefined;
+	if (text === "null") return null;
 	const starts: number[] = [];
 	if (text[0] === "{" || text[0] === "[") starts.push(0);
 	for (let i = 0; i < text.length - 1; i++) {
@@ -128,6 +129,23 @@ export function readGates(stdout: string): Gate[] {
 	}
 	return gates;
 }
+
+/** Parse a gate list while distinguishing bd's valid empty `null` from bad output. */
+export function readGateList(stdout: string): Gate[] | undefined {
+	const parsed = parseTrailingJson(stdout);
+	if (parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)) {
+		const error = (parsed as Record<string, unknown>).error;
+		if (error !== undefined && error !== null && error !== "") return undefined;
+	}
+	const data = envelopeData(parsed);
+	if (data === null) return [];
+	if (!Array.isArray(data) || data.some(row => !row || typeof row !== "object" ||
+		typeof row.id !== "string" || typeof row.await_type !== "string")) {
+		return undefined;
+	}
+	return readGates(stdout);
+}
+
 
 /** Whether spending a `bd gate check` can change anything. */
 export function gatesCanResolve(gates: Gate[]): boolean {
@@ -363,12 +381,8 @@ function consumeLastPush(dir: string): string | undefined {
 async function gateAdvisory(cwd: string, deadline: number): Promise<string | undefined> {
 	const listed = await runBd(cwd, ["gate", "list", "--json"], deadline);
 	if (listed === undefined) return "Beads gates could not be verified at session start.";
-	const data = envelopeData(parseTrailingJson(listed));
-	if (!Array.isArray(data) || data.some(row => !row || typeof row !== "object" ||
-		typeof row.id !== "string" || typeof row.await_type !== "string")) {
-		return "Beads gate list returned malformed data; unresolved gates remain unverified.";
-	}
-	let gates = readGates(listed);
+	let gates = readGateList(listed);
+	if (gates === undefined) return "Beads gate list returned malformed data; unresolved gates remain unverified.";
 	if (gates.length === 0) return undefined;
 	let outcome: CheckOutcome | undefined;
 	if (gatesCanResolve(gates)) {
@@ -377,7 +391,13 @@ async function gateAdvisory(cwd: string, deadline: number): Promise<string | und
 			outcome = readCheckOutcome(checked);
 			if (outcome.resolved > 0) {
 				const relisted = await runBd(cwd, ["gate", "list", "--json"], deadline);
-				if (relisted !== undefined) gates = readGates(relisted);
+				if (relisted !== undefined) {
+					const relistedGates = readGateList(relisted);
+					if (relistedGates === undefined) {
+						return "Beads gate list returned malformed data; unresolved gates remain unverified.";
+					}
+					gates = relistedGates;
+				}
 			}
 		}
 	}
