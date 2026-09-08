@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.2](https://github.com/srobroek/omp-plugins/compare/delivery--v0.7.1...delivery--v0.7.2) (2026-09-08)
+
+
+### Bug Fixes
+
+* **agents:** route operator to smol and PR reviewer to task ([#62](https://github.com/srobroek/omp-plugins/issues/62)) ([e2e2972](https://github.com/srobroek/omp-plugins/commit/e2e29728771251a8e838f2f1b9b560a832b61307))
+
 ## [0.7.1](https://github.com/srobroek/omp-plugins/compare/delivery--v0.7.0...delivery--v0.7.1) (2026-09-08)
 
 
