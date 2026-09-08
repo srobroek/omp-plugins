@@ -10,7 +10,6 @@ const zod = {
 	object: (shape: unknown) => shape,
 };
 import depScanTool, { classify, detectProject, normalizeVersion, parseRequirement, queryRegistry } from "./dep-scan-tool";
-import { applyBump } from "./lib";
 
 function tmp(): string {
 	return mkdtempSync(join(tmpdir(), "dep-scan-"));
@@ -147,7 +146,7 @@ describe("integration: dep_apply", () => {
 			params: Record<string, unknown>,
 			signal: undefined,
 			onUpdate: undefined,
-			ctx: { cwd: string },
+			ctx: { cwd: string; hasUI: boolean; ui: { confirm: () => Promise<boolean> }; setTimeout: typeof setTimeout; clearTimer: typeof clearTimeout },
 		) => Promise<{ content: Array<{ text: string }>; details: { exit: number } }>;
 		const project = tmp();
 		mkdirSync(project, { recursive: true });
@@ -156,16 +155,32 @@ describe("integration: dep_apply", () => {
 			{ ecosystem: "cargo", name: "serde", version: "1.0.200", path: project },
 			undefined,
 			undefined,
-			{ cwd: project },
+			{ cwd: project, hasUI: true, ui: { confirm: async () => true }, setTimeout, clearTimer: clearTimeout },
 		);
 		expect(result.details.exit).toBe(0);
 		expect(result.content[0].text).toContain("ADVISORY-ONLY");
 	});
-
-	test("applyBump skip when uv missing", async () => {
-		const project = tmp();
-		const result = await applyBump("pypi", "requests", "2.32.3", project);
-		// either applied or skipped; never throws
-		expect([0, 1]).toContain(result.exit);
+	test("headless and denied confirmation stop before dependency execution", async () => {
+		const captured: Record<string, unknown> = {};
+		depScanTool({ zod, registerTool: (d: Record<string, unknown>) => {
+			if (d.name === "dep_apply") Object.assign(captured, d);
+		} } as never);
+		const execute = captured.execute as (
+			id: string, params: Record<string, unknown>, signal: undefined, update: undefined,
+			ctx: { cwd: string; hasUI: boolean; ui: { confirm: (title: string, message: string) => Promise<boolean> } },
+		) => Promise<{ details: { error?: string } }>;
+		const params = { ecosystem: "npm", name: "@scope/pkg", version: "1.2.3", path: "/synthetic-project" };
+		const headless = await execute("headless", params, undefined, undefined, {
+			cwd: "/", hasUI: false, ui: { confirm: async () => { throw new Error("unexpected prompt"); } },
+		});
+		expect(headless.details.error).toContain("Interactive approval is required");
+		let prompt = "";
+		const denied = await execute("denied", params, undefined, undefined, {
+			cwd: "/", hasUI: true, ui: { confirm: async (_title, message) => { prompt = message; return false; } },
+		});
+		expect(denied.details.error).toContain("Dependency bump denied");
+		expect(prompt).toContain("@scope/pkg -> 1.2.3");
+		expect(prompt).toContain("/synthetic-project");
 	});
+
 });

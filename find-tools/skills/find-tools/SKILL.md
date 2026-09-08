@@ -27,8 +27,10 @@ install discovered tools globally by default.
 ## Rules
 
 - Install-mutating commands (`npx skills add`, `smithery mcp add`, curl-pipe-shell) are trial-only after explicit approval. They are never part of discovery.
+- `skills_cli` is an approval-required discovery gap, even when explicitly requested. Never fill it by automatically invoking `npx skills find` or a local skills executable; vet the package and obtain separate explicit execution approval.
 - Registry pages are discovery sources, not sufficient verification.
 - Do not treat an empty `omp plugin discover` as a closed search.
+- Local MCP inventory contains aggregate counts only. It omits names, configuration values, and parser diagnostics; do not request raw configuration to fill that gap.
 
 ## Output
 

@@ -1,3 +1,4 @@
+import { spawn } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -36,6 +37,9 @@ export type ScanDeps = {
 	readFile?: (path: string) => string | null;
 	env?: Record<string, string | undefined>;
 	which?: (bin: string) => boolean;
+	signal?: AbortSignal;
+	setTimeout?: (callback: () => void, ms: number) => Timer;
+	clearTimer?: (timer: Timer) => void;
 };
 
 export type ScanParams = {
@@ -48,37 +52,72 @@ const NETWORK_MS = 10_000;
 export function defaultRun(
 	argv: string[],
 	timeoutMs: number,
+	options: Pick<ScanDeps, "signal" | "setTimeout" | "clearTimer"> = {},
 ): Promise<{ ok: boolean; stdout: string; stderr: string }> {
-	return (async () => {
-		try {
-			const proc = Bun.spawn(argv, { stdout: "pipe", stderr: "pipe" });
-			const killer = setTimeout(() => {
-				try {
-					proc.kill();
-				} catch {
-					/* ignore */
-				}
-			}, timeoutMs);
-			const [stdout, stderr, exit] = await Promise.all([
-				new Response(proc.stdout).text(),
-				new Response(proc.stderr).text(),
-				proc.exited,
-			]);
-			clearTimeout(killer);
-			return { ok: exit === 0, stdout, stderr };
-		} catch (err) {
-			const message = err instanceof Error ? err.message : String(err);
-			return { ok: false, stdout: "", stderr: message };
-		}
-	})();
+	if (options.signal?.aborted) return Promise.resolve({ ok: false, stdout: "", stderr: "Cancelled before spawn" });
+	const schedule = options.setTimeout ?? setTimeout;
+	const clear = options.clearTimer ?? clearTimeout;
+	const { promise, resolve } = Promise.withResolvers<{ ok: boolean; stdout: string; stderr: string }>();
+	try {
+		const proc = spawn(argv[0], argv.slice(1), {
+			stdio: ["ignore", "pipe", "pipe"], detached: process.platform !== "win32",
+		});
+		const stdout: Buffer[] = [];
+		const stderr: Buffer[] = [];
+		let bytes = 0;
+		let stopped = "";
+		let settled = false;
+		let cleanup: Timer | undefined;
+		const finish = (code: number) => {
+			if (settled) return;
+			settled = true;
+			clear(deadline);
+			if (cleanup) clear(cleanup);
+			options.signal?.removeEventListener("abort", abort);
+			proc.stdout.destroy();
+			proc.stderr.destroy();
+			resolve({
+				ok: !stopped && code === 0,
+				stdout: Buffer.concat(stdout).toString("utf8"),
+				stderr: [Buffer.concat(stderr).toString("utf8"), stopped].filter(Boolean).join("\n"),
+			});
+		};
+		const stop = (reason: string) => {
+			if (stopped || settled) return;
+			stopped = reason;
+			try {
+				if (process.platform !== "win32" && proc.pid) process.kill(-proc.pid, "SIGKILL");
+				else proc.kill("SIGKILL");
+			} catch { /* already exited */ }
+			cleanup = schedule(() => finish(1), 1_000);
+		};
+		const abort = () => stop("Cancelled");
+		const deadline = schedule(() => stop("Discovery command deadline exceeded"),
+			Number.isFinite(timeoutMs) ? Math.max(1, Math.min(timeoutMs, NETWORK_MS)) : NETWORK_MS);
+		const collect = (target: Buffer[], chunk: Buffer) => {
+			if (stopped || settled) return;
+			const remaining = 65_536 - bytes;
+			if (remaining > 0) {
+				const kept = chunk.subarray(0, remaining);
+				target.push(Buffer.from(kept));
+				bytes += kept.length;
+			}
+			if (chunk.length > remaining) stop("Discovery command output limit exceeded");
+		};
+		proc.stdout.on("data", (chunk: Buffer) => collect(stdout, chunk));
+		proc.stderr.on("data", (chunk: Buffer) => collect(stderr, chunk));
+		proc.on("error", (error) => { stopped = `Discovery command failed to start: ${error.message}`; finish(1); });
+		proc.on("close", (code) => finish(code ?? 1));
+		options.signal?.addEventListener("abort", abort, { once: true });
+		if (options.signal?.aborted) abort();
+	} catch (error) {
+		resolve({ ok: false, stdout: "", stderr: error instanceof Error ? error.message : String(error) });
+	}
+	return promise;
 }
 
 function defaultWhich(bin: string): boolean {
-	const proc = Bun.spawnSync(["sh", "-c", `command -v ${JSON.stringify(bin)}`], {
-		stdout: "pipe",
-		stderr: "pipe",
-	});
-	return proc.exitCode === 0;
+	return Bun.which(bin) !== null;
 }
 
 function defaultRead(path: string): string | null {
@@ -129,7 +168,27 @@ async function scanLocal(deps: Required<Pick<ScanDeps, "run" | "readFile" | "whi
 	const mcpPath = join(homedir(), ".omp", "agent", "mcp.json");
 	const mcp = deps.readFile(mcpPath);
 	if (mcp !== null) {
-		hits.push({ name: "~/.omp/agent/mcp.json", detail: mcp.slice(0, 4000) });
+		let detail = "invalid MCP inventory; configuration omitted";
+		try {
+			const parsed: unknown = JSON.parse(mcp);
+			const servers = parsed && typeof parsed === "object" && !Array.isArray(parsed)
+				? (parsed as Record<string, unknown>).mcpServers : null;
+			if (servers && typeof servers === "object" && !Array.isArray(servers)) {
+				const counts = { configured: 0, disabled: 0, stdio: 0, remote: 0 };
+				for (const value of Object.values(servers)) {
+					if (!value || typeof value !== "object" || Array.isArray(value)) continue;
+					const server = value as Record<string, unknown>;
+					counts.configured++;
+					if (server.enabled === false || server.disabled === true) counts.disabled++;
+					if (typeof server.command === "string") counts.stdio++;
+					else if (typeof server.url === "string") counts.remote++;
+				}
+				detail = JSON.stringify(counts);
+			}
+		} catch {
+			// Parser diagnostics can contain configuration fragments.
+		}
+		hits.push({ name: "~/.omp/agent/mcp.json", detail });
 	} else if (existsSync(mcpPath) === false) {
 		hits.push({ name: "~/.omp/agent/mcp.json", detail: "absent" });
 	}
@@ -178,21 +237,10 @@ async function scanMcpRegistry(
 	}
 }
 
-async function scanSkillsCli(
-	deps: Required<Pick<ScanDeps, "run" | "which">>,
-	query: string,
-): Promise<SurfaceResult> {
-	if (!deps.which("npx")) {
-		return { surface: "skills_cli", ok: true, skipped: true, reason: "npx not found", hits: [] };
-	}
-	const r = await deps.run(["npx", "--yes", "skills", "find", query], NETWORK_MS);
-	if (!r.ok) {
-		return { surface: "skills_cli", ok: false, reason: r.stderr.slice(0, 500) || "skills find failed", hits: [] };
-	}
+async function scanSkillsCli(): Promise<SurfaceResult> {
 	return {
-		surface: "skills_cli",
-		ok: true,
-		hits: r.stdout.trim() ? [{ name: "npx skills find", detail: r.stdout.trim().slice(0, 4000) }] : [],
+		surface: "skills_cli", ok: true, skipped: true, hits: [],
+		reason: "Unavailable in read discovery: skills CLI execution requires separate explicit approval. Vet the package and request an approved execution separately; this scan never acquires or runs it.",
 	};
 }
 
@@ -209,13 +257,16 @@ async function scanNpm(fetchFn: typeof fetch, query: string): Promise<SurfaceRes
 			const json = JSON.parse(res.text) as {
 				objects?: Array<{ package?: { name?: string; description?: string; links?: { npm?: string } } }>;
 			};
+			if (!Array.isArray(json?.objects)) {
+				return { surface: "npm", ok: false, reason: `Invalid search response for ${kw}`, hits };
+			}
 			for (const obj of json.objects ?? []) {
 				const p = obj.package;
 				if (!p?.name) continue;
 				hits.push({ name: p.name, detail: p.description, url: p.links?.npm });
 			}
 		} catch {
-			/* ignore parse of one keyword */
+			return { surface: "npm", ok: false, reason: `Invalid search response for ${kw}`, hits };
 		}
 	}
 	return { surface: "npm", ok: true, hits };
@@ -280,8 +331,17 @@ export async function scanSurfaces(params: ScanParams, deps: ScanDeps = {}): Pro
 	results: SurfaceResult[];
 	gaps: Array<{ surface: SurfaceName; reason: string }>;
 }> {
-	const fetchFn = deps.fetchFn ?? fetch;
-	const run = deps.run ?? defaultRun;
+	const sourceFetch = deps.fetchFn ?? fetch;
+	const fetchFn: typeof fetch = deps.signal
+		? ((input, init) => sourceFetch(input, {
+			...init,
+			signal: init?.signal ? AbortSignal.any([deps.signal!, init.signal]) : deps.signal,
+		})) as typeof fetch
+		: sourceFetch;
+	const run: NonNullable<ScanDeps["run"]> = (argv, timeoutMs) => {
+		if (deps.signal?.aborted) return Promise.resolve({ ok: false, stdout: "", stderr: "Cancelled before spawn" });
+		return deps.run ? deps.run(argv, timeoutMs) : defaultRun(argv, timeoutMs, deps);
+	};
 	const readFile = deps.readFile ?? defaultRead;
 	const env = deps.env ?? process.env;
 	const which = deps.which ?? defaultWhich;
@@ -312,7 +372,7 @@ export async function scanSurfaces(params: ScanParams, deps: ScanDeps = {}): Pro
 	push("local", () => scanLocal({ run, readFile, which }));
 	push("discover", () => scanDiscover({ run, which }, params.query));
 	push("mcp_registry", () => scanMcpRegistry(fetchFn, params.query));
-	push("skills_cli", () => scanSkillsCli({ run, which }, params.query));
+	push("skills_cli", scanSkillsCli);
 	push("npm", () => scanNpm(fetchFn, params.query));
 	push("github", () => scanGithub({ run, which, env }, params.query));
 	push("smithery", () => scanSmithery(fetchFn, { env }, params.query));
@@ -331,15 +391,17 @@ export default function findToolsScanTool(pi: ExtensionAPI): void {
 		name: "find_tools_scan",
 		label: "Scan discovery surfaces",
 		description:
-			"Fan out a capability query across local inventory, omp discover, MCP Registry, skills CLI, npm, GitHub, and Smithery. Isolated per-surface failures.",
+			"Read-only discovery across local inventory, omp discover, MCP Registry, npm, GitHub, and Smithery. Skills CLI reports an approval-required gap; no package acquisition or execution. Isolated per-surface failures.",
 		parameters: z.object({
 			query: z.string().describe("Capability query"),
 			surfaces: z.array(z.string()).optional().describe("Optional subset of surface names"),
 		}),
 		approval: "read",
-		execute: async (_id, params: ScanParams) => {
+		execute: async (_id, params: ScanParams, signal, _onUpdate, ctx) => {
 			try {
-				const { results, gaps } = await scanSurfaces(params);
+				const { results, gaps } = await scanSurfaces(params, {
+					signal, setTimeout: ctx.setTimeout.bind(ctx), clearTimer: ctx.clearTimer.bind(ctx),
+				});
 				const lines: string[] = [];
 				for (const r of results) {
 					const flag = r.skipped ? "skip" : r.ok ? "ok" : "fail";

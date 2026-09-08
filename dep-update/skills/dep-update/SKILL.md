@@ -18,7 +18,7 @@ TRIGGER
    `skill://dep-update/references/recipes.md`.
 2. If `.project-setup/answers.toml` exists, read the baseline pins from
    `[module.lang-python]` / `[module.lang-ts]` (keys in `skill://dep-update/references/recipes.md`).
-   Absent file or section → continue silently on lockfile data alone.
+   Absent file or section → continue using detector declarations without baseline drift claims.
 3. Run the CVE scanners below.
 4. For MINOR-CHECK and MAJOR-ADVISORY, fetch changelog prose in the order given
    in `skill://dep-update/references/recipes.md` and cite every source by URL or git tag.
@@ -36,8 +36,8 @@ MINOR-CHECK     <name>  <current> → <latest>  [cite]
 MAJOR-ADVISORY  <name>  <current> → <latest>  breaking: <summary>  [cite]
 ```
 
-A dep whose lockfile version differs from its `answers.toml` baseline carries
-the drift note. Classes, for installed `A.B.C` against latest `X.Y.Z`:
+A dep whose independently resolved version differs from its `answers.toml` baseline carries
+the drift note. Manifest ranges alone do not establish installed-version drift. Classes for `A.B.C` against latest `X.Y.Z`:
 `C<Z` PATCH-SAFE · `B<Y` MINOR-CHECK · `A<X` MAJOR-ADVISORY · equal omitted.
 
 ## Apply loop
@@ -54,6 +54,10 @@ On `Y`: run the `dep_apply` tool (`ecosystem`, `name`, `version`, optional `path
 On `n`: record as skipped and move on.
 
 MUST confirm every bump on its own `[Y/n]` -- no global yes-to-all, no batching.
+MUST wait for the user's host approval and exact-bump confirmation for each `dep_apply` call. Denial or a headless session stops application.
+NOT approving a host prompt on the user's behalf.
+MUST treat a dep-update skill read as workflow handoff, never as approval for a bump.
+MUST inspect manifests and lockfiles after cancellation, deadline, output-limit, or package-manager failure; partial changes can remain.
 MUST keep majors, rust, and go out of the loop: named, cited, stopped (FR-014).
 NOT writing `.project-setup/answers.toml` or `sources.toml` -- enforced by the
 `fixture-write-gate` extension.
@@ -94,8 +98,11 @@ order, and the `answers.toml` key names.
 
 ## Out of scope
 
-`detect` enumerates **package-manager manifests** (lockfiles and language
-manifests). It does **not** cover:
+The detector reads root `package.json`, `Cargo.toml`, `go.mod`, `Gemfile`, and `composer.json`.
+Python uses the first available `uv.lock`, `poetry.lock`, `requirements.txt`, or `pyproject.toml`, in that order.
+Node lockfiles select the apply command but are not scanned for resolved versions.
+`Cargo.lock`, `go.sum`, `Pipfile.lock`, Ruby/PHP lockfiles, and workspace child manifests are not scanned.
+Report these coverage gaps; do not describe declaration ranges as installed versions. It does not cover:
 
 - Docker image tag lookup (`FROM` lines, Hub/GHCR tags)
 - GitHub Actions pinning (`uses:` version pins in workflow YAML)

@@ -154,6 +154,10 @@ export class Detector {
 			const data = await this.readToml(lock);
 			if (!data) continue;
 			const pkgs = data.package;
+			if (!Array.isArray(pkgs)) {
+				this.note(`detect: ${lock} has no package array; trying declarations`);
+				continue;
+			}
 			if (Array.isArray(pkgs)) {
 				for (const entry of pkgs) {
 					if (!entry || typeof entry !== "object") continue;
@@ -188,7 +192,7 @@ export class Detector {
 	private scanPep621(project: unknown): void {
 		if (!project || typeof project !== "object") return;
 		const p = project as Record<string, unknown>;
-		for (const req of (p.dependencies as unknown[]) || []) {
+		for (const req of Array.isArray(p.dependencies) ? p.dependencies : []) {
 			if (typeof req === "string") {
 				const [name, version] = parseRequirement(req);
 				this.emit("pypi", name, version);
@@ -197,7 +201,7 @@ export class Detector {
 		const extras = p["optional-dependencies"];
 		if (extras && typeof extras === "object") {
 			for (const reqs of Object.values(extras as Record<string, unknown>)) {
-				for (const req of (reqs as unknown[]) || []) {
+				for (const req of Array.isArray(reqs) ? reqs : []) {
 					if (typeof req === "string") {
 						const [name, version] = parseRequirement(req);
 						this.emit("pypi", name, version);
@@ -210,7 +214,7 @@ export class Detector {
 	private scanDependencyGroups(groups: unknown): void {
 		if (!groups || typeof groups !== "object") return;
 		for (const reqs of Object.values(groups as Record<string, unknown>)) {
-			for (const req of (reqs as unknown[]) || []) {
+			for (const req of Array.isArray(reqs) ? reqs : []) {
 				if (typeof req === "string") {
 					const [name, version] = parseRequirement(req);
 					this.emit("pypi", name, version);
@@ -326,6 +330,7 @@ export async function detectProject(target: string): Promise<{
 	const detector = new Detector(target);
 	await detector.scanAll();
 	const notes = [...detector.notes];
+	notes.push("Coverage: root declarations only, except uv.lock/poetry.lock. Unscanned: Node lockfiles, Cargo.lock, go.sum, Pipfile.lock, Ruby/PHP lockfiles, workspace children.");
 	notes.push("");
 	notes.push(`detect: ${detector.rows.length} dependency declaration(s) found in ${target}`);
 	if (detector.rows.length === 0) {

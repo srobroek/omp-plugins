@@ -878,6 +878,7 @@ function parse(toml, { maxDepth = 1000, integersAsBigInt } = {}) {
 
 // extensions/lib.ts
 import { statSync } from "fs";
+import { spawn } from "child_process";
 var MISSING = "?";
 var USER_AGENT = "dep-update-skill (+https://github.com/srobroek/agentic-packages)";
 var FETCH_TIMEOUT_MS = 1e4;
@@ -1026,6 +1027,10 @@ class Detector {
       if (!data2)
         continue;
       const pkgs = data2.package;
+      if (!Array.isArray(pkgs)) {
+        this.note(`detect: ${lock} has no package array; trying declarations`);
+        continue;
+      }
       if (Array.isArray(pkgs)) {
         for (const entry of pkgs) {
           if (!entry || typeof entry !== "object")
@@ -1060,7 +1065,7 @@ class Detector {
     if (!project || typeof project !== "object")
       return;
     const p = project;
-    for (const req of p.dependencies || []) {
+    for (const req of Array.isArray(p.dependencies) ? p.dependencies : []) {
       if (typeof req === "string") {
         const [name, version] = parseRequirement(req);
         this.emit("pypi", name, version);
@@ -1069,7 +1074,7 @@ class Detector {
     const extras = p["optional-dependencies"];
     if (extras && typeof extras === "object") {
       for (const reqs of Object.values(extras)) {
-        for (const req of reqs || []) {
+        for (const req of Array.isArray(reqs) ? reqs : []) {
           if (typeof req === "string") {
             const [name, version] = parseRequirement(req);
             this.emit("pypi", name, version);
@@ -1082,7 +1087,7 @@ class Detector {
     if (!groups || typeof groups !== "object")
       return;
     for (const reqs of Object.values(groups)) {
-      for (const req of reqs || []) {
+      for (const req of Array.isArray(reqs) ? reqs : []) {
         if (typeof req === "string") {
           const [name, version] = parseRequirement(req);
           this.emit("pypi", name, version);
@@ -1197,6 +1202,7 @@ async function detectProject(target) {
   const detector = new Detector(target);
   await detector.scanAll();
   const notes = [...detector.notes];
+  notes.push("Coverage: root declarations only, except uv.lock/poetry.lock. Unscanned: Node lockfiles, Cargo.lock, go.sum, Pipfile.lock, Ruby/PHP lockfiles, workspace children.");
   notes.push("");
   notes.push(`detect: ${detector.rows.length} dependency declaration(s) found in ${target}`);
   if (detector.rows.length === 0) {
@@ -1254,31 +1260,38 @@ class RegistryError extends Error {
     this.code = code;
   }
 }
-async function fetchJson(ecosystem, name, url, fixtureDir) {
+async function fetchJson(ecosystem, name, url, fixtureDir, signal) {
+  signal?.throwIfAborted();
   const dir = fixtureDir ?? process.env.DEP_UPDATE_FIXTURE_DIR ?? "";
   if (dir) {
     const safe = name.replaceAll("/", "__").replaceAll("@", "__at__");
     const fixture = join(dir, `${ecosystem}_${safe}.json`);
     if (isFile(fixture)) {
-      return JSON.parse(await Bun.file(fixture).text());
+      const data2 = JSON.parse(await Bun.file(fixture).text());
+      signal?.throwIfAborted();
+      return data2;
     }
     throw new RegistryError("fixture not found (offline simulation)");
   }
+  const deadline = AbortSignal.timeout(FETCH_TIMEOUT_MS);
   const res = await fetch(url, {
     headers: { "User-Agent": USER_AGENT },
-    signal: AbortSignal.timeout(FETCH_TIMEOUT_MS)
+    signal: signal ? AbortSignal.any([signal, deadline]) : deadline
   });
   if (!res.ok)
     throw new RegistryError(`HTTP ${res.status}`, res.status);
-  return await res.json();
+  const data = await res.json();
+  signal?.throwIfAborted();
+  return data;
 }
-async function queryRegistry(ecosystem, name, installed, fixtureDir) {
+async function queryRegistry(ecosystem, name, installed, fixtureDir, signal) {
+  signal?.throwIfAborted();
   const result = { ecosystem, name, installed, status: "UNRESOLVABLE" };
   try {
     let latest = "";
     let candidates = [];
     if (ecosystem === "pypi") {
-      const data = await fetchJson(ecosystem, name, `https://pypi.org/pypi/${name}/json`, fixtureDir);
+      const data = await fetchJson(ecosystem, name, `https://pypi.org/pypi/${name}/json`, fixtureDir, signal);
       const info = data.info;
       const ver = info?.version;
       if (typeof ver !== "string" || !ver) {
@@ -1297,7 +1310,7 @@ async function queryRegistry(ecosystem, name, installed, fixtureDir) {
       }
       candidates = Object.keys(releases);
     } else if (ecosystem === "npm" || ecosystem === "node") {
-      const data = await fetchJson(ecosystem, name, `https://registry.npmjs.org/${name}`, fixtureDir);
+      const data = await fetchJson(ecosystem, name, `https://registry.npmjs.org/${name}`, fixtureDir, signal);
       const tags = data["dist-tags"] ?? {};
       const ver = tags.latest;
       if (typeof ver !== "string" || !ver) {
@@ -1317,6 +1330,7 @@ async function queryRegistry(ecosystem, name, installed, fixtureDir) {
     result.class = verdict;
     return result;
   } catch (exc) {
+    signal?.throwIfAborted();
     if (exc instanceof RegistryError && exc.code !== undefined) {
       result.reason = exc.code === 401 || exc.code === 403 ? "auth-required" : `HTTP ${exc.code}`;
       return result;
@@ -1329,18 +1343,23 @@ async function queryRegistry(ecosystem, name, installed, fixtureDir) {
     return result;
   }
 }
-async function researchProject(target, fixtureDir) {
+async function researchProject(target, fixtureDir, signal) {
+  signal?.throwIfAborted();
   if (!isDir(target)) {
     return { exit: 2, records: [], stderr: `research: '${target}' is not a directory` };
   }
   const notes = ["dep-update/research: querying registries...", ""];
   const detected = await detectProject(target);
+  signal?.throwIfAborted();
+  notes.push(detected.stderr);
   const tallies = { OK: 0, CURRENT: 0, UNRESOLVABLE: 0, DISCONFIRMED: 0 };
   const records = [];
   for (const [ecosystem, name, installed] of detected.rows) {
+    signal?.throwIfAborted();
     if (!ecosystem || !name)
       continue;
-    const record = await queryRegistry(ecosystem, name, installed, fixtureDir);
+    const record = await queryRegistry(ecosystem, name, installed, fixtureDir, signal);
+    signal?.throwIfAborted();
     records.push(record);
     const status = record.status;
     if (status in tallies)
@@ -1420,13 +1439,13 @@ function pyprojectRequirements(data) {
   const project = data.project;
   if (project && typeof project === "object") {
     const p = project;
-    for (const r of p.dependencies || [])
+    for (const r of Array.isArray(p.dependencies) ? p.dependencies : [])
       if (typeof r === "string")
         out.push(r);
     const extras = p["optional-dependencies"];
     if (extras && typeof extras === "object") {
       for (const reqs of Object.values(extras)) {
-        for (const r of reqs || [])
+        for (const r of Array.isArray(reqs) ? reqs : [])
           if (typeof r === "string")
             out.push(r);
       }
@@ -1435,7 +1454,7 @@ function pyprojectRequirements(data) {
   const groups = data["dependency-groups"];
   if (groups && typeof groups === "object") {
     for (const reqs of Object.values(groups)) {
-      for (const r of reqs || [])
+      for (const r of Array.isArray(reqs) ? reqs : [])
         if (typeof r === "string")
           out.push(r);
     }
@@ -1469,7 +1488,7 @@ async function checkPythonVersion(root, name, version) {
     const data = await readTomlFile(lock);
     if (!data)
       return false;
-    for (const entry of data.package || []) {
+    for (const entry of Array.isArray(data.package) ? data.package : []) {
       if (!entry || typeof entry !== "object")
         continue;
       const rec = entry;
@@ -1492,7 +1511,7 @@ async function checkNodeVersion(root, name, version) {
     const accepted = new Set([version, `^${version}`, `~${version}`, `=${version}`]);
     for (const section of ["dependencies", "devDependencies", "peerDependencies", "optionalDependencies"]) {
       const block = rec[section];
-      if (!block || typeof block !== "object")
+      if (!block || typeof block !== "object" || Array.isArray(block) || !Object.hasOwn(block, name))
         continue;
       const declared = block[name];
       if (typeof declared === "string" && accepted.has(declared))
@@ -1503,15 +1522,98 @@ async function checkNodeVersion(root, name, version) {
     return false;
   }
 }
-async function runPm(command, root) {
-  const log = `==> ${command.join(" ")}`;
-  const proc = Bun.spawn(command, { cwd: root, stdout: "pipe", stderr: "pipe" });
-  const [stdout, stderr] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text()]);
-  const code = await proc.exited;
-  return { code, log: [log, stdout, stderr].filter(Boolean).join(`
-`) };
+async function runPm(command, root, options) {
+  if (options.signal?.aborted)
+    return { code: 1, log: "Cancelled before spawn; no changes made." };
+  const schedule = options.setTimeout ?? setTimeout;
+  const clear = options.clearTimer ?? clearTimeout;
+  return new Promise((resolve) => {
+    const proc = spawn(command[0], command.slice(1), {
+      cwd: root,
+      stdio: ["ignore", "pipe", "pipe"],
+      detached: process.platform !== "win32"
+    });
+    const chunks = [];
+    const limit = Math.max(1, Math.min(options.maxOutputBytes ?? 65536, 65536));
+    let bytes = 0;
+    let stopped = "";
+    let settled = false;
+    let cleanup;
+    const kill = () => {
+      try {
+        if (process.platform !== "win32" && proc.pid)
+          process.kill(-proc.pid, "SIGKILL");
+        else
+          proc.kill("SIGKILL");
+      } catch {}
+    };
+    const finish = (code) => {
+      if (settled)
+        return;
+      settled = true;
+      clear(deadline);
+      if (cleanup)
+        clear(cleanup);
+      options.signal?.removeEventListener("abort", abort);
+      proc.stdout?.destroy();
+      proc.stderr?.destroy();
+      resolve({ code, log: [
+        `==> ${command.join(" ")}`,
+        Buffer.concat(chunks).toString("utf8"),
+        stopped && `${stopped}; partial dependency changes may remain. Inspect manifests and lockfiles before retrying.`
+      ].filter(Boolean).join(`
+`) });
+    };
+    const stop = (reason) => {
+      if (stopped || settled)
+        return;
+      stopped = reason;
+      kill();
+      cleanup = schedule(() => finish(1), 1000);
+    };
+    const abort = () => stop("Cancelled");
+    const deadline = schedule(() => stop("Package manager deadline exceeded"), Math.max(1, Math.min(options.timeoutMs ?? 120000, 120000)));
+    const collect = (chunk) => {
+      const remaining = limit - bytes;
+      if (remaining > 0) {
+        const kept = chunk.subarray(0, remaining);
+        chunks.push(Buffer.from(kept));
+        bytes += kept.length;
+      }
+      if (chunk.length > remaining)
+        stop("Package manager output limit exceeded");
+    };
+    proc.stdout.on("data", collect);
+    proc.stderr.on("data", collect);
+    proc.on("error", () => {
+      stopped = "Package manager failed to start";
+      finish(1);
+    });
+    proc.on("close", (code) => finish(stopped ? 1 : code ?? 1));
+    options.signal?.addEventListener("abort", abort, { once: true });
+    if (options.signal?.aborted)
+      abort();
+  });
 }
-async function applyBump(ecosystem, name, version, root) {
+function validOperands(ecosystem, name, version) {
+  const semver = /^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:-(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*))*)?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/;
+  if (["npm", "node", "pnpm", "yarn", "bun"].includes(ecosystem)) {
+    return /^(?:@[a-z0-9][a-z0-9._-]*\/)?[a-z0-9][a-z0-9._-]*$/.test(name) && name.length <= 214 && semver.test(version);
+  }
+  if (ecosystem === "pypi" || ecosystem === "python") {
+    return REQ_NAME.test(name) && /^(?:\d+!)?\d+(?:\.\d+)*(?:(?:a|b|rc)\d+)?(?:\.post\d+)?(?:\.dev\d+)?(?:\+[a-z0-9]+(?:[._-][a-z0-9]+)*)?$/i.test(version);
+  }
+  if (ecosystem === "cargo" || ecosystem === "rust")
+    return /^[A-Za-z0-9][A-Za-z0-9_-]*$/.test(name) && semver.test(version);
+  if (ecosystem === "go")
+    return /^[A-Za-z0-9][A-Za-z0-9._~/-]*$/.test(name) && semver.test(version.replace(/^v/, ""));
+  return false;
+}
+async function applyBump(ecosystem, name, version, root, options = {}) {
+  if (!validOperands(ecosystem, name, version))
+    return { exit: 2, text: "ERROR: unsupported ecosystem, package name, or exact version; no process started" };
+  if (options.signal?.aborted)
+    return { exit: 1, text: "Cancelled before spawn; no changes made." };
   if (!isDir(root)) {
     return { exit: 2, text: `ERROR: '${root}' is not a directory` };
   }
@@ -1527,10 +1629,10 @@ async function applyBump(ecosystem, name, version, root) {
       return { exit: 0, text: lines.join(`
 `) };
     }
-    const ran = await runPm(["uv", "add", `${name}==${version}`], root);
+    const ran = await runPm(["uv", "add", `${name}==${version}`], root, options);
     lines.push(ran.log);
     if (ran.code !== 0) {
-      lines.push(`WARN: uv exited with status ${ran.code}; bump was not confirmed`);
+      lines.push(`WARN: uv exited with status ${ran.code}; partial changes may remain; bump was not confirmed`);
       return { exit: 1, text: lines.join(`
 `) };
     }
@@ -1547,12 +1649,12 @@ async function applyBump(ecosystem, name, version, root) {
   if (["npm", "node", "pnpm", "yarn", "bun"].includes(ecosystem)) {
     let pm = await detectNodePm(root);
     const cmds = {
-      pnpm: ["pnpm", "update", name, "--version", version],
+      pnpm: ["pnpm", "update", `${name}@${version}`],
       bun: ["bun", "add", `${name}@${version}`],
       yarn: ["yarn", "add", `${name}@${version}`],
       npm: ["npm", "install", `${name}@${version}`]
     };
-    if (!(pm in cmds))
+    if (!Object.hasOwn(cmds, pm))
       pm = "npm";
     const command = cmds[pm];
     if (!which(pm)) {
@@ -1561,10 +1663,10 @@ async function applyBump(ecosystem, name, version, root) {
       return { exit: 0, text: lines.join(`
 `) };
     }
-    const ran = await runPm(command, root);
+    const ran = await runPm(command, root, options);
     lines.push(ran.log);
     if (ran.code !== 0) {
-      lines.push(`WARN: ${pm} exited with status ${ran.code}; bump was not confirmed`);
+      lines.push(`WARN: ${pm} exited with status ${ran.code}; partial changes may remain; bump was not confirmed`);
       return { exit: 1, text: lines.join(`
 `) };
     }
@@ -1608,10 +1710,10 @@ function depScanTool(pi) {
       offline_fixture_dir: z.string().optional().describe("DEP_UPDATE_FIXTURE_DIR: read registry responses from fixture files instead of the network")
     }),
     approval: "read",
-    async execute(_id, params, _signal, _onUpdate, ctx) {
+    async execute(_id, params, signal, _onUpdate, ctx) {
       const dir = params.path ?? ctx.cwd;
       try {
-        const { exit, records, stderr } = await researchProject(dir, params.offline_fixture_dir);
+        const { exit, records, stderr } = await researchProject(dir, params.offline_fixture_dir, signal);
         if (exit !== 0) {
           return {
             content: [{ type: "text", text: `dep_scan failed (exit ${exit}):
@@ -1643,6 +1745,7 @@ ${stderr}` }],
           details: { records, summary: { upgradable: upgradable.length, skipped } }
         };
       } catch (error) {
+        signal?.throwIfAborted();
         const message = error instanceof Error ? error.message : String(error);
         return {
           content: [{ type: "text", text: `dep_scan error: ${message}` }],
@@ -1661,9 +1764,23 @@ ${stderr}` }],
       version: z.string().describe("Target version to pin"),
       path: z.string().optional().describe("Project root; defaults to session cwd")
     }),
-    async execute(_id, params, _signal, _onUpdate, ctx) {
+    approval: { tier: "exec", policy: "prompt" },
+    async execute(_id, params, signal, _onUpdate, ctx) {
       try {
-        const result = await applyBump(params.ecosystem, params.name, params.version, params.path ?? ctx.cwd);
+        if (signal?.aborted)
+          throw new Error("Cancelled before approval; no process started");
+        if (!ctx.hasUI)
+          throw new Error("Interactive approval is required; no process started");
+        const approved = await ctx.ui.confirm("Apply dependency bump", `${params.ecosystem}: ${params.name} -> ${params.version}
+Project: ${params.path ?? ctx.cwd}
+Package-manager failure or cancellation can leave partial changes.`, { signal, timeout: 120000 });
+        if (!approved)
+          throw new Error("Dependency bump denied; no process started");
+        const result = await applyBump(params.ecosystem, params.name, params.version, params.path ?? ctx.cwd, {
+          signal,
+          setTimeout: ctx.setTimeout.bind(ctx),
+          clearTimer: ctx.clearTimer.bind(ctx)
+        });
         return {
           content: [{ type: "text", text: result.text }],
           details: { exit: result.exit }

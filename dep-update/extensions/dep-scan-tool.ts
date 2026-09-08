@@ -21,10 +21,10 @@ export default function depScanTool(pi: ExtensionAPI): void {
 				.describe("DEP_UPDATE_FIXTURE_DIR: read registry responses from fixture files instead of the network"),
 		}),
 		approval: "read",
-		async execute(_id, params, _signal, _onUpdate, ctx) {
+		async execute(_id, params, signal, _onUpdate, ctx) {
 			const dir = params.path ?? ctx.cwd;
 			try {
-				const { exit, records, stderr } = await researchProject(dir, params.offline_fixture_dir);
+				const { exit, records, stderr } = await researchProject(dir, params.offline_fixture_dir, signal);
 				if (exit !== 0) {
 					return {
 						content: [{ type: "text" as const, text: `dep_scan failed (exit ${exit}):\n${stderr}` }],
@@ -53,6 +53,7 @@ export default function depScanTool(pi: ExtensionAPI): void {
 					details: { records, summary: { upgradable: upgradable.length, skipped } },
 				};
 			} catch (error) {
+				signal?.throwIfAborted();
 				const message = error instanceof Error ? error.message : String(error);
 				return {
 					content: [{ type: "text" as const, text: `dep_scan error: ${message}` }],
@@ -74,9 +75,22 @@ export default function depScanTool(pi: ExtensionAPI): void {
 			version: z.string().describe("Target version to pin"),
 			path: z.string().optional().describe("Project root; defaults to session cwd"),
 		}),
-		async execute(_id, params, _signal, _onUpdate, ctx) {
+		approval: { tier: "exec", policy: "prompt" },
+		async execute(_id, params, signal, _onUpdate, ctx) {
 			try {
-				const result = await applyBump(params.ecosystem, params.name, params.version, params.path ?? ctx.cwd);
+				if (signal?.aborted) throw new Error("Cancelled before approval; no process started");
+				if (!ctx.hasUI) throw new Error("Interactive approval is required; no process started");
+				const approved = await ctx.ui.confirm(
+					"Apply dependency bump",
+					`${params.ecosystem}: ${params.name} -> ${params.version}\nProject: ${params.path ?? ctx.cwd}\nPackage-manager failure or cancellation can leave partial changes.`,
+					{ signal, timeout: 120_000 },
+				);
+				if (!approved) throw new Error("Dependency bump denied; no process started");
+				const result = await applyBump(params.ecosystem, params.name, params.version, params.path ?? ctx.cwd, {
+					signal,
+					setTimeout: ctx.setTimeout.bind(ctx),
+					clearTimer: ctx.clearTimer.bind(ctx),
+				});
 				return {
 					content: [{ type: "text" as const, text: result.text }],
 					details: { exit: result.exit },
