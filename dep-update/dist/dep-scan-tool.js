@@ -1229,7 +1229,7 @@ function classify(installed, latest) {
   const cur = normalizeVersion(installed);
   const lat = normalizeVersion(latest);
   if (cur === null || lat === null)
-    return "MINOR-CHECK";
+    return "UNRESOLVABLE";
   if (cur[0] === lat[0] && cur[1] === lat[1] && cur[2] === lat[2])
     return "CURRENT";
   if (lat[0] > cur[0])
@@ -1327,7 +1327,10 @@ async function queryRegistry(ecosystem, name, installed, fixtureDir, signal) {
     latest = pickStable(latest, installed, candidates);
     const verdict = classify(installed, latest);
     result.latest = latest;
-    result.status = verdict === "CURRENT" ? "CURRENT" : "OK";
+    result.status = verdict === "CURRENT" || verdict === "UNRESOLVABLE" ? verdict : "OK";
+    if (verdict === "UNRESOLVABLE") {
+      result.reason = "Exact versions are required to classify an upgrade; resolve the declaration before applying.";
+    }
     result.class = verdict;
     return result;
   } catch (exc) {
@@ -1374,8 +1377,8 @@ async function researchProject(target, fixtureDir, signal) {
   notes.push(`  unresolvable:  ${unresolvable}`);
   if (records.length > 0 && tallies.OK === 0 && tallies.CURRENT === 0 && unresolvable === records.length) {
     notes.push("");
-    notes.push("WARNING: all registry queries failed - no registry access or all deps are private.");
-    notes.push("No upgrade plan can be produced. Check your network connection and retry.");
+    notes.push("WARNING: no dependency versions could be classified.");
+    notes.push("Resolve declared ranges and inspect each record's reason before planning upgrades.");
   }
   return { exit: 0, records, stderr: notes.join(`
 `) };
@@ -1708,7 +1711,7 @@ function depScanTool(pi) {
   pi.registerTool({
     name: "dep_scan",
     label: "Dependency Scan",
-    description: "Enumerate a project's declared dependencies, query PyPI/npm for the latest versions, and " + "classify every bump as PATCH-SAFE, MINOR-CHECK, or MAJOR-ADVISORY. Read-only: applies " + "nothing. Rust and go deps are enumerated but not classified (advisory-only by policy).",
+    description: "Enumerate a project's declared dependencies, query PyPI/npm for the latest versions, and " + "classify exact-version bumps as PATCH-SAFE, MINOR-CHECK, or MAJOR-ADVISORY. " + "Unresolved versions are UNRESOLVABLE, never an upgrade recommendation. Read-only; applies nothing. " + "Rust and go deps are enumerated but not classified (advisory-only by policy).",
     parameters: z.object({
       path: z.string().optional().describe("Project root to scan; defaults to the session cwd"),
       offline_fixture_dir: z.string().optional().describe("DEP_UPDATE_FIXTURE_DIR: read registry responses from fixture files instead of the network")
@@ -1737,6 +1740,11 @@ ${stderr}` }],
         for (const cls of order) {
           for (const r of (byClass.get(cls) ?? []).sort((a, b) => a.name.localeCompare(b.name))) {
             lines.push(`${cls.padEnd(15)} ${r.name}  ${r.installed} -> ${r.latest}  (${r.ecosystem})`);
+          }
+        }
+        for (const record of records) {
+          if (record.status === "UNRESOLVABLE" || record.status === "DISCONFIRMED") {
+            lines.push(`${record.status.padEnd(15)} ${record.name}  ${record.installed} -> ${record.latest ?? "unknown"}  (${record.ecosystem}): ${record.reason ?? "not classified"}`);
           }
         }
         const skipped = records.length - upgradable.length;

@@ -34,11 +34,13 @@ CVE-FLAGGED     <name>  <current> → <latest>  [CVE-XXXX-XXXX] <scanner> <advis
 PATCH-SAFE      <name>  <current> → <latest>  [cite]  [drifted from answers.toml: <baseline>]
 MINOR-CHECK     <name>  <current> → <latest>  [cite]
 MAJOR-ADVISORY  <name>  <current> → <latest>  breaking: <summary>  [cite]
+UNRESOLVABLE   <name>  <declaration> → <latest>  reason: <unresolved version or registry failure>
 ```
 
 A dep whose independently resolved version differs from its `answers.toml` baseline carries
 the drift note. Manifest ranges alone do not establish installed-version drift. Classes for `A.B.C` against latest `X.Y.Z`:
 `C<Z` PATCH-SAFE · `B<Y` MINOR-CHECK · `A<X` MAJOR-ADVISORY · equal omitted.
+Unresolved declarations are `UNRESOLVABLE`, not minor upgrades. Resolve exact versions before planning or applying a bump.
 
 ## Apply loop
 

@@ -28,7 +28,7 @@ describe("unit: versions", () => {
 		expect(classify("1.2.3", "1.3.0")).toBe("MINOR-CHECK");
 		expect(classify("1.2.3", "2.0.0")).toBe("MAJOR-ADVISORY");
 		expect(classify("1.2.3", "1.2.3")).toBe("CURRENT");
-		expect(classify("not-a-version", "1.2.3")).toBe("MINOR-CHECK");
+		expect(classify("not-a-version", "1.2.3")).toBe("UNRESOLVABLE");
 	});
 
 	test("parseRequirement extras", () => {
@@ -80,8 +80,8 @@ describe("unit: fixture registry", () => {
 		["pypi", "==1.0.0", "MAJOR-ADVISORY"],
 		["npm", "=1.0.0", "MAJOR-ADVISORY"],
 		["pypi", "==2.0.0", "CURRENT"],
-		["pypi", "==1.*", "MINOR-CHECK"],
-		["pypi", ">=1.0.0", "MINOR-CHECK"],
+		["pypi", "==1.*", "UNRESOLVABLE"],
+		["pypi", ">=1.0.0", "UNRESOLVABLE"],
 	])("%s classifies %s without treating ranges as resolved versions", async (ecosystem, installed, expected) => {
 		const fixtures = tmp();
 		try {
@@ -91,6 +91,7 @@ describe("unit: fixture registry", () => {
 			writeFileSync(join(fixtures, `${ecosystem}_example.json`), JSON.stringify(response));
 			const record = await queryRegistry(ecosystem, "example", installed, fixtures);
 			expect(record.class).toBe(expected);
+			expect(record.status).toBe(expected === "UNRESOLVABLE" || expected === "CURRENT" ? expected : "OK");
 		} finally {
 			rmSync(fixtures, { recursive: true, force: true });
 		}

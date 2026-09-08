@@ -1,6 +1,7 @@
 # dep-update
 
-Classify dependency declarations by semver safety. Apply patch/minor bumps with per-bump confirmation. PyPI and npm support application; Rust/Go are advisory.
+This plugin classifies dependency declarations by semver safety. It can apply patch or minor bumps, with confirmation for each bump.
+The plugin can apply changes for PyPI and npm. For Rust and Go, it only provides advice.
 
 ## Skills
 
@@ -11,8 +12,8 @@ Classify dependency declarations by semver safety. Apply patch/minor bumps with 
 ## Extensions
 
 - `fixture-write-gate`: blocks `edit`/`write` of `.project-setup/answers.toml`
-  and `.project-setup/sources.toml` at any depth. The project-setup runner owns
-  those fixtures; this plugin only reads them for baseline pins and drift notes.
+  and `.project-setup/sources.toml` at any depth.
+  The project-setup runner owns these fixtures. This plugin reads them only to report baseline pins and drift.
 
 ## Rules
 
@@ -22,18 +23,24 @@ Classify dependency declarations by semver safety. Apply patch/minor bumps with 
 
 ## Tools
 
-The plugin's extension modules register:
+The plugin registers `dep_scan` to scan dependencies and `dep_apply` to apply a confirmed bump.
 
-- `dep_apply`
-- `dep_scan`
+### Confirm a bump
 
-`dep_apply` declares exec approval. It requires interactive confirmation of the exact bump and project. Denial and headless execution stop application.
-Direct tool calls can show both the host approval and the bump confirmation; device calls still require the bump confirmation.
-Package-manager runs stop after 120 seconds or 64 KiB of combined output. Cancellation and failures can leave partial changes.
+`dep_apply` declares exec approval. Before applying a bump, it asks you to confirm which version to install and which project to change.
+If you deny confirmation or run without an interactive session, the tool stops without applying the bump.
+Direct calls to the tool can show both host approval and confirmation of the bump. Calls through a device still need confirmation of the bump.
 
-The detector reads root language manifests. Python also reads `uv.lock` or `poetry.lock` before falling back to declarations.
-Node lockfiles select the package manager; the detector does not read their resolved versions.
-The detector recognizes numeric equality pins such as `==1.2.3` and `=1.2.3`. It does not resolve version ranges.
+After 120 seconds or 64 KiB of combined output, the tool stops the package manager. Cancellation and failures can leave partial changes.
+
+### Find dependency versions
+
+The detector reads manifests at the project root. For Python, it checks `uv.lock` or `poetry.lock` first. If neither supplies the version, it uses declarations.
+For Node, lockfiles select the package manager. The detector does not read resolved versions from those lockfiles.
+
+The detector recognizes versions pinned with `==` or `=`, such as `==1.2.3` and `=1.2.3`. It does not resolve version ranges.
+The scanner labels unresolved versions `UNRESOLVABLE` and excludes them from upgrade recommendations.
+Before choosing a bump, resolve the installed version.
 
 The detector does not scan:
 

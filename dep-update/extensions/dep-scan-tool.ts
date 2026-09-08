@@ -11,8 +11,9 @@ export default function depScanTool(pi: ExtensionAPI): void {
 		label: "Dependency Scan",
 		description:
 			"Enumerate a project's declared dependencies, query PyPI/npm for the latest versions, and " +
-			"classify every bump as PATCH-SAFE, MINOR-CHECK, or MAJOR-ADVISORY. Read-only: applies " +
-			"nothing. Rust and go deps are enumerated but not classified (advisory-only by policy).",
+			"classify exact-version bumps as PATCH-SAFE, MINOR-CHECK, or MAJOR-ADVISORY. " +
+			"Unresolved versions are UNRESOLVABLE, never an upgrade recommendation. Read-only; applies nothing. " +
+			"Rust and go deps are enumerated but not classified (advisory-only by policy).",
 		parameters: z.object({
 			path: z.string().optional().describe("Project root to scan; defaults to the session cwd"),
 			offline_fixture_dir: z
@@ -43,6 +44,11 @@ export default function depScanTool(pi: ExtensionAPI): void {
 				for (const cls of order) {
 					for (const r of (byClass.get(cls) ?? []).sort((a, b) => a.name.localeCompare(b.name))) {
 						lines.push(`${cls.padEnd(15)} ${r.name}  ${r.installed} -> ${r.latest}  (${r.ecosystem})`);
+					}
+				}
+				for (const record of records) {
+					if (record.status === "UNRESOLVABLE" || record.status === "DISCONFIRMED") {
+						lines.push(`${record.status.padEnd(15)} ${record.name}  ${record.installed} -> ${record.latest ?? "unknown"}  (${record.ecosystem}): ${record.reason ?? "not classified"}`);
 					}
 				}
 				const skipped = records.length - upgradable.length;

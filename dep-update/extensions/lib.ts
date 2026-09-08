@@ -372,7 +372,7 @@ export function isPrerelease(raw: unknown): boolean {
 export function classify(installed: string, latest: string): string {
 	const cur = normalizeVersion(installed);
 	const lat = normalizeVersion(latest);
-	if (cur === null || lat === null) return "MINOR-CHECK";
+	if (cur === null || lat === null) return "UNRESOLVABLE";
 	if (cur[0] === lat[0] && cur[1] === lat[1] && cur[2] === lat[2]) return "CURRENT";
 	if (lat[0] > cur[0]) return "MAJOR-ADVISORY";
 	if (lat[0] === cur[0] && lat[1] > cur[1]) return "MINOR-CHECK";
@@ -478,7 +478,10 @@ export async function queryRegistry(
 		latest = pickStable(latest, installed, candidates);
 		const verdict = classify(installed, latest);
 		result.latest = latest;
-		result.status = verdict === "CURRENT" ? "CURRENT" : "OK";
+		result.status = verdict === "CURRENT" || verdict === "UNRESOLVABLE" ? verdict : "OK";
+		if (verdict === "UNRESOLVABLE") {
+			result.reason = "Exact versions are required to classify an upgrade; resolve the declaration before applying.";
+		}
 		result.class = verdict;
 		return result;
 	} catch (exc) {
@@ -528,8 +531,8 @@ export async function researchProject(
 	notes.push(`  unresolvable:  ${unresolvable}`);
 	if (records.length > 0 && tallies.OK === 0 && tallies.CURRENT === 0 && unresolvable === records.length) {
 		notes.push("");
-		notes.push("WARNING: all registry queries failed - no registry access or all deps are private.");
-		notes.push("No upgrade plan can be produced. Check your network connection and retry.");
+		notes.push("WARNING: no dependency versions could be classified.");
+		notes.push("Resolve declared ranges and inspect each record's reason before planning upgrades.");
 	}
 	return { exit: 0, records, stderr: notes.join("\n") };
 }
