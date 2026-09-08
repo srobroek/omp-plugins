@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.3.0](https://github.com/srobroek/omp-plugins/compare/authoring--v1.2.1...authoring--v1.3.0) (2026-09-08)
+
+
+### Features
+
+* **project:** add agentic scaffolding and repository context hooks ([#64](https://github.com/srobroek/omp-plugins/issues/64)) ([974536d](https://github.com/srobroek/omp-plugins/commit/974536df3e3c75d6d4f9128b6477c2eb9412cf86))
+
 ## [1.2.1](https://github.com/srobroek/omp-plugins/compare/authoring--v1.2.0...authoring--v1.2.1) (2026-09-08)
 
 

@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.0](https://github.com/srobroek/omp-plugins/compare/project--v0.3.1...project--v0.4.0) (2026-09-08)
+
+
+### Features
+
+* **project:** add agentic scaffolding and repository context hooks ([#64](https://github.com/srobroek/omp-plugins/issues/64)) ([974536d](https://github.com/srobroek/omp-plugins/commit/974536df3e3c75d6d4f9128b6477c2eb9412cf86))
+
 ## [0.3.1](https://github.com/srobroek/omp-plugins/compare/project--v0.3.0...project--v0.3.1) (2026-09-08)
 
 
