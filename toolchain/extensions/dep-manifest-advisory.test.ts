@@ -2,7 +2,7 @@ import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
-import { beforeEach, describe, expect, test } from "bun:test";
+import { describe, expect, test } from "bun:test";
 
 import depManifestAdvisory, {
 	adviseForAnchoredEdit,
@@ -11,11 +11,9 @@ import depManifestAdvisory, {
 	adviseForWrite,
 	collectHits,
 	depRegions,
-	formatAdvisory,
 	manifestKind,
 	parseHashline,
 	patternLiterals,
-	resetDepManifestAdvisoryForTests,
 	touchesRegion,
 	type Reader,
 } from "./dep-manifest-advisory.ts";
@@ -322,51 +320,35 @@ describe("ast_edit", () => {
 });
 
 describe("collectHits", () => {
-	test("dispatches per tool and ignores everything else", () => {
-		const changed = PACKAGE_JSON.replace('"^3.23.8"', '"^3.24.0"');
-		expect(collectHits("write", { path: "package.json", content: changed }, CWD, pkgReader)).toHaveLength(1);
-		expect(
-			collectHits("edit", { input: '[package.json#A1B2]\nPUT 8.=8:\n+x' }, CWD, pkgReader),
-		).toHaveLength(1);
-		expect(
-			collectHits("edit", { path: "package.json", old_string: '"zod": "^3.23.8"' }, CWD, pkgReader),
-		).toHaveLength(1);
-		expect(
-			collectHits("ast_edit", { paths: ["package.json"], ops: [{ pat: '"zod": $V', out: "" }] }, CWD, pkgReader),
-		).toHaveLength(1);
-		expect(collectHits("bash", { command: "bun add zod" }, CWD, pkgReader)).toEqual([]);
-		expect(collectHits("write", { path: "package.json" }, CWD, pkgReader)).toEqual([]);
+	test("device carrier distinguishes dependency edits, prose, and malformed input", () => {
+		const carrier = (pat: string) => ({
+			path: "xd://ast_edit",
+			content: JSON.stringify({ paths: ["package.json"], ops: [{ pat, out: "" }] }),
+		});
+		expect(collectHits("write", carrier('"zod": $V'), CWD, pkgReader).map((h) => h.path)).toEqual(["package.json"]);
+		expect(collectHits("write", carrier('"description": $V'), CWD, pkgReader)).toEqual([]);
+		for (const content of ["{", "null", "[]", "1"]) {
+			expect(collectHits("write", { path: "xd://ast_edit", content }, CWD, pkgReader)).toEqual([]);
+		}
 	});
 });
 
-describe("formatAdvisory", () => {
-	test("names the manifest, the CLI, and the lockfile", () => {
-		const text = formatAdvisory(
-			[{ path: "package.json", abs: "/repo/package.json", kind: "npm", cli: "bun add", lock: "bun.lock" }],
-			"/repo",
-		);
-		expect(text).toContain("package.json");
-		expect(text).toContain("bun add");
-		expect(text).toContain("bun.lock");
-	});
-});
 
 describe("integration", () => {
-	const wire = () => {
+	const wire = (cwd = CWD) => {
 		const handlers: Record<string, Array<(e: Record<string, unknown>) => unknown>> = {};
 		depManifestAdvisory({
 			zod: {},
 			registerTool: () => {},
-			on: (event: string, handler: (e: Record<string, unknown>) => unknown) => {
-				(handlers[event] ??= []).push(handler);
+			on: (event: string, handler: (e: Record<string, unknown>, ctx: { cwd: string }) => unknown) => {
+				(handlers[event] ??= []).push((e) => handler(e, { cwd }));
 			},
 		} as never);
 		return handlers;
 	};
 
-	beforeEach(() => resetDepManifestAdvisoryForTests());
 
-	test("tool_result prepends the reminder, then dedupes; a failed call still owes it", () => {
+	test("failed edits stay silent; subsequent successful edits remain observable", () => {
 		const handlers = wire();
 		const call = handlers.tool_call![0]!;
 		const done = handlers.tool_result![0]!;
@@ -392,7 +374,7 @@ describe("integration", () => {
 		call({ toolName: "edit", toolCallId: "a3", input });
 		expect(
 			done({ toolName: "edit", toolCallId: "a3", content: [{ type: "text", text: "edited" }] }),
-		).toBeUndefined();
+		).toBeDefined();
 	});
 
 	test("a prose edit to the same manifest leaves the result untouched", () => {

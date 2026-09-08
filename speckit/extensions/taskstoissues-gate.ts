@@ -14,6 +14,7 @@ export const DENY_REASON =
 	"blocked by speckit (taskstoissues converts tasks.md into a second tracker): do not run speckit-taskstoissues / speckit.taskstoissues / specify … /speckit.taskstoissues. Task state lives in beads. Link an existing GitHub issue with `bd update <id> --external-ref gh-<number>` instead.";
 
 const SEPARATOR: Record<string, true> = { ";": true, "&": true, "|": true, "(": true, ")": true };
+const RESERVED_PREFIXES = new Set(["if", "then", "elif", "else", "while", "until", "do", "!"]);
 
 /**
  * Wrappers that hand off to another command, with enough of each grammar to
@@ -233,6 +234,8 @@ function isBannedInvocation(tokens: Token[]): boolean {
 	while (i < tokens.length) {
 		// Find the command slot for this segment.
 		while (i < tokens.length && SEPARATOR[(tokens[i] as Token).text] === true && !(tokens[i] as Token).quoted) i++;
+		while (i < tokens.length && !(tokens[i] as Token).quoted &&
+			RESERVED_PREFIXES.has((tokens[i] as Token).text)) i++;
 		let optionsEnded = false;
 		let wrapper: Record<string, true> | undefined;
 		while (i < tokens.length) {

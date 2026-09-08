@@ -17,8 +17,11 @@ plain-`curl` variant and say so in the report's Coverage section.
 
 ## Step A -- resolve the current version (no network)
 
-Use `scripts/detect.py [dir]` to list the repo's declared dependencies as
-`ecosystem<TAB>name<TAB>version` (offline, no toolchain). Pick your target's row.
+Call native `version_gap_scan` with `{"path":"<project-root>"}` (omit `path` for
+session cwd). It is offline/read-only and returns text rows
+`ecosystem<TAB>name<TAB>version` plus `details.deps` objects with `ecosystem`,
+`name`, and `version`, and `details.count`. Pick the target's row. A tool error
+or nonzero detector exit is a coverage gap, not an empty dependency inventory.
 
 For an exact pinned version, the lockfile beats the manifest range:
 
@@ -114,16 +117,37 @@ B, so it works for GitHub, GitLab, Bitbucket, Codeberg, sr.ht, or a private
 remote identically. Bare + blobless clone keeps it cheap.
 
 ```sh
-REPO_URL=<from step B>; FROM=<current tag>; TO=<latest tag>
-TMP=$(mktemp -d); git clone --bare --filter=blob:none "$REPO_URL" "$TMP/r.git" 2>/dev/null \
-  || git clone --bare "$REPO_URL" "$TMP/r.git"
+REPO_URL=<from step B>
+TMP=$(mktemp -d)
+git clone --bare --filter=blob:none "$REPO_URL" "$TMP/r.git"
+# If the server rejects filtering, retry a bare clone into a fresh temp directory.
 G="git --git-dir=$TMP/r.git"
+$G tag --list --sort=version:refname
+```
 
-# tags vary: 1.2.3 / v1.2.3 / pkg-v1.2.3 / pkg@1.2.3. Find the real ones:
-$G tag --list | grep -E "(^|[-@/])v?$FROM$"
-$G tag --list | grep -E "(^|[-@/])v?$TO$"
+Resolve registry versions to **actual full tags** from this inventory: `1.2.3`,
+`v1.2.3`, `pkg-v1.2.3`, and `pkg@1.2.3` are distinct names. Select only the
+target package's tag family; record the mapping and exact `FROM` / `TO` tags.
+Build the release-tag set for **current < version <= target** using the
+ecosystem's version comparator (SemVer, PEP 440, etc.), retaining original tags
+for API lookup. Git's [version sort](https://git-scm.com/docs/git-tag#Documentation/git-tag.txt---sortltkeygt)
+is useful for numeric tag inventory, not a universal prerelease/epoch comparator.
+Never compare version strings lexically or use publication dates as version
+order. For example, `v1.10.0` follows `v1.9.0`; exclude unrelated package tags.
+Use an already-available ecosystem comparator; if none can order nonstandard
+tags or the version-to-tag mapping is ambiguous, report the unresolved span
+and incomplete coverage rather than guessing. Record prerelease policy.
 
-# CHANGELOG as tracked at the target tag (no web page, no rendering):
+Keep this temporary repository through all C1 diffs and Step D migration reads.
+For a GitHub-hosted file, use native `github` `file_read` with the exact tag as
+`branch` and the file's repo-relative `path`; do not fetch file bytes with curl.
+
+```sh
+FROM=<resolved-current-full-tag>; TO=<resolved-target-full-tag>
+$G rev-parse --verify "refs/tags/$FROM^{commit}"
+$G rev-parse --verify "refs/tags/$TO^{commit}"
+
+# Non-GitHub hosts: read the target changelog. GitHub files use file_read above.
 for f in CHANGELOG.md CHANGELOG CHANGES.md HISTORY.md NEWS.md docs/CHANGELOG.md; do
   $G cat-file -e "$TO:$f" 2>/dev/null && { echo "== $f =="; $G show "$TO:$f"; break; }
 done
@@ -134,8 +158,6 @@ $G log --no-merges --reverse --pretty='%h %s' "$RANGE" | grep -iE '^[0-9a-f]+ [a
 $G log --reverse --pretty='%h %s%n%b' "$RANGE" | grep -iE 'BREAKING CHANGE'                        # BREAKING (body)
 $G log --no-merges --reverse --pretty='%h %s' "$RANGE" | grep -iE '^[0-9a-f]+ feat(\(.+\))?!?:'    # features
 $G log --no-merges --reverse --pretty='%h %s' "$RANGE" | grep -iE '^[0-9a-f]+ fix(\(.+\))?!?:'     # fixes
-
-rm -rf "$TMP"
 ```
 
 `!` after the type, or a `BREAKING CHANGE:` body trailer, marks a breaking
@@ -144,29 +166,37 @@ load-bearing: `$G show <sha>` or `$G diff $FROM..$TO -- <path>`.
 
 ### C2 -- curated release notes (host API enrichment)
 
-Release notes live in the host's API, not in git. Fetch only those whose tag
-falls in the span; don't page through everything.
+Join release records to the exact selected tag set from C1; filter by tag
+membership, never string ranges. Fetch all pages before declaring release-note
+coverage complete: publication order can mix backports and prereleases, and a
+tag can exist without a release. Exclude drafts; apply the recorded prerelease
+policy. Preserve tag, release URL, date, and body/description.
 
-```sh
-# GitHub (gh handles auth+rate-limits; else curl with optional token)
-gh api "repos/<owner>/<repo>/releases?per_page=100" \
-  | jq -r '.[] | select((.tag_name|sub("^v";"")) >= "<FROM>" and (.tag_name|sub("^v";"")) <= "<TO>")
-                | "## \(.tag_name) (\(.published_at))\n\(.body)\n"'
-# no gh:
-curl -fsSL -H "Accept: application/vnd.github+json" \
-  ${GITHUB_TOKEN:+-H "Authorization: Bearer $GITHUB_TOKEN"} \
-  "https://api.github.com/repos/<owner>/<repo>/releases?per_page=100" | jq -r '...as above...'
+| Host | Reproducible read-only request | Pagination |
+|------|------------------------------|------------|
+| GitHub | `gh api --paginate "repos/<owner>/<repo>/releases?per_page=100"` | `--paginate` follows all pages; parse every returned array, not only the first. Without gh, GET `https://api.github.com/repos/<owner>/<repo>/releases?per_page=100&page=1` and follow response `Link` headers with `rel="next"`. |
+| GitLab | GET `https://gitlab.com/api/v4/projects/<URL-encoded-project>/releases?per_page=100&page=1` | Follow `Link` `rel="next"` or `X-Next-Page` through the final page. |
+| Gitea / Codeberg | GET `https://<host>/api/v1/repos/<owner>/<repo>/releases?limit=50&page=1` | Follow `Link` `rel="next"`; server-configured page caps may be below the requested limit. |
 
-# GitLab (project path URL-encoded; PROJECT=owner%2Frepo)
-curl -fsSL ${GITLAB_TOKEN:+-H "PRIVATE-TOKEN: $GITLAB_TOKEN"} \
-  "https://gitlab.com/api/v4/projects/<PROJECT>/releases?per_page=100" \
-  | jq -r '.[] | "## \(.tag_name) (\(.released_at))\n\(.description)\n"'
-# glab equivalent: glab api "projects/<PROJECT>/releases"
+Use native/read API access when it exposes headers; otherwise `curl -fsS -i
+"<URL>"` exposes status, pagination headers, and JSON. Supply credentials via
+the host's supported authorization header only when needed. If pagination
+headers are unavailable, increment `page` until a successful empty JSON array;
+do not stop merely because one page is shorter than the requested size.
+Follow only the same trusted API origin with credentials.
 
-# Gitea / Codeberg
-curl -fsSL "https://codeberg.org/api/v1/repos/<owner>/<repo>/releases" \
-  | jq -r '.[] | "## \(.tag_name)\n\(.body)\n"'
-```
+Track pages fetched, expected tags, matched tags, and missing releases. Stop on
+HTTP/auth/rate-limit errors, repeated pages, tool-output truncation, or an
+unresolved next page and mark coverage **INCOMPLETE**, naming unvisited pages
+and unmatched tags. Do not describe an unvisited release as absent. After
+complete enumeration, unmatched tags mean no visible release record; use C1's
+changelog/commits for those tags and report that distinction.
+
+API contracts: [GitHub releases](https://docs.github.com/en/rest/releases/releases#list-releases)
+and [pagination](https://docs.github.com/en/rest/using-the-rest-api/using-pagination-in-the-rest-api),
+[GitLab releases](https://docs.gitlab.com/api/releases/) and
+[pagination](https://docs.gitlab.com/api/rest/#pagination),
+[Gitea pagination](https://docs.gitea.com/development/api-usage/#pagination).
 
 ### C3 -- when there's no changelog and no releases
 
@@ -189,6 +219,10 @@ $G ls-tree -r --name-only "$TO" | grep -iE 'migrat|upgrad|breaking'
 ```
 
 Prefer the project's own guide over third-party blogs; flag blogs as derivative.
+
+After every changelog, commit, diff, and migration consumer has finished, remove
+only the temporary directory created in C1 (`rm -rf -- "$TMP"` after checking
+its exact path). Never clean it at the end of C1 while Step D still needs `$G`.
 
 ---
 

@@ -13,7 +13,7 @@ import type { ExtensionAPI, ExtensionToolCallEvent } from "@oh-my-pi/pi-coding-a
  * Creating a new migration is always allowed.
  */
 
-const EDIT_TOOLS: Record<string, true> = { edit: true, write: true };
+const EDIT_TOOLS = new Set(["edit", "write"]);
 
 /** Internal URIs (`xd://ast_edit`, `artifact://…`) are not filesystem paths. */
 const NON_FILE_SCHEME = /^[a-z][a-z0-9+.-]*:\/\//i;
@@ -122,7 +122,7 @@ export function decideToolCall(
 	input: Record<string, unknown>,
 	cwd: string,
 ): { block: true; reason: string } | undefined {
-	if (!EDIT_TOOLS[toolName]) return undefined;
+	if (!EDIT_TOOLS.has(toolName)) return undefined;
 	for (const path of editedPaths(input)) {
 		const decision = decidePath(path, cwd);
 		if (decision) return decision;
@@ -131,9 +131,12 @@ export function decideToolCall(
 }
 
 export default function migrationEditGate(pi: ExtensionAPI): void {
-	pi.on("tool_call", (event: ExtensionToolCallEvent) => {
+	pi.on("tool_call", (event: ExtensionToolCallEvent, ctx) => {
 		try {
-			return decideToolCall(event.toolName, event.input ?? {}, process.cwd());
+			const input = event.input ?? {};
+			const base = ctx?.cwd ?? process.cwd();
+			const cwd = typeof input.cwd === "string" ? resolve(base, input.cwd) : base;
+			return decideToolCall(event.toolName, input, cwd);
 		} catch {
 			return;
 		}

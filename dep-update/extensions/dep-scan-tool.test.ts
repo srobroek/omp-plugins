@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 const zod = {
@@ -10,7 +10,7 @@ const zod = {
 	object: (shape: unknown) => shape,
 };
 import depScanTool, { classify, detectProject, normalizeVersion, parseRequirement, queryRegistry } from "./dep-scan-tool";
-import { applyBump } from "./lib";
+import { isPrerelease, pickStable } from "./lib";
 
 function tmp(): string {
 	return mkdtempSync(join(tmpdir(), "dep-scan-"));
@@ -20,7 +20,9 @@ describe("unit: versions", () => {
 	test("normalizeVersion", () => {
 		expect(normalizeVersion("1.2.3")).toEqual([1, 2, 3]);
 		expect(normalizeVersion("v1.2.3")).toEqual([1, 2, 3]);
-		expect(normalizeVersion("1.2")).toEqual([1, 2, 0]);
+		expect(normalizeVersion("1.2")).toBeNull();
+		expect(normalizeVersion("1.2", "pypi")).toEqual([1, 2, 0]);
+		expect(normalizeVersion("==1.2", "pypi")).toEqual([1, 2, 0]);
 		expect(normalizeVersion("not-a-version")).toBeNull();
 	});
 
@@ -29,7 +31,32 @@ describe("unit: versions", () => {
 		expect(classify("1.2.3", "1.3.0")).toBe("MINOR-CHECK");
 		expect(classify("1.2.3", "2.0.0")).toBe("MAJOR-ADVISORY");
 		expect(classify("1.2.3", "1.2.3")).toBe("CURRENT");
-		expect(classify("not-a-version", "1.2.3")).toBe("MINOR-CHECK");
+		expect(classify("not-a-version", "1.2.3")).toBe("UNRESOLVABLE");
+	});
+
+	test.each([
+		"1.x", "1.X", "1.*", "1.2.x", "1", "1.2", "1.2.3.4",
+		"1.2.3 || 2.0.0", "1.2.3 <2.0.0", "1.2.3, <2.0.0",
+		"1.2.3 - 2.0.0", "1.2.3garbage", "1.2.3\n", "==1.2.3",
+		"01.2.3", "1.2.3-01", "1.2.3-", "1.2.3+",
+	])("rejects the complete unresolved Node input %j on either side", (version) => {
+		expect(normalizeVersion(version)).toBeNull();
+		expect(classify(version, "2.0.0")).toBe("UNRESOLVABLE");
+		expect(classify("1.0.0", version)).toBe("UNRESOLVABLE");
+	});
+
+	test("exact prereleases and build metadata remain parseable, not ranges", () => {
+		expect(normalizeVersion("1.2.3-beta.1+build.5")).toEqual([1, 2, 3]);
+		expect(normalizeVersion("1.2.3-2.0.0")).toEqual([1, 2, 3]);
+		expect(normalizeVersion("==1.2rc1", "pypi")).toEqual([1, 2, 0]);
+		expect(isPrerelease("1.2.3-preview")).toBe(true);
+		expect(isPrerelease("1.2.3+beta.1")).toBe(false);
+		expect(isPrerelease("1.2rc1", "pypi")).toBe(true);
+		expect(isPrerelease("1.2.dev1", "pypi")).toBe(true);
+		expect(isPrerelease("1.2.post1", "pypi")).toBe(false);
+		expect(pickStable("2.0.0-preview", "1.0.0", ["2.x", "1.1.0", "2.0.0-preview"])).toBe("1.1.0");
+		expect(pickStable("2.0.0-preview", "1.0.0-beta.1", ["1.1.0", "2.0.0-preview"])).toBe("2.0.0-preview");
+		expect(pickStable("2.0rc1", "1.0", ["2.*", "1.1", "2.0rc1"], "pypi")).toBe("1.1");
 	});
 
 	test("parseRequirement extras", () => {
@@ -77,6 +104,57 @@ describe("unit: fixture registry", () => {
 		expect(record.latest).toBe("2.32.3");
 	});
 
+	test.each([
+		["pypi", "==1.0.0", "MAJOR-ADVISORY"],
+		["npm", "=1.0.0", "MAJOR-ADVISORY"],
+		["pypi", "==2.0.0", "CURRENT"],
+		["pypi", "=1.0.0", "MAJOR-ADVISORY"],
+		["pypi", "==1.0", "MAJOR-ADVISORY"],
+		["pypi", "1", "MAJOR-ADVISORY"],
+		["pypi", "==1.0rc1", "MAJOR-ADVISORY"],
+		["npm", "==1.0.0", "UNRESOLVABLE"],
+		["npm", "1.0rc1", "UNRESOLVABLE"],
+		["pypi", "1.x", "UNRESOLVABLE"],
+		["pypi", "1.0 - 2.0", "UNRESOLVABLE"],
+		["pypi", "==1.0,!=1.0.1", "UNRESOLVABLE"],
+		["pypi", "1.0garbage", "UNRESOLVABLE"],
+		["pypi", "==1.*", "UNRESOLVABLE"],
+		["pypi", ">=1.0.0", "UNRESOLVABLE"],
+	])("%s classifies %s without treating ranges as resolved versions", async (ecosystem, installed, expected) => {
+		const fixtures = tmp();
+		try {
+			const response = ecosystem === "pypi"
+				? { info: { version: "2.0.0" }, releases: { "2.0.0": [{ yanked: false }] } }
+				: { "dist-tags": { latest: "2.0.0" }, versions: { "2.0.0": {} } };
+			writeFileSync(join(fixtures, `${ecosystem}_example.json`), JSON.stringify(response));
+			const record = await queryRegistry(ecosystem, "example", installed, fixtures);
+			expect(record.class).toBe(expected);
+			expect(record.status).toBe(expected === "UNRESOLVABLE" || expected === "CURRENT" ? expected : "OK");
+		} finally {
+			rmSync(fixtures, { recursive: true, force: true });
+		}
+	});
+
+	test.each(["npm", "node"])("%s unresolved declarations cannot become recommended OK upgrades", async (ecosystem) => {
+		const fixtures = tmp();
+		try {
+			writeFileSync(join(fixtures, `${ecosystem}_example.json`), JSON.stringify({
+				"dist-tags": { latest: "1.1.0" }, versions: { "1.1.0": {} },
+			}));
+			for (const installed of ["1.x", "1.*", "1", "1.0", "1.0.0 || 2.0.0", "1.0.0 - 2.0.0"]) {
+				const record = await queryRegistry(ecosystem, "example", installed, fixtures);
+				expect(record.status).toBe("UNRESOLVABLE");
+				expect(record.class).toBe("UNRESOLVABLE");
+				expect(record.reason).toContain("Exact versions are required");
+			}
+			const exact = await queryRegistry(ecosystem, "example", "1.0.0", fixtures);
+			expect(exact.status).toBe("OK");
+			expect(exact.class).toBe("MINOR-CHECK");
+		} finally {
+			rmSync(fixtures, { recursive: true, force: true });
+		}
+	});
+
 	test("yanked is disconfirmed", async () => {
 		const fixtures = tmp();
 		writeFileSync(
@@ -103,7 +181,7 @@ describe("integration: dep_scan", () => {
 			registerTool: (d: Record<string, unknown>) => {
 				if (d.name === "dep_scan") Object.assign(captured, d);
 			},
-			on: () => {},
+			on: () => { },
 		};
 		depScanTool(fakePi as never);
 		const execute = captured.execute as (
@@ -139,7 +217,7 @@ describe("integration: dep_apply", () => {
 			registerTool: (d: Record<string, unknown>) => {
 				if (d.name === "dep_apply") Object.assign(captured, d);
 			},
-			on: () => {},
+			on: () => { },
 		};
 		depScanTool(fakePi as never);
 		const execute = captured.execute as (
@@ -147,7 +225,7 @@ describe("integration: dep_apply", () => {
 			params: Record<string, unknown>,
 			signal: undefined,
 			onUpdate: undefined,
-			ctx: { cwd: string },
+			ctx: { cwd: string; hasUI: boolean; ui: { confirm: () => Promise<boolean> }; setTimeout: typeof setTimeout; clearTimer: typeof clearTimeout },
 		) => Promise<{ content: Array<{ text: string }>; details: { exit: number } }>;
 		const project = tmp();
 		mkdirSync(project, { recursive: true });
@@ -156,16 +234,34 @@ describe("integration: dep_apply", () => {
 			{ ecosystem: "cargo", name: "serde", version: "1.0.200", path: project },
 			undefined,
 			undefined,
-			{ cwd: project },
+			{ cwd: project, hasUI: true, ui: { confirm: async () => true }, setTimeout, clearTimer: clearTimeout },
 		);
 		expect(result.details.exit).toBe(0);
 		expect(result.content[0].text).toContain("ADVISORY-ONLY");
 	});
-
-	test("applyBump skip when uv missing", async () => {
-		const project = tmp();
-		const result = await applyBump("pypi", "requests", "2.32.3", project);
-		// either applied or skipped; never throws
-		expect([0, 1]).toContain(result.exit);
+	test("headless and denied confirmation stop before dependency execution", async () => {
+		const captured: Record<string, unknown> = {};
+		depScanTool({
+			zod, registerTool: (d: Record<string, unknown>) => {
+				if (d.name === "dep_apply") Object.assign(captured, d);
+			}
+		} as never);
+		const execute = captured.execute as (
+			id: string, params: Record<string, unknown>, signal: undefined, update: undefined,
+			ctx: { cwd: string; hasUI: boolean; ui: { confirm: (title: string, message: string) => Promise<boolean> } },
+		) => Promise<{ details: { error?: string } }>;
+		const params = { ecosystem: "npm", name: "@scope/pkg", version: "1.2.3", path: "/synthetic-project" };
+		const headless = await execute("headless", params, undefined, undefined, {
+			cwd: "/", hasUI: false, ui: { confirm: async () => { throw new Error("unexpected prompt"); } },
+		});
+		expect(headless.details.error).toContain("Interactive approval is required");
+		let prompt = "";
+		const denied = await execute("denied", params, undefined, undefined, {
+			cwd: "/", hasUI: true, ui: { confirm: async (_title, message) => { prompt = message; return false; } },
+		});
+		expect(denied.details.error).toContain("Dependency bump denied");
+		expect(prompt).toContain("@scope/pkg -> 1.2.3");
+		expect(prompt).toContain("/synthetic-project");
 	});
+
 });

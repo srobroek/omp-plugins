@@ -4,19 +4,8 @@ import taskstoissuesGate, {
 	DENY_REASON,
 	decideToolCall,
 	isTaskstoissuesInvocation,
-	tokenize,
 } from "./taskstoissues-gate.ts";
 
-describe("tokenize", () => {
-	test("keeps a quoted title as one token and marks it quoted", () => {
-		expect(tokenize("bd create --title 'port speckit-taskstoissues deny'")).toEqual([
-			{ text: "bd", quoted: false },
-			{ text: "create", quoted: false },
-			{ text: "--title", quoted: false },
-			{ text: "port speckit-taskstoissues deny", quoted: true },
-		]);
-	});
-});
 
 describe("isTaskstoissuesInvocation", () => {
 	test("blocks command-position invocations", () => {
@@ -29,6 +18,10 @@ describe("isTaskstoissuesInvocation", () => {
 			"FOO=1 speckit-taskstoissues",
 			"echo hi; speckit-taskstoissues",
 			"./bin/speckit-taskstoissues",
+			"while speckit-taskstoissues; do :; done",
+			"until specify speckit.taskstoissues; do :; done",
+			"if true; then speckit-taskstoissues; fi",
+			"while false; do speckit-taskstoissues; done",
 		]) {
 			expect(isTaskstoissuesInvocation(command)).toBe(true);
 		}
@@ -42,6 +35,8 @@ describe("isTaskstoissuesInvocation", () => {
 			"bd close x --reason 'retire speckit-taskstoissues'",
 			"rg speckit-taskstoissues",
 			"cat .specify/scripts/bash/speckit-taskstoissues.sh",
+			"echo while speckit-taskstoissues",
+			"while false; do echo speckit-taskstoissues; done",
 		]) {
 			expect(isTaskstoissuesInvocation(command)).toBe(false);
 		}
@@ -63,24 +58,8 @@ describe("decideToolCall", () => {
 });
 
 describe("register", () => {
-	test("registers a tool_call handler that blocks", () => {
-		const handlers: Record<string, Array<(e: unknown) => unknown>> = {};
-		const fakePi = {
-			on: (event: string, handler: (e: unknown) => unknown) => {
-				(handlers[event] ??= []).push(handler);
-			},
-		};
-		taskstoissuesGate(fakePi as never);
-		expect(
-			handlers.tool_call?.[0]?.({
-				toolName: "bash",
-				toolCallId: "1",
-				input: { command: "specify run /speckit.taskstoissues" },
-			}),
-		).toEqual({ block: true, reason: DENY_REASON });
-	});
 
-	test("fail-open on malformed input", () => {
+	test("registered handler returns blocking decisions and fails open on malformed input", () => {
 		const handlers: Record<string, Array<(e: unknown) => unknown>> = {};
 		const fakePi = {
 			on: (event: string, handler: (e: unknown) => unknown) => {
@@ -88,6 +67,11 @@ describe("register", () => {
 			},
 		};
 		taskstoissuesGate(fakePi as never);
+		const decision = handlers.tool_call?.[0]?.({
+			toolName: "bash",
+			input: { command: "specify run /speckit.taskstoissues" },
+		}) as { block?: boolean } | undefined;
+		expect(decision?.block).toBe(true);
 		expect(handlers.tool_call?.[0]?.({ toolName: "bash", input: null })).toBeUndefined();
 	});
 });

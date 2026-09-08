@@ -11,5 +11,3 @@ Implementation and mechanical-execution agents.
 | `operator` | `@coder` | Tiny mechanical commands with explicit targets |
 | `external-repo-worker` | `@coder` | Clone/edit/verify work in a repo outside the caller project |
 
-## Rules
-

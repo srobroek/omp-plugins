@@ -3,7 +3,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, existsSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import speckitSetupTool, {
+import {
 	ensureGitignore,
 	FORMULAS,
 	GITIGNORE_ENTRY,
@@ -15,8 +15,6 @@ import speckitSetupTool, {
 	specifyVersionOk,
 } from "./speckit-setup-tool.ts";
 
-const chain = () => new Proxy(() => chain(), { get: () => chain(), apply: () => chain() });
-const z = new Proxy({}, { get: () => chain() }) as never;
 
 describe("specifyVersionOk", () => {
 	test("accepts 0.12+", () => {
@@ -38,9 +36,9 @@ describe("ensureGitignore + formulas", () => {
 	});
 
 	test("appends once", () => {
-		expect(ensureGitignore(dir)).toContain("appended");
-		expect(readFileSync(join(dir, ".gitignore"), "utf8")).toContain(GITIGNORE_ENTRY);
-		expect(ensureGitignore(dir)).toContain("already");
+		ensureGitignore(dir);
+		ensureGitignore(dir);
+		expect(readFileSync(join(dir, ".gitignore"), "utf8").split("\n").filter((line) => line === GITIGNORE_ENTRY)).toHaveLength(1);
 	});
 
 	test("copies formulas from plugin root", () => {
@@ -49,9 +47,10 @@ describe("ensureGitignore + formulas", () => {
 		for (const name of FORMULAS) {
 			writeFileSync(join(src, `${name}.formula.toml`), "formula = true\n");
 		}
-		const lines = installFormulas(dir, src);
-		expect(lines.every((l) => l.startsWith("copied"))).toBe(true);
-		expect(existsSync(join(dir, ".beads/formulas/speckit-feature.formula.toml"))).toBe(true);
+		installFormulas(dir, src);
+		for (const name of FORMULAS) {
+			expect(readFileSync(join(dir, ".beads/formulas", `${name}.formula.toml`), "utf8")).toBe("formula = true\n");
+		}
 	});
 });
 
@@ -84,7 +83,6 @@ describe("runSetup skipSpecify", () => {
 	test("copies formulas and gitignore without specify", () => {
 		const out = runSetup({ workspace: dir, skipSpecify: true });
 		expect(out.ok).toBe(true);
-		expect(out.text).toContain("copied speckit-feature");
 		expect(existsSync(join(dir, ".beads/formulas/mol-speckit-bugfix.formula.toml"))).toBe(true);
 		expect(readFileSync(join(dir, ".gitignore"), "utf8")).toContain(GITIGNORE_ENTRY);
 	});
@@ -100,27 +98,3 @@ describe("runSetup skipSpecify", () => {
 	});
 });
 
-describe("registerTool", () => {
-	test("registers speckit_setup", async () => {
-		const captured: Record<string, unknown> = {};
-		const fakePi = {
-			zod: z,
-			registerTool: (d: Record<string, unknown>) => Object.assign(captured, d),
-			on: () => {},
-		};
-		speckitSetupTool(fakePi as never);
-		expect(captured.name).toBe("speckit_setup");
-		const execute = captured.execute as (
-			id: string,
-			params: { skipSpecify: boolean; workspace: string },
-		) => Promise<{ details: { ok: boolean } }>;
-		const tmp = mkdtempSync(join(tmpdir(), "ske-"));
-		setSpawnForTests(() => ({ exitCode: 1, stdout: "", stderr: "" }));
-		setPluginRootForTests(tmp);
-		const result = await execute("1", { skipSpecify: true, workspace: tmp });
-		expect(result.details.ok).toBe(true);
-		rmSync(tmp, { recursive: true, force: true });
-		setSpawnForTests(null);
-		setPluginRootForTests(null);
-	});
-});

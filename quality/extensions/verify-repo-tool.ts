@@ -1,5 +1,5 @@
 import { existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
 
 const TIMEOUT_MS = 600_000;
@@ -11,6 +11,7 @@ type VerifyParams = {
 
 export type VerifyResult = {
 	ok: boolean;
+	complete: boolean;
 	exitCode: number;
 	report: string;
 	ran: number;
@@ -26,6 +27,14 @@ function have(bin: string): boolean {
 		stderr: "pipe",
 	});
 	return proc.exitCode === 0;
+}
+
+function installedPythonTool(bin: string, cwd: string): string | null {
+	for (const dir of [join(cwd, ".venv", "bin"), join(cwd, "node_modules", ".bin")]) {
+		const path = join(dir, bin);
+		if (existsSync(path)) return path;
+	}
+	return have(bin) ? bin : null;
 }
 
 function fileExists(cwd: string, name: string): boolean {
@@ -48,8 +57,8 @@ function runCmd(
 			stderr: "pipe",
 			timeout: TIMEOUT_MS,
 		});
-		const out = proc.stdout.toString();
-		const err = proc.stderr.toString();
+		const out = proc.stdout.toString().slice(0, 16_384);
+		const err = proc.stderr.toString().slice(0, 16_384);
 		if (out) lines.push(out.replace(/\n$/, ""));
 		if (err) lines.push(err.replace(/\n$/, ""));
 		state.ran += 1;
@@ -71,7 +80,7 @@ function skip(reason: string, lines: string[], state: { skipped: number }): void
 	state.skipped += 1;
 }
 
-type Pkg = { scripts?: Record<string, string> };
+type Pkg = { scripts?: Record<string, string>; packageManager?: string };
 
 function readPkg(cwd: string): Pkg | null {
 	try {
@@ -87,13 +96,16 @@ function hasScript(pkg: Pkg, name: string): boolean {
 }
 
 function detectJsRunner(cwd: string): string | null {
-	if (fileExists(cwd, "pnpm-lock.yaml") && have("pnpm")) return "pnpm";
-	if ((fileExists(cwd, "bun.lock") || fileExists(cwd, "bun.lockb")) && have("bun")) {
-		return "bun";
+	const declared = readPkg(cwd)?.packageManager;
+	if (declared !== undefined) {
+		if (typeof declared !== "string") return null;
+		const manager = declared.split("@")[0] ?? "";
+		return ["npm", "pnpm", "bun", "yarn"].includes(manager) && have(manager) ? manager : null;
 	}
+	if (fileExists(cwd, "pnpm-lock.yaml")) return have("pnpm") ? "pnpm" : null;
+	if (fileExists(cwd, "bun.lock") || fileExists(cwd, "bun.lockb")) return have("bun") ? "bun" : null;
+	if (fileExists(cwd, "yarn.lock")) return have("yarn") ? "yarn" : null;
 	if (have("npm")) return "npm";
-	if (have("pnpm")) return "pnpm";
-	if (have("bun")) return "bun";
 	return null;
 }
 
@@ -104,33 +116,28 @@ function runJsScript(
 	lines: string[],
 	state: { ran: number; failed: number; failures: string[] },
 ): void {
-	const argv =
-		runner === "pnpm"
-			? ["pnpm", "run", script]
-			: runner === "bun"
-				? ["bun", "run", script]
-				: ["npm", "run", script];
+	const argv = [runner, "run", script];
 	runCmd(cwd, `package script: ${script}`, argv, lines, state);
 }
 
 function runJsExec(
 	cwd: string,
-	runner: string,
 	label: string,
-	toolArgv: string[],
+	toolArgv: [string, ...string[]],
 	lines: string[],
-	state: { ran: number; failed: number; failures: string[] },
+	state: { ran: number; skipped: number; failed: number; failures: string[] },
 ): void {
-	const argv =
-		runner === "pnpm"
-			? ["pnpm", "exec", ...toolArgv]
-			: runner === "bun"
-				? ["bunx", ...toolArgv]
-				: ["npx", "--no-install", ...toolArgv];
-	runCmd(cwd, label, argv, lines, state);
+	const [bin, ...args] = toolArgv;
+	const local = join(cwd, "node_modules", ".bin", bin);
+	if (existsSync(local) || have(bin)) {
+		runCmd(cwd, label, [existsSync(local) ? local : bin, ...args], lines, state);
+	} else {
+		skip(`${label}: ${bin} is not installed`, lines, state);
+	}
 }
 
 export function runVerify(cwd: string): VerifyResult {
+	cwd = resolve(cwd);
 	const lines: string[] = [];
 	const state = { ran: 0, skipped: 0, failed: 0, failures: [] as string[] };
 
@@ -143,7 +150,11 @@ export function runVerify(cwd: string): VerifyResult {
 				timeout: 15_000,
 			});
 			const text = listed.stdout.toString() + listed.stderr.toString();
-			if (/(^|\n)[ \t]*verify([ \t]|$)/.test(text)) {
+			if (listed.exitCode !== 0) {
+				state.failed += 1;
+				state.failures.push(`just --list exited ${listed.exitCode}`);
+				lines.push(text.slice(0, 16_384));
+			} else if (/(^|\n)[ \t]*verify([ \t\r\n]|$)/.test(text)) {
 				runCmd(cwd, "just verify", ["just", "verify"], lines, state);
 			}
 		} else {
@@ -178,7 +189,7 @@ export function runVerify(cwd: string): VerifyResult {
 				}
 			}
 			if (fileExists(cwd, "tsconfig.json") && !hasScript(pkg, "typecheck")) {
-				runJsExec(cwd, runner, "TypeScript check", ["tsc", "--noEmit"], lines, state);
+				runJsExec(cwd, "TypeScript check", ["tsc", "--noEmit"], lines, state);
 			}
 		}
 	}
@@ -214,19 +225,22 @@ export function runVerify(cwd: string): VerifyResult {
 	}
 
 	if (fileExists(cwd, "pyproject.toml") || fileExists(cwd, "requirements.txt")) {
-		if (have("ruff")) {
-			runCmd(cwd, "ruff check", ["ruff", "check", "."], lines, state);
-			runCmd(cwd, "ruff format", ["ruff", "format", "--check", "."], lines, state);
+		const ruff = installedPythonTool("ruff", cwd);
+		if (ruff) {
+			runCmd(cwd, "ruff check", [ruff, "check", "."], lines, state);
+			runCmd(cwd, "ruff format", [ruff, "format", "--check", "."], lines, state);
 		} else {
 			skip("ruff is not installed", lines, state);
 		}
-		if (have("pyright")) {
-			runCmd(cwd, "pyright", ["pyright", "."], lines, state);
+		const pyright = installedPythonTool("pyright", cwd);
+		if (pyright) {
+			runCmd(cwd, "pyright", [pyright, "."], lines, state);
 		} else {
 			skip("pyright is not installed", lines, state);
 		}
-		if (have("pytest")) {
-			runCmd(cwd, "pytest", ["pytest"], lines, state);
+		const pytest = installedPythonTool("pytest", cwd);
+		if (pytest) {
+			runCmd(cwd, "pytest", [pytest], lines, state);
 		} else {
 			skip("pytest is not installed", lines, state);
 		}
@@ -241,17 +255,19 @@ export function runVerify(cwd: string): VerifyResult {
 		lines.push("No supported verification workflow detected.");
 		return {
 			ok: false,
+			complete: false,
 			exitCode: 1,
 			report: lines.join("\n"),
 			...state,
 		};
 	}
 
-	if (state.failed !== 0) {
+	if (state.failed !== 0 || state.skipped !== 0) {
 		lines.push("Failures:");
 		for (const f of state.failures) lines.push(`- ${f}`);
 		return {
 			ok: false,
+			complete: state.skipped === 0,
 			exitCode: 1,
 			report: lines.join("\n"),
 			...state,
@@ -260,6 +276,7 @@ export function runVerify(cwd: string): VerifyResult {
 
 	return {
 		ok: true,
+		complete: true,
 		exitCode: 0,
 		report: lines.join("\n"),
 		...state,
@@ -285,13 +302,14 @@ export default function verifyRepoTool(pi: ExtensionAPI): void {
 				.describe("Unused by the runner; reserved for caller notes"),
 		}),
 		execute: async (_toolCallId, params: VerifyParams, _signal, _onUpdate, ctx) => {
-			const cwd = params.path ?? ctx?.cwd ?? process.cwd();
+			const cwd = resolve(ctx?.cwd ?? process.cwd(), params.path ?? ".");
 			try {
 				const result = runVerify(cwd);
 				return {
 					content: [{ type: "text", text: result.report }],
 					details: {
 						ok: result.ok,
+						complete: result.complete,
 						exitCode: result.exitCode,
 						path: cwd,
 						scope: params.scope,

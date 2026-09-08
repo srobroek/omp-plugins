@@ -4,6 +4,41 @@ import type {
 	ExtensionToolResultEvent,
 } from "@oh-my-pi/pi-coding-agent";
 
+import { tokenize } from "./bd-close-gate.ts";
+
+const VALUE_FLAGS = new Set(["--actor", "--db", "-C", "--directory", "--dolt-auto-commit"]);
+
+/** Literal simple commands only; this is not a shell interpreter. */
+export function commandSegments(command: string): string[][] {
+	const segments: string[][] = [];
+	let segment: string[] = [];
+	for (const token of tokenize(command)) {
+		if ([";", "&", "|", "(", ")", "\n"].includes(token)) {
+			if (segment.length) segments.push(segment);
+			segment = [];
+		} else segment.push(token);
+	}
+	if (segment.length) segments.push(segment);
+	return segments;
+}
+
+export function bdInvocations(command: string): { verb: string; args: string[]; prefix: string[] }[] {
+	const out: { verb: string; args: string[]; prefix: string[] }[] = [];
+	for (const tokens of commandSegments(command)) {
+		let i = 0;
+		while (/^[A-Za-z_]\w*=/.test(tokens[i] ?? "")) i++;
+		if (tokens[i] !== "bd") continue;
+		const prefix = tokens.slice(0, i);
+		i++;
+		while (tokens[i]?.startsWith("-")) {
+			const flag = tokens[i++]!;
+			if (VALUE_FLAGS.has(flag)) i++;
+		}
+		if (tokens[i]) out.push({ verb: tokens[i]!.toLowerCase(), args: tokens.slice(i + 1), prefix });
+	}
+	return out;
+}
+
 /** Hunt trigger verbs for `bd_mutate_actor_claim`. */
 export const MUTATING_VERBS: Record<string, true> = {
 	update: true,
@@ -29,39 +64,30 @@ export function extractCommand(input: Record<string, unknown>): string {
 	return "";
 }
 
-export function commandHasBeadsActor(command: string): boolean {
-	return /(?:^|[\s;&|])BEADS_ACTOR=/.test(command);
-}
 
 export function actorPresent(command: string, env: NodeJS.ProcessEnv = process.env): boolean {
-	if (commandHasBeadsActor(command)) return true;
-	const v = env.BEADS_ACTOR;
-	return typeof v === "string" && v.trim().length > 0;
+	const assignment = commandSegments(command)[0]?.find(token => token.startsWith("BEADS_ACTOR="));
+	const v = assignment === undefined ? env.BEADS_ACTOR : assignment.slice("BEADS_ACTOR=".length);
+	return typeof v === "string" && v.trim().length > 0 && !/[$`]/.test(v);
 }
 
 /**
- * First `bd` invocation in the string. Returns the verb token after `bd`.
+ * First literal `bd` invocation, after global flags.
  */
 export function firstBdVerb(command: string): string | null {
-	const m = command.match(/(?:^|[\s;&|(`])bd\s+([a-z][\w-]*)/i);
-	return m ? m[1].toLowerCase() : null;
+	return bdInvocations(command)[0]?.verb ?? null;
 }
 
 export function isMutatingBdCommand(command: string): boolean {
-	if (!/\bbd\s+/.test(command)) return false;
-	const verb = firstBdVerb(command);
-	if (!verb) return false;
-	if (!MUTATING_VERBS[verb]) return false;
-	if (verb === "comments") {
-		return /\bbd\s+comments\s+add\b/i.test(command);
-	}
-	return true;
+	return bdInvocations(command).some(({ verb, args }) =>
+		verb === "ready" ? args.includes("--claim") :
+		verb === "comments" ? args[0] === "add" : Object.hasOwn(MUTATING_VERBS, verb));
 }
 
 /** `bd update <id> --claim` or `bd claim <id>`. */
 export function isClaimCommand(command: string): boolean {
-	if (/\bbd\s+claim\b/i.test(command)) return true;
-	return /\bbd\s+update\s+\S+[^\n]*--claim\b/i.test(command);
+	return bdInvocations(command).some(({ verb, args }) =>
+		verb === "claim" || ((verb === "update" || verb === "ready") && args.includes("--claim")));
 }
 
 export type ActorGateDecision =
@@ -79,10 +105,19 @@ export function decideActorGate(
 	command: string,
 	env: NodeJS.ProcessEnv = process.env,
 ): ActorGateDecision {
-	if (!isMutatingBdCommand(command)) return { kind: "allow" };
-	if (actorPresent(command, env)) return { kind: "allow" };
-	if (isClaimCommand(command)) return { kind: "block", reason: CLAIM_REASON };
-	return { kind: "advisory", text: ADVISORY_TEXT };
+	let advisory = false;
+	for (const invocation of bdInvocations(command)) {
+		const { verb, args, prefix } = invocation;
+		const claim = verb === "claim" || ((verb === "update" || verb === "ready") && args.includes("--claim"));
+		const mutates = claim || (verb === "comments" ? args[0] === "add" : Object.hasOwn(MUTATING_VERBS, verb));
+		if (!mutates) continue;
+		const assignment = prefix.findLast(token => token.startsWith("BEADS_ACTOR="));
+		const actor = assignment === undefined ? env.BEADS_ACTOR : assignment.slice("BEADS_ACTOR=".length);
+		if (actor?.trim() && !/[$`]/.test(actor)) continue;
+		if (claim) return { kind: "block", reason: CLAIM_REASON };
+		advisory = true;
+	}
+	return advisory ? { kind: "advisory", text: ADVISORY_TEXT } : { kind: "allow" };
 }
 
 function prepend(

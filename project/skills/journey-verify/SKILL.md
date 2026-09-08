@@ -46,12 +46,12 @@ the rest run in parallel.
 1. **Resolve scope and inputs.** Which journeys; for each, the profile from
    its `interfaces:` and README.md. Pass each validator: journey path,
    journeys dir, run mode (`full` or `changed-only(S…)`), profile name, and
-   the repo's commit convention (in fan-out: validators do not commit -- you
-   commit once per wave).
-2. **Aggregate.** Collect the validators' structured results. With the
-   local tracker and parallel validators, id assignment is single-writer:
-   have validators return finding payloads and append them to TRACKER.md
-   yourself in one pass (github-issues validators may file directly).
+   the repo's commit convention. Validators own only their journey and run
+   files; the coordinator owns shared INDEX.md/TRACKER.md and commits.
+2. **Aggregate.** Collect the validators' structured results. Local finding
+   id assignment is single-writer: append returned finding payloads to
+   TRACKER.md yourself in one pass. Explicitly assigned github-issues
+   reporters may file directly.
 3. **Promotion.** A `draft` journey may become `active` only when every
    step passed AND its Known gaps are all user-confirmed; note the
    promotion in the run file. Otherwise leave `status` untouched.

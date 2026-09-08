@@ -15,7 +15,7 @@ and `build-formula` ships there.
 | Skill | Use when |
 |---|---|
 | `speckit-setup` | Bootstrap `.specify/`, extensions, and copy formulas into `.beads/formulas/`. |
-| `speckit-bugfix` | Fix a defect. Bond `mol-speckit-bugfix` when the trail must be tracked. |
+| `speckit-bugfix` | Fix a defect. If you need a tracked trail, bond `mol-speckit-bugfix`. |
 
 ## Agents
 
@@ -35,18 +35,27 @@ Setup installs the bundled formulas into the repo's `.beads/formulas/`.
 
 | Guard | Surface | Behavior |
 |---|---|---|
-| `extensions/tasks-guard.ts` | write/edit of `specs/*/tasks.md` | Blocks when beads is active (`bd where` decides), because task state lives in beads. Fails open. |
-| `extensions/taskstoissues-gate.ts` | bash | Blocks `speckit-taskstoissues` at the command slot, argv-parsed: wrapper chains (`sudo -u root …`, `env -S '…'`) resolve to the real executable, quoted mentions in `--title`/`--reason` pass. |
+| `extensions/tasks-guard.ts` | write/edit of `specs/*/tasks.md` | When beads is active (`bd where` decides), blocks writes and edits because task state lives in beads. Fails open. |
+| `extensions/taskstoissues-gate.ts` | bash | Blocks `speckit-taskstoissues` at command slots, including if/while/until conditions and then/do bodies. Wrapper chains resolve to the executable. Quoted mentions in `--title`/`--reason` pass. The gate is not a shell sandbox. |
 | `speckit-no-taskstoissues` (rule) | assistant stream | Interrupts on the slash form `/speckit.taskstoissues`. |
-| `speckit-implement-deprecated` (rule) | assistant stream | Advisory on `speckit.implement`. |
+| `speckit-implement-deprecated` (rule) | assistant text and bash | Advisory on `speckit.implement`. |
 | `speckit-tasks-md-bash` (rule) | edit/write of `specs/*/tasks.md` | Advisory companion to the gate. |
 | `speckit-workflow` (rule) | always loaded | The workflow contract and command routing table. |
 
 ## Tools
 
-- `speckit_setup`: idempotent bootstrap, called by the setup skill. `force=true`
-  re-scaffolds an existing `.specify/`. `skipSpecify=true` installs only formulas
-  and gitignore entries.
+The setup skill calls `speckit_setup` to bootstrap the repository.
+Failed required specify/catalog/extension/beads steps stop with `ok: false`.
+
+| Option | Effect |
+|---|---|
+| `force=true` | Re-scaffolds `.specify/` only. |
+| `skipSpecify=true` | Installs formulas and gitignore entries only. |
+| `skipBeads=true` | Explicitly omits beads and formulas, leaving molecule workflows unavailable. |
+
+Formula installation preflights every required source and destination. It rejects
+symlinks and never overwrites divergent files. These checks do not provide
+concurrency guarantees or roll back earlier successful CLI steps.
 
 ## License
 

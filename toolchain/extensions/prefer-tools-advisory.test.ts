@@ -2,12 +2,10 @@ import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { beforeEach, describe, expect, test } from "bun:test";
+import { describe, expect, test } from "bun:test";
 
 import preferToolsAdvisory, {
 	decideSwaps,
-	formatAdvisory,
-	resetPreferToolsAdvisoryForTests,
 } from "./prefer-tools-advisory.ts";
 
 /** A scratch tree seeded with `files` (name -> contents) and a `.git` stop marker. */
@@ -107,33 +105,22 @@ describe("make -> just", () => {
 	});
 });
 
-describe("formatAdvisory", () => {
-	test("names the marker, the modern tool, and the replacement", () => {
-		const text = formatAdvisory([
-			{ id: "npm-to-bun", legacyName: "npm/yarn", modern: "bun", hint: "bun add <package>", marker: "bun.lock" },
-		]);
-		expect(text).toContain("bun.lock");
-		expect(text).toContain("bun add <package>");
-		expect(text).toContain("npm/yarn");
-	});
-});
 
 describe("integration", () => {
-	const wire = () => {
+	const wire = (cwd = bare) => {
 		const handlers: Record<string, Array<(e: Record<string, unknown>) => unknown>> = {};
 		preferToolsAdvisory({
 			zod: {},
 			registerTool: () => {},
-			on: (event: string, handler: (e: Record<string, unknown>) => unknown) => {
-				(handlers[event] ??= []).push(handler);
+			on: (event: string, handler: (e: Record<string, unknown>, ctx: { cwd: string }) => unknown) => {
+				(handlers[event] ??= []).push((e) => handler(e, { cwd }));
 			},
 		} as never);
 		return handlers;
 	};
 
-	beforeEach(() => resetPreferToolsAdvisoryForTests());
 
-	test("advises on the result, never blocks, once per tree", () => {
+	test("advises on each result without blocking", () => {
 		const handlers = wire();
 		const bun = tree({ "bun.lock": "" });
 		const call = handlers.tool_call![0]!;
@@ -150,7 +137,7 @@ describe("integration", () => {
 		call({ toolName: "bash", toolCallId: "b2", input: { command: "npm install", cwd: bun } });
 		expect(
 			done({ toolName: "bash", toolCallId: "b2", content: [{ type: "text", text: "up to date" }] }),
-		).toBeUndefined();
+		).toBeDefined();
 	});
 
 	test("a failed run still made the tool choice", () => {

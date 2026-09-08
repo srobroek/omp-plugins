@@ -95,9 +95,10 @@ type = "task"
 needs = ["specify-touch"]
 labels = ["design", "phase:build"]
 description = """
-Implement the touch inside {{scope}}. Cover all nine states: default, hover,
-focus-visible, active, disabled, loading, empty, error, selected. Every colour
-comes from a token and every spacing value from the scale. Rename tokens and
+Implement the touch inside {{scope}}. Enumerate default, hover, focus-visible,
+active, disabled, loading, empty, error, selected. Implement and verify every
+applicable state; record N/A with a component-specific reason for the others.
+Every colour comes from a token and every spacing value from the scale. Rename tokens and
 components with lsp, never text substitution. Use skill://ui-microcopy for copy,
 skill://motion-design for motion, skill://platform-conformance for {{platform}}
 conventions.
@@ -180,9 +181,9 @@ labels = ["design", "phase:gate"]
 description = """
 Present the VERIFY evidence and both review verdicts for {{surface}}, then grill
 the user: what still reads wrong, and is the done condition from SPECIFY met.
-Number each question and give a recommended answer with it. In an unattended run
-do not stall: record on this bead what a reviewer would have been asked and what
-the recommended answers were, then proceed. Only bd gate resolve closes the gate.
+Number unresolved questions and give a recommended answer with each. Without
+explicit acceptance, record the evidence and unanswered request and leave this
+step unresolved, including unattended runs. Only bd gate resolve closes the gate.
 Another round of visual intent bonds mol-design-iterate onto this step.
 """
 

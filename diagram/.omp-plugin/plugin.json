@@ -5,11 +5,7 @@
   "category": "productivity",
   "mcpServers": {
     "excalidraw": {
-      "command": "npx",
-      "args": [
-        "-y",
-        "@mcp-demos/excalidraw-server"
-      ]
+      "url": "https://mcp.excalidraw.com/mcp"
     }
   }
 }

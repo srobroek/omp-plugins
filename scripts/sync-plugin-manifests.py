@@ -1,15 +1,14 @@
 #!/usr/bin/env python3
-"""Create the plugin skeleton: one directory per plugin with its `.omp-plugin/plugin.json`.
+"""Synchronize generated manifest fields while preserving plugin-owned metadata.
 
-Run once. Re-running rewrites the manifests but never touches plugin content, so
-it is safe as a drift check: `git diff` after a run shows hand-edits to name,
-description, or category. `version` is preserved when a manifest already exists,
-because release-please owns that field after the first release.
+`--check` compares generated artifacts without creating or modifying files.
 """
 
 from __future__ import annotations
 
+import argparse
 import json
+import sys
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
@@ -76,70 +75,76 @@ PLUGINS: dict[str, tuple[str, str]] = {
 
 UNPUBLISHED: set[str] = set()
 
-# Manifest keys this script does NOT own. A plugin authors these in its own
-# `.omp-plugin/plugin.json` and they survive every regeneration, exactly as `version`
-# does. Without this list the wholesale rewrite below would silently drop them, and the
-# `git diff` drift gate would then report the loss as an unexplained hand-edit.
-#
-# `mcpServers` is the one that matters today: it is a first-class plugin component, so it
-# belongs to the package rather than to this generator. OMP loads plugin MCP tools into
-# ONE flat session-global registry, so a server declared by a plugin loads for every
-# session in any project that installs it. That is why general-purpose servers live in
-# `browser-tools` and `diagram` rather than in `design`.
-PRESERVED_MANIFEST_KEYS = ("mcpServers",)
+def load_object(path: Path) -> dict[str, object]:
+    if not path.exists():
+        return {}
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except ValueError as err:
+        raise ValueError(f"{path}: invalid JSON: {err}") from err
+    if not isinstance(value, dict):
+        raise ValueError(f"{path}: expected a JSON object")
+    return value
 
 
 def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--check", action="store_true", help="verify generated manifests and linked MCP configs without writing")
+    args = parser.parse_args()
+    problems: list[str] = []
+    discovered = {
+        path.parent.parent.name for path in REPO.glob("*/.omp-plugin/plugin.json")
+    } | {path.parent.name for path in REPO.glob("*/package.json")}
+    unregistered = discovered - set(PLUGINS)
+    if unregistered:
+        print(f"FAIL: unregistered plugin directories: {sorted(unregistered)}", file=sys.stderr)
+        return 1
     for name, (category, description) in PLUGINS.items():
-        manifest_dir = REPO / name / ".omp-plugin"
-        manifest_dir.mkdir(parents=True, exist_ok=True)
-        manifest_path = manifest_dir / "plugin.json"
-
-        version = "0.1.0"
-        preserved: dict[str, object] = {}
-        if manifest_path.exists():
-            existing = json.loads(manifest_path.read_text(encoding="utf-8"))
-            version = existing.get("version", version)
-            preserved = {key: existing[key] for key in PRESERVED_MANIFEST_KEYS if key in existing}
-
-        manifest = {
-            "name": name,
-            "description": description,
-            "version": version,
-            "category": category,
-            **preserved,
-        }
-        if name in UNPUBLISHED:
-            manifest["publish"] = False
-
-        manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
-
-        # A `package.json` carrying an `omp` key is what makes the directory an OMP
-        # extension package, and that is the only carrier whose sibling `rules/` and
-        # `agents/` roots are discovered. Verified empirically on this estate:
-        #
-        #   marketplace install  -> skills load, rules and agents do NOT
-        #   link, no `omp` key   -> `omp plugin doctor` reports "not an omp plugin"
-        #   link, with `omp` key -> rules, agents, and skills all load
-        #
-        # The key may be empty for a plugin that ships no extension modules; it is a
-        # marker, not a payload. Existing `omp.extensions` entries are preserved.
+        manifest_path = REPO / name / ".omp-plugin" / "plugin.json"
         package_path = REPO / name / "package.json"
-        package = {}
-        if package_path.exists():
-            package = json.loads(package_path.read_text(encoding="utf-8"))
-        package.update(
-            {
-                "name": f"@srobroek/{name}",
-                "version": version,
-                "description": description,
-                "private": True,
-            }
-        )
-        package.setdefault("omp", {})
-        package_path.write_text(json.dumps(package, indent=2) + "\n", encoding="utf-8")
+        try:
+            manifest = load_object(manifest_path)
+            package = load_object(package_path)
+            version = manifest.get("version", "0.1.0")
+            if not isinstance(version, str) or not version.strip():
+                raise ValueError(f"{manifest_path}: version must be a non-empty string")
+            manifest.update(
+                name=name, description=description, version=version, category=category,
+            )
+            if name in UNPUBLISHED:
+                manifest["publish"] = False
+            else:
+                manifest.pop("publish", None)
 
-    print(f"wrote {len(PLUGINS)} plugin manifest(s) and package.json file(s)")
+            # The omp marker enables component discovery for marketplace and link installs.
+            package.update(
+                name=f"@srobroek/{name}", version=version,
+                description=description, private=True,
+            )
+            package.setdefault("omp", {})
+            if not isinstance(package["omp"], dict):
+                raise ValueError(f"{package_path}: omp must be an object")
+            artifacts = [(manifest_path, manifest), (package_path, package)]
+            if "mcpServers" in manifest:
+                servers = manifest["mcpServers"]
+                if not isinstance(servers, dict):
+                    raise ValueError(f"{manifest_path}: mcpServers must be an object")
+                artifacts.append((REPO / name / ".mcp.json", {"mcpServers": servers}))
+            for path, value in artifacts:
+                expected = json.dumps(value, indent=2) + "\n"
+                if args.check:
+                    if not path.is_file() or path.read_text(encoding="utf-8") != expected:
+                        problems.append(f"{path.relative_to(REPO)}: missing or stale")
+                else:
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    path.write_text(expected, encoding="utf-8")
+        except (ValueError, OSError) as err:
+            problems.append(str(err))
+    if problems:
+        for problem in problems:
+            print(f"FAIL: {problem}", file=sys.stderr)
+        return 1
+    print(f"{'PASS: checked' if args.check else 'wrote'} {len(PLUGINS)} plugin manifests and packages, plus declared linked MCP configs")
     return 0
 
 

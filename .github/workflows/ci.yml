@@ -5,9 +5,13 @@ on:
     branches: [main]
   pull_request:
 
+permissions:
+  contents: read
+
 jobs:
   check:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
 
@@ -39,8 +43,7 @@ jobs:
 
       - name: Plugin manifests are current
         run: |
-          python3 scripts/sync-plugin-manifests.py
-          git diff --exit-code -- '*/.omp-plugin/plugin.json'
+          python3 scripts/sync-plugin-manifests.py --check
 
       - uses: oven-sh/setup-bun@v2
         with:
@@ -57,9 +60,18 @@ jobs:
         run: |
           while IFS= read -r pkg; do
             if python3 -c "import json,sys; sys.exit(0 if json.load(open('$pkg')).get('dependencies') else 1)"; then
-              (cd "$(dirname "$pkg")" && bun install --silent)
+              (cd "$(dirname "$pkg")" && bun install --frozen-lockfile --silent)
             fi
           done < <(git ls-files '*/package.json')
+
+      - name: Shipped asset metadata and trigger syntax
+        run: bun scripts/check-agentic-metadata.ts
+      - name: Catalog and capability negative checks
+        run: |
+          python3 scripts/check-catalog-validation.py
+          python3 scripts/check-design-structure.py
+          python3 scripts/check-mcp-servers.py
+          python3 scripts/test-checker-contracts.py
 
       # Every extension module must at least parse and bundle. Committed dist/
       # bundles must match a fresh build (git installs run no install step on the
@@ -94,5 +106,23 @@ jobs:
       # `uvx` is not preinstalled on GitHub runners.
       - uses: astral-sh/setup-uv@v10.0.1
 
+      - name: Install Vale
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/vale"
+          gh release download v3.17.1 --repo errata-ai/vale \
+            --pattern vale_3.17.1_Linux_64-bit.tar.gz --dir "$RUNNER_TEMP/vale"
+          printf '%s  %s\n' \
+            db947f89f2292e6a0381a61de155f6a5f5cb4cb460ca178ea412ef605559cefd \
+            "$RUNNER_TEMP/vale/vale_3.17.1_Linux_64-bit.tar.gz" | sha256sum --check
+          tar -xzf "$RUNNER_TEMP/vale/vale_3.17.1_Linux_64-bit.tar.gz" \
+            -C "$RUNNER_TEMP/vale" vale
+          echo "$RUNNER_TEMP/vale" >> "$GITHUB_PATH"
+          "$RUNNER_TEMP/vale/vale" --version
+
+      - name: Prose checker failure contracts
+        run: uvx --from slopvac==1.0.1 python scripts/check-prose-gate.py
+
       - name: Prose gate
-        run: uvx slopvac README.md --profile normal
+        run: uvx --from slopvac==1.0.1 python scripts/prose-gate.py README.md --profile normal

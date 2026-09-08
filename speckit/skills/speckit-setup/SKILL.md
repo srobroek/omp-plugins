@@ -8,7 +8,7 @@ description: Bootstrap SpecKit end-to-end -- scaffold, extensions, workflows, ga
 Idempotent one-time bootstrap. Prefer the native `speckit_setup` tool over
 re-implementing the steps by hand.
 
-Requires `specify-cli` >= 0.12.0 (`uv tool install specify-cli`).
+Requires `specify-cli` >= 0.12.0 (`uv tool install specify-cli`) and `bd`.
 
 ## When to use
 
@@ -26,7 +26,7 @@ Call `speckit_setup` (or walk the same steps if the tool is unavailable):
    `bugfix`, `cleanup`, `critique`, `fix-findings`, `iterate`, `qa`, `refine`,
    `retro`, `review`, `roadmap`, `security-review`, `tinyspec`, plus
    `status-report` from `latest-release:Open-Agent-Tools/spec-kit-status`.
-   Custom-source installs are best-effort.
+   Stop and report failure if any required CLI step fails.
 4. `bd init --skip-hooks` if no workspace; copy every formula from
    `skill://speckit-setup` sibling plugin `formulas/` into `.beads/formulas/`.
    Formulas: `speckit-feature`, `speckit-lean`, `speckit-basic`,
@@ -34,8 +34,12 @@ Call `speckit_setup` (or walk the same steps if the tool is unavailable):
    `mol-speckit-refine`. Keep the `mol-` prefix.
 5. Append `specs/**/spec-status.md` to `.gitignore`.
 
-`force=true` re-scaffolds even if `.specify/` exists. `skipSpecify=true`
-installs only formulas + gitignore.
+`force=true` authorizes only re-scaffolding `.specify/`; it does not authorize
+overwriting divergent formulas. `skipSpecify=true` installs formulas and
+gitignore only. `skipBeads=true` explicitly omits beads and formulas; report
+that molecule workflows are unavailable rather than claiming full setup.
+Missing formula sources, symlink paths, or divergent destinations stop
+installation before formula copies. Resolve conflicts explicitly, then retry.
 
 Then start with `/speckit.specify`. Workflow order is the poured molecule;
 `bd mol current <root>` is current position.

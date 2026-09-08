@@ -1,51 +1,55 @@
-import { describe, expect, test } from "bun:test";
-import { mkdtempSync } from "node:fs";
+import { expect, test } from "bun:test";
+import { chmodSync, existsSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import typescriptQualityTool, { runTypescriptQuality } from "./typescript-quality-tool.ts";
+import { runTypescriptQuality } from "./typescript-quality-tool.ts";
 
-function fakeZod(): { zod: unknown } {
-	const chain: Record<string, unknown> = {};
-	const self = () => chain;
-	chain.string = self;
-	chain.optional = self;
-	chain.describe = self;
-	chain.object = self;
-	chain.enum = self;
-	return { zod: chain };
-}
-
-describe("runTypescriptQuality unit", () => {
-	test("empty dir without package.json skips cleanly", () => {
-		const dir = mkdtempSync(join(tmpdir(), "tsq-"));
-		const report = runTypescriptQuality("check", dir);
-		expect(report.ok).toBe(true);
-		expect(report.steps.every((s) => s.status === "skip")).toBe(true);
-		expect(report.steps.some((s) => s.detail.includes("package.json"))).toBe(true);
-	});
+test("missing project cannot report successful verification or repair", () => {
+ const dir = mkdtempSync(join(tmpdir(), "typescript-quality-"));
+ try {
+  for (const mode of ["check", "fix"] as const) {
+   const report = runTypescriptQuality(mode, dir);
+   expect(report.ok).toBe(false);
+   expect(report.complete).toBe(false);
+  }
+ } finally { rmSync(dir, { recursive: true, force: true }); }
 });
 
-describe("typescript_quality integration", () => {
-	test("execute check against empty dir", async () => {
-		const captured: Record<string, unknown> = {};
-		const fakePi = {
-			...fakeZod(),
-			registerTool: (d: Record<string, unknown>) => Object.assign(captured, d),
-			on: () => {},
-		};
-		typescriptQualityTool(fakePi as never);
-		expect(captured.name).toBe("typescript_quality");
-		const dir = mkdtempSync(join(tmpdir(), "tsq-int-"));
-		const execute = captured.execute as (
-			id: string,
-			params: { mode: "check" | "fix"; path?: string },
-			signal: undefined,
-			onUpdate: undefined,
-			ctx: { cwd: string },
-		) => Promise<{ content: { type: string; text: string }[]; details: { ok: boolean; steps: { status: string }[] } }>;
-		const result = await execute("t1", { mode: "check", path: dir }, undefined, undefined, { cwd: dir });
-		expect(result.content[0]?.type).toBe("text");
-		expect(result.details.ok).toBe(true);
-		expect(result.details.steps.every((s) => s.status === "skip")).toBe(true);
-	});
+test("missing requested tools and command failures cannot pass", () => {
+ const dir = mkdtempSync(join(tmpdir(), "typescript-quality-"));
+ try {
+  const bin = join(dir, "bin"); mkdirSync(bin);
+  writeFileSync(join(dir, "package.json"), '{}');
+  const which = join(bin, "which");
+  writeFileSync(which, '#!/bin/sh\n[ -x "' + bin + '/$1" ]\n'); chmodSync(which, 0o755);
+  const invoke = () => {
+   const source = `import { runTypescriptQuality } from ${JSON.stringify(import.meta.dir + "/typescript-quality-tool.ts")}; console.log(JSON.stringify(runTypescriptQuality("check", ${JSON.stringify(dir)})));`;
+   const proc = Bun.spawnSync([process.execPath, "-e", source], { env: { ...process.env, PATH: bin }, stdout: "pipe", stderr: "pipe", timeout: 10000 });
+   expect(proc.exitCode).toBe(0);
+   return JSON.parse(proc.stdout.toString());
+  };
+  const downloads = join(dir, "downloads");
+  for (const name of ["pnpm", "bun", "bunx", "npx"]) {
+   const runner = join(bin, name);
+   writeFileSync(runner, `#!/bin/sh\necho invoked >> "${downloads}"\nexit 0\n`);
+   chmodSync(runner, 0o755);
+  }
+  expect(invoke().ok).toBe(false);
+  expect(existsSync(downloads)).toBe(false);
+  const tool = join(bin, "biome");
+  writeFileSync(tool, "#!/bin/sh\nexit 0\n"); chmodSync(tool, 0o755);
+  const partial = invoke();
+  expect(partial.ok).toBe(false); expect(partial.complete).toBe(false);
+  writeFileSync(tool, "#!/bin/sh\necho failure >&2\nexit 7\n");
+  const failed = invoke();
+  expect(failed.ok).toBe(false);
+  expect(failed.steps.some((step: { status: string }) => step.status === "fail")).toBe(true);
+  mkdirSync(join(dir, "node_modules", ".bin"), { recursive: true });
+  for (const name of ["biome", "tsc"]) {
+   const local = join(dir, "node_modules", ".bin", name);
+   writeFileSync(local, "#!/bin/sh\nexit 0\n"); chmodSync(local, 0o755);
+  }
+  expect(invoke().ok).toBe(true);
+  expect(existsSync(downloads)).toBe(false);
+ } finally { rmSync(dir, { recursive: true, force: true }); }
 });

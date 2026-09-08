@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import runpy
 import sys
 from pathlib import Path
 
@@ -17,8 +18,8 @@ REPO = Path(__file__).resolve().parent.parent
 CONFIG = REPO / "release-please-config.json"
 MANIFEST = REPO / ".release-please-manifest.json"
 
-# Grouped releases: one release PR across all plugins. Separate PRs would mean up
-# to 31 open PRs per cycle. Tags read `<component>--v<version>`.
+# Grouped releases: one release PR across all plugins.
+# Tags read `<component>--v<version>`.
 BASE = {
     "$schema": "https://raw.githubusercontent.com/googleapis/release-please/main/schemas/config.json",
     "separate-pull-requests": False,
@@ -38,11 +39,8 @@ BASE = {
 
 
 def plugin_versions() -> dict[str, str]:
-    versions = {}
-    for path in sorted(REPO.glob("*/.omp-plugin/plugin.json")):
-        manifest = json.loads(path.read_text(encoding="utf-8"))
-        versions[manifest["name"]] = manifest["version"]
-    return versions
+    catalog = runpy.run_path(str(Path(__file__).with_name("build-catalog.py")))
+    return {manifest["name"]: manifest["version"] for manifest in catalog["manifests"](REPO)}
 
 
 def build() -> tuple[str, str]:
@@ -86,12 +84,12 @@ def main() -> int:
             print("FAIL: release-please files are stale:", ", ".join(stale), file=sys.stderr)
             print("Run: python3 scripts/build-release-config.py", file=sys.stderr)
             return 1
-        print(f"PASS: release-please config covers {len(plugin_versions())} plugin(s)")
+        print(f"PASS: release-please config covers {len(json.loads(manifest))} plugin(s)")
         return 0
 
     CONFIG.write_text(config, encoding="utf-8")
     MANIFEST.write_text(manifest, encoding="utf-8")
-    print(f"wrote release-please config for {len(plugin_versions())} plugin(s)")
+    print(f"wrote release-please config for {len(json.loads(manifest))} plugin(s)")
     return 0
 
 

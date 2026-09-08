@@ -14,6 +14,7 @@ export type StepResult = {
 
 export type QualityReport = {
 	ok: boolean;
+	complete: boolean;
 	cwd: string;
 	mode: QualityMode;
 	steps: StepResult[];
@@ -22,6 +23,14 @@ export type QualityReport = {
 function have(bin: string): boolean {
 	const proc = Bun.spawnSync(["which", bin], { stdout: "pipe", stderr: "pipe" });
 	return proc.exitCode === 0;
+}
+
+function installed(bin: string, cwd: string): string | null {
+	for (const dir of [join(cwd, ".venv", "bin"), join(cwd, "node_modules", ".bin")]) {
+		const path = join(dir, bin);
+		if (existsSync(path)) return path;
+	}
+	return have(bin) ? bin : null;
 }
 
 function run(
@@ -37,8 +46,8 @@ function run(
 		});
 		return {
 			exitCode: proc.exitCode,
-			stdout: proc.stdout.toString(),
-			stderr: proc.stderr.toString(),
+			stdout: proc.stdout.toString().slice(0, 16_384),
+			stderr: proc.stderr.toString().slice(0, 16_384),
 		};
 	} catch (err) {
 		return {
@@ -78,9 +87,9 @@ function record(
 
 export function runPythonQuality(mode: QualityMode, cwd: string): QualityReport {
 	const steps: StepResult[] = [];
-	const ruffOk = have("ruff");
-	const pyrightOk = have("pyright");
-	const pytestOk = have("pytest");
+	const ruff = installed("ruff", cwd);
+	const pyright = installed("pyright", cwd);
+	const pytest = installed("pytest", cwd);
 	const hasTests = existsSync(join(cwd, "pyproject.toml")) || existsSync(join(cwd, "tests"));
 	const hasPyProject = existsSync(join(cwd, "pyproject.toml"));
 	if (!hasPyProject && !hasTests) {
@@ -93,31 +102,31 @@ export function runPythonQuality(mode: QualityMode, cwd: string): QualityReport 
 			steps.push({ name: "pyright", status: "skip", detail: "no pyproject.toml or tests/" });
 			steps.push({ name: "pytest", status: "skip", detail: "no pyproject.toml or tests/" });
 		}
-		return { ok: true, cwd, mode, steps };
+		return { ok: false, complete: false, cwd, mode, steps };
 	}
 
 
 	if (mode === "fix") {
-		if (!ruffOk) {
+		if (!ruff) {
 			steps.push({ name: "ruff check --fix", status: "skip", detail: "ruff not on PATH" });
 			steps.push({ name: "ruff format", status: "skip", detail: "ruff not on PATH" });
 		} else {
-			record(steps, "ruff check --fix", run(["ruff", "check", "--fix", "."], cwd));
-			record(steps, "ruff format", run(["ruff", "format", "."], cwd));
+			record(steps, "ruff check --fix", run([ruff, "check", "--fix", "."], cwd));
+			record(steps, "ruff format", run([ruff, "format", "."], cwd));
 		}
 	} else {
-		if (!ruffOk) {
+		if (!ruff) {
 			steps.push({ name: "ruff check", status: "skip", detail: "ruff not on PATH" });
 			steps.push({ name: "ruff format --check", status: "skip", detail: "ruff not on PATH" });
 		} else {
-			record(steps, "ruff check", run(["ruff", "check", "."], cwd));
-			record(steps, "ruff format --check", run(["ruff", "format", "--check", "."], cwd));
+			record(steps, "ruff check", run([ruff, "check", "."], cwd));
+			record(steps, "ruff format --check", run([ruff, "format", "--check", "."], cwd));
 		}
 
-		if (!pyrightOk) {
+		if (!pyright) {
 			steps.push({ name: "pyright", status: "skip", detail: "pyright not on PATH" });
 		} else {
-			record(steps, "pyright", run(["pyright"], cwd));
+			record(steps, "pyright", run([pyright], cwd));
 		}
 
 		if (!hasTests) {
@@ -126,15 +135,16 @@ export function runPythonQuality(mode: QualityMode, cwd: string): QualityReport 
 				status: "skip",
 				detail: "no pyproject.toml or tests/",
 			});
-		} else if (!pytestOk) {
+		} else if (!pytest) {
 			steps.push({ name: "pytest", status: "skip", detail: "pytest not on PATH" });
 		} else {
-			record(steps, "pytest", run(["pytest"], cwd));
+			record(steps, "pytest", run([pytest], cwd));
 		}
 	}
 
-	const ok = steps.every((s) => s.status !== "fail");
-	return { ok, cwd, mode, steps };
+	const complete = steps.length > 0 && steps.every((s) => s.status !== "skip");
+	const ok = complete && steps.every((s) => s.status === "pass");
+	return { ok, complete, cwd, mode, steps };
 }
 
 export default function pythonQualityTool(pi: ExtensionAPI): void {
@@ -143,7 +153,7 @@ export default function pythonQualityTool(pi: ExtensionAPI): void {
 		name: "python_quality",
 		label: "Python quality",
 		description:
-			"Run ruff/pyright/pytest (check) or ruff --fix + format (fix). Missing binaries are skipped.",
+			"Run installed ruff/pyright/pytest (check) or ruff --fix + format (fix). Missing projects or requested tools produce incomplete, unsuccessful reports.",
 		parameters: z.object({
 			mode: z.enum(["check", "fix"]).describe("check: ruff, pyright, pytest; fix: ruff check --fix + format"),
 			path: z.string().optional().describe("Project cwd; defaults to session cwd"),

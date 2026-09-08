@@ -6,8 +6,8 @@ config, and **skips + warns + records the install hint** for any absent tool.
 There is no built-in grep fallback: detection uses real tools, and missing tools
 become reported coverage gaps, not silent guesses.
 
-Install via `scripts/install-tools.sh` (see `installer.md`). Probe first:
-`install-tools.sh --probe`.
+Install via `sniff_install_tools` (see `installer.md`). Probe first:
+`sniff_install_tools` with `{"mode":"probe"}`.
 
 ## Run-rules (apply to EVERY tool -- the per-target tables assume these)
 
@@ -140,7 +140,7 @@ bounded targets.
 
 ### scc -- LOC + complexity estimate, very fast
 - **Dimensions:** triage/hotspot ranking (size × complexity), not smells.
-- **Class:** local -- scope to the file list.
+- **Class:** local -- scope LOC and complexity estimates to the file list.
 - **Invocation:** `scc --by-file --format json .`
 - **Overlap:** none; used in step 1/triage to aim deeper passes.
 

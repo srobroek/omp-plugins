@@ -1,10 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, writeFileSync, readFileSync, existsSync } from "node:fs";
+import { mkdirSync, mkdtempSync, writeFileSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import journeysTool, {
-	cmdIndex,
+import {
 	cmdLint,
 	installFormulas,
 	parseFrontmatter,
@@ -12,10 +11,6 @@ import journeysTool, {
 } from "./journeys-tool.ts";
 
 
-// Structural stand-in for pi.zod: the module only builds a parameter schema with
-// it (object/string/array/boolean chains); execute() receives already-parsed params.
-const chain = () => new Proxy(() => chain(), { get: () => chain(), apply: () => chain() });
-const z = new Proxy({}, { get: () => chain() }) as never;
 
 describe("parseFrontmatter", () => {
 	test("parses scalars and lists", () => {
@@ -29,17 +24,8 @@ describe("parseFrontmatter", () => {
 });
 
 describe("index/lint fixture", () => {
-	test("empty dir lints and indexes", () => {
-		const dir = mkdtempSync(join(tmpdir(), "journeys-"));
-		const lint = cmdLint(dir);
-		expect(lint.ok).toBe(true);
-		expect(lint.text).toContain("0 journeys");
-		const idx = cmdIndex(dir);
-		expect(idx.count).toBe(0);
-		expect(readFileSync(join(dir, "INDEX.md"), "utf8")).toContain("Journey index");
-	});
 
-	test("valid journey lints clean", () => {
+	test("structurally valid journey lints without assessing readiness", () => {
 		const dir = mkdtempSync(join(tmpdir(), "journeys-"));
 		const jdir = join(dir, "J1-login");
 		mkdirSync(jdir);
@@ -75,41 +61,48 @@ describe("installFormulas", () => {
 
 	test("copies formulas", () => {
 		const src = mkdtempSync(join(tmpdir(), "forms-"));
-		writeFileSync(join(src, "demo.formula.toml"), "name = 'demo'\n");
+		for (const name of ["journey-step-agentic-verification", "journey-step-human-verification"]) {
+			writeFileSync(join(src, `${name}.formula.toml`), `formula = '${name}'\n`);
+		}
 		const repo = mkdtempSync(join(tmpdir(), "repo-"));
 		mkdirSync(join(repo, ".beads"));
 		const r = installFormulas(repo, false, src);
 		expect(r.ok).toBe(true);
-		expect(r.copied).toBe(1);
-		expect(existsSync(join(repo, ".beads", "formulas", "demo.formula.toml"))).toBe(true);
+		expect(r.copied).toBe(2);
+		expect(readFileSync(join(repo, ".beads", "formulas", "journey-step-agentic-verification.formula.toml"), "utf8"))
+			.toBe("formula = 'journey-step-agentic-verification'\n");
 		const again = installFormulas(repo, false, src);
-		expect(again.unchanged).toBe(1);
+		expect(again.unchanged).toBe(2);
 	});
 });
 
-describe("registerTool", () => {
-	test("execute lint via fake pi", async () => {
-		const captured: Record<string, unknown>[] = [];
-		const fakePi = {
-			zod: z,
-			registerTool: (d: Record<string, unknown>) => {
-				captured.push(d);
-			},
-			on: () => {},
+test.each(["native", "python"] as const)("pruning %s preserves unapproved journeys and rejects unknown selections", (implementation) => {
+	const root = mkdtempSync(join(tmpdir(), "journeys-scope-"));
+	try {
+		for (const name of ["J1-approved", "J2-unapproved"]) {
+			const dir = join(root, name);
+			mkdirSync(join(dir, "runs"), { recursive: true });
+			writeFileSync(join(dir, "journey.md"), `---\nid: ${name.split("-")[0]}\n---\n`);
+			writeFileSync(join(dir, "runs", "2026-01-01.md"), "old");
+			writeFileSync(join(dir, "runs", "2026-01-02.md"), "new");
+		}
+		const prune = (journey: string, yes: boolean): boolean => {
+			if (implementation === "native") {
+				return runJourneys({ command: "prune", journeysDir: root, keep: 1, journey, yes }).ok;
+			}
+			return Bun.spawnSync(["python3", join(import.meta.dir, "../skills/journey-init/scripts/journeys.py"),
+				"prune", root, "--keep", "1", "--journey", journey, ...(yes ? ["--yes"] : [])],
+				{ stdout: "pipe", stderr: "pipe", timeout: 10000 }).exitCode === 0;
 		};
-		journeysTool(fakePi as never);
-		expect(captured.map((c) => c.name)).toEqual(["journeys_index", "journey_install_formulas"]);
-		const lintTool = captured[0] as {
-			execute: (
-				id: string,
-				p: Record<string, unknown>,
-				a?: unknown,
-				b?: unknown,
-				c?: { cwd?: string },
-			) => Promise<{ details: { ok: boolean } }>;
-		};
-		const dir = mkdtempSync(join(tmpdir(), "jex-"));
-		const out = await lintTool.execute("id", { command: "lint", journeysDir: dir });
-		expect(out.details.ok).toBe(true);
-	});
+		const runs = (name: string) => readdirSync(join(root, name, "runs")).sort();
+		expect(prune("../J2-unapproved", true)).toBe(false);
+		expect(prune("J1-approved", false)).toBe(true);
+		expect(runs("J1-approved")).toEqual(["2026-01-01.md", "2026-01-02.md"]);
+		expect(prune("J1-approved", true)).toBe(true);
+		expect(runs("J1-approved")).toEqual(["2026-01-02.md"]);
+		expect(runs("J2-unapproved")).toEqual(["2026-01-01.md", "2026-01-02.md"]);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
 });
+

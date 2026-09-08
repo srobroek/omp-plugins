@@ -1,28 +1,40 @@
 # delivery
 
-Commit/push cadence, git workflow (branch, ship, merge proof, beads merge-queue linkage), a branch-first commit gate, and the read-only `pr-reviewer` agent.
+This plugin provides Git workflows for OMP, with guards for commits and reminders about work that needs pushing.
+Its rules cover when to deliver changes and how to prove they landed. It also links work to the beads merge queue.
 
 ## Agents
 
 | Name | When |
 | --- | --- |
-| `pr-reviewer` | Review a pull request; returns `VERDICT:` only. |
+| `pr-reviewer` | Reviews a pull request without changing it. Returns `VERDICT:` only. |
 
 ## Rules
 
 | Name | When |
 | --- | --- |
-| `delivery-cadence` | Continuous atomic commit and push. |
-| `delivery-git-workflow` | Branching, PRs, GW-3 landing proof, beads merge-queue linkage, GW-1/GW-2. |
+| `delivery-cadence` | Keeping commits atomic. Pushing finished work continuously. |
+| `delivery-git-workflow` | Working with branches and PRs. Proving a landing under GW-3. Linking beads to the merge queue. Following GW-1/GW-2. |
 | `delivery-draft-pr-advisory` | `gh pr create` without `--draft` (TTSR). |
 
 ## Extensions
 
-- `main-branch-gate` — blocks a `git`/`dgit` commit whose target repository has
-  main or master checked out, reading `git branch --show-current` there rather
-  than reading the commit message. Fails open when git cannot name a branch;
-  `--dry-run` and `DELIVERY_ALLOW_MAIN_COMMIT=1` are allowed. It replaces
-  `delivery-no-work-on-main`, which blocked `git commit -m 'fix main bug'` and
-  missed every commit whose message did not mention the branch.
-- `unpushed-work-advisory` — at a session stop, reports the agent's own
-  uncommitted files and unpushed commits.
+### `main-branch-gate`
+
+Blocks a `git`/`dgit` commit whose target repository has `main` or `master` checked out. It reads `git branch --show-current` in that repository, not the commit message.
+
+When git cannot name a branch, the gate allows the call. With `--dry-run` as a standalone commit option, the gate also allows the call. That exception excludes option values and paths after `--`.
+
+For a user-authorized exception, set `DELIVERY_ALLOW_MAIN_COMMIT=1` in the process environment or as an assignment prefix on the commit invocation.
+Message or echo text does not enable the override. The override records the exception. Host approval is still required.
+
+Directory checks are preflight observations, not atomic guarantees. Dynamic shell state remains outside this advisory-strength gate.
+
+### `unpushed-work-advisory`
+
+At session stop, reports dirty paths this extension instance observed touched and unpushed commits since its repository baseline.
+
+Path-level counts include pre-existing or concurrent edits in the same file.
+Before staging, inspect staged and unstaged hunks for ownership. A touched path is not permission to stage or commit the whole file.
+
+A SHA range likewise does not establish authorship. The reminder grants no authority to commit or publish.

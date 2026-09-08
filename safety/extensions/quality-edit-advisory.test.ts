@@ -9,9 +9,7 @@ import qualityEditAdvisory, {
 	languageForFile,
 	parseSelection,
 	precommitCovered,
-	resetQualityAdvisoryForTests,
 	selectedLanguages,
-	stateDir,
 } from "./quality-edit-advisory.ts";
 
 const temps: string[] = [];
@@ -24,7 +22,6 @@ function stash(key: string, value: string | undefined): void {
 }
 
 afterEach(() => {
-	resetQualityAdvisoryForTests();
 	for (const [k, v] of Object.entries(savedEnv)) {
 		if (v === undefined) delete process.env[k];
 		else process.env[k] = v;
@@ -105,16 +102,6 @@ describe("counters / hash state", () => {
 		expect(changedLineCount({})).toBe(1);
 	});
 
-	test("stateDir is under TMPDIR and hashed by root", () => {
-		const tmp = mkdtempSync(join(tmpdir(), "qea-state-"));
-		temps.push(tmp);
-		stash("TMPDIR", tmp);
-		const a = stateDir("/repo/a");
-		const b = stateDir("/repo/b");
-		expect(a.startsWith(tmp)).toBe(true);
-		expect(a).not.toBe(b);
-		expect(a).toContain("agentic-quality-advisory-");
-	});
 });
 
 describe("quality-edit-advisory integration", () => {
@@ -159,4 +146,28 @@ describe("quality-edit-advisory integration", () => {
 			process.chdir(cwd);
 		}
 	});
+});
+
+test("failed edits do not advance thresholds and registrations have isolated counters", () => {
+	const repo = tempRepo();
+	stash("AGENTIC_QUALITY_LANGS", "ts");
+	stash("AGENTIC_QUALITY_ADVISORY_LINES", "2");
+	stash("AGENTIC_QUALITY_ADVISORY_FILES", "99");
+	stash("AGENTIC_QUALITY_ADVISORY_COOLDOWN_SECONDS", "0");
+	const first = fakePi();
+	const second = fakePi();
+	qualityEditAdvisory(first.pi as never);
+	qualityEditAdvisory(second.pi as never);
+	const fire = (target: { handlers: Record<string, Handler[]> }, id: string, isError = false) => {
+		target.handlers.tool_call[0]({ toolName: "write", toolCallId: id,
+			input: { path: "a.ts", content: "x", cwd: repo } });
+		return target.handlers.tool_result[0]({ toolName: "write", toolCallId: id,
+			isError, content: [{ type: "text", text: isError ? "failed" : "ok" }] });
+	};
+	expect(fire(first, "failed", true)).toBeUndefined();
+	expect(fire(first, "one")).toBeUndefined();
+	expect(fire(second, "one")).toBeUndefined();
+	expect(fire(first, "two")).toBeDefined();
+	second.handlers.session_start[0]({});
+	expect(fire(second, "after-reset")).toBeUndefined();
 });

@@ -58,6 +58,15 @@ describe("decideToolCall", () => {
 		expect(decideToolCall("edit", { path: "specs/001-x/spec.md" }, "/tmp")).toBeUndefined();
 	});
 
+	test("checks every native edit target only in active beads workspaces", () => {
+		const input = { path: "src/a.ts", paths: ["src/b.ts", "specs/001-x/tasks.md"] };
+		setBeadsActiveForTests(true);
+		expect(decideToolCall("edit", input, "/tmp")?.block).toBe(true);
+		expect(decideToolCall("edit", { paths: ["src/a.ts", null, 3] }, "/tmp")).toBeUndefined();
+		setBeadsActiveForTests(false);
+		expect(decideToolCall("edit", input, "/tmp")).toBeUndefined();
+	});
+
 	test("blocks bash write, allows bash read", () => {
 		setBeadsActiveForTests(true);
 		expect(decideToolCall("bash", { command: "echo x > specs/001/tasks.md" }, "/tmp")?.block).toBe(
@@ -78,7 +87,7 @@ describe("register", () => {
 		const handlers: Record<string, Array<(e: Record<string, unknown>) => unknown>> = {};
 		const fakePi = {
 			zod: z,
-			registerTool: () => {},
+			registerTool: () => { },
 			on: (ev: string, fn: (e: Record<string, unknown>) => unknown) => {
 				(handlers[ev] ??= []).push(fn);
 			},
@@ -97,7 +106,7 @@ describe("register", () => {
 		const handlers: Record<string, Array<(e: Record<string, unknown>) => unknown>> = {};
 		const fakePi = {
 			zod: z,
-			registerTool: () => {},
+			registerTool: () => { },
 			on: (ev: string, fn: (e: Record<string, unknown>) => unknown) => {
 				(handlers[ev] ??= []).push(fn);
 			},

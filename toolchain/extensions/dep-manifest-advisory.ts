@@ -81,13 +81,6 @@ export type Hit = { path: string; abs: string; kind: ManifestKind; cli: string; 
 
 export type Reader = (absPath: string) => string | null;
 
-const pending = new Map<string, Hit[]>();
-const advised = new Set<string>();
-
-export function resetDepManifestAdvisoryForTests(): void {
-	pending.clear();
-	advised.clear();
-}
 
 export function manifestKind(path: string): ManifestKind | undefined {
 	return KIND_BY_FILE[basename(path.replaceAll("\\", "/"))];
@@ -374,6 +367,17 @@ export function collectHits(
 		const path = stringField(input, "path") ?? stringField(input, "file_path");
 		const content = input.content;
 		if (!path || typeof content !== "string") return [];
+		if (path === "xd://ast_edit") {
+			let args: unknown;
+			try {
+				args = JSON.parse(content);
+			} catch {
+				return [];
+			}
+			if (!args || typeof args !== "object" || Array.isArray(args)) return [];
+			const record = args as Record<string, unknown>;
+			return adviseForAstEdit(pathFields(record), astPatterns(record), cwd, read);
+		}
 		return adviseForWrite(path, content, cwd, read);
 	}
 
@@ -423,10 +427,12 @@ function prepend(
 }
 
 export default function depManifestAdvisory(pi: ExtensionAPI): void {
-	pi.on("tool_call", (event: ExtensionToolCallEvent) => {
+	const pending = new Map<string, { hits: Hit[]; cwd: string }>();
+	pi.on("tool_call", (event: ExtensionToolCallEvent, ctx) => {
 		try {
-			const hits = collectHits(event.toolName, event.input ?? {}, process.cwd());
-			if (hits.length > 0) pending.set(event.toolCallId, hits);
+			const cwd = ctx.cwd;
+			const hits = collectHits(event.toolName, event.input ?? {}, cwd);
+			if (hits.length > 0) pending.set(event.toolCallId, { hits, cwd });
 		} catch {
 			return;
 		}
@@ -434,14 +440,10 @@ export default function depManifestAdvisory(pi: ExtensionAPI): void {
 
 	pi.on("tool_result", (event: ExtensionToolResultEvent) => {
 		try {
-			const hits = pending.get(event.toolCallId);
+			const entry = pending.get(event.toolCallId);
 			pending.delete(event.toolCallId);
-			// A failed edit changed nothing, so the reminder is still owed next time.
-			if (!hits || event.isError === true) return;
-			const fresh = hits.filter((entry) => !advised.has(entry.abs));
-			if (fresh.length === 0) return;
-			for (const entry of fresh) advised.add(entry.abs);
-			return prepend(event, formatAdvisory(fresh, process.cwd()));
+			if (!entry || event.isError === true) return;
+			return prepend(event, formatAdvisory(entry.hits, entry.cwd));
 		} catch {
 			return;
 		}

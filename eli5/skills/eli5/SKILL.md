@@ -9,15 +9,14 @@ Explain the topic from the user request.
 
 ## Staging
 
-Before explaining, ask these questions:
+Explain immediately when the topic is clear. Honor the requested depth and length;
+a simple “ELI5” starts with a concise metaphor and plain-language explanation.
+Use all five levels when requested, or offer deeper levels after a short answer.
+Ask only when an ambiguous topic prevents a useful answer.
 
-1. **Depth**: How deep? All 5 levels (default), or specific levels?
-2. **Research**: Pair with research?
-   - `read` on a URL / `web_search` -- topic changed materially in the last 12 months or needs current, source-backed facts
-   - `whats-new` -- topic is a tool, library, service, or model and you need changes since a baseline
-   - none -- explain from existing knowledge (default)
-
-If the user doesn't specify, default to all 5 levels with no research skill.
+Research current or source-sensitive claims with `read` or `web_search`.
+Use `whats-new` for changes since a specified baseline. Stable concepts need no
+research ceremony or delegation.
 
 ## Depth levels
 

@@ -22,12 +22,7 @@
 # development is the named anti-pattern. Verification follows the same order,
 # because a component-level failure is smaller to locate than a page-level one.
 #
-# Every join names at least one unconditional step, so a step whose whole `needs`
-# list is filtered keeps its parent edge and becomes ready rather than stranded.
-# `specify-intent` names ground-system and grill-intent alongside the conditional
-# grill-system and write-design-md; `visual-approval` names reconcile-findings
-# alongside the conditional fix-round, which is what keeps the final gate
-# reachable when want_fix_round is false.
+# Runtime decisions remain in the DAG; only requested documentation is selected at pour.
 formula = "design-surface"
 description = "Six-phase design surface {{surface}} inside {{scope}}: ground and grill, specify, build bottom-up, verify, parallel critique and a11y, reconcile, human approval"
 type = "workflow"
@@ -48,20 +43,6 @@ description = "web uses browser; any other value uses computer for native deskto
 default = "false"
 description = "true when this surface must write or update repo-root DESIGN.md"
 
-# Set from the GROUND verdict, not guessed up front: true when
-# skill://design-system-audit returns ABSENT or PARTIAL, so the run must ask a
-# human before establishing a scale or a token. Introducing a scale is a system
-# decision the agent does not take alone.
-[vars.system_absent]
-default = "false"
-description = "true when design-system-audit returned ABSENT or PARTIAL, so establishing a scale needs human approval"
-
-# Set after RECONCILE, when the reconciled result still needs a deliberate pass
-# rather than another whole molecule. Default false keeps the DAG short; the
-# final gate stays reachable either way because it also names reconcile-findings.
-[vars.want_fix_round]
-default = "false"
-description = "true when RECONCILE leaves work that needs one more deliberate fix pass before the approval gate"
 
 [[steps]]
 id = "ground-system"
@@ -73,8 +54,8 @@ description = """
 Run skill://design-system-audit on {{scope}}. Read the token files, the scales,
 the primitives, and 5-10 existing components. Record the discovered registry on
 this bead so later steps cite it instead of guessing. Verdict PRESENT, PARTIAL,
-or ABSENT; ABSENT or PARTIAL means pour with system_absent=true. Never invent a
-token a search could find.
+or ABSENT. The system decision step evaluates that verdict before any new token
+is authored. Never invent a token a search could find.
 
 Detect the stack from evidence, never from a default: package.json dependencies,
 pubspec.yaml, a *.xcodeproj or Package.swift, composer.json, or app.json plus a
@@ -119,8 +100,8 @@ as done; and three 1-10 dials -- variance (centred and minimal through bold and
 asymmetric), motion (subtle micro-interactions through complex choreography), and
 density (spacious through dense dashboard).
 
-Never ask what a tool could answer. In an unattended run do not stall: record
-what a reviewer would have been asked and the recommended answers, then proceed.
+Never ask what a tool could answer or what the request already specifies.
+Unresolved intent stays blocked without explicit approval, including unattended runs.
 Only bd gate resolve closes the gate.
 """
 
@@ -133,19 +114,18 @@ id = "grill-system"
 title = "SYSTEM gate: approve establishing a scale or token"
 type = "task"
 needs = ["ground-system"]
-condition = "{{system_absent}}"
 labels = ["design", "phase:gate"]
 description = """
-GROUND returned ABSENT or PARTIAL, so this run would have to invent part of the
-system. Ask the user whether establishing that scale or token set is approved,
-and which existing convention it should follow. That is a system decision the
-agent must not take alone.
+Read GROUND's verdict. PRESENT with no new scale or token: record N/A with the
+registry evidence and resolve this gate without inventing a decision.
+ABSENT, PARTIAL, or a proposed new scale/token: obtain explicit user approval
+and record the convention to follow before authoring it.
 
 Approved and small: continue here. Approved and large: bond mol-design-tokens
-onto this step, or pour design-system instead of continuing this surface. In an
-unattended run record what a reviewer would have been asked, then proceed with
-the most conservative option, which is extending an existing scale rather than
-introducing a new one. Only bd gate resolve closes the gate.
+onto this step, or obtain approval to switch to design-system. Without approval,
+leave this step unresolved, including unattended runs. Existing approval covering
+the exact change is sufficient; recommended answers are not consent.
+Only bd gate resolve closes the gate.
 """
 
 [steps.gate]
@@ -182,8 +162,7 @@ answers rather than from taste. Name the component inventory this surface needs
 and which of those already exist. If DESIGN.md exists, cite its tokens;
 otherwise cite the GROUND registry. Do not invent tokens.
 
-ground-system and grill-intent are named unconditionally so this step stays
-reachable when system_absent and want_design_md are both false.
+The system decision always precedes this step; write-design-md is optional.
 """
 
 [[steps]]
@@ -194,9 +173,9 @@ needs = ["specify-intent"]
 labels = ["design", "phase:build"]
 description = """
 Component Driven stage one. Build each component from the SPECIFY inventory on
-its own, in isolation, starting small. Every component covers all nine states:
-default, hover, focus-visible, active, disabled, loading, empty, error,
-selected.
+its own, in isolation, starting small. Enumerate default, hover, focus-visible,
+active, disabled, loading, empty, error, selected. Implement and verify every
+applicable state; record N/A with a component-specific reason for the others.
 
 Every colour comes from a token and every spacing value from the scale. Verify
 each component property against manifests/components.json or the component
@@ -331,9 +310,10 @@ id = "fix-round"
 title = "one more fix pass on {{surface}}"
 type = "task"
 needs = ["reconcile-findings"]
-condition = "{{want_fix_round}}"
 labels = ["design", "phase:reconcile"]
 description = """
+Read the reconciled findings at runtime. None remain: record N/A with the
+reconciled evidence and close this step. Otherwise perform the pass below.
 A deliberate second pass over what RECONCILE left, when that is cheaper than
 another molecule. Fix inside {{scope}} only, re-verify only the changed
 assertion, and record what changed since the previous round along with the round
@@ -353,9 +333,8 @@ the user: is the reconciled result accepted, or is another iteration wanted.
 Number each question and give a recommended answer with it. Report the iteration
 number and what changed since the previous round.
 
-reconcile-findings is named unconditionally so this gate stays reachable when
-want_fix_round is false. In an unattended run do not stall: record on this bead
-what a reviewer would have been asked and the recommended answers, then proceed.
+If no human is available, record the evidence and unanswered approval request,
+then leave this step unresolved. Do not treat recommendations as acceptance.
 Only bd gate resolve closes the gate. Another round bonds mol-design-iterate
 onto this step.
 """

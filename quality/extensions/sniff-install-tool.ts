@@ -303,9 +303,9 @@ function runArgv(
 	cwd: string,
 	dryRun: boolean,
 	lines: string[],
-): void {
+): boolean {
 	lines.push(`  + ${argv.join(" ")}`);
-	if (dryRun) return;
+	if (dryRun) return true;
 	try {
 		const proc = Bun.spawnSync(argv, {
 			cwd,
@@ -313,25 +313,27 @@ function runArgv(
 			stderr: "pipe",
 			timeout: INSTALL_TIMEOUT_MS,
 		});
-		const out = proc.stdout.toString();
-		const err = proc.stderr.toString();
+		const out = proc.stdout.toString().slice(0, 16_384);
+		const err = proc.stderr.toString().slice(0, 16_384);
 		if (out) lines.push(out.replace(/\n$/, ""));
 		if (err) lines.push(err.replace(/\n$/, ""));
 		if (proc.exitCode !== 0) {
 			lines.push(`      (failed — exit ${proc.exitCode})`);
 		}
+		return proc.exitCode === 0;
 	} catch (err) {
 		const message = err instanceof Error ? err.message : String(err);
 		lines.push(`      (failed — ${message})`);
+		return false;
 	}
 }
 
-function installOne(rec: ToolRec, cwd: string, preferMise: boolean, dryRun: boolean, lines: string[]): void {
+function installOne(rec: ToolRec, cwd: string, preferMise: boolean, dryRun: boolean, lines: string[]): boolean {
 	const pkg = rec.pkg ?? rec.name;
 	const miseSpec = rec.miseSpec ?? rec.bin;
 	if (runnable(rec.bin)) {
 		lines.push(`  = ${rec.name} already installed`);
-		return;
+		return true;
 	}
 	if (have(rec.bin)) {
 		lines.push(`  ~ ${rec.name} present but not runnable (shim?) — (re)installing to make it work`);
@@ -340,46 +342,35 @@ function installOne(rec: ToolRec, cwd: string, preferMise: boolean, dryRun: bool
 	if (!mgr) {
 		lines.push(`  ! ${rec.name}: no supported manager on PATH — install manually:`);
 		lines.push(`      ${rec.hint}`);
-		return;
+		return false;
 	}
 	lines.push(`  installing ${rec.name} via ${mgr} ...`);
 	switch (mgr) {
 		case "brew":
-			runArgv(["brew", "install", pkg], cwd, dryRun, lines);
-			break;
+			return runArgv(["brew", "install", pkg], cwd, dryRun, lines);
 		case "pipx":
-			runArgv(["pipx", "install", pkg], cwd, dryRun, lines);
-			break;
+			return runArgv(["pipx", "install", pkg], cwd, dryRun, lines);
 		case "uv-tool":
-			runArgv(["uv", "tool", "install", pkg], cwd, dryRun, lines);
-			break;
+			return runArgv(["uv", "tool", "install", pkg], cwd, dryRun, lines);
 		case "npm":
-			runArgv(["npm", "install", "-g", pkg], cwd, dryRun, lines);
-			break;
+			return runArgv(["npm", "install", "-g", pkg], cwd, dryRun, lines);
 		case "cargo":
-			runArgv(["cargo", "install", pkg], cwd, dryRun, lines);
-			break;
+			return runArgv(["cargo", "install", pkg], cwd, dryRun, lines);
 		case "go": {
 			let goPath = miseSpec.startsWith("go:") ? miseSpec.slice(3) : miseSpec;
 			if (!goPath.includes("@")) goPath = `${goPath}@latest`;
-			runArgv(["go", "install", goPath], cwd, dryRun, lines);
-			break;
+			return runArgv(["go", "install", goPath], cwd, dryRun, lines);
 		}
 		case "rustup":
-			runArgv(["rustup", "component", "add", "clippy"], cwd, dryRun, lines);
-			break;
+			return runArgv(["rustup", "component", "add", "clippy"], cwd, dryRun, lines);
 		case "mise-cargo":
-			runArgv(["mise", "use", `cargo:${pkg}`], cwd, dryRun, lines);
-			break;
+			return runArgv(["mise", "use", `cargo:${pkg}`], cwd, dryRun, lines);
 		case "mise-npm":
-			runArgv(["mise", "use", `npm:${pkg}`], cwd, dryRun, lines);
-			break;
+			return runArgv(["mise", "use", `npm:${pkg}`], cwd, dryRun, lines);
 		case "mise-pipx":
-			runArgv(["mise", "use", `pipx:${pkg}`], cwd, dryRun, lines);
-			break;
+			return runArgv(["mise", "use", `pipx:${pkg}`], cwd, dryRun, lines);
 		case "mise-reg":
-			runArgv(["mise", "use", miseSpec], cwd, dryRun, lines);
-			break;
+			return runArgv(["mise", "use", miseSpec], cwd, dryRun, lines);
 		case "npm-local":
 			lines.push(`  ! ${rec.name} is project-local — install inside the repo, not globally:`);
 			lines.push(`      ${rec.hint}`);
@@ -387,6 +378,7 @@ function installOne(rec: ToolRec, cwd: string, preferMise: boolean, dryRun: bool
 		default:
 			lines.push(`  ! ${rec.name}: unknown manager ${mgr}`);
 	}
+	return false;
 }
 
 function probeBundle(name: BundleName, lines: string[]): void {
@@ -461,7 +453,7 @@ export function runSniffInstall(opts: SniffInstallOptions): { ok: boolean; repor
 		};
 	}
 	for (const t of targets) {
-		if (!(t in TOOLS)) {
+		if (!Object.hasOwn(TOOLS, t)) {
 			return {
 				ok: false,
 				report: `sniff: unknown bundle "${t}" (known: ${BUNDLES.join(" ")})`,
@@ -469,17 +461,18 @@ export function runSniffInstall(opts: SniffInstallOptions): { ok: boolean; repor
 		}
 	}
 	if (opts.dryRun) lines.push("(dry run — no changes will be made)");
+	let failed = 0;
 	for (const t of targets) {
 		const b = t as BundleName;
 		lines.push("");
 		lines.push(`[${b}]`);
 		for (const rec of TOOLS[b]) {
-			installOne(rec, cwd, preferMise, Boolean(opts.dryRun), lines);
+			if (!installOne(rec, cwd, preferMise, Boolean(opts.dryRun), lines)) failed += 1;
 		}
 	}
 	lines.push("");
-	lines.push("Done. Re-run probe to confirm.");
-	return { ok: true, report: lines.join("\n") };
+	lines.push(failed ? `Incomplete: ${failed} installation(s) failed or unavailable.` : "Done. Re-run probe to confirm.");
+	return { ok: failed === 0, report: lines.join("\n") };
 }
 
 type ToolParams = {

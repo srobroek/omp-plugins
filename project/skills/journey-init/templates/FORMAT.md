@@ -5,6 +5,9 @@ Normative spec for every artifact under this journeys directory. Installed by
 humans read the same files -- nothing here requires a runtime beyond a text
 editor, `git`, and `python3` for the index/lint helper.
 
+The helper's lint command checks structure only. A clean lint result does not
+establish semantic readiness or replace validation against the running product.
+
 ## Directory layout
 
 ```

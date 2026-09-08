@@ -1,5 +1,5 @@
 import { existsSync } from "node:fs";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 
 import type {
 	ExtensionAPI,
@@ -90,13 +90,6 @@ export type SwapHit = {
 	marker: string;
 };
 
-const pending = new Map<string, SwapHit[]>();
-const advised = new Set<string>();
-
-export function resetPreferToolsAdvisoryForTests(): void {
-	pending.clear();
-	advised.clear();
-}
 
 /** The marker proving the modern tool owns this tree, searched from cwd upward. */
 function configuredMarker(swap: ToolSwap, cwd: string): string | undefined {
@@ -157,16 +150,18 @@ function prepend(
 }
 
 export default function preferToolsAdvisory(pi: ExtensionAPI): void {
-	pi.on("tool_call", (event: ExtensionToolCallEvent) => {
+	const pending = new Map<string, SwapHit[]>();
+	pi.on("tool_call", (event: ExtensionToolCallEvent, ctx) => {
 		try {
 			if (event.toolName !== "bash") return;
 			const command = typeof event.input.command === "string" ? event.input.command : "";
 			if (!command) return;
 			const cwd =
-				typeof event.input.cwd === "string" && event.input.cwd ? event.input.cwd : process.cwd();
-			const hits = decideSwaps(command, cwd).filter((entry) => !advised.has(`${entry.id}@${cwd}`));
+				typeof event.input.cwd === "string" && event.input.cwd
+					? resolve(ctx.cwd, event.input.cwd)
+					: ctx.cwd;
+			const hits = decideSwaps(command, cwd);
 			if (hits.length === 0) return;
-			for (const entry of hits) advised.add(`${entry.id}@${cwd}`);
 			pending.set(event.toolCallId, hits);
 		} catch {
 			return;

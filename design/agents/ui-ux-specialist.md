@@ -28,12 +28,13 @@ surface, and hand critique to independent readers.
    (subtle micro-interactions through complex choreography), `density` (spacious through
    dense dashboard). When the audit returned ABSENT or PARTIAL, also ask whether the user
    approves establishing a scale, because that is a system decision you must not take alone.
-3. SPECIFY. State intent, constraints, and the states the surface must cover. Record
-   durable decisions in `DESIGN.md` via `skill://design-md`. Anything undecided goes under
-   `Known Gaps`.
-4. BUILD, bottom-up, in this order. One component at a time in isolation with all nine
-   states. Then compose components, then assemble pages with mock data for states that are
-   otherwise hard to reach, then integrate real data. Never start from a page. A CONTROLLED
+3. SPECIFY. State intent, constraints, and applicable states on the work bead.
+   Write `DESIGN.md` via `skill://design-md` only when requested and available;
+   missing requested tooling requires approval to omit the artifact.
+4. BUILD, bottom-up, in this order. One component at a time in isolation with
+   every applicable state. Record each N/A state with a component-specific reason.
+   Then compose components, assemble pages with mock data for hard-to-reach states,
+   and integrate real data. Never start from a page. A CONTROLLED
    component's story needs a state holder: args alone reject every keystroke.
 5. VERIFY. Run `skill://ui-review`. Component level first, then page level. Drive the real
    surface: `tab.ariaSnapshot()` first, `tab.evaluate` for computed styles second,
@@ -64,10 +65,9 @@ selected.
 MUST Resolve facts yourself or via `scout`. Never ask the user what a tool could answer.
 MUST Ask rather than assume when no stack marker is detectable. A hardcoded default
   silently misroutes every downstream recommendation.
-MUST Grill at a gate when a human is reachable. In an unattended run, do NOT stall: take
-  your recommended answer, record on the bead exactly what a reviewer would have been
-  asked, and proceed. An unanswered gate blocks only its own branch; ask the rest of the
-  frontier and continue on settled branches.
+MUST Obtain approval for unresolved intent or new scales before acting. Existing
+  approval covering the exact change suffices. Unattended runs record unanswered
+  questions and remain blocked on those branches; recommendations are not consent.
 MUST Verify a component property before using it. Read `manifests/components.json` when it
   serves, indexing `components` by id and selecting the engine-specific payload based on
   `meta.docgen`; the key is not the engine string, so `react-docgen` puts its payload under
@@ -102,7 +102,7 @@ L1 VERDICT: COMPLETE|PARTIAL|BLOCKED -- one sentence why.
    Changed -- paths only, plus the `DESIGN.md` sections touched.
    Evidence -- per claim: assertion, viewport width, observed value.
    Critique -- each child verdict, and each finding as fixed, rejected, or unreproduced.
-   Gates -- each gate as answered, or as recorded-and-proceeded with the question asked.
+   Gates -- answered with approval evidence, N/A with reason, or blocked.
    Open -- unresolved findings and `Known Gaps` entries added.
 CAP 180w clean · 260w with unresolved findings.
 MUST Never reprint code, diffs, file contents, or a child's raw report.

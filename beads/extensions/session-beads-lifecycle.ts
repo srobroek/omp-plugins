@@ -14,11 +14,11 @@
  * - claims still held at session close (beads-core SESSION CLOSE).
  */
 
-import { existsSync, readFileSync, rmSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, readFileSync, rmSync, statSync } from "node:fs";
+import { isAbsolute, join, resolve } from "node:path";
 import type { ExtensionAPI, ExtensionContext, ExtensionToolResultEvent } from "@oh-my-pi/pi-coding-agent";
 
-import { extractCommand, MUTATING_VERBS } from "./bd-actor-gate.ts";
+import { bdInvocations, extractCommand, MUTATING_VERBS } from "./bd-actor-gate.ts";
 
 /** No session boundary may hang on the database or on `gh`. */
 const TIMEOUT_MS = 8000;
@@ -48,24 +48,26 @@ export const EXTRA_WRITE_VERBS: Record<string, true> = {
 	supersede: true,
 };
 
-let advisedGates = false;
-let bdWrote = false;
-let staleAdvised = false;
-let stopFired = false;
-let touched = new Set<string>();
+interface SessionState {
+	bdWrote: boolean;
+	staleAdvised: boolean;
+	stopFired: boolean;
+	touched: Set<string>;
+}
 
-export function resetSessionBeadsLifecycleForTests(): void {
-	advisedGates = false;
-	bdWrote = false;
-	staleAdvised = false;
-	stopFired = false;
-	touched = new Set();
+function sessionKey(ctx: { sessionManager?: { getSessionId?: () => string } } | undefined): string {
+	return ctx?.sessionManager?.getSessionId?.() ?? "default";
 }
 
 /** The repository's `.beads` directory, or nothing when this is not a beads repo. */
 export function beadsDir(cwd: string): string | undefined {
-	const dir = join(cwd, ".beads");
-	return existsSync(dir) ? dir : undefined;
+	const pin = process.env.BEADS_DIR;
+	const dir = pin ? (isAbsolute(pin) ? pin : resolve(cwd, pin)) : join(cwd, ".beads");
+	try {
+		return statSync(dir).isDirectory() ? dir : undefined;
+	} catch {
+		return undefined;
+	}
 }
 
 /**
@@ -184,25 +186,6 @@ export function lastPushNotice(contents: string): string | undefined {
 }
 
 /**
- * Project memories, which are the one part of bd's context an omp rule cannot
- * carry: they are per-repository and written at runtime by `bd remember`.
- *
- * `bd prime --memories-only` rather than `bd prime`: the full output is a 4.6 KB
- * command reference that `rule://beads-core` and its siblings already own, and
- * re-stating it every session would duplicate a contract we control with one we
- * do not. The preamble line is bd's advice to its own hook host and is dropped.
- */
-export function memoriesNotice(stdout: string): string | undefined {
-	const body = stdout
-		.split("\n")
-		.filter(line => !line.startsWith("[bd prime]"))
-		.join("\n")
-		.trim();
-	if (body.length === 0 || body.includes("No memories stored")) return undefined;
-	return body;
-}
-
-/**
  * The stale-skip warning, from either shape bd reports it in.
  *
  * Only a real import produces this: `--dry-run` reports every row as `created`
@@ -229,26 +212,15 @@ export function staleSkipNotice(output: string): string | undefined {
 
 /** Every `bd` verb in a command line, skipping the global flags that precede one. */
 export function bdVerbs(command: string): string[] {
-	const pattern = /(?:^|[\s;&|(`])bd\s+(?:(?:-C|--directory|--db|--actor)\s+\S+\s+)*([a-z][\w-]*)/gi;
-	const verbs: string[] = [];
-	for (const match of command.matchAll(pattern)) verbs.push(match[1]!.toLowerCase());
-	return verbs;
+	return bdInvocations(command).map(invocation => invocation.verb);
 }
 
 /** Whether this command line wrote the beads database. */
 export function isBdWrite(command: string): boolean {
-	for (const verb of bdVerbs(command)) {
-		if (verb === "comments") {
-			if (/\bbd\s+comments\s+add\b/i.test(command)) return true;
-			continue;
-		}
-		if (verb === "ready") {
-			if (/--claim\b/.test(command)) return true;
-			continue;
-		}
-		if (MUTATING_VERBS[verb] || EXTRA_WRITE_VERBS[verb]) return true;
-	}
-	return false;
+	return bdInvocations(command).some(({ verb, args }) =>
+		verb === "comments" ? args[0] === "add" :
+		verb === "ready" ? args.includes("--claim") :
+		Object.hasOwn(MUTATING_VERBS, verb) || Object.hasOwn(EXTRA_WRITE_VERBS, verb));
 }
 
 /**
@@ -294,19 +266,19 @@ export function readBeads(stdout: string): Bead[] {
 /**
  * Claims this session is answerable for.
  *
- * `in_progress` only: an open bead is either backlog this session never touched
- * or work it just filed, and neither is a close-out omission. A held claim is.
+ * Touched in-progress work and assigned unfinished work remain accountable,
+ * including claims parked as blocked or deferred.
  */
 export function heldClaims(beads: Bead[], seen: Set<string>, actor: string | undefined): Bead[] {
 	return beads.filter(bead => {
-		if (bead.status !== "in_progress") return false;
-		if (seen.has(bead.id)) return true;
-		return actor !== undefined && actor.length > 0 && bead.assignee === actor;
+		if (!["open", "in_progress", "blocked", "deferred"].includes(bead.status)) return false;
+		if (actor?.trim() && bead.assignee === actor) return true;
+		return bead.status === "in_progress" && seen.has(bead.id);
 	});
 }
 
 export function formatSessionCloseAdvisory(beads: Bead[]): string {
-	const lines = ["Beads left in progress at session close, and this session wrote to the database:"];
+	const lines = ["Beads claims still held at session close (a mutating command was attempted):"];
 	for (const bead of beads.slice(0, MAX_LISTED)) {
 		const who = bead.assignee ? ` [${bead.assignee}]` : "";
 		lines.push(`- ${bead.id}${who} ${bead.title}`);
@@ -326,31 +298,36 @@ type SessionStopEvent = {
 export function handleSessionStop(
 	event: SessionStopEvent,
 	listOutput: string | undefined,
-	seen: Set<string> = touched,
+	seen: Set<string>,
 	actor: string | undefined = process.env.BEADS_ACTOR,
 ): { continue: true; additionalContext: string } | undefined {
 	if (event.stop_hook_active === true || event.stopHookActive === true) return;
-	if (stopFired) return;
-	if (!listOutput) return;
-	const held = heldClaims(readBeads(listOutput), seen, actor);
+	const data = listOutput === undefined ? undefined : envelopeData(parseTrailingJson(listOutput));
+	if (!Array.isArray(data) || data.some(row => !row || typeof row !== "object" ||
+		typeof row.id !== "string" || typeof row.status !== "string")) {
+		return { continue: true, additionalContext: "Beads claims could not be verified at session close. A mutating command was attempted; inspect assigned and touched work before stopping." };
+	}
+	const held = heldClaims(readBeads(listOutput!), seen, actor);
 	if (held.length === 0) return;
-	stopFired = true;
 	return { continue: true, additionalContext: formatSessionCloseAdvisory(held) };
 }
 
 /** Run bd for its stdout. Warnings on stderr are noise here and are dropped. */
-async function runBd(cwd: string, args: string[]): Promise<string | undefined> {
+async function runBd(cwd: string, args: string[], deadline = Date.now() + TIMEOUT_MS): Promise<string | undefined> {
 	try {
+		const remaining = deadline - Date.now();
+		if (remaining <= 0) return undefined;
 		const proc = Bun.spawn(["bd", ...args], {
 			cwd,
 			stdout: "pipe",
 			stderr: "ignore",
 			env: { ...process.env, BD_NO_PAGER: "1", BD_NON_INTERACTIVE: "1", BD_JSON_ENVELOPE: "1" },
-			timeout: TIMEOUT_MS,
+			timeout: Math.min(TIMEOUT_MS, remaining),
+			killSignal: "SIGKILL",
 		});
 		const out = await new Response(proc.stdout).text();
-		await proc.exited;
-		return out;
+		const code = await proc.exited;
+		return code === 0 ? out : undefined;
 	} catch {
 		return undefined;
 	}
@@ -383,30 +360,28 @@ function consumeLastPush(dir: string): string | undefined {
  * The cheap read comes first: a repository with no gates, which is most of them,
  * costs one read-only call and never a network-bound `gh` check.
  */
-async function gateAdvisory(cwd: string): Promise<string | undefined> {
-	const listed = await runBd(cwd, ["gate", "list", "--json"]);
-	if (listed === undefined) return undefined;
+async function gateAdvisory(cwd: string, deadline: number): Promise<string | undefined> {
+	const listed = await runBd(cwd, ["gate", "list", "--json"], deadline);
+	if (listed === undefined) return "Beads gates could not be verified at session start.";
+	const data = envelopeData(parseTrailingJson(listed));
+	if (!Array.isArray(data) || data.some(row => !row || typeof row !== "object" ||
+		typeof row.id !== "string" || typeof row.await_type !== "string")) {
+		return "Beads gate list returned malformed data; unresolved gates remain unverified.";
+	}
 	let gates = readGates(listed);
 	if (gates.length === 0) return undefined;
 	let outcome: CheckOutcome | undefined;
 	if (gatesCanResolve(gates)) {
-		const checked = await runBd(cwd, ["gate", "check", "--json"]);
+		const checked = await runBd(cwd, ["gate", "check", "--json"], deadline);
 		if (checked !== undefined) {
 			outcome = readCheckOutcome(checked);
 			if (outcome.resolved > 0) {
-				const relisted = await runBd(cwd, ["gate", "list", "--json"]);
+				const relisted = await runBd(cwd, ["gate", "list", "--json"], deadline);
 				if (relisted !== undefined) gates = readGates(relisted);
 			}
 		}
 	}
 	return formatGateAdvisory(gates, outcome);
-}
-
-/** Stored memories for this workspace, or nothing when there are none. */
-async function memoryAdvisory(cwd: string): Promise<string | undefined> {
-	const primed = await runBd(cwd, ["prime", "--memories-only"]);
-	if (primed === undefined) return undefined;
-	return memoriesNotice(primed);
 }
 
 /** Text blocks of a tool result, joined. */
@@ -421,22 +396,28 @@ function resultText(event: ExtensionToolResultEvent): string {
 }
 
 export default function sessionBeadsLifecycle(pi: ExtensionAPI): void {
+	const sessions = new Map<string, SessionState>();
+	function stateFor(ctx: ExtensionContext): SessionState {
+		const key = sessionKey(ctx);
+		let state = sessions.get(key);
+		if (!state) {
+			state = { bdWrote: false, staleAdvised: false, stopFired: false, touched: new Set() };
+			sessions.set(key, state);
+		}
+		return state;
+	}
+
 	pi.on("session_start", async (_event, ctx: ExtensionContext) => {
-		if (advisedGates) return;
-		advisedGates = true;
-		bdWrote = false;
-		staleAdvised = false;
-		stopFired = false;
-		touched = new Set();
+		const key = sessionKey(ctx);
+		sessions.delete(key);
+		const state = stateFor(ctx);
 		try {
 			const dir = beadsDir(ctx?.cwd ?? process.cwd());
 			if (dir === undefined) return;
-			const notices = [
-				consumeLastPush(dir),
-				await memoryAdvisory(ctx.cwd),
-				await gateAdvisory(ctx.cwd),
-			].filter((notice): notice is string => notice !== undefined);
-			if (notices.length === 0) return;
+			const deadline = Date.now() + TIMEOUT_MS;
+			const notices = [consumeLastPush(dir), await gateAdvisory(ctx.cwd, deadline)]
+				.filter((notice): notice is string => notice !== undefined);
+			if (sessions.get(key) !== state || notices.length === 0) return;
 			// A message rather than `ctx.ui.notify`: the agent runs the commands this
 			// is about, and a UI notification reaches neither it nor a --print session.
 			pi.sendMessage({
@@ -453,47 +434,30 @@ export default function sessionBeadsLifecycle(pi: ExtensionAPI): void {
 		}
 	});
 
-	// Compaction drops what a rule cannot restore. Rules are re-injected with the
-	// system prompt, so only the runtime state needs replaying, and only that.
-	pi.on("auto_compaction_end", async (_event, ctx: ExtensionContext) => {
-		try {
-			const cwd = ctx?.cwd ?? process.cwd();
-			if (beadsDir(cwd) === undefined) return;
-			const memories = await memoryAdvisory(cwd);
-			if (memories === undefined) return;
-			pi.sendMessage({
-				customType: "com.srobroek.beads.session-lifecycle",
-				content: memories,
-				display: true,
-				attribution: "user",
-				triggerTurn: false,
-			});
-		} catch (error) {
-			pi.logger.error("beads post-compaction memory refresh failed", {
-				error: error instanceof Error ? error.message : String(error),
-			});
-		}
+	pi.on("session_shutdown", (_event, ctx: ExtensionContext) => {
+		sessions.delete(sessionKey(ctx));
 	});
 
 	// Only the fired-once latch resets per turn; what the session touched must
 	// accumulate across the whole session.
-	pi.on("turn_start", () => {
-		stopFired = false;
+	pi.on("turn_start", (_event, ctx: ExtensionContext) => {
+		stateFor(ctx).stopFired = false;
 	});
 
-	pi.on("tool_result", (event: ExtensionToolResultEvent) => {
+	pi.on("tool_result", (event: ExtensionToolResultEvent, ctx: ExtensionContext) => {
 		try {
 			if (event.toolName !== "bash") return;
 			const command = extractCommand(event.input ?? {});
 			if (!command || !/\bbd\s+/.test(command)) return;
-			if (!event.isError && isBdWrite(command)) {
-				bdWrote = true;
-				for (const id of beadIdCandidates(command)) touched.add(id);
+			const state = stateFor(ctx);
+			if (isBdWrite(command)) {
+				state.bdWrote = true;
+				for (const id of beadIdCandidates(command)) state.touched.add(id);
 			}
-			if (staleAdvised) return;
+			if (state.staleAdvised) return;
 			const notice = staleSkipNotice(resultText(event));
 			if (notice === undefined) return;
-			staleAdvised = true;
+			state.staleAdvised = true;
 			return { content: [{ type: "text" as const, text: `${notice}\n\n` }, ...(event.content ?? [])] };
 		} catch {
 			// Attribution and advisories must never disturb a tool result.
@@ -501,12 +465,18 @@ export default function sessionBeadsLifecycle(pi: ExtensionAPI): void {
 		}
 	});
 
-	pi.on("session_stop", async (event: SessionStopEvent, ctx: { cwd?: string }) => {
+	pi.on("session_stop", async (event: SessionStopEvent, ctx: ExtensionContext) => {
 		try {
+			const key = sessionKey(ctx);
+			const state = sessions.get(key);
 			const cwd = ctx?.cwd ?? process.cwd();
-			if (!bdWrote || beadsDir(cwd) === undefined) return;
-			const listed = await runBd(cwd, ["list", "--status", "open,in_progress", "--json"]);
-			return handleSessionStop(event, listed);
+			if (!state?.bdWrote || state.stopFired || event.stop_hook_active === true ||
+				event.stopHookActive === true || beadsDir(cwd) === undefined) return;
+			const listed = await runBd(cwd, ["list", "--status", "open,in_progress,blocked,deferred", "--limit", "0", "--json"]);
+			if (sessions.get(key) !== state || state.stopFired) return;
+			const advisory = handleSessionStop(event, listed, state.touched);
+			if (advisory) state.stopFired = true;
+			return advisory;
 		} catch (error) {
 			pi.logger.error("beads session-close check failed", {
 				error: error instanceof Error ? error.message : String(error),

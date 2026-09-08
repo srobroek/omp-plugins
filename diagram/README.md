@@ -1,6 +1,6 @@
 # diagram
 
-Interactive diagramming and architecture-sketching canvas over MCP.
+Use this plugin to draw diagrams and sketch architecture in an interactive canvas through MCP.
 
 ## Install
 
@@ -9,19 +9,19 @@ omp plugin marketplace add srobroek/omp-plugins
 omp plugin install diagram@srobroek-omp
 ```
 
-OMP discovers plugins and connects MCP servers at startup, so the server becomes available
-in the NEXT session. `omp plugin list` then reports `diagram@srobroek-omp (0.1.0)`.
+OMP discovers plugins and connects MCP servers at startup. After installation, start a new session to use the server.
+In that session, `omp plugin list` reports `diagram@srobroek-omp`.
 
 ## MCP servers
 
-| Name | What it provides |
-|------|------------------|
-| `excalidraw` | Its own interactive canvas for diagramming, flow, and architecture sketching. |
-
-Plugin MCP tools are session-global, so this server serves any such work, not design work only. It needs a client that supports MCP Apps.
+The `excalidraw` server uses this endpoint: `https://mcp.excalidraw.com/mcp`.
+You need a client that supports MCP Apps. Plugin tools are available throughout the session, so you can use this server beyond design work.
 
 MCP servers connect only at session startup. An agent cannot reconnect them. A server unreachable at session start stays unreachable until the user runs `/mcp reconnect <name>`.
 
-## Licenses
+## Data handling
 
-`@mcp-demos/excalidraw-server` declares MIT in its `package.json` but ships no LICENSE file. It is advertised as a pointer and is never vendored.
+Diagram requests go to the hosted service. Its retention period remains unverified.
+Before sending confidential diagrams, get approval to disclose them to that service.
+
+To run the server locally, build it from the [upstream source](https://github.com/excalidraw/excalidraw-mcp).

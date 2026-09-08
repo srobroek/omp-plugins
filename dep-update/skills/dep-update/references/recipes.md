@@ -29,18 +29,20 @@ curl -fsSL -A 'dep-update-skill (+https://github.com/srobroek/omp-plugins)' \
 
 | Lockfile / manifest | Ecosystem | Apply command | Notes |
 |---------------------|-----------|---------------|-------|
-| `uv.lock` / `pyproject.toml` / `requirements.txt` / `poetry.lock` / `Pipfile.lock` | python | `uv add "name==ver"` | Updates pyproject.toml + uv.lock atomically |
+| `uv.lock` / `pyproject.toml` / `requirements.txt` / `poetry.lock` | python | `uv add "name==ver"` | Failures can leave partial changes |
 | (python, no uv) | python | `pip install "name==ver"` | Manual: also edit requirements.txt / pyproject.toml |
-| `pnpm-lock.yaml` | node | `pnpm update name --version ver` | |
+| `pnpm-lock.yaml` | node | `pnpm update "name@ver"` | Manager selection only; scan reads package.json |
 | `bun.lock` / `bun.lockb` | node | `bun add "name@ver"` | |
 | `yarn.lock` | node | `yarn add "name@ver"` | |
 | `package-lock.json` / `npm-shrinkwrap.json` | node | `npm install "name@ver"` | |
-| `Cargo.lock` / `Cargo.toml` | rust | `cargo update -p name --precise ver` | Advisory only -- never applied by this skill |
-| `go.sum` / `go.mod` | go | `go get module@ver && go mod tidy` | Advisory only -- never applied by this skill |
+| `Cargo.toml` | rust | `cargo update -p name --precise ver` | Advisory only; Cargo.lock is not scanned |
+| `go.mod` | go | `go get module@ver && go mod tidy` | Advisory only; go.sum is not scanned |
 
 Node package manager precedence: `[module.lang-ts].package_manager` in
 `answers.toml` first, else lockfile order `pnpm-lock.yaml` →
 `bun.lock`/`bun.lockb` → `yarn.lock` → `package-lock.json`.
+
+Node lockfiles in this table select the package manager, not resolved scan versions. `Pipfile.lock` is not scanned.
 
 Pre-release candidates (`rc`, `alpha`, `beta`, `a`, `b`, `dev`) are excluded
 from the upgrade offer unless the installed version is itself pre-release; the

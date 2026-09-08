@@ -71,11 +71,13 @@ jobs:
       - name: Sync catalogs and extension bundles on the release branch
         if: ${{ steps.release.outputs.prs_created == 'true' }}
         run: |
+          python3 scripts/sync-plugin-manifests.py
           python3 scripts/build-catalog.py
           python3 scripts/build-extensions.py
-          if ! git diff --quiet; then
+          git add -- '*/package.json' '*/.omp-plugin/plugin.json' '*/bun.lock' '*/dist/*.js' .omp-plugin/marketplace.json .claude-plugin/marketplace.json
+          if ! git diff --cached --quiet; then
             git config user.name "release-app[bot]"
             git config user.email "release-app[bot]@users.noreply.github.com"
-            git commit -am "chore: sync catalogs and extension bundles"
+            git commit -m "chore: sync catalogs and extension bundles"
             git push
           fi

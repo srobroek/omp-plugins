@@ -5,7 +5,7 @@ OMP compares `plugins[].version` in the single top-level catalog when deciding
 whether a plugin can be upgraded; an entry with no `version` is invisible to that
 comparer. release-please, however, only bumps files it is pointed at directly, so
 each plugin owns its version in `<plugin>/.omp-plugin/plugin.json` and this script
-aggregates the 31 of them into the one file OMP reads.
+aggregates them into the one file OMP reads.
 
 `--check` verifies the committed catalogs match what this would produce, which is
 what CI runs: it catches a hand-edited catalog drifting from the manifests.
@@ -16,6 +16,7 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import runpy
 import sys
 from pathlib import Path
 
@@ -42,11 +43,47 @@ HEADER = {
 }
 
 
-def manifests() -> list[dict[str, object]]:
+def manifests(repo: Path | None = None) -> list[dict[str, object]]:
     """Every plugin manifest in the repository, in catalog order."""
+    inventory = runpy.run_path(str(Path(__file__).with_name("sync-plugin-manifests.py")))["PLUGINS"]
+    paths = sorted((repo or REPO).glob("*/.omp-plugin/plugin.json"))
+    discovered = {path.parent.parent.name for path in paths}
+    package_names = {path.parent.name for path in (repo or REPO).glob("*/package.json")}
+    missing = set(inventory) - discovered
+    unregistered = (discovered | package_names) - set(inventory)
+    if missing or unregistered:
+        raise SystemExit(
+            f"local plugin inventory mismatch: missing {sorted(missing)}, "
+            f"unregistered {sorted(unregistered)}"
+        )
     found = []
-    for path in sorted(REPO.glob("*/.omp-plugin/plugin.json")):
-        found.append(json.loads(path.read_text(encoding="utf-8")))
+    seen = set()
+    for path in paths:
+        try:
+            manifest = json.loads(path.read_text(encoding="utf-8"))
+        except (ValueError, OSError) as err:
+            raise SystemExit(f"{path}: cannot read manifest: {err}") from err
+        if not isinstance(manifest, dict):
+            raise SystemExit(f"{path}: manifest must be an object")
+        name = manifest.get("name")
+        if not isinstance(name, str) or not NAME_PATTERN.fullmatch(name):
+            raise SystemExit(f"{path}: name must be an addressable plugin name")
+        if name in seen:
+            raise SystemExit(f"{path}: duplicate local plugin name {name!r}")
+        seen.add(name)
+        if name != path.parent.parent.name:
+            raise SystemExit(f"{path}: name {name!r} does not match plugin directory")
+        for field in ("description", "version"):
+            value = manifest.get(field)
+            if not isinstance(value, str) or not value.strip():
+                raise SystemExit(f"{path}: {field} must be a non-empty string")
+        if "publish" in manifest and not isinstance(manifest["publish"], bool):
+            raise SystemExit(f"{path}: publish must be a boolean")
+        if "category" in manifest and (
+            not isinstance(manifest["category"], str) or not manifest["category"].strip()
+        ):
+            raise SystemExit(f"{path}: category must be a non-empty string")
+        found.append(manifest)
     return found
 
 
@@ -88,7 +125,7 @@ def third_party() -> list[dict[str, object]]:
 
     try:
         data = json.loads(THIRD_PARTY.read_text(encoding="utf-8"))
-    except json.JSONDecodeError as err:
+    except (ValueError, OSError) as err:
         _fail(f"is not valid JSON: {err}")
     if not isinstance(data, dict):
         _fail(f"must contain a JSON object, got {type(data).__name__}")
@@ -108,7 +145,7 @@ def third_party() -> list[dict[str, object]]:
         name = entry.get("name")
         if not isinstance(name, str) or not name.strip():
             _fail(f"entry {position} needs a non-empty string `name`")
-        if not NAME_PATTERN.match(name):
+        if not NAME_PATTERN.fullmatch(name):
             _fail(f"{name!r} is not addressable as `<name>@<marketplace>`")
         if name in seen:
             _fail(f"duplicate entry {name!r}")
@@ -123,7 +160,7 @@ def third_party() -> list[dict[str, object]]:
         if not isinstance(source, dict):
             _fail(f"{name!r} needs a `source` object, got {type(source).__name__}")
         kind = source.get("source")
-        if kind not in SOURCE_REQUIRED_FIELDS:
+        if not isinstance(kind, str) or kind not in SOURCE_REQUIRED_FIELDS:
             _fail(
                 f"{name!r} has unsupported source kind {kind!r}; "
                 f"expected one of {sorted(SOURCE_REQUIRED_FIELDS)}"
@@ -175,7 +212,8 @@ def main() -> int:
     parser.add_argument("--check", action="store_true", help="fail when a catalog is stale")
     args = parser.parse_args()
 
-    expected = json.dumps(build(), indent=2) + "\n"
+    catalog = build()
+    expected = json.dumps(catalog, indent=2) + "\n"
 
     if args.check:
         stale = [
@@ -187,13 +225,13 @@ def main() -> int:
             print("FAIL: catalog does not match the plugin manifests:", ", ".join(stale), file=sys.stderr)
             print("Run: python3 scripts/build-catalog.py", file=sys.stderr)
             return 1
-        print(f"PASS: catalogs match {len(build()['plugins'])} plugin manifest(s)")
+        print(f"PASS: catalogs match {len(catalog['plugins'])} plugin manifest(s)")
         return 0
 
     for path in CATALOGS:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(expected, encoding="utf-8")
-    print(f"wrote {len(CATALOGS)} catalog(s) with {len(build()['plugins'])} plugin entries")
+    print(f"wrote {len(CATALOGS)} catalog(s) with {len(catalog['plugins'])} plugin entries")
     return 0
 
 

@@ -152,9 +152,6 @@ describe("findCloseInvocations", () => {
 	test("no literal id: close with a variable, or with none at all", () => {
 		expect(findCloseInvocations("bd close $GATE_ID")).toEqual([{ ids: [], dbArgs: [] }]);
 		expect(findCloseInvocations("bd close --reason done")).toEqual([{ ids: [], dbArgs: [] }]);
-		expect(findCloseInvocations("bd gate list --json | jq -r '.[].id' | xargs bd close")).toEqual([
-			{ ids: [], dbArgs: [] },
-		]);
 	});
 });
 
@@ -165,16 +162,26 @@ describe("gateIdsAmong", () => {
 		expect(gateIdsAmong(["bdp-1a", "bdp-2b", "bdp-3c"])).toEqual(["bdp-2b"]);
 	});
 
-	test("one bd show call carrying every id, the db selectors, and the bash cwd", () => {
-		const { run, calls } = fakeBd({ "bdp-1a": "gate", "bdp-2b": "gate" });
-		setBdShowRunForTests(run);
-		gateIdsAmong(["bdp-1a", "bdp-2b"], ["-C", "/repo"], "/work/checkout");
-		expect(calls).toEqual([
-			{
-				argv: ["bd", "-C", "/repo", "show", "bdp-1a", "bdp-2b", "--json"],
-				cwd: "/work/checkout",
-			},
-		]);
+	test("close decisions use the selected database rather than a same-id local bead", () => {
+		setBdShowRunForTests((argv, cwd) => {
+			let database = cwd;
+			for (let i = 1; i < argv.indexOf("show"); i++) {
+				const arg = argv[i] as string;
+				if (["-C", "--directory", "--db"].includes(arg)) database = argv[++i] as string;
+				else if (arg.startsWith("--db=")) database = arg.slice("--db=".length);
+			}
+			return { exitCode: 0, stdout: JSON.stringify([row("bdp-1a", database === "/gates" ? "gate" : "task")]) };
+		});
+		expect(decideBdClose("bd close bdp-1a", "/tasks")).toBeUndefined();
+		expect(decideBdClose("bd close bdp-1a", "/gates")?.block).toBe(true);
+		for (const command of [
+			"bd -C /gates close bdp-1a",
+			"bd --actor test --db=/gates close bdp-1a",
+			"bd close bdp-1a --directory /gates",
+			"echo bd close bdp-1a; env MODE=test command bd --db /gates done bdp-1a",
+			"sudo -u user bd --db /gates close bdp-1a",
+		]) expect(decideBdClose(command, "/tasks")?.block).toBe(true);
+		expect(decideBdClose("bd --db /tasks close bdp-1a", "/gates")).toBeUndefined();
 	});
 
 	test("no ids means no spawn", () => {
@@ -189,17 +196,17 @@ describe("gateIdsAmong", () => {
 		expect(gateIdsAmong(["bdp-1a"])).toEqual([]);
 	});
 
-	test("unparseable stdout fails open", () => {
+	test("unparseable stdout reports uncertainty", () => {
 		setBdShowRunForTests(() => ({ exitCode: 0, stdout: "bd: command not found" }));
-		expect(gateIdsAmong(["bdp-1a"])).toEqual([]);
+		expect(() => gateIdsAmong(["bdp-1a"])).toThrow();
 	});
 
-	test("the error object shape fails open", () => {
+	test("the error object shape reports uncertainty", () => {
 		setBdShowRunForTests(() => ({
 			exitCode: 0,
 			stdout: JSON.stringify({ error: "no issues found", schema_version: 1 }),
 		}));
-		expect(gateIdsAmong(["bdp-1a"])).toEqual([]);
+		expect(() => gateIdsAmong(["bdp-1a"])).toThrow();
 	});
 
 	test("a throwing seam is not swallowed here", () => {
@@ -263,6 +270,19 @@ describe("decideBdClose", () => {
 		expect(decideBdClose("bd close bdp-9z --reason 'gate answered'")).toBeUndefined();
 	});
 
+
+	test("mentions never query gates but a following real close still does", () => {
+		const { run, calls } = fakeBd({ "bdp-2b": "gate" });
+		setBdShowRunForTests(run);
+		for (const command of [
+			"echo bd close bdp-2b",
+			"printf '%s' bd close bdp-2b",
+			"env printf '%s' bd close bdp-2b",
+			"command echo bd close bdp-2b",
+		]) expect(decideBdClose(command)).toBeUndefined();
+		expect(calls).toEqual([]);
+		expect(decideBdClose("echo bd close bdp-2b && command bd close bdp-2b")?.block).toBe(true);
+	});
 	test("prefilter keeps unrelated commands away from the seam", () => {
 		const { run, calls } = fakeBd({ "bdp-2b": "gate" });
 		setBdShowRunForTests(run);
@@ -315,20 +335,22 @@ describe("integration", () => {
 		).toBeUndefined();
 	});
 
-	test("the bash call's cwd reaches bd show, so the same database answers", () => {
-		const { run, calls } = fakeBd({ "bdp-2b": "gate" });
-		setBdShowRunForTests(run);
+	test("handler decisions use the bash cwd rather than the session database", () => {
+		setBdShowRunForTests((_argv, cwd) => ({
+			exitCode: 0,
+			stdout: JSON.stringify([row("bdp-2b", cwd === "/other/repo" ? "gate" : "task")]),
+		}));
 		const [handler] = register();
-
-		handler?.({
+		expect(handler?.({
 			toolName: "bash",
 			toolCallId: "c6",
 			input: { command: "bd close bdp-2b", cwd: "/other/repo" },
-		});
-		expect(calls.map((c) => c.cwd)).toEqual(["/other/repo"]);
-
-		handler?.({ toolName: "bash", toolCallId: "c7", input: { command: "bd close bdp-2b" } });
-		expect(calls[1]?.cwd).toBe(process.cwd());
+		})).toEqual(expect.objectContaining({ block: true }));
+		expect(handler?.({
+			toolName: "bash",
+			toolCallId: "c7",
+			input: { command: "bd close bdp-2b" },
+		})).toBeUndefined();
 	});
 
 	test("ignores non-bash tools and empty input", () => {

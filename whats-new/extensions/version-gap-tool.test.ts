@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 const zod = {
@@ -27,6 +27,16 @@ describe("unit: detect", () => {
 		writeFileSync(join(dir, "package.json"), JSON.stringify({ dependencies: { leftpad: "1.3.0" } }));
 		const { rows } = await detectProject(dir);
 		expect(rows).toEqual([["npm", "leftpad", "1.3.0"]]);
+	});
+	test("malformed Python arrays fall back without losing valid declarations", async () => {
+		const dir = tmp();
+		try {
+			writeFileSync(join(dir, "uv.lock"), "package = false");
+			writeFileSync(join(dir, "pyproject.toml"), '[project]\ndependencies = 42\n[project.optional-dependencies]\nbad = false\ngood = ["requests==2.0.0"]\n[dependency-groups]\nbad = 1\ngood = ["pytest==8.0.0"]\n');
+			const result = await detectProject(dir);
+			expect(result.rows).toEqual([["pypi", "requests", "==2.0.0"], ["pypi", "pytest", "==8.0.0"]]);
+			expect(result.stderr).toContain("Unscanned:");
+		} finally { rmSync(dir, { recursive: true, force: true }); }
 	});
 });
 

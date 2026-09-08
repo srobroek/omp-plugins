@@ -50,9 +50,9 @@ finding ids.
 Aggregate. **Dedupe across journeys**: one product defect surfacing in
 several journeys is one finding -- file once, reference it from every
 affected run file; do not spam the tracker. With the local tracker, id
-assignment is single-writer: parallel validators return finding payloads
-and the coordinator appends them to TRACKER.md in one pass (github-issues
-validators may file directly). The coordinator owns the single reindex and
+assignment is single-writer: validators return finding payloads
+and the coordinator appends them to TRACKER.md in one pass (explicitly
+assigned github-issues reporters may file directly). The coordinator owns the single reindex and
 the single journeys-dir commit per wave.
 
 Then run the fix loop over the `suspected-regression` findings.

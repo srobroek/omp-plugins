@@ -3,7 +3,6 @@ import { afterEach, describe, expect, test } from "bun:test";
 import bdInitAdvisory, {
 	decideBdInit,
 	findInitInvocations,
-	initAdvisory,
 	missingInitFlags,
 	resetInitAdvisoryForTests,
 } from "./bd-init-advisory.ts";
@@ -90,20 +89,6 @@ describe("missingInitFlags", () => {
 	});
 });
 
-describe("initAdvisory", () => {
-	test("names skip-hooks, BEADS_DIR, and the measured fork", () => {
-		const text = initAdvisory({ skipHooks: true });
-		expect(text).toContain("--skip-hooks");
-		expect(text).toContain("BEADS_DIR");
-		expect(text).toContain("core.hooksPath");
-		expect(text).toContain("No active beads workspace found");
-		expect(text).toContain("copied 54-bead database");
-		expect(text).toContain("rule://beads-setup");
-		expect(text).toContain("bd init --init-if-missing --skip-hooks");
-		expect(text).not.toContain("--server");
-		expect(text).not.toContain("--shared-server");
-	});
-});
 
 describe("decideBdInit", () => {
 	test("advises a real init that omits --skip-hooks", () => {

@@ -36,19 +36,20 @@ You do not diagnose root causes, recommend changes, or patch files.
 
 ## Output
 
-Return:
+Begin your reply with:
 
 `METRICS-SUMMARIZER <node> verdict=PASS|WARN|BLOCK items=<N>`
 
-For non-pass, list up to 8 `item` lines:
+For every verdict, emit the requested digest as up to `top_k` `item` lines:
 
 - `file:line-range — metric-signature — count — representative-sample`
 
-Then include `next=RECHECK|ESCALATE`.
+For WARN or BLOCK, also list limitations (up to 8) and `next=RECHECK|ESCALATE`.
 
 - `PASS`: requested summary completed within the supplied bounds.
 - `WARN`: weak or ambiguous signal needs interpretation.
 - `BLOCK`: malformed data, parse failure, or required context was truncated.
 
-CAP 120 words clean, 220 words with findings.
+CAP 120 words clean, 220 words with limitations. If the cap prevents the requested
+digest, return WARN with the emitted item count and omitted coverage.
 MUST Never reprint source files, raw logs, or the caller's claim.

@@ -22,6 +22,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
+import { beadsDir } from "./session-beads-lifecycle.ts";
 
 /** Where beads records the backend it resolved. */
 export interface DoltMetadata {
@@ -64,12 +65,8 @@ export function classifyBackend(metadata: string, config: string): Backend {
 
 /** Read the backend of the repository rooted at `cwd`, without touching `bd`. */
 export async function readBackend(cwd: string): Promise<{ backend: Backend; tracked: boolean }> {
-	const beads = path.join(cwd, ".beads");
-	const tracked = await fs
-		.stat(beads)
-		.then(entry => entry.isDirectory())
-		.catch(() => false);
-	if (!tracked) return { backend: "unknown", tracked: false };
+	const beads = beadsDir(cwd);
+	if (beads === undefined) return { backend: "unknown", tracked: false };
 
 	const [metadata, config] = await Promise.all([
 		fs.readFile(path.join(beads, "metadata.json"), "utf8").catch(() => ""),
@@ -124,7 +121,9 @@ export function pidAlive(pid: number): boolean {
 
 /** The server pid this project recorded, when the value is usable. */
 async function serverPid(cwd: string): Promise<number | undefined> {
-	const raw = await fs.readFile(path.join(cwd, ".beads", "dolt-server.pid"), "utf8").catch(() => "");
+	const dir = beadsDir(cwd);
+	if (dir === undefined) return undefined;
+	const raw = await fs.readFile(path.join(dir, "dolt-server.pid"), "utf8").catch(() => "");
 	const pid = Number.parseInt(raw.trim(), 10);
 	return Number.isSafeInteger(pid) && pid > 0 ? pid : undefined;
 }
@@ -138,10 +137,13 @@ async function serverPid(cwd: string): Promise<number | undefined> {
  */
 async function stopServer(cwd: string): Promise<{ said: string; verdict: string }> {
 	const before = await serverPid(cwd);
-	const proc = Bun.spawn(["bd", "dolt", "stop"], { cwd, stdout: "pipe", stderr: "pipe" });
+	const proc = Bun.spawn(["bd", "dolt", "stop"], {
+		cwd, stdout: "pipe", stderr: "pipe", timeout: 1200, killSignal: "SIGKILL",
+	});
 	const [out, err] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text()]);
-	await proc.exited;
+	const code = await proc.exited;
 	const said = `${out}${err}`.trim();
+	if (code !== 0) return { said, verdict: `stop failed or timed out (exit ${code}); server state is unverified` };
 
 	if (before === undefined) return { said, verdict: "unverifiable: no pid recorded before the call" };
 	return { said, verdict: pidAlive(before) ? `still running: pid ${before} survived the stop` : `stopped: pid ${before} exited` };

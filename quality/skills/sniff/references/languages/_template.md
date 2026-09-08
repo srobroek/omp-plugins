@@ -22,7 +22,7 @@ in `../tooling.md` -- don't restate them, add only tool-specific detail.
 
 | Tool | Run recipe | Covers | Tier | Installed via |
 |------|-----------|--------|------|---------------|
-| <primary> | **exact command** + machine-readable flag + how the file set is passed; **config:** auto-uses project config / needs `--config` / no-config fallback; **exit:** 0 clean · N findings (parse) · usage/crash = INVALID (fix+re-run, never "clean"); any gotcha | <dimensions> | default-on | `install-tools.sh --install <bundle>` |
+| <primary> | **exact command** + machine-readable flag + how the file set is passed; **config:** auto-uses project config / needs `--config` / no-config fallback; **exit:** 0 clean · N findings (parse) · usage/crash = INVALID (fix+re-run, never "clean"); any gotcha | <dimensions> | default-on | `sniff_install_tools` with `{"mode":"install","bundles":["<bundle>"]}` |
 | <secondary> | … | <dimensions> | opt-in (reason) | … |
 
 - **Tier** is `default-on` (pre-selected in the Step-2 proposal) or `opt-in`

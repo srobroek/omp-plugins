@@ -1,5 +1,6 @@
+import { realpathSync } from "node:fs";
 import { homedir } from "node:os";
-import { isAbsolute, relative, resolve, sep } from "node:path";
+import { isAbsolute, relative, resolve } from "node:path";
 
 import type {
 	ExtensionAPI,
@@ -7,11 +8,10 @@ import type {
 	ExtensionToolResultEvent,
 } from "@oh-my-pi/pi-coding-agent";
 
-const EDIT_TOOLS: Record<string, true> = { edit: true, write: true };
+const EDIT_TOOLS = new Set(["edit", "write"]);
 const SUBPROCESS_TIMEOUT_MS = 2000;
 const REMINDER_MS = 10 * 60 * 1000;
 
-const SED_INPLACE = /(?:^|[;&|]|\n)\s*sed\s+(?:-[^\s]*i[^\s]*\s+|-[^\s]*\s+)*-i(?:[^\s]*)?(?:\s|$)/;
 
 type Cache = {
 	managed: Set<string> | null;
@@ -101,21 +101,60 @@ export function editedFiles(input: Record<string, unknown>): string[] {
 	return [];
 }
 
-export function sedInplacePaths(command: string): string[] {
-	if (!SED_INPLACE.test(command)) return [];
-	const tokens = command.split(/\s+/).filter(Boolean);
-	const out: string[] = [];
-	for (const t of tokens) {
-		if (t === "sed" || t.startsWith("-")) continue;
-		if (t.startsWith("/") || t.startsWith("~") || t.includes(sep)) out.push(t);
-	}
-	return out;
+/** Literal shell words only; no expansion or shell execution. */
+export function shellWords(command: string): string[] {
+	return (command.match(/(?:[^\s"';&|]+|'[^']*'|"[^"]*")+|[;&|]+|\n/g) ?? [])
+		.map((word) => word.replace(/'([^']*)'|"([^"]*)"/g, (_match, single, double) => single ?? double));
 }
 
-export function shouldInspect(abs: string, cwd: string): boolean {
-	if (!under(abs, homedir())) return false;
-	if (under(abs, cwd)) return false;
-	return true;
+export function sedInplacePaths(command: string): string[] {
+	const words = shellWords(command);
+	const paths: string[] = [];
+	let start = 0;
+	for (let i = 0; i <= words.length; i++) {
+		if (i < words.length && !/^[;&|\n]+$/.test(words[i]!)) continue;
+		paths.push(...sedWordPaths(words.slice(start, i)));
+		start = i + 1;
+	}
+	return paths;
+}
+
+function sedWordPaths(tokens: string[]): string[] {
+	let start = 0;
+	while (tokens[start] && (/^[A-Za-z_][A-Za-z0-9_]*=/.test(tokens[start]!) ||
+		["env", "command", "exec", "--"].includes(tokens[start]!))) start++;
+	if (!/(?:^|\/)sed$/.test(tokens[start] ?? "")) return [];
+	let inplace = false;
+	let script = false;
+	const paths: string[] = [];
+	for (let i = start + 1; i < tokens.length; i++) {
+		const token = tokens[i]!;
+		if (token === "--") {
+			paths.push(...tokens.slice(i + 1 + (script ? 0 : 1)));
+			break;
+		}
+		if (token === "-e" || token === "-f" || token === "--expression" || token === "--file") {
+			script = true;
+			i++;
+		} else if (/^--(?:expression|file)=/.test(token) || /^-[ef].+/.test(token)) {
+			script = true;
+		} else if (/^--in-place(?:=|$)/.test(token) || /^-[a-zA-Z]*i/.test(token)) {
+			inplace = true;
+			if (token === "-i" && tokens[i + 1] === "") i++;
+		} else if (!token.startsWith("-")) {
+			if (!script) script = true;
+			else paths.push(token);
+		}
+	}
+	return inplace ? paths : [];
+}
+
+function normalized(path: string): string {
+	try { return realpathSync(path); } catch { return path; }
+}
+
+export function shouldInspect(abs: string, _cwd: string): boolean {
+	return under(abs, homedir()) || under(normalized(abs), normalized(homedir()));
 }
 
 export function loadManaged(): Set<string> | null {
@@ -152,14 +191,21 @@ function refreshIfSourceEdit(abs: string): void {
 export function considerPath(abs: string, cwd: string): { block: true; reason: string } | undefined {
 	if (!shouldInspect(abs, cwd)) return;
 	const sourceDir = loadSourceDir();
-	if (sourceDir && under(abs, sourceDir)) {
+	if (sourceDir && under(normalized(abs), normalized(sourceDir))) {
 		refreshIfSourceEdit(abs);
 		return;
 	}
 	const managed = loadManaged();
 	if (!managed) return;
-	if (!managed.has(abs)) return;
-	const out = spawnChezmoi(["source-path", abs]);
+	const normalizedAbs = normalized(abs);
+	let target = managed.has(abs) ? abs : undefined;
+	if (!target) {
+		for (const path of managed) {
+			if (normalized(path) === normalizedAbs) { target = path; break; }
+		}
+	}
+	if (!target) return;
+	const out = spawnChezmoi(["source-path", target]);
 	const source = out?.trim() || `(run: chezmoi source-path ${abs})`;
 	return {
 		block: true,
@@ -193,8 +239,8 @@ export default function chezmoiGuard(pi: ExtensionAPI): void {
 		description: "Run chezmoi status and chezmoi diff; return both (read-only).",
 		parameters: z.object({}),
 		approval: "read",
-		execute: async () => {
-			const result = chezmoiStatusReport();
+		execute: async (_id, _params, _signal, _onUpdate, ctx) => {
+			const result = chezmoiStatusReport(ctx.cwd);
 			return {
 				content: [{ type: "text", text: result.text }],
 				details: { ok: result.ok },
@@ -202,15 +248,14 @@ export default function chezmoiGuard(pi: ExtensionAPI): void {
 		},
 	});
 
-	pi.on("tool_call", (event) => {
+	pi.on("tool_call", (event, ctx) => {
 		try {
-			const cwd =
-				typeof event.input.cwd === "string" && event.input.cwd
-					? event.input.cwd
-					: process.cwd();
+			const sessionCwd = ctx?.cwd || process.cwd();
+			const cwd = typeof event.input.cwd === "string" && event.input.cwd
+				? lexicalAbs(event.input.cwd, sessionCwd) : sessionCwd;
 			const paths: string[] = [];
 
-			if (EDIT_TOOLS[event.toolName]) {
+			if (EDIT_TOOLS.has(event.toolName)) {
 				paths.push(...editedFiles(event.input));
 			} else if (event.toolName === "bash") {
 				const command = typeof event.input.command === "string" ? event.input.command : "";
@@ -225,7 +270,7 @@ export default function chezmoiGuard(pi: ExtensionAPI): void {
 			for (const raw of paths) {
 				const abs = lexicalAbs(raw, cwd);
 				refreshIfSourceEdit(abs);
-				if (cache.sourceDir && under(abs, cache.sourceDir) && EDIT_TOOLS[event.toolName]) {
+				if (cache.sourceDir && under(abs, cache.sourceDir) && EDIT_TOOLS.has(event.toolName)) {
 					sourceHits.push(abs);
 				}
 				const decision = considerPath(abs, cwd);
@@ -239,7 +284,7 @@ export default function chezmoiGuard(pi: ExtensionAPI): void {
 
 	pi.on("tool_result", (event) => {
 		try {
-			if (!EDIT_TOOLS[event.toolName]) return;
+			if (!EDIT_TOOLS.has(event.toolName)) return;
 			const hits = pendingSourceEdits.get(event.toolCallId);
 			pendingSourceEdits.delete(event.toolCallId);
 			if (!hits?.length) return;
@@ -257,29 +302,25 @@ export default function chezmoiGuard(pi: ExtensionAPI): void {
 	});
 }
 
-export function chezmoiStatusReport(): { ok: boolean; text: string } {
-	const capture = (args: string[]): string | null => {
-		if (testSpawn) return testSpawn(args);
+export function chezmoiStatusReport(cwd = process.cwd()): { ok: boolean; text: string } {
+	const capture = (args: string[]): { ok: boolean; text: string } => {
+		if (testSpawn) {
+			const text = testSpawn(args);
+			return { ok: text !== null, text: text ?? `(chezmoi ${args[0]} failed)` };
+		}
 		try {
 			const proc = Bun.spawnSync(["chezmoi", ...args], {
-				stdout: "pipe",
-				stderr: "pipe",
-				timeout: SUBPROCESS_TIMEOUT_MS,
+				cwd, stdout: "pipe", stderr: "pipe", timeout: SUBPROCESS_TIMEOUT_MS,
 			});
-			const out = new TextDecoder().decode(proc.stdout);
-			const err = new TextDecoder().decode(proc.stderr);
-			if (proc.exitCode !== 0 && !out.trim() && !err.trim()) return null;
-			return [out, err].filter(Boolean).join("\n");
+			const text = [new TextDecoder().decode(proc.stdout), new TextDecoder().decode(proc.stderr)]
+				.filter(Boolean).join("\n");
+			return { ok: proc.exitCode === 0, text: proc.exitCode === 0 ? text : `chezmoi ${args[0]} failed (exit ${proc.exitCode})\n${text}` };
 		} catch {
-			return null;
+			return { ok: false, text: `chezmoi ${args[0]} unavailable or failed` };
 		}
 	};
 	const status = capture(["status"]);
 	const diff = capture(["diff"]);
-	if (status === null && diff === null) {
-		return { ok: false, text: "chezmoi not available or both commands failed" };
-	}
-	const parts = [status ?? "(chezmoi status failed)", "", diff ?? "(chezmoi diff failed)"];
-	return { ok: true, text: parts.join("\n") };
+	return { ok: status.ok && diff.ok, text: [status.text, "", diff.text].join("\n") };
 }
 

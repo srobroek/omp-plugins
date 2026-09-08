@@ -14,6 +14,7 @@ export type StepResult = {
 
 export type QualityReport = {
 	ok: boolean;
+	complete: boolean;
 	cwd: string;
 	mode: QualityMode;
 	steps: StepResult[];
@@ -37,8 +38,8 @@ function run(
 		});
 		return {
 			exitCode: proc.exitCode,
-			stdout: proc.stdout.toString(),
-			stderr: proc.stderr.toString(),
+			stdout: proc.stdout.toString().slice(0, 16_384),
+			stderr: proc.stderr.toString().slice(0, 16_384),
 		};
 	} catch (err) {
 		return {
@@ -87,7 +88,7 @@ export function runRustQuality(mode: QualityMode, cwd: string): QualityReport {
 			steps.push({ name: "cargo clippy", status: "skip", detail: "no Cargo.toml" });
 			steps.push({ name: "cargo test", status: "skip", detail: "no Cargo.toml" });
 		}
-		return { ok: true, cwd, mode, steps };
+		return { ok: false, complete: false, cwd, mode, steps };
 	}
 
 
@@ -99,7 +100,7 @@ export function runRustQuality(mode: QualityMode, cwd: string): QualityReport {
 			steps.push({ name: "cargo clippy", status: "skip", detail: "cargo not on PATH" });
 			steps.push({ name: "cargo test", status: "skip", detail: "cargo not on PATH" });
 		}
-		return { ok: true, cwd, mode, steps };
+		return { ok: false, complete: false, cwd, mode, steps };
 	}
 
 	if (mode === "fix") {
@@ -114,8 +115,9 @@ export function runRustQuality(mode: QualityMode, cwd: string): QualityReport {
 		record(steps, "cargo test", run(["cargo", "test"], cwd));
 	}
 
-	const ok = steps.every((s) => s.status !== "fail");
-	return { ok, cwd, mode, steps };
+	const complete = steps.length > 0 && steps.every((s) => s.status !== "skip");
+	const ok = complete && steps.every((s) => s.status === "pass");
+	return { ok, complete, cwd, mode, steps };
 }
 
 export default function rustQualityTool(pi: ExtensionAPI): void {
@@ -124,7 +126,7 @@ export default function rustQualityTool(pi: ExtensionAPI): void {
 		name: "rust_quality",
 		label: "Rust quality",
 		description:
-			"Run cargo fmt/clippy/test (check) or cargo fmt (fix). Missing cargo is skipped.",
+			"Run cargo fmt/clippy/test (check) or cargo fmt (fix). Missing projects or cargo produce incomplete, unsuccessful reports.",
 		parameters: z.object({
 			mode: z.enum(["check", "fix"]).describe("check: fmt --check, clippy -D warnings, test; fix: cargo fmt"),
 			path: z.string().optional().describe("Project cwd; defaults to session cwd"),

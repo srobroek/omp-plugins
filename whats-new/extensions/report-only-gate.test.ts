@@ -70,6 +70,9 @@ describe("isDependencyFile", () => {
 			"bun.lockb",
 			"poetry.lock",
 			"yarn.lock",
+			"package-lock.json",
+			"npm-shrinkwrap.json",
+			"apps/web/pnpm-lock.yaml",
 		]) {
 			expect(isDependencyFile(path)).toBe(true);
 		}
@@ -99,6 +102,15 @@ describe("decideToolCall while unarmed", () => {
 });
 
 describe("decideToolCall while armed", () => {
+	test("blocks direct apply until deliberate handoff and blocks mixed-path lockfile edits", () => {
+		const state = armed();
+		expect(decideToolCall(state, "dep_apply", { ecosystem: "npm", name: "x", version: "1.0.0" })?.block).toBe(true);
+		expect(decideToolCall(state, "edit", { paths: ["report.md", "web/pnpm-lock.yaml"] })?.block).toBe(true);
+		expect(decideToolCall(state, "write", { path: "constructor" })).toBeUndefined();
+		expect(decideToolCall(state, "constructor", { path: "package.json" })).toBeUndefined();
+		decideToolCall(state, "read", { path: "skill://dep-update" });
+		expect(decideToolCall(state, "dep_apply", {})).toBeUndefined();
+	});
 	test("blocks manifest and lockfile writes", () => {
 		expect(decideToolCall(armed(), "write", { path: "package.json" })).toEqual({
 			block: true,

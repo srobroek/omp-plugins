@@ -1,4 +1,5 @@
 import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
+import { envelopeData, parseTrailingJson } from "./session-beads-lifecycle.ts";
 
 const TIMEOUT_MS = 120_000;
 
@@ -28,6 +29,7 @@ export function runBd(cmd: string[], cwd?: string): SpawnResult {
 			stdout: "pipe",
 			stderr: "pipe",
 			timeout: TIMEOUT_MS,
+			killSignal: "SIGKILL",
 		});
 		return {
 			ok: proc.exitCode === 0,
@@ -106,32 +108,31 @@ export type MolShow = {
 };
 
 export function deepAssertFromMol(mol: MolShow): string[] {
+	if (!mol || typeof mol !== "object") return ["mol show returned malformed data"];
 	const issues = mol.issues;
 	if (!Array.isArray(issues) || issues.length === 0) {
 		return ["mol show returned no `issues` array; cannot verify the anchor rule"];
 	}
-	const deps = Array.isArray(mol.dependencies) ? mol.dependencies : [];
-	const blocked = new Set<string>();
-	for (const edge of deps) {
-		if (edge && typeof edge === "object" && "issue_id" in edge) {
-			const id = (edge as { issue_id?: unknown }).issue_id;
-			if (typeof id === "string" && id) blocked.add(id);
-		}
-	}
-	const titles: Record<string, string> = {};
+	if (!Array.isArray(mol.dependencies)) return ["mol show returned no `dependencies` array"];
+	const titles = new Map<string, string>();
 	for (const issue of issues) {
-		if (!issue || typeof issue !== "object") continue;
-		const rec = issue as { id?: unknown; title?: unknown };
-		if (typeof rec.id === "string") {
-			titles[rec.id] = typeof rec.title === "string" ? rec.title : rec.id;
-		}
+		if (!issue || typeof issue !== "object" || typeof issue.id !== "string" || !issue.id ||
+			titles.has(issue.id)) return ["mol show returned malformed or duplicate issues"];
+		titles.set(issue.id, typeof issue.title === "string" ? issue.title : issue.id);
 	}
-	const zeroDep = Object.keys(titles)
+	const blocked = new Set<string>();
+	for (const edge of mol.dependencies) {
+		if (!edge || typeof edge !== "object" || typeof edge.issue_id !== "string" ||
+			typeof edge.depends_on_id !== "string" || !titles.has(edge.issue_id) ||
+			!titles.has(edge.depends_on_id)) return ["mol show returned malformed dependencies"];
+		blocked.add(edge.issue_id);
+	}
+	const zeroDep = [...titles.keys()]
 		.filter((id) => !blocked.has(id))
-		.map((id) => titles[id]);
-	if (zeroDep.length > 1) {
+		.map((id) => titles.get(id));
+	if (zeroDep.length !== 1) {
 		return [
-			`${zeroDep.length} steps have no dependency, so more than one entry point exists — a join whose optional predecessors were all filtered lost its sequencing (anchor rule): ${JSON.stringify(zeroDep)}`,
+			`${zeroDep.length} steps have no dependency; expected exactly one entry point (more than one entry point or a cycle violates the anchor rule): ${JSON.stringify(zeroDep)}`,
 		];
 	}
 	return [];
@@ -139,27 +140,18 @@ export function deepAssertFromMol(mol: MolShow): string[] {
 
 export function deepAssert(formula: string, varargs: string[], workspace?: string): string[] {
 	const poured = runBd(["mol", "pour", formula, ...varargs], workspace);
-	if (poured.error) return [`real pour failed to spawn: ${poured.error}`];
-	if (!poured.ok) {
-		const out = [poured.stdout, poured.stderr].filter(Boolean).join("\n").trim();
-		return [`real pour failed: ${out}`];
-	}
 	const combined = [poured.stdout, poured.stderr].join("\n");
-	const m = combined.match(/Root issue: (\S+)/);
-	if (!m) return ["could not find the poured root id"];
-	const root = m[1];
+	const root = combined.match(/Root issue: (\S+)/)?.[1];
+	const recovery = root
+		? `Created root ${root} remains in ${workspace ?? "the current workspace"}; inspect with bd mol show ${root}. No cleanup was attempted.`
+		: "Pour may have created state, but no root id was recovered. Inspect the workspace before retrying; no cleanup was attempted.";
+	if (poured.error || !poured.ok) return [`real pour failed: ${poured.error ?? combined}\n${recovery}`];
+	if (!root) return [recovery];
 	const shown = runBd(["mol", "show", root, "--json"], workspace);
-	if (shown.error) return [`mol show failed to spawn: ${shown.error}`];
-	if (!shown.ok) {
-		const out = [shown.stdout, shown.stderr].filter(Boolean).join("\n").trim();
-		return [`mol show failed: ${out}`];
-	}
-	try {
-		const mol = JSON.parse(shown.stdout) as MolShow;
-		return deepAssertFromMol(mol);
-	} catch {
-		return ["mol show did not return JSON"];
-	}
+	if (shown.error || !shown.ok) return [`mol show failed: ${shown.error ?? [shown.stdout, shown.stderr].join("\n")}\n${recovery}`];
+	const mol = envelopeData(parseTrailingJson(shown.stdout));
+	const failures = deepAssertFromMol(mol as MolShow);
+	return failures.map(failure => `${failure}\n${recovery}`);
 }
 
 export function assertFormula(params: FormulaCheckParams): {
@@ -191,6 +183,7 @@ export function assertFormula(params: FormulaCheckParams): {
 	const listing = [dry.stdout, dry.stderr].join("\n");
 	const parsed = parseDryRun(listing);
 	const body = bodySteps(parsed.steps);
+	if (body.length === 0) failures.push("pour --dry-run returned no recognized body steps; cannot verify this formula");
 	const lines: string[] = [
 		`selection: ${(params.varargs ?? []).join(" ") || "(defaults)"}`,
 		`  steps poured: ${body.length}   gates: ${parsed.gates.length}`,
@@ -203,7 +196,7 @@ export function assertFormula(params: FormulaCheckParams): {
 	}
 	failures.push(...gateTypeFailures(parsed.gates));
 	failures.push(...unsubstitutedFailures(listing));
-	if (params.deep) {
+	if (params.deep && failures.length === 0) {
 		failures.push(...deepAssert(params.formula, varargs, cwd));
 	}
 	for (const f of failures) lines.push(`FAIL ${f}`);

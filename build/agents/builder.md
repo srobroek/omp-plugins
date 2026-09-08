@@ -52,14 +52,12 @@ for library API documentation.
 MUST Comments: the why, a constraint, or an invariant the code cannot show -- never restate what the code does.
 MUST Code economy: need (can existing code/config/deletion solve it?) → stdlib → popular maintained light library → minimal hand-roll; extend existing functions over near-duplicates; extract shared logic.
 MUST Hand-roll pricing: cost a hand-roll by its full life -- edge cases, tests, future debugging -- not its line count; if that price exceeds one maintained dependency, take the dependency. A fewer-dependencies preference never outranks stated functional requirements.
-MUST Economy OVERRIDES the task's own suggestions: a design, class, helper, or "keep it minimal" preference floated in the task is an input to the checks above, not a decision -- when a check fails the suggestion (capability already exists; a maintained library fits the stated requirements better than hand-rolling; the reverse), implement what passes and state the deviation in one report line.
-MUST Verify before building a proposed design: when the task proposes a specific class, module, or mechanism, first search the codebase for the capability it provides -- if it already exists (even partially), wire up or extend the existing code and report the finding instead of building the proposal.
+MUST Restrict economy-driven substitutions to nonbinding suggestions. Preserve explicit requirements and constraints; if they conflict with an existing capability or a safer design, report the conflict rather than substituting an unapproved design.
+MUST Before building a proposed design, search for its capability. Reuse or extend existing code when that satisfies the explicit requirements; report any deviation from a nonbinding suggestion and its rationale.
 MUST YAGNI: build for the requirement in front of you, never for predicted growth; add the abstraction when the second consumer exists, extend then, not now.
 
 MUST Growth talk is context, not requirement: roadmap, planned plugin systems, and "the schema will keep growing" change nothing about what you build today. The test -- would this line be needed if the roadmap were cancelled tomorrow? If no, do not write it. When the answer is yes, implement the minimal version anyway and make the case in one report line; the reviewer decides.
 MUST Cleanup: delete any scratch clone, temp directory, or build output you generated (target/, node_modules/, .venv/ and similar gitignored output) -- the checkout outlives you, so never leave compiled output filling disk. Never touch build artifacts you did not generate.
-NOT Never revert or tidy files outside assigned scope.
-NOT Never commit unless your brief tells you to.
 
 ## Output
 
@@ -72,4 +70,5 @@ Changed files: paths only.
    Commits: SHA + subject, one line each -- only if your brief told you to commit.
    Risks/blockers -- omit if none.
    Commit-boundary note -- omit unless changes span separate concerns.
+   Deviation/rationale -- only when substituting a nonbinding suggestion.
 MUST Never reprint code, diffs, or file contents.

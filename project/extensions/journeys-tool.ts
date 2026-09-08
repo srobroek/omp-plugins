@@ -1,5 +1,5 @@
-import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, unlinkSync, writeFileSync, copyFileSync } from "node:fs";
-import { join, basename } from "node:path";
+import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, lstatSync, unlinkSync, writeFileSync, copyFileSync } from "node:fs";
+import { join, basename, isAbsolute, parse, sep } from "node:path";
 
 import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
 
@@ -40,6 +40,36 @@ export function parseFrontmatter(text: string): Frontmatter {
 		}
 	}
 	return {};
+}
+
+function safePath(path: string): void {
+	const absolute = isAbsolute(path) ? path : `${process.cwd()}/${path}`;
+	let current = parse(absolute).root;
+	for (const part of absolute.slice(current.length).split(sep === "\\" ? /[\\/]/ : "/").filter(Boolean)) {
+		current = join(current, part);
+		if (lstatSync(current, { throwIfNoEntry: false })?.isSymbolicLink()) {
+			throw new Error(`unsafe symlink: ${current}`);
+		}
+	}
+}
+
+function safeJourneyPaths(root: string): void {
+	safePath(root);
+	safePath(join(root, "INDEX.md"));
+	safePath(join(root, "TRACKER.md"));
+	for (const name of readdirSync(root)) {
+		const dir = join(root, name);
+		safePath(dir);
+		if (!lstatSync(dir).isDirectory()) continue;
+		safePath(join(dir, "journey.md"));
+		const runs = join(dir, "runs");
+		safePath(runs);
+		if (!existsSync(runs)) continue;
+		for (const run of readdirSync(runs).filter((n) => n.endsWith(".md"))) {
+			safePath(join(runs, run));
+			if (!lstatSync(join(runs, run)).isFile()) throw new Error(`not a run file: ${run}`);
+		}
+	}
 }
 
 export function journeyDirs(root: string): string[] {
@@ -87,6 +117,7 @@ export function openFindings(root: string): Record<string, number> {
 }
 
 export function cmdIndex(root: string): { ok: boolean; text: string; count: number } {
+	safeJourneyPaths(root);
 	const findings = openFindings(root);
 	const rows: string[] = [];
 	for (const jdir of journeyDirs(root)) {
@@ -207,6 +238,7 @@ export function lintJourney(jdir: string, errors: string[], seenIds: Record<stri
 }
 
 export function cmdLint(root: string): { ok: boolean; text: string; errors: string[] } {
+	safeJourneyPaths(root);
 	const errors: string[] = [];
 	const seen: Record<string, string> = {};
 	const dirs = journeyDirs(root);
@@ -214,7 +246,7 @@ export function cmdLint(root: string): { ok: boolean; text: string; errors: stri
 	if (!dirs.length) lines.push(`no journeys found under ${root}`);
 	for (const jdir of dirs) lintJourney(jdir, errors, seen);
 	for (const err of errors) lines.push(`ERROR ${err}`);
-	lines.push(`lint: ${dirs.length} journeys, ${errors.length} errors`);
+	lines.push(`structural lint: ${dirs.length} journeys, ${errors.length} errors; semantic readiness not assessed`);
 	return { ok: errors.length === 0, text: lines.join("\n"), errors };
 }
 
@@ -222,9 +254,19 @@ export function cmdPrune(
 	root: string,
 	keep: number,
 	yes: boolean,
+	journey?: string,
 ): { ok: boolean; text: string; doomed: string[] } {
+	if (!Number.isSafeInteger(keep) || keep < 0) {
+		return { ok: false, text: "keep must be a finite nonnegative safe integer", doomed: [] };
+	}
+	safeJourneyPaths(root);
 	const doomed: string[] = [];
-	for (const jdir of journeyDirs(root)) {
+	const dirs = journeyDirs(root);
+	const selected = journey === undefined ? dirs : dirs.filter((dir) => basename(dir) === journey);
+	if (journey !== undefined && selected.length !== 1) {
+		return { ok: false, text: `unknown journey directory: ${journey}`, doomed: [] };
+	}
+	for (const jdir of selected) {
 		const runsDir = join(jdir, "runs");
 		if (!existsSync(runsDir)) continue;
 		const runs = readdirSync(runsDir)
@@ -249,20 +291,26 @@ export type JourneysIndexParams = {
 	journeysDir: string;
 	keep?: number;
 	yes?: boolean;
+	journey?: string;
 };
 
 export function runJourneys(params: JourneysIndexParams): { ok: boolean; text: string } {
 	const root = params.journeysDir;
 	try {
+		safePath(root);
 		if (!existsSync(root) || !statSync(root).isDirectory()) {
 			return { ok: false, text: `not a directory: ${root}` };
 		}
 	} catch {
 		return { ok: false, text: `not a directory: ${root}` };
 	}
-	if (params.command === "index") return cmdIndex(root);
-	if (params.command === "lint") return cmdLint(root);
-	return cmdPrune(root, params.keep ?? 20, Boolean(params.yes));
+	try {
+		if (params.command === "index") return cmdIndex(root);
+		if (params.command === "lint") return cmdLint(root);
+		return cmdPrune(root, params.keep ?? 20, Boolean(params.yes), params.journey);
+	} catch (err) {
+		return { ok: false, text: `ERROR ${err instanceof Error ? err.message : String(err)}` };
+	}
 }
 
 const FORMULAS_DIR = new URL("../skills/journey-verify/formulas/", import.meta.url).pathname;
@@ -280,9 +328,16 @@ export function installFormulas(
 	force = false,
 	sourcesDir = FORMULAS_DIR,
 ): { ok: boolean; text: string; copied?: number; unchanged?: number } {
+	try {
+		safePath(repoRoot);
+		safePath(sourcesDir);
+		safePath(join(repoRoot, ".beads", "formulas"));
+	} catch (err) {
+		return { ok: false, text: `ERROR ${err instanceof Error ? err.message : String(err)}` };
+	}
 	const beadsDir = join(repoRoot, ".beads");
 	try {
-		if (!existsSync(beadsDir) || !statSync(beadsDir).isDirectory() || statSync(beadsDir).isSymbolicLink()) {
+		if (!existsSync(beadsDir) || !lstatSync(beadsDir).isDirectory()) {
 			return { ok: false, text: `ERROR not a Beads workspace: ${repoRoot}` };
 		}
 	} catch {
@@ -290,9 +345,17 @@ export function installFormulas(
 	}
 	const destinationDir = join(beadsDir, "formulas");
 	if (existsSync(destinationDir)) {
-		const st = statSync(destinationDir);
+		const st = lstatSync(destinationDir);
 		if (st.isSymbolicLink() || !st.isDirectory()) {
 			return { ok: false, text: `ERROR unsafe formula destination: ${destinationDir}` };
+		}
+	}
+	const required = ["journey-step-agentic-verification", "journey-step-human-verification"];
+	for (const name of required) {
+		const source = join(sourcesDir, `${name}.formula.toml`);
+		const st = lstatSync(source, { throwIfNoEntry: false });
+		if (!st?.isFile() || st.isSymbolicLink()) {
+			return { ok: false, text: `ERROR required formula missing or unsafe: ${source}` };
 		}
 	}
 	const sources = formulaSources(sourcesDir);
@@ -303,9 +366,13 @@ export function installFormulas(
 	const unsafe: string[] = [];
 	const conflicts: string[] = [];
 	for (const source of sources) {
+		const sourceStat = lstatSync(source);
+		if (!sourceStat.isFile() || sourceStat.isSymbolicLink()) {
+			return { ok: false, text: `ERROR unsafe formula source: ${source}` };
+		}
 		const destination = join(destinationDir, basename(source));
-		if (existsSync(destination)) {
-			const st = statSync(destination);
+		const st = lstatSync(destination, { throwIfNoEntry: false });
+		if (st) {
 			if (st.isSymbolicLink() || !st.isFile()) {
 				unsafe.push(destination);
 			} else if (readFileSync(destination).equals(readFileSync(source))) {
@@ -345,12 +412,13 @@ export default function journeysTool(pi: ExtensionAPI): void {
 		name: "journeys_index",
 		label: "Journey index/lint/prune",
 		description:
-			"Index, lint, or prune a user-journeys directory. The repo-copied journeys.py remains the in-repo helper; this tool is the native in-harness equivalent.",
+			"Index, structurally lint (not semantic readiness), or prune a user-journeys directory. The repo-copied journeys.py provides the same checks.",
 		parameters: z.object({
 			command: z.enum(["index", "lint", "prune"]),
 			journeysDir: z.string().describe("Path to the journeys directory"),
-			keep: z.number().optional().describe("prune: keep newest N runs (default 20)"),
+			keep: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER).optional().describe("prune: keep newest N runs (default 20)"),
 			yes: z.boolean().optional().describe("prune: actually delete (default dry-run)"),
+			journey: z.string().min(1).optional().describe("prune: selected journey directory name; omit only for an explicitly authorized directory-wide prune"),
 		}),
 		approval: (toolCall) => {
 			const cmd = (toolCall.input as JourneysIndexParams | undefined)?.command;

@@ -1,6 +1,6 @@
 # eli5
 
-Explain a topic at five depth levels from metaphor to frontier.
+Explain directly at the requested depth, from a concise ELI5 to five levels spanning metaphor through frontier.
 
 ## Skills
 
@@ -8,11 +8,3 @@ Explain a topic at five depth levels from metaphor to frontier.
 |------|------|
 | `eli5` | "ELI5", "explain X", "what is X", "how does X work" |
 
-## Rules
-
-| Name | When |
-|------|------|
-
-## Agents
-
-None.

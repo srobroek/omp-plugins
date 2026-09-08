@@ -20,13 +20,18 @@ Author and audit agentic assets (skills, rules, agents).
 
 ## Extensions
 
-- `agentic-lint-reminder` — after a `write`, `edit`, or `ast_edit` lands on a
+- `agentic-lint-reminder`: after a `write`, `edit`, or `ast_edit` lands on a
   `SKILL.md`, `rules/*.md`, or `agents/*.md` file, prepends one reminder to lint it
-  with `agentic_lint`. Once per file per session. Vendored trees and the
-  marketplace or cache copies under `~/.omp/agent` are skipped.
+  with `agentic_lint`. Once per file per session. The reminder skips vendored trees
+  and the marketplace or cache copies under `~/.omp/agent`.
 
 ## Tools
 
 Registered by this plugin's extension modules:
 
 - `agentic_lint`
+
+Repository CI runs `bun scripts/check-agentic-metadata.ts` over every shipped
+rule, agent, and skill. It reports coverage and rejects malformed YAML, invalid
+required metadata, and invalid rule triggers using the authoring validator.
+Prose-style findings remain part of `agentic_lint`, not this metadata gate.

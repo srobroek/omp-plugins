@@ -12,6 +12,7 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
+from tempfile import TemporaryDirectory
 
 REPO = Path(__file__).resolve().parent.parent
 DESIGN = REPO / "design"
@@ -125,31 +126,54 @@ check("README documents every formula", not undocumented, f"missing={undocumente
 undocumented_skills = [s for s in sorted(shipped) if f"`{s}`" not in readme]
 check("README documents every skill", not undocumented_skills, f"missing={undocumented_skills}")
 
-# 8. The catalog still builds when the third-party file is absent.
-third_party = REPO / "scripts" / "third-party-plugins.json"
-backup = third_party.with_suffix(".json.probe-backup")
-if third_party.is_file():
-    shutil.move(str(third_party), str(backup))
-    try:
-        result = subprocess.run(
-            [sys.executable, "scripts/build-catalog.py"], cwd=REPO, capture_output=True, text=True
-        )
-        local_only = json.loads((REPO / ".omp-plugin" / "marketplace.json").read_text(encoding="utf-8"))
-        only_local = all(isinstance(p["source"], str) for p in local_only["plugins"])
-        check(
-            "catalog builds with no third-party file",
-            result.returncode == 0 and only_local,
-            result.stdout.strip() or result.stderr.strip(),
-        )
-    finally:
-        shutil.move(str(backup), str(third_party))
-        subprocess.run([sys.executable, "scripts/build-catalog.py"], cwd=REPO, capture_output=True, text=True)
-    restored = json.loads((REPO / ".omp-plugin" / "marketplace.json").read_text(encoding="utf-8"))
-    check(
-        "catalog restored with third-party entries",
-        any(not isinstance(p["source"], str) for p in restored["plugins"]),
-        f"{len(restored['plugins'])} entries",
-    )
+# 8. Probe both catalog input modes without touching the checkout.
+with TemporaryDirectory(prefix="omp-catalog-probe-") as temporary:
+    probe = Path(temporary)
+    (probe / "scripts").mkdir()
+    for script in ("build-catalog.py", "sync-plugin-manifests.py"):
+        shutil.copy2(REPO / "scripts" / script, probe / "scripts" / script)
+    for manifest in REPO.glob("*/.omp-plugin/plugin.json"):
+        target = probe / manifest.relative_to(REPO)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(manifest, target)
+    third_party = REPO / "scripts" / "third-party-plugins.json"
+    for include_third_party in (False, True):
+        if include_third_party:
+            if not third_party.is_file():
+                continue
+            shutil.copy2(third_party, probe / "scripts" / third_party.name)
+        label = f"catalog builds {'with' if include_third_party else 'without'} third-party entries"
+        output = probe / ".omp-plugin" / "marketplace.json"
+        output.unlink(missing_ok=True)
+        try:
+            result = subprocess.run(
+                [sys.executable, "scripts/build-catalog.py"],
+                cwd=probe, capture_output=True, text=True, timeout=60,
+            )
+            if result.returncode != 0:
+                check(label, False, f"exit {result.returncode}: {result.stderr.strip() or result.stdout.strip()}")
+                continue
+            generated = json.loads(output.read_text(encoding="utf-8"))
+            plugins = generated["plugins"]
+            if not isinstance(plugins, list):
+                raise ValueError("plugins must be a list")
+            if include_third_party:
+                expected = json.loads(third_party.read_text(encoding="utf-8"))["plugins"]
+                actual = {p["name"] for p in plugins if not isinstance(p["source"], str)}
+                ok = actual == {p["name"] for p in expected}
+            else:
+                expected_local = {
+                    json.loads(p.read_text(encoding="utf-8"))["name"]
+                    for p in probe.glob("*/.omp-plugin/plugin.json")
+                    if json.loads(p.read_text(encoding="utf-8")).get("publish") is not False
+                }
+                ok = (
+                    all(isinstance(p["source"], str) for p in plugins)
+                    and {p["name"] for p in plugins} == expected_local
+                )
+            check(label, ok, f"{len(plugins)} entries")
+        except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError) as err:
+            check(label, False, str(err))
 
 # 9. Report wrapper sizes rather than asserting a target, so the number is visible.
 for skill_md in sorted(DESIGN.glob("skills/*/SKILL.md")):

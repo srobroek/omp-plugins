@@ -1021,6 +1021,10 @@ class Detector {
       if (!data2)
         continue;
       const pkgs = data2.package;
+      if (!Array.isArray(pkgs)) {
+        this.note(`detect: ${lock} has no package array; trying declarations`);
+        continue;
+      }
       if (Array.isArray(pkgs)) {
         for (const entry of pkgs) {
           if (!entry || typeof entry !== "object")
@@ -1055,7 +1059,7 @@ class Detector {
     if (!project || typeof project !== "object")
       return;
     const p = project;
-    for (const req of p.dependencies || []) {
+    for (const req of Array.isArray(p.dependencies) ? p.dependencies : []) {
       if (typeof req === "string") {
         const [name, version] = parseRequirement(req);
         this.emit("pypi", name, version);
@@ -1064,7 +1068,7 @@ class Detector {
     const extras = p["optional-dependencies"];
     if (extras && typeof extras === "object") {
       for (const reqs of Object.values(extras)) {
-        for (const req of reqs || []) {
+        for (const req of Array.isArray(reqs) ? reqs : []) {
           if (typeof req === "string") {
             const [name, version] = parseRequirement(req);
             this.emit("pypi", name, version);
@@ -1077,7 +1081,7 @@ class Detector {
     if (!groups || typeof groups !== "object")
       return;
     for (const reqs of Object.values(groups)) {
-      for (const req of reqs || []) {
+      for (const req of Array.isArray(reqs) ? reqs : []) {
         if (typeof req === "string") {
           const [name, version] = parseRequirement(req);
           this.emit("pypi", name, version);
@@ -1192,6 +1196,7 @@ async function detectProject(target) {
   const detector = new Detector(target);
   await detector.scanAll();
   const notes = [...detector.notes];
+  notes.push("Coverage: root declarations only, except uv.lock/poetry.lock. Unscanned: Node lockfiles, Cargo.lock, go.sum, Pipfile.lock, Ruby/PHP lockfiles, workspace children.");
   notes.push("");
   notes.push(`detect: ${detector.rows.length} dependency declaration(s) found in ${target}`);
   if (detector.rows.length === 0) {

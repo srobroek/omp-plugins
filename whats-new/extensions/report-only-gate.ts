@@ -4,11 +4,10 @@ const EDIT_TOOLS: Record<string, true> = { edit: true, write: true };
 
 /** Dependency manifests. Lowercased basenames; macOS filesystems fold case. */
 const MANIFESTS: Record<string, true> = {
-	"package.json": true,
-	"cargo.toml": true,
-	"pyproject.toml": true,
-	"go.mod": true,
-	"go.sum": true,
+	"package.json": true, "cargo.toml": true, "pyproject.toml": true,
+	"go.mod": true, "go.sum": true, "requirements.txt": true,
+	"composer.json": true, "gemfile": true, "pipfile": true,
+	"package-lock.json": true, "npm-shrinkwrap.json": true, "pnpm-lock.yaml": true,
 };
 
 /** Any `*.lock` (uv, Cargo, poetry, yarn) plus bun's `bun.lock`/`bun.lockb`. */
@@ -26,7 +25,7 @@ export const DENY_REASON =
 	"between two versions and changes nothing itself. Do not edit dependency manifests or lockfiles and do not " +
 	"run installers or upgrade commands while researching -- the finding belongs in the report. If the user " +
 	"actually wants the upgrade applied, that is dep-update's job: read `skill://dep-update` and run its " +
-	"dep_scan/dep_apply confirm loop (reading it releases this gate).";
+	"dep_scan/dep_apply confirm loop (reading it releases this gate, not the per-bump approval).";
 
 /** Armed for the rest of the session once the skill is loaded. */
 export interface GateState {
@@ -70,7 +69,7 @@ export function disarmsGate(raw: string): boolean {
 export function isDependencyFile(raw: string): boolean {
 	const path = raw.replaceAll("\\", "/").trim();
 	const name = path.slice(path.lastIndexOf("/") + 1).toLowerCase();
-	return MANIFESTS[name] === true || LOCKFILE.test(name);
+	return Object.hasOwn(MANIFESTS, name) || LOCKFILE.test(name);
 }
 
 export function decideToolCall(
@@ -86,7 +85,8 @@ export function decideToolCall(
 		return;
 	}
 	if (!state.armed) return;
-	if (EDIT_TOOLS[toolName]) {
+	if (toolName === "dep_apply") return { block: true, reason: DENY_REASON };
+	if (Object.hasOwn(EDIT_TOOLS, toolName)) {
 		if (targetPaths(input).some(isDependencyFile)) return { block: true, reason: DENY_REASON };
 		return;
 	}

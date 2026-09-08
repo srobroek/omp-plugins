@@ -1,4 +1,4 @@
-import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { existsSync, lstatSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
 
@@ -16,9 +16,9 @@ export type Triple = [string, string, string];
 
 const HEDGES = new RegExp(
 	String.raw`\b(when (practical|appropriate|possible|needed|available)|consider|` +
-		String.raw`generally|usually|normally|if necessary|as needed|try to|ideally|` +
-		String.raw`where possible|genuinely|materially|substantial(ly)?|reasonabl[ye]|` +
-		String.raw`clearly|obvious(ly)?|large enough|significant(ly)?)\b`,
+	String.raw`generally|usually|normally|if necessary|as needed|try to|ideally|` +
+	String.raw`where possible|genuinely|materially|substantial(ly)?|reasonabl[ye]|` +
+	String.raw`clearly|obvious(ly)?|large enough|significant(ly)?)\b`,
 	"i",
 );
 const MODEL_NAMES = /\b(opus|sonnet|haiku|fable|gpt-\d)\b/i;
@@ -28,11 +28,11 @@ const CAPS_ENUM = /\b[A-Z][A-Z-]{2,}(\|[A-Z][A-Z-]{2,})+\b/;
 const OVER_CONSTRAINED_THRESHOLD = 15;
 const TRIGGER_PATTERN = new RegExp(
 	String.raw`\b(?:should\s+be\s+)?used?\s+(?:this\s+skill\s+)?(?:immediately\s+)?` +
-		String.raw`(?:when|after|before|whenever|for|to)\b` +
-		String.raw`|\buse\s+proactively\b` +
-		String.raw`|\btrigger(?:s)?\s+(?:when|on)\b` +
-		String.raw`|\bauto[-\s]?loads?\s+(?:when|on)\b` +
-		String.raw`|\binvoke\b`,
+	String.raw`(?:when|after|before|whenever|for|to)\b` +
+	String.raw`|\buse\s+proactively\b` +
+	String.raw`|\btrigger(?:s)?\s+(?:when|on)\b` +
+	String.raw`|\bauto[-\s]?loads?\s+(?:when|on)\b` +
+	String.raw`|\binvoke\b`,
 	"i",
 );
 const BLOATED_LINE_THRESHOLD = 800;
@@ -49,7 +49,7 @@ export function words(s: string): number {
 }
 
 export function blankCodeSpans(text: string): string {
-	const out = [...text];
+	const out = text.split("");
 	const blank = (start: number, end: number): void => {
 		const stop = Math.min(end, out.length);
 		for (let i = start; i < stop; i++) {
@@ -73,17 +73,19 @@ export function detectKind(path: string): string {
 	if (n.startsWith("template-")) return "template";
 	if (n === "SKILL.md") return "skill";
 	if (n.endsWith(".agent.md") || basename(dirname(path)) === "agents") return "agent";
+	if (basename(dirname(path)) === "rules" || n === "RULES.md") return "rule";
 	if (n.endsWith(".instructions.md")) return "pointer";
 	if (n.endsWith(".context.md")) return "context";
 	return "unknown";
 }
 
 function splitOnceTripleDash(text: string): string[] {
-	const first = text.indexOf("---");
-	if (first !== 0) return [text];
-	const second = text.indexOf("---", 3);
-	if (second < 0) return [text];
-	return [text.slice(0, first), text.slice(first + 3, second), text.slice(second + 3)];
+	const opening = /^---[ \t]*\r?\n/.exec(text);
+	if (!opening) return [text];
+	const rest = text.slice(opening[0].length);
+	const closing = /^---[ \t]*(?=\r?\n|$)/m.exec(rest);
+	if (!closing) return [text];
+	return ["", rest.slice(0, closing.index), rest.slice(closing.index + closing[0].length)];
 }
 
 export function splitFrontmatter(text: string): [Record<string, string>, string] {
@@ -104,25 +106,12 @@ export function splitFrontmatter(text: string): [Record<string, string>, string]
 	return [fm, parts[2] ?? ""];
 }
 
-/**
- * Frontmatter that only parses after lenient repair.
- *
- * omp tries strict YAML, and on failure retries with `quoteAmbiguousPlainScalars`
- * before giving up on a `key: value` line matcher. Measured: a description holding
- * an unquoted `": "` fails strict parse, and the repair pass recovers the whole
- * document -- a block-sequence `condition` beside it still arrives intact. So omp
- * itself is unharmed, and this is NOT an error.
- *
- * What does break is every strict consumer. Vale rejects its compiled rule and
- * lints NOTHING, which slopvac reports as UNCHECKED, so prose gates silently pass
- * on a file nobody checked. A loader passing `repair: false` reads an empty value
- * for the same key.
- */
+/** Strict consumers must not silently drop malformed frontmatter. */
 export function frontmatterDefects(text: string): Triple[] {
-	if (!text.startsWith("---")) return [];
+	if (!/^---[ \t]*(?:\r?\n|$)/.test(text)) return [];
 	const parts = splitOnceTripleDash(text);
 	const block = parts[1];
-	if (parts.length < 3 || block === undefined) return [];
+	if (parts.length < 3 || block === undefined) return [["ERROR", "E13", "unclosed frontmatter"]];
 
 	try {
 		Bun.YAML.parse(block);
@@ -131,9 +120,9 @@ export function frontmatterDefects(text: string): Triple[] {
 		const reason = (error instanceof Error ? error.message : String(error)).split("\n")[0];
 		return [
 			[
-				"WARN",
-				"W13",
-				`frontmatter needs lenient repair to parse (${reason}) — omp recovers it, but strict consumers do not: vale lints nothing and slopvac reports UNCHECKED. Quote the value.`,
+				"ERROR",
+				"E13",
+				`invalid frontmatter (${reason})`,
 			],
 		];
 	}
@@ -238,6 +227,49 @@ export function lint(path: string): Triple[] {
 
 	// Applies to every kind, rules included: a dropped condition breaks any of them.
 	raw.push(...frontmatterDefects(text));
+	if (["rule", "skill", "agent"].includes(kind) && !raw.some(([, code]) => code === "E13")) {
+		const block = splitOnceTripleDash(text)[1];
+		const parsed = block === undefined ? {} : Bun.YAML.parse(block);
+		if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+			err("E14", `${kind} frontmatter must be a mapping`);
+		} else {
+			const meta = parsed as Record<string, unknown>;
+			if (kind === "skill" || kind === "agent") {
+				for (const key of ["name", "description"]) {
+					if (typeof meta[key] !== "string" || !(meta[key] as string).trim()) {
+						err("E14", `${kind} ${key} must be a nonempty string`);
+					}
+				}
+			}
+			let triggered = false;
+			for (const key of kind === "rule" ? ["condition", "astCondition"] : []) {
+				const triggerKey = key === "condition"
+					? ["condition", "ttsr_trigger", "ttsrTrigger"].find(candidate => Object.hasOwn(meta, candidate))
+					: Object.hasOwn(meta, key) ? key : undefined;
+				if (triggerKey === undefined) continue;
+				const value = meta[triggerKey];
+				const patterns = typeof value === "string" ? [value] : value;
+				if (!Array.isArray(patterns) || patterns.some(p => typeof p !== "string" || !p.trim())) {
+					err("E14", `${key} must be a string or list of nonempty strings`);
+					continue;
+				}
+				triggered ||= patterns.length > 0;
+				if (key === "astCondition") continue;
+				for (const pattern of patterns) {
+					// The host accepts file-glob shorthand and leading inline flags.
+					if (!/[\\^$+|()]/.test(pattern) && /[?*[\]{}]/.test(pattern) &&
+						(pattern.includes("/") || /^\*\.[^\s/]+$/.test(pattern))) continue;
+					const flags = /^\(\?([ims]+)\)/.exec(pattern);
+					try { new RegExp(flags ? pattern.slice(flags[0].length) : pattern, flags ? [...new Set(flags[1])].join("") : undefined); }
+					catch { err("E14", `invalid ${key} regex: ${pattern}`); }
+				}
+			}
+			if (kind === "rule" && !triggered && meta.enabled !== false && meta.alwaysApply !== true && basename(path) !== "RULES.md" &&
+				!(typeof meta.description === "string" && meta.description.trim())) {
+				err("E14", "rule has no description, alwaysApply, or TTSR trigger; it is not discoverable");
+			}
+		}
+	}
 
 	if (kind === "skill" || kind === "agent" || kind === "pointer") {
 		const desc = fm.description ?? "";
@@ -370,7 +402,7 @@ export function lint(path: string): Triple[] {
 	if (allowedCodes.size === 0) return raw;
 	const out: Triple[] = [];
 	for (const [sev, code, msg] of raw) {
-		if (allowedCodes.has(code) && overrideReason) {
+		if (allowedCodes.has(code) && overrideReason && code !== "E13" && code !== "E14") {
 			out.push(["OVERRIDDEN", code, `${msg} (reason: ${overrideReason})`]);
 		} else {
 			out.push([sev, code, msg]);
@@ -417,10 +449,11 @@ export function main(argv: string[]): { exitCode: number; stdout: string } {
 function collectFiles(entry: string): string[] {
 	let st;
 	try {
-		st = statSync(entry);
+		st = lstatSync(entry);
 	} catch {
 		return [entry];
 	}
+	if (st.isSymbolicLink()) throw new Error(`symbolic link is outside lint traversal: ${entry}`);
 	if (st.isFile()) return [entry];
 	if (!st.isDirectory()) return [entry];
 	const out: string[] = [];
@@ -431,18 +464,21 @@ function collectFiles(entry: string): string[] {
 		try {
 			ents = readdirSync(dir);
 		} catch {
+			out.push(dir);
 			continue;
 		}
 		for (const name of ents) {
 			const p = join(dir, name);
 			let child;
 			try {
-				child = statSync(p);
+				child = lstatSync(p);
 			} catch {
+				out.push(p);
 				continue;
 			}
+			if (child.isSymbolicLink()) continue;
 			if (child.isDirectory()) stack.push(p);
-			else if (name.endsWith(".md")) out.push(p);
+			else if (name.endsWith(".md") || name.endsWith(".mdc")) out.push(p);
 		}
 	}
 	return out;
@@ -496,14 +532,14 @@ export default function agenticLintTool(pi: ExtensionAPI): void {
 		}),
 		approval: "read",
 		execute: async (_toolCallId, params: LintParams) => {
-			const files = params.paths.flatMap(collectFiles);
-			if (files.length === 0) {
-				return {
-					content: [{ type: "text", text: "agentic_lint: no markdown files in paths" }],
-					details: { ok: false, error: "no files", paths: params.paths },
-				};
-			}
 			try {
+				const files = params.paths.flatMap(collectFiles);
+				if (files.length === 0) {
+					return {
+						content: [{ type: "text", text: "agentic_lint: no markdown files in paths" }],
+						details: { ok: false, error: "no files", paths: params.paths },
+					};
+				}
 				const result = main(files);
 				const findings = parseFindings(result.stdout);
 				const errors = findings.filter((f) => f.severity === "ERROR").length;

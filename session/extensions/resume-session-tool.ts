@@ -1,9 +1,10 @@
 import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
-import { basename } from "node:path";
+import { basename, resolve } from "node:path";
 import {
 	acceptedPaths,
 	type Candidate,
 	candidates,
+	checkListingSize,
 	clip,
 	commitInfo,
 	EXACT_TIERS,
@@ -96,8 +97,8 @@ export function renderRow(row: Row, index: number, now: number, idLength = 8): s
 	if (meta.exitReason) flags.push(`exit:${meta.exitReason}`);
 	const lines = [
 		`${String(index).padStart(2)}. ${meta.id.slice(0, idLength)}  ${relativeTime(meta.lastActiveMs, now)}` +
-			`  (${absoluteTime(meta.lastActiveMs)})  ${meta.turnCount} turn${meta.turnCount === 1 ? "" : "s"}` +
-			`  ${(meta.bytes / 1024).toFixed(0)}KB${flags.length > 0 ? `  ${flags.join(" ")}` : ""}`,
+		`  (${absoluteTime(meta.lastActiveMs)})  ${meta.turnCount} turn${meta.turnCount === 1 ? "" : "s"}` +
+		`  ${(meta.bytes / 1024).toFixed(0)}KB${flags.length > 0 ? `  ${flags.join(" ")}` : ""}`,
 		`    branch: ${branchLabel(meta, row.worktree)}`,
 		`    worktree: ${worktreeLabel(row.worktree)} — ${meta.cwd}`,
 	];
@@ -140,6 +141,7 @@ export function renderList(cwd: string, options: ListOptions): { text: string; c
 	const byPath = new Map(family.flatMap((w) => pathKeys(w.path).map((key) => [key, w] as const)));
 
 	const found: Candidate[] = candidates(root, accept);
+	checkListingSize(found.map((candidate) => candidate.file));
 	const rows: Row[] = found
 		.map((candidate) => ({
 			meta: parseTranscript(candidate.file).meta,
@@ -184,6 +186,7 @@ export function renderList(cwd: string, options: ListOptions): { text: string; c
 }
 
 function withCost(text: string): string {
+	if (text.length > 1_000_000) throw new Error("Resume output exceeds 1000000 characters. Reduce `turns` or `limit`; if metadata alone exceeds the limit, use a smaller exported transcript via `file`. No metadata was silently omitted.");
 	return `${text}\n\nThis window: ~${estimateTokens(text).toLocaleString()} uncached tokens (${text.length.toLocaleString()} chars, estimated).`;
 }
 
@@ -261,14 +264,19 @@ export function renderRead(transcript: Transcript, options: ReadOptions): string
 	let used = 0;
 	for (let i = end - 1; i >= start; i -= 1) {
 		const block = renderTurn(turns[i], i + 1);
-		if (used + block.length > maxChars && rendered.length > 0) break;
-		if (transcript.compactionAfter.includes(i + 1)) {
-			rendered.push("--- compaction: earlier turns were summarized away in the original run ---");
+		const marker = transcript.compactionAfter.includes(i + 1)
+			? "--- compaction: earlier turns were summarized away in the original run ---\n" : "";
+		const size = marker.length + block.length + (rendered.length > 0 ? 1 : 0);
+		if (used + size > maxChars) {
+			if (rendered.length === 0) {
+				return withCost(`Insufficient max_chars=${maxChars}: the turn at offset ${offset} requires ${size} characters. Increase max_chars to at least ${size}; no turns rendered.`);
+			}
+			break;
 		}
-		rendered.push(block);
-		used += block.length;
+		rendered.push(marker ? marker + block : block);
+		used += size;
 	}
-	const shown = rendered.filter((block) => block.startsWith("### ")).length;
+	const shown = rendered.length;
 
 	const out = [
 		"# Session resume context",
@@ -297,7 +305,7 @@ export function renderRead(transcript: Transcript, options: ReadOptions): string
 	if (older < total) {
 		out.push(
 			`Older context remains (${total - older} earlier turns). If the left-off state is still unclear, page back:`,
-			`  resume_session mode="read" session="${meta.id.slice(0, 8)}" offset=${older} turns=${perWindow}`,
+			`  resume_session mode="read" file=${JSON.stringify(resolve(meta.file))} offset=${older} turns=${perWindow} max_chars=${maxChars} include_thinking=${options.includeThinking === true}`,
 		);
 	} else {
 		out.push("Start of session reached — no older turns.");
@@ -330,7 +338,7 @@ export default function resumeSessionTool(pi: ExtensionAPI): void {
 			path: z.string().optional().describe("Project directory; defaults to the session cwd's repo root"),
 			turns: z.number().optional().describe("read: turns per window (default 8)"),
 			offset: z.number().optional().describe("read: skip this many newest turns to page older"),
-			max_chars: z.number().optional().describe("read: hard cap on rendered window size (default 14000)"),
+			max_chars: z.number().optional().describe("read: cap on complete turn text, including compaction markers; metadata excluded (default 14000)"),
 			include_thinking: z
 				.boolean()
 				.optional()

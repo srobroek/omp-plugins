@@ -44,6 +44,8 @@ Honor whatever the user supplies; only discover the rest.
    `version_gap_scan` tool to list declared dependencies. If it returns
    more than one equally plausible candidate, list them and ask.
    Decide: versioned software or service/stream.
+   The scanner reads root declarations and Python's `uv.lock`/`poetry.lock`; it does not resolve Node or Rust lockfiles.
+   Report unscanned lockfiles and workspace children. Resolve installed versions separately from declaration ranges.
 
 2. **Resolve sources programmatically.**
    - *Software* (recipes A/B): current version (prefer lockfile), registry

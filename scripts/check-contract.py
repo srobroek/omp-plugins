@@ -40,17 +40,19 @@ NOT_A_PLUGIN = {"scripts", "examples", "node_modules"}
 def split_frontmatter(path: Path) -> tuple[dict[str, str], str] | None:
     """Return (frontmatter lines as key->raw value, body), or None when absent."""
     text = path.read_text(encoding="utf-8", errors="replace")
-    if not text.startswith("---"):
+    opening = re.match(r"\A---[ \t]*\r?\n", text)
+    if opening is None:
         return None
-    end = text.find("\n---", 3)
-    if end == -1:
+    closing = re.search(r"^---[ \t]*(?:\r?\n|$)", text[opening.end():], re.MULTILINE)
+    if closing is None:
         return None
+    end = opening.end() + closing.start()
     fields: dict[str, str] = {}
-    for line in text[3:end].splitlines():
+    for line in text[opening.end():end].splitlines():
         match = re.match(r"^([\w-]+):\s*(.*)$", line)
         if match:
             fields[match.group(1)] = match.group(2).strip()
-    return fields, text[end + 4 :]
+    return fields, text[opening.end() + closing.end():]
 
 
 def plugin_dirs() -> list[Path]:

@@ -1,25 +1,23 @@
 # typescript
 
-TypeScript and React architecture conventions, opinionated tooling defaults, and a quality skill.
+TypeScript and React architecture conventions, tooling defaults, and a quality skill.
 
 ## Skills
 
-- `typescript-quality` — run Biome format/lint and `tsc --noEmit` (check and fix scripts).
+- `typescript-quality`: run installed Biome (or ESLint) and `tsc --noEmit` through `typescript_quality`.
 
 ## Rules
 
-- `typescript-component-layout` — one layout primitive, slot props, barrels.
-- `typescript-state-data` — server vs client state, query facade, error seam.
-- `typescript-contract-boundary` — generated bindings, dispatch, envelope unwrap.
-- `typescript-type-safety` — generated unions, `satisfies`, trust-boundary validation.
-- `typescript-build-tooling` — pnpm workspaces, tsconfig, ESLint, CI `check`.
-- `typescript-styling-theming` — two-layer tokens, `data-theme`, density.
-- `typescript-testing` — test pyramid, conformance, Playwright, drift gate.
-
-No agents.
+- `typescript-component-layout`: one layout primitive, slot props, barrels.
+- `typescript-state-data`: server and client state, query facade, error seam.
+- `typescript-contract-boundary`: generated bindings, dispatch, envelope unwrap.
+- `typescript-type-safety`: generated unions, `satisfies`, trust-boundary validation.
+- `typescript-build-tooling`: pnpm workspaces, tsconfig, ESLint, CI `check`.
+- `typescript-styling-theming`: two-layer tokens, `data-theme`, density.
+- `typescript-testing`: test pyramid, conformance, Playwright, drift gate.
 
 ## Tools
 
-Registered by this plugin's extension modules:
+The plugin's extension modules register `typescript_quality`.
 
-- `typescript_quality`
+Executable resolution searches project-local `node_modules/.bin` first, then PATH. Check and fix never download executables. Missing projects or requested tools produce `ok: false, complete: false`; skipped checks are not a PASS.

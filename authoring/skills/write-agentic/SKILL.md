@@ -17,12 +17,13 @@ One workflow for three asset kinds. Pick the template, author at source, lint.
 
 ## Workflow
 
-1. MUST Edit the authoritative source (APM package repo).
+1. MUST Edit the authoritative source: the owning OMP plugin repository for
+   installable assets, or chezmoi source for machine configuration.
 2. Gather only what the repo cannot answer: purpose, trigger boundaries and
    non-triggers, install target, script/reference needs, external overlap.
 3. LOAD the matching template and follow it exactly.
-4. `agentic_lint` → fix every ERROR; justify or fix WARNs (running it is enforced
-   by `agentic-lint-reminder`).
+4. `agentic_lint` → fix every ERROR; justify or fix WARNs.
+   `agentic-lint-reminder` is advisory; it does not enforce execution.
 5. Review what lint cannot judge: are the triggers phrases a user would type, and
    is every reference one level deep?
 
