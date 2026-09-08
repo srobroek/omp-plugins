@@ -86,6 +86,8 @@ def hook_dispatch_smoke() -> None:
 
         previous = root / "previous-hooks"
         previous.mkdir()
+        shutil.copy2(root / ".githooks" / "pre-commit", previous / "pre-commit")
+        (previous / "pre-commit").chmod(0o755)
         commit_msg_marker = root / "commit-msg-marker"
         pre_push_marker = root / "pre-push-marker"
         commit_msg = previous / "commit-msg"

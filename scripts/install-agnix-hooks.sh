@@ -29,14 +29,11 @@ case "$current_hooks" in
 /*) current_hooks_dir="$current_hooks" ;;
 *) current_hooks_dir="$repo_root/$current_hooks" ;;
 esac
-current_hook="$current_hooks_dir/pre-commit"
 
 installer_active=0
 recorded_hooks_dir="$(git config --worktree --get agnix.hooksPath 2>/dev/null || true)"
-if [[ -n "$recorded_hooks_dir" && "$current_hooks_dir" == "$recorded_hooks_dir" ]]; then
-	installer_active=1
-elif [[ "$current_hooks_dir" == "$tracked_hooks_dir" ]] ||
-	{ [[ -f "$current_hook" ]] && cmp -s -- "$current_hook" "$tracked_pre_commit"; }; then
+if [[ "$current_hooks_dir" == "$tracked_hooks_dir" ||
+	(-n "$recorded_hooks_dir" && "$current_hooks_dir" == "$recorded_hooks_dir") ]]; then
 	installer_active=1
 fi
 
