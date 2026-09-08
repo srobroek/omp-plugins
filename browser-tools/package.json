@@ -1,6 +1,6 @@
 {
   "name": "@srobroek/browser-tools",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Cross-engine browser coverage and Chrome performance tracing over MCP.",
   "private": true,
   "omp": {}

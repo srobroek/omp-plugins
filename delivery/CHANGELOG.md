@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.7.1](https://github.com/srobroek/omp-plugins/compare/delivery--v0.7.0...delivery--v0.7.1) (2026-09-08)
+
+
+### Bug Fixes
+
+* **ci:** reject stale packages and incomplete checker runs ([8274c02](https://github.com/srobroek/omp-plugins/commit/8274c02e6e1af64adb7f6524e7ebabe830d26356))
+* correct plugin discovery, safety checks, and workflow contracts ([bfaa850](https://github.com/srobroek/omp-plugins/commit/bfaa850be719d7b79ac2245f2092be838673dd5d))
+* **delivery:** scope commit authority and preserve hunk ownership ([d61bb1f](https://github.com/srobroek/omp-plugins/commit/d61bb1f52e0f0aee8140eb68114cfe3cc21af610))
+
+
+### Documentation
+
+* clarify plugin safety and usage contracts ([f147fba](https://github.com/srobroek/omp-plugins/commit/f147fbaa08ddae1f5d745defd613b2d33ece4d61))
+
 ## [0.7.0](https://github.com/srobroek/omp-plugins/compare/delivery--v0.6.2...delivery--v0.7.0) (2026-08-27)
 
 

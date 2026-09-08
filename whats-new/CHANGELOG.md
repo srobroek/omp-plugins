@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.3.1](https://github.com/srobroek/omp-plugins/compare/whats-new--v0.3.0...whats-new--v0.3.1) (2026-09-08)
+
+
+### Bug Fixes
+
+* correct plugin discovery, safety checks, and workflow contracts ([bfaa850](https://github.com/srobroek/omp-plugins/commit/bfaa850be719d7b79ac2245f2092be838673dd5d))
+* **discovery:** bound scans and report incomplete research ([c74117e](https://github.com/srobroek/omp-plugins/commit/c74117e13b2d0228afb750ea1b63ed4e62512dfe))
+
 ## [0.3.0](https://github.com/srobroek/omp-plugins/compare/whats-new--v0.2.0...whats-new--v0.3.0) (2026-08-25)
 
 

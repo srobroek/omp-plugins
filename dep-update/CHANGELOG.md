@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.6.1](https://github.com/srobroek/omp-plugins/compare/dep-update--v0.6.0...dep-update--v0.6.1) (2026-09-08)
+
+
+### Bug Fixes
+
+* **ci:** reject stale packages and incomplete checker runs ([8274c02](https://github.com/srobroek/omp-plugins/commit/8274c02e6e1af64adb7f6524e7ebabe830d26356))
+* correct plugin discovery, safety checks, and workflow contracts ([bfaa850](https://github.com/srobroek/omp-plugins/commit/bfaa850be719d7b79ac2245f2092be838673dd5d))
+* **dep-update:** classify numeric equality pins by their versions ([f9ec250](https://github.com/srobroek/omp-plugins/commit/f9ec250f3190851a84522596215be71d09a6d49a))
+* **dep-update:** exclude unresolved versions from upgrade plans ([e6b814d](https://github.com/srobroek/omp-plugins/commit/e6b814d25e9fa6741211f163c31891264f8af781))
+* **dep-update:** reject unresolved numeric ranges ([86bd557](https://github.com/srobroek/omp-plugins/commit/86bd55725d8b446dd8eac6da64e4d109e63f8dea))
+* **discovery:** bound scans and report incomplete research ([c74117e](https://github.com/srobroek/omp-plugins/commit/c74117e13b2d0228afb750ea1b63ed4e62512dfe))
+
 ## [0.6.0](https://github.com/srobroek/omp-plugins/compare/dep-update--v0.5.1...dep-update--v0.6.0) (2026-08-27)
 
 
