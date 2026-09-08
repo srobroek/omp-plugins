@@ -12,26 +12,42 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 
 
-def git(root: Path, *args: str, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
+def clean_env(root: Path, overrides: dict[str, str] | None = None) -> dict[str, str]:
     merged_env = os.environ.copy()
-    if env:
-        merged_env.update(env)
+    for key in list(merged_env):
+        if key.startswith(("GIT_", "AGNIX_", "MISE_")):
+            del merged_env[key]
+    merged_env["GIT_CONFIG_NOSYSTEM"] = "1"
+    merged_env["GIT_CONFIG_GLOBAL"] = str(root / "global.gitconfig")
+    if overrides:
+        merged_env.update(overrides)
+    return merged_env
+
+
+def git(root: Path, *args: str, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
-        ["git", *args], cwd=root, env=merged_env, capture_output=True, text=True, check=True
+        ["git", *args],
+        cwd=root,
+        env=clean_env(root, env),
+        capture_output=True,
+        text=True,
+        check=True,
     )
 
 
 def checker(root: Path, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
-    merged_env = os.environ.copy()
-    if env:
-        merged_env.update(env)
     return subprocess.run(
         [str(root / "scripts" / "check-agnix-staged.sh")],
         cwd=root,
-        env=merged_env,
+        env=clean_env(root, env),
         capture_output=True,
         text=True,
     )
+
+
+def assert_accepted(label: str, result: subprocess.CompletedProcess[str]) -> None:
+    if result.returncode != 0:
+        raise AssertionError(f"{label} unexpectedly failed\n{result.stdout}\n{result.stderr}")
 
 
 def assert_rejected(label: str, result: subprocess.CompletedProcess[str]) -> None:
@@ -49,12 +65,15 @@ def main() -> None:
         shutil.copy2(REPO / ".agnix.toml", root / ".agnix.toml")
         shutil.copy2(REPO / "scripts" / "check-agnix-staged.sh", root / "scripts" / "check-agnix-staged.sh")
         (root / "scripts" / "check-agnix-staged.sh").chmod(0o755)
+        git(root, "add", ".agnix.toml")
+        git(root, "commit", "--quiet", "-m", "base")
         (root / "skills" / "valid").mkdir(parents=True)
         (root / "skills" / "valid" / "SKILL.md").write_text(
             "---\nname: valid\ndescription: Check a valid skill\n---\nBody\n", encoding="utf-8"
         )
         git(root, "add", "--all", "--")
-        git(root, "commit", "--quiet", "-m", "base")
+        assert_accepted("valid staged instruction", checker(root))
+        git(root, "commit", "--quiet", "-m", "valid fixture")
         base = git(root, "rev-parse", "HEAD").stdout.strip()
 
         malformed = root / "skills" / "bad\nname" / "SKILL.md"
