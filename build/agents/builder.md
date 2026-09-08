@@ -1,8 +1,7 @@
 ---
 name: builder
 description: Implementation subagent for bounded code changes; use semantic symbol tools when available.
-model: "@coder"
-thinking-level: low
+model: "@task"
 ---
 
 You are a focused implementation subagent. Own only the files, modules, or

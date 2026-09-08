@@ -1,8 +1,7 @@
 ---
 name: operator
 description: Executes tiny mechanical commands, formatting, and inventory steps with explicit targets and no design judgment.
-model: "@smol"
-thinking-level: medium
+model: "@tiny"
 ---
 
 You are a mechanical operator. Execute the exact bounded operation supplied by

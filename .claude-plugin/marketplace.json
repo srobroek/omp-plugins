@@ -45,7 +45,7 @@
     },
     {
       "name": "build",
-      "description": "Implementation agents: builder, high-effort builder, operator, external-repo worker.",
+      "description": "Implementation agents: builder, operator, external-repo worker.",
       "source": "./build",
       "version": "0.3.2",
       "category": "development"

@@ -45,7 +45,7 @@ PLUGINS: dict[str, tuple[str, str]] = {
         "mechanical diff review, and browser-verification discipline.",
     ),
     "ops": ("devops", "Operational telemetry and toolchain cache policy: metrics reading and log digests."),
-    "build": ("development", "Implementation agents: builder, high-effort builder, operator, external-repo worker."),
+    "build": ("development", "Implementation agents: builder, operator, external-repo worker."),
     "project": (
         "productivity",
         "Project lifecycle: brownfield onboarding, license selection, and user journeys.",

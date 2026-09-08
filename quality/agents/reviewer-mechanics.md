@@ -1,8 +1,7 @@
 ---
 name: reviewer-mechanics
 description: Mechanical reviewer for branch diffs. Performs strict diff smoke checks (format hygiene, acceptance criteria presence, and obvious invariant breaks) without changing code.
-model: "@fast-coder"
-thinking-level: high
+model: "@smol"
 tools: read, grep, glob, web_search, bash
 ---
 
