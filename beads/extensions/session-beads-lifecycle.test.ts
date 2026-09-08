@@ -18,8 +18,10 @@ import sessionBeadsLifecycle, {
 	readBeads,
 	readCheckOutcome,
 	readGates,
+	readGateList,
 	staleSkipNotice,
 } from "./session-beads-lifecycle.ts";
+
 
 /** `bd gate list --json` under BD_JSON_ENVELOPE=1, verbatim shape from bd 1.1.2. */
 const GATE_LIST = JSON.stringify({
@@ -103,6 +105,15 @@ describe("readGates", () => {
 	test("an empty database yields no gates", () => {
 		expect(readGates(JSON.stringify({ data: null, schema_version: 1 }))).toEqual([]);
 		expect(readGates("No open gates found.")).toEqual([]);
+	});
+
+	test("accepts bd's null empty-list contract but rejects malformed rows", () => {
+		expect(readGateList("null")).toEqual([]);
+		expect(readGateList(JSON.stringify({ data: null, schema_version: 1 }))).toEqual([]);
+		expect(readGateList(JSON.stringify({ data: null, error: null, schema_version: 1 }))).toEqual([]);
+		expect(readGateList(JSON.stringify({ data: null, error: "database unavailable", schema_version: 1 }))).toBeUndefined();
+		expect(readGateList(JSON.stringify({ data: [{ id: "g1" }], schema_version: 1 }))).toBeUndefined();
+		expect(readGateList(JSON.stringify({ error: "database unavailable" }))).toBeUndefined();
 	});
 
 	test("closed rows are not open gates", () => {
@@ -312,6 +323,54 @@ describe("integration", () => {
 		sessionBeadsLifecycle(fakePi as never);
 		return { handlers, logged };
 	};
+	test("session start accepts bd's null empty-list response", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "beads-empty-gates-"));
+		const originalPath = process.env.PATH;
+		const originalBeads = process.env.BEADS_DIR;
+		try {
+			mkdirSync(join(dir, ".beads"));
+			writeFileSync(join(dir, "bd"), `#!/bin/sh
+printf '%s\\n' '{"data":null,"schema_version":1}'
+`);
+			chmodSync(join(dir, "bd"), 0o755);
+			process.env.PATH = `${dir}:${originalPath ?? ""}`;
+			delete process.env.BEADS_DIR;
+			const { handlers, logged } = wire();
+			await handlers.session_start![0]!({}, { cwd: dir });
+			expect(logged).toEqual([]);
+		} finally {
+			if (originalPath === undefined) delete process.env.PATH;
+			else process.env.PATH = originalPath;
+			if (originalBeads === undefined) delete process.env.BEADS_DIR;
+			else process.env.BEADS_DIR = originalBeads;
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	test("session start warns when the gate list is malformed", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "beads-malformed-gates-"));
+		const originalPath = process.env.PATH;
+		const originalBeads = process.env.BEADS_DIR;
+		try {
+			mkdirSync(join(dir, ".beads"));
+			writeFileSync(join(dir, "bd"), `#!/bin/sh
+printf '%s\\n' '{"data":[{"id":"bd-bad"}],"schema_version":1}'
+`);
+			chmodSync(join(dir, "bd"), 0o755);
+			process.env.PATH = `${dir}:${originalPath ?? ""}`;
+			delete process.env.BEADS_DIR;
+			const { handlers, logged } = wire();
+			await handlers.session_start![0]!({}, { cwd: dir });
+			expect(logged).toEqual(["Beads gate list returned malformed data; unresolved gates remain unverified."]);
+		} finally {
+			if (originalPath === undefined) delete process.env.PATH;
+			else process.env.PATH = originalPath;
+			if (originalBeads === undefined) delete process.env.BEADS_DIR;
+			else process.env.BEADS_DIR = originalBeads;
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
 
 
 	test("session isolation preserves sibling notices, claims and repeated starts", async () => {
@@ -416,30 +475,41 @@ esac
 			),
 		).toBeUndefined();
 	});
-
 	test("session close stays silent until a bd write lands", async () => {
-		const { handlers } = wire();
-		// No write recorded yet: the stop hook must not even reach the database.
-		expect(await handlers.session_stop![0]!({}, { cwd: "/nonexistent-repo" })).toBeUndefined();
+		const originalBeads = process.env.BEADS_DIR;
+		process.env.BEADS_DIR = "/nonexistent-beads-dir";
+		try {
+			const { handlers } = wire();
+			// No write recorded yet: the stop hook must not even reach the database.
+			expect(await handlers.session_stop![0]!({}, { cwd: "/nonexistent-repo" })).toBeUndefined();
 
-		handlers.tool_result![0]!(
-			{
+			handlers.tool_result![0]!({
 				toolName: "bash",
 				toolCallId: "c1",
 				isError: false,
 				input: { command: "bd update bd-probe-2m7 --claim" },
 				content: [{ type: "text", text: "claimed" }],
-			},
-			{ cwd: "/repo" },
-		);
-		// A write landed, but the cwd is not a beads repo, so there is nothing to read.
-		expect(await handlers.session_stop![0]!({}, { cwd: "/nonexistent-repo" })).toBeUndefined();
+			}, { cwd: "/repo" });
+			// A write landed, but the cwd is not a beads repo, so there is nothing to read.
+			expect(await handlers.session_stop![0]!({}, { cwd: "/nonexistent-repo" })).toBeUndefined();
+		} finally {
+			if (originalBeads === undefined) delete process.env.BEADS_DIR;
+			else process.env.BEADS_DIR = originalBeads;
+		}
 	});
-
 
 	test("a non-beads cwd produces no session-start message", async () => {
-		const { handlers, logged } = wire();
-		await handlers.session_start![0]!({}, { cwd: "/nonexistent-repo" });
-		expect(logged).toEqual([]);
+		const originalBeads = process.env.BEADS_DIR;
+		process.env.BEADS_DIR = "/nonexistent-beads-dir";
+		try {
+			const { handlers, logged } = wire();
+			await handlers.session_start![0]!({}, { cwd: "/nonexistent-repo" });
+			expect(logged).toEqual([]);
+		} finally {
+			if (originalBeads === undefined) delete process.env.BEADS_DIR;
+			else process.env.BEADS_DIR = originalBeads;
+		}
 	});
+
+
 });
