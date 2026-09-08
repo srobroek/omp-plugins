@@ -70,7 +70,7 @@ After cloning or creating a worktree, run:
 ./scripts/install-agnix-hooks.sh
 ```
 
-The installer preserves the previous hooks path and existing `pre-commit` hook. The hook runs agnix against the staged index before each commit. Git does not install tracked hooks automatically when you clone.
+The installer preserves the previous hooks path and all existing hooks. The tracked `pre-commit` wrapper runs agnix against the staged index before each commit. Git does not install tracked hooks automatically when you clone.
 
 ## Generated files
 
