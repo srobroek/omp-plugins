@@ -1,7 +1,7 @@
 {
   "name": "@srobroek/quality",
   "version": "0.6.1",
-  "description": "Quality gates: code-smell auditing, final verification, lint and docs adjudication, mechanical diff review, and browser-verification discipline.",
+  "description": "Quality gates: code-smell auditing, final verification, lint and docs adjudication, and browser-verification discipline.",
   "private": true,
   "omp": {
     "extensions": [

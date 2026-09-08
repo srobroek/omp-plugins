@@ -17,8 +17,11 @@ Audit code for smells. Verify changes locally with quality gates and browser-ver
 | `refactor-challenger` | Adversarial critic of sniff findings | `@challenger` |
 | `lint-guard` | Triage lint reports; `LINT-GUARD … PASS\|WARN\|BLOCK` | `@smol` |
 | `docs-guard` | Doc-lint gate; `DOCS-GUARD … next=` | `@smol` |
-| `reviewer-mechanics` | Diff smoke; `MECH-REVIEW … verdict=PASS\|CHANGES` | `@smol` |
 | `adversarial-challenger` | Read-only challenger of claims, plans, and decisions | `@challenger` |
+
+Use the built-in `reviewer` for mechanical diff review. Specify the base ref and
+changed-file scope. Ask for read-only commands and anchored deterministic
+findings, with no heavy test suites or architecture changes.
 
 ## Rules
 

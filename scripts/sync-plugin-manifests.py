@@ -42,10 +42,10 @@ PLUGINS: dict[str, tuple[str, str]] = {
     "quality": (
         "development",
         "Quality gates: code-smell auditing, final verification, lint and docs adjudication, "
-        "mechanical diff review, and browser-verification discipline.",
+        "and browser-verification discipline.",
     ),
     "ops": ("devops", "Operational telemetry and toolchain cache policy: metrics reading and log digests."),
-    "build": ("development", "Implementation agents: builder, operator, external-repo worker."),
+    "build": ("development", "Execution agents: operator and external-repo worker."),
     "project": (
         "productivity",
         "Project lifecycle: brownfield onboarding, license selection, and user journeys.",
