@@ -1,0 +1,96 @@
+{
+  "scenarios": [
+    {
+      "id": "unattended-without-waiver",
+      "given": "No human is available; no explicit gate waiver exists",
+      "expect": "autonomous=no; preserve blocked gates and report the wait"
+    },
+    {
+      "id": "unattended-is-not-waiver",
+      "given": "User asks for an unattended run without waiving approval gates",
+      "expect": "autonomous=no; request an explicit waiver before omitting gates"
+    },
+    {
+      "id": "authorized-waiver",
+      "given": "User explicitly waives this run's human approval gates",
+      "expect": "autonomous=yes permitted; record waiver on root and review findings on preceding steps; verification remains mandatory"
+    },
+    {
+      "id": "invalid-autonomy",
+      "given": "autonomous is not exactly yes or no",
+      "expect": "Reject before pour"
+    },
+    {
+      "id": "basic-verification",
+      "given": "Either autonomy selection and either agent_assign selection",
+      "expect": "verify is unconditional after implement; final-checkpoint depends on verify; only human acceptance is conditional"
+    },
+    {
+      "id": "metrics-pass",
+      "given": "Requested bounded summary completes",
+      "expect": "PASS includes the requested digest and accurate emitted item count"
+    },
+    {
+      "id": "metrics-limited",
+      "given": "Word cap prevents complete requested digest",
+      "expect": "WARN includes bounded digest, omitted coverage, and next action"
+    },
+    {
+      "id": "builder-explicit-requirement",
+      "given": "Explicit design requirement conflicts with economy preference",
+      "expect": "Preserve requirement or report conflict; no unapproved substitution"
+    },
+    {
+      "id": "builder-suggestion",
+      "given": "Nonbinding suggested design duplicates an existing capability",
+      "expect": "Reuse existing capability and emit concise deviation/rationale"
+    },
+    {
+      "id": "composition-simple-core",
+      "given": "Existing-core edit satisfies requirement without independent variant",
+      "expect": "Edit existing core without wrappers added to minimize diff"
+    },
+    {
+      "id": "sniff-preapproval",
+      "given": "Target identified but tool set not approved",
+      "expect": "Allow target resolution, stack/config reads, and read-only availability probes; block installation, substantive scans, and bloodhound dispatch"
+    },
+    {
+      "id": "sniff-noninteractive",
+      "given": "Delegated brief explicitly authorizes target and installed tool set",
+      "expect": "Run that scope without installation; missing authorization remains blocked"
+    },
+    {
+      "id": "small-bugfix",
+      "given": "SpecKit quick-fix complexity remains 0-2",
+      "expect": "Keep direct edit and reproduction verification path; no forced full-spec lifecycle"
+    }
+  ],
+  "formula_profiles": [
+    "speckit-basic",
+    "speckit-lean",
+    "speckit-feature"
+  ],
+  "selections": [
+    {
+      "autonomous": "no",
+      "agent_assign": "no",
+      "human_gates": 3
+    },
+    {
+      "autonomous": "no",
+      "agent_assign": "yes",
+      "human_gates": 3
+    },
+    {
+      "autonomous": "yes",
+      "agent_assign": "no",
+      "human_gates": 0
+    },
+    {
+      "autonomous": "yes",
+      "agent_assign": "yes",
+      "human_gates": 0
+    }
+  ]
+}

@@ -1,11 +1,11 @@
-# speckit-basic -- spec-kit core plus the three human gates, nothing optional.
+# speckit-basic -- spec-kit core, mandatory verification, and human approval gates.
 #
 # Install: copy this file into <repo>/.beads/formulas/ (or ~/.beads/formulas/).
 # Pour one molecule per feature:
 #   bd mol pour speckit-basic --var feature=<NNN-slug>
 #
-# 10 steps. Every /speckit.* command here ships with spec-kit itself: specify,
-# clarify, plan, tasks, analyze. No community extension is required.
+# Every /speckit.* command here ships with spec-kit itself: specify,
+# clarify, plan, tasks, analyze. Verification requires no community extension.
 #
 # Every join is written for this step set rather than inherited, so each step's
 # `needs` names at least one unconditional step: a step whose whole `needs` list is
@@ -13,20 +13,19 @@
 # at pour. `implement` names `analyze` as well as `analyze-approval` for exactly
 # that reason.
 formula = "speckit-basic"
-description = "SpecKit basic profile for {{feature}}: specify through implement with human approval gates, no extensions required"
+description = "SpecKit basic profile for {{feature}}: specify through verification with human approval gates, no extensions required"
 type = "workflow"
 
 [vars.feature]
 required = true
 pattern = "^[0-9]{3}-[a-z0-9-]+$"
 
-# Human approval, or explicit permission to proceed without one. Same semantics as
-# speckit-feature: default "no" keeps the three approvals in the DAG; "yes" filters
-# them out for an unattended run, because `bd gate check` does not see a human gate
-# and the molecule would stall with `bd ready` empty.
-#
-# Skipping a gate does not skip its judgement: record on the preceding step's bead
-# what a reviewer would have been asked, before closing it.
+# Default "no" preserves human approval gates. Validate exactly "yes" or "no".
+# Set "yes" only with explicit user authorization to waive this run's human gates;
+# record the waiver on the molecule root. Unattended mode or human unavailability
+# is not consent: without a waiver preserve the blocked gate.
+# Record review findings and what a reviewer would have been asked on each
+# preceding step. Verification remains mandatory in either mode.
 [vars.autonomous]
 required = false
 default = "no"
@@ -124,11 +123,18 @@ needs = ["analyze", "analyze-approval"]
 description = "Work the implementation task beads that are children of this step: bd ready -> bd update <id> --claim -> bd close <id> --reason. There is no assign/validate chain in this profile. Per-file progress and retries ride a [wisp:worklog] wisp linked relates-to this step; the step thread keeps the outcome only. Keep this step open until every child is closed -- bd close on a parent with open children succeeds silently."
 
 [[steps]]
+id = "verify"
+title = "verify {{feature}}"
+type = "task"
+needs = ["implement"]
+description = "Review the implementation diff against spec.md and run the project's applicable checks and behavioral verification. Record evidence and resolve failures before closing. This verification is mandatory even when human approval gates are explicitly waived."
+
+[[steps]]
 id = "verify-signoff"
 title = "verify sign-off {{feature}}"
 type = "task"
-needs = ["implement"]
-description = "Human sign-off that the implementation matches spec.md. There is no verify agent step in this profile, so this gate is the whole verification: read the diff against the spec before resolving. Close the gate only after the user approves interactively."
+needs = ["verify"]
+description = "Human acceptance of the implementation against spec.md and the recorded verification evidence. Close the gate only after the user approves interactively."
 
 condition = "{{autonomous}} == no"
 [steps.gate]
@@ -138,5 +144,5 @@ type = "human"
 id = "final-checkpoint"
 title = "final checkpoint {{feature}}"
 type = "task"
-needs = ["implement", "verify-signoff"]
+needs = ["verify", "verify-signoff"]
 description = "Final commit + tag (git, no extension), then close out the molecule (bd dolt push)."

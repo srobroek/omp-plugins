@@ -10,9 +10,13 @@ molecule is the phase DAG and the only statement of step order.
 
 EXECUTION
 MUST Invoke SpecKit commands through their runtime-native skill interface.
-NOT Invoke deprecated `/speckit.implement`; route through the agent-assign chain
-  (assign -> validate -> execute) and work the molecule steps. `speckit-basic`
-  has no such chain: its `implement` step works the task beads under it directly.
+NOT Invoke deprecated `/speckit.implement`.
+MUST For lean/feature with `agent_assign=yes`, use the runtime-native
+  agent-assign chain (assign -> validate -> execute).
+MUST For `speckit-basic` or `agent_assign=no`, work the task beads directly
+  under the unconditional `implement` step.
+MUST Begin implementation child work only after the implement step's
+  prerequisites are satisfied, including every unwaived analysis approval gate.
 NOT Proceed with open questions, unresolved gaps, or unapproved intent changes.
 
 SETUP
@@ -26,8 +30,8 @@ MUST Set `--spec-id <NNN-slug>` on every bead a spec produces, including
   `bd update` after `bd mol pour`.
 
 MOLECULE PER FEATURE
-MUST Pour one molecule per spec dir. Profiles: `speckit-basic` (10),
-  `speckit-lean` (18), `speckit-feature` (26). All take `autonomous` and
+MUST Pour one molecule per spec dir. Profiles: `speckit-basic`,
+  `speckit-lean`, `speckit-feature`. All take `autonomous` and
   `agent_assign`. `bd mol pour <profile> --var feature=<NNN-slug>`, then
   `bd update <root-id> --spec-id <NNN-slug> --metadata '{"spec_dir":"specs/<NNN-slug>"}'`.
 DEFAULT Track position with `bd mol current <root-id>`.
@@ -36,8 +40,9 @@ SPEC START
 MUST At `/speckit.specify`, query parked work (`bd list --status deferred --json`)
   and surface hits before writing the spec.
 MUST Pour a molecule before writing the spec. Profiles live in this plugin's
-  `formulas/`; `bd cook <name>`. Use `--var autonomous=yes` if no human can
-  resolve gates; `--var agent_assign=no` if that extension is missing.
+  `formulas/`; `bd cook <name>`. Use `--var agent_assign=no` if that extension
+  is missing. Validate `autonomous` and `agent_assign` as exactly `yes` or `no`
+  before pouring.
 
 TASK STATE
 MUST When /speckit.tasks instructs writing specs/*/tasks.md, create beads
@@ -49,9 +54,12 @@ MUST Keep the implement parent open until every implementation child is closed.
 
 GATES
 MUST Resolve a human gate with `bd gate resolve <gate-id>` then `bd close <step-id>`.
-NOT Wait on a human gate in an unattended run — pour `--var autonomous=yes`.
-MUST When a gate was skipped that way, record on the preceding step what a
-  reviewer would have been asked.
+MUST Use `--var autonomous=yes` only after explicit user authorization to waive
+  this run's human approval gates; record the waiver on the molecule root.
+DEFAULT Use `autonomous=no`; unattended mode or an unavailable human is not a
+  waiver. Without authorization, preserve the blocked gate and report the wait.
+MUST For each waived gate, record on its preceding step the review findings and
+  what a reviewer would have been asked. Run all verification regardless of waiver.
 NOT `bd close <gate-id>` to resolve a gate — enforced by `rule://beads-gate-close`.
 
 COMMAND ROUTING (was the dispatcher table)

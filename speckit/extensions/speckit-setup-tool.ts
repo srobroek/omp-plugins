@@ -5,8 +5,9 @@ import {
 	appendFileSync,
 	readFileSync,
 	writeFileSync,
+	lstatSync,
 } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname, join, isAbsolute, parse, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
@@ -118,6 +119,7 @@ export function specifyVersionOk(versionOut: string): boolean {
 }
 
 export function ensureGitignore(repo: string): string {
+	safePath(join(repo, ".gitignore"));
 	const gi = join(repo, ".gitignore");
 	const existing = existsSync(gi) ? readFileSync(gi, "utf8") : "";
 	if (existing.split("\n").some((l) => l.trim() === GITIGNORE_ENTRY)) {
@@ -129,20 +131,37 @@ export function ensureGitignore(repo: string): string {
 	return "appended specs/**/spec-status.md to .gitignore";
 }
 
+function safePath(path: string): void {
+	const absolute = isAbsolute(path) ? path : `${process.cwd()}/${path}`;
+	let current = parse(absolute).root;
+	for (const part of absolute.slice(current.length).split(sep === "\\" ? /[\\/]/ : "/").filter(Boolean)) {
+		current = join(current, part);
+		const st = lstatSync(current, { throwIfNoEntry: false });
+		if (st?.isSymbolicLink()) throw new Error(`unsafe symlink: ${current}`);
+	}
+}
+
 export function installFormulas(repo: string, srcDir: string): string[] {
-	const lines: string[] = [];
 	const destDir = join(repo, ".beads", "formulas");
-	mkdirSync(destDir, { recursive: true });
+	safePath(destDir);
+	const copies: { src: string; dest: string; name: string }[] = [];
 	for (const name of FORMULAS) {
 		const src = join(srcDir, `${name}.formula.toml`);
-		if (!existsSync(src)) {
-			lines.push(`WARNING: ${name} formula not found at ${src}`);
-			continue;
+		const dest = join(destDir, `${name}.formula.toml`);
+		safePath(src);
+		safePath(dest);
+		if (!lstatSync(src, { throwIfNoEntry: false })?.isFile()) {
+			throw new Error(`required formula missing or unsafe: ${src}`);
 		}
-		copyFileSync(src, join(destDir, `${name}.formula.toml`));
-		lines.push(`copied ${name}`);
+		const st = lstatSync(dest, { throwIfNoEntry: false });
+		if (st && (!st.isFile() || !readFileSync(src).equals(readFileSync(dest)))) {
+			throw new Error(`refusing divergent formula destination: ${dest}`);
+		}
+		if (!st) copies.push({ src, dest, name });
 	}
-	return lines;
+	mkdirSync(destDir, { recursive: true });
+	for (const { src, dest } of copies) copyFileSync(src, dest);
+	return copies.map(({ name }) => `copied ${name}`);
 }
 
 export type SetupParams = {
@@ -151,6 +170,7 @@ export type SetupParams = {
 	force?: boolean;
 	workspace?: string;
 	skipSpecify?: boolean;
+	skipBeads?: boolean;
 };
 
 export function runSetup(params: SetupParams): { ok: boolean; text: string } {
@@ -158,13 +178,19 @@ export function runSetup(params: SetupParams): { ok: boolean; text: string } {
 	const log: string[] = [];
 	const integration = params.integration ?? "codex";
 	const script = params.script ?? "sh";
+	const fail = (text: string) => ({ ok: false, text: [...log, `ERROR: ${text}`].join("\n") });
+	try {
+	safePath(repo);
+	safePath(join(repo, ".specify"));
+	safePath(join(repo, ".beads"));
+	safePath(join(repo, ".gitignore"));
 
 	if (!params.skipSpecify) {
 		if (!which("specify")) {
 			return { ok: false, text: "ERROR: specify not on PATH. uv tool install specify-cli" };
 		}
 		const ver = run(["specify", "--version"], repo);
-		if (!specifyVersionOk(`${ver.stdout}\n${ver.stderr}`)) {
+		if (ver.exitCode !== 0 || !specifyVersionOk(`${ver.stdout}\n${ver.stderr}`)) {
 			return {
 				ok: false,
 				text: `ERROR: specify-cli >= 0.12.0 required. Got: ${ver.stdout || ver.stderr}`,
@@ -178,12 +204,12 @@ export function runSetup(params: SetupParams): { ok: boolean; text: string } {
 			);
 			log.push(`specify init exit=${init.exitCode}`);
 			if (init.stdout) log.push(init.stdout.trim());
-			if (init.exitCode !== 0) log.push(init.stderr.trim());
+			if (init.exitCode !== 0) return fail(`specify init: ${init.stderr.trim()}`);
 		} else {
 			log.push(".specify already present (pass force=true to re-scaffold)");
 		}
 
-		run(
+		const catalog = run(
 			[
 				"specify",
 				"extension",
@@ -196,38 +222,45 @@ export function runSetup(params: SetupParams): { ok: boolean; text: string } {
 			],
 			repo,
 		);
-		log.push("catalog add attempted");
+		if (catalog.exitCode !== 0) return fail(`catalog add: ${catalog.stderr.trim()}`);
+		log.push("catalog community ok");
 
 		for (const ext of EXTENSIONS) {
 			const add = run(["specify", "extension", "add", ext], repo);
-			if (add.exitCode !== 0) log.push(`WARNING: extension ${ext} skipped: ${add.stderr.trim()}`);
+			if (add.exitCode !== 0) return fail(`extension ${ext}: ${add.stderr.trim()}`);
 			else log.push(`extension ${ext} ok`);
 		}
 		const status = run(
 			["specify", "extension", "add", "status-report", "--from", STATUS_REPORT_FROM],
 			repo,
 		);
-		if (status.exitCode !== 0) log.push(`WARNING: status-report skipped: ${status.stderr.trim()}`);
+		if (status.exitCode !== 0) return fail(`status-report: ${status.stderr.trim()}`);
 		else log.push("extension status-report ok");
 	} else {
 		log.push("skipSpecify: specify CLI steps omitted");
 	}
 
-	if (which("bd")) {
+	if (params.skipBeads) {
+		log.push("SKIP: beads explicitly omitted; molecule workflows are unavailable");
+	} else if (which("bd")) {
 		const where = run(["bd", "where"], repo);
 		if (where.exitCode !== 0) {
 			const init = run(["bd", "init", "--skip-hooks"], repo);
 			log.push(`bd init exit=${init.exitCode}`);
+			if (init.exitCode !== 0) return fail(`bd init: ${init.stderr.trim()}`);
 		} else {
 			log.push("beads workspace already present");
 		}
 		log.push(...installFormulas(repo, join(pluginRoot(), "formulas")));
 	} else {
-		log.push("SKIP: bd not on PATH — formulas not installed");
+		return fail("bd not on PATH; install beads or explicitly set skipBeads=true for SpecKit-only setup");
 	}
 
 	log.push(ensureGitignore(repo));
 	return { ok: true, text: log.join("\n") };
+	} catch (err) {
+		return fail(err instanceof Error ? err.message : String(err));
+	}
 }
 
 export default function speckitSetupTool(pi: ExtensionAPI): void {
@@ -242,6 +275,7 @@ export default function speckitSetupTool(pi: ExtensionAPI): void {
 			script: z.string().optional().describe("specify script flavor (sh|ps). Default sh"),
 			force: z.boolean().optional().describe("Re-run specify init even if .specify exists"),
 			workspace: z.string().optional().describe("Repo cwd; defaults to process cwd"),
+			skipBeads: z.boolean().optional().describe("Explicitly omit beads and formulas; molecule workflows unavailable"),
 			skipSpecify: z
 				.boolean()
 				.optional()
@@ -257,7 +291,7 @@ export default function speckitSetupTool(pi: ExtensionAPI): void {
 			} catch (err) {
 				const message = err instanceof Error ? err.message : String(err);
 				return {
-					content: [{ type: "text", text: `setup failed open: ${message}` }],
+					content: [{ type: "text", text: `setup failed: ${message}` }],
 					details: { ok: false },
 				};
 			}

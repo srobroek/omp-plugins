@@ -62,12 +62,18 @@ export function beadsActive(cwd: string): boolean {
 	}
 }
 
-export function pathFromInput(input: Record<string, unknown>): string {
-	for (const key of ["file_path", "path"] as const) {
-		const v = input[key];
-		if (typeof v === "string" && v.length > 0) return v;
+function targetPaths(input: Record<string, unknown>): string[] {
+	const out: string[] = [];
+	for (const key of ["path", "file_path"] as const) {
+		const value = input[key];
+		if (typeof value === "string" && value.length > 0) out.push(value);
 	}
-	return "";
+	if (Array.isArray(input.paths)) {
+		for (const path of input.paths) {
+			if (typeof path === "string" && path.length > 0) out.push(path);
+		}
+	}
+	return out;
 }
 
 export function commandFromInput(input: Record<string, unknown>): string {
@@ -81,8 +87,7 @@ export function decideToolCall(
 	cwd: string,
 ): { block: true; reason: string } | undefined {
 	if (toolName === "edit" || toolName === "write") {
-		const path = pathFromInput(input);
-		if (!path || !isTasksMd(path)) return;
+		if (!targetPaths(input).some(isTasksMd)) return;
 		if (!beadsActive(cwd)) return;
 		return { block: true, reason: DENY_REASON };
 	}
