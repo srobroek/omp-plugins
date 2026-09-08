@@ -1,5 +1,12 @@
 # Changelog
 
+## [Unreleased]
+
+### Changed
+
+* reframe `resume_session` as a selective fresh-session context handoff with
+  native read-only streaming and bounded retained windows
+
 ## [1.1.1](https://github.com/srobroek/omp-plugins/compare/session--v1.1.0...session--v1.1.1) (2026-09-08)
 
 

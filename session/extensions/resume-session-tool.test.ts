@@ -1,6 +1,16 @@
 import { describe, expect, test } from "bun:test";
+import * as zod from "@oh-my-pi/omptype/zod";
 import { execFileSync } from "node:child_process";
-import { appendFileSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import {
+	appendFileSync,
+	mkdirSync,
+	mkdtempSync,
+	realpathSync,
+	rmSync,
+	statSync,
+	symlinkSync,
+	writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type FixtureSession, renderSession, writeSpillDir, writeStore } from "./fixtures";
@@ -15,6 +25,12 @@ import resumeSessionTool, {
 	resolveSession,
 	worktreeLabel,
 } from "./resume-session-tool";
+import {
+	__resetDirsFromEnvForTests,
+	getActiveProfile,
+	getAgentDir,
+	normalizeProfileName,
+} from "@oh-my-pi/pi-utils/dirs";
 import {
 	BranchTracker,
 	briefArgs,
@@ -34,8 +50,8 @@ function tmp(prefix: string): string {
 }
 
 /**
- * A fixture store laid out exactly as the harness lays out the real one, so the
- * full list/read path can run against it by pointing HOME at `home`.
+ * A fixture store laid out exactly as the harness lays it out, rooted at the
+ * explicit native agent directory used by `withHome`.
  */
 function fixtureStore(sessions: FixtureSession[]): { home: string; root: string } {
 	const home = tmp("resume-home-");
@@ -44,22 +60,31 @@ function fixtureStore(sessions: FixtureSession[]): { home: string; root: string 
 	writeStore(root, sessions);
 	return { home, root };
 }
-
-/** `sessionsRoot` reads the environment, so full-path tests relocate HOME. */
-function withHome<T>(home: string, run: () => T): T {
-	const previous = { home: process.env.HOME, config: process.env.PI_CONFIG_DIR, omp: process.env.OMP_PROFILE, pi: process.env.PI_PROFILE };
-	process.env.HOME = home;
+/**
+ * A fixture store rooted at an explicit native agent directory. This avoids
+ * relying on HOME changes after pi-utils/dirs has cached its resolver.
+ */
+async function withHome<T>(home: string, run: () => T | Promise<T>): Promise<T> {
+	const keys = ["PI_CODING_AGENT_DIR", "PI_CONFIG_DIR", "OMP_PROFILE", "PI_PROFILE", "XDG_DATA_HOME"] as const;
+	const previous = Object.fromEntries(keys.map((key) => [key, process.env[key]])) as Record<
+		(typeof keys)[number],
+		string | undefined
+	>;
+	process.env.PI_CODING_AGENT_DIR = join(home, "agent");
 	process.env.PI_CONFIG_DIR = ".";
 	delete process.env.OMP_PROFILE;
 	delete process.env.PI_PROFILE;
+	delete process.env.XDG_DATA_HOME;
+	__resetDirsFromEnvForTests();
 	try {
-		return run();
+		return await run();
 	} finally {
-		process.env.HOME = previous.home;
-		if (previous.config === undefined) delete process.env.PI_CONFIG_DIR;
-		else process.env.PI_CONFIG_DIR = previous.config;
-		if (previous.omp !== undefined) process.env.OMP_PROFILE = previous.omp;
-		if (previous.pi !== undefined) process.env.PI_PROFILE = previous.pi;
+		for (const key of keys) {
+			const value = previous[key];
+			if (value === undefined) delete process.env[key];
+			else process.env[key] = value;
+		}
+		__resetDirsFromEnvForTests();
 	}
 }
 
@@ -68,7 +93,8 @@ function repoWithWorktree(): { main: string; linked: string; linkedBranch: strin
 	const root = tmp("resume-repo-");
 	const main = join(root, "main");
 	mkdirSync(main, { recursive: true });
-	const run = (args: string[]) => execFileSync("git", args, { cwd: main, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
+	const run = (args: string[]) =>
+		execFileSync("git", args, { cwd: main, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
 	run(["init", "-q", "-b", "main"]);
 	run(["config", "user.email", "t@example.com"]);
 	run(["config", "user.name", "Test"]);
@@ -145,11 +171,54 @@ describe("unit: formatting", () => {
 		expect(briefArgs(undefined)).toBe("");
 	});
 
-	test("sessionsRoot honours config dir and profile like the harness", () => {
-		expect(sessionsRoot(undefined, {})).toMatch(/\.omp\/agent\/sessions$/);
-		expect(sessionsRoot(undefined, { PI_CONFIG_DIR: ".ompx" })).toMatch(/\.ompx\/agent\/sessions$/);
-		expect(sessionsRoot("work", {})).toMatch(/\.omp\/profiles\/work\/agent\/sessions$/);
-		expect(sessionsRoot(undefined, { OMP_PROFILE: "alt" })).toMatch(/profiles\/alt\/agent\/sessions$/);
+	test("sessionsRoot follows native active and read-only profile stores", async () => {
+		if (process.platform !== "linux" && process.platform !== "darwin") return;
+		const xdg = tmp("resume-xdg-");
+		const previous = {
+			agent: process.env.PI_CODING_AGENT_DIR,
+			config: process.env.PI_CONFIG_DIR,
+			omp: process.env.OMP_PROFILE,
+			pi: process.env.PI_PROFILE,
+			xdg: process.env.XDG_DATA_HOME,
+		};
+		try {
+			delete process.env.PI_CODING_AGENT_DIR;
+			process.env.PI_CONFIG_DIR = ".";
+			delete process.env.OMP_PROFILE;
+			delete process.env.PI_PROFILE;
+			process.env.XDG_DATA_HOME = xdg;
+			mkdirSync(join(xdg, "omp"), { recursive: true });
+			__resetDirsFromEnvForTests();
+			expect(getActiveProfile()).toBeUndefined();
+			expect(sessionsRoot()).toBe(join(xdg, "omp", "sessions"));
+
+			process.env.OMP_PROFILE = "active";
+			mkdirSync(join(xdg, "omp", "profiles", "active"), { recursive: true });
+			mkdirSync(join(xdg, "omp", "profiles", "other"), { recursive: true });
+			__resetDirsFromEnvForTests();
+
+			expect(getActiveProfile()).toBe("active");
+			expect(sessionsRoot()).toBe(join(xdg, "omp", "profiles", "active", "sessions"));
+			const beforeAgent = getAgentDir();
+			expect(sessionsRoot("other")).toBe(join(xdg, "omp", "profiles", "other", "sessions"));
+			expect(getActiveProfile()).toBe("active");
+			expect(getAgentDir()).toBe(beforeAgent);
+			expect(sessionsRoot("default")).toBe(join(xdg, "omp", "sessions"));
+			expect(normalizeProfileName(" other ")).toBe("other");
+		} finally {
+			if (previous.agent === undefined) delete process.env.PI_CODING_AGENT_DIR;
+			else process.env.PI_CODING_AGENT_DIR = previous.agent;
+			if (previous.config === undefined) delete process.env.PI_CONFIG_DIR;
+			else process.env.PI_CONFIG_DIR = previous.config;
+			if (previous.omp === undefined) delete process.env.OMP_PROFILE;
+			else process.env.OMP_PROFILE = previous.omp;
+			if (previous.pi === undefined) delete process.env.PI_PROFILE;
+			else process.env.PI_PROFILE = previous.pi;
+			if (previous.xdg === undefined) delete process.env.XDG_DATA_HOME;
+			else process.env.XDG_DATA_HOME = previous.xdg;
+			__resetDirsFromEnvForTests();
+			rmSync(xdg, { recursive: true, force: true });
+		}
 	});
 });
 
@@ -199,33 +268,36 @@ describe("unit: branch recovery", () => {
 });
 
 describe("unit: transcript parsing", () => {
-	test("head yields id, cwd, title, and the in-place updatedAt", () => {
+	test("head yields id, cwd, title, and the in-place updatedAt", async () => {
 		const { root } = fixtureStore([shipped]);
-		const head = readHead(storeFiles(root)[0]);
+		const head = await readHead(storeFiles(root)[0]);
 		expect(head?.id).toBe("aaaaaaaa-1111-7000-8888-000000000001");
 		expect(head?.cwd).toBe("/repo/main");
 		expect(head?.title).toBe("Wire the export path");
 		expect(head?.updatedAtMs).toBe(Date.parse("2026-08-24T13:30:00.000Z"));
 	});
 
-	test("turns fold tool results in, and thinking is dropped by default", () => {
+	test("turns fold tool results in, and thinking is dropped by default", async () => {
 		const { root } = fixtureStore([shipped]);
 		const file = storeFiles(root)[0];
-		const transcript = parseTranscript(file);
+		const transcript = await parseTranscript(file);
 		expect(transcript.turns.map((turn) => turn.role)).toEqual(["user", "assistant", "assistant", "assistant"]);
 		expect(transcript.meta.turnCount).toBe(4);
 		expect(transcript.turns[1].tools[0].name).toBe("bash");
 		expect(transcript.turns[1].tools[0].result).toContain("Switched to a new branch");
 		expect(JSON.stringify(transcript)).not.toContain("secret reasoning");
-		expect(JSON.stringify(parseTranscript(file, true))).toContain("secret reasoning");
+		expect(JSON.stringify(await parseTranscript(file, true))).toContain("secret reasoning");
 	});
 
-	test("branch comes from git's own output, not the command", () => {
+	test("branch comes from git's own output, not the command", async () => {
 		const { root } = fixtureStore([shipped]);
-		expect(parseTranscript(storeFiles(root)[0]).meta).toMatchObject({ branch: "feat/csv", branchTier: "switched" });
+		expect((await parseTranscript(storeFiles(root)[0])).meta).toMatchObject({
+			branch: "feat/csv",
+			branchTier: "switched",
+		});
 	});
 
-	test("the newest todo board is the plan state", () => {
+	test("the newest todo board is the plan state", async () => {
 		const { root } = fixtureStore([
 			{
 				...shipped,
@@ -235,33 +307,38 @@ describe("unit: transcript parsing", () => {
 				],
 			},
 		]);
-		const phases = parseTranscript(storeFiles(root)[0]).todoPhases;
+		const phases = (await parseTranscript(storeFiles(root)[0])).todoPhases;
 		expect(phases).toHaveLength(1);
 		expect(phases[0]).toEqual({ name: "New", tasks: [{ content: "fresh", status: "in_progress" }] });
 	});
 
-	test.each([{ phases: [] }, { phases: [{ name: "Cleared", tasks: [] }] }])("an empty latest board clears current tasks: %j", ({ phases }) => {
-		const { root } = fixtureStore([
-			{
-				...shipped,
-				entries: [
-					{ kind: "todo", phases: [{ name: "Old", tasks: [{ content: "obsolete", status: "pending" }] }] },
-					{ kind: "todo", phases },
-				],
-			},
-		]);
-		const transcript = parseTranscript(storeFiles(root)[0]);
-		expect(transcript.todoPhases).toEqual([]);
-		expect(renderRead(transcript, {})).not.toContain("## Latest plan / todo state");
-		expect(renderRead(transcript, {})).not.toContain("obsolete");
-	});
+	test.each([{ phases: [] }, { phases: [{ name: "Cleared", tasks: [] }] }])(
+		"an empty latest board clears current tasks: %j",
+		async ({ phases }) => {
+			const { root } = fixtureStore([
+				{
+					...shipped,
+					entries: [
+						{ kind: "todo", phases: [{ name: "Old", tasks: [{ content: "obsolete", status: "pending" }] }] },
+						{ kind: "todo", phases: phases.map((phase) => ({ name: phase.name, tasks: [...phase.tasks] })) },
+					],
+				},
+			]);
+			const transcript = await parseTranscript(storeFiles(root)[0]);
+			expect(transcript.todoPhases).toEqual([]);
+			expect(renderRead(transcript, {})).not.toContain("## Latest plan / todo state");
+			expect(renderRead(transcript, {})).not.toContain("obsolete");
+		},
+	);
 
-	test("left off is the last assistant prose, not the last record", () => {
+	test("left off is the last assistant prose, not the last record", async () => {
 		const { root } = fixtureStore([shipped]);
-		expect(parseTranscript(storeFiles(root)[0]).meta.leftOff).toBe("Writer landed; the CLI flag is still open.");
+		expect((await parseTranscript(storeFiles(root)[0])).meta.leftOff).toBe(
+			"Writer landed; the CLI flag is still open.",
+		);
 	});
 
-	test("compaction and exit are surfaced, not silently swallowed", () => {
+	test("compaction and exit are surfaced, not silently swallowed", async () => {
 		const { root } = fixtureStore([
 			{
 				...shipped,
@@ -273,7 +350,7 @@ describe("unit: transcript parsing", () => {
 				],
 			},
 		]);
-		const transcript = parseTranscript(storeFiles(root)[0]);
+		const transcript = await parseTranscript(storeFiles(root)[0]);
 		expect(transcript.meta.compactions).toBe(1);
 		expect(transcript.meta.exitReason).toBe("normal/dispose");
 		expect(transcript.compactionSummaries).toEqual(["earlier work summarized"]);
@@ -282,21 +359,21 @@ describe("unit: transcript parsing", () => {
 		expect(rendered).toContain("session end: normal/dispose");
 	});
 
-	test("empty turns are dropped so the window is not wasted", () => {
+	test("empty turns are dropped so the window is not wasted", async () => {
 		const { root } = fixtureStore([{ ...shipped, entries: [{ kind: "assistant" }, { kind: "user", text: "real" }] }]);
-		expect(parseTranscript(storeFiles(root)[0]).meta.turnCount).toBe(1);
+		expect((await parseTranscript(storeFiles(root)[0])).meta.turnCount).toBe(1);
 	});
 
-	test("a truncated final line does not abort the parse", () => {
+	test("a truncated final line does not abort the parse", async () => {
 		const { root } = fixtureStore([shipped]);
 		const file = storeFiles(root)[0];
 		appendFileSync(file, '{"type":"message","message":{"role":"assis');
-		expect(parseTranscript(file).meta.turnCount).toBe(4);
+		expect((await parseTranscript(file)).meta.turnCount).toBe(4);
 	});
 
-	test("continuation chains are counted", () => {
+	test("continuation chains are counted", async () => {
 		const { root } = fixtureStore([{ ...shipped, previousSessionFiles: ["/store/-a/x.jsonl"] }]);
-		expect(parseTranscript(storeFiles(root)[0]).meta.continuedFrom).toBe(1);
+		expect((await parseTranscript(storeFiles(root)[0])).meta.continuedFrom).toBe(1);
 	});
 });
 
@@ -307,22 +384,28 @@ describe("unit: store enumeration", () => {
 		expect(storeFiles(root)).toHaveLength(1);
 	});
 
-	test("candidates match the recorded cwd, not the directory name", () => {
+	test("candidates match the recorded cwd, not the directory name", async () => {
 		const { root } = fixtureStore([
 			shipped,
 			{ ...shipped, stem: "2026-08-24T09-00-00-000Z_bbbbbbbb-2222", cwd: "/repo/other" },
 		]);
-		expect(candidates(root, new Set(["/repo/main"]))).toHaveLength(1);
-		expect(candidates(root, new Set(["/repo/main", "/repo/other"]))).toHaveLength(2);
-		expect(candidates(root, new Set(["/nowhere"]))).toHaveLength(0);
+		expect(await candidates(root, new Set(["/repo/main"]))).toHaveLength(1);
+		expect(await candidates(root, new Set(["/repo/main", "/repo/other"]))).toHaveLength(2);
+		expect(await candidates(root, new Set(["/nowhere"]))).toHaveLength(0);
 	});
 
 	test("pathKeys accepts both spellings of a symlinked directory", () => {
-		const real = tmp("resume-real-");
-		expect(pathKeys(real)).toContain(real);
-		// macOS hands out /var/folders paths that resolve under /private.
-		expect(pathKeys(real).length).toBeGreaterThanOrEqual(1);
-		expect(pathKeys("/definitely/not/here")).toEqual(["/definitely/not/here"]);
+		const parent = tmp("resume-symlink-");
+		const realDirectory = join(parent, "real");
+		const symlink = join(parent, "link");
+		mkdirSync(realDirectory);
+		symlinkSync(realDirectory, symlink, "dir");
+		try {
+			expect(pathKeys(symlink)).toEqual(expect.arrayContaining([symlink, realpathSync(realDirectory)]));
+			expect(pathKeys("/definitely/not/here")).toEqual(["/definitely/not/here"]);
+		} finally {
+			rmSync(parent, { recursive: true, force: true });
+		}
 	});
 
 	test("a missing store is empty, not an error", () => {
@@ -379,78 +462,82 @@ describe("integration: list mode", () => {
 		]).home;
 	}
 
-	function list(home: string, project: string, extra: { worktrees?: boolean; git?: boolean; limit?: number } = {}): string {
-		return withHome(home, () => renderList(project, { path: project, ...extra })).text;
+	async function list(
+		home: string,
+		project: string,
+		extra: { worktrees?: boolean; git?: boolean; limit?: number } = {},
+	): Promise<string> {
+		return (await withHome(home, () => renderList(project, { path: project, ...extra }))).text;
 	}
 
-	test("rows are newest first and cover every worktree", () => {
+	test("rows are newest first and cover every worktree", async () => {
 		const repo = repoWithWorktree();
-		const text = list(twoWorktreeStore(repo), repo.main);
+		const text = await list(twoWorktreeStore(repo), repo.main);
 		expect(text.indexOf("newest in the linked worktree")).toBeLessThan(text.indexOf("older in main"));
 		expect(text).toContain("↳ left off: Writer landed");
 		expect(text).toContain("4 turns");
 		expect(text).toContain("STOP.");
 	});
 
-	test("drift against a worktree's current branch is shown", () => {
+	test("drift against a worktree's current branch is shown", async () => {
 		const repo = repoWithWorktree();
-		expect(list(twoWorktreeStore(repo), repo.main)).toContain("worked-on → worktree now on");
+		expect(await list(twoWorktreeStore(repo), repo.main)).toContain("worked-on → worktree now on");
 	});
 
-	test("worktrees:false narrows to the current checkout", () => {
+	test("worktrees:false narrows to the current checkout", async () => {
 		const repo = repoWithWorktree();
 		const home = twoWorktreeStore(repo);
-		const narrowed = list(home, repo.linked, { worktrees: false });
+		const narrowed = await list(home, repo.linked, { worktrees: false });
 		expect(narrowed).toContain("newest in the linked worktree");
 		expect(narrowed).not.toContain("older in main");
 		expect(narrowed).toContain("current checkout only");
 	});
 
-	test("limit caps the rows and says how many were held back", () => {
+	test("limit caps the rows and says how many were held back", async () => {
 		const repo = repoWithWorktree();
-		const text = list(twoWorktreeStore(repo), repo.main, { limit: 1 });
+		const text = await list(twoWorktreeStore(repo), repo.main, { limit: 1 });
 		expect(text).toContain("1 older session(s) not shown");
 	});
 
-	test("the git activity block ranks worktrees and can be suppressed", () => {
+	test("the git activity block ranks worktrees and can be suppressed", async () => {
 		const repo = repoWithWorktree();
 		const home = twoWorktreeStore(repo);
-		expect(list(home, repo.main)).toContain("## Worktree git activity");
-		expect(list(home, repo.main, { git: false })).not.toContain("## Worktree git activity");
+		expect(await list(home, repo.main)).toContain("## Worktree git activity");
+		expect(await list(home, repo.main, { git: false })).not.toContain("## Worktree git activity");
 	});
 
-	test("an empty store refuses to guess", () => {
+	test("an empty store refuses to guess", async () => {
 		const repo = repoWithWorktree();
-		const text = list(fixtureStore([]).home, repo.main);
+		const text = await list(fixtureStore([]).home, repo.main);
 		expect(text).toContain("No prior sessions recorded");
 		expect(text).toContain("do not guess a session");
 	});
 
-	test("colliding ids are printed long enough to stay usable", () => {
+	test("colliding ids are printed long enough to stay usable", async () => {
 		const repo = repoWithWorktree();
 		const { home } = fixtureStore([
 			{ ...shipped, cwd: repo.main, stem: "2026-08-24T09-00-00-000Z_01a0382f-37e9-7000-9795-a883afa2a01b" },
 			{ ...shipped, cwd: repo.main, stem: "2026-08-24T09-00-00-000Z_01a0382f-76b6-7000-a37c-3ade9b7ca8df" },
 		]);
-		const text = list(home, repo.main);
+		const text = await list(home, repo.main);
 		expect(text).toContain("01a0382f-3");
 		expect(text).toContain("01a0382f-7");
 	});
 
-	test("a one-turn session is not reported as '1 turns'", () => {
+	test("a one-turn session is not reported as '1 turns'", async () => {
 		const repo = repoWithWorktree();
 		const { home } = fixtureStore([{ ...shipped, cwd: repo.main, entries: [{ kind: "user", text: "only" }] }]);
-		expect(list(home, repo.main)).toContain("1 turn ");
+		expect(await list(home, repo.main)).toContain("1 turn ");
 	});
 
-	test("every window reports its own token cost", () => {
+	test("every window reports its own token cost", async () => {
 		const repo = repoWithWorktree();
-		expect(list(twoWorktreeStore(repo), repo.main)).toMatch(/~[\d,]+ uncached tokens/);
+		expect(await list(twoWorktreeStore(repo), repo.main)).toMatch(/~[\d,]+ uncached tokens/);
 	});
 });
 
 describe("integration: read mode", () => {
-	test("newest-first window, todo anchor, and a paging hint", () => {
+	test("newest-first window, todo anchor, and a paging hint", async () => {
 		const { root } = fixtureStore([
 			{
 				...shipped,
@@ -460,7 +547,7 @@ describe("integration: read mode", () => {
 				],
 			},
 		]);
-		const text = renderRead(parseTranscript(storeFiles(root)[0]), { turns: 4 });
+		const text = renderRead(await parseTranscript(storeFiles(root)[0], false, { turns: 4 }), { turns: 4 });
 		expect(text).toContain("window: turns 10..13 of 13 (newest first)");
 		expect(text.indexOf("[13]")).toBeLessThan(text.indexOf("[10]"));
 		expect(text).toContain("## Latest plan / todo state");
@@ -469,23 +556,51 @@ describe("integration: read mode", () => {
 		expect(text).toContain("STOP.");
 	});
 
-	test("offset pages older and eventually reaches the start", () => {
+	test("offset pages older and eventually reaches the start", async () => {
 		const { root } = fixtureStore([
 			{ ...shipped, entries: Array.from({ length: 6 }, (_, i) => ({ kind: "user" as const, text: `t${i}` })) },
 		]);
-		const transcript = parseTranscript(storeFiles(root)[0]);
+		const transcript = await parseTranscript(storeFiles(root)[0], false, { turns: 3, offset: 3 });
 		expect(renderRead(transcript, { turns: 3, offset: 3 })).toContain("Start of session reached");
 		expect(renderRead(transcript, { offset: 99 })).toContain("No turns at offset 99");
 	});
 
-	test("maxChars refuses oversized turns and stops on complete boundaries", () => {
+	test("large transcripts yield only the selected window and remain discoverable", async () => {
+		const { home, root } = fixtureStore([{ ...shipped, entries: [{ kind: "user", text: "OLD-HISTORY-MARKER" }] }]);
+		try {
+			const file = storeFiles(root)[0];
+			const chunk = `${JSON.stringify({ type: "custom", data: "x".repeat(8192) })}\n`.repeat(128);
+			for (let i = 0; i < 65; i++) appendFileSync(file, chunk);
+			for (const text of ["older selected turn", "newest selected turn"]) {
+				appendFileSync(file, `${JSON.stringify({ type: "message", message: { role: "user", content: text } })}\n`);
+			}
+			const size = statSync(file).size;
+			expect(size).toBeGreaterThan(64 * 1024 * 1024);
+			expect((await candidates(root, new Set([shipped.cwd]))).map((candidate) => candidate.head.id)).toEqual([
+				"aaaaaaaa-1111-7000-8888-000000000001",
+			]);
+			const newest = await parseTranscript(file, false, { turns: 1 });
+			expect(newest.meta.turnCount).toBe(3);
+			expect(newest.meta.bytes).toBe(size);
+			expect(newest.turns.map((turn) => turn.text)).toEqual(["newest selected turn"]);
+			expect(renderRead(newest, { turns: 1 })).not.toContain("OLD-HISTORY-MARKER");
+			const older = await parseTranscript(file, false, { turns: 1, offset: 1 });
+			expect(older.turns.map((turn) => turn.text)).toEqual(["older selected turn"]);
+			expect(older.windowStart).toBe(1);
+			expect(statSync(file).size).toBe(size);
+		} finally {
+			rmSync(home, { recursive: true, force: true });
+		}
+	});
+
+	test("maxChars refuses oversized turns and stops on complete boundaries", async () => {
 		const { root } = fixtureStore([
 			{
 				...shipped,
 				entries: Array.from({ length: 5 }, (_, i) => ({ kind: "assistant" as const, text: `${"x".repeat(400)}${i}` })),
 			},
 		]);
-		const transcript = parseTranscript(storeFiles(root)[0]);
+		const transcript = await parseTranscript(storeFiles(root)[0]);
 		const refused = renderRead(transcript, { turns: 5, maxChars: 1 });
 		expect(refused).toContain("Increase max_chars");
 		expect(refused).not.toContain("### [");
@@ -526,7 +641,7 @@ describe("integration: read mode", () => {
 });
 
 describe("integration: session resolution", () => {
-	test("a prefix resolves, an ambiguous prefix refuses, a miss names the store", () => {
+	test("a prefix resolves, an ambiguous prefix refuses, a miss names the store", async () => {
 		const repo = repoWithWorktree();
 		const { home } = fixtureStore([
 			{ ...shipped, cwd: repo.main, stem: "2026-08-24T09-00-00-000Z_dddddddd-1111-7000-8888-000000000001" },
@@ -534,19 +649,19 @@ describe("integration: session resolution", () => {
 			{ ...shipped, cwd: repo.main, stem: "2026-08-24T09-00-00-000Z_eeeeeeee-3333-7000-8888-000000000003" },
 		]);
 		const resolve = (session: string) => withHome(home, () => resolveSession(repo.main, { session, path: repo.main }));
-		expect(resolve("eeeeeeee")).toEqual({ file: expect.stringContaining("eeeeeeee") });
-		expect(resolve("dddddddd")).toEqual({ error: expect.stringContaining("matches 2 sessions") });
-		expect(resolve("nope")).toEqual({ error: expect.stringContaining("no session under") });
-		expect(resolve("")).toEqual({ error: expect.stringContaining("needs `session`") });
+		expect(await resolve("eeeeeeee")).toEqual({ file: expect.stringContaining("eeeeeeee") });
+		expect(await resolve("dddddddd")).toEqual({ error: expect.stringContaining("matches 2 sessions") });
+		expect(await resolve("nope")).toEqual({ error: expect.stringContaining("no session under") });
+		expect(await resolve("")).toEqual({ error: expect.stringContaining("needs `session`") });
 	});
 
-	test("an explicit file bypasses lookup entirely", () => {
+	test("an explicit file bypasses lookup entirely", async () => {
 		const { root } = fixtureStore([shipped]);
 		const file = storeFiles(root)[0];
-		expect(resolveSession("/nowhere", { file })).toEqual({ file });
+		expect(await resolveSession("/nowhere", { file })).toEqual({ file });
 	});
 
-	test.each(["collision", "explicit file"])("paging preserves the selected transcript: %s", (selection) => {
+	test.each(["collision", "explicit file"])("paging preserves the selected transcript: %s", async (selection) => {
 		const repo = repoWithWorktree();
 		const { home } = fixtureStore([
 			{ ...shipped, cwd: repo.main, stem: "2026-08-24T09-00-00Z_dddddddd-1111-7000-8888-000000000001" },
@@ -554,27 +669,38 @@ describe("integration: session resolution", () => {
 		]);
 		const external = join(tmp("resume-export-"), 'selected "transcript".jsonl');
 		writeFileSync(external, renderSession(shipped));
-		withHome(home, () => {
-			const selected = resolveSession(repo.main, selection === "collision"
-				? { session: "dddddddd-1111", path: repo.main, worktrees: false }
-				: { file: external });
+		await withHome(home, async () => {
+			const selected = await resolveSession(
+				repo.main,
+				selection === "collision"
+					? { session: "dddddddd-1111", path: repo.main, worktrees: false }
+					: { file: external },
+			);
 			if ("error" in selected) throw new Error(selected.error);
-			const transcript = parseTranscript(selected.file);
+			const transcript = await parseTranscript(selected.file, true, { turns: 1 });
 			const text = renderRead(transcript, { turns: 1, maxChars: 2000, includeThinking: true });
-			const paging = text.match(/resume_session mode="read" file=("(?:\\.|[^"\\])*") offset=(\d+) turns=(\d+) max_chars=(\d+) include_thinking=(true|false)/);
-			expect(paging).not.toBeNull();
-			const next = resolveSession("/unrelated-project", {
-				file: JSON.parse(paging![1]),
+			const paging = text.match(
+				/resume_session mode="read" file=("(?:\\.|[^"\\])*") offset=(\d+) turns=(\d+) max_chars=(\d+) include_thinking=(true|false)/,
+			);
+			if (!paging) throw new Error("Expected a file-scoped paging instruction");
+			const next = await resolveSession("/unrelated-project", {
+				file: JSON.parse(paging[1]),
 				profile: "unrelated-profile",
 			});
 			expect(next).toEqual(selected);
 			if ("error" in next) throw new Error(next.error);
-			const older = renderRead(parseTranscript(next.file, paging![5] === "true"), {
-				offset: Number(paging![2]),
-				turns: Number(paging![3]),
-				maxChars: Number(paging![4]),
-				includeThinking: paging![5] === "true",
-			});
+			const older = renderRead(
+				await parseTranscript(next.file, paging[5] === "true", {
+					offset: Number(paging[2]),
+					turns: Number(paging[3]),
+				}),
+				{
+					offset: Number(paging[2]),
+					turns: Number(paging[3]),
+					maxChars: Number(paging[4]),
+					includeThinking: paging[5] === "true",
+				},
+			);
 			expect(older).toContain("window: turns 3..3 of 4");
 			expect(older).toContain("STOP.");
 		});
@@ -583,17 +709,11 @@ describe("integration: session resolution", () => {
 
 describe("integration: tool registration", () => {
 	function fakePi(): { pi: Record<string, unknown>; captured: Record<string, unknown> } {
-		const chain: Record<string, unknown> = {};
-		const self = () => chain;
-		chain.string = self;
-		chain.number = self;
-		chain.boolean = self;
-		chain.optional = self;
-		chain.describe = self;
-		chain.object = self;
-		chain.enum = self;
 		const captured: Record<string, unknown> = {};
-		return { pi: { zod: chain, registerTool: (d: Record<string, unknown>) => Object.assign(captured, d), on: () => { } }, captured };
+		return {
+			pi: { zod, registerTool: (d: Record<string, unknown>) => Object.assign(captured, d), on: () => {} },
+			captured,
+		};
 	}
 
 	type Execute = (
@@ -619,7 +739,9 @@ describe("integration: tool registration", () => {
 		resumeSessionTool(pi as never);
 		const execute = captured.execute as Execute;
 
-		const listed = await withHome(home, () => execute("1", { mode: "list", path: repo.main }, undefined, undefined, { cwd: repo.main }));
+		const listed = await withHome(home, () =>
+			execute("1", { mode: "list", path: repo.main }, undefined, undefined, { cwd: repo.main }),
+		);
 		expect(listed.details).toMatchObject({ mode: "list", sessions: 1 });
 		expect(listed.content[0].text).toContain("Wire the export path");
 
@@ -637,7 +759,9 @@ describe("integration: tool registration", () => {
 		const { pi, captured } = fakePi();
 		resumeSessionTool(pi as never);
 		const result = await withHome(home, () =>
-			(captured.execute as Execute)("3", { mode: "read", session: "zzzz", path: repo.main }, undefined, undefined, { cwd: repo.main }),
+			(captured.execute as Execute)("3", { mode: "read", session: "zzzz", path: repo.main }, undefined, undefined, {
+				cwd: repo.main,
+			}),
 		);
 		expect(result.content[0].text).toContain("no session under");
 		expect(result.details.error).toBeDefined();

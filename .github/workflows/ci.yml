@@ -116,6 +116,12 @@ jobs:
 
       - name: Extension tests
         run: |
+          host="$RUNNER_TEMP/omp-session-host"
+          mkdir -p "$host"
+          printf '%s\n' '{"name":"omp-session-ci","private":true}' > "$host/package.json"
+          (cd "$host" && bun add --no-save --silent @oh-my-pi/pi-coding-agent@18.1.14)
+          ln -s "$host/node_modules" session/node_modules
+          trap 'rm -f session/node_modules' EXIT
           while IFS= read -r d; do
             (cd "$d/.." && bun test extensions/) || exit 1
           done < <(git ls-files '*/extensions/*.test.ts' | xargs -rn1 dirname | sort -u)

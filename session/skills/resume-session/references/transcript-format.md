@@ -1,178 +1,131 @@
-# OMP session transcript format
+# OMP transcript reading
 
-What `resume_session` reads, and why it reads the store directly. Every shape here
-was derived from the live store on a machine with 184 top-level transcripts; where
-a field's meaning is inferred rather than observed, it says so.
+The `resume_session` tool extracts selected context from an earlier top-level OMP session. It does not restore that session or append its full history to the current conversation.
 
-## `history://` cannot do this
+## Native APIs
 
-`history://<id>` resolves agents **registered in the current process** — live,
-parked, or released subagents of the running `omp`. A top-level session persisted
-by an *earlier* process is not in that registry, so it is unaddressable that way.
-Resuming a prior session therefore has to read the store. Do not re-try
-`history://` for this; it is not a permissions or syntax problem.
+The extension uses these public OMP APIs:
 
-The tool renders what it reads as a normalized transcript — turn-shaped, filtered,
-newest-first — so nothing downstream has to handle raw jsonl.
+| API | Purpose |
+| --- | --- |
+| `listSessionsReadOnly` | Discover session identities without repairing backups or changing files. |
+| `visitEntriesFromFileStream` | Visit JSONL records without retaining the full file. |
+| `FileSessionStorage` | Supply the native filesystem backend for discovery. |
 
-## Locations
+The plugin adds worktree matching, branch evidence, and handoff formatting. Native `history://` serves agent transcripts from the registry and artifact directories. It does not discover arbitrary top-level sessions.
 
+## Store selection
+
+Session discovery calls native `getSessionsDir()`. It does not use one hard-coded root. The default profile normally stores sessions here:
+
+```text
+~/.omp/agent/sessions/<encoded-cwd>/<timestamp>_<uuid>.jsonl
 ```
-~/.omp/agent/sessions/<escaped-cwd>/<timestamp>_<uuid>.jsonl
-~/.omp/agent/sessions/<escaped-cwd>/<timestamp>_<uuid>/      spilled tool output
+
+On Linux, the native resolver uses `$XDG_DATA_HOME/omp/sessions` when that data root already exists:
+
+```text
+$XDG_DATA_HOME/omp/sessions/<encoded-cwd>/<timestamp>_<uuid>.jsonl
 ```
 
-- Config root: `$HOME/${PI_CONFIG_DIR:-.omp}`.
-- Under a named profile (`$OMP_PROFILE` / `$PI_PROFILE`, or the tool's `profile`
-  argument): `<config>/profiles/<name>/agent/sessions`. Not scanned unless asked
-  for, because the active profile is the only one a resume normally means.
-- The directory beside a transcript holds that session's spilled tool output as
-  `<n>.<tool>.log` (the `artifact://` store). It is not a transcript; only
-  `*.jsonl` one level under the root counts.
+In default mode, `PI_CODING_AGENT_DIR` selects `<override>/sessions`. The override does not combine with the XDG data root. A named active profile uses its native profile-specific store. This reference does not duplicate native profile path rules.
 
-`<escaped-cwd>` is lossy — `/Users/you/tmp` becomes `-tmp`, and so does a
-`/tmp`-rooted path under a different rule. **Never reverse it.** Match sessions
-by the `cwd` the `session` record states outright. Both the literal and the
-`realpath` spelling are accepted, because a session records the cwd it was started
-in (`/tmp/x`) while `git rev-parse --show-toplevel` answers with the resolved one
-(`/private/tmp/x`).
+A directory beside each transcript holds spilled tool output. It follows the same selected store:
 
-## Records
+```text
+<selected-store>/<encoded-cwd>/<timestamp>_<uuid>/
+```
 
-One compact JSON object per line, no spaces after separators. `type` discriminates.
-Observed census over an 18-file sample: `message` 13981, `custom` 8822,
-`custom_message` 528, `thinking_level_change` 125, `ttsr_injection` 97,
-`model_change` 63, `mode_change` 52, `title_change` 15, `compaction` 14, `title` 13,
-`session` 13, `service_tier_change` 1, `branch_summary` 1.
+Discovery examines transcript files inside each project directory. It does not descend into artifact directories. It does not automatically scan legacy and XDG stores together. It does not migrate sessions between stores.
 
-### `title` — first line, rewritten in place
+Use the optional `profile` argument to select a profile for read-only discovery. It wins over `OMP_PROFILE` and `PI_PROFILE`. It does not activate a profile or mutate global directory state. Native helpers normalize profile names. An explicit `file` may read an older or exported transcript outside the active store.
+
+## Identity and titles
+
+The native loader understands the fixed title slot and legacy JSON title records. A session header supplies identity:
 
 ```json
-{"type":"title","v":1,"title":"Add generic beads defect detection","source":"auto",
- "updatedAt":"2026-08-25T10:25:13.620Z","pad":"        …"}
+{"type":"session","version":3,"id":"example-id","timestamp":"2026-08-24T11:27:39.091Z","cwd":"/repo/main","previousSessionFiles":[]}
 ```
 
-`pad` exists so the record keeps a fixed width and can be overwritten without
-rewriting the file. That makes `updatedAt` the session's **live last-active time**,
-readable from the first 16 KB — no tail scan needed to sort a listing.
+Relevant fields:
 
-### `session` — identity
+| Field | Meaning |
+| --- | --- |
+| `id` | Session identity, independent of the current process. |
+| `cwd` | Directory where the session began. |
+| `timestamp` | Session creation time. |
+| `previousSessionFiles` | Earlier files in a continued session. |
+| `title` | Title supplied by the header or native title slot. |
+
+Legacy title records can contain `title`, `updatedAt`, and padding for an in-place update. The tool also checks record timestamps when computing activity time.
+
+## Conversation records
+
+A `message` record wraps a message with a `role` and `content`. Content can be text or an array of blocks.
+
+| Block type | Handoff treatment |
+| --- | --- |
+| `text` | Keep the text, with an explicit rendering limit. |
+| `thinking` | Omit unless `include_thinking` is true. |
+| `toolCall` | Keep the tool name and a brief argument or intent summary. |
+| Image or attachment | Omit from the handoff. |
+
+Keep user and assistant messages that contain visible text or a tool call. Exclude developer messages, protocol noise, and empty turns.
+
+Tool-result messages use `toolCallId` to identify their assistant call. Keep a clipped result and its error flag with that call. A result can occur after other messages without losing its association.
+
+## Latest plan
+
+The `todo` tool's result carries a complete board in `message.details.phases`:
 
 ```json
-{"type":"session","version":3,"id":"01a03386-…","timestamp":"2026-08-24T11:27:39.091Z",
- "cwd":"/Users/sjors/personal/dev/omp-orchestrate",
- "previousSessionFiles":["/Users/sjors/.omp/agent/sessions/-.local-share-chezmoi/…jsonl"]}
+{"phases":[{"name":"Delivery","tasks":[{"content":"Confirm release approval","status":"blocked"}]}]}
 ```
 
-`cwd` is the only reliable project key. `previousSessionFiles` marks a session
-continued from earlier files; the row flags it as `continued`.
+Use the latest actual board, not a reconstruction from operation names. A later empty board clears earlier tasks. Ignore synthetic results that contain no board.
 
-### `message` — the conversation
+Rendering limits the plan to 6,000 characters and reports clipping. This limit does not change the stored task state.
 
-`message.role` is `user`, `assistant`, `toolResult`, or `developer`. Observed
-distribution in one 4857-record session: `toolResult` 1514, `assistant` 1479,
-`user` 96, `developer` 1.
+## Compaction and exit records
 
-`message.content` is a block array:
+A `compaction` record marks a context boundary. Count its position after filtering empty turns. Include up to three recent `shortSummary` values, each limited to 400 characters.
 
-| block | fields | note |
-| --- | --- | --- |
-| `text` | `text` | prose |
-| `thinking` | `thinking`, `thinkingSignature` | ~half of all assistant blocks; dropped unless `include_thinking` |
-| `toolCall` | `id`, `name`, `arguments`, `intent` | `intent` is the human label |
+A custom `session_exit` entry supplies `data.kind` and `data.reason`. This entry describes how the previous session ended. It does not authorize further actions.
 
-An assistant message also carries `usage`, `contextSnapshot`, `model`, `provider`,
-`stopReason`, `duration`, `ttft`. A `toolResult` carries `toolCallId`, `toolName`,
-`isError`, `details`, and sometimes `useless: true`.
+A `branch_summary` entry describes a conversation branch, not a Git branch.
 
-`toolResult` records are folded into the assistant turn that called them, keyed by
-`toolCallId`, so a window reads as a conversation rather than a record dump.
+## Git branch evidence
 
-### `toolName: "todo"` — the plan state
+Recover the branch from transcript evidence in this priority order:
 
-The result's `details` carries the **entire board**, not the delta:
+1. A confirmed Git switch or tracking-branch setup.
+2. Git status output.
+3. A branch-creation command without confirmed output.
+4. A command that only mentions a branch.
 
-```json
-{"op":"done","phases":[{"name":"Detection","tasks":[{"content":"…","status":"completed"}]}],
- "storage":"session","completedTasks":[…]}
-```
+Within one priority level, the latest evidence wins. Label the last two levels as inferred. Reject filenames, commit hashes, and `HEAD` as branch names.
 
-So the newest `todo` result is the authoritative plan state; reconstructing it from
-the `init`/`append`/`done`/`block`/`unblock`/`rm`/`start` op stream is unnecessary.
-Some results are synthetic (`{"__synthetic":true,"source":"interrupt_skipped"}`)
-and carry no `phases`; those are skipped.
+Status output can describe a child worktree. It must not override a confirmed switch in the session. If the worktree now uses a different branch, show that difference separately.
 
-### `compaction` — a hole in the record
+## Window selection
 
-```json
-{"type":"compaction","method":"…","shortSummary":"…","summary":"…","firstKeptEntryId":"…",
- "tokensBefore":…,"tokensAfter":…}
-```
+`turns` defaults to eight. `offset` skips that many newest filtered turns. Output runs newest-first, while displayed turn numbers remain chronological.
 
-Turns before it survive only as its summary. The window marks the gap rather than
-presenting a continuous history.
+The first streaming pass computes exact metadata and the latest plan. The second pass retains only the requested turn window and its tool-result associations. Neither pass creates an array of all historical turns.
 
-### `custom` / `custom_message`
+`max_chars` limits rendered turns and their compaction markers. Stop between rendered turns rather than cutting a turn in half. Long text bodies and tool results carry explicit clipping notices.
 
-`custom` is mostly `tool_execution_start` (one per tool call) plus
-`session_exit` (`{"reason":"dispose","kind":"normal"}`), which tells you how the
-session ended. `custom_message` carries harness chatter: `advisor`, `async-result`,
-`launch-completion`, `mid-run-todo-nudge`, `ttsr-injection`, `irc:incoming`,
-`lsp-late-diagnostic`, `plan-mode-context`, `orchestrate-notice`.
+The plan and other metadata sit outside the turn budget. Title and compaction-summary limits prevent large metadata fields from dominating the response.
 
-### `branch_summary` is not a git branch
+Paging instructions include the selected file path. A later page must not resolve a different transcript because of an ambiguous id prefix or a changed project directory.
 
-```json
-{"type":"branch_summary","fromId":"…","summary":"","details":{"kind":"discarded-entry-branch"}}
-```
+## Read safety and cost
 
-It records a **conversation** branch — an edit or rewind that discarded entries.
-Nothing in the store records a git branch.
+Only read regular files. Bound each streaming pass by its starting file size. If the source changes during a read, return an error rather than mix two snapshots.
 
-## Recovering the git branch
+Skip malformed JSONL records and values that are not objects. A truncated final record must not hide earlier valid records. Cancellation ends the read without reporting partial success.
 
-No `gitBranch` field exists (verified: zero occurrences across the whole store), so
-the branch a session worked on is recovered from what it ran, in tiers:
+The tool does not open `SessionManager`, acquire a writer lock, migrate sessions, or resolve image blobs. Current user instructions remain authoritative over transcript content.
 
-1. **switched** — git confirming that *this session* moved onto a branch:
-   `Switched to (a new) branch 'x'`, `branch 'x' set up to track`.
-2. **status** — genuine git output, but about whatever directory the command ran
-   in: `On branch x`, `Your branch is up to date with 'origin/x'`. For an
-   orchestrating session that directory is often a sibling worktree, which is why
-   this must never displace a tier-1 sighting.
-3. **created** — an explicit creating command whose output was not captured:
-   `git checkout -b x`, `git switch -c x`, `git worktree add … -b x`. Global
-   options are tolerated (`git -C dir …`, `dgit …`).
-4. **mentioned** — a bare `git checkout x` or a `git push <remote> x` argument.
-   Weakest: the command may have failed.
-
-The latest sighting in the strongest tier available wins, because a session ends on
-the branch it last moved to. Filenames, shas, `HEAD`, and option-shaped tokens are
-rejected. Tiers 3 and 4 are labelled `(inferred)`; git never confirmed them.
-
-Observed on 8 real sessions across 3 projects: 4 `switched`, 1 `mentioned`,
-3 `null` (short sessions that ran no git command). Orchestrating sessions commonly
-resolve to their own checkout's branch rather than a child worktree's, which is
-correct — the children did that work in their own sessions.
-
-**Drift** is the branch label against the worktree's branch *now*: when they differ
-the row says `[worked-on → worktree now on <current>]`, meaning on-disk files no
-longer match that session's work.
-
-## Filtering and paging
-
-- Turns with neither prose nor a tool call are dropped — protocol artefacts.
-- Tool results are clipped to 240 chars, turn text to 1600.
-- `turns` (default 8) and `offset` page a window; rendering is newest-first and
-  stops on a turn boundary when `max_chars` (default 14000) runs out, so a partial
-  turn never reads as a whole one.
-- Every window reports an estimated uncached token cost at ~4 chars/token. It is
-  uncached because the window is generated fresh per call.
-
-## Cost of reading
-
-The whole file is read and parsed. The largest transcript observed (21 MB, 6229
-records) reads and parses in ~40 ms, so windowing the read would buy nothing and
-would turn the turn count into a guess. Listing filters on a 16 KB head read
-first — 184 files scan in ~35 ms — and only fully parses the sessions that belong
-to the project.
+Report the output's estimated token cost separately from the source's byte-based token estimate. Sum output costs across discovery and read windows. These estimates do not measure provider billing or cache hits.
