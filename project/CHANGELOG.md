@@ -1,5 +1,21 @@
 # Changelog
 
+## [1.0.0](https://github.com/srobroek/omp-plugins/compare/project--v0.4.0...project--v1.0.0) (2026-09-08)
+
+
+### ⚠ BREAKING CHANGES
+
+* Drop support for APM formats and sidecar agent contracts.
+
+### Features
+
+* retire APM formats and add staged lint ([#68](https://github.com/srobroek/omp-plugins/issues/68)) ([07996f1](https://github.com/srobroek/omp-plugins/commit/07996f115baddbe4261ce6892100238bff2310bd))
+
+
+### Refactors
+
+* retire redundant agents and repair role routing ([#66](https://github.com/srobroek/omp-plugins/issues/66)) ([1a8dbb2](https://github.com/srobroek/omp-plugins/commit/1a8dbb24f127dfcbacb624857459a36a918ca4e6))
+
 ## [0.4.0](https://github.com/srobroek/omp-plugins/compare/project--v0.3.1...project--v0.4.0) (2026-09-08)
 
 
