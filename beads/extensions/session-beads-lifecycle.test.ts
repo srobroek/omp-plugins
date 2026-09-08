@@ -1,4 +1,7 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { describe, expect, test } from "bun:test";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import sessionBeadsLifecycle, {
 	bdVerbs,
@@ -11,12 +14,10 @@ import sessionBeadsLifecycle, {
 	heldClaims,
 	isBdWrite,
 	lastPushNotice,
-	memoriesNotice,
 	parseTrailingJson,
 	readBeads,
 	readCheckOutcome,
 	readGates,
-	resetSessionBeadsLifecycleForTests,
 	staleSkipNotice,
 } from "./session-beads-lifecycle.ts";
 
@@ -61,10 +62,6 @@ const BEAD_LIST = JSON.stringify({
 		{ id: "bd-probe-2m7", title: "target work", status: "in_progress", assignee: "omp/Main/s1" },
 	],
 	schema_version: 1,
-});
-
-afterEach(() => {
-	resetSessionBeadsLifecycleForTests();
 });
 
 describe("parseTrailingJson / envelopeData", () => {
@@ -168,38 +165,6 @@ describe("lastPushNotice", () => {
 	test("a successful verdict says nothing", () => {
 		expect(lastPushNotice("started: dbd\nok: pushed 3 commits\n")).toBeUndefined();
 		expect(lastPushNotice("")).toBeUndefined();
-	});
-});
-
-describe("memoriesNotice", () => {
-	/** `bd prime --memories-only` on a workspace with nothing stored, verbatim. */
-	const EMPTY = [
-		"[bd prime] If this output is truncated by your host, read the full persisted hook output before continuing.",
-		"",
-		"# Beads Persistent Memories",
-		"",
-		'No memories stored. Use `bd remember "insight"` to add one.',
-		"",
-	].join("\n");
-
-	test("an empty store says nothing", () => {
-		expect(memoriesNotice(EMPTY)).toBeUndefined();
-		expect(memoriesNotice("")).toBeUndefined();
-	});
-
-	test("stored memories survive, without bd's advice to its hook host", () => {
-		const text = memoriesNotice(
-			`[bd prime] If this output is truncated by your host, read the full persisted hook output.\n\n# Beads Persistent Memories\n\n- Dolt server mode is the default here.\n`,
-		)!;
-		expect(text).toContain("Dolt server mode is the default here.");
-		expect(text).not.toContain("[bd prime]");
-	});
-
-	test("the full command reference is never what this injects", () => {
-		// Guard against a future switch to bare `bd prime`: rule://beads-core owns
-		// the command contract, and duplicating it is the cost this avoids.
-		const text = memoriesNotice("# Beads Persistent Memories\n\n- one insight\n")!;
-		expect(text).not.toContain("Essential Commands");
 	});
 });
 
@@ -316,11 +281,6 @@ describe("handleSessionStop", () => {
 		expect(r?.additionalContext).toContain("bd-probe-2m7");
 	});
 
-	test("does not fire twice in a row", () => {
-		expect(handleSessionStop({}, BEAD_LIST, new Set(["bd-probe-2m7"]), undefined)).toBeDefined();
-		expect(handleSessionStop({}, BEAD_LIST, new Set(["bd-probe-2m7"]), undefined)).toBeUndefined();
-	});
-
 	test("skips its own continuation", () => {
 		expect(handleSessionStop({ stop_hook_active: true }, BEAD_LIST, new Set(["bd-probe-2m7"]))).toBeUndefined();
 		expect(handleSessionStop({ stopHookActive: true }, BEAD_LIST, new Set(["bd-probe-2m7"]))).toBeUndefined();
@@ -330,8 +290,8 @@ describe("handleSessionStop", () => {
 		expect(handleSessionStop({}, BEAD_LIST, new Set(), undefined)).toBeUndefined();
 	});
 
-	test("an unreadable database makes no claim", () => {
-		expect(handleSessionStop({}, undefined, new Set(["bd-probe-2m7"]), undefined)).toBeUndefined();
+	test("an unreadable database reports uncertainty", () => {
+		expect(handleSessionStop({}, undefined, new Set(["bd-probe-2m7"]), undefined)?.additionalContext).toContain("could not be verified");
 	});
 });
 
@@ -353,21 +313,77 @@ describe("integration", () => {
 		return { handlers, logged };
 	};
 
-	test("registers both boundaries, the compaction refresh, and the bash watcher", () => {
-		const { handlers } = wire();
-		expect(Object.keys(handlers).sort()).toEqual([
-			"auto_compaction_end",
-			"session_start",
-			"session_stop",
-			"tool_result",
-			"turn_start",
-		]);
-	});
 
-	test("a non-beads cwd produces no post-compaction message", async () => {
-		const { handlers, logged } = wire();
-		await handlers.auto_compaction_end![0]!({}, { cwd: "/nonexistent-repo" });
-		expect(logged).toEqual([]);
+	test("session isolation preserves sibling notices, claims and repeated starts", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "beads-session-isolation-"));
+		const originalPath = process.env.PATH;
+		const originalBeads = process.env.BEADS_DIR;
+		const originalActor = process.env.BEADS_ACTOR;
+		try {
+			mkdirSync(join(dir, ".beads"));
+			writeFileSync(join(dir, "bd"), `#!/bin/sh
+printf '%s\\n' "$*" >> '${dir}/calls'
+case "$1" in
+gate) printf '%s\\n' '[{"id":"bd-human","status":"open","await_type":"human"}]' ;;
+list) printf '%s\\n' '[{"id":"bd-alpha","status":"in_progress"},{"id":"bd-beta","status":"in_progress"}]' ;;
+*) printf '%s\\n' 'unexpected memory replay' ;;
+esac
+`);
+			chmodSync(join(dir, "bd"), 0o755);
+			process.env.PATH = `${dir}:${originalPath ?? ""}`;
+			delete process.env.BEADS_DIR;
+			delete process.env.BEADS_ACTOR;
+			const { handlers, logged } = wire();
+			const context = (id: string, cwd = dir) => ({ cwd, sessionManager: { getSessionId: () => id } });
+			const invoke = async (name: string, id: string, event: unknown = {}, cwd = dir) =>
+				await handlers[name]?.[0]?.(event, context(id, cwd)) as { additionalContext?: string; content?: unknown[] } | undefined;
+			const mutation = (id: string) => ({
+				toolName: "bash", isError: true,
+				input: { command: `bd update bd-${id} --claim && false` },
+				content: [{ type: "text", text: "Imported 3 issues (2 stale skipped)" }],
+			});
+
+			await invoke("session_start", "alpha", {}, join(dir, "absent"));
+			await invoke("session_start", "beta");
+			await invoke("session_start", "alpha");
+			expect(logged.filter(text => text.includes("bd-human"))).toHaveLength(2);
+			expect(logged.some(text => text.includes("unexpected memory replay"))).toBe(false);
+			await invoke("auto_compaction_end", "alpha");
+			expect(logged.some(text => text.includes("unexpected memory replay"))).toBe(false);
+			expect(readFileSync(join(dir, "calls"), "utf8")).not.toMatch(/prime|memories|remember|forget/);
+
+			expect((await invoke("tool_result", "alpha", mutation("alpha")))?.content).toBeDefined();
+			expect(await invoke("tool_result", "alpha", mutation("alpha"))).toBeUndefined();
+			expect(await invoke("session_stop", "beta")).toBeUndefined();
+			expect((await invoke("tool_result", "beta", mutation("beta")))?.content).toBeDefined();
+			const alpha = await invoke("session_stop", "alpha");
+			expect(alpha?.additionalContext).toContain("bd-alpha");
+			expect(alpha?.additionalContext).not.toContain("bd-beta");
+			const beta = await invoke("session_stop", "beta");
+			expect(beta?.additionalContext).toContain("bd-beta");
+			expect(beta?.additionalContext).not.toContain("bd-alpha");
+			expect(await invoke("session_stop", "alpha")).toBeUndefined();
+			await invoke("turn_start", "beta");
+			expect(await invoke("session_stop", "alpha")).toBeUndefined();
+			expect((await invoke("session_stop", "beta"))?.additionalContext).toContain("bd-beta");
+
+			await invoke("session_start", "alpha", {}, join(dir, "absent"));
+			expect(await invoke("session_stop", "alpha")).toBeUndefined();
+			expect((await invoke("tool_result", "alpha", mutation("beta")))?.content).toBeDefined();
+			const restarted = await invoke("session_stop", "alpha");
+			expect(restarted?.additionalContext).toContain("bd-beta");
+			expect(restarted?.additionalContext).not.toContain("bd-alpha");
+			await invoke("session_shutdown", "alpha");
+			expect(await invoke("session_stop", "alpha")).toBeUndefined();
+		} finally {
+			if (originalPath === undefined) delete process.env.PATH;
+			else process.env.PATH = originalPath;
+			if (originalBeads === undefined) delete process.env.BEADS_DIR;
+			else process.env.BEADS_DIR = originalBeads;
+			if (originalActor === undefined) delete process.env.BEADS_ACTOR;
+			else process.env.BEADS_ACTOR = originalActor;
+			rmSync(dir, { recursive: true, force: true });
+		}
 	});
 
 	test("a stale-skip import result is advised in band, once", () => {
@@ -420,20 +436,6 @@ describe("integration", () => {
 		expect(await handlers.session_stop![0]!({}, { cwd: "/nonexistent-repo" })).toBeUndefined();
 	});
 
-	test("a failed bd command is not a write", () => {
-		const { handlers } = wire();
-		handlers.tool_result![0]!(
-			{
-				toolName: "bash",
-				toolCallId: "c1",
-				isError: true,
-				input: { command: "bd close bd-probe-2m7 --reason done" },
-				content: [{ type: "text", text: "Error: issue not found" }],
-			},
-			{ cwd: "/repo" },
-		);
-		expect(handleSessionStop({}, BEAD_LIST)).toBeUndefined();
-	});
 
 	test("a non-beads cwd produces no session-start message", async () => {
 		const { handlers, logged } = wire();

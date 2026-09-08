@@ -38,7 +38,7 @@ const DB_BOOL_FLAGS = new Set(["--global"]);
 /** `bd close` verbs. `done` is a documented alias. */
 const CLOSE_VERBS = new Set(["close", "done"]);
 
-const SEPARATORS = new Set([";", "&", "|", "(", ")"]);
+const SEPARATORS = new Set([";", "&", "|", "(", ")", "\n"]);
 
 /** `<prefix>-<suffix>` bd id, e.g. `bdp-47b` or `sk-gate-probe-7gu`. */
 const BD_ID = /^[A-Za-z][A-Za-z0-9]*(?:-[A-Za-z0-9]+)+$/;
@@ -61,6 +61,7 @@ function defaultRun(argv: string[], cwd: string): { exitCode: number; stdout: st
 		stdout: "pipe",
 		stderr: "pipe",
 		timeout: TIMEOUT_MS,
+		env: { ...process.env, BD_JSON_ENVELOPE: "1", BD_NO_PAGER: "1", BD_NON_INTERACTIVE: "1" },
 	});
 	return { exitCode: proc.exitCode ?? 1, stdout: proc.stdout.toString() };
 }
@@ -108,6 +109,11 @@ export function tokenize(command: string): string[] {
 			i++;
 			continue;
 		}
+		if (ch === "\n") {
+			flush();
+			out.push(ch);
+			continue;
+		}
 		if (/\s/.test(ch)) {
 			flush();
 			continue;
@@ -135,8 +141,28 @@ export type CloseInvocation = {
 export function findCloseInvocations(command: string): CloseInvocation[] {
 	const tokens = tokenize(command);
 	const out: CloseInvocation[] = [];
+	let atCommand = true;
 	for (let i = 0; i < tokens.length; i++) {
-		if (tokens[i] !== "bd") continue;
+		const commandWord = tokens[i] as string;
+		if (SEPARATORS.has(commandWord)) {
+			atCommand = true;
+			continue;
+		}
+		if (!atCommand) continue;
+		if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(commandWord)) continue;
+		if (["command", "env", "sudo", "exec"].includes(commandWord)) {
+			// Common wrapper options belong to the wrapper, never to bd.
+			while (tokens[i + 1]?.startsWith("-")) {
+				const option = tokens[++i] as string;
+				if (option === "--") break;
+				if ((commandWord === "sudo" && ["-u", "-g", "-h", "-p", "-C", "-T", "-r", "-t",
+					"--user", "--group", "--host", "--prompt", "--chdir"].includes(option)) ||
+					(commandWord === "env" && ["-u", "--unset", "-C", "--chdir"].includes(option))) i++;
+			}
+			continue;
+		}
+		atCommand = false;
+		if (commandWord !== "bd") continue;
 		const dbArgs: string[] = [];
 		const ids: string[] = [];
 		let verb: string | null = null;
@@ -171,7 +197,7 @@ export function findCloseInvocations(command: string): CloseInvocation[] {
 			}
 			if (BD_ID.test(token)) ids.push(token);
 		}
-		i = j;
+		i = j - 1;
 		if (verb !== null && CLOSE_VERBS.has(verb)) out.push({ ids, dbArgs });
 	}
 	return out;
@@ -202,14 +228,19 @@ export function gateIdsAmong(
 	try {
 		parsed = JSON.parse(result.stdout);
 	} catch {
-		return [];
+		throw new Error("bd show returned unreadable JSON; gate types remain unverified");
 	}
+	if (parsed !== null && typeof parsed === "object" && !Array.isArray(parsed) &&
+		"schema_version" in parsed && "data" in parsed) parsed = parsed.data;
 	// A failed lookup answers with an `{error}` object instead of the array.
-	if (!Array.isArray(parsed)) return [];
+	if (!Array.isArray(parsed)) throw new Error("bd show returned no issue array; gate types remain unverified");
 	const gates: string[] = [];
 	for (const row of parsed) {
-		if (!row || typeof row !== "object") continue;
+		if (!row || typeof row !== "object") throw new Error("bd show returned malformed issues; gate types remain unverified");
 		const issue = row as { id?: unknown; issue_type?: unknown };
+		if (typeof issue.id !== "string" || typeof issue.issue_type !== "string") {
+			throw new Error("bd show omitted issue identity or type; gate types remain unverified");
+		}
 		if (issue.issue_type === "gate" && typeof issue.id === "string") gates.push(issue.id);
 	}
 	return gates;
@@ -254,7 +285,18 @@ export default function bdCloseGate(pi: ExtensionAPI): void {
 					? event.input.cwd
 					: process.cwd();
 			return decideBdClose(command, cwd);
-		} catch {
+		} catch (error) {
+			try {
+				pi.sendMessage({
+					customType: "com.srobroek.beads.close-lookup",
+					content: `Beads close guard could not verify gate types: ${error instanceof Error ? error.message : String(error)}. Inspect the target before closing; this advisory does not authorize gate closure.`,
+					display: true,
+					attribution: "user",
+					triggerTurn: false,
+				});
+			} catch {
+				// Advisory delivery cannot turn a lookup failure into a tool outage.
+			}
 			return;
 		}
 	});

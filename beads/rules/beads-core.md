@@ -11,23 +11,10 @@ MUST Use bd for all task tracking when the repo has `.beads/` (`bd where`
 DEFAULT SpecKit artifacts (spec.md/plan.md) stay the source for WHAT to build;
   beads tracks execution state, not requirements.
 
-MEMORY
-DEFAULT `bd remember "insight" --key <slug>` for repo-scoped durable facts any
-  agent or tool must see (gotchas, conventions, decisions). `bd prime` injects
-  every memory verbatim each session, so keep the set ≤30.
-MUST Route each captured lesson by what it lands on:
-
-| the memory is | verb |
-|---|---|
-| wrong | `bd remember --key <k>` -- the same key updates in place |
-| obsolete | `bd forget <k>` |
-| neither | a new key |
-
-MUST Where a recalled memory contradicts what you observe, suspect the memory.
-DEFAULT Epic-scoped `<epic>-*` keys perish fastest, and a run reviews them at
-  run end.
-DEFAULT MemPalace keeps cross-session semantic recall; user/global knowledge
-  stays in Claude auto-memory.
+KNOWLEDGE
+MUST Use builtin learn/retain/recall/reflect for persistent knowledge.
+NOT Store or replay persistent knowledge through beads; beads owns issues and
+  work state.
 
 IDENTITY
 MUST Set BEADS_ACTOR (`<harness>/<agent-name>/<session-id>`) on every mutating

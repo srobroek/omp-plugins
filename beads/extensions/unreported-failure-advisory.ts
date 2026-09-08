@@ -19,7 +19,7 @@
 
 import type { ExtensionAPI, ExtensionContext, ExtensionToolResultEvent } from "@oh-my-pi/pi-coding-agent";
 
-import { extractCommand } from "./bd-actor-gate.ts";
+import { commandSegments, extractCommand } from "./bd-actor-gate.ts";
 import { beadsDir, envelopeData, parseTrailingJson } from "./session-beads-lifecycle.ts";
 
 /**
@@ -145,8 +145,14 @@ export function resetUnreportedFailureAdvisoryForTests(): void {
  * attributed without quoting a pipeline back at the agent.
  */
 export function checkLabel(command: string): string | undefined {
-	const match = command.match(CHECK_RE);
-	return match === null ? undefined : match[0].replace(/\s+/g, " ").toLowerCase();
+	for (const tokens of commandSegments(command)) {
+		let i = 0;
+		while (/^[A-Za-z_]\w*=/.test(tokens[i] ?? "")) i++;
+		const candidate = tokens.slice(i).join(" ");
+		const match = candidate.match(CHECK_RE);
+		if (match?.index === 0) return match[0].replace(/\s+/g, " ").toLowerCase();
+	}
+	return undefined;
 }
 
 /**
@@ -301,10 +307,11 @@ async function listBugs(cwd: string): Promise<string> {
 			stderr: "ignore",
 			env: { ...process.env, BD_NO_PAGER: "1", BD_NON_INTERACTIVE: "1", BD_JSON_ENVELOPE: "1" },
 			timeout: BD_TIMEOUT_MS,
+			killSignal: "SIGKILL",
 		});
 		const out = await new Response(proc.stdout).text();
-		await proc.exited;
-		return out;
+		const code = await proc.exited;
+		return code === 0 ? out : "";
 	} catch {
 		return "";
 	}

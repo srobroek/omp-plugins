@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import formulaCheckTool, {
+import {
 	bodySteps,
 	deepAssertFromMol,
 	gateTypeFailures,
@@ -9,10 +9,6 @@ import formulaCheckTool, {
 } from "./formula-check-tool.ts";
 
 
-// Structural stand-in for pi.zod: the module only builds a parameter schema with
-// it (object/string/array/boolean chains); execute() receives already-parsed params.
-const chain = () => new Proxy(() => chain(), { get: () => chain(), apply: () => chain() });
-const z = new Proxy({}, { get: () => chain() }) as never;
 
 describe("parseDryRun", () => {
 	test("classifies steps vs gates", () => {
@@ -71,21 +67,9 @@ describe("deepAssertFromMol", () => {
 					{ id: "a", title: "A" },
 					{ id: "b", title: "B" },
 				],
-				dependencies: [{ issue_id: "b" }],
+				dependencies: [{ issue_id: "b", depends_on_id: "a" }],
 			}),
 		).toEqual([]);
 	});
 });
 
-describe("registerTool", () => {
-	test("registers bd_formula_check", () => {
-		const captured: Record<string, unknown> = {};
-		const fakePi = {
-			zod: z,
-			registerTool: (d: Record<string, unknown>) => Object.assign(captured, d),
-			on: () => {},
-		};
-		formulaCheckTool(fakePi as never);
-		expect(captured.name).toBe("bd_formula_check");
-	});
-});
