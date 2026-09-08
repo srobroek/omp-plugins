@@ -58,8 +58,8 @@ change of execution belongs in mol-design-fix-findings instead, so classify
 before revising. Read node {{node}} for the previous round's evidence rather than
 asking the user to restate it.
 
-In an unattended run do not stall: record what a reviewer would have been asked
-and the recommended answers, then proceed. Only bd gate resolve closes the gate.
+Without explicit approval for changed intent, record the unanswered questions and
+leave this step unresolved, including unattended runs. Only bd gate resolve closes the gate.
 """
 
 [steps.gate]
@@ -169,8 +169,8 @@ each question and give a recommended answer with it. Another round bonds a
 further mol-design-iterate with round incremented, rather than reopening this
 one, so each round keeps its own evidence.
 
-In an unattended run do not stall: record what a reviewer would have been asked
-and the recommended answers, then proceed. Only bd gate resolve closes the gate.
+Without explicit acceptance, record the evidence and unanswered request and leave
+this step unresolved, including unattended runs. Only bd gate resolve closes the gate.
 """
 
 [steps.gate]

@@ -49,22 +49,11 @@ description = "paths the work may touch"
 default = "web"
 description = "web uses browser; any other value uses computer for native desktop"
 
-# Accepted for interface parity with design-touch and design-surface, and it
-# conditions no step here. This tier has no optional DESIGN.md: document-system is
-# unconditional, because establishing a system without its authored-intent
-# artifact is not establishing a system. Pour design-surface when the DESIGN.md
-# write is the optional part.
+# Select documentation only when requested and its upstream is available.
 [vars.want_design_md]
 default = "false"
-description = "accepted for parity with the other two tiers; inert here because document-system is unconditional"
+description = "true when the user requests DESIGN.md and design-md's upstream is available"
 
-[vars.system_absent]
-default = "false"
-description = "true when design-system-audit returned ABSENT or PARTIAL, so establishing the scales needs human approval"
-
-[vars.want_fix_round]
-default = "false"
-description = "true when RECONCILE leaves work that needs one more deliberate fix pass before the approval gate"
 
 [vars.themes]
 default = "light,dark"
@@ -84,8 +73,8 @@ description = """
 Run skill://design-system-audit across {{scope}}. Inventory every token carrier,
 scale, primitive, and theme mechanism already present, plus the raw literals that
 bypass them. Record the registry on this bead. Verdict PRESENT, PARTIAL, or
-ABSENT; ABSENT or PARTIAL means pour with system_absent=true. Rebuilding is not
-starting over: anything already load-bearing constrains the new system.
+ABSENT. The system decision step evaluates that verdict before any new scale
+is authored. Anything already load-bearing constrains the new system.
 
 Detect the stack from evidence, never from a default: package.json dependencies,
 pubspec.yaml, a *.xcodeproj or Package.swift, composer.json, or app.json plus a
@@ -99,11 +88,11 @@ server that did not connect. A wrapper whose upstream is missing STOPS when it i
 reached, so an unrecorded gap strands this molecule at the step that needs it
 rather than here.
 
-document-system is UNCONDITIONAL in this tier, so its upstream create-design-md is
-required on every run: ask for `omp plugin install ui-skills@srobroek-omp` at the
-INTENT gate. Promote any other install only when a step that is actually ENABLED
-needs it. An install applies from the NEXT session, so a gap named here costs a
-command and the same gap found at document-system costs a session.
+document-system is conditional on {{want_design_md}}. Its upstream
+create-design-md is required only when the user requests that artifact.
+If requested but unavailable, report `omp plugin install ui-skills@srobroek-omp`
+and wait for availability or explicit approval to omit it. Do not silently
+change the request. Record the system contract on beads regardless.
 """
 
 [steps.metadata]
@@ -130,8 +119,8 @@ asymmetric), motion (subtle micro-interactions through complex choreography), an
 density (spacious through dense dashboard). Confirm the theme axis {{themes}} and
 the density axis {{density}} are the ones the product actually needs.
 
-Never ask what a tool could answer. In an unattended run do not stall: record
-what a reviewer would have been asked and the recommended answers, then proceed.
+Never ask what a tool could answer or what the request already specifies.
+Unresolved intent stays blocked without explicit approval, including unattended runs.
 Only bd gate resolve closes the gate.
 """
 
@@ -144,19 +133,16 @@ id = "grill-system"
 title = "SYSTEM gate: approve the scales this system introduces"
 type = "task"
 needs = ["ground-system"]
-condition = "{{system_absent}}"
 labels = ["design", "phase:gate"]
 description = """
-GROUND returned ABSENT or PARTIAL, so this run will establish scales that did not
-exist. Ask the user to approve each axis before any token is authored: the colour
-ramp shape, the type scale and its ratio, the spacing scale and its base, the
-radius set, the elevation set, and whether a fluid type scale is wanted at all.
-Introducing a scale is a system decision the agent must not take alone.
+Read GROUND's verdict and the proposed change. PRESENT with no new scales:
+record N/A with registry evidence and resolve this gate. Otherwise obtain
+explicit approval for each introduced or replaced axis: colour ramps, type
+ratio, spacing base, radii, elevation, and any fluid type scale.
 
-In an unattended run record what a reviewer would have been asked and the
-recommended answers, then proceed with the most conservative option, which is
-extending whatever GROUND already found rather than replacing it. Only bd gate
-resolve closes the gate.
+Existing approval covering the exact change is sufficient. Without it, leave
+this step unresolved, including unattended runs. Recommended answers are not
+consent. Only bd gate resolve closes the gate.
 """
 
 [steps.gate]
@@ -178,8 +164,7 @@ axis {{themes}} and the density axis {{density}} and how each maps to a selector
 Name the primitive set the system must ship. Pin the source format to DTCG Format
 Module 2025.10.
 
-ground-system and grill-intent are named unconditionally so this step stays
-reachable when system_absent is false.
+The system decision always precedes this step.
 """
 
 [[steps]]
@@ -297,9 +282,9 @@ needs = ["inventory-primitives", "build-token-artifacts"]
 labels = ["design", "phase:build"]
 description = """
 Component Driven stage one. Build or migrate each primitive from the inventory on
-its own, in isolation, starting small. Every primitive covers all nine states:
-default, hover, focus-visible, active, disabled, loading, empty, error,
-selected.
+its own, in isolation, starting small. Enumerate default, hover, focus-visible,
+active, disabled, loading, empty, error, selected. Implement every applicable
+state; record N/A with a primitive-specific reason for the others.
 
 Every colour comes from a token and every spacing value from the scale; the built
 artifacts exist by now, so a raw literal here is a mistake, not a shortcut.
@@ -366,7 +351,7 @@ computer otherwise. Where a Storybook exists, render the isolated story at
 iframe.html?id=<storyId>; otherwise use a scratch harness page.
 
 Evidence order is fixed: ARIA snapshot first, computed styles second, screenshot
-last. Widths 1440, 768, 375. Assert all nine states per primitive, and assert the
+last. Widths 1440, 768, 375. Assert every applicable state per primitive, and assert the
 computed values resolve to the generated tokens for every theme in {{themes}}.
 This is where the token spine and the primitive pass rejoin.
 """
@@ -455,9 +440,10 @@ id = "fix-round"
 title = "one more fix pass on the system"
 type = "task"
 needs = ["reconcile-findings"]
-condition = "{{want_fix_round}}"
 labels = ["design", "phase:reconcile"]
 description = """
+Read the reconciled findings at runtime. None remain: record N/A with the
+reconciled evidence and close this step. Otherwise perform the pass below.
 A deliberate second pass over what RECONCILE left, when that is cheaper than
 another molecule. Fix inside {{scope}} only, re-verify only the changed
 assertion, and record what changed since the previous round along with the round
@@ -470,6 +456,7 @@ id = "document-system"
 title = "document the system and write DESIGN.md"
 type = "task"
 needs = ["reconcile-findings", "fix-round"]
+condition = "{{want_design_md}}"
 labels = ["design", "phase:document"]
 description = """
 Run skill://design-md. Write repo-root DESIGN.md as the authored-intent artifact:
@@ -486,8 +473,7 @@ tokens/**/*.json is canonical and DESIGN.md is a projection. Gate the result
 with: npx --yes @google/design.md lint "$(git rev-parse --show-toplevel)/DESIGN.md"
 Review a change to it with: npx --yes @google/design.md diff "<before>" "<after>"
 
-reconcile-findings is named unconditionally so this step stays reachable when
-want_fix_round is false.
+When documentation is not requested, retain the contract and evidence on beads.
 """
 
 [steps.metadata]
@@ -497,19 +483,19 @@ skill_hints = "design-md"
 id = "system-approval"
 title = "ACCEPT gate: human approval of the system"
 type = "task"
-needs = ["document-system"]
+needs = ["fix-round", "document-system"]
 labels = ["design", "phase:gate"]
 description = """
 Present the whole chain for approval: the schema gate result, the theme and
 density matrix, the contrast gate with every measured ratio, the primitive
 inventory, the component-level and page-level evidence, both child verdicts, and
-DESIGN.md. Then grill the user: is the system accepted as the project's
-authority, and is another iteration wanted. Number each question and give a
-recommended answer with it.
+DESIGN.md when requested, otherwise the recorded system contract. Ask the user
+whether the system is accepted as the project's authority and another iteration is wanted.
+Number unresolved questions and give a recommended answer with each.
 
-In an unattended run do not stall: record on this bead what a reviewer would have
-been asked and the recommended answers, then proceed. Only bd gate resolve closes
-the gate. Another round bonds mol-design-iterate onto this step.
+Without explicit acceptance, record the evidence and unanswered request and leave
+this step unresolved, including unattended runs. Only bd gate resolve closes the
+gate. An approved additional round bonds mol-design-iterate onto this step.
 """
 
 [steps.gate]

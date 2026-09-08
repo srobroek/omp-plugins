@@ -1,0 +1,21 @@
+{
+  "mcpServers": {
+    "accessibility-scanner": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "accessibility-scanner-mcp"
+      ]
+    },
+    "wire-dsl": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@wire-dsl/mcp-server"
+      ]
+    },
+    "storybook": {
+      "url": "http://localhost:6006/mcp"
+    }
+  }
+}

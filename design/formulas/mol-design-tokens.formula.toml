@@ -79,9 +79,9 @@ gets to choose it. Introducing a scale is a system decision the agent must not
 take alone: that is why this gate precedes authoring rather than following the
 build.
 
-In an unattended run do not stall: record what a reviewer would have been asked
-and the recommended answers, then proceed with the most conservative option, which
-is extending what INVENTORY found. Only bd gate resolve closes the gate.
+Without explicit approval for new or replaced scales, record the unanswered
+questions and leave this step unresolved, including unattended runs.
+Only bd gate resolve closes the gate.
 """
 
 [steps.gate]

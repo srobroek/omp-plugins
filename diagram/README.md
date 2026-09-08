@@ -10,7 +10,7 @@ omp plugin install diagram@srobroek-omp
 ```
 
 OMP discovers plugins and connects MCP servers at startup, so the server becomes available
-in the NEXT session. `omp plugin list` then reports `diagram@srobroek-omp (0.1.0)`.
+in the NEXT session. `omp plugin list` then reports `diagram@srobroek-omp`.
 
 ## MCP servers
 
@@ -24,4 +24,4 @@ MCP servers connect only at session startup. An agent cannot reconnect them. A s
 
 ## Licenses
 
-`@mcp-demos/excalidraw-server` declares MIT in its `package.json` but ships no LICENSE file. It is advertised as a pointer and is never vendored.
+`@mcp-demos/excalidraw-server` declares MIT in its `package.json` but ships no LICENSE file. This plugin advertises the server without vendoring it.

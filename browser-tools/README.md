@@ -10,7 +10,7 @@ omp plugin install browser-tools@srobroek-omp
 ```
 
 OMP discovers plugins and connects MCP servers at startup, so both servers become available
-in the NEXT session. `omp plugin list` then reports `browser-tools@srobroek-omp (0.1.0)`.
+in the NEXT session. `omp plugin list` then reports `browser-tools@srobroek-omp`.
 
 ## MCP servers
 

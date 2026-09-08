@@ -22,27 +22,28 @@ omp plugin link <path-to-repo>/design
 
 Install the `beads` plugin too: the formulas assume a beads workspace.
 
-Either carrier applies from the NEXT session, because OMP discovers plugins at startup.
+Both installation methods take effect in the next session. OMP discovers plugins at startup.
 
 ## Usage
 
-In that next session, the eleven skills load, the five rules are listed, and
-`ui-ux-specialist` is spawnable. Confirm the package registered:
+In that next session, OMP loads eleven skills and lists five rules. For interface
+work, spawn `ui-ux-specialist`. Confirm the package registered:
 
 ```bash
 omp plugin list
 ```
 
-A marketplace install appears there as `design@srobroek-omp (0.1.0)`. `omp plugin doctor`
-reports a `✔ plugin:@srobroek/design` line for a linked directory only, and a
-`⚠ … not an omp plugin` line means that directory's rules and agents are silently absent.
+A marketplace install appears there as `design@srobroek-omp`. `omp plugin doctor`
+reports a `✔ plugin:@srobroek/design` line for a linked directory only.
+A `⚠ … not an omp plugin` line means that directory's rules and agents are silently absent.
 
 ## Skills
 
-The wrapper skills route to the upstream skills below. When an upstream is absent, the
-wrapper stops and prints the install command. Four are not wrappers: `design-overview` and
-`ui-review` are implemented here, and `wireloom` and `ux-copy` are vendored, so all four ship
-with this package.
+The wrapper skills route to the upstream skills below. When an upstream is absent,
+the wrapper stops and prints the installation command.
+
+Four skills are not wrappers. This package implements `design-overview` and
+`ui-review` locally and vendors `wireloom` and `ux-copy`. All four ship with this package.
 
 | Skill | Implementation or route | Use when |
 |---|---|---|
@@ -69,19 +70,28 @@ with this package.
 The lead spawns `design-critic` and `a11y-auditor` in one parallel batch. It also spawns
 bundled `scout` for recon and `operator` for mechanical steps.
 
-The lead never writes its own critique. An agent reviewing its own UI repeats the gap that
-produced the defect.
+The lead never writes its own critique.
 
 ## Method
 
 Six phases run in order: GROUND, SPECIFY, BUILD, VERIFY, CRITIQUE, RECONCILE.
 
-Three interrogation gates punctuate them. The lead asks for INTENT after GROUND, asks for
-SYSTEM approval when the audit returns ABSENT or PARTIAL, and asks for ACCEPT after
-RECONCILE. `design-surface` and `design-system` each declare all three.
+The lead requests approval at three gates:
 
-When a human is reachable, a gate grills the user. In an unattended run, the gate records
-the question on the bead and proceeds.
+- After GROUND, it asks for INTENT.
+- When the audit returns ABSENT or PARTIAL, it asks for SYSTEM approval.
+- After RECONCILE, it asks for ACCEPT.
+
+`design-surface` and `design-system` each declare all three gates.
+
+Unresolved intent, new scales, and acceptance require explicit approval. Unattended
+runs record unanswered questions and remain blocked on those branches.
+
+`grill-system` and `fix-round` are always present and evaluate runtime evidence.
+When no decision or further fix is necessary, they record N/A.
+
+`want_design_md` is a pour-time option. Enable it only for requested documentation
+with available upstream tooling. A missing requested upstream requires approval to omit it.
 
 BUILD follows Component Driven methodology, bottom-up, per
 `https://www.componentdriven.org/`:
@@ -93,8 +103,7 @@ BUILD follows Component Driven methodology, bottom-up, per
 | Assemble pages | Use mock data to reach hard-to-produce states |
 | Integrate pages | Connect real data and business logic |
 
-Because a component-level failure is smaller to locate, verification runs at component
-level first, then at page level. Page-first development is the named anti-pattern.
+Verify components first. Then verify pages. Do not use page-first development.
 
 ## Rules
 
@@ -110,6 +119,8 @@ level first, then at page level. Page-first development is the named anti-patter
 
 Layered DTCG under `tokens/**/*.json` is the canonical machine source. DESIGN.md holds
 authored intent and a linted projection of that source.
+Write the DESIGN.md projection only when requested. Otherwise keep the system
+contract and verification evidence on the work beads.
 
 DESIGN.md is not the compiler input. `npx --yes @google/design.md export "$(git rev-parse
 --show-toplevel)/DESIGN.md" --format dtcg` resolves aliases, flattens colors to sRGB, and
@@ -122,22 +133,24 @@ find tokens -type f -name '*.json' -print0 \
 npx --yes --package=@terrazzo/cli tz build
 ```
 
-Never let a bare bin name be the spec. Naming the package covers `@google/design.md`,
-whose bins are `design.md` and `designmd`. The last two need `--package`: a bare
-`dtokens` resolves an unrelated package, and a bare `tz` resolves a package with no bin.
+Specify the package rather than relying on a bare bin name. `@google/design.md`
+provides the `design.md` and `designmd` bins. The last two commands need `--package`:
+a bare `dtokens` resolves an unrelated package, and a bare `tz` resolves a package with no bin.
 `dtokens` expands no glob, so enumerate the token files and pass each as its own argument.
 
-Terrazzo is the single build authority. A second builder would create a second artifact
-authority. Details in `skills/design-system-audit/references/token-pipeline.md`.
+Terrazzo is the single build authority. Do not add a second token builder.
+See `skills/design-system-audit/references/token-pipeline.md`.
 
 ## Storybook
 
-Storybook documents ten frameworks: React, Vue 3, Angular, and Web Components as core, plus
-Ember, HTML, Svelte, Preact, Qwik, and SolidJS.
+Storybook documents ten frameworks:
 
-The skills run a dev server and keep it, rather than rebuilding. It recompiles on change, it
-outlives the turn, and you can open `http://localhost:6006` to watch the same surface the
-agent drives. The served URL appears in every report.
+- Core: React, Vue 3, Angular, and Web Components
+- Additional: Ember, HTML, Svelte, Preact, Qwik, and SolidJS
+
+The skills keep a dev server running instead of rebuilding. It recompiles on change
+and outlives the turn. Open `http://localhost:6006` to watch the same surface the agent drives.
+The served URL appears in every report.
 
 The documented route needs no MCP server:
 
@@ -150,10 +163,12 @@ Pass `--package` on that last one. An unrelated `test-storybook` package exists 
 
 Route support differs by framework, measured on Storybook 10.5.10 with
 `@storybook/addon-mcp` installed in both a React and a Vue project. `index.json`,
-`iframe.html`, and `manifests/docs.json` serve on both. `manifests/components.json` serves
-on React and returns 404 on Vue, because `@storybook/react` generates that payload and no
-Vue framework package does. Where it is absent, take prop truth from the rendered Autodocs
-`ArgTypes` block, which all ten frameworks support, or from the component source.
+`iframe.html`, and `manifests/docs.json` serve on both.
+
+`manifests/components.json` serves on React and returns 404 on Vue.
+`@storybook/react` generates that payload; no Vue framework package does.
+Where it is absent, take prop truth from the rendered Autodocs `ArgTypes` block or
+the component source. All ten frameworks support the `ArgTypes` block.
 
 A static build is the exception, for a CI job or a one-shot read. `npx --yes storybook build
 -o "<dir>"` emits the routes that framework serves, measured on React as all four. Adding
@@ -162,7 +177,7 @@ route the dev server does not serve for that framework, so Vue still yields no c
 manifest.
 
 MCP servers connect at session startup, and an agent cannot reconnect one. When this
-package starts Storybook itself, the MCP tools stay unavailable. Details in
+package starts Storybook itself, the MCP tools stay unavailable. See
 `skills/ui-review/references/storybook.md`.
 
 ## Formulas
@@ -183,7 +198,7 @@ bondable formulas take it.
 | `mol-design-responsive` | 4 | 0 | Running a reflow and target-size pass |
 | `mol-design-motion` | 4 | 0 | Running a motion and reduced-motion pass |
 
-Pour a tier, then bond a sub-process molecule onto the root id the pour prints:
+Pour a tier. Then bond a sub-process molecule onto the root id the pour prints:
 
 ```bash
 export BEADS_ACTOR=you
@@ -197,18 +212,17 @@ formula name and the target id as two positional arguments.
 
 ## Relationship to the bundled designer agent
 
-OMP bundles a `designer` agent, which stays the right choice for a small self-contained UI
-edit. This package ships no agent named `designer`, because discovery is first-wins and
-merges no frontmatter.
+OMP bundles a `designer` agent for a small self-contained UI edit.
+This package ships no agent named `designer`: discovery is first-wins and merges no frontmatter.
 
 Use `ui-ux-specialist` when the work spans components, needs a system audit, or needs
 independent critique.
 
-## One winner per topic
+## First-choice assets
 
 Each topic has one first-choice asset, so routing stays consistent.
 
-| Topic | Winner |
+| Topic | First choice |
 |---|---|
 | Design workflow and anti-slop | `impeccable`; its detector is a coarse signal, not located evidence |
 | Design system and tokens | `ss-tokens` |
@@ -224,8 +238,7 @@ Each topic has one first-choice asset, so routing stays consistent.
 | Token build | Terrazzo |
 | Browser-driven verification | `ui-review`, on OMP `browser` |
 
-The detector claims 59 executable rules. Measured on a fixture carrying about ten
-seeded defects:
+The detector claims 59 executable rules. A fixture probe with about ten seeded defects recorded:
 
 | Observation | Value |
 |---|---|
@@ -235,20 +248,23 @@ seeded defects:
 | File attributed | the HTML file, though two defects lived in the CSS |
 | Seeded defects caught | 3 of 10 |
 
-Treat each finding as a coarse signal, and corroborate it by driving the surface. It
-is never located evidence, and never a stand-in for driving the surface.
+Treat each finding as a coarse signal. Corroborate it by driving the surface.
+It is never located evidence or a substitute for driving the surface.
 
-No skill routes to two `impeccable` commands:
+No skill routes to these two `impeccable` commands:
 
-- `clarify` omits an onboarding surface, tone-tagged alternatives, a requester checklist,
-  and a tone map. `ux-copy` carries all four.
+- `clarify` omits four outputs that `ux-copy` provides:
+  - an onboarding surface
+  - tone-tagged alternatives
+  - a requester checklist
+  - a tone map
 - `document` does not write DESIGN.md. Its site lists six sections and its repository
   prompt lists eight. Its sample frontmatter fails the linter, whose dimension pattern
   rejects `clamp(...)`.
 
 ## Narrow specializations
 
-A second asset joins a winner only when its output stands alone.
+A second asset joins a first choice only when its output stands alone.
 
 | Asset | Output |
 |---|---|
@@ -281,8 +297,7 @@ Two entries need `git-subdir`, because a subdirectory holds the plugin root:
 
 - `impeccable` keeps its plugin under `plugin/`. Inside that root its one skill sits at
   `./skills/impeccable/`, which the plugin's own manifest declares as `"skills": "./skills/"`.
-  No `.agent` or `.agents` directory exists in the installed plugin. Its two version numbers
-  disagree: the npm CLI reports 3.6.0 while the plugin manifest reads 4.1.2.
+  No `.agent` or `.agents` directory exists in the installed plugin.
 - `frontend-slides` keeps its plugin under `plugins/frontend-slides/`. Discovery does not
   resolve the bare `SKILL.md` at its repository root.
 
@@ -299,8 +314,7 @@ Measured: installing all eleven entries puts 133 `SKILL.md` files on disk under 
 distinct names, to reach the ten these wrappers route to. The 29-file gap is duplication.
 `styleseed` ships all 23 `ss-*` skills twice, under `skills/` and again under
 `engine/.claude/skills/`, and `ui-ux-pro-max` ships its set twice as well. Name collisions
-resolve first-wins with no diagnostic of any kind, so `ss-learn` loses that race: it
-installs, and is then unavailable.
+resolve first-wins without a diagnostic. `ss-learn` installs but is unavailable because another skill wins the name collision.
 
 | Prerequisite | Entry |
 |---|---|
@@ -320,8 +334,8 @@ Each ships a LICENSE and a NOTICE beside its SKILL.md, and each records its own
 modifications.
 
 This package vendors `ux-copy` because installing its repository also exposes four
-displaced Figma-oriented review templates. It vendors `wireloom` because that upstream
-ships a bare `.md` file, which no catalog entry makes discoverable.
+Figma-oriented review templates that this package does not use. It vendors `wireloom`
+because that upstream ships a bare `.md` file, which no catalog entry makes discoverable.
 
 ## MCP servers
 
@@ -337,53 +351,51 @@ general-purpose servers.
 
 ## CLI packages these skills invoke
 
-`npx` resolves each package on demand and caches it, so none becomes a project dependency
-and a first run may reach the network. Every version and license below was read from the
-npm registry. The exact invocations, the `--package` rule, and the output flags each tool
-needs live in `skills/ui-review/references/tools.md`.
+`npx` resolves each package on demand and caches it. None becomes a project dependency;
+a first run may reach the network. See `skills/ui-review/references/tools.md` for exact
+invocations, the `--package` rule, and required output flags.
 
-| npm package | Version | License |
-|---|---|---|
-| `impeccable` | 3.6.0 | Apache-2.0 |
-| `storybook` | 10.5.10 | MIT |
-| `@storybook/test-runner` | 0.24.4 | MIT |
-| `@axe-core/cli` | 4.13.0 | MPL-2.0 |
-| `motionlint` | 0.2.1 | MIT |
-| `lighthouse` | 13.4.1 | Apache-2.0 |
-| `@google/design.md` | 0.4.0 | Apache-2.0 |
-| `@design-token-kit/cli` | 1.8.0 | Apache-2.0 |
-| `@terrazzo/cli` | 2.7.1 | MIT |
-| `modern-web-guidance` | 0.0.185 | Apache-2.0 |
-| `browser-driver-manager` | 2.0.1 | MIT |
-| `playwright` | 1.62.1 | Apache-2.0 |
-| `@superdesign/cli` | 0.13.0 | MIT |
-| `wireloom` | 0.7.0 | MIT |
+| npm package | License |
+|---|---|
+| `impeccable` | Apache-2.0 |
+| `storybook` | MIT |
+| `@storybook/test-runner` | MIT |
+| `@axe-core/cli` | MPL-2.0 |
+| `motionlint` | MIT |
+| `lighthouse` | Apache-2.0 |
+| `@google/design.md` | Apache-2.0 |
+| `@design-token-kit/cli` | Apache-2.0 |
+| `@terrazzo/cli` | MIT |
+| `modern-web-guidance` | Apache-2.0 |
+| `browser-driver-manager` | Apache-2.0 |
+| `playwright` | Apache-2.0 |
+| `@superdesign/cli` | MIT |
+| `wireloom` | MIT |
 
-## Considered and not included
+## Assets not included
 
 | Asset | Reason |
 |---|---|
-| `educlopez/ui-craft` | `impeccable` owns a workflow rather than a review pass. Its detector claims 59 rules against 43, but neither names a location: the UI Craft score names none, and impeccable's findings carry `"line": 0` |
-| `Owl-Listener/designer-skills` | MIT and good. Three wanted skills sit in two entries carrying 41 skills, and `git-subdir` cannot narrow that |
-| `Wire-DSL/wire-dsl` | Contributes no discoverable skill. Survives as an MCP server |
-| `StardockCorp/Wireloom` | Contributes no discoverable skill. Survives as a vendored skill |
-| `dominikmartn/nothing-design-skill` | Contributes no discoverable skill |
-| `ss-a11y`, `ss-copy` | A winner above covers each topic |
-| `fixing-accessibility`, `fixing-motion-performance` | A winner above covers each topic |
+| `educlopez/ui-craft` | `impeccable` provides a workflow rather than a review pass. Its detector claims 59 rules; UI Craft claims 43. Neither reports locations: UI Craft's score names none, and impeccable's findings carry `"line": 0` |
+| `Owl-Listener/designer-skills` | MIT. Three relevant skills sit in two entries carrying 41 skills, and `git-subdir` cannot narrow that |
+| `Wire-DSL/wire-dsl` | No discoverable skill; available as an MCP server |
+| `StardockCorp/Wireloom` | No discoverable skill; available as a vendored skill |
+| `dominikmartn/nothing-design-skill` | No discoverable skill |
+| `ss-a11y`, `ss-copy` | A first-choice asset above covers each topic |
+| `fixing-accessibility`, `fixing-motion-performance` | A first-choice asset above covers each topic |
 | `baseline-ui`, `improve-ui` | `impeccable` covers both |
 | `design-token`, `ux-writing` | `ss-tokens` and `ux-copy` cover these |
-| five `knowledge-work-plugins` design skills | Figma-oriented review templates, all displaced |
+| five `knowledge-work-plugins` design skills | Figma-oriented review templates; this package uses other assets for these topics |
 | `fixing-metadata` | Audits metadata that nothing else covers, but emits no located finding. `web-asset-generator` produces the assets |
-| `LE-VAI/designesy-org` | Real and MIT. Its output gives a URL only, with no selector or source line |
+| `LE-VAI/designesy-org` | MIT. Its output gives a URL only, with no selector or source line |
 | `canvas-design` | `xd://generate_image` already covers its raster output |
 | `pa11y` | Takes one URL. The axe CLI covers it |
 | `lighthouse-mcp`, `motionlint mcp` | Each duplicates a CLI above |
 | `culori` | Duplicates `colorjs.io` |
 | `penpot/penpot-mcp`, Figma Dev Mode MCP | Neither tool is in use here |
 
-Two probes settled the "no discoverable skill" verdicts. Installing a `git-subdir` entry
-pointed at one skill directory yielded zero skills. Installing one pointed at a bare
-`skills/` container also yielded zero.
+Two installation probes returned zero skills: a `git-subdir` entry pointing at one skill
+directory, and an entry pointing at a bare `skills/` container.
 
 Excluded on license:
 

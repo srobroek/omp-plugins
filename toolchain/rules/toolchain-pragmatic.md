@@ -11,18 +11,11 @@ Written artifacts (docs, READMEs, specs, decision records, comments, PR and comm
 text): write for the released, steady-state artifact, not the current moment or its
 history.
 
-No justification in a produced artifact:
-- Never write the reason for a choice into code, a comment, a docstring, markdown,
-  or any prose the artifact ships with. The artifact states what IS.
-- Three exceptions, and only these: the reader cannot recover the reason from the
-  code or text itself (a constraint, an invariant, a non-obvious gotcha, a
-  measured number that decided a threshold); the genre exists to record a decision
-  (ADR, spec, commit message, PR body); or the user asked for the rationale.
-- A rejected alternative, a defence of the approach, a note on what was tried
-  first, or a comparison to what it replaces belongs in the commit message, never
-  in the artifact.
-- Reassurance nobody asked for ("no configuration required", "this is safe",
-  "simple and clean") is justification wearing a different hat. Cut it.
+Shipped prose states the steady-state contract. Put decision rationale and
+rejected alternatives in an ADR/decision bead or the requested report, not in
+implementation prose. Keep non-obvious constraints, invariants, and gotchas
+where readers need them. Include rationale when the user explicitly requests it.
+Cut unsolicited reassurance.
 
 Code economy -- in order of preference: existing code, config, or a deletion; the
 standard library; a popular, maintained, light library (never a heavyweight for

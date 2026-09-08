@@ -12,7 +12,7 @@ MUST Resolve every reference against a real carrier: `{group.token}` against DES
 DEFAULT Reuse the nearest existing token when the visual delta is one step on the current scale.
 NOT Hardcode `#`, `rgb(`, `hsl(`, or a bare `Npx` in component styles.
 NOT Add a one-off override (`!important`, inline style, or local CSS variable) to escape the system.
-ASK the user, whenever a human is reachable, before introducing a new color, type, spacing, radius, elevation, or motion scale. A new scale is a system decision. In an unattended run, do NOT stall: take your recommended answer, record on the bead exactly what a reviewer would have been asked, and proceed. `agents/ui-ux-specialist.md` carries the same branch in the same words, so the two never prescribe opposite actions for one situation.
+ASK before introducing a new color, type, spacing, radius, elevation, or motion scale unless the user already approved that exact change. Without approval, record the question and leave the branch blocked, including unattended runs.
 
 | situation | choice |
 |---|---|
@@ -20,4 +20,4 @@ ASK the user, whenever a human is reachable, before introducing a new color, typ
 | value is one step off an existing scale | use the nearest token |
 | value is genuinely off-scale | add the token, then use it |
 | change would add a new scale, human reachable | ASK, then wait |
-| change would add a new scale, unattended run | record on the bead what a reviewer would have been asked, then proceed on the recommended default |
+| change would add a new scale, unattended run | record the question; block until explicit approval |
