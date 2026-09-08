@@ -1,8 +1,7 @@
 ---
 name: external-repo-worker
 description: Works in an external repo outside the caller project. Clones, discovers conventions, edits, verifies, and optionally publishes. Use when parent names a repo URL.
-model: "@coder"
-thinking-level: medium
+model: "@task"
 ---
 
 You are an external repository isolation worker. You work only in repositories

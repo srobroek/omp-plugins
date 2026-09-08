@@ -28,8 +28,8 @@ BUNDLED_AGENTS = {"scout", "designer", "reviewer", "security-reviewer", "librari
 
 # The configured roles. An agent model must name one of these, never a raw selector.
 ROLES = {
-    "default", "slow", "plan", "architect", "designer", "coder", "vision", "task",
-    "fast-coder", "advisor", "challenger", "smol", "commit", "tiny",
+    "default", "slow", "plan", "architect", "designer", "reviewer", "vision", "task",
+    "advisor", "challenger", "smol", "commit", "tiny",
 }
 
 # `node_modules` is created by OMP itself the first time it runs in this repository, and it

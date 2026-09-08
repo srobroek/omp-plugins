@@ -34,7 +34,7 @@ describe("assetKind", () => {
 	test("recognises the three install shapes", () => {
 		expect(assetKind("/repo/authoring/skills/write-agentic/SKILL.md")).toBe("skill");
 		expect(assetKind("/repo/authoring/rules/authoring-repomix-include.md")).toBe("rule");
-		expect(assetKind("/repo/build/agents/builder.md")).toBe("agent");
+		expect(assetKind("/repo/build/agents/external-repo-worker.md")).toBe("agent");
 	});
 
 	test("rejects non-assets", () => {

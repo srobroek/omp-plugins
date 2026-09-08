@@ -45,7 +45,7 @@
     },
     {
       "name": "build",
-      "description": "Implementation agents: builder, high-effort builder, operator, external-repo worker.",
+      "description": "Execution agents: operator and external-repo worker.",
       "source": "./build",
       "version": "0.3.2",
       "category": "development"
@@ -143,7 +143,7 @@
     },
     {
       "name": "quality",
-      "description": "Quality gates: code-smell auditing, final verification, lint and docs adjudication, mechanical diff review, and browser-verification discipline.",
+      "description": "Quality gates: code-smell auditing, final verification, lint and docs adjudication, and browser-verification discipline.",
       "source": "./quality",
       "version": "0.6.1",
       "category": "development"
