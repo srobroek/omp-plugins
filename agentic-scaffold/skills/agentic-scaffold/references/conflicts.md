@@ -17,4 +17,6 @@ LOAD when `inspect`, `plan`, `render`, or `doctor` reports an escalation. Exit 5
 
 A foreign block in `AGENTS.md` is not a conflict: append the managed block and preserve the foreign block. A symlink target or damaged/duplicated agentic-scaffold markers is a conflict.
 
+When `core.hooksPath` is configured globally or system-wide and `git-defender` is on `PATH`, choose the chained strategy: `hooks install` runs `git-defender precommit-tool-setup` in the repository, which creates `.git/hooks/pre-commit` for the system hook to chain and leaves pre-push to the git shim running `prek --stage pre-push`; `commit-msg` and `post-commit|post-checkout|post-merge` do not run (use `just context` for context refresh). If `git-defender` is unavailable, retain the `hook-manager` finding and resolve it with `--force`, repository-scoped hooks, or an explicit skip.
+
 Merging rules: TOML is key-level append inside managed blocks; JSON is existing-wins deep merge; YAML `repos:` has one shared header and each layer contributes list entries; plain text is a managed block. Exit 0 is success, 1 is operational error, 2 is drift, and 5 is conflict.

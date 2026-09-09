@@ -27,7 +27,13 @@ python3 "$SCAFFOLD" doctor --root /tmp/example
 just --directory /tmp/example check
 ```
 
-If beads is present, copy the formula into `.beads/formulas/`. Pour it with `bd mol pour mol-scaffold-greenfield --var feature=001-example --var profile=ts-app`. The interview and commit are human gates. Resolve a gate with `bd gate resolve <gate-id>`, then close its preceding step. Do not close a gate bead directly.
+With beads present, copy the formula into `.beads/formulas/` and pour it:
+
+```sh
+bd mol pour mol-scaffold-greenfield --var feature=001-example --var profile=ts-app
+```
+
+The molecule has two human gates: the interview and the commit. To pass a gate, run `bd gate resolve <gate-id>` and then close the preceding step. Never close a gate bead directly.
 
 ## Brownfield
 
@@ -42,14 +48,25 @@ python3 "$SCAFFOLD" plugins sync --root /path/to/repo
 python3 "$SCAFFOLD" doctor --root /path/to/repo
 ```
 
-The brownfield interview confirms the detected profile and chooses optional layers. The default is `agentic + hooks + tooling`. It resolves every finding. For a `hook-manager` finding, choose `hooks install --force` to let prek use repository hooks, move `core.hooksPath` to repository scope, or skip hooks; the refusal reports all three options and is recorded as drift. A foreign block in `AGENTS.md` is preserved and receives an `update-block` row; only damaged/duplicated agentic markers or symlinks conflict. For an `unowned-file` finding, pass `--adopt PATH` only after explicit approval. An existing user file is skipped; propose a diff before adoption.
+The brownfield interview has three parts:
+
+1. Confirm the detected profile.
+2. Choose optional layers. The default is `agentic + hooks + tooling`.
+3. Resolve every `inspect` finding.
+
+| Finding | What to do |
+|---|---|
+| `hook-manager` (global `core.hooksPath`) | With `git-defender` on PATH, `hooks install` chains through it. Otherwise choose one: `hooks install --force`, move `core.hooksPath` to repository scope, or skip the hooks layer. |
+| foreign block in `AGENTS.md` | Nothing. The plan shows `update-block`; the renderer keeps the foreign block. Only damaged agentic markers or a symlink conflict. |
+| `unowned-file` | Get explicit approval, then pass `--adopt PATH`. |
+| existing user file | The renderer skips it. Propose a diff before adoption. |
 
 ## Escalation rules
 
 - Exit 5 from `plan` means duplicate ownership or a `conflicts_with` pair. Drop a layer or use `--force-layer L` for the named winner on this run.
 - Exit 5 from `render` means damaged or duplicated markers. Restore the printed marker pair; never guess.
-- Existing `.omp/mcp.json` is deep-merged with existing keys winning. Existing `.omp/plugins.toml` is a marketplace/plugin union. Existing TOML `[tools]` keys are parsed and not duplicated. Plain text and YAML are marker blocks only.
-- Missing tools are reported by `inspect`/`doctor`; run `tools install --yes` or install the command manually.
+- Merge rules per file live in [`architecture.md`](architecture.md).
+- When `inspect` or `doctor` reports a missing tool, run `tools install --yes` or install the command by hand.
 
 ## Update, drift, and verification
 
@@ -61,4 +78,16 @@ omp plugin list --json
 omp -p --no-session --model smol "Which project-local agentic-scaffold skill is available?"
 ```
 
-`update` reads committed answers and refreshes managed blocks. When an owned-file hash differs from the last render, it reports `drifted` and leaves that file untouched. Text outside markers stays intact. `doctor` exit 0 is clean, exit 2 is drift, and exit 1 is an operational failure. `plugins sync --check` must report an empty drift list. Project scope must appear in OMP JSON. Reload a session after installation. After a live smoke, uninstall project plugins and delete the throwaway directory.
+`update` reads the committed answers and refreshes the managed blocks. Text outside markers stays intact. When an owned file differs from its recorded hash, `update` reports it as `drifted` and leaves it alone.
+
+| Check | Expected |
+|---|---|
+| `doctor` | exit 0. Exit 2 is drift, exit 1 is an operational failure. |
+| `plugins sync --check` | empty drift list |
+| `omp plugin list --json` | the profile's plugins with `scope: "project"` |
+| fresh session | the project skills appear after a reload |
+
+After a live smoke in a throwaway repository:
+
+1. Uninstall its project plugins.
+2. Delete the directory.

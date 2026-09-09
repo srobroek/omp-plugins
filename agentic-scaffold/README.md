@@ -29,10 +29,39 @@ python3 "$SCAFFOLD" hooks install --root R
 python3 "$SCAFFOLD" plugins sync --root R
 ```
 
-`--layer web-ui` appends the UI plugin layer for one run. `--var speckit=true` appends SpecKit. Precedence is CLI > profile > layer defaults. `plan` and `render --dry-run` write nothing. Exit codes are 0 success, 1 operational error, 2 drift, and 5 conflict.
+Flags and conventions:
+
+- `--layer web-ui` appends the UI plugin layer for one run.
+- `--var speckit=true` appends SpecKit.
+- Precedence: CLI, then profile, then layer defaults.
+- `plan` and `render --dry-run` write nothing.
+- Exit codes: 0 success, 1 operational error, 2 drift, 5 conflict.
 
 ## State and escalation
 
-`.omp/scaffold-answers.toml` stores the desired project input. `.omp/scaffold.json` records hashes for safe updates. `.omp/plugins.toml` declares project scope. Global plugin state stays unchanged. Existing `.omp/mcp.json` keeps its keys during deep merge. The renderer unions plugin entries and deduplicates TOML `[tools]` keys. Use `--adopt` only for an explicit user-owned file and `--force-layer` only to name a conflict winner.
+| File | Role |
+|---|---|
+| `.omp/scaffold-answers.toml` | desired project input |
+| `.omp/scaffold.json` | owned-file hashes for safe updates |
+| `.omp/plugins.toml` | project-scope plugin declaration |
 
-The seven phase references under `skills/agentic-scaffold/references/` contain the interview, layers, profiles, rendering, plugins, conflicts, and verification procedures. The end-to-end human process is [`docs/runbook.md`](docs/runbook.md); formulas live in `formulas/`.
+Guarantees:
+
+- The renderer leaves user-scope plugins alone.
+- In `.omp/mcp.json`, existing keys win.
+- Plugin entries are added, never removed.
+- A `[tools]` key that already exists is left alone.
+- `--adopt` requires the user's approval for that file.
+- `--force-layer` names the layer that wins a conflict.
+
+The phase references live in `skills/agentic-scaffold/references/`:
+
+- `interview.md`
+- `layers.md`
+- `profiles-and-combinations.md`
+- `render-and-update.md`
+- `plugins.md`
+- `conflicts.md`
+- `verify.md`
+
+Humans follow [`docs/runbook.md`](docs/runbook.md). Formulas live in `formulas/`.

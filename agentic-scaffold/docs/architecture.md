@@ -1,11 +1,83 @@
 # Architecture
 
-`skills/agentic-scaffold/scripts/scaffold.py` is the runtime boundary. It uses Python stdlib modules (`tomllib`, `json`, and `string.Template`) plus subprocesses for declared integrations. The CLI loads a profile, resolves layer defaults, applies profile overrides, applies CLI overrides, and produces one deterministic file map.
+## Runtime boundary
 
-Each `templates/<layer>/` directory contains `layer.toml`, a short `README.md`, and plain template files. `layer.toml` defines ordering, tools, ownership, managed blocks, conflicts, variables, and project plugins. `.tmpl` files use `string.Template`. The renderer substitutes `__name__` path segments. `.block` files compose managed markers for each layer.
+`skills/agentic-scaffold/scripts/scaffold.py` is the whole runtime. It imports only the standard library. Declared integrations run as subprocesses: `omp`, `prek`, `mise`, `git`, `git-defender`.
 
-Profiles define ordered layers, variables, and commands. The `web-ui` layer adds an `AGENTS.md` block and plugin entries. The renderer writes plugin entries to `.omp/plugins.toml`. It keeps existing marketplaces and plugin names. For `mcp.json`, existing keys win in a deep merge. The renderer parses existing TOML `[tools]` keys with `tomllib` before it appends missing keys.
+Every command prints one JSON document. The exit code carries the verdict:
 
-`.omp/scaffold-answers.toml` stores committed desired input. `.omp/scaffold.json` stores the installed profile, layer list, plugin version, and hashes of owned files. `update` refreshes managed blocks. It reports owned-file drift and leaves changed owned files untouched.
+| Code | Meaning |
+|---|---|
+| 0 | success |
+| 1 | operational error |
+| 2 | drift (`doctor`, `plugins sync --check`) |
+| 5 | conflict (`plan`, `render`) |
 
-`inspect` reads the repository and reports stack, tool, hook-manager, and unowned-file findings. `plan` and `render --dry-run` read the repository and return exit 5 for conflicts. `doctor` checks tools, project plugin sync, installed hooks, context status, answers, and markers. Exit 2 means drift. Formulas add human gates for the interview and commit stages.
+## Variable resolution
+
+The CLI builds one variable map first. Later sources override earlier ones:
+
+1. `layer.toml [vars]` defaults
+2. `profiles/<name>.toml [vars]`
+3. `.omp/scaffold-answers.toml`
+4. `--var` and `--set` on the command line
+
+The same map feeds every template, so a second render produces no diff.
+
+## Layers
+
+A layer is one directory under `templates/`. It holds:
+
+- `layer.toml`: the layer contract
+  - `after`: render order
+  - `requires_tools`
+  - `owns`: whole files
+  - `blocks`: managed-block targets
+  - `conflicts_with`: exclusive layers
+  - `[vars]` and `[plugins]`
+- `README.md`: a short description
+- template files
+
+Template rules:
+
+- A file ending in `.tmpl` passes through `string.Template`. The renderer removes the suffix.
+- A path segment `__name__` becomes the package name.
+- A file ending in `.block` becomes one managed block inside a shared target such as `.gitignore` or `justfile`.
+
+The `web-ui` layer has no owned files. It contributes an `AGENTS.md` block and plugin entries.
+
+## Profiles
+
+A profile lists ordered layers, variable overrides, and the five standard commands (`setup`, `test`, `lint`, `fmt`, `check`). Plugin sets live in layers, not in profiles.
+
+## Merge rules
+
+| Target | Rule |
+|---|---|
+| `.omp/plugins.toml` | union. Existing marketplaces and plugin names stay. |
+| `.omp/mcp.json` | deep merge. Existing keys win. |
+| `mise.toml` `[tools]` | parse with `tomllib`. Append only missing keys inside the block. |
+| `.pre-commit-config.yaml` | insert hook entries inside the existing `repos:` list |
+| other block targets | one marker pair per layer, replaced in place |
+
+## State files
+
+| File | Content | Committed |
+|---|---|---|
+| `.omp/scaffold-answers.toml` | interview answers | yes |
+| `.omp/scaffold.json` | profile, layers, plugin version, owned-file hashes | yes |
+| `.omp/plugins/` | OMP project registry and symlinks | no |
+
+## Commands
+
+| Command | Reads | Writes |
+|---|---|---|
+| `inspect` | repository | nothing. Reports stacks, tools, and findings (`hook-manager`, `unowned-file`). |
+| `plan`, `render --dry-run` | repository, profile | nothing. Exit 5 on a conflict. |
+| `render` | plan | owned files, managed blocks, state files |
+| `update` | `.omp/scaffold.json` | managed blocks. Drifted owned files stay untouched. |
+| `doctor` | rendered repository | nothing. Exit 2 on drift. |
+
+## Formulas
+
+Two bd formulas pour the same steps as the runbook. Each formula has two human gates. The first gate follows the interview. The second gate precedes the commit.
