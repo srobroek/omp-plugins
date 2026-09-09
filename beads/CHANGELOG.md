@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.2](https://github.com/srobroek/omp-plugins/compare/beads--v1.0.1...beads--v1.0.2) (2026-09-09)
+
+
+### Bug Fixes
+
+* **beads:** honour an exported BEADS_ACTOR earlier on the command line ([#75](https://github.com/srobroek/omp-plugins/issues/75)) ([6158b25](https://github.com/srobroek/omp-plugins/commit/6158b25fcb405517e0438e5c1cbf150ca6e44908))
+
 ## [1.0.1](https://github.com/srobroek/omp-plugins/compare/beads--v1.0.0...beads--v1.0.1) (2026-09-08)
 
 
