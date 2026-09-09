@@ -1,7 +1,7 @@
 # delivery
 
 This plugin provides Git workflows for OMP, with guards for commits and reminders about work that needs pushing.
-Its rules cover when to deliver changes and how to prove they landed. It also links work to the beads merge queue.
+Its rules cover delivery, automated-review fix loops, landing proof, and links to the beads merge queue.
 
 ## Agents
 
@@ -14,7 +14,7 @@ Its rules cover when to deliver changes and how to prove they landed. It also li
 | Name | When |
 | --- | --- |
 | `delivery-cadence` | Keeping commits atomic. Pushing finished work continuously. |
-| `delivery-git-workflow` | Working with branches and PRs. Proving a landing under GW-3. Linking beads to the merge queue. Following GW-1/GW-2. |
+| `delivery-git-workflow` | Working with branches and PRs. Running automated-review fix and escalation loops. Proving a landing under GW-3. Linking beads to the merge queue. Following GW-1/GW-2. |
 | `delivery-draft-pr-advisory` | `gh pr create` without `--draft` (TTSR). |
 
 ## Extensions

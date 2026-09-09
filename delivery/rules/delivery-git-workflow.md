@@ -30,6 +30,32 @@ Shipping (choose one, confirm if ambiguous):
   Use `git merge --no-ff` for feature branches; pass an explicit strategy
   flag to `gh pr merge` (`--squash`/`--merge`/`--rebase`).
 
+Automated review loop:
+
+MUST GW-4: the agent that creates a PR owns its automated-review loop until
+landing or explicit human escalation. It may delegate observation to a landing
+shepherd, but never to a polling watcher that holds a live session.
+
+1. Keep the PR draft until required local review, CI, and configured automated
+   reviewers have completed against the exact head. Cover CodeRabbit, Codex,
+   Copilot review, Greptile, and repository-configured reviewers when present.
+2. Park pending review waits and continue unrelated work. A later pass reads the
+   review state; no agent polls while holding the session open.
+3. Collect the complete actionable set for the head and assign one fix owner.
+   After the fix, push the new head and rerun every configured reviewer.
+4. Identify findings by GitHub review-thread node id. Without a thread, use the
+   review URL plus a stable bot/path/location/finding fingerprint. Count attempts
+   per material issue, not per PR or head. A new issue starts at one.
+5. For each addressed thread, reply when evidence is needed, call GitHub's
+   `resolveReviewThread` GraphQL mutation, and read back `isResolved=true`.
+   A reply or outdated diff does not resolve a conversation.
+6. After three unsuccessful fixes of the same material issue, hold only that PR
+   for human review. Record the issue identities, attempts, heads, fixes and
+   unresolved URLs, then notify the main agent loop. New issues may continue
+   through their own three attempts and never inherit an older issue's count.
+
+Unrelated implementations and PRs continue while one PR waits or is escalated.
+
 Beads linkage (PRs entering the PR-shepherd merge queue):
 
 The merge bead carries the linkage. The PR body carries none of it: the shepherd
