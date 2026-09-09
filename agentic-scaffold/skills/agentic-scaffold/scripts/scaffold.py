@@ -86,10 +86,10 @@ def value_default(value: Any) -> str:
     return str(value)
 def build_ci_jobs(language: str, values: dict[str, str]) -> str:
     checkout = "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7"
-    setup_uv = "astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v6"
+    setup_uv = "astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0"
     setup_bun = "oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2"
     setup_go = "actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5"
-    rust_toolchain = "dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # stable"
+    rust_toolchain = "dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1"
     if language == "python":
         job = f'''  python:
     runs-on: ubuntu-latest
