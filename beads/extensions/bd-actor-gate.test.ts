@@ -194,3 +194,10 @@ describe("export in an earlier segment", () => {
 		);
 	});
 });
+
+describe("here-documents", () => {
+	test("a commit message that mentions bd close is not a bd command", () => {
+		const command = "git commit -q -F - <<'EOF'\nfix: x\n\nafter that, bd close y and bd update z --claim.\nEOF";
+		expect(decideActorGate(command, emptyEnv).kind).toBe("allow");
+	});
+});
