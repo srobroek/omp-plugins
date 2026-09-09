@@ -734,26 +734,24 @@ def _save_hook_meta(root: Path, updates: dict[str, Any]) -> None:
 
 
 def _global_hooks_path(root: Path) -> tuple[str, str]:
-    try:
-        local = subprocess.run(["git", "config", "--local", "--get", "core.hooksPath"], cwd=root, capture_output=True, text=True, check=False)
-    except OSError:
-        local = None
-    if local is not None and local.returncode == 0 and local.stdout.strip():
-        return "", ""
-    for scope in ("global", "system"):
+    """Return (path, scope) when core.hooksPath is set outside the repository.
+
+    A repo-local setting wins and yields ("", ""): prek can install directly.
+    """
+    for scope in ("local", "global", "system"):
         try:
-            result = subprocess.run(["git", "config", f"--{scope}", "--get", "core.hooksPath"], cwd=root, capture_output=True, text=True, check=False)
+            result = subprocess.run(
+                ["git", "config", f"--{scope}", "--get", "core.hooksPath"],
+                cwd=root,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
         except OSError:
             continue
-        if result.returncode == 0 and result.stdout.strip():
-    fixture = root / "global.gitconfig"
-    if fixture.is_file():
-        try:
-            result = subprocess.run(["git", "config", "--file", str(fixture), "--get", "core.hooksPath"], cwd=root, capture_output=True, text=True, check=False)
-        except OSError:
-            result = None
-        if result is not None and result.returncode == 0 and result.stdout.strip():
-            return result.stdout.strip(), "global"
+        value = result.stdout.strip()
+        if result.returncode == 0 and value:
+            return ("", "") if scope == "local" else (value, scope)
     return "", ""
 
 
