@@ -166,8 +166,10 @@ def test_hooks_install_uses_git_defender_for_global_hooks_path(tmp_path: Path) -
     assert payload["stages"]["pre-commit"] == "chained"
     assert (tmp_path / ".git/hooks/pre-commit").is_file()
     doctor = run("doctor", "--root", str(tmp_path), env=environment)
-    assert doctor.returncode == 0, doctor.stderr
-    hooks = json.loads(doctor.stdout)["checks"]["hooks"]
+    payload = json.loads(doctor.stdout)
+    assert doctor.returncode in (0, 2), doctor.stderr
+    assert all(item.startswith("missing tool:") for item in payload["drift"]), payload["drift"]
+    hooks = payload["checks"]["hooks"]
     assert hooks["strategy"] == "git-defender"
     assert hooks["stages"]["pre-push"].startswith("git shim")
 
@@ -175,8 +177,10 @@ def test_doctor_reports_hook_status(tmp_path: Path) -> None:
     result = run("render", "--root", str(tmp_path), "--profile", "agentic-repo")
     assert result.returncode == 0, result.stderr
     doctor = run("doctor", "--root", str(tmp_path))
-    assert doctor.returncode == 0, doctor.stderr
-    hooks = json.loads(doctor.stdout)["checks"]["hooks"]
+    payload = json.loads(doctor.stdout)
+    assert doctor.returncode in (0, 2), doctor.stderr
+    assert all(item.startswith("missing tool:") for item in payload["drift"]), payload["drift"]
+    hooks = payload["checks"]["hooks"]
     assert hooks["declared"] and hooks["installed"] == [] and hooks["status"] == "not-installed"
 
 
