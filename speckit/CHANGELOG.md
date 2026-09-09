@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.0](https://github.com/srobroek/omp-plugins/compare/speckit--v0.6.1...speckit--v0.7.0) (2026-09-09)
+
+
+### Features
+
+* **speckit:** carry PRs through automated review remediation ([e7f5757](https://github.com/srobroek/omp-plugins/commit/e7f575755b3035b2f77dec558ae6ae647c4631c6))
+
 ## [0.6.1](https://github.com/srobroek/omp-plugins/compare/speckit--v0.6.0...speckit--v0.6.1) (2026-09-08)
 
 

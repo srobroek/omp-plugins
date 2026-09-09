@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.8.0](https://github.com/srobroek/omp-plugins/compare/delivery--v0.7.3...delivery--v0.8.0) (2026-09-09)
+
+
+### Features
+
+* **delivery:** require bounded automated review remediation ([49edfd2](https://github.com/srobroek/omp-plugins/commit/49edfd2075ac402e37df933f9143d05eaeb5e4d1))
+
 ## [0.7.3](https://github.com/srobroek/omp-plugins/compare/delivery--v0.7.2...delivery--v0.7.3) (2026-09-08)
 
 
