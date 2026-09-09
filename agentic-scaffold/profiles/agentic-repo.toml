@@ -1,0 +1,15 @@
+name = "agentic-repo"
+summary = "Agentic repository with project-local context and hooks"
+layers = ["base", "tooling", "hooks", "agentic"]
+
+[vars]
+python = "3.13"
+node = "22"
+bun_version = "latest"
+
+[commands]
+setup = "mise install && uv sync"
+test = "uv run pytest"
+lint = "prek run --all-files"
+fmt = "prek run --all-files"
+check = "just test && just lint"

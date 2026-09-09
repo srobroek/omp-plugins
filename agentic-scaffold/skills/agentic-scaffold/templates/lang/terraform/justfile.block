@@ -1,0 +1,15 @@
+[group('terraform')]
+terraform-test:
+    terraform fmt -check -recursive
+
+[group('terraform')]
+terraform-lint:
+    tflint --recursive
+
+[group('terraform')]
+terraform-fmt:
+    terraform fmt -recursive
+
+[group('terraform')]
+terraform-check:
+    terraform validate

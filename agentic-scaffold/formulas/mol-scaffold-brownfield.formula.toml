@@ -1,0 +1,68 @@
+formula = "mol-scaffold-brownfield"
+description = "Retrofit a repository with agentic-scaffold layers"
+type = "workflow"
+
+[vars.feature]
+required = true
+pattern = "^[0-9]{3}-[a-z0-9-]+$"
+
+[vars.autonomous]
+default = "no"
+
+[[steps]]
+id = "inspect"
+title = "inspect brownfield {{feature}}"
+type = "task"
+priority = 1
+description = "Inspect stacks, existing instructions, hooks, tooling, beads, and repository state without mutating the destination."
+
+[[steps]]
+id = "classify"
+title = "classify brownfield changes {{feature}}"
+type = "task"
+needs = ["inspect"]
+priority = 1
+description = "Review the proposed profile and file map. Preserve user files and resolve hook-manager or managed-marker conflicts before rendering."
+
+[steps.gate]
+type = "human"
+
+[[steps]]
+id = "render"
+title = "render brownfield layers {{feature}}"
+type = "task"
+needs = ["classify"]
+priority = 1
+description = "Render the agentic layer and explicitly selected stack layers. Only create files or update managed marker blocks."
+
+[[steps]]
+id = "plugins-sync"
+title = "sync brownfield plugins {{feature}}"
+type = "task"
+needs = ["render"]
+description = "Apply .omp/plugins.toml at project scope with scaffold.py plugins sync."
+
+[[steps]]
+id = "hooks-install"
+title = "install brownfield hooks {{feature}}"
+type = "task"
+needs = ["plugins-sync"]
+description = "Install declared prek hooks without --force and preserve unrelated hooks."
+
+[[steps]]
+id = "verify"
+title = "verify brownfield scaffold {{feature}}"
+type = "task"
+needs = ["hooks-install"]
+description = "Run just check, omp plugin list --json with project scope, and a fresh no-session skill visibility probe."
+
+[[steps]]
+id = "commit"
+title = "approve brownfield commit {{feature}}"
+type = "task"
+needs = ["verify"]
+priority = 1
+description = "Review and commit the bounded retrofit diff after human confirmation."
+
+[steps.gate]
+type = "human"

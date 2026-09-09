@@ -1,0 +1,15 @@
+[group('ts')]
+ts-test:
+    bun test
+
+[group('ts')]
+ts-lint:
+    bunx oxlint
+
+[group('ts')]
+ts-fmt:
+    bunx biome check --write .
+
+[group('ts')]
+ts-check:
+    bunx tsc --noEmit

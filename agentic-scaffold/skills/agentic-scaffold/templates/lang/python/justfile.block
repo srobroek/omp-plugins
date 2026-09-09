@@ -1,0 +1,16 @@
+[group('python')]
+python-test:
+    uv run pytest
+
+[group('python')]
+python-lint:
+    uv run ruff check .
+
+[group('python')]
+python-fmt:
+    uv run ruff format .
+
+[group('python')]
+python-check:
+    uv run pyright
+    uv run ty check

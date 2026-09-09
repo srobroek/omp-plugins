@@ -1,0 +1,19 @@
+{
+  "name": "${package_kebab}",
+  "version": "0.1.0",
+  "description": "${description}",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "bun test",
+    "lint": "oxlint",
+    "fmt": "biome check --write .",
+    "check": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "latest",
+    "@types/bun": "latest",
+    "oxlint": "latest",
+    "typescript": "latest"
+  }
+}

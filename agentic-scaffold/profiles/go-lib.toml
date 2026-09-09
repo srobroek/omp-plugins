@@ -1,0 +1,15 @@
+name = "go-lib"
+summary = "Go library"
+layers = ["base", "tooling", "hooks", "lang/go", "ci/github", "release", "agentic"]
+[vars]
+web_ui = false
+speckit = false
+[plugins."srobroek-omp"]
+source = "srobroek/omp-plugins"
+plugins = ["architecture", "go"]
+[commands]
+setup = "mise install && go mod download"
+test = "go test -race ./..."
+lint = "golangci-lint run ./..."
+fmt = 'test -z "$(gofmt -l .)"'
+check = "go vet ./..."

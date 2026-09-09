@@ -1,0 +1,12 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": ["config:recommended", ":dependencyDashboard", ":semanticCommits"],
+  "enabledManagers": ["cargo", "gomod", "npm", "bun", "pep621", "mise", "pre-commit", "terraform"],
+  "packageRules": [{
+    "matchUpdateTypes": ["patch", "minor"],
+    "groupName": "patch and minor"
+  }, {
+    "matchUpdateTypes": ["major"],
+    "dependencyDashboardApproval": true
+  }]
+}

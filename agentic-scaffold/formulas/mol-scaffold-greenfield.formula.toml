@@ -1,0 +1,89 @@
+formula = "mol-scaffold-greenfield"
+description = "Scaffold a greenfield repository with agentic-scaffold"
+type = "workflow"
+
+[vars.feature]
+required = true
+pattern = "^[0-9]{3}-[a-z0-9-]+$"
+
+[vars.profile]
+required = true
+
+[vars.autonomous]
+default = "no"
+
+[vars.beads]
+default = "no"
+
+[[steps]]
+id = "interview"
+title = "interview scaffold {{feature}}"
+type = "task"
+priority = 1
+description = "Collect the repository name, purpose, stack/profile, license, and project-scope plugin choices. Record the selected profile and explicit answers before rendering."
+
+[steps.gate]
+type = "human"
+
+[[steps]]
+id = "plan"
+title = "plan scaffold {{feature}}"
+type = "task"
+needs = ["interview"]
+priority = 1
+description = "Run scaffold.py plan and review every create, skip, update-block, and conflict row. Resolve all conflicts before rendering."
+
+[[steps]]
+id = "render"
+title = "render scaffold {{feature}}"
+type = "task"
+needs = ["plan"]
+priority = 1
+description = "Render the selected profile into the destination. User-owned files remain unchanged; managed blocks are updated only between their markers."
+
+[[steps]]
+id = "tools-install"
+title = "install tools for {{feature}}"
+type = "task"
+needs = ["render"]
+description = "Run scaffold.py tools install --yes and the profile's dependency setup commands."
+
+[[steps]]
+id = "hooks-install"
+title = "install hooks for {{feature}}"
+type = "task"
+needs = ["tools-install"]
+description = "Run scaffold.py hooks install without --force and verify the declared prek stages."
+
+[[steps]]
+id = "plugins-sync"
+title = "sync project plugins for {{feature}}"
+type = "task"
+needs = ["hooks-install"]
+description = "Run scaffold.py plugins sync. Project plugins are installed with --scope project; do not mutate user scope."
+
+[[steps]]
+id = "context-refresh"
+title = "refresh project context for {{feature}}"
+type = "task"
+needs = ["plugins-sync"]
+condition = "{{beads}} == yes"
+description = "Refresh Graphify and Repomix context after rendering when the repository uses beads/context tooling."
+
+[[steps]]
+id = "verify"
+title = "verify scaffold {{feature}}"
+type = "task"
+needs = ["plugins-sync", "context-refresh"]
+description = "Run just check, inspect project-scope omp plugin JSON, and run a fresh no-session skill visibility probe."
+
+[[steps]]
+id = "commit"
+title = "approve scaffold commit {{feature}}"
+type = "task"
+needs = ["verify"]
+priority = 1
+description = "Review the generated diff and commit only after the human confirms the destination, files, tools, hooks, and project plugin scope."
+
+[steps.gate]
+type = "human"

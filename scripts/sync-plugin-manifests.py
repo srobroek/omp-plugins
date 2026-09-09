@@ -71,6 +71,7 @@ PLUGINS: dict[str, tuple[str, str]] = {
     ),
     "browser-tools": ("development", "Cross-engine browser coverage and Chrome performance tracing over MCP."),
     "diagram": ("productivity", "Interactive diagramming and architecture-sketching canvas over MCP."),
+    "agentic-scaffold": ("development", "Deterministic project scaffolding from ordered template layers and Beads formulas."),
 }
 
 UNPUBLISHED: set[str] = set()

@@ -1,0 +1,12 @@
+{
+  "name": "agentic-scaffold",
+  "version": "0.1.0",
+  "description": "Deterministic project scaffolding from ordered template layers and Beads formulas.",
+  "author": {
+    "name": "Sjors Robroek"
+  },
+  "license": "Apache-2.0",
+  "skills": "./skills",
+  "formulas": "./formulas",
+  "category": "development"
+}
