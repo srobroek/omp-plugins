@@ -137,13 +137,38 @@ def test_hooks_install_reports_global_hook_manager(tmp_path: Path) -> None:
     config = tmp_path / "global.gitconfig"
     config.write_text("[core]\n\thooksPath = /global/hooks\n")
     environment = os.environ.copy()
-    environment["GIT_CONFIG_GLOBAL"] = str(config)
+    environment["PATH"] = "/usr/bin:/bin"
     result = run("hooks", "install", "--root", str(tmp_path), env=environment)
     assert result.returncode == 2
     payload = json.loads(result.stdout)
     assert payload["finding"]["kind"] == "hook-manager"
     assert len(payload["finding"]["options"]) == 3
 
+
+def test_hooks_install_uses_git_defender_for_global_hooks_path(tmp_path: Path) -> None:
+    rendered = run("render", "--root", str(tmp_path), "--profile", "agentic-repo")
+    assert rendered.returncode == 0, rendered.stderr
+    config = tmp_path / "global.gitconfig"
+    config.write_text("[core]\n\thooksPath = /global/hooks\n")
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    defender = fake_bin / "git-defender"
+    defender.write_text("#!/bin/sh\nmkdir -p .git/hooks\nprintf '#!/bin/sh\\nexit 0\\n' > .git/hooks/pre-commit\nchmod +x .git/hooks/pre-commit\n")
+    defender.chmod(0o755)
+    environment = os.environ.copy()
+    environment["GIT_CONFIG_GLOBAL"] = str(config)
+    environment["PATH"] = str(fake_bin) + os.pathsep + environment.get("PATH", "")
+    result = run("hooks", "install", "--root", str(tmp_path), env=environment)
+    assert result.returncode == 0, result.stderr
+    payload = json.loads(result.stdout)
+    assert payload["strategy"] == "git-defender"
+    assert payload["stages"]["pre-commit"] == "chained"
+    assert (tmp_path / ".git/hooks/pre-commit").is_file()
+    doctor = run("doctor", "--root", str(tmp_path), env=environment)
+    assert doctor.returncode == 0, doctor.stderr
+    hooks = json.loads(doctor.stdout)["checks"]["hooks"]
+    assert hooks["strategy"] == "git-defender"
+    assert hooks["stages"]["pre-push"].startswith("git shim")
 
 def test_doctor_reports_hook_status(tmp_path: Path) -> None:
     result = run("render", "--root", str(tmp_path), "--profile", "agentic-repo")

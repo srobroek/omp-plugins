@@ -533,11 +533,49 @@ def replace_block(existing: str, body: str, block: str, target: Path) -> str:
     if state == "broken":
         raise ValueError(f"managed markers conflict in {target}; expected {begin} and {end}")
     if target.name == ".pre-commit-config.yaml":
-        lines = body.splitlines()
-        if lines and lines[0].strip() == "repos:":
-            body = "\n".join(lines[1:]).lstrip("\n")
-        if not re.search(r"(?m)^repos:\s*$", existing):
-            existing = "repos:\n" + existing
+        body_lines = body.splitlines()
+        if body_lines and body_lines[0].strip() == "repos:":
+            body_lines = body_lines[1:]
+        item_match = next((re.match(r"^(\s*)-\s+repo:", line) for line in body_lines if line.strip()), None)
+        generated_indent = len(item_match.group(1)) if item_match else 2
+        def body_for_indent(indent: int) -> str:
+            delta = indent - generated_indent
+            adjusted: list[str] = []
+            for line in body_lines:
+                if not line.strip():
+                    adjusted.append(line)
+                elif delta >= 0:
+                    adjusted.append(" " * delta + line)
+                else:
+                    adjusted.append(line[min(-delta, len(line) - len(line.lstrip())):])
+            return "\n".join(adjusted).rstrip("\n")
+        if state == "ok":
+            start, finish = existing.index(begin), existing.index(end) + len(end)
+            old_block = existing[start:finish]
+            old_item = next((re.match(r"^(\s*)-\s+repo:", line) for line in old_block.splitlines() if line.strip()), None)
+            desired_indent = len(old_item.group(1)) if old_item else generated_indent
+            return existing[:start] + begin + "\n" + body_for_indent(desired_indent) + "\n" + end + existing[finish:]
+        lines = existing.splitlines(keepends=True)
+        repos_index = next((index for index, line in enumerate(lines) if re.match(r"^repos:\s*$", line.rstrip("\n"))), None)
+        if repos_index is None:
+            lines = ["repos:\n"] + lines
+            repos_index = 0
+            list_indent = 2
+            insert_index = 1
+        else:
+            list_indent = next((len(match.group(1)) for line in lines[repos_index + 1:] if (match := re.match(r"^(\s*)-\s+repo:", line))), 2)
+            insert_index = repos_index + 1
+            for index in range(repos_index + 1, len(lines)):
+                line = lines[index]
+                if line.strip() and not line[:1].isspace() and not line.lstrip().startswith("#"):
+                    insert_index = index
+                    break
+                insert_index = index + 1
+        fragment = begin + "\n" + body_for_indent(list_indent) + "\n" + end + "\n"
+        prefix = "".join(lines[:insert_index])
+        if prefix and not prefix.endswith("\n"):
+            prefix += "\n"
+        return prefix + fragment + "".join(lines[insert_index:])
     if state == "ok":
         start, finish = existing.index(begin), existing.index(end) + len(end)
         return existing[:start] + begin + "\n" + body.rstrip("\n") + "\n" + end + existing[finish:]
@@ -695,14 +733,42 @@ def _save_hook_meta(root: Path, updates: dict[str, Any]) -> None:
     metadata_path(root).write_text(json.dumps(meta, indent=2, sort_keys=True) + "\n")
 
 
+def _global_hooks_path(root: Path) -> tuple[str, str]:
+    try:
+        local = subprocess.run(["git", "config", "--local", "--get", "core.hooksPath"], cwd=root, capture_output=True, text=True, check=False)
+    except OSError:
+        local = None
+    if local is not None and local.returncode == 0 and local.stdout.strip():
+        return "", ""
+    for scope in ("global", "system"):
+        try:
+            result = subprocess.run(["git", "config", f"--{scope}", "--get", "core.hooksPath"], cwd=root, capture_output=True, text=True, check=False)
+        except OSError:
+            continue
+        if result.returncode == 0 and result.stdout.strip():
+            return result.stdout.strip(), scope
+    return "", ""
+
+
+def _git_defender_hook_report() -> dict[str, Any]:
+    return {"strategy": "git-defender", "stages": {"pre-commit": "chained", "pre-push": "git shim (container runs prek --stage pre-push)", "commit-msg": "not run", "post-commit|post-checkout|post-merge": "not run — use `just context`"}}
+
+
 def hooks_install(root: Path, migrate: bool = False, force: bool = False) -> tuple[dict[str, Any], int]:
     config = root / ".pre-commit-config.yaml"
     if not config.is_file():
         return {"error": "no .pre-commit-config.yaml"}, EXIT_ERROR
     stages = declared_hook_stages(config.read_text())
-    global_hooks = subprocess.run(["git", "config", "--global", "--get", "core.hooksPath"], cwd=root, capture_output=True, text=True, check=False)
-    if global_hooks.returncode == 0 and global_hooks.stdout.strip() and not force:
-        finding = {"kind": "hook-manager", "path": "core.hooksPath", "value": global_hooks.stdout.strip(), "options": ["run prek install --force into the repository hooks directory", "move core.hooksPath to repository scope", "skip hooks"]}
+    hooks_path, hooks_scope = _global_hooks_path(root)
+    if hooks_path and shutil.which("git-defender"):
+        command = [str(shutil.which("git-defender")), "precommit-tool-setup"]
+        run = subprocess.run(command, cwd=root, capture_output=True, text=True, check=False)
+        report = _git_defender_hook_report()
+        if run.returncode == 0:
+            _save_hook_meta(root, {"hooks_installed": True, "hook_stages": ["pre-commit", "pre-push"], "declared_hook_stages": stages, "hook_install_status": "installed", "hook_strategy": "git-defender", "hook_stage_report": report})
+        return {"command": command, "declared": stages, "installed": ["pre-commit", "pre-push"] if run.returncode == 0 else [], "strategy": report["strategy"], "stages": report["stages"], "stdout": run.stdout, "stderr": run.stderr, "hooksPath": hooks_path, "hooksPathScope": hooks_scope}, run.returncode
+    if hooks_path and not force:
+        finding = {"kind": "hook-manager", "path": "core.hooksPath", "value": hooks_path, "options": ["run prek install --force into the repository hooks directory", "move core.hooksPath to repository scope", "skip hooks"]}
         _save_hook_meta(root, {"hook_install_status": "refused", "hook_manager": finding, "declared_hook_stages": stages})
         return {"finding": finding, "declared": stages, "installed": [], "error": "global core.hooksPath is configured"}, EXIT_DRIFT
     command = ["prek", "install"]
@@ -712,9 +778,10 @@ def hooks_install(root: Path, migrate: bool = False, force: bool = False) -> tup
     if migrate:
         command.append("--migrate")
     run = subprocess.run(command, cwd=root, capture_output=True, text=True, check=False)
+    report = {"strategy": "prek", "stages": {stage: "prek" for stage in stages}}
     if run.returncode == 0:
-        _save_hook_meta(root, {"hooks_installed": True, "hook_stages": stages, "declared_hook_stages": stages, "hook_install_status": "installed"})
-    return {"command": command, "declared": stages, "installed": stages if run.returncode == 0 else [], "stdout": run.stdout, "stderr": run.stderr}, run.returncode
+        _save_hook_meta(root, {"hooks_installed": True, "hook_stages": stages, "declared_hook_stages": stages, "hook_install_status": "installed", "hook_strategy": "prek", "hook_stage_report": report})
+    return {"command": command, "declared": stages, "installed": stages if run.returncode == 0 else [], "strategy": report["strategy"], "stages": report["stages"], "stdout": run.stdout, "stderr": run.stderr}, run.returncode
 def read_plugins(root: Path) -> list[dict[str, Any]]:
     return [{"name": name, **value} for name, value in existing_plugins(root / ".omp/plugins.toml").items()]
 
@@ -869,12 +936,19 @@ def doctor(root: Path) -> tuple[dict[str, Any], int]:
                 drift.append(f"missing tool:{tool}")
     config_path = root / ".pre-commit-config.yaml"
     declared_hooks = declared_hook_stages(config_path.read_text()) if config_path.is_file() else []
-    installed_hooks = [str(item) for item in meta.get("hook_stages", [])] if meta.get("hooks_installed") else []
-    hook_status = "installed" if declared_hooks and set(declared_hooks) <= set(installed_hooks) else ("not-installed" if declared_hooks else "not-declared")
+    hook_strategy = str(meta.get("hook_strategy", "prek"))
+    hook_report = meta.get("hook_stage_report")
+    if hook_strategy == "git-defender":
+        installed_hooks = ["pre-commit", "pre-push"] if meta.get("hooks_installed") else []
+        hook_status = "installed" if meta.get("hooks_installed") else "not-installed"
+    else:
+        installed_hooks = [str(item) for item in meta.get("hook_stages", [])] if meta.get("hooks_installed") else []
+        hook_status = "installed" if declared_hooks and set(declared_hooks) <= set(installed_hooks) else ("not-installed" if declared_hooks else "not-declared")
+        hook_report = hook_report if isinstance(hook_report, dict) else {"strategy": hook_strategy, "stages": {stage: hook_strategy for stage in installed_hooks}}
     if meta.get("hook_install_status") == "refused":
         drift.append("hook-manager refusal requires resolution")
         hook_status = "refused"
-    if meta.get("hooks_installed"):
+    if meta.get("hooks_installed") and hook_strategy != "git-defender":
         for stage in declared_hooks:
             if stage not in installed_hooks:
                 drift.append(f"hook stage missing:{stage}")
@@ -906,7 +980,7 @@ def doctor(root: Path) -> tuple[dict[str, Any], int]:
         for layer in dict.fromkeys(item["layer"] for item in fragments):
             if marker_state(text, layer, Path(path)) != "ok":
                 drift.append(f"managed markers damaged:{path}:{layer}")
-    payload = {"profile": profile_name, "layers": layers, "checks": {"answers": answers_path(root).is_file(), "tools": True, "plugins": plugin_result, "hooks": {"declared": declared_hooks, "installed": installed_hooks, "status": hook_status}, "context": "CURRENT" if "agentic" in layers else "not-applicable", "markers": True}, "drift": sorted(set(drift)), "errors": errors}
+    payload = {"profile": profile_name, "layers": layers, "checks": {"answers": answers_path(root).is_file(), "tools": True, "plugins": plugin_result, "hooks": {"declared": declared_hooks, "installed": installed_hooks, "status": hook_status, "strategy": hook_strategy, "stages": hook_report.get("stages", {}) if isinstance(hook_report, dict) else {}}, "context": "CURRENT" if "agentic" in layers else "not-applicable", "markers": True}, "drift": sorted(set(drift)), "errors": errors}
     return payload, EXIT_ERROR if errors else (EXIT_DRIFT if drift else 0)
 
 
