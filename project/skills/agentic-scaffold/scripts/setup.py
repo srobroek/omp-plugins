@@ -220,7 +220,7 @@ def main() -> int:
             raise ValueError("Install uv through the project's toolchain first")
         if not available["prek"]:
             run([available["uv"], "tool", "install", "prek"], root)
-        run([available["uv"], "tool", "install", "graphifyy[mcp]==0.9.56"], root)
+        run([available["uv"], "tool", "install", "graphifyy[mcp]==0.9.57"], root)
         if not available["repomix"]:
             if not available["bun"]:
                 raise ValueError("Install bun through the project's toolchain first")
