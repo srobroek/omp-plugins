@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.3](https://github.com/srobroek/omp-plugins/compare/beads--v1.0.2...beads--v1.0.3) (2026-09-09)
+
+
+### Bug Fixes
+
+* **beads:** read here-document bodies as data in the bd gates ([#78](https://github.com/srobroek/omp-plugins/issues/78)) ([534c983](https://github.com/srobroek/omp-plugins/commit/534c983f8193d9b457603487a2b11bc056705041))
+
 ## [1.0.2](https://github.com/srobroek/omp-plugins/compare/beads--v1.0.1...beads--v1.0.2) (2026-09-09)
 
 
