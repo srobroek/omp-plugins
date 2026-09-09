@@ -141,6 +141,7 @@ const GROUP_WRITES: Record<string, Record<string, true>> = {
 	dep: { add: true, relate: true, remove: true, unrelate: true },
 	epic: { "close-eligible": true },
 	gate: { "add-waiter": true, check: true, create: true, resolve: true },
+	kv: { append: true, delete: true, rm: true, set: true, update: true },
 	label: { add: true, propagate: true, remove: true },
 	"merge-slot": { acquire: true, create: true, release: true },
 	swarm: { create: true },

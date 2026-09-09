@@ -124,6 +124,8 @@ describe("firstBdVerb / isMutatingBdCommand", () => {
 			"bd gate list",
 			"bd gate show gate-1",
 			"bd todo list",
+			"bd kv get key",
+			"bd kv list",
 			"bd duplicates",
 			"bd duplicates --dry-run",
 		]) {
@@ -149,6 +151,11 @@ describe("firstBdVerb / isMutatingBdCommand", () => {
 			"bd gate check",
 			"bd gate resolve gate-1",
 			"bd todo add task",
+			"bd kv append key value",
+			"bd kv delete key",
+			"bd kv rm key",
+			"bd kv set key value",
+			"bd kv update key value",
 			"bd duplicates --auto-merge",
 			"bd todo done todo-1",
 		]) {
