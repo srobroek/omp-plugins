@@ -73,6 +73,12 @@ describe("actorPresent", () => {
 	test("absent", () => {
 		expect(actorPresent("bd close z", emptyEnv)).toBe(false);
 	});
+	test("exported earlier on the same command line", () => {
+		expect(actorPresent("cd /repo && export BEADS_ACTOR=omp-main && bd close z", emptyEnv)).toBe(true);
+	});
+	test("an unexported assignment in an earlier segment never reaches bd", () => {
+		expect(actorPresent("BEADS_ACTOR=omp-main; bd close z", emptyEnv)).toBe(false);
+	});
 });
 
 describe("isClaimCommand", () => {
@@ -115,6 +121,18 @@ describe("decideActorGate", () => {
 
 describe("integration", () => {
 	test("blocks claim-shaped bash; advisories via tool_result", () => {
+		// The handler reads the harness's real environment; a developer shell that
+		// exports BEADS_ACTOR would otherwise turn every case here green.
+		const saved = process.env.BEADS_ACTOR;
+		delete process.env.BEADS_ACTOR;
+		try {
+			runIntegration();
+		} finally {
+			if (saved !== undefined) process.env.BEADS_ACTOR = saved;
+		}
+	});
+
+	function runIntegration() {
 		const handlers: Record<string, Array<(e: unknown) => unknown>> = {};
 		const fakePi = {
 			zod: {},
@@ -153,5 +171,26 @@ describe("integration", () => {
 			content: [{ type: "text", text: "closed" }],
 		});
 		expect(JSON.stringify(patched)).toContain("BEADS_ACTOR");
+	}
+});
+
+describe("export in an earlier segment", () => {
+	test("a mutation after an export raises no advisory", () => {
+		expect(
+			decideActorGate("cd /repo && export BEADS_ACTOR=omp-main && bd close chezmoi-2ji --reason done", emptyEnv).kind,
+		).toBe("allow");
+	});
+	test("a claim after an export is allowed", () => {
+		expect(decideActorGate("export BEADS_ACTOR=omp/x/y && bd update chezmoi-2ji --claim", emptyEnv).kind).toBe(
+			"allow",
+		);
+	});
+	test("a claim after an export of something else is still blocked", () => {
+		expect(decideActorGate("export OTHER=1 && bd update chezmoi-2ji --claim", emptyEnv).kind).toBe("block");
+	});
+	test("an export after the bd command does not count", () => {
+		expect(decideActorGate("bd close chezmoi-2ji && export BEADS_ACTOR=omp-main", emptyEnv).kind).toBe(
+			"advisory",
+		);
 	});
 });

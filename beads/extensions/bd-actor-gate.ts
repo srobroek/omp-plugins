@@ -22,9 +22,31 @@ export function commandSegments(command: string): string[][] {
 	return segments;
 }
 
-export function bdInvocations(command: string): { verb: string; args: string[]; prefix: string[] }[] {
-	const out: { verb: string; args: string[]; prefix: string[] }[] = [];
+export interface BdInvocation {
+	verb: string;
+	args: string[];
+	/** `NAME=value` assignments prefixed to this very `bd` word. */
+	prefix: string[];
+	/** The `BEADS_ACTOR` value an earlier `export` in the same command line set, if any. */
+	exported?: string;
+}
+
+/**
+ * Every `bd` invocation in the command line, with the environment it runs under.
+ *
+ * `export BEADS_ACTOR=x && bd close y` is one shell line and two segments; the
+ * export is what `bd` inherits, so it counts. A bare `BEADS_ACTOR=x; bd close y`
+ * does not: without `export` the variable never reaches the child process.
+ */
+export function bdInvocations(command: string): BdInvocation[] {
+	const out: BdInvocation[] = [];
+	let exported: string | undefined;
 	for (const tokens of commandSegments(command)) {
+		if (tokens[0] === "export") {
+			const assignment = tokens.findLast(token => token.startsWith("BEADS_ACTOR="));
+			if (assignment !== undefined) exported = assignment.slice("BEADS_ACTOR=".length);
+			continue;
+		}
 		let i = 0;
 		while (/^[A-Za-z_]\w*=/.test(tokens[i] ?? "")) i++;
 		if (tokens[i] !== "bd") continue;
@@ -34,7 +56,7 @@ export function bdInvocations(command: string): { verb: string; args: string[]; 
 			const flag = tokens[i++]!;
 			if (VALUE_FLAGS.has(flag)) i++;
 		}
-		if (tokens[i]) out.push({ verb: tokens[i]!.toLowerCase(), args: tokens.slice(i + 1), prefix });
+		if (tokens[i]) out.push({ verb: tokens[i]!.toLowerCase(), args: tokens.slice(i + 1), prefix, exported });
 	}
 	return out;
 }
@@ -66,8 +88,11 @@ export function extractCommand(input: Record<string, unknown>): string {
 
 
 export function actorPresent(command: string, env: NodeJS.ProcessEnv = process.env): boolean {
-	const assignment = commandSegments(command)[0]?.find(token => token.startsWith("BEADS_ACTOR="));
-	const v = assignment === undefined ? env.BEADS_ACTOR : assignment.slice("BEADS_ACTOR=".length);
+	const invocations = bdInvocations(command);
+	const first = invocations[0];
+	const prefixed = first?.prefix.findLast(token => token.startsWith("BEADS_ACTOR="));
+	const v =
+		prefixed !== undefined ? prefixed.slice("BEADS_ACTOR=".length) : (first?.exported ?? env.BEADS_ACTOR);
 	return typeof v === "string" && v.trim().length > 0 && !/[$`]/.test(v);
 }
 
@@ -107,12 +132,13 @@ export function decideActorGate(
 ): ActorGateDecision {
 	let advisory = false;
 	for (const invocation of bdInvocations(command)) {
-		const { verb, args, prefix } = invocation;
+		const { verb, args, prefix, exported } = invocation;
 		const claim = verb === "claim" || ((verb === "update" || verb === "ready") && args.includes("--claim"));
 		const mutates = claim || (verb === "comments" ? args[0] === "add" : Object.hasOwn(MUTATING_VERBS, verb));
 		if (!mutates) continue;
 		const assignment = prefix.findLast(token => token.startsWith("BEADS_ACTOR="));
-		const actor = assignment === undefined ? env.BEADS_ACTOR : assignment.slice("BEADS_ACTOR=".length);
+		const actor =
+			assignment !== undefined ? assignment.slice("BEADS_ACTOR=".length) : (exported ?? env.BEADS_ACTOR);
 		if (actor?.trim() && !/[$`]/.test(actor)) continue;
 		if (claim) return { kind: "block", reason: CLAIM_REASON };
 		advisory = true;
@@ -135,7 +161,9 @@ export default function bdActorGate(pi: ExtensionAPI): void {
 			if (event.toolName !== "bash") return;
 			const command = extractCommand(event.input);
 			if (!command || !/\bbd\s+/.test(command)) return;
-			const decision = decideActorGate(command);
+			// The bash tool's own `env` argument reaches the child like an export does.
+			const toolEnv = (event.input as { env?: Record<string, string> }).env;
+			const decision = decideActorGate(command, toolEnv ? { ...process.env, ...toolEnv } : process.env);
 			if (decision.kind === "block") {
 				return { block: true, reason: decision.reason };
 			}
