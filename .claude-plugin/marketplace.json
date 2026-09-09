@@ -12,7 +12,7 @@
       "name": "agentic-scaffold",
       "description": "Deterministic project scaffolding from ordered template layers and Beads formulas.",
       "source": "./agentic-scaffold",
-      "version": "0.1.0",
+      "version": "0.2.0",
       "category": "development"
     },
     {
@@ -138,7 +138,7 @@
       "name": "project",
       "description": "Project lifecycle: brownfield onboarding, license selection, and user journeys.",
       "source": "./project",
-      "version": "1.0.0",
+      "version": "1.1.0",
       "category": "productivity"
     },
     {
