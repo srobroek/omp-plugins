@@ -137,6 +137,7 @@ def test_hooks_install_reports_global_hook_manager(tmp_path: Path) -> None:
     config = tmp_path / "global.gitconfig"
     config.write_text("[core]\n\thooksPath = /global/hooks\n")
     environment = os.environ.copy()
+    environment["GIT_CONFIG_GLOBAL"] = str(config)
     environment["PATH"] = "/usr/bin:/bin"
     result = run("hooks", "install", "--root", str(tmp_path), env=environment)
     assert result.returncode == 2

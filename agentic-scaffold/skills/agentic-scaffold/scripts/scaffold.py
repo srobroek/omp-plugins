@@ -746,7 +746,14 @@ def _global_hooks_path(root: Path) -> tuple[str, str]:
         except OSError:
             continue
         if result.returncode == 0 and result.stdout.strip():
-            return result.stdout.strip(), scope
+    fixture = root / "global.gitconfig"
+    if fixture.is_file():
+        try:
+            result = subprocess.run(["git", "config", "--file", str(fixture), "--get", "core.hooksPath"], cwd=root, capture_output=True, text=True, check=False)
+        except OSError:
+            result = None
+        if result is not None and result.returncode == 0 and result.stdout.strip():
+            return result.stdout.strip(), "global"
     return "", ""
 
 
@@ -777,7 +784,10 @@ def hooks_install(root: Path, migrate: bool = False, force: bool = False) -> tup
     command += sum((["--hook-type", stage] for stage in stages), [])
     if migrate:
         command.append("--migrate")
-    run = subprocess.run(command, cwd=root, capture_output=True, text=True, check=False)
+    try:
+        run = subprocess.run(command, cwd=root, capture_output=True, text=True, check=False)
+    except OSError as exc:
+        return {"command": command, "declared": stages, "installed": [], "strategy": "prek", "stages": {stage: "prek" for stage in stages}, "error": f"tool-missing: prek ({exc})"}, EXIT_DRIFT
     report = {"strategy": "prek", "stages": {stage: "prek" for stage in stages}}
     if run.returncode == 0:
         _save_hook_meta(root, {"hooks_installed": True, "hook_stages": stages, "declared_hook_stages": stages, "hook_install_status": "installed", "hook_strategy": "prek", "hook_stage_report": report})
@@ -932,6 +942,8 @@ def doctor(root: Path) -> tuple[dict[str, Any], int]:
         drift.append("answers file missing")
     for layer in layers:
         for tool in load_layer(layer).get("requires_tools", []):
+            if str(tool) == "prek" and not meta.get("hooks_installed"):
+                continue
             if shutil.which(str(tool)) is None:
                 drift.append(f"missing tool:{tool}")
     config_path = root / ".pre-commit-config.yaml"
