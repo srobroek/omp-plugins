@@ -76,6 +76,19 @@ COMMAND ROUTING (was the dispatcher table)
 - retro.run: read beads (`bd list --spec --status all --json`), close reasons,
   wisps, and decision beads — not only spec.md/plan.md.
 
+PR REVIEW LOOP
+MUST The agent that creates a PR owns automated review through landing or human
+  escalation. Park pending CodeRabbit, Codex and repository-configured review
+  waits without polling; unrelated spec work continues.
+MUST Collect every actionable finding at the exact head into one fix round, push
+  the update, rerun all configured reviewers, resolve addressed GitHub threads
+  through `resolveReviewThread`, and read back `isResolved=true`.
+MUST Count attempts per material issue using the review-thread node id, or a
+  stable finding fingerprint when no thread exists. New findings start at one.
+MUST After three unsuccessful fixes of the same issue, hold that PR at human
+  review with the issue identities, attempts, heads, fixes and unresolved URLs,
+  then notify the main agent loop. Never charge new issues against the old count.
+
 DECISIONS
 MUST Register a hard-to-reverse choice when it lands (`adr` skill / decision bead).
 Phases that earn a record: plan, critique/security, analyze, implement, iterate.
