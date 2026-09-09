@@ -5,8 +5,7 @@
   "private": true,
   "omp": {
     "extensions": [
-      "./extensions/journeys-tool.ts",
-      "./extensions/agentic-scaffold.ts"
+      "./extensions/journeys-tool.ts"
     ]
   }
 }
