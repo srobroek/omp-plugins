@@ -33,7 +33,7 @@
       "name": "beads",
       "description": "Beads issue tracking: dependency DAGs, formulas, and decisions recorded as beads.",
       "source": "./beads",
-      "version": "1.0.3",
+      "version": "1.0.4",
       "category": "productivity"
     },
     {
@@ -68,7 +68,7 @@
       "name": "delivery",
       "description": "Delivery and git-workflow rules, plus a pull-request review agent.",
       "source": "./delivery",
-      "version": "0.7.3",
+      "version": "0.8.0",
       "category": "devops"
     },
     {
@@ -173,7 +173,7 @@
       "name": "speckit",
       "description": "SpecKit workflow: spec-driven setup, bugfix flow, tasks.md protection, and PR title discipline.",
       "source": "./speckit",
-      "version": "0.6.1",
+      "version": "0.7.0",
       "category": "development"
     },
     {

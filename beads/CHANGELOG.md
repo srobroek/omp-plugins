@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.4](https://github.com/srobroek/omp-plugins/compare/beads--v1.0.3...beads--v1.0.4) (2026-09-09)
+
+
+### Bug Fixes
+
+* **beads:** classify and arbitrate bd actor writes ([#80](https://github.com/srobroek/omp-plugins/issues/80)) ([d6dc2bd](https://github.com/srobroek/omp-plugins/commit/d6dc2bd47df753a0a1f4d77e811d430352c0594c))
+
 ## [1.0.3](https://github.com/srobroek/omp-plugins/compare/beads--v1.0.2...beads--v1.0.3) (2026-09-09)
 
 
