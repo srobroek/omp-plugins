@@ -162,20 +162,43 @@ export function extractCommand(input: Record<string, unknown>): string {
 	return "";
 }
 
-function invocationHasActor(invocation: BdInvocation, env: NodeJS.ProcessEnv): boolean {
+/** The environment a bash tool call supplies to its child process. */
+export function environmentForInput(
+	input: Record<string, unknown>,
+	base: NodeJS.ProcessEnv = process.env,
+): NodeJS.ProcessEnv {
+	const env: NodeJS.ProcessEnv = { ...base };
+	const supplied = input.env;
+	if (supplied !== null && typeof supplied === "object") {
+		for (const [name, value] of Object.entries(supplied)) {
+			if (typeof value === "string") env[name] = value;
+		}
+	}
+	return env;
+}
+
+function invocationActors(invocation: BdInvocation, env: NodeJS.ProcessEnv): string[] {
+	const actors: string[] = [];
 	for (const variable of ACTOR_VARS) {
 		const assignment = invocation.prefix.findLast(token => token.startsWith(`${variable}=`));
 		const value = assignment !== undefined
 			? assignment.slice(variable.length + 1)
 			: (invocation.exported[variable] ?? env[variable]);
-		if (value?.trim() && !/[$`]/.test(value)) return true;
+		if (value?.trim() && !/[$`]/.test(value)) actors.push(value.trim());
 	}
-	return false;
+	return actors;
+}
+
+export function actorValues(command: string, env: NodeJS.ProcessEnv = process.env): string[] {
+	const actors = bdInvocations(command)
+		.filter(isMutatingInvocation)
+		.flatMap(invocation => invocationActors(invocation, env));
+	return [...new Set(actors)];
 }
 
 export function actorPresent(command: string, env: NodeJS.ProcessEnv = process.env): boolean {
 	const first = bdInvocations(command)[0];
-	return first !== undefined && invocationHasActor(first, env);
+	return first !== undefined && invocationActors(first, env).length > 0;
 }
 
 /** First literal `bd` invocation, after global flags. */
@@ -237,7 +260,7 @@ export function decideActorGate(
 	for (const invocation of bdInvocations(command)) {
 		if (
 			!isMutatingInvocation(invocation) ||
-			invocationHasActor(invocation, env)
+			invocationActors(invocation, env).length > 0
 		) {
 			continue;
 		}
@@ -268,13 +291,7 @@ export default function bdActorGate(pi: ExtensionAPI): void {
 			const command = extractCommand(event.input);
 			if (!command || !/\bbd\s+/.test(command)) return;
 			// The bash tool's own `env` argument reaches the child like an export does.
-			const env: NodeJS.ProcessEnv = { ...process.env };
-			const suppliedEnv = event.input.env;
-			if (suppliedEnv !== null && typeof suppliedEnv === "object") {
-				for (const [name, value] of Object.entries(suppliedEnv)) {
-					if (typeof value === "string") env[name] = value;
-				}
-			}
+			const env = environmentForInput(event.input);
 			const decision = decideActorGate(command, env);
 			if (decision.kind === "block") {
 				return { block: true, reason: decision.reason };

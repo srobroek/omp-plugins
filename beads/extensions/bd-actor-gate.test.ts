@@ -3,7 +3,9 @@ import { afterEach, describe, expect, test } from "bun:test";
 import bdActorGate, {
 	ACTOR_NOTICE_ARBITER,
 	actorPresent,
+	actorValues,
 	decideActorGate,
+	environmentForInput,
 	extractCommand,
 	firstBdVerb,
 	isClaimCommand,
@@ -22,6 +24,22 @@ describe("extractCommand", () => {
 		expect(extractCommand({ command: "bd show x" })).toBe("bd show x");
 		expect(extractCommand({ cmd: "bd list" })).toBe("bd list");
 		expect(extractCommand({})).toBe("");
+	});
+});
+
+describe("actorValues / environmentForInput", () => {
+	test("returns the tool-level BD_ACTOR used by a claim without an id", () => {
+		const env = environmentForInput({ env: { BD_ACTOR: "omp/Main/alias" } }, emptyEnv);
+		expect(actorValues("bd ready --claim", env)).toEqual(["omp/Main/alias"]);
+	});
+
+	test("returns each literal actor used by mutating invocations only", () => {
+		expect(
+			actorValues(
+				"BEADS_ACTOR=omp/Main/a bd close a; export BD_ACTOR=omp/Main/b; bd update b --claim; bd show c",
+				emptyEnv,
+			),
+		).toEqual(["omp/Main/a", "omp/Main/b"]);
 	});
 });
 

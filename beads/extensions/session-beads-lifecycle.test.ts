@@ -498,6 +498,49 @@ esac
 		}
 	});
 
+	test("tracks tool-level BD_ACTOR for ready --claim without a bead id", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "beads-actor-alias-"));
+		const originalPath = process.env.PATH;
+		const originalBeads = process.env.BEADS_DIR;
+		const originalBeadsActor = process.env.BEADS_ACTOR;
+		const originalBdActor = process.env.BD_ACTOR;
+		try {
+			mkdirSync(join(dir, ".beads"));
+			writeFileSync(join(dir, "bd"), `#!/bin/sh
+case "$1" in
+list) printf '%s\\n' '[{"id":"bd-owned","title":"owned claim","status":"in_progress","assignee":"omp/Main/alias"}]' ;;
+*) printf '%s\\n' '[]' ;;
+esac
+`);
+			chmodSync(join(dir, "bd"), 0o755);
+			process.env.PATH = `${dir}:${originalPath ?? ""}`;
+			delete process.env.BEADS_DIR;
+			delete process.env.BEADS_ACTOR;
+			delete process.env.BD_ACTOR;
+			const { handlers } = wire();
+			handlers.tool_result![0]!({
+				toolName: "bash",
+				toolCallId: "alias-claim",
+				isError: false,
+				input: { command: "bd ready --claim", env: { BD_ACTOR: "omp/Main/alias" } },
+				content: [{ type: "text", text: "claimed" }],
+			}, { cwd: dir });
+
+			const advisory = await handlers.session_stop![0]!({}, { cwd: dir }) as { additionalContext?: string };
+			expect(advisory.additionalContext).toContain("bd-owned [omp/Main/alias] owned claim");
+		} finally {
+			if (originalPath === undefined) delete process.env.PATH;
+			else process.env.PATH = originalPath;
+			if (originalBeads === undefined) delete process.env.BEADS_DIR;
+			else process.env.BEADS_DIR = originalBeads;
+			if (originalBeadsActor === undefined) delete process.env.BEADS_ACTOR;
+			else process.env.BEADS_ACTOR = originalBeadsActor;
+			if (originalBdActor === undefined) delete process.env.BD_ACTOR;
+			else process.env.BD_ACTOR = originalBdActor;
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
 	test("a stale-skip import result is advised in band, once", () => {
 		const { handlers } = wire();
 		const result = (text: string, id: string) =>
