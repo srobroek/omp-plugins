@@ -84,6 +84,91 @@ def value_default(value: Any) -> str:
     if isinstance(value, bool):
         return "true" if value else "false"
     return str(value)
+def build_ci_jobs(language: str, values: dict[str, str]) -> str:
+    checkout = "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7"
+    setup_uv = "astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v6"
+    setup_bun = "oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2"
+    setup_go = "actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5"
+    rust_toolchain = "dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # stable"
+    if language == "python":
+        job = f'''  python:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: {checkout}
+        with:
+          persist-credentials: false
+      - name: Setup uv
+        uses: {setup_uv}
+      - run: uv sync
+      - run: {values["commands_test"]}
+      - run: {values["commands_lint"]}
+      - run: {values["commands_fmt"]}
+      - run: {values["commands_check"]}'''
+    elif language == "ts":
+        job = f'''  typescript:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: {checkout}
+        with:
+          persist-credentials: false
+      - name: Setup Bun
+        uses: {setup_bun}
+      - run: bun install --frozen-lockfile
+      - run: {values["commands_test"]}
+      - run: {values["commands_lint"]}
+      - run: {values["commands_fmt"]}
+      - run: {values["commands_check"]}'''
+    elif language == "rust":
+        job = f'''  rust:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: {checkout}
+      - name: Setup Rust
+        uses: {rust_toolchain}
+      - run: cargo test
+      - run: cargo clippy --all-targets --all-features -- -D warnings
+      - run: cargo fmt --all --check
+      - run: cargo check --all-targets'''
+    elif language == "go":
+        job = f'''  go:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: {checkout}
+      - name: Setup Go
+        uses: {setup_go}
+        with:
+          go-version: "stable"
+      - run: go test -race ./...
+      - run: golangci-lint run ./...
+      - run: test -z "$(gofmt -l .)"
+      - run: go vet ./...'''
+    elif language == "terraform":
+        job = f'''  terraform:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: {checkout}
+      - run: terraform fmt -check -recursive
+      - run: terraform validate'''
+    else:
+        job = f'''  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: {checkout}
+        with:
+          persist-credentials: false
+      - name: Setup uv
+        uses: {setup_uv}
+      - run: uvx prek run --all-files'''
+    prek = f'''  prek:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: {checkout}
+        with:
+          persist-credentials: false
+      - name: Setup uv
+        uses: {setup_uv}
+      - run: uvx prek run --all-files'''
+    return job + "\n" + prek
 
 
 def layer_defaults(layers: list[str]) -> dict[str, str]:
@@ -173,11 +258,16 @@ def resolve_selection(root: Path, profile_name: str | None, name: str | None, ov
     values.setdefault("year", str(datetime.now(UTC).year))
     values.setdefault("author", "")
     values.setdefault("license", "")
+    license_name = str(values.get("license", ""))
+    values["license_spdx"] = "Apache-2.0" if license_name.lower() in {"apache-2.0", "apache 2.0"} else license_name
+    author = str(values.get("author", ""))
+    values["authors"] = f"authors = [{{ name = {json.dumps(author)} }}]\n" if author else ""
     values["profile"] = selected_profile
     commands = profile.get("commands", {})
     if isinstance(commands, dict):
         for key in ("setup", "test", "lint", "fmt", "check"):
             values[f"commands_{key}"] = str(commands.get(key, ""))
+    values["ci_jobs"] = build_ci_jobs(str(values.get("language", "none")), values)
     if str(values.get("web_ui", "")).lower() in TRUTHY and "web-ui" not in layers:
         layers.append("web-ui")
     for layer in layers:
@@ -208,16 +298,19 @@ def collect(layers: list[str], values: dict[str, str]) -> tuple[dict[str, list[d
     blocks: dict[str, list[dict[str, Any]]] = {}
     for layer in layers:
         directory = layer_dir(layer)
+        config = load_layer(layer)
+        tools = config.get("tools", {})
+        if isinstance(tools, dict) and tools:
+            lines = ["[tools]"]
+            for key, value in tools.items():
+                resolved = render_text(str(value), values)
+                lines.append(f"{key} = {toml_value(resolved)}")
+            blocks.setdefault("mise.toml", []).append({"layer": layer, "source": str(directory / "layer.toml"), "target": "mise.toml", "body": "\n".join(lines) + "\n"})
         for source in sorted(directory.rglob("*")):
-            if not source.is_file() or source.name in {"layer.toml", "README.md", ".DS_Store"}:
+            if not source.is_file() or source.name in {"layer.toml", "README.md", ".DS_Store", "mise.toml.tmpl"}:
                 continue
             relative = source.relative_to(directory)
             if relative.name == "LICENSE" and str(values.get("license", "")).lower() not in {"", "apache-2.0", "apache 2.0"}:
-                continue
-            if relative.name == "mise.toml.tmpl":
-                target = target_path(Path(str(relative)[:-5]), values)
-                body = render_text(source.read_text(), values)
-                blocks.setdefault(str(target), []).append({"layer": layer, "source": str(source), "target": str(target), "body": body})
                 continue
             if relative.name.endswith(".block"):
                 target = target_path(Path(str(relative)[:-6]), values)
@@ -261,9 +354,8 @@ def classify(root: Path, layers: list[str], values: dict[str, str], force_layer:
         if len(set(owners)) > 1:
             winner = force_layer and force_layer in owners
             if not winner:
-                conflict = {"path": path, "owners": owners, "reason": "duplicate owns"}
-                conflicts.append(conflict)
-            rows.append({"path": path, "layer": owners if len(set(owners)) > 1 else owners[0], "class": "create" if winner else "conflict"})
+                conflicts.append({"path": path, "owners": owners, "reason": "duplicate owns"})
+            rows.append({"path": path, "layer": owners, "class": "create" if winner else "conflict"})
     for path, owners in sorted(direct.items()):
         names = [item["layer"] for item in owners]
         if len(owners) > 1:
@@ -280,10 +372,6 @@ def classify(root: Path, layers: list[str], values: dict[str, str], force_layer:
             elif path in {".omp/context.py", ".omp/project-context.json"} and not metadata_path(root).exists():
                 row_class = "conflict"
                 conflicts.append({"path": path, "owners": names, "reason": "unowned-file; explicit --adopt required"})
-            elif path == "AGENTS.md" and "agentic-scaffold:begin" not in target.read_text():
-                # An unmarked AGENTS.md is ambiguous: preserve it and require an explicit choice.
-                row_class = "conflict"
-                conflicts.append({"path": path, "owners": names, "reason": "unmarked managed instructions"})
             elif path == ".omp/mcp.json":
                 row_class = "update-merge"
             else:
@@ -292,16 +380,15 @@ def classify(root: Path, layers: list[str], values: dict[str, str], force_layer:
     for path, fragments in sorted(blocks.items()):
         target = root / path
         row_class = "create" if not target.exists() else "update-block"
-        if target.exists():
+        if target.is_symlink():
+            row_class = "conflict"
+            conflicts.append({"path": path, "reason": "managed block target is a symlink"})
+        elif target.exists():
             text = target.read_text()
             for layer in dict.fromkeys(item["layer"] for item in fragments):
-                state = marker_state(text, layer, Path(path))
-                if state == "broken":
+                if marker_state(text, layer, Path(path)) == "broken":
                     row_class = "conflict"
                     conflicts.append({"path": path, "layer": layer, "reason": "managed markers damaged or duplicated"})
-                elif state == "missing" and path == "AGENTS.md":
-                    row_class = "conflict"
-                    conflicts.append({"path": path, "layer": layer, "reason": "ambiguous AGENTS.md markers"})
         rows.append({"path": path, "layer": [item["layer"] for item in fragments], "class": row_class})
     for left in layers:
         for right in load_layer(left).get("conflicts_with", []):
@@ -315,20 +402,19 @@ def plugin_sets(layers: list[str], values: dict[str, str]) -> dict[str, dict[str
     for layer in layers:
         config = load_layer(layer)
         raw = config.get("plugins", {})
-        if not isinstance(raw, dict):
-            continue
-        for marketplace, entry in raw.items():
-            if not isinstance(entry, dict):
-                continue
-            condition = entry.get("when")
-            if isinstance(condition, dict):
-                variable = str(condition.get("var", ""))
-                expected = str(condition.get("equals", "true"))
-                if str(values.get(variable, "")).lower() != expected.lower():
+        if isinstance(raw, dict):
+            for marketplace, entry in raw.items():
+                if not isinstance(entry, dict):
                     continue
-            item = result.setdefault(str(marketplace), {"source": str(entry.get("source", marketplace)), "plugins": []})
-            item["source"] = str(entry.get("source", item["source"]))
-            item["plugins"] = list(dict.fromkeys(item["plugins"] + [str(p) for p in entry.get("plugins", [])]))
+                condition = entry.get("when")
+                if isinstance(condition, dict):
+                    variable = str(condition.get("var", ""))
+                    expected = str(condition.get("equals", "true"))
+                    if str(values.get(variable, "")).lower() != expected.lower():
+                        continue
+                item = result.setdefault(str(marketplace), {"source": str(entry.get("source", marketplace)), "plugins": []})
+                item["source"] = str(entry.get("source", item["source"]))
+                item["plugins"] = list(dict.fromkeys(item["plugins"] + [str(p) for p in entry.get("plugins", [])]))
         conditionals = config.get("conditional_plugins", {})
         if isinstance(conditionals, dict):
             for plugin, condition in conditionals.items():
@@ -339,6 +425,7 @@ def plugin_sets(layers: list[str], values: dict[str, str]) -> dict[str, dict[str
                 if str(values.get(variable, "")).lower() == expected.lower():
                     item = result.setdefault("srobroek-omp", {"source": "srobroek/omp-plugins", "plugins": []})
                     item["plugins"] = list(dict.fromkeys(item["plugins"] + [str(plugin)]))
+    if str(values.get("speckit", "")).lower() in TRUTHY:
         item = result.setdefault("srobroek-omp", {"source": "srobroek/omp-plugins", "plugins": []})
         item["plugins"] = list(dict.fromkeys(item["plugins"] + ["speckit"]))
     return result
@@ -440,13 +527,17 @@ def merge_tools_block(existing: str, generated: str, block: str, target: Path) -
     if existing and not existing.endswith("\n"):
         existing += "\n"
     return existing + begin + "\n" + body + "\n" + end + "\n"
-
-
 def replace_block(existing: str, body: str, block: str, target: Path) -> str:
     begin, end = marker_pair(block, target)
     state = marker_state(existing, block, target)
     if state == "broken":
         raise ValueError(f"managed markers conflict in {target}; expected {begin} and {end}")
+    if target.name == ".pre-commit-config.yaml":
+        lines = body.splitlines()
+        if lines and lines[0].strip() == "repos:":
+            body = "\n".join(lines[1:]).lstrip("\n")
+        if not re.search(r"(?m)^repos:\s*$", existing):
+            existing = "repos:\n" + existing
     if state == "ok":
         start, finish = existing.index(begin), existing.index(end) + len(end)
         return existing[:start] + begin + "\n" + body.rstrip("\n") + "\n" + end + existing[finish:]
@@ -545,6 +636,32 @@ def inspect(root: Path) -> dict[str, Any]:
             stacks.append(stack)
     if any(root.glob("*.tf")) or (root / "main.tf").exists():
         stacks.append("terraform")
+    notes: list[str] = []
+    if stacks:
+        selected = stacks[0]
+        if len(stacks) > 1:
+            notes.append(f"multiple stacks detected; selected {selected}")
+        if selected == "python":
+            try:
+                project = load_toml(root / "pyproject.toml")
+            except SystemExit:
+                project = {}
+            suggested = "python-app" if isinstance(project.get("project", {}).get("scripts"), dict) and project["project"]["scripts"] else "python-lib"
+        elif selected == "ts":
+            package = {}
+            try:
+                package = json.loads((root / "package.json").read_text()) if (root / "package.json").is_file() else {}
+            except json.JSONDecodeError:
+                package = {}
+            suggested = "ts-app" if (root / "src/index.ts").is_file() or package.get("bin") else "ts-lib"
+        elif selected == "rust":
+            suggested = "rust-app" if (root / "src/main.rs").is_file() else "rust-lib"
+        elif selected == "go":
+            suggested = "go-app" if (root / "cmd").is_dir() else "go-lib"
+        else:
+            suggested = "terraform"
+    else:
+        suggested = "agentic-repo"
     tools = {name: shutil.which(name) is not None for name in ("uv", "bun", "mise", "prek", "just", "gh", "bd", "omp")}
     hook_files = [str(p.relative_to(root)) for p in (root / ".pre-commit-config.yaml", root / "prek.toml") if p.exists()]
     hook_findings: list[dict[str, Any]] = []
@@ -558,14 +675,48 @@ def inspect(root: Path) -> dict[str, Any]:
     except OSError:
         pass
     for path in (root / ".omp/context.py", root / ".omp/project-context.json"):
-        if path.exists() and not (metadata_path(root).exists()):
+        if path.exists() and not metadata_path(root).exists():
             hook_findings.append({"kind": "unowned-file", "path": str(path.relative_to(root))})
-    return {"root": str(root), "git": (root / ".git").exists(), "stacks": stacks, "tooling": {"mise": (root / "mise.toml").exists(), "just": (root / "justfile").exists(), "prek": bool(hook_files), "omp": (root / ".omp").exists(), "agents": (root / "AGENTS.md").exists(), "beads": (root / ".beads").exists()}, "hook_manager_conflicts": hook_files if len(hook_files) > 1 else [], "findings": hook_findings, "missing_tools": [name for name, found in tools.items() if not found], "tools": tools, "suggested_profile": "agentic-repo" if not stacks else f"{stacks[0]}-lib"}
+    return {"root": str(root), "git": (root / ".git").exists(), "stacks": stacks, "tooling": {"mise": (root / "mise.toml").exists(), "just": (root / "justfile").exists(), "prek": bool(hook_files), "omp": (root / ".omp").exists(), "agents": (root / "AGENTS.md").exists(), "beads": (root / ".beads").exists()}, "hook_manager_conflicts": hook_files if len(hook_files) > 1 else [], "findings": hook_findings, "missing_tools": [name for name, found in tools.items() if not found], "tools": tools, "suggested_profile": suggested, "suggestedProfile": suggested, "notes": notes}
+def declared_hook_stages(config: str) -> list[str]:
+    groups = re.findall(r"(?:default_install_hook_types|stages):\s*\[([^]]+)\]", config)
+    return sorted({part.strip(" '\"") for group in groups for part in group.split(",") if part.strip()})
 
 
+def _save_hook_meta(root: Path, updates: dict[str, Any]) -> None:
+    meta: dict[str, Any] = {}
+    if metadata_path(root).is_file():
+        try:
+            meta = json.loads(metadata_path(root).read_text())
+        except json.JSONDecodeError:
+            meta = {}
+    meta.update(updates)
+    metadata_path(root).parent.mkdir(parents=True, exist_ok=True)
+    metadata_path(root).write_text(json.dumps(meta, indent=2, sort_keys=True) + "\n")
+
+
+def hooks_install(root: Path, migrate: bool = False, force: bool = False) -> tuple[dict[str, Any], int]:
+    config = root / ".pre-commit-config.yaml"
+    if not config.is_file():
+        return {"error": "no .pre-commit-config.yaml"}, EXIT_ERROR
+    stages = declared_hook_stages(config.read_text())
+    global_hooks = subprocess.run(["git", "config", "--global", "--get", "core.hooksPath"], cwd=root, capture_output=True, text=True, check=False)
+    if global_hooks.returncode == 0 and global_hooks.stdout.strip() and not force:
+        finding = {"kind": "hook-manager", "path": "core.hooksPath", "value": global_hooks.stdout.strip(), "options": ["run prek install --force into the repository hooks directory", "move core.hooksPath to repository scope", "skip hooks"]}
+        _save_hook_meta(root, {"hook_install_status": "refused", "hook_manager": finding, "declared_hook_stages": stages})
+        return {"finding": finding, "declared": stages, "installed": [], "error": "global core.hooksPath is configured"}, EXIT_DRIFT
+    command = ["prek", "install"]
+    if force:
+        command.append("--force")
+    command += sum((["--hook-type", stage] for stage in stages), [])
+    if migrate:
+        command.append("--migrate")
+    run = subprocess.run(command, cwd=root, capture_output=True, text=True, check=False)
+    if run.returncode == 0:
+        _save_hook_meta(root, {"hooks_installed": True, "hook_stages": stages, "declared_hook_stages": stages, "hook_install_status": "installed"})
+    return {"command": command, "declared": stages, "installed": stages if run.returncode == 0 else [], "stdout": run.stdout, "stderr": run.stderr}, run.returncode
 def read_plugins(root: Path) -> list[dict[str, Any]]:
     return [{"name": name, **value} for name, value in existing_plugins(root / ".omp/plugins.toml").items()]
-
 
 def marketplace_items(payload: Any) -> list[dict[str, Any]]:
     if isinstance(payload, list):
@@ -644,27 +795,6 @@ def plugins_sync(root: Path, check: bool) -> tuple[dict[str, Any], int]:
     return {"desired": desired, "drift": drift}, EXIT_DRIFT if check and drift else 0
 
 
-def hooks_install(root: Path, migrate: bool = False) -> tuple[dict[str, Any], int]:
-    config = root / ".pre-commit-config.yaml"
-    if not config.is_file():
-        return {"error": "no .pre-commit-config.yaml"}, EXIT_ERROR
-    groups = re.findall(r"(?:default_install_hook_types|stages):\s*\[([^]]+)\]", config.read_text())
-    stages = sorted({part.strip(" '\"") for group in groups for part in group.split(",") if part.strip()})
-    command = ["prek", "install"] + sum((["--hook-type", stage] for stage in stages), [])
-    if migrate:
-        command.append("--migrate")
-    run = subprocess.run(command, cwd=root, capture_output=True, text=True, check=False)
-    if run.returncode == 0:
-        meta = {}
-        if metadata_path(root).is_file():
-            try:
-                meta = json.loads(metadata_path(root).read_text())
-            except json.JSONDecodeError:
-                meta = {}
-        meta["hooks_installed"] = True
-        meta["hook_stages"] = stages
-        metadata_path(root).write_text(json.dumps(meta, indent=2, sort_keys=True) + "\n")
-    return {"command": command, "stages": stages, "stdout": run.stdout, "stderr": run.stderr}, run.returncode
 
 
 def tools_install(root: Path, yes: bool) -> tuple[dict[str, Any], int]:
@@ -737,9 +867,18 @@ def doctor(root: Path) -> tuple[dict[str, Any], int]:
         for tool in load_layer(layer).get("requires_tools", []):
             if shutil.which(str(tool)) is None:
                 drift.append(f"missing tool:{tool}")
+    config_path = root / ".pre-commit-config.yaml"
+    declared_hooks = declared_hook_stages(config_path.read_text()) if config_path.is_file() else []
+    installed_hooks = [str(item) for item in meta.get("hook_stages", [])] if meta.get("hooks_installed") else []
+    hook_status = "installed" if declared_hooks and set(declared_hooks) <= set(installed_hooks) else ("not-installed" if declared_hooks else "not-declared")
+    if meta.get("hook_install_status") == "refused":
+        drift.append("hook-manager refusal requires resolution")
+        hook_status = "refused"
     if meta.get("hooks_installed"):
-        for stage in meta.get("hook_stages", []):
-            if not (root / ".git/hooks" / str(stage)).exists():
+        for stage in declared_hooks:
+            if stage not in installed_hooks:
+                drift.append(f"hook stage missing:{stage}")
+            elif (root / ".git/hooks" / stage).parent.exists() and not (root / ".git/hooks" / stage).exists():
                 drift.append(f"hook missing:{stage}")
     plugin_result, plugin_code = plugins_sync(root, True)
     if plugin_code == EXIT_DRIFT:
@@ -767,7 +906,7 @@ def doctor(root: Path) -> tuple[dict[str, Any], int]:
         for layer in dict.fromkeys(item["layer"] for item in fragments):
             if marker_state(text, layer, Path(path)) != "ok":
                 drift.append(f"managed markers damaged:{path}:{layer}")
-    payload = {"profile": profile_name, "layers": layers, "checks": {"answers": answers_path(root).is_file(), "tools": True, "plugins": plugin_result, "context": "CURRENT" if "agentic" in layers else "not-applicable", "markers": True}, "drift": sorted(set(drift)), "errors": errors}
+    payload = {"profile": profile_name, "layers": layers, "checks": {"answers": answers_path(root).is_file(), "tools": True, "plugins": plugin_result, "hooks": {"declared": declared_hooks, "installed": installed_hooks, "status": hook_status}, "context": "CURRENT" if "agentic" in layers else "not-applicable", "markers": True}, "drift": sorted(set(drift)), "errors": errors}
     return payload, EXIT_ERROR if errors else (EXIT_DRIFT if drift else 0)
 
 
@@ -831,7 +970,7 @@ def build_parser() -> argparse.ArgumentParser:
     doctor_parser = sub.add_parser("doctor"); doctor_parser.add_argument("--root", default=".")
     update_parser = sub.add_parser("update"); update_parser.add_argument("--root", default="."); update_parser.add_argument("--var", action="append", default=[]); update_parser.add_argument("--layer", action="append", default=[]); update_parser.add_argument("--force-layer"); update_parser.add_argument("--adopt", action="append", default=[])
     plugins = sub.add_parser("plugins").add_subparsers(dest="plugins_command", required=True).add_parser("sync"); plugins.add_argument("--root", default="."); plugins.add_argument("--check", action="store_true")
-    hooks = sub.add_parser("hooks").add_subparsers(dest="hooks_command", required=True).add_parser("install"); hooks.add_argument("--root", default="."); hooks.add_argument("--migrate", action="store_true")
+    hooks = sub.add_parser("hooks").add_subparsers(dest="hooks_command", required=True).add_parser("install"); hooks.add_argument("--root", default="."); hooks.add_argument("--migrate", action="store_true"); hooks.add_argument("--force", action="store_true")
     context = sub.add_parser("context").add_subparsers(dest="context_command", required=True).add_parser("refresh"); context.add_argument("--root", default=".")
     tools = sub.add_parser("tools").add_subparsers(dest="tools_command", required=True).add_parser("install"); tools.add_argument("--root", default="."); tools.add_argument("--yes", action="store_true")
     return parser
@@ -859,7 +998,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "doctor": payload, code = doctor(root); print(json.dumps(payload, indent=2, sort_keys=True)); return code
     if args.command == "update": payload, code = update(root, parse_vars(args.var), args.layer, args.force_layer, set(args.adopt)); print(json.dumps(payload, indent=2, sort_keys=True)); return code
     if args.command == "plugins": payload, code = plugins_sync(root, args.check); print(json.dumps(payload, indent=2, sort_keys=True)); return code
-    if args.command == "hooks": payload, code = hooks_install(root, args.migrate); print(json.dumps(payload, indent=2, sort_keys=True)); return code
+    if args.command == "hooks": payload, code = hooks_install(root, args.migrate, args.force); print(json.dumps(payload, indent=2, sort_keys=True)); return code
     if args.command == "context": payload, code = context_refresh(root); print(json.dumps(payload, indent=2, sort_keys=True)); return code
     if args.command == "tools": payload, code = tools_install(root, args.yes); print(json.dumps(payload, indent=2, sort_keys=True)); return code
     return 2

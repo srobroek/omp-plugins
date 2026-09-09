@@ -44,12 +44,12 @@ def test_template_name_and_plugin_switches(tmp_path: Path) -> None:
     assert (tmp_path / "README.md").read_text().startswith("# my-app\n")
 
 
-def test_plan_conflicts_unmarked_user_file(tmp_path: Path) -> None:
-    (tmp_path / "AGENTS.md").write_text("User-owned\n")
+def test_plan_foreign_agents_block_is_update_block(tmp_path: Path) -> None:
+    (tmp_path / "AGENTS.md").write_text("<!-- BEGIN BEADS INTEGRATION -->\nbeads\n<!-- END BEADS INTEGRATION -->\n")
     result = run("plan", "--root", str(tmp_path), "--profile", "agentic-repo")
-    assert result.returncode == 5
-    payload = json.loads(result.stdout)
-    assert any(row["path"] == "AGENTS.md" for row in payload["conflicts"])
+    assert result.returncode == 0
+    rows = {row["path"]: row["class"] for row in json.loads(result.stdout)["files"]}
+    assert rows["AGENTS.md"] == "update-block"
 
 def test_plan_marks_existing_managed_block_as_update_block(tmp_path: Path) -> None:
     rendered = run("render", "--root", str(tmp_path), "--profile", "agentic-repo", "--name", "demo")

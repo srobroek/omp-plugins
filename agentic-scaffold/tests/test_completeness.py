@@ -57,7 +57,7 @@ def test_mcp_merge_plugins_union_and_tools_dedupe(tmp_path: Path) -> None:
     assert "existing" in by_name["custom"]["plugins"]
     tools = tomllib.loads((tmp_path / "mise.toml").read_text())["tools"]
     assert tools["python"] == "3.12"
-    assert set(tools) >= {"python", "uv", "prek", "just", "node", "bun"}
+    assert set(tools) >= {"python", "prek", "just"}
 
 
 def test_adopt_moves_existing_owned_file(tmp_path: Path) -> None:
@@ -81,3 +81,114 @@ def test_doctor_detects_broken_marker(tmp_path: Path) -> None:
     result = run("doctor", "--root", str(tmp_path))
     assert result.returncode == 2
     assert any("markers damaged" in item for item in json.loads(result.stdout)["drift"])
+
+def test_speckit_boolean_controls_plugin(tmp_path: Path) -> None:
+    false_result = run("render", "--root", str(tmp_path / "false"), "--profile", "agentic-repo", "--var", "speckit=false")
+    assert false_result.returncode == 0, false_result.stderr
+    assert '"speckit"' not in (tmp_path / "false/.omp/plugins.toml").read_text()
+    true_result = run("render", "--root", str(tmp_path / "true"), "--profile", "agentic-repo", "--var", "speckit=true")
+    assert true_result.returncode == 0, true_result.stderr
+    assert '"speckit"' in (tmp_path / "true/.omp/plugins.toml").read_text()
+
+
+def test_precommit_has_one_repos_header(tmp_path: Path) -> None:
+    result = run("render", "--root", str(tmp_path), "--profile", "python-app")
+    assert result.returncode == 0, result.stderr
+    lines = (tmp_path / ".pre-commit-config.yaml").read_text().splitlines()
+    assert sum(line == "repos:" for line in lines) == 1
+    assert sum(line.strip().startswith("- repo:") for line in lines) == 4
+
+
+def test_layer_owned_tools_do_not_cross_stacks(tmp_path: Path) -> None:
+    python_result = run("render", "--root", str(tmp_path / "python"), "--profile", "python-app")
+    assert python_result.returncode == 0, python_result.stderr
+    python_tools = tomllib.loads((tmp_path / "python/mise.toml").read_text())["tools"]
+    assert {"python", "uv", "prek", "just"} <= python_tools.keys()
+    assert "node" not in python_tools and "bun" not in python_tools
+    ts_result = run("render", "--root", str(tmp_path / "ts"), "--profile", "ts-lib")
+    assert ts_result.returncode == 0, ts_result.stderr
+    ts_tools = tomllib.loads((tmp_path / "ts/mise.toml").read_text())["tools"]
+    assert {"node", "bun", "prek", "just"} <= ts_tools.keys()
+    assert "python" not in ts_tools
+
+
+def test_python_uses_ty_spdx_and_omits_empty_authors(tmp_path: Path) -> None:
+    result = run("render", "--root", str(tmp_path), "--profile", "python-app")
+    assert result.returncode == 0, result.stderr
+    text = (tmp_path / "pyproject.toml").read_text()
+    assert 'license = "Apache-2.0"' in text
+    assert "authors" not in text
+    assert "pyright" not in text and "[tool.ty]" not in text
+    assert '"ty>=0.0"' in text
+
+
+def test_ci_is_runnable_and_sha_pinned(tmp_path: Path) -> None:
+    result = run("render", "--root", str(tmp_path), "--profile", "python-app")
+    assert result.returncode == 0, result.stderr
+    workflow = (tmp_path / ".github/workflows/ci.yml").read_text()
+    assert "setup-uv@" in workflow and "uv sync" in workflow and "uvx prek" in workflow
+    assert "matrix.stack" not in workflow and "setup-python" not in workflow and "mise install" not in workflow
+    assert all(len(line.split("@")[1].split(" ", 1)[0]) == 40 for line in workflow.splitlines() if " uses: " in line)
+
+
+def test_hooks_install_reports_global_hook_manager(tmp_path: Path) -> None:
+    render_result = run("render", "--root", str(tmp_path), "--profile", "agentic-repo")
+    assert render_result.returncode == 0, render_result.stderr
+    config = tmp_path / "global.gitconfig"
+    config.write_text("[core]\n\thooksPath = /global/hooks\n")
+    environment = os.environ.copy()
+    environment["GIT_CONFIG_GLOBAL"] = str(config)
+    result = run("hooks", "install", "--root", str(tmp_path), env=environment)
+    assert result.returncode == 2
+    payload = json.loads(result.stdout)
+    assert payload["finding"]["kind"] == "hook-manager"
+    assert len(payload["finding"]["options"]) == 3
+
+
+def test_doctor_reports_hook_status(tmp_path: Path) -> None:
+    result = run("render", "--root", str(tmp_path), "--profile", "agentic-repo")
+    assert result.returncode == 0, result.stderr
+    doctor = run("doctor", "--root", str(tmp_path))
+    assert doctor.returncode == 0, doctor.stderr
+    hooks = json.loads(doctor.stdout)["checks"]["hooks"]
+    assert hooks["declared"] and hooks["installed"] == [] and hooks["status"] == "not-installed"
+
+
+def test_foreign_agents_block_is_update_block(tmp_path: Path) -> None:
+    (tmp_path / "AGENTS.md").write_text("<!-- BEGIN BEADS INTEGRATION -->\nbeads\n<!-- END BEADS INTEGRATION -->\n")
+    result = run("plan", "--root", str(tmp_path), "--profile", "agentic-repo")
+    assert result.returncode == 0, result.stderr
+    rows = {row["path"]: row["class"] for row in json.loads(result.stdout)["files"]}
+    assert rows["AGENTS.md"] == "update-block"
+
+
+def test_inspect_derives_profiles(tmp_path: Path) -> None:
+    cases = {
+        "python": ("pyproject.toml", "[project]\n[project.scripts]\ndemo = 'demo:main'\n", "python-app"),
+        "ts": ("package.json", '{"bin": {"demo": "src/index.ts"}}\n', "ts-app"),
+        "rust": ("Cargo.toml", "[package]\nname='demo'\n", "rust-lib"),
+        "go": ("go.mod", "module example\n", "go-lib"),
+        "terraform": ("main.tf", "terraform {}\n", "terraform"),
+    }
+    for directory, (filename, content, expected) in cases.items():
+        root = tmp_path / directory
+        root.mkdir()
+        (root / filename).write_text(content)
+        if directory == "rust":
+            (root / "src").mkdir()
+            (root / "src/main.rs").write_text("fn main() {}\n")
+            expected = "rust-app"
+        if directory == "go":
+            (root / "cmd").mkdir()
+            expected = "go-app"
+        result = run("inspect", "--root", str(root))
+        assert result.returncode == 0, result.stderr
+        payload = json.loads(result.stdout)
+        assert payload["suggestedProfile"] == expected
+
+def test_symlink_managed_target_is_conflict(tmp_path: Path) -> None:
+    target = tmp_path / "AGENTS.md"
+    target.symlink_to(tmp_path / "missing-agents.md")
+    result = run("plan", "--root", str(tmp_path), "--profile", "agentic-repo")
+    assert result.returncode == 5
+    assert any(item.get("reason") == "managed block target is a symlink" for item in json.loads(result.stdout)["conflicts"])

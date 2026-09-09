@@ -4,12 +4,11 @@ version = "0.1.0"
 description = "${description}"
 readme = "README.md"
 requires-python = ">=${python}"
-authors = [{ name = "${author}" }]
-license = { text = "${license}" }
+${authors}license = "${license_spdx}"
 dependencies = []
 
 [dependency-groups]
-dev = ["pytest>=8", "ruff>=0.9", "pyright>=1.1", "ty>=0.0"]
+dev = ["pytest>=8", "ruff>=0.9", "ty>=0.0"]
 
 [tool.uv]
 default-groups = ["dev"]
@@ -24,11 +23,3 @@ select = ["E", "F", "I", "N", "W", "UP", "B", "SIM", "ANN", "RUF", "PT"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q --strict-markers --strict-config"
-
-[tool.pyright]
-include = ["src", "tests"]
-venvPath = "."
-venv = ".venv"
-
-[tool.ty]
-# ty is intentionally configured alongside pyright for editor and CI parity.

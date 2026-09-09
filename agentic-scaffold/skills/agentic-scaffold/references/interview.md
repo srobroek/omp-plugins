@@ -23,7 +23,7 @@ Derivations: `kind` selects the profile suffix (`-lib`/`-app`); language selects
 2. Choose optional layers to adopt. Default is `agentic + hooks + tooling` only.
 3. Resolve each human finding: foreign hook manager, unowned `.omp/*` files, and ambiguous `AGENTS.md` markers.
 
-Hook-manager choices are migrate (`hooks install --migrate`, preserving legacy hooks) or skip the hooks layer. Unowned files require explicit `--adopt`; never auto-adopt. Marker ambiguity requires the user to restore the expected pair or choose a new destination.
+Hook-manager choices are `hooks install --force` (repository hooks), moving `core.hooksPath` to repository scope, or skipping hooks; a refusal records all options and doctor reports drift. Unowned files require explicit `--adopt`; never auto-adopt. A foreign `AGENTS.md` block is preserved and gets `update-block`; only damaged/duplicated agentic markers or symlinks conflict.
 
 ## Command
 

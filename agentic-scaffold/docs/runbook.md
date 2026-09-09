@@ -42,7 +42,7 @@ python3 "$SCAFFOLD" plugins sync --root /path/to/repo
 python3 "$SCAFFOLD" doctor --root /path/to/repo
 ```
 
-The brownfield interview confirms the detected profile and chooses optional layers. The default is `agentic + hooks + tooling`. It resolves every finding. For a `hook-manager` finding, choose `hooks install --migrate` or skip hooks. Migration preserves legacy hooks. For an `unowned-file` finding, pass `--adopt PATH` only after explicit approval. Restore the expected `AGENTS.md` marker pair when markers are ambiguous. An existing user file is skipped; propose a diff before adoption.
+The brownfield interview confirms the detected profile and chooses optional layers. The default is `agentic + hooks + tooling`. It resolves every finding. For a `hook-manager` finding, choose `hooks install --force` to let prek use repository hooks, move `core.hooksPath` to repository scope, or skip hooks; the refusal reports all three options and is recorded as drift. A foreign block in `AGENTS.md` is preserved and receives an `update-block` row; only damaged/duplicated agentic markers or symlinks conflict. For an `unowned-file` finding, pass `--adopt PATH` only after explicit approval. An existing user file is skipped; propose a diff before adoption.
 
 ## Escalation rules
 

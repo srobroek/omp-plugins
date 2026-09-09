@@ -8,32 +8,4 @@ permissions:
   contents: read
 
 jobs:
-  check:
-    runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        stack: ["${profile}"]
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-        with:
-          persist-credentials: false
-      - name: Setup Python
-        uses: actions/setup-python@42375524e23c412d93fb67b49958b491fce71c38 # v6.0.0
-        with:
-          python-version: "${python}"
-      - name: Install and test
-        run: |
-          ${commands_setup}
-          ${commands_test}
-      - name: Lint
-        run: ${commands_lint}
-      - name: Format check
-        run: ${commands_fmt}
-  prek:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
-        with:
-          persist-credentials: false
-      - name: Run prek
-        run: prek run --all-files
+${ci_jobs}

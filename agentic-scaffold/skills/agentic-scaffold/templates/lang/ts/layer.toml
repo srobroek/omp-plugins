@@ -6,6 +6,9 @@ owns = ["package.json", "src/index.ts", "test/index.test.ts"]
 blocks = [".gitignore", "justfile", ".pre-commit-config.yaml"]
 conflicts_with = ["lang/python", "lang/rust", "lang/go", "lang/terraform"]
 conditional_plugins = { backend = { var = "app", equals = "true" } }
+[tools]
+node = "${node}"
+bun = "${bun_version}"
 [vars]
 node = { default = "22", prompt = "Node version", ask = false }
 bun_version = { default = "latest", prompt = "Bun version", ask = false }
