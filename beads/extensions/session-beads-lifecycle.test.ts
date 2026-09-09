@@ -220,11 +220,62 @@ describe("bdVerbs / isBdWrite", () => {
 		expect(isBdWrite("bd defer x --until 2026-09-01 --reason later")).toBe(true);
 	});
 
+	test("documented top-level mutations mark the session written", () => {
+		for (const command of [
+			"bd assign x worker",
+			"bd delete x",
+			"bd edit x",
+			"bd link a b",
+			"bd note x hi",
+			"bd priority x 1",
+			"bd promote x",
+			"bd q task",
+			"bd rename x y",
+			"bd reopen x",
+			"bd tag x blocked",
+			"bd undefer x",
+		]) {
+			expect(isBdWrite(command)).toBe(true);
+		}
+	});
+
 	test("reads are not writes", () => {
 		expect(isBdWrite("bd list --status open --json")).toBe(false);
 		expect(isBdWrite("bd ready --unassigned --json")).toBe(false);
 		expect(isBdWrite("bd comments x")).toBe(false);
 		expect(isBdWrite("bd swarm validate root --json")).toBe(false);
+	});
+
+	test("grouped reads and previews do not mark the session written", () => {
+		for (const command of [
+			"bd mol list",
+			"bd mol show mol-1",
+			"bd mol current mol-1",
+			"bd mol progress mol-1",
+			"bd mol ready",
+			"bd mol stale",
+			"bd mol last-activity mol-1",
+			"bd mol seed formula",
+			"bd mol pour formula --dry-run",
+			"bd mol wisp list",
+			"bd dep tree x",
+			"bd label list x",
+			"bd audit list",
+		]) {
+			expect(isBdWrite(command)).toBe(false);
+		}
+	});
+
+	test("grouped writes mark the session written", () => {
+		for (const command of [
+			"bd mol pour formula",
+			"bd mol wisp formula",
+			"bd dep add a b",
+			"bd label add x foo",
+			"bd audit record --kind tool_call",
+		]) {
+			expect(isBdWrite(command)).toBe(true);
+		}
 	});
 
 	test("the claim forms of read verbs are writes", () => {
@@ -317,7 +368,9 @@ describe("integration", () => {
 			sendMessage: (m: { content: string }) => logged.push(m.content),
 			logger: { error: () => {}, info: () => {} },
 			on: (event: string, handler: (e: unknown, c: unknown) => unknown) => {
-				(handlers[event] ??= []).push(handler);
+				const registered = handlers[event] ?? [];
+				registered.push(handler);
+				handlers[event] = registered;
 			},
 		};
 		sessionBeadsLifecycle(fakePi as never);
@@ -441,6 +494,49 @@ esac
 			else process.env.BEADS_DIR = originalBeads;
 			if (originalActor === undefined) delete process.env.BEADS_ACTOR;
 			else process.env.BEADS_ACTOR = originalActor;
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	test("tracks tool-level BD_ACTOR for ready --claim without a bead id", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "beads-actor-alias-"));
+		const originalPath = process.env.PATH;
+		const originalBeads = process.env.BEADS_DIR;
+		const originalBeadsActor = process.env.BEADS_ACTOR;
+		const originalBdActor = process.env.BD_ACTOR;
+		try {
+			mkdirSync(join(dir, ".beads"));
+			writeFileSync(join(dir, "bd"), `#!/bin/sh
+case "$1" in
+list) printf '%s\\n' '[{"id":"bd-owned","title":"owned claim","status":"in_progress","assignee":"omp/Main/alias"}]' ;;
+*) printf '%s\\n' '[]' ;;
+esac
+`);
+			chmodSync(join(dir, "bd"), 0o755);
+			process.env.PATH = `${dir}:${originalPath ?? ""}`;
+			delete process.env.BEADS_DIR;
+			delete process.env.BEADS_ACTOR;
+			delete process.env.BD_ACTOR;
+			const { handlers } = wire();
+			handlers.tool_result![0]!({
+				toolName: "bash",
+				toolCallId: "alias-claim",
+				isError: false,
+				input: { command: "bd ready --claim", env: { BD_ACTOR: "omp/Main/alias" } },
+				content: [{ type: "text", text: "claimed" }],
+			}, { cwd: dir });
+
+			const advisory = await handlers.session_stop![0]!({}, { cwd: dir }) as { additionalContext?: string };
+			expect(advisory.additionalContext).toContain("bd-owned [omp/Main/alias] owned claim");
+		} finally {
+			if (originalPath === undefined) delete process.env.PATH;
+			else process.env.PATH = originalPath;
+			if (originalBeads === undefined) delete process.env.BEADS_DIR;
+			else process.env.BEADS_DIR = originalBeads;
+			if (originalBeadsActor === undefined) delete process.env.BEADS_ACTOR;
+			else process.env.BEADS_ACTOR = originalBeadsActor;
+			if (originalBdActor === undefined) delete process.env.BD_ACTOR;
+			else process.env.BD_ACTOR = originalBdActor;
 			rmSync(dir, { recursive: true, force: true });
 		}
 	});

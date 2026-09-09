@@ -3,8 +3,40 @@ import type {
 	ExtensionToolCallEvent,
 	ExtensionToolResultEvent,
 } from "@oh-my-pi/pi-coding-agent";
-
 import { tokenize } from "./bd-close-gate.ts";
+
+/**
+ * Process-wide seam shared with omp-orchestrate. Orchestrate records tool calls whose
+ * richer run-scoped actor notice it delivered; this adapter drains the id at tool_result
+ * and suppresses only its generic duplicate. The versioned symbol is the whole cross-plugin
+ * interface, so the packages remain independently loadable.
+ */
+export const ACTOR_NOTICE_ARBITER = Symbol.for(
+	"com.srobroek.beads.actor-notice-arbiter.v1",
+);
+
+interface ActorNoticeArbiter {
+	handledToolCalls: Set<string>;
+}
+
+/** Install the arbiter during extension load, before either plugin can receive a tool call. */
+function installActorNoticeArbiter(): ActorNoticeArbiter {
+	const existing: unknown = Reflect.get(globalThis, ACTOR_NOTICE_ARBITER);
+	if (
+		existing !== null &&
+		typeof existing === "object" &&
+		"handledToolCalls" in existing
+	) {
+		const handledToolCalls = existing.handledToolCalls;
+		if (handledToolCalls instanceof Set) return { handledToolCalls };
+	}
+	const created: ActorNoticeArbiter = { handledToolCalls: new Set<string>() };
+	Reflect.set(globalThis, ACTOR_NOTICE_ARBITER, created);
+	return created;
+}
+
+const ACTOR_VARS = ["BEADS_ACTOR", "BD_ACTOR"] as const;
+type ActorVar = (typeof ACTOR_VARS)[number];
 
 const VALUE_FLAGS = new Set(["--actor", "--db", "-C", "--directory", "--dolt-auto-commit"]);
 
@@ -27,8 +59,8 @@ export interface BdInvocation {
 	args: string[];
 	/** `NAME=value` assignments prefixed to this very `bd` word. */
 	prefix: string[];
-	/** The `BEADS_ACTOR` value an earlier `export` in the same command line set, if any. */
-	exported?: string;
+	/** Actor values an earlier `export` in the same command line set. */
+	exported: Partial<Record<ActorVar, string>>;
 }
 
 /**
@@ -40,11 +72,15 @@ export interface BdInvocation {
  */
 export function bdInvocations(command: string): BdInvocation[] {
 	const out: BdInvocation[] = [];
-	let exported: string | undefined;
+	let exported: Partial<Record<ActorVar, string>> = {};
 	for (const tokens of commandSegments(command)) {
 		if (tokens[0] === "export") {
-			const assignment = tokens.findLast(token => token.startsWith("BEADS_ACTOR="));
-			if (assignment !== undefined) exported = assignment.slice("BEADS_ACTOR=".length);
+			for (const variable of ACTOR_VARS) {
+				const assignment = tokens.findLast(token => token.startsWith(`${variable}=`));
+				if (assignment !== undefined) {
+					exported = { ...exported, [variable]: assignment.slice(variable.length + 1) };
+				}
+			}
 			continue;
 		}
 		let i = 0;
@@ -53,30 +89,71 @@ export function bdInvocations(command: string): BdInvocation[] {
 		const prefix = tokens.slice(0, i);
 		i++;
 		while (tokens[i]?.startsWith("-")) {
-			const flag = tokens[i++]!;
+			const flag = tokens[i];
+			if (flag === undefined) break;
+			i++;
 			if (VALUE_FLAGS.has(flag)) i++;
 		}
-		if (tokens[i]) out.push({ verb: tokens[i]!.toLowerCase(), args: tokens.slice(i + 1), prefix, exported });
+		const verb = tokens[i];
+		if (verb !== undefined) {
+			out.push({ verb: verb.toLowerCase(), args: tokens.slice(i + 1), prefix, exported: { ...exported } });
+		}
 	}
 	return out;
 }
 
 /** Hunt trigger verbs for `bd_mutate_actor_claim`. */
 export const MUTATING_VERBS: Record<string, true> = {
-	update: true,
-	create: true,
+	assign: true,
+	batch: true,
+	claim: true,
 	close: true,
 	comment: true,
-	comments: true,
-	claim: true,
-	unclaim: true,
-	dep: true,
-	label: true,
-	remember: true,
+	cook: true,
+	create: true,
+	"create-form": true,
+	defer: true,
+	delete: true,
+	duplicate: true,
+	edit: true,
 	forget: true,
-	mol: true,
-	audit: true,
+	import: true,
+	link: true,
+	note: true,
+	priority: true,
+	promote: true,
+	q: true,
+	remember: true,
+	rename: true,
+	reopen: true,
 	"set-state": true,
+	ship: true,
+	supersede: true,
+	tag: true,
+	unclaim: true,
+	undefer: true,
+	update: true,
+};
+
+const GROUP_WRITES: Record<string, Record<string, true>> = {
+	audit: { label: true, record: true },
+	comments: { add: true },
+	dep: { add: true, relate: true, remove: true, unrelate: true },
+	epic: { "close-eligible": true },
+	gate: { "add-waiter": true, check: true, create: true, resolve: true },
+	kv: { append: true, delete: true, rm: true, set: true, update: true },
+	label: { add: true, propagate: true, remove: true },
+	"merge-slot": { acquire: true, create: true, release: true },
+	swarm: { create: true },
+	todo: { add: true, done: true },
+};
+
+const MOL_WRITES: Record<string, true> = {
+	bond: true,
+	burn: true,
+	distill: true,
+	pour: true,
+	squash: true,
 };
 const pendingAdvisory = new Map<string, string>();
 
@@ -86,33 +163,83 @@ export function extractCommand(input: Record<string, unknown>): string {
 	return "";
 }
 
-
-export function actorPresent(command: string, env: NodeJS.ProcessEnv = process.env): boolean {
-	const invocations = bdInvocations(command);
-	const first = invocations[0];
-	const prefixed = first?.prefix.findLast(token => token.startsWith("BEADS_ACTOR="));
-	const v =
-		prefixed !== undefined ? prefixed.slice("BEADS_ACTOR=".length) : (first?.exported ?? env.BEADS_ACTOR);
-	return typeof v === "string" && v.trim().length > 0 && !/[$`]/.test(v);
+/** The environment a bash tool call supplies to its child process. */
+export function environmentForInput(
+	input: Record<string, unknown>,
+	base: NodeJS.ProcessEnv = process.env,
+): NodeJS.ProcessEnv {
+	const env: NodeJS.ProcessEnv = { ...base };
+	const supplied = input.env;
+	if (supplied !== null && typeof supplied === "object") {
+		for (const [name, value] of Object.entries(supplied)) {
+			if (typeof value === "string") env[name] = value;
+		}
+	}
+	return env;
 }
 
-/**
- * First literal `bd` invocation, after global flags.
- */
+function invocationActors(invocation: BdInvocation, env: NodeJS.ProcessEnv): string[] {
+	const actors: string[] = [];
+	for (const variable of ACTOR_VARS) {
+		const assignment = invocation.prefix.findLast(token => token.startsWith(`${variable}=`));
+		const value = assignment !== undefined
+			? assignment.slice(variable.length + 1)
+			: (invocation.exported[variable] ?? env[variable]);
+		if (value?.trim() && !/[$`]/.test(value)) actors.push(value.trim());
+	}
+	return actors;
+}
+
+export function actorValues(command: string, env: NodeJS.ProcessEnv = process.env): string[] {
+	const actors = bdInvocations(command)
+		.filter(isMutatingInvocation)
+		.flatMap(invocation => invocationActors(invocation, env));
+	return [...new Set(actors)];
+}
+
+export function actorPresent(command: string, env: NodeJS.ProcessEnv = process.env): boolean {
+	const first = bdInvocations(command)[0];
+	return first !== undefined && invocationActors(first, env).length > 0;
+}
+
+/** First literal `bd` invocation, after global flags. */
 export function firstBdVerb(command: string): string | null {
 	return bdInvocations(command)[0]?.verb ?? null;
 }
 
-export function isMutatingBdCommand(command: string): boolean {
-	return bdInvocations(command).some(({ verb, args }) =>
-		verb === "ready" ? args.includes("--claim") :
-		verb === "comments" ? args[0] === "add" : Object.hasOwn(MUTATING_VERBS, verb));
+function isMutatingInvocation({ verb, args }: BdInvocation): boolean {
+	if (args.includes("--help") || args.includes("-h")) return false;
+	if (verb === "duplicates") return args.includes("--auto-merge") && !args.includes("--dry-run");
+	if (MUTATING_VERBS[verb] === true) return true;
+	if (verb === "ready") return args.includes("--claim");
+	if (verb === "dep" && args.includes("--blocks")) return true;
+	if (verb === "mol") {
+		if (args.includes("--dry-run")) return false;
+		const action = args[0] ?? "";
+		if (MOL_WRITES[action] === true) return true;
+		if (action !== "wisp") return false;
+		const wispAction = args[1];
+		return (
+			wispAction === "create" ||
+			wispAction === "gc" ||
+			(wispAction !== undefined && wispAction !== "list")
+		);
+	}
+	const action = args[0] ?? "";
+	return GROUP_WRITES[verb]?.[action] === true;
 }
 
-/** `bd update <id> --claim` or `bd claim <id>`. */
+export function isMutatingBdCommand(command: string): boolean {
+	return bdInvocations(command).some(isMutatingInvocation);
+}
+
+/** `bd update <id> --claim` or `bd claim <id>`, at shell command position. */
 export function isClaimCommand(command: string): boolean {
-	return bdInvocations(command).some(({ verb, args }) =>
-		verb === "claim" || ((verb === "update" || verb === "ready") && args.includes("--claim")));
+	return bdInvocations(command).some(
+		({ verb, args }) =>
+			verb === "claim" ||
+			((verb === "update" || verb === "ready") && args.includes("--claim")),
+	);
 }
 
 export type ActorGateDecision =
@@ -121,10 +248,10 @@ export type ActorGateDecision =
 	| { kind: "advisory"; text: string };
 
 const CLAIM_REASON =
-	"bd claim / `bd update <id> --claim` without BEADS_ACTOR creates undistinguishable dead claims. Set BEADS_ACTOR=<harness>/<agent-name>/<session-id> and retry.";
+	"bd claim / `bd update <id> --claim` without BEADS_ACTOR or BD_ACTOR creates undistinguishable dead claims. Set either variable to <harness>/<agent-name>/<session-id> and retry.";
 
 const ADVISORY_TEXT =
-	"BEADS_ACTOR is unset on this mutating `bd` command. Subagents must set BEADS_ACTOR so claims are attributable. Export it before mutating work.";
+	"BEADS_ACTOR and BD_ACTOR are unset on this mutating `bd` command. Subagents must set either variable so writes and claims are attributable. Export one before mutating work.";
 
 export function decideActorGate(
 	command: string,
@@ -132,14 +259,16 @@ export function decideActorGate(
 ): ActorGateDecision {
 	let advisory = false;
 	for (const invocation of bdInvocations(command)) {
-		const { verb, args, prefix, exported } = invocation;
-		const claim = verb === "claim" || ((verb === "update" || verb === "ready") && args.includes("--claim"));
-		const mutates = claim || (verb === "comments" ? args[0] === "add" : Object.hasOwn(MUTATING_VERBS, verb));
-		if (!mutates) continue;
-		const assignment = prefix.findLast(token => token.startsWith("BEADS_ACTOR="));
-		const actor =
-			assignment !== undefined ? assignment.slice("BEADS_ACTOR=".length) : (exported ?? env.BEADS_ACTOR);
-		if (actor?.trim() && !/[$`]/.test(actor)) continue;
+		if (
+			!isMutatingInvocation(invocation) ||
+			invocationActors(invocation, env).length > 0
+		) {
+			continue;
+		}
+		const { verb, args } = invocation;
+		const claim =
+			verb === "claim" ||
+			((verb === "update" || verb === "ready") && args.includes("--claim"));
 		if (claim) return { kind: "block", reason: CLAIM_REASON };
 		advisory = true;
 	}
@@ -156,14 +285,15 @@ function prepend(
 }
 
 export default function bdActorGate(pi: ExtensionAPI): void {
+	const arbiter = installActorNoticeArbiter();
 	pi.on("tool_call", (event: ExtensionToolCallEvent) => {
 		try {
 			if (event.toolName !== "bash") return;
 			const command = extractCommand(event.input);
 			if (!command || !/\bbd\s+/.test(command)) return;
 			// The bash tool's own `env` argument reaches the child like an export does.
-			const toolEnv = (event.input as { env?: Record<string, string> }).env;
-			const decision = decideActorGate(command, toolEnv ? { ...process.env, ...toolEnv } : process.env);
+			const env = environmentForInput(event.input);
+			const decision = decideActorGate(command, env);
 			if (decision.kind === "block") {
 				return { block: true, reason: decision.reason };
 			}
@@ -177,9 +307,10 @@ export default function bdActorGate(pi: ExtensionAPI): void {
 
 	pi.on("tool_result", (event: ExtensionToolResultEvent) => {
 		try {
+			const claimedByOrchestrate = arbiter.handledToolCalls.delete(event.toolCallId);
 			const text = pendingAdvisory.get(event.toolCallId);
 			pendingAdvisory.delete(event.toolCallId);
-			if (!text) return;
+			if (claimedByOrchestrate || !text) return;
 			return prepend(event, text);
 		} catch {
 			return;

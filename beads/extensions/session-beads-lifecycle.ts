@@ -18,7 +18,13 @@ import { existsSync, readFileSync, rmSync, statSync } from "node:fs";
 import { isAbsolute, join, resolve } from "node:path";
 import type { ExtensionAPI, ExtensionContext, ExtensionToolResultEvent } from "@oh-my-pi/pi-coding-agent";
 
-import { bdInvocations, extractCommand, MUTATING_VERBS } from "./bd-actor-gate.ts";
+import {
+	actorValues,
+	bdInvocations,
+	environmentForInput,
+	extractCommand,
+	isMutatingBdCommand,
+} from "./bd-actor-gate.ts";
 
 /** No session boundary may hang on the database or on `gh`. */
 const TIMEOUT_MS = 8000;
@@ -37,18 +43,9 @@ export const AUTO_GATE_TYPES: Record<string, true> = {
 	bead: true,
 };
 
-/**
- * Verbs that write the database beyond bd-actor-gate's claim taxonomy. `ready`
- * is a read unless it carries `--claim`, which is the swarm claim path.
- */
-export const EXTRA_WRITE_VERBS: Record<string, true> = {
-	import: true,
-	gate: true,
-	defer: true,
-	supersede: true,
-};
 
 interface SessionState {
+	actors: Set<string>;
 	bdWrote: boolean;
 	staleAdvised: boolean;
 	stopFired: boolean;
@@ -228,17 +225,14 @@ export function staleSkipNotice(output: string): string | undefined {
 	].join(" ");
 }
 
-/** Every `bd` verb in a command line, skipping the global flags that precede one. */
+/** Every real `bd` verb in a command line. */
 export function bdVerbs(command: string): string[] {
 	return bdInvocations(command).map(invocation => invocation.verb);
 }
 
 /** Whether this command line wrote the beads database. */
 export function isBdWrite(command: string): boolean {
-	return bdInvocations(command).some(({ verb, args }) =>
-		verb === "comments" ? args[0] === "add" :
-		verb === "ready" ? args.includes("--claim") :
-		Object.hasOwn(MUTATING_VERBS, verb) || Object.hasOwn(EXTRA_WRITE_VERBS, verb));
+	return isMutatingBdCommand(command);
 }
 
 /**
@@ -287,10 +281,17 @@ export function readBeads(stdout: string): Bead[] {
  * Touched in-progress work and assigned unfinished work remain accountable,
  * including claims parked as blocked or deferred.
  */
-export function heldClaims(beads: Bead[], seen: Set<string>, actor: string | undefined): Bead[] {
+export function heldClaims(
+	beads: Bead[],
+	seen: Set<string>,
+	actor: string | ReadonlySet<string> | undefined,
+): Bead[] {
+	const actors = typeof actor === "string"
+		? new Set(actor.trim() ? [actor.trim()] : [])
+		: actor;
 	return beads.filter(bead => {
 		if (!["open", "in_progress", "blocked", "deferred"].includes(bead.status)) return false;
-		if (actor?.trim() && bead.assignee === actor) return true;
+		if (bead.assignee !== undefined && actors?.has(bead.assignee)) return true;
 		return bead.status === "in_progress" && seen.has(bead.id);
 	});
 }
@@ -317,7 +318,7 @@ export function handleSessionStop(
 	event: SessionStopEvent,
 	listOutput: string | undefined,
 	seen: Set<string>,
-	actor: string | undefined = process.env.BEADS_ACTOR,
+	actor: string | ReadonlySet<string> | undefined = process.env.BEADS_ACTOR ?? process.env.BD_ACTOR,
 ): { continue: true; additionalContext: string } | undefined {
 	if (event.stop_hook_active === true || event.stopHookActive === true) return;
 	const data = listOutput === undefined ? undefined : envelopeData(parseTrailingJson(listOutput));
@@ -421,7 +422,7 @@ export default function sessionBeadsLifecycle(pi: ExtensionAPI): void {
 		const key = sessionKey(ctx);
 		let state = sessions.get(key);
 		if (!state) {
-			state = { bdWrote: false, staleAdvised: false, stopFired: false, touched: new Set() };
+			state = { actors: new Set(), bdWrote: false, staleAdvised: false, stopFired: false, touched: new Set() };
 			sessions.set(key, state);
 		}
 		return state;
@@ -467,11 +468,13 @@ export default function sessionBeadsLifecycle(pi: ExtensionAPI): void {
 	pi.on("tool_result", (event: ExtensionToolResultEvent, ctx: ExtensionContext) => {
 		try {
 			if (event.toolName !== "bash") return;
-			const command = extractCommand(event.input ?? {});
+			const input = event.input ?? {};
+			const command = extractCommand(input);
 			if (!command || !/\bbd\s+/.test(command)) return;
 			const state = stateFor(ctx);
 			if (isBdWrite(command)) {
 				state.bdWrote = true;
+				for (const actor of actorValues(command, environmentForInput(input))) state.actors.add(actor);
 				for (const id of beadIdCandidates(command)) state.touched.add(id);
 			}
 			if (state.staleAdvised) return;
@@ -494,7 +497,7 @@ export default function sessionBeadsLifecycle(pi: ExtensionAPI): void {
 				event.stopHookActive === true || beadsDir(cwd) === undefined) return;
 			const listed = await runBd(cwd, ["list", "--status", "open,in_progress,blocked,deferred", "--limit", "0", "--json"]);
 			if (sessions.get(key) !== state || state.stopFired) return;
-			const advisory = handleSessionStop(event, listed, state.touched);
+			const advisory = handleSessionStop(event, listed, state.touched, state.actors);
 			if (advisory) state.stopFired = true;
 			return advisory;
 		} catch (error) {
