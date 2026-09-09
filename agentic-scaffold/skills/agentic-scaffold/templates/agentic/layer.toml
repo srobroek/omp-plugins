@@ -1,0 +1,7 @@
+name = "agentic"
+summary = "Project-local OMP desired plugins and context"
+after = ["base", "tooling", "hooks"]
+requires_tools = ["omp"]
+owns = [".omp/mcp.json", ".omp/context.py", ".omp/repomix.json", ".omp/project-context.json", ".omp/plugins.toml"]
+blocks = ["AGENTS.md", "WATCHDOG.md", ".gitignore"]
+conflicts_with = []

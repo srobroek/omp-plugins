@@ -1,0 +1,8 @@
+## Agentic scaffold
+
+<!-- This block is managed by agentic-scaffold. Keep repository-specific instructions outside it. -->
+
+- Read `.omp/project-context.json` before broad repository exploration.
+- Use the configured Graphify MCP for relationships and LSP/source for exact edits.
+- Run `just check` before handing off changes.
+- Refresh context after commits, checkouts, and merges.

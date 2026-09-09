@@ -1,0 +1,7 @@
+name = "hooks"
+summary = "prek hook configuration for commit and context stages"
+after = ["tooling"]
+requires_tools = ["prek"]
+owns = []
+blocks = [".pre-commit-config.yaml"]
+conflicts_with = []

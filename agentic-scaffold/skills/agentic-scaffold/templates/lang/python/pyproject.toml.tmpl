@@ -1,0 +1,25 @@
+[project]
+name = "${package_kebab}"
+version = "0.1.0"
+description = "${description}"
+readme = "README.md"
+requires-python = ">=${python}"
+${authors}license = "${license_spdx}"
+dependencies = []
+
+[dependency-groups]
+dev = ["pytest>=8", "ruff>=0.9", "ty>=0.0"]
+
+[tool.uv]
+default-groups = ["dev"]
+
+[tool.ruff]
+target-version = "py${python}"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "W", "UP", "B", "SIM", "ANN", "RUF", "PT"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q --strict-markers --strict-config"

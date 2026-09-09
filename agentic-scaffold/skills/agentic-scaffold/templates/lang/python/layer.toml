@@ -1,0 +1,17 @@
+name = "lang/python"
+summary = "uv-managed Python package with src and tests"
+after = ["base", "tooling"]
+requires_tools = ["uv"]
+owns = ["pyproject.toml", "src/__name__/__init__.py", "tests/test_smoke.py"]
+blocks = [".gitignore", "justfile", ".pre-commit-config.yaml"]
+conflicts_with = ["lang/ts", "lang/rust", "lang/go", "lang/terraform"]
+conditional_plugins = { backend = { var = "app", equals = "true" } }
+[tools]
+python = "${python}"
+uv = "latest"
+[vars]
+python = { default = "3.13", prompt = "Python version", ask = false }
+[plugins."srobroek-omp"]
+source = "srobroek/omp-plugins"
+plugins = ["architecture", "python"]
+when = { var = "language", equals = "python" }

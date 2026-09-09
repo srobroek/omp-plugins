@@ -1,0 +1,7 @@
+{
+  "graphify": ["graphify"],
+  "graphify_mcp": ["graphify-mcp"],
+  "repomix": ["repomix"],
+  "repomix_include": ["src/**", "tests/**", "*.toml", "*.json", "*.md", "!node_modules/**"],
+  "timeout": 120
+}

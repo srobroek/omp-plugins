@@ -1,0 +1,10 @@
+name = "base"
+summary = "Package identity, license, editor settings, and README"
+after = []
+requires_tools = ["git"]
+owns = ["README.md", ".editorconfig", "LICENSE"]
+blocks = [".gitignore"]
+conflicts_with = []
+[vars]
+year = { default = "2026", prompt = "Copyright year", ask = false }
+license = { default = "apache-2.0", prompt = "License", ask = false }

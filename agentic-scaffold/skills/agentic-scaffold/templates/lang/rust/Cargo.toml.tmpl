@@ -1,0 +1,18 @@
+[package]
+name = "${package_kebab}"
+version = "0.1.0"
+edition = "2024"
+description = "${description}"
+license = "${license}"
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "${package_kebab}"
+path = "src/main.rs"
+
+[lints.rust]
+unsafe_code = "forbid"
+[lints.clippy]
+all = "warn"

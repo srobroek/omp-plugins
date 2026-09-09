@@ -1,0 +1,15 @@
+name = "python-lib"
+summary = "uv-managed Python library"
+layers = ["base", "tooling", "hooks", "lang/python", "ci/github", "release", "agentic"]
+[vars]
+language = "python"
+app = false
+python = "3.13"
+web_ui = false
+speckit = false
+[commands]
+setup = "uv sync"
+test = "uv run pytest"
+lint = "uv run ruff check ."
+fmt = "uv run ruff format --check ."
+check = "uv run ty check"

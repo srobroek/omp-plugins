@@ -1,0 +1,15 @@
+[group('go')]
+go-test:
+    go test -race ./...
+
+[group('go')]
+go-lint:
+    golangci-lint run ./...
+
+[group('go')]
+go-fmt:
+    gofmt -w .
+
+[group('go')]
+go-check:
+    go vet ./...

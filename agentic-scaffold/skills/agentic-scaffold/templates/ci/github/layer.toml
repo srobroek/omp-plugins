@@ -1,0 +1,7 @@
+name = "ci/github"
+summary = "SHA-pinned GitHub CI workflow and Renovate config"
+after = ["base"]
+requires_tools = ["gh"]
+owns = [".github/workflows/ci.yml", ".github/renovate.json"]
+blocks = []
+conflicts_with = []

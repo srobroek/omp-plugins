@@ -1,0 +1,16 @@
+setup:
+    $commands_setup
+
+test:
+    $commands_test
+
+lint:
+    $commands_lint
+
+fmt:
+    $commands_fmt
+
+check: test lint fmt
+
+context:
+    python3 .omp/context.py refresh

@@ -41,6 +41,18 @@
     }
   ],
   "packages": {
+    "agentic-scaffold": {
+      "release-type": "simple",
+      "component": "agentic-scaffold",
+      "changelog-path": "CHANGELOG.md",
+      "extra-files": [
+        {
+          "type": "json",
+          "path": ".omp-plugin/plugin.json",
+          "jsonpath": "$.version"
+        }
+      ]
+    },
     "architecture": {
       "release-type": "simple",
       "component": "architecture",

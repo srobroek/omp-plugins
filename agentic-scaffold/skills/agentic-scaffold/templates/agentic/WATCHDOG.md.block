@@ -1,0 +1,5 @@
+## Context freshness
+
+- `graphify-out/context-status.json` must report `CURRENT` after a refresh.
+- `repomix.xml` is a bounded source snapshot, not startup context.
+- Never commit generated context output.
