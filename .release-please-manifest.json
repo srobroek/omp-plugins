@@ -1,5 +1,5 @@
 {
-  "agentic-scaffold": "0.1.0",
+  "agentic-scaffold": "0.2.0",
   "architecture": "0.3.1",
   "authoring": "2.0.0",
   "backend": "0.3.0",
@@ -17,7 +17,7 @@
   "go": "0.3.1",
   "infrastructure": "0.4.1",
   "ops": "0.6.1",
-  "project": "1.0.0",
+  "project": "1.1.0",
   "python": "0.3.1",
   "quality": "1.0.0",
   "rust": "0.6.1",
