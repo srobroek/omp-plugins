@@ -1,20 +1,13 @@
 name = "web-ui"
 summary = "Bun web interface with the project UI toolset"
-layers = ["base", "tooling", "hooks", "agentic"]
+layers = ["base", "tooling", "hooks", "agentic", "web-ui"]
 [vars]
+language = "none"
+app = true
 node = "22"
 bun_version = "latest"
 web_ui = true
 speckit = false
-[plugins."srobroek-omp"]
-source = "srobroek/omp-plugins"
-plugins = ["browser-tools", "design", "diagram", "styleseed", "ui-skills", "platform-design-skills", "web-quality-skills", "ui-ux-pro-max", "modern-web-guidance", "effective-html", "frontend-slides", "web-asset-generator"]
-[plugins.impeccable]
-source = "pbakaus/impeccable"
-plugins = ["impeccable"]
-[plugins.interface-design]
-source = "Dammyjay93/interface-design"
-plugins = ["interface-design"]
 [commands]
 setup = "mise install && bun install"
 test = "bun test"

@@ -1,5 +1,5 @@
 formula = "mol-scaffold-brownfield"
-description = "Retrofit a repository with agentic-scaffold layers"
+description = "Retrofit a repository with interview-approved agentic-scaffold layers"
 type = "workflow"
 
 [vars.feature]
@@ -14,55 +14,69 @@ id = "inspect"
 title = "inspect brownfield {{feature}}"
 type = "task"
 priority = 1
-description = "Inspect stacks, existing instructions, hooks, tooling, beads, and repository state without mutating the destination."
+description = "Inspect stacks, existing instructions, hooks, tooling, beads, context files, and repository state without mutation."
 
 [[steps]]
-id = "classify"
-title = "classify brownfield changes {{feature}}"
+id = "interview"
+title = "interview brownfield {{feature}}"
 type = "task"
 needs = ["inspect"]
 priority = 1
-description = "Review the proposed profile and file map. Preserve user files and resolve hook-manager or managed-marker conflicts before rendering."
+description = "Confirm the detected profile and resolve hook-manager, unowned-file, and marker findings."
 
 [steps.gate]
 type = "human"
 
 [[steps]]
+id = "answers-write"
+title = "write brownfield answers {{feature}}"
+type = "task"
+needs = ["interview"]
+description = "Write the approved profile, layers, and overrides to .omp/scaffold-answers.toml."
+
+[[steps]]
+id = "plan"
+title = "plan brownfield changes {{feature}}"
+type = "task"
+needs = ["answers-write"]
+priority = 1
+description = "Review every create, skip, update-block, adopt, and conflict row before rendering."
+
+[[steps]]
 id = "render"
 title = "render brownfield layers {{feature}}"
 type = "task"
-needs = ["classify"]
-priority = 1
-description = "Render the agentic layer and explicitly selected stack layers. Only create files or update managed marker blocks."
-
-[[steps]]
-id = "plugins-sync"
-title = "sync brownfield plugins {{feature}}"
-type = "task"
-needs = ["render"]
-description = "Apply .omp/plugins.toml at project scope with scaffold.py plugins sync."
+needs = ["plan"]
+description = "Render only approved layers; preserve user files and update managed blocks."
 
 [[steps]]
 id = "hooks-install"
 title = "install brownfield hooks {{feature}}"
 type = "task"
-needs = ["plugins-sync"]
-description = "Install declared prek hooks without --force and preserve unrelated hooks."
+needs = ["render"]
+description = "Install declared prek stages, or migrate only after the interview resolves a foreign manager."
 
 [[steps]]
-id = "verify"
-title = "verify brownfield scaffold {{feature}}"
+id = "plugins-sync"
+title = "sync brownfield plugins {{feature}}"
 type = "task"
 needs = ["hooks-install"]
-description = "Run just check, omp plugin list --json with project scope, and a fresh no-session skill visibility probe."
+description = "Apply the desired project plugin set without mutating user scope."
+
+[[steps]]
+id = "doctor"
+title = "doctor brownfield scaffold {{feature}}"
+type = "task"
+needs = ["plugins-sync"]
+description = "Run scaffold.py doctor and retain its exit code and JSON report."
 
 [[steps]]
 id = "commit"
 title = "approve brownfield commit {{feature}}"
 type = "task"
-needs = ["verify"]
+needs = ["doctor"]
 priority = 1
-description = "Review and commit the bounded retrofit diff after human confirmation."
+description = "Review the bounded retrofit diff and commit only after human confirmation."
 
 [steps.gate]
 type = "human"

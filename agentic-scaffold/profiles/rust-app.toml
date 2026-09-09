@@ -2,11 +2,10 @@ name = "rust-app"
 summary = "Cargo-managed Rust application"
 layers = ["base", "tooling", "hooks", "lang/rust", "ci/github", "release", "agentic"]
 [vars]
+language = "rust"
+app = true
 web_ui = false
 speckit = false
-[plugins."srobroek-omp"]
-source = "srobroek/omp-plugins"
-plugins = ["architecture", "rust", "backend"]
 [commands]
 setup = "mise install && cargo fetch"
 test = "cargo test"

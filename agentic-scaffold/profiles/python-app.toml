@@ -2,12 +2,11 @@ name = "python-app"
 summary = "uv-managed Python application"
 layers = ["base", "tooling", "hooks", "lang/python", "ci/github", "release", "agentic"]
 [vars]
+language = "python"
+app = true
 python = "3.13"
 web_ui = false
 speckit = false
-[plugins."srobroek-omp"]
-source = "srobroek/omp-plugins"
-plugins = ["architecture", "python", "backend"]
 [commands]
 setup = "mise install && uv sync"
 test = "uv run pytest"

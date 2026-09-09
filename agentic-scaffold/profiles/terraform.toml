@@ -2,11 +2,10 @@ name = "terraform"
 summary = "Terraform infrastructure project"
 layers = ["base", "tooling", "hooks", "lang/terraform", "ci/github", "release", "agentic"]
 [vars]
+language = "terraform"
+app = false
 web_ui = false
 speckit = false
-[plugins."srobroek-omp"]
-source = "srobroek/omp-plugins"
-plugins = ["architecture", "infrastructure"]
 [commands]
 setup = "mise install"
 test = "terraform validate"

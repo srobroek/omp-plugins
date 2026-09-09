@@ -2,12 +2,11 @@ name = "python-lib"
 summary = "uv-managed Python library"
 layers = ["base", "tooling", "hooks", "lang/python", "ci/github", "release", "agentic"]
 [vars]
+language = "python"
+app = false
 python = "3.13"
 web_ui = false
 speckit = false
-[plugins."srobroek-omp"]
-source = "srobroek/omp-plugins"
-plugins = ["architecture", "python"]
 [commands]
 setup = "mise install && uv sync"
 test = "uv run pytest"

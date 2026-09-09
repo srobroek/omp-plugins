@@ -1,5 +1,5 @@
 formula = "mol-scaffold-greenfield"
-description = "Scaffold a greenfield repository with agentic-scaffold"
+description = "Scaffold a greenfield repository with interview, layers, and verification"
 type = "workflow"
 
 [vars.feature]
@@ -12,78 +12,81 @@ required = true
 [vars.autonomous]
 default = "no"
 
-[vars.beads]
-default = "no"
-
 [[steps]]
 id = "interview"
 title = "interview scaffold {{feature}}"
 type = "task"
 priority = 1
-description = "Collect the repository name, purpose, stack/profile, license, and project-scope plugin choices. Record the selected profile and explicit answers before rendering."
+description = "Ask the fixed greenfield questions, derive the profile, and present the answers file for human approval."
 
 [steps.gate]
 type = "human"
 
 [[steps]]
+id = "answers-write"
+title = "write scaffold answers {{feature}}"
+type = "task"
+needs = ["interview"]
+description = "Run scaffold.py answers write and commit .omp/scaffold-answers.toml as the desired input."
+
+[[steps]]
 id = "plan"
 title = "plan scaffold {{feature}}"
 type = "task"
-needs = ["interview"]
+needs = ["answers-write"]
 priority = 1
-description = "Run scaffold.py plan and review every create, skip, update-block, and conflict row. Resolve all conflicts before rendering."
+description = "Run scaffold.py plan (or render --dry-run) and resolve every conflict before rendering."
 
 [[steps]]
 id = "render"
 title = "render scaffold {{feature}}"
 type = "task"
 needs = ["plan"]
-priority = 1
-description = "Render the selected profile into the destination. User-owned files remain unchanged; managed blocks are updated only between their markers."
+description = "Render the selected layers; preserve user files and update managed blocks only."
 
 [[steps]]
 id = "tools-install"
 title = "install tools for {{feature}}"
 type = "task"
 needs = ["render"]
-description = "Run scaffold.py tools install --yes and the profile's dependency setup commands."
+description = "Run scaffold.py tools install --yes and the profile dependency setup command."
 
 [[steps]]
 id = "hooks-install"
 title = "install hooks for {{feature}}"
 type = "task"
 needs = ["tools-install"]
-description = "Run scaffold.py hooks install without --force and verify the declared prek stages."
+description = "Run scaffold.py hooks install, using --migrate only after resolving a foreign hook-manager finding."
 
 [[steps]]
 id = "plugins-sync"
 title = "sync project plugins for {{feature}}"
 type = "task"
 needs = ["hooks-install"]
-description = "Run scaffold.py plugins sync. Project plugins are installed with --scope project; do not mutate user scope."
+description = "Run scaffold.py plugins sync at project scope; never mutate user scope."
 
 [[steps]]
 id = "context-refresh"
 title = "refresh project context for {{feature}}"
 type = "task"
 needs = ["plugins-sync"]
-condition = "{{beads}} == yes"
-description = "Refresh Graphify and Repomix context after rendering when the repository uses beads/context tooling."
+condition = "{{profile}} != agentic-repo"
+description = "Refresh Graphify and Repomix context when the selected stack includes the agentic layer."
 
 [[steps]]
-id = "verify"
-title = "verify scaffold {{feature}}"
+id = "doctor"
+title = "doctor scaffold {{feature}}"
 type = "task"
 needs = ["plugins-sync", "context-refresh"]
-description = "Run just check, inspect project-scope omp plugin JSON, and run a fresh no-session skill visibility probe."
+description = "Run scaffold.py doctor and retain the JSON report; exit 2 is drift and exit 1 is an operational error."
 
 [[steps]]
 id = "commit"
 title = "approve scaffold commit {{feature}}"
 type = "task"
-needs = ["verify"]
+needs = ["doctor"]
 priority = 1
-description = "Review the generated diff and commit only after the human confirms the destination, files, tools, hooks, and project plugin scope."
+description = "Review generated files, answers, plugin scope, and doctor output before committing."
 
 [steps.gate]
 type = "human"

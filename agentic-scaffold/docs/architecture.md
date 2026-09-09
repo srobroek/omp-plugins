@@ -1,9 +1,11 @@
 # Architecture
 
-`scaffold.py` is the single runtime boundary. It loads a profile with `tomllib`, resolves ordered layer directories, builds a deterministic file map, and renders only missing files or managed marker blocks. It does not import Copier, Jinja, YAML, or a network client.
+`skills/agentic-scaffold/scripts/scaffold.py` is the runtime boundary. It uses Python stdlib modules (`tomllib`, `json`, and `string.Template`) plus subprocesses for declared integrations. The CLI loads a profile, resolves layer defaults, applies profile overrides, applies CLI overrides, and produces one deterministic file map.
 
-A layer is a directory under `skills/agentic-scaffold/templates/` (or a compatible external layer root). Plain files are copied byte-for-byte. `.tmpl` files use `string.Template.substitute`; `__name__` in path segments becomes the package name. A `.block` file contributes a rendered fragment to a marker block named for its layer. Existing text outside the markers is retained.
+Each `templates/<layer>/` directory contains `layer.toml`, a short `README.md`, and plain template files. `layer.toml` defines ordering, tools, ownership, managed blocks, conflicts, variables, and project plugins. `.tmpl` files use `string.Template`. The renderer substitutes `__name__` path segments. `.block` files compose managed markers for each layer.
 
-Profiles are TOML with `name`, `summary`, ordered `layers`, `[vars]`, `[plugins.<marketplace>]`, and `[commands]`. `.omp/plugins.toml` is desired state. `plugins sync` reconciles machine-global marketplace registration and project-scope installs while never changing user-scope installations.
+Profiles define ordered layers, variables, and commands. The `web-ui` layer adds an `AGENTS.md` block and plugin entries. The renderer writes plugin entries to `.omp/plugins.toml`. It keeps existing marketplaces and plugin names. For `mcp.json`, existing keys win in a deep merge. The renderer parses existing TOML `[tools]` keys with `tomllib` before it appends missing keys.
 
-Context refresh delegates to the copied upstream context implementation. It validates include patterns, rejects symlinked output, takes a lock, runs Graphify and Repomix, validates the XML pack, and writes a status record. Formulas define the human-gated greenfield and brownfield workflows; every step retains an unconditional predecessor.
+`.omp/scaffold-answers.toml` stores committed desired input. `.omp/scaffold.json` stores the installed profile, layer list, plugin version, and hashes of owned files. `update` refreshes managed blocks. It reports owned-file drift and leaves changed owned files untouched.
+
+`inspect` reads the repository and reports stack, tool, hook-manager, and unowned-file findings. `plan` and `render --dry-run` read the repository and return exit 5 for conflicts. `doctor` checks tools, project plugin sync, installed hooks, context status, answers, and markers. Exit 2 means drift. Formulas add human gates for the interview and commit stages.

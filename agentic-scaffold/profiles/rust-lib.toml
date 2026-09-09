@@ -2,11 +2,10 @@ name = "rust-lib"
 summary = "Cargo-managed Rust library"
 layers = ["base", "tooling", "hooks", "lang/rust", "ci/github", "release", "agentic"]
 [vars]
+language = "rust"
+app = false
 web_ui = false
 speckit = false
-[plugins."srobroek-omp"]
-source = "srobroek/omp-plugins"
-plugins = ["architecture", "rust"]
 [commands]
 setup = "mise install && cargo fetch"
 test = "cargo test"
