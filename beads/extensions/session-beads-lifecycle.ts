@@ -18,7 +18,7 @@ import { existsSync, readFileSync, rmSync, statSync } from "node:fs";
 import { isAbsolute, join, resolve } from "node:path";
 import type { ExtensionAPI, ExtensionContext, ExtensionToolResultEvent } from "@oh-my-pi/pi-coding-agent";
 
-import { bdInvocations, extractCommand, MUTATING_VERBS } from "./bd-actor-gate.ts";
+import { bdInvocations, extractCommand, isMutatingBdCommand } from "./bd-actor-gate.ts";
 
 /** No session boundary may hang on the database or on `gh`. */
 const TIMEOUT_MS = 8000;
@@ -37,16 +37,6 @@ export const AUTO_GATE_TYPES: Record<string, true> = {
 	bead: true,
 };
 
-/**
- * Verbs that write the database beyond bd-actor-gate's claim taxonomy. `ready`
- * is a read unless it carries `--claim`, which is the swarm claim path.
- */
-export const EXTRA_WRITE_VERBS: Record<string, true> = {
-	import: true,
-	gate: true,
-	defer: true,
-	supersede: true,
-};
 
 interface SessionState {
 	bdWrote: boolean;
@@ -228,17 +218,14 @@ export function staleSkipNotice(output: string): string | undefined {
 	].join(" ");
 }
 
-/** Every `bd` verb in a command line, skipping the global flags that precede one. */
+/** Every real `bd` verb in a command line. */
 export function bdVerbs(command: string): string[] {
 	return bdInvocations(command).map(invocation => invocation.verb);
 }
 
 /** Whether this command line wrote the beads database. */
 export function isBdWrite(command: string): boolean {
-	return bdInvocations(command).some(({ verb, args }) =>
-		verb === "comments" ? args[0] === "add" :
-		verb === "ready" ? args.includes("--claim") :
-		Object.hasOwn(MUTATING_VERBS, verb) || Object.hasOwn(EXTRA_WRITE_VERBS, verb));
+	return isMutatingBdCommand(command);
 }
 
 /**

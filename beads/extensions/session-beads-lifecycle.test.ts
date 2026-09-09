@@ -220,11 +220,62 @@ describe("bdVerbs / isBdWrite", () => {
 		expect(isBdWrite("bd defer x --until 2026-09-01 --reason later")).toBe(true);
 	});
 
+	test("documented top-level mutations mark the session written", () => {
+		for (const command of [
+			"bd assign x worker",
+			"bd delete x",
+			"bd edit x",
+			"bd link a b",
+			"bd note x hi",
+			"bd priority x 1",
+			"bd promote x",
+			"bd q task",
+			"bd rename x y",
+			"bd reopen x",
+			"bd tag x blocked",
+			"bd undefer x",
+		]) {
+			expect(isBdWrite(command)).toBe(true);
+		}
+	});
+
 	test("reads are not writes", () => {
 		expect(isBdWrite("bd list --status open --json")).toBe(false);
 		expect(isBdWrite("bd ready --unassigned --json")).toBe(false);
 		expect(isBdWrite("bd comments x")).toBe(false);
 		expect(isBdWrite("bd swarm validate root --json")).toBe(false);
+	});
+
+	test("grouped reads and previews do not mark the session written", () => {
+		for (const command of [
+			"bd mol list",
+			"bd mol show mol-1",
+			"bd mol current mol-1",
+			"bd mol progress mol-1",
+			"bd mol ready",
+			"bd mol stale",
+			"bd mol last-activity mol-1",
+			"bd mol seed formula",
+			"bd mol pour formula --dry-run",
+			"bd mol wisp list",
+			"bd dep tree x",
+			"bd label list x",
+			"bd audit list",
+		]) {
+			expect(isBdWrite(command)).toBe(false);
+		}
+	});
+
+	test("grouped writes mark the session written", () => {
+		for (const command of [
+			"bd mol pour formula",
+			"bd mol wisp formula",
+			"bd dep add a b",
+			"bd label add x foo",
+			"bd audit record --kind tool_call",
+		]) {
+			expect(isBdWrite(command)).toBe(true);
+		}
 	});
 
 	test("the claim forms of read verbs are writes", () => {
@@ -317,7 +368,9 @@ describe("integration", () => {
 			sendMessage: (m: { content: string }) => logged.push(m.content),
 			logger: { error: () => {}, info: () => {} },
 			on: (event: string, handler: (e: unknown, c: unknown) => unknown) => {
-				(handlers[event] ??= []).push(handler);
+				const registered = handlers[event] ?? [];
+				registered.push(handler);
+				handlers[event] = registered;
 			},
 		};
 		sessionBeadsLifecycle(fakePi as never);
