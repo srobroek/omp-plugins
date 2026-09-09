@@ -75,12 +75,18 @@ export function extractCommand(input: Record<string, unknown>): string {
 /**
  * Shell-ish tokenizer: enough to tell an id from a flag value and to keep a
  * quoted `bd close` inside a `--reason` from reading as a second command.
+ *
+ * A here-document body is data, not commands: `git commit -F - <<'EOF'` followed
+ * by a message that mentions `bd close x` used to read as a second `bd`
+ * invocation and trip the gates on a commit. The redirection and its body are
+ * dropped; scanning resumes on the line after the terminator.
  */
 export function tokenize(command: string): string[] {
 	const out: string[] = [];
 	let cur = "";
 	let started = false;
 	let quote: '"' | "'" | null = null;
+	const pending: Array<{ delimiter: string; stripTabs: boolean }> = [];
 	const flush = (): void => {
 		if (started) {
 			out.push(cur);
@@ -109,9 +115,29 @@ export function tokenize(command: string): string[] {
 			i++;
 			continue;
 		}
+		if (ch === "<" && command[i + 1] === "<" && command[i + 2] === "<") {
+			// A here-string feeds one word, not a body; consumed whole so its second
+			// `<<` does not read as a here-document.
+			flush();
+			out.push("<<<");
+			i += 2;
+			continue;
+		}
+		if (ch === "<" && command[i + 1] === "<") {
+			const operator = hereDocumentOperator(command, i);
+			if (operator !== null) {
+				flush();
+				pending.push(operator);
+				i = operator.end - 1;
+				continue;
+			}
+		}
 		if (ch === "\n") {
 			flush();
 			out.push(ch);
+			// The bodies of this line's here-documents follow, in order. They are
+			// data, so scanning resumes on the line after the last terminator.
+			while (pending.length) i = hereDocumentBodyEnd(command, i + 1, pending.shift()!);
 			continue;
 		}
 		if (/\s/.test(ch)) {
@@ -128,6 +154,54 @@ export function tokenize(command: string): string[] {
 	}
 	flush();
 	return out;
+}
+
+/**
+ * The `<<WORD` / `<<-'WORD'` redirection at `start`: the delimiter it names and
+ * the index just past it, or null when no delimiter word follows. The rest of
+ * the line stays commands -- `<<EOF | tee out` still pipes.
+ */
+function hereDocumentOperator(
+	command: string,
+	start: number,
+): { delimiter: string; stripTabs: boolean; end: number } | null {
+	let i = start + 2;
+	const stripTabs = command[i] === "-";
+	if (stripTabs) i++;
+	while (command[i] === " " || command[i] === "\t") i++;
+	let delimiter = "";
+	const quote = command[i];
+	if (quote === '"' || quote === "'") {
+		const close = command.indexOf(quote, i + 1);
+		if (close === -1) return null;
+		delimiter = command.slice(i + 1, close);
+		i = close + 1;
+	} else {
+		while (i < command.length && !/[\s;&|<>()]/.test(command[i] as string)) delimiter += command[i++];
+	}
+	return delimiter ? { delimiter, stripTabs, end: i } : null;
+}
+
+/**
+ * The index of the newline that ends a here-document body starting at `from`,
+ * so the caller's loop increment lands on the next command line. `<<-` strips
+ * leading tabs before comparing; an unterminated body runs to the end.
+ */
+function hereDocumentBodyEnd(
+	command: string,
+	from: number,
+	{ delimiter, stripTabs }: { delimiter: string; stripTabs: boolean },
+): number {
+	let cursor = from;
+	while (cursor < command.length) {
+		let next = command.indexOf("\n", cursor);
+		if (next === -1) next = command.length;
+		let line = command.slice(cursor, next);
+		if (stripTabs) line = line.replace(/^\t+/, "");
+		if (line === delimiter) return next;
+		cursor = next + 1;
+	}
+	return command.length;
 }
 
 export type CloseInvocation = {

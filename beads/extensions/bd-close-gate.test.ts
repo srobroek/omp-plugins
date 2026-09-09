@@ -76,6 +76,34 @@ describe("tokenize", () => {
 			"b-2",
 		]);
 	});
+
+	test("a here-document body is data, not commands", () => {
+		const command = "git commit -F - <<'EOF'\nfix: x\n\nrun bd close a-1 after\nEOF\necho done";
+		expect(tokenize(command)).toEqual(["git", "commit", "-F", "-", "\n", "echo", "done"]);
+	});
+
+	test("the rest of the redirection's line stays commands", () => {
+		const command = "cat <<EOF | bd close a-1\nbd close b-2\nEOF\n";
+		expect(tokenize(command)).toEqual(["cat", "|", "bd", "close", "a-1", "\n"]);
+	});
+
+	test("<<- strips leading tabs before matching the terminator", () => {
+		expect(tokenize("cat <<-EOF\n\tbd close a-1\n\tEOF\nbd close b-2")).toEqual([
+			"cat",
+			"\n",
+			"bd",
+			"close",
+			"b-2",
+		]);
+	});
+
+	test("an unterminated body runs to the end", () => {
+		expect(tokenize("cat <<EOF\nbd close a-1")).toEqual(["cat", "\n"]);
+	});
+
+	test("a here-string is not a here-document", () => {
+		expect(tokenize("bd close a-1 <<< x")).toEqual(["bd", "close", "a-1", "<<<", "x"]);
+	});
 });
 
 describe("findCloseInvocations", () => {
