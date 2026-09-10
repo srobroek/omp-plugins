@@ -261,3 +261,16 @@ def test_abort_treats_a_malformed_marker_as_a_run(tmp_path: Path) -> None:
     body = payload(run("abort", "--root", str(root)))
     assert body["hadRun"] is True and body["stagesCompleted"] == []
     assert not (root / ".omp/scaffold-run.json").exists()
+
+
+def test_guarded_write_leaves_no_temp_file_and_replaces_atomically(tmp_path: Path) -> None:
+    import importlib
+
+    sys.path.insert(0, str(CLI.parent))
+    scaffold = importlib.import_module("scaffold")
+    root = git_root(tmp_path)
+    target = root / ".omp/scaffold-run.json"
+    scaffold._write_under_root(root, target, "{}\n")
+    scaffold._write_under_root(root, target, '{"stages": []}\n')
+    assert target.read_text() == '{"stages": []}\n'
+    assert [p.name for p in target.parent.iterdir()] == ["scaffold-run.json"]

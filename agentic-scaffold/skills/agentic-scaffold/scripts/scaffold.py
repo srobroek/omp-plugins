@@ -76,7 +76,10 @@ def _write_under_root(root: Path, path: Path, content: str) -> None:
     except ValueError:
         fail(f"refusing write outside root: {target}", EXIT_BOUNDARY)
     target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(content)
+    # Write beside the target and rename so a killed process never leaves a truncated file.
+    tmp = target.with_name(f".{target.name}.{os.getpid()}.tmp")
+    tmp.write_text(content)
+    os.replace(tmp, target)
 
 
 def _rename_under_root(root: Path, source: Path, target: Path) -> None:
