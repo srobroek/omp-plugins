@@ -71,6 +71,17 @@ const TRANSPARENT_PREFIX: Record<string, true> = {
 
 const ENV_ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*=/;
 
+/** `env` options that consume the following argv word before its command. */
+const ENV_VALUE_OPTIONS: Record<string, true> = {
+	"-u": true,
+	"-C": true,
+	"-S": true,
+	"-P": true,
+	"--unset": true,
+	"--chdir": true,
+	"--split-string": true,
+};
+
 /** Pre-verb git options that consume the following token. */
 const PRE_VERB_VALUE_FLAGS: Record<string, true> = {
 	"-C": true,
@@ -505,6 +516,30 @@ function scanInvocations(command: string): CommitInvocation[] {
 			continue;
 		}
 		if (!atCommand) continue;
+		// A reserved word introduces a command rather than being one, so it leaves the slot open.
+		if (token.text === "env") {
+			let k = i + 1;
+			for (; k < tokens.length && !isSep(tokens[k]); k++) {
+				const operand = tokens[k] as Token;
+				if (operand.text === "--") continue;
+				if (ENV_ASSIGNMENT.test(operand.text)) {
+					const name = operand.text.slice(0, operand.text.indexOf("="));
+					if (TARGET_ENV.includes(name)) prefixRetarget = true;
+					continue;
+				}
+				const optionName = operand.text.includes("=")
+					? operand.text.slice(0, operand.text.indexOf("="))
+					: operand.text;
+				if (ENV_VALUE_OPTIONS[optionName] === true) {
+					if (!operand.text.includes("=")) k++;
+					continue;
+				}
+				if (operand.text.startsWith("-")) continue;
+				break;
+			}
+			i = k - 1;
+			continue;
+		}
 		// A reserved word introduces a command rather than being one, so it leaves the slot open.
 		if (
 			TRANSPARENT_PREFIX[token.text] === true ||
