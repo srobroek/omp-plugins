@@ -93,6 +93,9 @@ const SUDO_VALUE_OPTIONS: Record<string, true> = {
 	"-R": true,
 	"-T": true,
 	"-U": true,
+	"-r": true,
+	"-t": true,
+	"-a": true,
 	"--user": true,
 	"--group": true,
 	"--prompt": true,
@@ -100,7 +103,9 @@ const SUDO_VALUE_OPTIONS: Record<string, true> = {
 	"--chdir": true,
 	"--role": true,
 	"--type": true,
+	"--authentication-type": true,
 	"--other-user": true,
+	"--askpass-type": true,
 	"--command-timeout": true,
 	"--close-from": true,
 };
@@ -639,6 +644,13 @@ function scanInvocations(command: string): CommitInvocation[] {
 				}
 				if (SUDO_FLAG_OPTIONS[optionName] === true) continue;
 				if (/^-[AAbEeEHKknPSVv]+$/.test(operand.text)) continue;
+				if (operand.text.startsWith("-")) {
+					// An unrecognised sudo option may consume a value. Guessing where its command
+					// starts can hide git, so fail closed rather than advance past the wrong word.
+					out.push({ repoDir: null, dryRun: false, retargeted: true });
+					k = tokens.length;
+					break;
+				}
 				break;
 			}
 			i = k - 1;

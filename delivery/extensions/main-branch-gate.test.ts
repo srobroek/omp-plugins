@@ -358,6 +358,10 @@ describe("findCommitInvocations", () => {
 		for (const command of [
 			"sudo -u alice git commit -m x",
 			"sudo --user alice git commit -m x",
+			"sudo -r staff git commit -m x",
+			"sudo --role staff git commit -m x",
+			"sudo -a password git commit -m x",
+			"sudo --authentication-type=password git commit -m x",
 			"sudo -E git commit -m x",
 			"sudo -nHE git commit -m x",
 		]) {
