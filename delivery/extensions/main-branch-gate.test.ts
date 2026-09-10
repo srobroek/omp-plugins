@@ -540,6 +540,29 @@ describe("findCommitInvocations", () => {
 		expect(calls).toEqual([]);
 	});
 
+	test("time options do not hide the timed command", () => {
+		for (const command of [
+			"time git commit -m x",
+			"time -p git commit -m x",
+			"time -- git commit -m x",
+			"time -p -- git commit -m x",
+		]) {
+			expect(findCommitInvocations(command), command).toEqual([
+				{ repoDir: null, dryRun: false },
+			]);
+		}
+		expect(findCommitInvocations("time -p git commit --dry-run")).toEqual([
+			{ repoDir: null, dryRun: true },
+		]);
+		expect(findCommitInvocations("time -p git status")).toEqual([]);
+	});
+
+	test("unknown time options fail closed", () => {
+		expect(findCommitInvocations("time -o /tmp/out git commit -m x")).toEqual([
+			{ repoDir: null, dryRun: false, retargeted: true },
+		]);
+	});
+
 	test("ordinary commands mentioning Git are not wrappers", () => {
 		for (const command of [
 			"echo git commit",

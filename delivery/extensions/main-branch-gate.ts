@@ -736,6 +736,27 @@ function scanInvocations(command: string): CommitInvocation[] {
 			i = k - 1;
 			continue;
 		}
+		// `time` keeps the command slot open, but its own options stand before that command.
+		if (token.text === "time") {
+			let k = i + 1;
+			for (; k < tokens.length && !isSep(tokens[k]); k++) {
+				const operand = tokens[k] as Token;
+				if (operand.text === "--") {
+					k++;
+					break;
+				}
+				if (operand.text === "-p") continue;
+				if (operand.text.startsWith("-")) {
+					// An unrecognised option may consume the next word, so the command is unreadable.
+					out.push({ repoDir: null, dryRun: false, retargeted: true });
+					k = tokens.length;
+					break;
+				}
+				break;
+			}
+			i = k - 1;
+			continue;
+		}
 		// A reserved word introduces a command rather than being one, so it leaves the slot open.
 		if (
 			TRANSPARENT_PREFIX[token.text] === true ||
