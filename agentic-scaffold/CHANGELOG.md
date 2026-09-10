@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.1](https://github.com/srobroek/omp-plugins/compare/agentic-scaffold--v0.5.0...agentic-scaffold--v0.5.1) (2026-09-10)
+
+
+### Bug Fixes
+
+* **agentic-scaffold:** abort reports hadRun from the marker's existence ([#117](https://github.com/srobroek/omp-plugins/issues/117)) ([9b9356d](https://github.com/srobroek/omp-plugins/commit/9b9356de32f3df9e68e1b354d4397e8c7c2c9921))
+
 ## [0.5.0](https://github.com/srobroek/omp-plugins/compare/agentic-scaffold--v0.4.3...agentic-scaffold--v0.5.0) (2026-09-10)
 
 
