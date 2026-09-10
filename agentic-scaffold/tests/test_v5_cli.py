@@ -361,3 +361,39 @@ def test_preflight_hard_fails_on_a_dirty_tree_with_no_bypass(tmp_path: Path) -> 
     (root / ".omp/scaffold-answers.toml").write_text('profile = "agentic-repo"\nlayers = []\n[vars]\n')
     (root / "notes.txt").unlink()
     assert run("preflight", "--root", str(root), "--profile", "agentic-repo").returncode == 0  # scaffold state is not dirt
+
+
+@pytest.mark.parametrize(("profile", "lane", "publish_job"), [("python-lib", "python", "publish-pypi"), ("rust-lib", "rust", "publish-crates"), ("ts-lib", "typescript", "publish-npm"), ("go-lib", "go", "publish-github-assets"), ("python-app", "python", None)])
+def test_rendered_workflows_follow_the_ci_and_release_standard(tmp_path: Path, profile: str, lane: str, publish_job: str | None) -> None:
+    import yaml
+
+    root = git_root(tmp_path)
+    assert run("answers", "write", "--root", str(root), "--profile", profile, "--set", "name=demo", "--defaults-for", "purpose,kind,language,license,beads,publish").returncode == 0
+    assert run("apply", "--root", str(root), "--stage", "render").returncode == 0
+    ci = yaml.safe_load((root / ".github/workflows/ci.yml").read_text())
+    jobs = ci["jobs"]
+    assert {lane, "hooks", "agentic", "security", "gate"} <= set(jobs)
+    gate = jobs["gate"]
+    assert gate["if"] == "always()" and set(gate["needs"]) == set(jobs) - {"gate"}  # every lane feeds the gate
+    assert "merge_group" in ci[True] and ci["permissions"] == {"contents": "read"}
+    assert ci["concurrency"]["cancel-in-progress"] == "${{ github.event_name == 'pull_request' }}"
+    for name, job in jobs.items():
+        assert "timeout-minutes" in job, name
+        for step in job.get("steps", []):
+            uses = step.get("uses")
+            if uses:
+                ref = uses.split("@", 1)[1].split(" ")[0]
+                assert len(ref) == 40, f"{name}: {uses} is not SHA-pinned"
+    release = yaml.safe_load((root / ".github/workflows/release.yml").read_text())
+    assert set(release[True]) == {"release", "workflow_dispatch"}
+    rjobs = release["jobs"]
+    assert "release-gate" in rjobs and "check-runs?check_name=gate" in yaml.dump(rjobs["release-gate"])
+    if publish_job is None:
+        assert set(rjobs) == {"release-gate"}  # applications publish nowhere
+    else:
+        assert set(rjobs) == {"release-gate", "build", publish_job}
+        assert rjobs["build"]["needs"] == "release-gate"
+        assert set(rjobs[publish_job]["needs"]) == {"release-gate", "build"}
+        assert rjobs[publish_job]["environment"] == "release" and rjobs[publish_job]["permissions"]["id-token"] == "write"
+    rp = yaml.safe_load((root / ".github/workflows/release-please.yml").read_text())
+    assert "create-github-app-token" in yaml.dump(rp["jobs"])
