@@ -104,7 +104,6 @@ export function writtenPaths(event: ResultEvent, cwd: string): string[] {
 		if (details.op !== "delete") take(details.move ?? details.path);
 		return out;
 	}
-
 	if (event.toolName === "ast_edit") {
 		if (!details || details.applied !== true) return out;
 		// Detail paths are printed relative to the cwd of the edit, which is the
@@ -112,7 +111,6 @@ export function writtenPaths(event: ResultEvent, cwd: string): string[] {
 		const base = typeof details.cwd === "string" && details.cwd !== "" ? details.cwd : cwd;
 		if (Array.isArray(details.files)) {
 			for (const file of details.files) take(file, base);
-			return out;
 		}
 		if (Array.isArray(details.fileReplacements)) {
 			for (const raw of details.fileReplacements) take(asRecord(raw)?.path, base);

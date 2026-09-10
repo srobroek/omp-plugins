@@ -108,6 +108,18 @@ describe("writtenPaths", () => {
 		expect(writtenPaths(replacements, CWD)).toEqual(["/repo/rules/b.md"]);
 	});
 
+	test("ast_edit includes every applied result target", () => {
+		const event = {
+			toolName: "ast_edit",
+			details: {
+				applied: true,
+				files: ["rules/a.md"],
+				fileReplacements: [{ path: "rules/b.md", count: 1 }],
+			},
+		};
+		expect(writtenPaths(event, CWD)).toEqual(["/repo/rules/a.md", "/repo/rules/b.md"]);
+	});
+
 	test("unrelated tools contribute nothing", () => {
 		expect(writtenPaths({ toolName: "bash", input: { command: "ls rules/a.md" } }, CWD)).toEqual([]);
 	});
