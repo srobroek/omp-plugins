@@ -433,14 +433,33 @@ def member_scoped_body(body: str, layer: str, values: dict[str, str]) -> str:
     return "\n".join(result) + ("\n" if body.endswith("\n") else "")
 
 
+def effective_layer_tools(config: dict[str, Any], values: dict[str, str]) -> dict[str, str]:
+    """`[tools]` plus every `[conditional_tools]` entry whose `when` matches the answers."""
+    tools: dict[str, str] = {}
+    raw = config.get("tools", {})
+    if isinstance(raw, dict):
+        for key, value in raw.items():
+            tools[str(key)] = str(value)
+    conditional = config.get("conditional_tools", {})
+    if isinstance(conditional, dict):
+        for key, spec in conditional.items():
+            if not isinstance(spec, dict):
+                continue
+            variable = str(spec.get("var", ""))
+            expected = str(spec.get("equals", "true"))
+            if str(values.get(variable, "")).lower() == expected.lower():
+                tools[str(key)] = str(spec.get("version", "latest"))
+    return tools
+
+
 def collect(layers: list[str], values: dict[str, str], member_dir: str | None = None) -> tuple[dict[str, list[dict[str, Any]]], dict[str, list[dict[str, Any]]]]:
     direct: dict[str, list[dict[str, Any]]] = {}
     blocks: dict[str, list[dict[str, Any]]] = {}
     for layer in layers:
         directory = layer_dir(layer)
         config = load_layer(layer)
-        tools = config.get("tools", {})
-        if isinstance(tools, dict) and tools and member_dir is None:
+        tools = effective_layer_tools(config, values)
+        if tools and member_dir is None:
             lines = ["[tools]"]
             for key, value in tools.items():
                 resolved = render_text(str(value), values)
@@ -476,10 +495,8 @@ def collect(layers: list[str], values: dict[str, str], member_dir: str | None = 
 def layer_tools(layers: list[str], values: dict[str, str]) -> dict[str, str]:
     tools: dict[str, str] = {}
     for layer in layers:
-        raw = load_layer(layer).get("tools", {})
-        if isinstance(raw, dict):
-            for key, value in raw.items():
-                tools[str(key)] = render_text(str(value), values)
+        for key, value in effective_layer_tools(load_layer(layer), values).items():
+            tools[str(key)] = render_text(str(value), values)
     return tools
 
 

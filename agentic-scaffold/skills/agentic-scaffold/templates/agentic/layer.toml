@@ -10,4 +10,5 @@ conflicts_with = []
 node = "latest"
 "pipx:graphifyy[mcp]" = "latest"
 "npm:repomix" = "latest"
-"aqua:gastownhall/beads" = "latest"
+[conditional_tools]
+"aqua:gastownhall/beads" = { var = "beads", equals = "true", version = "latest" }
