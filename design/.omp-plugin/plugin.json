@@ -19,7 +19,8 @@
       ]
     },
     "storybook": {
-      "url": "http://localhost:6006/mcp"
+      "url": "http://localhost:6006/mcp",
+      "enabled": false
     }
   }
 }
