@@ -1049,9 +1049,23 @@ def installed_plugins(path: Path) -> set[tuple[str, str]]:
             if not isinstance(identifier, str) or "@" not in identifier:
                 continue
             plugin, marketplace = identifier.split("@", 1)
-            if isinstance(values, list) and any(isinstance(item, dict) and item.get("scope") == "project" for item in values):
+            if isinstance(values, list) and any(_project_entry_present(item) for item in values):
                 found.add((plugin, marketplace))
     return found
+
+
+def _project_entry_present(item: object) -> bool:
+    """A project entry counts only while its install path still exists.
+
+    `omp plugin uninstall` at user scope deletes the shared cache directory that
+    project entries symlink into, leaving a registry row that points nowhere.
+    """
+    if not isinstance(item, dict) or item.get("scope") != "project":
+        return False
+    install_path = item.get("installPath")
+    if not isinstance(install_path, str) or not install_path:
+        return True
+    return Path(install_path).exists()
 def plugins_sync(root: Path, check: bool) -> tuple[dict[str, Any], int]:
     desired = read_plugins(root)
     if not desired:
