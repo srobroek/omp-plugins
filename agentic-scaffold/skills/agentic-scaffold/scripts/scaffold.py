@@ -389,6 +389,8 @@ def collect(layers: list[str], values: dict[str, str], member_dir: str | None = 
                 body = render_text(source.read_text(), values)
                 if member_dir:
                     body = member_scoped_body(body, layer, values)
+                elif str(values.get("layout", "single")) == "monorepo" and layer == "tooling" and str(target) == "justfile":
+                    body = re.sub(r"(?ms)^(?:test|lint|fmt|check):\n(?:    .*\n)+\n?", "", body)
                 item = {"layer": layer, "block": member_block_name(layer, values), "source": str(source), "target": str(target), "body": body}
                 blocks.setdefault(str(target), []).append(item)
             else:
@@ -745,23 +747,25 @@ def render_workspace_manifest(root: Path, members: list[dict[str, str]], values:
 
 
 def render_workspace_aggregates(root: Path, members: list[dict[str, str]], written: list[str]) -> None:
-    if not members:
-        return
     just = root / "justfile"
-    if just.exists():
-        text = just.read_text()
-        begin = "# agentic-scaffold:begin workspace-members"
-        end = "# agentic-scaffold:end workspace-members"
-        recipes = [begin, "test: " + " ".join(f"{item['name']}-test" for item in members), "lint: " + " ".join(f"{item['name']}-lint" for item in members), "check: test lint", end]
-        fragment = "\n".join(recipes) + "\n"
-        if begin in text and end in text:
-            start, finish = text.index(begin), text.index(end) + len(end)
-            updated = text[:start] + fragment.rstrip("\n") + text[finish:]
-        else:
-            updated = text.rstrip("\n") + "\n\n" + fragment
-        if updated != text:
-            just.write_text(updated)
-            written.append("justfile")
+    if not just.exists():
+        return
+    text = just.read_text()
+    begin = "# agentic-scaffold:begin workspace-members"
+    end = "# agentic-scaffold:end workspace-members"
+    if members:
+        recipes = [begin, "test: " + " ".join(f"{item['name']}-test" for item in members), "lint: " + " ".join(f"{item['name']}-lint" for item in members), "fmt: " + " ".join(f"{item['name']}-fmt" for item in members), "check: test lint fmt", end]
+    else:
+        recipes = [begin, "test:", "    @echo 'no workspace members'", "lint:", "    @echo 'no workspace members'", "fmt:", "    @echo 'no workspace members'", "check: test lint fmt", end]
+    fragment = "\n".join(recipes) + "\n"
+    if begin in text and end in text:
+        start, finish = text.index(begin), text.index(end) + len(end)
+        updated = text[:start] + fragment.rstrip("\n") + text[finish:]
+    else:
+        updated = text.rstrip("\n") + "\n\n" + fragment
+    if updated != text:
+        just.write_text(updated)
+        written.append("justfile")
 
 
 def render_member_layers(root: Path, members: list[dict[str, str]], values: dict[str, str], written: list[str], skipped: list[str], drifted: list[str], preserve_paths: set[str]) -> list[dict[str, Any]]:
@@ -859,6 +863,8 @@ def render(root: Path, profile_name: str | None, name: str | None, overrides: di
         render_workspace_manifest(root, members, values, written)
         render_workspace_aggregates(root, members, written)
         render_release_members(root, members, written)
+    elif str(values.get("layout", "single")) == "monorepo":
+        render_workspace_aggregates(root, members, written)
     additions = write_plugins(root, plugin_sets(layers, values))
     root_meta = metadata_path(root)
     root_meta.parent.mkdir(parents=True, exist_ok=True)
