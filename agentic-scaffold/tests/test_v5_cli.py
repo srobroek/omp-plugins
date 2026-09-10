@@ -169,3 +169,19 @@ def test_render_preserves_hook_metadata(tmp_path: Path) -> None:
     assert run("render", "--root", str(root), "--profile", "agentic-repo").returncode == 0
     after = _json.loads(meta_path.read_text())
     assert after["hook_strategy"] == "git-defender" and after["hooks_installed"] is True and after["hook_stages"] == ["pre-commit", "pre-push"]
+
+
+def test_beads_pin_follows_the_beads_answer(tmp_path: Path) -> None:
+    import importlib
+
+    sys.path.insert(0, str(CLI.parent))
+    scaffold = importlib.import_module("scaffold")
+    layers = ["base", "tooling", "hooks", "agentic"]
+    without = scaffold.layer_tools(layers, {"beads": "false"})
+    with_beads = scaffold.layer_tools(layers, {"beads": "true"})
+    assert "aqua:gastownhall/beads" not in without
+    assert with_beads["aqua:gastownhall/beads"] == "latest"
+    root = git_root(tmp_path)
+    assert run("answers", "write", "--root", str(root), "--profile", "agentic-repo", "--set", "name=demo", "--defaults-for", "purpose,kind,language,license,beads").returncode == 0
+    assert run("render", "--root", str(root), "--profile", "agentic-repo").returncode == 0
+    assert "beads" not in (root / "mise.toml").read_text()
