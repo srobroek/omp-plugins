@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.8.1](https://github.com/srobroek/omp-plugins/compare/delivery--v0.8.0...delivery--v0.8.1) (2026-09-10)
+
+
+### Bug Fixes
+
+* **delivery:** require structured commit authority ([#147](https://github.com/srobroek/omp-plugins/issues/147)) ([9422cca](https://github.com/srobroek/omp-plugins/commit/9422ccac325e9894e9a401302ccb0d3f0da158cf))
+
 ## [0.8.0](https://github.com/srobroek/omp-plugins/compare/delivery--v0.7.3...delivery--v0.8.0) (2026-09-09)
 
 
