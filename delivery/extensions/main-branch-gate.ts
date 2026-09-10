@@ -276,7 +276,17 @@ export type Token = {
 	 * though it were the operator, emitting no invocation at all.
 	 */
 	quoted: boolean;
+	/**
+	 * This word begins with an UNQUOTED redirection operator, so the shell reads it as syntax and
+	 * the command keeps its own argv. Only PRESENT when set. `quoted` cannot answer this: it is
+	 * word-wide, so `git >'out' commit` marked the whole redirection an operand and the commit
+	 * after it went unseen.
+	 */
+	redirection?: true;
 };
+
+/** A redirection operator, anchored at the start of what remains of the command. */
+const REDIRECTION_OPERATOR = /^(?:<<<|>>|>\||<>|>&|<&|>|<)/;
 
 /**
  * Words and separators, with quoting recorded. A quoted region is inert here: finding where a
@@ -289,15 +299,22 @@ export function tokenize(command: string): Token[] {
 	let cur = "";
 	let started = false;
 	let wasQuoted = false;
+	let redirection = false;
 	let quote: string | null = null;
 	// Here-document bodies queued by operators on the current line, consumed in order once that
 	// line ends. `cat <<A <<B` queues two.
 	const pending: Array<{ delimiter: string; stripTabs: boolean }> = [];
 	const flush = (): void => {
-		if (started) out.push({ text: cur, quoted: wasQuoted });
+		if (started)
+			out.push(
+				redirection
+					? { text: cur, quoted: wasQuoted, redirection: true }
+					: { text: cur, quoted: wasQuoted },
+			);
 		cur = "";
 		started = false;
 		wasQuoted = false;
+		redirection = false;
 	};
 	for (let i = 0; i < command.length; i++) {
 		const ch = command[i] as string;
@@ -469,22 +486,24 @@ export function tokenize(command: string): Token[] {
 		// a file-descriptor prefix stays attached, so `2>&1` remains one operator.
 		if (ch === "&" && command[i + 1] === ">") {
 			flush();
-			cur = "&>";
+			cur = command[i + 2] === ">" ? "&>>" : "&>";
 			started = true;
-			i++;
+			redirection = true;
+			i += cur.length - 1;
 			continue;
 		}
 		if (ch === ">" || ch === "<") {
+			// `<<` is a here-document and was consumed above, so what remains is an operator whose
+			// text is known here. Recording it on the token keeps the operator's own quote state,
+			// which `quoted` cannot: it is word-wide, so `git >'out' commit` hid that commit.
+			const operator = REDIRECTION_OPERATOR.exec(command.slice(i));
+			if (operator === null) continue;
+			const text = operator[0] as string;
 			if (!/^(?:\d+|&)?$/.test(cur)) flush();
-			cur += ch;
+			cur += text;
 			started = true;
-			const next = command[i + 1];
-			// `>>`, `>&`, `<&`, `>|`, and `<>` are single operators. `&` and `|` must not reach the
-			// separator branch, where they would reset command position and hide the commit.
-			if (next === ">" || next === "&" || next === "|") {
-				cur += next;
-				i++;
-			}
+			redirection = true;
+			i += text.length - 1;
 			continue;
 		}
 		if (SEPARATOR[ch] === true) {
@@ -724,27 +743,25 @@ function isUnreadablePayload(payload: Token): boolean {
 const FORWARDING_COMMANDS = ["exec", "nice", "nohup", "time", "xargs", "xcrun"];
 
 /**
- * An unquoted redirection word is grammar rather than argv, so it stands between a command and
- * its own arguments: `git >/dev/null commit -m x` runs the same commit as `git commit -m x`.
- */
-const REDIRECTION = /^(?:\d+|&)?(?:<<<|<<-?|>>|>\||<>|>&|<&|>|<)/;
-
-/**
- * How many words this redirection occupies: 0 when it is argv, 1 when it carries its own target,
- * and 2 when the target is the next word. A bare operator claims no word across a separator,
- * because the target belongs to the same simple command.
+ * How many words this redirection occupies: 0 when the word is argv, 1 when it carries its own
+ * target, and 2 when the target is the next word. A bare operator claims no word across a
+ * separator, because the target belongs to the same simple command.
+ *
+ * The decision reads the operator's own provenance from `tokenize`. Matching the token text
+ * instead let a quoted target speak for the operator, and `git >'out' commit -m x` passed.
  */
 function redirectionWidth(
 	token: Token,
 	next: Token | undefined,
 	nextIsSeparator: boolean,
 ): 0 | 1 | 2 {
-	if (token.quoted) return 0;
-	const match = REDIRECTION.exec(token.text);
-	if (match === null) return 0;
-	if ((match[0] as string).length !== token.text.length) return 1;
+	if (token.redirection !== true) return 0;
+	if (!REDIRECTION_BARE.test(token.text)) return 1;
 	return next !== undefined && !nextIsSeparator ? 2 : 1;
 }
+
+/** A redirection word that is only its operator, so its target is the next word. */
+const REDIRECTION_BARE = /^(?:\d+|&)?(?:<<<|>>|>\||<>|>&|<&|>|<)$/;
 
 function scanInvocations(command: string): CommitInvocation[] {
 	const out: CommitInvocation[] = [];

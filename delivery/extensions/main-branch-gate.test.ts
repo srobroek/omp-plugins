@@ -736,6 +736,40 @@ describe("findCommitInvocations", () => {
 		);
 	});
 
+	test("a quoted redirection target does not make the operator argv", () => {
+		for (const command of [
+			"git >'out' commit -m x",
+			"git 2>'out' commit -m x",
+			"git >>'out' commit -m x",
+			"git <'in' commit -m x",
+			"git <>'file' commit -m x",
+			"git >&'2' commit -m x",
+			'git >"out" commit -m x',
+			"git <<<'foo' commit -m x",
+		]) {
+			expect(findCommitInvocations(command), command).toEqual([
+				{ repoDir: null, dryRun: false },
+			]);
+		}
+		expect(findCommitInvocations("git <<<'foo' commit --dry-run")).toEqual([
+			{ repoDir: null, dryRun: true },
+		]);
+		// A quoted OPERATOR is an operand, so it names a directory rather than redirecting.
+		expect(findCommitInvocations("git -C '>out' status")).toEqual([]);
+		for (const command of [
+			"git <<< hello commit -m x",
+			"git <<< 'hello' commit -m x",
+			"git > out commit -m x",
+			"git 2> out commit -m x",
+			"git >& 2 commit -m x",
+			"git < in commit -m x",
+		]) {
+			expect(findCommitInvocations(command), command).toEqual([
+				{ repoDir: null, dryRun: false },
+			]);
+		}
+	});
+
 	test("a redirected commit is decided without probing another branch", () => {
 		for (const command of [
 			"git >/dev/null commit -m x",
