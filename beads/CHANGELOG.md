@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.11](https://github.com/srobroek/omp-plugins/compare/beads--v1.0.10...beads--v1.0.11) (2026-09-10)
+
+
+### Documentation
+
+* **beads:** the plugin pins BEADS_DIR; agents must not demand an export ([#144](https://github.com/srobroek/omp-plugins/issues/144)) ([b27e33b](https://github.com/srobroek/omp-plugins/commit/b27e33b3c65ce529caf00dd1fa5c4e4872ad08b5))
+
 ## [1.0.10](https://github.com/srobroek/omp-plugins/compare/beads--v1.0.9...beads--v1.0.10) (2026-09-10)
 
 
