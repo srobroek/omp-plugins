@@ -712,7 +712,7 @@ function xargsPayloadIndex(remaining: Token[]): number | "unreadable" {
 		}
 		if (XARGS_FLAG_OPTIONS[name] === true) continue;
 		if (XARGS_VALUE_OPTIONS[name] === true) {
-			// A separated value (`-n 1`, `--replace X`) takes the next word; `--name=value` does not.
+			// A separated value (`-n 1`, `--max-args 1`) takes the next word; `--name=value` does not.
 			if (eq === -1) i++;
 			continue;
 		}
