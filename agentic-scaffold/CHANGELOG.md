@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.3](https://github.com/srobroek/omp-plugins/compare/agentic-scaffold--v0.4.2...agentic-scaffold--v0.4.3) (2026-09-10)
+
+
+### Bug Fixes
+
+* **agentic-scaffold:** name the finish state so a pending commit is not reported as failure ([#113](https://github.com/srobroek/omp-plugins/issues/113)) ([94b837c](https://github.com/srobroek/omp-plugins/commit/94b837c6032b402c849dd746e07c64febb0823e8))
+
 ## [0.4.2](https://github.com/srobroek/omp-plugins/compare/agentic-scaffold--v0.4.1...agentic-scaffold--v0.4.2) (2026-09-10)
 
 
