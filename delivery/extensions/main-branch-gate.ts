@@ -752,6 +752,21 @@ function scanInvocations(command: string): CommitInvocation[] {
 			if (name.startsWith("GIT_CONFIG_")) commandGitConfig = true;
 			continue;
 		}
+		const commandBase = token.text.split("/").at(-1) ?? "";
+		if (["bash", "sh", "zsh", "dash", "ksh"].includes(commandBase)) {
+			const shellArgs = tokens
+				.slice(i + 1)
+				.filter((candidate) => !isSep(candidate));
+			if (
+				shellArgs.some(
+					(candidate) =>
+						candidate.text === "-c" || /^-[^-]*c/.test(candidate.text),
+				)
+			)
+				out.push({ repoDir: null, dryRun: false, retargeted: true });
+			atCommand = false;
+			continue;
+		}
 		if (
 			token.text === "nice" ||
 			token.text === "nohup" ||
@@ -775,6 +790,12 @@ function scanInvocations(command: string): CommitInvocation[] {
 					k++;
 					continue;
 				}
+				if (
+					token.text === "exec" &&
+					((operand.text.startsWith("-a") && operand.text !== "-a") ||
+						operand.text.startsWith("--argv0="))
+				)
+					continue;
 				if (operand.text.startsWith("-")) continue;
 				break;
 			}
