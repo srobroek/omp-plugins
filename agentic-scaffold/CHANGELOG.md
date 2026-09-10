@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.9](https://github.com/srobroek/omp-plugins/compare/agentic-scaffold--v0.5.8...agentic-scaffold--v0.5.9) (2026-09-10)
+
+
+### Documentation
+
+* **agentic-scaffold:** every stop is an ask; inspect and preflight end in a confirmation ([#146](https://github.com/srobroek/omp-plugins/issues/146)) ([fb486f9](https://github.com/srobroek/omp-plugins/commit/fb486f96fe88d0ccd80eb5470f5ee99213407862))
+
 ## [0.5.8](https://github.com/srobroek/omp-plugins/compare/agentic-scaffold--v0.5.7...agentic-scaffold--v0.5.8) (2026-09-10)
 
 
