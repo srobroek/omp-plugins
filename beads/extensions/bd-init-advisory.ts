@@ -7,8 +7,8 @@
  * `git log --grep='bd init'` and `man bd init` — and on each other's correct form.
  * skip-hooks demanded `--skip-hooks`, prefer-server demanded a server flag, and
  * the invocation this estate actually wants, `bd init --init-if-missing --skip-hooks`
- * plus an exported `BEADS_DIR`, was blocked by skip-hooks' sibling anyway.
- * Verified live 2026-08-25.
+ * under the pinned database, was blocked by skip-hooks' sibling anyway.
+ * Verified live 2026-08-25. Since 2026-09-10 the plugin pins `BEADS_DIR` itself.
  *
  * Two things follow. Argv is the only honest trigger: a mention inside a quoted
  * string, a `--grep` pattern, or another program's arguments is not an
@@ -118,7 +118,7 @@ const BEADS_DIR_ADVICE =
 	"Unpinned, a read from a directory with no `.beads/` reports `No active beads " +
 	"workspace found`, and a copied checkout can resolve a personal database " +
 	"instead (`$HOME/.beads` exists on this machine).";
-	"`--claim` with none of it reaching the original.";
+
 
 const SKIP_HOOKS_ADVICE =
 	"`--skip-hooks` wherever hooks are already managed: plain `bd init` repoints " +

@@ -21,9 +21,9 @@ GOTCHA Unpinned, a read from a directory with no `.beads/` reports
 GOTCHA Something must own the pin. A harness that copies a checkout without
   setting `BEADS_DIR` still splits the database. Measured: a copied 54-bead
   database accepted `create` and `--claim` with none of it reaching the original.
-NOT A Dolt server flag as the remedy for worktrees or copied checkouts. Pin
-  `BEADS_DIR`. Server mode is a different layout with its own lifecycle; see
-  rule://beads-storage-mode.
+NOT A Dolt server flag as the remedy for worktrees or copied checkouts. The
+  plugin's pin covers both. Server mode is a different layout with its own
+  lifecycle; see rule://beads-storage-mode.
 
 GOTCHA `bd init` derives a Dolt remote from `git remote origin` on its own.
   Where that database already exists it fails with `can't create database
