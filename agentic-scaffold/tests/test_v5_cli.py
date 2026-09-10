@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import pytest
 import subprocess
 import sys
 from pathlib import Path
@@ -53,7 +54,7 @@ def test_apply_dry_run_does_not_write_and_reports_order(tmp_path: Path) -> None:
     root = git_root(tmp_path)
     answer(root)
     before = sorted(str(path.relative_to(root)) for path in root.rglob("*") if path.is_file())
-    result = run("apply", "--root", str(root), "--dry-run", "--allow-dirty")
+    result = run("apply", "--root", str(root), "--dry-run")
     after = sorted(str(path.relative_to(root)) for path in root.rglob("*") if path.is_file())
     assert before == after
     names = [row["name"] for row in payload(result)["stages"]]
@@ -301,7 +302,7 @@ def test_dry_run_returns_a_compact_plan_summary(tmp_path: Path) -> None:
     subprocess.run(["git", "add", "-A"], cwd=root, check=True, capture_output=True)
     subprocess.run(["git", "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-m", "init"], cwd=root, check=True, capture_output=True)
     assert run("answers", "write", "--root", str(root), "--profile", "agentic-repo", "--set", "layers=base,agentic", "--set", "name=demo").returncode == 0
-    result = run("apply", "--root", str(root), "--dry-run", "--allow-dirty")
+    result = run("apply", "--root", str(root), "--dry-run")
     body = payload(result)
     summary = body["planSummary"]
     assert summary["layers"] == ["base", "agentic"] and summary["counts"] and summary["lines"]
@@ -322,3 +323,41 @@ def test_bd_environment_does_not_choose_a_database(tmp_path: Path, monkeypatch) 
     assert env["BEADS_ACTOR"].startswith("agentic-scaffold/")
     monkeypatch.delenv("BEADS_DIR")
     assert "BEADS_DIR" not in scaffold._bd_environment(root)  # bd resolves from cwd=root
+
+
+@pytest.mark.parametrize("profile", sorted(p.stem for p in (ROOT / "profiles").glob("*.toml")))
+def test_answers_write_twice_stays_valid_toml_for_every_profile(tmp_path: Path, profile: str) -> None:
+    import tomllib
+
+    root = git_root(tmp_path)
+    probe = run("answers", "write", "--root", str(root), "--profile", profile, "--set", "name=demo")
+    defaults = ",".join(payload(probe).get("missing", [])) if probe.returncode == 3 else ""
+    for _ in range(2):  # the second write reads the first file back; meta keys must not be re-emitted
+        args = ["answers", "write", "--root", str(root), "--profile", profile, "--set", "name=demo"]
+        if defaults:
+            args += ["--defaults-for", defaults]
+        result = run(*args)
+        assert result.returncode == 0, result.stdout + result.stderr
+    text = (root / ".omp/scaffold-answers.toml").read_text()
+    data = tomllib.loads(text)  # raises on a duplicate key
+    assert data["profile"] == profile and "interviewed_at" in data
+    assert "defaults_for" not in data["vars"] and "interviewed_at" not in data["vars"]
+    assert text.index("interviewed_at") < text.index("[vars]")
+
+
+def test_preflight_hard_fails_on_a_dirty_tree_with_no_bypass(tmp_path: Path) -> None:
+    root = git_root(tmp_path)
+    (root / "README.md").write_text("# demo\n")
+    subprocess.run(["git", "add", "-A"], cwd=root, check=True, capture_output=True)
+    subprocess.run(["git", "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-m", "init"], cwd=root, check=True, capture_output=True)
+    clean = run("preflight", "--root", str(root), "--profile", "agentic-repo")
+    assert clean.returncode == 0, clean.stdout
+    (root / "notes.txt").write_text("uncommitted\n")
+    dirty = run("preflight", "--root", str(root), "--profile", "agentic-repo")
+    assert dirty.returncode != 0
+    assert any("work tree is dirty" in line for line in payload(dirty)["hard"])
+    assert run("preflight", "--root", str(root), "--profile", "agentic-repo", "--allow-dirty").returncode == 2  # unknown flag: argparse
+    (root / ".omp").mkdir(exist_ok=True)
+    (root / ".omp/scaffold-answers.toml").write_text('profile = "agentic-repo"\nlayers = []\n[vars]\n')
+    (root / "notes.txt").unlink()
+    assert run("preflight", "--root", str(root), "--profile", "agentic-repo").returncode == 0  # scaffold state is not dirt

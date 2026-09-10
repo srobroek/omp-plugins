@@ -311,6 +311,10 @@ def toml_value(value: Any) -> str:
     return json.dumps(str(value))
 
 
+# Answer-file bookkeeping that is never a template variable.
+ANSWER_META_KEYS = ("defaults_for", "interviewed_at")
+
+
 def write_answers(root: Path, profile: str, layers: list[str], values: dict[str, str], extra: dict[str, Any] | None = None) -> None:
     path = answers_path(root)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -323,27 +327,29 @@ def write_answers(root: Path, profile: str, layers: list[str], values: dict[str,
         except (OSError, json.JSONDecodeError):
             plugin_version = ""
     lines.append(f"plugin_version = {toml_value(plugin_version)}")
+    extra = extra or {}
+    # Top-level scalars go before the first table header; anything written after `[vars]`
+    # or `[[members]]` belongs to that table in TOML, and a later read would then feed them
+    # back through `values` and write them twice.
+    for key in [key for key, value in extra.items() if key != "members" and value is not None]:
+        lines.append(f"{toml_key(key)} = {toml_value(extra[key])}")
     lines.extend(["", "[vars]"])
-    reserved = {"name", "package", "package_kebab", "description", "profile"}
+    reserved = {"name", "package", "package_kebab", "description", "profile", *ANSWER_META_KEYS}
     for key in sorted(values):
         if key not in reserved:
             lines.append(f"{toml_key(key)} = {toml_value(values[key])}")
     for key in ("name", "description"):
         if key in values:
             lines.append(f"{toml_key(key)} = {toml_value(values[key])}")
-    if extra:
-        members = extra.get("members")
-        if isinstance(members, list):
-            for item in members:
-                if not isinstance(item, dict):
-                    continue
-                lines.extend(["", "[[members]]"])
-                for key in ("name", "layer", "kind", "dir"):
-                    if item.get(key):
-                        lines.append(f"{key} = {toml_value(item[key])}")
-        for key, value in extra.items():
-            if key != "members":
-                lines.extend(["", f"{key} = {toml_value(value)}"])
+    members = extra.get("members")
+    if isinstance(members, list):
+        for item in members:
+            if not isinstance(item, dict):
+                continue
+            lines.extend(["", "[[members]]"])
+            for key in ("name", "layer", "kind", "dir"):
+                if item.get(key):
+                    lines.append(f"{key} = {toml_value(item[key])}")
     _write_under_root(root, path, "\n".join(lines) + "\n")
 
 
@@ -1675,17 +1681,18 @@ def _graphify_mcp_available(root: Path) -> bool:
     return shutil.which("graphify-mcp") is not None
 
 
-def preflight(root: Path, profile_name: str | None, *, strict: bool = False, allow_dirty: bool = False) -> tuple[dict[str, Any], int]:
+def preflight(root: Path, profile_name: str | None, *, strict: bool = False) -> tuple[dict[str, Any], int]:
     root = validate_root(root, require_git=True)
     hard: list[str] = []
     soft: list[str] = []
     info = inspect(root)
-    if not allow_dirty:
-        status = subprocess.run(["git", "status", "--porcelain"], cwd=root, capture_output=True, text=True, check=False)
-        owned = _scaffold_owned_paths(root)
-        dirty = [line for line in status.stdout.splitlines() if line.strip() and not _scaffold_state_path(line[3:].strip()) and not _owned_status_line(line, owned)]
-        if dirty:
-            hard.append("git work tree is dirty (use --allow-dirty after review)")
+    # A clean tree is a prerequisite: scaffold state under .omp/ is the only tolerated dirt, because
+    # the interview writes it before apply. There is no bypass; use a clean branch or worktree.
+    status = subprocess.run(["git", "status", "--porcelain"], cwd=root, capture_output=True, text=True, check=False)
+    owned = _scaffold_owned_paths(root)
+    dirty = [line for line in status.stdout.splitlines() if line.strip() and not _scaffold_state_path(line[3:].strip()) and not _owned_status_line(line, owned)]
+    if dirty:
+        hard.append("git work tree is dirty: commit or stash your changes, or scaffold in a clean worktree")
     profile = profile_name or str(info.get("suggested_profile", "agentic-repo"))
     try:
         _, _, layers, values = resolve_selection(root, profile, None, {}, [])
@@ -1771,6 +1778,18 @@ def answers_write_interview(root: Path, profile_name: str | None, name: str | No
         supplied["name"] = name
     if profile_name and not supplied.get("profile"):
         supplied["profile"] = profile_name  # --profile answers the profile question
+    # Answers already recorded for this run stand: a re-run must not demand them again, and the
+    # first write turns an empty repository into a brownfield one whose interview asks more.
+    recorded = read_answers(root)
+    if str(recorded.get("profile", profile)) == profile:
+        recorded_layers = recorded.get("layers")
+        if isinstance(recorded_layers, list) and recorded_layers and not supplied.get("layers"):
+            supplied["layers"] = ",".join(str(item) for item in recorded_layers)
+        recorded_vars = recorded.get("vars", {})
+        if isinstance(recorded_vars, dict):
+            for key, value in recorded_vars.items():
+                if str(key) not in supplied and str(key) not in ANSWER_META_KEYS and value not in (None, ""):
+                    supplied[str(key)] = str(value)
     missing = [str(row["id"]) for row in questions["questions"] if row.get("required") and not supplied.get(str(row["id"])) and str(row["id"]) not in defaults_for]
     if missing:
         return {"ok": False, "missing": missing, "questions": questions["questions"]}, EXIT_NEEDS_INPUT
@@ -1789,8 +1808,8 @@ def answers_write_interview(root: Path, profile_name: str | None, name: str | No
     return {"ok": True, "path": str(answers_path(root)), "profile": values_profile, "layers": layers, "defaults_for": defaults_for, "vars": values}, 0
 
 
-def _run_stage(root: Path, name: str, profile: str, *, allow_dirty: bool = False, bump_tools: bool = False) -> tuple[dict[str, Any], int]:
-    if name == "preflight": return preflight(root, profile, strict=False, allow_dirty=allow_dirty)
+def _run_stage(root: Path, name: str, profile: str, *, bump_tools: bool = False) -> tuple[dict[str, Any], int]:
+    if name == "preflight": return preflight(root, profile, strict=False)
     if name == "plan":
         result = plan_payload(root, profile, None, {}, [], None, set())
         return result[0], result[4]
@@ -1806,7 +1825,7 @@ def _run_stage(root: Path, name: str, profile: str, *, allow_dirty: bool = False
 APPLY_STAGES = ("preflight", "plan", "render", "tools-install", "hooks-install", "plugins-sync", "context-refresh", "doctor")
 
 
-def apply_pipeline(root: Path, profile: str | None, *, dry_run: bool = False, stage: str | None = None, allow_dirty: bool = False, bump_tools: bool = False) -> tuple[dict[str, Any], int]:
+def apply_pipeline(root: Path, profile: str | None, *, dry_run: bool = False, stage: str | None = None, bump_tools: bool = False) -> tuple[dict[str, Any], int]:
     root = validate_root(root, require_git=True)
     answers = read_answers(root)
     selected = profile or str(answers.get("profile", ""))
@@ -1816,7 +1835,7 @@ def apply_pipeline(root: Path, profile: str | None, *, dry_run: bool = False, st
     if stage and stage not in APPLY_STAGES:
         return {"ok": False, "stages": [], "next": "unknown stage"}, EXIT_ERROR
     if dry_run:
-        pf, pc = preflight(root, selected, strict=False, allow_dirty=allow_dirty)
+        pf, pc = preflight(root, selected, strict=False)
         plan, _, _, _, plan_code = plan_payload(root, selected, None, {}, [], None, set())
         counts: dict[str, int] = {}
         lines: list[str] = []
@@ -1837,7 +1856,7 @@ def apply_pipeline(root: Path, profile: str | None, *, dry_run: bool = False, st
     rows: list[dict[str, Any]] = []
     for name in requested:
         started = datetime.now(UTC)
-        summary, code = _run_stage(root, name, selected, allow_dirty=allow_dirty, bump_tools=bump_tools)
+        summary, code = _run_stage(root, name, selected, bump_tools=bump_tools)
         status = "ok" if code == 0 else "failed"
         row = {"name": name, "status": status, "seconds": round((datetime.now(UTC) - started).total_seconds(), 3), "summary": summary}
         rows.append(row)
@@ -1935,13 +1954,13 @@ def build_parser() -> argparse.ArgumentParser:
     profiles_parent = sub.add_parser("profiles"); profiles_parent.add_argument("--root", default="."); profiles = profiles_parent.add_subparsers(dest="profiles_command", required=True); profiles.add_parser("list")
     layers_parent = sub.add_parser("layers"); layers_parent.add_argument("--root", default="."); layers = layers_parent.add_subparsers(dest="layers_command", required=True); layers.add_parser("list"); show = layers.add_parser("show"); show.add_argument("layer")
     inspect_parser = sub.add_parser("inspect"); inspect_parser.add_argument("--root", default=".")
-    preflight_parser = sub.add_parser("preflight"); preflight_parser.add_argument("--root", default="."); preflight_parser.add_argument("--profile"); preflight_parser.add_argument("--strict", action="store_true"); preflight_parser.add_argument("--allow-dirty", action="store_true")
+    preflight_parser = sub.add_parser("preflight"); preflight_parser.add_argument("--root", default="."); preflight_parser.add_argument("--profile"); preflight_parser.add_argument("--strict", action="store_true")
     interview_parent = sub.add_parser("interview"); interview_parent.add_argument("--root", default="."); interview = interview_parent.add_subparsers(dest="interview_command", required=True).add_parser("questions"); interview.add_argument("--root", default=argparse.SUPPRESS); interview.add_argument("--profile")
     for action in ("plan", "render"):
         command = sub.add_parser(action); command.add_argument("--root", default="."); command.add_argument("--profile"); command.add_argument("--name"); command.add_argument("--var", action="append", default=[]); command.add_argument("--layer", action="append", default=[]); command.add_argument("--force-layer"); command.add_argument("--adopt", action="append", default=[])
         if action == "render": command.add_argument("--dry-run", action="store_true"); command.add_argument("--bump-tools", action="store_true")
     answers_parent = sub.add_parser("answers"); answers_parent.add_argument("--root", default="."); answers = answers_parent.add_subparsers(dest="answers_command", required=True).add_parser("write"); answers.add_argument("--root", default=argparse.SUPPRESS); answers.add_argument("--profile"); answers.add_argument("--name"); answers.add_argument("--var", action="append", default=[]); answers.add_argument("--set", action="append", default=[]); answers.add_argument("--layer", action="append", default=[]); answers.add_argument("--defaults-for", default="")
-    apply_parser = sub.add_parser("apply"); apply_parser.add_argument("--root", default="."); apply_parser.add_argument("--profile"); apply_parser.add_argument("--dry-run", action="store_true"); apply_parser.add_argument("--stage"); apply_parser.add_argument("--allow-dirty", action="store_true"); apply_parser.add_argument("--bump-tools", action="store_true")
+    apply_parser = sub.add_parser("apply"); apply_parser.add_argument("--root", default="."); apply_parser.add_argument("--profile"); apply_parser.add_argument("--dry-run", action="store_true"); apply_parser.add_argument("--stage"); apply_parser.add_argument("--bump-tools", action="store_true")
     finish_parser = sub.add_parser("finish"); finish_parser.add_argument("--root", default=".")
     abort_parser = sub.add_parser("abort"); abort_parser.add_argument("--root", default=".")
     member_parent = sub.add_parser("member"); member_parent.add_argument("--root", default="."); member = member_parent.add_subparsers(dest="member_command", required=True)
@@ -1970,7 +1989,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "inspect":
         emit(inspect(root), root); return 0
     if args.command == "preflight":
-        payload, code = preflight(root, args.profile, strict=args.strict, allow_dirty=args.allow_dirty); emit(payload, root); return code
+        payload, code = preflight(root, args.profile, strict=args.strict); emit(payload, root); return code
     if args.command == "interview":
         emit(interview_questions(root, args.profile), root); return 0
     if args.command in {"plan", "render"}:
@@ -1988,7 +2007,7 @@ def main(argv: list[str] | None = None) -> int:
         payload, code = answers_write_interview(root, args.profile, args.name, overrides, defaults_for, args.layer)
         emit(payload, root); return code
     if args.command == "apply":
-        payload, code = apply_pipeline(root, args.profile, dry_run=args.dry_run, stage=args.stage, allow_dirty=args.allow_dirty, bump_tools=args.bump_tools); emit(payload, root); return code
+        payload, code = apply_pipeline(root, args.profile, dry_run=args.dry_run, stage=args.stage, bump_tools=args.bump_tools); emit(payload, root); return code
     if args.command == "finish":
         payload, code = finish(root); emit(payload, root); return code
     if args.command == "abort":

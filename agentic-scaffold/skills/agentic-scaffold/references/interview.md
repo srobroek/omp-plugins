@@ -43,7 +43,8 @@ Do not ask framework, provider, or tool-version questions.
 
 Confirm the detected profile, pick layers from the emitted catalogue (the default preselects the
 profile's layers; existing files a layer owns are skipped, never replaced), and resolve every emitted `finding:<kind>`. Findings include
-unowned `.omp/*` files, dirty state, and ambiguous managed markers. Ask the human which resolution
+unowned `.omp/*` files and ambiguous managed markers; a dirty work tree is never a question, it is
+a preflight prerequisite. Ask the human which resolution
 to use; do not turn a proposal into an answer without explicit approval.
 
 Hook wiring is not a question. Preflight detects the hook manager (`hook_strategy` in its JSON)
