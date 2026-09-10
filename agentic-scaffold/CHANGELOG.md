@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.2](https://github.com/srobroek/omp-plugins/compare/agentic-scaffold--v0.3.1...agentic-scaffold--v0.3.2) (2026-09-10)
+
+
+### Bug Fixes
+
+* **agentic-scaffold:** count a project plugin as installed only while its install path exists ([#106](https://github.com/srobroek/omp-plugins/issues/106)) ([3d9797c](https://github.com/srobroek/omp-plugins/commit/3d9797c82baef68223e0c7ad023addfc325c1bf6))
+
 ## [0.3.1](https://github.com/srobroek/omp-plugins/compare/agentic-scaffold--v0.3.0...agentic-scaffold--v0.3.1) (2026-09-10)
 
 

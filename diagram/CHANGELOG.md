@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.4](https://github.com/srobroek/omp-plugins/compare/diagram--v0.2.3...diagram--v0.2.4) (2026-09-10)
+
+
+### Documentation
+
+* **mcp:** clarify active profile config paths ([#104](https://github.com/srobroek/omp-plugins/issues/104)) ([4a686ed](https://github.com/srobroek/omp-plugins/commit/4a686edac6e92841f12f9bca81c2a96760662274))
+
 ## [0.2.3](https://github.com/srobroek/omp-plugins/compare/diagram--v0.2.2...diagram--v0.2.3) (2026-09-10)
 
 
