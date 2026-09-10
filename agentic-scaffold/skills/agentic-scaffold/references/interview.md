@@ -32,3 +32,11 @@ python3 skill://agentic-scaffold/scripts/scaffold.py answers write --root R --pr
 ```
 
 Precedence is CLI `--var`/`--set` > profile `[vars]` > layer `[vars]`. `--layer` appends for the run and is stored in the answers file.
+
+## Workspace questions
+
+Ask `layout: single | monorepo` after kind and language. Default is `single`.
+
+For `monorepo`, ask a bounded repeated set for each member: name, language, and kind. Use `member add --name N --layer lang/X --kind K`. Stop when the user says done. Store members as `[[members]]` in the answers file.
+
+For brownfield work, detect a workspace manifest during `inspect`. Offer `member import --dir packages/name --layer lang/X`. Import records the member and preserves existing member files.

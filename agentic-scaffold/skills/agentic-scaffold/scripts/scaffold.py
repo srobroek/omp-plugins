@@ -179,11 +179,52 @@ def layer_defaults(layers: list[str]) -> dict[str, str]:
             for key, value in raw.items():
                 values[str(key)] = value_default(value)
     return values
+def member_family(layer: str) -> str:
+    """Return the language family for a nested member layer."""
+    return layer.split("/", 1)[1] if layer.startswith("lang/") else layer.rsplit("/", 1)[-1]
+
+
+def member_dir_for(name: str, layer: str, kind: str = "lib") -> str:
+    family = member_family(layer)
+    if family in {"python", "ts"}:
+        return f"packages/{name}"
+    if family == "rust":
+        return f"crates/{name}"
+    if family == "go":
+        return f"services/{name}" if kind == "service" else f"cmd/{name}"
+    return f"packages/{name}"
+
+
+def answers_members(root: Path) -> list[dict[str, str]]:
+    raw = read_answers(root).get("members", [])
+    if not isinstance(raw, list):
+        return []
+    result: list[dict[str, str]] = []
+    for entry in raw:
+        if isinstance(entry, dict) and entry.get("name") and entry.get("layer"):
+            name = str(entry["name"])
+            layer = str(entry["layer"])
+            kind = str(entry.get("kind", "lib"))
+            result.append({"name": name, "layer": layer, "kind": kind, "dir": str(entry.get("dir") or member_dir_for(name, layer, kind))})
+    return result
+
+
+def workspace_members_values(members: list[dict[str, str]]) -> list[dict[str, str]]:
+    return [{"name": str(item["name"]), "layer": str(item["layer"]), "kind": str(item.get("kind", "lib")), "dir": str(item.get("dir") or member_dir_for(str(item["name"]), str(item["layer"]), str(item.get("kind", "lib"))))} for item in members]
+
+
+def member_values(values: dict[str, str], member: dict[str, str]) -> dict[str, str]:
+    scoped = dict(values)
+    name = str(member["name"])
+    scoped.update({"name": name, "member": name, "member_name": name, "member_dir": str(member["dir"]), "kind": str(member.get("kind", "lib")), "layer": str(member["layer"])})
+    scoped["package"] = re.sub(r"[^A-Za-z0-9]+", "_", name).strip("_").lower() or "member"
+    scoped["package_kebab"] = re.sub(r"[^A-Za-z0-9]+", "-", name).strip("-").lower() or "member"
+    scoped["language"] = member_family(str(member["layer"]))
+    return scoped
 
 
 def answers_path(root: Path) -> Path:
     return root / ".omp" / "scaffold-answers.toml"
-
 
 def read_answers(root: Path) -> dict[str, Any]:
     path = answers_path(root)
@@ -212,8 +253,7 @@ def write_answers(root: Path, profile: str, layers: list[str], values: dict[str,
         except (OSError, json.JSONDecodeError):
             plugin_version = ""
     lines.append(f"plugin_version = {toml_value(plugin_version)}")
-    lines.append("")
-    lines.append("[vars]")
+    lines.extend(["", "[vars]"])
     reserved = {"name", "package", "package_kebab", "description", "profile"}
     for key in sorted(values):
         if key not in reserved:
@@ -222,9 +262,18 @@ def write_answers(root: Path, profile: str, layers: list[str], values: dict[str,
         if key in values:
             lines.append(f"{key} = {toml_value(values[key])}")
     if extra:
-        lines.append("")
+        members = extra.get("members")
+        if isinstance(members, list):
+            for item in members:
+                if not isinstance(item, dict):
+                    continue
+                lines.extend(["", "[[members]]"])
+                for key in ("name", "layer", "kind", "dir"):
+                    if item.get(key):
+                        lines.append(f"{key} = {toml_value(item[key])}")
         for key, value in extra.items():
-            lines.append(f"{key} = {toml_value(value)}")
+            if key != "members":
+                lines.extend(["", f"{key} = {toml_value(value)}"])
     path.write_text("\n".join(lines) + "\n")
 
 
@@ -293,19 +342,42 @@ def marker_pair(block: str, target: Path) -> tuple[str, str]:
     return template.format(kind="begin", block=block), template.format(kind="end", block=block)
 
 
-def collect(layers: list[str], values: dict[str, str]) -> tuple[dict[str, list[dict[str, Any]]], dict[str, list[dict[str, Any]]]]:
+def member_block_name(layer: str, values: dict[str, str]) -> str:
+    member = str(values.get("member", ""))
+    return f"{layer}:{member}" if member else layer
+
+
+def member_scoped_body(body: str, layer: str, values: dict[str, str]) -> str:
+    """Namespace recipes and commands emitted for a nested member."""
+    member = str(values.get("member", ""))
+    member_dir = str(values.get("member_dir", ""))
+    if not member:
+        return body
+    result: list[str] = []
+    for line in body.splitlines():
+        if re.match(r"^[A-Za-z0-9_-]+-(?:test|lint|fmt|check):", line):
+            line = re.sub(r"^([A-Za-z0-9_-]+)-", f"{member}-", line, count=1)
+        if line.startswith("    ") and line.strip() and not line.lstrip().startswith("#"):
+            command = line.strip()
+            if command.startswith(("uv ", "bun ", "cargo ", "go ", "terraform ")):
+                line = f"    cd {member_dir} && {command}"
+        result.append(line)
+    return "\n".join(result) + ("\n" if body.endswith("\n") else "")
+
+
+def collect(layers: list[str], values: dict[str, str], member_dir: str | None = None) -> tuple[dict[str, list[dict[str, Any]]], dict[str, list[dict[str, Any]]]]:
     direct: dict[str, list[dict[str, Any]]] = {}
     blocks: dict[str, list[dict[str, Any]]] = {}
     for layer in layers:
         directory = layer_dir(layer)
         config = load_layer(layer)
         tools = config.get("tools", {})
-        if isinstance(tools, dict) and tools:
+        if isinstance(tools, dict) and tools and member_dir is None:
             lines = ["[tools]"]
             for key, value in tools.items():
                 resolved = render_text(str(value), values)
                 lines.append(f"{key} = {toml_value(resolved)}")
-            blocks.setdefault("mise.toml", []).append({"layer": layer, "source": str(directory / "layer.toml"), "target": "mise.toml", "body": "\n".join(lines) + "\n"})
+            blocks.setdefault("mise.toml", []).append({"layer": layer, "block": member_block_name(layer, values), "source": str(directory / "layer.toml"), "target": "mise.toml", "body": "\n".join(lines) + "\n"})
         for source in sorted(directory.rglob("*")):
             if not source.is_file() or source.name in {"layer.toml", "README.md", ".DS_Store", "mise.toml.tmpl"}:
                 continue
@@ -315,9 +387,14 @@ def collect(layers: list[str], values: dict[str, str]) -> tuple[dict[str, list[d
             if relative.name.endswith(".block"):
                 target = target_path(Path(str(relative)[:-6]), values)
                 body = render_text(source.read_text(), values)
-                blocks.setdefault(str(target), []).append({"layer": layer, "source": str(source), "target": str(target), "body": body})
+                if member_dir:
+                    body = member_scoped_body(body, layer, values)
+                item = {"layer": layer, "block": member_block_name(layer, values), "source": str(source), "target": str(target), "body": body}
+                blocks.setdefault(str(target), []).append(item)
             else:
                 target = target_path(relative, values)
+                if member_dir:
+                    target = Path(member_dir) / target
                 data = source.read_text()
                 if source.suffix == ".tmpl":
                     data = render_text(data, values)
@@ -385,10 +462,10 @@ def classify(root: Path, layers: list[str], values: dict[str, str], force_layer:
             conflicts.append({"path": path, "reason": "managed block target is a symlink"})
         elif target.exists():
             text = target.read_text()
-            for layer in dict.fromkeys(item["layer"] for item in fragments):
-                if marker_state(text, layer, Path(path)) == "broken":
+            for block in dict.fromkeys(item.get("block", item["layer"]) for item in fragments):
+                if marker_state(text, block, Path(path)) == "broken":
                     row_class = "conflict"
-                    conflicts.append({"path": path, "layer": layer, "reason": "managed markers damaged or duplicated"})
+                    conflicts.append({"path": path, "layer": block, "reason": "managed markers damaged or duplicated"})
         rows.append({"path": path, "layer": [item["layer"] for item in fragments], "class": row_class})
     for left in layers:
         for right in load_layer(left).get("conflicts_with", []):
@@ -434,7 +511,16 @@ def plugin_sets(layers: list[str], values: dict[str, str]) -> dict[str, dict[str
 def plan_payload(root: Path, profile_name: str | None, name: str | None, overrides: dict[str, str], extra_layers: list[str], force_layer: str | None, adopts: set[str]) -> tuple[dict[str, Any], dict[str, Any], list[str], dict[str, str], int]:
     profile_name, profile, layers, values = resolve_selection(root, profile_name, name, overrides, extra_layers)
     rows, conflicts = classify(root, layers, values, force_layer, adopts)
-    payload = {"profile": profile_name, "layers": layers, "root": str(root), "files": rows, "conflicts": conflicts, "vars": values}
+    members = answers_members(root) if str(values.get("layout", "single")) == "monorepo" else []
+    seen_dirs: dict[str, str] = {}
+    for member in members:
+        directory = str(member["dir"])
+        rows.append({"path": directory, "layer": member["layer"], "member": member["name"], "class": "create" if not (root / directory).exists() else "skip"})
+        if directory in seen_dirs:
+            conflicts.append({"path": directory, "members": [seen_dirs[directory], member["name"]], "reason": "members claim the same directory"})
+        else:
+            seen_dirs[directory] = member["name"]
+    payload = {"profile": profile_name, "layers": layers, "root": str(root), "files": rows, "conflicts": conflicts, "vars": values, "members": members}
     return payload, profile, layers, values, EXIT_CONFLICT if conflicts else 0
 
 
@@ -592,6 +678,125 @@ def file_hash(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def render_release_members(root: Path, members: list[dict[str, str]], written: list[str]) -> None:
+    if not members:
+        return
+    release_types = {"python": "python", "ts": "node", "rust": "rust", "go": "go"}
+    packages: dict[str, dict[str, Any]] = {}
+    manifest: dict[str, str] = {}
+    for member in members:
+        family = member_family(member["layer"])
+        directory = str(member["dir"])
+        packages[directory] = {"release-type": release_types.get(family, "simple"), "component": member["name"], "extra-files": [f"{directory}/pyproject.toml" if family == "python" else f"{directory}/package.json" if family == "ts" else f"{directory}/Cargo.toml" if family == "rust" else f"{directory}/go.mod"]}
+        manifest[directory] = "0.1.0"
+    config = {"$schema": "https://raw.githubusercontent.com/googleapis/release-please/main/schemas/config.json", "include-component-in-tag": True, "packages": packages}
+    config_path = root / "release-please-config.json"
+    manifest_path = root / ".release-please-manifest.json"
+    config_path.write_text(json.dumps(config, indent=2) + "\n")
+    manifest_path.write_text(json.dumps(manifest, indent=2) + "\n")
+    written.extend(["release-please-config.json", ".release-please-manifest.json"])
+
+
+def render_workspace_manifest(root: Path, members: list[dict[str, str]], values: dict[str, str], written: list[str]) -> None:
+    """Render per-family workspace manifests without overwriting user files."""
+    families: dict[str, list[dict[str, str]]] = {}
+    for member in members:
+        families.setdefault(member_family(member["layer"]), []).append(member)
+    for family, family_members in families.items():
+        dirs = [str(item["dir"]) for item in family_members]
+        if family == "python":
+            path = root / "pyproject.toml"
+            text = "[tool.uv.workspace]\nmembers = [" + ", ".join(json.dumps(item) for item in dirs) + "]\n"
+        elif family == "ts":
+            path = root / "package.json"
+            text = json.dumps({"private": True, "workspaces": dirs}, indent=2) + "\n"
+        elif family == "rust":
+            path = root / "Cargo.toml"
+            text = "[workspace]\nmembers = [" + ", ".join(json.dumps(item) for item in dirs) + "]\n\n[workspace.lints]\n"
+        elif family == "go":
+            path = root / "go.work"
+            text = "go 1.23\n\nuse (\n" + "\n".join(f"    ./{item}" for item in dirs) + "\n)\n"
+        else:
+            continue
+        if not path.exists():
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(text)
+            written.append(str(path.relative_to(root)))
+        else:
+            old = path.read_text()
+            if family == "python" and "[tool.uv.workspace]" not in old:
+                path.write_text(old.rstrip() + "\n\n" + text)
+                written.append(str(path.relative_to(root)))
+            elif family == "ts":
+                try:
+                    data = json.loads(old)
+                    if "workspaces" not in data:
+                        data["workspaces"] = dirs
+                        path.write_text(json.dumps(data, indent=2) + "\n")
+                        written.append(str(path.relative_to(root)))
+                except json.JSONDecodeError:
+                    pass
+            elif family == "rust" and "[workspace]" not in old:
+                path.write_text(old.rstrip() + "\n\n" + text)
+                written.append(str(path.relative_to(root)))
+            elif family == "go" and "\nuse (" not in old:
+                path.write_text(old.rstrip() + "\n\n" + text.split("\n\n", 1)[1])
+                written.append(str(path.relative_to(root)))
+
+
+def render_workspace_aggregates(root: Path, members: list[dict[str, str]], written: list[str]) -> None:
+    if not members:
+        return
+    just = root / "justfile"
+    if just.exists():
+        text = just.read_text()
+        begin = "# agentic-scaffold:begin workspace-members"
+        end = "# agentic-scaffold:end workspace-members"
+        recipes = [begin, "test: " + " ".join(f"{item['name']}-test" for item in members), "lint: " + " ".join(f"{item['name']}-lint" for item in members), "check: test lint", end]
+        fragment = "\n".join(recipes) + "\n"
+        if begin in text and end in text:
+            start, finish = text.index(begin), text.index(end) + len(end)
+            updated = text[:start] + fragment.rstrip("\n") + text[finish:]
+        else:
+            updated = text.rstrip("\n") + "\n\n" + fragment
+        if updated != text:
+            just.write_text(updated)
+            written.append("justfile")
+
+
+def render_member_layers(root: Path, members: list[dict[str, str]], values: dict[str, str], written: list[str], skipped: list[str], drifted: list[str], preserve_paths: set[str]) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for member in members:
+        layer = str(member["layer"])
+        load_layer(layer)
+        scoped = member_values(values, member)
+        direct, blocks = collect([layer], scoped, str(member["dir"]))
+        for path, owners in sorted(direct.items()):
+            target = root / path
+            rows.append({"path": path, "layer": layer, "member": member["name"], "class": "create" if not target.exists() else "skip"})
+            if target.exists():
+                skipped.append(path)
+                continue
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(owners[-1]["data"])
+            written.append(path)
+        for path, fragments in sorted(blocks.items()):
+            target = root / path
+            current = target.read_text() if target.exists() else ""
+            for block in dict.fromkeys(item.get("block", item["layer"]) for item in fragments):
+                body = "\n".join(item["body"].rstrip("\n") for item in fragments if item.get("block", item["layer"]) == block)
+                try:
+                    current = replace_block(current, body, block, Path(path))
+                except ValueError:
+                    continue
+            if current != (target.read_text() if target.exists() else ""):
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_text(current)
+                written.append(path)
+            rows.append({"path": path, "layer": layer, "member": member["name"], "class": "update-block"})
+    return rows
+
+
 def render(root: Path, profile_name: str | None, name: str | None, overrides: dict[str, str], extra_layers: list[str], force_layer: str | None = None, adopts: set[str] | None = None, dry_run: bool = False, preserve_paths: set[str] | None = None) -> tuple[dict[str, Any], int]:
     adopts = adopts or set()
     preserve_paths = preserve_paths or set()
@@ -633,13 +838,13 @@ def render(root: Path, profile_name: str | None, name: str | None, overrides: di
         target = root / path
         target.parent.mkdir(parents=True, exist_ok=True)
         current = target.read_text() if target.exists() else ""
-        for layer in dict.fromkeys(item["layer"] for item in fragments):
-            body = "\n".join(item["body"].rstrip("\n") for item in fragments if item["layer"] == layer)
+        for block in dict.fromkeys(item.get("block", item["layer"]) for item in fragments):
+            body = "\n".join(item["body"].rstrip("\n") for item in fragments if item.get("block", item["layer"]) == block)
             try:
                 if target.name == "mise.toml":
-                    current = merge_tools_block(current, body, layer, Path(path))
+                    current = merge_tools_block(current, body, block, Path(path))
                 else:
-                    current = replace_block(current, body, layer, Path(path))
+                    current = replace_block(current, body, block, Path(path))
             except ValueError as exc:
                 return {**plan, "error": str(exc)}, EXIT_CONFLICT
         if current != (target.read_text() if target.exists() else ""):
@@ -647,13 +852,22 @@ def render(root: Path, profile_name: str | None, name: str | None, overrides: di
             written.append(path)
         else:
             skipped.append(path)
+    members = answers_members(root) if str(values.get("layout", "single")) == "monorepo" else []
+    member_rows: list[dict[str, Any]] = []
+    if members:
+        member_rows = render_member_layers(root, members, values, written, skipped, drifted, preserve_paths)
+        render_workspace_manifest(root, members, values, written)
+        render_workspace_aggregates(root, members, written)
+        render_release_members(root, members, written)
     additions = write_plugins(root, plugin_sets(layers, values))
     root_meta = metadata_path(root)
     root_meta.parent.mkdir(parents=True, exist_ok=True)
     owned_hashes = {path: file_hash(root / path) for path in direct if (root / path).is_file()}
-    root_meta.write_text(json.dumps({"profile": profile_name, "layers": layers, "vars": values, "owned_hashes": owned_hashes, "plugin_version": read_answers(root).get("plugin_version", "")}, indent=2, sort_keys=True) + "\n")
-    write_answers(root, profile_name or "", layers, values)
-    return {**plan, "written": written, "skipped": skipped, "drifted": drifted, "plugin_additions": additions}, 0
+    member_meta = [{"name": item["name"], "layer": item["layer"], "kind": item["kind"], "dir": item["dir"], "owned_hashes": {str(path.relative_to(root)): file_hash(path) for path in (root / item["dir"]).rglob("*") if path.is_file()}} for item in members]
+    resolved_profile = str(plan.get("profile") or profile_name or values.get("profile") or "")
+    root_meta.write_text(json.dumps({"profile": resolved_profile, "layers": layers, "vars": values, "layout": values.get("layout", "single"), "members": member_meta, "owned_hashes": owned_hashes, "plugin_version": read_answers(root).get("plugin_version", "")}, indent=2, sort_keys=True) + "\n")
+    write_answers(root, resolved_profile, layers, values, {"members": members} if members else None)
+    return {**plan, "files": plan.get("files", []) + member_rows, "written": written, "skipped": skipped, "drifted": drifted, "plugin_additions": additions, "members": members}, 0
 
 
 def parse_vars(raw: list[str]) -> dict[str, str]:
@@ -868,6 +1082,59 @@ def plugins_sync(root: Path, check: bool) -> tuple[dict[str, Any], int]:
                         return {"error": install.stderr.strip() or f"failed to install {plugin}@{name}"}, EXIT_ERROR
                     installed = installed_plugins(root / ".omp/plugins/installed_plugins.json")
     return {"desired": desired, "drift": drift}, EXIT_DRIFT if check and drift else 0
+def member_answers_write(root: Path, members: list[dict[str, str]]) -> dict[str, Any]:
+    answers = read_answers(root)
+    profile_name = str(answers.get("profile", ""))
+    if not profile_name:
+        fail("member commands require .omp/scaffold-answers.toml", 2)
+    _, _, layers, values = resolve_selection(root, profile_name, None, {}, [])
+    write_answers(root, profile_name, layers, values, {"members": members})
+    return {"path": str(answers_path(root)), "members": members}
+
+
+def member_add(root: Path, name: str, layer: str, kind: str) -> dict[str, Any]:
+    if not layer.startswith("lang/"):
+        fail("member layer must be lang/<language>", 2)
+    load_layer(layer)
+    members = answers_members(root)
+    if any(item["name"] == name for item in members):
+        fail(f"member already exists: {name}", EXIT_CONFLICT)
+    item = {"name": name, "layer": layer, "kind": kind, "dir": member_dir_for(name, layer, kind)}
+    members.append(item)
+    return {"added": item, **member_answers_write(root, members)}
+
+
+def member_list(root: Path) -> dict[str, Any]:
+    return {"members": answers_members(root)}
+
+
+def member_remove(root: Path, name: str) -> dict[str, Any]:
+    members = answers_members(root)
+    selected = next((item for item in members if item["name"] == name), None)
+    if selected is None:
+        fail(f"member not found: {name}", 2)
+    remaining = [item for item in members if item["name"] != name]
+    payload = member_answers_write(root, remaining)
+    payload.update({"removed": selected, "directory": selected["dir"], "deleted": False})
+    return payload
+
+
+def member_import(root: Path, directory: str, layer: str, kind: str) -> dict[str, Any]:
+    relative = Path(directory)
+    name = relative.name
+    if relative.is_absolute():
+        try:
+            relative = relative.resolve().relative_to(root.resolve())
+        except ValueError:
+            fail("member directory must be inside root", 2)
+    members = answers_members(root)
+    if any(item["dir"] == str(relative) for item in members):
+        fail(f"member already exists: {relative}", EXIT_CONFLICT)
+    item = {"name": name, "layer": layer, "kind": kind, "dir": str(relative)}
+    members.append(item)
+    return {"imported": item, **member_answers_write(root, members)}
+
+
 
 
 
@@ -987,9 +1254,9 @@ def doctor(root: Path) -> tuple[dict[str, Any], int]:
             drift.append(f"managed file missing:{path}")
             continue
         text = target.read_text()
-        for layer in dict.fromkeys(item["layer"] for item in fragments):
-            if marker_state(text, layer, Path(path)) != "ok":
-                drift.append(f"managed markers damaged:{path}:{layer}")
+        for block in dict.fromkeys(item.get("block", item["layer"]) for item in fragments):
+            if marker_state(text, block, Path(path)) != "ok":
+                drift.append(f"managed markers damaged:{path}:{block}")
     payload = {"profile": profile_name, "layers": layers, "checks": {"answers": answers_path(root).is_file(), "tools": True, "plugins": plugin_result, "hooks": {"declared": declared_hooks, "installed": installed_hooks, "status": hook_status, "strategy": hook_strategy, "stages": hook_report.get("stages", {}) if isinstance(hook_report, dict) else {}}, "context": "CURRENT" if "agentic" in layers else "not-applicable", "markers": True}, "drift": sorted(set(drift)), "errors": errors}
     return payload, EXIT_ERROR if errors else (EXIT_DRIFT if drift else 0)
 
@@ -1051,6 +1318,11 @@ def build_parser() -> argparse.ArgumentParser:
         if action == "render": command.add_argument("--dry-run", action="store_true")
     answers = sub.add_parser("answers").add_subparsers(dest="answers_command", required=True).add_parser("write")
     answers.add_argument("--root", default="."); answers.add_argument("--profile"); answers.add_argument("--name"); answers.add_argument("--var", action="append", default=[]); answers.add_argument("--layer", action="append", default=[]); answers.add_argument("--set", action="append", default=[])
+    member = sub.add_parser("member").add_subparsers(dest="member_command", required=True)
+    member_list_parser = member.add_parser("list"); member_list_parser.add_argument("--root", default=".")
+    member_add_parser = member.add_parser("add"); member_add_parser.add_argument("--root", default="."); member_add_parser.add_argument("--name", required=True); member_add_parser.add_argument("--layer", required=True); member_add_parser.add_argument("--kind", choices=("lib", "app", "service", "cli"), default="lib")
+    member_remove_parser = member.add_parser("remove"); member_remove_parser.add_argument("--root", default="."); member_remove_parser.add_argument("--name", required=True)
+    member_import_parser = member.add_parser("import"); member_import_parser.add_argument("--root", default="."); member_import_parser.add_argument("--dir", required=True); member_import_parser.add_argument("--layer", required=True); member_import_parser.add_argument("--kind", choices=("lib", "app", "service", "cli"), default="lib")
     doctor_parser = sub.add_parser("doctor"); doctor_parser.add_argument("--root", default=".")
     update_parser = sub.add_parser("update"); update_parser.add_argument("--root", default="."); update_parser.add_argument("--var", action="append", default=[]); update_parser.add_argument("--layer", action="append", default=[]); update_parser.add_argument("--force-layer"); update_parser.add_argument("--adopt", action="append", default=[])
     plugins = sub.add_parser("plugins").add_subparsers(dest="plugins_command", required=True).add_parser("sync"); plugins.add_argument("--root", default="."); plugins.add_argument("--check", action="store_true")
@@ -1073,12 +1345,22 @@ def main(argv: list[str] | None = None) -> int:
         if args.command == "plan": payload, _, _, _, code = plan_payload(root, args.profile, args.name, overrides, args.layer, args.force_layer, set(args.adopt))
         else: payload, code = render(root, args.profile, args.name, overrides, args.layer, args.force_layer, set(args.adopt), args.dry_run)
         print(json.dumps(payload, indent=2, sort_keys=True)); return code
+    if args.command == "member":
+        if args.member_command == "list":
+            print(json.dumps(member_list(root), indent=2, sort_keys=True)); return 0
+        if args.member_command == "add":
+            print(json.dumps(member_add(root, args.name, args.layer, args.kind), indent=2, sort_keys=True)); return 0
+        if args.member_command == "remove":
+            print(json.dumps(member_remove(root, args.name), indent=2, sort_keys=True)); return 0
+        if args.member_command == "import":
+            print(json.dumps(member_import(root, args.dir, args.layer, args.kind), indent=2, sort_keys=True)); return 0
     if args.command == "answers":
         sets = parse_vars(args.set)
         overrides = parse_vars(args.var); overrides.update(sets)
         profile, _, layers, values = resolve_selection(root, args.profile, args.name, overrides, args.layer)
-        write_answers(root, profile, layers, values)
-        print(json.dumps({"path": str(answers_path(root)), "profile": profile, "layers": layers, "vars": values}, indent=2, sort_keys=True)); return 0
+        members = answers_members(root)
+        write_answers(root, profile, layers, values, {"members": members} if members else None)
+        print(json.dumps({"path": str(answers_path(root)), "profile": profile, "layers": layers, "vars": values, "members": members}, indent=2, sort_keys=True)); return 0
     if args.command == "doctor": payload, code = doctor(root); print(json.dumps(payload, indent=2, sort_keys=True)); return code
     if args.command == "update": payload, code = update(root, parse_vars(args.var), args.layer, args.force_layer, set(args.adopt)); print(json.dumps(payload, indent=2, sort_keys=True)); return code
     if args.command == "plugins": payload, code = plugins_sync(root, args.check); print(json.dumps(payload, indent=2, sort_keys=True)); return code

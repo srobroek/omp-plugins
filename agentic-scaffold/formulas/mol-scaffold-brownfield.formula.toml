@@ -9,6 +9,9 @@ pattern = "^[0-9]{3}-[a-z0-9-]+$"
 [vars.autonomous]
 default = "no"
 
+[vars.layout]
+default = "single"
+
 [[steps]]
 id = "inspect"
 title = "inspect brownfield {{feature}}"
@@ -50,10 +53,18 @@ needs = ["plan"]
 description = "Render only approved layers; preserve user files and update managed blocks."
 
 [[steps]]
+id = "members-import"
+title = "import workspace members {{feature}}"
+type = "task"
+needs = ["render"]
+condition = "{{layout}} == monorepo"
+description = "Run scaffold.py member import for detected existing workspace members without rewriting their files."
+
+[[steps]]
 id = "hooks-install"
 title = "install brownfield hooks {{feature}}"
 type = "task"
-needs = ["render"]
+needs = ["render", "members-import"]
 description = "Install declared prek stages, or migrate only after the interview resolves a foreign manager."
 
 [[steps]]

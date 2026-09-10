@@ -12,3 +12,7 @@ Every layer has `layer.toml` and a short `README.md`. The config declares orderi
 A profile is only a named ordered layer set plus variables and commands. Plugin sets belong to layers. `web-ui` is composable and contributes only its plugin set and an `AGENTS.md` block.
 
 Layer ownership must be disjoint for a selected profile. A duplicate `owns` path or a declared `conflicts_with` pair makes `plan` exit 5 unless `--force-layer L` names the winner for that run.
+
+The `workspace` layer is root-only. It derives member directories from the language family. Python and TypeScript use `packages/<name>`. Rust uses `crates/<name>`. Go uses `cmd/<name>` or `services/<name>`.
+
+The optional `moon` layer requires `workspace`. The optional `worktrunk` layer works with any profile. Run `layers show workspace`, `layers show moon`, or `layers show worktrunk` for current fields.

@@ -35,6 +35,24 @@ bd mol pour mol-scaffold-greenfield --var feature=001-example --var profile=ts-a
 
 The molecule has two human gates: the interview and the commit. To pass a gate, run `bd gate resolve <gate-id>` and then close the preceding step. Never close a gate bead directly.
 
+## Monorepo
+
+Use the workspace profile when one repository contains multiple language members.
+
+```sh
+python3 "$SCAFFOLD" answers write --root /tmp/workspace --profile monorepo --name workspace
+python3 "$SCAFFOLD" member add --root /tmp/workspace --name api --layer lang/python --kind app
+python3 "$SCAFFOLD" member add --root /tmp/workspace --name web --layer lang/ts --kind lib
+python3 "$SCAFFOLD" render --root /tmp/workspace
+python3 "$SCAFFOLD" member list --root /tmp/workspace
+```
+
+The renderer writes a root manifest for each language family. It writes member files below the recorded directory. Root just recipes and hook entries carry member scoping. Add `--layer moon` for Moon or `--layer worktrunk` for Worktrunk.
+
+For an existing workspace, inspect first. Import each detected member with `member import`. Import records the directory and does not rewrite existing member files. `member remove` updates answers and reports the directory. It never deletes files.
+
+Smoke checks are `uv sync` at the root for Python, `bun install` at the root for TypeScript, `just test`, `prek validate-config`, and `doctor`.
+
 ## Brownfield
 
 ```sh

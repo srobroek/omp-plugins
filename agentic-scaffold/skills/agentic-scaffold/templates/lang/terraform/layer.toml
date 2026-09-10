@@ -4,7 +4,7 @@ after = ["base", "tooling"]
 requires_tools = ["terraform"]
 owns = ["envs/dev/main.tf", "modules/main.tf"]
 blocks = [".gitignore", "justfile", ".pre-commit-config.yaml"]
-conflicts_with = ["lang/python", "lang/ts", "lang/rust", "lang/go"]
+conflicts_with = ["lang/python", "lang/ts", "lang/rust", "lang/go", "workspace"]
 [plugins."srobroek-omp"]
 source = "srobroek/omp-plugins"
 plugins = ["architecture", "infrastructure"]

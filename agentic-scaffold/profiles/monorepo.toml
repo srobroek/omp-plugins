@@ -1,0 +1,14 @@
+name = "monorepo"
+summary = "Workspace repository with nested language members"
+layers = ["base", "tooling", "hooks", "workspace", "ci/github", "release", "agentic"]
+[vars]
+layout = "monorepo"
+language = "none"
+web_ui = false
+speckit = false
+[commands]
+setup = "mise install"
+test = "just test"
+lint = "just lint"
+fmt = "just fmt"
+check = "just check"

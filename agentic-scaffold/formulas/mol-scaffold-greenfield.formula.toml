@@ -12,6 +12,9 @@ required = true
 [vars.autonomous]
 default = "no"
 
+[vars.layout]
+default = "single"
+
 [[steps]]
 id = "interview"
 title = "interview scaffold {{feature}}"
@@ -45,10 +48,18 @@ needs = ["plan"]
 description = "Render the selected layers; preserve user files and update managed blocks only."
 
 [[steps]]
+id = "members-add"
+title = "add workspace members {{feature}}"
+type = "task"
+needs = ["render"]
+condition = "{{layout}} == monorepo"
+description = "Run scaffold.py member add for every approved nested member before installing tools."
+
+[[steps]]
 id = "tools-install"
 title = "install tools for {{feature}}"
 type = "task"
-needs = ["render"]
+needs = ["render", "members-add"]
 description = "Run scaffold.py tools install --yes and the profile dependency setup command."
 
 [[steps]]
