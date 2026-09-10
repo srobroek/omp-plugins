@@ -769,12 +769,14 @@ function scanInvocations(command: string): CommitInvocation[] {
 		}
 		atCommand = false;
 		const opaqueCommand = token.text.includes("$") || token.text.includes("`");
+		const unquotedWordSplitting = opaqueCommand && !token.quoted;
 		const remaining = tokens
 			.slice(i + 1)
 			.filter((candidate) => !isSep(candidate));
 		if (
 			opaqueCommand &&
 			(commandGitConfig ||
+				(unquotedWordSplitting && remaining.length > 0) ||
 				remaining.some((candidate) => candidate.text === "commit") ||
 				remaining.some(
 					(candidate) =>

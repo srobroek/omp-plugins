@@ -1451,8 +1451,25 @@ describe("integration", () => {
 		).toEqual(expect.objectContaining({ block: true }));
 	});
 
-	test("variable command policy is commit-specific and fail closed", () => {
-		expect(findCommitInvocations("$" + "{RUNNER} status")).toEqual([]);
+	test("the bash call env cannot expand Git and commit from one word", () => {
+		const [handler] = register();
+		expect(
+			handler?.({
+				toolName: "bash",
+				toolCallId: "c-runner-multiword",
+				input: {
+					command: "$RUNNER -m x",
+					cwd: "/main-repo",
+					env: { RUNNER: "git commit" },
+				},
+			}),
+		).toEqual(expect.objectContaining({ block: true }));
+	});
+
+	test("unquoted variable commands fail closed", () => {
+		expect(findCommitInvocations("$" + "{RUNNER} status")).toEqual([
+			{ repoDir: null, dryRun: false, retargeted: true },
+		]);
 		expect(findCommitInvocations("env $" + "{RUNNER} commit -m x")).toEqual([
 			{ repoDir: null, dryRun: false, retargeted: true },
 		]);
@@ -1467,6 +1484,13 @@ describe("integration", () => {
 				"GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=alias.ci $" + "{RUNNER} ci -m x",
 			),
 		).toEqual([{ repoDir: null, dryRun: false, retargeted: true }]);
+	});
+
+	test("unquoted opaque commands fail closed before ordinary argv", () => {
+		expect(findCommitInvocations("$RUNNER ordinary")).toEqual([
+			{ repoDir: null, dryRun: false, retargeted: true },
+		]);
+		expect(findCommitInvocations("'$RUNNER' ordinary")).toEqual([]);
 	});
 
 	test("structured config cannot hide a variable alias command", () => {
