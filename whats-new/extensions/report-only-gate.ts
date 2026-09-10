@@ -1,4 +1,4 @@
-import type { ExtensionAPI, ExtensionToolCallEvent } from "@oh-my-pi/pi-coding-agent";
+import type { ExtensionAPI, ToolCallEvent } from "@oh-my-pi/pi-coding-agent";
 
 const EDIT_TOOLS: Record<string, true> = { edit: true, write: true };
 
@@ -41,17 +41,17 @@ export function createState(): GateState {
  * patch spans several files, so the derived `paths` array is the only complete
  * target list and both shapes must be read.
  */
-export function targetPaths(input: Record<string, unknown>): string[] {
+export function targetPaths(input: ToolCallEvent["input"]): string[] {
 	const out: string[] = [];
-	for (const key of ["path", "file_path"] as const) {
-		const value = input[key];
-		if (typeof value === "string" && value.length > 0) out.push(value);
+	// `in` narrows one literal key at a time, so the two spellings stay unrolled.
+	if ("path" in input && typeof input.path === "string" && input.path.length > 0) {
+		out.push(input.path);
 	}
-	const { paths } = input;
-	if (Array.isArray(paths)) {
-		for (const p of paths) {
-			if (typeof p === "string" && p.length > 0) out.push(p);
-		}
+	if ("file_path" in input && typeof input.file_path === "string" && input.file_path.length > 0) {
+		out.push(input.file_path);
+	}
+	if ("paths" in input && Array.isArray(input.paths)) {
+		for (const p of input.paths) if (typeof p === "string" && p.length > 0) out.push(p);
 	}
 	return out;
 }
@@ -75,7 +75,7 @@ export function isDependencyFile(raw: string): boolean {
 export function decideToolCall(
 	state: GateState,
 	toolName: string,
-	input: Record<string, unknown>,
+	input: ToolCallEvent["input"],
 ): { block: true; reason: string } | undefined {
 	if (toolName === "read") {
 		for (const path of targetPaths(input)) {
@@ -91,7 +91,7 @@ export function decideToolCall(
 		return;
 	}
 	if (toolName === "bash") {
-		const command = input.command;
+		const command = "command" in input ? input.command : undefined;
 		if (typeof command === "string" && INSTALLER.test(command)) {
 			return { block: true, reason: DENY_REASON };
 		}
@@ -108,7 +108,7 @@ export default function reportOnlyGate(pi: ExtensionAPI): void {
 		state.armed = false;
 	});
 
-	pi.on("tool_call", (event: ExtensionToolCallEvent) => {
+	pi.on("tool_call", (event: ToolCallEvent) => {
 		try {
 			return decideToolCall(state, event.toolName, event.input);
 		} catch {

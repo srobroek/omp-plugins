@@ -1,5 +1,5 @@
-import { parse as parseToml } from "smol-toml";
 import { statSync } from "node:fs";
+import { parse as parseToml } from "smol-toml";
 
 export const MISSING = "?";
 
@@ -62,12 +62,16 @@ function specVersion(spec: unknown): string {
 }
 
 export function parseRequirement(raw: string): [string, string] {
-	let line = raw.split("#", 1)[0].trim();
+	const first = raw.split("#", 1)[0];
+	if (first === undefined) return ["", ""];
+	let line = first.trim();
 	line = line.replace(/\\+$/, "").trim();
 	if (!line || line.startsWith("-") || line.startsWith(".") || line.startsWith("/")) {
 		return ["", ""];
 	}
-	line = line.split(";", 1)[0].trim();
+	const beforeSemicolon = line.split(";", 1)[0];
+	if (beforeSemicolon === undefined) return ["", ""];
+	line = beforeSemicolon.trim();
 	const match = REQ_SPLIT.exec(line);
 	if (!match) {
 		return REQ_NAME.test(line) ? [line, MISSING] : ["", ""];
@@ -288,7 +292,7 @@ export class Detector {
 		if (!lines) return;
 		for (const raw of lines) {
 			const match = GEM.exec(raw);
-			if (match) this.emit("rubygems", match[2], match[4] || MISSING);
+			if (match?.[2]) this.emit("rubygems", match[2], match[4] || MISSING);
 		}
 	}
 

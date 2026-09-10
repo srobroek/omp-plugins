@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+
 const zod = {
 	string: () => {
 		const s = { optional: () => s, describe: () => s };
@@ -9,6 +10,7 @@ const zod = {
 	},
 	object: (shape: unknown) => shape,
 };
+
 import versionGapTool, { detectProject, parseRequirement } from "./version-gap-tool";
 
 function tmp(): string {
@@ -60,6 +62,8 @@ describe("integration: version_gap_scan", () => {
 		writeFileSync(join(project, "package.json"), JSON.stringify({ dependencies: { leftpad: "1.3.0" } }));
 		const result = await execute("id", { path: project }, undefined, undefined, { cwd: project });
 		expect(result.details.count).toBe(1);
-		expect(result.content[0].text).toContain("npm\tleftpad\t1.3.0");
+		const first = result.content[0];
+		if (!first) throw new Error("missing tool output");
+		expect(first.text).toContain("npm\tleftpad\t1.3.0");
 	});
 });
