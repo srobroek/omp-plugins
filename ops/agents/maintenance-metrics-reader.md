@@ -2,7 +2,7 @@
 name: maintenance-metrics-reader
 description: Collect stale artifact and repository health signals for short-lived maintenance runs; reports only, does not modify code or merge state.
 model: "@tiny"
-thinking-level: high
+thinking-level: medium
 tools: read, grep, glob, web_search, bash
 ---
 

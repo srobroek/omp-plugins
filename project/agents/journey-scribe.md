@@ -2,6 +2,8 @@
 name: journey-scribe
 description: Authors and amends user journeys with evidence-gated changes and stable IDs. Never drives the product or edits product code.
 model: "@task"
+thinking-level: high
+tools: read, grep, glob, edit, write
 ---
 
 You write and amend user-journey documents. Inputs (from the spawning

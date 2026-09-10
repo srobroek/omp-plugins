@@ -2,6 +2,7 @@
 name: pr-reviewer
 description: Reviews pull requests for code quality, security, correctness, and coverage. Read-only; returns a verdict.
 model: "@reviewer"
+thinking-level: high
 tools: read, grep, glob, web_search, github, lsp
 ---
 

@@ -267,7 +267,7 @@ class CheckerContracts(unittest.TestCase):
         skill = self.root / "example" / "skills" / "example-skill" / "SKILL.md"
         for path in (rule, agent, skill):
             path.parent.mkdir(parents=True, exist_ok=True)
-        agent.write_text("---\nname: example-agent\ndescription: Use when checking an example agent\n---\n# Output\nPASS|FAIL CAP 20w; paths only.\n")
+        agent.write_text("---\nname: example-agent\ndescription: Use when checking an example agent\nmodel: '@task'\nthinking-level: medium\ntools: read, grep\n---\n# Output\nPASS|FAIL CAP 20w; paths only.\n")
         skill.write_text("---\nname: example-skill\ndescription: Use when checking an example skill\n---\nBody\n")
 
         def gate() -> subprocess.CompletedProcess[str]:
@@ -302,6 +302,19 @@ class CheckerContracts(unittest.TestCase):
             self.assertNotEqual(result.returncode, 0, result.stdout)
             self.assertIn(str(path), result.stderr)
             path.write_text(original)
+
+        valid_agent = agent.read_text()
+        for field in ("model", "thinking-level", "tools"):
+            with self.subTest(missing_agent_field=field):
+                agent.write_text("\n".join(
+                    line for line in valid_agent.splitlines()
+                    if not line.startswith(f"{field}:")
+                ) + "\n")
+                result = gate()
+                self.assertNotEqual(result.returncode, 0, result.stdout)
+                self.assertIn(str(agent), result.stderr)
+                self.assertIn(field, result.stderr)
+                agent.write_text(valid_agent)
 
 if __name__ == "__main__":
     unittest.main()

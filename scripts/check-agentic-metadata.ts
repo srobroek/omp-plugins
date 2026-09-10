@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
-import { readdirSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { lint } from "../authoring/extensions/agentic-lint-tool.ts";
+import { lint, splitFrontmatter } from "../authoring/extensions/agentic-lint-tool.ts";
 
 // Discovery identity is checked separately by check-contract.py. Reuse the
 // authoring validator for YAML and runtime metadata, not historical prose style.
@@ -28,6 +28,14 @@ try {
 					if (code !== "E13" && code !== "E14") continue;
 					console.error(`${path}: ${severity} ${code}: ${message}`);
 					if (severity === "ERROR") failed = true;
+				}
+				if (kind === "agents") {
+					const [metadata] = splitFrontmatter(readFileSync(path, "utf8"));
+					for (const field of ["model", "thinking-level", "tools"] as const) {
+						if (metadata[field]?.trim()) continue;
+						console.error(`${path}: ERROR E14: agent ${field} must be a nonempty frontmatter field`);
+						failed = true;
+					}
 				}
 			}
 		}
