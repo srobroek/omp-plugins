@@ -736,6 +736,42 @@ describe("findCommitInvocations", () => {
 		);
 	});
 
+	test("a redirected commit is decided without probing another branch", () => {
+		for (const command of [
+			"git >/dev/null commit -m x",
+			">/dev/null git commit -m x",
+			"git \\\n commit -m x",
+			"git >&2 commit -m x",
+		]) {
+			const { run, calls } = fakeGit({ "/main-repo": "main" });
+			setGitRunForTests(run);
+			expect(decideCommit(command, "/main-repo", {})?.block, command).toBe(
+				true,
+			);
+			expect(
+				calls.map((call) => call.cwd),
+				command,
+			).toEqual(["/main-repo"]);
+		}
+		for (const command of [
+			"printf x | xargs >/dev/null git commit -m x",
+			"printf x | xargs > /dev/null sh -c 'git commit -m x'",
+		]) {
+			const { run, calls } = fakeGit({ "/main-repo": "main" });
+			setGitRunForTests(run);
+			expect(decideCommit(command, "/main-repo", {})?.block, command).toBe(
+				true,
+			);
+			expect(calls, command).toEqual([]);
+		}
+		const { run, calls } = fakeGit({ "/feature": "feature" });
+		setGitRunForTests(run);
+		expect(
+			decideCommit("git >/dev/null commit -m x", "/feature", {}),
+		).toBeUndefined();
+		expect(calls.map((call) => call.cwd)).toEqual(["/feature"]);
+	});
+
 	test("redirections do not hide the command or its verb", () => {
 		for (const command of [
 			"git >/dev/null commit -m x",
