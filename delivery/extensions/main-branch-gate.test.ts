@@ -133,6 +133,26 @@ describe("findCommitInvocations", () => {
 			]);
 		}
 	});
+
+	test("malformed config-env operands do not invent an alias", () => {
+		for (const command of [
+			"git --config-env=alias.ci status",
+			"git --config-env alias.ci status",
+		]) {
+			expect(findCommitInvocations(command), command).toEqual([]);
+		}
+	});
+
+	test("config-env aliases block on a protected branch", () => {
+		const { run, calls } = fakeGit({ "/protected": "main" });
+		setGitRunForTests(run);
+		expect(
+			decideCommit("git --config-env=alias.ci=ALIAS ci -m x", "/protected", {
+				ALIAS: "commit",
+			})?.block,
+		).toBe(true);
+		expect(calls).toEqual([]);
+	});
 	test("dry-run is a commit option, not a message or path", () => {
 		expect(findCommitInvocations("git commit --dry-run")).toEqual([
 			{ repoDir: null, dryRun: true },
