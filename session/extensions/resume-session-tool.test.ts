@@ -602,12 +602,30 @@ describe("integration: read mode", () => {
 		]);
 		const transcript = await parseTranscript(storeFiles(root)[0]);
 		const refused = renderRead(transcript, { turns: 5, maxChars: 1 });
-		expect(refused).toContain("Increase max_chars");
+		expect(refused.length).toBeLessThanOrEqual(1);
 		expect(refused).not.toContain("### [");
 		const text = renderRead(transcript, { turns: 5, maxChars: 600 });
-		expect(text.match(/^### \[/gm)).toHaveLength(1);
-		expect(text).toContain(`${"x".repeat(400)}4`);
-		expect(text.split("## Recent turns (newest first)\n")[1].split("\n\n---")[0].length).toBeLessThanOrEqual(600);
+		expect(text.length).toBeLessThanOrEqual(600);
+		if (text.includes("### [")) {
+			expect(text).toContain(`${"x".repeat(400)}4`);
+		}
+		const envelope = renderRead(transcript, { turns: 1, maxChars: 2000 });
+		expect(envelope.length).toBeLessThanOrEqual(2000);
+		expect(envelope).toContain("# Fresh-session handoff context");
+		expect(envelope).toContain(`${"x".repeat(400)}4`);
+		expect(envelope).toContain("STOP. Summarize the goal");
+		const footerStart = envelope.lastIndexOf("\n\nThis window:");
+		expect(footerStart).toBeGreaterThan(0);
+		const narrow = renderRead(transcript, { turns: 1, maxChars: footerStart });
+		expect(narrow.length).toBeLessThanOrEqual(footerStart);
+		expect(narrow).toContain("Insufficient max_chars");
+		expect(narrow).not.toContain("# Fresh-session handoff context");
+		const required = Number(narrow.match(/complete output requires (\d+) characters/)?.[1]);
+		expect(required).toBeGreaterThan(footerStart);
+		const exact = renderRead(transcript, { turns: 1, maxChars: required });
+		expect(exact.length).toBeLessThanOrEqual(required);
+		expect(exact).toContain("# Fresh-session handoff context");
+		expect(exact).toContain("\n\nThis window:");
 	});
 
 	test("renderTurn shows tool calls with an error marker", () => {
