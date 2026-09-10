@@ -31,18 +31,27 @@ afterEach(() => {
 });
 
 type Handler = (event: Record<string, unknown>) => unknown;
+type HandlerMap = Record<string, Handler[]>;
+type FakePi = { handlers: HandlerMap; pi: { zod: unknown; registerTool: () => void; on: (ev: string, h: Handler) => void } };
 
-function fakePi(): { handlers: Record<string, Handler[]>; pi: { zod: unknown; registerTool: () => void; on: (ev: string, h: Handler) => void } } {
-	const handlers: Record<string, Handler[]> = {};
+function handlerAt(handlers: HandlerMap, event: string, index = 0): Handler {
+	const handler = handlers[event]?.[index];
+	if (!handler) throw new Error(`missing ${event} handler ${index}`);
+	return handler;
+}
+
+function fakePi(): FakePi {
+	const handlers: HandlerMap = {};
 	const chain: Record<string, unknown> = {};
-	const self = () => chain;
 	return {
 		handlers,
 		pi: {
 			zod: chain,
 			registerTool: () => {},
 			on: (ev, h) => {
-				(handlers[ev] ??= []).push(h);
+				const registered = handlers[ev] ?? [];
+				registered.push(h);
+				handlers[ev] = registered;
 			},
 		},
 	};
@@ -122,12 +131,10 @@ describe("quality-edit-advisory integration", () => {
 			qualityEditAdvisory(pi as never);
 
 			const fire = (id: string, path: string, content: string) => {
-				handlers.tool_call?.[0]?.({
-					toolName: "edit",
-					toolCallId: id,
-					input: { path, new_string: content, cwd: repo },
+				handlerAt(handlers, "tool_call")({
+					toolName: "edit", toolCallId: id, input: { path, new_string: content, cwd: repo },
 				});
-				return handlers.tool_result?.[0]?.({
+				return handlerAt(handlers, "tool_result")({
 					toolName: "edit",
 					toolCallId: id,
 					content: [{ type: "text", text: "ok" }],
@@ -158,16 +165,18 @@ test("failed edits do not advance thresholds and registrations have isolated cou
 	const second = fakePi();
 	qualityEditAdvisory(first.pi as never);
 	qualityEditAdvisory(second.pi as never);
-	const fire = (target: { handlers: Record<string, Handler[]> }, id: string, isError = false) => {
-		target.handlers.tool_call[0]({ toolName: "write", toolCallId: id,
+	const fire = (target: { handlers: HandlerMap }, id: string, isError = false) => {
+		const toolCall = handlerAt(target.handlers, "tool_call");
+		const toolResult = handlerAt(target.handlers, "tool_result");
+		toolCall({ toolName: "write", toolCallId: id,
 			input: { path: "a.ts", content: "x", cwd: repo } });
-		return target.handlers.tool_result[0]({ toolName: "write", toolCallId: id,
+		return toolResult({ toolName: "write", toolCallId: id,
 			isError, content: [{ type: "text", text: isError ? "failed" : "ok" }] });
 	};
 	expect(fire(first, "failed", true)).toBeUndefined();
 	expect(fire(first, "one")).toBeUndefined();
 	expect(fire(second, "one")).toBeUndefined();
 	expect(fire(first, "two")).toBeDefined();
-	second.handlers.session_start[0]({});
+	handlerAt(second.handlers, "session_start")({});
 	expect(fire(second, "after-reset")).toBeUndefined();
 });

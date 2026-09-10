@@ -1,4 +1,4 @@
-import type { ExtensionAPI, ExtensionToolCallEvent } from "@oh-my-pi/pi-coding-agent";
+import type { ExtensionAPI, ToolCallEvent } from "@oh-my-pi/pi-coding-agent";
 
 /**
  * Rewrite `gh pr create|edit --body` so GitHub close-keywords apply to every
@@ -55,7 +55,9 @@ export function normalizeLine(line: string): string {
 		const atBoundary = !last || !(/[A-Za-z0-9_]$/.test(last));
 		const word = atBoundary ? matchAt(WORD, line, pos) : null;
 		if (word === null) {
-			out.push(line[pos]);
+			const char = line[pos];
+			if (char === undefined) break;
+			out.push(char);
 			pos += 1;
 			continue;
 		}
@@ -98,10 +100,14 @@ function literalSegments(command: string): Token[][] | null {
 	const segments: Token[][] = [[]];
 	let i = 0;
 	while (i < command.length) {
-		if (" \t\r".includes(command[i])) { i++; continue; }
-		if (";&|\n".includes(command[i])) {
-			const ch = command[i++];
-			if ((ch === "&" || ch === "|") && command[i] === ch) i++;
+		const current = command[i];
+		if (current === undefined) break;
+		if (" \t\r".includes(current)) { i++; continue; }
+		if (";&|\n".includes(current)) {
+			const ch = current;
+			i++;
+			const next = command[i];
+			if ((ch === "&" || ch === "|") && next === ch) i++;
 			segments.push([]);
 			continue;
 		}
@@ -110,15 +116,14 @@ function literalSegments(command: string): Token[][] | null {
 		let quote: string | null = null;
 		while (i < command.length) {
 			const ch = command[i];
+			if (ch === undefined) break;
 			if (!quote && " \t\r;&|\n".includes(ch)) break;
 			if (ch === "'" && quote !== '"') { quote = quote ? null : "'"; i++; continue; }
 			if (ch === '"' && quote !== "'") { quote = quote ? null : '"'; i++; continue; }
 			if (quote !== "'" && ch === "\\") {
 				const next = command[i + 1];
 				if (next === undefined) return null;
-				if (quote === '"' && !'$`"\\\n'.includes(next)) {
-					value += ch; i++; continue;
-				}
+				if (quote === '"' && !'$`"\\\n'.includes(next)) { value += ch; i++; continue; }
 				if (next !== "\n") value += next;
 				i += 2;
 				continue;
@@ -128,11 +133,12 @@ function literalSegments(command: string): Token[][] | null {
 			i++;
 		}
 		if (quote) return null;
-		segments[segments.length - 1].push({ value, start, end: i });
+		const segment = segments[segments.length - 1];
+		if (!segment) return null;
+		segment.push({ value, start, end: i });
 	}
 	return segments;
 }
-
 
 function bodySpan(command: string): Token | null {
 	const segments = literalSegments(command);
@@ -140,31 +146,31 @@ function bodySpan(command: string): Token | null {
 	let selected: Token | null = null;
 	for (const segment of segments) {
 		let start = 0;
-		while (/^[A-Za-z_][A-Za-z0-9_]*=/.test(segment[start]?.value ?? "")) start++;
+		while (segment[start] !== undefined && /^[A-Za-z_][A-Za-z0-9_]*=/.test(segment[start]?.value ?? "")) start++;
 		if (segment[start]?.value !== "gh" || segment[start + 1]?.value !== "pr" ||
 			!["create", "edit"].includes(segment[start + 2]?.value ?? "")) continue;
 		selected = null;
 		for (let i = start + 3; i < segment.length; i++) {
 			const token = segment[i];
+			if (!token) continue;
 			if (token.value === "--") break;
 			if (token.value === "--body" || token.value === "-b") {
-				selected = segment[++i] ?? null;
+				const next = segment[i + 1];
+				selected = next ?? null;
+				if (next) i++;
 			} else {
 				if (["--title", "-t", "--base", "-B", "--head", "-H", "--repo", "-R",
 					"--reviewer", "-r", "--assignee", "-a", "--label", "-l", "--project", "-p",
 					"--milestone", "-m", "--body-file", "-F", "--template", "-T",
 					"--add-assignee", "--remove-assignee", "--add-label", "--remove-label",
 					"--add-project", "--remove-project", "--add-reviewer", "--remove-reviewer"].includes(token.value)) {
-					i++;
+					if (segment[i + 1]) i++;
 					continue;
 				}
 				const prefix = token.value.startsWith("--body=") ? "--body=" :
 					token.value.startsWith("-b=") ? "-b=" :
 					token.value.startsWith("-b") && !token.value.startsWith("--") ? "-b" : null;
-				if (prefix) {
-					// Replace the entire word, keeping the flag literal even when originally quoted.
-					selected = { ...token, value: token.value.slice(prefix.length) };
-				}
+				if (prefix) selected = { ...token, value: token.value.slice(prefix.length) };
 			}
 		}
 	}
@@ -187,9 +193,9 @@ export function replaceLastBody(command: string, next: string): string | null {
 	return command.slice(0, span.start) + prefix + escaped + command.slice(span.end);
 }
 
-function commandOf(event: ExtensionToolCallEvent): string {
+function commandOf(event: ToolCallEvent): string {
 	const raw = event.input;
-	if (typeof raw.command === "string") return raw.command;
+	if ("command" in raw && typeof raw.command === "string") return raw.command;
 	return "";
 }
 
