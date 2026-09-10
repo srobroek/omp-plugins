@@ -1,5 +1,6 @@
 import { execFile } from "node:child_process";
-import { realpathSync } from "node:fs";
+import { existsSync, realpathSync } from "node:fs";
+import { homedir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
@@ -48,8 +49,20 @@ export function validateScaffoldArgs(command: unknown, args: unknown): string | 
 	return null;
 }
 
-export function scaffoldScriptPath(): string {
-	return join(import.meta.dir, "..", "skills", "agentic-scaffold", "scripts", "scaffold.py");
+const SCRIPT_REL = ["skills", "agentic-scaffold", "scripts", "scaffold.py"] as const;
+
+/**
+ * The CLI that ships beside this extension. Resolved on every call: a plugin
+ * upgrade during a session removes the versioned cache directory this module was
+ * loaded from, so the load-time path goes stale while the stable `node_modules`
+ * link already points at the new version.
+ */
+export function scaffoldScriptPath(home: string = homedir(), loadedFrom: string = import.meta.dir): string {
+	const beside = join(loadedFrom, "..", ...SCRIPT_REL);
+	if (existsSync(beside)) return beside;
+	const linked = join(home, ".omp", "plugins", "node_modules", "@srobroek", "agentic-scaffold", ...SCRIPT_REL);
+	if (existsSync(linked)) return linked;
+	return beside;
 }
 
 export type ScaffoldExecution = {
