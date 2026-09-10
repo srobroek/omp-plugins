@@ -216,6 +216,7 @@ describe("findCommitInvocations", () => {
 			GIT_CONFIG_VALUE_0: "commit",
 		};
 		expect(decideCommit("printf hello", "/protected", env)).toBeUndefined();
+		expect(decideCommit('echo "$HOME"', "/protected", env)).toBeUndefined();
 	});
 
 	test("malformed config-env operands do not invent an alias", () => {

@@ -954,6 +954,27 @@ export function retargetReason(selector: string): string {
 	);
 }
 
+function hasOpaqueCommandPosition(command: string): boolean {
+	const tokens = tokenize(command);
+	let atCommand = true;
+	for (const token of tokens) {
+		const separator =
+			!token.quoted && (SEPARATOR[token.text] === true || token.text === "\n");
+		if (separator) {
+			atCommand = true;
+			continue;
+		}
+		if (!atCommand) continue;
+		if (
+			ENV_ASSIGNMENT.test(token.text) ||
+			TRANSPARENT_PREFIX[token.text] === true
+		)
+			continue;
+		return token.text.includes("$") || token.text.includes("`");
+	}
+	return false;
+}
+
 export function decideCommit(
 	command: string,
 	cwd: string = process.cwd(),
@@ -970,9 +991,7 @@ export function decideCommit(
 	if (
 		opaqueEnvConfig &&
 		invocations.length === 0 &&
-		(/\bd?git\b/.test(command) ||
-			command.includes("$") ||
-			command.includes("`"))
+		(/\bd?git\b/.test(command) || hasOpaqueCommandPosition(command))
 	)
 		return {
 			block: true,
