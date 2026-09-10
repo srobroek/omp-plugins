@@ -1867,6 +1867,30 @@ def finish(root: Path) -> tuple[dict[str, Any], int]:
     return payload, 0
 
 
+def abort(root: Path) -> tuple[dict[str, Any], int]:
+    """Close a run without finishing it: drop the marker (which lifts the hard boundary) and report what it left behind."""
+    root = validate_root(root, require_git=True)
+    marker = root / ".omp/scaffold-run.json"
+    run: dict[str, Any] = {}
+    if marker.exists():
+        try:
+            run = json.loads(marker.read_text())
+        except (OSError, json.JSONDecodeError):
+            run = {}
+        marker.unlink()
+    status = subprocess.run(["git", "status", "--porcelain"], cwd=root, capture_output=True, text=True, check=False)
+    meta: dict[str, Any] = {}
+    try:
+        meta = json.loads(metadata_path(root).read_text())
+    except (OSError, json.JSONDecodeError):
+        pass
+    owned = set(str(path) for path in meta.get("owned_hashes", {})) | {".omp/scaffold-answers.toml", ".omp/scaffold.json", ".omp/plugins.toml", "mise.toml"}
+    dirty = [line[3:].strip().split(" -> ")[-1] for line in status.stdout.splitlines() if len(line) >= 4]
+    stages = [row.get("name") for row in run.get("stages", []) if isinstance(row, dict)]
+    return {"ok": True, "hadRun": bool(run), "stagesCompleted": stages, "dirtyOwned": sorted(p for p in dirty if p in owned), "dirtyOther": sorted(p for p in dirty if p not in owned),
+            "resetCommand": "git checkout -- . && git ls-files --others --exclude-standard -z | xargs -0 rm -rf"}, 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
@@ -1881,6 +1905,7 @@ def build_parser() -> argparse.ArgumentParser:
     answers_parent = sub.add_parser("answers"); answers_parent.add_argument("--root", default="."); answers = answers_parent.add_subparsers(dest="answers_command", required=True).add_parser("write"); answers.add_argument("--root", default=argparse.SUPPRESS); answers.add_argument("--profile"); answers.add_argument("--name"); answers.add_argument("--var", action="append", default=[]); answers.add_argument("--set", action="append", default=[]); answers.add_argument("--layer", action="append", default=[]); answers.add_argument("--defaults-for", default="")
     apply_parser = sub.add_parser("apply"); apply_parser.add_argument("--root", default="."); apply_parser.add_argument("--profile"); apply_parser.add_argument("--dry-run", action="store_true"); apply_parser.add_argument("--stage"); apply_parser.add_argument("--allow-dirty", action="store_true"); apply_parser.add_argument("--bump-tools", action="store_true")
     finish_parser = sub.add_parser("finish"); finish_parser.add_argument("--root", default=".")
+    abort_parser = sub.add_parser("abort"); abort_parser.add_argument("--root", default=".")
     member_parent = sub.add_parser("member"); member_parent.add_argument("--root", default="."); member = member_parent.add_subparsers(dest="member_command", required=True)
     member_list_parser = member.add_parser("list"); member_list_parser.add_argument("--root", default=argparse.SUPPRESS)
     member_add_parser = member.add_parser("add"); member_add_parser.add_argument("--root", default=argparse.SUPPRESS); member_add_parser.add_argument("--name", required=True); member_add_parser.add_argument("--layer", required=True); member_add_parser.add_argument("--kind", choices=("lib", "app", "service", "cli"), default="lib")
@@ -1928,6 +1953,8 @@ def main(argv: list[str] | None = None) -> int:
         payload, code = apply_pipeline(root, args.profile, dry_run=args.dry_run, stage=args.stage, allow_dirty=args.allow_dirty, bump_tools=args.bump_tools); emit(payload, root); return code
     if args.command == "finish":
         payload, code = finish(root); emit(payload, root); return code
+    if args.command == "abort":
+        payload, code = abort(root); emit(payload, root); return code
     if args.command == "member":
         if args.member_command == "list":
             emit(member_list(root), root); return 0

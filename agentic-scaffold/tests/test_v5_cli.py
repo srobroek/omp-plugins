@@ -235,3 +235,20 @@ def test_hook_manager_question_is_skipped_when_git_defender_decides(tmp_path: Pa
     (fake_bin / "git-defender").unlink()
     without = scaffold.interview_questions(root, "agentic-repo")
     assert any(q["id"] == "finding:hook-manager" and q.get("allowed") and "skip hooks" in q["allowed"] for q in without["questions"])
+
+
+def test_abort_lifts_the_boundary_and_reports_owned_dirt(tmp_path: Path) -> None:
+    root = git_root(tmp_path)
+    (root / ".omp").mkdir(exist_ok=True)
+    (root / ".omp/scaffold.json").write_text('{"owned_hashes": {"mise.toml": "0"}, "layers": []}')
+    (root / ".omp/scaffold-run.json").write_text('{"stages": [{"name": "preflight", "status": "ok"}, {"name": "render", "status": "failed"}]}')
+    (root / "mise.toml").write_text("[tools]\n")
+    (root / "notes.txt").write_text("mine\n")
+    result = run("abort", "--root", str(root))
+    assert result.returncode == 0
+    body = payload(result)
+    assert body["hadRun"] and body["stagesCompleted"] == ["preflight", "render"]
+    assert body["dirtyOwned"] == ["mise.toml"] and "notes.txt" in body["dirtyOther"]
+    assert not (root / ".omp/scaffold-run.json").exists()
+    again = payload(run("abort", "--root", str(root)))
+    assert again["hadRun"] is False

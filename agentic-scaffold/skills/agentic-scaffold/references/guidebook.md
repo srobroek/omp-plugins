@@ -99,6 +99,19 @@ Decision by `state`:
 - `blocked`: stop and report every blocker verbatim.
 - `finished`: the run marker is gone; report the commit that closed the run.
 
+### Crashed or abandoned run
+
+While `.omp/scaffold-run.json` exists, the hard boundary stays active, even after a timeout or a
+killed process. Close such a run with:
+
+```sh
+python3 "$SCAFFOLD" abort --root R
+```
+
+Read `hadRun`, `stagesCompleted`, `dirtyOwned`, and `dirtyOther`. Present `dirtyOwned` to the
+human with `resetCommand`; the agent runs neither the reset nor a commit. `abort` deletes only
+the run marker.
+
 The agent never runs the commit command itself.
 
 ## 7. Hard rules

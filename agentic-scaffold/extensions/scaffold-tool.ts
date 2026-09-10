@@ -14,6 +14,7 @@ const COMMANDS = [
 	"apply",
 	"doctor",
 	"finish",
+	"abort",
 	"layers",
 	"profiles",
 	"member",
