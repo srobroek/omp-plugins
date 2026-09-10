@@ -1403,6 +1403,8 @@ describe("integration", () => {
 	});
 
 	test("the bash call env cannot inject a Git alias", () => {
+		const { run, calls } = fakeGit({ "/main-repo": "feature" });
+		setGitRunForTests(run);
 		const [handler] = register();
 		expect(
 			handler?.({
@@ -1415,6 +1417,7 @@ describe("integration", () => {
 				},
 			}),
 		).toEqual(expect.objectContaining({ block: true }));
+		expect(calls).toEqual([]);
 	});
 
 	test("an unrelated or falsy call env leaves the block in place", () => {
