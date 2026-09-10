@@ -72,4 +72,5 @@ It blocks writes to scaffold-owned paths. It blocks `eval` and unsafe shell comm
 - [`plugins.md`](skills/agentic-scaffold/references/plugins.md): project plugin proof.
 - [`verify.md`](skills/agentic-scaffold/references/verify.md): doctor and finish.
 - [`runbook.md`](docs/runbook.md): human flow.
+- [`ci-standard.md`](docs/ci-standard.md): the CI, quality-gate, and release standard the `ci/github` and `release` layers render, with the repositories it was derived from.
 - [`architecture.md`](docs/architecture.md): runtime details.

@@ -7,14 +7,33 @@ on:
 permissions:
   contents: write
   pull-requests: write
-  issues: write
+
+concurrency:
+  group: release-please
+  cancel-in-progress: false
 
 jobs:
-  release:
+  release-please:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      # Secrets cannot appear in `if:`; an env mirror can. Both credentials must be present.
+      APP_ID: ${{ vars.RELEASE_PLEASE_APP_ID }}
+      APP_PRIVATE_KEY: ${{ secrets.RELEASE_PLEASE_PRIVATE_KEY }}
     steps:
+      # Commits made with GITHUB_TOKEN do not trigger workflows, so a release PR authored with it
+      # never gets a CI gate. A GitHub App token fixes that; without both credentials we fall
+      # back to GITHUB_TOKEN and say so.
+      - id: app
+        if: ${{ env.APP_ID != '' && env.APP_PRIVATE_KEY != '' }}
+        uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2
+        with:
+          app-id: ${{ env.APP_ID }}
+          private-key: ${{ env.APP_PRIVATE_KEY }}
+      - if: ${{ env.APP_ID == '' || env.APP_PRIVATE_KEY == '' }}
+        run: echo "::warning::RELEASE_PLEASE_APP_ID or RELEASE_PLEASE_PRIVATE_KEY is missing; the release PR will not trigger CI until it is pushed to again"
       - uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0
         with:
-          token: ${{ secrets.GITHUB_TOKEN }}
+          token: ${{ steps.app.outputs.token || secrets.GITHUB_TOKEN }}
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json

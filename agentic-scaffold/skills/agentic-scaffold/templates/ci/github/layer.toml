@@ -1,5 +1,5 @@
 name = "ci/github"
-summary = "SHA-pinned GitHub CI workflow and Renovate config"
+summary = "GitHub CI with parallel lanes and a single fan-in gate, plus Renovate config"
 after = ["base"]
 requires_tools = ["gh"]
 owns = [".github/workflows/ci.yml", ".github/renovate.json"]

@@ -37,6 +37,11 @@ The fixed set covers name and purpose, kind (`lib | app | service | cli`), langu
 rust | go | terraform | none`), license, remote creation and visibility, beads, web UI, and
 SpecKit. The CLI may omit a question that is derived from an earlier answer. `kind` selects the
 profile suffix; `cli` selects `app`; web UI adds the `web-ui` layer; SpecKit adds the project plugin.
+Defaults come from the chosen profile, so accepting one never contradicts it.
+
+The `release` layer asks `publish`: `none`, `pypi`, `npm`, `crates`, or `github-assets`. The
+default is the language's registry for a library and `none` for an application; the answer
+selects the publish lane in `.github/workflows/release.yml`.
 Do not ask framework, provider, or tool-version questions.
 
 ## 3. Brownfield questions
