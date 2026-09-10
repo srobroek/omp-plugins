@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.1](https://github.com/srobroek/omp-plugins/compare/agentic-scaffold--v0.4.0...agentic-scaffold--v0.4.1) (2026-09-10)
+
+
+### Bug Fixes
+
+* **agentic-scaffold:** pin beads only when the interview answered beads=true ([#109](https://github.com/srobroek/omp-plugins/issues/109)) ([a34b835](https://github.com/srobroek/omp-plugins/commit/a34b8352f605aeaabe7788532a34abef810b351a))
+
 ## [0.4.0](https://github.com/srobroek/omp-plugins/compare/agentic-scaffold--v0.3.2...agentic-scaffold--v0.4.0) (2026-09-10)
 
 
