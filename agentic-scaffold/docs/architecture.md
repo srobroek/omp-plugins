@@ -1,98 +1,94 @@
-# Architecture
+# Agentic scaffold architecture
 
-## Runtime boundary
+## Runtime
 
-`skills/agentic-scaffold/scripts/scaffold.py` is the whole runtime. It imports only the standard library. Declared integrations run as subprocesses: `omp`, `prek`, `mise`, `git`, `git-defender`.
+| Component | Contract |
+|---|---|
+| Python CLI | Standard-library runtime with subprocess integrations. |
+| `scaffold` tool | Accepts an enum command and a string array. Adds `--root` from session cwd. |
+| Process launch | Calls `python3` with `execFile`. Disables the shell. Uses a ten-minute timeout. |
+| Argument guard | Rejects root overrides, NUL, newline, and traversal. |
+| JSON proof | Compares JSON `root` with the real session cwd. A mismatch returns exit `6` and discards output. |
 
-Every command prints one JSON document. The exit code carries the verdict:
+## Lead boundary
+
+The extension acts while `.omp/scaffold-run.json` exists.
+
+It blocks:
+
+- direct writes outside the root
+- direct writes to `owned_hashes` paths
+- inline `eval`
+- global OMP configuration
+- global mise changes
+- user-scope plugin changes
+- unsafe package installs
+- pushes and amended commits
+- `chezmoi apply`, `chezmoi init`, and `chezmoi update`
+- `sudo`
+- absolute writes outside the root
+- home-relative writes
+
+It allows read-only inspection. It allows project-scope CLI operations. It allows `bd` and `just`.
+
+## Exit codes
 
 | Code | Meaning |
 |---|---|
 | 0 | success |
 | 1 | operational error |
-| 2 | drift (`doctor`, `plugins sync --check`) |
-| 5 | conflict (`plan`, `render`) |
+| 2 | drift |
+| 3 | required input |
+| 5 | conflict |
+| 6 | boundary refusal |
 
-## Variable resolution
+Every command emits one JSON object with the resolved `root`.
 
-The CLI builds one variable map first. Later sources override earlier ones:
+## Pipeline
 
-1. `layer.toml [vars]` defaults
-2. `profiles/<name>.toml [vars]`
-3. `.omp/scaffold-answers.toml`
-4. `--var` and `--set` on the command line
-
-The same map feeds every template, so a second render produces no diff.
-
-## Layers
-
-A layer is one directory under `templates/`. It holds:
-
-- `layer.toml`: the layer contract
-  - `after`: render order
-  - `requires_tools`
-  - `owns`: whole files
-  - `blocks`: managed-block targets
-  - `conflicts_with`: exclusive layers
-  - `[vars]` and `[plugins]`
-- `README.md`: a short description
-- template files
-
-Template rules:
-
-- A file ending in `.tmpl` passes through `string.Template`. The renderer removes the suffix.
-- A path segment `__name__` becomes the package name.
-- A file ending in `.block` becomes one managed block inside a shared target such as `.gitignore` or `justfile`.
-
-The `web-ui` layer has no owned files. It contributes an `AGENTS.md` block and plugin entries.
-
-## Profiles
-
-A profile lists ordered layers, variable overrides, and the five standard commands (`setup`, `test`, `lint`, `fmt`, `check`). Plugin sets live in layers, not in profiles.
-
-## Merge rules
-
-| Target | Rule |
+| Stage | Responsibility |
 |---|---|
-| `.omp/plugins.toml` | union. Existing marketplaces and plugin names stay. |
-| `.omp/mcp.json` | deep merge. Existing keys win. |
-| `mise.toml` `[tools]` | parse with `tomllib`. Append only missing keys inside the block. |
-| `.pre-commit-config.yaml` | insert hook entries inside the existing `repos:` list |
-| other block targets | one marker pair per layer, replaced in place |
+| `preflight` | Check the repository and tools. |
+| `plan` | Classify writes. Refuse ownership conflicts. |
+| `render` | Write owned files under the root. |
+| `tools-install` | Pin project tools through mise. |
+| `hooks-install` | Install hooks with the selected strategy. |
+| `plugins-sync` | Union desired plugins. Install at project scope. |
+| `context-refresh` | Refresh selected agentic context. |
+| `doctor` | Report drift in rendered state. |
 
-## State files
+`apply --dry-run` runs `preflight` and `plan`. It writes no files. A live run returns `ok`, `stages`,
+and optional `next`. Each stage returns `name`, `status`, `seconds`, and `summary`.
 
-| File | Content | Committed |
+`finish` checks doctor, molecule state, and git status. It returns `commitCommand` on success. It
+removes the run marker. It never commits.
+
+## State
+
+| Path | Purpose | Commit |
 |---|---|---|
-| `.omp/scaffold-answers.toml` | interview answers | yes |
-| `.omp/scaffold.json` | profile, layers, plugin version, owned-file hashes | yes |
-| `.omp/plugins/` | OMP project registry and symlinks | no |
+| `.omp/scaffold-answers.toml` | Human answers. | yes |
+| `.omp/scaffold-run.json` | Active run marker. | no |
+| `.omp/scaffold.json` | Profile and owned hashes. | yes |
+| `.omp/plugins.toml` | Desired plugin state. | yes |
+| `.omp/plugins/` | Project plugin registry. | no |
+| `mise.toml` | Project tool pins. | yes |
 
-## Commands
+The CLI writes only inside the root. It preserves content outside managed blocks. It keeps JSON and
+TOML keys. It unions plugin entries.
 
-| Command | Reads | Writes |
-|---|---|---|
-| `inspect` | repository | nothing. Reports stacks, tools, and findings (`hook-manager`, `unowned-file`). |
-| `plan`, `render --dry-run` | repository, profile | nothing. Exit 5 on a conflict. |
-| `render` | plan | owned files, managed blocks, state files |
-| `update` | `.omp/scaffold.json` | managed blocks. Drifted owned files stay untouched. |
-| `doctor` | rendered repository | nothing. Exit 2 on drift. |
+## Delegation
 
-## Formulas
+| Role | Responsibility |
+|---|---|
+| Lead | Interview. Ask required questions. Show `apply --dry-run`. Wait for approval. |
+| `scaffolder` | Run preflight, apply, doctor, and finish through `scaffold`. No shell or edit tools. |
+| Human | Approve answers, plan, and `commitCommand`. |
 
-Two bd formulas pour the same steps as the runbook. Each formula has two human gates. The first gate follows the interview. The second gate precedes the commit.
+The execution agent reports non-zero JSON verbatim. It never commits.
 
-## Workspace rendering
+## Layers and members
 
-The `monorepo` profile selects the root `workspace` layer.
-
-- Answers store `name`, `layer`, `kind`, and `dir` for each member.
-- The engine renders root layers before member layers.
-- Each member layer receives its own variable scope.
-- Managed blocks resolve at the repository root.
-
-Python and TypeScript members use `packages/<name>`. Rust members use `crates/<name>`. Go members use `cmd/<name>` or `services/<name>`. Each family gets one manifest. Release configuration gets one package entry per member.
-
-Language layers add namespaced recipes, scoped hooks, and member CI jobs. Root recipes call each member. The renderer does not write member `mise.toml` files. Root tools remain authoritative.
-
-The `moon` layer requires `workspace`. The `worktrunk` layer works with any profile. `layers show` reports both layers. The renderer reads their template directories.
+A layer declares its contract in `layer.toml`. The contract names tools, files, blocks, variables,
+conflicts, and plugins. A profile composes layers. A workspace records members. Imports preserve
+files. Removal never deletes files.

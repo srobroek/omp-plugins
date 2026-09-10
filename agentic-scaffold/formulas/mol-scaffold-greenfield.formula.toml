@@ -33,10 +33,16 @@ needs = ["interview"]
 description = "Run scaffold.py answers write and commit .omp/scaffold-answers.toml as the desired input."
 
 [[steps]]
+id = "preflight"
+title = "preflight scaffold {{feature}}"
+type = "task"
+needs = ["answers-write"]
+description = "Run scaffold.py preflight and stop on any hard requirement or unresolved hook strategy."
+[[steps]]
 id = "plan"
 title = "plan scaffold {{feature}}"
 type = "task"
-needs = ["answers-write"]
+needs = ["answers-write", "preflight"]
 priority = 1
 description = "Run scaffold.py plan (or render --dry-run) and resolve every conflict before rendering."
 

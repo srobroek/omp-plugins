@@ -5,3 +5,5 @@ requires_tools = ["gh"]
 owns = ["release-please-config.json", ".release-please-manifest.json", ".github/workflows/release-please.yml"]
 blocks = []
 conflicts_with = []
+[tools]
+gh = "latest"

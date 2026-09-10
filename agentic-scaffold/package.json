@@ -3,5 +3,10 @@
   "version": "0.3.2",
   "description": "Deterministic project scaffolding from ordered template layers and Beads formulas.",
   "private": true,
-  "omp": {}
+  "omp": {
+    "extensions": [
+      "extensions/scaffold-tool.ts",
+      "extensions/scaffold-boundary.ts"
+    ]
+  }
 }

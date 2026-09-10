@@ -30,10 +30,21 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
             item.add_marker(skip)
 
 
+def git_root(path: Path) -> Path:
+    """Create the git work-tree boundary required by mutating CLI commands."""
+    path.mkdir(parents=True, exist_ok=True)
+    if not (path / ".git").exists():
+        subprocess.run(["git", "init", "-q"], cwd=path, check=True)
+    return path.resolve()
 def scaffold(*args: str, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
     """Run one scaffold CLI invocation with both streams captured."""
+    argv = list(args)
+    if "--root" in argv:
+        index = argv.index("--root")
+        if index + 1 < len(argv):
+            argv[index + 1] = str(git_root(Path(argv[index + 1])))
     return subprocess.run(
-        [sys.executable, str(SCAFFOLD), *args],
+        [sys.executable, str(SCAFFOLD), *argv],
         capture_output=True,
         text=True,
         check=False,

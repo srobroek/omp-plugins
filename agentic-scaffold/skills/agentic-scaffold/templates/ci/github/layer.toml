@@ -5,3 +5,5 @@ requires_tools = ["gh"]
 owns = [".github/workflows/ci.yml", ".github/renovate.json"]
 blocks = []
 conflicts_with = []
+[tools]
+gh = "latest"

@@ -10,3 +10,5 @@ conditional_plugins = { backend = { var = "app", equals = "true" } }
 source = "srobroek/omp-plugins"
 plugins = ["architecture", "go"]
 when = { var = "language", equals = "go" }
+[tools]
+go = "latest"

@@ -1,20 +1,66 @@
 # Verification
 
-LOAD after rendering, plugin sync, hooks, or update.
+Load after `apply`, or when diagnosing drift. Every command emits one JSON document and includes
+`root` resolved from `--root`.
+
+## Pipeline checks
 
 ```sh
-python3 skill://agentic-scaffold/scripts/scaffold.py doctor --root R
-python3 skill://agentic-scaffold/scripts/scaffold.py plugins sync --check --root R
-just check
+python3 "$SCAFFOLD" preflight --root R --profile P
+python3 "$SCAFFOLD" apply --root R --dry-run
+python3 "$SCAFFOLD" apply --root R
+python3 "$SCAFFOLD" doctor --root R
+python3 "$SCAFFOLD" finish --root R
+```
+
+`preflight` is fail-closed. Read `hard`, `soft`, `missing_tools`, `tools`, and `hook_strategy`;
+all hard findings must be resolved. `apply --dry-run` is preflight plus plan and writes nothing.
+Read `stages` and require every stage to be `ok` before approval. A live `apply` reports each stage
+with `name`, `status`, `seconds`, and `summary`; it stops at the first failure and may include `next`.
+
+`doctor` reads `.omp/scaffold-answers.toml`, `.omp/scaffold.json`, project plugins, hooks, tools,
+context, and managed markers. Read `checks`, `drift`, and `errors`. A declared but uninstalled hook
+is drift, not success. `finish` reads the doctor result, molecule state, and git status; read
+`commitCommand` and `blockers`. It removes `.omp/scaffold-run.json` only on success.
+
+## Exit codes
+
+| Code | Meaning | Decision |
+|---|---|---|
+| `0` | success | continue to the next command |
+| `1` | operational error | stop and report the JSON |
+| `2` | drift | repair through the CLI, then rerun |
+| `3` | needs input | ask the missing required question |
+| `5` | conflict | resolve ownership or layer selection |
+| `6` | boundary refusal | keep all writes and commands inside the project; retry via `scaffold` |
+
+Never treat a non-zero code as a warning. The execution agent reports the JSON verbatim and does not
+invent a smoke test or workaround.
+
+## Project-scope plugin proof
+
+```sh
+python3 "$SCAFFOLD" plugins sync --root R --check
 omp plugin list --json
 ```
 
-`doctor` checks the answers and metadata files, required tools from every selected layer, installed declared hook stages when hooks were installed, project plugin sync, context status, and every managed marker pair. It exits 0 only when no errors or drift are found, 2 for drift, and 1 for an operational failure.
+Read `desired` and `drift` from the CLI. Confirm each declared plugin in `omp plugin list --json`
+has `scope: "project"`; user-scope output is not proof of installation. A non-empty drift list is
+exit `2`.
 
-For a fresh-session proof, run `omp -p --no-session --model smol "Which project-local agentic-scaffold skill is available?"` from the rendered project. Do not infer project-scope installation from user-scope plugin output.
+## Fresh-session proof
 
-After commits, checkouts, and merges refresh context. Keep the JSON report and the exact exit code in the handoff.
+From the rendered project, start a fresh session after reload and ask:
 
-When `core.hooksPath` is configured globally or system-wide and `git-defender` is available, `hooks install` uses `git-defender precommit-tool-setup`: `doctor` reports strategy `git-defender`, `pre-commit` as chained, the pre-push git shim running `prek --stage pre-push`, and commit-msg/post-* stages as not run. Verify `.git/hooks/pre-commit` exists and that a test commit executes prek; do not replace the global hook manager with a direct `prek install`.
+```sh
+omp -p --no-session --model smol "Which project-local agentic-scaffold skill is available?"
+```
 
-For a monorepo, verify that every answer member has a directory and that every family manifest includes the same members. Check root recipes and hook entries for member scoping. `member remove` removes only the answer and manifest entry. It reports the directory and never deletes user files.
+The answer must identify the project-local skill. Do not infer visibility from the current session's
+loaded skill list.
+
+## Workspace proof
+
+For a monorepo, read `members` from `member list`, `answers`, and each family manifest. Every answer
+member must have a directory and a manifest entry. Verify root recipes and hook entries scope each
+member; `member remove` reports its directory and never deletes user files.
