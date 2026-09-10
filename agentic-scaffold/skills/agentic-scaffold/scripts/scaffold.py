@@ -292,6 +292,11 @@ def read_answers(root: Path) -> dict[str, Any]:
     return load_toml(path) if path.is_file() else {}
 
 
+def toml_key(key: str) -> str:
+    """Bare keys stay bare; anything else (e.g. `finding:hook-manager`) is quoted."""
+    return key if re.fullmatch(r"[A-Za-z0-9_-]+", key) else json.dumps(key)
+
+
 def toml_value(value: Any) -> str:
     if isinstance(value, bool):
         return "true" if value else "false"
@@ -318,10 +323,10 @@ def write_answers(root: Path, profile: str, layers: list[str], values: dict[str,
     reserved = {"name", "package", "package_kebab", "description", "profile"}
     for key in sorted(values):
         if key not in reserved:
-            lines.append(f"{key} = {toml_value(values[key])}")
+            lines.append(f"{toml_key(key)} = {toml_value(values[key])}")
     for key in ("name", "description"):
         if key in values:
-            lines.append(f"{key} = {toml_value(values[key])}")
+            lines.append(f"{toml_key(key)} = {toml_value(values[key])}")
     if extra:
         members = extra.get("members")
         if isinstance(members, list):
@@ -1711,7 +1716,19 @@ def interview_questions(root: Path, profile_name: str | None = None) -> dict[str
         questions.append({"id": "profile", "prompt": f"Confirm the detected profile ({suggested})", "required": True, "default": suggested, "allowed": sorted(path.stem for path in PROFILES.glob("*.toml")), "source": "fixed"})
         questions.append({"id": "layers", "prompt": "Which layers should be adopted?", "required": True, "default": "agentic,hooks,tooling", "source": "fixed"})
         for finding in info.get("findings", []):
-            questions.append({"id": f"finding:{finding.get('kind', 'unknown')}", "prompt": f"Resolve finding {finding}", "required": True, "default": "", "source": f"finding:{finding.get('kind', 'unknown')}"})
+            kind = str(finding.get("kind", "unknown"))
+            if kind == "hook-manager" and finding.get("path") == "core.hooksPath" and shutil.which("git-defender"):
+                # preflight already decided the git-defender strategy; nothing for the human to choose
+                continue
+            options = finding.get("options")
+            if kind == "hook-manager" and not options:
+                options = ["prek install --force into the repository hooks directory", "move core.hooksPath to repository scope", "skip hooks"]
+            prompt = f"Resolve finding {kind} at {finding.get('path', '?')}"
+            if finding.get("value"):
+                prompt += f" ({finding['value']})"
+            if options:
+                prompt += ". Choose one of: " + "; ".join(str(o) for o in options)
+            questions.append({"id": f"finding:{kind}", "prompt": prompt, "required": True, "default": "", "allowed": options or None, "source": f"finding:{kind}"})
     else:
         fixed = [("name", "Project name", True, ""), ("purpose", "One-line project purpose", True, ""), ("kind", "Project kind", True, "lib"), ("language", "Project language", True, "none"), ("license", "License", True, "apache-2.0"), ("beads", "Use beads?", True, "false"), ("remote", "Create a remote now?", False, "no"), ("visibility", "Remote visibility", False, "private"), ("web_ui", "Include web UI tooling?", False, "false"), ("speckit", "Include SpecKit?", False, "false")]
         allowed = {"kind": ["lib", "app", "service", "cli"], "language": ["python", "ts", "rust", "go", "terraform", "none"], "beads": ["true", "false"]}

@@ -6,6 +6,7 @@ import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
 
 const execFileAsync = promisify(execFile);
 const COMMANDS = [
+	"inspect",
 	"preflight",
 	"interview",
 	"answers",

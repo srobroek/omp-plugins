@@ -185,3 +185,36 @@ def test_beads_pin_follows_the_beads_answer(tmp_path: Path) -> None:
     assert run("answers", "write", "--root", str(root), "--profile", "agentic-repo", "--set", "name=demo", "--defaults-for", "purpose,kind,language,license,beads").returncode == 0
     assert run("render", "--root", str(root), "--profile", "agentic-repo").returncode == 0
     assert "beads" not in (root / "mise.toml").read_text()
+
+
+def test_finding_answers_serialize_as_valid_toml(tmp_path: Path) -> None:
+    root = git_root(tmp_path)
+    result = run("answers", "write", "--root", str(root), "--profile", "agentic-repo", "--set", "name=demo", "--set", "finding:hook-manager=git-defender", "--defaults-for", "purpose,kind,language,license,beads")
+    assert result.returncode == 0, result.stderr
+    import tomllib
+
+    data = tomllib.loads((root / ".omp/scaffold-answers.toml").read_text())
+    assert data["vars"]["finding:hook-manager"] == "git-defender"
+    assert run("plan", "--root", str(root), "--profile", "agentic-repo").returncode == 0
+
+
+def test_hook_manager_question_is_skipped_when_git_defender_decides(tmp_path: Path, monkeypatch) -> None:
+    import importlib
+
+    sys.path.insert(0, str(CLI.parent))
+    scaffold = importlib.import_module("scaffold")
+    root = git_root(tmp_path)
+    (root / "README.md").write_text("existing project\n")  # brownfield: the interview emits findings only for existing repos
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    (fake_bin / "git-defender").write_text("#!/bin/sh\nexit 0\n")
+    (fake_bin / "git-defender").chmod(0o755)
+    gitconfig = tmp_path / "gitconfig"
+    gitconfig.write_text("[core]\n\thooksPath = /opt/defender/hooks\n")
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(gitconfig))
+    monkeypatch.setenv("PATH", f"{fake_bin}:/usr/bin:/bin")  # hermetic: the host's real git-defender must not leak in
+    with_defender = scaffold.interview_questions(root, "agentic-repo")
+    assert not any(q["id"] == "finding:hook-manager" for q in with_defender["questions"])
+    (fake_bin / "git-defender").unlink()
+    without = scaffold.interview_questions(root, "agentic-repo")
+    assert any(q["id"] == "finding:hook-manager" and q.get("allowed") and "skip hooks" in q["allowed"] for q in without["questions"])
