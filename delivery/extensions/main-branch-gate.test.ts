@@ -499,6 +499,25 @@ describe("findCommitInvocations", () => {
 		}
 	});
 
+	test("unknown wrappers cannot hide Git commit forms", () => {
+		for (const command of [
+			"xcrun git commit -m x",
+			"xcrun git -c alias.ci=commit ci -m x",
+			"xcrun /usr/libexec/git-core/git-commit -m x",
+		]) {
+			expect(findCommitInvocations(command), command).toEqual([
+				{ repoDir: null, dryRun: false, retargeted: true },
+			]);
+		}
+		expect(findCommitInvocations("xcrun git status")).toEqual([]);
+	});
+
+	test("unknown wrapped helper dry-runs fail closed", () => {
+		expect(findCommitInvocations("xcrun git-commit --dry-run")).toEqual([
+			{ repoDir: null, dryRun: false, retargeted: true },
+		]);
+	});
+
 	// SILENT PERMIT at the decision level. A retargeted commit lands in another repository, so
 	// probing the call's own cwd cleared it. Nothing is read now, on any branch, because none of
 	// these names a working directory this gate can check.

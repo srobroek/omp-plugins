@@ -820,9 +820,12 @@ function scanInvocations(command: string): CommitInvocation[] {
 		atCommand = false;
 		const opaqueCommand = token.text.includes("$") || token.text.includes("`");
 		const unquotedWordSplitting = opaqueCommand && !token.quoted;
-		const remaining = tokens
+		const separatorOffset = tokens
 			.slice(i + 1)
-			.filter((candidate) => !isSep(candidate));
+			.findIndex((candidate) => isSep(candidate));
+		const segmentEnd =
+			separatorOffset === -1 ? tokens.length : i + 1 + separatorOffset;
+		const remaining = tokens.slice(i + 1, segmentEnd);
 		if (
 			opaqueCommand &&
 			(unquotedWordSplitting ||
@@ -839,6 +842,31 @@ function scanInvocations(command: string): CommitInvocation[] {
 						candidate.text === "--config-env" ||
 						candidate.text.startsWith("--config-env="),
 				))
+		) {
+			out.push({ repoDir: null, dryRun: false, retargeted: true });
+			continue;
+		}
+		const wrapperCandidate = ["xcrun"].includes(commandBase);
+		const wrappedGitIndex = wrapperCandidate
+			? remaining.findIndex((candidate) => {
+					const base = candidate.text.split("/").at(-1) ?? "";
+					return GIT_COMMANDS[base] === true || base === "git-commit";
+				})
+			: -1;
+		if (
+			wrappedGitIndex !== -1 &&
+			(remaining[wrappedGitIndex]?.text.endsWith("git-commit") ||
+				remaining
+					.slice(wrappedGitIndex + 1)
+					.some((candidate) => candidate.text === "commit") ||
+				remaining
+					.slice(wrappedGitIndex + 1)
+					.some(
+						(candidate) =>
+							candidate.text === "-c" ||
+							candidate.text.startsWith("-c=") ||
+							candidate.text.startsWith("--config-env"),
+					))
 		) {
 			out.push({ repoDir: null, dryRun: false, retargeted: true });
 			continue;
