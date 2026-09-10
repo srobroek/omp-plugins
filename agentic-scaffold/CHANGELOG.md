@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.1](https://github.com/srobroek/omp-plugins/compare/agentic-scaffold--v0.6.0...agentic-scaffold--v0.6.1) (2026-09-10)
+
+
+### Bug Fixes
+
+* **agentic-scaffold:** agentic lane fails closed; prose gate step is shellcheck-clean ([#158](https://github.com/srobroek/omp-plugins/issues/158)) ([e666021](https://github.com/srobroek/omp-plugins/commit/e666021d863e81aa9dde91b9a0e4a5ade1fae1ac))
+
 ## [0.6.0](https://github.com/srobroek/omp-plugins/compare/agentic-scaffold--v0.5.11...agentic-scaffold--v0.6.0) (2026-09-10)
 
 
