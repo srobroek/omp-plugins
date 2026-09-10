@@ -768,11 +768,21 @@ function scanInvocations(command: string): CommitInvocation[] {
 			continue;
 		}
 		atCommand = false;
+		const opaqueCommand = token.text.includes("$") || token.text.includes("`");
+		const remaining = tokens
+			.slice(i + 1)
+			.filter((candidate) => !isSep(candidate));
 		if (
-			(token.text.includes("$") || token.text.includes("`")) &&
-			tokens
-				.slice(i + 1)
-				.some((candidate) => !isSep(candidate) && candidate.text === "commit")
+			opaqueCommand &&
+			(commandGitConfig ||
+				remaining.some((candidate) => candidate.text === "commit") ||
+				remaining.some(
+					(candidate) =>
+						candidate.text === "-c" ||
+						candidate.text.startsWith("-c=") ||
+						candidate.text === "--config-env" ||
+						candidate.text.startsWith("--config-env="),
+				))
 		) {
 			out.push({ repoDir: null, dryRun: false, retargeted: true });
 			continue;
@@ -957,7 +967,13 @@ export function decideCommit(
 	);
 	const opaqueEnvConfig = envHasOpaqueGitConfig(env);
 	const invocations = findCommitInvocations(command);
-	if (opaqueEnvConfig && invocations.length === 0 && /\bd?git\b/.test(command))
+	if (
+		opaqueEnvConfig &&
+		invocations.length === 0 &&
+		(/\bd?git\b/.test(command) ||
+			command.includes("$") ||
+			command.includes("`"))
+	)
 		return {
 			block: true,
 			reason: retargetReason("structured Git configuration"),

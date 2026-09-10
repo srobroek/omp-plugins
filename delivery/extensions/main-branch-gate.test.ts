@@ -1443,6 +1443,34 @@ describe("integration", () => {
 		expect(findCommitInvocations("$" + "{RUNNER} commit --dry-run")).toEqual([
 			{ repoDir: null, dryRun: false, retargeted: true },
 		]);
+		expect(
+			findCommitInvocations("$" + "{RUNNER} -c alias.ci=commit ci -m x"),
+		).toEqual([{ repoDir: null, dryRun: false, retargeted: true }]);
+		expect(
+			findCommitInvocations(
+				"GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=alias.ci $" + "{RUNNER} ci -m x",
+			),
+		).toEqual([{ repoDir: null, dryRun: false, retargeted: true }]);
+	});
+
+	test("structured config cannot hide a variable alias command", () => {
+		const [handler] = register();
+		expect(
+			handler?.({
+				toolName: "bash",
+				toolCallId: "c-variable-alias",
+				input: {
+					command: "$" + "{RUNNER} ci -m x",
+					cwd: "/main-repo",
+					env: {
+						RUNNER: "/usr/bin/git",
+						GIT_CONFIG_COUNT: "1",
+						GIT_CONFIG_KEY_0: "alias.ci",
+						GIT_CONFIG_VALUE_0: "commit",
+					},
+				},
+			}),
+		).toEqual(expect.objectContaining({ block: true }));
 	});
 
 	test("an unrelated or falsy call env leaves the block in place", () => {
