@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.0](https://github.com/srobroek/omp-plugins/compare/agentic-scaffold--v0.3.2...agentic-scaffold--v0.4.0) (2026-09-10)
+
+
+### Features
+
+* **agentic-scaffold:** deterministic apply pipeline, hard boundary, mandatory interview ([#107](https://github.com/srobroek/omp-plugins/issues/107)) ([c6de4c5](https://github.com/srobroek/omp-plugins/commit/c6de4c58dedc14676061d0a49bdd9933ac3e084d))
+
 ## [0.3.2](https://github.com/srobroek/omp-plugins/compare/agentic-scaffold--v0.3.1...agentic-scaffold--v0.3.2) (2026-09-10)
 
 
