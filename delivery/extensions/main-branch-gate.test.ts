@@ -755,6 +755,65 @@ describe("findCommitInvocations", () => {
 		expect(findCommitInvocations("xargs -i echo")).toEqual([]);
 	});
 
+	test("an expansion in a pre-verb option value fails closed", () => {
+		for (const command of [
+			'git -C "$DIR" commit -m x',
+			"git -C $DIR commit -m x",
+			"git -C$DIR commit -m x",
+			'git --git-dir "$DIR" commit -m x',
+			'git --work-tree "$DIR" commit -m x',
+		]) {
+			expect(findCommitInvocations(command), command).toEqual([
+				{ repoDir: null, dryRun: false, retargeted: true },
+			]);
+		}
+		// A `-c` value can name the alias that renames the verb, so any verb is refused.
+		for (const command of ['git -c "$CFG" ci -m x', 'git -c "$CFG" status']) {
+			expect(findCommitInvocations(command), command).toEqual([
+				{ repoDir: null, dryRun: false, retargeted: true },
+			]);
+		}
+		// A `-C` value only decides WHERE, so an ordinary read stays allowed.
+		expect(findCommitInvocations('git -C "$DIR" status')).toEqual([]);
+	});
+
+	test("a dynamic descriptor redirection stays grammar", () => {
+		expect(tokenize("{fd}>out git commit -m x").map((t) => t.text)).toEqual([
+			"{fd}>out",
+			"git",
+			"commit",
+			"-m",
+			"x",
+		]);
+		for (const command of [
+			"{fd}>out git commit -m x",
+			"{fd}>>out git commit -m x",
+			"git {fd}>out commit -m x",
+		]) {
+			expect(findCommitInvocations(command), command).toEqual([
+				{ repoDir: null, dryRun: false },
+			]);
+		}
+	});
+
+	test("clustered xargs flags keep their payload readable", () => {
+		for (const command of [
+			"find . | xargs -0t ls",
+			"find . | xargs -0p echo",
+			"find . | xargs -t echo",
+		]) {
+			expect(findCommitInvocations(command), command).toEqual([]);
+		}
+		for (const command of [
+			"find . | xargs -0t git commit -m x",
+			"find . | xargs -0n1 git commit -m x",
+		]) {
+			expect(findCommitInvocations(command), command).toEqual([
+				{ repoDir: null, dryRun: false, retargeted: true },
+			]);
+		}
+	});
+
 	test("a quoted redirection target does not make the operator argv", () => {
 		for (const command of [
 			"git >'out' commit -m x",

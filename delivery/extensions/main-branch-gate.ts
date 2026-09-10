@@ -499,7 +499,7 @@ export function tokenize(command: string): Token[] {
 			const operator = REDIRECTION_OPERATOR.exec(command.slice(i));
 			if (operator === null) continue;
 			const text = operator[0] as string;
-			if (!/^(?:\d+|&)?$/.test(cur)) flush();
+			if (!/^(?:\d+|&|\{[A-Za-z_][A-Za-z0-9_]*\})?$/.test(cur)) flush();
 			cur += text;
 			started = true;
 			redirection = true;
@@ -663,10 +663,11 @@ const XARGS_VALUE_OPTIONS: Record<string, true> = {
  * so consuming the next word swallowed the payload command: bare `xargs --replace git commit`
  * ran that commit while this scan read `commit` as the payload.
  *
- * Verified against the installed `xargs 0.8.0`: `xargs --replace echo HIT` and `xargs -i echo
- * HIT` both print `HIT`, so neither consumed `echo`. That build rejects `--eof` and `-E`
- * outright, so a command using them runs nothing; listing `--eof` here keeps the word after it
- * readable, which refuses `xargs --eof git commit` rather than letting it pass unseen.
+ * Probed directly against the `xargs` on PATH, `/usr/bin/xargs`: `-E EOF` and `-I {}` each take
+ * a value, `-0t` clusters, and `--replace`, `-i`, and `--eof` are all rejected as unrecognised.
+ * The long forms stay listed so a GNU `xargs` on another host resolves the same payload, and
+ * `--eof` sits here rather than among the value options because reading the word after it
+ * refuses `xargs --eof git commit` instead of skipping past that commit unseen.
  */
 const XARGS_FLAG_OPTIONS: Record<string, true> = {
 	"-0": true,
@@ -721,6 +722,14 @@ function xargsPayloadIndex(remaining: Token[]): number | "unreadable" {
 			XARGS_VALUE_OPTIONS[attached] === true
 		)
 			continue;
+		// Short flags cluster, as in `-0t`. A cluster is only readable when every letter in it
+		// names no value: `-0n1` would need this scan to parse where the value begins, and a wrong
+		// guess there skips the word that names the payload.
+		if (/^-[^-]+$/.test(operand.text)) {
+			const letters = operand.text.slice(1).split("");
+			if (letters.every((letter) => XARGS_FLAG_OPTIONS[`-${letter}`] === true))
+				continue;
+		}
 		if (operand.text.startsWith("-")) return "unreadable";
 		return i;
 	}
@@ -770,8 +779,12 @@ function redirectionWidth(
 	return next !== undefined && !nextIsSeparator ? 2 : 1;
 }
 
-/** A redirection word that is only its operator, so its target is the next word. */
-const REDIRECTION_BARE = /^(?:\d+|&)?(?:<<<|>>|>\||<>|>&|<&|>|<)$/;
+/**
+ * A redirection word that is only its operator, so its target is the next word. The prefix may
+ * name a descriptor: a number, `&`, or bash's dynamic `{fd}` form.
+ */
+const REDIRECTION_BARE =
+	/^(?:\d+|&|\{[A-Za-z_][A-Za-z0-9_]*\})?(?:<<<|>>|>\||<>|>&|<&|>|<)$/;
 
 function scanInvocations(command: string): CommitInvocation[] {
 	const out: CommitInvocation[] = [];
@@ -1181,6 +1194,22 @@ function scanInvocations(command: string): CommitInvocation[] {
 				continue;
 			}
 			if (arg.text.startsWith("-") && arg.text !== "-") {
+				// An option VALUE is consumed below before the verb rule sees it, so an expansion
+				// there is checked here. A `-C` value hides which repository the commit reaches; a
+				// `-c` value can define the alias that turns a later word into `commit`.
+				if (
+					verb === null &&
+					(arg.text.includes("$") || arg.text.includes("`"))
+				) {
+					const optionName =
+						arg.text.indexOf("=") === -1
+							? arg.text
+							: arg.text.slice(0, arg.text.indexOf("="));
+					if (optionName === "-c" || optionName === "--config-env")
+						aliasOpaque = true;
+					else retargeted = true;
+					continue;
+				}
 				if (verb === null && arg.text.startsWith("-C") && arg.text !== "-C") {
 					const value = arg.text.slice(2);
 					repoDir =
@@ -1208,6 +1237,14 @@ function scanInvocations(command: string): CommitInvocation[] {
 				if (eq === -1 && verb === null && PRE_VERB_VALUE_FLAGS[name] === true) {
 					const value = tokens[j + 1];
 					if (value !== undefined && !isSep(value)) {
+						// The value is consumed here, so the verb rule never sees it. An expansion
+						// in it hides the repository, or the alias that renames the verb.
+						if (value.text.includes("$") || value.text.includes("`")) {
+							if (name === "-c" || name === "--config-env") aliasOpaque = true;
+							else retargeted = true;
+							j++;
+							continue;
+						}
 						if (name === "-c") {
 							const keyEnd = value.text.indexOf("=");
 							if (
