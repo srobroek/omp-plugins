@@ -11,7 +11,8 @@ shell forms below are the exact CLI commands used by that tool.
 python3 "$SCAFFOLD" preflight --root R --profile P
 ```
 
-Read `root`, `hard`, `soft`, `missing_tools`, `tools`, `hook_strategy`, and `version`.
+Read `root`, `hard`, `soft`, `missing_tools`, `tools`, and `version`. `hook_strategy` is recorded
+for later stages; do not report or ask about it.
 Require exit `0`; exit `1` is a hard prerequisite failure. Resolve the reported prerequisite or
 stop. Do not write files before this command succeeds. The root must be a git work tree, not
 `$HOME` or `~/.omp`, and every tool is later pinned in the project's `mise.toml`.
@@ -51,13 +52,16 @@ a conflict; return to the interview and change the selected profile or layer.
 python3 "$SCAFFOLD" apply --root R --dry-run
 ```
 
-Read `root`, `ok`, and `stages`. Each stage has `name`, `status` (`ok|skipped|failed`), `seconds`,
-and `summary`; a failure may include `next`. This command is preflight plus plan and writes
-nothing.
+Read `root`, `ok`, and `planSummary`. `planSummary` has `profile`, `layers`, `counts` (rows per
+class), `lines` (one `class path (layer)` line per file), `conflicts`, and `preflight`. The full
+`stages` array is for debugging a failure, not for the human. This command is preflight plus plan
+and writes nothing.
 
-Decision: show the complete JSON plan to the human and wait for explicit approval. On exit `2`,
-resolve drift; on exit `5`, resolve ownership; on exit `6`, resolve the boundary. Do not delegate
-execution until the human approves the exact plan.
+Present the plan in the assistant message as a table with one row per line of `planSummary.lines`
+(columns: action, path, layer) plus the counts; then call `ask` with two short options, "Approve
+plan" and "Change answers", and no JSON in either description. Approving in OMP plan mode counts
+as approval. On exit `2`, resolve drift; on exit `5`, resolve ownership; on exit `6`, resolve the
+boundary. Do not delegate execution until the human approves.
 
 ## 5. Execute the approved pipeline
 

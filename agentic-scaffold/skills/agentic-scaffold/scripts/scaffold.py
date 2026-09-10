@@ -347,7 +347,7 @@ def write_answers(root: Path, profile: str, layers: list[str], values: dict[str,
     _write_under_root(root, path, "\n".join(lines) + "\n")
 
 
-def resolve_selection(root: Path, profile_name: str | None, name: str | None, overrides: dict[str, str], extra_layers: list[str]) -> tuple[str, dict[str, Any], list[str], dict[str, str]]:
+def resolve_selection(root: Path, profile_name: str | None, name: str | None, overrides: dict[str, str], extra_layers: list[str], chosen_layers: list[str] | None = None) -> tuple[str, dict[str, Any], list[str], dict[str, str]]:
     answers = read_answers(root)
     selected_profile = profile_name or str(answers.get("profile", ""))
     if not selected_profile:
@@ -356,6 +356,11 @@ def resolve_selection(root: Path, profile_name: str | None, name: str | None, ov
     profile_layers = [str(item) for item in profile.get("layers", [])]
     answer_layers = answers.get("layers")
     layers = [str(item) for item in answer_layers] if isinstance(answer_layers, list) and str(answers.get("profile", selected_profile)) == selected_profile else profile_layers
+    if chosen_layers is not None:
+        unknown = [layer for layer in chosen_layers if not (TEMPLATES / layer / "layer.toml").is_file()]
+        if unknown:
+            fail(f"unknown layers in answer: {', '.join(unknown)}", EXIT_CONFLICT)
+        layers = list(chosen_layers)
     layers.extend(str(item) for item in extra_layers)
     layers = list(dict.fromkeys(layers))
     values = layer_defaults(layers)
@@ -1718,7 +1723,11 @@ def interview_questions(root: Path, profile_name: str | None = None) -> dict[str
     questions: list[dict[str, Any]] = []
     if brownfield:
         questions.append({"id": "profile", "prompt": f"Confirm the detected profile ({suggested})", "required": True, "default": suggested, "allowed": sorted(path.stem for path in PROFILES.glob("*.toml")), "source": "fixed"})
-        questions.append({"id": "layers", "prompt": "Which layers should be adopted?", "required": True, "default": "agentic,hooks,tooling", "source": "fixed"})
+        catalogue = layers_list()["layers"]
+        profile_layers = [str(item) for item in load_profile(suggested).get("layers", [])] if (PROFILES / f"{suggested}.toml").is_file() else []
+        proposed = profile_layers or ["base", "agentic", "hooks", "tooling"]
+        questions.append({"id": "layers", "prompt": "Which layers should be adopted? Pick every layer that applies.", "required": True, "multi": True, "default": ",".join(proposed),
+                          "allowed": [row["name"] for row in catalogue], "choices": [{"value": row["name"], "summary": row["summary"]} for row in catalogue], "source": "fixed"})
         for finding in info.get("findings", []):
             kind = str(finding.get("kind", "unknown"))
             if kind == "hook-manager" and finding.get("path") == "core.hooksPath" and shutil.which("git-defender"):
@@ -1757,6 +1766,8 @@ def answers_write_interview(root: Path, profile_name: str | None, name: str | No
     supplied = dict(overrides)
     if name:
         supplied["name"] = name
+    if profile_name and not supplied.get("profile"):
+        supplied["profile"] = profile_name  # --profile answers the profile question
     missing = [str(row["id"]) for row in questions["questions"] if row.get("required") and not supplied.get(str(row["id"])) and str(row["id"]) not in defaults_for]
     if missing:
         return {"ok": False, "missing": missing, "questions": questions["questions"]}, EXIT_NEEDS_INPUT
@@ -1767,7 +1778,8 @@ def answers_write_interview(root: Path, profile_name: str | None, name: str | No
     selected = profile or supplied.get("profile") or str(questions.get("profile", ""))
     if not selected:
         return {"ok": False, "missing": ["profile"]}, EXIT_NEEDS_INPUT
-    values_profile, _, layers, values = resolve_selection(root, selected, supplied.get("name"), supplied, extra_layers)
+    chosen_layers = [item.strip() for item in str(supplied.pop("layers", "")).split(",") if item.strip()]
+    values_profile, _, layers, values = resolve_selection(root, selected, supplied.get("name"), supplied, extra_layers, chosen_layers or None)
     write_answers(root, values_profile, layers, values, {"defaults_for": defaults_for, "interviewed_at": datetime.now(UTC).isoformat(), "members": answers_members(root) if answers_members(root) else None})
     marker = root / ".omp/scaffold-run.json"
     _write_under_root(root, marker, json.dumps({"root": str(root), "started": datetime.now(UTC).isoformat(), "session": os.environ.get("OMP_SESSION_ID"), "profile": values_profile, "stages": []}, indent=2, sort_keys=True) + "\n")
@@ -1803,7 +1815,15 @@ def apply_pipeline(root: Path, profile: str | None, *, dry_run: bool = False, st
     if dry_run:
         pf, pc = preflight(root, selected, strict=False, allow_dirty=allow_dirty)
         plan, _, _, _, plan_code = plan_payload(root, selected, None, {}, [], None, set())
-        return {"ok": pc == 0 and plan_code == 0, "stages": [{"name": "preflight", "status": "ok" if pc == 0 else "failed", "seconds": 0, "summary": pf}, {"name": "plan", "status": "ok" if plan_code == 0 else "failed", "seconds": 0, "summary": plan}]}, pc or plan_code
+        counts: dict[str, int] = {}
+        lines: list[str] = []
+        for row in plan.get("files", []):
+            cls = str(row.get("class", "?")); counts[cls] = counts.get(cls, 0) + 1
+            layer = row.get("layer"); layer = ",".join(layer) if isinstance(layer, list) else str(layer)
+            lines.append(f"{cls:<12} {row.get('path')}  ({layer})")
+        summary = {"profile": plan.get("profile"), "layers": plan.get("layers"), "counts": counts, "lines": lines, "conflicts": plan.get("conflicts", []),
+                   "preflight": {"ok": pc == 0, "hard": pf.get("hard", []), "soft": pf.get("soft", []), "missing_tools": pf.get("missing_tools", [])}}
+        return {"ok": pc == 0 and plan_code == 0, "planSummary": summary, "stages": [{"name": "preflight", "status": "ok" if pc == 0 else "failed", "seconds": 0, "summary": pf}, {"name": "plan", "status": "ok" if plan_code == 0 else "failed", "seconds": 0, "summary": plan}]}, pc or plan_code
     marker_path = root / ".omp/scaffold-run.json"
     try:
         marker = json.loads(marker_path.read_text()) if marker_path.is_file() else {"root": str(root), "started": datetime.now(UTC).isoformat(), "profile": selected, "stages": []}
@@ -1846,14 +1866,7 @@ def finish(root: Path) -> tuple[dict[str, Any], int]:
         meta = json.loads(metadata_path(root).read_text())
     except (OSError, json.JSONDecodeError):
         pass
-    owned = set(str(path) for path in meta.get("owned_hashes", {})) | {".omp/scaffold-answers.toml", ".omp/scaffold.json", ".omp/plugins.toml", "mise.toml"}
-    try:
-        recorded_layers = [str(item) for item in meta.get("layers", [])]
-        recorded_values = meta.get("vars", {}) if isinstance(meta.get("vars", {}), dict) else {}
-        generated_direct, generated_blocks = collect(recorded_layers, {str(k): str(v) for k, v in recorded_values.items()})
-        owned |= set(generated_direct) | set(generated_blocks)
-    except (OSError, KeyError, SystemExit):
-        pass
+    owned = _owned_paths(root, meta)
     # Stage state files are rewritten by later stages (hooks, plugins) and never block finish; the
     # commit command stages them together with everything else.
     state_files = {".omp/scaffold.json", ".omp/scaffold-run.json"}
@@ -1869,6 +1882,19 @@ def finish(root: Path) -> tuple[dict[str, Any], int]:
     if marker.exists():
         marker.unlink()
     return payload, 0
+
+
+def _owned_paths(root: Path, meta: dict[str, Any]) -> set[str]:
+    """Every path the scaffold writes for the recorded layers: direct outputs, managed blocks, and state files."""
+    owned = set(str(path) for path in meta.get("owned_hashes", {})) | {".omp/scaffold-answers.toml", ".omp/scaffold.json", ".omp/plugins.toml", "mise.toml"}
+    try:
+        recorded_layers = [str(item) for item in meta.get("layers", [])]
+        recorded_values = meta.get("vars", {}) if isinstance(meta.get("vars", {}), dict) else {}
+        generated_direct, generated_blocks = collect(recorded_layers, {str(k): str(v) for k, v in recorded_values.items()})
+        owned |= set(generated_direct) | set(generated_blocks)
+    except (OSError, KeyError, SystemExit):
+        pass
+    return owned
 
 
 def abort(root: Path) -> tuple[dict[str, Any], int]:
@@ -1890,7 +1916,7 @@ def abort(root: Path) -> tuple[dict[str, Any], int]:
         meta = json.loads(metadata_path(root).read_text())
     except (OSError, json.JSONDecodeError):
         pass
-    owned = set(str(path) for path in meta.get("owned_hashes", {})) | {".omp/scaffold-answers.toml", ".omp/scaffold.json", ".omp/plugins.toml", "mise.toml"}
+    owned = _owned_paths(root, meta)
     rows = [(line[:2], line[3:].strip().split(" -> ")[-1]) for line in status.stdout.splitlines() if len(line) >= 4]
     stages = [row.get("name") for row in run.get("stages", []) if isinstance(row, dict)]
     dirty_owned = sorted(path for _, path in rows if path in owned)
