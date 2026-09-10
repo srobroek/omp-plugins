@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.5.3](https://github.com/srobroek/omp-plugins/compare/agentic-scaffold--v0.5.2...agentic-scaffold--v0.5.3) (2026-09-10)
+
+
+### Bug Fixes
+
+* **agentic-scaffold:** layer multi-select, compact plan summary, per-path abort revert ([#121](https://github.com/srobroek/omp-plugins/issues/121)) ([b8d193d](https://github.com/srobroek/omp-plugins/commit/b8d193d28d5a4092fbe1e4e1a4694ea9fe45c75a))
+
+
+### Documentation
+
+* **agentic-scaffold:** hook strategy is detected, not chosen in the interview ([#123](https://github.com/srobroek/omp-plugins/issues/123)) ([051c59f](https://github.com/srobroek/omp-plugins/commit/051c59f2af933c185973821f7d4d7e4382b8ebac))
+
 ## [0.5.2](https://github.com/srobroek/omp-plugins/compare/agentic-scaffold--v0.5.1...agentic-scaffold--v0.5.2) (2026-09-10)
 
 
