@@ -39,6 +39,24 @@ const ACTOR_VARS = ["BEADS_ACTOR", "BD_ACTOR"] as const;
 type ActorVar = (typeof ACTOR_VARS)[number];
 
 const VALUE_FLAGS = new Set(["--actor", "--db", "-C", "--directory", "--dolt-auto-commit"]);
+const TRANSPARENT_WRAPPERS: Record<string, true> = { command: true, env: true, sudo: true };
+const WRAPPER_VALUE_FLAGS: Record<string, true> = {
+	"-C": true,
+	"--chdir": true,
+	"--chroot": true,
+	"--command-timeout": true,
+	"-g": true,
+	"--group": true,
+	"-h": true,
+	"--host": true,
+	"-p": true,
+	"--prompt": true,
+	"-R": true,
+	"-T": true,
+	"-u": true,
+	"--unset": true,
+	"--user": true,
+};
 
 /** Literal simple commands only; this is not a shell interpreter. */
 export function commandSegments(command: string): string[][] {
@@ -84,9 +102,23 @@ export function bdInvocations(command: string): BdInvocation[] {
 			continue;
 		}
 		let i = 0;
-		while (/^[A-Za-z_]\w*=/.test(tokens[i] ?? "")) i++;
+		const prefix: string[] = [];
+		while (true) {
+			while (/^[A-Za-z_]\w*=/.test(tokens[i] ?? "")) {
+				prefix.push(tokens[i] as string);
+				i++;
+			}
+			const wrapper = tokens[i] ?? "";
+			if (TRANSPARENT_WRAPPERS[wrapper] !== true) break;
+			i++;
+			if (wrapper === "command") continue;
+			while (tokens[i]?.startsWith("-")) {
+				const flag = tokens[i] as string;
+				i++;
+				if (WRAPPER_VALUE_FLAGS[flag] === true) i++;
+			}
+		}
 		if (tokens[i] !== "bd") continue;
-		const prefix = tokens.slice(0, i);
 		i++;
 		while (tokens[i]?.startsWith("-")) {
 			const flag = tokens[i];

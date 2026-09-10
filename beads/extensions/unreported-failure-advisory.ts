@@ -47,6 +47,47 @@ const MAX_SIGNAL_CHARS = 120;
 const CHECK_RE =
 	/\b(?:(?:bun|npm|pnpm|yarn|deno|node)\s+(?:run\s+)?(?:test|typecheck|type-check|lint|check|build)|bunx\s+\S+|npx\s+\S+|tsc\b|biome\b|eslint\b|oxlint\b|vitest\b|jest\b|mocha\b|slopvac\b|pytest\b|ruff\b|mypy\b|pyright\b|tox\b|cargo\s+(?:test|clippy|check|build|fmt)|go\s+(?:test|vet|build)|golangci-lint\b|just\s+\S+|make\b|mise\s+run\s+\S+|moon\s+run\s+\S+|uv\s+run\s+\S+|poetry\s+run\s+\S+|pre-commit\s+run)/i;
 
+const WRAPPER_VALUE_FLAGS: Record<string, true> = {
+	"-C": true,
+	"-g": true,
+	"--group": true,
+	"-h": true,
+	"--host": true,
+	"-p": true,
+	"--prompt": true,
+	"-R": true,
+	"--chroot": true,
+	"-T": true,
+	"--command-timeout": true,
+	"-u": true,
+	"--unset": true,
+	"--user": true,
+};
+
+function commandStart(tokens: string[]): number {
+	let index = 0;
+	while (index < tokens.length) {
+		while (/^[A-Za-z_]\w*=/.test(tokens[index] ?? "")) index++;
+		const wrapper = tokens[index];
+		if (wrapper === "command") {
+			if (tokens[index + 1]?.startsWith("-")) return tokens.length;
+			index++;
+			continue;
+		}
+		if (wrapper !== "env" && wrapper !== "sudo") return index;
+		index++;
+		while (tokens[index]?.startsWith("-")) {
+			const flag = tokens[index] as string;
+			index++;
+			if (WRAPPER_VALUE_FLAGS[flag] === true) index++;
+		}
+		if (wrapper === "env") {
+			while (/^[A-Za-z_]\w*=/.test(tokens[index] ?? "")) index++;
+		}
+	}
+	return index;
+}
+
 /**
  * A log record the program under test printed, rather than the runner's own
  * tally. `ERROR:root:retry 1 of 3 failed` inside a green suite is not three
@@ -146,9 +187,7 @@ export function resetUnreportedFailureAdvisoryForTests(): void {
  */
 export function checkLabel(command: string): string | undefined {
 	for (const tokens of commandSegments(command)) {
-		let i = 0;
-		while (/^[A-Za-z_]\w*=/.test(tokens[i] ?? "")) i++;
-		const candidate = tokens.slice(i).join(" ");
+		const candidate = tokens.slice(commandStart(tokens)).join(" ");
 		const match = candidate.match(CHECK_RE);
 		if (match?.index === 0) return match[0].replace(/\s+/g, " ").toLowerCase();
 	}

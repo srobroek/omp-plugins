@@ -168,6 +168,13 @@ describe("firstBdVerb / isMutatingBdCommand", () => {
 		expect(isMutatingBdCommand("cat <<'EOF'\nbd close x\nEOF")).toBe(false);
 	});
 
+	test("transparent wrappers retain real bd invocations", () => {
+		expect(firstBdVerb("command bd close x")).toBe("close");
+		expect(firstBdVerb("env FOO=1 bd close x")).toBe("close");
+		expect(firstBdVerb("sudo -u build bd close x")).toBe("close");
+		expect(isMutatingBdCommand("echo command bd close x")).toBe(false);
+	});
+
 	test("comments without add is read-only", () => {
 		expect(firstBdVerb("bd comments chezmoi-7eg")).toBe("comments");
 		expect(isMutatingBdCommand("bd comments chezmoi-7eg")).toBe(false);
