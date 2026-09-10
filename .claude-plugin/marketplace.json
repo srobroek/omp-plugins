@@ -40,7 +40,7 @@
       "name": "beads",
       "description": "Beads issue tracking: dependency DAGs, formulas, and decisions recorded as beads.",
       "source": "./beads",
-      "version": "1.0.9",
+      "version": "1.0.10",
       "category": "productivity"
     },
     {
@@ -61,7 +61,7 @@
       "name": "chezmoi",
       "description": "Edit chezmoi-managed dotfiles at their authoritative source.",
       "source": "./chezmoi",
-      "version": "0.3.1",
+      "version": "0.4.0",
       "category": "productivity"
     },
     {
