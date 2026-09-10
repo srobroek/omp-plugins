@@ -1,6 +1,6 @@
 {
   "name": "@srobroek/agentic-scaffold",
-  "version": "0.5.8",
+  "version": "0.5.9",
   "description": "Deterministic project scaffolding from ordered template layers and Beads formulas.",
   "private": true,
   "omp": {
