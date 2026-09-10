@@ -1420,6 +1420,31 @@ describe("integration", () => {
 		expect(calls).toEqual([]);
 	});
 
+	test("the bash call env cannot hide the Git command name", () => {
+		const [handler] = register();
+		expect(
+			handler?.({
+				toolName: "bash",
+				toolCallId: "c-runner",
+				input: {
+					command: "$" + "{RUNNER} commit -m x",
+					cwd: "/main-repo",
+					env: { RUNNER: "/usr/bin/git" },
+				},
+			}),
+		).toEqual(expect.objectContaining({ block: true }));
+	});
+
+	test("variable command policy is commit-specific and fail closed", () => {
+		expect(findCommitInvocations("$" + "{RUNNER} status")).toEqual([]);
+		expect(findCommitInvocations("env $" + "{RUNNER} commit -m x")).toEqual([
+			{ repoDir: null, dryRun: false, retargeted: true },
+		]);
+		expect(findCommitInvocations("$" + "{RUNNER} commit --dry-run")).toEqual([
+			{ repoDir: null, dryRun: false, retargeted: true },
+		]);
+	});
+
 	test("an unrelated or falsy call env leaves the block in place", () => {
 		const { run } = fakeGit({ "/main-repo": "main" });
 		setGitRunForTests(run);
