@@ -30,6 +30,8 @@ project or to `~/.omp/agent/mcp.json` for your user:
 }
 ```
 
+Put one override below in the user file for the active profile. Use `~/.omp/agent/mcp.json` for the default profile or `~/.omp/profiles/<name>/agent/mcp.json` for a named profile.
+
 The next two active-profile snippets are alternatives to the native entry above and to each other. Use only the snippet for the carrier that supplies the disabled server. Do not combine them.
 
 ### OMP package mirror (`diagram/.mcp.json`)
