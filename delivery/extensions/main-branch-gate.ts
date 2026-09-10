@@ -623,15 +623,9 @@ function scanInvocations(command: string): CommitInvocation[] {
 					optionName === "-S" ||
 					optionName === "--split-string"
 				) {
-					const splitValue = attachedShortSplit
-						? operand.text.slice(2)
-						: operand.text.includes("=")
-							? operand.text.slice(operand.text.indexOf("=") + 1)
-							: (tokens[k + 1]?.text ?? "");
-					// `env -S` performs its own argv split. Conservatively refuse any split
-					// payload mentioning git, even without a target assignment.
-					if (/\bd?git\b/.test(splitValue))
-						out.push({ repoDir: null, dryRun: false, retargeted: true });
+					// `env -S` performs quote removal and argv splitting with grammar this scanner
+					// does not implement. Refuse every split payload rather than inspect raw text.
+					out.push({ repoDir: null, dryRun: false, retargeted: true });
 					if (!attachedShortSplit && !operand.text.includes("=")) k++;
 					continue;
 				}
@@ -883,12 +877,10 @@ export function decideCommit(
 	env: NodeJS.ProcessEnv = process.env,
 ): { block: true; reason: string } | undefined {
 	if (env[ALLOW_ENV] === "1") return;
-	// Tested on the raw string AND with backslashes removed. A backslash removes syntax meaning
-	// without changing argv, so `g\it commit` runs git while the raw text carries no `git` for the
-	// regex to find, and this cheap reject cleared a real commit on a protected branch. Stripping
-	// can only ADD matches, so the extra test is one-sided.
-	if (!PREFILTER.test(command) && !PREFILTER.test(command.replace(/\\/g, "")))
-		return;
+	// Quote and backslash removal can join argv words such as `g\it` or `g"i"t`.
+	// This normalization only adds candidates; the invocation scanner still decides behavior.
+	const prefilterText = command.replace(/[\\'"]/g, "");
+	if (!PREFILTER.test(command) && !PREFILTER.test(prefilterText)) return;
 	// `GIT_DIR`, `GIT_WORK_TREE` and `GIT_COMMON_DIR` in the CALL's environment retarget every
 	// git command in it, exactly as the flags do, and are just as unreadable from here.
 	const envSelector = TARGET_ENV.find(

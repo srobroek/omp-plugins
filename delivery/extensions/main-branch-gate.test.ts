@@ -362,6 +362,9 @@ describe("findCommitInvocations", () => {
 			["env --split='git commit -m x'", {}],
 			["env -vS 'git commit -m x'", {}],
 			["env -ivC/protected git commit -m x", {}],
+			["env -S 'g\"i\"t commit -m x'", {}],
+			["env --split-string='g\"i\"t commit -m x'", {}],
+			["env -S '-C /protected g\"i\"t commit -m x'", {}],
 		] as Array<[string, Record<string, string>]>) {
 			const { run, calls } = fakeGit({
 				"/feature": "feature",
