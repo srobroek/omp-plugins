@@ -6,6 +6,7 @@ import { join } from "node:path";
 import sessionBeadsLifecycle, {
 	autoPinBeadsDir,
 	pinBashInput,
+	sessionPinAfter,
 	releaseAutoPin,
 	repoIdentity,
 	bdVerbs,
@@ -118,6 +119,19 @@ describe("autoPinBeadsDir", () => {
 });
 
 describe("pinBashInput", () => {
+	test("sessionPinAfter mirrors a foreign process pin, uses the checkout on conflict or when unpinned", () => {
+		const root = mkdtempSync(join(tmpdir(), "beads-pinafter-"));
+		mkdirSync(join(root, ".beads"));
+		expect(sessionPinAfter({}, root, { BEADS_DIR: "/human/.beads" })).toBe("/human/.beads");
+		expect(sessionPinAfter({ pinned: join(root, ".beads") }, root, { BEADS_DIR: join(root, ".beads") })).toBe(join(root, ".beads"));
+		expect(sessionPinAfter({ conflict: "/alpha/.beads" }, root, { BEADS_DIR: "/alpha/.beads" })).toBe(join(root, ".beads"));
+		expect(sessionPinAfter({}, root, {})).toBe(join(root, ".beads"));
+		const plain = mkdtempSync(join(tmpdir(), "beads-pinafter-plain-"));
+		expect(sessionPinAfter({}, plain, {})).toBeUndefined();
+		rmSync(root, { recursive: true, force: true });
+		rmSync(plain, { recursive: true, force: true });
+	});
+
 	test("adds the session pin to a bash call, keeps a caller pin, ignores malformed env", () => {
 		expect(pinBashInput({ command: "bd list" }, "/repo/.beads")).toEqual({ command: "bd list", env: { BEADS_DIR: "/repo/.beads" } });
 		expect(pinBashInput({ command: "bd list", env: { A: "1" } }, "/repo/.beads")).toEqual({ command: "bd list", env: { A: "1", BEADS_DIR: "/repo/.beads" } });
@@ -447,6 +461,23 @@ describe("integration", () => {
 			input: { command: "printenv BEADS_DIR", env: { BEADS_DIR: join(root, ".beads") } },
 		});
 		expect(await call({ toolName: "read", toolCallId: "2", input: { path: "x" } }, ctx)).toBeUndefined();
+		const human = mkdtempSync(join(tmpdir(), "beads-callpin-human-"));
+		mkdirSync(join(human, ".beads"));
+		const saved = process.env.BEADS_DIR;
+		const savedPath = process.env.PATH;
+		process.env.BEADS_DIR = "/human/pinned/.beads";
+		process.env.PATH = "/nonexistent"; // no bd: the pin decision is the only effect
+		try {
+			await handlers.session_start![0]!({}, { cwd: human, sessionManager: { getSessionId: () => "human-session" } });
+			const pinned = await call({ toolName: "bash", toolCallId: "4", input: { command: "bd list" } }, { cwd: human, sessionManager: { getSessionId: () => "human-session" } });
+			expect((pinned as { input: { env: Record<string, string> } }).input.env.BEADS_DIR).toBe("/human/pinned/.beads"); // never the checkout's own
+		} finally {
+			if (saved === undefined) delete process.env.BEADS_DIR;
+			else process.env.BEADS_DIR = saved;
+			if (savedPath === undefined) delete process.env.PATH;
+			else process.env.PATH = savedPath;
+			rmSync(human, { recursive: true, force: true });
+		}
 		const plain = mkdtempSync(join(tmpdir(), "beads-callpin-plain-"));
 		expect(await call({ toolName: "bash", toolCallId: "3", input: { command: "bd list" } }, { cwd: plain, sessionManager: { getSessionId: () => "other" } })).toBeUndefined();
 		rmSync(root, { recursive: true, force: true });
