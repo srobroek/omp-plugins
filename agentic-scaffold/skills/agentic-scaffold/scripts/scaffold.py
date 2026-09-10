@@ -1872,9 +1872,11 @@ def abort(root: Path) -> tuple[dict[str, Any], int]:
     root = validate_root(root, require_git=True)
     marker = root / ".omp/scaffold-run.json"
     run: dict[str, Any] = {}
-    if marker.exists():
+    had_run = marker.exists()
+    if had_run:
         try:
-            run = json.loads(marker.read_text())
+            loaded = json.loads(marker.read_text())
+            run = loaded if isinstance(loaded, dict) else {}
         except (OSError, json.JSONDecodeError):
             run = {}
         marker.unlink()
@@ -1887,7 +1889,7 @@ def abort(root: Path) -> tuple[dict[str, Any], int]:
     owned = set(str(path) for path in meta.get("owned_hashes", {})) | {".omp/scaffold-answers.toml", ".omp/scaffold.json", ".omp/plugins.toml", "mise.toml"}
     dirty = [line[3:].strip().split(" -> ")[-1] for line in status.stdout.splitlines() if len(line) >= 4]
     stages = [row.get("name") for row in run.get("stages", []) if isinstance(row, dict)]
-    return {"ok": True, "hadRun": bool(run), "stagesCompleted": stages, "dirtyOwned": sorted(p for p in dirty if p in owned), "dirtyOther": sorted(p for p in dirty if p not in owned),
+    return {"ok": True, "hadRun": had_run, "stagesCompleted": stages, "dirtyOwned": sorted(p for p in dirty if p in owned), "dirtyOther": sorted(p for p in dirty if p not in owned),
             "resetCommand": "git checkout -- . && git ls-files --others --exclude-standard -z | xargs -0 rm -rf"}, 0
 
 
