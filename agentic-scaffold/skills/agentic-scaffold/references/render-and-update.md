@@ -14,3 +14,13 @@ python3 skill://agentic-scaffold/scripts/scaffold.py update --root R
 `update` reads the committed answers file and current installed plugin version. Managed blocks refresh. An owned file whose hash differs from the last render is reported as `drifted` and remains untouched. Text outside markers is preserved.
 
 Exit codes: 0 success, 1 operational error, 2 drift/check failure, 5 conflict. Never use `--force-layer` or `--adopt` without reporting the decision in the review.
+
+For a monorepo, render root layers first. Then render each member using its own variable scope. Member files are rooted below the recorded member directory. Managed blocks remain at the repository root.
+
+```sh
+python3 skill://agentic-scaffold/scripts/scaffold.py member list --root R
+python3 skill://agentic-scaffold/scripts/scaffold.py member add --root R --name api --layer lang/python --kind app
+python3 skill://agentic-scaffold/scripts/scaffold.py render --root R
+```
+
+`update` re-renders every recorded member. It reports drifted owned member files and leaves them untouched.

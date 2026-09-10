@@ -19,4 +19,14 @@ A foreign block in `AGENTS.md` is not a conflict: append the managed block and p
 
 When `core.hooksPath` is configured globally or system-wide and `git-defender` is on `PATH`, choose the chained strategy: `hooks install` runs `git-defender precommit-tool-setup` in the repository, which creates `.git/hooks/pre-commit` for the system hook to chain and leaves pre-push to the git shim running `prek --stage pre-push`; `commit-msg` and `post-commit|post-checkout|post-merge` do not run (use `just context` for context refresh). If `git-defender` is unavailable, retain the `hook-manager` finding and resolve it with `--force`, repository-scoped hooks, or an explicit skip.
 
+## Workspace cases
+
+| Case | Detection | Resolution |
+|---|---|---|
+| Root language plus workspace | `plan` exit 5 | Remove root `lang/*`; add the language with `member add`. |
+| Manifest member missing from answers | `inspect` finding `unmanaged-member` | Run `member import --dir D --layer lang/X`. |
+| Two members claim one directory | `plan` exit 5 | Rename one member or provide a distinct directory. |
+
+Workspace conflicts are resolved before rendering. Member imports never rewrite existing member files.
+
 Merging rules: TOML is key-level append inside managed blocks; JSON is existing-wins deep merge; YAML `repos:` has one shared header and each layer contributes list entries; plain text is a managed block. Exit 0 is success, 1 is operational error, 2 is drift, and 5 is conflict.

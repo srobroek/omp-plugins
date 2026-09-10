@@ -16,3 +16,5 @@ For a fresh-session proof, run `omp -p --no-session --model smol "Which project-
 After commits, checkouts, and merges refresh context. Keep the JSON report and the exact exit code in the handoff.
 
 When `core.hooksPath` is configured globally or system-wide and `git-defender` is available, `hooks install` uses `git-defender precommit-tool-setup`: `doctor` reports strategy `git-defender`, `pre-commit` as chained, the pre-push git shim running `prek --stage pre-push`, and commit-msg/post-* stages as not run. Verify `.git/hooks/pre-commit` exists and that a test commit executes prek; do not replace the global hook manager with a direct `prek install`.
+
+For a monorepo, verify that every answer member has a directory and that every family manifest includes the same members. Check root recipes and hook entries for member scoping. `member remove` removes only the answer and manifest entry. It reports the directory and never deletes user files.

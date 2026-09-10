@@ -81,3 +81,13 @@ A profile lists ordered layers, variable overrides, and the five standard comman
 ## Formulas
 
 Two bd formulas pour the same steps as the runbook. Each formula has two human gates. The first gate follows the interview. The second gate precedes the commit.
+
+## Workspace rendering
+
+The `monorepo` profile adds the root `workspace` layer. Answers contain `[[members]]` entries with `name`, `layer`, `kind`, and `dir`. The engine renders root layers first. It then renders each member layer below its directory with a member variable scope. Managed blocks always resolve at the repository root.
+
+Python and TypeScript members use `packages/<name>`. Rust members use `crates/<name>`. Go members use `cmd/<name>` or `services/<name>`. Mixed families produce one manifest per family. Release configuration contains one package entry per member.
+
+Member language layers contribute namespaced recipes, scoped pre-commit hooks, and member CI jobs. Root aggregate recipes call each member. Member `mise.toml` files are not written. Root tools remain authoritative.
+
+The `moon` layer is opt-in and requires `workspace`. The `worktrunk` layer is opt-in and can be used with any profile. Both are represented in `layers show` and are rendered from their layer directories.

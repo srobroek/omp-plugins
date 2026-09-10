@@ -15,7 +15,12 @@ LOAD when choosing a stack. `profiles list` and `layers show` are the source of 
 | Agentic-only dotfiles/docs repo | `render --profile agentic-repo` |
 | Brownfield agentic + hooks | `inspect`, then `answers write --profile agentic-repo`, then `render` |
 | SpecKit project | any profile with `--var speckit=true` |
+| Python and TypeScript members | `answers write --profile monorepo`, then `member add` for `lang/python` and `lang/ts` |
+| Python members with Moon | `render --profile monorepo --layer moon` |
+| Any profile with Worktrunk | `render --profile python-app --layer worktrunk` |
+
+Mixed language members create one root manifest per family and share one root justfile.
 
 `--layer NAME` appends one layer for a run and records it in `.omp/scaffold-answers.toml`. `--var` overrides profile and layer defaults for that run. `web-ui` may be enabled with `--var web_ui=true`.
 
-Out of scope: monorepo/moon, docs sites, CDK, GitLab, and containers. The language and Terraform layers present in this package are the complete supported set.
+Out of scope: docs sites, CDK, GitLab, and containers. Use `monorepo` for nested members.
