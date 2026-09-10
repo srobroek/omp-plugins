@@ -59,8 +59,11 @@ and writes nothing.
 
 Present the plan in the assistant message as a table with one row per line of `planSummary.lines`
 (columns: action, path, layer) plus the counts; then call `ask` with two short options, "Approve
-plan" and "Change answers", and no JSON in either description. Approving in OMP plan mode counts
-as approval. On exit `2`, resolve drift; on exit `5`, resolve ownership; on exit `6`, resolve the
+plan" and "Change answers", and no JSON in either description.
+
+When the session is already in OMP plan mode, use its proposal flow instead of `ask`: write the
+same table to `local://scaffold-plan.md` and submit `scaffold` to `xd://propose`; the human's
+resolve is the approval. A skill cannot enter plan mode; do not claim to. On exit `2`, resolve drift; on exit `5`, resolve ownership; on exit `6`, resolve the
 boundary. Do not delegate execution until the human approves.
 
 ## 5. Execute the approved pipeline
