@@ -864,8 +864,9 @@ def render(root: Path, profile_name: str | None, name: str | None, overrides: di
     root_meta.parent.mkdir(parents=True, exist_ok=True)
     owned_hashes = {path: file_hash(root / path) for path in direct if (root / path).is_file()}
     member_meta = [{"name": item["name"], "layer": item["layer"], "kind": item["kind"], "dir": item["dir"], "owned_hashes": {str(path.relative_to(root)): file_hash(path) for path in (root / item["dir"]).rglob("*") if path.is_file()}} for item in members]
-    root_meta.write_text(json.dumps({"profile": profile_name or values.get("profile", ""), "layers": layers, "vars": values, "layout": values.get("layout", "single"), "members": member_meta, "owned_hashes": owned_hashes, "plugin_version": read_answers(root).get("plugin_version", "")}, indent=2, sort_keys=True) + "\n")
-    write_answers(root, profile_name or "", layers, values, {"members": members} if members else None)
+    resolved_profile = str(plan.get("profile") or profile_name or values.get("profile") or "")
+    root_meta.write_text(json.dumps({"profile": resolved_profile, "layers": layers, "vars": values, "layout": values.get("layout", "single"), "members": member_meta, "owned_hashes": owned_hashes, "plugin_version": read_answers(root).get("plugin_version", "")}, indent=2, sort_keys=True) + "\n")
+    write_answers(root, resolved_profile, layers, values, {"members": members} if members else None)
     return {**plan, "files": plan.get("files", []) + member_rows, "written": written, "skipped": skipped, "drifted": drifted, "plugin_additions": additions, "members": members}, 0
 
 
