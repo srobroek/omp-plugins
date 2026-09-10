@@ -529,6 +529,15 @@ describe("findCommitInvocations", () => {
 		expect(findCommitInvocations("xargs $" + "{RUNNER} commit -m x")).toEqual([
 			{ repoDir: null, dryRun: false, retargeted: true },
 		]);
+		expect(
+			findCommitInvocations("printf x | xargs sh -c 'git commit -m x'"),
+		).toEqual([{ repoDir: null, dryRun: false, retargeted: true }]);
+		const { run, calls } = fakeGit({ "/feature": "feature" });
+		setGitRunForTests(run);
+		expect(
+			decideCommit("printf x | xargs sh -c 'git commit -m x'", "/feature", {}),
+		).toEqual(expect.objectContaining({ block: true }));
+		expect(calls).toEqual([]);
 	});
 
 	test("ordinary commands mentioning Git are not wrappers", () => {

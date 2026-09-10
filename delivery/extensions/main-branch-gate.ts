@@ -857,6 +857,14 @@ function scanInvocations(command: string): CommitInvocation[] {
 				})
 			: -1;
 		if (
+			commandBase === "xargs" &&
+			wrappedGitIndex === -1 &&
+			remaining.length > 0
+		) {
+			out.push({ repoDir: null, dryRun: false, retargeted: true });
+			continue;
+		}
+		if (
 			wrapperCandidate &&
 			remaining.some(
 				(candidate) =>
