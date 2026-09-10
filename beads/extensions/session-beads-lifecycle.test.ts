@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -7,6 +7,7 @@ import sessionBeadsLifecycle, {
 	autoPinBeadsDir,
 	pinBashInput,
 	sessionPinAfter,
+	sessionPinFor,
 	releaseAutoPin,
 	repoIdentity,
 	bdVerbs,
@@ -100,6 +101,24 @@ describe("autoPinBeadsDir", () => {
 		releaseAutoPin(human, {});
 		expect(human.BEADS_DIR).toBe("/elsewhere/.beads");
 		for (const dir of [root, worktree, other, plain]) rmSync(dir, { recursive: true, force: true });
+	});
+
+	test("sessionPinFor finds the primary checkout's database from a linked worktree", () => {
+		const { execFileSync } = require("node:child_process") as typeof import("node:child_process");
+		const root = mkdtempSync(join(tmpdir(), "beads-wtpin-"));
+		execFileSync("git", ["-C", root, "init", "-q"]);
+		writeFileSync(join(root, "a"), "a");
+		execFileSync("git", ["-C", root, "-c", "user.email=t@t", "-c", "user.name=t", "add", "a"]);
+		execFileSync("git", ["-C", root, "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-m", "a"]);
+		mkdirSync(join(root, ".beads"));
+		const wt = `${root}-wt`;
+		execFileSync("git", ["-C", root, "worktree", "add", "-q", wt, "-b", "wt"]);
+		expect(sessionPinFor(wt)).toBe(realpathSync(join(root, ".beads")));
+		const bare = mkdtempSync(join(tmpdir(), "beads-wtpin-none-"));
+		expect(sessionPinFor(bare)).toBeUndefined();
+		execFileSync("git", ["-C", root, "worktree", "remove", "--force", wt]);
+		rmSync(root, { recursive: true, force: true });
+		rmSync(bare, { recursive: true, force: true });
 	});
 
 	test("repoIdentity resolves worktrees of one repository to the same common dir", () => {

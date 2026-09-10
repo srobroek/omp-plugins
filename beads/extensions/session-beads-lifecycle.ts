@@ -60,11 +60,23 @@ interface SessionState {
  * Per-session, unlike the process pin, so concurrent sessions never share it by accident.
  */
 export function sessionPinFor(cwd: string): string | undefined {
-	const dir = resolve(cwd, ".beads");
+	const local = resolve(cwd, ".beads");
+	if (isDir(local)) return local;
+	// A linked worktree keeps no database of its own; the primary checkout beside the
+	// common git dir does. bd's cwd walk would not find it, so the pin has to.
+	const common = repoIdentity(cwd);
+	if (common !== cwd && common.endsWith("/.git")) {
+		const primary = resolve(common, "..", ".beads");
+		if (isDir(primary)) return primary;
+	}
+	return undefined;
+}
+
+function isDir(path: string): boolean {
 	try {
-		return statSync(dir).isDirectory() ? dir : undefined;
+		return statSync(path).isDirectory();
 	} catch {
-		return undefined;
+		return false;
 	}
 }
 
@@ -151,14 +163,8 @@ export function autoPinBeadsDir(
 		(state.dependents ??= new Set()).add(sessionId); // same repository: shares the pin and keeps it alive
 		return {};
 	}
-	const dir = resolve(cwd, ".beads");
-	let exists = false;
-	try {
-		exists = statSync(dir).isDirectory();
-	} catch {
-		exists = false;
-	}
-	if (!exists) {
+	const dir = sessionPinFor(cwd);
+	if (dir === undefined) {
 		if (ours) releaseAutoPin(env, state);
 		return {};
 	}
