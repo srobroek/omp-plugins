@@ -373,6 +373,16 @@ describe("findCommitInvocations", () => {
 		}
 	});
 
+	test("wrapper retarget message names its actual uncertainty", () => {
+		const decision = decideCommit(
+			"env -C /protected git commit -m x",
+			"/feature",
+			{},
+		);
+		expect(decision?.reason).toContain("command-level target selector");
+		expect(decision?.reason).not.toContain("--git-dir/--work-tree");
+	});
+
 	test("attached env unset preserves an explicit git target", () => {
 		const { run, calls } = fakeGit({
 			"/feature": "feature",

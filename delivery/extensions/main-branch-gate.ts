@@ -850,9 +850,8 @@ export function denyReason(branch: string, readDir: string): string {
 }
 
 /**
- * A commit was pointed at another repository by `--git-dir`, `--work-tree`, or the matching
- * environment variables. Nothing was read: none of those names a working directory this gate can
- * check, so reading the call's own cwd would clear a commit that lands elsewhere.
+ * A commit was pointed at another repository by a command-level target selector. Nothing was
+ * read because the selector did not provide a working directory this gate can safely check.
  */
 export function retargetReason(selector: string): string {
 	return (
@@ -888,7 +887,10 @@ export function decideCommit(
 	for (const invocation of findCommitInvocations(command)) {
 		if (invocation.dryRun) continue;
 		if (invocation.retargeted === true)
-			return { block: true, reason: retargetReason("--git-dir/--work-tree") };
+			return {
+				block: true,
+				reason: retargetReason("a command-level target selector"),
+			};
 		if (envSelector !== undefined)
 			return { block: true, reason: retargetReason(envSelector) };
 		// `-C` is the only directory the command states outright, so it is the only one applied.
