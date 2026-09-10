@@ -176,6 +176,14 @@ describe("findCommitInvocations", () => {
 		}
 	});
 
+	test("exported Git config aliases fail closed", () => {
+		const command =
+			"export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=alias.ci GIT_CONFIG_VALUE_0=commit; git ci -m x";
+		expect(findCommitInvocations(command)).toEqual([
+			{ repoDir: null, dryRun: false, retargeted: true },
+		]);
+	});
+
 	test("command-prefix Git config policy is Git-scoped and fail closed", () => {
 		expect(findCommitInvocations("GIT_CONFIG_COUNT=1 git status")).toEqual([
 			{ repoDir: null, dryRun: false, retargeted: true },

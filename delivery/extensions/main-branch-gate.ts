@@ -753,6 +753,7 @@ function scanInvocations(command: string): CommitInvocation[] {
 				const name = ENV_ASSIGNMENT.test(operand.text)
 					? operand.text.slice(0, operand.text.indexOf("="))
 					: operand.text;
+				if (name.startsWith("GIT_CONFIG_")) commandGitConfig = true;
 				if (
 					TARGET_ENV.includes(name) &&
 					(ENV_ASSIGNMENT.test(operand.text) || targetAssignments.has(name))
