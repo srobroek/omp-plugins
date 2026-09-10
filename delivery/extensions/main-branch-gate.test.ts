@@ -455,6 +455,21 @@ describe("findCommitInvocations", () => {
 		).toEqual([{ repoDir: null, dryRun: false, retargeted: true }]);
 	});
 
+	test("execution wrappers preserve the Git command", () => {
+		for (const command of [
+			"nice git commit -m x",
+			"nice -n 5 git commit -m x",
+			"nohup git commit -m x",
+			"exec git commit -m x",
+		]) {
+			const { run } = fakeGit({ "/protected": "main" });
+			setGitRunForTests(run);
+			expect(decideCommit(command, "/protected", {})?.block, command).toBe(
+				true,
+			);
+		}
+	});
+
 	// SILENT PERMIT at the decision level. A retargeted commit lands in another repository, so
 	// probing the call's own cwd cleared it. Nothing is read now, on any branch, because none of
 	// these names a working directory this gate can check.

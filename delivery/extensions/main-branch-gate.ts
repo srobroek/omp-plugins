@@ -752,6 +752,28 @@ function scanInvocations(command: string): CommitInvocation[] {
 			if (name.startsWith("GIT_CONFIG_")) commandGitConfig = true;
 			continue;
 		}
+		if (
+			token.text === "nice" ||
+			token.text === "nohup" ||
+			token.text === "exec"
+		) {
+			let k = i + 1;
+			for (; k < tokens.length && !isSep(tokens[k]); k++) {
+				const operand = tokens[k] as Token;
+				if (operand.text === "--") continue;
+				if (
+					token.text === "nice" &&
+					(operand.text === "-n" || operand.text === "--adjustment")
+				) {
+					k++;
+					continue;
+				}
+				if (operand.text.startsWith("-")) continue;
+				break;
+			}
+			i = k - 1;
+			continue;
+		}
 		if (token.text === "export") {
 			for (let j = i + 1; j < tokens.length && !isSep(tokens[j]); j++) {
 				const operand = tokens[j] as Token;
