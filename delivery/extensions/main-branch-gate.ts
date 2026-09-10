@@ -105,6 +105,34 @@ const SUDO_VALUE_OPTIONS: Record<string, true> = {
 	"--close-from": true,
 };
 
+/** `sudo` options that do not consume an argv word. */
+const SUDO_FLAG_OPTIONS: Record<string, true> = {
+	"-A": true,
+	"-b": true,
+	"-E": true,
+	"-e": true,
+	"-H": true,
+	"-K": true,
+	"-k": true,
+	"-n": true,
+	"-P": true,
+	"-S": true,
+	"-V": true,
+	"-v": true,
+	"--askpass": true,
+	"--background": true,
+	"--preserve-env": true,
+	"--edit": true,
+	"--set-home": true,
+	"--remove-timestamp": true,
+	"--reset-timestamp": true,
+	"--non-interactive": true,
+	"--preserve-groups": true,
+	"--stdin": true,
+	"--validate": true,
+	"--version": true,
+};
+
 /** Pre-verb git options that consume the following token. */
 const PRE_VERB_VALUE_FLAGS: Record<string, true> = {
 	"-C": true,
@@ -609,6 +637,24 @@ function scanInvocations(command: string): CommitInvocation[] {
 					if (!operand.text.includes("=")) k++;
 					continue;
 				}
+				if (SUDO_FLAG_OPTIONS[optionName] === true) continue;
+				if (/^-[AAbEeEHKknPSVv]+$/.test(operand.text)) continue;
+				break;
+			}
+			i = k - 1;
+			continue;
+		}
+		if (token.text === "command") {
+			let k = i + 1;
+			for (; k < tokens.length && !isSep(tokens[k]); k++) {
+				const operand = tokens[k] as Token;
+				if (operand.text === "--") continue;
+				if (
+					operand.text === "-p" ||
+					operand.text === "-v" ||
+					operand.text === "-V"
+				)
+					continue;
 				break;
 			}
 			i = k - 1;

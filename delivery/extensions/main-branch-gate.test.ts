@@ -358,6 +358,8 @@ describe("findCommitInvocations", () => {
 		for (const command of [
 			"sudo -u alice git commit -m x",
 			"sudo --user alice git commit -m x",
+			"sudo -E git commit -m x",
+			"sudo -nHE git commit -m x",
 		]) {
 			const { run, calls } = fakeGit({ "/protected": "main" });
 			setGitRunForTests(run);
@@ -369,6 +371,15 @@ describe("findCommitInvocations", () => {
 				command,
 			).toEqual(["/protected"]);
 		}
+	});
+
+	test("command options preserve the wrapped git command", () => {
+		const { run, calls } = fakeGit({ "/protected": "main" });
+		setGitRunForTests(run);
+		expect(
+			decideCommit("command -p git commit -m x", "/protected", {})?.block,
+		).toBe(true);
+		expect(calls.map((call) => call.cwd)).toEqual(["/protected"]);
 	});
 
 	test("unrelated exports do not invent a retarget", () => {
