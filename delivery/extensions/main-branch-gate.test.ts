@@ -389,6 +389,18 @@ describe("findCommitInvocations", () => {
 		}
 	});
 
+	test("wrapper directory uncertainty overrides dry-run inference", () => {
+		for (const command of [
+			"env -C /protected git commit --dry-run",
+			"sudo -D /protected git commit --dry-run",
+		]) {
+			const { run, calls } = fakeGit({ "/feature": "feature" });
+			setGitRunForTests(run);
+			expect(decideCommit(command, "/feature", {})?.block, command).toBe(true);
+			expect(calls, command).toEqual([]);
+		}
+	});
+
 	test("wrapper retarget message names its actual uncertainty", () => {
 		const decision = decideCommit(
 			"env -C /protected git commit -m x",
