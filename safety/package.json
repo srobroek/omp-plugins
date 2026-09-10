@@ -5,7 +5,8 @@
   "omp": {
     "extensions": [
       "./extensions/close-keywords.ts",
-      "./extensions/quality-edit-advisory.ts"
+      "./extensions/quality-edit-advisory.ts",
+      "./extensions/quota-notice-resume.ts"
     ]
   },
   "version": "0.5.3",
