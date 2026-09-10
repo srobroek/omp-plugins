@@ -57,19 +57,24 @@ class), `lines` (one `class path (layer)` line per file), `conflicts`, and `pref
 `stages` array is for debugging a failure, not for the human. This command is preflight plus plan
 and writes nothing.
 
-Present the plan in the assistant message as a table with one row per line of `planSummary.lines`
-(columns: action, path, layer) plus the counts; then call `ask` with two short options, "Approve
-plan" and "Change answers", and no JSON in either description.
+Write the plan as a document before asking, the way plan mode would:
 
-When the session is already in OMP plan mode, use its proposal flow instead of `ask`: write the
-same table to `local://scaffold-plan.md` and submit `scaffold` to `xd://propose`; the human's
-resolve is the approval. A skill cannot enter plan mode; do not claim to. On exit `2`, resolve drift; on exit `5`, resolve ownership; on exit `6`, resolve the
+1. `write` `local://scaffold-plan.md` with: the profile and layers, the counts, one table row per
+   line of `planSummary.lines` (columns: action, path, layer), the conflicts, and a closing section
+   "After approval" that names the pipeline stages the scaffolder will run.
+2. Put the same table in the assistant message, with the artifact path.
+3. Call `ask` with two short options, "Approve plan" and "Change answers", and no JSON in either
+   description.
+
+When the session is already in OMP plan mode, submit `scaffold` to `xd://propose` instead of
+calling `ask`; the human's resolve is the approval. A skill cannot enter plan mode; do not claim to.
+The scaffolder receives the artifact path with its task so it executes the plan the human read. On exit `2`, resolve drift; on exit `5`, resolve ownership; on exit `6`, resolve the
 boundary. Do not delegate execution until the human approves.
 
 ## 5. Execute the approved pipeline
 
-Delegate a `task` to `scaffolder` with the approved profile and plan. It must call the `scaffold`
-tool for:
+Delegate a `task` to `scaffolder` with the approved profile and the `local://scaffold-plan.md`
+path. It must call the `scaffold` tool for:
 
 ```sh
 python3 "$SCAFFOLD" preflight --root R --profile P
