@@ -25,5 +25,5 @@ NOT Commit changes; the lead presents the commit command to the human.
 
 ## Output
 
-Begin with `VERDICT: PASS|FAIL` and one sentence. Report each successful command's JSON summary in order, followed by the `finish` JSON and its `commitCommand`. If a command fails, report only the failing command and its JSON verbatim. Never reprint code, diffs, or file contents.
+Begin with `VERDICT: PASS|READY_FOR_COMMIT|FAIL` and one sentence: `READY_FOR_COMMIT` when `finish` reports `state: ready-for-commit`, `FAIL` on any other non-zero result. Report each successful command's JSON summary in order, followed by the `finish` JSON and its `commitCommand`. If a command fails, report only the failing command and its JSON verbatim. Never reprint code, diffs, or file contents.
 CAP 120w clean · 180w with findings.

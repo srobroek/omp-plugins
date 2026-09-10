@@ -92,8 +92,14 @@ Read doctor `root`, `checks`, `drift`, and `errors`. Read finish `root`, `ok`, `
 `blockers`. `finish` succeeds only when doctor is clean, all molecule children and gates are closed,
 and scaffold-owned paths are ready to commit. Success removes `.omp/scaffold-run.json`.
 
-Decision: if `ok` is false or `blockers` is non-empty, stop and report the blockers. If `ok` is
-true, present `commitCommand` to the human. The agent never runs that commit command.
+Decision by `state`:
+
+- `ready-for-commit`: the only blocker is the uncommitted scaffold output. Present `commitCommand`
+  to the human; after the human commits, run `finish` once more.
+- `blocked`: stop and report every blocker verbatim.
+- `finished`: the run marker is gone; report the commit that closed the run.
+
+The agent never runs the commit command itself.
 
 ## 7. Hard rules
 
