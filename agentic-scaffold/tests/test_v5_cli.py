@@ -252,3 +252,12 @@ def test_abort_lifts_the_boundary_and_reports_owned_dirt(tmp_path: Path) -> None
     assert not (root / ".omp/scaffold-run.json").exists()
     again = payload(run("abort", "--root", str(root)))
     assert again["hadRun"] is False
+
+
+def test_abort_treats_a_malformed_marker_as_a_run(tmp_path: Path) -> None:
+    root = git_root(tmp_path)
+    (root / ".omp").mkdir(exist_ok=True)
+    (root / ".omp/scaffold-run.json").write_text("not json")
+    body = payload(run("abort", "--root", str(root)))
+    assert body["hadRun"] is True and body["stagesCompleted"] == []
+    assert not (root / ".omp/scaffold-run.json").exists()
