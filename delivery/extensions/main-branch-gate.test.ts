@@ -422,6 +422,16 @@ describe("findCommitInvocations", () => {
 		}
 	});
 
+	test("unknown sudo options fail closed", () => {
+		const { run, calls } = fakeGit({ "/feature": "feature" });
+		setGitRunForTests(run);
+		expect(
+			decideCommit("sudo --unknown value git commit -m x", "/feature", {})
+				?.block,
+		).toBe(true);
+		expect(calls).toEqual([]);
+	});
+
 	test("command options preserve the wrapped git command", () => {
 		const { run, calls } = fakeGit({ "/protected": "main" });
 		setGitRunForTests(run);
