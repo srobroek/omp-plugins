@@ -854,6 +854,16 @@ function scanInvocations(command: string): CommitInvocation[] {
 				})
 			: -1;
 		if (
+			wrapperCandidate &&
+			remaining.some(
+				(candidate) =>
+					candidate.text.includes("$") || candidate.text.includes("`"),
+			)
+		) {
+			out.push({ repoDir: null, dryRun: false, retargeted: true });
+			continue;
+		}
+		if (
 			wrappedGitIndex !== -1 &&
 			(remaining[wrappedGitIndex]?.text.endsWith("git-commit") ||
 				remaining

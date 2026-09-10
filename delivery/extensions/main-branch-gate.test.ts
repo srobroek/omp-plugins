@@ -512,6 +512,15 @@ describe("findCommitInvocations", () => {
 		expect(findCommitInvocations("xcrun git status")).toEqual([]);
 	});
 
+	test("unknown wrappers cannot hide opaque Git argv", () => {
+		expect(findCommitInvocations("xcrun $" + "{RUNNER} commit -m x")).toEqual([
+			{ repoDir: null, dryRun: false, retargeted: true },
+		]);
+		expect(findCommitInvocations("xcrun git $" + "{VERB} -m x")).toEqual([
+			{ repoDir: null, dryRun: false, retargeted: true },
+		]);
+	});
+
 	test("unknown wrapped helper dry-runs fail closed", () => {
 		expect(findCommitInvocations("xcrun git-commit --dry-run")).toEqual([
 			{ repoDir: null, dryRun: false, retargeted: true },
