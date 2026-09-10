@@ -449,6 +449,7 @@ describe("findCommitInvocations", () => {
 			"sudo -nHE git commit -m x",
 		]) {
 			const { run, calls } = fakeGit({ "/protected": "main" });
+
 			setGitRunForTests(run);
 			expect(decideCommit(command, "/protected", {})?.block, command).toBe(
 				true,
@@ -458,6 +459,19 @@ describe("findCommitInvocations", () => {
 				command,
 			).toEqual(["/protected"]);
 		}
+	});
+
+	test("repeated relative -C selectors resolve from the bash call cwd", () => {
+		const { run, calls } = fakeGit({ "/workspace/omp-plugins": "main" });
+		setGitRunForTests(run);
+		expect(
+			decideCommit(
+				"git -C omp-plugins -C delivery -C .. commit -m x",
+				"/workspace",
+				{},
+			)?.block,
+		).toBe(true);
+		expect(calls.map((call) => call.cwd)).toEqual(["/workspace/omp-plugins"]);
 	});
 
 	test("unknown sudo options fail closed", () => {
