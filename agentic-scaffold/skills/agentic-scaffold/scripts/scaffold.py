@@ -11,6 +11,7 @@ import argparse
 import hashlib
 import json
 import os
+import shlex
 import re
 import shutil
 import subprocess
@@ -1890,10 +1891,13 @@ def abort(root: Path) -> tuple[dict[str, Any], int]:
     except (OSError, json.JSONDecodeError):
         pass
     owned = set(str(path) for path in meta.get("owned_hashes", {})) | {".omp/scaffold-answers.toml", ".omp/scaffold.json", ".omp/plugins.toml", "mise.toml"}
-    dirty = [line[3:].strip().split(" -> ")[-1] for line in status.stdout.splitlines() if len(line) >= 4]
+    rows = [(line[:2], line[3:].strip().split(" -> ")[-1]) for line in status.stdout.splitlines() if len(line) >= 4]
     stages = [row.get("name") for row in run.get("stages", []) if isinstance(row, dict)]
-    return {"ok": True, "hadRun": had_run, "stagesCompleted": stages, "dirtyOwned": sorted(p for p in dirty if p in owned), "dirtyOther": sorted(p for p in dirty if p not in owned),
-            "resetCommand": "git checkout -- . && git ls-files --others --exclude-standard -z | xargs -0 rm -rf"}, 0
+    dirty_owned = sorted(path for _, path in rows if path in owned)
+    untracked = {path for code, path in rows if code == "??"}
+    # Per-path commands only: a whole-tree reset would discard work the scaffold never touched.
+    revert = [f"rm -rf {shlex.quote(path)}" if path in untracked else f"git checkout -- {shlex.quote(path)}" for path in dirty_owned]
+    return {"ok": True, "hadRun": had_run, "stagesCompleted": stages, "dirtyOwned": dirty_owned, "dirtyOther": sorted(path for _, path in rows if path not in owned), "revertCommands": revert}, 0
 
 
 def build_parser() -> argparse.ArgumentParser:

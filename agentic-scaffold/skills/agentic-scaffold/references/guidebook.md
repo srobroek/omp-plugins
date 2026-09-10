@@ -108,9 +108,10 @@ killed process. Close such a run with:
 python3 "$SCAFFOLD" abort --root R
 ```
 
-Read `hadRun`, `stagesCompleted`, `dirtyOwned`, and `dirtyOther`. Present `dirtyOwned` to the
-human with `resetCommand`; the agent runs neither the reset nor a commit. `abort` deletes only
-the run marker.
+Read `hadRun`, `stagesCompleted`, `dirtyOwned`, `dirtyOther`, and `revertCommands`. Present
+`dirtyOwned` with its per-path `revertCommands` to the human; `dirtyOther` is the human's own work
+and gets no command. The agent runs neither a revert nor a commit. `abort` deletes only the run
+marker.
 
 The agent never runs the commit command itself.
 

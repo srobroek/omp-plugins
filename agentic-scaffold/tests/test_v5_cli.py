@@ -249,6 +249,7 @@ def test_abort_lifts_the_boundary_and_reports_owned_dirt(tmp_path: Path) -> None
     body = payload(result)
     assert body["hadRun"] and body["stagesCompleted"] == ["preflight", "render"]
     assert body["dirtyOwned"] == ["mise.toml"] and "notes.txt" in body["dirtyOther"]
+    assert body["revertCommands"] == ["rm -rf mise.toml"]  # untracked owned file; user files never appear
     assert not (root / ".omp/scaffold-run.json").exists()
     again = payload(run("abort", "--root", str(root)))
     assert again["hadRun"] is False
