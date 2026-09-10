@@ -89,14 +89,14 @@
       "name": "design",
       "description": "UI and UX design: system audit, DESIGN.md, browser verification, accessibility, tokens, and Component Driven build.",
       "source": "./design",
-      "version": "0.3.1",
+      "version": "0.3.2",
       "category": "development"
     },
     {
       "name": "diagram",
       "description": "Interactive diagramming and architecture-sketching canvas over MCP.",
       "source": "./diagram",
-      "version": "0.2.2",
+      "version": "0.2.3",
       "category": "productivity"
     },
     {
@@ -166,7 +166,7 @@
       "name": "safety",
       "description": "Defence-in-depth advisories for destructive commands, attribution, and remote execution.",
       "source": "./safety",
-      "version": "0.5.3",
+      "version": "0.6.0",
       "category": "security"
     },
     {
