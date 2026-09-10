@@ -768,6 +768,13 @@ function scanInvocations(command: string): CommitInvocation[] {
 					k++;
 					continue;
 				}
+				if (
+					token.text === "exec" &&
+					(operand.text === "-a" || operand.text === "--argv0")
+				) {
+					k++;
+					continue;
+				}
 				if (operand.text.startsWith("-")) continue;
 				break;
 			}

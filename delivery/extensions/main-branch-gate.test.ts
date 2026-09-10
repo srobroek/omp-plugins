@@ -461,6 +461,8 @@ describe("findCommitInvocations", () => {
 			"nice -n 5 git commit -m x",
 			"nohup git commit -m x",
 			"exec git commit -m x",
+			"exec -a feature git commit -m x",
+			"exec --argv0 feature git commit -m x",
 		]) {
 			const { run } = fakeGit({ "/protected": "main" });
 			setGitRunForTests(run);
