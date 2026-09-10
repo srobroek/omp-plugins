@@ -365,6 +365,7 @@ describe("findCommitInvocations", () => {
 			["env -S 'g\"i\"t commit -m x'", {}],
 			["env --split-string='g\"i\"t commit -m x'", {}],
 			["env -S '-C /protected g\"i\"t commit -m x'", {}],
+			["env -S '$" + "{RUNNER} commit -m x'", { RUNNER: "git" }],
 		] as Array<[string, Record<string, string>]>) {
 			const { run, calls } = fakeGit({
 				"/feature": "feature",
@@ -462,12 +463,12 @@ describe("findCommitInvocations", () => {
 		expect(calls.map((call) => call.cwd)).toEqual(["/feature"]);
 	});
 
-	test("a non-git split payload does not invent a commit", () => {
+	test("every env split payload fails closed", () => {
 		const { run, calls } = fakeGit({ "/feature": "feature" });
 		setGitRunForTests(run);
-		expect(
-			decideCommit("env -S 'printf hello'", "/feature", {}),
-		).toBeUndefined();
+		expect(decideCommit("env -S 'printf hello'", "/feature", {})?.block).toBe(
+			true,
+		);
 		expect(calls).toEqual([]);
 	});
 

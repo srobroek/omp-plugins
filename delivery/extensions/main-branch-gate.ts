@@ -878,9 +878,18 @@ export function decideCommit(
 ): { block: true; reason: string } | undefined {
 	if (env[ALLOW_ENV] === "1") return;
 	// Quote and backslash removal can join argv words such as `g\it` or `g"i"t`.
-	// This normalization only adds candidates; the invocation scanner still decides behavior.
+	// Opaque env split payloads must reach the scanner even when variables hide `git` entirely.
 	const prefilterText = command.replace(/[\\'"]/g, "");
-	if (!PREFILTER.test(command) && !PREFILTER.test(prefilterText)) return;
+	const hasEnvSplit =
+		/(?:^|[\s;&|])env\s+(?:[^;&|\n]*\s)?(?:-S(?:\s|[^\s])|--split(?:-string)?=)/.test(
+			command,
+		);
+	if (
+		!hasEnvSplit &&
+		!PREFILTER.test(command) &&
+		!PREFILTER.test(prefilterText)
+	)
+		return;
 	// `GIT_DIR`, `GIT_WORK_TREE` and `GIT_COMMON_DIR` in the CALL's environment retarget every
 	// git command in it, exactly as the flags do, and are just as unreadable from here.
 	const envSelector = TARGET_ENV.find(
