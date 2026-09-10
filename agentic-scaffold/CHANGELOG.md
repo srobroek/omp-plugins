@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.0](https://github.com/srobroek/omp-plugins/compare/agentic-scaffold--v0.5.11...agentic-scaffold--v0.6.0) (2026-09-10)
+
+
+### Features
+
+* **agentic-scaffold:** CI and release standard with a single fan-in gate ([#154](https://github.com/srobroek/omp-plugins/issues/154)) ([f0db95d](https://github.com/srobroek/omp-plugins/commit/f0db95db2ede132fc0acc4f037452d8e4f8019bc))
+
 ## [0.5.11](https://github.com/srobroek/omp-plugins/compare/agentic-scaffold--v0.5.10...agentic-scaffold--v0.5.11) (2026-09-10)
 
 
