@@ -10,6 +10,7 @@ import {
 	statSync,
 } from "node:fs";
 import { delimiter, isAbsolute, join, resolve, sep } from "node:path";
+import type { TSchema } from "@oh-my-pi/pi-ai";
 import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
 import {
 	BUNDLES,
@@ -885,8 +886,9 @@ export function runSniffInstall(opts: SniffInstallOptions): SniffInstallResult {
 		for (const bundle of BUNDLES) {
 			lines.push("", `[${bundle}]`);
 			for (const rec of TOOLS[bundle]) {
-				const hosted = rec.hostPackages?.length
-					? ` [host packages: ${rec.hostPackages.join(", ")}]`
+				const hostPackages = "hostPackages" in rec ? rec.hostPackages : [];
+				const hosted = hostPackages.length
+					? ` [host packages: ${hostPackages.join(", ")}]`
 					: "";
 				lines.push(`  ${rec.name.padEnd(18)} ${rec.hint}${hosted}`);
 			}
@@ -995,7 +997,7 @@ export default function sniffInstallTool(pi: ExtensionAPI): void {
 				.string()
 				.optional()
 				.describe("Repo cwd for project-local tools and mise-local pins"),
-		}),
+		}) as unknown as TSchema,
 		execute: async (_id, params: ToolParams, _signal, _onUpdate, ctx) => {
 			try {
 				const result = runSniffInstall({
@@ -1054,7 +1056,7 @@ export default function sniffInstallTool(pi: ExtensionAPI): void {
 				.string()
 				.optional()
 				.describe("Exact target cwd for preflight and execution"),
-		}),
+		}) as unknown as TSchema,
 		execute: async (_id, params: AnalyzerParams, _signal, _onUpdate, ctx) => {
 			try {
 				const result = runSniffAnalyzer({
@@ -1102,6 +1104,7 @@ if (import.meta.main) {
 	const bundles: string[] = [];
 	for (let i = 0; i < argv.length; i += 1) {
 		const arg = argv[i];
+		if (arg === undefined) continue;
 		if (arg === "--probe") mode = "probe";
 		else if (arg === "--diagnose" || arg === "--preflight") mode = "diagnose";
 		else if (arg === "--list") mode = "list";

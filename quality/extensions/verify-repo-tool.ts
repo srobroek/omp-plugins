@@ -1,5 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
+import type { TSchema } from "@oh-my-pi/pi-ai";
 import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
 
 const TIMEOUT_MS = 600_000;
@@ -300,7 +301,7 @@ export default function verifyRepoTool(pi: ExtensionAPI): void {
 				.string()
 				.optional()
 				.describe("Unused by the runner; reserved for caller notes"),
-		}),
+		}) as unknown as TSchema,
 		execute: async (_toolCallId, params: VerifyParams, _signal, _onUpdate, ctx) => {
 			const cwd = resolve(ctx?.cwd ?? process.cwd(), params.path ?? ".");
 			try {
