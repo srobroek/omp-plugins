@@ -652,9 +652,7 @@ describe("findCommitInvocations", () => {
 			// `/feature` is safe, which is exactly why reading it was wrong.
 			const decision = decideCommit(command, "/feature", env);
 			expect(decision?.block, command).toBe(true);
-			expect(decision?.reason, command).toContain(
-				"pointed at another repository",
-			);
+			expect(decision?.reason, command).toContain("not readable here");
 			expect(calls, command).toEqual([]);
 		}
 	});
@@ -679,6 +677,167 @@ describe("findCommitInvocations", () => {
 		);
 		expect(decision?.reason).toContain("command-level target selector");
 		expect(decision?.reason).not.toContain("--git-dir/--work-tree");
+	});
+
+	test("a non-Git command never claims a repository it does not name", () => {
+		const { run, calls } = fakeGit({ "/main-repo": "main" });
+		setGitRunForTests(run);
+		expect(
+			decideCommit("printf x | xargs echo", "/main-repo", {}),
+		).toBeUndefined();
+		expect(
+			decideCommit("find . -print0 | xargs -0 ls", "/main-repo", {}),
+		).toBeUndefined();
+		expect(decideCommit("xargs --help", "/main-repo", {})).toBeUndefined();
+		expect(calls).toEqual([]);
+	});
+
+	test("xargs fails closed only for a payload that can reach Git", () => {
+		for (const command of [
+			"printf x | xargs sh -c 'git commit -m x'",
+			"printf x | xargs env git commit -m x",
+			"printf x | xargs $" + "{RUNNER} commit -m x",
+			"printf x | xargs -I{} sh -c 'git commit -m x'",
+			"printf x | xargs -0 git commit -m x",
+			"printf x | xargs --unknown-option git commit -m x",
+			"printf x | xargs >/dev/null sh -c 'git commit -m x'",
+			"printf x | xargs > /dev/null sh -c 'git commit -m x'",
+		]) {
+			expect(findCommitInvocations(command), command).toEqual([
+				{ repoDir: null, dryRun: false, retargeted: true },
+			]);
+		}
+		for (const command of [
+			"xargs echo",
+			"xargs --help",
+			"xargs -r",
+			"find . -print0 | xargs -0 ls",
+			"xargs echo sh",
+			"xargs echo git",
+			"xargs echo git commit",
+			"xargs -n1 echo '$HOME'",
+		]) {
+			expect(findCommitInvocations(command), command).toEqual([]);
+		}
+	});
+
+	test("a redirection never names the xargs payload", () => {
+		for (const command of [
+			"printf x | xargs >/dev/null git commit -m x",
+			"printf x | xargs > /dev/null git commit -m x",
+			"printf x | xargs 2>&1 git commit -m x",
+		]) {
+			expect(findCommitInvocations(command), command).toEqual([
+				{ repoDir: null, dryRun: false, retargeted: true },
+			]);
+		}
+		expect(findCommitInvocations("printf x | xargs >/dev/null echo")).toEqual(
+			[],
+		);
+	});
+
+	test("redirections do not hide the command or its verb", () => {
+		for (const command of [
+			"git >/dev/null commit -m x",
+			"git>/dev/null commit -m x",
+			">/dev/null git commit -m x",
+			"env >/dev/null git commit -m x",
+			"sudo 2>/dev/null git commit -m x",
+			"git > out commit -m x",
+			"git >>log commit -m x",
+			"git <input commit -m x",
+			"git 3<>file commit -m x",
+			"git commit -m x >/dev/null",
+		]) {
+			expect(findCommitInvocations(command), command).toEqual([
+				{ repoDir: null, dryRun: false },
+			]);
+		}
+		expect(findCommitInvocations("git -C sub >/dev/null commit -m x")).toEqual([
+			{ repoDir: "sub", dryRun: false },
+		]);
+		expect(findCommitInvocations("git commit --dry-run >/dev/null")).toEqual([
+			{ repoDir: null, dryRun: true },
+		]);
+	});
+
+	test("a redirection operator never reads as a separator", () => {
+		expect(tokenize("git >&2 commit -m x").map((t) => t.text)).toEqual([
+			"git",
+			">&2",
+			"commit",
+			"-m",
+			"x",
+		]);
+		for (const command of [
+			"git >&2 commit -m x",
+			"git 2>&1 commit -m x",
+			"git >| out commit -m x",
+			"git &>log commit -m x",
+			"git&>log commit -m x",
+		]) {
+			expect(findCommitInvocations(command), command).toEqual([
+				{ repoDir: null, dryRun: false },
+			]);
+		}
+	});
+
+	test("redirections stay grammar for ordinary commands", () => {
+		expect(findCommitInvocations("git status >/dev/null")).toEqual([]);
+		expect(findCommitInvocations("echo a>b")).toEqual([]);
+		expect(findCommitInvocations('git commit -m "a>b"')).toEqual([
+			{ repoDir: null, dryRun: false },
+		]);
+		// Bash rejects a redirection with no target, so refusing the later real commit is safe.
+		expect(findCommitInvocations("git > && git commit -m x")).toEqual([
+			{ repoDir: null, dryRun: false },
+		]);
+		expect(findCommitInvocations("git >")).toEqual([]);
+	});
+
+	test("a line continuation between words joins nothing", () => {
+		expect(tokenize("git \\\n commit -m x").map((t) => t.text)).toEqual([
+			"git",
+			"commit",
+			"-m",
+			"x",
+		]);
+		for (const command of [
+			"git \\\n commit -m x",
+			"env \\\n git commit -m x",
+			"git com\\\nmit -m x",
+		]) {
+			expect(findCommitInvocations(command), command).toEqual([
+				{ repoDir: null, dryRun: false },
+			]);
+		}
+	});
+
+	test("an expansion that could be the verb fails closed", () => {
+		for (const command of [
+			"git $EMPTY commit --allow-empty -m x",
+			"git com$" + "{EMPTY}mit --allow-empty -m x",
+			'git "$VERB" -m x',
+		]) {
+			expect(findCommitInvocations(command), command).toEqual([
+				{ repoDir: null, dryRun: false, retargeted: true },
+			]);
+		}
+		const { run, calls } = fakeGit({ "/main-repo": "main" });
+		setGitRunForTests(run);
+		expect(
+			decideCommit("git `printf commit` -m x", "/main-repo", {})?.block,
+		).toBe(true);
+		expect(calls).toEqual([]);
+	});
+
+	test("an expansion outside the verb slot stays ordinary", () => {
+		expect(findCommitInvocations("git status $ARGS")).toEqual([]);
+		expect(findCommitInvocations("git -C $DIR status")).toEqual([]);
+		expect(findCommitInvocations('git -C "$DIR" status')).toEqual([]);
+		expect(findCommitInvocations('git commit -m "$MSG"')).toEqual([
+			{ repoDir: null, dryRun: false },
+		]);
 	});
 
 	test("attached env unset preserves an explicit git target", () => {

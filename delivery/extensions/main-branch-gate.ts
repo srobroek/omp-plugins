@@ -318,7 +318,8 @@ export function tokenize(command: string): Token[] {
 				(command[i + 1] === "\r" && command[i + 2] === "\n"))
 		) {
 			i += command[i + 1] === "\r" ? 2 : 1;
-			started = true;
+			// NOT `started`: between words the continuation joins nothing, and flushing an empty
+			// token there put a word no verb matched where `commit` should have been.
 			continue;
 		}
 		if (quote === '"') {
@@ -463,6 +464,29 @@ export function tokenize(command: string): Token[] {
 			flush();
 			continue;
 		}
+		// A redirection ENDS the word before it and forms its own, because bash reads it as syntax
+		// wherever it sits: `git>/dev/null commit` and `git >&2 commit` both run that commit. Only
+		// a file-descriptor prefix stays attached, so `2>&1` remains one operator.
+		if (ch === "&" && command[i + 1] === ">") {
+			flush();
+			cur = "&>";
+			started = true;
+			i++;
+			continue;
+		}
+		if (ch === ">" || ch === "<") {
+			if (!/^(?:\d+|&)?$/.test(cur)) flush();
+			cur += ch;
+			started = true;
+			const next = command[i + 1];
+			// `>>`, `>&`, `<&`, `>|`, and `<>` are single operators. `&` and `|` must not reach the
+			// separator branch, where they would reset command position and hide the commit.
+			if (next === ">" || next === "&" || next === "|") {
+				cur += next;
+				i++;
+			}
+			continue;
+		}
 		if (SEPARATOR[ch] === true) {
 			flush();
 			// `&&` and `||` must not read as `&` and `|`.
@@ -593,9 +617,135 @@ export function findCommitInvocations(command: string): CommitInvocation[] {
 	return out;
 }
 
+/** Shells that run a script argument, so `-c` hides whatever the script does. */
+const SHELL_COMMANDS = ["bash", "sh", "zsh", "dash", "ksh"];
+
+/** `xargs` options that consume the following argv word before its payload command. */
+const XARGS_VALUE_OPTIONS: Record<string, true> = {
+	"-a": true,
+	"-d": true,
+	"-E": true,
+	"-I": true,
+	"-L": true,
+	"-n": true,
+	"-P": true,
+	"-s": true,
+	"--arg-file": true,
+	"--delimiter": true,
+	"--eof": true,
+	"--replace": true,
+	"--max-lines": true,
+	"--max-args": true,
+	"--max-procs": true,
+	"--max-chars": true,
+	"--process-slot-var": true,
+};
+
+/** `xargs` options that stand alone. */
+const XARGS_FLAG_OPTIONS: Record<string, true> = {
+	"-0": true,
+	"-o": true,
+	"-p": true,
+	"-r": true,
+	"-t": true,
+	"-x": true,
+	"--null": true,
+	"--no-run-if-empty": true,
+	"--open-tty": true,
+	"--interactive": true,
+	"--verbose": true,
+	"--exit": true,
+	"--help": true,
+	"--version": true,
+};
+
 /**
- * One pass over the command, quoting respected.
+ * Where the command `xargs` would execute begins, resolved past its own options. Only that word
+ * decides what runs: every later word is data appended to it, so `xargs echo git` runs `echo`.
+ *
+ * `-1` means xargs runs its default `echo`. `"unreadable"` means its position cannot be found,
+ * because an unknown option may consume the word that would name it.
  */
+function xargsPayloadIndex(remaining: Token[]): number | "unreadable" {
+	for (let i = 0; i < remaining.length; i++) {
+		const operand = remaining[i] as Token;
+		if (operand.text === "--") continue;
+		const eq = operand.text.indexOf("=");
+		const name = eq === -1 ? operand.text : operand.text.slice(0, eq);
+		// A redirection inside the xargs segment is grammar, so it never names the payload.
+		const skip = redirectionWidth(operand, remaining[i + 1], false);
+		if (skip !== 0) {
+			i += skip - 1;
+			continue;
+		}
+		if (XARGS_FLAG_OPTIONS[name] === true) continue;
+		if (XARGS_VALUE_OPTIONS[name] === true) {
+			// A separated value (`-n 1`, `--replace X`) takes the next word; `--name=value` does not.
+			if (eq === -1) i++;
+			continue;
+		}
+		// A short option may carry its value attached, as in `-n1`, `-I{}`, or `-d,`.
+		const attached = operand.text.slice(0, 2);
+		if (
+			operand.text.length > 2 &&
+			!operand.text.startsWith("--") &&
+			XARGS_VALUE_OPTIONS[attached] === true
+		)
+			continue;
+		if (operand.text.startsWith("-")) return "unreadable";
+		return i;
+	}
+	return -1;
+}
+
+/** Whether this word names a Git command, path-qualified or not, including the direct helper. */
+function isGitWord(token: Token): boolean {
+	const base = token.text.split("/").at(-1) ?? "";
+	return GIT_COMMANDS[base] === true || base === "git-commit";
+}
+
+/**
+ * Whether this payload command can reach Git without stating it. A shell runs any script, the
+ * transparent prefixes and argv forwarders pass their tail on, and an expansion hides the name.
+ * An ordinary utility cannot, so `xargs echo git` stays an ordinary command.
+ */
+function isUnreadablePayload(payload: Token): boolean {
+	const base = payload.text.split("/").at(-1) ?? "";
+	return (
+		SHELL_COMMANDS.includes(base) ||
+		TRANSPARENT_PREFIX[base] === true ||
+		FORWARDING_COMMANDS.includes(base) ||
+		payload.text.includes("$") ||
+		payload.text.includes("`")
+	);
+}
+
+/** Programs that execute an argv they are given, so a Git call can hide behind them. */
+const FORWARDING_COMMANDS = ["exec", "nice", "nohup", "time", "xargs", "xcrun"];
+
+/**
+ * An unquoted redirection word is grammar rather than argv, so it stands between a command and
+ * its own arguments: `git >/dev/null commit -m x` runs the same commit as `git commit -m x`.
+ */
+const REDIRECTION = /^(?:\d+|&)?(?:<<<|<<-?|>>|>\||<>|>&|<&|>|<)/;
+
+/**
+ * How many words this redirection occupies: 0 when it is argv, 1 when it carries its own target,
+ * and 2 when the target is the next word. A bare operator claims no word across a separator,
+ * because the target belongs to the same simple command.
+ */
+function redirectionWidth(
+	token: Token,
+	next: Token | undefined,
+	nextIsSeparator: boolean,
+): 0 | 1 | 2 {
+	if (token.quoted) return 0;
+	const match = REDIRECTION.exec(token.text);
+	if (match === null) return 0;
+	if ((match[0] as string).length !== token.text.length) return 1;
+	return next !== undefined && !nextIsSeparator ? 2 : 1;
+}
+
 function scanInvocations(command: string): CommitInvocation[] {
 	const out: CommitInvocation[] = [];
 	const tokens = tokenize(command);
@@ -619,6 +769,16 @@ function scanInvocations(command: string): CommitInvocation[] {
 			continue;
 		}
 		if (!atCommand) continue;
+		const leadingRedirection = redirectionWidth(
+			token,
+			tokens[i + 1],
+			isSep(tokens[i + 1]),
+		);
+		if (leadingRedirection !== 0) {
+			// A redirection before the command leaves the slot open: `>/dev/null git commit` commits.
+			i += leadingRedirection - 1;
+			continue;
+		}
 		// A reserved word introduces a command rather than being one, so it leaves the slot open.
 		if (token.text === "env") {
 			let k = i + 1;
@@ -774,7 +934,7 @@ function scanInvocations(command: string): CommitInvocation[] {
 			continue;
 		}
 		const commandBase = token.text.split("/").at(-1) ?? "";
-		if (["bash", "sh", "zsh", "dash", "ksh"].includes(commandBase)) {
+		if (SHELL_COMMANDS.includes(commandBase)) {
 			const shellArgs = tokens
 				.slice(i + 1)
 				.filter((candidate) => !isSep(candidate));
@@ -871,23 +1031,53 @@ function scanInvocations(command: string): CommitInvocation[] {
 		// Accepted advisory boundary: arbitrary programs may forward argv to Git. This gate handles
 		// the wrappers agents use in this estate (`xcrun` and `xargs`) but does not claim coverage
 		// for every executable such as timeout, parallel, or watch.
-		const wrappedGitIndex = wrapperCandidate
-			? remaining.findIndex((candidate) => {
-					const base = candidate.text.split("/").at(-1) ?? "";
-					return GIT_COMMANDS[base] === true || base === "git-commit";
-				})
-			: -1;
+		//
+		// `xargs` runs the one command named after its own options, and every later word is data
+		// appended to that command, so `xargs echo git` runs `echo`. `xcrun` passes its whole tail
+		// through, so any Git word in it is a real command.
+		const xargsCommand =
+			commandBase === "xargs" ? xargsPayloadIndex(remaining) : -1;
+		if (xargsCommand === "unreadable") {
+			out.push({ repoDir: null, dryRun: false, retargeted: true });
+			continue;
+		}
+		// For `xargs` the payload command and everything after it are the argv that runs; for
+		// `xcrun` the whole tail is. Both are analysed as one array so the index stays meaningful.
+		const wrapperTail =
+			commandBase === "xargs"
+				? xargsCommand === -1
+					? []
+					: remaining.slice(xargsCommand)
+				: remaining;
+		const payload = wrapperTail[0];
+		const wrappedGitIndex =
+			commandBase === "xargs"
+				? payload !== undefined && isGitWord(payload)
+					? 0
+					: -1
+				: wrapperCandidate
+					? wrapperTail.findIndex((candidate) => isGitWord(candidate))
+					: -1;
 		if (
 			commandBase === "xargs" &&
 			wrappedGitIndex === -1 &&
-			remaining.length > 0
+			payload !== undefined &&
+			isUnreadablePayload(payload)
 		) {
 			out.push({ repoDir: null, dryRun: false, retargeted: true });
 			continue;
 		}
+		// For `xargs` only the payload word decides what runs, so an expansion after it is data.
+		// `xcrun` passes its whole tail through, where an expansion can still become the command.
+		const opaqueTail =
+			commandBase === "xargs"
+				? payload === undefined
+					? []
+					: [payload]
+				: wrapperTail;
 		if (
 			wrapperCandidate &&
-			remaining.some(
+			opaqueTail.some(
 				(candidate) =>
 					candidate.text.includes("$") || candidate.text.includes("`"),
 			)
@@ -897,11 +1087,11 @@ function scanInvocations(command: string): CommitInvocation[] {
 		}
 		if (
 			wrappedGitIndex !== -1 &&
-			(remaining[wrappedGitIndex]?.text.endsWith("git-commit") ||
-				remaining
+			(wrapperTail[wrappedGitIndex]?.text.endsWith("git-commit") ||
+				wrapperTail
 					.slice(wrappedGitIndex + 1)
 					.some((candidate) => candidate.text === "commit") ||
-				remaining
+				wrapperTail
 					.slice(wrappedGitIndex + 1)
 					.some(
 						(candidate) =>
@@ -929,6 +1119,25 @@ function scanInvocations(command: string): CommitInvocation[] {
 		for (; j < tokens.length; j++) {
 			const arg = tokens[j] as Token;
 			if (isSep(arg)) break;
+			const argRedirection = redirectionWidth(
+				arg,
+				tokens[j + 1],
+				isSep(tokens[j + 1]),
+			);
+			if (argRedirection !== 0) {
+				// Redirections stand anywhere in a simple command without changing its argv.
+				j += argRedirection - 1;
+				continue;
+			}
+			if (
+				verb === null &&
+				(arg.text.includes("$") || arg.text.includes("`")) &&
+				!arg.text.startsWith("-")
+			) {
+				// This word decides the verb, and quoting does not make an expansion readable.
+				aliasOpaque = true;
+				continue;
+			}
 			if (verb === "commit") {
 				if (!commitOptions) continue;
 				if (arg.text === "--") {
@@ -1065,18 +1274,19 @@ export function denyReason(branch: string, readDir: string): string {
 }
 
 /**
- * A commit was pointed at another repository by a command-level target selector. Nothing was
- * read because the selector did not provide a working directory this gate can safely check.
+ * This command names no repository this gate can read, so no branch was checked. The cause is
+ * either a target selector pointing elsewhere or a construct whose real argv is not visible.
  */
-export function retargetReason(selector: string): string {
+export function unreadableReason(selector: string): string {
 	return (
-		"blocked by delivery (work lands on a branch, never on main/master): this commit is " +
-		`pointed at another repository by \`${selector}\`, and that is not a working directory ` +
-		"this gate can read. A bare repository, a linked worktree, or a `.git` outside its own " +
-		"tree each break the guess, so NOTHING was read and no branch was checked.\n\n" +
-		"Name the repository in a form that is read directly: pass the bash tool's `cwd`, or " +
-		"use an absolute `git -C <path> commit`. Then the branch is knowable and an ordinary " +
-		"commit on a feature branch passes.\n\n" +
+		"blocked by delivery (work lands on a branch, never on main/master): this command " +
+		`carries \`${selector}\`, so which repository a commit would reach is not readable here. ` +
+		"A bare repository, a linked worktree, a `.git` outside its own tree, and an argv this " +
+		"gate cannot see each break the guess, so NOTHING was read and no branch was checked.\n\n" +
+		"State the repository and the command in a form that is read directly: pass the bash " +
+		"tool's `cwd`, use an absolute `git -C <path> commit`, and write the git call out rather " +
+		"than wrapping it in a shell, a split string, or an expansion. Then the branch is " +
+		"knowable and an ordinary commit on a feature branch passes.\n\n" +
 		`Only when the user explicitly asked for a commit on a protected branch set \`${ALLOW_ENV}=1\` ` +
 		"in the ENVIRONMENT, either on the bash call or in the session."
 	);
@@ -1123,22 +1333,22 @@ export function decideCommit(
 	)
 		return {
 			block: true,
-			reason: retargetReason("structured Git configuration"),
+			reason: unreadableReason("structured Git configuration"),
 		};
 	for (const invocation of invocations) {
 		if (opaqueEnvConfig)
 			return {
 				block: true,
-				reason: retargetReason("structured Git configuration"),
+				reason: unreadableReason("structured Git configuration"),
 			};
 		if (invocation.dryRun) continue;
 		if (invocation.retargeted === true)
 			return {
 				block: true,
-				reason: retargetReason("a command-level target selector"),
+				reason: unreadableReason("a command-level target selector"),
 			};
 		if (envSelector !== undefined)
-			return { block: true, reason: retargetReason(envSelector) };
+			return { block: true, reason: unreadableReason(envSelector) };
 		// `-C` is the only directory the command states outright, so it is the only one applied.
 		// A `cd` is not followed, for the reasons on `findCommitInvocations`.
 		const target =
