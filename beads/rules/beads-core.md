@@ -105,7 +105,7 @@ NOT `bd import` of issues.jsonl by hand -- `bd dolt pull` is the sync path,
   own both halves.
 NOT Treating Dolt sync and the GitHub mirror as one thing: `bd dolt` moves the
   beads database between machines, `bd github` mirrors beads to GitHub issues.
-  The containerized `dbd` wrapper injects credentials for the Dolt verbs only, so
+  The PATH `bd` router injects credentials for the Dolt verbs only, so
   `bd github` runs on the host with `GITHUB_TOKEN` supplied per invocation.
 
 SYNC (Dolt first, JSONL only as fallback)
@@ -137,10 +137,10 @@ DEFAULT Check before pushing: the probe is `git push --dry-run`, which runs the
   difference matters -- goes through, rejected at pre-push, or no answer
   (unreachable/timeout: stay quiet and let the next session try, since advising a
   strategy change over a dropped network is worse than silence).
-MUST Where a direct push does not go through, set `custom.bd-push-command` to a
-  wrapper that runs bd with network access (`bd config set
-  custom.bd-push-command dbd`). That key is the redirect; do not invent a second
-  pusher path.
+MUST For public `github.com` repositories, invoke `git` and `bd` by name so the
+  PATH routers own Git pushes and Dolt sync. Configure the lifecycle redirect
+  with `bd config set custom.bd-push-command bd`; do not use an absolute Git or
+  Beads executable, `dgit`, `dbd`, or a second pusher path.
 GOTCHA Git resolves the remote host BEFORE running pre-push hooks, so an
   unreachable URL yields no answer either way.
 DEFAULT Prefer bd's own `export.auto` (throttled export after every write).
