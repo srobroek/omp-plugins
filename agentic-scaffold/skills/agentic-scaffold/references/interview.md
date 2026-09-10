@@ -11,9 +11,22 @@ python3 "$SCAFFOLD" interview questions --root R --profile P
 ```
 
 The JSON has `root` and `questions`. Every question has `id`, `prompt`, `required`, `default`,
-optional `allowed`, and `source`. Ask every `required` question with the `ask` tool, in order.
-Never silently accept a required question's default. Optional defaults may be accepted only when the
+optional `allowed`, optional `multi`, optional `choices` (value plus one-line summary), and `source`.
+Ask every question with the `ask` tool, in order; group related questions in one call. Never
+silently accept a required question's default. Optional defaults may be accepted only when the
 human explicitly says to use them.
+
+Turning a question into an `ask` entry:
+
+- `allowed` present: one option per allowed value, labelled with the value; put the `choices`
+  summary in the option description. Mark the default as recommended.
+- `multi: true`: set `multi: true` on the `ask` question so the human can pick several. When
+  `allowed` has more than five values, split it across consecutive questions of at most five
+  options each, all `multi: true`, and join every selection with commas for `--set id=a,b,c`.
+- No `allowed`: offer the default plus one "type my own" path; the UI adds a free-text option.
+
+Never invent combined options such as "agentic, hooks, tooling" as one choice; offer the layers
+themselves.
 
 Exit `0` means questions are available. Exit `1` is an operational error. Exit `6` is a root
 boundary refusal.
@@ -28,10 +41,14 @@ Do not ask framework, provider, or tool-version questions.
 
 ## 3. Brownfield questions
 
-Confirm the detected profile, choose optional layers (default proposal: `agentic + hooks + tooling`),
-and resolve every emitted `finding:<kind>`. Findings include a foreign hook manager, unowned
-`.omp/*` files, dirty state, and ambiguous managed markers. Ask the human which resolution to use;
-do not turn a proposal into an answer without explicit approval.
+Confirm the detected profile, pick layers from the emitted catalogue (the default preselects the
+profile's layers; existing files a layer owns are skipped, never replaced), and resolve every emitted `finding:<kind>`. Findings include
+unowned `.omp/*` files, dirty state, and ambiguous managed markers. Ask the human which resolution
+to use; do not turn a proposal into an answer without explicit approval.
+
+Hook wiring is not a question. Preflight detects the hook manager (`hook_strategy` in its JSON)
+and later stages chain through it; do not mention the strategy or ask about it unless the CLI
+emits a `finding:hook-manager` question, which happens only when no manager was detected.
 
 ## 4. Write approved answers
 

@@ -249,6 +249,7 @@ def test_abort_lifts_the_boundary_and_reports_owned_dirt(tmp_path: Path) -> None
     body = payload(result)
     assert body["hadRun"] and body["stagesCompleted"] == ["preflight", "render"]
     assert body["dirtyOwned"] == ["mise.toml"] and "notes.txt" in body["dirtyOther"]
+    assert body["revertCommands"] == ["rm -rf mise.toml"]  # untracked owned file; user files never appear
     assert not (root / ".omp/scaffold-run.json").exists()
     again = payload(run("abort", "--root", str(root)))
     assert again["hadRun"] is False
@@ -274,3 +275,35 @@ def test_guarded_write_leaves_no_temp_file_and_replaces_atomically(tmp_path: Pat
     scaffold._write_under_root(root, target, '{"stages": []}\n')
     assert target.read_text() == '{"stages": []}\n'
     assert [p.name for p in target.parent.iterdir()] == ["scaffold-run.json"]
+
+
+def test_brownfield_layers_question_is_a_catalogue_multiselect_and_its_answer_selects_layers(tmp_path: Path) -> None:
+    import importlib
+
+    sys.path.insert(0, str(CLI.parent))
+    scaffold = importlib.import_module("scaffold")
+    root = git_root(tmp_path)
+    (root / "README.md").write_text("# existing\n")
+    q = next(row for row in scaffold.interview_questions(root, "agentic-repo")["questions"] if row["id"] == "layers")
+    assert q["multi"] is True and "base" in q["default"].split(",") and "lang/python" in q["allowed"]
+    assert any(c["value"] == "hooks" and c["summary"] for c in q["choices"])
+    result = run("answers", "write", "--root", str(root), "--profile", "agentic-repo", "--set", "layers=base,agentic,tooling", "--set", "name=demo")
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert payload(result)["layers"] == ["base", "agentic", "tooling"]
+    assert "layers" not in payload(result)["vars"]
+    bad = run("answers", "write", "--root", str(root), "--profile", "agentic-repo", "--set", "layers=base,nope", "--set", "name=demo")
+    assert bad.returncode == 5
+
+
+def test_dry_run_returns_a_compact_plan_summary(tmp_path: Path) -> None:
+    root = git_root(tmp_path)
+    (root / ".gitignore").write_text("node_modules\n")
+    subprocess.run(["git", "add", "-A"], cwd=root, check=True, capture_output=True)
+    subprocess.run(["git", "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-m", "init"], cwd=root, check=True, capture_output=True)
+    assert run("answers", "write", "--root", str(root), "--profile", "agentic-repo", "--set", "layers=base,agentic", "--set", "name=demo").returncode == 0
+    result = run("apply", "--root", str(root), "--dry-run", "--allow-dirty")
+    body = payload(result)
+    summary = body["planSummary"]
+    assert summary["layers"] == ["base", "agentic"] and summary["counts"] and summary["lines"]
+    assert all(line.split()[0] in {"create", "update-block", "skip", "conflict"} for line in summary["lines"])
+    assert summary["preflight"]["ok"] in (True, False)

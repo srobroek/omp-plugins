@@ -16,7 +16,7 @@ TRIGGER
 
 | Phase | Load | Lead action and exact command |
 |---|---|---|
-| Preflight | `references/guidebook.md` | Call `scaffold` with `command: "preflight"`, `args: ["--profile", P]`. Read `root`, `hard`, `soft`, `tools`, and `hook_strategy`. |
+| Preflight | `references/guidebook.md` | Call `scaffold` with `command: "preflight"`, `args: ["--profile", P]`. Read `root`, `hard`, `soft`, and `tools`. |
 | Interview | `references/interview.md` | Call `scaffold` with `command: "interview"`, `args: ["questions", "--profile", P]`. Read `root` and `questions`; ask every `required: true` question with `ask`. |
 | Answers | `references/interview.md` | Call `scaffold` with `command: "answers"`, `args: ["write", "--profile", P, "--set", "k=v", "--defaults-for", "…"]`. Read `root`, `profile`, `layers`, `defaults_for`, and `vars`. |
 | Plan approval | `references/guidebook.md` | Call `scaffold` with `command: "apply"`, `args: ["--dry-run"]`. Read `root`, `ok`, and `stages`; show the plan and wait for explicit approval. |
