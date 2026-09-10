@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.2](https://github.com/srobroek/omp-plugins/compare/agentic-scaffold--v0.5.1...agentic-scaffold--v0.5.2) (2026-09-10)
+
+
+### Bug Fixes
+
+* **agentic-scaffold:** write guarded files atomically ([#119](https://github.com/srobroek/omp-plugins/issues/119)) ([d0be49b](https://github.com/srobroek/omp-plugins/commit/d0be49bc3bf17f585f99a6dfdce7c27d71bad840))
+
 ## [0.5.1](https://github.com/srobroek/omp-plugins/compare/agentic-scaffold--v0.5.0...agentic-scaffold--v0.5.1) (2026-09-10)
 
 
