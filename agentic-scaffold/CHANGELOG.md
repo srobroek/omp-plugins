@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.10](https://github.com/srobroek/omp-plugins/compare/agentic-scaffold--v0.5.9...agentic-scaffold--v0.5.10) (2026-09-10)
+
+
+### Documentation
+
+* **agentic-scaffold:** scope the confirmation gates; handle inspect failure; align verify.md ([#150](https://github.com/srobroek/omp-plugins/issues/150)) ([bda29c2](https://github.com/srobroek/omp-plugins/commit/bda29c22cb388d34eacad96ff4c1749e20b840b8))
+
 ## [0.5.9](https://github.com/srobroek/omp-plugins/compare/agentic-scaffold--v0.5.8...agentic-scaffold--v0.5.9) (2026-09-10)
 
 
