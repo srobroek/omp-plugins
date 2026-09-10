@@ -179,6 +179,16 @@ function isOpaqueGitConfigKey(key: string): boolean {
 	);
 }
 
+function envHasOpaqueGitConfig(env: NodeJS.ProcessEnv): boolean {
+	const count = Number.parseInt(env.GIT_CONFIG_COUNT ?? "0", 10);
+	if (!Number.isFinite(count) || count <= 0) return false;
+	for (let index = 0; index < count; index++) {
+		const key = env[`GIT_CONFIG_KEY_${index}`];
+		if (key !== undefined && isOpaqueGitConfigKey(key)) return true;
+	}
+	return false;
+}
+
 /**
  * A RAW-TEXT test on the whole command string, with no notion of command position: it asks only
  * whether `git` or `dgit` occurs between word boundaries. Any non-word character delimits, so a
@@ -926,7 +936,19 @@ export function decideCommit(
 	const envSelector = TARGET_ENV.find(
 		(name) => env[name] !== undefined && env[name] !== "",
 	);
-	for (const invocation of findCommitInvocations(command)) {
+	const opaqueEnvConfig = envHasOpaqueGitConfig(env);
+	const invocations = findCommitInvocations(command);
+	if (opaqueEnvConfig && invocations.length === 0 && /\bd?git\b/.test(command))
+		return {
+			block: true,
+			reason: retargetReason("structured Git configuration"),
+		};
+	for (const invocation of invocations) {
+		if (opaqueEnvConfig)
+			return {
+				block: true,
+				reason: retargetReason("structured Git configuration"),
+			};
 		if (invocation.dryRun) continue;
 		if (invocation.retargeted === true)
 			return {

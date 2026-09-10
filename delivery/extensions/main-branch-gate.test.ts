@@ -156,6 +156,35 @@ describe("findCommitInvocations", () => {
 		}
 	});
 
+	test("structured Git config aliases fail closed", () => {
+		const env = {
+			GIT_CONFIG_COUNT: "1",
+			GIT_CONFIG_KEY_0: "alias.ci",
+			GIT_CONFIG_VALUE_0: "commit",
+		};
+		expect(decideCommit("git ci -m x", "/protected", env)?.block).toBe(true);
+	});
+
+	test("structured Git config uncertainty overrides dry-run", () => {
+		const env = {
+			GIT_CONFIG_COUNT: "1",
+			GIT_CONFIG_KEY_0: "alias.ci",
+			GIT_CONFIG_VALUE_0: "commit",
+		};
+		expect(decideCommit("git commit --dry-run", "/feature", env)?.block).toBe(
+			true,
+		);
+	});
+
+	test("structured Git config does not block unrelated commands", () => {
+		const env = {
+			GIT_CONFIG_COUNT: "1",
+			GIT_CONFIG_KEY_0: "alias.ci",
+			GIT_CONFIG_VALUE_0: "commit",
+		};
+		expect(decideCommit("printf hello", "/protected", env)).toBeUndefined();
+	});
+
 	test("malformed config-env operands do not invent an alias", () => {
 		for (const command of [
 			"git --config-env=alias.ci status",
