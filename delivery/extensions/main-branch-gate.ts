@@ -846,7 +846,7 @@ function scanInvocations(command: string): CommitInvocation[] {
 			out.push({ repoDir: null, dryRun: false, retargeted: true });
 			continue;
 		}
-		const wrapperCandidate = ["xcrun"].includes(commandBase);
+		const wrapperCandidate = ["xcrun", "xargs"].includes(commandBase);
 		const wrappedGitIndex = wrapperCandidate
 			? remaining.findIndex((candidate) => {
 					const base = candidate.text.split("/").at(-1) ?? "";

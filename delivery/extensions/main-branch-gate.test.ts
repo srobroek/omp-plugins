@@ -521,6 +521,26 @@ describe("findCommitInvocations", () => {
 		]);
 	});
 
+	test("argv-forwarding wrappers cannot hide Git commit forms", () => {
+		expect(findCommitInvocations("xargs git commit -m x")).toEqual([
+			{ repoDir: null, dryRun: false, retargeted: true },
+		]);
+		expect(findCommitInvocations("xargs git status")).toEqual([]);
+		expect(findCommitInvocations("xargs $" + "{RUNNER} commit -m x")).toEqual([
+			{ repoDir: null, dryRun: false, retargeted: true },
+		]);
+	});
+
+	test("ordinary commands mentioning Git are not wrappers", () => {
+		for (const command of [
+			"echo git commit",
+			"printf git commit",
+			"cat git commit",
+		]) {
+			expect(findCommitInvocations(command), command).toEqual([]);
+		}
+	});
+
 	test("unknown wrapped helper dry-runs fail closed", () => {
 		expect(findCommitInvocations("xcrun git-commit --dry-run")).toEqual([
 			{ repoDir: null, dryRun: false, retargeted: true },
