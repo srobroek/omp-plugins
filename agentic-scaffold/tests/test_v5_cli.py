@@ -309,20 +309,16 @@ def test_dry_run_returns_a_compact_plan_summary(tmp_path: Path) -> None:
     assert summary["preflight"]["ok"] in (True, False)
 
 
-def test_bd_environment_keeps_a_valid_inherited_pin_and_falls_back_otherwise(tmp_path: Path, monkeypatch) -> None:
+def test_bd_environment_does_not_choose_a_database(tmp_path: Path, monkeypatch) -> None:
     import importlib
 
     sys.path.insert(0, str(CLI.parent))
     scaffold = importlib.import_module("scaffold")
     root = git_root(tmp_path)
     (root / ".beads").mkdir()
-    primary = tmp_path / "primary" / ".beads"
-    primary.mkdir(parents=True)
-    monkeypatch.setenv("BEADS_DIR", str(primary))
-    assert scaffold._bd_environment(root)["BEADS_DIR"] == str(primary)  # the session pin wins
-    monkeypatch.setenv("BEADS_DIR", ".beads")
-    assert scaffold._bd_environment(root)["BEADS_DIR"] == str((root / ".beads").resolve())  # relative: not a pin
-    monkeypatch.setenv("BEADS_DIR", str(tmp_path / "gone"))
-    assert scaffold._bd_environment(root)["BEADS_DIR"] == str((root / ".beads").resolve())  # missing: not a pin
+    monkeypatch.setenv("BEADS_DIR", "/pinned/by/the/session/.beads")
+    env = scaffold._bd_environment(root)
+    assert env["BEADS_DIR"] == "/pinned/by/the/session/.beads"  # inherited untouched
+    assert env["BEADS_ACTOR"].startswith("agentic-scaffold/")
     monkeypatch.delenv("BEADS_DIR")
-    assert scaffold._bd_environment(root)["BEADS_DIR"] == str((root / ".beads").resolve())
+    assert "BEADS_DIR" not in scaffold._bd_environment(root)  # bd resolves from cwd=root
