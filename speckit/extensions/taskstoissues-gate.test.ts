@@ -63,7 +63,9 @@ describe("register", () => {
 		const handlers: Record<string, Array<(e: unknown) => unknown>> = {};
 		const fakePi = {
 			on: (event: string, handler: (e: unknown) => unknown) => {
-				(handlers[event] ??= []).push(handler);
+				const registered = handlers[event] ?? [];
+				registered.push(handler);
+				handlers[event] = registered;
 			},
 		};
 		taskstoissuesGate(fakePi as never);

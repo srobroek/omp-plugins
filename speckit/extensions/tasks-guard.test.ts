@@ -1,17 +1,21 @@
-import { describe, expect, test, beforeEach } from "bun:test";
+import { beforeEach, describe, expect, test } from "bun:test";
 
 import tasksGuard, {
 	beadsActive,
 	commandMentionsTasksMd,
-	decideToolCall,
 	DENY_REASON,
+	decideToolCall,
 	isTasksMd,
 	setBeadsActiveForTests,
 	writesTasksMd,
 } from "./tasks-guard.ts";
 
-const chain = () => new Proxy(() => chain(), { get: () => chain(), apply: () => chain() });
-const z = new Proxy({}, { get: () => chain() }) as never;
+type ZodChain = {
+	(...args: never[]): ZodChain;
+	readonly [key: string]: ZodChain;
+};
+const chain = (): ZodChain => new Proxy(((..._args: never[]) => chain()) as ZodChain, { get: () => chain(), apply: () => chain() });
+const zod = new Proxy({}, { get: () => chain() }) as never;
 
 describe("isTasksMd", () => {
 	test("matches relative and absolute specs/*/tasks.md", () => {
@@ -82,41 +86,41 @@ describe("decideToolCall", () => {
 });
 
 describe("register", () => {
+  type Handler = (event: Record<string, unknown>) => unknown;
+  type HandlerMap = Record<string, Handler[]>;
+  function handlerAt(handlers: HandlerMap, event: string): Handler {
+	const handler = handlers[event]?.[0];
+	if (!handler) throw new Error(`missing ${event} handler`);
+	return handler;
+  }
 	test("registers tool_call handler and blocks", () => {
 		setBeadsActiveForTests(true);
-		const handlers: Record<string, Array<(e: Record<string, unknown>) => unknown>> = {};
+		const handlers: HandlerMap = {};
 		const fakePi = {
-			zod: z,
-			registerTool: () => { },
-			on: (ev: string, fn: (e: Record<string, unknown>) => unknown) => {
-				(handlers[ev] ??= []).push(fn);
+			zod, registerTool: () => {},
+			on: (ev: string, fn: Handler) => {
+				const registered = handlers[ev] ?? [];
+				registered.push(fn);
+				handlers[ev] = registered;
 			},
 		};
 		tasksGuard(fakePi as never);
-		const out = handlers.tool_call?.[0]?.({
-			toolName: "write",
-			toolCallId: "1",
-			input: { path: "specs/002/tasks.md", cwd: "/tmp" },
-		});
+		const out = handlerAt(handlers, "tool_call")({ toolName: "write", toolCallId: "1", input: { path: "specs/002/tasks.md", cwd: "/tmp" } });
 		expect(out).toEqual({ block: true, reason: DENY_REASON });
 	});
 
 	test("handler swallows throws", () => {
 		setBeadsActiveForTests(true);
-		const handlers: Record<string, Array<(e: Record<string, unknown>) => unknown>> = {};
+		const handlers: HandlerMap = {};
 		const fakePi = {
-			zod: z,
-			registerTool: () => { },
-			on: (ev: string, fn: (e: Record<string, unknown>) => unknown) => {
-				(handlers[ev] ??= []).push(fn);
+			zod, registerTool: () => {},
+			on: (ev: string, fn: Handler) => {
+				const registered = handlers[ev] ?? [];
+				registered.push(fn);
+				handlers[ev] = registered;
 			},
 		};
 		tasksGuard(fakePi as never);
-		expect(
-			handlers.tool_call?.[0]?.({
-				toolName: "write",
-				input: null,
-			}),
-		).toBeUndefined();
+		expect(handlerAt(handlers, "tool_call")({ toolName: "write", input: null })).toBeUndefined();
 	});
 });

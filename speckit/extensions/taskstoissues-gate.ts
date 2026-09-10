@@ -8,7 +8,7 @@
  *
  * Fails open: a throwing tool_call handler is a bash outage.
  */
-import type { ExtensionAPI, ExtensionToolCallEvent } from "@oh-my-pi/pi-coding-agent";
+import type { ExtensionAPI, ToolCallEvent } from "@oh-my-pi/pi-coding-agent";
 
 export const DENY_REASON =
 	"blocked by speckit (taskstoissues converts tasks.md into a second tracker): do not run speckit-taskstoissues / speckit.taskstoissues / specify … /speckit.taskstoissues. Task state lives in beads. Link an existing GitHub issue with `bd update <id> --external-ref gh-<number>` instead.";
@@ -59,9 +59,9 @@ const SPECIFY_BANNED: Record<string, true> = {
 
 const PREFILTER = /speckit[-.]taskstoissues/;
 
-export function extractCommand(input: Record<string, unknown>): string {
-	if (typeof input.command === "string") return input.command;
-	if (typeof input.cmd === "string") return input.cmd;
+export function extractCommand(input: ToolCallEvent["input"]): string {
+	if ("command" in input && typeof input.command === "string") return input.command;
+	if ("cmd" in input && typeof input.cmd === "string") return input.cmd;
 	return "";
 }
 
@@ -304,7 +304,7 @@ export function isTaskstoissuesInvocation(command: string): boolean {
 
 export function decideToolCall(
 	toolName: string,
-	input: Record<string, unknown>,
+	input: ToolCallEvent["input"],
 ): { block: true; reason: string } | undefined {
 	if (toolName !== "bash") return;
 	const command = extractCommand(input);
@@ -314,8 +314,9 @@ export function decideToolCall(
 }
 
 export default function taskstoissuesGate(pi: ExtensionAPI): void {
-	pi.on("tool_call", (event: ExtensionToolCallEvent) => {
+	pi.on("tool_call", (event: ToolCallEvent) => {
 		try {
+			// `decideToolCall` owns the bash-only check, so nothing is filtered here.
 			return decideToolCall(event.toolName, event.input);
 		} catch {
 			return;

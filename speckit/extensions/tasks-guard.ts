@@ -1,4 +1,4 @@
-import type { ExtensionAPI, ExtensionToolCallEvent } from "@oh-my-pi/pi-coding-agent";
+import type { ExtensionAPI, ToolCallEvent } from "@oh-my-pi/pi-coding-agent";
 
 const TIMEOUT_MS = 10_000;
 
@@ -62,13 +62,16 @@ export function beadsActive(cwd: string): boolean {
 	}
 }
 
-function targetPaths(input: Record<string, unknown>): string[] {
+function targetPaths(input: ToolCallEvent["input"]): string[] {
 	const out: string[] = [];
-	for (const key of ["path", "file_path"] as const) {
-		const value = input[key];
-		if (typeof value === "string" && value.length > 0) out.push(value);
+	// `in` narrows one literal key at a time, so the two spellings stay unrolled.
+	if ("path" in input && typeof input.path === "string" && input.path.length > 0) {
+		out.push(input.path);
 	}
-	if (Array.isArray(input.paths)) {
+	if ("file_path" in input && typeof input.file_path === "string" && input.file_path.length > 0) {
+		out.push(input.file_path);
+	}
+	if ("paths" in input && Array.isArray(input.paths)) {
 		for (const path of input.paths) {
 			if (typeof path === "string" && path.length > 0) out.push(path);
 		}
@@ -76,14 +79,14 @@ function targetPaths(input: Record<string, unknown>): string[] {
 	return out;
 }
 
-export function commandFromInput(input: Record<string, unknown>): string {
-	const v = input.command;
-	return typeof v === "string" ? v : "";
+export function commandFromInput(input: ToolCallEvent["input"]): string {
+	if (!("command" in input)) return "";
+	return typeof input.command === "string" ? input.command : "";
 }
 
 export function decideToolCall(
 	toolName: string,
-	input: Record<string, unknown>,
+	input: ToolCallEvent["input"],
 	cwd: string,
 ): { block: true; reason: string } | undefined {
 	if (toolName === "edit" || toolName === "write") {
@@ -101,10 +104,10 @@ export function decideToolCall(
 }
 
 export default function tasksGuard(pi: ExtensionAPI): void {
-	pi.on("tool_call", (event: ExtensionToolCallEvent) => {
+	pi.on("tool_call", (event: ToolCallEvent) => {
 		try {
 			const cwd =
-				typeof event.input.cwd === "string" && event.input.cwd
+				"cwd" in event.input && typeof event.input.cwd === "string" && event.input.cwd
 					? event.input.cwd
 					: process.cwd();
 			return decideToolCall(event.toolName, event.input, cwd);
