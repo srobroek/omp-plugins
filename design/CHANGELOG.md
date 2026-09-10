@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.1](https://github.com/srobroek/omp-plugins/compare/design--v0.3.0...design--v0.3.1) (2026-09-10)
+
+
+### Bug Fixes
+
+* **design:** disable storybook MCP by default ([52e610c](https://github.com/srobroek/omp-plugins/commit/52e610ce2221050aa05d98ab45309e13f504d41d))
+
 ## [0.3.0](https://github.com/srobroek/omp-plugins/compare/design--v0.2.1...design--v0.3.0) (2026-09-08)
 
 
