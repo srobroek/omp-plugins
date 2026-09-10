@@ -239,10 +239,9 @@ def build_ci_jobs(layers: list[str], values: dict[str, str]) -> str:
         jobs.append(_job("hooks", [f"      - name: Set up uv\n        uses: {a['setup_uv']}", _run("uvx prek run --all-files", "Run every hook")]))
     if "agentic" in layers:
         names.append("agentic")
-        prose_files = "$(git ls-files '*.md' | grep -v CHANGELOG | grep -v node_modules)"
         jobs.append(_job("agentic", [f"      - name: Set up uv\n        uses: {a['setup_uv']}",
-                                     _run("uvx --from agnix agnix --root . || echo '::warning::agnix unavailable; agentic lint skipped'", "Agentic lint"),
-                                     _run(f"uvx --from slopvac slopvac {prose_files} --profile normal", "Prose gate")]))
+                                     _run("uvx --from agnix==0.52.2 agnix .", "Agentic lint"),  # PyPI build of agent-sh/agnix; fails closed
+                                     _run("git ls-files -z '*.md' | grep -zv CHANGELOG | xargs -0 --no-run-if-empty uvx --from slopvac slopvac --profile normal", "Prose gate")]))
     names.append("security")
     jobs.append(_job("security", [f"      - name: Workflow audit\n        uses: {a['zizmor']}\n        with:\n          advanced-security: false",
                                   _run("uvx --from actionlint-py actionlint", "Actionlint"),
