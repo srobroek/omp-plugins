@@ -635,8 +635,12 @@ function scanInvocations(command: string): CommitInvocation[] {
 					if (!attachedShortSplit && !operand.text.includes("=")) k++;
 					continue;
 				}
-				if (optionName === "-C" || optionName === "--chdir") {
-					// `env` changes cwd before launching git. Refuse rather than infer its target.
+				if (
+					optionName === "-C" ||
+					optionName === "--chdir" ||
+					("--chdir".startsWith(optionName) && optionName.length >= 4)
+				) {
+					// GNU env accepts unambiguous long-option abbreviations such as `--ch`.
 					prefixRetarget = true;
 					if (!operand.text.includes("=")) k++;
 					continue;
