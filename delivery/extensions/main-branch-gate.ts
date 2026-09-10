@@ -736,13 +736,12 @@ function scanInvocations(command: string): CommitInvocation[] {
 				)
 					exportedRetarget = true;
 			}
-			atCommand = false;
 			continue;
 		}
 		atCommand = false;
-		// Quoting removes SYNTAX meaning, not argv meaning: `'git' commit` runs git, so command
-		// identity ignores it. Only `isSep` consults `quoted`.
-		if (GIT_COMMANDS[token.text] !== true) continue;
+		// Quoting removes syntax meaning, not argv meaning. A path-qualified executable is still
+		// git when its basename is `git` or `dgit`.
+		if (GIT_COMMANDS[token.text.split("/").at(-1) ?? ""] !== true) continue;
 
 		let repoDir: string | null = null;
 		let verb: string | null = null;

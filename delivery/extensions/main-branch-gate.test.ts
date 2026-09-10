@@ -60,6 +60,15 @@ describe("findCommitInvocations", () => {
 		]);
 	});
 
+	test("path-qualified git commands are scanned", () => {
+		expect(findCommitInvocations("/usr/bin/git commit -m x")).toEqual([
+			{ repoDir: null, dryRun: false },
+		]);
+		expect(findCommitInvocations("/opt/homebrew/bin/dgit commit -m x")).toEqual(
+			[{ repoDir: null, dryRun: false }],
+		);
+	});
+
 	test("-C names the target repository, and repeats fold", () => {
 		expect(findCommitInvocations("git -C /repo commit -m x")).toEqual([
 			{ repoDir: "/repo", dryRun: false },
