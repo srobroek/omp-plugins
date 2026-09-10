@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.5](https://github.com/srobroek/omp-plugins/compare/agentic-scaffold--v0.5.4...agentic-scaffold--v0.5.5) (2026-09-10)
+
+
+### Documentation
+
+* **agentic-scaffold:** write the plan as an artifact before asking, like plan mode ([#127](https://github.com/srobroek/omp-plugins/issues/127)) ([2946468](https://github.com/srobroek/omp-plugins/commit/29464683d0fc13f3bb00ca90f662a9d956901800))
+
 ## [0.5.4](https://github.com/srobroek/omp-plugins/compare/agentic-scaffold--v0.5.3...agentic-scaffold--v0.5.4) (2026-09-10)
 
 
