@@ -28,22 +28,19 @@ agent's playbook for using it.
    Pull the overlap/gap facts from `references/tooling.md`.
 3. **Install every default-on tool the user doesn't deselect.**
    `sniff_install_tools` mode `install` with `bundles` or `all`. Use `dryRun` first if
-   the user wants to see commands.
-4. **Proceed regardless.** If the user declines an install, continue with what
-   is present and list the gaps in the final report's coverage note.
+   the user wants to see commands. Install success is provisional: the tool re-probes
+   every command in a fresh mise-aware environment and reports a failure unless the
+   command is usable there. Never bypass package trust policy.
+4. **Run through the analyzer wrapper.** Installation never authorizes a later scan.
+   Invoke each selected analyzer with `sniff_run_analyzer`; it performs that tool's
+   preflight immediately before execution. A non-usable result blocks only that run
+   and becomes a coverage gap with status, resolved path, and remediation.
 
 ## Bundles
 
-Use `sniff_install_tools` with `{"mode":"list"}` for current bundle membership
-and install commands. Bundle names: `core`, `dup`, `security`, `rust`, `go`,
-`python`, `js-ts`, `shell`, `sql`, `css`, `data`, `api`, `infra`, `docs`.
-
-After approval, for example, call with
-`{"mode":"install","bundles":["infra"],"path":"<repo-root>"}`.
-`{"mode":"install","bundles":["infra"],"dryRun":true}` prints commands only.
-Bundle installs cover every member, including opt-ins: obtain approval for the
-whole bundle or install only individually approved tools using the listed
-commands. Do not use `all:true` unless all bundles were explicitly approved.
+Bundles group installation/catalog entries by target family. They are not analyzer
+manifests and never authorize execution. Use `sniff_install_tools` mode `list` for
+the canonical membership; do not duplicate that generated inventory here.
 
 ## Package managers
 
@@ -53,11 +50,9 @@ Its fallback uses the tool's supported manager (`brew`, `pipx` / `uv tool`,
 
 ## Project-local tools
 
-`eslint`, `knip`, `biome`, `stylelint` are JS ecosystem tools that belong in the
-**repo's own** `devDependencies`, pinned with the project. The native tool does **not**
-install them globally; it reports them and prints the `npm i -D ...` line to run
-inside the repo. Run them via `npx` so the project's config and plugin versions
-apply.
+JS ecosystem analyzers belong in the repo's `devDependencies`. The installer reports
+the required package set but does not install it globally. `sniff_run_analyzer`
+resolves these executables only from the target's `node_modules/.bin`.
 
 ## Rust note
 

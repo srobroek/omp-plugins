@@ -5,9 +5,8 @@ description: Audit code for smells, map to refactoring.guru, and produce a vette
 
 # Sniff
 
-Audit code for smells and non-idiomatic patterns, then produce a prioritized,
-adversarially-vetted refactoring plan. Advisory by default -- code is edited
-**only** on explicit user approval (see step 7).
+Audit code smells, map surviving findings to refactoring.guru, and produce an
+adversarially-vetted plan. Edit code only after explicit approval in step 7.
 
 ## Approval gates
 
@@ -15,22 +14,12 @@ Target resolution, stack detection, configuration reads, and read-only availabil
 probes are allowed before tool-set approval. Do not install tools, run substantive
 scans, or dispatch a `bloodhound` until target and tool-set approval are established.
 
-1. **Which target?** If the user did not explicitly name one, ask in **two steps**:
-   - **Step 1a -- pick the target KIND.** Offer every time:
-     `whole repo` · `language/area filter` (e.g. just Rust, just the frontend) ·
-     `directory/module` · `file(s)` · `uncommitted changes` · `commit` ·
-     `commit range / branch compare` · `PR`.
-     A `language/area filter` resolves by detected-language / area glob, not one path.
-     Always offer ref kinds (commit/range/branch/PR) even on a clean tree.
-   - **Step 1b -- pin the specifics.** Once they pick a kind that needs an argument,
-     ask for it. Kinds **compose** -- "the Rust in this PR" = PR target filtered to `.rs`.
-   Do **not** assume whole repo.
-2. **Which tools?** After resolving the target, run
-   `sniff_install_tools` (mode `probe`). Propose the full thorough tool set --
-   every viable tool for **each detected target** -- as a tiered table (default-on
-   pre-selected ON, opt-in shown OFF with reason), and **wait**. "go" = install every
-   missing default-on tool and run all. A missing default-on tool is an install, or a
-   recorded coverage gap if the user declines.
+1. **Target.** If unnamed, ask first for the kind: whole repo, language/area,
+   directory/module, files, uncommitted changes, commit, range/branch, or PR.
+   Then ask for the required path/ref. Kinds compose. Never assume whole repo.
+2. **Install set.** After stack detection, use `sniff_install_tools` `probe` and
+   target references to present every viable analyzer. Default-on tools start
+   selected; opt-in tools start unselected with their reason. Wait before install.
 
 For a **non-interactive** run, use the target and installed tool set explicitly
 authorized by the user or delegated brief; record gaps and never install tools.
@@ -45,7 +34,7 @@ Read those via `skill://sniff/<path>`. When a tool needs a filesystem path (semg
 
 ## Workflow
 
-Run in order. Full procedure is in `skill://sniff/references/workflow.md` -- LOAD it before starting.
+LOAD `skill://sniff/references/workflow.md` before starting. Run in order:
 
 1. **Resolve target & detect stack.** If user did not name a target, STOP and ask.
    LOAD `skill://sniff/references/targeting.md`: resolve to an explicit file list + base ref, decide
@@ -58,9 +47,9 @@ Run in order. Full procedure is in `skill://sniff/references/workflow.md` -- LOA
    - **2.5. Inventory project lint config FIRST.** Before substantive scans, find and read
      every config that governs it. **Honor it** -- a rule the project disabled is advisory
      at most, never a regression. See `skill://sniff/references/workflow.md` Step 2.5.
-3. **Tool-driven detection.** For each detected language, run installed tools per
-   `skill://sniff/references/tooling.md`, honoring the Step 2.5 config. Skip + warn + record an install
-   hint for absent tools.
+3. **Tool-driven detection.** Run every selected analyzer through
+   `sniff_run_analyzer`, honoring the Step 2.5 configuration. Its preflight and
+   exact-path execution are atomic; record unavailable analyzers as coverage gaps.
 4. **Detection reading.** For smells tools cannot see, read the code guided by
    `skill://sniff/references/languages/<lang>.md`. Small target → read inline. Otherwise propose a
    `bloodhound` fan-out plan -- one hound per language as the floor, splitting oversized
@@ -76,44 +65,40 @@ Run in order. Full procedure is in `skill://sniff/references/workflow.md` -- LOA
    If the user explicitly approves, apply **low-risk/mechanical** refactors only, then
    re-run step 3 checks to verify.
 
-## Hard rules
+## Rules
 
-MUST Detection uses real tools -- no built-in low-precision grep fallback for smell detection. If no tool is installed for a dimension, skip it and tell the user what to install.
-MUST Exception: a deterministic exact-match pass (checksums or `diff -q`/`git diff --no-index`) is allowed for byte-identical duplicated files. This is a floor, not a ceiling -- also read parallel/mirrored files for conceptual duplication checksums miss.
-MUST Never edit code in steps 1 to 6. Apply only in step 7, only on explicit approval, always followed by a verification re-run.
-MUST Scope each tool by its analysis class (local/relational/global/baseline -- see `skill://sniff/references/tooling.md`).
-MUST For ref targets, headline breaking-change findings vs. the base. Global analyses (dead code, cycles, unused deps) are skipped + noted in scoped runs.
-DEFAULT Resolve language/area filters by detected-language glob, not by directory path.
-DEFAULT Always offer commit/range/branch/PR target kinds even on a clean tree.
-- Load language docs and the refactoring catalog lazily -- only what the detected stack needs.
-- Rust: standard toolchain (clippy pedantic/nursery + rustc) covers most dimensions; do not over-tool. See `skill://sniff/references/languages/rust.md`.
+MUST Use real analyzers; no low-precision grep fallback for smell detection.
+MUST Exact-file checksum/diff is allowed only as the duplication floor.
+MUST Keep steps 1 to 6 read-only.
+MUST Scope analyzers by local, relational, global, or baseline class.
+MUST Headline base-ref breaking changes; skip and record invalid scoped global runs.
+MUST Resolve shipped assets through `skill://sniff/`; pass absolute paths to tools.
+MUST Run every selected analyzer only through `sniff_run_analyzer`; never invoke it through Bash, Eval, Hub, or a hand-built command.
+MUST Pass selected hosted packages and the exact documented analyzer completion exits to `sniff_run_analyzer`.
+MUST Prefix each Bash command during a sniff run with `OMP_SNIFF_ACTIVE=1`; this command-local marker activates the direct-analyzer advisory and grants no analyzer execution authority.
+DEFAULT Load only references needed by the detected stack.
 
-## Scope modes
-
-- **quick** -- error handling, hardcoded values, naming, error-path smells; skip the full tool sweep and adversarial pass.
-- **full** (default) -- all steps above.
-- **plan-only** -- steps 1 to 6; never apply, even on approval.
-
-**Debug mode** (orthogonal -- combine with any scope mode): OFF by default. Turn ON only when the user explicitly asks to debug the sniff RUN itself. See `skill://sniff/references/workflow.md` → "Debug mode".
+Modes: **quick** skips the full sweep/challenge; **full** runs all steps;
+**plan-only** never applies changes. Debug annotations are off unless requested.
 
 ## References
 
-| File | When to load |
-|------|--------------|
-| `skill://sniff/references/workflow.md` | Always, before step 1 |
-| `skill://sniff/references/targeting.md` | Step 1: any non-whole-repo target |
-| `skill://sniff/references/tooling.md` | Steps 2 to 3: tool catalog, invocation, overlap/gaps, analysis class |
-| `skill://sniff/references/installer.md` | Step 2: install-flow contract and bundles |
-| `skill://sniff/references/languages/index.md` | Step 1: route stack → language docs |
-| `skill://sniff/references/languages/<lang>.md` | Step 4: per-language smells/idioms/tools |
-| `skill://sniff/references/scout-brief.md` | Step 4: build the `bloodhound` Brief |
-| `skill://sniff/references/refactoring-catalog.md` | Step 5: smell → pattern → technique + URLs |
-| `skill://sniff/references/adversarial-brief.md` | Step 6: build the `refactor-challenger` Brief |
-| `skill://sniff/references/report-template.md` | Step 7: prioritized plan format |
+| File | Load when |
+|------|-----------|
+| `references/workflow.md` | Always, before step 1 |
+| `references/targeting.md` | Target resolution/reduction |
+| `references/tooling.md` | Tool class, overlap, invocation |
+| `references/installer.md` | Approved installation |
+| `references/languages/index.md` | Stack routing |
+| `references/languages/<lang>.md` | Detected target reading |
+| `references/scout-brief.md` | `bloodhound` dispatch |
+| `references/refactoring-catalog.md` | Mapping |
+| `references/adversarial-brief.md` | Challenge |
+| `references/report-template.md` | Report |
 
 ## Agents
 
-| Agent | Role | Spawned |
-|-------|------|---------|
-| `bloodhound` | Read-only per-language smell detector | Step 4, per-language (large languages split across several), parallel |
-| `refactor-challenger` | Read-only adversarial pragmatism critic | Step 6, once over the finding set |
+| Agent | Role |
+|-------|------|
+| `bloodhound` | Read-only language-slice detector |
+| `refactor-challenger` | Read-only pragmatism critic |

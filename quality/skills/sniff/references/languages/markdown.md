@@ -42,7 +42,7 @@ idiomatic alternative. Markdown-specific, not generic OO.
 | Bare URLs | `See https://example.com` pasted inline | `[descriptive text](https://example.com)` (`MD034`) |
 | Inconsistent list markers | Mixing `-`, `*`, `+` or `1.`/`1)` in one list | Pick one marker style repo-wide (`MD004`/`MD029`) |
 | Missing code-fence language | ```` ``` ```` with no language hint | ```` ```bash ```` / ```` ```json ```` for highlighting (`MD040`) |
-| Hardcoded absolute repo paths | `[x](/absolute/checkout/docs/x.md)` or full `https://github.com/...blob/...` to own files | Repo-relative link `[x](../x.md)` so it survives moves/forks |
+| Hardcoded absolute repo paths | `[x](~/repo/docs/x.md)` or full `https://github.com/...blob/...` to own files | Repo-relative link `[x](../x.md)` so it survives moves/forks |
 | Duplicate headings | Two `## Setup` collide, breaking generated anchors | Make headings unique or scope them (`MD024`) |
 | Trailing whitespace / hard tabs | Stray spaces at EOL; literal tabs for indent | Strip trailing space (`MD009`); use spaces (`MD010`) |
 | Over-long lines | Lines past a project-enforced limit | Wrap to the configured `MD013` width (only if enforced) |
