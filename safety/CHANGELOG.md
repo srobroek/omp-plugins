@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.3](https://github.com/srobroek/omp-plugins/compare/safety--v0.5.2...safety--v0.5.3) (2026-09-10)
+
+
+### Bug Fixes
+
+* **safety:** match the unweighted quota notice variant too ([#97](https://github.com/srobroek/omp-plugins/issues/97)) ([a0dd19f](https://github.com/srobroek/omp-plugins/commit/a0dd19fe6aaf92cb48b722e10b16a8cd9cbaeb62))
+
 ## [0.5.2](https://github.com/srobroek/omp-plugins/compare/safety--v0.5.1...safety--v0.5.2) (2026-09-10)
 
 
