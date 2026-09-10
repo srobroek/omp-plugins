@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.1](https://github.com/srobroek/omp-plugins/compare/agentic-scaffold--v0.3.0...agentic-scaffold--v0.3.1) (2026-09-10)
+
+
+### Bug Fixes
+
+* **agentic-scaffold:** monorepo just aggregates depend on member recipes ([6daad53](https://github.com/srobroek/omp-plugins/commit/6daad53bb0386f3823488baa9632ad0b2069f396))
+
 ## [0.3.0](https://github.com/srobroek/omp-plugins/compare/agentic-scaffold--v0.2.0...agentic-scaffold--v0.3.0) (2026-09-10)
 
 
