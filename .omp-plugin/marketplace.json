@@ -89,14 +89,14 @@
       "name": "design",
       "description": "UI and UX design: system audit, DESIGN.md, browser verification, accessibility, tokens, and Component Driven build.",
       "source": "./design",
-      "version": "0.3.0",
+      "version": "0.3.1",
       "category": "development"
     },
     {
       "name": "diagram",
       "description": "Interactive diagramming and architecture-sketching canvas over MCP.",
       "source": "./diagram",
-      "version": "0.2.1",
+      "version": "0.2.2",
       "category": "productivity"
     },
     {

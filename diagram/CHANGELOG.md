@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.2](https://github.com/srobroek/omp-plugins/compare/diagram--v0.2.1...diagram--v0.2.2) (2026-09-10)
+
+
+### Bug Fixes
+
+* **diagram:** disable excalidraw MCP by default ([fc4e602](https://github.com/srobroek/omp-plugins/commit/fc4e6028baca2241066b04fabf9cf6239d6075b4))
+
 ## [0.2.1](https://github.com/srobroek/omp-plugins/compare/diagram--v0.2.0...diagram--v0.2.1) (2026-09-08)
 
 
