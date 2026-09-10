@@ -12,17 +12,20 @@ source edits; `secret-commit-gate` blocks a commit that stages a plaintext crede
 
 ## Workflow
 
-1. Determine whether the target is managed:
+1. Before changing the authoritative chezmoi repository, read
+   `rule://chezmoi-direct-main-delivery`.
+2. Determine whether the target is managed:
    - `chezmoi managed`
    - `chezmoi source-path <target>` when a specific target is known
    - existing symlink/source layout when chezmoi cannot resolve it directly
-2. Edit the source under the chezmoi source tree, not `$HOME` runtime output.
-3. Use native chezmoi names for dotfiles, executables, private files, readonly
+3. Edit the source under the chezmoi source tree, not `$HOME` runtime output.
+4. Use native chezmoi names for dotfiles, executables, private files, readonly
    files, symlinks, and templates.
-4. Keep secrets in your credential manager or vault, never plaintext (see
+5. Keep secrets in your credential manager or vault, never plaintext (see
    `skill://chezmoi-editor/references/secrets.md`).
-5. Preview with `chezmoi diff`. Apply only when the source diff is correct and
+6. Preview with `chezmoi diff`. Apply only when the source diff is correct and
    the user wants the live target updated now.
+
 
 ## Rules
 

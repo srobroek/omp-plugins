@@ -8,6 +8,11 @@ The plugin resolves locations only through `chezmoi source-path` and `chezmoi ma
 
 - `chezmoi-editor`: edit managed source, not live `$HOME` copies.
 
+## Rules
+
+- `chezmoi-direct-main-delivery`: commit validated source changes directly to
+  `main` and push without a pull request.
+
 ## Extensions
 
 ### `chezmoi-guard`
