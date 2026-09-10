@@ -747,6 +747,7 @@ function scanInvocations(command: string): CommitInvocation[] {
 		let verb: string | null = null;
 		let dryRun = false;
 		let retargeted = prefixRetarget || exportedRetarget;
+		let aliasOpaque = false;
 		let j = i + 1;
 		let commitOptions = true;
 		for (; j < tokens.length; j++) {
@@ -780,9 +781,18 @@ function scanInvocations(command: string): CommitInvocation[] {
 				const name = eq === -1 ? arg.text : arg.text.slice(0, eq);
 				if (verb === null && (name === "--git-dir" || name === "--work-tree"))
 					retargeted = true;
+				if (
+					verb === null &&
+					name === "-c" &&
+					eq !== -1 &&
+					/^alias\.[^=]+=/.test(arg.text.slice(eq + 1))
+				)
+					aliasOpaque = true;
 				if (eq === -1 && verb === null && PRE_VERB_VALUE_FLAGS[name] === true) {
 					const value = tokens[j + 1];
 					if (value !== undefined && !isSep(value)) {
+						if (name === "-c" && /^alias\.[^=]+=/.test(value.text))
+							aliasOpaque = true;
 						if (name === "-C")
 							repoDir =
 								repoDir === null || value.text.startsWith("/")
@@ -800,7 +810,8 @@ function scanInvocations(command: string): CommitInvocation[] {
 		i = j - 1;
 		// The flag is only PRESENT when set, so an ordinary invocation stays two fields wide and
 		// the many `toEqual` assertions over this shape keep saying what they meant.
-		if (verb === "commit")
+		if (aliasOpaque) out.push({ repoDir, dryRun: false, retargeted: true });
+		else if (verb === "commit")
 			out.push(
 				retargeted
 					? { repoDir, dryRun, retargeted: true }

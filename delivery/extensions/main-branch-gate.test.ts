@@ -111,6 +111,17 @@ describe("findCommitInvocations", () => {
 		]);
 	});
 
+	test("inline Git aliases fail closed", () => {
+		for (const command of [
+			"git -c alias.ci=commit ci -m x",
+			"git -c=alias.ci=commit ci -m x",
+			"git -c alias.ci=commit ci --dry-run",
+		]) {
+			expect(findCommitInvocations(command), command).toEqual([
+				{ repoDir: null, dryRun: false, retargeted: true },
+			]);
+		}
+	});
 	test("dry-run is a commit option, not a message or path", () => {
 		expect(findCommitInvocations("git commit --dry-run")).toEqual([
 			{ repoDir: null, dryRun: true },
