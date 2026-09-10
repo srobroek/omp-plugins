@@ -170,6 +170,15 @@ const COMMIT_VALUE_FLAGS: Record<string, true> = {
 	"--pathspec-from-file": true,
 };
 
+function isOpaqueGitConfigKey(key: string): boolean {
+	const normalized = key.toLowerCase();
+	return (
+		normalized.startsWith("alias.") ||
+		normalized === "include.path" ||
+		(normalized.startsWith("includeif.") && normalized.endsWith(".path"))
+	);
+}
+
 /**
  * A RAW-TEXT test on the whole command string, with no notion of command position: it asks only
  * whether `git` or `dgit` occurs between word boundaries. Any non-word character delimits, so a
@@ -782,32 +791,34 @@ function scanInvocations(command: string): CommitInvocation[] {
 				const name = eq === -1 ? arg.text : arg.text.slice(0, eq);
 				if (verb === null && (name === "--git-dir" || name === "--work-tree"))
 					retargeted = true;
-				if (
-					verb === null &&
-					name === "-c" &&
-					eq !== -1 &&
-					/^alias\.[^=]+=/i.test(arg.text.slice(eq + 1))
-				)
-					aliasOpaque = true;
+				if (verb === null && name === "-c" && eq !== -1) {
+					const config = arg.text.slice(eq + 1);
+					const keyEnd = config.indexOf("=");
+					if (keyEnd !== -1 && isOpaqueGitConfigKey(config.slice(0, keyEnd)))
+						aliasOpaque = true;
+				}
 				if (verb === null && name === "--config-env" && eq !== -1) {
 					const configEnv = arg.text.slice(eq + 1);
 					const keyEnd = configEnv.indexOf("=");
-					if (
-						keyEnd !== -1 &&
-						configEnv.slice(0, keyEnd).toLowerCase().startsWith("alias.")
-					)
+					if (keyEnd !== -1 && isOpaqueGitConfigKey(configEnv.slice(0, keyEnd)))
 						aliasOpaque = true;
 				}
 				if (eq === -1 && verb === null && PRE_VERB_VALUE_FLAGS[name] === true) {
 					const value = tokens[j + 1];
 					if (value !== undefined && !isSep(value)) {
-						if (name === "-c" && /^alias\.[^=]+=/i.test(value.text))
-							aliasOpaque = true;
+						if (name === "-c") {
+							const keyEnd = value.text.indexOf("=");
+							if (
+								keyEnd !== -1 &&
+								isOpaqueGitConfigKey(value.text.slice(0, keyEnd))
+							)
+								aliasOpaque = true;
+						}
 						if (name === "--config-env") {
 							const keyEnd = value.text.indexOf("=");
 							if (
 								keyEnd !== -1 &&
-								value.text.slice(0, keyEnd).toLowerCase().startsWith("alias.")
+								isOpaqueGitConfigKey(value.text.slice(0, keyEnd))
 							)
 								aliasOpaque = true;
 						}

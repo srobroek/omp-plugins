@@ -142,6 +142,20 @@ describe("findCommitInvocations", () => {
 		}
 	});
 
+	test("inline Git config includes fail closed", () => {
+		for (const command of [
+			"git -c include.path=/tmp/aliases ci -m x",
+			"git -c includeIf.gitdir:/repo.path=/tmp/aliases ci -m x",
+			"git --config-env=include.path=CFG ci -m x",
+			"git -c include.path=/tmp/aliases ci -m x",
+			"git --config-env include.path=CFG ci -m x",
+		]) {
+			expect(findCommitInvocations(command), command).toEqual([
+				{ repoDir: null, dryRun: false, retargeted: true },
+			]);
+		}
+	});
+
 	test("malformed config-env operands do not invent an alias", () => {
 		for (const command of [
 			"git --config-env=alias.ci status",
