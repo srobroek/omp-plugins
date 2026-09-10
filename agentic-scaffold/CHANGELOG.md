@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.11](https://github.com/srobroek/omp-plugins/compare/agentic-scaffold--v0.5.10...agentic-scaffold--v0.5.11) (2026-09-10)
+
+
+### Bug Fixes
+
+* **agentic-scaffold:** valid answers TOML on re-run; clean tree is a prerequisite ([#152](https://github.com/srobroek/omp-plugins/issues/152)) ([23ab0ce](https://github.com/srobroek/omp-plugins/commit/23ab0ce2858788895d1efdaf315e6bb1afe4526e))
+
 ## [0.5.10](https://github.com/srobroek/omp-plugins/compare/agentic-scaffold--v0.5.9...agentic-scaffold--v0.5.10) (2026-09-10)
 
 
