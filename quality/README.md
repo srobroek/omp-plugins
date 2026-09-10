@@ -1,12 +1,12 @@
 # quality
 
-Smell audit, local verification, mechanical quality gates, and browser-verification discipline.
+Code-smell audits, local verification, and mechanical quality gates.
 
 ## Skills
 
 | Name | When |
 |------|------|
-| `sniff` | Audit code for smells, map to refactoring.guru, produce a vetted refactoring plan |
+| `sniff` | Audit code for smells, map them to catalogued refactorings, and produce a vetted plan |
 | `verify` | Final local verification pass before handoff |
 
 ## Agents
@@ -24,12 +24,13 @@ Smell audit, local verification, mechanical quality gates, and browser-verificat
 
 | Name | When |
 |------|------|
-| `quality-browser-verification` | Browser-visible layout/interaction/rendering/state changes |
-| `quality-no-credential-guessing` | Advisory on filling a password/OTP/secret field (TTSR) |
+| `quality-browser-verification` | Browser-visible UI changes |
+| `quality-sniff-analyzer-redirect` | Marked direct analyzer command during an active sniff run (TTSR advisory) |
 
 ## Tools
 
 Registered by this plugin's extension modules:
 
 - `sniff_install_tools`
+- `sniff_run_analyzer`
 - `verify_repo`
