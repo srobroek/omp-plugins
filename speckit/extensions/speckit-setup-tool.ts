@@ -287,12 +287,14 @@ export default function speckitSetupTool(pi: ExtensionAPI): void {
 				return {
 					content: [{ type: "text", text: result.text }],
 					details: { ok: result.ok },
+					isError: !result.ok,
 				};
 			} catch (err) {
 				const message = err instanceof Error ? err.message : String(err);
 				return {
 					content: [{ type: "text", text: `setup failed: ${message}` }],
 					details: { ok: false },
+					isError: true,
 				};
 			}
 		},
