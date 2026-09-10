@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.6](https://github.com/srobroek/omp-plugins/compare/beads--v1.0.5...beads--v1.0.6) (2026-09-10)
+
+
+### Bug Fixes
+
+* **beads,agentic-scaffold:** pin BEADS_DIR automatically and survive a mid-session plugin upgrade ([#129](https://github.com/srobroek/omp-plugins/issues/129)) ([0dc7658](https://github.com/srobroek/omp-plugins/commit/0dc76589969ec18c0efd6bd17ce34eabb31ff894))
+
 ## [1.0.5](https://github.com/srobroek/omp-plugins/compare/beads--v1.0.4...beads--v1.0.5) (2026-09-10)
 
 
