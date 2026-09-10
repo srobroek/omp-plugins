@@ -659,15 +659,18 @@ const XARGS_VALUE_OPTIONS: Record<string, true> = {
 };
 
 /**
- * `xargs` options that name no following word. `-i` and `--replace` take a value only attached,
- * so consuming the next word swallowed the payload command: bare `xargs --replace git commit`
- * ran that commit while this scan read `commit` as the payload.
+ * `xargs` options that name no following word.
  *
- * Probed directly against the `xargs` on PATH, `/usr/bin/xargs`: `-E EOF` and `-I {}` each take
- * a value, `-0t` clusters, and `--replace`, `-i`, and `--eof` are all rejected as unrecognised.
- * The long forms stay listed so a GNU `xargs` on another host resolves the same payload, and
- * `--eof` sits here rather than among the value options because reading the word after it
- * refuses `xargs --eof git commit` instead of skipping past that commit unseen.
+ * Both tables model GNU `xargs`, whose grammar is the wider of the two a host may provide, so a
+ * command written for it resolves to the same payload here. Under that grammar `-i`, `--replace`,
+ * and `--eof` take a value only when it is attached, which is why they belong here. On a host
+ * whose `xargs` accepts them, a review ran `xargs --replace git commit` and it committed, while
+ * this scan had consumed `git` as the option's value and read `commit` as the payload.
+ *
+ * The `xargs` on PATH is `/usr/bin/xargs`. Probed directly, it takes `-E EOF` and `-I {}`,
+ * clusters short flags such as `-0t`, and rejects `-i`, `--replace`, and `--eof` outright. A
+ * command using a form it rejects runs nothing, so reading these as flags costs at most a refusal
+ * of a command that could not have committed.
  */
 const XARGS_FLAG_OPTIONS: Record<string, true> = {
 	"-0": true,
