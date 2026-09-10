@@ -158,6 +158,28 @@ configuration below adds a separate native server named `storybook`. Add it to
 }
 ```
 
+The next two active-profile snippets are alternatives to the native entry above and to each other. Use only the snippet for the carrier that supplies the disabled server. Do not combine them.
+
+### OMP package mirror (`design/.mcp.json`)
+
+Use the bare key declared by the package mirror:
+
+```json
+{
+  "enabledServers": ["storybook"]
+}
+```
+
+### Marketplace entry (`design:storybook`)
+
+Use `design:storybook`, the marketplace runtime key named above. The loader documentation says `enabledServers` can force-enable a same-named disabled entry. The same contract accepts `:` in runtime names:
+
+```json
+{
+  "enabledServers": ["design:storybook"]
+}
+```
+
 Storybook documents ten frameworks:
 
 - Core: React, Vue 3, Angular, and Web Components
