@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.8](https://github.com/srobroek/omp-plugins/compare/beads--v1.0.7...beads--v1.0.8) (2026-09-10)
+
+
+### Bug Fixes
+
+* **beads:** per-call pin honors a foreign process pin ([#137](https://github.com/srobroek/omp-plugins/issues/137)) ([8b318be](https://github.com/srobroek/omp-plugins/commit/8b318be909965ebd956096f090deaf02815bdf69))
+
 ## [1.0.7](https://github.com/srobroek/omp-plugins/compare/beads--v1.0.6...beads--v1.0.7) (2026-09-10)
 
 
