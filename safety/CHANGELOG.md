@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.0](https://github.com/srobroek/omp-plugins/compare/safety--v0.5.3...safety--v0.6.0) (2026-09-10)
+
+
+### Features
+
+* **safety:** resume a turn that ends on a provider quota notice ([#101](https://github.com/srobroek/omp-plugins/issues/101)) ([b9e25ad](https://github.com/srobroek/omp-plugins/commit/b9e25ad2b94ec9145a82315d2319b1e11bc2cf58))
+
 ## [0.5.3](https://github.com/srobroek/omp-plugins/compare/safety--v0.5.2...safety--v0.5.3) (2026-09-10)
 
 

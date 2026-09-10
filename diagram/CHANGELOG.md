@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.3](https://github.com/srobroek/omp-plugins/compare/diagram--v0.2.2...diagram--v0.2.3) (2026-09-10)
+
+
+### Documentation
+
+* **mcp:** document packaged profile overrides ([#100](https://github.com/srobroek/omp-plugins/issues/100)) ([6d18129](https://github.com/srobroek/omp-plugins/commit/6d18129d1a5d58003337f8b97789260fb4663963))
+
 ## [0.2.2](https://github.com/srobroek/omp-plugins/compare/diagram--v0.2.1...diagram--v0.2.2) (2026-09-10)
 
 
