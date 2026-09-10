@@ -1436,6 +1436,21 @@ describe("integration", () => {
 		).toEqual(expect.objectContaining({ block: true }));
 	});
 
+	test("the bash call env cannot hide both Git and commit", () => {
+		const [handler] = register();
+		expect(
+			handler?.({
+				toolName: "bash",
+				toolCallId: "c-runner-verb",
+				input: {
+					command: "$" + "{RUNNER} $" + "{VERB} -m x",
+					cwd: "/main-repo",
+					env: { RUNNER: "/usr/bin/git", VERB: "commit" },
+				},
+			}),
+		).toEqual(expect.objectContaining({ block: true }));
+	});
+
 	test("variable command policy is commit-specific and fail closed", () => {
 		expect(findCommitInvocations("$" + "{RUNNER} status")).toEqual([]);
 		expect(findCommitInvocations("env $" + "{RUNNER} commit -m x")).toEqual([

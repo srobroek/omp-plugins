@@ -778,6 +778,10 @@ function scanInvocations(command: string): CommitInvocation[] {
 				remaining.some((candidate) => candidate.text === "commit") ||
 				remaining.some(
 					(candidate) =>
+						candidate.text.includes("$") || candidate.text.includes("`"),
+				) ||
+				remaining.some(
+					(candidate) =>
 						candidate.text === "-c" ||
 						candidate.text.startsWith("-c=") ||
 						candidate.text === "--config-env" ||
