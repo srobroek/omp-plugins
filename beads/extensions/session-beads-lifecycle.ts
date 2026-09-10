@@ -14,7 +14,8 @@
  * - claims still held at session close (beads-core SESSION CLOSE).
  */
 
-import { existsSync, readFileSync, rmSync, statSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { existsSync, readFileSync, realpathSync, rmSync, statSync } from "node:fs";
 import { isAbsolute, join, resolve } from "node:path";
 import type { ExtensionAPI, ExtensionContext, ExtensionToolResultEvent } from "@oh-my-pi/pi-coding-agent";
 
@@ -55,6 +56,97 @@ interface SessionState {
 function sessionKey(ctx: { sessionManager?: { getSessionId?: () => string } } | undefined): string {
 	return ctx?.sessionManager?.getSessionId?.() ?? "default";
 }
+
+/**
+ * Pin the process to the first session's checkout database when nothing pinned it.
+ *
+ * `BEADS_DIR` is inherited by every child the process spawns, so setting it once is
+ * the same pin a human exports before starting omp. Rules, in order:
+ *
+ * - a pin this extension did not set is never touched;
+ * - the pin belongs to the session that earned it and holds while that session is
+ *   live. A concurrent session in another checkout of the SAME repository (an
+ *   isolated worktree is the common case) inherits it, which is what the
+ *   storage-mode rule asks for. A concurrent session in an UNRELATED repository
+ *   gets a `conflict` back: the process pin cannot serve two databases, and the
+ *   caller warns that session to pass its own `BEADS_DIR` per `bd` call;
+ * - when the owning session ends, the pin is withdrawn and the next session start
+ *   earns its own.
+ */
+export type AutoPinState = { pinned?: string; owner?: string; ownerRepo?: string; dependents?: Set<string> };
+export type AutoPinResult = { pinned?: string; conflict?: string };
+
+/** Identity of the repository behind a checkout: its common git dir, or the cwd itself outside git. */
+export function repoIdentity(cwd: string): string {
+	try {
+		const out = execFileSync("git", ["-C", cwd, "rev-parse", "--git-common-dir"], { encoding: "utf8", timeout: 2000, stdio: ["ignore", "pipe", "ignore"] }).trim();
+		return realpathSync(isAbsolute(out) ? out : resolve(cwd, out));
+	} catch {
+		return cwd;
+	}
+}
+
+export function autoPinBeadsDir(
+	cwd: string,
+	sessionId: string,
+	liveSessions: (id: string) => boolean,
+	env: NodeJS.ProcessEnv = process.env,
+	state: AutoPinState = autoPinState,
+	identity: (cwd: string) => string = repoIdentity,
+): AutoPinResult {
+	const current = env.BEADS_DIR;
+	const ours = current !== undefined && current === state.pinned;
+	if (current !== undefined && current !== "" && !ours) return {};
+	if (ours && state.owner !== undefined && state.owner !== sessionId && liveSessions(state.owner)) {
+		if (state.ownerRepo !== identity(cwd)) return { conflict: current };
+		(state.dependents ??= new Set()).add(sessionId); // same repository: shares the pin and keeps it alive
+		return {};
+	}
+	const dir = resolve(cwd, ".beads");
+	let exists = false;
+	try {
+		exists = statSync(dir).isDirectory();
+	} catch {
+		exists = false;
+	}
+	if (!exists) {
+		if (ours) releaseAutoPin(env, state);
+		return {};
+	}
+	if (state.owner !== sessionId || state.pinned !== dir) state.dependents = new Set(); // a restarted owner keeps its dependents
+	env.BEADS_DIR = dir;
+	state.pinned = dir;
+	state.owner = sessionId;
+	state.ownerRepo = identity(cwd);
+	return { pinned: dir };
+}
+
+/**
+ * A session ended. The pin outlives its owner while a same-repository dependent is
+ * live: ownership passes to that dependent. Otherwise the pin is withdrawn.
+ */
+export function endAutoPinSession(sessionId: string, liveSessions: (id: string) => boolean, env: NodeJS.ProcessEnv = process.env, state: AutoPinState = autoPinState): void {
+	state.dependents?.delete(sessionId);
+	if (state.owner !== sessionId) return;
+	const heir = [...(state.dependents ?? [])].find((id) => liveSessions(id));
+	if (heir !== undefined) {
+		state.owner = heir;
+		state.dependents?.delete(heir);
+		return;
+	}
+	releaseAutoPin(env, state);
+}
+
+/** Withdraw the pin this extension set; a human pin is left alone. */
+export function releaseAutoPin(env: NodeJS.ProcessEnv = process.env, state: AutoPinState = autoPinState): void {
+	if (state.pinned !== undefined && env.BEADS_DIR === state.pinned) delete env.BEADS_DIR;
+	state.pinned = undefined;
+	state.owner = undefined;
+	state.ownerRepo = undefined;
+	state.dependents = undefined;
+}
+
+const autoPinState: AutoPinState = {};
 
 /** The repository's `.beads` directory, or nothing when this is not a beads repo. */
 export function beadsDir(cwd: string): string | undefined {
@@ -433,6 +525,19 @@ export default function sessionBeadsLifecycle(pi: ExtensionAPI): void {
 		sessions.delete(key);
 		const state = stateFor(ctx);
 		try {
+			const pin = autoPinBeadsDir(ctx?.cwd ?? process.cwd(), key, (id) => sessions.has(id));
+			if (pin.conflict !== undefined) {
+				pi.sendMessage({
+					customType: "com.srobroek.beads.session-lifecycle",
+					content:
+						`This process is pinned to another repository's beads database (\`BEADS_DIR=${pin.conflict}\`) by a live session. ` +
+						"For this checkout, pass `env: { BEADS_DIR: \"<this checkout>/.beads\" }` on every `bd` call; do not rely on the inherited pin.",
+					display: true,
+					attribution: "user",
+					triggerTurn: false,
+				});
+				return;
+			}
 			const dir = beadsDir(ctx?.cwd ?? process.cwd());
 			if (dir === undefined) return;
 			const deadline = Date.now() + TIMEOUT_MS;
@@ -456,7 +561,9 @@ export default function sessionBeadsLifecycle(pi: ExtensionAPI): void {
 	});
 
 	pi.on("session_shutdown", (_event, ctx: ExtensionContext) => {
-		sessions.delete(sessionKey(ctx));
+		const key = sessionKey(ctx);
+		sessions.delete(key);
+		endAutoPinSession(key, (id) => sessions.has(id));
 	});
 
 	// Only the fired-once latch resets per turn; what the session touched must

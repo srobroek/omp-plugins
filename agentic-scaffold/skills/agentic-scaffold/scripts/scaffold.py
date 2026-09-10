@@ -1707,8 +1707,6 @@ def preflight(root: Path, profile_name: str | None, *, strict: bool = False, all
         soft.append("global core.hooksPath requires a hook strategy")
     else:
         hook_strategy = "prek"
-    if (root / ".beads").exists() and not Path(os.environ.get("BEADS_DIR", "")).is_absolute():
-        soft.append("BEADS_DIR must be absolute")
     plugins = plugins_sync(root, True) if (root / ".omp/plugins.toml").is_file() and shutil.which("omp") else ({"desired": [], "drift": []}, 0)
     if isinstance(plugins, tuple) and plugins[1] == EXIT_DRIFT:
         soft.extend(str(item) for item in plugins[0].get("drift", []))

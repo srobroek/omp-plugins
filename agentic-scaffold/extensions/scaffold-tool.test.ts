@@ -77,3 +77,21 @@ describe("scaffold CLI execution", () => {
 		expect(JSON.parse(result.text)).toEqual({ root: realpathSync(cwd), ok: false });
 	});
 });
+
+describe("scaffold script resolution", () => {
+	test("falls back to the stable node_modules link when the load-time directory is gone", async () => {
+		const { mkdirSync, writeFileSync, rmSync } = await import("node:fs");
+		const { scaffoldScriptPath } = await import("./scaffold-tool.ts");
+		const home = mkdtempSync(join(tmpdir(), "scaffold-home-"));
+		const linked = join(home, ".omp", "plugins", "node_modules", "@srobroek", "agentic-scaffold", "skills", "agentic-scaffold", "scripts");
+		mkdirSync(linked, { recursive: true });
+		writeFileSync(join(linked, "scaffold.py"), "");
+		const removedCache = join(home, "cache", "agentic-scaffold___0.0.0", "extensions");
+		expect(scaffoldScriptPath(home, removedCache)).toBe(join(linked, "scaffold.py"));
+		const live = join(home, "live", "extensions");
+		mkdirSync(join(home, "live", "skills", "agentic-scaffold", "scripts"), { recursive: true });
+		writeFileSync(join(home, "live", "skills", "agentic-scaffold", "scripts", "scaffold.py"), "");
+		expect(scaffoldScriptPath(home, live)).toBe(join(home, "live", "skills", "agentic-scaffold", "scripts", "scaffold.py"));
+		rmSync(home, { recursive: true, force: true });
+	});
+});
