@@ -8,6 +8,7 @@ This plugin adds guards and advisories to OMP. It checks bash calls for risky pa
 - `srobroek-bash-indirection-guard`
 - `srobroek-git-force-push-advisory`
 - `srobroek-package-investigate`
+- `srobroek-quota-notice-continue`
 - `srobroek-remote-exec-guard`
 - `srobroek-sudo-destructive-advisory`
 
