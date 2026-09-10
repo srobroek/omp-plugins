@@ -1,5 +1,5 @@
-import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
 import { basename, resolve } from "node:path";
+import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
 import {
 	acceptedPaths,
 	type Candidate,
@@ -13,8 +13,8 @@ import {
 	parseTranscript,
 	pathKeys,
 	repoRoot,
-	scanTranscriptMeta,
 	type SessionMeta,
+	scanTranscriptMeta,
 	sessionsRoot,
 	type TodoPhase,
 	type Transcript,
@@ -271,7 +271,10 @@ export async function resolveSession(cwd: string, options: ReadOptions): Promise
 	const matches = (await candidates(root, accept)).filter(
 		(candidate) => candidate.head.id.startsWith(wanted) || basename(candidate.file).includes(wanted),
 	);
-	if (matches.length === 1) return { file: matches[0].file };
+	if (matches.length === 1) {
+		const match = matches[0];
+		if (match) return { file: match.file };
+	}
 	if (matches.length === 0) {
 		return { error: `resume_session: no session under ${root} for this project matches "${wanted}".` };
 	}

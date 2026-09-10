@@ -10,7 +10,10 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 
 let counter = 0;
-const nextId = () => `id${(counter += 1).toString(16).padStart(4, "0")}`;
+const nextId = () => {
+	counter += 1;
+	return `id${counter.toString(16).padStart(4, "0")}`;
+};
 
 export interface FixtureTool {
 	name: string;
