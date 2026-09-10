@@ -26,7 +26,7 @@ line verbatim. Then ask:
 - `hard` is empty: options "Continue to the interview" and "Stop here".
 - `hard` names a dirty work tree: options "Review and allow dirty" (you then show
   `git status --short` and re-run preflight with `--allow-dirty`), "Stop; I will clean the tree".
-- any other `hard` line: options "Stop; I will fix <the prerequisite>" and "Explain what is
+- any other `hard` line: options "Stop; I will fix the named prerequisite" and "Explain what is
   missing"; there is no bypass for a missing tool or an invalid root.
 
 Do not write files before preflight exits `0` and the human has chosen to continue.
