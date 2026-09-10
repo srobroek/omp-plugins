@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.2](https://github.com/srobroek/omp-plugins/compare/safety--v0.5.1...safety--v0.5.2) (2026-09-10)
+
+
+### Bug Fixes
+
+* **safety:** keep working after a provider weighted-token quota notice ([#95](https://github.com/srobroek/omp-plugins/issues/95)) ([5553aa7](https://github.com/srobroek/omp-plugins/commit/5553aa72ca95bac9a32a2e86f4f5a699de3ac4ef))
+
 ## [0.5.1](https://github.com/srobroek/omp-plugins/compare/safety--v0.5.0...safety--v0.5.1) (2026-09-08)
 
 
