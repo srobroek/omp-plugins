@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.4](https://github.com/srobroek/omp-plugins/compare/agentic-scaffold--v0.5.3...agentic-scaffold--v0.5.4) (2026-09-10)
+
+
+### Documentation
+
+* **agentic-scaffold:** use the plan-mode proposal flow when plan mode is active ([#124](https://github.com/srobroek/omp-plugins/issues/124)) ([c56da18](https://github.com/srobroek/omp-plugins/commit/c56da18cce8e9cf7fc287ef41bac963d42be7e9c))
+
 ## [0.5.3](https://github.com/srobroek/omp-plugins/compare/agentic-scaffold--v0.5.2...agentic-scaffold--v0.5.3) (2026-09-10)
 
 
