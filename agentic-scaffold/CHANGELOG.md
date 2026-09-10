@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.2](https://github.com/srobroek/omp-plugins/compare/agentic-scaffold--v0.4.1...agentic-scaffold--v0.4.2) (2026-09-10)
+
+
+### Bug Fixes
+
+* **agentic-scaffold:** valid TOML for finding answers, no hook question when git-defender decides, inspect in the tool ([#111](https://github.com/srobroek/omp-plugins/issues/111)) ([df05568](https://github.com/srobroek/omp-plugins/commit/df05568e75dccb376218591f551ce97a9c731629))
+
 ## [0.4.1](https://github.com/srobroek/omp-plugins/compare/agentic-scaffold--v0.4.0...agentic-scaffold--v0.4.1) (2026-09-10)
 
 
