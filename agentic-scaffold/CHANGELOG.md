@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.7](https://github.com/srobroek/omp-plugins/compare/agentic-scaffold--v0.5.6...agentic-scaffold--v0.5.7) (2026-09-10)
+
+
+### Bug Fixes
+
+* **agentic-scaffold:** keep an inherited absolute BEADS_DIR pin for the scaffold's bd calls ([#131](https://github.com/srobroek/omp-plugins/issues/131)) ([de0b9b8](https://github.com/srobroek/omp-plugins/commit/de0b9b8afe09b6b5eabb92ae1b52cb9bda6007c1))
+
 ## [0.5.6](https://github.com/srobroek/omp-plugins/compare/agentic-scaffold--v0.5.5...agentic-scaffold--v0.5.6) (2026-09-10)
 
 
