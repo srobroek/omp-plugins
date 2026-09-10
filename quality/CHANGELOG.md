@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.1.0](https://github.com/srobroek/omp-plugins/compare/quality--v1.0.0...quality--v1.1.0) (2026-09-10)
+
+
+### Features
+
+* **quality:** enforce atomic sniff analyzer runs ([3ff021a](https://github.com/srobroek/omp-plugins/commit/3ff021ae99f434eda69e80ea0166163301884e07))
+* **quality:** enforce atomic sniff analyzer runs ([94efed5](https://github.com/srobroek/omp-plugins/commit/94efed5a1364fc3173429df9b1419b8a9370229f))
+
 ## [1.0.0](https://github.com/srobroek/omp-plugins/compare/quality--v0.6.1...quality--v1.0.0) (2026-09-08)
 
 

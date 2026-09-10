@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.5](https://github.com/srobroek/omp-plugins/compare/beads--v1.0.4...beads--v1.0.5) (2026-09-10)
+
+
+### Documentation
+
+* route public GitHub sync through PATH shims ([#86](https://github.com/srobroek/omp-plugins/issues/86)) ([163f958](https://github.com/srobroek/omp-plugins/commit/163f958a7bef61ba4c46f4a40f31996084ba3757))
+
 ## [1.0.4](https://github.com/srobroek/omp-plugins/compare/beads--v1.0.3...beads--v1.0.4) (2026-09-09)
 
 
