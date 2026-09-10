@@ -2,7 +2,7 @@
 
 Track work with the [beads](https://github.com/steveyegge/beads) issue tracker (`bd`). Its dependency graph persists across processes and crashes.
 
-Install this plugin in a repository with `.beads/`, or export an absolute `BEADS_DIR` pointing to its shared store.
+Install this plugin in a repository with `.beads/`; it pins that database for every session. A human who wants a different shared store exports an absolute `BEADS_DIR` before starting omp, and the plugin keeps it.
 
 ## Skills
 

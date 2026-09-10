@@ -86,10 +86,8 @@ export function backendNotice(backend: Backend, tracked: boolean): string | unde
 	return [
 		"beads is on the embedded backend, which resolves by walking up from the working directory.",
 		"A copied checkout or a clone gets its own database: claims stop excluding each other, and comments and closures never reach the run.",
-		"A linked git worktree resolves the primary checkout's database unaided, and still gets the pin: no checkout shape is exempt.",
-		"Fix by exporting `BEADS_DIR` as the ABSOLUTE path of the run's `.beads`, once wherever the run starts; every child process inherits it. A relative value resolves against each process's own working directory.",
+		"The beads plugin pins `BEADS_DIR` for this session: the checkout's `.beads` (a linked worktree resolves to the primary checkout's) rides on every Bash call, and a value exported before omp started is kept. Verify with `printenv BEADS_DIR`; do not ask for an export or a restart, and do not pass `BEADS_DIR` on calls yourself.",
 		"Unpinned, a read from a directory with no `.beads/` reports `No active beads workspace found`.",
-		"Do not pin per call: that pin has to be right on every call, and `BEADS_DIR` is set once.",
 		"Switching this project to `--server` is an export, a re-init and a restore, not a flag, and it buys a pid-file lifecycle nobody owns.",
 	].join(" ");
 }

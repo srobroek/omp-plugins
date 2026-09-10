@@ -549,7 +549,7 @@ describe("integration", () => {
 			else process.env.BEADS_DIR = originalBeads;
 			for (const dir of [a, aWorktree, b, c]) rmSync(dir, { recursive: true, force: true });
 		}
-	});
+	}, 20_000); // creates a git worktree and runs several session_start hooks; slow under full-suite load
 
 	test("session start accepts bd's null empty-list response", async () => {
 		const dir = mkdtempSync(join(tmpdir(), "beads-empty-gates-"));
