@@ -476,6 +476,18 @@ describe("findCommitInvocations", () => {
 		}
 	});
 
+	test("shell script execution always fails closed", () => {
+		for (const command of [
+			"/bin/bash -c 'echo hi'",
+			"/bin/bash -lc 'git commit -m x'",
+			"/bin/bash -c 'git commit --dry-run'",
+		]) {
+			expect(findCommitInvocations(command), command).toEqual([
+				{ repoDir: null, dryRun: false, retargeted: true },
+			]);
+		}
+	});
+
 	// SILENT PERMIT at the decision level. A retargeted commit lands in another repository, so
 	// probing the call's own cwd cleared it. Nothing is read now, on any branch, because none of
 	// these names a working directory this gate can check.
