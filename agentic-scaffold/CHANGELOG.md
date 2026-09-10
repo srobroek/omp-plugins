@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.0](https://github.com/srobroek/omp-plugins/compare/agentic-scaffold--v0.4.3...agentic-scaffold--v0.5.0) (2026-09-10)
+
+
+### Features
+
+* **agentic-scaffold:** abort command closes a crashed run ([#115](https://github.com/srobroek/omp-plugins/issues/115)) ([6bf2891](https://github.com/srobroek/omp-plugins/commit/6bf2891e45bda3a8c3ea0af1f09ef2a9b074951d))
+
 ## [0.4.3](https://github.com/srobroek/omp-plugins/compare/agentic-scaffold--v0.4.2...agentic-scaffold--v0.4.3) (2026-09-10)
 
 
