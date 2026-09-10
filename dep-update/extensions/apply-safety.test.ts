@@ -32,13 +32,12 @@ test("apply rejects options, honors cancellation, bounds children/output, and pi
 		process.env.PATH = root;
 		process.env.DEP_UPDATE_PKG_MANAGER = "pnpm";
 		installStub("setInterval(() => {}, 1000);");
-		for (const [ecosystem, name, version] of [["npm", "--help", "1.0.0"], ["npm", "x", "--recursive"], ["pypi", "-r", "1.0.0"], ["npm", "x", "file:/tmp/x"]]) {
+		for (const [ecosystem, name, version] of [["npm", "--help", "1.0.0"], ["npm", "x", "--recursive"], ["pypi", "-r", "1.0.0"], ["npm", "x", "file:/tmp/x"]] as Array<[string, string, string]>) {
 			expect((await applyBump(ecosystem, name, version, root)).exit).toBe(2);
 		}
 		const cancelled = new AbortController(); cancelled.abort();
 		expect((await applyBump("npm", "x", "1.0.0", root, { signal: cancelled.signal })).exit).toBe(1);
 		expect(existsSync(marker)).toBe(false);
-
 		const timed = await applyBump("npm", "x", "1.0.0", root, { timeoutMs: 100 });
 		expect(timed.exit).toBe(1);
 		expect(timed.text).toContain("deadline exceeded");

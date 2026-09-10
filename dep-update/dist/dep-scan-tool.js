@@ -1,4 +1,8 @@
 // @bun
+// extensions/lib.ts
+import { spawn } from "child_process";
+import { statSync } from "fs";
+
 // node_modules/smol-toml/dist/date.js
 /*!
  * Copyright (c) Squirrel Chat et al., All rights reserved.
@@ -877,8 +881,6 @@ function parse(toml, { maxDepth = 1000, integersAsBigInt } = {}) {
  */
 
 // extensions/lib.ts
-import { statSync } from "fs";
-import { spawn } from "child_process";
 var MISSING = "?";
 var USER_AGENT = "dep-update-skill (+https://github.com/srobroek/agentic-packages)";
 var FETCH_TIMEOUT_MS = 1e4;
@@ -938,12 +940,12 @@ function specVersion(spec) {
   return scalar(spec);
 }
 function parseRequirement(raw) {
-  let line = raw.split("#", 1)[0].trim();
+  let line = (raw.split("#", 1)[0] ?? "").trim();
   line = line.replace(/\\+$/, "").trim();
   if (!line || line.startsWith("-") || line.startsWith(".") || line.startsWith("/")) {
     return ["", ""];
   }
-  line = line.split(";", 1)[0].trim();
+  line = (line.split(";", 1)[0] ?? "").trim();
   const match = REQ_SPLIT.exec(line);
   if (!match) {
     return REQ_NAME.test(line) ? [line, MISSING] : ["", ""];
@@ -1166,7 +1168,7 @@ class Detector {
     for (const raw of lines) {
       const match = GEM.exec(raw);
       if (match)
-        this.emit("rubygems", match[2], match[4] || MISSING);
+        this.emit("rubygems", match[2] ?? "", match[4] || MISSING);
     }
   }
   async scanPhp() {
@@ -1254,7 +1256,7 @@ function pickStable(latest, installed, versions, ecosystem = "npm") {
     const nb = normalizeVersion(b, ecosystem);
     return nb[0] - na[0] || nb[1] - na[1] || nb[2] - na[2];
   });
-  return stable[0];
+  return stable[0] ?? latest;
 }
 
 class RegistryError extends Error {
@@ -1422,7 +1424,7 @@ async function detectNodePm(root) {
       const langTs = module["lang-ts"] ?? {};
       const pinned = langTs.package_manager || langTs.package_manager_pin || "";
       if (pinned)
-        return String(pinned).split("@")[0].trim();
+        return (String(pinned).split("@")[0] ?? "").trim();
     } catch {}
   }
   if (isFile(join(root, "pnpm-lock.yaml")))
@@ -1434,7 +1436,7 @@ async function detectNodePm(root) {
   return "npm";
 }
 function splitPin(requirement) {
-  const body = requirement.split(";", 1)[0].trim();
+  const body = (requirement.split(";", 1)[0] ?? "").trim();
   if (!body.includes("=="))
     return ["", ""];
   const idx = body.indexOf("==");
@@ -1485,7 +1487,7 @@ async function checkPythonVersion(root, name, version) {
   if (isFile(requirements)) {
     const text = await readText(requirements) ?? "";
     for (const raw of text.split(/\r?\n/)) {
-      const [reqName, reqVersion] = splitPin(raw.split("#", 1)[0].trim());
+      const [reqName, reqVersion] = splitPin((raw.split("#", 1)[0] ?? "").trim());
       if (reqName && canonical(reqName) === wanted && reqVersion === version)
         return true;
     }
@@ -1535,7 +1537,12 @@ async function runPm(command, root, options) {
   const schedule = options.setTimeout ?? setTimeout;
   const clear = options.clearTimer ?? clearTimeout;
   return new Promise((resolve) => {
-    const proc = spawn(command[0], command.slice(1), {
+    const executable = command[0];
+    if (!executable) {
+      resolve({ code: 1, log: "No package manager command provided" });
+      return;
+    }
+    const proc = spawn(executable, command.slice(1), {
       cwd: root,
       stdio: ["ignore", "pipe", "pipe"],
       detached: process.platform !== "win32"
@@ -1667,6 +1674,9 @@ async function applyBump(ecosystem, name, version, root, options = {}) {
     if (!Object.hasOwn(cmds, pm))
       pm = "npm";
     const command = cmds[pm];
+    if (!command)
+      return { exit: 1, text: lines.join(`
+`) };
     if (!which(pm)) {
       lines.push(`SKIP: ${pm} not found. To apply manually:`);
       lines.push(`  ${command.join(" ")}`);

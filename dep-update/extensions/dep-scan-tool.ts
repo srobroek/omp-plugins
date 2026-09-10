@@ -1,7 +1,11 @@
+import type { TSchema } from "@oh-my-pi/pi-ai";
 import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
-import { applyBump, researchProject, type BumpRecord } from "./lib";
+import { applyBump, type BumpRecord, researchProject } from "./lib";
 
 export { classify, detectProject, normalizeVersion, parseRequirement, queryRegistry } from "./lib";
+
+type DepScanParams = { path?: string; offline_fixture_dir?: string };
+type DepApplyParams = { ecosystem: string; name: string; version: string; path?: string };
 
 export default function depScanTool(pi: ExtensionAPI): void {
 	const z = pi.zod;
@@ -16,13 +20,10 @@ export default function depScanTool(pi: ExtensionAPI): void {
 			"Rust and go deps are enumerated but not classified (advisory-only by policy).",
 		parameters: z.object({
 			path: z.string().optional().describe("Project root to scan; defaults to the session cwd"),
-			offline_fixture_dir: z
-				.string()
-				.optional()
-				.describe("DEP_UPDATE_FIXTURE_DIR: read registry responses from fixture files instead of the network"),
-		}),
+			offline_fixture_dir: z.string().optional().describe("DEP_UPDATE_FIXTURE_DIR: read registry responses from fixture files instead of the network"),
+		}) as unknown as TSchema, // pi.zod and the host TypeBox schema types differ.
 		approval: "read",
-		async execute(_id, params, signal, _onUpdate, ctx) {
+		async execute(_id, params: DepScanParams, signal, _onUpdate, ctx) {
 			const dir = params.path ?? ctx.cwd;
 			try {
 				const { exit, records, stderr } = await researchProject(dir, params.offline_fixture_dir, signal);
@@ -80,9 +81,9 @@ export default function depScanTool(pi: ExtensionAPI): void {
 			name: z.string().describe("Package name"),
 			version: z.string().describe("Target version to pin"),
 			path: z.string().optional().describe("Project root; defaults to session cwd"),
-		}),
+		}) as unknown as TSchema, // pi.zod and the host TypeBox schema types differ.
 		approval: { tier: "exec", policy: "prompt" },
-		async execute(_id, params, signal, _onUpdate, ctx) {
+		async execute(_id, params: DepApplyParams, signal, _onUpdate, ctx) {
 			try {
 				if (signal?.aborted) throw new Error("Cancelled before approval; no process started");
 				if (!ctx.hasUI) throw new Error("Interactive approval is required; no process started");

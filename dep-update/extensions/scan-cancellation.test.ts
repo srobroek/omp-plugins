@@ -22,13 +22,12 @@ function project() {
 	writeFileSync(join(dir, "package.json"), JSON.stringify({ dependencies: { first: "1.0.0", second: "1.0.0" } }));
 	return dir;
 }
-
 describe("scan cancellation", () => {
 	test("pre-cancelled callers stop before project or registry work", async () => {
 		const controller = new AbortController();
 		const reason = new Error("stop scan");
 		controller.abort(reason);
-		const fetchMock = spyOn(globalThis, "fetch").mockImplementation(async () => { throw new Error("unexpected fetch"); });
+		const fetchMock = spyOn(globalThis, "fetch").mockImplementation(Object.assign(async () => { throw new Error("unexpected fetch"); }, { preconnect: () => {} }));
 		try {
 			await expect(researchProject("/nonexistent-cancelled-project", "", controller.signal)).rejects.toBe(reason);
 			await expect(queryRegistry("npm", "first", "1.0.0", "", controller.signal)).rejects.toBe(reason);
@@ -48,7 +47,7 @@ describe("scan cancellation", () => {
 			let started!: () => void;
 			const active = new Promise<void>((resolve) => { started = resolve; });
 			const requests: string[] = [];
-			const fetchMock = spyOn(globalThis, "fetch").mockImplementation((async (url: unknown, init?: RequestInit) => {
+			const fetchMock = spyOn(globalThis, "fetch").mockImplementation(Object.assign(async (url: unknown, init?: RequestInit) => {
 				requests.push(String(url));
 				const signal = init?.signal;
 				if (!signal) throw new Error("missing request signal");
@@ -58,7 +57,7 @@ describe("scan cancellation", () => {
 				});
 				if (phase === "request") return pending();
 				return { ok: true, json: pending } as unknown as Response;
-			}) as typeof fetch);
+			}, { preconnect: () => {} }) as typeof fetch);
 			try {
 				const result = scanTool()("id", { path: dir, offline_fixture_dir: "" }, controller.signal, undefined, { cwd: dir });
 				const outcome = result.then(() => ({ resolved: true }), (error: unknown) => ({ error }));
@@ -77,11 +76,11 @@ describe("scan cancellation", () => {
 	test("ordinary registry failures remain unresolvable and allow the next dependency", async () => {
 		const dir = project();
 		const requests: string[] = [];
-		const fetchMock = spyOn(globalThis, "fetch").mockImplementation((async (url: unknown) => {
+		const fetchMock = spyOn(globalThis, "fetch").mockImplementation(Object.assign(async (url: unknown) => {
 			requests.push(String(url));
 			if (requests.length === 1) return new Response("denied", { status: 403 });
 			return Response.json({ "dist-tags": { latest: "1.0.1" }, versions: { "1.0.1": {} } });
-		}) as typeof fetch);
+		}, { preconnect: () => {} }) as typeof fetch);
 		try {
 			const result = await researchProject(dir, "", new AbortController().signal);
 			expect(result.records.map(({ name, status, reason }) => ({ name, status, reason }))).toEqual([
