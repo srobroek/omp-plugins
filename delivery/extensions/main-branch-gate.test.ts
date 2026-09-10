@@ -1466,6 +1466,21 @@ describe("integration", () => {
 		).toEqual(expect.objectContaining({ block: true }));
 	});
 
+	test("the bash call env cannot expand a complete Git commit command", () => {
+		const [handler] = register();
+		expect(
+			handler?.({
+				toolName: "bash",
+				toolCallId: "c-runner-complete",
+				input: {
+					command: "$RUNNER",
+					cwd: "/main-repo",
+					env: { RUNNER: "git commit --allow-empty -m x" },
+				},
+			}),
+		).toEqual(expect.objectContaining({ block: true }));
+	});
+
 	test("unquoted variable commands fail closed", () => {
 		expect(findCommitInvocations("$" + "{RUNNER} status")).toEqual([
 			{ repoDir: null, dryRun: false, retargeted: true },
@@ -1484,6 +1499,9 @@ describe("integration", () => {
 				"GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=alias.ci $" + "{RUNNER} ci -m x",
 			),
 		).toEqual([{ repoDir: null, dryRun: false, retargeted: true }]);
+		expect(findCommitInvocations("$RUNNER")).toEqual([
+			{ repoDir: null, dryRun: false, retargeted: true },
+		]);
 	});
 
 	test("unquoted opaque commands fail closed before ordinary argv", () => {

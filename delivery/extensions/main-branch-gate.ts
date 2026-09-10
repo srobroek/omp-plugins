@@ -775,8 +775,8 @@ function scanInvocations(command: string): CommitInvocation[] {
 			.filter((candidate) => !isSep(candidate));
 		if (
 			opaqueCommand &&
-			(commandGitConfig ||
-				(unquotedWordSplitting && remaining.length > 0) ||
+			(unquotedWordSplitting ||
+				commandGitConfig ||
 				remaining.some((candidate) => candidate.text === "commit") ||
 				remaining.some(
 					(candidate) =>
