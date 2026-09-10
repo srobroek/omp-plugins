@@ -98,19 +98,16 @@ describe("backendNotice", () => {
 		expect(backendNotice("embedded", false)).toBeUndefined();
 	});
 
-	test("the notice names the pin that works, not a per-call pin or a server first", () => {
+	test("the notice says the plugin pins the database and never asks for an export", () => {
 		const notice = backendNotice("embedded", true) ?? "";
 		expect(notice).toContain("claims stop excluding each other");
-		// ABSOLUTE is the load-bearing word. A relative value resolves against each process's
-		// own working directory, which is the failure the pin exists to prevent, so the notice
-		// must not offer the shorter form.
-		expect(notice).toContain("BEADS_DIR");
-		expect(notice).toContain("ABSOLUTE path");
-		expect(notice).not.toContain("BEADS_DIR=<run>/.beads");
-		expect(notice).toContain("linked git worktree");
+		expect(notice).toContain("The beads plugin pins `BEADS_DIR`");
+		expect(notice).toContain("printenv BEADS_DIR");
+		expect(notice).toContain("linked worktree");
 		expect(notice).toContain("No active beads workspace found");
-		expect(notice).not.toContain("bd -C");
-		expect(notice).not.toMatch(/Fix with `bd init --server`/);
+		expect(notice).not.toContain("exporting");
+		expect(notice).not.toContain("Do not pin per call");
+		expect(notice).toContain("not a flag");
 	});
 });
 

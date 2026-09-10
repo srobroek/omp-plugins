@@ -8,6 +8,7 @@ This plugin adds guards and advisories to OMP. It checks bash calls for risky pa
 - `srobroek-bash-indirection-guard`
 - `srobroek-git-force-push-advisory`
 - `srobroek-package-investigate`
+- `srobroek-quota-notice-continue`
 - `srobroek-remote-exec-guard`
 - `srobroek-sudo-destructive-advisory`
 
@@ -31,6 +32,7 @@ A later bash argument that quotes tool output can trigger a guard. The original 
 ## Extensions
 
 - `close-keywords`: rewrite `gh pr create|edit --body` so close-keywords apply to every issue in a list.
+- `quota-notice-resume`: when a turn ends on the bare provider line `You have N (weighted) tokens left`, send one follow-up so the task continues (at most 5 per session). Backs the `srobroek-quota-notice-continue` rule, which TTSR repeat gating can skip.
 - `quality-edit-advisory`: after enough edits, suggests checks for the language you changed.
 
 The body rewrite accepts only literal shell words. It replaces the source span of the selected PR body.

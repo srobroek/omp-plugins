@@ -1,5 +1,47 @@
 # Changelog
 
+## [1.0.11](https://github.com/srobroek/omp-plugins/compare/beads--v1.0.10...beads--v1.0.11) (2026-09-10)
+
+
+### Documentation
+
+* **beads:** the plugin pins BEADS_DIR; agents must not demand an export ([#144](https://github.com/srobroek/omp-plugins/issues/144)) ([b27e33b](https://github.com/srobroek/omp-plugins/commit/b27e33b3c65ce529caf00dd1fa5c4e4872ad08b5))
+
+## [1.0.10](https://github.com/srobroek/omp-plugins/compare/beads--v1.0.9...beads--v1.0.10) (2026-09-10)
+
+
+### Documentation
+
+* **beads:** the plugin pins BEADS_DIR; agents must not demand an export ([#141](https://github.com/srobroek/omp-plugins/issues/141)) ([179cf69](https://github.com/srobroek/omp-plugins/commit/179cf690761d8c91d54829ac13e125d15de69b2a))
+
+## [1.0.9](https://github.com/srobroek/omp-plugins/compare/beads--v1.0.8...beads--v1.0.9) (2026-09-10)
+
+
+### Bug Fixes
+
+* **beads:** a linked worktree pins to the primary checkout's database ([#139](https://github.com/srobroek/omp-plugins/issues/139)) ([6def97d](https://github.com/srobroek/omp-plugins/commit/6def97d94593885de18e985c0c45e4d74e88b298))
+
+## [1.0.8](https://github.com/srobroek/omp-plugins/compare/beads--v1.0.7...beads--v1.0.8) (2026-09-10)
+
+
+### Bug Fixes
+
+* **beads:** per-call pin honors a foreign process pin ([#137](https://github.com/srobroek/omp-plugins/issues/137)) ([8b318be](https://github.com/srobroek/omp-plugins/commit/8b318be909965ebd956096f090deaf02815bdf69))
+
+## [1.0.7](https://github.com/srobroek/omp-plugins/compare/beads--v1.0.6...beads--v1.0.7) (2026-09-10)
+
+
+### Bug Fixes
+
+* **beads:** pin BEADS_DIR on every bash call, not only on process.env ([#135](https://github.com/srobroek/omp-plugins/issues/135)) ([c6dfe5f](https://github.com/srobroek/omp-plugins/commit/c6dfe5f22d06a2144f2cb13ee2711256e0acb04e))
+
+## [1.0.6](https://github.com/srobroek/omp-plugins/compare/beads--v1.0.5...beads--v1.0.6) (2026-09-10)
+
+
+### Bug Fixes
+
+* **beads,agentic-scaffold:** pin BEADS_DIR automatically and survive a mid-session plugin upgrade ([#129](https://github.com/srobroek/omp-plugins/issues/129)) ([0dc7658](https://github.com/srobroek/omp-plugins/commit/0dc76589969ec18c0efd6bd17ce34eabb31ff894))
+
 ## [1.0.5](https://github.com/srobroek/omp-plugins/compare/beads--v1.0.4...beads--v1.0.5) (2026-09-10)
 
 

@@ -53,13 +53,9 @@ def write_status(path: Path, value: dict) -> None:
 
 def validate_pack(path: Path, root: Path) -> None:
     document = ElementTree.parse(path)
-    files = (
-        document.findall("./files/file") if document.getroot().tag == "repomix" else []
-    )
+    files = document.findall("./files/file") if document.getroot().tag == "repomix" else []
     if not files:
-        raise ValueError(
-            "Repomix produced no safe source files; retaining previous XML"
-        )
+        raise ValueError("Repomix produced no safe source files; retaining previous XML")
     for file in files:
         name = file.get("path", "")
         source = root / name
@@ -75,9 +71,7 @@ def validate_pack(path: Path, root: Path) -> None:
             raise ValueError(f"Unsafe packed source path: {name!r}")
 
 
-def run(
-    argv: list[str], root: Path, timeout: int, env: dict[str, str] | None = None
-) -> None:
+def run(argv: list[str], root: Path, timeout: int, env: dict[str, str] | None = None) -> None:
     subprocess.run(argv, cwd=root, check=True, timeout=timeout, env=env)
 
 
@@ -102,7 +96,8 @@ def main() -> int:
         fd = os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
     except FileExistsError:
         print(
-            "Context refresh already running or stale lock exists; retry after inspecting graphify-out/.refresh.lock",
+            "Context refresh already running or stale lock exists; "
+            "retry after inspecting graphify-out/.refresh.lock",
             file=sys.stderr,
         )
         return 1
@@ -138,9 +133,7 @@ def main() -> int:
         graph = output / "graph.json"
         if graph.is_symlink() or not graph.is_file():
             raise ValueError("Graphify did not produce the project graph.json")
-        handle, temporary = tempfile.mkstemp(
-            prefix=".repomix-", suffix=".xml", dir=root
-        )
+        handle, temporary = tempfile.mkstemp(prefix=".repomix-", suffix=".xml", dir=root)
         os.close(handle)
         try:
             run(
@@ -202,4 +195,4 @@ if __name__ == "__main__":
             f"Context refresh FAILED; existing output is not proof of freshness: {exc}",
             file=sys.stderr,
         )
-        raise SystemExit(1)
+        raise SystemExit(1) from exc

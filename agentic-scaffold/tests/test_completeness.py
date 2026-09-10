@@ -4,16 +4,20 @@ import json
 import os
 import subprocess
 import sys
-import tomllib
 from pathlib import Path
+import tomllib
+
+from conftest import git_root
 
 ROOT = Path(__file__).parents[1]
 CLI = ROOT / "skills/agentic-scaffold/scripts/scaffold.py"
 
-
 def run(*args: str, cwd: Path | None = None, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
-    return subprocess.run([sys.executable, str(CLI), *args], cwd=cwd, env=env, text=True, capture_output=True, check=False)
-
+    argv = list(args)
+    if "--root" in argv:
+        i = argv.index("--root")
+        if i + 1 < len(argv): argv[i + 1] = str(git_root(Path(argv[i + 1])))
+    return subprocess.run([sys.executable, str(CLI), *argv], cwd=cwd, env=env, text=True, capture_output=True, check=False)
 
 def render(root: Path, *args: str) -> None:
     result = run("render", "--root", str(root), "--profile", "agentic-repo", "--name", "demo", *args)
@@ -24,7 +28,7 @@ def test_layers_show_and_answer_precedence(tmp_path: Path) -> None:
     shown = run("layers", "show", "lang/python")
     assert shown.returncode == 0
     assert tomllib.loads((ROOT / "skills/agentic-scaffold/templates/lang/python/layer.toml").read_text())["name"] == json.loads(shown.stdout)["name"]
-    answer = run("answers", "write", "--root", str(tmp_path), "--profile", "python-lib", "--set", "python=3.11", "--set", "name=answer-demo")
+    answer = run("answers", "write", "--root", str(tmp_path), "--profile", "python-lib", "--set", "python=3.11", "--set", "name=answer-demo", "--defaults-for", "purpose,kind,language,license,beads")
     assert answer.returncode == 0, answer.stderr
     rendered = run("render", "--root", str(tmp_path), "--profile", "python-lib", "--var", "python=3.10")
     assert rendered.returncode == 0, rendered.stderr
@@ -104,7 +108,8 @@ def test_layer_owned_tools_do_not_cross_stacks(tmp_path: Path) -> None:
     assert python_result.returncode == 0, python_result.stderr
     python_tools = tomllib.loads((tmp_path / "python/mise.toml").read_text())["tools"]
     assert {"python", "uv", "prek", "just"} <= python_tools.keys()
-    assert "node" not in python_tools and "bun" not in python_tools
+    # the agentic layer pins node for npm-backed repomix; bun stays a TypeScript-only tool
+    assert "bun" not in python_tools and "node" in python_tools
     ts_result = run("render", "--root", str(tmp_path / "ts"), "--profile", "ts-lib")
     assert ts_result.returncode == 0, ts_result.stderr
     ts_tools = tomllib.loads((tmp_path / "ts/mise.toml").read_text())["tools"]
@@ -179,7 +184,7 @@ def test_doctor_reports_hook_status(tmp_path: Path) -> None:
     doctor = run("doctor", "--root", str(tmp_path))
     payload = json.loads(doctor.stdout)
     assert doctor.returncode in (0, 2), doctor.stderr
-    assert all(item.startswith("missing tool:") for item in payload["drift"]), payload["drift"]
+    assert "hooks declared but not installed" in payload["drift"]
     hooks = payload["checks"]["hooks"]
     assert hooks["declared"] and hooks["installed"] == [] and hooks["status"] == "not-installed"
 

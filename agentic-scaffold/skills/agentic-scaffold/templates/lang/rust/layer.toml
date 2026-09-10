@@ -4,9 +4,11 @@ after = ["base", "tooling"]
 requires_tools = ["cargo"]
 owns = ["Cargo.toml", "src/main.rs", "src/lib.rs"]
 blocks = [".gitignore", "justfile", ".pre-commit-config.yaml"]
-conflicts_with = ["lang/python", "lang/ts", "lang/go", "lang/terraform"]
+conflicts_with = ["lang/python", "lang/ts", "lang/go", "lang/terraform", "workspace"]
 conditional_plugins = { backend = { var = "app", equals = "true" } }
 [plugins."srobroek-omp"]
 source = "srobroek/omp-plugins"
 plugins = ["architecture", "rust"]
 when = { var = "language", equals = "rust" }
+[tools]
+rust = "latest"

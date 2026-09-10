@@ -1,5 +1,26 @@
 # Changelog
 
+## [0.2.4](https://github.com/srobroek/omp-plugins/compare/diagram--v0.2.3...diagram--v0.2.4) (2026-09-10)
+
+
+### Documentation
+
+* **mcp:** clarify active profile config paths ([#104](https://github.com/srobroek/omp-plugins/issues/104)) ([4a686ed](https://github.com/srobroek/omp-plugins/commit/4a686edac6e92841f12f9bca81c2a96760662274))
+
+## [0.2.3](https://github.com/srobroek/omp-plugins/compare/diagram--v0.2.2...diagram--v0.2.3) (2026-09-10)
+
+
+### Documentation
+
+* **mcp:** document packaged profile overrides ([#100](https://github.com/srobroek/omp-plugins/issues/100)) ([6d18129](https://github.com/srobroek/omp-plugins/commit/6d18129d1a5d58003337f8b97789260fb4663963))
+
+## [0.2.2](https://github.com/srobroek/omp-plugins/compare/diagram--v0.2.1...diagram--v0.2.2) (2026-09-10)
+
+
+### Bug Fixes
+
+* **diagram:** disable excalidraw MCP by default ([fc4e602](https://github.com/srobroek/omp-plugins/commit/fc4e6028baca2241066b04fabf9cf6239d6075b4))
+
 ## [0.2.1](https://github.com/srobroek/omp-plugins/compare/diagram--v0.2.0...diagram--v0.2.1) (2026-09-08)
 
 

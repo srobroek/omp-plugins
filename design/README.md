@@ -143,6 +143,45 @@ See `skills/design-system-audit/references/token-pipeline.md`.
 
 ## Storybook
 
+OMP names the marketplace entry `design:storybook`. It stays disabled. The
+configuration below adds a separate native server named `storybook`. Add it to
+`.omp/mcp.json` for one project or to `~/.omp/agent/mcp.json` for your user:
+
+```json
+{
+  "mcpServers": {
+    "storybook": {
+      "url": "http://localhost:6006/mcp",
+      "enabled": true
+    }
+  }
+}
+```
+
+Put one override below in the user file for the active profile. Use `~/.omp/agent/mcp.json` for the default profile or `~/.omp/profiles/<name>/agent/mcp.json` for a named profile.
+
+The next two active-profile snippets are alternatives to the native entry above and to each other. Use only the snippet for the carrier that supplies the disabled server. Do not combine them.
+
+### OMP package mirror (`design/.mcp.json`)
+
+Use the bare key declared by the package mirror:
+
+```json
+{
+  "enabledServers": ["storybook"]
+}
+```
+
+### Marketplace entry (`design:storybook`)
+
+Use `design:storybook`, the marketplace runtime key named above. The loader documentation says `enabledServers` can force-enable a same-named disabled entry. The same contract accepts `:` in runtime names:
+
+```json
+{
+  "enabledServers": ["design:storybook"]
+}
+```
+
 Storybook documents ten frameworks:
 
 - Core: React, Vue 3, Angular, and Web Components
@@ -176,9 +215,11 @@ A static build is the exception, for a CI job or a one-shot read. `npx --yes sto
 route the dev server does not serve for that framework, so Vue still yields no components
 manifest.
 
-MCP servers connect at session startup, and an agent cannot reconnect one. When this
-package starts Storybook itself, the MCP tools stay unavailable. See
-`skills/ui-review/references/storybook.md`.
+OMP reads MCP configuration and connects enabled servers at session startup.
+After you add the native entry, start a new session. If Storybook was unavailable
+at startup, start it. Then run `/mcp reconnect storybook`. OMP also needs that
+reconnect when this package starts Storybook after session startup. An agent
+cannot run the slash command.
 
 ## Formulas
 

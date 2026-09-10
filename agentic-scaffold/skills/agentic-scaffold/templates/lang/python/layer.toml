@@ -4,7 +4,7 @@ after = ["base", "tooling"]
 requires_tools = ["uv"]
 owns = ["pyproject.toml", "src/__name__/__init__.py", "tests/test_smoke.py"]
 blocks = [".gitignore", "justfile", ".pre-commit-config.yaml"]
-conflicts_with = ["lang/ts", "lang/rust", "lang/go", "lang/terraform"]
+conflicts_with = ["lang/ts", "lang/rust", "lang/go", "lang/terraform", "workspace"]
 conditional_plugins = { backend = { var = "app", equals = "true" } }
 [tools]
 python = "${python}"

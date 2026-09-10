@@ -11,7 +11,7 @@ web_ui = false
 speckit = false
 [commands]
 setup = "mise install"
-test = "just test"
+test = "just check"
 lint = "prek run --all-files"
 fmt = "prek run --all-files"
 check = "just check"

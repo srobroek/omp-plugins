@@ -1,5 +1,26 @@
 # Changelog
 
+## [0.3.3](https://github.com/srobroek/omp-plugins/compare/design--v0.3.2...design--v0.3.3) (2026-09-10)
+
+
+### Documentation
+
+* **mcp:** clarify active profile config paths ([#104](https://github.com/srobroek/omp-plugins/issues/104)) ([4a686ed](https://github.com/srobroek/omp-plugins/commit/4a686edac6e92841f12f9bca81c2a96760662274))
+
+## [0.3.2](https://github.com/srobroek/omp-plugins/compare/design--v0.3.1...design--v0.3.2) (2026-09-10)
+
+
+### Documentation
+
+* **mcp:** document packaged profile overrides ([#100](https://github.com/srobroek/omp-plugins/issues/100)) ([6d18129](https://github.com/srobroek/omp-plugins/commit/6d18129d1a5d58003337f8b97789260fb4663963))
+
+## [0.3.1](https://github.com/srobroek/omp-plugins/compare/design--v0.3.0...design--v0.3.1) (2026-09-10)
+
+
+### Bug Fixes
+
+* **design:** disable storybook MCP by default ([52e610c](https://github.com/srobroek/omp-plugins/commit/52e610ce2221050aa05d98ab45309e13f504d41d))
+
 ## [0.3.0](https://github.com/srobroek/omp-plugins/compare/design--v0.2.1...design--v0.3.0) (2026-09-08)
 
 

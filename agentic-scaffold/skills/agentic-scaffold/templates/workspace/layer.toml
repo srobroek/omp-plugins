@@ -1,0 +1,13 @@
+name = "workspace"
+summary = "Root workspace manifest and member aggregation"
+after = ["base", "tooling"]
+requires_tools = []
+owns = []
+blocks = ["justfile", ".pre-commit-config.yaml"]
+conflicts_with = ["lang/python", "lang/ts", "lang/rust", "lang/go", "lang/terraform"]
+[member_dirs]
+python = "packages/{name}"
+ts = "packages/{name}"
+rust = "crates/{name}"
+go_app = "cmd/{name}"
+go_service = "services/{name}"

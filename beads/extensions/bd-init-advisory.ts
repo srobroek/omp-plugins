@@ -7,8 +7,8 @@
  * `git log --grep='bd init'` and `man bd init` — and on each other's correct form.
  * skip-hooks demanded `--skip-hooks`, prefer-server demanded a server flag, and
  * the invocation this estate actually wants, `bd init --init-if-missing --skip-hooks`
- * plus an exported `BEADS_DIR`, was blocked by skip-hooks' sibling anyway.
- * Verified live 2026-08-25.
+ * under the pinned database, was blocked by skip-hooks' sibling anyway.
+ * Verified live 2026-08-25. Since 2026-09-10 the plugin pins `BEADS_DIR` itself.
  *
  * Two things follow. Argv is the only honest trigger: a mention inside a quoted
  * string, a `--grep` pattern, or another program's arguments is not an
@@ -109,15 +109,15 @@ export function missingInitFlags(flags: string[]): MissingFlags | undefined {
 }
 
 const BEADS_DIR_ADVICE =
-	"Whatever starts a run must export `BEADS_DIR` to that run's `.beads` " +
-	"directory so every child process inherits the pin. That is what makes a " +
-	"worktree or a copied checkout read and write the run's database. Unpinned, " +
-	"a read from a directory with no `.beads/` reports `No active beads " +
+	"The beads plugin pins `BEADS_DIR` for this session: the checkout's `.beads` " +
+	"(a linked worktree resolves to the primary checkout's) is placed on every Bash " +
+	"call, and a `BEADS_DIR` exported before omp started is kept. Verify with " +
+	"`printenv BEADS_DIR`; an absolute path means the pin is in place. Do not ask " +
+	"the human to export it or restart omp, and do not pass it on calls yourself. " +
+	"Unpinned, a read from a directory with no `.beads/` reports `No active beads " +
 	"workspace found`, and a copied checkout can resolve a personal database " +
-	"instead (`$HOME/.beads` exists on this machine). Something must own the " +
-	"pin: a harness that copies a checkout without setting it still splits the " +
-	"database. Measured: a copied 54-bead database accepted `create` and " +
-	"`--claim` with none of it reaching the original.";
+	"instead (`$HOME/.beads` exists on this machine).";
+
 
 const SKIP_HOOKS_ADVICE =
 	"`--skip-hooks` wherever hooks are already managed: plain `bd init` repoints " +

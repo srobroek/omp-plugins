@@ -5,9 +5,10 @@
   "omp": {
     "extensions": [
       "./extensions/close-keywords.ts",
-      "./extensions/quality-edit-advisory.ts"
+      "./extensions/quality-edit-advisory.ts",
+      "./extensions/quota-notice-resume.ts"
     ]
   },
-  "version": "0.5.1",
+  "version": "0.6.0",
   "description": "Defence-in-depth advisories for destructive commands, attribution, and remote execution."
 }

@@ -4,7 +4,7 @@ after = ["base", "tooling"]
 requires_tools = ["bun"]
 owns = ["package.json", "src/index.ts", "test/index.test.ts"]
 blocks = [".gitignore", "justfile", ".pre-commit-config.yaml"]
-conflicts_with = ["lang/python", "lang/rust", "lang/go", "lang/terraform"]
+conflicts_with = ["lang/python", "lang/rust", "lang/go", "lang/terraform", "workspace"]
 conditional_plugins = { backend = { var = "app", equals = "true" } }
 [tools]
 node = "${node}"

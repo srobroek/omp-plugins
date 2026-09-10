@@ -1,34 +1,78 @@
 # Interview
 
-LOAD when `inspect` is complete or a greenfield run needs answers. Answers are committed in `.omp/scaffold-answers.toml` by `answers write`; do not hand-edit generated files.
+Load after `preflight` or when starting a greenfield run. The CLI emits the ordered questions;
+answers are written to `.omp/scaffold-answers.toml` and the run marker is created by `answers write`.
+Do not hand-edit either generated file.
 
-## Greenfield fixed set
-
-Ask in order, skipping anything derivable from the preceding answer:
-
-1. **Name and one-line purpose.** Default name is the destination basename; purpose defaults to the profile summary.
-2. **Kind:** `lib | app | service | cli`. Default `app`; `cli` derives `app`.
-3. **Language:** `python | ts | rust | go | terraform | none`. Default `none`.
-4. **License.** Default `apache-2.0`; when unsure, load `skill://license-picker`.
-5. **Create remote now?** Default `no`; if yes, visibility defaults `private`.
-6. **Beads?** Default `yes` when `bd` is on PATH, otherwise `no`.
-7. **Web UI?** Default `no`; yes appends the `web-ui` layer.
-8. **SpecKit?** Default `no`; yes adds the `speckit` project plugin.
-
-Derivations: `kind` selects the profile suffix (`-lib`/`-app`); language selects the profile; `cli` selects `app`; web UI appends `web-ui`; Speckit is a variable. Ask no framework, provider, or tooling questions already fixed by a layer.
-
-## Brownfield fixed set
-
-1. Confirm the profile suggested by `inspect`.
-2. Choose optional layers to adopt. Default is `agentic + hooks + tooling` only.
-3. Resolve each human finding: foreign hook manager, unowned `.omp/*` files, and ambiguous `AGENTS.md` markers.
-
-Hook-manager choices are `hooks install --force` (repository hooks), moving `core.hooksPath` to repository scope, or skipping hooks; a refusal records all options and doctor reports drift. Unowned files require explicit `--adopt`; never auto-adopt. A foreign `AGENTS.md` block is preserved and gets `update-block`; only damaged/duplicated agentic markers or symlinks conflict.
-
-## Command
+## 1. Emit questions
 
 ```sh
-python3 skill://agentic-scaffold/scripts/scaffold.py answers write --root R --profile P --set name=NAME --set language=python
+python3 "$SCAFFOLD" interview questions --root R --profile P
 ```
 
-Precedence is CLI `--var`/`--set` > profile `[vars]` > layer `[vars]`. `--layer` appends for the run and is stored in the answers file.
+The JSON has `root` and `questions`. Every question has `id`, `prompt`, `required`, `default`,
+optional `allowed`, optional `multi`, optional `choices` (value plus one-line summary), and `source`.
+Ask every question with the `ask` tool, in order; group related questions in one call. Never
+silently accept a required question's default. Optional defaults may be accepted only when the
+human explicitly says to use them.
+
+Turning a question into an `ask` entry:
+
+- `allowed` present: one option per allowed value, labelled with the value; put the `choices`
+  summary in the option description. Mark the default as recommended.
+- `multi: true`: set `multi: true` on the `ask` question so the human can pick several. When
+  `allowed` has more than five values, split it across consecutive questions of at most five
+  options each, all `multi: true`, and join every selection with commas for `--set id=a,b,c`.
+- No `allowed`: offer the default plus one "type my own" path; the UI adds a free-text option.
+
+Never invent combined options such as "agentic, hooks, tooling" as one choice; offer the layers
+themselves.
+
+Exit `0` means questions are available. Exit `1` is an operational error. Exit `6` is a root
+boundary refusal.
+
+## 2. Greenfield questions
+
+The fixed set covers name and purpose, kind (`lib | app | service | cli`), language (`python | ts |
+rust | go | terraform | none`), license, remote creation and visibility, beads, web UI, and
+SpecKit. The CLI may omit a question that is derived from an earlier answer. `kind` selects the
+profile suffix; `cli` selects `app`; web UI adds the `web-ui` layer; SpecKit adds the project plugin.
+Do not ask framework, provider, or tool-version questions.
+
+## 3. Brownfield questions
+
+Confirm the detected profile, pick layers from the emitted catalogue (the default preselects the
+profile's layers; existing files a layer owns are skipped, never replaced), and resolve every emitted `finding:<kind>`. Findings include
+unowned `.omp/*` files, dirty state, and ambiguous managed markers. Ask the human which resolution
+to use; do not turn a proposal into an answer without explicit approval.
+
+Hook wiring is not a question. Preflight detects the hook manager (`hook_strategy` in its JSON)
+and later stages chain through it; do not mention the strategy or ask about it unless the CLI
+emits a `finding:hook-manager` question, which happens only when no manager was detected.
+
+## 4. Write approved answers
+
+```sh
+python3 "$SCAFFOLD" answers write --root R --profile P \
+  --set name=NAME --set language=python --defaults-for ID,ID
+```
+
+Use one `--set key=value` for each answer. Add an id to `--defaults-for` only after explicit human
+approval of that id's default. Read `root`, `ok`, `profile`, `layers`, `vars`, `defaults_for`,
+`interviewed_at`, and `path`.
+
+Exit `0` records the interview and creates `.omp/scaffold-run.json`. Exit `3` means at least one
+required id is unanswered; call `ask` and retry. Exit `5` means the answers select conflicting
+layers. Exit `6` means the root boundary refused the write. No later phase starts on exits `3`, `5`,
+or `6`.
+
+## 5. Workspace answers
+
+When `layout` is `monorepo`, ask the bounded member set emitted by the CLI. Add approved members
+with the `member` command, not by editing TOML:
+
+```sh
+python3 "$SCAFFOLD" member add --root R --name NAME --layer lang/python --kind app
+```
+
+Read `root`, `added`, `members`, and `path`. Stop when the human says the member list is complete.

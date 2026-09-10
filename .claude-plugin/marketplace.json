@@ -12,7 +12,7 @@
       "name": "agentic-scaffold",
       "description": "Deterministic project scaffolding from ordered template layers and Beads formulas.",
       "source": "./agentic-scaffold",
-      "version": "0.2.0",
+      "version": "0.5.10",
       "category": "development"
     },
     {
@@ -40,14 +40,14 @@
       "name": "beads",
       "description": "Beads issue tracking: dependency DAGs, formulas, and decisions recorded as beads.",
       "source": "./beads",
-      "version": "1.0.5",
+      "version": "1.0.11",
       "category": "productivity"
     },
     {
       "name": "browser-tools",
       "description": "Cross-engine browser coverage and Chrome performance tracing over MCP.",
       "source": "./browser-tools",
-      "version": "0.2.1",
+      "version": "0.3.0",
       "category": "development"
     },
     {
@@ -61,7 +61,7 @@
       "name": "chezmoi",
       "description": "Edit chezmoi-managed dotfiles at their authoritative source.",
       "source": "./chezmoi",
-      "version": "0.3.1",
+      "version": "0.4.0",
       "category": "productivity"
     },
     {
@@ -89,14 +89,14 @@
       "name": "design",
       "description": "UI and UX design: system audit, DESIGN.md, browser verification, accessibility, tokens, and Component Driven build.",
       "source": "./design",
-      "version": "0.3.0",
+      "version": "0.3.3",
       "category": "development"
     },
     {
       "name": "diagram",
       "description": "Interactive diagramming and architecture-sketching canvas over MCP.",
       "source": "./diagram",
-      "version": "0.2.1",
+      "version": "0.2.4",
       "category": "productivity"
     },
     {
@@ -166,7 +166,7 @@
       "name": "safety",
       "description": "Defence-in-depth advisories for destructive commands, attribution, and remote execution.",
       "source": "./safety",
-      "version": "0.5.1",
+      "version": "0.6.0",
       "category": "security"
     },
     {

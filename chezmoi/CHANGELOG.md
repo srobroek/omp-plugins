@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.0](https://github.com/srobroek/omp-plugins/compare/chezmoi--v0.3.1...chezmoi--v0.4.0) (2026-09-10)
+
+
+### Features
+
+* **chezmoi:** deliver dotfiles directly to main ([#142](https://github.com/srobroek/omp-plugins/issues/142)) ([6b1b616](https://github.com/srobroek/omp-plugins/commit/6b1b6167a88fe3bfad1204f43685f22af3efda46))
+
 ## [0.3.1](https://github.com/srobroek/omp-plugins/compare/chezmoi--v0.3.0...chezmoi--v0.3.1) (2026-09-08)
 
 

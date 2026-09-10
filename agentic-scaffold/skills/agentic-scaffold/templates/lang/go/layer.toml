@@ -4,9 +4,11 @@ after = ["base", "tooling"]
 requires_tools = ["go"]
 owns = ["go.mod", "__name__.go", "cmd/__name__/main.go"]
 blocks = [".gitignore", "justfile", ".pre-commit-config.yaml"]
-conflicts_with = ["lang/python", "lang/ts", "lang/rust", "lang/terraform"]
+conflicts_with = ["lang/python", "lang/ts", "lang/rust", "lang/terraform", "workspace"]
 conditional_plugins = { backend = { var = "app", equals = "true" } }
 [plugins."srobroek-omp"]
 source = "srobroek/omp-plugins"
 plugins = ["architecture", "go"]
 when = { var = "language", equals = "go" }
+[tools]
+go = "latest"

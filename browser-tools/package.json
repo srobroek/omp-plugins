@@ -1,7 +1,209 @@
 {
   "name": "@srobroek/browser-tools",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "description": "Cross-engine browser coverage and Chrome performance tracing over MCP.",
   "private": true,
-  "omp": {}
+  "omp": {
+    "extensions": [
+      "./extensions/headed-browser-tools.ts",
+      "./extensions/headed-browser-preflight.ts"
+    ],
+    "settings": {
+      "defaultEngine": {
+        "type": "enum",
+        "default": "firefox",
+        "values": [
+          "firefox",
+          "chrome"
+        ],
+        "description": "Default browser engine; each launch can override it.",
+        "env": "HEADED_BROWSER_DEFAULT_ENGINE"
+      },
+      "defaultBrowserChannel": {
+        "type": "enum",
+        "default": "auto",
+        "values": [
+          "auto",
+          "zen",
+          "firefox",
+          "firefox-esr",
+          "firefox-developer",
+          "firefox-nightly",
+          "librewolf",
+          "waterfox",
+          "chrome",
+          "chrome-canary",
+          "chromium",
+          "edge",
+          "brave",
+          "vivaldi",
+          "custom"
+        ],
+        "description": "Default browser channel; auto selects the first installed channel for the engine.",
+        "env": "HEADED_BROWSER_DEFAULT_BROWSER_CHANNEL"
+      },
+      "defaultHeadless": {
+        "type": "boolean",
+        "default": false,
+        "description": "Launch headless by default; each launch can override it.",
+        "env": "HEADED_BROWSER_DEFAULT_HEADLESS"
+      },
+      "executablePath": {
+        "type": "string",
+        "default": "",
+        "description": "Absolute browser executable path, required for the custom channel.",
+        "env": "HEADED_BROWSER_EXECUTABLE_PATH"
+      },
+      "profileMode": {
+        "type": "enum",
+        "default": "ephemeral-clone",
+        "values": [
+          "ephemeral-clone",
+          "persistent-dedicated",
+          "clean"
+        ],
+        "description": "Default profile materialization mode.",
+        "env": "HEADED_BROWSER_PROFILE_MODE"
+      },
+      "sourceProfileName": {
+        "type": "string",
+        "default": "",
+        "description": "Source profile name or path; empty selects the browser default.",
+        "env": "HEADED_BROWSER_SOURCE_PROFILE_NAME"
+      },
+      "profileRootOverride": {
+        "type": "string",
+        "default": "",
+        "description": "Override the detected browser profile root.",
+        "env": "HEADED_BROWSER_PROFILE_ROOT_OVERRIDE"
+      },
+      "ephemeralRoot": {
+        "type": "string",
+        "default": "",
+        "description": "Root for temporary session directories; empty uses the OS temporary directory.",
+        "env": "HEADED_BROWSER_EPHEMERAL_ROOT"
+      },
+      "copyStrategy": {
+        "type": "enum",
+        "default": "auto",
+        "values": [
+          "auto",
+          "clonefile",
+          "reflink",
+          "robocopy",
+          "node"
+        ],
+        "description": "Profile copy strategy.",
+        "env": "HEADED_BROWSER_COPY_STRATEGY"
+      },
+      "defaultCookieDomains": {
+        "type": "string",
+        "default": "",
+        "description": "Comma-separated cookie domains copied into a launch by default.",
+        "env": "HEADED_BROWSER_DEFAULT_COOKIE_DOMAINS"
+      },
+      "copyFirefoxLogins": {
+        "type": "boolean",
+        "default": false,
+        "description": "Copy Firefox saved-login database files into cloned profiles.",
+        "env": "HEADED_BROWSER_COPY_FIREFOX_LOGINS"
+      },
+      "noRemote": {
+        "type": "boolean",
+        "default": true,
+        "description": "Pass --no-remote so Firefox-family launches never join a running browser.",
+        "env": "HEADED_BROWSER_NO_REMOTE"
+      },
+      "allowedDomains": {
+        "type": "string",
+        "default": "",
+        "description": "Comma-separated navigation allowlist; mutually exclusive with deniedDomains.",
+        "env": "HEADED_BROWSER_ALLOWED_DOMAINS"
+      },
+      "deniedDomains": {
+        "type": "string",
+        "default": "",
+        "description": "Comma-separated navigation denylist; mutually exclusive with allowedDomains.",
+        "env": "HEADED_BROWSER_DENIED_DOMAINS"
+      },
+      "allowDownloads": {
+        "type": "boolean",
+        "default": true,
+        "description": "Allow browser downloads.",
+        "env": "HEADED_BROWSER_ALLOW_DOWNLOADS"
+      },
+      "allowFormSubmit": {
+        "type": "boolean",
+        "default": true,
+        "description": "Allow form submission.",
+        "env": "HEADED_BROWSER_ALLOW_FORM_SUBMIT"
+      },
+      "allowPasswordEntry": {
+        "type": "boolean",
+        "default": true,
+        "description": "Allow agent input into password fields.",
+        "env": "HEADED_BROWSER_ALLOW_PASSWORD_ENTRY"
+      },
+      "allowFileUpload": {
+        "type": "boolean",
+        "default": false,
+        "description": "Allow file uploads.",
+        "env": "HEADED_BROWSER_ALLOW_FILE_UPLOAD"
+      },
+      "allowEvaluate": {
+        "type": "boolean",
+        "default": true,
+        "description": "Allow page JavaScript evaluation.",
+        "env": "HEADED_BROWSER_ALLOW_EVALUATE"
+      },
+      "exposeCookieValues": {
+        "type": "boolean",
+        "default": false,
+        "description": "Include cookie values in cookie listings.",
+        "env": "HEADED_BROWSER_EXPOSE_COOKIE_VALUES"
+      },
+      "redactSecrets": {
+        "type": "boolean",
+        "default": true,
+        "description": "Redact credentials and token-shaped values from tool output and audit text.",
+        "env": "HEADED_BROWSER_REDACT_SECRETS"
+      },
+      "auditDir": {
+        "type": "string",
+        "default": "",
+        "description": "Audit log directory; empty uses the agent headed-browser-audit directory.",
+        "env": "HEADED_BROWSER_AUDIT_DIR"
+      },
+      "keepArtifactsOnClose": {
+        "type": "boolean",
+        "default": false,
+        "description": "Keep ephemeral session data after close.",
+        "env": "HEADED_BROWSER_KEEP_ARTIFACTS_ON_CLOSE"
+      },
+      "idleCloseSec": {
+        "type": "number",
+        "default": 7200,
+        "min": 120,
+        "max": 86400,
+        "step": 60,
+        "description": "Seconds of inactivity before automatic session close.",
+        "env": "HEADED_BROWSER_IDLE_CLOSE_SEC"
+      },
+      "navigationTimeoutMs": {
+        "type": "number",
+        "default": 30000,
+        "min": 1000,
+        "max": 300000,
+        "step": 1000,
+        "description": "Default navigation and launch timeout in milliseconds.",
+        "env": "HEADED_BROWSER_NAVIGATION_TIMEOUT_MS"
+      },
+      "driverModulePath": {
+        "type": "string",
+        "default": "",
+        "description": "Absolute puppeteer-core entry module path when host resolution is unavailable.",
+        "env": "HEADED_BROWSER_DRIVER_MODULE_PATH"
+      }
+    }
+  }
 }

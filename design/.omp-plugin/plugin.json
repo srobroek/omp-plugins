@@ -1,7 +1,7 @@
 {
   "name": "design",
   "description": "UI and UX design: system audit, DESIGN.md, browser verification, accessibility, tokens, and Component Driven build.",
-  "version": "0.3.0",
+  "version": "0.3.3",
   "category": "development",
   "mcpServers": {
     "accessibility-scanner": {
@@ -19,7 +19,8 @@
       ]
     },
     "storybook": {
-      "url": "http://localhost:6006/mcp"
+      "url": "http://localhost:6006/mcp",
+      "enabled": false
     }
   }
 }

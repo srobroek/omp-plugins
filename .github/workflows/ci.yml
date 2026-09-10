@@ -148,7 +148,7 @@ jobs:
           done < <(git ls-files '*/rules/*.test.ts' | xargs -rn1 dirname | sort -u)
 
       # `uvx` is not preinstalled on GitHub runners.
-      - uses: astral-sh/setup-uv@v10.0.1
+      - uses: astral-sh/setup-uv@v10.1.0
 
       - name: Install Vale
         env:
