@@ -330,6 +330,9 @@ describe("findCommitInvocations", () => {
 				"env -u HOME GIT_COMMON_DIR=/protected/.git git commit --allow-empty -m x",
 				{},
 			],
+			["env -S 'GIT_DIR=/protected/.git git commit -m x'", {}],
+			["env --split-string='GIT_WORK_TREE=/protected git commit -m x'", {}],
+			["env -S 'git commit -m x'", {}],
 		] as Array<[string, Record<string, string>]>) {
 			const { run, calls } = fakeGit({
 				"/feature": "feature",
