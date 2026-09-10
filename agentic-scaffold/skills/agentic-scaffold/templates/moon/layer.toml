@@ -1,0 +1,9 @@
+name = "moon"
+summary = "Moon task graph for workspace members"
+after = ["workspace"]
+requires_tools = ["moon"]
+owns = [".moon/workspace.yml", ".moon/toolchain.yml"]
+blocks = [".just.d/moon.just"]
+conflicts_with = []
+[vars]
+moon_version = { default = "latest", prompt = "Moon version", ask = false }

@@ -1,0 +1,11 @@
+name = "worktrunk"
+summary = "Worktrunk worktree inclusion and forge settings"
+after = ["base"]
+requires_tools = ["wt"]
+owns = [".config/wt.toml", ".worktreeinclude"]
+blocks = []
+conflicts_with = []
+[vars]
+forge_platform = { default = "github", prompt = "Forge platform", ask = false }
+forge_hostname = { default = "github.com", prompt = "Forge hostname", ask = false }
+worktree_includes = { default = ".env\n.env.*\n", prompt = "Worktree include patterns", ask = false }
