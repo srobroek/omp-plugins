@@ -847,6 +847,9 @@ function scanInvocations(command: string): CommitInvocation[] {
 			continue;
 		}
 		const wrapperCandidate = ["xcrun", "xargs"].includes(commandBase);
+		// Accepted advisory boundary: arbitrary programs may forward argv to Git. This gate handles
+		// the wrappers agents use in this estate (`xcrun` and `xargs`) but does not claim coverage
+		// for every executable such as timeout, parallel, or watch.
 		const wrappedGitIndex = wrapperCandidate
 			? remaining.findIndex((candidate) => {
 					const base = candidate.text.split("/").at(-1) ?? "";
