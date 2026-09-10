@@ -70,6 +70,16 @@ describe("findCommitInvocations", () => {
 		expect(findCommitInvocations("git -C/protected commit -m x")).toEqual([
 			{ repoDir: "/protected", dryRun: false },
 		]);
+		expect(
+			findCommitInvocations("git -C omp-plugins -C delivery -C .. commit -m x"),
+		).toEqual([{ repoDir: "omp-plugins/delivery/..", dryRun: false }]);
+		expect(
+			findCommitInvocations("git -C rel -C /absolute -C child commit -m x"),
+		).toEqual([{ repoDir: "/absolute/child", dryRun: false }]);
+		expect(findCommitInvocations("git -C rel -C.. commit -m x")).toEqual([
+			{ repoDir: "rel/..", dryRun: false },
+		]);
+		expect(findCommitInvocations("git -C commit -m x")).toEqual([]);
 	});
 
 	test("pre-verb value options do not swallow the verb", () => {

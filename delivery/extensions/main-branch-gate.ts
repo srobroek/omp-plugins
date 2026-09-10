@@ -774,7 +774,7 @@ function scanInvocations(command: string): CommitInvocation[] {
 					repoDir =
 						repoDir === null || value.startsWith("/")
 							? value
-							: resolve(repoDir, value);
+							: `${repoDir}/${value}`;
 					continue;
 				}
 				const eq = arg.text.indexOf("=");
@@ -786,7 +786,9 @@ function scanInvocations(command: string): CommitInvocation[] {
 					if (value !== undefined && !isSep(value)) {
 						if (name === "-C")
 							repoDir =
-								repoDir === null ? value.text : resolve(repoDir, value.text);
+								repoDir === null || value.text.startsWith("/")
+									? value.text
+									: `${repoDir}/${value.text}`;
 						j++;
 					}
 				}
