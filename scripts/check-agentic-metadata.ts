@@ -1,5 +1,5 @@
 #!/usr/bin/env bun
-import { readFileSync, readdirSync } from "node:fs";
+import { type Dirent, readdirSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { lint, parseFrontmatter } from "../authoring/extensions/agentic-lint-tool.ts";
 
@@ -14,7 +14,7 @@ try {
 		const base = join(root, plugin.name);
 		for (const kind of ["rules", "agents", "skills"] as const) {
 			const directory = join(base, kind);
-			let entries;
+			let entries: Dirent[];
 			try { entries = readdirSync(directory, { withFileTypes: true }); }
 			catch (error) {
 				if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
