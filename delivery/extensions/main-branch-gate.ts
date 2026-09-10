@@ -542,13 +542,17 @@ function scanInvocations(command: string): CommitInvocation[] {
 						: operand.text.includes("=")
 							? operand.text.slice(operand.text.indexOf("=") + 1)
 							: (tokens[k + 1]?.text ?? "");
-					// `env -S` performs its own argv split. Reusing the shell scanner would give
-					// separators and quotes meanings they do not have there, while skipping the
-					// payload hides an embedded commit. Conservatively refuse any split payload
-					// mentioning git, even without a target assignment.
+					// `env -S` performs its own argv split. Conservatively refuse any split
+					// payload mentioning git, even without a target assignment.
 					if (/\bd?git\b/.test(splitValue))
 						out.push({ repoDir: null, dryRun: false, retargeted: true });
 					if (!attachedShortSplit && !operand.text.includes("=")) k++;
+					continue;
+				}
+				if (optionName === "-C" || optionName === "--chdir") {
+					// `env` changes cwd before launching git. Refuse rather than infer its target.
+					prefixRetarget = true;
+					if (!operand.text.includes("=")) k++;
 					continue;
 				}
 				if (ENV_VALUE_OPTIONS[optionName] === true) {
