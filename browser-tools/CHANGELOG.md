@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.0](https://github.com/srobroek/omp-plugins/compare/browser-tools--v0.2.1...browser-tools--v0.3.0) (2026-09-10)
+
+
+### Features
+
+* **browser-tools:** add headed authenticated browser automation ([#99](https://github.com/srobroek/omp-plugins/issues/99)) ([653e35c](https://github.com/srobroek/omp-plugins/commit/653e35c495fae4444c6ddd2244b7d6c173138f23))
+
 ## [0.2.1](https://github.com/srobroek/omp-plugins/compare/browser-tools--v0.2.0...browser-tools--v0.2.1) (2026-09-08)
 
 
