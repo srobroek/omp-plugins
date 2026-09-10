@@ -5,17 +5,31 @@ pipeline. `$SCAFFOLD` is the installed `skills/agentic-scaffold/scripts/scaffold
 is the session project root. The lead invokes these commands through the `scaffold` tool; the
 shell forms below are the exact CLI commands used by that tool.
 
-## 1. Prove the repository is eligible
+## 1. Prove the repository is eligible, then confirm with the human
 
 ```sh
+python3 "$SCAFFOLD" inspect --root R
 python3 "$SCAFFOLD" preflight --root R --profile P
 ```
 
-Read `root`, `hard`, `soft`, `missing_tools`, `tools`, and `version`. `hook_strategy` is recorded
-for later stages; do not report or ask about it.
-Require exit `0`; exit `1` is a hard prerequisite failure. Resolve the reported prerequisite or
-stop. Do not write files before this command succeeds. The root must be a git work tree, not
-`$HOME` or `~/.omp`, and every tool is later pinned in the project's `mise.toml`.
+Read `inspect` for `stacks`, `suggestedProfile`, `tooling` (what the repo already has), `notes`,
+and `findings`. Read `preflight` for `root`, `hard`, `soft`, `missing_tools`, `tools`, `plugins`,
+`layers`, and `version`. `hook_strategy` is recorded for later stages; do not report or ask about
+it. The root must be a git work tree, not `$HOME` or `~/.omp`.
+
+This step always ends in an `ask`, whatever preflight returned. A report that ends the turn is
+not a stop; the human has to be able to answer without re-prompting. Write the findings first, as
+a short table in the assistant message: detected stacks, existing tooling, the profile you will
+propose and why, the layers that profile brings, declared plugins, and every `hard` and `soft`
+line verbatim. Then ask:
+
+- `hard` is empty: options "Continue to the interview" and "Stop here".
+- `hard` names a dirty work tree: options "Review and allow dirty" (you then show
+  `git status --short` and re-run preflight with `--allow-dirty`), "Stop; I will clean the tree".
+- any other `hard` line: options "Stop; I will fix <the prerequisite>" and "Explain what is
+  missing"; there is no bypass for a missing tool or an invalid root.
+
+Do not write files before preflight exits `0` and the human has chosen to continue.
 
 ## 2. Emit the interview
 
@@ -138,3 +152,6 @@ The agent never runs the commit command itself.
 6. Do not modify files outside `R`, scaffold-owned paths, templates, profiles, or formulas by hand.
 7. Exit codes are `0` success, `1` error, `2` drift, `3` needs input, `5` conflict, and `6` boundary.
 8. Stop on non-zero and report the command's JSON verbatim; do not invent tests or workarounds.
+9. Every stop is an `ask`, never a report that ends the turn: after inspect and preflight, after
+   the interview, at the plan, and on any blocker. The human always gets the findings, your
+   recommendation, and options to pick from.
