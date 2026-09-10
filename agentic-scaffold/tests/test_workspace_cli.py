@@ -11,7 +11,7 @@ def run(root: Path, *args: str):
 
 
 def test_monorepo_member_lifecycle(tmp_path: Path) -> None:
-    answers = run(tmp_path, "answers", "write", "--profile", "monorepo", "--name", "demo")
+    answers = run(tmp_path, "answers", "write", "--profile", "monorepo", "--name", "demo", "--defaults-for", "purpose,kind,language,license,beads")
     assert answers.returncode == 0, answers.stderr
     assert run(tmp_path, "member", "add", "--name", "api", "--layer", "lang/python", "--kind", "app").returncode == 0
     assert run(tmp_path, "member", "add", "--name", "web", "--layer", "lang/ts", "--kind", "lib").returncode == 0
@@ -30,7 +30,7 @@ def test_monorepo_member_lifecycle(tmp_path: Path) -> None:
 
 
 def test_member_directory_collision_is_reported(tmp_path: Path) -> None:
-    assert run(tmp_path, "answers", "write", "--profile", "monorepo", "--name", "demo").returncode == 0
+    assert run(tmp_path, "answers", "write", "--profile", "monorepo", "--name", "demo", "--defaults-for", "purpose,kind,language,license,beads").returncode == 0
     assert run(tmp_path, "member", "import", "--dir", "packages/api", "--layer", "lang/python").returncode == 0
     assert run(tmp_path, "member", "import", "--dir", "packages/api", "--layer", "lang/python").returncode == 5
 
@@ -44,7 +44,7 @@ def test_optional_layers_are_listed() -> None:
 
 
 def test_monorepo_just_aggregates_call_members(tmp_path: Path) -> None:
-    assert run(tmp_path, "answers", "write", "--profile", "monorepo", "--name", "demo").returncode == 0
+    assert run(tmp_path, "answers", "write", "--profile", "monorepo", "--name", "demo", "--defaults-for", "purpose,kind,language,license,beads").returncode == 0
     assert run(tmp_path, "member", "add", "--name", "api", "--layer", "lang/python", "--kind", "app").returncode == 0
     assert run(tmp_path, "member", "add", "--name", "web", "--layer", "lang/ts", "--kind", "lib").returncode == 0
     assert run(tmp_path, "render").returncode == 0

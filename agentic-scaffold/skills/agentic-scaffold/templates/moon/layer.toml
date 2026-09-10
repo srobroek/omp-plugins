@@ -5,5 +5,7 @@ requires_tools = ["moon"]
 owns = [".moon/workspace.yml", ".moon/toolchain.yml"]
 blocks = [".just.d/moon.just"]
 conflicts_with = []
+[tools]
+moon = "${moon_version}"
 [vars]
 moon_version = { default = "latest", prompt = "Moon version", ask = false }

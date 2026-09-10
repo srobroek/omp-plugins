@@ -38,10 +38,16 @@ needs = ["interview"]
 description = "Write the approved profile, layers, and overrides to .omp/scaffold-answers.toml."
 
 [[steps]]
+id = "preflight"
+title = "preflight brownfield scaffold {{feature}}"
+type = "task"
+needs = ["answers-write"]
+description = "Run scaffold.py preflight and stop on hard requirements or unresolved hook strategy."
+[[steps]]
 id = "plan"
 title = "plan brownfield changes {{feature}}"
 type = "task"
-needs = ["answers-write"]
+needs = ["answers-write", "preflight"]
 priority = 1
 description = "Review every create, skip, update-block, adopt, and conflict row before rendering."
 
@@ -61,10 +67,16 @@ condition = "{{layout}} == monorepo"
 description = "Run scaffold.py member import for detected existing workspace members without rewriting their files."
 
 [[steps]]
+id = "tools-install"
+title = "install brownfield tools {{feature}}"
+type = "task"
+needs = ["render", "members-import"]
+description = "Pin and install every tool declared by the selected layers."
+[[steps]]
 id = "hooks-install"
 title = "install brownfield hooks {{feature}}"
 type = "task"
-needs = ["render", "members-import"]
+needs = ["tools-install"]
 description = "Install declared prek stages, or migrate only after the interview resolves a foreign manager."
 
 [[steps]]
@@ -75,10 +87,17 @@ needs = ["hooks-install"]
 description = "Apply the desired project plugin set without mutating user scope."
 
 [[steps]]
+id = "context-refresh"
+title = "refresh brownfield context {{feature}}"
+type = "task"
+needs = ["plugins-sync"]
+description = "Refresh Graphify and Repomix context when the agentic layer is selected."
+
+[[steps]]
 id = "doctor"
 title = "doctor brownfield scaffold {{feature}}"
 type = "task"
-needs = ["plugins-sync"]
+needs = ["context-refresh"]
 description = "Run scaffold.py doctor and retain its exit code and JSON report."
 
 [[steps]]

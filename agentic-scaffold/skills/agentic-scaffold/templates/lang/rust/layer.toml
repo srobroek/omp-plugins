@@ -10,3 +10,5 @@ conditional_plugins = { backend = { var = "app", equals = "true" } }
 source = "srobroek/omp-plugins"
 plugins = ["architecture", "rust"]
 when = { var = "language", equals = "rust" }
+[tools]
+rust = "latest"

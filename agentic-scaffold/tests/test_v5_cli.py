@@ -1,0 +1,171 @@
+from __future__ import annotations
+
+import json
+import os
+import subprocess
+import sys
+from pathlib import Path
+
+from conftest import git_root
+
+ROOT = Path(__file__).parents[1]
+CLI = ROOT / "skills/agentic-scaffold/scripts/scaffold.py"
+
+
+def run(*args: str, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
+    argv = list(args)
+    if "--root" in argv:
+        i = argv.index("--root")
+        argv[i + 1] = str(git_root(Path(argv[i + 1])))
+    return subprocess.run([sys.executable, str(CLI), *argv], text=True, capture_output=True, env=env, check=False)
+
+
+def payload(result: subprocess.CompletedProcess[str]) -> dict:
+    return json.loads(result.stdout)
+
+
+def answer(root: Path) -> None:
+    result = run("answers", "write", "--root", str(root), "--profile", "python-app", "--set", "name=demo", "--set", "purpose=test", "--set", "language=python", "--defaults-for", "kind,license,beads")
+    assert result.returncode == 0, result.stderr
+
+
+def test_root_boundary_and_root_echo(tmp_path: Path) -> None:
+    result = run("profiles", "--root", str(tmp_path), "list")
+    assert result.returncode == 0
+    assert payload(result)["root"] == str(tmp_path.resolve())
+    result = subprocess.run([sys.executable, str(CLI), "render", "--root", str(Path.home())], text=True, capture_output=True, check=False)
+    assert result.returncode == 6
+
+
+def test_interview_and_answers_refusal_and_defaults_audit(tmp_path: Path) -> None:
+    root = git_root(tmp_path)
+    questions = payload(run("interview", "questions", "--root", str(root), "--profile", "python-app"))
+    assert {row["id"] for row in questions["questions"]} >= {"name", "purpose", "kind", "language", "license", "beads"}
+    refused = run("answers", "write", "--root", str(root), "--profile", "python-app", "--set", "name=demo")
+    assert refused.returncode == 3
+    answer(root)
+    text = (root / ".omp/scaffold-answers.toml").read_text()
+    assert "defaults_for" in text and "interviewed_at" in text
+    assert (root / ".omp/scaffold-run.json").is_file()
+
+
+def test_apply_dry_run_does_not_write_and_reports_order(tmp_path: Path) -> None:
+    root = git_root(tmp_path)
+    answer(root)
+    before = sorted(str(path.relative_to(root)) for path in root.rglob("*") if path.is_file())
+    result = run("apply", "--root", str(root), "--dry-run", "--allow-dirty")
+    after = sorted(str(path.relative_to(root)) for path in root.rglob("*") if path.is_file())
+    assert before == after
+    names = [row["name"] for row in payload(result)["stages"]]
+    assert names == ["preflight", "plan"]
+
+
+def test_mise_pins_are_stable_across_update(tmp_path: Path) -> None:
+    root = git_root(tmp_path)
+    first = run("render", "--root", str(root), "--profile", "python-app", "--name", "demo")
+    assert first.returncode == 0, first.stderr
+    initial = (root / "mise.toml").read_text()
+    second = run("update", "--root", str(root))
+    assert second.returncode == 0, second.stderr
+    assert (root / "mise.toml").read_text() == initial
+
+
+def test_hook_filtering_and_recursion_validator(tmp_path: Path) -> None:
+    root = git_root(tmp_path)
+    rendered = run("render", "--root", str(root), "--profile", "agentic-repo", "--name", "demo")
+    assert rendered.returncode == 0, rendered.stderr
+    config = root / ".pre-commit-config.yaml"
+    config.write_text(config.read_text() + "\nstages: [manual]\n")
+    result = run("hooks", "install", "--root", str(root))
+    if result.returncode == 0:
+        assert "manual" in payload(result).get("ignored", [])
+    assert "just check" in (root / "justfile").read_text()
+
+
+def test_doctor_and_finish_blockers(tmp_path: Path) -> None:
+    root = git_root(tmp_path)
+    rendered = run("render", "--root", str(root), "--profile", "agentic-repo", "--name", "demo")
+    assert rendered.returncode == 0
+    doctor = run("doctor", "--root", str(root))
+    assert doctor.returncode == 2
+    assert any("hooks" in item for item in payload(doctor)["drift"])
+    finish = run("finish", "--root", str(root))
+    assert finish.returncode == 2
+    assert payload(finish)["blockers"]
+
+
+def test_mise_block_rerender_keeps_provider_keys(tmp_path: Path) -> None:
+    import importlib
+
+    sys.path.insert(0, str(CLI.parent))
+    scaffold = importlib.import_module("scaffold")
+    target = Path("mise.toml")
+    first = scaffold.merge_tools_block("", '[tools]\nprek = "1"\n', "tooling", target)
+    second = scaffold.merge_tools_block(first, '[tools]\n"pipx:graphifyy[mcp]" = "0.9"\n"npm:repomix" = "1.1"\n', "agentic", target)
+    assert '"pipx:graphifyy[mcp]" = "0.9"' in second and '"npm:repomix" = "1.1"' in second
+    third = scaffold.merge_tools_block(second, '[tools]\n"pipx:graphifyy[mcp]" = "0.9"\n"npm:repomix" = "1.1"\nnode = "26"\n', "agentic", target)
+    assert '"pipx:graphifyy[mcp]" = "0.9"' in third and '"npm:repomix" = "1.1"' in third and 'node = "26"' in third
+    import tomllib
+
+    assert set(tomllib.loads(third)["tools"]) == {"prek", "pipx:graphifyy[mcp]", "npm:repomix", "node"}
+
+
+def test_python_tag_normalizes_versions(tmp_path: Path) -> None:
+    import importlib
+
+    sys.path.insert(0, str(CLI.parent))
+    scaffold = importlib.import_module("scaffold")
+    root = git_root(tmp_path) if "git_root" in globals() else tmp_path
+    for given, expected in (("3.13", "py313"), ("3.13.2", "py313"), ("py312", "py312"), ("3.9", "py39")):
+        _, _, _, values = scaffold.resolve_selection(root, "python-app", "demo", {"python": given}, [])
+        assert values["python_tag"] == expected, (given, values["python_tag"])
+
+
+def test_tool_command_maps_provider_keys() -> None:
+    import importlib
+
+    sys.path.insert(0, str(CLI.parent))
+    scaffold = importlib.import_module("scaffold")
+    assert scaffold._tool_command("aqua:gastownhall/beads") == "bd"
+    assert scaffold._tool_command("ubi:steveyegge/beads") == "bd"
+    assert scaffold._tool_command("pipx:graphifyy[mcp]") == "graphify"
+    assert scaffold._tool_command("npm:repomix") == "repomix"
+    assert scaffold._tool_command("python") == "python3"
+
+
+def test_update_refreshes_untouched_owned_files_and_keeps_edited_ones(tmp_path: Path) -> None:
+    root = git_root(tmp_path)
+    assert run("answers", "write", "--root", str(root), "--profile", "python-lib", "--set", "name=demo", "--set", "purpose=p", "--set", "kind=lib", "--set", "language=python", "--set", "license=apache-2.0", "--set", "beads=false").returncode == 0
+    assert run("render", "--root", str(root), "--profile", "python-lib").returncode == 0
+    readme = root / "README.md"
+    original = readme.read_text()
+    (root / ".editorconfig").write_text("# user edit\n")
+    # simulate a template change: mutate the recorded render so the current file no longer equals template output
+    readme.write_text(original + "\n")
+    import json as _json
+    meta_path = root / ".omp/scaffold.json"
+    meta = _json.loads(meta_path.read_text())
+    import hashlib
+    meta["owned_hashes"]["README.md"] = hashlib.sha256(readme.read_bytes()).hexdigest()
+    meta_path.write_text(_json.dumps(meta))
+    result = run("update", "--root", str(root))
+    assert result.returncode == 0, result.stderr
+    payload = _json.loads(result.stdout)
+    assert readme.read_text() == original, "untouched owned file is re-rendered from the template"
+    assert (root / ".editorconfig").read_text() == "# user edit\n"
+    assert ".editorconfig" in payload["drifted"]
+
+
+def test_render_preserves_hook_metadata(tmp_path: Path) -> None:
+    root = git_root(tmp_path)
+    assert run("answers", "write", "--root", str(root), "--profile", "agentic-repo", "--set", "name=demo").returncode in (0, 3)
+    assert run("answers", "write", "--root", str(root), "--profile", "agentic-repo", "--set", "name=demo", "--defaults-for", "purpose,kind,language,license,beads").returncode == 0
+    assert run("render", "--root", str(root), "--profile", "agentic-repo").returncode == 0
+    import json as _json
+    meta_path = root / ".omp/scaffold.json"
+    meta = _json.loads(meta_path.read_text())
+    meta.update({"hooks_installed": True, "hook_strategy": "git-defender", "hook_stages": ["pre-commit", "pre-push"]})
+    meta_path.write_text(_json.dumps(meta))
+    assert run("render", "--root", str(root), "--profile", "agentic-repo").returncode == 0
+    after = _json.loads(meta_path.read_text())
+    assert after["hook_strategy"] == "git-defender" and after["hooks_installed"] is True and after["hook_stages"] == ["pre-commit", "pre-push"]

@@ -4,14 +4,17 @@ import json
 import subprocess
 import sys
 from pathlib import Path
-
 ROOT = Path(__file__).parents[1]
 CLI = ROOT / "skills/agentic-scaffold/scripts/scaffold.py"
 
+from conftest import git_root
 
 def run(*args: str, cwd: Path | None = None, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
-    return subprocess.run([sys.executable, str(CLI), *args], cwd=cwd, env=env, text=True, capture_output=True, check=False)
-
+    argv = list(args)
+    if "--root" in argv:
+        i = argv.index("--root")
+        if i + 1 < len(argv): argv[i + 1] = str(git_root(Path(argv[i + 1])))
+    return subprocess.run([sys.executable, str(CLI), *argv], cwd=cwd, env=env, text=True, capture_output=True, check=False)
 
 def test_plan_render_classes_and_managed_idempotency(tmp_path: Path) -> None:
     result = run("plan", "--root", str(tmp_path), "--profile", "agentic-repo", "--name", "hello-world")

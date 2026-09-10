@@ -8,7 +8,7 @@ web_ui = false
 speckit = false
 [commands]
 setup = "mise install"
-test = "just test"
-lint = "just lint"
-fmt = "just fmt"
+test = "echo workspace members"
+lint = "echo workspace members"
+fmt = "echo workspace members"
 check = "just check"

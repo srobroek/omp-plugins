@@ -5,3 +5,9 @@ requires_tools = ["omp"]
 owns = [".omp/mcp.json", ".omp/context.py", ".omp/repomix.json", ".omp/project-context.json", ".omp/plugins.toml"]
 blocks = ["AGENTS.md", "WATCHDOG.md", ".gitignore"]
 conflicts_with = []
+[tools]
+# npm-backed tools need a pinned node in the isolated project env
+node = "latest"
+"pipx:graphifyy[mcp]" = "latest"
+"npm:repomix" = "latest"
+"aqua:gastownhall/beads" = "latest"
