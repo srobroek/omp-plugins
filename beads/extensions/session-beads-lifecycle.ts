@@ -17,7 +17,7 @@
 import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync, realpathSync, rmSync, statSync } from "node:fs";
 import { isAbsolute, join, resolve } from "node:path";
-import type { ExtensionAPI, ExtensionContext, ExtensionToolResultEvent } from "@oh-my-pi/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext, ExtensionToolCallEvent, ExtensionToolResultEvent } from "@oh-my-pi/pi-coding-agent";
 
 import {
 	actorValues,
@@ -48,9 +48,41 @@ export const AUTO_GATE_TYPES: Record<string, true> = {
 interface SessionState {
 	actors: Set<string>;
 	bdWrote: boolean;
+	/** The database this session's bash calls are pinned to, when its checkout has one. */
+	pin?: string;
 	staleAdvised: boolean;
 	stopFired: boolean;
 	touched: Set<string>;
+}
+
+/**
+ * The database a session's checkout provides: `<cwd>/.beads` when it exists.
+ * Per-session, unlike the process pin, so concurrent sessions never share it by accident.
+ */
+export function sessionPinFor(cwd: string): string | undefined {
+	const dir = resolve(cwd, ".beads");
+	try {
+		return statSync(dir).isDirectory() ? dir : undefined;
+	} catch {
+		return undefined;
+	}
+}
+
+/**
+ * Add the session pin to a bash call that carries no `BEADS_DIR` of its own.
+ *
+ * The persistent shell of an interactive session is spawned before `session_start`
+ * runs, so a value placed on `process.env` never reaches it; the call's own `env`
+ * does. A caller-supplied `BEADS_DIR` is left alone.
+ */
+export function pinBashInput(input: unknown, pin: string | undefined): Record<string, unknown> | undefined {
+	if (pin === undefined || input === null || typeof input !== "object") return undefined;
+	const record = input as Record<string, unknown>;
+	const env = record.env;
+	if (env !== undefined && (env === null || typeof env !== "object" || Array.isArray(env))) return undefined;
+	const current = (env as Record<string, unknown> | undefined)?.BEADS_DIR;
+	if (typeof current === "string" && current !== "") return undefined;
+	return { ...record, env: { ...((env as Record<string, unknown> | undefined) ?? {}), BEADS_DIR: pin } };
 }
 
 function sessionKey(ctx: { sessionManager?: { getSessionId?: () => string } } | undefined): string {
@@ -524,6 +556,7 @@ export default function sessionBeadsLifecycle(pi: ExtensionAPI): void {
 		const key = sessionKey(ctx);
 		sessions.delete(key);
 		const state = stateFor(ctx);
+		state.pin = sessionPinFor(ctx?.cwd ?? process.cwd());
 		try {
 			const pin = autoPinBeadsDir(ctx?.cwd ?? process.cwd(), key, (id) => sessions.has(id));
 			if (pin.conflict !== undefined) {
@@ -558,6 +591,14 @@ export default function sessionBeadsLifecycle(pi: ExtensionAPI): void {
 				error: error instanceof Error ? error.message : String(error),
 			});
 		}
+	});
+
+	pi.on("tool_call", (event: ExtensionToolCallEvent, ctx: ExtensionContext) => {
+		if (event.toolName !== "bash") return;
+		const state = sessions.get(sessionKey(ctx));
+		const pin = state?.pin ?? sessionPinFor(ctx?.cwd ?? process.cwd());
+		const revised = pinBashInput(event.input, pin);
+		return revised ? { input: revised } : undefined;
 	});
 
 	pi.on("session_shutdown", (_event, ctx: ExtensionContext) => {

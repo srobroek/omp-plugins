@@ -5,6 +5,7 @@ import { join } from "node:path";
 
 import sessionBeadsLifecycle, {
 	autoPinBeadsDir,
+	pinBashInput,
 	releaseAutoPin,
 	repoIdentity,
 	bdVerbs,
@@ -113,6 +114,16 @@ describe("autoPinBeadsDir", () => {
 		expect(repoIdentity(tmpdir())).not.toBe(repoIdentity(root));
 		execFileSync("git", ["-C", root, "worktree", "remove", "--force", wt]);
 		rmSync(root, { recursive: true, force: true });
+	});
+});
+
+describe("pinBashInput", () => {
+	test("adds the session pin to a bash call, keeps a caller pin, ignores malformed env", () => {
+		expect(pinBashInput({ command: "bd list" }, "/repo/.beads")).toEqual({ command: "bd list", env: { BEADS_DIR: "/repo/.beads" } });
+		expect(pinBashInput({ command: "bd list", env: { A: "1" } }, "/repo/.beads")).toEqual({ command: "bd list", env: { A: "1", BEADS_DIR: "/repo/.beads" } });
+		expect(pinBashInput({ command: "bd list", env: { BEADS_DIR: "/mine/.beads" } }, "/repo/.beads")).toBeUndefined();
+		expect(pinBashInput({ command: "bd list" }, undefined)).toBeUndefined();
+		expect(pinBashInput({ command: "bd list", env: "nope" }, "/repo/.beads")).toBeUndefined();
 	});
 });
 
@@ -426,6 +437,22 @@ describe("integration", () => {
 		sessionBeadsLifecycle(fakePi as never);
 		return { handlers, logged };
 	};
+	test("the tool_call hook pins bash for the session's checkout and nothing else", async () => {
+		const root = mkdtempSync(join(tmpdir(), "beads-callpin-"));
+		mkdirSync(join(root, ".beads"));
+		const { handlers } = wire();
+		const call = handlers.tool_call![0]!;
+		const ctx = { cwd: root, sessionManager: { getSessionId: () => "pin-session" } };
+		expect(await call({ toolName: "bash", toolCallId: "1", input: { command: "printenv BEADS_DIR" } }, ctx)).toEqual({
+			input: { command: "printenv BEADS_DIR", env: { BEADS_DIR: join(root, ".beads") } },
+		});
+		expect(await call({ toolName: "read", toolCallId: "2", input: { path: "x" } }, ctx)).toBeUndefined();
+		const plain = mkdtempSync(join(tmpdir(), "beads-callpin-plain-"));
+		expect(await call({ toolName: "bash", toolCallId: "3", input: { command: "bd list" } }, { cwd: plain, sessionManager: { getSessionId: () => "other" } })).toBeUndefined();
+		rmSync(root, { recursive: true, force: true });
+		rmSync(plain, { recursive: true, force: true });
+	});
+
 	test("a live session keeps its auto-pin; a concurrent session in another checkout does not overwrite it", async () => {
 		const a = mkdtempSync(join(tmpdir(), "beads-pin-a-"));
 		const b = mkdtempSync(join(tmpdir(), "beads-pin-b-"));
