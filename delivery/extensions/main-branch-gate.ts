@@ -604,6 +604,7 @@ function scanInvocations(command: string): CommitInvocation[] {
 	// transparent token, never in the call's environment, so it has to be tracked here.
 	let prefixRetarget = false;
 	let exportedRetarget = false;
+	let commandGitConfig = false;
 	const targetAssignments = new Set<string>();
 	for (let i = 0; i < tokens.length; i++) {
 		const token = tokens[i] as Token;
@@ -626,6 +627,7 @@ function scanInvocations(command: string): CommitInvocation[] {
 				if (ENV_ASSIGNMENT.test(operand.text)) {
 					const name = operand.text.slice(0, operand.text.indexOf("="));
 					if (TARGET_ENV.includes(name)) prefixRetarget = true;
+					if (name.startsWith("GIT_CONFIG_")) commandGitConfig = true;
 					continue;
 				}
 				const optionName = operand.text.includes("=")
@@ -742,6 +744,7 @@ function scanInvocations(command: string): CommitInvocation[] {
 				prefixRetarget = true;
 				targetAssignments.add(name);
 			}
+			if (name.startsWith("GIT_CONFIG_")) commandGitConfig = true;
 			continue;
 		}
 		if (token.text === "export") {
@@ -849,7 +852,8 @@ function scanInvocations(command: string): CommitInvocation[] {
 		i = j - 1;
 		// The flag is only PRESENT when set, so an ordinary invocation stays two fields wide and
 		// the many `toEqual` assertions over this shape keep saying what they meant.
-		if (aliasOpaque) out.push({ repoDir, dryRun: false, retargeted: true });
+		if (commandGitConfig || aliasOpaque)
+			out.push({ repoDir, dryRun: false, retargeted: true });
 		else if (verb === "commit")
 			out.push(
 				retargeted
