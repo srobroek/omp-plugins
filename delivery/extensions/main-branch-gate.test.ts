@@ -736,6 +736,25 @@ describe("findCommitInvocations", () => {
 		);
 	});
 
+	test("an xargs option with an optional value keeps its payload", () => {
+		for (const command of [
+			"printf '{}\\n' | xargs --replace git commit --dry-run",
+			"printf '{}\\n' | xargs --replace git commit -m x",
+			"printf '{}\\n' | xargs -i git commit -m x",
+			"printf '{}\\n' | xargs --eof git commit -m x",
+			"printf '{}\\n' | xargs --replace={} git commit -m x",
+			"printf '{}\\n' | xargs --eof=EOF git commit -m x",
+			"printf '{}\\n' | xargs -I{} git commit -m x",
+			"printf '{}\\n' | xargs -E EOF git commit -m x",
+		]) {
+			expect(findCommitInvocations(command), command).toEqual([
+				{ repoDir: null, dryRun: false, retargeted: true },
+			]);
+		}
+		expect(findCommitInvocations("xargs --replace echo")).toEqual([]);
+		expect(findCommitInvocations("xargs -i echo")).toEqual([]);
+	});
+
 	test("a quoted redirection target does not make the operator argv", () => {
 		for (const command of [
 			"git >'out' commit -m x",

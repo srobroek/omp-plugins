@@ -651,8 +651,6 @@ const XARGS_VALUE_OPTIONS: Record<string, true> = {
 	"-s": true,
 	"--arg-file": true,
 	"--delimiter": true,
-	"--eof": true,
-	"--replace": true,
 	"--max-lines": true,
 	"--max-args": true,
 	"--max-procs": true,
@@ -660,9 +658,19 @@ const XARGS_VALUE_OPTIONS: Record<string, true> = {
 	"--process-slot-var": true,
 };
 
-/** `xargs` options that stand alone. */
+/**
+ * `xargs` options that name no following word. `-i` and `--replace` take a value only attached,
+ * so consuming the next word swallowed the payload command: bare `xargs --replace git commit`
+ * ran that commit while this scan read `commit` as the payload.
+ *
+ * Verified against the installed `xargs 0.8.0`: `xargs --replace echo HIT` and `xargs -i echo
+ * HIT` both print `HIT`, so neither consumed `echo`. That build rejects `--eof` and `-E`
+ * outright, so a command using them runs nothing; listing `--eof` here keeps the word after it
+ * readable, which refuses `xargs --eof git commit` rather than letting it pass unseen.
+ */
 const XARGS_FLAG_OPTIONS: Record<string, true> = {
 	"-0": true,
+	"-i": true,
 	"-o": true,
 	"-p": true,
 	"-r": true,
@@ -674,6 +682,8 @@ const XARGS_FLAG_OPTIONS: Record<string, true> = {
 	"--interactive": true,
 	"--verbose": true,
 	"--exit": true,
+	"--eof": true,
+	"--replace": true,
 	"--help": true,
 	"--version": true,
 };
