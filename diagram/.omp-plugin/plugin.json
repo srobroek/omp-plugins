@@ -5,7 +5,8 @@
   "category": "productivity",
   "mcpServers": {
     "excalidraw": {
-      "url": "https://mcp.excalidraw.com/mcp"
+      "url": "https://mcp.excalidraw.com/mcp",
+      "enabled": false
     }
   }
 }
