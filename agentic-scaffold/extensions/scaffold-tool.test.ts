@@ -40,6 +40,17 @@ describe("scaffold CLI execution", () => {
 		expect(seen?.options.timeout).toBe(600_000);
 	});
 
+	test("abort is reachable through the tool while a run marker exists", async () => {
+		const cwd = mkdtempSync(join(tmpdir(), "scaffold-tool-abort-"));
+		Bun.spawnSync(["git", "init", "-q", cwd]);
+		Bun.spawnSync(["mkdir", "-p", join(cwd, ".omp")]);
+		await Bun.write(join(cwd, ".omp", "scaffold-run.json"), '{"stages": []}');
+		const result = await runScaffold(cwd, "abort", []);
+		expect(result.exitCode).toBe(0);
+		expect(JSON.parse(result.text).hadRun).toBe(true);
+		expect(await Bun.file(join(cwd, ".omp", "scaffold-run.json")).exists()).toBe(false);
+	});
+
 	test("runs the installed CLI path for an allowed command", async () => {
 		const cwd = mkdtempSync(join(tmpdir(), "scaffold-tool-real-"));
 		const result = await runScaffold(cwd, "profiles", ["list"]);
