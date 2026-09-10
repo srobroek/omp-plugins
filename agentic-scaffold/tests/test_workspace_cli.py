@@ -41,3 +41,18 @@ def test_optional_layers_are_listed() -> None:
     payload = json.loads(result.stdout)
     names = {item["name"] for item in payload["layers"]}
     assert {"workspace", "moon", "worktrunk"} <= names
+
+
+def test_monorepo_just_aggregates_call_members(tmp_path: Path) -> None:
+    assert run(tmp_path, "answers", "write", "--profile", "monorepo", "--name", "demo").returncode == 0
+    assert run(tmp_path, "member", "add", "--name", "api", "--layer", "lang/python", "--kind", "app").returncode == 0
+    assert run(tmp_path, "member", "add", "--name", "web", "--layer", "lang/ts", "--kind", "lib").returncode == 0
+    assert run(tmp_path, "render").returncode == 0
+    justfile = (tmp_path / "justfile").read_text()
+    assert "test: api-test web-test" in justfile
+    assert "lint: api-lint web-lint" in justfile
+    assert "fmt: api-fmt web-fmt" in justfile
+    assert "check: test lint fmt" in justfile
+    assert "just test" not in justfile
+    assert "just lint" not in justfile
+    assert "just fmt" not in justfile
