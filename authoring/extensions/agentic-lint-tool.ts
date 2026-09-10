@@ -86,44 +86,90 @@ function splitOnceTripleDash(text: string): string[] {
 	return ["", rest.slice(0, closing.index), rest.slice(closing.index + closing[0].length)];
 }
 
-export function splitFrontmatter(text: string): [Record<string, string>, string] {
-	if (!text.startsWith("---")) return [{}, text];
+type ParsedFrontmatter = {
+	values: Record<string, string>;
+	parsed: Record<string, unknown> | undefined;
+	body: string;
+	bodyLineOffset: number;
+	frontmatterDefects: Triple[];
+	xLintAllowedCodes: Set<string>;
+	xLintOverrideReason: string;
+};
+
+function parseFrontmatter(text: string): ParsedFrontmatter {
+	const empty = {
+		values: {},
+		parsed: undefined,
+		body: text,
+		bodyLineOffset: 0,
+		frontmatterDefects: [],
+		xLintAllowedCodes: new Set<string>(),
+		xLintOverrideReason: "",
+	};
+	if (!/^---[ \t]*(?:\r?\n|$)/.test(text)) return empty;
+
 	const parts = splitOnceTripleDash(text);
-	if (parts.length < 3) return [{}, text];
-	const fm: Record<string, string> = {};
+	const block = parts[1];
+	if (parts.length < 3 || block === undefined) {
+		return { ...empty, frontmatterDefects: [["ERROR", "E13", "unclosed frontmatter"]] };
+	}
+
+	const body = parts[2] ?? "";
+	const bodyLineOffset = text.slice(0, text.length - body.length).split(/\r?\n/).length - 1;
+	const values: Record<string, string> = {};
 	let key: string | null = null;
-	for (const line of (parts[1] ?? "").split("\n")) {
-		const m = /^(\w[\w-]*):\s*(.*)$/.exec(line);
-		if (m) {
-			key = m[1] ?? "";
-			fm[key] = (m[2] ?? "").trim();
+	for (const line of block.split("\n")) {
+		const match = /^(\w[\w-]*):\s*(.*)$/.exec(line);
+		if (match) {
+			key = match[1] ?? "";
+			values[key] = (match[2] ?? "").trim();
 		} else if (key && line.startsWith(" ")) {
-			fm[key] += ` ${line.trim()}`;
+			values[key] += ` ${line.trim()}`;
 		}
 	}
-	return [fm, parts[2] ?? ""];
+
+	try {
+		const document = Bun.YAML.parse(block);
+		const parsed = document && typeof document === "object" && !Array.isArray(document)
+			? document as Record<string, unknown>
+			: undefined;
+		const xLint = parsed?.["x-lint"];
+		const xLintRecord = xLint && typeof xLint === "object" && !Array.isArray(xLint)
+			? xLint as Record<string, unknown>
+			: undefined;
+		const allowed = Array.isArray(xLintRecord?.allow)
+			? new Set(xLintRecord.allow.filter((code): code is string => typeof code === "string"))
+			: new Set<string>();
+		const reason = typeof xLintRecord?.reason === "string" ? xLintRecord.reason.trim() : "";
+		return {
+			values,
+			parsed,
+			body,
+			bodyLineOffset,
+			frontmatterDefects: [],
+			xLintAllowedCodes: allowed,
+			xLintOverrideReason: reason,
+		};
+	} catch (error) {
+		const reason = (error instanceof Error ? error.message : String(error)).split("\n")[0];
+		return {
+			...empty,
+			values,
+			body,
+			bodyLineOffset,
+			frontmatterDefects: [["ERROR", "E13", `invalid frontmatter (${reason})`]],
+		};
+	}
+}
+
+export function splitFrontmatter(text: string): [Record<string, string>, string] {
+	const result = parseFrontmatter(text);
+	return [result.values, result.body];
 }
 
 /** Strict consumers must not silently drop malformed frontmatter. */
 export function frontmatterDefects(text: string): Triple[] {
-	if (!/^---[ \t]*(?:\r?\n|$)/.test(text)) return [];
-	const parts = splitOnceTripleDash(text);
-	const block = parts[1];
-	if (parts.length < 3 || block === undefined) return [["ERROR", "E13", "unclosed frontmatter"]];
-
-	try {
-		Bun.YAML.parse(block);
-		return [];
-	} catch (error) {
-		const reason = (error instanceof Error ? error.message : String(error)).split("\n")[0];
-		return [
-			[
-				"ERROR",
-				"E13",
-				`invalid frontmatter (${reason})`,
-			],
-		];
-	}
+	return parseFrontmatter(text).frontmatterDefects;
 }
 
 /**
@@ -148,40 +194,8 @@ export function hostSpecificPaths(body: string): string[] {
 }
 
 export function parseXlint(text: string): [Set<string>, string] {
-	if (!text.startsWith("---")) return [new Set(), ""];
-	const parts = splitOnceTripleDash(text);
-	if (parts.length < 3) return [new Set(), ""];
-	const fmText = parts[1] ?? "";
-	const xlintM = /^x-lint:\s*$/m.exec(fmText);
-	if (!xlintM || xlintM.index === undefined) return [new Set(), ""];
-	const after = fmText.slice(xlintM.index + xlintM[0].length);
-	const blockLines: string[] = [];
-	for (const line of after.split("\n")) {
-		if (line === "" || line.startsWith(" ") || line.startsWith("\t")) {
-			blockLines.push(line);
-		} else {
-			break;
-		}
-	}
-	const block = blockLines.join("\n");
-	const codes = new Set<string>();
-	const inline = /allow:\s*\[([^\]]*)\]/.exec(block);
-	if (inline) {
-		for (const raw of (inline[1] ?? "").split(",")) {
-			const tok = raw.trim().replace(/^['"]|['"]$/g, "");
-			if (tok) codes.add(tok);
-		}
-	} else {
-		const afterAllow = /allow:\s*\n((?:\s+-\s+\S+\n?)*)/.exec(block);
-		if (afterAllow) {
-			for (const tok of (afterAllow[1] ?? "").matchAll(/-\s+(\S+)/g)) {
-				codes.add((tok[1] ?? "").replace(/^['"]|['"]$/g, ""));
-			}
-		}
-	}
-	const reasonM = /reason:\s*["']?(.+?)["']?\s*$/m.exec(block);
-	const reason = reasonM ? (reasonM[1] ?? "").trim().replace(/^["']|["']$/g, "") : "";
-	return [codes, reason];
+	const result = parseFrontmatter(text);
+	return [result.xLintAllowedCodes, result.xLintOverrideReason];
 }
 
 
@@ -197,19 +211,18 @@ export function lint(path: string): Triple[] {
 	const text = readFileSync(path, "utf8");
 	const kind = detectKind(path);
 	if (kind === "template") return [];
-	const [fm, body] = splitFrontmatter(text);
+	const frontmatter = parseFrontmatter(text);
+	const { values: fm, body, bodyLineOffset, xLintAllowedCodes: allowedCodes, xLintOverrideReason: overrideReason } = frontmatter;
 	const lines = body.split("\n");
 
-	const [allowedCodes, overrideReason] = parseXlint(text);
 	if (allowedCodes.size > 0 && !overrideReason) {
 		raw.push(["ERROR", "E9", "x-lint.allow declared without a reason field"]);
 	}
 
 	// Applies to every kind, rules included: a dropped condition breaks any of them.
-	raw.push(...frontmatterDefects(text));
+	raw.push(...frontmatter.frontmatterDefects);
 	if (["rule", "skill", "agent"].includes(kind) && !raw.some(([, code]) => code === "E13")) {
-		const block = splitOnceTripleDash(text)[1];
-		const parsed = block === undefined ? {} : Bun.YAML.parse(block);
+		const parsed = frontmatter.parsed;
 		if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
 			err("E14", `${kind} frontmatter must be a mapping`);
 		} else {
@@ -271,7 +284,7 @@ export function lint(path: string): Triple[] {
 			if (m) {
 				err(
 					"E2",
-					`line ${idx + 1}: hedge '${m[0]}' — replace with an observable condition`,
+					`line ${idx + bodyLineOffset + 1}: hedge '${m[0]}' — replace with an observable condition`,
 				);
 			}
 		}
@@ -284,7 +297,7 @@ export function lint(path: string): Triple[] {
 			if (m) {
 				err(
 					"E3",
-					`line ${idx + 1}: model name '${m[0]}' in prose — route via steering-subagent-routing`,
+					`line ${idx + bodyLineOffset + 1}: model name '${m[0]}' in prose — route via steering-subagent-routing`,
 				);
 			}
 		});
@@ -338,8 +351,8 @@ export function lint(path: string): Triple[] {
 			key.length > 30 &&
 			(KEYWORD_LINE.test(ln) || SIGIL_LINE.test(ln) || ln.trim().startsWith("-"))
 		) {
-			if (key in seen) warn("W9", `line ${idx + 1} duplicates line ${seen[key]}`);
-			else seen[key] = idx + 1;
+			if (key in seen) warn("W9", `line ${idx + bodyLineOffset + 1} duplicates line ${seen[key]}`);
+			else seen[key] = idx + bodyLineOffset + 1;
 		}
 	});
 

@@ -207,6 +207,38 @@ describe("detectKind / splitFrontmatter", () => {
 
 });
 
+describe("frontmatter source locations", () => {
+	test("reports body findings at source lines after multiline frontmatter", () => {
+		const content = [
+			"---",
+			"name: source-lines",
+			"description: >-",
+			"  Use when checking source line accounting after frontmatter.",
+			"---",
+			"# Source lines",
+			"MUST consider choosing a concrete condition.",
+			"MUST use Sonnet for this check.",
+			"- MUST repeat this sufficiently long instruction for duplicate detection.",
+			"- MUST repeat this sufficiently long instruction for duplicate detection.",
+		].join("\n");
+		const path = write(tmpDir(), "SKILL.md", content);
+		const findings = lint(path);
+		expect(findings.find((finding) => finding[1] === "E2")?.[2]).toContain("line 7:");
+		expect(findings.find((finding) => finding[1] === "E3")?.[2]).toContain("line 8:");
+		expect(findings.find((finding) => finding[1] === "W9")?.[2]).toBe("line 10 duplicates line 9");
+	});
+
+	test("malformed frontmatter produces one E13 without throwing", () => {
+		const path = write(tmpDir(), "SKILL.md", "---\nname: broken\ndescription: bad: scalar\n---\n# Broken");
+		expect(lint(path).filter((finding) => finding[1] === "E13")).toHaveLength(1);
+	});
+
+	test("unclosed frontmatter produces one E13 without throwing", () => {
+		const path = write(tmpDir(), "SKILL.md", "---\nname: broken\ndescription: Use when checking an unclosed header.");
+		expect(lint(path).filter((finding) => finding[1] === "E13")).toHaveLength(1);
+	});
+});
+
 describe("override mechanism", () => {
 	test("suppressed e1 prints overridden", () => {
 		const desc = "word ".repeat(30).trim();
