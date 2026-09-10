@@ -13,7 +13,8 @@ python3 "$SCAFFOLD" preflight --root R --profile P
 ```
 
 Read `inspect` for `stacks`, `suggestedProfile`, `tooling` (what the repo already has), `notes`,
-and `findings`. Read `preflight` for `root`, `hard`, `soft`, `missing_tools`, `tools`, `plugins`,
+and `findings`. If `inspect` exits non-zero or returns no `stacks` key, show its JSON verbatim and
+ask "Stop" or "Explain"; do not build the table from guesses. Read `preflight` for `root`, `hard`, `soft`, `missing_tools`, `tools`, `plugins`,
 `layers`, and `version`. `hook_strategy` is recorded for later stages; do not report or ask about
 it. The root must be a git work tree, not `$HOME` or `~/.omp`.
 
@@ -152,6 +153,7 @@ The agent never runs the commit command itself.
 6. Do not modify files outside `R`, scaffold-owned paths, templates, profiles, or formulas by hand.
 7. Exit codes are `0` success, `1` error, `2` drift, `3` needs input, `5` conflict, and `6` boundary.
 8. Stop on non-zero and report the command's JSON verbatim; do not invent tests or workarounds.
-9. Every stop is an `ask`, never a report that ends the turn: after inspect and preflight, after
-   the interview, at the plan, and on any blocker. The human always gets the findings, your
-   recommendation, and options to pick from.
+9. The confirmation gates are `ask`s, never reports that end the turn: after inspect and
+   preflight, after the interview, and at the plan. The human gets the findings, your
+   recommendation, and options. A boundary refusal, an advisor block, or a failed stage is
+   reported with its JSON verbatim and offers only "stop" and "explain": no bypass option.

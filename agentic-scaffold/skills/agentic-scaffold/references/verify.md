@@ -13,9 +13,10 @@ python3 "$SCAFFOLD" doctor --root R
 python3 "$SCAFFOLD" finish --root R
 ```
 
-`preflight` is fail-closed. Read `hard`, `soft`, `missing_tools`, `tools`, and `hook_strategy`;
-all hard findings must be resolved. `apply --dry-run` is preflight plus plan and writes nothing.
-Read `stages` and require every stage to be `ok` before approval. A live `apply` reports each stage
+`preflight` is fail-closed. Read `hard`, `soft`, `missing_tools`, and `tools`; all hard findings
+must be resolved, and the findings are shown to the human with a choice (guidebook step 1) rather
+than reported as an end of turn. `apply --dry-run` is preflight plus plan and writes nothing.
+Read `planSummary` for the human and `stages` for debugging; every stage must be `ok` before approval. A live `apply` reports each stage
 with `name`, `status`, `seconds`, and `summary`; it stops at the first failure and may include `next`.
 
 `doctor` reads `.omp/scaffold-answers.toml`, `.omp/scaffold.json`, project plugins, hooks, tools,
