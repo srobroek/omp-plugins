@@ -67,6 +67,9 @@ describe("findCommitInvocations", () => {
 		expect(findCommitInvocations("git -C /repo -C sub commit -m x")).toEqual([
 			{ repoDir: "/repo/sub", dryRun: false },
 		]);
+		expect(findCommitInvocations("git -C/protected commit -m x")).toEqual([
+			{ repoDir: "/protected", dryRun: false },
+		]);
 	});
 
 	test("pre-verb value options do not swallow the verb", () => {
@@ -87,6 +90,21 @@ describe("findCommitInvocations", () => {
 		expect(findCommitInvocations("git --namespace ns commit -m y")).toEqual([
 			{ repoDir: null, dryRun: false },
 		]);
+	});
+
+	test("dry-run is a commit option, not a message or path", () => {
+		expect(findCommitInvocations("git commit --dry-run")).toEqual([
+			{ repoDir: null, dryRun: true },
+		]);
+		for (const command of [
+			"git commit -m --dry-run",
+			"git commit --message --dry-run",
+			"git commit -- --dry-run",
+		]) {
+			expect(findCommitInvocations(command), command).toEqual([
+				{ repoDir: null, dryRun: false },
+			]);
+		}
 	});
 
 	test("--dry-run is recorded", () => {
@@ -338,6 +356,7 @@ describe("findCommitInvocations", () => {
 			["env --chdir=/protected git commit -m x", {}],
 			["sudo -C /protected git commit -m x", {}],
 			["sudo --chdir=/protected git commit -m x", {}],
+			["env -C/protected git commit -m x", {}],
 		] as Array<[string, Record<string, string>]>) {
 			const { run, calls } = fakeGit({
 				"/feature": "feature",
@@ -352,6 +371,22 @@ describe("findCommitInvocations", () => {
 			);
 			expect(calls, command).toEqual([]);
 		}
+	});
+
+	test("attached env unset preserves an explicit git target", () => {
+		const { run, calls } = fakeGit({
+			"/feature": "feature",
+			"/protected": "main",
+		});
+		setGitRunForTests(run);
+		expect(
+			decideCommit(
+				"env -uGIT_DIR git -C /protected commit -m x",
+				"/feature",
+				{},
+			)?.block,
+		).toBe(true);
+		expect(calls.map((call) => call.cwd)).toEqual(["/protected"]);
 	});
 
 	test("sudo options preserve the wrapped git command", () => {
@@ -404,6 +439,15 @@ describe("findCommitInvocations", () => {
 		setGitRunForTests(run);
 		expect(
 			decideCommit("env -S 'printf hello'", "/feature", {}),
+		).toBeUndefined();
+		expect(calls).toEqual([]);
+	});
+
+	test("env option terminator makes the next dash-word the command", () => {
+		const { run, calls } = fakeGit({ "/feature": "feature" });
+		setGitRunForTests(run);
+		expect(
+			decideCommit("env -- -C /protected git commit -m x", "/feature", {}),
 		).toBeUndefined();
 		expect(calls).toEqual([]);
 	});

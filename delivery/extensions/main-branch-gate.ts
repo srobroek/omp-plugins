@@ -148,6 +148,27 @@ const PRE_VERB_VALUE_FLAGS: Record<string, true> = {
 	"--work-tree": true,
 };
 
+/** Commit options that consume the following argv word. */
+const COMMIT_VALUE_FLAGS: Record<string, true> = {
+	"-m": true,
+	"--message": true,
+	"-F": true,
+	"--file": true,
+	"-C": true,
+	"--reuse-message": true,
+	"-c": true,
+	"--reedit-message": true,
+	"--author": true,
+	"--date": true,
+	"--cleanup": true,
+	"-t": true,
+	"--template": true,
+	"--trailer": true,
+	"--fixup": true,
+	"--squash": true,
+	"--pathspec-from-file": true,
+};
+
 /**
  * A RAW-TEXT test on the whole command string, with no notion of command position: it asks only
  * whether `git` or `dgit` occurs between word boundaries. Any non-word character delimits, so a
@@ -577,7 +598,11 @@ function scanInvocations(command: string): CommitInvocation[] {
 			let k = i + 1;
 			for (; k < tokens.length && !isSep(tokens[k]); k++) {
 				const operand = tokens[k] as Token;
-				if (operand.text === "--") continue;
+				if (operand.text === "--") {
+					// The next argv word is env's command even when it starts with `-`.
+					k++;
+					break;
+				}
 				if (ENV_ASSIGNMENT.test(operand.text)) {
 					const name = operand.text.slice(0, operand.text.indexOf("="));
 					if (TARGET_ENV.includes(name)) prefixRetarget = true;
@@ -588,6 +613,11 @@ function scanInvocations(command: string): CommitInvocation[] {
 					: operand.text;
 				const attachedShortSplit =
 					operand.text.startsWith("-S") && operand.text !== "-S";
+				if (operand.text.startsWith("-C") && operand.text !== "-C") {
+					prefixRetarget = true;
+					continue;
+				}
+				if (operand.text.startsWith("-u") && operand.text !== "-u") continue;
 				if (
 					attachedShortSplit ||
 					optionName === "-S" ||
@@ -712,22 +742,36 @@ function scanInvocations(command: string): CommitInvocation[] {
 		let dryRun = false;
 		let retargeted = prefixRetarget || exportedRetarget;
 		let j = i + 1;
+		let commitOptions = true;
 		for (; j < tokens.length; j++) {
 			const arg = tokens[j] as Token;
 			if (isSep(arg)) break;
-			if (arg.text.startsWith("-") && arg.text !== "-") {
+			if (verb === "commit") {
+				if (!commitOptions) continue;
+				if (arg.text === "--") {
+					commitOptions = false;
+					continue;
+				}
+				if (arg.text === "--dry-run") {
+					dryRun = true;
+					continue;
+				}
 				const eq = arg.text.indexOf("=");
 				const name = eq === -1 ? arg.text : arg.text.slice(0, eq);
-				if (name === "--dry-run") dryRun = true;
-				// `--git-dir` and `--work-tree` point git at another repository, and neither is
-				// a working directory this gate can read: a bare repo, a linked worktree, or a
-				// `.git` outside its tree all break the guess. Both `=` and space forms count,
-				// and the `=` form previously fell through here entirely, so the commit was
-				// checked against the call's own cwd and a protected commit went through.
-				//
-				// PRE-VERB only. These are git's own options, so after the verb the same text is
-				// an operand: `git commit -m --git-dir=/tmp/other` is a message, and treating it
-				// as a selector refused an ordinary commit.
+				if (eq === -1 && COMMIT_VALUE_FLAGS[name] === true) j++;
+				continue;
+			}
+			if (arg.text.startsWith("-") && arg.text !== "-") {
+				if (verb === null && arg.text.startsWith("-C") && arg.text !== "-C") {
+					const value = arg.text.slice(2);
+					repoDir =
+						repoDir === null || value.startsWith("/")
+							? value
+							: resolve(repoDir, value);
+					continue;
+				}
+				const eq = arg.text.indexOf("=");
+				const name = eq === -1 ? arg.text : arg.text.slice(0, eq);
 				if (verb === null && (name === "--git-dir" || name === "--work-tree"))
 					retargeted = true;
 				if (eq === -1 && verb === null && PRE_VERB_VALUE_FLAGS[name] === true) {
