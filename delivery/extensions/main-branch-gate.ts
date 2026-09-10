@@ -180,6 +180,11 @@ function isOpaqueGitConfigKey(key: string): boolean {
 }
 
 function envHasOpaqueGitConfig(env: NodeJS.ProcessEnv): boolean {
+	if (
+		env.GIT_CONFIG_PARAMETERS !== undefined &&
+		env.GIT_CONFIG_PARAMETERS !== ""
+	)
+		return true;
 	const count = Number.parseInt(env.GIT_CONFIG_COUNT ?? "0", 10);
 	if (!Number.isFinite(count) || count <= 0) return false;
 	for (let index = 0; index < count; index++) {

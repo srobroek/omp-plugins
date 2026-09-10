@@ -165,6 +165,11 @@ describe("findCommitInvocations", () => {
 		expect(decideCommit("git ci -m x", "/protected", env)?.block).toBe(true);
 	});
 
+	test("legacy structured Git config parameters fail closed", () => {
+		const env = { GIT_CONFIG_PARAMETERS: "'alias.ci'='commit'" };
+		expect(decideCommit("git ci -m x", "/protected", env)?.block).toBe(true);
+	});
+
 	test("command-prefix Git config aliases fail closed", () => {
 		for (const command of [
 			"GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=alias.ci GIT_CONFIG_VALUE_0=commit git ci -m x",
@@ -1395,6 +1400,21 @@ describe("integration", () => {
 			}),
 		).toBeUndefined();
 		expect(calls).toEqual([]);
+	});
+
+	test("the bash call env cannot inject a Git alias", () => {
+		const [handler] = register();
+		expect(
+			handler?.({
+				toolName: "bash",
+				toolCallId: "c-config",
+				input: {
+					command: "git ci -m x",
+					cwd: "/main-repo",
+					env: { GIT_CONFIG_PARAMETERS: "'alias.ci'='commit'" },
+				},
+			}),
+		).toEqual(expect.objectContaining({ block: true }));
 	});
 
 	test("an unrelated or falsy call env leaves the block in place", () => {
