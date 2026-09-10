@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.7](https://github.com/srobroek/omp-plugins/compare/beads--v1.0.6...beads--v1.0.7) (2026-09-10)
+
+
+### Bug Fixes
+
+* **beads:** pin BEADS_DIR on every bash call, not only on process.env ([#135](https://github.com/srobroek/omp-plugins/issues/135)) ([c6dfe5f](https://github.com/srobroek/omp-plugins/commit/c6dfe5f22d06a2144f2cb13ee2711256e0acb04e))
+
 ## [1.0.6](https://github.com/srobroek/omp-plugins/compare/beads--v1.0.5...beads--v1.0.6) (2026-09-10)
 
 
