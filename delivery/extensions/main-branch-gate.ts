@@ -786,25 +786,28 @@ function scanInvocations(command: string): CommitInvocation[] {
 					verb === null &&
 					name === "-c" &&
 					eq !== -1 &&
-					/^alias\.[^=]+=/.test(arg.text.slice(eq + 1))
+					/^alias\.[^=]+=/i.test(arg.text.slice(eq + 1))
 				)
 					aliasOpaque = true;
 				if (verb === null && name === "--config-env" && eq !== -1) {
 					const configEnv = arg.text.slice(eq + 1);
 					const keyEnd = configEnv.indexOf("=");
-					if (keyEnd !== -1 && configEnv.slice(0, keyEnd).startsWith("alias."))
+					if (
+						keyEnd !== -1 &&
+						configEnv.slice(0, keyEnd).toLowerCase().startsWith("alias.")
+					)
 						aliasOpaque = true;
 				}
 				if (eq === -1 && verb === null && PRE_VERB_VALUE_FLAGS[name] === true) {
 					const value = tokens[j + 1];
 					if (value !== undefined && !isSep(value)) {
-						if (name === "-c" && /^alias\.[^=]+=/.test(value.text))
+						if (name === "-c" && /^alias\.[^=]+=/i.test(value.text))
 							aliasOpaque = true;
 						if (name === "--config-env") {
 							const keyEnd = value.text.indexOf("=");
 							if (
 								keyEnd !== -1 &&
-								value.text.slice(0, keyEnd).startsWith("alias.")
+								value.text.slice(0, keyEnd).toLowerCase().startsWith("alias.")
 							)
 								aliasOpaque = true;
 						}

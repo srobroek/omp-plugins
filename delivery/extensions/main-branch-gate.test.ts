@@ -132,6 +132,14 @@ describe("findCommitInvocations", () => {
 				{ repoDir: null, dryRun: false, retargeted: true },
 			]);
 		}
+		for (const command of [
+			"git -c ALIAS.ci=commit ci -m x",
+			"git --config-env=ALIAS.ci=ALIAS ci -m x",
+		]) {
+			expect(findCommitInvocations(command), command).toEqual([
+				{ repoDir: null, dryRun: false, retargeted: true },
+			]);
+		}
 	});
 
 	test("malformed config-env operands do not invent an alias", () => {
