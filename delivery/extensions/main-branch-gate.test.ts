@@ -336,6 +336,8 @@ describe("findCommitInvocations", () => {
 			['env -S"git commit -m x"', {}],
 			["env -C /protected git commit -m x", {}],
 			["env --chdir=/protected git commit -m x", {}],
+			["sudo -C /protected git commit -m x", {}],
+			["sudo --chdir=/protected git commit -m x", {}],
 		] as Array<[string, Record<string, string>]>) {
 			const { run, calls } = fakeGit({
 				"/feature": "feature",
@@ -349,6 +351,23 @@ describe("findCommitInvocations", () => {
 				"pointed at another repository",
 			);
 			expect(calls, command).toEqual([]);
+		}
+	});
+
+	test("sudo options preserve the wrapped git command", () => {
+		for (const command of [
+			"sudo -u alice git commit -m x",
+			"sudo --user alice git commit -m x",
+		]) {
+			const { run, calls } = fakeGit({ "/protected": "main" });
+			setGitRunForTests(run);
+			expect(decideCommit(command, "/protected", {})?.block, command).toBe(
+				true,
+			);
+			expect(
+				calls.map((call) => call.cwd),
+				command,
+			).toEqual(["/protected"]);
 		}
 	});
 

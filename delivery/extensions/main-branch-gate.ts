@@ -82,6 +82,29 @@ const ENV_VALUE_OPTIONS: Record<string, true> = {
 	"--split-string": true,
 };
 
+/** `sudo` options that consume the following argv word before its command. */
+const SUDO_VALUE_OPTIONS: Record<string, true> = {
+	"-u": true,
+	"-g": true,
+	"-p": true,
+	"-h": true,
+	"-C": true,
+	"-D": true,
+	"-R": true,
+	"-T": true,
+	"-U": true,
+	"--user": true,
+	"--group": true,
+	"--prompt": true,
+	"--host": true,
+	"--chdir": true,
+	"--role": true,
+	"--type": true,
+	"--other-user": true,
+	"--command-timeout": true,
+	"--close-from": true,
+};
+
 /** Pre-verb git options that consume the following token. */
 const PRE_VERB_VALUE_FLAGS: Record<string, true> = {
 	"-C": true,
@@ -560,6 +583,32 @@ function scanInvocations(command: string): CommitInvocation[] {
 					continue;
 				}
 				if (operand.text.startsWith("-")) continue;
+				break;
+			}
+			i = k - 1;
+			continue;
+		}
+		if (token.text === "sudo") {
+			let k = i + 1;
+			for (; k < tokens.length && !isSep(tokens[k]); k++) {
+				const operand = tokens[k] as Token;
+				if (operand.text === "--") continue;
+				const optionName = operand.text.includes("=")
+					? operand.text.slice(0, operand.text.indexOf("="))
+					: operand.text;
+				if (
+					optionName === "-C" ||
+					optionName === "-D" ||
+					optionName === "--chdir"
+				) {
+					prefixRetarget = true;
+					if (!operand.text.includes("=")) k++;
+					continue;
+				}
+				if (SUDO_VALUE_OPTIONS[optionName] === true) {
+					if (!operand.text.includes("=")) k++;
+					continue;
+				}
 				break;
 			}
 			i = k - 1;
