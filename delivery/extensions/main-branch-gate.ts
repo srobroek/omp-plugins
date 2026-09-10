@@ -661,11 +661,10 @@ const XARGS_VALUE_OPTIONS: Record<string, true> = {
 /**
  * `xargs` options that name no following word.
  *
- * Both tables model GNU `xargs`, whose grammar is the wider of the two a host may provide, so a
- * command written for it resolves to the same payload here. Under that grammar `-i`, `--replace`,
- * and `--eof` take a value only when it is attached, which is why they belong here. On a host
- * whose `xargs` accepts them, a review ran `xargs --replace git commit` and it committed, while
- * this scan had consumed `git` as the option's value and read `commit` as the payload.
+ * Both tables model the wider GNU grammar, so a command written for it resolves to the same
+ * payload here. `-i`, `--replace`, and `--eof` are listed here because their value is optional
+ * and attached: reading one as consuming the NEXT word would take the word that names the
+ * payload, which is how a payload command goes unseen.
  *
  * The `xargs` on PATH is `/usr/bin/xargs`. Probed directly, it takes `-E EOF` and `-I {}`,
  * clusters short flags such as `-0t`, and rejects `-i`, `--replace`, and `--eof` outright. A
