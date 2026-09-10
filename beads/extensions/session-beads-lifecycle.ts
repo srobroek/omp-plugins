@@ -69,6 +69,23 @@ export function sessionPinFor(cwd: string): string | undefined {
 }
 
 /**
+ * The value each of this session's bash calls receives, decided once at session start.
+ *
+ * - a process pin someone else set (a human export, or an earlier session of the same
+ *   repository) is mirrored as-is: the shell may predate it, and a human pin is never
+ *   replaced by the checkout's own database;
+ * - a conflict (the process pin belongs to an unrelated repository) gives this session
+ *   its own checkout database per call, which is exactly what the notice asks for;
+ * - otherwise the checkout's `.beads`, when it exists.
+ */
+export function sessionPinAfter(result: AutoPinResult, cwd: string, env: NodeJS.ProcessEnv = process.env): string | undefined {
+	if (result.conflict !== undefined) return sessionPinFor(cwd);
+	const current = env.BEADS_DIR;
+	if (current !== undefined && current !== "") return current;
+	return sessionPinFor(cwd);
+}
+
+/**
  * Add the session pin to a bash call that carries no `BEADS_DIR` of its own.
  *
  * The persistent shell of an interactive session is spawned before `session_start`
@@ -556,9 +573,10 @@ export default function sessionBeadsLifecycle(pi: ExtensionAPI): void {
 		const key = sessionKey(ctx);
 		sessions.delete(key);
 		const state = stateFor(ctx);
-		state.pin = sessionPinFor(ctx?.cwd ?? process.cwd());
 		try {
-			const pin = autoPinBeadsDir(ctx?.cwd ?? process.cwd(), key, (id) => sessions.has(id));
+			const cwd = ctx?.cwd ?? process.cwd();
+			const pin = autoPinBeadsDir(cwd, key, (id) => sessions.has(id));
+			state.pin = sessionPinAfter(pin, cwd);
 			if (pin.conflict !== undefined) {
 				pi.sendMessage({
 					customType: "com.srobroek.beads.session-lifecycle",
@@ -596,8 +614,8 @@ export default function sessionBeadsLifecycle(pi: ExtensionAPI): void {
 	pi.on("tool_call", (event: ExtensionToolCallEvent, ctx: ExtensionContext) => {
 		if (event.toolName !== "bash") return;
 		const state = sessions.get(sessionKey(ctx));
-		const pin = state?.pin ?? sessionPinFor(ctx?.cwd ?? process.cwd());
-		const revised = pinBashInput(event.input, pin);
+		const pin = state?.pin ?? process.env.BEADS_DIR ?? sessionPinFor(ctx?.cwd ?? process.cwd());
+		const revised = pinBashInput(event.input, pin === "" ? undefined : pin);
 		return revised ? { input: revised } : undefined;
 	});
 
