@@ -21,7 +21,7 @@
  * real invocation. The cost is that a `bd init` line inside a heredoc body reads
  * as one too, which is one advisory message and no block.
  */
-import type { ExtensionAPI, ExtensionToolCallEvent } from "@oh-my-pi/pi-coding-agent";
+import type { ExtensionAPI, ToolCallEvent } from "@oh-my-pi/pi-coding-agent";
 import { extractCommand, tokenize } from "./bd-close-gate.ts";
 
 /** Flags consuming the next token, so `bd -C <dir> init` still reads as `init`. */
@@ -158,7 +158,7 @@ export function resetInitAdvisoryForTests(): void {
 }
 
 export default function bdInitAdvisory(pi: ExtensionAPI): void {
-	pi.on("tool_call", (event: ExtensionToolCallEvent) => {
+	pi.on("tool_call", (event: ToolCallEvent) => {
 		try {
 			if (event.toolName !== "bash") return;
 			const command = extractCommand(event.input);

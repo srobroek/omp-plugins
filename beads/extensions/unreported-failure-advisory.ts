@@ -17,7 +17,7 @@
  * advisory that can take down a session is worse than no advisory at all.
  */
 
-import type { ExtensionAPI, ExtensionContext, ExtensionToolResultEvent } from "@oh-my-pi/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext, ToolResultEvent } from "@oh-my-pi/pi-coding-agent";
 
 import { commandSegments, extractCommand } from "./bd-actor-gate.ts";
 import { beadsDir, envelopeData, parseTrailingJson } from "./session-beads-lifecycle.ts";
@@ -308,7 +308,7 @@ export function formatUnreportedAdvisory(unreported: readonly string[], checks: 
 }
 
 /** Text blocks of a tool result, joined. */
-function resultText(event: ExtensionToolResultEvent): string {
+function resultText(event: ToolResultEvent): string {
 	let text = "";
 	for (const block of event.content ?? []) {
 		if (block !== null && typeof block === "object" && (block as { type?: string }).type === "text") {
@@ -325,7 +325,7 @@ function resultText(event: ExtensionToolResultEvent): string {
  * `Command exited with code N` notice can be cut when the output is capped or
  * spilled to an artifact. The structured field cannot be.
  */
-function exitLine(event: ExtensionToolResultEvent): string {
+function exitLine(event: ToolResultEvent): string {
 	const details: unknown = event.details;
 	if (details === null || typeof details !== "object") return "";
 	const code = (details as { exitCode?: unknown }).exitCode;
@@ -361,7 +361,7 @@ export default function unreportedFailureAdvisory(pi: ExtensionAPI): void {
 		observed.delete(sessionKey(ctx));
 	});
 
-	pi.on("tool_result", (event: ExtensionToolResultEvent, ctx: ExtensionContext) => {
+	pi.on("tool_result", (event: ToolResultEvent, ctx: ExtensionContext) => {
 		try {
 			// A shell-style tool is one whose input carries a command line. Naming tools
 			// instead would miss every shell an MCP server or plugin adds.
@@ -401,13 +401,15 @@ export default function unreportedFailureAdvisory(pi: ExtensionAPI): void {
 			if (bugs === undefined) return;
 			const unreported = unreportedFailures([...seen.keys()], bugs);
 			if (unreported.length === 0) return;
-			pi.sendMessage({
-				customType: "com.srobroek.beads.unreported-failure",
-				content: formatUnreportedAdvisory(unreported, seen),
-				display: true,
-				attribution: "user",
-				triggerTurn: false,
-			});
+			pi.sendMessage(
+				{
+					customType: "com.srobroek.beads.unreported-failure",
+					content: formatUnreportedAdvisory(unreported, seen),
+					display: true,
+					attribution: "user",
+				},
+				{ triggerTurn: false },
+			);
 		} catch (error) {
 			pi.logger.error("beads unreported-failure check failed", {
 				error: error instanceof Error ? error.message : String(error),

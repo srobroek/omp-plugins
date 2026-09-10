@@ -16,7 +16,7 @@
 
 import { existsSync, readFileSync, rmSync, statSync } from "node:fs";
 import { isAbsolute, join, resolve } from "node:path";
-import type { ExtensionAPI, ExtensionContext, ExtensionToolResultEvent } from "@oh-my-pi/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext, ToolResultEvent } from "@oh-my-pi/pi-coding-agent";
 
 import {
 	actorValues,
@@ -406,7 +406,7 @@ async function gateAdvisory(cwd: string, deadline: number): Promise<string | und
 }
 
 /** Text blocks of a tool result, joined. */
-function resultText(event: ExtensionToolResultEvent): string {
+function resultText(event: ToolResultEvent): string {
 	let text = "";
 	for (const block of event.content ?? []) {
 		if (block !== null && typeof block === "object" && (block as { type?: string }).type === "text") {
@@ -441,13 +441,15 @@ export default function sessionBeadsLifecycle(pi: ExtensionAPI): void {
 			if (sessions.get(key) !== state || notices.length === 0) return;
 			// A message rather than `ctx.ui.notify`: the agent runs the commands this
 			// is about, and a UI notification reaches neither it nor a --print session.
-			pi.sendMessage({
-				customType: "com.srobroek.beads.session-lifecycle",
-				content: notices.join("\n\n"),
-				display: true,
-				attribution: "user",
-				triggerTurn: false,
-			});
+			pi.sendMessage(
+				{
+					customType: "com.srobroek.beads.session-lifecycle",
+					content: notices.join("\n\n"),
+					display: true,
+					attribution: "user",
+				},
+				{ triggerTurn: false },
+			);
 		} catch (error) {
 			pi.logger.error("beads session-start check failed", {
 				error: error instanceof Error ? error.message : String(error),
@@ -465,7 +467,7 @@ export default function sessionBeadsLifecycle(pi: ExtensionAPI): void {
 		stateFor(ctx).stopFired = false;
 	});
 
-	pi.on("tool_result", (event: ExtensionToolResultEvent, ctx: ExtensionContext) => {
+	pi.on("tool_result", (event: ToolResultEvent, ctx: ExtensionContext) => {
 		try {
 			if (event.toolName !== "bash") return;
 			const input = event.input ?? {};

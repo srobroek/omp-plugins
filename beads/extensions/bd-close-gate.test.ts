@@ -343,7 +343,12 @@ describe("integration", () => {
 			zod: {},
 			registerTool: () => {},
 			on: (event: string, handler: (e: unknown) => unknown) => {
-				(handlers[event] ??= []).push(handler);
+				const eventHandlers = handlers[event];
+				if (eventHandlers) {
+					eventHandlers.push(handler);
+				} else {
+					handlers[event] = [handler];
+				}
 			},
 		};
 		bdCloseGate(fakePi as never);

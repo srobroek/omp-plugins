@@ -17,8 +17,8 @@ import sessionBeadsLifecycle, {
 	parseTrailingJson,
 	readBeads,
 	readCheckOutcome,
-	readGates,
 	readGateList,
+	readGates,
 	staleSkipNotice,
 } from "./session-beads-lifecycle.ts";
 

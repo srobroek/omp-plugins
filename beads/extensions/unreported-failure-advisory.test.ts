@@ -329,7 +329,9 @@ describe("integration", () => {
 			sendMessage: (m: { customType?: string; content: string }) => sent.push(m),
 			logger: { error: (message: string) => errors.push(message), info: () => {} },
 			on: (event: string, handler: (e: unknown, c: unknown) => unknown) => {
-				(handlers[event] ??= []).push(handler);
+				const registered = handlers[event] ?? [];
+				registered.push(handler);
+				handlers[event] = registered;
 			},
 		};
 		unreportedFailureAdvisory(fakePi as never);

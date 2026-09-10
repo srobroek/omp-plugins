@@ -170,13 +170,15 @@ export default function beadsDoltLifecycle(pi: ExtensionAPI): void {
 			// Sent as a message rather than a UI notification: the agent runs the `bd`
 			// calls this warns about, and `ctx.ui.notify` reaches neither the agent nor
 			// a `--print`/RPC session.
-			pi.sendMessage({
-				customType: "com.srobroek.beads.storage-mode",
-				content: notice,
-				display: true,
-				attribution: "user",
-				triggerTurn: false,
-			});
+			pi.sendMessage(
+				{
+					customType: "com.srobroek.beads.storage-mode",
+					content: notice,
+					display: true,
+					attribution: "user",
+				},
+				{ triggerTurn: false },
+			);
 		} catch (error) {
 			pi.logger.error("beads backend check failed", {
 				error: error instanceof Error ? error.message : String(error),

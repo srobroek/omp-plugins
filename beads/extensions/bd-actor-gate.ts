@@ -1,7 +1,7 @@
 import type {
 	ExtensionAPI,
-	ExtensionToolCallEvent,
-	ExtensionToolResultEvent,
+	ToolCallEvent,
+	ToolResultEvent,
 } from "@oh-my-pi/pi-coding-agent";
 import { tokenize } from "./bd-close-gate.ts";
 
@@ -189,19 +189,19 @@ const MOL_WRITES: Record<string, true> = {
 };
 const pendingAdvisory = new Map<string, string>();
 
-export function extractCommand(input: Record<string, unknown>): string {
-	if (typeof input.command === "string") return input.command;
-	if (typeof input.cmd === "string") return input.cmd;
+export function extractCommand(input: ToolCallEvent["input"]): string {
+	if ("command" in input && typeof input.command === "string") return input.command;
+	if ("cmd" in input && typeof input.cmd === "string") return input.cmd;
 	return "";
 }
 
 /** The environment a bash tool call supplies to its child process. */
 export function environmentForInput(
-	input: Record<string, unknown>,
+	input: ToolCallEvent["input"],
 	base: NodeJS.ProcessEnv = process.env,
 ): NodeJS.ProcessEnv {
 	const env: NodeJS.ProcessEnv = { ...base };
-	const supplied = input.env;
+	const supplied = "env" in input ? input.env : undefined;
 	if (supplied !== null && typeof supplied === "object") {
 		for (const [name, value] of Object.entries(supplied)) {
 			if (typeof value === "string") env[name] = value;
@@ -308,9 +308,9 @@ export function decideActorGate(
 }
 
 function prepend(
-	event: ExtensionToolResultEvent,
+	event: ToolResultEvent,
 	text: string,
-): { content: ExtensionToolResultEvent["content"] } {
+): { content: ToolResultEvent["content"] } {
 	const prefix = { type: "text" as const, text: `${text}\n\n` };
 	const existing = event.content ?? [];
 	return { content: [prefix, ...existing] };
@@ -318,7 +318,7 @@ function prepend(
 
 export default function bdActorGate(pi: ExtensionAPI): void {
 	const arbiter = installActorNoticeArbiter();
-	pi.on("tool_call", (event: ExtensionToolCallEvent) => {
+	pi.on("tool_call", (event: ToolCallEvent) => {
 		try {
 			if (event.toolName !== "bash") return;
 			const command = extractCommand(event.input);
@@ -337,7 +337,7 @@ export default function bdActorGate(pi: ExtensionAPI): void {
 		}
 	});
 
-	pi.on("tool_result", (event: ExtensionToolResultEvent) => {
+	pi.on("tool_result", (event: ToolResultEvent) => {
 		try {
 			const claimedByOrchestrate = arbiter.handledToolCalls.delete(event.toolCallId);
 			const text = pendingAdvisory.get(event.toolCallId);

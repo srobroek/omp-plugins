@@ -143,7 +143,9 @@ describe("integration", () => {
 				sent.push({ payload, options });
 			},
 			on: (event: string, handler: (e: unknown) => unknown) => {
-				(handlers[event] ??= []).push(handler);
+				const eventHandlers = handlers[event] ?? [];
+				eventHandlers.push(handler);
+				handlers[event] = eventHandlers;
 			},
 		};
 		bdInitAdvisory(fakePi as never);
@@ -202,7 +204,9 @@ describe("integration", () => {
 				throw new Error("send failed");
 			},
 			on: (event: string, handler: (e: unknown) => unknown) => {
-				(handlers[event] ??= []).push(handler);
+				const eventHandlers = handlers[event] ?? [];
+				eventHandlers.push(handler);
+				handlers[event] = eventHandlers;
 			},
 		};
 		bdInitAdvisory(fakePi as never);
