@@ -69,6 +69,17 @@ describe("findCommitInvocations", () => {
 		);
 	});
 
+	test("direct git commit helpers are scanned", () => {
+		expect(
+			findCommitInvocations(
+				"/Library/Developer/CommandLineTools/usr/libexec/git-core/git-commit -m x",
+			),
+		).toEqual([{ repoDir: null, dryRun: false }]);
+		expect(
+			findCommitInvocations("/usr/libexec/git-core/git-commit --dry-run"),
+		).toEqual([{ repoDir: null, dryRun: true }]);
+	});
+
 	test("-C names the target repository, and repeats fold", () => {
 		expect(findCommitInvocations("git -C /repo commit -m x")).toEqual([
 			{ repoDir: "/repo", dryRun: false },

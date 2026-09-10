@@ -843,12 +843,14 @@ function scanInvocations(command: string): CommitInvocation[] {
 			out.push({ repoDir: null, dryRun: false, retargeted: true });
 			continue;
 		}
-		// Quoting removes syntax meaning, not argv meaning. A path-qualified executable is still
-		// git when its basename is `git` or `dgit`.
-		if (GIT_COMMANDS[token.text.split("/").at(-1) ?? ""] !== true) continue;
+		// Quoting removes syntax meaning, not argv meaning. Path-qualified executables retain
+		// their basename; Git also exposes the direct `git-commit` plumbing helper.
+		const gitCommand = token.text.split("/").at(-1) ?? "";
+		const directCommit = gitCommand === "git-commit";
+		if (!directCommit && GIT_COMMANDS[gitCommand] !== true) continue;
 
 		let repoDir: string | null = null;
-		let verb: string | null = null;
+		let verb: string | null = directCommit ? "commit" : null;
 		let dryRun = false;
 		let retargeted = prefixRetarget || exportedRetarget;
 		let aliasOpaque = false;
