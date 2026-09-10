@@ -1,13 +1,13 @@
 # quality
 
-Audit code for smells. Verify changes locally with quality gates and browser-verification guidance.
+Code-smell audits, local verification, and mechanical quality gates.
 
 ## Skills
 
 | Name | When |
 |------|------|
-| `sniff` | Audit code for smells, map each to [a catalog entry](https://refactoring.guru), and produce a vetted refactoring plan |
-| `verify` | Before handoff: final local verification pass |
+| `sniff` | Audit code for smells, map them to catalogued refactorings, and produce a vetted plan |
+| `verify` | Final local verification pass before handoff |
 
 ## Agents
 
@@ -27,13 +27,15 @@ findings, with no heavy test suites or architecture changes.
 
 | Name | When |
 |------|------|
-| `quality-browser-verification` | Browser-visible layout/interaction/rendering/state changes |
+| `quality-browser-verification` | Browser-visible UI changes |
+| `quality-sniff-analyzer-redirect` | Marked direct analyzer command during an active sniff run (TTSR advisory) |
 
 ## Tools
 
 The plugin's extension modules register:
 
 - `sniff_install_tools`
+- `sniff_run_analyzer`
 - `verify_repo`
 
 `verify_repo` reports incomplete verification when no checks run or a detected workflow lacks a prerequisite. Failed discovery or checks return `ok: false`; `complete` distinguishes missing coverage from executed failures.

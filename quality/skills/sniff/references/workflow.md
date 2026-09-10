@@ -95,58 +95,23 @@ explicit scope/tool approval; detection does not authorize scans or installation
 **Report:** first-party file count (with what was excluded), the detected stack,
 and which language docs you will use.
 
-## Step 2 -- Probe and offer tools
+## Step 2 -- Select exact analyzers and approve installs
 
-**Non-interactive runs:** probe without installing. Proceed only within the
-scope and tool set explicitly delegated by the user or an authorized parent.
-If either is missing, report the unresolved approval and stop before scanning.
-Record missing or `SHIM`/unrunnable tools as coverage gaps; do not use them.
+Build the run plan from every detected target's language or format reference. Enumerate
+each exact analyzer identity and argv. Installation bundles group catalog entries; they
+do not prove that a later analyzer run is usable.
 
-The interactive flow -- **mandatory, blocking checkpoint. Do NOT begin detection
-(Step 3) until the user has confirmed the tool set.** The model is **propose the
-full thorough set, user deselects** -- NOT "pick a depth" and NOT "the installed
-tools looked adequate". Every viable tool for the detected stack is pre-selected
-ON by default; the user trims, they don't opt in.
+In interactive runs, present the full tiered analyzer table and stop for confirmation
+before installing anything. Default-on analyzers start selected; opt-in, alternative,
+baseline, and redundant analyzers start off with their reason. In non-interactive runs,
+never install without prior authorization; unavailable selected analyzers become gaps.
 
-1. Run `sniff_install_tools` with `{"mode":"probe"}`.
-2. **Enumerate EVERY viable tool for each detected TARGET** -- this means every
-   programming language AND every config/format/contract/infra target present:
-   Terraform, Dockerfile, Kubernetes manifests, CI workflows, OpenAPI, GraphQL,
-   Protobuf, SQL, shell, YAML/JSON/TOML, Markdown, CSS -- each has its own doc
-   under `references/languages/` (the dir name is historical; it holds ALL target
-   docs, not just languages -- see `references/languages/index.md`). Pull each
-   detected target's tool table from its doc, plus the cross-language default-on
-   set from `references/tooling.md`. Do not stop at programming languages and do
-   not silently omit a target because it's "just config/infra" -- a Dockerfile or
-   a `.tf` dir is a detected target with default-on tools (hadolint, tflint, …).
-   A missing default-on tool is an *install*, not an omission.
-3. Present a **tiered table per detected language**:
+Use `sniff_install_tools` for catalog operations only:
 
-   ```
-   <LANGUAGE>            installed?   dimension                 tier      action
-     <tool>              ✓ / ✗ / SHIM <what it catches>         ON        (use / → install via <mgr>)
-     <opt-in tool>       ✗            <dimension>               opt-in    off unless you want it
-   ```
-   - **default-on** tools are pre-checked ON (install the missing ones).
-   - **opt-in** tools are shown but OFF, each with the one-line reason it's
-     opt-in (nightly / redundant-with-X / heavy / security-only / needs-baseline),
-     from the language doc.
-   - Note **overlap** so a deselect is informed (e.g. "sonarjs already covers
-     JS/TS complexity+dup, so lizard/jscpd add nothing here").
-4. **STOP and wait.** Default action if the user just says "go" = install every
-   missing **default-on** tool and run the full set. The user may deselect any
-   ("skip type-coverage") or enable an opt-in ("add cargo-udeps").
-   Use `sniff_install_tools` with `{"mode":"list"}` to inspect bundle membership;
-   install an entirely approved bundle with
-   `{"mode":"install","bundles":["<bundle>"],"path":"<repo-root>"}`.
-   A bundle installs ALL members, including opt-ins: for a subset use only the
-   individually approved install commands from the list (see `installer.md`).
-   **Never auto-install without confirmation or silently drop a default-on
-   tool.** A declined install becomes a reported coverage gap.
+- `list`: inventory canonical analyzer ids and installation metadata.
+- `probe`: show current availability while planning.
+- `install`: perform the explicitly approved installation path.
 
-**Report:** the resolved tool set per language (on / opt-in-skipped / gap), so the
-coverage section is honest about what ran. If you reach Step 3 without having
-enumerated and confirmed the full per-language set, you skipped a required step.
 
 ## Step 2.5 -- Inventory the project's existing lint config (MANDATORY, before any tool runs)
 
@@ -181,34 +146,52 @@ Rules:
   rules were in force.
 
 **Report:** the per-tool config inventory and how it shapes each invocation.
+None of those results authorizes execution. Run every selected analyzer through
+`sniff_run_analyzer` with its canonical id, analyzer argv, exact target root,
+selected hosted packages, and exit contract. The runner performs that tool's own
+preflight immediately before every invocation and then launches the exact resolved
+executable. It refuses unknown, missing, shimmed, unrunnable, or project-local-missing
+tools without executing analyzer argv. Never retry a refusal via Bash, Eval, Hub, or a
+hand-built command.
+
+Prefix every Bash command issued during this workflow with `OMP_SNIFF_ACTIVE=1`
+(or `env OMP_SNIFF_ACTIVE=1`). This command-local marker is the explicit
+sniff-active signal. The `quality-sniff-analyzer-redirect` advisory uses it only
+when the command directly invokes a catalogued analyzer. The marker never
+authorizes direct execution; only `sniff_run_analyzer` produces valid coverage.
+
+Framework-hosted plugins such as `eslint-plugin-sonarjs`, `eslint-plugin-unicorn`, and
+`@graphql-eslint/eslint-plugin` are configuration of the `eslint` analyzer, not separate
+runtime identities. Pass only the hosted packages selected for this invocation. The
+runner requires each one in the target's `node_modules` and requires the analyzer config
+to reference it. An installed but unconfigured package is a coverage gap.
+
+`acceptedExitCodes` defaults to `[0]`. Add a documented nonzero findings exit only when
+the exact analyzer invocation uses it; never add usage, configuration, crash, or internal
+error exits. A nonzero exit outside the declared contract is a structured coverage
+failure, not a successful launch.
+
+**Report:** one row per planned invocation:
+
+```text
+target | tool id | hosted packages | accepted exits | preflight status | resolved path | analyzer exit | result or gap
+```
+
+A runner-level refusal or rejected exit means the planned analyzer coverage is absent.
 
 ## Step 3 -- Tool-driven detection
 
-**Before running each language's tools, read that language doc's *Pragmatism
-notes* and *Idioms* sections** -- they tell you how to invoke the tool so it does
-not generate noise the project doesn't want (e.g. `markdownlint` with no
-`.markdownlint*` config emits MD013 line-length by default → pass `--disable
-MD013`; honor `.editorconfig` indent/line-length before flagging yamllint/
-markdownlint defaults). Suppressing default-noise at invocation is not the same
-as the Step 6 pragmatism pass -- do both.
+Run every selected analyzer through `sniff_run_analyzer` using its canonical id,
+configured argv, exact target root, selected hosted packages, and documented completion
+exits. Read the target reference's pragmatism and idiom guidance before invocation.
+Rules:
 
-For each detected language, run the installed tools using the exact invocation
-and machine-readable output flag from `references/tooling.md` and the language
-doc. Rules:
-
-- Respect the project's own tool config; do not override it. (This is why ruff
-  uses `--extend-select` not `--select`, and clippy adds `-W pedantic` only when
-  the repo pins no clippy config -- see the language docs.)
-- For any catalog tool that is **not** installed (or reported `SHIM`/unrunnable
-  by the probe), skip it, warn, and record an install hint -- never fail the run.
-- Collect findings verbatim (tool, rule id, file:line, message). Do not yet
-  prioritize.
-- **Re-filter tool output through the Step-1 reduced set -- on every run,
-  including whole-repo.** Directory-taking tools (clippy per-package, `semgrep .`,
-  config-file linters) do NOT honor your file list, so they surface findings in
-  generated/vendored files you already dropped. Intersect every tool's findings
-  with the reduced set before reporting; reduction is both an input scope AND an
-  output filter.
+- Respect project configuration; target-doc recipes are no-config fallbacks.
+- Treat a wrapper refusal as a coverage gap with status, path, and remediation.
+- Treat only declared completion exits as analyzer results; all other exits are INVALID.
+- Collect tool, rule id, file:line, and message without prioritizing.
+- Re-filter output through the Step-1 reduced file set.
+- Never retry a refused analyzer through Bash, Eval, Hub, or a hand-built command.
 
 **When the run is scoped** (target is not the whole repo), apply each tool's
 **analysis class** from `references/tooling.md` (per `targeting.md`):
