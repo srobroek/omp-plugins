@@ -92,6 +92,23 @@ def test_doctor_and_finish_blockers(tmp_path: Path) -> None:
     finish = run("finish", "--root", str(root))
     assert finish.returncode == 2
     assert payload(finish)["blockers"]
+    assert payload(finish)["state"] == "blocked"  # doctor drift is more than uncommitted output
+
+
+def test_finish_reports_ready_for_commit_when_only_output_is_uncommitted(tmp_path: Path, monkeypatch) -> None:
+    import importlib
+
+    sys.path.insert(0, str(CLI.parent))
+    scaffold = importlib.import_module("scaffold")
+    root = git_root(tmp_path)
+    (root / "x.txt").write_text("x\n")
+    monkeypatch.setattr(scaffold, "doctor", lambda r: ({"drift": []}, 0))
+    (root / ".omp").mkdir(exist_ok=True)
+    (root / ".omp/scaffold.json").write_text('{"owned_hashes": {"x.txt": "0"}, "layers": []}')
+    (root / ".omp/scaffold-run.json").write_text("{}")
+    result, code = scaffold.finish(root)
+    assert code == 2 and result["state"] == "ready-for-commit" and result["commitCommand"].startswith("git add")
+    assert (root / ".omp/scaffold-run.json").exists()
 
 
 def test_mise_block_rerender_keeps_provider_keys(tmp_path: Path) -> None:

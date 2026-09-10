@@ -1856,7 +1856,9 @@ def finish(root: Path) -> tuple[dict[str, Any], int]:
     dirty_owned = [line[3:].strip() for line in status.stdout.splitlines() if len(line) >= 4 and line[3:].strip().split(" -> ")[-1] in owned - state_files]
     if dirty_owned:
         blockers.append("scaffold-owned paths are uncommitted: " + ", ".join(sorted(dirty_owned)))
-    payload = {"ok": not blockers, "commitCommand": "git add -A && git commit -m 'chore: scaffold project'", "blockers": blockers, "doctor": doctor_payload}
+    only_uncommitted = bool(blockers) and all(b.startswith("scaffold-owned paths are uncommitted") for b in blockers)
+    state = "finished" if not blockers else ("ready-for-commit" if only_uncommitted else "blocked")
+    payload = {"ok": not blockers, "state": state, "commitCommand": "git add -A && git commit -m 'chore: scaffold project'", "blockers": blockers, "doctor": doctor_payload}
     if blockers:
         return payload, EXIT_DRIFT
     marker = root / ".omp/scaffold-run.json"
