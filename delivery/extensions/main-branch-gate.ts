@@ -649,7 +649,13 @@ function scanInvocations(command: string): CommitInvocation[] {
 					if (!operand.text.includes("=")) k++;
 					continue;
 				}
-				if (operand.text.startsWith("-")) continue;
+				if (operand.text.startsWith("-")) {
+					// GNU env accepts abbreviations and bundled short options. If this scanner does
+					// not recognise one exactly, it cannot know where the wrapped command starts.
+					out.push({ repoDir: null, dryRun: false, retargeted: true });
+					k = tokens.length;
+					break;
+				}
 				break;
 			}
 			i = k - 1;
