@@ -12,7 +12,7 @@
       "name": "agentic-scaffold",
       "description": "Deterministic project scaffolding from ordered template layers and Beads formulas.",
       "source": "./agentic-scaffold",
-      "version": "0.5.5",
+      "version": "0.5.6",
       "category": "development"
     },
     {
@@ -40,7 +40,7 @@
       "name": "beads",
       "description": "Beads issue tracking: dependency DAGs, formulas, and decisions recorded as beads.",
       "source": "./beads",
-      "version": "1.0.5",
+      "version": "1.0.6",
       "category": "productivity"
     },
     {
