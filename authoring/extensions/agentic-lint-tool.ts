@@ -86,7 +86,7 @@ function splitOnceTripleDash(text: string): string[] {
 	return ["", rest.slice(0, closing.index), rest.slice(closing.index + closing[0].length)];
 }
 
-type ParsedFrontmatter = {
+export type ParsedFrontmatter = {
 	values: Record<string, string>;
 	parsed: Record<string, unknown> | undefined;
 	body: string;
@@ -96,7 +96,7 @@ type ParsedFrontmatter = {
 	xLintOverrideReason: string;
 };
 
-function parseFrontmatter(text: string): ParsedFrontmatter {
+export function parseFrontmatter(text: string): ParsedFrontmatter {
 	const empty = {
 		values: {},
 		parsed: undefined,

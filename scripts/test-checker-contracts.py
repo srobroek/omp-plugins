@@ -316,5 +316,12 @@ class CheckerContracts(unittest.TestCase):
                 self.assertIn(field, result.stderr)
                 agent.write_text(valid_agent)
 
+        agent.write_text(valid_agent.replace("tools: read, grep", "tools: [read, grep]"))
+        result = gate()
+        self.assertNotEqual(result.returncode, 0, result.stdout)
+        self.assertIn(str(agent), result.stderr)
+        self.assertIn("tools", result.stderr)
+        agent.write_text(valid_agent)
+
 if __name__ == "__main__":
     unittest.main()

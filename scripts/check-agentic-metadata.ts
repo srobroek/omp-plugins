@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 import { readFileSync, readdirSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { lint, splitFrontmatter } from "../authoring/extensions/agentic-lint-tool.ts";
+import { lint, parseFrontmatter } from "../authoring/extensions/agentic-lint-tool.ts";
 
 // Discovery identity is checked separately by check-contract.py. Reuse the
 // authoring validator for YAML and runtime metadata, not historical prose style.
@@ -30,10 +30,15 @@ try {
 					if (severity === "ERROR") failed = true;
 				}
 				if (kind === "agents") {
-					const [metadata] = splitFrontmatter(readFileSync(path, "utf8"));
-					for (const field of ["model", "thinking-level", "tools"] as const) {
-						if (metadata[field]?.trim()) continue;
-						console.error(`${path}: ERROR E14: agent ${field} must be a nonempty frontmatter field`);
+					const metadata = parseFrontmatter(readFileSync(path, "utf8")).parsed;
+					for (const field of ["model", "thinking-level"] as const) {
+						if (typeof metadata?.[field] === "string" && metadata[field].trim()) continue;
+						console.error(`${path}: ERROR E14: agent ${field} must be a nonempty string`);
+						failed = true;
+					}
+					const tools = metadata?.tools;
+					if (typeof tools !== "string" || tools.split(",").some(tool => !tool.trim())) {
+						console.error(`${path}: ERROR E14: agent tools must be a nonempty comma-separated string`);
 						failed = true;
 					}
 				}
