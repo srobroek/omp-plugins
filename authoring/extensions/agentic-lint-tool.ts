@@ -1,8 +1,23 @@
-import { existsSync, lstatSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { existsSync, lstatSync, readdirSync, readFileSync, type Stats, statSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
+import type { AgentToolResult } from "@oh-my-pi/pi-agent-core";
+import type { TSchema } from "@oh-my-pi/pi-ai";
 import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
 
 type LintParams = { paths: string[] };
+
+/** The two shapes `agentic_lint` reports: an early refusal, or a completed run. */
+type LintDetails =
+	| { ok: boolean; error: string; paths: string[] }
+	| {
+			ok: boolean;
+			exitCode: number;
+			errors: number;
+			warns: number;
+			files: string[];
+			findings: Finding[];
+			stdout: string;
+	  };
 
 export type Finding = {
 	path: string;
@@ -430,7 +445,7 @@ export function main(argv: string[]): { exitCode: number; stdout: string } {
 }
 
 function collectFiles(entry: string): string[] {
-	let st;
+	let st: Stats;
 	try {
 		st = lstatSync(entry);
 	} catch {
@@ -452,7 +467,7 @@ function collectFiles(entry: string): string[] {
 		}
 		for (const name of ents) {
 			const p = join(dir, name);
-			let child;
+			let child: Stats;
 			try {
 				child = lstatSync(p);
 			} catch {
@@ -512,9 +527,12 @@ export default function agenticLintTool(pi: ExtensionAPI): void {
 			paths: z
 				.array(z.string())
 				.describe("Skill, rule, or agent markdown files or directories"),
-		}),
+		}) as unknown as TSchema, // pi.zod and the host TypeBox schema types differ.
 		approval: "read",
-		execute: async (_toolCallId, params: LintParams) => {
+		execute: async (
+			_toolCallId,
+			params: LintParams,
+		): Promise<AgentToolResult<LintDetails>> => {
 			try {
 				const files = params.paths.flatMap(collectFiles);
 				if (files.length === 0) {
