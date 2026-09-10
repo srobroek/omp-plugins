@@ -84,10 +84,15 @@ Two bd formulas pour the same steps as the runbook. Each formula has two human g
 
 ## Workspace rendering
 
-The `monorepo` profile adds the root `workspace` layer. Answers contain `[[members]]` entries with `name`, `layer`, `kind`, and `dir`. The engine renders root layers first. It then renders each member layer below its directory with a member variable scope. Managed blocks always resolve at the repository root.
+The `monorepo` profile selects the root `workspace` layer.
 
-Python and TypeScript members use `packages/<name>`. Rust members use `crates/<name>`. Go members use `cmd/<name>` or `services/<name>`. Mixed families produce one manifest per family. Release configuration contains one package entry per member.
+- Answers store `name`, `layer`, `kind`, and `dir` for each member.
+- The engine renders root layers before member layers.
+- Each member layer receives its own variable scope.
+- Managed blocks resolve at the repository root.
 
-Member language layers contribute namespaced recipes, scoped pre-commit hooks, and member CI jobs. Root aggregate recipes call each member. Member `mise.toml` files are not written. Root tools remain authoritative.
+Python and TypeScript members use `packages/<name>`. Rust members use `crates/<name>`. Go members use `cmd/<name>` or `services/<name>`. Each family gets one manifest. Release configuration gets one package entry per member.
 
-The `moon` layer is opt-in and requires `workspace`. The `worktrunk` layer is opt-in and can be used with any profile. Both are represented in `layers show` and are rendered from their layer directories.
+Language layers add namespaced recipes, scoped hooks, and member CI jobs. Root recipes call each member. The renderer does not write member `mise.toml` files. Root tools remain authoritative.
+
+The `moon` layer requires `workspace`. The `worktrunk` layer works with any profile. `layers show` reports both layers. The renderer reads their template directories.

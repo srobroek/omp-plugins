@@ -1,6 +1,6 @@
 # agentic-scaffold
 
-Deterministic repository scaffolding from ordered template layers and Beads formulas. Install it with:
+A deterministic repository scaffold uses ordered template layers and Beads formulas. Install it with:
 
 ```sh
 omp plugin install agentic-scaffold@srobroek-omp
@@ -31,7 +31,7 @@ python3 "$SCAFFOLD" plugins sync --root R
 
 ## Monorepos
 
-Use the `monorepo` profile for a root workspace. Add nested language members before rendering:
+For a root workspace, use the `monorepo` profile. Add nested members in a second step.
 
 ```sh
 python3 "$SCAFFOLD" answers write --root R --profile monorepo --name demo
@@ -40,7 +40,7 @@ python3 "$SCAFFOLD" member add --root R --name web --layer lang/ts --kind lib
 python3 "$SCAFFOLD" render --root R
 ```
 
-Member files are rooted below `packages/<name>` for Python and TypeScript. Root manifests are generated per language family. Root recipes and hooks scope each member. `member remove` updates the answers and reports the directory. It never deletes files.
+The renderer puts Python and TypeScript members under `packages/<name>`. It writes one manifest for each language family. Root recipes and hooks scope each member. `member remove` updates answers and reports the directory. It never deletes files.
 
 Flags and conventions:
 
