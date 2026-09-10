@@ -1,8 +1,7 @@
-import { homedir, tmpdir } from "node:os";
-import { mkdtempSync, mkdirSync, rmSync } from "node:fs";
-import { join } from "node:path";
-
 import { afterEach, describe, expect, test } from "bun:test";
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
+import { join } from "node:path";
 
 import mainBranchGate, {
 	currentBranch,
@@ -439,7 +438,9 @@ describe("integration", () => {
 			zod: {},
 			registerTool: () => { },
 			on: (event: string, handler: (e: unknown) => unknown) => {
-				(handlers[event] ??= []).push(handler);
+				const registered = handlers[event] ?? [];
+				registered.push(handler);
+				handlers[event] = registered;
 			},
 		};
 		mainBranchGate(fakePi as never);

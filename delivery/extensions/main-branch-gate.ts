@@ -24,7 +24,7 @@ import { accessSync, constants, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, isAbsolute, join, resolve } from "node:path";
 
-import type { ExtensionAPI, ExtensionToolCallEvent } from "@oh-my-pi/pi-coding-agent";
+import type { ExtensionAPI, ToolCallEvent } from "@oh-my-pi/pi-coding-agent";
 
 const TIMEOUT_MS = 2000;
 
@@ -94,9 +94,9 @@ function defaultRun(argv: string[], cwd: string): { exitCode: number; stdout: st
  return { exitCode: proc.exitCode ?? 1, stdout: proc.stdout.toString() };
 }
 
-export function extractCommand(input: Record<string, unknown>): string {
- if (typeof input.command === "string") return input.command;
- if (typeof input.cmd === "string") return input.cmd;
+export function extractCommand(input: ToolCallEvent["input"]): string {
+ if ("command" in input && typeof input.command === "string") return input.command;
+ if ("cmd" in input && typeof input.cmd === "string") return input.cmd;
  return "";
 }
 
@@ -306,7 +306,9 @@ export function findCommitInvocations(
     continue;
    }
    const expanded = dir === "~" || dir.startsWith("~/") ? resolve(homedir(), dir.slice(2)) : dir;
-   const destination = chdir === null || chdirUnknown ? expanded : resolve(cwd, chdir, expanded);
+   // Annotated because `chdir` is assigned from this value below, and the
+   // inferred types would otherwise reference each other.
+   const destination: string = chdir === null || chdirUnknown ? expanded : resolve(cwd, chdir, expanded);
    if (canChdir && !chdirUnknown && !canChdir(destination)) {
     failedCd = true;
     continue;
@@ -440,7 +442,7 @@ export function decideCommit(
 }
 
 export default function mainBranchGate(pi: ExtensionAPI): void {
- pi.on("tool_call", (event: ExtensionToolCallEvent) => {
+ pi.on("tool_call", (event: ToolCallEvent) => {
   try {
    if (event.toolName !== "bash") return;
    const command = extractCommand(event.input);

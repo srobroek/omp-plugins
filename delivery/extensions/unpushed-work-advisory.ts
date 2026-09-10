@@ -405,12 +405,15 @@ export default function unpushedWorkAdvisory(pi: ExtensionAPI): void {
 		for (const state of states.values()) state.lastFired = false;
 	});
 	pi.on("tool_call", (event, ctx) => {
-		if (WRITING_TOOLS[event.toolName] !== true &&
-			(event.toolName !== "bash" || typeof event.input.command !== "string" ||
-				!/\bd?git\b[\s\S]*\bcommit\b/.test(event.input.command))) return;
+		let isGitCommit = false;
+		if (event.toolName === "bash") {
+			const command = event.input.command;
+			isGitCommit = typeof command === "string" && /\bd?git\b[\s\S]*\bcommit\b/.test(command);
+		}
+		if (WRITING_TOOLS[event.toolName] !== true && !isGitCommit) return;
 		try {
-			const cwd = resolve(typeof event.input.cwd === "string" && event.input.cwd
-				? event.input.cwd : ctx?.cwd || process.cwd());
+			const rawCwd = "cwd" in event.input ? event.input.cwd : undefined;
+			const cwd = resolve(typeof rawCwd === "string" && rawCwd ? rawCwd : ctx?.cwd || process.cwd());
 			stateFor(cwd);
 		} catch {
 			// Advisory observation must never block a tool.
@@ -418,10 +421,12 @@ export default function unpushedWorkAdvisory(pi: ExtensionAPI): void {
 	});
 	pi.on("tool_result", (event, ctx: { cwd?: string }) => {
 		try {
-			const cwd = resolve(typeof event.input?.cwd === "string" && event.input.cwd
-				? event.input.cwd : ctx?.cwd || process.cwd());
+			const input = event.input as Record<string, unknown> | undefined;
+			const rawCwd = input?.cwd;
+			const cwd = resolve(typeof rawCwd === "string" && rawCwd
+				? rawCwd : ctx?.cwd || process.cwd());
 			const state = stateFor(cwd);
-			const paths = extractWrittenPaths(event.toolName, event.isError, event.input, event.details);
+			const paths = extractWrittenPaths(event.toolName, event.isError, input, event.details);
 			for (const path of paths) recordAgentPath(cwd, path, state.agentPaths);
 		} catch {
 			// Attribution is best-effort and must never disturb a tool result.
