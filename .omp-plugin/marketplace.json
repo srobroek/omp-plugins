@@ -12,7 +12,7 @@
       "name": "agentic-scaffold",
       "description": "Deterministic project scaffolding from ordered template layers and Beads formulas.",
       "source": "./agentic-scaffold",
-      "version": "0.3.1",
+      "version": "0.3.2",
       "category": "development"
     },
     {
@@ -89,14 +89,14 @@
       "name": "design",
       "description": "UI and UX design: system audit, DESIGN.md, browser verification, accessibility, tokens, and Component Driven build.",
       "source": "./design",
-      "version": "0.3.2",
+      "version": "0.3.3",
       "category": "development"
     },
     {
       "name": "diagram",
       "description": "Interactive diagramming and architecture-sketching canvas over MCP.",
       "source": "./diagram",
-      "version": "0.2.3",
+      "version": "0.2.4",
       "category": "productivity"
     },
     {

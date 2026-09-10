@@ -1,5 +1,5 @@
 {
-  "agentic-scaffold": "0.3.1",
+  "agentic-scaffold": "0.3.2",
   "architecture": "0.3.1",
   "authoring": "2.0.0",
   "backend": "0.3.0",
@@ -10,8 +10,8 @@
   "debate": "0.3.1",
   "delivery": "0.8.0",
   "dep-update": "0.6.1",
-  "design": "0.3.2",
-  "diagram": "0.2.3",
+  "design": "0.3.3",
+  "diagram": "0.2.4",
   "eli5": "0.3.1",
   "find-tools": "1.0.0",
   "go": "0.3.1",

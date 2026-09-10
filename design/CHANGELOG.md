@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.3](https://github.com/srobroek/omp-plugins/compare/design--v0.3.2...design--v0.3.3) (2026-09-10)
+
+
+### Documentation
+
+* **mcp:** clarify active profile config paths ([#104](https://github.com/srobroek/omp-plugins/issues/104)) ([4a686ed](https://github.com/srobroek/omp-plugins/commit/4a686edac6e92841f12f9bca81c2a96760662274))
+
 ## [0.3.2](https://github.com/srobroek/omp-plugins/compare/design--v0.3.1...design--v0.3.2) (2026-09-10)
 
 
