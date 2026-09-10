@@ -615,6 +615,7 @@ function scanInvocations(command: string): CommitInvocation[] {
 					operand.text.startsWith("-S") && operand.text !== "-S";
 				if (operand.text.startsWith("-C") && operand.text !== "-C") {
 					prefixRetarget = true;
+					out.push({ repoDir: null, dryRun: false, retargeted: true });
 					continue;
 				}
 				if (operand.text.startsWith("-u") && operand.text !== "-u") continue;
@@ -636,6 +637,7 @@ function scanInvocations(command: string): CommitInvocation[] {
 				) {
 					// GNU env accepts unambiguous long-option abbreviations such as `--ch`.
 					prefixRetarget = true;
+					out.push({ repoDir: null, dryRun: false, retargeted: true });
 					if (!operand.text.includes("=")) k++;
 					continue;
 				}
@@ -669,6 +671,7 @@ function scanInvocations(command: string): CommitInvocation[] {
 					optionName === "--chdir"
 				) {
 					prefixRetarget = true;
+					out.push({ repoDir: null, dryRun: false, retargeted: true });
 					if (!operand.text.includes("=")) k++;
 					continue;
 				}

@@ -368,6 +368,11 @@ describe("findCommitInvocations", () => {
 			["env -S '$" + "{RUNNER} commit -m x'", { RUNNER: "git" }],
 			["env -ivS '$" + "{RUNNER} commit -m x'", { RUNNER: "git" }],
 			["env --split-string '$" + "{RUNNER} commit -m x'", { RUNNER: "git" }],
+			["env -C/protected $" + "{RUNNER} commit -m x", { RUNNER: "git" }],
+			["sudo -D /protected $" + "{RUNNER} commit -m x", { RUNNER: "git" }],
+			["env -C /protected $" + "{RUNNER} commit -m x", { RUNNER: "git" }],
+			["env --ch=/protected $" + "{RUNNER} commit -m x", { RUNNER: "git" }],
+			["sudo --chdir=/protected $" + "{RUNNER} commit -m x", { RUNNER: "git" }],
 		] as Array<[string, Record<string, string>]>) {
 			const { run, calls } = fakeGit({
 				"/feature": "feature",
