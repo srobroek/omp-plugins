@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.8](https://github.com/srobroek/omp-plugins/compare/agentic-scaffold--v0.5.7...agentic-scaffold--v0.5.8) (2026-09-10)
+
+
+### Bug Fixes
+
+* **agentic-scaffold:** stop choosing a beads database ([#133](https://github.com/srobroek/omp-plugins/issues/133)) ([6a9d1da](https://github.com/srobroek/omp-plugins/commit/6a9d1dad9d1adcfaab832bdc149faea49ca4a477))
+
 ## [0.5.7](https://github.com/srobroek/omp-plugins/compare/agentic-scaffold--v0.5.6...agentic-scaffold--v0.5.7) (2026-09-10)
 
 
