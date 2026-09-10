@@ -10,9 +10,11 @@ MUST Let the bd CLI own initialization and generated integration: bootstrap
   `bd where` and `bd hooks list`. A `bd init` that omits `--skip-hooks` draws
   one advisory from the `bd-init-advisory` extension; nothing is blocked,
   because the flag is contextual.
-MUST Whatever starts a run export `BEADS_DIR` to that run's `.beads` directory,
-  so every child process inherits the pin. That is what makes a worktree or a
-  copied checkout read and write the run's database.
+FACT The beads plugin pins `BEADS_DIR` for the session: the checkout's `.beads`
+  (a linked worktree resolves to the primary checkout's) rides on every Bash call,
+  and a value exported before omp started is kept. Verify with `printenv BEADS_DIR`.
+NOT Ask the human to export `BEADS_DIR` or restart omp when that prints an absolute
+  path, and do not pass `BEADS_DIR` on calls yourself.
 GOTCHA Unpinned, a read from a directory with no `.beads/` reports
   `No active beads workspace found`, and a copied checkout can resolve a
   personal database instead. `$HOME/.beads` exists on this machine.

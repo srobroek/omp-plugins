@@ -110,14 +110,14 @@ export function missingInitFlags(flags: string[]): MissingFlags | undefined {
 }
 
 const BEADS_DIR_ADVICE =
-	"Whatever starts a run must export `BEADS_DIR` to that run's `.beads` " +
-	"directory so every child process inherits the pin. That is what makes a " +
-	"worktree or a copied checkout read and write the run's database. Unpinned, " +
-	"a read from a directory with no `.beads/` reports `No active beads " +
+	"The beads plugin pins `BEADS_DIR` for this session: the checkout's `.beads` " +
+	"(a linked worktree resolves to the primary checkout's) is placed on every Bash " +
+	"call, and a `BEADS_DIR` exported before omp started is kept. Verify with " +
+	"`printenv BEADS_DIR`; an absolute path means the pin is in place. Do not ask " +
+	"the human to export it or restart omp, and do not pass it on calls yourself. " +
+	"Unpinned, a read from a directory with no `.beads/` reports `No active beads " +
 	"workspace found`, and a copied checkout can resolve a personal database " +
-	"instead (`$HOME/.beads` exists on this machine). Something must own the " +
-	"pin: a harness that copies a checkout without setting it still splits the " +
-	"database. Measured: a copied 54-bead database accepted `create` and " +
+	"instead (`$HOME/.beads` exists on this machine).";
 	"`--claim` with none of it reaching the original.";
 
 const SKIP_HOOKS_ADVICE =

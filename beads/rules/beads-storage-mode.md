@@ -1,6 +1,6 @@
 ---
 name: beads-storage-mode
-description: "Storage backend choice and its coordination consequences: embedded resolves a path, a copied checkout forks the database, and an absolute BEADS_DIR is the pin every checkout shape needs. Read before enabling isolation or worktrees against a beads repo."
+description: "Storage backend choice and its coordination consequences: embedded resolves a path, a copied checkout forks the database, and the plugin pins BEADS_DIR for every checkout shape. Read before enabling isolation or worktrees against a beads repo."
 ---
 
 # Beads storage mode
@@ -22,31 +22,31 @@ MUST Decide isolation from the resolution mechanism:
 - Embedded resolves a PATH, so a copied checkout resolves a second database.
 - Server mode resolves a HOST AND PORT, which copying cannot change.
 
-## Pin the run's database first
+## The database pin
 
-MUST Export `BEADS_DIR` as the absolute path of the run's `.beads`, wherever
-  the run starts. Child
-  processes inherit it. That export is the remedy that works on an existing
-  embedded project.
+FACT The beads plugin pins the database. At `session_start` it sets `BEADS_DIR` on the
+  omp process to the checkout's `.beads` (a linked worktree resolves to the primary
+  checkout's), and its `tool_call` hook places that value on every Bash call that
+  carries no `BEADS_DIR` of its own. A `BEADS_DIR` exported before omp started is
+  kept and mirrored instead. Verify with `printenv BEADS_DIR`: an absolute path means
+  the pin is in place.
 
-GOTCHA Without the pin, bd walks up from the working directory. Measured: from a
-  directory that holds no `.beads/`, a pinned `bd list` returned the run's
-  beads, and the same read unpinned reported `No active beads workspace found`.
-  Two concurrent writers from different working directories both landed theirs
-  in one embedded store when a parent set `BEADS_DIR`.
+NOT Ask the human to export `BEADS_DIR` or restart omp when `printenv BEADS_DIR`
+  already prints an absolute path. The value arriving through the call environment is
+  the pin; how it got there is the plugin's job, not the session's.
 
-MUST Pin every checkout shape, with no exemption. A worktree, a clone and a copy
-  all get the same export, so nobody has to remember which kind they are in.
+NOT Pass `BEADS_DIR` on a Bash call yourself. The hook does it; a hand-written value
+  can name the wrong database and the orchestrate gate refuses one that does not match
+  a bound run. `bd -C <repo>` is likewise not a pin.
 
-FACT A linked git worktree resolves the primary checkout's database unaided: five
-  live worktrees, none holding `.beads/`, every one reading its beads through
-  `bd where`. That is why the pin is cheap there, and not a reason to skip it.
-  Skipping depends on bd's resolution behavior and on the worktree holding no
-  `.beads/`, while the pin depends on neither.
+GOTCHA Without a pin, bd walks up from the working directory. Measured: from a
+  directory that holds no `.beads/`, a pinned `bd list` returned the run's beads, and
+  the same read unpinned reported `No active beads workspace found`. Two concurrent
+  writers from different working directories both landed theirs in one embedded store
+  when a parent set `BEADS_DIR`. This is why the plugin pins every checkout shape.
 
-NOT A per-call pin (`bd -C <repo>`). It has to be right on every call, nothing
-  enforces it, and a parent sets `BEADS_DIR` once. `srobroek/omp-orchestrate`
-  retired that pin for that reason.
+FACT `printenv BEADS_DIR` printing nothing means the session's checkout has no
+  `.beads/` and no primary checkout with one. Say so; do not invent a path.
 
 ## What embedded costs under isolation
 
@@ -82,7 +82,7 @@ NOT `bd init --server` as the default answer to a copied checkout. Server mode
 GOTCHA A container in its own network namespace cannot reach a loopback-bound
   Dolt server at any address. Embedded Dolt sync then fails under that network.
 
-DEFAULT Keep an existing embedded project. Pin `BEADS_DIR`. Reach for server
+DEFAULT Keep an existing embedded project under the plugin's pin. Reach for server
   mode only when many writers on one machine must share a store without
   inheriting an environment, and something outside bd owns the process.
 
