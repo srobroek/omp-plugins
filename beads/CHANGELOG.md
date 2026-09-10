@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.9](https://github.com/srobroek/omp-plugins/compare/beads--v1.0.8...beads--v1.0.9) (2026-09-10)
+
+
+### Bug Fixes
+
+* **beads:** a linked worktree pins to the primary checkout's database ([#139](https://github.com/srobroek/omp-plugins/issues/139)) ([6def97d](https://github.com/srobroek/omp-plugins/commit/6def97d94593885de18e985c0c45e4d74e88b298))
+
 ## [1.0.8](https://github.com/srobroek/omp-plugins/compare/beads--v1.0.7...beads--v1.0.8) (2026-09-10)
 
 
