@@ -333,6 +333,7 @@ describe("findCommitInvocations", () => {
 			["env -S 'GIT_DIR=/protected/.git git commit -m x'", {}],
 			["env --split-string='GIT_WORK_TREE=/protected git commit -m x'", {}],
 			["env -S 'git commit -m x'", {}],
+			['env -S"git commit -m x"', {}],
 		] as Array<[string, Record<string, string>]>) {
 			const { run, calls } = fakeGit({
 				"/feature": "feature",
@@ -360,6 +361,15 @@ describe("findCommitInvocations", () => {
 			),
 		).toBeUndefined();
 		expect(calls.map((call) => call.cwd)).toEqual(["/feature"]);
+	});
+
+	test("a non-git split payload does not invent a commit", () => {
+		const { run, calls } = fakeGit({ "/feature": "feature" });
+		setGitRunForTests(run);
+		expect(
+			decideCommit("env -S 'printf hello'", "/feature", {}),
+		).toBeUndefined();
+		expect(calls).toEqual([]);
 	});
 
 	test("a possibly skipped target export fails closed", () => {

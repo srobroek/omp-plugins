@@ -530,17 +530,25 @@ function scanInvocations(command: string): CommitInvocation[] {
 				const optionName = operand.text.includes("=")
 					? operand.text.slice(0, operand.text.indexOf("="))
 					: operand.text;
-				if (optionName === "-S" || optionName === "--split-string") {
-					const splitValue = operand.text.includes("=")
-						? operand.text.slice(operand.text.indexOf("=") + 1)
-						: (tokens[k + 1]?.text ?? "");
+				const attachedShortSplit =
+					operand.text.startsWith("-S") && operand.text !== "-S";
+				if (
+					attachedShortSplit ||
+					optionName === "-S" ||
+					optionName === "--split-string"
+				) {
+					const splitValue = attachedShortSplit
+						? operand.text.slice(2)
+						: operand.text.includes("=")
+							? operand.text.slice(operand.text.indexOf("=") + 1)
+							: (tokens[k + 1]?.text ?? "");
 					// `env -S` performs its own argv split. Reusing the shell scanner would give
 					// separators and quotes meanings they do not have there, while skipping the
 					// payload hides an embedded commit. Conservatively refuse any split payload
-					// mentioning git when the outer prefilter selected this command.
+					// mentioning git, even without a target assignment.
 					if (/\bd?git\b/.test(splitValue))
 						out.push({ repoDir: null, dryRun: false, retargeted: true });
-					if (!operand.text.includes("=")) k++;
+					if (!attachedShortSplit && !operand.text.includes("=")) k++;
 					continue;
 				}
 				if (ENV_VALUE_OPTIONS[optionName] === true) {
