@@ -122,6 +122,17 @@ describe("findCommitInvocations", () => {
 			]);
 		}
 	});
+
+	test("config-env Git aliases fail closed", () => {
+		for (const command of [
+			"git --config-env=alias.ci=ALIAS ci -m x",
+			"git --config-env alias.ci=ALIAS ci -m x",
+		]) {
+			expect(findCommitInvocations(command), command).toEqual([
+				{ repoDir: null, dryRun: false, retargeted: true },
+			]);
+		}
+	});
 	test("dry-run is a commit option, not a message or path", () => {
 		expect(findCommitInvocations("git commit --dry-run")).toEqual([
 			{ repoDir: null, dryRun: true },

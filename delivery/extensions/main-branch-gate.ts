@@ -145,6 +145,7 @@ const PRE_VERB_VALUE_FLAGS: Record<string, true> = {
 	"--exec-path": true,
 	"--git-dir": true,
 	"--namespace": true,
+	"--config-env": true,
 	"--work-tree": true,
 };
 
@@ -788,10 +789,19 @@ function scanInvocations(command: string): CommitInvocation[] {
 					/^alias\.[^=]+=/.test(arg.text.slice(eq + 1))
 				)
 					aliasOpaque = true;
+				if (
+					verb === null &&
+					name === "--config-env" &&
+					eq !== -1 &&
+					arg.text.slice(eq + 1).startsWith("alias.")
+				)
+					aliasOpaque = true;
 				if (eq === -1 && verb === null && PRE_VERB_VALUE_FLAGS[name] === true) {
 					const value = tokens[j + 1];
 					if (value !== undefined && !isSep(value)) {
 						if (name === "-c" && /^alias\.[^=]+=/.test(value.text))
+							aliasOpaque = true;
+						if (name === "--config-env" && value.text.startsWith("alias."))
 							aliasOpaque = true;
 						if (name === "-C")
 							repoDir =
