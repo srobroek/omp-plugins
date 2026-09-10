@@ -1,8 +1,7 @@
+import { describe, expect, test } from "bun:test";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-
-import { describe, expect, test } from "bun:test";
 
 import depManifestAdvisory, {
 	adviseForAnchoredEdit,
@@ -14,8 +13,8 @@ import depManifestAdvisory, {
 	manifestKind,
 	parseHashline,
 	patternLiterals,
-	touchesRegion,
 	type Reader,
+	touchesRegion,
 } from "./dep-manifest-advisory.ts";
 
 const CWD = "/tmp/dep-manifest-advisory-fixture";
@@ -341,7 +340,9 @@ describe("integration", () => {
 			zod: {},
 			registerTool: () => {},
 			on: (event: string, handler: (e: Record<string, unknown>, ctx: { cwd: string }) => unknown) => {
-				(handlers[event] ??= []).push((e) => handler(e, { cwd }));
+				const registered = handlers[event] ?? [];
+				registered.push((e) => handler(e, { cwd }));
+				handlers[event] = registered;
 			},
 		} as never);
 		return handlers;

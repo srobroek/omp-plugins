@@ -1,11 +1,6 @@
 import { basename, dirname, isAbsolute, relative, resolve } from "node:path";
 
-import type {
-	ExtensionAPI,
-	ExtensionToolCallEvent,
-	ExtensionToolResultEvent,
-} from "@oh-my-pi/pi-coding-agent";
-
+import type { ExtensionAPI, ToolCallEvent, ToolResultEvent } from "@oh-my-pi/pi-coding-agent";
 import { ancestors, firstPresent, readText } from "./lib";
 
 /**
@@ -412,9 +407,9 @@ export function formatAdvisory(hits: Hit[], cwd: string): string {
 }
 
 function prepend(
-	event: ExtensionToolResultEvent,
+	event: ToolResultEvent,
 	text: string,
-): { content: ExtensionToolResultEvent["content"] } {
+): { content: ToolResultEvent["content"] } {
 	const banner = `<system-reminder>\n${text}\n</system-reminder>\n\n`;
 	if (event.content[0]?.type === "text") {
 		return {
@@ -428,17 +423,21 @@ function prepend(
 
 export default function depManifestAdvisory(pi: ExtensionAPI): void {
 	const pending = new Map<string, { hits: Hit[]; cwd: string }>();
-	pi.on("tool_call", (event: ExtensionToolCallEvent, ctx) => {
+	pi.on("tool_call", (event: ToolCallEvent, ctx) => {
 		try {
+			// This module reads tool payloads by dynamic key (`stringField`,
+			// `EDIT_PAYLOAD_KEYS`), so the untyped host input is narrowed once here
+			// rather than per key. `collectHits` stays callable with plain objects.
+			const input = event.input as Record<string, unknown>;
 			const cwd = ctx.cwd;
-			const hits = collectHits(event.toolName, event.input ?? {}, cwd);
+			const hits = collectHits(event.toolName, input, cwd);
 			if (hits.length > 0) pending.set(event.toolCallId, { hits, cwd });
 		} catch {
 			return;
 		}
 	});
 
-	pi.on("tool_result", (event: ExtensionToolResultEvent) => {
+	pi.on("tool_result", (event: ToolResultEvent) => {
 		try {
 			const entry = pending.get(event.toolCallId);
 			pending.delete(event.toolCallId);
