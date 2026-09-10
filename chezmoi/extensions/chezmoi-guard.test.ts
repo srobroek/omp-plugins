@@ -36,7 +36,9 @@ function fakePi(): { handlers: Record<string, Handler[]>; pi: { zod: unknown; re
 			zod: chain,
 			registerTool: () => {},
 			on: (ev, h) => {
-				(handlers[ev] ??= []).push(h);
+				const registered = handlers[ev] ?? [];
+				registered.push(h);
+				handlers[ev] = registered;
 			},
 		},
 	};
