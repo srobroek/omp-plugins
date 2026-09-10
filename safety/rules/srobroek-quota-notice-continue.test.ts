@@ -4,8 +4,9 @@ import * as path from "node:path";
 
 /**
  * `srobroek-quota-notice-continue` matches only the bare gateway line. The
- * corpus behind these cases is 43,903 assistant texts from live sessions:
- * 94 emissions, 94 fires, 0 false positives (2026-09-10).
+ * corpus behind these cases is 44,288 assistant texts from live sessions:
+ * 116 whole-line emissions ("weighted" and plain), 116 fires, every fire the
+ * whole text, 0 false positives (2026-09-10).
  */
 const RULE = path.join(import.meta.dir, "srobroek-quota-notice-continue.md");
 
@@ -22,6 +23,8 @@ function condition(): RegExp {
 
 const FIRE = [
 	"You have 31348 weighted tokens left",
+	"You have 8020 tokens left.",
+	"You have 65176 tokens left",
 	"You have 351 weighted tokens left\n",
 	"Reading files.\nYou have 863 weighted tokens left\n",
 	"  You have 8,162 weighted tokens left.",
