@@ -1616,16 +1616,13 @@ def _tool_command(tool: str) -> str:
 
 
 def _bd_environment(root: Path) -> dict[str, str]:
-    """Environment for the scaffold's own bd calls.
+    """Environment for the scaffold's own bd calls: the session's, plus this caller's actor.
 
-    An inherited absolute BEADS_DIR that names an existing directory is the session's pin and is
-    kept: in a linked worktree it points at the primary database, and replacing it would fork one.
-    Anything else (unset, relative, missing) falls back to the project's own .beads.
+    The database is not chosen here. The beads plugin pins BEADS_DIR for the session, and bd
+    resolves .beads from the working directory when nothing is pinned; every bd call runs with
+    cwd=root.
     """
     env = os.environ.copy()
-    inherited = env.get("BEADS_DIR", "")
-    if not (inherited and os.path.isabs(inherited) and Path(inherited).is_dir()):
-        env["BEADS_DIR"] = str((root / ".beads").resolve())
     env["BEADS_ACTOR"] = f"agentic-scaffold/{env.get('OMP_SESSION_ID', 'local')}"
     return env
 
