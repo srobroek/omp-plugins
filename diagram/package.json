@@ -1,6 +1,6 @@
 {
   "name": "@srobroek/diagram",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "description": "Interactive diagramming and architecture-sketching canvas over MCP.",
   "private": true,
   "omp": {}

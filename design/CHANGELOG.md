@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.2](https://github.com/srobroek/omp-plugins/compare/design--v0.3.1...design--v0.3.2) (2026-09-10)
+
+
+### Documentation
+
+* **mcp:** document packaged profile overrides ([#100](https://github.com/srobroek/omp-plugins/issues/100)) ([6d18129](https://github.com/srobroek/omp-plugins/commit/6d18129d1a5d58003337f8b97789260fb4663963))
+
 ## [0.3.1](https://github.com/srobroek/omp-plugins/compare/design--v0.3.0...design--v0.3.1) (2026-09-10)
 
 
