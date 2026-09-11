@@ -13,6 +13,7 @@ import json
 import os
 import shlex
 import re
+import pathlib
 import shutil
 import subprocess
 import tempfile
@@ -2375,33 +2376,8 @@ def _owned_status_line(line: str, owned: set[str]) -> bool:
     if rel.endswith("/"):
         return any(path.startswith(rel) for path in owned)
     return rel in owned or any(rel.startswith(path.rstrip("/") + "/") for path in owned if path.endswith("/"))
-TOOL_RESOLUTION_TIMEOUT = 5
 
-def _tool_status(root: Path, tool: str) -> str:
-    """Classify declared tools as MISS, SHIM, or ok without invoking them."""
-    command = _tool_command(tool)
-    if shutil.which(command) is None:
-        return "MISS"
-    try:
-        probe = subprocess.run(["mise", "which", command], cwd=root, env=_project_mise_env(root), stdin=subprocess.DEVNULL, capture_output=True, text=True, check=False, timeout=TOOL_RESOLUTION_TIMEOUT)
-    except (OSError, subprocess.TimeoutExpired):
-        return "SHIM"
-    return "ok" if probe.returncode == 0 else "SHIM"
-TOOL_RESOLUTION_TIMEOUT = 5
 
-def _tool_status(root: Path, tool: str) -> str:
-    """Classify declared tools as MISS, SHIM, or ok without invoking them.
-
-    If mise is unavailable, doctor deliberately falls back to PATH presence.
-    """
-    command = _tool_command(tool)
-    if shutil.which(command) is None:
-        return "MISS"
-    try:
-        probe = subprocess.run(["mise", "which", command], cwd=root, env=_project_mise_env(root), stdin=subprocess.DEVNULL, capture_output=True, text=True, check=False, timeout=TOOL_RESOLUTION_TIMEOUT)
-    except (OSError, subprocess.TimeoutExpired):
-        return "SHIM"
-    return "ok" if probe.returncode == 0 else "SHIM"
 
 
 def _tool_available(root: Path, tool: str) -> bool:
@@ -2420,10 +2396,34 @@ def _tool_status(root: Path, tool: str) -> str:
     command = _tool_command(tool)
     if shutil.which(command) is None:
         return "MISS"
+    if shutil.which("mise") is None:
+        # No mise on this machine, so nothing can be a mise shim and there is no
+        # project resolution to consult. Presence is the only signal available, and
+        # reporting every declared tool as broken here would be worse than useless.
+        return "ok"
+    if "/mise/shims/" not in str(pathlib.Path(shutil.which(command) or "").resolve(strict=False)) and "/mise/shims/" not in (shutil.which(command) or ""):
+        # A real binary on PATH, not a mise shim. `mise which` would answer "mise does
+        # not manage this for this project", which says nothing about whether the tool
+        # runs -- git and ruff both answer non-zero there while being perfectly usable.
+        # Only a PATH entry that IS a shim can be a DEAD shim.
+        return "ok"
     try:
-        probe = subprocess.run(["mise", "which", command], cwd=root, env=_project_mise_env(root), stdin=subprocess.DEVNULL, capture_output=True, text=True, check=False, timeout=TOOL_RESOLUTION_TIMEOUT)
-    except (OSError, subprocess.TimeoutExpired):
+        probe = subprocess.run(
+            ["mise", "which", command],
+            cwd=root,
+            env=_project_mise_env(root),
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=TOOL_RESOLUTION_TIMEOUT,
+        )
+    except subprocess.TimeoutExpired:
         return "SHIM"
+    except OSError:
+        # mise was on PATH a moment ago but could not be executed. Treat that as an
+        # environment problem rather than a verdict about the tool.
+        return "ok"
     return "ok" if probe.returncode == 0 else "SHIM"
 
 

@@ -13,21 +13,47 @@ import conftest
 
 scaffold_module = conftest.load_scaffold()
 
-def test_declared_git_is_ok_without_invocation(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_tool_status_consults_mise_only_for_shims(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A real binary is ok on sight; only a mise shim is worth asking mise about.
+
+    The earlier version of this test asserted that `mise which` was INVOKED for a
+    plain `/bin/git`. That pinned the implementation rather than the behaviour, and it
+    is the wrong behaviour: `mise which git` answers "mise does not manage this for
+    this project", which says nothing about whether git runs. Asking it and trusting
+    the exit code is what classified git, ruff, terraform and actionlint as dead
+    shims. What matters is the verdict, and that mise is consulted for the one case
+    where its answer means something.
+    """
     root = tmp_path
     (root / "mise.toml").write_text('[tools]\ngit = "latest"\n')
     calls: list[list[str]] = []
+
     class Result:
-        returncode = 0
+        returncode = 1
+
     def fake_run(argv, **kwargs):
         calls.append(argv)
         assert kwargs["stdin"] is subprocess.DEVNULL
         assert kwargs["timeout"] == 5
         return Result()
-    monkeypatch.setattr(scaffold_module.shutil, "which", lambda name: "/bin/git" if name == "git" else "/bin/mise")
+
     monkeypatch.setattr(scaffold_module.subprocess, "run", fake_run)
+
+    # A real binary outside the shim directory: ok, and mise is not consulted at all.
+    monkeypatch.setattr(scaffold_module.shutil, "which", lambda name: "/bin/git" if name == "git" else "/bin/mise")
     assert scaffold_module._tool_status(root, "git") == "ok"
+    assert calls == []
+
+    # A mise shim that mise cannot resolve: SHIM, and mise IS consulted, because here
+    # its answer is the whole signal.
+    monkeypatch.setattr(
+        scaffold_module.shutil,
+        "which",
+        lambda name: "/home/u/.local/share/mise/shims/git" if name == "git" else "/bin/mise",
+    )
+    assert scaffold_module._tool_status(root, "git") == "SHIM"
     assert calls == [["mise", "which", "git"]]
+
 
 from conftest import git_root
 
@@ -248,3 +274,41 @@ def test_symlink_managed_target_is_conflict(tmp_path: Path) -> None:
     result = run("plan", "--root", str(tmp_path), "--profile", "agentic-repo")
     assert result.returncode == 5
     assert any(item.get("reason") == "managed block target is a symlink" for item in json.loads(result.stdout)["conflicts"])
+
+
+def test_tool_status_distinguishes_dead_shims_from_unmanaged_tools() -> None:
+    """A dead mise shim is SHIM; a real binary mise does not manage is ok."""
+    import importlib.util
+    import pathlib as _p
+    import shutil as _sh
+    import tempfile
+
+    spec = importlib.util.spec_from_file_location(
+        "scaffold_probe",
+        _p.Path(__file__).parent.parent / "skills" / "agentic-scaffold" / "scripts" / "scaffold.py",
+    )
+    assert spec and spec.loader
+    scaffold = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(scaffold)
+
+    root = _p.Path(tempfile.mkdtemp())
+    (root / "mise.toml").write_text('[tools]\njscpd = "5.2.0"\n')
+
+    # A tool with no executable at all.
+    assert scaffold._tool_status(root, "nosuchtool-xyz-0000") == "MISS"
+
+    # `git` is present and usable but not managed by mise for this project. `mise
+    # which git` answers non-zero there, which says nothing about whether git runs --
+    # classifying it SHIM was the false positive this test exists to prevent.
+    if _sh.which("git") and "/mise/shims/" not in (_sh.which("git") or ""):
+        assert scaffold._tool_status(root, "git") == "ok"
+
+    # With no mise on PATH nothing can be a mise shim, so presence decides. Reporting
+    # every declared tool as broken on a machine without mise would be worse than
+    # useless.
+    real_which = scaffold.shutil.which
+    try:
+        scaffold.shutil.which = lambda c, *a, **k: None if c == "mise" else real_which(c, *a, **k)
+        assert scaffold._tool_status(root, "git") == "ok"
+    finally:
+        scaffold.shutil.which = real_which
