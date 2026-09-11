@@ -1,7 +1,10 @@
+import type { TSchema } from "@oh-my-pi/pi-ai";
 import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
 import { detectProject } from "./detect";
 
 export { detectProject, parseRequirement } from "./detect";
+
+type VersionGapParams = { path?: string };
 
 export default function versionGapTool(pi: ExtensionAPI): void {
 	const z = pi.zod;
@@ -14,9 +17,9 @@ export default function versionGapTool(pi: ExtensionAPI): void {
 			"cargo, go, ruby, and more), offline and read-only. Input for what's-new research.",
 		parameters: z.object({
 			path: z.string().optional().describe("Project root to scan; defaults to the session cwd"),
-		}),
+		}) as unknown as TSchema, // pi.zod and the host TypeBox schema types differ.
 		approval: "read",
-		async execute(_id, params, _signal, _onUpdate, ctx) {
+		async execute(_id, params: VersionGapParams, _signal, _onUpdate, ctx) {
 			const dir = params.path ?? ctx.cwd;
 			try {
 				const { exit, rows, stderr } = await detectProject(dir);

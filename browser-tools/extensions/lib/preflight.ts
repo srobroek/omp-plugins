@@ -1,9 +1,9 @@
 import { Database } from "bun:sqlite";
-import type { ExtensionContext } from "@oh-my-pi/pi-coding-agent";
-import { access, mkdir, statfs } from "node:fs/promises";
 import { constants } from "node:fs";
+import { access, mkdir, statfs } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname } from "node:path";
+import type { ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 import type { ConfigOverrides, EffectiveConfig, Engine } from "./config.ts";
 import { resolveConfig } from "./config.ts";
 import type { BrowserInventoryEntry } from "./discovery.ts";

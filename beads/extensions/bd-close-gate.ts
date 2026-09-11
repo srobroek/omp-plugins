@@ -14,7 +14,7 @@
  * allow the call: a guard that blocks when it cannot see is worse than the TTSR
  * rule it backs up.
  */
-import type { ExtensionAPI, ExtensionToolCallEvent } from "@oh-my-pi/pi-coding-agent";
+import type { ExtensionAPI, ToolCallEvent } from "@oh-my-pi/pi-coding-agent";
 
 const TIMEOUT_MS = 10_000;
 
@@ -66,9 +66,9 @@ function defaultRun(argv: string[], cwd: string): { exitCode: number; stdout: st
 	return { exitCode: proc.exitCode ?? 1, stdout: proc.stdout.toString() };
 }
 
-export function extractCommand(input: Record<string, unknown>): string {
-	if (typeof input.command === "string") return input.command;
-	if (typeof input.cmd === "string") return input.cmd;
+export function extractCommand(input: ToolCallEvent["input"]): string {
+	if ("command" in input && typeof input.command === "string") return input.command;
+	if ("cmd" in input && typeof input.cmd === "string") return input.cmd;
 	return "";
 }
 
@@ -137,7 +137,11 @@ export function tokenize(command: string): string[] {
 			out.push(ch);
 			// The bodies of this line's here-documents follow, in order. They are
 			// data, so scanning resumes on the line after the last terminator.
-			while (pending.length) i = hereDocumentBodyEnd(command, i + 1, pending.shift()!);
+			while (pending.length) {
+				const document = pending.shift();
+				if (document === undefined) break;
+				i = hereDocumentBodyEnd(command, i + 1, document);
+			}
 			continue;
 		}
 		if (/\s/.test(ch)) {
@@ -349,25 +353,27 @@ export function decideBdClose(
 }
 
 export default function bdCloseGate(pi: ExtensionAPI): void {
-	pi.on("tool_call", (event: ExtensionToolCallEvent) => {
+	pi.on("tool_call", (event: ToolCallEvent) => {
 		try {
 			if (event.toolName !== "bash") return;
 			const command = extractCommand(event.input);
 			if (!command) return;
 			const cwd =
-				typeof event.input.cwd === "string" && event.input.cwd
+				"cwd" in event.input && typeof event.input.cwd === "string" && event.input.cwd
 					? event.input.cwd
 					: process.cwd();
 			return decideBdClose(command, cwd);
 		} catch (error) {
 			try {
-				pi.sendMessage({
-					customType: "com.srobroek.beads.close-lookup",
-					content: `Beads close guard could not verify gate types: ${error instanceof Error ? error.message : String(error)}. Inspect the target before closing; this advisory does not authorize gate closure.`,
-					display: true,
-					attribution: "user",
-					triggerTurn: false,
-				});
+				pi.sendMessage(
+					{
+						customType: "com.srobroek.beads.close-lookup",
+						content: `Beads close guard could not verify gate types: ${error instanceof Error ? error.message : String(error)}. Inspect the target before closing; this advisory does not authorize gate closure.`,
+						display: true,
+						attribution: "user",
+					},
+					{ triggerTurn: false },
+				);
 			} catch {
 				// Advisory delivery cannot turn a lookup failure into a tool outage.
 			}

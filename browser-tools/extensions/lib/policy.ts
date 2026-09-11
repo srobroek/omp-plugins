@@ -1,8 +1,8 @@
-import type { Cookie, Page } from "puppeteer-core";
-import type { ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 import { appendFile, chmod, mkdir } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import type { ExtensionContext } from "@oh-my-pi/pi-coding-agent";
+import type { Cookie, Page } from "puppeteer-core";
 import type { EffectiveConfig, Engine, ProfileMode } from "./config.ts";
 import { splitDomains } from "./config.ts";
 import type { HeadedSession } from "./session.ts";

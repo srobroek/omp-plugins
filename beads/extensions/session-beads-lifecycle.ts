@@ -17,7 +17,12 @@
 import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync, realpathSync, rmSync, statSync } from "node:fs";
 import { isAbsolute, join, resolve } from "node:path";
-import type { ExtensionAPI, ExtensionContext, ExtensionToolCallEvent, ExtensionToolResultEvent } from "@oh-my-pi/pi-coding-agent";
+import type {
+	ExtensionAPI,
+	ExtensionContext,
+	ToolCallEvent,
+	ToolResultEvent,
+} from "@oh-my-pi/pi-coding-agent";
 
 import {
 	actorValues,
@@ -160,7 +165,10 @@ export function autoPinBeadsDir(
 	if (current !== undefined && current !== "" && !ours) return {};
 	if (ours && state.owner !== undefined && state.owner !== sessionId && liveSessions(state.owner)) {
 		if (state.ownerRepo !== identity(cwd)) return { conflict: current };
-		(state.dependents ??= new Set()).add(sessionId); // same repository: shares the pin and keeps it alive
+		// Same repository: shares the pin and keeps it alive.
+		const dependents = state.dependents ?? new Set<string>();
+		dependents.add(sessionId);
+		state.dependents = dependents;
 		return {};
 	}
 	const dir = sessionPinFor(cwd);
@@ -553,7 +561,7 @@ async function gateAdvisory(cwd: string, deadline: number): Promise<string | und
 }
 
 /** Text blocks of a tool result, joined. */
-function resultText(event: ExtensionToolResultEvent): string {
+function resultText(event: ToolResultEvent): string {
 	let text = "";
 	for (const block of event.content ?? []) {
 		if (block !== null && typeof block === "object" && (block as { type?: string }).type === "text") {
@@ -584,15 +592,17 @@ export default function sessionBeadsLifecycle(pi: ExtensionAPI): void {
 			const pin = autoPinBeadsDir(cwd, key, (id) => sessions.has(id));
 			state.pin = sessionPinAfter(pin, cwd);
 			if (pin.conflict !== undefined) {
-				pi.sendMessage({
-					customType: "com.srobroek.beads.session-lifecycle",
-					content:
-						`This process is pinned to another repository's beads database (\`BEADS_DIR=${pin.conflict}\`) by a live session. ` +
-						"For this checkout, pass `env: { BEADS_DIR: \"<this checkout>/.beads\" }` on every `bd` call; do not rely on the inherited pin.",
-					display: true,
-					attribution: "user",
-					triggerTurn: false,
-				});
+				pi.sendMessage(
+					{
+						customType: "com.srobroek.beads.session-lifecycle",
+						content:
+							`This process is pinned to another repository's beads database (\`BEADS_DIR=${pin.conflict}\`) by a live session. ` +
+							"For this checkout, pass `env: { BEADS_DIR: \"<this checkout>/.beads\" }` on every `bd` call; do not rely on the inherited pin.",
+						display: true,
+						attribution: "user",
+					},
+					{ triggerTurn: false },
+				);
 				return;
 			}
 			const dir = beadsDir(ctx?.cwd ?? process.cwd());
@@ -603,13 +613,15 @@ export default function sessionBeadsLifecycle(pi: ExtensionAPI): void {
 			if (sessions.get(key) !== state || notices.length === 0) return;
 			// A message rather than `ctx.ui.notify`: the agent runs the commands this
 			// is about, and a UI notification reaches neither it nor a --print session.
-			pi.sendMessage({
-				customType: "com.srobroek.beads.session-lifecycle",
-				content: notices.join("\n\n"),
-				display: true,
-				attribution: "user",
-				triggerTurn: false,
-			});
+			pi.sendMessage(
+				{
+					customType: "com.srobroek.beads.session-lifecycle",
+					content: notices.join("\n\n"),
+					display: true,
+					attribution: "user",
+				},
+				{ triggerTurn: false },
+			);
 		} catch (error) {
 			pi.logger.error("beads session-start check failed", {
 				error: error instanceof Error ? error.message : String(error),
@@ -617,7 +629,7 @@ export default function sessionBeadsLifecycle(pi: ExtensionAPI): void {
 		}
 	});
 
-	pi.on("tool_call", (event: ExtensionToolCallEvent, ctx: ExtensionContext) => {
+	pi.on("tool_call", (event: ToolCallEvent, ctx: ExtensionContext) => {
 		if (event.toolName !== "bash") return;
 		const state = sessions.get(sessionKey(ctx));
 		const pin = state?.pin ?? process.env.BEADS_DIR ?? sessionPinFor(ctx?.cwd ?? process.cwd());
@@ -637,7 +649,7 @@ export default function sessionBeadsLifecycle(pi: ExtensionAPI): void {
 		stateFor(ctx).stopFired = false;
 	});
 
-	pi.on("tool_result", (event: ExtensionToolResultEvent, ctx: ExtensionContext) => {
+	pi.on("tool_result", (event: ToolResultEvent, ctx: ExtensionContext) => {
 		try {
 			if (event.toolName !== "bash") return;
 			const input = event.input ?? {};

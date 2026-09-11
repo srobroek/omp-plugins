@@ -1,5 +1,4 @@
 import { describe, expect, test } from "bun:test";
-import * as zod from "@oh-my-pi/omptype/zod";
 import { execFileSync } from "node:child_process";
 import {
 	appendFileSync,
@@ -13,6 +12,13 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import * as zod from "@oh-my-pi/omptype/zod";
+import {
+	__resetDirsFromEnvForTests,
+	getActiveProfile,
+	getAgentDir,
+	normalizeProfileName,
+} from "@oh-my-pi/pi-utils/dirs";
 import { type FixtureSession, renderSession, writeSpillDir, writeStore } from "./fixtures";
 import resumeSessionTool, {
 	absoluteTime,
@@ -25,12 +31,6 @@ import resumeSessionTool, {
 	resolveSession,
 	worktreeLabel,
 } from "./resume-session-tool";
-import {
-	__resetDirsFromEnvForTests,
-	getActiveProfile,
-	getAgentDir,
-	normalizeProfileName,
-} from "@oh-my-pi/pi-utils/dirs";
 import {
 	BranchTracker,
 	briefArgs,
@@ -47,6 +47,14 @@ import {
 
 function tmp(prefix: string): string {
 	return mkdtempSync(join(tmpdir(), prefix));
+}
+function required<T>(value: T | undefined, label = "fixture value"): T {
+	if (value === undefined) throw new Error(`Missing ${label}`);
+	return value;
+}
+
+function fixtureFile(root: string): string {
+	return required(storeFiles(root)[0], "fixture transcript");
 }
 
 /**
@@ -270,7 +278,7 @@ describe("unit: branch recovery", () => {
 describe("unit: transcript parsing", () => {
 	test("head yields id, cwd, title, and the in-place updatedAt", async () => {
 		const { root } = fixtureStore([shipped]);
-		const head = await readHead(storeFiles(root)[0]);
+		const head = await readHead(fixtureFile(root));
 		expect(head?.id).toBe("aaaaaaaa-1111-7000-8888-000000000001");
 		expect(head?.cwd).toBe("/repo/main");
 		expect(head?.title).toBe("Wire the export path");
@@ -279,19 +287,20 @@ describe("unit: transcript parsing", () => {
 
 	test("turns fold tool results in, and thinking is dropped by default", async () => {
 		const { root } = fixtureStore([shipped]);
-		const file = storeFiles(root)[0];
+		const file = fixtureFile(root);
 		const transcript = await parseTranscript(file);
 		expect(transcript.turns.map((turn) => turn.role)).toEqual(["user", "assistant", "assistant", "assistant"]);
 		expect(transcript.meta.turnCount).toBe(4);
-		expect(transcript.turns[1].tools[0].name).toBe("bash");
-		expect(transcript.turns[1].tools[0].result).toContain("Switched to a new branch");
+		const tool = required(required(transcript.turns[1], "assistant turn").tools[0], "bash tool");
+		expect(tool.name).toBe("bash");
+		expect(tool.result).toContain("Switched to a new branch");
 		expect(JSON.stringify(transcript)).not.toContain("secret reasoning");
 		expect(JSON.stringify(await parseTranscript(file, true))).toContain("secret reasoning");
 	});
 
 	test("branch comes from git's own output, not the command", async () => {
 		const { root } = fixtureStore([shipped]);
-		expect((await parseTranscript(storeFiles(root)[0])).meta).toMatchObject({
+		expect((await parseTranscript(fixtureFile(root))).meta).toMatchObject({
 			branch: "feat/csv",
 			branchTier: "switched",
 		});
@@ -307,9 +316,9 @@ describe("unit: transcript parsing", () => {
 				],
 			},
 		]);
-		const phases = (await parseTranscript(storeFiles(root)[0])).todoPhases;
+		const phases = (await parseTranscript(fixtureFile(root))).todoPhases;
 		expect(phases).toHaveLength(1);
-		expect(phases[0]).toEqual({ name: "New", tasks: [{ content: "fresh", status: "in_progress" }] });
+		expect(required(phases[0], "todo phase")).toEqual({ name: "New", tasks: [{ content: "fresh", status: "in_progress" }] });
 	});
 
 	test.each([{ phases: [] }, { phases: [{ name: "Cleared", tasks: [] }] }])(
@@ -324,7 +333,7 @@ describe("unit: transcript parsing", () => {
 					],
 				},
 			]);
-			const transcript = await parseTranscript(storeFiles(root)[0]);
+			const transcript = await parseTranscript(fixtureFile(root));
 			expect(transcript.todoPhases).toEqual([]);
 			expect(renderRead(transcript, {})).not.toContain("## Latest plan / todo state");
 			expect(renderRead(transcript, {})).not.toContain("obsolete");
@@ -333,7 +342,7 @@ describe("unit: transcript parsing", () => {
 
 	test("left off is the last assistant prose, not the last record", async () => {
 		const { root } = fixtureStore([shipped]);
-		expect((await parseTranscript(storeFiles(root)[0])).meta.leftOff).toBe(
+		expect((await parseTranscript(fixtureFile(root))).meta.leftOff).toBe(
 			"Writer landed; the CLI flag is still open.",
 		);
 	});
@@ -350,7 +359,7 @@ describe("unit: transcript parsing", () => {
 				],
 			},
 		]);
-		const transcript = await parseTranscript(storeFiles(root)[0]);
+		const transcript = await parseTranscript(fixtureFile(root));
 		expect(transcript.meta.compactions).toBe(1);
 		expect(transcript.meta.exitReason).toBe("normal/dispose");
 		expect(transcript.compactionSummaries).toEqual(["earlier work summarized"]);
@@ -361,19 +370,19 @@ describe("unit: transcript parsing", () => {
 
 	test("empty turns are dropped so the window is not wasted", async () => {
 		const { root } = fixtureStore([{ ...shipped, entries: [{ kind: "assistant" }, { kind: "user", text: "real" }] }]);
-		expect((await parseTranscript(storeFiles(root)[0])).meta.turnCount).toBe(1);
+		expect((await parseTranscript(fixtureFile(root))).meta.turnCount).toBe(1);
 	});
 
 	test("a truncated final line does not abort the parse", async () => {
 		const { root } = fixtureStore([shipped]);
-		const file = storeFiles(root)[0];
+		const file = fixtureFile(root);
 		appendFileSync(file, '{"type":"message","message":{"role":"assis');
 		expect((await parseTranscript(file)).meta.turnCount).toBe(4);
 	});
 
 	test("continuation chains are counted", async () => {
 		const { root } = fixtureStore([{ ...shipped, previousSessionFiles: ["/store/-a/x.jsonl"] }]);
-		expect((await parseTranscript(storeFiles(root)[0])).meta.continuedFrom).toBe(1);
+		expect((await parseTranscript(fixtureFile(root))).meta.continuedFrom).toBe(1);
 	});
 });
 
@@ -418,10 +427,10 @@ describe("integration: worktrees", () => {
 		const { main, linked, linkedBranch } = repoWithWorktree();
 		const family = listWorktrees(linked); // enumerating from the LINKED tree still finds main
 		expect(family).toHaveLength(2);
-		expect(family[0].isMain).toBe(true);
+		expect(required(family[0], "main worktree").isMain).toBe(true);
 		expect(family.filter((w) => w.branch === linkedBranch)).toHaveLength(1);
 		expect(family.filter((w) => w.branch === "main")).toHaveLength(1);
-		expect(pathKeys(main)).toContain(family[0].path);
+		expect(pathKeys(main)).toContain(required(family[0], "main worktree").path);
 	});
 
 	test("a non-repo directory yields no family", () => {
@@ -447,7 +456,6 @@ describe("integration: worktrees", () => {
 		expect(worktreeLabel(undefined)).toBe("?");
 	});
 });
-
 describe("integration: list mode", () => {
 	function twoWorktreeStore(repo: { main: string; linked: string }): string {
 		return fixtureStore([
@@ -547,7 +555,7 @@ describe("integration: read mode", () => {
 				],
 			},
 		]);
-		const text = renderRead(await parseTranscript(storeFiles(root)[0], false, { turns: 4 }), { turns: 4 });
+		const text = renderRead(await parseTranscript(fixtureFile(root), false, { turns: 4 }), { turns: 4 });
 		expect(text).toContain("window: turns 10..13 of 13 (newest first)");
 		expect(text.indexOf("[13]")).toBeLessThan(text.indexOf("[10]"));
 		expect(text).toContain("## Latest plan / todo state");
@@ -560,7 +568,7 @@ describe("integration: read mode", () => {
 		const { root } = fixtureStore([
 			{ ...shipped, entries: Array.from({ length: 6 }, (_, i) => ({ kind: "user" as const, text: `t${i}` })) },
 		]);
-		const transcript = await parseTranscript(storeFiles(root)[0], false, { turns: 3, offset: 3 });
+		const transcript = await parseTranscript(fixtureFile(root), false, { turns: 3, offset: 3 });
 		expect(renderRead(transcript, { turns: 3, offset: 3 })).toContain("Start of session reached");
 		expect(renderRead(transcript, { offset: 99 })).toContain("No turns at offset 99");
 	});
@@ -568,7 +576,7 @@ describe("integration: read mode", () => {
 	test("large transcripts yield only the selected window and remain discoverable", async () => {
 		const { home, root } = fixtureStore([{ ...shipped, entries: [{ kind: "user", text: "OLD-HISTORY-MARKER" }] }]);
 		try {
-			const file = storeFiles(root)[0];
+			const file = fixtureFile(root);
 			const chunk = `${JSON.stringify({ type: "custom", data: "x".repeat(8192) })}\n`.repeat(128);
 			for (let i = 0; i < 65; i++) appendFileSync(file, chunk);
 			for (const text of ["older selected turn", "newest selected turn"]) {
@@ -600,14 +608,32 @@ describe("integration: read mode", () => {
 				entries: Array.from({ length: 5 }, (_, i) => ({ kind: "assistant" as const, text: `${"x".repeat(400)}${i}` })),
 			},
 		]);
-		const transcript = await parseTranscript(storeFiles(root)[0]);
+		const transcript = await parseTranscript(fixtureFile(root));
 		const refused = renderRead(transcript, { turns: 5, maxChars: 1 });
-		expect(refused).toContain("Increase max_chars");
+		expect(refused.length).toBeLessThanOrEqual(1);
 		expect(refused).not.toContain("### [");
 		const text = renderRead(transcript, { turns: 5, maxChars: 600 });
-		expect(text.match(/^### \[/gm)).toHaveLength(1);
-		expect(text).toContain(`${"x".repeat(400)}4`);
-		expect(text.split("## Recent turns (newest first)\n")[1].split("\n\n---")[0].length).toBeLessThanOrEqual(600);
+		expect(text.length).toBeLessThanOrEqual(600);
+		if (text.includes("### [")) {
+			expect(text).toContain(`${"x".repeat(400)}4`);
+		}
+		const envelope = renderRead(transcript, { turns: 1, maxChars: 2000 });
+		expect(envelope.length).toBeLessThanOrEqual(2000);
+		expect(envelope).toContain("# Fresh-session handoff context");
+		expect(envelope).toContain(`${"x".repeat(400)}4`);
+		expect(envelope).toContain("STOP. Summarize the goal");
+		const footerStart = envelope.lastIndexOf("\n\nThis window:");
+		expect(footerStart).toBeGreaterThan(0);
+		const narrow = renderRead(transcript, { turns: 1, maxChars: footerStart });
+		expect(narrow.length).toBeLessThanOrEqual(footerStart);
+		expect(narrow).toContain("Insufficient max_chars");
+		expect(narrow).not.toContain("# Fresh-session handoff context");
+		const required = Number(narrow.match(/complete output requires (\d+) characters/)?.[1]);
+		expect(required).toBeGreaterThan(footerStart);
+		const exact = renderRead(transcript, { turns: 1, maxChars: required });
+		expect(exact.length).toBeLessThanOrEqual(required);
+		expect(exact).toContain("# Fresh-session handoff context");
+		expect(exact).toContain("\n\nThis window:");
 	});
 
 	test("renderTurn shows tool calls with an error marker", () => {
@@ -657,7 +683,7 @@ describe("integration: session resolution", () => {
 
 	test("an explicit file bypasses lookup entirely", async () => {
 		const { root } = fixtureStore([shipped]);
-		const file = storeFiles(root)[0];
+		const file = fixtureFile(root);
 		expect(await resolveSession("/nowhere", { file })).toEqual({ file });
 	});
 
@@ -684,21 +710,21 @@ describe("integration: session resolution", () => {
 			);
 			if (!paging) throw new Error("Expected a file-scoped paging instruction");
 			const next = await resolveSession("/unrelated-project", {
-				file: JSON.parse(paging[1]),
+				file: JSON.parse(required(paging[1], "paging file path")),
 				profile: "unrelated-profile",
 			});
 			expect(next).toEqual(selected);
 			if ("error" in next) throw new Error(next.error);
 			const older = renderRead(
-				await parseTranscript(next.file, paging[5] === "true", {
-					offset: Number(paging[2]),
-					turns: Number(paging[3]),
+				await parseTranscript(next.file, required(paging[5], "paging thinking flag") === "true", {
+					offset: Number(required(paging[2], "paging offset")),
+					turns: Number(required(paging[3], "paging turns")),
 				}),
 				{
-					offset: Number(paging[2]),
-					turns: Number(paging[3]),
-					maxChars: Number(paging[4]),
-					includeThinking: paging[5] === "true",
+					offset: Number(required(paging[2], "paging offset")),
+					turns: Number(required(paging[3], "paging turns")),
+					maxChars: Number(required(paging[4], "paging max chars")),
+					includeThinking: required(paging[5], "paging thinking flag") === "true",
 				},
 			);
 			expect(older).toContain("window: turns 3..3 of 4");
@@ -743,14 +769,14 @@ describe("integration: tool registration", () => {
 			execute("1", { mode: "list", path: repo.main }, undefined, undefined, { cwd: repo.main }),
 		);
 		expect(listed.details).toMatchObject({ mode: "list", sessions: 1 });
-		expect(listed.content[0].text).toContain("Wire the export path");
+		expect(required(listed.content[0], "list response").text).toContain("Wire the export path");
 
-		const id = (listed.details.ids as string[])[0];
+		const id = required((listed.details.ids as string[])[0], "listed session id");
 		const read = await withHome(home, () =>
 			execute("2", { mode: "read", session: id, path: repo.main }, undefined, undefined, { cwd: repo.main }),
 		);
 		expect(read.details).toMatchObject({ mode: "read", branch: "feat/csv", branchTier: "switched", turns: 4 });
-		expect(read.content[0].text).toContain("## Latest plan / todo state");
+		expect(required(read.content[0], "read response").text).toContain("## Latest plan / todo state");
 	});
 
 	test("an unresolvable session reports the problem instead of throwing", async () => {
@@ -763,7 +789,7 @@ describe("integration: tool registration", () => {
 				cwd: repo.main,
 			}),
 		);
-		expect(result.content[0].text).toContain("no session under");
+		expect(required(result.content[0], "error response").text).toContain("no session under");
 		expect(result.details.error).toBeDefined();
 	});
 });

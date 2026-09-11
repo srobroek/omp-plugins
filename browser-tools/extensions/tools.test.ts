@@ -59,8 +59,10 @@ describe("headed browser tool registration", () => {
 		let requestInterception = false;
 		let disconnected = false;
 		let postTimeoutMutation = false;
-		let releaseScreenshot = () => undefined;
-		const screenshotBlocked = new Promise<void>((resolve) => { releaseScreenshot = resolve; });
+		let releaseScreenshot: () => void = () => undefined;
+		const screenshotBlocked = new Promise<void>((resolve) => {
+			releaseScreenshot = () => resolve();
+		});
 		const initialPageState = {
 			on: () => undefined,
 			url: () => "about:blank",
@@ -92,9 +94,19 @@ describe("headed browser tool registration", () => {
 		const config = await resolveConfig(process.cwd(), {}, async () => ({ values: {}, source: "test", warnings: [] }));
 		const session: HeadedSession = {
 			id: "hb-newtab", browser,
-			resolvedBrowser: { engine: "firefox", channel: "firefox", path: "/browser", builtIn: true },
+			resolvedBrowser: { engine: "firefox", channel: "firefox", path: "/browser", probedPaths: [] },
 			profileMode: "clean",
-			profile: { sessionDir: "/tmp/hb-newtab", profileDir: "/tmp/hb-newtab/profile", downloadsDir: "/tmp/hb-newtab/downloads", artifactsDir: "/tmp/hb-newtab/artifacts", cookieDomains: [], containerCookiesSkipped: 0, warnings: [] },
+			profile: {
+				sessionDir: "/tmp/hb-newtab",
+				profileDir: "/tmp/hb-newtab/profile",
+				downloadsDir: "/tmp/hb-newtab/downloads",
+				artifactsDir: "/tmp/hb-newtab/artifacts",
+				cookieDomains: [],
+				containerCookiesSkipped: 0,
+				warnings: [],
+				persistentProfile: false,
+				copyStrategy: "node",
+			},
 			config, createdAt: Date.now(), lastActivityAt: Date.now(),
 			pages: new Map([["tab-initial", initialPage]]), pageIds: new WeakMap([[initialPage, "tab-initial"]]),
 			selectedTabId: "tab-initial", refs: new Map(), network: [], warnings: [],
@@ -112,7 +124,7 @@ describe("headed browser tool registration", () => {
 		expect(requestInterception).toBe(true);
 		expect(attachedEvents).toContain("request");
 		expect(session.selectedTabId).not.toBe("tab-initial");
-		let triggerTimeout = () => undefined;
+		let triggerTimeout: () => void = () => undefined;
 		const timeoutCtx = {
 			sessionManager: { getSessionId: () => "tool-test" },
 			setTimeout: (callback: () => void, _ms: number) => { triggerTimeout = callback; return 1; },

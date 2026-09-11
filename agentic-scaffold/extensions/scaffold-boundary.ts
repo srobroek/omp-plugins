@@ -1,14 +1,15 @@
 import { existsSync, readFileSync, realpathSync } from "node:fs";
-import { dirname, isAbsolute, relative, resolve } from "node:path";
-import { basename } from "node:path";
-import type { ExtensionAPI, ExtensionToolCallEvent } from "@oh-my-pi/pi-coding-agent";
+import { homedir } from "node:os";
+import { basename, dirname, isAbsolute, relative, resolve } from "node:path";
+import type { ExtensionAPI, ToolCallEvent } from "@oh-my-pi/pi-coding-agent";
 
 const EDIT_TOOLS = new Set(["write", "edit", "ast_edit"]);
 const SCAFFOLD_COMMAND = "scaffold apply";
 
 type JsonObject = Record<string, unknown>;
 
-function cwdOf(event: ExtensionToolCallEvent): string {
+function cwdOf(event: ToolCallEvent): string {
+	if (!("cwd" in event.input)) return process.cwd();
 	const value = event.input.cwd;
 	return typeof value === "string" && value ? value : process.cwd();
 }
@@ -46,15 +47,21 @@ function pathForRoot(root: string, value: string): string {
 	return realPathOrResolve(resolve(root, value));
 }
 
-function pathValues(input: JsonObject): string[] {
+function pathValues(input: ToolCallEvent["input"]): string[] {
 	const values: string[] = [];
-	for (const key of ["path", "file_path", "target"] as const) {
-		const value = input[key];
-		if (typeof value === "string" && value) values.push(value);
+	// `in` narrows one literal key at a time, so the spellings stay unrolled.
+	if ("path" in input && typeof input.path === "string" && input.path) values.push(input.path);
+	if ("file_path" in input && typeof input.file_path === "string" && input.file_path) {
+		values.push(input.file_path);
 	}
-	for (const key of ["paths", "files"] as const) {
-		const value = input[key];
-		if (Array.isArray(value)) values.push(...value.filter((item): item is string => typeof item === "string" && item.length > 0));
+	if ("target" in input && typeof input.target === "string" && input.target) {
+		values.push(input.target);
+	}
+	if ("paths" in input && Array.isArray(input.paths)) {
+		values.push(...input.paths.filter((item): item is string => typeof item === "string" && item.length > 0));
+	}
+	if ("files" in input && Array.isArray(input.files)) {
+		values.push(...input.files.filter((item): item is string => typeof item === "string" && item.length > 0));
 	}
 	return values;
 }
@@ -147,6 +154,7 @@ function commandTargetsOutsideRoot(root: string, words: string[]): boolean {
 	};
 	for (let index = 0; index < words.length; index += 1) {
 		const word = words[index];
+		if (word === undefined) continue;
 		if (/^>>?$/.test(word) || /^(?:>>?|2>|&>)\S+$/.test(word)) {
 			const target = /^>>?$/.test(word) ? words[index + 1] : word.replace(/^(?:>>?|2>|&>)/, "");
 			if (target && isOutside(target)) return true;
@@ -181,7 +189,7 @@ export function deniedBashReason(root: string, command: string): string | null {
 
 export type BoundaryDecision = { block: boolean; reason?: string } | undefined;
 
-export function boundaryDecision(event: ExtensionToolCallEvent): BoundaryDecision {
+export function boundaryDecision(event: ToolCallEvent): BoundaryDecision {
 	const cwd = cwdOf(event);
 	let root: string | null;
 	try {
@@ -209,5 +217,5 @@ export function boundaryDecision(event: ExtensionToolCallEvent): BoundaryDecisio
 }
 
 export default function scaffoldBoundary(pi: ExtensionAPI): void {
-	pi.on("tool_call", (event: ExtensionToolCallEvent) => boundaryDecision(event));
+	pi.on("tool_call", (event: ToolCallEvent) => boundaryDecision(event));
 }

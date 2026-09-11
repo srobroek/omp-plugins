@@ -1,6 +1,6 @@
 import { relative, resolve } from "node:path";
 
-import type { ExtensionAPI, ExtensionToolResultEvent } from "@oh-my-pi/pi-coding-agent";
+import type { ExtensionAPI, ToolResultEvent } from "@oh-my-pi/pi-coding-agent";
 
 /**
  * Remind the agent to lint an agentic asset it just authored.
@@ -45,7 +45,7 @@ export function resetLintReminderForTests(): void {
 export function assetKind(path: string): "skill" | "rule" | "agent" | null {
 	const parts = path.split(/[/\\]/).filter(Boolean);
 	const file = parts.at(-1);
-	if (!file || !file.endsWith(".md")) return null;
+	if (!file?.endsWith(".md")) return null;
 	for (const part of parts) {
 		if (Object.hasOwn(EXCLUDED_SEGMENTS, part)) return null;
 	}
@@ -104,15 +104,13 @@ export function writtenPaths(event: ResultEvent, cwd: string): string[] {
 		if (details.op !== "delete") take(details.move ?? details.path);
 		return out;
 	}
-
 	if (event.toolName === "ast_edit") {
-		if (!details || details.applied !== true) return out;
+		if (details?.applied !== true) return out;
 		// Detail paths are printed relative to the cwd of the edit, which is the
 		// session cwd unless the tool was pointed elsewhere.
 		const base = typeof details.cwd === "string" && details.cwd !== "" ? details.cwd : cwd;
 		if (Array.isArray(details.files)) {
 			for (const file of details.files) take(file, base);
-			return out;
 		}
 		if (Array.isArray(details.fileReplacements)) {
 			for (const raw of details.fileReplacements) take(asRecord(raw)?.path, base);
@@ -154,10 +152,10 @@ export default function agenticLintReminder(pi: ExtensionAPI): void {
 		reminded.clear();
 	});
 
-	pi.on("tool_result", (event: ExtensionToolResultEvent, ctx: { cwd?: string }) => {
+	pi.on("tool_result", (event: ToolResultEvent, ctx: { cwd?: string }) => {
 		try {
 			const cwd = ctx?.cwd || process.cwd();
-			const assets = pendingAssets(writtenPaths(event as ResultEvent, cwd));
+			const assets = pendingAssets(writtenPaths(event, cwd));
 			if (assets.length === 0) return;
 			const prefix = { type: "text" as const, text: `${formatReminder(assets, cwd)}\n\n` };
 			return { content: [prefix, ...(event.content ?? [])] };

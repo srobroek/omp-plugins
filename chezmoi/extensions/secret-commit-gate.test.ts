@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { join } from "node:path";
-import { mkdtempSync, writeFileSync, rmSync, unlinkSync, mkdirSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import { resetChezmoiGuardForTests, seedChezmoiCacheForTests } from "./chezmoi-guard.ts";
 import secretCommitGate, {
@@ -48,10 +48,19 @@ function fakePi(): { handlers: Record<string, Handler[]>; pi: unknown } {
 			zod: {},
 			registerTool: () => {},
 			on: (event: string, handler: Handler) => {
-				(handlers[event] ??= []).push(handler);
+				const registered = handlers[event] ?? [];
+				registered.push(handler);
+				handlers[event] = registered;
 			},
 		},
 	};
+}
+
+/** The gate registers exactly one `tool_call` handler; fail loudly if it did not. */
+function toolCallHandler(handlers: Record<string, Handler[]>): Handler {
+	const handler = handlers.tool_call?.[0];
+	if (!handler) throw new Error("secretCommitGate registered no tool_call handler");
+	return handler;
 }
 
 describe("gitCommits", () => {
@@ -75,9 +84,9 @@ describe("gitCommits", () => {
 	});
 
 	test("-a and combined short flags stage tracked edits", () => {
-		expect(gitCommits("git commit -am x", ROOT)[0]!.all).toBe(true);
-		expect(gitCommits("git commit --all", ROOT)[0]!.all).toBe(true);
-		expect(gitCommits("git commit -m x", ROOT)[0]!.all).toBe(false);
+		expect(gitCommits("git commit -am x", ROOT)[0]?.all).toBe(true);
+		expect(gitCommits("git commit --all", ROOT)[0]?.all).toBe(true);
+		expect(gitCommits("git commit -m x", ROOT)[0]?.all).toBe(false);
 	});
 
 	test("value-consuming globals do not hide the subcommand", () => {
@@ -209,7 +218,7 @@ describe("integration", () => {
 		const { handlers, pi } = fakePi();
 		seedRepo(["dotfiles/dot_config/gh/api_token"]);
 		secretCommitGate(pi as never);
-		const handler = handlers.tool_call![0]!;
+		const handler = toolCallHandler(handlers);
 
 		const blocked = handler(
 			{ toolName: "bash", toolCallId: "c1", input: { command: "git commit -m x", cwd: ROOT } },
@@ -230,7 +239,7 @@ describe("integration", () => {
 		const { handlers, pi } = fakePi();
 		seedRepo(["dotfiles/private_dot_env"]);
 		secretCommitGate(pi as never);
-		const handler = handlers.tool_call![0]!;
+		const handler = toolCallHandler(handlers);
 
 		expect(handler({ toolName: "write", input: { path: "a" } }, { cwd: ROOT })).toBeUndefined();
 		expect(handler({ toolName: "bash", input: {} }, { cwd: ROOT })).toBeUndefined();

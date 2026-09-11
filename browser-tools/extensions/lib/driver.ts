@@ -1,6 +1,6 @@
-import type { Browser, ConnectOptions, LaunchOptions } from "puppeteer-core";
 import { createServer } from "node:net";
 import { pathToFileURL } from "node:url";
+import type { Browser, ConnectOptions, LaunchOptions } from "puppeteer-core";
 import type { EffectiveConfig, Engine } from "./config.ts";
 
 export interface PuppeteerModule {
@@ -236,7 +236,9 @@ async function sshCapture(sshArgs: string[], host: string, command: string[], ti
 	const timedOut = Symbol("ssh-timeout");
 	const exitCode = await Promise.race([
 		process.exited,
-		Bun.sleep(timeoutMs).then(() => { process.kill(); return timedOut; }),
+		// The return annotation keeps the `unique symbol` from widening to `symbol`,
+		// so the identity check below narrows `exitCode` to a number.
+		Bun.sleep(timeoutMs).then((): typeof timedOut => { process.kill(); return timedOut; }),
 	]);
 	const [stdout, stderr] = await Promise.all([stdoutPromise, stderrPromise]);
 	if (exitCode === timedOut) throw new Error(`headed-browser: ssh ${host} timed out after ${timeoutMs} ms`);

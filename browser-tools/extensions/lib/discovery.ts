@@ -1,7 +1,7 @@
+import { spawnSync } from "node:child_process";
 import { accessSync, constants, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
-import { spawnSync } from "node:child_process";
 import type { Channel, Engine } from "./config.ts";
 
 export type ConcreteChannel = Exclude<Channel, "auto" | "custom">;

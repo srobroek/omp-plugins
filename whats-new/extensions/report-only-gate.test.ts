@@ -1,15 +1,16 @@
 import { describe, expect, test } from "bun:test";
 
 import reportOnlyGate, {
-	DENY_REASON,
 	armsGate,
 	createState,
+	DENY_REASON,
 	decideToolCall,
 	disarmsGate,
 	isDependencyFile,
 } from "./report-only-gate.ts";
 
-const chain = () => new Proxy(() => chain(), { get: () => chain(), apply: () => chain() });
+type Chain = (() => Chain) & { readonly [key: string]: Chain };
+const chain = (() => chain) as Chain;
 const z = new Proxy({}, { get: () => chain() }) as never;
 
 function fakePi(): {
@@ -21,7 +22,9 @@ function fakePi(): {
 		zod: z,
 		registerTool: () => {},
 		on: (ev: string, fn: (e: Record<string, unknown>) => unknown) => {
-			(handlers[ev] ??= []).push(fn);
+			const registered = handlers[ev] ?? [];
+			registered.push(fn);
+			handlers[ev] = registered;
 		},
 	};
 	return { handlers, pi: pi as never };

@@ -3,6 +3,7 @@ name: journey-validator
 description: Validates one user journey against the running product, recording evidence, intent-gated triage, and run results. Never edits product code.
 model: "@task"
 thinking-level: medium
+tools: read, grep, glob, eval, bash
 ---
 
 You validate exactly one user journey end to end. Your inputs (from the

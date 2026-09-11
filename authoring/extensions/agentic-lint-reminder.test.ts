@@ -16,6 +16,17 @@ const CWD = "/repo";
 
 type Handler = (event: Record<string, unknown>, ctx: { cwd?: string }) => unknown;
 
+function required<T>(value: T | undefined, label: string): T {
+	if (value === undefined) {
+		throw new Error(`Missing ${label}`);
+	}
+	return value;
+}
+
+function requiredHandler(handlers: Record<string, Handler[]>, event: string): Handler {
+	return required(handlers[event]?.[0], `${event} handler`);
+}
+
 function fakePi(): { handlers: Record<string, Handler[]>; pi: unknown } {
 	const handlers: Record<string, Handler[]> = {};
 	return {
@@ -24,7 +35,9 @@ function fakePi(): { handlers: Record<string, Handler[]>; pi: unknown } {
 			zod: {},
 			registerTool: () => {},
 			on: (event: string, handler: Handler) => {
-				(handlers[event] ??= []).push(handler);
+				const eventHandlers = handlers[event] ?? [];
+				eventHandlers.push(handler);
+				handlers[event] = eventHandlers;
 			},
 		},
 	};
@@ -108,6 +121,18 @@ describe("writtenPaths", () => {
 		expect(writtenPaths(replacements, CWD)).toEqual(["/repo/rules/b.md"]);
 	});
 
+	test("ast_edit includes every applied result target", () => {
+		const event = {
+			toolName: "ast_edit",
+			details: {
+				applied: true,
+				files: ["rules/a.md"],
+				fileReplacements: [{ path: "rules/b.md", count: 1 }],
+			},
+		};
+		expect(writtenPaths(event, CWD)).toEqual(["/repo/rules/a.md", "/repo/rules/b.md"]);
+	});
+
 	test("unrelated tools contribute nothing", () => {
 		expect(writtenPaths({ toolName: "bash", input: { command: "ls rules/a.md" } }, CWD)).toEqual([]);
 	});
@@ -137,7 +162,7 @@ describe("integration", () => {
 	test("prepends one reminder to the write that authored a rule", () => {
 		const { handlers, pi } = fakePi();
 		agenticLintReminder(pi as never);
-		const handler = handlers.tool_result![0]!;
+		const handler = requiredHandler(handlers, "tool_result");
 
 		const first = handler(
 			{
@@ -148,8 +173,8 @@ describe("integration", () => {
 			},
 			{ cwd: CWD },
 		) as { content: Array<{ text: string }> };
-		expect(first.content[0]!.text).toContain("agentic_lint");
-		expect(first.content[1]!.text).toBe("wrote 900 bytes");
+		expect(required(first.content[0], "first reminder").text).toContain("agentic_lint");
+		expect(required(first.content[1], "original result").text).toBe("wrote 900 bytes");
 
 		const second = handler(
 			{
@@ -166,7 +191,7 @@ describe("integration", () => {
 	test("stays silent on a non-asset write and survives a malformed event", () => {
 		const { handlers, pi } = fakePi();
 		agenticLintReminder(pi as never);
-		const handler = handlers.tool_result![0]!;
+		const handler = requiredHandler(handlers, "tool_result");
 
 		expect(handler({ toolName: "write", input: { path: "README.md" } }, { cwd: CWD })).toBeUndefined();
 		expect(handler({ toolName: "write", input: { path: 7 } }, {})).toBeUndefined();
@@ -182,9 +207,10 @@ describe("integration", () => {
 			input: { path: "authoring/rules/a.md" },
 			content: [{ type: "text", text: "ok" }],
 		};
-		expect(handlers.tool_result![0]!(event, { cwd: CWD })).toBeDefined();
-		expect(handlers.tool_result![0]!(event, { cwd: CWD })).toBeUndefined();
-		handlers.session_start![0]!({}, {});
-		expect(handlers.tool_result![0]!(event, { cwd: CWD })).toBeDefined();
+		const toolResultHandler = requiredHandler(handlers, "tool_result");
+		expect(toolResultHandler(event, { cwd: CWD })).toBeDefined();
+		expect(toolResultHandler(event, { cwd: CWD })).toBeUndefined();
+		requiredHandler(handlers, "session_start")({}, {});
+		expect(toolResultHandler(event, { cwd: CWD })).toBeDefined();
 	});
 });

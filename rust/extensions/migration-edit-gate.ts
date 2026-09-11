@@ -1,7 +1,7 @@
 import { existsSync, readdirSync } from "node:fs";
 import { isAbsolute, resolve } from "node:path";
 
-import type { ExtensionAPI, ExtensionToolCallEvent } from "@oh-my-pi/pi-coding-agent";
+import type { ExtensionAPI, ToolCallEvent } from "@oh-my-pi/pi-coding-agent";
 
 /**
  * Blocks edits to a migration that is already committed history.
@@ -131,9 +131,12 @@ export function decideToolCall(
 }
 
 export default function migrationEditGate(pi: ExtensionAPI): void {
-	pi.on("tool_call", (event: ExtensionToolCallEvent, ctx) => {
+	pi.on("tool_call", (event, ctx) => {
 		try {
-			const input = event.input ?? {};
+			if (!EDIT_TOOLS.has(event.toolName)) return;
+			// `editedPaths` reads payloads by dynamic key (`_path`, `input`, `_input`
+			// for hashline edits), so the untyped host input is narrowed once here.
+			const input = event.input as Record<string, unknown>;
 			const base = ctx?.cwd ?? process.cwd();
 			const cwd = typeof input.cwd === "string" ? resolve(base, input.cwd) : base;
 			return decideToolCall(event.toolName, input, cwd);

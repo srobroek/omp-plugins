@@ -1,7 +1,7 @@
-import type { PluginSettingSchema } from "@oh-my-pi/pi-coding-agent/extensibility/plugins";
 import { readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
+import type { PluginSettingSchema } from "@oh-my-pi/pi-coding-agent/extensibility/plugins";
 
 export const PLUGIN_PACKAGE = "@srobroek/browser-tools";
 
@@ -162,9 +162,18 @@ async function readSettingsFile(path: string): Promise<Record<string, unknown>> 
 	return parsed.settings?.[PLUGIN_PACKAGE] ?? {};
 }
 
-export async function loadStoredSettings(cwd: string): Promise<StoredSettings> {
+/** The public plugin-settings API, imported lazily so the fallback stays testable. */
+type PluginSettingsModule = {
+	getPluginSettings(pkg: string, cwd: string): Promise<Record<string, unknown> | undefined>;
+};
+
+export async function loadStoredSettings(
+	cwd: string,
+	importPluginSettings: () => Promise<PluginSettingsModule> = () =>
+		import("@oh-my-pi/pi-coding-agent/extensibility/plugins"),
+): Promise<StoredSettings> {
 	try {
-		const module = await import("@oh-my-pi/pi-coding-agent/extensibility/plugins");
+		const module = await importPluginSettings();
 		const values = await module.getPluginSettings(PLUGIN_PACKAGE, cwd);
 		return { values: values ?? {}, source: "public-api", warnings: [] };
 	} catch (error) {

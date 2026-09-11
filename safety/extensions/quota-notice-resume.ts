@@ -24,6 +24,9 @@ const RESUME_TEXT =
 interface ContentBlock {
 	type?: string;
 	text?: string;
+	// Real provider blocks carry more (a `toolCall` has `id`, `name`, `arguments`);
+	// only `type` and `text` are read here.
+	[key: string]: unknown;
 }
 
 interface MessageLike {

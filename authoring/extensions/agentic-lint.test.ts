@@ -1,15 +1,15 @@
 import { afterAll, describe, expect, test } from "bun:test";
-import { mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import agenticLintTool, {
 	detectKind,
 	frontmatterDefects,
-	splitFrontmatter,
 	hostSpecificPaths,
 	lint,
 	main,
 	parseXlint,
+	splitFrontmatter,
 	type Triple,
 } from "./agentic-lint-tool.ts";
 
@@ -55,7 +55,9 @@ type Registered = {
 	execute?: (id: string, params: { paths: string[] }) => Promise<ExecuteResult>;
 };
 
-function registerTool(): Registered {
+type RegisteredTool = Registered & { execute: NonNullable<Registered["execute"]> };
+
+function registerTool(): RegisteredTool {
 	const tools: Registered = {};
 	const fakePi = {
 		...fakeZod(),
@@ -63,7 +65,8 @@ function registerTool(): Registered {
 		on: () => { },
 	};
 	agenticLintTool(fakePi as never);
-	return tools;
+	if (!tools.execute) throw new Error("agenticLintTool registered no execute handler");
+	return tools as RegisteredTool;
 }
 
 const SKILL_TEMPLATE_LONG = `---
@@ -120,10 +123,10 @@ describe("bounded frontmatter and directory traversal", () => {
 		symlinkSync(root, join(root, "loop"), "dir");
 		symlinkSync(outside, join(root, "outside"), "dir");
 		const tool = registerTool();
-		const result = await tool.execute!("id", { paths: [root] });
+		const result = await tool.execute("id", { paths: [root] });
 		expect(result.details.ok).toBe(true);
 		expect(result.content[0]?.text).not.toContain(outside);
-		const linked = await tool.execute!("id", { paths: [join(root, "outside")] });
+		const linked = await tool.execute("id", { paths: [join(root, "outside")] });
 		expect(linked.details.ok).toBe(false);
 	});
 });
@@ -205,6 +208,38 @@ describe("detectKind / splitFrontmatter", () => {
 		expect(splitFrontmatter("nope")[0]).toEqual({});
 	});
 
+});
+
+describe("frontmatter source locations", () => {
+	test("reports body findings at source lines after multiline frontmatter", () => {
+		const content = [
+			"---",
+			"name: source-lines",
+			"description: >-",
+			"  Use when checking source line accounting after frontmatter.",
+			"---",
+			"# Source lines",
+			"MUST consider choosing a concrete condition.",
+			"MUST use Sonnet for this check.",
+			"- MUST repeat this sufficiently long instruction for duplicate detection.",
+			"- MUST repeat this sufficiently long instruction for duplicate detection.",
+		].join("\n");
+		const path = write(tmpDir(), "SKILL.md", content);
+		const findings = lint(path);
+		expect(findings.find((finding) => finding[1] === "E2")?.[2]).toContain("line 7:");
+		expect(findings.find((finding) => finding[1] === "E3")?.[2]).toContain("line 8:");
+		expect(findings.find((finding) => finding[1] === "W9")?.[2]).toBe("line 10 duplicates line 9");
+	});
+
+	test("malformed frontmatter produces one E13 without throwing", () => {
+		const path = write(tmpDir(), "SKILL.md", "---\nname: broken\ndescription: bad: scalar\n---\n# Broken");
+		expect(lint(path).filter((finding) => finding[1] === "E13")).toHaveLength(1);
+	});
+
+	test("unclosed frontmatter produces one E13 without throwing", () => {
+		const path = write(tmpDir(), "SKILL.md", "---\nname: broken\ndescription: Use when checking an unclosed header.");
+		expect(lint(path).filter((finding) => finding[1] === "E13")).toHaveLength(1);
+	});
 });
 
 describe("override mechanism", () => {
@@ -329,7 +364,7 @@ describe("main exit code via execute", () => {
 			.replace("{reason}", "routing depends on full description");
 		const p = write(tmpDir(), "SKILL.md", content);
 		const tools = registerTool();
-		const out = await tools.execute!("id", { paths: [p] });
+		const out = await tools.execute("id", { paths: [p] });
 		expect(out.details.exitCode).toBe(0);
 		expect(out.details.ok).toBe(true);
 	});
@@ -339,7 +374,7 @@ describe("main exit code via execute", () => {
 		const content = SKILL_TEMPLATE_NO_OVERRIDE.replace("{desc}", desc);
 		const p = write(tmpDir(), "SKILL.md", content);
 		const tools = registerTool();
-		const out = await tools.execute!("id", { paths: [p] });
+		const out = await tools.execute("id", { paths: [p] });
 		expect(out.details.exitCode).toBe(1);
 	});
 
@@ -358,7 +393,7 @@ MUST do something.
 `;
 		const p = write(tmpDir(), "SKILL.md", content);
 		const tools = registerTool();
-		const out = await tools.execute!("id", { paths: [p] });
+		const out = await tools.execute("id", { paths: [p] });
 		expect(out.details.exitCode).toBe(1);
 	});
 });

@@ -2,9 +2,9 @@ import { existsSync } from "node:fs";
 import { join, resolve } from "node:path";
 
 import type {
-	ExtensionAPI,
-	ExtensionToolCallEvent,
-	ExtensionToolResultEvent,
+    ExtensionAPI,
+    ToolCallEvent,
+    ToolResultEvent,
 } from "@oh-my-pi/pi-coding-agent";
 
 import { ancestors, firstPresent, readText } from "./lib";
@@ -135,9 +135,9 @@ export function formatAdvisory(hits: SwapHit[]): string {
 }
 
 function prepend(
-	event: ExtensionToolResultEvent,
+	event: ToolResultEvent,
 	text: string,
-): { content: ExtensionToolResultEvent["content"] } {
+): { content: ToolResultEvent["content"] } {
 	const banner = `<system-reminder>\n${text}\n</system-reminder>\n\n`;
 	if (event.content[0]?.type === "text") {
 		return {
@@ -151,7 +151,7 @@ function prepend(
 
 export default function preferToolsAdvisory(pi: ExtensionAPI): void {
 	const pending = new Map<string, SwapHit[]>();
-	pi.on("tool_call", (event: ExtensionToolCallEvent, ctx) => {
+	pi.on("tool_call", (event: ToolCallEvent, ctx) => {
 		try {
 			if (event.toolName !== "bash") return;
 			const command = typeof event.input.command === "string" ? event.input.command : "";
@@ -168,7 +168,7 @@ export default function preferToolsAdvisory(pi: ExtensionAPI): void {
 		}
 	});
 
-	pi.on("tool_result", (event: ExtensionToolResultEvent) => {
+	pi.on("tool_result", (event: ToolResultEvent) => {
 		try {
 			const hits = pending.get(event.toolCallId);
 			pending.delete(event.toolCallId);

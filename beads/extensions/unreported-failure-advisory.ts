@@ -17,7 +17,7 @@
  * advisory that can take down a session is worse than no advisory at all.
  */
 
-import type { ExtensionAPI, ExtensionContext, ExtensionToolResultEvent } from "@oh-my-pi/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext, ToolResultEvent } from "@oh-my-pi/pi-coding-agent";
 
 import { commandSegments, extractCommand } from "./bd-actor-gate.ts";
 import { beadsDir, envelopeData, parseTrailingJson } from "./session-beads-lifecycle.ts";
@@ -46,6 +46,47 @@ const MAX_SIGNAL_CHARS = 120;
  */
 const CHECK_RE =
 	/\b(?:(?:bun|npm|pnpm|yarn|deno|node)\s+(?:run\s+)?(?:test|typecheck|type-check|lint|check|build)|bunx\s+\S+|npx\s+\S+|tsc\b|biome\b|eslint\b|oxlint\b|vitest\b|jest\b|mocha\b|slopvac\b|pytest\b|ruff\b|mypy\b|pyright\b|tox\b|cargo\s+(?:test|clippy|check|build|fmt)|go\s+(?:test|vet|build)|golangci-lint\b|just\s+\S+|make\b|mise\s+run\s+\S+|moon\s+run\s+\S+|uv\s+run\s+\S+|poetry\s+run\s+\S+|pre-commit\s+run)/i;
+
+const WRAPPER_VALUE_FLAGS: Record<string, true> = {
+	"-C": true,
+	"-g": true,
+	"--group": true,
+	"-h": true,
+	"--host": true,
+	"-p": true,
+	"--prompt": true,
+	"-R": true,
+	"--chroot": true,
+	"-T": true,
+	"--command-timeout": true,
+	"-u": true,
+	"--unset": true,
+	"--user": true,
+};
+
+function commandStart(tokens: string[]): number {
+	let index = 0;
+	while (index < tokens.length) {
+		while (/^[A-Za-z_]\w*=/.test(tokens[index] ?? "")) index++;
+		const wrapper = tokens[index];
+		if (wrapper === "command") {
+			if (tokens[index + 1]?.startsWith("-")) return tokens.length;
+			index++;
+			continue;
+		}
+		if (wrapper !== "env" && wrapper !== "sudo") return index;
+		index++;
+		while (tokens[index]?.startsWith("-")) {
+			const flag = tokens[index] as string;
+			index++;
+			if (WRAPPER_VALUE_FLAGS[flag] === true) index++;
+		}
+		if (wrapper === "env") {
+			while (/^[A-Za-z_]\w*=/.test(tokens[index] ?? "")) index++;
+		}
+	}
+	return index;
+}
 
 /**
  * A log record the program under test printed, rather than the runner's own
@@ -146,9 +187,7 @@ export function resetUnreportedFailureAdvisoryForTests(): void {
  */
 export function checkLabel(command: string): string | undefined {
 	for (const tokens of commandSegments(command)) {
-		let i = 0;
-		while (/^[A-Za-z_]\w*=/.test(tokens[i] ?? "")) i++;
-		const candidate = tokens.slice(i).join(" ");
+		const candidate = tokens.slice(commandStart(tokens)).join(" ");
 		const match = candidate.match(CHECK_RE);
 		if (match?.index === 0) return match[0].replace(/\s+/g, " ").toLowerCase();
 	}
@@ -269,7 +308,7 @@ export function formatUnreportedAdvisory(unreported: readonly string[], checks: 
 }
 
 /** Text blocks of a tool result, joined. */
-function resultText(event: ExtensionToolResultEvent): string {
+function resultText(event: ToolResultEvent): string {
 	let text = "";
 	for (const block of event.content ?? []) {
 		if (block !== null && typeof block === "object" && (block as { type?: string }).type === "text") {
@@ -286,7 +325,7 @@ function resultText(event: ExtensionToolResultEvent): string {
  * `Command exited with code N` notice can be cut when the output is capped or
  * spilled to an artifact. The structured field cannot be.
  */
-function exitLine(event: ExtensionToolResultEvent): string {
+function exitLine(event: ToolResultEvent): string {
 	const details: unknown = event.details;
 	if (details === null || typeof details !== "object") return "";
 	const code = (details as { exitCode?: unknown }).exitCode;
@@ -322,7 +361,7 @@ export default function unreportedFailureAdvisory(pi: ExtensionAPI): void {
 		observed.delete(sessionKey(ctx));
 	});
 
-	pi.on("tool_result", (event: ExtensionToolResultEvent, ctx: ExtensionContext) => {
+	pi.on("tool_result", (event: ToolResultEvent, ctx: ExtensionContext) => {
 		try {
 			// A shell-style tool is one whose input carries a command line. Naming tools
 			// instead would miss every shell an MCP server or plugin adds.
@@ -362,13 +401,15 @@ export default function unreportedFailureAdvisory(pi: ExtensionAPI): void {
 			if (bugs === undefined) return;
 			const unreported = unreportedFailures([...seen.keys()], bugs);
 			if (unreported.length === 0) return;
-			pi.sendMessage({
-				customType: "com.srobroek.beads.unreported-failure",
-				content: formatUnreportedAdvisory(unreported, seen),
-				display: true,
-				attribution: "user",
-				triggerTurn: false,
-			});
+			pi.sendMessage(
+				{
+					customType: "com.srobroek.beads.unreported-failure",
+					content: formatUnreportedAdvisory(unreported, seen),
+					display: true,
+					attribution: "user",
+				},
+				{ triggerTurn: false },
+			);
 		} catch (error) {
 			pi.logger.error("beads unreported-failure check failed", {
 				error: error instanceof Error ? error.message : String(error),

@@ -5,6 +5,7 @@ import { join, resolve } from "node:path";
 
 import unpushedWorkAdvisory, {
 	agentAuthoredDirty,
+	createAdvisoryState,
 	extractWrittenPaths,
 	formatAdvisory,
 	handleSessionStop,
@@ -12,10 +13,9 @@ import unpushedWorkAdvisory, {
 	parseNumstat,
 	parsePorcelain,
 	recordAgentPath,
-	createAdvisoryState,
-	shouldAdvise,
 	SIGNIFICANT_AGENT_CHANGED_LINES,
 	SIGNIFICANT_AGENT_DIRTY_FILES,
+	shouldAdvise,
 	totalChangedLines,
 } from "./unpushed-work-advisory.ts";
 
@@ -395,7 +395,9 @@ describe("integration temp git repo", () => {
 			zod: {},
 			registerTool: () => { },
 			on: (e: string, h: (ev: unknown, ctx?: unknown) => unknown) => {
-				(handlers[e] ??= []).push(h);
+				const registered = handlers[e] ?? [];
+				registered.push(h);
+				handlers[e] = registered;
 			},
 		};
 		unpushedWorkAdvisory(fakePi as never);
@@ -476,7 +478,9 @@ describe("integration temp git repo", () => {
 			zod: {},
 			registerTool: () => { },
 			on: (e: string, h: (ev: unknown, ctx?: unknown) => unknown) => {
-				(handlers[e] ??= []).push(h);
+				const registered = handlers[e] ?? [];
+				registered.push(h);
+				handlers[e] = registered;
 			},
 		};
 		unpushedWorkAdvisory(fakePi as never);

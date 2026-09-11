@@ -1,19 +1,24 @@
-import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
-import type { Cookie, Dialog, ElementHandle, KeyInput, Page } from "puppeteer-core";
 import { mkdir } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
+import type { Cookie, Dialog, ElementHandle, KeyInput, Page } from "puppeteer-core";
 import type { Channel, ConfigOverrides, EffectiveConfig, Engine, ProfileMode } from "./lib/config.ts";
 import { CHANNELS, COPY_STRATEGIES, ENGINES, PROFILE_MODES, resolveConfig, splitDomains } from "./lib/config.ts";
-import { assertChannelEngine, resolveBrowser, resolveSourceProfile } from "./lib/discovery.ts";
 import type { ResolvedBrowser } from "./lib/discovery.ts";
+import { assertChannelEngine, resolveBrowser, resolveSourceProfile } from "./lib/discovery.ts";
 import { launchLocal, launchRemote } from "./lib/driver.ts";
-import { checkNavigation, createAuditWriter, deriveDomainPolicy, applyPagePolicy, redact, requireFeature, visibleCookies } from "./lib/policy.ts";
 import type { AuditWriter } from "./lib/policy.ts";
+import { applyPagePolicy, checkNavigation, createAuditWriter, deriveDomainPolicy, redact, requireFeature, visibleCookies } from "./lib/policy.ts";
 import { runPreflight } from "./lib/preflight.ts";
 import { grantCookiesFromSource, materializeProfile, removeMaterializedProfile } from "./lib/profile.ts";
+import type { HeadedSession, SessionSummary } from "./lib/session.ts";
 import { closeAllSessions, closeSession, createSession, getSession, installIdleSweep, listArtifacts, registerPage, selectedPage, selectTab, sessionSummary, sessions, syncPages } from "./lib/session.ts";
-import type { HeadedSession } from "./lib/session.ts";
+
+declare global {
+	/** Buffer injected into the page by the console policy; absent until then. */
+	var __ompHeadedConsole: unknown[] | undefined;
+}
 
 interface ToolParams extends ConfigOverrides {
 	op: string;
@@ -172,8 +177,11 @@ export default function headedBrowserTools(pi: ExtensionAPI): void {
 			else if (params.op === "reload") await withPageTimeout(session, ctx, "reload", timeout, () => page.reload({ timeout, waitUntil: "domcontentloaded" }));
 			else if (params.op === "wait") {
 				if (params.selector) await withPageTimeout(session, ctx, "wait", timeout, () => page.waitForSelector(params.selector!, { timeout }));
-				else if (params.text) await withPageTimeout(session, ctx, "wait", timeout, () => page.waitForFunction((text) => document.body?.innerText.includes(text), { timeout }, params.text));
-				else throw new Error("headed-browser: selector or text is required for wait");
+				else if (params.text) {
+					// Hoisted: narrowing on a mutable property does not survive into the closure.
+					const needle = params.text;
+					await withPageTimeout(session, ctx, "wait", timeout, () => page.waitForFunction((text) => document.body?.innerText.includes(text), { timeout }, needle));
+				} else throw new Error("headed-browser: selector or text is required for wait");
 			} else if (params.op === "viewport") {
 				if (!params.width || !params.height) throw new Error("headed-browser: width and height are required for viewport");
 				await page.setViewport({ width: params.width, height: params.height, deviceScaleFactor: params.deviceScaleFactor ?? 1 });
@@ -222,7 +230,9 @@ export default function headedBrowserTools(pi: ExtensionAPI): void {
 			} else if (params.op === "evaluate") {
 				requireFeature(session.config, "Evaluate");
 				const expression = requireString(params.expression, "expression");
-				const value = await withPageTimeout(session, ctx, "evaluate", timeout, () => page.evaluate((source) => (0, eval)(source), expression));
+				// Puppeteer evaluates a string argument as a page expression itself, so the
+				// tool needs no `eval` of its own.
+				const value = await withPageTimeout(session, ctx, "evaluate", timeout, () => page.evaluate(expression));
 				payload = /document\.cookie/.test(expression) ? "<REDACTED>" : value;
 			} else if (params.op === "cookies") payload = visibleCookies(await withPageTimeout(session, ctx, "cookies", timeout, () => page.cookies()), session.config);
 			else if (params.op === "console") {
@@ -282,7 +292,9 @@ export default function headedBrowserTools(pi: ExtensionAPI): void {
 					} else if (params.op === "upload") {
 						requireFeature(session.config, "FileUpload");
 						if (!params.files?.length) throw new Error("headed-browser: files is required for upload");
-						await element.uploadFile(...params.files);
+						// `targetElement` yields `ElementHandle<Element>`; `uploadFile` is typed
+						// for an input handle, and the element type is only knowable at runtime.
+						await (element as ElementHandle<HTMLInputElement>).uploadFile(...params.files);
 					} else throw new Error(`headed-browser: unsupported headed_act op ${params.op}`);
 				}
 			});
@@ -351,7 +363,7 @@ async function domSnapshot(session: HeadedSession, page: Page, selector?: string
 			while (current && current !== document.documentElement) {
 				let part = current.tagName.toLowerCase();
 				if (current.id) { part += `#${CSS.escape(current.id)}`; parts.unshift(part); break; }
-				const parent = current.parentElement;
+				const parent: Element | null = current.parentElement;
 				if (parent) {
 					const siblings = [...parent.children].filter((child) => child.tagName === current?.tagName);
 					if (siblings.length > 1) part += `:nth-of-type(${siblings.indexOf(current) + 1})`;
@@ -409,7 +421,9 @@ async function readMetrics(page: Page): Promise<Record<string, unknown>> {
 		const resources = performance.getEntriesByType("resource") as PerformanceResourceTiming[];
 		const summary: Record<string, { count: number; transferSize: number; duration: number }> = {};
 		for (const resource of resources) {
-			const key = resource.initiatorType || "other"; const bucket = summary[key] ??= { count: 0, transferSize: 0, duration: 0 };
+			const key = resource.initiatorType || "other";
+			const bucket = summary[key] ?? { count: 0, transferSize: 0, duration: 0 };
+			summary[key] = bucket;
 			bucket.count += 1; bucket.transferSize += resource.transferSize; bucket.duration += resource.duration;
 		}
 		const supported = PerformanceObserver.supportedEntryTypes ?? [];
@@ -468,8 +482,10 @@ function requireString(value: unknown, name: string): string {
 	return value;
 }
 
-function resultEnvelope(payload: unknown, details: Record<string, unknown>): ToolResult {
-	return { content: [{ type: "text", text: JSON.stringify(payload, null, 2) }], details };
+function resultEnvelope(payload: unknown, details: SessionSummary | Record<string, unknown>): ToolResult {
+	// Spread into a fresh literal: an `interface` never gains the implicit index
+	// signature that `Record<string, unknown>` needs, but an object literal does.
+	return { content: [{ type: "text", text: JSON.stringify(payload, null, 2) }], details: { ...details } };
 }
 
 async function safeResult(params: ToolParams, operation: () => Promise<ToolResult>): Promise<ToolResult> {

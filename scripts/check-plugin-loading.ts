@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
-import { cp, mkdir, mkdtemp, readFile, readdir, realpath, rm, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
+import { cp, mkdir, mkdtemp, readdir, readFile, realpath, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import type { Subprocess } from "bun";
@@ -62,7 +62,8 @@ async function expected(root: string) {
   const agentNames = await Promise.all(agents.map(async p => {
     const text = await readFile(p, "utf8");
     const match = text.match(/^name:\s*["']?([^\r\n"']+)/m);
-    check(match, `${p}: agent has no name`); return match[1].trim();
+    const name = match?.[1];
+    check(name !== undefined, `${p}: agent has no name`); return name.trim();
   }));
   // Tool names are not a package.json field: declarations in the manifest-selected
   // source entries are the independent expectation, including cold dist runs.
@@ -72,7 +73,7 @@ async function expected(root: string) {
     const text = await readFile(resolve(root, source), "utf8");
     const registrations = [...text.matchAll(/\.registerTool\s*\(\s*\{\s*name:\s*["']([^"']+)["']/g)];
     check(registrations.length === (text.match(/\.registerTool\s*\(/g) ?? []).length, `${source}: unsupported tool declaration; add an explicit expectation`);
-    tools.push(...registrations.map(m => m[1]));
+    tools.push(...registrations.flatMap(m => m[1] ? [m[1]] : []));
   }
   const mcp = typeof manifest.mcpServers === "object" ? Object.keys(manifest.mcpServers) : [];
   return {
@@ -294,10 +295,15 @@ async function main() {
   }
 }
 try {
-  if (process.argv[2] === "--worker") console.log(JSON.stringify(await worker(process.argv[3])));
-  else if (process.argv[2] === "--negative") {
+  if (process.argv[2] === "--worker") {
+    const workerPath = process.argv[3];
+    check(workerPath !== undefined, "missing worker path");
+    console.log(JSON.stringify(await worker(workerPath)));
+  } else if (process.argv[2] === "--negative") {
     try {
-      const p = await expected(process.argv[3]);
+      const negativePath = process.argv[3];
+      check(negativePath !== undefined, "missing negative fixture path");
+      const p = await expected(negativePath);
       const { loadExtensions } = await import(join(host!, "src/extensibility/extensions/loader.ts"));
       const loaded = await loadExtensions(p.extensions, process.cwd());
       check(loaded.errors.length === 0, "broken extension import");

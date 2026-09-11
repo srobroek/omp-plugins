@@ -25,17 +25,16 @@ function createState() {
 }
 function targetPaths(input) {
   const out = [];
-  for (const key of ["path", "file_path"]) {
-    const value = input[key];
-    if (typeof value === "string" && value.length > 0)
-      out.push(value);
+  if ("path" in input && typeof input.path === "string" && input.path.length > 0) {
+    out.push(input.path);
   }
-  const { paths } = input;
-  if (Array.isArray(paths)) {
-    for (const p of paths) {
+  if ("file_path" in input && typeof input.file_path === "string" && input.file_path.length > 0) {
+    out.push(input.file_path);
+  }
+  if ("paths" in input && Array.isArray(input.paths)) {
+    for (const p of input.paths)
       if (typeof p === "string" && p.length > 0)
         out.push(p);
-    }
   }
   return out;
 }
@@ -70,7 +69,7 @@ function decideToolCall(state, toolName, input) {
     return;
   }
   if (toolName === "bash") {
-    const command = input.command;
+    const command = "command" in input ? input.command : undefined;
     if (typeof command === "string" && INSTALLER.test(command)) {
       return { block: true, reason: DENY_REASON };
     }

@@ -1,5 +1,5 @@
-import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
 import { basename, resolve } from "node:path";
+import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
 import {
 	acceptedPaths,
 	type Candidate,
@@ -13,8 +13,8 @@ import {
 	parseTranscript,
 	pathKeys,
 	repoRoot,
-	scanTranscriptMeta,
 	type SessionMeta,
+	scanTranscriptMeta,
 	sessionsRoot,
 	type TodoPhase,
 	type Transcript,
@@ -214,6 +214,15 @@ function withCost(text: string): string {
 	return `${text}\n\nThis window: ~${estimateTokens(text).toLocaleString()} uncached tokens (${text.length.toLocaleString()} chars, estimated).`;
 }
 
+function boundedWithCost(text: string, maxChars: number): string {
+	const costed = withCost(text);
+	if (costed.length <= maxChars) return costed;
+	const notice = `Insufficient max_chars=${maxChars}: complete output requires ${costed.length} characters. Increase max_chars; no partial handoff returned.`;
+	if (notice.length <= maxChars) return notice;
+	const minimal = `max_chars=${maxChars} too small`;
+	return minimal.length <= maxChars ? minimal : "";
+}
+
 export function renderTodos(phases: TodoPhase[]): string[] {
 	const lines: string[] = [];
 	for (const phase of phases) {
@@ -262,7 +271,10 @@ export async function resolveSession(cwd: string, options: ReadOptions): Promise
 	const matches = (await candidates(root, accept)).filter(
 		(candidate) => candidate.head.id.startsWith(wanted) || basename(candidate.file).includes(wanted),
 	);
-	if (matches.length === 1) return { file: matches[0].file };
+	if (matches.length === 1) {
+		const match = matches[0];
+		if (match) return { file: match.file };
+	}
 	if (matches.length === 0) {
 		return { error: `resume_session: no session under ${root} for this project matches "${wanted}".` };
 	}
@@ -278,7 +290,7 @@ export function renderRead(transcript: Transcript, options: ReadOptions): string
 	const total = meta.turnCount;
 	const end = total - offset;
 	if (end <= 0) {
-		return withCost(`No turns at offset ${offset} (session ${meta.id.slice(0, 8)} has ${total} turns).`);
+		return boundedWithCost(`No turns at offset ${offset} (session ${meta.id.slice(0, 8)} has ${total} turns).`, maxChars);
 	}
 	const start = Math.max(transcript.windowStart, end - perWindow);
 
@@ -296,8 +308,9 @@ export function renderRead(transcript: Transcript, options: ReadOptions): string
 		const size = marker.length + block.length + (rendered.length > 0 ? 1 : 0);
 		if (used + size > maxChars) {
 			if (rendered.length === 0) {
-				return withCost(
-					`Insufficient max_chars=${maxChars}: the turn at offset ${offset} requires ${size} characters. Increase max_chars to at least ${size}; no turns rendered.`,
+				return boundedWithCost(
+					`Insufficient max_chars=${maxChars}: the turn at offset ${offset} requires ${size} characters. Increase max_chars; no turns rendered.`,
+					maxChars,
 				);
 			}
 			break;
@@ -349,7 +362,7 @@ export function renderRead(transcript: Transcript, options: ReadOptions): string
 		"STOP. Summarize the goal, the last action, the todo state, branch/cwd, and what is incomplete;",
 		"surface anything ambiguous, then wait for the user to confirm before resuming any work.",
 	);
-	return withCost(out.join("\n"));
+	return boundedWithCost(out.join("\n"), maxChars);
 }
 
 export default function resumeSessionTool(pi: ExtensionAPI): void {
@@ -365,7 +378,7 @@ export default function resumeSessionTool(pi: ExtensionAPI): void {
 			.number()
 			.int()
 			.optional()
-			.describe("read: cap on complete turn text, including compaction markers; metadata excluded (default 14000)"),
+			.describe("read: hard cap on the complete returned text, including metadata and paging guidance (default 14000)"),
 		include_thinking: z
 			.boolean()
 			.optional()

@@ -89,16 +89,21 @@ describe("sniff tool catalog", () => {
 			expect(seen.has(tool.name)).toBe(false);
 			seen.add(tool.name);
 		}
-		expect(tools.some((tool) => tool.name === "stylelint-order")).toBe(false);
-		expect(
-			tools.some((tool) => tool.name === "stylelint-declaration-strict-value"),
-		).toBe(false);
 		const stylelint = tools.find((tool) => tool.name === "stylelint");
-		expect(stylelint?.hostPackages).toContain("stylelint-order");
-		expect(stylelint?.hostPackages).toContain(
+		if (!stylelint || !("hostPackages" in stylelint) || !("configFiles" in stylelint)) {
+			throw new Error("stylelint catalog entry is missing host package metadata");
+		}
+		// Hosted plugins stay metadata on their host and never become runtime tools.
+		// Asserted against the host list rather than by name: `tool.name` is a literal
+		// union, so naming a non-tool directly is a comparison the compiler rejects.
+		for (const hosted of stylelint.hostPackages) {
+			expect(seen.has(hosted)).toBe(false);
+		}
+		expect(stylelint.hostPackages).toContain("stylelint-order");
+		expect(stylelint.hostPackages).toContain(
 			"stylelint-declaration-strict-value",
 		);
-		expect(stylelint?.configFiles).toContain("stylelint.config.js");
+		expect(stylelint.configFiles).toContain("stylelint.config.js");
 		expect(tools.find((tool) => tool.name === "graphql-inspector")?.pkg).toBe(
 			"@graphql-inspector/cli",
 		);

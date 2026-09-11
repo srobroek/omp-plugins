@@ -1,4 +1,7 @@
 // @bun
+// extensions/detect.ts
+import { statSync } from "fs";
+
 // node_modules/smol-toml/dist/date.js
 /*!
  * Copyright (c) Squirrel Chat et al., All rights reserved.
@@ -877,7 +880,6 @@ function parse(toml, { maxDepth = 1000, integersAsBigInt } = {}) {
  */
 
 // extensions/detect.ts
-import { statSync } from "fs";
 var MISSING = "?";
 var REQ_SPLIT = /[\[<>=!~;\s]/;
 var REQ_NAME = /^[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?$/;
@@ -932,12 +934,18 @@ function specVersion(spec) {
   return scalar(spec);
 }
 function parseRequirement(raw) {
-  let line = raw.split("#", 1)[0].trim();
+  const first = raw.split("#", 1)[0];
+  if (first === undefined)
+    return ["", ""];
+  let line = first.trim();
   line = line.replace(/\\+$/, "").trim();
   if (!line || line.startsWith("-") || line.startsWith(".") || line.startsWith("/")) {
     return ["", ""];
   }
-  line = line.split(";", 1)[0].trim();
+  const beforeSemicolon = line.split(";", 1)[0];
+  if (beforeSemicolon === undefined)
+    return ["", ""];
+  line = beforeSemicolon.trim();
   const match = REQ_SPLIT.exec(line);
   if (!match) {
     return REQ_NAME.test(line) ? [line, MISSING] : ["", ""];
@@ -1159,7 +1167,7 @@ class Detector {
       return;
     for (const raw of lines) {
       const match = GEM.exec(raw);
-      if (match)
+      if (match?.[2])
         this.emit("rubygems", match[2], match[4] || MISSING);
     }
   }

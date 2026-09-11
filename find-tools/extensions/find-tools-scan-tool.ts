@@ -2,7 +2,7 @@ import { spawn } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
-
+import type { TSchema } from "@oh-my-pi/pi-ai";
 import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
 
 export const SURFACES = [
@@ -57,69 +57,65 @@ export function defaultRun(
 	if (options.signal?.aborted) return Promise.resolve({ ok: false, stdout: "", stderr: "Cancelled before spawn" });
 	const schedule = options.setTimeout ?? setTimeout;
 	const clear = options.clearTimer ?? clearTimeout;
-	const { promise, resolve } = Promise.withResolvers<{ ok: boolean; stdout: string; stderr: string }>();
-	try {
-		const proc = spawn(argv[0], argv.slice(1), {
-			stdio: ["ignore", "pipe", "pipe"], detached: process.platform !== "win32",
-		});
-		const stdout: Buffer[] = [];
-		const stderr: Buffer[] = [];
-		let bytes = 0;
-		let stopped = "";
-		let settled = false;
-		let cleanup: Timer | undefined;
-		const finish = (code: number) => {
-			if (settled) return;
-			settled = true;
-			clear(deadline);
-			if (cleanup) clear(cleanup);
-			options.signal?.removeEventListener("abort", abort);
-			proc.stdout.destroy();
-			proc.stderr.destroy();
-			resolve({
-				ok: !stopped && code === 0,
-				stdout: Buffer.concat(stdout).toString("utf8"),
-				stderr: [Buffer.concat(stderr).toString("utf8"), stopped].filter(Boolean).join("\n"),
+	const command = argv[0];
+	if (!command) return Promise.resolve({ ok: false, stdout: "", stderr: "No command provided" });
+	return new Promise((resolve) => {
+		try {
+			const proc = spawn(command, argv.slice(1), {
+				stdio: ["ignore", "pipe", "pipe"], detached: process.platform !== "win32",
 			});
-		};
-		const stop = (reason: string) => {
-			if (stopped || settled) return;
-			stopped = reason;
-			try {
-				if (process.platform !== "win32" && proc.pid) process.kill(-proc.pid, "SIGKILL");
-				else proc.kill("SIGKILL");
-			} catch { /* already exited */ }
-			cleanup = schedule(() => finish(1), 1_000);
-		};
-		const abort = () => stop("Cancelled");
-		const deadline = schedule(() => stop("Discovery command deadline exceeded"),
-			Number.isFinite(timeoutMs) ? Math.max(1, Math.min(timeoutMs, NETWORK_MS)) : NETWORK_MS);
-		const collect = (target: Buffer[], chunk: Buffer) => {
-			if (stopped || settled) return;
-			const remaining = 65_536 - bytes;
-			if (remaining > 0) {
-				const kept = chunk.subarray(0, remaining);
-				target.push(Buffer.from(kept));
-				bytes += kept.length;
-			}
-			if (chunk.length > remaining) stop("Discovery command output limit exceeded");
-		};
-		proc.stdout.on("data", (chunk: Buffer) => collect(stdout, chunk));
-		proc.stderr.on("data", (chunk: Buffer) => collect(stderr, chunk));
-		proc.on("error", (error) => { stopped = `Discovery command failed to start: ${error.message}`; finish(1); });
-		proc.on("close", (code) => finish(code ?? 1));
-		options.signal?.addEventListener("abort", abort, { once: true });
-		if (options.signal?.aborted) abort();
-	} catch (error) {
-		resolve({ ok: false, stdout: "", stderr: error instanceof Error ? error.message : String(error) });
-	}
-	return promise;
+			const stdout: Buffer[] = [];
+			const stderr: Buffer[] = [];
+			let bytes = 0;
+			let stopped = "";
+			let settled = false;
+			let cleanup: Timer | undefined;
+			const finish = (code: number) => {
+				if (settled) return;
+				settled = true;
+				clear(deadline);
+				if (cleanup) clear(cleanup);
+				options.signal?.removeEventListener("abort", abort);
+				proc.stdout?.destroy();
+				proc.stderr?.destroy();
+				resolve({
+					ok: !stopped && code === 0,
+					stdout: Buffer.concat(stdout).toString("utf8"),
+					stderr: [Buffer.concat(stderr).toString("utf8"), stopped].filter(Boolean).join("\n"),
+				});
+			};
+			const stop = (reason: string) => {
+				if (stopped || settled) return;
+				stopped = reason;
+				try {
+					if (process.platform !== "win32" && proc.pid) process.kill(-proc.pid, "SIGKILL");
+					else proc.kill("SIGKILL");
+				} catch { /* already exited */ }
+				cleanup = schedule(() => finish(1), 1_000);
+			};
+			const abort = () => stop("Cancelled");
+			const deadline = schedule(() => stop("Discovery command deadline exceeded"), Number.isFinite(timeoutMs) ? Math.max(1, Math.min(timeoutMs, NETWORK_MS)) : NETWORK_MS);
+			const collect = (target: Buffer[], chunk: Buffer) => {
+				if (stopped || settled) return;
+				const remaining = 65_536 - bytes;
+				if (remaining > 0) { const kept = chunk.subarray(0, remaining); target.push(Buffer.from(kept)); bytes += kept.length; }
+				if (chunk.length > remaining) stop("Discovery command output limit exceeded");
+			};
+			proc.stdout?.on("data", (chunk: Buffer) => collect(stdout, chunk));
+			proc.stderr?.on("data", (chunk: Buffer) => collect(stderr, chunk));
+			proc.on("error", (error) => { stopped = `Discovery command failed to start: ${error.message}`; finish(1); });
+			proc.on("close", (code) => finish(code ?? 1));
+			options.signal?.addEventListener("abort", abort, { once: true });
+			if (options.signal?.aborted) abort();
+		} catch (error) {
+			resolve({ ok: false, stdout: "", stderr: error instanceof Error ? error.message : String(error) });
+		}
+	});
 }
 
 function defaultWhich(bin: string): boolean {
 	return Bun.which(bin) !== null;
 }
-
 function defaultRead(path: string): string | null {
 	try {
 		return readFileSync(path, "utf8");
@@ -395,7 +391,7 @@ export default function findToolsScanTool(pi: ExtensionAPI): void {
 		parameters: z.object({
 			query: z.string().describe("Capability query"),
 			surfaces: z.array(z.string()).optional().describe("Optional subset of surface names"),
-		}),
+		}) as unknown as TSchema, // pi.zod and the host TypeBox schema types differ.
 		approval: "read",
 		execute: async (_id, params: ScanParams, signal, _onUpdate, ctx) => {
 			try {

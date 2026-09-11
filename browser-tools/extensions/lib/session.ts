@@ -1,8 +1,8 @@
-import type { Browser, Page } from "puppeteer-core";
-import type { ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 import { randomBytes } from "node:crypto";
 import { readdir, stat } from "node:fs/promises";
 import { join } from "node:path";
+import type { ExtensionContext } from "@oh-my-pi/pi-coding-agent";
+import type { Browser, Page } from "puppeteer-core";
 import type { EffectiveConfig, ProfileMode } from "./config.ts";
 import type { ResolvedBrowser } from "./discovery.ts";
 import type { RemoteResources } from "./driver.ts";

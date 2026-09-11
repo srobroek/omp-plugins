@@ -19,7 +19,9 @@ function fakePi(): { handlers: Record<string, Handler[]>; pi: { zod: unknown; re
 			zod: chain,
 			registerTool: () => {},
 			on: (ev, h) => {
-				(handlers[ev] ??= []).push(h);
+				const registered = handlers[ev] ?? [];
+				registered.push(h);
+				handlers[ev] = registered;
 			},
 		},
 	};
@@ -113,7 +115,9 @@ test("rewritten literal bodies remain data in a real shell and leave later bodie
 	const command = `gh pr create -b old --body=${quote(body)}; gh issue edit 3 --body 'unrelated'`;
 	const { handlers, pi } = fakePi();
 	closeKeywords(pi as never);
-	const result = handlers.tool_call[0]({
+	const handler = handlers.tool_call?.[0];
+	if (!handler) throw new Error("tool_call handler not registered");
+	const result = handler({
 		toolName: "bash", input: { command },
 	}) as { input: { command: string } };
 	const run = spawnSync("timeout", ["5s", "bash", "-c",

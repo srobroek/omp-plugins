@@ -1,25 +1,17 @@
 import { describe, expect, test } from "bun:test";
 
-import { defaultRun, scanSurfaces, SURFACES } from "./find-tools-scan-tool.ts";
+import { defaultRun, SURFACES, scanSurfaces } from "./find-tools-scan-tool.ts";
 
 
 describe("scanSurfaces isolation", () => {
 	test("one fetch failure does not fail other surfaces", async () => {
-		const fetchFn = (async (url: string | URL) => {
+		const fetchFn = Object.assign(async (url: string | URL) => {
 			const href = String(url);
-			if (href.includes("registry.modelcontextprotocol.io")) {
-				throw new Error("network down");
-			}
-			if (href.includes("registry.npmjs.org")) {
-				return new Response(JSON.stringify({ objects: [{ package: { name: "x-mcp", description: "hit" } }] }), {
-					status: 200,
-				});
-			}
-			if (href.includes("smithery")) {
-				return new Response("{}", { status: 200 });
-			}
+			if (href.includes("registry.modelcontextprotocol.io")) throw new Error("network down");
+			if (href.includes("registry.npmjs.org")) return new Response(JSON.stringify({ objects: [{ package: { name: "x-mcp", description: "hit" } }] }), { status: 200 });
+			if (href.includes("smithery")) return new Response("{}", { status: 200 });
 			return new Response("{}", { status: 404 });
-		}) as typeof fetch;
+		}, { preconnect: () => {} }) as typeof fetch;
 
 		const { results, gaps } = await scanSurfaces(
 			{ query: "browser" },
@@ -48,7 +40,7 @@ describe("scanSurfaces isolation", () => {
 		const { results, gaps } = await scanSurfaces(
 			{ query: "x", surfaces: ["local"] },
 			{
-				fetchFn: (async () => new Response("should not run")) as typeof fetch,
+				fetchFn: Object.assign(async () => new Response("should not run"), { preconnect: () => {} }) as typeof fetch,
 				run: async () => ({ ok: true, stdout: "plugins", stderr: "" }),
 				readFile: () => "{}",
 				which: () => true,
@@ -63,8 +55,8 @@ describe("scanSurfaces isolation", () => {
 	test.each(["{", "{}", "null"])("invalid npm responses disclose incomplete coverage: %s", async (invalid) => {
 		let calls = 0;
 		const { results, gaps } = await scanSurfaces({ query: "example", surfaces: ["npm"] }, {
-			fetchFn: (async () => new Response(calls++ === 0
-				? JSON.stringify({ objects: [{ package: { name: "retained-hit" } }] }) : invalid)) as typeof fetch,
+			fetchFn: Object.assign(async () => new Response(calls++ === 0
+				? JSON.stringify({ objects: [{ package: { name: "retained-hit" } }] }) : invalid), { preconnect: () => {} }) as typeof fetch,
 		});
 		const npm = results.find((result) => result.surface === "npm");
 		expect(npm?.ok).toBe(false);
@@ -101,8 +93,10 @@ describe("read discovery execution boundary", () => {
 		for (const surfaces of [undefined, ["skills_cli"]]) {
 			const commands: string[][] = [];
 			const result = await scanSurfaces({ query: "browser", surfaces }, {
-				which: () => true, readFile: () => null, env: {},
-				fetchFn: (async () => new Response("{}")) as typeof fetch,
+				fetchFn: Object.assign(async () => new Response("{}"), { preconnect: () => {} }) as typeof fetch,
+				which: () => true,
+				readFile: () => null,
+				env: {},
 				run: async (argv) => {
 					commands.push(argv);
 					return { ok: true, stdout: "{}", stderr: "" };

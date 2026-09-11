@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
-import { join, basename, extname, resolve } from "node:path";
+import { basename, extname, join, resolve } from "node:path";
 
-import type { ExtensionAPI, ExtensionToolCallEvent, ExtensionToolResultEvent } from "@oh-my-pi/pi-coding-agent";
+import type { ExtensionAPI, ToolCallEvent, ToolResultEvent } from "@oh-my-pi/pi-coding-agent";
 
 /**
  * After enough edits accumulate, suggest targeted checks. Original was
@@ -120,37 +120,45 @@ export function precommitCovered(root: string): Set<string> {
 	return covered;
 }
 
-export function editedFiles(input: Record<string, unknown>): string[] {
-	for (const key of ["file_path", "path"] as const) {
-		const value = input[key];
-		if (typeof value === "string" && value) return [value];
+export function editedFiles(input: ToolCallEvent["input"]): string[] {
+	// `in` narrows one literal key at a time, so the two spellings stay unrolled.
+	if ("file_path" in input && typeof input.file_path === "string" && input.file_path) {
+		return [input.file_path];
 	}
-	const paths = input.paths;
-	if (Array.isArray(paths)) {
-		return paths.filter((p): p is string => typeof p === "string" && p.length > 0);
+	if ("path" in input && typeof input.path === "string" && input.path) return [input.path];
+	if ("paths" in input && Array.isArray(input.paths)) {
+		return input.paths.filter((p): p is string => typeof p === "string" && p.length > 0);
 	}
 	return [];
 }
 
-export function changedLineCount(input: Record<string, unknown>): number {
-	for (const key of ["new_string", "content", "out"] as const) {
-		const value = input[key];
-		if (typeof value === "string" && value) return value.split("\n").length || 1;
+export function changedLineCount(input: ToolCallEvent["input"]): number {
+	// `in` narrows one literal key at a time, so the three payload spellings stay unrolled.
+	if ("new_string" in input && typeof input.new_string === "string" && input.new_string) {
+		return input.new_string.split("\n").length || 1;
+	}
+	if ("content" in input && typeof input.content === "string" && input.content) {
+		return input.content.split("\n").length || 1;
+	}
+	if ("out" in input && typeof input.out === "string" && input.out) {
+		return input.out.split("\n").length || 1;
 	}
 	return 1;
 }
 
 
-function cwdOf(event: ExtensionToolCallEvent): string {
+function cwdOf(event: ToolCallEvent): string {
+	// Edit tools carry their own `cwd`; only fall back when the call omits it.
+	if (!("cwd" in event.input)) return process.cwd();
 	const raw = event.input.cwd;
 	if (typeof raw === "string" && raw) return raw;
 	return process.cwd();
 }
 
 function prepend(
-	event: ExtensionToolResultEvent,
+	event: ToolResultEvent,
 	text: string,
-): { content: ExtensionToolResultEvent["content"] } {
+): { content: ToolResultEvent["content"] } {
 	const banner = `<system-reminder>\n${text}\n</system-reminder>\n\n`;
 	if (event.content[0]?.type === "text") {
 		return {
@@ -172,11 +180,12 @@ export default function qualityEditAdvisory(pi: ExtensionAPI): void {
 	pi.on("tool_call", (event) => {
 		try {
 			if (!EDIT_TOOLS.has(event.toolName)) return;
-			const files = editedFiles(event.input);
+			const input = event.input;
+			const files = editedFiles(input);
 			if (!files.length) return;
 			pending.set(event.toolCallId, {
 				files,
-				lines: changedLineCount(event.input),
+				lines: changedLineCount(input),
 				cwd: cwdOf(event),
 			});
 		} catch {

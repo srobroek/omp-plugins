@@ -2,13 +2,13 @@
 import { execFileSync } from "node:child_process";
 import { type Dir, type Dirent, existsSync, opendirSync, readdirSync, realpathSync, statSync } from "node:fs";
 import { basename, join } from "node:path";
-import { getActiveProfile, getProfileRootDir, getSessionsDir, normalizeProfileName } from "@oh-my-pi/pi-utils";
 import {
+	type FileEntry,
 	FileSessionStorage,
 	listSessionsReadOnly,
 	visitEntriesFromFileStream,
-	type FileEntry,
 } from "@oh-my-pi/pi-coding-agent";
+import { getActiveProfile, getProfileRootDir, getSessionsDir, normalizeProfileName } from "@oh-my-pi/pi-utils";
 
 interface FileSnapshot {
 	size: number;
@@ -174,7 +174,10 @@ export function commitInfo(worktrees: Worktree[], project: string): Map<string, 
 		const parts = line.split("\0");
 		if (parts.length !== 3) continue;
 		const seconds = Number(parts[1]);
-		out.set(parts[0], { epochMs: Number.isFinite(seconds) ? seconds * 1000 : null, subject: parts[2] });
+		const head = parts[0];
+		const subject = parts[2];
+		if (head === undefined || subject === undefined) continue;
+		out.set(head, { epochMs: Number.isFinite(seconds) ? seconds * 1000 : null, subject });
 	}
 	return out;
 }
@@ -265,7 +268,9 @@ export class BranchTracker {
 		let found: string | null = null;
 		for (const pattern of BRANCH_PATTERNS[tier]) {
 			for (const match of text.matchAll(pattern)) {
-				const value = cleanBranch(match[1]);
+				const raw = match[1];
+				if (raw === undefined) continue;
+				const value = cleanBranch(raw);
 				if (value) found = value; // later evidence within one text wins
 			}
 		}

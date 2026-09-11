@@ -21,7 +21,7 @@
  * real invocation. The cost is that a `bd init` line inside a heredoc body reads
  * as one too, which is one advisory message and no block.
  */
-import type { ExtensionAPI, ExtensionToolCallEvent } from "@oh-my-pi/pi-coding-agent";
+import type { ExtensionAPI, ToolCallEvent } from "@oh-my-pi/pi-coding-agent";
 import { extractCommand, tokenize } from "./bd-close-gate.ts";
 
 /** Flags consuming the next token, so `bd -C <dir> init` still reads as `init`. */
@@ -34,13 +34,14 @@ const PRE_VERB_VALUE_FLAGS: Record<string, true> = {
 /** Words that may stand before `bd` and leave it at command position. */
 const TRANSPARENT_PREFIX: Record<string, true> = { command: true, env: true, sudo: true };
 
-const SEPARATOR: Record<string, true> = { ";": true, "&": true, "|": true, "(": true, ")": true };
 
 /** `NAME=value bd init`: an environment prefix is not the command. */
 const ENV_ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*=/;
 
-/** `--help` prints; it initialises nothing. */
 const HELP_FLAGS: Record<string, true> = { "--help": true, "-h": true };
+
+/** `--help` prints; it initialises nothing. */
+const SEPARATOR: Record<string, true> = { ";": true, "&": true, "|": true, "(": true, ")": true, "\n": true };
 
 /** Cheap prefilter: never tokenize a command that cannot be a `bd init`. */
 const PREFILTER = /\bbd\b[\s\S]{0,400}?\binit\b/;
@@ -60,39 +61,37 @@ export type InitInvocation = {
  */
 export function findInitInvocations(command: string): InitInvocation[] {
 	const out: InitInvocation[] = [];
-	for (const line of command.split(/\r?\n/)) {
-		const tokens = tokenize(line);
-		let atCommand = true;
-		for (let i = 0; i < tokens.length; i++) {
-			const token = tokens[i] as string;
-			if (SEPARATOR[token] === true) {
-				atCommand = true;
+	const tokens = tokenize(command);
+	let atCommand = true;
+	for (let i = 0; i < tokens.length; i++) {
+		const token = tokens[i] as string;
+		if (SEPARATOR[token] === true) {
+			atCommand = true;
+			continue;
+		}
+		if (!atCommand) continue;
+		if (TRANSPARENT_PREFIX[token] === true || ENV_ASSIGNMENT.test(token)) continue;
+		atCommand = false;
+		if (token !== "bd") continue;
+
+		const flags: string[] = [];
+		let verb: string | null = null;
+		let j = i + 1;
+		for (; j < tokens.length; j++) {
+			const arg = tokens[j] as string;
+			if (SEPARATOR[arg] === true) break;
+			if (arg.startsWith("-") && arg !== "-") {
+				const eq = arg.indexOf("=");
+				const name = eq === -1 ? arg : arg.slice(0, eq);
+				flags.push(name);
+				if (eq === -1 && verb === null && PRE_VERB_VALUE_FLAGS[name] === true) j++;
 				continue;
 			}
-			if (!atCommand) continue;
-			if (TRANSPARENT_PREFIX[token] === true || ENV_ASSIGNMENT.test(token)) continue;
-			atCommand = false;
-			if (token !== "bd") continue;
-
-			const flags: string[] = [];
-			let verb: string | null = null;
-			let j = i + 1;
-			for (; j < tokens.length; j++) {
-				const arg = tokens[j] as string;
-				if (SEPARATOR[arg] === true) break;
-				if (arg.startsWith("-") && arg !== "-") {
-					const eq = arg.indexOf("=");
-					const name = eq === -1 ? arg : arg.slice(0, eq);
-					flags.push(name);
-					if (eq === -1 && verb === null && PRE_VERB_VALUE_FLAGS[name] === true) j++;
-					continue;
-				}
-				if (verb === null) verb = arg.toLowerCase();
-			}
-			i = j;
-			atCommand = true;
-			if (verb === "init") out.push({ flags });
+			if (verb === null) verb = arg.toLowerCase();
 		}
+		i = j;
+		atCommand = true;
+		if (verb === "init") out.push({ flags });
 	}
 	return out;
 }
@@ -159,7 +158,7 @@ export function resetInitAdvisoryForTests(): void {
 }
 
 export default function bdInitAdvisory(pi: ExtensionAPI): void {
-	pi.on("tool_call", (event: ExtensionToolCallEvent) => {
+	pi.on("tool_call", (event: ToolCallEvent) => {
 		try {
 			if (event.toolName !== "bash") return;
 			const command = extractCommand(event.input);

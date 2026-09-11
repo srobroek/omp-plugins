@@ -1,11 +1,11 @@
 import { Database } from "bun:sqlite";
-import { chmod, cp, mkdir, mkdtemp, realpath, rm, stat, writeFile } from "node:fs/promises";
+import type { SpawnSyncReturns } from "node:child_process";
+import { spawnSync } from "node:child_process";
+import { randomBytes } from "node:crypto";
 import { existsSync } from "node:fs";
+import { chmod, cp, mkdir, mkdtemp, realpath, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, join, relative } from "node:path";
-import { randomBytes } from "node:crypto";
-import { spawnSync } from "node:child_process";
-import type { SpawnSyncReturns } from "node:child_process";
 import type { Page } from "puppeteer-core";
 import type { Channel, CopyStrategy, EffectiveConfig, Engine, ProfileMode } from "./config.ts";
 import { splitDomains } from "./config.ts";

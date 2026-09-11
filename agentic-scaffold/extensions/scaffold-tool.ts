@@ -100,13 +100,17 @@ export async function runScaffold(
 ): Promise<ScaffoldExecution> {
 	const invalid = validateScaffoldArgs(command, args);
 	if (invalid) return rejected(invalid);
+	// `validateScaffoldArgs` already proved both shapes, but a `string | null` return
+	// cannot narrow them, so re-apply the predicate the validator itself uses.
+	if (!isScaffoldCommand(command) || !Array.isArray(args)) return rejected("args must be an array of strings");
+	const scaffoldArgs = args.filter((value): value is string => typeof value === "string");
 	let root: string;
 	try {
 		root = realpathSync(cwd);
 	} catch {
 		return rejected(`cannot resolve session cwd: ${cwd}`);
 	}
-	const argv = [scaffoldScriptPath(), command, "--root", cwd, ...(args as string[])];
+	const argv = [scaffoldScriptPath(), command, "--root", cwd, ...scaffoldArgs];
 	try {
 		const result = await runner("python3", argv, {
 			cwd,

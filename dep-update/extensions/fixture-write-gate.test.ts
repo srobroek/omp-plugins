@@ -7,7 +7,8 @@ import fixtureWriteGate, {
 	targetPaths,
 } from "./fixture-write-gate.ts";
 
-const chain = () => new Proxy(() => chain(), { get: () => chain(), apply: () => chain() });
+type Chain = (() => Chain) & { [key: string]: Chain };
+const chain = (): Chain => new Proxy(() => chain(), { get: () => chain(), apply: () => chain() }) as Chain;
 const z = new Proxy({}, { get: () => chain() }) as never;
 
 function fakePi(): {
@@ -19,7 +20,9 @@ function fakePi(): {
 		zod: z,
 		registerTool: () => {},
 		on: (ev: string, fn: (e: Record<string, unknown>) => unknown) => {
-			(handlers[ev] ??= []).push(fn);
+			const registered = handlers[ev] ?? [];
+			registered.push(fn);
+			handlers[ev] = registered;
 		},
 	};
 	return { handlers, pi: pi as never };

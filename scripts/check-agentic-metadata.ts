@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
-import { readdirSync } from "node:fs";
+import { type Dirent, readdirSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { lint } from "../authoring/extensions/agentic-lint-tool.ts";
+import { lint, parseFrontmatter } from "../authoring/extensions/agentic-lint-tool.ts";
 
 // Discovery identity is checked separately by check-contract.py. Reuse the
 // authoring validator for YAML and runtime metadata, not historical prose style.
@@ -14,7 +14,7 @@ try {
 		const base = join(root, plugin.name);
 		for (const kind of ["rules", "agents", "skills"] as const) {
 			const directory = join(base, kind);
-			let entries;
+			let entries: Dirent[];
 			try { entries = readdirSync(directory, { withFileTypes: true }); }
 			catch (error) {
 				if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
@@ -28,6 +28,19 @@ try {
 					if (code !== "E13" && code !== "E14") continue;
 					console.error(`${path}: ${severity} ${code}: ${message}`);
 					if (severity === "ERROR") failed = true;
+				}
+				if (kind === "agents") {
+					const metadata = parseFrontmatter(readFileSync(path, "utf8")).parsed;
+					for (const field of ["model", "thinking-level"] as const) {
+						if (typeof metadata?.[field] === "string" && metadata[field].trim()) continue;
+						console.error(`${path}: ERROR E14: agent ${field} must be a nonempty string`);
+						failed = true;
+					}
+					const tools = metadata?.tools;
+					if (typeof tools !== "string" || tools.split(",").some(tool => !tool.trim())) {
+						console.error(`${path}: ERROR E14: agent tools must be a nonempty comma-separated string`);
+						failed = true;
+					}
 				}
 			}
 		}

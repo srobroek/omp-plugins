@@ -162,6 +162,12 @@ describe("checkLabel", () => {
 		expect(checkLabel("just lint")).toBe("just lint");
 	});
 
+	test("transparent wrappers preserve command position", () => {
+		expect(checkLabel("env FOO=1 bun test")).toBe("bun test");
+		expect(checkLabel("command cargo test")).toBe("cargo test");
+		expect(checkLabel("sudo -u build pytest -q")).toBe("pytest");
+	});
+
 	test("reading output is not running a check", () => {
 		expect(checkLabel("cat build.log")).toBeUndefined();
 		expect(checkLabel("bd list --type bug --json")).toBeUndefined();
@@ -172,6 +178,12 @@ describe("checkLabel", () => {
 	test("a word that merely contains a runner name is not that runner", () => {
 		expect(checkLabel("read tsconfig.json")).toBeUndefined();
 		expect(checkLabel("cmake --build .")).toBeUndefined();
+	});
+
+	test("wrapper names in arguments do not create checks", () => {
+		expect(checkLabel("echo env FOO=1 bun test")).toBeUndefined();
+		expect(checkLabel("printf '%s' command cargo test")).toBeUndefined();
+		expect(checkLabel("cat sudo-pytest-notes.txt")).toBeUndefined();
 	});
 });
 
@@ -317,7 +329,9 @@ describe("integration", () => {
 			sendMessage: (m: { customType?: string; content: string }) => sent.push(m),
 			logger: { error: (message: string) => errors.push(message), info: () => {} },
 			on: (event: string, handler: (e: unknown, c: unknown) => unknown) => {
-				(handlers[event] ??= []).push(handler);
+				const registered = handlers[event] ?? [];
+				registered.push(handler);
+				handlers[event] = registered;
 			},
 		};
 		unreportedFailureAdvisory(fakePi as never);

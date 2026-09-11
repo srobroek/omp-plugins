@@ -60,6 +60,13 @@ describe("findInitInvocations", () => {
 		}
 	});
 
+	test("heredoc bodies are not command positions", () => {
+		expect(findInitInvocations("cat <<'EOF'\nbd init\nEOF")).toEqual([]);
+		expect(findInitInvocations("cat <<'EOF'\nbd init\nEOF\nbd init --skip-hooks")).toEqual([
+			{ flags: ["--skip-hooks"] },
+		]);
+	});
+
 	test("a different verb is a different command", () => {
 		for (const command of ["bd init-db", "bd help init", "bd where", "bd hooks list"]) {
 			expect(findInitInvocations(command)).toEqual([]);
@@ -136,7 +143,9 @@ describe("integration", () => {
 				sent.push({ payload, options });
 			},
 			on: (event: string, handler: (e: unknown) => unknown) => {
-				(handlers[event] ??= []).push(handler);
+				const eventHandlers = handlers[event] ?? [];
+				eventHandlers.push(handler);
+				handlers[event] = eventHandlers;
 			},
 		};
 		bdInitAdvisory(fakePi as never);
@@ -195,7 +204,9 @@ describe("integration", () => {
 				throw new Error("send failed");
 			},
 			on: (event: string, handler: (e: unknown) => unknown) => {
-				(handlers[event] ??= []).push(handler);
+				const eventHandlers = handlers[event] ?? [];
+				eventHandlers.push(handler);
+				handlers[event] = eventHandlers;
 			},
 		};
 		bdInitAdvisory(fakePi as never);

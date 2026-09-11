@@ -1,6 +1,6 @@
-import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, lstatSync, unlinkSync, writeFileSync, copyFileSync } from "node:fs";
-import { join, basename, isAbsolute, parse, sep } from "node:path";
-
+import { copyFileSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { basename, isAbsolute, join, parse, sep } from "node:path";
+import type { TSchema } from "@oh-my-pi/pi-ai";
 import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
 
 const STEP_HEADING = /^### (S\d+[a-z]?) — .+ \{#(S\d+[a-z]?)\}\s*$/;
@@ -13,16 +13,20 @@ const REQUIRED_KEYS = ["id", "title", "version", "status", "last_reviewed"] as c
 
 export type Frontmatter = Record<string, string | string[] | Record<string, string>>;
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null;
+}
+
 export function parseFrontmatter(text: string): Frontmatter {
 	const lines = text.split("\n");
-	if (!lines.length || lines[0].trim() !== "---") return {};
+	if (!lines.length || lines[0]?.trim() !== "---") return {};
 	const fm: Frontmatter = {};
 	for (const line of lines.slice(1)) {
 		if (line.trim() === "---") return fm;
 		if (!line.trim() || line.trimStart().startsWith("#") || !line.includes(":")) continue;
 		const idx = line.indexOf(":");
 		const key = line.slice(0, idx).trim();
-		let raw = line.slice(idx + 1).split(" #")[0].trim();
+		const raw = line.slice(idx + 1).split(" #")[0]?.trim() ?? "";
 		if (raw.startsWith("[") && raw.endsWith("]")) {
 			const inner = raw.slice(1, -1).trim();
 			fm[key] = inner ? inner.split(",").map((v) => v.trim()).filter(Boolean) : [];
@@ -39,6 +43,7 @@ export function parseFrontmatter(text: string): Frontmatter {
 			fm[key] = raw;
 		}
 	}
+	// Loop exhausted without a closing `---`: the block is not frontmatter at all.
 	return {};
 }
 
@@ -65,6 +70,8 @@ function safeJourneyPaths(root: string): void {
 		const runs = join(dir, "runs");
 		safePath(runs);
 		if (!existsSync(runs)) continue;
+		const runsStat = lstatSync(runs);
+		if (!runsStat.isDirectory()) throw new Error(`runs is not a directory: ${runs}`);
 		for (const run of readdirSync(runs).filter((n) => n.endsWith(".md"))) {
 			safePath(join(runs, run));
 			if (!lstatSync(join(runs, run)).isFile()) throw new Error(`not a run file: ${run}`);
@@ -93,8 +100,8 @@ export function latestRun(jdir: string): Frontmatter | null {
 		.filter((n) => n.endsWith(".md"))
 		.sort()
 		.map((n) => join(runsDir, n));
-	if (!runs.length) return null;
-	const last = runs[runs.length - 1];
+	const last = runs.at(-1);
+	if (!last) return null;
 	const fm = parseFrontmatter(readFileSync(last, "utf8"));
 	fm._file = basename(last);
 	return fm;
@@ -109,10 +116,13 @@ export function openFindings(root: string): Record<string, number> {
 	for (const chunk of chunks) {
 		const jid = chunk.slice(0, 400).match(/journey:\s*(\S+)/);
 		const status = chunk.slice(0, 800).match(/status:\s*(\w+)/);
-		if (jid && (!status || status[1] === "open")) {
-			counts[jid[1]] = (counts[jid[1]] ?? 0) + 1;
+		const journeyId = jid?.[1];
+		const journeyStatus = status?.[1];
+		if (journeyId && (!status || journeyStatus === "open")) {
+			counts[journeyId] = (counts[journeyId] ?? 0) + 1;
 		}
 	}
+
 	return counts;
 }
 
@@ -186,6 +196,7 @@ export function lintJourney(jdir: string, errors: string[], seenIds: Record<stri
 				errors.push(`${rel}:${n}: malformed step heading (want \`### S<id> — title {#S<id>}\`)`);
 				return;
 			}
+			if (m[1] === undefined || m[2] === undefined) return;
 			if (m[1] !== m[2]) errors.push(`${rel}:${n}: heading id ${m[1]} != anchor ${m[2]}`);
 			if (stepIds.includes(m[1])) errors.push(`${rel}:${n}: duplicate step id ${m[1]}`);
 			stepIds.push(m[1]);
@@ -198,16 +209,12 @@ export function lintJourney(jdir: string, errors: string[], seenIds: Record<stri
 	lines.forEach((line, i) => {
 		const n = i + 1;
 		const m = line.match(DELTA_ENTRY);
-		if (!m) return;
-		if (version !== null && Number(m[1]) > version) {
-			errors.push(`${rel}:${n}: delta Δ${m[1]} exceeds journey version ${version}`);
-		}
+		if (!m || m[1] === undefined || m[3] === undefined) return;
+		if (version !== null && Number(m[1]) > version) errors.push(`${rel}:${n}: delta Δ${m[1]} exceeds journey version ${version}`);
 		const refs = m[3].match(STEP_REF) ?? [];
 		for (const raw of refs) {
 			const ref = raw.startsWith("+") ? raw.slice(1) : raw;
-			if (!stepIds.includes(ref)) {
-				errors.push(`${rel}:${n}: delta Δ${m[1]} references unknown step ${ref}`);
-			}
+			if (!stepIds.includes(ref)) errors.push(`${rel}:${n}: delta Δ${m[1]} references unknown step ${ref}`);
 		}
 	});
 
@@ -222,15 +229,14 @@ export function lintJourney(jdir: string, errors: string[], seenIds: Record<stri
 			continue;
 		}
 		if (rfm.journey !== jid) errors.push(`${rrel}: journey \`${rfm.journey}\` != \`${jid}\``);
+		// A run's own result is narrower than a step's: `skipped` is a step outcome.
 		if (rfm.result !== "pass" && rfm.result !== "fail" && rfm.result !== "blocked") {
 			errors.push(`${rrel}: result \`${rfm.result}\` not pass|fail|blocked`);
 		}
 		const steps = rfm.steps;
 		if (steps && typeof steps === "object" && !Array.isArray(steps)) {
 			for (const [sid, res] of Object.entries(steps)) {
-				if (!RESULTS[res]) {
-					errors.push(`${rrel}: step ${sid} result \`${res}\` not in ${JSON.stringify(Object.keys(RESULTS).sort())}`);
-				}
+				if (typeof res !== "string" || !RESULTS[res]) errors.push(`${rrel}: step ${sid} result \`${res}\` not in ${JSON.stringify(Object.keys(RESULTS).sort())}`);
 				if (!stepIds.includes(sid)) errors.push(`${rrel}: unknown step id ${sid}`);
 			}
 		}
@@ -411,51 +417,42 @@ export default function journeysTool(pi: ExtensionAPI): void {
 	pi.registerTool({
 		name: "journeys_index",
 		label: "Journey index/lint/prune",
-		description:
-			"Index, structurally lint (not semantic readiness), or prune a user-journeys directory. The repo-copied journeys.py provides the same checks.",
+		description: "Index, structurally lint (not semantic readiness), or prune a user-journeys directory. The repo-copied journeys.py provides the same checks.",
 		parameters: z.object({
 			command: z.enum(["index", "lint", "prune"]),
 			journeysDir: z.string().describe("Path to the journeys directory"),
 			keep: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER).optional().describe("prune: keep newest N runs (default 20)"),
 			yes: z.boolean().optional().describe("prune: actually delete (default dry-run)"),
 			journey: z.string().min(1).optional().describe("prune: selected journey directory name; omit only for an explicitly authorized directory-wide prune"),
-		}),
+		}) as unknown as TSchema,
 		approval: (toolCall) => {
-			const cmd = (toolCall.input as JourneysIndexParams | undefined)?.command;
-			const yes = Boolean((toolCall.input as JourneysIndexParams | undefined)?.yes);
+			const input = typeof toolCall === "object" && toolCall !== null && "input" in toolCall ? toolCall.input : undefined;
+			const record = isRecord(input) ? input : {};
+			const cmd = typeof record.command === "string" ? record.command : undefined;
+			const yes = "yes" in record && Boolean(record.yes);
 			if (cmd === "lint") return "read";
 			if (cmd === "prune" && !yes) return "read";
-			return undefined;
+			// The bare `exec` tier leaves the decision to the configured approval
+			// policy; a literal `policy: "prompt"` would override yolo/write modes.
+			return "exec";
 		},
 		execute: async (_id, params: JourneysIndexParams) => {
 			const result = runJourneys(params);
-			return {
-				content: [{ type: "text", text: result.text }],
-				details: { ok: result.ok, command: params.command },
-			};
+			return { content: [{ type: "text", text: result.text }], details: { ok: result.ok, command: params.command } };
 		},
 	});
 
 	pi.registerTool({
 		name: "journey_install_formulas",
 		label: "Install journey formulas",
-		description:
-			"Copy package-owned journey formula TOMLs into a Beads workspace .beads/formulas/.",
+		description: "Copy package-owned journey formula TOMLs into a Beads workspace .beads/formulas/.",
 		parameters: z.object({
 			repoRoot: z.string().describe("Repository root containing .beads/"),
 			force: z.boolean().optional().describe("Overwrite divergent destination files"),
-		}),
+		}) as unknown as TSchema,
 		execute: async (_id, params: { repoRoot: string; force?: boolean }) => {
 			const result = installFormulas(params.repoRoot, Boolean(params.force));
-			return {
-				content: [{ type: "text", text: result.text }],
-				details: {
-					ok: result.ok,
-					copied: result.copied,
-					unchanged: result.unchanged,
-				},
-			};
+			return { content: [{ type: "text", text: result.text }], details: { ok: result.ok, copied: result.copied, unchanged: result.unchanged } };
 		},
 	});
 }
-

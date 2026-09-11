@@ -11,7 +11,9 @@ function fakePi(): { handlers: Record<string, Handler[]>; sent: Array<{ message:
 		sent,
 		pi: {
 			on: (ev: string, h: Handler) => {
-				(handlers[ev] ??= []).push(h);
+				const registered = handlers[ev] ?? [];
+				registered.push(h);
+				handlers[ev] = registered;
 			},
 			sendMessage: (message: unknown, options: unknown) => {
 				sent.push({ message, options });
@@ -64,7 +66,12 @@ describe("agent_end hook", () => {
 
 		handlers.agent_end![0]!({ type: "agent_end", messages: [assistant("You have 8020 tokens left")] });
 		expect(sent).toHaveLength(1);
-		const [{ message, options }] = sent as Array<{ message: { customType: string; details: { resume: number } }; options: { deliverAs: string; triggerTurn: boolean } }>;
+		const [first] = sent as Array<{
+			message: { customType: string; details: { resume: number } };
+			options: { deliverAs: string; triggerTurn: boolean };
+		}>;
+		if (!first) throw new Error("quotaNoticeResume sent no message");
+		const { message, options } = first;
 		expect(message.customType).toBe(CUSTOM_TYPE);
 		expect(message.details.resume).toBe(1);
 		expect(options.deliverAs).toBe("followUp");

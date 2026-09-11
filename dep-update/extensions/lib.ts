@@ -1,6 +1,6 @@
-import { parse as parseToml } from "smol-toml";
-import { statSync } from "node:fs";
 import { spawn } from "node:child_process";
+import { statSync } from "node:fs";
+import { parse as parseToml } from "smol-toml";
 
 export const MISSING = "?";
 export const USER_AGENT = "dep-update-skill (+https://github.com/srobroek/agentic-packages)";
@@ -78,12 +78,12 @@ function specVersion(spec: unknown): string {
 }
 
 export function parseRequirement(raw: string): [string, string] {
-	let line = raw.split("#", 1)[0].trim();
+	let line = (raw.split("#", 1)[0] ?? "").trim();
 	line = line.replace(/\\+$/, "").trim();
 	if (!line || line.startsWith("-") || line.startsWith(".") || line.startsWith("/")) {
 		return ["", ""];
 	}
-	line = line.split(";", 1)[0].trim();
+	line = (line.split(";", 1)[0] ?? "").trim();
 	const match = REQ_SPLIT.exec(line);
 	if (!match) {
 		return REQ_NAME.test(line) ? [line, MISSING] : ["", ""];
@@ -304,7 +304,7 @@ export class Detector {
 		if (!lines) return;
 		for (const raw of lines) {
 			const match = GEM.exec(raw);
-			if (match) this.emit("rubygems", match[2], match[4] || MISSING);
+			if (match) this.emit("rubygems", match[2] ?? "", match[4] || MISSING);
 		}
 	}
 
@@ -391,7 +391,7 @@ export function pickStable(latest: string, installed: string, versions: string[]
 		const nb = normalizeVersion(b, ecosystem)!;
 		return nb[0] - na[0] || nb[1] - na[1] || nb[2] - na[2];
 	});
-	return stable[0];
+	return stable[0] ?? latest;
 }
 
 export class RegistryError extends Error {
@@ -576,7 +576,7 @@ export async function detectNodePm(root: string): Promise<string> {
 			const module = (data?.module ?? {}) as Record<string, unknown>;
 			const langTs = (module["lang-ts"] ?? {}) as Record<string, unknown>;
 			const pinned = langTs.package_manager || langTs.package_manager_pin || "";
-			if (pinned) return String(pinned).split("@")[0].trim();
+			if (pinned) return (String(pinned).split("@")[0] ?? "").trim();
 		} catch {
 			/* fail open */
 		}
@@ -588,7 +588,7 @@ export async function detectNodePm(root: string): Promise<string> {
 }
 
 function splitPin(requirement: string): [string, string] {
-	const body = requirement.split(";", 1)[0].trim();
+	const body = (requirement.split(";", 1)[0] ?? "").trim();
 	if (!body.includes("==")) return ["", ""];
 	const idx = body.indexOf("==");
 	const name = body.slice(0, idx).replace(/\[[^\]]*\]/g, "").trim();
@@ -633,7 +633,7 @@ export async function checkPythonVersion(root: string, name: string, version: st
 	if (isFile(requirements)) {
 		const text = (await readText(requirements)) ?? "";
 		for (const raw of text.split(/\r?\n/)) {
-			const [reqName, reqVersion] = splitPin(raw.split("#", 1)[0].trim());
+			const [reqName, reqVersion] = splitPin((raw.split("#", 1)[0] ?? "").trim());
 			if (reqName && canonical(reqName) === wanted && reqVersion === version) return true;
 		}
 	}
@@ -684,7 +684,9 @@ async function runPm(command: string[], root: string, options: ApplyOptions): Pr
 	const schedule = options.setTimeout ?? setTimeout;
 	const clear = options.clearTimer ?? clearTimeout;
 	return new Promise((resolve) => {
-		const proc = spawn(command[0], command.slice(1), {
+		const executable = command[0];
+		if (!executable) { resolve({ code: 1, log: "No package manager command provided" }); return; }
+		const proc = spawn(executable, command.slice(1), {
 			cwd: root, stdio: ["ignore", "pipe", "pipe"], detached: process.platform !== "win32",
 		});
 		const chunks: Buffer[] = [];
@@ -802,6 +804,7 @@ export async function applyBump(
 		};
 		if (!Object.hasOwn(cmds, pm)) pm = "npm";
 		const command = cmds[pm];
+		if (!command) return { exit: 1, text: lines.join("\n") };
 		if (!which(pm)) {
 			lines.push(`SKIP: ${pm} not found. To apply manually:`);
 			lines.push(`  ${command.join(" ")}`);

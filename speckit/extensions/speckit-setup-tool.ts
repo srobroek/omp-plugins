@@ -1,15 +1,15 @@
 import {
-	existsSync,
-	mkdirSync,
-	copyFileSync,
 	appendFileSync,
+	copyFileSync,
+	existsSync,
+	lstatSync,
+	mkdirSync,
 	readFileSync,
 	writeFileSync,
-	lstatSync,
 } from "node:fs";
-import { dirname, join, isAbsolute, parse, sep } from "node:path";
+import { dirname, isAbsolute, join, parse, sep } from "node:path";
 import { fileURLToPath } from "node:url";
-
+import type { TSchema } from "@oh-my-pi/pi-ai";
 import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
 
 const TIMEOUT_MS = 180_000;
@@ -280,19 +280,21 @@ export default function speckitSetupTool(pi: ExtensionAPI): void {
 				.boolean()
 				.optional()
 				.describe("Skip specify CLI (formulas + gitignore only)"),
-		}),
+		}) as unknown as TSchema,
 		execute: async (_id, params: SetupParams) => {
 			try {
 				const result = runSetup(params);
 				return {
 					content: [{ type: "text", text: result.text }],
 					details: { ok: result.ok },
+					isError: !result.ok,
 				};
 			} catch (err) {
 				const message = err instanceof Error ? err.message : String(err);
 				return {
 					content: [{ type: "text", text: `setup failed: ${message}` }],
 					details: { ok: false },
+					isError: true,
 				};
 			}
 		},

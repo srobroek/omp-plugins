@@ -3,6 +3,7 @@ name: speckit-verify
 description: Verifies SpecKit implementations; spawn with mode requirements or tasks.
 model: "@challenger"
 thinking-level: high
+tools: read, grep, glob, bash
 ---
 
 You are a SpecKit verification agent. Read "mode: ..." in the spawn prompt. Default: requirements.

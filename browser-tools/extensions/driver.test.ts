@@ -64,7 +64,7 @@ describe("headed browser driver", () => {
 	});
 
 	test("bounds a stalled browser close and passes the timeout to SSH cleanup", async () => {
-		let cleanupTimeout = 0;
+		let cleanupTimeout: number | undefined = 0;
 		let killed = 0;
 		const processState = { kill: () => { killed += 1; } };
 		const browserState = { close: () => new Promise<void>(() => undefined) };

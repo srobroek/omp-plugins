@@ -26,7 +26,7 @@ import { resolve } from "node:path";
 
 import type {
 	ExtensionAPI,
-	ExtensionToolCallEvent,
+	ToolCallEvent,
 } from "@oh-my-pi/pi-coding-agent";
 
 const TIMEOUT_MS = 2000;
@@ -263,9 +263,9 @@ function defaultRun(
 	return { exitCode: proc.exitCode ?? 1, stdout: proc.stdout.toString() };
 }
 
-export function extractCommand(input: Record<string, unknown>): string {
-	if (typeof input.command === "string") return input.command;
-	if (typeof input.cmd === "string") return input.cmd;
+export function extractCommand(input: ToolCallEvent["input"]): string {
+	if ("command" in input && typeof input.command === "string") return input.command;
+	if ("cmd" in input && typeof input.cmd === "string") return input.cmd;
 	return "";
 }
 export type Token = {
@@ -1428,7 +1428,7 @@ export function decideCommit(
 }
 
 export default function mainBranchGate(pi: ExtensionAPI): void {
-	pi.on("tool_call", (event: ExtensionToolCallEvent) => {
+	pi.on("tool_call", (event: ToolCallEvent) => {
 		try {
 			if (event.toolName !== "bash") return;
 			const command = extractCommand(event.input);

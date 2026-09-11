@@ -3,6 +3,7 @@ name: ui-ux-specialist
 description: Leads UI and UX work through the six-phase design process and delegates independent critique. Spawn for multi-component design work, not a one-file tweak.
 model: "@designer"
 thinking-level: high
+tools: read, grep, glob, eval
 spawns: design-critic, a11y-auditor, scout, operator
 autoloadSkills: design-system-audit, ui-review, design-prototype
 ---

@@ -1,9 +1,9 @@
-import { describe, expect, test, beforeEach, afterEach } from "bun:test";
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, existsSync } from "node:fs";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import {
+import speckitSetupTool, {
 	ensureGitignore,
 	FORMULAS,
 	GITIGNORE_ENTRY,
@@ -14,6 +14,25 @@ import {
 	setSpawnForTests,
 	specifyVersionOk,
 } from "./speckit-setup-tool.ts";
+
+type ToolResult = { details: { ok: boolean }; isError?: boolean };
+
+function fakeZod(): Record<string, unknown> {
+	const scalar = () => {
+		const chain = {
+			optional: () => chain,
+			describe: () => chain,
+		};
+		return chain;
+	};
+	return {
+		string: scalar,
+		boolean: scalar,
+		object: (shape: unknown) => shape,
+	};
+}
+
+const SAFE_TMPDIR = realpathSync(tmpdir());
 
 
 describe("specifyVersionOk", () => {
@@ -29,7 +48,7 @@ describe("ensureGitignore + formulas", () => {
 	let dir: string;
 
 	beforeEach(() => {
-		dir = mkdtempSync(join(tmpdir(), "sk-"));
+		dir = mkdtempSync(join(SAFE_TMPDIR, "sk-"));
 	});
 	afterEach(() => {
 		rmSync(dir, { recursive: true, force: true });
@@ -59,8 +78,8 @@ describe("runSetup skipSpecify", () => {
 	let plugin: string;
 
 	beforeEach(() => {
-		dir = mkdtempSync(join(tmpdir(), "sks-"));
-		plugin = mkdtempSync(join(tmpdir(), "skp-"));
+		dir = mkdtempSync(join(SAFE_TMPDIR, "sks-"));
+		plugin = mkdtempSync(join(SAFE_TMPDIR, "skp-"));
 		mkdirSync(join(plugin, "formulas"));
 		for (const name of FORMULAS) {
 			writeFileSync(join(plugin, "formulas", `${name}.formula.toml`), "# test\n");
@@ -95,6 +114,21 @@ describe("runSetup skipSpecify", () => {
 		const out = runSetup({ workspace: dir, skipSpecify: false });
 		expect(out.ok).toBe(false);
 		expect(out.text).toContain("specify not on PATH");
+	});
+
+	test("marks required-operation failures as tool errors", async () => {
+		let execute: ((id: string, params: { workspace: string; skipSpecify: boolean }) => Promise<ToolResult>) | undefined;
+		speckitSetupTool({
+			zod: fakeZod(),
+			registerTool: (definition: { execute: typeof execute }) => {
+				execute = definition.execute;
+			},
+		} as never);
+		if (!execute) throw new Error("speckit_setup was not registered");
+
+		const out = await execute("test", { workspace: dir, skipSpecify: false });
+		expect(out.details).toEqual({ ok: false });
+		expect(out.isError).toBe(true);
 	});
 });
 

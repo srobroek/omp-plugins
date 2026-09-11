@@ -1,6 +1,7 @@
-import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
 import { existsSync } from "node:fs";
-import { resolve, join } from "node:path";
+import { join, resolve } from "node:path";
+import type { TSchema } from "@oh-my-pi/pi-ai";
+import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
 
 const TIMEOUT_MS = 300_000;
 
@@ -11,6 +12,7 @@ export type StepResult = {
 	status: "pass" | "fail" | "skip";
 	detail: string;
 };
+type PythonQualityParams = { mode: QualityMode; path?: string };
 
 export type QualityReport = {
 	ok: boolean;
@@ -157,8 +159,8 @@ export default function pythonQualityTool(pi: ExtensionAPI): void {
 		parameters: z.object({
 			mode: z.enum(["check", "fix"]).describe("check: ruff, pyright, pytest; fix: ruff check --fix + format"),
 			path: z.string().optional().describe("Project cwd; defaults to session cwd"),
-		}),
-		execute: async (_id, params, _signal, _onUpdate, ctx) => {
+		}) as unknown as TSchema,
+		execute: async (_id, params: PythonQualityParams, _signal, _onUpdate, ctx) => {
 			try {
 				const cwd = resolve(params.path ?? ctx?.cwd ?? process.cwd());
 				if (!existsSync(cwd)) {

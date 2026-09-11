@@ -5,14 +5,14 @@ var FIXTURE = /(?:^|\/)\.project-setup\/(?:answers|sources)\.toml$/i;
 var DENY_REASON = "blocked by dep-update (project-setup owns its answer fixtures): `.project-setup/answers.toml` and " + "`.project-setup/sources.toml` record the frozen bootstrap the project-setup runner poured, and that runner " + "is their only writer. dep-update reads them for baseline pins and drift notes; it never writes them. " + "To move a baseline, re-run project-setup with `--refresh`. To record a bump, apply it with the `dep_apply` " + "tool so the real manifest and lockfile change instead.";
 function targetPaths(input) {
   const out = [];
-  for (const key of ["path", "file_path"]) {
-    const value = input[key];
-    if (typeof value === "string" && value.length > 0)
-      out.push(value);
+  if ("path" in input && typeof input.path === "string" && input.path.length > 0) {
+    out.push(input.path);
   }
-  const { paths } = input;
-  if (Array.isArray(paths)) {
-    for (const p of paths) {
+  if ("file_path" in input && typeof input.file_path === "string" && input.file_path.length > 0) {
+    out.push(input.file_path);
+  }
+  if ("paths" in input && Array.isArray(input.paths)) {
+    for (const p of input.paths) {
       if (typeof p === "string" && p.length > 0)
         out.push(p);
     }

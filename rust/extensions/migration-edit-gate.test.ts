@@ -1,8 +1,7 @@
+import { describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-
-import { describe, expect, test } from "bun:test";
 
 import migrationEditGate, {
 	decidePath,
@@ -167,7 +166,9 @@ describe("integration", () => {
 			zod: {},
 			registerTool: () => {},
 			on: (event: string, handler: (e: Record<string, unknown>, ctx?: { cwd: string }) => unknown) => {
-				(handlers[event] ??= []).push(handler);
+				const registered = handlers[event] ?? [];
+				registered.push(handler);
+				handlers[event] = registered;
 			},
 		} as never);
 		return handlers;

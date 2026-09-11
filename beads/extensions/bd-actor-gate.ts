@@ -1,7 +1,7 @@
 import type {
 	ExtensionAPI,
-	ExtensionToolCallEvent,
-	ExtensionToolResultEvent,
+	ToolCallEvent,
+	ToolResultEvent,
 } from "@oh-my-pi/pi-coding-agent";
 import { tokenize } from "./bd-close-gate.ts";
 
@@ -39,6 +39,24 @@ const ACTOR_VARS = ["BEADS_ACTOR", "BD_ACTOR"] as const;
 type ActorVar = (typeof ACTOR_VARS)[number];
 
 const VALUE_FLAGS = new Set(["--actor", "--db", "-C", "--directory", "--dolt-auto-commit"]);
+const TRANSPARENT_WRAPPERS: Record<string, true> = { command: true, env: true, sudo: true };
+const WRAPPER_VALUE_FLAGS: Record<string, true> = {
+	"-C": true,
+	"--chdir": true,
+	"--chroot": true,
+	"--command-timeout": true,
+	"-g": true,
+	"--group": true,
+	"-h": true,
+	"--host": true,
+	"-p": true,
+	"--prompt": true,
+	"-R": true,
+	"-T": true,
+	"-u": true,
+	"--unset": true,
+	"--user": true,
+};
 
 /** Literal simple commands only; this is not a shell interpreter. */
 export function commandSegments(command: string): string[][] {
@@ -84,9 +102,23 @@ export function bdInvocations(command: string): BdInvocation[] {
 			continue;
 		}
 		let i = 0;
-		while (/^[A-Za-z_]\w*=/.test(tokens[i] ?? "")) i++;
+		const prefix: string[] = [];
+		while (true) {
+			while (/^[A-Za-z_]\w*=/.test(tokens[i] ?? "")) {
+				prefix.push(tokens[i] as string);
+				i++;
+			}
+			const wrapper = tokens[i] ?? "";
+			if (TRANSPARENT_WRAPPERS[wrapper] !== true) break;
+			i++;
+			if (wrapper === "command") continue;
+			while (tokens[i]?.startsWith("-")) {
+				const flag = tokens[i] as string;
+				i++;
+				if (WRAPPER_VALUE_FLAGS[flag] === true) i++;
+			}
+		}
 		if (tokens[i] !== "bd") continue;
-		const prefix = tokens.slice(0, i);
 		i++;
 		while (tokens[i]?.startsWith("-")) {
 			const flag = tokens[i];
@@ -157,19 +189,19 @@ const MOL_WRITES: Record<string, true> = {
 };
 const pendingAdvisory = new Map<string, string>();
 
-export function extractCommand(input: Record<string, unknown>): string {
-	if (typeof input.command === "string") return input.command;
-	if (typeof input.cmd === "string") return input.cmd;
+export function extractCommand(input: ToolCallEvent["input"]): string {
+	if ("command" in input && typeof input.command === "string") return input.command;
+	if ("cmd" in input && typeof input.cmd === "string") return input.cmd;
 	return "";
 }
 
 /** The environment a bash tool call supplies to its child process. */
 export function environmentForInput(
-	input: Record<string, unknown>,
+	input: ToolCallEvent["input"],
 	base: NodeJS.ProcessEnv = process.env,
 ): NodeJS.ProcessEnv {
 	const env: NodeJS.ProcessEnv = { ...base };
-	const supplied = input.env;
+	const supplied = "env" in input ? input.env : undefined;
 	if (supplied !== null && typeof supplied === "object") {
 		for (const [name, value] of Object.entries(supplied)) {
 			if (typeof value === "string") env[name] = value;
@@ -276,9 +308,9 @@ export function decideActorGate(
 }
 
 function prepend(
-	event: ExtensionToolResultEvent,
+	event: ToolResultEvent,
 	text: string,
-): { content: ExtensionToolResultEvent["content"] } {
+): { content: ToolResultEvent["content"] } {
 	const prefix = { type: "text" as const, text: `${text}\n\n` };
 	const existing = event.content ?? [];
 	return { content: [prefix, ...existing] };
@@ -286,7 +318,7 @@ function prepend(
 
 export default function bdActorGate(pi: ExtensionAPI): void {
 	const arbiter = installActorNoticeArbiter();
-	pi.on("tool_call", (event: ExtensionToolCallEvent) => {
+	pi.on("tool_call", (event: ToolCallEvent) => {
 		try {
 			if (event.toolName !== "bash") return;
 			const command = extractCommand(event.input);
@@ -305,7 +337,7 @@ export default function bdActorGate(pi: ExtensionAPI): void {
 		}
 	});
 
-	pi.on("tool_result", (event: ExtensionToolResultEvent) => {
+	pi.on("tool_result", (event: ToolResultEvent) => {
 		try {
 			const claimedByOrchestrate = arbiter.handledToolCalls.delete(event.toolCallId);
 			const text = pendingAdvisory.get(event.toolCallId);

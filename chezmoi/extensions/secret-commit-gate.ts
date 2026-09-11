@@ -1,7 +1,7 @@
 import { accessSync, constants, statSync } from "node:fs";
 import { basename } from "node:path";
 
-import type { ExtensionAPI, ExtensionToolCallEvent } from "@oh-my-pi/pi-coding-agent";
+import type { ExtensionAPI, ToolCallEvent } from "@oh-my-pi/pi-coding-agent";
 
 import { lexicalAbs, loadSourceDir, shellWords } from "./chezmoi-guard.ts";
 
@@ -357,10 +357,10 @@ export function decideCommit(command: string, cwd: string): { block: true; reaso
 }
 
 export default function secretCommitGate(pi: ExtensionAPI): void {
-	pi.on("tool_call", (event: ExtensionToolCallEvent, ctx: { cwd?: string }) => {
+	pi.on("tool_call", (event: ToolCallEvent, ctx: { cwd?: string }) => {
 		try {
-			if (event.toolName !== "bash") return;
-			const input = event.input as Record<string, unknown>;
+			if (event.toolName !== "bash" || !("command" in event.input)) return;
+			const input = event.input;
 			const command = typeof input.command === "string" ? input.command : "";
 			if (command === "") return;
 			const sessionCwd = ctx?.cwd || process.cwd();

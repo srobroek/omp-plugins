@@ -5,11 +5,6 @@ import { join } from "node:path";
 
 import sessionBeadsLifecycle, {
 	autoPinBeadsDir,
-	pinBashInput,
-	sessionPinAfter,
-	sessionPinFor,
-	releaseAutoPin,
-	repoIdentity,
 	bdVerbs,
 	beadIdCandidates,
 	envelopeData,
@@ -21,10 +16,15 @@ import sessionBeadsLifecycle, {
 	isBdWrite,
 	lastPushNotice,
 	parseTrailingJson,
+	pinBashInput,
 	readBeads,
 	readCheckOutcome,
-	readGates,
 	readGateList,
+	readGates,
+	releaseAutoPin,
+	repoIdentity,
+	sessionPinAfter,
+	sessionPinFor,
 	staleSkipNotice,
 } from "./session-beads-lifecycle.ts";
 
@@ -522,26 +522,29 @@ describe("integration", () => {
 			execFileSync("git", ["-C", b, "init", "-q"]);
 			process.env.PATH = `/nonexistent:${originalPath ?? ""}`; // git resolves; bd does not
 			delete process.env.BEADS_DIR;
+			// Read through a call: `delete process.env.BEADS_DIR` above narrows the
+			// property to `undefined`, and TS cannot see the handlers re-setting it.
+			const pinned = () => process.env.BEADS_DIR;
 			const { handlers, logged } = wire();
 			const start = handlers.session_start![0]!;
 			const stop = handlers.session_shutdown![0]!;
 			const ctx = (cwd: string, id: string) => ({ cwd, sessionManager: { getSessionId: () => id } });
 			await start({}, ctx(a, "alpha"));
-			expect(process.env.BEADS_DIR).toBe(join(a, ".beads"));
+			expect(pinned()).toBe(join(a, ".beads"));
 			await start({}, ctx(b, "beta")); // concurrent session in an unrelated checkout
-			expect(process.env.BEADS_DIR).toBe(join(a, ".beads")); // alpha's live pin is not overwritten under it
+			expect(pinned()).toBe(join(a, ".beads")); // alpha's live pin is not overwritten under it
 			expect(logged.some((m) => m.includes("another repository's beads database"))).toBe(true); // beta is told to pin per call
 			await start({}, ctx(aWorktree, "delta")); // same repository as alpha: shares the pin
 			await start({}, ctx(a, "alpha")); // owner restarts: delta must not be forgotten
 			stop({}, ctx(a, "alpha"));
-			expect(process.env.BEADS_DIR).toBe(join(a, ".beads")); // delta keeps it alive after alpha ends
+			expect(pinned()).toBe(join(a, ".beads")); // delta keeps it alive after alpha ends
 			stop({}, ctx(aWorktree, "delta"));
-			expect(process.env.BEADS_DIR).toBeUndefined(); // released with the last same-repo session
+			expect(pinned()).toBeUndefined(); // released with the last same-repo session
 			await start({}, ctx(b, "beta"));
-			expect(process.env.BEADS_DIR).toBe(join(b, ".beads"));
+			expect(pinned()).toBe(join(b, ".beads"));
 			stop({}, ctx(b, "beta"));
 			await start({}, ctx(c, "gamma"));
-			expect(process.env.BEADS_DIR).toBeUndefined(); // c has no database: nothing inherited
+			expect(pinned()).toBeUndefined(); // c has no database: nothing inherited
 		} finally {
 			if (originalPath === undefined) delete process.env.PATH;
 			else process.env.PATH = originalPath;

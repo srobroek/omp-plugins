@@ -85,9 +85,15 @@ jobs:
           # (renovate-dist rebuilds automatically on renovate branches).
           bun-version: "1.4.0"
 
+      - name: Root TypeScript quality
+        run: |
+          bun install --frozen-lockfile --silent
+          bun run typecheck
+          bun run lint
       # Plugins that declare real `dependencies` need node_modules present before
       # their sources can resolve imports; the committed dist/ bundles cover the
       # consumer machines, but this runner builds from source.
+
       - name: Install plugin dependencies
         run: |
           while IFS= read -r pkg; do

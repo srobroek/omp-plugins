@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+
 const zod = {
 	string: () => {
 		const s = { optional: () => s, describe: () => s };
@@ -9,6 +10,7 @@ const zod = {
 	},
 	object: (shape: unknown) => shape,
 };
+
 import depScanTool, { classify, detectProject, normalizeVersion, parseRequirement, queryRegistry } from "./dep-scan-tool";
 import { isPrerelease, pickStable } from "./lib";
 
@@ -203,9 +205,11 @@ describe("integration: dep_scan", () => {
 		const result = await execute("id", { path: project, offline_fixture_dir: fixtures }, undefined, undefined, {
 			cwd: project,
 		});
-		expect(result.details.records[0].name).toBe("left-pad");
-		expect(result.details.records[0].class).toBe("CURRENT");
-		expect(result.content[0].text).toContain("upgradable");
+		const record = result.details.records[0];
+		if (!record) throw new Error("dep_scan returned no dependency records");
+		expect(record.name).toBe("left-pad");
+		expect(record.class).toBe("CURRENT");
+		expect(result.content[0]?.text).toContain("upgradable");
 	});
 });
 
@@ -237,7 +241,8 @@ describe("integration: dep_apply", () => {
 			{ cwd: project, hasUI: true, ui: { confirm: async () => true }, setTimeout, clearTimer: clearTimeout },
 		);
 		expect(result.details.exit).toBe(0);
-		expect(result.content[0].text).toContain("ADVISORY-ONLY");
+		const text = result.content[0]?.text;
+		expect(text).toContain("ADVISORY-ONLY");
 	});
 	test("headless and denied confirmation stop before dependency execution", async () => {
 		const captured: Record<string, unknown> = {};

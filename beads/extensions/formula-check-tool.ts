@@ -1,3 +1,4 @@
+import type { TSchema } from "@oh-my-pi/pi-ai";
 import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
 import { envelopeData, parseTrailingJson } from "./session-beads-lifecycle.ts";
 
@@ -62,6 +63,7 @@ export function parseDryRun(out: string): { steps: string[]; gates: string[] } {
 		if (!m) continue;
 		const title = m[1];
 		const origin = m[2];
+		if (title === undefined || origin === undefined) continue;
 		if (title.startsWith("Gate:") && origin.includes(".gate-")) {
 			gates.push(title);
 		} else {
@@ -116,20 +118,26 @@ export function deepAssertFromMol(mol: MolShow): string[] {
 	if (!Array.isArray(mol.dependencies)) return ["mol show returned no `dependencies` array"];
 	const titles = new Map<string, string>();
 	for (const issue of issues) {
-		if (!issue || typeof issue !== "object" || typeof issue.id !== "string" || !issue.id ||
-			titles.has(issue.id)) return ["mol show returned malformed or duplicate issues"];
-		titles.set(issue.id, typeof issue.title === "string" ? issue.title : issue.id);
+		if (!issue || typeof issue !== "object") return ["mol show returned malformed or duplicate issues"];
+		const record = issue as Record<string, unknown>;
+		if (typeof record.id !== "string" || !record.id || titles.has(record.id)) {
+			return ["mol show returned malformed or duplicate issues"];
+		}
+		titles.set(record.id, typeof record.title === "string" ? record.title : record.id);
 	}
 	const blocked = new Set<string>();
 	for (const edge of mol.dependencies) {
-		if (!edge || typeof edge !== "object" || typeof edge.issue_id !== "string" ||
-			typeof edge.depends_on_id !== "string" || !titles.has(edge.issue_id) ||
-			!titles.has(edge.depends_on_id)) return ["mol show returned malformed dependencies"];
-		blocked.add(edge.issue_id);
+		if (!edge || typeof edge !== "object") return ["mol show returned malformed dependencies"];
+		const record = edge as Record<string, unknown>;
+		if (typeof record.issue_id !== "string" || typeof record.depends_on_id !== "string" ||
+			!titles.has(record.issue_id) || !titles.has(record.depends_on_id)) {
+			return ["mol show returned malformed dependencies"];
+		}
+		blocked.add(record.issue_id);
 	}
 	const zeroDep = [...titles.keys()]
 		.filter((id) => !blocked.has(id))
-		.map((id) => titles.get(id));
+		.map((id) => titles.get(id) ?? id);
 	if (zeroDep.length !== 1) {
 		return [
 			`${zeroDep.length} steps have no dependency; expected exactly one entry point (more than one entry point or a cycle violates the anchor rule): ${JSON.stringify(zeroDep)}`,
@@ -220,26 +228,21 @@ export default function formulaCheckTool(pi: ExtensionAPI): void {
 			"Cook-validate a bd formula, parse `bd mol pour --dry-run`, check gates and unsubstituted braces. Default is dry-run (read). deep=true performs a real pour in the workspace and uses exec approval.",
 		parameters: z.object({
 			formula: z.string().describe("Formula stem to assert"),
-			varargs: z
-				.array(z.string())
-				.optional()
-				.describe("Selection vars as k=v pairs (passed as --var)"),
-			deep: z
-				.boolean()
-				.optional()
-				.describe(
-					"If true, pour for real and assert a single entry point (mutates workspace; exec approval)",
-				),
-			workspace: z
-				.string()
-				.optional()
-				.describe("Repo cwd for bd; defaults to the current working directory"),
+			varargs: z.array(z.string()).optional().describe("Selection vars as k=v pairs (passed as --var)"),
+			deep: z.boolean().optional().describe("If true, pour for real and assert a single entry point (mutates workspace; exec approval)"),
+			workspace: z.string().optional().describe("Repo cwd for bd; defaults to the current working directory"),
 			expectSteps: z.number().optional().describe("Expected body step count"),
 			expectGates: z.number().optional().describe("Expected gate count"),
-		}),
+		}) as unknown as TSchema, // pi.zod and the host TypeBox schema types differ.
 		approval: (toolCall) => {
-			const deep = Boolean((toolCall.input as FormulaCheckParams | undefined)?.deep);
-			return deep ? undefined : "read";
+			let input: unknown;
+			if (typeof toolCall === "object" && toolCall !== null && "input" in toolCall) {
+				input = toolCall.input;
+			}
+			const deep = typeof input === "object" && input !== null && "deep" in input && Boolean(input.deep);
+			// The bare `exec` tier leaves the decision to the configured approval
+			// policy; a literal `policy: "prompt"` would override yolo/write modes.
+			return deep ? "exec" : "read";
 		},
 		execute: async (_toolCallId, params: FormulaCheckParams) => {
 			const result = assertFormula(params);

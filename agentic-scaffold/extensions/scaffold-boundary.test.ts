@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { ExtensionToolCallEvent } from "@oh-my-pi/pi-coding-agent";
+import type { ToolCallEvent } from "@oh-my-pi/pi-coding-agent";
 import { boundaryDecision } from "./scaffold-boundary.ts";
 
 function rootWithRun(owned: string[] = []): string {
@@ -13,8 +13,8 @@ function rootWithRun(owned: string[] = []): string {
 	return root;
 }
 
-function event(toolName: string, input: Record<string, unknown>): ExtensionToolCallEvent {
-	return { toolName, toolCallId: "test", input } as unknown as ExtensionToolCallEvent;
+function event(toolName: string, input: Record<string, unknown>): ToolCallEvent {
+	return { toolName, toolCallId: "test", input } as unknown as ToolCallEvent;
 }
 
 describe("scaffold boundary activation", () => {

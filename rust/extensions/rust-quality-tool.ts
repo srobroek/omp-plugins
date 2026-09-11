@@ -1,6 +1,7 @@
-import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
 import { existsSync } from "node:fs";
 import { resolve } from "node:path";
+import type { TSchema } from "@oh-my-pi/pi-ai";
+import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
 
 const TIMEOUT_MS = 600_000;
 
@@ -11,6 +12,7 @@ export type StepResult = {
 	status: "pass" | "fail" | "skip";
 	detail: string;
 };
+type RustQualityParams = { mode: QualityMode; path?: string };
 
 export type QualityReport = {
 	ok: boolean;
@@ -130,8 +132,8 @@ export default function rustQualityTool(pi: ExtensionAPI): void {
 		parameters: z.object({
 			mode: z.enum(["check", "fix"]).describe("check: fmt --check, clippy -D warnings, test; fix: cargo fmt"),
 			path: z.string().optional().describe("Project cwd; defaults to session cwd"),
-		}),
-		execute: async (_id, params, _signal, _onUpdate, ctx) => {
+		}) as unknown as TSchema,
+		execute: async (_id, params: RustQualityParams, _signal, _onUpdate, ctx) => {
 			try {
 				const cwd = resolve(params.path ?? ctx?.cwd ?? process.cwd());
 				if (!existsSync(cwd)) {

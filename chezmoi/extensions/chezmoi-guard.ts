@@ -2,11 +2,7 @@ import { realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { isAbsolute, relative, resolve } from "node:path";
 
-import type {
-	ExtensionAPI,
-	ExtensionToolCallEvent,
-	ExtensionToolResultEvent,
-} from "@oh-my-pi/pi-coding-agent";
+import type { ExtensionAPI, ToolCallEvent, ToolResultEvent } from "@oh-my-pi/pi-coding-agent";
 
 const EDIT_TOOLS = new Set(["edit", "write"]);
 const SUBPROCESS_TIMEOUT_MS = 2000;
@@ -89,14 +85,16 @@ export function under(child: string, parent: string): boolean {
 	return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
 }
 
-export function editedFiles(input: Record<string, unknown>): string[] {
-	for (const key of ["file_path", "path"] as const) {
-		const value = input[key];
-		if (typeof value === "string" && value.length > 0) return [value];
+export function editedFiles(input: ToolCallEvent["input"]): string[] {
+	// `in` narrows one literal key at a time, so the two spellings stay unrolled.
+	if ("file_path" in input && typeof input.file_path === "string" && input.file_path.length > 0) {
+		return [input.file_path];
 	}
-	const paths = input.paths;
-	if (Array.isArray(paths)) {
-		return paths.filter((p): p is string => typeof p === "string" && p.length > 0);
+	if ("path" in input && typeof input.path === "string" && input.path.length > 0) {
+		return [input.path];
+	}
+	if ("paths" in input && Array.isArray(input.paths)) {
+		return input.paths.filter((p): p is string => typeof p === "string" && p.length > 0);
 	}
 	return [];
 }
@@ -217,9 +215,9 @@ export function considerPath(abs: string, cwd: string): { block: true; reason: s
 }
 
 function prepend(
-	event: ExtensionToolResultEvent,
+	event: ToolResultEvent,
 	text: string,
-): { content: ExtensionToolResultEvent["content"] } {
+): { content: ToolResultEvent["content"] } {
 	const banner = `<system-reminder>\n${text}\n</system-reminder>\n\n`;
 	if (event.content[0]?.type === "text") {
 		return {
@@ -248,17 +246,17 @@ export default function chezmoiGuard(pi: ExtensionAPI): void {
 		},
 	});
 
-	pi.on("tool_call", (event, ctx) => {
+	pi.on("tool_call", (event: ToolCallEvent, ctx) => {
 		try {
 			const sessionCwd = ctx?.cwd || process.cwd();
-			const cwd = typeof event.input.cwd === "string" && event.input.cwd
-				? lexicalAbs(event.input.cwd, sessionCwd) : sessionCwd;
+			const rawCwd = "cwd" in event.input ? event.input.cwd : undefined;
+			const cwd = typeof rawCwd === "string" && rawCwd ? lexicalAbs(rawCwd, sessionCwd) : sessionCwd;
 			const paths: string[] = [];
 
 			if (EDIT_TOOLS.has(event.toolName)) {
 				paths.push(...editedFiles(event.input));
 			} else if (event.toolName === "bash") {
-				const command = typeof event.input.command === "string" ? event.input.command : "";
+				const command = "command" in event.input && typeof event.input.command === "string" ? event.input.command : "";
 				if (!command) return;
 				paths.push(...sedInplacePaths(command));
 				if (!paths.length) return;
