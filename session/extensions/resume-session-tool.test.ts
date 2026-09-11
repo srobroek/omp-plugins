@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, setDefaultTimeout, test } from "bun:test";
 import { execFileSync } from "node:child_process";
 import {
 	appendFileSync,
@@ -44,6 +44,24 @@ import {
 	sessionsRoot,
 	storeFiles,
 } from "./store";
+
+// Every test here builds a fixture session store on disk and drives the tool
+// against it, so the file is uniformly slow rather than holding a few slow
+// exceptions: 50 tests take ~43s, of which ~1s is import and setup, and the two
+// heaviest are ~2.9s and ~3.4s of work each. Against Bun's 5s default those two
+// lose roughly half of all runs under concurrent load, which made a full-suite
+// result unusable as a pass/fail signal -- it produced two false readings in one
+// session, each needing an isolation matrix to dismiss.
+//
+// A per-test allowance is the repo's convention for a slow exception, and it is
+// the wrong shape here: the cost is a property of the fixture harness, so the
+// next heavy test added would silently inherit the same 5s cliff. 20s is the
+// same allowance the beads worktree tests already carry, and ~6x the worst
+// measured test, so it absorbs contention without hiding a genuine hang.
+//
+// This is a timeout, not the fix. The fixture harness costing ~850ms per test
+// with no subprocesses is the underlying defect; see omp-plugins-dg3.
+setDefaultTimeout(20_000);
 
 function tmp(prefix: string): string {
 	return mkdtempSync(join(tmpdir(), prefix));
