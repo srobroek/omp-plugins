@@ -9,6 +9,7 @@ import secretCommitGate, {
 	committedPaths,
 	decideCommit,
 	gitCommits,
+	nestsShell,
 	resetSecretCommitGateForTests,
 	secretStagedPaths,
 	setGitSpawnForTests,
@@ -280,6 +281,8 @@ describe("decideCommit", () => {
 			`sh -c "cd ${SOURCE} && git commit -m x"`,
 			`echo "$(cd ${SOURCE} && git commit -m x)"`,
 			`cd x&&(cd '${SOURCE}');git commit -m x`,
+			`env sh -c 'cd ${SOURCE} && git commit -m x'`,
+			`cd x; sh -c 'cd ${SOURCE} && git commit -m x'`,
 		]) {
 			const decision = decideCommit(command, ELSEWHERE);
 			expect(decision?.block).toBe(true);
@@ -303,6 +306,47 @@ describe("decideCommit", () => {
 		expect(decideCommit("find . -name x -exec rm {} ; git commit -m y", ROOT)).toBeUndefined();
 		// Single quotes are literal, so a substitution written inside them is inert.
 		expect(decideCommit(`git commit -m 'literal $(cd elsewhere)'`, ROOT)).toBeUndefined();
+		// Shell-looking words inside quotes are asserted directly against nestsShell
+		// below: routing them through decideCommit cannot prove anything, because its
+		// earlier exits also return undefined, which made a first attempt vacuous.
+	});
+
+	test("nestsShell reads only the text outside quotes", () => {
+		// Each row was checked against real bash. The false side matters as much as the
+		// true side: this detector refuses commits, so a wrong `true` blocks honest work.
+		const nests: Array<[string, boolean]> = [
+			// Real nesting, outside quotes.
+			["( cd src && git commit )", true],
+			["{ cd src; git commit; }", true],
+			["eval 'cd src && git commit'", true],
+			["cd x&&(cd y);git commit", true],
+			['sh -c "cd src && git commit"', true],
+			["env sh -c 'cd src && git commit'", true],
+			["cd src; sh -c 'git commit'", true],
+			// Substitution expands inside DOUBLE quotes, so it nests.
+			['git commit -m "$(cd src && pwd)"', true],
+			['git commit -m "`cd src && pwd`"', true],
+			// Literal punctuation and shell-looking WORDS inside quotes do not.
+			['git commit -m "fix (typo) and {braces}"', false],
+			["git commit -m '(fix) thing'", false],
+			["git commit -m 'literal; sh -c harmless'", false],
+			["git commit -m 'env sh -c text'", false],
+			["git commit -m 'see eval notes'", false],
+			['git commit -m "pipe | eval thing"', false],
+			["git commit -m 'literal $(cd elsewhere)'", false],
+			// Expansion and find's placeholder are not groups.
+			["git commit -m ${MSG}", false],
+			["find . -name x -exec rm {} ; git commit -m y", false],
+			// The shapes the walk already models correctly must stay allowed.
+			["cd src && git commit -m x", false],
+			["cd src; git commit -m x", false],
+			["cd src && git commit & git commit", false],
+			["cd src && printf x | git commit", false],
+			["git -C src commit -m x", false],
+		];
+		for (const [command, expected] of nests) {
+			expect(nestsShell(command), command).toBe(expected);
+		}
 	});
 });
 

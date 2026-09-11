@@ -435,6 +435,11 @@ export const SECRET_ADVICE =
  * can `cd` and commit just as a subshell can.
  */
 export function nestsShell(command: string): boolean {
+	// Text outside quotes, collected as the scan runs. The `eval` and `sh -c` test at
+	// the end has to see only this: run against the raw command it fires on
+	// `git commit -m 'literal; sh -c harmless'`, blocking a commit whose quoted
+	// message merely contains shell-looking words.
+	const bare: string[] = [];
 	let quote: '"' | "'" | null = null;
 	for (let index = 0; index < command.length; index++) {
 		const char = command[index]!;
@@ -455,6 +460,9 @@ export function nestsShell(command: string): boolean {
 		}
 		if (char === '"' || char === "'") {
 			quote = char;
+			// A quoted span is one opaque word to the shell, so leave a blank in its
+			// place rather than joining its neighbours into a spurious command word.
+			bare.push(" ");
 			continue;
 		}
 		if (char === "\\") {
@@ -464,10 +472,11 @@ export function nestsShell(command: string): boolean {
 		if (char === "(" || char === ")" || char === "`") return true;
 		if (char === "{" && /\s/.test(command[index + 1] ?? "")) return true;
 		if (char === "}" && /[\s;]/.test(command[index - 1] ?? "")) return true;
+		bare.push(char);
 	}
 	// A command word that hands a whole script to another shell is the same problem
 	// reached a different way: the payload is one opaque token to the tokeniser.
-	return /(?:^|[;&|]|\bcommand\b|\benv\b)\s*(?:eval\b|(?:ba|z|k|da)?sh\s+-c\b)/.test(command);
+	return /(?:^|[;&|]|\bcommand\b|\benv\b)\s*(?:eval\b|(?:ba|z|k|da)?sh\s+-c\b)/.test(bare.join(""));
 }
 
 export function decideCommit(command: string, cwd: string): { block: true; reason: string } | undefined {
