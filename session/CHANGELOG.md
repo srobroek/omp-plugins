@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.1.3](https://github.com/srobroek/omp-plugins/compare/session--v1.1.2...session--v1.1.3) (2026-09-11)
+
+
+### Bug Fixes
+
+* remediate confirmed sniff-audit findings and make the strict TypeScript + Biome contract pass ([5ecdd5f](https://github.com/srobroek/omp-plugins/commit/5ecdd5f027fa8f07f4eb9a2b10e93532b6e129d3))
+* **session:** enforce resume output cap ([e57f015](https://github.com/srobroek/omp-plugins/commit/e57f015c4616119360d43668723dd442e8fe2f7f))
+* **session:** satisfy the repository TypeScript and lint contract ([17ccdd3](https://github.com/srobroek/omp-plugins/commit/17ccdd30b9297fc9d4b0df9198242828db713e02))
+
 ## [1.1.2](https://github.com/srobroek/omp-plugins/compare/session--v1.1.1...session--v1.1.2) (2026-09-08)
 
 

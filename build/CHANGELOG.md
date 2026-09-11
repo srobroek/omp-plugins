@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.3.4](https://github.com/srobroek/omp-plugins/compare/build--v0.3.3...build--v0.3.4) (2026-09-11)
+
+
+### Bug Fixes
+
+* **authoring:** enforce agent metadata parity ([19ad6ae](https://github.com/srobroek/omp-plugins/commit/19ad6aeeb78038f74c0901bc5630c5f818c021d5))
+* remediate confirmed sniff-audit findings and make the strict TypeScript + Biome contract pass ([5ecdd5f](https://github.com/srobroek/omp-plugins/commit/5ecdd5f027fa8f07f4eb9a2b10e93532b6e129d3))
+
 ## [0.3.3](https://github.com/srobroek/omp-plugins/compare/build--v0.3.2...build--v0.3.3) (2026-09-08)
 
 

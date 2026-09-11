@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.0.12](https://github.com/srobroek/omp-plugins/compare/beads--v1.0.11...beads--v1.0.12) (2026-09-11)
+
+
+### Bug Fixes
+
+* **beads:** keep deep formula checks on the configured approval policy ([f1d460e](https://github.com/srobroek/omp-plugins/commit/f1d460e7238a2eb8f15bc5e255b92c47067a973b))
+* remediate confirmed sniff-audit findings and make the strict TypeScript + Biome contract pass ([5ecdd5f](https://github.com/srobroek/omp-plugins/commit/5ecdd5f027fa8f07f4eb9a2b10e93532b6e129d3))
+
 ## [1.0.11](https://github.com/srobroek/omp-plugins/compare/beads--v1.0.10...beads--v1.0.11) (2026-09-10)
 
 

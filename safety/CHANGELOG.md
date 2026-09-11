@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.6.1](https://github.com/srobroek/omp-plugins/compare/safety--v0.6.0...safety--v0.6.1) (2026-09-11)
+
+
+### Bug Fixes
+
+* remediate confirmed sniff-audit findings and make the strict TypeScript + Biome contract pass ([5ecdd5f](https://github.com/srobroek/omp-plugins/commit/5ecdd5f027fa8f07f4eb9a2b10e93532b6e129d3))
+* **safety:** honour the per-call cwd when advising on edits ([c5d3d50](https://github.com/srobroek/omp-plugins/commit/c5d3d501bdfbfb2b5ade964bf5bff6e430dc5c90))
+
 ## [0.6.0](https://github.com/srobroek/omp-plugins/compare/safety--v0.5.3...safety--v0.6.0) (2026-09-10)
 
 

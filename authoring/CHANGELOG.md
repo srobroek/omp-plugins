@@ -1,5 +1,16 @@
 # Changelog
 
+## [2.0.1](https://github.com/srobroek/omp-plugins/compare/authoring--v2.0.0...authoring--v2.0.1) (2026-09-11)
+
+
+### Bug Fixes
+
+* **authoring:** preserve agentic lint source lines ([45409ec](https://github.com/srobroek/omp-plugins/commit/45409ecd4373f2b694d6b850effc2beee076f8a0))
+* **authoring:** satisfy the repository TypeScript and lint contract ([a2cfe37](https://github.com/srobroek/omp-plugins/commit/a2cfe3707a0a8d1b416084e32af25f5a93ed5835))
+* **authoring:** unify applied ast edit paths ([eba945c](https://github.com/srobroek/omp-plugins/commit/eba945caabdbb07bf6f46aa4fc7c5b0712c092d3))
+* **authoring:** validate agent metadata types ([d52a5f2](https://github.com/srobroek/omp-plugins/commit/d52a5f287cad6fa75574c4ce2abb97d5edf1b593))
+* remediate confirmed sniff-audit findings and make the strict TypeScript + Biome contract pass ([5ecdd5f](https://github.com/srobroek/omp-plugins/commit/5ecdd5f027fa8f07f4eb9a2b10e93532b6e129d3))
+
 ## [2.0.0](https://github.com/srobroek/omp-plugins/compare/authoring--v1.3.0...authoring--v2.0.0) (2026-09-08)
 
 

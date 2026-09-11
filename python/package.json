@@ -1,6 +1,6 @@
 {
   "name": "@srobroek/python",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "description": "Python rules: uv-managed projects, typing, pytest layout, and a Python review skill.",
   "private": true,
   "omp": {

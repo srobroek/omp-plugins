@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.3.1](https://github.com/srobroek/omp-plugins/compare/browser-tools--v0.3.0...browser-tools--v0.3.1) (2026-09-11)
+
+
+### Bug Fixes
+
+* **browser-tools:** exercise the lock-file settings fallback instead of asserting it ([8b1de87](https://github.com/srobroek/omp-plugins/commit/8b1de875dd0c690b2474a843bd0967ae28c4a1e7))
+* remediate confirmed sniff-audit findings and make the strict TypeScript + Biome contract pass ([5ecdd5f](https://github.com/srobroek/omp-plugins/commit/5ecdd5f027fa8f07f4eb9a2b10e93532b6e129d3))
+
 ## [0.3.0](https://github.com/srobroek/omp-plugins/compare/browser-tools--v0.2.1...browser-tools--v0.3.0) (2026-09-10)
 
 

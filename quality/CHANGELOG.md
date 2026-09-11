@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.1.1](https://github.com/srobroek/omp-plugins/compare/quality--v1.1.0...quality--v1.1.1) (2026-09-11)
+
+
+### Bug Fixes
+
+* **quality:** assert hosted analyzer plugins never become runtime tools ([07f6a0c](https://github.com/srobroek/omp-plugins/commit/07f6a0c1db0e8584ddd2678073e8b3f8dc97c7bf))
+* **quality:** reduce sniff skill density ([b8fb294](https://github.com/srobroek/omp-plugins/commit/b8fb294ec8cac4b2a3a9629e1431d54a25d003f8))
+* remediate confirmed sniff-audit findings and make the strict TypeScript + Biome contract pass ([5ecdd5f](https://github.com/srobroek/omp-plugins/commit/5ecdd5f027fa8f07f4eb9a2b10e93532b6e129d3))
+
 ## [1.1.0](https://github.com/srobroek/omp-plugins/compare/quality--v1.0.0...quality--v1.1.0) (2026-09-10)
 
 
