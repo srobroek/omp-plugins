@@ -27,9 +27,8 @@ MUST Claim before working: `bd update <id> --claim` (atomic CAS; first wins,
   idempotent). Never claim via labels -- not atomic.
 MUST Discover work with `bd ready --unassigned --json`; never pick up work
   assigned to another actor unless the parent hands you its id.
-MUST On refusal, coordinate with holder; `bd unclaim --force` only after
-  confirming the holding session is dead.
-DEFAULT Release with `bd unclaim <id>`.
+MUST On refusal, coordinate with holder; only release a claim once the holding session is confirmed dead, using `bd update <id> --assignee '' --status open`.
+DEFAULT Release with `bd update <id> --assignee '' --status open`.
 
 FIELD TAXONOMY
 | purpose | mechanism | writer |
