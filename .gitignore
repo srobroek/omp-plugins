@@ -16,11 +16,14 @@ omp-plugins.lock.json
 installed_plugins.json
 node_modules/
 
-# Beads / Dolt files (added by bd init)
+# Beads / Dolt runtime state
+.beads/
 .dolt/
 *.db
 .beads-credential-key
-.beads/proxieddb/
+
+# Playwright MCP artifacts
+.playwright-mcp/
 
 # OMP project-scope plugin registry (machine-local paths)
 .omp/plugins/
