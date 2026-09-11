@@ -1,5 +1,26 @@
 # Changelog
 
+## [0.6.1](https://github.com/srobroek/omp-plugins/compare/agentic-scaffold--v0.6.0...agentic-scaffold--v0.6.1) (2026-09-10)
+
+
+### Bug Fixes
+
+* **agentic-scaffold:** agentic lane fails closed; prose gate step is shellcheck-clean ([#158](https://github.com/srobroek/omp-plugins/issues/158)) ([e666021](https://github.com/srobroek/omp-plugins/commit/e666021d863e81aa9dde91b9a0e4a5ade1fae1ac))
+
+## [0.6.0](https://github.com/srobroek/omp-plugins/compare/agentic-scaffold--v0.5.11...agentic-scaffold--v0.6.0) (2026-09-10)
+
+
+### Features
+
+* **agentic-scaffold:** CI and release standard with a single fan-in gate ([#154](https://github.com/srobroek/omp-plugins/issues/154)) ([f0db95d](https://github.com/srobroek/omp-plugins/commit/f0db95db2ede132fc0acc4f037452d8e4f8019bc))
+
+## [0.5.11](https://github.com/srobroek/omp-plugins/compare/agentic-scaffold--v0.5.10...agentic-scaffold--v0.5.11) (2026-09-10)
+
+
+### Bug Fixes
+
+* **agentic-scaffold:** valid answers TOML on re-run; clean tree is a prerequisite ([#152](https://github.com/srobroek/omp-plugins/issues/152)) ([23ab0ce](https://github.com/srobroek/omp-plugins/commit/23ab0ce2858788895d1efdaf315e6bb1afe4526e))
+
 ## [0.5.10](https://github.com/srobroek/omp-plugins/compare/agentic-scaffold--v0.5.9...agentic-scaffold--v0.5.10) (2026-09-10)
 
 

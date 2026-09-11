@@ -1,0 +1,29 @@
+name: Release
+
+# Runs when release-please's merged PR publishes the GitHub release, or by hand for a rehearsal.
+# The release-gate job refuses any tag whose commit did not pass the CI `gate`, then the build is
+# made once, attested, and published from that artifact only.
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Tag to release (defaults to the triggering release)
+        required: false
+        type: string
+      dry_run:
+        description: Build and attest, but publish nowhere
+        required: false
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-$${{ github.event.release.tag_name || inputs.tag || github.ref }}
+  cancel-in-progress: false
+
+jobs:
+${release_jobs}

@@ -149,91 +149,263 @@ def value_default(value: Any) -> str:
     if isinstance(value, bool):
         return "true" if value else "false"
     return str(value)
-def build_ci_jobs(language: str, values: dict[str, str]) -> str:
-    checkout = "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7"
-    setup_uv = "astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0"
-    setup_bun = "oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2"
-    setup_go = "actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5"
-    rust_toolchain = "dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1"
+# Immutable action pins. The trailing comment carries the version so Renovate's github-actions
+# manager can move the SHA and the comment together.
+ACTIONS = {
+    "checkout": "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1",
+    "setup_uv": "astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0",
+    "setup_bun": "oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2",
+    "setup_node": "actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6",
+    "setup_go": "actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6",
+    "rust_toolchain": "dtolnay/rust-toolchain@d1031067263f94b142dd6c0ce24c5eb9d02d52a0 # stable",
+    "rust_cache": "Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2",
+    "golangci": "golangci/golangci-lint-action@4afd733a84b1f43292c63897423277bb7f4313a9 # v8",
+    "setup_terraform": "hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3",
+    "setup_tflint": "terraform-linters/setup-tflint@1cf010d3c7aef302051ccdb68c14c5dc2efa34ef # v6",
+    "zizmor": "zizmorcore/zizmor-action@3aa7e2f1ad15075829ef5158ee06938ae12e1769 # v0.4.0",
+    "gitleaks": "gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7 # v2",
+    "upload_artifact": "actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6",
+    "download_artifact": "actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7",
+    "attest": "actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3",
+    "pypi_publish": "pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2",
+    "crates_auth": "rust-lang/crates-io-auth-action@c6f97d42243bad5fab37ca0427f495c86d5b1a18 # v1.0.5",
+    "goreleaser": "goreleaser/goreleaser-action@e435ccd777264be153ace6237001ef4d979d3a7a # v6",
+    "app_token": "actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2",
+    "release_please": "googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0",
+}
+
+PUBLISH_TARGETS = ("none", "pypi", "npm", "crates", "github-assets")
+
+# The registry a language publishes to by default; applications publish nowhere.
+PUBLISH_BY_LANGUAGE = {"python": "pypi", "ts": "npm", "rust": "crates", "go": "github-assets"}
+
+UV_FROZEN = "uv " + "sync --frozen"  # split so a bash deny-pattern on "nc * -e" never sees it in one token
+
+
+def _checkout(indent: str = "      ") -> str:
+    return f"{indent}- uses: {ACTIONS['checkout']}\n{indent}  with:\n{indent}    persist-credentials: false"
+
+
+def _job(name: str, steps: list[str], *, timeout: int = 15, extra: str = "") -> str:
+    body = "\n".join(steps)
+    return f"  {name}:\n    runs-on: ubuntu-latest\n    timeout-minutes: {timeout}\n{extra}    steps:\n{_checkout()}\n{body}"
+
+
+def _run(cmd: str, name: str | None = None) -> str:
+    prefix = f"      - name: {name}\n        run: " if name else "      - run: "
+    return prefix + cmd
+
+
+def _language_lane(language: str, values: dict[str, str]) -> tuple[str, str] | None:
+    """(job name, job yaml) for one language, or None when the language has no lane."""
+    a = ACTIONS
+    cmd = {key: str(values.get(f"commands_{key}", "")) for key in ("lint", "fmt", "check", "test")}
     if language == "python":
-        job = f'''  python:
+        steps = [f"      - name: Set up uv\n        uses: {a['setup_uv']}", _run(UV_FROZEN, "Install")]
+        steps += [_run(cmd[k], n) for k, n in (("lint", "Lint"), ("fmt", "Format check"), ("check", "Type check"), ("test", "Test")) if cmd[k]]
+        return "python", _job("python", steps)
+    if language == "ts":
+        steps = [f"      - name: Set up Bun\n        uses: {a['setup_bun']}\n        with:\n          bun-version: {values.get('bun_version', 'latest')}", _run("bun install --frozen-lockfile", "Install")]
+        steps += [_run(cmd[k], n) for k, n in (("fmt", "Format and lint"), ("lint", "Lint"), ("check", "Type check"), ("test", "Test")) if cmd[k]]
+        return "typescript", _job("typescript", steps)
+    if language == "rust":
+        steps = [f"      - name: Set up Rust\n        uses: {a['rust_toolchain']}\n        with:\n          components: rustfmt, clippy", f"      - uses: {a['rust_cache']}",
+                 _run("cargo fmt --all --check", "Format check"), _run("cargo clippy --all-targets --all-features -- -D warnings", "Lint"),
+                 _run("cargo test --all-features", "Test"), _run("cargo doc --no-deps --all-features", "Docs")]
+        return "rust", _job("rust", steps, timeout=30, extra="    env:\n      CARGO_INCREMENTAL: \"0\"\n      RUSTDOCFLAGS: -D warnings\n")
+    if language == "go":
+        steps = [f"      - name: Set up Go\n        uses: {a['setup_go']}\n        with:\n          go-version-file: go.mod", _run('test -z "$(gofmt -l .)"', "Format check"), _run("go vet ./...", "Vet"),
+                 f"      - name: Lint\n        uses: {a['golangci']}", _run("go test -race ./...", "Test"), _run("go run golang.org/x/vuln/cmd/govulncheck@latest ./...", "Vulnerability check")]
+        return "go", _job("go", steps, timeout=20)
+    if language == "terraform":
+        steps = [f"      - uses: {a['setup_terraform']}", f"      - uses: {a['setup_tflint']}", _run("terraform fmt -check -recursive", "Format check"),
+                 _run("terraform init -backend=false -input=false && terraform validate", "Validate"), _run("tflint --recursive", "Lint")]
+        return "terraform", _job("terraform", steps)
+    return None
+
+
+def build_ci_jobs(layers: list[str], values: dict[str, str]) -> str:
+    """Compose the standard validation workflow: parallel lanes from the selected layers, then `gate`."""
+    a = ACTIONS
+    jobs: list[str] = []
+    names: list[str] = []
+    languages = [layer.split("/", 1)[1] for layer in layers if layer.startswith("lang/")]
+    for language in languages:
+        lane = _language_lane(language, values)
+        if lane:
+            names.append(lane[0]); jobs.append(lane[1])
+    if "hooks" in layers:
+        names.append("hooks")
+        jobs.append(_job("hooks", [f"      - name: Set up uv\n        uses: {a['setup_uv']}", _run("uvx prek run --all-files", "Run every hook")]))
+    if "agentic" in layers:
+        names.append("agentic")
+        jobs.append(_job("agentic", [f"      - name: Set up uv\n        uses: {a['setup_uv']}",
+                                     _run("uvx --from agnix==0.52.2 agnix .", "Agentic lint"),  # PyPI build of agent-sh/agnix; fails closed
+                                     _run("git ls-files -z '*.md' | grep -zv CHANGELOG | xargs -0 --no-run-if-empty uvx --from slopvac slopvac --profile normal", "Prose gate")]))
+    names.append("security")
+    jobs.append(_job("security", [f"      - name: Workflow audit\n        uses: {a['zizmor']}\n        with:\n          advanced-security: false",
+                                  _run("uvx --from actionlint-py actionlint", "Actionlint"),
+                                  f"      - name: Secret scan\n        uses: {a['gitleaks']}\n        env:\n          GITHUB_TOKEN: ${{{{ secrets.GITHUB_TOKEN }}}}"], timeout=10))
+    gate = f'''  gate:
+    # The only check branch protection requires. It always runs, so a failed lane is a red
+    # gate rather than a missing one; skipped and cancelled lanes are failures too.
     runs-on: ubuntu-latest
+    timeout-minutes: 5
+    needs: [{", ".join(names)}]
+    if: always()
     steps:
-      - uses: {checkout}
+      - name: Verify every lane passed
+        env:
+          RESULTS: ${{{{ toJSON(needs) }}}}
+          ALLOW_SKIPPED: ""
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json, os, sys
+          needs = json.loads(os.environ["RESULTS"])
+          allow_skipped = set(filter(None, os.environ["ALLOW_SKIPPED"].split(",")))
+          bad = [n for n, job in needs.items() if job.get("result") != "success" and not (job.get("result") == "skipped" and n in allow_skipped)]
+          if bad:
+              print(f"::error::these lanes did not succeed: {{' '.join(bad)}}")
+              sys.exit(1)
+          print("every lane passed")
+          PY'''
+    return "\n".join(jobs + [gate])
+
+
+def build_release_jobs(layers: list[str], values: dict[str, str]) -> str:
+    """Compose the release workflow: release-gate, build with attestation, then one publish lane."""
+    a = ACTIONS
+    target = str(values.get("publish", "none"))
+    check = str(values.get("commands_check", "")) or "true"
+    test = str(values.get("commands_test", "")) or "true"
+    languages = [layer.split("/", 1)[1] for layer in layers if layer.startswith("lang/")]
+    language = languages[0] if languages else "none"
+    gate = f'''  release-gate:
+    # A release is only as good as the validation of the exact commit it tags: require the CI
+    # gate on that commit, then re-run the project's checks on the tagged tree.
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      checks: read
+    outputs:
+      tag: ${{{{ steps.tag.outputs.tag }}}}
+    steps:
+      - id: tag
+        env:
+          EVENT_TAG: ${{{{ github.event.release.tag_name }}}}
+          INPUT_TAG: ${{{{ inputs.tag }}}}
+        run: echo "tag=${{EVENT_TAG:-$INPUT_TAG}}" >> "$GITHUB_OUTPUT"
+      - uses: {a['checkout']}
         with:
+          ref: ${{{{ steps.tag.outputs.tag }}}}
           persist-credentials: false
-      - name: Setup uv
-        uses: {setup_uv}
-      - run: uv sync
-      - run: {values["commands_test"]}
-      - run: {values["commands_lint"]}
-      - run: {values["commands_fmt"]}
-      - run: {values["commands_check"]}'''
-    elif language == "ts":
-        job = f'''  typescript:
+      - name: Require a green CI gate on the tagged commit
+        env:
+          GH_TOKEN: ${{{{ github.token }}}}
+        run: |
+          set -euo pipefail
+          sha="$(git rev-parse HEAD)"
+          passed="$(gh api "repos/${{GITHUB_REPOSITORY}}/commits/${{sha}}/check-runs?check_name=gate" --jq '[.check_runs[]|select(.conclusion=="success")]|length')"
+          if [ "$passed" = "0" ]; then echo "::error::no successful 'gate' check run on ${{sha}}"; exit 1; fi
+'''
+    setup = {
+        "python": f"      - name: Set up uv\n        uses: {a['setup_uv']}\n      - run: {UV_FROZEN}",
+        "ts": f"      - name: Set up Bun\n        uses: {a['setup_bun']}\n        with:\n          bun-version: {values.get('bun_version', 'latest')}\n      - run: bun install --frozen-lockfile",
+        "rust": f"      - uses: {a['rust_toolchain']}\n      - uses: {a['rust_cache']}",
+        "go": f"      - uses: {a['setup_go']}\n        with:\n          go-version-file: go.mod",
+    }.get(language, "")
+    gate += (setup + "\n" if setup else "") + f"      - name: Verify the tagged tree\n        run: {check}\n      - run: {test}\n"
+    build_cmd = {
+        "pypi": "uv build && ls dist",
+        "npm": "bun run build && npm pack --pack-destination dist && ls dist",
+        "crates": "cargo package --locked && mkdir -p dist && cp target/package/*.crate dist/",
+        "github-assets": "echo 'GoReleaser builds in the publish lane'",
+    }.get(target)
+    if target == "none" or build_cmd is None:
+        return gate
+    build = f'''  build:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs: release-gate
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
     steps:
-      - uses: {checkout}
+      - uses: {a['checkout']}
         with:
+          ref: ${{{{ needs.release-gate.outputs.tag }}}}
           persist-credentials: false
-      - name: Setup Bun
-        uses: {setup_bun}
-      - run: bun install --frozen-lockfile
-      - run: {values["commands_test"]}
-      - run: {values["commands_lint"]}
-      - run: {values["commands_fmt"]}
-      - run: {values["commands_check"]}'''
-    elif language == "rust":
-        job = f'''  rust:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: {checkout}
-      - name: Setup Rust
-        uses: {rust_toolchain}
-      - run: cargo test
-      - run: cargo clippy --all-targets --all-features -- -D warnings
-      - run: cargo fmt --all --check
-      - run: cargo check --all-targets'''
-    elif language == "go":
-        job = f'''  go:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: {checkout}
-      - name: Setup Go
-        uses: {setup_go}
+{setup}
+      - name: Build the distributable once
+        run: {build_cmd}
+'''
+    if target != "github-assets":
+        build += f'''      - name: Attest build provenance
+        uses: {a['attest']}
         with:
-          go-version: "stable"
-      - run: go test -race ./...
-      - run: golangci-lint run ./...
-      - run: test -z "$(gofmt -l .)"
-      - run: go vet ./...'''
-    elif language == "terraform":
-        job = f'''  terraform:
+          subject-path: dist/*
+      - uses: {a['upload_artifact']}
+        with:
+          name: dist
+          path: dist/
+          if-no-files-found: error
+'''
+    publish_head = f'''  publish-{target}:
+    # The registry's trusted publisher names this workflow and the `release` environment; the
+    # environment carries the required reviewer. Renaming either breaks publishing.
     runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs: [release-gate, build]
+    # A published release always publishes; a manual run publishes only when dry_run is off.
+    if: ${{{{ github.event_name == 'release' || inputs.dry_run == false }}}}
+    environment: release
+    permissions:
+      contents: {"write" if target == "github-assets" else "read"}
+      id-token: write
     steps:
-      - uses: {checkout}
-      - run: terraform fmt -check -recursive
-      - run: terraform validate'''
+'''
+    download = f"      - uses: {a['download_artifact']}\n        with:\n          name: dist\n          path: dist/\n"
+    if target == "pypi":
+        publish = publish_head + download + f"      - uses: {a['pypi_publish']}\n        with:\n          attestations: true\n"
+    elif target == "npm":
+        publish = publish_head + download + f'''      - uses: {a['setup_node']}
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+      - name: Publish with provenance (trusted publishing, no token)
+        run: npm publish dist/*.tgz --provenance --access public
+'''
+    elif target == "crates":
+        publish = publish_head + f'''      - uses: {a['checkout']}
+        with:
+          ref: ${{{{ needs.release-gate.outputs.tag }}}}
+          persist-credentials: false
+      - uses: {a['rust_toolchain']}
+      - id: auth
+        uses: {a['crates_auth']}
+      - run: cargo publish --locked
+        env:
+          CARGO_REGISTRY_TOKEN: ${{{{ steps.auth.outputs.token }}}}
+'''
     else:
-        job = f'''  check:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: {checkout}
+        publish = publish_head + f'''      - uses: {a['checkout']}
         with:
+          ref: ${{{{ needs.release-gate.outputs.tag }}}}
+          fetch-depth: 0
           persist-credentials: false
-      - name: Setup uv
-        uses: {setup_uv}
-      - run: uvx prek run --all-files'''
-    prek = f'''  prek:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: {checkout}
+      - uses: {a['setup_go']}
         with:
-          persist-credentials: false
-      - name: Setup uv
-        uses: {setup_uv}
-      - run: uvx prek run --all-files'''
-    return job + "\n" + prek
+          go-version-file: go.mod
+      - uses: {a['goreleaser']}
+        with:
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{{{ github.token }}}}
+'''
+    return gate + build + publish
 
 
 def layer_defaults(layers: list[str]) -> dict[str, str]:
@@ -311,6 +483,10 @@ def toml_value(value: Any) -> str:
     return json.dumps(str(value))
 
 
+# Answer-file bookkeeping that is never a template variable.
+ANSWER_META_KEYS = ("defaults_for", "interviewed_at")
+
+
 def write_answers(root: Path, profile: str, layers: list[str], values: dict[str, str], extra: dict[str, Any] | None = None) -> None:
     path = answers_path(root)
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -323,27 +499,29 @@ def write_answers(root: Path, profile: str, layers: list[str], values: dict[str,
         except (OSError, json.JSONDecodeError):
             plugin_version = ""
     lines.append(f"plugin_version = {toml_value(plugin_version)}")
+    extra = extra or {}
+    # Top-level scalars go before the first table header; anything written after `[vars]`
+    # or `[[members]]` belongs to that table in TOML, and a later read would then feed them
+    # back through `values` and write them twice.
+    for key in [key for key, value in extra.items() if key != "members" and value is not None]:
+        lines.append(f"{toml_key(key)} = {toml_value(extra[key])}")
     lines.extend(["", "[vars]"])
-    reserved = {"name", "package", "package_kebab", "description", "profile"}
+    reserved = {"name", "package", "package_kebab", "description", "profile", *ANSWER_META_KEYS}
     for key in sorted(values):
         if key not in reserved:
             lines.append(f"{toml_key(key)} = {toml_value(values[key])}")
     for key in ("name", "description"):
         if key in values:
             lines.append(f"{toml_key(key)} = {toml_value(values[key])}")
-    if extra:
-        members = extra.get("members")
-        if isinstance(members, list):
-            for item in members:
-                if not isinstance(item, dict):
-                    continue
-                lines.extend(["", "[[members]]"])
-                for key in ("name", "layer", "kind", "dir"):
-                    if item.get(key):
-                        lines.append(f"{key} = {toml_value(item[key])}")
-        for key, value in extra.items():
-            if key != "members":
-                lines.extend(["", f"{key} = {toml_value(value)}"])
+    members = extra.get("members")
+    if isinstance(members, list):
+        for item in members:
+            if not isinstance(item, dict):
+                continue
+            lines.extend(["", "[[members]]"])
+            for key in ("name", "layer", "kind", "dir"):
+                if item.get(key):
+                    lines.append(f"{key} = {toml_value(item[key])}")
     _write_under_root(root, path, "\n".join(lines) + "\n")
 
 
@@ -394,7 +572,14 @@ def resolve_selection(root: Path, profile_name: str | None, name: str | None, ov
     if isinstance(commands, dict):
         for key in ("setup", "test", "lint", "fmt", "check"):
             values[f"commands_{key}"] = str(commands.get(key, ""))
-    values["ci_jobs"] = build_ci_jobs(str(values.get("language", "none")), values)
+    lane_languages = [layer.split("/", 1)[1] for layer in layers if layer.startswith("lang/")]
+    language = lane_languages[0] if lane_languages else str(values.get("language", "none"))
+    publish = str(values.get("publish", "")).strip() or ("none" if str(values.get("app", "")).lower() in TRUTHY else PUBLISH_BY_LANGUAGE.get(language, "none"))
+    if publish not in PUBLISH_TARGETS:
+        fail(f"publish must be one of {', '.join(PUBLISH_TARGETS)}: {publish}", EXIT_CONFLICT)
+    values["publish"] = publish
+    values["ci_jobs"] = build_ci_jobs(layers, values)
+    values["release_jobs"] = build_release_jobs(layers, values)
     if str(values.get("web_ui", "")).lower() in TRUTHY and "web-ui" not in layers:
         layers.append("web-ui")
     for recipe in ("setup", "test", "lint", "fmt", "context"):
@@ -1675,17 +1860,18 @@ def _graphify_mcp_available(root: Path) -> bool:
     return shutil.which("graphify-mcp") is not None
 
 
-def preflight(root: Path, profile_name: str | None, *, strict: bool = False, allow_dirty: bool = False) -> tuple[dict[str, Any], int]:
+def preflight(root: Path, profile_name: str | None, *, strict: bool = False) -> tuple[dict[str, Any], int]:
     root = validate_root(root, require_git=True)
     hard: list[str] = []
     soft: list[str] = []
     info = inspect(root)
-    if not allow_dirty:
-        status = subprocess.run(["git", "status", "--porcelain"], cwd=root, capture_output=True, text=True, check=False)
-        owned = _scaffold_owned_paths(root)
-        dirty = [line for line in status.stdout.splitlines() if line.strip() and not _scaffold_state_path(line[3:].strip()) and not _owned_status_line(line, owned)]
-        if dirty:
-            hard.append("git work tree is dirty (use --allow-dirty after review)")
+    # A clean tree is a prerequisite: scaffold state under .omp/ is the only tolerated dirt, because
+    # the interview writes it before apply. There is no bypass; use a clean branch or worktree.
+    status = subprocess.run(["git", "status", "--porcelain"], cwd=root, capture_output=True, text=True, check=False)
+    owned = _scaffold_owned_paths(root)
+    dirty = [line for line in status.stdout.splitlines() if line.strip() and not _scaffold_state_path(line[3:].strip()) and not _owned_status_line(line, owned)]
+    if dirty:
+        hard.append("git work tree is dirty: commit or stash your changes, or scaffold in a clean worktree")
     profile = profile_name or str(info.get("suggested_profile", "agentic-repo"))
     try:
         _, _, layers, values = resolve_selection(root, profile, None, {}, [])
@@ -1748,7 +1934,17 @@ def interview_questions(root: Path, profile_name: str | None = None) -> dict[str
     else:
         fixed = [("name", "Project name", True, ""), ("purpose", "One-line project purpose", True, ""), ("kind", "Project kind", True, "lib"), ("language", "Project language", True, "none"), ("license", "License", True, "apache-2.0"), ("beads", "Use beads?", True, "false"), ("remote", "Create a remote now?", False, "no"), ("visibility", "Remote visibility", False, "private"), ("web_ui", "Include web UI tooling?", False, "false"), ("speckit", "Include SpecKit?", False, "false")]
         allowed = {"kind": ["lib", "app", "service", "cli"], "language": ["python", "ts", "rust", "go", "terraform", "none"], "beads": ["true", "false"]}
+        # The chosen profile already decides language and kind; its values are the defaults, so
+        # accepting a default never contradicts the profile.
+        profile_vars = load_profile(suggested).get("vars", {}) if (PROFILES / f"{suggested}.toml").is_file() else {}
+        profile_vars = profile_vars if isinstance(profile_vars, dict) else {}
         for key, prompt, required, default in fixed:
+            if key == "language" and profile_vars.get("language"):
+                default = str(profile_vars["language"])
+            elif key == "kind" and "app" in profile_vars:
+                default = "app" if str(profile_vars["app"]).lower() in TRUTHY else "lib"
+            elif key in profile_vars and key not in ("name", "purpose"):
+                default = value_default(profile_vars[key])
             row: dict[str, Any] = {"id": key, "prompt": prompt, "required": required, "default": default, "source": "fixed"}
             if key in allowed:
                 row["allowed"] = allowed[key]
@@ -1771,6 +1967,18 @@ def answers_write_interview(root: Path, profile_name: str | None, name: str | No
         supplied["name"] = name
     if profile_name and not supplied.get("profile"):
         supplied["profile"] = profile_name  # --profile answers the profile question
+    # Answers already recorded for this run stand: a re-run must not demand them again, and the
+    # first write turns an empty repository into a brownfield one whose interview asks more.
+    recorded = read_answers(root)
+    if str(recorded.get("profile", profile)) == profile:
+        recorded_layers = recorded.get("layers")
+        if isinstance(recorded_layers, list) and recorded_layers and not supplied.get("layers"):
+            supplied["layers"] = ",".join(str(item) for item in recorded_layers)
+        recorded_vars = recorded.get("vars", {})
+        if isinstance(recorded_vars, dict):
+            for key, value in recorded_vars.items():
+                if str(key) not in supplied and str(key) not in ANSWER_META_KEYS and value not in (None, ""):
+                    supplied[str(key)] = str(value)
     missing = [str(row["id"]) for row in questions["questions"] if row.get("required") and not supplied.get(str(row["id"])) and str(row["id"]) not in defaults_for]
     if missing:
         return {"ok": False, "missing": missing, "questions": questions["questions"]}, EXIT_NEEDS_INPUT
@@ -1789,8 +1997,8 @@ def answers_write_interview(root: Path, profile_name: str | None, name: str | No
     return {"ok": True, "path": str(answers_path(root)), "profile": values_profile, "layers": layers, "defaults_for": defaults_for, "vars": values}, 0
 
 
-def _run_stage(root: Path, name: str, profile: str, *, allow_dirty: bool = False, bump_tools: bool = False) -> tuple[dict[str, Any], int]:
-    if name == "preflight": return preflight(root, profile, strict=False, allow_dirty=allow_dirty)
+def _run_stage(root: Path, name: str, profile: str, *, bump_tools: bool = False) -> tuple[dict[str, Any], int]:
+    if name == "preflight": return preflight(root, profile, strict=False)
     if name == "plan":
         result = plan_payload(root, profile, None, {}, [], None, set())
         return result[0], result[4]
@@ -1806,7 +2014,7 @@ def _run_stage(root: Path, name: str, profile: str, *, allow_dirty: bool = False
 APPLY_STAGES = ("preflight", "plan", "render", "tools-install", "hooks-install", "plugins-sync", "context-refresh", "doctor")
 
 
-def apply_pipeline(root: Path, profile: str | None, *, dry_run: bool = False, stage: str | None = None, allow_dirty: bool = False, bump_tools: bool = False) -> tuple[dict[str, Any], int]:
+def apply_pipeline(root: Path, profile: str | None, *, dry_run: bool = False, stage: str | None = None, bump_tools: bool = False) -> tuple[dict[str, Any], int]:
     root = validate_root(root, require_git=True)
     answers = read_answers(root)
     selected = profile or str(answers.get("profile", ""))
@@ -1816,7 +2024,7 @@ def apply_pipeline(root: Path, profile: str | None, *, dry_run: bool = False, st
     if stage and stage not in APPLY_STAGES:
         return {"ok": False, "stages": [], "next": "unknown stage"}, EXIT_ERROR
     if dry_run:
-        pf, pc = preflight(root, selected, strict=False, allow_dirty=allow_dirty)
+        pf, pc = preflight(root, selected, strict=False)
         plan, _, _, _, plan_code = plan_payload(root, selected, None, {}, [], None, set())
         counts: dict[str, int] = {}
         lines: list[str] = []
@@ -1837,7 +2045,7 @@ def apply_pipeline(root: Path, profile: str | None, *, dry_run: bool = False, st
     rows: list[dict[str, Any]] = []
     for name in requested:
         started = datetime.now(UTC)
-        summary, code = _run_stage(root, name, selected, allow_dirty=allow_dirty, bump_tools=bump_tools)
+        summary, code = _run_stage(root, name, selected, bump_tools=bump_tools)
         status = "ok" if code == 0 else "failed"
         row = {"name": name, "status": status, "seconds": round((datetime.now(UTC) - started).total_seconds(), 3), "summary": summary}
         rows.append(row)
@@ -1935,13 +2143,13 @@ def build_parser() -> argparse.ArgumentParser:
     profiles_parent = sub.add_parser("profiles"); profiles_parent.add_argument("--root", default="."); profiles = profiles_parent.add_subparsers(dest="profiles_command", required=True); profiles.add_parser("list")
     layers_parent = sub.add_parser("layers"); layers_parent.add_argument("--root", default="."); layers = layers_parent.add_subparsers(dest="layers_command", required=True); layers.add_parser("list"); show = layers.add_parser("show"); show.add_argument("layer")
     inspect_parser = sub.add_parser("inspect"); inspect_parser.add_argument("--root", default=".")
-    preflight_parser = sub.add_parser("preflight"); preflight_parser.add_argument("--root", default="."); preflight_parser.add_argument("--profile"); preflight_parser.add_argument("--strict", action="store_true"); preflight_parser.add_argument("--allow-dirty", action="store_true")
+    preflight_parser = sub.add_parser("preflight"); preflight_parser.add_argument("--root", default="."); preflight_parser.add_argument("--profile"); preflight_parser.add_argument("--strict", action="store_true")
     interview_parent = sub.add_parser("interview"); interview_parent.add_argument("--root", default="."); interview = interview_parent.add_subparsers(dest="interview_command", required=True).add_parser("questions"); interview.add_argument("--root", default=argparse.SUPPRESS); interview.add_argument("--profile")
     for action in ("plan", "render"):
         command = sub.add_parser(action); command.add_argument("--root", default="."); command.add_argument("--profile"); command.add_argument("--name"); command.add_argument("--var", action="append", default=[]); command.add_argument("--layer", action="append", default=[]); command.add_argument("--force-layer"); command.add_argument("--adopt", action="append", default=[])
         if action == "render": command.add_argument("--dry-run", action="store_true"); command.add_argument("--bump-tools", action="store_true")
     answers_parent = sub.add_parser("answers"); answers_parent.add_argument("--root", default="."); answers = answers_parent.add_subparsers(dest="answers_command", required=True).add_parser("write"); answers.add_argument("--root", default=argparse.SUPPRESS); answers.add_argument("--profile"); answers.add_argument("--name"); answers.add_argument("--var", action="append", default=[]); answers.add_argument("--set", action="append", default=[]); answers.add_argument("--layer", action="append", default=[]); answers.add_argument("--defaults-for", default="")
-    apply_parser = sub.add_parser("apply"); apply_parser.add_argument("--root", default="."); apply_parser.add_argument("--profile"); apply_parser.add_argument("--dry-run", action="store_true"); apply_parser.add_argument("--stage"); apply_parser.add_argument("--allow-dirty", action="store_true"); apply_parser.add_argument("--bump-tools", action="store_true")
+    apply_parser = sub.add_parser("apply"); apply_parser.add_argument("--root", default="."); apply_parser.add_argument("--profile"); apply_parser.add_argument("--dry-run", action="store_true"); apply_parser.add_argument("--stage"); apply_parser.add_argument("--bump-tools", action="store_true")
     finish_parser = sub.add_parser("finish"); finish_parser.add_argument("--root", default=".")
     abort_parser = sub.add_parser("abort"); abort_parser.add_argument("--root", default=".")
     member_parent = sub.add_parser("member"); member_parent.add_argument("--root", default="."); member = member_parent.add_subparsers(dest="member_command", required=True)
@@ -1970,7 +2178,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "inspect":
         emit(inspect(root), root); return 0
     if args.command == "preflight":
-        payload, code = preflight(root, args.profile, strict=args.strict, allow_dirty=args.allow_dirty); emit(payload, root); return code
+        payload, code = preflight(root, args.profile, strict=args.strict); emit(payload, root); return code
     if args.command == "interview":
         emit(interview_questions(root, args.profile), root); return 0
     if args.command in {"plan", "render"}:
@@ -1988,7 +2196,7 @@ def main(argv: list[str] | None = None) -> int:
         payload, code = answers_write_interview(root, args.profile, args.name, overrides, defaults_for, args.layer)
         emit(payload, root); return code
     if args.command == "apply":
-        payload, code = apply_pipeline(root, args.profile, dry_run=args.dry_run, stage=args.stage, allow_dirty=args.allow_dirty, bump_tools=args.bump_tools); emit(payload, root); return code
+        payload, code = apply_pipeline(root, args.profile, dry_run=args.dry_run, stage=args.stage, bump_tools=args.bump_tools); emit(payload, root); return code
     if args.command == "finish":
         payload, code = finish(root); emit(payload, root); return code
     if args.command == "abort":

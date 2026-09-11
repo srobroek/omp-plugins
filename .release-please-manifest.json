@@ -1,5 +1,5 @@
 {
-  "agentic-scaffold": "0.5.10",
+  "agentic-scaffold": "0.6.1",
   "architecture": "0.3.1",
   "authoring": "2.0.0",
   "backend": "0.3.0",
@@ -8,7 +8,7 @@
   "build": "0.3.3",
   "chezmoi": "0.4.0",
   "debate": "0.3.1",
-  "delivery": "0.8.0",
+  "delivery": "0.8.1",
   "dep-update": "0.6.1",
   "design": "0.3.3",
   "diagram": "0.2.4",

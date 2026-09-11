@@ -1,11 +1,18 @@
 name: CI
 
 on:
-  push:
   pull_request:
+  push:
+    branches: [main]
+  merge_group:
 
 permissions:
   contents: read
+
+# Cancel superseded pull-request runs; never cancel main or merge-group runs.
+concurrency:
+  group: $${{ github.workflow }}-$${{ github.ref }}
+  cancel-in-progress: $${{ github.event_name == 'pull_request' }}
 
 jobs:
 ${ci_jobs}

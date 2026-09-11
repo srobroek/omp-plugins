@@ -1,9 +1,11 @@
 name = "release"
-summary = "release-please configuration and workflow"
+summary = "release-please plus a gated release workflow that publishes from the tagged tree"
 after = ["ci/github"]
 requires_tools = ["gh"]
-owns = ["release-please-config.json", ".release-please-manifest.json", ".github/workflows/release-please.yml"]
+owns = ["release-please-config.json", ".release-please-manifest.json", ".github/workflows/release-please.yml", ".github/workflows/release.yml"]
 blocks = []
 conflicts_with = []
 [tools]
 gh = "latest"
+[vars]
+publish = { default = "", prompt = "Publish target for releases (none, pypi, npm, crates, github-assets); empty picks the language default, or none for applications", ask = true }

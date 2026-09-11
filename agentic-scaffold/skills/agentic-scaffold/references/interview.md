@@ -37,13 +37,19 @@ The fixed set covers name and purpose, kind (`lib | app | service | cli`), langu
 rust | go | terraform | none`), license, remote creation and visibility, beads, web UI, and
 SpecKit. The CLI may omit a question that is derived from an earlier answer. `kind` selects the
 profile suffix; `cli` selects `app`; web UI adds the `web-ui` layer; SpecKit adds the project plugin.
+Defaults come from the chosen profile, so accepting one never contradicts it.
+
+The `release` layer asks `publish`: `none`, `pypi`, `npm`, `crates`, or `github-assets`. The
+default is the language's registry for a library and `none` for an application; the answer
+selects the publish lane in `.github/workflows/release.yml`.
 Do not ask framework, provider, or tool-version questions.
 
 ## 3. Brownfield questions
 
 Confirm the detected profile, pick layers from the emitted catalogue (the default preselects the
 profile's layers; existing files a layer owns are skipped, never replaced), and resolve every emitted `finding:<kind>`. Findings include
-unowned `.omp/*` files, dirty state, and ambiguous managed markers. Ask the human which resolution
+unowned `.omp/*` files and ambiguous managed markers; a dirty work tree is never a question, it is
+a preflight prerequisite. Ask the human which resolution
 to use; do not turn a proposal into an answer without explicit approval.
 
 Hook wiring is not a question. Preflight detects the hook manager (`hook_strategy` in its JSON)
