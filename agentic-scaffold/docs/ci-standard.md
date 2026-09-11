@@ -1,16 +1,16 @@
 # CI and release standard
 
 The standard the `ci/github` and `release` layers render. It is the norm across the 70
-repositories active in September 2026, plus fixes for the gaps listed below. Where a repository
-does something else, this document is the target and the repository is the outlier.
+repositories active in September 2026, plus fixes for the gaps in the next section. Where a
+repository differs, this document is the target and the repository is the outlier.
 
 ## Sources
 
-| Pattern | Reference repositories |
+| Pattern | Repositories |
 |---|---|
 | Fan-in `gate` with `needs` + `if: always()` + fail-closed predicate | slopvac `test.yml`, agentic-scaffold `ci.yml`, computer-says-no `CI OK`, esp-idf-smtp `ci-ok`, KiroCrew `Coverage Gate` |
 | Independent parallel lanes per language and surface | omp-orchestrate (`ts`, `py`), ai-sde (`lint`, `typecheck`, `test`), Nightwatch crates (3-OS matrix) |
-| release-please with a GitHub App token so release PRs trigger checks | omp-orchestrate, slopvac, agentic-packages, sabot |
+| `release-please` with a GitHub App token so release PRs trigger checks | omp-orchestrate, slopvac, agentic-packages, sabot |
 | Publish only from the tagged tree, after verification | omp-autoclassifier (`bun run verify` on the tag), platevault `release-gate.yml`, prompting-press draft-then-finalize |
 | PyPI trusted publishing in a protected environment | slopvac `publish-lint.yml` |
 | npm trusted publishing (OIDC, no token) | omp-autoclassifier `release.yml` |
@@ -22,7 +22,7 @@ does something else, this document is the target and the repository is the outli
 
 Gaps the standard closes:
 
-- no repository gated its publish job on the CI gate, only on release-please's `release_created`
+- no repository gated its publish job on the CI gate, only on the `release_created` output
 - half the repositories with parallel jobs had no fan-in, so no stable required check
 - most application repositories had no security lane
 - action pins were mutable tags outside the mature repositories
@@ -30,11 +30,12 @@ Gaps the standard closes:
 
 ## Validation workflow: `.github/workflows/ci.yml`
 
-Triggers: `pull_request`, `push` to the default branch, `merge_group`. Permissions: `{}` at workflow
-level; each job grants only what it needs. Concurrency groups by workflow and
-`${{ github.event.pull_request.number || github.sha }}`. It cancels superseded pull-request runs only.
-The standard follows the 15 lessons in `ci-lessons.md`: pinned actions, least privilege, stable gates,
-trusted publishing, artifact attestations, explicit matrices, and self-auditing security lanes.
+Workflow header:
+
+- triggers: `pull_request`, `push` to the default branch, `merge_group`
+- permissions: `{}` at workflow level; each job elevates only what it needs
+- concurrency: one group per workflow and pull request; superseded pull-request runs are canceled,
+  default-branch and merge-group runs complete
 
 Every lane is its own job. Each one:
 
@@ -55,13 +56,11 @@ The selected layers decide which lanes exist:
 | `hooks` | `hooks` | `uvx prek run --all-files`: the same hooks a commit runs locally |
 | `agentic` | `agentic` | agentic lint over agents, skills, and rules; slopvac prose gate over documentation |
 | `security` | always | actionlint, zizmor (offline), gitleaks |
-| `gate` | always | see below |
+| `gate` | always | the fan-in check, described under The gate |
 
-The `changes` job always runs and emits one boolean per lane via `dorny/paths-filter`; global files
-(`.github/**`, lockfiles, `mise.toml`, `justfile`, `.pre-commit-config.yaml`) mark every lane affected.
-Every lane needs `changes`, instantiates even when unaffected, and executes a successful `echo unaffected`
-no-op. The `gate` needs `changes` and every lane, runs with `if: always()`, rejects detector failure,
-and allows a skipped/no-op lane only when its matching changes output is false. Security always runs.
+The `changes` job always runs. It emits one boolean per lane from `dorny/paths-filter`. Global
+files (`.github/**`, `mise.toml`, `justfile`, `.pre-commit-config.yaml`) set every boolean to true.
+Each lane runs only when its boolean is true and is otherwise `skipped`.
 
 ## Release workflows
 
@@ -112,7 +111,7 @@ Publish lanes:
 | crates.io | `rust-lang/crates-io-auth-action` then `cargo publish --locked`; workspaces publish members in dependency order |
 | GitHub release assets (Go, CLIs) | GoReleaser against the tag with checksums; assets attached to the release that triggered the run |
 
-The `release` environment carries the reviewer when a registry publish needs a human. The
+When a registry publish needs a human, the `release` environment carries the reviewer. The
 registry's trusted-publisher configuration names that environment, so renaming it breaks
 publishing. `dry_run` builds and attests but publishes nowhere.
 

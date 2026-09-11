@@ -1,18 +1,37 @@
 # Repository policy
 
-The `github` layer applies repository settings through the GitHub API. Run `scaffold.py policy apply --root . --dry-run` to inspect the planned requests, then run the command without `--dry-run` to apply them.
+The `github` layer applies repository settings through the GitHub API. `scaffold.py policy apply
+--root . --dry-run` prints the requests it would send; without `--dry-run` it sends only the
+requests whose current value differs.
 
-The policy enables squash merges, disables merge commits and rebases, disables the wiki and Discussions, enables issues, and creates standard labels. Public repositories also receive branch protection for the default branch with the `gate` status check, linear history, pull requests, and no force pushes or deletion.
+## What the layer applies
 
-## Manual steps
+- Merges: squash only, PR title as subject, PR body as message.
+- Branches: delete on merge.
+- Issues on; wiki off; Discussions off.
+- Labels: `bug`, `enhancement`, `task`.
+- Environments: `release`, plus `github-pages` when `.omp/docs.json` names a docs flavor.
+- Public repositories get a ruleset on the default branch. It requires:
+  - the `gate` check on an up-to-date branch
+  - linear history
+  - a pull request
+  - no force push and no deletion
 
-A maintainer must install the CLA app when `cla=true`, configure trusted package publishers, add required reviewers, and configure private-plan protection. The CLI does not grant app permissions or configure external registries.
+## What stays manual
+
+A maintainer does these once per repository, because the API does not let the layer do them:
+
+- Install the CLA app and set `CLA_APP_ID` when `cla=true`.
+- Register the trusted publisher on PyPI, npm, or crates.io for this repository, the release
+  workflow, and the `release` environment.
+- Set the App variable `RELEASE_APP_CLIENT_ID` and secret `RELEASE_APP_PRIVATE_KEY`.
+- Add required reviewers to the `release` environment where a publish warrants one.
+- Protect the default branch on a private repository whose plan lacks rulesets.
 
 ## Runbook
 
-1. Install and authorize `gh` for the repository owner.
-2. Review the dry-run JSON.
+1. Authorize `gh` for the repository owner: `gh auth status`.
+2. Run `scaffold.py policy apply --root . --dry-run` and read the JSON.
 3. Run `scaffold.py policy apply --root .`.
-4. Install the CLA app if the repository uses CLA checks.
-5. Configure trusted publishers and private repository protections in each provider.
-6. Confirm the `gate` check and reviewer requirements in repository settings.
+4. Do the manual steps above.
+5. Open a pull request and confirm that `gate` appears as the required check.
