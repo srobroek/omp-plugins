@@ -651,12 +651,42 @@ def effective_layer_tools(config: dict[str, Any], values: dict[str, str]) -> dic
     return tools
 
 
+def file_condition_holds(spec: Any, values: dict[str, str]) -> bool:
+    """A `[conditional_files]` entry: `{ var = "kind", equals = "tool" }` or `{ var = "kind", any = ["tool", "hybrid"] }`.
+
+    `equals`/`any` compare case-insensitively against the answer; an entry with neither key
+    always holds. An unknown shape never holds, so a typo cannot silently include a file.
+    """
+    if not isinstance(spec, dict):
+        return False
+    variable = str(spec.get("var", ""))
+    actual = str(values.get(variable, "")).lower()
+    if "any" in spec:
+        options = spec["any"]
+        return isinstance(options, list) and actual in {str(item).lower() for item in options}
+    if "equals" in spec:
+        return actual == str(spec["equals"]).lower()
+    return "var" not in spec
+
+
+def conditional_file_targets(config: dict[str, Any], values: dict[str, str]) -> set[str]:
+    """Relative template paths a layer's `[conditional_files]` excludes for these answers."""
+    excluded: set[str] = set()
+    conditional = config.get("conditional_files", {})
+    if isinstance(conditional, dict):
+        for relative, spec in conditional.items():
+            if not file_condition_holds(spec, values):
+                excluded.add(str(relative))
+    return excluded
+
+
 def collect(layers: list[str], values: dict[str, str], member_dir: str | None = None) -> tuple[dict[str, list[dict[str, Any]]], dict[str, list[dict[str, Any]]]]:
     direct: dict[str, list[dict[str, Any]]] = {}
     blocks: dict[str, list[dict[str, Any]]] = {}
     for layer in layers:
         directory = layer_dir(layer)
         config = load_layer(layer)
+        excluded_files = conditional_file_targets(config, values)
         tools = effective_layer_tools(config, values)
         if tools and member_dir is None:
             lines = ["[tools]"]
@@ -669,6 +699,8 @@ def collect(layers: list[str], values: dict[str, str], member_dir: str | None = 
             if not source.is_file() or source.name in {"layer.toml", "README.md", ".DS_Store", "mise.toml.tmpl"}:
                 continue
             relative = source.relative_to(directory)
+            if str(relative) in excluded_files:
+                continue
             if relative.name == "LICENSE" and str(values.get("license", "")).lower() not in {"", "apache-2.0", "apache 2.0"}:
                 continue
             if relative.name.endswith(".block"):
