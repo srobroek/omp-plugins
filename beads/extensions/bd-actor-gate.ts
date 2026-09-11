@@ -163,7 +163,6 @@ export const MUTATING_VERBS: Record<string, true> = {
 	ship: true,
 	supersede: true,
 	tag: true,
-	unclaim: true,
 	undefer: true,
 	update: true,
 };

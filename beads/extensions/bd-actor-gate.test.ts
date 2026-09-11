@@ -72,7 +72,6 @@ describe("firstBdVerb / isMutatingBdCommand", () => {
 			"ship capability",
 			"supersede a b",
 			"tag x blocked",
-			"unclaim x",
 			"undefer x",
 			"update x --status open",
 			"comments add x --body hi",

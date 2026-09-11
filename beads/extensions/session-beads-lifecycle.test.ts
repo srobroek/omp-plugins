@@ -419,7 +419,8 @@ describe("formatSessionCloseAdvisory", () => {
 	test("names the bead, the holder, and every remedy", () => {
 		const text = formatSessionCloseAdvisory(heldClaims(readBeads(BEAD_LIST), new Set(["bd-probe-2m7"]), undefined));
 		expect(text).toContain("bd-probe-2m7 [omp/Main/s1] target work");
-		expect(text).toContain("bd unclaim");
+		expect(text).toContain("bd update <id> --assignee '' --status open");
+		expect(text).not.toContain(["un", "claim"].join(""));
 		expect(text).toContain("bd comments add");
 		expect(text).toContain("discovered work");
 	});

@@ -459,7 +459,7 @@ export function formatSessionCloseAdvisory(beads: Bead[]): string {
 	}
 	if (beads.length > MAX_LISTED) lines.push(`- ...and ${beads.length - MAX_LISTED} more`);
 	lines.push(
-		"Close what is finished with a factual `--reason`, release what is not (`bd unclaim <id>`), and write residual context onto any bead whose work continues elsewhere (`bd comments add <id> -m ...`) -- the bead is the handover, not a PR body. File remaining or discovered work as its own bead before stopping.",
+		"Close what is finished with a factual `--reason`, release what is not (`bd update <id> --assignee '' --status open`), and write residual context onto any bead whose work continues elsewhere (`bd comments add <id> -m ...`) -- the bead is the handover, not a PR body. File remaining or discovered work as its own bead before stopping.",
 	);
 	return lines.join("\n");
 }

@@ -7,7 +7,7 @@ description: "Swarms and merge slots: building the work DAG, validating it, and 
 
 SPAWN HANDOFF
 MUST Pass the bead id in the spawn prompt so the worker claims it
-  (`bd update <id> --claim`). An unpassed id leaves the bead unclaimed, and a
+  (`bd update <id> --claim`). An unassigned id leaves the bead without a claim, and a
   parallel worker may take the same work.
 
 SWARMS
