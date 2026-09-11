@@ -45,7 +45,10 @@ Use the builtin learn/retain/recall/reflect tools for persistent knowledge. This
   Variable ids, an id-less `bd close`, and an unreachable database all allow the call.
   It accepts bare and enveloped JSON responses.
   Malformed responses produce an uncertainty advisory, not proof that closure is safe.
-- `bd-actor-gate`: blocks a claim or `bd create` made without `BEADS_ACTOR` or `BD_ACTOR`.
+- `bd-actor-gate`: blocks a claim, or any verb that constructs a bead, made without
+  `BEADS_ACTOR` or `BD_ACTOR`. That covers `bd create`, its alias `bd new`, and
+  `bd create-form`; blocking the literal verb alone would leave the alias as a
+  silent permit.
   An actorless `bd create` silently sets the new bead's `Owner` to the invoking human's git
   identity; there is no `--owner` flag, and `--assignee` sets a different field, so the
   mis-attribution is permanent. It advises on other mutating `bd` commands that lack an actor.
