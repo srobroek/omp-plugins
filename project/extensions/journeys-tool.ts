@@ -1,5 +1,5 @@
 import { copyFileSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from "node:fs";
-import { basename, isAbsolute, join, parse, sep } from "node:path";
+import { basename, isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { TSchema } from "@oh-my-pi/pi-ai";
 import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
 
@@ -47,10 +47,30 @@ export function parseFrontmatter(text: string): Frontmatter {
 	return {};
 }
 
-function safePath(path: string): void {
-	const absolute = isAbsolute(path) ? path : `${process.cwd()}/${path}`;
-	let current = parse(absolute).root;
-	for (const part of absolute.slice(current.length).split(sep === "\\" ? /[\\/]/ : "/").filter(Boolean)) {
+/**
+ * Refuse a symlink at or below `base`, and refuse a path that escapes it.
+ *
+ * Only the managed tree is attacker-shaped: a journeys directory's own contents,
+ * or the `.beads/formulas` directory a copy writes into. Components ABOVE `base`
+ * are the user's own filesystem layout, and walking those made the tool unusable
+ * wherever any ancestor is a symlink. On macOS both `/tmp` and `/var` are, so
+ * every temp directory was refused outright, and a symlinked home or work
+ * directory is common enough to hit real users.
+ *
+ * Refusing an escaping path is new, and it is the check that actually belongs
+ * here: a `--journey ../elsewhere` selection is a traversal regardless of
+ * whether any component happens to be a symlink.
+ */
+function safePath(path: string, base: string): void {
+	const root = resolve(base);
+	const absolute = resolve(isAbsolute(path) ? path : join(process.cwd(), path));
+	const inside = relative(root, absolute);
+	if (inside.startsWith("..") || isAbsolute(inside)) throw new Error(`outside the managed root: ${absolute}`);
+	let current = root;
+	if (lstatSync(current, { throwIfNoEntry: false })?.isSymbolicLink()) {
+		throw new Error(`unsafe symlink: ${current}`);
+	}
+	for (const part of inside.split(sep === "\\" ? /[\\/]/ : "/").filter(Boolean)) {
 		current = join(current, part);
 		if (lstatSync(current, { throwIfNoEntry: false })?.isSymbolicLink()) {
 			throw new Error(`unsafe symlink: ${current}`);
@@ -59,21 +79,21 @@ function safePath(path: string): void {
 }
 
 function safeJourneyPaths(root: string): void {
-	safePath(root);
-	safePath(join(root, "INDEX.md"));
-	safePath(join(root, "TRACKER.md"));
+	safePath(root, root);
+	safePath(join(root, "INDEX.md"), root);
+	safePath(join(root, "TRACKER.md"), root);
 	for (const name of readdirSync(root)) {
 		const dir = join(root, name);
-		safePath(dir);
+		safePath(dir, root);
 		if (!lstatSync(dir).isDirectory()) continue;
-		safePath(join(dir, "journey.md"));
+		safePath(join(dir, "journey.md"), root);
 		const runs = join(dir, "runs");
-		safePath(runs);
+		safePath(runs, root);
 		if (!existsSync(runs)) continue;
 		const runsStat = lstatSync(runs);
 		if (!runsStat.isDirectory()) throw new Error(`runs is not a directory: ${runs}`);
 		for (const run of readdirSync(runs).filter((n) => n.endsWith(".md"))) {
-			safePath(join(runs, run));
+			safePath(join(runs, run), root);
 			if (!lstatSync(join(runs, run)).isFile()) throw new Error(`not a run file: ${run}`);
 		}
 	}
@@ -303,7 +323,7 @@ export type JourneysIndexParams = {
 export function runJourneys(params: JourneysIndexParams): { ok: boolean; text: string } {
 	const root = params.journeysDir;
 	try {
-		safePath(root);
+		safePath(root, root);
 		if (!existsSync(root) || !statSync(root).isDirectory()) {
 			return { ok: false, text: `not a directory: ${root}` };
 		}
@@ -335,9 +355,9 @@ export function installFormulas(
 	sourcesDir = FORMULAS_DIR,
 ): { ok: boolean; text: string; copied?: number; unchanged?: number } {
 	try {
-		safePath(repoRoot);
-		safePath(sourcesDir);
-		safePath(join(repoRoot, ".beads", "formulas"));
+		safePath(repoRoot, repoRoot);
+		safePath(sourcesDir, sourcesDir);
+		safePath(join(repoRoot, ".beads", "formulas"), repoRoot);
 	} catch (err) {
 		return { ok: false, text: `ERROR ${err instanceof Error ? err.message : String(err)}` };
 	}
