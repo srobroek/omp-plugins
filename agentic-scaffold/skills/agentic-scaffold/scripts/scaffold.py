@@ -235,8 +235,8 @@ def build_ci_jobs(layers: list[str], values: dict[str, str]) -> str:
     all_names = ["changes", *names]
     filters = {n: [".github/**", "mise.toml", "justfile", ".pre-commit-config.yaml", "**/uv.lock", "**/package-lock.json", "**/Cargo.lock", "**/go.sum"] for n in names}
     filter_lines = "\n".join(f"          {n}:\n            - '{n}/**'" for n in names if n not in {"security"})
-    changes = f'''  changes:\n    runs-on: ubuntu-latest\n    permissions: {{}}\n    outputs:\n{''.join(f'      {n}: ${{{{ steps.filter.outputs.{n} }}}}\n' for n in names)}    steps:\n      - uses: {a['checkout']}\n      - id: filter\n        uses: {a['paths_filter']}\n        with:\n          filters: |\n{filter_lines}\n'''
-    gate = f'''  gate:\n    runs-on: ubuntu-latest\n    needs: [{", ".join(all_names)}]\n    if: always()\n    steps:\n      - name: Verify every lane passed\n        env:\n          RESULTS: ${{{{ toJSON(needs) }}}}\n          CHANGES: ${{{{ needs.changes.outputs.python || needs.changes.outputs.rust || needs.changes.outputs.typescript || needs.changes.outputs.go }}}}\n        run: |\n          python3 - <<'PY'\n          import json, os, sys\n          needs=json.loads(os.environ["RESULTS"])\n          if needs["changes"]["result"] != "success": sys.exit("changes detector failed")\n          bad=[n for n,v in needs.items() if n != "changes" and v.get("result") not in ("success", "skipped")]\n          if bad: sys.exit("failed lanes: " + ", ".join(bad))\n          PY\n'''
+    changes = f'''  changes:\n    runs-on: ubuntu-latest\n    timeout-minutes: 5\n    permissions: {{}}\n    outputs:\n{''.join(f'      {n}: ${{{{ steps.filter.outputs.{n} }}}}\n' for n in names)}    steps:\n      - uses: {a['checkout']}\n      - id: filter\n        uses: {a['paths_filter']}\n        with:\n          filters: |\n{filter_lines}\n'''
+    gate = f'''  gate:\n    runs-on: ubuntu-latest\n    timeout-minutes: 5\n    needs: [{", ".join(all_names)}]\n    if: always()\n    steps:\n      - name: Verify every lane passed\n        env:\n          RESULTS: ${{{{ toJSON(needs) }}}}\n          CHANGES: ${{{{ needs.changes.outputs.python || needs.changes.outputs.rust || needs.changes.outputs.typescript || needs.changes.outputs.go }}}}\n        run: |\n          python3 - <<'PY'\n          import json, os, sys\n          needs=json.loads(os.environ["RESULTS"])\n          if needs["changes"]["result"] != "success": sys.exit("changes detector failed")\n          bad=[n for n,v in needs.items() if n != "changes" and v.get("result") not in ("success", "skipped")]\n          if bad: sys.exit("failed lanes: " + ", ".join(bad))\n          PY\n'''
     return changes + "\n".join(jobs + [gate])
 def build_release_jobs(layers: list[str], values: dict[str, str]) -> str:
     """Compose the release workflow: release-gate, build with attestation, then one publish lane."""
@@ -626,6 +626,9 @@ def file_condition_holds(spec: Any, values: dict[str, str]) -> bool:
         return False
     variable = str(spec.get("var", ""))
     actual = str(values.get(variable, "")).lower()
+    if "not_any" in spec:
+        options = spec["not_any"]
+        return isinstance(options, list) and actual not in {str(item).lower() for item in options}
     if "any" in spec:
         options = spec["any"]
         return isinstance(options, list) and actual in {str(item).lower() for item in options}
