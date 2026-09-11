@@ -71,7 +71,7 @@ at the first tool call rather than at startup. The server therefore connects and
 all 24 tools with no WebKit build present. The failure arrives later, as
 `Browser webkit is not installed`, from whichever call came first.
 
-A server that mounts and then fails on use is worse than one that is absent. The default
+Disabling it keeps that failure out of sessions that never asked for WebKit. The default
 matches `storybook` and `excalidraw`.
 
 To enable it, first install the browser it needs:
@@ -80,8 +80,7 @@ To enable it, first install the browser it needs:
 npx -y playwright install webkit   # roughly 100 MB
 ```
 
-Then set `enabled: true` for `playwright-cross-engine` in your own MCP configuration. The
-plugin ships a default, not a ceiling.
+Then set `enabled: true` for `playwright-cross-engine` in your own MCP configuration.
 
 The built-in `browser` remains the default for public headless Chromium work, ARIA snapshots, computed styles, screenshots, keyboard input, viewport sizing, and request interception. MCP servers connect only at session startup; if one is unavailable, run `/mcp reconnect <name>`.
 
