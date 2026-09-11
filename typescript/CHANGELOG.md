@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.3.2](https://github.com/srobroek/omp-plugins/compare/typescript--v0.3.1...typescript--v0.3.2) (2026-09-11)
+
+
+### Bug Fixes
+
+* remediate confirmed sniff-audit findings and make the strict TypeScript + Biome contract pass ([5ecdd5f](https://github.com/srobroek/omp-plugins/commit/5ecdd5f027fa8f07f4eb9a2b10e93532b6e129d3))
+* **typescript:** satisfy the repository TypeScript and lint contract ([3248422](https://github.com/srobroek/omp-plugins/commit/3248422a4240e282d67d4d46950f3a8e6879a211))
+
 ## [0.3.1](https://github.com/srobroek/omp-plugins/compare/typescript--v0.3.0...typescript--v0.3.1) (2026-09-08)
 
 

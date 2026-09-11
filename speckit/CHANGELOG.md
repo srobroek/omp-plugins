@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.7.1](https://github.com/srobroek/omp-plugins/compare/speckit--v0.7.0...speckit--v0.7.1) (2026-09-11)
+
+
+### Bug Fixes
+
+* **authoring:** enforce agent metadata parity ([19ad6ae](https://github.com/srobroek/omp-plugins/commit/19ad6aeeb78038f74c0901bc5630c5f818c021d5))
+* remediate confirmed sniff-audit findings and make the strict TypeScript + Biome contract pass ([5ecdd5f](https://github.com/srobroek/omp-plugins/commit/5ecdd5f027fa8f07f4eb9a2b10e93532b6e129d3))
+* **speckit:** propagate setup failures at tool boundary ([7add27d](https://github.com/srobroek/omp-plugins/commit/7add27d06dc553565328abbc4334a6cf8747b18e))
+* **speckit:** restore tasks.md blocking for write and edit calls ([98a2fc7](https://github.com/srobroek/omp-plugins/commit/98a2fc72c5eaae086fb23b3dee57f37883674538))
+
 ## [0.7.0](https://github.com/srobroek/omp-plugins/compare/speckit--v0.6.1...speckit--v0.7.0) (2026-09-09)
 
 

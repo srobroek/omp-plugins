@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.7.0](https://github.com/srobroek/omp-plugins/compare/agentic-scaffold--v0.6.1...agentic-scaffold--v0.7.0) (2026-09-11)
+
+
+### Features
+
+* **agentic-scaffold:** layers may declare conditional_files keyed on an answer ([#163](https://github.com/srobroek/omp-plugins/issues/163)) ([17fee43](https://github.com/srobroek/omp-plugins/commit/17fee43f4d19ceb4be9abc2f2db757c6a6e0352c))
+
+
+### Bug Fixes
+
+* remediate confirmed sniff-audit findings and make the strict TypeScript + Biome contract pass ([5ecdd5f](https://github.com/srobroek/omp-plugins/commit/5ecdd5f027fa8f07f4eb9a2b10e93532b6e129d3))
+
 ## [0.6.1](https://github.com/srobroek/omp-plugins/compare/agentic-scaffold--v0.6.0...agentic-scaffold--v0.6.1) (2026-09-10)
 
 

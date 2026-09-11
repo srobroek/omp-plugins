@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.1.1](https://github.com/srobroek/omp-plugins/compare/project--v1.1.0...project--v1.1.1) (2026-09-11)
+
+
+### Bug Fixes
+
+* **authoring:** enforce agent metadata parity ([19ad6ae](https://github.com/srobroek/omp-plugins/commit/19ad6aeeb78038f74c0901bc5630c5f818c021d5))
+* **project:** reject unterminated frontmatter and skipped journey results again ([ebadbea](https://github.com/srobroek/omp-plugins/commit/ebadbeaefd640fbc4872bb741e3586555fc00dbc))
+* remediate confirmed sniff-audit findings and make the strict TypeScript + Biome contract pass ([5ecdd5f](https://github.com/srobroek/omp-plugins/commit/5ecdd5f027fa8f07f4eb9a2b10e93532b6e129d3))
+
 ## [1.1.0](https://github.com/srobroek/omp-plugins/compare/project--v1.0.0...project--v1.1.0) (2026-09-09)
 
 

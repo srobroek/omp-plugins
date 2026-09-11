@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.3.3](https://github.com/srobroek/omp-plugins/compare/toolchain--v0.3.2...toolchain--v0.3.3) (2026-09-11)
+
+
+### Bug Fixes
+
+* remediate confirmed sniff-audit findings and make the strict TypeScript + Biome contract pass ([5ecdd5f](https://github.com/srobroek/omp-plugins/commit/5ecdd5f027fa8f07f4eb9a2b10e93532b6e129d3))
+* **toolchain:** satisfy the repository TypeScript and lint contract ([b549339](https://github.com/srobroek/omp-plugins/commit/b549339a1f0516b8159889be7165aa476834bf62))
+
 ## [0.3.2](https://github.com/srobroek/omp-plugins/compare/toolchain--v0.3.1...toolchain--v0.3.2) (2026-09-08)
 
 

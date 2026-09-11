@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.6.2](https://github.com/srobroek/omp-plugins/compare/rust--v0.6.1...rust--v0.6.2) (2026-09-11)
+
+
+### Bug Fixes
+
+* remediate confirmed sniff-audit findings and make the strict TypeScript + Biome contract pass ([5ecdd5f](https://github.com/srobroek/omp-plugins/commit/5ecdd5f027fa8f07f4eb9a2b10e93532b6e129d3))
+* **rust:** satisfy the repository TypeScript and lint contract ([1bf55e7](https://github.com/srobroek/omp-plugins/commit/1bf55e79fd11d67d701946317f3ace568d739986))
+
 ## [0.6.1](https://github.com/srobroek/omp-plugins/compare/rust--v0.6.0...rust--v0.6.1) (2026-09-08)
 
 

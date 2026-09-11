@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.0.1](https://github.com/srobroek/omp-plugins/compare/find-tools--v1.0.0...find-tools--v1.0.1) (2026-09-11)
+
+
+### Bug Fixes
+
+* **find-tools:** separate discovery stderr with real newlines ([4dd4109](https://github.com/srobroek/omp-plugins/commit/4dd410942e880da7aa75aa24f611107e741c09c6))
+* remediate confirmed sniff-audit findings and make the strict TypeScript + Biome contract pass ([5ecdd5f](https://github.com/srobroek/omp-plugins/commit/5ecdd5f027fa8f07f4eb9a2b10e93532b6e129d3))
+
 ## [1.0.0](https://github.com/srobroek/omp-plugins/compare/find-tools--v0.4.1...find-tools--v1.0.0) (2026-09-08)
 
 

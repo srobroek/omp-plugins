@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.4.1](https://github.com/srobroek/omp-plugins/compare/chezmoi--v0.4.0...chezmoi--v0.4.1) (2026-09-11)
+
+
+### Bug Fixes
+
+* **chezmoi:** satisfy the repository TypeScript and lint contract ([fd4fcaf](https://github.com/srobroek/omp-plugins/commit/fd4fcaffd0584f02a04875f22565b44ef5f5a7b5))
+* remediate confirmed sniff-audit findings and make the strict TypeScript + Biome contract pass ([5ecdd5f](https://github.com/srobroek/omp-plugins/commit/5ecdd5f027fa8f07f4eb9a2b10e93532b6e129d3))
+
 ## [0.4.0](https://github.com/srobroek/omp-plugins/compare/chezmoi--v0.3.1...chezmoi--v0.4.0) (2026-09-10)
 
 

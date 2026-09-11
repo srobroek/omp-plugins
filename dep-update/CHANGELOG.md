@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.6.2](https://github.com/srobroek/omp-plugins/compare/dep-update--v0.6.1...dep-update--v0.6.2) (2026-09-11)
+
+
+### Bug Fixes
+
+* **dep-update:** recognise a whitespace-padded pinned package manager ([65aa7f8](https://github.com/srobroek/omp-plugins/commit/65aa7f80bdada4fbee144736333d6fb52271ece7))
+* remediate confirmed sniff-audit findings and make the strict TypeScript + Biome contract pass ([5ecdd5f](https://github.com/srobroek/omp-plugins/commit/5ecdd5f027fa8f07f4eb9a2b10e93532b6e129d3))
+
 ## [0.6.1](https://github.com/srobroek/omp-plugins/compare/dep-update--v0.6.0...dep-update--v0.6.1) (2026-09-08)
 
 
