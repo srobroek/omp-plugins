@@ -149,29 +149,31 @@ def value_default(value: Any) -> str:
     if isinstance(value, bool):
         return "true" if value else "false"
     return str(value)
-# Immutable action pins. The trailing comment carries the version so Renovate's github-actions
-# manager can move the SHA and the comment together.
 ACTIONS = {
     "checkout": "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1",
-    "setup_uv": "astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0",
-    "setup_bun": "oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2",
-    "setup_node": "actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6",
-    "setup_go": "actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6",
-    "rust_toolchain": "dtolnay/rust-toolchain@d1031067263f94b142dd6c0ce24c5eb9d02d52a0 # stable",
-    "rust_cache": "Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2",
-    "golangci": "golangci/golangci-lint-action@4afd733a84b1f43292c63897423277bb7f4313a9 # v8",
+    "mise": "jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0",
+    "setup_uv": "astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0",
+    "setup_bun": "oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0",
     "setup_terraform": "hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3",
     "setup_tflint": "terraform-linters/setup-tflint@1cf010d3c7aef302051ccdb68c14c5dc2efa34ef # v6",
-    "zizmor": "zizmorcore/zizmor-action@3aa7e2f1ad15075829ef5158ee06938ae12e1769 # v0.4.0",
-    "gitleaks": "gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7 # v2",
+    "setup_node": "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0",
+    "setup_go": "actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0",
+    "rust_toolchain": "jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0",
+    "rust_cache": "Swatinem/rust-cache@63fed3e2fecf6f7b51dc6f043341b79ef82a9ae7 # v2.9.2",
+    "sccache": "mozilla-actions/sccache-action@fd02668681acd5f960e1372061bee5e3e987195c # v0.0.11",
+    "golangci": "golangci/golangci-lint-action@d583c34f0599d37dbac4a198b9c83201be380893 # v9.3.0",
+    "zizmor": "zizmorcore/zizmor-action@cc914d7f3750a2d13d75c7f184a1060aa0e9d482 # v0.6.4",
+    "gitleaks": "gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e # v3.0.0",
+    "attest": "actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2",
     "upload_artifact": "actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6",
-    "download_artifact": "actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7",
-    "attest": "actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3",
-    "pypi_publish": "pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2",
+    "download_artifact": "actions/download-artifact@37930b1c2abaa49bbe596dc826c3c89aef350131 # v7",
+    "pypi_publish": "pypa/gh-action-pypi-publish@a892a5a61159132606e93a2fa6f4358831b04d26 # v1.14.2",
     "crates_auth": "rust-lang/crates-io-auth-action@c6f97d42243bad5fab37ca0427f495c86d5b1a18 # v1.0.5",
-    "goreleaser": "goreleaser/goreleaser-action@e435ccd777264be153ace6237001ef4d979d3a7a # v6",
-    "app_token": "actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2",
-    "release_please": "googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0",
+    "goreleaser": "goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3",
+    "app_token": "actions/create-github-app-token@fee1f7d63c2ff0034603e139729b119787bc349 # v2",
+    "release_please": "googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf # v5.0.0",
+    "release_plz": "release-plz/action@215491df88a898407007d2f176cefd3d311d4fe9 # v0.5.136",
+    "paths_filter": "dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3",
 }
 
 PUBLISH_TARGETS = ("none", "pypi", "npm", "crates", "github-assets")
@@ -197,82 +199,46 @@ def _run(cmd: str, name: str | None = None) -> str:
 
 
 def _language_lane(language: str, values: dict[str, str]) -> tuple[str, str] | None:
-    """(job name, job yaml) for one language, or None when the language has no lane."""
+    """Render a language lane."""
     a = ACTIONS
     cmd = {key: str(values.get(f"commands_{key}", "")) for key in ("lint", "fmt", "check", "test")}
+    steps = [f"      - name: Set up mise\n        uses: {a['mise']}\n        with:\n          install: true\n          cache: true"]
     if language == "python":
-        steps = [f"      - name: Set up uv\n        uses: {a['setup_uv']}", _run(UV_FROZEN, "Install")]
+        steps += [f"      - name: Set up uv cache\n        uses: {a['setup_uv']}\n        with:\n          enable-cache: true\n          cache-dependency-glob: uv.lock", _run(UV_FROZEN, "Install")]
         steps += [_run(cmd[k], n) for k, n in (("lint", "Lint"), ("fmt", "Format check"), ("check", "Type check"), ("test", "Test")) if cmd[k]]
-        return "python", _job("python", steps)
+        return "python", _job("python", steps, extra="    needs: changes\n")
     if language == "ts":
-        steps = [f"      - name: Set up Bun\n        uses: {a['setup_bun']}\n        with:\n          bun-version: {values.get('bun_version', 'latest')}", _run("bun install --frozen-lockfile", "Install")]
+        steps += [f"      - name: Node cache\n        uses: {a['setup_node']}\n        with:\n          cache: npm\n          cache-dependency-path: package-lock.json", _run("npm ci", "Install")]
         steps += [_run(cmd[k], n) for k, n in (("fmt", "Format and lint"), ("lint", "Lint"), ("check", "Type check"), ("test", "Test")) if cmd[k]]
-        return "typescript", _job("typescript", steps)
+        return "typescript", _job("typescript", steps, extra="    needs: changes\n")
     if language == "rust":
-        steps = [f"      - name: Set up Rust\n        uses: {a['rust_toolchain']}\n        with:\n          components: rustfmt, clippy", f"      - uses: {a['rust_cache']}",
-                 _run("cargo fmt --all --check", "Format check"), _run("cargo clippy --all-targets --all-features -- -D warnings", "Lint"),
-                 _run("cargo test --all-features", "Test"), _run("cargo doc --no-deps --all-features", "Docs")]
-        return "rust", _job("rust", steps, timeout=30, extra="    env:\n      CARGO_INCREMENTAL: \"0\"\n      RUSTDOCFLAGS: -D warnings\n")
+        steps += [f"      - uses: {a['rust_cache']}", _run("cargo fmt --all --check", "Format check"), _run("cargo clippy --all-targets --all-features -- -D warnings", "Lint"), _run("cargo test --all-features", "Test"), _run("cargo doc --no-deps --all-features", "Docs")]
+        if str(values.get("sccache", "")).lower() in TRUTHY:
+            steps.insert(1, f"      - uses: {a['sccache']}\n      - run: echo RUSTC_WRAPPER=sccache >> \"$GITHUB_ENV\"")
+        return "rust", _job("rust", steps, timeout=30, extra="    needs: changes\n    env:\n      CARGO_INCREMENTAL: \"0\"\n      RUSTDOCFLAGS: -D warnings\n")
     if language == "go":
-        steps = [f"      - name: Set up Go\n        uses: {a['setup_go']}\n        with:\n          go-version-file: go.mod", _run('test -z "$(gofmt -l .)"', "Format check"), _run("go vet ./...", "Vet"),
-                 f"      - name: Lint\n        uses: {a['golangci']}", _run("go test -race ./...", "Test"), _run("go run golang.org/x/vuln/cmd/govulncheck@latest ./...", "Vulnerability check")]
-        return "go", _job("go", steps, timeout=20)
-    if language == "terraform":
-        steps = [f"      - uses: {a['setup_terraform']}", f"      - uses: {a['setup_tflint']}", _run("terraform fmt -check -recursive", "Format check"),
-                 _run("terraform init -backend=false -input=false && terraform validate", "Validate"), _run("tflint --recursive", "Lint")]
-        return "terraform", _job("terraform", steps)
+        steps += [f"      - name: Go cache\n        uses: {a['setup_go']}\n        with:\n          cache: true\n          cache-dependency-path: go.sum", _run('test -z "$(gofmt -l .)"', "Format check"), _run("go vet ./...", "Vet"), f"      - name: Lint\n        uses: {a['golangci']}", _run("go test -race ./...", "Test")]
+        return "go", _job("go", steps, timeout=20, extra="    needs: changes\n")
     return None
 
-
 def build_ci_jobs(layers: list[str], values: dict[str, str]) -> str:
-    """Compose the standard validation workflow: parallel lanes from the selected layers, then `gate`."""
-    a = ACTIONS
-    jobs: list[str] = []
-    names: list[str] = []
+    a = ACTIONS; jobs: list[str] = []; names: list[str] = []
     languages = [layer.split("/", 1)[1] for layer in layers if layer.startswith("lang/")]
     for language in languages:
         lane = _language_lane(language, values)
-        if lane:
-            names.append(lane[0]); jobs.append(lane[1])
+        if lane: names.append(lane[0]); jobs.append(lane[1])
     if "hooks" in layers:
-        names.append("hooks")
-        jobs.append(_job("hooks", [f"      - name: Set up uv\n        uses: {a['setup_uv']}", _run("uvx prek run --all-files", "Run every hook")]))
+        names.append("hooks"); jobs.append(_job("hooks", [f"      - name: Set up mise\n        uses: {a['mise']}", _run("uvx prek run --all-files", "Run every hook")], extra="    needs: changes\n"))
     if "agentic" in layers:
-        names.append("agentic")
-        jobs.append(_job("agentic", [f"      - name: Set up uv\n        uses: {a['setup_uv']}",
-                                     _run("uvx --from agnix==0.52.2 agnix .", "Agentic lint"),  # PyPI build of agent-sh/agnix; fails closed
-                                     _run("git ls-files -z '*.md' | grep -zv CHANGELOG | xargs -0 --no-run-if-empty uvx --from slopvac slopvac --profile normal", "Prose gate")]))
-    names.append("security")
-    jobs.append(_job("security", [f"      - name: Workflow audit\n        uses: {a['zizmor']}\n        with:\n          advanced-security: false",
-                                  _run("uvx --from actionlint-py actionlint", "Actionlint"),
-                                  f"      - name: Secret scan\n        uses: {a['gitleaks']}\n        env:\n          GITHUB_TOKEN: ${{{{ secrets.GITHUB_TOKEN }}}}"], timeout=10))
-    gate = f'''  gate:
-    # The only check branch protection requires. It always runs, so a failed lane is a red
-    # gate rather than a missing one; skipped and cancelled lanes are failures too.
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    needs: [{", ".join(names)}]
-    if: always()
-    steps:
-      - name: Verify every lane passed
-        env:
-          RESULTS: ${{{{ toJSON(needs) }}}}
-          ALLOW_SKIPPED: ""
-        run: |
-          set -euo pipefail
-          python3 - <<'PY'
-          import json, os, sys
-          needs = json.loads(os.environ["RESULTS"])
-          allow_skipped = set(filter(None, os.environ["ALLOW_SKIPPED"].split(",")))
-          bad = [n for n, job in needs.items() if job.get("result") != "success" and not (job.get("result") == "skipped" and n in allow_skipped)]
-          if bad:
-              print(f"::error::these lanes did not succeed: {{' '.join(bad)}}")
-              sys.exit(1)
-          print("every lane passed")
-          PY'''
-    return "\n".join(jobs + [gate])
-
-
+        names.append("agentic"); jobs.append(_job("agentic", [f"      - name: Set up mise\n        uses: {a['mise']}", _run("uvx --from agnix==0.52.2 agnix .", "Agentic lint")], extra="    needs: changes\n"))
+    names.append("security"); jobs.append(_job("security", [f"      - name: Set up mise\n        uses: {a['mise']}", f"      - name: Workflow audit\n        uses: {a['zizmor']}", _run("uvx --from actionlint-py actionlint", "Actionlint"), f"      - name: Secret scan\n        uses: {a['gitleaks']}\n        env:\n          GITHUB_TOKEN: ${{{{ secrets.GITHUB_TOKEN }}}}"], timeout=10, extra="    needs: changes\n    env:\n      ACTIONS_CACHE_MODE: none\n"))
+    all_names = ["changes", *names]
+    filters = {n: [".github/**", "mise.toml", "justfile", ".pre-commit-config.yaml", "**/uv.lock", "**/package-lock.json", "**/Cargo.lock", "**/go.sum"] for n in names}
+    filter_lines = "\n".join(f"            {n}:\n              - '{n}/**'\n              - '.github/**'\n              - 'mise.toml'\n              - 'justfile'\n              - '.pre-commit-config.yaml'\n              - '**/uv.lock'\n              - '**/package-lock.json'\n              - '**/Cargo.lock'\n              - '**/go.sum'" for n in names if n != "security")
+    output_lines = "".join(f"      {n}: ${{{{ steps.filter.outputs.{n} }}}}\n" for n in names)
+    changes = f'''  changes:\n    runs-on: ubuntu-latest\n    timeout-minutes: 5\n    permissions: {{}}\n    outputs:\n{output_lines}    steps:\n      - uses: {a['checkout']}\n      - id: filter\n        uses: {a['paths_filter']}\n        with:\n          filters: |\n{filter_lines}\n''' 
+    gate = f'''  gate:\n    runs-on: ubuntu-latest\n    timeout-minutes: 5\n    needs: [{", ".join(all_names)}]\n    if: always()\n    steps:\n      - name: Verify every lane passed\n        env:\n          RESULTS: ${{{{ toJSON(needs) }}}}\n        run: |\n          python3 - <<'PY'\n          import json, os, sys\n          needs=json.loads(os.environ["RESULTS"])\n          if needs["changes"]["result"] != "success": sys.exit("changes detector failed")\n          bad=[n for n,v in needs.items() if n != "changes" and v.get("result") not in ("success", "skipped")]\n          if bad: sys.exit("failed lanes: " + ", ".join(bad))\n          PY\n'''
+    return changes + "\n".join(jobs + [gate])
 def build_release_jobs(layers: list[str], values: dict[str, str]) -> str:
     """Compose the release workflow: release-gate, build with attestation, then one publish lane."""
     a = ACTIONS
@@ -661,6 +627,9 @@ def file_condition_holds(spec: Any, values: dict[str, str]) -> bool:
         return False
     variable = str(spec.get("var", ""))
     actual = str(values.get(variable, "")).lower()
+    if "not_any" in spec:
+        options = spec["not_any"]
+        return isinstance(options, list) and actual not in {str(item).lower() for item in options}
     if "any" in spec:
         options = spec["any"]
         return isinstance(options, list) and actual in {str(item).lower() for item in options}

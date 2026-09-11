@@ -368,32 +368,44 @@ def test_rendered_workflows_follow_the_ci_and_release_standard(tmp_path: Path, p
     import yaml
 
     root = git_root(tmp_path)
-    assert run("answers", "write", "--root", str(root), "--profile", profile, "--set", "name=demo", "--defaults-for", "purpose,kind,language,license,beads,publish").returncode == 0
+    kind = "crate" if profile == "rust-lib" else "library"
+    assert run("answers", "write", "--root", str(root), "--profile", profile, "--set", "name=demo", "--set", f"kind={kind}", "--defaults-for", "purpose,language,license,beads,publish").returncode == 0
     assert run("apply", "--root", str(root), "--stage", "render").returncode == 0
     ci = yaml.safe_load((root / ".github/workflows/ci.yml").read_text())
     jobs = ci["jobs"]
-    assert {lane, "hooks", "agentic", "security", "gate"} <= set(jobs)
+    assert {lane, "hooks", "agentic", "security", "gate", "changes"} <= set(jobs)
     gate = jobs["gate"]
-    assert gate["if"] == "always()" and set(gate["needs"]) == set(jobs) - {"gate"}  # every lane feeds the gate
-    assert "merge_group" in ci[True] and ci["permissions"] == {"contents": "read"}
+    assert gate["if"] == "always()" and set(gate["needs"]) == set(jobs) - {"gate"}
+    assert ci["permissions"] == {}
+    assert "merge_group" in ci[True]
+    assert "changes.outputs" in yaml.dump(gate)
     assert ci["concurrency"]["cancel-in-progress"] == "${{ github.event_name == 'pull_request' }}"
     for name, job in jobs.items():
         assert "timeout-minutes" in job, name
+        if name not in {"changes", "gate"}:
+            assert job["needs"] == "changes"
+            assert "jdx/mise-action@" in job["steps"][1]["uses"]
         for step in job.get("steps", []):
             uses = step.get("uses")
             if uses:
                 ref = uses.split("@", 1)[1].split(" ")[0]
                 assert len(ref) == 40, f"{name}: {uses} is not SHA-pinned"
+                assert "dtolnay/rust-toolchain" not in uses
     release = yaml.safe_load((root / ".github/workflows/release.yml").read_text())
     assert set(release[True]) == {"release", "workflow_dispatch"}
     rjobs = release["jobs"]
     assert "release-gate" in rjobs and "check-runs?check_name=gate" in yaml.dump(rjobs["release-gate"])
     if publish_job is None:
-        assert set(rjobs) == {"release-gate"}  # applications publish nowhere
+        assert set(rjobs) == {"release-gate"}
     else:
         assert set(rjobs) == {"release-gate", "build", publish_job}
         assert rjobs["build"]["needs"] == "release-gate"
         assert set(rjobs[publish_job]["needs"]) == {"release-gate", "build"}
         assert rjobs[publish_job]["environment"] == "release" and rjobs[publish_job]["permissions"]["id-token"] == "write"
-    rp = yaml.safe_load((root / ".github/workflows/release-please.yml").read_text())
-    assert "create-github-app-token" in yaml.dump(rp["jobs"])
+    if profile == "rust-lib":
+        assert (root / "release-plz.toml").exists()
+        assert (root / ".github/workflows/release-plz.yml").exists()
+        assert not (root / ".github/workflows/release-please.yml").exists()
+    else:
+        rp = yaml.safe_load((root / ".github/workflows/release-please.yml").read_text())
+        assert "create-github-app-token" in yaml.dump(rp["jobs"])

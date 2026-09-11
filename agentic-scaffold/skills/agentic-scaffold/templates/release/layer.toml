@@ -2,9 +2,16 @@ name = "release"
 summary = "release-please plus a gated release workflow that publishes from the tagged tree"
 after = ["ci/github"]
 requires_tools = ["gh"]
-owns = ["release-please-config.json", ".release-please-manifest.json", ".github/workflows/release-please.yml", ".github/workflows/release.yml"]
+owns = ["release-please-config.json", ".release-please-manifest.json", ".github/workflows/release-please.yml", ".github/workflows/release.yml", "release-plz.toml", ".github/workflows/release-plz.yml"]
 blocks = []
 conflicts_with = []
+[conditional_files]
+"release-please-config.json" = { var = "kind", not_any = ["crate", "hybrid"] }
+".release-please-manifest.json" = { var = "kind", not_any = ["crate", "hybrid"] }
+".github/workflows/release-please.yml" = { var = "kind", not_any = ["crate", "hybrid"] }
+".github/workflows/release.yml" = { var = "kind", not_any = ["crate", "hybrid"] }
+"release-plz.toml" = { var = "kind", any = ["crate", "hybrid"] }
+".github/workflows/release-plz.yml" = { var = "kind", any = ["crate", "hybrid"] }
 [tools]
 gh = "latest"
 [vars]

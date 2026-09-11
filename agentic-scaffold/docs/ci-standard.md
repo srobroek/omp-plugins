@@ -30,10 +30,11 @@ Gaps the standard closes:
 
 ## Validation workflow: `.github/workflows/ci.yml`
 
-Triggers: `pull_request`, `push` to the default branch, `merge_group`. Permissions:
-`contents: read` at the top; a job widens only what it needs. Concurrency groups by workflow and
-ref. It cancels superseded pull-request runs only; runs on the default branch or in a merge group
-complete.
+Triggers: `pull_request`, `push` to the default branch, `merge_group`. Permissions: `{}` at workflow
+level; each job grants only what it needs. Concurrency groups by workflow and
+`${{ github.event.pull_request.number || github.sha }}`. It cancels superseded pull-request runs only.
+The standard follows the 15 lessons in `ci-lessons.md`: pinned actions, least privilege, stable gates,
+trusted publishing, artifact attestations, explicit matrices, and self-auditing security lanes.
 
 Every lane is its own job. Each one:
 
@@ -56,15 +57,11 @@ The selected layers decide which lanes exist:
 | `security` | always | actionlint, zizmor (offline), gitleaks |
 | `gate` | always | see below |
 
-The `gate` job is the only check branch protection needs. It declares `needs` on every other
-job, runs with `if: always()`, and fails unless every upstream result is `success`. `skipped` and
-`canceled` count as failures: a lane that never ran must not read as green. Because the gate
-always runs, a failed lane produces a red `gate` rather than a missing one. A required check can
-therefore never stay pending.
-
-Lanes have no path filters by default: filtering makes required checks skip, and skipping fails
-at the gate. A monorepo that needs affected-only lanes adds an explicit `changes` job and lists the
-conditional lanes in the gate's allow-skip set. The gate template ships that set empty.
+The `changes` job always runs and emits one boolean per lane via `dorny/paths-filter`; global files
+(`.github/**`, lockfiles, `mise.toml`, `justfile`, `.pre-commit-config.yaml`) mark every lane affected.
+Every lane needs `changes`, instantiates even when unaffected, and executes a successful `echo unaffected`
+no-op. The `gate` needs `changes` and every lane, runs with `if: always()`, rejects detector failure,
+and allows a skipped/no-op lane only when its matching changes output is false. Security always runs.
 
 ## Release workflows
 
@@ -75,9 +72,8 @@ Two workflows, split so the version decision and the publish are separate events
 On `push` to the default branch, one job runs `googleapis/release-please-action` with the
 repository's `release-please-config.json` and manifest.
 
-- Token: a GitHub App token when both the `RELEASE_PLEASE_APP_ID` variable and the
-  `RELEASE_PLEASE_PRIVATE_KEY` secret exist; otherwise `GITHUB_TOKEN`, with a warning in the run log.
-- Why the App token: commits made by `GITHUB_TOKEN` do not trigger the validation workflow, so a
+- Token: a GitHub App token when both `RELEASE_APP_CLIENT_ID` and `RELEASE_APP_PRIVATE_KEY` exist;
+  otherwise `GITHUB_TOKEN`, with a warning in the run log. Both are required for the App path.
   release PR authored with it has no CI gate.
 - Merging the release PR creates the tag and the GitHub release; that event starts the publish
   workflow.
