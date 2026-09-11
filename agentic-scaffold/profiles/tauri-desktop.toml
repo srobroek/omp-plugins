@@ -6,3 +6,9 @@ language = "rust"
 kind = "tool"
 app = true
 tauri = true
+[commands]
+setup = "mise install && bun install --frozen-lockfile"
+test = "cargo test --workspace"
+lint = "cargo clippy --all-targets -- -D warnings"
+fmt = "cargo fmt --all"
+check = "cargo check --workspace && bun run check"
