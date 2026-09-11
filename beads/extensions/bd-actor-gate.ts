@@ -210,28 +210,52 @@ export function environmentForInput(
 	return env;
 }
 
-function invocationActors(invocation: BdInvocation, env: NodeJS.ProcessEnv): string[] {
-	const actors: string[] = [];
-	for (const variable of ACTOR_VARS) {
+/**
+ * The ONE actor this invocation will really write under.
+ *
+ * Both variables are read, but they are not equals: measured against bd 1.2.2,
+ * `BD_ACTOR` beats `BEADS_ACTOR` whenever both resolve, and `BEADS_ACTOR` governs
+ * only when `BD_ACTOR` is absent. bd's own `--help` documents the default as
+ * `$BEADS_ACTOR`, which is why the order is worth stating here rather than
+ * inferring from the name.
+ *
+ * The practical consequence, and the reason this returns one value instead of a
+ * list: this harness sets BOTH variables on every call, so an inline
+ * `BEADS_ACTOR=x bd update <id> --claim` is a silent no-op -- the claim lands under
+ * the ambient `BD_ACTOR`. Collecting both values reported two actors for one write,
+ * and the second had written nothing.
+ */
+function invocationActor(invocation: BdInvocation, env: NodeJS.ProcessEnv): string | null {
+	const resolve = (variable: ActorVar): string | null => {
 		const assignment = invocation.prefix.findLast(token => token.startsWith(`${variable}=`));
 		const value = assignment !== undefined
 			? assignment.slice(variable.length + 1)
 			: (invocation.exported[variable] ?? env[variable]);
-		if (value?.trim() && !/[$`]/.test(value)) actors.push(value.trim());
-	}
-	return actors;
+		// A value carrying `$` or a backtick is unresolved text, not an identity.
+		if (!value?.trim() || /[$`]/.test(value)) return null;
+		return value.trim();
+	};
+	return resolve("BD_ACTOR") ?? resolve("BEADS_ACTOR");
 }
 
+/**
+ * Every actor a command line writes under: one per mutating invocation, deduped.
+ *
+ * Still plural, because one command line can carry several invocations under
+ * different actors. What it no longer does is report two actors for a single write
+ * because two variables were set.
+ */
 export function actorValues(command: string, env: NodeJS.ProcessEnv = process.env): string[] {
 	const actors = bdInvocations(command)
 		.filter(isMutatingInvocation)
-		.flatMap(invocation => invocationActors(invocation, env));
+		.map(invocation => invocationActor(invocation, env))
+		.filter((actor): actor is string => actor !== null);
 	return [...new Set(actors)];
 }
 
 export function actorPresent(command: string, env: NodeJS.ProcessEnv = process.env): boolean {
 	const first = bdInvocations(command)[0];
-	return first !== undefined && invocationActors(first, env).length > 0;
+	return first !== undefined && invocationActor(first, env) !== null;
 }
 
 /** First literal `bd` invocation, after global flags. */
@@ -306,10 +330,7 @@ export function decideActorGate(
 ): ActorGateDecision {
 	let advisory = false;
 	for (const invocation of bdInvocations(command)) {
-		if (
-			!isMutatingInvocation(invocation) ||
-			invocationActors(invocation, env).length > 0
-		) {
+		if (!isMutatingInvocation(invocation) || invocationActor(invocation, env) !== null) {
 			continue;
 		}
 		const { verb, args } = invocation;

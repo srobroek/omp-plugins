@@ -41,6 +41,50 @@ describe("actorValues / environmentForInput", () => {
 			),
 		).toEqual(["omp/Main/a", "omp/Main/b"]);
 	});
+
+	test("BD_ACTOR wins over BEADS_ACTOR, so one write reports one actor", () => {
+		// Measured against bd 1.2.2 by claiming a real bead four ways. bd's own --help
+		// documents the default as $BEADS_ACTOR, and that is not what governs:
+		//   ambient both, inline BEADS_ACTOR=x     -> recorded the AMBIENT actor
+		//   ambient both, inline BD_ACTOR=x        -> recorded x
+		//   BD_ACTOR removed, inline BEADS_ACTOR=x -> recorded x
+		const ambient = { BD_ACTOR: "omp/Main/ambient", BEADS_ACTOR: "omp/Main/ambient" };
+
+		// The trap: an inline BEADS_ACTOR override is a no-op while BD_ACTOR is set.
+		// Reporting both values credited two actors for a single write, and the
+		// BEADS_ACTOR one had written nothing.
+		expect(actorValues("BEADS_ACTOR=omp/Main/ignored bd update x --claim", ambient)).toEqual([
+			"omp/Main/ambient",
+		]);
+
+		// An inline BD_ACTOR does take effect.
+		expect(actorValues("BD_ACTOR=omp/Main/wins bd update x --claim", ambient)).toEqual([
+			"omp/Main/wins",
+		]);
+
+		// With BD_ACTOR absent, BEADS_ACTOR governs.
+		expect(
+			actorValues("BEADS_ACTOR=omp/Main/only bd update x --claim", {
+				BEADS_ACTOR: "omp/Main/env",
+			}),
+		).toEqual(["omp/Main/only"]);
+
+		// Both inline on one invocation: BD_ACTOR still wins.
+		expect(
+			actorValues("BEADS_ACTOR=omp/Main/no BD_ACTOR=omp/Main/yes bd update x --claim", emptyEnv),
+		).toEqual(["omp/Main/yes"]);
+	});
+
+	test("distinct invocations still report distinct actors", () => {
+		// The plural name stays earned: one command line can carry several writes
+		// under different identities. What is gone is two actors for ONE write.
+		expect(
+			actorValues(
+				"BD_ACTOR=omp/Main/a bd close a; BD_ACTOR=omp/Main/b bd update b --claim",
+				emptyEnv,
+			),
+		).toEqual(["omp/Main/a", "omp/Main/b"]);
+	});
 });
 
 describe("firstBdVerb / isMutatingBdCommand", () => {
