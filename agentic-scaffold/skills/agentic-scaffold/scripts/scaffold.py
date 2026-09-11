@@ -2536,6 +2536,256 @@ def policy_apply(root: Path, dry_run: bool = False) -> tuple[dict[str, Any], int
     return result, 0
 
 
+def _ask_payload(question_id: str, question: str, options: list[tuple[str, str]], *, recommended: int = 0, multi: bool = False) -> dict[str, Any]:
+    """Build the payload consumed by the OMP ``ask`` tool."""
+    return {
+        "questions": [{
+            "id": question_id,
+            "question": question,
+            "options": [{"label": label, "description": description} for label, description in options],
+            "recommended": recommended,
+            "multi": multi,
+        }]
+    }
+
+
+def _findings_report(info: dict[str, Any], preflight_payload: dict[str, Any]) -> dict[str, Any]:
+    """Render inspect and preflight facts once for the start verb."""
+    rows: list[dict[str, str]] = []
+    stacks = info.get("stacks", [])
+    rows.append({"item": "detected stacks", "value": ", ".join(str(item) for item in stacks) or "none"})
+    tooling = info.get("tooling", {})
+    rows.append({"item": "existing tooling", "value": ", ".join(str(key) for key, value in tooling.items() if value) or "none"})
+    recommended = str(preflight_payload.get("profile") or info.get("suggested_profile") or "agentic-repo")
+    rows.append({"item": "recommended profile", "value": recommended})
+    rows.append({"item": "layers", "value": ", ".join(str(item) for item in preflight_payload.get("layers", [])) or "none"})
+    missing = preflight_payload.get("missing_tools", [])
+    rows.append({"item": "missing tools", "value": ", ".join(str(item) for item in missing) or "none"})
+    for finding in info.get("findings", []):
+        if isinstance(finding, dict):
+            detail = str(finding.get("path", finding.get("kind", "finding")))
+            if finding.get("value"):
+                detail += f" ({finding['value']})"
+            rows.append({"item": str(finding.get("kind", "finding")), "value": detail})
+    for key, label in (("hard", "hard blocker"), ("soft", "soft finding")):
+        for value in preflight_payload.get(key, []):
+            rows.append({"item": label, "value": str(value)})
+    markdown = "| Finding | Value |\n| --- | --- |\n" + "\n".join(
+        f"| {row['item'].replace('|', '/')} | {row['value'].replace('|', '/')} |" for row in rows
+    )
+    return {"markdown": markdown, "rows": rows}
+
+
+def start_verb(root: Path, profile_name: str | None) -> tuple[dict[str, Any], int]:
+    """Inspect and preflight without writing repository state."""
+    root = validate_root(root, require_git=True)
+    info = inspect(root)
+    preflight_payload, preflight_code = preflight(root, profile_name, strict=False)
+    blockers = [str(item) for item in preflight_payload.get("hard", [])]
+    recommended = str(preflight_payload.get("profile") or info.get("suggested_profile") or "agentic-repo")
+    options = [("Stop", "Stop this scaffold run.")]
+    if not blockers and preflight_code == 0:
+        options.insert(0, ("Continue to the interview", "Proceed with the ordered scaffold interview."))
+    ask = _ask_payload("start", "Continue with the scaffold interview?", options, recommended=0, multi=False)
+    return {
+        "ok": preflight_code == 0 and not blockers,
+        "findings": _findings_report(info, preflight_payload),
+        "blockers": blockers,
+        "recommended_profile": recommended,
+        "ask": ask,
+    }, 0 if preflight_code == 0 else preflight_code
+
+
+def _answers_mapping(raw: str) -> tuple[str | None, dict[str, str], list[str]]:
+    """Normalize the JSON accepted by ``plan --answers``."""
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"--answers must be a JSON object: {exc}") from exc
+    if not isinstance(data, dict):
+        raise ValueError("--answers must be a JSON object")
+    nested = data.get("answers")
+    values: dict[str, Any] = dict(nested) if isinstance(nested, dict) else {}
+    values.update({str(key): value for key, value in data.items() if key not in {"answers", "profile", "defaults_for", "defaultsFor"}})
+    layers = values.get("layers")
+    if isinstance(layers, list):
+        values["layers"] = ",".join(str(item) for item in layers)
+    overrides = {str(key): (value if isinstance(value, str) else json.dumps(value, separators=(",", ":")) if isinstance(value, (dict, list)) else str(value)) for key, value in values.items() if value is not None}
+    raw_defaults = data.get("defaults_for", data.get("defaultsFor", []))
+    if isinstance(raw_defaults, str):
+        defaults = [item for item in raw_defaults.split(",") if item]
+    elif isinstance(raw_defaults, list):
+        defaults = [str(item) for item in raw_defaults]
+    else:
+        defaults = []
+    profile = data.get("profile") or values.pop("profile", None)
+    return (str(profile) if profile else None), overrides, defaults
+
+
+def _question_answered(answers: dict[str, Any], question_id: str) -> bool:
+    value = answers.get(question_id)
+    return value not in (None, "", [])
+
+
+def _question_visible(row: dict[str, Any], answers: dict[str, Any]) -> bool:
+    dependencies = row.get("depends_on", row.get("depends", []))
+    if isinstance(dependencies, str):
+        dependencies = [dependencies]
+    if isinstance(dependencies, list) and any(not _question_answered(answers, str(item)) for item in dependencies):
+        return False
+    condition = row.get("when", row.get("visible_if"))
+    if isinstance(condition, dict):
+        for key, expected in condition.items():
+            actual = answers.get(str(key))
+            expected_values = expected if isinstance(expected, list) else [expected]
+            if actual not in expected_values and str(actual) not in {str(item) for item in expected_values}:
+                return False
+    source = str(row.get("source", ""))
+    question_id = str(row.get("id", ""))
+    if source.startswith("layer:") and not _question_answered(answers, "layers"):
+        return False
+    if (question_id.startswith("member") or "member_kind" in question_id) and not _question_answered(answers, "members"):
+        return False
+    return True
+
+
+def _ordered_questions(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    def rank(row: dict[str, Any]) -> int:
+        question_id = str(row.get("id", "")).lower()
+        source = str(row.get("source", "")).lower()
+        if question_id in {"layout", "shape", "name", "purpose", "language"} or "layout" in question_id:
+            return 0
+        if question_id == "members" or question_id.startswith("member"):
+            return 1
+        if question_id == "kind" or question_id.endswith("_kind") or "member_kind" in question_id:
+            return 2
+        if question_id in {"profile", "layers"}:
+            return 3
+        if question_id == "license":
+            return 4
+        if question_id in {"docs", "docs_flavour", "documentation"} or source == "docs":
+            return 5
+        if question_id == "publish":
+            return 6
+        if question_id.startswith("bts_") or source.startswith("layer:"):
+            return 7
+        return 8
+    return [row for _, row in sorted(enumerate(rows), key=lambda pair: (rank(pair[1]), pair[0]))]
+
+
+def _question_options(row: dict[str, Any]) -> tuple[list[dict[str, str]], int]:
+    allowed = row.get("allowed")
+    choices = row.get("choices", [])
+    descriptions: dict[str, str] = {}
+    if isinstance(choices, list):
+        for choice in choices:
+            if isinstance(choice, dict) and "value" in choice:
+                descriptions[str(choice["value"])] = str(choice.get("summary", choice.get("description", "")))
+    labels = [str(item) for item in allowed] if isinstance(allowed, list) else []
+    default = str(row.get("default", ""))
+    default_label = default.split(",", 1)[0].strip()
+    if labels:
+        labels = labels[:5]
+        if default_label and default_label not in labels:
+            labels[-1] = default_label
+    else:
+        labels = [default_label] if default_label else ["Provide a value"]
+        labels.append("Other")
+    options = [{"label": label, "description": descriptions.get(label, f"Use {label} for {row.get('id', 'this answer')}.")} for label in labels[:5]]
+    recommended = next((index for index, option in enumerate(options) if option["label"] == default_label), 0)
+    return options, recommended
+
+
+def interview_verb(root: Path, profile_name: str | None, answers_raw: str | None) -> tuple[dict[str, Any], int]:
+    """Return one bounded ask page from the ordered interview."""
+    root = validate_root(root, require_git=True)
+    answers: dict[str, Any] = {}
+    if answers_raw:
+        try:
+            decoded = json.loads(answers_raw)
+        except json.JSONDecodeError as exc:
+            return {"ok": False, "error": f"--answers-so-far must be a JSON object: {exc}"}, EXIT_ERROR
+        if not isinstance(decoded, dict):
+            return {"ok": False, "error": "--answers-so-far must be a JSON object"}, EXIT_ERROR
+        nested = decoded.get("answers")
+        if isinstance(nested, dict):
+            answers.update(nested)
+        answers.update({str(key): value for key, value in decoded.items() if key != "answers"})
+    interview = interview_questions(root, profile_name)
+    rows = _ordered_questions([row for row in interview.get("questions", []) if isinstance(row, dict)])
+    pending: list[dict[str, Any]] = []
+    for row in rows:
+        question_id = str(row.get("id", ""))
+        if _question_answered(answers, question_id) or not _question_visible(row, answers):
+            continue
+        if not row.get("required") and not row.get("default") and not row.get("allowed"):
+            continue
+        pending.append(row)
+    page = pending[:5]
+    ask_questions: list[dict[str, Any]] = []
+    for row in page:
+        options, recommended = _question_options(row)
+        ask_questions.append({"id": str(row.get("id")), "question": str(row.get("question", row.get("prompt", row.get("id", "")))), "options": options, "recommended": recommended, "multi": bool(row.get("multi", False))})
+    return {"ok": True, "profile": profile_name or interview.get("profile"), "questions": page, "remaining": len(pending), "complete": not pending, "ask": {"questions": ask_questions}}, 0
+
+
+def _plan_document(root: Path, summary: dict[str, Any]) -> Path:
+    profile = str(summary.get("profile", ""))
+    layers = summary.get("layers", [])
+    counts = summary.get("counts", {})
+    lines = ["# Scaffold plan", "", f"Profile: `{profile}`", f"Layers: {', '.join(str(item) for item in layers) or 'none'}", "", "## Files", "", "| Action | Path | Layer |", "| --- | --- | --- |"]
+    for line in summary.get("lines", []):
+        match = re.match(r"^(\S+)\s+(.+?)\s+\((.*?)\)$", str(line))
+        if match:
+            lines.append(f"| {match.group(1)} | `{match.group(2)}` | {match.group(3)} |")
+    lines.extend(["", "## Counts", ""])
+    for action, count in counts.items():
+        lines.append(f"- {action}: {count}")
+    conflicts = summary.get("conflicts", [])
+    lines.extend(["", "## Conflicts", ""])
+    if conflicts:
+        lines.extend(f"- {item}" for item in conflicts)
+    else:
+        lines.append("- none")
+    preflight_summary = summary.get("preflight", {})
+    lines.extend(["", "## Tools to install", "", *([f"- {item}" for item in preflight_summary.get("missing_tools", [])] or ["- none"]), "", "## Hooks", "", "- The configured hook strategy runs during the hooks stage.", "", "## Commands", "", "- Run the stages in `APPLY_STAGES` after approval.", "", "## After approval", "", "- The `run` verb applies the plan and runs doctor."])
+    path = root / ".omp/scaffold-plan.md"
+    _write_under_root(root, path, "\n".join(lines) + "\n")
+    return path
+
+
+def plan_verb(root: Path, answers_raw: str) -> tuple[dict[str, Any], int]:
+    """Record JSON answers, produce the dry-run plan, and ask for approval."""
+    root = validate_root(root, require_git=True)
+    try:
+        profile, overrides, defaults_for = _answers_mapping(answers_raw)
+    except ValueError as exc:
+        return {"ok": False, "error": str(exc)}, EXIT_ERROR
+    answer_payload, answer_code = answers_write_interview(root, profile, None, overrides, defaults_for, [])
+    if answer_code:
+        return {"ok": False, "answers": answer_payload}, answer_code
+    selected = str(answer_payload.get("profile", profile or ""))
+    dry_run, dry_code = apply_pipeline(root, selected, dry_run=True)
+    if dry_code:
+        return {"ok": False, "answers": answer_payload, "dry_run": dry_run}, dry_code
+    summary = dry_run.get("planSummary", {})
+    path = _plan_document(root, summary)
+    ask = _ask_payload("plan", "Apply this scaffold plan?", [("Apply", "Apply the approved scaffold plan."), ("Stop", "Stop before applying changes.")], recommended=0, multi=False)
+    return {"ok": True, "path": str(path), "answers": answer_payload, "planSummary": summary, "dry_run": dry_run, "ask": ask}, 0
+
+
+def run_verb(root: Path) -> tuple[dict[str, Any], int]:
+    """Apply the recorded plan, run doctor, and return a commit handoff."""
+    root = validate_root(root, require_git=True)
+    applied, apply_code = apply_pipeline(root, None)
+    if apply_code:
+        return {"ok": False, "status": "BLOCKED", "apply": applied, "stages": applied.get("stages", [])}, apply_code
+    doctor_payload, doctor_code = doctor(root)
+    if doctor_code:
+        return {"ok": False, "status": "BLOCKED", "apply": applied, "doctor": doctor_payload, "stages": applied.get("stages", [])}, doctor_code
+    return {"ok": True, "status": "READY_FOR_COMMIT", "commitCommand": "git add -A && git commit -m 'chore: scaffold project'", "doctor": doctor_payload, "stages": applied.get("stages", [])}, 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
@@ -2543,9 +2793,9 @@ def build_parser() -> argparse.ArgumentParser:
     layers_parent = sub.add_parser("layers"); layers_parent.add_argument("--root", default="."); layers = layers_parent.add_subparsers(dest="layers_command", required=True); layers.add_parser("list"); show = layers.add_parser("show"); show.add_argument("layer")
     inspect_parser = sub.add_parser("inspect"); inspect_parser.add_argument("--root", default=".")
     preflight_parser = sub.add_parser("preflight"); preflight_parser.add_argument("--root", default="."); preflight_parser.add_argument("--profile"); preflight_parser.add_argument("--strict", action="store_true")
-    interview_parent = sub.add_parser("interview"); interview_parent.add_argument("--root", default="."); interview = interview_parent.add_subparsers(dest="interview_command", required=True).add_parser("questions"); interview.add_argument("--root", default=argparse.SUPPRESS); interview.add_argument("--profile")
+    interview_parent = sub.add_parser("interview"); interview_parent.add_argument("--root", default="."); interview_parent.add_argument("--profile"); interview_parent.add_argument("--answers-so-far"); interview = interview_parent.add_subparsers(dest="interview_command", required=False).add_parser("questions"); interview.add_argument("--root", default=argparse.SUPPRESS); interview.add_argument("--profile")
     for action in ("plan", "render"):
-        command = sub.add_parser(action); command.add_argument("--root", default="."); command.add_argument("--profile"); command.add_argument("--name"); command.add_argument("--var", action="append", default=[]); command.add_argument("--layer", action="append", default=[]); command.add_argument("--force-layer"); command.add_argument("--adopt", action="append", default=[])
+        command = sub.add_parser(action); command.add_argument("--root", default="."); command.add_argument("--profile"); command.add_argument("--name"); command.add_argument("--var", action="append", default=[]); command.add_argument("--layer", action="append", default=[]); command.add_argument("--force-layer"); command.add_argument("--adopt", action="append", default=[]); command.add_argument("--answers")
         if action == "render": command.add_argument("--dry-run", action="store_true"); command.add_argument("--bump-tools", action="store_true")
     answers_parent = sub.add_parser("answers"); answers_parent.add_argument("--root", default="."); answers = answers_parent.add_subparsers(dest="answers_command", required=True).add_parser("write"); answers.add_argument("--root", default=argparse.SUPPRESS); answers.add_argument("--profile"); answers.add_argument("--name"); answers.add_argument("--var", action="append", default=[]); answers.add_argument("--set", action="append", default=[]); answers.add_argument("--layer", action="append", default=[]); answers.add_argument("--defaults-for", default="")
     apply_parser = sub.add_parser("apply"); apply_parser.add_argument("--root", default="."); apply_parser.add_argument("--profile"); apply_parser.add_argument("--dry-run", action="store_true"); apply_parser.add_argument("--stage"); apply_parser.add_argument("--bump-tools", action="store_true")
@@ -2563,6 +2813,8 @@ def build_parser() -> argparse.ArgumentParser:
     hooks_parent = sub.add_parser("hooks"); hooks_parent.add_argument("--root", default="."); hooks = hooks_parent.add_subparsers(dest="hooks_command", required=True).add_parser("install"); hooks.add_argument("--root", default=argparse.SUPPRESS); hooks.add_argument("--migrate", action="store_true"); hooks.add_argument("--force", action="store_true")
     context_parent = sub.add_parser("context"); context_parent.add_argument("--root", default="."); context = context_parent.add_subparsers(dest="context_command", required=True).add_parser("refresh"); context.add_argument("--root", default=argparse.SUPPRESS)
     tools_parent = sub.add_parser("tools"); tools_parent.add_argument("--root", default="."); tools = tools_parent.add_subparsers(dest="tools_command", required=True).add_parser("install"); tools.add_argument("--root", default=argparse.SUPPRESS); tools.add_argument("--yes", action="store_true")
+    start_parser = sub.add_parser("start"); start_parser.add_argument("--root", default="."); start_parser.add_argument("--profile")
+    run_parser = sub.add_parser("run"); run_parser.add_argument("--root", default=".")
     return parser
 
 
@@ -2575,13 +2827,20 @@ def main(argv: list[str] | None = None) -> int:
         payload = layers_list() if args.layers_command == "list" else layers_show(args.layer)
         emit(payload, command_root); return 0
     root = command_root
+    if args.command == "start":
+        payload, code = start_verb(root, args.profile); emit(payload, root); return code
     if args.command == "inspect":
         emit(inspect(root), root); return 0
     if args.command == "preflight":
         payload, code = preflight(root, args.profile, strict=args.strict); emit(payload, root); return code
     if args.command == "interview":
-        emit(interview_questions(root, args.profile), root); return 0
+        if args.interview_command == "questions":
+            emit(interview_questions(root, args.profile), root); return 0
+        payload, code = interview_verb(root, args.profile, args.answers_so_far); emit(payload, root); return code
     if args.command in {"plan", "render"}:
+        if args.command == "plan" and args.answers is not None:
+            payload, code = plan_verb(root, args.answers)
+            emit(payload, root); return code
         overrides = parse_vars(args.var)
         if args.command == "plan":
             payload, _, _, _, code = plan_payload(root, args.profile, args.name, overrides, args.layer, args.force_layer, set(args.adopt))
@@ -2598,6 +2857,8 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "policy":
         validate_root(root, require_git=True)
         payload, code = policy_apply(root, args.dry_run); emit(payload, root); return code
+    if args.command == "run":
+        payload, code = run_verb(root); emit(payload, root); return code
     if args.command == "apply":
         payload, code = apply_pipeline(root, args.profile, dry_run=args.dry_run, stage=args.stage, bump_tools=args.bump_tools); emit(payload, root); return code
     if args.command == "finish":

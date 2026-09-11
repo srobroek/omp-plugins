@@ -82,3 +82,19 @@ python3 "$SCAFFOLD" member add --root R --name NAME --layer lang/python --kind a
 ```
 
 Read `root`, `added`, `members`, and `path`. Stop when the human says the member list is complete.
+
+## 6. Verb ordering
+
+The direct `interview` verb emits ask pages in this order:
+
+1. Layout and shape.
+2. Members.
+3. Project and member kinds.
+4. Profile and layers.
+5. License.
+6. Documentation.
+7. Publish target.
+8. Layer variables.
+
+The verb hides dependent questions until their answers appear in `--answers-so-far`.
+Each page has at most five questions. Each option list has at most five entries.
