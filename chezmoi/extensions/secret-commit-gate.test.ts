@@ -265,6 +265,45 @@ describe("decideCommit", () => {
 		expect(chezmoiRepo()).toBeNull();
 		expect(decideCommit("git commit -m x", ROOT)).toBeUndefined();
 	});
+
+	test("refuses a commit reached through a nested shell, which the walk cannot follow", () => {
+		// Independent review reproduced all three of these committing inside the chezmoi
+		// tree while the guard allowed them: the subshell and brace group were
+		// attributed to the parent directory, and eval produced no commit call at all.
+		// Confirmed against real bash with git shadowed to print $PWD -- from /usr, each
+		// of the three runs its commit in /tmp.
+		seedRepo(["dotfiles/dot_config/gh/api_token"]);
+		for (const command of [
+			`( cd '${SOURCE}' && git commit -m x )`,
+			`{ cd '${SOURCE}'; git commit -m x; }`,
+			`eval 'cd ${SOURCE} && git commit -m x'`,
+			`sh -c "cd ${SOURCE} && git commit -m x"`,
+			`echo "$(cd ${SOURCE} && git commit -m x)"`,
+			`cd x&&(cd '${SOURCE}');git commit -m x`,
+		]) {
+			const decision = decideCommit(command, ELSEWHERE);
+			expect(decision?.block).toBe(true);
+			expect(decision?.reason).toContain("nests a shell");
+		}
+	});
+
+	test("a nested shell outside a chezmoi tree, and quoted punctuation, are left alone", () => {
+		// The refusal must not become a general ban on subshells. It is scoped to a
+		// chezmoi source tree, where the gate has something to protect, and it must not
+		// fire on punctuation that only looks like shell syntax.
+		seedChezmoiCacheForTests(null, null);
+		expect(decideCommit(`( cd /some/repo && git commit -m x )`, ELSEWHERE)).toBeUndefined();
+
+		seedRepo([]);
+		// Parens and braces inside quotes are literal; `${VAR}` is an expansion, and
+		// find's `{}` is a placeholder. None of these starts a shell.
+		expect(decideCommit(`git commit -m "fix (typo) and {braces}"`, ROOT)).toBeUndefined();
+		expect(decideCommit(`git commit -m '(fix) thing'`, ROOT)).toBeUndefined();
+		expect(decideCommit("git commit -m ${MSG}", ROOT)).toBeUndefined();
+		expect(decideCommit("find . -name x -exec rm {} ; git commit -m y", ROOT)).toBeUndefined();
+		// Single quotes are literal, so a substitution written inside them is inert.
+		expect(decideCommit(`git commit -m 'literal $(cd elsewhere)'`, ROOT)).toBeUndefined();
+	});
 });
 
 describe("integration", () => {

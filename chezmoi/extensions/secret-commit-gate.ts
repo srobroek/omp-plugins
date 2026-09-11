@@ -412,10 +412,77 @@ export const SECRET_ADVICE =
 	"`chezmoi add --encrypt <target>`, which writes an `encrypted_` copy. A `.tmpl` or `encrypted_` " +
 	"file commits cleanly. Unstage the file, convert it, then commit.";
 
+/**
+ * Whether the command nests a shell that the flat segment walk cannot follow.
+ *
+ * `gitCommits` splits a command into a flat list of segments, so anything that
+ * starts a second shell is invisible to it. Independent review reproduced all
+ * three shapes committing in a chezmoi tree while the guard allowed them:
+ * `( cd src && git commit )` and `{ cd src; git commit; }` were attributed to the
+ * parent directory, and `eval 'cd src && git commit'` produced no commit call at
+ * all. Modelling them properly means parsing into a tree rather than a segment
+ * list, which is a rewrite; refusing is the honest interim, and it matches how
+ * the gate already treats a directory it cannot resolve.
+ *
+ * The scan is quote-aware rather than token-based because the tokeniser strips
+ * quotes: `git commit -m "(fix) thing"` yields a token starting with `(`, while
+ * `cd x&&(cd y);git commit` yields `(cd` glued to a word. A token test would
+ * refuse the first and miss the second.
+ *
+ * `{` only opens a group when a blank follows, and `}` only closes one when a
+ * blank or `;` precedes it, which is what keeps `${HOME}` and `find -exec {} ;`
+ * out of scope. Every unquoted paren counts, including `$(...)`: a substitution
+ * can `cd` and commit just as a subshell can.
+ */
+export function nestsShell(command: string): boolean {
+	let quote: '"' | "'" | null = null;
+	for (let index = 0; index < command.length; index++) {
+		const char = command[index]!;
+		if (quote === "'") {
+			// Single quotes are literal: nothing inside them can start a shell.
+			if (char === "'") quote = null;
+			continue;
+		}
+		if (quote === '"') {
+			// Double quotes are NOT literal. `$(...)` and backticks still expand, and a
+			// substitution can `cd` and commit exactly as a bare subshell can, so those
+			// two are detected here while an ordinary quoted paren stays allowed.
+			if (char === '"') quote = null;
+			else if (char === "\\") index++;
+			else if (char === "`") return true;
+			else if (char === "$" && command[index + 1] === "(") return true;
+			continue;
+		}
+		if (char === '"' || char === "'") {
+			quote = char;
+			continue;
+		}
+		if (char === "\\") {
+			index++;
+			continue;
+		}
+		if (char === "(" || char === ")" || char === "`") return true;
+		if (char === "{" && /\s/.test(command[index + 1] ?? "")) return true;
+		if (char === "}" && /[\s;]/.test(command[index - 1] ?? "")) return true;
+	}
+	// A command word that hands a whole script to another shell is the same problem
+	// reached a different way: the payload is one opaque token to the tokeniser.
+	return /(?:^|[;&|]|\bcommand\b|\benv\b)\s*(?:eval\b|(?:ba|z|k|da)?sh\s+-c\b)/.test(command);
+}
+
 export function decideCommit(command: string, cwd: string): { block: true; reason: string } | undefined {
 	if (!/\bcommit\b/.test(command) || !/\bd?git\b/.test(command)) return;
 	const chezmoi = chezmoiRepo();
 	if (!chezmoi) return;
+	// Placed after the chezmoi lookup on purpose: outside a chezmoi source tree there
+	// is nothing to protect, so an ordinary repository's subshell commits are
+	// untouched. Inside one, a shape the walk cannot follow must not be allowed.
+	if (nestsShell(command)) {
+		return {
+			block: true,
+			reason: "This command nests a shell -- a subshell, a brace group, a substitution, or eval -- and the guard cannot follow which directory the commit lands in, so it cannot check whether that commit stages a plaintext secret. Run the commit as a plain command in the directory it belongs to.",
+		};
+	}
 	for (const call of gitCommits(command, cwd)) {
 		if (call.cwd === null) {
 			return { block: true, reason: "Cannot determine the commit's working directory safely; refusing to allow a possible secret commit." };
