@@ -5,6 +5,8 @@ layers = ["base", "docs"]
 language = "none"
 kind = "library"
 docs_flavour = "splash"
+bts_docs = "starlight"
+bts_version = "3.42.2"
 [commands]
 setup = "bun install --frozen-lockfile"
 test = "bun run build"

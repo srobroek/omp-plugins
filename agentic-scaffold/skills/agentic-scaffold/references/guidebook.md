@@ -1,161 +1,86 @@
 # Scaffold guidebook
 
-Load this guide when a repository is being scaffolded or when the lead needs to explain the
-pipeline. `$SCAFFOLD` is the installed `skills/agentic-scaffold/scripts/scaffold.py` path and `R`
-is the session project root. The lead invokes these commands through the `scaffold` tool; the
-shell forms below are the exact CLI commands used by that tool.
+Load this guide when a repository is scaffolded. `$SCAFFOLD` names the installed
+`skills/agentic-scaffold/scripts/scaffold.py` path. `R` names the session project root.
+The lead invokes each command through the `scaffold` tool.
 
-## 1. Prove the repository is eligible, then confirm with the human
+## 1. Start
 
 ```sh
-python3 "$SCAFFOLD" inspect --root R
-python3 "$SCAFFOLD" preflight --root R --profile P
+python3 "$SCAFFOLD" start --root R --profile P
 ```
 
-Read `inspect` for `stacks`, `suggestedProfile`, `tooling` (what the repo already has), `notes`,
-and `findings`. If `inspect` exits non-zero or returns no `stacks` key, show its JSON verbatim and
-ask "Stop" or "Explain"; do not build the table from guesses. Read `preflight` for `root`, `hard`, `soft`, `missing_tools`, `tools`, `plugins`,
-`layers`, and `version`. `hook_strategy` is recorded for later stages; do not report or ask about
-it. The root must be a git work tree, not `$HOME` or `~/.omp`.
+Read `findings.markdown`, `findings.rows`, `blockers`, `recommended_profile`, and `ask`.
+The findings include detected stacks, tooling, layers, missing tools, and preflight lines.
+A clean tree with no blockers offers `Continue to the interview` and `Stop`.
+A dirty tree is a hard blocker and offers only `Stop`.
+Do not write files before the human selects `Continue to the interview`.
 
-This step always ends in an `ask`, whatever preflight returned. A report that ends the turn is
-not a stop; the human has to be able to answer without re-prompting. Write the findings first, as
-a short table in the assistant message: detected stacks, existing tooling, the profile you will
-propose and why, the layers that profile brings, declared plugins, and every `hard` and `soft`
-line verbatim. Then ask:
-
-- `hard` is empty: options "Continue to the interview" and "Stop here".
-- `hard` names a dirty work tree: a clean tree is a prerequisite and there is no bypass. Show
-  `git status --short`, then offer "Stop; I will commit or stash" and "Stop; I will scaffold in a
-  fresh worktree" (`wt switch --create scaffold/adopt --base origin/main`). The scaffold's own
-  `.omp/scaffold*` state is the only dirt preflight tolerates.
-- any other `hard` line: options "Stop; I will fix the named prerequisite" and "Explain what is
-  missing"; there is no bypass for a missing tool or an invalid root.
-
-Do not write files before preflight exits `0` and the human has chosen to continue.
-
-## 2. Emit the interview
+## 2. Interview
 
 ```sh
-python3 "$SCAFFOLD" interview questions --root R --profile P
+python3 "$SCAFFOLD" interview --root R --profile P [--answers-so-far JSON]
 ```
 
-Read `root` and `questions`. Each question has `id`, `prompt`, `required`, `default`, optional
-`allowed`, and `source` (`fixed`, `layer:<name>`, or `finding:<kind>`). Present every question with
-`required: true` to the human using the `ask` tool, in emitted order. Ask optional questions when
-the human wants to choose them. Never fill a required answer from its `default`.
+Read the returned `ask` object. Each page has at most five questions and each question has
+at most five options. When a question accepts more values than the page shows, its last option
+is `Another value` and its description lists the remaining accepted values; relay them. Pass selected answers in `--answers-so-far` as one JSON object.
+Repeat until `complete` is true. Preserve the question ids and multi-value arrays.
+The CLI orders layout and shape, members, kind, profile and layers, license, docs, publish,
+and layer variables. Dependent questions appear after their answers.
 
-Decision: if the list is empty, continue with the profile emitted by preflight. If any required
-question is unanswered, remain at this step and do not call `answers write`.
-
-## 3. Record approved answers
+## 3. Plan
 
 ```sh
-python3 "$SCAFFOLD" answers write --root R --profile P \
-  --set name=NAME --set language=LANG --defaults-for ID,ID
+python3 "$SCAFFOLD" plan --root R --answers JSON
 ```
 
-Include one `--set key=value` for each answer returned by `ask`. Include an id in
-`--defaults-for` only when the human explicitly approved that question's default. Read `root`,
-`ok`, `profile`, `layers`, `vars`, `defaults_for`, `interviewed_at`, and `path`.
+Pass the complete answer object returned by the interview. The command writes answers through
+the existing answers writer and runs the apply dry run. Read `path`, `planSummary`, and `ask`.
+The plan at `.omp/scaffold-plan.md` lists layers, files to create or skip, conflicts, tools,
+hooks, and commands. The ask options are `Apply` and `Stop`.
+Do not run the next verb until the human selects `Apply`.
 
-Decision: exit `0` creates `.omp/scaffold-answers.toml` and `.omp/scaffold-run.json`; exit `3`
-means a required id is missing and must be asked before retrying. Exit `5` means an answer creates
-a conflict; return to the interview and change the selected profile or layer.
-
-## 4. Show the dry-run plan
+## 4. Run
 
 ```sh
-python3 "$SCAFFOLD" apply --root R --dry-run
+python3 "$SCAFFOLD" run --root R
 ```
 
-Read `root`, `ok`, and `planSummary`. `planSummary` has `profile`, `layers`, `counts` (rows per
-class), `lines` (one `class path (layer)` line per file), `conflicts`, and `preflight`. The full
-`stages` array is for debugging a failure, not for the human. This command is preflight plus plan
-and writes nothing.
+The command applies every stage and runs doctor. The `provision` stage runs Better-T-Stack for
+TypeScript applications, Tauri frontends, TypeScript-only monorepos, and Starlight sites. It writes
+only into an empty root or a new member directory and refuses any other target; the refusal names
+the adopt path (`bts=false`: keep the existing stack, render governance, CI, release, hooks, and
+agent files only). `plan` shows the exact generator command before anything runs. Read `status`, `doctor`, `stages`, and
+`commitCommand`. A successful run returns `READY_FOR_COMMIT` and per-stage `seconds`.
+The agent never runs the commit command.
 
-Write the plan as a document before asking, the way plan mode would:
-
-1. `write` `local://scaffold-plan.md` with: the profile and layers, the counts, one table row per
-   line of `planSummary.lines` (columns: action, path, layer), the conflicts, and a closing section
-   "After approval" that names the pipeline stages the scaffolder will run.
-2. Put the same table in the assistant message, with the artifact path.
-3. Call `ask` with two short options, "Approve plan" and "Change answers", and no JSON in either
-   description.
-
-When the session is already in OMP plan mode, submit `scaffold` to `xd://propose` instead of
-calling `ask`; the human's resolve is the approval. A skill cannot enter plan mode; do not claim to.
-The scaffolder receives the artifact path with its task so it executes the plan the human read. On exit `2`, resolve drift; on exit `5`, resolve ownership; on exit `6`, resolve the
-boundary. Do not delegate execution until the human approves.
-
-## 5. Execute the approved pipeline
-
-Delegate a `task` to `scaffolder` with the approved profile and the `local://scaffold-plan.md`
-path. It must call the `scaffold` tool for:
+## 5. Finish
 
 ```sh
-python3 "$SCAFFOLD" preflight --root R --profile P
-python3 "$SCAFFOLD" apply --root R
-python3 "$SCAFFOLD" doctor --root R
 python3 "$SCAFFOLD" finish --root R
 ```
 
-The tool injects `--root` from the session cwd. Read each returned JSON document. `apply` reports
-`ok`, `stages`, and optional `next`; it stops at the first failed stage and is safe to retry.
-Stages are preflight, plan, render, tools-install, hooks-install, plugins-sync, context-refresh,
-and doctor. The execution agent stops and reports JSON verbatim on any non-zero exit.
+Run this command after the human commits. Read `state`, `ok`, `commitCommand`, and `blockers`.
+A blocked finish reports every blocker. A finished run removes `.omp/scaffold-run.json`.
 
-Decision: continue only when `preflight` and every `apply` stage are successful. A doctor exit `2`
-is drift, exit `1` is an operational failure, exit `3` needs input, exit `5` is a conflict, and exit
-`6` is a boundary refusal. Resolve the stated issue through the CLI, then rerun the pipeline; never
-hand-edit generated files or install around a failure.
-
-## 6. Verify the final gate
-
-```sh
-python3 "$SCAFFOLD" doctor --root R
-python3 "$SCAFFOLD" finish --root R
-```
-
-Read doctor `root`, `checks`, `drift`, and `errors`. Read finish `root`, `ok`, `commitCommand`, and
-`blockers`. `finish` succeeds only when doctor is clean, all molecule children and gates are closed,
-and scaffold-owned paths are ready to commit. Success removes `.omp/scaffold-run.json`.
-
-Decision by `state`:
-
-- `ready-for-commit`: the only blocker is the uncommitted scaffold output. Present `commitCommand`
-  to the human; after the human commits, run `finish` once more.
-- `blocked`: stop and report every blocker verbatim.
-- `finished`: the run marker is gone; report the commit that closed the run.
-
-### Crashed or abandoned run
-
-While `.omp/scaffold-run.json` exists, the hard boundary stays active, even after a timeout or a
-killed process. Close such a run with:
+## Crashed or abandoned runs
 
 ```sh
 python3 "$SCAFFOLD" abort --root R
 ```
 
-Read `hadRun`, `stagesCompleted`, `dirtyOwned`, `dirtyOther`, and `revertCommands`. Present
-`dirtyOwned` with its per-path `revertCommands` to the human; `dirtyOther` is the human's own work
-and gets no command. The agent runs neither a revert nor a commit. `abort` deletes only the run
-marker.
+Read `hadRun`, `stagesCompleted`, `dirtyOwned`, `dirtyOther`, and `revertCommands`.
+The agent does not run revert commands.
 
-The agent never runs the commit command itself.
+## Hard rules
 
-## 7. Hard rules
-
-1. Every deterministic operation is one `scaffold` command; do not write a custom script.
-2. The mandatory interview uses `ask` for every required question; defaults are never silently assumed.
-3. The lead shows `apply --dry-run` and waits for approval before delegating `apply`.
-4. During a run marker, direct `write`, `edit`, `ast_edit`, `eval`, unsafe bash, global config, and
-   user-scope plugin changes are blocked. Use `scaffold apply` instead.
-5. Never call `chezmoi apply`, push, amend a commit, or install tools outside the CLI pipeline.
-6. Do not modify files outside `R`, scaffold-owned paths, templates, profiles, or formulas by hand.
+1. Use one `scaffold` command for every deterministic operation.
+2. Use the returned `ask` payload. Do not recreate questions or findings.
+3. Never assume a required answer or bypass a blocker.
+4. Keep writes under `R` and use scaffold-owned paths.
+5. Never call `chezmoi apply`, push, amend, or install outside the CLI.
+6. Stop on non-zero and report the command JSON verbatim.
 7. Exit codes are `0` success, `1` error, `2` drift, `3` needs input, `5` conflict, and `6` boundary.
-8. Stop on non-zero and report the command's JSON verbatim; do not invent tests or workarounds.
-9. The confirmation gates are `ask`s, never reports that end the turn: after inspect and
-   preflight, after the interview, and at the plan. The human gets the findings, your
-   recommendation, and options. A boundary refusal, an advisor block, or a failed stage is
-   reported with its JSON verbatim and offers only "stop" and "explain": no bypass option.
+8. Do not hand-edit generated answers or rendered files.
+9. Every stop is an `ask`. A boundary refusal, advisor block, or failed stage offers only `Stop` and an explanation.

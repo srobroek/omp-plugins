@@ -7,6 +7,8 @@ import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
 
 const execFileAsync = promisify(execFile);
 const COMMANDS = [
+	"start",
+	"run",
 	"inspect",
 	"preflight",
 	"interview",
@@ -22,7 +24,19 @@ const COMMANDS = [
 	"policy",
 ] as const;
 const ROOT_FLAGS = ["--root", "--cwd", "--state", "--answers", "--output", "-C"] as const;
+/** Inline JSON answer payloads: parsed by the CLI, never used as a path. */
+const PAYLOAD_COMMANDS: Record<string, (typeof COMMANDS)[number]> = { "--answers": "plan", "--answers-so-far": "interview" };
 const TIMEOUT_MS = 10 * 60 * 1000;
+
+function isJsonObject(value: unknown): boolean {
+	if (typeof value !== "string") return false;
+	try {
+		const parsed: unknown = JSON.parse(value);
+		return typeof parsed === "object" && parsed !== null && !Array.isArray(parsed);
+	} catch {
+		return false;
+	}
+}
 
 export type ScaffoldCommand = (typeof COMMANDS)[number];
 
@@ -36,8 +50,18 @@ export function validateScaffoldArgs(command: unknown, args: unknown): string | 
 	if (!Array.isArray(args) || args.some((value) => typeof value !== "string")) {
 		return "args must be an array of strings";
 	}
+	let payloadFlag: string | null = null;
 	for (const arg of args as string[]) {
 		if (arg.includes("\0") || /[\r\n]/.test(arg)) return "arguments may not contain NUL or newline";
+		if (payloadFlag !== null) {
+			if (!isJsonObject(arg)) return `${payloadFlag} must be followed by a JSON object`;
+			payloadFlag = null;
+			continue;
+		}
+		if (PAYLOAD_COMMANDS[arg] === command) {
+			payloadFlag = arg;
+			continue;
+		}
 		if (ROOT_FLAGS.some((flag) => arg === flag || arg.startsWith(flag))) {
 			return `argument is reserved by scaffold: ${arg}`;
 		}
@@ -47,6 +71,7 @@ export function validateScaffoldArgs(command: unknown, args: unknown): string | 
 			return `argument escapes the project root: ${arg}`;
 		}
 	}
+	if (payloadFlag !== null) return `${payloadFlag} must be followed by a JSON object`;
 	return null;
 }
 

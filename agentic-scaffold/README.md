@@ -21,7 +21,7 @@ ask every required question
 scaffold answers write --profile P --set key=value --defaults-for approved-id
 scaffold apply --dry-run
 human approves the plan
-scaffolder task: preflight → apply → doctor → finish
+scaffold run
 present finish.commitCommand
 human commits
 ```

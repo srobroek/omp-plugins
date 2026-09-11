@@ -7,6 +7,8 @@ app = true
 node = "22"
 kind = "app"
 bun_version = "latest"
+bts = "true"
+bts_version = "3.42.2"
 web_ui = false
 speckit = false
 [commands]

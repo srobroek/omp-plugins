@@ -4,6 +4,9 @@ layers = ["base", "tooling", "hooks", "workspace", "ci/github", "release", "agen
 [vars]
 layout = "monorepo"
 language = "none"
+bts = "false"
+bts_version = "3.42.2"
+bts_layout = "turborepo"
 web_ui = false
 speckit = false
 [commands]
