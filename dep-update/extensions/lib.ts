@@ -10,7 +10,7 @@ import { parse as parseToml } from "smol-toml";
 // unchanged for its consumers.
 export * from "./detect";
 
-import { detectProject, isDir, isFile, readText, REQ_NAME } from "./detect";
+import { detectProject, isDir, isFile, REQ_NAME, readText } from "./detect";
 
 export const USER_AGENT = "dep-update-skill (+https://github.com/srobroek/agentic-packages)";
 export const FETCH_TIMEOUT_MS = 10_000;
