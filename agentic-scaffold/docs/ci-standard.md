@@ -141,3 +141,38 @@ Better-T-Stack owns the application skeleton: the workspace manifest, `package.j
 release, hooks, and agent files. The TypeScript lane installs with the selected package manager and
 runs `turbo run check-types build` when Turborepo is selected. The generator runs once, into an empty
 target, with a pinned version and no install or git step. A repository that already has a stack keeps it.
+
+## Attestation
+
+Release jobs set workflow permissions to `{}` and elevate only the release build or publish job.
+The build job generates an SBOM with `anchore/sbom-action`, attests the files with
+`actions/attest-build-provenance` and `actions/attest-sbom`, and verifies each release subject with
+`gh attestation verify <artifact> --repo <owner>/<repo>` before publication. Set `ACTIONS_CACHE_MODE`
+to `none` on release and security jobs. A maintainer must enable artifact attestations in repository
+settings and protect the `release` environment with a reviewer.
+
+## CodeQL
+
+Set `ci_codeql=true` for public repositories. The scaffold derives a CodeQL matrix from selected
+Python, TypeScript, and Go layers. Rust is not a CodeQL language, so the Rust lane is omitted.
+The CodeQL job alone receives `security-events: write`. A maintainer must enable GitHub Advanced
+Security and CodeQL analysis for the repository.
+
+## Runner hardening
+
+Set `ci_harden_runner=true` to add `step-security/harden-runner` as the first step in every job.
+The generated workflow starts with `egress-policy: audit`. A maintainer must review the audit log,
+allow required endpoints, then change the policy to `block` in the generated workflow.
+
+## Tauri desktop release
+
+The `tauri-desktop` profile builds Tauri v2 bundles for macOS arm64 and x86_64, Windows, and Linux.
+The workflow signs updater artifacts with `TAURI_SIGNING_PRIVATE_KEY` and
+`TAURI_SIGNING_PRIVATE_KEY_PASSWORD`, emits `latest.json`, attaches assets to the release-please
+GitHub release, and verifies attestations before publication. macOS signing and notarization run
+only when the Apple signing variables exist. Set the updater endpoint in `tauri.conf.json` to the
+published GitHub Release `latest.json` URL, for example
+`https://github.com/<owner>/<repo>/releases/latest/download/latest.json`.
+Set `tap_bump=true` to render the workflow that dispatches Homebrew and Scoop update workflows.
+The default is false. A maintainer must create the tap and bucket repositories and grant the
+fine-grained `TAP_BUMP_TOKEN` access to both repositories.

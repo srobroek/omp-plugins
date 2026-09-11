@@ -232,21 +232,26 @@ ACTIONS = {
     "cache": "actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0",
     "setup_node": "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0",
     "setup_go": "actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0",
-    "rust_cache": "Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2",
-    "sccache": "mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11",
-    "golangci": "golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0",
+    "rust_cache": "Swatinem/rust-cache@63fed3e2fecf6f7b51dc6f043341b79ef82a9ae7 # v2.9.2",
+    "sccache": "mozilla-actions/sccache-action@fd02668681acd5f960e1372061bee5e3e987195c # v0.0.11",
+    "golangci": "golangci/golangci-lint-action@d583c34f0599d37dbac4a198b9c83201be380893 # v9.3.0",
     "paths_filter": "dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3",
     "zizmor": "zizmorcore/zizmor-action@cc914d7f3750a2d13d75c7f184a1060aa0e9d482 # v0.6.4",
     "gitleaks": "gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e # v3.0.0",
     "upload_artifact": "actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0",
-    "download_artifact": "actions/download-artifact@37930b1c2abaa49be596cd826c3c89aef350131 # v7.0.0",
+    "download_artifact": "actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0",
     "attest": "actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2",
-    "pypi_publish": "pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2",
+    "attest_sbom": "actions/attest-sbom@c604332985a26aa8cf1bdc465b92731239ec6b9e # v4.1.0",
+    "sbom": "anchore/sbom-action@006b7ce8314066bdf1765b4500370d40fa6917a3 # v0.24.2",
+    "codeql": "github/codeql-action@977e6ceaea7361825998245d787fa3b4d6b9e5df # codeql-bundle-v2.27.0",
+    "harden_runner": "step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1",
+    "tauri": "tauri-apps/tauri-action@fce9c6108b31ea247710505d3aaaa893ee6768d4 # v0",
+    "pypi_publish": "pypa/gh-action-pypi-publish@a892a5a61159132606e93a2fa6f4358831b04d26 # v1.14.2",
     "crates_auth": "rust-lang/crates-io-auth-action@c6f97d42243bad5fab37ca0427f495c86d5b1a18 # v1.0.5",
     "goreleaser": "goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3",
     "app_token": "actions/create-github-app-token@29824e69f54612133e76f7eaac726eef6c875baf # v2.2.1",
     "release_please": "googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0",
-    "release_plz": "release-plz/action@a80d79efe0a195618acb02a4089d55fe74d2505f # v0.5.136",
+    "release_plz": "release-plz/action@215491df88a898407007d2f176cefd3d311d4fe9 # v0.5.136",
 }
 
 PUBLISH_TARGETS = ("none", "pypi", "npm", "crates", "github-assets")
@@ -276,6 +281,17 @@ def _checkout(indent: str = "      ") -> str:
     return f"{indent}- uses: {ACTIONS['checkout']}\n{indent}  with:\n{indent}    persist-credentials: false"
 
 
+def _harden_step(enabled: bool, indent: str = "      ") -> str:
+    if not enabled:
+        return ""
+    return f"{indent}- name: Harden runner\n{indent}  uses: {ACTIONS['harden_runner']}\n{indent}  with:\n{indent}    egress-policy: audit"
+
+
+def _action_variant(action: str, variant: str) -> str:
+    owner_repo, sha = action.split("@", 1)
+    return f"{owner_repo}/{variant}@{sha}"
+
+
 def _mise(indent: str = "      ") -> str:
     """mise installs every tool at the versions mise.toml pins: the single version authority."""
     return f"{indent}- name: Set up tools from mise.toml\n{indent}  uses: {ACTIONS['mise']}\n{indent}  with:\n{indent}    install: true\n{indent}    cache: true"
@@ -286,7 +302,7 @@ def _run(cmd: str, name: str | None = None) -> str:
     return prefix + cmd
 
 
-def _lane(name: str, steps: list[str], *, timeout: int = 15, env: dict[str, str] | None = None, gated: bool = True) -> str:
+def _lane(name: str, steps: list[str], *, timeout: int = 15, env: dict[str, str] | None = None, gated: bool = True, harden: bool = False) -> str:
     """A lane job. Gated lanes run only when the detector says their inputs changed.
 
     The job always exists (branch protection needs a stable check name); when unaffected it
@@ -298,7 +314,7 @@ def _lane(name: str, steps: list[str], *, timeout: int = 15, env: dict[str, str]
     header.append("    permissions:\n      contents: read")
     if env:
         header.append("    env:\n" + "\n".join(f"      {k}: {v}" for k, v in env.items()))
-    body = "\n".join([_checkout(), _mise(), *steps])
+    body = "\n".join(filter(None, [_harden_step(harden), _checkout(), _mise(), *steps]))
     return "\n".join(header) + f"\n    steps:\n{body}"
 
 
@@ -360,12 +376,12 @@ def _member_paths(values: dict[str, str], lane: str) -> list[str]:
 
 
 def build_ci_jobs(layers: list[str], values: dict[str, str]) -> str:
-    """Compose the standard validation workflow: a change detector, parallel lanes, and the fail-closed `gate`."""
+    """Compose validation lanes, optional CodeQL, and a fail-closed gate."""
     a = ACTIONS
+    harden = str(values.get("ci_harden_runner", "false")).lower() in TRUTHY
     jobs: list[str] = []
     gated: list[str] = []
     languages = [layer.split("/", 1)[1] for layer in layers if layer.startswith("lang/")]
-    # A monorepo's languages live on its members, not on the root profile.
     try:
         members = json.loads(values.get("members_json", "") or "[]")
     except json.JSONDecodeError:
@@ -379,19 +395,51 @@ def build_ci_jobs(layers: list[str], values: dict[str, str]) -> str:
         lane = _language_lane(language, values)
         if lane:
             gated.append(lane[0])
-            jobs.append(lane[1])
+            job = lane[1]
+            if harden:
+                job = job.replace("    steps:\n", "    steps:\n" + _harden_step(True) + "\n", 1)
+            jobs.append(job)
     if "hooks" in layers:
         gated.append("hooks")
-        jobs.append(_lane("hooks", [_run("prek run --all-files", "Run every hook")]))
+        jobs.append(_lane("hooks", [_run("prek run --all-files", "Run every hook")], harden=harden))
     if "agentic" in layers:
         gated.append("agentic")
         jobs.append(_lane("agentic", [_run("uvx --from agnix==0.52.2 agnix .", "Agentic lint"),
-                                      _run("git ls-files -z '*.md' | grep -zv CHANGELOG | xargs -0 --no-run-if-empty uvx --from slopvac slopvac --profile normal", "Prose gate")]))
-    # security always runs: workflow files and secrets are relevant to every change.
+                                      _run("git ls-files -z '*.md' | grep -zv CHANGELOG | xargs -0 --no-run-if-empty uvx --from slopvac slopvac --profile normal", "Prose gate")], harden=harden))
     jobs.append(_lane("security", [f"      - name: Workflow audit\n        uses: {a['zizmor']}",
                                    _run("uvx --from actionlint-py actionlint", "Actionlint"),
                                    f"      - name: Secret scan\n        uses: {a['gitleaks']}\n        env:\n          GITHUB_TOKEN: ${{{{ secrets.GITHUB_TOKEN }}}}"],
-                      timeout=10, env={"ACTIONS_CACHE_MODE": "none"}, gated=False))
+                      timeout=10, env={"ACTIONS_CACHE_MODE": "none"}, gated=False, harden=harden))
+
+    codeql_map = {"python": "python", "ts": "javascript-typescript", "go": "go"}
+    codeql_languages = list(dict.fromkeys(codeql_map[language] for language in languages if language in codeql_map))
+    codeql_enabled = str(values.get("ci_codeql", "false")).lower() in TRUTHY
+    if codeql_enabled and codeql_languages:
+        matrix = ", ".join(codeql_languages)
+        codeql_harden = _harden_step(harden)
+        codeql_steps = "\n".join(filter(None, [codeql_harden,
+            _checkout(),
+            f"      - name: Initialize CodeQL\n        uses: {_action_variant(a['codeql'], 'init')}\n        with:\n          languages: ${{{{ matrix.language }}}}",
+            f"      - name: Autobuild\n        id: autobuild\n        continue-on-error: true\n        uses: {_action_variant(a['codeql'], 'autobuild')}",
+            "      - name: Manual build fallback\n        if: steps.autobuild.outcome != 'success'\n        run: |\n          set -euo pipefail\n          case \"${{ matrix.language }}\" in\n            python) true ;;\n            javascript-typescript) bun install --frozen-lockfile ;;\n            go) go build ./... ;;\n            *) echo \"unsupported CodeQL language\" >&2; exit 1 ;;\n          esac",
+            f"      - name: Analyze\n        uses: {_action_variant(a['codeql'], 'analyze')}\n        with:\n          category: /language:${{{{ matrix.language }}}}"]))
+        jobs.append(f'''  codeql:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs: changes
+    if: needs.changes.result == 'success'
+    strategy:
+      fail-fast: false
+      matrix:
+        language: [{matrix}]
+    permissions:
+      contents: read
+      security-events: write
+    env:
+      ACTIONS_CACHE_MODE: none
+    steps:
+{codeql_steps}''')
+
     monorepo = str(values.get("layout", "single")) == "monorepo"
     filter_blocks: list[str] = []
     for name in gated:
@@ -401,8 +449,6 @@ def build_ci_jobs(layers: list[str], values: dict[str, str]) -> str:
         filter_blocks.append(f"            {name}:\n" + "\n".join(f"              - '{path}'" for path in paths))
     outputs = "".join(f"      {name}: ${{{{ steps.filter.outputs.{name} }}}}\n" for name in gated)
     changes = f'''  changes:
-    # Path detector. Every lane keys off one boolean here; the lane's job still exists when
-    # unaffected (branch protection needs stable check names) and `gate` reads the same boolean.
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -410,6 +456,7 @@ def build_ci_jobs(layers: list[str], values: dict[str, str]) -> str:
       pull-requests: read
     outputs:
 {outputs}    steps:
+{_harden_step(harden)}
 {_checkout()}
       - id: filter
         uses: {a['paths_filter']}
@@ -418,16 +465,16 @@ def build_ci_jobs(layers: list[str], values: dict[str, str]) -> str:
 {chr(10).join(filter_blocks)}
 '''
     all_lanes = [*gated, "security"]
+    if codeql_enabled and codeql_languages:
+        all_lanes.append("codeql")
     gate = f'''  gate:
-    # The only check branch protection requires. Fail-closed: a lane may be skipped only when
-    # the detector said its inputs did not change; any other non-success, or a failed detector,
-    # fails the gate.
     runs-on: ubuntu-latest
     timeout-minutes: 5
     needs: [changes, {", ".join(all_lanes)}]
     if: always()
     permissions: {{}}
     steps:
+{_harden_step(harden)}
       - name: Verify every lane passed or was legitimately unaffected
         env:
           NEEDS: ${{{{ toJSON(needs) }}}}
@@ -457,9 +504,130 @@ def build_ci_jobs(layers: list[str], values: dict[str, str]) -> str:
     return "\n".join([changes, *jobs, gate])
 
 
+def _tauri_release_jobs(values: dict[str, str]) -> str:
+    a = ACTIONS
+    harden = str(values.get("ci_harden_runner", "false")).lower() in TRUTHY
+    harden_step = _harden_step(harden)
+    return f'''  release-gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      checks: read
+    outputs:
+      tag: ${{{{ steps.tag.outputs.tag }}}}
+    env:
+      ACTIONS_CACHE_MODE: none
+    steps:
+{harden_step}
+      - id: tag
+        env:
+          EVENT_TAG: ${{{{ github.event.release.tag_name }}}}
+          INPUT_TAG: ${{{{ inputs.tag }}}}
+        run: echo "tag=${{EVENT_TAG:-$INPUT_TAG}}" >> "$GITHUB_OUTPUT"
+      - uses: {a['checkout']}
+        with:
+          ref: ${{{{ steps.tag.outputs.tag }}}}
+          persist-credentials: false
+      - name: Require the CI gate on the tagged commit
+        env:
+          GH_TOKEN: ${{{{ github.token }}}}
+        run: |
+          set -euo pipefail
+          sha="$(git rev-parse HEAD)"
+          gh api "repos/${{{{ github.repository }}}}/commits/${{sha}}/check-runs?check_name=gate" --jq '[.check_runs[]|select(.conclusion=="success")]|length' | grep -qx '[1-9]'
+
+  build-tauri:
+    name: Build Tauri (${{{{ matrix.target }}}})
+    needs: release-gate
+    if: matrix.os != 'macos-latest' || (vars.ENABLE_MACOS_SIGNING == 'true' && vars.APPLE_TEAM_ID != '')
+    runs-on: ${{{{ matrix.os }}}}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            target: aarch64-apple-darwin
+          - os: macos-latest
+            target: x86_64-apple-darwin
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    env:
+      ACTIONS_CACHE_MODE: none
+      GITHUB_TOKEN: ${{{{ secrets.GITHUB_TOKEN }}}}
+      TAURI_SIGNING_PRIVATE_KEY: ${{{{ secrets.TAURI_SIGNING_PRIVATE_KEY }}}}
+      TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{{{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}}}
+      APPLE_CERTIFICATE: ${{{{ secrets.APPLE_CERTIFICATE }}}}
+      APPLE_CERTIFICATE_PASSWORD: ${{{{ secrets.APPLE_CERTIFICATE_PASSWORD }}}}
+      APPLE_SIGNING_IDENTITY: ${{{{ vars.APPLE_SIGNING_IDENTITY }}}}
+      APPLE_ID: ${{{{ secrets.APPLE_ID }}}}
+      APPLE_PASSWORD: ${{{{ secrets.APPLE_PASSWORD }}}}
+      APPLE_TEAM_ID: ${{{{ vars.APPLE_TEAM_ID }}}}
+    steps:
+{harden_step}
+      - uses: {a['checkout']}
+        with:
+          ref: ${{{{ needs.release-gate.outputs.tag }}}}
+          persist-credentials: false
+      - uses: {a['mise']}
+        with:
+          install: true
+          cache: false
+      - name: Install frontend dependencies
+        run: bun install --frozen-lockfile
+      - name: Install Linux bundle dependencies
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev libayatana-appindicator3-dev patchelf
+      - name: Build and sign Tauri bundles
+        id: tauri
+        uses: {a['tauri']}
+        with:
+          projectPath: .
+          tauriScript: bun tauri
+          tagName: ${{{{ needs.release-gate.outputs.tag }}}}
+          releaseName: ${{{{ needs.release-gate.outputs.tag }}}}
+          releaseDraft: false
+          includeUpdaterJson: true
+          updaterJsonPreferNsis: true
+          args: --target ${{{{ matrix.target }}}}
+      - name: Generate SBOM
+        uses: {a['sbom']}
+        with:
+          path: src-tauri/target/release/bundle
+          format: spdx-json
+          output-file: src-tauri/target/release/bundle/sbom-${{{{ matrix.target }}}}.spdx.json
+      - name: Attest build provenance
+        uses: {a['attest']}
+        with:
+          subject-path: src-tauri/target/release/bundle/**/*
+      - name: Attest SBOM
+        uses: {a['attest_sbom']}
+        with:
+          subject-path: src-tauri/target/release/bundle/**/*
+          sbom-path: src-tauri/target/release/bundle/sbom-${{{{ matrix.target }}}}.spdx.json
+      - name: Verify attestations before publish
+        env:
+          GH_TOKEN: ${{{{ secrets.GITHUB_TOKEN }}}}
+        shell: bash
+        run: |
+          set -euo pipefail
+          while IFS= read -r artifact; do
+            gh attestation verify "$artifact" --repo "${{{{ github.repository }}}}"
+          done < <(find src-tauri/target/release/bundle -type f ! -name '*.sig' ! -name '*.spdx.json')
+'''
+
+
 def build_release_jobs(layers: list[str], values: dict[str, str]) -> str:
     """Compose the release workflow: release-gate, build with attestation, then one publish lane."""
     a = ACTIONS
+    if str(values.get("tauri", "false")).lower() in TRUTHY:
+        return _tauri_release_jobs(values)
     target = str(values.get("publish", "none"))
     check = str(values.get("commands_check", "")) or "true"
     test = str(values.get("commands_test", "")) or "true"
@@ -522,11 +690,30 @@ def build_release_jobs(layers: list[str], values: dict[str, str]) -> str:
       - name: Build the distributable once
         run: {build_cmd}
 '''
-    if target != "github-assets":
-        build += f'''      - name: Attest build provenance
+    build += f'''      - name: Generate SBOM
+        uses: {a['sbom']}
+        with:
+          path: dist
+          format: spdx-json
+          output-file: dist/sbom.spdx.json
+      - name: Attest build provenance
         uses: {a['attest']}
         with:
           subject-path: dist/*
+      - name: Attest SBOM
+        uses: {a['attest_sbom']}
+        with:
+          subject-path: dist/*
+          sbom-path: dist/sbom.spdx.json
+      - name: Verify attestations before publish
+        env:
+          GH_TOKEN: ${{{{ secrets.GITHUB_TOKEN }}}}
+        run: |
+          set -euo pipefail
+          for artifact in dist/*; do
+            [ "$(basename "$artifact")" = "sbom.spdx.json" ] && continue
+            gh attestation verify "$artifact" --repo "${{{{ github.repository }}}}"
+          done
       - uses: {a['upload_artifact']}
         with:
           name: dist
@@ -727,6 +914,10 @@ def resolve_selection(root: Path, profile_name: str | None, name: str | None, ov
     if isinstance(answer_vars, dict):
         values.update({str(k): value_default(v) for k, v in answer_vars.items()})
     values.update({str(k): str(v) for k, v in overrides.items()})
+    if "ci_codeql" not in values or not str(values.get("ci_codeql", "")).strip():
+        values["ci_codeql"] = "true" if str(values.get("visibility", "private")).lower() == "public" else "false"
+    if "ci_harden_runner" not in values or not str(values.get("ci_harden_runner", "")).strip():
+        values["ci_harden_runner"] = "false"
     is_ts_project = any(layer == "lang/ts" for layer in layers) or str(values.get("language", "")) == "ts" or selected_profile == "tauri-desktop"
     if not is_ts_project:
         # No generator on a non-TypeScript project; the value stays so lang/ts members render their skeleton.
@@ -2225,9 +2416,10 @@ def interview_questions(root: Path, profile_name: str | None = None) -> dict[str
         if isinstance(raw, dict):
             for key, value in raw.items():
                 if isinstance(value, dict) and value.get("ask") is True and not any(row["id"] == key for row in questions):
-                    # The profile's own value for a layer variable is that question's default, so
-                    # accepting defaults never contradicts the profile (static-site: docs_flavour=splash).
                     default = value_default(profile_var_values[key]) if key in profile_var_values else value_default(value)
+                    if key == "ci_codeql":
+                        visibility = str(profile_var_values.get("visibility", "")).lower()
+                        default = "true" if visibility == "public" else "false"
                     questions.append({"id": str(key), "prompt": str(value.get("prompt", key)), "required": bool(value.get("required", False)), "default": default, "source": f"layer:{layer}"})
     profile_language = str(profile_var_values.get("language", ""))
     profile_kind = str(profile_var_values.get("kind", ""))

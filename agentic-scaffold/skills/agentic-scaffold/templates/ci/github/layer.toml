@@ -7,3 +7,7 @@ blocks = []
 conflicts_with = []
 [tools]
 gh = "latest"
+
+[vars]
+ci_codeql = { default = "", prompt = "Enable CodeQL for supported selected languages (public repositories default to true when visibility is known; Rust is not a CodeQL language)", ask = true }
+ci_harden_runner = { default = "false", prompt = "Enable step-security/harden-runner in audit mode for every CI job; move to block after reading the audit", ask = true }

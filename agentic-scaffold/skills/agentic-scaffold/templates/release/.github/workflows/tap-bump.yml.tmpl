@@ -1,0 +1,25 @@
+name: Bump package taps
+
+on:
+  release:
+    types: [published]
+
+permissions: {}
+
+env:
+  ACTIONS_CACHE_MODE: none
+
+jobs:
+  dispatch-tap-bump:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Dispatch Homebrew tap bump
+        env:
+          GH_TOKEN: $${{ secrets.TAP_BUMP_TOKEN }}
+        run: gh workflow run bump.yml --repo ${github_owner}/homebrew-tap --field source_repo=$${{ GITHUB_REPOSITORY }} --field tag=$${{ github.event.release.tag_name }}
+      - name: Dispatch Scoop bucket bump
+        env:
+          GH_TOKEN: $${{ secrets.TAP_BUMP_TOKEN }}
+        run: gh workflow run update.yml --repo ${github_owner}/scoop-bucket --field source_repo=$${{ GITHUB_REPOSITORY }} --field tag=$${{ github.event.release.tag_name }}

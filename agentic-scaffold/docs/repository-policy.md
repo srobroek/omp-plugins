@@ -28,6 +28,20 @@ A maintainer does these once per repository, because the API does not let the la
 - Add required reviewers to the `release` environment where a publish warrants one.
 - Protect the default branch on a private repository whose plan lacks rulesets.
 
+## Release credentials
+
+A maintainer creates these repository secrets and variables before the first release:
+
+- `TAURI_SIGNING_PRIVATE_KEY` and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` for updater signatures.
+- `APPLE_CERTIFICATE`, `APPLE_CERTIFICATE_PASSWORD`, `APPLE_ID`, and `APPLE_PASSWORD` for macOS signing and notarization.
+- `APPLE_SIGNING_IDENTITY`, `APPLE_TEAM_ID`, and `ENABLE_MACOS_SIGNING` as Apple signing variables.
+- Windows signing secrets and variables required by the selected Windows signer.
+- `TAP_BUMP_TOKEN`, a fine-grained PAT with Actions access to `<owner>/homebrew-tap` and `<owner>/scoop-bucket`.
+- `RELEASE_APP_CLIENT_ID` and `RELEASE_APP_PRIVATE_KEY` for release-please GitHub App authentication.
+
+The maintainer configures required reviewers on the `release` environment. The reviewer approves
+registry publication and release asset publication.
+
 ## Runbook
 
 1. Authorize `gh` for the repository owner: `gh auth status`.
