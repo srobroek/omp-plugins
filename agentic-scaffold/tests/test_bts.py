@@ -112,3 +112,21 @@ def test_bts_questions_wait_for_the_typescript_answer(tmp_path: Path):
     assert not any(item.startswith("bts") for item in ids("ts-app", {**fixed, "language": "ts", "bts": "false"}))
     assert ids("ts-app", {**fixed, "language": "ts", "bts": "true"})[:3] == ["bts_frontend", "bts_backend", "bts_runtime"]
     assert ids("monorepo", {**fixed, "language": "ts"}) == ["bts_layout", "bts_package_manager"]
+
+
+def test_bts_questions_follow_the_layers_answer_in_a_brownfield_repository(tmp_path: Path):
+    scaffold = module()
+    root = tmp_path / "dotfiles"
+    root.mkdir()
+    subprocess.run(["git", "init", "-q"], cwd=root, check=True)
+    (root / "README.md").write_text("# dotfiles\n")
+    def ids(answers: dict[str, str]) -> list[str]:
+        payload, code = scaffold.interview_verb(root, "agentic-repo", json.dumps(answers))
+        assert code == 0
+        return [row["id"] for row in payload["ask"]["questions"]]
+    assert ids({}) == ["profile", "layers"]
+    assert not any(item.startswith("bts") for item in ids({"profile": "agentic-repo", "layers": "base,agentic,hooks,tooling", "github_owner": "s"}))
+    with_ts = {"profile": "agentic-repo", "layers": "base,agentic,lang/ts", "github_owner": "s"}
+    assert ids(with_ts) == ["bts"]
+    assert ids({**with_ts, "bts": "false"}) == []
+    assert ids({**with_ts, "bts": "true"})[:2] == ["bts_frontend", "bts_backend"]

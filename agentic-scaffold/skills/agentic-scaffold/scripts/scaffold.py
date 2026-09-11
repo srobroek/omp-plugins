@@ -2237,11 +2237,13 @@ def interview_questions(root: Path, profile_name: str | None = None) -> dict[str
     # Better-T-Stack enters the interview only after the human has chosen TypeScript (and an
     # application kind); until then no bts_* question is visible on any profile.
     is_workspace = str(profile_var_values.get("layout", "")) == "monorepo"
-    if (asks_language or ts_project) and not is_workspace:
-        after_ts: dict[str, Any] = {"depends_on": [key for key, present in (("language", asks_language), ("kind", asks_kind)) if present], "when": {**({"language": "ts"} if asks_language else {}), **({"kind": "app"} if asks_kind else {})}}
+    # Greenfield: the `language` answer is the gate. Brownfield: the `layers` answer must include lang/ts.
+    ts_gate: dict[str, Any] = {"depends_on": ["language"], "when": {"language": "ts"}} if asks_language else {"depends_on": ["layers"], "when_layers_include": "lang/ts"}
+    if (asks_language or brownfield) and not is_workspace:
+        after_ts: dict[str, Any] = {"depends_on": [*ts_gate["depends_on"], *(["kind"] if asks_kind else [])], "when": {**ts_gate.get("when", {}), **({"kind": "app"} if asks_kind else {})}, **({"when_layers_include": ts_gate["when_layers_include"]} if "when_layers_include" in ts_gate else {})}
         addons_default = ["turborepo", "tauri"] if suggested == "tauri-desktop" else ["turborepo"]
         def bts_row(key: str, prompt: str, default: Any, options: list[str], *, multi: bool = False) -> dict[str, Any]:
-            return {"id": key, "prompt": prompt, "question": prompt, "required": False, "default": default, "allowed": options, "options": options, "multi": multi, "source": "better-t-stack", "depends_on": [*after_ts["depends_on"], "bts"], "when": {**after_ts["when"], "bts": "true"}}
+            return {"id": key, "prompt": prompt, "question": prompt, "required": False, "default": default, "allowed": options, "options": options, "multi": multi, "source": "better-t-stack", **{k: v for k, v in after_ts.items() if k == "when_layers_include"}, "depends_on": [*after_ts["depends_on"], "bts"], "when": {**after_ts["when"], "bts": "true"}}
         questions.append({"id": "bts", "prompt": "Better-T-Stack", "question": "Generate the application skeleton with Better-T-Stack? Answer false to keep the existing stack and render only governance, CI, release, hooks, and agent files.", "required": False, "default": "false" if brownfield else "true", "allowed": ["true", "false"], "options": ["true", "false"], "source": "better-t-stack", **after_ts})
         questions.extend([
             bts_row("bts_frontend", "Better-T-Stack frontend", "tanstack-router", ["tanstack-router", "react-router", "tanstack-start", "next", "nuxt", "native-bare", "native-uniwind", "native-unistyles", "svelte", "solid", "astro", "none"]),
@@ -2261,7 +2263,7 @@ def interview_questions(root: Path, profile_name: str | None = None) -> dict[str
         questions.append(row)
     if is_workspace:
         # A workspace is generated only when its language is TypeScript; the questions wait for that answer.
-        ts_only = {"depends_on": ["language"], "when": {"language": "ts"}}
+        ts_only = ts_gate
         questions.append({"id": "bts_layout", "prompt": "TypeScript workspace generator", "question": "Generate the TypeScript workspace with Better-T-Stack?", "required": False, "default": "turborepo", "allowed": ["turborepo", "none"], "options": ["turborepo", "none"], "source": "better-t-stack", **ts_only})
         if not any(row["id"] == "bts_package_manager" for row in questions):
             questions.append({"id": "bts_package_manager", "prompt": "Better-T-Stack package manager", "question": "Better-T-Stack package manager", "required": False, "default": "pnpm", "allowed": ["npm", "pnpm", "bun"], "options": ["npm", "pnpm", "bun"], "source": "better-t-stack", **ts_only})
@@ -2679,6 +2681,12 @@ def _question_visible(row: dict[str, Any], answers: dict[str, Any]) -> bool:
             expected_values = expected if isinstance(expected, list) else [expected]
             if actual not in expected_values and str(actual) not in {str(item) for item in expected_values}:
                 return False
+    required_layer = row.get("when_layers_include")
+    if required_layer:
+        chosen = answers.get("layers", [])
+        chosen_layers = [item.strip() for item in (chosen.split(",") if isinstance(chosen, str) else chosen)]
+        if str(required_layer) not in chosen_layers:
+            return False
     source = str(row.get("source", ""))
     question_id = str(row.get("id", ""))
     if source.startswith("layer:") and not _question_answered(answers, "layers"):
@@ -2770,7 +2778,8 @@ def interview_verb(root: Path, profile_name: str | None, answers_raw: str | None
         options, recommended, overflow = _question_options(row)
         question = str(row.get("question", row.get("prompt", row.get("id", ""))))
         if overflow:
-            question += " Also accepted (type one as your own answer): " + ", ".join(overflow) + "."
+            typed = "a comma-separated list" if row.get("multi") else "one"
+            question += f" More accepted values (choose Other and type {typed}): " + ", ".join(overflow) + "."
         ask_questions.append({"id": str(row.get("id")), "question": question, "options": options, "recommended": recommended, "multi": bool(row.get("multi", False))})
     return {"ok": True, "profile": profile_name or interview.get("profile"), "questions": page, "remaining": len(pending), "complete": not pending, "ask": {"questions": ask_questions}}, 0
 

@@ -10,10 +10,15 @@ The lead invokes each command through the `scaffold` tool.
 python3 "$SCAFFOLD" start --root R --profile P
 ```
 
-Read `findings.markdown`, `findings.rows`, `blockers`, `recommended_profile`, and `ask`.
+Read these fields:
+
+- `findings.markdown` and `findings.rows`
+- `blockers`
+- `recommended_profile`
+- `ask`
 The findings include detected stacks, tooling, layers, missing tools, and preflight lines.
 A clean tree with no blockers offers `Continue to the interview` and `Stop`.
-A dirty tree is a hard blocker and offers only `Stop`.
+A dirty tree is a hard blocker; its only option is `Stop`.
 Do not write files before the human selects `Continue to the interview`.
 
 ## 2. Interview
@@ -24,7 +29,7 @@ python3 "$SCAFFOLD" interview --root R --profile P [--answers-so-far JSON]
 
 Read the returned `ask` object. Each page has at most five questions and each question has
 at most five options. When a question accepts more values than the page shows, the question text
-lists the remaining accepted values; the human types one as a free answer. Pass selected answers in `--answers-so-far` as one JSON object.
+lists the remaining accepted values; the human chooses `Other` and types the value. Pass selected answers in `--answers-so-far` as one JSON object.
 Repeat until `complete` is true. Preserve the question ids and multi-value arrays.
 The CLI orders layout and shape, members, kind, profile and layers, license, docs, publish,
 and layer variables. Dependent questions appear after their answers.
@@ -47,11 +52,10 @@ Do not run the next verb until the human selects `Apply`.
 python3 "$SCAFFOLD" run --root R
 ```
 
-The command applies every stage and runs doctor. The `provision` stage runs Better-T-Stack for
-TypeScript applications, Tauri frontends, TypeScript-only monorepos, and Starlight sites. It writes
-only into an empty root or a new member directory and refuses any other target; the refusal names
-the adopt path (`bts=false`: keep the existing stack, render governance, CI, release, hooks, and
-agent files only). `plan` shows the exact generator command before anything runs. Read `status`, `doctor`, `stages`, and
+The command applies every stage and runs doctor. The `provision` stage runs Better-T-Stack when
+the interview answered `bts = true`. It writes only into an empty root and refuses any other
+target. The refusal names the adopt path: `bts = false` keeps the existing stack and renders the
+scaffold layers only. `plan` shows the exact generator command before anything runs. Read `status`, `doctor`, `stages`, and
 `commitCommand`. A successful run returns `READY_FOR_COMMIT` and per-stage `seconds`.
 The agent never runs the commit command.
 
@@ -83,4 +87,4 @@ The agent does not run revert commands.
 6. Stop on non-zero and report the command JSON verbatim.
 7. Exit codes are `0` success, `1` error, `2` drift, `3` needs input, `5` conflict, and `6` boundary.
 8. Do not hand-edit generated answers or rendered files.
-9. Every stop is an `ask`. A boundary refusal, advisor block, or failed stage offers only `Stop` and an explanation.
+9. Every stop is an `ask`. A boundary refusal, advisor block, or failed stage has one option, `Stop`, with an explanation.
