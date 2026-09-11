@@ -17,9 +17,30 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null;
 }
 
-export function parseFrontmatter(text: string): Frontmatter {
+/**
+ * True when a block opened with `---` and never closed.
+ *
+ * A file with no block at all is a different condition: nothing was declared, so
+ * nothing was lost. An unterminated block means fields ARE present in the file and
+ * the parser discarded them, which is worth naming.
+ */
+export function frontmatterIsUnterminated(text: string): boolean {
 	const lines = text.split("\n");
-	if (!lines.length || lines[0]?.trim() !== "---") return {};
+	if (!lines.length || lines[0]?.trim() !== "---") return false;
+	return lines.slice(1).every((line) => line.trim() !== "---");
+}
+
+/**
+ * Returns null when the block is absent or unterminated, and {} only for a block
+ * that terminated with nothing in it.
+ *
+ * An empty object used to mean both, so a caller probing truthiness could not tell
+ * a malformed file from an empty one - `index` rendered a truncated run as `? ?`
+ * and reported nothing.
+ */
+export function parseFrontmatter(text: string): Frontmatter | null {
+	const lines = text.split("\n");
+	if (!lines.length || lines[0]?.trim() !== "---") return null;
 	const fm: Frontmatter = {};
 	for (const line of lines.slice(1)) {
 		if (line.trim() === "---") return fm;
@@ -43,8 +64,9 @@ export function parseFrontmatter(text: string): Frontmatter {
 			fm[key] = raw;
 		}
 	}
-	// Loop exhausted without a closing `---`: the block is not frontmatter at all.
-	return {};
+	// Loop exhausted without a closing `---`: fields were present and are being
+	// discarded, which is not the same as a file that declared nothing.
+	return null;
 }
 
 /**
@@ -153,7 +175,15 @@ export function latestRun(jdir: string): Frontmatter | null {
 		.map((n) => join(runsDir, n));
 	const last = runs.at(-1);
 	if (!last) return null;
-	const fm = parseFrontmatter(readFileSync(last, "utf8"));
+	const text = readFileSync(last, "utf8");
+	const fm = parseFrontmatter(text);
+	if (!fm) {
+		// A truncated block had fields the parser threw away, so callers must be able
+		// to say so. A run with no block at all declared nothing and keeps its previous
+		// rendering - that is a lint concern, not a lost-data one.
+		if (frontmatterIsUnterminated(text)) return { _file: basename(last), _malformed: "1" };
+		return { _file: basename(last) };
+	}
 	fm._file = basename(last);
 	return fm;
 }
@@ -181,11 +211,23 @@ export function cmdIndex(root: string): { ok: boolean; text: string; count: numb
 	safeJourneyPaths(root);
 	const findings = openFindings(root);
 	const rows: string[] = [];
+	const unreadable: string[] = [];
 	for (const jdir of journeyDirs(root)) {
-		const fm = parseFrontmatter(readFileSync(join(jdir, "journey.md"), "utf8"));
+		const journeyText = readFileSync(join(jdir, "journey.md"), "utf8");
+		const parsed = parseFrontmatter(journeyText);
+		let fm: Frontmatter = parsed ?? {};
+		if (!parsed && frontmatterIsUnterminated(journeyText)) {
+			// Fields were present and discarded; say so rather than rendering every
+			// column as `?`, which reads as a journey that simply omitted them.
+			unreadable.push(`${basename(jdir)}/journey.md`);
+			fm = { title: "**unreadable frontmatter**" };
+		}
 		const run = latestRun(jdir);
 		let last = "never";
-		if (run) {
+		if (run?._malformed) {
+			unreadable.push(`${basename(jdir)}/runs/${String(run._file)}`);
+			last = `**unreadable** (${String(run._file)})`;
+		} else if (run) {
 			const mode = String(run.mode ?? "full").split("(")[0];
 			last = `${run.date ?? "?"} ${run.result ?? "?"} (${mode})`;
 		}
@@ -208,7 +250,11 @@ export function cmdIndex(root: string): { ok: boolean; text: string; count: numb
 		"",
 	].join("\n");
 	writeFileSync(join(root, "INDEX.md"), body, "utf8");
-	return { ok: true, text: `INDEX.md: ${rows.length} journeys`, count: rows.length };
+	// Named in the result and marked in the row, which is what the defect needed: the
+	// old code reported nothing at all. `ok` stays true because index generates and
+	// lint validates - lint reports the same file as an error.
+	const notes = unreadable.map((rel) => `\nERROR ${rel}: unreadable frontmatter, rendered as unreadable`).join("");
+	return { ok: true, text: `INDEX.md: ${rows.length} journeys${notes}`, count: rows.length };
 }
 
 export function lintJourney(jdir: string, errors: string[], seenIds: Record<string, string>): void {
@@ -216,7 +262,7 @@ export function lintJourney(jdir: string, errors: string[], seenIds: Record<stri
 	const text = readFileSync(path, "utf8");
 	const rel = `${basename(jdir)}/journey.md`;
 	const fm = parseFrontmatter(text);
-	if (!Object.keys(fm).length) {
+	if (!fm) {
 		errors.push(`${rel}: missing or unterminated frontmatter`);
 		return;
 	}
@@ -225,8 +271,13 @@ export function lintJourney(jdir: string, errors: string[], seenIds: Record<stri
 	}
 	const jid = typeof fm.id === "string" ? fm.id : "";
 	if (jid && !JOURNEY_ID.test(jid)) errors.push(`${rel}: id \`${jid}\` does not match J<n>`);
-	if (jid in seenIds) errors.push(`${rel}: duplicate id \`${jid}\` (also ${seenIds[jid]})`);
-	seenIds[jid] = rel;
+	// Only a declared id can collide. Journeys with no `id:` all read as "", so an
+	// unguarded write made the second one report ``duplicate id ` ` `` - noise beside
+	// the `missing id` error that already names the real problem.
+	if (jid) {
+		if (jid in seenIds) errors.push(`${rel}: duplicate id \`${jid}\` (also ${seenIds[jid]})`);
+		seenIds[jid] = rel;
+	}
 	if (jid && !basename(jdir).startsWith(`${jid}-`)) {
 		errors.push(`${rel}: directory \`${basename(jdir)}\` does not start with \`${jid}-\``);
 	}
@@ -275,8 +326,8 @@ export function lintJourney(jdir: string, errors: string[], seenIds: Record<stri
 		const run = join(runsDir, name);
 		const rfm = parseFrontmatter(readFileSync(run, "utf8"));
 		const rrel = `${basename(jdir)}/runs/${name}`;
-		if (!Object.keys(rfm).length) {
-			errors.push(`${rrel}: missing frontmatter`);
+		if (!rfm) {
+			errors.push(`${rrel}: missing or unterminated frontmatter`);
 			continue;
 		}
 		if (rfm.journey !== jid) errors.push(`${rrel}: journey \`${rfm.journey}\` != \`${jid}\``);

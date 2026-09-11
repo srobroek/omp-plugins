@@ -4,8 +4,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import {
-	cmdLint,
+	cmdIndex,
+	frontmatterIsUnterminated,
 	installFormulas,
+	lintJourney,
 	parseFrontmatter,
 	runJourneys,
 } from "./journeys-tool.ts";
@@ -15,11 +17,20 @@ import {
 describe("parseFrontmatter", () => {
 	test("parses scalars and lists", () => {
 		const fm = parseFrontmatter("---\nid: J1\nsurfaces: [web, cli]\n---\nbody");
-		expect(fm.id).toBe("J1");
-		expect(fm.surfaces).toEqual(["web", "cli"]);
+		expect(fm?.id).toBe("J1");
+		expect(fm?.surfaces).toEqual(["web", "cli"]);
 	});
-	test("unterminated returns empty", () => {
-		expect(parseFrontmatter("---\nid: J1\n")).toEqual({});
+	test("absent and unterminated are both unreadable, and stay distinguishable", () => {
+		// null for either, so no caller mistakes a truncated file for an empty one.
+		expect(parseFrontmatter("---\nid: J1\n")).toBeNull();
+		expect(parseFrontmatter("no frontmatter here\n")).toBeNull();
+		// Only a truncated block means fields were present and discarded. A file that
+		// declared nothing lost nothing, and callers must keep treating it differently.
+		expect(frontmatterIsUnterminated("---\nid: J1\n")).toBe(true);
+		expect(frontmatterIsUnterminated("no frontmatter here\n")).toBe(false);
+	});
+	test("a block that terminated empty is readable, and empty", () => {
+		expect(parseFrontmatter("---\n---\n")).toEqual({});
 	});
 });
 
@@ -215,3 +226,81 @@ test.each(["native", "python"] as const)("pruning %s preserves unapproved journe
 	}
 });
 
+
+describe("defects ported from journeys.py (omp-plugins-jh0)", () => {
+	const mkroot = () => mkdtempSync(join(tmpdir(), "jh0-"));
+	const journey = (root: string, name: string, body: string) => {
+		mkdirSync(join(root, name), { recursive: true });
+		writeFileSync(join(root, name, "journey.md"), body, "utf8");
+		return join(root, name);
+	};
+	const FULL = "---\nid: J1\ntitle: alpha\nstatus: active\nversion: 1\nlast_reviewed: 2026-01-01\n---\n";
+
+	test("journeys without an id do not collide", () => {
+		// Both read as "", so an unconditional seenIds write made the second report
+		// ``duplicate id ` ` `` beside the `missing id` error already naming the cause.
+		const root = mkroot();
+		journey(root, "J1-alpha", "---\ntitle: alpha\n---\n");
+		journey(root, "J2-beta", "---\ntitle: beta\n---\n");
+		const errors: string[] = [];
+		const seen: Record<string, string> = {};
+		for (const n of ["J1-alpha", "J2-beta"]) lintJourney(join(root, n), errors, seen);
+		expect(errors.filter((e) => e.includes("duplicate id"))).toEqual([]);
+		// The real defect is still reported, once per journey.
+		expect(errors.filter((e) => e.includes("missing `id`"))).toHaveLength(2);
+		rmSync(root, { recursive: true, force: true });
+	});
+
+	test("a shared id is still reported", () => {
+		const root = mkroot();
+		journey(root, "J1-alpha", "---\nid: J1\ntitle: alpha\n---\n");
+		journey(root, "J1-beta", "---\nid: J1\ntitle: beta\n---\n");
+		const errors: string[] = [];
+		const seen: Record<string, string> = {};
+		for (const n of ["J1-alpha", "J1-beta"]) lintJourney(join(root, n), errors, seen);
+		expect(errors.filter((e) => e.includes("duplicate id `J1`"))).toHaveLength(1);
+		rmSync(root, { recursive: true, force: true });
+	});
+
+	test("index names an unreadable run instead of rendering it as `? ?`", () => {
+		// latestRun assigned _file onto the empty parse result, making failure truthy,
+		// so cmdIndex could not tell a truncated run from one missing optional fields.
+		const root = mkroot();
+		const jdir = journey(root, "J1-alpha", FULL);
+		mkdirSync(join(jdir, "runs"), { recursive: true });
+		// Every field a reader wants is present; only the terminator is missing.
+		writeFileSync(join(jdir, "runs", "r.md"), "---\njourney: J1\ndate: 2026-09-11\nresult: pass\nmode: full\n", "utf8");
+		const result = cmdIndex(root);
+		const row = readFileSync(join(root, "INDEX.md"), "utf8").split("\n").find((l) => l.startsWith("| [J1]")) ?? "";
+		expect(row).toContain("unreadable");
+		expect(row).not.toContain("? ?");
+		expect(result.text).toContain("ERROR J1-alpha/runs/r.md");
+		// index generates and lint validates, so the status is unchanged.
+		expect(result.ok).toBe(true);
+		rmSync(root, { recursive: true, force: true });
+	});
+
+	test("a run with no frontmatter is not treated as lost data", () => {
+		// Absent declared nothing, so nothing was discarded - only a truncated block
+		// means fields were thrown away. Conflating them fails the seeded-run cases.
+		const root = mkroot();
+		const jdir = journey(root, "J1-alpha", FULL);
+		mkdirSync(join(jdir, "runs"), { recursive: true });
+		writeFileSync(join(jdir, "runs", "2026-01-01.md"), "old", "utf8");
+		const result = cmdIndex(root);
+		expect(result.text).not.toContain("ERROR");
+		expect(result.ok).toBe(true);
+		rmSync(root, { recursive: true, force: true });
+	});
+
+	test("index is unchanged for a well-formed run", () => {
+		const root = mkroot();
+		const jdir = journey(root, "J1-alpha", FULL);
+		mkdirSync(join(jdir, "runs"), { recursive: true });
+		writeFileSync(join(jdir, "runs", "r.md"), "---\njourney: J1\ndate: 2026-09-11\nresult: pass\nmode: full\n---\n", "utf8");
+		expect(cmdIndex(root).text).not.toContain("ERROR");
+		const row = readFileSync(join(root, "INDEX.md"), "utf8").split("\n").find((l) => l.startsWith("| [J1]")) ?? "";
+		expect(row).toContain("2026-09-11 pass (full)");
+		rmSync(root, { recursive: true, force: true });
+	});
+});
