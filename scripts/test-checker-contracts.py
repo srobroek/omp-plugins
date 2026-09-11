@@ -52,6 +52,41 @@ class CheckerContracts(unittest.TestCase):
                 self.assertIn("FAIL", result.stderr)
                 self.assertEqual(before, self.snapshot())
 
+    def test_duplicate_check_rejects_drift_symlinks_and_missing_copies(self) -> None:
+        """A symlinked copy reads back the canonical bytes, so bytes alone cannot judge it.
+
+        The contract is two real copies, one per plugin, because each plugin bundles in
+        isolation. A link across the boundary satisfies a byte comparison while breaking
+        the contract, so it has to be rejected on file type rather than on content.
+        """
+        self.copy_script("check-shared-detector.py")
+        first = self.root / "dep-update" / "extensions" / "detect.ts"
+        second = self.root / "whats-new" / "extensions" / "detect.ts"
+        for path in (first, second):
+            path.parent.mkdir(parents=True)
+            path.write_text("export const shared = 1;\n", encoding="utf-8")
+
+        identical = self.run_script("check-shared-detector.py")
+        self.assertEqual(identical.returncode, 0, identical.stdout)
+        self.assertIn("PASS", identical.stdout)
+
+        second.write_text("export const shared = 2;\n", encoding="utf-8")
+        drifted = self.run_script("check-shared-detector.py")
+        self.assertNotEqual(drifted.returncode, 0)
+        self.assertIn("drifted", drifted.stdout)
+
+        second.unlink()
+        second.symlink_to(Path("..") / ".." / "dep-update" / "extensions" / "detect.ts")
+        self.assertEqual(second.read_bytes(), first.read_bytes(), "premise: bytes match through the link")
+        linked = self.run_script("check-shared-detector.py")
+        self.assertNotEqual(linked.returncode, 0, "a symlinked copy must not pass on identical bytes")
+        self.assertIn("symlinked", linked.stdout)
+
+        second.unlink()
+        absent = self.run_script("check-shared-detector.py")
+        self.assertNotEqual(absent.returncode, 0)
+        self.assertIn("incomplete", absent.stdout)
+
     def test_manifest_check_detects_missing_stale_and_invalid_packages(self) -> None:
         self.copy_script("sync-plugin-manifests.py")
         result = self.run_script("sync-plugin-manifests.py")
