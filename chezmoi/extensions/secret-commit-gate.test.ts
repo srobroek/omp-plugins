@@ -165,6 +165,27 @@ describe("targetName", () => {
 });
 
 describe("secretStagedPaths", () => {
+	test("credential words are matched as whole segments or camelCase, not substrings", () => {
+		// Loose /token/i, /secret/i and /credential/i hard-blocked ordinary names with no
+		// override. Anchoring must not cost detection, so both sides are asserted: every
+		// real credential spelling still blocks, and the ordinary names stop blocking.
+		const blocks = ["api_token", "token", "tokens", "secret", "secrets.md", "my-secret-file",
+			"client_credentials.json", "access-token.txt", "SECRET_KEY", "dot_netrc_token",
+			"apiToken", "mySecret", "awsCredentials", "gh_token.txt", "private_secret_env"];
+		const allows = ["secretary-contacts.md", "noncredentialed.md", "tokenizer.py",
+			"secretarial.txt", "credentialing-notes.md", "readme.md", "dot_zshrc"];
+		for (const name of blocks) {
+			expect(secretStagedPaths([`dotfiles/${name}`], "dotfiles/"), name).toEqual([`dotfiles/${name}`]);
+		}
+		for (const name of allows) {
+			expect(secretStagedPaths([`dotfiles/${name}`], "dotfiles/"), name).toEqual([]);
+		}
+		// Still blocked, deliberately: a delimited `-tokens.` segment is exactly how
+		// credential files are named, so the name alone cannot separate this from
+		// gh-tokens.json. Template it or rename it.
+		expect(secretStagedPaths(["dotfiles/design-tokens.md"], "dotfiles/")).toEqual(["dotfiles/design-tokens.md"]);
+	});
+
 	test("flags credential-named source files", () => {
 		const staged = [
 			"dotfiles/private_dot_ssh/private_id_ed25519",

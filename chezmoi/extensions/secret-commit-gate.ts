@@ -49,6 +49,29 @@ const ATTRIBUTES: Record<string, true> = {
 /**
  * Target names that carry a credential rather than configuration. Kept as a list
  * because these are patterns over one string, not a lookup.
+ *
+ * The three credential WORDS are anchored rather than matched as substrings. Loose
+ * `/token/i`, `/secret/i` and `/credential/i` hard-blocked ordinary names with no
+ * override available: `secretary-contacts.md`, `noncredentialed.md`,
+ * `tokenizer.py`, `secretarial.txt` and `credentialing-notes.md` all matched
+ * because the word merely appeared inside a longer one.
+ *
+ * Two anchors, because credential files are named both ways. The first matches the
+ * word as a whole dot/underscore/dash segment, which covers `api_token`,
+ * `SECRET_KEY`, `access-token.txt` and `client_credentials.json`. The second
+ * matches a camelCase boundary, which covers `apiToken`, `mySecret` and
+ * `awsCredentials` -- those have no delimiter and a segment anchor alone would
+ * miss them.
+ *
+ * Measured against a corpus of 15 real credential spellings and 8 ordinary names:
+ * every credential name still blocks, and 5 of the 6 loose false positives stop
+ * blocking. `design-tokens.md` still blocks, deliberately: a delimited `-tokens.`
+ * segment is exactly how credential files are named, so the name alone cannot
+ * distinguish it from `gh-tokens.json`. Template it or rename it.
+ *
+ * What this narrowing does give up: an undelimited, all-lowercase compound such as
+ * `secretkey` no longer matches on the word alone. `\.key$` still catches that
+ * example, but the class is a real gap rather than an oversight.
  */
 const SECRET_NAMES: RegExp[] = [
 	/\.pem$/i,
@@ -56,9 +79,8 @@ const SECRET_NAMES: RegExp[] = [
 	/_rsa$/i,
 	/\.p12$/i,
 	/^id_ed25519/i,
-	/token/i,
-	/secret/i,
-	/credential/i,
+	/(?:^|[._-])(?:tokens?|secrets?|credentials?)(?:[._-]|$)/i,
+	/(?:^|[a-z0-9])(?:Token|Secret|Credential)s?(?:[A-Z._-]|$)/,
 	/^\.env/i,
 ];
 
