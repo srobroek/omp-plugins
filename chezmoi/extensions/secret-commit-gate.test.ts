@@ -323,6 +323,18 @@ describe("decideCommit", () => {
 			['sh -c "cd src && git commit"', true],
 			["env sh -c 'cd src && git commit'", true],
 			["cd src; sh -c 'git commit'", true],
+			// Interpreter reached by path, and assignments or env between the prefix and
+			// the shell. Each of these was a live bypass of the regex this replaced, and
+			// each was verified to run its commit in the target directory.
+			["/bin/sh -c 'cd src && git commit'", true],
+			["env FOO=1 sh -c 'cd src && git commit'", true],
+			["FOO=1 sh -c 'cd src && git commit'", true],
+			["/usr/bin/env bash -c 'cd src && git commit'", true],
+			["command sh -c 'cd src && git commit'", true],
+			// A shell named without -c runs no script of its own.
+			["sh /tmp/script.sh; git commit -m x", false],
+			// A path that merely CONTAINS a shell name is not an interpreter.
+			["git commit -m x -- tools/bash/readme.md", false],
 			// Substitution expands inside DOUBLE quotes, so it nests.
 			['git commit -m "$(cd src && pwd)"', true],
 			['git commit -m "`cd src && pwd`"', true],

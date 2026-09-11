@@ -476,7 +476,47 @@ export function nestsShell(command: string): boolean {
 	}
 	// A command word that hands a whole script to another shell is the same problem
 	// reached a different way: the payload is one opaque token to the tokeniser.
-	return /(?:^|[;&|]|\bcommand\b|\benv\b)\s*(?:eval\b|(?:ba|z|k|da)?sh\s+-c\b)/.test(bare.join(""));
+	return handsOffToShell(bare.join(""));
+}
+
+/** Shells whose `-c` argument is a script this walk cannot follow. */
+const NESTING_SHELLS: Record<string, true> = { sh: true, bash: true, zsh: true, ksh: true, dash: true, ash: true, busybox: true };
+
+/**
+ * Whether any command in `bare` hands a script to another shell.
+ *
+ * This replaced a regex that anchored on `env`/`command` sitting immediately
+ * before the shell word, which three real shapes walked straight past:
+ * `env FOO=1 sh -c ...`, `FOO=1 sh -c ...` and `/bin/sh -c ...`. Each was verified
+ * to run its commit in the target directory while the guard allowed it. Looking at
+ * the command word instead of its neighbourhood covers all three, and covers a
+ * path-qualified interpreter without enumerating prefixes.
+ *
+ * `bare` is the unquoted text only, so `sh -c 'script'` arrives as `sh -c` with
+ * the payload already elided -- which is exactly what makes the `-c` visible.
+ */
+function handsOffToShell(bare: string): boolean {
+	for (const segment of bare.split(/[;&|\n]+/)) {
+		const words = segment.trim().split(/\s+/).filter(Boolean);
+		let at = 0;
+		// Skip a leading `env`/`command` and any VAR=VALUE assignments: they precede the
+		// real command word rather than being it. Names are compared without their
+		// directory throughout, because `/usr/bin/env bash -c` and `/bin/sh -c` are as
+		// common as the bare spellings, and anchoring on the bare ones is what let
+		// `env FOO=1 sh -c`, `FOO=1 sh -c` and `/bin/sh -c` through.
+		while (at < words.length) {
+			const word = words[at]!;
+			const leading = word.split("/").pop() ?? word;
+			if (leading !== "env" && leading !== "command" && !/^[A-Za-z_][A-Za-z0-9_]*=/.test(word)) break;
+			at++;
+		}
+		const head = words[at];
+		if (head === undefined) continue;
+		const name = head.split("/").pop() ?? head;
+		if (name === "eval") return true;
+		if (NESTING_SHELLS[name] === true && words.slice(at + 1).some((word) => word === "-c" || /^-[a-z]*c$/.test(word))) return true;
+	}
+	return false;
 }
 
 export function decideCommit(command: string, cwd: string): { block: true; reason: string } | undefined {
