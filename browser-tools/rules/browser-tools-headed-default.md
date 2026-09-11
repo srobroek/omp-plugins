@@ -9,7 +9,7 @@ description: Use for headed, authenticated, extension-dependent, or profile-boun
 | human-visible interactive flow, manual MFA, or 1Password unlock | headed tools with `headless: false`; act inside the agent's browser window |
 | Chromium performance trace, coverage, or CDP domain | built-in `browser` plus `chrome-devtools` MCP |
 | WCAG audit with axe-core | `design` plugin `accessibility-scanner` MCP |
-| WebKit engine check | `playwright-cross-engine` MCP |
+| WebKit engine check | `playwright-cross-engine` MCP, which ships disabled: enable it and install the WebKit build first, or report the check as unavailable rather than substituting another engine |
 | headless scrape of a public page | built-in `browser` |
 
 MUST launch from a clone, never the live profile.
