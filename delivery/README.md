@@ -14,7 +14,7 @@ Its rules cover delivery, automated-review fix loops, landing proof, and links t
 | Name | When |
 | --- | --- |
 | `delivery-cadence` | Keeping commits atomic. Pushing finished work continuously. |
-| `delivery-git-workflow` | Working with branches and PRs. Running automated-review fix and escalation loops. Proving a landing under GW-3. Linking beads to the merge queue. Following GW-1/GW-2. |
+| `delivery-git-workflow` | Working with branches and PRs. Running automated-review fix and escalation loops. Working in a Worktrunk worktree and removing it after landing (GW-5/GW-6). Proving a landing under GW-3. Linking beads to the merge queue. Following GW-1/GW-2. |
 | `delivery-draft-pr-advisory` | `gh pr create` without `--draft` (TTSR). |
 
 ## Extensions
@@ -29,6 +29,14 @@ For a user-authorized exception, set `DELIVERY_ALLOW_MAIN_COMMIT=1` in the proce
 Message or echo text does not enable the override. The override records the exception. Host approval is still required.
 
 Directory checks are preflight observations, not atomic guarantees. Dynamic shell state remains outside this advisory-strength gate.
+
+### `primary-checkout-gate`
+
+Blocks an `edit`, a `write`, or a `git`/`dgit` commit whose target lies in a repository's primary checkout: the checkout whose `git rev-parse --git-dir` equals its `--git-common-dir`. A Worktrunk worktree (or any `git worktree add`) is linked, so it passes. Paths outside a repository, internal URIs, and the `.omp/` and `.beads/` state directories pass.
+
+When git cannot answer, the gate allows the call. The refusal names the `wt switch --create` command to run instead.
+
+For a user-authorized exception, set `DELIVERY_ALLOW_PRIMARY_CHECKOUT=1` in the process environment or in the bash call's `env`. Text in a command or a file body does not enable it.
 
 ### `unpushed-work-advisory`
 
