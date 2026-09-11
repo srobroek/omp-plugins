@@ -1,0 +1,8 @@
+name = "tauri-desktop"
+summary = "Rust desktop tool"
+layers = ["base", "tooling", "hooks", "lang/rust", "ci/github", "release", "agentic"]
+[vars]
+language = "rust"
+kind = "tool"
+app = true
+tauri = true

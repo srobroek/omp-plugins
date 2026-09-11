@@ -1,0 +1,15 @@
+name = "docs"
+summary = "Project documentation and optional site"
+after = ["base"]
+conflicts_with = []
+owns = ["docs/adr/0001-record-architecture-decisions.md", "docs/architecture.md", ".omp/docs.json", "site/astro.config.mjs", "site/package.json", "site/src/pages/index.astro", "mkdocs.yml", "docs/index.md", "book.toml", "docs/src/SUMMARY.md"]
+[vars]
+docs_flavour = { default = "none", prompt = "Documentation flavour (none, splash, or site)", ask = true }
+[conditional_files]
+"site/astro.config.mjs" = { var = "docs_flavour", equals = "splash" }
+"site/package.json" = { var = "docs_flavour", equals = "splash" }
+"site/src/pages/index.astro" = { var = "docs_flavour", equals = "splash" }
+"mkdocs.yml" = { var = "docs_flavour", equals = "site" }
+"docs/index.md" = { var = "docs_flavour", equals = "site" }
+"book.toml" = { var = "docs_flavour", equals = "site" }
+"docs/src/SUMMARY.md" = { var = "docs_flavour", equals = "site" }
