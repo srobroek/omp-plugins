@@ -66,10 +66,10 @@ WebDriver BiDi does not expose Puppeteer's accessibility tree, coverage, tracing
 | `chrome-devtools` | Chromium performance traces, Core Web Vitals insights, and source-mapped console stacks; telemetry is disabled with `--no-usage-statistics` | enabled |
 | `playwright-cross-engine` | WebKit engine and device-profile checks | **disabled** |
 
-`playwright-cross-engine` ships disabled. `@playwright/mcp` launches its browser lazily,
-at the first tool call rather than at startup. The server therefore connects and advertises
-all 24 tools with no WebKit build present. The failure arrives later, as
-`Browser webkit is not installed`, from whichever call came first.
+`playwright-cross-engine` runs `@playwright/mcp`, and ships disabled. That package launches
+its browser lazily, at the first tool call rather than at startup. The server therefore
+connects and advertises all 24 tools with no WebKit build present. The failure arrives
+later, as `Browser webkit is not installed`, from whichever call came first.
 
 Disabling it keeps that failure out of sessions that never asked for WebKit. The default
 matches `storybook` and `excalidraw`.
