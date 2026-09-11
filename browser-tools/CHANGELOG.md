@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.3.2](https://github.com/srobroek/omp-plugins/compare/browser-tools--v0.3.1...browser-tools--v0.3.2) (2026-09-11)
+
+
+### Bug Fixes
+
+* **browser-tools:** document the disabled cross-engine server and release the disable ([23a0062](https://github.com/srobroek/omp-plugins/commit/23a0062908481da100ec92ab6b5dd0d9ad36c007))
+* **browser-tools:** document the disabled cross-engine server and release the disable ([18d4fef](https://github.com/srobroek/omp-plugins/commit/18d4feff71ffbfac4020b6d9a8b33cd52c45e7bc))
+
 ## [0.3.1](https://github.com/srobroek/omp-plugins/compare/browser-tools--v0.3.0...browser-tools--v0.3.1) (2026-09-11)
 
 
