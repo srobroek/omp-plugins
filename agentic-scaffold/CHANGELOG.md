@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.9.1](https://github.com/srobroek/omp-plugins/compare/agentic-scaffold--v0.9.0...agentic-scaffold--v0.9.1) (2026-09-11)
+
+
+### Bug Fixes
+
+* **agentic-scaffold:** Better-T-Stack questions wait for the TypeScript answer ([#175](https://github.com/srobroek/omp-plugins/issues/175)) ([0b514fd](https://github.com/srobroek/omp-plugins/commit/0b514fda3787b84cd88293356a66370b33ceaf3d))
+
 ## [0.9.0](https://github.com/srobroek/omp-plugins/compare/agentic-scaffold--v0.8.0...agentic-scaffold--v0.9.0) (2026-09-11)
 
 
