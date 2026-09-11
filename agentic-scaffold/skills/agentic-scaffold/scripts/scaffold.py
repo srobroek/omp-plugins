@@ -2149,13 +2149,17 @@ def doctor(root: Path) -> tuple[dict[str, Any], int]:
         drift.append("answers file missing")
     required_tools = {str(tool) for layer in layers for tool in load_layer(layer).get("requires_tools", [])}
     declared_tools = _mise_tools(root)
-    tool_status: dict[str, bool] = {}
+    tool_status: dict[str, str] = {}
     for tool in sorted(required_tools | set(declared_tools)):
-        command = _tool_command(tool)
-        present = shutil.which(command) is not None
-        tool_status[tool] = present
-        if not present:
+        if tool in declared_tools and tool not in required_tools:
+            status = _tool_status(root, tool)
+        else:
+            status = "ok" if shutil.which(_tool_command(tool)) is not None else "MISS"
+        tool_status[tool] = status
+        if status == "MISS":
             drift.append(f"missing tool:{tool}")
+        elif status == "SHIM":
+            drift.append(f"unrunnable tool:{tool}")
     config_path = root / ".pre-commit-config.yaml"
     declared_hooks = declared_hook_stages(config_path.read_text()) if config_path.is_file() else []
     valid_stages = {"pre-commit", "commit-msg", "pre-push", "post-commit", "post-checkout", "post-merge", "pre-rebase", "prepare-commit-msg", "post-rewrite", "pre-merge-commit"}
@@ -2375,6 +2379,25 @@ def _tool_available(root: Path, tool: str) -> bool:
     if (root / "mise.toml").exists() and shutil.which("mise") and tool not in ("omp", "mise", "git"):
         return _mise_has(root, tool)
     return shutil.which(_tool_command(tool)) is not None
+
+def _tool_status(root: Path, tool: str) -> str:
+    """Classify a tool as absent, a dead shim, or runnable without installing it."""
+    command = _tool_command(tool)
+    if shutil.which(command) is None:
+        return "MISS"
+    try:
+        probe = subprocess.run(
+            [command],
+            cwd=root,
+            env=_project_mise_env(root),
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=2,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return "SHIM"
+    return "ok" if probe.returncode == 0 else "SHIM"
 
 
 def _graphify_mcp_available(root: Path) -> bool:

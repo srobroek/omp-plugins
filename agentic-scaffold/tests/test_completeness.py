@@ -186,6 +186,22 @@ def test_doctor_reports_hook_status(tmp_path: Path) -> None:
     assert "hooks declared but not installed" in payload["drift"]
     hooks = payload["checks"]["hooks"]
     assert hooks["declared"] and hooks["installed"] == [] and hooks["status"] == "not-installed"
+def test_doctor_classifies_declared_dead_shim_as_shim(tmp_path: Path) -> None:
+    root = git_root(tmp_path)
+    fake_bin = tmp_path / "bin"
+    fake_bin.mkdir()
+    dead_tool = fake_bin / "jscpd"
+    dead_tool.write_text("#!/bin/sh\nexit 1\n")
+    dead_tool.chmod(0o755)
+    environment = os.environ.copy()
+    environment["PATH"] = str(fake_bin) + os.pathsep + environment.get("PATH", "")
+    rendered = run("render", "--root", str(root), "--profile", "agentic-repo", env=environment)
+    assert rendered.returncode == 0, rendered.stderr
+    mise = root / "mise.toml"
+    mise.write_text(mise.read_text().replace("[tools]\n", '[tools]\njscpd = "5.2.0"\n', 1))
+    doctor = run("doctor", "--root", str(root), env=environment)
+    body = json.loads(doctor.stdout)
+    assert body["checks"]["tools"]["jscpd"] == "SHIM"
 
 
 def test_foreign_agents_block_is_update_block(tmp_path: Path) -> None:
