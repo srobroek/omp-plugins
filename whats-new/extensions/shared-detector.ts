@@ -1,0 +1,1 @@
+../../dep-update/extensions/detect.ts

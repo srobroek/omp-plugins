@@ -1,5 +1,5 @@
 // @bun
-// extensions/detect.ts
+// extensions/shared-detector.ts
 import { statSync } from "fs";
 
 // node_modules/smol-toml/dist/date.js
@@ -879,7 +879,7 @@ function parse(toml, { maxDepth = 1000, integersAsBigInt } = {}) {
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-// extensions/detect.ts
+// extensions/shared-detector.ts
 var MISSING = "?";
 var REQ_SPLIT = /[\[<>=!~;\s]/;
 var REQ_NAME = /^[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?$/;
@@ -934,18 +934,12 @@ function specVersion(spec) {
   return scalar(spec);
 }
 function parseRequirement(raw) {
-  const first = raw.split("#", 1)[0];
-  if (first === undefined)
-    return ["", ""];
-  let line = first.trim();
+  let line = (raw.split("#", 1)[0] ?? "").trim();
   line = line.replace(/\\+$/, "").trim();
   if (!line || line.startsWith("-") || line.startsWith(".") || line.startsWith("/")) {
     return ["", ""];
   }
-  const beforeSemicolon = line.split(";", 1)[0];
-  if (beforeSemicolon === undefined)
-    return ["", ""];
-  line = beforeSemicolon.trim();
+  line = (line.split(";", 1)[0] ?? "").trim();
   const match = REQ_SPLIT.exec(line);
   if (!match) {
     return REQ_NAME.test(line) ? [line, MISSING] : ["", ""];
@@ -1025,10 +1019,10 @@ class Detector {
   }
   async scanPython() {
     for (const lock of ["uv.lock", "poetry.lock"]) {
-      const data = await this.readToml(lock);
-      if (!data)
+      const data2 = await this.readToml(lock);
+      if (!data2)
         continue;
-      const pkgs = data.package;
+      const pkgs = data2.package;
       if (!Array.isArray(pkgs)) {
         this.note(`detect: ${lock} has no package array; trying declarations`);
         continue;
@@ -1167,8 +1161,8 @@ class Detector {
       return;
     for (const raw of lines) {
       const match = GEM.exec(raw);
-      if (match?.[2])
-        this.emit("rubygems", match[2], match[4] || MISSING);
+      if (match)
+        this.emit("rubygems", match[2] ?? "", match[4] || MISSING);
     }
   }
   async scanPhp() {
