@@ -7,6 +7,28 @@ import sys
 from pathlib import Path
 import tomllib
 
+import pytest
+
+import conftest
+
+scaffold_module = conftest.load_scaffold()
+
+def test_declared_git_is_ok_without_invocation(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    root = tmp_path
+    (root / "mise.toml").write_text('[tools]\ngit = "latest"\n')
+    calls: list[list[str]] = []
+    class Result:
+        returncode = 0
+    def fake_run(argv, **kwargs):
+        calls.append(argv)
+        assert kwargs["stdin"] is subprocess.DEVNULL
+        assert kwargs["timeout"] == 5
+        return Result()
+    monkeypatch.setattr(scaffold_module.shutil, "which", lambda name: "/bin/git" if name == "git" else "/bin/mise")
+    monkeypatch.setattr(scaffold_module.subprocess, "run", fake_run)
+    assert scaffold_module._tool_status(root, "git") == "ok"
+    assert calls == [["mise", "which", "git"]]
+
 from conftest import git_root
 
 ROOT = Path(__file__).parents[1]
