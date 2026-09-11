@@ -1028,10 +1028,10 @@ class Detector {
   }
   async scanPython() {
     for (const lock of ["uv.lock", "poetry.lock"]) {
-      const data2 = await this.readToml(lock);
-      if (!data2)
+      const data = await this.readToml(lock);
+      if (!data)
         continue;
-      const pkgs = data2.package;
+      const pkgs = data.package;
       if (!Array.isArray(pkgs)) {
         this.note(`detect: ${lock} has no package array; trying declarations`);
         continue;
@@ -1282,9 +1282,9 @@ async function fetchJson(ecosystem, name, url, fixtureDir, signal) {
     const safe = name.replaceAll("/", "__").replaceAll("@", "__at__");
     const fixture = join2(dir, `${ecosystem}_${safe}.json`);
     if (isFile(fixture)) {
-      const data2 = JSON.parse(await Bun.file(fixture).text());
+      const data = JSON.parse(await Bun.file(fixture).text());
       signal?.throwIfAborted();
-      return data2;
+      return data;
     }
     throw new RegistryError("fixture not found (offline simulation)");
   }
