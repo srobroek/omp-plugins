@@ -70,7 +70,9 @@ def test_interview_pages_are_bounded_and_complete_for_profiles(tmp_path: Path) -
             questions = body["ask"]["questions"]
             assert len(questions) <= 5
             assert all(len(question["options"]) <= 5 for question in questions)
-            assert all(all("description" in option for option in question["options"]) for question in questions)
+            # A description is present only when the option has one worth reading; an empty or templated description is a defect.
+            assert all(all(option.get("description", "x").strip() for option in question["options"]) for question in questions)
+            assert all("Another value" not in [option["label"] for option in question["options"]] for question in questions)
             if body["complete"]:
                 break
             answers.update(_answer_defaults(body["questions"]))

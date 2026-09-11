@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import os
+import subprocess
 from pathlib import Path
 
 ROOT = Path(__file__).parents[1]
@@ -92,3 +94,21 @@ def test_bts_refuses_ts_app_members_in_a_monorepo():
     assert len(violations) == 1 and "web" in violations[0] and "ts-app" in violations[0]
     assert scaffold.bts_member_violations({"layout": "monorepo", "bts": "false"}, members) == []
     assert scaffold.bts_member_violations({"layout": "single", "bts": "true"}, members) == []
+
+
+def test_bts_questions_wait_for_the_typescript_answer(tmp_path: Path):
+    scaffold = module()
+    root = tmp_path / "repo"
+    root.mkdir()
+    subprocess.run(["git", "init", "-q"], cwd=root, check=True)
+    fixed = {"name": "demo", "purpose": "app", "kind": "app", "license": "apache-2.0", "beads": "false", "remote": "no", "visibility": "private", "web_ui": "false", "speckit": "false", "github_owner": "s", "publish": "none", "docs_flavour": "none"}
+    def ids(profile: str, answers: dict[str, str]) -> list[str]:
+        payload, code = scaffold.interview_verb(root, profile, json.dumps(answers))
+        assert code == 0
+        return [row["id"] for row in payload["ask"]["questions"]]
+    assert not any(item.startswith("bts") for item in ids("monorepo", {**fixed, "language": "none"}))
+    assert not any(item.startswith("bts") for item in ids("ts-app", {**fixed}))  # language not answered yet
+    assert ids("ts-app", {**fixed, "language": "ts"}) == ["bts"]
+    assert not any(item.startswith("bts") for item in ids("ts-app", {**fixed, "language": "ts", "bts": "false"}))
+    assert ids("ts-app", {**fixed, "language": "ts", "bts": "true"})[:3] == ["bts_frontend", "bts_backend", "bts_runtime"]
+    assert ids("monorepo", {**fixed, "language": "ts"}) == ["bts_layout", "bts_package_manager"]

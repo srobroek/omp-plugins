@@ -101,12 +101,15 @@ Each page has at most five questions. Each option list has at most five entries.
 
 ## 7. Better-T-Stack questions
 
-A TypeScript `app` kind, the `tauri-desktop` profile, a TypeScript-only monorepo, and a TypeScript
-`splash` or `site` documentation flavour add `bts_*` questions. Each has a default. The generator is
-pinned by `bts_version` in the profile.
+No `bts_*` question is visible until the human has answered `language = ts`. On a `monorepo`
+profile the only questions are `bts_layout` (`turborepo` or `none`) and `bts_package_manager`. On
+an application profile the switch question `bts` comes first; `true` opens the generator questions
+and `false` keeps the existing stack and renders governance, CI, release, hooks, and agent files
+only. The switch defaults to `false` in a brownfield repository.
 
 | Question | Default | Notes |
 |---|---|---|
+| `bts` | `true` greenfield, `false` brownfield | the switch; everything below waits for `true` |
 | `bts_frontend` | `tanstack-router` | one web frontend and one native frontend at most |
 | `bts_backend` | `hono` | `self` needs a full-stack frontend |
 | `bts_runtime` | `bun` | `workers` needs `hono` |
@@ -115,10 +118,10 @@ pinned by `bts_version` in the profile.
 | `bts_orm` | `drizzle` | |
 | `bts_auth` | `better-auth` | |
 | `bts_addons` | `turborepo` | `tauri` is forced on for `tauri-desktop`; hooks addons are excluded because the `hooks` layer owns hooks |
-| `bts_package_manager` | `bun`; `pnpm` for a monorepo | |
+| `bts_package_manager` | `bun`; `pnpm` for a workspace | |
 | `bts_docs` | `starlight` | Fumadocs is not offered: its generator prompt is interactive only |
-| `bts_layout` | `turborepo` | monorepo root layout |
+| `bts_layout` | `turborepo` | workspace profile only |
 
-`answers write` and `preflight` refuse an answer set that breaks a compatibility rule and name the rule.
-The generator writes only into an empty root or a new member directory. A repository that already
-has a TypeScript stack answers `bts=false` and keeps it.
+A question with more accepted values than a page shows lists the rest in its text; the human
+types one as the free answer. `answers write` and `preflight` refuse an answer set that breaks a
+compatibility rule and name the rule. The generator writes only into an empty root.

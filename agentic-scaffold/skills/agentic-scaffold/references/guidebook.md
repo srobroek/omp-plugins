@@ -23,8 +23,8 @@ python3 "$SCAFFOLD" interview --root R --profile P [--answers-so-far JSON]
 ```
 
 Read the returned `ask` object. Each page has at most five questions and each question has
-at most five options. When a question accepts more values than the page shows, its last option
-is `Another value` and its description lists the remaining accepted values; relay them. Pass selected answers in `--answers-so-far` as one JSON object.
+at most five options. When a question accepts more values than the page shows, the question text
+lists the remaining accepted values; the human types one as a free answer. Pass selected answers in `--answers-so-far` as one JSON object.
 Repeat until `complete` is true. Preserve the question ids and multi-value arrays.
 The CLI orders layout and shape, members, kind, profile and layers, license, docs, publish,
 and layer variables. Dependent questions appear after their answers.

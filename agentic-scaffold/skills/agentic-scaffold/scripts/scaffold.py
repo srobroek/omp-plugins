@@ -728,7 +728,15 @@ def resolve_selection(root: Path, profile_name: str | None, name: str | None, ov
         values.update({str(k): value_default(v) for k, v in answer_vars.items()})
     values.update({str(k): str(v) for k, v in overrides.items()})
     is_ts_project = any(layer == "lang/ts" for layer in layers) or str(values.get("language", "")) == "ts" or selected_profile == "tauri-desktop"
-    if is_ts_project or str(values.get("layout", "single")) == "monorepo":
+    if not is_ts_project:
+        # No generator on a non-TypeScript project; the value stays so lang/ts members render their skeleton.
+        for key in [key for key in values if key.startswith("bts_")]:
+            values.pop(key)
+        values["bts"] = "false"
+    else:
+        if str(values.get("layout", "single")) == "monorepo":
+            values.setdefault("bts_layout", "turborepo")
+            values.setdefault("bts", "true" if values["bts_layout"] == "turborepo" else "false")
         values.setdefault("bts", "false")
         values.setdefault("bts_version", BTS_VERSION_DEFAULT)
         values.setdefault("bts_frontend", "tanstack-router")
@@ -2224,11 +2232,17 @@ def interview_questions(root: Path, profile_name: str | None = None) -> dict[str
     profile_language = str(profile_var_values.get("language", ""))
     profile_kind = str(profile_var_values.get("kind", ""))
     ts_project = "lang/ts" in layers or profile_language == "ts" or suggested == "tauri-desktop"
-    ts_app = ts_project and (profile_kind == "app" or suggested == "tauri-desktop" or str(info.get("kind", "")) == "app")
-    if ts_app:
+    asks_language = any(row["id"] == "language" for row in questions)
+    asks_kind = any(row["id"] == "kind" for row in questions)
+    # Better-T-Stack enters the interview only after the human has chosen TypeScript (and an
+    # application kind); until then no bts_* question is visible on any profile.
+    is_workspace = str(profile_var_values.get("layout", "")) == "monorepo"
+    if (asks_language or ts_project) and not is_workspace:
+        after_ts: dict[str, Any] = {"depends_on": [key for key, present in (("language", asks_language), ("kind", asks_kind)) if present], "when": {**({"language": "ts"} if asks_language else {}), **({"kind": "app"} if asks_kind else {})}}
         addons_default = ["turborepo", "tauri"] if suggested == "tauri-desktop" else ["turborepo"]
         def bts_row(key: str, prompt: str, default: Any, options: list[str], *, multi: bool = False) -> dict[str, Any]:
-            return {"id": key, "prompt": prompt, "question": prompt, "required": False, "default": default, "allowed": options, "options": options, "multi": multi, "source": "better-t-stack"}
+            return {"id": key, "prompt": prompt, "question": prompt, "required": False, "default": default, "allowed": options, "options": options, "multi": multi, "source": "better-t-stack", "depends_on": [*after_ts["depends_on"], "bts"], "when": {**after_ts["when"], "bts": "true"}}
+        questions.append({"id": "bts", "prompt": "Better-T-Stack", "question": "Generate the application skeleton with Better-T-Stack? Answer false to keep the existing stack and render only governance, CI, release, hooks, and agent files.", "required": False, "default": "false" if brownfield else "true", "allowed": ["true", "false"], "options": ["true", "false"], "source": "better-t-stack", **after_ts})
         questions.extend([
             bts_row("bts_frontend", "Better-T-Stack frontend", "tanstack-router", ["tanstack-router", "react-router", "tanstack-start", "next", "nuxt", "native-bare", "native-uniwind", "native-unistyles", "svelte", "solid", "astro", "none"]),
             bts_row("bts_backend", "Better-T-Stack backend", "hono", ["hono", "express", "fastify", "elysia", "convex", "self", "none"]),
@@ -2245,10 +2259,12 @@ def interview_questions(root: Path, profile_name: str | None = None) -> dict[str
         row = {"id": "bts_docs", "prompt": "TypeScript documentation generator", "question": "TypeScript documentation generator", "required": False, "default": "starlight", "allowed": ["starlight", "none"], "options": ["starlight", "none"], "source": "better-t-stack"}
         row["unsupported"] = {"fumadocs": "supported, but not non-interactive via documented create flags"}
         questions.append(row)
-    if str(profile_var_values.get("layout", "")) == "monorepo":
-        questions.append({"id": "bts_layout", "prompt": "Better-T-Stack monorepo layout", "question": "Better-T-Stack monorepo layout", "required": False, "default": "turborepo", "allowed": ["turborepo", "none"], "options": ["turborepo", "none"], "source": "better-t-stack"})
+    if is_workspace:
+        # A workspace is generated only when its language is TypeScript; the questions wait for that answer.
+        ts_only = {"depends_on": ["language"], "when": {"language": "ts"}}
+        questions.append({"id": "bts_layout", "prompt": "TypeScript workspace generator", "question": "Generate the TypeScript workspace with Better-T-Stack?", "required": False, "default": "turborepo", "allowed": ["turborepo", "none"], "options": ["turborepo", "none"], "source": "better-t-stack", **ts_only})
         if not any(row["id"] == "bts_package_manager" for row in questions):
-            questions.append({"id": "bts_package_manager", "prompt": "Better-T-Stack package manager", "question": "Better-T-Stack package manager", "required": False, "default": "pnpm", "allowed": ["npm", "pnpm", "bun"], "options": ["npm", "pnpm", "bun"], "source": "better-t-stack"})
+            questions.append({"id": "bts_package_manager", "prompt": "Better-T-Stack package manager", "question": "Better-T-Stack package manager", "required": False, "default": "pnpm", "allowed": ["npm", "pnpm", "bun"], "options": ["npm", "pnpm", "bun"], "source": "better-t-stack", **ts_only})
     return {"questions": questions, "profile": suggested, "mode": "brownfield" if brownfield else "greenfield"}
 
 
@@ -2696,7 +2712,7 @@ def _ordered_questions(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return [row for _, row in sorted(enumerate(rows), key=lambda pair: (rank(pair[1]), pair[0]))]
 
 
-def _question_options(row: dict[str, Any]) -> tuple[list[dict[str, str]], int]:
+def _question_options(row: dict[str, Any]) -> tuple[list[dict[str, str]], int, list[str]]:
     allowed = row.get("allowed")
     choices = row.get("choices", [])
     descriptions: dict[str, str] = {}
@@ -2711,18 +2727,16 @@ def _question_options(row: dict[str, Any]) -> tuple[list[dict[str, str]], int]:
     if labels:
         if len(labels) > 5:
             shown = [label for label in labels if label == default_label][:1] + [label for label in labels if label != default_label]
-            shown, overflow = shown[:4], shown[4:]
+            shown, overflow = shown[:5], shown[5:]
             labels = shown
         elif default_label and default_label not in labels:
             labels[-1] = default_label
     else:
         labels = [default_label] if default_label else ["Provide a value"]
         labels.append("Other")
-    options = [{"label": label, "description": descriptions.get(label, f"Use {label} for {row.get('id', 'this answer')}.")} for label in labels]
-    if overflow:
-        options.append({"label": "Another value", "description": "Also accepted: " + ", ".join(overflow)})
+    options = [{"label": label, **({"description": descriptions[label]} if descriptions.get(label) else {})} for label in labels]
     recommended = next((index for index, option in enumerate(options) if option["label"] == default_label), 0)
-    return options, recommended
+    return options, recommended, overflow
 
 
 def interview_verb(root: Path, profile_name: str | None, answers_raw: str | None) -> tuple[dict[str, Any], int]:
@@ -2753,8 +2767,11 @@ def interview_verb(root: Path, profile_name: str | None, answers_raw: str | None
     page = pending[:5]
     ask_questions: list[dict[str, Any]] = []
     for row in page:
-        options, recommended = _question_options(row)
-        ask_questions.append({"id": str(row.get("id")), "question": str(row.get("question", row.get("prompt", row.get("id", "")))), "options": options, "recommended": recommended, "multi": bool(row.get("multi", False))})
+        options, recommended, overflow = _question_options(row)
+        question = str(row.get("question", row.get("prompt", row.get("id", ""))))
+        if overflow:
+            question += " Also accepted (type one as your own answer): " + ", ".join(overflow) + "."
+        ask_questions.append({"id": str(row.get("id")), "question": question, "options": options, "recommended": recommended, "multi": bool(row.get("multi", False))})
     return {"ok": True, "profile": profile_name or interview.get("profile"), "questions": page, "remaining": len(pending), "complete": not pending, "ask": {"questions": ask_questions}}, 0
 
 
