@@ -1,12 +1,12 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
-  "extends": ["config:recommended", ":dependencyDashboard", ":semanticCommits"],
-  "enabledManagers": ["cargo", "gomod", "npm", "bun", "pep621", "mise", "pre-commit", "terraform"],
-  "packageRules": [{
-    "matchUpdateTypes": ["patch", "minor"],
-    "groupName": "patch and minor"
-  }, {
-    "matchUpdateTypes": ["major"],
-    "dependencyDashboardApproval": true
-  }]
+  "extends": ["config:recommended", ":semanticCommits"],
+  "enabledManagers": ["cargo", "gomod", "npm", "bun", "pep621", "mise", "pre-commit", "terraform", "github-actions"],
+  "packageRules": [
+    {"matchUpdateTypes": ["patch", "minor", "pin", "digest"], "automerge": true, "platformAutomerge": true},
+    {"matchManagers": ["github-actions"], "groupName": "github actions"},
+    {"matchUpdateTypes": ["major"], "dependencyDashboardApproval": true}
+  ],
+  "lockFileMaintenance": {"enabled": true, "schedule": ["before 5am on monday"]},
+  "schedule": ["after 10pm and before 5am every weekday", "every weekend"]
 }

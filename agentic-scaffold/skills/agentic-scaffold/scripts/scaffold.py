@@ -703,6 +703,10 @@ def collect(layers: list[str], values: dict[str, str], member_dir: str | None = 
                 continue
             if relative.name == "LICENSE" and str(values.get("license", "")).lower() not in {"", "apache-2.0", "apache 2.0"}:
                 continue
+            if relative.name.startswith("LICENSE-"):
+                selected = str(values.get("license", "")).lower()
+                if relative.name != f"LICENSE-{selected}" or selected == "none":
+                    continue
             if relative.name.endswith(".block"):
                 target = target_path(Path(str(relative)[:-6]), values)
                 body = render_text(source.read_text(), values)
@@ -2169,6 +2173,32 @@ def abort(root: Path) -> tuple[dict[str, Any], int]:
     return {"ok": True, "hadRun": had_run, "stagesCompleted": stages, "dirtyOwned": dirty_owned, "dirtyOther": sorted(path for _, path in rows if path not in owned), "revertCommands": revert}, 0
 
 
+def policy_apply(root: Path, dry_run: bool = False) -> tuple[dict[str, Any], int]:
+    """Apply repository policy through gh, changing only values that differ."""
+    remote = subprocess.run(["git", "remote", "get-url", "origin"], cwd=root, capture_output=True, text=True, check=False).stdout.strip()
+    if not re.search(r"(?:^|@)github\.com[/:]", remote, re.IGNORECASE):
+        return {"error": "origin remote must use github.com", "remote": remote}, EXIT_ERROR
+    auth = subprocess.run(["gh", "auth", "status"], cwd=root, capture_output=True, text=True, check=False)
+    if auth.returncode != 0:
+        return {"error": "gh auth status failed"}, EXIT_ERROR
+    repo = re.sub(r"\.git$", "", remote.rsplit(":", 1)[-1] if "@" in remote else remote.rsplit("github.com/", 1)[-1])
+    desired = {"delete_branch_on_merge": True, "allow_squash_merge": True, "allow_merge_commit": False, "allow_rebase_merge": False, "squash_merge_commit_title": "PR_TITLE", "squash_merge_commit_message": "PR_BODY", "has_wiki": False, "has_discussions": False, "has_issues": True}
+    current_cmd = ["gh", "api", f"repos/{repo}"]
+    current_run = subprocess.run(current_cmd, cwd=root, capture_output=True, text=True, check=False)
+    current = json.loads(current_run.stdout) if current_run.returncode == 0 and current_run.stdout else {}
+    patch = {key: value for key, value in desired.items() if current.get(key) != value}
+    plan: list[dict[str, Any]] = [{"method": "PATCH", "endpoint": f"repos/{repo}", "body": patch}] if patch else []
+    for label in ("bug", "enhancement", "task"):
+        plan.append({"method": "POST", "endpoint": f"repos/{repo}/labels", "body": {"name": label}})
+    result = {"remote": remote, "repo": repo, "plan": plan, "dry_run": dry_run}
+    if not dry_run:
+        for item in plan:
+            command = ["gh", "api", "--method", item["method"], item["endpoint"]]
+            for key, value in item["body"].items(): command += ["-f", f"{key}={str(value).lower() if isinstance(value, bool) else value}"]
+            subprocess.run(command, cwd=root, check=False)
+    return result, 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
@@ -2185,6 +2215,7 @@ def build_parser() -> argparse.ArgumentParser:
     finish_parser = sub.add_parser("finish"); finish_parser.add_argument("--root", default=".")
     abort_parser = sub.add_parser("abort"); abort_parser.add_argument("--root", default=".")
     member_parent = sub.add_parser("member"); member_parent.add_argument("--root", default="."); member = member_parent.add_subparsers(dest="member_command", required=True)
+    policy_parent = sub.add_parser("policy"); policy_parent.add_argument("--root", default="."); policy = policy_parent.add_subparsers(dest="policy_command", required=True).add_parser("apply"); policy.add_argument("--root", default=argparse.SUPPRESS); policy.add_argument("--dry-run", action="store_true")
     member_list_parser = member.add_parser("list"); member_list_parser.add_argument("--root", default=argparse.SUPPRESS)
     member_add_parser = member.add_parser("add"); member_add_parser.add_argument("--root", default=argparse.SUPPRESS); member_add_parser.add_argument("--name", required=True); member_add_parser.add_argument("--layer", required=True); member_add_parser.add_argument("--kind", choices=("lib", "app", "service", "cli"), default="lib")
     member_remove_parser = member.add_parser("remove"); member_remove_parser.add_argument("--root", default=argparse.SUPPRESS); member_remove_parser.add_argument("--name", required=True)
@@ -2227,6 +2258,9 @@ def main(argv: list[str] | None = None) -> int:
         defaults_for = [item for item in args.defaults_for.split(",") if item]
         payload, code = answers_write_interview(root, args.profile, args.name, overrides, defaults_for, args.layer)
         emit(payload, root); return code
+    if args.command == "policy":
+        validate_root(root, require_git=True)
+        payload, code = policy_apply(root, args.dry_run); emit(payload, root); return code
     if args.command == "apply":
         payload, code = apply_pipeline(root, args.profile, dry_run=args.dry_run, stage=args.stage, bump_tools=args.bump_tools); emit(payload, root); return code
     if args.command == "finish":

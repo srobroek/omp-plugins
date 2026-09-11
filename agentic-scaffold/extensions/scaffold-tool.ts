@@ -19,6 +19,7 @@ const COMMANDS = [
 	"layers",
 	"profiles",
 	"member",
+	"policy",
 ] as const;
 const ROOT_FLAGS = ["--root", "--cwd", "--state", "--answers", "--output", "-C"] as const;
 const TIMEOUT_MS = 10 * 60 * 1000;
