@@ -15,7 +15,8 @@
         "@playwright/mcp@latest",
         "--browser",
         "webkit"
-      ]
+      ],
+      "enabled": false
     }
   }
 }
