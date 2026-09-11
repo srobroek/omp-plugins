@@ -46,7 +46,7 @@ The headed tools use the host `puppeteer-core` package. The verified implementat
 | Firefox | Firefox, ESR, Developer, Nightly, LibreWolf, Waterfox | WebDriver BiDi | primary target; requires Gecko 129 or newer |
 | Zen 1.21.10b | Zen | WebDriver BiDi | detected on macOS, but this build timed out before publishing Puppeteer's WebSocket endpoint; select `firefox` instead |
 | Chrome | Chrome, Canary, Chromium, Edge, Brave, Vivaldi | WebDriver BiDi via `protocol: "webDriverBiDi"` | selectable per launch; built-in `browser` remains cheaper for plain Chromium diagnostics |
-| WebKit/Safari | Not applicable | Not applicable | Puppeteer cannot drive this family. Use `playwright-cross-engine`. |
+| WebKit/Safari | Not applicable | Not applicable | Puppeteer cannot drive this family. `playwright-cross-engine` covers it, but ships disabled; see MCP servers below. |
 
 WebDriver BiDi does not expose Puppeteer's accessibility tree, coverage, tracing, `Page.metrics()`, response bodies, drag APIs, offline mode, or network-condition emulation. Use the design plugin's accessibility scanner for WCAG checks and the `chrome-devtools` MCP server for Chromium traces.
 
@@ -61,10 +61,26 @@ WebDriver BiDi does not expose Puppeteer's accessibility tree, coverage, tracing
 
 ## MCP servers
 
-| name | capability |
-|---|---|
-| `chrome-devtools` | Chromium performance traces, Core Web Vitals insights, and source-mapped console stacks; telemetry is disabled with `--no-usage-statistics` |
-| `playwright-cross-engine` | WebKit engine and device-profile checks |
+| name | capability | default |
+|---|---|---|
+| `chrome-devtools` | Chromium performance traces, Core Web Vitals insights, and source-mapped console stacks; telemetry is disabled with `--no-usage-statistics` | enabled |
+| `playwright-cross-engine` | WebKit engine and device-profile checks | **disabled** |
+
+`playwright-cross-engine` ships disabled because `@playwright/mcp` launches its browser
+lazily, at the first tool call rather than at startup. The server therefore connects and
+advertises all 24 of its tools with no WebKit build present, and the failure arrives later
+as `Browser webkit is not installed` from whichever tool call happened to be first. A
+server that mounts cleanly and then fails on use is worse than one that is absent, so the
+default matches `storybook` and `excalidraw`.
+
+Enable it per machine, after installing the browser it needs:
+
+```sh
+npx -y playwright install webkit   # roughly 100 MB
+```
+
+then set `enabled: true` for `playwright-cross-engine` in your own MCP configuration. The
+plugin's declaration is the shipped default, not a ceiling.
 
 The built-in `browser` remains the default for public headless Chromium work, ARIA snapshots, computed styles, screenshots, keyboard input, viewport sizing, and request interception. MCP servers connect only at session startup; if one is unavailable, run `/mcp reconnect <name>`.
 
