@@ -34,3 +34,23 @@ def test_rendered_manifests_are_structurally_valid():
     assert '[package]' in cargo and 'edition = "2024"' in cargo
     gomod = render(ROOT / "skills/agentic-scaffold/templates/lang/go/go.mod.tmpl")
     assert gomod.startswith("module example\n") and "go 1.23" in gomod
+
+
+def test_conditional_files_follow_the_answer(tmp_path: Path, monkeypatch) -> None:
+    import importlib
+    import sys
+
+    sys.path.insert(0, str(ROOT / "skills" / "agentic-scaffold" / "scripts"))
+    scaffold = importlib.import_module("scaffold")
+    layer = tmp_path / "templates" / "probe"
+    (layer / "src").mkdir(parents=True)
+    (layer / "layer.toml").write_text(
+        'summary = "probe"\n[conditional_files]\n"src/main.rs" = { var = "kind", any = ["tool", "hybrid"] }\n"src/lib.rs" = { var = "kind", any = ["crate", "hybrid"] }\n"bogus.txt" = "not a table"\n'
+    )
+    for name in ("src/main.rs", "src/lib.rs", "bogus.txt", "always.txt"):
+        (layer / name).write_text(name)
+    monkeypatch.setattr(scaffold, "TEMPLATES", tmp_path / "templates")
+    monkeypatch.setattr(scaffold, "layer_dir", lambda layer_name: tmp_path / "templates" / layer_name)
+    for kind, expected in (("tool", {"src/main.rs", "always.txt"}), ("crate", {"src/lib.rs", "always.txt"}), ("hybrid", {"src/main.rs", "src/lib.rs", "always.txt"})):
+        direct, _ = scaffold.collect(["probe"], {"kind": kind, "name": "demo"})
+        assert set(direct) == expected, kind  # the malformed entry never includes its file
