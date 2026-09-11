@@ -133,26 +133,32 @@ export function pidAlive(pid: number): boolean {
 	}
 }
 
-/** The server pid this project recorded, when the value is usable. */
-async function serverPid(cwd: string): Promise<number | undefined> {
-	const dir = beadsDir(cwd);
-	if (dir === undefined) return undefined;
-	const raw = await fs.readFile(path.join(dir, "dolt-server.pid"), "utf8").catch(() => "");
+/** The server pid recorded in `store`, a resolved `.beads` directory, when usable. */
+async function serverPid(store: string): Promise<number | undefined> {
+	const raw = await fs.readFile(path.join(store, "dolt-server.pid"), "utf8").catch(() => "");
 	const pid = Number.parseInt(raw.trim(), 10);
 	return Number.isSafeInteger(pid) && pid > 0 ? pid : undefined;
 }
 
 /**
- * Stop the project's server and report what actually happened.
+ * Stop the server owning `store` and report what actually happened.
  *
  * `bd dolt stop` cannot be taken at its word: on a shared server it prints
  * `Dolt server stopped.` while the process keeps running. The pid recorded before
  * the call is the only thing that settles it.
+ *
+ * `store` is threaded through rather than re-resolved. The caller classified one
+ * directory, and the pid read and the `bd` call must address that same one: this
+ * runs at shutdown, where the sibling lifecycle extension is clearing its own
+ * `BEADS_DIR` pin, so a second resolution across an await could name another
+ * repository's store. Pinning it explicitly for the child settles which store
+ * `bd` acts on rather than leaving it to whatever the environment holds.
  */
-async function stopServer(cwd: string): Promise<{ said: string; verdict: string }> {
-	const before = await serverPid(cwd);
+async function stopServer(cwd: string, store: string): Promise<{ said: string; verdict: string }> {
+	const before = await serverPid(store);
 	const proc = Bun.spawn(["bd", "dolt", "stop"], {
-		cwd, stdout: "pipe", stderr: "pipe", timeout: 1200, killSignal: "SIGKILL",
+		cwd, env: { ...process.env, BEADS_DIR: store },
+		stdout: "pipe", stderr: "pipe", timeout: 1200, killSignal: "SIGKILL",
 	});
 	const [out, err] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text()]);
 	const code = await proc.exited;
@@ -209,7 +215,7 @@ export default function beadsDoltLifecycle(pi: ExtensionAPI): void {
 			// server this session never used.
 			const store = beadsDir(ctx.cwd);
 			if (store === undefined || !shouldStopServer(await backendAt(store))) return;
-			const { said, verdict } = await stopServer(ctx.cwd);
+			const { said, verdict } = await stopServer(ctx.cwd, store);
 			// The verdict comes from the pid, not from what bd printed.
 			pi.logger.info("beads dolt server stop", { verdict, said });
 		} catch (error) {

@@ -119,7 +119,7 @@ describe("autoPinBeadsDir", () => {
 		execFileSync("git", ["-C", root, "worktree", "remove", "--force", wt]);
 		rmSync(root, { recursive: true, force: true });
 		rmSync(bare, { recursive: true, force: true });
-	});
+	}, 20_000); // shells out to git init/commit/worktree add; exceeds the 5s default under full-suite load
 
 	test("repoIdentity resolves worktrees of one repository to the same common dir", () => {
 		const { execFileSync } = require("node:child_process") as typeof import("node:child_process");
@@ -134,7 +134,7 @@ describe("autoPinBeadsDir", () => {
 		expect(repoIdentity(tmpdir())).not.toBe(repoIdentity(root));
 		execFileSync("git", ["-C", root, "worktree", "remove", "--force", wt]);
 		rmSync(root, { recursive: true, force: true });
-	});
+	}, 20_000); // shells out to git init/commit/worktree add; exceeds the 5s default under full-suite load
 });
 
 describe("pinBashInput", () => {
