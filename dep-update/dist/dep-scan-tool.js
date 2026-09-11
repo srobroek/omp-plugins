@@ -1,7 +1,8 @@
 // @bun
 // extensions/lib.ts
 import { spawn } from "child_process";
-import { statSync } from "fs";
+import { statSync as statSync2 } from "fs";
+import { join as join2 } from "path";
 
 // node_modules/smol-toml/dist/date.js
 /*!
@@ -880,16 +881,12 @@ function parse(toml, { maxDepth = 1000, integersAsBigInt } = {}) {
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
-// extensions/lib.ts
+// extensions/detect.ts
+import { statSync } from "fs";
 var MISSING = "?";
-var USER_AGENT = "dep-update-skill (+https://github.com/srobroek/agentic-packages)";
-var FETCH_TIMEOUT_MS = 1e4;
 var REQ_SPLIT = /[\[<>=!~;\s]/;
 var REQ_NAME = /^[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?$/;
 var GEM = /^\s*gem\s+(['"])([^'"]+)\1(?:\s*,\s*(['"])([^'"]*)\3)?/;
-var NODE_VERSION = /^=?v?(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-((?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*))*))?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/;
-var PYTHON_VERSION = /^(?:={1,2})?v?(\d+)(?:\.(\d+))?(?:\.(\d+))?(?:[-_.]?(a|b|rc|alpha|beta|pre|preview)[-_.]?\d*)?(?:[-_.]?post[-_.]?\d*)?(?:[-_.]?(dev)[-_.]?\d*)?(?:\+[a-z0-9]+(?:[-_.][a-z0-9]+)*)?$/i;
-var PROTECTED_NAME = /^\.project-setup|answers\.toml|sources\.toml/;
 function isFile(path) {
   try {
     return statSync(path).isFile();
@@ -940,12 +937,18 @@ function specVersion(spec) {
   return scalar(spec);
 }
 function parseRequirement(raw) {
-  let line = (raw.split("#", 1)[0] ?? "").trim();
+  const first = raw.split("#", 1)[0];
+  if (first === undefined)
+    return ["", ""];
+  let line = first.trim();
   line = line.replace(/\\+$/, "").trim();
   if (!line || line.startsWith("-") || line.startsWith(".") || line.startsWith("/")) {
     return ["", ""];
   }
-  line = (line.split(";", 1)[0] ?? "").trim();
+  const beforeSemicolon = line.split(";", 1)[0];
+  if (beforeSemicolon === undefined)
+    return ["", ""];
+  line = beforeSemicolon.trim();
   const match = REQ_SPLIT.exec(line);
   if (!match) {
     return REQ_NAME.test(line) ? [line, MISSING] : ["", ""];
@@ -1025,10 +1028,10 @@ class Detector {
   }
   async scanPython() {
     for (const lock of ["uv.lock", "poetry.lock"]) {
-      const data = await this.readToml(lock);
-      if (!data)
+      const data2 = await this.readToml(lock);
+      if (!data2)
         continue;
-      const pkgs = data.package;
+      const pkgs = data2.package;
       if (!Array.isArray(pkgs)) {
         this.note(`detect: ${lock} has no package array; trying declarations`);
         continue;
@@ -1167,8 +1170,8 @@ class Detector {
       return;
     for (const raw of lines) {
       const match = GEM.exec(raw);
-      if (match)
-        this.emit("rubygems", match[2] ?? "", match[4] || MISSING);
+      if (match?.[2])
+        this.emit("rubygems", match[2], match[4] || MISSING);
     }
   }
   async scanPhp() {
@@ -1215,6 +1218,12 @@ async function detectProject(target) {
   return { ok: true, exit: 0, rows: detector.rows, stderr: notes.join(`
 `) };
 }
+// extensions/lib.ts
+var USER_AGENT = "dep-update-skill (+https://github.com/srobroek/agentic-packages)";
+var FETCH_TIMEOUT_MS = 1e4;
+var NODE_VERSION = /^=?v?(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-((?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*))*))?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/;
+var PYTHON_VERSION = /^(?:={1,2})?v?(\d+)(?:\.(\d+))?(?:\.(\d+))?(?:[-_.]?(a|b|rc|alpha|beta|pre|preview)[-_.]?\d*)?(?:[-_.]?post[-_.]?\d*)?(?:[-_.]?(dev)[-_.]?\d*)?(?:\+[a-z0-9]+(?:[-_.][a-z0-9]+)*)?$/i;
+var PROTECTED_NAME = /^\.project-setup|answers\.toml|sources\.toml/;
 function normalizeVersion(raw, ecosystem = "npm") {
   if (typeof raw !== "string")
     return null;
@@ -1271,11 +1280,11 @@ async function fetchJson(ecosystem, name, url, fixtureDir, signal) {
   const dir = fixtureDir ?? process.env.DEP_UPDATE_FIXTURE_DIR ?? "";
   if (dir) {
     const safe = name.replaceAll("/", "__").replaceAll("@", "__at__");
-    const fixture = join(dir, `${ecosystem}_${safe}.json`);
+    const fixture = join2(dir, `${ecosystem}_${safe}.json`);
     if (isFile(fixture)) {
-      const data = JSON.parse(await Bun.file(fixture).text());
+      const data2 = JSON.parse(await Bun.file(fixture).text());
       signal?.throwIfAborted();
-      return data;
+      return data2;
     }
     throw new RegistryError("fixture not found (offline simulation)");
   }
@@ -1396,7 +1405,7 @@ function which(bin) {
   for (const dir of path.split(":")) {
     const cand = `${dir}/${bin}`;
     try {
-      if (statSync(cand).isFile())
+      if (statSync2(cand).isFile())
         return cand;
     } catch {}
   }
@@ -1416,7 +1425,7 @@ async function detectNodePm(root) {
   const override = process.env.DEP_UPDATE_PKG_MANAGER ?? "";
   if (override)
     return override;
-  const answers = join(root, ".project-setup/answers.toml");
+  const answers = join2(root, ".project-setup/answers.toml");
   if (isFile(answers)) {
     try {
       const data = await readTomlFile(answers);
@@ -1427,11 +1436,11 @@ async function detectNodePm(root) {
         return (String(pinned).split("@")[0] ?? "").trim();
     } catch {}
   }
-  if (isFile(join(root, "pnpm-lock.yaml")))
+  if (isFile(join2(root, "pnpm-lock.yaml")))
     return "pnpm";
-  if (isFile(join(root, "bun.lock")) || isFile(join(root, "bun.lockb")))
+  if (isFile(join2(root, "bun.lock")) || isFile(join2(root, "bun.lockb")))
     return "bun";
-  if (isFile(join(root, "yarn.lock")))
+  if (isFile(join2(root, "yarn.lock")))
     return "yarn";
   return "npm";
 }
@@ -1472,7 +1481,7 @@ function pyprojectRequirements(data) {
 }
 async function checkPythonVersion(root, name, version) {
   const wanted = canonical(name);
-  const pyproject = join(root, "pyproject.toml");
+  const pyproject = join2(root, "pyproject.toml");
   if (isFile(pyproject)) {
     const data = await readTomlFile(pyproject);
     if (data) {
@@ -1483,7 +1492,7 @@ async function checkPythonVersion(root, name, version) {
       }
     }
   }
-  const requirements = join(root, "requirements.txt");
+  const requirements = join2(root, "requirements.txt");
   if (isFile(requirements)) {
     const text = await readText(requirements) ?? "";
     for (const raw of text.split(/\r?\n/)) {
@@ -1492,7 +1501,7 @@ async function checkPythonVersion(root, name, version) {
         return true;
     }
   }
-  const lock = join(root, "uv.lock");
+  const lock = join2(root, "uv.lock");
   if (isFile(lock)) {
     const data = await readTomlFile(lock);
     if (!data)
@@ -1509,7 +1518,7 @@ async function checkPythonVersion(root, name, version) {
   return false;
 }
 async function checkNodeVersion(root, name, version) {
-  const manifest = join(root, "package.json");
+  const manifest = join2(root, "package.json");
   if (!isFile(manifest))
     return false;
   try {

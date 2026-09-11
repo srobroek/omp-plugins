@@ -110,6 +110,8 @@ jobs:
           python3 scripts/check-design-structure.py
           python3 scripts/check-mcp-servers.py
           python3 scripts/test-checker-contracts.py
+      - name: Files duplicated across plugins are identical
+        run: python3 scripts/check-shared-detector.py
 
       # Every extension module must at least parse and bundle. Committed dist/
       # bundles must match a fresh build (git installs run no install step on the
