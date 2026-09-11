@@ -13,7 +13,7 @@ jobs:
       contents: read
     steps:
       - name: CLA assistant
-        uses: cla-assistant/github-action@v2.5.3
+        uses: cla-assistant/github-action@v2.6.1
         if: ${{ vars.CLA_APP_ID != '' }}
         with:
           path-to-signatures: signatures/version.json
