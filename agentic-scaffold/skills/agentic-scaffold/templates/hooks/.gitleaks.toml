@@ -1,0 +1,3 @@
+[allowlist]
+description = "Fixture credentials used only in tests"
+paths = ['''tests/fixtures/.*''', '''fixtures/.*''']
