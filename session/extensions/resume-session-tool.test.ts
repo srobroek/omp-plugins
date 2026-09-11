@@ -1,4 +1,4 @@
-import { describe, expect, setDefaultTimeout, test } from "bun:test";
+import { describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
 import {
 	appendFileSync,
@@ -45,23 +45,6 @@ import {
 	storeFiles,
 } from "./store";
 
-// Every test here builds a fixture session store on disk and drives the tool
-// against it, so the file is uniformly slow rather than holding a few slow
-// exceptions: 50 tests take ~43s, of which ~1s is import and setup, and the two
-// heaviest are ~2.9s and ~3.4s of work each. Against Bun's 5s default those two
-// lose roughly half of all runs under concurrent load, which made a full-suite
-// result unusable as a pass/fail signal -- it produced two false readings in one
-// session, each needing an isolation matrix to dismiss.
-//
-// A per-test allowance is the repo's convention for a slow exception, and it is
-// the wrong shape here: the cost is a property of the fixture harness, so the
-// next heavy test added would silently inherit the same 5s cliff. 20s is the
-// same allowance the beads worktree tests already carry, and ~6x the worst
-// measured test, so it absorbs contention without hiding a genuine hang.
-//
-// This is a timeout, not the fix. The fixture harness costing ~850ms per test
-// with no subprocesses is the underlying defect; see omp-plugins-dg3.
-setDefaultTimeout(20_000);
 
 function tmp(prefix: string): string {
 	return mkdtempSync(join(tmpdir(), prefix));
@@ -474,6 +457,28 @@ describe("integration: worktrees", () => {
 		expect(worktreeLabel(undefined)).toBe("?");
 	});
 });
+
+// The tests in this describe, and in `session resolution` and `tool registration`
+// below, each carry an explicit 20s allowance. They build a fixture session store
+// on disk and drive the tool against it, and that is genuinely slow: measured per
+// describe, minus the file's import-and-setup baseline, `list mode` costs ~3.5s a
+// test, `session resolution` ~2.7s and `tool registration` ~2.3s, while every
+// `unit:` describe here runs a whole block in about a second.
+//
+// Against Bun's 5s default the heaviest sat ~1.5s from the ceiling unloaded, so
+// they lost roughly half of all runs under concurrent load. Four concurrent runs
+// of this file on the unfixed tree failed in 3 of 4, and surfaced a third test
+// name beyond the two already reported -- the cost belongs to the harness, not to
+// particular assertions.
+//
+// The allowance is deliberately NOT a file-wide `setDefaultTimeout`: the 34 fast
+// tests here should keep failing at 5s, because a unit test that hangs is a
+// diagnostic signal worth getting quickly. Any new test in these three describes
+// needs the same third argument.
+//
+// This is a ceiling, not a cure. ~850ms per test with no subprocesses at all is
+// the real defect, and each test does get its own temp store (53 created for 50
+// tests), so it is not fixture accumulation. Tracked on omp-plugins-dg3.
 describe("integration: list mode", () => {
 	function twoWorktreeStore(repo: { main: string; linked: string }): string {
 		return fixtureStore([
@@ -503,12 +508,12 @@ describe("integration: list mode", () => {
 		expect(text).toContain("↳ left off: Writer landed");
 		expect(text).toContain("4 turns");
 		expect(text).toContain("STOP.");
-	});
+	}, 20_000);
 
 	test("drift against a worktree's current branch is shown", async () => {
 		const repo = repoWithWorktree();
 		expect(await list(twoWorktreeStore(repo), repo.main)).toContain("worked-on → worktree now on");
-	});
+	}, 20_000);
 
 	test("worktrees:false narrows to the current checkout", async () => {
 		const repo = repoWithWorktree();
@@ -517,27 +522,27 @@ describe("integration: list mode", () => {
 		expect(narrowed).toContain("newest in the linked worktree");
 		expect(narrowed).not.toContain("older in main");
 		expect(narrowed).toContain("current checkout only");
-	});
+	}, 20_000);
 
 	test("limit caps the rows and says how many were held back", async () => {
 		const repo = repoWithWorktree();
 		const text = await list(twoWorktreeStore(repo), repo.main, { limit: 1 });
 		expect(text).toContain("1 older session(s) not shown");
-	});
+	}, 20_000);
 
 	test("the git activity block ranks worktrees and can be suppressed", async () => {
 		const repo = repoWithWorktree();
 		const home = twoWorktreeStore(repo);
 		expect(await list(home, repo.main)).toContain("## Worktree git activity");
 		expect(await list(home, repo.main, { git: false })).not.toContain("## Worktree git activity");
-	});
+	}, 20_000);
 
 	test("an empty store refuses to guess", async () => {
 		const repo = repoWithWorktree();
 		const text = await list(fixtureStore([]).home, repo.main);
 		expect(text).toContain("No prior sessions recorded");
 		expect(text).toContain("do not guess a session");
-	});
+	}, 20_000);
 
 	test("colliding ids are printed long enough to stay usable", async () => {
 		const repo = repoWithWorktree();
@@ -548,18 +553,18 @@ describe("integration: list mode", () => {
 		const text = await list(home, repo.main);
 		expect(text).toContain("01a0382f-3");
 		expect(text).toContain("01a0382f-7");
-	});
+	}, 20_000);
 
 	test("a one-turn session is not reported as '1 turns'", async () => {
 		const repo = repoWithWorktree();
 		const { home } = fixtureStore([{ ...shipped, cwd: repo.main, entries: [{ kind: "user", text: "only" }] }]);
 		expect(await list(home, repo.main)).toContain("1 turn ");
-	});
+	}, 20_000);
 
 	test("every window reports its own token cost", async () => {
 		const repo = repoWithWorktree();
 		expect(await list(twoWorktreeStore(repo), repo.main)).toMatch(/~[\d,]+ uncached tokens/);
-	});
+	}, 20_000);
 });
 
 describe("integration: read mode", () => {
@@ -697,13 +702,13 @@ describe("integration: session resolution", () => {
 		expect(await resolve("dddddddd")).toEqual({ error: expect.stringContaining("matches 2 sessions") });
 		expect(await resolve("nope")).toEqual({ error: expect.stringContaining("no session under") });
 		expect(await resolve("")).toEqual({ error: expect.stringContaining("needs `session`") });
-	});
+	}, 20_000);
 
 	test("an explicit file bypasses lookup entirely", async () => {
 		const { root } = fixtureStore([shipped]);
 		const file = fixtureFile(root);
 		expect(await resolveSession("/nowhere", { file })).toEqual({ file });
-	});
+	}, 20_000);
 
 	test.each(["collision", "explicit file"])("paging preserves the selected transcript: %s", async (selection) => {
 		const repo = repoWithWorktree();
@@ -748,7 +753,7 @@ describe("integration: session resolution", () => {
 			expect(older).toContain("window: turns 3..3 of 4");
 			expect(older).toContain("STOP.");
 		});
-	});
+	}, 20_000);
 });
 
 describe("integration: tool registration", () => {
@@ -774,7 +779,7 @@ describe("integration: tool registration", () => {
 		expect(captured.name).toBe("resume_session");
 		expect(captured.approval).toBe("read");
 		expect(typeof captured.execute).toBe("function");
-	});
+	}, 20_000);
 
 	test("both modes run end to end through execute", async () => {
 		const repo = repoWithWorktree();
@@ -795,7 +800,7 @@ describe("integration: tool registration", () => {
 		);
 		expect(read.details).toMatchObject({ mode: "read", branch: "feat/csv", branchTier: "switched", turns: 4 });
 		expect(required(read.content[0], "read response").text).toContain("## Latest plan / todo state");
-	});
+	}, 20_000);
 
 	test("an unresolvable session reports the problem instead of throwing", async () => {
 		const repo = repoWithWorktree();
@@ -809,5 +814,5 @@ describe("integration: tool registration", () => {
 		);
 		expect(required(result.content[0], "error response").text).toContain("no session under");
 		expect(result.details.error).toBeDefined();
-	});
+	}, 20_000);
 });
