@@ -18,6 +18,7 @@ describe("scaffold argument boundary", () => {
 	expect(validateScaffoldArgs("interview", ["--answers-so-far", '{"layout":"single"}'])).toBeNull();
 	expect(validateScaffoldArgs("plan", ["--answers", "../answers.toml"])).toContain("JSON object");
 	expect(validateScaffoldArgs("apply", ["--answers", '{"a":1}'])).toContain("reserved");
+	expect(validateScaffoldArgs("plan", ["--answers"])).toContain("JSON object");
 		expect(validateScaffoldArgs("apply", ["--root", "/tmp"])).toContain("reserved");
 		expect(validateScaffoldArgs("apply", ["--cwd=/tmp"])).toContain("reserved");
 	});
