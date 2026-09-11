@@ -11,6 +11,10 @@ Copies are compared byte for byte. A formatting-only difference is still a drift
 the point of the contract is that one edit lands in every copy, and a diff nobody
 intended is exactly the signal that it did not.
 
+Every copy must be a real file. A symlink reads back the canonical bytes, so a byte
+comparison alone would accept a tree that had replaced a copy with a link across the
+plugin boundary -- which is the shape this contract exists to reject.
+
 Add a set by appending to DUPLICATED, whose members are repository-relative paths
 that must all be identical.
 """
@@ -39,6 +43,19 @@ def main() -> int:
         if missing:
             failures.append(
                 f"{group[0]}: copy set is incomplete, missing {', '.join(missing)}"
+            )
+            continue
+
+        # is_file() follows symlinks, and a symlink to the canonical copy reads back
+        # identical bytes -- so a byte comparison alone would pass a tree that had
+        # quietly replaced a copy with a link across the plugin boundary. That is the
+        # shape this contract exists to reject: it makes one plugin depend on another's
+        # internals undeclared, and it does not survive Windows or archive extraction.
+        links = [name for name in group if (ROOT / name).is_symlink()]
+        if links:
+            failures.append(
+                f"{', '.join(links)}: symlinked instead of copied\n"
+                f"    each plugin bundles in isolation, so every copy must be a real file"
             )
             continue
 
