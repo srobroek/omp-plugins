@@ -22,7 +22,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
-import { beadsDir, sessionPinFor } from "./session-beads-lifecycle.ts";
+import { sessionPinFor } from "./session-beads-lifecycle.ts";
 
 /** Where beads records the backend it resolved. */
 export interface DoltMetadata {
@@ -208,12 +208,15 @@ export default function beadsDoltLifecycle(pi: ExtensionAPI): void {
 
 	pi.on("session_shutdown", async (_event, ctx: ExtensionContext) => {
 		try {
-			// Classify the store this will actually stop, not the checkout. `serverPid`
-			// and `bd dolt stop` both resolve through `beadsDir`, which honours an
-			// inherited `BEADS_DIR` that may point at another repository's store.
-			// Deciding from the checkout while acting on the pinned store could stop a
-			// server this session never used.
-			const store = beadsDir(ctx.cwd);
+			// Only ever stop a server whose store belongs to THIS checkout. Resolving
+			// through `beadsDir` would honour an inherited `BEADS_DIR`, and independent
+			// review reproduced the consequence: with a foreign pin present, shutdown
+			// issued `bd dolt stop` against another repository's store. The session's
+			// own bash calls do not necessarily use that pin either -- on a conflict the
+			// sibling extension deliberately pins the checkout's own database instead.
+			// `BEADS_STOP_SERVER_ON_EXIT` is per-project intent, so when this checkout
+			// has no store of its own the correct action is to stop nothing.
+			const store = sessionPinFor(ctx.cwd);
 			if (store === undefined || !shouldStopServer(await backendAt(store))) return;
 			const { said, verdict } = await stopServer(ctx.cwd, store);
 			// The verdict comes from the pid, not from what bd printed.

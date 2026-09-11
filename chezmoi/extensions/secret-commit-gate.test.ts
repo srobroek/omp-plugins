@@ -113,6 +113,18 @@ describe("gitCommits", () => {
 			expect(gitCommits(`cd '${other}'; cd '${dir}' & git commit`, dir)).toEqual([{ cwd: other, all: false }]);
 			// bash: a bare backgrounded `cd` never moves the parent.
 			expect(gitCommits(`cd '${other}' & git commit`, dir)).toEqual([{ cwd: dir, all: false }]);
+			// A PIPELINE inside a backgrounded list. Independent review reproduced a
+			// bypass here: the pipeline stage reset to the parent's directory, so BOTH
+			// commits were reported outside and a staged plaintext secret in `other`
+			// went uninspected. bash runs the backgrounded pipeline's commit in `other`
+			// and the foreground one in `dir`, because the job's own `cd` applies inside
+			// the job while never reaching the parent.
+			expect(gitCommits(`cd '${other}' && printf x | git commit & git commit`, dir).map((c) => c.cwd).sort()).toEqual([dir, other].sort());
+			// Both stages of a backgrounded pipeline see the job's directory.
+			expect(gitCommits(`cd '${other}' && printf x | git commit & printf y | git commit`, dir).map((c) => c.cwd).sort()).toEqual([dir, other].sort());
+			// A pipeline whose own first stage cds: that cd is subshell-local, so the
+			// commit stays in the parent's directory and the following `;` does too.
+			expect(gitCommits(`cd '${other}' | git commit; git commit`, dir).map((c) => c.cwd)).toEqual([dir, dir]);
 		} finally {
 			rmSync(dir, { recursive: true, force: true });
 		}

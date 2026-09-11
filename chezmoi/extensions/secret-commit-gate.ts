@@ -155,6 +155,14 @@ export function gitCommits(command: string, cwd: string): CommitCall[] {
 	let here: string | null = cwd;
 	let sequential = cwd;
 	let sequentialUnknownCd = false;
+	// The directory the CURRENT list runs in, which is not the same as `sequential`.
+	// A backgrounded list's `cd` cannot escape to the parent shell, so `sequential`
+	// must not see it -- but a later pipeline stage in that same job still runs in
+	// it. Resetting a pipeline stage to `sequential` discarded the job's own `cd`,
+	// which sent a real commit to be inspected against the parent's directory:
+	// `cd secrets && printf x | git commit & git commit` put BOTH commits outside.
+	let listCwd = cwd;
+	let listUnknownCd = false;
 	let unknownCd = false;
 	let inPipeline = false;
 	let pipelineStatus: ShellStatus = "unknown";
@@ -182,26 +190,34 @@ export function gitCommits(command: string, cwd: string): CommitCall[] {
 		const { tokens, separator } = segments[slot]!;
 		if (separator === "|") {
 			if (!inPipeline) pipelineStatus = status;
-			here = sequentialUnknownCd ? null : sequential;
-			unknownCd = sequentialUnknownCd;
+			here = listUnknownCd ? null : listCwd;
+			unknownCd = listUnknownCd;
 			inPipeline = true;
 		} else if (separator === "&") {
 			here = sequentialUnknownCd ? null : sequential;
 			unknownCd = sequentialUnknownCd;
+			listCwd = sequential;
+			listUnknownCd = sequentialUnknownCd;
 			inPipeline = false;
 			status = "unknown";
 		} else if (inPipeline) {
 			status = pipelineStatus;
-			here = sequentialUnknownCd ? null : sequential;
-			unknownCd = sequentialUnknownCd;
+			here = listUnknownCd ? null : listCwd;
+			unknownCd = listUnknownCd;
 			inPipeline = false;
-			// This publishes the directory the PREVIOUS segment left behind, so the
-			// question is whether that segment was backgrounded. Testing this segment
-			// instead would discard a foreground `cd` that ran before a background job:
-			// in `cd /tmp; cd /other & git commit` the parent really is left in /tmp.
-		} else if (!backgrounded[slot - 1]) {
-			if (here !== null) sequential = here;
-			sequentialUnknownCd = unknownCd;
+		} else {
+			// Publish what the PREVIOUS segment left behind. `listCwd` follows this
+			// list even when it is backgrounded; `sequential` advances only for a
+			// foreground segment, since a backgrounded `cd` never reaches the parent.
+			// Testing this segment rather than the previous one would discard a
+			// foreground `cd` that ran before a background job: in
+			// `cd /tmp; cd /other & git commit` the parent really is left in /tmp.
+			if (here !== null) listCwd = here;
+			listUnknownCd = unknownCd;
+			if (!backgrounded[slot - 1]) {
+				if (here !== null) sequential = here;
+				sequentialUnknownCd = unknownCd;
+			}
 		}
 		const shouldRun = separator === "&&" ? status !== "failure" :
 			separator === "||" ? status !== "success" : true;
