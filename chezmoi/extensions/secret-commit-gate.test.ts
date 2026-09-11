@@ -290,25 +290,32 @@ describe("decideCommit", () => {
 		}
 	});
 
-	test("a nested shell outside a chezmoi tree, and quoted punctuation, are left alone", () => {
-		// The refusal must not become a general ban on subshells. It is scoped to a
-		// chezmoi source tree, where the gate has something to protect, and it must not
-		// fire on punctuation that only looks like shell syntax.
+	test("a nested shell outside a chezmoi tree is left alone", () => {
+		// The refusal is scoped: with no chezmoi source resolved there is nothing to
+		// protect, so an ordinary repository's subshell commits must pass untouched.
 		seedChezmoiCacheForTests(null, null);
 		expect(decideCommit(`( cd /some/repo && git commit -m x )`, ELSEWHERE)).toBeUndefined();
+	});
 
-		seedRepo([]);
-		// Parens and braces inside quotes are literal; `${VAR}` is an expansion, and
-		// find's `{}` is a placeholder. None of these starts a shell.
+	test("inside a chezmoi tree, quoted punctuation and shell words still do not block", () => {
+		// Seeded with a harmless staged path, deliberately not a secret, so chezmoi
+		// RESOLVES and the nesting check is actually reached while the staged-file
+		// inspection finds nothing to block on. Two earlier versions of this test were
+		// vacuous: an empty repo left chezmoi unresolved so decideCommit returned before
+		// the check, and seeding a secret would block regardless of the detector. The
+		// block assertions at the end are what prove the check is reached at all.
+		seedRepo(["dotfiles/dot_zshrc"]);
 		expect(decideCommit(`git commit -m "fix (typo) and {braces}"`, ROOT)).toBeUndefined();
 		expect(decideCommit(`git commit -m '(fix) thing'`, ROOT)).toBeUndefined();
 		expect(decideCommit("git commit -m ${MSG}", ROOT)).toBeUndefined();
 		expect(decideCommit("find . -name x -exec rm {} ; git commit -m y", ROOT)).toBeUndefined();
-		// Single quotes are literal, so a substitution written inside them is inert.
 		expect(decideCommit(`git commit -m 'literal $(cd elsewhere)'`, ROOT)).toBeUndefined();
-		// Shell-looking words inside quotes are asserted directly against nestsShell
-		// below: routing them through decideCommit cannot prove anything, because its
-		// earlier exits also return undefined, which made a first attempt vacuous.
+		expect(decideCommit(`git commit -m 'literal; sh -c harmless'`, ROOT)).toBeUndefined();
+		expect(decideCommit(`git commit -m 'env sh -c text'`, ROOT)).toBeUndefined();
+		expect(decideCommit(`git commit -m "pipe | eval thing"`, ROOT)).toBeUndefined();
+		// The same words outside quotes DO block, in this same seeded tree.
+		expect(decideCommit(`env sh -c 'cd src && git commit'`, ROOT)?.block).toBe(true);
+		expect(decideCommit(`/bin/sh -c 'cd src && git commit'`, ROOT)?.block).toBe(true);
 	});
 
 	test("nestsShell reads only the text outside quotes", () => {
