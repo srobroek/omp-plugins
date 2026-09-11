@@ -1315,20 +1315,31 @@ def inspect(root: Path) -> dict[str, Any]:
                 project = load_toml(root / "pyproject.toml")
             except SystemExit:
                 project = {}
-            suggested = "python-app" if isinstance(project.get("project", {}).get("scripts"), dict) and project["project"]["scripts"] else "python-lib"
+            kind = "tool" if project.get("project", {}).get("scripts") else "library"
+            suggested = "python-app" if kind == "tool" else "python-lib"
         elif selected == "ts":
-            package = {}
             try:
                 package = json.loads((root / "package.json").read_text()) if (root / "package.json").is_file() else {}
             except json.JSONDecodeError:
                 package = {}
-            suggested = "ts-app" if (root / "src/index.ts").is_file() or package.get("bin") else "ts-lib"
+            kind = "omp-plugin" if (root / ".omp-plugin/plugin.json").is_file() else ("app" if package.get("bin") or (root / "src/index.ts").is_file() else "library")
+            suggested = "ts-app" if kind == "app" else "ts-lib"
         elif selected == "rust":
-            suggested = "rust-app" if (root / "src/main.rs").is_file() else "rust-lib"
+            try:
+                cargo = load_toml(root / "Cargo.toml")
+            except SystemExit:
+                cargo = {}
+            has_lib = bool(cargo.get("lib")) or (root / "src/lib.rs").is_file()
+            has_bin = bool(cargo.get("bin")) or (root / "src/main.rs").is_file()
+            kind = "hybrid" if has_lib and has_bin else "tool" if has_bin else "crate"
+            suggested = "rust-app" if kind == "tool" else "rust-lib"
         elif selected == "go":
-            suggested = "go-app" if (root / "cmd").is_dir() else "go-lib"
+            kind = "tool" if (root / "cmd").is_dir() else "library"
+            suggested = "go-app" if kind == "tool" else "go-lib"
         else:
             suggested = "terraform"
+        fixed = [("name", "Project name", True, ""), ("purpose", "One-line project purpose", True, ""), ("language", "Project language", True, "none"), ("kind", "Project kind (selected language's allowed values)", True, "library"), ("license", "License", True, "apache-2.0"), ("beads", "Use beads?", True, "false"), ("remote", "Create a remote now?", False, "no"), ("visibility", "Remote visibility", False, "private"), ("web_ui", "Include web UI tooling?", False, "false"), ("speckit", "Include SpecKit?", False, "false")]
+        allowed = {"language": ["python", "ts", "rust", "go", "terraform", "none"], "beads": ["true", "false"]}
     else:
         suggested = "agentic-repo"
     tools = {name: shutil.which(name) is not None for name in ("uv", "bun", "mise", "prek", "just", "gh", "bd", "omp")}
@@ -1346,7 +1357,7 @@ def inspect(root: Path) -> dict[str, Any]:
     for path in (root / ".omp/context.py", root / ".omp/project-context.json"):
         if path.exists() and not metadata_path(root).exists():
             hook_findings.append({"kind": "unowned-file", "path": str(path.relative_to(root))})
-    return {"root": str(root), "git": (root / ".git").exists(), "stacks": stacks, "tooling": {"mise": (root / "mise.toml").exists(), "just": (root / "justfile").exists(), "prek": bool(hook_files), "omp": (root / ".omp").exists(), "agents": (root / "AGENTS.md").exists(), "beads": (root / ".beads").exists()}, "hook_manager_conflicts": hook_files if len(hook_files) > 1 else [], "findings": hook_findings, "missing_tools": [name for name, found in tools.items() if not found], "tools": tools, "suggested_profile": suggested, "suggestedProfile": suggested, "notes": notes}
+    return {"root": str(root), "git": (root / ".git").exists(), "stacks": stacks, "language": stacks[0] if stacks else "none", "kind": locals().get("kind", "library"), "tooling": {"mise": (root / "mise.toml").exists(), "just": (root / "justfile").exists(), "prek": bool(hook_files), "omp": (root / ".omp").exists(), "agents": (root / "AGENTS.md").exists(), "beads": (root / ".beads").exists()}, "hook_manager_conflicts": hook_files if len(hook_files) > 1 else [], "findings": hook_findings, "missing_tools": [name for name, found in tools.items() if not found], "tools": tools, "suggested_profile": suggested, "suggestedProfile": suggested, "notes": notes}
 def declared_hook_stages(config: str) -> list[str]:
     groups = re.findall(r"(?:default_install_hook_types|stages):\s*\[([^]]+)\]", config)
     return sorted({part.strip(" '\"") for group in groups for part in group.split(",") if part.strip()})
@@ -1943,6 +1954,12 @@ def interview_questions(root: Path, profile_name: str | None = None) -> dict[str
     suggested = profile_name or str(info.get("suggested_profile", "agentic-repo"))
     questions: list[dict[str, Any]] = []
     if brownfield:
+        detected_kind = str(info.get("kind", "library"))
+        detected_language = str(info.get("language", info.get("stacks", ["none"])[0] if info.get("stacks") else "none"))
+        kind_allowed = {"python": ["library", "tool"], "ts": ["library", "app", "omp-plugin"], "rust": ["crate", "tool", "hybrid"], "go": ["library", "tool"]}.get(detected_language)
+        if kind_allowed:
+            questions.append({"id": "kind", "prompt": f"Confirm detected {detected_language} kind", "required": True, "default": detected_kind, "allowed": kind_allowed, "source": "inspect"})
+    if brownfield:
         questions.append({"id": "profile", "prompt": f"Confirm the detected profile ({suggested})", "required": True, "default": suggested, "allowed": sorted(path.stem for path in PROFILES.glob("*.toml")), "source": "fixed"})
         catalogue = layers_list()["layers"]
         profile_layers = [str(item) for item in load_profile(suggested).get("layers", [])] if (PROFILES / f"{suggested}.toml").is_file() else []
@@ -1973,8 +1990,8 @@ def interview_questions(root: Path, profile_name: str | None = None) -> dict[str
         for key, prompt, required, default in fixed:
             if key == "language" and profile_vars.get("language"):
                 default = str(profile_vars["language"])
-            elif key == "kind" and "app" in profile_vars:
-                default = "app" if str(profile_vars["app"]).lower() in TRUTHY else "lib"
+            elif key == "kind" and profile_vars.get("kind"):
+                default = str(profile_vars["kind"])
             elif key in profile_vars and key not in ("name", "purpose"):
                 default = value_default(profile_vars[key])
             row: dict[str, Any] = {"id": key, "prompt": prompt, "required": required, "default": default, "source": "fixed"}
@@ -2186,7 +2203,7 @@ def build_parser() -> argparse.ArgumentParser:
     abort_parser = sub.add_parser("abort"); abort_parser.add_argument("--root", default=".")
     member_parent = sub.add_parser("member"); member_parent.add_argument("--root", default="."); member = member_parent.add_subparsers(dest="member_command", required=True)
     member_list_parser = member.add_parser("list"); member_list_parser.add_argument("--root", default=argparse.SUPPRESS)
-    member_add_parser = member.add_parser("add"); member_add_parser.add_argument("--root", default=argparse.SUPPRESS); member_add_parser.add_argument("--name", required=True); member_add_parser.add_argument("--layer", required=True); member_add_parser.add_argument("--kind", choices=("lib", "app", "service", "cli"), default="lib")
+    member_add_parser = member.add_parser("add"); member_add_parser.add_argument("--root", default=argparse.SUPPRESS); member_add_parser.add_argument("--name", required=True); member_add_parser.add_argument("--layer", required=True); member_add_parser.add_argument("--kind", default="library")
     member_remove_parser = member.add_parser("remove"); member_remove_parser.add_argument("--root", default=argparse.SUPPRESS); member_remove_parser.add_argument("--name", required=True)
     member_import_parser = member.add_parser("import"); member_import_parser.add_argument("--root", default=argparse.SUPPRESS); member_import_parser.add_argument("--dir", required=True); member_import_parser.add_argument("--layer", required=True); member_import_parser.add_argument("--kind", choices=("lib", "app", "service", "cli"), default="lib")
     doctor_parser = sub.add_parser("doctor"); doctor_parser.add_argument("--root", default=".")

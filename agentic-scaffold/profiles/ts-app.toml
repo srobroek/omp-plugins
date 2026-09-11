@@ -5,6 +5,7 @@ layers = ["base", "tooling", "hooks", "lang/ts", "ci/github", "release", "agenti
 language = "ts"
 app = true
 node = "22"
+kind = "app"
 bun_version = "latest"
 web_ui = false
 speckit = false

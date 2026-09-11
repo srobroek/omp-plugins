@@ -2,16 +2,21 @@ name = "lang/python"
 summary = "uv-managed Python package with src and tests"
 after = ["base", "tooling"]
 requires_tools = ["uv"]
-owns = ["pyproject.toml", "src/__name__/__init__.py", "tests/test_smoke.py"]
+owns = ["pyproject.toml", "src/__name__/__init__.py", "src/__name__/py.typed", "src/__name__/cli.py", "tests/conftest.py", "tests/test_smoke.py"]
 blocks = [".gitignore", "justfile", ".pre-commit-config.yaml"]
 conflicts_with = ["lang/ts", "lang/rust", "lang/go", "lang/terraform", "workspace"]
 conditional_plugins = { backend = { var = "app", equals = "true" } }
+[conditional_files]
+"src/__name__/__init__.py" = { var = "kind", any = ["library", "tool"] }
+"src/__name__/py.typed" = { var = "kind", equals = "library" }
+"src/__name__/cli.py" = { var = "kind", equals = "tool" }
+[plugins."srobroek-omp"]
+source = "srobroek/omp-plugins"
+plugins = ["architecture", "python"]
+when = { var = "language", equals = "python" }
 [tools]
 python = "${python}"
 uv = "latest"
 [vars]
 python = { default = "3.13", prompt = "Python version", ask = false }
-[plugins."srobroek-omp"]
-source = "srobroek/omp-plugins"
-plugins = ["architecture", "python"]
-when = { var = "language", equals = "python" }
+kind = { default = "library", prompt = "Python kind (library or tool)", ask = true }
