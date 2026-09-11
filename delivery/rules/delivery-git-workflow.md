@@ -9,6 +9,18 @@ LEGEND: Rules carry stable IDs (GW-n).
 
 Branching:
 
+- MUST GW-5: every change happens in a Worktrunk worktree of the project, orchestrated or
+  not: `wt switch --create <branch> --base origin/main --no-cd --format json`, then edit,
+  test, and commit inside the path it prints. The primary checkout is the human's: read it,
+  never edit or commit in it. The `primary-checkout-gate` extension refuses `edit`/`write`
+  and `git commit` whose target is a primary checkout (git dir equals git common dir); it
+  fails open when git cannot answer, leaves `.omp/` and `.beads/` state alone, and
+  `DELIVERY_ALLOW_PRIMARY_CHECKOUT=1` in the environment lifts it when the user asked for
+  the primary checkout.
+- MUST GW-6: remove the worktree when its branch has landed: `wt remove <branch>` after the
+  PR merges (`wt merge` removes it itself). The Worktrunk `post-start` and `post-switch`
+  hooks run `wt step prune`, which removes any merged worktree left behind; do not rely on
+  it as the first line.
 - Reuse an existing branch/worktree only when it was created for this task.
 - Work lands on a branch, not on main/master. A commit whose repository has
   main or master checked out is refused by the `main-branch-gate` extension,
