@@ -1,7 +1,7 @@
 ---
 name: srobroek-git-force-push-advisory
 description: Warns on a force push that is not --force-with-lease, which can discard a collaborator's commits.
-condition: ["(?i)(?:^|\"command\"\\s*:\\s*\"|\\\\n|\\n)\\s*(?:(?:then|do|else|sudo|command|env|exec|time|nohup|xargs)\\s+(?:-[-A-Za-z0-9]+\\s+)*|[A-Za-z_][A-Za-z0-9_]*=[^\\s;|&\"']*\\s+){0,3}git\\s+push(?:(?!\\\\n)[^;|&\\n]){0,200}?(?:--force(?![-\\w])|\\s-f(?:\\s|$))"]
+condition: ["(?i)(?:^|\"command\"\\s*:\\s*\"|\\\\n|\\n)\\s*(?:(?:then|do|else|sudo|command|env|exec|time|nohup|xargs)\\s+(?:-[-A-Za-z0-9]+\\s+)*|[A-Za-z_][A-Za-z0-9_]*=[^\\s;|&\"']*\\s+){0,3}git\\s+push(?:(?!\\\\n)[^;|&\\n]){0,200}?(?:--force(?!(?:-with-lease(?:=|\\s|[\"}]|$)|-if-includes(?:\\s|[\"}]|$)))|\\s-[^-\\s]*f[A-Za-z0-9]*(?=[\\s\"}]|$))"]
 scope: "tool:bash"
 interruptMode: never
 ---
