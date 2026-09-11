@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.9.1](https://github.com/srobroek/omp-plugins/compare/delivery--v0.9.0...delivery--v0.9.1) (2026-09-11)
+
+
+### Documentation
+
+* **delivery:** GW-6 names the installed post-start prune hook ([#201](https://github.com/srobroek/omp-plugins/issues/201)) ([bbb685f](https://github.com/srobroek/omp-plugins/commit/bbb685fbe7c55e0c1e866b59e6dfbc8f2c59391b))
+* **delivery:** primary-checkout gate is advisory-strength; shell writes are not parsed ([#199](https://github.com/srobroek/omp-plugins/issues/199)) ([e467692](https://github.com/srobroek/omp-plugins/commit/e467692ae26825d94d99c0bbca409ef314854c43))
+
 ## [0.9.0](https://github.com/srobroek/omp-plugins/compare/delivery--v0.8.3...delivery--v0.9.0) (2026-09-11)
 
 

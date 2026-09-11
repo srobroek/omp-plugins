@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.4.4](https://github.com/srobroek/omp-plugins/compare/chezmoi--v0.4.3...chezmoi--v0.4.4) (2026-09-11)
+
+
+### Bug Fixes
+
+* **chezmoi:** anchor the credential-word patterns instead of matching substrings ([6f064c4](https://github.com/srobroek/omp-plugins/commit/6f064c4eb52fc7d4e9c574927ea804efa2ce4252))
+* **chezmoi:** anchor the credential-word patterns instead of matching substrings ([286f95e](https://github.com/srobroek/omp-plugins/commit/286f95e651ae644f86687f5a07fff0a8ab16a1f1))
+* **chezmoi:** clear the design-token documentation names by exact name ([537e737](https://github.com/srobroek/omp-plugins/commit/537e7375a2507396aefccb281ce4c20de63aa797))
+
 ## [0.4.3](https://github.com/srobroek/omp-plugins/compare/chezmoi--v0.4.2...chezmoi--v0.4.3) (2026-09-11)
 
 

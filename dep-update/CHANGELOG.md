@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.6.3](https://github.com/srobroek/omp-plugins/compare/dep-update--v0.6.2...dep-update--v0.6.3) (2026-09-11)
+
+
+### Bug Fixes
+
+* **dep-update,whats-new:** rebuild the bundles with the toolchain CI uses ([d1cdad4](https://github.com/srobroek/omp-plugins/commit/d1cdad42267750583c56c6f285188682d8404a73))
+* **dep-update:** order the imports I added in lib.ts ([41bb23e](https://github.com/srobroek/omp-plugins/commit/41bb23e2d93c576054fdb8998d7e4cbb9797b528))
+
+
+### Refactors
+
+* **dep-update,whats-new:** give the duplicated detector one owner per plugin and a drift check ([d8be096](https://github.com/srobroek/omp-plugins/commit/d8be096c505992d6d38f47ddf4901f4b46673469))
+* **dep-update,whats-new:** give the duplicated detector one owner per plugin and a drift check ([023cdfe](https://github.com/srobroek/omp-plugins/commit/023cdfe701129839bc1c12b79a6fb7d60f27a880))
+
 ## [0.6.2](https://github.com/srobroek/omp-plugins/compare/dep-update--v0.6.1...dep-update--v0.6.2) (2026-09-11)
 
 

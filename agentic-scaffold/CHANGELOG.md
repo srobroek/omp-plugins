@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.10.2](https://github.com/srobroek/omp-plugins/compare/agentic-scaffold--v0.10.1...agentic-scaffold--v0.10.2) (2026-09-11)
+
+
+### Bug Fixes
+
+* **agentic-scaffold:** classify a declared tool by whether its PATH entry is a dead shim ([35c94aa](https://github.com/srobroek/omp-plugins/commit/35c94aa396347baa4474a0dbaf8e668a67bbc58a))
+* **agentic-scaffold:** classify a declared tool by whether its PATH entry is a dead shim ([0b39248](https://github.com/srobroek/omp-plugins/commit/0b392487e3704ae95982f5f9756df84cc5bd0fe8))
+* **agentic-scaffold:** recognise mise shim paths on Windows ([e09c54a](https://github.com/srobroek/omp-plugins/commit/e09c54a0b513f1bf06e73226a9933986bce790f9))
+* **agentic-scaffold:** require the mise and shims path components to be adjacent ([d10017e](https://github.com/srobroek/omp-plugins/commit/d10017e0fc1800c978ebae180b9169ad7971e706))
+* **agentic-scaffold:** resolve declared tools through mise ([b3884c6](https://github.com/srobroek/omp-plugins/commit/b3884c644d8c19a575d74ae8ba4c8d1ef65da20e))
+
 ## [0.10.1](https://github.com/srobroek/omp-plugins/compare/agentic-scaffold--v0.10.0...agentic-scaffold--v0.10.1) (2026-09-11)
 
 
