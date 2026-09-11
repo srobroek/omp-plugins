@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.15](https://github.com/srobroek/omp-plugins/compare/beads--v1.0.14...beads--v1.0.15) (2026-09-11)
+
+
+### Bug Fixes
+
+* **beads:** release a claim with a command bd actually has ([#198](https://github.com/srobroek/omp-plugins/issues/198)) ([1993a25](https://github.com/srobroek/omp-plugins/commit/1993a25cf9ae0b0d3e0da85243c57f9a9b276454))
+
 ## [1.0.14](https://github.com/srobroek/omp-plugins/compare/beads--v1.0.13...beads--v1.0.14) (2026-09-11)
 
 

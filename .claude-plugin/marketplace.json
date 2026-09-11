@@ -40,14 +40,14 @@
       "name": "beads",
       "description": "Beads issue tracking: dependency DAGs, formulas, and decisions recorded as beads.",
       "source": "./beads",
-      "version": "1.0.14",
+      "version": "1.0.15",
       "category": "productivity"
     },
     {
       "name": "browser-tools",
       "description": "Cross-engine browser coverage and Chrome performance tracing over MCP.",
       "source": "./browser-tools",
-      "version": "0.3.2",
+      "version": "0.3.3",
       "category": "development"
     },
     {
