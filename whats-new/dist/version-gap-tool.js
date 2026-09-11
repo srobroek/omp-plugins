@@ -1025,10 +1025,10 @@ class Detector {
   }
   async scanPython() {
     for (const lock of ["uv.lock", "poetry.lock"]) {
-      const data = await this.readToml(lock);
-      if (!data)
+      const data2 = await this.readToml(lock);
+      if (!data2)
         continue;
-      const pkgs = data.package;
+      const pkgs = data2.package;
       if (!Array.isArray(pkgs)) {
         this.note(`detect: ${lock} has no package array; trying declarations`);
         continue;
