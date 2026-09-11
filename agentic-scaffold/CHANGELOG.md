@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.8.0](https://github.com/srobroek/omp-plugins/compare/agentic-scaffold--v0.7.0...agentic-scaffold--v0.8.0) (2026-09-11)
+
+
+### Features
+
+* **agentic-scaffold:** survey-driven standard: fail-closed path-filtered CI, release-plz, governance, kinds, docs ([#164](https://github.com/srobroek/omp-plugins/issues/164)) ([620ae7f](https://github.com/srobroek/omp-plugins/commit/620ae7f24ecf449332a280e9f23f71e6a5b12c15))
+
 ## [0.7.0](https://github.com/srobroek/omp-plugins/compare/agentic-scaffold--v0.6.1...agentic-scaffold--v0.7.0) (2026-09-11)
 
 
