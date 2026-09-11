@@ -134,7 +134,8 @@ function unquote(token: string): string {
 	return (first === '"' || first === "'") && token.at(-1) === first ? token.slice(1, -1) : token;
 }
 
-export type CommitCall = { cwd: string; all: boolean; paths?: string[] };
+export type CommitCall = { cwd: string | null; all: boolean; paths?: string[] };
+type ShellStatus = "success" | "failure" | "unknown";
 
 const COMMIT_VALUES: Record<string, true> = {
 	"-m": true, "--message": true, "-F": true, "--file": true,
@@ -145,61 +146,123 @@ const COMMIT_VALUES: Record<string, true> = {
 
 /**
  * The `git commit` calls in a shell command line, each with the directory it runs
- * in. `cd` is followed across segments: without that, `cd ~/.local/share/chezmoi
- * && git commit` reads as a commit in the session cwd.
+ * in. `cd` is followed across sequential segments, while failed conditionals and
+ * pipeline stages retain their shell scope. A null cwd means the shell's directory
+ * cannot be resolved safely, so the caller must refuse the commit.
  */
 export function gitCommits(command: string, cwd: string): CommitCall[] {
 	const out: CommitCall[] = [];
-	let here = cwd;
+	let here: string | null = cwd;
 	let sequential = cwd;
+	let sequentialUnknownCd = false;
+	// The directory the CURRENT list runs in, which is not the same as `sequential`.
+	// A backgrounded list's `cd` cannot escape to the parent shell, so `sequential`
+	// must not see it -- but a later pipeline stage in that same job still runs in
+	// it. Resetting a pipeline stage to `sequential` discarded the job's own `cd`,
+	// which sent a real commit to be inspected against the parent's directory:
+	// `cd secrets && printf x | git commit & git commit` put BOTH commits outside.
+	let listCwd = cwd;
+	let listUnknownCd = false;
+	let unknownCd = false;
 	let inPipeline = false;
-	let failedCd = false;
-	let skipAnd = false;
+	let pipelineStatus: ShellStatus = "unknown";
+	let status: ShellStatus = "success";
 	const segments: { tokens: string[]; separator: string }[] = [{ tokens: [], separator: "" }];
 	for (const word of shellWords(command)) {
 		if (SEGMENTS.test(word)) segments.push({ tokens: [], separator: word });
 		else segments[segments.length - 1]!.tokens.push(word);
 	}
-	for (const { tokens, separator } of segments) {
-		if (separator === "&&" && (failedCd || skipAnd)) skipAnd = true;
-		else if (separator === ";" || separator === "\n" || separator === "||") skipAnd = false;
-		failedCd = false;
+	// `&` backgrounds the ENTIRE preceding list, so a `cd` inside it runs in a subshell
+	// and cannot escape to the parent: `cd /tmp && git commit & git commit` runs the
+	// foreground commit in the original directory. Each separator arrives attached to
+	// the segment that FOLLOWS it, so membership is computed up front — discovering the
+	// `&` while walking left to right is already too late, and a leaked directory would
+	// send the real foreground commit to be inspected against the wrong one.
+	const backgrounded: boolean[] = segments.map(() => false);
+	for (let first = 0; first < segments.length; first++) {
+		let last = first;
+		// A list continues across `&&`, `||` and `|`; only `;` and `&` end the job.
+		while (last + 1 < segments.length && ![";", "&"].includes(segments[last + 1]!.separator)) last++;
+		if (segments[last + 1]?.separator === "&") for (let i = first; i <= last; i++) backgrounded[i] = true;
+		first = last;
+	}
+	for (let slot = 0; slot < segments.length; slot++) {
+		const { tokens, separator } = segments[slot]!;
 		if (separator === "|") {
-			here = sequential;
+			if (!inPipeline) pipelineStatus = status;
+			here = listUnknownCd ? null : listCwd;
+			unknownCd = listUnknownCd;
 			inPipeline = true;
-		} else if (separator === "||" || separator === "&") {
-			here = sequential;
+		} else if (separator === "&") {
+			here = sequentialUnknownCd ? null : sequential;
+			unknownCd = sequentialUnknownCd;
+			listCwd = sequential;
+			listUnknownCd = sequentialUnknownCd;
+			inPipeline = false;
+			status = "unknown";
+		} else if (inPipeline) {
+			status = pipelineStatus;
+			here = listUnknownCd ? null : listCwd;
+			unknownCd = listUnknownCd;
 			inPipeline = false;
 		} else {
-			if (inPipeline) here = sequential;
-			inPipeline = false;
-			sequential = here;
-		}
-		if (tokens.length === 0 || skipAnd) continue;
-
-		if (tokens[0] === "cd") {
-			const target = tokens[1];
-			// A `$var` or command substitution names a directory only the shell knows.
-			if (target && !/[$`]/.test(target)) {
-				const destination = lexicalAbs(unquote(target), here);
-				try {
-					if (!statSync(destination).isDirectory()) {
-						failedCd = true;
-						continue;
-					}
-					accessSync(destination, constants.X_OK);
-					here = destination;
-				} catch {
-					failedCd = true;
-				}
+			// Publish what the PREVIOUS segment left behind. `listCwd` follows this
+			// list even when it is backgrounded; `sequential` advances only for a
+			// foreground segment, since a backgrounded `cd` never reaches the parent.
+			// Testing this segment rather than the previous one would discard a
+			// foreground `cd` that ran before a background job: in
+			// `cd /tmp; cd /other & git commit` the parent really is left in /tmp.
+			if (here !== null) listCwd = here;
+			listUnknownCd = unknownCd;
+			if (!backgrounded[slot - 1]) {
+				if (here !== null) sequential = here;
+				sequentialUnknownCd = unknownCd;
 			}
+		}
+		const shouldRun = separator === "&&" ? status !== "failure" :
+			separator === "||" ? status !== "success" : true;
+		const conditional = separator === "&&" || separator === "||";
+		if (tokens.length === 0 || !shouldRun) continue;
+		if (tokens[0] === "cd") {
+			const targetIndex = tokens[1] === "--" ? 2 : 1;
+			const target = tokens[targetIndex] ?? "~";
+			const invalid = tokens.length > targetIndex + 1 || target.startsWith("-") ||
+				/[$`*?[\]]/.test(target) || /^~[^/]/.test(target) ||
+				(here === null && !target.startsWith("/") && !target.startsWith("~"));
+			if (invalid) {
+				here = null;
+				unknownCd = true;
+				status = "unknown";
+				if (inPipeline) pipelineStatus = status;
+				continue;
+			}
+			const destination = lexicalAbs(unquote(target), here ?? cwd);
+			try {
+				if (!statSync(destination).isDirectory()) {
+					status = "failure";
+					if (inPipeline) pipelineStatus = status;
+					continue;
+				}
+				accessSync(destination, constants.X_OK);
+				if (!conditional) unknownCd = false;
+				here = unknownCd ? null : destination;
+				status = "success";
+			} catch {
+				status = "failure";
+			}
+			if (inPipeline) pipelineStatus = status;
 			continue;
 		}
 
 		let start = 0;
 		while (tokens[start] && (/^[A-Za-z_][A-Za-z0-9_]*=/.test(tokens[start]!) ||
 			["env", "command", "exec", "--"].includes(tokens[start]!))) start++;
-		if (!["git", "dgit"].includes(basename(tokens[start] ?? ""))) continue;
+		if (!["git", "dgit"].includes(basename(tokens[start] ?? ""))) {
+			status = tokens[start] === "true" || tokens[start] === ":" ? "success" :
+				tokens[start] === "false" ? "failure" : "unknown";
+			if (inPipeline) pipelineStatus = status;
+			continue;
+		}
 
 		let where = here;
 		let index = start + 1;
@@ -208,7 +271,9 @@ export function gitCommits(command: string, cwd: string): CommitCall[] {
 			if (!token.startsWith("-")) break;
 			// `-C<path>`, attached, as git also accepts it.
 			if (token.startsWith("-C") && token.length > 2) {
-				where = lexicalAbs(unquote(token.slice(2)), where);
+				const target = unquote(token.slice(2));
+				where = where === null && !target.startsWith("/") && !target.startsWith("~") ? null :
+					lexicalAbs(target, where ?? cwd);
 				index += 1;
 				continue;
 			}
@@ -218,14 +283,23 @@ export function gitCommits(command: string, cwd: string): CommitCall[] {
 			}
 			if (token === "-C") {
 				const value = tokens[index + 1];
-				if (value) where = lexicalAbs(unquote(value), where);
+				if (!value) where = null;
+				else {
+					const target = unquote(value);
+					where = where === null && !target.startsWith("/") && !target.startsWith("~") ? null :
+						lexicalAbs(target, where ?? cwd);
+				}
 				index += 2;
 				continue;
 			}
 			index += Object.hasOwn(VALUE_OPTIONS, token) ? 2 : 1;
 		}
 
-		if (tokens[index] !== "commit") continue;
+		if (tokens[index] !== "commit") {
+			status = "unknown";
+			if (inPipeline) pipelineStatus = status;
+			continue;
+		}
 		const rest = tokens.slice(index + 1).map(unquote);
 		let all = false;
 		let boundary = false;
@@ -257,7 +331,10 @@ export function gitCommits(command: string, cwd: string): CommitCall[] {
 			if (/[$`*?[\]]/.test(arg) || arg.startsWith(":")) uncertain = true;
 			paths.push(arg);
 		}
-		if (!uncertain) out.push({ cwd: where, all, ...(paths.length ? { paths } : {}) });
+		if (where === null) out.push({ cwd: null, all, ...(paths.length ? { paths } : {}) });
+		else if (!uncertain) out.push({ cwd: where, all, ...(paths.length ? { paths } : {}) });
+		status = "unknown";
+		if (inPipeline) pipelineStatus = status;
 	}
 	return out;
 }
@@ -340,6 +417,9 @@ export function decideCommit(command: string, cwd: string): { block: true; reaso
 	const chezmoi = chezmoiRepo();
 	if (!chezmoi) return;
 	for (const call of gitCommits(command, cwd)) {
+		if (call.cwd === null) {
+			return { block: true, reason: "Cannot determine the commit's working directory safely; refusing to allow a possible secret commit." };
+		}
 		// git answers where the commit lands, so a symlinked path still compares equal.
 		const top = spawnGit(["-C", call.cwd, "rev-parse", "--show-toplevel"]);
 		if (top === null || top.trim() !== chezmoi.top) continue;
@@ -368,8 +448,8 @@ export default function secretCommitGate(pi: ExtensionAPI): void {
 			const cwd = typeof input.cwd === "string" && input.cwd !== "" ? lexicalAbs(input.cwd, sessionCwd) : sessionCwd;
 			return decideCommit(command, cwd);
 		} catch {
-			// Uncertainty allows the commit: a throwing tool_call handler is an outage.
-			return;
+			// Uncertainty is safety-critical: do not allow a commit we could not inspect.
+			return { block: true, reason: "The secret commit guard could not resolve this command safely; refusing to allow it." };
 		}
 	});
 }

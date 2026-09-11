@@ -182,3 +182,47 @@ describe("cross-instance once-guard", () => {
 		expect(sent.length).toBe(1);
 	});
 });
+
+describe("session_shutdown store selection", () => {
+	test("stops this checkout's server, never the one an inherited BEADS_DIR names", async () => {
+		// Independent review reproduced `bd dolt stop` being issued against another
+		// repository's store: shutdown resolved through `beadsDir`, which honours an
+		// inherited pin, while the session's own bash calls used the checkout's
+		// database. A fake `bd` on PATH records which store it was actually pointed at.
+		const checkout = await repo({ "metadata.json": '{"dolt_mode":"server"}' });
+		const foreign = await repo({ "metadata.json": '{"dolt_mode":"server"}' });
+		const bin = await mkdtemp(join(tmpdir(), "beads-fakebin-"));
+		dirs.push(bin);
+		const log = join(bin, "calls.txt");
+		await writeFile(join(bin, "bd"),
+			`#!/bin/sh\nprintf '%s|%s\\n' "$*" "$BEADS_DIR" >> ${JSON.stringify(log)}\nexit 0\n`);
+		await Bun.spawn(["chmod", "+x", join(bin, "bd")]).exited;
+
+		const saved = { path: process.env.PATH, beads: process.env.BEADS_DIR, stop: process.env.BEADS_STOP_SERVER_ON_EXIT };
+		const handlers: Array<(event: unknown, ctx: unknown) => Promise<void>> = [];
+		try {
+			process.env.PATH = `${bin}:${saved.path ?? ""}`;
+			process.env.BEADS_DIR = join(foreign, ".beads");
+			process.env.BEADS_STOP_SERVER_ON_EXIT = "1";
+			const pi = {
+				on: (name: string, handler: (event: unknown, ctx: unknown) => Promise<void>) => {
+					if (name === "session_shutdown") handlers.push(handler);
+				},
+				sendMessage: () => {},
+				logger: { error: () => {}, info: () => {} },
+			};
+			beadsDoltLifecycle(pi as never);
+			for (const handler of handlers) await handler({}, { cwd: checkout });
+
+			const recorded = await Bun.file(log).text().catch(() => "");
+			expect(recorded).toContain("dolt stop");
+			expect(recorded).toContain(join(checkout, ".beads"));
+			expect(recorded).not.toContain(join(foreign, ".beads"));
+		} finally {
+			for (const [key, value] of [["PATH", saved.path], ["BEADS_DIR", saved.beads], ["BEADS_STOP_SERVER_ON_EXIT", saved.stop]] as const) {
+				if (value === undefined) delete process.env[key];
+				else process.env[key] = value;
+			}
+		}
+	});
+});

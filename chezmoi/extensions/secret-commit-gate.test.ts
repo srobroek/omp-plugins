@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -80,7 +80,54 @@ describe("gitCommits", () => {
 		} finally {
 			rmSync(dir, { recursive: true, force: true });
 		}
-		expect(gitCommits("cd $DIR && git commit", ELSEWHERE)).toEqual([{ cwd: ELSEWHERE, all: false }]);
+		expect(gitCommits("cd $DIR && git commit", ELSEWHERE)).toEqual([{ cwd: null, all: false }]);
+		expect(gitCommits("cd $DIR && git -C /tmp commit", ELSEWHERE)).toEqual([{ cwd: "/tmp", all: false }]);
+	});
+
+	test("conditional branches preserve the shell cwd", () => {
+		const dir = mkdtempSync(join(tmpdir(), "secret-conditional-cd-"));
+		const other = join(dir, "other");
+		mkdirSync(other);
+		try {
+			expect(gitCommits(`cd '${other}' || git commit`, dir)).toEqual([]);
+			expect(gitCommits(`cd '${other}' || true && git commit`, dir)).toEqual([{ cwd: other, all: false }]);
+			expect(gitCommits(`cd '${other}' && cd missing || git commit`, dir)).toEqual([{ cwd: other, all: false }]);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	test("a backgrounded list keeps its cd out of the parent shell", () => {
+		// `&` backgrounds the whole preceding list, so its `cd` runs in a subshell. Every
+		// expectation below was read off real bash with `git` shadowed to print $PWD; a
+		// parser that leaks the subshell's directory would inspect the WRONG tree for the
+		// foreground commit, which is how a real plaintext secret escapes the guard.
+		const dir = mkdtempSync(join(tmpdir(), "secret-bg-cd-"));
+		const other = join(dir, "other");
+		mkdirSync(other);
+		try {
+			// bash: the backgrounded commit runs in `other`, the foreground one in `dir`.
+			expect(gitCommits(`cd '${other}' && git commit & git commit`, dir).map((c) => c.cwd).sort()).toEqual([dir, other].sort());
+			// bash: the first `cd` is foreground and DOES move the parent, so the
+			// foreground commit runs in `other` even though a background job follows.
+			expect(gitCommits(`cd '${other}'; cd '${dir}' & git commit`, dir)).toEqual([{ cwd: other, all: false }]);
+			// bash: a bare backgrounded `cd` never moves the parent.
+			expect(gitCommits(`cd '${other}' & git commit`, dir)).toEqual([{ cwd: dir, all: false }]);
+			// A PIPELINE inside a backgrounded list. Independent review reproduced a
+			// bypass here: the pipeline stage reset to the parent's directory, so BOTH
+			// commits were reported outside and a staged plaintext secret in `other`
+			// went uninspected. bash runs the backgrounded pipeline's commit in `other`
+			// and the foreground one in `dir`, because the job's own `cd` applies inside
+			// the job while never reaching the parent.
+			expect(gitCommits(`cd '${other}' && printf x | git commit & git commit`, dir).map((c) => c.cwd).sort()).toEqual([dir, other].sort());
+			// Both stages of a backgrounded pipeline see the job's directory.
+			expect(gitCommits(`cd '${other}' && printf x | git commit & printf y | git commit`, dir).map((c) => c.cwd).sort()).toEqual([dir, other].sort());
+			// A pipeline whose own first stage cds: that cd is subshell-local, so the
+			// commit stays in the parent's directory and the following `;` does too.
+			expect(gitCommits(`cd '${other}' | git commit; git commit`, dir).map((c) => c.cwd)).toEqual([dir, dir]);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
 	});
 
 	test("-a and combined short flags stage tracked edits", () => {
@@ -181,6 +228,13 @@ describe("decideCommit", () => {
 		seedRepo([], ["dotfiles/private_dot_env"]);
 		expect(decideCommit("git commit -am wip", ROOT)?.block).toBe(true);
 		expect(decideCommit("git commit -m wip", ROOT)).toBeUndefined();
+	});
+
+	test("blocks when cd leaves the commit cwd unknown", () => {
+		seedRepo(["dotfiles/private_dot_env"]);
+		const decision = decideCommit("cd $DIR && git commit -m x", ROOT);
+		expect(decision?.block).toBe(true);
+		expect(decision?.reason).toContain("working directory safely");
 	});
 
 	test("allows a clean commit, another repository, and a non-commit", () => {
@@ -306,7 +360,7 @@ test("literal shell cwd keeps secrets guarded after failed and pipeline-local cd
 			// Replace git with a shell function: observe the real cwd without committing.
 			const observed = Bun.spawnSync(["bash", "-c", `git() { pwd; }; ${command}`],
 				{ cwd: dir, stdout: "pipe", stderr: "pipe" });
-			expect(observed.stdout.toString().trim()).toBe(dir);
+			expect(observed.stdout.toString().trim()).toBe(realpathSync(dir));
 			expect(gitCommits(command, dir)).toEqual([{ cwd: dir, all: false }]);
 			expect(decideCommit(command, dir)?.block).toBe(true);
 		}

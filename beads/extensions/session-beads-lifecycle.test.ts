@@ -119,7 +119,7 @@ describe("autoPinBeadsDir", () => {
 		execFileSync("git", ["-C", root, "worktree", "remove", "--force", wt]);
 		rmSync(root, { recursive: true, force: true });
 		rmSync(bare, { recursive: true, force: true });
-	});
+	}, 20_000); // shells out to git init/commit/worktree add; exceeds the 5s default under full-suite load
 
 	test("repoIdentity resolves worktrees of one repository to the same common dir", () => {
 		const { execFileSync } = require("node:child_process") as typeof import("node:child_process");
@@ -134,7 +134,7 @@ describe("autoPinBeadsDir", () => {
 		expect(repoIdentity(tmpdir())).not.toBe(repoIdentity(root));
 		execFileSync("git", ["-C", root, "worktree", "remove", "--force", wt]);
 		rmSync(root, { recursive: true, force: true });
-	});
+	}, 20_000); // shells out to git init/commit/worktree add; exceeds the 5s default under full-suite load
 });
 
 describe("pinBashInput", () => {
@@ -470,37 +470,61 @@ describe("integration", () => {
 		sessionBeadsLifecycle(fakePi as never);
 		return { handlers, logged };
 	};
+	/**
+	 * The `BEADS_DIR` a `tool_call` rewrite pins, narrowed rather than asserted.
+	 *
+	 * Each step throws on a shape the hook should never return, so a changed return
+	 * type fails the test loudly instead of being read through an unchecked cast.
+	 */
+	const pinnedBeadsDir = (result: unknown): unknown => {
+		if (!(result && typeof result === "object" && "input" in result)) throw new Error("the hook did not rewrite the call");
+		const { input } = result;
+		if (!(input && typeof input === "object" && "env" in input)) throw new Error("the rewritten call carries no env");
+		const { env } = input;
+		if (!(env && typeof env === "object" && "BEADS_DIR" in env)) throw new Error("the rewritten env carries no BEADS_DIR");
+		return env.BEADS_DIR;
+	};
 	test("the tool_call hook pins bash for the session's checkout and nothing else", async () => {
-		const root = mkdtempSync(join(tmpdir(), "beads-callpin-"));
-		mkdirSync(join(root, ".beads"));
-		const { handlers } = wire();
-		const call = handlers.tool_call![0]!;
-		const ctx = { cwd: root, sessionManager: { getSessionId: () => "pin-session" } };
-		expect(await call({ toolName: "bash", toolCallId: "1", input: { command: "printenv BEADS_DIR" } }, ctx)).toEqual({
-			input: { command: "printenv BEADS_DIR", env: { BEADS_DIR: join(root, ".beads") } },
-		});
-		expect(await call({ toolName: "read", toolCallId: "2", input: { path: "x" } }, ctx)).toBeUndefined();
-		const human = mkdtempSync(join(tmpdir(), "beads-callpin-human-"));
-		mkdirSync(join(human, ".beads"));
-		const saved = process.env.BEADS_DIR;
-		const savedPath = process.env.PATH;
-		process.env.BEADS_DIR = "/human/pinned/.beads";
-		process.env.PATH = "/nonexistent"; // no bd: the pin decision is the only effect
+		// This test asserts the branch where NO pin is inherited, so it has to establish
+		// that precondition. The plugin exports `BEADS_DIR` into every session it runs
+		// in, and an inherited value deliberately wins (asserted in the middle block);
+		// left ambient, the first and last assertions would read that pin instead of the
+		// checkout's own. The sibling test below saves and restores the same way.
+		const ambient = process.env.BEADS_DIR;
+		delete process.env.BEADS_DIR;
 		try {
-			await handlers.session_start![0]!({}, { cwd: human, sessionManager: { getSessionId: () => "human-session" } });
-			const pinned = await call({ toolName: "bash", toolCallId: "4", input: { command: "bd list" } }, { cwd: human, sessionManager: { getSessionId: () => "human-session" } });
-			expect((pinned as { input: { env: Record<string, string> } }).input.env.BEADS_DIR).toBe("/human/pinned/.beads"); // never the checkout's own
+			const root = mkdtempSync(join(tmpdir(), "beads-callpin-"));
+			mkdirSync(join(root, ".beads"));
+			const { handlers } = wire();
+			const call = handlers.tool_call![0]!;
+			const ctx = { cwd: root, sessionManager: { getSessionId: () => "pin-session" } };
+			expect(await call({ toolName: "bash", toolCallId: "1", input: { command: "printenv BEADS_DIR" } }, ctx)).toEqual({
+				input: { command: "printenv BEADS_DIR", env: { BEADS_DIR: join(root, ".beads") } },
+			});
+			expect(await call({ toolName: "read", toolCallId: "2", input: { path: "x" } }, ctx)).toBeUndefined();
+			const human = mkdtempSync(join(tmpdir(), "beads-callpin-human-"));
+			mkdirSync(join(human, ".beads"));
+			const savedPath = process.env.PATH;
+			process.env.BEADS_DIR = "/human/pinned/.beads";
+			process.env.PATH = "/nonexistent"; // no bd: the pin decision is the only effect
+			try {
+				await handlers.session_start![0]!({}, { cwd: human, sessionManager: { getSessionId: () => "human-session" } });
+				const pinned = await call({ toolName: "bash", toolCallId: "4", input: { command: "bd list" } }, { cwd: human, sessionManager: { getSessionId: () => "human-session" } });
+				expect(pinnedBeadsDir(pinned)).toBe("/human/pinned/.beads"); // never the checkout's own
+			} finally {
+				delete process.env.BEADS_DIR; // cleared for this test; the outer finally puts the ambient value back
+				if (savedPath === undefined) delete process.env.PATH;
+				else process.env.PATH = savedPath;
+				rmSync(human, { recursive: true, force: true });
+			}
+			const plain = mkdtempSync(join(tmpdir(), "beads-callpin-plain-"));
+			expect(await call({ toolName: "bash", toolCallId: "3", input: { command: "bd list" } }, { cwd: plain, sessionManager: { getSessionId: () => "other" } })).toBeUndefined();
+			rmSync(root, { recursive: true, force: true });
+			rmSync(plain, { recursive: true, force: true });
 		} finally {
-			if (saved === undefined) delete process.env.BEADS_DIR;
-			else process.env.BEADS_DIR = saved;
-			if (savedPath === undefined) delete process.env.PATH;
-			else process.env.PATH = savedPath;
-			rmSync(human, { recursive: true, force: true });
+			if (ambient === undefined) delete process.env.BEADS_DIR;
+			else process.env.BEADS_DIR = ambient;
 		}
-		const plain = mkdtempSync(join(tmpdir(), "beads-callpin-plain-"));
-		expect(await call({ toolName: "bash", toolCallId: "3", input: { command: "bd list" } }, { cwd: plain, sessionManager: { getSessionId: () => "other" } })).toBeUndefined();
-		rmSync(root, { recursive: true, force: true });
-		rmSync(plain, { recursive: true, force: true });
 	});
 
 	test("a live session keeps its auto-pin; a concurrent session in another checkout does not overwrite it", async () => {

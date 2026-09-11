@@ -22,7 +22,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
-import { beadsDir } from "./session-beads-lifecycle.ts";
+import { sessionPinFor } from "./session-beads-lifecycle.ts";
 
 /** Where beads records the backend it resolved. */
 export interface DoltMetadata {
@@ -63,16 +63,32 @@ export function classifyBackend(metadata: string, config: string): Backend {
 	return "unknown";
 }
 
-/** Read the backend of the repository rooted at `cwd`, without touching `bd`. */
-export async function readBackend(cwd: string): Promise<{ backend: Backend; tracked: boolean }> {
-	const beads = beadsDir(cwd);
-	if (beads === undefined) return { backend: "unknown", tracked: false };
-
+/** Classify the store held in `beads`, a resolved `.beads` directory. */
+async function backendAt(beads: string): Promise<Backend> {
 	const [metadata, config] = await Promise.all([
 		fs.readFile(path.join(beads, "metadata.json"), "utf8").catch(() => ""),
 		fs.readFile(path.join(beads, "config.yaml"), "utf8").catch(() => ""),
 	]);
-	return { backend: classifyBackend(metadata, config), tracked: true };
+	return classifyBackend(metadata, config);
+}
+
+/**
+ * Read the backend of the repository rooted at `cwd`, without touching `bd`.
+ *
+ * Resolution deliberately ignores an ambient `BEADS_DIR`: the question is which
+ * backend THIS checkout carries, and the plugin pins that variable into every
+ * session, so honouring it would report the pinned repository's backend for every
+ * directory asked about. `sessionPinFor` answers for the checkout itself, still
+ * resolving a linked worktree to the primary checkout's database.
+ *
+ * This is the right resolution for advising about the checkout. Anything that
+ * ACTS on a server must instead classify the store it will act on; see the
+ * shutdown handler.
+ */
+export async function readBackend(cwd: string): Promise<{ backend: Backend; tracked: boolean }> {
+	const beads = sessionPinFor(cwd);
+	if (beads === undefined) return { backend: "unknown", tracked: false };
+	return { backend: await backendAt(beads), tracked: true };
 }
 
 /**
@@ -117,26 +133,32 @@ export function pidAlive(pid: number): boolean {
 	}
 }
 
-/** The server pid this project recorded, when the value is usable. */
-async function serverPid(cwd: string): Promise<number | undefined> {
-	const dir = beadsDir(cwd);
-	if (dir === undefined) return undefined;
-	const raw = await fs.readFile(path.join(dir, "dolt-server.pid"), "utf8").catch(() => "");
+/** The server pid recorded in `store`, a resolved `.beads` directory, when usable. */
+async function serverPid(store: string): Promise<number | undefined> {
+	const raw = await fs.readFile(path.join(store, "dolt-server.pid"), "utf8").catch(() => "");
 	const pid = Number.parseInt(raw.trim(), 10);
 	return Number.isSafeInteger(pid) && pid > 0 ? pid : undefined;
 }
 
 /**
- * Stop the project's server and report what actually happened.
+ * Stop the server owning `store` and report what actually happened.
  *
  * `bd dolt stop` cannot be taken at its word: on a shared server it prints
  * `Dolt server stopped.` while the process keeps running. The pid recorded before
  * the call is the only thing that settles it.
+ *
+ * `store` is threaded through rather than re-resolved. The caller classified one
+ * directory, and the pid read and the `bd` call must address that same one: this
+ * runs at shutdown, where the sibling lifecycle extension is clearing its own
+ * `BEADS_DIR` pin, so a second resolution across an await could name another
+ * repository's store. Pinning it explicitly for the child settles which store
+ * `bd` acts on rather than leaving it to whatever the environment holds.
  */
-async function stopServer(cwd: string): Promise<{ said: string; verdict: string }> {
-	const before = await serverPid(cwd);
+async function stopServer(cwd: string, store: string): Promise<{ said: string; verdict: string }> {
+	const before = await serverPid(store);
 	const proc = Bun.spawn(["bd", "dolt", "stop"], {
-		cwd, stdout: "pipe", stderr: "pipe", timeout: 1200, killSignal: "SIGKILL",
+		cwd, env: { ...process.env, BEADS_DIR: store },
+		stdout: "pipe", stderr: "pipe", timeout: 1200, killSignal: "SIGKILL",
 	});
 	const [out, err] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text()]);
 	const code = await proc.exited;
@@ -186,9 +208,17 @@ export default function beadsDoltLifecycle(pi: ExtensionAPI): void {
 
 	pi.on("session_shutdown", async (_event, ctx: ExtensionContext) => {
 		try {
-			const { backend } = await readBackend(ctx.cwd);
-			if (!shouldStopServer(backend)) return;
-			const { said, verdict } = await stopServer(ctx.cwd);
+			// Only ever stop a server whose store belongs to THIS checkout. Resolving
+			// through `beadsDir` would honour an inherited `BEADS_DIR`, and independent
+			// review reproduced the consequence: with a foreign pin present, shutdown
+			// issued `bd dolt stop` against another repository's store. The session's
+			// own bash calls do not necessarily use that pin either -- on a conflict the
+			// sibling extension deliberately pins the checkout's own database instead.
+			// `BEADS_STOP_SERVER_ON_EXIT` is per-project intent, so when this checkout
+			// has no store of its own the correct action is to stop nothing.
+			const store = sessionPinFor(ctx.cwd);
+			if (store === undefined || !shouldStopServer(await backendAt(store))) return;
+			const { said, verdict } = await stopServer(ctx.cwd, store);
 			// The verdict comes from the pid, not from what bd printed.
 			pi.logger.info("beads dolt server stop", { verdict, said });
 		} catch (error) {
