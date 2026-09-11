@@ -13,6 +13,7 @@ import json
 import os
 import shlex
 import re
+import pathlib
 import shutil
 import subprocess
 import tempfile
@@ -2149,13 +2150,20 @@ def doctor(root: Path) -> tuple[dict[str, Any], int]:
         drift.append("answers file missing")
     required_tools = {str(tool) for layer in layers for tool in load_layer(layer).get("requires_tools", [])}
     declared_tools = _mise_tools(root)
-    tool_status: dict[str, bool] = {}
+    tool_status: dict[str, str | bool] = {}
+    mise_available = shutil.which("mise") is not None
     for tool in sorted(required_tools | set(declared_tools)):
-        command = _tool_command(tool)
-        present = shutil.which(command) is not None
-        tool_status[tool] = present
-        if not present:
+        if tool in declared_tools and tool not in required_tools:
+            status = _tool_status(root, tool) if mise_available else ("ok" if shutil.which(_tool_command(tool)) is not None else "MISS")
+        else:
+            # Required-tool checks intentionally remain PATH presence checks.
+            status = shutil.which(_tool_command(tool)) is not None
+        tool_status[tool] = status
+        if status is False or status == "MISS":
             drift.append(f"missing tool:{tool}")
+        elif status == "SHIM":
+            drift.append(f"unrunnable tool:{tool}")
+
     config_path = root / ".pre-commit-config.yaml"
     declared_hooks = declared_hook_stages(config_path.read_text()) if config_path.is_file() else []
     valid_stages = {"pre-commit", "commit-msg", "pre-push", "post-commit", "post-checkout", "post-merge", "pre-rebase", "prepare-commit-msg", "post-rewrite", "pre-merge-commit"}
@@ -2370,11 +2378,62 @@ def _owned_status_line(line: str, owned: set[str]) -> bool:
     return rel in owned or any(rel.startswith(path.rstrip("/") + "/") for path in owned if path.endswith("/"))
 
 
+
+
 def _tool_available(root: Path, tool: str) -> bool:
     """Project pins win: with a mise.toml the tool must resolve through the isolated project env; otherwise PATH decides."""
     if (root / "mise.toml").exists() and shutil.which("mise") and tool not in ("omp", "mise", "git"):
         return _mise_has(root, tool)
     return shutil.which(_tool_command(tool)) is not None
+TOOL_RESOLUTION_TIMEOUT = 5
+
+def _tool_status(root: Path, tool: str) -> str:
+    """Classify a declared tool as MISS, SHIM, or ok without invoking it.
+
+    When mise is unavailable the caller falls back to PATH presence; this keeps
+    doctor useful on machines that do not have mise installed.
+    """
+    command = _tool_command(tool)
+    if shutil.which(command) is None:
+        return "MISS"
+    if shutil.which("mise") is None:
+        # No mise on this machine, so nothing can be a mise shim and there is no
+        # project resolution to consult. Presence is the only signal available, and
+        # reporting every declared tool as broken here would be worse than useless.
+        return "ok"
+    resolved = shutil.which(command) or ""
+    # Separator-normalised so a Windows shim at ...\mise\shims\tool is recognised too;
+    # this scaffold's CI matrix includes Windows, where a hard-coded posix form would
+    # treat every dead shim as an ordinary binary and report it ok.
+    #
+    # The two components must be ADJACENT. Testing membership independently also matches
+    # an ordinary binary under .../mise/project/shims/tool, which is not a shim path.
+    parts = resolved.replace("\\", "/").split("/")
+    shim_path = any(parts[i] == "mise" and parts[i + 1] == "shims" for i in range(len(parts) - 1))
+    if not shim_path:
+        # A real binary on PATH, not a mise shim. `mise which` would answer "mise does
+        # not manage this for this project", which says nothing about whether the tool
+        # runs -- git and ruff both answer non-zero there while being perfectly usable.
+        # Only a PATH entry that IS a shim can be a DEAD shim.
+        return "ok"
+    try:
+        probe = subprocess.run(
+            ["mise", "which", command],
+            cwd=root,
+            env=_project_mise_env(root),
+            stdin=subprocess.DEVNULL,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=TOOL_RESOLUTION_TIMEOUT,
+        )
+    except subprocess.TimeoutExpired:
+        return "SHIM"
+    except OSError:
+        # mise was on PATH a moment ago but could not be executed. Treat that as an
+        # environment problem rather than a verdict about the tool.
+        return "ok"
+    return "ok" if probe.returncode == 0 else "SHIM"
 
 
 def _graphify_mcp_available(root: Path) -> bool:
