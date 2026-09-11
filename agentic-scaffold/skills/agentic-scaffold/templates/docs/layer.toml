@@ -5,6 +5,7 @@ conflicts_with = []
 owns = ["docs/adr/0001-record-architecture-decisions.md", "docs/architecture.md", ".omp/docs.json", "site/astro.config.mjs", "site/package.json", "site/src/pages/index.astro", "mkdocs.yml", "docs/index.md", "book.toml", "docs/src/SUMMARY.md"]
 [vars]
 docs_flavour = { default = "none", prompt = "Documentation flavour (none, splash, or site)", ask = true }
+bts_docs = { default = "starlight", prompt = "TypeScript docs generator (starlight or none)", ask = false }
 [conditional_files]
 "site/astro.config.mjs" = { var = "docs_flavour", equals = "splash" }
 "site/package.json" = { var = "docs_flavour", equals = "splash" }

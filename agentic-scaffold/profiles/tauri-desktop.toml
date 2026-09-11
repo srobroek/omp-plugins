@@ -1,14 +1,16 @@
 name = "tauri-desktop"
-summary = "Rust desktop tool"
-layers = ["base", "tooling", "hooks", "lang/rust", "ci/github", "release", "agentic"]
+summary = "Tauri desktop TypeScript application"
+layers = ["base", "tooling", "hooks", "lang/ts", "ci/github", "release", "agentic"]
 [vars]
-language = "rust"
-kind = "tool"
+language = "ts"
+kind = "app"
 app = true
 tauri = true
+bts = "true"
+bts_version = "3.42.2"
 [commands]
 setup = "mise install && bun install --frozen-lockfile"
-test = "cargo test --workspace"
-lint = "cargo clippy --all-targets -- -D warnings"
-fmt = "cargo fmt --all"
-check = "cargo check --workspace && bun run check"
+test = "bun test"
+lint = "bunx oxlint"
+fmt = "bunx biome check ."
+check = "bun run check"
