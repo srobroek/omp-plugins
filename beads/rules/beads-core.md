@@ -27,9 +27,11 @@ MUST Claim before working: `bd update <id> --claim` (atomic CAS; first wins,
   idempotent). Never claim via labels -- not atomic.
 MUST Discover work with `bd ready --unassigned --json`; never pick up work
   assigned to another actor unless the parent hands you its id.
-MUST On refusal, coordinate with holder; `bd unclaim --force` only after
-  confirming the holding session is dead.
-DEFAULT Release with `bd unclaim <id>`.
+MUST On refusal, coordinate with the holder. There is no `bd unclaim` and no
+  force flag: releasing another actor's claim means clearing its assignee, so do
+  it only after establishing the holding session is dead, and say in a comment
+  what you checked -- a peer roster proves nothing about other processes.
+DEFAULT Release with `bd update <id> --assignee '' --status open`.
 
 FIELD TAXONOMY
 | purpose | mechanism | writer |
