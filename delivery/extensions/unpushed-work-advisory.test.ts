@@ -455,11 +455,21 @@ describe("integration temp git repo", () => {
 	test.skipIf(!gitOk)("counts only commits made after the session opened", () => {
 		const work = mkdtempSync(join(tmpdir(), "unpushed-adv-commits-"));
 		const origin = mkdtempSync(join(tmpdir(), "unpushed-adv-origin-"));
+		// Isolation is written as repository config instead of passed as `-c` on every
+		// call, because this test pushes. A `git` wrapper on PATH may refuse a push
+		// that carries `-c` at all, on the grounds that those options can retarget the
+		// push or override its config. The push then fails, no upstream is recorded,
+		// `ahead` stays 0, and the advisory is correctly silent -- so the test failed
+		// for a reason unrelated to what it asserts, and only outside CI.
 		const run = (args: string[], cwd = work) =>
-			Bun.spawnSync(["git", ...GIT_ISOLATED, ...args], { cwd, stdout: "pipe", stderr: "pipe" });
+			Bun.spawnSync(["git", ...args], { cwd, stdout: "pipe", stderr: "pipe" });
 
 		run(["init", "--bare", "-b", "topic"], origin);
+		run(["config", "core.hooksPath", "/dev/null"], origin);
+		run(["config", "commit.gpgsign", "false"], origin);
 		run(["init", "-b", "topic"]);
+		run(["config", "core.hooksPath", "/dev/null"]);
+		run(["config", "commit.gpgsign", "false"]);
 		run(["config", "user.email", "t@t.test"]);
 		run(["config", "user.name", "t"]);
 		writeFileSync(join(work, "a.txt"), "one\n");

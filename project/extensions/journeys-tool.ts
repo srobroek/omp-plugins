@@ -1,5 +1,5 @@
-import { copyFileSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, statSync, unlinkSync, writeFileSync } from "node:fs";
-import { basename, isAbsolute, join, parse, sep } from "node:path";
+import { copyFileSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { basename, isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { TSchema } from "@oh-my-pi/pi-ai";
 import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
 
@@ -47,10 +47,38 @@ export function parseFrontmatter(text: string): Frontmatter {
 	return {};
 }
 
-function safePath(path: string): void {
-	const absolute = isAbsolute(path) ? path : `${process.cwd()}/${path}`;
-	let current = parse(absolute).root;
-	for (const part of absolute.slice(current.length).split(sep === "\\" ? /[\\/]/ : "/").filter(Boolean)) {
+/**
+ * Refuse a symlink at or below `base`, and refuse a path that escapes it.
+ *
+ * Only the managed tree is attacker-shaped: a journeys directory's own contents,
+ * or the `.beads/formulas` directory a copy writes into. Components ABOVE `base`
+ * are the user's own filesystem layout, and walking those made the tool unusable
+ * wherever any ancestor is a symlink. On macOS both `/tmp` and `/var` are, so
+ * every temp directory was refused outright, and a symlinked home or work
+ * directory is common enough to hit real users.
+ *
+ * `base` MUST already be physically resolved by the caller -- see `managedRoot`.
+ * Resolving it is what keeps the checked path and the operated path the same one:
+ * a lexical `resolve()` collapses `link/..` to the parent of the symlink, so the
+ * walk inspects `/top/managed` while the filesystem writes to `/outside/managed`.
+ * The candidate is then only normalised lexically, because it is built from that
+ * resolved root and its own components must stay unresolved for `lstat` to see a
+ * symlink at all.
+ */
+function safePath(path: string, base: string): void {
+	const root = base;
+	const absolute = resolve(isAbsolute(path) ? path : join(process.cwd(), path));
+	const inside = relative(root, absolute);
+	// Component-aware, not `startsWith("..")`: an ordinary entry named `..metadata`
+	// is inside the root, and rejecting it diverged from the Python port.
+	if (inside === ".." || inside.startsWith(`..${sep}`) || isAbsolute(inside)) {
+		throw new Error(`outside the managed root: ${absolute}`);
+	}
+	let current = root;
+	if (lstatSync(current, { throwIfNoEntry: false })?.isSymbolicLink()) {
+		throw new Error(`unsafe symlink: ${current}`);
+	}
+	for (const part of inside.split(sep === "\\" ? /[\\/]/ : "/").filter(Boolean)) {
 		current = join(current, part);
 		if (lstatSync(current, { throwIfNoEntry: false })?.isSymbolicLink()) {
 			throw new Error(`unsafe symlink: ${current}`);
@@ -58,22 +86,45 @@ function safePath(path: string): void {
 	}
 }
 
+/**
+ * The physical directory a command operates in, or `null` when it cannot be one.
+ *
+ * A `..` component is refused outright rather than normalised. `..` is the only
+ * way a root can traverse a symlink: `/top/link/../managed` normalises lexically
+ * to `/top/managed` while the filesystem resolves it to whatever `link` points
+ * at, so the guard would inspect one tree and the writes would land in another.
+ * Refusing the component is precise -- comparing the lexical form against the
+ * physical one is NOT usable here, because a plain `/tmp/x` legitimately differs
+ * from `/private/tmp/x` on macOS, which is the breakage this whole change fixes.
+ *
+ * Everything else resolves physically, so the tree walked is the tree written.
+ */
+function managedRoot(dir: string): string | null {
+	const absolute = resolve(isAbsolute(dir) ? dir : join(process.cwd(), dir));
+	if (dir.split(sep === "\\" ? /[\\/]/ : "/").includes("..")) return null;
+	try {
+		return realpathSync(absolute);
+	} catch {
+		return null;
+	}
+}
+
 function safeJourneyPaths(root: string): void {
-	safePath(root);
-	safePath(join(root, "INDEX.md"));
-	safePath(join(root, "TRACKER.md"));
+	safePath(root, root);
+	safePath(join(root, "INDEX.md"), root);
+	safePath(join(root, "TRACKER.md"), root);
 	for (const name of readdirSync(root)) {
 		const dir = join(root, name);
-		safePath(dir);
+		safePath(dir, root);
 		if (!lstatSync(dir).isDirectory()) continue;
-		safePath(join(dir, "journey.md"));
+		safePath(join(dir, "journey.md"), root);
 		const runs = join(dir, "runs");
-		safePath(runs);
+		safePath(runs, root);
 		if (!existsSync(runs)) continue;
 		const runsStat = lstatSync(runs);
 		if (!runsStat.isDirectory()) throw new Error(`runs is not a directory: ${runs}`);
 		for (const run of readdirSync(runs).filter((n) => n.endsWith(".md"))) {
-			safePath(join(runs, run));
+			safePath(join(runs, run), root);
 			if (!lstatSync(join(runs, run)).isFile()) throw new Error(`not a run file: ${run}`);
 		}
 	}
@@ -301,9 +352,12 @@ export type JourneysIndexParams = {
 };
 
 export function runJourneys(params: JourneysIndexParams): { ok: boolean; text: string } {
-	const root = params.journeysDir;
+	// Resolve first, then check and operate on that one directory. Passing the raw
+	// argument on would let `link/..` be checked as one tree and written as another.
+	const root = managedRoot(params.journeysDir);
+	if (root === null) return { ok: false, text: `not a directory: ${params.journeysDir}` };
 	try {
-		safePath(root);
+		safePath(root, root);
 		if (!existsSync(root) || !statSync(root).isDirectory()) {
 			return { ok: false, text: `not a directory: ${root}` };
 		}
@@ -330,14 +384,18 @@ export function formulaSources(dir = FORMULAS_DIR): string[] {
 }
 
 export function installFormulas(
-	repoRoot: string,
+	rawRepoRoot: string,
 	force = false,
-	sourcesDir = FORMULAS_DIR,
+	rawSourcesDir = FORMULAS_DIR,
 ): { ok: boolean; text: string; copied?: number; unchanged?: number } {
+	const repoRoot = managedRoot(rawRepoRoot);
+	const sourcesDir = managedRoot(rawSourcesDir);
+	if (repoRoot === null) return { ok: false, text: `ERROR not a Beads workspace: ${rawRepoRoot}` };
+	if (sourcesDir === null) return { ok: false, text: `ERROR no formula sources: ${rawSourcesDir}` };
 	try {
-		safePath(repoRoot);
-		safePath(sourcesDir);
-		safePath(join(repoRoot, ".beads", "formulas"));
+		safePath(repoRoot, repoRoot);
+		safePath(sourcesDir, sourcesDir);
+		safePath(join(repoRoot, ".beads", "formulas"), repoRoot);
 	} catch (err) {
 		return { ok: false, text: `ERROR ${err instanceof Error ? err.message : String(err)}` };
 	}

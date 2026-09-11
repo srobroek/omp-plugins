@@ -13,6 +13,7 @@ Format spec: FORMAT.md in the journeys directory.
 from __future__ import annotations
 
 import argparse
+import os
 import re
 import sys
 from pathlib import Path
@@ -55,30 +56,70 @@ def parse_frontmatter(text: str) -> dict:
     return {}  # unterminated frontmatter
 
 
-def safe_path(path: Path) -> None:
-    absolute = path.absolute()
-    for parent in [*reversed(absolute.parents), absolute]:
-        if parent.is_symlink():
-            raise ValueError(f"unsafe symlink: {parent}")
+def managed_root(directory: Path) -> Path | None:
+    """The physical directory a command operates in, or None when it cannot be one.
+
+    Mirrors managedRoot in journeys-tool.ts. A `..` component is refused outright
+    rather than normalised: `..` is the only way a root can traverse a symlink, so
+    `/top/link/../managed` would be checked as one tree and written as another.
+    Comparing the lexical form against the physical one is NOT usable here, since
+    a plain `/tmp/x` legitimately differs from `/private/tmp/x` on macOS.
+    """
+    if ".." in Path(directory).parts:
+        return None
+    try:
+        return Path(directory).resolve(strict=True)
+    except OSError:
+        return None
+
+def safe_path(path: Path, base: Path) -> None:
+    """Refuse a symlink at or below `base`, and refuse a path that escapes it.
+
+    Mirrors safePath in journeys-tool.ts. Only the managed tree is
+    attacker-shaped; components above `base` are the user's own filesystem
+    layout. Walking those refused every temp directory on macOS, where `/tmp`
+    and `/var` are themselves symlinks, and would refuse any real checkout
+    reached through a symlinked home or work directory.
+
+    `base` MUST already be physically resolved by the caller, via managed_root.
+    That is what keeps the checked path and the operated path the same one: a
+    lexical normpath collapses `link/..` to the symlink's parent, so the walk
+    inspects one tree while the filesystem writes to another. The candidate is
+    then only normalised lexically, because it is built from that resolved root
+    and its own components must stay unresolved for is_symlink() to see them.
+    """
+    root = base
+    absolute = Path(os.path.normpath(path.absolute()))
+    try:
+        inside = absolute.relative_to(root)
+    except ValueError:
+        raise ValueError(f"outside the managed root: {absolute}") from None
+    if root.is_symlink():
+        raise ValueError(f"unsafe symlink: {root}")
+    current = root
+    for part in inside.parts:
+        current = current / part
+        if current.is_symlink():
+            raise ValueError(f"unsafe symlink: {current}")
 
 
 def safe_journey_paths(root: Path) -> None:
-    safe_path(root)
-    safe_path(root / "INDEX.md")
-    safe_path(root / "TRACKER.md")
+    safe_path(root, root)
+    safe_path(root / "INDEX.md", root)
+    safe_path(root / "TRACKER.md", root)
     for directory in root.iterdir():
-        safe_path(directory)
+        safe_path(directory, root)
         if not directory.is_dir():
             continue
-        safe_path(directory / "journey.md")
+        safe_path(directory / "journey.md", root)
         runs = directory / "runs"
-        safe_path(runs)
+        safe_path(runs, root)
         if not runs.exists():
             continue
         if not runs.is_dir():
             raise ValueError(f"not a runs directory: {runs}")
         for run in runs.glob("*.md"):
-            safe_path(run)
+            safe_path(run, root)
             if not run.is_file():
                 raise ValueError(f"not a run file: {run}")
 
@@ -265,9 +306,11 @@ def main(argv: list[str] | None = None) -> int:
             p.add_argument("--yes", action="store_true")
             p.add_argument("--journey", help="selected journey directory name; omit only for an explicitly authorized directory-wide prune")
     args = ap.parse_args(argv)
-    root = args.journeys_dir.absolute()
-    if not root.is_dir():
-        print(f"not a directory: {root}", file=sys.stderr)
+    # Resolve first, then check and operate on that one directory. Using the raw
+    # argument would let `link/..` be checked as one tree and written as another.
+    root = managed_root(args.journeys_dir)
+    if root is None or not root.is_dir():
+        print(f"not a directory: {args.journeys_dir}", file=sys.stderr)
         return 2
     try:
         if args.cmd == "index":

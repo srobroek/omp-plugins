@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -20,6 +20,115 @@ describe("parseFrontmatter", () => {
 	});
 	test("unterminated returns empty", () => {
 		expect(parseFrontmatter("---\nid: J1\n")).toEqual({});
+	});
+});
+
+describe("managed root traversal", () => {
+	/** A journeys tree with one approved journey holding two runs. */
+	const seed = (root: string) => {
+		mkdirSync(join(root, "J1-approved", "runs"), { recursive: true });
+		writeFileSync(join(root, "J1-approved", "journey.md"), "---\nid: J1\ntitle: t\n---\n\n### S1 — Open {#S1}\n");
+		writeFileSync(join(root, "J1-approved", "runs", "2026-01-01.md"), "old\n");
+		writeFileSync(join(root, "J1-approved", "runs", "2026-01-02.md"), "new\n");
+	};
+	const python = (args: string[]) =>
+		Bun.spawnSync(["python3", join(import.meta.dir, "../skills/journey-init/scripts/journeys.py"), ...args],
+			{ stdout: "pipe", stderr: "pipe", timeout: 10000 });
+
+	test("a root traversing a symlink via .. is refused by both implementations", () => {
+		// `/top/link/../managed` normalises LEXICALLY to `/top/managed` while the
+		// filesystem resolves it through `link` to somewhere else entirely. Checking
+		// the normalised form and operating on the resolved one inspects one tree and
+		// writes to another; the Python port deleted runs in the outside tree.
+		// The path is built by concatenation on purpose: `join()` would collapse `..`
+		// before the code under test ever sees it, which is how this escaped review.
+		const top = mkdtempSync(join(tmpdir(), "journeys-top-"));
+		const outside = mkdtempSync(join(tmpdir(), "journeys-outside-"));
+		try {
+			mkdirSync(join(outside, "child"));
+			mkdirSync(join(top, "managed"));
+			mkdirSync(join(outside, "managed"));
+			seed(join(top, "managed"));
+			seed(join(outside, "managed"));
+			symlinkSync(join(outside, "child"), join(top, "link"));
+			const raw = `${top}/link/../managed`;
+
+			expect(runJourneys({ command: "index", journeysDir: raw }).ok).toBe(false);
+			expect(python(["index", raw]).exitCode).not.toBe(0);
+			expect(existsSync(join(top, "managed", "INDEX.md"))).toBe(false);
+			expect(existsSync(join(outside, "managed", "INDEX.md"))).toBe(false);
+
+			// The destructive form: a prune through that root must delete nothing.
+			const runs = () => readdirSync(join(outside, "managed", "J1-approved", "runs")).length;
+			const before = runs();
+			expect(python(["prune", raw, "--keep", "0", "--journey", "J1-approved", "--yes"]).exitCode).not.toBe(0);
+			expect(runs()).toBe(before);
+		} finally {
+			rmSync(top, { recursive: true, force: true });
+			rmSync(outside, { recursive: true, force: true });
+		}
+	});
+
+	test("a symlink inside the tree is still refused, and a plain temp root still works", () => {
+		// The narrowing must not cost the protection, and must not reintroduce the
+		// macOS breakage: /var and /tmp are themselves symlinks, so a temp root has a
+		// symlinked ancestor and used to be refused outright.
+		const planted = mkdtempSync(join(tmpdir(), "journeys-inner-"));
+		const plain = mkdtempSync(join(tmpdir(), "journeys-plain-"));
+		try {
+			seed(planted);
+			symlinkSync("/etc/hosts", join(planted, "J1-approved", "runs", "2026-01-03.md"));
+			expect(runJourneys({ command: "lint", journeysDir: planted }).text).toContain("unsafe symlink");
+			expect(python(["lint", planted]).exitCode).not.toBe(0);
+
+			seed(plain);
+			expect(runJourneys({ command: "index", journeysDir: plain }).ok).toBe(true);
+			expect(python(["index", plain]).exitCode).toBe(0);
+		} finally {
+			rmSync(planted, { recursive: true, force: true });
+			rmSync(plain, { recursive: true, force: true });
+		}
+	});
+
+	test("a root that is itself a symlink is accepted, and operated on where it resolves", () => {
+		// A deliberate contract change, recorded rather than left implicit: the guard
+		// used to refuse this, and now resolves it. A root the user names IS the root,
+		// and `~/journeys -> /data/journeys` is an ordinary layout -- refusing it is the
+		// same class of breakage as refusing every /var temp directory. Safety does not
+		// rest on this: the checked tree and the written tree are the same one after
+		// resolution, symlinks INSIDE the tree are still refused (above), and traversal
+		// through a link is refused by the `..` rule (above).
+		const real = mkdtempSync(join(tmpdir(), "journeys-real-"));
+		const link = `${real}-link`;
+		try {
+			seed(real);
+			symlinkSync(real, link);
+			expect(runJourneys({ command: "index", journeysDir: link }).ok).toBe(true);
+			expect(python(["index", link]).exitCode).toBe(0);
+			// The write lands in the resolved directory, not beside the link.
+			expect(existsSync(join(real, "INDEX.md"))).toBe(true);
+		} finally {
+			rmSync(link, { force: true });
+			rmSync(real, { recursive: true, force: true });
+		}
+	});
+
+	test("an ordinary entry beginning with .. is inside the root, in both implementations", () => {
+		// `inside.startsWith("..")` rejected `..metadata` as an escape. The check is
+		// component-aware now; Python's relative_to always was, so this pins the pair
+		// together against that divergence returning.
+		const root = mkdtempSync(join(tmpdir(), "journeys-dotdot-"));
+		try {
+			seed(root);
+			mkdirSync(join(root, "..metadata"));
+			const ts = runJourneys({ command: "index", journeysDir: root });
+			const py = python(["index", root]);
+			expect(ts.ok).toBe(true);
+			expect(py.exitCode).toBe(0);
+			expect(ts.text).not.toContain("outside the managed root");
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
 	});
 });
 
