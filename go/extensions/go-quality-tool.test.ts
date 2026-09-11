@@ -33,7 +33,11 @@ test("missing requested tools and command failures cannot pass", () => {
   writeFileSync(tool, "#!/bin/sh\nexit 0\n"); chmodSync(tool, 0o755);
   const partial = invoke();
   expect(partial.ok).toBe(false); expect(partial.complete).toBe(false);
-  writeFileSync(tool, "#!/bin/sh\necho failure >&2\nexit 7\n");
+  // A real linter answers `--version` even when it reports findings, and the
+		// runnability probe relies on exactly that distinction. A stub that failed
+		// every argument would read as an uninstalled tool, which is a different
+		// outcome from a tool that ran and found problems.
+		writeFileSync(tool, '#!/bin/sh\ncase "$1" in --version) exit 0 ;; esac\necho failure >&2\nexit 7\n');
   const failed = invoke();
   expect(failed.ok).toBe(false);
   expect(failed.steps.some((step: { status: string }) => step.status === "fail")).toBe(true);
