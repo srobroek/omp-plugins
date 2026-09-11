@@ -16,8 +16,9 @@ omp-plugins.lock.json
 installed_plugins.json
 node_modules/
 
-# Beads / Dolt runtime state
-.beads/
+# Beads / Dolt runtime state. The per-directory .beads/.gitignore owns which
+# files inside .beads/ are runtime; a blanket .beads/ here would also untrack
+# config.yaml, which pins storage mode for every checkout.
 .dolt/
 *.db
 .beads-credential-key
