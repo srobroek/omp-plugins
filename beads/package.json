@@ -1,6 +1,6 @@
 {
   "name": "@srobroek/beads",
-  "version": "1.0.13",
+  "version": "1.0.14",
   "description": "Beads issue tracking: dependency DAGs, formulas, and decisions recorded as beads.",
   "private": true,
   "omp": {

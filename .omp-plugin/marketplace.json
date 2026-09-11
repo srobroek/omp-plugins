@@ -12,7 +12,7 @@
       "name": "agentic-scaffold",
       "description": "Deterministic project scaffolding from ordered template layers and Beads formulas.",
       "source": "./agentic-scaffold",
-      "version": "0.9.1",
+      "version": "0.10.0",
       "category": "development"
     },
     {
@@ -40,7 +40,7 @@
       "name": "beads",
       "description": "Beads issue tracking: dependency DAGs, formulas, and decisions recorded as beads.",
       "source": "./beads",
-      "version": "1.0.13",
+      "version": "1.0.14",
       "category": "productivity"
     },
     {
@@ -61,7 +61,7 @@
       "name": "chezmoi",
       "description": "Edit chezmoi-managed dotfiles at their authoritative source.",
       "source": "./chezmoi",
-      "version": "0.4.1",
+      "version": "0.4.2",
       "category": "productivity"
     },
     {
@@ -75,7 +75,7 @@
       "name": "delivery",
       "description": "Delivery and git-workflow rules, plus a pull-request review agent.",
       "source": "./delivery",
-      "version": "0.8.2",
+      "version": "0.8.3",
       "category": "devops"
     },
     {
@@ -138,7 +138,7 @@
       "name": "project",
       "description": "Project lifecycle: brownfield onboarding, license selection, and user journeys.",
       "source": "./project",
-      "version": "1.1.1",
+      "version": "1.1.2",
       "category": "productivity"
     },
     {
@@ -166,14 +166,14 @@
       "name": "safety",
       "description": "Defence-in-depth advisories for destructive commands, attribution, and remote execution.",
       "source": "./safety",
-      "version": "0.6.1",
+      "version": "0.6.2",
       "category": "security"
     },
     {
       "name": "session",
       "description": "Create a selective fresh-session handoff from a prior OMP transcript without replaying its full history.",
       "source": "./session",
-      "version": "1.1.3",
+      "version": "1.1.4",
       "category": "productivity"
     },
     {
@@ -187,7 +187,7 @@
       "name": "toolchain",
       "description": "Toolchain defaults, tools-versus-scripts layout, and pragmatic output rules.",
       "source": "./toolchain",
-      "version": "0.3.3",
+      "version": "0.3.4",
       "category": "development"
     },
     {
