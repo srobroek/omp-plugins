@@ -133,3 +133,11 @@ matching policy, applied by a human or by the `github` layer when it exists:
 - Renovate with `config:recommended` and automerge for patch, minor, pin, and digest updates
   after the `gate` check
 - Renovate's `github-actions` manager, so pinned action SHAs move with their version comments
+
+## TypeScript applications
+
+Better-T-Stack owns the application skeleton: the workspace manifest, `package.json`, `tsconfig.json`,
+`turbo.json`, the frontend and backend packages, and `bts.jsonc`. The scaffold owns governance, CI,
+release, hooks, and agent files. The TypeScript lane installs with the selected package manager and
+runs `turbo run check-types build` when Turborepo is selected. The generator runs once, into an empty
+target, with a pinned version and no install or git step. A repository that already has a stack keeps it.

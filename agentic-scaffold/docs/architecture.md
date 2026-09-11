@@ -12,7 +12,7 @@
 
 ## Lead boundary
 
-The extension acts while `.omp/scaffold-run.json` exists.
+While `.omp/scaffold-run.json` exists, the extension acts.
 
 It blocks:
 
@@ -57,8 +57,13 @@ Every command emits one JSON object with the resolved `root`.
 | `context-refresh` | Refresh selected agentic context. |
 | `doctor` | Report drift in rendered state. |
 
-`apply --dry-run` runs `preflight` and `plan`. It writes no files. A live run returns `ok`, `stages`,
-and optional `next`. Each stage returns `name`, `status`, `seconds`, and `summary`.
+`apply --dry-run` runs `preflight`, `plan`, and the `provision` dry run. It writes no files. A live run
+returns `ok`, `stages`, and optional `next`. Each stage row has these fields:
+
+- `name`
+- `status`
+- `seconds`
+- `summary`
 
 `finish` checks doctor, molecule state, and git status. It returns `commitCommand` on success. It
 removes the run marker. It never commits.
@@ -81,14 +86,20 @@ TOML keys. It unions plugin entries.
 
 | Role | Responsibility |
 |---|---|
-| Lead | Interview. Ask required questions. Show `apply --dry-run`. Wait for approval. |
-| `scaffolder` | Run preflight, apply, doctor, and finish through `scaffold`. No shell or edit tools. |
+| Lead | Call the five verbs in order: `start`, `interview` until `complete`, `plan`, `run`, `finish`. Relay each `ask`. |
 | Human | Approve answers, plan, and `commitCommand`. |
 
-The execution agent reports non-zero JSON verbatim. It never commits.
+The lead reports non-zero JSON verbatim. It never commits.
 
 ## Layers and members
 
-A layer declares its contract in `layer.toml`. The contract names tools, files, blocks, variables,
-conflicts, and plugins. A profile composes layers. A workspace records members. Imports preserve
+A layer declares its contract in `layer.toml`. The contract names:
+
+- tools
+- files and blocks
+- variables
+- conflicts
+- plugins
+
+A profile composes layers. A workspace records members. Imports preserve
 files. Removal never deletes files.

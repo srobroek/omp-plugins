@@ -84,15 +84,16 @@ This command writes nothing. Show the JSON plan. Wait for approval.
 
 Resolve exit `2` drift. Resolve exit `5` conflicts. Resolve exit `6` boundary refusals.
 
-## 5. Delegate execution
+## 5. Run
 
-After human approval, delegate a `task` to `scaffolder`.
-It calls the `scaffold` tool with these commands:
+After human approval, the lead calls `scaffold run`. It runs `apply` and `doctor` in one call and
+returns `READY_FOR_COMMIT` with the commit command and per-stage seconds. The lead presents the
+commit command. The human commits. The lead then calls `scaffold finish`.
+
+The shell form is:
 
 ```sh
-python3 "$SCAFFOLD" preflight --root "$R" --profile P
-python3 "$SCAFFOLD" apply --root "$R"
-python3 "$SCAFFOLD" doctor --root "$R"
+python3 "$SCAFFOLD" run --root "$R"
 python3 "$SCAFFOLD" finish --root "$R"
 ```
 
@@ -100,6 +101,7 @@ python3 "$SCAFFOLD" finish --root "$R"
 
 - preflight
 - plan
+- provision
 - render
 - tools-install
 - hooks-install

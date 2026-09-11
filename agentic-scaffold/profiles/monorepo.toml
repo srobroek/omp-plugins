@@ -9,6 +9,7 @@ bts_version = "3.42.2"
 bts_layout = "turborepo"
 web_ui = false
 speckit = false
+[commands]
 setup = "mise install"
 test = "echo workspace members"
 lint = "echo workspace members"

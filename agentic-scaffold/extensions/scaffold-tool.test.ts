@@ -12,6 +12,12 @@ describe("scaffold argument boundary", () => {
 
 	test("rejects unknown commands and non-string argument lists", () => {
 		expect(validateScaffoldArgs("shell", [])).toContain("unknown scaffold command");
+	expect(validateScaffoldArgs("start", ["--profile", "python-lib"])).toBeNull();
+	expect(validateScaffoldArgs("run", [])).toBeNull();
+	expect(validateScaffoldArgs("plan", ["--answers", '{"name":"demo","purpose":"../x"}'])).toBeNull();
+	expect(validateScaffoldArgs("interview", ["--answers-so-far", '{"layout":"single"}'])).toBeNull();
+	expect(validateScaffoldArgs("plan", ["--answers", "../answers.toml"])).toContain("JSON object");
+	expect(validateScaffoldArgs("apply", ["--answers", '{"a":1}'])).toContain("reserved");
 		expect(validateScaffoldArgs("apply", ["--root", "/tmp"])).toContain("reserved");
 		expect(validateScaffoldArgs("apply", ["--cwd=/tmp"])).toContain("reserved");
 	});

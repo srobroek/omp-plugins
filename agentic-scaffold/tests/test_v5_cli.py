@@ -58,7 +58,8 @@ def test_apply_dry_run_does_not_write_and_reports_order(tmp_path: Path) -> None:
     after = sorted(str(path.relative_to(root)) for path in root.rglob("*") if path.is_file())
     assert before == after
     names = [row["name"] for row in payload(result)["stages"]]
-    assert names == ["preflight", "plan"]
+    assert names == ["preflight", "plan", "provision"]
+    assert payload(result)["planSummary"]["provision"]["skipped"] is True
 
 
 def test_mise_pins_are_stable_across_update(tmp_path: Path) -> None:

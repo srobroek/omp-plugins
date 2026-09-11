@@ -23,7 +23,8 @@ python3 "$SCAFFOLD" interview --root R --profile P [--answers-so-far JSON]
 ```
 
 Read the returned `ask` object. Each page has at most five questions and each question has
-at most five options. Pass selected answers in `--answers-so-far` as one JSON object.
+at most five options. When a question accepts more values than the page shows, its last option
+is `Another value` and its description lists the remaining accepted values; relay them. Pass selected answers in `--answers-so-far` as one JSON object.
 Repeat until `complete` is true. Preserve the question ids and multi-value arrays.
 The CLI orders layout and shape, members, kind, profile and layers, license, docs, publish,
 and layer variables. Dependent questions appear after their answers.
@@ -46,7 +47,11 @@ Do not run the next verb until the human selects `Apply`.
 python3 "$SCAFFOLD" run --root R
 ```
 
-The command applies every stage and runs doctor. Read `status`, `doctor`, `stages`, and
+The command applies every stage and runs doctor. The `provision` stage runs Better-T-Stack for
+TypeScript applications, Tauri frontends, TypeScript-only monorepos, and Starlight sites. It writes
+only into an empty root or a new member directory and refuses any other target; the refusal names
+the adopt path (`bts=false`: keep the existing stack, render governance, CI, release, hooks, and
+agent files only). `plan` shows the exact generator command before anything runs. Read `status`, `doctor`, `stages`, and
 `commitCommand`. A successful run returns `READY_FOR_COMMIT` and per-stage `seconds`.
 The agent never runs the commit command.
 

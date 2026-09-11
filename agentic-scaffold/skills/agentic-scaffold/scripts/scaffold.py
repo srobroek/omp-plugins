@@ -2152,7 +2152,7 @@ def preflight(root: Path, profile_name: str | None, *, strict: bool = False) -> 
     else:
         hook_strategy = "prek"
     plugins = plugins_sync(root, True) if (root / ".omp/plugins.toml").is_file() and shutil.which("omp") else ({"desired": [], "drift": []}, 0)
-    hard.extend(f"Better-T-Stack compatibility: {item}" for item in bts_validate(values))
+    hard.extend(f"Better-T-Stack compatibility: {item}" for item in bts_validate(values) + bts_member_violations(values, answers_members(root)))
     if isinstance(plugins, tuple) and plugins[1] == EXIT_DRIFT:
         soft.extend(str(item) for item in plugins[0].get("drift", []))
     payload = {"ok": not hard, "profile": profile, "layers": layers, "vars": values, "hard": hard, "soft": soft, "missing_tools": missing, "hook_strategy": hook_strategy, "hooksPath": hooks_path, "hooksPathScope": hooks_scope, "checks": {"git": True, "omp": "omp" not in missing, "mise": "mise" not in missing, "tools": {tool: tool not in missing for tool in sorted(required)}, "plugins": plugins[0] if isinstance(plugins, tuple) else plugins}}
@@ -2237,7 +2237,7 @@ def interview_questions(root: Path, profile_name: str | None = None) -> dict[str
             bts_row("bts_database", "Better-T-Stack database", "sqlite", ["none", "sqlite", "postgres", "mysql", "mongodb"]),
             bts_row("bts_orm", "Better-T-Stack ORM", "drizzle", ["drizzle", "prisma", "mongoose", "none"]),
             bts_row("bts_auth", "Better-T-Stack auth", "better-auth", ["better-auth", "clerk", "none"]),
-            bts_row("bts_addons", "Better-T-Stack addons", addons_default, ["pwa", "tauri", "electrobun", "starlight", "biome", "mcp", "turborepo", "nx", "vite-plus", "fumadocs", "ultracite", "oxlint", "opentui", "wxt", "skills", "evlog", "none"], multi=True),
+            bts_row("bts_addons", "Better-T-Stack addons", addons_default, ["pwa", "tauri", "electrobun", "starlight", "biome", "mcp", "turborepo", "nx", "vite-plus", "ultracite", "oxlint", "opentui", "wxt", "skills", "evlog", "none"], multi=True),
             bts_row("bts_package_manager", "Better-T-Stack package manager", "pnpm" if suggested == "monorepo" else "bun", ["npm", "pnpm", "bun"]),
         ])
     docs_flavour = str(profile_var_values.get("docs_flavour", ""))
@@ -2285,13 +2285,23 @@ def answers_write_interview(root: Path, profile_name: str | None, name: str | No
         return {"ok": False, "missing": ["profile"]}, EXIT_NEEDS_INPUT
     chosen_layers = [item.strip() for item in str(supplied.pop("layers", "")).split(",") if item.strip()]
     values_profile, _, layers, values = resolve_selection(root, selected, supplied.get("name"), supplied, extra_layers, chosen_layers or None)
-    violations = bts_validate(values)
+    violations = bts_validate(values) + bts_member_violations(values, answers_members(root))
     if violations:
         return {"ok": False, "violations": violations, "vars": values}, EXIT_CONFLICT
     write_answers(root, values_profile, layers, values, {"defaults_for": defaults_for, "interviewed_at": datetime.now(UTC).isoformat(), "members": answers_members(root) if answers_members(root) else None})
     marker = root / ".omp/scaffold-run.json"
     _write_under_root(root, marker, json.dumps({"root": str(root), "started": datetime.now(UTC).isoformat(), "session": os.environ.get("OMP_SESSION_ID"), "profile": values_profile, "stages": []}, indent=2, sort_keys=True) + "\n")
     return {"ok": True, "path": str(answers_path(root)), "profile": values_profile, "layers": layers, "defaults_for": defaults_for, "vars": values}, 0
+
+
+def bts_member_violations(values: dict[str, Any], members: list[dict[str, str]]) -> list[str]:
+    """Better-T-Stack creates applications at the workspace root, never inside a member directory."""
+    if str(values.get("layout", "single")) != "monorepo" or str(values.get("bts", "false")).lower() not in TRUTHY:
+        return []
+    apps = [str(member["name"]) for member in members if str(member.get("layer", "")) == "lang/ts" and str(member.get("kind", "")) == "app"]
+    if not apps:
+        return []
+    return [f"TypeScript app member(s) {', '.join(apps)}: Better-T-Stack creates applications at the workspace root; use the ts-app profile (its Turborepo addon is the workspace) or declare the member as a library"]
 
 
 def _bts_argv(values: dict[str, Any], target: str) -> list[str]:
@@ -2312,25 +2322,27 @@ def _bts_argv(values: dict[str, Any], target: str) -> list[str]:
         if docs == "starlight" and "starlight" not in addons:
             addons.append("starlight")
         flags = [("--frontend", str(values.get("bts_frontend", "tanstack-router"))), ("--backend", str(values.get("bts_backend", "hono"))), ("--runtime", str(values.get("bts_runtime", "bun"))), ("--api", str(values.get("bts_api", "trpc"))), ("--database", str(values.get("bts_database", "sqlite"))), ("--orm", str(values.get("bts_orm", "drizzle"))), ("--auth", str(values.get("bts_auth", "better-auth")))]
-        flags.extend([("--payments", "none"), ("--addons", addons), ("--db-setup", "none"), ("--web-deploy", "none"), ("--server-deploy", "none"), ("--package-manager", str(values.get("bts_package_manager", "bun")))])
+        flags.extend([("--payments", "none"), ("--addons", addons), ("--examples", "none"), ("--db-setup", "none"), ("--web-deploy", "none"), ("--server-deploy", "none"), ("--package-manager", str(values.get("bts_package_manager", "bun")))])
     argv = ["bunx", f"create-better-t-stack@{version}", target]
     for flag, value in flags:
         argv.append(flag)
         argv.extend(value if isinstance(value, list) else [value])
-    argv.extend(["--no-git", "--no-install", "--disable-analytics", "--directory-conflict", "error"])
+    # Every prompt has an answer on the command line; `--no-render-title` and `--manual-db`
+    # remove the banner and the database setup prompt so a missing flag fails instead of waiting.
+    argv.extend(["--no-git", "--no-install", "--manual-db", "--no-render-title", "--disable-analytics", "--directory-conflict", "error"])
     return argv
 
 
 def _bts_state_only(path: Path) -> bool:
     if not path.is_dir() or path.name != ".omp":
         return False
-    allowed = {"scaffold-answers.toml", "scaffold-run.json", "scaffold.json", "plugins.toml"}
+    allowed = {"scaffold-answers.toml", "scaffold-run.json", "scaffold-plan.md", "scaffold-provision.json", "scaffold.json", "plugins.toml"}
     return all(item.name in allowed for item in path.iterdir())
 
 
 def _provision_target(target_root: Path, values: dict[str, Any], dry_run: bool) -> tuple[dict[str, Any], int]:
     target_root = resolved_root(target_root)
-    argv = _bts_argv(values, target_root.name if target_root.parent == target_root.parent else target_root.name)
+    argv = _bts_argv(values, target_root.name)
     record_path = target_root / ".omp" / "scaffold-provision.json"
     if record_path.is_file():
         try:
@@ -2346,11 +2358,20 @@ def _provision_target(target_root: Path, values: dict[str, Any], dry_run: bool) 
         return {"ok": False, "argv": argv, "error": f"Better-T-Stack target is not empty: {target_root}; adopt it with --set bts=false"}, EXIT_CONFLICT
     if dry_run:
         return {"ok": True, "dry_run": True, "argv": argv, "command": shlex.join(argv), "version": str(values.get("bts_version", BTS_VERSION_DEFAULT))}, 0
-    target_root.parent.mkdir(parents=True, exist_ok=True)
-    result = subprocess.run(argv, cwd=target_root.parent, capture_output=True, text=True, check=False)
-    if result.returncode:
-        return {"ok": False, "argv": argv, "stdout": result.stdout, "stderr": result.stderr, "error": f"Better-T-Stack exited with {result.returncode}"}, EXIT_ERROR
-    generated = sorted(str(path.relative_to(target_root)) for path in target_root.rglob("*") if path.is_file() and path.name != "scaffold-provision.json" and ".git" not in path.parts)
+    # The generator refuses a non-empty directory and the target already holds `.git` and the
+    # answers, so it writes into an empty staging directory and the result moves into the target.
+    target_root.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix="scaffold-bts-") as staging:
+        result = subprocess.run(argv, cwd=staging, capture_output=True, text=True, check=False)
+        if result.returncode:
+            return {"ok": False, "argv": argv, "stdout": result.stdout, "stderr": result.stderr, "error": f"Better-T-Stack exited with {result.returncode}"}, EXIT_ERROR
+        produced = Path(staging) / target_root.name
+        for item in sorted(produced.iterdir()) if produced.is_dir() else []:
+            destination = target_root / item.name
+            if destination.exists():
+                return {"ok": False, "argv": argv, "error": f"Better-T-Stack output collides with {destination}"}, EXIT_CONFLICT
+            shutil.move(str(item), str(destination))
+    generated = sorted(str(path.relative_to(target_root)) for path in target_root.rglob("*") if path.is_file() and ".git" not in path.parts and ".omp" not in path.parts)
     record = {"argv": argv, "version": str(values.get("bts_version", BTS_VERSION_DEFAULT)), "generated": generated}
     _write_under_root(target_root, record_path, json.dumps(record, indent=2, sort_keys=True) + "\n")
     return {"ok": True, "argv": argv, "version": record["version"], "generated": generated}, 0
@@ -2399,6 +2420,7 @@ def apply_pipeline(root: Path, profile: str | None, *, dry_run: bool = False, st
     if dry_run:
         pf, pc = preflight(root, selected, strict=False)
         plan, _, _, _, plan_code = plan_payload(root, selected, None, {}, [], None, set())
+        prov, prov_code = provision(root, True)
         counts: dict[str, int] = {}
         lines: list[str] = []
         for row in plan.get("files", []):
@@ -2406,8 +2428,9 @@ def apply_pipeline(root: Path, profile: str | None, *, dry_run: bool = False, st
             layer = row.get("layer"); layer = ",".join(layer) if isinstance(layer, list) else str(layer)
             lines.append(f"{cls:<12} {row.get('path')}  ({layer})")
         summary = {"profile": plan.get("profile"), "layers": plan.get("layers"), "counts": counts, "lines": lines, "conflicts": plan.get("conflicts", []),
-                   "preflight": {"ok": pc == 0, "hard": pf.get("hard", []), "soft": pf.get("soft", []), "missing_tools": pf.get("missing_tools", [])}}
-        return {"ok": pc == 0 and plan_code == 0, "planSummary": summary, "stages": [{"name": "preflight", "status": "ok" if pc == 0 else "failed", "seconds": 0, "summary": pf}, {"name": "plan", "status": "ok" if plan_code == 0 else "failed", "seconds": 0, "summary": plan}]}, pc or plan_code
+                   "preflight": {"ok": pc == 0, "hard": pf.get("hard", []), "soft": pf.get("soft", []), "missing_tools": pf.get("missing_tools", [])},
+                   "provision": prov}
+        return {"ok": pc == 0 and plan_code == 0 and prov_code == 0, "planSummary": summary, "stages": [{"name": "preflight", "status": "ok" if pc == 0 else "failed", "seconds": 0, "summary": pf}, {"name": "plan", "status": "ok" if plan_code == 0 else "failed", "seconds": 0, "summary": plan}, {"name": "provision", "status": "ok" if prov_code == 0 else "failed", "seconds": 0, "summary": prov}]}, pc or plan_code or prov_code
     marker_path = root / ".omp/scaffold-run.json"
     try:
         marker = json.loads(marker_path.read_text()) if marker_path.is_file() else {"root": str(root), "started": datetime.now(UTC).isoformat(), "profile": selected, "stages": []}
@@ -2684,14 +2707,20 @@ def _question_options(row: dict[str, Any]) -> tuple[list[dict[str, str]], int]:
     labels = [str(item) for item in allowed] if isinstance(allowed, list) else []
     default = str(row.get("default", ""))
     default_label = default.split(",", 1)[0].strip()
+    overflow: list[str] = []
     if labels:
-        labels = labels[:5]
-        if default_label and default_label not in labels:
+        if len(labels) > 5:
+            shown = [label for label in labels if label == default_label][:1] + [label for label in labels if label != default_label]
+            shown, overflow = shown[:4], shown[4:]
+            labels = shown
+        elif default_label and default_label not in labels:
             labels[-1] = default_label
     else:
         labels = [default_label] if default_label else ["Provide a value"]
         labels.append("Other")
-    options = [{"label": label, "description": descriptions.get(label, f"Use {label} for {row.get('id', 'this answer')}.")} for label in labels[:5]]
+    options = [{"label": label, "description": descriptions.get(label, f"Use {label} for {row.get('id', 'this answer')}.")} for label in labels]
+    if overflow:
+        options.append({"label": "Another value", "description": "Also accepted: " + ", ".join(overflow)})
     recommended = next((index for index, option in enumerate(options) if option["label"] == default_label), 0)
     return options, recommended
 
@@ -2748,7 +2777,14 @@ def _plan_document(root: Path, summary: dict[str, Any]) -> Path:
     else:
         lines.append("- none")
     preflight_summary = summary.get("preflight", {})
-    lines.extend(["", "## Tools to install", "", *([f"- {item}" for item in preflight_summary.get("missing_tools", [])] or ["- none"]), "", "## Hooks", "", "- The configured hook strategy runs during the hooks stage.", "", "## Commands", "", "- Run the stages in `APPLY_STAGES` after approval.", "", "## After approval", "", "- The `run` verb applies the plan and runs doctor."])
+    provision_summary = summary.get("provision", {})
+    if provision_summary.get("command"):
+        provision_lines = [f"- `{provision_summary['command']}`", "- Runs once into an empty target; the result moves into the repository root."]
+    elif provision_summary.get("skipped"):
+        provision_lines = ["- none (bts=false)"]
+    else:
+        provision_lines = [f"- refused: {provision_summary.get('error', 'see planSummary.provision')}"]
+    lines.extend(["", "## Tools to install", "", *([f"- {item}" for item in preflight_summary.get("missing_tools", [])] or ["- none"]), "", "## Generator", "", *provision_lines, "", "## Hooks", "", "- The configured hook strategy runs during the hooks stage.", "", "## Stages", "", *[f"- {name}" for name in APPLY_STAGES], "", "## After approval", "", "- The `run` verb applies the plan and runs doctor."])
     path = root / ".omp/scaffold-plan.md"
     _write_under_root(root, path, "\n".join(lines) + "\n")
     return path

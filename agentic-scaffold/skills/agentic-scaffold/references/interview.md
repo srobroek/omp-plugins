@@ -98,3 +98,27 @@ The direct `interview` verb emits ask pages in this order:
 
 The verb hides dependent questions until their answers appear in `--answers-so-far`.
 Each page has at most five questions. Each option list has at most five entries.
+
+## 7. Better-T-Stack questions
+
+A TypeScript `app` kind, the `tauri-desktop` profile, a TypeScript-only monorepo, and a TypeScript
+`splash` or `site` documentation flavour add `bts_*` questions. Each has a default. The generator is
+pinned by `bts_version` in the profile.
+
+| Question | Default | Notes |
+|---|---|---|
+| `bts_frontend` | `tanstack-router` | one web frontend and one native frontend at most |
+| `bts_backend` | `hono` | `self` needs a full-stack frontend |
+| `bts_runtime` | `bun` | `workers` needs `hono` |
+| `bts_api` | `trpc` | `orpc` or `none` for Nuxt, Svelte, Solid, Astro |
+| `bts_database` | `sqlite` | `mongodb` is rejected with `workers` |
+| `bts_orm` | `drizzle` | |
+| `bts_auth` | `better-auth` | |
+| `bts_addons` | `turborepo` | `tauri` is forced on for `tauri-desktop`; hooks addons are excluded because the `hooks` layer owns hooks |
+| `bts_package_manager` | `bun`; `pnpm` for a monorepo | |
+| `bts_docs` | `starlight` | Fumadocs is not offered: its generator prompt is interactive only |
+| `bts_layout` | `turborepo` | monorepo root layout |
+
+`answers write` and `preflight` refuse an answer set that breaks a compatibility rule and name the rule.
+The generator writes only into an empty root or a new member directory. A repository that already
+has a TypeScript stack answers `bts=false` and keeps it.

@@ -37,11 +37,11 @@ def test_bts_dry_run_argv_recipes():
     scaffold = module()
     common = {"bts_version": "3.42.2", "bts_package_manager": "bun"}
     app = scaffold._bts_argv({**common, "kind": "app", "bts_frontend": "tanstack-router", "bts_backend": "hono", "bts_runtime": "bun", "bts_api": "trpc", "bts_database": "sqlite", "bts_orm": "drizzle", "bts_auth": "better-auth", "bts_addons": "turborepo"}, "web-app")
-    assert app == ["bunx", "create-better-t-stack@3.42.2", "web-app", "--frontend", "tanstack-router", "--backend", "hono", "--runtime", "bun", "--api", "trpc", "--database", "sqlite", "--orm", "drizzle", "--auth", "better-auth", "--payments", "none", "--addons", "turborepo", "--db-setup", "none", "--web-deploy", "none", "--server-deploy", "none", "--package-manager", "bun", "--no-git", "--no-install", "--disable-analytics", "--directory-conflict", "error"]
+    assert app == ["bunx", "create-better-t-stack@3.42.2", "web-app", "--frontend", "tanstack-router", "--backend", "hono", "--runtime", "bun", "--api", "trpc", "--database", "sqlite", "--orm", "drizzle", "--auth", "better-auth", "--payments", "none", "--addons", "turborepo", "--examples", "none", "--db-setup", "none", "--web-deploy", "none", "--server-deploy", "none", "--package-manager", "bun", "--no-git", "--no-install", "--manual-db", "--no-render-title", "--disable-analytics", "--directory-conflict", "error"]
     tauri = scaffold._bts_argv({**common, "profile": "tauri-desktop", "kind": "app", "bts_frontend": "tanstack-router", "bts_backend": "hono", "bts_runtime": "bun", "bts_api": "trpc", "bts_database": "sqlite", "bts_orm": "drizzle", "bts_auth": "better-auth", "bts_addons": "turborepo"}, "desktop-app")
-    assert "tauri" in tauri and tauri[tauri.index("--addons") + 1:tauri.index("--db-setup")] == ["turborepo", "tauri"]
+    assert "tauri" in tauri and tauri[tauri.index("--addons") + 1:tauri.index("--examples")] == ["turborepo", "tauri"]
     mono = scaffold._bts_argv({"bts_version": "3.42.2", "layout": "monorepo", "bts_layout": "turborepo"}, "mono")
-    assert mono[2:] == ["mono", "--frontend", "none", "--backend", "none", "--database", "none", "--orm", "none", "--runtime", "none", "--api", "none", "--addons", "turborepo", "--package-manager", "pnpm", "--no-git", "--no-install", "--disable-analytics", "--directory-conflict", "error"]
+    assert mono[2:] == ["mono", "--frontend", "none", "--backend", "none", "--database", "none", "--orm", "none", "--runtime", "none", "--api", "none", "--addons", "turborepo", "--package-manager", "pnpm", "--no-git", "--no-install", "--manual-db", "--no-render-title", "--disable-analytics", "--directory-conflict", "error"]
     docs = scaffold._bts_argv({"bts_version": "3.42.2", "bts_docs": "starlight", "bts_package_manager": "pnpm", "kind": "library"}, "starlight")
     assert "--addons" in docs and docs[docs.index("--addons") + 1] == "starlight"
 
@@ -60,12 +60,17 @@ def test_bts_provision_empty_target_record_and_refusal(tmp_path: Path, monkeypat
     fake = tmp_path / "bin"
     fake.mkdir()
     bunx = fake / "bunx"
-    bunx.write_text("#!/bin/sh\nmkdir -p \"$2/.omp\"\nprintf generated > \"$2/generated.txt\"\n")
+    bunx.write_text("#!/bin/sh\nmkdir -p \"$2\"\nprintf generated > \"$2/generated.txt\"\n")
     bunx.chmod(0o755)
     target2 = tmp_path / "execute"
+    (target2 / ".git").mkdir(parents=True)
+    (target2 / ".omp").mkdir()
+    (target2 / ".omp" / "scaffold-answers.toml").write_text("profile = 'ts-app'\n")
     monkeypatch.setenv("PATH", f"{fake}{os.pathsep}{os.environ.get('PATH', '')}")
     result, code = scaffold._provision_target(target2, values, False)
     assert code == 0 and (target2 / "generated.txt").read_text() == "generated"
+    assert (target2 / ".omp" / "scaffold-answers.toml").is_file() and (target2 / ".git").is_dir()
+    assert result["generated"] == ["generated.txt"]
     result, code = scaffold._provision_target(target2, values, False)
     assert code == 0 and result["skipped"] is True
 
@@ -78,3 +83,12 @@ def test_bts_conditional_files_and_ci_lane():
     _, lane = scaffold._language_lane("ts", {"bts": "true", "bts_package_manager": "pnpm", "bts_addons": "turborepo"})
     assert "pnpm install --frozen-lockfile" in lane
     assert "turbo run check-types build" in lane
+
+
+def test_bts_refuses_ts_app_members_in_a_monorepo():
+    scaffold = module()
+    members = [{"name": "web", "layer": "lang/ts", "kind": "app", "dir": "packages/web"}, {"name": "core", "layer": "lang/ts", "kind": "lib", "dir": "packages/core"}]
+    violations = scaffold.bts_member_violations({"layout": "monorepo", "bts": "true"}, members)
+    assert len(violations) == 1 and "web" in violations[0] and "ts-app" in violations[0]
+    assert scaffold.bts_member_violations({"layout": "monorepo", "bts": "false"}, members) == []
+    assert scaffold.bts_member_violations({"layout": "single", "bts": "true"}, members) == []
