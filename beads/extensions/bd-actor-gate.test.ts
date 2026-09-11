@@ -231,6 +231,36 @@ describe("decideActorGate", () => {
 		const d = decideActorGate("bd close chezmoi-2ji", emptyEnv);
 		expect(d.kind).toBe("advisory");
 	});
+	test("blocks create without actor", () => {
+		const d = decideActorGate("bd create --title 'new bead'", emptyEnv);
+		expect(d.kind).toBe("block");
+		if (d.kind === "block") {
+			expect(d.reason).toContain("Owner");
+			expect(d.reason).toContain("--owner");
+			expect(d.reason).toContain("--assignee");
+		}
+	});
+	test("allows create with actor", () => {
+		expect(decideActorGate("bd create --title 'new bead'", actorEnv).kind).toBe("allow");
+	});
+	test("blocks every verb that constructs an issue, not just `create`", () => {
+		// `bd create --help` reports "Aliases: create, new", and `create-form` is
+		// the interactive form over the same path. Each stamps an unrepairable
+		// Owner, so blocking the literal verb alone leaves a silent permit.
+		for (const command of [
+			"bd new --title 'new bead'",
+			"bd create-form",
+		]) {
+			const d = decideActorGate(command, emptyEnv);
+			expect(d.kind).toBe("block");
+			if (d.kind === "block") expect(d.reason).toContain("Owner");
+		}
+	});
+	test("allows `bd new` when an actor is present", () => {
+		expect(decideActorGate("bd new --title 'new bead'", actorEnv).kind).toBe(
+			"allow",
+		);
+	});
 	test("allow read-only even without actor", () => {
 		expect(decideActorGate("bd show chezmoi-2ji", emptyEnv).kind).toBe("allow");
 		expect(decideActorGate("bd comments chezmoi-7eg", emptyEnv).kind).toBe("allow");
@@ -242,14 +272,22 @@ describe("decideActorGate", () => {
 
 describe("integration", () => {
 	test("blocks claim-shaped bash; advisories via tool_result", () => {
-		// The handler reads the harness's real environment; a developer shell that
-		// exports BEADS_ACTOR would otherwise turn every case here green.
-		const saved = process.env.BEADS_ACTOR;
+		// The handler reads the harness's real environment. The gate honours BOTH
+		// BEADS_ACTOR and BD_ACTOR, so clearing one still let a shell that exported
+		// the other turn every case here green -- which is the shell every agent is
+		// told to run. Clear both.
+		const saved = {
+			BEADS_ACTOR: process.env.BEADS_ACTOR,
+			BD_ACTOR: process.env.BD_ACTOR,
+		};
 		delete process.env.BEADS_ACTOR;
+		delete process.env.BD_ACTOR;
 		try {
 			runIntegration();
 		} finally {
-			if (saved !== undefined) process.env.BEADS_ACTOR = saved;
+			for (const [name, value] of Object.entries(saved)) {
+				if (value !== undefined) process.env[name] = value;
+			}
 		}
 	});
 

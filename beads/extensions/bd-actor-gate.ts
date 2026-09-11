@@ -151,6 +151,7 @@ export const MUTATING_VERBS: Record<string, true> = {
 	forget: true,
 	import: true,
 	link: true,
+	new: true,
 	note: true,
 	priority: true,
 	promote: true,
@@ -282,6 +283,21 @@ export type ActorGateDecision =
 const CLAIM_REASON =
 	"bd claim / `bd update <id> --claim` without BEADS_ACTOR or BD_ACTOR creates undistinguishable dead claims. Set either variable to <harness>/<agent-name>/<session-id> and retry.";
 
+/**
+ * Verbs that construct a new issue, and so stamp an `Owner` that cannot be
+ * repaired afterwards. `new` is `create`'s own alias (`bd create --help`
+ * reports "Aliases: create, new"), and `create-form` is the interactive form
+ * over the same path, so all three must refuse rather than warn.
+ */
+const CREATING_VERBS: Record<string, true> = {
+	create: true,
+	"create-form": true,
+	new: true,
+};
+
+const CREATE_REASON =
+	"bd create / `bd new` / `bd create-form` without BEADS_ACTOR or BD_ACTOR silently sets Owner to the invoking human's git identity. There is no --owner flag, and --assignee sets a different field, so the mis-attribution is permanent. Set either variable to <harness>/<agent-name>/<session-id> and retry.";
+
 const ADVISORY_TEXT =
 	"BEADS_ACTOR and BD_ACTOR are unset on this mutating `bd` command. Subagents must set either variable so writes and claims are attributable. Export one before mutating work.";
 
@@ -302,6 +318,8 @@ export function decideActorGate(
 			verb === "claim" ||
 			((verb === "update" || verb === "ready") && args.includes("--claim"));
 		if (claim) return { kind: "block", reason: CLAIM_REASON };
+		if (CREATING_VERBS[verb] === true)
+			return { kind: "block", reason: CREATE_REASON };
 		advisory = true;
 	}
 	return advisory ? { kind: "advisory", text: ADVISORY_TEXT } : { kind: "allow" };
