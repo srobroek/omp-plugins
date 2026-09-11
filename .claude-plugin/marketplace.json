@@ -12,7 +12,7 @@
       "name": "agentic-scaffold",
       "description": "Deterministic project scaffolding from ordered template layers and Beads formulas.",
       "source": "./agentic-scaffold",
-      "version": "0.10.0",
+      "version": "0.10.1",
       "category": "development"
     },
     {
@@ -173,7 +173,7 @@
       "name": "session",
       "description": "Create a selective fresh-session handoff from a prior OMP transcript without replaying its full history.",
       "source": "./session",
-      "version": "1.1.4",
+      "version": "1.1.5",
       "category": "productivity"
     },
     {
