@@ -4,7 +4,7 @@ import string
 import tomllib
 
 ROOT = Path(__file__).parents[1]
-VARS = {"name": "Example", "package": "example", "package_kebab": "example", "description": "Example project", "python": "3.13", "python_tag": "py313", "node": "22", "bun_version": "latest", "year": "2026", "author": "Example Author", "authors": 'authors = [{ name = "Example Author" }]\n', "license": "Apache-2.0", "license_spdx": "Apache-2.0", "profile": "python-app", "language": "python", "commands_setup": "uv sync", "commands_test": "pytest", "commands_lint": "ruff check .", "commands_fmt": "ruff format --check .", "commands_check": "ty check", "ci_jobs": "", "release_jobs": "", "publish": "pypi"}
+VARS = {"name": "Example", "package": "example", "package_kebab": "example", "description": "Example project", "python": "3.13", "python_tag": "py313", "node": "22", "bun_version": "latest", "year": "2026", "author": "Example Author", "authors": 'authors = [{ name = "Example Author" }]\n', "license": "Apache-2.0", "license_spdx": "Apache-2.0", "profile": "python-app", "language": "python", "commands_setup": "uv sync", "commands_test": "pytest", "commands_lint": "ruff check .", "commands_fmt": "ruff format --check .", "commands_check": "ty check", "ci_jobs": "", "release_jobs": "", "publish": "pypi", "docs_flavour": "none", "github_owner": "demo-owner", "conduct_contact": "conduct@example.com", "kind": "library", "layout": "single"}
 BLOCK_TARGETS = {".gitignore", "justfile", ".pre-commit-config.yaml", "AGENTS.md", "WATCHDOG.md"}
 
 

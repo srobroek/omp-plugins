@@ -2,8 +2,15 @@
 name = "${package_kebab}"
 version = "0.1.0"
 edition = "2024"
+rust-version = "1.85"
 description = "${description}"
 license = "${license}"
+
+[lints.rust]
+unsafe_code = "forbid"
+[lints.clippy]
+all = "warn"
+pedantic = "warn"
 
 [lib]
 path = "src/lib.rs"
@@ -11,8 +18,3 @@ path = "src/lib.rs"
 [[bin]]
 name = "${package_kebab}"
 path = "src/main.rs"
-
-[lints.rust]
-unsafe_code = "forbid"
-[lints.clippy]
-all = "warn"

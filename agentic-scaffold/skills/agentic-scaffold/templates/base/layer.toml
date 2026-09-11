@@ -1,10 +1,12 @@
 name = "base"
-summary = "Package identity, license, editor settings, and README"
+summary = "Package identity, governance, license, editor settings, and README"
 after = []
 requires_tools = ["git"]
-owns = ["README.md", ".editorconfig", "LICENSE"]
+owns = ["README.md", ".editorconfig", "LICENSE", "CODE_OF_CONDUCT.md", "CONTRIBUTING.md", "SECURITY.md", ".gitattributes", ".github/CODEOWNERS"]
 blocks = [".gitignore"]
 conflicts_with = []
 [vars]
 year = { default = "2026", prompt = "Copyright year", ask = false }
 license = { default = "apache-2.0", prompt = "License", ask = false }
+conduct_contact = { default = "${author_email}", prompt = "Code of Conduct contact", ask = false }
+github_owner = { default = "", prompt = "GitHub owner", ask = true }

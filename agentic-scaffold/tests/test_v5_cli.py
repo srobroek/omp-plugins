@@ -363,37 +363,98 @@ def test_preflight_hard_fails_on_a_dirty_tree_with_no_bypass(tmp_path: Path) -> 
     assert run("preflight", "--root", str(root), "--profile", "agentic-repo").returncode == 0  # scaffold state is not dirt
 
 
-@pytest.mark.parametrize(("profile", "lane", "publish_job"), [("python-lib", "python", "publish-pypi"), ("rust-lib", "rust", "publish-crates"), ("ts-lib", "typescript", "publish-npm"), ("go-lib", "go", "publish-github-assets"), ("python-app", "python", None)])
-def test_rendered_workflows_follow_the_ci_and_release_standard(tmp_path: Path, profile: str, lane: str, publish_job: str | None) -> None:
+@pytest.mark.parametrize(("profile", "extra", "lane", "release"), [
+    ("python-lib", {}, "python", {"release-please.yml", "release.yml"}),
+    ("rust-lib", {"kind": "crate"}, "rust", {"release-plz.yml"}),
+    ("rust-app", {"kind": "tool"}, "rust", {"release-please.yml", "release.yml"}),
+    ("ts-lib", {}, "typescript", {"release-please.yml", "release.yml"}),
+    ("go-lib", {}, "go", {"release-please.yml", "release.yml"}),
+    ("python-app", {}, "python", {"release-please.yml", "release.yml"}),
+])
+def test_rendered_workflows_follow_the_ci_and_release_standard(tmp_path: Path, profile: str, extra: dict[str, str], lane: str, release: set[str]) -> None:
     import yaml
 
     root = git_root(tmp_path)
-    assert run("answers", "write", "--root", str(root), "--profile", profile, "--set", "name=demo", "--defaults-for", "purpose,kind,language,license,beads,publish").returncode == 0
+    sets = ["--set", "name=demo"] + [arg for k, v in extra.items() for arg in ("--set", f"{k}={v}")]
+    defaults = "purpose,kind,language,license,beads,publish,docs_flavour,github_owner,conduct_contact"
+    assert run("answers", "write", "--root", str(root), "--profile", profile, *sets, "--defaults-for", defaults).returncode == 0
     assert run("apply", "--root", str(root), "--stage", "render").returncode == 0
+    workflows = {p.name for p in (root / ".github/workflows").glob("*.yml")}
+    assert workflows == {"ci.yml", *release}, workflows
     ci = yaml.safe_load((root / ".github/workflows/ci.yml").read_text())
     jobs = ci["jobs"]
-    assert {lane, "hooks", "agentic", "security", "gate"} <= set(jobs)
+    assert ci["permissions"] == {} and "merge_group" in ci[True]
+    gated = {lane, "hooks", "agentic"}
+    assert gated | {"changes", "security", "gate"} == set(jobs)
+    for name in gated:
+        assert jobs[name]["needs"] == "changes"
+        assert jobs[name]["if"] == f"needs.changes.outputs.{name} == 'true'"
+        assert name in jobs["changes"]["outputs"]
+        assert jobs[name]["steps"][1]["uses"].startswith("jdx/mise-action@"), "mise is the version authority"
+    assert "if" not in jobs["security"], "security always runs"
     gate = jobs["gate"]
-    assert gate["if"] == "always()" and set(gate["needs"]) == set(jobs) - {"gate"}  # every lane feeds the gate
-    assert "merge_group" in ci[True] and ci["permissions"] == {"contents": "read"}
-    assert ci["concurrency"]["cancel-in-progress"] == "${{ github.event_name == 'pull_request' }}"
+    assert gate["if"] == "always()" and set(gate["needs"]) == {"changes", *gated, "security"}
+    filters = jobs["changes"]["steps"][1]["with"]["filters"]
+    assert ".github/**" in filters and "mise.toml" in filters, "global paths force every lane"
     for name, job in jobs.items():
         assert "timeout-minutes" in job, name
         for step in job.get("steps", []):
             uses = step.get("uses")
             if uses:
-                ref = uses.split("@", 1)[1].split(" ")[0]
-                assert len(ref) == 40, f"{name}: {uses} is not SHA-pinned"
-    release = yaml.safe_load((root / ".github/workflows/release.yml").read_text())
-    assert set(release[True]) == {"release", "workflow_dispatch"}
-    rjobs = release["jobs"]
-    assert "release-gate" in rjobs and "check-runs?check_name=gate" in yaml.dump(rjobs["release-gate"])
-    if publish_job is None:
-        assert set(rjobs) == {"release-gate"}  # applications publish nowhere
+                assert "dtolnay/rust-toolchain" not in uses
+                assert len(uses.split("@", 1)[1].split(" ")[0]) == 40, f"{name}: {uses} is not SHA-pinned"
+    if "release.yml" in release:
+        rel = yaml.safe_load((root / ".github/workflows/release.yml").read_text())
+        assert "release-gate" in rel["jobs"] and "check-runs?check_name=gate" in yaml.dump(rel["jobs"]["release-gate"])
+        rp = (root / ".github/workflows/release-please.yml").read_text()
+        assert "RELEASE_APP_CLIENT_ID" in rp and "RELEASE_APP_PRIVATE_KEY" in rp
     else:
-        assert set(rjobs) == {"release-gate", "build", publish_job}
-        assert rjobs["build"]["needs"] == "release-gate"
-        assert set(rjobs[publish_job]["needs"]) == {"release-gate", "build"}
-        assert rjobs[publish_job]["environment"] == "release" and rjobs[publish_job]["permissions"]["id-token"] == "write"
-    rp = yaml.safe_load((root / ".github/workflows/release-please.yml").read_text())
-    assert "create-github-app-token" in yaml.dump(rp["jobs"])
+        assert (root / "release-plz.toml").exists() and not (root / "release-please-config.json").exists()
+
+
+def _gate_script(root: Path) -> str:
+    import yaml
+
+    ci = yaml.safe_load((root / ".github/workflows/ci.yml").read_text())
+    run_block = ci["jobs"]["gate"]["steps"][0]["run"]
+    body = run_block.split("<<'PY'", 1)[1].rsplit("PY", 1)[0]
+    return "\n".join(line[10:] if line.startswith(" " * 10) else line for line in body.splitlines())
+
+
+@pytest.mark.parametrize(("needs", "ok"), [
+    ({"changes": {"result": "success", "outputs": {"python": "true"}}, "python": {"result": "success"}, "security": {"result": "success"}}, True),
+    ({"changes": {"result": "success", "outputs": {"python": "false"}}, "python": {"result": "skipped"}, "security": {"result": "success"}}, True),
+    ({"changes": {"result": "success", "outputs": {"python": "true"}}, "python": {"result": "skipped"}, "security": {"result": "success"}}, False),
+    ({"changes": {"result": "success", "outputs": {"python": "true"}}, "python": {"result": "failure"}, "security": {"result": "success"}}, False),
+    ({"changes": {"result": "failure", "outputs": {}}, "python": {"result": "skipped"}, "security": {"result": "success"}}, False),
+    ({"changes": {"result": "success", "outputs": {"python": "false"}}, "python": {"result": "skipped"}, "security": {"result": "skipped"}}, False),
+    ({"changes": {"result": "success", "outputs": {"python": "true"}}, "python": {"result": "cancelled"}, "security": {"result": "success"}}, False),
+])
+def test_gate_script_is_fail_closed(tmp_path: Path, needs: dict, ok: bool) -> None:
+    """The rendered gate accepts a skipped lane only when the detector said its inputs did not change."""
+    import json
+    import os
+
+    root = git_root(tmp_path)
+    assert run("answers", "write", "--root", str(root), "--profile", "python-lib", "--set", "name=demo", "--defaults-for", "purpose,kind,language,license,beads,publish,docs_flavour,github_owner,conduct_contact").returncode == 0
+    assert run("apply", "--root", str(root), "--stage", "render").returncode == 0
+    result = subprocess.run([sys.executable, "-"], input=_gate_script(root), text=True, capture_output=True, env={**os.environ, "NEEDS": json.dumps(needs)})
+    assert (result.returncode == 0) == ok, result.stdout + result.stderr
+
+
+def test_monorepo_ci_derives_lanes_and_path_filters_from_members(tmp_path: Path) -> None:
+    import yaml
+
+    root = git_root(tmp_path)
+    defaults = "purpose,kind,language,license,beads,publish,docs_flavour,github_owner,conduct_contact"
+    assert run("answers", "write", "--root", str(root), "--profile", "monorepo", "--set", "name=demo", "--defaults-for", defaults).returncode == 0
+    for name, layer, kind in (("api", "lang/python", "tool"), ("core", "lang/rust", "crate"), ("web", "lang/ts", "app")):
+        assert run("member", "add", "--root", str(root), "--name", name, "--layer", layer, "--kind", kind).returncode == 0
+    assert run("apply", "--root", str(root), "--stage", "render").returncode == 0
+    ci = yaml.safe_load((root / ".github/workflows/ci.yml").read_text())
+    jobs = ci["jobs"]
+    assert {"python", "rust", "typescript"} <= set(jobs), "one lane per member language"
+    filters = yaml.safe_load(jobs["changes"]["steps"][1]["with"]["filters"])
+    assert "packages/api/**" in filters["python"] and "crates/core/**" in filters["rust"] and "packages/web/**" in filters["typescript"]
+    assert ".github/**" in filters["python"], "global paths still force the lane"
+    assert set(jobs["gate"]["needs"]) == {"changes", "python", "rust", "typescript", "hooks", "agentic", "security"}

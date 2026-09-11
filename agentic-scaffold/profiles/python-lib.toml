@@ -5,6 +5,7 @@ layers = ["base", "tooling", "hooks", "lang/python", "ci/github", "release", "ag
 language = "python"
 app = false
 python = "3.13"
+kind = "library"
 web_ui = false
 speckit = false
 [commands]

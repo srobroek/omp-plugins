@@ -149,29 +149,29 @@ def value_default(value: Any) -> str:
     if isinstance(value, bool):
         return "true" if value else "false"
     return str(value)
-# Immutable action pins. The trailing comment carries the version so Renovate's github-actions
-# manager can move the SHA and the comment together.
+# Immutable action pins, resolved from each release tag and checked to exist (2026-09-11). The
+# trailing comment carries the version so Renovate's github-actions manager moves both together.
 ACTIONS = {
     "checkout": "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1",
-    "setup_uv": "astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0",
-    "setup_bun": "oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2",
-    "setup_node": "actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6",
-    "setup_go": "actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6",
-    "rust_toolchain": "dtolnay/rust-toolchain@d1031067263f94b142dd6c0ce24c5eb9d02d52a0 # stable",
-    "rust_cache": "Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2",
-    "golangci": "golangci/golangci-lint-action@4afd733a84b1f43292c63897423277bb7f4313a9 # v8",
-    "setup_terraform": "hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3",
-    "setup_tflint": "terraform-linters/setup-tflint@1cf010d3c7aef302051ccdb68c14c5dc2efa34ef # v6",
-    "zizmor": "zizmorcore/zizmor-action@3aa7e2f1ad15075829ef5158ee06938ae12e1769 # v0.4.0",
-    "gitleaks": "gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7 # v2",
-    "upload_artifact": "actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6",
-    "download_artifact": "actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7",
-    "attest": "actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3",
+    "mise": "jdx/mise-action@c2a87611a18de5b3828c5652fe268e992400cb5c # v4.3.0",
+    "cache": "actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0",
+    "setup_node": "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0",
+    "setup_go": "actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0",
+    "rust_cache": "Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2",
+    "sccache": "mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11",
+    "golangci": "golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0",
+    "paths_filter": "dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3",
+    "zizmor": "zizmorcore/zizmor-action@cc914d7f3750a2d13d75c7f184a1060aa0e9d482 # v0.6.4",
+    "gitleaks": "gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e # v3.0.0",
+    "upload_artifact": "actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0",
+    "download_artifact": "actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0",
+    "attest": "actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2",
     "pypi_publish": "pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2",
     "crates_auth": "rust-lang/crates-io-auth-action@c6f97d42243bad5fab37ca0427f495c86d5b1a18 # v1.0.5",
-    "goreleaser": "goreleaser/goreleaser-action@e435ccd777264be153ace6237001ef4d979d3a7a # v6",
-    "app_token": "actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2",
+    "goreleaser": "goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3",
+    "app_token": "actions/create-github-app-token@29824e69f54612133e76f7eaac726eef6c875baf # v2.2.1",
     "release_please": "googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0",
+    "release_plz": "release-plz/action@a80d79efe0a195618acb02a4089d55fe74d2505f # v0.5.136",
 }
 
 PUBLISH_TARGETS = ("none", "pypi", "npm", "crates", "github-assets")
@@ -181,14 +181,29 @@ PUBLISH_BY_LANGUAGE = {"python": "pypi", "ts": "npm", "rust": "crates", "go": "g
 
 UV_FROZEN = "uv " + "sync --frozen"  # split so a bash deny-pattern on "nc * -e" never sees it in one token
 
+# Paths that invalidate every lane: workflow and tool configuration shared by all of them.
+GLOBAL_PATHS = (".github/**", "mise.toml", "justfile", ".pre-commit-config.yaml")
+
+# Per-language paths for a single-package repository; a monorepo derives them from member dirs.
+LANE_PATHS = {
+    "python": ("src/**", "tests/**", "pyproject.toml", "uv.lock"),
+    "typescript": ("src/**", "test/**", "tests/**", "package.json", "bun.lock", "pnpm-lock.yaml", "package-lock.json", "tsconfig*.json", "biome.json"),
+    "rust": ("src/**", "tests/**", "benches/**", "crates/**", "Cargo.toml", "Cargo.lock", "rust-toolchain.toml", "clippy.toml", "rustfmt.toml", "deny.toml"),
+    "go": ("**/*.go", "go.mod", "go.sum", ".golangci.yml"),
+    "terraform": ("**/*.tf", "**/*.tfvars", ".tflint.hcl"),
+    "hooks": (".pre-commit-config.yaml", ".gitleaks.toml", ".typos.toml"),
+    "agentic": ("AGENTS.md", "CLAUDE.md", "WATCHDOG.md", ".omp/**", "agents/**", "skills/**", "rules/**", "docs/**", "**/*.md"),
+}
+LANE_BY_LANGUAGE = {"python": "python", "ts": "typescript", "rust": "rust", "go": "go", "terraform": "terraform"}
+
 
 def _checkout(indent: str = "      ") -> str:
     return f"{indent}- uses: {ACTIONS['checkout']}\n{indent}  with:\n{indent}    persist-credentials: false"
 
 
-def _job(name: str, steps: list[str], *, timeout: int = 15, extra: str = "") -> str:
-    body = "\n".join(steps)
-    return f"  {name}:\n    runs-on: ubuntu-latest\n    timeout-minutes: {timeout}\n{extra}    steps:\n{_checkout()}\n{body}"
+def _mise(indent: str = "      ") -> str:
+    """mise installs every tool at the versions mise.toml pins: the single version authority."""
+    return f"{indent}- name: Set up tools from mise.toml\n{indent}  uses: {ACTIONS['mise']}\n{indent}  with:\n{indent}    install: true\n{indent}    cache: true"
 
 
 def _run(cmd: str, name: str | None = None) -> str:
@@ -196,81 +211,168 @@ def _run(cmd: str, name: str | None = None) -> str:
     return prefix + cmd
 
 
+def _lane(name: str, steps: list[str], *, timeout: int = 15, env: dict[str, str] | None = None, gated: bool = True) -> str:
+    """A lane job. Gated lanes run only when the detector says their inputs changed.
+
+    The job always exists (branch protection needs a stable check name); when unaffected it
+    is `skipped`, and `gate` accepts that skip only because it reads the same detector output.
+    """
+    header = [f"  {name}:", "    runs-on: ubuntu-latest", f"    timeout-minutes: {timeout}", "    needs: changes"]
+    if gated:
+        header.append(f"    if: needs.changes.outputs.{name} == 'true'")
+    header.append("    permissions:\n      contents: read")
+    if env:
+        header.append("    env:\n" + "\n".join(f"      {k}: {v}" for k, v in env.items()))
+    body = "\n".join([_checkout(), _mise(), *steps])
+    return "\n".join(header) + f"\n    steps:\n{body}"
+
+
 def _language_lane(language: str, values: dict[str, str]) -> tuple[str, str] | None:
-    """(job name, job yaml) for one language, or None when the language has no lane."""
+    """(job name, job yaml) for one language lane, or None when the language has no lane."""
     a = ACTIONS
     cmd = {key: str(values.get(f"commands_{key}", "")) for key in ("lint", "fmt", "check", "test")}
     if language == "python":
-        steps = [f"      - name: Set up uv\n        uses: {a['setup_uv']}", _run(UV_FROZEN, "Install")]
+        steps = [f"      - name: uv cache\n        uses: {a['cache']}\n        with:\n          path: ~/.cache/uv\n          key: uv-${{{{ runner.os }}}}-${{{{ hashFiles('**/uv.lock') }}}}\n          restore-keys: uv-${{{{ runner.os }}}}-", _run(UV_FROZEN, "Install")]
         steps += [_run(cmd[k], n) for k, n in (("lint", "Lint"), ("fmt", "Format check"), ("check", "Type check"), ("test", "Test")) if cmd[k]]
-        return "python", _job("python", steps)
+        return "python", _lane("python", steps)
     if language == "ts":
-        steps = [f"      - name: Set up Bun\n        uses: {a['setup_bun']}\n        with:\n          bun-version: {values.get('bun_version', 'latest')}", _run("bun install --frozen-lockfile", "Install")]
+        steps = [f"      - name: Bun cache\n        uses: {a['cache']}\n        with:\n          path: ~/.bun/install/cache\n          key: bun-${{{{ runner.os }}}}-${{{{ hashFiles('**/bun.lock') }}}}\n          restore-keys: bun-${{{{ runner.os }}}}-", _run("bun install --frozen-lockfile", "Install")]
         steps += [_run(cmd[k], n) for k, n in (("fmt", "Format and lint"), ("lint", "Lint"), ("check", "Type check"), ("test", "Test")) if cmd[k]]
-        return "typescript", _job("typescript", steps)
+        return "typescript", _lane("typescript", steps)
     if language == "rust":
-        steps = [f"      - name: Set up Rust\n        uses: {a['rust_toolchain']}\n        with:\n          components: rustfmt, clippy", f"      - uses: {a['rust_cache']}",
-                 _run("cargo fmt --all --check", "Format check"), _run("cargo clippy --all-targets --all-features -- -D warnings", "Lint"),
-                 _run("cargo test --all-features", "Test"), _run("cargo doc --no-deps --all-features", "Docs")]
-        return "rust", _job("rust", steps, timeout=30, extra="    env:\n      CARGO_INCREMENTAL: \"0\"\n      RUSTDOCFLAGS: -D warnings\n")
+        steps = [f"      - uses: {a['rust_cache']}"]
+        if str(values.get("sccache", "")).lower() in TRUTHY:
+            steps.append(f"      - uses: {a['sccache']}\n      - run: echo RUSTC_WRAPPER=sccache >> \"$GITHUB_ENV\"")
+        steps += [_run("cargo fmt --all --check", "Format check"), _run("cargo clippy --all-targets --all-features -- -D warnings", "Lint"),
+                  _run("cargo test --all-features", "Test"), _run("cargo doc --no-deps --all-features", "Docs")]
+        if str(values.get("kind", "")) in ("crate", "hybrid"):
+            steps.append(_run("cargo publish --dry-run --locked", "Publish dry run"))
+        return "rust", _lane("rust", steps, timeout=30, env={"CARGO_INCREMENTAL": '"0"', "RUSTDOCFLAGS": "-D warnings"})
     if language == "go":
-        steps = [f"      - name: Set up Go\n        uses: {a['setup_go']}\n        with:\n          go-version-file: go.mod", _run('test -z "$(gofmt -l .)"', "Format check"), _run("go vet ./...", "Vet"),
-                 f"      - name: Lint\n        uses: {a['golangci']}", _run("go test -race ./...", "Test"), _run("go run golang.org/x/vuln/cmd/govulncheck@latest ./...", "Vulnerability check")]
-        return "go", _job("go", steps, timeout=20)
+        steps = [f"      - name: Go cache\n        uses: {a['setup_go']}\n        with:\n          go-version-file: go.mod\n          cache: true\n          cache-dependency-path: go.sum",
+                 _run('test -z "$(gofmt -l .)"', "Format check"), _run("go vet ./...", "Vet"), _run("go mod tidy && git diff --exit-code go.mod go.sum", "Tidy check"),
+                 f"      - name: Lint\n        uses: {a['golangci']}\n        with:\n          install-mode: none", _run("go test -race ./...", "Test"), _run("govulncheck ./...", "Vulnerability check")]
+        return "go", _lane("go", steps, timeout=20)
     if language == "terraform":
-        steps = [f"      - uses: {a['setup_terraform']}", f"      - uses: {a['setup_tflint']}", _run("terraform fmt -check -recursive", "Format check"),
-                 _run("terraform init -backend=false -input=false && terraform validate", "Validate"), _run("tflint --recursive", "Lint")]
-        return "terraform", _job("terraform", steps)
+        steps = [_run("terraform fmt -check -recursive", "Format check"), _run("terraform init -backend=false -input=false && terraform validate", "Validate"), _run("tflint --recursive", "Lint")]
+        return "terraform", _lane("terraform", steps)
     return None
 
 
+def _member_paths(values: dict[str, str], lane: str) -> list[str]:
+    """Paths for a lane in a monorepo: every member dir whose language maps to that lane."""
+    raw = values.get("members_json", "")
+    try:
+        members = json.loads(raw) if raw else []
+    except json.JSONDecodeError:
+        members = []
+    paths: list[str] = []
+    for member in members:
+        if not isinstance(member, dict):
+            continue
+        language = str(member.get("layer", member.get("language", ""))).split("/")[-1]
+        directory = str(member.get("dir", "")).strip("/")
+        if directory and LANE_BY_LANGUAGE.get(language) == lane:
+            paths.append(f"{directory}/**")
+    return paths
+
+
 def build_ci_jobs(layers: list[str], values: dict[str, str]) -> str:
-    """Compose the standard validation workflow: parallel lanes from the selected layers, then `gate`."""
+    """Compose the standard validation workflow: a change detector, parallel lanes, and the fail-closed `gate`."""
     a = ACTIONS
     jobs: list[str] = []
-    names: list[str] = []
+    gated: list[str] = []
     languages = [layer.split("/", 1)[1] for layer in layers if layer.startswith("lang/")]
+    # A monorepo's languages live on its members, not on the root profile.
+    try:
+        members = json.loads(values.get("members_json", "") or "[]")
+    except json.JSONDecodeError:
+        members = []
+    for member in members:
+        if isinstance(member, dict):
+            language = str(member.get("layer", member.get("language", ""))).split("/")[-1]
+            if language in LANE_BY_LANGUAGE and language not in languages:
+                languages.append(language)
     for language in languages:
         lane = _language_lane(language, values)
         if lane:
-            names.append(lane[0]); jobs.append(lane[1])
+            gated.append(lane[0])
+            jobs.append(lane[1])
     if "hooks" in layers:
-        names.append("hooks")
-        jobs.append(_job("hooks", [f"      - name: Set up uv\n        uses: {a['setup_uv']}", _run("uvx prek run --all-files", "Run every hook")]))
+        gated.append("hooks")
+        jobs.append(_lane("hooks", [_run("prek run --all-files", "Run every hook")]))
     if "agentic" in layers:
-        names.append("agentic")
-        jobs.append(_job("agentic", [f"      - name: Set up uv\n        uses: {a['setup_uv']}",
-                                     _run("uvx --from agnix==0.52.2 agnix .", "Agentic lint"),  # PyPI build of agent-sh/agnix; fails closed
-                                     _run("git ls-files -z '*.md' | grep -zv CHANGELOG | xargs -0 --no-run-if-empty uvx --from slopvac slopvac --profile normal", "Prose gate")]))
-    names.append("security")
-    jobs.append(_job("security", [f"      - name: Workflow audit\n        uses: {a['zizmor']}\n        with:\n          advanced-security: false",
-                                  _run("uvx --from actionlint-py actionlint", "Actionlint"),
-                                  f"      - name: Secret scan\n        uses: {a['gitleaks']}\n        env:\n          GITHUB_TOKEN: ${{{{ secrets.GITHUB_TOKEN }}}}"], timeout=10))
-    gate = f'''  gate:
-    # The only check branch protection requires. It always runs, so a failed lane is a red
-    # gate rather than a missing one; skipped and cancelled lanes are failures too.
+        gated.append("agentic")
+        jobs.append(_lane("agentic", [_run("uvx --from agnix==0.52.2 agnix .", "Agentic lint"),
+                                      _run("git ls-files -z '*.md' | grep -zv CHANGELOG | xargs -0 --no-run-if-empty uvx --from slopvac slopvac --profile normal", "Prose gate")]))
+    # security always runs: workflow files and secrets are relevant to every change.
+    jobs.append(_lane("security", [f"      - name: Workflow audit\n        uses: {a['zizmor']}",
+                                   _run("uvx --from actionlint-py actionlint", "Actionlint"),
+                                   f"      - name: Secret scan\n        uses: {a['gitleaks']}\n        env:\n          GITHUB_TOKEN: ${{{{ secrets.GITHUB_TOKEN }}}}"],
+                      timeout=10, env={"ACTIONS_CACHE_MODE": "none"}, gated=False))
+    monorepo = str(values.get("layout", "single")) == "monorepo"
+    filter_blocks: list[str] = []
+    for name in gated:
+        paths = list(GLOBAL_PATHS)
+        member_paths = _member_paths(values, name) if monorepo else []
+        paths += member_paths if member_paths else list(LANE_PATHS.get(name, ()))
+        filter_blocks.append(f"            {name}:\n" + "\n".join(f"              - '{path}'" for path in paths))
+    outputs = "".join(f"      {name}: ${{{{ steps.filter.outputs.{name} }}}}\n" for name in gated)
+    changes = f'''  changes:
+    # Path detector. Every lane keys off one boolean here; the lane's job still exists when
+    # unaffected (branch protection needs stable check names) and `gate` reads the same boolean.
     runs-on: ubuntu-latest
     timeout-minutes: 5
-    needs: [{", ".join(names)}]
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+{outputs}    steps:
+{_checkout()}
+      - id: filter
+        uses: {a['paths_filter']}
+        with:
+          filters: |
+{chr(10).join(filter_blocks)}
+'''
+    all_lanes = [*gated, "security"]
+    gate = f'''  gate:
+    # The only check branch protection requires. Fail-closed: a lane may be skipped only when
+    # the detector said its inputs did not change; any other non-success, or a failed detector,
+    # fails the gate.
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    needs: [changes, {", ".join(all_lanes)}]
     if: always()
+    permissions: {{}}
     steps:
-      - name: Verify every lane passed
+      - name: Verify every lane passed or was legitimately unaffected
         env:
-          RESULTS: ${{{{ toJSON(needs) }}}}
-          ALLOW_SKIPPED: ""
+          NEEDS: ${{{{ toJSON(needs) }}}}
         run: |
           set -euo pipefail
           python3 - <<'PY'
           import json, os, sys
-          needs = json.loads(os.environ["RESULTS"])
-          allow_skipped = set(filter(None, os.environ["ALLOW_SKIPPED"].split(",")))
-          bad = [n for n, job in needs.items() if job.get("result") != "success" and not (job.get("result") == "skipped" and n in allow_skipped)]
+          needs = json.loads(os.environ["NEEDS"])
+          if needs["changes"]["result"] != "success":
+              sys.exit("::error::the change detector did not succeed")
+          unaffected = needs["changes"].get("outputs", {{}})
+          bad = []
+          for lane, job in needs.items():
+              if lane == "changes":
+                  continue
+              result = job.get("result")
+              if result == "success":
+                  continue
+              if result == "skipped" and unaffected.get(lane) == "false":
+                  continue
+              bad.append(f"{{lane}}={{result}}")
           if bad:
-              print(f"::error::these lanes did not succeed: {{' '.join(bad)}}")
-              sys.exit(1)
-          print("every lane passed")
-          PY'''
-    return "\n".join(jobs + [gate])
+              sys.exit("::error::lanes not green: " + ", ".join(bad))
+          print("gate: every lane passed or was unaffected")
+          PY
+'''
+    return "\n".join([changes, *jobs, gate])
 
 
 def build_release_jobs(layers: list[str], values: dict[str, str]) -> str:
@@ -310,12 +412,8 @@ def build_release_jobs(layers: list[str], values: dict[str, str]) -> str:
           passed="$(gh api "repos/${{GITHUB_REPOSITORY}}/commits/${{sha}}/check-runs?check_name=gate" --jq '[.check_runs[]|select(.conclusion=="success")]|length')"
           if [ "$passed" = "0" ]; then echo "::error::no successful 'gate' check run on ${{sha}}"; exit 1; fi
 '''
-    setup = {
-        "python": f"      - name: Set up uv\n        uses: {a['setup_uv']}\n      - run: {UV_FROZEN}",
-        "ts": f"      - name: Set up Bun\n        uses: {a['setup_bun']}\n        with:\n          bun-version: {values.get('bun_version', 'latest')}\n      - run: bun install --frozen-lockfile",
-        "rust": f"      - uses: {a['rust_toolchain']}\n      - uses: {a['rust_cache']}",
-        "go": f"      - uses: {a['setup_go']}\n        with:\n          go-version-file: go.mod",
-    }.get(language, "")
+    install = {"python": UV_FROZEN, "ts": "bun install --frozen-lockfile", "rust": "cargo fetch --locked", "go": "go mod download"}.get(language)
+    setup = _mise() + (f"\n      - run: {install}" if install else "")
     gate += (setup + "\n" if setup else "") + f"      - name: Verify the tagged tree\n        run: {check}\n      - run: {test}\n"
     build_cmd = {
         "pypi": "uv build && ls dist",
@@ -383,7 +481,7 @@ def build_release_jobs(layers: list[str], values: dict[str, str]) -> str:
         with:
           ref: ${{{{ needs.release-gate.outputs.tag }}}}
           persist-credentials: false
-      - uses: {a['rust_toolchain']}
+{_mise()}
       - id: auth
         uses: {a['crates_auth']}
       - run: cargo publish --locked
@@ -396,9 +494,7 @@ def build_release_jobs(layers: list[str], values: dict[str, str]) -> str:
           ref: ${{{{ needs.release-gate.outputs.tag }}}}
           fetch-depth: 0
           persist-credentials: false
-      - uses: {a['setup_go']}
-        with:
-          go-version-file: go.mod
+{_mise()}
       - uses: {a['goreleaser']}
         with:
           args: release --clean
@@ -574,10 +670,13 @@ def resolve_selection(root: Path, profile_name: str | None, name: str | None, ov
             values[f"commands_{key}"] = str(commands.get(key, ""))
     lane_languages = [layer.split("/", 1)[1] for layer in layers if layer.startswith("lang/")]
     language = lane_languages[0] if lane_languages else str(values.get("language", "none"))
-    publish = str(values.get("publish", "")).strip() or ("none" if str(values.get("app", "")).lower() in TRUTHY else PUBLISH_BY_LANGUAGE.get(language, "none"))
+    release_plz = language == "rust" and str(values.get("kind", "")) in ("crate", "hybrid")
+    publish = str(values.get("publish", "")).strip() or ("none" if str(values.get("app", "")).lower() in TRUTHY or release_plz else PUBLISH_BY_LANGUAGE.get(language, "none"))
     if publish not in PUBLISH_TARGETS:
         fail(f"publish must be one of {', '.join(PUBLISH_TARGETS)}: {publish}", EXIT_CONFLICT)
     values["publish"] = publish
+    if str(values.get("layout", "single")) == "monorepo":
+        values["members_json"] = json.dumps(answers_members(root))
     values["ci_jobs"] = build_ci_jobs(layers, values)
     values["release_jobs"] = build_release_jobs(layers, values)
     if str(values.get("web_ui", "")).lower() in TRUTHY and "web-ui" not in layers:
@@ -652,15 +751,17 @@ def effective_layer_tools(config: dict[str, Any], values: dict[str, str]) -> dic
 
 
 def file_condition_holds(spec: Any, values: dict[str, str]) -> bool:
-    """A `[conditional_files]` entry: `{ var = "kind", equals = "tool" }` or `{ var = "kind", any = ["tool", "hybrid"] }`.
-
-    `equals`/`any` compare case-insensitively against the answer; an entry with neither key
-    always holds. An unknown shape never holds, so a typo cannot silently include a file.
-    """
+    """Evaluate conditional file predicates, including ``all`` compound predicates."""
     if not isinstance(spec, dict):
         return False
+    if "all" in spec:
+        predicates = spec["all"]
+        return isinstance(predicates, list) and all(file_condition_holds(item, values) for item in predicates)
     variable = str(spec.get("var", ""))
     actual = str(values.get(variable, "")).lower()
+    if "not_any" in spec:
+        options = spec["not_any"]
+        return isinstance(options, list) and actual not in {str(item).lower() for item in options}
     if "any" in spec:
         options = spec["any"]
         return isinstance(options, list) and actual in {str(item).lower() for item in options}
@@ -699,10 +800,16 @@ def collect(layers: list[str], values: dict[str, str], member_dir: str | None = 
             if not source.is_file() or source.name in {"layer.toml", "README.md", ".DS_Store", "mise.toml.tmpl"}:
                 continue
             relative = source.relative_to(directory)
-            if str(relative) in excluded_files:
+            rendered_name = str(relative)[:-5] if str(relative).endswith(".tmpl") else str(relative)
+            if str(relative) in excluded_files or rendered_name in excluded_files:
                 continue
             if relative.name == "LICENSE" and str(values.get("license", "")).lower() not in {"", "apache-2.0", "apache 2.0"}:
                 continue
+            if relative.name.startswith("LICENSE-"):
+                selected = str(values.get("license", "")).lower()
+                if relative.name != f"LICENSE-{selected}" or selected == "none":
+                    continue
+                relative = relative.with_name("LICENSE")
             if relative.name.endswith(".block"):
                 target = target_path(Path(str(relative)[:-6]), values)
                 body = render_text(source.read_text(), values)
@@ -1315,20 +1422,31 @@ def inspect(root: Path) -> dict[str, Any]:
                 project = load_toml(root / "pyproject.toml")
             except SystemExit:
                 project = {}
-            suggested = "python-app" if isinstance(project.get("project", {}).get("scripts"), dict) and project["project"]["scripts"] else "python-lib"
+            kind = "tool" if project.get("project", {}).get("scripts") else "library"
+            suggested = "python-app" if kind == "tool" else "python-lib"
         elif selected == "ts":
-            package = {}
             try:
                 package = json.loads((root / "package.json").read_text()) if (root / "package.json").is_file() else {}
             except json.JSONDecodeError:
                 package = {}
-            suggested = "ts-app" if (root / "src/index.ts").is_file() or package.get("bin") else "ts-lib"
+            kind = "omp-plugin" if (root / ".omp-plugin/plugin.json").is_file() else ("app" if package.get("bin") or (root / "src/index.ts").is_file() else "library")
+            suggested = "ts-app" if kind == "app" else "ts-lib"
         elif selected == "rust":
-            suggested = "rust-app" if (root / "src/main.rs").is_file() else "rust-lib"
+            try:
+                cargo = load_toml(root / "Cargo.toml")
+            except SystemExit:
+                cargo = {}
+            has_lib = bool(cargo.get("lib")) or (root / "src/lib.rs").is_file()
+            has_bin = bool(cargo.get("bin")) or (root / "src/main.rs").is_file()
+            kind = "hybrid" if has_lib and has_bin else "tool" if has_bin else "crate"
+            suggested = "rust-app" if kind == "tool" else "rust-lib"
         elif selected == "go":
-            suggested = "go-app" if (root / "cmd").is_dir() else "go-lib"
+            kind = "tool" if (root / "cmd").is_dir() else "library"
+            suggested = "go-app" if kind == "tool" else "go-lib"
         else:
             suggested = "terraform"
+        fixed = [("name", "Project name", True, ""), ("purpose", "One-line project purpose", True, ""), ("language", "Project language", True, "none"), ("kind", "Project kind (selected language's allowed values)", True, "library"), ("license", "License", True, "apache-2.0"), ("beads", "Use beads?", True, "false"), ("remote", "Create a remote now?", False, "no"), ("visibility", "Remote visibility", False, "private"), ("web_ui", "Include web UI tooling?", False, "false"), ("speckit", "Include SpecKit?", False, "false")]
+        allowed = {"language": ["python", "ts", "rust", "go", "terraform", "none"], "beads": ["true", "false"]}
     else:
         suggested = "agentic-repo"
     tools = {name: shutil.which(name) is not None for name in ("uv", "bun", "mise", "prek", "just", "gh", "bd", "omp")}
@@ -1346,7 +1464,7 @@ def inspect(root: Path) -> dict[str, Any]:
     for path in (root / ".omp/context.py", root / ".omp/project-context.json"):
         if path.exists() and not metadata_path(root).exists():
             hook_findings.append({"kind": "unowned-file", "path": str(path.relative_to(root))})
-    return {"root": str(root), "git": (root / ".git").exists(), "stacks": stacks, "tooling": {"mise": (root / "mise.toml").exists(), "just": (root / "justfile").exists(), "prek": bool(hook_files), "omp": (root / ".omp").exists(), "agents": (root / "AGENTS.md").exists(), "beads": (root / ".beads").exists()}, "hook_manager_conflicts": hook_files if len(hook_files) > 1 else [], "findings": hook_findings, "missing_tools": [name for name, found in tools.items() if not found], "tools": tools, "suggested_profile": suggested, "suggestedProfile": suggested, "notes": notes}
+    return {"root": str(root), "git": (root / ".git").exists(), "stacks": stacks, "language": stacks[0] if stacks else "none", "kind": locals().get("kind", "library"), "tooling": {"mise": (root / "mise.toml").exists(), "just": (root / "justfile").exists(), "prek": bool(hook_files), "omp": (root / ".omp").exists(), "agents": (root / "AGENTS.md").exists(), "beads": (root / ".beads").exists()}, "hook_manager_conflicts": hook_files if len(hook_files) > 1 else [], "findings": hook_findings, "missing_tools": [name for name, found in tools.items() if not found], "tools": tools, "suggested_profile": suggested, "suggestedProfile": suggested, "notes": notes}
 def declared_hook_stages(config: str) -> list[str]:
     groups = re.findall(r"(?:default_install_hook_types|stages):\s*\[([^]]+)\]", config)
     return sorted({part.strip(" '\"") for group in groups for part in group.split(",") if part.strip()})
@@ -1943,6 +2061,12 @@ def interview_questions(root: Path, profile_name: str | None = None) -> dict[str
     suggested = profile_name or str(info.get("suggested_profile", "agentic-repo"))
     questions: list[dict[str, Any]] = []
     if brownfield:
+        detected_kind = str(info.get("kind", "library"))
+        detected_language = str(info.get("language", info.get("stacks", ["none"])[0] if info.get("stacks") else "none"))
+        kind_allowed = {"python": ["library", "tool"], "ts": ["library", "app", "omp-plugin"], "rust": ["crate", "tool", "hybrid"], "go": ["library", "tool"]}.get(detected_language)
+        if kind_allowed:
+            questions.append({"id": "kind", "prompt": f"Confirm detected {detected_language} kind", "required": True, "default": detected_kind, "allowed": kind_allowed, "source": "inspect"})
+    if brownfield:
         questions.append({"id": "profile", "prompt": f"Confirm the detected profile ({suggested})", "required": True, "default": suggested, "allowed": sorted(path.stem for path in PROFILES.glob("*.toml")), "source": "fixed"})
         catalogue = layers_list()["layers"]
         profile_layers = [str(item) for item in load_profile(suggested).get("layers", [])] if (PROFILES / f"{suggested}.toml").is_file() else []
@@ -1973,21 +2097,26 @@ def interview_questions(root: Path, profile_name: str | None = None) -> dict[str
         for key, prompt, required, default in fixed:
             if key == "language" and profile_vars.get("language"):
                 default = str(profile_vars["language"])
-            elif key == "kind" and "app" in profile_vars:
-                default = "app" if str(profile_vars["app"]).lower() in TRUTHY else "lib"
+            elif key == "kind" and profile_vars.get("kind"):
+                default = str(profile_vars["kind"])
             elif key in profile_vars and key not in ("name", "purpose"):
                 default = value_default(profile_vars[key])
             row: dict[str, Any] = {"id": key, "prompt": prompt, "required": required, "default": default, "source": "fixed"}
             if key in allowed:
                 row["allowed"] = allowed[key]
             questions.append(row)
-    layers = [str(item) for item in load_profile(suggested).get("layers", [])] if (PROFILES / f"{suggested}.toml").is_file() else []
+    profile_config = load_profile(suggested) if (PROFILES / f"{suggested}.toml").is_file() else {}
+    layers = [str(item) for item in profile_config.get("layers", [])]
+    profile_var_values = profile_config.get("vars", {}) if isinstance(profile_config.get("vars", {}), dict) else {}
     for layer in layers:
         raw = load_layer(layer).get("vars", {})
         if isinstance(raw, dict):
             for key, value in raw.items():
                 if isinstance(value, dict) and value.get("ask") is True and not any(row["id"] == key for row in questions):
-                    questions.append({"id": str(key), "prompt": str(value.get("prompt", key)), "required": bool(value.get("required", False)), "default": value_default(value), "source": f"layer:{layer}"})
+                    # The profile's own value for a layer variable is that question's default, so
+                    # accepting defaults never contradicts the profile (static-site: docs_flavour=splash).
+                    default = value_default(profile_var_values[key]) if key in profile_var_values else value_default(value)
+                    questions.append({"id": str(key), "prompt": str(value.get("prompt", key)), "required": bool(value.get("required", False)), "default": default, "source": f"layer:{layer}"})
     return {"questions": questions, "profile": suggested, "mode": "brownfield" if brownfield else "greenfield"}
 
 
@@ -2169,6 +2298,32 @@ def abort(root: Path) -> tuple[dict[str, Any], int]:
     return {"ok": True, "hadRun": had_run, "stagesCompleted": stages, "dirtyOwned": dirty_owned, "dirtyOther": sorted(path for _, path in rows if path not in owned), "revertCommands": revert}, 0
 
 
+def policy_apply(root: Path, dry_run: bool = False) -> tuple[dict[str, Any], int]:
+    """Apply repository policy through gh, changing only values that differ."""
+    remote = subprocess.run(["git", "remote", "get-url", "origin"], cwd=root, capture_output=True, text=True, check=False).stdout.strip()
+    if "github.com/" not in remote.lower() and "github.com:" not in remote.lower():
+        return {"error": "origin remote must use github.com", "remote": remote}, EXIT_ERROR
+    auth = subprocess.run(["gh", "auth", "status"], cwd=root, capture_output=True, text=True, check=False)
+    if auth.returncode != 0:
+        return {"error": "gh auth status failed"}, EXIT_ERROR
+    repo = re.sub(r"\.git$", "", remote.rsplit(":", 1)[-1] if "@" in remote else remote.rsplit("github.com/", 1)[-1])
+    desired = {"delete_branch_on_merge": True, "allow_squash_merge": True, "allow_merge_commit": False, "allow_rebase_merge": False, "squash_merge_commit_title": "PR_TITLE", "squash_merge_commit_message": "PR_BODY", "has_wiki": False, "has_discussions": False, "has_issues": True}
+    current_cmd = ["gh", "api", f"repos/{repo}"]
+    current_run = subprocess.run(current_cmd, cwd=root, capture_output=True, text=True, check=False)
+    current = json.loads(current_run.stdout) if current_run.returncode == 0 and current_run.stdout else {}
+    patch = {key: value for key, value in desired.items() if current.get(key) != value}
+    plan: list[dict[str, Any]] = [{"method": "PATCH", "endpoint": f"repos/{repo}", "body": patch}] if patch else []
+    for label in ("bug", "enhancement", "task"):
+        plan.append({"method": "POST", "endpoint": f"repos/{repo}/labels", "body": {"name": label}})
+    result = {"remote": remote, "repo": repo, "plan": plan, "dry_run": dry_run}
+    if not dry_run:
+        for item in plan:
+            command = ["gh", "api", "--method", item["method"], item["endpoint"]]
+            for key, value in item["body"].items(): command += ["-f", f"{key}={str(value).lower() if isinstance(value, bool) else value}"]
+            subprocess.run(command, cwd=root, check=False)
+    return result, 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
@@ -2185,8 +2340,9 @@ def build_parser() -> argparse.ArgumentParser:
     finish_parser = sub.add_parser("finish"); finish_parser.add_argument("--root", default=".")
     abort_parser = sub.add_parser("abort"); abort_parser.add_argument("--root", default=".")
     member_parent = sub.add_parser("member"); member_parent.add_argument("--root", default="."); member = member_parent.add_subparsers(dest="member_command", required=True)
+    policy_parent = sub.add_parser("policy"); policy_parent.add_argument("--root", default="."); policy = policy_parent.add_subparsers(dest="policy_command", required=True).add_parser("apply"); policy.add_argument("--root", default=argparse.SUPPRESS); policy.add_argument("--dry-run", action="store_true")
     member_list_parser = member.add_parser("list"); member_list_parser.add_argument("--root", default=argparse.SUPPRESS)
-    member_add_parser = member.add_parser("add"); member_add_parser.add_argument("--root", default=argparse.SUPPRESS); member_add_parser.add_argument("--name", required=True); member_add_parser.add_argument("--layer", required=True); member_add_parser.add_argument("--kind", choices=("lib", "app", "service", "cli"), default="lib")
+    member_add_parser = member.add_parser("add"); member_add_parser.add_argument("--root", default=argparse.SUPPRESS); member_add_parser.add_argument("--name", required=True); member_add_parser.add_argument("--layer", required=True); member_add_parser.add_argument("--kind", default="library")
     member_remove_parser = member.add_parser("remove"); member_remove_parser.add_argument("--root", default=argparse.SUPPRESS); member_remove_parser.add_argument("--name", required=True)
     member_import_parser = member.add_parser("import"); member_import_parser.add_argument("--root", default=argparse.SUPPRESS); member_import_parser.add_argument("--dir", required=True); member_import_parser.add_argument("--layer", required=True); member_import_parser.add_argument("--kind", choices=("lib", "app", "service", "cli"), default="lib")
     doctor_parser = sub.add_parser("doctor"); doctor_parser.add_argument("--root", default=".")
@@ -2227,6 +2383,9 @@ def main(argv: list[str] | None = None) -> int:
         defaults_for = [item for item in args.defaults_for.split(",") if item]
         payload, code = answers_write_interview(root, args.profile, args.name, overrides, defaults_for, args.layer)
         emit(payload, root); return code
+    if args.command == "policy":
+        validate_root(root, require_git=True)
+        payload, code = policy_apply(root, args.dry_run); emit(payload, root); return code
     if args.command == "apply":
         payload, code = apply_pipeline(root, args.profile, dry_run=args.dry_run, stage=args.stage, bump_tools=args.bump_tools); emit(payload, root); return code
     if args.command == "finish":

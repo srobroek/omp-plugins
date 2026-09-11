@@ -1,0 +1,13 @@
+name = "static-site"
+summary = "Astro splash site"
+layers = ["base", "docs"]
+[vars]
+language = "none"
+kind = "library"
+docs_flavour = "splash"
+[commands]
+setup = "bun install --frozen-lockfile"
+test = "bun run build"
+lint = "bunx biome check ."
+fmt = "bunx biome format --write ."
+check = "bun run build"

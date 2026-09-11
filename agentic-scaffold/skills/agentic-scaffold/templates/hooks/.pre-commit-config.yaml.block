@@ -11,6 +11,14 @@ repos:
       - id: end-of-file-fixer
       - id: check-yaml
       - id: check-added-large-files
+  - repo: https://github.com/zricethezav/gitleaks
+    rev: v8.24.2
+    hooks:
+      - id: gitleaks
+  - repo: https://github.com/crate-ci/typos
+    rev: v1.39.1
+    hooks:
+      - id: typos
   - repo: local
     hooks:
       - id: omp-context-refresh

@@ -1,0 +1,13 @@
+name = "omp-plugin"
+summary = "Bun OMP plugin"
+layers = ["base", "tooling", "hooks", "agentic", "lang/ts", "ci/github", "release"]
+[vars]
+language = "ts"
+kind = "omp-plugin"
+app = false
+[commands]
+setup = "bun install --frozen-lockfile"
+test = "bun test"
+lint = "bunx biome check ."
+fmt = "bunx biome format --write ."
+check = "bunx tsc --noEmit && bun test"

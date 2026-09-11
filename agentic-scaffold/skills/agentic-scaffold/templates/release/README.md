@@ -5,8 +5,9 @@ Renders the release configuration and two workflows to the standard in `docs/ci-
 - `release-please-config.json`, `.release-please-manifest.json`: versions stay owned by
   `release-please`; never hand-edit them.
 - `.github/workflows/release-please.yml`: runs on the default branch. With the
-  `RELEASE_PLEASE_APP_ID` variable and `RELEASE_PLEASE_PRIVATE_KEY` secret it uses a GitHub App
-  token, so the release PR triggers CI.
+  `RELEASE_APP_CLIENT_ID` variable and `RELEASE_APP_PRIVATE_KEY` secret it uses a GitHub App
+  token, so the release PR triggers CI. If either is missing it falls back to `GITHUB_TOKEN` and
+  emits a warning; both App credentials are required for the App path.
 - `.github/workflows/release.yml`: starts when the release PR merge publishes the GitHub release.
   - `release-gate` requires a green `gate` on the tagged commit and re-runs the checks on the
     tagged tree.

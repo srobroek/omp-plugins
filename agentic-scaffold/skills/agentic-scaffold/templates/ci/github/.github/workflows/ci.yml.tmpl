@@ -6,12 +6,11 @@ on:
     branches: [main]
   merge_group:
 
-permissions:
-  contents: read
+permissions: {}
 
 # Cancel superseded pull-request runs; never cancel main or merge-group runs.
 concurrency:
-  group: $${{ github.workflow }}-$${{ github.ref }}
+  group: $${{ github.workflow }}-$${{ github.event.pull_request.number || github.sha }}
   cancel-in-progress: $${{ github.event_name == 'pull_request' }}
 
 jobs:

@@ -1,0 +1,12 @@
+name = "agent-bundle"
+summary = "Agentic project bundle"
+layers = ["base", "agentic"]
+[vars]
+language = "none"
+kind = "library"
+[commands]
+setup = "mise install"
+test = "just check"
+lint = "prek run --all-files"
+fmt = "prek run --all-files"
+check = "just check"

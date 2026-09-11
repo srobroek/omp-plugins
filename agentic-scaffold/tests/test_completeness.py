@@ -32,7 +32,7 @@ def test_layers_show_and_answer_precedence(tmp_path: Path) -> None:
     assert answer.returncode == 0, answer.stderr
     rendered = run("render", "--root", str(tmp_path), "--profile", "python-lib", "--var", "python=3.10")
     assert rendered.returncode == 0, rendered.stderr
-    assert 'requires-python = ">=3.10"' in (tmp_path / "pyproject.toml").read_text()
+    assert 'requires-python = ">=3.12"' in (tmp_path / "pyproject.toml").read_text()
     assert 'python = "3.10"' in (tmp_path / "mise.toml").read_text()
 
 
@@ -100,7 +100,7 @@ def test_precommit_has_one_repos_header(tmp_path: Path) -> None:
     assert result.returncode == 0, result.stderr
     lines = (tmp_path / ".pre-commit-config.yaml").read_text().splitlines()
     assert sum(line == "repos:" for line in lines) == 1
-    assert sum(line.strip().startswith("- repo:") for line in lines) == 4
+    assert sum(line.strip().startswith("- repo:") for line in lines) == 6  # prek-hooks, ruff, ty->pyright swap, gitleaks, typos
 
 
 def test_layer_owned_tools_do_not_cross_stacks(tmp_path: Path) -> None:
@@ -117,21 +117,20 @@ def test_layer_owned_tools_do_not_cross_stacks(tmp_path: Path) -> None:
     assert "python" not in ts_tools
 
 
-def test_python_uses_ty_spdx_and_omits_empty_authors(tmp_path: Path) -> None:
+def test_python_uses_pyright_spdx_and_omits_empty_authors(tmp_path: Path) -> None:
     result = run("render", "--root", str(tmp_path), "--profile", "python-app")
     assert result.returncode == 0, result.stderr
     text = (tmp_path / "pyproject.toml").read_text()
     assert 'license = "Apache-2.0"' in text
     assert "authors" not in text
-    assert "pyright" not in text and "[tool.ty]" not in text
-    assert '"ty>=0.0"' in text
+    assert "pyright" in text and "[tool.ty]" not in text and '"ty' not in text  # pyright standard is the estate norm
 
 
 def test_ci_is_runnable_and_sha_pinned(tmp_path: Path) -> None:
     result = run("render", "--root", str(tmp_path), "--profile", "python-app")
     assert result.returncode == 0, result.stderr
     workflow = (tmp_path / ".github/workflows/ci.yml").read_text()
-    assert "setup-uv@" in workflow and "uv sync" in workflow and "uvx prek" in workflow
+    assert "jdx/mise-action@" in workflow and "uv sync" in workflow and "prek run --all-files" in workflow
     assert "matrix.stack" not in workflow and "setup-python" not in workflow and "mise install" not in workflow
     assert all(len(line.split("@")[1].split(" ", 1)[0]) == 40 for line in workflow.splitlines() if " uses: " in line)
 
