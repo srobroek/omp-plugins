@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.14](https://github.com/srobroek/omp-plugins/compare/beads--v1.0.13...beads--v1.0.14) (2026-09-11)
+
+
+### Bug Fixes
+
+* repair the secret-commit guard's cwd model and the beads backend resolver ([#169](https://github.com/srobroek/omp-plugins/issues/169)) ([d8c3c85](https://github.com/srobroek/omp-plugins/commit/d8c3c8520e9b8a96aafe1f42505af49bd31cd370))
+
 ## [1.0.13](https://github.com/srobroek/omp-plugins/compare/beads--v1.0.12...beads--v1.0.13) (2026-09-11)
 
 

@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.4](https://github.com/srobroek/omp-plugins/compare/toolchain--v0.3.3...toolchain--v0.3.4) (2026-09-11)
+
+
+### Bug Fixes
+
+* **toolchain:** audit worktrees before prune ([#171](https://github.com/srobroek/omp-plugins/issues/171)) ([abe82d7](https://github.com/srobroek/omp-plugins/commit/abe82d7a6de35f11fff145c1848da778269f0fc0))
+
 ## [0.3.3](https://github.com/srobroek/omp-plugins/compare/toolchain--v0.3.2...toolchain--v0.3.3) (2026-09-11)
 
 
