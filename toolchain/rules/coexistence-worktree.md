@@ -36,5 +36,6 @@ Interference:
 - On interference, do not fight for the shared checkout. Humans and parallel
   human checkouts stay on Worktrunk (`wt switch --create <branch> --base <base>`).
   Agents move to an isolated task checkout (`isolated: true`) and continue there.
+- Before running `wt prune`, run `wt prune-preview`, capture each candidate's tip SHA with `git rev-parse`, and only then run the real prune.
 
 Branch switched underneath you: enforced by `coexistence-branch-advisory`.
