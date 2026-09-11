@@ -8,3 +8,9 @@ conflicts_with = []
 [vars]
 cla = { default = "false", prompt = "Enable CLA", ask = false }
 reviews = { default = "0", prompt = "Required reviews", ask = false }
+[conditional_files."CLA.md"]
+var = "cla"
+equals = "true"
+[conditional_files.".github/workflows/cla.yml"]
+var = "cla"
+equals = "true"

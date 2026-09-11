@@ -707,6 +707,7 @@ def collect(layers: list[str], values: dict[str, str], member_dir: str | None = 
                 selected = str(values.get("license", "")).lower()
                 if relative.name != f"LICENSE-{selected}" or selected == "none":
                     continue
+                relative = relative.with_name("LICENSE")
             if relative.name.endswith(".block"):
                 target = target_path(Path(str(relative)[:-6]), values)
                 body = render_text(source.read_text(), values)
@@ -2176,7 +2177,7 @@ def abort(root: Path) -> tuple[dict[str, Any], int]:
 def policy_apply(root: Path, dry_run: bool = False) -> tuple[dict[str, Any], int]:
     """Apply repository policy through gh, changing only values that differ."""
     remote = subprocess.run(["git", "remote", "get-url", "origin"], cwd=root, capture_output=True, text=True, check=False).stdout.strip()
-    if not re.search(r"(?:^|@)github\.com[/:]", remote, re.IGNORECASE):
+    if "github.com/" not in remote.lower() and "github.com:" not in remote.lower():
         return {"error": "origin remote must use github.com", "remote": remote}, EXIT_ERROR
     auth = subprocess.run(["gh", "auth", "status"], cwd=root, capture_output=True, text=True, check=False)
     if auth.returncode != 0:
