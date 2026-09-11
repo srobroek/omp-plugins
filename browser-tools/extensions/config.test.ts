@@ -54,10 +54,20 @@ describe("headed browser configuration", () => {
 		await mkdir(join(project, ".omp"), { recursive: true });
 		await writeFile(lockPath, JSON.stringify({ settings: { "@srobroek/browser-tools": { defaultHeadless: true, defaultEngine: "chrome" } } }));
 		await writeFile(join(project, ".omp", "plugin-overrides.json"), JSON.stringify({ settings: { "@srobroek/browser-tools": { defaultEngine: "firefox" } } }));
+		const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
 		process.env.PI_CODING_AGENT_DIR = agentDir;
-		const stored = await loadStoredSettings(project);
-		expect(stored.values).toEqual({ defaultHeadless: true, defaultEngine: "firefox" });
-		expect(stored.source).toContain("lock-file:");
+		try {
+			// The public API is installed in this repo, so the fallback is only reached
+			// by injecting an importer that fails the way a missing package would.
+			const stored = await loadStoredSettings(project, async () => {
+				throw new Error("module not found");
+			});
+			expect(stored.values).toEqual({ defaultHeadless: true, defaultEngine: "firefox" });
+			expect(stored.source).toContain("lock-file:");
+		} finally {
+			if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+			else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+		}
 	});
 
 	test("keeps package settings schema in sync with the runtime schema", async () => {
