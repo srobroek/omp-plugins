@@ -61,7 +61,10 @@ test("failed discovery and missing prerequisites remain failures with bounded ou
 	const partial = invoke();
 	expect(partial.ok).toBe(false);
 	expect(partial.complete).toBe(false);
-	writeFileSync(just, '#!/bin/sh\n[ "$1" = "--list" ] && { echo " verify"; exit 0; }; i=0; while [ "$i" -lt 5000 ]; do echo noisy-failure-output; i=$((i+1)); done; exit 8\n');
+	// A real `just` answers --version even when a recipe fails, and the runnability
+	// probe relies on that: a stub failing every argument reads as an uninstalled
+	// tool, which is a different outcome from a recipe that ran and failed.
+	writeFileSync(just, '#!/bin/sh\ncase "$1" in --version) exit 0 ;; esac\n[ "$1" = "--list" ] && { echo " verify"; exit 0; }; i=0; while [ "$i" -lt 5000 ]; do echo noisy-failure-output; i=$((i+1)); done; exit 8\n');
 	const failed = invoke();
 	expect(failed.ok).toBe(false);
 	expect(failed.failed).toBe(1);
