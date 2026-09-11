@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.9.0](https://github.com/srobroek/omp-plugins/compare/agentic-scaffold--v0.8.0...agentic-scaffold--v0.9.0) (2026-09-11)
+
+
+### Features
+
+* **agentic-scaffold:** deterministic verbs and Better-T-Stack delegation ([#170](https://github.com/srobroek/omp-plugins/issues/170)) ([6a138f5](https://github.com/srobroek/omp-plugins/commit/6a138f53a3905b0d3cfe848351d9572185209f7a))
+
 ## [0.8.0](https://github.com/srobroek/omp-plugins/compare/agentic-scaffold--v0.7.0...agentic-scaffold--v0.8.0) (2026-09-11)
 
 
