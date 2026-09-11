@@ -34,6 +34,81 @@ MARKER_HTML = "<!-- agentic-scaffold:{kind} {block} -->"
 MARKER_HASH = "# agentic-scaffold:{kind} {block}"
 TRUTHY = {"1", "true", "yes", "on"}
 
+BTS_VERSION_DEFAULT = "3.42.2"
+
+
+def _bts_values(value: Any) -> list[str]:
+    """Normalize variadic Better-T-Stack answers from TOML or CLI text."""
+    if isinstance(value, (list, tuple, set)):
+        return [str(item).strip().strip("'\"") for item in value if str(item).strip()]
+    raw = str(value or "").strip()
+    if raw.startswith("[") and raw.endswith("]"):
+        raw = raw[1:-1]
+    return [item.strip().strip("'\"") for item in raw.split(",") if item.strip()]
+
+
+def bts_validate(vars: dict[str, Any]) -> list[str]:
+    """Return Better-T-Stack source compatibility violations for selected answers."""
+    if "bts" in vars and str(vars.get("bts", "false")).lower() not in TRUTHY:
+        return []
+    if "bts" not in vars and not any(str(key).startswith("bts_") for key in vars):
+        return []
+    frontend = _bts_values(vars.get("bts_frontend", "tanstack-router"))
+    addons = set(_bts_values(vars.get("bts_addons", "turborepo")))
+    backend = str(vars.get("bts_backend", "hono")).lower()
+    runtime = str(vars.get("bts_runtime", "bun")).lower()
+    api = str(vars.get("bts_api", "trpc")).lower()
+    database = str(vars.get("bts_database", "sqlite")).lower()
+    orm = str(vars.get("bts_orm", "drizzle")).lower()
+    auth = str(vars.get("bts_auth", "better-auth")).lower()
+    example = str(vars.get("bts_examples", vars.get("examples", "none"))).lower()
+    web_deploy = str(vars.get("bts_web_deploy", vars.get("web_deploy", "none"))).lower()
+    web = [item for item in frontend if item != "none" and not item.startswith("native-")]
+    native = [item for item in frontend if item.startswith("native-")]
+    violations: list[str] = []
+    if len(web) > 1:
+        violations.append("Better-T-Stack allows at most one web frontend")
+    if len(native) > 1:
+        violations.append("Better-T-Stack allows at most one native frontend")
+    full_stack = {"next", "tanstack-start", "nuxt", "svelte", "solid", "astro"}
+    if backend == "self" and not (set(web) & full_stack):
+        violations.append("backend self requires a full-stack web frontend (Next, TanStack Start, Nuxt, Svelte, Solid, or Astro)")
+    if runtime == "workers" and backend != "hono":
+        violations.append("Workers runtime requires the Hono backend")
+    if runtime == "workers" and database == "mongodb":
+        violations.append("MongoDB is incompatible with the Workers runtime")
+    if api == "trpc" and set(web) & {"nuxt", "svelte", "solid", "astro"}:
+        violations.append("tRPC is incompatible with Nuxt, Svelte, Solid, and Astro")
+    if backend == "convex" and set(web) & {"solid", "astro"}:
+        violations.append("Convex is incompatible with Solid and Astro")
+    if backend == "convex" and auth == "better-auth" and set(web) & {"nuxt", "svelte", "solid", "astro"}:
+        violations.append("Convex with Better Auth is incompatible with Nuxt, Svelte, Solid, and Astro")
+    if example == "todo" and backend != "convex" and (database == "none" or api == "none"):
+        violations.append("The todo example requires a database and API unless the backend is Convex")
+    if example == "ai":
+        if backend == "none":
+            violations.append("The AI example requires a backend")
+        if set(web) & {"solid", "astro"}:
+            violations.append("The AI example is incompatible with Solid and Astro")
+    prisma_frontends = {"next", "nuxt", "astro", "react-router", "tanstack-start", "svelte", "solid"}
+    if web_deploy == "prisma" and not (set(web) & prisma_frontends):
+        violations.append("web-deploy prisma requires a compatible web frontend")
+    static_addons = addons & {"tauri", "electrobun"}
+    if static_addons and backend == "self":
+        violations.append("Tauri and Electrobun reject backend self")
+    if static_addons and auth == "clerk" and "react-router" in web:
+        violations.append("Clerk with React Router is incompatible with Tauri and Electrobun")
+    if "tauri" in addons and (not web or any(item.startswith("native-") for item in frontend)):
+        violations.append("The Tauri addon requires a supported web frontend")
+    if "tauri" in addons and backend == "convex" and auth == "better-auth" and set(web) & {"next", "tanstack-start"}:
+        violations.append("Tauri with Convex and Better Auth is incompatible with Next and TanStack Start")
+    if addons & {"evlog", "axiom"} and backend not in {"hono", "express", "fastify", "elysia", "self"}:
+        violations.append("Observability addons require Hono, Express, Fastify, Elysia, or compatible self backend")
+    if database == "mongodb" and orm not in {"prisma", "mongoose"}:
+        violations.append("MongoDB requires Prisma or Mongoose")
+    if runtime == "workers" and orm not in {"drizzle", "prisma"}:
+        violations.append("Workers runtime supports only Drizzle or Prisma")
+    return violations
 
 
 EXIT_NEEDS_INPUT = 3
@@ -164,7 +239,7 @@ ACTIONS = {
     "zizmor": "zizmorcore/zizmor-action@cc914d7f3750a2d13d75c7f184a1060aa0e9d482 # v0.6.4",
     "gitleaks": "gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e # v3.0.0",
     "upload_artifact": "actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6.0.0",
-    "download_artifact": "actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7.0.0",
+    "download_artifact": "actions/download-artifact@37930b1c2abaa49be596cd826c3c89aef350131 # v7.0.0",
     "attest": "actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2",
     "pypi_publish": "pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2",
     "crates_auth": "rust-lang/crates-io-auth-action@c6f97d42243bad5fab37ca0427f495c86d5b1a18 # v1.0.5",
@@ -236,8 +311,15 @@ def _language_lane(language: str, values: dict[str, str]) -> tuple[str, str] | N
         steps += [_run(cmd[k], n) for k, n in (("lint", "Lint"), ("fmt", "Format check"), ("check", "Type check"), ("test", "Test")) if cmd[k]]
         return "python", _lane("python", steps)
     if language == "ts":
-        steps = [f"      - name: Bun cache\n        uses: {a['cache']}\n        with:\n          path: ~/.bun/install/cache\n          key: bun-${{{{ runner.os }}}}-${{{{ hashFiles('**/bun.lock') }}}}\n          restore-keys: bun-${{{{ runner.os }}}}-", _run("bun install --frozen-lockfile", "Install")]
-        steps += [_run(cmd[k], n) for k, n in (("fmt", "Format and lint"), ("lint", "Lint"), ("check", "Type check"), ("test", "Test")) if cmd[k]]
+        manager = str(values.get("bts_package_manager", "bun")) if str(values.get("bts", "false")).lower() in TRUTHY else "bun"
+        lock = "pnpm-lock.yaml" if manager == "pnpm" else "bun.lock"
+        cache_path = "~/.local/share/pnpm/store" if manager == "pnpm" else "~/.bun/install/cache"
+        cache_name = "pnpm" if manager == "pnpm" else "bun"
+        steps = [f"      - name: {cache_name} cache\n        uses: {a['cache']}\n        with:\n          path: {cache_path}\n          key: {cache_name}-${{{{ runner.os }}}}-${{{{ hashFiles('**/{lock}') }}}}\n          restore-keys: {cache_name}-${{{{ runner.os }}}}-", _run(f"{manager} install --frozen-lockfile", "Install")]
+        if str(values.get("bts", "false")).lower() in TRUTHY and "turborepo" in _bts_values(values.get("bts_addons", "")):
+            steps.append(_run("turbo run check-types build", "Type check and build"))
+        else:
+            steps += [_run(cmd[k], n) for k, n in (("fmt", "Format and lint"), ("lint", "Lint"), ("check", "Type check"), ("test", "Test")) if cmd[k]]
         return "typescript", _lane("typescript", steps)
     if language == "rust":
         steps = [f"      - uses: {a['rust_cache']}"]
@@ -645,6 +727,21 @@ def resolve_selection(root: Path, profile_name: str | None, name: str | None, ov
     if isinstance(answer_vars, dict):
         values.update({str(k): value_default(v) for k, v in answer_vars.items()})
     values.update({str(k): str(v) for k, v in overrides.items()})
+    is_ts_project = any(layer == "lang/ts" for layer in layers) or str(values.get("language", "")) == "ts" or selected_profile == "tauri-desktop"
+    if is_ts_project or str(values.get("layout", "single")) == "monorepo":
+        values.setdefault("bts", "false")
+        values.setdefault("bts_version", BTS_VERSION_DEFAULT)
+        values.setdefault("bts_frontend", "tanstack-router")
+        values.setdefault("bts_backend", "hono")
+        values.setdefault("bts_runtime", "bun")
+        values.setdefault("bts_api", "trpc")
+        values.setdefault("bts_database", "sqlite")
+        values.setdefault("bts_orm", "drizzle")
+        values.setdefault("bts_auth", "better-auth")
+        values.setdefault("bts_addons", "turborepo")
+        values.setdefault("bts_package_manager", "pnpm" if str(values.get("layout", "single")) == "monorepo" else "bun")
+        values.setdefault("bts_docs", "starlight" if "docs" in layers else "none")
+        values["bts_biome"] = "true" if "biome" in _bts_values(values.get("bts_addons", "")) else "false"
     actual_name = name or values.get("name") or "project"
     values["name"] = str(actual_name)
     values["package"] = re.sub(r"[^A-Za-z0-9]+", "_", values["name"]).strip("_").lower() or "project"
@@ -776,8 +873,11 @@ def conditional_file_targets(config: dict[str, Any], values: dict[str, str]) -> 
     conditional = config.get("conditional_files", {})
     if isinstance(conditional, dict):
         for relative, spec in conditional.items():
+            key = str(relative).rstrip("/")
             if not file_condition_holds(spec, values):
                 excluded.add(str(relative))
+                excluded.add(key)
+                excluded.add(key + "/")
     return excluded
 
 
@@ -801,7 +901,10 @@ def collect(layers: list[str], values: dict[str, str], member_dir: str | None = 
                 continue
             relative = source.relative_to(directory)
             rendered_name = str(relative)[:-5] if str(relative).endswith(".tmpl") else str(relative)
-            if str(relative) in excluded_files or rendered_name in excluded_files:
+            excluded = str(relative) in excluded_files or rendered_name in excluded_files
+            if not excluded:
+                excluded = any(str(relative).startswith(item.rstrip("/") + "/") for item in excluded_files if item.rstrip("/") in {str(relative).split("/", 1)[0], "src"})
+            if excluded:
                 continue
             if relative.name == "LICENSE" and str(values.get("license", "")).lower() not in {"", "apache-2.0", "apache 2.0"}:
                 continue
@@ -2049,6 +2152,7 @@ def preflight(root: Path, profile_name: str | None, *, strict: bool = False) -> 
     else:
         hook_strategy = "prek"
     plugins = plugins_sync(root, True) if (root / ".omp/plugins.toml").is_file() and shutil.which("omp") else ({"desired": [], "drift": []}, 0)
+    hard.extend(f"Better-T-Stack compatibility: {item}" for item in bts_validate(values))
     if isinstance(plugins, tuple) and plugins[1] == EXIT_DRIFT:
         soft.extend(str(item) for item in plugins[0].get("drift", []))
     payload = {"ok": not hard, "profile": profile, "layers": layers, "vars": values, "hard": hard, "soft": soft, "missing_tools": missing, "hook_strategy": hook_strategy, "hooksPath": hooks_path, "hooksPathScope": hooks_scope, "checks": {"git": True, "omp": "omp" not in missing, "mise": "mise" not in missing, "tools": {tool: tool not in missing for tool in sorted(required)}, "plugins": plugins[0] if isinstance(plugins, tuple) else plugins}}
@@ -2117,6 +2221,34 @@ def interview_questions(root: Path, profile_name: str | None = None) -> dict[str
                     # accepting defaults never contradicts the profile (static-site: docs_flavour=splash).
                     default = value_default(profile_var_values[key]) if key in profile_var_values else value_default(value)
                     questions.append({"id": str(key), "prompt": str(value.get("prompt", key)), "required": bool(value.get("required", False)), "default": default, "source": f"layer:{layer}"})
+    profile_language = str(profile_var_values.get("language", ""))
+    profile_kind = str(profile_var_values.get("kind", ""))
+    ts_project = "lang/ts" in layers or profile_language == "ts" or suggested == "tauri-desktop"
+    ts_app = ts_project and (profile_kind == "app" or suggested == "tauri-desktop" or str(info.get("kind", "")) == "app")
+    if ts_app:
+        addons_default = ["turborepo", "tauri"] if suggested == "tauri-desktop" else ["turborepo"]
+        def bts_row(key: str, prompt: str, default: Any, options: list[str], *, multi: bool = False) -> dict[str, Any]:
+            return {"id": key, "prompt": prompt, "question": prompt, "required": False, "default": default, "allowed": options, "options": options, "multi": multi, "source": "better-t-stack"}
+        questions.extend([
+            bts_row("bts_frontend", "Better-T-Stack frontend", "tanstack-router", ["tanstack-router", "react-router", "tanstack-start", "next", "nuxt", "native-bare", "native-uniwind", "native-unistyles", "svelte", "solid", "astro", "none"]),
+            bts_row("bts_backend", "Better-T-Stack backend", "hono", ["hono", "express", "fastify", "elysia", "convex", "self", "none"]),
+            bts_row("bts_runtime", "Better-T-Stack runtime", "bun", ["bun", "node", "workers", "none"]),
+            bts_row("bts_api", "Better-T-Stack API", "trpc", ["trpc", "orpc", "none"]),
+            bts_row("bts_database", "Better-T-Stack database", "sqlite", ["none", "sqlite", "postgres", "mysql", "mongodb"]),
+            bts_row("bts_orm", "Better-T-Stack ORM", "drizzle", ["drizzle", "prisma", "mongoose", "none"]),
+            bts_row("bts_auth", "Better-T-Stack auth", "better-auth", ["better-auth", "clerk", "none"]),
+            bts_row("bts_addons", "Better-T-Stack addons", addons_default, ["pwa", "tauri", "electrobun", "starlight", "biome", "mcp", "turborepo", "nx", "vite-plus", "fumadocs", "ultracite", "oxlint", "opentui", "wxt", "skills", "evlog", "none"], multi=True),
+            bts_row("bts_package_manager", "Better-T-Stack package manager", "pnpm" if suggested == "monorepo" else "bun", ["npm", "pnpm", "bun"]),
+        ])
+    docs_flavour = str(profile_var_values.get("docs_flavour", ""))
+    if ts_project and docs_flavour in {"splash", "site"}:
+        row = {"id": "bts_docs", "prompt": "TypeScript documentation generator", "question": "TypeScript documentation generator", "required": False, "default": "starlight", "allowed": ["starlight", "none"], "options": ["starlight", "none"], "source": "better-t-stack"}
+        row["unsupported"] = {"fumadocs": "supported, but not non-interactive via documented create flags"}
+        questions.append(row)
+    if str(profile_var_values.get("layout", "")) == "monorepo":
+        questions.append({"id": "bts_layout", "prompt": "Better-T-Stack monorepo layout", "question": "Better-T-Stack monorepo layout", "required": False, "default": "turborepo", "allowed": ["turborepo", "none"], "options": ["turborepo", "none"], "source": "better-t-stack"})
+        if not any(row["id"] == "bts_package_manager" for row in questions):
+            questions.append({"id": "bts_package_manager", "prompt": "Better-T-Stack package manager", "question": "Better-T-Stack package manager", "required": False, "default": "pnpm", "allowed": ["npm", "pnpm", "bun"], "options": ["npm", "pnpm", "bun"], "source": "better-t-stack"})
     return {"questions": questions, "profile": suggested, "mode": "brownfield" if brownfield else "greenfield"}
 
 
@@ -2132,6 +2264,7 @@ def answers_write_interview(root: Path, profile_name: str | None, name: str | No
     # first write turns an empty repository into a brownfield one whose interview asks more.
     recorded = read_answers(root)
     if str(recorded.get("profile", profile)) == profile:
+
         recorded_layers = recorded.get("layers")
         if isinstance(recorded_layers, list) and recorded_layers and not supplied.get("layers"):
             supplied["layers"] = ",".join(str(item) for item in recorded_layers)
@@ -2152,17 +2285,94 @@ def answers_write_interview(root: Path, profile_name: str | None, name: str | No
         return {"ok": False, "missing": ["profile"]}, EXIT_NEEDS_INPUT
     chosen_layers = [item.strip() for item in str(supplied.pop("layers", "")).split(",") if item.strip()]
     values_profile, _, layers, values = resolve_selection(root, selected, supplied.get("name"), supplied, extra_layers, chosen_layers or None)
+    violations = bts_validate(values)
+    if violations:
+        return {"ok": False, "violations": violations, "vars": values}, EXIT_CONFLICT
     write_answers(root, values_profile, layers, values, {"defaults_for": defaults_for, "interviewed_at": datetime.now(UTC).isoformat(), "members": answers_members(root) if answers_members(root) else None})
     marker = root / ".omp/scaffold-run.json"
     _write_under_root(root, marker, json.dumps({"root": str(root), "started": datetime.now(UTC).isoformat(), "session": os.environ.get("OMP_SESSION_ID"), "profile": values_profile, "stages": []}, indent=2, sort_keys=True) + "\n")
     return {"ok": True, "path": str(answers_path(root)), "profile": values_profile, "layers": layers, "defaults_for": defaults_for, "vars": values}, 0
 
 
+def _bts_argv(values: dict[str, Any], target: str) -> list[str]:
+    """Build the pinned, non-interactive Better-T-Stack command for a target."""
+    version = str(values.get("bts_version", BTS_VERSION_DEFAULT))
+    addons = _bts_values(values.get("bts_addons", "turborepo"))
+    if str(values.get("profile", "")) == "tauri-desktop" and "tauri" not in addons:
+        addons.append("tauri")
+    layout = str(values.get("bts_layout", ""))
+    docs = str(values.get("bts_docs", ""))
+    monorepo = str(values.get("layout", "single")) == "monorepo" and layout == "turborepo"
+    docs_only = docs == "starlight" and not monorepo and not (str(values.get("kind", "")) == "app" or str(values.get("profile", "")) in {"ts-app", "tauri-desktop"})
+    if monorepo:
+        flags = [("--frontend", "none"), ("--backend", "none"), ("--database", "none"), ("--orm", "none"), ("--runtime", "none"), ("--api", "none"), ("--addons", "turborepo"), ("--package-manager", "pnpm")]
+    elif docs_only:
+        flags = [("--frontend", "none"), ("--backend", "none"), ("--database", "none"), ("--orm", "none"), ("--runtime", "none"), ("--api", "none"), ("--addons", "starlight"), ("--package-manager", str(values.get("bts_package_manager", "pnpm")))]
+    else:
+        if docs == "starlight" and "starlight" not in addons:
+            addons.append("starlight")
+        flags = [("--frontend", str(values.get("bts_frontend", "tanstack-router"))), ("--backend", str(values.get("bts_backend", "hono"))), ("--runtime", str(values.get("bts_runtime", "bun"))), ("--api", str(values.get("bts_api", "trpc"))), ("--database", str(values.get("bts_database", "sqlite"))), ("--orm", str(values.get("bts_orm", "drizzle"))), ("--auth", str(values.get("bts_auth", "better-auth")))]
+        flags.extend([("--payments", "none"), ("--addons", addons), ("--db-setup", "none"), ("--web-deploy", "none"), ("--server-deploy", "none"), ("--package-manager", str(values.get("bts_package_manager", "bun")))])
+    argv = ["bunx", f"create-better-t-stack@{version}", target]
+    for flag, value in flags:
+        argv.append(flag)
+        argv.extend(value if isinstance(value, list) else [value])
+    argv.extend(["--no-git", "--no-install", "--disable-analytics", "--directory-conflict", "error"])
+    return argv
+
+
+def _bts_state_only(path: Path) -> bool:
+    if not path.is_dir() or path.name != ".omp":
+        return False
+    allowed = {"scaffold-answers.toml", "scaffold-run.json", "scaffold.json", "plugins.toml"}
+    return all(item.name in allowed for item in path.iterdir())
+
+
+def _provision_target(target_root: Path, values: dict[str, Any], dry_run: bool) -> tuple[dict[str, Any], int]:
+    target_root = resolved_root(target_root)
+    argv = _bts_argv(values, target_root.name if target_root.parent == target_root.parent else target_root.name)
+    record_path = target_root / ".omp" / "scaffold-provision.json"
+    if record_path.is_file():
+        try:
+            record = json.loads(record_path.read_text())
+        except (OSError, json.JSONDecodeError):
+            record = {}
+        if record.get("argv") == argv and str(record.get("version")) == str(values.get("bts_version", BTS_VERSION_DEFAULT)):
+            return {"ok": True, "skipped": True, "argv": argv, "version": str(record.get("version")), "generated": record.get("generated", [])}, 0
+    occupied = []
+    if target_root.exists():
+        occupied = [item for item in target_root.iterdir() if item.name != ".git" and not _bts_state_only(item)]
+    if occupied:
+        return {"ok": False, "argv": argv, "error": f"Better-T-Stack target is not empty: {target_root}; adopt it with --set bts=false"}, EXIT_CONFLICT
+    if dry_run:
+        return {"ok": True, "dry_run": True, "argv": argv, "command": shlex.join(argv), "version": str(values.get("bts_version", BTS_VERSION_DEFAULT))}, 0
+    target_root.parent.mkdir(parents=True, exist_ok=True)
+    result = subprocess.run(argv, cwd=target_root.parent, capture_output=True, text=True, check=False)
+    if result.returncode:
+        return {"ok": False, "argv": argv, "stdout": result.stdout, "stderr": result.stderr, "error": f"Better-T-Stack exited with {result.returncode}"}, EXIT_ERROR
+    generated = sorted(str(path.relative_to(target_root)) for path in target_root.rglob("*") if path.is_file() and path.name != "scaffold-provision.json" and ".git" not in path.parts)
+    record = {"argv": argv, "version": str(values.get("bts_version", BTS_VERSION_DEFAULT)), "generated": generated}
+    _write_under_root(target_root, record_path, json.dumps(record, indent=2, sort_keys=True) + "\n")
+    return {"ok": True, "argv": argv, "version": record["version"], "generated": generated}, 0
+
+
+def provision(root: Path, dry_run: bool = False) -> tuple[dict[str, Any], int]:
+    """Provision Better-T-Stack only when answers opt in, preserving generated files on reruns."""
+    root = resolved_root(root)
+    values = read_answers(root).get("vars", {})
+    if not isinstance(values, dict):
+        values = {}
+    values = {str(key): value for key, value in values.items()}
+    values.setdefault("profile", str(read_answers(root).get("profile", "")))
+    if str(values.get("bts", "false")).lower() not in TRUTHY:
+        return {"ok": True, "skipped": True, "reason": "bts=false"}, 0
+    return _provision_target(root, values, dry_run)
 def _run_stage(root: Path, name: str, profile: str, *, bump_tools: bool = False) -> tuple[dict[str, Any], int]:
     if name == "preflight": return preflight(root, profile, strict=False)
     if name == "plan":
         result = plan_payload(root, profile, None, {}, [], None, set())
         return result[0], result[4]
+    if name == "provision": return provision(root)
     if name == "render": return render(root, profile, None, {}, [], None, set(), False, set(), bump_tools)
     if name == "tools-install": return tools_install(root, True)
     if name == "hooks-install": return hooks_install(root)
@@ -2172,7 +2382,7 @@ def _run_stage(root: Path, name: str, profile: str, *, bump_tools: bool = False)
     return {"error": f"unknown apply stage: {name}"}, EXIT_ERROR
 
 
-APPLY_STAGES = ("preflight", "plan", "render", "tools-install", "hooks-install", "plugins-sync", "context-refresh", "doctor")
+APPLY_STAGES = ("preflight", "plan", "provision", "render", "tools-install", "hooks-install", "plugins-sync", "context-refresh", "doctor")
 
 
 def apply_pipeline(root: Path, profile: str | None, *, dry_run: bool = False, stage: str | None = None, bump_tools: bool = False) -> tuple[dict[str, Any], int]:
@@ -2184,6 +2394,8 @@ def apply_pipeline(root: Path, profile: str | None, *, dry_run: bool = False, st
     requested = [stage] if stage else list(APPLY_STAGES)
     if stage and stage not in APPLY_STAGES:
         return {"ok": False, "stages": [], "next": "unknown stage"}, EXIT_ERROR
+    if dry_run and stage == "provision":
+        return provision(root, True)
     if dry_run:
         pf, pc = preflight(root, selected, strict=False)
         plan, _, _, _, plan_code = plan_payload(root, selected, None, {}, [], None, set())

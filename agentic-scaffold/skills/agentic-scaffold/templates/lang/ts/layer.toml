@@ -6,6 +6,10 @@ owns = ["package.json", "tsconfig.json", "biome.json", "src/index.ts", "test/ind
 blocks = [".gitignore", "justfile", ".pre-commit-config.yaml"]
 conflicts_with = ["lang/python", "lang/rust", "lang/go", "lang/terraform", "workspace"]
 [conditional_files]
+"package.json" = { var = "bts", equals = "false" }
+"tsconfig.json" = { var = "bts", equals = "false" }
+"src" = { var = "bts", equals = "false" }
+"biome.json" = { var = "bts_biome", equals = "false" }
 "bin/index.ts" = { var = "kind", equals = "app" }
 ".omp-plugin/plugin.json" = { var = "kind", equals = "omp-plugin" }
 "extensions/index.ts" = { var = "kind", equals = "omp-plugin" }
@@ -24,3 +28,5 @@ bun = "${bun_version}"
 node = { default = "22", prompt = "Node version", ask = false }
 bun_version = { default = "latest", prompt = "Bun version", ask = false }
 kind = { default = "library", prompt = "TypeScript kind (library, app, or omp-plugin)", ask = true }
+bts = { default = "false", prompt = "Use Better-T-Stack for the application skeleton?", ask = false }
+bts_version = { default = "3.42.2", prompt = "Better-T-Stack version", ask = false }
