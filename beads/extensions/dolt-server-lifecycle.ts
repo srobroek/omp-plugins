@@ -22,7 +22,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
-import { beadsDir } from "./session-beads-lifecycle.ts";
+import { beadsDir, sessionPinFor } from "./session-beads-lifecycle.ts";
 
 /** Where beads records the backend it resolved. */
 export interface DoltMetadata {
@@ -63,16 +63,32 @@ export function classifyBackend(metadata: string, config: string): Backend {
 	return "unknown";
 }
 
-/** Read the backend of the repository rooted at `cwd`, without touching `bd`. */
-export async function readBackend(cwd: string): Promise<{ backend: Backend; tracked: boolean }> {
-	const beads = beadsDir(cwd);
-	if (beads === undefined) return { backend: "unknown", tracked: false };
-
+/** Classify the store held in `beads`, a resolved `.beads` directory. */
+async function backendAt(beads: string): Promise<Backend> {
 	const [metadata, config] = await Promise.all([
 		fs.readFile(path.join(beads, "metadata.json"), "utf8").catch(() => ""),
 		fs.readFile(path.join(beads, "config.yaml"), "utf8").catch(() => ""),
 	]);
-	return { backend: classifyBackend(metadata, config), tracked: true };
+	return classifyBackend(metadata, config);
+}
+
+/**
+ * Read the backend of the repository rooted at `cwd`, without touching `bd`.
+ *
+ * Resolution deliberately ignores an ambient `BEADS_DIR`: the question is which
+ * backend THIS checkout carries, and the plugin pins that variable into every
+ * session, so honouring it would report the pinned repository's backend for every
+ * directory asked about. `sessionPinFor` answers for the checkout itself, still
+ * resolving a linked worktree to the primary checkout's database.
+ *
+ * This is the right resolution for advising about the checkout. Anything that
+ * ACTS on a server must instead classify the store it will act on; see the
+ * shutdown handler.
+ */
+export async function readBackend(cwd: string): Promise<{ backend: Backend; tracked: boolean }> {
+	const beads = sessionPinFor(cwd);
+	if (beads === undefined) return { backend: "unknown", tracked: false };
+	return { backend: await backendAt(beads), tracked: true };
 }
 
 /**
@@ -186,8 +202,13 @@ export default function beadsDoltLifecycle(pi: ExtensionAPI): void {
 
 	pi.on("session_shutdown", async (_event, ctx: ExtensionContext) => {
 		try {
-			const { backend } = await readBackend(ctx.cwd);
-			if (!shouldStopServer(backend)) return;
+			// Classify the store this will actually stop, not the checkout. `serverPid`
+			// and `bd dolt stop` both resolve through `beadsDir`, which honours an
+			// inherited `BEADS_DIR` that may point at another repository's store.
+			// Deciding from the checkout while acting on the pinned store could stop a
+			// server this session never used.
+			const store = beadsDir(ctx.cwd);
+			if (store === undefined || !shouldStopServer(await backendAt(store))) return;
 			const { said, verdict } = await stopServer(ctx.cwd);
 			// The verdict comes from the pid, not from what bd printed.
 			pi.logger.info("beads dolt server stop", { verdict, said });
