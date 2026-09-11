@@ -19,9 +19,9 @@ Branching:
   the primary checkout. It does not parse shell writes (`sed -i`, redirections, scripts);
   those are yours to keep out of the primary checkout.
 - MUST GW-6: remove the worktree when its branch has landed: `wt remove <branch>` after the
-  PR merges (`wt merge` removes it itself). The Worktrunk `post-start` and `post-switch`
-  hooks run `wt step prune`, which removes any merged worktree left behind; do not rely on
-  it as the first line.
+  PR merges (`wt merge` removes it itself). The Worktrunk `post-start` hook runs
+  `wt step prune --min-age 1d` on every new worktree, which removes any merged worktree
+  older than a day; do not rely on it as the first line.
 - Reuse an existing branch/worktree only when it was created for this task.
 - Work lands on a branch, not on main/master. A commit whose repository has
   main or master checked out is refused by the `main-branch-gate` extension,
