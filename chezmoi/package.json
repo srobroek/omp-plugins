@@ -1,6 +1,6 @@
 {
   "name": "@srobroek/chezmoi",
-  "version": "0.4.3",
+  "version": "0.4.4",
   "description": "Edit chezmoi-managed dotfiles at their authoritative source.",
   "private": true,
   "omp": {

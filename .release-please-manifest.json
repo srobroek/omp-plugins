@@ -1,15 +1,15 @@
 {
-  "agentic-scaffold": "0.10.1",
+  "agentic-scaffold": "0.10.2",
   "architecture": "0.3.1",
   "authoring": "2.0.1",
   "backend": "0.3.0",
   "beads": "1.0.14",
   "browser-tools": "0.3.1",
   "build": "0.3.4",
-  "chezmoi": "0.4.3",
+  "chezmoi": "0.4.4",
   "debate": "0.3.1",
-  "delivery": "0.9.0",
-  "dep-update": "0.6.2",
+  "delivery": "0.9.1",
+  "dep-update": "0.6.3",
   "design": "0.3.4",
   "diagram": "0.2.4",
   "eli5": "0.3.1",
@@ -26,5 +26,5 @@
   "speckit": "0.7.1",
   "toolchain": "0.3.4",
   "typescript": "0.3.2",
-  "whats-new": "0.3.2"
+  "whats-new": "0.3.3"
 }
