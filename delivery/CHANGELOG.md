@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.9.0](https://github.com/srobroek/omp-plugins/compare/delivery--v0.8.3...delivery--v0.9.0) (2026-09-11)
+
+
+### Features
+
+* **delivery:** primary-checkout gate and worktree rules GW-5/GW-6 ([#192](https://github.com/srobroek/omp-plugins/issues/192)) ([e6d522c](https://github.com/srobroek/omp-plugins/commit/e6d522cadd06079e55b5d80260f2d3b3a9245ec9))
+
 ## [0.8.3](https://github.com/srobroek/omp-plugins/compare/delivery--v0.8.2...delivery--v0.8.3) (2026-09-11)
 
 

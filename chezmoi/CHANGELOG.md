@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.4.3](https://github.com/srobroek/omp-plugins/compare/chezmoi--v0.4.2...chezmoi--v0.4.3) (2026-09-11)
+
+
+### Bug Fixes
+
+* **chezmoi:** feed the nested-shell word test only unquoted text ([c006708](https://github.com/srobroek/omp-plugins/commit/c00670875af62817fae987b1eaefa0e97d9d526d))
+* **chezmoi:** identify a nesting shell by its command word, not its neighbours ([e9c9f80](https://github.com/srobroek/omp-plugins/commit/e9c9f80e58752d4aa1a86a74e844542464ebebf1))
+* **chezmoi:** refuse a commit reached through a nested shell ([11f0b38](https://github.com/srobroek/omp-plugins/commit/11f0b38ed963f61c89c28fd371ddca58c97d7f46))
+
 ## [0.4.2](https://github.com/srobroek/omp-plugins/compare/chezmoi--v0.4.1...chezmoi--v0.4.2) (2026-09-11)
 
 
