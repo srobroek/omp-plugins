@@ -18,8 +18,7 @@ on:
         type: boolean
         default: true
 
-permissions:
-  contents: read
+permissions: {}
 
 concurrency:
   group: release-$${{ github.event.release.tag_name || inputs.tag || github.ref }}

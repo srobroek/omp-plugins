@@ -4,9 +4,8 @@ on:
   push:
     branches: [main]
 
-permissions:
-  contents: write
-  pull-requests: write
+permissions: {}
+
 
 concurrency:
   group: release-please
@@ -16,19 +15,23 @@ jobs:
   release-please:
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    permissions:
+      contents: write
+      pull-requests: write
     env:
+      ACTIONS_CACHE_MODE: none
       APP_CLIENT_ID: ${{ vars.RELEASE_APP_CLIENT_ID }}
       APP_PRIVATE_KEY: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
     steps:
       - id: app
+        uses: actions/create-github-app-token@29824e69f54612133e76f7eaac726eef6c875baf # v2.2.1
         if: ${{ env.APP_CLIENT_ID != '' && env.APP_PRIVATE_KEY != '' }}
-        uses: actions/create-github-app-token@fee1f7d63c2ff0034603e3d139729b119787bc349 # v2
         with:
           app-id: ${{ env.APP_CLIENT_ID }}
           private-key: ${{ env.APP_PRIVATE_KEY }}
       - if: ${{ env.APP_CLIENT_ID == '' || env.APP_PRIVATE_KEY == '' }}
         run: echo "::warning::RELEASE_APP_CLIENT_ID or RELEASE_APP_PRIVATE_KEY is missing; falling back to GITHUB_TOKEN"
-      - uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf # v5.0.0
+      - uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0
         with:
           token: ${{ steps.app.outputs.token || secrets.GITHUB_TOKEN }}
           config-file: release-please-config.json

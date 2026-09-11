@@ -28,6 +28,23 @@ A maintainer does these once per repository, because the API does not let the la
 - Add required reviewers to the `release` environment where a publish warrants one.
 - Protect the default branch on a private repository whose plan lacks rulesets.
 
+## Release credentials
+
+A maintainer creates these repository secrets and variables before the first release:
+
+- `RELEASE_APP_CLIENT_ID` (variable) and `RELEASE_APP_PRIVATE_KEY` (secret): the release App.
+  The tap bump uses the same App, so the App must have `contents: write` and
+  `pull-requests: write` on the tap and bucket repositories.
+- `TAURI_SIGNING_PRIVATE_KEY` and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`: updater signatures.
+  The build fails when the key is missing.
+- Apple signing, required on macOS; the macOS jobs fail when any is missing:
+  - `APPLE_CERTIFICATE` and `APPLE_CERTIFICATE_PASSWORD` (secrets)
+  - `APPLE_ID` and `APPLE_PASSWORD` (secrets)
+  - `APPLE_SIGNING_IDENTITY` and `APPLE_TEAM_ID` (variables)
+
+The maintainer configures required reviewers on the `release` environment. The reviewer approves
+registry publication and release asset publication.
+
 ## Runbook
 
 1. Authorize `gh` for the repository owner: `gh auth status`.

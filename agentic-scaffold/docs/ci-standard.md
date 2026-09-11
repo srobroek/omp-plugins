@@ -141,3 +141,58 @@ Better-T-Stack owns the application skeleton: the workspace manifest, `package.j
 release, hooks, and agent files. The TypeScript lane installs with the selected package manager and
 runs `turbo run check-types build` when Turborepo is selected. The generator runs once, into an empty
 target, with a pinned version and no install or git step. A repository that already has a stack keeps it.
+
+## Attestation
+
+The release workflow sets `permissions: {}` and elevates only the build job and the publish job. The
+build job does these steps in order:
+
+1. Generate an SBOM with `anchore/sbom-action`.
+2. Attest the files with `actions/attest-build-provenance` and `actions/attest-sbom`.
+3. Verify every release subject with `gh attestation verify <artifact> --repo <owner>/<repo>`.
+
+Publication happens after step 3. Release and security jobs set `ACTIONS_CACHE_MODE` to `none`.
+Repository settings: enable artifact attestations; give the `release` environment a reviewer.
+
+## CodeQL
+
+Set `ci_codeql=true` for public repositories. The scaffold derives the CodeQL matrix from the Python,
+TypeScript, and Go layers. CodeQL has no Rust analyzer, so a Rust repository gets no CodeQL job.
+Only the CodeQL job has `security-events: write`. Repository settings: enable code scanning with
+CodeQL.
+
+## Runner hardening
+
+Set `ci_harden_runner=true` to make `step-security/harden-runner` the first step of every job, with
+`egress-policy: audit`. After a few runs, read the audit log, allow the endpoints it lists, and
+change the policy to `block` in the workflow.
+
+## Tauri desktop release
+
+The `tauri-desktop` profile builds Tauri v2 bundles for four targets:
+
+- macOS arm64
+- macOS x86_64
+- Windows x86_64
+- Linux x86_64
+
+The build job publishes nothing until the end. Its order:
+
+1. Sign the updater artifacts with `TAURI_SIGNING_PRIVATE_KEY`.
+2. Generate an SBOM and attest the bundles.
+3. Verify the attestations.
+4. Upload the verified files to the release that release-please created.
+
+A missing signing input fails the job. On macOS the job also requires the Apple certificate, identity,
+and notarization account. A final job composes `latest.json` from the uploaded assets and their
+`.sig` files and attaches it to the release. Set the updater endpoint in
+`tauri.conf.json` to `https://github.com/<owner>/<repo>/releases/latest/download/latest.json`.
+
+Set `tap_bump=true` to render the tap workflow; the default is false. On each published release it
+reads the asset digests and edits two manifests:
+
+- `Casks/<name>.rb` in `<owner>/homebrew-tap`
+- `bucket/<name>.json` in `<owner>/scoop-bucket`
+
+It opens a pull request in each repository with the release App token. Create both repositories and
+install the release App on them.
