@@ -119,6 +119,27 @@ const MUST_FIRE: Case[] = [
 		fire: ["forcePush"],
 		why: "the shape the advisory exists for",
 	},
+    {
+        id: "force push in a short flag cluster",
+        command: "git push -uf origin main",
+        intent: "Overwriting the remote branch with bundled short flags",
+        fire: ["forcePush"],
+        why: "the short force flag can be bundled with other push flags",
+    },
+    {
+        id: "force push combined with other long flags",
+        command: "git push --follow-tags --force origin main",
+        intent: "Overwriting the remote branch after following tags",
+        fire: ["forcePush"],
+        why: "the force option remains unsafe when combined with other flags",
+    },
+    {
+        id: "force option after end-of-options marker",
+        command: "git push -- --force origin main",
+        intent: "Checking a force-looking refspec",
+        fire: ["forcePush"],
+        why: "the advisory scans the complete push argument, including text after `--`",
+    },
 	{
 		id: "force push starting a line in a script",
 		command: "cd /work/repo\ngit push -f origin main",
@@ -363,6 +384,20 @@ const MUST_NOT_FIRE: Case[] = [
 		fire: [],
 		why: "the safe form the advisory's own description exempts",
 	},
+    {
+        id: "force push with lease and a refspec",
+        command: "git push --force-with-lease=origin/main",
+        intent: "Overwriting the remote branch with an expected ref",
+        fire: [],
+        why: "the safe lease form can carry its optional refspec as a value",
+    },
+    {
+        id: "force push if includes",
+        command: "git push --force-if-includes origin main",
+        intent: "Overwriting the remote branch after checking included work",
+        fire: [],
+        why: "Git's other safe force-push option is not the unconditional form",
+    },
 	{
 		id: "prose about the shape in the intent argument",
 		command: "bun test rules/srobroek-bash-guards.test.ts",
