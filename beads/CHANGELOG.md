@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.13](https://github.com/srobroek/omp-plugins/compare/beads--v1.0.12...beads--v1.0.13) (2026-09-11)
+
+
+### Bug Fixes
+
+* **beads:** refuse an actorless bd create, including its aliases ([#165](https://github.com/srobroek/omp-plugins/issues/165)) ([a3a8ade](https://github.com/srobroek/omp-plugins/commit/a3a8ade5166292d533adbfdf8369e07cae93a25b))
+
 ## [1.0.12](https://github.com/srobroek/omp-plugins/compare/beads--v1.0.11...beads--v1.0.12) (2026-09-11)
 
 

@@ -1,9 +1,9 @@
 {
-  "agentic-scaffold": "0.7.0",
+  "agentic-scaffold": "0.8.0",
   "architecture": "0.3.1",
   "authoring": "2.0.1",
   "backend": "0.3.0",
-  "beads": "1.0.12",
+  "beads": "1.0.13",
   "browser-tools": "0.3.1",
   "build": "0.3.4",
   "chezmoi": "0.4.1",
