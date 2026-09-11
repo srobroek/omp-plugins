@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.10.1](https://github.com/srobroek/omp-plugins/compare/agentic-scaffold--v0.10.0...agentic-scaffold--v0.10.1) (2026-09-11)
+
+
+### Bug Fixes
+
+* **agentic-scaffold:** Better-T-Stack questions sort after every other question ([#185](https://github.com/srobroek/omp-plugins/issues/185)) ([ba72015](https://github.com/srobroek/omp-plugins/commit/ba72015b42b3873e2daa8d17a3db82df4ca1a604))
+
 ## [0.10.0](https://github.com/srobroek/omp-plugins/compare/agentic-scaffold--v0.9.1...agentic-scaffold--v0.10.0) (2026-09-11)
 
 

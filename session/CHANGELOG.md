@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.1.5](https://github.com/srobroek/omp-plugins/compare/session--v1.1.4...session--v1.1.5) (2026-09-11)
+
+
+### Refactors
+
+* **session:** scope the resume-session timeout to the measured-heavy tests ([13b1c0b](https://github.com/srobroek/omp-plugins/commit/13b1c0b9f47b4db8d935b6ebe392684113cc9c19))
+* **session:** scope the resume-session timeout to the measured-heavy tests ([c0bb897](https://github.com/srobroek/omp-plugins/commit/c0bb89730e64bc827f8fb0bffe3da24cd1ab8c1e))
+
 ## [1.1.4](https://github.com/srobroek/omp-plugins/compare/session--v1.1.3...session--v1.1.4) (2026-09-11)
 
 
