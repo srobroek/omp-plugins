@@ -2966,6 +2966,8 @@ def _ordered_questions(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     def rank(row: dict[str, Any]) -> int:
         question_id = str(row.get("id", "")).lower()
         source = str(row.get("source", "")).lower()
+        if question_id == "bts" or question_id.startswith("bts_"):
+            return 9
         if question_id in {"layout", "shape", "name", "purpose", "language"} or "layout" in question_id:
             return 0
         if question_id == "members" or question_id.startswith("member"):
@@ -2980,7 +2982,7 @@ def _ordered_questions(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
             return 5
         if question_id == "publish":
             return 6
-        if question_id.startswith("bts_") or source.startswith("layer:"):
+        if source.startswith("layer:"):
             return 7
         return 8
     return [row for _, row in sorted(enumerate(rows), key=lambda pair: (rank(pair[1]), pair[0]))]

@@ -130,3 +130,9 @@ def test_bts_questions_follow_the_layers_answer_in_a_brownfield_repository(tmp_p
     assert ids(with_ts) == ["bts"]
     assert ids({**with_ts, "bts": "false"}) == []
     assert ids({**with_ts, "bts": "true"})[:2] == ["bts_frontend", "bts_backend"]
+
+
+def test_bts_layout_never_sorts_before_the_fixed_questions():
+    scaffold = module()
+    rows = [{"id": "bts_layout", "source": "better-t-stack"}, {"id": "bts", "source": "better-t-stack"}, {"id": "license", "source": "fixed"}, {"id": "language", "source": "fixed"}]
+    assert [row["id"] for row in scaffold._ordered_questions(rows)] == ["language", "license", "bts_layout", "bts"]
