@@ -2403,10 +2403,14 @@ def _tool_status(root: Path, tool: str) -> str:
         return "ok"
     resolved = shutil.which(command) or ""
     # Separator-normalised so a Windows shim at ...\mise\shims\tool is recognised too;
-    # this scaffold's CI matrix includes Windows, where the hard-coded posix form would
+    # this scaffold's CI matrix includes Windows, where a hard-coded posix form would
     # treat every dead shim as an ordinary binary and report it ok.
+    #
+    # The two components must be ADJACENT. Testing membership independently also matches
+    # an ordinary binary under .../mise/project/shims/tool, which is not a shim path.
     parts = resolved.replace("\\", "/").split("/")
-    if not ("mise" in parts and "shims" in parts):
+    shim_path = any(parts[i] == "mise" and parts[i + 1] == "shims" for i in range(len(parts) - 1))
+    if not shim_path:
         # A real binary on PATH, not a mise shim. `mise which` would answer "mise does
         # not manage this for this project", which says nothing about whether the tool
         # runs -- git and ruff both answer non-zero there while being perfectly usable.

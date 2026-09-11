@@ -342,3 +342,14 @@ def test_tool_status_recognises_windows_shim_paths(tmp_path: Path, monkeypatch: 
         lambda name: r"C:\Program Files\Git\bin\git.exe" if name == "git" else r"C:\mise.exe",
     )
     assert scaffold_module._tool_status(root, "git") == "ok"
+
+    # The two components must be adjacent. A binary living under a directory that
+    # merely contains both words somewhere is not a shim, and treating it as one
+    # sends a working tool through the dead-shim path.
+    for path in ("/opt/mise/project/shims/git", "/usr/shims/mise/git", "/home/u/mise/git"):
+        monkeypatch.setattr(
+            scaffold_module.shutil,
+            "which",
+            lambda name, _p=path: _p if name == "git" else "/usr/bin/mise",
+        )
+        assert scaffold_module._tool_status(root, "git") == "ok", path
