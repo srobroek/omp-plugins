@@ -7,6 +7,9 @@ requires-python = ">=3.12"
 ${authors}license = "${license_spdx}"
 dependencies = []
 
+[project.scripts]
+${package_kebab} = "${package}:main"
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"

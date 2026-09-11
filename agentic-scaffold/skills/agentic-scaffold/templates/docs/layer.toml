@@ -9,7 +9,7 @@ docs_flavour = { default = "none", prompt = "Documentation flavour (none, splash
 "site/astro.config.mjs" = { var = "docs_flavour", equals = "splash" }
 "site/package.json" = { var = "docs_flavour", equals = "splash" }
 "site/src/pages/index.astro" = { var = "docs_flavour", equals = "splash" }
-"mkdocs.yml" = { var = "docs_flavour", equals = "site" }
-"docs/index.md" = { var = "docs_flavour", equals = "site" }
-"book.toml" = { var = "docs_flavour", equals = "site" }
-"docs/src/SUMMARY.md" = { var = "docs_flavour", equals = "site" }
+"mkdocs.yml" = { all = [{ var = "docs_flavour", equals = "site" }, { var = "language", any = ["python", "ts", "go", "none"] }] }
+"docs/index.md" = { all = [{ var = "docs_flavour", equals = "site" }, { var = "language", any = ["python", "ts", "go", "none"] }] }
+"book.toml" = { all = [{ var = "docs_flavour", equals = "site" }, { var = "language", equals = "rust" }] }
+"docs/src/SUMMARY.md" = { all = [{ var = "docs_flavour", equals = "site" }, { var = "language", equals = "rust" }] }

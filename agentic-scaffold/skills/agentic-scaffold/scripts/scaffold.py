@@ -652,13 +652,12 @@ def effective_layer_tools(config: dict[str, Any], values: dict[str, str]) -> dic
 
 
 def file_condition_holds(spec: Any, values: dict[str, str]) -> bool:
-    """A `[conditional_files]` entry: `{ var = "kind", equals = "tool" }` or `{ var = "kind", any = ["tool", "hybrid"] }`.
-
-    `equals`/`any` compare case-insensitively against the answer; an entry with neither key
-    always holds. An unknown shape never holds, so a typo cannot silently include a file.
-    """
+    """Evaluate conditional file predicates, including ``all`` compound predicates."""
     if not isinstance(spec, dict):
         return False
+    if "all" in spec:
+        predicates = spec["all"]
+        return isinstance(predicates, list) and all(file_condition_holds(item, values) for item in predicates)
     variable = str(spec.get("var", ""))
     actual = str(values.get(variable, "")).lower()
     if "any" in spec:
