@@ -64,10 +64,9 @@ const ATTRIBUTES: Record<string, true> = {
  * miss them.
  *
  * Measured against a corpus of 15 real credential spellings and 8 ordinary names:
- * every credential name still blocks, and 5 of the 6 loose false positives stop
- * blocking. `design-tokens.md` still blocks, deliberately: a delimited `-tokens.`
- * segment is exactly how credential files are named, so the name alone cannot
- * distinguish it from `gh-tokens.json`. Template it or rename it.
+ * every credential name still blocks, and all 6 loose false positives stop
+ * blocking. `design-tokens.md` is cleared by DESIGN_ARTIFACT_NAMES below rather
+ * than by the anchors, because the anchors cannot separate it from `gh-tokens.json`.
  *
  * What this narrowing does give up: an undelimited, all-lowercase compound such as
  * `secretkey` no longer matches on the word alone. `\.key$` still catches that
@@ -83,6 +82,32 @@ const SECRET_NAMES: RegExp[] = [
 	/(?:^|[a-z0-9])(?:Token|Secret|Credential)s?(?:[A-Z._-]|$)/,
 	/^\.env/i,
 ];
+
+/**
+ * Exact target names cleared before SECRET_NAMES runs.
+ *
+ * `design-tokens.md` carries `tokens` as a delimited segment, which is exactly how
+ * `gh-tokens.json` is named, so no anchoring rule separates the two -- the corpus
+ * proves it, since `secrets.md` must block and shares the same shape. The only
+ * mechanism left is an exemption, and an exemption on a secret gate has to be as
+ * small as it can possibly be.
+ *
+ * So this is a set of whole names, not a pattern. A first attempt allowed any
+ * extension after the stem, which cleared `design-tokens.pem` ahead of the `\.pem$`
+ * check -- an exemption that runs first turns any looseness in it into a bypass, so
+ * the two documentation formats a design-token file actually takes are listed and
+ * nothing else is.
+ *
+ * The cost, stated rather than buried: a credential file named exactly
+ * `design-tokens.md` or `design-tokens.json` is not detected by name. That is
+ * accepted because a real secret has three remedies this gate already advises --
+ * `private_`, encryption, a template -- while a falsely blocked design-token file
+ * has none.
+ */
+const DESIGN_ARTIFACT_NAMES: Record<string, true> = {
+	"design-tokens.json": true,
+	"design-tokens.md": true,
+};
 
 /** Shell separators that end one command. `2>&1` fragments cannot contain `commit`, so they fall out. */
 const SEGMENTS = /^(?:\|\||&&|[;&|\n])$/;
@@ -398,6 +423,8 @@ export function secretStagedPaths(staged: string[], prefix: string): string[] {
 		if (base.endsWith(".tmpl")) continue;
 		const { name, encrypted } = targetName(base);
 		if (encrypted) continue;
+		// hasOwn, not a truthiness test: `constructor` and friends are inherited and truthy.
+		if (Object.hasOwn(DESIGN_ARTIFACT_NAMES, name.toLowerCase())) continue;
 		if (SECRET_NAMES.some((pattern) => pattern.test(name))) out.push(path);
 	}
 	return out;
