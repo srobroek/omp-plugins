@@ -71,6 +71,19 @@ backup/
 *.db-shm
 db.sqlite
 bd.db
+
+# Server-mode Dolt runtime. These were only hidden while the repository root
+# ignored .beads/ wholesale, which also untracked config.yaml.
+dolt-server.log
+dolt-server.pid
+dolt-server.port
+dolt-backup.json
+dolt-backup-state.json
+backup/
+
+# Interaction log. Dolt holds the authoritative record, so tracking this only
+# produces a dirty tree in every checkout that runs a bd command.
+interactions.jsonl
 # NOTE: Do NOT add negation patterns here.
 # They would override fork protection in .git/info/exclude.
 # Config files (metadata.json, config.yaml) are tracked by git by default
