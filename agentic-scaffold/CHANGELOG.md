@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.10.0](https://github.com/srobroek/omp-plugins/compare/agentic-scaffold--v0.9.1...agentic-scaffold--v0.10.0) (2026-09-11)
+
+
+### Features
+
+* **agentic-scaffold:** release attestation, Tauri desktop release, CodeQL and runner hardening ([#179](https://github.com/srobroek/omp-plugins/issues/179)) ([98e9dc4](https://github.com/srobroek/omp-plugins/commit/98e9dc479411da0e07df54f233be1742a2a95b73))
+
 ## [0.9.1](https://github.com/srobroek/omp-plugins/compare/agentic-scaffold--v0.9.0...agentic-scaffold--v0.9.1) (2026-09-11)
 
 

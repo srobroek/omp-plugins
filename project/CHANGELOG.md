@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.1.2](https://github.com/srobroek/omp-plugins/compare/project--v1.1.1...project--v1.1.2) (2026-09-11)
+
+
+### Bug Fixes
+
+* repair the journeys symlink guard and the session-commit test's git isolation ([#172](https://github.com/srobroek/omp-plugins/issues/172)) ([c9ccd43](https://github.com/srobroek/omp-plugins/commit/c9ccd4353ebabfcc87ebb93aab67f429fcfb8b64))
+
 ## [1.1.1](https://github.com/srobroek/omp-plugins/compare/project--v1.1.0...project--v1.1.1) (2026-09-11)
 
 

@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.1.4](https://github.com/srobroek/omp-plugins/compare/session--v1.1.3...session--v1.1.4) (2026-09-11)
+
+
+### Bug Fixes
+
+* **session:** give the resume-session suite a timeout matching its measured cost ([#178](https://github.com/srobroek/omp-plugins/issues/178)) ([b09e220](https://github.com/srobroek/omp-plugins/commit/b09e2204034b9753ad9438343f25219b35d5155d))
+
 ## [1.1.3](https://github.com/srobroek/omp-plugins/compare/session--v1.1.2...session--v1.1.3) (2026-09-11)
 
 

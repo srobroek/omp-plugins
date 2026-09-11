@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.2](https://github.com/srobroek/omp-plugins/compare/safety--v0.6.1...safety--v0.6.2) (2026-09-11)
+
+
+### Bug Fixes
+
+* **safety:** exempt safe force-push options ([#177](https://github.com/srobroek/omp-plugins/issues/177)) ([fba4c53](https://github.com/srobroek/omp-plugins/commit/fba4c536cc8be2a014599da51c16822a0c3a5107))
+
 ## [0.6.1](https://github.com/srobroek/omp-plugins/compare/safety--v0.6.0...safety--v0.6.1) (2026-09-11)
 
 
