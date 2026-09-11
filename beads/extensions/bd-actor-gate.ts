@@ -282,6 +282,9 @@ export type ActorGateDecision =
 const CLAIM_REASON =
 	"bd claim / `bd update <id> --claim` without BEADS_ACTOR or BD_ACTOR creates undistinguishable dead claims. Set either variable to <harness>/<agent-name>/<session-id> and retry.";
 
+const CREATE_REASON =
+	"bd create without BEADS_ACTOR or BD_ACTOR silently sets Owner to the invoking human's git identity. There is no --owner flag, and --assignee sets a different field, so the mis-attribution is permanent. Set either variable to <harness>/<agent-name>/<session-id> and retry.";
+
 const ADVISORY_TEXT =
 	"BEADS_ACTOR and BD_ACTOR are unset on this mutating `bd` command. Subagents must set either variable so writes and claims are attributable. Export one before mutating work.";
 
@@ -302,6 +305,7 @@ export function decideActorGate(
 			verb === "claim" ||
 			((verb === "update" || verb === "ready") && args.includes("--claim"));
 		if (claim) return { kind: "block", reason: CLAIM_REASON };
+		if (verb === "create") return { kind: "block", reason: CREATE_REASON };
 		advisory = true;
 	}
 	return advisory ? { kind: "advisory", text: ADVISORY_TEXT } : { kind: "allow" };

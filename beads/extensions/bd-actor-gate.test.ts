@@ -231,6 +231,18 @@ describe("decideActorGate", () => {
 		const d = decideActorGate("bd close chezmoi-2ji", emptyEnv);
 		expect(d.kind).toBe("advisory");
 	});
+	test("blocks create without actor", () => {
+		const d = decideActorGate("bd create --title 'new bead'", emptyEnv);
+		expect(d.kind).toBe("block");
+		if (d.kind === "block") {
+			expect(d.reason).toContain("Owner");
+			expect(d.reason).toContain("--owner");
+			expect(d.reason).toContain("--assignee");
+		}
+	});
+	test("allows create with actor", () => {
+		expect(decideActorGate("bd create --title 'new bead'", actorEnv).kind).toBe("allow");
+	});
 	test("allow read-only even without actor", () => {
 		expect(decideActorGate("bd show chezmoi-2ji", emptyEnv).kind).toBe("allow");
 		expect(decideActorGate("bd comments chezmoi-7eg", emptyEnv).kind).toBe("allow");
