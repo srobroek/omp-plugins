@@ -89,6 +89,47 @@ describe("managed root traversal", () => {
 			rmSync(plain, { recursive: true, force: true });
 		}
 	});
+
+	test("a root that is itself a symlink is accepted, and operated on where it resolves", () => {
+		// A deliberate contract change, recorded rather than left implicit: the guard
+		// used to refuse this, and now resolves it. A root the user names IS the root,
+		// and `~/journeys -> /data/journeys` is an ordinary layout -- refusing it is the
+		// same class of breakage as refusing every /var temp directory. Safety does not
+		// rest on this: the checked tree and the written tree are the same one after
+		// resolution, symlinks INSIDE the tree are still refused (above), and traversal
+		// through a link is refused by the `..` rule (above).
+		const real = mkdtempSync(join(tmpdir(), "journeys-real-"));
+		const link = `${real}-link`;
+		try {
+			seed(real);
+			symlinkSync(real, link);
+			expect(runJourneys({ command: "index", journeysDir: link }).ok).toBe(true);
+			expect(python(["index", link]).exitCode).toBe(0);
+			// The write lands in the resolved directory, not beside the link.
+			expect(existsSync(join(real, "INDEX.md"))).toBe(true);
+		} finally {
+			rmSync(link, { force: true });
+			rmSync(real, { recursive: true, force: true });
+		}
+	});
+
+	test("an ordinary entry beginning with .. is inside the root, in both implementations", () => {
+		// `inside.startsWith("..")` rejected `..metadata` as an escape. The check is
+		// component-aware now; Python's relative_to always was, so this pins the pair
+		// together against that divergence returning.
+		const root = mkdtempSync(join(tmpdir(), "journeys-dotdot-"));
+		try {
+			seed(root);
+			mkdirSync(join(root, "..metadata"));
+			const ts = runJourneys({ command: "index", journeysDir: root });
+			const py = python(["index", root]);
+			expect(ts.ok).toBe(true);
+			expect(py.exitCode).toBe(0);
+			expect(ts.text).not.toContain("outside the managed root");
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
 });
 
 describe("index/lint fixture", () => {
