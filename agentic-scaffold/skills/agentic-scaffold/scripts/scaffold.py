@@ -245,7 +245,7 @@ ACTIONS = {
     "sbom": "anchore/sbom-action@006b7ce8314066bdf1765b4500370d40fa6917a3 # v0.24.2",
     "codeql": "github/codeql-action@977e6ceaea7361825998245d787fa3b4d6b9e5df # codeql-bundle-v2.27.0",
     "harden_runner": "step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2.21.1",
-    "tauri": "tauri-apps/tauri-action@fce9c6108b31ea247710505d3aaaa893ee6768d4 # v0",
+    "tauri": "tauri-apps/tauri-action@1deb371b0cd8bd54025b384f1cd735e725c4060f # action-v1.0.0",
     "pypi_publish": "pypa/gh-action-pypi-publish@a892a5a61159132606e93a2fa6f4358831b04d26 # v1.14.2",
     "crates_auth": "rust-lang/crates-io-auth-action@c6f97d42243bad5fab37ca0427f495c86d5b1a18 # v1.0.5",
     "goreleaser": "goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3",
@@ -538,10 +538,12 @@ def _tauri_release_jobs(values: dict[str, str]) -> str:
           gh api "repos/${{{{ github.repository }}}}/commits/${{sha}}/check-runs?check_name=gate" --jq '[.check_runs[]|select(.conclusion=="success")]|length' | grep -qx '[1-9]'
 
   build-tauri:
+    # The generator builds and signs the bundles but publishes nothing: attestation and
+    # verification run on the exact files, and only the verified files reach the release.
     name: Build Tauri (${{{{ matrix.target }}}})
     needs: release-gate
-    if: matrix.os != 'macos-latest' || (vars.ENABLE_MACOS_SIGNING == 'true' && vars.APPLE_TEAM_ID != '')
     runs-on: ${{{{ matrix.os }}}}
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
@@ -560,7 +562,6 @@ def _tauri_release_jobs(values: dict[str, str]) -> str:
       attestations: write
     env:
       ACTIONS_CACHE_MODE: none
-      GITHUB_TOKEN: ${{{{ secrets.GITHUB_TOKEN }}}}
       TAURI_SIGNING_PRIVATE_KEY: ${{{{ secrets.TAURI_SIGNING_PRIVATE_KEY }}}}
       TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{{{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}}}
       APPLE_CERTIFICATE: ${{{{ secrets.APPLE_CERTIFICATE }}}}
@@ -579,6 +580,18 @@ def _tauri_release_jobs(values: dict[str, str]) -> str:
         with:
           install: true
           cache: false
+      - name: Require the signing inputs
+        # An unsigned desktop build never reaches the release: the updater key on every platform,
+        # and the Apple certificate, identity, and notarization account on macOS.
+        shell: bash
+        run: |
+          set -euo pipefail
+          [ -n "$TAURI_SIGNING_PRIVATE_KEY" ] || {{ echo "::error::TAURI_SIGNING_PRIVATE_KEY is not set"; exit 1; }}
+          if [ "$RUNNER_OS" = macOS ]; then
+            for name in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID; do
+              [ -n "${{!name}}" ] || {{ echo "::error::$name is not set; macOS bundles must be signed and notarized"; exit 1; }}
+            done
+          fi
       - name: Install frontend dependencies
         run: bun install --frozen-lockfile
       - name: Install Linux bundle dependencies
@@ -590,36 +603,93 @@ def _tauri_release_jobs(values: dict[str, str]) -> str:
         with:
           projectPath: .
           tauriScript: bun tauri
-          tagName: ${{{{ needs.release-gate.outputs.tag }}}}
-          releaseName: ${{{{ needs.release-gate.outputs.tag }}}}
-          releaseDraft: false
-          includeUpdaterJson: true
-          updaterJsonPreferNsis: true
           args: --target ${{{{ matrix.target }}}}
+      - name: Collect the bundles
+        shell: bash
+        env:
+          ARTIFACTS: ${{{{ steps.tauri.outputs.artifactPaths }}}}
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          jq -r '.[]' <<< "$ARTIFACTS" | while IFS= read -r artifact; do
+            cp "$artifact" dist/
+          done
+          ls -l dist
       - name: Generate SBOM
         uses: {a['sbom']}
         with:
-          path: src-tauri/target/release/bundle
+          path: dist
           format: spdx-json
-          output-file: src-tauri/target/release/bundle/sbom-${{{{ matrix.target }}}}.spdx.json
+          output-file: dist/sbom-${{{{ matrix.target }}}}.spdx.json
       - name: Attest build provenance
         uses: {a['attest']}
         with:
-          subject-path: src-tauri/target/release/bundle/**/*
+          subject-path: dist/*
       - name: Attest SBOM
         uses: {a['attest_sbom']}
         with:
-          subject-path: src-tauri/target/release/bundle/**/*
-          sbom-path: src-tauri/target/release/bundle/sbom-${{{{ matrix.target }}}}.spdx.json
+          subject-path: dist/*
+          sbom-path: dist/sbom-${{{{ matrix.target }}}}.spdx.json
       - name: Verify attestations before publish
         env:
-          GH_TOKEN: ${{{{ secrets.GITHUB_TOKEN }}}}
+          GH_TOKEN: ${{{{ github.token }}}}
         shell: bash
         run: |
           set -euo pipefail
-          while IFS= read -r artifact; do
+          for artifact in dist/*; do
+            case "$artifact" in *.sig|*.spdx.json) continue ;; esac
             gh attestation verify "$artifact" --repo "${{{{ github.repository }}}}"
-          done < <(find src-tauri/target/release/bundle -type f ! -name '*.sig' ! -name '*.spdx.json')
+          done
+      - name: Upload the verified bundles to the release
+        if: ${{{{ !inputs.dry_run }}}}
+        env:
+          GH_TOKEN: ${{{{ github.token }}}}
+        shell: bash
+        run: gh release upload "${{{{ needs.release-gate.outputs.tag }}}}" dist/* --repo "${{{{ github.repository }}}}" --clobber
+
+  publish-updater:
+    # latest.json points the Tauri updater at the verified assets; it is composed from the release
+    # itself after every platform has uploaded, so it never names a file that is not there.
+    needs: [release-gate, build-tauri]
+    if: ${{{{ !inputs.dry_run }}}}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    env:
+      ACTIONS_CACHE_MODE: none
+    steps:
+{harden_step}
+      - name: Compose latest.json from the release assets
+        env:
+          GH_TOKEN: ${{{{ github.token }}}}
+          TAG: ${{{{ needs.release-gate.outputs.tag }}}}
+        run: |
+          set -euo pipefail
+          mkdir -p updater && cd updater
+          gh release download "$TAG" --repo "${{{{ github.repository }}}}" --pattern '*.sig'
+          gh release view "$TAG" --repo "${{{{ github.repository }}}}" --json assets,body,publishedAt > release.json
+          platform_of() {{
+            case "$1" in
+              *aarch64*.app.tar.gz*|*aarch64*.dmg*) echo darwin-aarch64 ;;
+              *x64*.app.tar.gz*|*x86_64*.app.tar.gz*|*x64*.dmg*|*x86_64*.dmg*) echo darwin-x86_64 ;;
+              *setup.exe*|*.msi*) echo windows-x86_64 ;;
+              *.AppImage*) echo linux-x86_64 ;;
+              *) echo "" ;;
+            esac
+          }}
+          jq -n --arg version "${{TAG#v}}" --arg notes "$(jq -r .body release.json)" --arg pub "$(jq -r .publishedAt release.json)" \
+            '{{version: $version, notes: $notes, pub_date: $pub, platforms: {{}}}}' > latest.json
+          for sig in *.sig; do
+            asset="${{sig%.sig}}"
+            platform="$(platform_of "$asset")"
+            [ -n "$platform" ] || continue
+            url="$(jq -r --arg name "$asset" '.assets[]|select(.name==$name)|.url' release.json)"
+            [ -n "$url" ] || {{ echo "::error::no release asset for $asset"; exit 1; }}
+            jq --arg p "$platform" --arg sig "$(cat "$sig")" --arg url "$url" '.platforms[$p] = {{signature: $sig, url: $url}}' latest.json > latest.tmp && mv latest.tmp latest.json
+          done
+          jq -e '.platforms|length > 0' latest.json >/dev/null
+          gh release upload "$TAG" latest.json --repo "${{{{ github.repository }}}}" --clobber
 '''
 
 
@@ -633,6 +703,10 @@ def build_release_jobs(layers: list[str], values: dict[str, str]) -> str:
     test = str(values.get("commands_test", "")) or "true"
     languages = [layer.split("/", 1)[1] for layer in layers if layer.startswith("lang/")]
     language = languages[0] if languages else "none"
+    harden = _harden_step(str(values.get("ci_harden_runner", "false")).lower() in TRUTHY)
+    harden_lines = (harden + "\n") if harden else ""
+    # Release and security evidence never depends on a shared cache.
+    no_cache = "    env:\n      ACTIONS_CACHE_MODE: none\n"
     gate = f'''  release-gate:
     # A release is only as good as the validation of the exact commit it tags: require the CI
     # gate on that commit, then re-run the project's checks on the tagged tree.
@@ -641,10 +715,10 @@ def build_release_jobs(layers: list[str], values: dict[str, str]) -> str:
     permissions:
       contents: read
       checks: read
-    outputs:
+{no_cache}    outputs:
       tag: ${{{{ steps.tag.outputs.tag }}}}
     steps:
-      - id: tag
+{harden_lines}      - id: tag
         env:
           EVENT_TAG: ${{{{ github.event.release.tag_name }}}}
           INPUT_TAG: ${{{{ inputs.tag }}}}
@@ -681,8 +755,8 @@ def build_release_jobs(layers: list[str], values: dict[str, str]) -> str:
       contents: read
       id-token: write
       attestations: write
-    steps:
-      - uses: {a['checkout']}
+{no_cache}    steps:
+{harden_lines}      - uses: {a['checkout']}
         with:
           ref: ${{{{ needs.release-gate.outputs.tag }}}}
           persist-credentials: false
@@ -732,8 +806,8 @@ def build_release_jobs(layers: list[str], values: dict[str, str]) -> str:
     permissions:
       contents: {"write" if target == "github-assets" else "read"}
       id-token: write
-    steps:
-'''
+{no_cache}    steps:
+{harden_lines}'''
     download = f"      - uses: {a['download_artifact']}\n        with:\n          name: dist\n          path: dist/\n"
     if target == "pypi":
         publish = publish_head + download + f"      - uses: {a['pypi_publish']}\n        with:\n          attestations: true\n"
