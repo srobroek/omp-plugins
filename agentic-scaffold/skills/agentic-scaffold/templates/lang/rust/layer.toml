@@ -2,13 +2,19 @@ name = "lang/rust"
 summary = "Cargo-managed Rust package"
 after = ["base", "tooling"]
 requires_tools = ["cargo"]
-owns = ["Cargo.toml", "src/main.rs", "src/lib.rs"]
+owns = ["Cargo.toml", "src/main.rs", "src/lib.rs", "tests/smoke.rs", "rust-toolchain.toml", "clippy.toml", "rustfmt.toml", "deny.toml"]
 blocks = [".gitignore", "justfile", ".pre-commit-config.yaml"]
 conflicts_with = ["lang/python", "lang/ts", "lang/go", "lang/terraform", "workspace"]
 conditional_plugins = { backend = { var = "app", equals = "true" } }
+[conditional_files]
+"src/lib.rs" = { var = "kind", any = ["crate", "hybrid"] }
+"src/main.rs" = { var = "kind", any = ["tool", "hybrid"] }
+"tests/smoke.rs" = { var = "kind", equals = "crate" }
 [plugins."srobroek-omp"]
 source = "srobroek/omp-plugins"
 plugins = ["architecture", "rust"]
 when = { var = "language", equals = "rust" }
 [tools]
 rust = "latest"
+[vars]
+kind = { default = "crate", prompt = "Rust kind (crate, tool, or hybrid)", ask = true }

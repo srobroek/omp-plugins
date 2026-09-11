@@ -1,0 +1,6 @@
+name = "agent-bundle"
+summary = "Agentic project bundle"
+layers = ["base", "agentic"]
+[vars]
+language = "none"
+kind = "library"

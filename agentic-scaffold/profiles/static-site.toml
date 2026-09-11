@@ -1,0 +1,7 @@
+name = "static-site"
+summary = "Astro splash site"
+layers = ["base", "docs"]
+[vars]
+language = "none"
+kind = "library"
+docs_flavour = "splash"
