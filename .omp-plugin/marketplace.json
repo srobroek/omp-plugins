@@ -12,7 +12,7 @@
       "name": "agentic-scaffold",
       "description": "Deterministic project scaffolding from ordered template layers and Beads formulas.",
       "source": "./agentic-scaffold",
-      "version": "0.10.1",
+      "version": "0.10.2",
       "category": "development"
     },
     {
@@ -61,7 +61,7 @@
       "name": "chezmoi",
       "description": "Edit chezmoi-managed dotfiles at their authoritative source.",
       "source": "./chezmoi",
-      "version": "0.4.3",
+      "version": "0.4.4",
       "category": "productivity"
     },
     {
@@ -75,14 +75,14 @@
       "name": "delivery",
       "description": "Delivery and git-workflow rules, plus a pull-request review agent.",
       "source": "./delivery",
-      "version": "0.9.0",
+      "version": "0.9.1",
       "category": "devops"
     },
     {
       "name": "dep-update",
       "description": "Classify dependency updates by semver safety and produce a cited upgrade plan.",
       "source": "./dep-update",
-      "version": "0.6.2",
+      "version": "0.6.3",
       "category": "development"
     },
     {
@@ -201,7 +201,7 @@
       "name": "whats-new",
       "description": "Research breaking changes, deprecations, and new features between two versions.",
       "source": "./whats-new",
-      "version": "0.3.2",
+      "version": "0.3.3",
       "category": "productivity"
     },
     {

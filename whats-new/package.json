@@ -1,6 +1,6 @@
 {
   "name": "@srobroek/whats-new",
-  "version": "0.3.2",
+  "version": "0.3.3",
   "description": "Research breaking changes, deprecations, and new features between two versions.",
   "private": true,
   "dependencies": {
