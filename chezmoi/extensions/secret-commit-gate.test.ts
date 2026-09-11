@@ -9,6 +9,7 @@ import secretCommitGate, {
 	committedPaths,
 	decideCommit,
 	gitCommits,
+	nestsShell,
 	resetSecretCommitGateForTests,
 	secretStagedPaths,
 	setGitSpawnForTests,
@@ -264,6 +265,107 @@ describe("decideCommit", () => {
 		setGitSpawnForTests(() => null);
 		expect(chezmoiRepo()).toBeNull();
 		expect(decideCommit("git commit -m x", ROOT)).toBeUndefined();
+	});
+
+	test("refuses a commit reached through a nested shell, which the walk cannot follow", () => {
+		// Independent review reproduced all three of these committing inside the chezmoi
+		// tree while the guard allowed them: the subshell and brace group were
+		// attributed to the parent directory, and eval produced no commit call at all.
+		// Confirmed against real bash with git shadowed to print $PWD -- from /usr, each
+		// of the three runs its commit in /tmp.
+		seedRepo(["dotfiles/dot_config/gh/api_token"]);
+		for (const command of [
+			`( cd '${SOURCE}' && git commit -m x )`,
+			`{ cd '${SOURCE}'; git commit -m x; }`,
+			`eval 'cd ${SOURCE} && git commit -m x'`,
+			`sh -c "cd ${SOURCE} && git commit -m x"`,
+			`echo "$(cd ${SOURCE} && git commit -m x)"`,
+			`cd x&&(cd '${SOURCE}');git commit -m x`,
+			`env sh -c 'cd ${SOURCE} && git commit -m x'`,
+			`cd x; sh -c 'cd ${SOURCE} && git commit -m x'`,
+		]) {
+			const decision = decideCommit(command, ELSEWHERE);
+			expect(decision?.block).toBe(true);
+			expect(decision?.reason).toContain("nests a shell");
+		}
+	});
+
+	test("a nested shell outside a chezmoi tree is left alone", () => {
+		// The refusal is scoped: with no chezmoi source resolved there is nothing to
+		// protect, so an ordinary repository's subshell commits must pass untouched.
+		seedChezmoiCacheForTests(null, null);
+		expect(decideCommit(`( cd /some/repo && git commit -m x )`, ELSEWHERE)).toBeUndefined();
+	});
+
+	test("inside a chezmoi tree, quoted punctuation and shell words still do not block", () => {
+		// Seeded with a harmless staged path, deliberately not a secret, so chezmoi
+		// RESOLVES and the nesting check is actually reached while the staged-file
+		// inspection finds nothing to block on. Two earlier versions of this test were
+		// vacuous: an empty repo left chezmoi unresolved so decideCommit returned before
+		// the check, and seeding a secret would block regardless of the detector. The
+		// block assertions at the end are what prove the check is reached at all.
+		seedRepo(["dotfiles/dot_zshrc"]);
+		expect(decideCommit(`git commit -m "fix (typo) and {braces}"`, ROOT)).toBeUndefined();
+		expect(decideCommit(`git commit -m '(fix) thing'`, ROOT)).toBeUndefined();
+		expect(decideCommit("git commit -m ${MSG}", ROOT)).toBeUndefined();
+		expect(decideCommit("find . -name x -exec rm {} ; git commit -m y", ROOT)).toBeUndefined();
+		expect(decideCommit(`git commit -m 'literal $(cd elsewhere)'`, ROOT)).toBeUndefined();
+		expect(decideCommit(`git commit -m 'literal; sh -c harmless'`, ROOT)).toBeUndefined();
+		expect(decideCommit(`git commit -m 'env sh -c text'`, ROOT)).toBeUndefined();
+		expect(decideCommit(`git commit -m "pipe | eval thing"`, ROOT)).toBeUndefined();
+		// The same words outside quotes DO block, in this same seeded tree.
+		expect(decideCommit(`env sh -c 'cd src && git commit'`, ROOT)?.block).toBe(true);
+		expect(decideCommit(`/bin/sh -c 'cd src && git commit'`, ROOT)?.block).toBe(true);
+	});
+
+	test("nestsShell reads only the text outside quotes", () => {
+		// Each row was checked against real bash. The false side matters as much as the
+		// true side: this detector refuses commits, so a wrong `true` blocks honest work.
+		const nests: Array<[string, boolean]> = [
+			// Real nesting, outside quotes.
+			["( cd src && git commit )", true],
+			["{ cd src; git commit; }", true],
+			["eval 'cd src && git commit'", true],
+			["cd x&&(cd y);git commit", true],
+			['sh -c "cd src && git commit"', true],
+			["env sh -c 'cd src && git commit'", true],
+			["cd src; sh -c 'git commit'", true],
+			// Interpreter reached by path, and assignments or env between the prefix and
+			// the shell. Each of these was a live bypass of the regex this replaced, and
+			// each was verified to run its commit in the target directory.
+			["/bin/sh -c 'cd src && git commit'", true],
+			["env FOO=1 sh -c 'cd src && git commit'", true],
+			["FOO=1 sh -c 'cd src && git commit'", true],
+			["/usr/bin/env bash -c 'cd src && git commit'", true],
+			["command sh -c 'cd src && git commit'", true],
+			// A shell named without -c runs no script of its own.
+			["sh /tmp/script.sh; git commit -m x", false],
+			// A path that merely CONTAINS a shell name is not an interpreter.
+			["git commit -m x -- tools/bash/readme.md", false],
+			// Substitution expands inside DOUBLE quotes, so it nests.
+			['git commit -m "$(cd src && pwd)"', true],
+			['git commit -m "`cd src && pwd`"', true],
+			// Literal punctuation and shell-looking WORDS inside quotes do not.
+			['git commit -m "fix (typo) and {braces}"', false],
+			["git commit -m '(fix) thing'", false],
+			["git commit -m 'literal; sh -c harmless'", false],
+			["git commit -m 'env sh -c text'", false],
+			["git commit -m 'see eval notes'", false],
+			['git commit -m "pipe | eval thing"', false],
+			["git commit -m 'literal $(cd elsewhere)'", false],
+			// Expansion and find's placeholder are not groups.
+			["git commit -m ${MSG}", false],
+			["find . -name x -exec rm {} ; git commit -m y", false],
+			// The shapes the walk already models correctly must stay allowed.
+			["cd src && git commit -m x", false],
+			["cd src; git commit -m x", false],
+			["cd src && git commit & git commit", false],
+			["cd src && printf x | git commit", false],
+			["git -C src commit -m x", false],
+		];
+		for (const [command, expected] of nests) {
+			expect(nestsShell(command), command).toBe(expected);
+		}
 	});
 });
 
