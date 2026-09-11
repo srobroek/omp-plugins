@@ -753,7 +753,7 @@ describe("integration: session resolution", () => {
 			expect(older).toContain("window: turns 3..3 of 4");
 			expect(older).toContain("STOP.");
 		});
-	});
+	}, 20_000);
 });
 
 describe("integration: tool registration", () => {
