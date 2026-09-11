@@ -38,6 +38,8 @@ When git cannot answer, the gate allows the call. The refusal names the `wt swit
 
 For a user-authorized exception, set `DELIVERY_ALLOW_PRIMARY_CHECKOUT=1` in the process environment or in the bash call's `env`. Text in a command or a file body does not enable it.
 
+The gate is advisory-strength. It reads the two tool surfaces agents edit through and the commit boundary. A shell command that writes files (`sed -i`, a redirection, a script) is not parsed, because a shell parser in a gate produces silent permits. GW-5 is the rule; the gate catches the common path.
+
 ### `unpushed-work-advisory`
 
 At session stop, reports dirty paths this extension instance observed touched and unpushed commits since its repository baseline.

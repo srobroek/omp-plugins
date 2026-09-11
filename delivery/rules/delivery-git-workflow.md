@@ -16,7 +16,8 @@ Branching:
   and `git commit` whose target is a primary checkout (git dir equals git common dir); it
   fails open when git cannot answer, leaves `.omp/` and `.beads/` state alone, and
   `DELIVERY_ALLOW_PRIMARY_CHECKOUT=1` in the environment lifts it when the user asked for
-  the primary checkout.
+  the primary checkout. It does not parse shell writes (`sed -i`, redirections, scripts);
+  those are yours to keep out of the primary checkout.
 - MUST GW-6: remove the worktree when its branch has landed: `wt remove <branch>` after the
   PR merges (`wt merge` removes it itself). The Worktrunk `post-start` and `post-switch`
   hooks run `wt step prune`, which removes any merged worktree left behind; do not rely on
