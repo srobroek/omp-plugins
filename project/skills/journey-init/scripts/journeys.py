@@ -27,12 +27,31 @@ STATUSES = {"draft", "active", "deprecated"}
 REQUIRED_KEYS = ("id", "title", "version", "status", "last_reviewed")
 
 
-def parse_frontmatter(text: str) -> dict:
-    """Parse the minimal YAML subset the format uses (scalars, inline
-    lists/dicts, no nesting). Returns {} when no frontmatter block."""
+def frontmatter_is_unterminated(text: str) -> bool:
+    """True when a block opened with `---` and never closed.
+
+    A file with no block at all is a different condition: nothing was declared,
+    so nothing was lost. An unterminated block means fields ARE present in the
+    file and the parser discarded them, which is worth naming.
+    """
     lines = text.splitlines()
     if not lines or lines[0].strip() != "---":
-        return {}
+        return False
+    return all(line.strip() != "---" for line in lines[1:])
+
+
+def parse_frontmatter(text: str) -> dict | None:
+    """Parse the minimal YAML subset the format uses (scalars, inline
+    lists/dicts, no nesting).
+
+    Returns None when the block is absent or unterminated, and {} only for a
+    block that terminated with nothing in it. An empty dict used to mean both,
+    so a caller probing truthiness could not tell a malformed file from an empty
+    one - `index` rendered a truncated run as `? ?` and reported nothing.
+    """
+    lines = text.splitlines()
+    if not lines or lines[0].strip() != "---":
+        return None
     fm: dict = {}
     for line in lines[1:]:
         if line.strip() == "---":
@@ -53,7 +72,7 @@ def parse_frontmatter(text: str) -> dict:
             fm[key] = entries
         else:
             fm[key] = raw
-    return {}  # unterminated frontmatter
+    return None  # unterminated frontmatter
 
 
 def managed_root(directory: Path) -> Path | None:
@@ -132,7 +151,15 @@ def latest_run(jdir: Path) -> dict | None:
     runs = sorted((jdir / "runs").glob("*.md")) if (jdir / "runs").is_dir() else []
     if not runs:
         return None
-    fm = parse_frontmatter(runs[-1].read_text(encoding="utf-8"))
+    text = runs[-1].read_text(encoding="utf-8")
+    fm = parse_frontmatter(text)
+    if fm is None:
+        # A truncated block had fields the parser threw away, so callers must be
+        # able to say so. A run with no block at all declared nothing and keeps
+        # its previous rendering - that is a lint concern, not a lost-data one.
+        if frontmatter_is_unterminated(text):
+            return {"_file": runs[-1].name, "_malformed": True}
+        return {"_file": runs[-1].name}
     fm["_file"] = runs[-1].name
     return fm
 
@@ -154,15 +181,28 @@ def open_findings(root: Path) -> dict:
 def cmd_index(root: Path) -> int:
     safe_journey_paths(root)
     rows = []
+    unreadable: list[str] = []
     findings = open_findings(root)
     for jdir in journey_dirs(root):
-        fm = parse_frontmatter((jdir / "journey.md").read_text(encoding="utf-8"))
+        text = (jdir / "journey.md").read_text(encoding="utf-8")
+        fm = parse_frontmatter(text)
+        if fm is None:
+            if frontmatter_is_unterminated(text):
+                # Fields were present and discarded; say so rather than rendering
+                # every column as `?`, which reads as a journey that omitted them.
+                unreadable.append(f"{jdir.name}/journey.md")
+                fm = {"title": "**unreadable frontmatter**"}
+            else:
+                fm = {}
         run = latest_run(jdir)
-        if run:
+        if run is None:
+            last = "never"
+        elif run.get("_malformed"):
+            unreadable.append(f"{jdir.name}/runs/{run['_file']}")
+            last = f"**unreadable** ({run['_file']})"
+        else:
             mode = str(run.get("mode", "full")).split("(")[0]
             last = f"{run.get('date', '?')} {run.get('result', '?')} ({mode})"
-        else:
-            last = "never"
         n_open = findings.get(fm.get("id", ""), 0)
         rows.append(
             "| [{id}]({d}/journey.md) | {t} | {st} | v{v} | {su} | {ifc} | {lr} | {last} | {op} |".format(
@@ -188,6 +228,12 @@ def cmd_index(root: Path) -> int:
     )
     (root / "INDEX.md").write_text(body, encoding="utf-8")
     print(f"INDEX.md: {len(rows)} journeys")
+    # Named on stderr and marked in the row, which is what the defect needed: the
+    # old code reported nothing at all. The exit code stays 0 because `index`
+    # generates and `lint` validates - lint reports the same file as an error, and
+    # no caller treats this command's status as a verdict on journey content.
+    for rel in unreadable:
+        print(f"ERROR {rel}: unreadable frontmatter, rendered as unreadable", file=sys.stderr)
     return 0
 
 
@@ -196,7 +242,7 @@ def lint_journey(jdir: Path, errors: list[str], seen_ids: dict) -> None:
     text = path.read_text(encoding="utf-8")
     rel = f"{jdir.name}/journey.md"
     fm = parse_frontmatter(text)
-    if not fm:
+    if fm is None:
         errors.append(f"{rel}: missing or unterminated frontmatter")
         return
     for key in REQUIRED_KEYS:
@@ -205,9 +251,13 @@ def lint_journey(jdir: Path, errors: list[str], seen_ids: dict) -> None:
     jid = fm.get("id", "")
     if jid and not JOURNEY_ID.match(jid):
         errors.append(f"{rel}: id `{jid}` does not match J<n>")
-    if jid in seen_ids:
-        errors.append(f"{rel}: duplicate id `{jid}` (also {seen_ids[jid]})")
-    seen_ids[jid] = rel
+    # Only a declared id can collide. Journeys with no `id:` all read as "", so an
+    # unguarded write made the second one report `duplicate id ``` - noise beside
+    # the `missing id` error that already names the real problem.
+    if jid:
+        if jid in seen_ids:
+            errors.append(f"{rel}: duplicate id `{jid}` (also {seen_ids[jid]})")
+        seen_ids[jid] = rel
     if jid and not jdir.name.startswith(f"{jid}-"):
         errors.append(f"{rel}: directory `{jdir.name}` does not start with `{jid}-`")
     if fm.get("status") and fm["status"] not in STATUSES:
@@ -244,8 +294,8 @@ def lint_journey(jdir: Path, errors: list[str], seen_ids: dict) -> None:
     for run in sorted((jdir / "runs").glob("*.md")) if (jdir / "runs").is_dir() else []:
         rfm = parse_frontmatter(run.read_text(encoding="utf-8"))
         rrel = f"{jdir.name}/runs/{run.name}"
-        if not rfm:
-            errors.append(f"{rrel}: missing frontmatter")
+        if rfm is None:
+            errors.append(f"{rrel}: missing or unterminated frontmatter")
             continue
         if rfm.get("journey") != jid:
             errors.append(f"{rrel}: journey `{rfm.get('journey')}` != `{jid}`")
