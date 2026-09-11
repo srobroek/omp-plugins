@@ -409,7 +409,10 @@ describe("bdVerbs / isBdWrite", () => {
 
 	test("the claim forms of read verbs are writes", () => {
 		expect(isBdWrite("bd ready --parent e --unassigned --claim --json")).toBe(true);
-		expect(isBdWrite('bd comments add x -m "note"')).toBe(true);
+		// Positional text, which is the form bd 1.2.2 accepts. The fixture used to
+		// spell it `-m "note"`, a flag bd rejects, so the suite taught the invalid
+		// invocation it was meant to classify.
+		expect(isBdWrite('bd comments add x "note"')).toBe(true);
 	});
 });
 
@@ -465,6 +468,20 @@ describe("claimAnchor", () => {
 	test("preserves host and pid from a claimed bead for liveness checks", () => {
 		const [bead] = readBeads(JSON.stringify({data: [{id: "bd-live-1", status: "in_progress", assignee: "omp/Other/s2", metadata: {lease_host: "worker-1", lease_pid: "4242"}}], schema_version: 1}));
 		expect(bead && claimAnchor(bead)).toEqual({ host: "worker-1", pid: 4242 });
+	});
+});
+describe("formatSessionCloseAdvisory", () => {
+	test("names the bead, the holder, and remedies that bd actually has", () => {
+		// The advisory previously told agents to run `bd unclaim`, which bd 1.2.2
+		// rejects as an unknown command, and `bd comments add -m`, where the text is
+		// positional and `-m` does not exist. An agent following either left its
+		// claim held, which is the one thing this advisory exists to prevent.
+		const text = formatSessionCloseAdvisory(heldClaims(readBeads(BEAD_LIST), new Set(["bd-probe-2m7"]), undefined), process.env, undefined, true, new Set(["omp/Main/s1"]));
+		expect(text).toContain("bd-probe-2m7 [omp/Main/s1] target work");
+		expect(text).not.toContain("bd unclaim");
+		expect(text).toContain("'--assignee' '' '--status' 'open'");
+		expect(text).toContain('bd comments add <id> "..."');
+		expect(text).toContain("discovered work");
 	});
 });
 
