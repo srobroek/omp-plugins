@@ -312,3 +312,33 @@ def test_tool_status_distinguishes_dead_shims_from_unmanaged_tools() -> None:
         assert scaffold._tool_status(root, "git") == "ok"
     finally:
         scaffold.shutil.which = real_which
+
+
+def test_tool_status_recognises_windows_shim_paths(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A dead shim must be SHIM on Windows too, where paths use backslashes.
+
+    This scaffold's CI matrix includes Windows x86_64. A posix-only substring test for
+    the shim directory would classify every dead Windows shim as an ordinary binary
+    and report it usable, which is the failure this test exists to prevent.
+    """
+    root = tmp_path
+    (root / "mise.toml").write_text('[tools]\njscpd = "5.2.0"\n')
+
+    class Result:
+        returncode = 1
+
+    monkeypatch.setattr(scaffold_module.subprocess, "run", lambda *a, **k: Result())
+
+    monkeypatch.setattr(
+        scaffold_module.shutil,
+        "which",
+        lambda name: r"C:\Users\u\AppData\Local\mise\shims\jscpd.exe" if name == "jscpd" else r"C:\mise.exe",
+    )
+    assert scaffold_module._tool_status(root, "jscpd") == "SHIM"
+
+    monkeypatch.setattr(
+        scaffold_module.shutil,
+        "which",
+        lambda name: r"C:\Program Files\Git\bin\git.exe" if name == "git" else r"C:\mise.exe",
+    )
+    assert scaffold_module._tool_status(root, "git") == "ok"
