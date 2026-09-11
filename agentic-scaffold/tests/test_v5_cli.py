@@ -440,3 +440,21 @@ def test_gate_script_is_fail_closed(tmp_path: Path, needs: dict, ok: bool) -> No
     assert run("apply", "--root", str(root), "--stage", "render").returncode == 0
     result = subprocess.run([sys.executable, "-"], input=_gate_script(root), text=True, capture_output=True, env={**os.environ, "NEEDS": json.dumps(needs)})
     assert (result.returncode == 0) == ok, result.stdout + result.stderr
+
+
+def test_monorepo_ci_derives_lanes_and_path_filters_from_members(tmp_path: Path) -> None:
+    import yaml
+
+    root = git_root(tmp_path)
+    defaults = "purpose,kind,language,license,beads,publish,docs_flavour,github_owner,conduct_contact"
+    assert run("answers", "write", "--root", str(root), "--profile", "monorepo", "--set", "name=demo", "--defaults-for", defaults).returncode == 0
+    for name, layer, kind in (("api", "lang/python", "tool"), ("core", "lang/rust", "crate"), ("web", "lang/ts", "app")):
+        assert run("member", "add", "--root", str(root), "--name", name, "--layer", layer, "--kind", kind).returncode == 0
+    assert run("apply", "--root", str(root), "--stage", "render").returncode == 0
+    ci = yaml.safe_load((root / ".github/workflows/ci.yml").read_text())
+    jobs = ci["jobs"]
+    assert {"python", "rust", "typescript"} <= set(jobs), "one lane per member language"
+    filters = yaml.safe_load(jobs["changes"]["steps"][1]["with"]["filters"])
+    assert "packages/api/**" in filters["python"] and "crates/core/**" in filters["rust"] and "packages/web/**" in filters["typescript"]
+    assert ".github/**" in filters["python"], "global paths still force the lane"
+    assert set(jobs["gate"]["needs"]) == {"changes", "python", "rust", "typescript", "hooks", "agentic", "security"}

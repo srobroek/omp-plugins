@@ -283,6 +283,16 @@ def build_ci_jobs(layers: list[str], values: dict[str, str]) -> str:
     jobs: list[str] = []
     gated: list[str] = []
     languages = [layer.split("/", 1)[1] for layer in layers if layer.startswith("lang/")]
+    # A monorepo's languages live on its members, not on the root profile.
+    try:
+        members = json.loads(values.get("members_json", "") or "[]")
+    except json.JSONDecodeError:
+        members = []
+    for member in members:
+        if isinstance(member, dict):
+            language = str(member.get("layer", member.get("language", ""))).split("/")[-1]
+            if language in LANE_BY_LANGUAGE and language not in languages:
+                languages.append(language)
     for language in languages:
         lane = _language_lane(language, values)
         if lane:
