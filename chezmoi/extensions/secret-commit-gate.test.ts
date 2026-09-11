@@ -165,6 +165,45 @@ describe("targetName", () => {
 });
 
 describe("secretStagedPaths", () => {
+	test("credential words are matched as whole segments or camelCase, not substrings", () => {
+		// Loose /token/i, /secret/i and /credential/i hard-blocked ordinary names with no
+		// override. Anchoring must not cost detection, so both sides are asserted: every
+		// real credential spelling still blocks, and the ordinary names stop blocking.
+		const blocks = ["api_token", "token", "tokens", "secret", "secrets.md", "my-secret-file",
+			"client_credentials.json", "access-token.txt", "SECRET_KEY", "dot_netrc_token",
+			"apiToken", "mySecret", "awsCredentials", "gh_token.txt", "private_secret_env"];
+		const allows = ["secretary-contacts.md", "noncredentialed.md", "tokenizer.py",
+			"secretarial.txt", "credentialing-notes.md", "readme.md", "dot_zshrc"];
+		for (const name of blocks) {
+			expect(secretStagedPaths([`dotfiles/${name}`], "dotfiles/"), name).toEqual([`dotfiles/${name}`]);
+		}
+		for (const name of allows) {
+			expect(secretStagedPaths([`dotfiles/${name}`], "dotfiles/"), name).toEqual([]);
+		}
+	});
+
+	test("clears the two design-token documentation names without opening a bypass", () => {
+		// `design-tokens.md` carries `tokens` as a delimited segment, exactly like
+		// `gh-tokens.json`, so no anchoring rule separates them: `secrets.md` above must
+		// block and has the same shape. It is therefore cleared by whole name.
+		expect(secretStagedPaths(["dotfiles/design-tokens.md"], "dotfiles/")).toEqual([]);
+		expect(secretStagedPaths(["dotfiles/design-tokens.json"], "dotfiles/")).toEqual([]);
+
+		// The exemption runs before the patterns, so any looseness in it becomes a
+		// bypass. Allowing the stem plus any extension cleared these three.
+		for (const name of ["design-tokens.pem", "design-tokens.key", "design_tokens.md"]) {
+			expect(secretStagedPaths([`dotfiles/${name}`], "dotfiles/"), name).toEqual([`dotfiles/${name}`]);
+		}
+
+		// An inherited key must not read as an exemption.
+		expect(secretStagedPaths(["dotfiles/constructor.pem"], "dotfiles/")).toEqual(["dotfiles/constructor.pem"]);
+
+		// Neighbouring credential spellings are untouched.
+		for (const name of ["gh-tokens.json", "api-tokens.json"]) {
+			expect(secretStagedPaths([`dotfiles/${name}`], "dotfiles/"), name).toEqual([`dotfiles/${name}`]);
+		}
+	});
+
 	test("flags credential-named source files", () => {
 		const staged = [
 			"dotfiles/private_dot_ssh/private_id_ed25519",
