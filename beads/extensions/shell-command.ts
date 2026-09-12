@@ -90,19 +90,62 @@ export function tokenize(segment: string): Token[] {
 	return out;
 }
 
+/** True when every quote in the segment is closed; an odd one means a broken command. */
+export function quotesBalanced(segment: string): boolean {
+	let quote: string | null = null;
+	for (let i = 0; i < segment.length; i++) {
+		const char = segment[i];
+		if (quote) {
+			if (char === quote && segment[i - 1] !== "\\") quote = null;
+			continue;
+		}
+		if (char === "'" || char === '"') quote = char;
+	}
+	return quote === null;
+}
+
 /**
- * The tokens of `segment` when it invokes `argv` at command position, skipping
- * `VAR=value` prefixes; null when it invokes something else.
+ * Launchers that run the REAL command after their own arguments, so `bd` behind
+ * one is still `bd` at command position. `echo` is deliberately absent: text
+ * that merely mentions a command must never be treated as running it.
+ */
+const WRAPPERS: Record<string, true> = {
+	mise: true,
+	env: true,
+	command: true,
+	exec: true,
+	nohup: true,
+	nice: true,
+	time: true,
+};
+
+/**
+ * The tokens of `segment` from `argv` onward when it invokes `argv` at command
+ * position, looking through `VAR=value` prefixes and wrapper launchers, and
+ * matching a path (`/usr/bin/bd`) by its basename; null when it invokes
+ * something else.
  */
 export function invocation(segment: string, argv: string[]): Token[] | null {
 	const tokens = tokenize(segment);
+	const head = argv[0];
+	if (!head) return null;
 	let start = 0;
-	while (tokens[start] && !tokens[start]?.quoted && /^[A-Za-z_][A-Za-z0-9_]*=/.test(tokens[start]?.value ?? "")) {
-		start++;
+	for (; start < tokens.length; start++) {
+		const token = tokens[start];
+		if (!token || token.quoted) return null;
+		const basename = token.value.split("/").pop() ?? token.value;
+		if (basename === head) break;
+		const skippable =
+			/^[A-Za-z_][A-Za-z0-9_]*=/.test(token.value) ||
+			token.value.startsWith("-") ||
+			WRAPPERS[basename] === true;
+		if (!skippable) return null;
 	}
 	for (const [offset, word] of argv.entries()) {
 		const token = tokens[start + offset];
-		if (!token || token.quoted || token.value !== word) return null;
+		if (!token || token.quoted) return null;
+		const value = offset === 0 ? (token.value.split("/").pop() ?? token.value) : token.value;
+		if (value !== word) return null;
 	}
 	return tokens.slice(start);
 }

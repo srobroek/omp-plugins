@@ -1,6 +1,6 @@
 import { hostname } from "node:os";
 import type { ExtensionAPI, ToolCallEvent } from "@oh-my-pi/pi-coding-agent";
-import { commandSegments, invocation } from "./shell-command.ts";
+import { commandSegments, invocation, quotesBalanced } from "./shell-command.ts";
 
 /**
  * A claim is a lease, and a lease has a holder you can check.
@@ -40,6 +40,9 @@ export function stampLease(
 		if (!tokens) return segment;
 		if (!tokens.some((token) => !token.quoted && token.value === "--claim")) return segment;
 		if (ALREADY_STAMPED.test(segment)) return segment;
+		// An unterminated quote would swallow the anchors into its string, and the
+		// command is already broken: leave it exactly as written.
+		if (!quotesBalanced(segment)) return segment;
 		stamped = true;
 		const body = segment.trimEnd();
 		return body + anchors + segment.slice(body.length);

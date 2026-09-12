@@ -71,3 +71,29 @@ describe("stampLease", () => {
 		expect(stampLease(`bd update x --claim ${"y".repeat(64_001)}`, "boxy", 7)).toBeNull();
 	});
 });
+
+describe("stampLease behind wrappers and paths", () => {
+	test("stamps bd behind a launcher", () => {
+		expect(stampLease("mise exec -- bd update a --claim", "boxy", 7)).toBe(
+			`mise exec -- bd update a --claim ${ANCHORS}`,
+		);
+		expect(stampLease("time bd update a --claim", "boxy", 7)).toBe(
+			`time bd update a --claim ${ANCHORS}`,
+		);
+	});
+
+	test("stamps bd invoked by path", () => {
+		expect(stampLease("/usr/bin/bd update a --claim", "boxy", 7)).toBe(
+			`/usr/bin/bd update a --claim ${ANCHORS}`,
+		);
+	});
+
+	test("refuses a command whose quotes never close", () => {
+		expect(stampLease("bd update a --claim --notes 'unterminated", "boxy", 7)).toBeNull();
+	});
+
+	test("still ignores a mentioned command", () => {
+		expect(stampLease("echo mise exec -- bd update a --claim", "boxy", 7)).toBeNull();
+		expect(stampLease('"bd" update a --claim', "boxy", 7)).toBeNull();
+	});
+});
