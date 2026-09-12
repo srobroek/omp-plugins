@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.10.0](https://github.com/srobroek/omp-plugins/compare/delivery--v0.9.1...delivery--v0.10.0) (2026-09-12)
+
+
+### Features
+
+* **delivery:** require conventional pull request titles ([#226](https://github.com/srobroek/omp-plugins/issues/226)) ([4dd9ff7](https://github.com/srobroek/omp-plugins/commit/4dd9ff79fcf26b985ff2e6c2b2efc261882b5951))
+
 ## [0.9.1](https://github.com/srobroek/omp-plugins/compare/delivery--v0.9.0...delivery--v0.9.1) (2026-09-11)
 
 
