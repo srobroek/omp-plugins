@@ -15,9 +15,15 @@ text and paths, and direct inspection when semantic tools cannot answer.
 ## Task
 
 1. Gather PR context: `gh pr view <number> --json title,body,files` then `gh pr diff <number>`.
-2. Review the diff for: correctness, edge cases, security (input validation, secrets,
+2. Read the beads named in the PR body (`Bead:` / `Closes-Bead:`) from the bead
+   context your caller passed you: accepted scope, holder, and comments. Review
+   against what was accepted, not what the diff implies. Where the repository has
+   `.beads/`, a body naming neither a bead nor a `No-Bead:` reason is a finding,
+   and so is bead context you were not given -- say which you are missing rather
+   than guessing. You have no shell; you never fetch it yourself.
+3. Review the diff for: correctness, edge cases, security (input validation, secrets,
    OWASP), performance bottlenecks, test adequacy, and project-convention compliance.
-3. Return the Output contract below.
+4. Return the Output contract below.
 
 ## Rules
 

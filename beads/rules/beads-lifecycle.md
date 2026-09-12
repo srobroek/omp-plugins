@@ -9,7 +9,7 @@ LIFECYCLE
 | situation | choice |
 |---|---|
 | runnable work | Keep `status=open`; `bd ready` decides readiness from dependencies and gates. |
-| worker starts | Claim atomically; `status=in_progress` and assignee identify live ownership. |
+| worker starts | Claim atomically; `status=in_progress` plus assignee record the claim, and the `lease_host`/`lease_pid` anchors are what prove it still live ([Claiming]rule://beads-core). |
 | concrete prerequisite | Add a blocking dependency; do not encode it only in prose or state labels. |
 | work intentionally postponed | `bd defer <id> --until ... --reason ...`; deferred work stays out of `bd ready`. |
 | issue replaced | `bd supersede <old> --with <new>`; do not close without the replacement link. |

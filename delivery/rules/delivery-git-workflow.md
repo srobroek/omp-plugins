@@ -69,11 +69,34 @@ shepherd, but never to a polling watcher that holds a live session.
 
 Unrelated implementations and PRs continue while one PR waits or is escalated.
 
-Beads linkage (PRs entering the PR-shepherd merge queue):
+Beads linkage:
 
-The merge bead carries the linkage. The PR body carries none of it: the shepherd
-discovers work by label and proves it against bead metadata, so a trailer in the
-body would be read by nothing.
+Where beads is active (`.beads/` exists), a PR and its beads point at each
+other. Either pointer alone rots: a PR body names beads a reader can open, and
+the bead's `pr` metadata is what a later session, a shepherd, or a review finds
+without scanning GitHub history.
+
+- MUST name every bead the PR implements in the body, as `Bead: <id>` lines or
+  `Closes-Bead: <id>`. A PR may name several beads.
+- MUST stamp `pr` metadata on every bead the PR implements, not merely a merge
+  bead: `bd update <id> --set-metadata pr=<n>`. A bead may carry several PR
+  numbers, comma-separated.
+- MUST load the other side before acting. Before reviewing, merging, pushing to,
+  commenting on, or reporting a PR as done, read its beads and name the holder.
+  Before acting on a bead that carries `pr`, read that PR. A passing glance at a
+  diff needs neither.
+- MUST pass that bead context into a review agent's prompt. `pr-reviewer` has no
+  shell by design, since it reads untrusted PR and bead text; whoever spawns it
+  owes it the accepted scope, the holder, and the relevant comments.
+- Exempt from naming a bead: PRs authored by a bot or app (release automation,
+  dependency bumps), repositories with no `.beads/`, and repositories whose own
+  rules replace the PR flow ([chezmoi delivery]rule://chezmoi-direct-main-delivery
+  sends work straight to main). To ship a human-authored PR without a bead, put
+  `No-Bead: <reason>` in the body; the reason is for a reviewer, so name what
+  makes a bead wrong here.
+
+For PRs entering the PR-shepherd merge queue, the merge bead carries the queue
+state on top of that linkage:
 
 - Before PR creation, create one open, unassigned task bead labeled `pr:merge` and
   `agent:integrator`, with `branch`, `repo`, and `origin_actor` metadata. For
