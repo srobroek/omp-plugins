@@ -68,6 +68,7 @@ const BEAD_LIST = JSON.stringify({
 	data: [
 		{ id: "bd-probe-e8z", title: "second thing", status: "open" },
 		{ id: "bd-probe-2m7", title: "target work", status: "in_progress", assignee: "omp/Main/s1" },
+		{ id: "bd-probe-r9p", title: "reported handoff", status: "in_progress", labels: ["state:reported"] },
 	],
 	schema_version: 1,
 });
@@ -398,6 +399,10 @@ describe("heldClaims", () => {
 
 	test("a touched in_progress bead is held", () => {
 		expect(heldClaims(beads, new Set(["bd-probe-2m7"]), undefined).map(b => b.id)).toEqual(["bd-probe-2m7"]);
+	});
+
+	test("a reported handoff is no longer held by this session", () => {
+		expect(heldClaims(beads, new Set(["bd-probe-r9p"]), undefined)).toEqual([]);
 	});
 
 	test("an untouched backlog bead is not this session's problem", () => {
