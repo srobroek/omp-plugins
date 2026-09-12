@@ -7,7 +7,7 @@ Its rules cover delivery, automated-review fix loops, landing proof, and links t
 
 | Name | When |
 | --- | --- |
-| `pr-reviewer` | Reviews a pull request without changing it. Returns `VERDICT:` only. |
+| `pr-reviewer` | Reviews a pull request without changing it. Returns `VERDICT:` only. It has no shell, because it reads untrusted PR and bead text, so whoever spawns it passes the bead context: accepted scope, holder, and relevant comments. |
 
 ## Rules
 
