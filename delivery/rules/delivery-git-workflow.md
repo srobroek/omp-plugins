@@ -36,9 +36,13 @@ Shipping (choose one, confirm if ambiguous):
   `gh pr ready` only after implementation, local validation, and required
   agent review are complete and no known blocker remains.
   Body: what changed, why, test plan. One close keyword per issue line.
-  Under squash merge the PR title becomes the changelog entry: write it for end
-  users (`fix: catalog refresh fails when offline`), never spec ids, task refs,
-  or phase names. Spec context goes in the body.
+  MUST GW-7: under squash merge the PR TITLE becomes the commit subject, so it
+  carries a conventional type and, in a monorepo, the package scope
+  (`fix(beads): catalog refresh fails when offline`). Release automation reads
+  subjects: a prose title strands the change on the default branch, released by
+  nothing, because the branch's own `feat`/`fix` subjects survive only as body
+  bullets that release tooling does not attribute. Write it for end users, never
+  spec ids, task refs, or phase names. Spec context goes in the body.
 - Local merge to main -- only when the user asks or the repo has no PR flow.
   Use `git merge --no-ff` for feature branches; pass an explicit strategy
   flag to `gh pr merge` (`--squash`/`--merge`/`--rebase`).
