@@ -1,5 +1,18 @@
 # Changelog
 
+## [1.1.0](https://github.com/srobroek/omp-plugins/compare/beads--v1.0.15...beads--v1.1.0) (2026-09-12)
+
+
+### Features
+
+* **beads:** fire when a branch is created for an unclaimed bead ([#222](https://github.com/srobroek/omp-plugins/issues/222)) ([af18695](https://github.com/srobroek/omp-plugins/commit/af186950f807739baac6786572bdcf1d7395e40d))
+
+
+### Bug Fixes
+
+* **beads:** resolve one effective actor per bd invocation, BD_ACTOR first ([b0c10cd](https://github.com/srobroek/omp-plugins/commit/b0c10cd63252974f159e4349b5c899a7e2ebbfc6))
+* **beads:** resolve one effective actor per bd invocation, BD_ACTOR first ([26b08da](https://github.com/srobroek/omp-plugins/commit/26b08dad291d83c84adf2bf466a18cfa6c74bfc5))
+
 ## [1.0.15](https://github.com/srobroek/omp-plugins/compare/beads--v1.0.14...beads--v1.0.15) (2026-09-11)
 
 
