@@ -75,6 +75,20 @@ Use the builtin learn/retain/recall/reflect tools for persistent knowledge. This
   The stop subprocess has a 1.2-second timeout.
   A timeout leaves server state unverified.
 
+- `bd-lease-gate`: writes `lease_host` and `lease_pid` metadata after a claim succeeds, so a
+  later session can prove a holder gone instead of guessing from staleness.
+  It reads the bead ids from `bd`'s own output and stamps them with a separate
+  `bd update`, so no command is ever rewritten; when detection misses, the bead
+  simply carries no anchors, which the claiming rule treats as unprovable rather
+  than dead. The pid is the agent process, not the shell child that exits with
+  the command.
+- `pr-bead-link-gate`: blocks `gh pr create` and the `github` device's `pr_create` when the
+  body names neither a bead nor a `No-Bead:` reason, and only where a `.beads`
+  workspace exists.
+  It refuses rather than injecting an id, because a body it had to guess at
+  outlives the PR. A body built by `--fill`, `--body-file`, or a command
+  substitution is not visible to a tool call, so those stay a rule matter.
+
 Both lifecycle extensions honor `BEADS_DIR`, as does the advisory for unreported failures. None of them copies the store.
 
 ## Tools
