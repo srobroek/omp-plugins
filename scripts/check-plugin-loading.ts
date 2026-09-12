@@ -12,6 +12,8 @@ interface CatalogEntry { name: string; source: string }
 
 // Run with Bun and a pinned, separately installed OMP. No provider requests or MCP startup.
 const VERSION = "18.1.14";
+// Published checkout plugins (`./` catalog sources). A pin, so an accidental unpublish fails loudly.
+const EXPECTED_PLUGINS = 27;
 const repo = resolve(process.env.OMP_SMOKE_REPO ?? join(import.meta.dir, ".."));
 const started = performance.now();
 const timeoutMs = Number(process.env.OMP_SMOKE_TIMEOUT_MS ?? 600_000);
@@ -221,7 +223,7 @@ async function main() {
   const sdkVersion = (await json(join(host, "package.json"))).version;
   check(sdkVersion === VERSION, `SDK version must be ${VERSION}; got ${sdkVersion}`);
   const entries: CatalogEntry[] = (await json(join(repo, ".omp-plugin/marketplace.json"))).plugins.filter((p: CatalogEntry) => typeof p.source === "string" && p.source.startsWith("./"));
-  check(entries.length === 27, `Expected 27 checkout plugins, found ${entries.length}`);
+  check(entries.length === EXPECTED_PLUGINS, `Expected ${EXPECTED_PLUGINS} checkout plugins, found ${entries.length}`);
   const temp = await mkdtemp(join(tmpdir(), "omp-plugin-loading-"));
   const clean = () => { interrupted = true; for (const child of children) child.kill("SIGKILL"); };
   const timer = setTimeout(clean, timeoutMs);
@@ -266,7 +268,7 @@ async function main() {
       children.delete(child);
       check(code === 0, `${variant}/${carrier}: worker failed (${code}): ${stdout.trim()}`);
       const result = JSON.parse(stdout.trim().split("\n").at(-1)!);
-      check(result.rows.length === 27, "Worker returned incomplete coverage");
+      check(result.rows.length === EXPECTED_PLUGINS, "Worker returned incomplete coverage");
       rows.push({ variant, carrier, elapsedMs: Math.round(performance.now() - caseStart), ...result });
     }
     // Each fixture invokes the same real loader/manifest validator in an isolated
@@ -288,7 +290,7 @@ async function main() {
       check(result.code !== 0 && result.stdout.includes('"fixtureRejected":true'), `${kind}: fixture did not fail through the expected validation path`);
       rows.push({ negative: kind, exitCode: result.code, rejected: true });
     }
-    return { status: "PASS", hostVersion: VERSION, plugins: 27, carrierCases: 54, negatives: 3, elapsedMs: Math.round(performance.now() - started), rows };
+    return { status: "PASS", hostVersion: VERSION, plugins: EXPECTED_PLUGINS, carrierCases: EXPECTED_PLUGINS * 2, negatives: 3, elapsedMs: Math.round(performance.now() - started), rows };
   } finally {
     clearTimeout(timer); clean(); process.off("SIGINT", clean); process.off("SIGTERM", clean);
     await rm(temp, { recursive: true, force: true });

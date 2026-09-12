@@ -74,7 +74,9 @@ PLUGINS: dict[str, tuple[str, str]] = {
     "agentic-scaffold": ("development", "Deterministic project scaffolding from ordered template layers and Beads formulas."),
 }
 
-UNPUBLISHED: set[str] = set()
+# The canonical agentic-scaffold lives in its own repository and ships to Claude/Codex from
+# there; this checkout's copy stays for its tests but is no longer published.
+UNPUBLISHED: set[str] = {"agentic-scaffold"}
 
 def load_object(path: Path) -> dict[str, object]:
     if not path.exists():
