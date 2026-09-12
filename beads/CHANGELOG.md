@@ -1,5 +1,15 @@
 # Changelog
 
+## [1.2.0](https://github.com/srobroek/omp-plugins/compare/beads--v1.1.0...beads--v1.2.0) (2026-09-12)
+
+Released by hand: the two merges below landed with prose squash subjects, so
+release-please attributed nothing and opened no release PR.
+
+### Features
+
+* **beads:** prove bead ownership by lease and require PR linkage ([#221](https://github.com/srobroek/omp-plugins/issues/221)) ([435b8a3](https://github.com/srobroek/omp-plugins/commit/435b8a3d2d99a554db967de3e464e245b412d27f))
+* **beads:** document the lease and PR-linkage gates ([#225](https://github.com/srobroek/omp-plugins/issues/225)) ([190bd80](https://github.com/srobroek/omp-plugins/commit/190bd80dcc0b4840acc69771489f6fc759ec203b))
+
 ## [1.1.0](https://github.com/srobroek/omp-plugins/compare/beads--v1.0.15...beads--v1.1.0) (2026-09-12)
 
 
