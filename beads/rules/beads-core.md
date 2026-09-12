@@ -25,9 +25,19 @@ DEFAULT BD_ACTOR is legacy (Beads 1.1.0 commit trailer only); export the same
 CLAIMING
 MUST Claim before working: `bd update <id> --claim` (atomic CAS; first wins,
   idempotent). Never claim via labels -- not atomic.
-MUST Discover work with `bd ready --unassigned --json`; never pick up work
-  assigned to another actor unless the parent hands you its id.
-MUST On refusal, coordinate with holder; only release a claim once the holding session is confirmed dead, using `bd update <id> --assignee '' --status open`.
+MUST Discover work with `bd ready --unassigned --json`. Unclaimed and open is
+  self-serve; a live lease is not.
+MUST Work only beads you own. You own a bead when its assignee carries YOUR
+  session id, so a resumed or recovered session keeps its own claims.
+MUST Refuse `--claim`, `assign`, `close` and `reopen` on a bead leased to
+  another session while that lease is LIVE. Comments stay open -- commenting is
+  coordination, not takeover.
+DEFAULT Others' beads are yours to work when the parent hands you the id, or a
+  handover document or the user's instruction names it.
+MUST Prove a lease dead before taking it, never infer it from age: read
+  `lease_host` and `lease_pid` metadata, and on that host confirm the process is
+  gone (`kill -0 <pid>` fails). A different host is unprovable -- ask.
+MUST Record the takeover in a comment naming the dead lease before claiming.
 DEFAULT Release with `bd update <id> --assignee '' --status open`.
 
 FIELD TAXONOMY
@@ -44,6 +54,8 @@ FIELD TAXONOMY
 | state cache | `bd set-state <id> dim=value --reason` | owning agent |
 | execution hints | metadata `execution_*` (type, model, effort, group) | orchestrator, BEFORE spawn |
 | git anchors | metadata (repo, branch, base_sha, worktree, pr, merge_sha) | worker/integrator |
+| lease holder | metadata `lease_host` + `lease_pid`, stamped by `--claim` | worker |
+| PR linkage | metadata `pr`, comma-separated for several PRs | worker/integrator |
 | scope globs | metadata `scope` | orchestrator |
 | dedupe keys | metadata (CVE, PR#, file:line) | finder skills |
 | rationale | description + notes, never labels/metadata | any |
@@ -56,6 +68,17 @@ MUST Orchestrators set routing labels and `execution_*` metadata at creation --
   model/effort are fixed at spawn, too late after delegation.
 NOT Labels as locks or gate substitutes -- gate beads + `bd gate check` own
   blocking waits; `bd set-state` is non-blocking only.
+
+REPORTING TO THE USER
+MUST Give each bead an id, a title and one clause of what it relates to --
+  the project area, the work that produced it, or what it blocks. Bare ids and
+  bare titles do not answer "what is still open".
+MUST Answer with your own beads first, then others in a separate section naming
+  each holder and whether its lease is live.
+DEFAULT Exempt from the relation clause: pure id tables, counts, and
+  single-bead answers whose prose already explains the bead.
+NOT Expanding beads in agent-to-agent reports -- machine readers take the terse
+  form ([Reporter contract]rule://beads-audit).
 
 DEPENDENCIES
 DEFAULT `blocks` for ordering; `parent-child` for epics; `discovered-from` for

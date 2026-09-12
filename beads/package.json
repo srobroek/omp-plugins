@@ -8,6 +8,8 @@
       "./extensions/formula-check-tool.ts",
       "./extensions/bd-actor-gate.ts",
       "./extensions/bd-close-gate.ts",
+      "./extensions/bd-lease-gate.ts",
+      "./extensions/pr-bead-link-gate.ts",
       "./extensions/bd-init-advisory.ts",
       "./extensions/dolt-server-lifecycle.ts",
       "./extensions/session-beads-lifecycle.ts",
