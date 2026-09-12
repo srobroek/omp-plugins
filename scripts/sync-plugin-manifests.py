@@ -41,7 +41,7 @@ PLUGINS: dict[str, tuple[str, str]] = {
     "authoring": ("productivity", "Author and audit agentic assets: skills, rules, agents, and steering."),
     "quality": (
         "development",
-        "Quality gates: code-smell auditing, final verification, lint and docs adjudication, "
+        "Quality gates for final verification, lint and docs adjudication, "
         "and browser-verification discipline.",
     ),
     "ops": ("devops", "Operational telemetry and toolchain cache policy: metrics reading and log digests."),
