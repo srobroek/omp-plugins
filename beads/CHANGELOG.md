@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.2.2](https://github.com/srobroek/omp-plugins/compare/beads--v1.2.1...beads--v1.2.2) (2026-09-12)
+
+
+### Bug Fixes
+
+* **beads:** prefer primary store in linked worktrees ([#232](https://github.com/srobroek/omp-plugins/issues/232)) ([f4294a8](https://github.com/srobroek/omp-plugins/commit/f4294a89da49c464257fbfa2cfdea1aad7da9de0))
+
 ## [1.2.1](https://github.com/srobroek/omp-plugins/compare/beads--v1.2.0...beads--v1.2.1) (2026-09-12)
 
 
