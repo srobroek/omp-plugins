@@ -425,8 +425,10 @@ export function readBeads(stdout: string): Bead[] {
 			id: record.id,
 			title: typeof record.title === "string" ? record.title : "",
 			status: typeof record.status === "string" ? record.status : "",
-			labels: Array.isArray(record.labels) ? record.labels.filter((label): label is string => typeof label === "string") : [],
-			assignee: typeof record.assignee === "string" ? record.assignee : undefined,
+			labels: Array.isArray(record.labels) && record.labels.every((label) => typeof label === "string")
+				? record.labels as string[]
+				: undefined,
+			assignee: typeof record.assignee === "string" && record.assignee.trim() ? record.assignee : undefined,
 		});
 	}
 	return beads;
@@ -447,7 +449,7 @@ export function heldClaims(
 		? new Set(actor.trim() ? [actor.trim()] : [])
 		: actor;
 	return beads.filter(bead => {
-		if (bead.labels?.includes("state:reported")) return false;
+		if (bead.assignee === undefined && bead.labels?.includes("state:reported")) return false;
 		if (!["open", "in_progress", "blocked", "deferred"].includes(bead.status)) return false;
 		if (bead.assignee !== undefined && actors?.has(bead.assignee)) return true;
 		return bead.status === "in_progress" && seen.has(bead.id);

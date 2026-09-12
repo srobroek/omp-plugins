@@ -69,6 +69,8 @@ const BEAD_LIST = JSON.stringify({
 		{ id: "bd-probe-e8z", title: "second thing", status: "open" },
 		{ id: "bd-probe-2m7", title: "target work", status: "in_progress", assignee: "omp/Main/s1" },
 		{ id: "bd-probe-r9p", title: "reported handoff", status: "in_progress", labels: ["state:reported"] },
+		{ id: "bd-probe-v4k", title: "inconsistent reported owner", status: "in_progress", assignee: "omp/Main/s1", labels: ["state:reported"] },
+		{ id: "bd-probe-k2j", title: "malformed reported labels", status: "in_progress", labels: ["state:reported", 42] },
 	],
 	schema_version: 1,
 });
@@ -405,6 +407,13 @@ describe("heldClaims", () => {
 		expect(heldClaims(beads, new Set(["bd-probe-r9p"]), undefined)).toEqual([]);
 	});
 
+	test("reported state fails closed while assigned or malformed", () => {
+		expect(heldClaims(beads, new Set(["bd-probe-v4k", "bd-probe-k2j"]), undefined).map(b => b.id)).toEqual([
+			"bd-probe-v4k",
+			"bd-probe-k2j",
+		]);
+	});
+
 	test("an untouched backlog bead is not this session's problem", () => {
 		expect(heldClaims(beads, new Set(), undefined)).toEqual([]);
 	});
@@ -414,7 +423,7 @@ describe("heldClaims", () => {
 	});
 
 	test("this actor's own claim counts even when the id was never seen", () => {
-		expect(heldClaims(beads, new Set(), "omp/Main/s1").map(b => b.id)).toEqual(["bd-probe-2m7"]);
+		expect(heldClaims(beads, new Set(), "omp/Main/s1").map(b => b.id)).toEqual(["bd-probe-2m7", "bd-probe-v4k"]);
 		expect(heldClaims(beads, new Set(), "omp/Other/s2")).toEqual([]);
 		expect(heldClaims(beads, new Set(), "")).toEqual([]);
 	});
