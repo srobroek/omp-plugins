@@ -36,12 +36,16 @@ MUST Refuse `--claim`, `assign`, `close` and `reopen` on a bead leased to
   coordination, not takeover.
 MUST Prove a lease dead before taking it, never infer it from age: read
   `lease_host` and `lease_pid` metadata, and on that host confirm the process is
-  gone (`kill -0 <pid>` fails). A different host is unprovable -- ask.
+  gone (`kill -0 <pid>` fails). A different host, or missing anchors, is
+  unprovable -- ask, do not take.
 MUST Record the takeover in a comment naming the dead lease before claiming.
+MUST Re-stamp your own anchors when you resume a claim from an earlier session
+  (`bd update <id> --set-metadata lease_host=... --set-metadata lease_pid=...`);
+  the stored pid names the process that has since exited, and a peer reading it
+  would prove your live work dead.
+DEFAULT The `bd-lease-gate` extension writes the anchors after a successful
+  claim, so an ordinary `--claim` needs nothing extra.
 DEFAULT Release with `bd update <id> --assignee '' --status open`.
-MUST Stamp the lease yourself after `bd ready --claim` (`bd update <id>
-  --set-metadata lease_host=... --set-metadata lease_pid=...`); `bd ready`
-  rejects `--set-metadata`, so only `bd update --claim` is stamped for you.
 
 FIELD TAXONOMY
 | purpose | mechanism | writer |

@@ -84,11 +84,16 @@ export function bodyOfGhCreate(segment: string): string | null {
 			i++;
 			continue;
 		}
-		for (const prefix of ["--body=", "-b=", "-b"]) {
-			if (token.value.startsWith(prefix) && token.value.length > prefix.length) {
-				body = token.value.slice(prefix.length);
-				break;
-			}
+		if (token.value.startsWith("--body=")) {
+			body = token.value.slice("--body=".length);
+			continue;
+		}
+		// Short flags cluster, and `gh` accepts a value attached to the last one:
+		// `-db'no bead'` is a draft whose body is `no bead`, not a bodyless call.
+		const cluster = /^-([A-Za-z]*)b(=?)(.*)$/.exec(token.value);
+		if (cluster && !token.value.startsWith("--")) {
+			const attached = cluster[3] ?? "";
+			body = attached.length > 0 || cluster[2] === "=" ? attached : (tokens[++i]?.value ?? "");
 		}
 	}
 	return body;
@@ -140,9 +145,11 @@ export default function prBeadLinkGate(pi: ExtensionAPI): void {
 				if (!path.startsWith("xd://github")) return;
 				const content = typeof input.content === "string" ? input.content : "";
 				if (!content) return;
-				const args = JSON.parse(content) as { op?: string; body?: string };
+				const args = JSON.parse(content) as { op?: string; body?: string; fill?: boolean };
 				if (args.op !== "pr_create") return;
-				// The device has no --fill: a missing body IS a bead-less body.
+				// `fill: true` builds the body from commits, so it is not visible here;
+				// anything else without a body is a bead-less body, not an unknown one.
+				if (args.fill === true) return;
 				const body = typeof args.body === "string" ? args.body : "";
 				return decidePrCreate(body, beadsActive(cwd)) ?? undefined;
 			}

@@ -90,3 +90,18 @@ describe("decideCommand", () => {
 		expect(decideCommand("gh run watch 42", true)).toBeNull();
 	});
 });
+
+describe("short flag clusters", () => {
+	test("reads a body attached to a clustered -b", () => {
+		expect(bodyOfGhCreate("gh pr create -dbNoBead")).toBe("NoBead");
+		expect(bodyOfGhCreate("gh pr create -db 'Bead: omp-1'")).toBe("Bead: omp-1");
+	});
+
+	test("blocks a clustered bead-less body", () => {
+		expect(decideCommand("gh pr create -dbjust prose", true)).not.toBeNull();
+	});
+
+	test("leaves clusters without b alone", () => {
+		expect(bodyOfGhCreate("gh pr create -d --fill")).toBeNull();
+	});
+});

@@ -90,20 +90,6 @@ export function tokenize(segment: string): Token[] {
 	return out;
 }
 
-/** True when every quote in the segment is closed; an odd one means a broken command. */
-export function quotesBalanced(segment: string): boolean {
-	let quote: string | null = null;
-	for (let i = 0; i < segment.length; i++) {
-		const char = segment[i];
-		if (quote) {
-			if (char === quote && segment[i - 1] !== "\\") quote = null;
-			continue;
-		}
-		if (char === "'" || char === '"') quote = char;
-	}
-	return quote === null;
-}
-
 /**
  * Launchers that run the REAL command after their own arguments, so `bd` behind
  * one is still `bd` at command position. `echo` is deliberately absent: text

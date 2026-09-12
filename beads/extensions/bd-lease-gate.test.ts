@@ -1,99 +1,49 @@
 import { describe, expect, test } from "bun:test";
 
-import { stampLease } from "./bd-lease-gate.ts";
+import { anchorArgs, claimedIds } from "./bd-lease-gate.ts";
 
-const ANCHORS = "--set-metadata lease_host=boxy --set-metadata lease_pid=7";
+/** Shapes bd 1.1.2 prints for a claim, envelope and plain. */
+const ENVELOPE = '{"data":[{"id":"omp-plugins-dd1","status":"in_progress","assignee":"omp/Main/01a08b2b"}]}';
 
-describe("stampLease", () => {
-	test("stamps host and pid onto a claim", () => {
-		expect(stampLease("bd update omp-1 --claim", "boxy", 7)).toBe(
-			`bd update omp-1 --claim ${ANCHORS}`,
-		);
+describe("claimedIds", () => {
+	test("reads the id out of a claim's own JSON", () => {
+		expect(claimedIds(ENVELOPE)).toEqual(["omp-plugins-dd1"]);
 	});
 
-	test("stamps every claim in a chain", () => {
-		expect(stampLease("bd update a --claim && bd update b --claim", "boxy", 7)).toBe(
-			`bd update a --claim ${ANCHORS} && bd update b --claim ${ANCHORS}`,
-		);
+	test("reads a plain claimed line", () => {
+		expect(claimedIds("Claimed chezmoi-5vn (in_progress)")).toEqual(["chezmoi-5vn"]);
 	});
 
-	test("stamps a claim that is not the first command, and reads env prefixes", () => {
-		expect(stampLease("cd repo; bd update omp-2 --claim", "boxy", 7)).toBe(
-			`cd repo; bd update omp-2 --claim ${ANCHORS}`,
-		);
-		expect(stampLease("BEADS_ACTOR=x bd update omp-3 --claim", "boxy", 7)).toBe(
-			`BEADS_ACTOR=x bd update omp-3 --claim ${ANCHORS}`,
-		);
+	test("collects every bead a batch claim reports, without duplicates", () => {
+		const out = '{"id":"omp-1"}\n{"id":"omp-2"}\n{"id":"omp-1"}';
+		expect(claimedIds(out).sort()).toEqual(["omp-1", "omp-2"]);
 	});
 
-	test("preserves what follows the claim", () => {
-		expect(stampLease("bd update omp-1 --claim | tee log", "boxy", 7)).toBe(
-			`bd update omp-1 --claim ${ANCHORS} | tee log`,
-		);
+	test("ignores text that carries no bead id", () => {
+		expect(claimedIds("error: unknown flag: --set-metadata")).toEqual([]);
+		expect(claimedIds("")).toEqual([]);
 	});
 
-	test("leaves bd ready alone: it rejects --set-metadata", () => {
-		expect(stampLease("bd ready --claim --json", "boxy", 7)).toBeNull();
-	});
-
-	test("ignores a bd that is not at command position", () => {
-		expect(stampLease("echo bd update x --claim", "boxy", 7)).toBeNull();
-	});
-
-	test("ignores a quoted --claim, which is text and not a flag", () => {
-		expect(stampLease("bd comment omp-1 'do not --claim this'", "boxy", 7)).toBeNull();
-		expect(stampLease("bd update omp-1 --notes '--claim'", "boxy", 7)).toBeNull();
-	});
-
-	test("does not corrupt a quoted separator", () => {
-		expect(stampLease("bd update omp-1 --claim --notes 'a; b'", "boxy", 7)).toBe(
-			`bd update omp-1 --claim --notes 'a; b' ${ANCHORS}`,
-		);
-	});
-
-	test("leaves non-claiming bd commands alone", () => {
-		expect(stampLease("bd show omp-1 --json", "boxy", 7)).toBeNull();
-		expect(stampLease("bd update omp-1 --status open", "boxy", 7)).toBeNull();
-	});
-
-	test("does not stamp twice", () => {
-		const once = stampLease("bd update omp-1 --claim", "boxy", 7) as string;
-		expect(stampLease(once, "boxy", 7)).toBeNull();
-	});
-
-	test("stamps the unstamped claim in a chain whose sibling is already stamped", () => {
-		expect(stampLease(`bd update a --claim ${ANCHORS} && bd update b --claim`, "boxy", 7)).toBe(
-			`bd update a --claim ${ANCHORS} && bd update b --claim ${ANCHORS}`,
-		);
-	});
-
-	test("refuses a command large enough to be a payload", () => {
-		expect(stampLease(`bd update x --claim ${"y".repeat(64_001)}`, "boxy", 7)).toBeNull();
+	test("ignores values that are not bead-shaped", () => {
+		expect(claimedIds('{"id":"not a bead"}')).toEqual([]);
+		expect(claimedIds('{"id":"12345"}')).toEqual([]);
 	});
 });
 
-describe("stampLease behind wrappers and paths", () => {
-	test("stamps bd behind a launcher", () => {
-		expect(stampLease("mise exec -- bd update a --claim", "boxy", 7)).toBe(
-			`mise exec -- bd update a --claim ${ANCHORS}`,
-		);
-		expect(stampLease("time bd update a --claim", "boxy", 7)).toBe(
-			`time bd update a --claim ${ANCHORS}`,
-		);
+describe("anchorArgs", () => {
+	test("builds an argv, so nothing is quoted or parsed as shell", () => {
+		expect(anchorArgs("omp-1", "boxy", 7)).toEqual([
+			"bd",
+			"update",
+			"omp-1",
+			"--set-metadata",
+			"lease_host=boxy",
+			"--set-metadata",
+			"lease_pid=7",
+		]);
 	});
 
-	test("stamps bd invoked by path", () => {
-		expect(stampLease("/usr/bin/bd update a --claim", "boxy", 7)).toBe(
-			`/usr/bin/bd update a --claim ${ANCHORS}`,
-		);
-	});
-
-	test("refuses a command whose quotes never close", () => {
-		expect(stampLease("bd update a --claim --notes 'unterminated", "boxy", 7)).toBeNull();
-	});
-
-	test("still ignores a mentioned command", () => {
-		expect(stampLease("echo mise exec -- bd update a --claim", "boxy", 7)).toBeNull();
-		expect(stampLease('"bd" update a --claim', "boxy", 7)).toBeNull();
+	test("carries a host with punctuation without escaping", () => {
+		expect(anchorArgs("omp-1", "box-1", 7)[4]).toBe("lease_host=box-1");
 	});
 });
