@@ -85,6 +85,9 @@ without scanning GitHub history.
   commenting on, or reporting a PR as done, read its beads and name the holder.
   Before acting on a bead that carries `pr`, read that PR. A passing glance at a
   diff needs neither.
+- MUST pass that bead context into a review agent's prompt. `pr-reviewer` has no
+  shell by design, since it reads untrusted PR and bead text; whoever spawns it
+  owes it the accepted scope, the holder, and the relevant comments.
 - Exempt from naming a bead: PRs authored by a bot or app (release automation,
   dependency bumps), repositories with no `.beads/`, and repositories whose own
   rules replace the PR flow ([chezmoi delivery]rule://chezmoi-direct-main-delivery
