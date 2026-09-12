@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.1.2](https://github.com/srobroek/omp-plugins/compare/quality--v1.1.1...quality--v1.1.2) (2026-09-12)
+
+
+### Refactors
+
+* **quality:** remove embedded Sniff implementation ([#223](https://github.com/srobroek/omp-plugins/issues/223)) ([e94d500](https://github.com/srobroek/omp-plugins/commit/e94d500d866393f3c7017b300d2ef86fa3d3a5af))
+
 ## [1.1.1](https://github.com/srobroek/omp-plugins/compare/quality--v1.1.0...quality--v1.1.1) (2026-09-11)
 
 
