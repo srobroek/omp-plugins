@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.2.1](https://github.com/srobroek/omp-plugins/compare/beads--v1.2.0...beads--v1.2.1) (2026-09-12)
+
+
+### Bug Fixes
+
+* ignore reported handoffs in session claim guard ([#230](https://github.com/srobroek/omp-plugins/issues/230)) ([8669abe](https://github.com/srobroek/omp-plugins/commit/8669abe16e6af0966a272ac47eb0a6dac58b73ff))
+
 ## [1.2.0](https://github.com/srobroek/omp-plugins/compare/beads--v1.1.0...beads--v1.2.0) (2026-09-12)
 
 Released by hand: the two merges below landed with prose squash subjects, so
