@@ -1,6 +1,6 @@
 import { hostname } from "node:os";
 import type { ExtensionAPI, ToolCallEvent } from "@oh-my-pi/pi-coding-agent";
-
+import { commandSegments, invocation } from "./shell-command.ts";
 
 /**
  * A claim is a lease, and a lease has a holder you can check.
@@ -11,16 +11,18 @@ import type { ExtensionAPI, ToolCallEvent } from "@oh-my-pi/pi-coding-agent";
  * implementation touches no bead for an hour, while a crashed session looks busy
  * for a day.
  *
- * So `--claim` gets stamped with the holder's host and pid, taken from this
- * process rather than the shell's `$$` (which is the bash child, dead the moment
- * the command returns). A later session reads those anchors and proves the
- * holder gone with `kill -0`. Nothing here blocks: stamping is all this gate
- * does, and the refusal it enables lives in rule://beads-core, because deciding
- * a lease is dead needs the bead's metadata that only the agent has read.
+ * So `bd update --claim` gets stamped with the holder's host and pid, taken from
+ * this process rather than the shell's `$$` (which is the bash child, dead the
+ * moment the command returns). A later session reads those anchors and proves
+ * the holder gone with `kill -0`.
+ *
+ * Only `bd update` is stamped: `bd ready --claim` rejects `--set-metadata`
+ * ("unknown flag"), so stamping it would break a supported claiming path.
+ * rule://beads-core requires the follow-up `bd update` there. Nothing here
+ * blocks; the refusal this enables needs bead metadata only the agent has read.
  */
 
 const MAX_COMMAND_LENGTH = 64_000;
-const CLAIM = /(^|[\s;&|(])bd\s+(?:update|ready)\s+[^;&|]*--claim\b/;
 const ALREADY_STAMPED = /--set-metadata[= ]\s*lease_(?:host|pid)=/;
 
 export function stampLease(
@@ -29,18 +31,20 @@ export function stampLease(
 	pid: number,
 ): string | null {
 	if (command.length > MAX_COMMAND_LENGTH) return null;
-	if (ALREADY_STAMPED.test(command)) return null;
-	// Append to the claiming invocation, not the end of a chain: `bd update x
-	// --claim && bd comment ...` must not stamp the comment.
-	const match = CLAIM.exec(command);
-	if (!match) return null;
 	const anchors = ` --set-metadata lease_host=${host} --set-metadata lease_pid=${pid}`;
-	const start = match.index + (match[1]?.length ?? 0);
-	const rest = command.slice(start);
-	const end = rest.search(/[;&|]|$/);
-	const invocation = rest.slice(0, end).trimEnd();
-	const trailing = rest.slice(invocation.length);
-	return command.slice(0, start) + invocation + anchors + trailing;
+	// Every claiming invocation in the chain, not just the first: `bd update a
+	// --claim && bd update b --claim` must leave both beads with lease anchors.
+	let stamped = false;
+	const out = commandSegments(command).map((segment) => {
+		const tokens = invocation(segment, ["bd", "update"]);
+		if (!tokens) return segment;
+		if (!tokens.some((token) => !token.quoted && token.value === "--claim")) return segment;
+		if (ALREADY_STAMPED.test(segment)) return segment;
+		stamped = true;
+		const body = segment.trimEnd();
+		return body + anchors + segment.slice(body.length);
+	});
+	return stamped ? out.join("") : null;
 }
 
 export default function bdLeaseGate(pi: ExtensionAPI): void {

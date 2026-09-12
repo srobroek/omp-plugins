@@ -27,18 +27,21 @@ MUST Claim before working: `bd update <id> --claim` (atomic CAS; first wins,
   idempotent). Never claim via labels -- not atomic.
 MUST Discover work with `bd ready --unassigned --json`. Unclaimed and open is
   self-serve; a live lease is not.
-MUST Work only beads you own. You own a bead when its assignee carries YOUR
-  session id, so a resumed or recovered session keeps its own claims.
+MUST Work only beads you own, or beads handed to you: the parent passes the id,
+  a handover names it, or the user's instruction names it. Anything else is
+  another agent's work. You own a bead when its assignee carries YOUR session
+  id, so a resumed or recovered session keeps its own claims.
 MUST Refuse `--claim`, `assign`, `close` and `reopen` on a bead leased to
   another session while that lease is LIVE. Comments stay open -- commenting is
   coordination, not takeover.
-DEFAULT Others' beads are yours to work when the parent hands you the id, or a
-  handover document or the user's instruction names it.
 MUST Prove a lease dead before taking it, never infer it from age: read
   `lease_host` and `lease_pid` metadata, and on that host confirm the process is
   gone (`kill -0 <pid>` fails). A different host is unprovable -- ask.
 MUST Record the takeover in a comment naming the dead lease before claiming.
 DEFAULT Release with `bd update <id> --assignee '' --status open`.
+MUST Stamp the lease yourself after `bd ready --claim` (`bd update <id>
+  --set-metadata lease_host=... --set-metadata lease_pid=...`); `bd ready`
+  rejects `--set-metadata`, so only `bd update --claim` is stamped for you.
 
 FIELD TAXONOMY
 | purpose | mechanism | writer |

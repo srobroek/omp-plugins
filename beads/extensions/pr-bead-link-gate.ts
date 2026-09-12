@@ -1,6 +1,7 @@
 import { existsSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import type { ExtensionAPI, ToolCallEvent } from "@oh-my-pi/pi-coding-agent";
+import { commandSegments, invocation } from "./shell-command.ts";
 
 /**
  * A PR that names no bead is a PR nobody can trace back to a decision.
@@ -20,7 +21,32 @@ import type { ExtensionAPI, ToolCallEvent } from "@oh-my-pi/pi-coding-agent";
 const MAX_COMMAND_LENGTH = 64_000;
 const BEAD_REF = /(?:^|\s)(?:Bead|Closes-Bead|Bead-Id):\s*[A-Za-z][A-Za-z0-9_-]*-[A-Za-z0-9]+/i;
 const NO_BEAD = /(?:^|\s)No-Bead:\s*\S/i;
-const PR_CREATE = /(^|[\s;&|(])gh\s+pr\s+create\b/;
+
+/** Flags whose following token is a value, so a `--body` inside one is not the body. */
+const VALUE_FLAGS: Record<string, true> = {
+	"--title": true,
+	"-t": true,
+	"--base": true,
+	"-B": true,
+	"--head": true,
+	"-H": true,
+	"--repo": true,
+	"-R": true,
+	"--reviewer": true,
+	"-r": true,
+	"--assignee": true,
+	"-a": true,
+	"--label": true,
+	"-l": true,
+	"--project": true,
+	"-p": true,
+	"--milestone": true,
+	"-m": true,
+	"--body-file": true,
+	"-F": true,
+	"--template": true,
+	"-T": true,
+};
 
 export const REASON =
 	"This PR names no bead. Where beads is active, a PR and its beads point at each other: the body names what it implements, and each bead carries `pr` metadata, so a later session finds the decision without scanning GitHub history. Add a `Bead: <id>` line (several are fine) and stamp `bd update <id> --set-metadata pr=<n>` after creation. A PR that genuinely needs no bead carries `No-Bead: <reason>` instead.";
@@ -35,25 +61,60 @@ export function beadsActive(dir: string): boolean {
 	}
 }
 
+/**
+ * The `--body` value of one `gh pr create` segment: null when the segment
+ * creates no PR, and null when it creates one whose body is not visible here
+ * (`--fill`, `--body-file`, an editor session).
+ */
+export function bodyOfGhCreate(segment: string): string | null {
+	const tokens = invocation(segment, ["gh", "pr", "create"]);
+	if (!tokens) return null;
+	let body: string | null = null;
+	for (let i = 3; i < tokens.length; i++) {
+		const token = tokens[i];
+		if (!token) continue;
+		if (!token.quoted && token.value === "--") break;
+		if (token.quoted) continue;
+		if (VALUE_FLAGS[token.value]) {
+			i++;
+			continue;
+		}
+		if (token.value === "--body" || token.value === "-b") {
+			body = tokens[i + 1]?.value ?? "";
+			i++;
+			continue;
+		}
+		for (const prefix of ["--body=", "-b=", "-b"]) {
+			if (token.value.startsWith(prefix) && token.value.length > prefix.length) {
+				body = token.value.slice(prefix.length);
+				break;
+			}
+		}
+	}
+	return body;
+}
+
 export function decidePrCreate(
 	body: string | null,
 	active: boolean,
 ): { block: true; reason: string } | null {
 	if (!active) return null;
-	// No body at all is `gh pr create --fill` or an editor session: the body is
-	// not visible here, so blocking would refuse a call whose content is unknown.
 	if (body === null) return null;
 	if (BEAD_REF.test(body) || NO_BEAD.test(body)) return null;
 	return { block: true, reason: REASON };
 }
 
-/** The `--body`/`-b` value of a `gh pr create`, or null when it carries none. */
-export function bodyOfGhCreate(command: string): string | null {
-	if (!PR_CREATE.test(command)) return null;
-	const flag = /(?:--body|(?<![\w-])-b)(?:[= ]|\s+)('([^']*)'|"([^"]*)"|(\S+))/;
-	const match = flag.exec(command);
-	if (!match) return null;
-	return match[2] ?? match[3] ?? match[4] ?? "";
+/** Blocks when any `gh pr create` in the command carries a bead-less body. */
+export function decideCommand(
+	command: string,
+	active: boolean,
+): { block: true; reason: string } | null {
+	if (command.length > MAX_COMMAND_LENGTH) return null;
+	for (const segment of commandSegments(command)) {
+		const decision = decidePrCreate(bodyOfGhCreate(segment), active);
+		if (decision) return decision;
+	}
+	return null;
 }
 
 export default function prBeadLinkGate(pi: ExtensionAPI): void {
@@ -63,16 +124,16 @@ export default function prBeadLinkGate(pi: ExtensionAPI): void {
 				command?: unknown;
 				content?: unknown;
 				path?: unknown;
+				cwd?: unknown;
 			};
+			// The bash tool's own cwd, not this process's: a gate that reads
+			// process.cwd() both blocks in the wrong repository and misses in the
+			// right one.
+			const cwd = typeof input.cwd === "string" && input.cwd ? input.cwd : process.cwd();
 			if (event.toolName === "bash") {
-				const command = typeof input.command === "string" ? input.command : "";
-				if (!command || command.length > MAX_COMMAND_LENGTH) return;
-				if (!PR_CREATE.test(command)) return;
-				const decision = decidePrCreate(
-					bodyOfGhCreate(command),
-					beadsActive(process.cwd()),
-				);
-				return decision ?? undefined;
+				const command = typeof input.command === "string" ? input.command : null;
+				if (!command?.includes("gh")) return;
+				return decideCommand(command, beadsActive(cwd)) ?? undefined;
 			}
 			if (event.toolName === "write") {
 				const path = typeof input.path === "string" ? input.path : "";
@@ -81,11 +142,9 @@ export default function prBeadLinkGate(pi: ExtensionAPI): void {
 				if (!content) return;
 				const args = JSON.parse(content) as { op?: string; body?: string };
 				if (args.op !== "pr_create") return;
-				const decision = decidePrCreate(
-					typeof args.body === "string" ? args.body : null,
-					beadsActive(process.cwd()),
-				);
-				return decision ?? undefined;
+				// The device has no --fill: a missing body IS a bead-less body.
+				const body = typeof args.body === "string" ? args.body : "";
+				return decidePrCreate(body, beadsActive(cwd)) ?? undefined;
 			}
 		} catch {
 			return;
