@@ -116,6 +116,7 @@ describe("autoPinBeadsDir", () => {
 		mkdirSync(join(root, ".beads"));
 		const wt = `${root}-wt`;
 		execFileSync("git", ["-C", root, "worktree", "add", "-q", wt, "-b", "wt"]);
+		mkdirSync(join(wt, ".beads")); // copied ignored state must not fork the embedded database
 		expect(sessionPinFor(wt)).toBe(realpathSync(join(root, ".beads")));
 		const bare = mkdtempSync(join(tmpdir(), "beads-wtpin-none-"));
 		expect(sessionPinFor(bare)).toBeUndefined();
