@@ -43,8 +43,6 @@ paths = [
   "project/skills/journey-init/templates/journey.template.md",
   "project/skills/journey-init/templates/run.template.md",
   "project/skills/journey-write/SKILL.md",
-  "quality/skills/sniff/references/languages/_template.md",
-  "quality/skills/sniff/references/report-template.md",
   "speckit/rules/speckit-workflow.md",
   "whats-new/skills/whats-new/references/recipes.md",
 ]

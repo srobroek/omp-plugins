@@ -1,12 +1,11 @@
 {
   "name": "@srobroek/quality",
   "version": "1.1.1",
-  "description": "Quality gates: code-smell auditing, final verification, lint and docs adjudication, and browser-verification discipline.",
+  "description": "Quality gates for final verification, lint and docs adjudication, and browser-verification discipline.",
   "private": true,
   "omp": {
     "extensions": [
-      "./extensions/verify-repo-tool.ts",
-      "./extensions/sniff-install-tool.ts"
+      "./extensions/verify-repo-tool.ts"
     ]
   }
 }
