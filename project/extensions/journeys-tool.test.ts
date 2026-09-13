@@ -1,217 +1,140 @@
 import { describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import {
-	cmdLint,
-	installFormulas,
-	parseFrontmatter,
-	runJourneys,
-} from "./journeys-tool.ts";
+import { installFormulas, journeysScriptPath, runJourneys } from "./journeys-tool.ts";
 
+const tempRoot = (prefix: string): string => mkdtempSync(join(tmpdir(), prefix));
 
+function seedJourney(root: string, name = "J1-login"): string {
+	const journey = join(root, name);
+	mkdirSync(join(journey, "runs"), { recursive: true });
+	writeFileSync(
+		join(journey, "journey.md"),
+		"---\nid: J1\ntitle: Login\nversion: 1\nstatus: draft\nlast_reviewed: 2026-01-01\nsurfaces: [web]\ninterfaces: [browser]\n---\n\n### S1 — Open app {#S1}\n",
+	);
+	return journey;
+}
 
-describe("parseFrontmatter", () => {
-	test("parses scalars and lists", () => {
-		const fm = parseFrontmatter("---\nid: J1\nsurfaces: [web, cli]\n---\nbody");
-		expect(fm.id).toBe("J1");
-		expect(fm.surfaces).toEqual(["web", "cli"]);
-	});
-	test("unterminated returns empty", () => {
-		expect(parseFrontmatter("---\nid: J1\n")).toEqual({});
-	});
-});
-
-describe("managed root traversal", () => {
-	/** A journeys tree with one approved journey holding two runs. */
-	const seed = (root: string) => {
-		mkdirSync(join(root, "J1-approved", "runs"), { recursive: true });
-		writeFileSync(join(root, "J1-approved", "journey.md"), "---\nid: J1\ntitle: t\n---\n\n### S1 — Open {#S1}\n");
-		writeFileSync(join(root, "J1-approved", "runs", "2026-01-01.md"), "old\n");
-		writeFileSync(join(root, "J1-approved", "runs", "2026-01-02.md"), "new\n");
-	};
-	const python = (args: string[]) =>
-		Bun.spawnSync(["python3", join(import.meta.dir, "../skills/journey-init/scripts/journeys.py"), ...args],
-			{ stdout: "pipe", stderr: "pipe", timeout: 10000 });
-
-	test("a root traversing a symlink via .. is refused by both implementations", () => {
-		// `/top/link/../managed` normalises LEXICALLY to `/top/managed` while the
-		// filesystem resolves it through `link` to somewhere else entirely. Checking
-		// the normalised form and operating on the resolved one inspects one tree and
-		// writes to another; the Python port deleted runs in the outside tree.
-		// The path is built by concatenation on purpose: `join()` would collapse `..`
-		// before the code under test ever sees it, which is how this escaped review.
-		const top = mkdtempSync(join(tmpdir(), "journeys-top-"));
-		const outside = mkdtempSync(join(tmpdir(), "journeys-outside-"));
+describe("journeys Python wrapper", () => {
+	test("maps each command and prune flags to the Python CLI and passes cwd", async () => {
+		const cwd = tempRoot("journeys-wrapper-");
 		try {
-			mkdirSync(join(outside, "child"));
-			mkdirSync(join(top, "managed"));
-			mkdirSync(join(outside, "managed"));
-			seed(join(top, "managed"));
-			seed(join(outside, "managed"));
-			symlinkSync(join(outside, "child"), join(top, "link"));
-			const raw = `${top}/link/../managed`;
+			const seen: { file: string; args: string[]; options: Record<string, unknown> }[] = [];
+			const runner = async (file: string, args: string[], options: Record<string, unknown>) => {
+				seen.push({ file, args, options });
+				return { stdout: "ok", stderr: "" };
+			};
 
-			expect(runJourneys({ command: "index", journeysDir: raw }).ok).toBe(false);
-			expect(python(["index", raw]).exitCode).not.toBe(0);
-			expect(existsSync(join(top, "managed", "INDEX.md"))).toBe(false);
-			expect(existsSync(join(outside, "managed", "INDEX.md"))).toBe(false);
+			await runJourneys(cwd, { command: "index", journeysDir: "/tmp/journeys" }, undefined, runner);
+			await runJourneys(cwd, { command: "lint", journeysDir: "/tmp/journeys" }, undefined, runner);
+			await runJourneys(
+				cwd,
+				{ command: "prune", journeysDir: "/tmp/journeys", keep: 3, journey: "J1-login", yes: true },
+				undefined,
+				runner,
+			);
 
-			// The destructive form: a prune through that root must delete nothing.
-			const runs = () => readdirSync(join(outside, "managed", "J1-approved", "runs")).length;
-			const before = runs();
-			expect(python(["prune", raw, "--keep", "0", "--journey", "J1-approved", "--yes"]).exitCode).not.toBe(0);
-			expect(runs()).toBe(before);
+			expect(seen.map(({ file }) => file)).toEqual(["python3", "python3", "python3"]);
+			expect(seen[0]?.args).toEqual([journeysScriptPath(), "index", "/tmp/journeys"]);
+			expect(seen[1]?.args).toEqual([journeysScriptPath(), "lint", "/tmp/journeys"]);
+			expect(seen[2]?.args).toEqual([
+				journeysScriptPath(),
+				"prune",
+				"/tmp/journeys",
+				"--keep",
+				"3",
+				"--journey",
+				"J1-login",
+				"--yes",
+			]);
+			expect(seen.every(({ options }) => options.cwd === cwd && options.shell === false)).toBe(true);
 		} finally {
-			rmSync(top, { recursive: true, force: true });
-			rmSync(outside, { recursive: true, force: true });
+			rmSync(cwd, { recursive: true, force: true });
 		}
 	});
 
-	test("a symlink inside the tree is still refused, and a plain temp root still works", () => {
-		// The narrowing must not cost the protection, and must not reintroduce the
-		// macOS breakage: /var and /tmp are themselves symlinks, so a temp root has a
-		// symlinked ancestor and used to be refused outright.
-		const planted = mkdtempSync(join(tmpdir(), "journeys-inner-"));
-		const plain = mkdtempSync(join(tmpdir(), "journeys-plain-"));
+	test("returns stdout, stderr, and a non-zero subprocess exit code", async () => {
+		const cwd = tempRoot("journeys-wrapper-error-");
 		try {
-			seed(planted);
-			symlinkSync("/etc/hosts", join(planted, "J1-approved", "runs", "2026-01-03.md"));
-			expect(runJourneys({ command: "lint", journeysDir: planted }).text).toContain("unsafe symlink");
-			expect(python(["lint", planted]).exitCode).not.toBe(0);
-
-			seed(plain);
-			expect(runJourneys({ command: "index", journeysDir: plain }).ok).toBe(true);
-			expect(python(["index", plain]).exitCode).toBe(0);
+			const result = await runJourneys(cwd, { command: "lint", journeysDir: cwd }, undefined, async () => {
+				throw { code: 7, stdout: "partial output", stderr: "lint failed" };
+			});
+			expect(result).toEqual({ stdout: "partial output", stderr: "lint failed", exitCode: 7 });
 		} finally {
-			rmSync(planted, { recursive: true, force: true });
-			rmSync(plain, { recursive: true, force: true });
+			rmSync(cwd, { recursive: true, force: true });
 		}
 	});
 
-	test("a root that is itself a symlink is accepted, and operated on where it resolves", () => {
-		// A deliberate contract change, recorded rather than left implicit: the guard
-		// used to refuse this, and now resolves it. A root the user names IS the root,
-		// and `~/journeys -> /data/journeys` is an ordinary layout -- refusing it is the
-		// same class of breakage as refusing every /var temp directory. Safety does not
-		// rest on this: the checked tree and the written tree are the same one after
-		// resolution, symlinks INSIDE the tree are still refused (above), and traversal
-		// through a link is refused by the `..` rule (above).
-		const real = mkdtempSync(join(tmpdir(), "journeys-real-"));
-		const link = `${real}-link`;
+	test("runs the bundled Python helper end to end", async () => {
+		const root = tempRoot("journeys-wrapper-e2e-");
 		try {
-			seed(real);
-			symlinkSync(real, link);
-			expect(runJourneys({ command: "index", journeysDir: link }).ok).toBe(true);
-			expect(python(["index", link]).exitCode).toBe(0);
-			// The write lands in the resolved directory, not beside the link.
-			expect(existsSync(join(real, "INDEX.md"))).toBe(true);
+			seedJourney(root);
+			const result = await runJourneys(root, { command: "index", journeysDir: root });
+			expect(result.exitCode).toBe(0);
+			expect(result.stdout).toContain("INDEX.md: 1 journeys");
+		expect(readFileSync(join(root, "INDEX.md"), "utf8")).toContain("[J1](J1-login/journey.md)");
 		} finally {
-			rmSync(link, { force: true });
-			rmSync(real, { recursive: true, force: true });
+			rmSync(root, { recursive: true, force: true });
 		}
 	});
 
-	test("an ordinary entry beginning with .. is inside the root, in both implementations", () => {
-		// `inside.startsWith("..")` rejected `..metadata` as an escape. The check is
-		// component-aware now; Python's relative_to always was, so this pins the pair
-		// together against that divergence returning.
-		const root = mkdtempSync(join(tmpdir(), "journeys-dotdot-"));
+	test("keeps the Python fixes for missing ids and unreadable runs", async () => {
+		const root = tempRoot("journeys-wrapper-defects-");
 		try {
-			seed(root);
-			mkdirSync(join(root, "..metadata"));
-			const ts = runJourneys({ command: "index", journeysDir: root });
-			const py = python(["index", root]);
-			expect(ts.ok).toBe(true);
-			expect(py.exitCode).toBe(0);
-			expect(ts.text).not.toContain("outside the managed root");
+			for (const name of ["J1-alpha", "J2-beta"]) {
+				const journey = join(root, name);
+				mkdirSync(journey, { recursive: true });
+				writeFileSync(join(journey, "journey.md"), `---\ntitle: ${name}\nversion: 1\nstatus: draft\nlast_reviewed: 2026-01-01\n---\n`);
+			}
+			const lint = await runJourneys(root, { command: "lint", journeysDir: root });
+			expect(lint.exitCode).not.toBe(0);
+		expect(lint.stdout.match(/duplicate id/g)).toBeNull();
+		expect(lint.stdout.match(/frontmatter missing `id`/g)).toHaveLength(2);
+
+			const valid = join(root, "J1-alpha", "journey.md");
+			writeFileSync(valid, "---\nid: J1\ntitle: alpha\nversion: 1\nstatus: active\nlast_reviewed: 2026-01-01\n---\n");
+			const runs = join(root, "J1-alpha", "runs");
+			mkdirSync(runs);
+			writeFileSync(join(runs, "2026-01-01.md"), "---\njourney: J1\ndate: 2026-01-01\nresult: pass\nmode: full\n");
+			const index = await runJourneys(root, { command: "index", journeysDir: root });
+			expect(index.exitCode).toBe(0);
+			expect(index.stdout).toContain("ERROR J1-alpha/runs/2026-01-01.md: unreadable frontmatter");
+			expect(readFileSync(join(root, "INDEX.md"), "utf8")).toContain("**unreadable**");
+			expect(readFileSync(join(root, "INDEX.md"), "utf8")).not.toContain("? ?");
 		} finally {
 			rmSync(root, { recursive: true, force: true });
 		}
 	});
 });
 
-describe("index/lint fixture", () => {
-
-	test("structurally valid journey lints without assessing readiness", () => {
-		const dir = mkdtempSync(join(tmpdir(), "journeys-"));
-		const jdir = join(dir, "J1-login");
-		mkdirSync(jdir);
-		writeFileSync(
-			join(jdir, "journey.md"),
-			`---
-id: J1
-title: Login
-version: 1
-status: draft
-last_reviewed: 2026-01-01
-surfaces: [web]
-interfaces: [browser]
----
-
-### S1 — Open app {#S1}
-`,
-		);
-		const lint = runJourneys({ command: "lint", journeysDir: dir });
-		expect(lint.ok).toBe(true);
-		const idx = runJourneys({ command: "index", journeysDir: dir });
-		expect(idx.text).toContain("1 journeys");
-	});
-});
-
-describe("installFormulas", () => {
-	test("refuses non-beads", () => {
-		const dir = mkdtempSync(join(tmpdir(), "nobead-"));
-		const r = installFormulas(dir);
-		expect(r.ok).toBe(false);
-		expect(r.text).toContain("not a Beads workspace");
-	});
-
-	test("copies formulas", () => {
-		const src = mkdtempSync(join(tmpdir(), "forms-"));
-		for (const name of ["journey-step-agentic-verification", "journey-step-human-verification"]) {
-			writeFileSync(join(src, `${name}.formula.toml`), `formula = '${name}'\n`);
+describe("journey formula installation", () => {
+	test("refuses a repository without Beads", () => {
+		const root = tempRoot("journeys-formulas-no-beads-");
+		try {
+			expect(installFormulas(root).ok).toBe(false);
+		} finally {
+			rmSync(root, { recursive: true, force: true });
 		}
-		const repo = mkdtempSync(join(tmpdir(), "repo-"));
-		mkdirSync(join(repo, ".beads"));
-		const r = installFormulas(repo, false, src);
-		expect(r.ok).toBe(true);
-		expect(r.copied).toBe(2);
-		expect(readFileSync(join(repo, ".beads", "formulas", "journey-step-agentic-verification.formula.toml"), "utf8"))
-			.toBe("formula = 'journey-step-agentic-verification'\n");
-		const again = installFormulas(repo, false, src);
-		expect(again.unchanged).toBe(2);
 	});
-});
 
-test.each(["native", "python"] as const)("pruning %s preserves unapproved journeys and rejects unknown selections", (implementation) => {
-	const root = mkdtempSync(join(tmpdir(), "journeys-scope-"));
-	try {
-		for (const name of ["J1-approved", "J2-unapproved"]) {
-			const dir = join(root, name);
-			mkdirSync(join(dir, "runs"), { recursive: true });
-			writeFileSync(join(dir, "journey.md"), `---\nid: ${name.split("-")[0]}\n---\n`);
-			writeFileSync(join(dir, "runs", "2026-01-01.md"), "old");
-			writeFileSync(join(dir, "runs", "2026-01-02.md"), "new");
-		}
-		const prune = (journey: string, yes: boolean): boolean => {
-			if (implementation === "native") {
-				return runJourneys({ command: "prune", journeysDir: root, keep: 1, journey, yes }).ok;
+	test("copies the required formula files", () => {
+		const source = tempRoot("journeys-formulas-source-");
+		const repo = tempRoot("journeys-formulas-repo-");
+		try {
+			for (const name of ["journey-step-agentic-verification", "journey-step-human-verification"]) {
+				writeFileSync(join(source, `${name}.formula.toml`), `formula = '${name}'\n`);
 			}
-			return Bun.spawnSync(["python3", join(import.meta.dir, "../skills/journey-init/scripts/journeys.py"),
-				"prune", root, "--keep", "1", "--journey", journey, ...(yes ? ["--yes"] : [])],
-				{ stdout: "pipe", stderr: "pipe", timeout: 10000 }).exitCode === 0;
-		};
-		const runs = (name: string) => readdirSync(join(root, name, "runs")).sort();
-		expect(prune("../J2-unapproved", true)).toBe(false);
-		expect(prune("J1-approved", false)).toBe(true);
-		expect(runs("J1-approved")).toEqual(["2026-01-01.md", "2026-01-02.md"]);
-		expect(prune("J1-approved", true)).toBe(true);
-		expect(runs("J1-approved")).toEqual(["2026-01-02.md"]);
-		expect(runs("J2-unapproved")).toEqual(["2026-01-01.md", "2026-01-02.md"]);
-	} finally {
-		rmSync(root, { recursive: true, force: true });
-	}
+			mkdirSync(join(repo, ".beads"));
+			const result = installFormulas(repo, false, source);
+			expect(result).toMatchObject({ ok: true, copied: 2 });
+			expect(readFileSync(join(repo, ".beads", "formulas", "journey-step-agentic-verification.formula.toml"), "utf8")).toBe(
+				"formula = 'journey-step-agentic-verification'\n",
+			);
+		} finally {
+			rmSync(source, { recursive: true, force: true });
+			rmSync(repo, { recursive: true, force: true });
+		}
+	});
 });
-

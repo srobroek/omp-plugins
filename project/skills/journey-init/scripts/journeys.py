@@ -27,12 +27,19 @@ STATUSES = {"draft", "active", "deprecated"}
 REQUIRED_KEYS = ("id", "title", "version", "status", "last_reviewed")
 
 
-def parse_frontmatter(text: str) -> dict:
-    """Parse the minimal YAML subset the format uses (scalars, inline
-    lists/dicts, no nesting). Returns {} when no frontmatter block."""
+def frontmatter_is_unterminated(text: str) -> bool:
     lines = text.splitlines()
     if not lines or lines[0].strip() != "---":
-        return {}
+        return False
+    return all(line.strip() != "---" for line in lines[1:])
+
+
+def parse_frontmatter(text: str) -> dict | None:
+    """Parse the minimal YAML subset the format uses (scalars, inline
+    lists/dicts, no nesting). Returns None when absent or unterminated."""
+    lines = text.splitlines()
+    if not lines or lines[0].strip() != "---":
+        return None
     fm: dict = {}
     for line in lines[1:]:
         if line.strip() == "---":
@@ -53,7 +60,8 @@ def parse_frontmatter(text: str) -> dict:
             fm[key] = entries
         else:
             fm[key] = raw
-    return {}  # unterminated frontmatter
+    return None
+
 
 
 def managed_root(directory: Path) -> Path | None:
@@ -132,9 +140,16 @@ def latest_run(jdir: Path) -> dict | None:
     runs = sorted((jdir / "runs").glob("*.md")) if (jdir / "runs").is_dir() else []
     if not runs:
         return None
-    fm = parse_frontmatter(runs[-1].read_text(encoding="utf-8"))
-    fm["_file"] = runs[-1].name
+    last = runs[-1]
+    text = last.read_text(encoding="utf-8")
+    fm = parse_frontmatter(text)
+    if fm is None:
+        if frontmatter_is_unterminated(text):
+            return {"_file": last.name, "_malformed": True}
+        return None
+    fm["_file"] = last.name
     return fm
+
 
 
 def open_findings(root: Path) -> dict:
@@ -155,10 +170,19 @@ def cmd_index(root: Path) -> int:
     safe_journey_paths(root)
     rows = []
     findings = open_findings(root)
+    unreadable: list[str] = []
     for jdir in journey_dirs(root):
-        fm = parse_frontmatter((jdir / "journey.md").read_text(encoding="utf-8"))
+        journey_text = (jdir / "journey.md").read_text(encoding="utf-8")
+        parsed = parse_frontmatter(journey_text)
+        fm = parsed or {}
+        if parsed is None and frontmatter_is_unterminated(journey_text):
+            unreadable.append(f"{jdir.name}/journey.md")
+            fm = {"title": "**unreadable frontmatter**"}
         run = latest_run(jdir)
-        if run:
+        if run and run.get("_malformed"):
+            unreadable.append(f"{jdir.name}/runs/{run['_file']}")
+            last = "**unreadable**"
+        elif run:
             mode = str(run.get("mode", "full")).split("(")[0]
             last = f"{run.get('date', '?')} {run.get('result', '?')} ({mode})"
         else:
@@ -187,8 +211,12 @@ def cmd_index(root: Path) -> int:
         ]
     )
     (root / "INDEX.md").write_text(body, encoding="utf-8")
+    notes = "\n".join(f"ERROR {rel}: unreadable frontmatter" for rel in unreadable)
     print(f"INDEX.md: {len(rows)} journeys")
+    if notes:
+        print(notes)
     return 0
+
 
 
 def lint_journey(jdir: Path, errors: list[str], seen_ids: dict) -> None:
@@ -205,9 +233,10 @@ def lint_journey(jdir: Path, errors: list[str], seen_ids: dict) -> None:
     jid = fm.get("id", "")
     if jid and not JOURNEY_ID.match(jid):
         errors.append(f"{rel}: id `{jid}` does not match J<n>")
-    if jid in seen_ids:
+    if jid and jid in seen_ids:
         errors.append(f"{rel}: duplicate id `{jid}` (also {seen_ids[jid]})")
-    seen_ids[jid] = rel
+    if jid:
+        seen_ids[jid] = rel
     if jid and not jdir.name.startswith(f"{jid}-"):
         errors.append(f"{rel}: directory `{jdir.name}` does not start with `{jid}-`")
     if fm.get("status") and fm["status"] not in STATUSES:

@@ -26,8 +26,9 @@ The plugin's extension modules register:
 - `journey_install_formulas`: preflights both bundled formulas and rejects symlink
   paths and divergent destinations. `force=true` permits overwriting only
   divergent formula files selected for this installation.
-- `journeys_index`: index, structural lint, and prune. Lint does not assess
-  semantic readiness or prove that a journey passes against the product.
+- `journeys_index`: delegates index, structural lint, and prune to the bundled
+  `journeys.py` helper. Lint does not assess semantic readiness or prove that a
+  journey passes against the product.
   Prune requires a nonnegative safe integer `keep`; deletion requires `yes=true`.
   Select one journey directory with `journey` (CLI: `--journey`). Omitting
   the selector prunes every journey and requires directory-wide approval.
