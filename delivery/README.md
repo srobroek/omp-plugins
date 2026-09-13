@@ -1,7 +1,6 @@
 # delivery
 
-This plugin provides Git workflows for OMP, with guards for commits and reminders about work that needs pushing.
-Its rules cover delivery, automated-review fix loops, landing proof, and links to the beads merge queue.
+This plugin provides Git workflows for OMP. Its rule covers PR delivery, automated-review fix loops, landing proof, worktree cleanup, and links to the beads merge queue.
 
 ## Agents
 
@@ -13,9 +12,7 @@ Its rules cover delivery, automated-review fix loops, landing proof, and links t
 
 | Name | When |
 | --- | --- |
-| `delivery-cadence` | Keeping commits atomic. Pushing finished work continuously. |
-| `delivery-git-workflow` | Working with branches and PRs. Running automated-review fix and escalation loops. Working in a Worktrunk worktree and removing it after landing (GW-5/GW-6). Proving a landing under GW-3. Linking beads to the merge queue. Following GW-1/GW-2. |
-| `delivery-draft-pr-advisory` | `gh pr create` without `--draft` (TTSR). |
+| `delivery-git-workflow` | Creating or reviewing PRs, owning automated-review loops, proving a landing under GW-3, cleaning worktrees under GW-6, applying GW-7 release-subject titles, and linking beads to the merge queue. |
 
 ## Extensions
 
@@ -25,8 +22,7 @@ Blocks a `git`/`dgit` commit whose target repository has `main` or `master` chec
 
 When git cannot name a branch, the gate allows the call. With `--dry-run` as a standalone commit option, the gate also allows the call. That exception excludes option values and paths after `--`.
 
-For a user-authorized exception, set `DELIVERY_ALLOW_MAIN_COMMIT=1` in the process environment or as an assignment prefix on the commit invocation.
-Message or echo text does not enable the override. The override records the exception. Host approval is still required.
+For a user-authorized exception, set `DELIVERY_ALLOW_MAIN_COMMIT=1` in the process environment or as an assignment prefix on the commit invocation. Message or echo text does not enable the override. The override records the exception. Host approval is still required.
 
 Directory checks are preflight observations, not atomic guarantees. Dynamic shell state remains outside this advisory-strength gate.
 
@@ -38,13 +34,12 @@ When git cannot answer, the gate allows the call. The refusal names the `wt swit
 
 For a user-authorized exception, set `DELIVERY_ALLOW_PRIMARY_CHECKOUT=1` in the process environment or in the bash call's `env`. Text in a command or a file body does not enable it.
 
-The gate is advisory-strength. It reads the two tool surfaces agents edit through and the commit boundary. A shell command that writes files (`sed -i`, a redirection, a script) is not parsed, because a shell parser in a gate produces silent permits. GW-5 is the rule; the gate catches the common path.
+The gate is advisory-strength. It reads the two tool surfaces agents edit through and the commit boundary. A shell command that writes files (`sed -i`, a redirection, a script) is not parsed, because a shell parser in a gate produces silent permits.
 
 ### `unpushed-work-advisory`
 
 At session stop, reports dirty paths this extension instance observed touched and unpushed commits since its repository baseline.
 
-Path-level counts include pre-existing or concurrent edits in the same file.
-Before staging, inspect staged and unstaged hunks for ownership. A touched path is not permission to stage or commit the whole file.
+Path-level counts include pre-existing or concurrent edits in the same file. Before staging, inspect staged and unstaged hunks for ownership. A touched path is not permission to stage or publish the whole file.
 
-A SHA range likewise does not establish authorship. The reminder grants no authority to commit or publish.
+A SHA range likewise does not establish authorship. The reminder grants no authority to stage or publish.

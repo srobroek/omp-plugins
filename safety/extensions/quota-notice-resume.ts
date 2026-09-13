@@ -6,9 +6,7 @@ import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
  * The bedrock-mantle gateway surfaces `You have N weighted tokens left` (or
  * `You have N tokens left`) inside the model's response while a request bucket
  * drains. When that line is the whole final message, the run has stopped on
- * noise. The `srobroek-quota-notice-continue` TTSR rule covers most cases, but
- * TTSR repeat gating (`ttsr.repeatMode: after-gap`) can skip a second notice that
- * arrives within the gap. This hook re-prompts on every terminal notice, bounded
+ * noise. The extension itself re-prompts on every terminal notice, bounded
  * per session so a drained bucket cannot loop forever.
  */
 

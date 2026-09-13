@@ -14,10 +14,8 @@ Does not tell the agent to prefer `rg`/`fd`/`eza`/`bat` in bash: OMP routes thos
 | `toolchain-languages` | Per-language library picks. |
 | `toolchain-quality-observability` | Logs, traces, scanners. |
 | `toolchain-tools-scripts` | `scripts/` and `tools/`. |
-| `toolchain-pragmatic` | Produced-artifact register. |
 | `toolchain-asset-ownership` | OMP vs chezmoi vs marketplace. |
 | `coexistence-worktree` | Concurrent agents/humans, interference. |
-| `coexistence-branch-advisory` | Branch switched underneath you (TTSR). |
 | `shell-language` | Shell portability, quoting, command safety. |
 
 ## Extensions

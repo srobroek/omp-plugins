@@ -8,9 +8,9 @@ This plugin adds guards and advisories to OMP. It checks bash calls for risky pa
 - `srobroek-bash-indirection-guard`
 - `srobroek-git-force-push-advisory`
 - `srobroek-package-investigate`
-- `srobroek-quota-notice-continue`
 - `srobroek-remote-exec-guard`
 - `srobroek-sudo-destructive-advisory`
+- `srobroek-worktree-tmp-guard`
 
 The blocking guards, `srobroek-bash-indirection-guard` and `srobroek-remote-exec-guard`, share a test corpus. `bun test rules/` scores each case against the `condition` in the rule's frontmatter. It checks both encodings carried by a live buffer: JSON arguments to the bash tool and the bare command.
 
@@ -32,20 +32,14 @@ A later bash argument that quotes tool output can trigger a guard. The original 
 ## Extensions
 
 - `close-keywords`: rewrite `gh pr create|edit --body` so close-keywords apply to every issue in a list.
-- `quota-notice-resume`: when a turn ends on the bare provider line `You have N (weighted) tokens left`, send one follow-up so the task continues (at most 5 per session). Backs the `srobroek-quota-notice-continue` rule, which TTSR repeat gating can skip.
+- `quota-notice-resume`: when a turn ends on a bare provider quota line, send one follow-up so the task continues (at most 5 per session). The extension owns quota continuation.
 - `quality-edit-advisory`: after enough edits, suggests checks for the language you changed.
 
-The body rewrite accepts only literal shell words. It replaces the source span of the selected PR body.
-Single quotes and apostrophes remain data, as do literal dollar signs and backticks.
-If a command contains expansions or unsupported shell syntax, the extension leaves it unchanged.
-For these commands, explicitly apply close-keywords to each issue in the list, or supply a literal body. This rewrite is not a shell security boundary.
+The body rewrite accepts only literal shell words. It replaces the source span of the selected PR body. Single quotes and apostrophes remain data, as do literal dollar signs and backticks. If a command contains expansions or unsupported shell syntax, the extension leaves it unchanged. For these commands, explicitly apply close-keywords to each issue in the list, or supply a literal body. This rewrite is not a shell security boundary.
 
-The quality advisory keeps counters for each repository within the session. It counts only successful edits and discards failed calls.
-When you restart or switch sessions, it resets the accumulated files and lines. It also resets the cooldown for advice.
-It does not share counters through temporary files.
+The quality advisory keeps counters for each repository within the session. It counts only successful edits and discards failed calls. When you restart or switch sessions, it resets the accumulated files and lines. It also resets the cooldown for advice. It does not share counters through temporary files.
 
-Before you install a package, the `srobroek-package-investigate` TTSR rule prompts you to vet it.
-After the result arrives, that rule gives no advice.
+Before you install a package, the `srobroek-package-investigate` TTSR rule prompts you to vet it. After the result arrives, that rule gives no advice.
 
 ## Hook limitations
 
