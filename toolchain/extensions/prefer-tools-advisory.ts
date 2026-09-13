@@ -22,9 +22,8 @@ type Marker = { file: string; contains?: string };
 type ToolSwap = {
 	id: string;
 	legacyName: string;
-	legacy: RegExp;
-	/** The legacy shape, spelled by the modern tool itself (`uv pip install`). */
-	exempt?: RegExp;
+	/** Returns whether a command-position token sequence invokes the legacy tool. */
+	matches: (words: readonly string[]) => boolean;
 	markers: readonly Marker[];
 	/** Files proving the legacy tool is still load-bearing here. */
 	blockedBy?: readonly string[];
@@ -41,7 +40,9 @@ const SWAPS: readonly ToolSwap[] = [
 	{
 		id: "npm-to-bun",
 		legacyName: "npm/yarn",
-		legacy: /(?:^|[\s;&|(])(?:npm|yarn)\s+(?:install|add|i)(?:\s|$)/,
+		matches: (words) =>
+			(words[0] === "npm" || words[0] === "yarn") &&
+			(words[1] === "install" || words[1] === "add" || words[1] === "i"),
 		markers: [{ file: "bun.lock" }, { file: "bun.lockb" }, { file: "bunfig.toml" }],
 		modern: "bun",
 		hint: "bun install / bun add <package>",
@@ -49,8 +50,12 @@ const SWAPS: readonly ToolSwap[] = [
 	{
 		id: "pip-to-uv",
 		legacyName: "pip",
-		legacy: /(?:^|[\s;&|(])(?:python3?\s+-m\s+)?pip3?\s+install\b/,
-		exempt: /\buv\s+pip\b/,
+		matches: (words) =>
+			(words[0] === "pip" || words[0] === "pip3") && words[1] === "install" ||
+			(words[0] === "python" || words[0] === "python3") &&
+			words[1] === "-m" &&
+			(words[2] === "pip" || words[2] === "pip3") &&
+			words[3] === "install",
 		markers: UV_MARKERS,
 		modern: "uv",
 		hint: "uv add <package> / uv sync",
@@ -58,7 +63,7 @@ const SWAPS: readonly ToolSwap[] = [
 	{
 		id: "poetry-to-uv",
 		legacyName: "poetry",
-		legacy: /(?:^|[\s;&|(])poetry\s+[a-z]/,
+		matches: (words) => words[0] === "poetry" && /^[a-z]/.test(words[1] ?? ""),
 		markers: UV_MARKERS,
 		modern: "uv",
 		hint: "uv add / uv sync / uv run",
@@ -66,7 +71,8 @@ const SWAPS: readonly ToolSwap[] = [
 	{
 		id: "version-manager-to-mise",
 		legacyName: "nvm/pyenv",
-		legacy: /(?:^|[\s;&|(])(?:nvm|pyenv)\s+[a-z]/,
+		matches: (words) =>
+			(words[0] === "nvm" || words[0] === "pyenv") && /^[a-z]/.test(words[1] ?? ""),
 		markers: [{ file: "mise.toml" }, { file: ".mise.toml" }],
 		modern: "mise",
 		hint: "mise use <tool>@<version> / mise install",
@@ -74,13 +80,14 @@ const SWAPS: readonly ToolSwap[] = [
 	{
 		id: "make-to-just",
 		legacyName: "make",
-		legacy: /(?:^|[\s;&|(])make(?:\s|$)/,
+		matches: (words) => words[0] === "make" || words[0] === "gmake",
 		markers: [{ file: "justfile" }, { file: "Justfile" }, { file: ".justfile" }],
 		blockedBy: ["Makefile", "makefile", "GNUmakefile"],
 		modern: "just",
 		hint: "just <recipe> (just --list)",
 	},
 ];
+
 
 export type SwapHit = {
 	id: string;
@@ -104,20 +111,125 @@ function configuredMarker(swap: ToolSwap, cwd: string): string | undefined {
 	return undefined;
 }
 
+type ShellToken = { text: string; separator: boolean };
+
+/** Copied locally from delivery's main-branch-gate tokenizer; plugin boundaries stay isolated. */
+function tokenize(command: string): ShellToken[] {
+	const tokens: ShellToken[] = [];
+	let word = "";
+	let quote: "'" | '"' | null = null;
+	const flush = () => {
+		if (word) tokens.push({ text: word, separator: false });
+		word = "";
+	};
+	const separator = (text: string) => {
+		flush();
+		tokens.push({ text, separator: true });
+	};
+	for (let i = 0; i < command.length; i++) {
+		const ch = command[i]!;
+		if (quote === "'") {
+			if (ch === "'") quote = null;
+			else word += ch;
+			continue;
+		}
+		if (quote === '"') {
+			if (ch === '"') quote = null;
+			else if (ch === "\\" && i + 1 < command.length) word += command[++i]!;
+			else if (ch === "$" && command[i + 1] === "(") separator("$(");
+			else if (ch === "`") separator("`");
+			else word += ch;
+			continue;
+		}
+		if (ch === "'" || ch === '"') {
+			quote = ch;
+			continue;
+		}
+		if (ch === "\\" && i + 1 < command.length) {
+			word += command[++i]!;
+			continue;
+		}
+		if (/\s/.test(ch)) {
+			if (ch === "\n" || ch === "\r") separator("\n");
+			else flush();
+			continue;
+		}
+		if (ch === ";") {
+			separator(";");
+			continue;
+		}
+		if (ch === "|") {
+			separator(command[i + 1] === "|" ? "||" : "|");
+			if (command[i + 1] === "|") i++;
+			continue;
+		}
+		if (ch === "&" && command[i + 1] === "&") {
+			separator("&&");
+			i++;
+			continue;
+		}
+		if (ch === "$" && command[i + 1] === "(") {
+			separator("$(");
+			i++;
+			continue;
+		}
+		if (ch === "`" || ch === ")") {
+			separator(ch);
+			continue;
+		}
+		word += ch;
+	}
+	flush();
+	return tokens;
+}
+
+const ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*=/;
+const WRAPPERS: Record<string, true> = { env: true, sudo: true, nice: true, time: true };
+const VALUE_OPTIONS: Record<string, true> = {
+	"-u": true,
+	"-C": true,
+	"-n": true,
+	"--user": true,
+	"--group": true,
+	"--chdir": true,
+	"--adjustment": true,
+};
+
+function commandWords(segment: readonly string[]): readonly string[] {
+	let i = 0;
+	while (i < segment.length) {
+		const word = segment[i]!;
+		if (ASSIGNMENT.test(word)) {
+			i++;
+			continue;
+		}
+		if (!WRAPPERS[word]) break;
+		i++;
+		while (i < segment.length && segment[i]!.startsWith("-")) {
+			const option = segment[i++]!;
+			if (VALUE_OPTIONS[option]) i++;
+		}
+	}
+	return segment.slice(i);
+}
+
+function commandSegments(command: string): readonly (readonly string[])[] {
+	const segments: string[][] = [[]];
+	for (const token of tokenize(command)) {
+		if (token.separator) segments.push([]);
+		else segments[segments.length - 1]!.push(token.text);
+	}
+	return segments.map(commandWords);
+}
+
 export function decideSwaps(command: string, cwd: string): SwapHit[] {
+	const segments = commandSegments(command);
 	const out: SwapHit[] = [];
 	for (const swap of SWAPS) {
-		if (!swap.legacy.test(command)) continue;
-		if (swap.exempt?.test(command)) continue;
+		if (!segments.some((words) => swap.matches(words))) continue;
 		const marker = configuredMarker(swap, cwd);
 		if (!marker) continue;
-		out.push({
-			id: swap.id,
-			legacyName: swap.legacyName,
-			modern: swap.modern,
-			hint: swap.hint,
-			marker,
-		});
+		out.push({ id: swap.id, legacyName: swap.legacyName, modern: swap.modern, hint: swap.hint, marker });
 	}
 	return out;
 }
