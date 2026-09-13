@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.2.4](https://github.com/srobroek/omp-plugins/compare/beads--v1.2.3...beads--v1.2.4) (2026-09-13)
+
+
+### Bug Fixes
+
+* **beads:** surface lease stamp failures ([#242](https://github.com/srobroek/omp-plugins/issues/242)) ([c08e073](https://github.com/srobroek/omp-plugins/commit/c08e07392136bfa17e6e158e0061ce0fee589e37))
+
 ## [1.2.3](https://github.com/srobroek/omp-plugins/compare/beads--v1.2.2...beads--v1.2.3) (2026-09-13)
 
 

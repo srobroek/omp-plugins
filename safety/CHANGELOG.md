@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.3](https://github.com/srobroek/omp-plugins/compare/safety--v0.6.2...safety--v0.6.3) (2026-09-13)
+
+
+### Bug Fixes
+
+* **safety:** anchor package investigation rule ([#238](https://github.com/srobroek/omp-plugins/issues/238)) ([82dc7bb](https://github.com/srobroek/omp-plugins/commit/82dc7bbdb88425c4b435e4457504a62f0fd4ef9d))
+
 ## [0.6.2](https://github.com/srobroek/omp-plugins/compare/safety--v0.6.1...safety--v0.6.2) (2026-09-11)
 
 
