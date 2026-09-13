@@ -106,7 +106,12 @@ function buffers(c: Case): string[] {
 }
 
 function firedBy(buffer: string): Guard[] {
-	return GUARDS.filter(g => (CONDITIONS[g] as RegExp[]).some(re => re.test(buffer)));
+	return GUARDS.filter(g =>
+		(CONDITIONS[g] as RegExp[]).some(re => {
+			re.lastIndex = 0;
+			return re.test(buffer);
+		}),
+	);
 }
 
 const BT = "`";
@@ -146,6 +151,13 @@ const MUST_FIRE: Case[] = [
 		intent: "Overwriting the remote branch from a script",
 		fire: ["forcePush"],
 		why: "a verb starting a line was the commonest shape the unanchored rule missed",
+	},
+	{
+		id: "force push after an and-separator",
+		command: "echo ok && git push --force origin main",
+		intent: "Overwriting the remote branch after a successful prefix",
+		fire: ["forcePush"],
+		why: "the advisory must catch a real force push chained after another command",
 	},
 	{
 		id: "unquoted variable target",
