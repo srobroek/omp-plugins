@@ -167,7 +167,7 @@ export function decideCommit(
 	env: NodeJS.ProcessEnv = process.env,
 ): { block: true; reason: string } | undefined {
 	if (env[ALLOW_ENV] === "1") return undefined;
-	for (const invocation of findCommitInvocations(command)) {
+    for (const invocation of findCommitInvocations(command, false)) {
 		if (invocation.dryRun || invocation.retargeted) continue;
 		const target = invocation.repoDir === null ? cwd : resolve(cwd, invocation.repoDir);
 		const checkout = checkoutOf(target);

@@ -102,6 +102,25 @@ describe("decideCommit", () => {
 		expect(decideCommit("git status && echo commit", primary, {})).toBeUndefined();
 		expect(decideCommit("git commit -m 'fix'", primary, { DELIVERY_ALLOW_PRIMARY_CHECKOUT: "1" })).toBeUndefined();
 	});
+
+	test("does not block the read-only git inspection reproducer", () => {
+		const { primary } = setup();
+		const inspection = `for r in omp-orchestrate sniff agentic-scaffold slopvac; do
+		d=/Users/sjors/personal/dev/$r; git -C "$d" fetch -q 2>/dev/null; b=$(git -C "$d" rev-parse --abbrev-ref HEAD); u=$(git -C "$d" rev-parse --abbrev-ref '@{upstream}' 2>/dev/null || echo origin/main); behind=$(git -C "$d" rev-list --count HEAD.."$u" 2>/dev/null); ahead=$(git -C "$d" rev-list --count "$u"..HEAD 2>/dev/null); rules=$(git -C "$d" diff --name-only HEAD "$u" -- 'rules/*' 'AGENTS.md' 'CLAUDE.md' '*/AGENTS.md' 2>/dev/null | wc -l | tr -d ' '); printf '%-18s %-40s behind=%s ahead=%s rules/steering files differing=%s\\n' "$r" "$b -> $u" "$behind" "$ahead" "$rules"; done`;
+		expect(decideCommit(inspection, primary, {})).toBeUndefined();
+        expect(decideCommit('git -C "$d" commit -m x', primary, {})).toBeUndefined();
+	});
+
+	test("does not block quoted git prose", () => {
+        const { primary } = setup();
+        expect(decideCommit("printf '<text containing the words git commit>' >> file && bd create --body-file file", primary, {})).toBeUndefined();
+	});
+
+	test("blocks actual commits in the primary checkout", () => {
+		const { primary } = setup();
+		expect(decideCommit("git commit -m x", primary, {})?.block).toBe(true);
+		expect(decideCommit(`cd ${primary} && git commit -m x`, primary, {})?.block).toBe(true);
+    });
 });
 
 describe("editedPaths", () => {
