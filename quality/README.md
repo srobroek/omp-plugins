@@ -20,12 +20,6 @@ Use the built-in `reviewer` for mechanical diff review. Specify the base ref and
 changed-file scope. Ask for read-only commands and anchored deterministic
 findings, with no heavy test suites or architecture changes.
 
-## Rules
-
-| Name | When |
-|------|------|
-| `quality-browser-verification` | Browser-visible UI changes |
-
 ## Tools
 
 The plugin's extension module registers `verify_repo`.

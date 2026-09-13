@@ -7,16 +7,16 @@ description: When setting Cargo workspace lints, workspace.dependencies, feature
 
 ## Rules
 
-- Lints: `[workspace.lints]`; members inherit via `[lints] workspace = true`.
-  Clippy `all` + `pedantic` at `warn`; CI: `-D warnings`. Per-crate overrides marked `// LINT(crate): reason`.
-- Containment: `clippy.toml` `disallowed-methods` must list `std::fs::canonicalize` and `std::path::Path::canonicalize`. Both follow symlinks and junctions, so a lexically-under-root path can resolve outside the root and pass a containment check. Normalize lexically and `lstat` instead. Human path print / dedup stays a clippy allow with a reason.
-- Dependencies: all semver ranges in `[workspace.dependencies]`; members use `{ workspace = true }`.
-  Don't pin patch-level without a known breakage (link it). Bump once per workspace.
-- Dev dependencies: in the crate that uses them. `tests-common` lib only when multiple crates share
-  elaborate fixtures. Automation deps in CI/toolchain files, not `[dev-dependencies]`.
-- Test layers: unit + integration on default profile (unlimited parallelism); E2E serial under
-  `[profile.e2e]`. Use `cargo test -p <crate>` when the workspace suite is red elsewhere.
-- Shared DTOs: dedicated crate (e.g. `contracts-core`); don't spread feature flags across DTO boundaries.
+- Workspace lints belong in `[workspace.lints]`; members inherit them via
+  `[lints] workspace = true`.
+- Keep semver ranges in `[workspace.dependencies]`; members use
+  `{ workspace = true }`. Do not pin patch-level without a known breakage;
+  document the reason. Bump once per workspace.
+- Keep dev dependencies in the crate that uses them. Add a shared `tests-common`
+  library only when multiple crates share elaborate fixtures. Keep automation
+  dependencies in CI/toolchain files, not `[dev-dependencies]`.
+- Keep unit, integration, and end-to-end tests in the crate or workspace layer
+  that owns them. Use targeted package tests while unrelated packages are red.
 
 ## Feature-gated dev surface
 

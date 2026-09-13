@@ -7,5 +7,7 @@ description: When writing or reviewing Terraform, OpenTofu, HCL, stacks, environ
 
 Keep environments and stacks explicit.
 
-Prefer vendor modules, then maintained community modules, then custom thin
-wrappers. Document rationale when bypassing official or community modules.
+Evaluate vendor modules, maintained community modules, and thin custom wrappers
+for maintenance, quality, support, compatibility, and security. Prefer a
+maintained module that fits the project; document the rationale when bypassing
+an official or community module.

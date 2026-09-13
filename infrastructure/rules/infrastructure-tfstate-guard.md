@@ -1,7 +1,7 @@
 ---
 name: infrastructure-tfstate-guard
 description: Never hand-edit Terraform or OpenTofu state; require state subcommands with a backup.
-condition: ["(?i)(?:terraform|tofu)\\s+state\\s+(rm|mv|push)"]
+condition: ["(?i)(?:^|[;&|(]\\s*|\\bthen\\s+|\\bdo\\s+)(?:terraform|tofu)\\s+state\\s+(?:rm|mv|push)\\b", "(?i)(?:^|[;&|(]\\s*|\\bthen\\s+|\\bdo\\s+)(?:rm|git\\s+rm)\\s+(?:-{1,2}[^\\n;&|]+\\s+)*terraform\\.tfstate\\S*"]
 scope: "tool:bash, tool:edit(**/*.tfstate*), tool:write(**/*.tfstate*)"
 interruptMode: never
 ---

@@ -1,8 +1,3 @@
----
-name: rust-tauri-mcp-bridge
-description: When building, testing, or driving a running Tauri v2 app through a Tauri MCP bridge — dev-only safety gating, the withGlobalTauri overlay, host/port override, and WSL-to-Windows connectivity.
----
-
 # Tauri MCP bridge
 
 Use a Tauri MCP server to build, test, debug, and drive a running Tauri v2 desktop or

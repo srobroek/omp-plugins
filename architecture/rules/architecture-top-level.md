@@ -17,3 +17,6 @@ Prefer these top-level directories when the project shape needs them:
 - `tools/` for maintained CLIs, generators, MCP implementations, and reusable developer tooling.
 - `scripts/` for thin automation.
 - `docs/`, `specs/`, `tests/`, `assets/`, and `archive/` for cross-cutting project material.
+
+Keep non-shared deployment configuration with the owning deployable rather than
+in root `infrastructure/`.

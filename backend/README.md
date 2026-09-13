@@ -6,6 +6,4 @@ Steering for backend runtime layout: services, functions, workers, API contracts
 
 | Name | When |
 | --- | --- |
-| `backend-runtime` | Services, functions, workers, deployable-owned assets |
-| `backend-api-contracts` | APIs, schemas, event and owner-local contracts |
 | `backend-background-jobs` | Queues, scheduled jobs, retries, dead-letter handling |

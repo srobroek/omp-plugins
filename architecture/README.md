@@ -1,14 +1,11 @@
 # architecture
 
-Cross-cutting design principles, capability-first layout, ownership, and search routing.
+Cross-cutting design principles, capability-first layout, ownership, and durable project knowledge.
 
 ## Rules
 
 | Name | When |
 | --- | --- |
-| `architecture-compose-dont-fork` | Extending a core, adding a variant |
 | `architecture-top-level` | Choosing repository top-level directories |
-| `architecture-ownership` | libs roles, contracts, schemas, product agents; data assets (folded from `data-ownership`) |
+| `architecture-ownership` | libs roles, contracts, schemas, product agents, UI primitives, and data assets |
 | `architecture-docs-files` | Durable project knowledge under `docs/` |
-| `architecture-component-promotion` | App-local vs shared UI in `libs/ui` |
-| `architecture-structural-search` | Symbol/AST navigation after Serena |
