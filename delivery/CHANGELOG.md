@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.10.2](https://github.com/srobroek/omp-plugins/compare/delivery--v0.10.1...delivery--v0.10.2) (2026-09-13)
+
+
+### Bug Fixes
+
+* **delivery:** allow runtime isolation roots ([#248](https://github.com/srobroek/omp-plugins/issues/248)) ([d18e900](https://github.com/srobroek/omp-plugins/commit/d18e900e3241d6470f7ac5458d24ef63a63f0174))
+
 ## [0.10.1](https://github.com/srobroek/omp-plugins/compare/delivery--v0.10.0...delivery--v0.10.1) (2026-09-13)
 
 
