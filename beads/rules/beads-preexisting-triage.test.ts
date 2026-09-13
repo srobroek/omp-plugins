@@ -12,8 +12,10 @@ import * as path from "node:path";
  *
  * On 2026-09-13 the scope alternative fired on exactly that ownership report.
  * The two alternatives that carried no problem noun (scope, unrelated-to) now
- * require one within reach and skip text that already says fixed/filed, the same
- * guard the upstream/noise alternatives already had (omp-plugins-j5f).
+ * require one within reach, skip text that already says fixed/filed (the guard the
+ * upstream/noise alternatives already had), and ignore the phrase when it is
+ * quoted -- a cited phrase is discussion of the rule, not a disclaimer. The quoted
+ * case is the one verbatim live fire on record (omp-plugins-j5f).
  */
 const RULE = path.join(import.meta.dir, "beads-preexisting-triage.md");
 
@@ -41,6 +43,7 @@ const FIRE = [
 	"Out of scope here: the flaky test on main.",
 	"The crash is orthogonal to this task.",
 	"pre-existing tests fail; unrelated to this change",
+	"I consider the flaky test out of scope.",
 ];
 
 const HOLD = [
@@ -55,6 +58,10 @@ const HOLD = [
 	"I filed omp-plugins-xyz for the lint failure that is out of scope here.",
 	"Fixed the regression that was unrelated to this change while I was in the file.",
 	"I filed a bead for the pre-existing lint failure and left it unassigned.",
+	// citing the rule's own phrases in quotes is discussion, not a disclaimer (live fire, 2026-09-13)
+	'Trade: a bare "out of scope" with no problem noun nearby no longer fires; the rule is advisory.',
+	'The rule\'s "out of scope" alternative fired on a test failure report.',
+	"The `unrelated to this change` branch of the regex matches error reports too.",
 ];
 describe("beads-preexisting-triage", () => {
 	const res = conditions();
