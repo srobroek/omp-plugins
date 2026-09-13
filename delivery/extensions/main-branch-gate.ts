@@ -574,26 +574,27 @@ export type CommitInvocation = {
  * the list it belongs to, and `pushd` moves the directory with no `cd` token at all. Each
  * produced a SILENT permit, so `-C` and the bash call's `cwd` are the only directories read.
  */
-export function findCommitInvocations(command: string): CommitInvocation[] {
-	const out = scanInvocations(command);
+export function findCommitInvocations(command: string, includeOpaqueSubstitution = true): CommitInvocation[] {
+    const out = scanInvocations(command);
 	// A substitution runs commands the quote-aware scan reads as data, and which substitutions
 	// are inert cannot be decided here: a quoted here-document delimiter makes its body inert
 	// while an unquoted one does not, an apostrophe in a body or a comment is literal text yet
 	// poisons quote tracking, and a backtick nests through backslashes.
 	//
-	// So no attempt is made to read inside one. When the command holds a substitution and
-	// `PREFILTER` matches, one candidate is APPENDED aimed at the call's cwd, and the ordinary
-	// branch decision applies to it. On a feature branch that allows the call; on a protected one
-	// it blocks.
+    // So no attempt is made to read inside one. When includeOpaqueSubstitution is true and the
+    // command matches `PREFILTER`, one candidate is APPENDED aimed at the call's cwd, and the
+    // ordinary branch decision applies to it. On a feature branch that allows the call; on a
+    // protected one it blocks. Callers that only want resolved command-position invocations can
+    // disable this conservative opaque-substitution candidate.
 	//
 	// `PREFILTER` and not a literal `commit`, because quoting splits a verb without changing
 	// argv, so `"$(git com'mit' -m x)"` carries no such word. Read that regex for what it does
 	// and does not imply; every paraphrase of it written here has so far been wrong.
 	//
-	// Appended unconditionally, not only when the scan found nothing. `git commit --dry-run -m
-	// "$(git commit -m x)"` yields one dry-run invocation from the outer command, and the real
-	// nested commit would be skipped along with it. The outer `--dry-run` says nothing about
-	// what the substitution runs, so the candidate is never dry.
+    // Appended unconditionally when enabled, not only when the scan found nothing. `git commit
+    // --dry-run -m "$(git commit -m x)"` yields one dry-run invocation from the outer command,
+    // and the real nested commit would be skipped along with it. The outer `--dry-run` says
+    // nothing about what the substitution runs, so the candidate is never dry.
 	//
 	// KNOWN GAP, accepted. A `-C /elsewhere` inside the substitution is invisible, so from a
 	// feature cwd `echo "$(git -C /protected commit -m x)"` is allowed. Blocking every
@@ -607,10 +608,11 @@ export function findCommitInvocations(command: string): CommitInvocation[] {
 	// deleting an empty `-C` operand so the flag swallowed the verb, and promoting `--dry-run`
 	// out of a message. Appending a candidate cannot weaken anything.
 	//
-	// THE COST, stated exactly, because three earlier comments here got it wrong. This candidate
-	// is appended when the command holds a substitution AND `PREFILTER` (`\bd?git\b`) hits its raw
-	// text. That second half is NOT a command: prose, a comment, or a path satisfies it, so
-	// `echo 'the git tool'; echo "$(date)"` gets a candidate with no git command present.
+    // THE COST, stated exactly, because three earlier comments here got it wrong. This candidate
+    // is appended when includeOpaqueSubstitution is true, the command holds a substitution, and
+    // `PREFILTER` (`\bd?git\b`) hits its raw text. That second half is NOT a command: prose, a
+    // comment, or a path satisfies it, so `echo 'the git tool'; echo "$(date)"` gets a candidate
+    // with no git command present.
 	//
 	// Neither half needs anything to do with the other, so ON A PROTECTED BRANCH any such
 	// command is refused whatever either part is doing: `echo "$(date)"; git status`,
@@ -628,11 +630,12 @@ export function findCommitInvocations(command: string): CommitInvocation[] {
 	// The remedy depends on where the substitution sits, and `denyReason` states both. One
 	// UNRELATED to the git command is fixed by sending it as a separate call. One that is PART
 	// of the git command survives that, and has to be replaced by its value.
-	if (
-		(command.includes("$(") || command.includes("`")) &&
-		PREFILTER.test(command)
-	)
-		out.push({ repoDir: null, dryRun: false });
+    if (
+        includeOpaqueSubstitution &&
+        (command.includes("$(") || command.includes("`")) &&
+        PREFILTER.test(command)
+    )
+        out.push({ repoDir: null, dryRun: false });
 	return out;
 }
 

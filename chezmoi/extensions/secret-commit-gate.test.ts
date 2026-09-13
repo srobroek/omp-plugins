@@ -329,6 +329,11 @@ describe("decideCommit", () => {
 		}
 	});
 
+    test("allows a nested shell with no git token", () => {
+        seedRepo(["dotfiles/dot_config/gh/api_token"]);
+        expect(decideCommit('bd create --description "$(cat f)"', ELSEWHERE)).toBeUndefined();
+    });
+
 	test("a nested shell outside a chezmoi tree is left alone", () => {
 		// The refusal is scoped: with no chezmoi source resolved there is nothing to
 		// protect, so an ordinary repository's subshell commits must pass untouched.
