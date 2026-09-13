@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.1.3](https://github.com/srobroek/omp-plugins/compare/quality--v1.1.2...quality--v1.1.3) (2026-09-13)
+
+
+### Refactors
+
+* **architecture:** apply the languages audit ([#251](https://github.com/srobroek/omp-plugins/issues/251)) ([be355d7](https://github.com/srobroek/omp-plugins/commit/be355d7c19c0d690d5637c4afd31ff143ba5b9ab))
+
 ## [1.1.2](https://github.com/srobroek/omp-plugins/compare/quality--v1.1.1...quality--v1.1.2) (2026-09-12)
 
 

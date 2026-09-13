@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.0.2](https://github.com/srobroek/omp-plugins/compare/authoring--v2.0.1...authoring--v2.0.2) (2026-09-13)
+
+
+### Refactors
+
+* **design:** apply the productivity audit ([#250](https://github.com/srobroek/omp-plugins/issues/250)) ([940eb98](https://github.com/srobroek/omp-plugins/commit/940eb9841ac38fc5399f36602113f778ca90f524))
+
 ## [2.0.1](https://github.com/srobroek/omp-plugins/compare/authoring--v2.0.0...authoring--v2.0.1) (2026-09-11)
 
 

@@ -1,6 +1,6 @@
 {
   "name": "@srobroek/architecture",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "description": "Architecture rules: module boundaries, compose-don't-fork, project structure, component promotion, and structural-search routing.",
   "private": true,
   "omp": {}

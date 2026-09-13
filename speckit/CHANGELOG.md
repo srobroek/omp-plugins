@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.7.2](https://github.com/srobroek/omp-plugins/compare/speckit--v0.7.1...speckit--v0.7.2) (2026-09-13)
+
+
+### Refactors
+
+* **beads:** apply the rules audit ([#252](https://github.com/srobroek/omp-plugins/issues/252)) ([129a5f8](https://github.com/srobroek/omp-plugins/commit/129a5f8e972f89abe35e1985394363f5ede37670))
+* **design:** apply the productivity audit ([#250](https://github.com/srobroek/omp-plugins/issues/250)) ([940eb98](https://github.com/srobroek/omp-plugins/commit/940eb9841ac38fc5399f36602113f778ca90f524))
+
 ## [0.7.1](https://github.com/srobroek/omp-plugins/compare/speckit--v0.7.0...speckit--v0.7.1) (2026-09-11)
 
 

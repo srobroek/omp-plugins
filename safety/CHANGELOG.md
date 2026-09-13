@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.4](https://github.com/srobroek/omp-plugins/compare/safety--v0.6.3...safety--v0.6.4) (2026-09-13)
+
+
+### Refactors
+
+* **safety:** apply the safety, toolchain, delivery and ops rules audit ([#254](https://github.com/srobroek/omp-plugins/issues/254)) ([f86c53c](https://github.com/srobroek/omp-plugins/commit/f86c53c98d194aa4b8bfe98c387951eb9042e37a))
+
 ## [0.6.3](https://github.com/srobroek/omp-plugins/compare/safety--v0.6.2...safety--v0.6.3) (2026-09-13)
 
 

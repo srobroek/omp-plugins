@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.5](https://github.com/srobroek/omp-plugins/compare/design--v0.3.4...design--v0.3.5) (2026-09-13)
+
+
+### Refactors
+
+* **design:** apply the productivity audit ([#250](https://github.com/srobroek/omp-plugins/issues/250)) ([940eb98](https://github.com/srobroek/omp-plugins/commit/940eb9841ac38fc5399f36602113f778ca90f524))
+
 ## [0.3.4](https://github.com/srobroek/omp-plugins/compare/design--v0.3.3...design--v0.3.4) (2026-09-11)
 
 

@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.2.5](https://github.com/srobroek/omp-plugins/compare/beads--v1.2.4...beads--v1.2.5) (2026-09-13)
+
+
+### Refactors
+
+* **beads:** apply the rules audit ([#252](https://github.com/srobroek/omp-plugins/issues/252)) ([129a5f8](https://github.com/srobroek/omp-plugins/commit/129a5f8e972f89abe35e1985394363f5ede37670))
+
 ## [1.2.4](https://github.com/srobroek/omp-plugins/compare/beads--v1.2.3...beads--v1.2.4) (2026-09-13)
 
 
