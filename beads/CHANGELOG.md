@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.2.3](https://github.com/srobroek/omp-plugins/compare/beads--v1.2.2...beads--v1.2.3) (2026-09-13)
+
+
+### Bug Fixes
+
+* **beads:** stop the triage rule firing on ownership and quoted scope statements ([#244](https://github.com/srobroek/omp-plugins/issues/244)) ([11422a3](https://github.com/srobroek/omp-plugins/commit/11422a3b5591449bb87b7a4eeb7ae24199042170))
+
 ## [1.2.2](https://github.com/srobroek/omp-plugins/compare/beads--v1.2.1...beads--v1.2.2) (2026-09-12)
 
 
