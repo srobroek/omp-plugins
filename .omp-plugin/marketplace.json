@@ -9,13 +9,6 @@
   },
   "plugins": [
     {
-      "name": "agentic-scaffold",
-      "description": "Deterministic project scaffolding from ordered template layers and Beads formulas.",
-      "source": "./agentic-scaffold",
-      "version": "0.10.2",
-      "category": "development"
-    },
-    {
       "name": "architecture",
       "description": "Architecture rules: module boundaries, compose-don't-fork, project structure, component promotion, and structural-search routing.",
       "source": "./architecture",
