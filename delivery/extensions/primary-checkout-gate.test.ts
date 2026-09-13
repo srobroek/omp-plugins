@@ -9,6 +9,7 @@ import {
 	decideEdit,
 	editedPaths,
 	type GitRun,
+	isRuntimeCheckout,
 	setGitRunForTests,
 } from "./primary-checkout-gate.ts";
 
@@ -26,14 +27,22 @@ function fakeGit(repos: Repo[]): GitRun {
 }
 
 let scratch: string;
-function setup(): { primary: string; linked: string; outside: string } {
+function setup(): { primary: string; linked: string; outside: string; runtime: string; worktreesDir: string } {
 	scratch = mkdtempSync(join(tmpdir(), "pcg-"));
 	const primary = join(scratch, "repo");
 	const linked = join(scratch, "worktrees", "repo", "feat-x");
 	const outside = join(scratch, "elsewhere");
-	for (const dir of [join(primary, "src"), join(primary, ".omp"), join(linked, "src"), outside]) mkdirSync(dir, { recursive: true });
-	setGitRunForTests(fakeGit([{ topLevel: primary, primary: true }, { topLevel: linked, primary: false }]));
-	return { primary, linked, outside };
+	const worktreesDir = join(scratch, "omp-wt");
+	const runtime = join(worktreesDir, "t123", "m");
+	for (const dir of [join(primary, "src"), join(primary, ".omp"), join(linked, "src"), join(runtime, "src"), outside]) {
+		mkdirSync(dir, { recursive: true });
+	}
+	setGitRunForTests(fakeGit([
+		{ topLevel: primary, primary: true },
+		{ topLevel: linked, primary: false },
+		{ topLevel: runtime, primary: true },
+	]));
+	return { primary, linked, outside, runtime, worktreesDir };
 }
 
 afterEach(() => {
@@ -70,6 +79,16 @@ describe("decideEdit", () => {
 		expect(decideEdit("read", { path: join(primary, "src", "a.ts") }, "/", {})).toBeUndefined();
 	});
 
+	test("allows harness-owned isolated roots while retaining the human primary-checkout guard", () => {
+		const { primary, runtime, worktreesDir } = setup();
+		expect(isRuntimeCheckout(runtime, worktreesDir)).toBe(true);
+		expect(isRuntimeCheckout(primary, worktreesDir)).toBe(false);
+		expect(isRuntimeCheckout(worktreesDir, worktreesDir)).toBe(false);
+		expect(isRuntimeCheckout(join(scratch, "omp-wt-other", "repo"), worktreesDir)).toBe(false);
+		expect(decideEdit("write", { path: join(runtime, "src", "new.ts"), content: "x" }, "/", {}, worktreesDir)).toBeUndefined();
+		expect(decideEdit("write", { path: join(primary, "src", "new.ts"), content: "x" }, "/", {}, worktreesDir)?.block).toBe(true);
+	});
+
 	test("resolves a relative path against the call cwd", () => {
 		const { primary, linked } = setup();
 		expect(decideEdit("write", { path: "src/new.ts", content: "x" }, primary, {})?.block).toBe(true);
@@ -101,6 +120,12 @@ describe("decideCommit", () => {
 		expect(decideCommit("git commit --dry-run -m 'fix'", primary, {})).toBeUndefined();
 		expect(decideCommit("git status && echo commit", primary, {})).toBeUndefined();
 		expect(decideCommit("git commit -m 'fix'", primary, { DELIVERY_ALLOW_PRIMARY_CHECKOUT: "1" })).toBeUndefined();
+	});
+
+	test("allows commits in harness-owned isolated roots but not human primary checkouts", () => {
+		const { primary, runtime, worktreesDir } = setup();
+		expect(decideCommit("git commit -m 'capture'", runtime, {}, worktreesDir)).toBeUndefined();
+		expect(decideCommit("git commit -m 'human primary'", primary, {}, worktreesDir)?.block).toBe(true);
 	});
 
 	test("does not block the read-only git inspection reproducer", () => {

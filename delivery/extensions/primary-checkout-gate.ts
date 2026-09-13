@@ -1,8 +1,9 @@
 import { existsSync, statSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, isAbsolute, resolve } from "node:path";
+import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
 
 import type { ExtensionAPI, ToolCallEvent } from "@oh-my-pi/pi-coding-agent";
+import { getWorktreesDir } from "@oh-my-pi/pi-utils/dirs";
 
 import { extractCommand, findCommitInvocations } from "./main-branch-gate.ts";
 
@@ -135,12 +136,22 @@ export function reasonFor(topLevel: string, what: string): string {
 		`${ALLOW_ENV}=1 in the environment only when the user asked for the primary checkout.`
 	);
 }
+/** Runtime-created isolated roots are harness-owned even though Git sees them as primary. */
+export function isRuntimeCheckout(topLevel: string, worktreesDir = getWorktreesDir()): boolean {
+	const path = relative(resolve(worktreesDir), resolve(topLevel));
+	return path !== "" && path !== ".." && !path.startsWith(`..${sep}`) && !isAbsolute(path);
+}
 
-export function decidePath(path: string, cwd: string): { block: true; reason: string } | undefined {
+
+export function decidePath(
+	path: string,
+	cwd: string,
+	worktreesDir = getWorktreesDir(),
+): { block: true; reason: string } | undefined {
 	if (NON_FILE_SCHEME.test(path)) return undefined;
 	const absolute = isAbsolute(path) ? resolve(path) : resolve(cwd, expandHome(path));
 	const checkout = checkoutOf(existingDir(absolute));
-	if (!checkout || !checkout.primary) return undefined;
+	if (!checkout?.primary || isRuntimeCheckout(checkout.topLevel, worktreesDir)) return undefined;
 	if (!absolute.startsWith(`${checkout.topLevel}/`)) return undefined;
 	if (isStatePath(absolute, checkout.topLevel)) return undefined;
 	return { block: true, reason: reasonFor(checkout.topLevel, `\`${path}\``) };
@@ -151,11 +162,12 @@ export function decideEdit(
 	input: Record<string, unknown>,
 	cwd: string,
 	env: NodeJS.ProcessEnv = process.env,
+	worktreesDir = getWorktreesDir(),
 ): { block: true; reason: string } | undefined {
 	if (EDIT_TOOLS[toolName] !== true) return undefined;
 	if (env[ALLOW_ENV] === "1") return undefined;
 	for (const path of editedPaths(input)) {
-		const decision = decidePath(path, cwd);
+		const decision = decidePath(path, cwd, worktreesDir);
 		if (decision) return decision;
 	}
 	return undefined;
@@ -165,13 +177,14 @@ export function decideCommit(
 	command: string,
 	cwd: string,
 	env: NodeJS.ProcessEnv = process.env,
+	worktreesDir = getWorktreesDir(),
 ): { block: true; reason: string } | undefined {
 	if (env[ALLOW_ENV] === "1") return undefined;
-    for (const invocation of findCommitInvocations(command, false)) {
+	for (const invocation of findCommitInvocations(command, false)) {
 		if (invocation.dryRun || invocation.retargeted) continue;
 		const target = invocation.repoDir === null ? cwd : resolve(cwd, invocation.repoDir);
 		const checkout = checkoutOf(target);
-		if (!checkout || !checkout.primary) continue;
+		if (!checkout?.primary || isRuntimeCheckout(checkout.topLevel, worktreesDir)) continue;
 		return { block: true, reason: reasonFor(checkout.topLevel, "This commit") };
 	}
 	return undefined;
