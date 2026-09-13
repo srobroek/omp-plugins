@@ -3,10 +3,10 @@
  *
  * A gate's id is an ordinary bd id, so nothing in the command reveals what is
  * being closed: `issue_type: gate` is the only marker and it lives in the
- * database. `rule://beads-gate-close` therefore fires on the shapes that reveal
- * intent (a placeholder naming a gate, a reason mentioning one, a gate id piped
- * from `bd gate list`). This gate closes the remaining hole by asking the
- * database: it resolves every literal id on the command line through
+ * database. The former advisory could only infer intent from shapes such as a placeholder
+ * naming a gate, a reason mentioning one, or a gate id piped from `bd gate list`.
+ * This database-aware gate closes that hole by resolving every literal id on the
+ * command line through
  * `bd show --json` and blocks when any of them is a gate.
  *
  * Advisory-class, so it fails open. An unreachable database, a missing `bd`, a

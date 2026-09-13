@@ -12,19 +12,11 @@ TRIGGER
 + adding optional stages, gates, or `extends` to an existing formula
 - claiming, closing, commenting, or labelling day-to-day → `rule://beads-core`
 - disposing of a finished molecule (promote/squash/burn) → `rule://beads-composition`
-- coordinating live agents, wisp grammar, decision records → `rule://beads-orchestration-doctrine`
+- coordinating live agents, wisp grammar, or decision records → `skill://orchestrate`
 
 ## Boundary with steering
 
-This skill owns **authoring a formula**: the step schema, `condition`, gates, composition, and the
-assertions that prove a formula pours what it claims. It is loaded when writing one.
-
-Steering owns **operating beads**: the execution-shape table, claiming, the carrier doctrine, wisp TTLs,
-and disposition. It is always available and applies whether or not a formula is involved.
-
-Where a fact belongs to both, it lives in steering and this skill names the consequence only. Example:
-the carrier doctrine is steering; the authoring consequence is that a step's `notes` is durable, so
-chatter belongs on a wisp.
+This skill owns formula authoring (schema, conditions, gates, composition, assertions); steering owns execution shape, claiming, carriers, wisp TTLs, and disposition. `notes` is durable, so put ephemeral chatter on a wisp.
 
 ## Is it formula-shaped? Answer first
 
@@ -40,13 +32,11 @@ A formula is a fixed DAG cooked once and instantiated many times. **Steps are de
 | The next step depends on the previous step's output | **no** -- one step, branch inside it |
 | A probe/action decision table | **no** -- that is judgement; write a skill |
 
-Could a human draw the DAG before starting? If it needs a loop with an unknown bound, write a skill
-that *pours* formulas instead.
+Could a human draw the DAG before starting? If it needs a loop with an unknown bound, write a skill that *pours* formulas instead.
 
 ## Workflow
 
-1. **Pour the builder.** `formulas/build-formula.formula.toml` is a formula that builds a formula --
-   14 steps, the order that catches mistakes soonest, with the traps in each step's description.
+1. **Pour the builder.** `formulas/build-formula.formula.toml` is a 14-step formula that builds a formula; its order catches mistakes soonest and each step names its traps.
 
    ```bash
    bd mol pour build-formula --var name=<stem> --var kind=reusable
