@@ -7,7 +7,7 @@ function condition(): RegExp {
 	const text = fs.readFileSync(RULE, "utf8");
 	const line = text.split(/\r?\n/).find(l => l.startsWith("condition:"));
 	if (!line) throw new Error("no condition");
-	const [pattern] = JSON.parse(line.slice("condition:".length).trim()) as string[];
+	const pattern = (JSON.parse(line.slice("condition:".length).trim()) as string[])[0]; if (!pattern) throw new Error("empty condition");
 	return new RegExp(pattern, "u");
 }
 
