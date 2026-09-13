@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.4](https://github.com/srobroek/omp-plugins/compare/dep-update--v0.6.3...dep-update--v0.6.4) (2026-09-13)
+
+
+### Refactors
+
+* **design:** apply the productivity audit ([#250](https://github.com/srobroek/omp-plugins/issues/250)) ([940eb98](https://github.com/srobroek/omp-plugins/commit/940eb9841ac38fc5399f36602113f778ca90f524))
+
 ## [0.6.3](https://github.com/srobroek/omp-plugins/compare/dep-update--v0.6.2...dep-update--v0.6.3) (2026-09-11)
 
 

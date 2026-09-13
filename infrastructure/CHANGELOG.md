@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.2](https://github.com/srobroek/omp-plugins/compare/infrastructure--v0.4.1...infrastructure--v0.4.2) (2026-09-13)
+
+
+### Refactors
+
+* **architecture:** apply the languages audit ([#251](https://github.com/srobroek/omp-plugins/issues/251)) ([be355d7](https://github.com/srobroek/omp-plugins/commit/be355d7c19c0d690d5637c4afd31ff143ba5b9ab))
+
 ## [0.4.1](https://github.com/srobroek/omp-plugins/compare/infrastructure--v0.4.0...infrastructure--v0.4.1) (2026-09-08)
 
 
