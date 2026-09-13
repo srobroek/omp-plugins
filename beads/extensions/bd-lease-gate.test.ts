@@ -54,7 +54,8 @@ function handlers(): { toolCall: Handler; toolResult: Handler } {
 	const registered: Record<string, Handler[]> = {};
 	const pi = {
 		on(event: string, handler: Handler) {
-			(registered[event] ??= []).push(handler);
+			registered[event] ??= [];
+			registered[event].push(handler);
 		},
 	};
 	bdLeaseGate(pi as never);

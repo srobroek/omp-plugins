@@ -123,7 +123,7 @@ function leadingCdCwd(command: string, cwd: string): string {
 	const match = /^\s*cd\s+([^\s;&]+)\s*&&/.exec(command);
 	if (!match) return cwd;
 	const dir = match[1];
-	if (dir === undefined || /^[-~$]/.test(dir) || /[\\`"'*?\[\]{}]/.test(dir)) return cwd;
+	if (dir === undefined || /^[-~$]/.test(dir) || /[\\`"'*?[\]{}]/.test(dir)) return cwd;
 	return dir.startsWith("/") ? dir : resolve(cwd, dir);
 }
 
