@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Install this hook with ./scripts/install-agnix-hooks.sh.
+# Install this hook with ./scripts/install-agnix-hooks.py.
 set -euo pipefail
 
 repo_root="$(git rev-parse --show-toplevel)"
@@ -36,4 +36,4 @@ if [[ -n "$previous_hooks" ]]; then
 	fi
 fi
 
-exec "$repo_root/scripts/check-agnix-staged.sh" "$@"
+exec "$repo_root/scripts/check-agnix-staged.py" "$@"
