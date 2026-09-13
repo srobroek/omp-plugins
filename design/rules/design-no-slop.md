@@ -1,7 +1,7 @@
 ---
 name: design-no-slop
-description: Refuse generated-UI visual tells and missing interaction states.
-globs: ["**/*.{css,scss,sass,less,styl,tsx,jsx,ts,js,vue,svelte,astro,html,mdx}"]
+description: When critiquing or building a rendered UI, reject generated-UI visual tells and missing interaction states.
+
 ---
 
 MUST Cover loading, empty, and error on every data-backed surface. A missing state is a miss.

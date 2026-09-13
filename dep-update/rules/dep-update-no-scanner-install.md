@@ -1,7 +1,7 @@
 ---
 name: dep-update-no-scanner-install
-description: An absent CVE scanner is reported or run ephemerally, never installed by the audit that found it missing.
-condition: ["(?i)\\b(?:pip3?|uv\\s+pip)\\s+install\\b[^\\n]*\\bpip-audit\\b", "(?i)\\bcargo\\s+install\\b[^\\n]*\\bcargo-audit\\b", "(?i)\\bgo\\s+install\\b[^\\n]*\\bgovulncheck\\b", "(?i)\\bnpm\\s+i(?:nstall)?\\b[^\\n]*\\bosv-scanner\\b"]
+description: During dependency audits, block persistent CVE-scanner installs and use an ephemeral runner or report the gap.
+condition: ["(?:^|[;&|(]\\s*|\\b(?:then|do)\\s+)(?:pip3?\\s+install\\b[^\\n]*\\bpip-audit\\b|cargo\\s+install\\b[^\\n]*\\bcargo-audit\\b|go\\s+install\\b[^\\n]*\\bgolang\\.org/x/vuln/cmd/govulncheck@latest\\b|npm\\s+i(?:nstall)?\\s+-g\\s+osv-scanner\\b)"]
 scope: "tool:bash"
 interruptMode: never
 ---

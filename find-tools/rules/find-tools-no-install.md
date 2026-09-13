@@ -1,7 +1,7 @@
 ---
 name: find-tools-no-install
-description: Discovery must not run install-mutating commands.
-condition: ["^\\s*(?:npx\\s+skills\\s+add|smithery\\s+mcp\\s+add)\\b"]
+description: During tool discovery, block install-mutating skills or MCP commands until explicitly approved.
+condition: ["(?:^|[;&|(]\\s*|\\b(?:then|do)\\s+)(?:npx\\s+(?:--[^\\s]+\\s+)*skills\\s+add|smithery\\s+mcp\\s+add)\\b"]
 scope: "tool:bash"
 interruptMode: never
 ---
