@@ -138,6 +138,12 @@ jobs:
           while IFS= read -r d; do
             (cd "$d/.." && bun test extensions/) || exit 1
           done < <(git ls-files '*/extensions/*.test.ts' | xargs -rn1 dirname | sort -u)
+      - name: Loader smoke against pinned OMP
+        timeout-minutes: 10
+        env:
+          OMP_HOST_ROOT: ${{ runner.temp }}/omp-session-host/node_modules/@oh-my-pi/pi-coding-agent
+          OMP_BIN: ${{ runner.temp }}/omp-session-host/node_modules/.bin/omp
+        run: bun scripts/check-plugin-loading.ts
 
       # A rule's `condition` is a regex with no compiler and no type check: the only
       # thing that catches a false positive is a corpus. These tests read the
