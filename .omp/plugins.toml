@@ -1,4 +1,4 @@
-# Project-scoped OMP plugins; synced by agentic-scaffold (`scaffold.py plugins sync`).
+# Project-scoped OMP plugins; synced by the manifest tooling.
 
 [[marketplaces]]
 name = "srobroek-omp"

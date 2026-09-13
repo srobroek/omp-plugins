@@ -105,7 +105,7 @@ describe("decideCommit", () => {
 
 	test("does not block the read-only git inspection reproducer", () => {
 		const { primary } = setup();
-		const inspection = `for r in omp-orchestrate sniff agentic-scaffold slopvac; do
+		const inspection = `for r in omp-orchestrate sniff slopvac; do
 		d=/Users/sjors/personal/dev/$r; git -C "$d" fetch -q 2>/dev/null; b=$(git -C "$d" rev-parse --abbrev-ref HEAD); u=$(git -C "$d" rev-parse --abbrev-ref '@{upstream}' 2>/dev/null || echo origin/main); behind=$(git -C "$d" rev-list --count HEAD.."$u" 2>/dev/null); ahead=$(git -C "$d" rev-list --count "$u"..HEAD 2>/dev/null); rules=$(git -C "$d" diff --name-only HEAD "$u" -- 'rules/*' 'AGENTS.md' 'CLAUDE.md' '*/AGENTS.md' 2>/dev/null | wc -l | tr -d ' '); printf '%-18s %-40s behind=%s ahead=%s rules/steering files differing=%s\\n' "$r" "$b -> $u" "$behind" "$ahead" "$rules"; done`;
 		expect(decideCommit(inspection, primary, {})).toBeUndefined();
         expect(decideCommit('git -C "$d" commit -m x', primary, {})).toBeUndefined();

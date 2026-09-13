@@ -1,5 +1,0 @@
-{
-  "name": "${package_kebab}",
-  "version": "0.1.0",
-  "description": "${description}"
-}

@@ -17,14 +17,6 @@ jobs:
         with:
           fetch-depth: 0
 
-      - uses: actions/setup-python@v7
-        with:
-          python-version: "3.14"
-
-      - name: Agentic scaffold tests
-        run: |
-          python -m pip install pytest pyyaml
-          python -m pytest agentic-scaffold/tests -q
 
       - name: Install cargo-binstall
         if: ${{ github.event_name == 'pull_request' }}

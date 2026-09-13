@@ -71,12 +71,10 @@ PLUGINS: dict[str, tuple[str, str]] = {
     ),
     "browser-tools": ("development", "Cross-engine browser coverage and Chrome performance tracing over MCP."),
     "diagram": ("productivity", "Interactive diagramming and architecture-sketching canvas over MCP."),
-    "agentic-scaffold": ("development", "Deterministic project scaffolding from ordered template layers and Beads formulas."),
 }
 
-# The canonical agentic-scaffold lives in its own repository and ships to Claude/Codex from
-# there; this checkout's copy stays for its tests but is no longer published.
-UNPUBLISHED: set[str] = {"agentic-scaffold"}
+# Keep this set for any temporarily unpublished plugins.
+UNPUBLISHED: set[str] = set()
 
 def load_object(path: Path) -> dict[str, object]:
     if not path.exists():

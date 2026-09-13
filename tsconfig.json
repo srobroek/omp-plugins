@@ -16,5 +16,5 @@
     "types": ["bun"]
   },
   "include": ["**/*.ts"],
-  "exclude": ["node_modules", "dist", "agentic-scaffold/skills/agentic-scaffold/templates"]
+  "exclude": ["node_modules", "dist"]
 }

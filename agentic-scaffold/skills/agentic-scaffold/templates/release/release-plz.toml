@@ -1,8 +1,0 @@
-[workspace]
-# release-plz discovers Cargo packages and opens release PRs.
-changelog_update = true
-
-[release]
-
-[git]
-
