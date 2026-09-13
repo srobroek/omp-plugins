@@ -5,7 +5,7 @@
     "@oh-my-pi/omptype": "18.1.19",
     "@oh-my-pi/pi-agent-core": "18.1.19",
     "@oh-my-pi/pi-ai": "18.1.17",
-    "@oh-my-pi/pi-coding-agent": "18.1.17",
+    "@oh-my-pi/pi-coding-agent": "18.1.19",
     "@oh-my-pi/pi-utils": "18.1.19",
     "@types/bun": "1.4.2",
     "puppeteer-core": "25.10.0",
