@@ -46,7 +46,7 @@ jobs:
           trap 'rm -f "$index"' EXIT
           export GIT_INDEX_FILE="$index"
           git read-tree HEAD
-          ./scripts/check-agnix-staged.sh
+          python3 scripts/check-agnix-staged.py
 
       - name: Agnix hook regression cases
         if: ${{ github.event_name == 'pull_request' }}
