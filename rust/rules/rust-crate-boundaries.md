@@ -14,4 +14,3 @@ Keep existing project choices unless the task is about setup, refactor, or stand
 - `lib.rs` is a thin facade: module declarations and curated re-exports. Logic
   sitting in `lib.rs` is logic that leaked out of the module owning it -- push it
   down. Top-level legacy aliases are a migration smell.
-- Preserve stable public paths via re-export when splitting an existing crate.

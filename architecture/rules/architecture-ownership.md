@@ -1,6 +1,6 @@
 ---
 name: architecture-ownership
-description: When placing libs, owner-local data/contracts/prompts, schemas, generated clients, or product agents.
+description: Opinionated repository ownership layout for repos adopting it; load when placing libs, owner-local assets, schemas, generated clients, UI primitives, or product agents.
 ---
 
 Keep `libs/` organized by architectural role: `domain`, `application`,
@@ -8,6 +8,11 @@ Keep `libs/` organized by architectural role: `domain`, `application`,
 
 `libs/domain` is pure domain logic. It must not import network, database,
 filesystem, framework, or cloud SDK dependencies.
+
+Keep components local to an app. Move shared primitives and design-system code
+to `libs/ui` only after two app surfaces actually reuse them. Shared UI code
+should be more stable than app-local components: use typed props, documented
+variants, and reusable accessibility behavior.
 
 Use owner-local folders for owned assets:
 

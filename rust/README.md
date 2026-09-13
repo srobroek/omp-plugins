@@ -9,15 +9,13 @@ Rust crate, workspace, and quality conventions for OMP.
 ## Rules
 
 - `rust-crate-boundaries`: crate splits, facades, adapters.
-- `rust-domain-modeling`: thiserror, UUID v5, serde newtypes.
+- `rust-domain-modeling`: thiserror and serde newtypes.
 - `rust-contract-boundary`: generated bindings and wire casing.
 - `rust-safe-mutation`: plan/approve/apply and CAS.
 - `rust-ci`: rust-cache, ci-gate, attestation.
 - `rust-persistence`: sqlx, migrations, transactional CAS.
-- `rust-workspace`: workspace lints and layered tests.
-- `rust-errors`: wire error-code registry and audit.
+- `rust-workspace`: workspace lints, dependencies, and layered tests.
 - `rust-tauri`: Tauri v2 bundles, updater, WebDriver.
-- `rust-tauri-mcp-bridge`: driving a running Tauri app over the MCP bridge.
 - `rust-cargo-install-advisory`: `cargo install` compiles from source (TTSR).
 - `rust-rustflags-linker`: a linker in `RUSTFLAGS` invalidates the rust-cache key (TTSR).
 
