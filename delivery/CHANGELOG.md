@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.10.1](https://github.com/srobroek/omp-plugins/compare/delivery--v0.10.0...delivery--v0.10.1) (2026-09-13)
+
+
+### Bug Fixes
+
+* **delivery:** require resolved git verb in primary checkout gate ([#241](https://github.com/srobroek/omp-plugins/issues/241)) ([58977f3](https://github.com/srobroek/omp-plugins/commit/58977f39d5b4669913d45ae9c3b16b7ee5844766))
+
 ## [0.10.0](https://github.com/srobroek/omp-plugins/compare/delivery--v0.9.1...delivery--v0.10.0) (2026-09-12)
 
 

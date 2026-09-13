@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.5](https://github.com/srobroek/omp-plugins/compare/chezmoi--v0.4.4...chezmoi--v0.4.5) (2026-09-13)
+
+
+### Bug Fixes
+
+* **delivery:** require resolved git verb in primary checkout gate ([#241](https://github.com/srobroek/omp-plugins/issues/241)) ([58977f3](https://github.com/srobroek/omp-plugins/commit/58977f39d5b4669913d45ae9c3b16b7ee5844766))
+
 ## [0.4.4](https://github.com/srobroek/omp-plugins/compare/chezmoi--v0.4.3...chezmoi--v0.4.4) (2026-09-11)
 
 

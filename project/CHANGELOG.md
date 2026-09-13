@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.1.3](https://github.com/srobroek/omp-plugins/compare/project--v1.1.2...project--v1.1.3) (2026-09-13)
+
+
+### Bug Fixes
+
+* **project:** delegate journeys checks to bundled Python helper ([#243](https://github.com/srobroek/omp-plugins/issues/243)) ([85cf87c](https://github.com/srobroek/omp-plugins/commit/85cf87ca7fe8d9149003e2b20eb19fb3e02fd5b0))
+
 ## [1.1.2](https://github.com/srobroek/omp-plugins/compare/project--v1.1.1...project--v1.1.2) (2026-09-11)
 
 

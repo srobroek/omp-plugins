@@ -9,6 +9,6 @@
       "./extensions/quota-notice-resume.ts"
     ]
   },
-  "version": "0.6.2",
+  "version": "0.6.3",
   "description": "Defence-in-depth advisories for destructive commands, attribution, and remote execution."
 }

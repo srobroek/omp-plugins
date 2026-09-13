@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.5](https://github.com/srobroek/omp-plugins/compare/toolchain--v0.3.4...toolchain--v0.3.5) (2026-09-13)
+
+
+### Bug Fixes
+
+* **toolchain:** resolve prefer-tools command slots ([#240](https://github.com/srobroek/omp-plugins/issues/240)) ([f6bbe3f](https://github.com/srobroek/omp-plugins/commit/f6bbe3f534b3ec4666f442c0b1fe51dffba1e4dc))
+
 ## [0.3.4](https://github.com/srobroek/omp-plugins/compare/toolchain--v0.3.3...toolchain--v0.3.4) (2026-09-11)
 
 
