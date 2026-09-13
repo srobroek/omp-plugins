@@ -44,7 +44,8 @@ MUST Re-stamp your own anchors when you resume a claim from an earlier session
   the stored pid names the process that has since exited, and a peer reading it
   would prove your live work dead.
 DEFAULT The `bd-lease-gate` extension writes the anchors after a successful
-  claim, so an ordinary `--claim` needs nothing extra.
+  claim, so an ordinary `--claim` needs nothing extra; when the gate reports a
+  stamp failure, re-stamp by hand.
 DEFAULT Release with `bd update <id> --assignee '' --status open`.
 
 FIELD TAXONOMY
