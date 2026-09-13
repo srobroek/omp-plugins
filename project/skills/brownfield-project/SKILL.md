@@ -21,7 +21,6 @@ project scaffold.
   `agent-management` skill; run the documented OMP plugin commands directly when
   it is unavailable.
 
-When a scaffold renderer is needed, read `skill://agentic-scaffold` after classification and install it with `omp plugin install agentic-scaffold@srobroek-omp` before rendering.
 - Uses the optional `grilling` skill when repo evidence is not enough to
   understand the project's purpose, requirements, constraints, or desired
   agentic workflow; ask the questions inline when that skill is unavailable.

@@ -15,6 +15,5 @@
     "noEmit": true,
     "types": ["bun"]
   },
-  "include": ["**/*.ts"],
-  "exclude": ["node_modules", "dist", "agentic-scaffold/skills/agentic-scaffold/templates"]
+  "include": ["**/*.ts"]
 }

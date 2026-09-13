@@ -1,5 +1,0 @@
-# TypeScript tool caches
-.oxlintcache
-*.tsbuildinfo
-node_modules/
-dist/

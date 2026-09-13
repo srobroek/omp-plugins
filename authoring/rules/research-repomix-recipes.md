@@ -5,7 +5,7 @@ description: When packing a whole tree or many files at once for bulk context wi
 
 # Repomix for bulk context
 
-Use Repomix for bulk source review, not a single lookup. An agentic-scaffold
+Use Repomix for bulk source review, not a single lookup. A scaffolded
 project maintains a scoped, ignored `repomix.xml` through prek hooks; check
 `graphify-out/context-status.json` before using it. Otherwise pack on demand.
 

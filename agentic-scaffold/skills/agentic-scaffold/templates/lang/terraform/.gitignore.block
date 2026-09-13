@@ -1,5 +1,0 @@
-# Terraform state and plans
-.terraform/
-*.tfstate
-*.tfstate.*
-*.tfplan
