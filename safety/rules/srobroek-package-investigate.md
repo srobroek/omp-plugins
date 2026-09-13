@@ -1,7 +1,7 @@
 ---
 name: srobroek-package-investigate
 description: Before adding or changing a dependency, vet the package and prefer the package-manager CLI.
-condition: ["(?i)\\b(?:(?:pnpm|npm|bun|yarn)\\s+add\\b|(?:pnpm|npm|bun)\\s+(?:i|install)(?:\\s+-{1,2}[A-Za-z][^\\s]*)*\\s+(?!-)[^\\s;|&]|uv\\s+add\\b|pip3?\\s+install\\b|poetry\\s+add\\b|cargo\\s+add\\b|go\\s+get\\b|composer\\s+require\\b)"]
+condition: ["(?i)(?:^|[;|&()])\\s*(?:(?:(?:pnpm|npm|bun|yarn)\\s+add|(?:pnpm|npm|bun)\\s+(?:i|install)(?:\\s+-{1,2}[A-Za-z][^\\s]*)*|uv\\s+add|pip3?\\s+install|poetry\\s+add|cargo\\s+add|go\\s+get|composer\\s+require)\\s+(?!-)[A-Za-z@./_~][^\\s;|&<>()`$]*)"]
 scope: "tool:bash"
 interruptMode: never
 ---
