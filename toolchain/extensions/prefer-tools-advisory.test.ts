@@ -90,6 +90,20 @@ describe("make -> just", () => {
 		const just = tree({ justfile: "build:\n\techo hi\n" });
 		expect(decideSwaps("make build", just).map((h) => h.modern)).toEqual(["just"]);
 		expect(decideSwaps("make", just)).toHaveLength(1);
+		expect(decideSwaps("cd sub && make -j4", just)).toHaveLength(1);
+		expect(decideSwaps("FOO=1 make test", just)).toHaveLength(1);
+		expect(decideSwaps("gmake test", just)).toHaveLength(1);
+	});
+
+	test("does not fire on make inside quoted arguments", () => {
+		const just = tree({ justfile: "build:\n" });
+		expect(
+			decideSwaps(
+				'bd create --type bug --title "x" --description "Implement the extractor or make the recipe refuse python"',
+				just,
+			),
+		).toEqual([]);
+		expect(decideSwaps("echo 'we make progress'", just)).toEqual([]);
 	});
 
 	test("a Makefile means make is still load-bearing", () => {
@@ -103,8 +117,6 @@ describe("make -> just", () => {
 		expect(decideSwaps("makeself --help", just)).toEqual([]);
 	});
 });
-
-
 describe("integration", () => {
 	const wire = (cwd = bare) => {
 		const handlers: Record<string, Array<(e: Record<string, unknown>) => unknown>> = {};
