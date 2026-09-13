@@ -1,7 +1,6 @@
 ---
 name: speckit-workflow
-description: SpecKit beads workflow — molecule per spec, tasks.md never authored, command-time routing.
-alwaysApply: true
+description: Load for SpecKit work or repositories containing `.specify/`; route active specs through beads molecules without authoring tasks.md.
 ---
 
 The upstream /speckit.* skills are unmodified; they still talk about tasks.md.

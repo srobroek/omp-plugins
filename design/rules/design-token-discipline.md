@@ -1,7 +1,7 @@
 ---
 name: design-token-discipline
-description: Colors and spacing come from tokens; new scales need user approval first.
-globs: ["**/*.{css,scss,sass,less,styl,tsx,jsx,ts,js,vue,svelte,astro,html,md,json,swift,kt}"]
+description: When styling a component or editing its design tokens, use named color and spacing tokens and obtain approval for new scales.
+
 ---
 
 MUST Use a named color token for every color. A literal hex, rgb, hsl, or named CSS color in a component is a miss.

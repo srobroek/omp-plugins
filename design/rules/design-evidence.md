@@ -1,7 +1,7 @@
 ---
 name: design-evidence
-description: A rendered-UI claim requires named ARIA, computed-style, or screenshot evidence.
-alwaysApply: true
+description: Cite ARIA, computed-style, or screenshot evidence for claims about a rendered UI surface.
+
 ---
 
 MUST Cite, per claim, the ONE kind that fits it: an ARIA snapshot (`tab.ariaSnapshot()` YAML or `tab.observe()` tree), a computed-style value from `tab.evaluate`, or a screenshot path from `tab.screenshot`. This governs citation. Collection order is separate and belongs to `rule://design-tool-ladder`: snapshot the tree once per pass before claiming anything, then cite whichever kind the claim needs.

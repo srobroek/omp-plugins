@@ -9,6 +9,33 @@ workflow stays self-contained without following a link. The same text therefore 
 more than one place. When two copies disagree, this file is the authority and the other copy
 is the bug.
 
+## Tool selection by design phase
+
+Use this phase map before choosing an invocation. Check components before assembled pages so failures stay local.
+
+| phase | OMP tool | evidence | prevents |
+|---|---|---|---|
+| GROUND | `read` / `grep` / `ast_grep` | token names, scales, existing primitives | inventing an existing token |
+| SPECIFY | `read` DESIGN.md | resolved refs, known gaps | TODOs and unknowns |
+| BUILD | `lsp` rename; `read` / `ast_grep` | every state implemented | dropped symbol callsites |
+| VERIFY | `browser` (web) or `computer` (native) | ARIA, computed style, screenshot | unsupported surface claims |
+| CRITIQUE | `browser` / `computer` read-only | finding plus evidence path | evidence-free opinion |
+| RECONCILE | tool that measured the failing assertion | that assertion rerun | needless full-suite reruns |
+
+## Non-command tool routes
+
+These routes are selected by phase and called as tools, not spawned as processes:
+
+| tool | purpose |
+|---|---|
+| `accessibility-scanner` MCP | primary WCAG 2.2 accessibility measurement |
+| Storybook MCP docs tools | component prop truth when Storybook is running |
+| `wire-dsl` MCP | vector wireframes as SVG, PNG, or PDF |
+| `excalidraw` MCP | diagrams and architecture canvases |
+| `xd://generate_image` | skill-routed image artifacts |
+
+`impeccable detect` is corroborating signal only: findings carry `line: 0` and require browser or computer confirmation. Screenshots never replace ARIA or computed-style evidence, and `browser` is for web surfaces while `computer` is for native desktop surfaces.
+
 Commands only. The `accessibility-scanner`, `storybook`, `wire-dsl`, and `excalidraw` MCP
 servers are routed by `rule://design-tool-ladder` and called as tools, not spawned as
 processes, so they carry no invocation to record here.

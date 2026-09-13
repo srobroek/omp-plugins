@@ -1,8 +1,8 @@
 ---
 name: speckit-implement-deprecated
-description: Advises that /speckit.implement is deprecated in beads repos.
-condition: ["(?i)(?:^|[\\s;|&])/?speckit[.-]implement(?![\\w-])"]
-scope: [text, "tool:bash"]
+description: In SpecKit text, route deprecated `/speckit.implement` through the agent-assign workflow.
+condition: ["(?i)(?:^|\\s)/speckit[.-]implement(?![\\w-])"]
+scope: "text"
 interruptMode: never
 ---
 
