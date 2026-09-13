@@ -1,22 +1,17 @@
 ---
 name: beads-no-bd-edit
 description: bd edit shells out to $EDITOR and blocks a non-interactive agent.
-condition: ["(?m)(?:^|[;|&]\\s*)bd(?:\\s+-C\\s+\\S+)?\\s+edit\\b(?![^\\n]*--help)"]
+condition: ["(?m)(?<![\"'\\x60])(?:^|(?:&&|\\|\\||[;&|()])\\s*|\\bthen\\s+|\\bdo\\s+)(?:[A-Za-z_][A-Za-z0-9_]*=\\S+\\s+)*bd(?:\\s+(?:-C\\s+\\S+|--directory(?:=\\S+|\\s+\\S+)))*\\s+edit\\b(?![^\\n;&|()]*--help\\b)"]
 scope: "tool:bash"
 interruptMode: always
 ---
-`bd edit` opens `$EDITOR`. Verified: with `EDITOR=true` it exits 0 and prints `No changes made`, so bd really does invoke the editor.
 
-An agent has no terminal to answer with. A real editor waits for input that never arrives, and the session stalls until someone kills it.
-
-Use the flag forms, which write the same fields without a terminal:
+`bd edit` opens `$EDITOR` and can stall a non-interactive agent. Use explicit
+non-interactive updates instead:
 
 - `bd update <id> --status <s> --priority <p> --assignee <a>`
 - `bd comment <id> -m "<text>"`
 - `bd label add <id> <label>`
 
-`bd edit --help` and `bd help edit` stay allowed. This rule catches only the interactive form.
-
-The condition is anchored to command position — start of a line, or after `;`, `|`,
-or `&` — because the token stream includes quoted text. Unanchored, `git commit -m
-'bd edit docs'` fired this rule and blocked the commit.
+`bd edit --help` and `bd help edit` stay allowed. The condition is anchored to
+command position and supports environment prefixes plus `-C`/`--directory`.

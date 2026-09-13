@@ -19,15 +19,13 @@ To read a rule, open its `rule://<name>` address.
 |---|---|
 | `beads-core` | Claiming work and managing fields. Routing dependencies and syncing data. Using JSONL as a fallback and maintaining the database. |
 | `beads-setup` | Setting up beads. Verifying the install. |
+| `beads-storage-mode` | Choosing embedded or server storage, diagnosing copied checkouts, and migrating a database. |
 | `beads-lifecycle` | Status transitions and gate beads. |
-| `beads-carriers` | Choosing where to keep authoritative records. Using comments or decision beads. Using wisps or artifacts. |
+| `beads-carriers` | Choosing where to keep authoritative records. Using comments, decision beads, wisps, or artifacts. |
 | `beads-composition` | Choosing an issue or epic. Using formulas and molecules. Working with bonds or wisps. |
-| `beads-coordination` | Swarms, merge slots, and passing a bead id at spawn so the worker claims it. |
-| `beads-orchestration-doctrine` | Claim-as-contract doctrine for orchestration workflows. |
-| `beads-audit` | Explicit `bd audit record` entries for semantic events. |
+| `beads-coordination` | Swarms and merge slots. |
+| `beads-audit` | Explicit semantic events and read-only reporting for non-orchestrated runs. |
 | `beads-github-mirror` | Mirroring beads out to GitHub issues. |
-| `beads-adr` | Architecture decisions as decision beads. |
-| `beads-gate-close` | Resolve gate beads rather than closing them (TTSR, plus the `bd-close-gate` extension). |
 
 ## Sync and session boundaries
 

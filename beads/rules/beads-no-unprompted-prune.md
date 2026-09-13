@@ -1,13 +1,14 @@
 ---
 name: beads-no-unprompted-prune
 description: Irreversible Dolt maintenance needs a human.
-condition: ["(?m)(?:^|[;|&]\\s*)bd(?:\\s+-C\\s+\\S+)?\\s+(?:prune|purge|flatten)\\b(?![^\\n]*--(?:dry-run|help))"]
+condition: ["(?m)(?<![\"'\\x60])(?:^|(?:&&|\\|\\||[;&|()])\\s*|\\bthen\\s+|\\bdo\\s+)(?:[A-Za-z_][A-Za-z0-9_]*=\\S+\\s+)*bd(?:\\s+(?:-C\\s+\\S+|--directory(?:=\\S+|\\s+\\S+)))*\\s+(?:prune|purge|flatten)\\b(?![^\\n;&|()]*--(?:dry-run|help)\\b)"]
 scope: "tool:bash"
 interruptMode: always
 ---
-Never run `bd prune`, `bd purge`, or `bd flatten` unprompted. Preview `--dry-run`, report numbers, wait for the user.
 
-`--dry-run` and `--help` are excluded: the preview is the documented safe path, so
-blocking it blocked the way out of the rule. The condition is anchored to command
-position, so a mention (`echo bd prune`, a commit message) no longer fires it, and
-`bd -C <dir> prune` now does.
+Never run `bd prune`, `bd purge`, or `bd flatten` unprompted. Preview with
+`--dry-run`, report the numbers, and wait for the user.
+
+The safe preview and help forms remain allowed. The command-position anchor
+keeps quoted mentions silent, supports `-C` and `--directory`, and evaluates the
+safe exception only within the current shell command.

@@ -59,13 +59,14 @@ DEFAULT Use `autonomous=no`; unattended mode or an unavailable human is not a
   waiver. Without authorization, preserve the blocked gate and report the wait.
 MUST For each waived gate, record on its preceding step the review findings and
   what a reviewer would have been asked. Run all verification regardless of waiver.
-NOT `bd close <gate-id>` to resolve a gate — enforced by `rule://beads-gate-close`.
+NOT `bd close <gate-id>` to resolve a gate; the `bd-close-gate` extension checks
+  literal ids against the database and blocks gate closure.
 
 COMMAND ROUTING (was the dispatcher table)
 - constitution / roadmap.write: project-scoped; do not pour a molecule.
 - tinyspec: no lifecycle; do not pour. If it grows, stop and pour a feature molecule.
-- bugfix.report: active spec → `bd mol bond mol-speckit-bugfix`; no spec → create
-  the spec dir first. The patch step's tasks.md write is denied — create beads.
+- bugfix.report: active spec -> `bd mol bond mol-speckit-bugfix`; no spec -> create
+  the spec dir first. The patch step's tasks.md write is denied -- create beads.
 - brownfield.bootstrap: read legacy tasks.md; import once as beads; never write it.
 - cleanup / cleanup.run / converge / iterate.apply / reconcile.run / refine.propagate:
   their tasks.md writes are denied. Create children of the implement step instead.
@@ -73,7 +74,7 @@ COMMAND ROUTING (was the dispatcher table)
 - review.run / qa.run: bond `mol-speckit-fix-findings` for code defects; converge
   for NEVER-built requirements.
 - retro.run: read beads (`bd list --spec --status all --json`), close reasons,
-  wisps, and decision beads — not only spec.md/plan.md.
+  wisps, and decision beads -- not only spec.md/plan.md.
 
 PR REVIEW LOOP
 MUST The agent that creates a PR owns automated review through landing or human

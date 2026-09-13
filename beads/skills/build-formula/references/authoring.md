@@ -120,7 +120,7 @@ Not this skill's subject. The carrier doctrine, promotion rule, and wisp TTL cla
 they apply to all beads work rather than to formula authoring:
 
 - `rule://beads-carriers` -- carrier authority and lifecycle
-- `rule://beads-orchestration-doctrine` -- wisps, links, labels, and gates
+- `skill://orchestrate` -- orchestration-specific lifecycle and recovery
 - `rule://beads-composition` -- execution shapes and promote/squash/burn disposition
 
 The orchestration package maps its run model onto these Beads carriers; it does not redefine them.

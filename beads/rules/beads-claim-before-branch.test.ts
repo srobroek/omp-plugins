@@ -13,6 +13,13 @@ import * as path from "node:path";
  * 0.33 on token similarity, 25th of 335 overlapping pairs, and every threshold
  * catching it also flagged roughly a hundred unrelated pairs (2026-09-12).
  *
+ * In the measured `chezmoi-6ko` incident (2026-09-12), two sessions implemented
+ * one open unassigned bead in parallel. The loser spent a worktree, signed
+ * commit, source checks (89.5s), routed push and gitleaks (77s), draft PR,
+ * teardown, and a second push (70s) before the conflict surfaced as a
+ * `CONFLICTING` PR. Neither session broke the letter of the workflow: both saw
+ * the bead as open and unassigned because neither had claimed it.
+ *
  * HOLD cases carry the load here. The condition is anchored to command position
  * because the token stream includes quoted text, so prose describing a branch
  * creation must stay silent.
