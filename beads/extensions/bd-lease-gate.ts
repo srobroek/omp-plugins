@@ -1,4 +1,5 @@
 import { hostname } from "node:os";
+import { resolve } from "node:path";
 import type { ExtensionAPI, ExtensionContext, ToolCallEvent, ToolResultEvent } from "@oh-my-pi/pi-coding-agent";
 
 /**
@@ -122,8 +123,8 @@ function leadingCdCwd(command: string, cwd: string): string {
 	const match = /^\s*cd\s+([^\s;&]+)\s*&&/.exec(command);
 	if (!match) return cwd;
 	const dir = match[1];
-	if (dir === undefined || dir.startsWith("$")) return cwd;
-	return dir.startsWith("/") ? dir : `${cwd.replace(/\/$/, "")}/${dir}`;
+	if (dir === undefined || /^[-~$]/.test(dir) || /[\\`"'*?\[\]{}]/.test(dir)) return cwd;
+	return dir.startsWith("/") ? dir : resolve(cwd, dir);
 }
 
 function bashExitCode(event: ToolResultEvent): number {
