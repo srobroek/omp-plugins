@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.10.3](https://github.com/srobroek/omp-plugins/compare/delivery--v0.10.2...delivery--v0.10.3) (2026-09-13)
+
+
+### Refactors
+
+* **safety:** apply the safety, toolchain, delivery and ops rules audit ([#254](https://github.com/srobroek/omp-plugins/issues/254)) ([f86c53c](https://github.com/srobroek/omp-plugins/commit/f86c53c98d194aa4b8bfe98c387951eb9042e37a))
+
 ## [0.10.2](https://github.com/srobroek/omp-plugins/compare/delivery--v0.10.1...delivery--v0.10.2) (2026-09-13)
 
 
