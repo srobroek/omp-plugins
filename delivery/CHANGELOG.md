@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.10.4](https://github.com/srobroek/omp-plugins/compare/delivery--v0.10.3...delivery--v0.10.4) (2026-09-14)
+
+
+### Bug Fixes
+
+* **delivery:** allow harness runtime worktree roots ([7d066ff](https://github.com/srobroek/omp-plugins/commit/7d066ff89c8ff12477eb77deb3a36b2e9984223a))
+
 ## [0.10.3](https://github.com/srobroek/omp-plugins/compare/delivery--v0.10.2...delivery--v0.10.3) (2026-09-13)
 
 
