@@ -2,8 +2,9 @@ import { existsSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
 
+import { getWorktreesDir as upstreamGetWorktreesDir } from "@oh-my-pi/pi-utils";
+
 import type { ExtensionAPI, ToolCallEvent } from "@oh-my-pi/pi-coding-agent";
-import { getWorktreesDir } from "@oh-my-pi/pi-utils/dirs";
 
 import { extractCommand, findCommitInvocations } from "./main-branch-gate.ts";
 
@@ -36,6 +37,12 @@ const HASHLINE_HEADER = /^\s*\[([^#\r\n]+)#[0-9a-fA-F]{4}\]\s*$/;
 
 /** Agent state that lives beside the code and is written by the harness, not by the human. */
 const STATE_DIRS: Record<string, true> = { ".omp": true, ".beads": true };
+
+/** Resolve the harness-owned worktree root using the host's configured path semantics. */
+export function getWorktreesDir(): string {
+	return upstreamGetWorktreesDir();
+}
+
 
 export type GitRun = (argv: string[], cwd: string) => { exitCode: number; stdout: string };
 
@@ -141,7 +148,6 @@ export function isRuntimeCheckout(topLevel: string, worktreesDir = getWorktreesD
 	const path = relative(resolve(worktreesDir), resolve(topLevel));
 	return path !== "" && path !== ".." && !path.startsWith(`..${sep}`) && !isAbsolute(path);
 }
-
 
 export function decidePath(
 	path: string,
