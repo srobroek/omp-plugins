@@ -11,6 +11,7 @@
       "./extensions/bd-lease-gate.ts",
       "./extensions/pr-bead-link-gate.ts",
       "./extensions/bd-init-advisory.ts",
+      "./extensions/bd-init-server-gate.ts",
       "./extensions/dolt-server-lifecycle.ts",
       "./extensions/session-beads-lifecycle.ts",
       "./extensions/unreported-failure-advisory.ts"

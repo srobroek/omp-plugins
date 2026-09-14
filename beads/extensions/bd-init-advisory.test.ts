@@ -20,12 +20,12 @@ describe("findInitInvocations", () => {
 		expect(findInitInvocations("bd init --init-if-missing --skip-hooks")).toEqual([
 			{ flags: ["--init-if-missing", "--skip-hooks"] },
 		]);
-		expect(findInitInvocations("bd init --prefix=bdp")).toEqual([{ flags: ["--prefix"] }]);
+		expect(findInitInvocations("bd init --prefix=bdp")).toEqual([{ flags: ["--prefix"], prefix: "bdp" }]);
 	});
 
 	test("a pre-verb value flag does not swallow the verb", () => {
 		expect(findInitInvocations("bd -C /tmp/repo init --skip-hooks")).toEqual([
-			{ flags: ["-C", "--skip-hooks"] },
+			{ flags: ["-C", "--skip-hooks"], dir: "/tmp/repo" },
 		]);
 		expect(findInitInvocations("bd --db /tmp/x.db init")).toEqual([{ flags: ["--db"] }]);
 		expect(findInitInvocations("bd --db=/tmp/x.db init")).toEqual([{ flags: ["--db"] }]);

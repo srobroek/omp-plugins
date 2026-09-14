@@ -31,6 +31,9 @@ const PRE_VERB_VALUE_FLAGS: Record<string, true> = {
 	"--directory": true,
 };
 
+/** `bd init` flags that consume the next token, so a value is never read as the verb. */
+const VALUE_FLAGS: Record<string, true> = { "--prefix": true, "--server-host": true, "--server-port": true };
+
 /** Words that may stand before `bd` and leave it at command position. */
 const TRANSPARENT_PREFIX: Record<string, true> = { command: true, env: true, sudo: true };
 
@@ -49,6 +52,10 @@ const PREFILTER = /\bbd\b[\s\S]{0,400}?\binit\b/;
 export type InitInvocation = {
 	/** Flag names on this invocation, `--flag=value` reduced to `--flag`. */
 	flags: string[];
+	/** The `--prefix` value when one is given. */
+	prefix?: string;
+	/** The `-C` / `--directory` value when one is given: the directory `bd` acts in. */
+	dir?: string;
 };
 
 /**
@@ -76,6 +83,8 @@ export function findInitInvocations(command: string): InitInvocation[] {
 
 		const flags: string[] = [];
 		let verb: string | null = null;
+		let prefix: string | undefined;
+		let dir: string | undefined;
 		let j = i + 1;
 		for (; j < tokens.length; j++) {
 			const arg = tokens[j] as string;
@@ -84,14 +93,24 @@ export function findInitInvocations(command: string): InitInvocation[] {
 				const eq = arg.indexOf("=");
 				const name = eq === -1 ? arg : arg.slice(0, eq);
 				flags.push(name);
-				if (eq === -1 && verb === null && PRE_VERB_VALUE_FLAGS[name] === true) j++;
+				const takesValue = VALUE_FLAGS[name] === true || (verb === null && PRE_VERB_VALUE_FLAGS[name] === true);
+				let value: string | undefined;
+				if (eq !== -1) value = arg.slice(eq + 1);
+				else if (takesValue && j + 1 < tokens.length && SEPARATOR[tokens[j + 1] as string] !== true) value = tokens[++j] as string;
+				if (name === "--prefix") prefix = value;
+				if (name === "-C" || name === "--directory") dir = value;
 				continue;
 			}
 			if (verb === null) verb = arg.toLowerCase();
 		}
 		i = j;
 		atCommand = true;
-		if (verb === "init") out.push({ flags });
+		if (verb === "init") {
+			const invocation: InitInvocation = { flags };
+			if (prefix !== undefined) invocation.prefix = prefix;
+			if (dir !== undefined) invocation.dir = dir;
+			out.push(invocation);
+		}
 	}
 	return out;
 }
@@ -127,7 +146,7 @@ export function initAdvisory(_missing: MissingFlags): string {
 	return (
 		`bd init advisory — nothing was blocked, and this speaks once per session. ` +
 		`This \`bd init\` omits \`--skip-hooks\`. ${SKIP_HOOKS_ADVICE} ${BEADS_DIR_ADVICE} ` +
-		`The full form is \`bd init --init-if-missing --skip-hooks\` ` +
+		`The full form is \`bd init --shared-server --init-if-missing --skip-hooks\` ` +
 		`(rule://beads-setup). Both the flag and the pin are contextual, so decide ` +
 		`rather than re-run blind: an already-initialised repository or hooks the ` +
 		`project deliberately owns can each make the plainer form the right call.`
