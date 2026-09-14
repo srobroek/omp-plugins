@@ -557,7 +557,7 @@ export function handleSessionStop(
 
 async function releaseCasSupported(cwd: string, deadline: number): Promise<boolean> {
 	const help = await runBd(cwd, ["update", "--help"], deadline);
-	return help !== undefined && help.includes("--if-assignee");
+	return help?.includes("--if-assignee") === true;
 }
 
 /** Run bd for its stdout. Warnings on stderr are noise here and are dropped. */

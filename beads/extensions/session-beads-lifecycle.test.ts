@@ -879,9 +879,9 @@ printf '%s\\n' '[]'
 			process.env.PATH = `${dir}:${originalPath ?? ""}`;
 			const { handlers } = wire();
 			const ctx = { cwd: dir, sessionManager: { getSessionId: () => "release-cas" } };
-			handlers.tool_result![0]!({ toolName: "bash", toolCallId: "a", isError: false, input: { command: "bd ready --claim", env: { BD_ACTOR: "actor/a" } }, content: [] }, ctx);
-			handlers.tool_result![0]!({ toolName: "bash", toolCallId: "b", isError: false, input: { command: "bd ready --claim", env: { BD_ACTOR: "actor/b" } }, content: [] }, ctx);
-			const result = await handlers.session_stop![0]!({}, ctx) as { additionalContext?: string };
+			handlers.tool_result?.[0]?.({ toolName: "bash", toolCallId: "a", isError: false, input: { command: "bd ready --claim", env: { BD_ACTOR: "actor/a" } }, content: [] }, ctx);
+			handlers.tool_result?.[0]?.({ toolName: "bash", toolCallId: "b", isError: false, input: { command: "bd ready --claim", env: { BD_ACTOR: "actor/b" } }, content: [] }, ctx);
+			const result = await handlers.session_stop![0]!({}, ctx) as { additionalContext: string };
 			expect(result.additionalContext).toContain("'release_actor=actor/a'");
 			expect(result.additionalContext).toContain("'release_actor=actor/b'");
 			expect(result.additionalContext).not.toContain("<actor>");
