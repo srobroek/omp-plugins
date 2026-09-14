@@ -454,7 +454,7 @@ describe("releaseClaimArgs", () => {
 	});
 	test("emits a command-local BD_ACTOR matching release metadata", () => {
 		const command = releaseClaimCommand("bd-a-1", "omp/Main/s1", { BD_ACTOR: "omp/Main/s2", BEADS_ACTOR: "omp/Main/ambient" }, at);
-		expect(command).toContain("BD_ACTOR='omp/Main/s2' 'bd'");
+		expect(command).toContain("BEADS_ACTOR='omp/Main/s2' BD_ACTOR='omp/Main/s2' 'bd'");
 		expect(command).toContain("'release_actor=omp/Main/s2'");
 		expect(command).toContain("'--if-assignee' 'omp/Main/s1'");
 	});
@@ -887,6 +887,8 @@ esac
 	test("registered stop emits per-bead CAS commands only when help advertises support", async () => {
 		const dir = mkdtempSync(join(tmpdir(), "beads-release-cas-"));
 		const originalPath = process.env.PATH;
+		const originalBeadsActor = process.env.BEADS_ACTOR;
+		const originalBdActor = process.env.BD_ACTOR;
 		try {
 			mkdirSync(join(dir, ".beads"));
 			writeFileSync(join(dir, "bd"), `#!/bin/sh
@@ -897,6 +899,9 @@ printf '%s\\n' '[]'
 `);
 			chmodSync(join(dir, "bd"), 0o755);
 			process.env.PATH = `${dir}:${originalPath ?? ""}`;
+			// Ambient identities must not leak into the generated release command.
+			process.env.BEADS_ACTOR = "ambient/canonical";
+			process.env.BD_ACTOR = "ambient/legacy";
 			const { handlers } = wire();
 			const ctx = { cwd: dir, sessionManager: { getSessionId: () => "release-cas" } };
 			handlers.tool_result?.[0]?.({ toolName: "bash", toolCallId: "a", isError: false, input: { command: "bd ready --claim", env: { BD_ACTOR: "actor/a" } }, content: [] }, ctx);
@@ -904,8 +909,12 @@ printf '%s\\n' '[]'
 			const sessionStop = handlers.session_stop?.[0];
 			if (sessionStop === undefined) throw new Error("session stop handler was not registered");
 			const result = await sessionStop({}, ctx) as { additionalContext: string };
+			expect(result.additionalContext).toContain("BEADS_ACTOR='actor/a' BD_ACTOR='actor/a' 'bd'");
+			expect(result.additionalContext).toContain("BEADS_ACTOR='actor/b' BD_ACTOR='actor/b' 'bd'");
 			expect(result.additionalContext).toContain("'release_actor=actor/a'");
 			expect(result.additionalContext).toContain("'release_actor=actor/b'");
+			expect(result.additionalContext).toContain("'--if-assignee' 'actor/a'");
+			expect(result.additionalContext).toContain("'--if-assignee' 'actor/b'");
 			expect(result.additionalContext).not.toContain("<actor>");
 			expect(result.additionalContext).not.toContain("<current-assignee>");
 			const commands = readFileSync(join(dir, "calls"), "utf8").split("\\n");
@@ -915,6 +924,10 @@ printf '%s\\n' '[]'
 		} finally {
 			if (originalPath === undefined) delete process.env.PATH;
 			else process.env.PATH = originalPath;
+			if (originalBeadsActor === undefined) delete process.env.BEADS_ACTOR;
+			else process.env.BEADS_ACTOR = originalBeadsActor;
+			if (originalBdActor === undefined) delete process.env.BD_ACTOR;
+			else process.env.BD_ACTOR = originalBdActor;
 			rmSync(dir, { recursive: true, force: true });
 		}
 	});
