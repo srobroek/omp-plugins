@@ -4,13 +4,10 @@
  * Two jobs, both session-scoped, because beads' own session hooks are Claude and
  * Codex JSON wiring that never fires under omp.
  *
- * At session start, report once when a beads repository is on the embedded backend.
- * Embedded resolves a PATH, so a copied checkout or a clone gets its own database.
- * A linked git worktree resolves the primary's store unaided, and still gets the pin, so
- * nobody has to remember which checkout shape they are in.
- * The pin that works is `BEADS_DIR` holding the ABSOLUTE path of the run's `.beads`, set
- * once; children inherit it. A relative value resolves against each process's own working
- * directory, which is the failure the pin exists to prevent.
+ * At session start, report once when a beads repository is on the embedded backend,
+ * carrying the migration route to the shared Dolt server. Embedded resolves a PATH, so
+ * a copied checkout or a clone gets its own database, and the machine-wide
+ * shared-server default makes every `bd` command in such a project fail.
  *
  * At session end, optionally stop a per-project server. Stopping is safe -- bd
  * flushes the working set first and the next read auto-starts a fresh process -- but
@@ -94,18 +91,21 @@ export async function readBackend(cwd: string): Promise<{ backend: Backend; trac
 /**
  * The advice for a backend, or `undefined` when there is nothing worth saying.
  *
- * Only `embedded` earns a notice. A repository with no `.beads` has no claims to
- * split. Server layouts survive a copy, but they are not the first remedy.
+ * Only `embedded` earns a notice. With the machine-wide shared-server default in
+ * place (`BEADS_DOLT_SHARED_SERVER=true`), every `bd` command in an embedded project
+ * fails with `database not found`, and OMP's isolated subagents fork an embedded
+ * store with every clone; the migration below fixes both. Reads are never blocked.
  */
 export function backendNotice(backend: Backend, tracked: boolean): string | undefined {
 	if (!tracked || backend !== "embedded") return undefined;
 	return [
-		"beads is on the embedded backend, which resolves by walking up from the working directory.",
-		"A copied checkout or a clone gets its own database: claims stop excluding each other, and comments and closures never reach the run.",
-		"The beads plugin pins `BEADS_DIR` for this session: the checkout's `.beads` (a linked worktree resolves to the primary checkout's) rides on every Bash call, and a value exported before omp started is kept. Verify with `printenv BEADS_DIR`; do not ask for an export or a restart, and do not pass `BEADS_DIR` on calls yourself.",
-		"Unpinned, a read from a directory with no `.beads/` reports `No active beads workspace found`.",
-		"Switching this project to `--server` is an export, a re-init and a restore, not a flag, and it buys a pid-file lifecycle nobody owns.",
-	].join(" ");
+		"beads is on the embedded backend. With this machine's shared-server default every `bd` command here fails with `database not found`, and an OMP isolated subagent forks the store with its clone. Migrate the store to the shared Dolt server:",
+		"1. `bd export > issues.jsonl`; `bd backup init <dir> && bd backup sync` (a directory outside the checkout).",
+		"2. When `git ls-remote origin 'refs/dolt/*'` is empty: `bd init --shared-server --reinit-local --skip-hooks --skip-agents --prefix <prefix>`, then set `dolt_mode` to `server` in `.beads/metadata.json`, add `dolt.shared-server: true` to `.beads/config.yaml`, and `bd backup restore --force <dir>`.",
+		"   Otherwise: `bd dolt push` (on a non-fast-forward, `bd dolt pull` once and push again), make the same two file edits, then `bd bootstrap --yes`.",
+		"3. Check `bd list --all --json | jq length` against the pre-migration count and `bd export` against `issues.jsonl` (ignoring `updated_at`); then move `.beads/embeddeddolt` out of the checkout and commit `.beads/config.yaml` and `.beads/metadata.json`.",
+		"Remove `.beads/dolt-backup.json` afterwards: its state file churns inside isolated clones and breaks OMP's merge-back.",
+	].join("\n");
 }
 
 /**
@@ -194,7 +194,7 @@ export default function beadsDoltLifecycle(pi: ExtensionAPI): void {
 				{
 					customType: "com.srobroek.beads.storage-mode",
 					content: notice,
-					display: true,
+					display: false,
 					attribution: "user",
 				},
 				{ triggerTurn: false },

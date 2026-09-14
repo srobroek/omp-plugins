@@ -87,7 +87,7 @@ describe("readBackend", () => {
 
 describe("backendNotice", () => {
 	test("only embedded earns a notice", () => {
-		expect(backendNotice("embedded", true)).toContain("BEADS_DIR");
+		expect(backendNotice("embedded", true)).toContain("shared Dolt server");
 		expect(backendNotice("per-project", true)).toBeUndefined();
 		expect(backendNotice("shared", true)).toBeUndefined();
 	});
@@ -98,16 +98,12 @@ describe("backendNotice", () => {
 		expect(backendNotice("embedded", false)).toBeUndefined();
 	});
 
-	test("the notice says the plugin pins the database and never asks for an export", () => {
+	test("the notice carries both migration routes and the machine-default failure", () => {
 		const notice = backendNotice("embedded", true) ?? "";
-		expect(notice).toContain("claims stop excluding each other");
-		expect(notice).toContain("The beads plugin pins `BEADS_DIR`");
-		expect(notice).toContain("printenv BEADS_DIR");
-		expect(notice).toContain("linked worktree");
-		expect(notice).toContain("No active beads workspace found");
-		expect(notice).not.toContain("exporting");
-		expect(notice).not.toContain("Do not pin per call");
-		expect(notice).toContain("not a flag");
+		expect(notice).toContain("database not found");
+		expect(notice).toContain("bd init --shared-server --reinit-local");
+		expect(notice).toContain("bd bootstrap --yes");
+		expect(notice).toContain("bd backup restore --force");
 	});
 });
 
