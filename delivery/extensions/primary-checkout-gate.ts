@@ -1,10 +1,8 @@
 import { existsSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
-
-import { getWorktreesDir as upstreamGetWorktreesDir } from "@oh-my-pi/pi-utils";
-
 import type { ExtensionAPI, ToolCallEvent } from "@oh-my-pi/pi-coding-agent";
+import { getWorktreesDir as upstreamGetWorktreesDir } from "@oh-my-pi/pi-utils";
 
 import { extractCommand, findCommitInvocations } from "./main-branch-gate.ts";
 
@@ -24,7 +22,9 @@ import { extractCommand, findCommitInvocations } from "./main-branch-gate.ts";
  * a guard that blocks what it cannot see is worse than the rule it enforces.
  *
  * `DELIVERY_ALLOW_PRIMARY_CHECKOUT=1` in the ENVIRONMENT (session or bash-call `env`) is the
- * sanctioned override for the case where the user asked for the primary checkout.
+ * sanctioned override for the case where the user asked for the primary checkout. A bash-call
+ * override also grants later `edit`/`write` calls in that same primary checkout for this session,
+ * because those tool schemas have no `env` field.
  */
 
 const EDIT_TOOLS: Record<string, true> = { edit: true, write: true };
@@ -129,6 +129,18 @@ export function editedPaths(input: Record<string, unknown>): string[] {
 	return [...new Set(out)];
 }
 
+function inputEnvironment(input: Record<string, unknown>): NodeJS.ProcessEnv | undefined {
+	const value = input.env;
+	if (value === null || typeof value !== "object" || Array.isArray(value)) return undefined;
+	const env: NodeJS.ProcessEnv = {};
+	for (const [key, entry] of Object.entries(value)) {
+		if (typeof entry === "string") env[key] = entry;
+	}
+	return env;
+}
+
+type AuthorizedPrimaryCheckouts = ReadonlySet<string>;
+
 function isStatePath(absolute: string, topLevel: string): boolean {
 	const relative = absolute.slice(topLevel.length + 1);
 	const head = relative.split("/")[0] ?? "";
@@ -140,7 +152,9 @@ export function reasonFor(topLevel: string, what: string): string {
 		`${what} is inside the primary checkout of ${topLevel}. Agents work in a Worktrunk ` +
 		`worktree of the project: run \`wt switch --create <branch> --base origin/main --no-cd ` +
 		`--format json\` (in that repository) and make the change there. Set ` +
-		`${ALLOW_ENV}=1 in the environment only when the user asked for the primary checkout.`
+		`${ALLOW_ENV}=1 in the environment only when the user asked for the primary checkout. ` +
+		`For a follow-up edit/write, put that flag in a bash call's \`env\` while its cwd is ` +
+		`this checkout; that session grant is limited to this repository.`
 	);
 }
 /** Runtime-created isolated roots are harness-owned even though Git sees them as primary. */
@@ -153,12 +167,14 @@ export function decidePath(
 	path: string,
 	cwd: string,
 	worktreesDir = getWorktreesDir(),
+	authorizedPrimaryCheckouts?: AuthorizedPrimaryCheckouts,
 ): { block: true; reason: string } | undefined {
 	if (NON_FILE_SCHEME.test(path)) return undefined;
 	const absolute = isAbsolute(path) ? resolve(path) : resolve(cwd, expandHome(path));
 	const checkout = checkoutOf(existingDir(absolute));
 	if (!checkout?.primary || isRuntimeCheckout(checkout.topLevel, worktreesDir)) return undefined;
 	if (!absolute.startsWith(`${checkout.topLevel}/`)) return undefined;
+	if (authorizedPrimaryCheckouts?.has(checkout.topLevel)) return undefined;
 	if (isStatePath(absolute, checkout.topLevel)) return undefined;
 	return { block: true, reason: reasonFor(checkout.topLevel, `\`${path}\``) };
 }
@@ -169,11 +185,12 @@ export function decideEdit(
 	cwd: string,
 	env: NodeJS.ProcessEnv = process.env,
 	worktreesDir = getWorktreesDir(),
+	authorizedPrimaryCheckouts?: AuthorizedPrimaryCheckouts,
 ): { block: true; reason: string } | undefined {
 	if (EDIT_TOOLS[toolName] !== true) return undefined;
 	if (env[ALLOW_ENV] === "1") return undefined;
 	for (const path of editedPaths(input)) {
-		const decision = decidePath(path, cwd, worktreesDir);
+		const decision = decidePath(path, cwd, worktreesDir, authorizedPrimaryCheckouts);
 		if (decision) return decision;
 	}
 	return undefined;
@@ -196,20 +213,52 @@ export function decideCommit(
 	return undefined;
 }
 
+/** Bash-call environment grants are session-scoped and keyed by canonical primary checkout roots. */
+type SessionContext = { sessionManager?: { getSessionId?: () => string } };
+
+function sessionKey(ctx: SessionContext | undefined): string {
+	return ctx?.sessionManager?.getSessionId?.() ?? "default";
+}
+
 export default function primaryCheckoutGate(pi: ExtensionAPI): void {
+	const authorizations = new Map<string, Set<string>>();
+	const grantsFor = (ctx: SessionContext | undefined): Set<string> => {
+		const key = sessionKey(ctx);
+		let grants = authorizations.get(key);
+		if (grants === undefined) {
+			grants = new Set<string>();
+			authorizations.set(key, grants);
+		}
+		return grants;
+	};
+	pi.on("session_start", (_event, ctx) => {
+		authorizations.delete(sessionKey(ctx));
+	});
+	pi.on("session_shutdown", (_event, ctx) => {
+		authorizations.delete(sessionKey(ctx));
+	});
 	pi.on("tool_call", (event: ToolCallEvent, ctx) => {
 		try {
 			const input = event.input as Record<string, unknown>;
 			const base = ctx?.cwd ?? process.cwd();
 			const cwd = typeof input.cwd === "string" && input.cwd ? resolve(base, input.cwd) : base;
-			const callEnv =
-				typeof input.env === "object" && input.env !== null ? (input.env as NodeJS.ProcessEnv) : undefined;
-			const env = callEnv ? { ...process.env, ...callEnv } : process.env;
-			if (EDIT_TOOLS[event.toolName] === true) return decideEdit(event.toolName, input, cwd, env);
+			const inputEnv = inputEnvironment(input);
+			const env = inputEnv ? { ...process.env, ...inputEnv } : process.env;
+			const worktreesDir = getWorktreesDir();
+			const authorizedPrimaryCheckouts = grantsFor(ctx);
 			if (event.toolName === "bash") {
+				if (inputEnv?.[ALLOW_ENV] === "1") {
+					const checkout = checkoutOf(cwd);
+					if (checkout?.primary && !isRuntimeCheckout(checkout.topLevel, worktreesDir)) {
+						authorizedPrimaryCheckouts.add(checkout.topLevel);
+					}
+				}
 				const command = extractCommand(event.input);
 				if (!command) return;
-				return decideCommit(command, cwd, env);
+				return decideCommit(command, cwd, env, worktreesDir);
+			}
+			if (EDIT_TOOLS[event.toolName] === true) {
+				return decideEdit(event.toolName, input, cwd, env, worktreesDir, authorizedPrimaryCheckouts);
 			}
 			return;
 		} catch {
