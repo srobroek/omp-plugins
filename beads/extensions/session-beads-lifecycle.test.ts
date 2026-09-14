@@ -456,9 +456,9 @@ describe("releaseClaimArgs", () => {
 describe("formatSessionCloseAdvisory", () => {
 	const at = "2026-09-14T12:34:56.789Z";
 	test("names the bead and emits an actor-bound guarded command", () => {
-		const text = formatSessionCloseAdvisory(heldClaims(readBeads(BEAD_LIST), new Set(["bd-probe-2m7"]), undefined), { BD_ACTOR: "omp/Main/releaser" }, at);
+		const text = formatSessionCloseAdvisory(heldClaims(readBeads(BEAD_LIST), new Set(["bd-probe-2m7"]), undefined), { BD_ACTOR: "omp/Main/s1" }, at);
 		expect(text).toContain("bd-probe-2m7 [omp/Main/s1] target work");
-		expect(text).toContain("'release_actor=omp/Main/releaser'");
+		expect(text).toContain("'release_actor=omp/Main/s1'");
 		expect(text).toContain(`'released_at=${at}'`);
 		expect(text).toContain("'--if-assignee'");
 		expect(text).toContain("'omp/Main/s1'");
@@ -466,8 +466,16 @@ describe("formatSessionCloseAdvisory", () => {
 		expect(text).not.toContain("<current-assignee>");
 		expect(text).toContain("bd comments add");
 	});
+	test("does not release another holder when one actor merely touched the bead", () => {
+		const text = formatSessionCloseAdvisory(heldClaims(readBeads(BEAD_LIST), new Set(["bd-probe-2m7"]), undefined), { BD_ACTOR: "omp/Main/releaser" }, at);
+		expect(text).toContain("Release unavailable");
+		expect(text).not.toContain("release_actor=");
+		expect(text).not.toContain("--if-assignee");
+	});
 	test("fails closed when actor discovery is absent", () => {
-		const text = formatSessionCloseAdvisory([readBeads(BEAD_LIST)[1]!], {}, at);
+		const bead = readBeads(BEAD_LIST)[1];
+		if (bead === undefined) throw new Error("fixture must contain a second bead");
+		const text = formatSessionCloseAdvisory([bead], {}, at);
 		expect(text).toContain("Release unavailable");
 		expect(text).not.toContain("release_actor=");
 	});
@@ -484,8 +492,8 @@ describe("handleSessionStop", () => {
 		expect(r?.additionalContext).toContain("bd-probe-2m7");
 	});
 	test("passes the effective actor into actual release commands", () => {
-		const r = handleSessionStop({}, BEAD_LIST, new Set(["bd-probe-2m7"]), "omp/Main/releaser");
-		expect(r?.additionalContext).toContain("'release_actor=omp/Main/releaser'");
+		const r = handleSessionStop({}, BEAD_LIST, new Set(["bd-probe-2m7"]), "omp/Main/s1");
+		expect(r?.additionalContext).toContain("'release_actor=omp/Main/s1'");
 		expect(r?.additionalContext).toContain("'--if-assignee'");
 		expect(r?.additionalContext).toContain("'omp/Main/s1'");
 		expect(r?.additionalContext).not.toContain("<actor>");
@@ -774,7 +782,10 @@ esac
 			delete process.env.BEADS_ACTOR;
 			delete process.env.BD_ACTOR;
 			const { handlers } = wire();
-			handlers.tool_result![0]!({
+			const toolResult = handlers.tool_result?.[0];
+			const sessionStop = handlers.session_stop?.[0];
+			if (toolResult === undefined || sessionStop === undefined) throw new Error("lifecycle handlers were not registered");
+			toolResult({
 				toolName: "bash",
 				toolCallId: "alias-claim",
 				isError: false,
@@ -782,7 +793,7 @@ esac
 				content: [{ type: "text", text: "claimed" }],
 			}, { cwd: dir });
 
-			const advisory = await handlers.session_stop![0]!({}, { cwd: dir }) as { additionalContext?: string };
+			const advisory = await sessionStop({}, { cwd: dir }) as { additionalContext?: string };
 			expect(advisory.additionalContext).toContain("bd-owned [omp/Main/alias] owned claim");
 		} finally {
 			if (originalPath === undefined) delete process.env.PATH;
@@ -881,7 +892,9 @@ printf '%s\\n' '[]'
 			const ctx = { cwd: dir, sessionManager: { getSessionId: () => "release-cas" } };
 			handlers.tool_result?.[0]?.({ toolName: "bash", toolCallId: "a", isError: false, input: { command: "bd ready --claim", env: { BD_ACTOR: "actor/a" } }, content: [] }, ctx);
 			handlers.tool_result?.[0]?.({ toolName: "bash", toolCallId: "b", isError: false, input: { command: "bd ready --claim", env: { BD_ACTOR: "actor/b" } }, content: [] }, ctx);
-			const result = await handlers.session_stop![0]!({}, ctx) as { additionalContext: string };
+			const sessionStop = handlers.session_stop?.[0];
+			if (sessionStop === undefined) throw new Error("session stop handler was not registered");
+			const result = await sessionStop({}, ctx) as { additionalContext: string };
 			expect(result.additionalContext).toContain("'release_actor=actor/a'");
 			expect(result.additionalContext).toContain("'release_actor=actor/b'");
 			expect(result.additionalContext).not.toContain("<actor>");
@@ -911,8 +924,11 @@ printf '%s\\n' '[]'
 			process.env.PATH = `${dir}:${originalPath ?? ""}`;
 			const { handlers } = wire();
 			const ctx = { cwd: dir, sessionManager: { getSessionId: () => "release-stable" } };
-			handlers.tool_result![0]!({ toolName: "bash", toolCallId: "stable", isError: false, input: { command: "bd update bd-stable-1 --claim" }, content: [] }, ctx);
-			const stable = await handlers.session_stop![0]!({}, ctx) as { additionalContext?: string };
+			const toolResult = handlers.tool_result?.[0];
+			const sessionStop = handlers.session_stop?.[0];
+			if (toolResult === undefined || sessionStop === undefined) throw new Error("lifecycle handlers were not registered");
+			toolResult({ toolName: "bash", toolCallId: "stable", isError: false, input: { command: "bd update bd-stable-1 --claim" }, content: [] }, ctx);
+			const stable = await sessionStop({}, ctx) as { additionalContext?: string };
 			expect(stable.additionalContext).toContain("does not advertise atomic");
 			expect(stable.additionalContext).not.toContain("Release with:");
 		} finally {

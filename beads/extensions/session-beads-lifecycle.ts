@@ -515,7 +515,7 @@ export function formatSessionCloseAdvisory(
 		lines.push(`- ${bead.id}${who} ${bead.title}`);
 		const actor = bead.assignee !== undefined && effectiveActors.has(bead.assignee)
 			? bead.assignee
-			: effectiveActors.size === 1 ? [...effectiveActors][0] : undefined;
+			: undefined;
 		const release = bead.assignee === undefined || actor === undefined ? undefined
 			: releaseClaimCommand(bead.id, bead.assignee, { ...env, BD_ACTOR: actor }, releasedAt, casSupported);
 		lines.push(release === undefined
