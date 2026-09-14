@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.4.0](https://github.com/srobroek/omp-plugins/compare/build--v0.3.4...build--v0.4.0) (2026-09-14)
+
+
+### Features
+
+* **build:** route main tasks through low-cost agents ([#259](https://github.com/srobroek/omp-plugins/issues/259)) ([e6239a8](https://github.com/srobroek/omp-plugins/commit/e6239a86d4040d5f5569b0b66ab2a684bde29b87))
+
+
+### Bug Fixes
+
+* **build:** delegate before repository tool calls ([#262](https://github.com/srobroek/omp-plugins/issues/262)) ([dc83aaf](https://github.com/srobroek/omp-plugins/commit/dc83aaf25885a652d7d35708089404524e74551c))
+
 ## [0.3.4](https://github.com/srobroek/omp-plugins/compare/build--v0.3.3...build--v0.3.4) (2026-09-11)
 
 
