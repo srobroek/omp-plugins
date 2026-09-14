@@ -864,4 +864,61 @@ esac
 	});
 
 
+	test("registered stop emits per-bead CAS commands only when help advertises support", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "beads-release-cas-"));
+		const originalPath = process.env.PATH;
+		try {
+			mkdirSync(join(dir, ".beads"));
+			writeFileSync(join(dir, "bd"), `#!/bin/sh
+printf '%s\\n' "$*" >> '${dir}/calls'
+if [ "$1" = update ] && [ "$2" = --help ]; then printf '%s\\n' 'Usage: bd update [--if-assignee HOLDER]'; exit 0; fi
+if [ "$1" = list ]; then printf '%s\\n' '[{"id":"bd-a-1","title":"a","status":"in_progress","assignee":"actor/a"},{"id":"bd-b-2","title":"b","status":"in_progress","assignee":"actor/b"}]'; exit 0; fi
+printf '%s\\n' '[]'
+`);
+			chmodSync(join(dir, "bd"), 0o755);
+			process.env.PATH = `${dir}:${originalPath ?? ""}`;
+			const { handlers } = wire();
+			const ctx = { cwd: dir, sessionManager: { getSessionId: () => "release-cas" } };
+			handlers.tool_result![0]!({ toolName: "bash", toolCallId: "a", isError: false, input: { command: "bd ready --claim", env: { BD_ACTOR: "actor/a" } }, content: [] }, ctx);
+			handlers.tool_result![0]!({ toolName: "bash", toolCallId: "b", isError: false, input: { command: "bd ready --claim", env: { BD_ACTOR: "actor/b" } }, content: [] }, ctx);
+			const result = await handlers.session_stop![0]!({}, ctx) as { additionalContext?: string };
+			expect(result.additionalContext).toContain("'release_actor=actor/a'");
+			expect(result.additionalContext).toContain("'release_actor=actor/b'");
+			expect(result.additionalContext).not.toContain("<actor>");
+			expect(result.additionalContext).not.toContain("<current-assignee>");
+			const commands = readFileSync(join(dir, "calls"), "utf8").split("\\n");
+			expect(commands.filter(line => line.includes("update --help"))).toHaveLength(1);
+			const timestamps = [...(result.additionalContext.matchAll(/released_at=([^']+)/g))].map(match => match[1]);
+			expect(new Set(timestamps).size).toBe(1);
+		} finally {
+			if (originalPath === undefined) delete process.env.PATH;
+			else process.env.PATH = originalPath;
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	test("registered stop fails closed for stable help and missing actor", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "beads-release-stable-"));
+		const originalPath = process.env.PATH;
+		try {
+			mkdirSync(join(dir, ".beads"));
+			writeFileSync(join(dir, "bd"), `#!/bin/sh
+if [ "$1" = update ] && [ "$2" = --help ]; then printf '%s\\n' 'Usage: bd update [--status STATUS]'; exit 0; fi
+if [ "$1" = list ]; then printf '%s\\n' '[{"id":"bd-stable-1","title":"stable","status":"in_progress","assignee":"actor/a"}]'; exit 0; fi
+printf '%s\\n' '[]'
+`);
+			chmodSync(join(dir, "bd"), 0o755);
+			process.env.PATH = `${dir}:${originalPath ?? ""}`;
+			const { handlers } = wire();
+			const ctx = { cwd: dir, sessionManager: { getSessionId: () => "release-stable" } };
+			handlers.tool_result![0]!({ toolName: "bash", toolCallId: "stable", isError: false, input: { command: "bd update bd-stable-1 --claim" }, content: [] }, ctx);
+			const stable = await handlers.session_stop![0]!({}, ctx) as { additionalContext?: string };
+			expect(stable.additionalContext).toContain("does not advertise atomic");
+			expect(stable.additionalContext).not.toContain("Release with:");
+		} finally {
+			if (originalPath === undefined) delete process.env.PATH;
+			else process.env.PATH = originalPath;
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
 });
