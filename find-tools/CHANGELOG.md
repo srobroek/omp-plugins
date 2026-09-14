@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.0.3](https://github.com/srobroek/omp-plugins/compare/find-tools--v1.0.2...find-tools--v1.0.3) (2026-09-14)
+
+
+### Bug Fixes
+
+* **find-tools:** route capability queries across marketplaces ([ef78d9f](https://github.com/srobroek/omp-plugins/commit/ef78d9fa9cb0fbc189c4505294a2bf9fbd7bf871))
+* **find-tools:** route capability queries across marketplaces ([c09b2e6](https://github.com/srobroek/omp-plugins/commit/c09b2e6f1ae3c3e6cd2f07eb44976669ac1ba6e2))
+
 ## [1.0.2](https://github.com/srobroek/omp-plugins/compare/find-tools--v1.0.1...find-tools--v1.0.2) (2026-09-13)
 
 

@@ -191,11 +191,14 @@ async function scanLocal(deps: Required<Pick<ScanDeps, "run" | "readFile" | "whi
 	return { surface: "local", ok: true, hits };
 }
 
-async function scanDiscover(deps: Required<Pick<ScanDeps, "run" | "which">>, query: string): Promise<SurfaceResult> {
+async function scanDiscover(deps: Required<Pick<ScanDeps, "run" | "which">>): Promise<SurfaceResult> {
 	if (!deps.which("omp")) {
 		return { surface: "discover", ok: true, skipped: true, reason: "omp binary not found", hits: [] };
 	}
-	const r = await deps.run(["omp", "plugin", "discover", query], NETWORK_MS);
+	// `omp plugin discover` searches every configured marketplace. Its optional
+	// argument is a marketplace name, not a capability query; passing the user
+	// query here makes the CLI interpret natural language as a marketplace.
+	const r = await deps.run(["omp", "plugin", "discover"], NETWORK_MS);
 	if (!r.ok) {
 		return { surface: "discover", ok: false, reason: r.stderr.slice(0, 500) || "discover failed", hits: [] };
 	}
@@ -366,7 +369,7 @@ export async function scanSurfaces(params: ScanParams, deps: ScanDeps = {}): Pro
 	};
 
 	push("local", () => scanLocal({ run, readFile, which }));
-	push("discover", () => scanDiscover({ run, which }, params.query));
+	push("discover", () => scanDiscover({ run, which }));
 	push("mcp_registry", () => scanMcpRegistry(fetchFn, params.query));
 	push("skills_cli", scanSkillsCli);
 	push("npm", () => scanNpm(fetchFn, params.query));

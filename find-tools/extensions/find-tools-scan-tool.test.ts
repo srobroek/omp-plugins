@@ -109,6 +109,22 @@ describe("read discovery execution boundary", () => {
 	});
 });
 
+	test("routes capability queries to all configured marketplaces", async () => {
+		const commands: string[][] = [];
+		const result = await scanSurfaces(
+			{ query: "Find a reusable capability for browser automation and authenticated web workflows", surfaces: ["discover"] },
+			{
+				which: () => true,
+				run: async (argv) => {
+					commands.push(argv);
+					return { ok: true, stdout: "browser-tools", stderr: "" };
+				},
+			},
+		);
+		expect(commands).toEqual([["omp", "plugin", "discover"]]);
+		expect(result.results.find((surface) => surface.surface === "discover")?.hits[0]?.detail).toBe("browser-tools");
+	});
+
 // Real subprocess deadlines and inherited OS pipes cannot be exercised with fake timers.
 describe("bounded discovery subprocesses", () => {
 	test("kills a SIGTERM-resistant command at the deadline", async () => {
