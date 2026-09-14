@@ -67,13 +67,12 @@ describe("getWorktreesDir", () => {
 		delete process.env.OMP_WORKTREE_DIR;
 		expect(getWorktreesDir()).toBe(override);
 	});
-
 	test("uses the profile-aware XDG data root for the fallback", () => {
 		const home = mkdtempSync(join(tmpdir(), "pcg-home-"));
 		const xdg = join(home, "xdg");
 		const profileRoot = join(xdg, "omp", "profiles", "acme");
 		mkdirSync(profileRoot, { recursive: true });
-		const source = join(process.cwd(), "delivery/extensions/primary-checkout-gate.ts");
+		const source = join(import.meta.dir, "primary-checkout-gate.ts");
 		const script = `import { getWorktreesDir } from ${JSON.stringify(source)}; console.log(getWorktreesDir());`;
 		const result = Bun.spawnSync([process.execPath, "-e", script], {
 			env: { ...process.env, HOME: home, OMP_PROFILE: "acme", XDG_DATA_HOME: xdg, OMP_WORKTREE_DIR: "" },
