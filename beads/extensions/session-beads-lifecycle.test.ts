@@ -452,6 +452,15 @@ describe("releaseClaimArgs", () => {
 		expect(releaseClaimArgs("bd-a-1", "omp/Main/s1", { BD_ACTOR: "omp/Main/s2;rm" }, at)).toBeUndefined();
 		expect(releaseClaimCommand("bd-a-1", "omp/Main/s1", { BD_ACTOR: "omp/Main/s2" }, at)).toContain("--if-assignee");
 	});
+	test("emits a command-local BD_ACTOR matching release metadata", () => {
+		const command = releaseClaimCommand("bd-a-1", "omp/Main/s1", { BD_ACTOR: "omp/Main/s2", BEADS_ACTOR: "omp/Main/ambient" }, at);
+		expect(command).toContain("BD_ACTOR='omp/Main/s2' 'bd'");
+		expect(command).toContain("'release_actor=omp/Main/s2'");
+		expect(command).toContain("'--if-assignee' 'omp/Main/s1'");
+	});
+	test("refuses quote-bearing actors instead of interpolating shell text", () => {
+		expect(releaseClaimCommand("bd-a-1", "omp/Main/s1", { BD_ACTOR: "omp/Main/o'hare" }, at)).toBeUndefined();
+	});
 });
 describe("formatSessionCloseAdvisory", () => {
 	const at = "2026-09-14T12:34:56.789Z";

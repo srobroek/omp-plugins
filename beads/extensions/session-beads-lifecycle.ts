@@ -422,7 +422,7 @@ export function releaseClaimArgs(
 	releasedAt = new Date().toISOString(),
 	casSupported = true,
 ): string[] | undefined {
-	const actor = (env.BD_ACTOR?.trim() || env.BEADS_ACTOR?.trim() || "");
+	const actor = env.BD_ACTOR?.trim() || env.BEADS_ACTOR?.trim() || "";
 	if (!casSupported || !SAFE_RELEASE_IDENTIFIER.test(id) || !SAFE_RELEASE_IDENTIFIER.test(holder) || !SAFE_RELEASE_IDENTIFIER.test(actor)) return undefined;
 	if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(releasedAt)) return undefined;
 	return [
@@ -447,8 +447,11 @@ export function releaseClaimCommand(
 	casSupported = true,
 ): string | undefined {
 	const args = releaseClaimArgs(id, holder, env, releasedAt, casSupported);
-	return args === undefined ? undefined : ["bd", ...args].map(shellQuote).join(" ");
+	if (args === undefined) return undefined;
+	const actor = env.BD_ACTOR?.trim() || env.BEADS_ACTOR?.trim() || "";
+	return [`BD_ACTOR=${shellQuote(actor)}`, "bd", ...args].map((value, index) => index === 0 ? value : shellQuote(value)).join(" ");
 }
+
 
 export interface Bead {
 	id: string;
