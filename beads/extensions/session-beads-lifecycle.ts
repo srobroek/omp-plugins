@@ -412,8 +412,9 @@ const SAFE_RELEASE_IDENTIFIER = /^[A-Za-z0-9][A-Za-z0-9._/-]*$/;
  * deliberately kept in the argv array: issue text and actor values are never
  * parsed as shell source, and a concurrent holder cannot be released.
  *
- * `BD_ACTOR` is bd's effective convention; `BEADS_ACTOR` remains the plugin's
- * documented fallback while projects migrate their hooks.
+ * Both actor environment names are bound command-locally to the same validated
+ * identity. bd releases currently consume `BEADS_ACTOR`; the legacy alias is
+ * retained for older installations and for the actor gate's attribution.
  */
 export function releaseClaimArgs(
 	id: string,
@@ -449,7 +450,7 @@ export function releaseClaimCommand(
 	const args = releaseClaimArgs(id, holder, env, releasedAt, casSupported);
 	if (args === undefined) return undefined;
 	const actor = env.BD_ACTOR?.trim() || env.BEADS_ACTOR?.trim() || "";
-	return [`BD_ACTOR=${shellQuote(actor)}`, "bd", ...args].map((value, index) => index === 0 ? value : shellQuote(value)).join(" ");
+	return [`BEADS_ACTOR=${shellQuote(actor)}`, `BD_ACTOR=${shellQuote(actor)}`, "bd", ...args].map((value, index) => index < 2 ? value : shellQuote(value)).join(" ");
 }
 
 
