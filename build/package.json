@@ -1,6 +1,6 @@
 {
   "name": "@srobroek/build",
-  "version": "0.3.4",
+  "version": "0.4.0",
   "description": "Execution agents: operator and external-repo worker.",
   "private": true,
   "omp": {}
