@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.3.2](https://github.com/srobroek/omp-plugins/compare/beads--v1.3.1...beads--v1.3.2) (2026-09-14)
+
+
+### Bug Fixes
+
+* **beads:** bind both actor env names on release ([69ebdd3](https://github.com/srobroek/omp-plugins/commit/69ebdd3aa1d0f3773813de3939751ea5be92902d))
+* **beads:** bind canonical actor on release commands ([756ac12](https://github.com/srobroek/omp-plugins/commit/756ac12d848b0406754bccb90cb92dfdf9f49ae4))
+* **beads:** require dual actor binding in release guidance ([4001677](https://github.com/srobroek/omp-plugins/commit/40016772e15d808790d56f9b5792789107d70f14))
+
 ## [1.3.1](https://github.com/srobroek/omp-plugins/compare/beads--v1.3.0...beads--v1.3.1) (2026-09-14)
 
 
