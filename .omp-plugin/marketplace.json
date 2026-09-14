@@ -68,7 +68,7 @@
       "name": "delivery",
       "description": "Delivery and git-workflow rules, plus a pull-request review agent.",
       "source": "./delivery",
-      "version": "0.10.5",
+      "version": "0.10.6",
       "category": "devops"
     },
     {
@@ -103,7 +103,7 @@
       "name": "find-tools",
       "description": "Discover and vet skills, agents, MCP servers, and plugins across real registries.",
       "source": "./find-tools",
-      "version": "1.0.2",
+      "version": "1.0.3",
       "category": "productivity"
     },
     {

@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.10.6](https://github.com/srobroek/omp-plugins/compare/delivery--v0.10.5...delivery--v0.10.6) (2026-09-14)
+
+
+### Bug Fixes
+
+* **delivery:** resolve child test module path ([0be13b9](https://github.com/srobroek/omp-plugins/commit/0be13b948548186e45ffbc8ccbc1cf96e82b134b))
+* **delivery:** resolve child test module path ([0fa4686](https://github.com/srobroek/omp-plugins/commit/0fa46864032817cc8a7c94bb0e3f8127eeaba0aa))
+
 ## [0.10.5](https://github.com/srobroek/omp-plugins/compare/delivery--v0.10.4...delivery--v0.10.5) (2026-09-14)
 
 
