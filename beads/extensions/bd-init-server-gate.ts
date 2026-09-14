@@ -9,8 +9,9 @@
  * orchestration from its first commit.
  *
  * What satisfies the gate: `--shared-server` or `--server` on the command, or
- * `BEADS_DOLT_SHARED_SERVER=true` in this process's environment, which is what the
- * spawned `bd` inherits. The user-level `~/.config/bd/config.yaml` carrier is
+ * `BEADS_DOLT_SHARED_SERVER` set to `true` or `1` in this process's environment, which
+ * is what the spawned `bd` inherits (both spellings complete a plain init; verified
+ * 2026-09-14). The user-level `~/.config/bd/config.yaml` carrier is
  * deliberately NOT accepted: on bd 1.2.2 it records server mode in `metadata.json`
  * but leaves the init half done (embedded store created, server database never
  * created), verified 2026-09-14.
@@ -39,6 +40,9 @@ const PREFILTER = /\bbd\b[\s\S]{0,400}?\binit\b/;
 
 /** Flags that make `bd init` create a server-mode store. */
 const SERVER_FLAGS: Record<string, true> = { "--shared-server": true, "--server": true };
+
+/** Values of `BEADS_DOLT_SHARED_SERVER` that bd 1.2.2 honours. */
+const ENV_ON: Record<string, true> = { true: true, "1": true };
 
 /** `--help` prints; it initialises nothing. */
 const HELP_FLAGS: Record<string, true> = { "--help": true, "-h": true };
@@ -82,7 +86,7 @@ export function ownedDatabase(cwd: string): string | undefined {
 
 export const MODE_REFUSAL =
 	"bd init refused: this would create an embedded store, and OMP's isolated subagents fork an embedded store with every clone. " +
-	"Add `--shared-server` to the command, or `export BEADS_DOLT_SHARED_SERVER=true` before starting omp. " +
+	"Add `--shared-server` to the command, or `export BEADS_DOLT_SHARED_SERVER=true` (or `=1`) before starting omp. " +
 	"The user-level `~/.config/bd/config.yaml` default does not count: on bd 1.2.2 it records server mode but never creates the server database.";
 
 export function collisionRefusal(database: string): string {
@@ -117,7 +121,7 @@ export function decideBdInitServer(
 	for (const invocation of invocations) {
 		if (invocation.flags.some(flag => HELP_FLAGS[flag] === true)) continue;
 		const serverFlag = invocation.flags.some(flag => SERVER_FLAGS[flag] === true);
-		if (!serverFlag && gate.env.BEADS_DOLT_SHARED_SERVER !== "true") return { block: true, reason: MODE_REFUSAL };
+		if (!serverFlag && !ENV_ON[gate.env.BEADS_DOLT_SHARED_SERVER ?? ""]) return { block: true, reason: MODE_REFUSAL };
 		const dir = invocation.dir === undefined ? cwd : path.resolve(cwd, invocation.dir);
 		const database = databaseFor(invocation, dir);
 		const owned = ownedDatabase(dir);

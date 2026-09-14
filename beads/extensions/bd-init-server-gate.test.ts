@@ -43,13 +43,14 @@ describe("decideBdInitServer: store mode", () => {
 		expect(decideBdInitServer("bd init --skip-hooks", cwd, gate([]))).toEqual({ block: true, reason: MODE_REFUSAL });
 	});
 
-	test("--shared-server, --server, or BEADS_DOLT_SHARED_SERVER=true satisfies the gate", () => {
+	test("--shared-server, --server, or BEADS_DOLT_SHARED_SERVER (true or 1) satisfies the gate", () => {
 		const cwd = tmp("fresh");
 		expect(decideBdInitServer("bd init --shared-server --skip-hooks", cwd, gate([]))).toBeUndefined();
 		expect(decideBdInitServer("bd init --server", cwd, gate([]))).toBeUndefined();
 		expect(decideBdInitServer("bd init --init-if-missing", cwd, gate([], { BEADS_DOLT_SHARED_SERVER: "true" }))).toBeUndefined();
-		// Any other value is not the carrier bd reads.
-		expect(decideBdInitServer("bd init", cwd, gate([], { BEADS_DOLT_SHARED_SERVER: "1" }))).toEqual({ block: true, reason: MODE_REFUSAL });
+		expect(decideBdInitServer("bd init", cwd, gate([], { BEADS_DOLT_SHARED_SERVER: "1" }))).toBeUndefined();
+		// bd reads only `true` and `1` (verified 2026-09-14); anything else is not the carrier.
+		expect(decideBdInitServer("bd init", cwd, gate([], { BEADS_DOLT_SHARED_SERVER: "yes" }))).toEqual({ block: true, reason: MODE_REFUSAL });
 	});
 
 	test("a mention, --help, and unrelated commands are allowed", () => {
