@@ -15,6 +15,6 @@
   "private": true,
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "lint": "biome check --config-path biome.json"
+    "lint": "biome check --config-path biome.json --max-diagnostics=1000"
   }
 }
