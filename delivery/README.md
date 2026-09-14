@@ -32,7 +32,7 @@ Blocks an `edit`, a `write`, or a `git`/`dgit` commit whose target lies in a rep
 
 When git cannot answer, the gate allows the call. The refusal names the `wt switch --create` command to run instead.
 
-For a user-authorized exception, set `DELIVERY_ALLOW_PRIMARY_CHECKOUT=1` in the process environment or in the bash call's `env`. Text in a command or a file body does not enable it.
+For a user-authorized exception, set `DELIVERY_ALLOW_PRIMARY_CHECKOUT=1` in the process environment or in the bash call's `env`. Because `edit` and `write` have no `env` field, a bash call carrying that value while its `cwd` is a primary checkout grants subsequent `edit`/`write` calls in that same checkout for the current session. The grant is repository-scoped; a grant from another repository or a linked worktree does not transfer. Text in a command or a file body does not enable it.
 
 The gate is advisory-strength. It reads the two tool surfaces agents edit through and the commit boundary. A shell command that writes files (`sed -i`, a redirection, a script) is not parsed, because a shell parser in a gate produces silent permits.
 

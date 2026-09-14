@@ -5,14 +5,14 @@ import { join } from "node:path";
 
 import { setWorktreesDir } from "@oh-my-pi/pi-utils";
 
-import {
+import primaryCheckoutGate, {
 	checkoutOf,
 	decideCommit,
 	decideEdit,
 	editedPaths,
+	type GitRun,
 	getWorktreesDir,
 	isRuntimeCheckout,
-	type GitRun,
 	setGitRunForTests,
 } from "./primary-checkout-gate.ts";
 
@@ -196,5 +196,66 @@ describe("decideCommit", () => {
 describe("editedPaths", () => {
 	test("collects write paths, path lists, and hashline section headers once each", () => {
 		expect(editedPaths({ path: "a.ts", paths: ["b.ts", "a.ts"], input: "[c.ts#ABCD]\nPUT 1.=1:\n+x\n['d e.ts'#ABCD]\n" })).toEqual(["a.ts", "b.ts", "c.ts", "d e.ts"]);
+	});
+});
+
+describe("integration", () => {
+	type Handler = (event: unknown, context?: unknown) => unknown;
+
+	function register(): { toolCall: Handler; sessionStart: Handler } {
+		const handlers: Record<string, Handler[]> = {};
+		const fakePi = {
+			on: (event: string, handler: Handler) => {
+				const eventHandlers = handlers[event] ?? [];
+				eventHandlers.push(handler);
+				handlers[event] = eventHandlers;
+			},
+		};
+		primaryCheckoutGate(fakePi as never);
+		const toolCall = handlers.tool_call?.[0];
+		const sessionStart = handlers.session_start?.[0];
+		if (toolCall === undefined || sessionStart === undefined) {
+			throw new Error("primary checkout gate handlers were not registered");
+		}
+		return { toolCall, sessionStart };
+	}
+
+	test("a bash-call env grant allows later edits in the same primary checkout", () => {
+		const { primary } = setup();
+		const { toolCall } = register();
+		expect(toolCall({ toolName: "bash", input: { cwd: primary, env: { DELIVERY_ALLOW_PRIMARY_CHECKOUT: "1" } } })).toBeUndefined();
+		expect(toolCall({ toolName: "write", input: { path: join(primary, "src", "new.ts"), content: "" } })).toBeUndefined();
+	});
+
+	test("a grant is scoped to its primary checkout", () => {
+		const { primary } = setup();
+		const other = join(scratch, "other-repo");
+		mkdirSync(join(other, "src"), { recursive: true });
+		setGitRunForTests(fakeGit([{ topLevel: primary, primary: true }, { topLevel: other, primary: true }]));
+		const { toolCall } = register();
+		expect(toolCall({ toolName: "bash", input: { cwd: primary, env: { DELIVERY_ALLOW_PRIMARY_CHECKOUT: "1" } } })).toBeUndefined();
+		expect(toolCall({ toolName: "write", input: { path: join(other, "src", "new.ts"), content: "" } })).toMatchObject({ block: true });
+	});
+
+	test("a bash-call env grant does not require command or file content", () => {
+		const { primary } = setup();
+		const { toolCall } = register();
+		expect(toolCall({ toolName: "bash", input: { cwd: primary, env: { DELIVERY_ALLOW_PRIMARY_CHECKOUT: "1" } } })).toBeUndefined();
+		expect(toolCall({ toolName: "edit", input: { input: `[${primary}/src/a.ts#1A2B]\nPUT 1.=1:\n+DELIVERY_ALLOW_PRIMARY_CHECKOUT=1\n` } })).toBeUndefined();
+	});
+
+	test("a non-primary cwd does not grant a primary checkout", () => {
+		const { primary, linked } = setup();
+		const { toolCall } = register();
+		expect(toolCall({ toolName: "bash", input: { cwd: linked, env: { DELIVERY_ALLOW_PRIMARY_CHECKOUT: "1" } } })).toBeUndefined();
+		expect(toolCall({ toolName: "write", input: { path: join(primary, "src", "new.ts"), content: "" } })).toMatchObject({ block: true });
+	});
+
+	test("session start clears repository grants", () => {
+		const { primary } = setup();
+		const { toolCall, sessionStart } = register();
+		expect(toolCall({ toolName: "bash", input: { cwd: primary, env: { DELIVERY_ALLOW_PRIMARY_CHECKOUT: "1" } } })).toBeUndefined();
+		expect(sessionStart({})).toBeUndefined();
+		expect(toolCall({ toolName: "write", input: { path: join(primary, "src", "new.ts"), content: "" } })).toMatchObject({ block: true });
 	});
 });
