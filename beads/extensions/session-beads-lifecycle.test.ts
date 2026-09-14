@@ -22,6 +22,8 @@ import sessionBeadsLifecycle, {
 	readGateList,
 	readGates,
 	releaseAutoPin,
+	releaseClaimArgs,
+	releaseClaimCommand,
 	repoIdentity,
 	sessionPinAfter,
 	sessionPinFor,
@@ -430,16 +432,62 @@ describe("heldClaims", () => {
 	});
 });
 
-describe("formatSessionCloseAdvisory", () => {
-	test("names the bead, the holder, and every remedy", () => {
-		const text = formatSessionCloseAdvisory(heldClaims(readBeads(BEAD_LIST), new Set(["bd-probe-2m7"]), undefined));
-		expect(text).toContain("bd-probe-2m7 [omp/Main/s1] target work");
-		expect(text).toContain("bd update <id> --assignee '' --status open");
-		expect(text).not.toContain(["un", "claim"].join(""));
-		expect(text).toContain("bd comments add");
-		expect(text).toContain("discovered work");
+describe("releaseClaimArgs", () => {
+	const at = "2026-09-14T12:34:56.789Z";
+	test("builds one guarded argv and preserves metadata by using set-metadata", () => {
+		expect(releaseClaimArgs("bd-probe-2m7", "omp/Main/s1", { BD_ACTOR: "omp/Main/s2" }, at)).toEqual([
+			"update", "bd-probe-2m7", "--assignee", "", "--status", "open",
+			"--set-metadata", "release_actor=omp/Main/s2", "--set-metadata", `released_at=${at}`,
+			"--if-assignee", "omp/Main/s1",
+		]);
 	});
-
+	test("prefers BD_ACTOR and falls back to BEADS_ACTOR", () => {
+		expect(releaseClaimArgs("bd-a-1", "omp/Main/s1", { BEADS_ACTOR: "omp/Main/fallback" }, at)?.[7]).toBe("release_actor=omp/Main/fallback");
+		expect(releaseClaimArgs("bd-a-1", "omp/Main/s1", { BD_ACTOR: " ", BEADS_ACTOR: "omp/Main/fallback" }, at)?.[7]).toBe("release_actor=omp/Main/fallback");
+		expect(releaseClaimArgs("bd-a-1", "omp/Main/s1", { BD_ACTOR: "omp/Main/wins", BEADS_ACTOR: "omp/Main/loses" }, at)?.[7]).toBe("release_actor=omp/Main/wins");
+		expect(releaseClaimArgs("bd-a-1", "omp/Main/s1", {}, at)).toBeUndefined();
+	});
+	test("refuses unsafe identifiers instead of interpolating shell text", () => {
+		expect(releaseClaimArgs("bd-a-1;rm", "omp/Main/s1", { BD_ACTOR: "omp/Main/s2" }, at)).toBeUndefined();
+		expect(releaseClaimArgs("bd-a-1", "omp/Main/s1", { BD_ACTOR: "omp/Main/s2;rm" }, at)).toBeUndefined();
+		expect(releaseClaimCommand("bd-a-1", "omp/Main/s1", { BD_ACTOR: "omp/Main/s2" }, at)).toContain("--if-assignee");
+	});
+	test("emits a command-local BD_ACTOR matching release metadata", () => {
+		const command = releaseClaimCommand("bd-a-1", "omp/Main/s1", { BD_ACTOR: "omp/Main/s2", BEADS_ACTOR: "omp/Main/ambient" }, at);
+		expect(command).toContain("BD_ACTOR='omp/Main/s2' 'bd'");
+		expect(command).toContain("'release_actor=omp/Main/s2'");
+		expect(command).toContain("'--if-assignee' 'omp/Main/s1'");
+	});
+	test("refuses quote-bearing actors instead of interpolating shell text", () => {
+		expect(releaseClaimCommand("bd-a-1", "omp/Main/s1", { BD_ACTOR: "omp/Main/o'hare" }, at)).toBeUndefined();
+	});
+});
+describe("formatSessionCloseAdvisory", () => {
+	const at = "2026-09-14T12:34:56.789Z";
+	test("names the bead and emits an actor-bound guarded command", () => {
+		const text = formatSessionCloseAdvisory(heldClaims(readBeads(BEAD_LIST), new Set(["bd-probe-2m7"]), undefined), { BD_ACTOR: "omp/Main/s1" }, at);
+		expect(text).toContain("bd-probe-2m7 [omp/Main/s1] target work");
+		expect(text).toContain("'release_actor=omp/Main/s1'");
+		expect(text).toContain(`'released_at=${at}'`);
+		expect(text).toContain("'--if-assignee'");
+		expect(text).toContain("'omp/Main/s1'");
+		expect(text).not.toContain("<actor>");
+		expect(text).not.toContain("<current-assignee>");
+		expect(text).toContain("bd comments add");
+	});
+	test("does not release another holder when one actor merely touched the bead", () => {
+		const text = formatSessionCloseAdvisory(heldClaims(readBeads(BEAD_LIST), new Set(["bd-probe-2m7"]), undefined), { BD_ACTOR: "omp/Main/releaser" }, at);
+		expect(text).toContain("Release unavailable");
+		expect(text).not.toContain("release_actor=");
+		expect(text).not.toContain("--if-assignee");
+	});
+	test("fails closed when actor discovery is absent", () => {
+		const bead = readBeads(BEAD_LIST)[1];
+		if (bead === undefined) throw new Error("fixture must contain a second bead");
+		const text = formatSessionCloseAdvisory([bead], {}, at);
+		expect(text).toContain("Release unavailable");
+		expect(text).not.toContain("release_actor=");
+	});
 	test("a long list is capped and counted", () => {
 		const many = Array.from({ length: 11 }, (_, i) => ({ id: `b-${i}`, title: "t", status: "in_progress" }));
 		expect(formatSessionCloseAdvisory(many)).toContain("...and 3 more");
@@ -451,6 +499,13 @@ describe("handleSessionStop", () => {
 		const r = handleSessionStop({}, BEAD_LIST, new Set(["bd-probe-2m7"]), undefined);
 		expect(r?.continue).toBe(true);
 		expect(r?.additionalContext).toContain("bd-probe-2m7");
+	});
+	test("passes the effective actor into actual release commands", () => {
+		const r = handleSessionStop({}, BEAD_LIST, new Set(["bd-probe-2m7"]), "omp/Main/s1");
+		expect(r?.additionalContext).toContain("'release_actor=omp/Main/s1'");
+		expect(r?.additionalContext).toContain("'--if-assignee'");
+		expect(r?.additionalContext).toContain("'omp/Main/s1'");
+		expect(r?.additionalContext).not.toContain("<actor>");
 	});
 
 	test("skips its own continuation", () => {
@@ -736,7 +791,10 @@ esac
 			delete process.env.BEADS_ACTOR;
 			delete process.env.BD_ACTOR;
 			const { handlers } = wire();
-			handlers.tool_result![0]!({
+			const toolResult = handlers.tool_result?.[0];
+			const sessionStop = handlers.session_stop?.[0];
+			if (toolResult === undefined || sessionStop === undefined) throw new Error("lifecycle handlers were not registered");
+			toolResult({
 				toolName: "bash",
 				toolCallId: "alias-claim",
 				isError: false,
@@ -744,7 +802,7 @@ esac
 				content: [{ type: "text", text: "claimed" }],
 			}, { cwd: dir });
 
-			const advisory = await handlers.session_stop![0]!({}, { cwd: dir }) as { additionalContext?: string };
+			const advisory = await sessionStop({}, { cwd: dir }) as { additionalContext?: string };
 			expect(advisory.additionalContext).toContain("bd-owned [omp/Main/alias] owned claim");
 		} finally {
 			if (originalPath === undefined) delete process.env.PATH;
@@ -826,4 +884,66 @@ esac
 	});
 
 
+	test("registered stop emits per-bead CAS commands only when help advertises support", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "beads-release-cas-"));
+		const originalPath = process.env.PATH;
+		try {
+			mkdirSync(join(dir, ".beads"));
+			writeFileSync(join(dir, "bd"), `#!/bin/sh
+printf '%s\\n' "$*" >> '${dir}/calls'
+if [ "$1" = update ] && [ "$2" = --help ]; then printf '%s\\n' 'Usage: bd update [--if-assignee HOLDER]'; exit 0; fi
+if [ "$1" = list ]; then printf '%s\\n' '[{"id":"bd-a-1","title":"a","status":"in_progress","assignee":"actor/a"},{"id":"bd-b-2","title":"b","status":"in_progress","assignee":"actor/b"}]'; exit 0; fi
+printf '%s\\n' '[]'
+`);
+			chmodSync(join(dir, "bd"), 0o755);
+			process.env.PATH = `${dir}:${originalPath ?? ""}`;
+			const { handlers } = wire();
+			const ctx = { cwd: dir, sessionManager: { getSessionId: () => "release-cas" } };
+			handlers.tool_result?.[0]?.({ toolName: "bash", toolCallId: "a", isError: false, input: { command: "bd ready --claim", env: { BD_ACTOR: "actor/a" } }, content: [] }, ctx);
+			handlers.tool_result?.[0]?.({ toolName: "bash", toolCallId: "b", isError: false, input: { command: "bd ready --claim", env: { BD_ACTOR: "actor/b" } }, content: [] }, ctx);
+			const sessionStop = handlers.session_stop?.[0];
+			if (sessionStop === undefined) throw new Error("session stop handler was not registered");
+			const result = await sessionStop({}, ctx) as { additionalContext: string };
+			expect(result.additionalContext).toContain("'release_actor=actor/a'");
+			expect(result.additionalContext).toContain("'release_actor=actor/b'");
+			expect(result.additionalContext).not.toContain("<actor>");
+			expect(result.additionalContext).not.toContain("<current-assignee>");
+			const commands = readFileSync(join(dir, "calls"), "utf8").split("\\n");
+			expect(commands.filter(line => line.includes("update --help"))).toHaveLength(1);
+			const timestamps = [...(result.additionalContext.matchAll(/released_at=([^']+)/g))].map(match => match[1]);
+			expect(new Set(timestamps).size).toBe(1);
+		} finally {
+			if (originalPath === undefined) delete process.env.PATH;
+			else process.env.PATH = originalPath;
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	test("registered stop fails closed for stable help and missing actor", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "beads-release-stable-"));
+		const originalPath = process.env.PATH;
+		try {
+			mkdirSync(join(dir, ".beads"));
+			writeFileSync(join(dir, "bd"), `#!/bin/sh
+if [ "$1" = update ] && [ "$2" = --help ]; then printf '%s\\n' 'Usage: bd update [--status STATUS]'; exit 0; fi
+if [ "$1" = list ]; then printf '%s\\n' '[{"id":"bd-stable-1","title":"stable","status":"in_progress","assignee":"actor/a"}]'; exit 0; fi
+printf '%s\\n' '[]'
+`);
+			chmodSync(join(dir, "bd"), 0o755);
+			process.env.PATH = `${dir}:${originalPath ?? ""}`;
+			const { handlers } = wire();
+			const ctx = { cwd: dir, sessionManager: { getSessionId: () => "release-stable" } };
+			const toolResult = handlers.tool_result?.[0];
+			const sessionStop = handlers.session_stop?.[0];
+			if (toolResult === undefined || sessionStop === undefined) throw new Error("lifecycle handlers were not registered");
+			toolResult({ toolName: "bash", toolCallId: "stable", isError: false, input: { command: "bd update bd-stable-1 --claim" }, content: [] }, ctx);
+			const stable = await sessionStop({}, ctx) as { additionalContext?: string };
+			expect(stable.additionalContext).toContain("does not advertise atomic");
+			expect(stable.additionalContext).not.toContain("Release with:");
+		} finally {
+			if (originalPath === undefined) delete process.env.PATH;
+			else process.env.PATH = originalPath;
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
 });

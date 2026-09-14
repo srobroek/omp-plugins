@@ -33,7 +33,7 @@ MUST Re-stamp your own anchors when resuming an earlier session:
   `bd update <id> --set-metadata lease_host=... --set-metadata lease_pid=...`.
 DEFAULT `bd-lease-gate` stamps anchors after a successful claim; restamp by hand
   if it reports a failure.
-DEFAULT Release with `bd update <id> --assignee '' --status open`.
+DEFAULT Before presenting or running the guarded release command, run `bd update --help`. Proceed only when its output contains `--if-assignee`. If help omits the flag, do not release. Upgrade `bd` first. Release only your current lease with one guarded atomic update: `bd update <id> --assignee '' --status open --set-metadata release_actor=<actor> --set-metadata released_at=<UTC timestamp> --if-assignee <current-assignee>`. Set `BD_ACTOR` (or `BEADS_ACTOR`) first; a non-zero/CAS-mismatch result means the holder changed, so inspect instead of retrying without the guard.
 
 FIELD TAXONOMY
 | purpose | mechanism | writer |

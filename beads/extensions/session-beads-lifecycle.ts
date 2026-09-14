@@ -405,6 +405,54 @@ export function beadIdCandidates(command: string): string[] {
 	return ids;
 }
 
+const SAFE_RELEASE_IDENTIFIER = /^[A-Za-z0-9][A-Za-z0-9._/-]*$/;
+
+/**
+ * Build the one atomic command used to release a claim. The assignee CAS is
+ * deliberately kept in the argv array: issue text and actor values are never
+ * parsed as shell source, and a concurrent holder cannot be released.
+ *
+ * `BD_ACTOR` is bd's effective convention; `BEADS_ACTOR` remains the plugin's
+ * documented fallback while projects migrate their hooks.
+ */
+export function releaseClaimArgs(
+	id: string,
+	holder: string,
+	env: NodeJS.ProcessEnv = process.env,
+	releasedAt = new Date().toISOString(),
+	casSupported = true,
+): string[] | undefined {
+	const actor = env.BD_ACTOR?.trim() || env.BEADS_ACTOR?.trim() || "";
+	if (!casSupported || !SAFE_RELEASE_IDENTIFIER.test(id) || !SAFE_RELEASE_IDENTIFIER.test(holder) || !SAFE_RELEASE_IDENTIFIER.test(actor)) return undefined;
+	if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(releasedAt)) return undefined;
+	return [
+		"update", id,
+		"--assignee", "",
+		"--status", "open",
+		"--set-metadata", `release_actor=${actor}`,
+		"--set-metadata", `released_at=${releasedAt}`,
+		"--if-assignee", holder,
+	];
+}
+
+function shellQuote(value: string): string {
+	return `'${value.replaceAll("'", "'\\''")}'`;
+}
+
+export function releaseClaimCommand(
+	id: string,
+	holder: string,
+	env: NodeJS.ProcessEnv = process.env,
+	releasedAt = new Date().toISOString(),
+	casSupported = true,
+): string | undefined {
+	const args = releaseClaimArgs(id, holder, env, releasedAt, casSupported);
+	if (args === undefined) return undefined;
+	const actor = env.BD_ACTOR?.trim() || env.BEADS_ACTOR?.trim() || "";
+	return [`BD_ACTOR=${shellQuote(actor)}`, "bd", ...args].map((value, index) => index === 0 ? value : shellQuote(value)).join(" ");
+}
+
+
 export interface Bead {
 	id: string;
 	title: string;
@@ -456,15 +504,32 @@ export function heldClaims(
 	});
 }
 
-export function formatSessionCloseAdvisory(beads: Bead[]): string {
+export function formatSessionCloseAdvisory(
+	beads: Bead[],
+	env: NodeJS.ProcessEnv = process.env,
+	releasedAt = new Date().toISOString(),
+	casSupported = true,
+	actors?: ReadonlySet<string>,
+): string {
+	const effectiveActors = actors ?? new Set([env.BD_ACTOR?.trim() || env.BEADS_ACTOR?.trim() || ""].filter(Boolean));
 	const lines = ["Beads claims still held at session close (a mutating command was attempted):"];
 	for (const bead of beads.slice(0, MAX_LISTED)) {
 		const who = bead.assignee ? ` [${bead.assignee}]` : "";
 		lines.push(`- ${bead.id}${who} ${bead.title}`);
+		const actor = bead.assignee !== undefined && effectiveActors.has(bead.assignee)
+			? bead.assignee
+			: undefined;
+		const release = bead.assignee === undefined || actor === undefined ? undefined
+			: releaseClaimCommand(bead.id, bead.assignee, { ...env, BD_ACTOR: actor }, releasedAt, casSupported);
+		lines.push(release === undefined
+			? casSupported
+				? "  Release unavailable: the effective actor is missing or ambiguous; verify the current assignee and actor before retrying."
+				: "  Release unavailable: this bd does not advertise atomic --if-assignee; upgrade bd before retrying."
+			: `  Release with: ${release}`);
 	}
 	if (beads.length > MAX_LISTED) lines.push(`- ...and ${beads.length - MAX_LISTED} more`);
 	lines.push(
-		"Close what is finished with a factual `--reason`, release what is not (`bd update <id> --assignee '' --status open`), and write residual context onto any bead whose work continues elsewhere (`bd comments add <id> -m ...`) -- the bead is the handover, not a PR body. File remaining or discovered work as its own bead before stopping.",
+		"Close what is finished with a factual --reason, release only with the guarded command above, and write residual context onto any bead whose work continues elsewhere (bd comments add <id> -m ...). The bead is the handover, not a PR body. File remaining or discovered work as its own bead before stopping.",
 	);
 	return lines.join("\n");
 }
@@ -479,6 +544,7 @@ export function handleSessionStop(
 	listOutput: string | undefined,
 	seen: Set<string>,
 	actor: string | ReadonlySet<string> | undefined = process.env.BEADS_ACTOR ?? process.env.BD_ACTOR,
+	casSupported = true,
 ): { continue: true; additionalContext: string } | undefined {
 	if (event.stop_hook_active === true || event.stopHookActive === true) return;
 	const data = listOutput === undefined ? undefined : envelopeData(parseTrailingJson(listOutput));
@@ -488,7 +554,13 @@ export function handleSessionStop(
 	}
 	const held = heldClaims(readBeads(listOutput!), seen, actor);
 	if (held.length === 0) return;
-	return { continue: true, additionalContext: formatSessionCloseAdvisory(held) };
+	const actors = typeof actor === "string" ? new Set(actor.trim() ? [actor.trim()] : []) : actor;
+	return { continue: true, additionalContext: formatSessionCloseAdvisory(held, {}, new Date().toISOString(), casSupported, actors) };
+}
+
+async function releaseCasSupported(cwd: string, deadline: number): Promise<boolean> {
+	const help = await runBd(cwd, ["update", "--help"], deadline);
+	return help?.includes("--if-assignee") === true;
 }
 
 /** Run bd for its stdout. Warnings on stderr are noise here and are dropped. */
@@ -684,9 +756,11 @@ export default function sessionBeadsLifecycle(pi: ExtensionAPI): void {
 			const cwd = ctx?.cwd ?? process.cwd();
 			if (!state?.bdWrote || state.stopFired || event.stop_hook_active === true ||
 				event.stopHookActive === true || beadsDir(cwd) === undefined) return;
-			const listed = await runBd(cwd, ["list", "--status", "open,in_progress,blocked,deferred", "--limit", "0", "--json"]);
+			const deadline = Date.now() + TIMEOUT_MS;
+			const casSupported = await releaseCasSupported(cwd, deadline);
+			const listed = await runBd(cwd, ["list", "--status", "open,in_progress,blocked,deferred", "--limit", "0", "--json"], deadline);
 			if (sessions.get(key) !== state || state.stopFired) return;
-			const advisory = handleSessionStop(event, listed, state.touched, state.actors);
+			const advisory = handleSessionStop(event, listed, state.touched, state.actors, casSupported);
 			if (advisory) state.stopFired = true;
 			return advisory;
 		} catch (error) {
