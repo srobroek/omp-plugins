@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.3.0](https://github.com/srobroek/omp-plugins/compare/beads--v1.2.5...beads--v1.3.0) (2026-09-14)
+
+
+### Features
+
+* **beads:** refuse embedded and colliding bd init; shared-server migration notice ([#264](https://github.com/srobroek/omp-plugins/issues/264)) ([d01758f](https://github.com/srobroek/omp-plugins/commit/d01758fb0dc5bd0c0247acfb2095396c61bfce69))
+
 ## [1.2.5](https://github.com/srobroek/omp-plugins/compare/beads--v1.2.4...beads--v1.2.5) (2026-09-13)
 
 
