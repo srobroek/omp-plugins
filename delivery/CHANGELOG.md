@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.10.5](https://github.com/srobroek/omp-plugins/compare/delivery--v0.10.4...delivery--v0.10.5) (2026-09-14)
+
+
+### Bug Fixes
+
+* **delivery:** honor primary checkout grants ([#269](https://github.com/srobroek/omp-plugins/issues/269)) ([bc2e1cb](https://github.com/srobroek/omp-plugins/commit/bc2e1cb0c09a9ca7d1c45784e0495e472fd20771))
+
 ## [0.10.4](https://github.com/srobroek/omp-plugins/compare/delivery--v0.10.3...delivery--v0.10.4) (2026-09-14)
 
 
