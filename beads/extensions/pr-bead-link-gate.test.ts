@@ -1,6 +1,14 @@
 import { describe, expect, test } from "bun:test";
 
-import { bodyOfGhCreate, decideCommand, decidePrCreate, REASON } from "./pr-bead-link-gate.ts";
+import {
+	bodyOfGhCreate,
+	decideCommand,
+	decidePrCreate,
+	parseGhCreate,
+	REASON,
+	repoSlug,
+	targetsBeadsRepo,
+} from "./pr-bead-link-gate.ts";
 
 describe("bodyOfGhCreate", () => {
 	test("reads every real --body spelling, attached forms included", () => {
@@ -88,6 +96,90 @@ describe("decideCommand", () => {
 	test("ignores unrelated gh commands", () => {
 		expect(decideCommand("gh pr list --state open", true)).toBeNull();
 		expect(decideCommand("gh run watch 42", true)).toBeNull();
+	});
+});
+
+describe("repoSlug", () => {
+	test("normalises every spelling GitHub accepts to owner/repo", () => {
+		expect(repoSlug("srobroek/omp-plugins")).toBe("srobroek/omp-plugins");
+		expect(repoSlug("github.com/Srobroek/OMP-Plugins")).toBe("srobroek/omp-plugins");
+		expect(repoSlug("https://github.com/srobroek/omp-plugins.git")).toBe("srobroek/omp-plugins");
+		expect(repoSlug("git@github.com:srobroek/omp-plugins.git\n")).toBe("srobroek/omp-plugins");
+		expect(repoSlug("ssh://git@github.com/srobroek/omp-plugins")).toBe("srobroek/omp-plugins");
+	});
+
+	test("rejects text that is not a repository", () => {
+		expect(repoSlug("omp-plugins")).toBeNull();
+		expect(repoSlug("")).toBeNull();
+	});
+});
+
+describe("parseGhCreate targets", () => {
+	test("reads the repository and fork head alongside the body", () => {
+		const create = parseGhCreate(
+			"gh pr create -R can1357/oh-my-pi --head srobroek:fix/x --draft --body 'upstream fix'",
+		);
+		expect(create).toEqual({
+			body: "upstream fix",
+			target: { repo: "can1357/oh-my-pi", headOwner: "srobroek" },
+		});
+		expect(parseGhCreate("gh pr create --repo=o/r --head=topic --body b")?.target).toEqual({
+			repo: "o/r",
+			headOwner: null,
+		});
+	});
+
+	test("reports no target for a create in the current repository", () => {
+		expect(parseGhCreate("gh pr create --body 'Bead: omp-1'")?.target).toEqual({
+			repo: null,
+			headOwner: null,
+		});
+	});
+});
+
+describe("targetsBeadsRepo", () => {
+	const home = "srobroek/omp-plugins";
+	test("an explicit repository decides, case-insensitively", () => {
+		expect(targetsBeadsRepo({ repo: "can1357/oh-my-pi", headOwner: null }, home)).toBe(false);
+		expect(targetsBeadsRepo({ repo: "Srobroek/OMP-Plugins", headOwner: null }, home)).toBe(true);
+		expect(targetsBeadsRepo({ repo: "github.com/srobroek/omp-plugins", headOwner: null }, home)).toBe(true);
+	});
+
+	test("a fork head against another owner is an upstream PR", () => {
+		expect(targetsBeadsRepo({ repo: null, headOwner: "srobroek" }, home)).toBe(true);
+		expect(targetsBeadsRepo({ repo: null, headOwner: "someone-else" }, home)).toBe(false);
+	});
+
+	test("unknown on either side keeps the gate on", () => {
+		expect(targetsBeadsRepo({ repo: null, headOwner: null }, home)).toBe(true);
+		expect(targetsBeadsRepo({ repo: "can1357/oh-my-pi", headOwner: null }, null)).toBe(true);
+		expect(targetsBeadsRepo({ repo: "not a repo", headOwner: null }, home)).toBe(true);
+	});
+});
+
+describe("decideCommand across repositories", () => {
+	const home = "srobroek/omp-plugins";
+	test("does not require a bead on a PR against another repository", () => {
+		expect(
+			decideCommand("gh pr create -R can1357/oh-my-pi --head srobroek:fix/x --body 'host fix'", true, home),
+		).toBeNull();
+		expect(decideCommand("gh pr create --head other:topic --body 'fork pr'", true, home)).toBeNull();
+	});
+
+	test("still requires one in the bead store's own repository", () => {
+		expect(decideCommand("gh pr create -R srobroek/omp-plugins --body 'no bead'", true, home)).not.toBeNull();
+		expect(decideCommand("gh pr create --body 'no bead'", true, home)).not.toBeNull();
+		expect(decideCommand("gh pr create -R can1357/oh-my-pi --body 'no bead'", true, null)).not.toBeNull();
+	});
+
+	test("judges each create in a chain by its own target", () => {
+		expect(
+			decideCommand(
+				"gh pr create -R can1357/oh-my-pi --body 'upstream' && gh pr create --body 'home, no bead'",
+				true,
+				home,
+			),
+		).not.toBeNull();
 	});
 });
 
