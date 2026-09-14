@@ -499,15 +499,23 @@ export function heldClaims(
 	});
 }
 
-export function formatSessionCloseAdvisory(beads: Bead[]): string {
+export function formatSessionCloseAdvisory(
+	beads: Bead[],
+	env: NodeJS.ProcessEnv = process.env,
+	releasedAt = new Date().toISOString(),
+): string {
 	const lines = ["Beads claims still held at session close (a mutating command was attempted):"];
 	for (const bead of beads.slice(0, MAX_LISTED)) {
 		const who = bead.assignee ? ` [${bead.assignee}]` : "";
 		lines.push(`- ${bead.id}${who} ${bead.title}`);
+		const release = bead.assignee === undefined ? undefined : releaseClaimCommand(bead.id, bead.assignee, env, releasedAt);
+		lines.push(release === undefined
+			? "  Release unavailable: set a safe BD_ACTOR (or BEADS_ACTOR) and verify the current assignee before retrying."
+			: `  Release with: ${release}`);
 	}
 	if (beads.length > MAX_LISTED) lines.push(`- ...and ${beads.length - MAX_LISTED} more`);
 	lines.push(
-		"Close what is finished with a factual `--reason`, release what is not (`bd update <id> --assignee '' --status open --set-metadata release_actor=<actor> --set-metadata released_at=<UTC timestamp> --if-assignee <current-assignee>`), and write residual context onto any bead whose work continues elsewhere (`bd comments add <id> -m ...`) -- the bead is the handover, not a PR body. File remaining or discovered work as its own bead before stopping.",
+		"Close what is finished with a factual --reason, release only with the guarded command above, and write residual context onto any bead whose work continues elsewhere (bd comments add <id> -m ...). The bead is the handover, not a PR body. File remaining or discovered work as its own bead before stopping.",
 	);
 	return lines.join("\n");
 }

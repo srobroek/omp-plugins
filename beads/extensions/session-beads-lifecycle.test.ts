@@ -453,18 +453,24 @@ describe("releaseClaimArgs", () => {
 		expect(releaseClaimCommand("bd-a-1", "omp/Main/s1", { BD_ACTOR: "omp/Main/s2" }, at)).toContain("--if-assignee");
 	});
 });
-
 describe("formatSessionCloseAdvisory", () => {
-	test("names the bead, the holder, and every remedy", () => {
-		const text = formatSessionCloseAdvisory(heldClaims(readBeads(BEAD_LIST), new Set(["bd-probe-2m7"]), undefined));
+	const at = "2026-09-14T12:34:56.789Z";
+	test("names the bead and emits an actor-bound guarded command", () => {
+		const text = formatSessionCloseAdvisory(heldClaims(readBeads(BEAD_LIST), new Set(["bd-probe-2m7"]), undefined), { BD_ACTOR: "omp/Main/releaser" }, at);
 		expect(text).toContain("bd-probe-2m7 [omp/Main/s1] target work");
-		expect(text).toContain("--set-metadata release_actor=<actor>");
-		expect(text).toContain("--if-assignee <current-assignee>");
-		expect(text).not.toContain(["un", "claim"].join(""));
+		expect(text).toContain("'release_actor=omp/Main/releaser'");
+		expect(text).toContain(`'released_at=${at}'`);
+		expect(text).toContain("'--if-assignee'");
+		expect(text).toContain("'omp/Main/s1'");
+		expect(text).not.toContain("<actor>");
+		expect(text).not.toContain("<current-assignee>");
 		expect(text).toContain("bd comments add");
-		expect(text).toContain("discovered work");
 	});
-
+	test("fails closed when actor discovery is absent", () => {
+		const text = formatSessionCloseAdvisory([readBeads(BEAD_LIST)[1]!], {}, at);
+		expect(text).toContain("Release unavailable");
+		expect(text).not.toContain("release_actor=");
+	});
 	test("a long list is capped and counted", () => {
 		const many = Array.from({ length: 11 }, (_, i) => ({ id: `b-${i}`, title: "t", status: "in_progress" }));
 		expect(formatSessionCloseAdvisory(many)).toContain("...and 3 more");
