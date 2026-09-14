@@ -483,6 +483,13 @@ describe("handleSessionStop", () => {
 		expect(r?.continue).toBe(true);
 		expect(r?.additionalContext).toContain("bd-probe-2m7");
 	});
+	test("passes the effective actor into actual release commands", () => {
+		const r = handleSessionStop({}, BEAD_LIST, new Set(["bd-probe-2m7"]), "omp/Main/releaser");
+		expect(r?.additionalContext).toContain("'release_actor=omp/Main/releaser'");
+		expect(r?.additionalContext).toContain("'--if-assignee'");
+		expect(r?.additionalContext).toContain("'omp/Main/s1'");
+		expect(r?.additionalContext).not.toContain("<actor>");
+	});
 
 	test("skips its own continuation", () => {
 		expect(handleSessionStop({ stop_hook_active: true }, BEAD_LIST, new Set(["bd-probe-2m7"]))).toBeUndefined();
