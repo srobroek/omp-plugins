@@ -1,5 +1,24 @@
 # Changelog
 
+## [1.3.1](https://github.com/srobroek/omp-plugins/compare/beads--v1.3.0...beads--v1.3.1) (2026-09-14)
+
+
+### Bug Fixes
+
+* **beads:** attribute guarded claim releases ([3a26640](https://github.com/srobroek/omp-plugins/commit/3a26640c81f31b037dc2d372bc356f4475c28ae4))
+* **beads:** attribute guarded claim releases ([80febee](https://github.com/srobroek/omp-plugins/commit/80febee7b3bbdde6591bd6a4ffe1ae7a28abfd98))
+* **beads:** bind release command actor ([3de26ba](https://github.com/srobroek/omp-plugins/commit/3de26bae06c634e535dfa4eb74e529dc41a1fcd8))
+* **beads:** guard release attribution by CLI capability ([55e266f](https://github.com/srobroek/omp-plugins/commit/55e266f604de709328f1c11881ccfebf37d532f5))
+* **beads:** require actor to match claim holder ([3ccbf8e](https://github.com/srobroek/omp-plugins/commit/3ccbf8e7159e944fe5ee15183c35e222d0d00da5))
+* **beads:** satisfy import ordering check ([8616083](https://github.com/srobroek/omp-plugins/commit/861608387b393a74eb2af62b828804230167dd52))
+* **beads:** satisfy lifecycle checks ([00121b1](https://github.com/srobroek/omp-plugins/commit/00121b1b847b4afbf2cdac1518733452af83ca41))
+* **beads:** wire guarded release advisory ([6783557](https://github.com/srobroek/omp-plugins/commit/6783557647f427d775346a4fd845c2db38f41d8e))
+
+
+### Documentation
+
+* **beads:** require release flag capability check ([9083d9e](https://github.com/srobroek/omp-plugins/commit/9083d9eacdd87fd8b89447730cf409bc621ad825))
+
 ## [1.3.0](https://github.com/srobroek/omp-plugins/compare/beads--v1.2.5...beads--v1.3.0) (2026-09-14)
 
 
