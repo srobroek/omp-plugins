@@ -13,35 +13,31 @@ afterEach(() => {
 
 describe("findInitInvocations", () => {
 	test("plain init", () => {
-		expect(findInitInvocations("bd init")).toEqual([{ flags: [] }]);
+		expect(findInitInvocations("bd init")).toEqual([{ flags: [], env: {}, cleared: false }]);
 	});
 
 	test("flags are collected, `--flag=value` reduced to the name", () => {
 		expect(findInitInvocations("bd init --init-if-missing --skip-hooks")).toEqual([
-			{ flags: ["--init-if-missing", "--skip-hooks"] },
+			{ flags: ["--init-if-missing", "--skip-hooks"], env: {}, cleared: false },
 		]);
-		expect(findInitInvocations("bd init --prefix=bdp")).toEqual([{ flags: ["--prefix"], prefix: "bdp" }]);
+		expect(findInitInvocations("bd init --prefix=bdp")).toEqual([{ flags: ["--prefix"], prefix: "bdp", env: {}, cleared: false }]);
 	});
 
 	test("a pre-verb value flag does not swallow the verb", () => {
 		expect(findInitInvocations("bd -C /tmp/repo init --skip-hooks")).toEqual([
-			{ flags: ["-C", "--skip-hooks"], dir: "/tmp/repo" },
+			{ flags: ["-C", "--skip-hooks"], dir: "/tmp/repo", env: {}, cleared: false },
 		]);
-		expect(findInitInvocations("bd --db /tmp/x.db init")).toEqual([{ flags: ["--db"] }]);
-		expect(findInitInvocations("bd --db=/tmp/x.db init")).toEqual([{ flags: ["--db"] }]);
+		expect(findInitInvocations("bd --db /tmp/x.db init")).toEqual([{ flags: ["--db"], env: {}, cleared: false }]);
+		expect(findInitInvocations("bd --db=/tmp/x.db init")).toEqual([{ flags: ["--db"], env: {}, cleared: false }]);
 	});
 
 	test("command position: after a separator, after a newline, behind env or sudo", () => {
-		expect(findInitInvocations("bd where && bd init --skip-hooks")).toEqual([
-			{ flags: ["--skip-hooks"] },
-		]);
-		expect(findInitInvocations("cd /repo\nbd init")).toEqual([{ flags: [] }]);
-		expect(findInitInvocations("BEADS_ACTOR=omp/main/s1 bd init")).toEqual([{ flags: [] }]);
-		expect(findInitInvocations("sudo bd init")).toEqual([{ flags: [] }]);
-		expect(findInitInvocations("bd init; bd init --skip-hooks")).toEqual([
-			{ flags: [] },
-			{ flags: ["--skip-hooks"] },
-		]);
+		const plain = { flags: [], env: {}, cleared: false };
+		expect(findInitInvocations("bd where && bd init --skip-hooks")).toEqual([{ ...plain, flags: ["--skip-hooks"] }]);
+		expect(findInitInvocations("cd /repo\nbd init")).toEqual([{ ...plain, cwd: "/repo" }]);
+		expect(findInitInvocations("BEADS_ACTOR=omp/main/s1 bd init")).toEqual([{ ...plain, env: { BEADS_ACTOR: "omp/main/s1" } }]);
+		expect(findInitInvocations("sudo bd init")).toEqual([plain]);
+		expect(findInitInvocations("bd init; bd init --skip-hooks")).toEqual([plain, { ...plain, flags: ["--skip-hooks"] }]);
 	});
 
 	// The live incident class: every one of these blocked a bash call under
@@ -63,7 +59,7 @@ describe("findInitInvocations", () => {
 	test("heredoc bodies are not command positions", () => {
 		expect(findInitInvocations("cat <<'EOF'\nbd init\nEOF")).toEqual([]);
 		expect(findInitInvocations("cat <<'EOF'\nbd init\nEOF\nbd init --skip-hooks")).toEqual([
-			{ flags: ["--skip-hooks"] },
+			{ flags: ["--skip-hooks"], env: {}, cleared: false },
 		]);
 	});
 

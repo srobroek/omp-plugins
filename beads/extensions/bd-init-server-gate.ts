@@ -22,11 +22,11 @@
  * on the shared server and this checkout does not already own it, the gate names the
  * collision and asks for a different `--prefix`.
  *
- * Argv is the trigger, through the same reader as `bd-init-advisory`: a mention of
- * `bd init` inside a quoted string or another program's arguments is not an
- * invocation. Only when that reader throws on text that carries the token `bd init`
- * does the gate fail closed; a command it can read and finds no invocation in is
- * allowed.
+ * Argv is the trigger, through the same reader as `bd-init-advisory`: `bd` by basename,
+ * behind environment prefixes, the launchers the reader knows (`env`, `sudo`, `exec`,
+ * `nice`, `timeout`, `mise exec --`, ...), and a literal `sh -c '...'`; a mention of
+ * `bd init` inside a quoted string or another program's arguments is not an invocation.
+ * The gate fails closed when the reader reports a wrapper or `cd` it could not follow.
  */
 import { existsSync, readFileSync } from "node:fs";
 import os from "node:os";
@@ -35,8 +35,8 @@ import type { ExtensionAPI, ToolCallEvent } from "@oh-my-pi/pi-coding-agent";
 import { extractCommand } from "./bd-close-gate.ts";
 import { findInitInvocations, type InitInvocation } from "./bd-init-advisory.ts";
 
-/** Cheap prefilter shared with the advisory: never tokenize a command that cannot be a `bd init`. */
-const PREFILTER = /\bbd\b[\s\S]{0,400}?\binit\b/;
+/** Cheap prefilter: never tokenize a command that cannot mention `bd`. */
+const PREFILTER = /\bbd\b/;
 
 /** Flags that make `bd init` create a server-mode store. */
 const SERVER_FLAGS: Record<string, true> = { "--shared-server": true, "--server": true };
@@ -98,34 +98,56 @@ export function collisionRefusal(database: string): string {
 }
 
 export const PARSE_REFUSAL =
-	"bd init refused: the command text carries `bd init` but could not be read as a shell command, so the gate cannot tell which store it would create. Simplify the command.";
+	"bd init refused: the command reaches `bd init` through a wrapper or directory change this gate cannot follow (`env -S`, `mise` without `--`, `cd -`, a `$variable`), so it cannot tell which store it would create or where. Run `bd init --shared-server ...` directly.";
+
+/**
+ * The environment the spawned `bd` will see: the process environment, then the bash
+ * call's structured `env`, then what the command line itself sets or clears.
+ */
+function effectiveEnv(
+	processEnv: NodeJS.ProcessEnv,
+	inputEnv: Record<string, unknown> | undefined,
+	invocation: InitInvocation,
+): Record<string, string | undefined> {
+	const env: Record<string, string | undefined> = invocation.cleared ? {} : { ...processEnv };
+	if (inputEnv !== undefined && !invocation.cleared) {
+		for (const [key, value] of Object.entries(inputEnv)) if (typeof value === "string") env[key] = value;
+	}
+	for (const [key, value] of Object.entries(invocation.env)) env[key] = value;
+	return env;
+}
 
 /**
  * The refusal this command earns, or `undefined` when it may run.
  *
- * `cwd` is the bash call's working directory; an invocation's own `-C` / `--directory`
- * overrides it, because that is where `bd` will look for `.beads/metadata.json`.
+ * `cwd` is the bash call's working directory; a `cd` before `bd`, `env -C`, `sudo -D`,
+ * and `bd`'s own `-C` / `--directory` move it, because that is where `bd` looks for
+ * `.beads/metadata.json`. `inputEnv` is the bash call's structured `env`.
  */
 export function decideBdInitServer(
 	command: string,
 	cwd: string,
 	gate: GateEnvironment = defaultGateEnvironment(),
+	inputEnv: Record<string, unknown> | undefined = undefined,
 ): { block: true; reason: string } | undefined {
 	if (!PREFILTER.test(command)) return undefined;
 	let invocations: InitInvocation[];
 	try {
-		invocations = findInitInvocations(command);
+		invocations = findInitInvocations(command, cwd);
 	} catch {
 		return { block: true, reason: PARSE_REFUSAL };
 	}
 	for (const invocation of invocations) {
 		if (invocation.flags.some(flag => HELP_FLAGS[flag] === true)) continue;
+		if (invocation.unresolved) return { block: true, reason: PARSE_REFUSAL };
 		const serverFlag = invocation.flags.some(flag => SERVER_FLAGS[flag] === true);
-		if (!serverFlag && !ENV_ON[gate.env.BEADS_DOLT_SHARED_SERVER ?? ""]) return { block: true, reason: MODE_REFUSAL };
-		const dir = invocation.dir === undefined ? cwd : path.resolve(cwd, invocation.dir);
+		const env = effectiveEnv(gate.env, inputEnv, invocation);
+		if (!serverFlag && !ENV_ON[env.BEADS_DOLT_SHARED_SERVER ?? ""]) return { block: true, reason: MODE_REFUSAL };
+		const shellCwd = invocation.cwd;
+		if (shellCwd === undefined) return { block: true, reason: PARSE_REFUSAL };
+		const dir = invocation.dir === undefined ? shellCwd : path.resolve(shellCwd, invocation.dir);
 		const database = databaseFor(invocation, dir);
-		const owned = ownedDatabase(dir);
-		if (owned === database) continue;
+		if (ownedDatabase(dir) === database) continue;
 		if (existsSync(path.join(gate.sharedServerDataDir, database))) return { block: true, reason: collisionRefusal(database) };
 	}
 	return undefined;
@@ -139,7 +161,11 @@ export default function bdInitServerGate(pi: ExtensionAPI): void {
 			if (!command) return;
 			const cwd =
 				"cwd" in event.input && typeof event.input.cwd === "string" && event.input.cwd ? event.input.cwd : process.cwd();
-			return decideBdInitServer(command, cwd);
+			const inputEnv =
+				"env" in event.input && event.input.env !== null && typeof event.input.env === "object" && !Array.isArray(event.input.env)
+					? (event.input.env as Record<string, unknown>)
+					: undefined;
+			return decideBdInitServer(command, cwd, defaultGateEnvironment(), inputEnv);
 		} catch (error) {
 			// Fail closed only where the text names the command this gate exists for.
 			if (PREFILTER.test(extractCommand(event.input))) {
