@@ -21,7 +21,9 @@ MUST Keep these duties in the main thread:
 - integration decisions and user-intent interpretation
 - work requiring live user input
 
-MUST Identify independent slices before substantive work. MUST Dispatch all independent slices in one parallel `task` batch. When agents can own slices without conflicting edits, MUST use multiple workers. NEVER Serialize independent slices.
+MUST Classify the request against the inline cases before any repository tool call. For every other task, MUST make the first repository action one `task` call that dispatches all independent slices in parallel. NEVER Call `read`, `grep`, or `glob` to begin delegated work. NEVER Call `edit`, `write`, or `bash` to begin delegated work.
+
+After dispatch, MUST Restrict direct repository tools to cross-slice integration and concrete conflicts between completed slices. If a worker leaves its slice incomplete, MUST redispatch that slice instead of completing worker-owned work in the main thread. NEVER Serialize independent slices.
 
 DEFAULT Use `scout` for read-only repository discovery and analysis. DEFAULT Use `operator` for explicit mechanical commands. DEFAULT Use the default task agent for implementation.
 
