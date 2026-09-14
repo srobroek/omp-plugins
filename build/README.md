@@ -6,10 +6,18 @@ Implementation and mechanical-execution agents.
 
 | Name | Role | When |
 |------|------|------|
-| `operator` | `@tiny` | Tiny mechanical commands with explicit targets |
+| `operator` | `@tiny` | One mechanical command with explicit targets |
 | `external-repo-worker` | `@task` | Clone/edit/verify work in a repo outside the caller project |
 
 Use the built-in `task` agent for implementation in the current repository.
-The assignment should name the owned files, verification commands, and whether
-commits are authorized. Keep sibling assignments disjoint.
+Each assignment names its owned files.
+Each assignment names its verification commands.
+Each assignment states whether the main agent authorizes commits.
+Keep sibling assignments disjoint.
+
+## Rules
+
+| Name | When |
+|------|------|
+| `build-main-task-delegation` | Route nontrivial main-agent work to cost-efficient parallel workers |
 
