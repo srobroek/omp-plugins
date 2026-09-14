@@ -33,6 +33,13 @@ describe("actorValues / environmentForInput", () => {
 		expect(actorValues("bd ready --claim", env)).toEqual(["omp/Main/alias"]);
 	});
 
+	test("parses canonical and legacy command-local assignments as one actor", () => {
+		expect(actorValues("BEADS_ACTOR=omp/Main/release BD_ACTOR=omp/Main/release bd update bead-1 --if-assignee holder", {
+			BEADS_ACTOR: "ambient/canonical",
+			BD_ACTOR: "ambient/legacy",
+		})).toEqual(["omp/Main/release"]);
+	});
+
 	test("returns each literal actor used by mutating invocations only", () => {
 		expect(
 			actorValues(
