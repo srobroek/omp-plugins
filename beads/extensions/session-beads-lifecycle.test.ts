@@ -10,6 +10,8 @@ import sessionBeadsLifecycle, {
 	envelopeData,
 	formatGateAdvisory,
 	formatSessionCloseAdvisory,
+	releaseClaimArgs,
+	releaseClaimCommand,
 	gatesCanResolve,
 	handleSessionStop,
 	heldClaims,
@@ -430,11 +432,34 @@ describe("heldClaims", () => {
 	});
 });
 
+describe("releaseClaimArgs", () => {
+	const at = "2026-09-14T12:34:56.789Z";
+	test("builds one guarded argv and preserves metadata by using set-metadata", () => {
+		expect(releaseClaimArgs("bd-probe-2m7", "omp/Main/s1", { BD_ACTOR: "omp/Main/s2" }, at)).toEqual([
+			"update", "bd-probe-2m7", "--assignee", "", "--status", "open",
+			"--set-metadata", "release_actor=omp/Main/s2", "--set-metadata", `released_at=${at}`,
+			"--if-assignee", "omp/Main/s1",
+		]);
+	});
+	test("prefers BD_ACTOR and falls back to BEADS_ACTOR", () => {
+		expect(releaseClaimArgs("bd-a-1", "omp/Main/s1", { BEADS_ACTOR: "omp/Main/fallback" }, at)?.[7]).toBe("release_actor=omp/Main/fallback");
+		expect(releaseClaimArgs("bd-a-1", "omp/Main/s1", { BD_ACTOR: " ", BEADS_ACTOR: "omp/Main/fallback" }, at)?.[7]).toBe("release_actor=omp/Main/fallback");
+		expect(releaseClaimArgs("bd-a-1", "omp/Main/s1", { BD_ACTOR: "omp/Main/wins", BEADS_ACTOR: "omp/Main/loses" }, at)?.[7]).toBe("release_actor=omp/Main/wins");
+		expect(releaseClaimArgs("bd-a-1", "omp/Main/s1", {}, at)).toBeUndefined();
+	});
+	test("refuses unsafe identifiers instead of interpolating shell text", () => {
+		expect(releaseClaimArgs("bd-a-1;rm", "omp/Main/s1", { BD_ACTOR: "omp/Main/s2" }, at)).toBeUndefined();
+		expect(releaseClaimArgs("bd-a-1", "omp/Main/s1", { BD_ACTOR: "omp/Main/s2;rm" }, at)).toBeUndefined();
+		expect(releaseClaimCommand("bd-a-1", "omp/Main/s1", { BD_ACTOR: "omp/Main/s2" }, at)).toContain("--if-assignee");
+	});
+});
+
 describe("formatSessionCloseAdvisory", () => {
 	test("names the bead, the holder, and every remedy", () => {
 		const text = formatSessionCloseAdvisory(heldClaims(readBeads(BEAD_LIST), new Set(["bd-probe-2m7"]), undefined));
 		expect(text).toContain("bd-probe-2m7 [omp/Main/s1] target work");
-		expect(text).toContain("bd update <id> --assignee '' --status open");
+		expect(text).toContain("--set-metadata release_actor=<actor>");
+		expect(text).toContain("--if-assignee <current-assignee>");
 		expect(text).not.toContain(["un", "claim"].join(""));
 		expect(text).toContain("bd comments add");
 		expect(text).toContain("discovered work");

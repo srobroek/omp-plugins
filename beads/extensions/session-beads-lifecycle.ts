@@ -405,6 +405,49 @@ export function beadIdCandidates(command: string): string[] {
 	return ids;
 }
 
+const SAFE_RELEASE_IDENTIFIER = /^[A-Za-z0-9][A-Za-z0-9._/-]*$/;
+
+/**
+ * Build the one atomic command used to release a claim. The assignee CAS is
+ * deliberately kept in the argv array: issue text and actor values are never
+ * parsed as shell source, and a concurrent holder cannot be released.
+ *
+ * `BD_ACTOR` is bd's effective convention; `BEADS_ACTOR` remains the plugin's
+ * documented fallback while projects migrate their hooks.
+ */
+export function releaseClaimArgs(
+	id: string,
+	holder: string,
+	env: NodeJS.ProcessEnv = process.env,
+	releasedAt = new Date().toISOString(),
+): string[] | undefined {
+	const actor = (env.BD_ACTOR?.trim() || env.BEADS_ACTOR?.trim() || "");
+	if (!SAFE_RELEASE_IDENTIFIER.test(id) || !SAFE_RELEASE_IDENTIFIER.test(holder) || !SAFE_RELEASE_IDENTIFIER.test(actor)) return undefined;
+	if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(releasedAt)) return undefined;
+	return [
+		"update", id,
+		"--assignee", "",
+		"--status", "open",
+		"--set-metadata", `release_actor=${actor}`,
+		"--set-metadata", `released_at=${releasedAt}`,
+		"--if-assignee", holder,
+	];
+}
+
+function shellQuote(value: string): string {
+	return `'${value.replaceAll("'", "'\\''")}'`;
+}
+
+export function releaseClaimCommand(
+	id: string,
+	holder: string,
+	env: NodeJS.ProcessEnv = process.env,
+	releasedAt = new Date().toISOString(),
+): string | undefined {
+	const args = releaseClaimArgs(id, holder, env, releasedAt);
+	return args === undefined ? undefined : ["bd", ...args].map(shellQuote).join(" ");
+}
+
 export interface Bead {
 	id: string;
 	title: string;
@@ -464,7 +507,7 @@ export function formatSessionCloseAdvisory(beads: Bead[]): string {
 	}
 	if (beads.length > MAX_LISTED) lines.push(`- ...and ${beads.length - MAX_LISTED} more`);
 	lines.push(
-		"Close what is finished with a factual `--reason`, release what is not (`bd update <id> --assignee '' --status open`), and write residual context onto any bead whose work continues elsewhere (`bd comments add <id> -m ...`) -- the bead is the handover, not a PR body. File remaining or discovered work as its own bead before stopping.",
+		"Close what is finished with a factual `--reason`, release what is not (`bd update <id> --assignee '' --status open --set-metadata release_actor=<actor> --set-metadata released_at=<UTC timestamp> --if-assignee <current-assignee>`), and write residual context onto any bead whose work continues elsewhere (`bd comments add <id> -m ...`) -- the bead is the handover, not a PR body. File remaining or discovered work as its own bead before stopping.",
 	);
 	return lines.join("\n");
 }
