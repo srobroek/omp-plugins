@@ -1,6 +1,6 @@
 ---
 name: design-critic
-description: Critiques a rendered surface for hierarchy, rhythm, and generated-UI tells, returning a verdict. Spawn at CRITIQUE beside a11y-auditor; reads only.
+description: Critiques a rendered surface for hierarchy, rhythm, and generated-UI tells, returning a verdict. Spawn at CRITIQUE beside a11y-auditor; read-only, never implements or edits.
 model: "@designer"
 thinking-level: high
 tools: read, grep, glob, eval

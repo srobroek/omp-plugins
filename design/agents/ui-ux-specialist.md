@@ -1,6 +1,6 @@
 ---
 name: ui-ux-specialist
-description: Leads UI and UX work through the six-phase design process and delegates independent critique. Spawn for multi-component design work, not a one-file tweak.
+description: Leads multi-component UI and UX work through the six-phase design process, delegating critique. Excludes software architecture, API planning, and routine implementation.
 model: "@designer"
 thinking-level: high
 tools: read, grep, glob, eval

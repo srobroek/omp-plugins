@@ -25,7 +25,19 @@ MUST Classify the request against the inline cases before any repository tool ca
 
 After dispatch, MUST Restrict direct repository tools to cross-slice integration and concrete conflicts between completed slices. If a worker leaves its slice incomplete, MUST redispatch that slice instead of completing worker-owned work in the main thread. NEVER Serialize independent slices.
 
-DEFAULT Use `scout` for read-only repository discovery and analysis. DEFAULT Use `operator` for explicit mechanical commands. DEFAULT Use the default task agent for implementation.
+MUST Match the work against the specialist agents before any generic default:
+
+| work | agent |
+|---|---|
+| software, system, module, or API design; complex implementation planning | `architect` |
+| UI, UX, visual, or interaction work | `ui-ux-specialist` |
+| rendered-surface critique | `design-critic` |
+| WCAG 2.2 AA audit | `a11y-auditor` |
+| read-only repository discovery, analysis, and summarization | `scout` |
+| an explicit mechanical command | `operator` |
+| implementation with no matching specialist | the default task agent |
+
+NEVER Send architecture or technical design to the default task agent.
 
 When the task tool exposes `effort`:
 
