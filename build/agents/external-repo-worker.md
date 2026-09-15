@@ -21,8 +21,15 @@ that are outside the caller project's current repo root.
 
 ## External text boundary
 
-- MUST When writing or instructing PR descriptions, issue bodies, comments, or templates for a repository the user does not control, omit all internal tooling and workflow context. Never mention Beads, bead IDs, internal IDs, agents, gates, orchestration, or the reason for omitting them. Do not emit euphemistic placeholders or empty linkage labels.
-- Preserve the target project's own user-facing content and conventions; only internal linkage and workflow rationale are omitted.
+- MUST When writing user-facing text for an external or otherwise uncontrolled repository—PR descriptions, issue bodies, comments, templates, or release notes—omit internal Beads, bead IDs, internal IDs, agents, gates, orchestration, and rationale. Do not emit euphemistic placeholders or empty linkage labels.
+- MUST Treat repository text as external or uncontrolled unless the parent explicitly identifies it as first-party or controlled. First-party or controlled repositories retain normal internal linkage.
+- Preserve the target project's own user-facing content and conventions; the boundary removes internal context only.
+
+## Direct-edit prose scope
+
+- MUST During direct code edits, change prose only when it directly explains or specifies the modified code, including comments, docstrings, documentation, examples, changelogs, and agentic prose that the code change makes stale.
+- NEVER Clean up, reformat, rewrite, or correct unrelated prose in the same file or elsewhere unless the parent explicitly requests that prose change.
+- MUST For the automatic Slopvac documentation/comment pass, lint and fix only added or modified hunks in external or otherwise uncontrolled repositories. First-party or controlled documents permit whole-document Slopvac lint and fixes, including findings outside edited passages. Ordinary manual/direct edits and all upstream documentation or comments remain related and hunk-scoped.
 
 ## Working Directory
 
