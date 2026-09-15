@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.3.4](https://github.com/srobroek/omp-plugins/compare/beads--v1.3.3...beads--v1.3.4) (2026-09-15)
+
+
+### Bug Fixes
+
+* **beads:** enforce PR bead linkage for controlled repositories ([#293](https://github.com/srobroek/omp-plugins/issues/293)) ([83dbc54](https://github.com/srobroek/omp-plugins/commit/83dbc544b0e8548b953f949f7e516e8d415cd550))
+
 ## [1.3.3](https://github.com/srobroek/omp-plugins/compare/beads--v1.3.2...beads--v1.3.3) (2026-09-15)
 
 
