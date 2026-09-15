@@ -8,7 +8,7 @@ function frontmatter(text: string): Record<string, string> {
 	const match = text.match(/^---\n([\s\S]*?)\n---\n([\s\S]*)$/);
 	if (!match) throw new Error("rule has no frontmatter");
 	const fields: Record<string, string> = {};
-	for (const line of match[1]!.split("\n")) {
+	for (const line of match[1]?.split("\n") ?? []) {
 		const separator = line.indexOf(":");
 		fields[line.slice(0, separator)] = line.slice(separator + 1).trim();
 	}
