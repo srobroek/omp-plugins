@@ -92,7 +92,8 @@ describe("getWorktreesDir", () => {
 		mkdirSync(profileRoot, { recursive: true });
 		const source = join(process.cwd(), "delivery/extensions/primary-checkout-gate.ts");
 		const script = `import { getWorktreesDir } from ${JSON.stringify(source)}; console.log(getWorktreesDir());`;
-		const result = Bun.spawnSync([process.execPath, "-e", script], {
+		const bun = Bun.which("bun") ?? process.execPath;
+		const result = Bun.spawnSync([bun, "-e", script], {
 			env: { ...process.env, HOME: home, OMP_PROFILE: "acme", XDG_DATA_HOME: xdg, OMP_WORKTREE_DIR: "" },
 			stdout: "pipe",
 			stderr: "pipe",
