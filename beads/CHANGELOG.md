@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.3.3](https://github.com/srobroek/omp-plugins/compare/beads--v1.3.2...beads--v1.3.3) (2026-09-15)
+
+
+### Bug Fixes
+
+* **delivery:** trust remote steering sources ([ce43658](https://github.com/srobroek/omp-plugins/commit/ce43658be90aa22656fd973b2daf05c8e0400a4e))
+
 ## [1.3.2](https://github.com/srobroek/omp-plugins/compare/beads--v1.3.1...beads--v1.3.2) (2026-09-14)
 
 

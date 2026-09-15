@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.10.7](https://github.com/srobroek/omp-plugins/compare/delivery--v0.10.6...delivery--v0.10.7) (2026-09-15)
+
+
+### Bug Fixes
+
+* **delivery:** trust remote steering sources ([ce43658](https://github.com/srobroek/omp-plugins/commit/ce43658be90aa22656fd973b2daf05c8e0400a4e))
+
 ## [0.10.6](https://github.com/srobroek/omp-plugins/compare/delivery--v0.10.5...delivery--v0.10.6) (2026-09-14)
 
 
