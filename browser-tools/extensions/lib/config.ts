@@ -1,7 +1,7 @@
-import * as pluginDirs from "@oh-my-pi/pi-utils/dirs";
 import { readFile } from "node:fs/promises";
 import { isAbsolute, normalize } from "node:path";
 import type { PluginSettingSchema } from "@oh-my-pi/pi-coding-agent/extensibility/plugins";
+import * as pluginDirs from "@oh-my-pi/pi-utils/dirs";
 
 type PluginDirsModule = {
 	getPluginsLockfile(home?: string): string;
