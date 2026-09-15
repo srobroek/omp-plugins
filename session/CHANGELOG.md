@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.1.7](https://github.com/srobroek/omp-plugins/compare/session--v1.1.6...session--v1.1.7) (2026-09-15)
+
+
+### Bug Fixes
+
+* **session:** confirm target before cross-project reads ([d1f0185](https://github.com/srobroek/omp-plugins/commit/d1f01855592b9b8529df145102fbfaedf2ac2fbd))
+* **session:** confirm target before cross-project reads ([d1f0185](https://github.com/srobroek/omp-plugins/commit/d1f01855592b9b8529df145102fbfaedf2ac2fbd))
+
 ## [1.1.6](https://github.com/srobroek/omp-plugins/compare/session--v1.1.5...session--v1.1.6) (2026-09-15)
 
 
