@@ -15,6 +15,7 @@ function authorizeMain(root: string, body = "MUST authorize DELIVERY_ALLOW_MAIN_
 	trustedSources.set(root, `${body}\n`);
 }
 
+import { findGitInvocations } from "./main-branch-gate.ts";
 import primaryCheckoutGate, {
 	checkoutOf,
 	decideCommit,
@@ -41,6 +42,8 @@ function fakeGit(repos: Repo[]): GitRun {
 			const common = repo.primary ? `${repo.topLevel}/.git` : "/primary/.git";
 			return { exitCode: 0, stdout: `${repo.topLevel}\n${gitDir}\n${common}\n` };
 		}
+		if (argv[1] === "rev-parse" && argv.includes("--git-common-dir")) return { exitCode: 0, stdout: `${repo.primary ? repo.topLevel : "/primary"}/.git\n` };
+		if (argv[1] === "config" && argv[2] === "--get-all" && argv[3] === "remote.origin.url") return { exitCode: 0, stdout: `https://example.test/${repo.topLevel.replaceAll("/", "_")}.git\n` };
 		if (argv[1] === "ls-remote") return { exitCode: 0, stdout: `ref: refs/heads/main\tHEAD\n${DEFAULT_SHA}\tHEAD\n` };
 		if (argv[1] === "rev-parse" && argv.includes("--verify")) return { exitCode: 0, stdout: `${DEFAULT_SHA}\n` };
 		if (argv[1] === "ls-tree") {
@@ -393,5 +396,47 @@ describe("integration", () => {
 		expect(toolCall({ toolName: "bash", input: { cwd: primary, env: { DELIVERY_ALLOW_PRIMARY_CHECKOUT: "1" } } })).toBeUndefined();
 		expect(sessionStart({})).toBeUndefined();
 		expect(toolCall({ toolName: "write", input: { path: join(primary, "src", "new.ts"), content: "" } })).toMatchObject({ block: true });
+	});
+});
+
+describe("final primary parser bypass controls", () => {
+	test("direct git helpers fail closed before the generic non-Git skip", () => {
+		const { primary } = setup();
+		for (const command of [
+			"/usr/libexec/git-core/git-commit -m x",
+			"/usr/libexec/git-core/git-checkout feature",
+			"/usr/libexec/git-core/git-switch feature",
+			"/usr/libexec/git-core/git-merge feature",
+			"/usr/libexec/git-core/git-unknown-helper x",
+		]) expect(decideCommit(command, primary)?.block, command).toBe(true);
+		expect(decideCommit("echo git-notes.txt", primary)).toBeUndefined();
+		expect(findGitInvocations("/usr/libexec/git-core/git-unknown-helper x")).toEqual([{ operation: "opaque", repoDir: null, retargeted: true }]);
+	});
+
+	test("remote origin mutations are primary mutations while reads stay allowed", () => {
+		const { primary } = setup();
+		for (const command of [
+			"git remote set-url origin https://evil.test/repo.git",
+			"git remote remove origin",
+			"git remote rename origin evil",
+			"git config remote.origin.url https://evil.test/repo.git",
+			"alias mutate='git remote set-url origin evil'; mutate",
+			"env git remote set-url origin evil",
+		]) expect(decideCommit(command, primary)?.block, command).toBe(true);
+		expect(decideCommit("git remote -v", primary)).toBeUndefined();
+		expect(decideCommit("git fetch origin", primary)).toBeUndefined();
+	});
+
+	test.each([
+		"cd /primary && git commit -m x",
+		"cd /primary ; git checkout feature",
+		"pushd /primary && git merge feature",
+		"{ git commit -m x; }",
+		"(git commit -m x)",
+		"cd /does-not-exist ; git commit -m x",
+		"cd /does-not-exist && git commit -m x",
+	])("registered primary cwd/grouping chain fails closed: %s", (command) => {
+		const { primary } = setup();
+		expect(decideCommit(command, primary)?.block, command).toBe(true);
 	});
 });

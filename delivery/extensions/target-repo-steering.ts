@@ -1,10 +1,55 @@
 import { isAbsolute, resolve } from "node:path";
 
 export type GitRun = (argv: string[], cwd: string) => { exitCode: number; stdout: string };
+export type SteeringScope = string;
 
 type TreeEntry = { mode: string; type: string; object: string; path: string };
 type ReadResult = { text: string | null; error: boolean };
 type RemoteDefault = { ref: string; sha: string };
+type RemoteAnchor = { root: string; commonDir: string; origin: string; authority: RemoteDefault };
+
+function normalizeRemoteIdentity(raw: string, root: string): string | null {
+	const value = raw.trim();
+	if (!value || /[\r\n\0]/.test(value)) return null;
+	if (isAbsolute(value)) return resolve(value);
+	if (/^(?:https?|ssh|git|file):\/\//i.test(value)) {
+		try {
+			const url = new URL(value);
+			url.protocol = url.protocol.toLowerCase();
+			url.hostname = url.hostname.toLowerCase();
+			url.pathname = url.pathname.replace(/\/+$/, "");
+			return url.toString();
+		} catch {
+			return null;
+		}
+	}
+	const scp = /^([^@/:]+@)?([^:/]+):(.+)$/.exec(value);
+	if (scp) return `${scp[1] ?? ""}${scp[2]?.toLowerCase() ?? ""}:${scp[3]?.replace(/\/+$/, "") ?? ""}`;
+	return resolve(root, value);
+}
+
+function configuredOrigin(root: string, run: GitRun): string | null {
+	try {
+		const result = run(["git", "config", "--get-all", "remote.origin.url"], root);
+		if (result.exitCode !== 0) return null;
+		const values = result.stdout.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+		if (values.length !== 1) return null;
+		return normalizeRemoteIdentity(values[0] as string, root);
+	} catch {
+		return null;
+	}
+}
+
+function commonDir(root: string, run: GitRun): string | null {
+	try {
+		const result = run(["git", "rev-parse", "--path-format=absolute", "--git-common-dir"], root);
+		if (result.exitCode !== 0) return null;
+		const raw = result.stdout.split(/\r?\n/, 1)[0]?.trim() ?? "";
+		return raw ? (isAbsolute(raw) ? resolve(raw) : resolve(root, raw)) : null;
+	} catch {
+		return null;
+	}
+}
 
 function canonicalRoot(target: string, run: GitRun): string | null {
 	try {
@@ -18,9 +63,9 @@ function canonicalRoot(target: string, run: GitRun): string | null {
 	}
 }
 
-function trustedRemoteDefault(root: string, run: GitRun): RemoteDefault | null {
+function trustedRemoteDefault(root: string, origin: string, run: GitRun): RemoteDefault | null {
 	try {
-		const result = run(["git", "ls-remote", "--symref", "origin", "HEAD"], root);
+		const result = run(["git", "ls-remote", "--symref", origin, "HEAD"], root);
 		if (result.exitCode !== 0) return null;
 		const raw = result.stdout.replace(/\r?\n$/, "");
 		const lines = raw.split(/\r?\n/);
@@ -42,6 +87,34 @@ function trustedRemoteDefault(root: string, run: GitRun): RemoteDefault | null {
 		return null;
 	}
 }
+
+const ANCHORS = new Map<string, RemoteAnchor>();
+
+function anchorKey(scope: SteeringScope, root: string, common: string): string {
+	return `${scope}\0${root}\0${common}`;
+}
+
+function observeAnchor(root: string, run: GitRun, scope: SteeringScope): RemoteAnchor | null {
+	const origin = configuredOrigin(root, run);
+	const common = commonDir(root, run);
+	if (origin === null || common === null) return null;
+	const key = anchorKey(scope, root, common);
+	const existing = ANCHORS.get(key);
+	if (existing !== undefined && (existing.origin !== origin || existing.commonDir !== common)) return null;
+	const authority = trustedRemoteDefault(root, existing?.origin ?? origin, run);
+	if (authority === null) return null;
+	if (existing !== undefined && (existing.authority.ref !== authority.ref || existing.authority.sha !== authority.sha)) return null;
+	if (existing !== undefined) return existing;
+	const anchor: RemoteAnchor = { root, commonDir: common, origin, authority };
+	ANCHORS.set(key, anchor);
+	return anchor;
+}
+
+export function targetRepoTrusts(target: string, run: GitRun, scope: SteeringScope = "default"): boolean {
+	const root = canonicalRoot(target, run);
+	return root !== null && observeAnchor(root, run, scope) !== null;
+}
+
 const TREE_CACHE = new Map<string, TreeEntry[] | null>();
 
 function treeEntries(root: string, sha: string, run: GitRun): TreeEntry[] | null {
@@ -52,10 +125,7 @@ function treeEntries(root: string, sha: string, run: GitRun): TreeEntry[] | null
 		return value;
 	};
 	try {
-		const result = run(
-			["git", "ls-tree", "-rz", "--full-tree", "-r", sha, "--", "AGENTS.md", "CLAUDE.md", ".omp"],
-			root,
-		);
+		const result = run(["git", "ls-tree", "-rz", "--full-tree", "-r", sha, "--", "AGENTS.md", "CLAUDE.md", ".omp"], root);
 		if (result.exitCode !== 0) return cache(null);
 		const entries: TreeEntry[] = [];
 		const seen = new Set<string>();
@@ -78,13 +148,7 @@ function treeEntries(root: string, sha: string, run: GitRun): TreeEntry[] | null
 }
 
 function directSource(path: string): boolean {
-	return (
-		path === "AGENTS.md" ||
-		path === "CLAUDE.md" ||
-		(path.startsWith(".omp/rules/") &&
-			path.endsWith(".md") &&
-			!path.slice(".omp/rules/".length).includes("/"))
-	);
+	return path === "AGENTS.md" || path === "CLAUDE.md" || (path.startsWith(".omp/rules/") && path.endsWith(".md") && !path.slice(".omp/rules/".length).includes("/"));
 }
 const FILE_CACHE = new Map<string, ReadResult>();
 
@@ -103,11 +167,7 @@ function readTrustedFile(root: string, sha: string, path: string, run: GitRun): 
 	return result;
 }
 
-function fencedLineScanner(
-	text: string,
-	affirmative: string,
-	veto: string,
-): { affirmative: boolean; veto: boolean } {
+function fencedLineScanner(text: string, affirmative: string, veto: string): { affirmative: boolean; veto: boolean } {
 	let fence: { char: "`" | "~"; length: number } | undefined;
 	let foundAffirmative = false;
 	let foundVeto = false;
@@ -130,21 +190,23 @@ function fencedLineScanner(
 
 /**
  * Return whether the target repository's remote-authoritative default tree authorizes an override.
- * The remote's HEAD ref and SHA come from `git ls-remote --symref origin HEAD`; mutable local
- * origin refs are never used. Only exact standalone directives in regular, non-symlink candidate
- * blobs count. Missing, malformed, ambiguous, unavailable, or mismatched data denies.
+ * The origin identity and common directory are pinned on first observation for this scope. Every
+ * later authorization re-reads the configured identity, then queries that pinned identity for the
+ * same default ref and SHA. Mutable local origin refs are never used.
  */
 const AUTH_CACHE = new Map<string, boolean>();
 
-export function targetRepoAuthorizes(target: string, envName: string, run: GitRun): boolean {
+export function targetRepoAuthorizes(target: string, envName: string, run: GitRun, scope: SteeringScope = "default"): boolean {
 	const root = canonicalRoot(target, run);
 	if (root === null) return false;
-	const remote = trustedRemoteDefault(root, run);
-	if (remote === null) return false;
-	const cacheKey = `${root}\0${remote.sha}\0${envName}`;
+	const common = commonDir(root, run);
+	if (common === null) return false;
+	const anchor = observeAnchor(root, run, scope);
+	if (anchor === null) return false;
+	const cacheKey = `${root}\0${anchor.authority.sha}\0${envName}`;
 	const cached = AUTH_CACHE.get(cacheKey);
 	if (cached !== undefined) return cached;
-	const entries = treeEntries(root, remote.sha, run);
+	const entries = treeEntries(root, anchor.authority.sha, run);
 	if (entries === null) {
 		AUTH_CACHE.set(cacheKey, false);
 		return false;
@@ -156,7 +218,7 @@ export function targetRepoAuthorizes(target: string, envName: string, run: GitRu
 	for (const entry of entries) {
 		if (entry.path === ".omp" || entry.path === ".omp/rules" || !directSource(entry.path)) continue;
 		if (!(entry.type === "blob" && (entry.mode === "100644" || entry.mode === "100755"))) continue;
-		const result = readTrustedFile(root, remote.sha, entry.path, run);
+		const result = readTrustedFile(root, anchor.authority.sha, entry.path, run);
 		if (result.error || result.text === null) {
 			AUTH_CACHE.set(cacheKey, false);
 			return false;

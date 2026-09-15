@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { type GitRun, steeringDirective, targetRepoAuthorizes } from "./target-repo-steering.ts";
+import { type GitRun, steeringDirective, targetRepoAuthorizes, targetRepoTrusts } from "./target-repo-steering.ts";
 
 let scratch: string | undefined;
 const SHA = "a".repeat(40);
@@ -26,6 +26,8 @@ function fakeGit(
 	return (argv, cwd) => {
 		if (cwd !== root) return { exitCode: 128, stdout: "" };
 		if (argv[1] === "rev-parse" && argv.includes("--show-toplevel")) return { exitCode: 0, stdout: `${root}\n` };
+		if (argv[1] === "rev-parse" && argv.includes("--git-common-dir")) return { exitCode: 0, stdout: `${root}/.git\n` };
+		if (argv[1] === "config" && argv[2] === "--get-all" && argv[3] === "remote.origin.url") return { exitCode: 0, stdout: "https://example.test/repo.git\n" };
 		if (argv[1] === "ls-remote") {
 			return remoteRef === null
 				? { exitCode: 128, stdout: "" }
@@ -73,6 +75,40 @@ describe("targetRepoAuthorizes", () => {
 		expect(calls.filter((argv) => argv[1] === "ls-remote")).toHaveLength(2);
 		expect(calls.filter((argv) => argv[1] === "ls-tree")).toHaveLength(1);
 		expect(calls.filter((argv) => argv[1] === "show")).toHaveLength(1);
+	});
+
+
+	test("pins origin identity on first observation and rejects redirects until exact restoration", () => {
+		const root = setupRepo();
+		const files = [{ path: "AGENTS.md", text: `${steeringDirective("DELIVERY_ALLOW_MAIN_COMMIT")}\n` }];
+		const baseline = "https://example.test/repo.git";
+		const redirect = "https://evil.test/repo.git";
+		let configuredOrigin = baseline;
+		let authoritySha = SHA;
+		const queried: string[][] = [];
+		const base = fakeGit(root, files);
+		const run: GitRun = (argv, cwd) => {
+			if (argv[1] === "config" && argv[2] === "--get-all") return { exitCode: 0, stdout: `${configuredOrigin}\n` };
+			if (argv[1] === "ls-remote") {
+				queried.push(argv);
+				return { exitCode: 0, stdout: `ref: refs/heads/main\tHEAD\n${authoritySha}\tHEAD\n` };
+			}
+			return base(argv, cwd);
+		};
+		expect(targetRepoTrusts(root, run)).toBe(true);
+		expect(targetRepoAuthorizes(root, "DELIVERY_ALLOW_MAIN_COMMIT", run)).toBe(true);
+		expect(queried.every((argv) => argv[3] === baseline)).toBe(true);
+		configuredOrigin = redirect;
+		expect(targetRepoAuthorizes(root, "DELIVERY_ALLOW_MAIN_COMMIT", run)).toBe(false);
+		configuredOrigin = baseline;
+		expect(targetRepoAuthorizes(root, "DELIVERY_ALLOW_MAIN_COMMIT", run)).toBe(true);
+		expect(queried.every((argv) => argv[3] === baseline)).toBe(true);
+		expect(queried.filter((argv) => argv[1] === "ls-remote")).toHaveLength(3);
+		const treeCount = queried.length;
+		authoritySha = ALT_SHA;
+		expect(targetRepoAuthorizes(root, "DELIVERY_ALLOW_MAIN_COMMIT", run)).toBe(false);
+		// Rechecking a changed authority never parses a new tree or retains the old positive result.
+		expect(queried.length).toBe(treeCount + 1);
 	});
 
 	test("uses remote HEAD and SHA rather than retargeted local origin metadata", () => {

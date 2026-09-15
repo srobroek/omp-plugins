@@ -23,6 +23,9 @@ The primary-checkout override requires `MUST authorize DELIVERY_ALLOW_PRIMARY_CH
 Each directive must occupy its own line in a non-symlink root `AGENTS.md` or `CLAUDE.md`, or a direct non-symlink `.omp/rules/*.md` file.
 An exact `MUST NOT authorize <name>=1 for this repository.` line vetoes the corresponding authorization.
 The gate resolves the target repository from the bash call `cwd` or `git -C <path>` before reading its steering.
+On first observation, it pins the normalized `remote.origin.url`, common Git directory, default ref, and remote HEAD SHA for the session and extension.
+Each authorization re-reads the configured origin and queries the pinned remote identity explicitly. An identity or HEAD SHA change denies the call and invalidates the positive decision; restoring the exact pinned identity and unchanged remote HEAD permits a fresh authorization check.
+The parsed steering tree is cached only by the exact remote SHA, never by elapsed time.
 Text in a command, commit message, or file body never authorizes an override.
 
 Primary-checkout commits use the canonical-main exception: they require the exact
@@ -32,7 +35,8 @@ structured environment. `DELIVERY_ALLOW_PRIMARY_CHECKOUT=1` never authorizes a c
 it remains a separate factor for edit/write authorization and session grants.
 
 The main-branch gate blocks commits on `main` or `master`.
-The extension receives raw shell text, so arbitrary Bash checkout, switch, and merge operations are not runtime-enforced. Follow the steering prohibition above for those operations.
+The simple-shape allowlist refuses direct `git-*` helpers, wrappers, aliases, dynamic targets, and Git-bearing commands combined with `cd`, `pushd`, failed-cd separator chains, braces, or subshells. Set the tool `cwd` or use a supported static `git -C <path>` form instead.
+Origin mutation commands are primary mutations, not reads. Ordinary `git remote -v` and `git fetch` are read operations only while the pinned origin remains unchanged. Filesystem tampering before first observation or session startup is outside this boundary; after observation, mismatches fail closed.
 
 ## Automated review loop
 

@@ -3,7 +3,7 @@ import { homedir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { ExtensionAPI, ToolCallEvent } from "@oh-my-pi/pi-coding-agent";
 import { extractCommand, findGitInvocations, unreadableReason } from "./main-branch-gate.ts";
-import { steeringDirective, targetRepoAuthorizes } from "./target-repo-steering.ts";
+import { steeringDirective, targetRepoAuthorizes, targetRepoTrusts } from "./target-repo-steering.ts";
 
 let worktreesDirOverride: string | undefined;
 
@@ -249,21 +249,24 @@ export function decideCommit(
 	env: NodeJS.ProcessEnv = process.env,
 	worktreesDir = getWorktreesDir(),
 	authorizationEnv: NodeJS.ProcessEnv = env,
+	scope: string = "default",
 ): { block: true; reason: string } | undefined {
 	const run = injectedRun ?? defaultRun;
 	for (const invocation of findGitInvocations(command, env)) {
 		if (invocation.operation === "opaque" || invocation.retargeted === true)
 			return { block: true, reason: unreadableReason("an opaque Git invocation") };
-		if (invocation.operation === "push" || invocation.operation === "read" || invocation.dryRun === true) continue;
 		const target = invocation.repoDir === null ? cwd : resolve(cwd, invocation.repoDir);
 		const checkout = checkoutOf(target);
+		if (checkout?.primary && !isRuntimeCheckout(checkout.topLevel, worktreesDir) && (invocation.operation === "push" || invocation.operation === "read") && !targetRepoTrusts(checkout.topLevel, run, scope))
+			return { block: true, reason: unreadableReason("unpinned repository origin") };
+		if (invocation.operation === "push" || invocation.operation === "read" || invocation.dryRun === true) continue;
 		if (invocation.operation === "checkout" || invocation.operation === "switch" || invocation.operation === "merge") {
 			if (checkout?.primary && !isRuntimeCheckout(checkout.topLevel, worktreesDir))
 				return { block: true, reason: reasonFor(checkout.topLevel, "This repository mutation") };
 			continue;
 		}
 		if (invocation.operation !== "commit" || !checkout?.primary || isRuntimeCheckout(checkout.topLevel, worktreesDir)) continue;
-		if (authorizationEnv[MAIN_COMMIT_ENV] === "1" && targetRepoAuthorizes(checkout.topLevel, MAIN_COMMIT_ENV, run)) continue;
+		if (authorizationEnv[MAIN_COMMIT_ENV] === "1" && targetRepoAuthorizes(checkout.topLevel, MAIN_COMMIT_ENV, run, scope)) continue;
 		return { block: true, reason: reasonFor(checkout.topLevel, "This commit") };
 	}
 	return undefined;
@@ -306,13 +309,13 @@ export default function primaryCheckoutGate(pi: ExtensionAPI): void {
 					if (
 						checkout?.primary &&
 						!isRuntimeCheckout(checkout.topLevel, worktreesDir) &&
-						targetRepoAuthorizes(checkout.topLevel, ALLOW_ENV, injectedRun ?? defaultRun)
+						targetRepoAuthorizes(checkout.topLevel, ALLOW_ENV, injectedRun ?? defaultRun, sessionKey(ctx))
 					)
 						authorizedPrimaryCheckouts.add(checkout.topLevel);
 				}
 				const command = extractCommand(event.input);
 				if (!command) return;
-				return decideCommit(command, cwd, env, worktreesDir, inputEnv ?? {});
+				return decideCommit(command, cwd, env, worktreesDir, inputEnv ?? {}, sessionKey(ctx));
 			}
 			if (EDIT_TOOLS[event.toolName] === true) {
 				return decideEdit(event.toolName, input, cwd, env, worktreesDir, authorizedPrimaryCheckouts);

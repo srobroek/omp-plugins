@@ -24,7 +24,7 @@ import type {
 	ExtensionAPI,
 	ToolCallEvent,
 } from "@oh-my-pi/pi-coding-agent";
-import { steeringDirective, targetRepoAuthorizes } from "./target-repo-steering.ts";
+import { steeringDirective, targetRepoAuthorizes, targetRepoTrusts } from "./target-repo-steering.ts";
 
 const TIMEOUT_MS = 2000;
 
@@ -642,6 +642,29 @@ export function findCommitInvocations(command: string, includeOpaqueSubstitution
 	return out;
 }
 export type GitOperation = "read" | "commit" | "checkout" | "switch" | "merge" | "push" | "opaque";
+
+const GIT_COMMAND_TEXT = /(?:^|[^A-Za-z0-9_./-])(?:d?git|git-[A-Za-z0-9_-]+)(?:$|[^A-Za-z0-9_-])/;
+const SHELL_CWD_COMMANDS = new Set(["cd", "pushd", "popd"]);
+
+export function hasUnsafeShellCwdOrGrouping(command: string): boolean {
+	if (!GIT_COMMAND_TEXT.test(command)) return false;
+	const tokens = tokenize(command);
+	let atCommand = true;
+	for (const token of tokens) {
+		if (token.quoted) continue;
+		if (token.text === "(" || token.text === ")" || token.text === "{" || token.text === "}") return true;
+		if (SEPARATOR[token.text] === true || token.text === "\n") {
+			atCommand = true;
+			continue;
+		}
+		if (!atCommand) continue;
+		if (ENV_ASSIGNMENT.test(token.text) || TRANSPARENT_PREFIX[token.text] === true || RESERVED_WORD[token.text] === true) continue;
+		if (SHELL_CWD_COMMANDS.has(tokenBase(token))) return true;
+		atCommand = false;
+	}
+	return false;
+}
+
 export type GitInvocation = {
 	operation: GitOperation;
 	repoDir: string | null;
@@ -657,12 +680,25 @@ const PRIMARY_READ_ONLY = new Set([
 ]);
 const PRIMARY_MUTATIONS = new Set(["checkout", "switch", "merge"]);
 const PRIMARY_SAFE_TEXT_COMMANDS = new Set(["echo", "printf", "cat", "true", "false", ":", "pwd", "rg", "grep"]);
+const REMOTE_READ_SUBCOMMANDS = new Set(["", "-v", "--verbose", "show", "get-url"]);
 const PRIMARY_WRAPPERS = new Set([
 	"bash", "sh", "zsh", "dash", "ksh", "eval", "env", "command", "sudo", "time", "nice", "nohup", "exec", "xargs", "xcrun",
 ]);
 
 function tokenBase(token: Token): string {
 	return token.text.split("/").at(-1) ?? "";
+}
+
+function remoteCommandMutatesOrigin(remainder: Token[]): boolean {
+	const remote = remainder.findIndex((token) => token.text === "remote");
+	if (remote < 0) return false;
+	for (let index = remote + 1; index < remainder.length; index++) {
+		const text = remainder[index]?.text ?? "";
+		if (text === "-v" || text === "--verbose") continue;
+		if (text === "--") return true;
+		return !REMOTE_READ_SUBCOMMANDS.has(text);
+	}
+	return false;
 }
 
 function envValueMayBeGit(value: string | undefined): boolean {
@@ -699,6 +735,8 @@ function opaqueInvocation(): GitInvocation {
 
 /** Parse only direct simple Git shapes; every wrapper, alias, helper, and dynamic target fails closed. */
 export function findGitInvocations(command: string, env: NodeJS.ProcessEnv = {}): GitInvocation[] {
+	if (/(?:^|[;&|\n])\s*alias\b[^;|&\n]*\b(?:d?git)\s+remote\s+(?:set-url|remove|rename|add|set-head|set-branches)\b/.test(command))
+		return [opaqueInvocation()];
 	const tokens = tokenize(command);
 	const out: GitInvocation[] = [];
 	const isSep = (token: Token | undefined): boolean => token !== undefined && !token.quoted && (SEPARATOR[token.text] === true || token.text === "\n");
@@ -725,6 +763,12 @@ export function findGitInvocations(command: string, env: NodeJS.ProcessEnv = {})
 		const base = tokenBase(commandToken);
 		const remainder = segment.slice(index + 1);
 		const hasStructuredConfig = envHasOpaqueGitConfig(env) || configAssignment;
+		// Git's direct helper namespace is executable Git, not an ordinary hyphenated utility.
+		// Classify it before the generic non-Git branch so helpers cannot silently skip the gate.
+		if (base.startsWith("git-")) {
+			out.push(opaqueInvocation());
+			continue;
+		}
 		if (base !== "git" && base !== "dgit") {
 			if (base === "xargs") {
 				const payloadIndex = xargsPayloadIndex(remainder);
@@ -736,10 +780,6 @@ export function findGitInvocations(command: string, env: NodeJS.ProcessEnv = {})
 			const nestedGit = remainder.some((token) => substitutionMayRunGit(token.text, env));
 			const wrapperGit = remainder.some((token) => possibleGitToken(token, env) || /(?:^|\s)(?:d?git|git-[A-Za-z0-9_-]+)(?:$|\s)/.test(token.text));
 			if (commandToken.text.includes("$") || commandToken.text.includes("`") || nestedGit || ((PRIMARY_WRAPPERS.has(base) || !PRIMARY_SAFE_TEXT_COMMANDS.has(base)) && wrapperGit)) out.push(opaqueInvocation());
-			continue;
-		}
-		if (base.startsWith("git-")) {
-			out.push(opaqueInvocation());
 			continue;
 		}
 		let repoDir: string | null = null;
@@ -785,6 +825,7 @@ export function findGitInvocations(command: string, env: NodeJS.ProcessEnv = {})
 			}
 			if (operation === "commit" && arg.text === "--dry-run") dryRun = true;
 		}
+		if (operation === "read" && remoteCommandMutatesOrigin(remainder)) operation = "opaque";
 		if (operation === undefined) operation = "opaque";
 		if (opaque || operation === "opaque") out.push(opaqueInvocation());
 		else out.push({ operation, repoDir, ...(dryRun ? { dryRun: true } : {}) });
@@ -1542,8 +1583,10 @@ export function decideCommit(
 	cwd: string = process.cwd(),
 	env: NodeJS.ProcessEnv = process.env,
 	authorizationEnv: NodeJS.ProcessEnv = env,
+	scope: string = "default",
 ): { block: true; reason: string } | undefined {
 	const run = injectedRun ?? defaultRun;
+	if (hasUnsafeShellCwdOrGrouping(command)) return { block: true, reason: unreadableReason("shell cwd mutation or grouping") };
 	const envSelector = TARGET_ENV.find(
 		(name) => env[name] !== undefined && env[name] !== "",
 	);
@@ -1577,7 +1620,7 @@ export function decideCommit(
 		const branch = currentBranch(target);
 		if (branch === null) continue;
 		if (PROTECTED_BRANCHES[branch] === true) {
-			if (authorizationEnv[ALLOW_ENV] === "1" && targetRepoAuthorizes(target, ALLOW_ENV, run)) continue;
+			if (authorizationEnv[ALLOW_ENV] === "1" && targetRepoTrusts(target, run, scope) && targetRepoAuthorizes(target, ALLOW_ENV, run, scope)) continue;
 			return { block: true, reason: denyReason(branch, target) };
 		}
 	}
@@ -1601,6 +1644,7 @@ export default function mainBranchGate(pi: ExtensionAPI): void {
 				cwd,
 				callEnv ? { ...process.env, ...callEnv } : process.env,
 				callEnv ?? {},
+				ctx?.sessionManager?.getSessionId?.() ?? "default",
 			);
 		} catch {
 			return;

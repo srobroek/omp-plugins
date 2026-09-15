@@ -37,6 +37,8 @@ function fakeGit(
 		const root = roots.find((candidate) => cwd === candidate || cwd.startsWith(`${candidate}/`));
 		if (root === undefined) return { exitCode: 128, stdout: "" };
         if (argv[1] === "rev-parse" && argv.includes("--show-toplevel")) return { exitCode: 0, stdout: `${root}\n` };
+        if (argv[1] === "rev-parse" && argv.includes("--git-common-dir")) return { exitCode: 0, stdout: `${root}/.git\n` };
+        if (argv[1] === "config" && argv[2] === "--get-all" && argv[3] === "remote.origin.url") return { exitCode: 0, stdout: `https://example.test/${root.replaceAll("/", "_")}.git\n` };
         if (argv[1] === "symbolic-ref") return { exitCode: 0, stdout: "refs/remotes/origin/main\n" };
         if (argv[1] === "ls-remote") return { exitCode: 0, stdout: `ref: refs/heads/main\tHEAD\n${"a".repeat(40)}\tHEAD\n` };
         if (argv[1] === "rev-parse" && argv.includes("--verify")) return { exitCode: 0, stdout: `${"a".repeat(40)}\n` };
@@ -1496,7 +1498,7 @@ describe("decideCommit", () => {
 			expect(
 				calls.map((c) => c.cwd),
 				command,
-			).toEqual(["/session"]);
+			).toEqual([]);
 		}
 	});
 
@@ -2116,4 +2118,41 @@ describe("repository steering", () => {
 		expect(reason).toContain("target repository must contain");
 	});
 
+});
+
+
+describe("final registered bypass controls", () => {
+	type Handler = (event: unknown, context?: { cwd?: string }) => unknown;
+	function register(): Handler {
+		const handlers: Handler[] = [];
+		mainBranchGate({ on: (event: string, handler: Handler) => { if (event === "tool_call") handlers.push(handler); } } as never);
+		return handlers[0] as Handler;
+	}
+
+	test("absolute git-commit helper is checked on feature and main through the registered chain", () => {
+		for (const branch of ["feature", "main"]) {
+			const root = branch === "main" ? "/main-helper" : "/feature-helper";
+			const { run } = fakeGit({ [root]: branch });
+			setGitRunForTests(run);
+			const result = register()({ toolName: "bash", input: { cwd: root, command: "/usr/libexec/git-core/git-commit -m x" } });
+			if (branch === "main") expect(result, branch).toMatchObject({ block: true });
+			else expect(result, branch).toBeUndefined();
+		}
+	});
+
+	test.each([
+		"cd /main && git commit -m x",
+		"cd /main ; git checkout feature",
+		"pushd /main && git merge feature",
+		"{ git commit -m x; }",
+		"(git commit -m x)",
+		"cd /missing ; git commit -m x",
+		"cd /missing && git commit -m x",
+	])("registered cwd/grouping chain refuses without cwd simulation: %s", (command) => {
+		const { run, calls } = fakeGit({ "/feature": "feature", "/main": "main" });
+		setGitRunForTests(run);
+		const result = register()({ toolName: "bash", input: { cwd: "/feature", command } });
+		expect(result).toMatchObject({ block: true });
+		expect(calls).toEqual([]);
+	});
 });
