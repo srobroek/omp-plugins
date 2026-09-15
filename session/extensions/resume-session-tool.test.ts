@@ -703,19 +703,45 @@ describe("integration: session resolution", () => {
 		expect(await resolve("nope")).toEqual({ error: expect.stringContaining("no session under") });
 		expect(await resolve("")).toEqual({ error: expect.stringContaining("needs `session`") });
 	}, 20_000);
-	test("an explicit short id resolves centrally across repository scope", async () => {
+	test("an explicit short id gates cross-repository reads until target confirmation", async () => {
 		const repo = repoWithWorktree();
+		const target = join(tmp("resume-target-"), "repo");
+		mkdirSync(target, { recursive: true });
 		const { home } = fixtureStore([
 			{
 				...shipped,
 				stem: "2026-08-24T09-00-00-000Z_01a09dd3-1111-7000-8888-000000000001",
-				cwd: "/home/sjors/dev/finance-statement-tracker",
+				cwd: target,
 			},
 		]);
-		const resolved = await withHome(home, () =>
+		const blocked = await withHome(home, () =>
 			resolveSession(repo.main, { session: "01a09dd3", path: repo.main, worktrees: false }),
 		);
+		expect(blocked).toEqual({ error: expect.stringContaining("transcript content was not read") });
+		expect(blocked).toEqual({ error: expect.stringContaining("retry with an absolute path") });
+		const resolved = await withHome(home, () => resolveSession(repo.main, { session: "01a09dd3", path: target }));
 		expect(resolved).toEqual({ file: expect.stringContaining("01a09dd3") });
+	});
+	test("refuses incomplete target metadata and non-absolute selectors", async () => {
+		const repo = repoWithWorktree();
+		const cases = [
+			{ cwd: "relative/project", path: repo.main },
+			{ cwd: repo.main, path: "" },
+			{ cwd: repo.main, path: "relative/project" },
+		];
+		for (const [index, target] of cases.entries()) {
+			const { home } = fixtureStore([
+				{
+					...shipped,
+					stem: `2026-08-24T09-00-00-000Z_01a09dd3-2222-7000-8888-00000000000${index + 1}`,
+					cwd: target.cwd,
+				},
+			]);
+			const blocked = await withHome(home, () =>
+				resolveSession(repo.main, { session: "01a09dd3", path: target.path }),
+			);
+			expect(blocked).toEqual({ error: expect.stringContaining("transcript content was not read") });
+		}
 	});
 
 	test("an explicit file bypasses lookup entirely", async () => {
