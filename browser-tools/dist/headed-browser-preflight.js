@@ -38972,7 +38972,7 @@ var init_PipeTransport = __esm(() => {
 // node_modules/puppeteer-core/lib/puppeteer/node/BrowserLauncher.js
 import { existsSync } from "fs";
 import { tmpdir } from "os";
-import { join as join3 } from "path";
+import { join as join2 } from "path";
 function getBrowserTypeDisplayName(browserType) {
   switch (browserType) {
     case Browser6.FIREFOX:
@@ -39087,7 +39087,7 @@ class BrowserLauncher {
       browserCloseCallback();
       const logs = browserProcess.getRecentLogs().join(`
 `);
-      if (logs.includes("Failed to create a ProcessSingleton for your profile directory") || process.platform === "win32" && existsSync(join3(launchArgs.userDataDir, "lockfile"))) {
+      if (logs.includes("Failed to create a ProcessSingleton for your profile directory") || process.platform === "win32" && existsSync(join2(launchArgs.userDataDir, "lockfile"))) {
         throw new Error(`The browser is already running for ${launchArgs.userDataDir}. Use a different \`userDataDir\` or stop the running browser first.`);
       }
       if (logs.includes("Missing X server") && options.headless === false) {
@@ -39179,7 +39179,7 @@ class BrowserLauncher {
   }
   async getProfilePath() {
     const config = await this.puppeteer.configuration();
-    return join3(config.temporaryDirectory ?? tmpdir(), `puppeteer_dev_${this.browser}_profile-`);
+    return join2(config.temporaryDirectory ?? tmpdir(), `puppeteer_dev_${this.browser}_profile-`);
   }
   async resolveExecutablePath(headless, validatePath = true) {
     const config = await this.puppeteer.configuration();
@@ -39742,7 +39742,7 @@ var init_PuppeteerNode = __esm(() => {
 import { spawn as spawn2, spawnSync as spawnSync3 } from "child_process";
 import fs6 from "fs";
 import os8 from "os";
-import { dirname as dirname3 } from "path";
+import { dirname as dirname2 } from "path";
 import { PassThrough } from "stream";
 function countFrames(startTimestamp, previousTimestamp, timestamp, fps) {
   const end = Math.round((timestamp - startTimestamp) * fps);
@@ -39871,7 +39871,7 @@ var init_ScreenRecorder = __esm(() => {
           filters.push(formatArgs.splice(vf, 2).at(-1) ?? "");
         }
         if (path) {
-          fs6.mkdirSync(dirname3(path), { recursive: overwrite });
+          fs6.mkdirSync(dirname2(path), { recursive: overwrite });
         }
         this.#process = spawn2(ffmpegPath, [
           ["-loglevel", "error"],
@@ -40237,20 +40237,20 @@ var init_puppeteer_core = __esm(() => {
 
 // extensions/headed-browser-preflight.ts
 import { mkdir as mkdir4, readFile as readFile2, rename as rename2, writeFile as writeFile2 } from "fs/promises";
-import { homedir as homedir4 } from "os";
-import { dirname as dirname5, join as join5 } from "path";
+import { homedir as homedir3 } from "os";
+import { dirname as dirname4, join as join4 } from "path";
 
 // extensions/lib/preflight.ts
 import { Database } from "bun:sqlite";
 import { constants as constants2 } from "fs";
 import { access, mkdir as mkdir3, statfs } from "fs/promises";
 import { tmpdir as tmpdir2 } from "os";
-import { dirname as dirname4 } from "path";
+import { dirname as dirname3 } from "path";
 
 // extensions/lib/config.ts
 import { readFile } from "fs/promises";
-import { homedir } from "os";
-import { dirname, isAbsolute, join, normalize } from "path";
+import { isAbsolute, normalize } from "path";
+var importPluginDirs = () => import("@oh-my-pi/pi-utils/dirs");
 var PLUGIN_PACKAGE = "@srobroek/browser-tools";
 var ENGINES = ["firefox", "chrome"];
 var CHANNELS = [
@@ -40314,21 +40314,40 @@ async function readSettingsFile(path) {
   const parsed = JSON.parse(await readFile(path, "utf8"));
   return parsed.settings?.[PLUGIN_PACKAGE] ?? {};
 }
-async function loadStoredSettings(cwd, importPluginSettings = () => import("@oh-my-pi/pi-coding-agent/extensibility/plugins")) {
+async function readTrustedGlobalDriver(path, warnings) {
+  try {
+    const settings = await readSettingsFile(path);
+    return settings.driverModulePath;
+  } catch (error) {
+    if (!isMissingFile(error))
+      warnings.push(`headed-browser: cannot read settings from ${path}: ${errorMessage(error)}`);
+    return;
+  }
+}
+async function loadStoredSettings(cwd, importPluginSettings = () => import("@oh-my-pi/pi-coding-agent/extensibility/plugins"), importDirs = importPluginDirs) {
+  const warnings = [];
+  let lockPath;
+  let overridePath;
+  try {
+    const dirs = await importDirs();
+    lockPath = dirs.getPluginsLockfile();
+    overridePath = dirs.getProjectPluginOverridesPath(cwd);
+  } catch (error) {
+    warnings.push(`headed-browser: plugin directory resolver unavailable (${errorMessage(error)})`);
+  }
   try {
     const module = await importPluginSettings();
-    const values = await module.getPluginSettings(PLUGIN_PACKAGE, cwd);
-    return { values: values ?? {}, source: "public-api", warnings: [] };
+    const values = { ...await module.getPluginSettings(PLUGIN_PACKAGE, cwd) ?? {} };
+    delete values.driverModulePath;
+    const trustedDriver = lockPath === undefined ? undefined : await readTrustedGlobalDriver(lockPath, warnings);
+    if (trustedDriver !== undefined)
+      values.driverModulePath = trustedDriver;
+    return { values, source: "public-api", warnings };
   } catch (error) {
-    const warnings = [
-      `headed-browser: plugin settings public API unavailable; using lock-file fallback (${errorMessage(error)})`
-    ];
-    const pluginsDir = process.env.PI_CODING_AGENT_DIR ? join(dirname(process.env.PI_CODING_AGENT_DIR), "plugins") : join(homedir(), ".omp", "plugins");
-    const lockPath = join(pluginsDir, "omp-plugins.lock.json");
-    const overridePath = join(cwd, ".omp", "plugin-overrides.json");
+    warnings.push(`headed-browser: plugin settings public API unavailable; using lock-file fallback (${errorMessage(error)})`);
     let values = {};
     const sources = [];
-    for (const path of [lockPath, overridePath]) {
+    for (const path of [lockPath, overridePath].filter((path) => path !== undefined)) {
       try {
         const settings = await readSettingsFile(path);
         if (path === overridePath)
@@ -40336,9 +40355,8 @@ async function loadStoredSettings(cwd, importPluginSettings = () => import("@oh-
         values = { ...values, ...settings };
         sources.push(path);
       } catch (readError) {
-        if (!isMissingFile(readError)) {
+        if (!isMissingFile(readError))
           warnings.push(`headed-browser: cannot read settings from ${path}: ${errorMessage(readError)}`);
-        }
       }
     }
     return {
@@ -40434,8 +40452,8 @@ function splitDomains(value) {
 // extensions/lib/discovery.ts
 import { spawnSync } from "child_process";
 import { accessSync, constants, readFileSync } from "fs";
-import { homedir as homedir2 } from "os";
-import { dirname as dirname2, isAbsolute as isAbsolute2, join as join2, resolve } from "path";
+import { homedir } from "os";
+import { dirname, isAbsolute as isAbsolute2, join, resolve } from "path";
 var CHANNEL_ENGINE = {
   zen: "firefox",
   firefox: "firefox",
@@ -40510,7 +40528,7 @@ var WINDOWS_CANDIDATES = {
 };
 function candidatesForChannel(channel, options = {}) {
   const platform = options.platform ?? process.platform;
-  const home = options.home ?? homedir2();
+  const home = options.home ?? homedir();
   const env = options.env ?? process.env;
   if (platform === "darwin")
     return DARWIN_CANDIDATES[channel].map((path) => expandPath(path, home, env));
@@ -40522,11 +40540,11 @@ function candidatesForChannel(channel, options = {}) {
     const candidates = [];
     for (const name of names) {
       for (const pathDir of pathEntries)
-        candidates.push(join2(pathDir, name));
+        candidates.push(join(pathDir, name));
       candidates.push(`/usr/bin/${name}`, `/usr/local/bin/${name}`, `/opt/${name}/${name}`);
     }
     for (const id of FLATPAK_IDS[channel] ?? []) {
-      candidates.push(`/var/lib/flatpak/exports/bin/${id}`, join2(home, ".local/share/flatpak/exports/bin", id));
+      candidates.push(`/var/lib/flatpak/exports/bin/${id}`, join(home, ".local/share/flatpak/exports/bin", id));
     }
     return [...new Set(candidates)];
   }
@@ -40611,19 +40629,19 @@ function selectFirefoxProfile(root, profilesText, installsText = "", sourceProfi
 }
 function profileRoots(engine, channel, options = {}) {
   const platform = options.platform ?? process.platform;
-  const home = options.home ?? homedir2();
+  const home = options.home ?? homedir();
   const env = options.env ?? process.env;
   if (engine === "firefox") {
     const name = channel === "zen" ? "zen" : channel === "librewolf" ? "LibreWolf" : channel === "waterfox" ? "Waterfox" : "Firefox";
     if (platform === "darwin")
-      return [join2(home, "Library/Application Support", name)];
+      return [join(home, "Library/Application Support", name)];
     if (platform === "win32")
-      return [join2(env.APPDATA ?? join2(home, "AppData/Roaming"), name === "Firefox" ? "Mozilla/Firefox" : name.toLowerCase())];
+      return [join(env.APPDATA ?? join(home, "AppData/Roaming"), name === "Firefox" ? "Mozilla/Firefox" : name.toLowerCase())];
     const linux = {
-      zen: [join2(home, ".zen"), join2(home, ".var/app/app.zen_browser.zen/.zen")],
-      Firefox: [join2(home, ".mozilla/firefox"), join2(home, ".var/app/org.mozilla.firefox/.mozilla/firefox")],
-      LibreWolf: [join2(home, ".librewolf")],
-      Waterfox: [join2(home, ".waterfox")]
+      zen: [join(home, ".zen"), join(home, ".var/app/app.zen_browser.zen/.zen")],
+      Firefox: [join(home, ".mozilla/firefox"), join(home, ".var/app/org.mozilla.firefox/.mozilla/firefox")],
+      LibreWolf: [join(home, ".librewolf")],
+      Waterfox: [join(home, ".waterfox")]
     };
     return linux[name] ?? [];
   }
@@ -40636,9 +40654,9 @@ function profileRoots(engine, channel, options = {}) {
     vivaldi: "Vivaldi"
   };
   if (platform === "darwin")
-    return [join2(home, "Library/Application Support", rootName[channel] ?? channel)];
+    return [join(home, "Library/Application Support", rootName[channel] ?? channel)];
   if (platform === "win32")
-    return [join2(env.LOCALAPPDATA ?? join2(home, "AppData/Local"), rootName[channel] ?? channel, channel === "edge" ? "User Data" : "")];
+    return [join(env.LOCALAPPDATA ?? join(home, "AppData/Local"), rootName[channel] ?? channel, channel === "edge" ? "User Data" : "")];
   const linuxRoot = {
     chrome: "google-chrome",
     "chrome-canary": "google-chrome-unstable",
@@ -40647,7 +40665,7 @@ function profileRoots(engine, channel, options = {}) {
     brave: "BraveSoftware/Brave-Browser",
     vivaldi: "vivaldi"
   };
-  return [join2(home, ".config", linuxRoot[channel] ?? channel)];
+  return [join(home, ".config", linuxRoot[channel] ?? channel)];
 }
 function resolveSourceProfile(engine, channel, sourceProfileName = "", profileRootOverride = "", options = {}) {
   const exists = options.exists ?? pathExists;
@@ -40657,10 +40675,10 @@ function resolveSourceProfile(engine, channel, sourceProfileName = "", profileRo
     return { warnings: [`headed-browser: no ${channel} profile found; launched with an empty profile`], cleanFallback: true };
   try {
     if (engine === "firefox") {
-      const profilesText = readFileSync(join2(root, "profiles.ini"), "utf8");
+      const profilesText = readFileSync(join(root, "profiles.ini"), "utf8");
       let installsText = "";
       try {
-        installsText = readFileSync(join2(root, "installs.ini"), "utf8");
+        installsText = readFileSync(join(root, "installs.ini"), "utf8");
       } catch {}
       const profile = selectFirefoxProfile(root, profilesText, installsText, sourceProfileName);
       if (!exists(profile.resolvedPath))
@@ -40668,7 +40686,7 @@ function resolveSourceProfile(engine, channel, sourceProfileName = "", profileRo
       return { profileRoot: root, profilePath: profile.resolvedPath, profileName: profile.name, warnings: [], cleanFallback: false };
     }
     const profileName = sourceProfileName || "Default";
-    const profilePath = join2(root, profileName);
+    const profilePath = join(root, profileName);
     if (!exists(profilePath))
       throw new Error(`profile path does not exist: ${profilePath}`);
     return { profileRoot: root, profilePath, profileName, warnings: [], cleanFallback: false };
@@ -40695,8 +40713,8 @@ function parseIni(text) {
   return sections;
 }
 function readFirefoxMetadata(executablePath, filename, key) {
-  const macResources = resolve(dirname2(executablePath), "../Resources", filename);
-  const paths = [join2(dirname2(executablePath), filename), macResources];
+  const macResources = resolve(dirname(executablePath), "../Resources", filename);
+  const paths = [join(dirname(executablePath), filename), macResources];
   for (const path of paths) {
     try {
       const section = Object.values(parseIni(readFileSync(path, "utf8"))).find((values) => values[key]);
@@ -40712,7 +40730,7 @@ function chromeVersion(executablePath) {
   return text.match(/\d+(?:\.\d+)+/)?.[0];
 }
 function expandPath(path, home, env) {
-  let expanded = path.startsWith("~/") ? join2(home, path.slice(2)) : path;
+  let expanded = path.startsWith("~/") ? join(home, path.slice(2)) : path;
   expanded = expanded.replace(/%([^%]+)%/g, (_match, key) => env[key] ?? `%${key}%`);
   return expanded;
 }
@@ -40750,8 +40768,8 @@ async function loadPuppeteer(config) {
 
 // extensions/lib/policy.ts
 import { appendFile, chmod, mkdir } from "fs/promises";
-import { homedir as homedir3 } from "os";
-import { join as join4 } from "path";
+import { homedir as homedir2 } from "os";
+import { join as join3 } from "path";
 function deriveDomainPolicy(config) {
   const allowed = splitDomains(config.allowedDomains);
   const denied = splitDomains(config.deniedDomains);
@@ -40762,10 +40780,10 @@ function deriveDomainPolicy(config) {
 }
 function createAuditWriter(ctx, config) {
   const ompSessionId = ctx.sessionManager.getSessionId?.() ?? String(process.pid);
-  const agentDir = process.env.PI_CODING_AGENT_DIR ?? join4(homedir3(), ".omp", "agent");
-  const directory = config.auditDir || join4(agentDir, "headed-browser-audit");
+  const agentDir = process.env.PI_CODING_AGENT_DIR ?? join3(homedir2(), ".omp", "agent");
+  const directory = config.auditDir || join3(agentDir, "headed-browser-audit");
   const date = new Date().toISOString().slice(0, 10);
-  const path = join4(directory, `${date}-${ompSessionId}.jsonl`);
+  const path = join3(directory, `${date}-${ompSessionId}.jsonl`);
   return {
     path,
     async write(session, op, decision, url, reason) {
@@ -40877,8 +40895,8 @@ async function runPreflight(cwd, ctx, overrides = {}) {
   }
   const audit = createAuditWriter(ctx, config);
   try {
-    await mkdir3(dirname4(audit.path), { recursive: true, mode: 448 });
-    await access(dirname4(audit.path), constants2.W_OK);
+    await mkdir3(dirname3(audit.path), { recursive: true, mode: 448 });
+    await access(dirname3(audit.path), constants2.W_OK);
     checks.push({ name: "audit", status: "ok", observed: audit.path });
   } catch (error) {
     checks.push({ name: "audit", status: "warn", observed: error instanceof Error ? error.message : String(error), remedy: "Set auditDir to a writable directory." });
@@ -40935,8 +40953,8 @@ function preflightCacheKey(result) {
   });
 }
 function preflightCachePath() {
-  const agentDir = process.env.PI_CODING_AGENT_DIR ?? join5(homedir4(), ".omp", "agent");
-  return join5(agentDir, "headed-browser-preflight.json");
+  const agentDir = process.env.PI_CODING_AGENT_DIR ?? join4(homedir3(), ".omp", "agent");
+  return join4(agentDir, "headed-browser-preflight.json");
 }
 async function readCache(path) {
   try {
@@ -40955,7 +40973,7 @@ async function readCache(path) {
   }
 }
 async function writeCache(path, cache) {
-  await mkdir4(dirname5(path), { recursive: true, mode: 448 });
+  await mkdir4(dirname4(path), { recursive: true, mode: 448 });
   const temporary = `${path}.${process.pid}.tmp`;
   await writeFile2(temporary, `${JSON.stringify(cache, null, 2)}
 `, { mode: 384 });

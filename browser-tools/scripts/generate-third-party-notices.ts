@@ -7,6 +7,7 @@ import { dirname, join } from "node:path";
 const root = dirname(import.meta.dir);
 const output = join(root, "THIRD_PARTY_NOTICES.txt");
 const require = createRequire(import.meta.url);
+const LICENSE_FILE = /^(?:license|licence|copying|notice)(?:$|[-_. ]+[a-z0-9]+(?:[-_. ]+[a-z0-9]+)*)$/i;
 
 type Manifest = {
 	name: string;
@@ -53,11 +54,8 @@ async function render(): Promise<string> {
 		const license = typeof manifest.license === "string" ? manifest.license : manifest.license?.type ?? "UNKNOWN";
 		const repository = typeof manifest.repository === "string" ? manifest.repository : manifest.repository?.url ?? manifest.homepage ?? "";
 		sections.push(`${manifest.name}@${manifest.version}`, `License: ${license}`, ...(repository ? [`Source: ${repository}`] : []));
-		const licenseFile = readdirSync(directory)
-			.sort()
-			.find((name) => ["license", "license.txt", "copying", "notice", "notice.txt"].includes(name.toLowerCase()));
+		const licenseFile = readdirSync(directory).sort().find((name) => LICENSE_FILE.test(name));
 		if (licenseFile) sections.push(`File: ${licenseFile}`, "", await readFile(join(directory, licenseFile), "utf8"));
-		sections.push("", "---", "");
 	}
 	return `${sections.join("\n").trimEnd()}\n`;
 }
