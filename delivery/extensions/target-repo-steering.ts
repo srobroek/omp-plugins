@@ -3,6 +3,28 @@ import { isAbsolute, resolve } from "node:path";
 export type GitRun = (argv: string[], cwd: string) => { exitCode: number; stdout: string };
 export type SteeringScope = string;
 
+/**
+ * `git rev-parse`, `config`, `ls-tree`, and `show` read this disk, so a hang is a local bug and
+ * their budget stays short. `ls-remote` is the only probe that leaves the machine, and it pays for
+ * the SSH agent's signature before it prints anything: measured at 2.47-2.61s through a 1Password
+ * agent, past the local budget. A killed probe is indistinguishable from an unreachable origin, so
+ * the anchor never formed and every authorization denied, including the ones the human had granted.
+ * The wider budget is still bounded, and exceeding it still fails closed.
+ */
+const LOCAL_PROBE_TIMEOUT_MS = 2000;
+const REMOTE_PROBE_TIMEOUT_MS = 10_000;
+
+/** The Git seam both delivery gates run in production. A non-zero exit denies, never permits. */
+export function runGitProbe(argv: string[], cwd: string): { exitCode: number; stdout: string } {
+	const proc = Bun.spawnSync(argv, {
+		cwd,
+		stdout: "pipe",
+		stderr: "pipe",
+		timeout: argv[1] === "ls-remote" ? REMOTE_PROBE_TIMEOUT_MS : LOCAL_PROBE_TIMEOUT_MS,
+	});
+	return { exitCode: proc.exitCode ?? 1, stdout: proc.stdout.toString() };
+}
+
 type TreeEntry = { mode: string; type: string; object: string; path: string };
 type ReadResult = { text: string | null; error: boolean };
 type RemoteDefault = { ref: string; sha: string };

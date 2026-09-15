@@ -32,8 +32,12 @@ type Repo = { topLevel: string; primary: boolean };
 
 const DEFAULT_SHA = "a".repeat(40);
 
-/** A fake Git seam keyed by repository, including the trusted remote-default steering tree. */
-function fakeGit(repos: Repo[]): GitRun {
+/**
+ * A fake Git seam keyed by repository, including the trusted remote-default steering tree.
+ * `remoteAnchored: false` is the outcome of a failed or timed-out `ls-remote`: the origin is
+ * configured, but no anchor forms.
+ */
+function fakeGit(repos: Repo[], remoteAnchored = true): GitRun {
 	return (argv, cwd) => {
 		const repo = repos.find((r) => cwd === r.topLevel || cwd.startsWith(`${r.topLevel}/`));
 		if (!repo) return { exitCode: 128, stdout: "" };
@@ -44,7 +48,7 @@ function fakeGit(repos: Repo[]): GitRun {
 		}
 		if (argv[1] === "rev-parse" && argv.includes("--git-common-dir")) return { exitCode: 0, stdout: `${repo.primary ? repo.topLevel : "/primary"}/.git\n` };
 		if (argv[1] === "config" && argv[2] === "--get-all" && argv[3] === "remote.origin.url") return { exitCode: 0, stdout: `https://example.test/${repo.topLevel.replaceAll("/", "_")}.git\n` };
-		if (argv[1] === "ls-remote") return { exitCode: 0, stdout: `ref: refs/heads/main\tHEAD\n${DEFAULT_SHA}\tHEAD\n` };
+		if (argv[1] === "ls-remote") return remoteAnchored ? { exitCode: 0, stdout: `ref: refs/heads/main\tHEAD\n${DEFAULT_SHA}\tHEAD\n` } : { exitCode: 128, stdout: "" };
 		if (argv[1] === "rev-parse" && argv.includes("--verify")) return { exitCode: 0, stdout: `${DEFAULT_SHA}\n` };
 		if (argv[1] === "ls-tree") {
 			const text = trustedSources.get(repo.topLevel);
@@ -224,6 +228,24 @@ describe("decideCommit", () => {
 		expect(decideCommit("git commit -m x", primary, {})?.block).toBe(true);
 		expect(decideCommit(`cd ${primary} && git commit -m x`, primary, {})?.block).toBe(true);
     });
+});
+
+describe("the remote anchor decides a primary-checkout read", () => {
+	/** The exact shapes chezmoi-dmqk reported, in the checkout it reported them from. */
+	const REVIEW_COMMANDS = ["git status --porcelain", "git diff --stat", "git -C REPO diff --stat -- AGENTS.md"];
+
+	test("allows the reported review commands once the anchor succeeds", () => {
+		const { primary } = setup();
+		for (const command of REVIEW_COMMANDS)
+			expect(decideCommit(command.replace("REPO", primary), primary, {}), command).toBeUndefined();
+	});
+
+	test("refuses them when no anchor forms, so a timed-out probe stays fail-closed", () => {
+		const { primary } = setup();
+		setGitRunForTests(fakeGit([{ topLevel: primary, primary: true }], false));
+		for (const command of REVIEW_COMMANDS)
+			expect(decideCommit(command.replace("REPO", primary), primary, {})?.reason, command).toContain("unpinned repository origin");
+	});
 });
 
 describe("canonical-main primary commits", () => {

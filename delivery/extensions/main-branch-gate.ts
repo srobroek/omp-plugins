@@ -24,9 +24,7 @@ import type {
 	ExtensionAPI,
 	ToolCallEvent,
 } from "@oh-my-pi/pi-coding-agent";
-import { steeringDirective, targetRepoAuthorizes, targetRepoTrusts } from "./target-repo-steering.ts";
-
-const TIMEOUT_MS = 2000;
+import { runGitProbe, steeringDirective, targetRepoAuthorizes, targetRepoTrusts } from "./target-repo-steering.ts";
 
 const PROTECTED_BRANCHES: Record<string, true> = { main: true, master: true };
 
@@ -249,19 +247,6 @@ let injectedRun: GitRun | null = null;
 /** Replace the `git branch --show-current` seam. Pass `null` to restore it. */
 export function setGitRunForTests(fn: GitRun | null): void {
 	injectedRun = fn;
-}
-
-function defaultRun(
-	argv: string[],
-	cwd: string,
-): { exitCode: number; stdout: string } {
-	const proc = Bun.spawnSync(argv, {
-		cwd,
-		stdout: "pipe",
-		stderr: "pipe",
-		timeout: TIMEOUT_MS,
-	});
-	return { exitCode: proc.exitCode ?? 1, stdout: proc.stdout.toString() };
 }
 
 export function extractCommand(input: ToolCallEvent["input"]): string {
@@ -1495,7 +1480,7 @@ function scanInvocations(command: string): CommitInvocation[] {
  * say: no work tree, a detached HEAD, an unborn branch, or no `git` at all.
  */
 export function currentBranch(cwd: string): string | null {
-	const run = injectedRun ?? defaultRun;
+	const run = injectedRun ?? runGitProbe;
 	try {
 		const result = run(["git", "branch", "--show-current"], cwd);
 		if (result.exitCode !== 0) return null;
@@ -1585,7 +1570,7 @@ export function decideCommit(
 	authorizationEnv: NodeJS.ProcessEnv = env,
 	scope: string = "default",
 ): { block: true; reason: string } | undefined {
-	const run = injectedRun ?? defaultRun;
+	const run = injectedRun ?? runGitProbe;
 	if (hasUnsafeShellCwdOrGrouping(command)) return { block: true, reason: unreadableReason("shell cwd mutation or grouping") };
 	const envSelector = TARGET_ENV.find(
 		(name) => env[name] !== undefined && env[name] !== "",
