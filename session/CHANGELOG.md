@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.1.6](https://github.com/srobroek/omp-plugins/compare/session--v1.1.5...session--v1.1.6) (2026-09-15)
+
+
+### Bug Fixes
+
+* **session:** resolve explicit short IDs globally ([#285](https://github.com/srobroek/omp-plugins/issues/285)) ([4d0c111](https://github.com/srobroek/omp-plugins/commit/4d0c1119965f8845181e5f08f74ec864093f0501))
+
 ## [1.1.5](https://github.com/srobroek/omp-plugins/compare/session--v1.1.4...session--v1.1.5) (2026-09-11)
 
 
