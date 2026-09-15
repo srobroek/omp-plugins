@@ -16,7 +16,7 @@ For a session from another worktree, ask the user to confirm the target before r
 
 ## Discovery
 
-Call `mode: "list"`. The tool matches the recorded `cwd` against the repository's worktrees. It does not guess paths from encoded directory names.
+Call `mode: "list"`. The tool uses `path` and `worktrees` to scope repository and worktree discovery. It matches the recorded `cwd` against those worktrees. It does not guess paths from encoded directory names.
 
 Each row includes:
 
@@ -25,13 +25,19 @@ Each row includes:
 - Branch evidence and the worktree location.
 - The last assistant message.
 
-Set `worktrees: false` to restrict discovery to the current checkout. Set `git: false` to omit the optional overview of worktree activity.
+Set `worktrees: false` to restrict list discovery to the current checkout. Set `git: false` to omit the optional overview of worktree activity.
 
 ## Reading
 
-Call `mode: "read"` with the selected session id. The default window contains up to eight filtered turns, in newest-first order.
+Call `mode: "read"` with the selected session id or prefix. The tool resolves that id globally within the selected profile store and rejects ambiguous prefixes.
 
-Use `offset` to skip recent turns and `turns` to set the next window size. Enable `include_thinking` only when visible evidence leaves a reasoning gap.
+- Before rendering, the tool checks that the recorded cwd belongs to the requested repository/worktree family.
+- If they differ, show the metadata for that target.
+- Ask the user to confirm that target.
+- Retry with the matching `path`.
+- For global ID lookup, ignore `worktrees`.
+
+If visible evidence leaves a reasoning gap, enable `include_thinking`. Use `offset` to skip recent turns and `turns` to set the next window size.
 
 The handoff includes the latest task board. An empty board clears earlier tasks. Tool results remain attached to their calls through `toolCallId`.
 

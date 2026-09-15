@@ -1,4 +1,4 @@
-import { basename, resolve } from "node:path";
+import { basename, isAbsolute, resolve } from "node:path";
 import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
 import {
 	acceptedPaths,
@@ -259,27 +259,38 @@ export interface ReadOptions {
 	profile?: string;
 }
 
-/** Resolve a session id (full or prefix) to exactly one transcript file. */
+/** Resolve a session id (full or prefix) globally, then gate transcript access to the requested repo family. */
 export async function resolveSession(cwd: string, options: ReadOptions): Promise<{ file: string } | { error: string }> {
 	if (options.file) return { file: options.file };
 	const wanted = (options.session ?? "").trim();
 	if (!wanted) return { error: 'resume_session: mode "read" needs `session` (an id or id prefix) or `file`.' };
 	const root = sessionsRoot(options.profile);
-	// Explicit IDs are globally addressable within the selected profile. Repository
-	// scope remains a list-mode concern; applying it here makes a valid ID look
-	// absent when the session was recorded in a sibling worktree or project.
 	const matches = (await candidates(root)).filter(
 		(candidate) => candidate.head.id.startsWith(wanted) || basename(candidate.file).includes(wanted),
 	);
-	if (matches.length === 1) {
-		const match = matches[0];
-		if (match) return { file: match.file };
-	}
 	if (matches.length === 0) {
 		return { error: `resume_session: no session under ${root} matches "${wanted}".` };
 	}
-	const ids = matches.map((candidate) => candidate.head.id.slice(0, 12)).join(", ");
-	return { error: `resume_session: ${wanted} matches ${matches.length} sessions (${ids}). Use a longer prefix.` };
+	if (matches.length > 1) {
+		const ids = matches.map((candidate) => candidate.head.id.slice(0, 12)).join(", ");
+		return { error: `resume_session: ${wanted} matches ${matches.length} sessions (${ids}). Use a longer prefix.` };
+	}
+	const match = matches[0];
+	if (!match) return { error: `resume_session: no session under ${root} matches "${wanted}".` };
+	const requested = options.path ?? cwd;
+	const project = repoRoot(requested);
+	const recordedCwd = match.head.cwd;
+	const target = isAbsolute(recordedCwd) ? recordedCwd : "(missing or invalid recorded cwd)";
+	const family = isAbsolute(requested) && isAbsolute(project) ? listWorktrees(project) : [];
+	const accepted = isAbsolute(requested) && isAbsolute(project) ? acceptedPaths(family, project) : new Set<string>();
+	if (!isAbsolute(recordedCwd) || !isAbsolute(requested) || !isAbsolute(project) || !pathKeys(recordedCwd).some((key) => accepted.has(key))) {
+		return {
+			error:
+				`resume_session: ${match.head.id} targets ${target}, which is not proven to belong to the requested repository/worktree family. ` +
+				`Confirm the target, then retry with an absolute path; transcript content was not read.`,
+		};
+	}
+	return { file: match.file };
 }
 
 export function renderRead(transcript: Transcript, options: ReadOptions): string {
@@ -369,9 +380,9 @@ export default function resumeSessionTool(pi: ExtensionAPI): void {
 	const z = pi.zod;
 	const parameters = z.object({
 		mode: z.enum(["list", "read"]),
-		session: z.string().optional().describe('read: session id or id prefix, from a "list" row'),
+		session: z.string().optional().describe("read: session id or prefix from a list row. Resolves globally within the selected profile store. Rejects ambiguous prefixes. Gates transcript access to the requested repository/worktree family."),
 		file: z.string().optional().describe("read: explicit transcript path, bypassing id lookup"),
-		path: z.string().optional().describe("Project directory; defaults to the session cwd's repo root"),
+		path: z.string().optional().describe("list: repository directory used to scope discovery; read: requested repository/worktree family for the target confirmation gate"),
 		turns: z.number().int().optional().describe("read: turns per window (default 8)"),
 		offset: z.number().int().optional().describe("read: skip this many newest turns to page older"),
 		max_chars: z
@@ -384,9 +395,9 @@ export default function resumeSessionTool(pi: ExtensionAPI): void {
 			.optional()
 			.describe("read: keep thinking blocks — only when tool calls alone leave a logic gap"),
 		limit: z.number().int().optional().describe("list: rows to print (default 12)"),
-		worktrees: z.boolean().optional().describe("list/read: scan every worktree of the repo (default true)"),
+		worktrees: z.boolean().optional().describe("list: include every worktree of the repository (default true); read: ignored for global ID lookup"),
 		git: z.boolean().optional().describe("list: print the per-worktree git activity block (default true)"),
-		profile: z.string().optional().describe("Named OMP profile whose store to read; defaults to the active one"),
+		profile: z.string().optional().describe("Named OMP profile store to search; defaults to the active one"),
 	});
 
 	pi.registerTool({
@@ -394,8 +405,10 @@ export default function resumeSessionTool(pi: ExtensionAPI): void {
 		label: "Resume Session",
 		description:
 			"Build a small handoff from a prior OMP session without switching sessions or replaying its full history. " +
-			'mode "list" prints worktree-aware session summaries; mode "read" returns one selected, filtered ' +
-			"turn window plus the latest plan. Uses native read-only streaming. Select a session with the user, " +
+			'mode "list" uses path and worktrees to scope worktree-aware discovery; mode "read" resolves an id or prefix ' +
+			"globally within the selected profile store and rejects ambiguous prefixes. Before rendering, it gates transcript access " +
+			"to the requested repository/worktree family and asks for target confirmation when they differ. " +
+			"Read returns one selected, filtered turn window plus the latest plan. Uses native read-only streaming. Select a session with the user, " +
 			"then confirm the handoff before continuing work in this fresh session. Reports output token cost.",
 		parameters,
 		approval: "read",
