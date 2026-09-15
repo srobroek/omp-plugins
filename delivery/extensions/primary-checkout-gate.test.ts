@@ -29,6 +29,8 @@ import primaryCheckoutGate, {
 
 type Repo = { topLevel: string; primary: boolean };
 
+const DEFAULT_SHA = "a".repeat(40);
+
 /** A fake Git seam keyed by repository, including the trusted remote-default steering tree. */
 function fakeGit(repos: Repo[]): GitRun {
 	return (argv, cwd) => {
@@ -39,11 +41,11 @@ function fakeGit(repos: Repo[]): GitRun {
 			const common = repo.primary ? `${repo.topLevel}/.git` : "/primary/.git";
 			return { exitCode: 0, stdout: `${repo.topLevel}\n${gitDir}\n${common}\n` };
 		}
-		if (argv[1] === "symbolic-ref") return { exitCode: 0, stdout: "refs/remotes/origin/main\n" };
-		if (argv[1] === "rev-parse" && argv.includes("--verify")) return { exitCode: 0, stdout: "deadbeef\n" };
+		if (argv[1] === "ls-remote") return { exitCode: 0, stdout: `ref: refs/heads/main\tHEAD\n${DEFAULT_SHA}\tHEAD\n` };
+		if (argv[1] === "rev-parse" && argv.includes("--verify")) return { exitCode: 0, stdout: `${DEFAULT_SHA}\n` };
 		if (argv[1] === "ls-tree") {
 			const text = trustedSources.get(repo.topLevel);
-			return { exitCode: 0, stdout: text === undefined ? "" : `100644 blob deadbeef\tCLAUDE.md\0` };
+			return { exitCode: 0, stdout: text === undefined ? "" : `100644 blob ${DEFAULT_SHA}\tCLAUDE.md\0` };
 		}
 		if (argv[1] === "show") return { exitCode: 0, stdout: trustedSources.get(repo.topLevel) ?? "" };
 		return { exitCode: 1, stdout: "" };

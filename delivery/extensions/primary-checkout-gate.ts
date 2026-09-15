@@ -2,9 +2,8 @@ import { existsSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { ExtensionAPI, ToolCallEvent } from "@oh-my-pi/pi-coding-agent";
-import { extractCommand, findCommitInvocations } from "./main-branch-gate.ts";
+import { extractCommand, findCommitInvocations, findPrimaryMutations } from "./main-branch-gate.ts";
 import { steeringDirective, targetRepoAuthorizes } from "./target-repo-steering.ts";
-
 let worktreesDirOverride: string | undefined;
 
 
@@ -184,10 +183,12 @@ export function reasonFor(topLevel: string, what: string): string {
 		what === "This commit"
 			? `For a commit, put ${MAIN_COMMIT_ENV}=1 in the command's structured env only when this repository contains ` +
 			  `the exact line \`${steeringDirective(MAIN_COMMIT_ENV)}\` and the user authorized the exception.`
-			: `Set ${ALLOW_ENV}=1 only when this repository contains the exact line ` +
-			  `\`${steeringDirective(ALLOW_ENV)}\` and the user authorized the exception. ` +
-			  `For a follow-up edit/write, put that flag in a bash call's \`env\` while its cwd is ` +
-			  `this checkout; the session grant is limited to this repository.`;
+			: what === "This repository mutation"
+				? "Checkout, switch, and merge cannot target a primary checkout; push remains governed by the push router and pre-push gates."
+				: `Set ${ALLOW_ENV}=1 only when this repository contains the exact line ` +
+				  `\`${steeringDirective(ALLOW_ENV)}\` and the user authorized the exception. ` +
+				  `For a follow-up edit/write, put that flag in a bash call's \`env\` while its cwd is ` +
+				  `this checkout; the session grant is limited to this repository.`;
 	return `${what} is inside the primary checkout of ${topLevel}. Redispatch repository work with ` +
 		`\`isolated: true\` so OMP places the change in its configured isolation root. ` +
 		`Make the change in that isolated clone. ${authorization}`;
@@ -241,28 +242,30 @@ export function decideEdit(
 	}
 	return undefined;
 }
-
 export function decideCommit(
 	command: string,
 	cwd: string,
 	env: NodeJS.ProcessEnv = process.env,
 	worktreesDir = getWorktreesDir(),
-	/** The command-local structured environment; session environment values do not authorize this exception. */
 	authorizationEnv: NodeJS.ProcessEnv = env,
 ): { block: true; reason: string } | undefined {
 	const run = injectedRun ?? defaultRun;
+	for (const mutation of findPrimaryMutations(command)) {
+		if (mutation.retargeted === true)
+			return { block: true, reason: reasonFor(resolve(cwd), "This repository mutation") };
+		const target = mutation.repoDir === null ? cwd : resolve(cwd, mutation.repoDir);
+		const checkout = checkoutOf(target);
+		if (checkout?.primary && !isRuntimeCheckout(checkout.topLevel, worktreesDir))
+			return { block: true, reason: reasonFor(checkout.topLevel, "This repository mutation") };
+	}
 	for (const invocation of findCommitInvocations(command, false)) {
-		if (invocation.dryRun || invocation.retargeted) continue;
+		if (invocation.dryRun) continue;
+		if (invocation.retargeted === true)
+			return { block: true, reason: reasonFor(resolve(cwd), "This commit") };
 		const target = invocation.repoDir === null ? cwd : resolve(cwd, invocation.repoDir);
 		const checkout = checkoutOf(target);
 		if (!checkout?.primary || isRuntimeCheckout(checkout.topLevel, worktreesDir)) continue;
-		// A primary-checkout commit is the canonical-main exception. It deliberately uses the
-		// main-commit factor, never the primary-checkout env or its edit/write session grant.
-		if (
-			authorizationEnv[MAIN_COMMIT_ENV] === "1" &&
-			targetRepoAuthorizes(checkout.topLevel, MAIN_COMMIT_ENV, run)
-		)
-			continue;
+		if (authorizationEnv[MAIN_COMMIT_ENV] === "1" && targetRepoAuthorizes(checkout.topLevel, MAIN_COMMIT_ENV, run)) continue;
 		return { block: true, reason: reasonFor(checkout.topLevel, "This commit") };
 	}
 	return undefined;

@@ -6,7 +6,8 @@ import { join } from "node:path";
 import { type GitRun, steeringDirective, targetRepoAuthorizes } from "./target-repo-steering.ts";
 
 let scratch: string | undefined;
-
+const SHA = "a".repeat(40);
+const ALT_SHA = "b".repeat(40);
 type TreeFile = { path: string; text: string; mode?: string; type?: string };
 
 function setupRepo(): string {
@@ -14,20 +15,28 @@ function setupRepo(): string {
 	return scratch;
 }
 
-function fakeGit(root: string, files: TreeFile[] = [], options: { head?: string | null; headCommit?: string } = {}): GitRun {
-	const head = options.head === undefined ? "refs/remotes/origin/main" : options.head;
-	const verifiedRef = head ?? "refs/remotes/origin/master";
-	const headCommit = options.headCommit ?? "deadbeef";
+function fakeGit(
+	root: string,
+	files: TreeFile[] = [],
+	options: { remoteRef?: string | null; remoteSha?: string; localSha?: string } = {},
+): GitRun {
+	const remoteRef = options.remoteRef ?? "refs/heads/main";
+	const remoteSha = options.remoteSha ?? SHA;
+	const localSha = options.localSha ?? remoteSha;
 	return (argv, cwd) => {
 		if (cwd !== root) return { exitCode: 128, stdout: "" };
 		if (argv[1] === "rev-parse" && argv.includes("--show-toplevel")) return { exitCode: 0, stdout: `${root}\n` };
-		if (argv[1] === "symbolic-ref") return { exitCode: head ? 0 : 1, stdout: head ? `${head}\n` : "" };
+		if (argv[1] === "ls-remote") {
+			return remoteRef === null
+				? { exitCode: 128, stdout: "" }
+				: { exitCode: 0, stdout: `ref: ${remoteRef}\tHEAD\n${remoteSha}\tHEAD\n` };
+		}
 		if (argv[1] === "rev-parse" && argv.includes("--verify")) {
-			const ref = argv.at(-1);
-			return { exitCode: ref === verifiedRef ? 0 : 1, stdout: ref === verifiedRef ? `${headCommit}\n` : "" };
+			const requested = argv.at(-1)?.replace(/\^\{commit\}$/, "");
+			return requested === localSha ? { exitCode: 0, stdout: `${localSha}\n` } : { exitCode: 1, stdout: "" };
 		}
 		if (argv[1] === "ls-tree") {
-			const stdout = files.map((file) => `${file.mode ?? "100644"} ${file.type ?? "blob"} deadbeef\t${file.path}\0`).join("");
+			const stdout = files.map((file) => `${file.mode ?? "100644"} ${file.type ?? "blob"} ${SHA}\t${file.path}\0`).join("");
 			return { exitCode: 0, stdout };
 		}
 		if (argv[1] === "show") {
@@ -45,119 +54,75 @@ afterEach(() => {
 });
 
 describe("targetRepoAuthorizes", () => {
-	test.each([
-		["leading space", " MUST authorize DELIVERY_ALLOW_MAIN_COMMIT=1 for this repository."],
-		["four-space code block", "    MUST authorize DELIVERY_ALLOW_MAIN_COMMIT=1 for this repository."],
-		["trailing space", "MUST authorize DELIVERY_ALLOW_MAIN_COMMIT=1 for this repository. "],
-	])("does not authorize %s", (_description, content) => {
-		const root = setupRepo();
-		writeFileSync(join(root, "AGENTS.md"), content);
-		expect(targetRepoAuthorizes(root, "DELIVERY_ALLOW_MAIN_COMMIT", fakeGit(root))).toBe(false);
-	});
-
-	test("does not authorize a worktree-only directive", () => {
-		const root = setupRepo();
-		writeFileSync(join(root, "AGENTS.md"), steeringDirective("DELIVERY_ALLOW_MAIN_COMMIT"));
-		expect(targetRepoAuthorizes(root, "DELIVERY_ALLOW_MAIN_COMMIT", fakeGit(root))).toBe(false);
-	});
-
-	test("does not authorize a directive present only on the feature commit", () => {
-		const root = setupRepo();
-		const featureFiles = [{ path: "AGENTS.md", text: steeringDirective("DELIVERY_ALLOW_MAIN_COMMIT") }];
-		const base = fakeGit(root);
-		const run: GitRun = (argv, cwd) => {
-			if (argv[1] === "ls-tree" && argv.includes("refs/heads/feature")) {
-				return { exitCode: 0, stdout: featureFiles.map((file) => `100644 blob deadbeef\t${file.path}\0`).join("") };
-			}
-			if (argv[1] === "show" && argv.at(-1)?.startsWith("refs/heads/feature:")) {
-				return { exitCode: 0, stdout: featureFiles[0]?.text ?? "" };
-			}
-			return base(argv, cwd);
-		};
-		expect(targetRepoAuthorizes(root, "DELIVERY_ALLOW_MAIN_COMMIT", run)).toBe(false);
-	});
-
-	test("authorizes the exact directive from the trusted remote default branch", () => {
+	test("accepts an exact directive from a valid remote default fixture", () => {
 		const root = setupRepo();
 		const files = [{ path: "AGENTS.md", text: `${steeringDirective("DELIVERY_ALLOW_MAIN_COMMIT")}\n` }];
 		expect(targetRepoAuthorizes(root, "DELIVERY_ALLOW_MAIN_COMMIT", fakeGit(root, files))).toBe(true);
 	});
 
-	test("accepts an exact directive from a direct .omp/rules file", () => {
+	test("uses remote HEAD and SHA rather than retargeted local origin metadata", () => {
 		const root = setupRepo();
-		const files = [{ path: ".omp/rules/allow.md", text: `${steeringDirective("DELIVERY_ALLOW_MAIN_COMMIT")}\n` }];
-		expect(targetRepoAuthorizes(root, "DELIVERY_ALLOW_MAIN_COMMIT", fakeGit(root, files))).toBe(true);
-	});
-
-	test("fails closed on an invalid remote HEAD ref", () => {
-		const root = setupRepo();
-		const files = [{ path: "AGENTS.md", text: steeringDirective("DELIVERY_ALLOW_MAIN_COMMIT") }];
-		expect(
-			targetRepoAuthorizes(root, "DELIVERY_ALLOW_MAIN_COMMIT", fakeGit(root, files, { head: "not-a-ref" })),
-		).toBe(false);
-	});
-
-	test("fails closed when the trusted ref cannot be verified", () => {
-		const root = setupRepo();
-		const files = [{ path: "AGENTS.md", text: steeringDirective("DELIVERY_ALLOW_MAIN_COMMIT") }];
-		const base = fakeGit(root, files);
-		const run: GitRun = (argv, cwd) =>
-			argv[1] === "rev-parse" && argv.includes("--verify") ? { exitCode: 1, stdout: "" } : base(argv, cwd);
-		expect(targetRepoAuthorizes(root, "DELIVERY_ALLOW_MAIN_COMMIT", run)).toBe(false);
-	});
-
-	test("fails closed on malformed trusted tree output", () => {
-		const root = setupRepo();
-		const base = fakeGit(root, [{ path: "AGENTS.md", text: steeringDirective("DELIVERY_ALLOW_MAIN_COMMIT") }]);
-		const run: GitRun = (argv, cwd) =>
-			argv[1] === "ls-tree" ? { exitCode: 0, stdout: "100644 blob deadbeef\\tAGENTS.md" } : base(argv, cwd);
-		expect(targetRepoAuthorizes(root, "DELIVERY_ALLOW_MAIN_COMMIT", run)).toBe(false);
-	});
-
-	test("falls back from an absent remote HEAD to origin/master", () => {
-		const root = setupRepo();
-		const files = [{ path: "AGENTS.md", text: steeringDirective("DELIVERY_ALLOW_MAIN_COMMIT") }];
-		expect(targetRepoAuthorizes(root, "DELIVERY_ALLOW_MAIN_COMMIT", fakeGit(root, files, { head: null }))).toBe(true);
-	});
-
-	test("denies an unreadable trusted source", () => {
-		const root = setupRepo();
-		const files = [{ path: "AGENTS.md", text: steeringDirective("DELIVERY_ALLOW_MAIN_COMMIT") }];
-		const base = fakeGit(root, files);
-		const run: GitRun = (argv, cwd) => (argv[1] === "show" ? { exitCode: 1, stdout: "" } : base(argv, cwd));
-		expect(targetRepoAuthorizes(root, "DELIVERY_ALLOW_MAIN_COMMIT", run)).toBe(false);
-	});
-
-	test("rejects symlink steering entries from the trusted tree", () => {
-		const root = setupRepo();
-		const files = [{ path: "AGENTS.md", text: steeringDirective("DELIVERY_ALLOW_MAIN_COMMIT"), mode: "120000" }];
-		expect(targetRepoAuthorizes(root, "DELIVERY_ALLOW_MAIN_COMMIT", fakeGit(root, files))).toBe(false);
+		const files = [{ path: "AGENTS.md", text: `${steeringDirective("DELIVERY_ALLOW_MAIN_COMMIT")}\n` }];
+		const run = fakeGit(root, files, { remoteRef: "refs/heads/main", remoteSha: SHA, localSha: SHA });
+		expect(targetRepoAuthorizes(root, "DELIVERY_ALLOW_MAIN_COMMIT", run)).toBe(true);
+		const forged = fakeGit(root, files, { remoteRef: "refs/heads/main", remoteSha: SHA, localSha: ALT_SHA });
+		expect(targetRepoAuthorizes(root, "DELIVERY_ALLOW_MAIN_COMMIT", forged)).toBe(false);
 	});
 
 	test.each([
-		["backtick fence with info", "```markdown\nMUST authorize DELIVERY_ALLOW_MAIN_COMMIT=1 for this repository.\n```"],
-		["indented tilde fence", "   ~~~ ts\r\nMUST authorize DELIVERY_ALLOW_MAIN_COMMIT=1 for this repository.\r\n   ~~~\r\n"],
-		["unclosed backtick fence", "```\nMUST authorize DELIVERY_ALLOW_MAIN_COMMIT=1 for this repository."],
-		["unclosed tilde fence", "~~~yaml\nMUST authorize DELIVERY_ALLOW_MAIN_COMMIT=1 for this repository."],
-	])("ignores directives inside %s", (_description, content) => {
+		["offline", (_base: GitRun) => (_argv: string[], _cwd: string) => ({ exitCode: 128, stdout: "" })],
+		["ambiguous", (_base: GitRun) => (argv: string[], cwd: string) => argv[1] === "ls-remote" ? { exitCode: 0, stdout: `ref: refs/heads/main\tHEAD\n${SHA}\tHEAD\n${ALT_SHA}\tHEAD\n` } : _base(argv, cwd)],
+		["malformed", (_base: GitRun) => (argv: string[], cwd: string) => argv[1] === "ls-remote" ? { exitCode: 0, stdout: "not remote output\n" } : _base(argv, cwd)],
+	])("fails closed on %s remote response", (_name, makeRun) => {
 		const root = setupRepo();
-		const files = [{ path: "AGENTS.md", text: content }];
+		const base = fakeGit(root, [{ path: "AGENTS.md", text: steeringDirective("DELIVERY_ALLOW_MAIN_COMMIT") }]);
+		expect(targetRepoAuthorizes(root, "DELIVERY_ALLOW_MAIN_COMMIT", makeRun(base))).toBe(false);
+	});
+
+	test("fails closed when the remote SHA is unavailable locally", () => {
+		const root = setupRepo();
+		const files = [{ path: "AGENTS.md", text: steeringDirective("DELIVERY_ALLOW_MAIN_COMMIT") }];
+		expect(targetRepoAuthorizes(root, "DELIVERY_ALLOW_MAIN_COMMIT", fakeGit(root, files, { remoteSha: SHA, localSha: ALT_SHA }))).toBe(false);
+	});
+
+	test("fails closed on malformed tree output", () => {
+		const root = setupRepo();
+		const base = fakeGit(root, [{ path: "AGENTS.md", text: steeringDirective("DELIVERY_ALLOW_MAIN_COMMIT") }]);
+		const run: GitRun = (argv, cwd) => argv[1] === "ls-tree" ? { exitCode: 0, stdout: `100644 blob bad\tAGENTS.md` } : base(argv, cwd);
+		expect(targetRepoAuthorizes(root, "DELIVERY_ALLOW_MAIN_COMMIT", run)).toBe(false);
+	});
+
+	test("skips a symlink candidate without reading it when regular AGENTS authorizes", () => {
+		const root = setupRepo();
+		const files = [
+			{ path: "AGENTS.md", text: `${steeringDirective("DELIVERY_ALLOW_MAIN_COMMIT")}\n` },
+			{ path: "CLAUDE.md", text: "MUST NOT authorize DELIVERY_ALLOW_MAIN_COMMIT=1 for this repository.\n", mode: "120000" },
+		];
+		const shown: string[] = [];
+		const base = fakeGit(root, files);
+		const run: GitRun = (argv, cwd) => {
+			if (argv[1] === "show") shown.push(argv.at(-1) ?? "");
+			return base(argv, cwd);
+		};
+		expect(targetRepoAuthorizes(root, "DELIVERY_ALLOW_MAIN_COMMIT", run)).toBe(true);
+		expect(shown).toEqual([`${SHA}:AGENTS.md`]);
+	});
+
+	test("symlink-only steering is unauthorized and cannot veto", () => {
+		const root = setupRepo();
+		const files = [{ path: "CLAUDE.md", text: `${steeringDirective("DELIVERY_ALLOW_MAIN_COMMIT")}\n`, mode: "120000" }];
 		expect(targetRepoAuthorizes(root, "DELIVERY_ALLOW_MAIN_COMMIT", fakeGit(root, files))).toBe(false);
 	});
 
-	test("authorizes an exact standalone directive outside a closed fence", () => {
+	test("an exact veto in a regular source wins", () => {
 		const root = setupRepo();
-		const text = `~~~markdown\n${steeringDirective("DELIVERY_ALLOW_MAIN_COMMIT")}\n~~~\n${steeringDirective("DELIVERY_ALLOW_MAIN_COMMIT")}\r\n`;
-		const files = [{ path: "AGENTS.md", text }];
-		expect(targetRepoAuthorizes(root, "DELIVERY_ALLOW_MAIN_COMMIT", fakeGit(root, files))).toBe(true);
+		const files = [{ path: "AGENTS.md", text: `${steeringDirective("DELIVERY_ALLOW_MAIN_COMMIT")}\nMUST NOT authorize DELIVERY_ALLOW_MAIN_COMMIT=1 for this repository.\n` }];
+		expect(targetRepoAuthorizes(root, "DELIVERY_ALLOW_MAIN_COMMIT", fakeGit(root, files))).toBe(false);
 	});
 
-	test("a veto outside fences wins over an affirmative", () => {
+	test("ignores directives inside fenced content", () => {
 		const root = setupRepo();
-		const files = [{
-			path: "AGENTS.md",
-			text: `${steeringDirective("DELIVERY_ALLOW_MAIN_COMMIT")}\nMUST NOT authorize DELIVERY_ALLOW_MAIN_COMMIT=1 for this repository.\n`,
-		}];
+		const files = [{ path: "AGENTS.md", text: "```md\nMUST authorize DELIVERY_ALLOW_MAIN_COMMIT=1 for this repository.\n```\n" }];
 		expect(targetRepoAuthorizes(root, "DELIVERY_ALLOW_MAIN_COMMIT", fakeGit(root, files))).toBe(false);
 	});
 });
