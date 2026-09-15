@@ -4,7 +4,7 @@
   "description": "Cross-engine browser coverage and Chrome performance tracing over MCP.",
   "private": true,
   "dependencies": {
-    "puppeteer-core": "25.3.0"
+    "puppeteer-core": "25.11.0"
   },
   "scripts": {
     "licenses:check": "bun run scripts/generate-third-party-notices.ts --check"

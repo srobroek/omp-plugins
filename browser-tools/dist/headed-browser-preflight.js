@@ -24,7 +24,6 @@ var __esm = (fn, res, err) => () => {
     throw err[0];
   return res;
 };
-var __require = import.meta.require;
 
 // node_modules/puppeteer-core/lib/puppeteer/environment.js
 var isNode, environment;
@@ -32,13 +31,26 @@ var init_environment = __esm(() => {
   isNode = !!(typeof process !== "undefined" && process.version);
   environment = {
     value: {
-      get fs() {
-        throw new Error("fs is not available in this environment");
-      },
+      followSymlinks: true,
       ScreenRecorder: class {
         constructor() {
           throw new Error("ScreenRecorder is not available in this environment");
         }
+      },
+      readFile: () => {
+        throw new Error("readFile is not available in this environment");
+      },
+      writeFile: () => {
+        throw new Error("writeFile is not available in this environment");
+      },
+      openFileForWriting: () => {
+        throw new Error("openFileForWriting is not available in this environment");
+      },
+      createWriteStream: () => {
+        throw new Error("createWriteStream is not available in this environment");
+      },
+      mkdir: () => {
+        throw new Error("mkdir is not available in this environment");
       }
     }
   };
@@ -48,13 +60,68 @@ var init_environment = __esm(() => {
 import fs from "fs";
 import path from "path";
 import { debuglog } from "util";
+async function readFile2(path, encoding) {
+  if (!environment.value.followSymlinks && fs.constants.O_NOFOLLOW !== undefined) {
+    return await fs.promises.readFile(path, {
+      encoding,
+      flag: READ_NOFOLLOW_FLAGS
+    });
+  }
+  return await fs.promises.readFile(path, { encoding });
+}
+var READ_NOFOLLOW_FLAGS, WRITE_NOFOLLOW_FLAGS, WRITE_NOFOLLOW_NOOVERWRITE_FLAGS, WRITE_NOOVERWRITE_FLAGS, WRITE_NOFOLLOW_MODE = 384;
 var init_node_env_setup = __esm(() => {
   init_environment();
+  READ_NOFOLLOW_FLAGS = fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW;
+  WRITE_NOFOLLOW_FLAGS = fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_TRUNC | fs.constants.O_NOFOLLOW;
+  WRITE_NOFOLLOW_NOOVERWRITE_FLAGS = fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_NOFOLLOW;
+  WRITE_NOOVERWRITE_FLAGS = fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL;
   environment.value = {
-    fs,
     path,
     debuglog,
-    ScreenRecorder: environment.value.ScreenRecorder
+    ScreenRecorder: environment.value.ScreenRecorder,
+    followSymlinks: true,
+    readFile: readFile2,
+    writeFile: async (filePath, data) => {
+      if (!environment.value.followSymlinks && fs.constants.O_NOFOLLOW !== undefined) {
+        await fs.promises.writeFile(filePath, data, {
+          flag: WRITE_NOFOLLOW_FLAGS,
+          mode: WRITE_NOFOLLOW_MODE
+        });
+      } else {
+        await fs.promises.writeFile(filePath, data);
+      }
+    },
+    openFileForWriting: async (filePath) => {
+      if (!environment.value.followSymlinks && fs.constants.O_NOFOLLOW !== undefined) {
+        return await fs.promises.open(filePath, WRITE_NOFOLLOW_FLAGS, WRITE_NOFOLLOW_MODE);
+      }
+      return await fs.promises.open(filePath, "w+");
+    },
+    createWriteStream: (filePath, options) => {
+      const encoding = options?.encoding;
+      const overwrite = options?.overwrite ?? true;
+      if (!environment.value.followSymlinks && fs.constants.O_NOFOLLOW !== undefined) {
+        const flags = overwrite ? WRITE_NOFOLLOW_FLAGS : WRITE_NOFOLLOW_NOOVERWRITE_FLAGS;
+        const fd = fs.openSync(filePath, flags, WRITE_NOFOLLOW_MODE);
+        return fs.createWriteStream("", {
+          fd,
+          mode: WRITE_NOFOLLOW_MODE,
+          encoding
+        });
+      }
+      if (!overwrite) {
+        const fd = fs.openSync(filePath, WRITE_NOOVERWRITE_FLAGS);
+        return fs.createWriteStream("", {
+          fd,
+          encoding
+        });
+      }
+      return fs.createWriteStream(filePath, encoding ? { encoding } : undefined);
+    },
+    mkdir: async (dirPath, options) => {
+      await fs.promises.mkdir(dirPath, options);
+    }
   };
 });
 
@@ -2409,6 +2476,53 @@ var init_rxjs = __esm(() => {
   isArray3 = Array.isArray;
 });
 
+// node_modules/puppeteer-core/lib/puppeteer/common/Debug.js
+function setLogCapture(value) {
+  capturedLogs = [];
+  captureLogs = value;
+}
+function getCapturedLogs() {
+  return capturedLogs;
+}
+var DEBUG_PREFIXES, debug = (prefix) => {
+  if (isNode) {
+    const nodeDebug = environment.value.debuglog?.(prefix);
+    if (!nodeDebug || !nodeDebug.enabled) {
+      return;
+    }
+    return (...logArgs) => {
+      if (captureLogs) {
+        capturedLogs.push(prefix + logArgs);
+      }
+      nodeDebug(...logArgs);
+    };
+  }
+  const debugLevel = globalThis.__PUPPETEER_DEBUG;
+  if (!debugLevel) {
+    return;
+  }
+  const everythingShouldBeLogged = debugLevel === "*";
+  const prefixMatchesDebugLevel = everythingShouldBeLogged || (debugLevel.endsWith("*") ? prefix.startsWith(debugLevel.slice(0, -1)) : prefix === debugLevel);
+  if (!prefixMatchesDebugLevel) {
+    return;
+  }
+  return (...logArgs) => {
+    console.log(`${prefix}:`, ...logArgs);
+  };
+}, capturedLogs, captureLogs = false;
+var init_Debug = __esm(() => {
+  init_environment();
+  DEBUG_PREFIXES = {
+    cdpSend: "puppeteer:protocol:SEND \u25BA",
+    cdpReceive: "puppeteer:protocol:RECV \u25C0",
+    bidiSend: "puppeteer:webDriverBiDi:SEND \u25BA",
+    bidiReceive: "puppeteer:webDriverBiDi:RECV \u25C0",
+    error: "puppeteer:error",
+    ffmpeg: "puppeteer:ffmpeg"
+  };
+  capturedLogs = [];
+});
+
 // node_modules/puppeteer-core/lib/third_party/mitt/mitt.js
 function mitt_default(n) {
   return { all: n = n || /* @__PURE__ */ new Map, on: function(t, e) {
@@ -2604,6 +2718,82 @@ var init_disposable = __esm(() => {
   SuppressedError2 = globalThis.SuppressedError ?? SuppressedErrorPolyfill;
 });
 
+// node_modules/puppeteer-core/lib/puppeteer/common/EventEmitter.js
+var EventEmitter;
+var init_EventEmitter = __esm(() => {
+  init_mitt();
+  init_disposable();
+  init_Debug();
+  EventEmitter = class EventEmitter {
+    #emitter;
+    #handlers = new Map;
+    #logger;
+    constructor(emitter = mitt_default(new Map), logger) {
+      this.#emitter = emitter;
+      this.#logger = logger;
+    }
+    on(type, handler) {
+      const handlers = this.#handlers.get(type);
+      if (handlers === undefined) {
+        this.#handlers.set(type, [handler]);
+      } else {
+        handlers.push(handler);
+      }
+      this.#emitter.on(type, handler);
+      return this;
+    }
+    off(type, handler) {
+      const handlers = this.#handlers.get(type) ?? [];
+      if (handler === undefined) {
+        for (const handler of handlers) {
+          this.#emitter.off(type, handler);
+        }
+        this.#handlers.delete(type);
+        return this;
+      }
+      const index = handlers.lastIndexOf(handler);
+      if (index > -1) {
+        this.#emitter.off(type, ...handlers.splice(index, 1));
+      }
+      return this;
+    }
+    emit(type, event) {
+      this.#emitter.emit(type, event);
+      return this.listenerCount(type) > 0;
+    }
+    once(type, handler) {
+      const onceHandler = (eventData) => {
+        handler(eventData);
+        this.off(type, onceHandler);
+      };
+      return this.on(type, onceHandler);
+    }
+    listenerCount(type) {
+      return this.#handlers.get(type)?.length || 0;
+    }
+    removeAllListeners(type) {
+      if (type !== undefined) {
+        return this.off(type);
+      }
+      this[disposeSymbol]();
+      return this;
+    }
+    [disposeSymbol]() {
+      return void this[asyncDisposeSymbol]().catch((error) => {
+        this.#logger?.(DEBUG_PREFIXES.error)?.(error);
+      });
+    }
+    async[asyncDisposeSymbol]() {
+      for (const [type, handlers] of this.#handlers) {
+        for (const handler of handlers) {
+          this.#emitter.off(type, handler);
+        }
+      }
+      this.#handlers.clear();
+    }
+  };
+});
+
 // node_modules/puppeteer-core/lib/puppeteer/util/assert.js
 var assert = (value, message) => {
   if (!value) {
@@ -2654,46 +2844,7 @@ function mergeUint8Arrays(items) {
 }
 
 // node_modules/puppeteer-core/lib/puppeteer/util/version.js
-var packageVersion = "25.3.0";
-
-// node_modules/puppeteer-core/lib/puppeteer/common/Debug.js
-function setLogCapture(value) {
-  capturedLogs = [];
-  captureLogs = value;
-}
-function getCapturedLogs() {
-  return capturedLogs;
-}
-var debug = (prefix) => {
-  if (isNode) {
-    const nodeDebug = environment.value.debuglog?.(prefix);
-    if (!nodeDebug || !nodeDebug.enabled) {
-      return;
-    }
-    return (...logArgs) => {
-      if (captureLogs) {
-        capturedLogs.push(prefix + logArgs);
-      }
-      nodeDebug(...logArgs);
-    };
-  }
-  const debugLevel = globalThis.__PUPPETEER_DEBUG;
-  if (!debugLevel) {
-    return;
-  }
-  const everythingShouldBeLogged = debugLevel === "*";
-  const prefixMatchesDebugLevel = everythingShouldBeLogged || (debugLevel.endsWith("*") ? prefix.startsWith(debugLevel.slice(0, -1)) : prefix === debugLevel);
-  if (!prefixMatchesDebugLevel) {
-    return;
-  }
-  return (...logArgs) => {
-    console.log(`${prefix}:`, ...logArgs);
-  };
-}, capturedLogs, captureLogs = false;
-var init_Debug = __esm(() => {
-  init_environment();
-  capturedLogs = [];
-});
+var packageVersion = "25.11.0";
 
 // node_modules/puppeteer-core/lib/puppeteer/common/Errors.js
 var PuppeteerError, TimeoutError, TouchError, ProtocolError, UnsupportedOperation, TargetCloseError, ConnectionClosedError;
@@ -2834,11 +2985,11 @@ function evaluationString(fun, ...args) {
   }
   return `(${fun})(${args.map(serializeArgument).join(",")})`;
 }
-async function getReadableAsTypedArray(readable, path) {
+async function getReadableAsTypedArray(readable, path, logger) {
   const buffers = [];
   const reader = readable.getReader();
   if (path) {
-    const fileHandle = await environment.value.fs.promises.open(path, "w+");
+    const fileHandle = await environment.value.openFileForWriting(path);
     try {
       while (true) {
         const { done, value } = await reader.read();
@@ -2867,7 +3018,7 @@ async function getReadableAsTypedArray(readable, path) {
     }
     return concat;
   } catch (error) {
-    debugError?.(error);
+    logger?.(DEBUG_PREFIXES.error)?.(error);
     return null;
   }
 }
@@ -2998,7 +3149,7 @@ function filterAsync(predicate) {
     }));
   });
 }
-var debugError, debugCatchError, DEFAULT_VIEWPORT, SOURCE_URL, withSourcePuppeteerURLIfNone = (functionName, object) => {
+var DEFAULT_VIEWPORT, SOURCE_URL, withSourcePuppeteerURLIfNone = (functionName, object) => {
   if (Object.prototype.hasOwnProperty.call(object, SOURCE_URL)) {
     return object;
   }
@@ -3033,8 +3184,6 @@ var init_util = __esm(() => {
   init_Debug();
   init_Errors();
   init_PDFOptions();
-  debugError = debug("puppeteer:error");
-  debugCatchError = debugError ?? (() => {});
   DEFAULT_VIEWPORT = Object.freeze({ width: 800, height: 600 });
   SOURCE_URL = Symbol("Source URL for Puppeteer evaluation scripts");
   VALID_DIALOG_TYPES = new Set([
@@ -3053,82 +3202,11 @@ var init_util = __esm(() => {
   };
 });
 
-// node_modules/puppeteer-core/lib/puppeteer/common/EventEmitter.js
-var EventEmitter;
-var init_EventEmitter = __esm(() => {
-  init_mitt();
-  init_disposable();
-  init_util();
-  EventEmitter = class EventEmitter {
-    #emitter;
-    #handlers = new Map;
-    constructor(emitter = mitt_default(new Map)) {
-      this.#emitter = emitter;
-    }
-    on(type, handler) {
-      const handlers = this.#handlers.get(type);
-      if (handlers === undefined) {
-        this.#handlers.set(type, [handler]);
-      } else {
-        handlers.push(handler);
-      }
-      this.#emitter.on(type, handler);
-      return this;
-    }
-    off(type, handler) {
-      const handlers = this.#handlers.get(type) ?? [];
-      if (handler === undefined) {
-        for (const handler of handlers) {
-          this.#emitter.off(type, handler);
-        }
-        this.#handlers.delete(type);
-        return this;
-      }
-      const index = handlers.lastIndexOf(handler);
-      if (index > -1) {
-        this.#emitter.off(type, ...handlers.splice(index, 1));
-      }
-      return this;
-    }
-    emit(type, event) {
-      this.#emitter.emit(type, event);
-      return this.listenerCount(type) > 0;
-    }
-    once(type, handler) {
-      const onceHandler = (eventData) => {
-        handler(eventData);
-        this.off(type, onceHandler);
-      };
-      return this.on(type, onceHandler);
-    }
-    listenerCount(type) {
-      return this.#handlers.get(type)?.length || 0;
-    }
-    removeAllListeners(type) {
-      if (type !== undefined) {
-        return this.off(type);
-      }
-      this[disposeSymbol]();
-      return this;
-    }
-    [disposeSymbol]() {
-      return void this[asyncDisposeSymbol]().catch(debugCatchError);
-    }
-    async[asyncDisposeSymbol]() {
-      for (const [type, handlers] of this.#handlers) {
-        for (const handler of handlers) {
-          this.#emitter.off(type, handler);
-        }
-      }
-      this.#handlers.clear();
-    }
-  };
-});
-
 // node_modules/puppeteer-core/lib/puppeteer/api/Browser.js
 var WEB_PERMISSION_TO_PROTOCOL_PERMISSION, Browser;
 var init_Browser = __esm(() => {
   init_rxjs();
+  init_Debug();
   init_EventEmitter();
   init_util();
   init_disposable();
@@ -3154,8 +3232,13 @@ var init_Browser = __esm(() => {
     ["midi-sysex", "midiSysex"]
   ]);
   Browser = class Browser extends EventEmitter {
-    constructor() {
-      super();
+    #logger;
+    constructor(logger) {
+      super(undefined, logger);
+      this.#logger = logger;
+    }
+    get logger() {
+      return this.#logger;
     }
     async waitForTarget(predicate, options = {}) {
       const { timeout: ms = 30000, signal } = options;
@@ -3185,7 +3268,9 @@ var init_Browser = __esm(() => {
       return await this.defaultBrowserContext().setPermission(origin, ...permissions);
     }
     [disposeSymbol]() {
-      return void this[asyncDisposeSymbol]().catch(debugCatchError);
+      return void this[asyncDisposeSymbol]().catch((error) => {
+        this.#logger?.(DEBUG_PREFIXES.error)?.(error);
+      });
     }
     async[asyncDisposeSymbol]() {
       if (this.process()) {
@@ -3331,13 +3416,19 @@ var init_Mutex = __esm(() => {
 var BrowserContext;
 var init_BrowserContext = __esm(() => {
   init_rxjs();
+  init_Debug();
   init_EventEmitter();
   init_util();
   init_disposable();
   init_Mutex();
   BrowserContext = class BrowserContext extends EventEmitter {
-    constructor() {
-      super();
+    #logger;
+    constructor(logger) {
+      super(undefined, logger);
+      this.#logger = logger;
+    }
+    get logger() {
+      return this.#logger;
     }
     #pageScreenshotMutex;
     #screenshotOperationsCount = 0;
@@ -3412,7 +3503,9 @@ var init_BrowserContext = __esm(() => {
       return;
     }
     [disposeSymbol]() {
-      return void this[asyncDisposeSymbol]().catch(debugCatchError);
+      return void this[asyncDisposeSymbol]().catch((error) => {
+        this.#logger?.(DEBUG_PREFIXES.error)?.(error);
+      });
     }
     async[asyncDisposeSymbol]() {
       await this.close();
@@ -3452,7 +3545,13 @@ class Dialog {
   #type;
   #message;
   #defaultValue;
-  handled = false;
+  #handled = false;
+  get handled() {
+    return this.#handled;
+  }
+  set handled(handled) {
+    this.#handled = handled;
+  }
   constructor(type, message, defaultValue = "") {
     this.#type = type;
     this.#message = message;
@@ -3982,7 +4081,7 @@ var init_CSSQueryHandler = __esm(() => {
 });
 
 // node_modules/puppeteer-core/lib/puppeteer/generated/injected.js
-var source = '"use strict";var N=Object.defineProperty;var B=Object.getOwnPropertyDescriptor;var Y=Object.getOwnPropertyNames;var G=Object.prototype.hasOwnProperty;var l=(t,e)=>{for(var r in e)N(t,r,{get:e[r],enumerable:!0})},J=(t,e,r,o)=>{if(e&&typeof e=="object"||typeof e=="function")for(let n of Y(e))!G.call(t,n)&&n!==r&&N(t,n,{get:()=>e[n],enumerable:!(o=B(e,n))||o.enumerable});return t};var z=t=>J(N({},"__esModule",{value:!0}),t);var ye={};l(ye,{default:()=>pe});module.exports=z(ye);var b=class extends Error{constructor(e,r){super(e,r),this.name=this.constructor.name}get[Symbol.toStringTag](){return this.constructor.name}},p=class extends b{};var c=class t{static create(e){return new t(e)}static async race(e){let r=new Set;try{let o=e.map(n=>n instanceof t?(n.#n&&r.add(n),n.valueOrThrow()):n);return await Promise.race(o)}finally{for(let o of r)o.reject(new Error("Timeout cleared"))}}#e=!1;#r=!1;#o;#t;#a=new Promise(e=>{this.#t=e});#n;#i;constructor(e){e&&e.timeout>0&&(this.#i=new p(e.message),this.#n=setTimeout(()=>{this.reject(this.#i)},e.timeout))}#l(e){clearTimeout(this.#n),this.#o=e,this.#t()}resolve(e){this.#r||this.#e||(this.#e=!0,this.#l(e))}reject(e){this.#r||this.#e||(this.#r=!0,this.#l(e))}resolved(){return this.#e}finished(){return this.#e||this.#r}value(){return this.#o}#s;valueOrThrow(){return this.#s||(this.#s=(async()=>{if(await this.#a,this.#r)throw this.#o;return this.#o})()),this.#s}};var W=new Map,j=t=>{let e=W.get(t);return e||(e=new Function(`return ${t}`)(),W.set(t,e),e)};var v={};l(v,{ariaQuerySelector:()=>K,ariaQuerySelectorAll:()=>x});var K=(t,e)=>globalThis.__ariaQuerySelector(t,e),x=async function*(t,e){yield*await globalThis.__ariaQuerySelectorAll(t,e)};var E={};l(E,{cssQuerySelector:()=>Z,cssQuerySelectorAll:()=>ee});var Z=(t,e)=>t.querySelector(e),ee=function(t,e){return t.querySelectorAll(e)};var A={};l(A,{CustomQuerySelectorRegistry:()=>y,customQuerySelectors:()=>P});var y=class{#e=new Map;register(e,r){if(!r.queryOne&&r.queryAll){let o=r.queryAll;r.queryOne=(n,i)=>{for(let s of o(n,i))return s;return null}}else if(r.queryOne&&!r.queryAll){let o=r.queryOne;r.queryAll=(n,i)=>{let s=o(n,i);return s?[s]:[]}}else if(!r.queryOne||!r.queryAll)throw new Error("At least one query method must be defined.");this.#e.set(e,{querySelector:r.queryOne,querySelectorAll:r.queryAll})}unregister(e){this.#e.delete(e)}get(e){return this.#e.get(e)}clear(){this.#e.clear()}},P=new y;var R={};l(R,{pierceQuerySelector:()=>te,pierceQuerySelectorAll:()=>re});var te=(t,e)=>{let r=null,o=n=>{let i=document.createTreeWalker(n,NodeFilter.SHOW_ELEMENT);do{let s=i.currentNode;s.shadowRoot&&o(s.shadowRoot),!(s instanceof ShadowRoot)&&s!==n&&!r&&s.matches(e)&&(r=s)}while(!r&&i.nextNode())};return t instanceof Document&&(t=t.documentElement),o(t),r},re=(t,e)=>{let r=[],o=n=>{let i=document.createTreeWalker(n,NodeFilter.SHOW_ELEMENT);do{let s=i.currentNode;s.shadowRoot&&o(s.shadowRoot),!(s instanceof ShadowRoot)&&s!==n&&s.matches(e)&&r.push(s)}while(i.nextNode())};return t instanceof Document&&(t=t.documentElement),o(t),r};var u=(t,e)=>{if(!t)throw new Error(e)};var w=class{#e;#r;#o;#t;constructor(e,r){this.#e=e,this.#r=r}async start(){let e=this.#t=c.create(),r=await this.#e();if(r){e.resolve(r);return}this.#o=new MutationObserver(async()=>{let o=await this.#e();o&&(e.resolve(o),await this.stop())}),this.#o.observe(this.#r,{childList:!0,subtree:!0,attributes:!0})}async stop(){u(this.#t,"Polling never started."),this.#t.finished()||this.#t.reject(new Error("Polling stopped")),this.#o&&(this.#o.disconnect(),this.#o=void 0)}result(){return u(this.#t,"Polling never started."),this.#t.valueOrThrow()}},T=class{#e;#r;constructor(e){this.#e=e}async start(){let e=this.#r=c.create(),r=await this.#e();if(r){e.resolve(r);return}let o=async()=>{if(e.finished())return;let n=await this.#e();if(!n){window.requestAnimationFrame(o);return}e.resolve(n),await this.stop()};window.requestAnimationFrame(o)}async stop(){u(this.#r,"Polling never started."),this.#r.finished()||this.#r.reject(new Error("Polling stopped"))}result(){return u(this.#r,"Polling never started."),this.#r.valueOrThrow()}},S=class{#e;#r;#o;#t;constructor(e,r){this.#e=e,this.#r=r}async start(){let e=this.#t=c.create(),r=await this.#e();if(r){e.resolve(r);return}this.#o=setInterval(async()=>{let o=await this.#e();o&&(e.resolve(o),await this.stop())},this.#r)}async stop(){u(this.#t,"Polling never started."),this.#t.finished()||this.#t.reject(new Error("Polling stopped")),this.#o&&(clearInterval(this.#o),this.#o=void 0)}result(){return u(this.#t,"Polling never started."),this.#t.valueOrThrow()}};var L={};l(L,{PCombinator:()=>U,pQuerySelector:()=>me,pQuerySelectorAll:()=>X});var a=class{static async*map(e,r){for await(let o of e)yield await r(o)}static async*flatMap(e,r){for await(let o of e)yield*r(o)}static async collect(e){let r=[];for await(let o of e)r.push(o);return r}static async first(e){for await(let r of e)return r}};var O={};l(O,{textQuerySelectorAll:()=>m});var oe=new Set(["checkbox","image","radio"]),ne=t=>t instanceof HTMLSelectElement||t instanceof HTMLTextAreaElement||t instanceof HTMLInputElement&&!oe.has(t.type),se=new Set(["SCRIPT","STYLE"]),f=t=>!se.has(t.nodeName)&&!document.head?.contains(t),C=new WeakMap,V=t=>{for(;t;)C.delete(t),t instanceof ShadowRoot?t=t.host:t=t.parentNode},F=new WeakSet,I,ie=()=>{let t=globalThis.MutationObserver;if(!t)throw new Error("MutationObserver is not available in this environment.");return I||(I=new t(e=>{for(let r of e)V(r.target)})),I},d=t=>{let e=C.get(t);if(e||(e={full:"",immediate:[]},!f(t)))return e;let r="";if(ne(t))e.full=t.value,e.immediate.push(t.value),t.addEventListener("input",o=>{V(o.target)},{once:!0,capture:!0});else{for(let o=t.firstChild;o;o=o.nextSibling){if(o.nodeType===Node.TEXT_NODE){e.full+=o.nodeValue??"",r+=o.nodeValue??"";continue}r&&e.immediate.push(r),r="",o.nodeType===Node.ELEMENT_NODE&&(e.full+=d(o).full)}r&&e.immediate.push(r),t instanceof Element&&t.shadowRoot&&(e.full+=d(t.shadowRoot).full),F.has(t)||(ie().observe(t,{childList:!0,characterData:!0,subtree:!0}),F.add(t))}return C.set(t,e),e};var m=function*(t,e){let r=!1;for(let o of t.childNodes)if(o instanceof Element&&f(o)){let n;o.shadowRoot?n=m(o.shadowRoot,e):n=m(o,e);for(let i of n)yield i,r=!0}r||t instanceof Element&&f(t)&&d(t).full.includes(e)&&(yield t)};var M={};l(M,{checkVisibility:()=>ae,pierce:()=>g,pierceAll:()=>k});var le=["hidden","collapse"],ae=(t,e)=>{if(!t)return e===!1;if(e===void 0)return t;let r=t.nodeType===Node.TEXT_NODE?t.parentElement:t,o=window.getComputedStyle(r),n=o&&!le.includes(o.visibility)&&!ce(r);return e===n?t:!1};function ce(t){let e=t.getBoundingClientRect();return e.width===0||e.height===0}var ue=t=>"shadowRoot"in t&&t.shadowRoot instanceof ShadowRoot;function*g(t){ue(t)?yield t.shadowRoot:yield t}function*k(t){t=g(t).next().value,yield t;let e=[document.createTreeWalker(t,NodeFilter.SHOW_ELEMENT)];for(let r of e){let o;for(;o=r.nextNode();)o.shadowRoot&&(yield o.shadowRoot,e.push(document.createTreeWalker(o.shadowRoot,NodeFilter.SHOW_ELEMENT)))}}var D={};l(D,{xpathQuerySelectorAll:()=>q});var q=function*(t,e,r=-1){let n=(t.ownerDocument||document).evaluate(e,t,null,XPathResult.ORDERED_NODE_ITERATOR_TYPE),i=[],s;for(;(s=n.iterateNext())&&(i.push(s),!(r&&i.length===r)););for(let h=0;h<i.length;h++)s=i[h],yield s,i[h]=null};var de=/[-\\w\\P{ASCII}*]/u,U=(r=>(r.Descendent=">>>",r.Child=">>>>",r))(U||{}),H=t=>"querySelectorAll"in t,Q=class{#e;#r=[];#o=void 0;elements;constructor(e,r){this.elements=[e],this.#e=r,this.#t()}async run(){for(typeof this.#o=="string"&&this.#o.trimStart()===":scope"&&this.#t();this.#o!==void 0;this.#t()){let e=this.#o;typeof e=="string"?e[0]&&de.test(e[0])?this.elements=a.flatMap(this.elements,async function*(r){H(r)&&(yield*r.querySelectorAll(e))}):this.elements=a.flatMap(this.elements,async function*(r){if(!r.parentElement){if(!H(r))return;yield*r.querySelectorAll(e);return}let o=0;for(let n of r.parentElement.children)if(++o,n===r)break;yield*r.parentElement.querySelectorAll(`:scope>:nth-child(${o})${e}`)}):this.elements=a.flatMap(this.elements,async function*(r){switch(e.name){case"text":yield*m(r,e.value);break;case"xpath":yield*q(r,e.value);break;case"aria":yield*x(r,e.value);break;default:let o=P.get(e.name);if(!o)throw new Error(`Unknown selector type: ${e.name}`);yield*o.querySelectorAll(r,e.value)}})}}#t(){if(this.#r.length!==0){this.#o=this.#r.shift();return}if(this.#e.length===0){this.#o=void 0;return}let e=this.#e.shift();switch(e){case">>>>":{this.elements=a.flatMap(this.elements,g),this.#t();break}case">>>":{this.elements=a.flatMap(this.elements,k),this.#t();break}default:this.#r=e,this.#t();break}}},_=class{#e=new WeakMap;calculate(e,r=[]){if(e===null)return r;e instanceof ShadowRoot&&(e=e.host);let o=this.#e.get(e);if(o)return[...o,...r];let n=0;for(let s=e.previousSibling;s;s=s.previousSibling)++n;let i=this.calculate(e.parentNode,[n]);return this.#e.set(e,i),[...i,...r]}},$=(t,e)=>{if(t.length+e.length===0)return 0;let[r=-1,...o]=t,[n=-1,...i]=e;return r===n?$(o,i):r<n?-1:1},fe=async function*(t){let e=new Set;for await(let o of t)e.add(o);let r=new _;yield*[...e.values()].map(o=>[o,r.calculate(o)]).sort(([,o],[,n])=>$(o,n)).map(([o])=>o)},X=function(t,e){let r=JSON.parse(e);if(r.some(o=>{let n=0;return o.some(i=>(typeof i=="string"?++n:n=0,n>1))}))throw new Error("Multiple deep combinators found in sequence.");return fe(a.flatMap(r,o=>{let n=new Q(t,o);return n.run(),n.elements}))},me=async function(t,e){for await(let r of X(t,e))return r;return null};var he=Object.freeze({...v,...A,...R,...L,...O,...M,...D,...E,Deferred:c,createFunction:j,createTextContent:d,IntervalPoller:S,isSuitableNodeForTextMatching:f,MutationPoller:w,RAFPoller:T}),pe=he;\n';
+var source = '"use strict";var g=Object.defineProperty;var X=Object.getOwnPropertyDescriptor;var Y=Object.getOwnPropertyNames;var G=Object.prototype.hasOwnProperty;var l=(t,e)=>{for(var r in e)g(t,r,{get:e[r],enumerable:!0})},J=(t,e,r,o)=>{if(e&&typeof e=="object"||typeof e=="function")for(let n of Y(e))!G.call(t,n)&&n!==r&&g(t,n,{get:()=>e[n],enumerable:!(o=X(e,n))||o.enumerable});return t};var z=t=>J(g({},"__esModule",{value:!0}),t);var Se={};l(Se,{default:()=>Te});module.exports=z(Se);var b=class extends Error{constructor(e,r){super(e,r),this.name=this.constructor.name}get[Symbol.toStringTag](){return this.constructor.name}},p=class extends b{};var c=class t{static create(e){return new t(e)}static async race(e){let r=new Set;try{let o=e.map(n=>n instanceof t?(n.#s&&r.add(n),n.valueOrThrow()):n);return await Promise.race(o)}finally{for(let o of r)o.reject(new Error("Timeout cleared"))}}#e=!1;#r=!1;#t;#o;#n=new Promise(e=>{this.#o=e});#s;#l;constructor(e){e&&e.timeout>0&&(this.#l=new p(e.message),this.#s=setTimeout(()=>{this.reject(this.#l)},e.timeout))}#i(e){clearTimeout(this.#s),this.#t=e,this.#o()}resolve(e){this.#r||this.#e||(this.#e=!0,this.#i(e))}reject(e){this.#r||this.#e||(this.#r=!0,this.#i(e))}resolved(){return this.#e}finished(){return this.#e||this.#r}value(){return this.#t}#a;valueOrThrow(){return this.#a||(this.#a=(async()=>{if(await this.#n,this.#r)throw this.#t;return this.#t})()),this.#a}};var W=new Map,F=t=>{let e=W.get(t);return e||(e=new Function(`return ${t}`)(),W.set(t,e),e)};var E={};l(E,{ariaQuerySelector:()=>K,ariaQuerySelectorAll:()=>x});var K=(t,e)=>globalThis.__ariaQuerySelector(t,e),x=async function*(t,e){yield*await globalThis.__ariaQuerySelectorAll(t,e)};var v={};l(v,{cssQuerySelector:()=>Z,cssQuerySelectorAll:()=>ee});var Z=(t,e)=>t.querySelector(e),ee=function(t,e){return t.querySelectorAll(e)};var A={};l(A,{CustomQuerySelectorRegistry:()=>y,customQuerySelectors:()=>P});var y=class{#e=new Map;register(e,r){if(!r.queryOne&&r.queryAll){let o=r.queryAll;r.queryOne=(n,i)=>{for(let s of o(n,i))return s;return null}}else if(r.queryOne&&!r.queryAll){let o=r.queryOne;r.queryAll=(n,i)=>{let s=o(n,i);return s?[s]:[]}}else if(!r.queryOne||!r.queryAll)throw new Error("At least one query method must be defined.");this.#e.set(e,{querySelector:r.queryOne,querySelectorAll:r.queryAll})}unregister(e){this.#e.delete(e)}get(e){return this.#e.get(e)}clear(){this.#e.clear()}},P=new y;var R={};l(R,{pierceQuerySelector:()=>te,pierceQuerySelectorAll:()=>re});var te=(t,e)=>{let r=null,o=n=>{let i=document.createTreeWalker(n,NodeFilter.SHOW_ELEMENT);do{let s=i.currentNode;s.shadowRoot&&o(s.shadowRoot),!(s instanceof ShadowRoot)&&s!==n&&!r&&s.matches(e)&&(r=s)}while(!r&&i.nextNode())};return t instanceof Document&&(t=t.documentElement),o(t),r},re=(t,e)=>{let r=[],o=n=>{let i=document.createTreeWalker(n,NodeFilter.SHOW_ELEMENT);do{let s=i.currentNode;s.shadowRoot&&o(s.shadowRoot),!(s instanceof ShadowRoot)&&s!==n&&s.matches(e)&&r.push(s)}while(i.nextNode())};return t instanceof Document&&(t=t.documentElement),o(t),r};var u=(t,e)=>{if(!t)throw new Error(e)};var oe={childList:!0,subtree:!0,attributes:!0};function ne(t){return t.nodeType===Node.ELEMENT_NODE||t.nodeType===Node.DOCUMENT_FRAGMENT_NODE}function se(t){return t.parentNode??t.host??null}function ie(t,e){let r=t,o;for(;o=se(r);){if(e.has(o))return!0;r=o}return!1}var w=class{#e;#r;#t;#o=new WeakSet;#n;constructor(e,r){this.#e=e,this.#r=r}async start(){let e=this.#n=c.create(),r=await this.#e();if(r){e.resolve(r);return}this.#o=new WeakSet,this.#t=new MutationObserver(async o=>{this.#l(o);let n=await this.#e();n&&(e.resolve(n),await this.stop())}),this.#s(this.#r)}#s(e){!this.#t||this.#o.has(e)||(this.#o.add(e),this.#t.observe(e,oe),this.#i(e))}#l(e){let r=new Set;for(let o of e)for(let n of o.addedNodes)ne(n)&&r.add(n);for(let o of r)ie(o,r)||this.#i(o)}#i(e){let r=document.createTreeWalker(e,NodeFilter.SHOW_ELEMENT);do{let{shadowRoot:o}=r.currentNode;o&&this.#s(o)}while(r.nextNode())}async stop(){u(this.#n,"Polling never started."),this.#n.finished()||this.#n.reject(new Error("Polling stopped")),this.#t&&(this.#t.disconnect(),this.#t=void 0)}result(){return u(this.#n,"Polling never started."),this.#n.valueOrThrow()}},N=class{#e;#r;constructor(e){this.#e=e}async start(){let e=this.#r=c.create(),r=await this.#e();if(r){e.resolve(r);return}let o=async()=>{if(e.finished())return;let n=await this.#e();if(!n){window.requestAnimationFrame(o);return}e.resolve(n),await this.stop()};window.requestAnimationFrame(o)}async stop(){u(this.#r,"Polling never started."),this.#r.finished()||this.#r.reject(new Error("Polling stopped"))}result(){return u(this.#r,"Polling never started."),this.#r.valueOrThrow()}},T=class{#e;#r;#t;#o;constructor(e,r){this.#e=e,this.#r=r}async start(){let e=this.#o=c.create(),r=await this.#e();if(r){e.resolve(r);return}this.#t=setInterval(async()=>{let o=await this.#e();o&&(e.resolve(o),await this.stop())},this.#r)}async stop(){u(this.#o,"Polling never started."),this.#o.finished()||this.#o.reject(new Error("Polling stopped")),this.#t&&(clearInterval(this.#t),this.#t=void 0)}result(){return u(this.#o,"Polling never started."),this.#o.valueOrThrow()}};var L={};l(L,{PCombinator:()=>V,pQuerySelector:()=>we,pQuerySelectorAll:()=>B});var a=class{static async*map(e,r){for await(let o of e)yield await r(o)}static async*flatMap(e,r){for await(let o of e)yield*r(o)}static async collect(e){let r=[];for await(let o of e)r.push(o);return r}static async first(e){for await(let r of e)return r}};var C={};l(C,{textQuerySelectorAll:()=>m});var le=new Set(["checkbox","image","radio"]),ae=t=>t instanceof HTMLSelectElement||t instanceof HTMLTextAreaElement||t instanceof HTMLInputElement&&!le.has(t.type),ce=new Set(["SCRIPT","STYLE"]),f=t=>!ce.has(t.nodeName)&&!document.head?.contains(t),O=new WeakMap,H=t=>{for(;t;)O.delete(t),t instanceof ShadowRoot?t=t.host:t=t.parentNode},j=new WeakSet,I,ue=()=>{let t=globalThis.MutationObserver;if(!t)throw new Error("MutationObserver is not available in this environment.");return I||(I=new t(e=>{for(let r of e)H(r.target)})),I},d=t=>{let e=O.get(t);if(e||(e={full:"",immediate:[]},!f(t)))return e;let r="";if(ae(t))e.full=t.value,e.immediate.push(t.value),t.addEventListener("input",o=>{H(o.target)},{once:!0,capture:!0});else{for(let o=t.firstChild;o;o=o.nextSibling){if(o.nodeType===Node.TEXT_NODE){e.full+=o.nodeValue??"",r+=o.nodeValue??"";continue}r&&e.immediate.push(r),r="",o.nodeType===Node.ELEMENT_NODE&&(e.full+=d(o).full)}r&&e.immediate.push(r),t instanceof Element&&t.shadowRoot&&(e.full+=d(t.shadowRoot).full),j.has(t)||(ue().observe(t,{childList:!0,characterData:!0,subtree:!0}),j.add(t))}return O.set(t,e),e};var m=function*(t,e){let r=!1;for(let o of t.childNodes)if(o instanceof Element&&f(o)){let n;o.shadowRoot?n=m(o.shadowRoot,e):n=m(o,e);for(let i of n)yield i,r=!0}r||t instanceof Element&&f(t)&&d(t).full.includes(e)&&(yield t)};var k={};l(k,{checkVisibility:()=>fe,pierce:()=>S,pierceAll:()=>M});var de=["hidden","collapse"],fe=(t,e)=>{if(!t)return e===!1;if(e===void 0)return t;let r=t.nodeType===Node.TEXT_NODE?t.parentElement:t;if(!r)return e===!1;let o=window.getComputedStyle(r),n=o&&!de.includes(o.visibility)&&!me(r);return e===n?t:!1};function me(t){let e=t.getBoundingClientRect();return e.width===0||e.height===0}var he=t=>"shadowRoot"in t&&t.shadowRoot instanceof ShadowRoot;function*S(t){he(t)?yield t.shadowRoot:yield t}function*M(t){t=S(t).next().value,yield t;let e=[document.createTreeWalker(t,NodeFilter.SHOW_ELEMENT)];for(let r of e){let o;for(;o=r.nextNode();)o.shadowRoot&&(yield o.shadowRoot,e.push(document.createTreeWalker(o.shadowRoot,NodeFilter.SHOW_ELEMENT)))}}var _={};l(_,{xpathQuerySelectorAll:()=>D});var D=function*(t,e,r=-1){let n=(t.ownerDocument||document).evaluate(e,t,null,XPathResult.ORDERED_NODE_ITERATOR_TYPE),i=[],s;for(;(s=n.iterateNext())&&(i.push(s),!(r&&i.length===r)););for(let h=0;h<i.length;h++)s=i[h],yield s,i[h]=null};var pe=/[-\\w\\P{ASCII}*]/u,V=(r=>(r.Descendent=">>>",r.Child=">>>>",r))(V||{}),U=t=>"querySelectorAll"in t,q=class{#e;#r=[];#t=void 0;elements;constructor(e,r){this.elements=[e],this.#e=r,this.#o()}async run(){for(typeof this.#t=="string"&&this.#t.trimStart()===":scope"&&this.#o();this.#t!==void 0;this.#o()){let e=this.#t;typeof e=="string"?e[0]&&pe.test(e[0])?this.elements=a.flatMap(this.elements,async function*(r){U(r)&&(yield*r.querySelectorAll(e))}):this.elements=a.flatMap(this.elements,async function*(r){if(!r.parentElement){if(!U(r))return;yield*r.querySelectorAll(e);return}let o=0;for(let n of r.parentElement.children)if(++o,n===r)break;yield*r.parentElement.querySelectorAll(`:scope>:nth-child(${o})${e}`)}):this.elements=a.flatMap(this.elements,async function*(r){switch(e.name){case"text":yield*m(r,e.value);break;case"xpath":yield*D(r,e.value);break;case"aria":yield*x(r,e.value);break;default:let o=P.get(e.name);if(!o)throw new Error(`Unknown selector type: ${e.name}`);yield*o.querySelectorAll(r,e.value)}})}}#o(){if(this.#r.length!==0){this.#t=this.#r.shift();return}if(this.#e.length===0){this.#t=void 0;return}let e=this.#e.shift();switch(e){case">>>>":{this.elements=a.flatMap(this.elements,S),this.#o();break}case">>>":{this.elements=a.flatMap(this.elements,M),this.#o();break}default:this.#r=e,this.#o();break}}},Q=class{#e=new WeakMap;calculate(e,r=[]){if(e===null)return r;e instanceof ShadowRoot&&(e=e.host);let o=this.#e.get(e);if(o)return[...o,...r];let n=0;for(let s=e.previousSibling;s;s=s.previousSibling)++n;let i=this.calculate(e.parentNode,[n]);return this.#e.set(e,i),[...i,...r]}},$=(t,e)=>{if(t.length+e.length===0)return 0;let[r=-1,...o]=t,[n=-1,...i]=e;return r===n?$(o,i):r<n?-1:1},ye=async function*(t){let e=new Set;for await(let o of t)e.add(o);let r=new Q;yield*[...e.values()].map(o=>[o,r.calculate(o)]).sort(([,o],[,n])=>$(o,n)).map(([o])=>o)},B=function(t,e){let r=JSON.parse(e);if(r.some(o=>{let n=0;return o.some(i=>(typeof i=="string"?++n:n=0,n>1))}))throw new Error("Multiple deep combinators found in sequence.");return ye(a.flatMap(r,o=>{let n=new q(t,o);return n.run(),n.elements}))},we=async function(t,e){for await(let r of B(t,e))return r;return null};var Ne=Object.freeze({...E,...A,...R,...L,...C,...k,..._,...v,Deferred:c,createFunction:F,createTextContent:d,IntervalPoller:T,isSuitableNodeForTextMatching:f,MutationPoller:w,RAFPoller:N}),Te=Ne;\n';
 
 // node_modules/puppeteer-core/lib/puppeteer/common/ScriptInjector.js
 class ScriptInjector {
@@ -4776,6 +4875,7 @@ var __runInitializers = function(thisArg, initializers, value) {
   return value;
 }, __disposeResources4, JSHandle;
 var init_JSHandle = __esm(() => {
+  init_Debug();
   init_util();
   init_decorators();
   init_disposable();
@@ -4837,8 +4937,12 @@ var init_JSHandle = __esm(() => {
           Object.defineProperty(_classThis, Symbol.metadata, { enumerable: true, configurable: true, writable: true, value: _metadata });
         __runInitializers(_classThis, _classExtraInitializers);
       }
-      constructor() {
-        __runInitializers(this, _instanceExtraInitializers);
+      #logger = __runInitializers(this, _instanceExtraInitializers);
+      constructor(logger) {
+        this.#logger = logger;
+      }
+      get logger() {
+        return this.#logger;
       }
       async evaluate(pageFunction, ...args) {
         pageFunction = withSourcePuppeteerURLIfNone(this.evaluate.name, pageFunction);
@@ -4878,7 +4982,9 @@ var init_JSHandle = __esm(() => {
         return map;
       }
       [(_getProperty_decorators = [throwIfDisposed()], _getProperties_decorators = [throwIfDisposed()], disposeSymbol)]() {
-        return void this[asyncDisposeSymbol]().catch(debugCatchError);
+        return void this[asyncDisposeSymbol]().catch((error) => {
+          this.#logger?.(DEBUG_PREFIXES.error)?.(error);
+        });
       }
       [asyncDisposeSymbol]() {
         return this.dispose();
@@ -4932,6 +5038,7 @@ var __addDisposableResource5 = function(env, value, async) {
 }, __disposeResources5, LocatorEvent, Locator, FunctionLocator, DelegatedLocator, FilteredLocator, MappedLocator, NodeLocator, RaceLocator, RETRY_DELAY = 100;
 var init_locators = __esm(() => {
   init_rxjs();
+  init_Debug();
   init_EventEmitter();
   init_util();
   __disposeResources5 = function(SuppressedError2) {
@@ -4974,6 +5081,14 @@ var init_locators = __esm(() => {
     LocatorEvent["Action"] = "action";
   })(LocatorEvent || (LocatorEvent = {}));
   Locator = class Locator extends EventEmitter {
+    #logger;
+    constructor(logger) {
+      super(undefined, logger);
+      this.#logger = logger;
+    }
+    get logger() {
+      return this.#logger;
+    }
     static race(locators) {
       return RaceLocator.create(locators);
     }
@@ -5115,7 +5230,9 @@ var init_locators = __esm(() => {
         return this.emit(LocatorEvent.Action, undefined);
       }), mergeMap((handle) => {
         return from(handle.click(options)).pipe(catchError((err) => {
-          handle.dispose().catch(debugCatchError);
+          handle.dispose().catch((error) => {
+            this.#logger?.(DEBUG_PREFIXES.error)?.(error);
+          });
           throw err;
         }));
       }), this.operators.retryAndRaceWithSignalAndTimer(signal, cause));
@@ -5243,7 +5360,9 @@ var init_locators = __esm(() => {
               throw new Error(`Element cannot be filled out.`);
           }
         })).pipe(catchError((err) => {
-          handle.dispose().catch(debugCatchError);
+          handle.dispose().catch((error) => {
+            this.#logger?.(DEBUG_PREFIXES.error)?.(error);
+          });
           throw err;
         }));
       }), this.operators.retryAndRaceWithSignalAndTimer(signal, cause));
@@ -5258,7 +5377,9 @@ var init_locators = __esm(() => {
         return this.emit(LocatorEvent.Action, undefined);
       }), mergeMap((handle) => {
         return from(handle.hover()).pipe(catchError((err) => {
-          handle.dispose().catch(debugCatchError);
+          handle.dispose().catch((error) => {
+            this.#logger?.(DEBUG_PREFIXES.error)?.(error);
+          });
           throw err;
         }));
       }), this.operators.retryAndRaceWithSignalAndTimer(signal, cause));
@@ -5280,7 +5401,9 @@ var init_locators = __esm(() => {
             el.scrollLeft = scrollLeft;
           }
         }, options?.scrollTop, options?.scrollLeft)).pipe(catchError((err) => {
-          handle.dispose().catch(debugCatchError);
+          handle.dispose().catch((error) => {
+            this.#logger?.(DEBUG_PREFIXES.error)?.(error);
+          });
           throw err;
         }));
       }), this.operators.retryAndRaceWithSignalAndTimer(signal, cause));
@@ -5341,7 +5464,7 @@ var init_locators = __esm(() => {
     #pageOrFrame;
     #func;
     constructor(pageOrFrame, func) {
-      super();
+      super(pageOrFrame.logger);
       this.#pageOrFrame = pageOrFrame;
       this.#func = func;
     }
@@ -5361,7 +5484,7 @@ var init_locators = __esm(() => {
   DelegatedLocator = class DelegatedLocator extends Locator {
     #delegate;
     constructor(delegate) {
-      super();
+      super(delegate.logger);
       this.#delegate = delegate;
       this.copyOptions(this.#delegate);
     }
@@ -5438,7 +5561,7 @@ var init_locators = __esm(() => {
     #pageOrFrame;
     #selectorOrHandle;
     constructor(pageOrFrame, selectorOrHandle) {
-      super();
+      super(pageOrFrame.logger);
       this.#pageOrFrame = pageOrFrame;
       this.#selectorOrHandle = selectorOrHandle;
     }
@@ -5486,7 +5609,9 @@ var init_locators = __esm(() => {
     }
     #locators;
     constructor(locators) {
-      super();
+      super(locators[0]?.logger ?? (() => {
+        return;
+      }));
       this.#locators = locators;
     }
     _clone() {
@@ -5783,8 +5908,8 @@ var init_ElementHandle = __esm(() => {
       }
       isolatedHandle = __runInitializers2(this, _instanceExtraInitializers);
       handle;
-      constructor(handle) {
-        super();
+      constructor(handle, logger) {
+        super(logger);
         this.handle = handle;
         this[_isElementHandle] = true;
       }
@@ -6681,8 +6806,10 @@ var init_Frame = __esm(() => {
       _parentId;
       _name;
       _hasStartedLoading = false;
-      constructor() {
-        super();
+      logger;
+      constructor(logger) {
+        super(undefined, logger);
+        this.logger = logger;
       }
       #_document;
       #document() {
@@ -6811,7 +6938,7 @@ var init_Frame = __esm(() => {
           throw new Error("Exactly one of `url`, `path`, or `content` must be specified.");
         }
         if (path) {
-          content = await environment.value.fs.promises.readFile(path, "utf8");
+          content = await environment.value.readFile(path, "utf8");
           content += `//# sourceURL=${path.replace(/\n/g, "")}`;
         }
         type = type ?? "text/javascript";
@@ -6846,7 +6973,7 @@ var init_Frame = __esm(() => {
           throw new Error("Exactly one of `url`, `path`, or `content` must be specified.");
         }
         if (path) {
-          content = await environment.value.fs.promises.readFile(path, "utf8");
+          content = await environment.value.readFile(path, "utf8");
           content += "/*# sourceURL=" + path.replace(/\n/g, "") + "*/";
           options.content = content;
         }
@@ -7116,14 +7243,15 @@ function headersArray(headers) {
   }
   return result;
 }
-function handleError(error) {
+function handleError(error, logger) {
   if (error.originalMessage.includes("Invalid header") || error.originalMessage.includes("Unsafe header") || error.originalMessage.includes('Expected "header"') || error.originalMessage.includes("invalid argument")) {
     throw error;
   }
-  debugError?.(error);
+  logger?.(DEBUG_PREFIXES.error)?.(error);
 }
 var DEFAULT_INTERCEPT_RESOLUTION_PRIORITY = 0, InterceptResolutionAction, STATUS_TEXTS, errorReasons;
 var init_HTTPRequest = __esm(() => {
+  init_Debug();
   init_util();
   (function(InterceptResolutionAction) {
     InterceptResolutionAction["Abort"] = "abort";
@@ -7451,6 +7579,7 @@ var __runInitializers4 = function(thisArg, initializers, value) {
 }, __disposeResources8, Page, supportedMetrics;
 var init_Page = __esm(() => {
   init_rxjs();
+  init_Debug();
   init_Errors();
   init_EventEmitter();
   init_util();
@@ -7510,8 +7639,10 @@ var init_Page = __esm(() => {
       _tabId = "";
       #requestHandlers = new WeakMap;
       #inflight$ = new ReplaySubject(1);
-      constructor() {
-        super();
+      logger;
+      constructor(logger) {
+        super(undefined, logger);
+        this.logger = logger;
         fromEmitterEvent(this, "request").pipe(mergeMap((originalRequest) => {
           return concat(of(1), merge(fromEmitterEvent(this, "requestfailed"), fromEmitterEvent(this, "requestfinished"), fromEmitterEvent(this, "response").pipe(map((response) => {
             return response.request();
@@ -7662,7 +7793,7 @@ var init_Page = __esm(() => {
         if (!path) {
           return;
         }
-        await environment.value.fs.promises.writeFile(path, typedArray);
+        await environment.value.writeFile(path, typedArray);
       }
       async screencast(options = {}) {
         const ScreenRecorder = environment.value.ScreenRecorder;
@@ -7697,34 +7828,73 @@ var init_Page = __esm(() => {
         if (options.scale !== undefined && options.scale <= 0) {
           throw new Error(`\`scale\` must be greater than 0.`);
         }
+        if (options.path && environment.value.path) {
+          await environment.value.mkdir(environment.value.path.dirname(options.path), { recursive: options.overwrite ?? true });
+        }
+        const stream = options.path ? environment.value.createWriteStream(options.path, {
+          encoding: "binary",
+          overwrite: options.overwrite
+        }) : undefined;
         const recorder = new ScreenRecorder(this, width, height, {
           ...options,
           crop
-        });
+        }, this.logger);
         try {
           await this._startScreencast();
         } catch (error) {
           recorder.stop();
           throw error;
         }
-        if (options.path) {
-          const { createWriteStream } = environment.value.fs;
-          const stream = createWriteStream(options.path, "binary");
+        if (stream) {
           recorder.pipe(stream);
         }
         return recorder;
+      }
+      async record(options = {}) {
+        if (options.maxWidth !== undefined && options.maxWidth <= 0) {
+          throw new Error("`maxWidth` must be greater than 0.");
+        }
+        if (options.maxHeight !== undefined && options.maxHeight <= 0) {
+          throw new Error("`maxHeight` must be greater than 0.");
+        }
+        if (options.frameRate !== undefined && options.frameRate <= 0) {
+          throw new Error("`frameRate` must be greater than 0.");
+        }
+        if (options.fps !== undefined && options.fps <= 0) {
+          throw new Error("`fps` must be greater than 0.");
+        }
+        if (options.path && environment.value.path) {
+          await environment.value.mkdir(environment.value.path.dirname(options.path), { recursive: options.overwrite ?? true });
+        }
+        const stream = options.path ? environment.value.createWriteStream(options.path, {
+          encoding: "binary",
+          overwrite: options.overwrite
+        }) : undefined;
+        const recording = this.createScreenRecording(options);
+        try {
+          await recording._start();
+        } catch (error) {
+          recording.stop();
+          throw error;
+        }
+        if (stream) {
+          recording.pipe(stream);
+        }
+        return recording;
       }
       #screencastSessionCount = 0;
       #startScreencastPromise;
       async _startScreencast() {
         ++this.#screencastSessionCount;
         if (!this.#startScreencastPromise) {
-          this.#startScreencastPromise = this.mainFrame().client.send("Page.startScreencast", { format: "png" }).then(() => {
-            return new Promise((resolve) => {
-              return this.mainFrame().client.once("Page.screencastFrame", () => {
-                return resolve();
-              });
+          const client = this.mainFrame().client;
+          const firstFrame = new Promise((resolve) => {
+            return client.once("Page.screencastFrame", () => {
+              return resolve();
             });
+          });
+          this.#startScreencastPromise = client.send("Page.startScreencast", { format: "png" }).then(() => {
+            return firstFrame;
           });
         }
         await this.#startScreencastPromise;
@@ -7747,7 +7917,9 @@ var init_Page = __esm(() => {
           if (viewport && viewport.deviceScaleFactor !== 0) {
             await this.setViewport({ ...viewport, deviceScaleFactor: 0 });
             stack.defer(() => {
-              this.setViewport(viewport).catch(debugCatchError);
+              this.setViewport(viewport).catch((error) => {
+                this.logger?.(DEBUG_PREFIXES.error)?.(error);
+              });
             });
           }
           return await this.mainFrame().isolatedRealm().evaluate(() => {
@@ -7829,7 +8001,9 @@ var init_Page = __esm(() => {
                   ...scrollDimensions
                 });
                 stack.defer(async () => {
-                  await this.setViewport(viewport).catch(debugCatchError);
+                  await this.setViewport(viewport).catch((error) => {
+                    this.logger?.(DEBUG_PREFIXES.error)?.(error);
+                  });
                 });
               }
             } else {
@@ -7882,7 +8056,9 @@ var init_Page = __esm(() => {
       [(_screenshot_decorators = [guarded(function() {
         return this.browser();
       })], disposeSymbol)]() {
-        return void this[asyncDisposeSymbol]().catch(debugCatchError);
+        return void this[asyncDisposeSymbol]().catch((error) => {
+          this.logger?.(DEBUG_PREFIXES.error)?.(error);
+        });
       }
       async[asyncDisposeSymbol]() {
         await this.close();
@@ -8117,9 +8293,81 @@ var init_Realm = __esm(() => {
   };
 });
 
+// node_modules/puppeteer-core/lib/puppeteer/api/ScreenRecording.js
+var ScreenRecording;
+var init_ScreenRecording = __esm(() => {
+  init_disposable();
+  ScreenRecording = class ScreenRecording extends ReadableStream {
+    page;
+    options;
+    logger;
+    controller;
+    destinations = new Set;
+    stopped = false;
+    constructor(page, options = {}, logger) {
+      let controller;
+      super({
+        start(c) {
+          controller = c;
+        }
+      });
+      this.controller = controller;
+      this.page = page;
+      this.options = options;
+      this.logger = logger;
+    }
+    pipe(destination) {
+      if ("getWriter" in destination && typeof destination.getWriter === "function") {
+        return this.pipeTo(destination);
+      }
+      const dest = destination;
+      this.destinations.add(dest);
+      dest.once?.("unpipe", () => {
+        this.destinations.delete(dest);
+      });
+      dest.once?.("error", () => {
+        this.destinations.delete(dest);
+      });
+      dest.once?.("close", () => {
+        this.destinations.delete(dest);
+      });
+      dest.once?.("finish", () => {
+        this.destinations.delete(dest);
+      });
+      return dest;
+    }
+    async closeDestinations() {
+      try {
+        this.controller.close();
+      } catch {}
+      for (const dest of this.destinations) {
+        dest.end();
+      }
+      const destinationPromises = Array.from(this.destinations).map((dest) => {
+        return new Promise((resolve) => {
+          if (dest.writableFinished || dest.closed || dest.destroyed) {
+            resolve(undefined);
+          } else {
+            dest.once?.("finish", resolve);
+            dest.once?.("close", resolve);
+            dest.once?.("error", resolve);
+          }
+        });
+      });
+      await Promise.all(destinationPromises);
+    }
+    async[asyncDisposeSymbol]() {
+      await this.stop();
+    }
+  };
+});
+
 // node_modules/puppeteer-core/lib/puppeteer/api/Target.js
 class Target {
-  constructor() {}
+  logger;
+  constructor(logger) {
+    this.logger = logger;
+  }
   async worker() {
     return null;
   }
@@ -8194,6 +8442,7 @@ var init_api = __esm(() => {
   init_JSHandle();
   init_Page();
   init_Realm();
+  init_ScreenRecording();
   init_Target();
   init_WebWorker();
   init_locators();
@@ -8203,9 +8452,11 @@ var init_api = __esm(() => {
 class Accessibility {
   #realm;
   #frameId;
-  constructor(realm, frameId = "") {
+  #logger;
+  constructor(realm, frameId = "", logger) {
     this.#realm = realm;
     this.#frameId = frameId;
+    this.#logger = logger;
   }
   async snapshot(options = {}) {
     const { interestingOnly = true, root = null, includeIframes = false } = options;
@@ -8239,7 +8490,7 @@ class Accessibility {
             const iframeSnapshot = await frame.accessibility.snapshot(options);
             root.iframeSnapshot = iframeSnapshot ?? undefined;
           } catch (error) {
-            debugError?.(error);
+            this.#logger?.(DEBUG_PREFIXES.error)?.(error);
           }
         } catch (e_1) {
           env_1.error = e_1;
@@ -8667,7 +8918,7 @@ var __addDisposableResource9 = function(env, value, async) {
   return value;
 }, __disposeResources9;
 var init_Accessibility = __esm(() => {
-  init_util();
+  init_Debug();
   __disposeResources9 = function(SuppressedError2) {
     return function(env) {
       function fail(e) {
@@ -8711,10 +8962,12 @@ class Binding {
   #name;
   #fn;
   #initSource;
-  constructor(name, fn, initSource) {
+  #logger;
+  constructor(name, fn, initSource, logger) {
     this.#name = name;
     this.#fn = fn;
     this.#initSource = initSource;
+    this.#logger = logger;
   }
   get name() {
     return this.#name;
@@ -8770,13 +9023,17 @@ class Binding {
           const callbacks = globalThis[name].callbacks;
           callbacks.get(seq).reject(error);
           callbacks.delete(seq);
-        }, this.#name, id, error.message, error.stack).catch(debugCatchError);
+        }, this.#name, id, error.message, error.stack).catch((error) => {
+          this.#logger?.(DEBUG_PREFIXES.error)?.(error);
+        });
       } else {
         await context.evaluate((name, seq, error) => {
           const callbacks = globalThis[name].callbacks;
           callbacks.get(seq).reject(error);
           callbacks.delete(seq);
-        }, this.#name, id, error).catch(debugCatchError);
+        }, this.#name, id, error).catch((error) => {
+          this.#logger?.(DEBUG_PREFIXES.error)?.(error);
+        });
       }
     }
   }
@@ -8816,7 +9073,7 @@ var __addDisposableResource10 = function(env, value, async) {
 }, __disposeResources10;
 var init_Binding = __esm(() => {
   init_JSHandle();
-  init_util();
+  init_Debug();
   init_disposable();
   __disposeResources10 = function(SuppressedError2) {
     return function(env) {
@@ -8961,8 +9218,10 @@ var init_NetworkManagerEvents = __esm(() => {
 class CallbackRegistry {
   #callbacks = new Map;
   #idGenerator;
-  constructor(idGenerator) {
+  #logger;
+  constructor(idGenerator, logger) {
     this.#idGenerator = idGenerator;
+    this.#logger = logger;
   }
   has(id) {
     return this.#callbacks.has(id);
@@ -8973,7 +9232,9 @@ class CallbackRegistry {
     try {
       request(callback.id);
     } catch (error) {
-      callback.promise.catch(debugCatchError).finally(() => {
+      callback.promise.catch((err) => {
+        this.#logger?.(DEBUG_PREFIXES.error)?.(err);
+      }).finally(() => {
         this.#callbacks.delete(callback.id);
       });
       callback.reject(error);
@@ -9070,8 +9331,8 @@ class Callback {
 }
 var init_CallbackRegistry = __esm(() => {
   init_Deferred();
+  init_Debug();
   init_Errors();
-  init_util();
 });
 
 // node_modules/puppeteer-core/lib/puppeteer/cdp/CdpSession.js
@@ -9089,11 +9350,11 @@ var init_CdpSession = __esm(() => {
     #target;
     #rawErrors = false;
     #detached = false;
-    constructor(connection, targetType, sessionId, parentSessionId, rawErrors) {
+    constructor(connection, targetType, sessionId, parentSessionId, rawErrors, logger) {
       super();
       this.#connection = connection;
       this.#targetType = targetType;
-      this.#callbacks = new CallbackRegistry(connection._idGenerator);
+      this.#callbacks = new CallbackRegistry(connection._idGenerator, logger);
       this.#sessionId = sessionId;
       this.#parentSessionId = parentSessionId;
       this.#rawErrors = rawErrors;
@@ -9176,7 +9437,7 @@ var init_CdpSession = __esm(() => {
 function isTargetClosedError(error) {
   return error instanceof TargetCloseError;
 }
-var debugProtocolSend, debugProtocolReceive, Connection;
+var Connection;
 var init_Connection = __esm(() => {
   init_CDPSession();
   init_CallbackRegistry();
@@ -9184,8 +9445,6 @@ var init_Connection = __esm(() => {
   init_Errors();
   init_EventEmitter();
   init_CdpSession();
-  debugProtocolSend = debug("puppeteer:protocol:SEND \u25BA");
-  debugProtocolReceive = debug("puppeteer:protocol:RECV \u25C0");
   Connection = class Connection extends EventEmitter {
     #url;
     #transport;
@@ -9198,12 +9457,18 @@ var init_Connection = __esm(() => {
     #callbacks;
     #rawErrors = false;
     #idGenerator;
-    constructor(url, transport, delay = 0, timeout, rawErrors = false, idGenerator = createIncrementalIdGenerator()) {
+    #debugProtocolSend;
+    #debugProtocolReceive;
+    #logger;
+    constructor(url, transport, delay = 0, timeout = undefined, rawErrors = false, idGenerator = createIncrementalIdGenerator(), logger) {
       super();
+      this.#logger = logger;
       this.#rawErrors = rawErrors;
       this.#idGenerator = idGenerator;
-      this.#callbacks = new CallbackRegistry(idGenerator);
+      this.#callbacks = new CallbackRegistry(idGenerator, logger);
       this.#url = url;
+      this.#debugProtocolSend = logger?.(DEBUG_PREFIXES.cdpSend);
+      this.#debugProtocolReceive = logger?.(DEBUG_PREFIXES.cdpReceive);
       this.#delay = delay;
       this.#timeout = timeout ?? 180000;
       this.#transport = transport;
@@ -9260,7 +9525,7 @@ var init_Connection = __esm(() => {
           id,
           sessionId
         });
-        debugProtocolSend?.(stringifiedMessage);
+        this.#debugProtocolSend?.(stringifiedMessage);
         this.#transport.send(stringifiedMessage);
       });
     }
@@ -9273,11 +9538,11 @@ var init_Connection = __esm(() => {
           return setTimeout(r, this.#delay);
         });
       }
-      debugProtocolReceive?.(message);
+      this.#debugProtocolReceive?.(message);
       const object = JSON.parse(message);
       if (object.method === "Target.attachedToTarget") {
         const sessionId = object.params.sessionId;
-        const session = new CdpCDPSession(this, object.params.targetInfo.type, sessionId, object.sessionId, this.#rawErrors);
+        const session = new CdpCDPSession(this, object.params.targetInfo.type, sessionId, object.sessionId, this.#rawErrors, this.#logger);
         this.#sessions.set(sessionId, session);
         this.emit(CDPSessionEvent.SessionAttached, session);
         const parentSession = this.#sessions.get(object.sessionId);
@@ -9409,7 +9674,9 @@ class JSCoverage {
   #resetOnNavigation = false;
   #reportAnonymousScripts = false;
   #includeRawScriptCoverage = false;
-  constructor(client) {
+  #logger;
+  constructor(client, logger) {
+    this.#logger = logger;
     this.#client = client;
   }
   updateClient(client) {
@@ -9459,7 +9726,7 @@ class JSCoverage {
       this.#scriptURLs.set(event.scriptId, event.url);
       this.#scriptSources.set(event.scriptId, response.scriptSource);
     } catch (error) {
-      debugError?.(error);
+      this.#logger?.(DEBUG_PREFIXES.error)?.(error);
     }
   }
   async stop() {
@@ -9505,7 +9772,9 @@ class CSSCoverage {
   #stylesheetSources = new Map;
   #eventListeners;
   #resetOnNavigation = false;
-  constructor(client) {
+  #logger;
+  constructor(client, logger) {
+    this.#logger = logger;
     this.#client = client;
   }
   updateClient(client) {
@@ -9547,7 +9816,7 @@ class CSSCoverage {
       this.#stylesheetURLs.set(header.styleSheetId, header.sourceURL);
       this.#stylesheetSources.set(header.styleSheetId, response.text);
     } catch (error) {
-      debugError?.(error);
+      this.#logger?.(DEBUG_PREFIXES.error)?.(error);
     }
   }
   async stop() {
@@ -9628,6 +9897,7 @@ function convertToDisjointRanges(nestedRanges) {
   });
 }
 var init_Coverage = __esm(() => {
+  init_Debug();
   init_EventEmitter();
   init_util();
   init_disposable();
@@ -9642,13 +9912,18 @@ var init_Dialog2 = __esm(() => {
     constructor(client, type, message, defaultValue = "") {
       super(type, message, defaultValue);
       this.#client = client;
+      client.once("Page.javascriptDialogClosed", this.#onDialogClosed);
     }
     async handle(options) {
       await this.#client.send("Page.handleJavaScriptDialog", {
         accept: options.accept,
         promptText: options.text
       });
+      this.#client.off("Page.javascriptDialogClosed", this.#onDialogClosed);
     }
+    #onDialogClosed = () => {
+      this.handled = true;
+    };
   };
 });
 
@@ -9732,7 +10007,7 @@ var __runInitializers5 = function(thisArg, initializers, value) {
 }, EmulationManager;
 var init_EmulationManager = __esm(() => {
   init_CDPSession();
-  init_util();
+  init_Debug();
   init_decorators();
   EmulationManager = (() => {
     let _instanceExtraInitializers = [];
@@ -9782,7 +10057,9 @@ var init_EmulationManager = __esm(() => {
               client.send("Emulation.setTouchEmulationEnabled", {
                 enabled: false
               })
-            ]).catch(debugCatchError);
+            ]).catch((err) => {
+              return this.#logger?.(DEBUG_PREFIXES.error)?.(err);
+            });
             return;
           }
           const { viewport } = viewportState;
@@ -9801,7 +10078,7 @@ var init_EmulationManager = __esm(() => {
               screenOrientation
             }).catch((err) => {
               if (err.message.includes("Target does not support metrics override")) {
-                debugError?.(err);
+                this.#logger?.(DEBUG_PREFIXES.error)?.(err);
                 return;
               }
               throw err;
@@ -9959,7 +10236,9 @@ var init_EmulationManager = __esm(() => {
         active: false
       }, this, this.#emulateFocus);
       #secondaryClients = new Set;
-      constructor(client) {
+      #logger;
+      constructor(client, logger) {
+        this.#logger = logger;
         this.#client = client;
       }
       updateClient(client) {
@@ -9978,7 +10257,9 @@ var init_EmulationManager = __esm(() => {
           this.#secondaryClients.delete(client);
         });
         Promise.all(this.#states.map((s) => {
-          return s.sync().catch(debugCatchError);
+          return s.sync().catch((err) => {
+            return this.#logger?.(DEBUG_PREFIXES.error)?.(err);
+          });
         }));
       }
       get javascriptEnabled() {
@@ -10243,23 +10524,23 @@ class CdpDeviceRequestPromptManager {
 }
 var CdpDeviceRequestPrompt;
 var init_DeviceRequestPrompt = __esm(() => {
+  init_EventEmitter();
   init_Deferred();
+  init_disposable();
   CdpDeviceRequestPrompt = class CdpDeviceRequestPrompt extends DeviceRequestPrompt {
     #client;
     #timeoutSettings;
     #id;
     #handled = false;
-    #updateDevicesHandle = this.#updateDevices.bind(this);
     #waitForDevicePromises = new Set;
+    #subscriptions = new DisposableStack;
     constructor(client, timeoutSettings, firstEvent) {
       super();
       this.#client = client;
       this.#timeoutSettings = timeoutSettings;
       this.#id = firstEvent.id;
-      this.#client.on("DeviceAccess.deviceRequestPrompted", this.#updateDevicesHandle);
-      this.#client.on("Target.detachedFromTarget", () => {
-        this.#client = null;
-      });
+      const clientEmitter = this.#subscriptions.use(new EventEmitter(this.#client));
+      clientEmitter.on("DeviceAccess.deviceRequestPrompted", this.#updateDevices.bind(this));
       this.#updateDevices(firstEvent);
     }
     #updateDevices(event) {
@@ -10306,22 +10587,20 @@ var init_DeviceRequestPrompt = __esm(() => {
       }
     }
     async select(device) {
-      assert(this.#client !== null, "Cannot select device through detached session!");
       assert(this.devices.includes(device), "Cannot select unknown device!");
       assert(!this.#handled, "Cannot select DeviceRequestPrompt which is already handled!");
-      this.#client.off("DeviceAccess.deviceRequestPrompted", this.#updateDevicesHandle);
+      this.#subscriptions.dispose();
       this.#handled = true;
-      return await this.#client.send("DeviceAccess.selectPrompt", {
+      await this.#client.send("DeviceAccess.selectPrompt", {
         id: this.#id,
         deviceId: device.id
       });
     }
     async cancel() {
-      assert(this.#client !== null, "Cannot cancel prompt through detached session!");
       assert(!this.#handled, "Cannot cancel DeviceRequestPrompt which is already handled!");
-      this.#client.off("DeviceAccess.deviceRequestPrompted", this.#updateDevicesHandle);
+      this.#subscriptions.dispose();
       this.#handled = true;
-      return await this.#client.send("DeviceAccess.cancelPrompt", { id: this.#id });
+      await this.#client.send("DeviceAccess.cancelPrompt", { id: this.#id });
     }
   };
 });
@@ -10526,27 +10805,29 @@ var init_utils = __esm(() => {
 });
 
 // node_modules/puppeteer-core/lib/puppeteer/cdp/JSHandle.js
-async function releaseObject(client, remoteObject) {
+async function releaseObject(client, remoteObject, logger) {
   if (!remoteObject.objectId) {
     return;
   }
   await client.send("Runtime.releaseObject", { objectId: remoteObject.objectId }).catch((error) => {
-    debugError?.(error);
+    logger?.(DEBUG_PREFIXES.error)?.(error);
   });
 }
 var CdpJSHandle;
 var init_JSHandle2 = __esm(() => {
   init_JSHandle();
-  init_util();
+  init_Debug();
   init_utils();
   CdpJSHandle = class CdpJSHandle extends JSHandle {
     #disposed = false;
     #remoteObject;
     #world;
-    constructor(world, remoteObject) {
-      super();
+    #logger;
+    constructor(world, remoteObject, logger) {
+      super(logger);
       this.#world = world;
       this.#remoteObject = remoteObject;
+      this.#logger = logger;
     }
     get disposed() {
       return this.#disposed;
@@ -10577,7 +10858,7 @@ var init_JSHandle2 = __esm(() => {
         return;
       }
       this.#disposed = true;
-      await releaseObject(this.client, this.#remoteObject);
+      await releaseObject(this.client, this.#remoteObject, this.#logger);
     }
     toString() {
       if (!this.#remoteObject.objectId) {
@@ -10662,7 +10943,7 @@ var __runInitializers6 = function(thisArg, initializers, value) {
 }, NON_ELEMENT_NODE_ROLES, CdpElementHandle;
 var init_ElementHandle2 = __esm(() => {
   init_ElementHandle();
-  init_util();
+  init_Debug();
   init_environment();
   init_decorators();
   init_JSHandle2();
@@ -10689,8 +10970,10 @@ var init_ElementHandle2 = __esm(() => {
           Object.defineProperty(this, Symbol.metadata, { enumerable: true, configurable: true, writable: true, value: _metadata });
       }
       #backendNodeId = __runInitializers6(this, _instanceExtraInitializers);
-      constructor(world, remoteObject) {
-        super(new CdpJSHandle(world, remoteObject));
+      #logger;
+      constructor(world, remoteObject, logger) {
+        super(new CdpJSHandle(world, remoteObject, logger), logger);
+        this.#logger = logger;
       }
       get realm() {
         return this.handle.realm;
@@ -10723,7 +11006,7 @@ var init_ElementHandle2 = __esm(() => {
             objectId: this.id
           });
         } catch (error) {
-          debugError?.(error);
+          this.#logger?.(DEBUG_PREFIXES.error)?.(error);
           await super.scrollIntoView();
         }
       }
@@ -10841,7 +11124,7 @@ var __addDisposableResource11 = function(env, value, async) {
     env.stack.push({ async: true });
   }
   return value;
-}, __disposeResources11, ariaQuerySelectorBinding, ariaQuerySelectorAllBinding, ExecutionContext, rewriteError2 = (error) => {
+}, __disposeResources11, ExecutionContext, rewriteError2 = (error) => {
   if (error.message.includes("Object reference chain is too long")) {
     return { result: { type: "undefined" } };
   }
@@ -10856,6 +11139,7 @@ var __addDisposableResource11 = function(env, value, async) {
 var init_ExecutionContext = __esm(() => {
   init_CDPSession();
   init_AriaQueryHandler();
+  init_Debug();
   init_EventEmitter();
   init_ScriptInjector();
   init_util();
@@ -10902,23 +11186,31 @@ var init_ExecutionContext = __esm(() => {
     var e = new Error(message);
     return e.name = "SuppressedError", e.error = error, e.suppressed = suppressed, e;
   });
-  ariaQuerySelectorBinding = new Binding("__ariaQuerySelector", ARIAQueryHandler.queryOne, "");
-  ariaQuerySelectorAllBinding = new Binding("__ariaQuerySelectorAll", async (element, selector) => {
-    const results = ARIAQueryHandler.queryAll(element, selector);
-    return await element.realm.evaluateHandle((...elements) => {
-      return elements;
-    }, ...await AsyncIterableUtil.collect(results));
-  }, "");
   ExecutionContext = class ExecutionContext extends EventEmitter {
+    static #ariaQuerySelectorBinding;
+    static getOrCreateAriaQuerySelectorBinding(logger) {
+      return this.#ariaQuerySelectorBinding ??= new Binding("__ariaQuerySelector", ARIAQueryHandler.queryOne, "", logger);
+    }
+    static #ariaQuerySelectorAllBinding;
+    static getOrCreateAriaQuerySelectorAllBinding(logger) {
+      return this.#ariaQuerySelectorAllBinding ??= new Binding("__ariaQuerySelectorAll", async (element, selector) => {
+        const results = ARIAQueryHandler.queryAll(element, selector);
+        return await element.realm.evaluateHandle((...elements) => {
+          return elements;
+        }, ...await AsyncIterableUtil.collect(results));
+      }, "", logger);
+    }
     #client;
     #world;
     #id;
     #name;
     #disposables = new DisposableStack;
-    constructor(client, contextPayload, world) {
-      super();
+    #logger;
+    constructor(client, contextPayload, world, logger) {
+      super(undefined, logger);
       this.#client = client;
       this.#world = world;
+      this.#logger = logger;
       this.#id = contextPayload.id;
       if (contextPayload.name) {
         this.#name = contextPayload.name;
@@ -10966,7 +11258,7 @@ var init_ExecutionContext = __esm(() => {
               return;
             }
           }
-          debugError?.(error);
+          this.#logger?.(DEBUG_PREFIXES.error)?.(error);
         }
       } catch (e_1) {
         env_1.error = e_1;
@@ -10998,7 +11290,7 @@ var init_ExecutionContext = __esm(() => {
         const binding = this.#bindings.get(name);
         await binding?.run(this, seq, args, isTrivial);
       } catch (err) {
-        debugError?.(err);
+        this.#logger?.(DEBUG_PREFIXES.error)?.(err);
       }
     }
     get id() {
@@ -11016,8 +11308,8 @@ var init_ExecutionContext = __esm(() => {
       let promise = Promise.resolve();
       if (!this.#bindingsInstalled) {
         promise = Promise.all([
-          this.#addBindingWithoutThrowing(ariaQuerySelectorBinding),
-          this.#addBindingWithoutThrowing(ariaQuerySelectorAllBinding)
+          this.#addBindingWithoutThrowing(ExecutionContext.getOrCreateAriaQuerySelectorBinding(this.#logger)),
+          this.#addBindingWithoutThrowing(ExecutionContext.getOrCreateAriaQuerySelectorAllBinding(this.#logger))
         ]);
         this.#bindingsInstalled = true;
       }
@@ -11037,7 +11329,7 @@ var init_ExecutionContext = __esm(() => {
       try {
         await this.#addBinding(binding);
       } catch (err) {
-        debugError?.(err);
+        this.#logger?.(DEBUG_PREFIXES.error)?.(err);
       }
     }
     async evaluate(pageFunction, ...args) {
@@ -11182,8 +11474,8 @@ var init_WebWorker2 = __esm(() => {
   init_CDPSession();
   init_Target();
   init_WebWorker();
+  init_Debug();
   init_EventEmitter();
-  init_util();
   init_Deferred();
   init_ExecutionContext();
   init_IsolatedWorld();
@@ -11194,20 +11486,22 @@ var init_WebWorker2 = __esm(() => {
     #client;
     #id;
     #targetType;
+    #logger;
     #emitter;
     #workerLoaded = new Deferred;
     get internalEmitter() {
       return this.#emitter;
     }
-    constructor(client, url, targetId, targetType, exceptionThrown, networkManager) {
+    constructor(client, url, targetId, targetType, exceptionThrown, networkManager, logger) {
       super(url);
       this.#id = targetId;
       this.#client = client;
+      this.#logger = logger;
       this.#targetType = targetType;
-      this.#world = new IsolatedWorld(this, new TimeoutSettings, MAIN_WORLD);
-      this.#emitter = new EventEmitter;
+      this.#world = new IsolatedWorld(this, new TimeoutSettings, MAIN_WORLD, logger);
+      this.#emitter = new EventEmitter(undefined, logger);
       this.#client.once("Runtime.executionContextCreated", async (event) => {
-        this.#world.setContext(new ExecutionContext(client, event.context, this.#world));
+        this.#world.setContext(new ExecutionContext(client, event.context, this.#world, logger));
       });
       this.#client.once("Inspector.workerScriptLoaded", () => {
         this.#workerLoaded.resolve();
@@ -11221,7 +11515,9 @@ var init_WebWorker2 = __esm(() => {
           const noWorkerListeners = this.listenerCount(WebWorkerEvent.Console) === 0;
           if (noInternalListeners && noWorkerListeners) {
             for (const value of values) {
-              value.dispose().catch(debugCatchError);
+              value.dispose().catch((err) => {
+                return this.#logger?.(DEBUG_PREFIXES.error)?.(err);
+              });
             }
             return;
           }
@@ -11231,15 +11527,19 @@ var init_WebWorker2 = __esm(() => {
             this.emit(WebWorkerEvent.Console, consoleMessages);
           }
         } catch (err) {
-          debugError?.(err);
+          this.#logger?.(DEBUG_PREFIXES.error)?.(err);
         }
       });
       this.#client.on("Runtime.exceptionThrown", exceptionThrown);
       this.#client.once(CDPSessionEvent.Disconnected, () => {
         this.#world.dispose();
       });
-      networkManager?.addClient(this.#client).catch(debugCatchError ?? (() => {}));
-      this.#client.send("Runtime.enable").catch(debugCatchError ?? (() => {}));
+      networkManager?.addClient(this.#client).catch((err) => {
+        return this.#logger?.(DEBUG_PREFIXES.error)?.(err);
+      });
+      this.#client.send("Runtime.enable").catch((err) => {
+        return this.#logger?.(DEBUG_PREFIXES.error)?.(err);
+      });
     }
     mainRealm() {
       return this.#world;
@@ -11299,10 +11599,12 @@ var init_IsolatedWorld = __esm(() => {
     #worldId;
     #origin;
     #frameOrWorker;
-    constructor(frameOrWorker, timeoutSettings, worldId) {
+    #logger;
+    constructor(frameOrWorker, timeoutSettings, worldId, logger) {
       super(timeoutSettings);
       this.#frameOrWorker = frameOrWorker;
       this.#worldId = worldId;
+      this.#logger = logger;
     }
     get environment() {
       return this.#frameOrWorker;
@@ -11407,9 +11709,9 @@ var init_IsolatedWorld = __esm(() => {
     }
     createCdpHandle(remoteObject) {
       if (remoteObject.subtype === "node") {
-        return new CdpElementHandle(this, remoteObject);
+        return new CdpElementHandle(this, remoteObject, this.#logger);
       }
-      return new CdpJSHandle(this, remoteObject);
+      return new CdpJSHandle(this, remoteObject, this.#logger);
     }
     [disposeSymbol]() {
       this.#context?.[disposeSymbol]();
@@ -11662,8 +11964,8 @@ var __runInitializers7 = function(thisArg, initializers, value) {
 }, CdpFrame;
 var init_Frame2 = __esm(() => {
   init_Frame();
+  init_Debug();
   init_Errors();
-  init_util();
   init_Deferred();
   init_disposable();
   init_Accessibility();
@@ -11706,20 +12008,22 @@ var init_Frame2 = __esm(() => {
       accessibility;
       worlds;
       extensionWorlds = {};
-      constructor(frameManager, frameId, parentFrameId, client) {
-        super();
+      #logger;
+      constructor(frameManager, frameId, parentFrameId, client, logger) {
+        super(logger);
         this._frameManager = frameManager;
         this.#url = "";
         this._id = frameId;
         this._parentId = parentFrameId;
         this.#detached = false;
         this.#client = client;
+        this.#logger = logger;
         this._loaderId = "";
         this.worlds = {
-          [MAIN_WORLD]: new IsolatedWorld(this, this._frameManager.timeoutSettings, MAIN_WORLD),
-          [PUPPETEER_WORLD]: new IsolatedWorld(this, this._frameManager.timeoutSettings, PUPPETEER_WORLD)
+          [MAIN_WORLD]: new IsolatedWorld(this, this._frameManager.timeoutSettings, MAIN_WORLD, logger),
+          [PUPPETEER_WORLD]: new IsolatedWorld(this, this._frameManager.timeoutSettings, PUPPETEER_WORLD, logger)
         };
-        this.accessibility = new Accessibility(this.worlds[MAIN_WORLD], frameId);
+        this.accessibility = new Accessibility(this.worlds[MAIN_WORLD], frameId, logger);
         this.on(FrameEvent.FrameSwappedByActivation, () => {
           this._onLoadingStarted();
           this._onLoadingStopped();
@@ -11838,6 +12142,12 @@ var init_Frame2 = __esm(() => {
           throw error;
         }
       }
+      async setFrameContent(content) {
+        await this.#client.send("Page.setDocumentContent", {
+          frameId: this._id,
+          html: content
+        });
+      }
       url() {
         return this.#url;
       }
@@ -11871,7 +12181,9 @@ var init_Frame2 = __esm(() => {
           this.#client.send("Runtime.addBinding", {
             name: CDP_BINDING_PREFIX + binding.name
           }),
-          this.evaluate(binding.initSource).catch(debugCatchError)
+          this.evaluate(binding.initSource).catch((error) => {
+            this.#logger?.(DEBUG_PREFIXES.error)?.(error);
+          })
         ]);
       }
       async removeExposedFunctionBinding(binding) {
@@ -11884,7 +12196,9 @@ var init_Frame2 = __esm(() => {
           }),
           this.evaluate((name) => {
             globalThis[name] = undefined;
-          }, binding.name).catch(debugCatchError)
+          }, binding.name).catch((error) => {
+            this.#logger?.(DEBUG_PREFIXES.error)?.(error);
+          })
         ]);
       }
       async waitForDevicePrompt(options = {}) {
@@ -12022,7 +12336,7 @@ var init_FrameTree = __esm(() => {
 var CdpHTTPRequest;
 var init_HTTPRequest2 = __esm(() => {
   init_HTTPRequest();
-  init_util();
+  init_Debug();
   CdpHTTPRequest = class CdpHTTPRequest extends HTTPRequest {
     id;
     #client;
@@ -12035,14 +12349,16 @@ var init_HTTPRequest2 = __esm(() => {
     #headers = {};
     #frame;
     #initiator;
+    #logger;
     get client() {
       return this.#client;
     }
     set client(newClient) {
       this.#client = newClient;
     }
-    constructor(client, frame, interceptionId, allowInterception, data, redirectChain) {
+    constructor(client, frame, interceptionId, allowInterception, data, redirectChain, logger) {
       super();
+      this.#logger = logger;
       this.#client = client;
       this.id = data.requestId;
       this.#isNavigationRequest = data.requestId === data.loaderId && data.type === "Document";
@@ -12093,7 +12409,7 @@ var init_HTTPRequest2 = __esm(() => {
         });
         return result.postData;
       } catch (err) {
-        debugError?.(err);
+        this.#logger?.(DEBUG_PREFIXES.error)?.(err);
         return;
       }
     }
@@ -12141,7 +12457,7 @@ var init_HTTPRequest2 = __esm(() => {
         headers: headers ? headersArray(headers) : undefined
       }).catch((error) => {
         this.interception.handled = false;
-        return handleError(error);
+        return handleError(error, this.#logger);
       });
     }
     async _respond(response) {
@@ -12177,7 +12493,7 @@ var init_HTTPRequest2 = __esm(() => {
         body: parsedBody?.base64
       }).catch((error) => {
         this.interception.handled = false;
-        return handleError(error);
+        return handleError(error, this.#logger);
       });
     }
     async _abort(errorReason) {
@@ -12188,7 +12504,9 @@ var init_HTTPRequest2 = __esm(() => {
       await this.#client.send("Fetch.failRequest", {
         requestId: this._interceptionId,
         errorReason: errorReason || "Failed"
-      }).catch(handleError);
+      }).catch((error) => {
+        return handleError(error, this.#logger);
+      });
     }
   };
 });
@@ -12473,6 +12791,7 @@ var init_NetworkEventManager = __esm(() => {
 var NetworkManager;
 var init_NetworkManager = __esm(() => {
   init_CDPSession();
+  init_Debug();
   init_EventEmitter();
   init_NetworkManagerEvents();
   init_util();
@@ -12495,6 +12814,7 @@ var init_NetworkManager = __esm(() => {
     #userAgentMetadata;
     #platform;
     #acceptLanguage;
+    #userAgentOverrideApplied = false;
     #handlers = [
       ["Fetch.requestPaused", this.#onRequestPaused],
       ["Fetch.authRequired", this.#onAuthRequired],
@@ -12509,10 +12829,12 @@ var init_NetworkManager = __esm(() => {
     ];
     #clients = new Map;
     #networkEnabled;
-    constructor(frameManager, networkEnabled) {
-      super();
+    #logger;
+    constructor(frameManager, networkEnabled = true, logger) {
+      super(undefined, logger);
       this.#frameManager = frameManager;
       this.#networkEnabled = networkEnabled ?? true;
+      this.#logger = logger;
     }
     #canIgnoreError(error) {
       return isErrorLike(error) && (isTargetClosedError(error) || error.message.includes("Not supported") || error.message.includes("wasn't found"));
@@ -12649,6 +12971,10 @@ var init_NetworkManager = __esm(() => {
       await this.#applyToAllClients(this.#applyUserAgent.bind(this));
     }
     async#applyUserAgent(client) {
+      const nothingToEmulate = this.#userAgent === undefined && this.#userAgentMetadata === undefined && this.#acceptLanguage === undefined && this.#platform === undefined;
+      if (nothingToEmulate && !this.#userAgentOverrideApplied) {
+        return;
+      }
       const userAgent = this.#userAgent ?? await this.#frameManager.page().browser().userAgent();
       if (userAgent === undefined) {
         return;
@@ -12660,6 +12986,7 @@ var init_NetworkManager = __esm(() => {
           userAgentMetadata: this.#userAgentMetadata,
           platform: this.#platform
         });
+        this.#userAgentOverrideApplied = !nothingToEmulate;
       } catch (error) {
         if (this.#canIgnoreError(error)) {
           return;
@@ -12754,13 +13081,17 @@ var init_NetworkManager = __esm(() => {
       client.send("Fetch.continueWithAuth", {
         requestId: event.requestId,
         authChallengeResponse: { response, username, password }
-      }).catch(debugCatchError);
+      }).catch((err) => {
+        this.#logger?.(DEBUG_PREFIXES.error)?.(err);
+      });
     }
     #onRequestPaused(client, event) {
       if (!this.#userRequestInterceptionEnabled && this.#protocolRequestInterceptionEnabled) {
         client.send("Fetch.continueRequest", {
           requestId: event.requestId
-        }).catch(debugCatchError);
+        }).catch((err) => {
+          this.#logger?.(DEBUG_PREFIXES.error)?.(err);
+        });
       }
       const { networkId: networkRequestId, requestId: fetchRequestId } = event;
       if (!networkRequestId) {
@@ -12790,7 +13121,7 @@ var init_NetworkManager = __esm(() => {
     }
     #onRequestWithoutNetworkInstrumentation(client, event) {
       const frame = event.frameId ? this.#frameManager.frame(event.frameId) : null;
-      const request = new CdpHTTPRequest(client, frame, event.requestId, this.#userRequestInterceptionEnabled, event, []);
+      const request = new CdpHTTPRequest(client, frame, event.requestId, this.#userRequestInterceptionEnabled, event, [], this.#logger);
       this.emit(NetworkManagerEvent.Request, request);
       request.finalizeInterceptions();
     }
@@ -12819,7 +13150,7 @@ var init_NetworkManager = __esm(() => {
         }
       }
       const frame = event.frameId ? this.#frameManager.frame(event.frameId) : null;
-      const request = new CdpHTTPRequest(client, frame, fetchRequestId, this.#userRequestInterceptionEnabled, event, redirectChain);
+      const request = new CdpHTTPRequest(client, frame, fetchRequestId, this.#userRequestInterceptionEnabled, event, redirectChain, this.#logger);
       const extraInfo = this.#networkEventManager.requestExtraInfo(event.requestId).shift();
       if (extraInfo) {
         request.updateHeaders(extraInfo.headers);
@@ -12848,7 +13179,7 @@ var init_NetworkManager = __esm(() => {
         request = this.#networkEventManager.getRequest(event.requestId);
       }
       if (!request) {
-        debugError?.(new Error(`Request ${event.requestId} was served from cache but we could not find the corresponding request object`));
+        this.#logger?.(DEBUG_PREFIXES.error)?.(new Error(`Request ${event.requestId} was served from cache but we could not find the corresponding request object`));
         return;
       }
       this.emit(NetworkManagerEvent.RequestServedFromCache, request);
@@ -12869,7 +13200,7 @@ var init_NetworkManager = __esm(() => {
       }
       const extraInfos = this.#networkEventManager.responseExtraInfo(responseReceived.requestId);
       if (extraInfos.length) {
-        debugError?.(new Error("Unexpected extraInfo events for request " + responseReceived.requestId));
+        this.#logger?.(DEBUG_PREFIXES.error)?.(new Error("Unexpected extraInfo events for request " + responseReceived.requestId));
       }
       if (responseReceived.response.fromDiskCache) {
         extraInfo = null;
@@ -12975,10 +13306,43 @@ var init_NetworkManager = __esm(() => {
 });
 
 // node_modules/puppeteer-core/lib/puppeteer/cdp/FrameManager.js
-var CHROME_EXTENSION_PREFIX = "chrome-extension://", FrameManager;
+var __addDisposableResource12 = function(env, value, async) {
+  if (value !== null && value !== undefined) {
+    if (typeof value !== "object" && typeof value !== "function")
+      throw new TypeError("Object expected.");
+    var dispose, inner;
+    if (async) {
+      if (!Symbol.asyncDispose)
+        throw new TypeError("Symbol.asyncDispose is not defined.");
+      dispose = value[Symbol.asyncDispose];
+    }
+    if (dispose === undefined) {
+      if (!Symbol.dispose)
+        throw new TypeError("Symbol.dispose is not defined.");
+      dispose = value[Symbol.dispose];
+      if (async)
+        inner = dispose;
+    }
+    if (typeof dispose !== "function")
+      throw new TypeError("Object not disposable.");
+    if (inner)
+      dispose = function() {
+        try {
+          inner.call(this);
+        } catch (e) {
+          return Promise.reject(e);
+        }
+      };
+    env.stack.push({ value, dispose, async });
+  } else if (async) {
+    env.stack.push({ async: true });
+  }
+  return value;
+}, __disposeResources12, CHROME_EXTENSION_PREFIX = "chrome-extension://", FrameManager;
 var init_FrameManager = __esm(() => {
   init_CDPSession();
   init_Frame();
+  init_Debug();
   init_EventEmitter();
   init_util();
   init_Deferred();
@@ -12992,6 +13356,42 @@ var init_FrameManager = __esm(() => {
   init_IsolatedWorld();
   init_IsolatedWorlds();
   init_NetworkManager();
+  __disposeResources12 = function(SuppressedError2) {
+    return function(env) {
+      function fail(e) {
+        env.error = env.hasError ? new SuppressedError2(e, env.error, "An error was suppressed during disposal.") : e;
+        env.hasError = true;
+      }
+      var r, s = 0;
+      function next() {
+        while (r = env.stack.pop()) {
+          try {
+            if (!r.async && s === 1)
+              return s = 0, env.stack.push(r), Promise.resolve().then(next);
+            if (r.dispose) {
+              var result = r.dispose.call(r.value);
+              if (r.async)
+                return s |= 2, Promise.resolve(result).then(next, function(e) {
+                  fail(e);
+                  return next();
+                });
+            } else
+              s |= 1;
+          } catch (e) {
+            fail(e);
+          }
+        }
+        if (s === 1)
+          return env.hasError ? Promise.reject(env.error) : Promise.resolve();
+        if (env.hasError)
+          throw env.error;
+      }
+      return next();
+    };
+  }(typeof SuppressedError === "function" ? SuppressedError : function(error, suppressed, message) {
+    var e = new Error(message);
+    return e.name = "SuppressedError", e.error = error, e.suppressed = suppressed, e;
+  });
   FrameManager = class FrameManager extends EventEmitter {
     #page;
     #networkManager;
@@ -13004,6 +13404,7 @@ var init_FrameManager = __esm(() => {
     #frameNavigatedReceived = new Set;
     #deviceRequestPromptManagerMap = new WeakMap;
     #frameTreeHandled;
+    #logger;
     get timeoutSettings() {
       return this.#timeoutSettings;
     }
@@ -13013,48 +13414,57 @@ var init_FrameManager = __esm(() => {
     get client() {
       return this.#client;
     }
-    constructor(client, page, timeoutSettings) {
-      super();
+    constructor(client, page, timeoutSettings, logger) {
+      super(undefined, logger);
       this.#client = client;
       this.#page = page;
-      this.#networkManager = new NetworkManager(this, page.browser().isNetworkEnabled());
+      this.#networkManager = new NetworkManager(this, page.browser().isNetworkEnabled(), logger);
       this.#timeoutSettings = timeoutSettings;
+      this.#logger = logger;
       this.setupEventListeners(this.#client);
       client.once(CDPSessionEvent.Disconnected, () => {
-        this.#onClientDisconnect(client).catch(debugCatchError);
+        this.#onClientDisconnect(client).catch((error) => {
+          this.#logger?.(DEBUG_PREFIXES.error)?.(error);
+        });
       });
     }
     async#onClientDisconnect(client) {
-      const mainFrame = this._frameTree.getMainFrame();
-      if (!mainFrame) {
-        return;
-      }
-      if (this.#client !== client) {
-        return;
-      }
-      if (!this.#page.browser().connected || this.#page.isClosed()) {
-        this.#removeFramesRecursively(mainFrame);
-        return;
-      }
-      for (const child of mainFrame.childFrames()) {
-        this.#removeFramesRecursively(child);
-      }
-      const swapped = Deferred.create();
-      const onFrameSwapped = () => {
-        swapped.resolve();
-      };
-      const onPageClosed = () => {
-        swapped.reject(new Error("Page closed"));
-      };
-      mainFrame.once(FrameEvent.FrameSwappedByActivation, onFrameSwapped);
-      this.#page.once("close", onPageClosed);
+      const env_1 = { stack: [], error: undefined, hasError: false };
       try {
-        await swapped.valueOrThrow();
-      } catch {
-        this.#removeFramesRecursively(mainFrame);
+        const mainFrame = this._frameTree.getMainFrame();
+        if (!mainFrame) {
+          return;
+        }
+        if (this.#client !== client) {
+          return;
+        }
+        if (!this.#page.browser().connected || this.#page.isClosed()) {
+          this.#removeFramesRecursively(mainFrame);
+          return;
+        }
+        for (const child of mainFrame.childFrames()) {
+          this.#removeFramesRecursively(child);
+        }
+        const swapped = Deferred.create();
+        const subscriptions = __addDisposableResource12(env_1, new DisposableStack, false);
+        const frameEmitter = subscriptions.use(new EventEmitter(mainFrame));
+        const pageEmitter = subscriptions.use(new EventEmitter(this.#page));
+        frameEmitter.once(FrameEvent.FrameSwappedByActivation, () => {
+          swapped.resolve();
+        });
+        pageEmitter.once("close", () => {
+          swapped.reject(new Error("Page closed"));
+        });
+        try {
+          await swapped.valueOrThrow();
+        } catch {
+          this.#removeFramesRecursively(mainFrame);
+        }
+      } catch (e_1) {
+        env_1.error = e_1;
+        env_1.hasError = true;
       } finally {
-        mainFrame.off(FrameEvent.FrameSwappedByActivation, onFrameSwapped);
-        this.#page.off("close", onPageClosed);
+        __disposeResources12(env_1);
       }
     }
     async swapFrameTree(client) {
@@ -13069,7 +13479,9 @@ var init_FrameManager = __esm(() => {
       }
       this.setupEventListeners(client);
       client.once(CDPSessionEvent.Disconnected, () => {
-        this.#onClientDisconnect(client).catch(debugCatchError);
+        this.#onClientDisconnect(client).catch((error) => {
+          this.#logger?.(DEBUG_PREFIXES.error)?.(error);
+        });
       });
       await this.initialize(client, frame);
       await this.#networkManager.addClient(client);
@@ -13163,17 +13575,28 @@ var init_FrameManager = __esm(() => {
     frame(frameId) {
       return this._frameTree.getById(frameId) || null;
     }
+    async#forEachFrame(action) {
+      await Promise.all(this.frames().map(async (frame) => {
+        try {
+          await action(frame);
+        } catch (error) {
+          if (frame._client() === this.#client || !isErrorLike(error) || !isTargetClosedError(error)) {
+            throw error;
+          }
+        }
+      }));
+    }
     async addExposedFunctionBinding(binding) {
       this.#bindings.add(binding);
-      await Promise.all(this.frames().map(async (frame) => {
-        return await frame.addExposedFunctionBinding(binding);
-      }));
+      await this.#forEachFrame((frame) => {
+        return frame.addExposedFunctionBinding(binding);
+      });
     }
     async removeExposedFunctionBinding(binding) {
       this.#bindings.delete(binding);
-      await Promise.all(this.frames().map(async (frame) => {
-        return await frame.removeExposedFunctionBinding(binding);
-      }));
+      await this.#forEachFrame((frame) => {
+        return frame.removeExposedFunctionBinding(binding);
+      });
     }
     async evaluateOnNewDocument(source) {
       const { identifier } = await this.mainFrame()._client().send("Page.addScriptToEvaluateOnNewDocument", {
@@ -13181,9 +13604,9 @@ var init_FrameManager = __esm(() => {
       });
       const preloadScript = new CdpPreloadScript(this.mainFrame(), identifier, source);
       this.#scriptsToEvaluateOnNewDocument.set(identifier, preloadScript);
-      await Promise.all(this.frames().map(async (frame) => {
-        return await frame.addPreloadScript(preloadScript);
-      }));
+      await this.#forEachFrame((frame) => {
+        return frame.addPreloadScript(preloadScript);
+      });
       return { identifier };
     }
     async removeScriptToEvaluateOnNewDocument(identifier) {
@@ -13199,7 +13622,9 @@ var init_FrameManager = __esm(() => {
         }
         return frame._client().send("Page.removeScriptToEvaluateOnNewDocument", {
           identifier
-        }).catch(debugCatchError);
+        }).catch((error) => {
+          this.#logger?.(DEBUG_PREFIXES.error)?.(error);
+        });
       }));
     }
     onAttachedToTarget(target) {
@@ -13211,7 +13636,9 @@ var init_FrameManager = __esm(() => {
         frame.updateClient(target._session());
       }
       this.setupEventListeners(target._session());
-      this.initialize(target._session(), frame).catch(debugCatchError);
+      this.initialize(target._session(), frame).catch((error) => {
+        this.#logger?.(DEBUG_PREFIXES.error)?.(error);
+      });
     }
     _deviceRequestPromptManager(client) {
       let manager = this.#deviceRequestPromptManagerMap.get(client);
@@ -13271,7 +13698,7 @@ var init_FrameManager = __esm(() => {
         }
         return;
       }
-      frame = new CdpFrame(this, frameId, parentFrameId, session);
+      frame = new CdpFrame(this, frameId, parentFrameId, session, this.#logger);
       this._frameTree.addFrame(frame);
       this.emit(FrameManagerEvent.FrameAttached, frame);
     }
@@ -13289,7 +13716,7 @@ var init_FrameManager = __esm(() => {
           this._frameTree.removeFrame(frame);
           frame._id = frameId;
         } else {
-          frame = new CdpFrame(this, frameId, undefined, this.#client);
+          frame = new CdpFrame(this, frameId, undefined, this.#client, this.#logger);
         }
         this._frameTree.addFrame(frame);
       }
@@ -13314,7 +13741,9 @@ var init_FrameManager = __esm(() => {
           frameId: frame._id,
           worldName: name,
           grantUniveralAccess: true
-        }).catch(debugCatchError);
+        }).catch((error) => {
+          this.#logger?.(DEBUG_PREFIXES.error)?.(error);
+        });
       }));
       this.#isolatedWorlds.add(key);
     }
@@ -13372,13 +13801,13 @@ var init_FrameManager = __esm(() => {
         } else if (this.#isExtensionOrigin(origin)) {
           const extId = this.#extractExtensionId(origin);
           if (!extId) {
-            debugError?.("Error while parsing extension id");
+            this.#logger?.(DEBUG_PREFIXES.error)?.("Error while parsing extension id");
             return;
           }
           if (frame.extensionWorlds[extId]) {
             world = frame.extensionWorlds[extId];
           } else {
-            world = new IsolatedWorld(frame, this.timeoutSettings, extId);
+            world = new IsolatedWorld(frame, this.timeoutSettings, extId, this.#logger);
             frame.extensionWorlds[extId] = world;
             frame.registerWorldListeners(world);
             world.origin = origin;
@@ -13389,7 +13818,7 @@ var init_FrameManager = __esm(() => {
       if (!world) {
         return;
       }
-      const context = new ExecutionContext(frame?.client || this.#client, contextPayload, world);
+      const context = new ExecutionContext(frame?.client || this.#client, contextPayload, world, this.#logger);
       world.setContext(context);
     }
     #removeFramesRecursively(frame) {
@@ -14259,13 +14688,140 @@ var init_Input2 = __esm(() => {
   };
 });
 
+// node_modules/puppeteer-core/lib/puppeteer/cdp/ScreenRecording.js
+var __runInitializers8 = function(thisArg, initializers, value) {
+  var useValue = arguments.length > 2;
+  for (var i = 0;i < initializers.length; i++) {
+    value = useValue ? initializers[i].call(thisArg, value) : initializers[i].call(thisArg);
+  }
+  return useValue ? value : undefined;
+}, __esDecorate8 = function(ctor, descriptorIn, decorators, contextIn, initializers, extraInitializers) {
+  function accept(f) {
+    if (f !== undefined && typeof f !== "function")
+      throw new TypeError("Function expected");
+    return f;
+  }
+  var kind = contextIn.kind, key = kind === "getter" ? "get" : kind === "setter" ? "set" : "value";
+  var target = !descriptorIn && ctor ? contextIn["static"] ? ctor : ctor.prototype : null;
+  var descriptor = descriptorIn || (target ? Object.getOwnPropertyDescriptor(target, contextIn.name) : {});
+  var _, done = false;
+  for (var i = decorators.length - 1;i >= 0; i--) {
+    var context = {};
+    for (var p in contextIn)
+      context[p] = p === "access" ? {} : contextIn[p];
+    for (var p in contextIn.access)
+      context.access[p] = contextIn.access[p];
+    context.addInitializer = function(f) {
+      if (done)
+        throw new TypeError("Cannot add initializers after decoration has completed");
+      extraInitializers.push(accept(f || null));
+    };
+    var result = (0, decorators[i])(kind === "accessor" ? { get: descriptor.get, set: descriptor.set } : descriptor[key], context);
+    if (kind === "accessor") {
+      if (result === undefined)
+        continue;
+      if (result === null || typeof result !== "object")
+        throw new TypeError("Object expected");
+      if (_ = accept(result.get))
+        descriptor.get = _;
+      if (_ = accept(result.set))
+        descriptor.set = _;
+      if (_ = accept(result.init))
+        initializers.unshift(_);
+    } else if (_ = accept(result)) {
+      if (kind === "field")
+        initializers.unshift(_);
+      else
+        descriptor[key] = _;
+    }
+  }
+  if (target)
+    Object.defineProperty(target, contextIn.name, descriptor);
+  done = true;
+}, CdpScreenRecording;
+var init_ScreenRecording2 = __esm(() => {
+  init_CDPSession();
+  init_ScreenRecording();
+  init_Debug();
+  init_decorators();
+  CdpScreenRecording = (() => {
+    let _classSuper = ScreenRecording;
+    let _instanceExtraInitializers = [];
+    let _stop_decorators;
+    return class CdpScreenRecording extends _classSuper {
+      static {
+        const _metadata = typeof Symbol === "function" && Symbol.metadata ? Object.create(_classSuper[Symbol.metadata] ?? null) : undefined;
+        _stop_decorators = [guarded()];
+        __esDecorate8(this, null, _stop_decorators, { kind: "method", name: "stop", static: false, private: false, access: { has: (obj) => ("stop" in obj), get: (obj) => obj.stop }, metadata: _metadata }, null, _instanceExtraInitializers);
+        if (_metadata)
+          Object.defineProperty(this, Symbol.metadata, { enumerable: true, configurable: true, writable: true, value: _metadata });
+      }
+      #streamHandle = __runInitializers8(this, _instanceExtraInitializers);
+      constructor(page, options = {}, logger) {
+        super(page, options, logger);
+        const { client } = this.page.mainFrame();
+        client?.once?.(CDPSessionEvent.Disconnected, () => {
+          this.stop().catch((err) => {
+            this.logger(DEBUG_PREFIXES.error)?.(err);
+          });
+        });
+      }
+      async _start() {
+        const { client } = this.page.mainFrame();
+        const frameRate = this.options.frameRate ?? this.options.fps;
+        const result = await client.send("Page.startScreenRecording", {
+          audio: this.options.audio,
+          maxWidth: this.options.maxWidth,
+          maxHeight: this.options.maxHeight,
+          frameRate
+        });
+        this.#streamHandle = result.stream;
+      }
+      async stop() {
+        if (this.stopped) {
+          return;
+        }
+        this.stopped = true;
+        try {
+          const { client } = this.page.mainFrame();
+          await client.send("Page.stopScreenRecording").catch((err) => {
+            this.logger(DEBUG_PREFIXES.error)?.(err);
+          });
+          if (!this.#streamHandle) {
+            throw new Error("Screen recording stream handle is missing.");
+          }
+          let eof = false;
+          while (!eof) {
+            const { data, base64Encoded, eof: isEof } = await client.send("IO.read", { handle: this.#streamHandle });
+            eof = isEof;
+            if (data) {
+              const buffer = stringToTypedArray(data, base64Encoded ?? false);
+              this.controller.enqueue(buffer);
+              for (const dest of this.destinations) {
+                dest.write(buffer);
+              }
+            }
+          }
+          await client.send("IO.close", { handle: this.#streamHandle }).catch((err) => {
+            this.logger(DEBUG_PREFIXES.error)?.(err);
+          });
+        } finally {
+          await this.closeDestinations();
+        }
+      }
+    };
+  })();
+});
+
 // node_modules/puppeteer-core/lib/puppeteer/cdp/Tracing.js
 class Tracing {
   #client;
   #recording = false;
   #path;
-  constructor(client) {
+  #logger;
+  constructor(client, logger) {
     this.#client = client;
+    this.#logger = logger;
   }
   updateClient(client) {
     this.#client = client;
@@ -14285,7 +14841,7 @@ class Tracing {
       "disabled-by-default-devtools.timeline.stack",
       "disabled-by-default-v8.cpu_profiler"
     ];
-    const { path, screenshots = false, categories = defaultCategories } = options;
+    const { path, screenshots = false, categories = defaultCategories, bufferSize } = options;
     if (screenshots) {
       categories.push("disabled-by-default-devtools.screenshot");
     }
@@ -14303,7 +14859,8 @@ class Tracing {
       transferMode: "ReturnAsStream",
       traceConfig: {
         excludedCategories,
-        includedCategories
+        includedCategories,
+        traceBufferSizeInKb: bufferSize
       }
     });
   }
@@ -14313,7 +14870,7 @@ class Tracing {
       try {
         assert(event.stream, 'Missing "stream"');
         const readable = await getReadableFromProtocolStream(this.#client, event.stream);
-        const typedArray = await getReadableAsTypedArray(readable, this.#path);
+        const typedArray = await getReadableAsTypedArray(readable, this.#path, this.#logger);
         contentDeferred.resolve(typedArray ?? undefined);
       } catch (error) {
         if (isErrorLike(error)) {
@@ -14338,21 +14895,24 @@ class WebMCPToolCall {
   id;
   tool;
   input;
-  constructor(invocationId, tool, input) {
+  #logger;
+  constructor(invocationId, tool, input, logger) {
     this.id = invocationId;
     this.tool = tool;
+    this.#logger = logger;
     try {
       this.input = JSON.parse(input);
     } catch (error) {
       this.input = {};
-      debugError?.(error);
+      this.#logger?.(DEBUG_PREFIXES.error)?.(error);
     }
   }
 }
 var WebMCPTool, WebMCP;
 var init_WebMCP = __esm(() => {
+  init_Debug();
   init_EventEmitter();
-  init_util();
+  init_disposable();
   init_IsolatedWorlds();
   WebMCPTool = class WebMCPTool extends EventEmitter {
     #webmcp;
@@ -14395,16 +14955,25 @@ var init_WebMCP = __esm(() => {
         return this.#formElement;
       })();
     }
-    async execute(input = {}) {
+    async execute(input = {}, options = {}) {
       const { invocationId } = await this.#webmcp.invokeTool(this, input);
       return await new Promise((resolve) => {
+        const onAbort = () => {
+          this.#webmcp.cancelInvocation(invocationId);
+        };
         const handler = (event) => {
           if (event.id === invocationId) {
+            options.signal?.removeEventListener("abort", onAbort);
             this.#webmcp.off("toolresponded", handler);
             resolve(event);
           }
         };
         this.#webmcp.on("toolresponded", handler);
+        if (options.signal?.aborted) {
+          onAbort();
+        } else {
+          options.signal?.addEventListener("abort", onAbort, { once: true });
+        }
       });
     }
   };
@@ -14413,6 +14982,8 @@ var init_WebMCP = __esm(() => {
     #frameManager;
     #tools = new Map;
     #pendingCalls = new Map;
+    #logger;
+    #subscriptions = new DisposableStack;
     #onToolsAdded = (event) => {
       const tools = [];
       for (const tool of event.tools) {
@@ -14447,7 +15018,7 @@ var init_WebMCP = __esm(() => {
       if (!tool) {
         return;
       }
-      const call = new WebMCPToolCall(event.invocationId, tool, event.input);
+      const call = new WebMCPToolCall(event.invocationId, tool, event.input, this.#logger);
       this.#pendingCalls.set(call.id, call);
       tool.emit("toolinvoked", call);
       this.emit("toolinvoked", call);
@@ -14484,14 +15055,17 @@ var init_WebMCP = __esm(() => {
         this.#onContextDisposed(frame);
       });
     }
-    constructor(client, frameManager) {
-      super();
+    constructor(client, frameManager, logger) {
+      super(undefined, logger);
       this.#client = client;
       this.#frameManager = frameManager;
+      this.#logger = logger;
       this.#bindListeners();
     }
     async initialize() {
-      return await this.#client.send("WebMCP.enable").catch(debugCatchError);
+      return await this.#client.send("WebMCP.enable").catch((err) => {
+        this.#logger?.(DEBUG_PREFIXES.error)?.(err);
+      });
     }
     async invokeTool(tool, input) {
       return await this.#client.send("WebMCP.invokeTool", {
@@ -14500,22 +15074,28 @@ var init_WebMCP = __esm(() => {
         input
       });
     }
+    async cancelInvocation(invocationId) {
+      return await this.#client.send("WebMCP.cancelInvocation", {
+        invocationId
+      }).catch((err) => {
+        this.#logger?.(DEBUG_PREFIXES.error)?.(err);
+      });
+    }
     tools() {
       return Array.from(this.#tools.values()).flatMap((toolMap) => {
         return Array.from(toolMap.values());
       });
     }
     #bindListeners() {
-      this.#client.on("WebMCP.toolsAdded", this.#onToolsAdded);
-      this.#client.on("WebMCP.toolsRemoved", this.#onToolsRemoved);
-      this.#client.on("WebMCP.toolInvoked", this.#onToolInvoked);
-      this.#client.on("WebMCP.toolResponded", this.#onToolResponded);
+      const clientEmitter = this.#subscriptions.use(new EventEmitter(this.#client));
+      clientEmitter.on("WebMCP.toolsAdded", this.#onToolsAdded);
+      clientEmitter.on("WebMCP.toolsRemoved", this.#onToolsRemoved);
+      clientEmitter.on("WebMCP.toolInvoked", this.#onToolInvoked);
+      clientEmitter.on("WebMCP.toolResponded", this.#onToolResponded);
     }
     updateClient(client) {
-      this.#client.off("WebMCP.toolsAdded", this.#onToolsAdded);
-      this.#client.off("WebMCP.toolsRemoved", this.#onToolsRemoved);
-      this.#client.off("WebMCP.toolInvoked", this.#onToolInvoked);
-      this.#client.off("WebMCP.toolResponded", this.#onToolResponded);
+      this.#subscriptions.dispose();
+      this.#subscriptions = new DisposableStack;
       this.#client = client;
       this.#bindListeners();
     }
@@ -14558,7 +15138,7 @@ function convertCookiesPartitionKeyFromPuppeteerToCdp(partitionKey) {
     hasCrossSiteAncestor: partitionKey.hasCrossSiteAncestor ?? false
   };
 }
-var __addDisposableResource12 = function(env, value, async) {
+var __addDisposableResource13 = function(env, value, async) {
   if (value !== null && value !== undefined) {
     if (typeof value !== "object" && typeof value !== "function")
       throw new TypeError("Object expected.");
@@ -14590,12 +15170,13 @@ var __addDisposableResource12 = function(env, value, async) {
     env.stack.push({ async: true });
   }
   return value;
-}, __disposeResources12, CdpPage, supportedMetrics2;
+}, __disposeResources13, CdpPage, supportedMetrics2;
 var init_Page2 = __esm(() => {
   init_rxjs();
   init_CDPSession();
   init_Page();
   init_WebWorker();
+  init_Debug();
   init_Errors();
   init_EventEmitter();
   init_FileChooser();
@@ -14615,11 +15196,12 @@ var init_Page2 = __esm(() => {
   init_Input2();
   init_IsolatedWorlds();
   init_JSHandle2();
+  init_ScreenRecording2();
   init_Tracing();
   init_utils();
   init_WebMCP();
   init_WebWorker2();
-  __disposeResources12 = function(SuppressedError2) {
+  __disposeResources13 = function(SuppressedError2) {
     return function(env) {
       function fail(e) {
         env.error = env.hasError ? new SuppressedError2(e, env.error, "An error was suppressed during disposal.") : e;
@@ -14656,15 +15238,15 @@ var init_Page2 = __esm(() => {
     return e.name = "SuppressedError", e.error = error, e.suppressed = suppressed, e;
   });
   CdpPage = class CdpPage extends Page {
-    static async _create(client, target, defaultViewport) {
-      const page = new CdpPage(client, target);
+    static async _create(client, target, defaultViewport, logger) {
+      const page = new CdpPage(client, target, logger);
       await page.#initialize();
       if (defaultViewport) {
         try {
           await page.setViewport(defaultViewport);
         } catch (err) {
           if (isErrorLike(err) && isTargetClosedError(err)) {
-            debugError?.(err);
+            page.logger?.(DEBUG_PREFIXES.error)?.(err);
           } else {
             throw err;
           }
@@ -14695,8 +15277,8 @@ var init_Page2 = __esm(() => {
     #sessionCloseDeferred = Deferred.create();
     #serviceWorkerBypassed = false;
     #userDragInterceptionEnabled = false;
-    constructor(client, target) {
-      super();
+    constructor(client, target, logger) {
+      super(logger);
       this.#primaryTargetClient = client;
       this.#tabTargetClient = client.parentSession();
       assert(this.#tabTargetClient, "Tab target session is not defined.");
@@ -14708,10 +15290,10 @@ var init_Page2 = __esm(() => {
       this.#keyboard = new CdpKeyboard(client);
       this.#mouse = new CdpMouse(client, this.#keyboard);
       this.#touchscreen = new CdpTouchscreen(client, this.#keyboard);
-      this.#frameManager = new FrameManager(client, this, this._timeoutSettings);
-      this.#emulationManager = new EmulationManager(client);
-      this.#tracing = new Tracing(client);
-      this.#webmcp = new WebMCP(client, this.#frameManager);
+      this.#frameManager = new FrameManager(client, this, this._timeoutSettings, logger);
+      this.#emulationManager = new EmulationManager(client, this.logger);
+      this.#tracing = new Tracing(client, this.logger);
+      this.#webmcp = new WebMCP(client, this.#frameManager, logger);
       this.#coverage = new Coverage(client);
       this.#viewport = null;
       this.#cdpBluetoothEmulation = new CdpBluetoothEmulation(this.#primaryTargetClient.connection());
@@ -14754,7 +15336,9 @@ var init_Page2 = __esm(() => {
         this.#targetManager.off("targetGone", this.#onDetachedFromTarget);
         this.emit("close", undefined);
         this.#closed = true;
-      }).catch(debugCatchError);
+      }).catch((error) => {
+        this.logger?.(DEBUG_PREFIXES.error)?.(error);
+      });
       this.#setupPrimaryTargetListeners();
       this.#attachExistingTargets();
     }
@@ -14796,8 +15380,12 @@ var init_Page2 = __esm(() => {
       if (session.target()._subtype() !== "prerender") {
         return;
       }
-      this.#frameManager.registerSpeculativeSession(session).catch(debugCatchError);
-      this.#emulationManager.registerSpeculativeSession(session).catch(debugCatchError);
+      this.#frameManager.registerSpeculativeSession(session).catch((error) => {
+        this.logger?.(DEBUG_PREFIXES.error)?.(error);
+      });
+      this.#emulationManager.registerSpeculativeSession(session).catch((error) => {
+        this.logger?.(DEBUG_PREFIXES.error)?.(error);
+      });
     }
     #setupPrimaryTargetListeners() {
       const clientEmitter = new EventEmitter(this.#primaryTargetClient);
@@ -14831,14 +15419,16 @@ var init_Page2 = __esm(() => {
       assert(session instanceof CdpCDPSession);
       this.#frameManager.onAttachedToTarget(session.target());
       if (session.target()._getTargetInfo().type === "worker") {
-        const worker = new CdpWebWorker(session, session.target().url(), session.target()._targetId, session.target().type(), this.#handleException.bind(this), this.#frameManager.networkManager);
+        const worker = new CdpWebWorker(session, session.target().url(), session.target()._targetId, session.target().type(), this.#handleException.bind(this), this.#frameManager.networkManager, this.logger);
         this.#workers.set(session.id(), worker);
         worker.internalEmitter.on(WebWorkerEvent.Console, (message) => {
           const noListenersForConsoleOnPage = this.listenerCount("console") === 0;
           const noListenersForConsoleOnWorker = worker.listenerCount(WebWorkerEvent.Console) === 0;
           if (noListenersForConsoleOnPage && noListenersForConsoleOnWorker) {
             for (const arg of message.args()) {
-              arg.dispose().catch(debugCatchError);
+              arg.dispose().catch((error) => {
+                this.logger?.(DEBUG_PREFIXES.error)?.(error);
+              });
             }
             return;
           }
@@ -14860,7 +15450,7 @@ var init_Page2 = __esm(() => {
         ]);
       } catch (err) {
         if (isErrorLike(err) && isTargetClosedError(err)) {
-          debugError?.(err);
+          this.logger?.(DEBUG_PREFIXES.error)?.(err);
         } else {
           throw err;
         }
@@ -14886,7 +15476,7 @@ var init_Page2 = __esm(() => {
         }
         const frame = this.#frameManager.frame(event.frameId);
         assert(frame, "This should never happen.");
-        const handle = __addDisposableResource12(env_1, await frame.worlds[MAIN_WORLD].adoptBackendNode(event.backendNodeId), false);
+        const handle = __addDisposableResource13(env_1, await frame.worlds[MAIN_WORLD].adoptBackendNode(event.backendNodeId), false);
         const fileChooser = new FileChooser(handle.move(), event.mode !== "selectSingle");
         for (const promise of this.#fileChooserDeferreds) {
           promise.resolve(fileChooser);
@@ -14896,7 +15486,7 @@ var init_Page2 = __esm(() => {
         env_1.error = e_1;
         env_1.hasError = true;
       } finally {
-        __disposeResources12(env_1);
+        __disposeResources13(env_1);
       }
     }
     _client() {
@@ -14978,7 +15568,7 @@ var init_Page2 = __esm(() => {
       const { level, text, args, source, url, lineNumber, stackTrace } = event.entry;
       if (args) {
         args.map((arg) => {
-          releaseObject(this.#primaryTargetClient, arg);
+          releaseObject(this.#primaryTargetClient, arg, this.logger);
         });
       }
       if (source !== "worker") {
@@ -15125,10 +15715,10 @@ var init_Page2 = __esm(() => {
       let binding;
       switch (typeof pptrFunction) {
         case "function":
-          binding = new Binding(name, pptrFunction, source);
+          binding = new Binding(name, pptrFunction, source, this.logger);
           break;
         default:
-          binding = new Binding(name, pptrFunction.default, source);
+          binding = new Binding(name, pptrFunction.default, source, this.logger);
           break;
       }
       this.#bindings.set(name, binding);
@@ -15170,29 +15760,35 @@ var init_Page2 = __esm(() => {
       return this.#buildMetricsObject(response.metrics);
     }
     async captureHeapSnapshot(options) {
-      const { createWriteStream } = environment.value.fs;
-      const stream = createWriteStream(options.path);
-      const streamPromise = new Promise((resolve, reject) => {
-        stream.on("error", reject);
-        stream.on("finish", resolve);
-      });
-      const client = this.#primaryTargetClient;
-      await client.send("HeapProfiler.enable");
-      await client.send("HeapProfiler.collectGarbage");
-      const handler = (event) => {
-        stream.write(event.chunk);
-      };
-      client.on("HeapProfiler.addHeapSnapshotChunk", handler);
+      const env_2 = { stack: [], error: undefined, hasError: false };
       try {
-        await client.send("HeapProfiler.takeHeapSnapshot", {
-          reportProgress: false
+        const stream = environment.value.createWriteStream(options.path);
+        const streamPromise = new Promise((resolve, reject) => {
+          stream.on("error", reject);
+          stream.on("finish", resolve);
         });
+        const client = this.#primaryTargetClient;
+        await client.send("HeapProfiler.enable");
+        await client.send("HeapProfiler.collectGarbage");
+        const clientEmitter = __addDisposableResource13(env_2, new EventEmitter(client), false);
+        clientEmitter.on("HeapProfiler.addHeapSnapshotChunk", (event) => {
+          stream.write(event.chunk);
+        });
+        try {
+          await client.send("HeapProfiler.takeHeapSnapshot", {
+            reportProgress: false
+          });
+        } finally {
+          await client.send("HeapProfiler.disable");
+        }
+        stream.end();
+        await streamPromise;
+      } catch (e_2) {
+        env_2.error = e_2;
+        env_2.hasError = true;
       } finally {
-        client.off("HeapProfiler.addHeapSnapshotChunk", handler);
-        await client.send("HeapProfiler.disable");
+        __disposeResources13(env_2);
       }
-      stream.end();
-      await streamPromise;
     }
     #emitMetrics(event) {
       this.emit("metrics", {
@@ -15223,7 +15819,9 @@ var init_Page2 = __esm(() => {
       if (!hasPageConsoleListeners) {
         if (!hasWorkerConsoleListeners) {
           for (const value of values) {
-            value.dispose().catch(debugCatchError);
+            value.dispose().catch((error) => {
+              this.logger?.(DEBUG_PREFIXES.error)?.(error);
+            });
           }
         }
         return;
@@ -15347,14 +15945,16 @@ var init_Page2 = __esm(() => {
       await this.#frameManager.networkManager.setCacheEnabled(enabled);
     }
     async _screenshot(options) {
-      const env_2 = { stack: [], error: undefined, hasError: false };
+      const env_3 = { stack: [], error: undefined, hasError: false };
       try {
         const { fromSurface, omitBackground, optimizeForSpeed, quality, clip: userClip, type, captureBeyondViewport } = options;
-        const stack = __addDisposableResource12(env_2, new AsyncDisposableStack, true);
+        const stack = __addDisposableResource13(env_3, new AsyncDisposableStack, true);
         if (omitBackground && (type === "png" || type === "webp")) {
           await this.#emulationManager.setTransparentBackgroundColor();
           stack.defer(async () => {
-            await this.#emulationManager.resetDefaultBackgroundColor().catch(debugCatchError);
+            await this.#emulationManager.resetDefaultBackgroundColor().catch((error) => {
+              this.logger?.(DEBUG_PREFIXES.error)?.(error);
+            });
           });
         }
         let clip = userClip;
@@ -15374,11 +15974,11 @@ var init_Page2 = __esm(() => {
           captureBeyondViewport
         });
         return data;
-      } catch (e_2) {
-        env_2.error = e_2;
-        env_2.hasError = true;
+      } catch (e_3) {
+        env_3.error = e_3;
+        env_3.hasError = true;
       } finally {
-        const result_1 = __disposeResources12(env_2);
+        const result_1 = __disposeResources13(env_3);
         if (result_1)
           await result_1;
       }
@@ -15423,14 +16023,14 @@ var init_Page2 = __esm(() => {
     async pdf(options = {}) {
       const { path = undefined } = options;
       const readable = await this.createPDFStream(options);
-      const typedArray = await getReadableAsTypedArray(readable, path);
+      const typedArray = await getReadableAsTypedArray(readable, path, this.logger);
       assert(typedArray, "Could not create typed array");
       return typedArray;
     }
     async close(options = { runBeforeUnload: undefined }) {
-      const env_3 = { stack: [], error: undefined, hasError: false };
+      const env_4 = { stack: [], error: undefined, hasError: false };
       try {
-        const _guard = __addDisposableResource12(env_3, await this.browserContext().waitForScreenshotOperations(), false);
+        const _guard = __addDisposableResource13(env_4, await this.browserContext().waitForScreenshotOperations(), false);
         const connection = this.#primaryTargetClient.connection();
         assert(connection, "Connection closed. Most likely the page has been closed.");
         const runBeforeUnload = !!options.runBeforeUnload;
@@ -15442,11 +16042,11 @@ var init_Page2 = __esm(() => {
           });
           await this.#tabTarget._isClosedDeferred.valueOrThrow();
         }
-      } catch (e_3) {
-        env_3.error = e_3;
-        env_3.hasError = true;
+      } catch (e_4) {
+        env_4.error = e_4;
+        env_4.hasError = true;
       } finally {
-        __disposeResources12(env_3);
+        __disposeResources13(env_4);
       }
     }
     isClosed() {
@@ -15463,6 +16063,9 @@ var init_Page2 = __esm(() => {
     }
     extensionRealms() {
       return this.mainFrame().extensionRealms();
+    }
+    createScreenRecording(options) {
+      return new CdpScreenRecording(this, options, this.logger);
     }
   };
   supportedMetrics2 = new Set([
@@ -15483,7 +16086,7 @@ var init_Page2 = __esm(() => {
 });
 
 // node_modules/puppeteer-core/lib/puppeteer/cdp/BrowserContext.js
-var __addDisposableResource13 = function(env, value, async) {
+var __addDisposableResource14 = function(env, value, async) {
   if (value !== null && value !== undefined) {
     if (typeof value !== "object" && typeof value !== "function")
       throw new TypeError("Object expected.");
@@ -15515,12 +16118,12 @@ var __addDisposableResource13 = function(env, value, async) {
     env.stack.push({ async: true });
   }
   return value;
-}, __disposeResources13, CdpBrowserContext;
+}, __disposeResources14, CdpBrowserContext;
 var init_BrowserContext2 = __esm(() => {
   init_Browser();
   init_BrowserContext();
   init_Page2();
-  __disposeResources13 = function(SuppressedError2) {
+  __disposeResources14 = function(SuppressedError2) {
     return function(env) {
       function fail(e) {
         env.error = env.hasError ? new SuppressedError2(e, env.error, "An error was suppressed during disposal.") : e;
@@ -15560,8 +16163,8 @@ var init_BrowserContext2 = __esm(() => {
     #connection;
     #browser;
     #id;
-    constructor(connection, browser, contextId) {
-      super();
+    constructor(connection, browser, contextId = undefined, logger) {
+      super(logger);
       this.#connection = connection;
       this.#browser = browser;
       this.#id = contextId;
@@ -15623,13 +16226,13 @@ var init_BrowserContext2 = __esm(() => {
     async newPage(options) {
       const env_1 = { stack: [], error: undefined, hasError: false };
       try {
-        const _guard = __addDisposableResource13(env_1, await this.waitForScreenshotOperations(), false);
+        const _guard = __addDisposableResource14(env_1, await this.waitForScreenshotOperations(), false);
         return await this.#browser._createPageInContext(this.#id, options);
       } catch (e_1) {
         env_1.error = e_1;
         env_1.hasError = true;
       } finally {
-        __disposeResources13(env_1);
+        __disposeResources14(env_1);
       }
     }
     browser() {
@@ -15679,13 +16282,15 @@ var init_BrowserContext2 = __esm(() => {
 var CdpExtension;
 var init_Extension = __esm(() => {
   init_api();
-  init_util();
+  init_Debug();
   init_Connection();
   CdpExtension = class CdpExtension extends Extension {
     #browser;
-    constructor(id, version, name, path, enabled, browser) {
+    #logger;
+    constructor(id, version, name, path, enabled, browser, logger) {
       super(id, version, name, path, enabled);
       this.#browser = browser;
+      this.#logger = logger;
     }
     async workers() {
       const targets = this.#browser.targets();
@@ -15698,7 +16303,7 @@ var init_Extension = __esm(() => {
           return await target.worker();
         } catch (err) {
           if (this.#canIgnoreError(err)) {
-            debugError?.(err);
+            this.#logger?.(DEBUG_PREFIXES.error)?.(err);
             return null;
           }
           throw err;
@@ -15719,7 +16324,7 @@ var init_Extension = __esm(() => {
           return await target.asPage();
         } catch (err) {
           if (this.#canIgnoreError(err)) {
-            debugError?.(err);
+            this.#logger?.(DEBUG_PREFIXES.error)?.(err);
             return null;
           }
           throw err;
@@ -15745,7 +16350,7 @@ var init_Extension = __esm(() => {
 var InitializationStatus, CdpTarget, PageTarget, DevToolsTarget, WorkerTarget, OtherTarget;
 var init_Target2 = __esm(() => {
   init_Target();
-  init_util();
+  init_Debug();
   init_Deferred();
   init_Page2();
   init_WebWorker2();
@@ -15759,20 +16364,22 @@ var init_Target2 = __esm(() => {
     #targetInfo;
     #targetManager;
     #sessionFactory;
+    #logger;
     #childTargets = new Set;
     _initializedDeferred = Deferred.create();
     _isClosedDeferred = Deferred.create();
     _targetId;
     _asPagePromise;
     pagePromise;
-    constructor(targetInfo, session, browserContext, targetManager, sessionFactory) {
-      super();
+    constructor(targetInfo, session, browserContext, targetManager, sessionFactory, logger) {
+      super(logger);
       this.#session = session;
       this.#targetManager = targetManager;
       this.#targetInfo = targetInfo;
       this.#browserContext = browserContext;
       this._targetId = targetInfo.targetId;
       this.#sessionFactory = sessionFactory;
+      this.#logger = logger;
       if (this.#session) {
         this.#session.setTarget(this);
       }
@@ -15787,7 +16394,7 @@ var init_Target2 = __esm(() => {
       if (!this._asPagePromise) {
         const session = this._session();
         this._asPagePromise = (session ? Promise.resolve(session) : this._sessionFactory()(false)).then((client) => {
-          return CdpPage._create(client, this, null);
+          return CdpPage._create(client, this, null, this.#logger);
         });
       }
       return await this._asPagePromise ?? null;
@@ -15894,8 +16501,8 @@ var init_Target2 = __esm(() => {
   };
   PageTarget = class PageTarget extends CdpTarget {
     #defaultViewport;
-    constructor(targetInfo, session, browserContext, targetManager, sessionFactory, defaultViewport) {
-      super(targetInfo, session, browserContext, targetManager, sessionFactory);
+    constructor(targetInfo, session, browserContext, targetManager, sessionFactory, defaultViewport, logger) {
+      super(targetInfo, session, browserContext, targetManager, sessionFactory, logger);
       this.#defaultViewport = defaultViewport ?? undefined;
     }
     _initialize() {
@@ -15917,14 +16524,16 @@ var init_Target2 = __esm(() => {
         const popupPage = await this.page();
         openerPage.emit("popup", popupPage);
         return true;
-      }).catch(debugCatchError);
+      }).catch((error) => {
+        this.logger?.(DEBUG_PREFIXES.error)?.(error);
+      });
       this._checkIfInitialized();
     }
     async page() {
       if (!this.pagePromise) {
         const session = this._session();
         this.pagePromise = (session ? Promise.resolve(session) : this._sessionFactory()(false)).then((client) => {
-          return CdpPage._create(client, this, this.#defaultViewport ?? null);
+          return CdpPage._create(client, this, this.#defaultViewport ?? null, this.logger);
         });
       }
       return await this.pagePromise ?? null;
@@ -15946,7 +16555,7 @@ var init_Target2 = __esm(() => {
       if (!this.#workerPromise) {
         const session = this._session();
         this.#workerPromise = (session ? Promise.resolve(session) : this._sessionFactory()(false)).then((client) => {
-          return new CdpWebWorker(client, this._getTargetInfo().url, this._targetId, this.type(), () => {}, undefined);
+          return new CdpWebWorker(client, this._getTargetInfo().url, this._targetId, this.type(), () => {}, undefined, this.logger);
         });
       }
       return await this.#workerPromise;
@@ -16795,9 +17404,10 @@ var TargetManager;
 var init_TargetManager = __esm(() => {
   init_urlpattern_polyfill();
   init_CDPSession();
+  init_Debug();
   init_EventEmitter();
-  init_util();
   init_Deferred();
+  init_disposable();
   init_CdpSession();
   init_Target2();
   TargetManager = class TargetManager extends EventEmitter {
@@ -16808,8 +17418,8 @@ var init_TargetManager = __esm(() => {
     #ignoredTargets = new Set;
     #targetFilterCallback;
     #targetFactory;
-    #attachedToTargetListenersBySession = new WeakMap;
-    #detachedFromTargetListenersBySession = new WeakMap;
+    #subscriptions = new DisposableStack;
+    #attachmentSubscriptions = new WeakMap;
     #initializeDeferred = Deferred.create();
     #waitForInitiallyDiscoveredTargets = true;
     #discoveryFilter = [{}];
@@ -16817,8 +17427,9 @@ var init_TargetManager = __esm(() => {
     #initialAttachDone = false;
     #blocklist = [];
     #allowlist = [];
-    constructor(connection, targetFactory, targetFilterCallback, waitForInitiallyDiscoveredTargets = true, blocklist, allowlist) {
-      super();
+    #logger;
+    constructor(connection, targetFactory, targetFilterCallback, waitForInitiallyDiscoveredTargets = true, blocklist, allowlist, logger) {
+      super(undefined, logger);
       if (blocklist && allowlist) {
         throw new Error("Cannot specify both blockList and allowList");
       }
@@ -16826,12 +17437,14 @@ var init_TargetManager = __esm(() => {
       this.#targetFilterCallback = targetFilterCallback;
       this.#targetFactory = targetFactory;
       this.#waitForInitiallyDiscoveredTargets = waitForInitiallyDiscoveredTargets;
+      this.#logger = logger;
       this.#blocklist = this.#mapPatterns(blocklist);
       this.#allowlist = this.#mapPatterns(allowlist);
-      this.#connection.on("Target.targetCreated", this.#onTargetCreated);
-      this.#connection.on("Target.targetDestroyed", this.#onTargetDestroyed);
-      this.#connection.on("Target.targetInfoChanged", this.#onTargetInfoChanged);
-      this.#connection.on(CDPSessionEvent.SessionDetached, this.#onSessionDetached);
+      const connectionEmitter = this.#subscriptions.use(new EventEmitter(this.#connection));
+      connectionEmitter.on("Target.targetCreated", this.#onTargetCreated);
+      connectionEmitter.on("Target.targetDestroyed", this.#onTargetDestroyed);
+      connectionEmitter.on("Target.targetInfoChanged", this.#onTargetInfoChanged);
+      connectionEmitter.on(CDPSessionEvent.SessionDetached, this.#onSessionDetached);
       this.#setupAttachmentListeners(this.#connection);
     }
     async initialize() {
@@ -16862,10 +17475,7 @@ var init_TargetManager = __esm(() => {
       return target._childTargets();
     }
     dispose() {
-      this.#connection.off("Target.targetCreated", this.#onTargetCreated);
-      this.#connection.off("Target.targetDestroyed", this.#onTargetDestroyed);
-      this.#connection.off("Target.targetInfoChanged", this.#onTargetInfoChanged);
-      this.#connection.off(CDPSessionEvent.SessionDetached, this.#onSessionDetached);
+      this.#subscriptions.dispose();
       this.#removeAttachmentListeners(this.#connection);
     }
     getAvailableTargets() {
@@ -16875,36 +17485,33 @@ var init_TargetManager = __esm(() => {
       return this.#discoveredTargetsByTargetId;
     }
     #setupAttachmentListeners(session) {
-      const listener = (event) => {
+      assert(!this.#attachmentSubscriptions.has(session));
+      const subscriptions = new DisposableStack;
+      const sessionEmitter = subscriptions.use(new EventEmitter(session));
+      sessionEmitter.on("Target.attachedToTarget", (event) => {
         this.#onAttachedToTarget(session, event);
-      };
-      assert(!this.#attachedToTargetListenersBySession.has(session));
-      this.#attachedToTargetListenersBySession.set(session, listener);
-      session.on("Target.attachedToTarget", listener);
-      const detachedListener = (event) => {
+      });
+      sessionEmitter.on("Target.detachedFromTarget", (event) => {
         return this.#onDetachedFromTarget(session, event);
-      };
-      assert(!this.#detachedFromTargetListenersBySession.has(session));
-      this.#detachedFromTargetListenersBySession.set(session, detachedListener);
-      session.on("Target.detachedFromTarget", detachedListener);
+      });
+      this.#attachmentSubscriptions.set(session, subscriptions);
     }
     #removeAttachmentListeners(session) {
-      const listener = this.#attachedToTargetListenersBySession.get(session);
-      if (listener) {
-        session.off("Target.attachedToTarget", listener);
-        this.#attachedToTargetListenersBySession.delete(session);
-      }
-      const detachedListener = this.#detachedFromTargetListenersBySession.get(session);
-      if (detachedListener) {
-        session.off("Target.detachedFromTarget", detachedListener);
-        this.#detachedFromTargetListenersBySession.delete(session);
+      const subscriptions = this.#attachmentSubscriptions.get(session);
+      if (subscriptions) {
+        subscriptions.dispose();
+        this.#attachmentSubscriptions.delete(session);
       }
     }
     #silentDetach = async (session, parentSession) => {
-      await session.send("Runtime.runIfWaitingForDebugger").catch(debugCatchError);
+      await session.send("Runtime.runIfWaitingForDebugger").catch((error) => {
+        this.#logger?.(DEBUG_PREFIXES.error)?.(error);
+      });
       await parentSession.send("Target.detachFromTarget", {
         sessionId: session.id()
-      }).catch(debugCatchError);
+      }).catch((error) => {
+        this.#logger?.(DEBUG_PREFIXES.error)?.(error);
+      });
     };
     #getParentTarget = (parentSession) => {
       return parentSession instanceof CdpCDPSession ? parentSession.target() : null;
@@ -16980,7 +17587,9 @@ var init_TargetManager = __esm(() => {
           await Promise.all([
             this.#maybeSetupNetworkConditions(session, targetInfo),
             session.send("Runtime.runIfWaitingForDebugger")
-          ]).catch(debugCatchError);
+          ]).catch((error) => {
+            this.#logger?.(DEBUG_PREFIXES.error)?.(error);
+          });
           return;
         }
         await this.#silentDetach(session, parentSession);
@@ -17036,7 +17645,9 @@ var init_TargetManager = __esm(() => {
         }),
         this.#maybeSetupNetworkConditions(session, targetInfo),
         session.send("Runtime.runIfWaitingForDebugger")
-      ]).catch(debugCatchError);
+      ]).catch((error) => {
+        this.#logger?.(DEBUG_PREFIXES.error)?.(error);
+      });
     };
     #finishInitializationIfReady(targetId) {
       if (targetId !== undefined) {
@@ -17131,7 +17742,9 @@ var init_TargetManager = __esm(() => {
         offline: this.#blocklist.length > 0 ? true : undefined,
         matchedNetworkConditions
       }));
-      await Promise.all(promises).catch(debugCatchError);
+      await Promise.all(promises).catch((error) => {
+        this.#logger?.(DEBUG_PREFIXES.error)?.(error);
+      });
     };
   };
 });
@@ -17144,15 +17757,17 @@ var CdpBrowser;
 var init_Browser2 = __esm(() => {
   init_Browser();
   init_CDPSession();
+  init_EventEmitter();
   init_Deferred();
+  init_disposable();
   init_BrowserContext2();
   init_Extension();
   init_Target2();
   init_TargetManager();
   CdpBrowser = class CdpBrowser extends Browser {
     protocol = "cdp";
-    static async _create(connection, contextIds, acceptInsecureCerts, defaultViewport, downloadBehavior, process2, closeCallback, targetFilterCallback, isPageTargetCallback, waitForInitiallyDiscoveredTargets = true, networkEnabled = true, issuesEnabled = true, handleDevToolsAsPage = false, blocklist, allowlist) {
-      const browser = new CdpBrowser(connection, contextIds, defaultViewport, process2, closeCallback, targetFilterCallback, isPageTargetCallback, waitForInitiallyDiscoveredTargets, networkEnabled, issuesEnabled, handleDevToolsAsPage, blocklist, allowlist);
+    static async _create(connection, contextIds, acceptInsecureCerts, defaultViewport = undefined, downloadBehavior = undefined, process2 = undefined, closeCallback = undefined, targetFilterCallback = undefined, isPageTargetCallback = undefined, waitForInitiallyDiscoveredTargets = true, networkEnabled = true, issuesEnabled = true, handleDevToolsAsPage = false, blocklist = undefined, allowlist = undefined, logger) {
+      const browser = new CdpBrowser(connection, contextIds, defaultViewport, process2, closeCallback, targetFilterCallback, isPageTargetCallback, waitForInitiallyDiscoveredTargets, networkEnabled, issuesEnabled, handleDevToolsAsPage, blocklist, allowlist, logger);
       if (allowlist) {
         const version = await browser.#getVersion();
         const majorVersion = parseInt(version.product.match(/\d+/)?.[0] ?? "0", 10);
@@ -17182,8 +17797,10 @@ var init_Browser2 = __esm(() => {
     #handleDevToolsAsPage = false;
     #extensions = new Map;
     #version;
-    constructor(connection, contextIds, defaultViewport, process2, closeCallback, targetFilterCallback, isPageTargetCallback, waitForInitiallyDiscoveredTargets = true, networkEnabled = true, issuesEnabled = true, handleDevToolsAsPage = false, blocklist, allowlist) {
-      super();
+    #hasNetworkRestrictions = false;
+    #subscriptions = new DisposableStack;
+    constructor(connection, contextIds, defaultViewport = undefined, process2 = undefined, closeCallback = undefined, targetFilterCallback = undefined, isPageTargetCallback = undefined, waitForInitiallyDiscoveredTargets = true, networkEnabled = true, issuesEnabled = true, handleDevToolsAsPage = false, blocklist = undefined, allowlist = undefined, logger) {
+      super(logger);
       this.#networkEnabled = networkEnabled;
       this.#issuesEnabled = issuesEnabled;
       this.#defaultViewport = defaultViewport;
@@ -17195,33 +17812,32 @@ var init_Browser2 = __esm(() => {
       });
       this.#handleDevToolsAsPage = handleDevToolsAsPage;
       this.#setIsPageTargetCallback(isPageTargetCallback);
-      connection.rejectEmulateNetworkConditionsCalls = Boolean(blocklist && blocklist.length > 0 || allowlist && allowlist.length > 0);
-      this.#targetManager = new TargetManager(connection, this.#createTarget, this.#targetFilterCallback, waitForInitiallyDiscoveredTargets, blocklist, allowlist);
-      this.#defaultContext = new CdpBrowserContext(this.#connection, this);
+      this.#hasNetworkRestrictions = Boolean(blocklist && blocklist.length > 0 || allowlist && allowlist.length > 0);
+      connection.rejectEmulateNetworkConditionsCalls = this.#hasNetworkRestrictions;
+      this.#targetManager = new TargetManager(connection, this.#createTarget, this.#targetFilterCallback, waitForInitiallyDiscoveredTargets, blocklist, allowlist, logger);
+      this.#defaultContext = new CdpBrowserContext(this.#connection, this, undefined, logger);
       for (const contextId of contextIds) {
-        this.#contexts.set(contextId, new CdpBrowserContext(this.#connection, this, contextId));
+        this.#contexts.set(contextId, new CdpBrowserContext(this.#connection, this, contextId, logger));
       }
     }
     #emitDisconnected = () => {
       this.emit("disconnected", undefined);
     };
     async _attach(downloadBehavior) {
-      this.#connection.on(CDPSessionEvent.Disconnected, this.#emitDisconnected);
+      const connectionEmitter = this.#subscriptions.use(new EventEmitter(this.#connection));
+      connectionEmitter.on(CDPSessionEvent.Disconnected, this.#emitDisconnected);
       if (downloadBehavior) {
         await this.#defaultContext.setDownloadBehavior(downloadBehavior);
       }
-      this.#targetManager.on("targetAvailable", this.#onAttachedToTarget);
-      this.#targetManager.on("targetGone", this.#onDetachedFromTarget);
-      this.#targetManager.on("targetChanged", this.#onTargetChanged);
-      this.#targetManager.on("targetDiscovered", this.#onTargetDiscovered);
+      const targetManagerEmitter = this.#subscriptions.use(new EventEmitter(this.#targetManager));
+      targetManagerEmitter.on("targetAvailable", this.#onAttachedToTarget);
+      targetManagerEmitter.on("targetGone", this.#onDetachedFromTarget);
+      targetManagerEmitter.on("targetChanged", this.#onTargetChanged);
+      targetManagerEmitter.on("targetDiscovered", this.#onTargetDiscovered);
       await this.#targetManager.initialize();
     }
     _detach() {
-      this.#connection.off(CDPSessionEvent.Disconnected, this.#emitDisconnected);
-      this.#targetManager.off("targetAvailable", this.#onAttachedToTarget);
-      this.#targetManager.off("targetGone", this.#onDetachedFromTarget);
-      this.#targetManager.off("targetChanged", this.#onTargetChanged);
-      this.#targetManager.off("targetDiscovered", this.#onTargetDiscovered);
+      this.#subscriptions.dispose();
     }
     process() {
       return this.#process ?? null;
@@ -17243,7 +17859,7 @@ var init_Browser2 = __esm(() => {
         proxyServer,
         proxyBypassList: proxyBypassList && proxyBypassList.join(",")
       });
-      const context = new CdpBrowserContext(this.#connection, this, browserContextId);
+      const context = new CdpBrowserContext(this.#connection, this, browserContextId, this.logger);
       if (downloadBehavior) {
         await context.setDownloadBehavior(downloadBehavior);
       }
@@ -17274,15 +17890,15 @@ var init_Browser2 = __esm(() => {
       const createSession = (isAutoAttachEmulated) => {
         return this.#connection._createSession(targetInfo, isAutoAttachEmulated);
       };
-      const otherTarget = new OtherTarget(targetInfo, session, context, this.#targetManager, createSession);
+      const otherTarget = new OtherTarget(targetInfo, session, context, this.#targetManager, createSession, this.logger);
       if (targetInfo.url && isDevToolsPageTarget(targetInfo.url)) {
-        return new DevToolsTarget(targetInfo, session, context, this.#targetManager, createSession, this.#defaultViewport ?? null);
+        return new DevToolsTarget(targetInfo, session, context, this.#targetManager, createSession, this.#defaultViewport ?? null, this.logger);
       }
       if (this.#isPageTargetCallback(otherTarget)) {
-        return new PageTarget(targetInfo, session, context, this.#targetManager, createSession, this.#defaultViewport ?? null);
+        return new PageTarget(targetInfo, session, context, this.#targetManager, createSession, this.#defaultViewport ?? null, this.logger);
       }
       if (targetInfo.type === "service_worker" || targetInfo.type === "shared_worker") {
-        return new WorkerTarget(targetInfo, session, context, this.#targetManager, createSession);
+        return new WorkerTarget(targetInfo, session, context, this.#targetManager, createSession, this.logger);
       }
       return otherTarget;
     };
@@ -17401,6 +18017,63 @@ var init_Browser2 = __esm(() => {
       await Promise.all(targetDestroyedPromises);
       this.#extensions.delete(id);
     }
+    async installPWA(options) {
+      if (this.#hasNetworkRestrictions) {
+        throw new Error("PWA APIs are not supported when network restrictions are configured.");
+      }
+      await this.#connection.send("PWA.install", {
+        manifestId: options.manifestId,
+        installUrlOrBundleUrl: options.installUrlOrBundleUrl
+      });
+      if (options.displayMode) {
+        await this.#connection.send("PWA.changeAppUserSettings", {
+          manifestId: options.manifestId,
+          displayMode: options.displayMode
+        });
+      }
+      return options.manifestId;
+    }
+    async uninstallPWA(options) {
+      if (this.#hasNetworkRestrictions) {
+        throw new Error("PWA APIs are not supported when network restrictions are configured.");
+      }
+      await this.#connection.send("PWA.uninstall", {
+        manifestId: options.manifestId
+      });
+    }
+    async launchPWA(options) {
+      if (this.#hasNetworkRestrictions) {
+        throw new Error("PWA APIs are not supported when network restrictions are configured.");
+      }
+      const { targetId: tabTargetId } = await this.#connection.send("PWA.launch", {
+        manifestId: options.manifestId,
+        url: options.url
+      });
+      const target = await this.waitForTarget((candidate) => {
+        const tab = this.#targetManager.getAvailableTargets().get(tabTargetId);
+        if (tab?.type() !== "tab") {
+          return false;
+        }
+        for (const child of tab._childTargets()) {
+          if (child === candidate) {
+            return true;
+          }
+        }
+        return false;
+      }, { timeout: options.timeout });
+      const page = await target.page();
+      if (!page) {
+        throw new Error(`Failed to create a page for the launched PWA (manifestId = ${options.manifestId})`);
+      }
+      return page;
+    }
+    async getPWAState(options) {
+      if (this.#hasNetworkRestrictions) {
+        throw new Error("PWA APIs are not supported when network restrictions are configured.");
+      }
+      const { badgeCount, fileHandlers } = await this.#connection.send("PWA.getOsAppState", { manifestId: options.manifestId });
+      return { badgeCount, fileHandlers };
+    }
     async screens() {
       const { screenInfos } = await this.#connection.send("Emulation.getScreenInfos");
       return screenInfos;
@@ -17488,7 +18161,7 @@ var init_Browser2 = __esm(() => {
         if (this.#extensions.has(currExtension.id)) {
           extensionsMap.set(currExtension.id, this.#extensions.get(currExtension.id));
         } else {
-          const newExtension = new CdpExtension(currExtension.id, currExtension.version, currExtension.name, currExtension.path, currExtension.enabled, this);
+          const newExtension = new CdpExtension(currExtension.id, currExtension.version, currExtension.name, currExtension.path, currExtension.enabled, this, this.logger);
           extensionsMap.set(currExtension.id, newExtension);
         }
       }
@@ -17502,16 +18175,20 @@ var init_Browser2 = __esm(() => {
 });
 
 // node_modules/puppeteer-core/lib/puppeteer/cdp/BrowserConnector.js
-async function _connectToCdpBrowser(connectionTransport, url, options) {
+async function _connectToCdpBrowser(connectionTransport, url, options, logger) {
   const { acceptInsecureCerts = false, networkEnabled = true, issuesEnabled = true, defaultViewport = DEFAULT_VIEWPORT, downloadBehavior, targetFilter, _isPageTarget: isPageTarget, slowMo = 0, protocolTimeout, handleDevToolsAsPage, idGenerator = createIncrementalIdGenerator(), blocklist, allowlist } = options;
-  const connection = new Connection(url, connectionTransport, slowMo, protocolTimeout, false, idGenerator);
+  const log = options.logger ?? logger;
+  const connection = new Connection(url, connectionTransport, slowMo, protocolTimeout, false, idGenerator, log);
   const { browserContextIds } = await connection.send("Target.getBrowserContexts");
   const browser = await CdpBrowser._create(connection, browserContextIds, acceptInsecureCerts, defaultViewport, downloadBehavior, undefined, () => {
-    return connection.send("Browser.close").catch(debugCatchError);
-  }, targetFilter, isPageTarget, undefined, networkEnabled, issuesEnabled, handleDevToolsAsPage, blocklist, allowlist);
+    return connection.send("Browser.close").catch((error) => {
+      log?.(DEBUG_PREFIXES.error)?.(error);
+    });
+  }, targetFilter, isPageTarget, undefined, networkEnabled, issuesEnabled, handleDevToolsAsPage, blocklist, allowlist, log);
   return browser;
 }
 var init_BrowserConnector = __esm(() => {
+  init_Debug();
   init_util();
   init_Browser2();
   init_Connection();
@@ -17739,6 +18416,7 @@ var init_cdp = __esm(() => {
   init_NetworkManager();
   init_Page2();
   init_PredefinedNetworkConditions();
+  init_ScreenRecording2();
   init_Target2();
   init_TargetManager();
   init_TargetManageEvents();
@@ -17755,20 +18433,22 @@ __export(exports_BrowserWebSocketTransport, {
 });
 
 class BrowserWebSocketTransport {
-  static create(url) {
+  static create(url, _headers, logger, _options) {
     return new Promise((resolve, reject) => {
       const ws = new WebSocket(url);
       ws.addEventListener("open", () => {
-        return resolve(new BrowserWebSocketTransport(ws));
+        return resolve(new BrowserWebSocketTransport(ws, logger));
       });
       ws.addEventListener("error", reject);
     });
   }
   #ws;
+  #logger;
   onmessage;
   onclose;
-  constructor(ws) {
+  constructor(ws, logger) {
     this.#ws = ws;
+    this.#logger = logger;
     this.#ws.addEventListener("message", (event) => {
       if (this.onmessage) {
         this.onmessage.call(null, event.data);
@@ -17779,7 +18459,9 @@ class BrowserWebSocketTransport {
         this.onclose.call(null);
       }
     });
-    this.#ws.addEventListener("error", debugCatchError);
+    this.#ws.addEventListener("error", () => {
+      this.#logger?.(DEBUG_PREFIXES.error);
+    });
   }
   send(message) {
     this.#ws.send(message);
@@ -17789,7 +18471,7 @@ class BrowserWebSocketTransport {
   }
 }
 var init_BrowserWebSocketTransport = __esm(() => {
-  init_util();
+  init_Debug();
 });
 
 // node_modules/puppeteer-core/lib/puppeteer/common/Device.js
@@ -18373,6 +19055,30 @@ var init_Device = __esm(() => {
       }
     },
     {
+      name: "iPhone SE (3rd gen)",
+      userAgent: "Mozilla/5.0 (iPhone; CPU iPhone OS 18_5 like Mac OS X) AppleWebKit/603.1.30 (KHTML, like Gecko) Version/26.5 Mobile/19E241 Safari/602.1",
+      viewport: {
+        width: 375,
+        height: 667,
+        deviceScaleFactor: 2,
+        isMobile: true,
+        hasTouch: true,
+        isLandscape: false
+      }
+    },
+    {
+      name: "iPhone SE (3rd gen) landscape",
+      userAgent: "Mozilla/5.0 (iPhone; CPU iPhone OS 18_5 like Mac OS X) AppleWebKit/603.1.30 (KHTML, like Gecko) Version/26.5 Mobile/19E241 Safari/602.1",
+      viewport: {
+        width: 667,
+        height: 375,
+        deviceScaleFactor: 2,
+        isMobile: true,
+        hasTouch: true,
+        isLandscape: true
+      }
+    },
+    {
       name: "iPhone X",
       userAgent: "Mozilla/5.0 (iPhone; CPU iPhone OS 11_0 like Mac OS X) AppleWebKit/604.1.38 (KHTML, like Gecko) Version/11.0 Mobile/15A372 Safari/604.1",
       viewport: {
@@ -18870,6 +19576,246 @@ var init_Device = __esm(() => {
       viewport: {
         width: 814,
         height: 380,
+        deviceScaleFactor: 3,
+        isMobile: true,
+        hasTouch: true,
+        isLandscape: true
+      }
+    },
+    {
+      name: "iPhone 16",
+      userAgent: "Mozilla/5.0 (iPhone; CPU iPhone OS 18_7 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.5 Mobile/15E148 Safari/604.1",
+      viewport: {
+        width: 393,
+        height: 659,
+        deviceScaleFactor: 3,
+        isMobile: true,
+        hasTouch: true,
+        isLandscape: false
+      }
+    },
+    {
+      name: "iPhone 16 landscape",
+      userAgent: "Mozilla/5.0 (iPhone; CPU iPhone OS 18_7 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.5 Mobile/15E148 Safari/604.1",
+      viewport: {
+        width: 734,
+        height: 343,
+        deviceScaleFactor: 3,
+        isMobile: true,
+        hasTouch: true,
+        isLandscape: true
+      }
+    },
+    {
+      name: "iPhone 16 Plus",
+      userAgent: "Mozilla/5.0 (iPhone; CPU iPhone OS 18_7 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.5 Mobile/15E148 Safari/604.1",
+      viewport: {
+        width: 430,
+        height: 739,
+        deviceScaleFactor: 3,
+        isMobile: true,
+        hasTouch: true,
+        isLandscape: false
+      }
+    },
+    {
+      name: "iPhone 16 Plus landscape",
+      userAgent: "Mozilla/5.0 (iPhone; CPU iPhone OS 18_7 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.5 Mobile/15E148 Safari/604.1",
+      viewport: {
+        width: 814,
+        height: 380,
+        deviceScaleFactor: 3,
+        isMobile: true,
+        hasTouch: true,
+        isLandscape: true
+      }
+    },
+    {
+      name: "iPhone 16 Pro",
+      userAgent: "Mozilla/5.0 (iPhone; CPU iPhone OS 18_7 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.5 Mobile/15E148 Safari/604.1",
+      viewport: {
+        width: 402,
+        height: 681,
+        deviceScaleFactor: 3,
+        isMobile: true,
+        hasTouch: true,
+        isLandscape: false
+      }
+    },
+    {
+      name: "iPhone 16 Pro landscape",
+      userAgent: "Mozilla/5.0 (iPhone; CPU iPhone OS 18_7 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.5 Mobile/15E148 Safari/604.1",
+      viewport: {
+        width: 756,
+        height: 352,
+        deviceScaleFactor: 3,
+        isMobile: true,
+        hasTouch: true,
+        isLandscape: true
+      }
+    },
+    {
+      name: "iPhone 16 Pro Max",
+      userAgent: "Mozilla/5.0 (iPhone; CPU iPhone OS 18_7 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.5 Mobile/15E148 Safari/604.1",
+      viewport: {
+        width: 440,
+        height: 763,
+        deviceScaleFactor: 3,
+        isMobile: true,
+        hasTouch: true,
+        isLandscape: false
+      }
+    },
+    {
+      name: "iPhone 16 Pro Max landscape",
+      userAgent: "Mozilla/5.0 (iPhone; CPU iPhone OS 18_7 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.5 Mobile/15E148 Safari/604.1",
+      viewport: {
+        width: 838,
+        height: 390,
+        deviceScaleFactor: 3,
+        isMobile: true,
+        hasTouch: true,
+        isLandscape: true
+      }
+    },
+    {
+      name: "iPhone 16e",
+      userAgent: "Mozilla/5.0 (iPhone; CPU iPhone OS 18_7 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.5 Mobile/15E148 Safari/604.1",
+      viewport: {
+        width: 390,
+        height: 651,
+        deviceScaleFactor: 3,
+        isMobile: true,
+        hasTouch: true,
+        isLandscape: false
+      }
+    },
+    {
+      name: "iPhone 16e landscape",
+      userAgent: "Mozilla/5.0 (iPhone; CPU iPhone OS 18_7 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.5 Mobile/15E148 Safari/604.1",
+      viewport: {
+        width: 726,
+        height: 340,
+        deviceScaleFactor: 3,
+        isMobile: true,
+        hasTouch: true,
+        isLandscape: true
+      }
+    },
+    {
+      name: "iPhone 17",
+      userAgent: "Mozilla/5.0 (iPhone; CPU iPhone OS 18_7 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.5 Mobile/15E148 Safari/604.1",
+      viewport: {
+        width: 402,
+        height: 681,
+        deviceScaleFactor: 3,
+        isMobile: true,
+        hasTouch: true,
+        isLandscape: false
+      }
+    },
+    {
+      name: "iPhone 17 landscape",
+      userAgent: "Mozilla/5.0 (iPhone; CPU iPhone OS 18_7 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.5 Mobile/15E148 Safari/604.1",
+      viewport: {
+        width: 756,
+        height: 352,
+        deviceScaleFactor: 3,
+        isMobile: true,
+        hasTouch: true,
+        isLandscape: true
+      }
+    },
+    {
+      name: "iPhone Air",
+      userAgent: "Mozilla/5.0 (iPhone; CPU iPhone OS 18_7 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.5 Mobile/15E148 Safari/604.1",
+      viewport: {
+        width: 420,
+        height: 719,
+        deviceScaleFactor: 3,
+        isMobile: true,
+        hasTouch: true,
+        isLandscape: false
+      }
+    },
+    {
+      name: "iPhone Air landscape",
+      userAgent: "Mozilla/5.0 (iPhone; CPU iPhone OS 18_7 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.5 Mobile/15E148 Safari/604.1",
+      viewport: {
+        width: 794,
+        height: 370,
+        deviceScaleFactor: 3,
+        isMobile: true,
+        hasTouch: true,
+        isLandscape: true
+      }
+    },
+    {
+      name: "iPhone 17 Pro",
+      userAgent: "Mozilla/5.0 (iPhone; CPU iPhone OS 18_7 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.5 Mobile/15E148 Safari/604.1",
+      viewport: {
+        width: 402,
+        height: 681,
+        deviceScaleFactor: 3,
+        isMobile: true,
+        hasTouch: true,
+        isLandscape: false
+      }
+    },
+    {
+      name: "iPhone 17 Pro landscape",
+      userAgent: "Mozilla/5.0 (iPhone; CPU iPhone OS 18_7 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.5 Mobile/15E148 Safari/604.1",
+      viewport: {
+        width: 756,
+        height: 352,
+        deviceScaleFactor: 3,
+        isMobile: true,
+        hasTouch: true,
+        isLandscape: true
+      }
+    },
+    {
+      name: "iPhone 17 Pro Max",
+      userAgent: "Mozilla/5.0 (iPhone; CPU iPhone OS 18_7 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.5 Mobile/15E148 Safari/604.1",
+      viewport: {
+        width: 440,
+        height: 763,
+        deviceScaleFactor: 3,
+        isMobile: true,
+        hasTouch: true,
+        isLandscape: false
+      }
+    },
+    {
+      name: "iPhone 17 Pro Max landscape",
+      userAgent: "Mozilla/5.0 (iPhone; CPU iPhone OS 18_7 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.5 Mobile/15E148 Safari/604.1",
+      viewport: {
+        width: 838,
+        height: 390,
+        deviceScaleFactor: 3,
+        isMobile: true,
+        hasTouch: true,
+        isLandscape: true
+      }
+    },
+    {
+      name: "iPhone 17e",
+      userAgent: "Mozilla/5.0 (iPhone; CPU iPhone OS 18_7 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.5 Mobile/15E148 Safari/604.1",
+      viewport: {
+        width: 390,
+        height: 651,
+        deviceScaleFactor: 3,
+        isMobile: true,
+        hasTouch: true,
+        isLandscape: false
+      }
+    },
+    {
+      name: "iPhone 17e landscape",
+      userAgent: "Mozilla/5.0 (iPhone; CPU iPhone OS 18_7 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.5 Mobile/15E148 Safari/604.1",
+      viewport: {
+        width: 726,
+        height: 340,
         deviceScaleFactor: 3,
         isMobile: true,
         hasTouch: true,
@@ -19394,7 +20340,7 @@ function mitt_default2(n) {
   } };
 }
 
-// node_modules/chromium-bidi/lib/utils/EventEmitter.js
+// node_modules/chromium-bidi/out/Default/gen/src/utils/EventEmitter.js
 class EventEmitter2 {
   #emitter = mitt_default2();
   on(type, handler) {
@@ -19426,7 +20372,7 @@ class EventEmitter2 {
 }
 var init_EventEmitter2 = () => {};
 
-// node_modules/chromium-bidi/lib/utils/log.js
+// node_modules/chromium-bidi/out/Default/gen/src/utils/log.js
 var LogType;
 var init_log = __esm(() => {
   (function(LogType) {
@@ -19439,7 +20385,7 @@ var init_log = __esm(() => {
   })(LogType || (LogType = {}));
 });
 
-// node_modules/chromium-bidi/lib/utils/ProcessingQueue.js
+// node_modules/chromium-bidi/out/Default/gen/src/utils/ProcessingQueue.js
 var _a, ProcessingQueue;
 var init_ProcessingQueue = __esm(() => {
   init_log();
@@ -19468,15 +20414,15 @@ var init_ProcessingQueue = __esm(() => {
           continue;
         }
         const [entryPromise, name] = arrayEntry;
-        this.#logger?.(_a.LOGGER_PREFIX, "Processing event:", name);
+        this.#logger?.(_a.LOGGER_PREFIX)?.("Processing event:", name);
         await entryPromise.then((entry) => {
           if (entry.kind === "error") {
-            this.#logger?.(LogType.debugError, "Event threw before sending:", entry.error.message, entry.error.stack);
+            this.#logger?.(LogType.debugError)?.("Event threw before sending:", entry.error.message, entry.error.stack);
             return;
           }
           return this.#processor(entry.value);
         }).catch((error) => {
-          this.#logger?.(LogType.debugError, "Event was not processed:", error?.message);
+          this.#logger?.(LogType.debugError)?.("Event was not processed:", error?.message);
         });
       }
       this.#isProcessing = false;
@@ -19485,10 +20431,10 @@ var init_ProcessingQueue = __esm(() => {
   _a = ProcessingQueue;
 });
 
-// node_modules/chromium-bidi/lib/protocol/cdp.js
+// node_modules/chromium-bidi/out/Default/gen/src/protocol/cdp.js
 var init_cdp2 = () => {};
 
-// node_modules/chromium-bidi/lib/protocol/chromium-bidi.js
+// node_modules/chromium-bidi/out/Default/gen/src/protocol/chromium-bidi.js
 var BiDiModule, Script, Log, BrowsingContext, Input3, Network, Bluetooth, Speculation, EVENT_NAMES;
 var init_chromium_bidi = __esm(() => {
   (function(BiDiModule) {
@@ -19579,10 +20525,10 @@ var init_chromium_bidi = __esm(() => {
   ]);
 });
 
-// node_modules/chromium-bidi/lib/protocol/generated/webdriver-bidi.js
+// node_modules/chromium-bidi/out/Default/gen/src/protocol/generated/webdriver-bidi.js
 var init_webdriver_bidi = () => {};
 
-// node_modules/chromium-bidi/lib/protocol/ErrorResponse.js
+// node_modules/chromium-bidi/out/Default/gen/src/protocol/ErrorResponse.js
 var Exception, InvalidArgumentException, InvalidSelectorException, MoveTargetOutOfBoundsException, NoSuchAlertException, NoSuchElementException, NoSuchFrameException, NoSuchHandleException, NoSuchHistoryEntryException, NoSuchInterceptException, NoSuchNodeException, NoSuchRequestException, NoSuchScriptException, NoSuchUserContextException, UnknownCommandException, UnknownErrorException, UnableToCaptureScreenException, UnsupportedOperationException, UnableToSetCookieException, UnableToSetFileInputException, InvalidWebExtensionException, NoSuchWebExtensionException, NoSuchNetworkCollectorException, NoSuchNetworkDataException;
 var init_ErrorResponse = __esm(() => {
   Exception = class Exception extends Error {
@@ -19722,19 +20668,22 @@ var init_ErrorResponse = __esm(() => {
   };
 });
 
-// node_modules/chromium-bidi/lib/protocol/generated/webdriver-bidi-permissions.js
+// node_modules/chromium-bidi/out/Default/gen/src/protocol/generated/webdriver-bidi-permissions.js
 var init_webdriver_bidi_permissions = () => {};
 
-// node_modules/chromium-bidi/lib/protocol/generated/webdriver-bidi-bluetooth.js
+// node_modules/chromium-bidi/out/Default/gen/src/protocol/generated/webdriver-bidi-bluetooth.js
 var init_webdriver_bidi_bluetooth = () => {};
 
-// node_modules/chromium-bidi/lib/protocol/generated/webdriver-bidi-nav-speculation.js
+// node_modules/chromium-bidi/out/Default/gen/src/protocol/generated/webdriver-bidi-nav-speculation.js
 var init_webdriver_bidi_nav_speculation = () => {};
 
-// node_modules/chromium-bidi/lib/protocol/generated/webdriver-bidi-ua-client-hints.js
+// node_modules/chromium-bidi/out/Default/gen/src/protocol/generated/webdriver-bidi-digital-credentials.js
+var init_webdriver_bidi_digital_credentials = () => {};
+
+// node_modules/chromium-bidi/out/Default/gen/src/protocol/generated/webdriver-bidi-ua-client-hints.js
 var init_webdriver_bidi_ua_client_hints = () => {};
 
-// node_modules/chromium-bidi/lib/protocol/protocol.js
+// node_modules/chromium-bidi/out/Default/gen/src/protocol/protocol.js
 var init_protocol = __esm(() => {
   init_cdp2();
   init_chromium_bidi();
@@ -19744,9 +20693,10 @@ var init_protocol = __esm(() => {
   init_webdriver_bidi_permissions();
   init_webdriver_bidi_bluetooth();
   init_webdriver_bidi_nav_speculation();
+  init_webdriver_bidi_digital_credentials();
 });
 
-// node_modules/chromium-bidi/lib/bidiMapper/BidiNoOpParser.js
+// node_modules/chromium-bidi/out/Default/gen/src/bidiMapper/BidiNoOpParser.js
 class BidiNoOpParser {
   parseDisableSimulationParameters(params) {
     return params;
@@ -19830,6 +20780,12 @@ class BidiNoOpParser {
     return params;
   }
   parseSetViewportParams(params) {
+    return params;
+  }
+  parseStartScreencastParams(params) {
+    return params;
+  }
+  parseStopScreencastParams(params) {
     return params;
   }
   parseTraverseHistoryParams(params) {
@@ -19970,9 +20926,12 @@ class BidiNoOpParser {
   parseUninstallParams(params) {
     return params;
   }
+  parseSetVirtualWalletBehaviorParams(params) {
+    return params;
+  }
 }
 
-// node_modules/chromium-bidi/lib/bidiMapper/modules/browser/BrowserProcessor.js
+// node_modules/chromium-bidi/out/Default/gen/src/bidiMapper/modules/browser/BrowserProcessor.js
 class BrowserProcessor {
   #browserCdpClient;
   #browsingContextStorage;
@@ -20195,7 +21154,7 @@ var init_BrowserProcessor = __esm(() => {
   init_protocol();
 });
 
-// node_modules/chromium-bidi/lib/bidiMapper/modules/cdp/CdpProcessor.js
+// node_modules/chromium-bidi/out/Default/gen/src/bidiMapper/modules/cdp/CdpProcessor.js
 class CdpProcessor {
   #browsingContextStorage;
   #realmStorage;
@@ -20236,7 +21195,7 @@ var init_CdpProcessor = __esm(() => {
   init_protocol();
 });
 
-// node_modules/chromium-bidi/lib/bidiMapper/modules/context/BrowsingContextProcessor.js
+// node_modules/chromium-bidi/out/Default/gen/src/bidiMapper/modules/context/BrowsingContextProcessor.js
 class BrowsingContextProcessor {
   #browserCdpClient;
   #browsingContextStorage;
@@ -20456,7 +21415,7 @@ var init_BrowsingContextProcessor = __esm(() => {
   init_protocol();
 });
 
-// node_modules/chromium-bidi/lib/bidiMapper/modules/emulation/EmulationProcessor.js
+// node_modules/chromium-bidi/out/Default/gen/src/bidiMapper/modules/emulation/EmulationProcessor.js
 class EmulationProcessor {
   #userContextStorage;
   #browsingContextStorage;
@@ -20788,14 +21747,14 @@ var init_EmulationProcessor = __esm(() => {
   init_protocol();
 });
 
-// node_modules/chromium-bidi/lib/utils/assert.js
+// node_modules/chromium-bidi/out/Default/gen/src/utils/assert.js
 function assert2(predicate, message) {
   if (!predicate) {
     throw new Error(message ?? "Internal assertion failed.");
   }
 }
 
-// node_modules/chromium-bidi/lib/utils/graphemeTools.js
+// node_modules/chromium-bidi/out/Default/gen/src/utils/graphemeTools.js
 function isSingleComplexGrapheme(value) {
   return isSingleGrapheme(value) && value.length > 1;
 }
@@ -20804,7 +21763,7 @@ function isSingleGrapheme(value) {
   return [...segmenter.segment(value)].length === 1;
 }
 
-// node_modules/chromium-bidi/lib/bidiMapper/modules/input/InputSource.js
+// node_modules/chromium-bidi/out/Default/gen/src/bidiMapper/modules/input/InputSource.js
 class NoneSource {
   type = "none";
 }
@@ -20849,6 +21808,23 @@ class KeySource {
   }
 }
 
+class ClickContext {
+  static #DOUBLE_CLICK_TIME_MS = 500;
+  static #MAX_DOUBLE_CLICK_RADIUS = 2;
+  count = 0;
+  #x;
+  #y;
+  #time;
+  constructor(x, y, time) {
+    this.#x = x;
+    this.#y = y;
+    this.#time = time;
+  }
+  compare(context) {
+    return context.#time - this.#time > ClickContext.#DOUBLE_CLICK_TIME_MS || Math.abs(context.#x - this.#x) > ClickContext.#MAX_DOUBLE_CLICK_RADIUS || Math.abs(context.#y - this.#y) > ClickContext.#MAX_DOUBLE_CLICK_RADIUS;
+  }
+}
+
 class PointerSource {
   type = "pointer";
   subtype;
@@ -20886,22 +21862,6 @@ class PointerSource {
     }
     return buttons;
   }
-  static ClickContext = class ClickContext {
-    static #DOUBLE_CLICK_TIME_MS = 500;
-    static #MAX_DOUBLE_CLICK_RADIUS = 2;
-    count = 0;
-    #x;
-    #y;
-    #time;
-    constructor(x, y, time) {
-      this.#x = x;
-      this.#y = y;
-      this.#time = time;
-    }
-    compare(context) {
-      return context.#time - this.#time > ClickContext.#DOUBLE_CLICK_TIME_MS || Math.abs(context.#x - this.#x) > ClickContext.#MAX_DOUBLE_CLICK_RADIUS || Math.abs(context.#y - this.#y) > ClickContext.#MAX_DOUBLE_CLICK_RADIUS;
-    }
-  };
   #clickContexts = new Map;
   setClickCount(button, context) {
     let storedContext = this.#clickContexts.get(button);
@@ -20923,12 +21883,8 @@ class PointerSource {
 class WheelSource {
   type = "wheel";
 }
-var _a2;
-var init_InputSource = __esm(() => {
-  _a2 = PointerSource;
-});
 
-// node_modules/chromium-bidi/lib/bidiMapper/modules/input/keyUtils.js
+// node_modules/chromium-bidi/out/Default/gen/src/bidiMapper/modules/input/keyUtils.js
 function getNormalizedKey(value) {
   switch (value) {
     case "\uE000":
@@ -21389,7 +22345,7 @@ function getKeyLocation(key) {
   }
 }
 
-// node_modules/chromium-bidi/lib/bidiMapper/modules/input/USKeyboardLayout.js
+// node_modules/chromium-bidi/out/Default/gen/src/bidiMapper/modules/input/USKeyboardLayout.js
 var KeyToKeyCode;
 var init_USKeyboardLayout2 = __esm(() => {
   KeyToKeyCode = {
@@ -21646,7 +22602,7 @@ var init_USKeyboardLayout2 = __esm(() => {
   };
 });
 
-// node_modules/chromium-bidi/lib/bidiMapper/modules/input/ActionDispatcher.js
+// node_modules/chromium-bidi/out/Default/gen/src/bidiMapper/modules/input/ActionDispatcher.js
 async function getElementCenter(context, element) {
   const hiddenSandboxRealm = await context.getOrCreateHiddenSandbox();
   const result = await hiddenSandboxRealm.callFunction(CALCULATE_IN_VIEW_CENTER_PT_DECL, false, { type: "undefined" }, [element]);
@@ -21774,7 +22730,7 @@ class ActionDispatcher {
           modifiers,
           button: getCdpButton(button),
           buttons: source.buttons,
-          clickCount: source.setClickCount(button, new PointerSource.ClickContext(x, y, performance.now())),
+          clickCount: source.setClickCount(button, new ClickContext(x, y, performance.now())),
           pointerType,
           tangentialPressure,
           tiltX,
@@ -22285,7 +23241,6 @@ var CALCULATE_IN_VIEW_CENTER_PT_DECL, IS_MAC_DECL, getKeyEventUnmodifiedText = (
 };
 var init_ActionDispatcher = __esm(() => {
   init_protocol();
-  init_InputSource();
   init_USKeyboardLayout2();
   CALCULATE_IN_VIEW_CENTER_PT_DECL = ((i) => {
     const t = i.getClientRects()[0], e = Math.max(0, Math.min(t.x, t.x + t.width)), n = Math.min(window.innerWidth, Math.max(t.x, t.x + t.width)), h = Math.max(0, Math.min(t.y, t.y + t.height)), m = Math.min(window.innerHeight, Math.max(t.y, t.y + t.height));
@@ -22296,7 +23251,7 @@ var init_ActionDispatcher = __esm(() => {
   }).toString();
 });
 
-// node_modules/chromium-bidi/lib/utils/Mutex.js
+// node_modules/chromium-bidi/out/Default/gen/src/utils/Mutex.js
 class Mutex2 {
   #locked = false;
   #acquirers = [];
@@ -22333,7 +23288,7 @@ class Mutex2 {
   }
 }
 
-// node_modules/chromium-bidi/lib/bidiMapper/modules/input/InputState.js
+// node_modules/chromium-bidi/out/Default/gen/src/bidiMapper/modules/input/InputState.js
 class InputState {
   cancelList = [];
   #sources = new Map;
@@ -22405,10 +23360,9 @@ class InputState {
 }
 var init_InputState = __esm(() => {
   init_protocol();
-  init_InputSource();
 });
 
-// node_modules/chromium-bidi/lib/bidiMapper/modules/input/InputStateManager.js
+// node_modules/chromium-bidi/out/Default/gen/src/bidiMapper/modules/input/InputStateManager.js
 var InputStateManager;
 var init_InputStateManager = __esm(() => {
   init_InputState();
@@ -22423,7 +23377,7 @@ var init_InputStateManager = __esm(() => {
   };
 });
 
-// node_modules/chromium-bidi/lib/bidiMapper/modules/input/InputProcessor.js
+// node_modules/chromium-bidi/out/Default/gen/src/bidiMapper/modules/input/InputProcessor.js
 class InputProcessor {
   #browsingContextStorage;
   #inputStateManager = new InputStateManager;
@@ -22581,7 +23535,7 @@ var init_InputProcessor = __esm(() => {
   init_InputStateManager();
 });
 
-// node_modules/chromium-bidi/lib/utils/base64.js
+// node_modules/chromium-bidi/out/Default/gen/src/utils/base64.js
 function base64ToString(base64Str) {
   if ("atob" in globalThis) {
     return globalThis.atob(base64Str);
@@ -22589,7 +23543,7 @@ function base64ToString(base64Str) {
   return Buffer.from(base64Str, "base64").toString("ascii");
 }
 
-// node_modules/chromium-bidi/lib/bidiMapper/modules/network/NetworkUtils.js
+// node_modules/chromium-bidi/out/Default/gen/src/bidiMapper/modules/network/NetworkUtils.js
 function computeHeadersSize(headers) {
   const requestHeaders = headers.reduce((acc, header) => {
     return `${acc}${header.name}: ${header.value.value}\r
@@ -22796,7 +23750,7 @@ var init_NetworkUtils = __esm(() => {
   init_ErrorResponse();
 });
 
-// node_modules/chromium-bidi/lib/bidiMapper/modules/network/NetworkProcessor.js
+// node_modules/chromium-bidi/out/Default/gen/src/bidiMapper/modules/network/NetworkProcessor.js
 class NetworkProcessor {
   #browsingContextStorage;
   #networkStorage;
@@ -23271,7 +24225,7 @@ var init_NetworkProcessor = __esm(() => {
 `, "\r"]);
 });
 
-// node_modules/chromium-bidi/lib/bidiMapper/modules/permissions/PermissionsProcessor.js
+// node_modules/chromium-bidi/out/Default/gen/src/bidiMapper/modules/permissions/PermissionsProcessor.js
 class PermissionsProcessor {
   #browserCdpClient;
   constructor(browserCdpClient) {
@@ -23302,7 +24256,7 @@ var init_PermissionsProcessor = __esm(() => {
   init_protocol();
 });
 
-// node_modules/chromium-bidi/lib/utils/uuid.js
+// node_modules/chromium-bidi/out/Default/gen/src/utils/uuid.js
 function bytesToHex(bytes) {
   return bytes.reduce((str, byte) => str + byte.toString(16).padStart(2, "0"), "");
 }
@@ -23313,8 +24267,6 @@ function uuidv4() {
   const randomValues = new Uint8Array(16);
   if ("crypto" in globalThis && "getRandomValues" in globalThis.crypto) {
     globalThis.crypto.getRandomValues(randomValues);
-  } else {
-    __require("crypto").webcrypto.getRandomValues(randomValues);
   }
   randomValues[6] = randomValues[6] & 15 | 64;
   randomValues[8] = randomValues[8] & 63 | 128;
@@ -23327,7 +24279,7 @@ function uuidv4() {
   ].join("-");
 }
 
-// node_modules/chromium-bidi/lib/bidiMapper/modules/script/ChannelProxy.js
+// node_modules/chromium-bidi/out/Default/gen/src/bidiMapper/modules/script/ChannelProxy.js
 class ChannelProxy {
   #properties;
   #id = uuidv4();
@@ -23347,7 +24299,7 @@ class ChannelProxy {
       const channelHandle = await this.#getHandleFromWindow(realm);
       this.#startListener(realm, channelHandle, eventManager);
     } catch (error) {
-      this.#logger?.(LogType.debugError, error);
+      this.#logger?.(LogType.debugError)?.(error);
     }
   }
   static #createChannelProxyEvalStr() {
@@ -23433,7 +24385,7 @@ class ChannelProxy {
           }, browsingContext.id);
         }
       } catch (error) {
-        this.#logger?.(LogType.debugError, error);
+        this.#logger?.(LogType.debugError)?.(error);
         break;
       }
     }
@@ -23481,7 +24433,7 @@ var init_ChannelProxy = __esm(() => {
   init_log();
 });
 
-// node_modules/chromium-bidi/lib/bidiMapper/modules/script/PreloadScript.js
+// node_modules/chromium-bidi/out/Default/gen/src/bidiMapper/modules/script/PreloadScript.js
 class PreloadScript {
   #id = uuidv4();
   #cdpPreloadScripts = [];
@@ -23552,7 +24504,7 @@ var init_PreloadScript = __esm(() => {
   init_ChannelProxy();
 });
 
-// node_modules/chromium-bidi/lib/bidiMapper/modules/script/ScriptProcessor.js
+// node_modules/chromium-bidi/out/Default/gen/src/bidiMapper/modules/script/ScriptProcessor.js
 class ScriptProcessor {
   #eventManager;
   #browsingContextStorage;
@@ -23664,7 +24616,7 @@ var init_ScriptProcessor = __esm(() => {
   init_PreloadScript();
 });
 
-// node_modules/chromium-bidi/lib/bidiMapper/modules/session/SessionProcessor.js
+// node_modules/chromium-bidi/out/Default/gen/src/bidiMapper/modules/session/SessionProcessor.js
 class SessionProcessor {
   #eventManager;
   #browserCdpClient;
@@ -23769,7 +24721,7 @@ var init_SessionProcessor = __esm(() => {
   init_protocol();
 });
 
-// node_modules/chromium-bidi/lib/bidiMapper/modules/storage/StorageProcessor.js
+// node_modules/chromium-bidi/out/Default/gen/src/bidiMapper/modules/storage/StorageProcessor.js
 class StorageProcessor {
   #browserCdpClient;
   #browsingContextStorage;
@@ -23838,7 +24790,7 @@ class StorageProcessor {
       if (this.#isNoSuchUserContextError(err)) {
         throw new NoSuchUserContextException(err.message);
       }
-      this.#logger?.(LogType.debugError, err);
+      this.#logger?.(LogType.debugError)?.(err);
       throw new UnableToSetCookieException(err.toString());
     }
     return {
@@ -23875,7 +24827,7 @@ class StorageProcessor {
       }
     }
     if (unsupportedPartitionKeys.size > 0) {
-      this.#logger?.(LogType.debugInfo, `Unsupported partition keys: ${JSON.stringify(Object.fromEntries(unsupportedPartitionKeys))}`);
+      this.#logger?.(LogType.debugInfo)?.(`Unsupported partition keys: ${JSON.stringify(Object.fromEntries(unsupportedPartitionKeys))}`);
     }
     const userContext = descriptor.userContext ?? "default";
     return {
@@ -23907,7 +24859,7 @@ var init_StorageProcessor = __esm(() => {
   init_NetworkUtils();
 });
 
-// node_modules/chromium-bidi/lib/bidiMapper/modules/webExtension/WebExtensionProcessor.js
+// node_modules/chromium-bidi/out/Default/gen/src/bidiMapper/modules/webExtension/WebExtensionProcessor.js
 class WebExtensionProcessor {
   #browserCdpClient;
   constructor(browserCdpClient) {
@@ -23953,7 +24905,7 @@ var init_WebExtensionProcessor = __esm(() => {
   init_protocol();
 });
 
-// node_modules/chromium-bidi/lib/bidiMapper/OutgoingMessage.js
+// node_modules/chromium-bidi/out/Default/gen/src/bidiMapper/OutgoingMessage.js
 class OutgoingMessage {
   #message;
   #googChannel;
@@ -23986,7 +24938,7 @@ class OutgoingMessage {
   }
 }
 
-// node_modules/chromium-bidi/lib/bidiMapper/CommandProcessor.js
+// node_modules/chromium-bidi/out/Default/gen/src/bidiMapper/CommandProcessor.js
 var CommandProcessor;
 var init_CommandProcessor = __esm(() => {
   init_protocol();
@@ -24009,6 +24961,7 @@ var init_CommandProcessor = __esm(() => {
     #browserProcessor;
     #browsingContextProcessor;
     #cdpProcessor;
+    #digitalCredentialsProcessor;
     #emulationProcessor;
     #inputProcessor;
     #networkProcessor;
@@ -24019,12 +24972,13 @@ var init_CommandProcessor = __esm(() => {
     #webExtensionProcessor;
     #parser;
     #logger;
-    constructor(cdpConnection, browserCdpClient, eventManager, browsingContextStorage, realmStorage, preloadScriptStorage, networkStorage, contextConfigStorage, bluetoothProcessor, userContextStorage, parser = new BidiNoOpParser, initConnection, logger) {
+    constructor(cdpConnection, browserCdpClient, eventManager, browsingContextStorage, realmStorage, preloadScriptStorage, networkStorage, contextConfigStorage, bluetoothProcessor, digitalCredentialsProcessor, userContextStorage, parser = new BidiNoOpParser, initConnection, logger) {
       super();
       this.#browserCdpClient = browserCdpClient;
       this.#parser = parser;
       this.#logger = logger;
       this.#bluetoothProcessor = bluetoothProcessor;
+      this.#digitalCredentialsProcessor = digitalCredentialsProcessor;
       this.#browserProcessor = new BrowserProcessor(browserCdpClient, browsingContextStorage, contextConfigStorage, userContextStorage);
       this.#browsingContextProcessor = new BrowsingContextProcessor(browserCdpClient, browsingContextStorage, userContextStorage, contextConfigStorage, eventManager);
       this.#cdpProcessor = new CdpProcessor(browsingContextStorage, realmStorage, cdpConnection, browserCdpClient);
@@ -24102,6 +25056,12 @@ var init_CommandProcessor = __esm(() => {
           throw new UnsupportedOperationException(`Method ${command.method} is not implemented.`);
         case "browsingContext.setViewport":
           return await this.#browsingContextProcessor.setViewport(this.#parser.parseSetViewportParams(command.params));
+        case "browsingContext.startScreencast":
+          this.#parser.parseStartScreencastParams(command.params);
+          throw new UnsupportedOperationException(`Method ${command.method} is not implemented.`);
+        case "browsingContext.stopScreencast":
+          this.#parser.parseStopScreencastParams(command.params);
+          throw new UnsupportedOperationException(`Method ${command.method} is not implemented.`);
         case "browsingContext.traverseHistory":
           return await this.#browsingContextProcessor.traverseHistory(this.#parser.parseTraverseHistoryParams(command.params));
         case "goog:cdp.getSession":
@@ -24110,6 +25070,8 @@ var init_CommandProcessor = __esm(() => {
           return this.#cdpProcessor.resolveRealm(this.#parser.parseResolveRealmParams(command.params));
         case "goog:cdp.sendCommand":
           return await this.#cdpProcessor.sendCommand(this.#parser.parseSendCommandParams(command.params));
+        case "digitalCredentials.setVirtualWalletBehavior":
+          return await this.#digitalCredentialsProcessor.setVirtualWalletBehavior(this.#parser.parseSetVirtualWalletBehaviorParams(command.params));
         case "emulation.setForcedColorsModeThemeOverride":
           this.#parser.parseSetForcedColorsModeThemeOverrideParams(command.params);
           throw new UnsupportedOperationException(`Method ${command.method} is not implemented.`);
@@ -24230,7 +25192,7 @@ var init_CommandProcessor = __esm(() => {
           });
         } else {
           const error = e;
-          this.#logger?.(LogType.bidi, error);
+          this.#logger?.(LogType.bidi)?.(error);
           const errorException = this.#browserCdpClient.isCloseError(e) ? new NoSuchFrameException(`Browsing context is gone`) : new UnknownErrorException(error.message, error.stack);
           this.emit("response", {
             message: OutgoingMessage.createResolved(errorException.toErrorResponse(command.id), command["goog:channel"]),
@@ -24242,7 +25204,7 @@ var init_CommandProcessor = __esm(() => {
   };
 });
 
-// node_modules/chromium-bidi/lib/bidiMapper/modules/bluetooth/BluetoothProcessor.js
+// node_modules/chromium-bidi/out/Default/gen/src/bidiMapper/modules/bluetooth/BluetoothProcessor.js
 class BluetoothGattItem {
   id;
   uuid;
@@ -24612,11 +25574,12 @@ var init_BluetoothProcessor = __esm(() => {
   };
 });
 
-// node_modules/chromium-bidi/lib/bidiMapper/modules/browser/ContextConfig.js
+// node_modules/chromium-bidi/out/Default/gen/src/bidiMapper/modules/browser/ContextConfig.js
 class ContextConfig {
   acceptInsecureCerts;
   clientHints;
   devicePixelRatio;
+  digitalCredentialsBehavior;
   disableNetworkDurableMessages;
   downloadBehavior;
   emulatedNetworkConditions;
@@ -24652,7 +25615,7 @@ class ContextConfig {
   }
 }
 
-// node_modules/chromium-bidi/lib/bidiMapper/modules/browser/ContextConfigStorage.js
+// node_modules/chromium-bidi/out/Default/gen/src/bidiMapper/modules/browser/ContextConfigStorage.js
 class ContextConfigStorage {
   #global = new ContextConfig;
   #userContextConfigs = new Map;
@@ -24687,7 +25650,7 @@ class ContextConfigStorage {
 }
 var init_ContextConfigStorage = () => {};
 
-// node_modules/chromium-bidi/lib/bidiMapper/modules/browser/UserContextStorage.js
+// node_modules/chromium-bidi/out/Default/gen/src/bidiMapper/modules/browser/UserContextStorage.js
 class UserContextStorage {
   #browserClient;
   constructor(browserClient) {
@@ -24726,7 +25689,7 @@ var init_UserContextStorage = __esm(() => {
   init_protocol();
 });
 
-// node_modules/chromium-bidi/lib/utils/Deferred.js
+// node_modules/chromium-bidi/out/Default/gen/src/utils/Deferred.js
 var Deferred2;
 var init_Deferred2 = __esm(() => {
   Deferred2 = class Deferred2 {
@@ -24777,17 +25740,17 @@ var init_Deferred2 = __esm(() => {
   };
 });
 
-// node_modules/chromium-bidi/lib/utils/time.js
+// node_modules/chromium-bidi/out/Default/gen/src/utils/time.js
 function getTimestamp() {
   return new Date().getTime();
 }
 
-// node_modules/chromium-bidi/lib/utils/unitConversions.js
+// node_modules/chromium-bidi/out/Default/gen/src/utils/unitConversions.js
 function inchesFromCm(cm) {
   return cm / 2.54;
 }
 
-// node_modules/chromium-bidi/lib/bidiMapper/modules/script/SharedId.js
+// node_modules/chromium-bidi/out/Default/gen/src/bidiMapper/modules/script/SharedId.js
 function getSharedId(frameId, documentId, backendNodeId) {
   return `f.${frameId}.d.${documentId}.e.${backendNodeId}`;
 }
@@ -24837,7 +25800,7 @@ function parseSharedId(sharedId) {
 }
 var SHARED_ID_DIVIDER = "_element_";
 
-// node_modules/chromium-bidi/lib/bidiMapper/modules/script/Realm.js
+// node_modules/chromium-bidi/out/Default/gen/src/bidiMapper/modules/script/Realm.js
 class Realm3 {
   #cdpClient;
   #eventManager;
@@ -24864,7 +25827,7 @@ class Realm3 {
         bidiValue.handle = objectId;
         this.realmStorage.knownHandlesToRealmMap.set(objectId, this.realmId);
       } else {
-        this.#releaseObject(objectId).catch((error) => this.#logger?.(LogType.debugError, error));
+        this.#releaseObject(objectId).catch((error) => this.#logger?.(LogType.debugError)?.(error));
       }
     }
     return bidiValue;
@@ -25245,7 +26208,7 @@ var init_Realm2 = __esm(() => {
   init_ChannelProxy();
 });
 
-// node_modules/chromium-bidi/lib/bidiMapper/modules/script/WindowRealm.js
+// node_modules/chromium-bidi/out/Default/gen/src/bidiMapper/modules/script/WindowRealm.js
 var WindowRealm;
 var init_WindowRealm = __esm(() => {
   init_protocol();
@@ -25353,7 +26316,7 @@ var init_WindowRealm = __esm(() => {
   };
 });
 
-// node_modules/chromium-bidi/lib/utils/urlHelpers.js
+// node_modules/chromium-bidi/out/Default/gen/src/utils/urlHelpers.js
 function urlMatchesAboutBlank(url) {
   if (url === "") {
     return true;
@@ -25370,7 +26333,7 @@ function urlMatchesAboutBlank(url) {
   }
 }
 
-// node_modules/chromium-bidi/lib/bidiMapper/modules/context/NavigationTracker.js
+// node_modules/chromium-bidi/out/Default/gen/src/bidiMapper/modules/context/NavigationTracker.js
 class NavigationResult {
   eventName;
   message;
@@ -25479,7 +26442,7 @@ class NavigationTracker {
     return this.#lastCommittedNavigation.url;
   }
   createPendingNavigation(url, canBeInitialNavigation = false) {
-    this.#logger?.(LogType.debug, "createCommandNavigation");
+    this.#logger?.(LogType.debug)?.("createCommandNavigation");
     this.#isInitialNavigation = canBeInitialNavigation && this.#isInitialNavigation && urlMatchesAboutBlank(url);
     this.#pendingNavigation?.fail("navigation canceled by concurrent navigation");
     const navigation = new NavigationState(url, this.#browsingContextId, this.#isInitialNavigation, this.#eventManager);
@@ -25491,7 +26454,7 @@ class NavigationTracker {
     this.#lastCommittedNavigation.fail("navigation canceled by context disposal");
   }
   onTargetInfoChanged(url) {
-    this.#logger?.(LogType.debug, `onTargetInfoChanged ${url}`);
+    this.#logger?.(LogType.debug)?.(`onTargetInfoChanged ${url}`);
     this.#lastCommittedNavigation.url = url;
   }
   #getNavigationForFrameNavigated(url, loaderId) {
@@ -25504,7 +26467,7 @@ class NavigationTracker {
     return this.createPendingNavigation(url, true);
   }
   frameNavigated(url, loaderId, unreachableUrl) {
-    this.#logger?.(LogType.debug, `frameNavigated ${url}`);
+    this.#logger?.(LogType.debug)?.(`frameNavigated ${url}`);
     if (unreachableUrl !== undefined) {
       const navigation = this.#loaderIdToNavigationsMap.get(loaderId) ?? this.#pendingNavigation ?? this.createPendingNavigation(unreachableUrl, true);
       navigation.url = unreachableUrl;
@@ -25527,7 +26490,7 @@ class NavigationTracker {
     }
   }
   navigatedWithinDocument(url, navigationType) {
-    this.#logger?.(LogType.debug, `navigatedWithinDocument ${url}, ${navigationType}`);
+    this.#logger?.(LogType.debug)?.(`navigatedWithinDocument ${url}, ${navigationType}`);
     this.#lastCommittedNavigation.url = url;
     if (navigationType !== "fragment") {
       return;
@@ -25539,16 +26502,16 @@ class NavigationTracker {
     }
   }
   loadPageEvent(loaderId) {
-    this.#logger?.(LogType.debug, "loadPageEvent");
+    this.#logger?.(LogType.debug)?.("loadPageEvent");
     this.#isInitialNavigation = false;
     this.#loaderIdToNavigationsMap.get(loaderId)?.load();
   }
   failNavigation(navigation, errorText) {
-    this.#logger?.(LogType.debug, "failCommandNavigation");
+    this.#logger?.(LogType.debug)?.("failCommandNavigation");
     navigation.fail(errorText);
   }
   navigationCommandFinished(navigation, loaderId) {
-    this.#logger?.(LogType.debug, `finishCommandNavigation ${navigation.navigationId}, ${loaderId}`);
+    this.#logger?.(LogType.debug)?.(`finishCommandNavigation ${navigation.navigationId}, ${loaderId}`);
     if (loaderId !== undefined) {
       navigation.loaderId = loaderId;
       this.#loaderIdToNavigationsMap.set(loaderId, navigation);
@@ -25556,7 +26519,7 @@ class NavigationTracker {
     navigation.isFragmentNavigation = loaderId === undefined;
   }
   frameStartedNavigating(url, loaderId, navigationType) {
-    this.#logger?.(LogType.debug, `frameStartedNavigating ${url}, ${loaderId}`);
+    this.#logger?.(LogType.debug)?.(`frameStartedNavigating ${url}, ${loaderId}`);
     if (this.#pendingNavigation && this.#pendingNavigation?.loaderId !== undefined && this.#pendingNavigation?.loaderId !== loaderId) {
       this.#pendingNavigation?.fail("navigation canceled by concurrent navigation");
       this.#pendingNavigation = undefined;
@@ -25587,7 +26550,7 @@ var init_NavigationTracker = __esm(() => {
   init_log();
 });
 
-// node_modules/chromium-bidi/lib/bidiMapper/modules/context/BrowsingContextImpl.js
+// node_modules/chromium-bidi/out/Default/gen/src/bidiMapper/modules/context/BrowsingContextImpl.js
 function serializeOrigin(origin) {
   if (["://", ""].includes(origin)) {
     origin = "null";
@@ -25680,7 +26643,7 @@ function parseInteger(value) {
   }
   return parseInt(value);
 }
-var _a3, BrowsingContextImpl;
+var _a2, BrowsingContextImpl;
 var init_BrowsingContextImpl = __esm(() => {
   init_protocol();
   init_Deferred2();
@@ -25725,7 +26688,7 @@ var init_BrowsingContextImpl = __esm(() => {
       this.#navigationTracker = new NavigationTracker(url, id, eventManager, logger);
     }
     static create(id, parentId, userContext, cdpTarget, eventManager, browsingContextStorage, realmStorage, configStorage, url, originalOpener, logger) {
-      const context = new _a3(id, parentId, userContext, cdpTarget, eventManager, browsingContextStorage, realmStorage, configStorage, url, originalOpener, logger);
+      const context = new _a2(id, parentId, userContext, cdpTarget, eventManager, browsingContextStorage, realmStorage, configStorage, url, originalOpener, logger);
       context.#initListeners();
       browsingContextStorage.addContext(context);
       if (!context.isTopLevelContext()) {
@@ -25785,7 +26748,7 @@ var init_BrowsingContextImpl = __esm(() => {
     }
     set parentId(parentId) {
       if (this.#parentId !== null) {
-        this.#logger?.(LogType.debugError, "Parent context already set");
+        this.#logger?.(LogType.debugError)?.("Parent context already set");
         return;
       }
       this.#parentId = parentId;
@@ -25897,7 +26860,7 @@ var init_BrowsingContextImpl = __esm(() => {
           return;
         }
         if (this.#loaderId === undefined) {
-          this.#logger?.(LogType.debugError, "LoaderId should be defined when file upload is shown", params);
+          this.#logger?.(LogType.debugError)?.("LoaderId should be defined when file upload is shown", params);
           return;
         }
         const element = params.backendNodeId === undefined ? undefined : {
@@ -26011,7 +26974,7 @@ var init_BrowsingContextImpl = __esm(() => {
           case "isolated":
             sandbox = name;
             if (!this.#defaultRealmDeferred.isFinished) {
-              this.#logger?.(LogType.debugError, "Unexpectedly, isolated realm created before the default one");
+              this.#logger?.(LogType.debugError)?.("Unexpectedly, isolated realm created before the default one");
             }
             origin = this.#defaultRealmDeferred.isFinished ? this.#defaultRealmDeferred.result.origin : "";
             break;
@@ -26054,7 +27017,7 @@ var init_BrowsingContextImpl = __esm(() => {
         }
         const accepted = params.result;
         if (this.#lastUserPromptType === undefined) {
-          this.#logger?.(LogType.debugError, "Unexpectedly no opening prompt event before closing one");
+          this.#logger?.(LogType.debugError)?.("Unexpectedly no opening prompt event before closing one");
         }
         this.#eventManager.registerEvent({
           type: "event",
@@ -26075,7 +27038,7 @@ var init_BrowsingContextImpl = __esm(() => {
         if (!params.frameId && this.#parentId && this.#cdpTarget.cdpClient !== this.#browsingContextStorage.getContext(this.#parentId)?.cdpTarget.cdpClient) {
           return;
         }
-        const promptType = _a3.#getPromptType(params.type);
+        const promptType = _a2.#getPromptType(params.type);
         this.#lastUserPromptType = promptType;
         const promptHandler = this.#getPromptHandler(promptType);
         this.#eventManager.registerEvent({
@@ -26196,12 +27159,12 @@ var init_BrowsingContextImpl = __esm(() => {
       if (this.#lifecycle.DOMContentLoaded.isFinished) {
         this.#lifecycle.DOMContentLoaded = new Deferred2;
       } else {
-        this.#logger?.(_a3.LOGGER_PREFIX, "Document changed (DOMContentLoaded)");
+        this.#logger?.(_a2.LOGGER_PREFIX)?.("Document changed (DOMContentLoaded)");
       }
       if (this.#lifecycle.load.isFinished) {
         this.#lifecycle.load = new Deferred2;
       } else {
-        this.#logger?.(_a3.LOGGER_PREFIX, "Document changed (load)");
+        this.#logger?.(_a2.LOGGER_PREFIX)?.("Document changed (load)");
       }
     }
     #failLifecycleIfNotFinished() {
@@ -26621,7 +27584,7 @@ var init_BrowsingContextImpl = __esm(() => {
       };
       const locatorResult = await realm.callFunction(locatorDelegate.functionDeclaration, false, { type: "undefined" }, locatorDelegate.argumentsLocalValues, "none", serializationOptions);
       if (locatorResult.type !== "success") {
-        this.#logger?.(_a3.LOGGER_PREFIX, "Failed locateNodesByLocator", locatorResult);
+        this.#logger?.(_a2.LOGGER_PREFIX)?.("Failed locateNodesByLocator", locatorResult);
         if (locatorResult.exceptionDetails.text?.endsWith("is not a valid selector.") || locatorResult.exceptionDetails.text?.endsWith("is not a valid XPath expression.")) {
           throw new InvalidSelectorException(`Not valid selector ${typeof locator.value === "string" ? locator.value : JSON.stringify(locator.value)}`);
         }
@@ -26763,10 +27726,10 @@ var init_BrowsingContextImpl = __esm(() => {
       await this.cdpTarget.setDeviceMetricsOverride(config.viewport ?? null, config.devicePixelRatio ?? null, config.screenOrientation ?? null, config.screenArea ?? null, scrollbarType);
     }
   };
-  _a3 = BrowsingContextImpl;
+  _a2 = BrowsingContextImpl;
 });
 
-// node_modules/chromium-bidi/lib/bidiMapper/modules/script/WorkerRealm.js
+// node_modules/chromium-bidi/out/Default/gen/src/bidiMapper/modules/script/WorkerRealm.js
 var WorkerRealm;
 var init_WorkerRealm = __esm(() => {
   init_Realm2();
@@ -26818,7 +27781,7 @@ var init_WorkerRealm = __esm(() => {
   };
 });
 
-// node_modules/chromium-bidi/lib/bidiMapper/modules/log/logHelper.js
+// node_modules/chromium-bidi/out/Default/gen/src/bidiMapper/modules/log/logHelper.js
 function isFormatSpecifier(str) {
   return specifiers.some((spec) => str.includes(spec));
 }
@@ -26926,7 +27889,7 @@ var init_logHelper = __esm(() => {
   specifiers = ["%s", "%d", "%i", "%f", "%o", "%O", "%c"];
 });
 
-// node_modules/chromium-bidi/lib/bidiMapper/modules/log/LogManager.js
+// node_modules/chromium-bidi/out/Default/gen/src/bidiMapper/modules/log/LogManager.js
 function getBidiStackTrace(cdpStackTrace) {
   const stackFrames = cdpStackTrace?.callFrames.map((callFrame) => {
     return {
@@ -26976,7 +27939,7 @@ class LogManager {
     this.#logger = logger;
   }
   static create(cdpTarget, realmStorage, eventManager, logger) {
-    const logManager = new _a4(cdpTarget, realmStorage, eventManager, logger);
+    const logManager = new _a3(cdpTarget, realmStorage, eventManager, logger);
     logManager.#initializeEntryAddedEventListener();
     return logManager;
   }
@@ -27015,7 +27978,7 @@ class LogManager {
         executionContextId: params.executionContextId
       });
       if (realm === undefined) {
-        this.#logger?.(LogType.cdp, params);
+        this.#logger?.(LogType.cdp)?.(params);
         return;
       }
       const argsPromise = Promise.all(params.args.map((arg) => this.#heuristicSerializeArg(arg, realm)));
@@ -27048,11 +28011,11 @@ class LogManager {
         executionContextId: params.exceptionDetails.executionContextId
       });
       if (realm === undefined) {
-        this.#logger?.(LogType.cdp, params);
+        this.#logger?.(LogType.cdp)?.(params);
         return;
       }
       for (const browsingContext of realm.associatedBrowsingContexts) {
-        this.#eventManager.registerPromiseEvent(_a4.#getExceptionText(params, realm).then((text) => ({
+        this.#eventManager.registerPromiseEvent(_a3.#getExceptionText(params, realm).then((text) => ({
           kind: "success",
           value: {
             type: "event",
@@ -27083,15 +28046,15 @@ class LogManager {
     return await realm.stringifyObject(params.exceptionDetails.exception);
   }
 }
-var _a4;
+var _a3;
 var init_LogManager = __esm(() => {
   init_protocol();
   init_log();
   init_logHelper();
-  _a4 = LogManager;
+  _a3 = LogManager;
 });
 
-// node_modules/chromium-bidi/lib/bidiMapper/modules/network/CollectorsStorage.js
+// node_modules/chromium-bidi/out/Default/gen/src/bidiMapper/modules/network/CollectorsStorage.js
 class CollectorsStorage {
   #collectors = new Map;
   #responseCollectors = new Map;
@@ -27163,14 +28126,14 @@ class CollectorsStorage {
       return false;
     }
     if (dataType === "request" && request.bodySize > collector.maxEncodedDataSize) {
-      this.#logger?.(LogType.debug, `Request's ${request.id} body size is too big for the collector ${collectorId}`);
+      this.#logger?.(LogType.debug)?.(`Request's ${request.id} body size is too big for the collector ${collectorId}`);
       return false;
     }
     if (dataType === "response" && request.encodedResponseBodySize > collector.maxEncodedDataSize) {
-      this.#logger?.(LogType.debug, `Request's ${request.id} response is too big for the collector ${collectorId}`);
+      this.#logger?.(LogType.debug)?.(`Request's ${request.id} response is too big for the collector ${collectorId}`);
       return false;
     }
-    this.#logger?.(LogType.debug, `Collector ${collectorId} collected ${dataType} of ${request.id}`);
+    this.#logger?.(LogType.debug)?.(`Collector ${collectorId} collected ${dataType} of ${request.id}`);
     return true;
   }
   collectIfNeeded(request, dataType, topLevelBrowsingContext, userContext) {
@@ -27211,7 +28174,7 @@ var init_CollectorsStorage = __esm(() => {
   init_log();
 });
 
-// node_modules/chromium-bidi/lib/utils/DefaultMap.js
+// node_modules/chromium-bidi/out/Default/gen/src/utils/DefaultMap.js
 var DefaultMap;
 var init_DefaultMap = __esm(() => {
   DefaultMap = class DefaultMap extends Map {
@@ -27229,7 +28192,7 @@ var init_DefaultMap = __esm(() => {
   };
 });
 
-// node_modules/chromium-bidi/lib/bidiMapper/modules/network/NetworkRequest.js
+// node_modules/chromium-bidi/out/Default/gen/src/bidiMapper/modules/network/NetworkRequest.js
 class NetworkRequest {
   static unknownParameter = "UNKNOWN";
   #id;
@@ -27237,13 +28200,13 @@ class NetworkRequest {
   #interceptPhase;
   #servedFromCache = false;
   #redirectCount;
+  #bodySize = 0;
+  #encodedResponseBodySize = 0;
+  #decodedResponseBodySize = 0;
   #request = {};
   #requestOverrides;
   #responseOverrides;
-  #response = {
-    decodedSize: 0,
-    encodedSize: 0
-  };
+  #response = {};
   #eventManager;
   #networkStorage;
   #cdpTarget;
@@ -27275,7 +28238,7 @@ class NetworkRequest {
   }
   get url() {
     const fragment = this.#request.info?.request.urlFragment ?? this.#request.paused?.request.urlFragment ?? "";
-    const url = this.#response.paused?.request.url ?? this.#requestOverrides?.url ?? this.#response.info?.url ?? this.#request.auth?.request.url ?? this.#request.info?.request.url ?? this.#request.paused?.request.url ?? _a5.unknownParameter;
+    const url = this.#response.paused?.request.url ?? this.#requestOverrides?.url ?? this.#response.info?.url ?? this.#request.auth?.request.url ?? this.#request.info?.request.url ?? this.#request.paused?.request.url ?? _a4.unknownParameter;
     return `${url}${fragment}`;
   }
   get redirectCount() {
@@ -27286,7 +28249,7 @@ class NetworkRequest {
   }
   updateCdpTarget(cdpTarget) {
     if (cdpTarget !== this.#cdpTarget) {
-      this.#logger?.(LogType.debugInfo, `Request ${this.id} was moved from ${this.#cdpTarget.id} to ${cdpTarget.id}`);
+      this.#logger?.(LogType.debugInfo)?.(`Request ${this.id} was moved from ${this.#cdpTarget.id} to ${cdpTarget.id}`);
       this.#cdpTarget = cdpTarget;
     }
   }
@@ -27329,18 +28292,23 @@ class NetworkRequest {
       if (Number.isInteger(bodySize)) {
         return bodySize;
       }
-      this.#logger?.(LogType.debugError, "Unexpected non-integer 'Content-Length' header");
+      this.#logger?.(LogType.debugError)?.("Unexpected non-integer 'Content-Length' header");
     }
     return;
   }
-  get bodySize() {
+  #updateBodySize() {
     if (typeof this.#requestOverrides?.bodySize === "number") {
-      return this.#requestOverrides.bodySize;
+      this.#bodySize = this.#requestOverrides.bodySize;
+      return;
     }
     if (this.#request.info?.request.postDataEntries !== undefined) {
-      return bidiBodySizeFromCdpPostDataEntries(this.#request.info?.request.postDataEntries);
+      this.#bodySize = bidiBodySizeFromCdpPostDataEntries(this.#request.info?.request.postDataEntries);
+      return;
     }
-    return this.#getBodySizeFromHeaders(this.#request.info?.request.headers) ?? this.#getBodySizeFromHeaders(this.#request.extraInfo?.headers) ?? 0;
+    this.#bodySize = this.#getBodySizeFromHeaders(this.#request.info?.request.headers) ?? this.#getBodySizeFromHeaders(this.#request.extraInfo?.headers) ?? 0;
+  }
+  get bodySize() {
+    return this.#bodySize;
   }
   get #context() {
     const result = this.#response.paused?.frameId ?? this.#request.info?.frameId ?? this.#request.paused?.frameId ?? this.#request.auth?.frameId;
@@ -27435,8 +28403,8 @@ class NetworkRequest {
   }
   handleRedirect(event) {
     this.#response.hasExtraInfo = false;
-    this.#response.decodedSize = 0;
-    this.#response.encodedSize = 0;
+    this.#decodedResponseBodySize = 0;
+    this.#encodedResponseBodySize = 0;
     this.#response.info = event.redirectResponse;
     this.#emitEventsIfReady({
       wasRedirected: true
@@ -27464,11 +28432,13 @@ class NetworkRequest {
   }
   onRequestWillBeSentEvent(event) {
     this.#request.info = event;
+    this.#updateBodySize();
     this.#networkStorage.collectIfNeeded(this, "request");
     this.#emitEventsIfReady();
   }
   onRequestWillBeSentExtraInfoEvent(event) {
     this.#request.extraInfo = event;
+    this.#updateBodySize();
     this.#emitEventsIfReady();
   }
   onResponseReceivedExtraInfoEvent(event) {
@@ -27481,6 +28451,7 @@ class NetworkRequest {
   onResponseReceivedEvent(event) {
     this.#response.hasExtraInfo = event.hasExtraInfo;
     this.#response.info = event.response;
+    this.#encodedResponseBodySize = event.response.encodedDataLength;
     this.#networkStorage.collectIfNeeded(this, "response");
     this.#emitEventsIfReady();
   }
@@ -27490,11 +28461,12 @@ class NetworkRequest {
   }
   onLoadingFinishedEvent(event) {
     this.#response.loadingFinished = event;
+    this.#encodedResponseBodySize = event.encodedDataLength;
     this.#emitEventsIfReady();
   }
   onDataReceivedEvent(event) {
-    this.#response.decodedSize += event.dataLength;
-    this.#response.encodedSize += event.encodedDataLength;
+    this.#decodedResponseBodySize += event.dataLength;
+    this.#encodedResponseBodySize += event.encodedDataLength;
   }
   onLoadingFailedEvent(event) {
     this.#response.loadingFailed = event;
@@ -27508,6 +28480,7 @@ class NetworkRequest {
         }
       };
     });
+    this.disposeData();
   }
   async failRequest(errorReason) {
     assert2(this.#fetchId, "Network Interception not set-up.");
@@ -27667,6 +28640,12 @@ class NetworkRequest {
   dispose() {
     this.waitNextPhase.reject(new Error("waitNextPhase disposed"));
   }
+  disposeData() {
+    this.#request = {};
+    this.#response = {};
+    this.#requestOverrides = undefined;
+    this.#responseOverrides = undefined;
+  }
   async#continueWithAuth(authChallengeResponse) {
     assert2(this.#fetchId, "Network Interception not set-up.");
     await this.cdpClient.sendCommand("Fetch.continueWithAuth", {
@@ -27680,7 +28659,7 @@ class NetworkRequest {
     try {
       event = getEvent();
     } catch (error) {
-      this.#logger?.(LogType.debugError, error);
+      this.#logger?.(LogType.debugError)?.(error);
       return;
     }
     if (this.#isIgnoredEvent() || this.#emittedEvents[event.method] && event.method !== Network.EventNames.AuthRequired) {
@@ -27741,7 +28720,7 @@ class NetworkRequest {
       headersSize: computeHeadersSize(headers),
       bodySize: this.encodedResponseBodySize,
       content: {
-        size: this.#response.decodedSize ?? 0
+        size: this.#decodedResponseBodySize
       },
       ...authChallenges ? { authChallenges } : {}
     };
@@ -27751,14 +28730,17 @@ class NetworkRequest {
     };
   }
   get encodedResponseBodySize() {
-    return this.#response.loadingFinished?.encodedDataLength ?? this.#response.info?.encodedDataLength ?? this.#response.encodedSize ?? 0;
+    return this.#encodedResponseBodySize;
+  }
+  get decodedResponseBodySize() {
+    return this.#decodedResponseBodySize;
   }
   #getRequestData() {
     const headers = this.#requestHeaders;
     const request = {
       request: this.#id,
       url: this.url,
-      method: this.#method ?? _a5.unknownParameter,
+      method: this.#method ?? _a4.unknownParameter,
       headers,
       cookies: this.#cookies,
       headersSize: computeHeadersSize(headers),
@@ -27818,7 +28800,7 @@ class NetworkRequest {
       params: {
         ...this.#getBaseEventParams("beforeRequestSent"),
         initiator: {
-          type: _a5.#getInitiator(this.#request.info.initiator.type),
+          type: _a4.#getInitiator(this.#request.info.initiator.type),
           columnNumber: this.#request.info.initiator.columnNumber,
           lineNumber: this.#request.info.initiator.lineNumber,
           stackTrace: this.#request.info.initiator.stack,
@@ -27894,7 +28876,7 @@ function getSizeFromBiDiBytesValue(body) {
   }
   return 0;
 }
-var _a5, REALM_REGEX;
+var _a4, REALM_REGEX;
 var init_NetworkRequest = __esm(() => {
   init_protocol();
   init_DefaultMap();
@@ -27902,10 +28884,10 @@ var init_NetworkRequest = __esm(() => {
   init_log();
   init_NetworkUtils();
   REALM_REGEX = /(?<=realm=").*(?=")/;
-  _a5 = NetworkRequest;
+  _a4 = NetworkRequest;
 });
 
-// node_modules/chromium-bidi/lib/bidiMapper/modules/network/NetworkStorage.js
+// node_modules/chromium-bidi/out/Default/gen/src/bidiMapper/modules/network/NetworkStorage.js
 class NetworkStorage {
   #browsingContextStorage;
   #eventManager;
@@ -28170,6 +29152,7 @@ class NetworkStorage {
   }
   disposeRequest(id) {
     if (this.#collectorsStorage.isCollected(id)) {
+      this.#requests.get(id)?.disposeData();
       return;
     }
     this.#requests.delete(id);
@@ -28209,7 +29192,7 @@ var init_NetworkStorage = __esm(() => {
   init_NetworkUtils();
 });
 
-// node_modules/chromium-bidi/lib/bidiMapper/modules/cdp/CdpTarget.js
+// node_modules/chromium-bidi/out/Default/gen/src/bidiMapper/modules/cdp/CdpTarget.js
 class CdpTarget2 {
   #id;
   userContext;
@@ -28276,7 +29259,7 @@ class CdpTarget2 {
   }
   get windowId() {
     if (this.#windowId === undefined) {
-      this.#logger?.(LogType.debugError, "Getting windowId before it was set, returning 0");
+      this.#logger?.(LogType.debugError)?.("Getting windowId before it was set, returning 0");
     }
     return this.#windowId ?? 0;
   }
@@ -28316,7 +29299,7 @@ class CdpTarget2 {
     ]);
     for (const result of results) {
       if (result instanceof Error) {
-        this.#logger?.(LogType.debugError, "Error happened when configuring a new target", result);
+        this.#logger?.(LogType.debugError)?.("Error happened when configuring a new target", result);
       }
     }
     this.#unblocked.resolve({
@@ -28371,7 +29354,7 @@ class CdpTarget2 {
         }
         return await this.#cdpClient.sendCommand("Fetch.disable");
       }).catch((error) => {
-        this.#logger?.(LogType.bidi, "Disable failed", error);
+        this.#logger?.(LogType.bidi)?.("Disable failed", error);
       });
     }
   }
@@ -28382,7 +29365,7 @@ class CdpTarget2 {
         this.toggleFetchIfNeeded()
       ]);
     } catch (err) {
-      this.#logger?.(LogType.debugError, err);
+      this.#logger?.(LogType.debugError)?.(err);
       if (!this.#isExpectedError(err)) {
         throw err;
       }
@@ -28400,7 +29383,7 @@ class CdpTarget2 {
         cacheDisabled
       });
     } catch (err) {
-      this.#logger?.(LogType.debugError, err);
+      this.#logger?.(LogType.debugError)?.(err);
       this.#cacheDisableState = !cacheDisabled;
       if (!this.#isExpectedError(err)) {
         throw err;
@@ -28416,7 +29399,7 @@ class CdpTarget2 {
     try {
       await this.#cdpClient.sendCommand(enabled ? "DeviceAccess.enable" : "DeviceAccess.disable");
     } catch (err) {
-      this.#logger?.(LogType.debugError, err);
+      this.#logger?.(LogType.debugError)?.(err);
       this.#deviceAccessEnabled = !enabled;
       if (!this.#isExpectedError(err)) {
         throw err;
@@ -28432,7 +29415,7 @@ class CdpTarget2 {
     try {
       await this.#cdpClient.sendCommand(enabled ? "Preload.enable" : "Preload.disable");
     } catch (err) {
-      this.#logger?.(LogType.debugError, err);
+      this.#logger?.(LogType.debugError)?.(err);
       this.#preloadEnabled = !enabled;
       if (!this.#isExpectedError(err)) {
         throw err;
@@ -28501,7 +29484,7 @@ class CdpTarget2 {
     const stages = this.#networkStorage.getInterceptionStages(this.topLevelId);
     const fetchEnable = Object.values(stages).some((value) => value);
     const fetchChanged = this.#fetchDomainStages.request !== stages.request || this.#fetchDomainStages.response !== stages.response || this.#fetchDomainStages.auth !== stages.auth;
-    this.#logger?.(LogType.debugInfo, "Toggle Network", `Fetch (${fetchEnable}) ${fetchChanged}`);
+    this.#logger?.(LogType.debugInfo)?.("Toggle Network", `Fetch (${fetchEnable}) ${fetchChanged}`);
     if (fetchEnable && fetchChanged) {
       await this.#enableFetch(stages);
     }
@@ -28576,6 +29559,14 @@ class CdpTarget2 {
     }
     if (config.maxTouchPoints !== undefined) {
       promises.push(this.setTouchOverride(config.maxTouchPoints));
+    }
+    if (config.digitalCredentialsBehavior && this.id === this.topLevelId) {
+      promises.push(this.cdpClient.sendCommand("DigitalCredentials.setVirtualWalletBehavior", {
+        action: config.digitalCredentialsBehavior.action,
+        behavior: config.digitalCredentialsBehavior.action,
+        protocol: config.digitalCredentialsBehavior.protocol,
+        response: config.digitalCredentialsBehavior.response
+      }).catch(() => {}));
     }
     await Promise.all(promises);
   }
@@ -28766,7 +29757,7 @@ var init_CdpTarget = __esm(() => {
   init_NetworkStorage();
 });
 
-// node_modules/chromium-bidi/lib/bidiMapper/modules/cdp/CdpTargetManager.js
+// node_modules/chromium-bidi/out/Default/gen/src/bidiMapper/modules/cdp/CdpTargetManager.js
 class CdpTargetManager {
   #browserCdpClient;
   #cdpConnection;
@@ -28826,7 +29817,7 @@ class CdpTargetManager {
     const { sessionId, targetInfo } = params;
     const targetCdpClient = this.#cdpConnection.getCdpClient(sessionId);
     const detach = async () => {
-      await targetCdpClient.sendCommand("Runtime.runIfWaitingForDebugger").then(() => parentSessionCdpClient.sendCommand("Target.detachFromTarget", params)).catch((error) => this.#logger?.(LogType.debugError, error));
+      await targetCdpClient.sendCommand("Runtime.runIfWaitingForDebugger").then(() => parentSessionCdpClient.sendCommand("Target.detachFromTarget", params)).catch((error) => this.#logger?.(LogType.debugError)?.(error));
     };
     if (this.#selfTargetId === targetInfo.targetId) {
       detach();
@@ -28960,7 +29951,7 @@ var init_CdpTargetManager = __esm(() => {
   };
 });
 
-// node_modules/chromium-bidi/lib/bidiMapper/modules/context/BrowsingContextStorage.js
+// node_modules/chromium-bidi/out/Default/gen/src/bidiMapper/modules/context/BrowsingContextStorage.js
 class BrowsingContextStorage {
   #contexts = new Map;
   #eventEmitter = new EventEmitter2;
@@ -29060,7 +30051,7 @@ var init_BrowsingContextStorage = __esm(() => {
   init_EventEmitter2();
 });
 
-// node_modules/chromium-bidi/lib/bidiMapper/modules/script/PreloadScriptStorage.js
+// node_modules/chromium-bidi/out/Default/gen/src/bidiMapper/modules/script/PreloadScriptStorage.js
 class PreloadScriptStorage {
   #scripts = new Set;
   find(filter) {
@@ -29110,7 +30101,7 @@ var init_PreloadScriptStorage = __esm(() => {
   init_ErrorResponse();
 });
 
-// node_modules/chromium-bidi/lib/bidiMapper/modules/script/RealmStorage.js
+// node_modules/chromium-bidi/out/Default/gen/src/bidiMapper/modules/script/RealmStorage.js
 class RealmStorage {
   #knownHandlesToRealmMap = new Map;
   #realmMap = new Map;
@@ -29174,7 +30165,7 @@ var init_RealmStorage = __esm(() => {
   init_WindowRealm();
 });
 
-// node_modules/chromium-bidi/lib/utils/Buffer.js
+// node_modules/chromium-bidi/out/Default/gen/src/utils/Buffer.js
 class Buffer2 {
   #capacity;
   #entries = [];
@@ -29197,7 +30188,7 @@ class Buffer2 {
   }
 }
 
-// node_modules/chromium-bidi/lib/utils/IdWrapper.js
+// node_modules/chromium-bidi/out/Default/gen/src/utils/IdWrapper.js
 class IdWrapper {
   static #counter = 0;
   #id;
@@ -29209,7 +30200,7 @@ class IdWrapper {
   }
 }
 
-// node_modules/chromium-bidi/lib/bidiMapper/modules/session/events.js
+// node_modules/chromium-bidi/out/Default/gen/src/bidiMapper/modules/session/events.js
 function isCdpEvent(name) {
   return name.split(".").at(0)?.startsWith(BiDiModule.Cdp) ?? false;
 }
@@ -29222,7 +30213,7 @@ var init_events = __esm(() => {
   init_protocol();
 });
 
-// node_modules/chromium-bidi/lib/bidiMapper/modules/session/SubscriptionManager.js
+// node_modules/chromium-bidi/out/Default/gen/src/bidiMapper/modules/session/SubscriptionManager.js
 function unrollEvents(events) {
   const allEvents = new Set;
   function addEvents(events) {
@@ -29426,7 +30417,7 @@ var init_SubscriptionManager = __esm(() => {
   init_protocol();
 });
 
-// node_modules/chromium-bidi/lib/bidiMapper/modules/session/EventManager.js
+// node_modules/chromium-bidi/out/Default/gen/src/bidiMapper/modules/session/EventManager.js
 class EventWrapper {
   #idWrapper = new IdWrapper;
   #contextId;
@@ -29445,7 +30436,7 @@ class EventWrapper {
     return this.#event;
   }
 }
-var _a6, eventBufferLength, EventManager;
+var _a5, eventBufferLength, EventManager;
 var init_EventManager = __esm(() => {
   init_protocol();
   init_DefaultMap();
@@ -29575,7 +30566,7 @@ var init_EventManager = __esm(() => {
     }
     clearBufferedEvents(contextId) {
       for (const eventName of eventBufferLength.keys()) {
-        const bufferMapKey = _a6.#getMapKey(eventName, contextId);
+        const bufferMapKey = _a5.#getMapKey(eventName, contextId);
         this.#eventBuffers.delete(bufferMapKey);
       }
     }
@@ -29583,7 +30574,7 @@ var init_EventManager = __esm(() => {
       if (!eventBufferLength.has(eventName)) {
         return;
       }
-      const bufferMapKey = _a6.#getMapKey(eventName, eventWrapper.contextId);
+      const bufferMapKey = _a5.#getMapKey(eventName, eventWrapper.contextId);
       if (!this.#eventBuffers.has(bufferMapKey)) {
         this.#eventBuffers.set(bufferMapKey, new Buffer2(eventBufferLength.get(eventName)));
       }
@@ -29594,7 +30585,7 @@ var init_EventManager = __esm(() => {
       if (!eventBufferLength.has(eventName)) {
         return;
       }
-      const lastSentMapKey = _a6.#getMapKey(eventName, eventWrapper.contextId);
+      const lastSentMapKey = _a5.#getMapKey(eventName, eventWrapper.contextId);
       const lastId = Math.max(this.#lastMessageSent.get(lastSentMapKey)?.get(googChannel) ?? 0, eventWrapper.id);
       const googChannelMap = this.#lastMessageSent.get(lastSentMapKey);
       if (googChannelMap) {
@@ -29604,7 +30595,7 @@ var init_EventManager = __esm(() => {
       }
     }
     #getBufferedEvents(eventName, contextId, googChannel) {
-      const bufferMapKey = _a6.#getMapKey(eventName, contextId);
+      const bufferMapKey = _a5.#getMapKey(eventName, contextId);
       const lastSentMessageId = this.#lastMessageSent.get(bufferMapKey)?.get(googChannel) ?? -Infinity;
       const result = this.#eventBuffers.get(bufferMapKey)?.get().filter((wrapper) => wrapper.id > lastSentMessageId) ?? [];
       if (contextId === null) {
@@ -29613,10 +30604,10 @@ var init_EventManager = __esm(() => {
       return result.sort((e1, e2) => e1.id - e2.id);
     }
   };
-  _a6 = EventManager;
+  _a5 = EventManager;
 });
 
-// node_modules/chromium-bidi/lib/bidiMapper/modules/speculation/SpeculationProcessor.js
+// node_modules/chromium-bidi/out/Default/gen/src/bidiMapper/modules/speculation/SpeculationProcessor.js
 class SpeculationProcessor {
   #eventManager;
   #logger;
@@ -29641,7 +30632,7 @@ class SpeculationProcessor {
           prefetchStatus = "failure";
           break;
         default:
-          this.#logger?.(LogType.debugWarn, `Unknown prefetch status: ${event.status}`);
+          this.#logger?.(LogType.debugWarn)?.(`Unknown prefetch status: ${event.status}`);
           return;
       }
       this.#eventManager.registerEvent({
@@ -29660,7 +30651,89 @@ var init_SpeculationProcessor = __esm(() => {
   init_log();
 });
 
-// node_modules/chromium-bidi/lib/bidiMapper/BidiServer.js
+// node_modules/chromium-bidi/out/Default/gen/src/bidiMapper/modules/digitalCredentials/DigitalCredentialsProcessor.js
+class DigitalCredentialsProcessor {
+  #browsingContextStorage;
+  #contextConfigStorage;
+  constructor(browsingContextStorage, contextConfigStorage) {
+    this.#browsingContextStorage = browsingContextStorage;
+    this.#contextConfigStorage = contextConfigStorage;
+  }
+  async setVirtualWalletBehavior(params) {
+    const { context, action, protocol, response } = params;
+    if (action === "respond") {
+      if (protocol === undefined || response === undefined) {
+        throw new InvalidArgumentException("Protocol and response are required when action is 'respond'");
+      }
+    } else {
+      if (protocol !== undefined || response !== undefined) {
+        throw new InvalidArgumentException("Protocol and response are only allowed when action is 'respond'");
+      }
+    }
+    if (context === undefined) {
+      if (action === "clear") {
+        this.#contextConfigStorage.updateGlobalConfig({
+          digitalCredentialsBehavior: null
+        });
+      } else {
+        this.#contextConfigStorage.updateGlobalConfig({
+          digitalCredentialsBehavior: { action, protocol, response }
+        });
+      }
+    } else {
+      const browsingContext = this.#browsingContextStorage.getContext(context);
+      if (browsingContext.parentId !== null) {
+        throw new UnsupportedOperationException("Only top-level contexts are supported");
+      }
+      if (action === "clear") {
+        this.#contextConfigStorage.updateBrowsingContextConfig(context, {
+          digitalCredentialsBehavior: null
+        });
+      } else {
+        this.#contextConfigStorage.updateBrowsingContextConfig(context, {
+          digitalCredentialsBehavior: { action, protocol, response }
+        });
+      }
+    }
+    await this.#applyToAllTargets();
+    return {};
+  }
+  async#applyToAllTargets() {
+    const contexts = this.#browsingContextStorage.getAllContexts();
+    const targets = new Set;
+    for (const c of contexts) {
+      targets.add(c.cdpTarget);
+    }
+    await Promise.all(Array.from(targets).map((target) => this.#applyBehaviorToTarget(target)));
+  }
+  async#applyBehaviorToTarget(target) {
+    if (target.id !== target.topLevelId) {
+      return;
+    }
+    const config = this.#contextConfigStorage.getActiveConfig(target.topLevelId, target.userContext);
+    const behavior = config.digitalCredentialsBehavior;
+    if (behavior === null || behavior === undefined) {
+      await this.#sendCdpCommand(target, {
+        action: "clear"
+      });
+      return;
+    }
+    await this.#sendCdpCommand(target, behavior);
+  }
+  async#sendCdpCommand(cdpTarget, behavior) {
+    await cdpTarget.cdpClient.sendCommand("DigitalCredentials.setVirtualWalletBehavior", {
+      action: behavior.action,
+      behavior: behavior.action,
+      protocol: behavior.protocol,
+      response: behavior.response
+    });
+  }
+}
+var init_DigitalCredentialsProcessor = __esm(() => {
+  init_protocol();
+});
+
+// node_modules/chromium-bidi/out/Default/gen/src/bidiMapper/BidiServer.js
 var BidiServer;
 var init_BidiServer = __esm(() => {
   init_EventEmitter2();
@@ -29677,6 +30750,7 @@ var init_BidiServer = __esm(() => {
   init_RealmStorage();
   init_EventManager();
   init_SpeculationProcessor();
+  init_DigitalCredentialsProcessor();
   BidiServer = class BidiServer extends EventEmitter2 {
     #messageQueue;
     #transport;
@@ -29687,10 +30761,11 @@ var init_BidiServer = __esm(() => {
     #preloadScriptStorage = new PreloadScriptStorage;
     #bluetoothProcessor;
     #speculationProcessor;
+    #digitalCredentialsProcessor;
     #logger;
     #handleIncomingMessage = (message) => {
       this.#commandProcessor.processCommand(message).catch((error) => {
-        this.#logger?.(LogType.debugError, error);
+        this.#logger?.(LogType.debugError)?.(error);
       });
     };
     #processOutgoingMessage = async (messageEntry) => {
@@ -29712,7 +30787,8 @@ var init_BidiServer = __esm(() => {
       const networkStorage = new NetworkStorage(this.#eventManager, this.#browsingContextStorage, browserCdpClient, logger);
       this.#bluetoothProcessor = new BluetoothProcessor(this.#eventManager, this.#browsingContextStorage);
       this.#speculationProcessor = new SpeculationProcessor(this.#eventManager, this.#logger);
-      this.#commandProcessor = new CommandProcessor(cdpConnection, browserCdpClient, this.#eventManager, this.#browsingContextStorage, this.#realmStorage, this.#preloadScriptStorage, networkStorage, contextConfigStorage, this.#bluetoothProcessor, userContextStorage, parser, async (options) => {
+      this.#digitalCredentialsProcessor = new DigitalCredentialsProcessor(this.#browsingContextStorage, contextConfigStorage);
+      this.#commandProcessor = new CommandProcessor(cdpConnection, browserCdpClient, this.#eventManager, this.#browsingContextStorage, this.#realmStorage, this.#preloadScriptStorage, networkStorage, contextConfigStorage, this.#bluetoothProcessor, this.#digitalCredentialsProcessor, userContextStorage, parser, async (options) => {
         await browserCdpClient.sendCommand("Security.setIgnoreCertificateErrors", {
           ignore: options.acceptInsecureCerts ?? false
         });
@@ -29786,14 +30862,14 @@ var init_BidiServer = __esm(() => {
   };
 });
 
-// node_modules/chromium-bidi/lib/bidiMapper/BidiMapper.js
+// node_modules/chromium-bidi/out/Default/gen/src/bidiMapper/BidiMapper.js
 var init_BidiMapper = __esm(() => {
   init_BidiServer();
   init_EventEmitter2();
 });
 
-// node_modules/chromium-bidi/lib/index.js
-var init_lib = __esm(() => {
+// node_modules/chromium-bidi/out/Default/gen/src/index.js
+var init_src = __esm(() => {
   init_BidiMapper();
   init_protocol();
 });
@@ -29891,30 +30967,32 @@ function createProtocolError(object) {
 function isCdpEvent2(event) {
   return event.method.startsWith("goog:cdp.");
 }
-var debugProtocolSend2, debugProtocolReceive2, BidiConnection;
+var BidiConnection;
 var init_Connection2 = __esm(() => {
   init_CallbackRegistry();
   init_Debug();
   init_Errors();
   init_EventEmitter();
-  init_util();
   init_CDPSession2();
-  debugProtocolSend2 = debug("puppeteer:webDriverBiDi:SEND \u25BA");
-  debugProtocolReceive2 = debug("puppeteer:webDriverBiDi:RECV \u25C0");
   BidiConnection = class BidiConnection extends EventEmitter {
     #url;
     #transport;
     #delay;
     #timeout = 0;
     #closed = false;
+    #logger;
     #callbacks;
     #emitters = [];
-    constructor(url, transport, idGenerator, delay = 0, timeout) {
+    #debugProtocolSend;
+    #debugProtocolReceive;
+    constructor(url, transport, idGenerator, delay = 0, timeout = undefined, logger) {
       super();
       this.#url = url;
       this.#delay = delay;
       this.#timeout = timeout ?? 180000;
-      this.#callbacks = new CallbackRegistry(idGenerator);
+      this.#callbacks = new CallbackRegistry(idGenerator, logger);
+      this.#debugProtocolSend = logger?.(DEBUG_PREFIXES.bidiSend);
+      this.#debugProtocolReceive = logger?.(DEBUG_PREFIXES.bidiReceive);
       this.#transport = transport;
       this.#transport.onmessage = this.onMessage.bind(this);
       this.#transport.onclose = this.unbind.bind(this);
@@ -29958,7 +31036,7 @@ var init_Connection2 = __esm(() => {
           method,
           params
         });
-        debugProtocolSend2?.(stringifiedMessage);
+        this.#debugProtocolSend?.(stringifiedMessage);
         this.#transport.send(stringifiedMessage);
       });
     }
@@ -29968,7 +31046,7 @@ var init_Connection2 = __esm(() => {
           return setTimeout(f, this.#delay);
         });
       }
-      debugProtocolReceive2?.(message);
+      this.#debugProtocolReceive?.(message);
       const object = JSON.parse(message);
       if ("type" in object) {
         switch (object.type) {
@@ -29993,7 +31071,7 @@ var init_Connection2 = __esm(() => {
       if ("id" in object) {
         this.#callbacks.reject(object.id, `Protocol Error. Message is not in BiDi protocol format: '${message}'`, object.message);
       }
-      debugError?.(object);
+      this.#logger?.(DEBUG_PREFIXES.error)?.(object);
     }
     unbind() {
       if (this.#closed) {
@@ -30015,7 +31093,10 @@ var init_Connection2 = __esm(() => {
 });
 
 // node_modules/puppeteer-core/lib/puppeteer/bidi/BidiOverCdp.js
-async function connectBidiOverCdp(cdp) {
+async function connectBidiOverCdp(cdp, logger) {
+  const bidiServerLogger = logger ? (prefix) => {
+    return logger(`bidi:${prefix}`);
+  } : undefined;
   const transportBiDi = new NoOpTransport;
   const cdpConnectionAdapter = new CdpConnectionAdapter(cdp);
   const pptrTransport = {
@@ -30032,7 +31113,7 @@ async function connectBidiOverCdp(cdp) {
   transportBiDi.on("bidiResponse", (message) => {
     pptrTransport.onmessage(JSON.stringify(message));
   });
-  const pptrBiDiConnection = new BidiConnection(cdp.url(), pptrTransport, cdp._idGenerator, cdp.delay, cdp.timeout);
+  const pptrBiDiConnection = new BidiConnection(cdp.url(), pptrTransport, cdp._idGenerator, cdp.delay, cdp.timeout, logger);
   const bidiServer = await BidiServer.createAndStart(transportBiDi, cdpConnectionAdapter, cdpConnectionAdapter.browserClient(), "", undefined, bidiServerLogger);
   return pptrBiDiConnection;
 }
@@ -30067,12 +31148,9 @@ class CdpConnectionAdapter {
     }
   }
 }
-var bidiServerLogger = (prefix, ...args) => {
-  debug(`bidi:${prefix}`)?.(args);
-}, CDPClientAdapter, NoOpTransport;
+var CDPClientAdapter, NoOpTransport;
 var init_BidiOverCdp = __esm(() => {
-  init_lib();
-  init_Debug();
+  init_src();
   init_Errors();
   init_Connection2();
   CDPClientAdapter = class CDPClientAdapter extends EventEmitter2 {
@@ -30244,13 +31322,13 @@ var init_DeviceRequestPrompt2 = __esm(() => {
 });
 
 // node_modules/puppeteer-core/lib/puppeteer/bidi/core/Navigation.js
-var __runInitializers8 = function(thisArg, initializers, value) {
+var __runInitializers9 = function(thisArg, initializers, value) {
   var useValue = arguments.length > 2;
   for (var i = 0;i < initializers.length; i++) {
     value = useValue ? initializers[i].call(thisArg, value) : initializers[i].call(thisArg);
   }
   return useValue ? value : undefined;
-}, __esDecorate8 = function(ctor, descriptorIn, decorators, contextIn, initializers, extraInitializers) {
+}, __esDecorate9 = function(ctor, descriptorIn, decorators, contextIn, initializers, extraInitializers) {
   function accept(f) {
     if (f !== undefined && typeof f !== "function")
       throw new TypeError("Function expected");
@@ -30306,7 +31384,7 @@ var init_Navigation = __esm(() => {
     return class Navigation extends _classSuper {
       static {
         const _metadata = typeof Symbol === "function" && Symbol.metadata ? Object.create(_classSuper[Symbol.metadata] ?? null) : undefined;
-        __esDecorate8(this, null, _dispose_decorators, { kind: "method", name: "dispose", static: false, private: false, access: { has: (obj) => ("dispose" in obj), get: (obj) => obj.dispose }, metadata: _metadata }, null, _instanceExtraInitializers);
+        __esDecorate9(this, null, _dispose_decorators, { kind: "method", name: "dispose", static: false, private: false, access: { has: (obj) => ("dispose" in obj), get: (obj) => obj.dispose }, metadata: _metadata }, null, _instanceExtraInitializers);
         if (_metadata)
           Object.defineProperty(this, Symbol.metadata, { enumerable: true, configurable: true, writable: true, value: _metadata });
       }
@@ -30315,7 +31393,7 @@ var init_Navigation = __esm(() => {
         navigation.#initialize();
         return navigation;
       }
-      #request = __runInitializers8(this, _instanceExtraInitializers);
+      #request = __runInitializers9(this, _instanceExtraInitializers);
       #navigation;
       #browsingContext;
       #disposables = new DisposableStack;
@@ -30414,13 +31492,13 @@ var init_Navigation = __esm(() => {
 });
 
 // node_modules/puppeteer-core/lib/puppeteer/bidi/core/Realm.js
-var __runInitializers9 = function(thisArg, initializers, value) {
+var __runInitializers10 = function(thisArg, initializers, value) {
   var useValue = arguments.length > 2;
   for (var i = 0;i < initializers.length; i++) {
     value = useValue ? initializers[i].call(thisArg, value) : initializers[i].call(thisArg);
   }
   return useValue ? value : undefined;
-}, __esDecorate9 = function(ctor, descriptorIn, decorators, contextIn, initializers, extraInitializers) {
+}, __esDecorate10 = function(ctor, descriptorIn, decorators, contextIn, initializers, extraInitializers) {
   function accept(f) {
     if (f !== undefined && typeof f !== "function")
       throw new TypeError("Function expected");
@@ -30463,7 +31541,7 @@ var __runInitializers9 = function(thisArg, initializers, value) {
   if (target)
     Object.defineProperty(target, contextIn.name, descriptor);
   done = true;
-}, _a7, Realm4, WindowRealm2, DedicatedWorkerRealm, SharedWorkerRealm;
+}, _a6, Realm4, WindowRealm2, DedicatedWorkerRealm, SharedWorkerRealm;
 var init_Realm3 = __esm(() => {
   init_EventEmitter();
   init_decorators();
@@ -30479,15 +31557,15 @@ var init_Realm3 = __esm(() => {
     return class Realm extends _classSuper {
       static {
         const _metadata = typeof Symbol === "function" && Symbol.metadata ? Object.create(_classSuper[Symbol.metadata] ?? null) : undefined;
-        __esDecorate9(this, null, _dispose_decorators, { kind: "method", name: "dispose", static: false, private: false, access: { has: (obj) => ("dispose" in obj), get: (obj) => obj.dispose }, metadata: _metadata }, null, _instanceExtraInitializers);
-        __esDecorate9(this, null, _disown_decorators, { kind: "method", name: "disown", static: false, private: false, access: { has: (obj) => ("disown" in obj), get: (obj) => obj.disown }, metadata: _metadata }, null, _instanceExtraInitializers);
-        __esDecorate9(this, null, _callFunction_decorators, { kind: "method", name: "callFunction", static: false, private: false, access: { has: (obj) => ("callFunction" in obj), get: (obj) => obj.callFunction }, metadata: _metadata }, null, _instanceExtraInitializers);
-        __esDecorate9(this, null, _evaluate_decorators, { kind: "method", name: "evaluate", static: false, private: false, access: { has: (obj) => ("evaluate" in obj), get: (obj) => obj.evaluate }, metadata: _metadata }, null, _instanceExtraInitializers);
-        __esDecorate9(this, null, _resolveExecutionContextId_decorators, { kind: "method", name: "resolveExecutionContextId", static: false, private: false, access: { has: (obj) => ("resolveExecutionContextId" in obj), get: (obj) => obj.resolveExecutionContextId }, metadata: _metadata }, null, _instanceExtraInitializers);
+        __esDecorate10(this, null, _dispose_decorators, { kind: "method", name: "dispose", static: false, private: false, access: { has: (obj) => ("dispose" in obj), get: (obj) => obj.dispose }, metadata: _metadata }, null, _instanceExtraInitializers);
+        __esDecorate10(this, null, _disown_decorators, { kind: "method", name: "disown", static: false, private: false, access: { has: (obj) => ("disown" in obj), get: (obj) => obj.disown }, metadata: _metadata }, null, _instanceExtraInitializers);
+        __esDecorate10(this, null, _callFunction_decorators, { kind: "method", name: "callFunction", static: false, private: false, access: { has: (obj) => ("callFunction" in obj), get: (obj) => obj.callFunction }, metadata: _metadata }, null, _instanceExtraInitializers);
+        __esDecorate10(this, null, _evaluate_decorators, { kind: "method", name: "evaluate", static: false, private: false, access: { has: (obj) => ("evaluate" in obj), get: (obj) => obj.evaluate }, metadata: _metadata }, null, _instanceExtraInitializers);
+        __esDecorate10(this, null, _resolveExecutionContextId_decorators, { kind: "method", name: "resolveExecutionContextId", static: false, private: false, access: { has: (obj) => ("resolveExecutionContextId" in obj), get: (obj) => obj.resolveExecutionContextId }, metadata: _metadata }, null, _instanceExtraInitializers);
         if (_metadata)
           Object.defineProperty(this, Symbol.metadata, { enumerable: true, configurable: true, writable: true, value: _metadata });
       }
-      #reason = __runInitializers9(this, _instanceExtraInitializers);
+      #reason = __runInitializers10(this, _instanceExtraInitializers);
       disposables = new DisposableStack;
       id;
       origin;
@@ -30615,7 +31693,7 @@ var init_Realm3 = __esm(() => {
   };
   DedicatedWorkerRealm = class DedicatedWorkerRealm extends Realm4 {
     static from(owner, id, origin) {
-      const realm = new _a7(owner, id, origin);
+      const realm = new _a6(owner, id, origin);
       realm.#initialize();
       return realm;
     }
@@ -30640,7 +31718,7 @@ var init_Realm3 = __esm(() => {
         if (!info.owners.includes(this.id)) {
           return;
         }
-        const realm = _a7.from(this, info.realm, info.origin);
+        const realm = _a6.from(this, info.realm, info.origin);
         this.#workers.set(realm.id, realm);
         const realmEmitter = this.disposables.use(new EventEmitter(realm));
         realmEmitter.once("destroyed", () => {
@@ -30659,7 +31737,7 @@ var init_Realm3 = __esm(() => {
       return this.owners.values().next().value.session;
     }
   };
-  _a7 = DedicatedWorkerRealm;
+  _a6 = DedicatedWorkerRealm;
   SharedWorkerRealm = class SharedWorkerRealm extends Realm4 {
     static from(browser, id, origin) {
       const realm = new SharedWorkerRealm(browser, id, origin);
@@ -30709,13 +31787,13 @@ var init_Realm3 = __esm(() => {
 });
 
 // node_modules/puppeteer-core/lib/puppeteer/bidi/core/Request.js
-var __runInitializers10 = function(thisArg, initializers, value) {
+var __runInitializers11 = function(thisArg, initializers, value) {
   var useValue = arguments.length > 2;
   for (var i = 0;i < initializers.length; i++) {
     value = useValue ? initializers[i].call(thisArg, value) : initializers[i].call(thisArg);
   }
   return useValue ? value : undefined;
-}, __esDecorate10 = function(ctor, descriptorIn, decorators, contextIn, initializers, extraInitializers) {
+}, __esDecorate11 = function(ctor, descriptorIn, decorators, contextIn, initializers, extraInitializers) {
   function accept(f) {
     if (f !== undefined && typeof f !== "function")
       throw new TypeError("Function expected");
@@ -30772,7 +31850,7 @@ var init_Request = __esm(() => {
     return class Request extends _classSuper {
       static {
         const _metadata = typeof Symbol === "function" && Symbol.metadata ? Object.create(_classSuper[Symbol.metadata] ?? null) : undefined;
-        __esDecorate10(this, null, _dispose_decorators, { kind: "method", name: "dispose", static: false, private: false, access: { has: (obj) => ("dispose" in obj), get: (obj) => obj.dispose }, metadata: _metadata }, null, _instanceExtraInitializers);
+        __esDecorate11(this, null, _dispose_decorators, { kind: "method", name: "dispose", static: false, private: false, access: { has: (obj) => ("dispose" in obj), get: (obj) => obj.dispose }, metadata: _metadata }, null, _instanceExtraInitializers);
         if (_metadata)
           Object.defineProperty(this, Symbol.metadata, { enumerable: true, configurable: true, writable: true, value: _metadata });
       }
@@ -30781,7 +31859,7 @@ var init_Request = __esm(() => {
         request.#initialize();
         return request;
       }
-      #responseContentPromise = (__runInitializers10(this, _instanceExtraInitializers), null);
+      #responseContentPromise = (__runInitializers11(this, _instanceExtraInitializers), null);
       #requestBodyPromise = null;
       #error;
       #redirect;
@@ -31004,13 +32082,13 @@ var init_Request = __esm(() => {
 });
 
 // node_modules/puppeteer-core/lib/puppeteer/bidi/core/UserPrompt.js
-var __runInitializers11 = function(thisArg, initializers, value) {
+var __runInitializers12 = function(thisArg, initializers, value) {
   var useValue = arguments.length > 2;
   for (var i = 0;i < initializers.length; i++) {
     value = useValue ? initializers[i].call(thisArg, value) : initializers[i].call(thisArg);
   }
   return useValue ? value : undefined;
-}, __esDecorate11 = function(ctor, descriptorIn, decorators, contextIn, initializers, extraInitializers) {
+}, __esDecorate12 = function(ctor, descriptorIn, decorators, contextIn, initializers, extraInitializers) {
   function accept(f) {
     if (f !== undefined && typeof f !== "function")
       throw new TypeError("Function expected");
@@ -31066,8 +32144,8 @@ var init_UserPrompt = __esm(() => {
     return class UserPrompt extends _classSuper {
       static {
         const _metadata = typeof Symbol === "function" && Symbol.metadata ? Object.create(_classSuper[Symbol.metadata] ?? null) : undefined;
-        __esDecorate11(this, null, _dispose_decorators, { kind: "method", name: "dispose", static: false, private: false, access: { has: (obj) => ("dispose" in obj), get: (obj) => obj.dispose }, metadata: _metadata }, null, _instanceExtraInitializers);
-        __esDecorate11(this, null, _handle_decorators, { kind: "method", name: "handle", static: false, private: false, access: { has: (obj) => ("handle" in obj), get: (obj) => obj.handle }, metadata: _metadata }, null, _instanceExtraInitializers);
+        __esDecorate12(this, null, _dispose_decorators, { kind: "method", name: "dispose", static: false, private: false, access: { has: (obj) => ("dispose" in obj), get: (obj) => obj.dispose }, metadata: _metadata }, null, _instanceExtraInitializers);
+        __esDecorate12(this, null, _handle_decorators, { kind: "method", name: "handle", static: false, private: false, access: { has: (obj) => ("handle" in obj), get: (obj) => obj.handle }, metadata: _metadata }, null, _instanceExtraInitializers);
         if (_metadata)
           Object.defineProperty(this, Symbol.metadata, { enumerable: true, configurable: true, writable: true, value: _metadata });
       }
@@ -31076,7 +32154,7 @@ var init_UserPrompt = __esm(() => {
         userPrompt.#initialize();
         return userPrompt;
       }
-      #reason = __runInitializers11(this, _instanceExtraInitializers);
+      #reason = __runInitializers12(this, _instanceExtraInitializers);
       #result;
       #disposables = new DisposableStack;
       browsingContext;
@@ -31143,13 +32221,13 @@ var init_UserPrompt = __esm(() => {
 });
 
 // node_modules/puppeteer-core/lib/puppeteer/bidi/core/BrowsingContext.js
-var __runInitializers12 = function(thisArg, initializers, value) {
+var __runInitializers13 = function(thisArg, initializers, value) {
   var useValue = arguments.length > 2;
   for (var i = 0;i < initializers.length; i++) {
     value = useValue ? initializers[i].call(thisArg, value) : initializers[i].call(thisArg);
   }
   return useValue ? value : undefined;
-}, __esDecorate12 = function(ctor, descriptorIn, decorators, contextIn, initializers, extraInitializers) {
+}, __esDecorate13 = function(ctor, descriptorIn, decorators, contextIn, initializers, extraInitializers) {
   function accept(f) {
     if (f !== undefined && typeof f !== "function")
       throw new TypeError("Function expected");
@@ -31210,6 +32288,8 @@ var init_BrowsingContext = __esm(() => {
     let _dispose_decorators;
     let _activate_decorators;
     let _captureScreenshot_decorators;
+    let _startScreencast_decorators;
+    let _stopScreencast_decorators;
     let _close_decorators;
     let _traverseHistory_decorators;
     let _navigate_decorators;
@@ -31245,35 +32325,37 @@ var init_BrowsingContext = __esm(() => {
         _locateNodes_decorators = [throwIfDisposed((context) => {
           return context.#reason;
         })];
-        __esDecorate12(this, null, _dispose_decorators, { kind: "method", name: "dispose", static: false, private: false, access: { has: (obj) => ("dispose" in obj), get: (obj) => obj.dispose }, metadata: _metadata }, null, _instanceExtraInitializers);
-        __esDecorate12(this, null, _activate_decorators, { kind: "method", name: "activate", static: false, private: false, access: { has: (obj) => ("activate" in obj), get: (obj) => obj.activate }, metadata: _metadata }, null, _instanceExtraInitializers);
-        __esDecorate12(this, null, _captureScreenshot_decorators, { kind: "method", name: "captureScreenshot", static: false, private: false, access: { has: (obj) => ("captureScreenshot" in obj), get: (obj) => obj.captureScreenshot }, metadata: _metadata }, null, _instanceExtraInitializers);
-        __esDecorate12(this, null, _close_decorators, { kind: "method", name: "close", static: false, private: false, access: { has: (obj) => ("close" in obj), get: (obj) => obj.close }, metadata: _metadata }, null, _instanceExtraInitializers);
-        __esDecorate12(this, null, _traverseHistory_decorators, { kind: "method", name: "traverseHistory", static: false, private: false, access: { has: (obj) => ("traverseHistory" in obj), get: (obj) => obj.traverseHistory }, metadata: _metadata }, null, _instanceExtraInitializers);
-        __esDecorate12(this, null, _navigate_decorators, { kind: "method", name: "navigate", static: false, private: false, access: { has: (obj) => ("navigate" in obj), get: (obj) => obj.navigate }, metadata: _metadata }, null, _instanceExtraInitializers);
-        __esDecorate12(this, null, _reload_decorators, { kind: "method", name: "reload", static: false, private: false, access: { has: (obj) => ("reload" in obj), get: (obj) => obj.reload }, metadata: _metadata }, null, _instanceExtraInitializers);
-        __esDecorate12(this, null, _setCacheBehavior_decorators, { kind: "method", name: "setCacheBehavior", static: false, private: false, access: { has: (obj) => ("setCacheBehavior" in obj), get: (obj) => obj.setCacheBehavior }, metadata: _metadata }, null, _instanceExtraInitializers);
-        __esDecorate12(this, null, _print_decorators, { kind: "method", name: "print", static: false, private: false, access: { has: (obj) => ("print" in obj), get: (obj) => obj.print }, metadata: _metadata }, null, _instanceExtraInitializers);
-        __esDecorate12(this, null, _handleUserPrompt_decorators, { kind: "method", name: "handleUserPrompt", static: false, private: false, access: { has: (obj) => ("handleUserPrompt" in obj), get: (obj) => obj.handleUserPrompt }, metadata: _metadata }, null, _instanceExtraInitializers);
-        __esDecorate12(this, null, _setViewport_decorators, { kind: "method", name: "setViewport", static: false, private: false, access: { has: (obj) => ("setViewport" in obj), get: (obj) => obj.setViewport }, metadata: _metadata }, null, _instanceExtraInitializers);
-        __esDecorate12(this, null, _setTouchOverride_decorators, { kind: "method", name: "setTouchOverride", static: false, private: false, access: { has: (obj) => ("setTouchOverride" in obj), get: (obj) => obj.setTouchOverride }, metadata: _metadata }, null, _instanceExtraInitializers);
-        __esDecorate12(this, null, _performActions_decorators, { kind: "method", name: "performActions", static: false, private: false, access: { has: (obj) => ("performActions" in obj), get: (obj) => obj.performActions }, metadata: _metadata }, null, _instanceExtraInitializers);
-        __esDecorate12(this, null, _releaseActions_decorators, { kind: "method", name: "releaseActions", static: false, private: false, access: { has: (obj) => ("releaseActions" in obj), get: (obj) => obj.releaseActions }, metadata: _metadata }, null, _instanceExtraInitializers);
-        __esDecorate12(this, null, _createWindowRealm_decorators, { kind: "method", name: "createWindowRealm", static: false, private: false, access: { has: (obj) => ("createWindowRealm" in obj), get: (obj) => obj.createWindowRealm }, metadata: _metadata }, null, _instanceExtraInitializers);
-        __esDecorate12(this, null, _addPreloadScript_decorators, { kind: "method", name: "addPreloadScript", static: false, private: false, access: { has: (obj) => ("addPreloadScript" in obj), get: (obj) => obj.addPreloadScript }, metadata: _metadata }, null, _instanceExtraInitializers);
-        __esDecorate12(this, null, _addIntercept_decorators, { kind: "method", name: "addIntercept", static: false, private: false, access: { has: (obj) => ("addIntercept" in obj), get: (obj) => obj.addIntercept }, metadata: _metadata }, null, _instanceExtraInitializers);
-        __esDecorate12(this, null, _removePreloadScript_decorators, { kind: "method", name: "removePreloadScript", static: false, private: false, access: { has: (obj) => ("removePreloadScript" in obj), get: (obj) => obj.removePreloadScript }, metadata: _metadata }, null, _instanceExtraInitializers);
-        __esDecorate12(this, null, _setGeolocationOverride_decorators, { kind: "method", name: "setGeolocationOverride", static: false, private: false, access: { has: (obj) => ("setGeolocationOverride" in obj), get: (obj) => obj.setGeolocationOverride }, metadata: _metadata }, null, _instanceExtraInitializers);
-        __esDecorate12(this, null, _setTimezoneOverride_decorators, { kind: "method", name: "setTimezoneOverride", static: false, private: false, access: { has: (obj) => ("setTimezoneOverride" in obj), get: (obj) => obj.setTimezoneOverride }, metadata: _metadata }, null, _instanceExtraInitializers);
-        __esDecorate12(this, null, _setLocaleOverride_decorators, { kind: "method", name: "setLocaleOverride", static: false, private: false, access: { has: (obj) => ("setLocaleOverride" in obj), get: (obj) => obj.setLocaleOverride }, metadata: _metadata }, null, _instanceExtraInitializers);
-        __esDecorate12(this, null, _setScreenOrientationOverride_decorators, { kind: "method", name: "setScreenOrientationOverride", static: false, private: false, access: { has: (obj) => ("setScreenOrientationOverride" in obj), get: (obj) => obj.setScreenOrientationOverride }, metadata: _metadata }, null, _instanceExtraInitializers);
-        __esDecorate12(this, null, _getCookies_decorators, { kind: "method", name: "getCookies", static: false, private: false, access: { has: (obj) => ("getCookies" in obj), get: (obj) => obj.getCookies }, metadata: _metadata }, null, _instanceExtraInitializers);
-        __esDecorate12(this, null, _setCookie_decorators, { kind: "method", name: "setCookie", static: false, private: false, access: { has: (obj) => ("setCookie" in obj), get: (obj) => obj.setCookie }, metadata: _metadata }, null, _instanceExtraInitializers);
-        __esDecorate12(this, null, _setFiles_decorators, { kind: "method", name: "setFiles", static: false, private: false, access: { has: (obj) => ("setFiles" in obj), get: (obj) => obj.setFiles }, metadata: _metadata }, null, _instanceExtraInitializers);
-        __esDecorate12(this, null, _subscribe_decorators, { kind: "method", name: "subscribe", static: false, private: false, access: { has: (obj) => ("subscribe" in obj), get: (obj) => obj.subscribe }, metadata: _metadata }, null, _instanceExtraInitializers);
-        __esDecorate12(this, null, _addInterception_decorators, { kind: "method", name: "addInterception", static: false, private: false, access: { has: (obj) => ("addInterception" in obj), get: (obj) => obj.addInterception }, metadata: _metadata }, null, _instanceExtraInitializers);
-        __esDecorate12(this, null, _deleteCookie_decorators, { kind: "method", name: "deleteCookie", static: false, private: false, access: { has: (obj) => ("deleteCookie" in obj), get: (obj) => obj.deleteCookie }, metadata: _metadata }, null, _instanceExtraInitializers);
-        __esDecorate12(this, null, _locateNodes_decorators, { kind: "method", name: "locateNodes", static: false, private: false, access: { has: (obj) => ("locateNodes" in obj), get: (obj) => obj.locateNodes }, metadata: _metadata }, null, _instanceExtraInitializers);
+        __esDecorate13(this, null, _dispose_decorators, { kind: "method", name: "dispose", static: false, private: false, access: { has: (obj) => ("dispose" in obj), get: (obj) => obj.dispose }, metadata: _metadata }, null, _instanceExtraInitializers);
+        __esDecorate13(this, null, _activate_decorators, { kind: "method", name: "activate", static: false, private: false, access: { has: (obj) => ("activate" in obj), get: (obj) => obj.activate }, metadata: _metadata }, null, _instanceExtraInitializers);
+        __esDecorate13(this, null, _captureScreenshot_decorators, { kind: "method", name: "captureScreenshot", static: false, private: false, access: { has: (obj) => ("captureScreenshot" in obj), get: (obj) => obj.captureScreenshot }, metadata: _metadata }, null, _instanceExtraInitializers);
+        __esDecorate13(this, null, _startScreencast_decorators, { kind: "method", name: "startScreencast", static: false, private: false, access: { has: (obj) => ("startScreencast" in obj), get: (obj) => obj.startScreencast }, metadata: _metadata }, null, _instanceExtraInitializers);
+        __esDecorate13(this, null, _stopScreencast_decorators, { kind: "method", name: "stopScreencast", static: false, private: false, access: { has: (obj) => ("stopScreencast" in obj), get: (obj) => obj.stopScreencast }, metadata: _metadata }, null, _instanceExtraInitializers);
+        __esDecorate13(this, null, _close_decorators, { kind: "method", name: "close", static: false, private: false, access: { has: (obj) => ("close" in obj), get: (obj) => obj.close }, metadata: _metadata }, null, _instanceExtraInitializers);
+        __esDecorate13(this, null, _traverseHistory_decorators, { kind: "method", name: "traverseHistory", static: false, private: false, access: { has: (obj) => ("traverseHistory" in obj), get: (obj) => obj.traverseHistory }, metadata: _metadata }, null, _instanceExtraInitializers);
+        __esDecorate13(this, null, _navigate_decorators, { kind: "method", name: "navigate", static: false, private: false, access: { has: (obj) => ("navigate" in obj), get: (obj) => obj.navigate }, metadata: _metadata }, null, _instanceExtraInitializers);
+        __esDecorate13(this, null, _reload_decorators, { kind: "method", name: "reload", static: false, private: false, access: { has: (obj) => ("reload" in obj), get: (obj) => obj.reload }, metadata: _metadata }, null, _instanceExtraInitializers);
+        __esDecorate13(this, null, _setCacheBehavior_decorators, { kind: "method", name: "setCacheBehavior", static: false, private: false, access: { has: (obj) => ("setCacheBehavior" in obj), get: (obj) => obj.setCacheBehavior }, metadata: _metadata }, null, _instanceExtraInitializers);
+        __esDecorate13(this, null, _print_decorators, { kind: "method", name: "print", static: false, private: false, access: { has: (obj) => ("print" in obj), get: (obj) => obj.print }, metadata: _metadata }, null, _instanceExtraInitializers);
+        __esDecorate13(this, null, _handleUserPrompt_decorators, { kind: "method", name: "handleUserPrompt", static: false, private: false, access: { has: (obj) => ("handleUserPrompt" in obj), get: (obj) => obj.handleUserPrompt }, metadata: _metadata }, null, _instanceExtraInitializers);
+        __esDecorate13(this, null, _setViewport_decorators, { kind: "method", name: "setViewport", static: false, private: false, access: { has: (obj) => ("setViewport" in obj), get: (obj) => obj.setViewport }, metadata: _metadata }, null, _instanceExtraInitializers);
+        __esDecorate13(this, null, _setTouchOverride_decorators, { kind: "method", name: "setTouchOverride", static: false, private: false, access: { has: (obj) => ("setTouchOverride" in obj), get: (obj) => obj.setTouchOverride }, metadata: _metadata }, null, _instanceExtraInitializers);
+        __esDecorate13(this, null, _performActions_decorators, { kind: "method", name: "performActions", static: false, private: false, access: { has: (obj) => ("performActions" in obj), get: (obj) => obj.performActions }, metadata: _metadata }, null, _instanceExtraInitializers);
+        __esDecorate13(this, null, _releaseActions_decorators, { kind: "method", name: "releaseActions", static: false, private: false, access: { has: (obj) => ("releaseActions" in obj), get: (obj) => obj.releaseActions }, metadata: _metadata }, null, _instanceExtraInitializers);
+        __esDecorate13(this, null, _createWindowRealm_decorators, { kind: "method", name: "createWindowRealm", static: false, private: false, access: { has: (obj) => ("createWindowRealm" in obj), get: (obj) => obj.createWindowRealm }, metadata: _metadata }, null, _instanceExtraInitializers);
+        __esDecorate13(this, null, _addPreloadScript_decorators, { kind: "method", name: "addPreloadScript", static: false, private: false, access: { has: (obj) => ("addPreloadScript" in obj), get: (obj) => obj.addPreloadScript }, metadata: _metadata }, null, _instanceExtraInitializers);
+        __esDecorate13(this, null, _addIntercept_decorators, { kind: "method", name: "addIntercept", static: false, private: false, access: { has: (obj) => ("addIntercept" in obj), get: (obj) => obj.addIntercept }, metadata: _metadata }, null, _instanceExtraInitializers);
+        __esDecorate13(this, null, _removePreloadScript_decorators, { kind: "method", name: "removePreloadScript", static: false, private: false, access: { has: (obj) => ("removePreloadScript" in obj), get: (obj) => obj.removePreloadScript }, metadata: _metadata }, null, _instanceExtraInitializers);
+        __esDecorate13(this, null, _setGeolocationOverride_decorators, { kind: "method", name: "setGeolocationOverride", static: false, private: false, access: { has: (obj) => ("setGeolocationOverride" in obj), get: (obj) => obj.setGeolocationOverride }, metadata: _metadata }, null, _instanceExtraInitializers);
+        __esDecorate13(this, null, _setTimezoneOverride_decorators, { kind: "method", name: "setTimezoneOverride", static: false, private: false, access: { has: (obj) => ("setTimezoneOverride" in obj), get: (obj) => obj.setTimezoneOverride }, metadata: _metadata }, null, _instanceExtraInitializers);
+        __esDecorate13(this, null, _setLocaleOverride_decorators, { kind: "method", name: "setLocaleOverride", static: false, private: false, access: { has: (obj) => ("setLocaleOverride" in obj), get: (obj) => obj.setLocaleOverride }, metadata: _metadata }, null, _instanceExtraInitializers);
+        __esDecorate13(this, null, _setScreenOrientationOverride_decorators, { kind: "method", name: "setScreenOrientationOverride", static: false, private: false, access: { has: (obj) => ("setScreenOrientationOverride" in obj), get: (obj) => obj.setScreenOrientationOverride }, metadata: _metadata }, null, _instanceExtraInitializers);
+        __esDecorate13(this, null, _getCookies_decorators, { kind: "method", name: "getCookies", static: false, private: false, access: { has: (obj) => ("getCookies" in obj), get: (obj) => obj.getCookies }, metadata: _metadata }, null, _instanceExtraInitializers);
+        __esDecorate13(this, null, _setCookie_decorators, { kind: "method", name: "setCookie", static: false, private: false, access: { has: (obj) => ("setCookie" in obj), get: (obj) => obj.setCookie }, metadata: _metadata }, null, _instanceExtraInitializers);
+        __esDecorate13(this, null, _setFiles_decorators, { kind: "method", name: "setFiles", static: false, private: false, access: { has: (obj) => ("setFiles" in obj), get: (obj) => obj.setFiles }, metadata: _metadata }, null, _instanceExtraInitializers);
+        __esDecorate13(this, null, _subscribe_decorators, { kind: "method", name: "subscribe", static: false, private: false, access: { has: (obj) => ("subscribe" in obj), get: (obj) => obj.subscribe }, metadata: _metadata }, null, _instanceExtraInitializers);
+        __esDecorate13(this, null, _addInterception_decorators, { kind: "method", name: "addInterception", static: false, private: false, access: { has: (obj) => ("addInterception" in obj), get: (obj) => obj.addInterception }, metadata: _metadata }, null, _instanceExtraInitializers);
+        __esDecorate13(this, null, _deleteCookie_decorators, { kind: "method", name: "deleteCookie", static: false, private: false, access: { has: (obj) => ("deleteCookie" in obj), get: (obj) => obj.deleteCookie }, metadata: _metadata }, null, _instanceExtraInitializers);
+        __esDecorate13(this, null, _locateNodes_decorators, { kind: "method", name: "locateNodes", static: false, private: false, access: { has: (obj) => ("locateNodes" in obj), get: (obj) => obj.locateNodes }, metadata: _metadata }, null, _instanceExtraInitializers);
         if (_metadata)
           Object.defineProperty(this, Symbol.metadata, { enumerable: true, configurable: true, writable: true, value: _metadata });
       }
@@ -31282,7 +32364,7 @@ var init_BrowsingContext = __esm(() => {
         browsingContext.#initialize();
         return browsingContext;
       }
-      #navigation = __runInitializers12(this, _instanceExtraInitializers);
+      #navigation = __runInitializers13(this, _instanceExtraInitializers);
       #reason;
       #url;
       #clientHintsAreSet = false;
@@ -31458,6 +32540,19 @@ var init_BrowsingContext = __esm(() => {
         });
         return data;
       }
+      async startScreencast(options = {}) {
+        const { result } = await this.#session.send("browsingContext.startScreencast", {
+          context: this.id,
+          ...options
+        });
+        return result;
+      }
+      async stopScreencast(screencast) {
+        const { result } = await this.#session.send("browsingContext.stopScreencast", {
+          screencast
+        });
+        return result;
+      }
       async close(promptUnload) {
         await this.#session.send("browsingContext.close", {
           context: this.id,
@@ -31610,6 +32705,10 @@ var init_BrowsingContext = __esm(() => {
         return context.#reason;
       })], _captureScreenshot_decorators = [throwIfDisposed((context) => {
         return context.#reason;
+      })], _startScreencast_decorators = [throwIfDisposed((context) => {
+        return context.#reason;
+      })], _stopScreencast_decorators = [throwIfDisposed((context) => {
+        return context.#reason;
       })], _close_decorators = [throwIfDisposed((context) => {
         return context.#reason;
       })], _traverseHistory_decorators = [throwIfDisposed((context) => {
@@ -31740,13 +32839,13 @@ var init_BrowsingContext = __esm(() => {
 });
 
 // node_modules/puppeteer-core/lib/puppeteer/bidi/core/UserContext.js
-var __runInitializers13 = function(thisArg, initializers, value) {
+var __runInitializers14 = function(thisArg, initializers, value) {
   var useValue = arguments.length > 2;
   for (var i = 0;i < initializers.length; i++) {
     value = useValue ? initializers[i].call(thisArg, value) : initializers[i].call(thisArg);
   }
   return useValue ? value : undefined;
-}, __esDecorate13 = function(ctor, descriptorIn, decorators, contextIn, initializers, extraInitializers) {
+}, __esDecorate14 = function(ctor, descriptorIn, decorators, contextIn, initializers, extraInitializers) {
   function accept(f) {
     if (f !== undefined && typeof f !== "function")
       throw new TypeError("Function expected");
@@ -31807,12 +32906,12 @@ var init_UserContext = __esm(() => {
     return class UserContext extends _classSuper {
       static {
         const _metadata = typeof Symbol === "function" && Symbol.metadata ? Object.create(_classSuper[Symbol.metadata] ?? null) : undefined;
-        __esDecorate13(this, null, _dispose_decorators, { kind: "method", name: "dispose", static: false, private: false, access: { has: (obj) => ("dispose" in obj), get: (obj) => obj.dispose }, metadata: _metadata }, null, _instanceExtraInitializers);
-        __esDecorate13(this, null, _createBrowsingContext_decorators, { kind: "method", name: "createBrowsingContext", static: false, private: false, access: { has: (obj) => ("createBrowsingContext" in obj), get: (obj) => obj.createBrowsingContext }, metadata: _metadata }, null, _instanceExtraInitializers);
-        __esDecorate13(this, null, _remove_decorators, { kind: "method", name: "remove", static: false, private: false, access: { has: (obj) => ("remove" in obj), get: (obj) => obj.remove }, metadata: _metadata }, null, _instanceExtraInitializers);
-        __esDecorate13(this, null, _getCookies_decorators, { kind: "method", name: "getCookies", static: false, private: false, access: { has: (obj) => ("getCookies" in obj), get: (obj) => obj.getCookies }, metadata: _metadata }, null, _instanceExtraInitializers);
-        __esDecorate13(this, null, _setCookie_decorators, { kind: "method", name: "setCookie", static: false, private: false, access: { has: (obj) => ("setCookie" in obj), get: (obj) => obj.setCookie }, metadata: _metadata }, null, _instanceExtraInitializers);
-        __esDecorate13(this, null, _setPermissions_decorators, { kind: "method", name: "setPermissions", static: false, private: false, access: { has: (obj) => ("setPermissions" in obj), get: (obj) => obj.setPermissions }, metadata: _metadata }, null, _instanceExtraInitializers);
+        __esDecorate14(this, null, _dispose_decorators, { kind: "method", name: "dispose", static: false, private: false, access: { has: (obj) => ("dispose" in obj), get: (obj) => obj.dispose }, metadata: _metadata }, null, _instanceExtraInitializers);
+        __esDecorate14(this, null, _createBrowsingContext_decorators, { kind: "method", name: "createBrowsingContext", static: false, private: false, access: { has: (obj) => ("createBrowsingContext" in obj), get: (obj) => obj.createBrowsingContext }, metadata: _metadata }, null, _instanceExtraInitializers);
+        __esDecorate14(this, null, _remove_decorators, { kind: "method", name: "remove", static: false, private: false, access: { has: (obj) => ("remove" in obj), get: (obj) => obj.remove }, metadata: _metadata }, null, _instanceExtraInitializers);
+        __esDecorate14(this, null, _getCookies_decorators, { kind: "method", name: "getCookies", static: false, private: false, access: { has: (obj) => ("getCookies" in obj), get: (obj) => obj.getCookies }, metadata: _metadata }, null, _instanceExtraInitializers);
+        __esDecorate14(this, null, _setCookie_decorators, { kind: "method", name: "setCookie", static: false, private: false, access: { has: (obj) => ("setCookie" in obj), get: (obj) => obj.setCookie }, metadata: _metadata }, null, _instanceExtraInitializers);
+        __esDecorate14(this, null, _setPermissions_decorators, { kind: "method", name: "setPermissions", static: false, private: false, access: { has: (obj) => ("setPermissions" in obj), get: (obj) => obj.setPermissions }, metadata: _metadata }, null, _instanceExtraInitializers);
         if (_metadata)
           Object.defineProperty(this, Symbol.metadata, { enumerable: true, configurable: true, writable: true, value: _metadata });
       }
@@ -31822,7 +32921,7 @@ var init_UserContext = __esm(() => {
         context.#initialize();
         return context;
       }
-      #reason = __runInitializers13(this, _instanceExtraInitializers);
+      #reason = __runInitializers14(this, _instanceExtraInitializers);
       #browsingContexts = new Map;
       #disposables = new DisposableStack;
       #id;
@@ -31949,9 +33048,9 @@ var init_UserContext = __esm(() => {
 
 // node_modules/puppeteer-core/lib/puppeteer/bidi/Deserializer.js
 class BidiDeserializer {
-  static deserialize(result) {
+  static deserialize(result, logger) {
     if (!result) {
-      debugError?.("Service did not produce a result.");
+      logger?.(DEBUG_PREFIXES.error)?.("Service did not produce a result.");
       return;
     }
     switch (result.type) {
@@ -31993,7 +33092,7 @@ class BidiDeserializer {
       case "string":
         return result.value;
     }
-    debugError?.(`Deserialization of type ${result.type} not supported.`);
+    logger?.(DEBUG_PREFIXES.error)?.(`Deserialization of type ${result.type} not supported.`);
     return;
   }
   static #deserializeNumber(value) {
@@ -32017,7 +33116,7 @@ class BidiDeserializer {
   }
 }
 var init_Deserializer = __esm(() => {
-  init_util();
+  init_Debug();
 });
 
 // node_modules/puppeteer-core/lib/puppeteer/bidi/JSHandle.js
@@ -32034,7 +33133,7 @@ var init_JSHandle3 = __esm(() => {
     realm;
     #disposed = false;
     constructor(value, realm) {
-      super();
+      super(realm.logger);
       this.#remoteValue = value;
       this.realm = realm;
     }
@@ -32088,13 +33187,13 @@ var init_JSHandle3 = __esm(() => {
 });
 
 // node_modules/puppeteer-core/lib/puppeteer/bidi/ElementHandle.js
-var __runInitializers14 = function(thisArg, initializers, value) {
+var __runInitializers15 = function(thisArg, initializers, value) {
   var useValue = arguments.length > 2;
   for (var i = 0;i < initializers.length; i++) {
     value = useValue ? initializers[i].call(thisArg, value) : initializers[i].call(thisArg);
   }
   return useValue ? value : undefined;
-}, __esDecorate14 = function(ctor, descriptorIn, decorators, contextIn, initializers, extraInitializers) {
+}, __esDecorate15 = function(ctor, descriptorIn, decorators, contextIn, initializers, extraInitializers) {
   function accept(f) {
     if (f !== undefined && typeof f !== "function")
       throw new TypeError("Function expected");
@@ -32137,7 +33236,7 @@ var __runInitializers14 = function(thisArg, initializers, value) {
   if (target)
     Object.defineProperty(target, contextIn.name, descriptor);
   done = true;
-}, __addDisposableResource14 = function(env, value, async) {
+}, __addDisposableResource15 = function(env, value, async) {
   if (value !== null && value !== undefined) {
     if (typeof value !== "object" && typeof value !== "function")
       throw new TypeError("Object expected.");
@@ -32169,14 +33268,14 @@ var __runInitializers14 = function(thisArg, initializers, value) {
     env.stack.push({ async: true });
   }
   return value;
-}, __disposeResources14, BidiElementHandle;
+}, __disposeResources15, BidiElementHandle;
 var init_ElementHandle3 = __esm(() => {
   init_ElementHandle();
   init_Errors();
   init_environment();
   init_decorators();
   init_JSHandle3();
-  __disposeResources14 = function(SuppressedError2) {
+  __disposeResources15 = function(SuppressedError2) {
     return function(env) {
       function fail(e) {
         env.error = env.hasError ? new SuppressedError2(e, env.error, "An error was suppressed during disposal.") : e;
@@ -32222,17 +33321,17 @@ var init_ElementHandle3 = __esm(() => {
         const _metadata = typeof Symbol === "function" && Symbol.metadata ? Object.create(_classSuper[Symbol.metadata] ?? null) : undefined;
         _autofill_decorators = [throwIfDisposed()];
         _contentFrame_decorators = [throwIfDisposed(), bindIsolatedHandle];
-        __esDecorate14(this, null, _autofill_decorators, { kind: "method", name: "autofill", static: false, private: false, access: { has: (obj) => ("autofill" in obj), get: (obj) => obj.autofill }, metadata: _metadata }, null, _instanceExtraInitializers);
-        __esDecorate14(this, null, _contentFrame_decorators, { kind: "method", name: "contentFrame", static: false, private: false, access: { has: (obj) => ("contentFrame" in obj), get: (obj) => obj.contentFrame }, metadata: _metadata }, null, _instanceExtraInitializers);
+        __esDecorate15(this, null, _autofill_decorators, { kind: "method", name: "autofill", static: false, private: false, access: { has: (obj) => ("autofill" in obj), get: (obj) => obj.autofill }, metadata: _metadata }, null, _instanceExtraInitializers);
+        __esDecorate15(this, null, _contentFrame_decorators, { kind: "method", name: "contentFrame", static: false, private: false, access: { has: (obj) => ("contentFrame" in obj), get: (obj) => obj.contentFrame }, metadata: _metadata }, null, _instanceExtraInitializers);
         if (_metadata)
           Object.defineProperty(this, Symbol.metadata, { enumerable: true, configurable: true, writable: true, value: _metadata });
       }
-      #backendNodeId = __runInitializers14(this, _instanceExtraInitializers);
+      #backendNodeId = __runInitializers15(this, _instanceExtraInitializers);
       static from(value, realm) {
         return new BidiElementHandle(value, realm);
       }
       constructor(value, realm) {
-        super(BidiJSHandle.from(value, realm));
+        super(BidiJSHandle.from(value, realm), realm.logger);
       }
       get realm() {
         return this.handle.realm;
@@ -32260,7 +33359,7 @@ var init_ElementHandle3 = __esm(() => {
       async contentFrame() {
         const env_1 = { stack: [], error: undefined, hasError: false };
         try {
-          const handle = __addDisposableResource14(env_1, await this.evaluateHandle((element) => {
+          const handle = __addDisposableResource15(env_1, await this.evaluateHandle((element) => {
             if (element instanceof HTMLIFrameElement || element instanceof HTMLFrameElement) {
               return element.contentWindow;
             }
@@ -32277,7 +33376,7 @@ var init_ElementHandle3 = __esm(() => {
           env_1.error = e_1;
           env_1.hasError = true;
         } finally {
-          __disposeResources14(env_1);
+          __disposeResources15(env_1);
         }
       }
       async uploadFile(...files) {
@@ -32335,6 +33434,9 @@ var init_Dialog3 = __esm(() => {
       super(prompt.info.type, prompt.info.message, prompt.info.defaultValue);
       this.#prompt = prompt;
       this.handled = prompt.handled;
+      prompt.once("handled", () => {
+        this.handled = true;
+      });
     }
     async handle(options) {
       await this.#prompt.handle({
@@ -32346,7 +33448,7 @@ var init_Dialog3 = __esm(() => {
 });
 
 // node_modules/puppeteer-core/lib/puppeteer/bidi/ExposedFunction.js
-var __addDisposableResource15 = function(env, value, async) {
+var __addDisposableResource16 = function(env, value, async) {
   if (value !== null && value !== undefined) {
     if (typeof value !== "object" && typeof value !== "function")
       throw new TypeError("Object expected.");
@@ -32378,15 +33480,15 @@ var __addDisposableResource15 = function(env, value, async) {
     env.stack.push({ async: true });
   }
   return value;
-}, __disposeResources15, ExposableFunction;
+}, __disposeResources16, ExposableFunction;
 var init_ExposedFunction = __esm(() => {
+  init_Debug();
   init_EventEmitter();
-  init_util();
   init_disposable();
   init_Function();
   init_ElementHandle3();
   init_JSHandle3();
-  __disposeResources15 = function(SuppressedError2) {
+  __disposeResources16 = function(SuppressedError2) {
     return function(env) {
       function fail(e) {
         env.error = env.hasError ? new SuppressedError2(e, env.error, "An error was suppressed during disposal.") : e;
@@ -32423,8 +33525,8 @@ var init_ExposedFunction = __esm(() => {
     return e.name = "SuppressedError", e.error = error, e.suppressed = suppressed, e;
   });
   ExposableFunction = class ExposableFunction {
-    static async from(frame, name, apply, isolate = false) {
-      const func = new ExposableFunction(frame, name, apply, isolate);
+    static async from(frame, name, apply, isolate = false, logger) {
+      const func = new ExposableFunction(frame, name, apply, isolate, logger);
       await func.#initialize();
       return func;
     }
@@ -32432,14 +33534,16 @@ var init_ExposedFunction = __esm(() => {
     name;
     #apply;
     #isolate;
+    #logger;
     #channel;
     #scripts = [];
     #disposables = new DisposableStack;
-    constructor(frame, name, apply, isolate = false) {
+    constructor(frame, name, apply, isolate = false, logger) {
       this.#frame = frame;
       this.name = name;
       this.#apply = apply;
       this.#isolate = isolate;
+      this.#logger = logger;
       this.#channel = `__puppeteer__${this.#frame._id}_page_exposeFunction_${this.name}`;
     }
     async#initialize() {
@@ -32451,7 +33555,7 @@ var init_ExposedFunction = __esm(() => {
           ownership: "root"
         }
       };
-      const connectionEmitter = this.#disposables.use(new EventEmitter(connection));
+      const connectionEmitter = this.#disposables.use(new EventEmitter(connection, this.#logger));
       connectionEmitter.on("script.message", this.#handleMessage);
       const functionDeclaration = stringifyFunction(interpolateFunction((callback) => {
         Object.assign(globalThis, {
@@ -32480,7 +33584,7 @@ var init_ExposedFunction = __esm(() => {
           ]);
           this.#scripts.push([frame, script]);
         } catch (error) {
-          debugError?.(error);
+          this.#logger?.(DEBUG_PREFIXES.error)?.(error);
         }
       }));
     }
@@ -32497,14 +33601,14 @@ var init_ExposedFunction = __esm(() => {
         if (!realm) {
           return;
         }
-        const dataHandle = __addDisposableResource15(env_1, BidiJSHandle.from(params.data, realm), false);
-        const stack = __addDisposableResource15(env_1, new DisposableStack, false);
+        const dataHandle = __addDisposableResource16(env_1, BidiJSHandle.from(params.data, realm), false);
+        const stack = __addDisposableResource16(env_1, new DisposableStack, false);
         const args = [];
         let result;
         try {
           const env_2 = { stack: [], error: undefined, hasError: false };
           try {
-            const argsHandle = __addDisposableResource15(env_2, await dataHandle.evaluateHandle(([, , args2]) => {
+            const argsHandle = __addDisposableResource16(env_2, await dataHandle.evaluateHandle(([, , args2]) => {
               return args2;
             }), false);
             for (const [index, handle] of await argsHandle.getProperties()) {
@@ -32521,7 +33625,7 @@ var init_ExposedFunction = __esm(() => {
             env_2.error = e_1;
             env_2.hasError = true;
           } finally {
-            __disposeResources15(env_2);
+            __disposeResources16(env_2);
           }
         } catch (error) {
           try {
@@ -32540,7 +33644,7 @@ var init_ExposedFunction = __esm(() => {
               }, error);
             }
           } catch (error2) {
-            debugError?.(error2);
+            this.#logger?.(DEBUG_PREFIXES.error)?.(error2);
           }
           return;
         }
@@ -32549,13 +33653,13 @@ var init_ExposedFunction = __esm(() => {
             resolve(result2);
           }, result);
         } catch (error) {
-          debugError?.(error);
+          this.#logger?.(DEBUG_PREFIXES.error)?.(error);
         }
       } catch (e_2) {
         env_1.error = e_2;
         env_1.hasError = true;
       } finally {
-        __disposeResources15(env_1);
+        __disposeResources16(env_1);
       }
     };
     #getRealm(source) {
@@ -32576,7 +33680,9 @@ var init_ExposedFunction = __esm(() => {
       return;
     }
     [Symbol.dispose]() {
-      this[Symbol.asyncDispose]().catch(debugCatchError);
+      this[Symbol.asyncDispose]().catch((error) => {
+        this.#logger?.(DEBUG_PREFIXES.error)?.(error);
+      });
     }
     async[Symbol.asyncDispose]() {
       this.#disposables.dispose();
@@ -32595,7 +33701,7 @@ var init_ExposedFunction = __esm(() => {
             frame.browsingContext.removePreloadScript(script)
           ]);
         } catch (error) {
-          debugError?.(error);
+          this.#logger?.(DEBUG_PREFIXES.error)?.(error);
         }
       }));
     }
@@ -32603,13 +33709,13 @@ var init_ExposedFunction = __esm(() => {
 });
 
 // node_modules/puppeteer-core/lib/puppeteer/bidi/HTTPResponse.js
-var __runInitializers15 = function(thisArg, initializers, value) {
+var __runInitializers16 = function(thisArg, initializers, value) {
   var useValue = arguments.length > 2;
   for (var i = 0;i < initializers.length; i++) {
     value = useValue ? initializers[i].call(thisArg, value) : initializers[i].call(thisArg);
   }
   return useValue ? value : undefined;
-}, __esDecorate15 = function(ctor, descriptorIn, decorators, contextIn, initializers, extraInitializers) {
+}, __esDecorate16 = function(ctor, descriptorIn, decorators, contextIn, initializers, extraInitializers) {
   function accept(f) {
     if (f !== undefined && typeof f !== "function")
       throw new TypeError("Function expected");
@@ -32664,7 +33770,7 @@ var init_HTTPResponse2 = __esm(() => {
       static {
         const _metadata = typeof Symbol === "function" && Symbol.metadata ? Object.create(_classSuper[Symbol.metadata] ?? null) : undefined;
         _remoteAddress_decorators = [invokeAtMostOnceForArguments];
-        __esDecorate15(this, null, _remoteAddress_decorators, { kind: "method", name: "remoteAddress", static: false, private: false, access: { has: (obj) => ("remoteAddress" in obj), get: (obj) => obj.remoteAddress }, metadata: _metadata }, null, _instanceExtraInitializers);
+        __esDecorate16(this, null, _remoteAddress_decorators, { kind: "method", name: "remoteAddress", static: false, private: false, access: { has: (obj) => ("remoteAddress" in obj), get: (obj) => obj.remoteAddress }, metadata: _metadata }, null, _instanceExtraInitializers);
         if (_metadata)
           Object.defineProperty(this, Symbol.metadata, { enumerable: true, configurable: true, writable: true, value: _metadata });
       }
@@ -32678,7 +33784,7 @@ var init_HTTPResponse2 = __esm(() => {
         response.#initialize();
         return response;
       }
-      #data = __runInitializers15(this, _instanceExtraInitializers);
+      #data = __runInitializers16(this, _instanceExtraInitializers);
       #request;
       #securityDetails;
       #cdpSupported = false;
@@ -32719,7 +33825,9 @@ var init_HTTPResponse2 = __esm(() => {
         for (const header of this.#data.headers) {
           if (header.value.type === "string") {
             const headerName = header.name.toLowerCase();
-            headers[headerName] = normalizeHeaderValue(headerName, header.value.value);
+            const value = headerName in headers ? `${headers[headerName]}
+${header.value.value}` : header.value.value;
+            headers[headerName] = normalizeHeaderValue(headerName, value);
           }
         }
         return headers;
@@ -32794,15 +33902,15 @@ function getBidiHeaders(rawHeaders) {
   }
   return headers;
 }
-var _a8, requests, BidiHTTPRequest;
+var _a7, requests, BidiHTTPRequest;
 var init_HTTPRequest3 = __esm(() => {
   init_HTTPRequest();
   init_Errors();
   init_HTTPResponse2();
   requests = new WeakMap;
   BidiHTTPRequest = class BidiHTTPRequest extends HTTPRequest {
-    static from(bidiRequest, frame, isNetworkInterceptionEnabled, redirect) {
-      const request = new _a8(bidiRequest, frame, isNetworkInterceptionEnabled, redirect);
+    static from(bidiRequest, frame, isNetworkInterceptionEnabled, redirect, logger) {
+      const request = new _a7(bidiRequest, frame, isNetworkInterceptionEnabled, redirect, logger);
       request.#initialize();
       return request;
     }
@@ -32811,8 +33919,10 @@ var init_HTTPRequest3 = __esm(() => {
     id;
     #frame;
     #request;
-    constructor(request, frame, isNetworkInterceptionEnabled, redirect) {
+    #logger;
+    constructor(request, frame, isNetworkInterceptionEnabled, redirect, logger) {
       super();
+      this.#logger = logger;
       requests.set(request, this);
       this.interception.enabled = isNetworkInterceptionEnabled;
       this.#request = request;
@@ -32825,7 +33935,7 @@ var init_HTTPRequest3 = __esm(() => {
     }
     #initialize() {
       this.#request.on("redirect", (request) => {
-        const httpRequest = _a8.from(request, this.#frame, this.interception.enabled, this);
+        const httpRequest = _a7.from(request, this.#frame, this.interception.enabled, this, this.#logger);
         this.#redirectChain.push(this);
         request.once("success", () => {
           this.#frame.page().trustedEmitter.emit("requestfinished", httpRequest);
@@ -32923,7 +34033,7 @@ var init_HTTPRequest3 = __esm(() => {
         headers: headers.length > 0 ? headers : undefined
       }).catch((error) => {
         this.interception.handled = false;
-        return handleError(error);
+        return handleError(error, this.#logger);
       });
     }
     async _abort() {
@@ -33004,7 +34114,7 @@ var init_HTTPRequest3 = __esm(() => {
       return this.#request.getResponseContent();
     }
   };
-  _a8 = BidiHTTPRequest;
+  _a7 = BidiHTTPRequest;
 });
 
 // node_modules/puppeteer-core/lib/puppeteer/bidi/Serializer.js
@@ -33205,7 +34315,7 @@ var init_util2 = __esm(() => {
 });
 
 // node_modules/puppeteer-core/lib/puppeteer/bidi/Realm.js
-var __addDisposableResource16 = function(env, value, async) {
+var __addDisposableResource17 = function(env, value, async) {
   if (value !== null && value !== undefined) {
     if (typeof value !== "object" && typeof value !== "function")
       throw new TypeError("Object expected.");
@@ -33237,11 +34347,12 @@ var __addDisposableResource16 = function(env, value, async) {
     env.stack.push({ async: true });
   }
   return value;
-}, __disposeResources16, BidiRealm, BidiFrameRealm, BidiWorkerRealm;
+}, __disposeResources17, BidiRealm, BidiFrameRealm, BidiWorkerRealm;
 var init_Realm4 = __esm(() => {
   init_Realm();
   init_WebWorker();
   init_AriaQueryHandler();
+  init_Debug();
   init_ScriptInjector();
   init_util();
   init_index_browser();
@@ -33252,7 +34363,7 @@ var init_Realm4 = __esm(() => {
   init_JSHandle3();
   init_Serializer();
   init_util2();
-  __disposeResources16 = function(SuppressedError2) {
+  __disposeResources17 = function(SuppressedError2) {
     return function(env) {
       function fail(e) {
         env.error = env.hasError ? new SuppressedError2(e, env.error, "An error was suppressed during disposal.") : e;
@@ -33290,9 +34401,14 @@ var init_Realm4 = __esm(() => {
   });
   BidiRealm = class BidiRealm extends Realm {
     realm;
-    constructor(realm, timeoutSettings) {
+    #logger;
+    constructor(realm, timeoutSettings, logger) {
       super(timeoutSettings);
       this.realm = realm;
+      this.#logger = logger;
+    }
+    get logger() {
+      return this.#logger;
     }
     initialize() {
       this.realm.on("destroyed", (reason) => {
@@ -33410,8 +34526,8 @@ ${sourceUrlComment}
       if (handleIds.length === 0) {
         return;
       }
-      await this.realm.disown(handleIds).catch((error) => {
-        debugError?.(error);
+      this.realm.disown(handleIds).catch((error) => {
+        this.#logger?.(DEBUG_PREFIXES.error)?.(error);
       });
     }
     async adoptHandle(handle) {
@@ -33435,14 +34551,14 @@ ${sourceUrlComment}
     }
   };
   BidiFrameRealm = class BidiFrameRealm extends BidiRealm {
-    static from(realm, frame) {
-      const frameRealm = new BidiFrameRealm(realm, frame);
+    static from(realm, frame, logger) {
+      const frameRealm = new BidiFrameRealm(realm, frame, logger);
       frameRealm.#initialize();
       return frameRealm;
     }
     #frame;
-    constructor(realm, frame) {
-      super(realm, frame.timeoutSettings);
+    constructor(realm, frame, logger) {
+      super(realm, frame.timeoutSettings, logger);
       this.#frame = frame;
     }
     #initialize() {
@@ -33457,13 +34573,13 @@ ${sourceUrlComment}
       let promise = Promise.resolve();
       if (!this.#bindingsInstalled) {
         promise = Promise.all([
-          ExposableFunction.from(this.environment, "__ariaQuerySelector", ARIAQueryHandler.queryOne, !!this.sandbox),
+          ExposableFunction.from(this.environment, "__ariaQuerySelector", ARIAQueryHandler.queryOne, !!this.sandbox, this.logger),
           ExposableFunction.from(this.environment, "__ariaQuerySelectorAll", async (element, selector) => {
             const results = ARIAQueryHandler.queryAll(element, selector);
             return await element.realm.evaluateHandle((...elements) => {
               return elements;
             }, ...await AsyncIterableUtil.collect(results));
-          }, !!this.sandbox)
+          }, !!this.sandbox, this.logger)
         ]);
         this.#bindingsInstalled = true;
       }
@@ -33484,7 +34600,7 @@ ${sourceUrlComment}
           backendNodeId,
           executionContextId: await this.realm.resolveExecutionContextId()
         });
-        const handle = __addDisposableResource16(env_1, BidiElementHandle.from({
+        const handle = __addDisposableResource17(env_1, BidiElementHandle.from({
           handle: object.objectId,
           type: "node"
         }, this), false);
@@ -33495,19 +34611,19 @@ ${sourceUrlComment}
         env_1.error = e_1;
         env_1.hasError = true;
       } finally {
-        __disposeResources16(env_1);
+        __disposeResources17(env_1);
       }
     }
   };
   BidiWorkerRealm = class BidiWorkerRealm extends BidiRealm {
-    static from(realm, worker) {
-      const workerRealm = new BidiWorkerRealm(realm, worker);
+    static from(realm, worker, logger) {
+      const workerRealm = new BidiWorkerRealm(realm, worker, logger);
       workerRealm.initialize();
       return workerRealm;
     }
     #worker;
-    constructor(realm, frame) {
-      super(realm, frame.timeoutSettings);
+    constructor(realm, frame, logger) {
+      super(realm, frame.timeoutSettings, logger);
       this.#worker = frame;
     }
     initialize() {
@@ -33538,16 +34654,16 @@ var init_WebWorker3 = __esm(() => {
   init_Errors();
   init_Realm4();
   BidiWebWorker = class BidiWebWorker extends WebWorker {
-    static from(frame, realm) {
-      const worker = new BidiWebWorker(frame, realm);
+    static from(frame, realm, logger) {
+      const worker = new BidiWebWorker(frame, realm, logger);
       return worker;
     }
     #frame;
     #realm;
-    constructor(frame, realm) {
+    constructor(frame, realm, logger) {
       super(realm.origin);
       this.#frame = frame;
-      this.#realm = BidiWorkerRealm.from(realm, this);
+      this.#realm = BidiWorkerRealm.from(realm, this, logger);
     }
     get frame() {
       return this.#frame;
@@ -33562,13 +34678,13 @@ var init_WebWorker3 = __esm(() => {
 });
 
 // node_modules/puppeteer-core/lib/puppeteer/bidi/Frame.js
-var __runInitializers16 = function(thisArg, initializers, value) {
+var __runInitializers17 = function(thisArg, initializers, value) {
   var useValue = arguments.length > 2;
   for (var i = 0;i < initializers.length; i++) {
     value = useValue ? initializers[i].call(thisArg, value) : initializers[i].call(thisArg);
   }
   return useValue ? value : undefined;
-}, __esDecorate16 = function(ctor, descriptorIn, decorators, contextIn, initializers, extraInitializers) {
+}, __esDecorate17 = function(ctor, descriptorIn, decorators, contextIn, initializers, extraInitializers) {
   function accept(f) {
     if (f !== undefined && typeof f !== "function")
       throw new TypeError("Function expected");
@@ -33620,6 +34736,7 @@ var init_Frame3 = __esm(() => {
   init_rxjs();
   init_Frame();
   init_Accessibility();
+  init_Debug();
   init_Errors();
   init_util();
   init_CDPSession2();
@@ -33655,10 +34772,10 @@ var init_Frame3 = __esm(() => {
         _setFiles_decorators = [throwIfDetached];
         _frameElement_decorators = [throwIfDetached];
         _locateNodes_decorators = [throwIfDetached];
-        __esDecorate16(this, null, _goto_decorators, { kind: "method", name: "goto", static: false, private: false, access: { has: (obj) => ("goto" in obj), get: (obj) => obj.goto }, metadata: _metadata }, null, _instanceExtraInitializers);
-        __esDecorate16(this, null, _setContent_decorators, { kind: "method", name: "setContent", static: false, private: false, access: { has: (obj) => ("setContent" in obj), get: (obj) => obj.setContent }, metadata: _metadata }, null, _instanceExtraInitializers);
-        __esDecorate16(this, null, _waitForNavigation_decorators, { kind: "method", name: "waitForNavigation", static: false, private: false, access: { has: (obj) => ("waitForNavigation" in obj), get: (obj) => obj.waitForNavigation }, metadata: _metadata }, null, _instanceExtraInitializers);
-        __esDecorate16(this, _private_waitForLoad$_descriptor = { value: __setFunctionName3(function(options = {}) {
+        __esDecorate17(this, null, _goto_decorators, { kind: "method", name: "goto", static: false, private: false, access: { has: (obj) => ("goto" in obj), get: (obj) => obj.goto }, metadata: _metadata }, null, _instanceExtraInitializers);
+        __esDecorate17(this, null, _setContent_decorators, { kind: "method", name: "setContent", static: false, private: false, access: { has: (obj) => ("setContent" in obj), get: (obj) => obj.setContent }, metadata: _metadata }, null, _instanceExtraInitializers);
+        __esDecorate17(this, null, _waitForNavigation_decorators, { kind: "method", name: "waitForNavigation", static: false, private: false, access: { has: (obj) => ("waitForNavigation" in obj), get: (obj) => obj.waitForNavigation }, metadata: _metadata }, null, _instanceExtraInitializers);
+        __esDecorate17(this, _private_waitForLoad$_descriptor = { value: __setFunctionName3(function(options = {}) {
           let { waitUntil = "load" } = options;
           const { timeout: ms = this.timeoutSettings.navigationTimeout() } = options;
           if (!Array.isArray(waitUntil)) {
@@ -33686,7 +34803,7 @@ var init_Frame3 = __esm(() => {
             throw new Error("Frame detached.");
           }))));
         }, "#waitForLoad$") }, _private_waitForLoad$_decorators, { kind: "method", name: "#waitForLoad$", static: false, private: true, access: { has: (obj) => (#waitForLoad$ in obj), get: (obj) => obj.#waitForLoad$ }, metadata: _metadata }, null, _instanceExtraInitializers);
-        __esDecorate16(this, _private_waitForNetworkIdle$_descriptor = { value: __setFunctionName3(function(options = {}) {
+        __esDecorate17(this, _private_waitForNetworkIdle$_descriptor = { value: __setFunctionName3(function(options = {}) {
           let { waitUntil = "load" } = options;
           if (!Array.isArray(waitUntil)) {
             waitUntil = [waitUntil];
@@ -33713,35 +34830,37 @@ var init_Frame3 = __esm(() => {
             concurrency
           });
         }, "#waitForNetworkIdle$") }, _private_waitForNetworkIdle$_decorators, { kind: "method", name: "#waitForNetworkIdle$", static: false, private: true, access: { has: (obj) => (#waitForNetworkIdle$ in obj), get: (obj) => obj.#waitForNetworkIdle$ }, metadata: _metadata }, null, _instanceExtraInitializers);
-        __esDecorate16(this, null, _setFiles_decorators, { kind: "method", name: "setFiles", static: false, private: false, access: { has: (obj) => ("setFiles" in obj), get: (obj) => obj.setFiles }, metadata: _metadata }, null, _instanceExtraInitializers);
-        __esDecorate16(this, null, _frameElement_decorators, { kind: "method", name: "frameElement", static: false, private: false, access: { has: (obj) => ("frameElement" in obj), get: (obj) => obj.frameElement }, metadata: _metadata }, null, _instanceExtraInitializers);
-        __esDecorate16(this, null, _locateNodes_decorators, { kind: "method", name: "locateNodes", static: false, private: false, access: { has: (obj) => ("locateNodes" in obj), get: (obj) => obj.locateNodes }, metadata: _metadata }, null, _instanceExtraInitializers);
+        __esDecorate17(this, null, _setFiles_decorators, { kind: "method", name: "setFiles", static: false, private: false, access: { has: (obj) => ("setFiles" in obj), get: (obj) => obj.setFiles }, metadata: _metadata }, null, _instanceExtraInitializers);
+        __esDecorate17(this, null, _frameElement_decorators, { kind: "method", name: "frameElement", static: false, private: false, access: { has: (obj) => ("frameElement" in obj), get: (obj) => obj.frameElement }, metadata: _metadata }, null, _instanceExtraInitializers);
+        __esDecorate17(this, null, _locateNodes_decorators, { kind: "method", name: "locateNodes", static: false, private: false, access: { has: (obj) => ("locateNodes" in obj), get: (obj) => obj.locateNodes }, metadata: _metadata }, null, _instanceExtraInitializers);
         if (_metadata)
           Object.defineProperty(this, Symbol.metadata, { enumerable: true, configurable: true, writable: true, value: _metadata });
       }
-      static from(parent, browsingContext) {
-        const frame = new BidiFrame(parent, browsingContext);
+      static from(parent, browsingContext, logger) {
+        const frame = new BidiFrame(parent, browsingContext, logger);
         frame.#initialize();
         return frame;
       }
-      #parent = __runInitializers16(this, _instanceExtraInitializers);
+      #parent = __runInitializers17(this, _instanceExtraInitializers);
       browsingContext;
       #frames = new WeakMap;
       realms;
+      #logger;
       _id;
       client;
       accessibility;
-      constructor(parent, browsingContext) {
-        super();
+      constructor(parent, browsingContext, logger) {
+        super(logger);
         this.#parent = parent;
         this.browsingContext = browsingContext;
+        this.#logger = logger;
         this._id = browsingContext.id;
         this.client = new BidiCdpSession(this);
         this.realms = {
-          default: BidiFrameRealm.from(this.browsingContext.defaultRealm, this),
-          internal: BidiFrameRealm.from(this.browsingContext.createWindowRealm(`__puppeteer_internal_${Math.ceil(Math.random() * 1e4)}`), this)
+          default: BidiFrameRealm.from(this.browsingContext.defaultRealm, this, logger),
+          internal: BidiFrameRealm.from(this.browsingContext.createWindowRealm(`__puppeteer_internal_${Math.ceil(Math.random() * 1e4)}`), this, logger)
         };
-        this.accessibility = new Accessibility(this.realms.default, this._id);
+        this.accessibility = new Accessibility(this.realms.default, this._id, logger);
       }
       #initialize() {
         for (const browsingContext of this.browsingContext.children) {
@@ -33759,7 +34878,7 @@ var init_Frame3 = __esm(() => {
           this.page().trustedEmitter.emit("framedetached", this);
         });
         this.browsingContext.on("request", (request) => {
-          const httpRequest = BidiHTTPRequest.from(request, this, this.page().isNetworkInterceptionEnabled);
+          const httpRequest = BidiHTTPRequest.from(request, this, this.page().isNetworkInterceptionEnabled, undefined, this.logger);
           request.once("success", () => {
             this.page().trustedEmitter.emit("requestfinished", httpRequest);
           });
@@ -33815,11 +34934,11 @@ var init_Frame3 = __esm(() => {
 `);
             this.page().trustedEmitter.emit("pageerror", error);
           } else {
-            debugError?.(`Unhandled LogEntry with type "${entry.type}", text "${entry.text}" and level "${entry.level}"`);
+            this.#logger?.(DEBUG_PREFIXES.error)?.(`Unhandled LogEntry with type "${entry.type}", text "${entry.text}" and level "${entry.level}"`);
           }
         });
         this.browsingContext.on("worker", (realm) => {
-          const worker = BidiWebWorker.from(this, realm);
+          const worker = BidiWebWorker.from(this, realm, this.#logger);
           realm.on("destroyed", () => {
             this.page().trustedEmitter.emit("workerdestroyed", worker);
           });
@@ -33827,7 +34946,7 @@ var init_Frame3 = __esm(() => {
         });
       }
       #createFrameTarget(browsingContext) {
-        const frame = BidiFrame.from(this, browsingContext);
+        const frame = BidiFrame.from(this, browsingContext, this.#logger);
         this.#frames.set(browsingContext, frame);
         this.page().trustedEmitter.emit("frameattached", frame);
         browsingContext.on("closed", () => {
@@ -33976,7 +35095,7 @@ var init_Frame3 = __esm(() => {
         if (this.#exposedFunctions.has(name)) {
           throw new Error(`Failed to add page binding with name ${name}: globalThis['${name}'] already exists!`);
         }
-        const exposable = await ExposableFunction.from(this, name, apply);
+        const exposable = await ExposableFunction.from(this, name, apply, false, this.#logger);
         this.#exposedFunctions.set(name, exposable);
       }
       async removeExposedFunction(name) {
@@ -34635,6 +35754,135 @@ var init_Input3 = __esm(() => {
   };
 });
 
+// node_modules/puppeteer-core/lib/puppeteer/bidi/ScreenRecording.js
+var __runInitializers18 = function(thisArg, initializers, value) {
+  var useValue = arguments.length > 2;
+  for (var i = 0;i < initializers.length; i++) {
+    value = useValue ? initializers[i].call(thisArg, value) : initializers[i].call(thisArg);
+  }
+  return useValue ? value : undefined;
+}, __esDecorate18 = function(ctor, descriptorIn, decorators, contextIn, initializers, extraInitializers) {
+  function accept(f) {
+    if (f !== undefined && typeof f !== "function")
+      throw new TypeError("Function expected");
+    return f;
+  }
+  var kind = contextIn.kind, key = kind === "getter" ? "get" : kind === "setter" ? "set" : "value";
+  var target = !descriptorIn && ctor ? contextIn["static"] ? ctor : ctor.prototype : null;
+  var descriptor = descriptorIn || (target ? Object.getOwnPropertyDescriptor(target, contextIn.name) : {});
+  var _, done = false;
+  for (var i = decorators.length - 1;i >= 0; i--) {
+    var context = {};
+    for (var p in contextIn)
+      context[p] = p === "access" ? {} : contextIn[p];
+    for (var p in contextIn.access)
+      context.access[p] = contextIn.access[p];
+    context.addInitializer = function(f) {
+      if (done)
+        throw new TypeError("Cannot add initializers after decoration has completed");
+      extraInitializers.push(accept(f || null));
+    };
+    var result = (0, decorators[i])(kind === "accessor" ? { get: descriptor.get, set: descriptor.set } : descriptor[key], context);
+    if (kind === "accessor") {
+      if (result === undefined)
+        continue;
+      if (result === null || typeof result !== "object")
+        throw new TypeError("Object expected");
+      if (_ = accept(result.get))
+        descriptor.get = _;
+      if (_ = accept(result.set))
+        descriptor.set = _;
+      if (_ = accept(result.init))
+        initializers.unshift(_);
+    } else if (_ = accept(result)) {
+      if (kind === "field")
+        initializers.unshift(_);
+      else
+        descriptor[key] = _;
+    }
+  }
+  if (target)
+    Object.defineProperty(target, contextIn.name, descriptor);
+  done = true;
+}, BidiScreenRecording;
+var init_ScreenRecording3 = __esm(() => {
+  init_ScreenRecording();
+  init_Debug();
+  init_environment();
+  init_decorators();
+  BidiScreenRecording = (() => {
+    let _classSuper = ScreenRecording;
+    let _instanceExtraInitializers = [];
+    let _stop_decorators;
+    return class BidiScreenRecording extends _classSuper {
+      static {
+        const _metadata = typeof Symbol === "function" && Symbol.metadata ? Object.create(_classSuper[Symbol.metadata] ?? null) : undefined;
+        _stop_decorators = [guarded()];
+        __esDecorate18(this, null, _stop_decorators, { kind: "method", name: "stop", static: false, private: false, access: { has: (obj) => ("stop" in obj), get: (obj) => obj.stop }, metadata: _metadata }, null, _instanceExtraInitializers);
+        if (_metadata)
+          Object.defineProperty(this, Symbol.metadata, { enumerable: true, configurable: true, writable: true, value: _metadata });
+      }
+      #screencastId = __runInitializers18(this, _instanceExtraInitializers);
+      #path;
+      constructor(page, options = {}, logger) {
+        super(page, options, logger);
+        const browsingContext = this.page.mainFrame().browsingContext;
+        browsingContext?.once?.("closed", () => {
+          this.stop().catch((err) => {
+            this.logger(DEBUG_PREFIXES.error)?.(err);
+          });
+        });
+      }
+      async _start() {
+        const frameRate = this.options.frameRate ?? this.options.fps;
+        const video = this.options.maxWidth !== undefined || this.options.maxHeight !== undefined || frameRate !== undefined ? {
+          width: this.options.maxWidth,
+          height: this.options.maxHeight,
+          frameRate
+        } : undefined;
+        const result = await this.page.mainFrame().browsingContext.startScreencast({
+          audio: this.options.audio,
+          video
+        });
+        this.#screencastId = result.screencast;
+        this.#path = result.path;
+      }
+      async stop() {
+        if (this.stopped) {
+          return;
+        }
+        this.stopped = true;
+        try {
+          if (!this.#screencastId) {
+            return;
+          }
+          const result = await this.page.mainFrame().browsingContext.stopScreencast(this.#screencastId).catch((err) => {
+            this.logger(DEBUG_PREFIXES.error)?.(err);
+            return;
+          });
+          if (result?.error) {
+            this.logger(DEBUG_PREFIXES.error)?.(result.error);
+          }
+          const filePath = result?.path ?? this.#path;
+          if (filePath) {
+            try {
+              const buffer = await environment.value.readFile(filePath);
+              this.controller.enqueue(buffer);
+              for (const dest of this.destinations) {
+                dest.write(buffer);
+              }
+            } catch (err) {
+              this.logger(DEBUG_PREFIXES.error)?.(err);
+            }
+          }
+        } finally {
+          await this.closeDestinations();
+        }
+      }
+    };
+  })();
+});
+
 // node_modules/puppeteer-core/lib/puppeteer/bidi/Page.js
 function evaluationExpression(fun, ...args) {
   return `() => {${evaluationString(fun, ...args)}}`;
@@ -34761,7 +36009,7 @@ function convertCookiesPartitionKeyFromPuppeteerToBiDi(partitionKey) {
   }
   return partitionKey.sourceOrigin;
 }
-var __esDecorate17 = function(ctor, descriptorIn, decorators, contextIn, initializers, extraInitializers) {
+var __esDecorate19 = function(ctor, descriptorIn, decorators, contextIn, initializers, extraInitializers) {
   function accept(f) {
     if (f !== undefined && typeof f !== "function")
       throw new TypeError("Function expected");
@@ -34804,13 +36052,13 @@ var __esDecorate17 = function(ctor, descriptorIn, decorators, contextIn, initial
   if (target)
     Object.defineProperty(target, contextIn.name, descriptor);
   done = true;
-}, __runInitializers17 = function(thisArg, initializers, value) {
+}, __runInitializers19 = function(thisArg, initializers, value) {
   var useValue = arguments.length > 2;
   for (var i = 0;i < initializers.length; i++) {
     value = useValue ? initializers[i].call(thisArg, value) : initializers[i].call(thisArg);
   }
   return useValue ? value : undefined;
-}, __addDisposableResource17 = function(env, value, async) {
+}, __addDisposableResource18 = function(env, value, async) {
   if (value !== null && value !== undefined) {
     if (typeof value !== "object" && typeof value !== "function")
       throw new TypeError("Object expected.");
@@ -34842,7 +36090,7 @@ var __esDecorate17 = function(ctor, descriptorIn, decorators, contextIn, initial
     env.stack.push({ async: true });
   }
   return value;
-}, __disposeResources17, BidiPage, CDP_SPECIFIC_PREFIX = "goog:";
+}, __disposeResources18, BidiPage, CDP_SPECIFIC_PREFIX = "goog:";
 var init_Page3 = __esm(() => {
   init_rxjs();
   init_Page();
@@ -34858,8 +36106,9 @@ var init_Page3 = __esm(() => {
   init_ElementHandle3();
   init_Frame3();
   init_Input3();
+  init_ScreenRecording3();
   init_util2();
-  __disposeResources17 = function(SuppressedError2) {
+  __disposeResources18 = function(SuppressedError2) {
     return function(env) {
       function fail(e) {
         env.error = env.hasError ? new SuppressedError2(e, env.error, "An error was suppressed during disposal.") : e;
@@ -34904,25 +36153,25 @@ var init_Page3 = __esm(() => {
       static {
         const _metadata = typeof Symbol === "function" && Symbol.metadata ? Object.create(_classSuper[Symbol.metadata] ?? null) : undefined;
         _trustedEmitter_decorators = [bubble()];
-        __esDecorate17(this, null, _trustedEmitter_decorators, { kind: "accessor", name: "trustedEmitter", static: false, private: false, access: { has: (obj) => ("trustedEmitter" in obj), get: (obj) => obj.trustedEmitter, set: (obj, value) => {
+        __esDecorate19(this, null, _trustedEmitter_decorators, { kind: "accessor", name: "trustedEmitter", static: false, private: false, access: { has: (obj) => ("trustedEmitter" in obj), get: (obj) => obj.trustedEmitter, set: (obj, value) => {
           obj.trustedEmitter = value;
         } }, metadata: _metadata }, _trustedEmitter_initializers, _trustedEmitter_extraInitializers);
         if (_metadata)
           Object.defineProperty(this, Symbol.metadata, { enumerable: true, configurable: true, writable: true, value: _metadata });
       }
-      static from(browserContext, browsingContext) {
-        const page = new BidiPage(browserContext, browsingContext);
+      static from(browserContext, browsingContext, logger) {
+        const page = new BidiPage(browserContext, browsingContext, logger);
         page.#initialize();
         return page;
       }
-      #trustedEmitter_accessor_storage = __runInitializers17(this, _trustedEmitter_initializers, new EventEmitter);
+      #trustedEmitter_accessor_storage = __runInitializers19(this, _trustedEmitter_initializers, new EventEmitter);
       get trustedEmitter() {
         return this.#trustedEmitter_accessor_storage;
       }
       set trustedEmitter(value) {
         this.#trustedEmitter_accessor_storage = value;
       }
-      #browserContext = __runInitializers17(this, _trustedEmitter_extraInitializers);
+      #browserContext = __runInitializers19(this, _trustedEmitter_extraInitializers);
       #frame;
       #viewport = null;
       #workers = new Set;
@@ -34940,12 +36189,12 @@ var init_Page3 = __esm(() => {
       _client() {
         return this.#frame.client;
       }
-      constructor(browserContext, browsingContext) {
-        super();
+      constructor(browserContext, browsingContext, logger) {
+        super(logger);
         this.#browserContext = browserContext;
-        this.#frame = BidiFrame.from(this, browsingContext);
-        this.#cdpEmulationManager = new EmulationManager(this.#frame.client);
-        this.tracing = new Tracing(this.#frame.client);
+        this.#frame = BidiFrame.from(this, browsingContext, logger);
+        this.#cdpEmulationManager = new EmulationManager(this.#frame.client, logger);
+        this.tracing = new Tracing(this.#frame.client, logger);
         this.coverage = new Coverage(this.#frame.client);
         this.keyboard = new BidiKeyboard(this);
         this.mouse = new BidiMouse(this);
@@ -35029,7 +36278,7 @@ var init_Page3 = __esm(() => {
       async focusedFrame() {
         const env_1 = { stack: [], error: undefined, hasError: false };
         try {
-          const handle = __addDisposableResource17(env_1, await this.mainFrame().isolatedRealm().evaluateHandle(() => {
+          const handle = __addDisposableResource18(env_1, await this.mainFrame().isolatedRealm().evaluateHandle(() => {
             let win = window;
             while (win.document.activeElement instanceof win.HTMLIFrameElement || win.document.activeElement instanceof win.HTMLFrameElement) {
               if (win.document.activeElement.contentWindow === null) {
@@ -35050,7 +36299,7 @@ var init_Page3 = __esm(() => {
           env_1.error = e_1;
           env_1.hasError = true;
         } finally {
-          __disposeResources17(env_1);
+          __disposeResources18(env_1);
         }
       }
       frames() {
@@ -35066,7 +36315,7 @@ var init_Page3 = __esm(() => {
       async close(options) {
         const env_2 = { stack: [], error: undefined, hasError: false };
         try {
-          const _guard = __addDisposableResource17(env_2, await this.#browserContext.waitForScreenshotOperations(), false);
+          const _guard = __addDisposableResource18(env_2, await this.#browserContext.waitForScreenshotOperations(), false);
           try {
             await this.#frame.browsingContext.close(options?.runBeforeUnload);
           } catch {
@@ -35076,7 +36325,7 @@ var init_Page3 = __esm(() => {
           env_2.error = e_2;
           env_2.hasError = true;
         } finally {
-          __disposeResources17(env_2);
+          __disposeResources18(env_2);
         }
       }
       async reload(options = {}) {
@@ -35524,6 +36773,9 @@ var init_Page3 = __esm(() => {
       extensionRealms() {
         throw new UnsupportedOperation;
       }
+      createScreenRecording(options) {
+        return new BidiScreenRecording(this, options, this.logger);
+      }
     };
   })();
 });
@@ -35536,8 +36788,8 @@ var init_Target3 = __esm(() => {
   init_Page3();
   BidiBrowserTarget = class BidiBrowserTarget extends Target {
     #browser;
-    constructor(browser) {
-      super();
+    constructor(browser, logger) {
+      super(logger);
       this.#browser = browser;
     }
     asPage() {
@@ -35564,8 +36816,8 @@ var init_Target3 = __esm(() => {
   };
   BidiPageTarget = class BidiPageTarget extends Target {
     #page;
-    constructor(page) {
-      super();
+    constructor(page, logger) {
+      super(logger);
       this.#page = page;
     }
     async page() {
@@ -35596,13 +36848,13 @@ var init_Target3 = __esm(() => {
   BidiFrameTarget = class BidiFrameTarget extends Target {
     #frame;
     #page;
-    constructor(frame) {
-      super();
+    constructor(frame, logger) {
+      super(logger);
       this.#frame = frame;
     }
     async page() {
       if (this.#page === undefined) {
-        this.#page = BidiPage.from(this.browserContext(), this.#frame.browsingContext);
+        this.#page = BidiPage.from(this.browserContext(), this.#frame.browsingContext, this.logger);
       }
       return this.#page;
     }
@@ -35630,8 +36882,8 @@ var init_Target3 = __esm(() => {
   };
   BidiWorkerTarget = class BidiWorkerTarget extends Target {
     #worker;
-    constructor(worker) {
-      super();
+    constructor(worker, logger) {
+      super(logger);
       this.#worker = worker;
     }
     async page() {
@@ -35662,7 +36914,7 @@ var init_Target3 = __esm(() => {
 });
 
 // node_modules/puppeteer-core/lib/puppeteer/bidi/BrowserContext.js
-var __esDecorate18 = function(ctor, descriptorIn, decorators, contextIn, initializers, extraInitializers) {
+var __esDecorate20 = function(ctor, descriptorIn, decorators, contextIn, initializers, extraInitializers) {
   function accept(f) {
     if (f !== undefined && typeof f !== "function")
       throw new TypeError("Function expected");
@@ -35705,13 +36957,13 @@ var __esDecorate18 = function(ctor, descriptorIn, decorators, contextIn, initial
   if (target)
     Object.defineProperty(target, contextIn.name, descriptor);
   done = true;
-}, __runInitializers18 = function(thisArg, initializers, value) {
+}, __runInitializers20 = function(thisArg, initializers, value) {
   var useValue = arguments.length > 2;
   for (var i = 0;i < initializers.length; i++) {
     value = useValue ? initializers[i].call(thisArg, value) : initializers[i].call(thisArg);
   }
   return useValue ? value : undefined;
-}, __addDisposableResource18 = function(env, value, async) {
+}, __addDisposableResource19 = function(env, value, async) {
   if (value !== null && value !== undefined) {
     if (typeof value !== "object" && typeof value !== "function")
       throw new TypeError("Object expected.");
@@ -35743,19 +36995,19 @@ var __esDecorate18 = function(ctor, descriptorIn, decorators, contextIn, initial
     env.stack.push({ async: true });
   }
   return value;
-}, __disposeResources18, BidiBrowserContext;
+}, __disposeResources19, BidiBrowserContext;
 var init_BrowserContext3 = __esm(() => {
   init_Browser();
   init_BrowserContext();
+  init_Debug();
   init_Errors();
   init_EventEmitter();
-  init_util();
   init_decorators();
   init_UserContext();
   init_Page3();
   init_Target3();
   init_Target3();
-  __disposeResources18 = function(SuppressedError2) {
+  __disposeResources19 = function(SuppressedError2) {
     return function(env) {
       function fail(e) {
         env.error = env.hasError ? new SuppressedError2(e, env.error, "An error was suppressed during disposal.") : e;
@@ -35800,35 +37052,37 @@ var init_BrowserContext3 = __esm(() => {
       static {
         const _metadata = typeof Symbol === "function" && Symbol.metadata ? Object.create(_classSuper[Symbol.metadata] ?? null) : undefined;
         _trustedEmitter_decorators = [bubble()];
-        __esDecorate18(this, null, _trustedEmitter_decorators, { kind: "accessor", name: "trustedEmitter", static: false, private: false, access: { has: (obj) => ("trustedEmitter" in obj), get: (obj) => obj.trustedEmitter, set: (obj, value) => {
+        __esDecorate20(this, null, _trustedEmitter_decorators, { kind: "accessor", name: "trustedEmitter", static: false, private: false, access: { has: (obj) => ("trustedEmitter" in obj), get: (obj) => obj.trustedEmitter, set: (obj, value) => {
           obj.trustedEmitter = value;
         } }, metadata: _metadata }, _trustedEmitter_initializers, _trustedEmitter_extraInitializers);
         if (_metadata)
           Object.defineProperty(this, Symbol.metadata, { enumerable: true, configurable: true, writable: true, value: _metadata });
       }
-      static from(browser, userContext, options) {
-        const context = new BidiBrowserContext(browser, userContext, options);
+      static from(browser, userContext, options, logger) {
+        const context = new BidiBrowserContext(browser, userContext, options, logger);
         context.#initialize();
         return context;
       }
-      #trustedEmitter_accessor_storage = __runInitializers18(this, _trustedEmitter_initializers, new EventEmitter);
+      #trustedEmitter_accessor_storage = __runInitializers20(this, _trustedEmitter_initializers, new EventEmitter);
       get trustedEmitter() {
         return this.#trustedEmitter_accessor_storage;
       }
       set trustedEmitter(value) {
         this.#trustedEmitter_accessor_storage = value;
       }
-      #browser = __runInitializers18(this, _trustedEmitter_extraInitializers);
+      #browser = __runInitializers20(this, _trustedEmitter_extraInitializers);
       #defaultViewport;
       userContext;
       #pages = new WeakMap;
       #targets = new Map;
       #overrides = [];
-      constructor(browser, userContext, options) {
-        super();
+      #logger;
+      constructor(browser, userContext, options, logger) {
+        super(logger);
         this.#browser = browser;
         this.userContext = userContext;
         this.#defaultViewport = options.defaultViewport;
+        this.#logger = logger;
       }
       #initialize() {
         for (const browsingContext of this.userContext.browsingContexts) {
@@ -35849,17 +37103,17 @@ var init_BrowserContext3 = __esm(() => {
         });
       }
       #createPage(browsingContext) {
-        const page = BidiPage.from(this, browsingContext);
+        const page = BidiPage.from(this, browsingContext, this.#logger);
         this.#pages.set(browsingContext, page);
         page.trustedEmitter.on("close", () => {
           this.#pages.delete(browsingContext);
         });
-        const pageTarget = new BidiPageTarget(page);
+        const pageTarget = new BidiPageTarget(page, this.#logger);
         const pageTargets = new Map;
         this.#targets.set(page, [pageTarget, pageTargets]);
         page.trustedEmitter.on("frameattached", (frame) => {
           const bidiFrame = frame;
-          const target = new BidiFrameTarget(bidiFrame);
+          const target = new BidiFrameTarget(bidiFrame, this.#logger);
           pageTargets.set(bidiFrame, target);
           this.trustedEmitter.emit("targetcreated", target);
         });
@@ -35883,7 +37137,7 @@ var init_BrowserContext3 = __esm(() => {
         });
         page.trustedEmitter.on("workercreated", (worker) => {
           const bidiWorker = worker;
-          const target = new BidiWorkerTarget(bidiWorker);
+          const target = new BidiWorkerTarget(bidiWorker, this.#logger);
           pageTargets.set(bidiWorker, target);
           this.trustedEmitter.emit("targetcreated", target);
         });
@@ -35914,7 +37168,7 @@ var init_BrowserContext3 = __esm(() => {
       async newPage(options) {
         const env_1 = { stack: [], error: undefined, hasError: false };
         try {
-          const _guard = __addDisposableResource18(env_1, await this.waitForScreenshotOperations(), false);
+          const _guard = __addDisposableResource19(env_1, await this.waitForScreenshotOperations(), false);
           const type = options?.type === "window" ? "window" : "tab";
           const context = await this.userContext.createBrowsingContext(type, {
             background: options?.background
@@ -35927,14 +37181,14 @@ var init_BrowserContext3 = __esm(() => {
             try {
               await page.setViewport(this.#defaultViewport);
             } catch (error) {
-              debugError?.(error);
+              this.#logger?.(DEBUG_PREFIXES.error)?.(error);
             }
           }
           if (options?.type === "window" && options?.windowBounds !== undefined) {
             try {
               await this.browser().setWindowBounds(context.windowId, options.windowBounds);
             } catch (error) {
-              debugError?.(error);
+              this.#logger?.(DEBUG_PREFIXES.error)?.(error);
             }
           }
           return page;
@@ -35942,7 +37196,7 @@ var init_BrowserContext3 = __esm(() => {
           env_1.error = e_1;
           env_1.hasError = true;
         } finally {
-          __disposeResources18(env_1);
+          __disposeResources19(env_1);
         }
       }
       async close() {
@@ -35950,7 +37204,7 @@ var init_BrowserContext3 = __esm(() => {
         try {
           await this.userContext.remove();
         } catch (error) {
-          debugError?.(error);
+          this.#logger?.(DEBUG_PREFIXES.error)?.(error);
         }
         this.#targets.clear();
       }
@@ -35976,7 +37230,9 @@ var init_BrowserContext3 = __esm(() => {
           }, permissionsSet.has(permission) ? "granted" : "denied");
           this.#overrides.push({ origin, permission });
           if (!permissionsSet.has(permission)) {
-            return result.catch(debugCatchError);
+            return result.catch((error) => {
+              this.#logger?.(DEBUG_PREFIXES.error)?.(error);
+            });
           }
           return result;
         }));
@@ -36004,7 +37260,9 @@ var init_BrowserContext3 = __esm(() => {
         const promises = this.#overrides.map(({ permission, origin }) => {
           return this.userContext.setPermissions(origin, {
             name: permission
-          }, "prompt").catch(debugCatchError);
+          }, "prompt").catch((error) => {
+            this.#logger?.(DEBUG_PREFIXES.error)?.(error);
+          });
         });
         this.#overrides = [];
         await Promise.all(promises);
@@ -36045,13 +37303,13 @@ var init_BrowserContext3 = __esm(() => {
 });
 
 // node_modules/puppeteer-core/lib/puppeteer/bidi/core/Browser.js
-var __runInitializers19 = function(thisArg, initializers, value) {
+var __runInitializers21 = function(thisArg, initializers, value) {
   var useValue = arguments.length > 2;
   for (var i = 0;i < initializers.length; i++) {
     value = useValue ? initializers[i].call(thisArg, value) : initializers[i].call(thisArg);
   }
   return useValue ? value : undefined;
-}, __esDecorate19 = function(ctor, descriptorIn, decorators, contextIn, initializers, extraInitializers) {
+}, __esDecorate21 = function(ctor, descriptorIn, decorators, contextIn, initializers, extraInitializers) {
   function accept(f) {
     if (f !== undefined && typeof f !== "function")
       throw new TypeError("Function expected");
@@ -36094,7 +37352,7 @@ var __runInitializers19 = function(thisArg, initializers, value) {
   if (target)
     Object.defineProperty(target, contextIn.name, descriptor);
   done = true;
-}, __addDisposableResource19 = function(env, value, async) {
+}, __addDisposableResource20 = function(env, value, async) {
   if (value !== null && value !== undefined) {
     if (typeof value !== "object" && typeof value !== "function")
       throw new TypeError("Object expected.");
@@ -36126,7 +37384,7 @@ var __runInitializers19 = function(thisArg, initializers, value) {
     env.stack.push({ async: true });
   }
   return value;
-}, __disposeResources19, Browser4;
+}, __disposeResources20, Browser4;
 var init_Browser3 = __esm(() => {
   init_Errors();
   init_EventEmitter();
@@ -36134,7 +37392,7 @@ var init_Browser3 = __esm(() => {
   init_disposable();
   init_Realm3();
   init_UserContext();
-  __disposeResources19 = function(SuppressedError2) {
+  __disposeResources20 = function(SuppressedError2) {
     return function(env) {
       function fail(e) {
         env.error = env.hasError ? new SuppressedError2(e, env.error, "An error was suppressed during disposal.") : e;
@@ -36186,16 +37444,16 @@ var init_Browser3 = __esm(() => {
     return class Browser extends _classSuper {
       static {
         const _metadata = typeof Symbol === "function" && Symbol.metadata ? Object.create(_classSuper[Symbol.metadata] ?? null) : undefined;
-        __esDecorate19(this, null, _dispose_decorators, { kind: "method", name: "dispose", static: false, private: false, access: { has: (obj) => ("dispose" in obj), get: (obj) => obj.dispose }, metadata: _metadata }, null, _instanceExtraInitializers);
-        __esDecorate19(this, null, _close_decorators, { kind: "method", name: "close", static: false, private: false, access: { has: (obj) => ("close" in obj), get: (obj) => obj.close }, metadata: _metadata }, null, _instanceExtraInitializers);
-        __esDecorate19(this, null, _addPreloadScript_decorators, { kind: "method", name: "addPreloadScript", static: false, private: false, access: { has: (obj) => ("addPreloadScript" in obj), get: (obj) => obj.addPreloadScript }, metadata: _metadata }, null, _instanceExtraInitializers);
-        __esDecorate19(this, null, _removeIntercept_decorators, { kind: "method", name: "removeIntercept", static: false, private: false, access: { has: (obj) => ("removeIntercept" in obj), get: (obj) => obj.removeIntercept }, metadata: _metadata }, null, _instanceExtraInitializers);
-        __esDecorate19(this, null, _removePreloadScript_decorators, { kind: "method", name: "removePreloadScript", static: false, private: false, access: { has: (obj) => ("removePreloadScript" in obj), get: (obj) => obj.removePreloadScript }, metadata: _metadata }, null, _instanceExtraInitializers);
-        __esDecorate19(this, null, _createUserContext_decorators, { kind: "method", name: "createUserContext", static: false, private: false, access: { has: (obj) => ("createUserContext" in obj), get: (obj) => obj.createUserContext }, metadata: _metadata }, null, _instanceExtraInitializers);
-        __esDecorate19(this, null, _installExtension_decorators, { kind: "method", name: "installExtension", static: false, private: false, access: { has: (obj) => ("installExtension" in obj), get: (obj) => obj.installExtension }, metadata: _metadata }, null, _instanceExtraInitializers);
-        __esDecorate19(this, null, _uninstallExtension_decorators, { kind: "method", name: "uninstallExtension", static: false, private: false, access: { has: (obj) => ("uninstallExtension" in obj), get: (obj) => obj.uninstallExtension }, metadata: _metadata }, null, _instanceExtraInitializers);
-        __esDecorate19(this, null, _setClientWindowState_decorators, { kind: "method", name: "setClientWindowState", static: false, private: false, access: { has: (obj) => ("setClientWindowState" in obj), get: (obj) => obj.setClientWindowState }, metadata: _metadata }, null, _instanceExtraInitializers);
-        __esDecorate19(this, null, _getClientWindowInfo_decorators, { kind: "method", name: "getClientWindowInfo", static: false, private: false, access: { has: (obj) => ("getClientWindowInfo" in obj), get: (obj) => obj.getClientWindowInfo }, metadata: _metadata }, null, _instanceExtraInitializers);
+        __esDecorate21(this, null, _dispose_decorators, { kind: "method", name: "dispose", static: false, private: false, access: { has: (obj) => ("dispose" in obj), get: (obj) => obj.dispose }, metadata: _metadata }, null, _instanceExtraInitializers);
+        __esDecorate21(this, null, _close_decorators, { kind: "method", name: "close", static: false, private: false, access: { has: (obj) => ("close" in obj), get: (obj) => obj.close }, metadata: _metadata }, null, _instanceExtraInitializers);
+        __esDecorate21(this, null, _addPreloadScript_decorators, { kind: "method", name: "addPreloadScript", static: false, private: false, access: { has: (obj) => ("addPreloadScript" in obj), get: (obj) => obj.addPreloadScript }, metadata: _metadata }, null, _instanceExtraInitializers);
+        __esDecorate21(this, null, _removeIntercept_decorators, { kind: "method", name: "removeIntercept", static: false, private: false, access: { has: (obj) => ("removeIntercept" in obj), get: (obj) => obj.removeIntercept }, metadata: _metadata }, null, _instanceExtraInitializers);
+        __esDecorate21(this, null, _removePreloadScript_decorators, { kind: "method", name: "removePreloadScript", static: false, private: false, access: { has: (obj) => ("removePreloadScript" in obj), get: (obj) => obj.removePreloadScript }, metadata: _metadata }, null, _instanceExtraInitializers);
+        __esDecorate21(this, null, _createUserContext_decorators, { kind: "method", name: "createUserContext", static: false, private: false, access: { has: (obj) => ("createUserContext" in obj), get: (obj) => obj.createUserContext }, metadata: _metadata }, null, _instanceExtraInitializers);
+        __esDecorate21(this, null, _installExtension_decorators, { kind: "method", name: "installExtension", static: false, private: false, access: { has: (obj) => ("installExtension" in obj), get: (obj) => obj.installExtension }, metadata: _metadata }, null, _instanceExtraInitializers);
+        __esDecorate21(this, null, _uninstallExtension_decorators, { kind: "method", name: "uninstallExtension", static: false, private: false, access: { has: (obj) => ("uninstallExtension" in obj), get: (obj) => obj.uninstallExtension }, metadata: _metadata }, null, _instanceExtraInitializers);
+        __esDecorate21(this, null, _setClientWindowState_decorators, { kind: "method", name: "setClientWindowState", static: false, private: false, access: { has: (obj) => ("setClientWindowState" in obj), get: (obj) => obj.setClientWindowState }, metadata: _metadata }, null, _instanceExtraInitializers);
+        __esDecorate21(this, null, _getClientWindowInfo_decorators, { kind: "method", name: "getClientWindowInfo", static: false, private: false, access: { has: (obj) => ("getClientWindowInfo" in obj), get: (obj) => obj.getClientWindowInfo }, metadata: _metadata }, null, _instanceExtraInitializers);
         if (_metadata)
           Object.defineProperty(this, Symbol.metadata, { enumerable: true, configurable: true, writable: true, value: _metadata });
       }
@@ -36204,7 +37462,7 @@ var init_Browser3 = __esm(() => {
         await browser.#initialize();
         return browser;
       }
-      #closed = (__runInitializers19(this, _instanceExtraInitializers), false);
+      #closed = (__runInitializers21(this, _instanceExtraInitializers), false);
       #reason;
       #disposables = new DisposableStack;
       #userContexts = new Map;
@@ -36240,7 +37498,7 @@ var init_Browser3 = __esm(() => {
         {
           const env_1 = { stack: [], error: undefined, hasError: false };
           try {
-            const sessionEmitter = __addDisposableResource19(env_1, new EventEmitter(this.session), false);
+            const sessionEmitter = __addDisposableResource20(env_1, new EventEmitter(this.session), false);
             sessionEmitter.on("browsingContext.contextCreated", (info) => {
               contextIds.add(info.context);
             });
@@ -36250,7 +37508,7 @@ var init_Browser3 = __esm(() => {
             env_1.error = e_1;
             env_1.hasError = true;
           } finally {
-            __disposeResources19(env_1);
+            __disposeResources20(env_1);
           }
         }
         for (const info of contexts) {
@@ -36406,13 +37664,13 @@ var init_Browser3 = __esm(() => {
 });
 
 // node_modules/puppeteer-core/lib/puppeteer/bidi/core/Session.js
-var __runInitializers20 = function(thisArg, initializers, value) {
+var __runInitializers22 = function(thisArg, initializers, value) {
   var useValue = arguments.length > 2;
   for (var i = 0;i < initializers.length; i++) {
     value = useValue ? initializers[i].call(thisArg, value) : initializers[i].call(thisArg);
   }
   return useValue ? value : undefined;
-}, __esDecorate20 = function(ctor, descriptorIn, decorators, contextIn, initializers, extraInitializers) {
+}, __esDecorate22 = function(ctor, descriptorIn, decorators, contextIn, initializers, extraInitializers) {
   function accept(f) {
     if (f !== undefined && typeof f !== "function")
       throw new TypeError("Function expected");
@@ -36475,14 +37733,14 @@ var init_Session = __esm(() => {
     return class Session extends _classSuper {
       static {
         const _metadata = typeof Symbol === "function" && Symbol.metadata ? Object.create(_classSuper[Symbol.metadata] ?? null) : undefined;
-        __esDecorate20(this, null, _connection_decorators, { kind: "accessor", name: "connection", static: false, private: false, access: { has: (obj) => ("connection" in obj), get: (obj) => obj.connection, set: (obj, value) => {
+        __esDecorate22(this, null, _connection_decorators, { kind: "accessor", name: "connection", static: false, private: false, access: { has: (obj) => ("connection" in obj), get: (obj) => obj.connection, set: (obj, value) => {
           obj.connection = value;
         } }, metadata: _metadata }, _connection_initializers, _connection_extraInitializers);
-        __esDecorate20(this, null, _dispose_decorators, { kind: "method", name: "dispose", static: false, private: false, access: { has: (obj) => ("dispose" in obj), get: (obj) => obj.dispose }, metadata: _metadata }, null, _instanceExtraInitializers);
-        __esDecorate20(this, null, _send_decorators, { kind: "method", name: "send", static: false, private: false, access: { has: (obj) => ("send" in obj), get: (obj) => obj.send }, metadata: _metadata }, null, _instanceExtraInitializers);
-        __esDecorate20(this, null, _subscribe_decorators, { kind: "method", name: "subscribe", static: false, private: false, access: { has: (obj) => ("subscribe" in obj), get: (obj) => obj.subscribe }, metadata: _metadata }, null, _instanceExtraInitializers);
-        __esDecorate20(this, null, _addIntercepts_decorators, { kind: "method", name: "addIntercepts", static: false, private: false, access: { has: (obj) => ("addIntercepts" in obj), get: (obj) => obj.addIntercepts }, metadata: _metadata }, null, _instanceExtraInitializers);
-        __esDecorate20(this, null, _end_decorators, { kind: "method", name: "end", static: false, private: false, access: { has: (obj) => ("end" in obj), get: (obj) => obj.end }, metadata: _metadata }, null, _instanceExtraInitializers);
+        __esDecorate22(this, null, _dispose_decorators, { kind: "method", name: "dispose", static: false, private: false, access: { has: (obj) => ("dispose" in obj), get: (obj) => obj.dispose }, metadata: _metadata }, null, _instanceExtraInitializers);
+        __esDecorate22(this, null, _send_decorators, { kind: "method", name: "send", static: false, private: false, access: { has: (obj) => ("send" in obj), get: (obj) => obj.send }, metadata: _metadata }, null, _instanceExtraInitializers);
+        __esDecorate22(this, null, _subscribe_decorators, { kind: "method", name: "subscribe", static: false, private: false, access: { has: (obj) => ("subscribe" in obj), get: (obj) => obj.subscribe }, metadata: _metadata }, null, _instanceExtraInitializers);
+        __esDecorate22(this, null, _addIntercepts_decorators, { kind: "method", name: "addIntercepts", static: false, private: false, access: { has: (obj) => ("addIntercepts" in obj), get: (obj) => obj.addIntercepts }, metadata: _metadata }, null, _instanceExtraInitializers);
+        __esDecorate22(this, null, _end_decorators, { kind: "method", name: "end", static: false, private: false, access: { has: (obj) => ("end" in obj), get: (obj) => obj.end }, metadata: _metadata }, null, _instanceExtraInitializers);
         if (_metadata)
           Object.defineProperty(this, Symbol.metadata, { enumerable: true, configurable: true, writable: true, value: _metadata });
       }
@@ -36494,11 +37752,11 @@ var init_Session = __esm(() => {
         await session.#initialize();
         return session;
       }
-      #reason = __runInitializers20(this, _instanceExtraInitializers);
+      #reason = __runInitializers22(this, _instanceExtraInitializers);
       #disposables = new DisposableStack;
       #info;
       browser;
-      #connection_accessor_storage = __runInitializers20(this, _connection_initializers, undefined);
+      #connection_accessor_storage = __runInitializers22(this, _connection_initializers, undefined);
       get connection() {
         return this.#connection_accessor_storage;
       }
@@ -36507,7 +37765,7 @@ var init_Session = __esm(() => {
       }
       constructor(connection, info) {
         super();
-        __runInitializers20(this, _connection_extraInitializers);
+        __runInitializers22(this, _connection_extraInitializers);
         this.#info = info;
         this.connection = connection;
       }
@@ -36584,7 +37842,7 @@ var init_Session = __esm(() => {
 });
 
 // node_modules/puppeteer-core/lib/puppeteer/bidi/Browser.js
-var __esDecorate21 = function(ctor, descriptorIn, decorators, contextIn, initializers, extraInitializers) {
+var __esDecorate23 = function(ctor, descriptorIn, decorators, contextIn, initializers, extraInitializers) {
   function accept(f) {
     if (f !== undefined && typeof f !== "function")
       throw new TypeError("Function expected");
@@ -36627,7 +37885,7 @@ var __esDecorate21 = function(ctor, descriptorIn, decorators, contextIn, initial
   if (target)
     Object.defineProperty(target, contextIn.name, descriptor);
   done = true;
-}, __runInitializers21 = function(thisArg, initializers, value) {
+}, __runInitializers23 = function(thisArg, initializers, value) {
   var useValue = arguments.length > 2;
   for (var i = 0;i < initializers.length; i++) {
     value = useValue ? initializers[i].call(thisArg, value) : initializers[i].call(thisArg);
@@ -36640,9 +37898,9 @@ var __esDecorate21 = function(ctor, descriptorIn, decorators, contextIn, initial
 }, BidiBrowser;
 var init_Browser4 = __esm(() => {
   init_Browser();
+  init_Debug();
   init_Errors();
   init_EventEmitter();
-  init_util();
   init_decorators();
   init_BrowserContext3();
   init_Session();
@@ -36657,7 +37915,7 @@ var init_Browser4 = __esm(() => {
       static {
         const _metadata = typeof Symbol === "function" && Symbol.metadata ? Object.create(_classSuper[Symbol.metadata] ?? null) : undefined;
         _private_trustedEmitter_decorators = [bubble()];
-        __esDecorate21(this, _private_trustedEmitter_descriptor = { get: __setFunctionName4(function() {
+        __esDecorate23(this, _private_trustedEmitter_descriptor = { get: __setFunctionName4(function() {
           return this.#trustedEmitter_accessor_storage;
         }, "#trustedEmitter", "get"), set: __setFunctionName4(function(value) {
           this.#trustedEmitter_accessor_storage = value;
@@ -36712,34 +37970,35 @@ var init_Browser4 = __esm(() => {
             });
           } catch (err) {
             if (err instanceof ProtocolError) {
-              debugError?.(err);
+              opts.logger?.(DEBUG_PREFIXES.error)?.(err);
             } else {
               throw err;
             }
           }
         }));
-        const browser = new BidiBrowser(session.browser, opts);
+        const browser = new BidiBrowser(session.browser, opts, opts.logger);
         browser.#initialize();
         return browser;
       }
-      #trustedEmitter_accessor_storage = __runInitializers21(this, _private_trustedEmitter_initializers, new EventEmitter);
+      #trustedEmitter_accessor_storage = __runInitializers23(this, _private_trustedEmitter_initializers, new EventEmitter);
       get #trustedEmitter() {
         return _private_trustedEmitter_descriptor.get.call(this);
       }
       set #trustedEmitter(value) {
         return _private_trustedEmitter_descriptor.set.call(this, value);
       }
-      #process = __runInitializers21(this, _private_trustedEmitter_extraInitializers);
+      #process = __runInitializers23(this, _private_trustedEmitter_extraInitializers);
       #closeCallback;
       #browserCore;
       #defaultViewport;
       #browserContexts = new WeakMap;
-      #target = new BidiBrowserTarget(this);
+      #target;
       #cdpConnection;
       #networkEnabled;
       #issuesEnabled;
-      constructor(browserCore, opts) {
-        super();
+      #logger;
+      constructor(browserCore, opts, logger) {
+        super(logger);
         this.#process = opts.process;
         this.#closeCallback = opts.closeCallback;
         this.#browserCore = browserCore;
@@ -36747,6 +38006,8 @@ var init_Browser4 = __esm(() => {
         this.#cdpConnection = opts.cdpConnection;
         this.#networkEnabled = opts.networkEnabled;
         this.#issuesEnabled = opts.issuesEnabled;
+        this.#logger = logger;
+        this.#target = new BidiBrowserTarget(this, logger);
       }
       #initialize() {
         for (const userContext of this.#browserCore.userContexts) {
@@ -36779,7 +38040,7 @@ var init_Browser4 = __esm(() => {
       #createBrowserContext(userContext) {
         const browserContext = BidiBrowserContext.from(this, userContext, {
           defaultViewport: this.#defaultViewport
-        });
+        }, this.#logger);
         this.#browserContexts.set(userContext, browserContext);
         browserContext.trustedEmitter.on("targetcreated", (target) => {
           this.#trustedEmitter.emit("targetcreated", target);
@@ -36806,7 +38067,7 @@ var init_Browser4 = __esm(() => {
           await this.#browserCore.close();
           await this.#closeCallback?.call(null);
         } catch (error) {
-          debugError?.(error);
+          this.#logger?.(DEBUG_PREFIXES.error)?.(error);
         } finally {
           this.connection.dispose();
         }
@@ -36840,6 +38101,18 @@ var init_Browser4 = __esm(() => {
       }
       async uninstallExtension(id) {
         await this.#browserCore.uninstallExtension(id);
+      }
+      installPWA() {
+        throw new UnsupportedOperation;
+      }
+      uninstallPWA() {
+        throw new UnsupportedOperation;
+      }
+      launchPWA() {
+        throw new UnsupportedOperation;
+      }
+      getPWAState() {
+        throw new UnsupportedOperation;
       }
       screens() {
         throw new UnsupportedOperation;
@@ -36895,7 +38168,7 @@ var init_Browser4 = __esm(() => {
         try {
           await this.#browserCore.session.end();
         } catch (error) {
-          debugError?.(error);
+          this.#logger?.(DEBUG_PREFIXES.error)?.(error);
         } finally {
           this.connection.dispose();
         }
@@ -36932,12 +38205,13 @@ var init_bidi = __esm(() => {
   init_JSHandle3();
   init_Page3();
   init_Realm4();
+  init_ScreenRecording3();
 });
 
 // node_modules/puppeteer-core/lib/puppeteer/bidi/BrowserConnector.js
-async function _connectToBiDiBrowser(connectionTransport, url, options) {
+async function _connectToBiDiBrowser(connectionTransport, url, options, logger) {
   const { acceptInsecureCerts = false, networkEnabled = true, issuesEnabled = true, defaultViewport = DEFAULT_VIEWPORT } = options;
-  const { bidiConnection, cdpConnection, closeCallback } = await getBiDiConnection(connectionTransport, url, options);
+  const { bidiConnection, cdpConnection, closeCallback } = await getBiDiConnection(connectionTransport, url, options, logger);
   const BiDi = await Promise.resolve().then(() => (init_bidi(), {}));
   const bidiBrowser = await BidiBrowser.create({
     connection: bidiConnection,
@@ -36948,21 +38222,24 @@ async function _connectToBiDiBrowser(connectionTransport, url, options) {
     acceptInsecureCerts,
     networkEnabled,
     issuesEnabled,
-    capabilities: options.capabilities
+    capabilities: options.capabilities,
+    logger
   });
   return bidiBrowser;
 }
-async function getBiDiConnection(connectionTransport, url, options) {
+async function getBiDiConnection(connectionTransport, url, options, logger) {
   const BiDi = await Promise.resolve().then(() => (init_bidi(), {}));
   const { slowMo = 0, protocolTimeout, idGenerator = createIncrementalIdGenerator() } = options;
-  const pureBidiConnection = new BidiConnection(url, connectionTransport, idGenerator, slowMo, protocolTimeout);
+  const pureBidiConnection = new BidiConnection(url, connectionTransport, idGenerator, slowMo, protocolTimeout, options.logger ?? logger);
   try {
     const result = await pureBidiConnection.send("session.status", {});
     if ("type" in result && result.type === "success") {
       return {
         bidiConnection: pureBidiConnection,
         closeCallback: async () => {
-          await pureBidiConnection.send("browser.close", {}).catch(debugCatchError);
+          await pureBidiConnection.send("browser.close", {}).catch((error) => {
+            logger?.(DEBUG_PREFIXES.error)?.(error);
+          });
         }
       };
     }
@@ -36972,22 +38249,25 @@ async function getBiDiConnection(connectionTransport, url, options) {
     }
   }
   pureBidiConnection.unbind();
-  const cdpConnection = new Connection(url, connectionTransport, slowMo, protocolTimeout, true, idGenerator);
+  const cdpConnection = new Connection(url, connectionTransport, slowMo, protocolTimeout, true, idGenerator, options.logger ?? logger);
   const version = await cdpConnection.send("Browser.getVersion");
   if (version.product.toLowerCase().includes("firefox")) {
     throw new UnsupportedOperation("Firefox is not supported in BiDi over CDP mode.");
   }
-  const bidiOverCdpConnection = await connectBidiOverCdp(cdpConnection);
+  const bidiOverCdpConnection = await connectBidiOverCdp(cdpConnection, logger);
   return {
     cdpConnection,
     bidiConnection: bidiOverCdpConnection,
     closeCallback: async () => {
-      await cdpConnection.send("Browser.close").catch(debugCatchError);
+      await cdpConnection.send("Browser.close").catch((error) => {
+        logger?.(DEBUG_PREFIXES.error)?.(error);
+      });
     }
   };
 }
 var init_BrowserConnector2 = __esm(() => {
   init_Connection();
+  init_Debug();
   init_Errors();
   init_util();
 });
@@ -37000,7 +38280,7 @@ __export(exports_NodeWebSocketTransport, {
 import NodeWebSocket from "ws";
 
 class NodeWebSocketTransport {
-  static create(url, headers) {
+  static create(url, headers, logger, options = {}) {
     return new Promise((resolve, reject) => {
       const ws = new NodeWebSocket(url, [], {
         followRedirects: true,
@@ -37013,73 +38293,69 @@ class NodeWebSocketTransport {
         }
       });
       ws.addEventListener("open", () => {
-        return resolve(new NodeWebSocketTransport(ws));
+        return resolve(new NodeWebSocketTransport(ws, logger, options));
       });
       ws.addEventListener("error", reject);
     });
   }
   #ws;
+  #logger;
+  #keepAliveTimer;
   onmessage;
   onclose;
-  constructor(ws) {
+  constructor(ws, logger, options = {}) {
     this.#ws = ws;
+    this.#logger = logger;
     this.#ws.addEventListener("message", (event) => {
       if (this.onmessage) {
         this.onmessage.call(null, event.data);
       }
     });
     this.#ws.addEventListener("close", () => {
+      this.#stopKeepAlive();
       if (this.onclose) {
         this.onclose.call(null);
       }
     });
-    this.#ws.addEventListener("error", debugCatchError);
+    this.#ws.addEventListener("error", (err) => {
+      this.#logger?.(DEBUG_PREFIXES.error)?.(err);
+    });
+    if (options.keepAlive) {
+      this.#startKeepAlive(options.keepAliveIntervalMs ?? DEFAULT_KEEP_ALIVE_INTERVAL_MS);
+    }
+  }
+  #startKeepAlive(intervalMs) {
+    let awaitingPong = false;
+    this.#ws.on("pong", () => {
+      awaitingPong = false;
+    });
+    this.#keepAliveTimer = setInterval(() => {
+      if (awaitingPong) {
+        this.#ws.terminate();
+        return;
+      }
+      awaitingPong = true;
+      this.#ws.ping();
+    }, intervalMs);
+    this.#keepAliveTimer.unref?.();
+  }
+  #stopKeepAlive() {
+    if (this.#keepAliveTimer !== undefined) {
+      clearInterval(this.#keepAliveTimer);
+      this.#keepAliveTimer = undefined;
+    }
   }
   send(message) {
     this.#ws.send(message);
   }
   close() {
+    this.#stopKeepAlive();
     this.#ws.close();
   }
 }
+var DEFAULT_KEEP_ALIVE_INTERVAL_MS = 30000;
 var init_NodeWebSocketTransport = __esm(() => {
-  init_util();
-});
-
-// node_modules/@puppeteer/browsers/lib/browser-data/types.js
-var Browser6, BrowserPlatform, BrowserTag, ChromeReleaseChannel;
-var init_types = __esm(() => {
-  (function(Browser) {
-    Browser["CHROME"] = "chrome";
-    Browser["CHROMEHEADLESSSHELL"] = "chrome-headless-shell";
-    Browser["CHROMIUM"] = "chromium";
-    Browser["FIREFOX"] = "firefox";
-    Browser["CHROMEDRIVER"] = "chromedriver";
-  })(Browser6 || (Browser6 = {}));
-  (function(BrowserPlatform) {
-    BrowserPlatform["LINUX"] = "linux";
-    BrowserPlatform["LINUX_ARM"] = "linux_arm";
-    BrowserPlatform["MAC"] = "mac";
-    BrowserPlatform["MAC_ARM"] = "mac_arm";
-    BrowserPlatform["WIN32"] = "win32";
-    BrowserPlatform["WIN64"] = "win64";
-  })(BrowserPlatform || (BrowserPlatform = {}));
-  (function(BrowserTag) {
-    BrowserTag["CANARY"] = "canary";
-    BrowserTag["NIGHTLY"] = "nightly";
-    BrowserTag["BETA"] = "beta";
-    BrowserTag["DEV"] = "dev";
-    BrowserTag["DEVEDITION"] = "devedition";
-    BrowserTag["STABLE"] = "stable";
-    BrowserTag["ESR"] = "esr";
-    BrowserTag["LATEST"] = "latest";
-  })(BrowserTag || (BrowserTag = {}));
-  (function(ChromeReleaseChannel) {
-    ChromeReleaseChannel["STABLE"] = "stable";
-    ChromeReleaseChannel["DEV"] = "dev";
-    ChromeReleaseChannel["CANARY"] = "canary";
-    ChromeReleaseChannel["BETA"] = "beta";
-  })(ChromeReleaseChannel || (ChromeReleaseChannel = {}));
+  init_Debug();
 });
 
 // node_modules/@puppeteer/browsers/lib/httpUtil.js
@@ -37151,13 +38427,53 @@ function getText(url) {
 }
 var init_httpUtil = () => {};
 
+// node_modules/@puppeteer/browsers/lib/browser-data/types.js
+var Browser6, BrowserPlatform, BrowserTag, ChromeReleaseChannel;
+var init_types = __esm(() => {
+  (function(Browser) {
+    Browser["CHROME"] = "chrome";
+    Browser["CHROMEHEADLESSSHELL"] = "chrome-headless-shell";
+    Browser["CHROMIUM"] = "chromium";
+    Browser["FIREFOX"] = "firefox";
+    Browser["CHROMEDRIVER"] = "chromedriver";
+  })(Browser6 || (Browser6 = {}));
+  (function(BrowserPlatform) {
+    BrowserPlatform["LINUX"] = "linux";
+    BrowserPlatform["LINUX_ARM"] = "linux_arm";
+    BrowserPlatform["MAC"] = "mac";
+    BrowserPlatform["MAC_ARM"] = "mac_arm";
+    BrowserPlatform["WIN32"] = "win32";
+    BrowserPlatform["WIN64"] = "win64";
+  })(BrowserPlatform || (BrowserPlatform = {}));
+  (function(BrowserTag) {
+    BrowserTag["CANARY"] = "canary";
+    BrowserTag["NIGHTLY"] = "nightly";
+    BrowserTag["BETA"] = "beta";
+    BrowserTag["DEV"] = "dev";
+    BrowserTag["DEVEDITION"] = "devedition";
+    BrowserTag["STABLE"] = "stable";
+    BrowserTag["ESR"] = "esr";
+    BrowserTag["LATEST"] = "latest";
+  })(BrowserTag || (BrowserTag = {}));
+  (function(ChromeReleaseChannel) {
+    ChromeReleaseChannel["STABLE"] = "stable";
+    ChromeReleaseChannel["DEV"] = "dev";
+    ChromeReleaseChannel["CANARY"] = "canary";
+    ChromeReleaseChannel["BETA"] = "beta";
+  })(ChromeReleaseChannel || (ChromeReleaseChannel = {}));
+});
+
 // node_modules/@puppeteer/browsers/lib/browser-data/chrome.js
 import { execSync } from "child_process";
 import os from "os";
 import path2 from "path";
-function folder(platform) {
+function folder(platform, buildId) {
   switch (platform) {
     case BrowserPlatform.LINUX_ARM:
+      if (buildId && compareVersions(buildId, "153.0.8001.0") < 0) {
+        return "linux64";
+      }
+      return "linux-arm64";
     case BrowserPlatform.LINUX:
       return "linux64";
     case BrowserPlatform.MAC_ARM:
@@ -37174,19 +38490,23 @@ function resolveDownloadUrl(platform, buildId, baseUrl = "https://storage.google
   return `${baseUrl}/${resolveDownloadPath(platform, buildId).join("/")}`;
 }
 function resolveDownloadPath(platform, buildId) {
-  return [buildId, folder(platform), `chrome-${folder(platform)}.zip`];
+  return [
+    buildId,
+    folder(platform, buildId),
+    `chrome-${folder(platform, buildId)}.zip`
+  ];
 }
-function relativeExecutablePath(platform, _buildId) {
+function relativeExecutablePath(platform, buildId) {
   switch (platform) {
     case BrowserPlatform.MAC:
     case BrowserPlatform.MAC_ARM:
-      return path2.join("chrome-" + folder(platform), "Google Chrome for Testing.app", "Contents", "MacOS", "Google Chrome for Testing");
+      return path2.join("chrome-" + folder(platform, buildId), "Google Chrome for Testing.app", "Contents", "MacOS", "Google Chrome for Testing");
     case BrowserPlatform.LINUX_ARM:
     case BrowserPlatform.LINUX:
-      return path2.join("chrome-linux64", "chrome");
+      return path2.join("chrome-" + folder(platform, buildId), "chrome");
     case BrowserPlatform.WIN32:
     case BrowserPlatform.WIN64:
-      return path2.join("chrome-" + folder(platform), "chrome.exe");
+      return path2.join("chrome-" + folder(platform, buildId), "chrome.exe");
   }
 }
 async function getLastKnownGoodReleaseForChannel(channel) {
@@ -37422,9 +38742,13 @@ var init_chrome = __esm(() => {
 
 // node_modules/@puppeteer/browsers/lib/browser-data/chrome-headless-shell.js
 import path3 from "path";
-function folder2(platform) {
+function folder2(platform, buildId) {
   switch (platform) {
     case BrowserPlatform.LINUX_ARM:
+      if (buildId && compareVersions(buildId, "153.0.8001.0") < 0) {
+        return "linux64";
+      }
+      return "linux-arm64";
     case BrowserPlatform.LINUX:
       return "linux64";
     case BrowserPlatform.MAC_ARM:
@@ -37443,33 +38767,38 @@ function resolveDownloadUrl2(platform, buildId, baseUrl = "https://storage.googl
 function resolveDownloadPath2(platform, buildId) {
   return [
     buildId,
-    folder2(platform),
-    `chrome-headless-shell-${folder2(platform)}.zip`
+    folder2(platform, buildId),
+    `chrome-headless-shell-${folder2(platform, buildId)}.zip`
   ];
 }
-function relativeExecutablePath2(platform, _buildId) {
+function relativeExecutablePath2(platform, buildId) {
   switch (platform) {
     case BrowserPlatform.MAC:
     case BrowserPlatform.MAC_ARM:
-      return path3.join("chrome-headless-shell-" + folder2(platform), "chrome-headless-shell");
+      return path3.join("chrome-headless-shell-" + folder2(platform, buildId), "chrome-headless-shell");
     case BrowserPlatform.LINUX_ARM:
     case BrowserPlatform.LINUX:
-      return path3.join("chrome-headless-shell-linux64", "chrome-headless-shell");
+      return path3.join("chrome-headless-shell-" + folder2(platform, buildId), "chrome-headless-shell");
     case BrowserPlatform.WIN32:
     case BrowserPlatform.WIN64:
-      return path3.join("chrome-headless-shell-" + folder2(platform), "chrome-headless-shell.exe");
+      return path3.join("chrome-headless-shell-" + folder2(platform, buildId), "chrome-headless-shell.exe");
   }
 }
 var init_chrome_headless_shell = __esm(() => {
+  init_chrome();
   init_types();
   init_chrome();
 });
 
 // node_modules/@puppeteer/browsers/lib/browser-data/chromedriver.js
 import path4 from "path";
-function folder3(platform) {
+function folder3(platform, buildId) {
   switch (platform) {
     case BrowserPlatform.LINUX_ARM:
+      if (buildId && compareVersions(buildId, "153.0.8001.0") < 0) {
+        return "linux64";
+      }
+      return "linux-arm64";
     case BrowserPlatform.LINUX:
       return "linux64";
     case BrowserPlatform.MAC_ARM:
@@ -37486,22 +38815,27 @@ function resolveDownloadUrl3(platform, buildId, baseUrl = "https://storage.googl
   return `${baseUrl}/${resolveDownloadPath3(platform, buildId).join("/")}`;
 }
 function resolveDownloadPath3(platform, buildId) {
-  return [buildId, folder3(platform), `chromedriver-${folder3(platform)}.zip`];
+  return [
+    buildId,
+    folder3(platform, buildId),
+    `chromedriver-${folder3(platform, buildId)}.zip`
+  ];
 }
-function relativeExecutablePath3(platform, _buildId) {
+function relativeExecutablePath3(platform, buildId) {
   switch (platform) {
     case BrowserPlatform.MAC:
     case BrowserPlatform.MAC_ARM:
-      return path4.join("chromedriver-" + folder3(platform), "chromedriver");
+      return path4.join("chromedriver-" + folder3(platform, buildId), "chromedriver");
     case BrowserPlatform.LINUX_ARM:
     case BrowserPlatform.LINUX:
-      return path4.join("chromedriver-linux64", "chromedriver");
+      return path4.join("chromedriver-" + folder3(platform, buildId), "chromedriver");
     case BrowserPlatform.WIN32:
     case BrowserPlatform.WIN64:
-      return path4.join("chromedriver-" + folder3(platform), "chromedriver.exe");
+      return path4.join("chromedriver-" + folder3(platform, buildId), "chromedriver.exe");
   }
 }
 var init_chromedriver = __esm(() => {
+  init_chrome();
   init_types();
   init_chrome();
 });
@@ -37783,13 +39117,12 @@ function defaultProfilePreferences(extraPrefs) {
     "network.sntp.pools": server,
     "plugin.state.flash": 0,
     "privacy.trackingprotection.enabled": false,
-    "remote.enabled": true,
     "remote.bidi.dismiss_file_pickers.enabled": true,
     "screenshots.browser.component.enabled": false,
     "security.certerrors.mitm.priming.enabled": false,
     "security.fileuri.strict_origin_policy": false,
     "security.notification_enable_delay": 0,
-    "services.settings.server": `http://${server}/dummy/blocklist/`,
+    "services.settings.server": "data:,#remote-settings-dummy/v1",
     "signon.autofillForms": false,
     "signon.rememberSignons": false,
     "startup.homepage_welcome_url": "about:blank",
@@ -38032,11 +39365,18 @@ var init_browser_data = __esm(() => {
 
 // node_modules/@puppeteer/browsers/lib/debug.js
 import { debuglog as debuglog2 } from "util";
-var debug2 = (prefix) => {
+var DEBUG_PREFIXES2, debug2 = (prefix) => {
   const log = debuglog2(prefix);
   return log.enabled ? log : undefined;
 };
-var init_debug = () => {};
+var init_debug = __esm(() => {
+  DEBUG_PREFIXES2 = {
+    cache: "puppeteer:browsers:cache",
+    fileUtil: "puppeteer:browsers:fileUtil",
+    install: "puppeteer:browsers:install",
+    launcher: "puppeteer:browsers:launcher"
+  };
+});
 
 // node_modules/@puppeteer/browsers/lib/detectPlatform.js
 import os2 from "os";
@@ -38103,8 +39443,10 @@ class InstalledBrowser {
 
 class Cache {
   #rootDir;
-  constructor(rootDir) {
+  #logger;
+  constructor(rootDir, logger) {
     this.#rootDir = rootDir;
+    this.#logger = logger?.(DEBUG_PREFIXES2.cache);
   }
   get rootDir() {
     return this.#rootDir;
@@ -38211,7 +39553,7 @@ class Cache {
     try {
       options.buildId = this.resolveAlias(options.browser, options.buildId) ?? options.buildId;
     } catch {
-      debugCache?.("could not read .metadata file for the browser");
+      this.#logger?.("could not read .metadata file for the browser");
     }
     const installationDir = this.installationDir(options.browser, options.platform, options.buildId);
     const storedExecutablePath = this.readExecutablePath(options.browser, options.platform, options.buildId);
@@ -38233,12 +39575,10 @@ function parseFolderPath(folderPath) {
   }
   return { platform, buildId };
 }
-var debugCache;
 var init_Cache = __esm(() => {
   init_browser_data();
   init_debug();
   init_detectPlatform();
-  debugCache = debug2("puppeteer:browsers:cache");
 });
 
 // node_modules/@puppeteer/browsers/lib/launch.js
@@ -38257,7 +39597,7 @@ function computeExecutablePath(options) {
   }
   return new Cache(options.cacheDir).computeExecutablePath(options);
 }
-function computeSystemExecutablePath(options) {
+function computeSystemExecutablePath(options, validatePath = true) {
   options.platform ??= detectBrowserPlatform();
   if (!options.platform) {
     throw new Error(`Cannot download a binary for the provided platform: ${os4.platform()} (${os4.arch()})`);
@@ -38269,13 +39609,19 @@ function computeSystemExecutablePath(options) {
       return path;
     } catch {}
   }
+  if (!validatePath) {
+    return paths[0];
+  }
   throw new Error(`Could not find Google Chrome executable for channel '${options.channel}' at:${paths.map((path) => {
     return `
  - ${path}`;
   })}.`);
 }
 function launch(opts) {
-  return new Process(opts);
+  return new Process({
+    ...opts,
+    logger: opts.logger ?? debug2
+  });
 }
 function subscribeToProcessEvent(event, handler) {
   const listeners = processListeners.get(event) || [];
@@ -38301,6 +39647,7 @@ function unsubscribeFromProcessEvent(event, handler) {
 class Process {
   #executablePath;
   #args;
+  #logger;
   #browserProcess;
   #exited = false;
   #hooksRan = false;
@@ -38316,6 +39663,7 @@ class Process {
   constructor(opts) {
     this.#executablePath = opts.executablePath;
     this.#args = opts.args ?? [];
+    this.#logger = opts.logger?.(DEBUG_PREFIXES2.launcher);
     this.#signal = opts.signal;
     if (this.#signal?.aborted) {
       throw new Error(this.#signal.reason ? this.#signal.reason : "Launch aborted");
@@ -38331,7 +39679,7 @@ class Process {
       pipe: opts.pipe
     });
     const env = opts.env || {};
-    debugLaunch?.(`Launching ${this.#executablePath} ${this.#args.join(" ")}`, {
+    this.#logger?.(`Launching ${this.#executablePath} ${this.#args.join(" ")}`, {
       detached: opts.detached,
       env: Object.keys(env).reduce((res, key) => {
         if (key.toLowerCase().startsWith("puppeteer_")) {
@@ -38343,12 +39691,13 @@ class Process {
     });
     this.#browserProcess = childProcess.spawn(this.#executablePath, this.#args, {
       detached: opts.detached,
+      windowsHide: true,
       env,
       stdio
     });
     this.#recordStream(this.#browserProcess.stderr);
     this.#recordStream(this.#browserProcess.stdout);
-    debugLaunch?.(`Launched ${this.#browserProcess.pid}`);
+    this.#logger?.(`Launched ${this.#browserProcess.pid}`);
     if (opts.dumpio) {
       this.#browserProcess.stderr?.pipe(process.stderr);
       this.#browserProcess.stdout?.pipe(process.stdout);
@@ -38368,7 +39717,7 @@ class Process {
     }
     this.#browserProcessExiting = new Promise((resolve, reject) => {
       this.#browserProcess.once("exit", async () => {
-        debugLaunch?.(`Browser process ${this.#browserProcess.pid} onExit`);
+        this.#logger?.(`Browser process ${this.#browserProcess.pid} onExit`);
         this.#clearListeners();
         this.#exited = true;
         try {
@@ -38430,15 +39779,15 @@ class Process {
     return this.#browserProcessExiting;
   }
   kill() {
-    debugLaunch?.(`Trying to kill ${this.#browserProcess.pid}`);
+    this.#logger?.(`Trying to kill ${this.#browserProcess.pid}`);
     if (this.#browserProcess && this.#browserProcess.pid && pidExists(this.#browserProcess.pid)) {
       try {
-        debugLaunch?.(`Browser process ${this.#browserProcess.pid} exists`);
+        this.#logger?.(`Browser process ${this.#browserProcess.pid} exists`);
         if (process.platform === "win32") {
           try {
             childProcess.execSync(`taskkill /pid ${this.#browserProcess.pid} /T /F`);
           } catch (error) {
-            debugLaunch?.(`Killing ${this.#browserProcess.pid} using taskkill failed`, error);
+            this.#logger?.(`Killing ${this.#browserProcess.pid} using taskkill failed`, error);
             this.#browserProcess.kill();
           }
         } else {
@@ -38446,7 +39795,7 @@ class Process {
           try {
             process.kill(processGroupId, "SIGKILL");
           } catch (error) {
-            debugLaunch?.(`Killing ${this.#browserProcess.pid} using process.kill failed`, error);
+            this.#logger?.(`Killing ${this.#browserProcess.pid} using process.kill failed`, error);
             this.#browserProcess.kill("SIGKILL");
           }
         }
@@ -38548,7 +39897,7 @@ function isErrorLike2(obj) {
 function isErrnoException2(obj) {
   return isErrorLike2(obj) && (("errno" in obj) || ("code" in obj) || ("path" in obj) || ("syscall" in obj));
 }
-var debugLaunch, CDP_WEBSOCKET_ENDPOINT_REGEX, WEBDRIVER_BIDI_WEBSOCKET_ENDPOINT_REGEX, processListeners, dispatchers, PROCESS_ERROR_EXPLANATION = `Puppeteer was unable to kill the process which ran the browser binary.
+var CDP_WEBSOCKET_ENDPOINT_REGEX, WEBDRIVER_BIDI_WEBSOCKET_ENDPOINT_REGEX, processListeners, dispatchers, PROCESS_ERROR_EXPLANATION = `Puppeteer was unable to kill the process which ran the browser binary.
 This means that, on future Puppeteer launches, Puppeteer might not be able to launch the browser.
 Please check your open processes and ensure that the browser processes that Puppeteer launched have been killed.
 If you think this is a bug, please report it on the Puppeteer issue tracker.`, TimeoutError2;
@@ -38557,7 +39906,6 @@ var init_launch = __esm(() => {
   init_Cache();
   init_debug();
   init_detectPlatform();
-  debugLaunch = debug2("puppeteer:browsers:launcher");
   CDP_WEBSOCKET_ENDPOINT_REGEX = /^DevTools listening on (ws:\/\/.*)$/;
   WEBDRIVER_BIDI_WEBSOCKET_ENDPOINT_REGEX = /^WebDriver BiDi listening on (ws:\/\/.*)$/;
   processListeners = new Map;
@@ -38600,11 +39948,10 @@ var init_DefaultProvider = __esm(() => {
 // node_modules/@puppeteer/browsers/lib/fileUtil.js
 import { spawnSync as spawnSync2, spawn, execFile } from "child_process";
 import { promisify } from "util";
-var execFileAsync, debugFileUtil;
+var execFileAsync;
 var init_fileUtil = __esm(() => {
   init_debug();
   execFileAsync = promisify(execFile);
-  debugFileUtil = debug2("puppeteer:browsers:fileUtil");
 });
 // node_modules/@puppeteer/browsers/lib/install.js
 import os5 from "os";
@@ -38618,7 +39965,7 @@ async function uninstall(options) {
 async function getInstalledBrowsers(options) {
   return new Cache(options.cacheDir).getInstalledBrowsers();
 }
-var debugInstall, times;
+var times;
 var init_install = __esm(() => {
   init_browser_data();
   init_Cache();
@@ -38627,7 +39974,6 @@ var init_install = __esm(() => {
   init_detectPlatform();
   init_fileUtil();
   init_httpUtil();
-  debugInstall = debug2("puppeteer:browsers:install");
   times = new Map;
 });
 
@@ -38708,29 +40054,31 @@ async function _connectToBrowser(options) {
   assertSupportedUrlRestrictions(options);
   const { connectionTransport, endpointUrl } = await getConnectionTransport(options);
   if (options.protocol === "webDriverBiDi") {
-    const bidiBrowser = await _connectToBiDiBrowser(connectionTransport, endpointUrl, options);
+    const bidiBrowser = await _connectToBiDiBrowser(connectionTransport, endpointUrl, options, options.logger);
     return bidiBrowser;
   } else {
-    const cdpBrowser = await _connectToCdpBrowser(connectionTransport, endpointUrl, options);
+    const cdpBrowser = await _connectToCdpBrowser(connectionTransport, endpointUrl, options, options.logger);
     return cdpBrowser;
   }
 }
 async function getConnectionTransport(options) {
-  const { browserWSEndpoint, browserURL, channel, transport, headers = {} } = options;
+  const { browserWSEndpoint, browserURL, channel, transport } = options;
+  const headers = options.wsOptions?.headers ?? options.headers ?? {};
+  const wsOptions = options.wsOptions ?? {};
   assert(Number(!!browserWSEndpoint) + Number(!!browserURL) + Number(!!transport) + Number(!!channel) === 1, "Exactly one of browserWSEndpoint, browserURL, transport or channel must be passed to puppeteer.connect");
   if (transport) {
     return { connectionTransport: transport, endpointUrl: "" };
   } else if (browserWSEndpoint) {
     const WebSocketClass = await getWebSocketTransportClass();
-    const connectionTransport = await WebSocketClass.create(browserWSEndpoint, headers);
+    const connectionTransport = await WebSocketClass.create(browserWSEndpoint, headers, options.logger, wsOptions);
     return {
       connectionTransport,
       endpointUrl: browserWSEndpoint
     };
   } else if (browserURL) {
-    const connectionURL = await getWSEndpoint(browserURL);
+    const connectionURL = await getWSEndpoint(browserURL, headers);
     const WebSocketClass = await getWebSocketTransportClass();
-    const connectionTransport = await WebSocketClass.create(connectionURL);
+    const connectionTransport = await WebSocketClass.create(connectionURL, headers, options.logger, wsOptions);
     return {
       connectionTransport,
       endpointUrl: connectionURL
@@ -38746,7 +40094,7 @@ async function getConnectionTransport(options) {
     const userDataDir = resolveDefaultUserDataDir2(Browser.CHROME, platform, convertPuppeteerChannelToBrowsersChannel(options.channel));
     const portPath = join(userDataDir, "DevToolsActivePort");
     try {
-      const fileContent = await environment.value.fs.promises.readFile(portPath, "ascii");
+      const fileContent = await environment.value.readFile(portPath, "ascii");
       const [rawPort, rawPath] = fileContent.split(`
 `).map((line) => {
         return line.trim();
@@ -38762,7 +40110,7 @@ async function getConnectionTransport(options) {
       }
       const browserWSEndpoint = `ws://localhost:${port}${rawPath}`;
       const WebSocketClass = await getWebSocketTransportClass();
-      const connectionTransport = await WebSocketClass.create(browserWSEndpoint, headers);
+      const connectionTransport = await WebSocketClass.create(browserWSEndpoint, headers, options.logger, wsOptions);
       return {
         connectionTransport,
         endpointUrl: browserWSEndpoint
@@ -38775,11 +40123,12 @@ async function getConnectionTransport(options) {
   }
   throw new Error("Invalid connection options");
 }
-async function getWSEndpoint(browserURL) {
+async function getWSEndpoint(browserURL, headers) {
   const endpointURL = new URL("/json/version", browserURL);
   try {
     const result = await globalThis.fetch(endpointURL.toString(), {
-      method: "GET"
+      method: "GET",
+      headers
     });
     if (!result.ok) {
       throw new Error(`HTTP ${result.statusText}`);
@@ -38808,6 +40157,7 @@ var Puppeteer;
 var init_Puppeteer = __esm(() => {
   init_BrowserConnector3();
   init_CustomQueryHandler();
+  init_Debug();
   Puppeteer = class Puppeteer {
     static customQueryHandlers = customQueryHandlers;
     static registerCustomQueryHandler(name, queryHandler) {
@@ -38829,7 +40179,11 @@ var init_Puppeteer = __esm(() => {
       this.connect = this.connect.bind(this);
     }
     connect(options) {
-      return _connectToBrowser(options);
+      const withLogger = {
+        logger: debug,
+        ...options
+      };
+      return _connectToBrowser(withLogger);
     }
   };
 });
@@ -38883,9 +40237,9 @@ var init_common = __esm(() => {
 var PUPPETEER_REVISIONS;
 var init_revisions = __esm(() => {
   PUPPETEER_REVISIONS = Object.freeze({
-    chrome: "150.0.7871.24",
-    "chrome-headless-shell": "150.0.7871.24",
-    firefox: "stable_152.0.4"
+    chrome: "153.0.8010.36",
+    "chrome-headless-shell": "153.0.8010.36",
+    firefox: "stable_155.0.1"
   });
 });
 
@@ -38909,13 +40263,15 @@ var init_index_browser = __esm(() => {
 class PipeTransport {
   #pipeWrite;
   #subscriptions = new DisposableStack;
+  #logger;
   #isClosed = false;
   #pendingMessage = [];
   onclose;
   onmessage;
-  constructor(pipeWrite, pipeRead) {
+  constructor(pipeWrite, pipeRead, logger) {
     this.#pipeWrite = pipeWrite;
-    const pipeReadEmitter = this.#subscriptions.use(new EventEmitter(pipeRead));
+    this.#logger = logger;
+    const pipeReadEmitter = this.#subscriptions.use(new EventEmitter(pipeRead, logger));
     pipeReadEmitter.on("data", (buffer) => {
       return this.#dispatch(buffer);
     });
@@ -38924,9 +40280,13 @@ class PipeTransport {
         this.onclose.call(null);
       }
     });
-    pipeReadEmitter.on("error", debugCatchError);
+    pipeReadEmitter.on("error", (err) => {
+      this.#logger?.(DEBUG_PREFIXES.error)?.(err);
+    });
     const pipeWriteEmitter = this.#subscriptions.use(new EventEmitter(pipeWrite));
-    pipeWriteEmitter.on("error", debugCatchError);
+    pipeWriteEmitter.on("error", (err) => {
+      this.#logger?.(DEBUG_PREFIXES.error)?.(err);
+    });
   }
   send(message) {
     assert(!this.#isClosed, "`PipeTransport` is closed.");
@@ -38964,15 +40324,23 @@ class PipeTransport {
   }
 }
 var init_PipeTransport = __esm(() => {
+  init_Debug();
   init_EventEmitter();
-  init_util();
   init_disposable();
 });
 
 // node_modules/puppeteer-core/lib/puppeteer/node/BrowserLauncher.js
-import { existsSync } from "fs";
+import { accessSync as accessSync3, constants as constants2, existsSync } from "fs";
 import { tmpdir } from "os";
 import { join as join2 } from "path";
+function isWritableDirectory(directory) {
+  try {
+    accessSync3(directory, constants2.W_OK);
+    return true;
+  } catch {
+    return !existsSync(directory);
+  }
+}
 function getBrowserTypeDisplayName(browserType) {
   switch (browserType) {
     case Browser6.FIREFOX:
@@ -38985,15 +40353,21 @@ function getBrowserTypeDisplayName(browserType) {
 
 class BrowserLauncher {
   #browser;
+  #logger;
   puppeteer;
-  constructor(puppeteer, browser) {
+  constructor(puppeteer, browser, logger) {
     this.puppeteer = puppeteer;
     this.#browser = browser;
+    this.#logger = logger;
+  }
+  get logger() {
+    return this.#logger;
   }
   get browser() {
     return this.#browser;
   }
   async launch(options = {}) {
+    options.logger ??= this.#logger;
     const { dumpio = false, enableExtensions = false, extensionsEnabledInIncognito = [], env = process.env, handleSIGINT = true, handleSIGTERM = true, handleSIGHUP = true, acceptInsecureCerts = false, networkEnabled = true, issuesEnabled = true, defaultViewport = DEFAULT_VIEWPORT, downloadBehavior, slowMo = 0, timeout = 30000, waitForInitialPage = true, protocolTimeout, handleDevToolsAsPage, idGenerator = createIncrementalIdGenerator(), blocklist, allowlist } = options;
     let { protocol } = options;
     if (this.#browser === "firefox" && protocol === undefined) {
@@ -39012,6 +40386,11 @@ class BrowserLauncher {
       protocol
     });
     if (!existsSync(launchArgs.executablePath)) {
+      if (launchArgs.isTempUserDataDir) {
+        await this.cleanUserDataDir(launchArgs.userDataDir, {
+          isTemp: true
+        });
+      }
       throw new Error(`Browser was not found at the configured executablePath (${launchArgs.executablePath})`);
     }
     const usePipe = launchArgs.args.includes("--remote-debugging-pipe");
@@ -39033,7 +40412,8 @@ class BrowserLauncher {
       env,
       pipe: usePipe,
       onExit: onProcessExit,
-      signal: options.signal
+      signal: options.signal,
+      logger: options.logger
     });
     let browser;
     let cdpConnection;
@@ -39054,7 +40434,8 @@ class BrowserLauncher {
           defaultViewport,
           acceptInsecureCerts,
           networkEnabled,
-          idGenerator
+          idGenerator,
+          logger: options.logger
         });
       } else {
         if (usePipe) {
@@ -39062,14 +40443,16 @@ class BrowserLauncher {
             timeout,
             protocolTimeout,
             slowMo,
-            idGenerator
+            idGenerator,
+            logger: options.logger
           });
         } else {
           cdpConnection = await this.createCdpSocketConnection(browserProcess, {
             timeout,
             protocolTimeout,
             slowMo,
-            idGenerator
+            idGenerator,
+            logger: options.logger
           });
         }
         if (protocol === "webDriverBiDi") {
@@ -39077,10 +40460,11 @@ class BrowserLauncher {
             defaultViewport,
             acceptInsecureCerts,
             networkEnabled,
-            issuesEnabled
+            issuesEnabled,
+            logger: options.logger
           });
         } else {
-          browser = await CdpBrowser._create(cdpConnection, [], acceptInsecureCerts, defaultViewport, downloadBehavior, browserProcess.nodeProcess, browserCloseCallback, options.targetFilter, undefined, undefined, networkEnabled, issuesEnabled, handleDevToolsAsPage, blocklist, allowlist);
+          browser = await CdpBrowser._create(cdpConnection, [], acceptInsecureCerts, defaultViewport, downloadBehavior, browserProcess.nodeProcess, browserCloseCallback, options.targetFilter, undefined, undefined, networkEnabled, issuesEnabled, handleDevToolsAsPage, blocklist, allowlist, options.logger);
         }
       }
     } catch (error) {
@@ -39088,6 +40472,9 @@ class BrowserLauncher {
       const logs = browserProcess.getRecentLogs().join(`
 `);
       if (logs.includes("Failed to create a ProcessSingleton for your profile directory") || process.platform === "win32" && existsSync(join2(launchArgs.userDataDir, "lockfile"))) {
+        if (!isWritableDirectory(launchArgs.userDataDir)) {
+          throw new Error(`The browser cannot write to ${launchArgs.userDataDir}. Make the \`userDataDir\` writable or use a different one.`);
+        }
         throw new Error(`The browser is already running for ${launchArgs.userDataDir}. Use a different \`userDataDir\` or stop the running browser first.`);
       }
       if (logs.includes("Missing X server") && options.headless === false) {
@@ -39118,7 +40505,7 @@ class BrowserLauncher {
         await cdpConnection.closeBrowser();
         await browserProcess.hasClosed();
       } catch (error) {
-        debugError?.(error);
+        this.#logger?.(DEBUG_PREFIXES.error)?.(error);
         await browserProcess.close();
       }
     } else {
@@ -39139,18 +40526,18 @@ class BrowserLauncher {
   }
   async createCdpSocketConnection(browserProcess, opts) {
     const browserWSEndpoint = await browserProcess.waitForLineOutput(CDP_WEBSOCKET_ENDPOINT_REGEX, opts.timeout);
-    const transport = await NodeWebSocketTransport.create(browserWSEndpoint);
-    return new Connection(browserWSEndpoint, transport, opts.slowMo, opts.protocolTimeout, false, opts.idGenerator);
+    const transport = await NodeWebSocketTransport.create(browserWSEndpoint, undefined, opts.logger, opts.wsOptions);
+    return new Connection(browserWSEndpoint, transport, opts.slowMo, opts.protocolTimeout, false, opts.idGenerator, opts.logger);
   }
   async createCdpPipeConnection(browserProcess, opts) {
     const { 3: pipeWrite, 4: pipeRead } = browserProcess.nodeProcess.stdio;
-    const transport = new PipeTransport(pipeWrite, pipeRead);
-    return new Connection("", transport, opts.slowMo, opts.protocolTimeout, false, opts.idGenerator);
+    const transport = new PipeTransport(pipeWrite, pipeRead, opts.logger);
+    return new Connection("", transport, opts.slowMo, opts.protocolTimeout, false, opts.idGenerator, opts.logger);
   }
   async createBiDiOverCdpBrowser(browserProcess, cdpConnection, closeCallback, opts) {
     const bidiOnly = process.env["PUPPETEER_WEBDRIVER_BIDI_ONLY"] === "true";
     const BiDi = await Promise.resolve().then(() => (init_bidi(), {}));
-    const bidiConnection = await connectBidiOverCdp(cdpConnection);
+    const bidiConnection = await connectBidiOverCdp(cdpConnection, opts.logger);
     return await BidiBrowser.create({
       connection: bidiConnection,
       cdpConnection: bidiOnly ? undefined : cdpConnection,
@@ -39159,14 +40546,15 @@ class BrowserLauncher {
       defaultViewport: opts.defaultViewport,
       acceptInsecureCerts: opts.acceptInsecureCerts,
       networkEnabled: opts.networkEnabled,
-      issuesEnabled: opts.issuesEnabled
+      issuesEnabled: opts.issuesEnabled,
+      logger: opts.logger
     });
   }
   async createBiDiBrowser(browserProcess, closeCallback, opts) {
     const browserWSEndpoint = await browserProcess.waitForLineOutput(WEBDRIVER_BIDI_WEBSOCKET_ENDPOINT_REGEX, opts.timeout) + "/session";
-    const transport = await NodeWebSocketTransport.create(browserWSEndpoint);
+    const transport = await NodeWebSocketTransport.create(browserWSEndpoint, undefined, opts.logger, opts.wsOptions);
     const BiDi = await Promise.resolve().then(() => (init_bidi(), {}));
-    const bidiConnection = new BidiConnection(browserWSEndpoint, transport, opts.idGenerator, opts.slowMo, opts.protocolTimeout);
+    const bidiConnection = new BidiConnection(browserWSEndpoint, transport, opts.idGenerator, opts.slowMo, opts.protocolTimeout, opts.logger);
     return await BidiBrowser.create({
       connection: bidiConnection,
       closeCallback,
@@ -39174,7 +40562,8 @@ class BrowserLauncher {
       defaultViewport: opts.defaultViewport,
       acceptInsecureCerts: opts.acceptInsecureCerts,
       networkEnabled: opts.networkEnabled ?? true,
-      issuesEnabled: opts.issuesEnabled ?? true
+      issuesEnabled: opts.issuesEnabled ?? true,
+      logger: opts.logger
     });
   }
   async getProfilePath() {
@@ -39229,6 +40618,7 @@ var init_BrowserLauncher = __esm(() => {
   init_Browser2();
   init_Connection();
   init_BrowserConnector3();
+  init_Debug();
   init_Errors();
   init_util();
   init_NodeWebSocketTransport();
@@ -39245,7 +40635,8 @@ var init_fs = __esm(() => {
   rmOptions = {
     force: true,
     recursive: true,
-    maxRetries: 5
+    maxRetries: 10,
+    retryDelay: 100
   };
 });
 
@@ -39280,13 +40671,13 @@ function removeMatchingFlags(array, flag) {
 var ChromeLauncher;
 var init_ChromeLauncher = __esm(() => {
   init_main();
-  init_util();
+  init_Debug();
   init_BrowserLauncher();
   init_LaunchOptions();
   init_fs();
   ChromeLauncher = class ChromeLauncher extends BrowserLauncher {
-    constructor(puppeteer) {
-      super(puppeteer, "chrome");
+    constructor(puppeteer, logger) {
+      super(puppeteer, "chrome", logger);
     }
     async launch(options = {}) {
       const config = await this.puppeteer.configuration();
@@ -39360,8 +40751,7 @@ var init_ChromeLauncher = __esm(() => {
         try {
           await rm(path);
         } catch (error) {
-          debugError?.(error);
-          throw error;
+          this.logger(DEBUG_PREFIXES.error)?.(error);
         }
       }
     }
@@ -39387,6 +40777,8 @@ var init_ChromeLauncher = __esm(() => {
         "MediaRouter",
         "OptimizationHints",
         "WebUIReloadButton",
+        "WebUIOmniboxPopup",
+        "WebUIOmniboxAimPopup",
         ...turnOnExperimentalFeaturesForTesting ? [] : [
           "ProcessPerSiteUpToMainFrameThreshold",
           "IsolateSandboxedIframes"
@@ -39458,7 +40850,7 @@ var init_ChromeLauncher = __esm(() => {
         return computeSystemExecutablePath({
           browser: Browser6.CHROME,
           channel: convertPuppeteerChannelToBrowsersChannel(channel)
-        });
+        }, validatePath);
       } else {
         return await this.resolveExecutablePath(undefined, validatePath);
       }
@@ -39474,12 +40866,12 @@ import path9 from "path";
 var FirefoxLauncher;
 var init_FirefoxLauncher = __esm(() => {
   init_main();
-  init_util();
+  init_Debug();
   init_BrowserLauncher();
   init_fs();
   FirefoxLauncher = class FirefoxLauncher extends BrowserLauncher {
-    constructor(puppeteer) {
-      super(puppeteer, "firefox");
+    constructor(puppeteer, logger) {
+      super(puppeteer, "firefox", logger);
     }
     static getPreferences(extraPrefsFirefox) {
       return {
@@ -39547,8 +40939,7 @@ var init_FirefoxLauncher = __esm(() => {
         try {
           await rm(userDataDir);
         } catch (error) {
-          debugError?.(error);
-          throw error;
+          this.logger(DEBUG_PREFIXES.error)?.(error);
         }
       } else {
         try {
@@ -39568,7 +40959,7 @@ var init_FirefoxLauncher = __esm(() => {
             }
           }
         } catch (error) {
-          debugError?.(error);
+          this.logger(DEBUG_PREFIXES.error)?.(error);
         }
       }
     }
@@ -39611,7 +41002,9 @@ var init_FirefoxLauncher = __esm(() => {
 var PuppeteerNode;
 var init_PuppeteerNode = __esm(() => {
   init_main();
+  init_Debug();
   init_Puppeteer();
+  init_environment();
   init_revisions();
   init_ChromeLauncher();
   init_FirefoxLauncher();
@@ -39636,38 +41029,40 @@ var init_PuppeteerNode = __esm(() => {
       this.trimCache = this.trimCache.bind(this);
     }
     connect(options) {
+      options.logger ??= debug;
       return super.connect(options);
     }
     async launch(options = {}) {
+      options.logger ??= debug;
       const { browser = await this.defaultBrowser() } = options;
       this.#lastLaunchedBrowser = browser;
       if (!["chrome", "firefox"].includes(browser)) {
         throw new Error(`Unknown product: ${browser}`);
       }
-      this.#launcher = this.#getLauncher(browser);
+      this.#launcher = this.#getLauncher(browser, options.logger);
       return await this.#launcher.launch(options);
     }
-    #getLauncher(browser) {
+    #getLauncher(browser, logger) {
       if (this.#launcher && this.#launcher.browser === browser) {
         return this.#launcher;
       }
       switch (browser) {
         case "chrome":
-          return new ChromeLauncher(this);
+          return new ChromeLauncher(this, logger);
         case "firefox":
-          return new FirefoxLauncher(this);
+          return new FirefoxLauncher(this, logger);
         default:
           throw new Error(`Unknown product: ${browser}`);
       }
     }
     async executablePath(optsOrChannel) {
       if (optsOrChannel === undefined) {
-        return await this.#getLauncher(await this.lastLaunchedBrowser()).executablePath(undefined, false);
+        return await this.#getLauncher(await this.lastLaunchedBrowser(), debug).executablePath(undefined, false);
       }
       if (typeof optsOrChannel === "string") {
-        return await this.#getLauncher("chrome").executablePath(optsOrChannel, false);
+        return await this.#getLauncher("chrome", debug).executablePath(optsOrChannel, false);
       }
-      return await this.#getLauncher(optsOrChannel.browser ?? await this.lastLaunchedBrowser()).resolveExecutablePath(optsOrChannel.headless, false);
+      return await this.#getLauncher(optsOrChannel.browser ?? await this.lastLaunchedBrowser(), optsOrChannel.logger ?? debug).resolveExecutablePath(optsOrChannel.headless, false);
     }
     async browserVersion() {
       const config = await this.configuration();
@@ -39686,7 +41081,7 @@ var init_PuppeteerNode = __esm(() => {
       return config.defaultBrowser ?? "chrome";
     }
     async defaultArgs(options = {}) {
-      return this.#getLauncher(options.browser ?? await this.lastLaunchedBrowser()).defaultArgs(options);
+      return this.#getLauncher(options.browser ?? await this.lastLaunchedBrowser(), options.logger ?? debug).defaultArgs(options);
     }
     async trimCache() {
       const platform = detectBrowserPlatform();
@@ -39735,27 +41130,28 @@ var init_PuppeteerNode = __esm(() => {
         });
       }
     }
+    setFollowSymlinks(followSymlinks) {
+      environment.value.followSymlinks = followSymlinks;
+    }
   };
 });
 
 // node_modules/puppeteer-core/lib/puppeteer/node/ScreenRecorder.js
 import { spawn as spawn2, spawnSync as spawnSync3 } from "child_process";
-import fs6 from "fs";
 import os8 from "os";
-import { dirname as dirname2 } from "path";
 import { PassThrough } from "stream";
 function countFrames(startTimestamp, previousTimestamp, timestamp, fps) {
   const end = Math.round((timestamp - startTimestamp) * fps);
   const start = Math.round((previousTimestamp - startTimestamp) * fps);
   return Math.max(0, end - start);
 }
-var __runInitializers22 = function(thisArg, initializers, value) {
+var __runInitializers24 = function(thisArg, initializers, value) {
   var useValue = arguments.length > 2;
   for (var i = 0;i < initializers.length; i++) {
     value = useValue ? initializers[i].call(thisArg, value) : initializers[i].call(thisArg);
   }
   return useValue ? value : undefined;
-}, __esDecorate22 = function(ctor, descriptorIn, decorators, contextIn, initializers, extraInitializers) {
+}, __esDecorate24 = function(ctor, descriptorIn, decorators, contextIn, initializers, extraInitializers) {
   function accept(f) {
     if (f !== undefined && typeof f !== "function")
       throw new TypeError("Function expected");
@@ -39802,7 +41198,7 @@ var __runInitializers22 = function(thisArg, initializers, value) {
   if (typeof name === "symbol")
     name = name.description ? "[".concat(name.description, "]") : "";
   return Object.defineProperty(f, "name", { configurable: true, value: prefix ? "".concat(prefix, " ", name) : name });
-}, CRF_VALUE = 30, DEFAULT_FPS = 30, debugFfmpeg, ScreenRecorder;
+}, CRF_VALUE = 30, DEFAULT_FPS = 30, ScreenRecorder;
 var init_ScreenRecorder = __esm(() => {
   init_rxjs();
   init_CDPSession();
@@ -39810,7 +41206,6 @@ var init_ScreenRecorder = __esm(() => {
   init_util();
   init_decorators();
   init_disposable();
-  debugFfmpeg = debug("puppeteer:ffmpeg");
   ScreenRecorder = (() => {
     let _classSuper = PassThrough;
     let _instanceExtraInitializers = [];
@@ -39820,7 +41215,7 @@ var init_ScreenRecorder = __esm(() => {
     return class ScreenRecorder extends _classSuper {
       static {
         const _metadata = typeof Symbol === "function" && Symbol.metadata ? Object.create(_classSuper[Symbol.metadata] ?? null) : undefined;
-        __esDecorate22(this, _private_writeFrame_descriptor = { value: __setFunctionName5(async function(buffer) {
+        __esDecorate24(this, _private_writeFrame_descriptor = { value: __setFunctionName5(async function(buffer) {
           const error = await new Promise((resolve) => {
             this.#process.stdin.write(buffer, resolve);
           });
@@ -39828,17 +41223,19 @@ var init_ScreenRecorder = __esm(() => {
             console.log(`ffmpeg failed to write: ${error.message}.`);
           }
         }, "#writeFrame") }, _private_writeFrame_decorators, { kind: "method", name: "#writeFrame", static: false, private: true, access: { has: (obj) => (#writeFrame in obj), get: (obj) => obj.#writeFrame }, metadata: _metadata }, null, _instanceExtraInitializers);
-        __esDecorate22(this, null, _stop_decorators, { kind: "method", name: "stop", static: false, private: false, access: { has: (obj) => ("stop" in obj), get: (obj) => obj.stop }, metadata: _metadata }, null, _instanceExtraInitializers);
+        __esDecorate24(this, null, _stop_decorators, { kind: "method", name: "stop", static: false, private: false, access: { has: (obj) => ("stop" in obj), get: (obj) => obj.stop }, metadata: _metadata }, null, _instanceExtraInitializers);
         if (_metadata)
           Object.defineProperty(this, Symbol.metadata, { enumerable: true, configurable: true, writable: true, value: _metadata });
       }
-      #page = __runInitializers22(this, _instanceExtraInitializers);
+      #page = __runInitializers24(this, _instanceExtraInitializers);
       #process;
       #controller = new AbortController;
       #lastFrame;
       #fps;
-      constructor(page, width, height, { ffmpegPath, speed, scale, crop, format, fps, loop, delay, quality, colors, path, overwrite } = {}) {
+      #logger;
+      constructor(page, width, height, { ffmpegPath, speed, scale, crop, format, fps, loop, delay, quality, colors } = {}, logger) {
         super({ allowHalfOpen: false });
+        this.#logger = logger;
         ffmpegPath ??= "ffmpeg";
         format ??= "webm";
         fps ??= DEFAULT_FPS;
@@ -39846,7 +41243,6 @@ var init_ScreenRecorder = __esm(() => {
         delay ??= -1;
         quality ??= CRF_VALUE;
         colors ??= 256;
-        overwrite ??= true;
         this.#fps = fps;
         const { error } = spawnSync3(ffmpegPath);
         if (error) {
@@ -39870,9 +41266,6 @@ var init_ScreenRecorder = __esm(() => {
         if (vf !== -1) {
           filters.push(formatArgs.splice(vf, 2).at(-1) ?? "");
         }
-        if (path) {
-          fs6.mkdirSync(dirname2(path), { recursive: overwrite });
-        }
         this.#process = spawn2(ffmpegPath, [
           ["-loglevel", "error"],
           ["-avioflags", "direct"],
@@ -39892,17 +41285,18 @@ var init_ScreenRecorder = __esm(() => {
           ["-b:v", "0"],
           formatArgs,
           ["-vf", filters.join()],
-          [overwrite ? "-y" : "-n"],
           "pipe:1"
         ].flat(), { stdio: ["pipe", "pipe", "pipe"] });
         this.#process.stdout.pipe(this);
         this.#process.stderr.on("data", (data) => {
-          debugFfmpeg?.(data.toString("utf8"));
+          this.#logger?.(DEBUG_PREFIXES.ffmpeg)?.(data.toString("utf8"));
         });
         this.#page = page;
         const { client } = this.#page.mainFrame();
         client.once(CDPSessionEvent.Disconnected, () => {
-          this.stop().catch(debugCatchError);
+          this.stop().catch((err) => {
+            this.#logger?.(DEBUG_PREFIXES.error)?.(err);
+          });
         });
         let startTimestamp;
         this.#lastFrame = lastValueFrom(fromEmitterEvent(client, "Page.screencastFrame").pipe(tap((event) => {
@@ -39973,7 +41367,9 @@ var init_ScreenRecorder = __esm(() => {
         if (this.#controller.signal.aborted) {
           return;
         }
-        await this.#page._stopScreencast().catch(debugCatchError);
+        await this.#page._stopScreencast().catch((err) => {
+          this.#logger?.(DEBUG_PREFIXES.error)?.(err);
+        });
         this.#controller.abort();
         const [buffer, timestamp] = await this.#lastFrame;
         await Promise.all(Array(Math.max(1, Math.round(this.#fps * (performance.now() - timestamp) / 1000))).fill(buffer).map(this.#writeFrame.bind(this)));
@@ -40041,6 +41437,7 @@ __export(exports_puppeteer_core, {
   CdpMouse: () => CdpMouse,
   CdpPage: () => CdpPage,
   CdpPreloadScript: () => CdpPreloadScript,
+  CdpScreenRecording: () => CdpScreenRecording,
   CdpTarget: () => CdpTarget,
   CdpTouchHandle: () => CdpTouchHandle,
   CdpTouchscreen: () => CdpTouchscreen,
@@ -40051,6 +41448,7 @@ __export(exports_puppeteer_core, {
   ConsoleMessage: () => ConsoleMessage,
   Coverage: () => Coverage,
   CustomQueryHandlerRegistry: () => CustomQueryHandlerRegistry,
+  DEBUG_PREFIXES: () => DEBUG_PREFIXES,
   DEFAULT_INTERCEPT_RESOLUTION_PRIORITY: () => DEFAULT_INTERCEPT_RESOLUTION_PRIORITY,
   DEFAULT_VIEWPORT: () => DEFAULT_VIEWPORT,
   Deferred: () => Deferred,
@@ -40120,6 +41518,7 @@ __export(exports_puppeteer_core, {
   SOURCE_URL_REGEX: () => SOURCE_URL_REGEX,
   STATUS_TEXTS: () => STATUS_TEXTS,
   ScreenRecorder: () => ScreenRecorder,
+  ScreenRecording: () => ScreenRecording,
   ScriptInjector: () => ScriptInjector,
   SecurityDetails: () => SecurityDetails,
   SuppressedError: () => SuppressedError2,
@@ -40164,8 +41563,6 @@ __export(exports_puppeteer_core, {
   createProtocolErrorMessage: () => createProtocolErrorMessage,
   customQueryHandlers: () => customQueryHandlers,
   debug: () => debug,
-  debugCatchError: () => debugCatchError,
-  debugError: () => debugError,
   default: () => puppeteer_core_default,
   defaultArgs: () => defaultArgs,
   disposeSymbol: () => disposeSymbol,
@@ -40236,16 +41633,16 @@ var init_puppeteer_core = __esm(() => {
 });
 
 // extensions/headed-browser-preflight.ts
-import { mkdir as mkdir4, readFile as readFile2, rename as rename2, writeFile as writeFile2 } from "fs/promises";
+import { mkdir as mkdir4, readFile as readFile3, rename as rename2, writeFile as writeFile2 } from "fs/promises";
 import { homedir as homedir3 } from "os";
-import { dirname as dirname4, join as join4 } from "path";
+import { dirname as dirname3, join as join4 } from "path";
 
 // extensions/lib/preflight.ts
 import { Database } from "bun:sqlite";
-import { constants as constants2 } from "fs";
+import { constants as constants3 } from "fs";
 import { access, mkdir as mkdir3, statfs } from "fs/promises";
 import { tmpdir as tmpdir2 } from "os";
-import { dirname as dirname3 } from "path";
+import { dirname as dirname2 } from "path";
 
 // extensions/lib/config.ts
 import { readFile } from "fs/promises";
@@ -40895,8 +42292,8 @@ async function runPreflight(cwd, ctx, overrides = {}) {
   }
   const audit = createAuditWriter(ctx, config);
   try {
-    await mkdir3(dirname3(audit.path), { recursive: true, mode: 448 });
-    await access(dirname3(audit.path), constants2.W_OK);
+    await mkdir3(dirname2(audit.path), { recursive: true, mode: 448 });
+    await access(dirname2(audit.path), constants3.W_OK);
     checks.push({ name: "audit", status: "ok", observed: audit.path });
   } catch (error) {
     checks.push({ name: "audit", status: "warn", observed: error instanceof Error ? error.message : String(error), remedy: "Set auditDir to a writable directory." });
@@ -40958,7 +42355,7 @@ function preflightCachePath() {
 }
 async function readCache(path) {
   try {
-    const value = JSON.parse(await readFile2(path, "utf8"));
+    const value = JSON.parse(await readFile3(path, "utf8"));
     if (!value || typeof value !== "object")
       return;
     if (!("checkedAt" in value) || typeof value.checkedAt !== "number")
@@ -40973,7 +42370,7 @@ async function readCache(path) {
   }
 }
 async function writeCache(path, cache) {
-  await mkdir4(dirname4(path), { recursive: true, mode: 448 });
+  await mkdir4(dirname3(path), { recursive: true, mode: 448 });
   const temporary = `${path}.${process.pid}.tmp`;
   await writeFile2(temporary, `${JSON.stringify(cache, null, 2)}
 `, { mode: 384 });
