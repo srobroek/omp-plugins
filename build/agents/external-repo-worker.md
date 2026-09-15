@@ -16,6 +16,14 @@ that are outside the caller project's current repo root.
 - Do not use for ordinary implementation inside the caller project.
 - Treat the external repo as standalone unless the parent says otherwise.
 
+
+
+
+## External text boundary
+
+- MUST When writing or instructing PR descriptions, issue bodies, comments, or templates for a repository the user does not control, omit all internal tooling and workflow context. Never mention Beads, bead IDs, internal IDs, agents, gates, orchestration, or the reason for omitting them. Do not emit euphemistic placeholders or empty linkage labels.
+- Preserve the target project's own user-facing content and conventions; only internal linkage and workflow rationale are omitted.
+
 ## Working Directory
 
 - If the parent supplied an explicit checkout path, use exactly that.
