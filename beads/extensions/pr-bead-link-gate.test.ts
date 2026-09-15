@@ -1,6 +1,39 @@
 import { describe, expect, test } from "bun:test";
+import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
-import { bodyOfGhCreate, controlledByViewerPermission, decideCommand, decidePrCreate, REASON, repositoryFromGhCreate } from "./pr-bead-link-gate.ts";
+import { bodyOfGhCreate, controlledByViewerPermission, decideCommand, decidePrCreate, REASON, repositoryControlled, repositoryFromGhCreate } from "./pr-bead-link-gate.ts";
+
+describe("repository subprocess contract", () => {
+	test("uses gh repo view's viewerPermission output contract", () => {
+		const dir = mkdtempSync(join(tmpdir(), "beads-gh-"));
+		const gh = join(dir, "gh");
+		const args = join(dir, "args");
+		writeFileSync(gh, '#!/bin/sh\nprintf "%s\\n" "$@" > "$GH_ARGS_FILE"\nprintf "%s\\n" "${' + 'GH_PERMISSION:-WRITE}"\n');
+		chmodSync(gh, 0o755);
+		const previousPath = process.env.PATH;
+		const previousArgsFile = process.env.GH_ARGS_FILE;
+		const previousPermission = process.env.GH_PERMISSION;
+		process.env.PATH = `${dir}:${previousPath ?? ""}`;
+		process.env.GH_ARGS_FILE = args;
+		try {
+			expect(repositoryControlled("owner/repo")).toBe(true);
+			process.env.GH_PERMISSION = "READ";
+			expect(repositoryControlled("owner/repo")).toBe(false);
+			expect(readFileSync(args, "utf8").trim().split("\n")).toEqual(["repo", "view", "owner/repo", "--json", "viewerPermission", "--jq", ".viewerPermission"]);
+		} finally {
+			if (previousPath === undefined) delete process.env.PATH;
+			else process.env.PATH = previousPath;
+			if (previousPermission === undefined) delete process.env.GH_PERMISSION;
+			else process.env.GH_PERMISSION = previousPermission;
+			if (previousArgsFile === undefined) delete process.env.GH_ARGS_FILE;
+			else process.env.GH_ARGS_FILE = previousArgsFile;
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+});
 
 describe("repository control", () => {
 	test("only write-capable viewer permissions control", () => {

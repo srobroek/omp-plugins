@@ -169,11 +169,7 @@ export function repositoryFromCurrentCheckout(cwd: string): string | null {
 export function repositoryControlled(repo: string | null): boolean {
 	if (!repo) return false;
 	try {
-		const parts = repo.split("/");
-		const host = parts.length === 3 ? parts.shift() : null;
-		const path = parts.join("/");
-		const argv = host ? ["api", "--hostname", host, `repos/${path}`, "--jq", ".viewerPermission"] : ["api", `repos/${path}`, "--jq", ".viewerPermission"];
-		const permission = execFileSync("gh", argv, { encoding: "utf8" }).trim();
+		const permission = execFileSync("gh", ["repo", "view", repo, "--json", "viewerPermission", "--jq", ".viewerPermission"], { encoding: "utf8" }).trim();
 		return controlledByViewerPermission(permission);
 	} catch { return false; }
 }
