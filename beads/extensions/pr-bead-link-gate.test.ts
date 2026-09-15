@@ -1,6 +1,57 @@
 import { describe, expect, test } from "bun:test";
+import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
-import { bodyOfGhCreate, decideCommand, decidePrCreate, REASON } from "./pr-bead-link-gate.ts";
+import { bodyOfGhCreate, controlledByViewerPermission, decideCommand, decidePrCreate, REASON, repositoryControlled, repositoryFromGhCreate } from "./pr-bead-link-gate.ts";
+
+describe("repository subprocess contract", () => {
+	test("uses gh repo view's viewerPermission output contract", () => {
+		const dir = mkdtempSync(join(tmpdir(), "beads-gh-"));
+		const gh = join(dir, "gh");
+		const args = join(dir, "args");
+		writeFileSync(gh, '#!/bin/sh\nprintf "%s\\n" "$@" > "$GH_ARGS_FILE"\nprintf "%s\\n" "${' + 'GH_PERMISSION:-WRITE}"\n');
+		chmodSync(gh, 0o755);
+		const previousPath = process.env.PATH;
+		const previousArgsFile = process.env.GH_ARGS_FILE;
+		const previousPermission = process.env.GH_PERMISSION;
+		process.env.PATH = `${dir}:${previousPath ?? ""}`;
+		process.env.GH_ARGS_FILE = args;
+		try {
+			expect(repositoryControlled("owner/repo")).toBe(true);
+			process.env.GH_PERMISSION = "READ";
+			expect(repositoryControlled("owner/repo")).toBe(false);
+			expect(readFileSync(args, "utf8").trim().split("\n")).toEqual(["repo", "view", "owner/repo", "--json", "viewerPermission", "--jq", ".viewerPermission"]);
+		} finally {
+			if (previousPath === undefined) delete process.env.PATH;
+			else process.env.PATH = previousPath;
+			if (previousPermission === undefined) delete process.env.GH_PERMISSION;
+			else process.env.GH_PERMISSION = previousPermission;
+			if (previousArgsFile === undefined) delete process.env.GH_ARGS_FILE;
+			else process.env.GH_ARGS_FILE = previousArgsFile;
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+});
+
+describe("repository control", () => {
+	test("only write-capable viewer permissions control", () => {
+		for (const permission of ["WRITE", "MAINTAIN", "ADMIN"]) expect(controlledByViewerPermission(permission)).toBe(true);
+		for (const permission of ["READ", "TRIAGE", null, undefined, ""]) expect(controlledByViewerPermission(permission)).toBe(false);
+	});
+	test("resolves explicit repo and rejects ambiguous targets", () => {
+		expect(repositoryFromGhCreate("gh pr create --repo owner/old --repo=owner/new --body x")).toBe("owner/new");
+		expect(repositoryFromGhCreate("gh pr create \"--repo\" owner/quoted --body x")).toBe("owner/quoted");
+		expect(repositoryFromGhCreate("gh pr create -R owner/short --body x")).toBe("owner/short");
+		expect(repositoryFromGhCreate("gh pr create --title \"--repo owner/fake\" --body x")).toBeNull();
+		expect(repositoryFromGhCreate("gh pr create --body \"--repo owner/fake\"")).toBeNull();
+		expect(repositoryFromGhCreate("gh pr create -R owner/one -Rowner/two --body x")).toBe("owner/two");
+		expect(repositoryFromGhCreate("gh pr create -dRowner/two --body x")).toBe("owner/two");
+		expect(repositoryFromGhCreate("gh pr create --body \"--repo owner/fake\"")).toBeNull();
+		expect(repositoryFromGhCreate("gh pr create --repo ghe.example.com/owner/project --body x")).toBe("ghe.example.com/owner/project");
+	});
+});
 
 describe("bodyOfGhCreate", () => {
 	test("reads every real --body spelling, attached forms included", () => {
@@ -52,9 +103,10 @@ describe("decidePrCreate", () => {
 		expect(decidePrCreate("Bead: omp-1\nBead: omp-2", true)).toBeNull();
 	});
 
-	test("allows the stated escape hatch and rejects an empty one", () => {
-		expect(decidePrCreate("No-Bead: revert of a bad merge", true)).toBeNull();
-		expect(decidePrCreate("No-Bead:", true)).not.toBeNull();
+	test("rejects internal linkage placeholders instead of treating them as an escape hatch", () => {
+		const placeholder = ["No", "-Bead"].join("");
+		expect(decidePrCreate(`${placeholder}: revert of a bad merge`, true)).not.toBeNull();
+		expect(decidePrCreate(`${placeholder}:`, true)).not.toBeNull();
 	});
 
 	test("stays silent where beads is not active", () => {
@@ -88,6 +140,18 @@ describe("decideCommand", () => {
 	test("ignores unrelated gh commands", () => {
 		expect(decideCommand("gh pr list --state open", true)).toBeNull();
 		expect(decideCommand("gh run watch 42", true)).toBeNull();
+	});
+});
+
+describe("per-segment repository control", () => {
+	test("evaluates mixed targets independently in either order", () => {
+		const controlled = (segment: string) => segment.includes("controlled/repo");
+		expect(decideCommand("gh pr create --repo external/repo --body plain && gh pr create --repo controlled/repo --body plain", controlled)).not.toBeNull();
+		expect(decideCommand("gh pr create --repo controlled/repo --body plain && gh pr create --repo external/repo --body plain", controlled)).not.toBeNull();
+	});
+	test("handles three mixed targets without sharing classification", () => {
+		const controlled = (segment: string) => segment.includes("controlled/repo");
+		expect(decideCommand("gh pr create --repo external/repo --body 'Bead: x-1' && gh pr create --repo controlled/repo --body plain && gh pr create --repo external/repo --body 'Bead: x-2'", controlled)).not.toBeNull();
 	});
 });
 

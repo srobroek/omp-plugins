@@ -81,8 +81,8 @@ Use the builtin learn/retain/recall/reflect tools for persistent knowledge. This
   than dead. The pid is the agent process, not the shell child that exits with
   the command.
 - `pr-bead-link-gate`: blocks `gh pr create` and the `github` device's `pr_create` when the
-  body names neither a bead nor a `No-Bead:` reason, and only where a `.beads`
-  workspace exists.
+  body names no bead, and only where a `.beads` workspace exists. External repositories
+  without `.beads` are untouched; their user-facing prose must omit internal linkage.
   It refuses rather than injecting an id, because a body it had to guess at
   outlives the PR. A body built by `--fill`, `--body-file`, or a command
   substitution is not visible to a tool call, so those stay a rule matter.
