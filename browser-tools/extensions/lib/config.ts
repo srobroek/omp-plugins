@@ -1,7 +1,15 @@
 import { readFile } from "node:fs/promises";
-import { homedir } from "node:os";
-import { dirname, join } from "node:path";
+import { isAbsolute, normalize } from "node:path";
 import type { PluginSettingSchema } from "@oh-my-pi/pi-coding-agent/extensibility/plugins";
+
+type PluginDirsModule = {
+	getPluginsLockfile(home?: string): string;
+	getProjectPluginOverridesPath(cwd?: string): string;
+};
+
+type ImportPluginDirs = () => Promise<PluginDirsModule>;
+
+const importPluginDirs: ImportPluginDirs = () => import("@oh-my-pi/pi-utils/dirs");
 
 export const PLUGIN_PACKAGE = "@srobroek/browser-tools";
 
@@ -110,7 +118,7 @@ export interface EffectiveConfig {
 	settingsSource: string;
 }
 
-export type ConfigOverrides = Partial<Record<SettingKey, unknown>> & {
+export type ConfigOverrides = Partial<Record<Exclude<SettingKey, "driverModulePath">, unknown>> & {
 	engine?: unknown;
 	browserChannel?: unknown;
 	headless?: unknown;
@@ -162,7 +170,17 @@ async function readSettingsFile(path: string): Promise<Record<string, unknown>> 
 	return parsed.settings?.[PLUGIN_PACKAGE] ?? {};
 }
 
-/** The public plugin-settings API, imported lazily so the fallback stays testable. */
+async function readTrustedGlobalDriver(path: string, warnings: string[]): Promise<unknown> {
+	try {
+		const settings = await readSettingsFile(path);
+		return settings.driverModulePath;
+	} catch (error) {
+		if (!isMissingFile(error)) warnings.push(`headed-browser: cannot read settings from ${path}: ${errorMessage(error)}`);
+		return undefined;
+	}
+}
+
+/** Public host APIs are imported lazily so tests can provide a deterministic adapter. */
 type PluginSettingsModule = {
 	getPluginSettings(pkg: string, cwd: string): Promise<Record<string, unknown> | undefined>;
 };
@@ -171,30 +189,39 @@ export async function loadStoredSettings(
 	cwd: string,
 	importPluginSettings: () => Promise<PluginSettingsModule> = () =>
 		import("@oh-my-pi/pi-coding-agent/extensibility/plugins"),
+	importDirs: ImportPluginDirs = importPluginDirs,
 ): Promise<StoredSettings> {
+	const warnings: string[] = [];
+	let lockPath: string | undefined;
+	let overridePath: string | undefined;
+	try {
+		const dirs = await importDirs();
+		lockPath = dirs.getPluginsLockfile();
+		overridePath = dirs.getProjectPluginOverridesPath(cwd);
+	} catch (error) {
+		warnings.push(`headed-browser: plugin directory resolver unavailable (${errorMessage(error)})`);
+	}
 	try {
 		const module = await importPluginSettings();
-		const values = await module.getPluginSettings(PLUGIN_PACKAGE, cwd);
-		return { values: values ?? {}, source: "public-api", warnings: [] };
+		const values = { ...(await module.getPluginSettings(PLUGIN_PACKAGE, cwd) ?? {}) };
+		// The public API merges project overrides, so only the operator-global lock
+		// file is trusted for the executable driver module path.
+		delete values.driverModulePath;
+		const trustedDriver = lockPath === undefined ? undefined : await readTrustedGlobalDriver(lockPath, warnings);
+		if (trustedDriver !== undefined) values.driverModulePath = trustedDriver;
+		return { values, source: "public-api", warnings };
 	} catch (error) {
-		const warnings = [
-			`headed-browser: plugin settings public API unavailable; using lock-file fallback (${errorMessage(error)})`,
-		];
-		const pluginsDir = process.env.PI_CODING_AGENT_DIR
-			? join(dirname(process.env.PI_CODING_AGENT_DIR), "plugins")
-			: join(homedir(), ".omp", "plugins");
-		const lockPath = join(pluginsDir, "omp-plugins.lock.json");
-		const overridePath = join(cwd, ".omp", "plugin-overrides.json");
+		warnings.push(`headed-browser: plugin settings public API unavailable; using lock-file fallback (${errorMessage(error)})`);
 		let values: Record<string, unknown> = {};
 		const sources: string[] = [];
-		for (const path of [lockPath, overridePath]) {
+		for (const path of [lockPath, overridePath].filter((path): path is string => path !== undefined)) {
 			try {
-				values = { ...values, ...(await readSettingsFile(path)) };
+				const settings = await readSettingsFile(path);
+				if (path === overridePath) delete settings.driverModulePath;
+				values = { ...values, ...settings };
 				sources.push(path);
 			} catch (readError) {
-				if (!isMissingFile(readError)) {
-					warnings.push(`headed-browser: cannot read settings from ${path}: ${errorMessage(readError)}`);
-				}
+				if (!isMissingFile(readError)) warnings.push(`headed-browser: cannot read settings from ${path}: ${errorMessage(readError)}`);
 			}
 		}
 		return {
@@ -221,8 +248,13 @@ export async function resolveConfig(
 		if (Object.hasOwn(stored.values, key)) {
 			value = coerce(key, stored.values[key], schema, value, warnings);
 		}
-		if (Object.hasOwn(overrides, key)) {
-			value = coerce(key, overrides[key as SettingKey], schema, value, warnings);
+		if (key === "driverModulePath") {
+			values[key] = value;
+			continue;
+		}
+		const overrideKey = key as Exclude<SettingKey, "driverModulePath">;
+		if (Object.hasOwn(overrides, overrideKey)) {
+			value = coerce(key, overrides[overrideKey], schema, value, warnings);
 		}
 		values[key] = value;
 	}
@@ -266,7 +298,10 @@ function coerce(
 	warnings: string[],
 ): unknown {
 	let value: unknown;
-	if (schema.type === "string") value = typeof candidate === "string" ? candidate : undefined;
+	if (schema.type === "string") {
+		value = typeof candidate === "string" ? candidate : undefined;
+		if (key === "driverModulePath" && typeof value === "string" && value !== "" && (!isAbsolute(value) || normalize(value) !== value)) value = undefined;
+	}
 	if (schema.type === "boolean") {
 		if (typeof candidate === "boolean") value = candidate;
 		else if (typeof candidate === "string" && /^(true|1|yes|on)$/i.test(candidate)) value = true;

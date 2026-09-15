@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { EffectiveConfig } from "./lib/config.ts";
 import type { RemoteResources } from "./lib/driver.ts";
-import { closeRemote, launchLocal, validateRemoteTarget, validateSshOptions } from "./lib/driver.ts";
+import { closeRemote, launchLocal, loadPuppeteer, validateRemoteTarget, validateSshOptions } from "./lib/driver.ts";
 
 const temps: string[] = [];
 
@@ -84,6 +84,29 @@ describe("headed browser driver", () => {
 		});
 		expect(cleanupTimeout).toBe(17);
 		expect(killed).toBe(2);
+	});
+
+	describe("driver resolution", () => {
+		test("bundled default exposes launch and connect", async () => {
+			const module = await loadPuppeteer(config("", true));
+			expect(typeof module.launch).toBe("function");
+			expect(typeof module.connect).toBe("function");
+		});
+
+		test("explicit override wins", async () => {
+			const path = await fakeDriver();
+			const module = await loadPuppeteer(config(path, true));
+			expect(typeof module.launch).toBe("function");
+		});
+
+		test("invalid override has an override-specific error and cause", async () => {
+			try {
+				await loadPuppeteer(config(join(tmpdir(), "missing-driver.mjs"), true));
+				throw new Error("expected loadPuppeteer to reject");
+			} catch (error) {
+				expect(error).toMatchObject({ message: expect.stringContaining("driverModulePath override is invalid"), cause: expect.anything() });
+			}
+		});
 	});
 
 });

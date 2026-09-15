@@ -94,6 +94,9 @@ jobs:
             fi
           done < <(git ls-files '*/package.json')
 
+      - name: Browser-tools third-party notices are current
+        run: bun browser-tools/scripts/generate-third-party-notices.ts --check
+
       - name: Shipped asset metadata and trigger syntax
         run: bun scripts/check-agentic-metadata.ts
       - name: Catalog and capability negative checks

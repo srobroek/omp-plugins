@@ -35,17 +35,21 @@ export interface RemoteResources {
 }
 
 export async function loadPuppeteer(config: Pick<EffectiveConfig, "driverModulePath">): Promise<PuppeteerModule> {
+	const override = config.driverModulePath;
 	try {
-		// Runtime-selected driver paths support host installations without adding a bundled dependency.
-		const module = config.driverModulePath
-			? await import(pathToFileURL(config.driverModulePath).href)
+		// An explicit path is authoritative; the empty setting selects the bundled static import.
+		const module = override
+			? await import(pathToFileURL(override).href)
 			: await import("puppeteer-core");
-		if (typeof module.launch !== "function" || typeof module.connect !== "function") throw new Error("module has no launch/connect exports");
+		if (typeof module.launch !== "function" || typeof module.connect !== "function") {
+			throw new Error("module has no launch/connect exports");
+		}
 		return module as PuppeteerModule;
-	} catch {
-		throw new Error(
-			"headed-browser: puppeteer-core not resolvable; set the driverModulePath setting to <omp install>/node_modules/.mise/puppeteer-core@<version>/node_modules/puppeteer-core/lib/puppeteer/puppeteer-core.js",
-		);
+	} catch (cause) {
+		if (override) {
+			throw new Error(`headed-browser: driverModulePath override is invalid: ${override}`, { cause });
+		}
+		throw new Error("headed-browser: bundled puppeteer-core driver is corrupt or unavailable", { cause });
 	}
 }
 

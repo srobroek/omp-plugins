@@ -85,7 +85,6 @@ export default function headedBrowserTools(pi: ExtensionAPI): void {
 		keepArtifactsOnClose: z.boolean().optional(),
 		idleCloseSec: z.number().optional(),
 		navigationTimeoutMs: z.number().optional(),
-		driverModulePath: z.string().optional(),
 	};
 
 	pi.registerTool({

@@ -15,7 +15,7 @@ OMP discovers extensions and MCP servers at session startup. Start a new session
 omp -p 'headed_session op:"preflight"'
 ```
 
-Configure persistent defaults under `/settings` → Plugins → `@srobroek/browser-tools`. Every setting can be overridden by `headed_session op:"launch"`; remote SSH parameters exist only on that launch call.
+Configure persistent defaults under `/settings` → Plugins → `@srobroek/browser-tools`. Override launch settings with `headed_session op:"launch"`. `driverModulePath` is trusted configuration only; remote SSH parameters are accepted only on that launch call.
 
 ## Headed browser tools
 
@@ -39,8 +39,9 @@ Sessions persist across turns until closed or idle for `idleCloseSec`. `op:"clos
 
 ## Browser support
 
-The headed tools use the host `puppeteer-core` package. The verified implementation target is `puppeteer-core@25.3.0`.
+The headed tools ship self-contained `puppeteer-core@25.3.0` bundles (about 2.8 MB total). An empty `driverModulePath` uses the embedded driver, so consumer machines need no plugin `node_modules`. Set `driverModulePath` only in trusted operator configuration or `HEADED_BROWSER_DRIVER_MODULE_PATH`, and only to an existing absolute canonical Puppeteer entry module. It loads executable JavaScript with plugin privileges, is not accepted in per-call parameters, and reports load failures separately when set.
 
+The verified implementation target is `puppeteer-core@25.3.0`.
 | target | browsers | protocol | status |
 |---|---|---|---|
 | Firefox | Firefox, ESR, Developer, Nightly, LibreWolf, Waterfox | WebDriver BiDi | primary target; requires Gecko 129 or newer |

@@ -3,10 +3,16 @@
   "version": "0.3.4",
   "description": "Cross-engine browser coverage and Chrome performance tracing over MCP.",
   "private": true,
+  "dependencies": {
+    "puppeteer-core": "25.3.0"
+  },
+  "scripts": {
+    "licenses:check": "bun run scripts/generate-third-party-notices.ts --check"
+  },
   "omp": {
     "extensions": [
-      "./extensions/headed-browser-tools.ts",
-      "./extensions/headed-browser-preflight.ts"
+      "./dist/headed-browser-tools.js",
+      "./dist/headed-browser-preflight.js"
     ],
     "settings": {
       "defaultEngine": {
@@ -201,7 +207,7 @@
       "driverModulePath": {
         "type": "string",
         "default": "",
-        "description": "Absolute puppeteer-core entry module path when host resolution is unavailable.",
+        "description": "Trusted operator-only absolute canonical puppeteer-core entry module path; loads executable code with plugin privileges.",
         "env": "HEADED_BROWSER_DRIVER_MODULE_PATH"
       }
     }
