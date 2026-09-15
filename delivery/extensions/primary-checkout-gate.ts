@@ -2,7 +2,7 @@ import { existsSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { ExtensionAPI, ToolCallEvent } from "@oh-my-pi/pi-coding-agent";
-import { extractCommand, findGitInvocations, unreadableReason } from "./main-branch-gate.ts";
+import { absoluteGitCwdTransition, extractCommand, findGitInvocations, unreadableReason } from "./main-branch-gate.ts";
 import { steeringDirective, targetRepoAuthorizes, targetRepoCommonDir, targetRepoTrusts } from "./target-repo-steering.ts";
 
 let worktreesDirOverride: string | undefined;
@@ -267,7 +267,14 @@ export function decideCommit(
 	scope: string = "default",
 ): { block: true; reason: string } | undefined {
 	const run = injectedRun ?? defaultRun;
-	for (const invocation of findGitInvocations(command, env)) {
+	const invocations = findGitInvocations(command, env);
+	const transitionedCwd = absoluteGitCwdTransition(command);
+	if (transitionedCwd !== undefined) {
+		for (const invocation of invocations) {
+			if (invocation.repoDir === null) invocation.repoDir = transitionedCwd;
+		}
+	}
+	for (const invocation of invocations) {
 		if (invocation.operation === "opaque" || invocation.retargeted === true)
 			return { block: true, reason: unreadableReason("an opaque Git invocation") };
 		const target = invocation.repoDir === null ? cwd : resolve(cwd, invocation.repoDir);

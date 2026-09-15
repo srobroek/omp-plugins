@@ -577,6 +577,12 @@ export type CommitInvocation = {
  */
 export function findCommitInvocations(command: string, includeOpaqueSubstitution = true): CommitInvocation[] {
     const out = scanInvocations(command);
+	const transitionedCwd = absoluteGitCwdTransition(command);
+	if (transitionedCwd !== undefined) {
+		for (const invocation of out) {
+			if (invocation.repoDir === null) invocation.repoDir = transitionedCwd;
+		}
+	}
 	// A substitution runs commands the quote-aware scan reads as data, and which substitutions
 	// are inert cannot be decided here: a quoted here-document delimiter makes its body inert
 	// while an unquoted one does not, an apostrophe in a body or a comment is literal text yet
@@ -644,10 +650,18 @@ export function findCommitInvocations(command: string, includeOpaqueSubstitution
 export type GitOperation = "read" | "commit" | "checkout" | "switch" | "merge" | "push" | "opaque";
 
 const GIT_COMMAND_TEXT = /(?:^|[^A-Za-z0-9_./-])(?:d?git|git-[A-Za-z0-9_-]+)(?:$|[^A-Za-z0-9_-])/;
+const ABSOLUTE_GIT_AFTER_CWD = /^\s*cd\s+(\/[^\s;&|]+)\s*&&\s+(\/[^\s;&|]+\/git)(?:\s|$)/;
+
+export function absoluteGitCwdTransition(command: string): string | undefined {
+	const match = command.match(ABSOLUTE_GIT_AFTER_CWD);
+	return match?.[1];
+}
+
 const SHELL_CWD_COMMANDS = new Set(["cd", "pushd", "popd"]);
 
 export function hasUnsafeShellCwdOrGrouping(command: string): boolean {
 	if (!GIT_COMMAND_TEXT.test(command)) return false;
+	if (absoluteGitCwdTransition(command) !== undefined) return false;
 	const tokens = tokenize(command);
 	let atCommand = true;
 	for (const token of tokens) {

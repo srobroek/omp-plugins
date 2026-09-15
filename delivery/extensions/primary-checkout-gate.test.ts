@@ -540,3 +540,17 @@ describe("final primary parser bypass controls", () => {
 		expect(decideCommit(command, primary)?.block, command).toBe(true);
 	});
 });
+test("absolute Git after a cwd transition resolves the transitioned primary checkout", () => {
+		const { primary, linked } = setup();
+		const command = `cd ${primary} && /usr/bin/git commit -m x`;
+		expect(decideCommit(command, linked)?.block, command).toBe(true);
+	});
+
+	test.each(["/usr/bin/git commit -m x", "/bin/git commit -m x", "/opt/homebrew/bin/git commit -m x"])(
+		"absolute Git executable after a cwd transition is not treated as ordinary text: %s",
+		(git) => {
+			const { primary, linked } = setup();
+			const command = `cd ${primary} && ${git}`;
+			expect(decideCommit(command, linked)?.block, command).toBe(true);
+		},
+	);

@@ -2041,6 +2041,14 @@ describe("nested substitution integration", () => {
     });
 });
 });
+test("absolute Git after a cwd transition resolves the transitioned main repository", () => {
+	const { run, calls } = fakeGit({ "/main-repo": "main", "/feature": "feature" });
+	setGitRunForTests(run);
+	const command = "cd /main-repo && /usr/bin/git commit -m x";
+	expect(decideCommit(command, "/feature")?.block, command).toBe(true);
+	expect(calls.map((call) => call.cwd)).toEqual(["/main-repo"]);
+});
+
 describe("repository steering", () => {
     test("accepts an exact root directive from a nested cwd", () => {
         const root = steeredRepo("DELIVERY_ALLOW_MAIN_COMMIT", "MUST authorize DELIVERY_ALLOW_MAIN_COMMIT=1 for this repository.");

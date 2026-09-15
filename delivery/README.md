@@ -30,7 +30,7 @@ An explicit user request or the absence of a PR flow does not authorize it.
 Git must report the target repository and branch before the commit gate can decide.
 A failed or detached branch lookup allows the call.
 
-A protected commit is allowed only when the process environment contains `DELIVERY_ALLOW_MAIN_COMMIT=1` and the target repository contains this exact line:
+A protected commit is allowed only when the same bash tool call's structured `env` contains `DELIVERY_ALLOW_MAIN_COMMIT=1` and the target repository contains this exact line:
 
 `MUST authorize DELIVERY_ALLOW_MAIN_COMMIT=1 for this repository.`
 
@@ -54,12 +54,12 @@ The primary checkout is the checkout whose Git directory equals its common Git d
 Redispatch repository work with `isolated: true` so OMP places it in standalone clones under its configured isolation root. Those clones pass even when Git classifies them as primary.
 Paths outside a repository, internal URIs, and the `.omp/` and `.beads/` state directories pass.
 
-A protected primary checkout is allowed only when the process environment contains `DELIVERY_ALLOW_PRIMARY_CHECKOUT=1` and the trusted remote default tree contains this exact line:
+A protected primary checkout is allowed only when the same bash tool call's structured `env` contains `DELIVERY_ALLOW_PRIMARY_CHECKOUT=1` and the trusted remote default tree contains this exact line:
 
 `MUST authorize DELIVERY_ALLOW_PRIMARY_CHECKOUT=1 for this repository.`
 
 The same committed-source, fenced-block, symlink, and veto rules apply to this authorization.
-A bash call carrying the authorized override grants later `edit` and `write` calls in that same canonical primary checkout for the current session.
+A bash call carrying the authorized structured `env` override grants later `edit` and `write` calls in that same canonical primary checkout for the current session.
 `git remote -v` and `git fetch` remain read operations only after the origin anchor is unchanged. `git remote set-url`, `git remote add`, `git remote remove`, `git remote rename`, `git config remote.origin.*`, aliases, and wrappers that can perform those mutations are denied in the primary checkout.
 The grant does not transfer to another repository or an OMP-isolated clone.
 
