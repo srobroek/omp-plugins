@@ -72,8 +72,8 @@ describe("decidePrCreate", () => {
 
 	test("rejects internal linkage placeholders instead of treating them as an escape hatch", () => {
 		const placeholder = ["No", "-Bead"].join("");
-		expect(decidePrCreate(placeholder + ": revert of a bad merge", true)).not.toBeNull();
-		expect(decidePrCreate(placeholder + ":", true)).not.toBeNull();
+		expect(decidePrCreate(`${placeholder}: revert of a bad merge`, true)).not.toBeNull();
+		expect(decidePrCreate(`${placeholder}:`, true)).not.toBeNull();
 	});
 
 	test("stays silent where beads is not active", () => {
