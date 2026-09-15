@@ -46,10 +46,12 @@ jobs:
           # (renovate-dist rebuilds automatically on renovate branches).
           bun-version: "1.4.2"
 
-      - name: Rebuild extension bundles
+      - name: Rebuild extension bundles and notices
         run: |
+          (cd browser-tools && bun install --frozen-lockfile --silent)
+          bun browser-tools/scripts/generate-third-party-notices.ts
           python3 scripts/build-extensions.py
-          git add -- '*/bun.lock' '*/dist/*.js'
+          git add -- '*/bun.lock' '*/dist/*.js' browser-tools/THIRD_PARTY_NOTICES.txt
           if ! git diff --cached --quiet; then
             git config user.name "release-app[bot]"
             git config user.email "release-app[bot]@users.noreply.github.com"

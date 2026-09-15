@@ -38,9 +38,9 @@ export async function runPreflight(
 	const checks: PreflightCheck[] = [];
 	try {
 		await loadPuppeteer(config);
-		checks.push({ name: "driver", status: "ok", observed: config.driverModulePath || "puppeteer-core package resolution" });
+		checks.push({ name: "driver", status: "ok", observed: config.driverModulePath || "bundled puppeteer-core driver" });
 	} catch (error) {
-		checks.push({ name: "driver", status: "fail", observed: error instanceof Error ? error.message : String(error), remedy: "Set driverModulePath to the host puppeteer-core entry module." });
+		checks.push({ name: "driver", status: "fail", observed: error instanceof Error ? error.message : String(error), remedy: config.driverModulePath ? "Check the explicit driverModulePath module." : "Reinstall the browser-tools plugin or set the trusted driverModulePath configuration." });
 	}
 	const installed = inventory();
 	checks.push({ name: "browser-inventory", status: installed.length > 0 ? "ok" : "warn", observed: installed, remedy: installed.length > 0 ? undefined : "Install Firefox-family or Chrome-family browser." });

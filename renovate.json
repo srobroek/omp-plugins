@@ -6,6 +6,11 @@
       "description": "Automerge minor and patch updates once every check passes; the CI gates (module parse, bundle drift, tests, catalog sync) are the decision-makers. Majors still open a PR for review.",
       "matchUpdateTypes": ["minor", "patch", "pin", "digest"],
       "automerge": true
+    },
+    {
+      "description": "Puppeteer upgrades change the bundled browser driver and require deliberate verification.",
+      "matchPackageNames": ["puppeteer-core"],
+      "automerge": false
     }
   ]
 }

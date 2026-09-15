@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { homedir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, isAbsolute, join, normalize } from "node:path";
 import type { PluginSettingSchema } from "@oh-my-pi/pi-coding-agent/extensibility/plugins";
 
 export const PLUGIN_PACKAGE = "@srobroek/browser-tools";
@@ -110,7 +110,7 @@ export interface EffectiveConfig {
 	settingsSource: string;
 }
 
-export type ConfigOverrides = Partial<Record<SettingKey, unknown>> & {
+export type ConfigOverrides = Partial<Record<Exclude<SettingKey, "driverModulePath">, unknown>> & {
 	engine?: unknown;
 	browserChannel?: unknown;
 	headless?: unknown;
@@ -189,7 +189,9 @@ export async function loadStoredSettings(
 		const sources: string[] = [];
 		for (const path of [lockPath, overridePath]) {
 			try {
-				values = { ...values, ...(await readSettingsFile(path)) };
+				const settings = await readSettingsFile(path);
+				if (path === overridePath) delete settings.driverModulePath;
+				values = { ...values, ...settings };
 				sources.push(path);
 			} catch (readError) {
 				if (!isMissingFile(readError)) {
@@ -221,8 +223,13 @@ export async function resolveConfig(
 		if (Object.hasOwn(stored.values, key)) {
 			value = coerce(key, stored.values[key], schema, value, warnings);
 		}
-		if (Object.hasOwn(overrides, key)) {
-			value = coerce(key, overrides[key as SettingKey], schema, value, warnings);
+		if (key === "driverModulePath") {
+			values[key] = value;
+			continue;
+		}
+		const overrideKey = key as Exclude<SettingKey, "driverModulePath">;
+		if (Object.hasOwn(overrides, overrideKey)) {
+			value = coerce(key, overrides[overrideKey], schema, value, warnings);
 		}
 		values[key] = value;
 	}
@@ -266,7 +273,10 @@ function coerce(
 	warnings: string[],
 ): unknown {
 	let value: unknown;
-	if (schema.type === "string") value = typeof candidate === "string" ? candidate : undefined;
+	if (schema.type === "string") {
+		value = typeof candidate === "string" ? candidate : undefined;
+		if (key === "driverModulePath" && typeof value === "string" && value !== "" && (!isAbsolute(value) || normalize(value) !== value)) value = undefined;
+	}
 	if (schema.type === "boolean") {
 		if (typeof candidate === "boolean") value = candidate;
 		else if (typeof candidate === "string" && /^(true|1|yes|on)$/i.test(candidate)) value = true;
