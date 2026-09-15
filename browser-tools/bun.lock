@@ -5,11 +5,28 @@
     "": {
       "name": "@srobroek/browser-tools",
       "dependencies": {
+        "@oh-my-pi/pi-utils": "18.1.21",
         "puppeteer-core": "25.3.0",
       },
     },
   },
   "packages": {
+    "@oh-my-pi/pi-natives": ["@oh-my-pi/pi-natives@18.1.21", "", { "optionalDependencies": { "@oh-my-pi/pi-natives-darwin-arm64": "18.1.21", "@oh-my-pi/pi-natives-darwin-x64": "18.1.21", "@oh-my-pi/pi-natives-linux-arm64": "18.1.21", "@oh-my-pi/pi-natives-linux-x64": "18.1.21", "@oh-my-pi/pi-natives-win32-arm64": "18.1.21", "@oh-my-pi/pi-natives-win32-x64": "18.1.21" } }, "sha512-bqHpdFXGlPWSgF21BGW7pcKkjEwo23efmV76qTJUpf84xkbkAF7QAehn9UUXYOSQDE/QuTLiZpwNmWjN+ub6oA=="],
+
+    "@oh-my-pi/pi-natives-darwin-arm64": ["@oh-my-pi/pi-natives-darwin-arm64@18.1.21", "", { "os": "darwin", "cpu": "arm64" }, "sha512-BS2cHt/Mv/rIimOkPYcnRfTrQUglD/pdCZG1rB7hQg0Wz+BzAzDif8Ni0Um/2zx+FXxBZdnV4DY7o5Tbs1i5bw=="],
+
+    "@oh-my-pi/pi-natives-darwin-x64": ["@oh-my-pi/pi-natives-darwin-x64@18.1.21", "", { "os": "darwin", "cpu": "x64" }, "sha512-ZFaWWveWkl7klw5NDtIr/AHlM3ib6ARLic2JPSHcRGHtALAE87aqgOTXl405G9B/UTsPA8FFYMP8t5e572rjgw=="],
+
+    "@oh-my-pi/pi-natives-linux-arm64": ["@oh-my-pi/pi-natives-linux-arm64@18.1.21", "", { "os": "linux", "cpu": "arm64" }, "sha512-tNmRyL9qLL7ZiF5r4jJX04jiqFsxb6/gkKxZYUxj/8YgSuA4fRviT0dZO07ZZVNCAnTtEPdWur3nDk3Ffztn0w=="],
+
+    "@oh-my-pi/pi-natives-linux-x64": ["@oh-my-pi/pi-natives-linux-x64@18.1.21", "", { "os": "linux", "cpu": "x64" }, "sha512-rCa9+Ca5z3gdBl15xqt/lmS21moiQ+V9mng5Xj1Sa4MpPvJ3MmoXlmyj2TkQOB2y6Pj0jmn+yR276ER9i7uQuw=="],
+
+    "@oh-my-pi/pi-natives-win32-arm64": ["@oh-my-pi/pi-natives-win32-arm64@18.1.21", "", { "os": "win32", "cpu": "arm64" }, "sha512-yJlFdYYSo5TD2ip/KKMqR60VPoudRZwZAIfjWw8WpiPZdkBK/OtfjkkOCGYcgocmHlywWaSkqWujN9WSXIQiqw=="],
+
+    "@oh-my-pi/pi-natives-win32-x64": ["@oh-my-pi/pi-natives-win32-x64@18.1.21", "", { "os": "win32", "cpu": "x64" }, "sha512-ClFZ8YMf7DhTXpyTR4tuSA10EbY9LE60UG7eVPsxwIEzjbBAJSucV/HuklMvud7+6Cif3L4bvNtzwB7OILLtDg=="],
+
+    "@oh-my-pi/pi-utils": ["@oh-my-pi/pi-utils@18.1.21", "", { "dependencies": { "@oh-my-pi/pi-natives": "18.1.21" } }, "sha512-ylED4NTpdHyHBxgxvogviV3xC4XsbxAuaJynISuCBmaVw9BGH28A/uMNNdbvn6A4Cim1E+GVnOoH//9hgCi6vQ=="],
+
     "@puppeteer/browsers": ["@puppeteer/browsers@3.0.6", "", { "dependencies": { "modern-tar": "^0.7.6", "yargs": "^18.0.0" }, "peerDependencies": { "proxy-agent": ">=8.0.1", "yauzl": "^2.10.0 || ^3.4.0" }, "optionalPeers": ["proxy-agent", "yauzl"], "bin": { "browsers": "lib/main-cli.js" } }, "sha512-B/gKoqlFkzhvzsI6jo9K1cZz9o5ypviVv/xu8CwA4grZzyVwN+XfkT+tu8T1zrauuEXv6VhS2oGX+6NL95WcKA=="],
 
     "ansi-regex": ["ansi-regex@6.3.0", "", {}, "sha512-WpDfL7NO6j7tH88IDBNVdUJxDh9nmCteAVW9dsep846XdwF4naCBK+/tGLX3KJgcpgMRXCFlTM2hKGoK9FsdrQ=="],
