@@ -42,31 +42,38 @@ function trustedRemoteDefault(root: string, run: GitRun): RemoteDefault | null {
 		return null;
 	}
 }
+const TREE_CACHE = new Map<string, TreeEntry[] | null>();
 
 function treeEntries(root: string, sha: string, run: GitRun): TreeEntry[] | null {
+	const cacheKey = `${root}\0${sha}`;
+	if (TREE_CACHE.has(cacheKey)) return TREE_CACHE.get(cacheKey) ?? null;
+	const cache = (value: TreeEntry[] | null): TreeEntry[] | null => {
+		TREE_CACHE.set(cacheKey, value);
+		return value;
+	};
 	try {
 		const result = run(
 			["git", "ls-tree", "-rz", "--full-tree", "-r", sha, "--", "AGENTS.md", "CLAUDE.md", ".omp"],
 			root,
 		);
-		if (result.exitCode !== 0) return null;
+		if (result.exitCode !== 0) return cache(null);
 		const entries: TreeEntry[] = [];
 		const seen = new Set<string>();
 		for (const record of result.stdout.split("\0")) {
 			if (!record) continue;
 			const tab = record.indexOf("\t");
-			if (tab < 0) return null;
+			if (tab < 0) return cache(null);
 			const fields = record.slice(0, tab).split(" ");
 			const [mode, type, object] = fields;
 			const path = record.slice(tab + 1);
-			if (!mode || !type || !object || fields.length !== 3 || !path || seen.has(path)) return null;
-			if (!/^[0-9]+$/.test(mode) || !/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(object)) return null;
+			if (!mode || !type || !object || fields.length !== 3 || !path || seen.has(path)) return cache(null);
+			if (!/^[0-9]+$/.test(mode) || !/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(object)) return cache(null);
 			seen.add(path);
 			entries.push({ mode, type, object, path });
 		}
-		return entries;
+		return cache(entries);
 	} catch {
-		return null;
+		return cache(null);
 	}
 }
 
@@ -79,15 +86,21 @@ function directSource(path: string): boolean {
 			!path.slice(".omp/rules/".length).includes("/"))
 	);
 }
+const FILE_CACHE = new Map<string, ReadResult>();
 
 function readTrustedFile(root: string, sha: string, path: string, run: GitRun): ReadResult {
+	const cacheKey = `${root}\0${sha}\0${path}`;
+	const cached = FILE_CACHE.get(cacheKey);
+	if (cached !== undefined) return cached;
+	let result: ReadResult;
 	try {
-		const result = run(["git", "show", `${sha}:${path}`], root);
-		if (result.exitCode !== 0) return { text: null, error: true };
-		return { text: result.stdout, error: false };
+		const command = run(["git", "show", `${sha}:${path}`], root);
+		result = command.exitCode !== 0 ? { text: null, error: true } : { text: command.stdout, error: false };
 	} catch {
-		return { text: null, error: true };
+		result = { text: null, error: true };
 	}
+	FILE_CACHE.set(cacheKey, result);
+	return result;
 }
 
 function fencedLineScanner(
@@ -121,28 +134,40 @@ function fencedLineScanner(
  * origin refs are never used. Only exact standalone directives in regular, non-symlink candidate
  * blobs count. Missing, malformed, ambiguous, unavailable, or mismatched data denies.
  */
+const AUTH_CACHE = new Map<string, boolean>();
+
 export function targetRepoAuthorizes(target: string, envName: string, run: GitRun): boolean {
 	const root = canonicalRoot(target, run);
 	if (root === null) return false;
 	const remote = trustedRemoteDefault(root, run);
 	if (remote === null) return false;
+	const cacheKey = `${root}\0${remote.sha}\0${envName}`;
+	const cached = AUTH_CACHE.get(cacheKey);
+	if (cached !== undefined) return cached;
 	const entries = treeEntries(root, remote.sha, run);
-	if (entries === null) return false;
+	if (entries === null) {
+		AUTH_CACHE.set(cacheKey, false);
+		return false;
+	}
 	const affirmative = `MUST authorize ${envName}=1 for this repository.`;
 	const veto = `MUST NOT authorize ${envName}=1 for this repository.`;
 	let foundAffirmative = false;
 	let foundVeto = false;
 	for (const entry of entries) {
 		if (entry.path === ".omp" || entry.path === ".omp/rules" || !directSource(entry.path)) continue;
-		// Symlinks and other non-regular candidate entries are inert and are never read.
 		if (!(entry.type === "blob" && (entry.mode === "100644" || entry.mode === "100755"))) continue;
 		const result = readTrustedFile(root, remote.sha, entry.path, run);
-		if (result.error || result.text === null) return false;
+		if (result.error || result.text === null) {
+			AUTH_CACHE.set(cacheKey, false);
+			return false;
+		}
 		const scanned = fencedLineScanner(result.text, affirmative, veto);
 		foundAffirmative ||= scanned.affirmative;
 		foundVeto ||= scanned.veto;
 	}
-	return foundAffirmative && !foundVeto;
+	const authorized = foundAffirmative && !foundVeto;
+	AUTH_CACHE.set(cacheKey, authorized);
+	return authorized;
 }
 
 export function steeringDirective(envName: string): string {

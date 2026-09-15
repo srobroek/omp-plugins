@@ -183,8 +183,11 @@ function envHasOpaqueGitConfig(env: NodeJS.ProcessEnv): boolean {
 		env.GIT_CONFIG_PARAMETERS !== ""
 	)
 		return true;
-	const count = Number.parseInt(env.GIT_CONFIG_COUNT ?? "0", 10);
-	if (!Number.isFinite(count) || count <= 0) return false;
+	const rawCount = env.GIT_CONFIG_COUNT;
+	if (rawCount === undefined || rawCount === "") return false;
+	if (!/^\d+$/.test(rawCount)) return true;
+	const count = Number(rawCount);
+	if (!Number.isSafeInteger(count) || count <= 0 || count > 1024) return count > 0;
 	for (let index = 0; index < count; index++) {
 		const key = env[`GIT_CONFIG_KEY_${index}`];
 		if (key !== undefined && isOpaqueGitConfigKey(key)) return true;
@@ -638,121 +641,153 @@ export function findCommitInvocations(command: string, includeOpaqueSubstitution
         out.push({ repoDir: null, dryRun: false, retargeted: true });
 	return out;
 }
-export type PrimaryMutationInvocation = {
-	operation: "checkout" | "switch" | "merge";
+export type GitOperation = "read" | "commit" | "checkout" | "switch" | "merge" | "push" | "opaque";
+export type GitInvocation = {
+	operation: GitOperation;
 	repoDir: string | null;
+	dryRun?: boolean;
 	retargeted?: true;
 };
 
-/**
- * Find repository-mutating checkout/switch/merge calls without pretending to execute shell.
- * Explicit -C paths are retained; wrappers and unknown substitutions are unreadable and fail
- * closed. Push is deliberately not included: publication belongs to the push router/pre-push
- * gates, not this primary-checkout mutation boundary.
- */
-export function findPrimaryMutations(command: string): PrimaryMutationInvocation[] {
+const PRIMARY_READ_ONLY = new Set([
+	"status", "log", "diff", "show", "branch", "rev-parse", "rev-list", "ls-files", "ls-tree", "cat-file",
+	"describe", "name-rev", "for-each-ref", "symbolic-ref", "shortlog", "blame", "grep", "archive", "count-objects",
+	"fsck", "verify-commit", "verify-tag", "whatchanged", "range-diff", "merge-base", "fetch", "remote", "worktree",
+	"help", "version",
+]);
+const PRIMARY_MUTATIONS = new Set(["checkout", "switch", "merge"]);
+const PRIMARY_SAFE_TEXT_COMMANDS = new Set(["echo", "printf", "cat", "true", "false", ":", "pwd", "rg", "grep"]);
+const PRIMARY_WRAPPERS = new Set([
+	"bash", "sh", "zsh", "dash", "ksh", "eval", "env", "command", "sudo", "time", "nice", "nohup", "exec", "xargs", "xcrun",
+]);
+
+function tokenBase(token: Token): string {
+	return token.text.split("/").at(-1) ?? "";
+}
+
+function envValueMayBeGit(value: string | undefined): boolean {
+	if (value === undefined) return false;
+	return /(?:^|[\s/])(?:d?git)(?:$|[\s/])/.test(value) || /(?:^|[\s/])git-[A-Za-z0-9_-]+(?:$|[\s/])/.test(value);
+}
+
+function expansionVariables(text: string): string[] {
+	const names: string[] = [];
+	for (const match of text.matchAll(/\$(?:\{([A-Za-z_][A-Za-z0-9_]*)\}|([A-Za-z_][A-Za-z0-9_]*))/g)) {
+		const name = match[1] ?? match[2];
+		if (name !== undefined) names.push(name);
+	}
+	return names;
+}
+
+function substitutionMayRunGit(text: string, env: NodeJS.ProcessEnv): boolean {
+	if (!text.includes("$(") && !text.includes("`")) return false;
+	if (/(?:^|[^A-Za-z0-9_-])(?:d?git|git-[A-Za-z0-9_-]+)(?:$|[^A-Za-z0-9_-])/.test(text)) return true;
+	return expansionVariables(text).some((name) => envValueMayBeGit(env[name]));
+}
+
+function possibleGitToken(token: Token, env: NodeJS.ProcessEnv): boolean {
+	const base = tokenBase(token);
+	if (GIT_COMMANDS[base] === true || base.startsWith("git-")) return true;
+	if (token.quoted && !token.text.includes("$") && !token.text.includes("`")) return false;
+	if (/(?:^|\s)(?:d?git|git-[A-Za-z0-9_-]+)(?:$|\s)/.test(token.text)) return true;
+	if (token.text.includes("$") || token.text.includes("`")) return token.text.includes("$(") || token.text.includes("`") ? substitutionMayRunGit(token.text, env) : true;
+	return false;
+}
+function opaqueInvocation(): GitInvocation {
+	return { operation: "opaque", repoDir: null, retargeted: true };
+}
+
+/** Parse only direct simple Git shapes; every wrapper, alias, helper, and dynamic target fails closed. */
+export function findGitInvocations(command: string, env: NodeJS.ProcessEnv = {}): GitInvocation[] {
 	const tokens = tokenize(command);
-	const out: PrimaryMutationInvocation[] = [];
-	const isSep = (token: Token | undefined): boolean =>
-		token !== undefined && !token.quoted && (SEPARATOR[token.text] === true || token.text === "\n");
+	const out: GitInvocation[] = [];
+	const isSep = (token: Token | undefined): boolean => token !== undefined && !token.quoted && (SEPARATOR[token.text] === true || token.text === "\n");
 	let start = 0;
 	for (let end = 0; end <= tokens.length; end++) {
 		if (end < tokens.length && !isSep(tokens[end])) continue;
 		const segment = tokens.slice(start, end);
 		start = end + 1;
 		if (segment.length === 0) continue;
-		const raw = segment.map((token) => token.text).join(" ");
 		let index = 0;
-		let retargeted = false;
-		const skipRedirection = (): boolean => {
-			const width = redirectionWidth(segment[index] as Token, segment[index + 1], false);
-			if (width === 0) return false;
-			index += width;
-			return true;
-		};
 		while (index < segment.length) {
-			if (skipRedirection()) continue;
-			const token = segment[index] as Token;
-			if (ENV_ASSIGNMENT.test(token.text) || RESERVED_WORD[token.text] === true || token.text === "then") {
-				index++;
+			const width = redirectionWidth(segment[index] as Token, segment[index + 1], false);
+			if (width === 0) break;
+			index += width;
+		}
+		let configAssignment = false;
+		while (index < segment.length && ENV_ASSIGNMENT.test((segment[index] as Token).text)) {
+			const assignment = (segment[index] as Token).text;
+			if (assignment.slice(0, assignment.indexOf("=")).startsWith("GIT_CONFIG_")) configAssignment = true;
+			index++;
+		}
+		if (index >= segment.length) continue;
+		const commandToken = segment[index] as Token;
+		const base = tokenBase(commandToken);
+		const remainder = segment.slice(index + 1);
+		const hasStructuredConfig = envHasOpaqueGitConfig(env) || configAssignment;
+		if (base !== "git" && base !== "dgit") {
+			if (base === "xargs") {
+				const payloadIndex = xargsPayloadIndex(remainder);
+				const payload = payloadIndex === "unreadable" || payloadIndex < 0 ? undefined : remainder[payloadIndex];
+				if (payloadIndex === "unreadable" && remainder.some((token) => possibleGitToken(token, env))) out.push(opaqueInvocation());
+				else if (payload !== undefined && (possibleGitToken(payload, env) || substitutionMayRunGit(payload.text, env))) out.push(opaqueInvocation());
 				continue;
 			}
-			if (token.text === "env") {
-				index++;
-				while (index < segment.length) {
-					const option = segment[index] as Token;
-					if (ENV_ASSIGNMENT.test(option.text)) {
-						if (TARGET_ENV.includes(option.text.slice(0, option.text.indexOf("=")))) retargeted = true;
-						index++;
-						continue;
-					}
-					if (option.text === "--") {
-						index++;
-						break;
-					}
-					if (option.text === "-C" || option.text === "--chdir") {
-						retargeted = true;
-						index += 2;
-						continue;
-					}
-					if (option.text.startsWith("-")) {
-						retargeted = true;
-						index = segment.length;
-						break;
-					}
-					break;
-				}
+			const nestedGit = remainder.some((token) => substitutionMayRunGit(token.text, env));
+			const wrapperGit = remainder.some((token) => possibleGitToken(token, env) || /(?:^|\s)(?:d?git|git-[A-Za-z0-9_-]+)(?:$|\s)/.test(token.text));
+			if (commandToken.text.includes("$") || commandToken.text.includes("`") || nestedGit || ((PRIMARY_WRAPPERS.has(base) || !PRIMARY_SAFE_TEXT_COMMANDS.has(base)) && wrapperGit)) out.push(opaqueInvocation());
+			continue;
+		}
+		if (base.startsWith("git-")) {
+			out.push(opaqueInvocation());
+			continue;
+		}
+		let repoDir: string | null = null;
+		let operation: GitOperation | undefined;
+		let dryRun = false;
+		let opaque = hasStructuredConfig;
+		for (let i = 0; i < remainder.length; i++) {
+			const arg = remainder[i] as Token;
+			const width = redirectionWidth(arg, remainder[i + 1], false);
+			if (width !== 0) {
+				i += width - 1;
 				continue;
 			}
-			if (token.text === "sudo" || token.text === "command" || token.text === "time" || token.text === "nice" || token.text === "nohup" || token.text === "exec") {
-				index++;
-				while (index < segment.length && (segment[index] as Token).text.startsWith("-")) {
-					const option = segment[index] as Token;
-					if (option.text === "-C" || option.text === "-D" || option.text === "--chdir") retargeted = true;
-					if (["-C", "-D", "--chdir", "-n", "--adjustment", "-a", "--argv0"].includes(option.text)) index++;
-					index++;
-				}
-				continue;
-			}
-			if (SHELL_COMMANDS.includes(token.text.split("/").at(-1) ?? "")) {
-				if (segment.some((candidate) => candidate.text === "-c" || candidate.text.startsWith("-c")) && /\bd?git\b/.test(raw))
-					out.push({ operation: "merge", repoDir: null, retargeted: true });
-				break;
-			}
-			if (token.text === "xcrun") {
-				index++;
-				continue;
-			}
-			const base = token.text.split("/").at(-1) ?? "";
-			if (base !== "git" && base !== "dgit") break;
-			let repoDir: string | null = null;
-			let operation: "checkout" | "switch" | "merge" | undefined;
-			for (index++; index < segment.length; index++) {
-				const arg = segment[index] as Token;
-				if (arg.redirection === true) continue;
-				if (operation === undefined && (arg.text === "-C" || arg.text.startsWith("-C"))) {
-					const value = arg.text === "-C" ? segment[++index] : ({ text: arg.text.slice(2) } as Token);
-					if (value === undefined || value.text.includes("$") || value.text.includes("`")) retargeted = true;
+			if (substitutionMayRunGit(arg.text, env)) opaque = true;
+			if (operation === undefined) {
+				if (arg.text === "-C" || arg.text.startsWith("-C")) {
+					const value = arg.text === "-C" ? remainder[++i] : ({ text: arg.text.slice(2) } as Token);
+					if (value === undefined || value.text.includes("$") || value.text.includes("`")) opaque = true;
 					else repoDir = repoDir === null || value.text.startsWith("/") ? value.text : `${repoDir}/${value.text}`;
 					continue;
 				}
-				if (operation === undefined && (arg.text === "--git-dir" || arg.text === "--work-tree" || arg.text.startsWith("--git-dir=") || arg.text.startsWith("--work-tree="))) {
-					retargeted = true;
-					if (!arg.text.includes("=")) index++;
+				if (arg.text === "-c" || arg.text.startsWith("-c=") || arg.text === "--config-env" || arg.text.startsWith("--config-env=")) {
+					opaque = true;
+					if ((arg.text === "-c" || arg.text === "--config-env") && remainder[i + 1] !== undefined) i++;
 					continue;
 				}
-				if (operation === undefined && !arg.text.startsWith("-")) {
-					if (arg.text === "checkout" || arg.text === "switch" || arg.text === "merge") operation = arg.text;
-					else break;
+				if (arg.text === "--git-dir" || arg.text.startsWith("--git-dir=") || arg.text === "--work-tree" || arg.text.startsWith("--work-tree=") || arg.text === "--common-dir" || arg.text.startsWith("--common-dir=")) {
+					opaque = true;
+					if (!arg.text.includes("=") && remainder[i + 1] !== undefined) i++;
 					continue;
 				}
-				if (operation !== undefined && (arg.text.includes("$(") || arg.text.includes("`")) && /\bd?git\b/.test(raw)) retargeted = true;
+				if (arg.text.startsWith("-")) {
+					if (!["--no-pager", "--paginate", "--no-replace-objects", "--bare", "--literal-pathspecs", "--glob-pathspecs", "--noglob-pathspecs"].includes(arg.text)) opaque = true;
+					continue;
+				}
+				if (arg.text.includes("$") || arg.text.includes("`")) opaque = true;
+				else if (PRIMARY_MUTATIONS.has(arg.text)) operation = arg.text as GitOperation;
+				else if (arg.text === "commit") operation = "commit";
+				else if (arg.text === "push") operation = "push";
+				else if (PRIMARY_READ_ONLY.has(arg.text)) operation = "read";
+				else operation = "opaque";
+				continue;
 			}
-			if (operation !== undefined) out.push(retargeted ? { operation, repoDir, retargeted: true } : { operation, repoDir });
-			break;
+			if (operation === "commit" && arg.text === "--dry-run") dryRun = true;
 		}
-		if (out.length === 0 && /\bd?git\b/.test(raw) && /\b(?:checkout|switch|merge)\b/.test(raw) && (raw.includes("$(") || raw.includes("`")))
-			out.push({ operation: "merge", repoDir: null, retargeted: true });
+		if (operation === undefined) operation = "opaque";
+		if (opaque || operation === "opaque") out.push(opaqueInvocation());
+		else out.push({ operation, repoDir, ...(dryRun ? { dryRun: true } : {}) });
 	}
 	return out;
 }
@@ -1550,20 +1585,13 @@ export function decideCommit(
 }
 
 export default function mainBranchGate(pi: ExtensionAPI): void {
-	pi.on("tool_call", (event: ToolCallEvent) => {
+	pi.on("tool_call", (event: ToolCallEvent, ctx) => {
 		try {
 			if (event.toolName !== "bash") return;
 			const command = extractCommand(event.input);
 			if (!command) return;
-			const cwd =
-				typeof event.input.cwd === "string" && event.input.cwd
-					? event.input.cwd
-					: process.cwd();
-			// The bash call's own environment counts, layered over the process environment.
-			// Without it the override is reachable only by relaunching the session with the flag
-			// set, which disables the gate for every commit rather than the one the user
-			// authorised. Structured tool input is safe to trust here in a way command text is
-			// not: a commit message or a here-document body cannot forge a field.
+			const base = typeof ctx?.cwd === "string" && ctx.cwd ? ctx.cwd : process.cwd();
+			const cwd = typeof event.input.cwd === "string" && event.input.cwd ? resolve(base, event.input.cwd) : base;
 			const callEnv =
 				typeof event.input.env === "object" && event.input.env !== null
 					? (event.input.env as NodeJS.ProcessEnv)

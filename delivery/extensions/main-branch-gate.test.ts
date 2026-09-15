@@ -208,6 +208,12 @@ describe("findCommitInvocations", () => {
 		expect(decideCommit("git ci -m x", "/protected", env)?.block).toBe(true);
 	});
 
+	test("fails closed before iterating an oversized Git config count", () => {
+		const decision = decideCommit("git status", "/feature", { GIT_CONFIG_COUNT: "2147483647" });
+		expect(decision?.block).toBe(true);
+		expect(decision?.reason).toContain("structured Git configuration");
+	});
+
 	test("command-prefix Git config aliases fail closed", () => {
 		for (const command of [
 			"GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=alias.ci GIT_CONFIG_VALUE_0=commit git ci -m x",
@@ -1735,7 +1741,6 @@ test("harmless substitutions are not broadly blocked", () => {
 	test("an outer --dry-run does not cover the nested commit", () => {
 		// The outer command writes nothing, but the substitution runs a real commit. Appending
 		// the candidate only when the scan found nothing left this permitted on main.
-		const { run } = fakeGit({ "/protected": "main" });
         const command = 'git commit --dry-run -m "$(git commit -m x)"';
         expect(findCommitInvocations(command)).toEqual([
             { repoDir: null, dryRun: true },
@@ -1770,21 +1775,21 @@ test("harmless substitutions are not broadly blocked", () => {
 		).toBe(true);
 	});
 });
-
 describe("integration", () => {
-	function register(): Array<(e: unknown) => unknown> {
-		const handlers: Record<string, Array<(e: unknown) => unknown>> = {};
+	type Handler = (event: unknown, context?: { cwd?: string }) => unknown;
+	function register(): Handler[] {
+		const handlers: Record<string, Handler[]> = {};
 		const fakePi = {
 			zod: {},
 			registerTool: () => {},
-			on: (event: string, handler: (e: unknown) => unknown) => {
+			on: (event: string, handler: Handler) => {
 				const eventHandlers = handlers[event] ?? [];
 				eventHandlers.push(handler);
 				handlers[event] = eventHandlers;
 			},
 		};
 		mainBranchGate(fakePi as never);
-		return handlers.tool_call as Array<(e: unknown) => unknown>;
+		return handlers.tool_call as Handler[];
 	}
 
 	test("blocks a commit in the bash call's cwd when that repo is on main", () => {
@@ -1804,6 +1809,26 @@ describe("integration", () => {
 
 	// The Bash call's environment is one required factor, not authorization by itself; exact
 	// target-repository steering is also required, while command text cannot forge either factor.
+	test("omitted input cwd uses the session context cwd", () => {
+		const { run } = fakeGit({ "/main-repo": "main" });
+		setGitRunForTests(run);
+		const [handler] = register();
+		expect(handler?.({ toolName: "bash", input: { command: "git commit -m x" } }, { cwd: "/main-repo" })).toEqual(expect.objectContaining({ block: true }));
+	});
+
+	test("relative input cwd resolves from the session context cwd", () => {
+		const { run } = fakeGit({ "/main-repo/nested": "main" });
+		setGitRunForTests(run);
+		const [handler] = register();
+		expect(handler?.({ toolName: "bash", input: { command: "git commit -m x", cwd: "nested" } }, { cwd: "/main-repo" })).toEqual(expect.objectContaining({ block: true }));
+	});
+
+	test("an unrelated session cwd remains unblocked", () => {
+		const { run } = fakeGit({ "/feature": "feature" });
+		setGitRunForTests(run);
+		const [handler] = register();
+		expect(handler?.({ toolName: "bash", input: { command: "git commit -m x" } }, { cwd: "/feature" })).toBeUndefined();
+	});
 	test("the Bash call's env alone does not grant the override", () => {
 		const { run } = fakeGit({ "/main-repo": "main" });
 		setGitRunForTests(run);

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -58,6 +58,21 @@ describe("targetRepoAuthorizes", () => {
 		const root = setupRepo();
 		const files = [{ path: "AGENTS.md", text: `${steeringDirective("DELIVERY_ALLOW_MAIN_COMMIT")}\n` }];
 		expect(targetRepoAuthorizes(root, "DELIVERY_ALLOW_MAIN_COMMIT", fakeGit(root, files))).toBe(true);
+	});
+	test("reuses immutable tree parsing while rechecking remote authority", () => {
+		const root = setupRepo();
+		const files = [{ path: "AGENTS.md", text: `${steeringDirective("DELIVERY_ALLOW_MAIN_COMMIT")}\n` }];
+		const calls: string[][] = [];
+		const base = fakeGit(root, files);
+		const run: GitRun = (argv, cwd) => {
+			calls.push(argv);
+			return base(argv, cwd);
+		};
+		expect(targetRepoAuthorizes(root, "DELIVERY_ALLOW_MAIN_COMMIT", run)).toBe(true);
+		expect(targetRepoAuthorizes(root, "DELIVERY_ALLOW_MAIN_COMMIT", run)).toBe(true);
+		expect(calls.filter((argv) => argv[1] === "ls-remote")).toHaveLength(2);
+		expect(calls.filter((argv) => argv[1] === "ls-tree")).toHaveLength(1);
+		expect(calls.filter((argv) => argv[1] === "show")).toHaveLength(1);
 	});
 
 	test("uses remote HEAD and SHA rather than retargeted local origin metadata", () => {

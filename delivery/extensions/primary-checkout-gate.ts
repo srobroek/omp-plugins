@@ -2,8 +2,9 @@ import { existsSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { ExtensionAPI, ToolCallEvent } from "@oh-my-pi/pi-coding-agent";
-import { extractCommand, findCommitInvocations, findPrimaryMutations } from "./main-branch-gate.ts";
+import { extractCommand, findGitInvocations, unreadableReason } from "./main-branch-gate.ts";
 import { steeringDirective, targetRepoAuthorizes } from "./target-repo-steering.ts";
+
 let worktreesDirOverride: string | undefined;
 
 
@@ -250,21 +251,18 @@ export function decideCommit(
 	authorizationEnv: NodeJS.ProcessEnv = env,
 ): { block: true; reason: string } | undefined {
 	const run = injectedRun ?? defaultRun;
-	for (const mutation of findPrimaryMutations(command)) {
-		if (mutation.retargeted === true)
-			return { block: true, reason: reasonFor(resolve(cwd), "This repository mutation") };
-		const target = mutation.repoDir === null ? cwd : resolve(cwd, mutation.repoDir);
-		const checkout = checkoutOf(target);
-		if (checkout?.primary && !isRuntimeCheckout(checkout.topLevel, worktreesDir))
-			return { block: true, reason: reasonFor(checkout.topLevel, "This repository mutation") };
-	}
-	for (const invocation of findCommitInvocations(command, false)) {
-		if (invocation.dryRun) continue;
-		if (invocation.retargeted === true)
-			return { block: true, reason: reasonFor(resolve(cwd), "This commit") };
+	for (const invocation of findGitInvocations(command, env)) {
+		if (invocation.operation === "opaque" || invocation.retargeted === true)
+			return { block: true, reason: unreadableReason("an opaque Git invocation") };
+		if (invocation.operation === "push" || invocation.operation === "read" || invocation.dryRun === true) continue;
 		const target = invocation.repoDir === null ? cwd : resolve(cwd, invocation.repoDir);
 		const checkout = checkoutOf(target);
-		if (!checkout?.primary || isRuntimeCheckout(checkout.topLevel, worktreesDir)) continue;
+		if (invocation.operation === "checkout" || invocation.operation === "switch" || invocation.operation === "merge") {
+			if (checkout?.primary && !isRuntimeCheckout(checkout.topLevel, worktreesDir))
+				return { block: true, reason: reasonFor(checkout.topLevel, "This repository mutation") };
+			continue;
+		}
+		if (invocation.operation !== "commit" || !checkout?.primary || isRuntimeCheckout(checkout.topLevel, worktreesDir)) continue;
 		if (authorizationEnv[MAIN_COMMIT_ENV] === "1" && targetRepoAuthorizes(checkout.topLevel, MAIN_COMMIT_ENV, run)) continue;
 		return { block: true, reason: reasonFor(checkout.topLevel, "This commit") };
 	}

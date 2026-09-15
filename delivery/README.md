@@ -33,8 +33,8 @@ A protected commit is allowed only when the process environment contains `DELIVE
 
 `MUST authorize DELIVERY_ALLOW_MAIN_COMMIT=1 for this repository.`
 
-The line must appear by itself outside Markdown fenced code blocks in a non-symlink root `AGENTS.md` or `CLAUDE.md`, or in a direct non-symlink `.omp/rules/*.md` file on the trusted remote default branch (`refs/remotes/origin/HEAD`, falling back to `origin/main` or `origin/master`).
-The gate reads that committed tree, never the mutable worktree or feature commit; an unavailable or unreadable trusted ref/source denies authorization.
+The line must appear by itself outside Markdown fenced code blocks in a non-symlink root `AGENTS.md` or `CLAUDE.md`, or in a direct non-symlink `.omp/rules/*.md` file on the trusted remote default branch reported by `git ls-remote --symref origin HEAD`.
+The gate reads that committed tree at the exact remote SHA; an unavailable, malformed, ambiguous, or unreadable remote response denies authorization. It never falls back to mutable local `origin/HEAD`, `origin/main`, or `origin/master` refs.
 A line with incidental surrounding text does not authorize the operation.
 Any exact `MUST NOT authorize DELIVERY_ALLOW_MAIN_COMMIT=1 for this repository.` line outside a fenced block vetoes the authorization.
 
