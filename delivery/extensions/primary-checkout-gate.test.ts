@@ -90,7 +90,7 @@ describe("getWorktreesDir", () => {
 		const xdg = join(home, "xdg");
 		const profileRoot = join(xdg, "omp", "profiles", "acme");
 		mkdirSync(profileRoot, { recursive: true });
-		const source = join(process.cwd(), "delivery/extensions/primary-checkout-gate.ts");
+		const source = join(import.meta.dir, "primary-checkout-gate.ts");
 		const script = `import { getWorktreesDir } from ${JSON.stringify(source)}; console.log(getWorktreesDir());`;
 		const bun = Bun.which("bun") ?? process.execPath;
 		const result = Bun.spawnSync([bun, "-e", script], {
