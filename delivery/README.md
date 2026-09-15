@@ -33,9 +33,10 @@ A protected commit is allowed only when the process environment contains `DELIVE
 
 `MUST authorize DELIVERY_ALLOW_MAIN_COMMIT=1 for this repository.`
 
-The line must appear by itself in a non-symlink root `AGENTS.md` or `CLAUDE.md`, or in a direct non-symlink `.omp/rules/*.md` file.
+The line must appear by itself outside Markdown fenced code blocks in a non-symlink root `AGENTS.md` or `CLAUDE.md`, or in a direct non-symlink `.omp/rules/*.md` file on the trusted remote default branch (`refs/remotes/origin/HEAD`, falling back to `origin/main` or `origin/master`).
+The gate reads that committed tree, never the mutable worktree or feature commit; an unavailable or unreadable trusted ref/source denies authorization.
 A line with incidental surrounding text does not authorize the operation.
-Any exact `MUST NOT authorize DELIVERY_ALLOW_MAIN_COMMIT=1 for this repository.` line vetoes the authorization.
+Any exact `MUST NOT authorize DELIVERY_ALLOW_MAIN_COMMIT=1 for this repository.` line outside a fenced block vetoes the authorization.
 
 ### `primary-checkout-gate`
 
@@ -44,11 +45,11 @@ The primary checkout is the checkout whose Git directory equals its common Git d
 Redispatch repository work with `isolated: true` so OMP places it in standalone clones under its configured isolation root. Those clones pass even when Git classifies them as primary.
 Paths outside a repository, internal URIs, and the `.omp/` and `.beads/` state directories pass.
 
-A protected primary checkout is allowed only when the process environment contains `DELIVERY_ALLOW_PRIMARY_CHECKOUT=1` and the target repository contains this exact line:
+A protected primary checkout is allowed only when the process environment contains `DELIVERY_ALLOW_PRIMARY_CHECKOUT=1` and the trusted remote default tree contains this exact line:
 
 `MUST authorize DELIVERY_ALLOW_PRIMARY_CHECKOUT=1 for this repository.`
 
-The same source rules and veto precedence apply to this authorization.
+The same committed-source, fenced-block, symlink, and veto rules apply to this authorization.
 A bash call carrying the authorized override grants later `edit` and `write` calls in that same canonical primary checkout for the current session.
 The grant does not transfer to another repository or an OMP-isolated clone.
 

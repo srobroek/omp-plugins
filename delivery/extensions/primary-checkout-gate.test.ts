@@ -3,11 +3,12 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 
+const trustedSources = new Map<string, string>();
+
 function authorizePrimary(root: string, body = "MUST authorize DELIVERY_ALLOW_PRIMARY_CHECKOUT=1 for this repository."): void {
 	writeFileSync(join(root, "CLAUDE.md"), `${body}\n`);
+	trustedSources.set(root, `${body}\n`);
 }
-
-import { setWorktreesDir } from "@oh-my-pi/pi-utils";
 
 import primaryCheckoutGate, {
 	checkoutOf,
@@ -18,20 +19,32 @@ import primaryCheckoutGate, {
 	getWorktreesDir,
 	isRuntimeCheckout,
 	setGitRunForTests,
+	setWorktreesDir,
 } from "./primary-checkout-gate.ts";
 
 type Repo = { topLevel: string; primary: boolean };
 
-/** A fake `git rev-parse --show-toplevel --git-dir --git-common-dir` keyed by the repo that contains cwd. */
+/** A fake Git seam keyed by repository, including the trusted remote-default steering tree. */
 function fakeGit(repos: Repo[]): GitRun {
-	return (_argv, cwd) => {
+	return (argv, cwd) => {
 		const repo = repos.find((r) => cwd === r.topLevel || cwd.startsWith(`${r.topLevel}/`));
 		if (!repo) return { exitCode: 128, stdout: "" };
-		const gitDir = repo.primary ? `${repo.topLevel}/.git` : `/primary/.git/worktrees/${repo.topLevel.split("/").pop()}`;
-		const common = repo.primary ? `${repo.topLevel}/.git` : "/primary/.git";
-		return { exitCode: 0, stdout: `${repo.topLevel}\n${gitDir}\n${common}\n` };
+		if (argv[1] === "rev-parse" && argv.includes("--show-toplevel")) {
+			const gitDir = repo.primary ? `${repo.topLevel}/.git` : `/primary/.git/worktrees/${repo.topLevel.split("/").pop()}`;
+			const common = repo.primary ? `${repo.topLevel}/.git` : "/primary/.git";
+			return { exitCode: 0, stdout: `${repo.topLevel}\n${gitDir}\n${common}\n` };
+		}
+		if (argv[1] === "symbolic-ref") return { exitCode: 0, stdout: "refs/remotes/origin/main\n" };
+		if (argv[1] === "rev-parse" && argv.includes("--verify")) return { exitCode: 0, stdout: "deadbeef\n" };
+		if (argv[1] === "ls-tree") {
+			const text = trustedSources.get(repo.topLevel);
+			return { exitCode: 0, stdout: text === undefined ? "" : `100644 blob deadbeef\tCLAUDE.md\0` };
+		}
+		if (argv[1] === "show") return { exitCode: 0, stdout: trustedSources.get(repo.topLevel) ?? "" };
+		return { exitCode: 1, stdout: "" };
 	};
 }
+
 
 let scratch: string;
 function setup(): { primary: string; linked: string; outside: string } {

@@ -13,16 +13,20 @@ import mainBranchGate, {
 	tokenize,
 } from "./main-branch-gate.ts";
 
+type TrustedSource = { path: string; text: string; mode?: string; type?: string };
+const trustedSources: Record<string, TrustedSource[]> = {};
+
 function steeredRepo(envName: string, body = `MUST authorize ${envName}=1 for this repository.`): string {
 	const root = mkdtempSync(join("/tmp", "delivery-steering-"));
 	mkdirSync(join(root, "src"), { recursive: true });
 	writeFileSync(join(root, "CLAUDE.md"), `${body}\n`);
+	trustedSources[root] = [{ path: "CLAUDE.md", text: `${body}\n` }];
 	return root;
 }
 
 type Call = { argv: string[]; cwd: string };
 
-/** A fake git seam over a fixed cwd -> branch table, including canonical root lookup. */
+/** A fake git seam over a fixed cwd -> branch table and trusted remote-default tree. */
 function fakeGit(
 	table: Record<string, string>,
 	calls: Call[] = [],
@@ -32,7 +36,21 @@ function fakeGit(
 		calls.push({ argv, cwd });
 		const root = roots.find((candidate) => cwd === candidate || cwd.startsWith(`${candidate}/`));
 		if (root === undefined) return { exitCode: 128, stdout: "" };
-		if (argv.includes("--show-toplevel")) return { exitCode: 0, stdout: `${root}\n` };
+		if (argv[1] === "rev-parse" && argv.includes("--show-toplevel")) return { exitCode: 0, stdout: `${root}\n` };
+		if (argv[1] === "symbolic-ref") return { exitCode: 0, stdout: "refs/remotes/origin/main\n" };
+		if (argv[1] === "rev-parse" && argv.includes("--verify")) return { exitCode: 0, stdout: "deadbeef\n" };
+		if (argv[1] === "ls-tree") {
+			const entries = trustedSources[root] ?? [];
+			return {
+				exitCode: 0,
+				stdout: entries.map((entry) => `${entry.mode ?? "100644"} ${entry.type ?? "blob"} deadbeef\t${entry.path}\0`).join(""),
+			};
+		}
+		if (argv[1] === "show") {
+			const path = argv.at(-1)?.split(":").at(-1);
+			const entry = (trustedSources[root] ?? []).find((candidate) => candidate.path === path);
+			return entry ? { exitCode: 0, stdout: entry.text } : { exitCode: 1, stdout: "" };
+		}
 		return { exitCode: 0, stdout: `${table[root]}\n` };
 	};
 	return { run, calls };
@@ -2050,15 +2068,21 @@ describe("repository steering", () => {
 				join(ruleRoot, ".omp", "rules", "allow.md"),
 				"MUST authorize DELIVERY_ALLOW_MAIN_COMMIT=1 for this repository.\n",
 			);
+			trustedSources[ruleRoot] = [{ path: ".omp/rules/allow.md", text: "MUST authorize DELIVERY_ALLOW_MAIN_COMMIT=1 for this repository.\n" }];
 			mkdirSync(join(vetoRoot, ".omp", "rules"), { recursive: true });
 			writeFileSync(
 				join(vetoRoot, ".omp", "rules", "deny.md"),
 				"MUST NOT authorize DELIVERY_ALLOW_MAIN_COMMIT=1 for this repository.\n",
 			);
+			trustedSources[vetoRoot] = [
+				{ path: "CLAUDE.md", text: "MUST authorize DELIVERY_ALLOW_MAIN_COMMIT=1 for this repository.\n" },
+				{ path: ".omp/rules/deny.md", text: "MUST NOT authorize DELIVERY_ALLOW_MAIN_COMMIT=1 for this repository.\n" },
+			];
 			const real = join(symlinkRoot, "real.md");
 			rmSync(join(symlinkRoot, "CLAUDE.md"));
 			writeFileSync(real, "MUST authorize DELIVERY_ALLOW_MAIN_COMMIT=1 for this repository.\n");
 			symlinkSync(real, join(symlinkRoot, "CLAUDE.md"));
+			trustedSources[symlinkRoot] = [{ path: "CLAUDE.md", text: "MUST authorize DELIVERY_ALLOW_MAIN_COMMIT=1 for this repository.\n", mode: "120000" }];
 			const { run } = fakeGit({ [ruleRoot]: "main", [vetoRoot]: "main", [symlinkRoot]: "main" });
 			setGitRunForTests(run);
 			const env = { DELIVERY_ALLOW_MAIN_COMMIT: "1" };

@@ -1,11 +1,47 @@
 import { existsSync, statSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, isAbsolute, relative, resolve, sep } from "node:path";
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { ExtensionAPI, ToolCallEvent } from "@oh-my-pi/pi-coding-agent";
-import { getWorktreesDir as upstreamGetWorktreesDir } from "@oh-my-pi/pi-utils";
-
 import { extractCommand, findCommitInvocations } from "./main-branch-gate.ts";
 import { steeringDirective, targetRepoAuthorizes } from "./target-repo-steering.ts";
+
+let worktreesDirOverride: string | undefined;
+
+
+function resolveWorktreeBase(value: string | undefined): string | undefined {
+	const trimmed = value?.trim();
+	if (!trimmed) return undefined;
+	let path = trimmed;
+	if (path === "~") path = homedir();
+	else if (path.startsWith("~/") || path.startsWith("~\\")) path = homedir() + path.slice(1);
+	return isAbsolute(path) ? resolve(path) : undefined;
+}
+
+/** Replace the configured worktree base for tests and host configuration. */
+export function setWorktreesDir(path: string | undefined): string | undefined {
+	worktreesDirOverride = resolveWorktreeBase(path);
+	return worktreesDirOverride;
+}
+
+function activeProfile(): string | undefined {
+	const raw = process.env.OMP_PROFILE !== undefined ? process.env.OMP_PROFILE : process.env.PI_PROFILE;
+	const profile = raw?.trim();
+	if (!profile || profile === "default" || !/^[a-z0-9][a-z0-9._-]{0,63}$/.test(profile)) return undefined;
+	return profile;
+}
+
+/** Resolve the harness-owned worktree root without loading native OMP modules in child tests. */
+export function getWorktreesDir(): string {
+	const configured = resolveWorktreeBase(process.env.OMP_WORKTREE_DIR);
+	if (configured) return configured;
+	if (worktreesDirOverride) return worktreesDirOverride;
+	const profile = activeProfile();
+	const xdg = process.env.XDG_DATA_HOME;
+	const dataRoot = xdg && (profile ? existsSync(join(xdg, "omp", "profiles", profile)) : existsSync(join(xdg, "omp")))
+		? join(xdg, "omp")
+		: join(homedir(), ".omp");
+	return profile ? join(dataRoot, "profiles", profile, "wt") : join(dataRoot, "wt");
+}
 
 /**
  * Refuse edits and commits inside a repository's primary checkout.
@@ -36,12 +72,6 @@ const HASHLINE_HEADER = /^\s*\[([^#\r\n]+)#[0-9a-fA-F]{4}\]\s*$/;
 
 /** Agent state that lives beside the code and is written by the harness, not by the human. */
 const STATE_DIRS: Record<string, true> = { ".omp": true, ".beads": true };
-
-/** Resolve the harness-owned worktree root using the host's configured path semantics. */
-export function getWorktreesDir(): string {
-	return upstreamGetWorktreesDir();
-}
-
 
 export type GitRun = (argv: string[], cwd: string) => { exitCode: number; stdout: string };
 
