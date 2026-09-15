@@ -10,6 +10,12 @@ function authorizePrimary(root: string, body = "MUST authorize DELIVERY_ALLOW_PR
 	trustedSources.set(root, `${body}\n`);
 }
 
+function authorizeMain(root: string, body = "MUST authorize DELIVERY_ALLOW_MAIN_COMMIT=1 for this repository."): void {
+	writeFileSync(join(root, "CLAUDE.md"), `${body}\n`);
+	trustedSources.set(root, `${body}\n`);
+}
+
+import { findGitInvocations } from "./main-branch-gate.ts";
 import primaryCheckoutGate, {
 	checkoutOf,
 	decideCommit,
@@ -21,24 +27,37 @@ import primaryCheckoutGate, {
 	setGitRunForTests,
 	setWorktreesDir,
 } from "./primary-checkout-gate.ts";
+import { steeringDirective } from "./target-repo-steering.ts";
 
 type Repo = { topLevel: string; primary: boolean };
+type RemoteState = { origin?: string; commonDir?: string; sha?: string; offline?: boolean; lsRemoteCalls?: number };
+
+const DEFAULT_SHA = "a".repeat(40);
+const ALT_SHA = "b".repeat(40);
 
 /** A fake Git seam keyed by repository, including the trusted remote-default steering tree. */
-function fakeGit(repos: Repo[]): GitRun {
+function fakeGit(repos: Repo[], state: RemoteState = {}): GitRun {
 	return (argv, cwd) => {
 		const repo = repos.find((r) => cwd === r.topLevel || cwd.startsWith(`${r.topLevel}/`));
 		if (!repo) return { exitCode: 128, stdout: "" };
 		if (argv[1] === "rev-parse" && argv.includes("--show-toplevel")) {
-			const gitDir = repo.primary ? `${repo.topLevel}/.git` : `/primary/.git/worktrees/${repo.topLevel.split("/").pop()}`;
-			const common = repo.primary ? `${repo.topLevel}/.git` : "/primary/.git";
+			const gitDir = repo.primary ? (state.commonDir ?? `${repo.topLevel}/.git`) : `/primary/.git/worktrees/${repo.topLevel.split("/").pop()}`;
+			const common = state.commonDir ?? (repo.primary ? `${repo.topLevel}/.git` : "/primary/.git");
 			return { exitCode: 0, stdout: `${repo.topLevel}\n${gitDir}\n${common}\n` };
 		}
-		if (argv[1] === "symbolic-ref") return { exitCode: 0, stdout: "refs/remotes/origin/main\n" };
-		if (argv[1] === "rev-parse" && argv.includes("--verify")) return { exitCode: 0, stdout: "deadbeef\n" };
+		if (argv[1] === "rev-parse" && argv.includes("--git-common-dir")) return { exitCode: 0, stdout: `${state.commonDir ?? (repo.primary ? `${repo.topLevel}/.git` : "/primary/.git")}\n` };
+		if (argv[1] === "config" && argv[2] === "--get-all" && argv[3] === "remote.origin.url")
+			return { exitCode: 0, stdout: `${state.origin ?? `https://example.test/${repo.topLevel.replaceAll("/", "_")}.git`}\n` };
+		if (argv[1] === "ls-remote") {
+			state.lsRemoteCalls = (state.lsRemoteCalls ?? 0) + 1;
+			if (state.offline) return { exitCode: 128, stdout: "" };
+			const sha = state.sha ?? DEFAULT_SHA;
+			return { exitCode: 0, stdout: `ref: refs/heads/main\tHEAD\n${sha}\tHEAD\n` };
+		}
+		if (argv[1] === "rev-parse" && argv.includes("--verify")) return { exitCode: 0, stdout: `${state.sha ?? DEFAULT_SHA}\n` };
 		if (argv[1] === "ls-tree") {
 			const text = trustedSources.get(repo.topLevel);
-			return { exitCode: 0, stdout: text === undefined ? "" : `100644 blob deadbeef\tCLAUDE.md\0` };
+			return { exitCode: 0, stdout: text === undefined ? "" : `100644 blob ${state.sha ?? DEFAULT_SHA}\tCLAUDE.md\0` };
 		}
 		if (argv[1] === "show") return { exitCode: 0, stdout: trustedSources.get(repo.topLevel) ?? "" };
 		return { exitCode: 1, stdout: "" };
@@ -61,6 +80,7 @@ afterEach(() => {
 	setGitRunForTests(null);
 	setWorktreesDir(undefined);
 	delete process.env.OMP_WORKTREE_DIR;
+	trustedSources.clear();
 	if (scratch) rmSync(scratch, { recursive: true, force: true });
 });
 
@@ -191,12 +211,16 @@ describe("decideCommit", () => {
 		expect(decideCommit("git commit -m 'fix'", primary, { DELIVERY_ALLOW_PRIMARY_CHECKOUT: "1" })?.block).toBe(true);
 	});
 
-	test("does not block the read-only git inspection reproducer", () => {
+	test("refuses the unresolved dynamic -C inspection chain", () => {
 		const { primary } = setup();
 		const inspection = `for r in omp-orchestrate sniff agentic-scaffold slopvac; do
-		d=/Users/sjors/personal/dev/$r; git -C "$d" fetch -q 2>/dev/null; b=$(git -C "$d" rev-parse --abbrev-ref HEAD); u=$(git -C "$d" rev-parse --abbrev-ref '@{upstream}' 2>/dev/null || echo origin/main); behind=$(git -C "$d" rev-list --count HEAD.."$u" 2>/dev/null); ahead=$(git -C "$d" rev-list --count "$u"..HEAD 2>/dev/null); rules=$(git -C "$d" diff --name-only HEAD "$u" -- 'rules/*' 'AGENTS.md' 'CLAUDE.md' '*/AGENTS.md' 2>/dev/null | wc -l | tr -d ' '); printf '%-18s %-40s behind=%s ahead=%s rules/steering files differing=%s\\n' "$r" "$b -> $u" "$behind" "$ahead" "$rules"; done`;
-		expect(decideCommit(inspection, primary, {})).toBeUndefined();
-        expect(decideCommit('git -C "$d" commit -m x', primary, {})).toBeUndefined();
+		d=/Users/sjors/personal/dev/$r; git -C "$d" fetch -q 2>/dev/null; b=$(git -C "$d" rev-parse --abbrev-ref HEAD); done`;
+		expect(decideCommit(inspection, primary, {})).toMatchObject({ block: true });
+		expect(decideCommit(inspection, primary, {})?.reason).toContain("not readable here");
+	});
+	test("static -C read-only commands remain allowed", () => {
+		const { primary } = setup();
+		expect(decideCommit("git -C /elsewhere status", primary, {})).toBeUndefined();
 	});
 
 	test("does not block quoted git prose", () => {
@@ -208,6 +232,71 @@ describe("decideCommit", () => {
 		const { primary } = setup();
 		expect(decideCommit("git commit -m x", primary, {})?.block).toBe(true);
 		expect(decideCommit(`cd ${primary} && git commit -m x`, primary, {})?.block).toBe(true);
+    });
+});
+
+describe("canonical-main primary commits", () => {
+	test("requires the command-local main env and trusted default-branch directive", () => {
+		const { primary } = setup();
+		authorizeMain(primary);
+		expect(decideCommit("git commit -m x", primary, { DELIVERY_ALLOW_MAIN_COMMIT: "1" })).toBeUndefined();
+		expect(decideCommit("git commit -m x", primary, {} )?.block).toBe(true);
+
+		const noDirective = join(scratch, "no-directive");
+		mkdirSync(join(noDirective, "src"), { recursive: true });
+		setGitRunForTests(fakeGit([
+			{ topLevel: primary, primary: true },
+			{ topLevel: noDirective, primary: true },
+		]));
+		expect(decideCommit("git commit -m x", noDirective, { DELIVERY_ALLOW_MAIN_COMMIT: "1" })?.block).toBe(true);
+	});
+
+	test.each([
+		["working-tree-only", "MUST authorize DELIVERY_ALLOW_MAIN_COMMIT=1 for this repository."],
+		["feature-branch text", "feature branch: MUST authorize DELIVERY_ALLOW_MAIN_COMMIT=1 for this repository."],
+		["fenced text", "```markdown\nMUST authorize DELIVERY_ALLOW_MAIN_COMMIT=1 for this repository.\n```"],
+	])("rejects %s steering", (_name, body) => {
+		const { primary } = setup();
+		writeFileSync(join(primary, "CLAUDE.md"), `${body}\n`);
+		// No trusted remote-default tree entry is installed for the first case; for the other
+		// cases the fake tree carries only the non-standalone or fenced text.
+		if (_name !== "working-tree-only") trustedSources.set(primary, `${body}\n`);
+		expect(decideCommit("git commit -m x", primary, { DELIVERY_ALLOW_MAIN_COMMIT: "1" })?.block).toBe(true);
+	});
+
+	test("does not borrow canonical-main steering from another repository", () => {
+		const { primary } = setup();
+		const other = join(scratch, "other-repo");
+		mkdirSync(join(other, "src"), { recursive: true });
+		authorizeMain(other);
+		setGitRunForTests(fakeGit([
+			{ topLevel: primary, primary: true },
+			{ topLevel: other, primary: true },
+		]));
+		expect(decideCommit("git commit -m x", primary, { DELIVERY_ALLOW_MAIN_COMMIT: "1" })?.block).toBe(true);
+		expect(decideCommit("git commit -m x", other, { DELIVERY_ALLOW_MAIN_COMMIT: "1" })).toBeUndefined();
+	});
+
+	test("does not treat primary env as a main-commit authorization", () => {
+		const { primary } = setup();
+		authorizeMain(primary);
+		expect(decideCommit("git commit -m x", primary, { DELIVERY_ALLOW_PRIMARY_CHECKOUT: "1" })?.block).toBe(true);
+		expect(decideEdit("write", { path: join(primary, "src", "new.ts") }, "/", { DELIVERY_ALLOW_PRIMARY_CHECKOUT: "1" })?.block).toBe(true);
+	});
+
+    test("canonical-main authorization does not authorize checkout, switch, merge, or push", () => {
+        const { primary } = setup();
+        authorizeMain(primary);
+        for (const command of [
+            "git checkout main",
+            "git switch main",
+            "git merge feature",
+            "git push origin main",
+        ]) {
+            const decision = decideCommit(command, primary, { DELIVERY_ALLOW_MAIN_COMMIT: "1" });
+            if (command.startsWith("git push")) expect(decision, command).toBeUndefined();
+            else expect(decision, command).toMatchObject({ block: true });
+        }
     });
 });
 
@@ -238,12 +327,140 @@ describe("integration", () => {
 		return { toolCall, sessionStart };
 	}
 
+	test("requires the main override on the same bash call", () => {
+		const { primary } = setup();
+		authorizeMain(primary);
+		const { toolCall } = register();
+		expect(
+			toolCall({
+				toolName: "bash",
+				input: { cwd: primary, command: "git commit -m x", env: { DELIVERY_ALLOW_MAIN_COMMIT: "1" } },
+			}),
+		).toBeUndefined();
+		expect(
+			toolCall({ toolName: "bash", input: { cwd: primary, command: "git commit -m x" } }),
+		).toMatchObject({ block: true });
+	});
+
+    test("unrelated tool calls do not crash or receive canonical-main authorization", () => {
+        const { primary } = setup();
+        authorizeMain(primary);
+        const { toolCall } = register();
+        expect(toolCall({ toolName: "github", input: { op: "repo_view" } })).toBeUndefined();
+        expect(toolCall({ toolName: "eval", input: { code: "1 + 1" } })).toBeUndefined();
+        expect(
+            toolCall({
+                toolName: "bash",
+                input: { cwd: primary, command: "git checkout main", env: { DELIVERY_ALLOW_MAIN_COMMIT: "1" } },
+            }),
+        ).toMatchObject({ block: true });
+    });
+    test("registered primary handler rejects a nested checkout mutation chain", () => {
+        const { primary } = setup();
+        const { toolCall } = register();
+        expect(toolCall({
+            toolName: "bash",
+            input: { cwd: primary, command: 'echo "$(git checkout main)"' },
+        })).toMatchObject({ block: true });
+    });
+
 	test("a bash-call env grant allows later edits in the same primary checkout", () => {
 		const { primary } = setup();
 		authorizePrimary(primary);
 		const { toolCall } = register();
 		expect(toolCall({ toolName: "bash", input: { cwd: primary, env: { DELIVERY_ALLOW_PRIMARY_CHECKOUT: "1" } } })).toBeUndefined();
 		expect(toolCall({ toolName: "write", input: { path: join(primary, "src", "new.ts"), content: "" } })).toBeUndefined();
+	});
+
+	test("revokes a grant when origin changes and requires a new grant after restoration", () => {
+		const { primary } = setup();
+		authorizePrimary(primary);
+		const state: RemoteState = {};
+		setGitRunForTests(fakeGit([{ topLevel: primary, primary: true }], state));
+		const { toolCall } = register();
+		const context = { cwd: "/", sessionManager: { getSessionId: () => "origin-sequence" } };
+		const grant = { toolName: "bash", input: { cwd: primary, env: { DELIVERY_ALLOW_PRIMARY_CHECKOUT: "1" } } };
+		const write = { toolName: "write", input: { path: join(primary, "src", "new.ts"), content: "" } };
+		expect(toolCall(grant, context)).toBeUndefined();
+		expect(toolCall(write, context)).toBeUndefined();
+		state.origin = "https://evil.test/redirect.git";
+		expect(toolCall(write, context)).toMatchObject({ block: true });
+		state.origin = `https://example.test/${primary.replaceAll("/", "_")}.git`;
+		expect(toolCall(write, context)).toMatchObject({ block: true });
+		expect(toolCall(grant, context)).toBeUndefined();
+		expect(toolCall(write, context)).toBeUndefined();
+	});
+
+	test("revokes a grant when the common directory changes and requires a new grant after restoration", () => {
+		const { primary } = setup();
+		authorizePrimary(primary);
+		const state: RemoteState = {};
+		setGitRunForTests(fakeGit([{ topLevel: primary, primary: true }], state));
+		const { toolCall } = register();
+		const context = { cwd: "/", sessionManager: { getSessionId: () => "common-dir-sequence" } };
+		const grant = { toolName: "bash", input: { cwd: primary, env: { DELIVERY_ALLOW_PRIMARY_CHECKOUT: "1" } } };
+		const write = { toolName: "write", input: { path: join(primary, "src", "new.ts"), content: "" } };
+		expect(toolCall(grant, context)).toBeUndefined();
+		expect(toolCall(write, context)).toBeUndefined();
+		state.commonDir = `${primary}/alternate.git`;
+		expect(toolCall(write, context)).toMatchObject({ block: true });
+		state.commonDir = `${primary}/.git`;
+		expect(toolCall(write, context)).toMatchObject({ block: true });
+		expect(toolCall(grant, context)).toBeUndefined();
+		expect(toolCall(write, context)).toBeUndefined();
+	});
+
+	test.each([
+		["directive removed", "not an authorization"],
+		["veto added", `${steeringDirective("DELIVERY_ALLOW_PRIMARY_CHECKOUT")}\nMUST NOT authorize DELIVERY_ALLOW_PRIMARY_CHECKOUT=1 for this repository.`],
+	])("revokes a grant when the remote SHA changes and the primary directive is %s", (_name, body) => {
+		const { primary } = setup();
+		authorizePrimary(primary);
+		const state: RemoteState = {};
+		setGitRunForTests(fakeGit([{ topLevel: primary, primary: true }], state));
+		const { toolCall } = register();
+		const context = { cwd: "/", sessionManager: { getSessionId: () => `sha-${_name}` } };
+		const grant = { toolName: "bash", input: { cwd: primary, env: { DELIVERY_ALLOW_PRIMARY_CHECKOUT: "1" } } };
+		const write = { toolName: "write", input: { path: join(primary, "src", "new.ts"), content: "" } };
+		expect(toolCall(grant, context)).toBeUndefined();
+		expect(toolCall(write, context)).toBeUndefined();
+		state.sha = ALT_SHA;
+		trustedSources.set(primary, `${body}\n`);
+		expect(toolCall(write, context)).toMatchObject({ block: true });
+		state.sha = DEFAULT_SHA;
+		authorizePrimary(primary);
+		expect(toolCall(write, context)).toMatchObject({ block: true });
+	});
+
+	test("revokes a grant while remote authority is offline", () => {
+		const { primary } = setup();
+		authorizePrimary(primary);
+		const state: RemoteState = {};
+		setGitRunForTests(fakeGit([{ topLevel: primary, primary: true }], state));
+		const { toolCall } = register();
+		const context = { cwd: "/", sessionManager: { getSessionId: () => "offline-sequence" } };
+		const grant = { toolName: "bash", input: { cwd: primary, env: { DELIVERY_ALLOW_PRIMARY_CHECKOUT: "1" } } };
+		const write = { toolName: "write", input: { path: join(primary, "src", "new.ts"), content: "" } };
+		expect(toolCall(grant, context)).toBeUndefined();
+		state.offline = true;
+		expect(toolCall(write, context)).toMatchObject({ block: true });
+		state.offline = false;
+		expect(toolCall(write, context)).toMatchObject({ block: true });
+	});
+
+	test("revalidates unchanged anchors once per edit without reparsing the tree", () => {
+		const { primary } = setup();
+		authorizePrimary(primary);
+		const state: RemoteState = {};
+		setGitRunForTests(fakeGit([{ topLevel: primary, primary: true }], state));
+		const { toolCall } = register();
+		const context = { cwd: "/", sessionManager: { getSessionId: () => "bounded-sequence" } };
+		const grant = { toolName: "bash", input: { cwd: primary, env: { DELIVERY_ALLOW_PRIMARY_CHECKOUT: "1" } } };
+		const write = { toolName: "write", input: { path: join(primary, "src", "new.ts"), content: "" } };
+		expect(toolCall(grant, context)).toBeUndefined();
+		expect(toolCall(write, context)).toBeUndefined();
+		expect(toolCall(write, context)).toBeUndefined();
+		expect(state.lsRemoteCalls).toBe(3);
 	});
 
 	test("a grant is scoped to its primary checkout", () => {
@@ -281,3 +498,73 @@ describe("integration", () => {
 		expect(toolCall({ toolName: "write", input: { path: join(primary, "src", "new.ts"), content: "" } })).toMatchObject({ block: true });
 	});
 });
+
+describe("final primary parser bypass controls", () => {
+	test("direct git helpers fail closed before the generic non-Git skip", () => {
+		const { primary } = setup();
+		for (const command of [
+			"/usr/libexec/git-core/git-commit -m x",
+			"/usr/libexec/git-core/git-checkout feature",
+			"/usr/libexec/git-core/git-switch feature",
+			"/usr/libexec/git-core/git-merge feature",
+			"/usr/libexec/git-core/git-unknown-helper x",
+		]) expect(decideCommit(command, primary)?.block, command).toBe(true);
+		expect(decideCommit("echo git-notes.txt", primary)).toBeUndefined();
+		expect(findGitInvocations("/usr/libexec/git-core/git-unknown-helper x")).toEqual([{ operation: "opaque", repoDir: null, retargeted: true }]);
+	});
+
+	test("remote origin mutations are primary mutations while reads stay allowed", () => {
+		const { primary } = setup();
+		for (const command of [
+			"git remote set-url origin https://evil.test/repo.git",
+			"git remote remove origin",
+			"git remote rename origin evil",
+			"git config remote.origin.url https://evil.test/repo.git",
+			"alias mutate='git remote set-url origin evil'; mutate",
+			"env git remote set-url origin evil",
+		]) expect(decideCommit(command, primary)?.block, command).toBe(true);
+		expect(decideCommit("git remote -v", primary)).toBeUndefined();
+		expect(decideCommit("git fetch origin", primary)).toBeUndefined();
+	});
+
+	test.each([
+		"cd /primary && git commit -m x",
+		"cd /primary ; git checkout feature",
+		"pushd /primary && git merge feature",
+		"{ git commit -m x; }",
+		"(git commit -m x)",
+		"cd /does-not-exist ; git commit -m x",
+		"cd /does-not-exist && git commit -m x",
+	])("registered primary cwd/grouping chain fails closed: %s", (command) => {
+		const { primary } = setup();
+		expect(decideCommit(command, primary)?.block, command).toBe(true);
+	});
+});
+test("absolute Git after a cwd transition resolves the transitioned primary checkout", () => {
+		const { primary, linked } = setup();
+		const command = `cd ${primary} && /usr/bin/git commit -m x`;
+		expect(decideCommit(command, linked)?.block, command).toBe(true);
+	});
+
+	test.each(["/usr/bin/git commit -m x", "/bin/git commit -m x", "/opt/homebrew/bin/git commit -m x"])(
+		"absolute Git executable after a cwd transition is not treated as ordinary text: %s",
+		(git) => {
+			const { primary, linked } = setup();
+			const command = `cd ${primary} && ${git}`;
+			expect(decideCommit(command, linked)?.block, command).toBe(true);
+		},
+	);
+
+	test("mixed cwd transitions never reuse the first transition", () => {
+		const { primary, linked } = setup();
+		for (const command of [
+			`cd ${linked} && /usr/bin/git status; cd ${primary} && git commit -m x`,
+			`cd ${linked} && /usr/bin/git status && cd ${primary} && git commit -m x`,
+			`cd ${linked} && /usr/bin/git status || cd ${primary} && git commit -m x`,
+			`cd ${linked} && /usr/bin/git status\ncd ${primary} && git commit -m x`,
+			`cd ${linked} && (/usr/bin/git status; cd ${primary} && git commit -m x)`,
+			`cd ${linked} && /usr/bin/git status; cd ${primary} && /bin/git commit -m x`,
+		]) {
+			expect(decideCommit(command, linked)?.block, command).toBe(true);
+		}
+	});

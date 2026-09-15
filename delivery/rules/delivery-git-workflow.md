@@ -12,6 +12,7 @@ LEGEND: Rules carry stable IDs (GW-n).
 - A PR (`gh pr create`) is the default for reviewed or outward-facing work.
 - Agent-authored PRs start as drafts (`gh pr create --draft`). Promote with `gh pr ready` only after implementation, local validation, required review, and CI are complete with no known blocker.
 - The body states what changed, why, and the test plan. Use one close keyword per issue line.
+- MUST GW-8: When the target repository is external, upstream, or not controlled by the user, omit internal linkage fields and sections from every externally visible PR or issue title, body, comment, review, and template field. Never mention Beads, bead IDs, internal IDs, agents, gates, orchestration, workflow rationale, or placeholders for omitted context. Controlled repositories retain the Beads linkage below.
 - MUST GW-7: under squash merge the PR title becomes the commit subject, so it carries a conventional type and, in a monorepo, the package scope (`fix(beads): catalog refresh fails when offline`). Release automation reads subjects, not body bullets. Write the title for end users, never spec IDs, task references, or phase names.
 - Agents MUST NOT checkout or switch to `main` or `master`, or locally merge on those branches, unless repository-local steering explicitly authorizes the operation. An explicit user request or the absence of a PR flow does not authorize it.
 
@@ -23,10 +24,27 @@ The primary-checkout override requires `MUST authorize DELIVERY_ALLOW_PRIMARY_CH
 Each directive must occupy its own line in a non-symlink root `AGENTS.md` or `CLAUDE.md`, or a direct non-symlink `.omp/rules/*.md` file.
 An exact `MUST NOT authorize <name>=1 for this repository.` line vetoes the corresponding authorization.
 The gate resolves the target repository from the bash call `cwd` or `git -C <path>` before reading its steering.
+
+On first observation, it pins the normalized `remote.origin.url`, common Git directory, default ref, and remote HEAD SHA for the session and extension.
+
+Each authorization re-reads the configured origin and queries the pinned remote identity explicitly. An identity or HEAD SHA change denies the call and invalidates the positive decision; restoring the exact pinned identity and unchanged remote HEAD permits a fresh authorization check.
+
+The parsed steering tree is cached only by the exact remote SHA, never by elapsed time.
+
 Text in a command, commit message, or file body never authorizes an override.
 
+
+Primary-checkout commits use the canonical-main exception: they require the exact
+`MUST authorize DELIVERY_ALLOW_MAIN_COMMIT=1 for this repository.` directive from the
+trusted remote default tree and `DELIVERY_ALLOW_MAIN_COMMIT=1` in the same command's
+structured environment. `DELIVERY_ALLOW_PRIMARY_CHECKOUT=1` never authorizes a commit;
+it remains a separate factor for edit/write authorization and session grants.
+
 The main-branch gate blocks commits on `main` or `master`.
-The extension receives raw shell text, so arbitrary Bash checkout, switch, and merge operations are not runtime-enforced. Follow the steering prohibition above for those operations.
+
+The simple-shape allowlist refuses direct `git-*` helpers, wrappers, aliases, dynamic targets, and Git-bearing commands combined with `cd`, `pushd`, failed-cd separator chains, braces, or subshells. Set the tool `cwd` or use a supported static `git -C <path>` form instead.
+
+Origin mutation commands are primary mutations, not reads. Ordinary `git remote -v` and `git fetch` are read operations only while the pinned origin remains unchanged. Filesystem tampering before first observation or session startup is outside this boundary; after observation, mismatches fail closed.
 
 ## Automated review loop
 

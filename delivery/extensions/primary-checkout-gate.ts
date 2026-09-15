@@ -2,8 +2,8 @@ import { existsSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { ExtensionAPI, ToolCallEvent } from "@oh-my-pi/pi-coding-agent";
-import { extractCommand, findCommitInvocations } from "./main-branch-gate.ts";
-import { steeringDirective, targetRepoAuthorizes } from "./target-repo-steering.ts";
+import { absoluteGitCwdTransition, extractCommand, findGitInvocations, hasUnsafeShellCwdOrGrouping, unreadableReason } from "./main-branch-gate.ts";
+import { steeringDirective, targetRepoAuthorizes, targetRepoCommonDir, targetRepoTrusts } from "./target-repo-steering.ts";
 
 let worktreesDirOverride: string | undefined;
 
@@ -59,11 +59,14 @@ export function getWorktreesDir(): string {
  * `DELIVERY_ALLOW_PRIMARY_CHECKOUT=1` is accepted only when the targeted repository itself
  * contains the exact affirmative steering directive. A bash-call override also grants later
  * `edit`/`write` calls in that same authorized primary checkout for the current session.
- *
+ * A commit from the primary checkout is separate: it requires command-local
+ * `DELIVERY_ALLOW_MAIN_COMMIT=1` plus the trusted canonical-main directive; the primary
+ * checkout env never authorizes a commit.
  */
 
 const EDIT_TOOLS: Record<string, true> = { edit: true, write: true };
 const ALLOW_ENV = "DELIVERY_ALLOW_PRIMARY_CHECKOUT";
+const MAIN_COMMIT_ENV = "DELIVERY_ALLOW_MAIN_COMMIT";
 const TIMEOUT_MS = 2000;
 
 /** Internal URIs (`xd://…`, `artifact://…`, `memory://…`) are not filesystem paths. */
@@ -168,7 +171,8 @@ function inputEnvironment(input: Record<string, unknown>): NodeJS.ProcessEnv | u
 	return env;
 }
 
-type AuthorizedPrimaryCheckouts = ReadonlySet<string>;
+type PrimaryGrant = { directive: typeof ALLOW_ENV; commonDir: string };
+type AuthorizedPrimaryCheckouts = Map<string, PrimaryGrant>;
 
 function isStatePath(absolute: string, topLevel: string): boolean {
 	const relative = absolute.slice(topLevel.length + 1);
@@ -177,15 +181,31 @@ function isStatePath(absolute: string, topLevel: string): boolean {
 }
 
 export function reasonFor(topLevel: string, what: string): string {
-	return (
-		`${what} is inside the primary checkout of ${topLevel}. Redispatch repository work with ` +
+	const authorization =
+		what === "This commit"
+			? `For a commit, put ${MAIN_COMMIT_ENV}=1 in the command's structured env only when this repository contains ` +
+			  `the exact line \`${steeringDirective(MAIN_COMMIT_ENV)}\` and the user authorized the exception.`
+			: what === "This repository mutation"
+				? "Checkout, switch, and merge cannot target a primary checkout; push remains governed by the push router and pre-push gates."
+				: `Set ${ALLOW_ENV}=1 only when this repository contains the exact line ` +
+				  `\`${steeringDirective(ALLOW_ENV)}\` and the user authorized the exception. ` +
+				  `For a follow-up edit/write, put that flag in a bash call's \`env\` while its cwd is ` +
+				  `this checkout; the session grant is limited to this repository.`;
+	return `${what} is inside the primary checkout of ${topLevel}. Redispatch repository work with ` +
 		`\`isolated: true\` so OMP places the change in its configured isolation root. ` +
-		`Make the change in that isolated clone. Set ` +
-		`${ALLOW_ENV}=1 only when this repository contains the exact line ` +
-		`\`${steeringDirective(ALLOW_ENV)}\` and the user authorized the exception. ` +
-		`For a follow-up edit/write, put that flag in a bash call's \`env\` while its cwd is ` +
-		`this checkout; the session grant is limited to this repository.`
-	);
+		`Make the change in that isolated clone. ${authorization}`;
+}
+
+function revokeStaleGrants(grants: Map<string, PrimaryGrant> | undefined, run: GitRun, scope: string): void {
+	if (grants === undefined) return;
+	for (const [topLevel, grant] of grants) {
+		try {
+			const commonDir = targetRepoCommonDir(topLevel, run);
+			if (commonDir === null || commonDir !== grant.commonDir || !targetRepoAuthorizes(topLevel, grant.directive, run, scope)) grants.delete(topLevel);
+		} catch {
+			grants.delete(topLevel);
+		}
+	}
 }
 
 /** Runtime-created isolated roots are harness-owned even though Git sees them as primary. */
@@ -217,9 +237,11 @@ export function decideEdit(
 	env: NodeJS.ProcessEnv = process.env,
 	worktreesDir = getWorktreesDir(),
 	authorizedPrimaryCheckouts?: AuthorizedPrimaryCheckouts,
+	scope: string = "default",
 ): { block: true; reason: string } | undefined {
 	if (EDIT_TOOLS[toolName] !== true) return undefined;
 	const run = injectedRun ?? defaultRun;
+	revokeStaleGrants(authorizedPrimaryCheckouts, run, scope);
 	for (const path of editedPaths(input)) {
 		const decision = decidePath(path, cwd, worktreesDir, authorizedPrimaryCheckouts);
 		if (!decision) continue;
@@ -229,45 +251,61 @@ export function decideEdit(
 			env[ALLOW_ENV] === "1" &&
 			checkout?.primary === true &&
 			!isRuntimeCheckout(checkout.topLevel, worktreesDir) &&
-			targetRepoAuthorizes(checkout.topLevel, ALLOW_ENV, run)
+			targetRepoAuthorizes(checkout.topLevel, ALLOW_ENV, run, scope)
 		)
 			continue;
 		return decision;
 	}
 	return undefined;
 }
-
 export function decideCommit(
 	command: string,
 	cwd: string,
 	env: NodeJS.ProcessEnv = process.env,
 	worktreesDir = getWorktreesDir(),
+	authorizationEnv: NodeJS.ProcessEnv = env,
+	scope: string = "default",
 ): { block: true; reason: string } | undefined {
 	const run = injectedRun ?? defaultRun;
-	for (const invocation of findCommitInvocations(command, false)) {
-		if (invocation.dryRun || invocation.retargeted) continue;
+	if (hasUnsafeShellCwdOrGrouping(command)) return { block: true, reason: unreadableReason("shell cwd mutation or grouping") };
+	const invocations = findGitInvocations(command, env);
+	const transitionedCwd = absoluteGitCwdTransition(command);
+	if (transitionedCwd !== undefined) {
+		for (const invocation of invocations) {
+			if (invocation.repoDir === null) invocation.repoDir = transitionedCwd;
+		}
+	}
+	for (const invocation of invocations) {
+		if (invocation.operation === "opaque" || invocation.retargeted === true)
+			return { block: true, reason: unreadableReason("an opaque Git invocation") };
 		const target = invocation.repoDir === null ? cwd : resolve(cwd, invocation.repoDir);
 		const checkout = checkoutOf(target);
-		if (!checkout?.primary || isRuntimeCheckout(checkout.topLevel, worktreesDir)) continue;
-		if (env[ALLOW_ENV] === "1" && targetRepoAuthorizes(checkout.topLevel, ALLOW_ENV, run))
+		if (checkout?.primary && !isRuntimeCheckout(checkout.topLevel, worktreesDir) && (invocation.operation === "push" || invocation.operation === "read") && !targetRepoTrusts(checkout.topLevel, run, scope))
+			return { block: true, reason: unreadableReason("unpinned repository origin") };
+		if (invocation.operation === "push" || invocation.operation === "read" || invocation.dryRun === true) continue;
+		if (invocation.operation === "checkout" || invocation.operation === "switch" || invocation.operation === "merge") {
+			if (checkout?.primary && !isRuntimeCheckout(checkout.topLevel, worktreesDir))
+				return { block: true, reason: reasonFor(checkout.topLevel, "This repository mutation") };
 			continue;
+		}
+		if (invocation.operation !== "commit" || !checkout?.primary || isRuntimeCheckout(checkout.topLevel, worktreesDir)) continue;
+		if (authorizationEnv[MAIN_COMMIT_ENV] === "1" && targetRepoAuthorizes(checkout.topLevel, MAIN_COMMIT_ENV, run, scope)) continue;
 		return { block: true, reason: reasonFor(checkout.topLevel, "This commit") };
 	}
 	return undefined;
 }
 type SessionContext = { sessionManager?: { getSessionId?: () => string } };
-
 function sessionKey(ctx: SessionContext | undefined): string {
 	return ctx?.sessionManager?.getSessionId?.() ?? "default";
 }
 
 export default function primaryCheckoutGate(pi: ExtensionAPI): void {
-	const authorizations = new Map<string, Set<string>>();
-	const grantsFor = (ctx: SessionContext | undefined): Set<string> => {
+	const authorizations = new Map<string, Map<string, PrimaryGrant>>();
+	const grantsFor = (ctx: SessionContext | undefined): Map<string, PrimaryGrant> => {
 		const key = sessionKey(ctx);
 		let grants = authorizations.get(key);
 		if (grants === undefined) {
-			grants = new Set<string>();
+			grants = new Map<string, PrimaryGrant>();
 			authorizations.set(key, grants);
 		}
 		return grants;
@@ -290,19 +328,22 @@ export default function primaryCheckoutGate(pi: ExtensionAPI): void {
 			if (event.toolName === "bash") {
 				if (inputEnv?.[ALLOW_ENV] === "1") {
 					const checkout = checkoutOf(cwd);
+					const run = injectedRun ?? defaultRun;
+					const commonDir = checkout?.primary === true ? targetRepoCommonDir(checkout.topLevel, run) : null;
 					if (
 						checkout?.primary &&
 						!isRuntimeCheckout(checkout.topLevel, worktreesDir) &&
-						targetRepoAuthorizes(checkout.topLevel, ALLOW_ENV, injectedRun ?? defaultRun)
+						commonDir !== null &&
+						targetRepoAuthorizes(checkout.topLevel, ALLOW_ENV, run, sessionKey(ctx))
 					)
-						authorizedPrimaryCheckouts.add(checkout.topLevel);
+						authorizedPrimaryCheckouts.set(checkout.topLevel, { directive: ALLOW_ENV, commonDir });
 				}
 				const command = extractCommand(event.input);
 				if (!command) return;
-				return decideCommit(command, cwd, env, worktreesDir);
+				return decideCommit(command, cwd, env, worktreesDir, inputEnv ?? {}, sessionKey(ctx));
 			}
 			if (EDIT_TOOLS[event.toolName] === true) {
-				return decideEdit(event.toolName, input, cwd, env, worktreesDir, authorizedPrimaryCheckouts);
+				return decideEdit(event.toolName, input, cwd, env, worktreesDir, authorizedPrimaryCheckouts, sessionKey(ctx));
 			}
 			return;
 		} catch {

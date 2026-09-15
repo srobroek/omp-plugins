@@ -24,7 +24,7 @@ import type {
 	ExtensionAPI,
 	ToolCallEvent,
 } from "@oh-my-pi/pi-coding-agent";
-import { steeringDirective, targetRepoAuthorizes } from "./target-repo-steering.ts";
+import { steeringDirective, targetRepoAuthorizes, targetRepoTrusts } from "./target-repo-steering.ts";
 
 const TIMEOUT_MS = 2000;
 
@@ -183,8 +183,11 @@ function envHasOpaqueGitConfig(env: NodeJS.ProcessEnv): boolean {
 		env.GIT_CONFIG_PARAMETERS !== ""
 	)
 		return true;
-	const count = Number.parseInt(env.GIT_CONFIG_COUNT ?? "0", 10);
-	if (!Number.isFinite(count) || count <= 0) return false;
+	const rawCount = env.GIT_CONFIG_COUNT;
+	if (rawCount === undefined || rawCount === "") return false;
+	if (!/^\d+$/.test(rawCount)) return true;
+	const count = Number(rawCount);
+	if (!Number.isSafeInteger(count) || count <= 0 || count > 1024) return count > 0;
 	for (let index = 0; index < count; index++) {
 		const key = env[`GIT_CONFIG_KEY_${index}`];
 		if (key !== undefined && isOpaqueGitConfigKey(key)) return true;
@@ -574,6 +577,12 @@ export type CommitInvocation = {
  */
 export function findCommitInvocations(command: string, includeOpaqueSubstitution = true): CommitInvocation[] {
     const out = scanInvocations(command);
+	const transitionedCwd = absoluteGitCwdTransition(command);
+	if (transitionedCwd !== undefined) {
+		for (const invocation of out) {
+			if (invocation.repoDir === null) invocation.repoDir = transitionedCwd;
+		}
+	}
 	// A substitution runs commands the quote-aware scan reads as data, and which substitutions
 	// are inert cannot be decided here: a quoted here-document delimiter makes its body inert
 	// while an unquoted one does not, an apostrophe in a body or a comment is literal text yet
@@ -628,12 +637,215 @@ export function findCommitInvocations(command: string, includeOpaqueSubstitution
 	// The remedy depends on where the substitution sits, and `denyReason` states both. One
 	// UNRELATED to the git command is fixed by sending it as a separate call. One that is PART
 	// of the git command survives that, and has to be replaced by its value.
+    const commitText = /(?:^|[^A-Za-z])commit(?:$|[^A-Za-z])|(?:^|[^A-Za-z])com(?:['"\\\s]*)mit(?:$|[^A-Za-z])/.test(command);
     if (
         includeOpaqueSubstitution &&
         (command.includes("$(") || command.includes("`")) &&
-        PREFILTER.test(command)
+        PREFILTER.test(command) &&
+        commitText
     )
-        out.push({ repoDir: null, dryRun: false });
+        out.push({ repoDir: null, dryRun: false, retargeted: true });
+	return out;
+}
+export type GitOperation = "read" | "commit" | "checkout" | "switch" | "merge" | "push" | "opaque";
+
+const GIT_COMMAND_TEXT = /(?:^|[^A-Za-z0-9_./-])(?:d?git|git-[A-Za-z0-9_-]+)(?:$|[^A-Za-z0-9_-])/;
+const ABSOLUTE_GIT_COMMAND_TEXT = /(?:^|[\s;&|()])\/[^\s;&|()]+\/(?:d?git|git-[A-Za-z0-9_-]+)(?:$|[\s;&|()])/;
+const ABSOLUTE_GIT_AFTER_CWD = /^\s*cd\s+(\/[^\s;&|]+)\s*&&\s+(\/[^\s;&|]+\/git)([\s\S]*)$/;
+
+export function absoluteGitCwdTransition(command: string): string | undefined {
+	const match = command.match(ABSOLUTE_GIT_AFTER_CWD);
+	if (match === null || /[;&|()\r\n]/.test((match[3] ?? "").replace(/\s+$/, ""))) return undefined;
+	return match[1];
+}
+
+const SHELL_CWD_COMMANDS = new Set(["cd", "pushd", "popd"]);
+
+export function hasUnsafeShellCwdOrGrouping(command: string): boolean {
+	if (!GIT_COMMAND_TEXT.test(command) && !ABSOLUTE_GIT_COMMAND_TEXT.test(command)) return false;
+	if (absoluteGitCwdTransition(command) !== undefined) return false;
+	const tokens = tokenize(command);
+	let atCommand = true;
+	for (const token of tokens) {
+		if (token.quoted) continue;
+		if (token.text === "(" || token.text === ")" || token.text === "{" || token.text === "}") return true;
+		if (SEPARATOR[token.text] === true || token.text === "\n") {
+			atCommand = true;
+			continue;
+		}
+		if (!atCommand) continue;
+		if (ENV_ASSIGNMENT.test(token.text) || TRANSPARENT_PREFIX[token.text] === true || RESERVED_WORD[token.text] === true) continue;
+		if (SHELL_CWD_COMMANDS.has(tokenBase(token))) return true;
+		atCommand = false;
+	}
+	return false;
+}
+
+export type GitInvocation = {
+	operation: GitOperation;
+	repoDir: string | null;
+	dryRun?: boolean;
+	retargeted?: true;
+};
+
+const PRIMARY_READ_ONLY = new Set([
+	"status", "log", "diff", "show", "branch", "rev-parse", "rev-list", "ls-files", "ls-tree", "cat-file",
+	"describe", "name-rev", "for-each-ref", "symbolic-ref", "shortlog", "blame", "grep", "archive", "count-objects",
+	"fsck", "verify-commit", "verify-tag", "whatchanged", "range-diff", "merge-base", "fetch", "remote", "worktree",
+	"help", "version",
+]);
+const PRIMARY_MUTATIONS = new Set(["checkout", "switch", "merge"]);
+const PRIMARY_SAFE_TEXT_COMMANDS = new Set(["echo", "printf", "cat", "true", "false", ":", "pwd", "rg", "grep"]);
+const REMOTE_READ_SUBCOMMANDS = new Set(["", "-v", "--verbose", "show", "get-url"]);
+const PRIMARY_WRAPPERS = new Set([
+	"bash", "sh", "zsh", "dash", "ksh", "eval", "env", "command", "sudo", "time", "nice", "nohup", "exec", "xargs", "xcrun",
+]);
+
+function tokenBase(token: Token): string {
+	return token.text.split("/").at(-1) ?? "";
+}
+
+function remoteCommandMutatesOrigin(remainder: Token[]): boolean {
+	const remote = remainder.findIndex((token) => token.text === "remote");
+	if (remote < 0) return false;
+	for (let index = remote + 1; index < remainder.length; index++) {
+		const text = remainder[index]?.text ?? "";
+		if (text === "-v" || text === "--verbose") continue;
+		if (text === "--") return true;
+		return !REMOTE_READ_SUBCOMMANDS.has(text);
+	}
+	return false;
+}
+
+function envValueMayBeGit(value: string | undefined): boolean {
+	if (value === undefined) return false;
+	return /(?:^|[\s/])(?:d?git)(?:$|[\s/])/.test(value) || /(?:^|[\s/])git-[A-Za-z0-9_-]+(?:$|[\s/])/.test(value);
+}
+
+function expansionVariables(text: string): string[] {
+	const names: string[] = [];
+	for (const match of text.matchAll(/\$(?:\{([A-Za-z_][A-Za-z0-9_]*)\}|([A-Za-z_][A-Za-z0-9_]*))/g)) {
+		const name = match[1] ?? match[2];
+		if (name !== undefined) names.push(name);
+	}
+	return names;
+}
+
+function substitutionMayRunGit(text: string, env: NodeJS.ProcessEnv): boolean {
+	if (!text.includes("$(") && !text.includes("`")) return false;
+	if (/(?:^|[^A-Za-z0-9_-])(?:d?git|git-[A-Za-z0-9_-]+)(?:$|[^A-Za-z0-9_-])/.test(text)) return true;
+	return expansionVariables(text).some((name) => envValueMayBeGit(env[name]));
+}
+
+function possibleGitToken(token: Token, env: NodeJS.ProcessEnv): boolean {
+	const base = tokenBase(token);
+	if (GIT_COMMANDS[base] === true || base.startsWith("git-")) return true;
+	if (token.quoted && !token.text.includes("$") && !token.text.includes("`")) return false;
+	if (/(?:^|\s)(?:d?git|git-[A-Za-z0-9_-]+)(?:$|\s)/.test(token.text)) return true;
+	if (token.text.includes("$") || token.text.includes("`")) return token.text.includes("$(") || token.text.includes("`") ? substitutionMayRunGit(token.text, env) : true;
+	return false;
+}
+function opaqueInvocation(): GitInvocation {
+	return { operation: "opaque", repoDir: null, retargeted: true };
+}
+
+/** Parse only direct simple Git shapes; every wrapper, alias, helper, and dynamic target fails closed. */
+export function findGitInvocations(command: string, env: NodeJS.ProcessEnv = {}): GitInvocation[] {
+	if (/(?:^|[;&|\n])\s*alias\b[^;|&\n]*\b(?:d?git)\s+remote\s+(?:set-url|remove|rename|add|set-head|set-branches)\b/.test(command))
+		return [opaqueInvocation()];
+	const tokens = tokenize(command);
+	const out: GitInvocation[] = [];
+	const isSep = (token: Token | undefined): boolean => token !== undefined && !token.quoted && (SEPARATOR[token.text] === true || token.text === "\n");
+	let start = 0;
+	for (let end = 0; end <= tokens.length; end++) {
+		if (end < tokens.length && !isSep(tokens[end])) continue;
+		const segment = tokens.slice(start, end);
+		start = end + 1;
+		if (segment.length === 0) continue;
+		let index = 0;
+		while (index < segment.length) {
+			const width = redirectionWidth(segment[index] as Token, segment[index + 1], false);
+			if (width === 0) break;
+			index += width;
+		}
+		let configAssignment = false;
+		while (index < segment.length && ENV_ASSIGNMENT.test((segment[index] as Token).text)) {
+			const assignment = (segment[index] as Token).text;
+			if (assignment.slice(0, assignment.indexOf("=")).startsWith("GIT_CONFIG_")) configAssignment = true;
+			index++;
+		}
+		if (index >= segment.length) continue;
+		const commandToken = segment[index] as Token;
+		const base = tokenBase(commandToken);
+		const remainder = segment.slice(index + 1);
+		const hasStructuredConfig = envHasOpaqueGitConfig(env) || configAssignment;
+		// Git's direct helper namespace is executable Git, not an ordinary hyphenated utility.
+		// Classify it before the generic non-Git branch so helpers cannot silently skip the gate.
+		if (base.startsWith("git-")) {
+			out.push(opaqueInvocation());
+			continue;
+		}
+		if (base !== "git" && base !== "dgit") {
+			if (base === "xargs") {
+				const payloadIndex = xargsPayloadIndex(remainder);
+				const payload = payloadIndex === "unreadable" || payloadIndex < 0 ? undefined : remainder[payloadIndex];
+				if (payloadIndex === "unreadable" && remainder.some((token) => possibleGitToken(token, env))) out.push(opaqueInvocation());
+				else if (payload !== undefined && (possibleGitToken(payload, env) || substitutionMayRunGit(payload.text, env))) out.push(opaqueInvocation());
+				continue;
+			}
+			const nestedGit = remainder.some((token) => substitutionMayRunGit(token.text, env));
+			const wrapperGit = remainder.some((token) => possibleGitToken(token, env) || /(?:^|\s)(?:d?git|git-[A-Za-z0-9_-]+)(?:$|\s)/.test(token.text));
+			if (commandToken.text.includes("$") || commandToken.text.includes("`") || nestedGit || ((PRIMARY_WRAPPERS.has(base) || !PRIMARY_SAFE_TEXT_COMMANDS.has(base)) && wrapperGit)) out.push(opaqueInvocation());
+			continue;
+		}
+		let repoDir: string | null = null;
+		let operation: GitOperation | undefined;
+		let dryRun = false;
+		let opaque = hasStructuredConfig;
+		for (let i = 0; i < remainder.length; i++) {
+			const arg = remainder[i] as Token;
+			const width = redirectionWidth(arg, remainder[i + 1], false);
+			if (width !== 0) {
+				i += width - 1;
+				continue;
+			}
+			if (substitutionMayRunGit(arg.text, env)) opaque = true;
+			if (operation === undefined) {
+				if (arg.text === "-C" || arg.text.startsWith("-C")) {
+					const value = arg.text === "-C" ? remainder[++i] : ({ text: arg.text.slice(2) } as Token);
+					if (value === undefined || value.text.includes("$") || value.text.includes("`")) opaque = true;
+					else repoDir = repoDir === null || value.text.startsWith("/") ? value.text : `${repoDir}/${value.text}`;
+					continue;
+				}
+				if (arg.text === "-c" || arg.text.startsWith("-c=") || arg.text === "--config-env" || arg.text.startsWith("--config-env=")) {
+					opaque = true;
+					if ((arg.text === "-c" || arg.text === "--config-env") && remainder[i + 1] !== undefined) i++;
+					continue;
+				}
+				if (arg.text === "--git-dir" || arg.text.startsWith("--git-dir=") || arg.text === "--work-tree" || arg.text.startsWith("--work-tree=") || arg.text === "--common-dir" || arg.text.startsWith("--common-dir=")) {
+					opaque = true;
+					if (!arg.text.includes("=") && remainder[i + 1] !== undefined) i++;
+					continue;
+				}
+				if (arg.text.startsWith("-")) {
+					if (!["--no-pager", "--paginate", "--no-replace-objects", "--bare", "--literal-pathspecs", "--glob-pathspecs", "--noglob-pathspecs"].includes(arg.text)) opaque = true;
+					continue;
+				}
+				if (arg.text.includes("$") || arg.text.includes("`")) opaque = true;
+				else if (PRIMARY_MUTATIONS.has(arg.text)) operation = arg.text as GitOperation;
+				else if (arg.text === "commit") operation = "commit";
+				else if (arg.text === "push") operation = "push";
+				else if (PRIMARY_READ_ONLY.has(arg.text)) operation = "read";
+				else operation = "opaque";
+				continue;
+			}
+			if (operation === "commit" && arg.text === "--dry-run") dryRun = true;
+		}
+		if (operation === "read" && remoteCommandMutatesOrigin(remainder)) operation = "opaque";
+		if (operation === undefined) operation = "opaque";
+		if (opaque || operation === "opaque") out.push(opaqueInvocation());
+		else out.push({ operation, repoDir, ...(dryRun ? { dryRun: true } : {}) });
+	}
 	return out;
 }
 
@@ -1386,8 +1598,11 @@ export function decideCommit(
 	command: string,
 	cwd: string = process.cwd(),
 	env: NodeJS.ProcessEnv = process.env,
+	authorizationEnv: NodeJS.ProcessEnv = env,
+	scope: string = "default",
 ): { block: true; reason: string } | undefined {
 	const run = injectedRun ?? defaultRun;
+	if (hasUnsafeShellCwdOrGrouping(command)) return { block: true, reason: unreadableReason("shell cwd mutation or grouping") };
 	const envSelector = TARGET_ENV.find(
 		(name) => env[name] !== undefined && env[name] !== "",
 	);
@@ -1421,7 +1636,7 @@ export function decideCommit(
 		const branch = currentBranch(target);
 		if (branch === null) continue;
 		if (PROTECTED_BRANCHES[branch] === true) {
-			if (env[ALLOW_ENV] === "1" && targetRepoAuthorizes(target, ALLOW_ENV, run)) continue;
+			if (authorizationEnv[ALLOW_ENV] === "1" && targetRepoTrusts(target, run, scope) && targetRepoAuthorizes(target, ALLOW_ENV, run, scope)) continue;
 			return { block: true, reason: denyReason(branch, target) };
 		}
 	}
@@ -1429,20 +1644,13 @@ export function decideCommit(
 }
 
 export default function mainBranchGate(pi: ExtensionAPI): void {
-	pi.on("tool_call", (event: ToolCallEvent) => {
+	pi.on("tool_call", (event: ToolCallEvent, ctx) => {
 		try {
 			if (event.toolName !== "bash") return;
 			const command = extractCommand(event.input);
 			if (!command) return;
-			const cwd =
-				typeof event.input.cwd === "string" && event.input.cwd
-					? event.input.cwd
-					: process.cwd();
-			// The bash call's own environment counts, layered over the process environment.
-			// Without it the override is reachable only by relaunching the session with the flag
-			// set, which disables the gate for every commit rather than the one the user
-			// authorised. Structured tool input is safe to trust here in a way command text is
-			// not: a commit message or a here-document body cannot forge a field.
+			const base = typeof ctx?.cwd === "string" && ctx.cwd ? ctx.cwd : process.cwd();
+			const cwd = typeof event.input.cwd === "string" && event.input.cwd ? resolve(base, event.input.cwd) : base;
 			const callEnv =
 				typeof event.input.env === "object" && event.input.env !== null
 					? (event.input.env as NodeJS.ProcessEnv)
@@ -1451,6 +1659,8 @@ export default function mainBranchGate(pi: ExtensionAPI): void {
 				command,
 				cwd,
 				callEnv ? { ...process.env, ...callEnv } : process.env,
+				callEnv ?? {},
+				ctx?.sessionManager?.getSessionId?.() ?? "default",
 			);
 		} catch {
 			return;
