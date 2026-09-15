@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.10.8](https://github.com/srobroek/omp-plugins/compare/delivery--v0.10.7...delivery--v0.10.8) (2026-09-15)
+
+
+### Bug Fixes
+
+* **delivery:** harden canonical and primary checkout gates ([#294](https://github.com/srobroek/omp-plugins/issues/294)) ([49a7fe6](https://github.com/srobroek/omp-plugins/commit/49a7fe69c9f22bdc451359566778b9600e9259db))
+
 ## [0.10.7](https://github.com/srobroek/omp-plugins/compare/delivery--v0.10.6...delivery--v0.10.7) (2026-09-15)
 
 

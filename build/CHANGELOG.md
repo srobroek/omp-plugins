@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.0](https://github.com/srobroek/omp-plugins/compare/build--v0.4.0...build--v0.5.0) (2026-09-15)
+
+
+### Features
+
+* **build:** scope direct-edit prose changes ([#296](https://github.com/srobroek/omp-plugins/issues/296)) ([b7dc4f3](https://github.com/srobroek/omp-plugins/commit/b7dc4f33aa05c5dbeb42744f14759d121054f83a))
+
 ## [0.4.0](https://github.com/srobroek/omp-plugins/compare/build--v0.3.4...build--v0.4.0) (2026-09-14)
 
 

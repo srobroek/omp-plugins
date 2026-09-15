@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.7](https://github.com/srobroek/omp-plugins/compare/chezmoi--v0.4.6...chezmoi--v0.4.7) (2026-09-15)
+
+
+### Bug Fixes
+
+* **chezmoi:** align direct delivery guidance ([#295](https://github.com/srobroek/omp-plugins/issues/295)) ([ee2e33a](https://github.com/srobroek/omp-plugins/commit/ee2e33a2a7fde440d8daa81a1224ac7f20300840))
+
 ## [0.4.6](https://github.com/srobroek/omp-plugins/compare/chezmoi--v0.4.5...chezmoi--v0.4.6) (2026-09-15)
 
 

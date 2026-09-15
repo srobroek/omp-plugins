@@ -1,6 +1,6 @@
 {
   "name": "beads",
   "description": "Beads issue tracking: dependency DAGs, formulas, and decisions recorded as beads.",
-  "version": "1.3.3",
+  "version": "1.3.4",
   "category": "productivity"
 }
