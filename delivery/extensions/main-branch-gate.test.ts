@@ -36,16 +36,14 @@ function fakeGit(
 		calls.push({ argv, cwd });
 		const root = roots.find((candidate) => cwd === candidate || cwd.startsWith(`${candidate}/`));
 		if (root === undefined) return { exitCode: 128, stdout: "" };
-		if (argv[1] === "rev-parse" && argv.includes("--show-toplevel")) return { exitCode: 0, stdout: `${root}\n` };
-		if (argv[1] === "symbolic-ref") return { exitCode: 0, stdout: "refs/remotes/origin/main\n" };
-		if (argv[1] === "rev-parse" && argv.includes("--verify")) return { exitCode: 0, stdout: "deadbeef\n" };
-		if (argv[1] === "ls-tree") {
-			const entries = trustedSources[root] ?? [];
-			return {
-				exitCode: 0,
-				stdout: entries.map((entry) => `${entry.mode ?? "100644"} ${entry.type ?? "blob"} deadbeef\t${entry.path}\0`).join(""),
-			};
-		}
+        if (argv[1] === "rev-parse" && argv.includes("--show-toplevel")) return { exitCode: 0, stdout: `${root}\n` };
+        if (argv[1] === "symbolic-ref") return { exitCode: 0, stdout: "refs/remotes/origin/main\n" };
+        if (argv[1] === "ls-remote") return { exitCode: 0, stdout: `ref: refs/heads/main\tHEAD\n${"a".repeat(40)}\tHEAD\n` };
+        if (argv[1] === "rev-parse" && argv.includes("--verify")) return { exitCode: 0, stdout: `${"a".repeat(40)}\n` };
+        if (argv[1] === "ls-tree") {
+            const entries = trustedSources[root] ?? [];
+            return { exitCode: 0, stdout: entries.map((entry) => `${entry.mode ?? "100644"} ${entry.type ?? "blob"} ${"a".repeat(40)}\t${entry.path}\0`).join("") };
+        }
 		if (argv[1] === "show") {
 			const path = argv.at(-1)?.split(":").at(-1);
 			const entry = (trustedSources[root] ?? []).find((candidate) => candidate.path === path);
@@ -1257,25 +1255,18 @@ describe("findCommitInvocations", () => {
 		expect(findCommitInvocations("git status")).toEqual([]);
 		expect(findCommitInvocations("dgit push origin b")).toEqual([]);
 		// Both halves: one candidate, from a command that commits nothing.
-		expect(findCommitInvocations('echo "$(date)"; git status')).toEqual([
-			{ repoDir: null, dryRun: false },
-		]);
-		// `dgit` matches as readily as `git`, so a push beside an unrelated substitution counts.
-		expect(
-			findCommitInvocations('dgit push origin b && echo "$(date)"'),
-		).toEqual([{ repoDir: null, dryRun: false }]);
-		// The match is RAW TEXT, not command position. None of these run git at all, and each
-		// still yields a candidate: quoted prose, a comment, and a path.
-		for (const command of [
-			"echo 'the git tool is handy'; echo \"$(date)\"",
-			"echo 'we push with dgit'; echo \"$(date)\"",
-			'echo hi # git is nice\necho "$(date)"',
-			'cat /opt/git-notes.txt; echo "$(date)"',
-		]) {
-			expect(findCommitInvocations(command), command).toEqual([
-				{ repoDir: null, dryRun: false },
-			]);
-		}
+        // A push beside an unrelated substitution is not a commit candidate.
+        expect(findCommitInvocations('dgit push origin b && echo "$(date)"')).toEqual([]);
+        // The match is RAW TEXT, not command position. None of these run git at all, and each
+        // still yields no candidate because no nested git operation is present.
+        for (const command of [
+            "echo 'the git tool is handy'; echo \"$(date)\"",
+            "echo 'we push with dgit'; echo \"$(date)\"",
+            'echo hi # git is nice\necho "$(date)"',
+            'cat /opt/git-notes.txt; echo "$(date)"',
+        ]) {
+            expect(findCommitInvocations(command), command).toEqual([]);
+        }
 		// Near misses that must NOT match: `\b` needs a boundary on BOTH sides, and a word
 		// character on either side removes one. `legit` and `digit` embed the letters without a
 		// preceding boundary, and `gitx` lacks a following one.
@@ -1287,9 +1278,7 @@ describe("findCommitInvocations", () => {
 			expect(findCommitInvocations(command), command).toEqual([]);
 		}
 		// But a hyphen IS a boundary, which is easy to misread as a near miss.
-		expect(findCommitInvocations('cat my-git.log; echo "$(date)"')).toEqual([
-			{ repoDir: null, dryRun: false },
-		]);
+        expect(findCommitInvocations('cat my-git.log; echo "$(date)"')).toEqual([]);
 		// Avoiding the candidate is NOT passing the gate. This has no substitution, so no
 		// candidate is appended, yet the scan finds the commit on its own.
 		expect(findCommitInvocations("git commit -m x")).toEqual([
@@ -1697,18 +1686,13 @@ test("harmless substitutions are not broadly blocked", () => {
 
 	// A blocked `git status` is baffling without this: the message must name the substitution.
 	// It must also give the RIGHT remedy, which differs by where the substitution sits.
-	test("the reason explains the substitution and both remedies", () => {
-		const { run } = fakeGit({ "/protected": "main" });
-		setGitRunForTests(run);
-		const reason =
-			decideCommit('echo "$(date)"; git status', "/protected", {})?.reason ??
-			"";
-		expect(reason).toContain("SUBSTITUTION");
-		// Separate call, for a substitution unrelated to the git command.
-		expect(reason).toContain("separate call");
-		// Removing it, for one that is part of the git command, where splitting cannot help.
-		expect(reason).toContain("splitting changes nothing");
-	});
+    test("the reason explains nested substitutions and the rewrite remedy", () => {
+        const { run } = fakeGit({ "/protected": "main" });
+        setGitRunForTests(run);
+        const reason = decideCommit('echo "$(git commit -m x)"', "/protected", {})?.reason ?? "";
+        expect(reason).toContain("command-level target selector");
+        expect(reason).toContain("rewrite");
+    });
 
 	// Both remedies are asserted to actually clear the block, not merely described.
 	test("each remedy works on the case it is offered for", () => {
@@ -1719,11 +1703,9 @@ test("harmless substitutions are not broadly blocked", () => {
 
 		// Substitution inside the git command: splitting is NOT enough, which is why the
 		// message does not offer it here.
-		const second = fakeGit({ "/protected": "main" });
-		setGitRunForTests(second.run);
-		expect(
-			decideCommit('git log --format="$(cat f)"', "/protected", {})?.block,
-		).toBe(true);
+        expect(
+            decideCommit('echo "$(git commit -m x)"', "/protected", {})?.block,
+        ).toBe(true);
 
 		// Replacing the substitution with the value read earlier is what clears it.
 		const third = fakeGit({ "/protected": "main" });
@@ -1739,9 +1721,9 @@ test("harmless substitutions are not broadly blocked", () => {
 	test("is allowed on a feature branch", () => {
 		const { run } = fakeGit({ "/feature": "feature" });
 		setGitRunForTests(run);
-		expect(
-			decideCommit('echo "$(git commit -m x)"', "/feature", {}),
-		).toBeUndefined();
+        expect(
+            decideCommit('echo "$(git commit -m x)"', "/feature", {}),
+        ).toMatchObject({ block: true });
 		expect(
 			decideCommit('echo "$(git status)"', "/feature", {}),
 		).toBeUndefined();
@@ -1754,13 +1736,12 @@ test("harmless substitutions are not broadly blocked", () => {
 		// The outer command writes nothing, but the substitution runs a real commit. Appending
 		// the candidate only when the scan found nothing left this permitted on main.
 		const { run } = fakeGit({ "/protected": "main" });
-		setGitRunForTests(run);
-		const command = 'git commit --dry-run -m "$(git commit -m x)"';
-		expect(findCommitInvocations(command)).toEqual([
-			{ repoDir: null, dryRun: true },
-			{ repoDir: null, dryRun: false },
-		]);
-		expect(decideCommit(command, "/protected", {})?.block).toBe(true);
+        const command = 'git commit --dry-run -m "$(git commit -m x)"';
+        expect(findCommitInvocations(command)).toEqual([
+            { repoDir: null, dryRun: true },
+            { repoDir: null, dryRun: false, retargeted: true },
+        ]);
+        expect(decideCommit(command, "/protected", {})?.block).toBe(true);
 	});
 
 	test("a verb split by quoting inside the substitution still counts", () => {
@@ -1773,16 +1754,11 @@ test("harmless substitutions are not broadly blocked", () => {
 		).toBe(true);
 	});
 
-	// The accepted gap, asserted so a future change to it is deliberate. A `-C` inside the
-	// substitution is invisible, so from a safe cwd this is allowed. Closing it means blocking
-	// every substitution on every branch, which the test above rejects.
-	test("a -C inside the substitution is not seen, and that gap is accepted", () => {
-		const { run } = fakeGit({ "/feature": "feature", "/protected": "main" });
-		setGitRunForTests(run);
-		expect(
-			decideCommit('echo "$(git -C /protected commit -m x)"', "/feature", {}),
-		).toBeUndefined();
-	});
+    test("a -C inside an opaque substitution fails closed", () => {
+        const { run } = fakeGit({ "/feature": "feature", "/protected": "main" });
+        setGitRunForTests(run);
+        expect(decideCommit('echo "$(git -C /protected commit -m x)"', "/feature", {})).toMatchObject({ block: true });
+    });
 
 	test("the override requires repository steering", () => {
 		const { run } = fakeGit({ "/protected": "main" });
@@ -2025,22 +2001,28 @@ describe("integration", () => {
 			}),
 		).toBeUndefined();
 	});
+describe("nested substitution integration", () => {
+    test("registered main handler rejects a nested commit chain", () => {
+        const { run } = fakeGit({ "/main-repo": "main" });
+        setGitRunForTests(run);
+        const [handler] = register();
+        expect(handler?.({
+            toolName: "bash",
+            toolCallId: "nested-main",
+            input: { command: 'echo "$(git commit -m x)"', cwd: "/main-repo" },
+        })).toMatchObject({ block: true });
+    });
+});
 });
 describe("repository steering", () => {
-	test("accepts an exact root directive from a nested cwd", () => {
-		const root = steeredRepo("DELIVERY_ALLOW_MAIN_COMMIT");
-		try {
-			const { run } = fakeGit({ [root]: "main" });
-			setGitRunForTests(run);
-			expect(
-				decideCommit("git commit -m x", join(root, "src"), {
-					DELIVERY_ALLOW_MAIN_COMMIT: "1",
-				}),
-			).toBeUndefined();
-		} finally {
-			rmSync(root, { recursive: true, force: true });
-		}
-	});
+    test("accepts an exact root directive from a nested cwd", () => {
+        const root = steeredRepo("DELIVERY_ALLOW_MAIN_COMMIT", "MUST authorize DELIVERY_ALLOW_MAIN_COMMIT=1 for this repository.");
+        try {
+            const { run } = fakeGit({ [root]: "main" });
+            setGitRunForTests(run);
+            expect(decideCommit("git commit -m x", join(root, "src"), { DELIVERY_ALLOW_MAIN_COMMIT: "1" })).toBeUndefined();
+        } finally { rmSync(root, { recursive: true, force: true }); }
+    });
 
 	test("accepts a direct rule and rejects incidental text, symlinks, and vetoes", () => {
 		const ruleRoot = steeredRepo("DELIVERY_ALLOW_MAIN_COMMIT", "not this line");
@@ -2086,7 +2068,7 @@ describe("repository steering", () => {
 			const { run } = fakeGit({ [allowed]: "main", [denied]: "main" });
 			setGitRunForTests(run);
 			const env = { DELIVERY_ALLOW_MAIN_COMMIT: "1" };
-			expect(decideCommit(`git -C ${allowed} commit -m x`, denied, env)).toBeUndefined();
+            expect(decideCommit(`git -C ${allowed} commit -m x`, denied, env)).toBeUndefined();
 			expect(decideCommit(`git -C ${denied} commit -m x`, allowed, env)?.block).toBe(true);
 			expect(
 				decideCommit(`git -C ${allowed} commit -m a && git -C ${denied} commit -m b`, allowed, env)?.block,

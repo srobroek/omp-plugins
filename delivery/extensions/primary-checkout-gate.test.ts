@@ -204,7 +204,7 @@ describe("decideCommit", () => {
 		const inspection = `for r in omp-orchestrate sniff agentic-scaffold slopvac; do
 		d=/Users/sjors/personal/dev/$r; git -C "$d" fetch -q 2>/dev/null; b=$(git -C "$d" rev-parse --abbrev-ref HEAD); u=$(git -C "$d" rev-parse --abbrev-ref '@{upstream}' 2>/dev/null || echo origin/main); behind=$(git -C "$d" rev-list --count HEAD.."$u" 2>/dev/null); ahead=$(git -C "$d" rev-list --count "$u"..HEAD 2>/dev/null); rules=$(git -C "$d" diff --name-only HEAD "$u" -- 'rules/*' 'AGENTS.md' 'CLAUDE.md' '*/AGENTS.md' 2>/dev/null | wc -l | tr -d ' '); printf '%-18s %-40s behind=%s ahead=%s rules/steering files differing=%s\\n' "$r" "$b -> $u" "$behind" "$ahead" "$rules"; done`;
 		expect(decideCommit(inspection, primary, {})).toBeUndefined();
-        expect(decideCommit('git -C "$d" commit -m x', primary, {})).toBeUndefined();
+        expect(decideCommit('git -C "$d" commit -m x', primary, {})).toMatchObject({ block: true });
 	});
 
 	test("does not block quoted git prose", () => {
@@ -268,18 +268,20 @@ describe("canonical-main primary commits", () => {
 		expect(decideEdit("write", { path: join(primary, "src", "new.ts") }, "/", { DELIVERY_ALLOW_PRIMARY_CHECKOUT: "1" })?.block).toBe(true);
 	});
 
-	test("canonical-main authorization does not authorize checkout, switch, merge, or push", () => {
-		const { primary } = setup();
-		authorizeMain(primary);
-		for (const command of [
-			"git checkout main",
-			"git switch main",
-			"git merge feature",
-			"git push origin main",
-		]) {
-			expect(decideCommit(command, primary, { DELIVERY_ALLOW_MAIN_COMMIT: "1" }), command).toBeUndefined();
-		}
-	});
+    test("canonical-main authorization does not authorize checkout, switch, merge, or push", () => {
+        const { primary } = setup();
+        authorizeMain(primary);
+        for (const command of [
+            "git checkout main",
+            "git switch main",
+            "git merge feature",
+            "git push origin main",
+        ]) {
+            const decision = decideCommit(command, primary, { DELIVERY_ALLOW_MAIN_COMMIT: "1" });
+            if (command.startsWith("git push")) expect(decision, command).toBeUndefined();
+            else expect(decision, command).toMatchObject({ block: true });
+        }
+    });
 });
 
 describe("editedPaths", () => {
@@ -324,19 +326,27 @@ describe("integration", () => {
 		).toMatchObject({ block: true });
 	});
 
-	test("unrelated tool calls do not crash or receive canonical-main authorization", () => {
-		const { primary } = setup();
-		authorizeMain(primary);
-		const { toolCall } = register();
-		expect(toolCall({ toolName: "github", input: { op: "repo_view" } })).toBeUndefined();
-		expect(toolCall({ toolName: "eval", input: { code: "1 + 1" } })).toBeUndefined();
-		expect(
-			toolCall({
-				toolName: "bash",
-				input: { cwd: primary, command: "git checkout main", env: { DELIVERY_ALLOW_MAIN_COMMIT: "1" } },
-			}),
-		).toBeUndefined();
-	});
+    test("unrelated tool calls do not crash or receive canonical-main authorization", () => {
+        const { primary } = setup();
+        authorizeMain(primary);
+        const { toolCall } = register();
+        expect(toolCall({ toolName: "github", input: { op: "repo_view" } })).toBeUndefined();
+        expect(toolCall({ toolName: "eval", input: { code: "1 + 1" } })).toBeUndefined();
+        expect(
+            toolCall({
+                toolName: "bash",
+                input: { cwd: primary, command: "git checkout main", env: { DELIVERY_ALLOW_MAIN_COMMIT: "1" } },
+            }),
+        ).toMatchObject({ block: true });
+    });
+    test("registered primary handler rejects a nested checkout mutation chain", () => {
+        const { primary } = setup();
+        const { toolCall } = register();
+        expect(toolCall({
+            toolName: "bash",
+            input: { cwd: primary, command: 'echo "$(git checkout main)"' },
+        })).toMatchObject({ block: true });
+    });
 
 	test("a bash-call env grant allows later edits in the same primary checkout", () => {
 		const { primary } = setup();
