@@ -703,6 +703,20 @@ describe("integration: session resolution", () => {
 		expect(await resolve("nope")).toEqual({ error: expect.stringContaining("no session under") });
 		expect(await resolve("")).toEqual({ error: expect.stringContaining("needs `session`") });
 	}, 20_000);
+	test("an explicit short id resolves centrally across repository scope", async () => {
+		const repo = repoWithWorktree();
+		const { home } = fixtureStore([
+			{
+				...shipped,
+				stem: "2026-08-24T09-00-00-000Z_01a09dd3-1111-7000-8888-000000000001",
+				cwd: "/home/sjors/dev/finance-statement-tracker",
+			},
+		]);
+		const resolved = await withHome(home, () =>
+			resolveSession(repo.main, { session: "01a09dd3", path: repo.main, worktrees: false }),
+		);
+		expect(resolved).toEqual({ file: expect.stringContaining("01a09dd3") });
+	});
 
 	test("an explicit file bypasses lookup entirely", async () => {
 		const { root } = fixtureStore([shipped]);

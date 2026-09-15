@@ -264,11 +264,11 @@ export async function resolveSession(cwd: string, options: ReadOptions): Promise
 	if (options.file) return { file: options.file };
 	const wanted = (options.session ?? "").trim();
 	if (!wanted) return { error: 'resume_session: mode "read" needs `session` (an id or id prefix) or `file`.' };
-	const project = repoRoot(options.path ?? cwd);
 	const root = sessionsRoot(options.profile);
-	const family = options.worktrees === false ? [] : listWorktrees(project);
-	const accept = acceptedPaths(family, project);
-	const matches = (await candidates(root, accept)).filter(
+	// Explicit IDs are globally addressable within the selected profile. Repository
+	// scope remains a list-mode concern; applying it here makes a valid ID look
+	// absent when the session was recorded in a sibling worktree or project.
+	const matches = (await candidates(root)).filter(
 		(candidate) => candidate.head.id.startsWith(wanted) || basename(candidate.file).includes(wanted),
 	);
 	if (matches.length === 1) {
@@ -276,7 +276,7 @@ export async function resolveSession(cwd: string, options: ReadOptions): Promise
 		if (match) return { file: match.file };
 	}
 	if (matches.length === 0) {
-		return { error: `resume_session: no session under ${root} for this project matches "${wanted}".` };
+		return { error: `resume_session: no session under ${root} matches "${wanted}".` };
 	}
 	const ids = matches.map((candidate) => candidate.head.id.slice(0, 12)).join(", ");
 	return { error: `resume_session: ${wanted} matches ${matches.length} sessions (${ids}). Use a longer prefix.` };
