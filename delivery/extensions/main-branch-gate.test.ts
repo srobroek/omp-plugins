@@ -2049,6 +2049,21 @@ test("absolute Git after a cwd transition resolves the transitioned main reposit
 	expect(calls.map((call) => call.cwd)).toEqual(["/main-repo"]);
 });
 
+test("mixed cwd transitions never reuse the first transition", () => {
+	const { run } = fakeGit({ "/main-repo": "main", "/feature": "feature" });
+	setGitRunForTests(run);
+	for (const command of [
+		"cd /feature && /usr/bin/git status; cd /main-repo && git commit -m x",
+		"cd /feature && /usr/bin/git status && cd /main-repo && git commit -m x",
+		"cd /feature && /usr/bin/git status || cd /main-repo && git commit -m x",
+		"cd /feature && /usr/bin/git status\ncd /main-repo && git commit -m x",
+		"cd /feature && (/usr/bin/git status; cd /main-repo && git commit -m x)",
+		"cd /feature && /usr/bin/git status; cd /main-repo && /bin/git commit -m x",
+	]) {
+		expect(decideCommit(command, "/feature")?.block, command).toBe(true);
+	}
+});
+
 describe("repository steering", () => {
     test("accepts an exact root directive from a nested cwd", () => {
         const root = steeredRepo("DELIVERY_ALLOW_MAIN_COMMIT", "MUST authorize DELIVERY_ALLOW_MAIN_COMMIT=1 for this repository.");

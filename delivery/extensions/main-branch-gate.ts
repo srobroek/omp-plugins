@@ -650,17 +650,19 @@ export function findCommitInvocations(command: string, includeOpaqueSubstitution
 export type GitOperation = "read" | "commit" | "checkout" | "switch" | "merge" | "push" | "opaque";
 
 const GIT_COMMAND_TEXT = /(?:^|[^A-Za-z0-9_./-])(?:d?git|git-[A-Za-z0-9_-]+)(?:$|[^A-Za-z0-9_-])/;
-const ABSOLUTE_GIT_AFTER_CWD = /^\s*cd\s+(\/[^\s;&|]+)\s*&&\s+(\/[^\s;&|]+\/git)(?:\s|$)/;
+const ABSOLUTE_GIT_COMMAND_TEXT = /(?:^|[\s;&|()])\/[^\s;&|()]+\/(?:d?git|git-[A-Za-z0-9_-]+)(?:$|[\s;&|()])/;
+const ABSOLUTE_GIT_AFTER_CWD = /^\s*cd\s+(\/[^\s;&|]+)\s*&&\s+(\/[^\s;&|]+\/git)([\s\S]*)$/;
 
 export function absoluteGitCwdTransition(command: string): string | undefined {
 	const match = command.match(ABSOLUTE_GIT_AFTER_CWD);
-	return match?.[1];
+	if (match === null || /[;&|()\r\n]/.test(match[3] ?? "")) return undefined;
+	return match[1];
 }
 
 const SHELL_CWD_COMMANDS = new Set(["cd", "pushd", "popd"]);
 
 export function hasUnsafeShellCwdOrGrouping(command: string): boolean {
-	if (!GIT_COMMAND_TEXT.test(command)) return false;
+	if (!GIT_COMMAND_TEXT.test(command) && !ABSOLUTE_GIT_COMMAND_TEXT.test(command)) return false;
 	if (absoluteGitCwdTransition(command) !== undefined) return false;
 	const tokens = tokenize(command);
 	let atCommand = true;

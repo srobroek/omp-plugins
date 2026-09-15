@@ -554,3 +554,17 @@ test("absolute Git after a cwd transition resolves the transitioned primary chec
 			expect(decideCommit(command, linked)?.block, command).toBe(true);
 		},
 	);
+
+	test("mixed cwd transitions never reuse the first transition", () => {
+		const { primary, linked } = setup();
+		for (const command of [
+			`cd ${linked} && /usr/bin/git status; cd ${primary} && git commit -m x`,
+			`cd ${linked} && /usr/bin/git status && cd ${primary} && git commit -m x`,
+			`cd ${linked} && /usr/bin/git status || cd ${primary} && git commit -m x`,
+			`cd ${linked} && /usr/bin/git status\ncd ${primary} && git commit -m x`,
+			`cd ${linked} && (/usr/bin/git status; cd ${primary} && git commit -m x)`,
+			`cd ${linked} && /usr/bin/git status; cd ${primary} && /bin/git commit -m x`,
+		]) {
+			expect(decideCommit(command, linked)?.block, command).toBe(true);
+		}
+	});

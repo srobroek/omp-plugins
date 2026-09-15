@@ -2,7 +2,7 @@ import { existsSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { ExtensionAPI, ToolCallEvent } from "@oh-my-pi/pi-coding-agent";
-import { absoluteGitCwdTransition, extractCommand, findGitInvocations, unreadableReason } from "./main-branch-gate.ts";
+import { absoluteGitCwdTransition, extractCommand, findGitInvocations, hasUnsafeShellCwdOrGrouping, unreadableReason } from "./main-branch-gate.ts";
 import { steeringDirective, targetRepoAuthorizes, targetRepoCommonDir, targetRepoTrusts } from "./target-repo-steering.ts";
 
 let worktreesDirOverride: string | undefined;
@@ -267,6 +267,7 @@ export function decideCommit(
 	scope: string = "default",
 ): { block: true; reason: string } | undefined {
 	const run = injectedRun ?? defaultRun;
+	if (hasUnsafeShellCwdOrGrouping(command)) return { block: true, reason: unreadableReason("shell cwd mutation or grouping") };
 	const invocations = findGitInvocations(command, env);
 	const transitionedCwd = absoluteGitCwdTransition(command);
 	if (transitionedCwd !== undefined) {
