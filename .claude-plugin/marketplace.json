@@ -40,7 +40,7 @@
       "name": "browser-tools",
       "description": "Cross-engine browser coverage and Chrome performance tracing over MCP.",
       "source": "./browser-tools",
-      "version": "0.3.6",
+      "version": "0.3.7",
       "category": "development"
     },
     {
