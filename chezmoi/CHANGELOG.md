@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.6](https://github.com/srobroek/omp-plugins/compare/chezmoi--v0.4.5...chezmoi--v0.4.6) (2026-09-15)
+
+
+### Bug Fixes
+
+* **delivery:** trust remote steering sources ([ce43658](https://github.com/srobroek/omp-plugins/commit/ce43658be90aa22656fd973b2daf05c8e0400a4e))
+
 ## [0.4.5](https://github.com/srobroek/omp-plugins/compare/chezmoi--v0.4.4...chezmoi--v0.4.5) (2026-09-13)
 
 
