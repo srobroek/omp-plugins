@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.3.7](https://github.com/srobroek/omp-plugins/compare/browser-tools--v0.3.6...browser-tools--v0.3.7) (2026-09-15)
+
+
+### Bug Fixes
+
+* **browser-tools:** bundle plugin directory resolver ([c68e3c0](https://github.com/srobroek/omp-plugins/commit/c68e3c01976551b72e3f16b152bae91d212950e7))
+* **browser-tools:** bundle plugin directory resolver ([708bd58](https://github.com/srobroek/omp-plugins/commit/708bd58af95b48dccaeb71f5577709a04ff08c68))
+* **browser-tools:** normalize resolver imports ([86df48c](https://github.com/srobroek/omp-plugins/commit/86df48cba7f6ddb13729bcb3888566de4d836175))
+* **browser-tools:** rebuild resolver bundles ([436e142](https://github.com/srobroek/omp-plugins/commit/436e14222359bbb562deb81a5398964c8aa88c6e))
+
 ## [0.3.6](https://github.com/srobroek/omp-plugins/compare/browser-tools--v0.3.5...browser-tools--v0.3.6) (2026-09-15)
 
 
