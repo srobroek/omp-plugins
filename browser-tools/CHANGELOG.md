@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.3.6](https://github.com/srobroek/omp-plugins/compare/browser-tools--v0.3.5...browser-tools--v0.3.6) (2026-09-15)
+
+
+### Documentation
+
+* **browser-tools:** clarify trusted driver path handling ([0ef71b7](https://github.com/srobroek/omp-plugins/commit/0ef71b77564dbe58d5a398affc920d5ec3435278))
+* **browser-tools:** clarify trusted driver path handling ([7b99b9a](https://github.com/srobroek/omp-plugins/commit/7b99b9a91e865143f4b1608d2605a40cc3883a2f))
+
 ## [0.3.5](https://github.com/srobroek/omp-plugins/compare/browser-tools--v0.3.4...browser-tools--v0.3.5) (2026-09-15)
 
 
