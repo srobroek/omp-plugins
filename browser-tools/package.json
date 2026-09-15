@@ -207,7 +207,7 @@
       "driverModulePath": {
         "type": "string",
         "default": "",
-        "description": "Trusted operator-only absolute canonical puppeteer-core entry module path; loads executable code with plugin privileges.",
+        "description": "Normalized absolute path to an operator-trusted puppeteer-core entry module when host resolution is unavailable. Import-time loading validates that the module exists and exports launch and connect.",
         "env": "HEADED_BROWSER_DRIVER_MODULE_PATH"
       }
     }

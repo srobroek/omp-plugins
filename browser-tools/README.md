@@ -15,7 +15,7 @@ OMP discovers extensions and MCP servers at session startup. Start a new session
 omp -p 'headed_session op:"preflight"'
 ```
 
-Configure persistent defaults under `/settings` → Plugins → `@srobroek/browser-tools`. Override launch settings with `headed_session op:"launch"`. `driverModulePath` is trusted configuration only; remote SSH parameters are accepted only on that launch call.
+Configure persistent defaults under `/settings` → Plugins → `@srobroek/browser-tools`. Override launch settings with `headed_session op:"launch"`. `driverModulePath` is trusted configuration only; remote SSH parameters are accepted only on that launch call. When host resolution is unavailable, set `driverModulePath` to a normalized absolute path to an operator-trusted `puppeteer-core` entry module. Import-time loading validates that the module exists and exports `launch` and `connect`.
 
 ## Headed browser tools
 
