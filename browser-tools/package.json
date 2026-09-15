@@ -4,12 +4,16 @@
   "description": "Cross-engine browser coverage and Chrome performance tracing over MCP.",
   "private": true,
   "dependencies": {
+    "@oh-my-pi/pi-utils": "18.1.21",
     "puppeteer-core": "25.3.0"
   },
   "scripts": {
     "licenses:check": "bun run scripts/generate-third-party-notices.ts --check"
   },
   "omp": {
+    "bundleExternal": [
+      "@oh-my-pi/pi-coding-agent"
+    ],
     "extensions": [
       "./dist/headed-browser-tools.js",
       "./dist/headed-browser-preflight.js"

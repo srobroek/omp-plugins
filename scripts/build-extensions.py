@@ -101,6 +101,10 @@ def bundle(plugin: Path, write: bool) -> list[str]:
             ["bun", "install", "--frozen-lockfile", "--silent"],
             cwd=working, check=True, capture_output=True, timeout=300,
         )
+        external = json.loads((plugin / "package.json").read_text(encoding="utf-8")).get("omp", {}).get("bundleExternal", ["@oh-my-pi/*"])
+        if not isinstance(external, list) or not all(isinstance(pattern, str) for pattern in external):
+            problems.append(f"{plugin}: omp.bundleExternal must be a list of strings")
+            return problems
         for src in declared:
             out_name = f"{src.stem}.js"
             committed = plugin / "dist" / out_name
@@ -108,7 +112,7 @@ def bundle(plugin: Path, write: bool) -> list[str]:
                 [
                     "bun", "build", "--target=bun", str(working / src.relative_to(plugin)),
                     "--outdir", str(working / "dist"),
-                    "--external", "@oh-my-pi/*",
+                    *sum((["--external", pattern] for pattern in external), []),
                 ],
                 cwd=working, capture_output=True, text=True, timeout=300,
             )

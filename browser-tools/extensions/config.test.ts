@@ -108,6 +108,11 @@ describe("headed browser configuration", () => {
 		const noLock = await loadStoredSettings("/project", async () => ({ getPluginSettings: async () => ({ driverModulePath: "/untrusted/project.js" }) }), directoryResolver(lockPath, "/project"));
 		expect(noLock.values).toEqual({});
 	});
+	test("uses the bundled directory resolver by default", async () => {
+		const stored = await loadStoredSettings(process.cwd(), async () => ({ getPluginSettings: async () => ({}) }));
+		expect(stored.source).toBe("public-api");
+		expect(stored.warnings).not.toContain(expect.stringContaining("plugin directory resolver unavailable"));
+	});
 
 	test("reads canonical lock paths supplied by default, XDG, and named-profile layouts", async () => {
 		const root = await temporary();

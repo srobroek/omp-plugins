@@ -1,3 +1,4 @@
+import * as pluginDirs from "@oh-my-pi/pi-utils/dirs";
 import { readFile } from "node:fs/promises";
 import { isAbsolute, normalize } from "node:path";
 import type { PluginSettingSchema } from "@oh-my-pi/pi-coding-agent/extensibility/plugins";
@@ -9,7 +10,7 @@ type PluginDirsModule = {
 
 type ImportPluginDirs = () => Promise<PluginDirsModule>;
 
-const importPluginDirs: ImportPluginDirs = () => import("@oh-my-pi/pi-utils/dirs");
+const importPluginDirs: ImportPluginDirs = async () => pluginDirs;
 
 export const PLUGIN_PACKAGE = "@srobroek/browser-tools";
 
