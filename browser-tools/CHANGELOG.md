@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.3.5](https://github.com/srobroek/omp-plugins/compare/browser-tools--v0.3.4...browser-tools--v0.3.5) (2026-09-15)
+
+
+### Bug Fixes
+
+* **browser-tools:** bundle Puppeteer driver ([6a682bd](https://github.com/srobroek/omp-plugins/commit/6a682bdbfd4f56ddb9e14e13271623ca286df616))
+* **browser-tools:** bundle Puppeteer driver ([5fb1cd4](https://github.com/srobroek/omp-plugins/commit/5fb1cd43d4fcdc0474bb6802a197e3154aea1e2e))
+* **browser-tools:** make notice license lookup portable ([e92d31d](https://github.com/srobroek/omp-plugins/commit/e92d31d3666f0acd581d09179f7fd8b1c96009c2))
+* **browser-tools:** secure driver configuration ([551b10a](https://github.com/srobroek/omp-plugins/commit/551b10abce4aba06ba132466abf17fb8675e4a2d))
+
 ## [0.3.4](https://github.com/srobroek/omp-plugins/compare/browser-tools--v0.3.3...browser-tools--v0.3.4) (2026-09-13)
 
 
