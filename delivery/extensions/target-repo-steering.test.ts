@@ -83,6 +83,37 @@ describe("targetRepoAuthorizes", () => {
 		expect(targetRepoAuthorizes(root, "DELIVERY_ALLOW_MAIN_COMMIT", fakeGit(root, files))).toBe(true);
 	});
 
+	test("accepts an exact directive from a direct .omp/rules file", () => {
+		const root = setupRepo();
+		const files = [{ path: ".omp/rules/allow.md", text: `${steeringDirective("DELIVERY_ALLOW_MAIN_COMMIT")}\n` }];
+		expect(targetRepoAuthorizes(root, "DELIVERY_ALLOW_MAIN_COMMIT", fakeGit(root, files))).toBe(true);
+	});
+
+	test("fails closed on an invalid remote HEAD ref", () => {
+		const root = setupRepo();
+		const files = [{ path: "AGENTS.md", text: steeringDirective("DELIVERY_ALLOW_MAIN_COMMIT") }];
+		expect(
+			targetRepoAuthorizes(root, "DELIVERY_ALLOW_MAIN_COMMIT", fakeGit(root, files, { head: "not-a-ref" })),
+		).toBe(false);
+	});
+
+	test("fails closed when the trusted ref cannot be verified", () => {
+		const root = setupRepo();
+		const files = [{ path: "AGENTS.md", text: steeringDirective("DELIVERY_ALLOW_MAIN_COMMIT") }];
+		const base = fakeGit(root, files);
+		const run: GitRun = (argv, cwd) =>
+			argv[1] === "rev-parse" && argv.includes("--verify") ? { exitCode: 1, stdout: "" } : base(argv, cwd);
+		expect(targetRepoAuthorizes(root, "DELIVERY_ALLOW_MAIN_COMMIT", run)).toBe(false);
+	});
+
+	test("fails closed on malformed trusted tree output", () => {
+		const root = setupRepo();
+		const base = fakeGit(root, [{ path: "AGENTS.md", text: steeringDirective("DELIVERY_ALLOW_MAIN_COMMIT") }]);
+		const run: GitRun = (argv, cwd) =>
+			argv[1] === "ls-tree" ? { exitCode: 0, stdout: "100644 blob deadbeef\\tAGENTS.md" } : base(argv, cwd);
+		expect(targetRepoAuthorizes(root, "DELIVERY_ALLOW_MAIN_COMMIT", run)).toBe(false);
+	});
+
 	test("falls back from an absent remote HEAD to origin/master", () => {
 		const root = setupRepo();
 		const files = [{ path: "AGENTS.md", text: steeringDirective("DELIVERY_ALLOW_MAIN_COMMIT") }];

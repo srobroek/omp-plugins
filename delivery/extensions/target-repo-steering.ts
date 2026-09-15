@@ -22,10 +22,9 @@ function trustedRef(root: string, run: GitRun): string | null {
 		const head = run(["git", "symbolic-ref", "--quiet", "refs/remotes/origin/HEAD"], root);
 		if (head.exitCode === 0) {
 			const ref = head.stdout.trim();
-			if (/^refs\/remotes\/origin\/(?!HEAD(?:\/|$))\S+$/.test(ref)) {
-				const verified = run(["git", "rev-parse", "--verify", "--quiet", ref], root);
-				if (verified.exitCode === 0 && verified.stdout.trim()) return ref;
-			}
+			if (!/^refs\/remotes\/origin\/(?!HEAD(?:\/|$))\S+$/.test(ref)) return null;
+			const verified = run(["git", "rev-parse", "--verify", "--quiet", ref], root);
+			return verified.exitCode === 0 && verified.stdout.trim() ? ref : null;
 		}
 		for (const branch of ["main", "master"]) {
 			const ref = `refs/remotes/origin/${branch}`;
@@ -39,7 +38,7 @@ function trustedRef(root: string, run: GitRun): string | null {
 function treeEntries(root: string, ref: string, run: GitRun): TreeEntry[] | null {
 	try {
 		const result = run(
-			["git", "ls-tree", "-rz", "--full-tree", ref, "--", "AGENTS.md", "CLAUDE.md", ".omp"],
+			["git", "ls-tree", "-rz", "--full-tree", "-r", ref, "--", "AGENTS.md", "CLAUDE.md", ".omp"],
 			root,
 		);
 		if (result.exitCode !== 0) return null;

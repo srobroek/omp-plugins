@@ -59,11 +59,14 @@ export function getWorktreesDir(): string {
  * `DELIVERY_ALLOW_PRIMARY_CHECKOUT=1` is accepted only when the targeted repository itself
  * contains the exact affirmative steering directive. A bash-call override also grants later
  * `edit`/`write` calls in that same authorized primary checkout for the current session.
- *
+ * A commit from the primary checkout is separate: it requires command-local
+ * `DELIVERY_ALLOW_MAIN_COMMIT=1` plus the trusted canonical-main directive; the primary
+ * checkout env never authorizes a commit.
  */
 
 const EDIT_TOOLS: Record<string, true> = { edit: true, write: true };
 const ALLOW_ENV = "DELIVERY_ALLOW_PRIMARY_CHECKOUT";
+const MAIN_COMMIT_ENV = "DELIVERY_ALLOW_MAIN_COMMIT";
 const TIMEOUT_MS = 2000;
 
 /** Internal URIs (`xd://…`, `artifact://…`, `memory://…`) are not filesystem paths. */
@@ -177,15 +180,17 @@ function isStatePath(absolute: string, topLevel: string): boolean {
 }
 
 export function reasonFor(topLevel: string, what: string): string {
-	return (
-		`${what} is inside the primary checkout of ${topLevel}. Redispatch repository work with ` +
+	const authorization =
+		what === "This commit"
+			? `For a commit, put ${MAIN_COMMIT_ENV}=1 in the command's structured env only when this repository contains ` +
+			  `the exact line \`${steeringDirective(MAIN_COMMIT_ENV)}\` and the user authorized the exception.`
+			: `Set ${ALLOW_ENV}=1 only when this repository contains the exact line ` +
+			  `\`${steeringDirective(ALLOW_ENV)}\` and the user authorized the exception. ` +
+			  `For a follow-up edit/write, put that flag in a bash call's \`env\` while its cwd is ` +
+			  `this checkout; the session grant is limited to this repository.`;
+	return `${what} is inside the primary checkout of ${topLevel}. Redispatch repository work with ` +
 		`\`isolated: true\` so OMP places the change in its configured isolation root. ` +
-		`Make the change in that isolated clone. Set ` +
-		`${ALLOW_ENV}=1 only when this repository contains the exact line ` +
-		`\`${steeringDirective(ALLOW_ENV)}\` and the user authorized the exception. ` +
-		`For a follow-up edit/write, put that flag in a bash call's \`env\` while its cwd is ` +
-		`this checkout; the session grant is limited to this repository.`
-	);
+		`Make the change in that isolated clone. ${authorization}`;
 }
 
 /** Runtime-created isolated roots are harness-owned even though Git sees them as primary. */
@@ -242,6 +247,8 @@ export function decideCommit(
 	cwd: string,
 	env: NodeJS.ProcessEnv = process.env,
 	worktreesDir = getWorktreesDir(),
+	/** The command-local structured environment; session environment values do not authorize this exception. */
+	authorizationEnv: NodeJS.ProcessEnv = env,
 ): { block: true; reason: string } | undefined {
 	const run = injectedRun ?? defaultRun;
 	for (const invocation of findCommitInvocations(command, false)) {
@@ -249,7 +256,12 @@ export function decideCommit(
 		const target = invocation.repoDir === null ? cwd : resolve(cwd, invocation.repoDir);
 		const checkout = checkoutOf(target);
 		if (!checkout?.primary || isRuntimeCheckout(checkout.topLevel, worktreesDir)) continue;
-		if (env[ALLOW_ENV] === "1" && targetRepoAuthorizes(checkout.topLevel, ALLOW_ENV, run))
+		// A primary-checkout commit is the canonical-main exception. It deliberately uses the
+		// main-commit factor, never the primary-checkout env or its edit/write session grant.
+		if (
+			authorizationEnv[MAIN_COMMIT_ENV] === "1" &&
+			targetRepoAuthorizes(checkout.topLevel, MAIN_COMMIT_ENV, run)
+		)
 			continue;
 		return { block: true, reason: reasonFor(checkout.topLevel, "This commit") };
 	}
@@ -299,7 +311,7 @@ export default function primaryCheckoutGate(pi: ExtensionAPI): void {
 				}
 				const command = extractCommand(event.input);
 				if (!command) return;
-				return decideCommit(command, cwd, env, worktreesDir);
+				return decideCommit(command, cwd, env, worktreesDir, inputEnv ?? {});
 			}
 			if (EDIT_TOOLS[event.toolName] === true) {
 				return decideEdit(event.toolName, input, cwd, env, worktreesDir, authorizedPrimaryCheckouts);

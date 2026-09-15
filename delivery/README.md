@@ -53,6 +53,11 @@ The same committed-source, fenced-block, symlink, and veto rules apply to this a
 A bash call carrying the authorized override grants later `edit` and `write` calls in that same canonical primary checkout for the current session.
 The grant does not transfer to another repository or an OMP-isolated clone.
 
+Primary-checkout commits use the canonical-main exception: they require the same
+`DELIVERY_ALLOW_MAIN_COMMIT=1` command-local environment factor and the main-commit
+directive above. `DELIVERY_ALLOW_PRIMARY_CHECKOUT=1` never authorizes a commit;
+that factor remains separate for edit/write authorization and session grants.
+
 The gate is advisory-strength.
 It does not parse shell commands that write files through redirection, scripts, or utilities such as `sed -i`.
 

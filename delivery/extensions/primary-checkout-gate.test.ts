@@ -10,6 +10,11 @@ function authorizePrimary(root: string, body = "MUST authorize DELIVERY_ALLOW_PR
 	trustedSources.set(root, `${body}\n`);
 }
 
+function authorizeMain(root: string, body = "MUST authorize DELIVERY_ALLOW_MAIN_COMMIT=1 for this repository."): void {
+	writeFileSync(join(root, "CLAUDE.md"), `${body}\n`);
+	trustedSources.set(root, `${body}\n`);
+}
+
 import primaryCheckoutGate, {
 	checkoutOf,
 	decideCommit,
@@ -61,6 +66,7 @@ afterEach(() => {
 	setGitRunForTests(null);
 	setWorktreesDir(undefined);
 	delete process.env.OMP_WORKTREE_DIR;
+	trustedSources.clear();
 	if (scratch) rmSync(scratch, { recursive: true, force: true });
 });
 
@@ -211,6 +217,69 @@ describe("decideCommit", () => {
     });
 });
 
+describe("canonical-main primary commits", () => {
+	test("requires the command-local main env and trusted default-branch directive", () => {
+		const { primary } = setup();
+		authorizeMain(primary);
+		expect(decideCommit("git commit -m x", primary, { DELIVERY_ALLOW_MAIN_COMMIT: "1" })).toBeUndefined();
+		expect(decideCommit("git commit -m x", primary, {} )?.block).toBe(true);
+
+		const noDirective = join(scratch, "no-directive");
+		mkdirSync(join(noDirective, "src"), { recursive: true });
+		setGitRunForTests(fakeGit([
+			{ topLevel: primary, primary: true },
+			{ topLevel: noDirective, primary: true },
+		]));
+		expect(decideCommit("git commit -m x", noDirective, { DELIVERY_ALLOW_MAIN_COMMIT: "1" })?.block).toBe(true);
+	});
+
+	test.each([
+		["working-tree-only", "MUST authorize DELIVERY_ALLOW_MAIN_COMMIT=1 for this repository."],
+		["feature-branch text", "feature branch: MUST authorize DELIVERY_ALLOW_MAIN_COMMIT=1 for this repository."],
+		["fenced text", "```markdown\nMUST authorize DELIVERY_ALLOW_MAIN_COMMIT=1 for this repository.\n```"],
+	])("rejects %s steering", (_name, body) => {
+		const { primary } = setup();
+		writeFileSync(join(primary, "CLAUDE.md"), `${body}\n`);
+		// No trusted remote-default tree entry is installed for the first case; for the other
+		// cases the fake tree carries only the non-standalone or fenced text.
+		if (_name !== "working-tree-only") trustedSources.set(primary, `${body}\n`);
+		expect(decideCommit("git commit -m x", primary, { DELIVERY_ALLOW_MAIN_COMMIT: "1" })?.block).toBe(true);
+	});
+
+	test("does not borrow canonical-main steering from another repository", () => {
+		const { primary } = setup();
+		const other = join(scratch, "other-repo");
+		mkdirSync(join(other, "src"), { recursive: true });
+		authorizeMain(other);
+		setGitRunForTests(fakeGit([
+			{ topLevel: primary, primary: true },
+			{ topLevel: other, primary: true },
+		]));
+		expect(decideCommit("git commit -m x", primary, { DELIVERY_ALLOW_MAIN_COMMIT: "1" })?.block).toBe(true);
+		expect(decideCommit("git commit -m x", other, { DELIVERY_ALLOW_MAIN_COMMIT: "1" })).toBeUndefined();
+	});
+
+	test("does not treat primary env as a main-commit authorization", () => {
+		const { primary } = setup();
+		authorizeMain(primary);
+		expect(decideCommit("git commit -m x", primary, { DELIVERY_ALLOW_PRIMARY_CHECKOUT: "1" })?.block).toBe(true);
+		expect(decideEdit("write", { path: join(primary, "src", "new.ts") }, "/", { DELIVERY_ALLOW_PRIMARY_CHECKOUT: "1" })?.block).toBe(true);
+	});
+
+	test("canonical-main authorization does not authorize checkout, switch, merge, or push", () => {
+		const { primary } = setup();
+		authorizeMain(primary);
+		for (const command of [
+			"git checkout main",
+			"git switch main",
+			"git merge feature",
+			"git push origin main",
+		]) {
+			expect(decideCommit(command, primary, { DELIVERY_ALLOW_MAIN_COMMIT: "1" }), command).toBeUndefined();
+		}
+	});
+});
+
 describe("editedPaths", () => {
 	test("collects write paths, path lists, and hashline section headers once each", () => {
 		expect(editedPaths({ path: "a.ts", paths: ["b.ts", "a.ts"], input: "[c.ts#ABCD]\nPUT 1.=1:\n+x\n['d e.ts'#ABCD]\n" })).toEqual(["a.ts", "b.ts", "c.ts", "d e.ts"]);
@@ -237,6 +306,35 @@ describe("integration", () => {
 		}
 		return { toolCall, sessionStart };
 	}
+
+	test("requires the main override on the same bash call", () => {
+		const { primary } = setup();
+		authorizeMain(primary);
+		const { toolCall } = register();
+		expect(
+			toolCall({
+				toolName: "bash",
+				input: { cwd: primary, command: "git commit -m x", env: { DELIVERY_ALLOW_MAIN_COMMIT: "1" } },
+			}),
+		).toBeUndefined();
+		expect(
+			toolCall({ toolName: "bash", input: { cwd: primary, command: "git commit -m x" } }),
+		).toMatchObject({ block: true });
+	});
+
+	test("unrelated tool calls do not crash or receive canonical-main authorization", () => {
+		const { primary } = setup();
+		authorizeMain(primary);
+		const { toolCall } = register();
+		expect(toolCall({ toolName: "github", input: { op: "repo_view" } })).toBeUndefined();
+		expect(toolCall({ toolName: "eval", input: { code: "1 + 1" } })).toBeUndefined();
+		expect(
+			toolCall({
+				toolName: "bash",
+				input: { cwd: primary, command: "git checkout main", env: { DELIVERY_ALLOW_MAIN_COMMIT: "1" } },
+			}),
+		).toBeUndefined();
+	});
 
 	test("a bash-call env grant allows later edits in the same primary checkout", () => {
 		const { primary } = setup();

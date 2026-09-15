@@ -25,6 +25,12 @@ An exact `MUST NOT authorize <name>=1 for this repository.` line vetoes the corr
 The gate resolves the target repository from the bash call `cwd` or `git -C <path>` before reading its steering.
 Text in a command, commit message, or file body never authorizes an override.
 
+Primary-checkout commits use the canonical-main exception: they require the exact
+`MUST authorize DELIVERY_ALLOW_MAIN_COMMIT=1 for this repository.` directive from the
+trusted remote default tree and `DELIVERY_ALLOW_MAIN_COMMIT=1` in the same command's
+structured environment. `DELIVERY_ALLOW_PRIMARY_CHECKOUT=1` never authorizes a commit;
+it remains a separate factor for edit/write authorization and session grants.
+
 The main-branch gate blocks commits on `main` or `master`.
 The extension receives raw shell text, so arbitrary Bash checkout, switch, and merge operations are not runtime-enforced. Follow the steering prohibition above for those operations.
 
