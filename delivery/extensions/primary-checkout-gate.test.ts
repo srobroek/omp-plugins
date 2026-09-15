@@ -1,7 +1,11 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
+
+function authorizePrimary(root: string, body = "MUST authorize DELIVERY_ALLOW_PRIMARY_CHECKOUT=1 for this repository."): void {
+	writeFileSync(join(root, "CLAUDE.md"), `${body}\n`);
+}
 
 import { setWorktreesDir } from "@oh-my-pi/pi-utils";
 
@@ -67,12 +71,13 @@ describe("getWorktreesDir", () => {
 		delete process.env.OMP_WORKTREE_DIR;
 		expect(getWorktreesDir()).toBe(override);
 	});
+
 	test("uses the profile-aware XDG data root for the fallback", () => {
 		const home = mkdtempSync(join(tmpdir(), "pcg-home-"));
 		const xdg = join(home, "xdg");
 		const profileRoot = join(xdg, "omp", "profiles", "acme");
 		mkdirSync(profileRoot, { recursive: true });
-		const source = join(import.meta.dir, "primary-checkout-gate.ts");
+		const source = join(process.cwd(), "delivery/extensions/primary-checkout-gate.ts");
 		const script = `import { getWorktreesDir } from ${JSON.stringify(source)}; console.log(getWorktreesDir());`;
 		const result = Bun.spawnSync([process.execPath, "-e", script], {
 			env: { ...process.env, HOME: home, OMP_PROFILE: "acme", XDG_DATA_HOME: xdg, OMP_WORKTREE_DIR: "" },
@@ -107,11 +112,12 @@ describe("isRuntimeCheckout", () => {
 });
 
 describe("decideEdit", () => {
-	test("refuses an edit or write inside the primary checkout and names the wt command", () => {
+	test("refuses an edit or write inside the primary checkout and names OMP isolation", () => {
 		const { primary } = setup();
 		const write = decideEdit("write", { path: join(primary, "src", "new.ts"), content: "x" }, "/", {});
 		expect(write?.block).toBe(true);
-		expect(write?.reason).toContain("wt switch --create");
+		expect(write?.reason).toContain("isolated: true");
+		expect(write?.reason).toContain("configured isolation root");
 		expect(write?.reason).toContain(primary);
 		const edit = decideEdit("edit", { input: `[${primary}/src/a.ts#1A2B]\nPUT 1.=1:\n+x\n` }, "/", {});
 		expect(edit?.block).toBe(true);
@@ -149,9 +155,8 @@ describe("decideEdit", () => {
 		const { primary } = setup();
 		const input = { path: join(primary, "src", "new.ts"), content: "DELIVERY_ALLOW_PRIMARY_CHECKOUT=1" };
 		expect(decideEdit("write", input, "/", {})?.block).toBe(true);
-		expect(decideEdit("write", input, "/", { DELIVERY_ALLOW_PRIMARY_CHECKOUT: "1" })).toBeUndefined();
+		expect(decideEdit("write", input, "/", { DELIVERY_ALLOW_PRIMARY_CHECKOUT: "1" })?.block).toBe(true);
 	});
-
 	test("fails open when git cannot answer", () => {
 		const { primary } = setup();
 		setGitRunForTests(() => {
@@ -169,7 +174,7 @@ describe("decideCommit", () => {
 		expect(decideCommit(`git -C ${primary} commit -m 'fix'`, linked, {})?.block).toBe(true);
 		expect(decideCommit("git commit --dry-run -m 'fix'", primary, {})).toBeUndefined();
 		expect(decideCommit("git status && echo commit", primary, {})).toBeUndefined();
-		expect(decideCommit("git commit -m 'fix'", primary, { DELIVERY_ALLOW_PRIMARY_CHECKOUT: "1" })).toBeUndefined();
+		expect(decideCommit("git commit -m 'fix'", primary, { DELIVERY_ALLOW_PRIMARY_CHECKOUT: "1" })?.block).toBe(true);
 	});
 
 	test("does not block the read-only git inspection reproducer", () => {
@@ -221,6 +226,7 @@ describe("integration", () => {
 
 	test("a bash-call env grant allows later edits in the same primary checkout", () => {
 		const { primary } = setup();
+		authorizePrimary(primary);
 		const { toolCall } = register();
 		expect(toolCall({ toolName: "bash", input: { cwd: primary, env: { DELIVERY_ALLOW_PRIMARY_CHECKOUT: "1" } } })).toBeUndefined();
 		expect(toolCall({ toolName: "write", input: { path: join(primary, "src", "new.ts"), content: "" } })).toBeUndefined();
@@ -228,6 +234,7 @@ describe("integration", () => {
 
 	test("a grant is scoped to its primary checkout", () => {
 		const { primary } = setup();
+		authorizePrimary(primary);
 		const other = join(scratch, "other-repo");
 		mkdirSync(join(other, "src"), { recursive: true });
 		setGitRunForTests(fakeGit([{ topLevel: primary, primary: true }, { topLevel: other, primary: true }]));
@@ -238,6 +245,7 @@ describe("integration", () => {
 
 	test("a bash-call env grant does not require command or file content", () => {
 		const { primary } = setup();
+		authorizePrimary(primary);
 		const { toolCall } = register();
 		expect(toolCall({ toolName: "bash", input: { cwd: primary, env: { DELIVERY_ALLOW_PRIMARY_CHECKOUT: "1" } } })).toBeUndefined();
 		expect(toolCall({ toolName: "edit", input: { input: `[${primary}/src/a.ts#1A2B]\nPUT 1.=1:\n+DELIVERY_ALLOW_PRIMARY_CHECKOUT=1\n` } })).toBeUndefined();
@@ -252,6 +260,7 @@ describe("integration", () => {
 
 	test("session start clears repository grants", () => {
 		const { primary } = setup();
+		authorizePrimary(primary);
 		const { toolCall, sessionStart } = register();
 		expect(toolCall({ toolName: "bash", input: { cwd: primary, env: { DELIVERY_ALLOW_PRIMARY_CHECKOUT: "1" } } })).toBeUndefined();
 		expect(sessionStart({})).toBeUndefined();

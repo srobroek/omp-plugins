@@ -1,6 +1,6 @@
 ---
 name: delivery-git-workflow
-description: When creating or reviewing PRs, owning automated review, proving landing, cleaning worktrees, or linking delivery to Beads.
+description: When creating or reviewing PRs, owning automated review, proving landing, cleaning native isolation clones, or linking delivery to Beads.
 ---
 
 # Git Workflow
@@ -13,7 +13,20 @@ LEGEND: Rules carry stable IDs (GW-n).
 - Agent-authored PRs start as drafts (`gh pr create --draft`). Promote with `gh pr ready` only after implementation, local validation, required review, and CI are complete with no known blocker.
 - The body states what changed, why, and the test plan. Use one close keyword per issue line.
 - MUST GW-7: under squash merge the PR title becomes the commit subject, so it carries a conventional type and, in a monorepo, the package scope (`fix(beads): catalog refresh fails when offline`). Release automation reads subjects, not body bullets. Write the title for end users, never spec IDs, task references, or phase names.
-- A local merge to main is for an explicit request or a repository with no PR flow. Use `git merge --no-ff` for feature branches and an explicit strategy with `gh pr merge`.
+- Agents MUST NOT checkout or switch to `main` or `master`, or locally merge on those branches, unless repository-local steering explicitly authorizes the operation. An explicit user request or the absence of a PR flow does not authorize it.
+
+## Delivery gate authorization
+
+The delivery extensions require exact target-repository steering before either protected override works.
+The main-branch override requires `MUST authorize DELIVERY_ALLOW_MAIN_COMMIT=1 for this repository.`.
+The primary-checkout override requires `MUST authorize DELIVERY_ALLOW_PRIMARY_CHECKOUT=1 for this repository.`.
+Each directive must occupy its own line in a non-symlink root `AGENTS.md` or `CLAUDE.md`, or a direct non-symlink `.omp/rules/*.md` file.
+An exact `MUST NOT authorize <name>=1 for this repository.` line vetoes the corresponding authorization.
+The gate resolves the target repository from the bash call `cwd` or `git -C <path>` before reading its steering.
+Text in a command, commit message, or file body never authorizes an override.
+
+The main-branch gate blocks commits on `main` or `master`.
+The extension receives raw shell text, so arbitrary Bash checkout, switch, and merge operations are not runtime-enforced. Follow the steering prohibition above for those operations.
 
 ## Automated review loop
 
@@ -36,4 +49,4 @@ For PRs entering the PR-shepherd merge queue, create before PR creation one open
 
 MUST GW-3: prove the exact reviewed work reached its final destination. For PR-backed work, read `state`, `baseRefName`, `headRefOid`, and `mergeCommit` with `gh pr view`; `MERGED` proves that the recorded PR head landed in its base, but compare the branch tip with `headRefOid` because later commits remain unlanded. An intermediate merge needs proof that it reached the final destination. Without a PR, `git cherry` or stable patch IDs can prove an individual equivalent patch, not a multi-commit squash. Inspect the recorded merge commit or exact expected hunks. Do not use ancestry, merge-tree output, path existence, or non-empty history as sole proof.
 
-MUST GW-6: remove the worktree when its branch has landed: `wt remove <branch>` after the PR merges (`wt merge` removes it itself). The installed post-start prune hook is cleanup, not the first line.
+MUST GW-6: let OMP prune its native isolation clone after its branch lands. Do not use Git or Worktrunk worktree cleanup commands.

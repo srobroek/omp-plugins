@@ -1,6 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
-import { homedir, tmpdir } from "node:os";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 import mainBranchGate, {
@@ -14,18 +13,27 @@ import mainBranchGate, {
 	tokenize,
 } from "./main-branch-gate.ts";
 
+function steeredRepo(envName: string, body = `MUST authorize ${envName}=1 for this repository.`): string {
+	const root = mkdtempSync(join("/tmp", "delivery-steering-"));
+	mkdirSync(join(root, "src"), { recursive: true });
+	writeFileSync(join(root, "CLAUDE.md"), `${body}\n`);
+	return root;
+}
+
 type Call = { argv: string[]; cwd: string };
 
-/** A fake `git branch --show-current` over a fixed cwd -> branch table. */
+/** A fake git seam over a fixed cwd -> branch table, including canonical root lookup. */
 function fakeGit(
 	table: Record<string, string>,
 	calls: Call[] = [],
 ): { run: GitRun; calls: Call[] } {
+	const roots = Object.keys(table).sort((a, b) => b.length - a.length);
 	const run: GitRun = (argv, cwd) => {
 		calls.push({ argv, cwd });
-		const branch = table[cwd];
-		if (branch === undefined) return { exitCode: 128, stdout: "" };
-		return { exitCode: 0, stdout: `${branch}\n` };
+		const root = roots.find((candidate) => cwd === candidate || cwd.startsWith(`${candidate}/`));
+		if (root === undefined) return { exitCode: 128, stdout: "" };
+		if (argv.includes("--show-toplevel")) return { exitCode: 0, stdout: `${root}\n` };
+		return { exitCode: 0, stdout: `${table[root]}\n` };
 	};
 	return { run, calls };
 }
@@ -1537,15 +1545,15 @@ describe("decideCommit", () => {
 		expect(decideCommit("git commit -m x", "/work", {})).toBeUndefined();
 	});
 
-	test("the override comes from the environment, never from the command text", () => {
+	test("the override requires environment plus target-repository steering", () => {
 		const { run, calls } = fakeGit({ "/work": "main" });
 		setGitRunForTests(run);
 		expect(
 			decideCommit("git commit -m x", "/work", {
 				DELIVERY_ALLOW_MAIN_COMMIT: "1",
-			}),
-		).toBeUndefined();
-		expect(calls).toEqual([]);
+			})?.block,
+		).toBe(true);
+		expect(calls.length).toBeGreaterThan(0);
 
 		expect(
 			decideCommit("git commit -m x", "/work", {
@@ -1554,9 +1562,9 @@ describe("decideCommit", () => {
 		).toBe(true);
 	});
 
-	// Every one of these switched the gate off through text alone. A commit message explaining
-	// this gate contains exactly that prose, and a comment or here-document body is data the
-	// shell never executes, so no scan of the command can authorise soundly.
+	// Command text supplies neither authorization factor. A commit message explaining this gate
+	// contains exactly that prose, and a comment or here-document body is data the shell never
+	// executes, so no scan of the command can authorize soundly.
 	test("no command text grants the override", () => {
 		for (const command of [
 			"DELIVERY_ALLOW_MAIN_COMMIT=1 git commit -m x",
@@ -1595,7 +1603,7 @@ describe("denyReason", () => {
 		// The directory whose branch was actually read. Claiming it was the bash call's cwd was
 		// false whenever `-C` selected another repository.
 		expect(reason).toContain("/some/repo");
-		expect(reason).toContain("git switch -c");
+		expect(reason).toContain("feature branch")
 		// The route that actually works when the commit targets another repository.
 		expect(reason).toContain("cwd");
 		expect(reason).toContain("git -C");
@@ -1773,14 +1781,14 @@ describe("a commit inside a substitution", () => {
 		).toBeUndefined();
 	});
 
-	test("the override still clears it", () => {
+	test("the override requires repository steering", () => {
 		const { run } = fakeGit({ "/protected": "main" });
 		setGitRunForTests(run);
 		expect(
 			decideCommit('echo "$(git commit -m x)"', "/protected", {
 				DELIVERY_ALLOW_MAIN_COMMIT: "1",
-			}),
-		).toBeUndefined();
+			})?.block,
+		).toBe(true);
 	});
 });
 
@@ -1815,11 +1823,10 @@ describe("integration", () => {
 		expect(calls.map((c) => c.cwd)).toEqual(["/main-repo"]);
 	});
 
-	// Without this the override is reachable only by relaunching the session with the flag,
-	// which clears every commit rather than the one the user authorised. Structured tool input
-	// is safe to trust where command text is not: a message body cannot forge a field.
-	test("the bash call's own env grants the override for that call", () => {
-		const { run, calls } = fakeGit({ "/main-repo": "main" });
+	// The Bash call's environment is one required factor, not authorization by itself; exact
+	// target-repository steering is also required, while command text cannot forge either factor.
+	test("the Bash call's env alone does not grant the override", () => {
+		const { run } = fakeGit({ "/main-repo": "main" });
 		setGitRunForTests(run);
 		const [handler] = register();
 
@@ -1833,8 +1840,7 @@ describe("integration", () => {
 					env: { DELIVERY_ALLOW_MAIN_COMMIT: "1" },
 				},
 			}),
-		).toBeUndefined();
-		expect(calls).toEqual([]);
+		).toEqual(expect.objectContaining({ block: true }));
 	});
 
 	test("the bash call env cannot inject a Git alias", () => {
@@ -2016,4 +2022,82 @@ describe("integration", () => {
 			}),
 		).toBeUndefined();
 	});
+});
+describe("repository steering", () => {
+	test("accepts an exact root directive from a nested cwd", () => {
+		const root = steeredRepo("DELIVERY_ALLOW_MAIN_COMMIT");
+		try {
+			const { run } = fakeGit({ [root]: "main" });
+			setGitRunForTests(run);
+			expect(
+				decideCommit("git commit -m x", join(root, "src"), {
+					DELIVERY_ALLOW_MAIN_COMMIT: "1",
+				}),
+			).toBeUndefined();
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	test("accepts a direct rule and rejects incidental text, symlinks, and vetoes", () => {
+		const ruleRoot = steeredRepo("DELIVERY_ALLOW_MAIN_COMMIT", "not this line");
+		const vetoRoot = steeredRepo("DELIVERY_ALLOW_MAIN_COMMIT");
+		const symlinkRoot = steeredRepo("DELIVERY_ALLOW_MAIN_COMMIT");
+		try {
+			rmSync(join(ruleRoot, "CLAUDE.md"));
+			mkdirSync(join(ruleRoot, ".omp", "rules"), { recursive: true });
+			writeFileSync(
+				join(ruleRoot, ".omp", "rules", "allow.md"),
+				"MUST authorize DELIVERY_ALLOW_MAIN_COMMIT=1 for this repository.\n",
+			);
+			mkdirSync(join(vetoRoot, ".omp", "rules"), { recursive: true });
+			writeFileSync(
+				join(vetoRoot, ".omp", "rules", "deny.md"),
+				"MUST NOT authorize DELIVERY_ALLOW_MAIN_COMMIT=1 for this repository.\n",
+			);
+			const real = join(symlinkRoot, "real.md");
+			rmSync(join(symlinkRoot, "CLAUDE.md"));
+			writeFileSync(real, "MUST authorize DELIVERY_ALLOW_MAIN_COMMIT=1 for this repository.\n");
+			symlinkSync(real, join(symlinkRoot, "CLAUDE.md"));
+			const { run } = fakeGit({ [ruleRoot]: "main", [vetoRoot]: "main", [symlinkRoot]: "main" });
+			setGitRunForTests(run);
+			const env = { DELIVERY_ALLOW_MAIN_COMMIT: "1" };
+			expect(decideCommit("git commit -m x", ruleRoot, env)).toBeUndefined();
+			expect(decideCommit("git commit -m x", vetoRoot, env)?.block).toBe(true);
+			expect(decideCommit("git commit -m x", symlinkRoot, env)?.block).toBe(true);
+		} finally {
+			for (const root of [ruleRoot, vetoRoot, symlinkRoot]) rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	test("scopes authorization to each -C target and does not let one invocation grant another", () => {
+		const allowed = steeredRepo("DELIVERY_ALLOW_MAIN_COMMIT");
+		const denied = steeredRepo("DELIVERY_ALLOW_MAIN_COMMIT", "unrelated text");
+		try {
+			const { run } = fakeGit({ [allowed]: "main", [denied]: "main" });
+			setGitRunForTests(run);
+			const env = { DELIVERY_ALLOW_MAIN_COMMIT: "1" };
+			expect(decideCommit(`git -C ${allowed} commit -m x`, denied, env)).toBeUndefined();
+			expect(decideCommit(`git -C ${denied} commit -m x`, allowed, env)?.block).toBe(true);
+			expect(
+				decideCommit(`git -C ${allowed} commit -m a && git -C ${denied} commit -m b`, allowed, env)?.block,
+			).toBe(true);
+		} finally {
+			rmSync(allowed, { recursive: true, force: true });
+			rmSync(denied, { recursive: true, force: true });
+		}
+	});
+
+	test("explains that unreadable commands must be rewritten before authorization", () => {
+		const { run } = fakeGit({ "/protected": "main" });
+		setGitRunForTests(run);
+		const reason = decideCommit("exec $RUNNER git commit -m x", "/protected", {
+			DELIVERY_ALLOW_MAIN_COMMIT: "1",
+		})?.reason;
+		expect(reason).toContain("First rewrite the command into a readable form");
+		expect(reason).toContain("Do not try to clear this refusal with environment variables");
+		expect(reason).toContain("Only after the rewritten operation is readable");
+		expect(reason).toContain("target repository must contain");
+	});
+
 });

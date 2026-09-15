@@ -5,26 +5,25 @@ import type { ExtensionAPI, ToolCallEvent } from "@oh-my-pi/pi-coding-agent";
 import { getWorktreesDir as upstreamGetWorktreesDir } from "@oh-my-pi/pi-utils";
 
 import { extractCommand, findCommitInvocations } from "./main-branch-gate.ts";
+import { steeringDirective, targetRepoAuthorizes } from "./target-repo-steering.ts";
 
 /**
  * Refuse edits and commits inside a repository's primary checkout.
  *
- * An agent works in a Worktrunk worktree of the project (`wt switch --create`), never in
- * the checkout the human keeps open. That is true whether or not the run is orchestrated:
- * the primary checkout is where the human's branch, uncommitted work, and editor live, and
- * two actors in one tree lose work in ways neither can see.
+ * OMP redispatches repository work with `isolated: true` into standalone clones under its
+ * configured isolation root. Agents use those clones instead of editing the checkout the human
+ * keeps open. The primary checkout contains the human's branch, uncommitted work, and editor.
  *
  * Primary means: `git rev-parse --git-dir` and `--git-common-dir` name the same directory.
- * A linked worktree (Worktrunk or `git worktree add`) has its own `.git` file pointing at
- * `<common>/worktrees/<name>`, so the two differ. Outside a repository nothing is gated.
+ * OMP-native isolated clones under the configured root can also report as primary to Git, so the
+ * guard exempts them explicitly. Outside a repository nothing is gated.
  *
- * Fails open on purpose: when git cannot answer (no git, not a work tree, spawn failure),
- * a guard that blocks what it cannot see is worse than the rule it enforces.
+ * Fails open on purpose: when Git cannot answer (no Git, not a work tree, or spawn failure), a
+ * guard that blocks what it cannot see is worse than the rule it enforces.
+ * `DELIVERY_ALLOW_PRIMARY_CHECKOUT=1` is accepted only when the targeted repository itself
+ * contains the exact affirmative steering directive. A bash-call override also grants later
+ * `edit`/`write` calls in that same authorized primary checkout for the current session.
  *
- * `DELIVERY_ALLOW_PRIMARY_CHECKOUT=1` in the ENVIRONMENT (session or bash-call `env`) is the
- * sanctioned override for the case where the user asked for the primary checkout. A bash-call
- * override also grants later `edit`/`write` calls in that same primary checkout for this session,
- * because those tool schemas have no `env` field.
  */
 
 const EDIT_TOOLS: Record<string, true> = { edit: true, write: true };
@@ -149,14 +148,16 @@ function isStatePath(absolute: string, topLevel: string): boolean {
 
 export function reasonFor(topLevel: string, what: string): string {
 	return (
-		`${what} is inside the primary checkout of ${topLevel}. Agents work in a Worktrunk ` +
-		`worktree of the project: run \`wt switch --create <branch> --base origin/main --no-cd ` +
-		`--format json\` (in that repository) and make the change there. Set ` +
-		`${ALLOW_ENV}=1 in the environment only when the user asked for the primary checkout. ` +
+		`${what} is inside the primary checkout of ${topLevel}. Redispatch repository work with ` +
+		`\`isolated: true\` so OMP places the change in its configured isolation root. ` +
+		`Make the change in that isolated clone. Set ` +
+		`${ALLOW_ENV}=1 only when this repository contains the exact line ` +
+		`\`${steeringDirective(ALLOW_ENV)}\` and the user authorized the exception. ` +
 		`For a follow-up edit/write, put that flag in a bash call's \`env\` while its cwd is ` +
-		`this checkout; that session grant is limited to this repository.`
+		`this checkout; the session grant is limited to this repository.`
 	);
 }
+
 /** Runtime-created isolated roots are harness-owned even though Git sees them as primary. */
 export function isRuntimeCheckout(topLevel: string, worktreesDir = getWorktreesDir()): boolean {
 	const path = relative(resolve(worktreesDir), resolve(topLevel));
@@ -188,10 +189,20 @@ export function decideEdit(
 	authorizedPrimaryCheckouts?: AuthorizedPrimaryCheckouts,
 ): { block: true; reason: string } | undefined {
 	if (EDIT_TOOLS[toolName] !== true) return undefined;
-	if (env[ALLOW_ENV] === "1") return undefined;
+	const run = injectedRun ?? defaultRun;
 	for (const path of editedPaths(input)) {
 		const decision = decidePath(path, cwd, worktreesDir, authorizedPrimaryCheckouts);
-		if (decision) return decision;
+		if (!decision) continue;
+		const absolute = isAbsolute(path) ? resolve(path) : resolve(cwd, expandHome(path));
+		const checkout = checkoutOf(existingDir(absolute));
+		if (
+			env[ALLOW_ENV] === "1" &&
+			checkout?.primary === true &&
+			!isRuntimeCheckout(checkout.topLevel, worktreesDir) &&
+			targetRepoAuthorizes(checkout.topLevel, ALLOW_ENV, run)
+		)
+			continue;
+		return decision;
 	}
 	return undefined;
 }
@@ -202,18 +213,18 @@ export function decideCommit(
 	env: NodeJS.ProcessEnv = process.env,
 	worktreesDir = getWorktreesDir(),
 ): { block: true; reason: string } | undefined {
-	if (env[ALLOW_ENV] === "1") return undefined;
+	const run = injectedRun ?? defaultRun;
 	for (const invocation of findCommitInvocations(command, false)) {
 		if (invocation.dryRun || invocation.retargeted) continue;
 		const target = invocation.repoDir === null ? cwd : resolve(cwd, invocation.repoDir);
 		const checkout = checkoutOf(target);
 		if (!checkout?.primary || isRuntimeCheckout(checkout.topLevel, worktreesDir)) continue;
+		if (env[ALLOW_ENV] === "1" && targetRepoAuthorizes(checkout.topLevel, ALLOW_ENV, run))
+			continue;
 		return { block: true, reason: reasonFor(checkout.topLevel, "This commit") };
 	}
 	return undefined;
 }
-
-/** Bash-call environment grants are session-scoped and keyed by canonical primary checkout roots. */
 type SessionContext = { sessionManager?: { getSessionId?: () => string } };
 
 function sessionKey(ctx: SessionContext | undefined): string {
@@ -249,9 +260,12 @@ export default function primaryCheckoutGate(pi: ExtensionAPI): void {
 			if (event.toolName === "bash") {
 				if (inputEnv?.[ALLOW_ENV] === "1") {
 					const checkout = checkoutOf(cwd);
-					if (checkout?.primary && !isRuntimeCheckout(checkout.topLevel, worktreesDir)) {
+					if (
+						checkout?.primary &&
+						!isRuntimeCheckout(checkout.topLevel, worktreesDir) &&
+						targetRepoAuthorizes(checkout.topLevel, ALLOW_ENV, injectedRun ?? defaultRun)
+					)
 						authorizedPrimaryCheckouts.add(checkout.topLevel);
-					}
 				}
 				const command = extractCommand(event.input);
 				if (!command) return;
