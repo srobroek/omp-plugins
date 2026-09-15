@@ -63,14 +63,26 @@ NOT Use labels as locks or gate substitutes. Gate beads and `bd gate check`
   own blocking waits; `bd set-state` is non-blocking.
 
 REPORTING TO THE USER
+MUST In prose, immediately follow every Beads ID with a brief parenthetical
+  description. For example: `chezmoi-l3ig (find-tools routes discovery
+  incorrectly)`. Keep the brief description on every mention, including when an
+  expanded description has already been given.
+MUST When a Beads ID is specifically referenced or becomes the conversation's
+  main topic, give one expanded description at that point covering its scope,
+  status, and relevance. Do not repeat that expanded description while the same
+  subject remains active. Reset the one-time expanded-description rule only after
+  the conversation subject changes away from that bead and later returns to it.
+MUST Give every table containing Beads IDs a separate Description column and
+  populate it with each ID's brief parenthetical description; do not use a pure-ID
+  table as a substitute.
 MUST Give a bead an id, title, and one clause saying what it relates to:
   project area, producing work, or blocked work. Bare ids and titles are not a
   useful open-work report.
 MUST Report your beads first, then others in a separate section naming each
   holder and whether its lease is live.
-DEFAULT Pure id tables, counts, and prose that already explains a single bead
-  may omit the relation clause. Keep agent-to-agent reports terse; use the
-  [reporter contract]rule://beads-audit for machine-readable detail.
+DEFAULT Keep agent-to-agent reports terse while retaining the required brief
+  description and relation clause; use the [reporter contract]rule://beads-audit
+  for machine-readable detail.
 
 DEPENDENCIES
 DEFAULT Use `blocks` for ordering and `parent-child` for epics; use

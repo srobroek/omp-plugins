@@ -13,14 +13,10 @@
  * when it cannot see is worse than the rule it replaces. `--dry-run` commits
  * nothing and is allowed for the same reason.
  *
- * The escape hatch is deliberate. Local commits on main are sanctioned when the
- * user asks or the repository has no PR flow (rule://delivery-git-workflow), and
- * the rule this replaces could be re-armed per `ttsr.repeatMode` whereas a gate
- * blocks every attempt. `DELIVERY_ALLOW_MAIN_COMMIT=1` in the ENVIRONMENT, either
- * on the bash call or in the session, makes that decision explicit and auditable
- * instead of unavailable. Nothing written in the command grants it: matching that
- * text let a commit message disable the gate. This is advisory-strength, not a
- * security boundary.
+ * A protected main commit requires both `DELIVERY_ALLOW_MAIN_COMMIT=1` in the structured environment
+ * and exact target-repository steering. User-request wording, PR-flow status, or environment alone
+ * never authorizes the commit. Command text never authorizes either factor: matching text could let a
+ * commit message disable the gate. This is advisory-strength, not a security boundary.
  */
 import { resolve } from "node:path";
 
@@ -28,6 +24,7 @@ import type {
 	ExtensionAPI,
 	ToolCallEvent,
 } from "@oh-my-pi/pi-coding-agent";
+import { steeringDirective, targetRepoAuthorizes } from "./target-repo-steering.ts";
 
 const TIMEOUT_MS = 2000;
 
@@ -147,6 +144,7 @@ const PRE_VERB_VALUE_FLAGS: Record<string, true> = {
 	"--namespace": true,
 	"--config-env": true,
 	"--work-tree": true,
+	"--super-prefix": true,
 };
 
 /** Commit options that consume the following argv word. */
@@ -1295,6 +1293,7 @@ function scanInvocations(command: string): CommitInvocation[] {
 	return out;
 }
 
+
 /**
  * The checked-out branch of the repository at `cwd`, or `null` when git cannot
  * say: no work tree, a detached HEAD, an unborn branch, or no `git` at all.
@@ -1314,8 +1313,7 @@ export function currentBranch(cwd: string): string | null {
 export function denyReason(branch: string, readDir: string): string {
 	return (
 		`blocked by delivery (work lands on a branch, never on ${branch}): \`${readDir}\` has ` +
-		`\`${branch}\` checked out. Create or switch to a feature branch first (\`git switch -c ` +
-		"<type>/<slug>`, or `git switch <existing>` when the branch was made for this task), " +
+		`\`${branch}\` checked out, so this commit is refused. Create a feature branch for this task, ` +
 		"then commit there and open a PR.\n\n" +
 		"If this command writes no commit of its own, something in its TEXT read as one anyway. " +
 		"The usual cause is a SUBSTITUTION: this gate does not read inside `$(...)` or backticks, " +
@@ -1324,9 +1322,9 @@ export function denyReason(branch: string, readDir: string): string {
 		"counts, so this can fire with no git command present at all. A function definition body " +
 		"is scanned too, since a definition and a definition followed by a call cannot be told " +
 		"apart here.\n\n" +
-		"Which remedy applies depends on where the substitution sits. When it is UNRELATED to " +
-		'any git work, as in `echo "$(date)"; git status`, send the two parts as separate ' +
-		'calls. When it is PART of the git command, as in `git log --format="$(cat f)"`, ' +
+		"Which remedy applies depends on where the substitution sits. When it is UNRELATED to" +
+		' any git work, as in `echo "$(date)"; git status`, send the two parts as separate' +
+		' calls. When it is PART of the git command, as in `git log --format="$(cat f)"`, ' +
 		"splitting changes nothing and the substitution itself has to go: read the value in one " +
 		"call, then pass the result literally in the next. When the mention is only prose, " +
 		"rewrite it without backticks or `$(`.\n\n" +
@@ -1334,11 +1332,11 @@ export function denyReason(branch: string, readDir: string): string {
 		"`cwd`, or use an absolute `git -C <path> commit`. Both are read directly. A `cd` in " +
 		"the command is NOT followed, because the walker cannot tell a `cd` that ran from one " +
 		"that did not, and inferring it cleared commits onto protected branches.\n\n" +
-		`Only when the user explicitly asked for a commit on ${branch}, in a repository with ` +
-		`no PR flow or under an instruction to land directly, set \`${ALLOW_ENV}=1\` in the ` +
-		"ENVIRONMENT, either on the bash call or in the session. There is no command-text " +
-		"form: a commit message mentioning that flag used to disable this gate, so nothing " +
-		"written in the command grants it."
+		`Only when the target repository contains the exact line \`${steeringDirective(ALLOW_ENV)}\` ` +
+		`and the user authorized this protected operation, set \`${ALLOW_ENV}=1\` in the ` +
+		"ENVIRONMENT, either on the bash call or in the session. There is no command-text form: " +
+		"a commit message mentioning that flag used to disable this gate, so nothing written in the " +
+		"command grants it."
 	);
 }
 
@@ -1352,12 +1350,14 @@ export function unreadableReason(selector: string): string {
 		`carries \`${selector}\`, so which repository a commit would reach is not readable here. ` +
 		"A bare repository, a linked worktree, a `.git` outside its own tree, and an argv this " +
 		"gate cannot see each break the guess, so NOTHING was read and no branch was checked.\n\n" +
-		"State the repository and the command in a form that is read directly: pass the bash " +
-		"tool's `cwd`, use an absolute `git -C <path> commit`, and write the git call out rather " +
-		"than wrapping it in a shell, a split string, or an expansion. Then the branch is " +
-		"knowable and an ordinary commit on a feature branch passes.\n\n" +
-		`Only when the user explicitly asked for a commit on a protected branch set \`${ALLOW_ENV}=1\` ` +
-		"in the ENVIRONMENT, either on the bash call or in the session."
+		"First rewrite the command into a readable form: pass the bash tool's `cwd`, use an " +
+		"absolute `git -C <path> commit`, and write the git call out rather than wrapping it in a " +
+		"shell, a split string, or an expansion. Do not try to clear this refusal with environment " +
+		"variables or repository steering while the command is unreadable.\n\n" +
+		"Only after the rewritten operation is readable, if it targets a protected branch, the target " +
+		`repository must contain the exact line \`${steeringDirective(ALLOW_ENV)}\` and the user must ` +
+		`authorize it; then set \`${ALLOW_ENV}=1\` in the ENVIRONMENT, either on the bash call or in ` +
+		"the session."
 	);
 }
 
@@ -1387,9 +1387,7 @@ export function decideCommit(
 	cwd: string = process.cwd(),
 	env: NodeJS.ProcessEnv = process.env,
 ): { block: true; reason: string } | undefined {
-	if (env[ALLOW_ENV] === "1") return;
-	// `GIT_DIR`, `GIT_WORK_TREE` and `GIT_COMMON_DIR` in the CALL's environment retarget every
-	// git command in it, exactly as the flags do, and are just as unreadable from here.
+	const run = injectedRun ?? defaultRun;
 	const envSelector = TARGET_ENV.find(
 		(name) => env[name] !== undefined && env[name] !== "",
 	);
@@ -1418,14 +1416,14 @@ export function decideCommit(
 			};
 		if (envSelector !== undefined)
 			return { block: true, reason: unreadableReason(envSelector) };
-		// `-C` is the only directory the command states outright, so it is the only one applied.
-		// A `cd` is not followed, for the reasons on `findCommitInvocations`.
 		const target =
 			invocation.repoDir === null ? cwd : resolve(cwd, invocation.repoDir);
 		const branch = currentBranch(target);
 		if (branch === null) continue;
-		if (PROTECTED_BRANCHES[branch] === true)
+		if (PROTECTED_BRANCHES[branch] === true) {
+			if (env[ALLOW_ENV] === "1" && targetRepoAuthorizes(target, ALLOW_ENV, run)) continue;
 			return { block: true, reason: denyReason(branch, target) };
+		}
 	}
 	return;
 }
