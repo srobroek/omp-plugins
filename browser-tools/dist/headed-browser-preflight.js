@@ -40247,6 +40247,10 @@ import { access, mkdir as mkdir3, statfs } from "fs/promises";
 import { tmpdir as tmpdir3 } from "os";
 import { dirname as dirname4 } from "path";
 
+// extensions/lib/config.ts
+import { readFile } from "fs/promises";
+import { isAbsolute as isAbsolute2, normalize as normalize2 } from "path";
+
 // node_modules/@oh-my-pi/pi-utils/src/dirs.ts
 var exports_dirs = {};
 __export(exports_dirs, {
@@ -40996,8 +41000,6 @@ function __resetInstallIdCacheForTests() {
 }
 
 // extensions/lib/config.ts
-import { readFile } from "fs/promises";
-import { isAbsolute as isAbsolute2, normalize as normalize2 } from "path";
 var importPluginDirs = async () => exports_dirs;
 var PLUGIN_PACKAGE = "@srobroek/browser-tools";
 var ENGINES = ["firefox", "chrome"];
