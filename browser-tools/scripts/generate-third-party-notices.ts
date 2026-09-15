@@ -1,5 +1,5 @@
 #!/usr/bin/env bun
-import { existsSync, realpathSync } from "node:fs";
+import { readdirSync, realpathSync } from "node:fs";
 import { readFile, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
@@ -53,7 +53,9 @@ async function render(): Promise<string> {
 		const license = typeof manifest.license === "string" ? manifest.license : manifest.license?.type ?? "UNKNOWN";
 		const repository = typeof manifest.repository === "string" ? manifest.repository : manifest.repository?.url ?? manifest.homepage ?? "";
 		sections.push(`${manifest.name}@${manifest.version}`, `License: ${license}`, ...(repository ? [`Source: ${repository}`] : []));
-		const licenseFile = ["LICENSE", "LICENSE.txt", "COPYING", "NOTICE", "NOTICE.txt"].find((name) => existsSync(join(directory, name)));
+		const licenseFile = readdirSync(directory)
+			.sort()
+			.find((name) => ["license", "license.txt", "copying", "notice", "notice.txt"].includes(name.toLowerCase()));
 		if (licenseFile) sections.push(`File: ${licenseFile}`, "", await readFile(join(directory, licenseFile), "utf8"));
 		sections.push("", "---", "");
 	}

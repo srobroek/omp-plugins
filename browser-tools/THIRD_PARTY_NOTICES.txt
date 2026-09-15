@@ -12,7 +12,7 @@ Source: https://github.com/puppeteer/puppeteer/tree/main/packages/browsers
 ansi-regex@6.3.0
 License: MIT
 Source: chalk/ansi-regex
-File: LICENSE
+File: license
 
 MIT License
 
@@ -30,7 +30,7 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 ansi-styles@6.2.3
 License: MIT
 Source: chalk/ansi-styles
-File: LICENSE
+File: license
 
 MIT License
 
@@ -323,7 +323,7 @@ Source: https://github.com/mathiasbynens/emoji-regex.git
 escalade@3.2.0
 License: MIT
 Source: lukeed/escalade
-File: LICENSE
+File: license
 
 MIT License
 
@@ -347,7 +347,7 @@ Source: git+https://github.com/stefanpenner/get-caller-file.git
 get-east-asian-width@1.6.0
 License: MIT
 Source: sindresorhus/get-east-asian-width
-File: LICENSE
+File: license
 
 MIT License
 
@@ -431,7 +431,7 @@ Source: https://github.com/puppeteer/puppeteer/tree/main/packages/puppeteer-core
 string-width@7.2.0
 License: MIT
 Source: sindresorhus/string-width
-File: LICENSE
+File: license
 
 MIT License
 
@@ -449,7 +449,7 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 string-width@7.2.0
 License: MIT
 Source: sindresorhus/string-width
-File: LICENSE
+File: license
 
 MIT License
 
@@ -467,7 +467,7 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 string-width@8.2.2
 License: MIT
 Source: sindresorhus/string-width
-File: LICENSE
+File: license
 
 MIT License
 
@@ -485,7 +485,7 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 strip-ansi@7.2.0
 License: MIT
 Source: chalk/strip-ansi
-File: LICENSE
+File: license
 
 MIT License
 
@@ -744,7 +744,7 @@ File: LICENSE
 wrap-ansi@9.0.2
 License: MIT
 Source: chalk/wrap-ansi
-File: LICENSE
+File: license
 
 MIT License
 
