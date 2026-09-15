@@ -1,7 +1,8 @@
+import { execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import type { ExtensionAPI, ToolCallEvent } from "@oh-my-pi/pi-coding-agent";
-import { commandSegments, invocation } from "./shell-command.ts";
+import { commandSegments, invocation, type Token } from "./shell-command.ts";
 
 /**
  * A PR that names no bead is a PR nobody can trace back to a decision.
@@ -20,7 +21,6 @@ import { commandSegments, invocation } from "./shell-command.ts";
 
 const MAX_COMMAND_LENGTH = 64_000;
 const BEAD_REF = /(?:^|\s)(?:Bead|Closes-Bead|Bead-Id):\s*[A-Za-z][A-Za-z0-9_-]*-[A-Za-z0-9]+/i;
-const NO_BEAD = /(?:^|\s)No-Bead:\s*\S/i;
 
 /** Flags whose following token is a value, so a `--body` inside one is not the body. */
 const VALUE_FLAGS: Record<string, true> = {
@@ -49,7 +49,7 @@ const VALUE_FLAGS: Record<string, true> = {
 };
 
 export const REASON =
-	"This PR names no bead. Where beads is active, a PR and its beads point at each other: the body names what it implements, and each bead carries `pr` metadata, so a later session finds the decision without scanning GitHub history. Add a `Bead: <id>` line (several are fine) and stamp `bd update <id> --set-metadata pr=<n>` after creation. A PR that genuinely needs no bead carries `No-Bead: <reason>` instead.";
+	"This PR names no bead. Where beads is active, a PR and its beads point at each other: the body names what it implements, and each bead carries `pr` metadata, so a later session finds the decision without scanning GitHub history. Add a `Bead: <id>` line (several are fine) and stamp `bd update <id> --set-metadata pr=<n>` after creation.";
 
 export function beadsActive(dir: string): boolean {
 	let current = resolve(dir);
@@ -105,21 +105,77 @@ export function decidePrCreate(
 ): { block: true; reason: string } | null {
 	if (!active) return null;
 	if (body === null) return null;
-	if (BEAD_REF.test(body) || NO_BEAD.test(body)) return null;
+	if (BEAD_REF.test(body)) return null;
 	return { block: true, reason: REASON };
 }
 
 /** Blocks when any `gh pr create` in the command carries a bead-less body. */
 export function decideCommand(
 	command: string,
-	active: boolean,
+	active: boolean | ((segment: string) => boolean),
 ): { block: true; reason: string } | null {
 	if (command.length > MAX_COMMAND_LENGTH) return null;
 	for (const segment of commandSegments(command)) {
-		const decision = decidePrCreate(bodyOfGhCreate(segment), active);
+		const segmentActive = typeof active === "function" ? active(segment) : active;
+		const decision = decidePrCreate(bodyOfGhCreate(segment), segmentActive);
 		if (decision) return decision;
 	}
 	return null;
+}
+
+export function controlledByViewerPermission(permission: unknown): boolean {
+	return permission === "WRITE" || permission === "MAINTAIN" || permission === "ADMIN";
+}
+
+export function repositoryFromGhCreate(command: string): string | null {
+	const tokens = invocation(command, ["gh", "pr", "create"]);
+	if (!tokens) return null;
+	let selected: string | null = null;
+	for (let i = 3; i < tokens.length; i += 1) {
+		const token = tokens[i] as Token;
+		const value = token.value;
+		if (value === "--repo" || value === "-R") {
+			const next = tokens[++i];
+			selected = next?.value ?? null;
+		} else if (value.startsWith("--repo=")) {
+			selected = value.slice(7);
+		} else if (value.startsWith("-R") && value.length > 2) {
+			selected = value.slice(2);
+		} else if (/^-[A-Za-z]*R.+$/.test(value) && value.length > 3) {
+			selected = value.slice(value.indexOf("R") + 1);
+		} else if (value.startsWith("-") && VALUE_FLAGS[value] === true) {
+			i += 1;
+		}
+	}
+	return selected && /^(?:[^/\s]+\/)?[^/\s]+\/[^/\s]+$/.test(selected) ? selected : null;
+}
+
+export type RepositoryView = { nameWithOwner?: unknown; isFork?: unknown; parent?: { nameWithOwner?: unknown } | null };
+
+export function repositoryFromView(view: RepositoryView): string | null {
+	if (typeof view.nameWithOwner !== "string") return null;
+	if (view.isFork === true) return typeof view.parent?.nameWithOwner === "string" ? view.parent.nameWithOwner : null;
+	if (view.isFork === false) return view.nameWithOwner;
+	return null;
+}
+
+export function repositoryFromCurrentCheckout(cwd: string): string | null {
+	try {
+		const raw = execFileSync("gh", ["repo", "view", "--json", "nameWithOwner,isFork,parent"], { cwd, encoding: "utf8" });
+		return repositoryFromView(JSON.parse(raw) as RepositoryView);
+	} catch { return null; }
+}
+
+export function repositoryControlled(repo: string | null): boolean {
+	if (!repo) return false;
+	try {
+		const parts = repo.split("/");
+		const host = parts.length === 3 ? parts.shift() : null;
+		const path = parts.join("/");
+		const argv = host ? ["api", "--hostname", host, `repos/${path}`, "--jq", ".viewerPermission"] : ["api", `repos/${path}`, "--jq", ".viewerPermission"];
+		const permission = execFileSync("gh", argv, { encoding: "utf8" }).trim();
+		return controlledByViewerPermission(permission);
+	} catch { return false; }
 }
 
 export default function prBeadLinkGate(pi: ExtensionAPI): void {
@@ -138,20 +194,20 @@ export default function prBeadLinkGate(pi: ExtensionAPI): void {
 			if (event.toolName === "bash") {
 				const command = typeof input.command === "string" ? input.command : null;
 				if (!command?.includes("gh")) return;
-				return decideCommand(command, beadsActive(cwd)) ?? undefined;
+				return decideCommand(command, (segment) => beadsActive(cwd) && repositoryControlled(repositoryFromGhCreate(segment) ?? repositoryFromCurrentCheckout(cwd))) ?? undefined;
 			}
 			if (event.toolName === "write") {
 				const path = typeof input.path === "string" ? input.path : "";
 				if (!path.startsWith("xd://github")) return;
 				const content = typeof input.content === "string" ? input.content : "";
 				if (!content) return;
-				const args = JSON.parse(content) as { op?: string; body?: string; fill?: boolean };
+				const args = JSON.parse(content) as { op?: string; body?: string; fill?: boolean; repo?: string };
 				if (args.op !== "pr_create") return;
 				// `fill: true` builds the body from commits, so it is not visible here;
 				// anything else without a body is a bead-less body, not an unknown one.
 				if (args.fill === true) return;
 				const body = typeof args.body === "string" ? args.body : "";
-				return decidePrCreate(body, beadsActive(cwd)) ?? undefined;
+				return decidePrCreate(body, beadsActive(cwd) && repositoryControlled(typeof args.repo === "string" ? args.repo : repositoryFromCurrentCheckout(cwd))) ?? undefined;
 			}
 		} catch {
 			return;

@@ -1,6 +1,24 @@
 import { describe, expect, test } from "bun:test";
 
-import { bodyOfGhCreate, decideCommand, decidePrCreate, REASON } from "./pr-bead-link-gate.ts";
+import { bodyOfGhCreate, controlledByViewerPermission, decideCommand, decidePrCreate, REASON, repositoryFromGhCreate } from "./pr-bead-link-gate.ts";
+
+describe("repository control", () => {
+	test("only write-capable viewer permissions control", () => {
+		for (const permission of ["WRITE", "MAINTAIN", "ADMIN"]) expect(controlledByViewerPermission(permission)).toBe(true);
+		for (const permission of ["READ", "TRIAGE", null, undefined, ""]) expect(controlledByViewerPermission(permission)).toBe(false);
+	});
+	test("resolves explicit repo and rejects ambiguous targets", () => {
+		expect(repositoryFromGhCreate("gh pr create --repo owner/old --repo=owner/new --body x")).toBe("owner/new");
+		expect(repositoryFromGhCreate("gh pr create \"--repo\" owner/quoted --body x")).toBe("owner/quoted");
+		expect(repositoryFromGhCreate("gh pr create -R owner/short --body x")).toBe("owner/short");
+		expect(repositoryFromGhCreate("gh pr create --title \"--repo owner/fake\" --body x")).toBeNull();
+		expect(repositoryFromGhCreate("gh pr create --body \"--repo owner/fake\"")).toBeNull();
+		expect(repositoryFromGhCreate("gh pr create -R owner/one -Rowner/two --body x")).toBe("owner/two");
+		expect(repositoryFromGhCreate("gh pr create -dRowner/two --body x")).toBe("owner/two");
+		expect(repositoryFromGhCreate("gh pr create --body \"--repo owner/fake\"")).toBeNull();
+		expect(repositoryFromGhCreate("gh pr create --repo ghe.example.com/owner/project --body x")).toBe("ghe.example.com/owner/project");
+	});
+});
 
 describe("bodyOfGhCreate", () => {
 	test("reads every real --body spelling, attached forms included", () => {
@@ -52,9 +70,10 @@ describe("decidePrCreate", () => {
 		expect(decidePrCreate("Bead: omp-1\nBead: omp-2", true)).toBeNull();
 	});
 
-	test("allows the stated escape hatch and rejects an empty one", () => {
-		expect(decidePrCreate("No-Bead: revert of a bad merge", true)).toBeNull();
-		expect(decidePrCreate("No-Bead:", true)).not.toBeNull();
+	test("rejects internal linkage placeholders instead of treating them as an escape hatch", () => {
+		const placeholder = ["No", "-Bead"].join("");
+		expect(decidePrCreate(placeholder + ": revert of a bad merge", true)).not.toBeNull();
+		expect(decidePrCreate(placeholder + ":", true)).not.toBeNull();
 	});
 
 	test("stays silent where beads is not active", () => {
@@ -88,6 +107,18 @@ describe("decideCommand", () => {
 	test("ignores unrelated gh commands", () => {
 		expect(decideCommand("gh pr list --state open", true)).toBeNull();
 		expect(decideCommand("gh run watch 42", true)).toBeNull();
+	});
+});
+
+describe("per-segment repository control", () => {
+	test("evaluates mixed targets independently in either order", () => {
+		const controlled = (segment: string) => segment.includes("controlled/repo");
+		expect(decideCommand("gh pr create --repo external/repo --body plain && gh pr create --repo controlled/repo --body plain", controlled)).not.toBeNull();
+		expect(decideCommand("gh pr create --repo controlled/repo --body plain && gh pr create --repo external/repo --body plain", controlled)).not.toBeNull();
+	});
+	test("handles three mixed targets without sharing classification", () => {
+		const controlled = (segment: string) => segment.includes("controlled/repo");
+		expect(decideCommand("gh pr create --repo external/repo --body 'Bead: x-1' && gh pr create --repo controlled/repo --body plain && gh pr create --repo external/repo --body 'Bead: x-2'", controlled)).not.toBeNull();
 	});
 });
 
