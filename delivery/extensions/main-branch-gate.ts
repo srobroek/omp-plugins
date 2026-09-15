@@ -655,7 +655,7 @@ const ABSOLUTE_GIT_AFTER_CWD = /^\s*cd\s+(\/[^\s;&|]+)\s*&&\s+(\/[^\s;&|]+\/git)
 
 export function absoluteGitCwdTransition(command: string): string | undefined {
 	const match = command.match(ABSOLUTE_GIT_AFTER_CWD);
-	if (match === null || /[;&|()\r\n]/.test(match[3] ?? "")) return undefined;
+	if (match === null || /[;&|()\r\n]/.test((match[3] ?? "").replace(/\s+$/, ""))) return undefined;
 	return match[1];
 }
 
