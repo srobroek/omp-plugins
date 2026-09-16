@@ -131,7 +131,7 @@ const MUST_FIRE: Case[] = [
 	{ id: "after closed double quoted data", command: 'bd create x -d "don\'t"\ngit push origin main', why: "the push is executable once the double-quoted argv value closes" },
 	{ id: "after closed single quoted data", command: "bd create x -d 'say \"hello\"'\ngit push origin main", why: "the push is executable once the single-quoted argv value closes" },
 	{ id: "after closed escaped double quote data", command: 'bd create x -d "say \\"hello\\""\ngit push origin main', why: "escaped double quotes do not hide a push after the value closes" },
-	{ id: "after closed escaped single quote data", command: "bd create x -d 'don\\'t'\ngit push origin main", why: "escaped single quotes do not hide a push after the value closes" },
+	{ id: "after closed POSIX single quoted data", command: "bd create x -d 'don'\\''t'\ngit push origin main", why: "the push is executable after the concatenated escaped apostrophe and reopened single-quoted segment close" },
 	{ id: "newline mid script", command: "git status\ngit push origin main", why: "the same where the first line is also a git call" },
 	{ id: "command substitution", command: "$(git push origin main)", why: "an open paren starts a command position" },
 	{ id: "bd command substitution", command: 'bd create "t" -d "$(git push origin main)"', why: "a substitution inside bd data still executes its own command" },
