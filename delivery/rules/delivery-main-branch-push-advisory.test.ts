@@ -205,11 +205,6 @@ const MUST_NOT_FIRE: Case[] = [
 		why: "an escaped double quote does not end a double-quoted argv value",
 	},
 	{
-		id: "multiline single quoted description with escaped quote",
-		command: "bd create x -d 'don\\'t\ngit push origin main'",
-		why: "an escaped single quote does not end a single-quoted argv value",
-	},
-	{
 		id: "multiline bd update description",
 		command: "bd update adr-5 --description='commit/push/apply/install guidance:\ngit push origin main'",
 		why: "update payloads have the same argv-data contract",
