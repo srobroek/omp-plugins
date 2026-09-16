@@ -59,7 +59,7 @@ MUST GW-4: the agent that creates a PR owns its automated-review loop until land
 
 ## Beads linkage
 
-Where `.beads/` exists, a PR and its beads point at each other. Name every implementing bead in the PR body as `Bead: <id>` or `Closes-Bead: <id>`, and stamp `pr` metadata on every implementing bead. Before acting on a bead carrying `pr`, read that PR; before reviewing or landing a PR, read its beads and name the holder. Pass that context to review agents.
+- Agent-created PRs in a `.beads/` workspace link to an existing governing bead in the PR body as `Bead: <id>` or `Closes-Bead: <id>`, and stamp `pr` metadata on every implementing bead. If no governing bead exists, the agent states a truthful `No-Bead: <reason>`. Before acting on a bead carrying `pr`, read that PR. Before reviewing or landing an already-created incoming human or bot PR, absence of these trailers alone is not a finding or blocker; when Bead context is supplied, read it and validate it. Automated Release Please PRs are explicitly acceptable without linkage. This is an agent-side workflow convention, not a repository or GitHub requirement. Pass supplied Bead context to review agents.
 
 For PRs entering the PR-shepherd merge queue, create before PR creation one open, unassigned task bead labeled `pr:merge` and `agent:integrator`, with `branch`, `repo`, and `origin_actor` metadata. For every closing work bead, add its dependency on the merge bead before approval freezes the graph. Immediately after creation, stamp PR/base/head anchors on the merge bead. Keep implementation beads at `state:reported` or `state:approved` while unmerged; the integrator verifies landing before closing a `Closes-Bead` target. Draft PRs and automated release PRs are not ordinary merge-queue entries.
 
