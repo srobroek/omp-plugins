@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { gitTimeoutMs, runGitProbe, type GitRun, steeringDirective, targetRepoAuthorizes, targetRepoTrusts } from "./target-repo-steering.ts";
+import { type GitRun, gitTimeoutMs, runGitProbe, steeringDirective, targetRepoAuthorizes, targetRepoTrusts } from "./target-repo-steering.ts";
 
 let scratch: string | undefined;
 const SHA = "a".repeat(40);
