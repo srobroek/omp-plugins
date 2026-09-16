@@ -14,6 +14,7 @@ import mainBranchGate, {
 	PRIMARY_INDEX_OPERATIONS,
 	setGitRunForTests,
 	tokenize,
+	UNDECIDED_REASON,
 } from "./main-branch-gate.ts";
 
 type TrustedSource = { path: string; text: string; mode?: string; type?: string };
@@ -2442,5 +2443,134 @@ describe("production Git runner", () => {
 		} finally {
 			Object.defineProperty(Bun, "spawnSync", { value: original });
 		}
+	});
+});
+
+describe("relative -C after a supported cwd transition", () => {
+	test("resolves from the transitioned cwd, leaving direct and absolute forms alone", () => {
+		// `cd /abs-primary && /abs/git -C . commit` commits in /abs-primary. Filling in only the
+		// nulls left `-C .` resolving against the CALLER's checkout, so the branch of the wrong
+		// repository was read and the commit landed on whatever /abs-primary had checked out.
+		expect(findCommitInvocations("cd /abs-primary && /abs/git -C . commit -m x", false)[0]?.repoDir).toBe("/abs-primary/.");
+		expect(findCommitInvocations("cd /abs-primary && /abs/git -C sub commit -m x", false)[0]?.repoDir).toBe("/abs-primary/sub");
+		expect(findCommitInvocations("cd /abs-primary && /abs/git -Csub commit -m x", false)[0]?.repoDir).toBe("/abs-primary/sub");
+		expect(findCommitInvocations("cd /abs-primary && /abs/git -C a -C b commit -m x", false)[0]?.repoDir).toBe("/abs-primary/a/b");
+		// An absolute `-C` already names its target, and a relative child folds onto it.
+		expect(findCommitInvocations("cd /abs-primary && /abs/git -C /elsewhere commit -m x", false)[0]?.repoDir).toBe("/elsewhere");
+		expect(findCommitInvocations("cd /abs-primary && /abs/git -C /elsewhere -C child commit -m x", false)[0]?.repoDir).toBe("/elsewhere/child");
+		expect(findCommitInvocations("cd /abs-primary && /abs/git commit -m x", false)[0]?.repoDir).toBe("/abs-primary");
+		// With no transition to read, a relative `-C` still resolves against the bash call's cwd.
+		expect(findCommitInvocations("git -C sub commit -m x", false)[0]?.repoDir).toBe("sub");
+	});
+
+	test("a commit through the transitioned checkout is refused on its protected branch", () => {
+		const { run } = fakeGit({ "/feature": "feature", "/main": "main" });
+		setGitRunForTests(run);
+		for (const command of [
+			"cd /main && /usr/bin/git -C . commit -m x",
+			"cd /main && /usr/bin/git -C sub commit -m x",
+			"cd /main && /usr/bin/git -Csub commit -m x",
+		])
+			expect(decideCommit(command, "/feature"), command).toMatchObject({ block: true });
+		// The caller's own checkout is on a feature branch, which is what the old resolution read.
+		expect(decideCommit("cd /feature && /usr/bin/git -C . commit -m x", "/feature")).toBeUndefined();
+		expect(decideCommit("cd /feature && /usr/bin/git -C /feature commit -m x", "/main")).toBeUndefined();
+	});
+});
+
+describe("redirection targets carrying command substitution", () => {
+	// Bash expands a redirection target BEFORE it opens the file, so the nested Git call runs even
+	// though no argv this walker parses ever contains it. Checked with `includeOpaqueSubstitution`
+	// OFF, so these prove the redirection seam itself rather than the prose-level fallback.
+	const hidden = [
+		'git status > "$(git commit -m x)"',
+		'git status > "$(git checkout other)"',
+		'git status > "`git commit -m x`"',
+		'> "$(git commit -m x)" git status',
+		'echo ok > "$(git commit -m x)"',
+		'cat < "$(git checkout other)"',
+		// Concatenated so no single literal spells `${…}`. The command text is exactly
+		// `printf x 3>"$(g${EMPTY}it commit -m x)"`, a substitution naming no readable `git`.
+		'printf x 3>"$(g$' + '{EMPTY}it commit -m x)"',
+		'RUNNER=git; >"$($RUNNER commit -m x)" printf x',
+		"RUNNER=git; >\"`$RUNNER commit -m x`\" printf x",
+	];
+
+	test.each(hidden)("the commit walker surfaces it as unreadable: %s", (command) => {
+		expect(findCommitInvocations(command, false)).toContainEqual({ repoDir: null, dryRun: false, retargeted: true });
+	});
+
+	test.each(hidden)("a protected branch refuses it: %s", (command) => {
+		const { run } = fakeGit({ "/main": "main" });
+		setGitRunForTests(run);
+		expect(decideCommit(command, "/main")?.block, command).toBe(true);
+	});
+
+	test.each([
+		"git commit -m x > out.txt",
+		"git commit -m x 2>&1",
+		'git commit -m x > "$HOME/out.txt"',
+		"git commit -m x >/dev/null",
+		"> out.txt git commit -m x",
+	])("a harmless redirection adds no unreadable candidate: %s", (command) => {
+		const invocations = findCommitInvocations(command, false);
+		expect(invocations.length, command).toBe(1);
+		expect(invocations[0], command).toEqual({ repoDir: null, dryRun: false });
+	});
+});
+
+describe("registered handler on an unexpected failure", () => {
+	type Handler = (event: unknown, context?: { cwd?: string }) => unknown;
+	function register(): Handler {
+		const handlers: Handler[] = [];
+		mainBranchGate({ on: (event: string, handler: Handler) => { if (event === "tool_call") handlers.push(handler); } } as never);
+		return handlers[0] as Handler;
+	}
+
+	test("a tool name that throws on first access is refused, not allowed", () => {
+		const exploding = {
+			get toolName(): string {
+				throw new Error("classification exploded");
+			},
+			get input(): never {
+				throw new Error("input must not be read");
+			},
+		};
+		expect(register()(exploding)).toEqual({ block: true, reason: UNDECIDED_REASON });
+	});
+
+	test("a tool name read twice cannot launder a governed call into an ungoverned one", () => {
+		const { run } = fakeGit({ "/main": "main" });
+		setGitRunForTests(run);
+		let reads = 0;
+		const stateful = {
+			get toolName(): string {
+				reads++;
+				return reads === 1 ? "bash" : "read";
+			},
+			input: { cwd: "/main", command: "git commit -m x" },
+		};
+		expect(register()(stateful)).toMatchObject({ block: true });
+		expect(reads).toBe(1);
+	});
+
+	test("a tool this gate does not govern is never inspected", () => {
+		const untouched = {
+			toolName: "read",
+			get input(): never {
+				throw new Error("input must not be read");
+			},
+		};
+		expect(register()(untouched)).toBeUndefined();
+	});
+
+	test("a bash call whose classification throws is refused, not allowed", () => {
+		const exploding = {
+			toolName: "bash",
+			get input(): never {
+				throw new Error("classification exploded");
+			},
+		};
+		expect(register()(exploding)).toEqual({ block: true, reason: UNDECIDED_REASON });
 	});
 });

@@ -679,7 +679,13 @@ export function findCommitInvocations(command: string, includeOpaqueSubstitution
 	const transitionedCwd = absoluteGitCwdTransition(command);
 	if (transitionedCwd !== undefined) {
 		for (const invocation of out) {
+			// A RELATIVE `-C` in the same command resolves from the cwd the command transitioned
+			// to, not from the caller's: `cd /abs-primary && /abs/git -C . commit -m x` commits in
+			// /abs-primary. Filling in only the nulls left a relative `-C` pointing at the caller's
+			// checkout, so the branch of the wrong repository was read. An absolute `-C` already
+			// names its target.
 			if (invocation.repoDir === null) invocation.repoDir = transitionedCwd;
+			else if (!invocation.repoDir.startsWith("/")) invocation.repoDir = `${transitionedCwd}/${invocation.repoDir}`;
 		}
 	}
 	// A Git selector set in the SHELL survives the separator, so no invocation in this command
@@ -761,6 +767,12 @@ export type GitOperation =
 	| "push"
 	| "stage"
 	| "unstage"
+	/**
+	 * A `branch`, `worktree`, `fetch` or `symbolic-ref` spelling whose operands write, move, or
+	 * delete local refs or checkouts. The verb alone cannot say which: `git branch --list` reports
+	 * while `git branch -D x` deletes, so `operandAwareOperation` reads the operands.
+	 */
+	| "ref-mutation"
 	| "opaque";
 
 const GIT_COMMAND_TEXT = /(?:^|[^A-Za-z0-9_./-])(?:d?git|git-[A-Za-z0-9_-]+)(?:$|[^A-Za-z0-9_-])/;
@@ -804,12 +816,69 @@ export type GitInvocation = {
 	paths?: string[];
 };
 
-const PRIMARY_READ_ONLY = new Set([
-	"status", "log", "diff", "show", "branch", "rev-parse", "rev-list", "ls-files", "ls-tree", "cat-file",
-	"describe", "name-rev", "for-each-ref", "symbolic-ref", "shortlog", "blame", "grep", "archive", "count-objects",
-	"fsck", "verify-commit", "verify-tag", "whatchanged", "range-diff", "merge-base", "fetch", "remote", "worktree",
-	"help", "version",
-]);
+/**
+ * Verbs that read in EVERY spelling. A verb whose answer depends on its operands does NOT belong
+ * here; it goes in `OPERAND_AWARE_VERB_READS`. `branch`, `worktree`, `fetch` and `symbolic-ref`
+ * sat in this set, so `git branch -D <ref>`, `git branch -f <ref> <commit>`, `git worktree remove`,
+ * `git worktree prune`, `git fetch --prune`, `git fetch <remote> +refs/heads/main:refs/heads/main`
+ * and `git symbolic-ref HEAD refs/heads/other` all classified as reads, and the primary gate
+ * allowed every one of them in a pinned primary checkout with no authorization factor.
+ */
+const PRIMARY_READ_ONLY: Record<string, true> = {
+	status: true, log: true, diff: true, show: true, "rev-parse": true, "rev-list": true,
+	"ls-files": true, "ls-tree": true, "cat-file": true, describe: true, "name-rev": true,
+	"for-each-ref": true, shortlog: true, blame: true, grep: true, archive: true,
+	"count-objects": true, fsck: true, "verify-commit": true, "verify-tag": true,
+	whatchanged: true, "range-diff": true, "merge-base": true, remote: true, help: true,
+	version: true,
+};
+
+/**
+ * Options that keep an operand-aware verb a read. Everything UNLISTED — an unknown option, or a
+ * bare ref, remote, refspec or subcommand operand — is a local ref or checkout mutation. That
+ * direction is deliberate: a spelling nobody enumerated is refused in a protected primary checkout
+ * rather than permitted, so `git branch --list 'topic/*'` is refused with it. `worktree` lists no
+ * reading option beyond reporting flags because its SUBCOMMAND alone decides what it does.
+ */
+const OPERAND_AWARE_VERB_READS: Record<string, Record<string, true>> = {
+	branch: {
+		"-l": true, "--list": true, "-a": true, "--all": true, "-r": true, "--remotes": true,
+		"-v": true, "-vv": true, "--verbose": true, "--show-current": true, "-i": true,
+		"--ignore-case": true, "--color": true, "--no-color": true, "--column": true,
+		"--no-column": true, "--abbrev": true, "--no-abbrev": true, "--omit-empty": true,
+		"--contains": true, "--no-contains": true, "--merged": true, "--no-merged": true,
+		"--points-at": true, "--format": true, "--sort": true,
+	},
+	// A remote or refspec operand writes remote-tracking refs and `--prune` deletes them, so only
+	// the spellings that write nothing stay reads. `--dry-run` writes nothing AT ALL, which is why
+	// it also clears the operand rule below: `git fetch --dry-run origin main` only reports.
+	fetch: { "--dry-run": true, "-v": true, "--verbose": true, "-q": true, "--quiet": true, "--progress": true, "--no-progress": true },
+	"symbolic-ref": { "--short": true, "-q": true, "--quiet": true },
+	worktree: { "--porcelain": true, "-v": true, "--verbose": true, "-z": true },
+};
+
+/**
+ * Read options that CONSUME the following word when written without an attached `=`, so a ref they
+ * name is not counted as a positional operand: `git branch --contains HEAD` reports.
+ *
+ * Every entry here also forces Git's LIST mode, which is what makes consuming safe — if this table
+ * swallows an operand, Git was not going to write it either. Git's OPTIONAL-argument options are
+ * deliberately absent: `--color`, `--column` and `--abbrev` take a value only when attached with
+ * `=`, so listing them let `git branch --color newbranch` swallow the new ref and read as a report
+ * of nothing, while Git created that branch.
+ */
+const OPERAND_AWARE_VALUE_OPTIONS: Record<string, Record<string, true>> = {
+	branch: {
+		"--contains": true, "--no-contains": true, "--merged": true, "--no-merged": true,
+		"--points-at": true, "--format": true, "--sort": true,
+	},
+	fetch: {},
+	"symbolic-ref": {},
+	worktree: {},
+};
+
+/** `git worktree` subcommands that only report; the rest add, move, remove, lock, or prune. */
+const WORKTREE_READ_SUBCOMMANDS: Record<string, true> = { list: true };
 const PRIMARY_MUTATIONS = new Set(["checkout", "switch", "merge"]);
 const PRIMARY_SAFE_TEXT_COMMANDS = new Set(["echo", "printf", "cat", "true", "false", ":", "pwd", "rg", "grep"]);
 const REMOTE_READ_SUBCOMMANDS = new Set(["", "-v", "--verbose", "show", "get-url"]);
@@ -939,6 +1008,12 @@ export function findGitInvocations(command: string, env: NodeJS.ProcessEnv = {})
 	const tokens = tokenize(command);
 	if (persistentGitRetargeting(tokens)) return [opaqueInvocation()];
 	const out: GitInvocation[] = [];
+	// Bash expands a redirection TARGET before it opens the file, wherever the redirection sits and
+	// whatever command owns it, so this is asked ONCE over the whole stream instead of at each place
+	// the walker skips a redirection. `git status > "$(git checkout other)"`,
+	// `printf x 3>"$(git checkout other)"` and `> "$(git checkout other)" printf x` all run the
+	// substituted command, and only the first of those three is a Git command at all.
+	if (unreadableRedirectionTarget(tokens)) out.push(opaqueInvocation());
 	// Session- or call-level retargeting applies to every Git invocation in the command, so the
 	// checkout resolved from the caller's cwd is not the repository these commands would touch.
 	const envRetargeted = [...Object.keys(RETARGET_ENV), ...Object.keys(PATHSPEC_ENV)].some((name) => env[name] !== undefined && env[name] !== "");
@@ -1028,7 +1103,8 @@ export function findGitInvocations(command: string, env: NodeJS.ProcessEnv = {})
 				else if (PRIMARY_MUTATIONS.has(arg.text)) operation = arg.text as GitOperation;
 				else if (arg.text === "commit") operation = "commit";
 				else if (arg.text === "push") operation = "push";
-				else if (PRIMARY_READ_ONLY.has(arg.text)) operation = "read";
+				else if (OPERAND_AWARE_VERB_READS[arg.text] !== undefined) operation = operandAwareOperation(arg.text, remainder.slice(i + 1));
+				else if (PRIMARY_READ_ONLY[arg.text] === true) operation = "read";
 				else if (INDEX_VERB[arg.text] !== undefined) operation = INDEX_VERB[arg.text] as GitOperation;
 				else operation = "opaque";
 				continue;
@@ -1200,9 +1276,123 @@ function redirectionWidth(
 const REDIRECTION_BARE =
 	/^(?:\d+|&|\{[A-Za-z_][A-Za-z0-9_]*\})?(?:<<<|>>|>\||<>|>&|<&|>|<)$/;
 
+/**
+ * Whether any redirection in this command has a target this gate cannot read. Bash expands a
+ * redirection TARGET before it opens the file, wherever the redirection sits and whatever command
+ * owns it, so `git status > "$(git checkout other)"` performs that checkout with no argv any parse
+ * here contains, and quoting the target does not make it inert.
+ *
+ * FAILS CLOSED on the substitution itself rather than on a Git word inside it. Reading the body is
+ * the parser problem this module refuses to take on, and every text test tried on one has been
+ * escapable: `$(g${EMPTY}it checkout other)` spells no `git`, `$($RUNNER checkout other)` names the
+ * program in a shell variable, and a backtick nests through backslashes. So a target that must RUN
+ * something to be known is unreadable, and `> "$(date)"` is refused with the rest — the cost of not
+ * guessing. A target that names a file, a descriptor, or an ordinary variable expansion is grammar
+ * and is left alone, so `> out.txt`, `2>&1` and `> "$HOME/out.txt"` stay reads.
+ *
+ * A process substitution (`> >(git checkout other)`) never reaches this test: `tokenize` emits its
+ * `(` as a separator, so the nested command is walked at command position and `decideCommit` has
+ * already refused the grouping.
+ */
+function unreadableRedirectionTarget(words: Token[]): boolean {
+	for (let i = 0; i < words.length; i++) {
+		const word = words[i] as Token;
+		const next = words[i + 1];
+		const nextIsSeparator =
+			next !== undefined && !next.quoted && next.escaped !== true && (SEPARATOR[next.text] === true || next.text === "\n");
+		const width = redirectionWidth(word, next, nextIsSeparator);
+		if (width === 0) continue;
+		for (const target of words.slice(i, i + width))
+			if (target.text.includes("$(") || target.text.includes("`")) return true;
+		i += width - 1;
+	}
+	return false;
+}
+
+/**
+ * Whether an operand-aware verb reads or mutates local refs. `symbolic-ref` reads one ref name and
+ * writes when given a second, `worktree` is decided by its subcommand, and `branch` or `fetch`
+ * mutates as soon as it carries a positional operand it would write.
+ *
+ * FAILS CLOSED: an option `OPERAND_AWARE_VERB_READS` does not list is a `ref-mutation`, because a
+ * spelling this gate cannot read must not become an allow in a protected primary checkout. The one
+ * thing that outranks that is a verb's own `--dry-run`, which makes the WHOLE operation write
+ * nothing, so it is honoured however the rest of the command reads.
+ */
+function operandAwareOperation(verb: string, operands: Token[]): GitOperation {
+	const reads = OPERAND_AWARE_VERB_READS[verb];
+	if (reads === undefined) return "ref-mutation";
+	const valueOptions = OPERAND_AWARE_VALUE_OPTIONS[verb] ?? {};
+	const positional: string[] = [];
+	// Recorded rather than returned mid-walk. An early return on the first unlisted option made the
+	// ANSWER DEPEND ON ORDER: `git fetch --dry-run --prune` was refused while `--prune --dry-run` was
+	// not, which contradicts an operation-wide dry-run rule. Every operand is read first, then the
+	// precedence below is applied once.
+	//
+	// `--dry-run` DOMINATES for a verb that declares it: `git fetch --dry-run` updates no ref at all,
+	// so `--prune`, `--force` and a refspec beside it are reports of what would happen. Git's
+	// parse-options also accepts the generated negation, so this is the option's FINAL state and not
+	// merely whether the word appeared: `--dry-run --no-dry-run` writes and `--no-dry-run --dry-run`
+	// does not. Reading it as a latch permitted the first of those.
+	let dryRun = false;
+	// An option nobody enumerated. Refused unless the operation writes nothing at all.
+	let unlisted = false;
+	// `--list` makes every operand a PATTERN to match rather than a ref to write.
+	let listing = false;
+	// `--` ends option parsing, so `git branch --list -- -topic` matches a pattern that begins with a
+	// dash instead of passing an option nobody enumerated.
+	let options = true;
+	for (let i = 0; i < operands.length; i++) {
+		const token = operands[i] as Token;
+		const width = redirectionWidth(token, operands[i + 1], false);
+		if (width !== 0) {
+			// A redirection target is a FILE NAME, never an option: `git fetch origin > --dry-run`
+			// updates refs and reports nothing.
+			i += width - 1;
+			continue;
+		}
+		const text = token.text;
+		if (options && text === "--") {
+			options = false;
+			continue;
+		}
+		if (options && text.startsWith("-") && text !== "-") {
+			const name = text.includes("=") ? text.slice(0, text.indexOf("=")) : text;
+			if (reads["--dry-run"] === true && (name === "--dry-run" || name === "--no-dry-run"))
+				dryRun = name === "--dry-run";
+			else if (reads[name] !== true) unlisted = true;
+			// NOT `-l`: it means `--list` on current Git but `--create-reflog` on older Git, where
+			// `git branch -l newbranch` CREATES a branch. Ambiguity stays with the positional rule.
+			else if (name === "--list") listing = true;
+			if (!text.includes("=") && valueOptions[name] === true) {
+				const next = operands[i + 1];
+				if (next !== undefined && !next.text.startsWith("-")) i++;
+			}
+			continue;
+		}
+		positional.push(text);
+	}
+	if (dryRun) return "read";
+	if (unlisted) return "ref-mutation";
+	if (listing) return "read";
+	// `git fetch` writes remote-tracking refs in EVERY spelling that is not a dry run, including the
+	// bare form that defaults to `origin` and the explicitly negated one, so no operand count earns
+	// it a read.
+	if (verb === "fetch") return "ref-mutation";
+	// `git worktree` is a subcommand verb: only a reporting subcommand reads, and it takes no ref of
+	// its own. `git symbolic-ref <name>` reads that ref, and a second operand writes it.
+	if (verb === "worktree") return positional.length === 1 && WORKTREE_READ_SUBCOMMANDS[positional[0] as string] === true ? "read" : "ref-mutation";
+	if (verb === "symbolic-ref") return positional.length === 1 ? "read" : "ref-mutation";
+	return positional.length === 0 ? "read" : "ref-mutation";
+}
+
 function scanInvocations(command: string): CommitInvocation[] {
 	const out: CommitInvocation[] = [];
 	const tokens = tokenize(command);
+	// Asked once over the whole stream, for the reason `findGitInvocations` states: a redirection
+	// target expands wherever it sits and whatever command owns it, so a substitution there is a
+	// command this walker cannot read.
+	if (unreadableRedirectionTarget(tokens)) out.push({ repoDir: null, dryRun: false, retargeted: true });
 	const isSep = (t: Token | undefined): boolean =>
 		t !== undefined &&
 		!t.quoted &&
@@ -1778,6 +1968,21 @@ export function unreadableReason(selector: string): string {
 	);
 }
 
+/**
+ * An unexpected failure while classifying a call decided NOTHING, and a gate that returns no
+ * decision is read by the harness as an ALLOW: one malformed operand or one throwing filesystem
+ * question would silence the refusal for that whole call. Both delivery gates refuse with this
+ * shared reason instead, so an undecided call means the same thing in each of them.
+ */
+export const UNDECIDED_REASON =
+	"blocked by delivery (this gate could not classify this call): reading the call raised an " +
+	"unexpected error, so no branch and no checkout were read and nothing was authorized. Nothing " +
+	"about the command was permitted. Re-issue it in a plainer readable form — a direct `git` " +
+	"call with the bash tool's `cwd` set, one literal path or Git operand per call, no path the " +
+	"filesystem cannot answer for, no NUL or control byte, no wrapper shell, and no expansion in " +
+	"command position — and redispatch repository work with `isolated: true` so OMP places the " +
+	"change in its configured isolation root. Report the failure if it repeats.";
+
 function hasOpaqueCommandPosition(command: string): boolean {
 	const tokens = tokenize(command);
 	let atCommand = true;
@@ -1851,7 +2056,12 @@ export function decideCommit(
 export default function mainBranchGate(pi: ExtensionAPI): void {
 	pi.on("tool_call", (event: ToolCallEvent, ctx) => {
 		try {
-			if (event.toolName !== "bash") return;
+			// Read ONCE, and inside the guard. A property that throws on first access cannot be
+			// treated as a pass-through, and a stateful one that answers `bash` and then something
+			// else must not launder a governed call into an ungoverned one.
+			const toolName = event.toolName;
+			// A tool this gate never governs stays a pass-through: its input is never read.
+			if (toolName !== "bash") return;
 			const command = extractCommand(event.input);
 			if (!command) return;
 			const base = typeof ctx?.cwd === "string" && ctx.cwd ? ctx.cwd : process.cwd();
@@ -1868,7 +2078,9 @@ export default function mainBranchGate(pi: ExtensionAPI): void {
 				ctx?.sessionManager?.getSessionId?.() ?? "default",
 			);
 		} catch {
-			return;
+			// NEVER `return` here: an undecided bash call reads as an allow, which is how a single
+			// unexpected error used to disable the protected-branch refusal for the whole call.
+			return { block: true, reason: UNDECIDED_REASON };
 		}
 	});
 }

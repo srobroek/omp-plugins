@@ -2,7 +2,7 @@ import { existsSync, realpathSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { ExtensionAPI, ToolCallEvent } from "@oh-my-pi/pi-coding-agent";
-import { absoluteGitCwdTransition, extractCommand, findGitInvocations, hasUnsafeShellCwdOrGrouping, PRIMARY_INDEX_OPERATIONS, unreadableReason } from "./main-branch-gate.ts";
+import { absoluteGitCwdTransition, extractCommand, findGitInvocations, hasUnsafeShellCwdOrGrouping, PRIMARY_INDEX_OPERATIONS, UNDECIDED_REASON, unreadableReason } from "./main-branch-gate.ts";
 import { runGitProbe, steeringDirective, targetRepoAuthorizes, targetRepoCommonDir, targetRepoTrusts } from "./target-repo-steering.ts";
 
 let worktreesDirOverride: string | undefined;
@@ -242,8 +242,10 @@ export function reasonFor(topLevel: string, what: string): string {
 		what === "This commit"
 			? `For a commit, put ${MAIN_COMMIT_ENV}=1 in the command's structured env only when this repository contains ` +
 			  `the exact line \`${steeringDirective(MAIN_COMMIT_ENV)}\` and the user authorized the exception.`
-			: what === "This repository mutation"
-				? "Checkout, switch, and merge cannot target a primary checkout; push remains governed by the push router and pre-push gates."
+		: what === "This repository mutation"
+			? "Checkout, switch, merge, and local ref or worktree mutations (`git branch -D`, `git worktree remove`, " +
+			  "a `git fetch` refspec, a `git symbolic-ref` write) cannot target a primary checkout; push remains " +
+			  "governed by the push router and pre-push gates."
 				: `Set ${ALLOW_ENV}=1 only when this repository contains the exact line ` +
 				  `\`${steeringDirective(ALLOW_ENV)}\` and the user authorized the exception. ` +
 				  `For a follow-up edit/write, put that flag in a bash call's \`env\` while its cwd is ` +
@@ -252,18 +254,6 @@ export function reasonFor(topLevel: string, what: string): string {
 		`\`isolated: true\` so OMP places the change in its configured isolation root. ` +
 		`Make the change in that isolated clone. ${authorization}`;
 }
-
-/**
- * This gate raised an unexpected error while classifying a call it governs, so it never reached a
- * decision. An undecided call is refused: the alternative reads as an allow.
- */
-const UNDECIDED_REASON =
-	"blocked by delivery (the primary-checkout gate could not classify this call): reading the " +
-	"call raised an unexpected error, so whether it mutates a repository's primary checkout is " +
-	"unknown and it is refused rather than allowed. Send the work in a plainer shape — one " +
-	"literal path or Git operand per call, no path the filesystem cannot answer for, no NUL or " +
-	"control byte, no shell wrapper — and redispatch repository work with `isolated: true` so " +
-	"OMP places the change in its configured isolation root.";
 
 function revokeStaleGrants(grants: Map<string, PrimaryGrant> | undefined, run: GitRun, scope: string): void {
 	if (grants === undefined) return;
@@ -277,10 +267,38 @@ function revokeStaleGrants(grants: Map<string, PrimaryGrant> | undefined, run: G
 	}
 }
 
+/**
+ * `absolute` with its EXISTING prefix resolved through symlinks and its not-yet-existing tail
+ * appended unchanged (a `write` creates files, and may create several segments at once), or `null`
+ * when the filesystem cannot answer for that prefix.
+ */
+function canonicalPath(absolute: string): string | null {
+	const existing = existingDir(absolute);
+	try {
+		const real = realpathSync.native(existing);
+		return existing === absolute ? real : join(real, relative(existing, absolute));
+	} catch {
+		return null;
+	}
+}
+
 /** Runtime-created isolated roots are harness-owned even though Git sees them as primary. */
 export function isRuntimeCheckout(topLevel: string, worktreesDir = getWorktreesDir()): boolean {
-	const path = relative(resolve(worktreesDir), resolve(topLevel));
-	return path !== "" && path !== ".." && !path.startsWith(`..${sep}`) && !isAbsolute(path);
+	const root = resolve(worktreesDir);
+	const clone = resolve(topLevel);
+	// Compared BOTH as given and through symlinks. One directory has several spellings — a `/var/…`
+	// harness root against the `/private/var/…` top level Git reports for the same clone on macOS,
+	// or either reached through a symlink — and a runtime clone that failed this test was treated as
+	// a human's primary checkout and refused, so the harness could not write in its own isolation.
+	for (const [parent, child] of [
+		[root, clone],
+		[canonicalPath(root), canonicalPath(clone)],
+	] as const) {
+		if (parent === null || child === null) continue;
+		const path = relative(parent, child);
+		if (path !== "" && path !== ".." && !path.startsWith(`..${sep}`) && !isAbsolute(path)) return true;
+	}
+	return false;
 }
 
 export function decidePath(
@@ -293,9 +311,24 @@ export function decidePath(
 	const absolute = isAbsolute(path) ? resolve(path) : resolve(cwd, expandHome(path));
 	const checkout = checkoutOf(existingDir(absolute));
 	if (!checkout?.primary || isRuntimeCheckout(checkout.topLevel, worktreesDir)) return undefined;
-	if (!absolute.startsWith(`${checkout.topLevel}/`)) return undefined;
+	// Compared through CANONICAL spellings on BOTH sides. Git reports a top level as a REAL path, so
+	// a symlinked spelling of a file inside the checkout failed a raw prefix test and slipped an edit
+	// or write past this gate while the canonical spelling of the same file was refused.
+	// Canonicalizing one side only moves the mismatch: on macOS a `/var/…` tmpdir realpaths to
+	// `/private/var/…`, so a canonical target compared against a raw top level stops matching its
+	// own checkout.
+	const canonicalAbsolute = canonicalPath(absolute);
+	const canonicalTopLevel = canonicalPath(checkout.topLevel);
+	// The checkout is already known to be a protected primary one, so a path this gate cannot
+	// canonicalize is refused rather than allowed: an unreadable spelling must not be the way past it.
+	if (canonicalAbsolute === null || canonicalTopLevel === null) return { block: true, reason: reasonFor(checkout.topLevel, `\`${path}\``) };
+	const canonicallyInside = canonicalAbsolute.startsWith(`${canonicalTopLevel}/`);
+	if (!absolute.startsWith(`${checkout.topLevel}/`) && !canonicallyInside) return undefined;
 	if (authorizedPrimaryCheckouts?.has(checkout.topLevel)) return undefined;
-	if (isStatePath(absolute, checkout.topLevel)) return undefined;
+	// State is identified by where the write LANDS, never by how it is spelled. A `.omp` or `.beads`
+	// entry that is a symlink out into the source tree is not agent state: the lexical head read
+	// `.omp` while the write reached a tracked file, so the exemption is measured canonically.
+	if (canonicallyInside && isStatePath(canonicalAbsolute, canonicalTopLevel)) return undefined;
 	return { block: true, reason: reasonFor(checkout.topLevel, `\`${path}\``) };
 }
 
@@ -383,7 +416,7 @@ export function decideCommit(
 			return { block: true, reason: reasonFor(checkout.topLevel, "This index mutation") };
 		}
 		if (invocation.dryRun === true) continue;
-		if (invocation.operation === "checkout" || invocation.operation === "switch" || invocation.operation === "merge") {
+		if (invocation.operation === "checkout" || invocation.operation === "switch" || invocation.operation === "merge" || invocation.operation === "ref-mutation") {
 			if (checkout?.primary && !isRuntimeCheckout(checkout.topLevel, worktreesDir))
 				return { block: true, reason: reasonFor(checkout.topLevel, "This repository mutation") };
 			continue;
@@ -417,14 +450,17 @@ export default function primaryCheckoutGate(pi: ExtensionAPI): void {
 		authorizations.delete(sessionKey(ctx));
 	});
 	pi.on("tool_call", (event: ToolCallEvent, ctx) => {
-		// A tool this gate never governs stays a pass-through, and no filesystem or Git question is
-		// asked about it. For the tools it does govern, a question that cannot be answered is a
-		// refusal: an error raised while classifying the call once meant "no decision", which the
-		// harness reads as an allow, so one malformed operand laundered every later verb in the
-		// same command.
-		const governed = event.toolName === "bash" || EDIT_TOOLS[event.toolName] === true;
-		if (!governed) return;
 		try {
+			// Read ONCE, and inside the guard. A property that throws on first access cannot be
+			// treated as a pass-through, and a stateful one that answers `write` and then `read`
+			// must not launder a governed call into an ungoverned one.
+			const toolName = event.toolName;
+			// A tool this gate never governs stays a pass-through, and no input, filesystem, or Git
+			// question is asked about it. For the tools it does govern, a question that cannot be
+			// answered is a refusal: an error raised while classifying the call once meant "no
+			// decision", which the harness reads as an allow, so one malformed operand laundered
+			// every later verb in the same command.
+			if (toolName !== "bash" && EDIT_TOOLS[toolName] !== true) return;
 			const input = event.input as Record<string, unknown>;
 			const base = ctx?.cwd ?? process.cwd();
 			const cwd = typeof input.cwd === "string" && input.cwd ? resolve(base, input.cwd) : base;
@@ -432,7 +468,7 @@ export default function primaryCheckoutGate(pi: ExtensionAPI): void {
 			const env = inputEnv ? { ...process.env, ...inputEnv } : process.env;
 			const worktreesDir = getWorktreesDir();
 			const authorizedPrimaryCheckouts = grantsFor(ctx);
-			if (event.toolName === "bash") {
+			if (toolName === "bash") {
 				if (inputEnv?.[ALLOW_ENV] === "1") {
 					const checkout = checkoutOf(cwd);
 					const run = injectedRun ?? defaultRun;
@@ -449,7 +485,7 @@ export default function primaryCheckoutGate(pi: ExtensionAPI): void {
 				if (!command) return;
 				return decideCommit(command, cwd, env, worktreesDir, inputEnv ?? {}, sessionKey(ctx));
 			}
-			return decideEdit(event.toolName, input, cwd, env, worktreesDir, authorizedPrimaryCheckouts, sessionKey(ctx));
+			return decideEdit(toolName, input, cwd, env, worktreesDir, authorizedPrimaryCheckouts, sessionKey(ctx));
 		} catch {
 			return { block: true, reason: UNDECIDED_REASON };
 		}

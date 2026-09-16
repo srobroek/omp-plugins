@@ -15,11 +15,12 @@ function authorizeMain(root: string, body = "MUST authorize DELIVERY_ALLOW_MAIN_
 	trustedSources.set(root, `${body}\n`);
 }
 
-import { findGitInvocations } from "./main-branch-gate.ts";
+import { findGitInvocations, UNDECIDED_REASON } from "./main-branch-gate.ts";
 import primaryCheckoutGate, {
 	checkoutOf,
 	decideCommit,
 	decideEdit,
+	decidePath,
 	editedPaths,
 	type GitRun,
 	getWorktreesDir,
@@ -257,7 +258,7 @@ describe("decideCommit", () => {
 		const { primary } = setup();
 		const state: RemoteState = { offline: true };
 		setGitRunForTests(fakeGit([{ topLevel: primary, primary: true }], state));
-		for (const command of ["git status", "git diff", "git log -1", "git show HEAD", "git fetch origin"]) {
+		for (const command of ["git status", "git diff", "git log -1", "git show HEAD", "git fetch --dry-run origin"]) {
 			expect(decideCommit(command, primary, {}), command).toBeUndefined();
 		}
 		expect(decideCommit("git push origin main", primary, {})).toMatchObject({
@@ -920,7 +921,10 @@ describe("final primary parser bypass controls", () => {
 			"env git remote set-url origin evil",
 		]) expect(decideCommit(command, primary)?.block, command).toBe(true);
 		expect(decideCommit("git remote -v", primary)).toBeUndefined();
-		expect(decideCommit("git fetch origin", primary)).toBeUndefined();
+		// `git fetch origin` writes remote-tracking refs in this checkout, so it is a repository
+		// mutation now. Only the spellings that write nothing at all stay reads.
+		expect(decideCommit("git fetch origin", primary)?.block).toBe(true);
+		expect(decideCommit("git fetch --dry-run origin", primary)).toBeUndefined();
 	});
 
 	test.each([
@@ -992,5 +996,288 @@ describe("production Git runner", () => {
 		} finally {
 			Object.defineProperty(Bun, "spawnSync", { value: original });
 		}
+	});
+});
+
+describe("destructive ref spellings reach the primary-checkout policy", () => {
+	test.each([
+		"git branch -D main",
+		"git branch -f main HEAD",
+		"git branch -m main other",
+		"git branch --delete main",
+		"git branch topic",
+		"git worktree remove ../w",
+		"git worktree prune",
+		"git worktree add ../w main",
+		"git fetch --prune",
+		"git fetch origin +refs/heads/main:refs/heads/main",
+		"git symbolic-ref HEAD refs/heads/other",
+		"git symbolic-ref -d HEAD",
+		// A branch CREATION hiding behind an option whose argument is optional. `--color`, `--column`
+		// and `--abbrev` take a value only when attached with `=`, and `-l` is `--create-reflog` on
+		// older Git, so none of them may swallow the new ref and leave a report of nothing.
+		"git branch -l newbranch",
+		"git branch --color newbranch",
+		"git branch --column newbranch",
+		"git branch --abbrev newbranch",
+		// A refspec fetch whose redirection TARGET is merely named `--dry-run`: that is a file name,
+		// so the fetch still writes remote-tracking refs.
+		"git fetch origin main > --dry-run",
+		// Git's parse-options accepts the generated negation, so the LAST spelling decides. A latch
+		// that only asked whether `--dry-run` appeared permitted the first of these.
+		"git fetch --dry-run --no-dry-run origin",
+		"git fetch --dry-run --no-dry-run --prune origin main",
+		"git fetch --no-dry-run",
+		"git fetch --no-dry-run origin",
+		// Bare `git fetch` defaults to `origin` and writes remote-tracking refs, so no operand count
+		// earns it a read either.
+		"git fetch",
+		"git fetch -v",
+		"git fetch --quiet origin",
+	])("a protected primary checkout refuses it as a repository mutation: %s", (command) => {
+		const { primary } = setup();
+		expect(findGitInvocations(command), command).toEqual([{ operation: "ref-mutation", repoDir: null }]);
+		// Classifying it is only half the fix: `decideCommit` ends its loop in `continue`, so an
+		// operation it does not name explicitly is allowed.
+		expect(decideCommit(command, primary)?.reason, command).toContain("This repository mutation");
+	});
+
+	test.each([
+		"git branch",
+		"git branch -a",
+		"git branch --list",
+		"git branch --show-current",
+		"git branch --contains HEAD",
+		"git branch --sort=committerdate",
+		"git branch --list topic-*",
+		"git branch --list -- -topic",
+		// `--list` makes every operand a pattern, so it reports even beside an optional-arg option.
+		"git branch --list --color newbranch",
+		"git branch -l",
+		"git branch --color",
+		"git branch --abbrev=7",
+		// `--dry-run` makes the WHOLE fetch a report, so it outranks every later option and operand
+		// and the answer cannot depend on their order.
+		"git fetch --dry-run --prune",
+		"git fetch --prune --dry-run",
+		"git fetch --dry-run --force origin +refs/heads/main:refs/heads/main",
+		"git fetch origin +refs/heads/main:refs/heads/main --dry-run",
+		"git fetch --dry-run --prune --force origin main",
+		"git fetch --no-dry-run --dry-run origin",
+		"git fetch --no-dry-run --prune --dry-run origin main",
+		"git fetch --prune --dry-run -- origin main",
+		"git worktree list",
+		"git worktree list --porcelain",
+		"git symbolic-ref HEAD",
+		"git symbolic-ref --short HEAD",
+		"git fetch --dry-run",
+		"git fetch --dry-run origin",
+		"git fetch --dry-run origin main",
+		"git fetch origin --dry-run",
+		"git fetch --dry-run -- origin main",
+		"git status",
+		"git log --oneline",
+		"git rev-parse --show-toplevel",
+	])("a true read spelling is still allowed in the primary checkout: %s", (command) => {
+		const { primary } = setup();
+		expect(findGitInvocations(command), command).toEqual([{ operation: "read", repoDir: null }]);
+		expect(decideCommit(command, primary), command).toBeUndefined();
+	});
+
+	test("a linked worktree keeps every destructive spelling", () => {
+		const { linked } = setup();
+		for (const command of ["git branch -D main", "git worktree prune", "git fetch --prune", "git symbolic-ref -d HEAD"])
+			expect(decideCommit(command, linked), command).toBeUndefined();
+	});
+});
+
+describe("redirection targets carrying command substitution", () => {
+	// Bash expands a redirection target BEFORE it opens the file, so the nested Git call runs even
+	// though no argv either walker parses ever contains it. Checked at both positions and with a
+	// non-Git outer command, since a caller reaching only one seam must not get the weaker answer.
+	const hidden = [
+		'git status > "$(git checkout other)"',
+		'git status >> "$(git checkout other)"',
+		'git status 2> "$(git checkout other)"',
+		'git status > "`git checkout other`"',
+		'> "$(git checkout other)" git status',
+		'echo ok > "$(git commit -m x)"',
+		'cat < "$(git checkout other)"',
+		// Concatenated so no single literal spells `${…}`. The command text is exactly
+		// `printf x 3>"$(g${EMPTY}it checkout other)"`, a substitution naming no readable `git`.
+		'printf x 3>"$(g$' + '{EMPTY}it checkout other)"',
+		'RUNNER=git; >"$($RUNNER checkout other)" printf x',
+		"RUNNER=git; >\"`$RUNNER checkout other`\" printf x",
+	];
+
+	test.each(hidden)("findGitInvocations surfaces the hidden Git call: %s", (command) => {
+		expect(findGitInvocations(command)).toContainEqual({ operation: "opaque", repoDir: null, retargeted: true });
+	});
+
+	test.each(hidden)("a protected primary checkout refuses it: %s", (command) => {
+		const { primary } = setup();
+		expect(decideCommit(command, primary)?.block, command).toBe(true);
+	});
+
+	test.each([
+		"git status > out.txt",
+		"git status 2>&1",
+		'git status > "$HOME/out.txt"',
+		"git status >/dev/null",
+		"> out.txt git status",
+	])("a harmless redirection stays a read: %s", (command) => {
+		const { primary } = setup();
+		expect(findGitInvocations(command), command).toEqual([{ operation: "read", repoDir: null }]);
+		expect(decideCommit(command, primary), command).toBeUndefined();
+	});
+
+	test("a process substitution is refused as grouping", () => {
+		const { primary } = setup();
+		for (const command of ["git status > >(git checkout other)", "git status < <(git checkout other)"])
+			expect(decideCommit(command, primary)?.block, command).toBe(true);
+	});
+});
+
+describe("registered handler on an unexpected failure", () => {
+	type Handler = (event: unknown, context?: unknown) => unknown;
+	function register(): Handler {
+		const handlers: Handler[] = [];
+		primaryCheckoutGate({
+			on: (event: string, handler: Handler) => {
+				if (event === "tool_call") handlers.push(handler);
+			},
+		} as never);
+		return handlers[0] as Handler;
+	}
+
+	test("a tool name that throws on first access is refused, not allowed", () => {
+		const exploding = {
+			get toolName(): string {
+				throw new Error("classification exploded");
+			},
+			get input(): never {
+				throw new Error("input must not be read");
+			},
+		};
+		expect(register()(exploding)).toEqual({ block: true, reason: UNDECIDED_REASON });
+	});
+
+	test("a tool name read twice cannot launder a governed call into an ungoverned one", () => {
+		const { primary } = setup();
+		let reads = 0;
+		const stateful = {
+			get toolName(): string {
+				reads++;
+				return reads === 1 ? "write" : "read";
+			},
+			input: { path: join(primary, "src", "new.ts"), content: "x" },
+		};
+		expect(register()(stateful, { cwd: primary })).toMatchObject({ block: true });
+		expect(reads).toBe(1);
+	});
+
+	test("a tool this gate does not govern is never inspected", () => {
+		const untouched = {
+			toolName: "read",
+			get input(): never {
+				throw new Error("input must not be read");
+			},
+		};
+		expect(register()(untouched)).toBeUndefined();
+	});
+
+	test("a classification failure inside a governed call is refused", () => {
+		const exploding = {
+			toolName: "write",
+			input: {
+				get path(): string {
+					throw new Error("classification exploded");
+				},
+			},
+		};
+		expect(register()(exploding)).toEqual({ block: true, reason: UNDECIDED_REASON });
+	});
+});
+
+describe("symlinked spellings of a primary checkout", () => {
+	/**
+	 * Real Git resolves symlinks itself and reports the checkout's REAL top level, which is what
+	 * lets an aliased path fail a raw prefix comparison. This seam reproduces that: it answers for
+	 * any directory whose realpath is inside the primary checkout, and reports the real top level.
+	 */
+	function realpathAwareGit(primary: string): GitRun {
+		const realPrimary = realpathSync(primary);
+		return (argv, cwd) => {
+			let real: string;
+			try {
+				real = realpathSync(cwd);
+			} catch {
+				return { exitCode: 128, stdout: "" };
+			}
+			if (real !== realPrimary && !real.startsWith(`${realPrimary}/`)) return { exitCode: 128, stdout: "" };
+			if (argv[1] === "rev-parse" && argv.includes("--show-toplevel"))
+				return { exitCode: 0, stdout: `${realPrimary}\n${realPrimary}/.git\n${realPrimary}/.git\n` };
+			if (argv[1] === "rev-parse" && argv.includes("--git-common-dir")) return { exitCode: 0, stdout: `${realPrimary}/.git\n` };
+			return { exitCode: 1, stdout: "" };
+		};
+	}
+
+	test("an alias of the primary checkout blocks write and edit like the canonical spelling", () => {
+		const { primary } = setup();
+		const alias = join(scratch, "alias");
+		symlinkSync(primary, alias);
+		setGitRunForTests(realpathAwareGit(primary));
+		expect(decidePath(join(primary, "src", "a.ts"), "/")).toMatchObject({ block: true });
+		expect(decidePath(join(alias, "src", "a.ts"), "/")).toMatchObject({ block: true });
+		expect(decideEdit("write", { path: join(alias, "src", "new.ts"), content: "" }, "/", {})).toMatchObject({ block: true });
+		expect(decideEdit("edit", { input: `[${join(alias, "src", "a.ts")}#1A2B]\nPUT 1.=1:\n+x\n` }, "/", {})).toMatchObject({ block: true });
+	});
+
+	test("a nested alias and a path whose last components do not exist yet still block", () => {
+		const { primary } = setup();
+		const alias = join(scratch, "alias");
+		const nested = join(scratch, "nested");
+		symlinkSync(primary, alias);
+		symlinkSync(alias, nested);
+		setGitRunForTests(realpathAwareGit(primary));
+		expect(decidePath(join(nested, "src", "a.ts"), "/")).toMatchObject({ block: true });
+		expect(decidePath(join(nested, "src", "deep", "deeper", "new.ts"), "/")).toMatchObject({ block: true });
+		expect(decideEdit("write", { path: join(nested, "src", "deep", "deeper", "new.ts"), content: "" }, "/", {})).toMatchObject({ block: true });
+	});
+
+	test("a state directory that symlinks into the source tree is not agent state", () => {
+		const { primary } = setup();
+		symlinkSync(join(primary, "src"), join(primary, ".omp", "escape"));
+		setGitRunForTests(realpathAwareGit(primary));
+		expect(decidePath(join(primary, ".omp", "state.json"), "/")).toBeUndefined();
+		expect(decidePath(join(primary, ".omp", "escape", "a.ts"), "/")).toMatchObject({ block: true });
+		expect(decideEdit("write", { path: join(primary, ".omp", "escape", "new.ts"), content: "" }, "/", {})).toMatchObject({ block: true });
+	});
+
+	test("aliasing leaves the linked, outside, internal-URI and read controls alone", () => {
+		const { primary, linked, outside } = setup();
+		const alias = join(scratch, "alias");
+		symlinkSync(primary, alias);
+		setGitRunForTests(realpathAwareGit(primary));
+		expect(decidePath(join(linked, "src", "a.ts"), "/")).toBeUndefined();
+		expect(decidePath(join(outside, "a.ts"), "/")).toBeUndefined();
+		expect(decidePath("xd://ast_edit", "/")).toBeUndefined();
+		expect(decideEdit("read", { path: join(alias, "src", "a.ts") }, "/", {})).toBeUndefined();
+	});
+
+	test("a runtime clone stays a runtime clone through an aliased harness root", () => {
+		scratch = mkdtempSync(join(tmpdir(), "pcg-"));
+		const root = join(scratch, "omp-wt");
+		const clone = join(root, "task-1", "repo");
+		mkdirSync(clone, { recursive: true });
+		const aliasRoot = join(scratch, "wt-alias");
+		symlinkSync(root, aliasRoot);
+		// Either side may carry the aliased spelling, and `/var` against `/private/var` is the same
+		// question: a runtime clone that failed this test was refused as a human's primary checkout.
+		expect(isRuntimeCheckout(clone, aliasRoot)).toBe(true);
+		expect(isRuntimeCheckout(join(aliasRoot, "task-1", "repo"), root)).toBe(true);
+		expect(isRuntimeCheckout(realpathSync(clone), aliasRoot)).toBe(true);
+		expect(isRuntimeCheckout(realpathSync(clone), root)).toBe(true);
+		expect(isRuntimeCheckout(join(scratch, "elsewhere", "repo"), root)).toBe(false);
 	});
 });
