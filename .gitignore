@@ -22,6 +22,8 @@ node_modules/
 .dolt/
 *.db
 .beads-credential-key
+.beads.gate.lock
+# OMP beads gate lock; untracked runtime artifact must not enter isolation patches
 
 # Playwright MCP artifacts
 .playwright-mcp/
