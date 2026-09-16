@@ -1,0 +1,87 @@
+name: omp-minor-issue
+
+# .github/dependabot.yml ignores @oh-my-pi/* minor and major updates on purpose,
+# so nothing would otherwise notice that this checkout has fallen behind a new
+# OMP minor. This opens one compatibility issue per minor and hands the decision
+# to a human.
+
+on:
+  schedule:
+    - cron: "0 9 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+# Serialized, never cancelled. The dedupe below reads the issue list and then
+# creates an issue; two overlapping runs would both read "absent" and file the
+# same compatibility issue twice, and cancelling a run between the read and the
+# create loses the week's notice entirely.
+concurrency:
+  group: omp-minor-issue
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Open a compatibility issue for a newer OMP minor
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+
+          # The root manifest is the authority for the OMP version this checkout
+          # targets; scripts/check-plugin-loading.ts and ci.yml read the same pin.
+          current="$(python3 -c 'import json; print(json.load(open("package.json"))["devDependencies"]["@oh-my-pi/pi-coding-agent"])')"
+          latest="$(npm view @oh-my-pi/pi-coding-agent version)"
+          for value in "$current" "$latest"; do
+            case "$value" in
+              [0-9]*.[0-9]*.[0-9]*) ;;
+              *) echo "Not a resolvable version: '$value'" >&2; exit 1 ;;
+            esac
+          done
+          IFS=. read -r current_major current_minor _ <<<"$current"
+          IFS=. read -r latest_major latest_minor _ <<<"$latest"
+
+          if [ "$latest_major" -lt "$current_major" ]; then
+            exit 0
+          fi
+          if [ "$latest_major" -eq "$current_major" ] && [ "$latest_minor" -le "$current_minor" ]; then
+            exit 0
+          fi
+
+          title="Review OMP ${latest_major}.${latest_minor} compatibility"
+
+          # Fail closed on the dedupe. `gh issue list --limit N` silently stops at
+          # N, so a repository with more history than that page would file this
+          # issue again every Monday; `gh api --paginate` walks every page. `set -e`
+          # aborts on an API error instead of reading an empty result as "no such
+          # issue". The /issues endpoint also returns pull requests, so a PR that
+          # happens to share the title is filtered out rather than suppressing a
+          # real issue.
+          titles="$(gh api --paginate -X GET repos/{owner}/{repo}/issues \
+            -f state=all -f per_page=100 \
+            --jq '.[] | select(has("pull_request") | not) | .title')"
+          if printf '%s\n' "$titles" | grep -Fxq "$title"; then
+            echo "$title already exists; nothing to do."
+            exit 0
+          fi
+
+          gh issue create --title "$title" --body "$(
+            printf '%s\n' \
+              "The latest \`@oh-my-pi/pi-coding-agent\` release is $latest; this repository pins $current." \
+              "" \
+              "Dependabot ignores @oh-my-pi/* minor and major updates (see .github/dependabot.yml)" \
+              "because a new OMP minor can change the extension SDK the plugins in this" \
+              "repository compile against. Review compatibility, then move all five @oh-my-pi" \
+              "pins in package.json together: the root manifest is the single authority for the" \
+              "loader smoke and the CI host, so they follow the pins automatically."
+          )"

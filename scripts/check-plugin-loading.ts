@@ -11,10 +11,13 @@ interface LoadResult { extensions: unknown[]; runtime: unknown; errors: Array<{ 
 interface CatalogEntry { name: string; source: string }
 
 // Run with Bun and a pinned, separately installed OMP. No provider requests or MCP startup.
-const VERSION = "18.1.14";
+const repo = resolve(process.env.OMP_SMOKE_REPO ?? join(import.meta.dir, ".."));
+// The root manifest is the single authority for the OMP version this checkout targets, so
+// the dependency bot moves the smoke host and the development pins in one commit instead of
+// leaving this smoke to certify a host nobody develops against.
+const VERSION: string = (await json(join(repo, "package.json"))).devDependencies["@oh-my-pi/pi-coding-agent"];
 // Published checkout plugins (`./` catalog sources). A pin, so an accidental unpublish fails loudly.
 const EXPECTED_PLUGINS = 27;
-const repo = resolve(process.env.OMP_SMOKE_REPO ?? join(import.meta.dir, ".."));
 const started = performance.now();
 const timeoutMs = Number(process.env.OMP_SMOKE_TIMEOUT_MS ?? 600_000);
 const host = process.env.OMP_HOST_ROOT;
@@ -219,7 +222,7 @@ async function worker(configPath: string) {
 }
 
 async function main() {
-  check(host && existsSync(join(host, "src/extensibility/extensions/loader.ts")), "Set OMP_HOST_ROOT to an installed OMP18.1.14 package containing src");
+  check(host && existsSync(join(host, "src/extensibility/extensions/loader.ts")), `Set OMP_HOST_ROOT to an installed OMP${VERSION} package containing src`);
   const sdkVersion = (await json(join(host, "package.json"))).version;
   check(sdkVersion === VERSION, `SDK version must be ${VERSION}; got ${sdkVersion}`);
   const entries: CatalogEntry[] = (await json(join(repo, ".omp-plugin/marketplace.json"))).plugins.filter((p: CatalogEntry) => typeof p.source === "string" && p.source.startsWith("./"));

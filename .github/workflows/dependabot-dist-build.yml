@@ -1,0 +1,102 @@
+name: dependabot-dist-build
+
+# The unprivileged half of the generated-dist automation.
+#
+# A dependency bump changes a plugin's package.json, but the committed dist/
+# bundle still carries the old version inlined, so ci.yml's "Extension bundles
+# are current" gate fails by design. This job rebuilds the bundles and the
+# third-party notices from the pull request head and uploads them as an artifact.
+#
+# It runs pull-request code — `bun install` executes dependency lifecycle scripts
+# and `bun build` evaluates plugin sources — so it holds no credentials: a
+# `pull_request` event on a Dependabot branch gets a read-only GITHUB_TOKEN and no
+# access to secrets, and `persist-credentials: false` keeps even that token out of
+# the checkout. dependabot-dist.yml publishes the artifact separately, from the
+# default branch, and re-derives every judgement about it there.
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dependabot-dist-build-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    if: >-
+      github.event.pull_request.user.login == 'dependabot[bot]' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      startsWith(github.head_ref, 'dependabot/')
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      # The exact head commit, not the `pull_request` default merge ref: the
+      # publish job pushes onto that commit, so the rebuild must describe it and
+      # not a merge with main that never existed on the branch.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.14"
+
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          # Pinned: build-extensions.py --check byte-compares committed dist/
+          # bundles against a fresh build, so the CI bun MUST match the bun that
+          # built the committed bundles. Bump together with a dist rebuild
+          # (dependabot-dist rebuilds automatically on Dependabot branches).
+          bun-version: "1.4.2"
+
+      - name: Rebuild extension bundles and notices
+        run: |
+          set -euo pipefail
+          # Every plugin Dependabot covers, not just browser-tools: dep-update and
+          # whats-new bundle smol-toml, so build-extensions.py needs their
+          # node_modules too. --frozen-lockfile matches ci.yml, so the lockfile
+          # Dependabot wrote is the one that gets bundled.
+          while IFS= read -r pkg; do
+            if python3 -c "import json,sys; sys.exit(0 if json.load(open('$pkg')).get('dependencies') else 1)"; then
+              (cd "$(dirname "$pkg")" && bun install --frozen-lockfile --silent)
+            fi
+          done < <(git ls-files '*/package.json')
+          bun browser-tools/scripts/generate-third-party-notices.ts
+          python3 scripts/build-extensions.py
+
+      - name: Stage the generated output
+        id: stage
+        env:
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          # The pathspec is the first narrowing and scripts/dependabot-dist-guard.py
+          # is the second: it re-checks every path against the same allowlist the
+          # publish job applies, so a rebuild that touched anything else fails here
+          # instead of arriving as an unexplained artifact entry.
+          git add -- '*/dist/*.js' browser-tools/THIRD_PARTY_NOTICES.txt
+          git diff --cached --name-only -- '*/dist/*.js' browser-tools/THIRD_PARTY_NOTICES.txt \
+            > "$RUNNER_TEMP/changed.txt"
+          python3 scripts/dependabot-dist-guard.py stage \
+            --repo . \
+            --changed "$RUNNER_TEMP/changed.txt" \
+            --out "$RUNNER_TEMP/dependabot-dist" \
+            --repository "$GITHUB_REPOSITORY" \
+            --head-ref "$HEAD_REF" \
+            --head-sha "$HEAD_SHA" \
+            --github-output "$GITHUB_OUTPUT"
+
+      - name: Upload the generated output
+        if: ${{ steps.stage.outputs.staged == 'true' }}
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
+        with:
+          name: dependabot-dist
+          path: ${{ runner.temp }}/dependabot-dist
+          if-no-files-found: error
+          retention-days: 1

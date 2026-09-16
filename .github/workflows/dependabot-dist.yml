@@ -1,0 +1,151 @@
+name: dependabot-dist
+
+# The privileged half of the generated-dist automation.
+#
+# dependabot-dist-build.yml rebuilds the committed dist/ bundles from the pull
+# request head with no credentials and uploads them. This job publishes those
+# bytes with the release App token so CI re-runs on the branch.
+#
+# `workflow_run` is the trust boundary. GitHub resolves this workflow file, and
+# the checkout it runs from, on the default branch — never from the pull request —
+# so every line below is reviewed logic. Nothing from the artifact or from the
+# Dependabot branch is sourced, imported, installed or executed: the job downloads
+# the artifact into a scratch directory, proves the run and the pull request agree
+# on the exact Dependabot actor, this repository, the head ref and the head commit,
+# reduces the artifact to an allowlist of generated output paths, and then copies
+# those bytes into a checkout of the verified commit and pushes.
+#
+# The `pull_request_target` shape this replaced checked out the pull request head
+# with a write token in scope and ran `bun install` and the build scripts from it,
+# which hands any code on that branch the token.
+
+on:
+  workflow_run:
+    workflows: [dependabot-dist-build]
+    types: [completed]
+
+# No write scope: the push uses the release App token, minted only after every
+# check below has passed.
+permissions:
+  contents: read
+  actions: read
+
+# Serialized per branch. Two runs pushing rebuilt bundles onto the same branch
+# would race on the same ref, and cancelling a run mid-push is worse than queueing.
+concurrency:
+  group: dependabot-dist-${{ github.event.workflow_run.head_branch }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    if: >-
+      github.event.workflow_run.event == 'pull_request' &&
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.repository.full_name == github.repository &&
+      github.event.workflow_run.head_repository.full_name == github.repository &&
+      github.event.workflow_run.actor.login == 'dependabot[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      # The default branch, because this job's own logic must not come from the
+      # branch it is about to write to. No `ref`, so checkout resolves the default
+      # branch for a workflow_run event.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.14"
+
+      - name: Verify the Dependabot context
+        id: context
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          set -euo pipefail
+          # The branch comes out of the event payload, but it is about to be
+          # interpolated into an API path, so the guard proves it is a
+          # `dependabot/` ref with a safe name before it is used as data.
+          branch="$(python3 scripts/dependabot-dist-guard.py event-branch --event "$GITHUB_EVENT_PATH")"
+          gh api --method GET "repos/$GITHUB_REPOSITORY/pulls" \
+            -f state=open -f "head=${GITHUB_REPOSITORY%%/*}:$branch" \
+            > "$RUNNER_TEMP/pulls.json"
+          python3 scripts/dependabot-dist-guard.py verify-context \
+            --event "$GITHUB_EVENT_PATH" \
+            --pulls "$RUNNER_TEMP/pulls.json" \
+            --repository "$GITHUB_REPOSITORY" \
+            --default-branch "$DEFAULT_BRANCH" \
+            --github-output "$GITHUB_OUTPUT"
+
+      # Into the runner temp directory, never into a checkout: the download is
+      # untrusted input and must not land where a later step reads code from.
+      - uses: actions/download-artifact@018cc2cf5baa6db3ef3c5f8a56943fffe632ef53 # v6.0.0
+        with:
+          name: dependabot-dist
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/dependabot-dist
+
+      - name: Verify the generated output
+        env:
+          HEAD_REF: ${{ steps.context.outputs.head-ref }}
+          HEAD_SHA: ${{ steps.context.outputs.head-sha }}
+        run: |
+          set -euo pipefail
+          python3 scripts/dependabot-dist-guard.py verify-artifact \
+            --artifact "$RUNNER_TEMP/dependabot-dist" \
+            --trusted . \
+            --repository "$GITHUB_REPOSITORY" \
+            --head-ref "$HEAD_REF" \
+            --head-sha "$HEAD_SHA" \
+            --manifest "$RUNNER_TEMP/dependabot-dist-manifest.txt"
+
+      # Only now, with the actor, the repository, the head and every artifact path
+      # already proven, does a write credential enter the job.
+      - name: Mint release-app token
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          client-id: ${{ vars.RELEASE_APP_CLIENT_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+
+      # By commit id, not by branch name: the tree this job writes onto is exactly
+      # the commit the artifact was built from, and a branch that moved meanwhile
+      # fails the push lease below instead of silently landing on a new head.
+      #
+      # The leading underscore keeps this directory out of the plugin namespace the
+      # allowlist recognises, so no artifact path can name it.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ github.repository }}
+          ref: ${{ steps.context.outputs.head-sha }}
+          token: ${{ steps.app-token.outputs.token }}
+          path: _dependabot-head
+
+      - name: Apply the generated output and push
+        env:
+          HEAD_REF: ${{ steps.context.outputs.head-ref }}
+          HEAD_SHA: ${{ steps.context.outputs.head-sha }}
+        run: |
+          set -euo pipefail
+          # Bytes only. Nothing in _dependabot-head/ is installed, imported or
+          # run, and the allowlist is re-checked here against the default-branch
+          # checkout rather than trusted from the previous step.
+          python3 scripts/dependabot-dist-guard.py apply \
+            --artifact "$RUNNER_TEMP/dependabot-dist" \
+            --manifest "$RUNNER_TEMP/dependabot-dist-manifest.txt" \
+            --target _dependabot-head \
+            --trusted .
+          git -C _dependabot-head add --pathspec-from-file="$RUNNER_TEMP/dependabot-dist-manifest.txt"
+          if git -C _dependabot-head diff --cached --quiet; then
+            echo "The published bytes already match the branch; nothing to push."
+            exit 0
+          fi
+          git -C _dependabot-head config user.name "release-app[bot]"
+          git -C _dependabot-head config user.email "release-app[bot]@users.noreply.github.com"
+          git -C _dependabot-head commit -m "chore: rebuild extension bundles for dependency bump"
+          git -C _dependabot-head push \
+            --force-with-lease="refs/heads/$HEAD_REF:$HEAD_SHA" \
+            origin "HEAD:refs/heads/$HEAD_REF"

@@ -37,7 +37,7 @@ jobs:
 
       - name: Run release-please
         id: release
-        uses: googleapis/release-please-action@v5
+        uses: googleapis/release-please-action@0dfd8538845b8e92600d271a895a5372865d4062 # v5
         with:
           token: ${{ steps.app-token.outputs.token }}
           config-file: release-please-config.json
@@ -47,25 +47,25 @@ jobs:
       # commit below also triggers CI on the PR.
       - name: Checkout release branch
         if: ${{ steps.release.outputs.prs_created == 'true' }}
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ fromJSON(steps.release.outputs.pr).headBranchName }}
           token: ${{ steps.app-token.outputs.token }}
 
       - name: Set up Python
         if: ${{ steps.release.outputs.prs_created == 'true' }}
-        uses: actions/setup-python@v7
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.14"
 
       - name: Set up Bun
         if: ${{ steps.release.outputs.prs_created == 'true' }}
-        uses: oven-sh/setup-bun@v2
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           # Pinned: build-extensions.py --check byte-compares committed dist/
           # bundles against a fresh build, so the CI bun MUST match the bun that
           # built the committed bundles. Bump together with a dist rebuild
-          # (renovate-dist rebuilds automatically on renovate branches).
+          # (dependabot-dist rebuilds automatically on Dependabot branches).
           bun-version: "1.4.2"
 
       - name: Sync catalogs and extension bundles on the release branch

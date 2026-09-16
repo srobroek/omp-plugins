@@ -1,0 +1,70 @@
+version: 2
+
+# Dependency updates for this repository. Renovate previously owned this job and
+# automerged every minor and patch bump; Dependabot replaces it with a narrower
+# policy, because a minor OMP release can change the extension SDK this
+# repository's plugins compile against.
+#
+# @oh-my-pi/* patch bumps arrive as one grouped PR named `omp-patch` and are the
+# only updates dependabot-automerge.yml will merge unattended. Minor and major
+# OMP bumps are ignored here on purpose: omp-minor-issue.yml opens a
+# compatibility issue instead, so a human decides when this checkout moves to a
+# new OMP minor.
+#
+# One entry per directory that carries a bun.lock, because Dependabot only reads
+# the manifest in the directory it is pointed at: the root workspace plus the
+# three plugins that declare real dependencies and ship committed dist/ bundles.
+# scripts/check-dependabot-config.py fails when a lockfile appears without an
+# entry, so a new dependency-bearing plugin cannot go unwatched.
+updates:
+  - package-ecosystem: bun
+    directory: /
+    schedule:
+      interval: daily
+    groups:
+      # The group name is a contract: dependabot-automerge.yml gates on it, and
+      # scripts/check-dependabot-config.py fails when the two drift apart.
+      omp-patch:
+        patterns:
+          - "@oh-my-pi/*"
+        update-types:
+          - patch
+    ignore:
+      # `ignore[].update-types` takes the semver-qualified spellings; the bare
+      # `minor`/`major` accepted under `groups` is silently not a match here, so
+      # an unqualified value would leave OMP minors auto-opening PRs.
+      - dependency-name: "@oh-my-pi/*"
+        update-types:
+          - version-update:semver-minor
+          - version-update:semver-major
+
+  # browser-tools depends on @oh-my-pi/pi-utils, so it carries the same OMP
+  # grouping and the same minor/major suppression as the root manifest.
+  - package-ecosystem: bun
+    directory: /browser-tools
+    schedule:
+      interval: daily
+    groups:
+      omp-patch:
+        patterns:
+          - "@oh-my-pi/*"
+        update-types:
+          - patch
+    ignore:
+      - dependency-name: "@oh-my-pi/*"
+        update-types:
+          - version-update:semver-minor
+          - version-update:semver-major
+
+  # dep-update and whats-new depend only on smol-toml. No OMP grouping: the group
+  # exists so dependabot-automerge.yml can merge OMP patch bumps unattended, and
+  # an empty group here would let a non-OMP bump inherit that clearance.
+  - package-ecosystem: bun
+    directory: /dep-update
+    schedule:
+      interval: daily
+
+  - package-ecosystem: bun
+    directory: /whats-new
+    schedule:
+      interval: daily

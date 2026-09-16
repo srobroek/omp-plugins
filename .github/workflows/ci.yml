@@ -13,7 +13,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
 
@@ -69,12 +69,12 @@ jobs:
         run: |
           python3 scripts/sync-plugin-manifests.py --check
 
-      - uses: oven-sh/setup-bun@v2
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           # Pinned: build-extensions.py --check byte-compares committed dist/
           # bundles against a fresh build, so the CI bun MUST match the bun that
           # built the committed bundles. Bump together with a dist rebuild
-          # (renovate-dist rebuilds automatically on renovate branches).
+          # (dependabot-dist rebuilds automatically on Dependabot branches).
           bun-version: "1.4.2"
 
       - name: Root TypeScript quality
@@ -127,7 +127,10 @@ jobs:
           host="$RUNNER_TEMP/omp-session-host"
           mkdir -p "$host"
           printf '%s\n' '{"name":"omp-session-ci","private":true}' > "$host/package.json"
-          (cd "$host" && bun add --no-save --silent @oh-my-pi/pi-coding-agent@18.1.14)
+          # The root manifest is the authority for the OMP version this checkout
+          # targets, so this host and the development pins move in one commit.
+          version="$(python3 -c 'import json; print(json.load(open("package.json"))["devDependencies"]["@oh-my-pi/pi-coding-agent"])')"
+          (cd "$host" && bun add --no-save --silent "@oh-my-pi/pi-coding-agent@$version")
           ln -s "$host/node_modules" session/node_modules
           trap 'rm -f session/node_modules' EXIT
           while IFS= read -r d; do
@@ -151,7 +154,22 @@ jobs:
           done < <(git ls-files '*/rules/*.test.ts' | xargs -rn1 dirname | sort -u)
 
       # `uvx` is not preinstalled on GitHub runners.
-      - uses: astral-sh/setup-uv@v10.1.0
+      - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+
+      # The Dependabot policy is a cross-file contract: the group name that
+      # dependabot-automerge.yml merges on, the semver-qualified ignore spellings
+      # that actually suppress OMP minors, one entry per lockfile, the manifest
+      # being the only place an OMP version is written, and the split that keeps the
+      # dist rebuild's write token away from pull-request code. Nothing else fails
+      # when those drift.
+      - name: Dependabot policy contract
+        run: uvx --from pyyaml==6.0.3 python scripts/check-dependabot-config.py
+
+      # A validator that reads a file and finds nothing wrong looks exactly like a
+      # validator that stopped looking, so every contract above gets a mutation, and
+      # the dist guard gets the rejections it exists for.
+      - name: Dependabot policy and dist guard contracts
+        run: uvx --from pyyaml==6.0.3 python scripts/test-dependabot-contracts.py
 
       - name: Install Vale
         env:
