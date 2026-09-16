@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.10.9](https://github.com/srobroek/omp-plugins/compare/delivery--v0.10.8...delivery--v0.10.9) (2026-09-16)
+
+
+### Bug Fixes
+
+* **delivery:** scope Bead linkage to agent-created PRs ([56dee62](https://github.com/srobroek/omp-plugins/commit/56dee62c8e02e71f3f6a891cc41b71f64e3466b6))
+
 ## [0.10.8](https://github.com/srobroek/omp-plugins/compare/delivery--v0.10.7...delivery--v0.10.8) (2026-09-15)
 
 
