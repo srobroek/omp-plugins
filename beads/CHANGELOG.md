@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.3.6](https://github.com/srobroek/omp-plugins/compare/beads--v1.3.5...beads--v1.3.6) (2026-09-16)
+
+
+### Bug Fixes
+
+* **beads:** use specific reference wording ([1d24415](https://github.com/srobroek/omp-plugins/commit/1d2441598f0f0c218c6bf32f6e121229963e673d))
+* **beads:** use specific reference wording ([a98786b](https://github.com/srobroek/omp-plugins/commit/a98786bcd6bffe5c17aa2e374584ba355a7c6628))
+
 ## [1.3.5](https://github.com/srobroek/omp-plugins/compare/beads--v1.3.4...beads--v1.3.5) (2026-09-16)
 
 
