@@ -28,6 +28,8 @@ interface Case {
 	command: string;
 	/** The bash tool's `i` (intent) argument; it lands in the same buffer. */
 	intent?: string;
+	/** Structured environment data; it lands in the JSON buffer but is never shell source. */
+	env?: Record<string, string>;
 	/** Why this case is in the corpus. */
 	why: string;
 }
@@ -71,7 +73,9 @@ const CONDITIONS = conditions();
 
 /** The two encodings a live buffer can hold for one bash call. Both must agree. */
 function buffers(c: Case): string[] {
-	const args = c.intent === undefined ? { command: c.command } : { command: c.command, i: c.intent };
+	const args: { command: string; env?: Record<string, string>; i?: string } = { command: c.command };
+	if (c.env !== undefined) args.env = c.env;
+	if (c.intent !== undefined) args.i = c.intent;
 	return [JSON.stringify(args), c.command];
 }
 
@@ -124,8 +128,15 @@ const MUST_FIRE: Case[] = [
 	{ id: "after pipe", command: "true | git push origin main", why: "a pipe does the same" },
 	{ id: "second push fires", command: "git push origin feature && git push origin main", why: "a safe first command must not mask the second" },
 	{ id: "after raw newline", command: "cd repo\ngit push origin main", why: "a newline is a command separator in both encodings (raw, and \\n in JSON)" },
+	{ id: "after closed double quoted data", command: 'bd create x -d "don\'t"\ngit push origin main', why: "the push is executable once the double-quoted argv value closes" },
+	{ id: "after closed single quoted data", command: "bd create x -d 'say \"hello\"'\ngit push origin main", why: "the push is executable once the single-quoted argv value closes" },
+	{ id: "after closed escaped double quote data", command: 'bd create x -d "say \\"hello\\""\ngit push origin main', why: "escaped double quotes do not hide a push after the value closes" },
+	{ id: "after closed POSIX single quoted data", command: "bd create x -d 'don'\\''t'\ngit push origin main", why: "the push is executable after the concatenated escaped apostrophe and reopened single-quoted segment close" },
 	{ id: "newline mid script", command: "git status\ngit push origin main", why: "the same where the first line is also a git call" },
 	{ id: "command substitution", command: "$(git push origin main)", why: "an open paren starts a command position" },
+	{ id: "bd command substitution", command: 'bd create "t" -d "$(git push origin main)"', why: "a substitution inside bd data still executes its own command" },
+	{ id: "mise exec wrapper", command: "mise exec -- git push origin main", why: "mise executes git from the argv after --" },
+	{ id: "shell command wrapper", command: 'bash -c "git push origin main"', why: "the shell executes its command-string argument" },
 	{ id: "subshell group", command: "(git push origin main)", why: "the closing paren must still count as a word boundary" },
 	{ id: "if context", command: "if ! git push origin main; then echo no; fi", why: "if and ! precede the command word" },
 	{ id: "then context", command: "git fetch; then git push origin main", why: "then precedes the command word" },
@@ -172,6 +183,45 @@ const MUST_NOT_FIRE: Case[] = [
 	{ id: "double quoted echo", command: 'echo "git push origin main"', why: "the same inside double quotes, which reach the buffer as \\\" in JSON" },
 	{ id: "quoted prose with separator", command: 'bd create --description "then git push origin main"', why: "a separator word inside quoted prose must not open a command position" },
 	{ id: "quoted prose with equals", command: 'bd update x --description="git push origin main"', why: "the same where the quote follows =" },
+	{
+		id: "multiline bd create description",
+		command:
+			"bd create \"Use a deep matinee-security module seam for secure-channel state\" --type decision --id adr-5 --force --validate --spec-id 006-identity-authorization-secure-channels -d '## Decision\nDocument the commit and push workflow before apply or install steps.\n```sh\ngit push origin main\n```\nThis is decision data.'",
+		why: "the original bd decision body is argv data even when a line looks executable",
+	},
+	{
+		id: "multiline double quoted description with apostrophe",
+		command: 'bd create x -d "don\'t\ngit push origin main"',
+		why: "an apostrophe does not end a double-quoted argv value",
+	},
+	{
+		id: "multiline single quoted description with double quotes",
+		command: "bd create x -d 'say \"hello\"\ngit push origin main'",
+		why: "a double quote does not end a single-quoted argv value",
+	},
+	{
+		id: "multiline double quoted description with escaped quote",
+		command: 'bd create x -d "say \\"hello\\"\ngit push origin main"',
+		why: "an escaped double quote does not end a double-quoted argv value",
+	},
+	{
+		id: "multiline bd update description",
+		command: "bd update adr-5 --description='commit/push/apply/install guidance:\ngit push origin main'",
+		why: "update payloads have the same argv-data contract",
+	},
+	{
+		id: "multiline bd close reason",
+		command: "bd close adr-5 --reason='document before apply/install:\ngit push origin main'",
+		why: "close reasons do not become shell source",
+	},
+	{
+		id: "bd description in structured env",
+		command: 'bd create "Use a deep module seam" -d "$DESC"',
+		env: { DESC: "commit/push/apply/install guidance:\ngit push origin main" },
+		why: "per-call environment values are data outside the command field",
+	},
+	{ id: "gh pr mutation body", command: "gh pr edit 326 --body='release notes:\ngit push origin main'", why: "GitHub body data is not a git push" },
+	{ id: "release notes body", command: "gh release create v1 --notes='install then apply:\ngit push origin main'", why: "release notes are not shell source" },
 	{ id: "commit message mention", command: "git commit -m 'document git push origin main'", why: "a commit message that documents the command" },
 	{ id: "other git verb", command: "git switch main", why: "only push is classified" },
 	{ id: "checkout after push", command: "git push origin feature && git checkout main", why: "a later git verb in command position is still not push" },
