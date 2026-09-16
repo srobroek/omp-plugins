@@ -17,7 +17,8 @@ text and paths, and direct inspection when semantic tools cannot answer.
 1. Gather PR context: `gh pr view <number> --json title,body,files` then `gh pr diff <number>`.
 2. Determine whether the target repository is controlled before reviewing repository-local metadata.
    - External or uncontrolled target: skip repository-local metadata checks and omit that context from all feedback. Do not evaluate, request, mention, or report it.
-   - Controlled target: read the Beads named in the PR body (`Bead:` / `Closes-Bead:`) from the context your caller passed you: accepted scope, holder, and comments. Review against what was accepted, not what the diff implies. If the required context is missing, report which context is missing rather than guessing.
+   - Controlled target with an agent-created PR: read the Beads named in the PR body (`Bead:` / `Closes-Bead:`), or the truthful `No-Bead:` reason, from the context your caller passed you. Review against what was accepted, not what the diff implies. If the required agent context is missing, report which context is missing rather than guessing.
+   - Controlled target with an already-created incoming human or bot PR: absence of Bead trailers is not a finding or blocker. Automated Release Please PRs are explicitly acceptable without linkage. If Bead context is supplied, read and validate it; do not flag missing linkage merely because `.beads/` exists.
    You have no shell; you never fetch it yourself.
 3. Review the diff for: correctness, edge cases, security (input validation, secrets,
    OWASP), performance bottlenecks, test adequacy, and project-convention compliance.
