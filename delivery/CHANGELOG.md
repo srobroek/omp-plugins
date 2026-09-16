@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.10.10](https://github.com/srobroek/omp-plugins/compare/delivery--v0.10.9...delivery--v0.10.10) (2026-09-16)
+
+
+### Bug Fixes
+
+* **delivery:** allow slower remote anchor probes ([#317](https://github.com/srobroek/omp-plugins/issues/317)) ([8b408fb](https://github.com/srobroek/omp-plugins/commit/8b408fbc94cd034f374b21aa847f8d20365f257d))
+* **delivery:** type the Git spawn adapter ([#321](https://github.com/srobroek/omp-plugins/issues/321)) ([facc4af](https://github.com/srobroek/omp-plugins/commit/facc4af1537c886fb7caaf4526bc5392cf64a3e6))
+
 ## [0.10.9](https://github.com/srobroek/omp-plugins/compare/delivery--v0.10.8...delivery--v0.10.9) (2026-09-16)
 
 
