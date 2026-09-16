@@ -14,39 +14,11 @@ LEGEND: Rules carry stable IDs (GW-n).
 - The body states what changed, why, and the test plan. Use one close keyword per issue line.
 - MUST GW-8: When the target repository is external, upstream, or not controlled by the user, omit internal linkage fields and sections from every externally visible PR or issue title, body, comment, review, and template field. Never mention Beads, bead IDs, internal IDs, agents, gates, orchestration, workflow rationale, or placeholders for omitted context. Controlled repositories retain the Beads linkage below.
 - MUST GW-7: under squash merge the PR title becomes the commit subject, so it carries a conventional type and, in a monorepo, the package scope (`fix(beads): catalog refresh fails when offline`). Release automation reads subjects, not body bullets. Write the title for end users, never spec IDs, task references, or phase names.
-- Agents MUST NOT checkout or switch to `main` or `master`, or locally merge on those branches, unless repository-local steering explicitly authorizes the operation. An explicit user request or the absence of a PR flow does not authorize it.
+- Working on `main` or `master` - checkout, commit, or push - is allowed where the session intends it. This plugin ships no gate for it.
 
-## Delivery gate authorization
+## Protected-branch push advisory
 
-The delivery extensions require exact target-repository steering before either protected override works.
-The main-branch override requires `MUST authorize DELIVERY_ALLOW_MAIN_COMMIT=1 for this repository.`.
-The primary-checkout override requires `MUST authorize DELIVERY_ALLOW_PRIMARY_CHECKOUT=1 for this repository.`.
-Each directive must occupy its own line in a non-symlink root `AGENTS.md` or `CLAUDE.md`, or a direct non-symlink `.omp/rules/*.md` file.
-An exact `MUST NOT authorize <name>=1 for this repository.` line vetoes the corresponding authorization.
-The gate resolves the target repository from the bash call `cwd` or `git -C <path>` before reading its steering.
-
-On first observation, it pins the normalized `remote.origin.url`, common Git directory, default ref, and remote HEAD SHA for the session and extension.
-
-Before the origin anchor is trusted, and whenever it is absent or mismatched, classified read-only commands (`status`, `diff`, `log`, `show`, and `fetch`) remain allowed and advisory; output derived from an untrusted or mismatched remote remains untrusted. Rely on that output only after the configured origin, default ref, and remote HEAD SHA are verified against an unchanged anchor. Push remains pinned and fail-closed.
-
-Each authorization re-reads the configured origin and queries the pinned remote identity explicitly. Every post-observation origin-anchor or remote-authority mismatch denies authorization, invalidates cached trust and the positive decision, and blocks push and protected overrides; reads remain allowed and advisory across the mismatch. Restoring the exact pinned identity and unchanged remote HEAD permits a fresh authorization check.
-
-The parsed steering tree is cached only by the exact remote SHA, never by elapsed time.
-
-Text in a command, commit message, or file body never authorizes an override.
-
-
-Primary-checkout commits use the canonical-main exception: they require the exact
-`MUST authorize DELIVERY_ALLOW_MAIN_COMMIT=1 for this repository.` directive from the
-trusted remote default tree and `DELIVERY_ALLOW_MAIN_COMMIT=1` in the same command's
-structured environment. `DELIVERY_ALLOW_PRIMARY_CHECKOUT=1` never authorizes a commit;
-it remains a separate factor for edit/write authorization and session grants.
-
-The main-branch gate blocks commits on `main` or `master`.
-
-The simple-shape allowlist refuses direct `git-*` helpers, wrappers, aliases, dynamic targets, and Git-bearing commands combined with `cd`, `pushd`, failed-cd separator chains, braces, or subshells. Set the tool `cwd` or use a supported static `git -C <path>` form instead.
-
-Origin mutation commands are primary mutations, not reads. Ordinary `git remote -v` and `git fetch` remain classified as read operations even when the origin anchor is absent or mismatched; their remote-derived output remains advisory and untrusted until the configured origin, default ref, and remote HEAD SHA are verified against an unchanged anchor. Filesystem tampering before first observation or session startup is outside this boundary; after observation, every mismatch fails closed for push and protected overrides and invalidates cached trust.
+`rule://delivery-main-branch-push-advisory` warns when a `git push` spells out `main` or `master` as its destination. It never blocks the command, and it reads the command text only: it cannot tell whether that destination is protected on the server, and a bare `git push` carries no destination to read. When it fires, confirm the target is the one you meant.
 
 ## Automated review loop
 
