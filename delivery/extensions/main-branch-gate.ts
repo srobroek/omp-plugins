@@ -811,7 +811,17 @@ const PRIMARY_READ_ONLY = new Set([
 	"help", "version",
 ]);
 const PRIMARY_MUTATIONS = new Set(["checkout", "switch", "merge"]);
-const PRIMARY_SAFE_TEXT_COMMANDS = new Set(["echo", "printf", "cat", "true", "false", ":", "pwd", "rg", "grep"]);
+/**
+ * Commands whose argv is DATA and never a command word, so a Git-looking argument among their
+ * operands cannot become a Git invocation and must not make the call unreadable. `bd` earns its
+ * place the same way `echo` does: no `bd` subcommand runs an argv element as a command, while its
+ * titles, descriptions, and `-d "$DESC"` payloads are free prose that routinely name Git. The
+ * question this set answers is "can this argv execute Git?", never "does this program consult Git
+ * internally?" — an internal consultation reaches no branch this gate protects.
+ */
+const PRIMARY_SAFE_TEXT_COMMANDS: Record<string, true> = {
+	echo: true, printf: true, cat: true, true: true, false: true, ":": true, pwd: true, rg: true, grep: true, bd: true,
+};
 const REMOTE_READ_SUBCOMMANDS = new Set(["", "-v", "--verbose", "show", "get-url"]);
 const PRIMARY_WRAPPERS = new Set([
 	"bash", "sh", "zsh", "dash", "ksh", "eval", "env", "command", "sudo", "time", "nice", "nohup", "exec", "xargs", "xcrun",
@@ -986,7 +996,7 @@ export function findGitInvocations(command: string, env: NodeJS.ProcessEnv = {})
 			}
 			const nestedGit = remainder.some((token) => substitutionMayRunGit(token.text, env));
 			const wrapperGit = remainder.some((token) => possibleGitToken(token, env) || /(?:^|\s)(?:d?git|git-[A-Za-z0-9_-]+)(?:$|\s)/.test(token.text));
-			if (commandToken.text.includes("$") || commandToken.text.includes("`") || nestedGit || ((PRIMARY_WRAPPERS.has(base) || !PRIMARY_SAFE_TEXT_COMMANDS.has(base)) && wrapperGit)) out.push(opaqueInvocation());
+			if (commandToken.text.includes("$") || commandToken.text.includes("`") || nestedGit || ((PRIMARY_WRAPPERS.has(base) || PRIMARY_SAFE_TEXT_COMMANDS[base] !== true) && wrapperGit)) out.push(opaqueInvocation());
 			continue;
 		}
 		let repoDir: string | null = null;

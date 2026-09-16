@@ -273,6 +273,47 @@ describe("decideCommit", () => {
         expect(decideCommit("printf '<text containing the words git commit>' >> file && bd create --body-file file", primary, {})).toBeUndefined();
 	});
 
+	// The exact `bd create` call this gate once refused as an opaque Git invocation. `bd` cannot
+	// execute an argv element, so Git prose in a title or a `-d "$DESC"` payload names nothing the
+	// shell will run, and the structured cwd stays the repository anchor.
+	test("a bd call carrying Git prose in its argv is not a Git invocation", () => {
+		const { primary, linked } = setup();
+		const DESC = "## Decision\nCreate one deep `crates/matinee-security` module seam.\n";
+		const create =
+			'bd create "Use a deep matinee-security module seam for secure-channel state" --type decision --id adr-5 --force --validate --spec-id 006-identity-authorization-secure-channels -d "$DESC"';
+		expect(findGitInvocations(create, { DESC })).toEqual([]);
+		expect(decideCommit(create, linked, { DESC })).toBeUndefined();
+		expect(decideCommit(create, primary, { DESC })).toBeUndefined();
+		expect(decideCommit('bd create "fix git gate false positive" --type bug', linked, {})).toBeUndefined();
+		expect(decideCommit("bd create /usr/bin/git", linked, {})).toBeUndefined();
+	});
+
+	// Every shape that CAN reach Git from its own argv, including the prototype key a plain-object
+	// lookup would report as a known-safe command.
+	test("a command that can execute its argv still fails closed", () => {
+		const { linked } = setup();
+		for (const command of [
+			"mise exec -- git commit -m x",
+			'bash -c "git commit -m x"',
+			"env git commit -m x",
+			"sudo git commit -m x",
+			'bd create "t" -d "$(git log -1)"',
+			'$TOOL create "t"',
+			"constructor git commit -m x",
+		])
+			expect(decideCommit(command, linked, {})?.reason, command).toContain("an opaque Git invocation");
+	});
+
+	// A `cd` in the text never moves the anchor: a bd call that reaches Git through a substitution
+	// is refused for being unreadable, while a bd call with no Git in it has no target to resolve.
+	test("a cd in the text is refused rather than followed", () => {
+		const { primary, linked } = setup();
+		expect(decideCommit(`cd ${primary} && bd create "t" -d "$(git log -1)"`, linked, {})?.reason).toContain(
+			"shell cwd mutation or grouping",
+		);
+		expect(decideCommit(`cd ${primary} && bd create "t"`, linked, {})).toBeUndefined();
+	});
+
 	test("blocks actual commits in the primary checkout", () => {
 		const { primary } = setup();
 		expect(decideCommit("git commit -m x", primary, {})?.block).toBe(true);
