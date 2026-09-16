@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.2.0](https://github.com/srobroek/omp-plugins/compare/session--v1.1.7...session--v1.2.0) (2026-09-16)
+
+
+### Features
+
+* **session:** wake parents on settled task batches and release stale claims by evidence ([#330](https://github.com/srobroek/omp-plugins/issues/330)) ([47aa331](https://github.com/srobroek/omp-plugins/commit/47aa33155c04aa4124c1f0dbd736f28e8267df2c))
+
 ## [1.1.7](https://github.com/srobroek/omp-plugins/compare/session--v1.1.6...session--v1.1.7) (2026-09-15)
 
 
