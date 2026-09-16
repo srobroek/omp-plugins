@@ -58,6 +58,99 @@ const SEPARATOR: Record<string, true> = {
  */
 const TARGET_ENV = ["GIT_DIR", "GIT_WORK_TREE", "GIT_COMMON_DIR"];
 
+/**
+ * Environment names that point Git at another repository, index, or object store. `TARGET_ENV` is
+ * the subset the commit walker reports by name; this table is what makes an invocation unreadable,
+ * so it also covers the index and object-store selectors that decide where a staged path lands.
+ */
+const RETARGET_ENV: Record<string, true> = {
+	GIT_ALTERNATE_OBJECT_DIRECTORIES: true,
+	GIT_COMMON_DIR: true,
+	GIT_DIR: true,
+	GIT_INDEX_FILE: true,
+	GIT_NAMESPACE: true,
+	GIT_OBJECT_DIRECTORY: true,
+	GIT_WORK_TREE: true,
+};
+
+/**
+ * Environment names that decide which files Git reads its configuration from. An alias or an
+ * `include.path` in a file this gate cannot read is what makes `-c` and `--config-env` opaque, so
+ * the environment spellings of the same choice are opaque too.
+ */
+const CONFIG_FILE_ENV = ["GIT_CONFIG_GLOBAL", "GIT_CONFIG_SYSTEM", "GIT_CONFIG_NOSYSTEM"];
+
+/**
+ * Environment names that change which paths a pathspec covers. `GIT_ICASE_PATHSPECS` is the
+ * dangerous one: the consumer validates every operand with `--literal-pathspecs`, so a
+ * case-insensitive match stages entries that validation never saw. The glob, noglob and literal
+ * twins sit beside it because a selector must not be readable in the environment while the same
+ * selector in argv is not.
+ */
+const PATHSPEC_ENV: Record<string, true> = {
+	GIT_GLOB_PATHSPECS: true,
+	GIT_ICASE_PATHSPECS: true,
+	GIT_LITERAL_PATHSPECS: true,
+	GIT_NOGLOB_PATHSPECS: true,
+};
+
+/** Shell builtins that put a name in the environment of every later command in the same call. */
+const EXPORT_BUILTIN: Record<string, true> = {
+	declare: true,
+	export: true,
+	local: true,
+	readonly: true,
+	typeset: true,
+};
+
+/**
+ * Whether this command sets a Git selector in the SHELL rather than on one invocation. Both
+ * spellings that do survive the separator: a segment that is only assignments (`GIT_DIR=…;`, the
+ * form `set -a` needs no help with) and an exporting builtin (`export GIT_DIR=…`,
+ * `declare -x GIT_INDEX_FILE=…`, `readonly GIT_WORK_TREE=…`). Every later Git command in the call
+ * then reads another repository, index, object store, config file, or pathspec rule, so none of
+ * them is the bounded operation its own words describe.
+ *
+ * A PREFIX assignment is deliberately not this: `GIT_DIR=… git add -- f` belongs to the one
+ * command that follows it, and `findGitInvocations` classifies it there. Position is not read
+ * either: an assignment after the Git command refuses a call the shell would have run
+ * unretargeted, which is the safe direction and keeps this a single pass.
+ */
+function persistentGitRetargeting(tokens: Token[]): boolean {
+	let start = 0;
+	for (let end = 0; end <= tokens.length; end++) {
+		const boundary = tokens[end];
+		if (
+			boundary !== undefined &&
+			!(!boundary.quoted && boundary.escaped !== true && (SEPARATOR[boundary.text] === true || boundary.text === "\n"))
+		)
+			continue;
+		const segment = tokens.slice(start, end);
+		start = end + 1;
+		let index = 0;
+		const names: string[] = [];
+		while (index < segment.length && ENV_ASSIGNMENT.test((segment[index] as Token).text)) {
+			const text = (segment[index] as Token).text;
+			names.push(text.slice(0, text.indexOf("=")));
+			index++;
+		}
+		if (index < segment.length) {
+			// A command follows, so those assignments were its prefix and end with it. Only an
+			// exporting builtin reaches further, and each of its operands names a variable whether
+			// or not it carries a value: `export GIT_DIR` exports whatever the session holds.
+			names.length = 0;
+			if (EXPORT_BUILTIN[tokenBase(segment[index] as Token)] !== true) continue;
+			for (const operand of segment.slice(index + 1)) {
+				const equals = operand.text.indexOf("=");
+				names.push(equals === -1 ? operand.text : operand.text.slice(0, equals));
+			}
+		}
+		for (const name of names)
+			if (RETARGET_ENV[name] === true || PATHSPEC_ENV[name] === true || name.startsWith("GIT_CONFIG_")) return true;
+	}
+	return false;
+}
+
 /** Words that may stand before `git` and leave it at command position. */
 const TRANSPARENT_PREFIX: Record<string, true> = {
 	command: true,
@@ -177,6 +270,10 @@ function isOpaqueGitConfigKey(key: string): boolean {
 }
 
 function envHasOpaqueGitConfig(env: NodeJS.ProcessEnv): boolean {
+	// `GIT_CONFIG_GLOBAL` and `GIT_CONFIG_SYSTEM` REPLACE the files Git reads its configuration
+	// from, and `GIT_CONFIG_NOSYSTEM` changes which of them answer at all. What those files hold
+	// is exactly what `-c` and `--config-env` are opaque for, so naming one is opaque too.
+	for (const name of CONFIG_FILE_ENV) if (env[name] !== undefined && env[name] !== "") return true;
 	if (
 		env.GIT_CONFIG_PARAMETERS !== undefined &&
 		env.GIT_CONFIG_PARAMETERS !== ""
@@ -274,6 +371,13 @@ export type Token = {
 	 * after it went unseen.
 	 */
 	redirection?: true;
+	/**
+	 * A backslash escape produced part of this word, so a character that spells shell syntax is
+	 * DATA here. `quoted` cannot answer this: an escape must leave command identity alone, since
+	 * `g\it commit` runs git, while `git add -- f \; dir` passes `;` and `dir` to Git as operands.
+	 * A separator read out of an escaped word ended the command early and hid every later operand.
+	 */
+	escaped?: true;
 };
 
 /** A redirection operator, anchored at the start of what remains of the command. */
@@ -291,21 +395,23 @@ export function tokenize(command: string): Token[] {
 	let started = false;
 	let wasQuoted = false;
 	let redirection = false;
+	let escaped = false;
 	let quote: string | null = null;
 	// Here-document bodies queued by operators on the current line, consumed in order once that
 	// line ends. `cat <<A <<B` queues two.
 	const pending: Array<{ delimiter: string; stripTabs: boolean }> = [];
 	const flush = (): void => {
-		if (started)
-			out.push(
-				redirection
-					? { text: cur, quoted: wasQuoted, redirection: true }
-					: { text: cur, quoted: wasQuoted },
-			);
+		if (started) {
+			const token: Token = { text: cur, quoted: wasQuoted };
+			if (redirection) token.redirection = true;
+			if (escaped) token.escaped = true;
+			out.push(token);
+		}
 		cur = "";
 		started = false;
 		wasQuoted = false;
 		redirection = false;
+		escaped = false;
 	};
 	for (let i = 0; i < command.length; i++) {
 		const ch = command[i] as string;
@@ -361,7 +467,10 @@ export function tokenize(command: string): Token[] {
 			cur += command[i + 1] as string;
 			started = true;
 			// NOT `wasQuoted`: a backslash removes syntax meaning exactly as quotes do, and
-			// `g\it commit` runs git, so command identity must still see this word.
+			// `g\it commit` runs git, so command identity must still see this word. `escaped`
+			// records the same removal for the one question `quoted` answers wrongly here:
+			// whether a `;`, `&` or `|` in this word is an operator or an operand.
+			escaped = true;
 			i++;
 			continue;
 		}
@@ -573,6 +682,12 @@ export function findCommitInvocations(command: string, includeOpaqueSubstitution
 			if (invocation.repoDir === null) invocation.repoDir = transitionedCwd;
 		}
 	}
+	// A Git selector set in the SHELL survives the separator, so no invocation in this command
+	// describes the repository it would touch. `scanInvocations` reads the `export NAME=…` form
+	// already; this covers the assignment-only segment and the other exporting builtins.
+	if (persistentGitRetargeting(tokenize(command))) {
+		for (const invocation of out) invocation.retargeted = true;
+	}
 	// A substitution runs commands the quote-aware scan reads as data, and which substitutions
 	// are inert cannot be decided here: a quoted here-document delimiter makes its body inert
 	// while an unquoted one does not, an apostrophe in a body or a comment is literal text yet
@@ -637,7 +752,16 @@ export function findCommitInvocations(command: string, includeOpaqueSubstitution
         out.push({ repoDir: null, dryRun: false, retargeted: true });
 	return out;
 }
-export type GitOperation = "read" | "commit" | "checkout" | "switch" | "merge" | "push" | "opaque";
+export type GitOperation =
+	| "read"
+	| "commit"
+	| "checkout"
+	| "switch"
+	| "merge"
+	| "push"
+	| "stage"
+	| "unstage"
+	| "opaque";
 
 const GIT_COMMAND_TEXT = /(?:^|[^A-Za-z0-9_./-])(?:d?git|git-[A-Za-z0-9_-]+)(?:$|[^A-Za-z0-9_-])/;
 const ABSOLUTE_GIT_COMMAND_TEXT = /(?:^|[\s;&|()])\/[^\s;&|()]+\/(?:d?git|git-[A-Za-z0-9_-]+)(?:$|[\s;&|()])/;
@@ -659,7 +783,7 @@ export function hasUnsafeShellCwdOrGrouping(command: string): boolean {
 	for (const token of tokens) {
 		if (token.quoted) continue;
 		if (token.text === "(" || token.text === ")" || token.text === "{" || token.text === "}") return true;
-		if (SEPARATOR[token.text] === true || token.text === "\n") {
+		if (token.escaped !== true && (SEPARATOR[token.text] === true || token.text === "\n")) {
 			atCommand = true;
 			continue;
 		}
@@ -676,6 +800,8 @@ export type GitInvocation = {
 	repoDir: string | null;
 	dryRun?: boolean;
 	retargeted?: true;
+	/** The literal operands of a readable index operation, exactly as Git would resolve them. */
+	paths?: string[];
 };
 
 const PRIMARY_READ_ONLY = new Set([
@@ -690,6 +816,73 @@ const REMOTE_READ_SUBCOMMANDS = new Set(["", "-v", "--verbose", "show", "get-url
 const PRIMARY_WRAPPERS = new Set([
 	"bash", "sh", "zsh", "dash", "ksh", "eval", "env", "command", "sudo", "time", "nice", "nohup", "exec", "xargs", "xcrun",
 ]);
+
+/**
+ * Verbs whose sanctioned argv shape this gate reads. Both touch the index only. The verb alone
+ * earns nothing: only the exact shapes `indexPaths` accepts are readable, and every other
+ * spelling of the same verb — another option, a missing operand list, a pathspec that is not one
+ * literal file — stays opaque. Working-tree and history verbs (`stash`, `rebase`, `reset`,
+ * `checkout`) are deliberately absent: their argv does not bound what they rewrite.
+ */
+const INDEX_VERB: Record<string, GitOperation> = { add: "stage", restore: "unstage" };
+
+/**
+ * Index operations the primary gate can authorize: they stage or unstage the paths the command
+ * names and touch nothing else. The argv text alone does not bound the effect — Git expands each
+ * operand against the index, where a tracked subtree can hide under one word — so the consumer
+ * checks every operand against the worktree and the index before it authorizes anything. They are
+ * still refused in a protected primary checkout without both authorization factors, and they
+ * authorize no commit.
+ */
+export const PRIMARY_INDEX_OPERATIONS: Partial<Record<GitOperation, true>> = { stage: true, unstage: true };
+
+/**
+ * Pathspec text this gate cannot read as one literal file. Git itself expands `*`, `?`, `[…]` and
+ * `:(glob)`/`:!` magic, the shell expands `{…}`, `~`, `$…` and backticks, and a backslash escape
+ * hides the real name, so none of these operands names a file whose identity is visible here.
+ * A NUL or other C0 control byte cannot survive `execve`, so text carrying one is not the word
+ * any command would really pass and no filesystem call may be made with it.
+ */
+// biome-ignore lint/suspicious/noControlCharactersInRegex: a NUL or C0 byte is exactly what this rejects.
+const UNREADABLE_PATH_TEXT = /[*?[\]{}~$`\\]|[\u0000-\u001f\u007f]|^:/;
+
+/**
+ * One literal file path, relative to the repository this gate resolved. A leading `-` would be
+ * read by Git as an option, a leading `/` leaves the resolved checkout, and `.`, `..`, a trailing
+ * slash, or an empty segment name a directory whose contents the command does not list.
+ */
+function isLiteralFilePath(token: Token | undefined): boolean {
+	const text = token?.text;
+	if (text === undefined || text === "" || text.startsWith("-") || text.startsWith("/")) return false;
+	if (UNREADABLE_PATH_TEXT.test(text)) return false;
+	return text.split("/").every((segment) => segment !== "" && segment !== "." && segment !== "..");
+}
+
+/**
+ * A `-C` value this gate resolves to the same directory Git will use. `~`, `{…}`, `$…` and
+ * backticks are expanded by the shell, `*`, `?` and `[…]` by the shell or Git, and a backslash
+ * escape hides the real name, so for any of them the directory this gate inspects is not the
+ * directory the invocation reaches — the literal text would resolve under the caller's cwd while
+ * Git works somewhere else entirely.
+ */
+function isLiteralRepoDir(token: Token | undefined): token is Token {
+	const text = token?.text;
+	return text !== undefined && text !== "" && !UNREADABLE_PATH_TEXT.test(text);
+}
+
+/**
+ * The files a readable index operation names, or `null` when its operands are not that one
+ * sanctioned shape: `add -- <files>` and `restore --staged -- <files>`. Anything else — `-A`,
+ * `--patch`, a whole-tree `restore`, a `--worktree` that leaves the index, a missing `--`, an
+ * empty list, a directory or glob operand — yields `null`, and the caller turns the invocation
+ * opaque.
+ */
+function indexPaths(operation: GitOperation, operands: Token[]): string[] | null {
+	const tail = operation === "unstage" ? (operands[0]?.text === "--staged" ? operands.slice(1) : []) : operands;
+	const [separator, ...paths] = tail;
+	if (separator?.text !== "--" || paths.length === 0 || !paths.every((path) => isLiteralFilePath(path))) return null;
+	return paths.map((path) => path.text);
+}
 
 function tokenBase(token: Token): string {
 	return token.text.split("/").at(-1) ?? "";
@@ -744,8 +937,13 @@ export function findGitInvocations(command: string, env: NodeJS.ProcessEnv = {})
 	if (/(?:^|[;&|\n])\s*alias\b[^;|&\n]*\b(?:d?git)\s+remote\s+(?:set-url|remove|rename|add|set-head|set-branches)\b/.test(command))
 		return [opaqueInvocation()];
 	const tokens = tokenize(command);
+	if (persistentGitRetargeting(tokens)) return [opaqueInvocation()];
 	const out: GitInvocation[] = [];
-	const isSep = (token: Token | undefined): boolean => token !== undefined && !token.quoted && (SEPARATOR[token.text] === true || token.text === "\n");
+	// Session- or call-level retargeting applies to every Git invocation in the command, so the
+	// checkout resolved from the caller's cwd is not the repository these commands would touch.
+	const envRetargeted = [...Object.keys(RETARGET_ENV), ...Object.keys(PATHSPEC_ENV)].some((name) => env[name] !== undefined && env[name] !== "");
+	const isSep = (token: Token | undefined): boolean =>
+		token !== undefined && !token.quoted && token.escaped !== true && (SEPARATOR[token.text] === true || token.text === "\n");
 	let start = 0;
 	for (let end = 0; end <= tokens.length; end++) {
 		if (end < tokens.length && !isSep(tokens[end])) continue;
@@ -759,16 +957,19 @@ export function findGitInvocations(command: string, env: NodeJS.ProcessEnv = {})
 			index += width;
 		}
 		let configAssignment = false;
+		let retargetAssignment = false;
 		while (index < segment.length && ENV_ASSIGNMENT.test((segment[index] as Token).text)) {
 			const assignment = (segment[index] as Token).text;
-			if (assignment.slice(0, assignment.indexOf("=")).startsWith("GIT_CONFIG_")) configAssignment = true;
+			const name = assignment.slice(0, assignment.indexOf("="));
+			if (name.startsWith("GIT_CONFIG_")) configAssignment = true;
+			if (RETARGET_ENV[name] === true || PATHSPEC_ENV[name] === true) retargetAssignment = true;
 			index++;
 		}
 		if (index >= segment.length) continue;
 		const commandToken = segment[index] as Token;
 		const base = tokenBase(commandToken);
 		const remainder = segment.slice(index + 1);
-		const hasStructuredConfig = envHasOpaqueGitConfig(env) || configAssignment;
+		const hasStructuredConfig = envHasOpaqueGitConfig(env) || configAssignment || retargetAssignment || envRetargeted;
 		// Git's direct helper namespace is executable Git, not an ordinary hyphenated utility.
 		// Classify it before the generic non-Git branch so helpers cannot silently skip the gate.
 		if (base.startsWith("git-")) {
@@ -791,6 +992,8 @@ export function findGitInvocations(command: string, env: NodeJS.ProcessEnv = {})
 		let repoDir: string | null = null;
 		let operation: GitOperation | undefined;
 		let dryRun = false;
+		const operands: Token[] = [];
+		let files: string[] | null = null;
 		let opaque = hasStructuredConfig;
 		for (let i = 0; i < remainder.length; i++) {
 			const arg = remainder[i] as Token;
@@ -803,7 +1006,7 @@ export function findGitInvocations(command: string, env: NodeJS.ProcessEnv = {})
 			if (operation === undefined) {
 				if (arg.text === "-C" || arg.text.startsWith("-C")) {
 					const value = arg.text === "-C" ? remainder[++i] : ({ text: arg.text.slice(2) } as Token);
-					if (value === undefined || value.text.includes("$") || value.text.includes("`")) opaque = true;
+					if (!isLiteralRepoDir(value)) opaque = true;
 					else repoDir = repoDir === null || value.text.startsWith("/") ? value.text : `${repoDir}/${value.text}`;
 					continue;
 				}
@@ -818,7 +1021,7 @@ export function findGitInvocations(command: string, env: NodeJS.ProcessEnv = {})
 					continue;
 				}
 				if (arg.text.startsWith("-")) {
-					if (!["--no-pager", "--paginate", "--no-replace-objects", "--bare", "--literal-pathspecs", "--glob-pathspecs", "--noglob-pathspecs"].includes(arg.text)) opaque = true;
+					if (!["--no-pager", "--paginate", "--no-replace-objects", "--bare"].includes(arg.text)) opaque = true;
 					continue;
 				}
 				if (arg.text.includes("$") || arg.text.includes("`")) opaque = true;
@@ -826,15 +1029,21 @@ export function findGitInvocations(command: string, env: NodeJS.ProcessEnv = {})
 				else if (arg.text === "commit") operation = "commit";
 				else if (arg.text === "push") operation = "push";
 				else if (PRIMARY_READ_ONLY.has(arg.text)) operation = "read";
+				else if (INDEX_VERB[arg.text] !== undefined) operation = INDEX_VERB[arg.text] as GitOperation;
 				else operation = "opaque";
 				continue;
 			}
+			operands.push(arg);
 			if (operation === "commit" && arg.text === "--dry-run") dryRun = true;
 		}
 		if (operation === "read" && remoteCommandMutatesOrigin(remainder)) operation = "opaque";
+		if (operation !== undefined && PRIMARY_INDEX_OPERATIONS[operation] === true) {
+			files = indexPaths(operation, operands);
+			if (files === null) operation = "opaque";
+		}
 		if (operation === undefined) operation = "opaque";
 		if (opaque || operation === "opaque") out.push(opaqueInvocation());
-		else out.push({ operation, repoDir, ...(dryRun ? { dryRun: true } : {}) });
+		else out.push({ operation, repoDir, ...(dryRun ? { dryRun: true } : {}), ...(files === null ? {} : { paths: files }) });
 	}
 	return out;
 }
@@ -997,6 +1206,7 @@ function scanInvocations(command: string): CommitInvocation[] {
 	const isSep = (t: Token | undefined): boolean =>
 		t !== undefined &&
 		!t.quoted &&
+		t.escaped !== true &&
 		(SEPARATOR[t.text] === true || t.text === "\n");
 	let atCommand = true;
 	// A shell prefix assignment applies to the command that follows it in the same simple
@@ -1416,11 +1626,13 @@ function scanInvocations(command: string): CommitInvocation[] {
 					continue;
 				}
 				if (verb === null && arg.text.startsWith("-C") && arg.text !== "-C") {
-					const value = arg.text.slice(2);
-					repoDir =
-						repoDir === null || value.startsWith("/")
-							? value
-							: `${repoDir}/${value}`;
+					const value = { text: arg.text.slice(2) } as Token;
+					if (!isLiteralRepoDir(value)) retargeted = true;
+					else
+						repoDir =
+							repoDir === null || value.text.startsWith("/")
+								? value.text
+								: `${repoDir}/${value.text}`;
 					continue;
 				}
 				const eq = arg.text.indexOf("=");
@@ -1466,11 +1678,14 @@ function scanInvocations(command: string): CommitInvocation[] {
 							)
 								aliasOpaque = true;
 						}
-						if (name === "-C")
-							repoDir =
-								repoDir === null || value.text.startsWith("/")
-									? value.text
-									: `${repoDir}/${value.text}`;
+						if (name === "-C") {
+							if (!isLiteralRepoDir(value)) retargeted = true;
+							else
+								repoDir =
+									repoDir === null || value.text.startsWith("/")
+										? value.text
+										: `${repoDir}/${value.text}`;
+						}
 						j++;
 					}
 				}
