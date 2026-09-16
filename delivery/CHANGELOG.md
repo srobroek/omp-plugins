@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.10.11](https://github.com/srobroek/omp-plugins/compare/delivery--v0.10.10...delivery--v0.10.11) (2026-09-16)
+
+
+### Bug Fixes
+
+* **delivery:** allow untrusted-origin Git reads while keeping pushes fail-closed
+
 ## [0.10.10](https://github.com/srobroek/omp-plugins/compare/delivery--v0.10.9...delivery--v0.10.10) (2026-09-16)
 
 

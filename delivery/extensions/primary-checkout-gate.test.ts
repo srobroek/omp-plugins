@@ -223,6 +223,21 @@ describe("decideCommit", () => {
 		expect(decideCommit("git -C /elsewhere status", primary, {})).toBeUndefined();
 	});
 
+	test("allows untrusted primary reads but blocks untrusted push", () => {
+		const { primary } = setup();
+		const state: RemoteState = { offline: true };
+		setGitRunForTests(fakeGit([{ topLevel: primary, primary: true }], state));
+		for (const command of ["git status", "git diff", "git log -1", "git show HEAD", "git fetch origin"]) {
+			expect(decideCommit(command, primary, {}), command).toBeUndefined();
+		}
+		expect(decideCommit("git push origin main", primary, {})).toMatchObject({
+			block: true,
+			reason: expect.stringContaining("unpinned repository origin"),
+		});
+		state.offline = false;
+		expect(decideCommit("git push origin main", primary, {})).toBeUndefined();
+	});
+
 	test("does not block quoted git prose", () => {
         const { primary } = setup();
         expect(decideCommit("printf '<text containing the words git commit>' >> file && bd create --body-file file", primary, {})).toBeUndefined();

@@ -278,7 +278,7 @@ export function decideCommit(
 			return { block: true, reason: unreadableReason("an opaque Git invocation") };
 		const target = invocation.repoDir === null ? cwd : resolve(cwd, invocation.repoDir);
 		const checkout = checkoutOf(target);
-		if (checkout?.primary && !isRuntimeCheckout(checkout.topLevel, worktreesDir) && (invocation.operation === "push" || invocation.operation === "read") && !targetRepoTrusts(checkout.topLevel, run, scope))
+		if (checkout?.primary && !isRuntimeCheckout(checkout.topLevel, worktreesDir) && invocation.operation === "push" && !targetRepoTrusts(checkout.topLevel, run, scope))
 			return { block: true, reason: unreadableReason("unpinned repository origin") };
 		if (invocation.operation === "push" || invocation.operation === "read" || invocation.dryRun === true) continue;
 		if (invocation.operation === "checkout" || invocation.operation === "switch" || invocation.operation === "merge") {

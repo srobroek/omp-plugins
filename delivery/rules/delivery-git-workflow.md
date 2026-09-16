@@ -27,7 +27,9 @@ The gate resolves the target repository from the bash call `cwd` or `git -C <pat
 
 On first observation, it pins the normalized `remote.origin.url`, common Git directory, default ref, and remote HEAD SHA for the session and extension.
 
-Each authorization re-reads the configured origin and queries the pinned remote identity explicitly. An identity or HEAD SHA change denies the call and invalidates the positive decision; restoring the exact pinned identity and unchanged remote HEAD permits a fresh authorization check.
+Before the origin anchor is trusted, and whenever it is absent or mismatched, classified read-only commands (`status`, `diff`, `log`, `show`, and `fetch`) remain allowed and advisory; output derived from an untrusted or mismatched remote remains untrusted. Rely on that output only after the configured origin, default ref, and remote HEAD SHA are verified against an unchanged anchor. Push remains pinned and fail-closed.
+
+Each authorization re-reads the configured origin and queries the pinned remote identity explicitly. Every post-observation origin-anchor or remote-authority mismatch denies authorization, invalidates cached trust and the positive decision, and blocks push and protected overrides; reads remain allowed and advisory across the mismatch. Restoring the exact pinned identity and unchanged remote HEAD permits a fresh authorization check.
 
 The parsed steering tree is cached only by the exact remote SHA, never by elapsed time.
 
@@ -44,7 +46,7 @@ The main-branch gate blocks commits on `main` or `master`.
 
 The simple-shape allowlist refuses direct `git-*` helpers, wrappers, aliases, dynamic targets, and Git-bearing commands combined with `cd`, `pushd`, failed-cd separator chains, braces, or subshells. Set the tool `cwd` or use a supported static `git -C <path>` form instead.
 
-Origin mutation commands are primary mutations, not reads. Ordinary `git remote -v` and `git fetch` are read operations only while the pinned origin remains unchanged. Filesystem tampering before first observation or session startup is outside this boundary; after observation, mismatches fail closed.
+Origin mutation commands are primary mutations, not reads. Ordinary `git remote -v` and `git fetch` remain classified as read operations even when the origin anchor is absent or mismatched; their remote-derived output remains advisory and untrusted until the configured origin, default ref, and remote HEAD SHA are verified against an unchanged anchor. Filesystem tampering before first observation or session startup is outside this boundary; after observation, every mismatch fails closed for push and protected overrides and invalidates cached trust.
 
 ## Automated review loop
 
