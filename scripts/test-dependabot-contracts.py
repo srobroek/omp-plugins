@@ -65,7 +65,12 @@ BRANCH = "dependabot/bun/browser-tools/oh-my-pi/pi-utils-18.2.1"
 
 def run(*args: str, cwd: Path) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
-        [sys.executable, *args], cwd=cwd, capture_output=True, text=True, timeout=120
+        [sys.executable, *args],
+        cwd=cwd,
+        capture_output=True,
+        text=True,
+        timeout=120,
+        check=False,
     )
 
 
@@ -625,6 +630,18 @@ class DistGuardFixtures(unittest.TestCase):
         self.assertEqual(result.returncode, 1, result.stdout)
         self.assertIn("destination is a symlink", result.stderr)
         self.assertEqual(outside.read_text(encoding="utf-8"), "// untouched\n")
+
+    def test_apply_refuses_a_symlinked_destination_parent(self) -> None:
+        self.prepare_target()
+        outside = self.root / "outside"
+        outside.mkdir()
+        shutil.rmtree(self.target / "browser-tools")
+        (self.target / "browser-tools").symlink_to(outside, target_is_directory=True)
+        self.stage_artifact({"browser-tools/dist/headed-browser-tools.js": "// new\n"})
+        result = self.apply("browser-tools/dist/headed-browser-tools.js\n")
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertIn("destination path contains a symlink", result.stderr)
+        self.assertEqual(list(outside.iterdir()), [], "a rejected path changed the outside tree")
 
     # --- stage -------------------------------------------------------------
 

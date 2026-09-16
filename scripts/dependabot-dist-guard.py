@@ -260,6 +260,32 @@ def verify_artifact(
     return sorted(payload)
 
 
+def unsafe_destination(root: Path, relative: str) -> str | None:
+    """Reject a destination whose existing components escape or follow symlinks."""
+    parts = Path(relative).parts
+    destination = root.joinpath(*parts)
+    for depth in range(1, len(parts) + 1):
+        candidate = root.joinpath(*parts[:depth])
+        try:
+            info = candidate.lstat()
+        except FileNotFoundError:
+            break
+        except OSError as error:
+            return f"{relative}: cannot inspect destination path: {error}"
+        if stat.S_ISLNK(info.st_mode):
+            if candidate == destination:
+                return f"{relative}: destination is a symlink in the head checkout"
+            return f"{relative}: destination path contains a symlink"
+    try:
+        resolved = destination.resolve(strict=False)
+        contained = Path(os.path.commonpath([root, resolved])) == root
+    except (OSError, RuntimeError, ValueError) as error:
+        return f"{relative}: cannot resolve destination path: {error}"
+    if not contained:
+        return f"{relative}: resolves outside the head checkout"
+    return None
+
+
 def apply(artifact: Path, manifest: Path, target: Path, trusted: Path) -> list[str]:
     """Copy verified bytes into the head checkout, re-checking the allowlist."""
     reasons: list[str] = []
@@ -278,11 +304,9 @@ def apply(artifact: Path, manifest: Path, target: Path, trusted: Path) -> list[s
             reasons.append(f"{relative}: no longer a regular file in the artifact")
             continue
         destination = root / relative
-        if os.path.commonpath([root, Path(os.path.normpath(destination))]) != str(root):
-            reasons.append(f"{relative}: resolves outside the head checkout")
-            continue
-        if destination.is_symlink():
-            reasons.append(f"{relative}: destination is a symlink in the head checkout")
+        problem = unsafe_destination(root, relative)
+        if problem:
+            reasons.append(problem)
             continue
         destination.parent.mkdir(parents=True, exist_ok=True)
         destination.write_bytes(source.read_bytes())
