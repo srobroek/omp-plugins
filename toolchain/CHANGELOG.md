@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.7](https://github.com/srobroek/omp-plugins/compare/toolchain--v0.3.6...toolchain--v0.3.7) (2026-09-16)
+
+
+### Refactors
+
+* **delivery:** replace blocking gates with push advisory ([#325](https://github.com/srobroek/omp-plugins/issues/325)) ([f65d1f5](https://github.com/srobroek/omp-plugins/commit/f65d1f5b38226a6627401a3b3ca95c26b08236a2))
+
 ## [0.3.6](https://github.com/srobroek/omp-plugins/compare/toolchain--v0.3.5...toolchain--v0.3.6) (2026-09-13)
 
 

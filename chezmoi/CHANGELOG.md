@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.8](https://github.com/srobroek/omp-plugins/compare/chezmoi--v0.4.7...chezmoi--v0.4.8) (2026-09-16)
+
+
+### Refactors
+
+* **delivery:** replace blocking gates with push advisory ([#325](https://github.com/srobroek/omp-plugins/issues/325)) ([f65d1f5](https://github.com/srobroek/omp-plugins/commit/f65d1f5b38226a6627401a3b3ca95c26b08236a2))
+
 ## [0.4.7](https://github.com/srobroek/omp-plugins/compare/chezmoi--v0.4.6...chezmoi--v0.4.7) (2026-09-15)
 
 

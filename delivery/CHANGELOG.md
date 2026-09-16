@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.11.1](https://github.com/srobroek/omp-plugins/compare/delivery--v0.11.0...delivery--v0.11.1) (2026-09-16)
+
+
+### Bug Fixes
+
+* **delivery:** read only authorized index operations in a checkout ([3d97020](https://github.com/srobroek/omp-plugins/commit/3d9702027773339c7287cfd9796e12dd736cb1f2))
+
+
+### Refactors
+
+* **delivery:** replace blocking gates with push advisory ([#325](https://github.com/srobroek/omp-plugins/issues/325)) ([f65d1f5](https://github.com/srobroek/omp-plugins/commit/f65d1f5b38226a6627401a3b3ca95c26b08236a2))
+
 ## [0.11.0](https://github.com/srobroek/omp-plugins/compare/delivery--v0.10.11...delivery--v0.11.0) (2026-09-16)
 
 
