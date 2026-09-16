@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.4.0](https://github.com/srobroek/omp-plugins/compare/beads--v1.3.6...beads--v1.4.0) (2026-09-16)
+
+
+### Features
+
+* **session:** wake parents on settled task batches and release stale claims by evidence ([#330](https://github.com/srobroek/omp-plugins/issues/330)) ([47aa331](https://github.com/srobroek/omp-plugins/commit/47aa33155c04aa4124c1f0dbd736f28e8267df2c))
+
+
+### Bug Fixes
+
+* **beads:** ignore the host gate lock and drop the Unicode dash from beads-core ([#333](https://github.com/srobroek/omp-plugins/issues/333)) ([d5165f2](https://github.com/srobroek/omp-plugins/commit/d5165f2b3259f770491e04154477a3f9b2c4c410))
+
 ## [1.3.6](https://github.com/srobroek/omp-plugins/compare/beads--v1.3.5...beads--v1.3.6) (2026-09-16)
 
 
