@@ -1,0 +1,40 @@
+name: dependabot-automerge
+
+# Only the `omp-patch` group merges itself. CI is the decision-maker: `--auto`
+# waits for the required checks, so a patch bump that breaks the loader smoke,
+# the bundle-drift gate or the tests stays open.
+
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  automerge:
+    if: >-
+      github.event.pull_request.user.login == 'dependabot[bot]' &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Read Dependabot metadata
+        id: metadata
+        uses: dependabot/fetch-metadata@08eff52bf64351f401fb50d4972fa95b9f2c2d1b # v2.4.0
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      # `dependency-group` is the authority, not the dependency names: the group
+      # is defined in .github/dependabot.yml as @oh-my-pi/* patch updates only,
+      # so membership already proves both the package scope and the update type.
+      # A PR outside the group falls through and waits for a human.
+      - name: Enable automerge for the OMP patch group
+        if: >-
+          steps.metadata.outputs.package-ecosystem == 'bun' &&
+          steps.metadata.outputs.dependency-group == 'omp-patch'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+        run: gh pr merge "$PR_URL" --auto --squash
