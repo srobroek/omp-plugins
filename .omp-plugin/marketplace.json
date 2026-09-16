@@ -12,7 +12,7 @@
       "name": "architecture",
       "description": "Architecture rules: module boundaries, compose-don't-fork, project structure, component promotion, and structural-search routing.",
       "source": "./architecture",
-      "version": "0.3.2",
+      "version": "0.4.0",
       "category": "development"
     },
     {
@@ -33,7 +33,7 @@
       "name": "beads",
       "description": "Beads issue tracking: dependency DAGs, formulas, and decisions recorded as beads.",
       "source": "./beads",
-      "version": "1.3.4",
+      "version": "1.3.5",
       "category": "productivity"
     },
     {
@@ -47,7 +47,7 @@
       "name": "build",
       "description": "Execution agents: operator and external-repo worker.",
       "source": "./build",
-      "version": "0.5.0",
+      "version": "0.6.0",
       "category": "development"
     },
     {
@@ -82,7 +82,7 @@
       "name": "design",
       "description": "UI and UX design: system audit, DESIGN.md, browser verification, accessibility, tokens, and Component Driven build.",
       "source": "./design",
-      "version": "0.3.5",
+      "version": "0.4.0",
       "category": "development"
     },
     {
