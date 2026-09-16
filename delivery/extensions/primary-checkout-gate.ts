@@ -3,7 +3,7 @@ import { homedir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { ExtensionAPI, ToolCallEvent } from "@oh-my-pi/pi-coding-agent";
 import { extractCommand, findCommitInvocations } from "./main-branch-gate.ts";
-import { steeringDirective, targetRepoAuthorizes } from "./target-repo-steering.ts";
+import { runGitProbe, steeringDirective, targetRepoAuthorizes } from "./target-repo-steering.ts";
 
 let worktreesDirOverride: string | undefined;
 
@@ -64,7 +64,6 @@ export function getWorktreesDir(): string {
 
 const EDIT_TOOLS: Record<string, true> = { edit: true, write: true };
 const ALLOW_ENV = "DELIVERY_ALLOW_PRIMARY_CHECKOUT";
-const TIMEOUT_MS = 2000;
 
 /** Internal URIs (`xd://…`, `artifact://…`, `memory://…`) are not filesystem paths. */
 const NON_FILE_SCHEME = /^[a-z][a-z0-9+.-]*:\/\//i;
@@ -82,10 +81,6 @@ export function setGitRunForTests(fn: GitRun | null): void {
 	injectedRun = fn;
 }
 
-function defaultRun(argv: string[], cwd: string): { exitCode: number; stdout: string } {
-	const proc = Bun.spawnSync(argv, { cwd, stdout: "pipe", stderr: "pipe", timeout: TIMEOUT_MS });
-	return { exitCode: proc.exitCode ?? 1, stdout: proc.stdout.toString() };
-}
 
 export type Checkout = { primary: boolean; topLevel: string };
 
@@ -94,7 +89,7 @@ export type Checkout = { primary: boolean; topLevel: string };
  * the git dir and the common dir coincide.
  */
 export function checkoutOf(dir: string): Checkout | null {
-	const run = injectedRun ?? defaultRun;
+	const run = injectedRun ?? runGitProbe;
 	let result: { exitCode: number; stdout: string };
 	try {
 		result = run(["git", "rev-parse", "--show-toplevel", "--git-dir", "--git-common-dir"], dir);
@@ -219,7 +214,7 @@ export function decideEdit(
 	authorizedPrimaryCheckouts?: AuthorizedPrimaryCheckouts,
 ): { block: true; reason: string } | undefined {
 	if (EDIT_TOOLS[toolName] !== true) return undefined;
-	const run = injectedRun ?? defaultRun;
+	const run = injectedRun ?? runGitProbe;
 	for (const path of editedPaths(input)) {
 		const decision = decidePath(path, cwd, worktreesDir, authorizedPrimaryCheckouts);
 		if (!decision) continue;
@@ -243,7 +238,7 @@ export function decideCommit(
 	env: NodeJS.ProcessEnv = process.env,
 	worktreesDir = getWorktreesDir(),
 ): { block: true; reason: string } | undefined {
-	const run = injectedRun ?? defaultRun;
+	const run = injectedRun ?? runGitProbe;
 	for (const invocation of findCommitInvocations(command, false)) {
 		if (invocation.dryRun || invocation.retargeted) continue;
 		const target = invocation.repoDir === null ? cwd : resolve(cwd, invocation.repoDir);
@@ -293,7 +288,7 @@ export default function primaryCheckoutGate(pi: ExtensionAPI): void {
 					if (
 						checkout?.primary &&
 						!isRuntimeCheckout(checkout.topLevel, worktreesDir) &&
-						targetRepoAuthorizes(checkout.topLevel, ALLOW_ENV, injectedRun ?? defaultRun)
+						targetRepoAuthorizes(checkout.topLevel, ALLOW_ENV, injectedRun ?? runGitProbe, sessionKey(ctx))
 					)
 						authorizedPrimaryCheckouts.add(checkout.topLevel);
 				}

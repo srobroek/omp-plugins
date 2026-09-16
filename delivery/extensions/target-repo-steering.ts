@@ -2,6 +2,20 @@ import { isAbsolute, resolve } from "node:path";
 
 export type GitRun = (argv: string[], cwd: string) => { exitCode: number; stdout: string };
 
+const LOCAL_PROBE_TIMEOUT_MS = 2000;
+const REMOTE_PROBE_TIMEOUT_MS = 10_000;
+
+/** The Git seam both delivery gates run in production. A non-zero exit denies, never permits. */
+export function runGitProbe(argv: string[], cwd: string): { exitCode: number; stdout: string } {
+	const proc = Bun.spawnSync(argv, {
+		cwd,
+		stdout: "pipe",
+		stderr: "pipe",
+		timeout: argv[1] === "ls-remote" ? REMOTE_PROBE_TIMEOUT_MS : LOCAL_PROBE_TIMEOUT_MS,
+	});
+	return { exitCode: proc.exitCode ?? 1, stdout: proc.stdout.toString() };
+}
+
 type TreeEntry = { mode: string; type: string; path: string };
 type ReadResult = { text: string | null; error: boolean };
 
