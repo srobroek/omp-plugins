@@ -68,7 +68,7 @@
       "name": "delivery",
       "description": "Delivery and git-workflow rules, plus a pull-request review agent.",
       "source": "./delivery",
-      "version": "0.10.10",
+      "version": "0.10.11",
       "category": "devops"
     },
     {

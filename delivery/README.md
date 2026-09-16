@@ -60,8 +60,10 @@ A protected primary checkout is allowed only when the same bash tool call's stru
 
 The same committed-source, fenced-block, symlink, and veto rules apply to this authorization.
 A bash call carrying the authorized structured `env` override grants later `edit` and `write` calls in that same canonical primary checkout for the current session.
-`git remote -v` and `git fetch` remain read operations only after the origin anchor is unchanged. `git remote set-url`, `git remote add`, `git remote remove`, `git remote rename`, `git config remote.origin.*`, aliases, and wrappers that can perform those mutations are denied in the primary checkout.
+`git remote -v` and `git fetch` remain classified as read operations even when the origin anchor is absent or mismatched; their remote-derived output remains advisory and untrusted until the configured origin, default ref, and remote HEAD SHA are verified against an unchanged anchor. `git remote set-url`, `git remote add`, `git remote remove`, `git remote rename`, `git config remote.origin.*`, aliases, and wrappers that can perform those mutations are denied in the primary checkout.
 The grant does not transfer to another repository or an OMP-isolated clone.
+
+Read-only primary-checkout commands (`status`, `diff`, `log`, `show`, and `fetch`) remain allowed and advisory when the origin anchor is absent or mismatched: remote-derived output is untrusted until the configured origin, default ref, and remote HEAD SHA are verified against an unchanged anchor. Push remains pinned and fail-closed.
 
 Primary-checkout commits use the canonical-main exception: they require the same
 `DELIVERY_ALLOW_MAIN_COMMIT=1` command-local environment factor and the main-commit
@@ -69,7 +71,7 @@ directive above. `DELIVERY_ALLOW_PRIMARY_CHECKOUT=1` never authorizes a commit;
 that factor remains separate for edit/write authorization and session grants.
 
 The gate is advisory-strength.
-Filesystem tampering before the extension observes a repository, or before session startup, is outside this boundary. After first observation, an origin identity or remote-authority mismatch fails closed.
+Filesystem tampering before the extension observes a repository, or before session startup, is outside this boundary. After first observation, every origin-anchor or remote-authority mismatch fails closed for protected actions, invalidates cached trust, and blocks push and protected overrides; classified reads remain allowed and advisory.
 It does not parse shell commands that write files through redirection, scripts, or utilities such as `sed -i`.
 
 ### `unpushed-work-advisory`
