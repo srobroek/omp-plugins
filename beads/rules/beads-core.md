@@ -17,23 +17,18 @@ MUST Set `BEADS_ACTOR` (`<harness>/<agent-name>/<session-id>`) on every
   `BD_ACTOR` until the project hook accepts `BEADS_ACTOR`.
 
 CLAIMING AND LEASES
-MUST Claim before working with `bd update <id> --claim` (atomic CAS; first wins,
-  idempotent). Never claim through labels.
-MUST Discover work with `bd ready --unassigned --json`. Open and unassigned is
-  self-serve; a live lease is not.
-MUST Work only beads you own or that a parent, handover, or user names. Your
-  session id in the assignee identifies ownership after resume or recovery.
-MUST Refuse claim, assign, close, or reopen on another session's live lease;
-  comments remain available.
-MUST Prove a lease dead before taking it. Read `lease_host` and `lease_pid`,
-  then on that host confirm `kill -0 <pid>` fails. A different host or missing
-  anchors is unprovable: ask instead of taking it.
-MUST Record a takeover comment naming the dead lease before claiming.
-MUST Re-stamp your own anchors when resuming an earlier session:
-  `bd update <id> --set-metadata lease_host=... --set-metadata lease_pid=...`.
-DEFAULT `bd-lease-gate` stamps anchors after a successful claim; restamp by hand
-  if it reports a failure.
-DEFAULT Before presenting or running the guarded release command, run `bd update --help`. Proceed only when its output contains `--if-assignee`. If help omits the flag, do not release. Upgrade `bd` first. Release only your current lease with one guarded atomic update, binding both actor variables command-locally to the same shell-quoted identity: `BEADS_ACTOR='omp/example/session' BD_ACTOR='omp/example/session' bd update 'id' --assignee '' --status open --set-metadata 'release_actor=omp/example/session' --set-metadata 'released_at=UTC timestamp' --if-assignee 'current-assignee'`. Do not set only one variable or rely on ambient values. A non-zero/CAS-mismatch result means the holder changed, so inspect instead of retrying without the guard.
+MUST Refuse claim, assign, close, or reopen on a live lease; comments remain available.
+MUST Classify a held bead before touching it:
+| state | evidence | action |
+|---|---|---|
+| live | the holder's agent is running or idle in `hub list`, or its job is running in `hub jobs`, or `orc_status.held` shows `worker … running` | refuse |
+| worker ended | `orc_status.held` shows its worker ended `completed`/`failed`/`aborted`, or `hub jobs` shows the job settled with the bead still `in_progress` | release with a comment naming the ended worker |
+| own | assignee is your actor (`omp/<session id>`) | release or restamp freely |
+| unprovable | different host (`lease_host`), no anchors, no worker record | ask, or release with `force`/an explicit takeover comment only when a human or the run lead asked for recovery |
+| closed | `status: closed` | never reassign; reopen is a separate decision |
+DEFAULT `lease_pid` is the OMP process id; every subagent of one OMP process shares it, so `kill -0` only proves a *different* OMP process died. Never treat a live pid as proof that a specific subagent is alive.
+MUST Release with show, update, then show: `bd show <id> --json` (record the assignee), then `BEADS_ACTOR='<actor>' BD_ACTOR='<actor>' bd update '<id>' --assignee '' --status open --set-metadata 'release_actor=<actor>' --set-metadata 'released_at=<UTC ISO>' --set-metadata 'released_from=<holder>'`. Run `bd show <id> --json` again. An assignee still present means a concurrent claim, so inspect rather than repeat. Add `--if-assignee '<holder>'` when `bd update --help` lists it.
+MUST Record a release or takeover comment (`bd comments add <id> -m …`) naming the evidence before the update.
 
 FIELD TAXONOMY
 | purpose | mechanism | writer |

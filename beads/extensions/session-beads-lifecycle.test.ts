@@ -434,12 +434,21 @@ describe("heldClaims", () => {
 
 describe("releaseClaimArgs", () => {
 	const at = "2026-09-14T12:34:56.789Z";
-	test("builds one guarded argv and preserves metadata by using set-metadata", () => {
+	test("builds one guarded argv and preserves release metadata", () => {
 		expect(releaseClaimArgs("bd-probe-2m7", "omp/Main/s1", { BD_ACTOR: "omp/Main/s2" }, at)).toEqual([
 			"update", "bd-probe-2m7", "--assignee", "", "--status", "open",
 			"--set-metadata", "release_actor=omp/Main/s2", "--set-metadata", `released_at=${at}`,
-			"--if-assignee", "omp/Main/s1",
+			"--set-metadata", "released_from=omp/Main/s1", "--if-assignee", "omp/Main/s1",
 		]);
+	});
+	test("builds a readback-verified argv when CAS is unavailable", () => {
+		const args = releaseClaimArgs("bd-probe-2m7", "omp/Main/s1", { BD_ACTOR: "omp/Main/s2" }, at, false);
+		expect(args).toEqual([
+			"update", "bd-probe-2m7", "--assignee", "", "--status", "open",
+			"--set-metadata", "release_actor=omp/Main/s2", "--set-metadata", `released_at=${at}`,
+			"--set-metadata", "released_from=omp/Main/s1",
+		]);
+		expect(args).not.toContain("--if-assignee");
 	});
 	test("prefers BD_ACTOR and falls back to BEADS_ACTOR", () => {
 		expect(releaseClaimArgs("bd-a-1", "omp/Main/s1", { BEADS_ACTOR: "omp/Main/fallback" }, at)?.[7]).toBe("release_actor=omp/Main/fallback");
@@ -451,11 +460,14 @@ describe("releaseClaimArgs", () => {
 		expect(releaseClaimArgs("bd-a-1;rm", "omp/Main/s1", { BD_ACTOR: "omp/Main/s2" }, at)).toBeUndefined();
 		expect(releaseClaimArgs("bd-a-1", "omp/Main/s1", { BD_ACTOR: "omp/Main/s2;rm" }, at)).toBeUndefined();
 		expect(releaseClaimCommand("bd-a-1", "omp/Main/s1", { BD_ACTOR: "omp/Main/s2" }, at)).toContain("--if-assignee");
+		expect(releaseClaimCommand("bd-a-1", "omp/Main/s1", { BD_ACTOR: "omp/Main/s2" }, at, false)).not.toContain("--if-assignee");
+		expect(releaseClaimCommand("bd-a-1", "omp/Main/s1", { BD_ACTOR: "omp/Main/s2" }, at, false)).toContain("released_from=omp/Main/s1");
 	});
 	test("emits a command-local BD_ACTOR matching release metadata", () => {
 		const command = releaseClaimCommand("bd-a-1", "omp/Main/s1", { BD_ACTOR: "omp/Main/s2", BEADS_ACTOR: "omp/Main/ambient" }, at);
 		expect(command).toContain("BEADS_ACTOR='omp/Main/s2' BD_ACTOR='omp/Main/s2' 'bd'");
 		expect(command).toContain("'release_actor=omp/Main/s2'");
+		expect(command).toContain("'released_from=omp/Main/s1'");
 		expect(command).toContain("'--if-assignee' 'omp/Main/s1'");
 	});
 	test("refuses quote-bearing actors instead of interpolating shell text", () => {
@@ -474,6 +486,12 @@ describe("formatSessionCloseAdvisory", () => {
 		expect(text).not.toContain("<actor>");
 		expect(text).not.toContain("<current-assignee>");
 		expect(text).toContain("bd comments add");
+	});
+	test("emits a readback verification for bd without CAS support", () => {
+		const text = formatSessionCloseAdvisory(heldClaims(readBeads(BEAD_LIST), new Set(["bd-probe-2m7"]), undefined), { BD_ACTOR: "omp/Main/s1" }, at, false);
+		expect(text).toContain("Release with:");
+		expect(text).not.toContain("does not advertise atomic");
+		expect(text).toContain("Then verify: bd show <id> --json must show no assignee.");
 	});
 	test("does not release another holder when one actor merely touched the bead", () => {
 		const text = formatSessionCloseAdvisory(heldClaims(readBeads(BEAD_LIST), new Set(["bd-probe-2m7"]), undefined), { BD_ACTOR: "omp/Main/releaser" }, at);
@@ -500,9 +518,10 @@ describe("handleSessionStop", () => {
 		expect(r?.continue).toBe(true);
 		expect(r?.additionalContext).toContain("bd-probe-2m7");
 	});
-	test("passes the effective actor into actual release commands", () => {
+test("passes the effective actor into actual release commands", () => {
 		const r = handleSessionStop({}, BEAD_LIST, new Set(["bd-probe-2m7"]), "omp/Main/s1");
 		expect(r?.additionalContext).toContain("'release_actor=omp/Main/s1'");
+		expect(r?.additionalContext).toContain("'released_from=omp/Main/s1'");
 		expect(r?.additionalContext).toContain("'--if-assignee'");
 		expect(r?.additionalContext).toContain("'omp/Main/s1'");
 		expect(r?.additionalContext).not.toContain("<actor>");
@@ -913,7 +932,9 @@ printf '%s\\n' '[]'
 			expect(result.additionalContext).toContain("BEADS_ACTOR='actor/b' BD_ACTOR='actor/b' 'bd'");
 			expect(result.additionalContext).toContain("'release_actor=actor/a'");
 			expect(result.additionalContext).toContain("'release_actor=actor/b'");
-			expect(result.additionalContext).toContain("'--if-assignee' 'actor/a'");
+			expect(result.additionalContext).toContain("'released_from=actor/a'");
+			expect(result.additionalContext).toContain("'released_from=actor/b'");
+		expect(result.additionalContext).toContain("'--if-assignee' 'actor/a'");
 			expect(result.additionalContext).toContain("'--if-assignee' 'actor/b'");
 			expect(result.additionalContext).not.toContain("<actor>");
 			expect(result.additionalContext).not.toContain("<current-assignee>");
@@ -932,16 +953,16 @@ printf '%s\\n' '[]'
 		}
 	});
 
-	test("registered stop fails closed for stable help and missing actor", async () => {
+	test("registered stop emits a readback-verified release when CAS is unavailable", async () => {
 		const dir = mkdtempSync(join(tmpdir(), "beads-release-stable-"));
 		const originalPath = process.env.PATH;
 		try {
 			mkdirSync(join(dir, ".beads"));
 			writeFileSync(join(dir, "bd"), `#!/bin/sh
-if [ "$1" = update ] && [ "$2" = --help ]; then printf '%s\\n' 'Usage: bd update [--status STATUS]'; exit 0; fi
-if [ "$1" = list ]; then printf '%s\\n' '[{"id":"bd-stable-1","title":"stable","status":"in_progress","assignee":"actor/a"}]'; exit 0; fi
-printf '%s\\n' '[]'
-`);
+		if [ "$1" = update ] && [ "$2" = --help ]; then printf '%s\\n' 'Usage: bd update [--status STATUS]'; exit 0; fi
+		if [ "$1" = list ]; then printf '%s\\n' '[{"id":"bd-stable-1","title":"stable","status":"in_progress","assignee":"actor/a"}]'; exit 0; fi
+		printf '%s\\n' '[]'
+		`);
 			chmodSync(join(dir, "bd"), 0o755);
 			process.env.PATH = `${dir}:${originalPath ?? ""}`;
 			const { handlers } = wire();
@@ -949,10 +970,11 @@ printf '%s\\n' '[]'
 			const toolResult = handlers.tool_result?.[0];
 			const sessionStop = handlers.session_stop?.[0];
 			if (toolResult === undefined || sessionStop === undefined) throw new Error("lifecycle handlers were not registered");
-			toolResult({ toolName: "bash", toolCallId: "stable", isError: false, input: { command: "bd update bd-stable-1 --claim" }, content: [] }, ctx);
+			toolResult({ toolName: "bash", toolCallId: "stable", isError: false, input: { command: "bd update bd-stable-1 --claim", env: { BD_ACTOR: "actor/a" } }, content: [] }, ctx);
 			const stable = await sessionStop({}, ctx) as { additionalContext?: string };
-			expect(stable.additionalContext).toContain("does not advertise atomic");
-			expect(stable.additionalContext).not.toContain("Release with:");
+			expect(stable.additionalContext).toContain("Release with:");
+			expect(stable.additionalContext).not.toContain("does not advertise atomic");
+			expect(stable.additionalContext).toContain("Then verify: bd show <id> --json must show no assignee.");
 		} finally {
 			if (originalPath === undefined) delete process.env.PATH;
 			else process.env.PATH = originalPath;

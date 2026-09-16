@@ -5,7 +5,8 @@
   "private": true,
   "omp": {
     "extensions": [
-      "./extensions/resume-session-tool.ts"
+      "./extensions/resume-session-tool.ts",
+      "./extensions/task-batch-supervisor.ts"
     ]
   }
 }
