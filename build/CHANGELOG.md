@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.1](https://github.com/srobroek/omp-plugins/compare/build--v0.6.0...build--v0.6.1) (2026-09-16)
+
+
+### Refactors
+
+* **build:** enforce recursive work-conserving task delegation ([#327](https://github.com/srobroek/omp-plugins/issues/327)) ([90621cc](https://github.com/srobroek/omp-plugins/commit/90621cc6bef46fee6624cadc72545d9a58d516c8))
+
 ## [0.6.0](https://github.com/srobroek/omp-plugins/compare/build--v0.5.0...build--v0.6.0) (2026-09-16)
 
 
