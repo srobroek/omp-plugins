@@ -408,9 +408,8 @@ export function beadIdCandidates(command: string): string[] {
 const SAFE_RELEASE_IDENTIFIER = /^[A-Za-z0-9][A-Za-z0-9._/-]*$/;
 
 /**
- * Build the one atomic command used to release a claim. The assignee CAS is
- * deliberately kept in the argv array: issue text and actor values are never
- * parsed as shell source, and a concurrent holder cannot be released.
+ * Build the command used to release a claim. When bd supports assignee CAS,
+ * retain the guard; older bd versions still get a readback-verified release.
  *
  * Both actor environment names are bound command-locally to the same validated
  * identity. bd releases currently consume `BEADS_ACTOR`; the legacy alias is
@@ -424,16 +423,18 @@ export function releaseClaimArgs(
 	casSupported = true,
 ): string[] | undefined {
 	const actor = env.BD_ACTOR?.trim() || env.BEADS_ACTOR?.trim() || "";
-	if (!casSupported || !SAFE_RELEASE_IDENTIFIER.test(id) || !SAFE_RELEASE_IDENTIFIER.test(holder) || !SAFE_RELEASE_IDENTIFIER.test(actor)) return undefined;
+	if (!SAFE_RELEASE_IDENTIFIER.test(id) || !SAFE_RELEASE_IDENTIFIER.test(holder) || !SAFE_RELEASE_IDENTIFIER.test(actor)) return undefined;
 	if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(releasedAt)) return undefined;
-	return [
+	const args = [
 		"update", id,
 		"--assignee", "",
 		"--status", "open",
 		"--set-metadata", `release_actor=${actor}`,
 		"--set-metadata", `released_at=${releasedAt}`,
-		"--if-assignee", holder,
+		"--set-metadata", `released_from=${holder}`,
 	];
+	if (casSupported) args.push("--if-assignee", holder);
+	return args;
 }
 
 function shellQuote(value: string): string {
@@ -522,11 +523,12 @@ export function formatSessionCloseAdvisory(
 			: undefined;
 		const release = bead.assignee === undefined || actor === undefined ? undefined
 			: releaseClaimCommand(bead.id, bead.assignee, { ...env, BD_ACTOR: actor }, releasedAt, casSupported);
-		lines.push(release === undefined
-			? casSupported
-				? "  Release unavailable: the effective actor is missing or ambiguous; verify the current assignee and actor before retrying."
-				: "  Release unavailable: this bd does not advertise atomic --if-assignee; upgrade bd before retrying."
-			: `  Release with: ${release}`);
+		if (release === undefined) {
+			lines.push("  Release unavailable: the effective actor is missing or ambiguous; verify the current assignee and actor before retrying.");
+		} else {
+			lines.push(`  Release with: ${release}`);
+			if (!casSupported) lines.push("  Then verify: bd show <id> --json must show no assignee.");
+		}
 	}
 	if (beads.length > MAX_LISTED) lines.push(`- ...and ${beads.length - MAX_LISTED} more`);
 	lines.push(

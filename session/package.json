@@ -1,11 +1,12 @@
 {
   "name": "@srobroek/session",
   "version": "1.1.7",
-  "description": "Create a selective fresh-session handoff from a prior OMP transcript without replaying its full history.",
+  "description": "Session continuity: fresh-session handoff, and a supervisor that wakes a parent when its dispatched task batch settles or a child stalls.",
   "private": true,
   "omp": {
     "extensions": [
-      "./extensions/resume-session-tool.ts"
+      "./extensions/resume-session-tool.ts",
+      "./extensions/task-batch-supervisor.ts"
     ]
   }
 }
