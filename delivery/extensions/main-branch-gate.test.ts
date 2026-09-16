@@ -2179,3 +2179,22 @@ describe("final registered bypass controls", () => {
 		expect(calls).toEqual([]);
 	});
 });
+
+describe("production Git runner", () => {
+	test("uses the remote budget when main authorization reaches ls-remote", () => {
+		const root = "/tmp/runner-main";
+		const seen: number[] = [];
+		const original = Bun.spawnSync;
+		Object.defineProperty(Bun, "spawnSync", { value: (_argv: string[], options: { timeout: number }) => {
+			seen.push(options.timeout);
+			return { exitCode: 0, stdout: { toString: () => "main\n" } };
+		} });
+		try {
+			const result = decideCommit("git commit -m x", root, { DELIVERY_ALLOW_MAIN_COMMIT: "1" });
+			expect(result).toMatchObject({ block: true });
+			expect(seen).toContain(10_000);
+		} finally {
+			Object.defineProperty(Bun, "spawnSync", { value: original });
+		}
+	});
+});

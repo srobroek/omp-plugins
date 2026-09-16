@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { type GitRun, steeringDirective, targetRepoAuthorizes, targetRepoTrusts } from "./target-repo-steering.ts";
+import { gitTimeoutMs, runGitProbe, type GitRun, steeringDirective, targetRepoAuthorizes, targetRepoTrusts } from "./target-repo-steering.ts";
 
 let scratch: string | undefined;
 const SHA = "a".repeat(40);
@@ -49,6 +49,21 @@ function fakeGit(
 		return { exitCode: 1, stdout: "" };
 	};
 }
+
+describe("gitTimeoutMs", () => {
+	test("uses 10 seconds only for the production remote HEAD probe", () => {
+		const seen: number[] = [];
+		const spawn = (_argv: string[], options: { cwd: string; stdout: "pipe"; stderr: "pipe"; timeout: number }) => {
+			seen.push(options.timeout);
+			return { exitCode: 0, stdout: { toString: () => "" } };
+		};
+		runGitProbe(["git", "ls-remote", "--symref", "https://example.test/repo.git", "HEAD"], "/repo", spawn);
+		runGitProbe(["git", "rev-parse", "--verify", "HEAD"], "/repo", spawn);
+		runGitProbe(["git", "ls-remote", "--symref", "origin", "HEAD", "extra"], "/repo", spawn);
+		runGitProbe(["dgit", "ls-remote", "--symref", "origin", "HEAD"], "/repo", spawn);
+		expect(seen).toEqual([10_000, 2_000, 2_000, 2_000]);
+	});
+});
 
 afterEach(() => {
 	if (scratch) rmSync(scratch, { recursive: true, force: true });

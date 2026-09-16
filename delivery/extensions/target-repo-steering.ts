@@ -3,6 +3,23 @@ import { isAbsolute, resolve } from "node:path";
 export type GitRun = (argv: string[], cwd: string) => { exitCode: number; stdout: string };
 export type SteeringScope = string;
 
+const LOCAL_GIT_TIMEOUT_MS = 2_000;
+const REMOTE_HEAD_GIT_TIMEOUT_MS = 10_000;
+
+/** Select the longer budget only for the remote-authoritative default probe. */
+export function gitTimeoutMs(argv: string[]): number {
+	return argv.length === 5 && argv[0] === "git" && argv[1] === "ls-remote" && argv[2] === "--symref" && argv[4] === "HEAD"
+		? REMOTE_HEAD_GIT_TIMEOUT_MS
+		: LOCAL_GIT_TIMEOUT_MS;
+}
+
+export type GitSpawn = (argv: string[], options: { cwd: string; stdout: "pipe"; stderr: "pipe"; timeout: number }) => { exitCode: number | null; stdout: { toString(): string } };
+
+export function runGitProbe(argv: string[], cwd: string, spawn: GitSpawn = Bun.spawnSync): { exitCode: number; stdout: string } {
+	const proc = spawn(argv, { cwd, stdout: "pipe", stderr: "pipe", timeout: gitTimeoutMs(argv) });
+	return { exitCode: proc.exitCode ?? 1, stdout: proc.stdout.toString() };
+}
+
 type TreeEntry = { mode: string; type: string; object: string; path: string };
 type ReadResult = { text: string | null; error: boolean };
 type RemoteDefault = { ref: string; sha: string };
