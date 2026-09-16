@@ -8,7 +8,10 @@ import mainBranchGate, {
 	denyReason,
 	extractCommand,
 	findCommitInvocations,
+	findGitInvocations,
+	type GitOperation,
 	type GitRun,
+	PRIMARY_INDEX_OPERATIONS,
 	setGitRunForTests,
 	tokenize,
 } from "./main-branch-gate.ts";
@@ -2141,6 +2144,249 @@ describe("repository steering", () => {
 		expect(reason).toContain("target repository must contain");
 	});
 
+});
+
+describe("readable index operations", () => {
+	test.each<[string, GitOperation, string[]]>([
+		["git add -- src/a.ts", "stage", ["src/a.ts"]],
+		["git add -- src/a.ts src/b.ts", "stage", ["src/a.ts", "src/b.ts"]],
+		['git add -- "src/my file.ts"', "stage", ["src/my file.ts"]],
+		["dgit add -- src/a.ts", "stage", ["src/a.ts"]],
+		["git restore --staged -- src/a.ts", "unstage", ["src/a.ts"]],
+		["git restore --staged -- src/a.ts src/b.ts", "unstage", ["src/a.ts", "src/b.ts"]],
+	])("reads %s as an index operation over its literal files", (command, operation, paths) => {
+		expect(findGitInvocations(command)).toEqual([{ operation, repoDir: null, paths }]);
+	});
+
+	test("keeps the repository target of a readable index operation", () => {
+		expect(findGitInvocations("git -C /repo add -- src/a.ts")).toEqual([{ operation: "stage", repoDir: "/repo", paths: ["src/a.ts"] }]);
+	});
+
+	test.each([
+		"git add .",
+		"git add src/a.ts",
+		"git add -- .",
+		"git add -- ..",
+		"git add -- ./src/a.ts",
+		"git add -- src/",
+		"git add -- src//a.ts",
+		"git add -- ../other/a.ts",
+		"git add -- /etc/passwd",
+		"git add -A -- src/a.ts",
+		"git add --all -- src/a.ts",
+		"git add -u -- src/a.ts",
+		"git add -p -- src/a.ts",
+		"git add --",
+		"git add -- -src/a.ts",
+		"git add -- $FILE",
+		'git add -- "$(ls)"',
+		"git add -- 'src/*.ts'",
+		"git add -- src/?.ts",
+		"git add -- 'src/[ab].ts'",
+		"git add -- src/{a,b}.ts",
+		"git add -- ~/src/a.ts",
+		"git add -- ':(glob)src/**'",
+		"git add -- ':!src/a.ts'",
+		"git restore -- src/a.ts",
+		"git restore --staged src/a.ts",
+		"git restore --staged --worktree -- src/a.ts",
+		"git restore --staged --",
+		"git restore --source=HEAD~1 --staged -- src/a.ts",
+		"git stash push -- src/a.ts",
+		"git stash push -m sync -- src/a.ts",
+		"git stash",
+		"git stash pop",
+		"git rebase origin/main",
+		"git rebase --onto main feature~3 feature",
+		"git reset --hard",
+		"git -C $d add -- src/a.ts",
+		"git --git-dir=/elsewhere/.git add -- src/a.ts",
+		"git --work-tree=/elsewhere add -- src/a.ts",
+		"GIT_DIR=/elsewhere/.git git add -- src/a.ts",
+		"GIT_WORK_TREE=/elsewhere git add -- src/a.ts",
+		"GIT_INDEX_FILE=/tmp/other-index git add -- src/a.ts",
+		"GIT_OBJECT_DIRECTORY=/tmp/objects git add -- src/a.ts",
+		"GIT_DIR=/elsewhere/.git git restore --staged -- src/a.ts",
+		"env GIT_DIR=/elsewhere git add -- src/a.ts",
+		"eval git add -- src/a.ts",
+		"bash -c 'git add -- src/a.ts'",
+		"xargs git add -- src/a.ts",
+		"/usr/libexec/git-core/git-add -- src/a.ts",
+	])("keeps %s opaque", (command) => {
+		expect(findGitInvocations(command)).toEqual([{ operation: "opaque", repoDir: null, retargeted: true }]);
+	});
+
+	test.each(["GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY"])(
+		"a %s in the call environment makes an index operation opaque",
+		(name) => {
+			expect(findGitInvocations("git add -- src/a.ts", { [name]: "/elsewhere" })).toEqual([
+				{ operation: "opaque", repoDir: null, retargeted: true },
+			]);
+		},
+	);
+
+	test.each([
+		"git -C ~/repo add -- src/a.ts",
+		"git -C ~ add -- src/a.ts",
+		"git -C~/repo add -- src/a.ts",
+		"git -C ~/repo restore --staged -- src/a.ts",
+		"git -C ~/repo status",
+		"git -C ~/repo commit -m x",
+		"git -C /tmp/re*o add -- src/a.ts",
+		"git -C '/tmp/re*o' add -- src/a.ts",
+		"git -C /tmp/re?o add -- src/a.ts",
+		"git -C '/tmp/[ab]' add -- src/a.ts",
+		"git -C /tmp/{a,b} add -- src/a.ts",
+		"git -C '' add -- src/a.ts",
+		"git -C $HOME/repo add -- src/a.ts",
+		"git -C `pwd` add -- src/a.ts",
+	])("a -C value the shell or Git would resolve elsewhere is opaque: %s", (command) => {
+		expect(findGitInvocations(command)).toEqual([{ operation: "opaque", repoDir: null, retargeted: true }]);
+	});
+
+	test("a -C value this gate can resolve identically still names its repository", () => {
+		expect(findGitInvocations("git -C sub add -- src/a.ts")).toEqual([{ operation: "stage", repoDir: "sub", paths: ["src/a.ts"] }]);
+		expect(findGitInvocations("git -C .. add -- src/a.ts")).toEqual([{ operation: "stage", repoDir: "..", paths: ["src/a.ts"] }]);
+		// The tokenizer resolves the escape, so the gate holds the same word the shell passes.
+		expect(findGitInvocations("git -C /tmp/re\\ po add -- src/a.ts")).toEqual([{ operation: "stage", repoDir: "/tmp/re po", paths: ["src/a.ts"] }]);
+	});
+
+	test.each(["stash", "rebase", "reset", "checkout"])("the %s verb never becomes a readable index operation in the `-- <files>` shape", (verb) => {
+		for (const command of [`git ${verb} -- src/a.ts`, `git ${verb} -- src/a.ts src/b.ts`, `git ${verb} --staged -- src/a.ts`]) {
+			const invocations = findGitInvocations(command);
+			expect(invocations.length, command).toBe(1);
+			const invocation = invocations[0] as { operation: GitOperation; paths?: string[] };
+			expect(PRIMARY_INDEX_OPERATIONS[invocation.operation], command).toBeUndefined();
+			expect(invocation.paths, command).toBeUndefined();
+		}
+	});
+
+	test("a readable staging chain does not launder the commit it feeds on a protected branch", () => {
+		const { run } = fakeGit({ "/main": "main", "/feature": "feature" });
+		setGitRunForTests(run);
+		expect(decideCommit("git add -- src/a.ts && git commit -m x", "/main", {})?.block).toBe(true);
+		expect(decideCommit("git restore --staged -- src/a.ts && git commit -m x", "/main", {})?.block).toBe(true);
+		expect(decideCommit("git add -- src/a.ts && git commit -m x", "/feature", {})).toBeUndefined();
+		expect(decideCommit("git add -- src/a.ts", "/main", {})).toBeUndefined();
+	});
+});
+
+describe("shell-level Git selectors", () => {
+	test.each([
+		"export GIT_DIR=/other/.git; git add -- src/a.ts",
+		"export GIT_DIR=/other/.git && git add -- src/a.ts",
+		"export GIT_DIR=/other/.git\ngit add -- src/a.ts",
+		"export GIT_WORK_TREE=/other | git add -- src/a.ts",
+		"export GIT_DIR",
+		"declare -x GIT_INDEX_FILE=/tmp/other-index; git add -- src/a.ts",
+		"typeset -x GIT_OBJECT_DIRECTORY=/tmp/objects; git add -- src/a.ts",
+		"readonly GIT_WORK_TREE=/other; git restore --staged -- src/a.ts",
+		"export GIT_CONFIG_GLOBAL=/tmp/evil.config; git add -- src/a.ts",
+		"export GIT_ICASE_PATHSPECS=1; git add -- src/a.ts",
+		"GIT_DIR=/other/.git; git add -- src/a.ts",
+		"GIT_INDEX_FILE=/tmp/other-index\ngit add -- src/a.ts",
+		"set -a; GIT_DIR=/other/.git; git add -- src/a.ts",
+		"git add -- src/a.ts; export GIT_DIR=/other/.git",
+		// Quoting the NAME does not stop the export: bash assigns GIT_DIR either way.
+		"export 'GIT_DIR'=/other/.git; git add -- src/a.ts",
+	])("an exported or shell-level Git selector makes the whole call opaque: %s", (command) => {
+		expect(findGitInvocations(command)).toEqual([{ operation: "opaque", repoDir: null, retargeted: true }]);
+	});
+
+	test("the commit walker agrees that a shell-level selector retargets every commit in the call", () => {
+		for (const command of [
+			"GIT_DIR=/other/.git; git commit -m x",
+			"set -a; GIT_DIR=/other/.git; git commit -m x",
+			"declare -x GIT_WORK_TREE=/other && git commit -m x",
+		])
+			expect(findCommitInvocations(command), command).toEqual([{ repoDir: null, dryRun: false, retargeted: true }]);
+	});
+
+	test.each([
+		"export PAGER=cat; git add -- src/a.ts",
+		"GIT_PAGER=cat; git add -- src/a.ts",
+		"export GITDIR=/other; git add -- src/a.ts",
+		"echo export GIT_DIR=/other/.git; git add -- src/a.ts",
+	])("an unrelated export or a mention of one leaves the index operation readable: %s", (command) => {
+		expect(findGitInvocations(command)).toEqual([{ operation: "stage", repoDir: null, paths: ["src/a.ts"] }]);
+	});
+
+	test("a prefix assignment stays bound to its own command", () => {
+		// `GIT_DIR=… true` ends with `true`, so the staging that follows is not retargeted, while
+		// the same assignment in front of `git add` is (covered above as an opaque prefix form).
+		expect(findGitInvocations("GIT_DIR=/other/.git true; git add -- src/a.ts")).toEqual([
+			{ operation: "stage", repoDir: null, paths: ["src/a.ts"] },
+		]);
+	});
+
+	test.each(["GIT_CONFIG_GLOBAL", "GIT_CONFIG_SYSTEM", "GIT_CONFIG_NOSYSTEM", "GIT_ICASE_PATHSPECS", "GIT_GLOB_PATHSPECS", "GIT_NOGLOB_PATHSPECS", "GIT_LITERAL_PATHSPECS"])(
+		"a %s in the call environment is as opaque as its argv twin",
+		(name) => {
+			expect(findGitInvocations("git add -- src/a.ts", { [name]: "1" })).toEqual([
+				{ operation: "opaque", repoDir: null, retargeted: true },
+			]);
+			expect(findGitInvocations("git add -- src/a.ts", { [name]: "" })).toEqual([
+				{ operation: "stage", repoDir: null, paths: ["src/a.ts"] },
+			]);
+		},
+	);
+
+	test.each([
+		"git --icase-pathspecs add -- src/a.ts",
+		"git --glob-pathspecs add -- src/a.ts",
+		"git --noglob-pathspecs add -- src/a.ts",
+		"git --literal-pathspecs add -- src/a.ts",
+	])("a pathspec-magic option in argv is opaque: %s", (command) => {
+		expect(findGitInvocations(command)).toEqual([{ operation: "opaque", repoDir: null, retargeted: true }]);
+	});
+
+	test("a structured GIT_CONFIG_GLOBAL blocks a commit the same way -c does", () => {
+		const { run } = fakeGit({ "/feature": "feature" });
+		setGitRunForTests(run);
+		expect(decideCommit("git commit -m x", "/feature", { GIT_CONFIG_GLOBAL: "/tmp/evil.config" })?.block).toBe(true);
+		expect(decideCommit("git commit -m x", "/feature", { GIT_CONFIG_NOSYSTEM: "1" })?.block).toBe(true);
+		expect(decideCommit("git commit -m x", "/feature", {})).toBeUndefined();
+	});
+});
+
+describe("escaped separators", () => {
+	test("an escaped separator is an operand of the one real Git command, not a boundary", () => {
+		expect(tokenize("git add -- verified.txt \\; bigdir").map((t) => [t.text, t.escaped === true])).toEqual([
+			["git", false],
+			["add", false],
+			["--", false],
+			["verified.txt", false],
+			[";", true],
+			["bigdir", false],
+		]);
+	});
+
+	test.each([
+		["git add -- verified.txt \\; bigdir", ["verified.txt", ";", "bigdir"]],
+		["git add -- verified.txt \\&\\& bigdir", ["verified.txt", "&&", "bigdir"]],
+		["git add -- verified.txt \\| bigdir", ["verified.txt", "|", "bigdir"]],
+		["git add -- verified.txt ';' bigdir", ["verified.txt", ";", "bigdir"]],
+		['git add -- verified.txt "&&" bigdir', ["verified.txt", "&&", "bigdir"]],
+		["git restore --staged -- verified.txt \\; bigdir", ["verified.txt", ";", "bigdir"]],
+	])("%s carries every operand Git receives", (command, paths) => {
+		const invocations = findGitInvocations(command);
+		expect(invocations.length, command).toBe(1);
+		expect(invocations[0], command).toMatchObject({ paths });
+	});
+
+	test("an unescaped separator still ends the command", () => {
+		expect(findGitInvocations("git add -- verified.txt ; bigdir")).toEqual([
+			{ operation: "stage", repoDir: null, paths: ["verified.txt"] },
+		]);
+	});
+
+	test("an escaped separator does not hide a later command from the commit walker", () => {
+		// `echo \; git commit -m x` runs no commit: `;`, `git`, `commit`, `-m` and `x` are all
+		// operands of `echo`. Reading the escape as a boundary invented a second command here and
+		// dropped the operands of the real one everywhere else.
+		expect(findCommitInvocations("echo \\; git commit -m x", false)).toEqual([]);
+		expect(findCommitInvocations("echo ; git commit -m x", false)).toEqual([{ repoDir: null, dryRun: false }]);
+	});
 });
 
 

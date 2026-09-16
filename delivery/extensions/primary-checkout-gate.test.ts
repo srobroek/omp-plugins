@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -30,10 +30,13 @@ import primaryCheckoutGate, {
 import { steeringDirective } from "./target-repo-steering.ts";
 
 type Repo = { topLevel: string; primary: boolean };
-type RemoteState = { origin?: string; commonDir?: string; sha?: string; offline?: boolean; lsRemoteCalls?: number };
+type RemoteState = { origin?: string; commonDir?: string; sha?: string; offline?: boolean; lsRemoteCalls?: number; index?: string[]; indexUnreadable?: true };
 
 const DEFAULT_SHA = "a".repeat(40);
 const ALT_SHA = "b".repeat(40);
+
+/** Tracked paths every fake repository carries unless a test names its own index. */
+const DEFAULT_INDEX = ["src/a.ts", "src/b.ts"];
 
 /** A fake Git seam keyed by repository, including the trusted remote-default steering tree. */
 function fakeGit(repos: Repo[], state: RemoteState = {}): GitRun {
@@ -55,6 +58,14 @@ function fakeGit(repos: Repo[], state: RemoteState = {}): GitRun {
 			return { exitCode: 0, stdout: `ref: refs/heads/main\tHEAD\n${sha}\tHEAD\n` };
 		}
 		if (argv[1] === "rev-parse" && argv.includes("--verify")) return { exitCode: 0, stdout: `${state.sha ?? DEFAULT_SHA}\n` };
+		if (argv.includes("ls-files")) {
+			if (state.indexUnreadable === true) return { exitCode: 128, stdout: "" };
+			const pathspec = argv.at(-1) as string;
+			const tracked = state.index ?? DEFAULT_INDEX;
+			// Git matches a literal pathspec as itself or as a directory prefix of tracked entries.
+			const matched = tracked.filter((entry) => entry === pathspec || entry.startsWith(`${pathspec}/`));
+			return { exitCode: 0, stdout: matched.map((entry) => `${entry}\0`).join("") };
+		}
 		if (argv[1] === "ls-tree") {
 			const text = trustedSources.get(repo.topLevel);
 			return { exitCode: 0, stdout: text === undefined ? "" : `100644 blob ${state.sha ?? DEFAULT_SHA}\tCLAUDE.md\0` };
@@ -133,6 +144,25 @@ describe("checkoutOf", () => {
 		expect(checkoutOf(primary)).toEqual({ primary: true, topLevel: primary });
 		expect(checkoutOf(join(linked, "src"))).toEqual({ primary: false, topLevel: linked });
 		expect(checkoutOf(outside)).toBeNull();
+	});
+
+	test("a subdirectory of a primary checkout reached through a symlink is still primary", () => {
+		const { primary } = setup();
+		const link = join(scratch, "via-link");
+		// The filesystem is the only thing that can answer whether two spellings are one directory,
+		// so the directories the probe names have to exist as they do in a real checkout.
+		mkdirSync(join(primary, ".git", "worktrees", "feat"), { recursive: true });
+		symlinkSync(primary, link);
+		const canonical = realpathSync.native(primary);
+		// Real Git prints `--git-dir` with symlinks resolved and `--git-common-dir` relative to the
+		// directory the probe ran in, measured on git 2.55.0 from a subdirectory of a checkout under
+		// a symlinked path. Comparing that text alone called the subdirectory a linked worktree.
+		setGitRunForTests(() => ({ exitCode: 0, stdout: `${canonical}\n${canonical}/.git\n../.git\n` }));
+		expect(checkoutOf(join(link, "src"))).toEqual({ primary: true, topLevel: canonical });
+		expect(checkoutOf(join(canonical, "src"))).toEqual({ primary: true, topLevel: canonical });
+		// A linked worktree still answers with two different directories, so it stays non-primary.
+		setGitRunForTests(() => ({ exitCode: 0, stdout: `${canonical}\n${canonical}/.git/worktrees/feat\n${canonical}/.git\n` }));
+		expect(checkoutOf(join(link, "src"))).toEqual({ primary: false, topLevel: canonical });
 	});
 });
 
@@ -248,6 +278,271 @@ describe("decideCommit", () => {
 		expect(decideCommit("git commit -m x", primary, {})?.block).toBe(true);
 		expect(decideCommit(`cd ${primary} && git commit -m x`, primary, {})?.block).toBe(true);
     });
+
+	test("index operations run unauthorized in a linked worktree", () => {
+		const { linked } = setup();
+		for (const command of ["git add -- src/a.ts", "git restore --staged -- src/a.ts"])
+			expect(decideCommit(command, linked, {}), command).toBeUndefined();
+	});
+
+	test("an index operation in an unauthorized primary checkout is refused with or without the env factor", () => {
+		const { primary } = setup();
+		for (const command of ["git add -- src/a.ts", "git restore --staged -- src/a.ts"]) {
+			expect(decideCommit(command, primary, {})?.block, command).toBe(true);
+			expect(decideCommit(command, primary, { DELIVERY_ALLOW_PRIMARY_CHECKOUT: "1" })?.block, command).toBe(true);
+		}
+		const refusal = decideCommit("git add -- src/a.ts", primary, { DELIVERY_ALLOW_PRIMARY_CHECKOUT: "1" })?.reason;
+		expect(refusal).toContain("This index mutation is inside the primary checkout");
+		expect(refusal).toContain(steeringDirective("DELIVERY_ALLOW_PRIMARY_CHECKOUT"));
+	});
+
+	test("an authorized primary checkout still needs the env factor on the index command", () => {
+		const { primary } = setup();
+		authorizePrimary(primary);
+		for (const command of ["git add -- src/a.ts", "git restore --staged -- src/a.ts"]) {
+			expect(decideCommit(command, primary, { DELIVERY_ALLOW_PRIMARY_CHECKOUT: "1" }), command).toBeUndefined();
+			expect(decideCommit(command, primary, {})?.block, command).toBe(true);
+		}
+	});
+
+	test("an index operation is governed by its -C target, not the caller's checkout", () => {
+		const { primary, linked } = setup();
+		authorizePrimary(primary);
+		expect(decideCommit(`git -C ${primary} add -- src/a.ts`, linked, { DELIVERY_ALLOW_PRIMARY_CHECKOUT: "1" })).toBeUndefined();
+		expect(decideCommit(`git -C ${primary} add -- src/a.ts`, linked, {})?.block).toBe(true);
+	});
+
+	test("index authorization never authorizes a commit", () => {
+		const { primary } = setup();
+		authorizePrimary(primary);
+		expect(decideCommit("git add -- src/a.ts && git commit -m x", primary, { DELIVERY_ALLOW_PRIMARY_CHECKOUT: "1" })?.reason).toContain(
+			"This commit is inside the primary checkout",
+		);
+	});
+
+	test("an authorized index operation on an unpinned primary checkout is still refused", () => {
+		const { primary } = setup();
+		authorizePrimary(primary);
+		setGitRunForTests(fakeGit([{ topLevel: primary, primary: true }], { offline: true }));
+		const decision = decideCommit("git add -- src/a.ts", primary, { DELIVERY_ALLOW_PRIMARY_CHECKOUT: "1" });
+		expect(decision?.block).toBe(true);
+		expect(decision?.reason).toContain("unpinned repository origin");
+	});
+
+	test("a directory operand is refused even where the same file list would be allowed", () => {
+		const { primary, linked } = setup();
+		authorizePrimary(primary);
+		const env = { DELIVERY_ALLOW_PRIMARY_CHECKOUT: "1" };
+		expect(decideCommit("git add -- src", primary, env)?.reason).toContain("a directory operand");
+		expect(decideCommit("git restore --staged -- src", linked, {})?.reason).toContain("a directory operand");
+		expect(decideCommit("git add -- src/a.ts", primary, env)).toBeUndefined();
+	});
+
+	test("an escaped separator does not shrink the operand list the gate checks", () => {
+		const { primary, linked } = setup();
+		authorizePrimary(primary);
+		const env = { DELIVERY_ALLOW_PRIMARY_CHECKOUT: "1" };
+		// Git receives `;` and `src` as pathspecs here, so this stages the whole `src` subtree.
+		// Reading `\;` as a command boundary hid both operands and passed the call as a bounded
+		// stage of src/a.ts alone.
+		expect(decideCommit("git add -- src/a.ts \\; src", primary, env)?.block).toBe(true);
+		expect(decideCommit("git add -- src/a.ts \\; src", linked, {})?.block).toBe(true);
+		expect(decideCommit("git restore --staged -- src/a.ts \\&\\& src", linked, {})?.block).toBe(true);
+		expect(decideCommit('git add -- src/a.ts ";" src', linked, {})?.block).toBe(true);
+		// A real separator still ends the command, so the stage that precedes it stays bounded.
+		expect(decideCommit("git add -- src/a.ts ; echo done", linked, {})).toBeUndefined();
+		expect(decideCommit("git add -- src/a.ts", linked, {})).toBeUndefined();
+	});
+
+	test("a relative -C after a cwd transition names the directory the cd reached", () => {
+		const { primary, linked } = setup();
+		const relative = `cd ${primary} && /usr/bin/git -C . add -- src/a.ts`;
+		// The call runs from the isolated worktree, but the shell moved to the human's primary
+		// checkout first, so `-C .` is that checkout and not this one.
+		expect(decideCommit(relative, linked, {})?.block).toBe(true);
+		expect(decideCommit(`cd ${primary} && /usr/bin/git -C src restore --staged -- src/a.ts`, linked, {})?.block).toBe(true);
+		expect(decideCommit(`cd ${primary} && /usr/bin/git add -- src/a.ts`, linked, {})?.block).toBe(true);
+		authorizePrimary(primary);
+		expect(decideCommit(relative, linked, { DELIVERY_ALLOW_PRIMARY_CHECKOUT: "1" })).toBeUndefined();
+		expect(decideCommit(relative, linked, {})?.reason).toContain("This index mutation is inside the primary checkout");
+	});
+
+	test("a shell-level Git selector refuses an index operation in a linked worktree", () => {
+		const { linked } = setup();
+		for (const command of [
+			"export GIT_DIR=/other/.git; git add -- src/a.ts",
+			"GIT_INDEX_FILE=/tmp/other-index; git add -- src/a.ts",
+			"declare -x GIT_CONFIG_GLOBAL=/tmp/evil.config && git restore --staged -- src/a.ts",
+		])
+			expect(decideCommit(command, linked, {})?.reason, command).toContain("an opaque Git invocation");
+		expect(decideCommit("git add -- src/a.ts", linked, { GIT_ICASE_PATHSPECS: "1" })?.reason).toContain("an opaque Git invocation");
+		expect(decideCommit("git add -- src/a.ts", linked, { GIT_CONFIG_GLOBAL: "/tmp/evil.config" })?.reason).toContain("an opaque Git invocation");
+	});
+
+	test("an absent operand that Git would expand to a tracked subtree is refused", () => {
+		const { primary, linked } = setup();
+		authorizePrimary(primary);
+		const state: RemoteState = { index: ["gone/x.ts", "gone/y.ts"] };
+		setGitRunForTests(fakeGit([{ topLevel: primary, primary: true }, { topLevel: linked, primary: false }], state));
+		const env = { DELIVERY_ALLOW_PRIMARY_CHECKOUT: "1" };
+		expect(decideCommit("git add -- gone", primary, env)?.reason).toContain("a tracked subtree operand");
+		expect(decideCommit("git restore --staged -- gone", primary, env)?.reason).toContain("a tracked subtree operand");
+		expect(decideCommit("git add -- gone", linked, {})?.reason).toContain("a tracked subtree operand");
+	});
+
+	test("an absent operand with a single tracked entry beneath it is still a subtree", () => {
+		const { primary } = setup();
+		authorizePrimary(primary);
+		setGitRunForTests(fakeGit([{ topLevel: primary, primary: true }], { index: ["nested/one.ts"] }));
+		expect(decideCommit("git add -- nested", primary, { DELIVERY_ALLOW_PRIMARY_CHECKOUT: "1" })?.reason).toContain("a tracked subtree operand");
+	});
+
+	test("one exact deleted tracked file is the file the operand names", () => {
+		const { primary } = setup();
+		authorizePrimary(primary);
+		setGitRunForTests(fakeGit([{ topLevel: primary, primary: true }], { index: ["src/a.ts"] }));
+		const env = { DELIVERY_ALLOW_PRIMARY_CHECKOUT: "1" };
+		expect(existsSync(join(primary, "src", "a.ts"))).toBe(false);
+		expect(decideCommit("git add -- src/a.ts", primary, env)).toBeUndefined();
+		expect(decideCommit("git restore --staged -- src/a.ts", primary, env)).toBeUndefined();
+	});
+
+	test("an operand that matches neither the worktree nor the index is refused", () => {
+		const { primary } = setup();
+		authorizePrimary(primary);
+		expect(decideCommit("git add -- typo.ts", primary, { DELIVERY_ALLOW_PRIMARY_CHECKOUT: "1" })?.reason).toContain("an operand no file or index entry matches");
+	});
+
+	test("a file that replaced a tracked directory is refused", () => {
+		const { primary } = setup();
+		authorizePrimary(primary);
+		writeFileSync(join(primary, "legacy"), "now a file\n");
+		setGitRunForTests(fakeGit([{ topLevel: primary, primary: true }], { index: ["legacy/one.ts"] }));
+		expect(decideCommit("git add -- legacy", primary, { DELIVERY_ALLOW_PRIMARY_CHECKOUT: "1" })?.reason).toContain("a tracked subtree operand");
+	});
+
+	test("an index the gate cannot read refuses the operand", () => {
+		const { primary } = setup();
+		authorizePrimary(primary);
+		setGitRunForTests(fakeGit([{ topLevel: primary, primary: true }], { indexUnreadable: true }));
+		expect(decideCommit("git add -- src/a.ts", primary, { DELIVERY_ALLOW_PRIMARY_CHECKOUT: "1" })?.reason).toContain("an unreadable index");
+	});
+
+	test("a new file and a symlink to a file pass while a symlink to a directory does not", () => {
+		const { primary } = setup();
+		authorizePrimary(primary);
+		writeFileSync(join(primary, "fresh.ts"), "new\n");
+		symlinkSync(join(primary, "fresh.ts"), join(primary, "alias.ts"));
+		symlinkSync(join(primary, "src"), join(primary, "src-link"));
+		const env = { DELIVERY_ALLOW_PRIMARY_CHECKOUT: "1" };
+		expect(decideCommit("git add -- fresh.ts", primary, env)).toBeUndefined();
+		expect(decideCommit("git add -- alias.ts", primary, env)).toBeUndefined();
+		expect(decideCommit("git add -- src-link", primary, env)?.reason).toContain("a directory operand");
+	});
+
+	/** Operands whose identity the filesystem refuses to answer for; `stat` throws past a missing entry. */
+	function unanswerableOperands(root: string): { operand: string; selector: string }[] {
+		writeFileSync(join(root, "src", "a.ts"), "tracked\n");
+		symlinkSync(join(root, "loop-b"), join(root, "loop-a"));
+		symlinkSync(join(root, "loop-a"), join(root, "loop-b"));
+		return [
+			{ operand: "src/a.ts/segment", selector: "an operand this gate cannot inspect" },
+			{ operand: "loop-a", selector: "an operand this gate cannot inspect" },
+			{ operand: `src/${"n".repeat(600)}.ts`, selector: "an operand this gate cannot inspect" },
+			{ operand: "src/a\u0000b.ts", selector: "an opaque Git invocation" },
+		];
+	}
+
+	test("an operand the filesystem cannot answer for is refused, never skipped", () => {
+		const { primary } = setup();
+		authorizePrimary(primary);
+		const env = { DELIVERY_ALLOW_PRIMARY_CHECKOUT: "1" };
+		for (const { operand, selector } of unanswerableOperands(primary)) {
+			for (const command of [`git add -- ${operand}`, `git restore --staged -- ${operand}`]) {
+				const decision = decideCommit(command, primary, env);
+				expect(decision?.block, command).toBe(true);
+				expect(decision?.reason, command).toContain(selector);
+			}
+		}
+	});
+
+	test("an unanswerable operand is refused with no authorization factor and on an unpinned origin", () => {
+		const { primary, linked } = setup();
+		setGitRunForTests(fakeGit([{ topLevel: primary, primary: true }, { topLevel: linked, primary: false }], { offline: true }));
+		for (const { operand, selector } of unanswerableOperands(primary)) {
+			// The primary checkout carries neither the directive nor a pinned origin, so its own
+			// refusals could hide an operand this gate never inspected.
+			expect(decideCommit(`git add -- ${operand}`, primary, {})?.reason, operand).toContain(selector);
+		}
+		for (const { operand, selector } of unanswerableOperands(linked)) {
+			// A linked worktree needs no factor for a readable index operation, so only the operand refuses this one.
+			expect(decideCommit(`git add -- ${operand}`, linked, {})?.reason, operand).toContain(selector);
+		}
+	});
+
+	test.each([";", "||", "&&", "&", "\n"])(
+		"a malformed operand does not launder a later verb across %j",
+		(separator) => {
+			const { primary } = setup();
+			authorizePrimary(primary);
+			writeFileSync(join(primary, "src", "a.ts"), "tracked\n");
+			for (const later of ["git commit -m x", "git reset --hard", "git push origin main"]) {
+				const command = `git add -- src/a.ts/segment ${separator} ${later}`;
+				const decision = decideCommit(command, primary, { DELIVERY_ALLOW_PRIMARY_CHECKOUT: "1" });
+				expect(decision?.block, command).toBe(true);
+				expect(decision?.reason, command).toContain("an operand this gate cannot inspect");
+			}
+		},
+	);
+
+	test("a Git seam that throws or answers with nothing refuses an index operation", () => {
+		const { primary } = setup();
+		authorizePrimary(primary);
+		writeFileSync(join(primary, "src", "a.ts"), "tracked\n");
+		const env = { DELIVERY_ALLOW_PRIMARY_CHECKOUT: "1" };
+		setGitRunForTests(() => {
+			throw new Error("git seam exploded");
+		});
+		expect(decideCommit("git add -- src/a.ts", primary, env)?.reason).toContain("an unreadable index");
+		setGitRunForTests((() => undefined) as unknown as GitRun);
+		expect(decideCommit("git add -- src/a.ts", primary, env)?.reason).toContain("an unreadable index");
+		setGitRunForTests((() => ({ exitCode: 0, stdout: null })) as unknown as GitRun);
+		expect(decideCommit("git add -- src/a.ts", primary, env)?.reason).toContain("an unreadable index");
+	});
+
+	test.each([
+		"git add .",
+		"git add -- .",
+		"git add -A -- src/a.ts",
+		"git add -- src/",
+		"git add -- 'src/*.ts'",
+		"git add -- $FILE",
+		"git restore --staged src/a.ts",
+		"git restore --staged --worktree -- src/a.ts",
+		"git stash push -m sync -- src/a.ts",
+		"git rebase origin/main",
+		"git reset --hard",
+		"git stash -- src/a.ts",
+		"git rebase -- src/a.ts",
+		"git reset -- src/a.ts",
+		"git -C ~/repo add -- src/a.ts",
+		"git -C '/tmp/re*o' add -- src/a.ts",
+		"git -C /tmp/{a,b} restore --staged -- src/a.ts",
+		"GIT_DIR=/elsewhere/.git git add -- src/a.ts",
+		"eval git add -- src/a.ts",
+	])("an unsupported index shape stays refused even when authorized: %s", (command) => {
+		const { primary } = setup();
+		authorizePrimary(primary);
+		const decision = decideCommit(command, primary, { DELIVERY_ALLOW_PRIMARY_CHECKOUT: "1" });
+		expect(decision?.block, command).toBe(true);
+		expect(decision?.reason, command).toContain("an opaque Git invocation");
+	});
+
+	test("an index operation whose -C the shell would expand is refused with no factors at all", () => {
+		const { linked } = setup();
+		for (const command of ["git -C ~/repo add -- src/a.ts", "git -C ~/repo restore --staged -- src/a.ts", "git -C /tmp/re*o add -- src/a.ts"])
+			expect(decideCommit(command, linked, {})?.reason, command).toContain("an opaque Git invocation");
+	});
 });
 
 describe("canonical-main primary commits", () => {
@@ -387,6 +682,33 @@ describe("integration", () => {
 		expect(toolCall({ toolName: "write", input: { path: join(primary, "src", "new.ts"), content: "" } })).toBeUndefined();
 	});
 
+	test("a registered index operation is authorized by the call's own env, never by the process env", () => {
+		const { primary } = setup();
+		authorizePrimary(primary);
+		const { toolCall } = register();
+		expect(
+			toolCall({ toolName: "bash", input: { cwd: primary, command: "git add -- src/a.ts", env: { DELIVERY_ALLOW_PRIMARY_CHECKOUT: "1" } } }),
+		).toBeUndefined();
+		process.env.DELIVERY_ALLOW_PRIMARY_CHECKOUT = "1";
+		try {
+			expect(toolCall({ toolName: "bash", input: { cwd: primary, command: "git add -- src/a.ts" } })).toMatchObject({ block: true });
+			expect(toolCall({ toolName: "bash", input: { cwd: primary, command: "git restore --staged -- src/a.ts" } })).toMatchObject({ block: true });
+		} finally {
+			delete process.env.DELIVERY_ALLOW_PRIMARY_CHECKOUT;
+		}
+	});
+
+	test("the registered handler refuses an index operation whose -C or operand it cannot resolve", () => {
+		const { primary, linked } = setup();
+		authorizePrimary(primary);
+		setGitRunForTests(fakeGit([{ topLevel: primary, primary: true }, { topLevel: linked, primary: false }], { index: ["gone/x.ts", "gone/y.ts"] }));
+		const { toolCall } = register();
+		const env = { DELIVERY_ALLOW_PRIMARY_CHECKOUT: "1" };
+		expect(toolCall({ toolName: "bash", input: { cwd: linked, command: "git -C ~/repo add -- src/a.ts" } })).toMatchObject({ block: true });
+		expect(toolCall({ toolName: "bash", input: { cwd: primary, command: "git add -- gone", env } })).toMatchObject({ block: true });
+		expect(toolCall({ toolName: "bash", input: { cwd: linked, command: "git add -- gone" } })).toMatchObject({ block: true });
+	});
+
 	test("revokes a grant when origin changes and requires a new grant after restoration", () => {
 		const { primary } = setup();
 		authorizePrimary(primary);
@@ -511,6 +833,65 @@ describe("integration", () => {
 		expect(toolCall({ toolName: "bash", input: { cwd: primary, env: { DELIVERY_ALLOW_PRIMARY_CHECKOUT: "1" } } })).toBeUndefined();
 		expect(sessionStart({})).toBeUndefined();
 		expect(toolCall({ toolName: "write", input: { path: join(primary, "src", "new.ts"), content: "" } })).toMatchObject({ block: true });
+	});
+
+	test("the registered handler refuses an operand the filesystem cannot answer for", () => {
+		const { primary, linked } = setup();
+		authorizePrimary(primary);
+		writeFileSync(join(linked, "src", "a.ts"), "tracked\n");
+		symlinkSync(join(linked, "loop-b"), join(linked, "loop-a"));
+		symlinkSync(join(linked, "loop-a"), join(linked, "loop-b"));
+		const { toolCall } = register();
+		// A linked worktree needs no factor for a readable index operation, so nothing but the
+		// operand can refuse these; before the operand was inspected they were allowed outright.
+		for (const operand of ["src/a.ts/segment", "loop-a", `src/${"n".repeat(600)}.ts`, "src/a\u0000b.ts"]) {
+			for (const later of ["git commit -m x", "git reset --hard", "git push origin main"]) {
+				for (const separator of [";", "||", "&&", "&", "\n"]) {
+					const command = `git add -- ${operand} ${separator} ${later}`;
+					expect(toolCall({ toolName: "bash", input: { cwd: linked, command } }), command).toMatchObject({ block: true });
+				}
+			}
+			const authorized = { cwd: primary, command: `git restore --staged -- ${operand}`, env: { DELIVERY_ALLOW_PRIMARY_CHECKOUT: "1" } };
+			expect(toolCall({ toolName: "bash", input: authorized }), operand).toMatchObject({ block: true });
+		}
+	});
+
+	test("the registered handler refuses a call it cannot classify and still passes unrelated tools", () => {
+		const { primary } = setup();
+		authorizePrimary(primary);
+		const { toolCall } = register();
+		const hostile = {
+			cwd: "/",
+			sessionManager: {
+				getSessionId: () => {
+					throw new Error("session manager unavailable");
+				},
+			},
+		};
+		expect(toolCall({ toolName: "bash", input: { cwd: primary, command: "git add -- src/a.ts && git commit -m x" } }, hostile)).toMatchObject({ block: true });
+		expect(toolCall({ toolName: "write", input: { path: join(primary, "src", "new.ts"), content: "" } }, hostile)).toMatchObject({ block: true });
+		expect(toolCall({ toolName: "github", input: { op: "repo_view" } }, hostile)).toBeUndefined();
+		expect(toolCall({ toolName: "eval", input: { code: "1 + 1" } }, hostile)).toBeUndefined();
+		expect(toolCall({ toolName: "read", input: { path: join(primary, "src", "a.ts") } }, hostile)).toBeUndefined();
+	});
+
+	test("the registered handler refuses a bash call whose Git seam answers with a shape it did not ask for", () => {
+		const { primary } = setup();
+		authorizePrimary(primary);
+		writeFileSync(join(primary, "src", "a.ts"), "tracked\n");
+		const { toolCall } = register();
+		const call = { toolName: "bash", input: { cwd: primary, command: "git add -- src/a.ts ; git commit -m x", env: { DELIVERY_ALLOW_PRIMARY_CHECKOUT: "1" } } };
+		for (const malformed of [
+			() => {
+				throw new Error("git seam exploded");
+			},
+			() => undefined,
+			() => ({ exitCode: 0, stdout: null }),
+			() => ({ exitCode: null, stdout: "" }),
+		]) {
+			setGitRunForTests(malformed as unknown as GitRun);
+			expect(toolCall(call), String(malformed)).toMatchObject({ block: true });
+		}
 	});
 });
 

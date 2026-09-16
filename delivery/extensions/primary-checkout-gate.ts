@@ -1,8 +1,8 @@
-import { existsSync, statSync } from "node:fs";
+import { existsSync, realpathSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import type { ExtensionAPI, ToolCallEvent } from "@oh-my-pi/pi-coding-agent";
-import { absoluteGitCwdTransition, extractCommand, findGitInvocations, hasUnsafeShellCwdOrGrouping, unreadableReason } from "./main-branch-gate.ts";
+import { absoluteGitCwdTransition, extractCommand, findGitInvocations, hasUnsafeShellCwdOrGrouping, PRIMARY_INDEX_OPERATIONS, unreadableReason } from "./main-branch-gate.ts";
 import { runGitProbe, steeringDirective, targetRepoAuthorizes, targetRepoCommonDir, targetRepoTrusts } from "./target-repo-steering.ts";
 
 let worktreesDirOverride: string | undefined;
@@ -62,6 +62,10 @@ export function getWorktreesDir(): string {
  * A commit from the primary checkout is separate: it requires command-local
  * `DELIVERY_ALLOW_MAIN_COMMIT=1` plus the trusted canonical-main directive; the primary
  * checkout env never authorizes a commit.
+ * Index operations (`git add -- <files>`, `git restore --staged -- <files>`) are the only
+ * repository mutations this gate reads. In a protected primary checkout they need the same two
+ * factors as an `edit`: command-local `DELIVERY_ALLOW_PRIMARY_CHECKOUT=1` plus the committed
+ * directive, on top of the unchanged origin anchor. They authorize no commit of their own.
  */
 
 const EDIT_TOOLS: Record<string, true> = { edit: true, write: true };
@@ -92,27 +96,82 @@ export type Checkout = { primary: boolean; topLevel: string };
 
 /**
  * The checkout that contains `dir`, or `null` when git cannot say. `primary` is true when
- * the git dir and the common dir coincide.
+ * the git dir and the common dir coincide. Reading the probe's own answer stays inside the
+ * guard: a runner that returns a shape this gate did not ask for is git failing to say, not a
+ * question to skip.
+ *
+ * The two answers can spell one directory differently. Git prints `--git-dir` with symlinks
+ * already resolved and `--git-common-dir` relative to the directory the probe ran in, so a probe
+ * directory carrying a symlinked component — `/var` and `/tmp` on macOS, or any repository reached
+ * through a symlink — made them compare unequal: from `<symlink>/repo/sub`, `--git-dir` reads
+ * `/private/var/…/repo/.git` while `../.git` resolved against the probe directory reads
+ * `/var/…/repo/.git`. A subdirectory of a primary checkout then reported itself as a linked
+ * worktree and every primary-checkout refusal was skipped for a call that named one, including
+ * `git -C sub add -- file`. Unequal text is therefore re-asked of the filesystem, which is the
+ * only thing that can say whether two paths are one directory. A path it cannot answer for stays
+ * unequal, exactly as the text comparison left it.
  */
 export function checkoutOf(dir: string): Checkout | null {
 	const run = injectedRun ?? defaultRun;
-	let result: { exitCode: number; stdout: string };
 	try {
-		result = run(["git", "rev-parse", "--show-toplevel", "--git-dir", "--git-common-dir"], dir);
+		const result = run(["git", "rev-parse", "--show-toplevel", "--git-dir", "--git-common-dir"], dir);
+		if (result.exitCode !== 0) return null;
+		const [topLevel, gitDir, commonDir] = result.stdout.split("\n").map((line) => line.trim());
+		if (!topLevel || !gitDir || !commonDir) return null;
+		const gitDirPath = resolve(dir, gitDir);
+		const commonDirPath = resolve(dir, commonDir);
+		let primary = gitDirPath === commonDirPath;
+		if (!primary)
+			try {
+				primary = realpathSync.native(gitDirPath) === realpathSync.native(commonDirPath);
+			} catch {
+				primary = false;
+			}
+		return { primary, topLevel: resolve(topLevel) };
 	} catch {
 		return null;
 	}
-	if (result.exitCode !== 0) return null;
-	const [topLevel, gitDir, commonDir] = result.stdout.split("\n").map((line) => line.trim());
-	if (!topLevel || !gitDir || !commonDir) return null;
-	const primary = resolve(dir, gitDir) === resolve(dir, commonDir);
-	return { primary, topLevel: resolve(topLevel) };
+}
+
+/**
+ * The tracked paths Git's index would expand one literal operand to, relative to `dir`, or `null`
+ * when the index cannot be read. `--literal-pathspecs` keeps Git from reading the operand as a
+ * pathspec pattern, and `-z` keeps unusual names verbatim. One entry equal to the operand is the
+ * file the command names; anything else — several entries, or one entry below it — is a subtree.
+ * A runner that answers with a shape this gate did not ask for is an unreadable index.
+ */
+function indexEntriesFor(path: string, dir: string, run: GitRun): string[] | null {
+	try {
+		const result = run(["git", "--literal-pathspecs", "ls-files", "-z", "--cached", "--", path], dir);
+		if (result.exitCode !== 0) return null;
+		return result.stdout.split("\0").filter((entry) => entry !== "");
+	} catch {
+		return null;
+	}
+}
+
+/**
+ * What the filesystem says about one path, without letting a failed question become an allow.
+ * `throwIfNoEntry: false` covers only a missing entry: a segment under a file (`ENOTDIR`), a
+ * symlink loop (`ELOOP`), a name the platform rejects, and a path the caller cannot search all
+ * still throw, and a NUL byte is a `TypeError` before any syscall runs.
+ */
+type PathKind = "directory" | "file" | "absent" | "unreadable";
+
+function pathKind(path: string): PathKind {
+	try {
+		const entry = statSync(path, { throwIfNoEntry: false });
+		if (entry === undefined) return "absent";
+		return entry.isDirectory() ? "directory" : "file";
+	} catch {
+		return "unreadable";
+	}
 }
 
 /** The nearest existing ancestor of a path that may not exist yet (a `write` creates files). */
 function existingDir(path: string): string {
 	let cursor = path;
-	while (!existsSync(cursor) || !statSync(cursor).isDirectory()) {
+	while (pathKind(cursor) !== "directory") {
 		const parent = dirname(cursor);
 		if (parent === cursor) return cursor;
 		cursor = parent;
@@ -194,6 +253,18 @@ export function reasonFor(topLevel: string, what: string): string {
 		`Make the change in that isolated clone. ${authorization}`;
 }
 
+/**
+ * This gate raised an unexpected error while classifying a call it governs, so it never reached a
+ * decision. An undecided call is refused: the alternative reads as an allow.
+ */
+const UNDECIDED_REASON =
+	"blocked by delivery (the primary-checkout gate could not classify this call): reading the " +
+	"call raised an unexpected error, so whether it mutates a repository's primary checkout is " +
+	"unknown and it is refused rather than allowed. Send the work in a plainer shape — one " +
+	"literal path or Git operand per call, no path the filesystem cannot answer for, no NUL or " +
+	"control byte, no shell wrapper — and redispatch repository work with `isolated: true` so " +
+	"OMP places the change in its configured isolation root.";
+
 function revokeStaleGrants(grants: Map<string, PrimaryGrant> | undefined, run: GitRun, scope: string): void {
 	if (grants === undefined) return;
 	for (const [topLevel, grant] of grants) {
@@ -268,9 +339,13 @@ export function decideCommit(
 	if (hasUnsafeShellCwdOrGrouping(command)) return { block: true, reason: unreadableReason("shell cwd mutation or grouping") };
 	const invocations = findGitInvocations(command, env);
 	const transitionedCwd = absoluteGitCwdTransition(command);
+	// The shell runs `cd /human && /abs/git -C . add -- f` with its cwd already moved, so BOTH the
+	// absent `-C` and a relative one name the directory the `cd` reached, not the caller's. Filling
+	// in only the absent case left `-C .` resolving against this checkout, and an index operation
+	// aimed at a human's primary checkout read as one aimed at the harness's own isolated clone.
 	if (transitionedCwd !== undefined) {
 		for (const invocation of invocations) {
-			if (invocation.repoDir === null) invocation.repoDir = transitionedCwd;
+			invocation.repoDir = invocation.repoDir === null ? transitionedCwd : resolve(transitionedCwd, invocation.repoDir);
 		}
 	}
 	for (const invocation of invocations) {
@@ -280,7 +355,34 @@ export function decideCommit(
 		const checkout = checkoutOf(target);
 		if (checkout?.primary && !isRuntimeCheckout(checkout.topLevel, worktreesDir) && invocation.operation === "push" && !targetRepoTrusts(checkout.topLevel, run, scope))
 			return { block: true, reason: unreadableReason("unpinned repository origin") };
-		if (invocation.operation === "push" || invocation.operation === "read" || invocation.dryRun === true) continue;
+		if (invocation.operation === "push" || invocation.operation === "read") continue;
+		if (PRIMARY_INDEX_OPERATIONS[invocation.operation] === true) {
+			// Git resolves a pathspec against the command's own directory, the same base this gate
+			// resolved. A directory operand stages or unstages a whole subtree the command never
+			// names, so it is not the readable file list this gate accepted. A path that is absent
+			// from the worktree is not automatically one file either: a tracked directory whose
+			// copy is gone, or a file that replaced one, still expands to every index entry
+			// beneath it, so the index decides what each operand really covers. An operand the
+			// filesystem refuses to answer for is not a readable file list either, so it is
+			// refused instead of skipped.
+			for (const path of invocation.paths ?? []) {
+				const kind = pathKind(resolve(target, path));
+				if (kind === "unreadable") return { block: true, reason: unreadableReason("an operand this gate cannot inspect") };
+				if (kind === "directory") return { block: true, reason: unreadableReason("a directory operand") };
+				const tracked = indexEntriesFor(path, target, run);
+				if (tracked === null) return { block: true, reason: unreadableReason("an unreadable index") };
+				if (tracked.length > 1 || (tracked.length === 1 && tracked[0] !== path))
+					return { block: true, reason: unreadableReason("a tracked subtree operand") };
+				if (tracked.length === 0 && kind === "absent") return { block: true, reason: unreadableReason("an operand no file or index entry matches") };
+			}
+			// An index mutation is a protected action, so it stays pinned: reads are advisory
+			// without an anchor, but staging into an unpinned primary checkout is not.
+			if (!checkout?.primary || isRuntimeCheckout(checkout.topLevel, worktreesDir)) continue;
+			if (!targetRepoTrusts(checkout.topLevel, run, scope)) return { block: true, reason: unreadableReason("unpinned repository origin") };
+			if (authorizationEnv[ALLOW_ENV] === "1" && targetRepoAuthorizes(checkout.topLevel, ALLOW_ENV, run, scope)) continue;
+			return { block: true, reason: reasonFor(checkout.topLevel, "This index mutation") };
+		}
+		if (invocation.dryRun === true) continue;
 		if (invocation.operation === "checkout" || invocation.operation === "switch" || invocation.operation === "merge") {
 			if (checkout?.primary && !isRuntimeCheckout(checkout.topLevel, worktreesDir))
 				return { block: true, reason: reasonFor(checkout.topLevel, "This repository mutation") };
@@ -315,6 +417,13 @@ export default function primaryCheckoutGate(pi: ExtensionAPI): void {
 		authorizations.delete(sessionKey(ctx));
 	});
 	pi.on("tool_call", (event: ToolCallEvent, ctx) => {
+		// A tool this gate never governs stays a pass-through, and no filesystem or Git question is
+		// asked about it. For the tools it does govern, a question that cannot be answered is a
+		// refusal: an error raised while classifying the call once meant "no decision", which the
+		// harness reads as an allow, so one malformed operand laundered every later verb in the
+		// same command.
+		const governed = event.toolName === "bash" || EDIT_TOOLS[event.toolName] === true;
+		if (!governed) return;
 		try {
 			const input = event.input as Record<string, unknown>;
 			const base = ctx?.cwd ?? process.cwd();
@@ -340,12 +449,9 @@ export default function primaryCheckoutGate(pi: ExtensionAPI): void {
 				if (!command) return;
 				return decideCommit(command, cwd, env, worktreesDir, inputEnv ?? {}, sessionKey(ctx));
 			}
-			if (EDIT_TOOLS[event.toolName] === true) {
-				return decideEdit(event.toolName, input, cwd, env, worktreesDir, authorizedPrimaryCheckouts, sessionKey(ctx));
-			}
-			return;
+			return decideEdit(event.toolName, input, cwd, env, worktreesDir, authorizedPrimaryCheckouts, sessionKey(ctx));
 		} catch {
-			return;
+			return { block: true, reason: UNDECIDED_REASON };
 		}
 	});
 }
