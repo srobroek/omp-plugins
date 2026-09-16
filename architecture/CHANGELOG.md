@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.4.0](https://github.com/srobroek/omp-plugins/compare/architecture--v0.3.2...architecture--v0.4.0) (2026-09-16)
+
+
+### Features
+
+* **architecture:** add read-only architect agent definition ([#308](https://github.com/srobroek/omp-plugins/issues/308)) ([268d30b](https://github.com/srobroek/omp-plugins/commit/268d30ba4e63b102b2435f13408ecfe16983af19))
+
+
+### Bug Fixes
+
+* **architecture:** make architect verdict directive imperative ([#310](https://github.com/srobroek/omp-plugins/issues/310)) ([383e5da](https://github.com/srobroek/omp-plugins/commit/383e5daa3a036f0af095d43a58760a8598f83c94))
+
 ## [0.3.2](https://github.com/srobroek/omp-plugins/compare/architecture--v0.3.1...architecture--v0.3.2) (2026-09-13)
 
 

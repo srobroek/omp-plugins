@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.3.5](https://github.com/srobroek/omp-plugins/compare/beads--v1.3.4...beads--v1.3.5) (2026-09-16)
+
+
+### Bug Fixes
+
+* **beads:** clarify referenced work item reporting ([6681c2c](https://github.com/srobroek/omp-plugins/commit/6681c2c9f1df32354b3d625bdaabad82ba0869f6))
+
 ## [1.3.4](https://github.com/srobroek/omp-plugins/compare/beads--v1.3.3...beads--v1.3.4) (2026-09-15)
 
 

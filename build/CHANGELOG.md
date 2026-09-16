@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.0](https://github.com/srobroek/omp-plugins/compare/build--v0.5.0...build--v0.6.0) (2026-09-16)
+
+
+### Features
+
+* **architecture:** add read-only architect agent definition ([#308](https://github.com/srobroek/omp-plugins/issues/308)) ([268d30b](https://github.com/srobroek/omp-plugins/commit/268d30ba4e63b102b2435f13408ecfe16983af19))
+
 ## [0.5.0](https://github.com/srobroek/omp-plugins/compare/build--v0.4.0...build--v0.5.0) (2026-09-15)
 
 
