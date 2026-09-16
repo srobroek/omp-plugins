@@ -35,7 +35,7 @@ FIELD TAXONOMY
 |---|---|---|
 | lifecycle | status (`open`, `in_progress`, `blocked`, `deferred`, `closed`) | worker |
 | ownership | assignee (atomic via `--claim`) | worker |
-| urgency | priority 0–4 | orchestrator/user |
+| urgency | priority 0-4 | orchestrator/user |
 | work kind | type (`bug`, `feature`, `task`, `epic`, `chore`) | creator |
 | bounce-back | `discovered-from` dependency plus comment; release | integrator |
 | routing queue | label `agent:<name>` | orchestrator/formula |
