@@ -2614,12 +2614,17 @@ describe("a credential handed to the GitHub CLI", () => {
 		expect(findGitInvocations(`env -u GH_TOKEN ${name}="$value" gh pr create --base main`)).toEqual([]);
 	});
 
-	// A shell or `eval` operand is ONE token holding a whole script, so a word that merely STARTS
-	// with an assignment is a command wearing its prefix. Reading the prefix alone let
-	// `GITHUB_TOKEN=x $RUNNER checkout other` through with `RUNNER=git` in the environment, so an
-	// assignment earns its exemption only when the whole word is one, with a value that cannot open
-	// another command word.
+	// A shell or `eval` operand is ONE token holding a whole script that the inner shell parses AGAIN
+	// after the outer one expands it, so no word there can be read as environment: with
+	// `SCRIPT='; git checkout other'`, `GITHUB_TOKEN=x$SCRIPT` is a lone assignment by every lexical
+	// test and a Git command once expanded. Only the word's POSITION separates the two, so the
+	// exemption belongs to `env` and `sudo` argv and to nothing else.
 	test.each([
+		[`bash -c "GITHUB_TOKEN=x$SCRIPT"`, { SCRIPT: "; git checkout other" }],
+		[`bash -c "GITHUB_TOKEN=x$SCRIPT"`, {}],
+		[`eval "GITHUB_TOKEN=x$SCRIPT"`, { SCRIPT: "; git checkout other" }],
+		[`sh -c "GH_TOKEN=x$SCRIPT"`, { SCRIPT: "; git checkout other" }],
+		[`bash -lc "GITHUB_TOKEN=$token$SCRIPT"`, { SCRIPT: "; git checkout other" }],
 		[`bash -c 'GITHUB_TOKEN=x $RUNNER checkout other'`, { RUNNER: "git" }],
 		[`bash -c 'GITHUB_TOKEN=x $RUNNER checkout other'`, {}],
 		[`sh -c 'GH_TOKEN=x $R commit -m x'`, { R: "git" }],
@@ -2627,10 +2632,30 @@ describe("a credential handed to the GitHub CLI", () => {
 		[`eval 'GITHUB_TOKEN=x $RUNNER checkout other'`, { RUNNER: "git" }],
 		[`bash -c "GITHUB_TOKEN=$token $RUNNER push origin main"`, { RUNNER: "git" }],
 		[`bash -c 'A=x;$R'`, { R: "git checkout other" }],
-		[`bash -c 'A=x|$R'`, { R: "git checkout other" }],
-		[`bash -c 'A=x&&$R'`, { R: "git checkout other" }],
 		[`env GITHUB_TOKEN=x $RUNNER checkout other`, { RUNNER: "git" }],
-	] as Array<[string, NodeJS.ProcessEnv]>)("a script wearing an assignment's prefix stays unreadable: %s", (command, env) => {
+		// The run ends at the program the wrapper executes, so every later word is a command word
+		// again even when more assignments precede it.
+		[`env GITHUB_TOKEN=x sudo GH_TOKEN=y $RUNNER checkout other`, { RUNNER: "git" }],
+	] as Array<[string, NodeJS.ProcessEnv]>)("a script operand keeps a bare expansion unreadable: %s", (command, env) => {
+		expect(findGitInvocations(command, env)).toEqual([{ operation: "opaque", repoDir: null, retargeted: true }]);
+	});
+
+	// The same spelling in an `env` or `sudo` assignment position is one environment value that
+	// nothing re-parses, so the separator inside it never runs.
+	test("an assignment position passes a value on without re-parsing it", () => {
+		expect(findGitInvocations(`env GITHUB_TOKEN=x$SCRIPT gh pr create --base main`, { SCRIPT: "; git checkout other" })).toEqual([]);
+		expect(findGitInvocations(`sudo -u ci GITHUB_TOKEN="$token" gh pr create --base main`)).toEqual([]);
+	});
+
+	// An option and the word it consumes are not the assignment run: `env -S` hands `env` a string
+	// that `env` itself splits and runs, so that word is a script like any other.
+	test.each([
+		[`env -S "GITHUB_TOKEN=x$SCRIPT"`, { SCRIPT: "; git checkout other" }],
+		[`env --split-string "GITHUB_TOKEN=x$SCRIPT"`, { SCRIPT: "; git checkout other" }],
+		[`env -u GH_TOKEN -S "GH_TOKEN=x$SCRIPT"`, { SCRIPT: "; git checkout other" }],
+		[`env -S "GITHUB_TOKEN=x $RUNNER checkout"`, { RUNNER: "git" }],
+		[`sudo -u "$who" GITHUB_TOKEN=x $RUNNER checkout other`, { RUNNER: "git" }],
+	] as Array<[string, NodeJS.ProcessEnv]>)("an option value is outside the assignment run: %s", (command, env) => {
 		expect(findGitInvocations(command, env)).toEqual([{ operation: "opaque", repoDir: null, retargeted: true }]);
 	});
 

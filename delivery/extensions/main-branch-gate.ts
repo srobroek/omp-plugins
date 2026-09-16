@@ -158,17 +158,14 @@ const TRANSPARENT_PREFIX: Record<string, true> = {
 	sudo: true,
 };
 
-/** The prefix of an environment assignment word. A later word in the same segment still runs. */
-const ENV_ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*=/;
-
 /**
- * One whole environment assignment and nothing else, capturing the name it assigns: a value that
- * carries no whitespace and no character able to open another command word. A shell or `eval`
- * operand is ONE token holding a whole script, so `GITHUB_TOKEN=x $RUNNER checkout other` and
- * `A=x;$R` are commands with an assignment's prefix rather than assignments, and only this stricter
- * spelling separates them. `$(` and a backtick are decided before this regex is reached.
+ * An environment assignment word, capturing the name it assigns. Whether the word IS an assignment
+ * is a question about its position, never about its text: a shell or `eval` operand is one token
+ * holding a whole script, and `GITHUB_TOKEN=x$SCRIPT` there is re-parsed after the expansion, so
+ * the same spelling that names environment in `env`'s argv runs `; git checkout other` under
+ * `bash -c`. `assignmentRunEnd` decides the position; this regex only reads the name.
  */
-const LONE_ENV_ASSIGNMENT = /^([A-Za-z_][A-Za-z0-9_]*)=[^\s;&|<>()'"\\]*$/;
+const ENV_ASSIGNMENT = /^([A-Za-z_][A-Za-z0-9_]*)=/;
 
 /** `env` options that consume the following argv word before its command. */
 const ENV_VALUE_OPTIONS: Record<string, true> = {
@@ -1000,11 +997,40 @@ function substitutionMayRunGit(text: string, env: NodeJS.ProcessEnv): boolean {
 }
 
 /**
- * Where a word sits, which decides whether it can be read as environment at all. A wrapper's argv
- * holds assignments; the word `xargs` resolves as its utility is a program name, so `NAME=value`
- * there is a filename and not an assignment, and it keeps failing closed.
+ * Where a word sits in its segment. Only `assignment` - a word the parser placed in the environment
+ * run of a wrapper that consumes `NAME=value` from argv - can be read as environment. Everywhere
+ * else, including a shell or `eval` script operand and the utility `xargs` resolves from argv, a
+ * bare expansion is a command word this gate cannot read.
  */
-type WordPosition = "argv" | "utility";
+type WordPosition = "assignment" | "command";
+
+/**
+ * The words of a wrapper's argv that are its own environment assignments. Only `env` and `sudo` take
+ * `NAME=value` there, and neither re-parses the value it passes on: each consumes its own options
+ * first, then a run of assignments, and the first word that is neither ends the run and is the
+ * program that runs. Every other command takes no assignments at all, so its run is empty - a shell
+ * or `eval` gets none, because its operand is a script the shell parses again after expanding it.
+ *
+ * An option and the word it consumes stay OUTSIDE the run: `env -S "GITHUB_TOKEN=x $RUNNER
+ * checkout"` hands `env` a string it splits and runs itself, so that word is a script like any
+ * other, not the environment the assignments in front of a program are.
+ */
+function assignmentRun(base: string, remainder: Token[]): { start: number; end: number } {
+	if (base !== "env" && base !== "sudo") return { start: 0, end: 0 };
+	const valueOptions = base === "env" ? ENV_VALUE_OPTIONS : SUDO_VALUE_OPTIONS;
+	let start = 0;
+	while (start < remainder.length) {
+		const text = (remainder[start] as Token).text;
+		if (valueOptions[text] === true) start += 2;
+		else if (text.startsWith("-")) start += 1;
+		else break;
+	}
+	// A word the run accepts must still be an assignment, so the program `env` or `sudo` executes is
+	// never swept into it: only its own `NAME=value` words are.
+	let end = start;
+	while (end < remainder.length && ENV_ASSIGNMENT.test((remainder[end] as Token).text)) end++;
+	return { start, end };
+}
 
 function possibleGitToken(token: Token, env: NodeJS.ProcessEnv, position: WordPosition): boolean {
 	const base = tokenBase(token);
@@ -1012,19 +1038,17 @@ function possibleGitToken(token: Token, env: NodeJS.ProcessEnv, position: WordPo
 	if (token.quoted && !token.text.includes("$") && !token.text.includes("`")) return false;
 	if (/(?:^|\s)(?:d?git|git-[A-Za-z0-9_-]+)(?:$|\s)/.test(token.text)) return true;
 	// A substitution runs a command of its own wherever the word sits, so it answers first and for
-	// every word shape. What remains is a bare parameter expansion: unreadable, and so a possible
-	// Git command word anywhere a command word can stand.
+	// every position. What remains is a bare parameter expansion: unreadable, and so a possible Git
+	// command word anywhere a command word can stand.
 	if (token.text.includes("$(") || token.text.includes("`")) return substitutionMayRunGit(token.text, env);
 	if (!token.text.includes("$")) return false;
-	if (position === "utility") return true;
-	// In a wrapper's argv, one whole assignment and nothing else is environment, never the program
-	// that runs: `env GITHUB_TOKEN="$token" gh pr create` hands a credential to a child. A shell or
-	// `eval` operand arrives as ONE token holding a whole script, so the value must also be unable
-	// to open another command word: `bash -c 'GITHUB_TOKEN=x $RUNNER checkout other'` and
-	// `bash -c 'A=x;$R'` are commands wearing an assignment's prefix, and they stay unreadable. What
-	// is left is Git's own environment namespace, which Git owns behind the underscore: `GIT_DIR=$d`
-	// retargets whatever Git command the call reaches, while `GITHUB_TOKEN` only looks like it does.
-	const name = LONE_ENV_ASSIGNMENT.exec(token.text)?.[1];
+	if (position === "command") return true;
+	// In an assignment position the expansion becomes one environment value that nothing re-parses,
+	// so `env GITHUB_TOKEN="$token" gh pr create` hands a credential to a child and reaches no Git.
+	// What is left is Git's own environment namespace, which Git owns behind the underscore:
+	// `GIT_DIR=$d` retargets whatever Git command the call reaches, while `GITHUB_TOKEN` only looks
+	// like it does.
+	const name = ENV_ASSIGNMENT.exec(token.text)?.[1];
 	return name === undefined || name.startsWith("GIT_");
 }
 function opaqueInvocation(): GitInvocation {
@@ -1085,12 +1109,19 @@ export function findGitInvocations(command: string, env: NodeJS.ProcessEnv = {})
 			if (base === "xargs") {
 				const payloadIndex = xargsPayloadIndex(remainder);
 				const payload = payloadIndex === "unreadable" || payloadIndex < 0 ? undefined : remainder[payloadIndex];
-				if (payloadIndex === "unreadable" && remainder.some((token) => possibleGitToken(token, env, "utility"))) out.push(opaqueInvocation());
-				else if (payload !== undefined && (possibleGitToken(payload, env, "utility") || substitutionMayRunGit(payload.text, env))) out.push(opaqueInvocation());
+				if (payloadIndex === "unreadable" && remainder.some((token) => possibleGitToken(token, env, "command"))) out.push(opaqueInvocation());
+				else if (payload !== undefined && (possibleGitToken(payload, env, "command") || substitutionMayRunGit(payload.text, env))) out.push(opaqueInvocation());
 				continue;
 			}
 			const nestedGit = remainder.some((token) => substitutionMayRunGit(token.text, env));
-			const wrapperGit = remainder.some((token) => possibleGitToken(token, env, "argv") || /(?:^|\s)(?:d?git|git-[A-Za-z0-9_-]+)(?:$|\s)/.test(token.text));
+			// Resolved once for the segment: the walk that finds the run is the same walk for every
+			// word in it, and each word then only has to know whether it falls inside.
+			const run = assignmentRun(base, remainder);
+			const wrapperGit = remainder.some(
+				(token, index) =>
+					possibleGitToken(token, env, index >= run.start && index < run.end ? "assignment" : "command") ||
+					/(?:^|\s)(?:d?git|git-[A-Za-z0-9_-]+)(?:$|\s)/.test(token.text),
+			);
 			if (commandToken.text.includes("$") || commandToken.text.includes("`") || nestedGit || ((PRIMARY_WRAPPERS.has(base) || !PRIMARY_SAFE_TEXT_COMMANDS.has(base)) && wrapperGit)) out.push(opaqueInvocation());
 			continue;
 		}
