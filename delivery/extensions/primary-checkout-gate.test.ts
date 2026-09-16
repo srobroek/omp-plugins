@@ -568,3 +568,33 @@ test("absolute Git after a cwd transition resolves the transitioned primary chec
 			expect(decideCommit(command, linked)?.block, command).toBe(true);
 		}
 	});
+
+describe("production Git runner", () => {
+	test("authorized primary checkout reaches remote authority with the remote budget", () => {
+		const { primary } = setup();
+		setGitRunForTests(null);
+		const sha = "a".repeat(40);
+		const directive = "MUST authorize DELIVERY_ALLOW_PRIMARY_CHECKOUT=1 for this repository.\n";
+		const seen: Array<{ argv: string[]; timeout: number }> = [];
+		const original = Bun.spawnSync;
+		Object.defineProperty(Bun, "spawnSync", { value: (argv: string[], options: { cwd: string; stdout: "pipe"; stderr: "pipe"; timeout: number }) => {
+			seen.push({ argv, timeout: options.timeout });
+			if (argv[1] === "rev-parse" && argv.includes("--show-toplevel")) return { exitCode: 0, stdout: { toString: () => `${primary}\n${primary}/.git\n${primary}/.git\n` } };
+			if (argv[1] === "rev-parse" && argv.includes("--git-common-dir")) return { exitCode: 0, stdout: { toString: () => `${primary}/.git\n` } };
+			if (argv[1] === "config") return { exitCode: 0, stdout: { toString: () => "https://example.test/primary.git\n" } };
+			if (argv[1] === "ls-remote") return { exitCode: 0, stdout: { toString: () => `ref: refs/heads/main\tHEAD\n${sha}\tHEAD\n` } };
+			if (argv[1] === "rev-parse" && argv.includes("--verify")) return { exitCode: 0, stdout: { toString: () => `${sha}\n` } };
+			if (argv[1] === "ls-tree") return { exitCode: 0, stdout: { toString: () => `100644 blob ${sha}\tCLAUDE.md\0` } };
+			if (argv[1] === "show") return { exitCode: 0, stdout: { toString: () => directive } };
+			return { exitCode: 1, stdout: { toString: () => "" } };
+		} });
+		try {
+			expect(decideEdit("write", { path: join(primary, "src", "new.ts"), content: "x" }, "/", { DELIVERY_ALLOW_PRIMARY_CHECKOUT: "1" }, "/var/empty")).toBeUndefined();
+			const remote = seen.find((call) => call.argv[1] === "ls-remote");
+			expect(remote).toEqual({ argv: ["git", "ls-remote", "--symref", "https://example.test/primary.git", "HEAD"], timeout: 10_000 });
+			expect(seen.filter((call) => call.argv[1] !== "ls-remote").every((call) => call.timeout === 2_000)).toBe(true);
+		} finally {
+			Object.defineProperty(Bun, "spawnSync", { value: original });
+		}
+	});
+});
