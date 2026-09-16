@@ -128,6 +128,10 @@ const MUST_FIRE: Case[] = [
 	{ id: "after pipe", command: "true | git push origin main", why: "a pipe does the same" },
 	{ id: "second push fires", command: "git push origin feature && git push origin main", why: "a safe first command must not mask the second" },
 	{ id: "after raw newline", command: "cd repo\ngit push origin main", why: "a newline is a command separator in both encodings (raw, and \\n in JSON)" },
+	{ id: "after closed double quoted data", command: 'bd create x -d "don\'t"\ngit push origin main', why: "the push is executable once the double-quoted argv value closes" },
+	{ id: "after closed single quoted data", command: "bd create x -d 'say \"hello\"'\ngit push origin main", why: "the push is executable once the single-quoted argv value closes" },
+	{ id: "after closed escaped double quote data", command: 'bd create x -d "say \\"hello\\""\ngit push origin main', why: "escaped double quotes do not hide a push after the value closes" },
+	{ id: "after closed escaped single quote data", command: "bd create x -d 'don\\'t'\ngit push origin main", why: "escaped single quotes do not hide a push after the value closes" },
 	{ id: "newline mid script", command: "git status\ngit push origin main", why: "the same where the first line is also a git call" },
 	{ id: "command substitution", command: "$(git push origin main)", why: "an open paren starts a command position" },
 	{ id: "bd command substitution", command: 'bd create "t" -d "$(git push origin main)"', why: "a substitution inside bd data still executes its own command" },
@@ -184,6 +188,26 @@ const MUST_NOT_FIRE: Case[] = [
 		command:
 			"bd create \"Use a deep matinee-security module seam for secure-channel state\" --type decision --id adr-5 --force --validate --spec-id 006-identity-authorization-secure-channels -d '## Decision\nDocument the commit and push workflow before apply or install steps.\n```sh\ngit push origin main\n```\nThis is decision data.'",
 		why: "the original bd decision body is argv data even when a line looks executable",
+	},
+	{
+		id: "multiline double quoted description with apostrophe",
+		command: 'bd create x -d "don\'t\ngit push origin main"',
+		why: "an apostrophe does not end a double-quoted argv value",
+	},
+	{
+		id: "multiline single quoted description with double quotes",
+		command: "bd create x -d 'say \"hello\"\ngit push origin main'",
+		why: "a double quote does not end a single-quoted argv value",
+	},
+	{
+		id: "multiline double quoted description with escaped quote",
+		command: 'bd create x -d "say \\"hello\\"\ngit push origin main"',
+		why: "an escaped double quote does not end a double-quoted argv value",
+	},
+	{
+		id: "multiline single quoted description with escaped quote",
+		command: "bd create x -d 'don\\'t\ngit push origin main'",
+		why: "an escaped single quote does not end a single-quoted argv value",
 	},
 	{
 		id: "multiline bd update description",
