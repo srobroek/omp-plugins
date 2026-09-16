@@ -602,6 +602,48 @@ describe("findCommitInvocations", () => {
 		]);
 	});
 
+	// One reader answers for `env` and `sudo`, so an option it RESOLVES consumes exactly the words the
+	// wrapper consumes and the command after it is read rather than guessed. `getopt_long` takes the
+	// shortest prefix naming one option, so `--unse` is `--unset` and takes a value: read as a flag it
+	// would make `HOME` the program and find no commit at all, and left unresolved it would refuse
+	// the call without reading it.
+	test("resolved wrapper options leave the wrapped command readable", () => {
+		for (const command of [
+			"env -u HOME git commit -m x",
+			"env --unset HOME git commit -m x",
+			"env --unse HOME git commit -m x",
+			"env --un HOME git commit -m x",
+			"env --unset=HOME git commit -m x",
+			"env -uHOME git commit -m x",
+			"sudo -u ci git commit -m x",
+			"sudo --user ci git commit -m x",
+			"sudo --use ci git commit -m x",
+			"sudo -n -u ci git commit -m x",
+			"sudo -nu ci git commit -m x",
+		])
+			expect(findCommitInvocations(command), command).toEqual([
+				{ repoDir: null, dryRun: false },
+			]);
+	});
+
+	// An option whose arity this reader cannot state - unknown to it, or a prefix naming two of the
+	// wrapper's options and so an error the wrapper reports rather than a choice it makes - leaves the
+	// position of the wrapped command a guess. Advancing by one word instead walks past `git`.
+	test("unresolved and ambiguous wrapper options fail closed", () => {
+		for (const command of [
+			"env --de git commit -m x",
+			"env --bogus git commit -m x",
+			"env -iv git commit -m x",
+			"env - git commit -m x",
+			"sudo --c ci git commit -m x",
+			"sudo --p prompt git commit -m x",
+			"sudo --bogus git commit -m x",
+		])
+			expect(findCommitInvocations(command), command).toEqual([
+				{ repoDir: null, dryRun: false, retargeted: true },
+			]);
+	});
+
 	test("ordinary commands mentioning Git are not wrappers", () => {
 		for (const command of [
 			"echo git commit",
@@ -682,6 +724,21 @@ describe("findCommitInvocations", () => {
 			["env -C /protected $" + "{RUNNER} commit -m x", { RUNNER: "git" }],
 			["env --ch=/protected $" + "{RUNNER} commit -m x", { RUNNER: "git" }],
 			["sudo --chdir=/protected $" + "{RUNNER} commit -m x", { RUNNER: "git" }],
+			["env --split-str 'git commit -m x'", {}],
+			["env --spli 'git commit -m x'", {}],
+			["env --s 'git commit -m x'", {}],
+			["env --split-str='git commit -m x'", {}],
+			["env --spli='g\"i\"t commit -m x'", {}],
+			["env --split-str '$" + "{RUNNER} commit -m x'", { RUNNER: "git" }],
+			["env --chd /protected $" + "{RUNNER} commit -m x", { RUNNER: "git" }],
+			["sudo --chd /protected git commit -m x", {}],
+			["sudo --chd=/protected git commit -m x", {}],
+			["env --de git commit -m x", {}],
+			["env -iv git commit -m x", {}],
+			["env - git commit -m x", {}],
+			["sudo --c /protected git commit -m x", {}],
+			["sudo --p prompt git commit -m x", {}],
+			["sudo --bogus git commit -m x", {}],
 		] as Array<[string, Record<string, string>]>) {
 			const { run, calls } = fakeGit({
 				"/feature": "feature",
@@ -2640,11 +2697,36 @@ describe("a credential handed to the GitHub CLI", () => {
 		expect(findGitInvocations(command, env)).toEqual([{ operation: "opaque", repoDir: null, retargeted: true }]);
 	});
 
-	// The same spelling in an `env` or `sudo` assignment position is one environment value that
-	// nothing re-parses, so the separator inside it never runs.
-	test("an assignment position passes a value on without re-parsing it", () => {
-		expect(findGitInvocations(`env GITHUB_TOKEN=x$SCRIPT gh pr create --base main`, { SCRIPT: "; git checkout other" })).toEqual([]);
+	// A QUOTED value in an `env` or `sudo` assignment position is one environment value that nothing
+	// re-parses, so the separator inside it never runs.
+	test("a quoted assignment value is passed on without re-parsing it", () => {
+		expect(findGitInvocations(`env GITHUB_TOKEN="x$SCRIPT" gh pr create --base main`, { SCRIPT: "; git checkout other" })).toEqual([]);
 		expect(findGitInvocations(`sudo -u ci GITHUB_TOKEN="$token" gh pr create --base main`)).toEqual([]);
+		expect(findGitInvocations(`env GITHUB_TOKEN='literal' gh pr create --base main`)).toEqual([]);
+		expect(findGitInvocations(`env GITHUB_TOKEN="$SAFE$ALSO" gh pr create --base main`)).toEqual([]);
+	});
+
+	// The UNQUOTED spelling of the same word is not that value. An assignment word is an ordinary
+	// argv word to `env` and `sudo` - unlike a shell prefix assignment, where assignment context
+	// suppresses splitting - so the shell field-splits an unquoted expansion and every field after
+	// the first is more argv for the wrapper. Measured against the real binary: with
+	// SCRIPT=' /bin/echo split-ran', `env FOO=x$SCRIPT` prints `split-ran` and
+	// `FOO=x$SCRIPT printenv FOO` prints the whole value instead. So the payload here is the
+	// utility `env` runs, and the earlier permit for this spelling was unsound.
+	test.each([
+		[`env GITHUB_TOKEN=x$SCRIPT`, { SCRIPT: " git checkout other" }],
+		[`env GITHUB_TOKEN=x$SCRIPT gh pr create --base main`, { SCRIPT: " git checkout other" }],
+		[`env GITHUB_TOKEN=x$SCRIPT gh pr create --base main`, {}],
+		[`env -- GITHUB_TOKEN=x$SCRIPT gh pr create`, { SCRIPT: " git checkout other" }],
+		["env GITHUB_TOKEN=x$" + "{SCRIPT} gh pr create", { SCRIPT: " git checkout other" }],
+		[`env -u GH_TOKEN GITHUB_TOKEN=$token gh pr create --fill`, {}],
+		[`sudo -u ci GITHUB_TOKEN=x$SCRIPT gh pr create`, { SCRIPT: " git checkout other" }],
+		[`sudo GITHUB_TOKEN=$token gh pr create --fill`, {}],
+		// Mixed quoting: the word is `quoted` word-wide, and its bare fragment still splits.
+		[`env GITHUB_TOKEN="$SAFE"$UNSAFE gh pr create`, { UNSAFE: " git checkout other" }],
+		[`env GITHUB_TOKEN=x"$SAFE"$UNSAFE`, {}],
+	] as Array<[string, NodeJS.ProcessEnv]>)("an unquoted assignment value can carry the utility: %s", (command, env) => {
+		expect(findGitInvocations(command, env)).toEqual([{ operation: "opaque", repoDir: null, retargeted: true }]);
 	});
 
 	// An option and the word it consumes are not the assignment run: `env -S` hands `env` a string
@@ -2657,6 +2739,58 @@ describe("a credential handed to the GitHub CLI", () => {
 		[`sudo -u "$who" GITHUB_TOKEN=x $RUNNER checkout other`, { RUNNER: "git" }],
 	] as Array<[string, NodeJS.ProcessEnv]>)("an option value is outside the assignment run: %s", (command, env) => {
 		expect(findGitInvocations(command, env)).toEqual([{ operation: "opaque", repoDir: null, retargeted: true }]);
+	});
+
+	// `getopt_long` accepts the shortest prefix that names one option, so `--split-str`, `--spli` and
+	// `--s` are all `--split-string`: each hands `env` a string `env` splits and runs itself, which
+	// makes that word a script whatever it is SPELLED like. Reading it as an assignment because it
+	// looks like one is the bypass this closes.
+	test.each([
+		[`env --split-str "GITHUB_TOKEN=x$SCRIPT"`, { SCRIPT: "; git checkout other" }],
+		[`env --split-strin "GITHUB_TOKEN=x$SCRIPT"`, { SCRIPT: "; git checkout other" }],
+		[`env --spli "GITHUB_TOKEN=x$SCRIPT"`, { SCRIPT: "; git checkout other" }],
+		[`env --s "GITHUB_TOKEN=x$SCRIPT"`, { SCRIPT: "; git checkout other" }],
+		[`env --split-str="GITHUB_TOKEN=x$SCRIPT"`, { SCRIPT: "; git checkout other" }],
+		[`env --spli="GITHUB_TOKEN=x$SCRIPT"`, { SCRIPT: "; git checkout other" }],
+		[`env -S"GITHUB_TOKEN=x$SCRIPT"`, { SCRIPT: "; git checkout other" }],
+		[`env -uHOME -S "GITHUB_TOKEN=x$SCRIPT"`, { SCRIPT: "; git checkout other" }],
+		[`env -u GH_TOKEN --spli "GH_TOKEN=x$SCRIPT"`, { SCRIPT: "; git checkout other" }],
+		[`env --split-str "GITHUB_TOKEN=x $RUNNER checkout"`, { RUNNER: "git" }],
+	] as Array<[string, NodeJS.ProcessEnv]>)("an abbreviated split payload is a script, not environment: %s", (command, env) => {
+		expect(findGitInvocations(command, env)).toEqual([{ operation: "opaque", repoDir: null, retargeted: true }]);
+	});
+
+	// With the wrapper's own argv width unreadable, NO later word can be shown to be environment, so
+	// the run is empty and every word is a command word again. `--c` and `--p` name three of `sudo`'s
+	// options each, which is an error `sudo` reports rather than a choice it makes.
+	test.each([
+		[`env --de "GITHUB_TOKEN=x$SCRIPT" gh pr create`, { SCRIPT: "; git checkout other" }],
+		[`env --bogus "GITHUB_TOKEN=x$SCRIPT" gh pr create`, { SCRIPT: "; git checkout other" }],
+		[`env -i "GITHUB_TOKEN=x$SCRIPT" gh pr create`, { SCRIPT: "; git checkout other" }],
+		[`env -iv "GITHUB_TOKEN=x$SCRIPT" gh pr create`, { SCRIPT: "; git checkout other" }],
+		[`env - "GITHUB_TOKEN=x$SCRIPT" gh pr create`, { SCRIPT: "; git checkout other" }],
+		[`sudo --c root "GITHUB_TOKEN=x$SCRIPT" gh pr create`, { SCRIPT: "; git checkout other" }],
+		[`sudo --p root "GITHUB_TOKEN=x$SCRIPT" gh pr create`, { SCRIPT: "; git checkout other" }],
+		[`sudo --bogus "GITHUB_TOKEN=x$SCRIPT" gh pr create`, { SCRIPT: "; git checkout other" }],
+	] as Array<[string, NodeJS.ProcessEnv]>)("an unresolved option empties the assignment run: %s", (command, env) => {
+		expect(findGitInvocations(command, env)).toEqual([{ operation: "opaque", repoDir: null, retargeted: true }]);
+	});
+
+	// The same reader stands in front of the credential, so the approved handoff is permitted in
+	// every spelling the wrapper itself resolves - and the option's value stays outside the run.
+	test.each([
+		`env -u GH_TOKEN -u GITHUB_TOKEN GITHUB_TOKEN="$token" gh pr create --fill`,
+		`env --unset GH_TOKEN GITHUB_TOKEN="$token" gh pr create --fill`,
+		`env --unse GH_TOKEN GITHUB_TOKEN="$token" gh pr create --fill`,
+		`env --unset=GH_TOKEN GITHUB_TOKEN="$token" gh pr create --fill`,
+		`env -uGH_TOKEN GITHUB_TOKEN="$token" gh pr create --fill`,
+		`env -- GITHUB_TOKEN="$token" gh pr create --fill`,
+		`sudo -u deploy GITHUB_TOKEN="$token" gh pr create --fill`,
+		`sudo --use deploy GITHUB_TOKEN="$token" gh pr create --fill`,
+		`sudo -udeploy GITHUB_TOKEN="$token" gh pr create --fill`,
+		`sudo -n -u deploy GITHUB_TOKEN="$token" gh pr create --fill`,
+	])("a resolved option leaves the credential in the run: %s", (command) => {
+		expect(findGitInvocations(command)).toEqual([]);
 	});
 
 	// `xargs` resolves its utility from argv, so `NAME=value` there is a filename and not an
