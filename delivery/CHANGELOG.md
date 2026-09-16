@@ -1,5 +1,70 @@
 # Changelog
 
+## [0.11.0](https://github.com/srobroek/omp-plugins/compare/delivery--v0.10.11...delivery--v0.11.0) (2026-09-16)
+
+
+### Features
+
+* add design plugin with routed third-party skills and MCP packages ([325fc4c](https://github.com/srobroek/omp-plugins/commit/325fc4c8721b213b5f3c5cc0119cc8be48670165))
+* **delivery:** primary-checkout gate and worktree rules GW-5/GW-6 ([#192](https://github.com/srobroek/omp-plugins/issues/192)) ([e6d522c](https://github.com/srobroek/omp-plugins/commit/e6d522cadd06079e55b5d80260f2d3b3a9245ec9))
+* **delivery:** require bounded automated review remediation ([49edfd2](https://github.com/srobroek/omp-plugins/commit/49edfd2075ac402e37df933f9143d05eaeb5e4d1))
+* **delivery:** require conventional pull request titles ([#226](https://github.com/srobroek/omp-plugins/issues/226)) ([4dd9ff7](https://github.com/srobroek/omp-plugins/commit/4dd9ff79fcf26b985ff2e6c2b2efc261882b5951))
+* **rules:** mechanize nine steering clauses as TTSR rules ([539efc0](https://github.com/srobroek/omp-plugins/commit/539efc02a153a2fddeab8d4bd2fee6ada30e7040))
+* **session:** revive session plugin with resume-session skill ([af9251e](https://github.com/srobroek/omp-plugins/commit/af9251e4f4a7b36163d228373b76c21035813eba))
+* **speckit:** recover spec-modes rule lost in the docs rollup ([84c01b8](https://github.com/srobroek/omp-plugins/commit/84c01b85067a877cd2ab4d20c0bfeca88934aa0d))
+
+
+### Bug Fixes
+
+* **agents:** route operator to smol and PR reviewer to task ([#62](https://github.com/srobroek/omp-plugins/issues/62)) ([e2e2972](https://github.com/srobroek/omp-plugins/commit/e2e29728771251a8e838f2f1b9b560a832b61307))
+* **authoring:** enforce agent metadata parity ([19ad6ae](https://github.com/srobroek/omp-plugins/commit/19ad6aeeb78038f74c0901bc5630c5f818c021d5))
+* **changelog:** drop the entries my merge strategy duplicated ([525b7b1](https://github.com/srobroek/omp-plugins/commit/525b7b11dbe4c6dd85ff6073d916f6b3090bf5ff))
+* **changelog:** drop the entries my merge strategy duplicated ([63f3643](https://github.com/srobroek/omp-plugins/commit/63f36438b0f0c9c86678c175c07cf5a3de452c91))
+* **ci:** reject stale packages and incomplete checker runs ([8274c02](https://github.com/srobroek/omp-plugins/commit/8274c02e6e1af64adb7f6524e7ebabe830d26356))
+* correct plugin discovery, safety checks, and workflow contracts ([bfaa850](https://github.com/srobroek/omp-plugins/commit/bfaa850be719d7b79ac2245f2092be838673dd5d))
+* **delivery:** allow harness runtime worktree roots ([7d066ff](https://github.com/srobroek/omp-plugins/commit/7d066ff89c8ff12477eb77deb3a36b2e9984223a))
+* **delivery:** allow runtime isolation roots ([#248](https://github.com/srobroek/omp-plugins/issues/248)) ([d18e900](https://github.com/srobroek/omp-plugins/commit/d18e900e3241d6470f7ac5458d24ef63a63f0174))
+* **delivery:** allow slower remote anchor probes ([#317](https://github.com/srobroek/omp-plugins/issues/317)) ([8b408fb](https://github.com/srobroek/omp-plugins/commit/8b408fbc94cd034f374b21aa847f8d20365f257d))
+* **delivery:** attribute unpushed commits to the session that made them ([a215a38](https://github.com/srobroek/omp-plugins/commit/a215a38e9139a0c77012f1608ff4c71457c7f67b))
+* **delivery:** attribute unpushed commits to the session; summarise per-file diffs ([0ae7a0f](https://github.com/srobroek/omp-plugins/commit/0ae7a0f874e262d0f54cb75ada173e1a11a5be35))
+* **delivery:** attribute untracked files the agent created ([5c3b985](https://github.com/srobroek/omp-plugins/commit/5c3b985fa0237ac831b530748c0e5df79e823313))
+* **delivery:** attribute untracked files the agent created ([daf6654](https://github.com/srobroek/omp-plugins/commit/daf66543cb4b6556b3de7bbf5c457989940efe4e))
+* **delivery:** harden canonical and primary checkout gates ([#294](https://github.com/srobroek/omp-plugins/issues/294)) ([49a7fe6](https://github.com/srobroek/omp-plugins/commit/49a7fe69c9f22bdc451359566778b9600e9259db))
+* **delivery:** honor primary checkout grants ([#269](https://github.com/srobroek/omp-plugins/issues/269)) ([bc2e1cb](https://github.com/srobroek/omp-plugins/commit/bc2e1cb0c09a9ca7d1c45784e0495e472fd20771))
+* **delivery:** make unpinned reads advisory ([#322](https://github.com/srobroek/omp-plugins/issues/322)) ([7832d9d](https://github.com/srobroek/omp-plugins/commit/7832d9dedde1c3179bf24cd9efe85296c4b88b6e))
+* **delivery:** only command-slot git tokens count as invocations ([#52](https://github.com/srobroek/omp-plugins/issues/52)) ([cae7e6f](https://github.com/srobroek/omp-plugins/commit/cae7e6f4dad420f0ea13d91e8ac709dd5cc15cfa))
+* **delivery:** read the branch of the repository the commit actually targets ([13899c6](https://github.com/srobroek/omp-plugins/commit/13899c6d464020278c71c340e9f57795d8dcdaaa))
+* **delivery:** require resolved git verb in primary checkout gate ([#241](https://github.com/srobroek/omp-plugins/issues/241)) ([58977f3](https://github.com/srobroek/omp-plugins/commit/58977f39d5b4669913d45ae9c3b16b7ee5844766))
+* **delivery:** require structured commit authority ([#147](https://github.com/srobroek/omp-plugins/issues/147)) ([9422cca](https://github.com/srobroek/omp-plugins/commit/9422ccac325e9894e9a401302ccb0d3f0da158cf))
+* **delivery:** resolve child test module path ([0be13b9](https://github.com/srobroek/omp-plugins/commit/0be13b948548186e45ffbc8ccbc1cf96e82b134b))
+* **delivery:** resolve child test module path ([0fa4686](https://github.com/srobroek/omp-plugins/commit/0fa46864032817cc8a7c94bb0e3f8127eeaba0aa))
+* **delivery:** restore cd tracking, reconciled with the command-slot rule ([#54](https://github.com/srobroek/omp-plugins/issues/54)) ([a9f9b7e](https://github.com/srobroek/omp-plugins/commit/a9f9b7ef281994abf012979b856ff3de37dcbad2))
+* **delivery:** satisfy the repository TypeScript and lint contract ([50b7657](https://github.com/srobroek/omp-plugins/commit/50b7657e0ff21578eba7e8a0d7a99bd2847ba13d))
+* **delivery:** scope Bead linkage to agent-created PRs ([56dee62](https://github.com/srobroek/omp-plugins/commit/56dee62c8e02e71f3f6a891cc41b71f64e3466b6))
+* **delivery:** scope commit authority and preserve hunk ownership ([d61bb1f](https://github.com/srobroek/omp-plugins/commit/d61bb1f52e0f0aee8140eb68114cfe3cc21af610))
+* **delivery:** treat a branch-dependent cd as unknowable ([01a0942](https://github.com/srobroek/omp-plugins/commit/01a094263de845faae77094ba119e84198551235))
+* **delivery:** trust remote steering sources ([ce43658](https://github.com/srobroek/omp-plugins/commit/ce43658be90aa22656fd973b2daf05c8e0400a4e))
+* **delivery:** type the Git spawn adapter ([#321](https://github.com/srobroek/omp-plugins/issues/321)) ([facc4af](https://github.com/srobroek/omp-plugins/commit/facc4af1537c886fb7caaf4526bc5392cf64a3e6))
+* remediate confirmed sniff-audit findings and make the strict TypeScript + Biome contract pass ([5ecdd5f](https://github.com/srobroek/omp-plugins/commit/5ecdd5f027fa8f07f4eb9a2b10e93532b6e129d3))
+* repair the journeys symlink guard and the session-commit test's git isolation ([#172](https://github.com/srobroek/omp-plugins/issues/172)) ([c9ccd43](https://github.com/srobroek/omp-plugins/commit/c9ccd4353ebabfcc87ebb93aab67f429fcfb8b64))
+* **speckit:** retire the spec-id TTSR as a contextual false positive ([f292cca](https://github.com/srobroek/omp-plugins/commit/f292ccac9deb988459859ee1836aaa99deb36317))
+* **speckit:** retire the spec-id TTSR as a contextual false positive ([76caeec](https://github.com/srobroek/omp-plugins/commit/76caeec135b0b1943b6df551578cd6b6e7facd1b))
+* **ttsr:** audit wave - retire and re-anchor the blocking rules ([a6ae591](https://github.com/srobroek/omp-plugins/commit/a6ae5911aa0ece0e8af982a43040ae8515970d3a))
+
+
+### Refactors
+
+* retire redundant agents and repair role routing ([#66](https://github.com/srobroek/omp-plugins/issues/66)) ([1a8dbb2](https://github.com/srobroek/omp-plugins/commit/1a8dbb24f127dfcbacb624857459a36a918ca4e6))
+* **safety:** apply the safety, toolchain, delivery and ops rules audit ([#254](https://github.com/srobroek/omp-plugins/issues/254)) ([f86c53c](https://github.com/srobroek/omp-plugins/commit/f86c53c98d194aa4b8bfe98c387951eb9042e37a))
+
+
+### Documentation
+
+* clarify plugin safety and usage contracts ([f147fba](https://github.com/srobroek/omp-plugins/commit/f147fbaa08ddae1f5d745defd613b2d33ece4d61))
+* **delivery:** GW-6 names the installed post-start prune hook ([#201](https://github.com/srobroek/omp-plugins/issues/201)) ([bbb685f](https://github.com/srobroek/omp-plugins/commit/bbb685fbe7c55e0c1e866b59e6dfbc8f2c59391b))
+* **delivery:** primary-checkout gate is advisory-strength; shell writes are not parsed ([#199](https://github.com/srobroek/omp-plugins/issues/199)) ([e467692](https://github.com/srobroek/omp-plugins/commit/e467692ae26825d94d99c0bbca409ef314854c43))
+* **steering:** own commit/push policy in git rules; ban narrating foreign state ([ccef816](https://github.com/srobroek/omp-plugins/commit/ccef816ac76cf318d5c4871919953ba6b2989eef))
+
 ## [0.10.11](https://github.com/srobroek/omp-plugins/compare/delivery--v0.10.10...delivery--v0.10.11) (2026-09-16)
 
 
