@@ -54,7 +54,7 @@
       "name": "chezmoi",
       "description": "Edit chezmoi-managed dotfiles at their authoritative source.",
       "source": "./chezmoi",
-      "version": "0.4.7",
+      "version": "0.4.8",
       "category": "productivity"
     },
     {
@@ -68,7 +68,7 @@
       "name": "delivery",
       "description": "Delivery and git-workflow rules, plus a pull-request review agent.",
       "source": "./delivery",
-      "version": "0.11.0",
+      "version": "0.11.1",
       "category": "devops"
     },
     {
@@ -180,7 +180,7 @@
       "name": "toolchain",
       "description": "Toolchain defaults, tools-versus-scripts layout, and pragmatic output rules.",
       "source": "./toolchain",
-      "version": "0.3.6",
+      "version": "0.3.7",
       "category": "development"
     },
     {
