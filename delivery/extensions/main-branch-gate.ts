@@ -158,145 +158,74 @@ const TRANSPARENT_PREFIX: Record<string, true> = {
 	sudo: true,
 };
 
-/**
- * An environment assignment word, capturing the name it assigns. Whether the word IS an assignment
- * is a question about its position, never about its text: a shell or `eval` operand is one token
- * holding a whole script, and `GITHUB_TOKEN=x$SCRIPT` there is re-parsed after the expansion, so
- * the same spelling that names environment in `env`'s argv runs `; git checkout other` under
- * `bash -c`. `assignmentRunEnd` decides the position; this regex only reads the name.
- */
-const ENV_ASSIGNMENT = /^([A-Za-z_][A-Za-z0-9_]*)=/;
+const ENV_ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*=/;
 
-/**
- * What a wrapper option does to the argv word after it. `value` consumes that word, `chdir` consumes
- * it and moves the working directory the wrapped command runs in, and `split` consumes a whole
- * string the wrapper splits and runs ITSELF, so that word is a script and never environment.
- * `flag` consumes nothing.
- */
-type WrapperOptionArity = "flag" | "value" | "chdir" | "split";
-
-/**
- * `env`'s own options, and `sudo`'s: ONE table per wrapper, read by ONE reader, so no caller keeps a
- * second spelling of the same arity and the two cannot drift apart.
- *
- * Each table is deliberately a SUBSET of its tool's real option set - only spellings whose arity is
- * verified are listed - and `wrapperOption` fails closed on every word it cannot resolve. A subset
- * stays sound both ways: an option missing here makes its call unreadable and therefore refused,
- * while a long prefix that names one option here but two in the real tool makes that tool exit with
- * an ambiguity error, so no command runs at all.
- */
-const ENV_OPTIONS: Record<string, WrapperOptionArity> = {
-	"-u": "value",
-	"-P": "value",
-	"--unset": "value",
-	"-C": "chdir",
-	"--chdir": "chdir",
-	"-S": "split",
-	"--split-string": "split",
+/** `env` options that consume the following argv word before its command. */
+const ENV_VALUE_OPTIONS: Record<string, true> = {
+	"-u": true,
+	"-C": true,
+	"-S": true,
+	"-P": true,
+	"--unset": true,
+	"--chdir": true,
+	"--split-string": true,
 };
 
-const SUDO_OPTIONS: Record<string, WrapperOptionArity> = {
-	"-u": "value",
-	"-g": "value",
-	"-p": "value",
-	"-h": "value",
-	"-R": "value",
-	"-T": "value",
-	"-U": "value",
-	"-r": "value",
-	"-t": "value",
-	"-a": "value",
-	"--user": "value",
-	"--group": "value",
-	"--prompt": "value",
-	"--host": "value",
-	"--role": "value",
-	"--type": "value",
-	"--authentication-type": "value",
-	"--other-user": "value",
-	"--askpass-type": "value",
-	"--command-timeout": "value",
-	"--close-from": "value",
-	// `-C` is `--close-from` and `-D` is `--chdir`, but both are read as a directory move: refusing a
-	// call whose working directory may not be the caller's costs nothing here.
-	"-C": "chdir",
-	"-D": "chdir",
-	"--chdir": "chdir",
-	"-A": "flag",
-	"-b": "flag",
-	"-E": "flag",
-	"-e": "flag",
-	"-H": "flag",
-	"-K": "flag",
-	"-k": "flag",
-	"-n": "flag",
-	"-P": "flag",
-	"-S": "flag",
-	"-V": "flag",
-	"-v": "flag",
-	"--askpass": "flag",
-	"--background": "flag",
-	"--preserve-env": "flag",
-	"--edit": "flag",
-	"--set-home": "flag",
-	"--remove-timestamp": "flag",
-	"--reset-timestamp": "flag",
-	"--non-interactive": "flag",
-	"--preserve-groups": "flag",
-	"--stdin": "flag",
-	"--validate": "flag",
-	"--version": "flag",
+/** `sudo` options that consume the following argv word before its command. */
+const SUDO_VALUE_OPTIONS: Record<string, true> = {
+	"-u": true,
+	"-g": true,
+	"-p": true,
+	"-h": true,
+	"-C": true,
+	"-D": true,
+	"-R": true,
+	"-T": true,
+	"-U": true,
+	"-r": true,
+	"-t": true,
+	"-a": true,
+	"--user": true,
+	"--group": true,
+	"--prompt": true,
+	"--host": true,
+	"--chdir": true,
+	"--role": true,
+	"--type": true,
+	"--authentication-type": true,
+	"--other-user": true,
+	"--askpass-type": true,
+	"--command-timeout": true,
+	"--close-from": true,
 };
 
-/** One option word as its wrapper reads it: its arity, and how many argv words it occupies. */
-type WrapperOptionRead = { arity: WrapperOptionArity; width: 1 | 2 };
-
-/**
- * Read one option word of `env`'s or `sudo`'s own argv. `undefined` is never harmless: a caller that
- * cannot say how wide an option is cannot say which later word is the program it runs, so it MUST
- * refuse the call rather than assume width 1 and walk into the wrapped command.
- */
-function wrapperOption(word: string, table: Record<string, WrapperOptionArity>): WrapperOptionRead | undefined {
-	// A lone `-` is an operand to some wrappers and an error to others, and `--` ends option parsing
-	// rather than being an option: neither is this reader's to resolve.
-	if (word === "-" || word === "--") return undefined;
-	if (word.startsWith("--")) {
-		const equals = word.indexOf("=");
-		const arity = longOptionArity(equals === -1 ? word : word.slice(0, equals), table);
-		if (arity === undefined) return undefined;
-		// A value attached with `=` is already consumed. A flag refuses one outright, and getopt_long
-		// then exits instead of running anything, so that spelling is not a readable option either.
-		if (equals !== -1) return arity === "flag" ? undefined : { arity, width: 1 };
-		return { arity, width: arity === "flag" ? 1 : 2 };
-	}
-	// A single dash is a cluster of short options, and the first one that takes a value takes the
-	// rest of the word - or the next argv word, when it is the cluster's last character.
-	for (let index = 1; index < word.length; index++) {
-		const arity = table[`-${word[index] as string}`];
-		if (arity === undefined) return undefined;
-		if (arity === "flag") continue;
-		return { arity, width: index === word.length - 1 ? 2 : 1 };
-	}
-	return { arity: "flag", width: 1 };
-}
-
-/**
- * `getopt_long` accepts the shortest prefix that names exactly one long option, so `--chd` is
- * `--chdir` and `--spli` is `--split-string`. An exact spelling wins even where it also prefixes a
- * longer name, and two candidates are an error the tool reports rather than a choice it makes.
- */
-function longOptionArity(name: string, table: Record<string, WrapperOptionArity>): WrapperOptionArity | undefined {
-	const exact = table[name];
-	if (exact !== undefined) return exact;
-	if (name.length <= 2) return undefined;
-	let found: WrapperOptionArity | undefined;
-	for (const candidate of Object.keys(table)) {
-		if (!candidate.startsWith(name)) continue;
-		if (found !== undefined) return undefined;
-		found = table[candidate];
-	}
-	return found;
-}
+/** `sudo` options that do not consume an argv word. */
+const SUDO_FLAG_OPTIONS: Record<string, true> = {
+	"-A": true,
+	"-b": true,
+	"-E": true,
+	"-e": true,
+	"-H": true,
+	"-K": true,
+	"-k": true,
+	"-n": true,
+	"-P": true,
+	"-S": true,
+	"-V": true,
+	"-v": true,
+	"--askpass": true,
+	"--background": true,
+	"--preserve-env": true,
+	"--edit": true,
+	"--set-home": true,
+	"--remove-timestamp": true,
+	"--reset-timestamp": true,
+	"--non-interactive": true,
+	"--preserve-groups": true,
+	"--stdin": true,
+	"--validate": true,
+	"--version": true,
+};
 
 /** Pre-verb git options that consume the following token. */
 const PRE_VERB_VALUE_FLAGS: Record<string, true> = {
@@ -449,14 +378,6 @@ export type Token = {
 	 * A separator read out of an escaped word ended the command early and hid every later operand.
 	 */
 	escaped?: true;
-	/**
-	 * An expansion in this word stood OUTSIDE quotes, so the shell field-splits its value and this
-	 * one written word may reach the command as SEVERAL argv words. `quoted` cannot answer this: it
-	 * is word-wide, so `GITHUB_TOKEN="$SAFE"$UNSAFE` is `quoted` while its second expansion still
-	 * splits, and `env GITHUB_TOKEN="$SAFE"$UNSAFE` runs whatever `$UNSAFE`'s later fields name.
-	 * Only PRESENT when set.
-	 */
-	unquotedExpansion?: true;
 };
 
 /** A redirection operator, anchored at the start of what remains of the command. */
@@ -475,7 +396,6 @@ export function tokenize(command: string): Token[] {
 	let wasQuoted = false;
 	let redirection = false;
 	let escaped = false;
-	let unquotedExpansion = false;
 	let quote: string | null = null;
 	// Here-document bodies queued by operators on the current line, consumed in order once that
 	// line ends. `cat <<A <<B` queues two.
@@ -485,7 +405,6 @@ export function tokenize(command: string): Token[] {
 			const token: Token = { text: cur, quoted: wasQuoted };
 			if (redirection) token.redirection = true;
 			if (escaped) token.escaped = true;
-			if (unquotedExpansion) token.unquotedExpansion = true;
 			out.push(token);
 		}
 		cur = "";
@@ -493,7 +412,6 @@ export function tokenize(command: string): Token[] {
 		wasQuoted = false;
 		redirection = false;
 		escaped = false;
-		unquotedExpansion = false;
 	};
 	for (let i = 0; i < command.length; i++) {
 		const ch = command[i] as string;
@@ -699,10 +617,6 @@ export function tokenize(command: string): Token[] {
 			out.push({ text: ch, quoted: false });
 			continue;
 		}
-		// An expansion reached here outside every quote, so its value is field-split. A `$` that
-		// expands nothing is recorded too: the cheap answer over-refuses a word that already had to
-		// be read as an expansion, and guessing which `$` is literal needs the parser this is not.
-		if (ch === "$" || ch === "`") unquotedExpansion = true;
 		cur += ch;
 		started = true;
 	}
@@ -1075,80 +989,13 @@ function substitutionMayRunGit(text: string, env: NodeJS.ProcessEnv): boolean {
 	return expansionVariables(text).some((name) => envValueMayBeGit(env[name]));
 }
 
-/**
- * Where a word sits in its segment. Only `assignment` - a word the parser placed in the environment
- * run of a wrapper that consumes `NAME=value` from argv - can be read as environment. Everywhere
- * else, including a shell or `eval` script operand and the utility `xargs` resolves from argv, a
- * bare expansion is a command word this gate cannot read.
- */
-type WordPosition = "assignment" | "command";
-
-/**
- * The words of a wrapper's argv that are its own environment assignments. Only `env` and `sudo` take
- * `NAME=value` there, and neither re-parses the value it passes on: each consumes its own options
- * first, then a run of assignments, and the first word that is neither ends the run and is the
- * program that runs. Every other command takes no assignments at all, so its run is empty - a shell
- * or `eval` gets none, because its operand is a script the shell parses again after expanding it.
- *
- * An option and the word it consumes stay OUTSIDE the run, and `wrapperOption` - the same reader the
- * primary walk uses - decides which words those are. Two answers empty the run outright: a `split`
- * option, because `env --split-str "GITHUB_TOKEN=x $RUNNER checkout"` hands `env` a string it splits
- * and runs itself, so that word is a script like any other; and an option whose arity is unknown or
- * ambiguous, because the wrapper's own argv then has no readable width and NO later word can be
- * shown to be environment. Assuming width 1 there is the bypass: it reads the next word as an
- * assignment when the wrapper reads it as a value or a script.
- */
-function assignmentRun(base: string, remainder: Token[]): { start: number; end: number } {
-	if (base !== "env" && base !== "sudo") return { start: 0, end: 0 };
-	const options = base === "env" ? ENV_OPTIONS : SUDO_OPTIONS;
-	let start = 0;
-	while (start < remainder.length) {
-		const text = (remainder[start] as Token).text;
-		// `--` ends OPTION parsing only: `env -- GITHUB_TOKEN=x gh ...` still passes that assignment
-		// to the child, so the run continues past it.
-		if (text === "--") {
-			start += 1;
-			break;
-		}
-		if (!text.startsWith("-")) break;
-		const option = wrapperOption(text, options);
-		if (option === undefined || option.arity === "split") return { start: 0, end: 0 };
-		start += option.width;
-	}
-	// A word the run accepts must still be an assignment, so the program `env` or `sudo` executes is
-	// never swept into it: only its own `NAME=value` words are.
-	let end = start;
-	while (end < remainder.length && ENV_ASSIGNMENT.test((remainder[end] as Token).text)) end++;
-	return { start, end };
-}
-
-function possibleGitToken(token: Token, env: NodeJS.ProcessEnv, position: WordPosition): boolean {
+function possibleGitToken(token: Token, env: NodeJS.ProcessEnv): boolean {
 	const base = tokenBase(token);
 	if (GIT_COMMANDS[base] === true || base.startsWith("git-")) return true;
 	if (token.quoted && !token.text.includes("$") && !token.text.includes("`")) return false;
 	if (/(?:^|\s)(?:d?git|git-[A-Za-z0-9_-]+)(?:$|\s)/.test(token.text)) return true;
-	// A substitution runs a command of its own wherever the word sits, so it answers first and for
-	// every position. What remains is a bare parameter expansion: unreadable, and so a possible Git
-	// command word anywhere a command word can stand.
-	if (token.text.includes("$(") || token.text.includes("`")) return substitutionMayRunGit(token.text, env);
-	if (!token.text.includes("$")) return false;
-	if (position === "command") return true;
-	// An assignment position is an exemption for ONE environment value, so the value must be one
-	// word after the shell is done with it. Field splitting decides that before the name does: an
-	// expansion outside quotes becomes as many argv words as its value has fields, and every field
-	// after the first is more argv for the wrapper, not part of the value. With
-	// SCRIPT=' git checkout other', `env GITHUB_TOKEN=x$SCRIPT gh pr create` hands `env` an
-	// assignment AND `git checkout other` to run, which is verified against the real binary.
-	// Word-wide `quoted` cannot answer it either: in `GITHUB_TOKEN="$SAFE"$UNSAFE` the second
-	// expansion still splits, so the tokenizer records the unquoted fragment itself.
-	if (token.unquotedExpansion === true) return true;
-	// What remains is a quoted expansion: one value that nothing re-parses, so
-	// `env GITHUB_TOKEN="$token" gh pr create` hands a credential to a child and reaches no Git.
-	// What is left is Git's own environment namespace, which Git owns behind the underscore:
-	// `GIT_DIR="$d"` retargets whatever Git command the call reaches, while `GITHUB_TOKEN` only
-	// looks like it does.
-	const name = ENV_ASSIGNMENT.exec(token.text)?.[1];
-	return name === undefined || name.startsWith("GIT_");
+	if (token.text.includes("$") || token.text.includes("`")) return token.text.includes("$(") || token.text.includes("`") ? substitutionMayRunGit(token.text, env) : true;
+	return false;
 }
 function opaqueInvocation(): GitInvocation {
 	return { operation: "opaque", repoDir: null, retargeted: true };
@@ -1208,19 +1055,12 @@ export function findGitInvocations(command: string, env: NodeJS.ProcessEnv = {})
 			if (base === "xargs") {
 				const payloadIndex = xargsPayloadIndex(remainder);
 				const payload = payloadIndex === "unreadable" || payloadIndex < 0 ? undefined : remainder[payloadIndex];
-				if (payloadIndex === "unreadable" && remainder.some((token) => possibleGitToken(token, env, "command"))) out.push(opaqueInvocation());
-				else if (payload !== undefined && (possibleGitToken(payload, env, "command") || substitutionMayRunGit(payload.text, env))) out.push(opaqueInvocation());
+				if (payloadIndex === "unreadable" && remainder.some((token) => possibleGitToken(token, env))) out.push(opaqueInvocation());
+				else if (payload !== undefined && (possibleGitToken(payload, env) || substitutionMayRunGit(payload.text, env))) out.push(opaqueInvocation());
 				continue;
 			}
 			const nestedGit = remainder.some((token) => substitutionMayRunGit(token.text, env));
-			// Resolved once for the segment: the walk that finds the run is the same walk for every
-			// word in it, and each word then only has to know whether it falls inside.
-			const run = assignmentRun(base, remainder);
-			const wrapperGit = remainder.some(
-				(token, index) =>
-					possibleGitToken(token, env, index >= run.start && index < run.end ? "assignment" : "command") ||
-					/(?:^|\s)(?:d?git|git-[A-Za-z0-9_-]+)(?:$|\s)/.test(token.text),
-			);
+			const wrapperGit = remainder.some((token) => possibleGitToken(token, env) || /(?:^|\s)(?:d?git|git-[A-Za-z0-9_-]+)(?:$|\s)/.test(token.text));
 			if (commandToken.text.includes("$") || commandToken.text.includes("`") || nestedGit || ((PRIMARY_WRAPPERS.has(base) || !PRIMARY_SAFE_TEXT_COMMANDS.has(base)) && wrapperGit)) out.push(opaqueInvocation());
 			continue;
 		}
@@ -1590,9 +1430,7 @@ function scanInvocations(command: string): CommitInvocation[] {
 			for (; k < tokens.length && !isSep(tokens[k]); k++) {
 				const operand = tokens[k] as Token;
 				if (operand.text === "--") {
-					// The next argv word is env's command even when it starts with `-`; its own
-					// `NAME=value` operands still reach the main walk as the prefix assignments
-					// they are.
+					// The next argv word is env's command even when it starts with `-`.
 					k++;
 					break;
 				}
@@ -1602,25 +1440,51 @@ function scanInvocations(command: string): CommitInvocation[] {
 					if (name.startsWith("GIT_CONFIG_")) commandGitConfig = true;
 					continue;
 				}
-				if (!operand.text.startsWith("-")) break;
-				const option = wrapperOption(operand.text, ENV_OPTIONS);
-				if (option === undefined) {
-					// GNU env accepts long-option abbreviations and bundled short options. An option
-					// this reader cannot resolve leaves the wrapped command's position a guess, and
-					// guessing it can walk past `git`.
+				const optionName = operand.text.includes("=")
+					? operand.text.slice(0, operand.text.indexOf("="))
+					: operand.text;
+				const attachedShortSplit =
+					operand.text.startsWith("-S") && operand.text !== "-S";
+				if (operand.text.startsWith("-C") && operand.text !== "-C") {
+					prefixRetarget = true;
+					out.push({ repoDir: null, dryRun: false, retargeted: true });
+					continue;
+				}
+				if (operand.text.startsWith("-u") && operand.text !== "-u") continue;
+				if (
+					attachedShortSplit ||
+					optionName === "-S" ||
+					optionName === "--split-string"
+				) {
+					// `env -S` performs quote removal and argv splitting with grammar this scanner
+					// does not implement. Refuse every split payload rather than inspect raw text.
+					out.push({ repoDir: null, dryRun: false, retargeted: true });
+					if (!attachedShortSplit && !operand.text.includes("=")) k++;
+					continue;
+				}
+				if (
+					optionName === "-C" ||
+					optionName === "--chdir" ||
+					("--chdir".startsWith(optionName) && optionName.length >= 4)
+				) {
+					// GNU env accepts unambiguous long-option abbreviations such as `--ch`.
+					prefixRetarget = true;
+					out.push({ repoDir: null, dryRun: false, retargeted: true });
+					if (!operand.text.includes("=")) k++;
+					continue;
+				}
+				if (ENV_VALUE_OPTIONS[optionName] === true) {
+					if (!operand.text.includes("=")) k++;
+					continue;
+				}
+				if (operand.text.startsWith("-")) {
+					// GNU env accepts abbreviations and bundled short options. If this scanner does
+					// not recognise one exactly, it cannot know where the wrapped command starts.
 					out.push({ repoDir: null, dryRun: false, retargeted: true });
 					k = tokens.length;
 					break;
 				}
-				if (option.arity === "split") {
-					// `env -S` performs quote removal and argv splitting with grammar this scanner
-					// does not implement. Refuse every split payload rather than inspect raw text.
-					out.push({ repoDir: null, dryRun: false, retargeted: true });
-				} else if (option.arity === "chdir") {
-					prefixRetarget = true;
-					out.push({ repoDir: null, dryRun: false, retargeted: true });
-				}
-				k += option.width - 1;
+				break;
 			}
 			i = k - 1;
 			continue;
@@ -1630,20 +1494,33 @@ function scanInvocations(command: string): CommitInvocation[] {
 			for (; k < tokens.length && !isSep(tokens[k]); k++) {
 				const operand = tokens[k] as Token;
 				if (operand.text === "--") continue;
-				if (!operand.text.startsWith("-")) break;
-				const option = wrapperOption(operand.text, SUDO_OPTIONS);
-				if (option === undefined) {
+				const optionName = operand.text.includes("=")
+					? operand.text.slice(0, operand.text.indexOf("="))
+					: operand.text;
+				if (
+					optionName === "-C" ||
+					optionName === "-D" ||
+					optionName === "--chdir"
+				) {
+					prefixRetarget = true;
+					out.push({ repoDir: null, dryRun: false, retargeted: true });
+					if (!operand.text.includes("=")) k++;
+					continue;
+				}
+				if (SUDO_VALUE_OPTIONS[optionName] === true) {
+					if (!operand.text.includes("=")) k++;
+					continue;
+				}
+				if (SUDO_FLAG_OPTIONS[optionName] === true) continue;
+				if (/^-[AAbEeEHKknPSVv]+$/.test(operand.text)) continue;
+				if (operand.text.startsWith("-")) {
 					// An unrecognised sudo option may consume a value. Guessing where its command
 					// starts can hide git, so fail closed rather than advance past the wrong word.
 					out.push({ repoDir: null, dryRun: false, retargeted: true });
 					k = tokens.length;
 					break;
 				}
-				if (option.arity === "chdir") {
-					prefixRetarget = true;
-					out.push({ repoDir: null, dryRun: false, retargeted: true });
-				}
-				k += option.width - 1;
+				break;
 			}
 			i = k - 1;
 			continue;

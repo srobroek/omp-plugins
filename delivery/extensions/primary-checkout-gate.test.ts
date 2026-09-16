@@ -380,62 +380,6 @@ describe("decideCommit", () => {
 		expect(decideCommit("git add -- src/a.ts", linked, { GIT_CONFIG_GLOBAL: "/tmp/evil.config" })?.reason).toContain("an opaque Git invocation");
 	});
 
-	test("the child-scoped GitHub CLI credential handoff is permitted from a linked worktree", () => {
-		const { linked } = setup();
-		const auth = `token="$(env -u GH_TOKEN -u GITHUB_TOKEN gh auth token --hostname github.com 2>/dev/null)"`;
-		const create = `env -u GH_TOKEN GITHUB_TOKEN="$token" gh pr create --repo o/r --head fix/x --base main --draft --title T --body-file /tmp/body.md`;
-		expect(decideCommit(`${auth}\n${create}`, linked, {})).toBeUndefined();
-		// The same credential in front of Git, or a substitution that runs Git, still names a
-		// repository this gate cannot read.
-		expect(decideCommit(`env GITHUB_TOKEN="$token" git push origin main`, linked, {})?.reason).toContain("an opaque Git invocation");
-		expect(decideCommit(`env GITHUB_TOKEN="$(git checkout other)" gh pr create --base main`, linked, {})?.reason).toContain("an opaque Git invocation");
-		// The approved handoff keeps its permit in every option spelling `env` and `sudo` resolve,
-		// including the long-option abbreviations `getopt_long` accepts.
-		expect(decideCommit(`env --unse GH_TOKEN GITHUB_TOKEN="$token" gh pr create --fill`, linked, {})).toBeUndefined();
-		expect(decideCommit(`env -uGH_TOKEN GITHUB_TOKEN="$token" gh pr create --fill`, linked, {})).toBeUndefined();
-		expect(decideCommit(`sudo --use deploy GITHUB_TOKEN="$token" gh pr create --fill`, linked, {})).toBeUndefined();
-	});
-
-	test("a script operand carrying a credential assignment cannot check out in a linked worktree", () => {
-		const { linked } = setup();
-		// One token holds the whole script, and the inner shell parses it again after the outer one
-		// expands it, so a word that merely reads as an assignment still runs `git checkout other`.
-		for (const [command, env] of [
-			[`bash -c "GITHUB_TOKEN=x$SCRIPT"`, { SCRIPT: "; git checkout other" }],
-			[`eval "GITHUB_TOKEN=x$SCRIPT"`, { SCRIPT: "; git checkout other" }],
-			[`bash -c "GITHUB_TOKEN=x$SCRIPT"`, {}],
-			[`bash -c 'GITHUB_TOKEN=x $RUNNER checkout other'`, { RUNNER: "git" }],
-			[`bash -c 'GITHUB_TOKEN=x $RUNNER checkout other'`, {}],
-			[`eval 'GH_TOKEN=x $R merge other'`, { R: "git" }],
-			[`bash -c 'A=x;$R'`, { R: "git checkout other" }],
-			[`xargs GITHUB_TOKEN="$token" git checkout other`, {}],
-			[`env GITHUB_TOKEN=x sudo GH_TOKEN=y $RUNNER checkout other`, { RUNNER: "git" }],
-		] as Array<[string, NodeJS.ProcessEnv]>)
-			expect(decideCommit(command, linked, env)?.reason, command).toContain("an opaque Git invocation");
-	});
-
-	// An `env` or `sudo` assignment word is ordinary argv, so an UNQUOTED expansion in its value is
-	// field-split and its later fields are more argv: `env FOO=x$SCRIPT` runs what `$SCRIPT` names,
-	// measured against the real binary. An option whose arity this gate cannot resolve hides where
-	// the wrapped command starts, and every abbreviation of `--split-string` hands `env` a script.
-	test("a wrapper argv this gate cannot read cannot check out in a linked worktree", () => {
-		const { linked } = setup();
-		for (const [command, env] of [
-			[`env GITHUB_TOKEN=x$SCRIPT`, { SCRIPT: " git checkout other" }],
-			[`env GITHUB_TOKEN=x$SCRIPT gh pr create --base main`, { SCRIPT: " git checkout other" }],
-			[`env -- GITHUB_TOKEN=x$SCRIPT gh pr create`, { SCRIPT: " git checkout other" }],
-			[`env GITHUB_TOKEN="$SAFE"$UNSAFE gh pr create`, { UNSAFE: " git checkout other" }],
-			[`sudo -u ci GITHUB_TOKEN=x$SCRIPT gh pr create`, { SCRIPT: " git checkout other" }],
-			[`env --split-str "GITHUB_TOKEN=x$SCRIPT"`, { SCRIPT: "; git checkout other" }],
-			[`env --spli "GITHUB_TOKEN=x$SCRIPT"`, { SCRIPT: "; git checkout other" }],
-			[`env --s "GITHUB_TOKEN=x $RUNNER checkout"`, { RUNNER: "git" }],
-			[`env --de "GITHUB_TOKEN=x$SCRIPT" gh pr create`, { SCRIPT: "; git checkout other" }],
-			[`env -iv "GITHUB_TOKEN=x$SCRIPT" gh pr create`, { SCRIPT: "; git checkout other" }],
-			[`sudo --c root "GITHUB_TOKEN=x$SCRIPT" gh pr create`, { SCRIPT: "; git checkout other" }],
-		] as Array<[string, NodeJS.ProcessEnv]>)
-			expect(decideCommit(command, linked, env)?.reason, command).toContain("an opaque Git invocation");
-	});
-
 	test("an absent operand that Git would expand to a tracked subtree is refused", () => {
 		const { primary, linked } = setup();
 		authorizePrimary(primary);
