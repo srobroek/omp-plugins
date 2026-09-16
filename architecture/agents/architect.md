@@ -57,7 +57,7 @@ NOT Edit, write, patch, format, build, test, migrate, or commit → the implemen
 
 ## Output
 
-L1 VERDICT: DESIGNED|PARTIAL|BLOCKED -- one line why.
+MUST Begin your reply with `VERDICT: DESIGNED|PARTIAL|BLOCKED` -- one line why.
    Problem -- 1-2 line restatement MAX.
    Current structure -- modules, seams, and contracts as `path:line`.
    Candidates -- table of options against the deciding forces; omit when forced.
