@@ -391,6 +391,20 @@ describe("decideCommit", () => {
 		expect(decideCommit(`env GITHUB_TOKEN="$(git checkout other)" gh pr create --base main`, linked, {})?.reason).toContain("an opaque Git invocation");
 	});
 
+	test("a script wearing a credential assignment's prefix cannot check out in a linked worktree", () => {
+		const { linked } = setup();
+		// One token holds the whole script, so reading only its assignment prefix would drop the
+		// `$RUNNER checkout` that follows and let the repository mutation through.
+		for (const [command, env] of [
+			[`bash -c 'GITHUB_TOKEN=x $RUNNER checkout other'`, { RUNNER: "git" }],
+			[`bash -c 'GITHUB_TOKEN=x $RUNNER checkout other'`, {}],
+			[`eval 'GH_TOKEN=x $R merge other'`, { R: "git" }],
+			[`bash -c 'A=x;$R'`, { R: "git checkout other" }],
+			[`xargs GITHUB_TOKEN="$token" git checkout other`, {}],
+		] as Array<[string, NodeJS.ProcessEnv]>)
+			expect(decideCommit(command, linked, env)?.reason, command).toContain("an opaque Git invocation");
+	});
+
 	test("an absent operand that Git would expand to a tracked subtree is refused", () => {
 		const { primary, linked } = setup();
 		authorizePrimary(primary);

@@ -2613,4 +2613,35 @@ describe("a credential handed to the GitHub CLI", () => {
 	test.each(["GITHUB_TOKEN", "GITHUB_REPOSITORY", "GH_TOKEN", "GH_HOST"])("an unreadable %s retargets nothing", (name) => {
 		expect(findGitInvocations(`env -u GH_TOKEN ${name}="$value" gh pr create --base main`)).toEqual([]);
 	});
+
+	// A shell or `eval` operand is ONE token holding a whole script, so a word that merely STARTS
+	// with an assignment is a command wearing its prefix. Reading the prefix alone let
+	// `GITHUB_TOKEN=x $RUNNER checkout other` through with `RUNNER=git` in the environment, so an
+	// assignment earns its exemption only when the whole word is one, with a value that cannot open
+	// another command word.
+	test.each([
+		[`bash -c 'GITHUB_TOKEN=x $RUNNER checkout other'`, { RUNNER: "git" }],
+		[`bash -c 'GITHUB_TOKEN=x $RUNNER checkout other'`, {}],
+		[`sh -c 'GH_TOKEN=x $R commit -m x'`, { R: "git" }],
+		[`zsh -c 'GITHUB_TOKEN=x $R merge other'`, {}],
+		[`eval 'GITHUB_TOKEN=x $RUNNER checkout other'`, { RUNNER: "git" }],
+		[`bash -c "GITHUB_TOKEN=$token $RUNNER push origin main"`, { RUNNER: "git" }],
+		[`bash -c 'A=x;$R'`, { R: "git checkout other" }],
+		[`bash -c 'A=x|$R'`, { R: "git checkout other" }],
+		[`bash -c 'A=x&&$R'`, { R: "git checkout other" }],
+		[`env GITHUB_TOKEN=x $RUNNER checkout other`, { RUNNER: "git" }],
+	] as Array<[string, NodeJS.ProcessEnv]>)("a script wearing an assignment's prefix stays unreadable: %s", (command, env) => {
+		expect(findGitInvocations(command, env)).toEqual([{ operation: "opaque", repoDir: null, retargeted: true }]);
+	});
+
+	// `xargs` resolves its utility from argv, so `NAME=value` there is a filename and not an
+	// assignment at all: nothing in that position may be read as environment.
+	test("an xargs utility is a command word, not an assignment", () => {
+		expect(findGitInvocations(`xargs GITHUB_TOKEN="$token" git checkout other`)).toEqual([
+			{ operation: "opaque", repoDir: null, retargeted: true },
+		]);
+		expect(findGitInvocations(`xargs GITHUB_TOKEN="$token" -- git checkout other`)).toEqual([
+			{ operation: "opaque", repoDir: null, retargeted: true },
+		]);
+	});
 });
