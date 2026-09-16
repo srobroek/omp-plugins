@@ -15,7 +15,9 @@ export function gitTimeoutMs(argv: string[]): number {
 
 export type GitSpawn = (argv: string[], options: { cwd: string; stdout: "pipe"; stderr: "pipe"; timeout: number }) => { exitCode: number | null; stdout: { toString(): string } };
 
-export function runGitProbe(argv: string[], cwd: string, spawn: GitSpawn = Bun.spawnSync): { exitCode: number; stdout: string } {
+const defaultGitSpawn: GitSpawn = (argv, options) => Bun.spawnSync(argv, options);
+
+export function runGitProbe(argv: string[], cwd: string, spawn: GitSpawn = defaultGitSpawn): { exitCode: number; stdout: string } {
 	const proc = spawn(argv, { cwd, stdout: "pipe", stderr: "pipe", timeout: gitTimeoutMs(argv) });
 	return { exitCode: proc.exitCode ?? 1, stdout: proc.stdout.toString() };
 }
