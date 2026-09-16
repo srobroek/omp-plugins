@@ -1,7 +1,7 @@
 {
   "name": "@srobroek/session",
   "version": "1.1.7",
-  "description": "Session continuity: fresh-session handoff, and a supervisor that wakes a parent when its dispatched task batch settles or a child stalls.",
+  "description": "Create a selective fresh-session handoff from a prior OMP transcript without replaying its full history.",
   "private": true,
   "omp": {
     "extensions": [
