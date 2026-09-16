@@ -113,7 +113,7 @@ function configuredMarker(swap: ToolSwap, cwd: string): string | undefined {
 
 type ShellToken = { text: string; separator: boolean };
 
-/** Copied locally from delivery's main-branch-gate tokenizer; plugin boundaries stay isolated. */
+/** Tokenizes shell-like command text into words while preserving separators needed by advisory matching. */
 function tokenize(command: string): ShellToken[] {
 	const tokens: ShellToken[] = [];
 	let word = "";
