@@ -2574,3 +2574,43 @@ describe("registered handler on an unexpected failure", () => {
 		expect(register()(exploding)).toEqual({ block: true, reason: UNDECIDED_REASON });
 	});
 });
+
+describe("a credential handed to the GitHub CLI", () => {
+	const auth = `token="$(env -u GH_TOKEN -u GITHUB_TOKEN gh auth token --hostname github.com 2>/dev/null)"`;
+	const create = `env -u GH_TOKEN GITHUB_TOKEN="$token" gh pr create --repo o/r --head fix/x --base main --draft --title T --body-file /tmp/body.md`;
+
+	// `github.com` is not the word `git`, and `GITHUB_TOKEN=$token` is environment for a child, not
+	// the program `env` runs. Neither reaches Git, so this call names no repository to read.
+	test("is not the program a wrapper runs", () => {
+		expect(findGitInvocations(auth)).toEqual([]);
+		expect(findGitInvocations(create)).toEqual([]);
+		expect(findGitInvocations(`${auth}\n${create}`)).toEqual([]);
+	});
+
+	test.each([
+		`env -u GH_TOKEN GITHUB_TOKEN="$token" git push origin main`,
+		`env GITHUB_TOKEN="$token" /usr/bin/git checkout main`,
+		`xcrun GITHUB_TOKEN="$token" git commit -m x`,
+		`env GITHUB_TOKEN="$(git checkout other)" gh pr create`,
+		`env GITHUB_TOKEN="$token" "$runner" pr create`,
+		`env GITHUB_TOKEN="$token" gh pr create --title "$(git log -1 --pretty=%s)"`,
+		`env GITHUB_TOKEN="$token" bash -c 'git commit -m x'`,
+	])("cannot launder the Git call in: %s", (command) => {
+		expect(findGitInvocations(command)).toEqual([{ operation: "opaque", repoDir: null, retargeted: true }]);
+	});
+
+	// The underscore is the whole boundary, so a prefix test that stops at `GIT` would refuse the
+	// approved call again, and one that never runs would miss a real retarget.
+	test.each(["GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_CONFIG_GLOBAL", "GIT_ICASE_PATHSPECS"])(
+		"an unreadable %s in the same argv keeps the call opaque",
+		(name) => {
+			expect(findGitInvocations(`env ${name}="$elsewhere" gh pr create --base main`)).toEqual([
+				{ operation: "opaque", repoDir: null, retargeted: true },
+			]);
+		},
+	);
+
+	test.each(["GITHUB_TOKEN", "GITHUB_REPOSITORY", "GH_TOKEN", "GH_HOST"])("an unreadable %s retargets nothing", (name) => {
+		expect(findGitInvocations(`env -u GH_TOKEN ${name}="$value" gh pr create --base main`)).toEqual([]);
+	});
+});

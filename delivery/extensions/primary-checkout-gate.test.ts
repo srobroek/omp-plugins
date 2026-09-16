@@ -380,6 +380,17 @@ describe("decideCommit", () => {
 		expect(decideCommit("git add -- src/a.ts", linked, { GIT_CONFIG_GLOBAL: "/tmp/evil.config" })?.reason).toContain("an opaque Git invocation");
 	});
 
+	test("the child-scoped GitHub CLI credential handoff is permitted from a linked worktree", () => {
+		const { linked } = setup();
+		const auth = `token="$(env -u GH_TOKEN -u GITHUB_TOKEN gh auth token --hostname github.com 2>/dev/null)"`;
+		const create = `env -u GH_TOKEN GITHUB_TOKEN="$token" gh pr create --repo o/r --head fix/x --base main --draft --title T --body-file /tmp/body.md`;
+		expect(decideCommit(`${auth}\n${create}`, linked, {})).toBeUndefined();
+		// The same credential in front of Git, or a substitution that runs Git, still names a
+		// repository this gate cannot read.
+		expect(decideCommit(`env GITHUB_TOKEN="$token" git push origin main`, linked, {})?.reason).toContain("an opaque Git invocation");
+		expect(decideCommit(`env GITHUB_TOKEN="$(git checkout other)" gh pr create --base main`, linked, {})?.reason).toContain("an opaque Git invocation");
+	});
+
 	test("an absent operand that Git would expand to a tracked subtree is refused", () => {
 		const { primary, linked } = setup();
 		authorizePrimary(primary);

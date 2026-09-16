@@ -158,7 +158,8 @@ const TRANSPARENT_PREFIX: Record<string, true> = {
 	sudo: true,
 };
 
-const ENV_ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*=/;
+/** An environment assignment word, capturing the name it assigns. */
+const ENV_ASSIGNMENT = /^([A-Za-z_][A-Za-z0-9_]*)=/;
 
 /** `env` options that consume the following argv word before its command. */
 const ENV_VALUE_OPTIONS: Record<string, true> = {
@@ -994,8 +995,18 @@ function possibleGitToken(token: Token, env: NodeJS.ProcessEnv): boolean {
 	if (GIT_COMMANDS[base] === true || base.startsWith("git-")) return true;
 	if (token.quoted && !token.text.includes("$") && !token.text.includes("`")) return false;
 	if (/(?:^|\s)(?:d?git|git-[A-Za-z0-9_-]+)(?:$|\s)/.test(token.text)) return true;
-	if (token.text.includes("$") || token.text.includes("`")) return token.text.includes("$(") || token.text.includes("`") ? substitutionMayRunGit(token.text, env) : true;
-	return false;
+	// A substitution runs a command of its own wherever the word sits, so it answers first and for
+	// every word shape. What remains is a bare parameter expansion: unreadable, and so a possible
+	// Git command word anywhere a command word can stand.
+	if (token.text.includes("$(") || token.text.includes("`")) return substitutionMayRunGit(token.text, env);
+	if (!token.text.includes("$")) return false;
+	// `NAME=value` is environment, never the program a wrapper executes: `env
+	// GITHUB_TOKEN="$token" gh pr create` hands a credential to a child. A wrapper that consumes no
+	// assignments would exec a file literally named `NAME=value`, which is not Git either. What is
+	// left is Git's own environment namespace, which Git owns behind the underscore: `GIT_DIR=$d`
+	// retargets whatever Git command the call reaches, while `GITHUB_TOKEN` only looks like it does.
+	const name = ENV_ASSIGNMENT.exec(token.text)?.[1];
+	return name === undefined || name.startsWith("GIT_");
 }
 function opaqueInvocation(): GitInvocation {
 	return { operation: "opaque", repoDir: null, retargeted: true };
