@@ -52,6 +52,14 @@ recognition condition decides both carriers rather than the carrier deciding it.
 `✔ plugin:<package>` line for a linked directory only, so use it while developing here: a
 `⚠ … not an omp plugin` line means that directory's rules and agents are silently absent.
 
+For JSON inventory, `omp plugin list --json` separates two registry views:
+
+- `npm` entries are runtime package registrations. They may be enabled or disabled; `enabled: true` indicates the configured runtime selection.
+- `marketplace` entries are user/project installed-plugin registry records. Each `installPath` points to a cached copy; this list does not scan arbitrary cache directories.
+
+Historical marketplace versions can coexist. A cached `installPath` proves that a marketplace record exists, not that the record is the configured runtime or that an already-running session loaded it. `omp plugin doctor` checks installed runtime package health, not arbitrary cache records.
+In the observed inventory, `@srobroek/delivery` v0.10.4 is enabled at `node_modules`. Marketplace user records retain v0.10.6 and v0.10.8 cache paths. Doctor checks v0.10.4 and reports 4 OK, 0 warnings, and 0 errors.
+
 A rule is addressable only when it lands in a bucket. Read one back to prove it, naming a rule
 from a plugin you installed:
 

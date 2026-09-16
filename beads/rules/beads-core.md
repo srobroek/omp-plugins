@@ -67,11 +67,13 @@ MUST In prose, immediately follow every Beads ID with a brief parenthetical
   description. For example: `chezmoi-l3ig (find-tools routes discovery
   incorrectly)`. Keep the brief description on every mention, including when an
   expanded description has already been given.
-MUST When a Beads ID is specifically referenced or becomes the conversation's
-  main topic, give one expanded description at that point covering its scope,
-  status, and relevance. Do not repeat that expanded description while the same
-  subject remains active. Reset the one-time expanded-description rule only after
-  the conversation subject changes away from that bead and later returns to it.
+MUST When prose directly references a Beads ID as the subject of a statement or
+  question, or as the conversation's main topic, give one expanded description
+  at that point covering its scope and current status, plus its relevance. Do
+  not repeat that expanded description while the same subject remains active.
+  Reset the one-time expanded-description rule only after the conversation
+  subject changes away from that bead and later returns to it.
+MUST Label unavailable metadata as unavailable. NEVER infer unavailable metadata.
 MUST Give every table containing Beads IDs a separate Description column and
   populate it with each ID's brief parenthetical description; do not use a pure-ID
   table as a substitute.
