@@ -67,7 +67,7 @@ MUST In prose, immediately follow every Beads ID with a brief parenthetical
   description. For example: `chezmoi-l3ig (find-tools routes discovery
   incorrectly)`. Keep the brief description on every mention, including when an
   expanded description has already been given.
-MUST When prose directly references a Beads ID as the subject of a statement or
+MUST When prose specifically references a Beads ID as the subject of a statement or
   question, or as the conversation's main topic, give one expanded description
   at that point covering its scope and current status, plus its relevance. Do
   not repeat that expanded description while the same subject remains active.
