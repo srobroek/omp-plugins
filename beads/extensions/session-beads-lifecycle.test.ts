@@ -14,6 +14,7 @@ import sessionBeadsLifecycle, {
 	handleSessionStop,
 	heldClaims,
 	isBdWrite,
+	isForeignBeadsRepository,
 	lastPushNotice,
 	parseTrailingJson,
 	pinBashInput,
@@ -616,6 +617,38 @@ describe("integration", () => {
 			else process.env.BEADS_DIR = ambient;
 		}
 	});
+
+	test("pins only session repositories when bash provides a working directory", async () => {
+		const ambient = process.env.BEADS_DIR;
+		delete process.env.BEADS_DIR;
+		const { execFileSync } = require("node:child_process") as typeof import("node:child_process");
+		const session = mkdtempSync(join(tmpdir(), "beads-callpin-session-"));
+		const foreign = mkdtempSync(join(tmpdir(), "beads-callpin-foreign-"));
+		const outside = mkdtempSync(join(tmpdir(), "beads-callpin-outside-"));
+		try {
+			for (const repo of [session, foreign]) {
+				execFileSync("git", ["-C", repo, "init", "-q"]);
+				mkdirSync(join(repo, ".beads"));
+			}
+			const { handlers } = wire();
+			const call = handlers.tool_call![0]!;
+			const ctx = { cwd: session, sessionManager: { getSessionId: () => "foreign-repo-pin" } };
+			const own = { command: "bd list", cwd: session };
+			const other = { command: "bd list", cwd: foreign };
+			const noRepo = { command: "bd list", cwd: outside };
+			expect(isForeignBeadsRepository(own, session)).toBe(false);
+			expect(isForeignBeadsRepository(other, session)).toBe(true);
+			expect(isForeignBeadsRepository(noRepo, session)).toBe(false);
+			expect(await call({ toolName: "bash", toolCallId: "own", input: own }, ctx)).toEqual({ input: { ...own, env: { BEADS_DIR: join(session, ".beads") } } });
+			expect(await call({ toolName: "bash", toolCallId: "other", input: other }, ctx)).toBeUndefined();
+			expect(await call({ toolName: "bash", toolCallId: "outside", input: noRepo }, ctx)).toEqual({ input: { ...noRepo, env: { BEADS_DIR: join(session, ".beads") } } });
+		} finally {
+			rmSync(session, { recursive: true, force: true });
+			rmSync(foreign, { recursive: true, force: true });
+			if (ambient === undefined) delete process.env.BEADS_DIR;
+			else process.env.BEADS_DIR = ambient;
+		}
+	}, 20_000);
 
 	test("a live session keeps its auto-pin; a concurrent session in another checkout does not overwrite it", async () => {
 		const a = mkdtempSync(join(tmpdir(), "beads-pin-a-"));

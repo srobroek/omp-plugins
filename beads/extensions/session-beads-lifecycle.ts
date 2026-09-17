@@ -119,6 +119,28 @@ export function pinBashInput(input: unknown, pin: string | undefined): Record<st
 	return { ...record, env: { ...((env as Record<string, unknown> | undefined) ?? {}), BEADS_DIR: pin } };
 }
 
+function repositoryRoot(cwd: string): string | undefined {
+	try {
+		const out = execFileSync("git", ["-C", cwd, "rev-parse", "--show-toplevel"], {
+			encoding: "utf8",
+			timeout: 2000,
+			stdio: ["ignore", "pipe", "ignore"],
+		}).trim();
+		return out ? realpathSync(isAbsolute(out) ? out : resolve(cwd, out)) : undefined;
+	} catch {
+		return undefined;
+	}
+}
+
+/** A call cwd is foreign only when git resolves it to another repo with its own store. */
+export function isForeignBeadsRepository(input: unknown, sessionCwd: string): boolean {
+	if (input === null || typeof input !== "object") return false;
+	const requestedCwd = (input as Record<string, unknown>).cwd;
+	const cwd = typeof requestedCwd === "string" && requestedCwd !== "" ? requestedCwd : sessionCwd;
+	const root = repositoryRoot(cwd);
+	return root !== undefined && isDir(join(root, ".beads")) && repoIdentity(cwd) !== repoIdentity(sessionCwd);
+}
+
 function sessionKey(ctx: { sessionManager?: { getSessionId?: () => string } } | undefined): string {
 	return ctx?.sessionManager?.getSessionId?.() ?? "default";
 }
@@ -709,14 +731,15 @@ export default function sessionBeadsLifecycle(pi: ExtensionAPI): void {
 		}
 	});
 
+
 	pi.on("tool_call", (event: ToolCallEvent, ctx: ExtensionContext) => {
 		if (event.toolName !== "bash") return;
 		const state = sessions.get(sessionKey(ctx));
-		const pin = state?.pin ?? process.env.BEADS_DIR ?? sessionPinFor(ctx?.cwd ?? process.cwd());
-		const revised = pinBashInput(event.input, pin === "" ? undefined : pin);
+		const sessionCwd = ctx?.cwd ?? process.cwd();
+		const pin = state?.pin ?? process.env.BEADS_DIR ?? sessionPinFor(sessionCwd);
+		const revised = isForeignBeadsRepository(event.input, sessionCwd) ? undefined : pinBashInput(event.input, pin === "" ? undefined : pin);
 		return revised ? { input: revised } : undefined;
 	});
-
 	pi.on("session_shutdown", (_event, ctx: ExtensionContext) => {
 		const key = sessionKey(ctx);
 		sessions.delete(key);
