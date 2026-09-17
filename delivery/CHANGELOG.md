@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.11.2](https://github.com/srobroek/omp-plugins/compare/delivery--v0.11.1...delivery--v0.11.2) (2026-09-16)
+
+
+### Bug Fixes
+
+* **delivery:** treat quoted argv data as non-executable ([ac6725d](https://github.com/srobroek/omp-plugins/commit/ac6725d8fc77bf4ef77071a05e0a251e1bd88ac9))
+
 ## [0.11.1](https://github.com/srobroek/omp-plugins/compare/delivery--v0.11.0...delivery--v0.11.1) (2026-09-16)
 
 
