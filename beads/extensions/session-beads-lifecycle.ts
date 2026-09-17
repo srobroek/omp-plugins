@@ -14,8 +14,7 @@
  * - claims still held at session close (beads-core SESSION CLOSE).
  */
 
-import { execFileSync } from "node:child_process";
-import { existsSync, readFileSync, realpathSync, rmSync, statSync } from "node:fs";
+import { existsSync, readFileSync, rmSync, statSync } from "node:fs";
 import { isAbsolute, join, resolve } from "node:path";
 import type {
 	ExtensionAPI,
@@ -29,8 +28,11 @@ import {
 	bdInvocations,
 	environmentForInput,
 	extractCommand,
+	invocationFromArgv,
 	isMutatingBdCommand,
 } from "./bd-actor-gate.ts";
+import { withEmbeddedWriteLock, writesStore } from "./bd-embedded-write-lock.ts";
+import { repoIdentity, sessionPinFor } from "./beads-store.ts";
 
 /** No session boundary may hang on the database or on `gh`. */
 const TIMEOUT_MS = 8000;
@@ -64,30 +66,8 @@ interface SessionState {
 	touched: Set<string>;
 }
 
-/**
- * The database a session's checkout provides. Linked worktrees always use the
- * primary checkout's store, even when ignored state copied a local `.beads`.
- */
-export function sessionPinFor(cwd: string): string | undefined {
-	const local = resolve(cwd, ".beads");
-	const common = repoIdentity(cwd);
-	if (common !== cwd && common.endsWith("/.git")) {
-		const primaryRoot = resolve(common, "..");
-		if (realpathSync(cwd) === primaryRoot && isDir(local)) return local;
-		const primary = resolve(primaryRoot, ".beads");
-		if (isDir(primary)) return primary;
-	}
-	if (isDir(local)) return local;
-	return undefined;
-}
+export { repoIdentity, sessionPinFor };
 
-function isDir(path: string): boolean {
-	try {
-		return statSync(path).isDirectory();
-	} catch {
-		return false;
-	}
-}
 /**
  * The value Bash calls in this session's repository family receive, decided once at session start.
  *
@@ -150,16 +130,6 @@ function sessionKey(ctx: { sessionManager?: { getSessionId?: () => string } } | 
  */
 export type AutoPinState = { pinned?: string; owner?: string; ownerRepo?: string; dependents?: Set<string> };
 export type AutoPinResult = { pinned?: string; conflict?: string };
-
-/** Identity of the repository behind a checkout: its common git dir, or the cwd itself outside git. */
-export function repoIdentity(cwd: string): string {
-	try {
-		const out = execFileSync("git", ["-C", cwd, "rev-parse", "--git-common-dir"], { encoding: "utf8", timeout: 2000, stdio: ["ignore", "pipe", "ignore"] }).trim();
-		return realpathSync(isAbsolute(out) ? out : resolve(cwd, out));
-	} catch {
-		return cwd;
-	}
-}
 
 export function autoPinBeadsDir(
 	cwd: string,
@@ -575,8 +545,53 @@ async function releaseCasSupported(cwd: string, deadline: number): Promise<boole
 	return help?.includes("--if-assignee") === true;
 }
 
-/** Run bd for its stdout. Warnings on stderr are noise here and are dropped. */
-async function runBd(cwd: string, args: string[], deadline = Date.now() + TIMEOUT_MS): Promise<string | undefined> {
+/**
+ * A holder id per internal run. Session boundaries carry no tool call, and such a
+ * run is never nested inside one -- `session_start` precedes every tool call -- so a
+ * fresh id is both correct and incapable of self-deadlock.
+ */
+let internalRuns = 0;
+
+export type BdStream = (cwd: string, args: string[], deadline: number, env: NodeJS.ProcessEnv) => Promise<string | undefined>;
+
+let injectedStream: BdStream | null = null;
+
+/** Replace the `bd` seam. Pass `null` to restore the real one. */
+export function setBdStreamForTests(fn: BdStream | null): void {
+	injectedStream = fn;
+}
+
+/**
+ * Run bd for its stdout. Warnings on stderr are noise here and are dropped.
+ *
+ * A mutating argv (`bd gate check` resolves gates, so it writes) goes through the
+ * embedded store's write lock, classified by the same predicate the bash gate uses
+ * rather than by a list kept here. Fails closed: a lock this process cannot take
+ * means bd is never spawned and the caller sees the same `undefined` it sees for
+ * any unverified run, so no write races the store.
+ */
+export async function runBd(
+	cwd: string,
+	args: string[],
+	deadline = Date.now() + TIMEOUT_MS,
+	env: NodeJS.ProcessEnv = process.env,
+): Promise<string | undefined> {
+	const stream = injectedStream ?? spawnBd;
+	// The same fail-closed predicate the bash boundary uses, so a verb bd adds later
+	// is serialised here without anyone editing this module.
+	if (writesStore(invocationFromArgv(args))) {
+		const locked = await withEmbeddedWriteLock(
+			cwd,
+			`beads-session-run-${process.pid}-${internalRuns++}`,
+			() => stream(cwd, args, deadline, env),
+			env,
+		);
+		return locked.kind === "failed" ? undefined : locked.value;
+	}
+	return stream(cwd, args, deadline, env);
+}
+
+async function spawnBd(cwd: string, args: string[], deadline: number, env: NodeJS.ProcessEnv): Promise<string | undefined> {
 	try {
 		const remaining = deadline - Date.now();
 		if (remaining <= 0) return undefined;
@@ -584,7 +599,7 @@ async function runBd(cwd: string, args: string[], deadline = Date.now() + TIMEOU
 			cwd,
 			stdout: "pipe",
 			stderr: "ignore",
-			env: { ...process.env, BD_NO_PAGER: "1", BD_NON_INTERACTIVE: "1", BD_JSON_ENVELOPE: "1" },
+			env: { ...env, BD_NO_PAGER: "1", BD_NON_INTERACTIVE: "1", BD_JSON_ENVELOPE: "1" },
 			timeout: Math.min(TIMEOUT_MS, remaining),
 			killSignal: "SIGKILL",
 		});

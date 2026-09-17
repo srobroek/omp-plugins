@@ -19,7 +19,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
-import { sessionPinFor } from "./session-beads-lifecycle.ts";
+import { sessionPinFor } from "./beads-store.ts";
 
 /** Where beads records the backend it resolved. */
 export interface DoltMetadata {
@@ -100,10 +100,10 @@ export function backendNotice(backend: Backend, tracked: boolean): string | unde
 	if (!tracked || backend !== "embedded") return undefined;
 	return [
 		"beads is on the embedded backend. With this machine's shared-server default every `bd` command here fails with `database not found`, and an OMP isolated subagent forks the store with its clone. Migrate the store to the shared Dolt server:",
-		"1. `bd export > issues.jsonl`; `bd backup init <dir> && bd backup sync` (a directory outside the checkout).",
+		"1. `bd export -o issues.jsonl`, then `bd backup init <dir>` and `bd backup sync` as separate calls (a directory outside the checkout).",
 		"2. When `git ls-remote origin 'refs/dolt/*'` is empty: `bd init --shared-server --reinit-local --skip-hooks --skip-agents --prefix <prefix>`, then set `dolt_mode` to `server` in `.beads/metadata.json`, add `dolt.shared-server: true` to `.beads/config.yaml`, and `bd backup restore --force <dir>`.",
 		"   Otherwise: `bd dolt push` (on a non-fast-forward, `bd dolt pull` once and push again), make the same two file edits, then `bd bootstrap --yes`.",
-		"3. Check `bd list --all --json | jq length` against the pre-migration count and `bd export` against `issues.jsonl` (ignoring `updated_at`); then move `.beads/embeddeddolt` out of the checkout and commit `.beads/config.yaml` and `.beads/metadata.json`.",
+		"3. Check `bd count` against the pre-migration count and `bd export` against `issues.jsonl` (ignoring `updated_at`); then move `.beads/embeddeddolt` out of the checkout and commit `.beads/config.yaml` and `.beads/metadata.json`.",
 		"Remove `.beads/dolt-backup.json` afterwards: its state file churns inside isolated clones and breaks OMP's merge-back.",
 	].join("\n");
 }

@@ -77,7 +77,7 @@ function claimResult(toolCallId: string, text: string, details?: unknown): unkno
 }
 
 describe("bdLeaseGate", () => {
-	test("stamps from the bash call cwd, not the extension process cwd", () => {
+	test("stamps from the bash call cwd, not the extension process cwd", async () => {
 		const calls: Array<{ argv: string[]; cwd: string }> = [];
 		setBdRunForTests((argv, cwd) => {
 			calls.push({ argv, cwd });
@@ -86,7 +86,7 @@ describe("bdLeaseGate", () => {
 		try {
 			const { toolCall, toolResult } = handlers();
 			toolCall({ toolName: "bash", toolCallId: "cwd", input: { command: "bd update omp-1 --claim", cwd: "/claiming/repo" } }, { cwd: "/session/repo" });
-			toolResult(claimResult("cwd", '{"id":"omp-1"}'));
+			await toolResult(claimResult("cwd", '{"id":"omp-1"}'));
 			expect(calls).toHaveLength(1);
 			expect(calls[0]?.cwd).toBe("/claiming/repo");
 		} finally {
@@ -94,7 +94,7 @@ describe("bdLeaseGate", () => {
 		}
 	});
 
-	test("falls back to the session cwd and resolves a literal leading cd", () => {
+	test("falls back to the session cwd and resolves a literal leading cd", async () => {
 		const calls: string[] = [];
 		setBdRunForTests((_argv, cwd) => {
 			calls.push(cwd);
@@ -103,19 +103,19 @@ describe("bdLeaseGate", () => {
 		try {
 			const { toolCall, toolResult } = handlers();
 			toolCall({ toolName: "bash", toolCallId: "fallback", input: { command: "cd /claiming/repo && bd update omp-1 --claim" } }, { cwd: "/session/repo" });
-			toolResult(claimResult("fallback", '{"id":"omp-1"}'));
+			await toolResult(claimResult("fallback", '{"id":"omp-1"}'));
 			expect(calls).toEqual(["/claiming/repo"]);
 		} finally {
 			setBdRunForTests(null);
 		}
 	});
 
-	test("returns an advisory when the stamp command fails", () => {
+	test("returns an advisory when the stamp command fails", async () => {
 		setBdRunForTests(() => ({ exitCode: 7, stdout: "", stderr: "permission denied" }));
 		try {
 			const { toolCall, toolResult } = handlers();
 			toolCall({ toolName: "bash", toolCallId: "failure", input: { command: "bd update omp-1 --claim", cwd: "/claiming/repo" } });
-			const result = toolResult(claimResult("failure", '{"id":"omp-1"}')) as { content: Array<{ text?: string }> } | undefined;
+			const result = (await toolResult(claimResult("failure", '{"id":"omp-1"}'))) as { content: Array<{ text?: string }> } | undefined;
 			expect(result?.content[0]?.text).toContain("omp-1");
 			expect(result?.content[0]?.text).toContain("bd exited 7");
 			expect(result?.content[0]?.text).toContain("permission denied");
@@ -124,35 +124,35 @@ describe("bdLeaseGate", () => {
 		}
 	});
 
-	test("returns no advisory when the stamp succeeds", () => {
+	test("returns no advisory when the stamp succeeds", async () => {
 		setBdRunForTests(() => ({ exitCode: 0, stdout: "", stderr: "" }));
 		try {
 			const { toolCall, toolResult } = handlers();
 			toolCall({ toolName: "bash", toolCallId: "success", input: { command: "bd update omp-1 --claim", cwd: "/claiming/repo" } });
-			expect(toolResult(claimResult("success", '{"id":"omp-1"}'))).toBeUndefined();
+			expect(await toolResult(claimResult("success", '{"id":"omp-1"}'))).toBeUndefined();
 		} finally {
 			setBdRunForTests(null);
 		}
 	});
 
-	test("returns an advisory when the stamp command throws", () => {
+	test("returns an advisory when the stamp command throws", async () => {
 		setBdRunForTests(() => {
 			throw new Error("spawn unavailable");
 		});
 		try {
 			const { toolCall, toolResult } = handlers();
 			toolCall({ toolName: "bash", toolCallId: "throw", input: { command: "bd update omp-1 --claim", cwd: "/claiming/repo" } });
-			const result = toolResult(claimResult("throw", '{"id":"omp-1"}')) as { content: Array<{ text?: string }> } | undefined;
+			const result = (await toolResult(claimResult("throw", '{"id":"omp-1"}'))) as { content: Array<{ text?: string }> } | undefined;
 			expect(result?.content[0]?.text).toContain("spawn unavailable");
 		} finally {
 			setBdRunForTests(null);
 		}
 	});
 
-	test("advises when a successful claim result has no parseable bead id", () => {
+	test("advises when a successful claim result has no parseable bead id", async () => {
 		const { toolCall, toolResult } = handlers();
 		toolCall({ toolName: "bash", toolCallId: "missing", input: { command: "bd update omp-1 --claim", cwd: "/claiming/repo" } });
-		const result = toolResult(claimResult("missing", "claim completed")) as { content: Array<{ text?: string }> } | undefined;
+		const result = (await toolResult(claimResult("missing", "claim completed"))) as { content: Array<{ text?: string }> } | undefined;
 		expect(result?.content[0]?.text).toContain("could not parse a bead id");
 	});
 });
