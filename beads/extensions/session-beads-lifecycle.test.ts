@@ -7,6 +7,7 @@ import sessionBeadsLifecycle, {
 	autoPinBeadsDir,
 	bdVerbs,
 	beadIdCandidates,
+	claimAnchor,
 	envelopeData,
 	formatGateAdvisory,
 	formatSessionCloseAdvisory,
@@ -430,6 +431,13 @@ describe("heldClaims", () => {
 		expect(heldClaims(beads, new Set(), "omp/Main/s1").map(b => b.id)).toEqual(["bd-probe-2m7", "bd-probe-v4k"]);
 		expect(heldClaims(beads, new Set(), "omp/Other/s2")).toEqual([]);
 		expect(heldClaims(beads, new Set(), "")).toEqual([]);
+	});
+});
+
+describe("claimAnchor", () => {
+	test("preserves host and pid from a claimed bead for liveness checks", () => {
+		const [bead] = readBeads(JSON.stringify({data: [{id: "bd-live-1", status: "in_progress", assignee: "omp/Other/s2", metadata: {lease_host: "worker-1", lease_pid: "4242"}}], schema_version: 1}));
+		expect(bead && claimAnchor(bead)).toEqual({ host: "worker-1", pid: 4242 });
 	});
 });
 
