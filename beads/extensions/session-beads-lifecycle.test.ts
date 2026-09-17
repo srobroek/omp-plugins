@@ -642,9 +642,12 @@ describe("integration", () => {
 			const { handlers, logged } = wire();
 			const start = handlers.session_start![0]!;
 			const stop = handlers.session_shutdown![0]!;
+			const call = handlers.tool_call![0]!;
 			const ctx = (cwd: string, id: string) => ({ cwd, sessionManager: { getSessionId: () => id } });
 			await start({}, ctx(a, "alpha"));
 			expect(pinned()).toBe(join(a, ".beads"));
+			expect(await call({ toolName: "bash", toolCallId: "foreign", input: { command: "bd list", cwd: b } }, ctx(a, "alpha"))).toBeUndefined();
+			expect(pinnedBeadsDir(await call({ toolName: "bash", toolCallId: "worktree", input: { command: "bd list", cwd: aWorktree } }, ctx(a, "alpha")))).toBe(join(a, ".beads"));
 			await start({}, ctx(b, "beta")); // concurrent session in an unrelated checkout
 			expect(pinned()).toBe(join(a, ".beads")); // alpha's live pin is not overwritten under it
 			expect(logged.some((m) => m.includes("another repository's beads database"))).toBe(true); // beta is told to pin per call
