@@ -1,8 +1,8 @@
 import { afterEach, describe, expect, test } from "bun:test";
 
 import bdDoltUserAdvisory, {
-	decideBdDoltUser,
 	DOLT_USER_ADVISORY,
+	decideBdDoltUser,
 	resetBdDoltUserAdvisoryForTests,
 } from "./bd-dolt-user-advisory.ts";
 
