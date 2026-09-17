@@ -521,18 +521,27 @@ type SessionStopEvent = {
 	stopHookActive?: boolean;
 };
 
+export type BdRunResult = { output: string } | { failure: string };
+
+function boundedFailure(reason: string): string {
+	const oneLine = reason.replace(/\s+/g, " ").trim();
+	return oneLine.length > 160 ? `${oneLine.slice(0, 157)}...` : oneLine;
+}
+
 export function handleSessionStop(
 	event: SessionStopEvent,
 	listOutput: string | undefined,
 	seen: Set<string>,
 	actor: string | ReadonlySet<string> | undefined = process.env.BEADS_ACTOR ?? process.env.BD_ACTOR,
 	casSupported = true,
+	listFailure?: string,
 ): { continue: true; additionalContext: string } | undefined {
 	if (event.stop_hook_active === true || event.stopHookActive === true) return;
 	const data = listOutput === undefined ? undefined : envelopeData(parseTrailingJson(listOutput));
 	if (!Array.isArray(data) || data.some(row => !row || typeof row !== "object" ||
 		typeof row.id !== "string" || typeof row.status !== "string")) {
-		return { continue: true, additionalContext: "Beads claims could not be verified at session close. A mutating command was attempted; inspect assigned and touched work before stopping." };
+		const reason = listFailure === undefined ? "the command returned no readable result" : boundedFailure(listFailure);
+		return { continue: true, additionalContext: `Beads claims could not be read at session close: ${reason}. A mutating command was attempted; inspect assigned and touched work before stopping.` };
 	}
 	const held = heldClaims(readBeads(listOutput!), seen, actor);
 	if (held.length === 0) return;
@@ -562,52 +571,69 @@ export function setBdStreamForTests(fn: BdStream | null): void {
 }
 
 /**
- * Run bd for its stdout. Warnings on stderr are noise here and are dropped.
- *
- * A mutating argv (`bd gate check` resolves gates, so it writes) goes through the
- * embedded store's write lock, classified by the same predicate the bash gate uses
- * rather than by a list kept here. Fails closed: a lock this process cannot take
- * means bd is never spawned and the caller sees the same `undefined` it sees for
- * any unverified run, so no write races the store.
+ * Run bd while retaining a bounded reason when the command cannot be read.
+ * The typed result keeps stdout separate from failure context; the legacy wrapper
+ * below preserves the string-or-undefined seam used by other lifecycle checks.
  */
+export async function runBdResult(
+	cwd: string,
+	args: string[],
+	deadline = Date.now() + TIMEOUT_MS,
+	env: NodeJS.ProcessEnv = process.env,
+): Promise<BdRunResult> {
+	const stream = injectedStream;
+	const execute = () => stream === null
+		? spawnBd(cwd, args, deadline, env)
+		: stream(cwd, args, deadline, env).then((output) => output === undefined
+			? { failure: "bd command could not be run" }
+			: { output });
+	if (writesStore(invocationFromArgv(args))) {
+		const locked = await withEmbeddedWriteLock(
+			cwd,
+			`beads-session-run-${process.pid}-${internalRuns++}`,
+			execute,
+			env,
+		);
+		return locked.kind === "failed" ? { failure: boundedFailure(locked.reason) } : locked.value;
+	}
+	return execute();
+}
+
 export async function runBd(
 	cwd: string,
 	args: string[],
 	deadline = Date.now() + TIMEOUT_MS,
 	env: NodeJS.ProcessEnv = process.env,
 ): Promise<string | undefined> {
-	const stream = injectedStream ?? spawnBd;
-	// The same fail-closed predicate the bash boundary uses, so a verb bd adds later
-	// is serialised here without anyone editing this module.
-	if (writesStore(invocationFromArgv(args))) {
-		const locked = await withEmbeddedWriteLock(
-			cwd,
-			`beads-session-run-${process.pid}-${internalRuns++}`,
-			() => stream(cwd, args, deadline, env),
-			env,
-		);
-		return locked.kind === "failed" ? undefined : locked.value;
-	}
-	return stream(cwd, args, deadline, env);
+	const result = await runBdResult(cwd, args, deadline, env);
+	return "output" in result ? result.output : undefined;
 }
 
-async function spawnBd(cwd: string, args: string[], deadline: number, env: NodeJS.ProcessEnv): Promise<string | undefined> {
+async function spawnBd(cwd: string, args: string[], deadline: number, env: NodeJS.ProcessEnv): Promise<BdRunResult> {
+	const remaining = deadline - Date.now();
+	if (remaining <= 0) return { failure: "bd command timed out" };
+	const started = Date.now();
 	try {
-		const remaining = deadline - Date.now();
-		if (remaining <= 0) return undefined;
 		const proc = Bun.spawn(["bd", ...args], {
 			cwd,
 			stdout: "pipe",
-			stderr: "ignore",
+			stderr: "pipe",
 			env: { ...env, BD_NO_PAGER: "1", BD_NON_INTERACTIVE: "1", BD_JSON_ENVELOPE: "1" },
 			timeout: Math.min(TIMEOUT_MS, remaining),
 			killSignal: "SIGKILL",
 		});
-		const out = await new Response(proc.stdout).text();
+		const [out, stderr] = await Promise.all([
+			new Response(proc.stdout).text(),
+			new Response(proc.stderr).text(),
+		]);
 		const code = await proc.exited;
-		return code === 0 ? out : undefined;
-	} catch {
-		return undefined;
+		if (code === 0) return { output: out };
+		if (Date.now() >= deadline || Date.now() - started >= remaining) return { failure: "bd command timed out" };
+		const detail = stderr.replace(/\s+/g, " ").trim();
+		return { failure: boundedFailure(`bd exited with code ${code}${detail ? `: ${detail}` : ""}`) };
+	} catch (error) {
+		if (Date.now() >= deadline || Date.now() - started >= remaining) return { failure: "bd command timed out" };
+		return { failure: boundedFailure(`bd could not run: ${error instanceof Error ? error.message : String(error)}`) };
 	}
 }
 
@@ -797,9 +823,11 @@ export default function sessionBeadsLifecycle(pi: ExtensionAPI): void {
 				event.stopHookActive === true || beadsDir(cwd) === undefined) return;
 			const deadline = Date.now() + TIMEOUT_MS;
 			const casSupported = await releaseCasSupported(cwd, deadline);
-			const listed = await runBd(cwd, ["list", "--status", "open,in_progress,blocked,deferred", "--limit", "0", "--json"], deadline);
+			const listed = await runBdResult(cwd, ["list", "--status", "open,in_progress,blocked,deferred", "--limit", "0", "--json"], deadline);
 			if (sessions.get(key) !== state || state.stopFired) return;
-			const advisory = handleSessionStop(event, listed, state.touched, state.actors, casSupported);
+			const advisory = "output" in listed
+				? handleSessionStop(event, listed.output, state.touched, state.actors, casSupported)
+				: handleSessionStop(event, undefined, state.touched, state.actors, casSupported, listed.failure);
 			if (advisory) state.stopFired = true;
 			return advisory;
 		} catch (error) {
