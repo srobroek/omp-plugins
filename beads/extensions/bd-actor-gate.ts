@@ -38,8 +38,28 @@ function installActorNoticeArbiter(): ActorNoticeArbiter {
 const ACTOR_VARS = ["BEADS_ACTOR", "BD_ACTOR"] as const;
 type ActorVar = (typeof ACTOR_VARS)[number];
 
-const VALUE_FLAGS = new Set(["--actor", "--db", "-C", "--directory", "--dolt-auto-commit"]);
+/**
+ * Global flags of `bd` itself that consume the next word, read from `bd --help`
+ * on 1.3.0. A missing entry is not cosmetic: the parser would take the flag's
+ * VALUE for the verb, so `bd --database x close y` would look like verb `x`.
+ */
+const VALUE_FLAGS = new Set([
+	"--actor",
+	"--database",
+	"--db",
+	"-C",
+	"--directory",
+	"--dolt-auto-commit",
+	"--mem-profile",
+]);
+
+/**
+ * Launchers that run the real command after their own arguments, so `bd` behind one
+ * is still `bd` at command position. This serves actor attribution; the write lock
+ * deliberately models no wrappers at all and refuses anything but a direct call.
+ */
 const TRANSPARENT_WRAPPERS: Record<string, true> = { command: true, env: true, sudo: true };
+
 const WRAPPER_VALUE_FLAGS: Record<string, true> = {
 	"-C": true,
 	"--chdir": true,
@@ -75,6 +95,8 @@ export function commandSegments(command: string): string[][] {
 export interface BdInvocation {
 	verb: string;
 	args: string[];
+	/** Global flags and their values, sitting between the `bd` word and the verb. */
+	globals: string[];
 	/** `NAME=value` assignments prefixed to this very `bd` word. */
 	prefix: string[];
 	/** Actor values an earlier `export` in the same command line set. */
@@ -108,7 +130,7 @@ export function bdInvocations(command: string): BdInvocation[] {
 				prefix.push(tokens[i] as string);
 				i++;
 			}
-			const wrapper = tokens[i] ?? "";
+			const wrapper = (tokens[i] ?? "").split("/").pop() ?? "";
 			if (TRANSPARENT_WRAPPERS[wrapper] !== true) break;
 			i++;
 			if (wrapper === "command") continue;
@@ -118,21 +140,81 @@ export function bdInvocations(command: string): BdInvocation[] {
 				if (WRAPPER_VALUE_FLAGS[flag] === true) i++;
 			}
 		}
-		if (tokens[i] !== "bd") continue;
+		// Match by basename: `/usr/local/bin/bd close x` and `bd close x` are one
+		// command, and treating the path form as something else splits every
+		// classification this parser feeds.
+		const word = tokens[i];
+		if (word === undefined || (word.split("/").pop() ?? word) !== "bd") continue;
 		i++;
-		while (tokens[i]?.startsWith("-")) {
-			const flag = tokens[i];
-			if (flag === undefined) break;
-			i++;
-			if (VALUE_FLAGS.has(flag)) i++;
-		}
-		const verb = tokens[i];
+		const scanned = scanGlobals(tokens, i);
+		const verb = tokens[scanned.next];
 		if (verb !== undefined) {
-			out.push({ verb: verb.toLowerCase(), args: tokens.slice(i + 1), prefix, exported: { ...exported } });
+			out.push({ verb: verb.toLowerCase(), args: tokens.slice(scanned.next + 1), globals: scanned.globals, prefix, exported: { ...exported } });
 		}
 	}
 	return out;
 }
+
+/**
+ * The global flags between `bd` and its verb, and where the verb starts.
+ *
+ * `--flag=value` is one word and consumes nothing after it. Reading it as a bare
+ * flag would take the NEXT word for the value and leave the verb one place off,
+ * which is how `--directory=/path` came to resolve the wrong store.
+ */
+function scanGlobals(tokens: string[], from: number): { globals: string[]; next: number } {
+	const globals: string[] = [];
+	let i = from;
+	while (true) {
+		const flag = tokens[i];
+		if (flag === undefined || !flag.startsWith("-")) break;
+		globals.push(flag);
+		i++;
+		if (flag.includes("=")) continue;
+		if (!VALUE_FLAGS.has(flag)) continue;
+		const value = tokens[i];
+		if (value !== undefined) globals.push(value);
+		i++;
+	}
+	return { globals, next: i };
+}
+
+/** The value a global flag carries, in either the `--flag value` or `--flag=value` spelling. */
+export function globalValue(globals: string[], names: string[]): string | undefined {
+	for (const [index, token] of globals.entries()) {
+		for (const name of names) {
+			if (token === name) return globals[index + 1];
+			if (token.startsWith(`${name}=`)) return token.slice(name.length + 1);
+		}
+	}
+	return undefined;
+}
+
+/**
+ * Whether a boolean flag is switched ON, in any spelling the CLI accepts.
+ *
+ * `--flag` and `--flag=true` are on; `--flag=false` is OFF and treating it as
+ * present inverted the meaning of `--readonly=false` and `--help=false`. A value
+ * bd itself would reject counts as off, because such a command fails and writes
+ * nothing.
+ */
+export function flagEnabled(tokens: string[], names: string[]): boolean {
+	for (const token of tokens) {
+		for (const name of names) {
+			if (token === name) return true;
+			if (token.startsWith(`${name}=`)) return TRUTHY[token.slice(name.length + 1)] === true;
+			// `bd orphans -fj` is `-f -j`, so a fused run of short booleans has to be
+			// read letter by letter; matching the whole token missed `-f` entirely.
+			if (name.length === 2 && name.startsWith("-") && /^-[A-Za-z]{2,}$/.test(token) && token.includes(name.slice(1))) {
+				return true;
+			}
+		}
+	}
+	return false;
+}
+
+/** The values Go's flag parsing reads as true. */
+const TRUTHY: Record<string, true> = { "": true, "1": true, t: true, T: true, TRUE: true, true: true, True: true };
 
 /** Hunt trigger verbs for `bd_mutate_actor_claim`. */
 export const MUTATING_VERBS: Record<string, true> = {
@@ -258,12 +340,24 @@ export function actorPresent(command: string, env: NodeJS.ProcessEnv = process.e
 	return first !== undefined && invocationActor(first, env) !== null;
 }
 
+/**
+ * One `bd` invocation read from an argv the plugin itself builds, so an internal
+ * spawn is classified by the same rules as a command line an agent typed.
+ * `undefined` when the argv carries no verb.
+ */
+export function invocationFromArgv(args: string[]): BdInvocation | undefined {
+	const scanned = scanGlobals(args, 0);
+	const verb = args[scanned.next];
+	if (verb === undefined) return undefined;
+	return { verb: verb.toLowerCase(), args: args.slice(scanned.next + 1), globals: scanned.globals, prefix: [], exported: {} };
+}
+
 /** First literal `bd` invocation, after global flags. */
 export function firstBdVerb(command: string): string | null {
 	return bdInvocations(command)[0]?.verb ?? null;
 }
 
-function isMutatingInvocation({ verb, args }: BdInvocation): boolean {
+export function isMutatingInvocation({ verb, args }: BdInvocation): boolean {
 	if (args.includes("--help") || args.includes("-h")) return false;
 	if (verb === "duplicates") return args.includes("--auto-merge") && !args.includes("--dry-run");
 	if (MUTATING_VERBS[verb] === true) return true;

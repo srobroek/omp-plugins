@@ -76,9 +76,10 @@ The gate accepts the first two carriers and not the third.
 
 MUST Treat a mode switch as export, re-init or push, and restore, not as a flag.
 The prefix lives in the database, not the repository, so read `--prefix` from an
-existing bead id. Two routes, chosen by whether `origin` carries `refs/dolt/data`
-(`git ls-remote origin 'refs/dolt/*'`); both start with
-`bd export > issues.jsonl` and `bd backup init <dir> && bd backup sync`:
+existing bead id. Choose one of two routes by whether `origin` carries
+`refs/dolt/data`. Run `git ls-remote origin 'refs/dolt/*'` to find out. Both routes
+start the same way. First run `bd export -o issues.jsonl`. Then run
+`bd backup init <dir>`. Then run `bd backup sync`.
 
 ```bash
 # No Dolt data on origin
@@ -92,10 +93,10 @@ bd dolt push            # on a non-fast-forward: bd dolt pull once, then push ag
 bd bootstrap --yes
 ```
 
-Verify `bd list --all --json | jq length` against the pre-migration count and
-`bd export` against `issues.jsonl` ignoring `updated_at`, then move
-`.beads/embeddeddolt` out of the checkout and commit `.beads/config.yaml` and
-`.beads/metadata.json`. Remove `.beads/dolt-backup.json` afterwards: its state
+Verify `bd count` against the pre-migration count. Compare `bd export` against
+`issues.jsonl`, ignoring `updated_at`. Then move `.beads/embeddeddolt` out of the
+checkout. Commit `.beads/config.yaml` and `.beads/metadata.json`. Remove
+`.beads/dolt-backup.json` afterwards: its state
 file churns inside OMP's isolated clones and breaks the merge-back.
 
 Review generated integration before adopting the target: `bd init` may add

@@ -1,6 +1,9 @@
 import { hostname } from "node:os";
-import { resolve } from "node:path";
 import type { ExtensionAPI, ExtensionContext, ToolCallEvent, ToolResultEvent } from "@oh-my-pi/pi-coding-agent";
+
+import { environmentForInput } from "./bd-actor-gate.ts";
+import { withEmbeddedWriteLock } from "./bd-embedded-write-lock.ts";
+import { leadingCdCwd } from "./shell-command.ts";
 
 /**
  * A claim is a lease, and a lease has a holder you can check.
@@ -21,14 +24,23 @@ import type { ExtensionAPI, ExtensionContext, ToolCallEvent, ToolResultEvent } f
  *
  * The pid is this process, not the shell's `$$`: the bash child is dead by the
  * time anyone reads it.
+ *
+ * The stamp is a real `bd` write, so on an embedded store it goes through the same
+ * per-store lock the bash boundary uses. It runs in the `tool_result` of the claim
+ * whose hold may still be open, which is why that lock counts holds per tool call:
+ * passing this call's id joins the hold instead of waiting on it.
+ *
+ * It also runs under the claim call's OWN environment rather than this process's.
+ * A bash call carrying `BEADS_DIR` writes the database that variable names, so a
+ * stamp spawned with the process environment could address a different store than
+ * the claim it is anchoring -- and would then queue on that other store's lock.
  */
 
 const TIMEOUT_MS = 10_000;
 /** Cheap prefilter: never spawn on a command that cannot be a claim. */
 const PREFILTER = /\bbd\b[\s\S]{0,400}?--claim\b/;
 const BD_ID = /^[A-Za-z][A-Za-z0-9]*(?:-[A-Za-z0-9]+)+$/;
-
-export type BdRun = (argv: string[], cwd: string) => { exitCode: number; stdout: string; stderr?: string };
+export type BdRun = (argv: string[], cwd: string, env: NodeJS.ProcessEnv) => Promise<{ exitCode: number; stdout: string; stderr?: string }> | { exitCode: number; stdout: string; stderr?: string };
 
 let injectedRun: BdRun | null = null;
 
@@ -68,7 +80,8 @@ export function anchorArgs(id: string, host: string, pid: number): string[] {
 }
 
 export default function bdLeaseGate(pi: ExtensionAPI): void {
-	const pending = new Map<string, string>();
+	/** The directory and environment each pending claim's stamp must run under. */
+	const pending = new Map<string, { cwd: string; env: NodeJS.ProcessEnv }>();
 
 	pi.on("tool_call", (event: ToolCallEvent, ctx: ExtensionContext) => {
 		try {
@@ -78,15 +91,19 @@ export default function bdLeaseGate(pi: ExtensionAPI): void {
 			if (!command || !PREFILTER.test(command)) return;
 			const sessionCwd = ctx?.cwd ?? process.cwd();
 			const inputCwd = typeof input.cwd === "string" && input.cwd ? input.cwd : sessionCwd;
-			pending.set(event.toolCallId, leadingCdCwd(command, inputCwd));
+			pending.set(event.toolCallId, {
+				cwd: leadingCdCwd(command, inputCwd),
+				env: environmentForInput(event.input),
+			});
 		} catch {
 			return;
 		}
 	});
 
-	pi.on("tool_result", (event: ToolResultEvent) => {
-		const cwd = pending.get(event.toolCallId);
-		if (cwd === undefined) return;
+	pi.on("tool_result", async (event: ToolResultEvent) => {
+		const claim = pending.get(event.toolCallId);
+		if (claim === undefined) return;
+		const { cwd, env } = claim;
 		pending.delete(event.toolCallId);
 		try {
 			const text = (event.content ?? [])
@@ -103,12 +120,17 @@ export default function bdLeaseGate(pi: ExtensionAPI): void {
 			const host = hostname().split(".")[0] ?? "localhost";
 			const advisories: string[] = [];
 			for (const id of ids) {
-				try {
-					const result = run(anchorArgs(id, host, process.pid), cwd);
-					if (result.exitCode !== 0) advisories.push(stampFailure(id, `bd exited ${result.exitCode}`, result.stderr));
-				} catch (error) {
-					advisories.push(stampFailure(id, "bd threw", error instanceof Error ? error.message : String(error)));
-				}
+				const argv = anchorArgs(id, host, process.pid);
+				const stamped = await withEmbeddedWriteLock(cwd, event.toolCallId, async () => {
+					try {
+						const result = await run(argv, cwd, env);
+						return result.exitCode === 0 ? undefined : stampFailure(id, `bd exited ${result.exitCode}`, result.stderr);
+					} catch (error) {
+						return stampFailure(id, "bd threw", error instanceof Error ? error.message : String(error));
+					}
+				}, env);
+				if (stamped.kind === "failed") advisories.push(stampFailure(id, "the embedded write lock refused the stamp", stamped.reason));
+				else if (stamped.value !== undefined) advisories.push(stamped.value);
 			}
 			if (advisories.length === 0) return;
 			return advisoryResult(event, advisories.join("\n"));
@@ -116,15 +138,6 @@ export default function bdLeaseGate(pi: ExtensionAPI): void {
 			return;
 		}
 	});
-}
-
-/** Resolve only a literal leading `cd <path> &&`; shell expansions and wrappers stay unresolved. */
-function leadingCdCwd(command: string, cwd: string): string {
-	const match = /^\s*cd\s+([^\s;&]+)\s*&&/.exec(command);
-	if (!match) return cwd;
-	const dir = match[1];
-	if (dir === undefined || /^[-~$]/.test(dir) || /[\\`"'*?[\]{}]/.test(dir)) return cwd;
-	return dir.startsWith("/") ? dir : resolve(cwd, dir);
 }
 
 function bashExitCode(event: ToolResultEvent): number {
@@ -142,13 +155,23 @@ function advisoryResult(event: ToolResultEvent, text: string): { content: ToolRe
 	return { content: [{ type: "text", text: `${text}\n\n` }, ...(event.content ?? [])] };
 }
 
-function defaultRun(argv: string[], cwd: string): { exitCode: number; stdout: string; stderr: string } {
-	const proc = Bun.spawnSync(argv, {
+/**
+ * Spawn bd without blocking the event loop.
+ *
+ * The write lock this stamp runs inside renews its lease on an event-loop timer, and
+ * `Bun.spawnSync` would block that timer for the whole command. Ten seconds is well
+ * inside the lease, but the invariant worth keeping is simple rather than arithmetic:
+ * no writer this plugin owns blocks the loop while holding the lock.
+ */
+async function defaultRun(argv: string[], cwd: string, env: NodeJS.ProcessEnv): Promise<{ exitCode: number; stdout: string; stderr: string }> {
+	const proc = Bun.spawn(argv, {
 		cwd,
 		stdout: "pipe",
 		stderr: "pipe",
 		timeout: TIMEOUT_MS,
-		env: { ...process.env, BD_NO_PAGER: "1", BD_NON_INTERACTIVE: "1" },
+		killSignal: "SIGKILL",
+		env: { ...env, BD_NO_PAGER: "1", BD_NON_INTERACTIVE: "1" },
 	});
-	return { exitCode: proc.exitCode ?? 1, stdout: proc.stdout.toString(), stderr: proc.stderr.toString() };
+	const [stdout, stderr] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text()]);
+	return { exitCode: (await proc.exited) ?? 1, stdout, stderr };
 }

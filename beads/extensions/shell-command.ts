@@ -1,12 +1,14 @@
 /**
  * Shell-shaped reading of a command string, shared by the beads gates.
  *
- * Both gates have to answer "is this `bd` / `gh` at a command position, and what
- * is its real argument?" A plain regex over the whole string gets this wrong in
- * two directions: it rewrites `echo bd update x --claim`, and it reads `--body`
- * out of a quoted title. Quotes are the whole difficulty, so they are handled
- * once here rather than in each gate.
+ * The gates have to answer "is this `bd` / `gh` at a command position, what is its
+ * real argument, and which directory does it run in?" A plain regex over the whole
+ * string gets the first wrong in two directions: it rewrites
+ * `echo bd update x --claim`, and it reads `--body` out of a quoted title. Quotes
+ * are the whole difficulty, so they are handled once here rather than in each gate.
  */
+
+import { resolve } from "node:path";
 
 const SEPARATORS: Record<string, true> = { ";": true, "&": true, "|": true, "\n": true };
 
@@ -134,4 +136,20 @@ export function invocation(segment: string, argv: string[]): Token[] | null {
 		if (value !== word) return null;
 	}
 	return tokens.slice(start);
+}
+
+/**
+ * The directory a command line really runs in: `cwd`, or the target of a literal
+ * leading `cd <path> &&`.
+ *
+ * Only that one literal shape. A shell expansion, a wrapper, or a quoted or
+ * globbed path is left unresolved, because guessing the directory wrong points a
+ * gate at the wrong repository, and reporting `cwd` unchanged is the honest answer.
+ */
+export function leadingCdCwd(command: string, cwd: string): string {
+	const match = /^\s*cd\s+([^\s;&]+)\s*&&/.exec(command);
+	if (!match) return cwd;
+	const dir = match[1];
+	if (dir === undefined || /^[-~$]/.test(dir) || /[\\`"'*?[\]{}]/.test(dir)) return cwd;
+	return dir.startsWith("/") ? dir : resolve(cwd, dir);
 }
