@@ -28,8 +28,31 @@ export type SurfaceResult = {
 	ok: boolean;
 	skipped?: boolean;
 	reason?: string;
+	/** Sub-source failures tolerated because other sub-sources of the same surface answered. */
+	failures?: string[];
 	hits: SurfaceHit[];
 };
+
+/**
+ * A surface that answered with nothing is not a surface that could not answer, so the
+ * aggregate reports both separately instead of leaving callers to guess from an empty list.
+ */
+export type SurfaceStatus = "ok" | "empty" | "partial" | "skipped" | "failed";
+
+export type ClassifiedSurface = SurfaceResult & { status: SurfaceStatus };
+
+export type Gap = {
+	surface: SurfaceName;
+	kind: "unavailable" | "partial" | "failed";
+	reason: string;
+};
+
+export function classify(result: SurfaceResult): SurfaceStatus {
+	if (result.skipped) return "skipped";
+	if (!result.ok) return "failed";
+	if (result.failures?.length) return "partial";
+	return result.hits.length > 0 ? "ok" : "empty";
+}
 
 export type ScanDeps = {
 	fetchFn?: typeof fetch;
@@ -243,32 +266,84 @@ async function scanSkillsCli(): Promise<SurfaceResult> {
 	};
 }
 
+type NpmSearchResponse = {
+	objects?: Array<{ package?: { name?: string; description?: string; links?: { npm?: string } } }>;
+};
+
+/** npm rejects a search `text` outside 2..64 characters with HTTP 400 ERR_TEXT_LENGTH. */
+const NPM_TEXT_MAX = 64;
+
+/**
+ * Fits `keywords:<kw> <terms>` inside npm's search-text window. A natural-language
+ * capability query is longer than the window, so the terms that do not fit are dropped and
+ * counted rather than sent and rejected.
+ */
+export function npmSearchText(keyword: string, query: string): { text: string; dropped: number } | null {
+	const text = `keywords:${keyword}`;
+	if (text.length > NPM_TEXT_MAX) return null;
+	const terms = query.split(/[^A-Za-z0-9@._/-]+/).filter(Boolean);
+	let used = 0;
+	let joined = text;
+	for (const term of terms) {
+		if (joined.length + 1 + term.length > NPM_TEXT_MAX) break;
+		joined = `${joined} ${term}`;
+		used++;
+	}
+	return { text: joined, dropped: terms.length - used };
+}
+
 async function scanNpm(fetchFn: typeof fetch, query: string): Promise<SurfaceResult> {
 	const keywords = ["mcp-server", "claude-plugin", "claude-skill", "agent-skill", "omp-plugin", "oh-my-pi"];
 	const hits: SurfaceHit[] = [];
+	const failures: string[] = [];
+	let answered = 0;
+	let dropped = 0;
 	for (const kw of keywords) {
-		const url = `https://registry.npmjs.org/-/v1/search?text=${encodeURIComponent(`keywords:${kw} ${query}`)}&size=5`;
+		const search = npmSearchText(kw, query);
+		if (!search) {
+			failures.push(`${kw}: keyword alone exceeds npm's ${NPM_TEXT_MAX}-character search text limit`);
+			continue;
+		}
+		dropped = Math.max(dropped, search.dropped);
+		const url = `https://registry.npmjs.org/-/v1/search?text=${encodeURIComponent(search.text)}&size=5`;
 		const res = await timedFetch(fetchFn, url);
 		if (!res.ok) {
-			return { surface: "npm", ok: false, reason: `HTTP ${res.status} for ${kw}`, hits };
+			failures.push(`${kw}: HTTP ${res.status}`);
+			continue;
 		}
+		let json: NpmSearchResponse;
 		try {
-			const json = JSON.parse(res.text) as {
-				objects?: Array<{ package?: { name?: string; description?: string; links?: { npm?: string } } }>;
-			};
-			if (!Array.isArray(json?.objects)) {
-				return { surface: "npm", ok: false, reason: `Invalid search response for ${kw}`, hits };
-			}
-			for (const obj of json.objects ?? []) {
-				const p = obj.package;
-				if (!p?.name) continue;
-				hits.push({ name: p.name, detail: p.description, url: p.links?.npm });
-			}
+			// npm search response; the objects array is checked before it is read.
+			json = JSON.parse(res.text) as NpmSearchResponse;
 		} catch {
-			return { surface: "npm", ok: false, reason: `Invalid search response for ${kw}`, hits };
+			failures.push(`${kw}: invalid search response`);
+			continue;
+		}
+		if (!Array.isArray(json?.objects)) {
+			failures.push(`${kw}: invalid search response`);
+			continue;
+		}
+		answered++;
+		for (const obj of json.objects) {
+			const p = obj.package;
+			if (!p?.name) continue;
+			hits.push({ name: p.name, detail: p.description, url: p.links?.npm });
 		}
 	}
-	return { surface: "npm", ok: true, hits };
+	if (answered === 0) {
+		return { surface: "npm", ok: false, reason: failures.join("; ") || "no npm searches ran", failures, hits };
+	}
+	const notes = [
+		failures.length > 0 ? `${answered}/${keywords.length} npm keyword searches answered` : "",
+		dropped > 0 ? `query truncated to npm's ${NPM_TEXT_MAX}-character search text limit (${dropped} term(s) dropped)` : "",
+	].filter(Boolean);
+	return {
+		surface: "npm",
+		ok: true,
+		hits,
+		...(failures.length > 0 ? { failures } : {}),
+		...(notes.length > 0 ? { reason: notes.join("; ") } : {}),
+	};
 }
 
 async function scanGithub(
@@ -330,8 +405,9 @@ async function scanSmithery(
 }
 
 export async function scanSurfaces(params: ScanParams, deps: ScanDeps = {}): Promise<{
-	results: SurfaceResult[];
-	gaps: Array<{ surface: SurfaceName; reason: string }>;
+	results: ClassifiedSurface[];
+	gaps: Gap[];
+	coverage: { answered: number; empty: number; partial: number; unavailable: number; failed: number };
 }> {
 	const sourceFetch = deps.fetchFn ?? fetch;
 	const fetchFn: typeof fetch = deps.signal
@@ -381,10 +457,24 @@ export async function scanSurfaces(params: ScanParams, deps: ScanDeps = {}): Pro
 
 	await Promise.all(jobs);
 	results.sort((a, b) => SURFACES.indexOf(a.surface) - SURFACES.indexOf(b.surface));
-	const gaps = results
-		.filter((r) => r.skipped || !r.ok)
-		.map((r) => ({ surface: r.surface, reason: r.reason ?? (r.skipped ? "skipped" : "failed") }));
-	return { results, gaps };
+	const classified: ClassifiedSurface[] = results.map((r) => ({ ...r, status: classify(r) }));
+	const gaps: Gap[] = [];
+	const coverage = { answered: 0, empty: 0, partial: 0, unavailable: 0, failed: 0 };
+	for (const r of classified) {
+		if (r.status === "ok") coverage.answered++;
+		else if (r.status === "empty") coverage.empty++;
+		else if (r.status === "partial") {
+			coverage.partial++;
+			gaps.push({ surface: r.surface, kind: "partial", reason: r.failures?.join("; ") ?? r.reason ?? "partial coverage" });
+		} else if (r.status === "skipped") {
+			coverage.unavailable++;
+			gaps.push({ surface: r.surface, kind: "unavailable", reason: r.reason ?? "skipped" });
+		} else {
+			coverage.failed++;
+			gaps.push({ surface: r.surface, kind: "failed", reason: r.reason ?? "failed" });
+		}
+	}
+	return { results: classified, gaps, coverage };
 }
 
 export default function findToolsScanTool(pi: ExtensionAPI): void {
@@ -401,24 +491,26 @@ export default function findToolsScanTool(pi: ExtensionAPI): void {
 		approval: "read",
 		execute: async (_id, params: ScanParams, signal, _onUpdate, ctx) => {
 			try {
-				const { results, gaps } = await scanSurfaces(params, {
+				const { results, gaps, coverage } = await scanSurfaces(params, {
 					signal, setTimeout: ctx.setTimeout.bind(ctx), clearTimer: ctx.clearTimer.bind(ctx),
 				});
 				const lines: string[] = [];
 				for (const r of results) {
-					const flag = r.skipped ? "skip" : r.ok ? "ok" : "fail";
-					lines.push(`[${flag}] ${r.surface}${r.reason ? ` — ${r.reason}` : ""} (${r.hits.length} hits)`);
+					lines.push(`[${r.status}] ${r.surface}${r.reason ? ` — ${r.reason}` : ""} (${r.hits.length} hits)`);
 					for (const h of r.hits.slice(0, 8)) {
 						lines.push(`  - ${h.name}${h.detail ? `: ${h.detail.slice(0, 120)}` : ""}`);
 					}
 				}
+				lines.push(
+					`coverage: ${coverage.answered} answered, ${coverage.empty} empty, ${coverage.partial} partial, ${coverage.unavailable} unavailable, ${coverage.failed} failed`,
+				);
 				if (gaps.length) {
 					lines.push("gaps:");
-					for (const g of gaps) lines.push(`  - ${g.surface}: ${g.reason}`);
+					for (const g of gaps) lines.push(`  - ${g.surface} (${g.kind}): ${g.reason}`);
 				}
 				return {
 					content: [{ type: "text" as const, text: lines.join("\n") }],
-					details: { ok: true, results, gaps },
+					details: { ok: true, results, gaps, coverage },
 				};
 			} catch (error) {
 				const message = error instanceof Error ? error.message : String(error);
