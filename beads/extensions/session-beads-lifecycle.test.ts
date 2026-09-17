@@ -571,7 +571,7 @@ describe("runBdResult", () => {
 	test("distinguishes a timed-out bd process", async () => {
 		const root = mkdtempSync(join(tmpdir(), "beads-run-timeout-"));
 		const script = join(root, "bd");
-		writeFileSync(script, "#!/bin/sh\nsleep 1\n");
+		writeFileSync(script, "#!/bin/sh\nexec /bin/sleep 1\n");
 		chmodSync(script, 0o755);
 		try {
 			const result = await runBdResult(root, ["list"], Date.now() + 30, { ...process.env, PATH: root });
