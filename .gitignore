@@ -30,3 +30,4 @@ node_modules/
 
 # OMP project-scope plugin registry (machine-local paths)
 .omp/plugins/
+*.gate.lock*
