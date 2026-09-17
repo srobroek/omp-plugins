@@ -2,7 +2,7 @@
 
 Track work with the [beads](https://github.com/steveyegge/beads) issue tracker (`bd`). Its dependency graph persists across processes and crashes.
 
-Install this plugin in a repository with `.beads/`; it pins that database for every session. A human who wants a different shared store exports an absolute `BEADS_DIR` before starting omp, and the plugin keeps it.
+Install this plugin in a repository with `.beads/`; it pins that database for sessions and Bash calls in the same repository family. Bash calls whose working directory belongs to another repository remain unpinned. A human who wants a different shared store exports an absolute `BEADS_DIR` before starting omp, and the plugin keeps it within that session repository.
 
 ## Skills
 
@@ -56,9 +56,9 @@ Use the builtin learn/retain/recall/reflect tools for persistent knowledge. This
   It reads argv at command position. It ignores mentions in `echo` or `rg`, as well as `git log --grep` or `man bd init`.
   It blocks nothing: whether the flag is appropriate depends on repository state that the token stream cannot see.
 
-  The advisory also states that the plugin pins `BEADS_DIR` for the session (the
-  checkout's `.beads` on every Bash call; a pre-existing export is kept), so no
-  export or restart is needed.
+  The advisory also states that the plugin pins `BEADS_DIR` for the session. The
+  checkout's `.beads` is added to Bash calls in the same repository family, while
+  foreign-repository calls remain unpinned. A pre-existing export is kept.
   The advisory does not block `bd init --init-if-missing --skip-hooks`.
 - `session-beads-lifecycle`: reports unresolved gates at startup, along with whether the previous session's detached push succeeded.
   At close, it reports held claims. Assigned work remains a held claim when blocked or deferred.

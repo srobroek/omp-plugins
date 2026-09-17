@@ -55,6 +55,10 @@ interface SessionState {
 	bdWrote: boolean;
 	/** The database this session's bash calls are pinned to, when its checkout has one. */
 	pin?: string;
+	/** Git common-dir identity for the checkout that started this session. */
+	repo?: string;
+	/** Repository identity by resolved Bash cwd; avoids a Git subprocess on repeat calls. */
+	repos: Map<string, string>;
 	staleAdvised: boolean;
 	stopFired: boolean;
 	touched: Set<string>;
@@ -84,9 +88,8 @@ function isDir(path: string): boolean {
 		return false;
 	}
 }
-
 /**
- * The value each of this session's bash calls receives, decided once at session start.
+ * The value Bash calls in this session's repository family receive, decided once at session start.
  *
  * - a process pin someone else set (a human export, or an earlier session of the same
  *   repository) is mirrored as-is: the shell may predate it, and a human pin is never
@@ -117,6 +120,12 @@ export function pinBashInput(input: unknown, pin: string | undefined): Record<st
 	const current = (env as Record<string, unknown> | undefined)?.BEADS_DIR;
 	if (typeof current === "string" && current !== "") return undefined;
 	return { ...record, env: { ...((env as Record<string, unknown> | undefined) ?? {}), BEADS_DIR: pin } };
+}
+
+function bashCallCwd(input: unknown, fallback: string): string {
+	if (input === null || typeof input !== "object") return fallback;
+	const cwd = (input as Record<string, unknown>).cwd;
+	return typeof cwd === "string" && cwd !== "" ? resolve(fallback, cwd) : fallback;
 }
 
 function sessionKey(ctx: { sessionManager?: { getSessionId?: () => string } } | undefined): string {
@@ -657,10 +666,18 @@ export default function sessionBeadsLifecycle(pi: ExtensionAPI): void {
 		const key = sessionKey(ctx);
 		let state = sessions.get(key);
 		if (!state) {
-			state = { actors: new Set(), bdWrote: false, staleAdvised: false, stopFired: false, touched: new Set() };
+			state = { actors: new Set(), bdWrote: false, repos: new Map(), staleAdvised: false, stopFired: false, touched: new Set() };
 			sessions.set(key, state);
 		}
 		return state;
+	}
+	function identityFor(state: SessionState, cwd: string): string {
+		const key = resolve(cwd);
+		const cached = state.repos.get(key);
+		if (cached !== undefined) return cached;
+		const identity = repoIdentity(key);
+		state.repos.set(key, identity);
+		return identity;
 	}
 
 	pi.on("session_start", async (_event, ctx: ExtensionContext) => {
@@ -670,6 +687,7 @@ export default function sessionBeadsLifecycle(pi: ExtensionAPI): void {
 		try {
 			const cwd = ctx?.cwd ?? process.cwd();
 			const pin = autoPinBeadsDir(cwd, key, (id) => sessions.has(id));
+			state.repo = identityFor(state, cwd);
 			state.pin = sessionPinAfter(pin, cwd);
 			if (pin.conflict !== undefined) {
 				pi.sendMessage(
@@ -677,7 +695,7 @@ export default function sessionBeadsLifecycle(pi: ExtensionAPI): void {
 						customType: "com.srobroek.beads.session-lifecycle",
 						content:
 							`This process is pinned to another repository's beads database (\`BEADS_DIR=${pin.conflict}\`) by a live session. ` +
-							"For this checkout, pass `env: { BEADS_DIR: \"<this checkout>/.beads\" }` on every `bd` call; do not rely on the inherited pin.",
+							"Bash calls in this checkout use its own `.beads`; calls in other repositories remain unpinned unless they provide `BEADS_DIR`.",
 						display: true,
 						attribution: "user",
 					},
@@ -712,7 +730,10 @@ export default function sessionBeadsLifecycle(pi: ExtensionAPI): void {
 	pi.on("tool_call", (event: ToolCallEvent, ctx: ExtensionContext) => {
 		if (event.toolName !== "bash") return;
 		const state = sessions.get(sessionKey(ctx));
-		const pin = state?.pin ?? process.env.BEADS_DIR ?? sessionPinFor(ctx?.cwd ?? process.cwd());
+		const sessionCwd = ctx?.cwd ?? process.cwd();
+		const callCwd = bashCallCwd(event.input, sessionCwd);
+		if (state?.repo !== undefined && identityFor(state, callCwd) !== state.repo) return;
+		const pin = state?.pin ?? process.env.BEADS_DIR ?? sessionPinFor(callCwd);
 		const revised = pinBashInput(event.input, pin === "" ? undefined : pin);
 		return revised ? { input: revised } : undefined;
 	});
