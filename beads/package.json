@@ -12,6 +12,7 @@
       "./extensions/bd-embedded-write-lock.ts",
       "./extensions/pr-bead-link-gate.ts",
       "./extensions/bd-init-advisory.ts",
+      "./extensions/bd-dolt-user-advisory.ts",
       "./extensions/bd-init-server-gate.ts",
       "./extensions/dolt-server-lifecycle.ts",
       "./extensions/session-beads-lifecycle.ts",
