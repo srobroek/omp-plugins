@@ -364,6 +364,18 @@
           "jsonpath": "$.version"
         }
       ]
+    },
+    "worktrunk": {
+      "release-type": "simple",
+      "component": "worktrunk",
+      "changelog-path": "CHANGELOG.md",
+      "extra-files": [
+        {
+          "type": "json",
+          "path": ".omp-plugin/plugin.json",
+          "jsonpath": "$.version"
+        }
+      ]
     }
   }
 }

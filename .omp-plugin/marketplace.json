@@ -198,6 +198,13 @@
       "category": "productivity"
     },
     {
+      "name": "worktrunk",
+      "description": "Worktree discipline for every agent: a membership-based canonical-mutation guardrail and an isolation precheck.",
+      "source": "./worktrunk",
+      "version": "0.1.0",
+      "category": "development"
+    },
+    {
       "name": "impeccable",
       "description": "End-to-end design workflow and deterministic anti-slop detection, with 59 executable rules over rendered UI.",
       "source": {
