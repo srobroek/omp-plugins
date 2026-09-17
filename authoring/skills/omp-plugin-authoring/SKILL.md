@@ -14,16 +14,18 @@ TRIGGER
 
 ## Install carrier
 
-Every carrier (npm install, marketplace install, `omp plugin link`) becomes an enabled plugin root, and all three feed one discovery graph. The carrier does not decide which surface types load. The tree layout and the manifest decide.
+Two lanes discover surfaces. npm installs and `omp plugin link` share the first lane: OMP recognizes the package by its manifest, loads the manifest entry points, then scans the package tree. Marketplace installs use the second lane, discovered from the installed-plugin registry and its `installPath`. OMP filters marketplace roots out of the first lane, so a marketplace plugin exposes tree surfaces without a manifest.
 
 | Surface | Loaded from | Manifest key |
 |---|---|---|
-| skills, commands, rules | `skills/`, `commands/`, `rules/` | none, tree convention |
+| skills, rules | `skills/`, `rules/` | none, tree convention |
+| commands | `commands/` as the fallback | optional `omp.commands` path, which overrides it |
 | task agents | `agents/*.md` | none, tree convention |
-| tools, hooks, extensions, commands, features, settings | paths named in the manifest | `package.json` `omp` |
+| tools, hooks, extensions, features, settings | paths named in the manifest | `package.json` `omp` |
 
-MUST Give the package a non-null `package.json` `omp` (legacy `pi`) object. Without it `omp plugin link` loads **nothing**, and `omp plugin doctor` reports "not an omp plugin".
-NOT Treating `omp` as a bare marker. It carries tools, hooks, extensions, commands, features and settings. No `skills`, `rules` or `agents` key exists, so no tree surface moves into it.
+MUST Give an npm or linked package a non-null `package.json` `omp` (legacy `pi`) object. Without it OMP skips the package, `omp plugin link` loads **nothing**, and `omp plugin doctor` reports "not an omp plugin".
+DEFAULT A marketplace install needs no manifest key to expose `skills/`, `rules/` or `agents/*.md`. Its registry entry carries the root.
+NOT Treating `omp` as a bare marker. It carries tools, hooks, extensions, commands, features and settings. No `skills`, `rules` or `agents` key exists, so those surfaces stay in the tree.
 
 A marketplace install copies its source to `cache/plugins/MKT___NAME___VERSION`, then symlinks that directory into the scope's `node_modules`. `omp plugin list` therefore prints one install twice, once under **npm Plugins** and once under **Marketplace Plugins**. One physical copy backs both rows, and they carry the same version.
 
