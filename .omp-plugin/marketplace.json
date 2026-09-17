@@ -19,7 +19,7 @@
       "name": "authoring",
       "description": "Author and audit agentic assets: skills, rules, agents, and steering.",
       "source": "./authoring",
-      "version": "2.0.2",
+      "version": "2.0.3",
       "category": "productivity"
     },
     {
