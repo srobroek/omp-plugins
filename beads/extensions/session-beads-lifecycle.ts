@@ -64,6 +64,7 @@ interface SessionState {
 	staleAdvised: boolean;
 	stopFired: boolean;
 	touched: Set<string>;
+	claimsReleased: boolean;
 }
 
 export { repoIdentity, sessionPinFor };
@@ -440,6 +441,7 @@ export interface Bead {
 	status: string;
 	assignee?: string;
 	labels?: string[];
+	metadata?: Record<string, string>;
 }
 
 export function readBeads(stdout: string): Bead[] {
@@ -450,6 +452,14 @@ export function readBeads(stdout: string): Bead[] {
 		if (row === null || typeof row !== "object") continue;
 		const record = row as Record<string, unknown>;
 		if (typeof record.id !== "string") continue;
+		const rawMetadata = record.metadata;
+		const metadata: Record<string, string> | undefined = rawMetadata !== null && typeof rawMetadata === "object"
+			? Object.fromEntries(
+					Object.entries(rawMetadata as Record<string, unknown>).filter(
+						(entry): entry is [string, string] => typeof entry[1] === "string",
+					),
+				)
+			: undefined;
 		beads.push({
 			id: record.id,
 			title: typeof record.title === "string" ? record.title : "",
@@ -458,9 +468,17 @@ export function readBeads(stdout: string): Bead[] {
 				? record.labels as string[]
 				: undefined,
 			assignee: typeof record.assignee === "string" && record.assignee.trim() ? record.assignee : undefined,
+			metadata: Object.keys(metadata ?? {}).length > 0 ? metadata : undefined,
 		});
 	}
 	return beads;
+}
+
+/** A lease anchor makes a foreign claim checkable without guessing from age. */
+export function claimAnchor(bead: Bead): { host: string; pid: number } | undefined {
+	const host = bead.metadata?.lease_host?.trim();
+	const pid = Number(bead.metadata?.lease_pid);
+	return host && Number.isInteger(pid) && pid > 0 ? { host, pid } : undefined;
 }
 
 /**
@@ -497,6 +515,8 @@ export function formatSessionCloseAdvisory(
 	for (const bead of beads.slice(0, MAX_LISTED)) {
 		const who = bead.assignee ? ` [${bead.assignee}]` : "";
 		lines.push(`- ${bead.id}${who} ${bead.title}`);
+		const anchor = claimAnchor(bead);
+		if (anchor !== undefined) lines.push(`  Lease anchor: host=${anchor.host} pid=${anchor.pid}; check that process on that host before takeover.`);
 		const actor = bead.assignee !== undefined && effectiveActors.has(bead.assignee)
 			? bead.assignee
 			: undefined;
@@ -552,6 +572,22 @@ export function handleSessionStop(
 async function releaseCasSupported(cwd: string, deadline: number): Promise<boolean> {
 	const help = await runBd(cwd, ["update", "--help"], deadline);
 	return help?.includes("--if-assignee") === true;
+}
+
+async function releaseClaimsAtExit(cwd: string, state: SessionState): Promise<void> {
+	if (state.claimsReleased || !state.bdWrote || state.actors.size === 0) return;
+	state.claimsReleased = true;
+	const deadline = Date.now() + TIMEOUT_MS;
+	const listed = await runBdResult(cwd, ["list", "--status", "open,in_progress,blocked,deferred", "--limit", "0", "--json"], deadline);
+	if (!("output" in listed)) return;
+	const claims = heldClaims(readBeads(listed.output), new Set(), state.actors);
+	const casSupported = await releaseCasSupported(cwd, deadline);
+	for (const bead of claims) {
+		if (bead.assignee === undefined) continue;
+		const args = releaseClaimArgs(bead.id, bead.assignee, { BD_ACTOR: bead.assignee }, new Date().toISOString(), casSupported);
+		if (args === undefined) continue;
+		await runBdResult(cwd, args, deadline, { ...process.env, BEADS_ACTOR: bead.assignee, BD_ACTOR: bead.assignee });
+	}
 }
 
 /**
@@ -707,7 +743,7 @@ export default function sessionBeadsLifecycle(pi: ExtensionAPI): void {
 		const key = sessionKey(ctx);
 		let state = sessions.get(key);
 		if (!state) {
-			state = { actors: new Set(), bdWrote: false, repos: new Map(), staleAdvised: false, stopFired: false, touched: new Set() };
+			state = { actors: new Set(), bdWrote: false, repos: new Map(), staleAdvised: false, stopFired: false, touched: new Set(), claimsReleased: false };
 			sessions.set(key, state);
 		}
 		return state;
@@ -781,8 +817,13 @@ export default function sessionBeadsLifecycle(pi: ExtensionAPI): void {
 
 	pi.on("session_shutdown", (_event, ctx: ExtensionContext) => {
 		const key = sessionKey(ctx);
+		const state = sessions.get(key);
 		sessions.delete(key);
 		endAutoPinSession(key, (id) => sessions.has(id));
+		if (state === undefined) return;
+		void releaseClaimsAtExit(ctx?.cwd ?? process.cwd(), state).catch((error) => {
+			pi.logger.error("beads claim release at session exit failed", { error: error instanceof Error ? error.message : String(error) });
+		});
 	});
 
 	// Only the fired-once latch resets per turn; what the session touched must
