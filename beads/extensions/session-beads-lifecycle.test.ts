@@ -25,6 +25,7 @@ import sessionBeadsLifecycle, {
 	releaseClaimArgs,
 	releaseClaimCommand,
 	repoIdentity,
+	runBdResult,
 	sessionPinAfter,
 	sessionPinFor,
 	staleSkipNotice,
@@ -537,7 +538,45 @@ test("passes the effective actor into actual release commands", () => {
 	});
 
 	test("an unreadable database reports uncertainty", () => {
-		expect(handleSessionStop({}, undefined, new Set(["bd-probe-2m7"]), undefined)?.additionalContext).toContain("could not be verified");
+		expect(handleSessionStop({}, undefined, new Set(["bd-probe-2m7"]), undefined)?.additionalContext).toContain("could not be read");
+	});
+	test("includes a bounded nonzero exit reason and keeps the inspection instruction", () => {
+		const reason = `bd exited with code 7: ${"permission denied ".repeat(30)}`;
+		const text = handleSessionStop({}, undefined, new Set(), undefined, true, reason)?.additionalContext ?? "";
+		expect(text).toContain("bd exited with code 7: permission denied");
+		expect(text).toContain("inspect assigned and touched work before stopping");
+		expect(text.length).toBeLessThan(400);
+	});
+	test("distinguishes a timeout failure", () => {
+		const text = handleSessionStop({}, undefined, new Set(), undefined, true, "bd command timed out")?.additionalContext ?? "";
+		expect(text).toContain("Beads claims could not be read at session close: bd command timed out.");
+	});
+	test("successful reads retain the held claims advisory", () => {
+		const text = handleSessionStop({}, BEAD_LIST, new Set(["bd-probe-2m7"]), undefined)?.additionalContext ?? "";
+		expect(text).toContain("bd-probe-2m7");
+	});
+});
+
+describe("runBdResult", () => {
+	test("keeps nonzero stderr bounded in the failure result", async () => {
+		const root = mkdtempSync(join(tmpdir(), "beads-run-fail-"));
+		const script = join(root, "bd");
+		writeFileSync(script, "#!/bin/sh\nprintf '%s' 'permission denied by the embedded ledger' >&2\nexit 7\n");
+		chmodSync(script, 0o755);
+		try {
+			const result = await runBdResult(root, ["list"], Date.now() + 5_000, { ...process.env, PATH: root });
+			expect(result).toEqual({ failure: "bd exited with code 7: permission denied by the embedded ledger" });
+		} finally { rmSync(root, { recursive: true, force: true }); }
+	});
+	test("distinguishes a timed-out bd process", async () => {
+		const root = mkdtempSync(join(tmpdir(), "beads-run-timeout-"));
+		const script = join(root, "bd");
+		writeFileSync(script, "#!/bin/sh\nsleep 1\n");
+		chmodSync(script, 0o755);
+		try {
+			const result = await runBdResult(root, ["list"], Date.now() + 30, { ...process.env, PATH: root });
+			expect(result).toEqual({ failure: "bd command timed out" });
+		} finally { rmSync(root, { recursive: true, force: true }); }
 	});
 });
 
