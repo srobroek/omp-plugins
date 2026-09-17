@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.0.3](https://github.com/srobroek/omp-plugins/compare/authoring--v2.0.2...authoring--v2.0.3) (2026-09-17)
+
+
+### Bug Fixes
+
+* **authoring:** correct install-carrier surface loading ([#336](https://github.com/srobroek/omp-plugins/issues/336)) ([004bded](https://github.com/srobroek/omp-plugins/commit/004bded869540f89d1bcc4174ff3c4a9b75b8e1d))
+
 ## [2.0.2](https://github.com/srobroek/omp-plugins/compare/authoring--v2.0.1...authoring--v2.0.2) (2026-09-13)
 
 
