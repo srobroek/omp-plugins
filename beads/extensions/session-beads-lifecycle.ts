@@ -453,8 +453,12 @@ export function readBeads(stdout: string): Bead[] {
 		const record = row as Record<string, unknown>;
 		if (typeof record.id !== "string") continue;
 		const rawMetadata = record.metadata;
-		const metadata = rawMetadata !== null && typeof rawMetadata === "object"
-			? Object.fromEntries(Object.entries(rawMetadata as Record<string, unknown>).filter(([, value]) => typeof value === "string"))
+		const metadata: Record<string, string> | undefined = rawMetadata !== null && typeof rawMetadata === "object"
+			? Object.fromEntries(
+					Object.entries(rawMetadata as Record<string, unknown>).filter(
+						(entry): entry is [string, string] => typeof entry[1] === "string",
+					),
+				)
 			: undefined;
 		beads.push({
 			id: record.id,
