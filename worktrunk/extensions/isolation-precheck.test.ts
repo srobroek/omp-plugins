@@ -1,6 +1,6 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, mock, test } from "bun:test";
 
-import isolationPrecheck, { ISOLATION_REFUSAL, requestsIsolation } from "./isolation-precheck.ts";
+import isolationPrecheck, { ISOLATION_REFUSAL, isolationEnabled, requestsIsolation } from "./isolation-precheck.ts";
 
 type Handler = (event: unknown, ctx?: unknown) => unknown;
 
@@ -57,5 +57,23 @@ describe("the session-start advisory", () => {
 		const { start, sent } = handlers();
 		start({});
 		expect(sent).toEqual([]);
+	});
+
+	test("names the setting and the worktree remedy while isolation is on", () => {
+		// The setting is read through OMP's settings module, so answering that read
+		// is the only way to exercise the on-branch.
+		mock.module("@oh-my-pi/pi-coding-agent/config/settings", () => ({
+			settings: { get: (key: string) => key === "task.isolation.enabled" },
+		}));
+		try {
+			expect(isolationEnabled()).toBe(true);
+			const { start, sent } = handlers();
+			start({});
+			expect(sent).toHaveLength(1);
+			expect(sent[0]?.content).toContain("task.isolation.enabled");
+			expect(sent[0]?.content).toContain("wt switch");
+		} finally {
+			mock.restore();
+		}
 	});
 });

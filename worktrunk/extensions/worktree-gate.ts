@@ -24,12 +24,15 @@
  * target — landing merges a pull request and refreshes canonical with `git fetch`
  * alone — so no agent has a sanctioned reason to write there.
  *
- * Uncertainty refuses. Path inputs are derived with OMP's own normalization and
- * cwds with OMP's own `resolveToCwd`, never a second parser: a parser that
+ * Uncertainty refuses. A `git` that does not answer — missing binary, timeout,
+ * any unexpected failure — is not evidence that this directory is outside a
+ * repository, so it refuses mutation instead of standing down, and such a
+ * failure is never cached. Path inputs are derived with OMP's own normalization
+ * and cwds with OMP's own `resolveToCwd`, never a second parser: a parser that
  * disagreed with the tool performing the write would guard a different file than
  * the one that changes.
  */
-import { execFileSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import { realpathSync } from "node:fs";
 import path from "node:path";
 import type { ExtensionAPI, ExtensionContext, ToolCallEvent } from "@oh-my-pi/pi-coding-agent";
@@ -74,7 +77,6 @@ const READ_ONLY_TOOLS: Record<string, true> = {
 	read: true,
 	recall: true,
 	reflect: true,
-	security_scan: true,
 	task: true,
 	think: true,
 	todo: true,
@@ -98,6 +100,7 @@ const PATH_KEYS: Record<string, true> = {
 	file_path: true,
 	filepath: true,
 	files: true,
+	knowledge_base_paths: true,
 	out: true,
 	outfile: true,
 	output: true,
@@ -156,11 +159,33 @@ export function containmentRefusal(target: string, canonical: string, worktrees:
 	);
 }
 
-/** The refusal an unclassifiable payload earns. Uncertainty refuses. */
-export function uncertaintyRefusal(what: string, canonical: string): string {
+/**
+ * The refusal an unclassifiable payload earns. Uncertainty refuses.
+ *
+ * `canonical` is `null` when the canonical root itself could not be resolved;
+ * the refusal then says so rather than naming a directory it does not know.
+ */
+export function uncertaintyRefusal(what: string, canonical: string | null): string {
+	const where =
+		canonical === null
+			? "the canonical checkout (which git could not name) or in a worktree"
+			: `the canonical checkout (${canonical}) or in a worktree`;
+	return `worktrunk refused this call: ${what}, so it cannot tell whether the mutation lands in ${where}. ${CREATE_HINT} ${SANDBOX_LIMIT}`;
+}
+
+/**
+ * The refusal an undetermined project topology earns.
+ *
+ * `git` failing to answer proves nothing about where a write lands, so the gate
+ * refuses rather than standing down: a gate that disables itself whenever the
+ * command it depends on misbehaves is not a guardrail. The failure is not
+ * cached, so the next call after git recovers is decided normally.
+ */
+export function topologyRefusal(detail: string): string {
 	return (
-		`worktrunk refused this call: ${what}, so it cannot tell whether the mutation lands in the ` +
-		`canonical checkout (${canonical}) or in a worktree. ${CREATE_HINT} ${SANDBOX_LIMIT}`
+		`worktrunk refused this call: ${detail}, so it cannot tell whether this mutation lands in the ` +
+		`canonical checkout or in a linked worktree of this project. Uncertainty refuses; retry once ` +
+		`\`git\` answers again. ${CREATE_HINT} ${SANDBOX_LIMIT}`
 	);
 }
 
@@ -211,44 +236,109 @@ export function insideAny(target: string, roots: readonly string[]): boolean {
 	return false;
 }
 
-function git(cwd: string, args: string[]): string | null {
-	try {
-		return execFileSync("git", ["-C", cwd, ...args], {
-			encoding: "utf8",
-			stdio: ["ignore", "pipe", "ignore"],
-			timeout: 5000,
-		});
-	} catch {
-		return null;
+/** What a `git` invocation established: an answer, a refusal to be in a repository, or nothing. */
+type GitOutcome =
+	| { ok: true; stdout: string }
+	| { ok: false; kind: "no-repository" }
+	| { ok: false; kind: "unavailable"; detail: string };
+
+/**
+ * `git` said this directory is in no repository at all — a definite answer, not
+ * a failure. Deliberately narrow: a `cwd` git cannot even enter ("No such file
+ * or directory") is an unknown, not a licence to stand down.
+ */
+const NOT_A_REPOSITORY = /not a git repository|not a working tree/i;
+
+/**
+ * Run `git` and classify the outcome, distinguishing a definite "no repository
+ * here" from a `git` that did not answer.
+ *
+ * `spawnSync` rather than `execFileSync` because the distinction lives in
+ * `error` (ENOENT when git is not on PATH, ETIMEDOUT), in `signal` (the timeout
+ * kill), and in `stderr` (git's own diagnosis) — an exception collapses all
+ * three into one indistinguishable failure, which is how a gate ends up
+ * standing down when its own toolchain breaks.
+ */
+function runGit(cwd: string, args: string[]): GitOutcome {
+	const result = spawnSync("git", ["-C", cwd, ...args], {
+		encoding: "utf8",
+		stdio: ["ignore", "pipe", "pipe"],
+		timeout: 5000,
+	});
+	if (result.error) return { ok: false, kind: "unavailable", detail: `\`git\` did not run (${result.error.message})` };
+	if (result.signal !== null && result.signal !== undefined) {
+		return { ok: false, kind: "unavailable", detail: `\`git ${args[0]}\` was killed by ${result.signal} (timeout)` };
 	}
+	if (result.status !== 0) {
+		const stderr = (result.stderr ?? "").trim();
+		// git's own diagnosis is the only thing that turns a non-zero exit into a
+		// definite answer; every other non-zero exit is an unknown.
+		if (NOT_A_REPOSITORY.test(stderr)) return { ok: false, kind: "no-repository" };
+		return {
+			ok: false,
+			kind: "unavailable",
+			detail: `\`git ${args[0]}\` exited ${result.status}${stderr.length > 0 ? `: ${stderr.split("\n")[0]}` : ""}`,
+		};
+	}
+	return { ok: true, stdout: result.stdout ?? "" };
+}
+
+/** What resolving the canonical root established. `unknown` is a refusal state, not an inert one. */
+export type CanonicalResolution =
+	| { state: "repository"; canonical: string }
+	| { state: "no-repository" }
+	| { state: "unknown"; detail: string };
+
+/**
+ * Resolve the absolute canonical root of the repository `cwd` belongs to: the
+ * directory holding the common git directory. A linked worktree reports the
+ * canonical checkout's `.git`, which is exactly the identity the gate needs.
+ *
+ * Three outcomes, because two would be a fail-open bug: `no-repository` is git
+ * saying there is nothing to protect, while `unknown` is git not saying
+ * anything, and only the first may make the gate inert.
+ */
+export function resolveCanonicalRoot(cwd: string): CanonicalResolution {
+	const outcome = runGit(cwd, ["rev-parse", "--path-format=absolute", "--git-common-dir"]);
+	if (!outcome.ok) {
+		return outcome.kind === "no-repository" ? { state: "no-repository" } : { state: "unknown", detail: outcome.detail };
+	}
+	const commonDir = outcome.stdout.trim();
+	if (commonDir.length === 0) {
+		return { state: "unknown", detail: "`git rev-parse --git-common-dir` printed nothing" };
+	}
+	const canonical = realDeepest(path.dirname(commonDir));
+	if (canonical === null) {
+		return { state: "unknown", detail: `the common git directory ${commonDir} does not resolve on disk` };
+	}
+	return { state: "repository", canonical };
 }
 
 /**
- * Absolute canonical root of the repository `cwd` belongs to: the directory
- * holding the common git directory. A linked worktree reports the canonical
- * checkout's `.git`, which is exactly the identity the gate needs. `null` when
- * `cwd` is in no repository at all.
+ * Canonical root, or `null` for both "no repository" and "git did not answer".
+ *
+ * Informational only: the gate decides on `resolveCanonicalRoot`, because this
+ * `null` conflates a directory that needs no guarding with one whose topology is
+ * merely unknown, and treating the second as the first is what disables a gate.
  */
 export function canonicalRoot(cwd: string): string | null {
-	const out = git(cwd, ["rev-parse", "--path-format=absolute", "--git-common-dir"]);
-	if (out === null) return null;
-	const commonDir = out.trim();
-	if (commonDir.length === 0) return null;
-	return realDeepest(path.dirname(commonDir));
+	const resolution = resolveCanonicalRoot(cwd);
+	return resolution.state === "repository" ? resolution.canonical : null;
 }
 
 /**
- * Linked, non-canonical worktrees of this repository, as physical paths.
+ * Linked, non-canonical worktrees of this repository, as physical paths, or
+ * `null` when `git worktree list` did not answer.
  *
  * A bare or missing entry is skipped; the canonical root itself is excluded,
  * because it is the one place no agent may mutate.
  */
-export function projectWorktrees(canonical: string): string[] {
-	const out = git(canonical, ["worktree", "list", "--porcelain"]);
-	if (out === null) return [];
+export function projectWorktrees(canonical: string): string[] | null {
+	const outcome = runGit(canonical, ["worktree", "list", "--porcelain"]);
+	if (!outcome.ok) return null;
 	const realCanonical = realDeepest(canonical);
 	const found: string[] = [];
-	for (const line of out.split("\n")) {
+	for (const line of outcome.stdout.split("\n")) {
 		if (!line.startsWith("worktree ")) continue;
 		const real = realDeepest(line.slice("worktree ".length).trim());
 		if (real === null || real === realCanonical) continue;
@@ -259,15 +349,21 @@ export function projectWorktrees(canonical: string): string[] {
 
 /** Project topology the decision runs against. Injectable so tests need no repository. */
 export interface GateTopology {
-	/** Canonical root, or `null` when the session is in no repository. */
+	/** Canonical root, or `null` when the session is in no repository or the topology is unknown. */
 	canonical: string | null;
-	/** Cached non-canonical worktrees. */
+	/**
+	 * Why the topology could not be determined, or `null`/absent when it was.
+	 * Non-null means mutation refuses: a `null` canonical alone cannot say
+	 * whether there is nothing to guard or nothing was learned.
+	 */
+	uncertainty?: string | null;
+	/** Cached non-canonical worktrees; empty when the list could not be read. */
 	worktrees: readonly string[];
 	/** Re-read the worktree list and return it. */
 	refresh(): readonly string[];
 }
 
-const canonicalCache = new Map<string, string | null>();
+const canonicalCache = new Map<string, CanonicalResolution>();
 const worktreeCache = new Map<string, string[]>();
 
 /**
@@ -286,20 +382,37 @@ export function resetTopologyCache(): void {
 }
 
 export function defaultTopology(sessionCwd: string): GateTopology {
-	let canonical = canonicalCache.get(sessionCwd);
-	if (canonical === undefined) {
-		canonical = canonicalRoot(sessionCwd);
-		canonicalCache.set(sessionCwd, canonical);
+	let resolution = canonicalCache.get(sessionCwd);
+	if (resolution === undefined) {
+		resolution = resolveCanonicalRoot(sessionCwd);
+		// A failure is never cached. Caching it would let one transient `git`
+		// failure disable the gate for the rest of the session, which is exactly
+		// the shape a guardrail must not have.
+		if (resolution.state !== "unknown") canonicalCache.set(sessionCwd, resolution);
 	}
-	const root = canonical;
-	if (root === null) return { canonical: null, worktrees: [], refresh: () => [] };
-	const read = (): string[] => {
+	if (resolution.state === "unknown") {
+		return { canonical: null, uncertainty: resolution.detail, worktrees: [], refresh: () => [] };
+	}
+	if (resolution.state === "no-repository") {
+		return { canonical: null, uncertainty: null, worktrees: [], refresh: () => [] };
+	}
+	const root = resolution.canonical;
+	let listFailure: string | null = null;
+	const read = (): readonly string[] => {
 		const fresh = projectWorktrees(root);
+		if (fresh === null) {
+			listFailure = `\`git worktree list\` did not answer in ${root}`;
+			return [];
+		}
+		listFailure = null;
 		worktreeCache.set(root, fresh);
 		return fresh;
 	};
 	return {
 		canonical: root,
+		get uncertainty(): string | null {
+			return listFailure;
+		},
 		get worktrees(): readonly string[] {
 			return worktreeCache.get(root) ?? read();
 		},
@@ -563,6 +676,18 @@ export function createsWorktree(command: string): boolean {
 	);
 }
 
+/**
+ * True when the command can change whether this directory is in a repository at
+ * all, or which repository it belongs to, so every cached lookup is stale.
+ *
+ * A cached `no-repository` is a definite answer only until someone creates a
+ * repository under the session cwd. An unknown is never cached, so a `git` that
+ * comes back on PATH needs no invalidation — availability recovers by itself.
+ */
+export function changesRepositoryTopology(command: string): boolean {
+	return /\bgit\s+(?:[^\n]*\s)?(?:init|clone)\b/.test(command);
+}
+
 /** The bash call's command string, whatever spelling the input uses. */
 export function extractCommand(input: unknown): string {
 	const record = asRecord(input);
@@ -600,8 +725,9 @@ export function scanPathArguments(input: unknown, depth = 0): string[] {
 /**
  * The refusal this tool call earns, or `undefined` when it may run.
  *
- * The gate is inert when the session is in no git repository: there is no
- * project to protect and no worktree anyone could be asked to occupy. Inside a
+ * The gate is inert only when git has confirmed the session is in no repository:
+ * there is then no project to protect and no worktree anyone could be asked to
+ * occupy. An undetermined topology is not that state and refuses. Inside a
  * project, every mutation must land in a non-canonical worktree of it, and
  * anything the gate cannot classify refuses.
  */
@@ -611,19 +737,26 @@ export function decideWorktreeCall(
 	sessionCwd: string,
 	topology: GateTopology = defaultTopology(sessionCwd),
 ): GateRefusal | undefined {
+	if (READ_ONLY_TOOLS[toolName] === true) return undefined;
+	const uncertainty = topology.uncertainty ?? null;
+	if (uncertainty !== null) return { block: true, reason: topologyRefusal(uncertainty) };
 	const canonical = topology.canonical;
 	if (canonical === null) return undefined;
-	if (READ_ONLY_TOOLS[toolName] === true) return undefined;
 
-	const refuseTarget = (target: string): GateRefusal | undefined =>
-		contained(target, topology)
-			? undefined
-			: {
-					block: true,
-					// The physical target, so it is comparable with the realpath'd roots
-					// beside it: `/tmp` vs `/private/tmp` otherwise reads as a bug.
-					reason: containmentRefusal(realDeepest(target) ?? target, canonical, topology.worktrees),
-				};
+	const refuseTarget = (target: string): GateRefusal | undefined => {
+		if (contained(target, topology)) return undefined;
+		// Containment refused, so the worktree list was re-read: if that read is
+		// what failed, the honest refusal is the uncertainty one, not a claim that
+		// this project has no worktree holding the target.
+		const late = topology.uncertainty ?? null;
+		if (late !== null) return { block: true, reason: topologyRefusal(late) };
+		return {
+			block: true,
+			// The physical target, so it is comparable with the realpath'd roots
+			// beside it: `/tmp` vs `/private/tmp` otherwise reads as a bug.
+			reason: containmentRefusal(realDeepest(target) ?? target, canonical, topology.worktrees),
+		};
+	};
 
 	const refuseAll = (raws: readonly string[]): GateRefusal | undefined => {
 		for (const raw of raws) {
@@ -717,16 +850,23 @@ export default function worktreeGate(pi: ExtensionAPI): void {
 	pi.on("tool_call", (event: ToolCallEvent, ctx: ExtensionContext) => {
 		const sessionCwd = ctx?.cwd ?? process.cwd();
 		try {
-			if (event.toolName === "bash" && createsWorktree(extractCommand(event.input))) invalidateWorktreeCache();
+			if (event.toolName === "bash") {
+				const command = extractCommand(event.input);
+				if (changesRepositoryTopology(command)) resetTopologyCache();
+				else if (createsWorktree(command)) invalidateWorktreeCache();
+			}
 			return decideWorktreeCall(event.toolName, event.input, sessionCwd);
 		} catch (error) {
-			const canonical = canonicalCache.get(sessionCwd) ?? null;
-			if (canonical === null) return undefined;
+			// A thrown classification is an unknown, and an unknown refuses. Only a
+			// confirmed non-repository session stands down here.
+			if (READ_ONLY_TOOLS[event.toolName] === true) return undefined;
+			const cached = canonicalCache.get(sessionCwd);
+			if (cached?.state === "no-repository") return undefined;
 			return {
 				block: true,
 				reason: uncertaintyRefusal(
 					`this call could not be classified (${error instanceof Error ? error.message : String(error)})`,
-					canonical,
+					cached?.state === "repository" ? cached.canonical : null,
 				),
 			};
 		}

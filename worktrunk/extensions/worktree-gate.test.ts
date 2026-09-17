@@ -1,16 +1,21 @@
 import { afterEach, describe, expect, test } from "bun:test";
+import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import {
 	bootstrapAllowed,
+	changesRepositoryTopology,
 	createsWorktree,
 	decideWorktreeCall,
 	editTargets,
 	type GateTopology,
 	globBase,
 	insideAny,
+	projectWorktrees,
+	resetTopologyCache,
+	resolveCanonicalRoot,
 	tokenize,
 } from "./worktree-gate.ts";
 
@@ -321,9 +326,132 @@ describe("eval", () => {
 });
 
 describe("scope", () => {
-	test("the gate is inert when the session is in no repository", () => {
-		const inert: GateTopology = { canonical: null, worktrees: [], refresh: () => [] };
+	test("the gate is inert when git confirmed the session is in no repository", () => {
+		const inert: GateTopology = { canonical: null, uncertainty: null, worktrees: [], refresh: () => [] };
 		expect(decideWorktreeCall("write", { path: "/anywhere/x.ts", content: "" }, "/anywhere", inert)).toBeUndefined();
+	});
+
+	test("an undetermined topology refuses mutation and still allows reading", () => {
+		const unknown: GateTopology = {
+			canonical: null,
+			uncertainty: "`git` did not run (spawn git ENOENT)",
+			worktrees: [],
+			refresh: () => [],
+		};
+		const decision = decideWorktreeCall("write", { path: "/anywhere/x.ts", content: "" }, "/anywhere", unknown);
+		expect(decision?.block).toBe(true);
+		expect(decision?.reason).toContain("ENOENT");
+		expect(decision?.reason).toContain("Uncertainty refuses");
+		expect(decideWorktreeCall("read", { path: "/anywhere/x.ts" }, "/anywhere", unknown)).toBeUndefined();
+	});
+
+	test("a worktree list that does not answer refuses rather than reporting no worktrees", () => {
+		const { canonical } = project();
+		let listFailure: string | null = null;
+		const broken: GateTopology = {
+			canonical,
+			get uncertainty(): string | null {
+				return listFailure;
+			},
+			worktrees: [],
+			refresh: () => {
+				listFailure = "`git worktree list` did not answer";
+				return [];
+			},
+		};
+		const decision = decideWorktreeCall("write", { path: join(canonical, "src", "x.ts"), content: "" }, canonical, broken);
+		expect(decision?.block).toBe(true);
+		expect(decision?.reason).toContain("`git worktree list` did not answer");
+	});
+});
+
+/** A real repository with one linked worktree: the git-answer classification needs real git. */
+function repository(): { canonical: string; worktree: string } {
+	const parent = mkdtempSync(join(tmpdir(), "worktrunk-git-"));
+	roots.push(parent);
+	const canonical = join(parent, "canonical");
+	mkdirSync(join(canonical, "src"), { recursive: true });
+	const git = (...args: string[]): void => {
+		execFileSync("git", ["-C", canonical, ...args], { stdio: "ignore" });
+	};
+	git("init", "-q", "-b", "main");
+	git("config", "user.email", "probe@example.invalid");
+	git("config", "user.name", "probe");
+	git("commit", "-q", "--allow-empty", "-m", "root");
+	const worktree = join(parent, "wt");
+	git("worktree", "add", "-q", "-b", "omp/agent/probe", worktree);
+	return { canonical, worktree };
+}
+
+describe("git answers", () => {
+	afterEach(() => {
+		resetTopologyCache();
+	});
+
+	test("a repository, a plain directory and an unavailable git are three different answers", () => {
+		const { canonical, worktree } = repository();
+		expect(resolveCanonicalRoot(canonical)).toEqual({ state: "repository", canonical: expect.stringContaining("canonical") });
+		expect(resolveCanonicalRoot(worktree)).toEqual({ state: "repository", canonical: expect.stringContaining("canonical") });
+		expect(projectWorktrees(canonical)?.length).toBe(1);
+
+		const plain = mkdtempSync(join(tmpdir(), "worktrunk-plain-"));
+		roots.push(plain);
+		expect(resolveCanonicalRoot(plain)).toEqual({ state: "no-repository" });
+
+		const path = process.env.PATH;
+		process.env.PATH = join(plain, "no-tools");
+		try {
+			const unknown = resolveCanonicalRoot(canonical);
+			expect(unknown.state).toBe("unknown");
+			expect(projectWorktrees(canonical)).toBeNull();
+		} finally {
+			process.env.PATH = path;
+		}
+	});
+
+	test("a git failure blocks the write and is not cached, so recovery needs no invalidation", () => {
+		const { canonical, worktree } = repository();
+		const path = process.env.PATH;
+		process.env.PATH = join(canonical, "no-tools");
+		let duringFailure: { block: boolean } | undefined;
+		try {
+			duringFailure = decideWorktreeCall("write", { path: "src/probe.ts", content: "" }, canonical) as
+				| { block: boolean }
+				| undefined;
+		} finally {
+			process.env.PATH = path;
+		}
+		expect(duringFailure?.block).toBe(true);
+		// No cache was poisoned: the very next call decides against real git again.
+		expect(
+			decideWorktreeCall("write", { path: join(worktree, "src", "probe.ts"), content: "" }, canonical),
+		).toBeUndefined();
+		expect(decideWorktreeCall("write", { path: "src/probe.ts", content: "" }, canonical)?.block).toBe(true);
+	});
+});
+
+describe("security_scan", () => {
+	test("its output root and knowledge base are mutations, so canonical targets are refused", () => {
+		const { canonical, worktree, topology } = project();
+		expect(
+			decideWorktreeCall("security_scan", { action: "start", output_root: "scan-out" }, canonical, topology)?.block,
+		).toBe(true);
+		expect(
+			decideWorktreeCall(
+				"security_scan",
+				{ action: "start", knowledge_base_paths: [join(canonical, "kb")] },
+				canonical,
+				topology,
+			)?.block,
+		).toBe(true);
+		expect(
+			decideWorktreeCall(
+				"security_scan",
+				{ action: "start", output_root: join(worktree, "scan-out") },
+				canonical,
+				topology,
+			),
+		).toBeUndefined();
 	});
 });
 
@@ -337,5 +465,12 @@ describe("helpers", () => {
 		expect(createsWorktree("wt switch -y --create --no-cd --base main --format json omp/agent/x")).toBe(true);
 		expect(createsWorktree("git worktree add ../x -b y")).toBe(true);
 		expect(createsWorktree("wt list --format json")).toBe(false);
+	});
+
+	test("changesRepositoryTopology recognizes only what can create or move a repository", () => {
+		expect(changesRepositoryTopology("git init -b main")).toBe(true);
+		expect(changesRepositoryTopology("git clone https://example.invalid/r.git")).toBe(true);
+		expect(changesRepositoryTopology("git status --porcelain")).toBe(false);
+		expect(changesRepositoryTopology("wt switch -y --create --no-cd --base main --format json omp/agent/x")).toBe(false);
 	});
 });

@@ -31,15 +31,17 @@ A `tool_call` gate that refuses a mutation whose target is not physically inside
 | `eval` | the effective cwd |
 | any other tool | every argument under a path-shaped key, plus every absolute or `~`-rooted string |
 
-Read-only tools (`read`, `grep`, `glob`, `ast_grep`, `lsp`, `task`, `hub`, and the rest) are exempt: the gate blocks mutation, not inspection. Every other tool name is treated as mutating, because `toolName` is an unrestricted string and allow-by-omission is how a guardrail stops guarding an unenumerated device or MCP tool.
+Read-only tools (`read`, `grep`, `glob`, `ast_grep`, `lsp`, `task`, `hub`, and the rest) are exempt: the gate blocks mutation, not inspection. `security_scan` is not among them — it writes under `output_root` and reads a knowledge base by path, so it is checked like any other tool. Every other tool name is treated as mutating, because `toolName` is an unrestricted string and allow-by-omission is how a guardrail stops guarding an unenumerated device or MCP tool.
 
 Path arguments are derived with OMP's own normalization and cwds with OMP's own `resolveToCwd`, and containment compares the realpath of the deepest existing ancestor on both sides. A second parser would guard a different file than the one that changes, and a lexical prefix check passes a symlink inside a worktree that points at the canonical checkout.
 
-Uncertainty refuses: an `edit` payload with no parseable target, a `cwd` that does not resolve, a command with a canonical effective cwd that matches no allowlisted shape, and a thrown classification all block. The gate is inert only when the session is in no git repository, where there is no project to protect.
+Uncertainty refuses: an `edit` payload with no parseable target, a `cwd` that does not resolve, a command with a canonical effective cwd that matches no allowlisted shape, and a thrown classification all block. `git` failing to answer is uncertainty too, not an absence of a repository: a missing binary, the 5 s timeout, or any unexpected non-zero exit blocks mutation, and only git's own "not a git repository" diagnosis makes the gate inert. Such a failure is never cached, so the call after git recovers is decided normally; a cached "no repository" is dropped when a `git init` or `git clone` is observed.
 
 An agent's first action necessarily runs from the canonical checkout, because a spawned child inherits its parent's working directory. A closed bootstrap allowlist covers exactly that: `wt switch` in its create and `pr:<N>` forms, `wt list`, `wt config show`, `wt step prune --dry-run`, read-only `git`, and every `bd` call. A shell metacharacter (`;`, `&`, `|`, a backtick, `$(`, `>`, `<`, or a newline) disqualifies a command from the allowlist outright.
 
 This is an accident guardrail, not a sandbox. A cooperative agent stops writing to the canonical checkout by mistake; a process whose cwd is a worktree can still write any absolute path through `git -C <canonical>`, a redirection, or `eval`, and the gate does not pretend to prevent that. Canonical is never a merge target, so nothing legitimate writes there anyway.
+
+One bounded gap follows from the same D3 accident-guardrail scope. On an unenumerated tool, a **relative** path under a key the gate does not recognize as path-shaped — `mcp__fs_write {"name": "src/probe.ts"}` — is not checked, because on an arbitrary tool any short string could be a name rather than a path and refusing every one of them would refuse ordinary work. Absolute paths, `~`-rooted paths, and every recognized path key are checked whatever the tool. Add the key to the gate's path-key table when a tool in use spells its target differently.
 
 ### `isolation-precheck`
 
