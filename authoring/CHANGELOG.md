@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.0.4](https://github.com/srobroek/omp-plugins/compare/authoring--v2.0.3...authoring--v2.0.4) (2026-09-17)
+
+
+### Bug Fixes
+
+* **authoring:** correct carrier lane documentation ([d69dad7](https://github.com/srobroek/omp-plugins/commit/d69dad7b980b59288d62327dd69ac08ef51316ce))
+
 ## [2.0.3](https://github.com/srobroek/omp-plugins/compare/authoring--v2.0.2...authoring--v2.0.3) (2026-09-17)
 
 
