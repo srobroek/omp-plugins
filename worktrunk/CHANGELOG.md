@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.6](https://github.com/srobroek/omp-plugins/compare/worktrunk--v0.2.5...worktrunk--v0.2.6) (2026-09-18)
+
+
+### Bug Fixes
+
+* **worktrunk:** resolve the gate's repository from a directory, not a file ([#380](https://github.com/srobroek/omp-plugins/issues/380)) ([da9384b](https://github.com/srobroek/omp-plugins/commit/da9384b996c82306f22490007ca076d5e35959a8))
+
 ## [0.2.5](https://github.com/srobroek/omp-plugins/compare/worktrunk--v0.2.4...worktrunk--v0.2.5) (2026-09-18)
 
 
