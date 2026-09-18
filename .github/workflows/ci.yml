@@ -26,7 +26,7 @@ jobs:
         if: ${{ github.event_name == 'pull_request' }}
         env:
           BINSTALL_DISABLE_TELEMETRY: "true"
-        run: cargo binstall agnix-cli@0.52.2 --no-confirm
+        run: cargo binstall agnix-cli@0.54.0 --no-confirm
 
       - name: Staged agentic check
         if: ${{ github.event_name == 'pull_request' }}
