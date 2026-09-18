@@ -46,6 +46,7 @@ import {
 } from "@oh-my-pi/pi-coding-agent/tools/path-utils";
 import { unwrapHashlineHeaderPath } from "@oh-my-pi/pi-coding-agent/tools/plan-mode-guard";
 import { editInspect } from "@oh-my-pi/pi-natives";
+import { trustedPrimaryPolicy } from "./trusted-primary-policy.ts";
 
 /** Refusal shape the `tool_call` gate API understands. */
 export interface GateRefusal {
@@ -179,13 +180,26 @@ const READ_ONLY_COMPANIONS: Record<string, true> = {
 	cat: true,
 	echo: true,
 	false: true,
-	grep: true,
-	head: true,
 	printf: true,
 	rg: true,
-	tail: true,
+	sort: true,
 	true: true,
+	uniq: true,
+	wc: true,
 };
+
+/** Filters that consume stdin, with conservative argument shapes that exclude file operands. */
+const STDIN_FILTERS: Record<string, true> = { cut: true, grep: true, head: true, jq: true, sed: true, sort: true, tail: true, tr: true, uniq: true, wc: true };
+
+function stdinFilterAllowed(program: string, args: readonly string[]): boolean {
+	if (!STDIN_FILTERS[program]) return false;
+	const positionals = args.filter(token => !token.startsWith("-"));
+	if (program === "sed" && args.some(token => token === "-i" || token === "--in-place")) return false;
+	if (program === "grep" && args.some(token => token === "-f" || token === "--file")) return false;
+	if (program === "tr") return positionals.length === 2;
+	if (program === "grep" || program === "jq" || program === "sed") return positionals.length === 1;
+	return positionals.length === 0;
+}
 
 /** Branch names an agent may create from the canonical checkout. */
 const AGENT_BRANCH = /^omp\/[A-Za-z0-9._/-]+$/;
@@ -392,7 +406,18 @@ function repositoryMetadata(cwd: string): RepositoryMetadata {
 }
 
 function runGit(cwd: string, args: string[]): GitOutcome {
+	const env: NodeJS.ProcessEnv = {};
+	for (const [key, value] of Object.entries(process.env)) {
+		if (!key.startsWith("GIT_")) env[key] = value;
+	}
+	env.GIT_CONFIG_NOSYSTEM = "1";
+	env.GIT_CONFIG_GLOBAL = "/dev/null";
+	env.GIT_CONFIG_SYSTEM = "/dev/null";
+	env.GIT_CONFIG_COUNT = "0";
+	env.GIT_NO_REPLACE_OBJECTS = "1";
+	env.GIT_TERMINAL_PROMPT = "0";
 	const result = spawnSync("git", ["-C", cwd, ...args], {
+		env,
 		encoding: "utf8",
 		stdio: ["ignore", "pipe", "pipe"],
 		timeout: 5000,
@@ -1041,6 +1066,19 @@ function invocationKind(segment: readonly string[]): "allowed" | "safe" | "other
 	const program = segment[index];
 	if (program === undefined) return "safe";
 	const rest = segment.slice(index + 1);
+	if (program === "env") {
+		let envIndex = 0;
+		while (envIndex < rest.length) {
+			const option = rest[envIndex];
+			if (option === undefined) return "other";
+			if (/^[A-Za-z_][A-Za-z0-9_]*=.*$/.test(option)) { envIndex++; continue; }
+			if (option === "-i" || option === "--ignore-environment") { envIndex++; continue; }
+			if (option === "-u" || option === "--unset") { if (rest[envIndex + 1] === undefined) return "other"; envIndex += 2; continue; }
+			break;
+		}
+		if (envIndex >= rest.length) return "other";
+		return invocationKind(rest.slice(envIndex));
+	}
 	if (program === "bd") return "allowed";
 	if (program === "wt") {
 		const args = afterWtGlobals(rest);
@@ -1063,11 +1101,13 @@ function invocationKind(segment: readonly string[]): "allowed" | "safe" | "other
 		return "other";
 	}
 	if (program === "gh") return ghReadAllowed(rest) ? "allowed" : "other";
+	if (stdinFilterAllowed(program, rest)) return "safe";
 	return READ_ONLY_COMPANIONS[program] === true ? "safe" : "other";
 }
 
 /** True when every command is a permitted bootstrap/read companion and one is a bootstrap invocation. */
 export function bootstrapAllowed(command: string): boolean {
+	if (/\$\(|`/.test(command)) return false;
 	const tokens = commandTokens(command);
 	if (tokens === null) return false;
 	let segment: string[] = [];

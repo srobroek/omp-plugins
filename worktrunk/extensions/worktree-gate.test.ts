@@ -429,10 +429,13 @@ describe("bootstrapAllowed", () => {
 	test("resolves env prefixes and stdin-only pipeline filters", () => {
 		expect(bootstrapAllowed("env -u BEADS_DIR bd --readonly --sandbox stats 2>&1 | head -40")).toBe(true);
 		expect(bootstrapAllowed("bd --readonly --sandbox show omp-plugins-p98r 2>&1 | cut -c1-140")).toBe(true);
+		expect(bootstrapAllowed("bd --readonly --sandbox show omp-plugins-p98r 2>&1 | cut -c1-140 named.txt")).toBe(false);
+		expect(bootstrapAllowed("bd --readonly --sandbox show omp-plugins-p98r 2>&1 | cut -c1-140 /tmp/output.txt")).toBe(false);
 		expect(bootstrapAllowed("bd --readonly --sandbox list --status open")).toBe(true);
 		expect(bootstrapAllowed("git commit -m x")).toBe(false);
 		expect(bootstrapAllowed("bash -c \"bd list\"")).toBe(false);
 		expect(bootstrapAllowed("bd list $(echo nope)")).toBe(false);
+		expect(bootstrapAllowed("bd list `echo nope`")).toBe(false);
 		expect(bootstrapAllowed("bd list | xargs touch")).toBe(false);
 		expect(bootstrapAllowed("bd list > checkout.txt")).toBe(false);
 		expect(bootstrapAllowed("not-a-bootstrap-binary")).toBe(false);
@@ -639,6 +642,23 @@ describe("git answers", () => {
 			process.env.PATH = path;
 		}
 	}, 60000);
+
+	test("ownership queries ignore inherited Git environment controls", () => {
+		const { canonical, worktree } = repository();
+		const previous = { GIT_DIR: process.env.GIT_DIR, GIT_CONFIG_GLOBAL: process.env.GIT_CONFIG_GLOBAL, GIT_CONFIG_COUNT: process.env.GIT_CONFIG_COUNT };
+		process.env.GIT_DIR = join(canonical, "missing-git-dir");
+		process.env.GIT_CONFIG_GLOBAL = join(canonical, "missing-config");
+		process.env.GIT_CONFIG_COUNT = "1";
+		try {
+			expect(resolveCanonicalRoot(worktree).state).toBe("repository");
+			expect(projectWorktrees(canonical)).toHaveLength(1);
+		} finally {
+			for (const [key, value] of Object.entries(previous)) {
+				if (value === undefined) delete process.env[key];
+				else process.env[key] = value;
+			}
+		}
+	});
 
 	test("a second repository is judged against its own topology, not this project's", () => {
 		const mine = repository();
