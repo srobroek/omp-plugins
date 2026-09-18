@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.7.2](https://github.com/srobroek/omp-plugins/compare/beads--v1.7.1...beads--v1.7.2) (2026-09-18)
+
+
+### Bug Fixes
+
+* **beads:** give session lifecycle bd calls the server credential ([#376](https://github.com/srobroek/omp-plugins/issues/376)) ([973a689](https://github.com/srobroek/omp-plugins/commit/973a68964f3363eb39ac17268fbe3109e17198f1))
+
 ## [1.7.1](https://github.com/srobroek/omp-plugins/compare/beads--v1.7.0...beads--v1.7.1) (2026-09-18)
 
 
