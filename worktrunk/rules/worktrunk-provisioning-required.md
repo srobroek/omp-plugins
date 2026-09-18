@@ -9,7 +9,7 @@ the project's hooks and step configuration, and `.worktreeinclude` listing the
 gitignored directories a fresh worktree needs. Neither is global; without them a
 repository gets no project provisioning.
 
-MUST author either file when it is missing, customised for that repository, before
+MUST author each missing file, customised for that repository, before
 proceeding with the work. A verification that stops at "absent" provisions nothing.
 Where a project cannot carry them, record that and the reason on the governing bead.
 
