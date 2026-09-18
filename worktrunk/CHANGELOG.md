@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.2.7](https://github.com/srobroek/omp-plugins/compare/worktrunk--v0.2.6...worktrunk--v0.2.7) (2026-09-18)
+
+
+### Bug Fixes
+
+* **worktrunk:** own the target's repository and close three gate bypasses ([#357](https://github.com/srobroek/omp-plugins/issues/357)) ([05d3c33](https://github.com/srobroek/omp-plugins/commit/05d3c33a06554db8a0d33a0017a5e344137eab3d))
+
+
+### Documentation
+
+* **worktrunk:** require authoring the provisioning files, not only checking ([#385](https://github.com/srobroek/omp-plugins/issues/385)) ([083ffaf](https://github.com/srobroek/omp-plugins/commit/083ffaf2d1b6a407300babf2917301cdc85671dd))
+* **worktrunk:** require dependency provisioning ([#384](https://github.com/srobroek/omp-plugins/issues/384)) ([04b4146](https://github.com/srobroek/omp-plugins/commit/04b4146db7caaf164e87f20d7724869c306a460c))
+* **worktrunk:** require provenance before a destructive ref deletion ([#382](https://github.com/srobroek/omp-plugins/issues/382)) ([3a417f4](https://github.com/srobroek/omp-plugins/commit/3a417f4ece1847407352e673c4b2a8b1459183f7))
+
 ## [0.2.6](https://github.com/srobroek/omp-plugins/compare/worktrunk--v0.2.5...worktrunk--v0.2.6) (2026-09-18)
 
 
