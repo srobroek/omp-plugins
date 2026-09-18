@@ -4,8 +4,8 @@ Worktrunk manages linked worktrees.
 
 ## Rules
 
-Use a worktree for mutations.
-The project disables native isolation.
+Use worktrees for mutations.
+Native isolation is off.
 Retry contention.
 
 ## Gate
