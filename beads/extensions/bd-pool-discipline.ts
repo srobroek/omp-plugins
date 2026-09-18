@@ -6,6 +6,7 @@ import { leadingCdCwd } from "./shell-command.ts";
 
 export const CLAIM_POOLS_KEY = "claim.pools";
 export const PHASE_METADATA_KEY = "phase";
+export const INTEGRATION_OWNER_METADATA_KEY = "integration_owner";
 export const DECLARED_POOL_ALIASES = [
 	"pool:orc-implementer",
 	"pool:orc-implementer-deep",
@@ -22,8 +23,10 @@ const TIMEOUT_MS = 10_000;
 const PREFILTER = /\bbd\b[\s\S]{0,400}?(?:--claim\b|\bclaim\b|\breclaim\b)/;
 const BEAD_ID = /^[A-Za-z][A-Za-z0-9]*(?:-[A-Za-z0-9]+)+$/;
 const POOLS_FAILURE = "bd pool discipline refused: cannot establish claim.pools in the client's database for this store";
-const NO_PHASE_ADVISORY = (id: string) => `bd pool discipline advisory: reclaimed bead ${id} has no recorded \`phase\` metadata; it remains unassigned and needs an explicit phase before it can re-enter a pool.`;
-const RESTAMP_FAILURE = (id: string, detail: string) => `bd pool discipline advisory: could not restore phase for reclaimed bead ${id} (${detail}); it remains unassigned.`;
+const NO_PHASE_ADVISORY = (id: string) => `bd pool discipline advisory: reclaimed work bead ${id} has no recorded \`phase\` metadata; it remains unassigned and needs an explicit phase before it can re-enter a pool.`;
+const NO_OWNER_ADVISORY = (id: string) => `bd pool discipline advisory: reclaimed merge slot ${id} has no recorded \`integration_owner\` metadata; it remains unassigned and needs an explicit owner before it can serialize a target.`;
+const RESTAMP_FAILURE = (id: string, detail: string) => `bd pool discipline advisory: could not restore phase for reclaimed work bead ${id} (${detail}); it remains unassigned.`;
+const OWNER_RESTORE_FAILURE = (id: string, detail: string) => `bd pool discipline advisory: could not restore integration owner for reclaimed merge slot ${id} (${detail}); it remains unassigned.`;
 
 export type BdRunResult = { exitCode: number; stdout: string; stderr?: string };
 export type BdRun = (argv: string[], cwd: string, env: NodeJS.ProcessEnv) => Promise<BdRunResult> | BdRunResult;
@@ -140,6 +143,10 @@ export function phaseArgs(invocation: BdInvocation, id: string, phase: string): 
 	return [...invocation.globals, "update", id, "--assignee", phase, "--json"];
 }
 
+export function ownerArgs(invocation: BdInvocation, id: string, owner: string): string[] {
+	return [...invocation.globals, "update", id, "--assignee", owner, "--json"];
+}
+
 function invocationIds(invocation: BdInvocation): string[] {
 	if (invocation.verb !== "reclaim") return [];
 	const ids = new Set<string>();
@@ -163,7 +170,7 @@ export function reclaimedIds(output: string, invocation?: BdInvocation): string[
 	return [...ids];
 }
 
-export function readPhase(output: string, id: string): string | undefined {
+function rowForId(output: string, id: string): Record<string, unknown> | undefined {
 	let parsed: unknown;
 	try {
 		parsed = JSON.parse(output);
@@ -171,14 +178,28 @@ export function readPhase(output: string, id: string): string | undefined {
 		return undefined;
 	}
 	const rows = Array.isArray(parsed) ? parsed : parsed !== null && typeof parsed === "object" && "data" in parsed && Array.isArray(parsed.data) ? parsed.data : [parsed];
-	for (const row of rows) {
-		if (row === null || typeof row !== "object") continue;
-		const object = row as Record<string, unknown>;
-		if (object.id !== id) continue;
-		const metadata = object.metadata;
-		if (metadata !== null && typeof metadata === "object" && typeof (metadata as Record<string, unknown>)[PHASE_METADATA_KEY] === "string") return (metadata as Record<string, string>)[PHASE_METADATA_KEY];
-	}
+	return rows.find(row => row !== null && typeof row === "object" && (row as Record<string, unknown>).id === id) as Record<string, unknown> | undefined;
+}
+
+function metadataString(output: string, id: string, key: string): string | undefined {
+	const row = rowForId(output, id);
+	const metadata = row?.metadata;
+	if (metadata !== null && typeof metadata === "object" && typeof (metadata as Record<string, unknown>)[key] === "string") return (metadata as Record<string, string>)[key];
 	return undefined;
+}
+
+export function readPhase(output: string, id: string): string | undefined {
+	return metadataString(output, id, PHASE_METADATA_KEY);
+}
+
+export function readIntegrationOwner(output: string, id: string): string | undefined {
+	return metadataString(output, id, INTEGRATION_OWNER_METADATA_KEY);
+}
+
+function isMergeSlot(output: string, id: string): boolean {
+	const row = rowForId(output, id);
+	const labels = row?.labels;
+	return Array.isArray(labels) && labels.includes("pr:merge");
 }
 
 function hasUnassignedAssignee(output: string, id: string): boolean {
@@ -277,6 +298,16 @@ export default function bdPoolDiscipline(pi: ExtensionAPI): void {
 				if (invocation === undefined) continue;
 				const shown = await run(["bd", ...invocation.globals, "show", id, "--json"], reclaim.cwd, reclaim.env);
 				if (shown.exitCode !== 0 || !hasUnassignedAssignee(shown.stdout, id)) continue;
+				if (isMergeSlot(shown.stdout, id)) {
+					const owner = readIntegrationOwner(shown.stdout, id);
+					if (owner === undefined || owner.trim() === "") {
+						notices.push(NO_OWNER_ADVISORY(id));
+						continue;
+					}
+					const restored = await withEmbeddedWriteLock(reclaim.cwd, event.toolCallId, () => run(["bd", ...ownerArgs(invocation, id, owner)], reclaim.cwd, reclaim.env), reclaim.env);
+					if (restored.kind === "failed" || restored.value.exitCode !== 0) notices.push(OWNER_RESTORE_FAILURE(id, restored.kind === "failed" ? restored.reason : restored.value.stderr?.trim() ?? `bd exited ${restored.value.exitCode}`));
+					continue;
+				}
 				const phase = readPhase(shown.stdout, id);
 				if (phase === undefined || phase.trim() === "") {
 					notices.push(NO_PHASE_ADVISORY(id));

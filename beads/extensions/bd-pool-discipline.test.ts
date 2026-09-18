@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 
 import bdPoolDiscipline, {
 	DECLARED_POOL_SET,
+	INTEGRATION_OWNER_METADATA_KEY,
 	PHASE_METADATA_KEY,
 	setBdRunForTests,
 } from "./bd-pool-discipline.ts";
@@ -13,6 +14,8 @@ type RunState = {
 	assignee?: string;
 	setExit?: number;
 	phase?: string;
+	owner?: string;
+	slot?: boolean;
 	calls: string[][];
 };
 
@@ -42,7 +45,7 @@ function handlers(state: RunState): { toolCall: Handler; toolResult: Handler } {
 		}
 		if (argv.includes("show")) {
 			const id = argv[argv.indexOf("show") + 1];
-			return { exitCode: 0, stdout: JSON.stringify({ data: [{ id, assignee: state.assignee, metadata: state.phase === undefined ? {} : { [PHASE_METADATA_KEY]: state.phase } }] }) };
+			return { exitCode: 0, stdout: JSON.stringify({ data: [{ id, assignee: state.assignee, labels: state.slot ? ["pr:merge"] : [], metadata: { ...(state.phase === undefined ? {} : { [PHASE_METADATA_KEY]: state.phase }), ...(state.owner === undefined ? {} : { [INTEGRATION_OWNER_METADATA_KEY]: state.owner }) } }] }) };
 		}
 		if (argv.includes("update")) return { exitCode: 0, stdout: "updated" };
 		return { exitCode: 0, stdout: "" };
@@ -105,7 +108,24 @@ describe("reclaim phase restoration", () => {
 		expect(state.calls).toContainEqual(["bd", "update", "bead-1", "--assignee", "pool:orc-reviewer", "--json"]);
 	});
 
-	test("reports a reclaimed bead with no recorded phase instead of leaving it silent", async () => {
+	test("restores a reclaimed merge slot to its integration owner", async () => {
+		const state: RunState = { pool: DECLARED_POOL_SET, owner: "omp/shepherd", slot: true, calls: [] };
+		const { toolCall, toolResult } = handlers(state);
+		await toolCall(call("bd reclaim --older-than 0s --id bead-1"));
+		await toolResult(result("call-1", '{"data":[{"id":"bead-1"}]}'));
+		expect(state.calls).toContainEqual(["bd", "update", "bead-1", "--assignee", "omp/shepherd", "--json"]);
+	});
+
+	test("reports a reclaimed merge slot with no recorded owner", async () => {
+		const state: RunState = { pool: DECLARED_POOL_SET, slot: true, calls: [] };
+		const { toolCall, toolResult } = handlers(state);
+		await toolCall(call("bd reclaim --older-than 0s --id bead-1"));
+		const advisory = await toolResult(result("call-1", '{"data":[{"id":"bead-1"}]}')) as { content: Array<{ text?: string }> };
+		expect(advisory.content[0]?.text).toContain("no recorded `integration_owner` metadata");
+		expect(state.calls.some(argv => argv.includes("--assignee"))).toBe(false);
+	});
+
+	test("reports a reclaimed work bead with no recorded phase instead of leaving it silent", async () => {
 		const state: RunState = { pool: DECLARED_POOL_SET, calls: [] };
 		const { toolCall, toolResult } = handlers(state);
 		await toolCall(call("bd reclaim --older-than 0s --id bead-1"));
