@@ -308,7 +308,7 @@ function runGit(cwd: string, args: string[]): GitOutcome {
 		return {
 			ok: false,
 			kind: "unavailable",
-			detail: `\`git ${args[0]}\` exited ${result.status}${stderr.length > 0 ? `: ${stderr.split("\\n")[0]}` : ""}`,
+			detail: `\`git ${args[0]}\` exited ${result.status}${stderr.length > 0 ? `: ${stderr.split("\n")[0]}` : ""}`,
 		};
 	}
 	return { ok: true, stdout: result.stdout ?? "" };
