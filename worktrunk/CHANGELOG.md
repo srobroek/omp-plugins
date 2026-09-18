@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.3](https://github.com/srobroek/omp-plugins/compare/worktrunk--v0.2.2...worktrunk--v0.2.3) (2026-09-18)
+
+
+### Bug Fixes
+
+* **worktrunk:** honor authorized primary checkouts ([#370](https://github.com/srobroek/omp-plugins/issues/370)) ([badedee](https://github.com/srobroek/omp-plugins/commit/badedee729c66d4c13db4bed17d66a22a789e0f6))
+
 ## [0.2.2](https://github.com/srobroek/omp-plugins/compare/worktrunk--v0.2.1...worktrunk--v0.2.2) (2026-09-18)
 
 
