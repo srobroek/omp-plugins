@@ -76,8 +76,6 @@ describe("missingInitFlags", () => {
 		expect(missingInitFlags(["--init-if-missing"])).toEqual({ skipHooks: true });
 	});
 
-	test("a leftover server flag does not silence the skip-hooks advisory", () => {
-	});
 
 	test("the correct form says nothing", () => {
 		expect(missingInitFlags(["--skip-hooks"])).toBeUndefined();

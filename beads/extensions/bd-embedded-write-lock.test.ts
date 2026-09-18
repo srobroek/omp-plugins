@@ -116,38 +116,32 @@ describe("writesStore", () => {
 
 describe("store resolution follows the store bd will really write", () => {
 	test("a path-valued --db names the store, so those writes cannot escape", () => {
-		const beads = store("embedded");
+		const beads = store();
 		expect(embeddedStores(`bd --db ${beads} close x`, "/repo", {})).toEqual([beads]);
 	});
 
 	test("a --db inside the store resolves to the store itself", () => {
-		const beads = store("embedded");
+		const beads = store();
 		const file = join(beads, "beads.db");
 		writeFileSync(file, "");
 		expect(embeddedStores(`bd --db ${file} close x`, "/repo", {})).toEqual([beads]);
 	});
 
-		const beads = store("embedded");
-		expect(embeddedStores("bd --db some_server_database close x", "/repo", { BEADS_DIR: beads })).toEqual([]);
-	});
 
 	test("--directory=<path> resolves the same store as -C <path>", () => {
-		const beads = store("embedded");
+		const beads = store();
 		const checkout = join(beads, "..");
 		expect(embeddedStores(`bd --directory=${checkout} close x`, "/elsewhere", {})).toEqual([beads]);
 	});
 
 	test("--global addresses another database, so this store is left alone", () => {
-		const beads = store("embedded");
+		const beads = store();
 		expect(embeddedStores("bd --global close x", "/repo", { BEADS_DIR: beads })).toEqual([]);
 	});
 
-		const beads = store("embedded");
-		expect(embeddedStores("bd --database other close x", "/repo", { BEADS_DIR: beads })).toEqual([]);
-	});
 
 	test("a global flag's value is never mistaken for the verb", () => {
-		const beads = store("embedded");
+		const beads = store();
 		// `--database other` once made `other` look like the verb, which classified as
 		// a write for the wrong reason; the store is still left alone, but via --database.
 		expect(embeddedStores("bd --actor me list --json", "/repo", { BEADS_DIR: beads })).toEqual([]);
@@ -155,12 +149,12 @@ describe("store resolution follows the store bd will really write", () => {
 	});
 
 	test("bd reached by path is the same command, so it takes the same lock", () => {
-		const beads = store("embedded");
+		const beads = store();
 		expect(embeddedStores("/usr/local/bin/bd close x", "/repo", { BEADS_DIR: beads })).toEqual([beads]);
 	});
 
 	test("two spellings of one store are one lock domain", () => {
-		const beads = store("embedded");
+		const beads = store();
 		const roundabout = join(beads, "..", ".beads", ".", "..", ".beads");
 		expect(embeddedStores(`bd close x`, "/repo", { BEADS_DIR: roundabout })).toEqual([beads]);
 	});
@@ -182,7 +176,7 @@ describe("a call that never executes cannot strand its hold", () => {
 	}
 
 	test("a turn that ends without a tool result gives the hold back", async () => {
-		const beads = store("embedded");
+		const beads = store();
 		const handlers = lifecycle();
 		await handlers.tool_call?.[0]?.(bashCall("timed-out", "bd create a -t task", beads));
 		expect(existsSync(join(beads, LOCK))).toBe(true);
@@ -196,7 +190,7 @@ describe("a call that never executes cannot strand its hold", () => {
 	});
 
 	test("a denied approval gives the hold back without waiting for the turn", async () => {
-		const beads = store("embedded");
+		const beads = store();
 		const handlers = lifecycle();
 		await handlers.tool_call?.[0]?.(bashCall("denied", "bd create a -t task", beads));
 		handlers.tool_approval_resolved?.[0]?.({ toolCallId: "denied", approved: false });
@@ -204,7 +198,7 @@ describe("a call that never executes cannot strand its hold", () => {
 	});
 
 	test("an approved call keeps its hold until the result arrives", async () => {
-		const beads = store("embedded");
+		const beads = store();
 		const handlers = lifecycle();
 		await handlers.tool_call?.[0]?.(bashCall("approved", "bd create a -t task", beads));
 		handlers.tool_approval_resolved?.[0]?.({ toolCallId: "approved", approved: true });
@@ -214,7 +208,7 @@ describe("a call that never executes cannot strand its hold", () => {
 	});
 
 	test("a hold whose lease lapsed is taken over even though its pid is alive", async () => {
-		const beads = store("embedded");
+		const beads = store();
 		// Exactly the shape a stranded hold leaves behind: this very process, alive,
 		// with a lease nobody renewed.
 		writeFileSync(
@@ -269,7 +263,7 @@ describe("only a direct bd invocation is accepted", () => {
 
 	for (const [name, command] of Object.entries(ACCEPTED)) {
 		test(`locks the resolved store for ${name}`, () => {
-			const beads = store("embedded");
+			const beads = store();
 			expect(embeddedWriteTargets(command, "/repo", { BEADS_DIR: beads })).toEqual({ kind: "stores", stores: [beads] });
 		});
 	}
@@ -291,15 +285,9 @@ describe("only a direct bd invocation is accepted", () => {
 		"bd --version": "bd --version",
 		"bd --help": "bd --help",
 		"bare bd": "bd",
-		"a read on a server store is not this lock's business": "bd close x",
-	};
+			};
 
 	for (const [name, command] of Object.entries(FREE)) {
-		test(`leaves ${name} unserialised`, () => {
-			const mode = name.includes("server store") ? "server" : "embedded";
-			const beads = store(mode);
-			expect(embeddedWriteTargets(command, "/repo", { BEADS_DIR: beads })).toEqual({ kind: "stores", stores: [] });
-		});
 	}
 
 	/**
@@ -348,18 +336,19 @@ describe("only a direct bd invocation is accepted", () => {
 
 	for (const [name, command] of Object.entries(REFUSED)) {
 		test(`refuses ${name}`, () => {
-			const beads = store("embedded");
+			const beads = store();
 			const targets = embeddedWriteTargets(command, "/repo", { BEADS_DIR: beads });
 			expect(targets.kind).toBe("refused");
 		});
 
 		test(`allows ${name} where no embedded store is in reach`, () => {
+			const beads = store();
 			expect(embeddedWriteTargets(command, "/repo", { BEADS_DIR: beads })).toEqual({ kind: "stores", stores: [] });
 		});
 	}
 
 	test("the refusal names the shape that clears it, and that shape is accepted", () => {
-		const beads = store("embedded");
+		const beads = store();
 		const refused = embeddedWriteTargets("cd other && bd close x", "/repo", { BEADS_DIR: beads });
 		expect(refused.kind).toBe("refused");
 		const reason = refused.kind === "refused" ? refused.reason : "";
@@ -370,40 +359,34 @@ describe("only a direct bd invocation is accepted", () => {
 	});
 
 	test("a direct write to an explicit store is locked with no ambient store at all", () => {
-		const beads = store("embedded");
+		const beads = store();
 		// No BEADS_DIR and a cwd with no `.beads`: the explicit target is the only
 		// thing naming a store, and it still has to be locked.
 		expect(embeddedWriteTargets(`bd -C ${join(beads, "..")} close x`, "/nowhere", {})).toEqual({ kind: "stores", stores: [beads] });
 	});
 
 	test("a compound command naming an explicit embedded store is refused with no ambient store", () => {
-		const beads = store("embedded");
+		const beads = store();
 		const targets = embeddedWriteTargets(`cd /tmp && bd -C ${join(beads, "..")} close x`, "/nowhere", {});
 		expect(targets.kind).toBe("refused");
 		expect(targets.kind === "refused" && targets.reason).toContain(beads);
 	});
 
-	test("a compound command naming an explicit server store is allowed", () => {
-		expect(embeddedWriteTargets(`cd /tmp && bd -C ${join(beads, "..")} close x`, "/nowhere", {})).toEqual({ kind: "stores", stores: [] });
-	});
 
 	test("a nested payload naming an explicit embedded store is refused with no ambient store", () => {
-		const beads = store("embedded");
+		const beads = store();
 		const targets = embeddedWriteTargets(`bash -c 'bd -C ${join(beads, "..")} close x'`, "/nowhere", {});
 		expect(targets.kind).toBe("refused");
 		expect(targets.kind === "refused" && targets.reason).toContain(beads);
 	});
 
 	test("a nested payload naming an explicit store is refused, never locked as direct", () => {
-		const beads = store("embedded");
+		const beads = store();
 		// The distinction matters: locking it would report the write as serialised while
 		// the shell ran something this gate never read.
 		expect(embeddedWriteTargets(`bash -c 'bd --db ${beads} close x'`, "/nowhere", {}).kind).toBe("refused");
 	});
 
-	test("a nested payload naming a server store stays allowed", () => {
-		expect(embeddedWriteTargets(`bash -c 'bd -C ${join(beads, "..")} close x'`, "/nowhere", {})).toEqual({ kind: "stores", stores: [] });
-	});
 
 	test("a compound command naming no store at all is allowed when nothing is in reach", () => {
 		expect(embeddedWriteTargets("cd /tmp && bd close x", "/nowhere", {})).toEqual({ kind: "stores", stores: [] });
@@ -411,32 +394,13 @@ describe("only a direct bd invocation is accepted", () => {
 });
 
 describe("jurisdiction does not depend on the session's own store", () => {
-	test("a server-backed session store does not hide an explicit embedded target", () => {
-		const other = store("embedded");
-		// The session's own store is server-backed, so it needs no lock -- but the
-		// command names an embedded store, and that write still has to be serialised.
-		expect(embeddedWriteTargets(`bd -C ${join(other, "..")} close x`, "/repo", { BEADS_DIR: session })).toEqual({
-			kind: "stores",
-			stores: [other],
-		});
-	});
 
-	test("a server-backed session store does not hide an explicit embedded target in a compound command", () => {
-		const other = store("embedded");
-		const targets = embeddedWriteTargets(`cd /tmp && bd -C ${join(other, "..")} close x`, "/repo", { BEADS_DIR: session });
-		expect(targets.kind).toBe("refused");
-		expect(targets.kind === "refused" && targets.reason).toContain(other);
-	});
 
-	test("a server-backed session store does not hide an explicit embedded target in a nested payload", () => {
-		const other = store("embedded");
-		expect(embeddedWriteTargets(`bash -c 'bd -C ${join(other, "..")} close x'`, "/repo", { BEADS_DIR: session }).kind).toBe("refused");
-	});
 });
 
 describe("the gate refuses what it cannot place", () => {
 	test("a compound command is blocked, with the remediation the agent needs", async () => {
-		const beads = store("embedded");
+		const beads = store();
 		const { lockCall } = wire();
 		const blocked = (await lockCall(bashCall("compound", "cd other && bd close x", beads))) as { block?: boolean; reason?: string };
 		expect(blocked?.block).toBe(true);
@@ -444,21 +408,17 @@ describe("the gate refuses what it cannot place", () => {
 		expect(existsSync(join(beads, LOCK))).toBe(false);
 	});
 
-	test("the same command is allowed on a server store, where the lock is irrelevant", async () => {
-		const { lockCall } = wire();
-		expect(await lockCall(bashCall("compound", "cd other && bd close x", beads))).toBeUndefined();
-	});
 });
 
 /** A `.beads` directory carrying the mode carriers bd writes. */
-function store(mode: "embedded" | "server"): string {
+function store(): string {
 	// Canonical, because the lock canonicalises every store path so two spellings of
 	// one database cannot become two lock domains; on macOS `/var` is a symlink.
 	const root = realpathSync(mkdtempSync(join(tmpdir(), "beads-write-lock-")));
 	roots.push(root);
 	const beads = join(root, ".beads");
 	mkdirSync(beads);
-	writeFileSync(join(beads, "metadata.json"), JSON.stringify({ dolt_mode: mode }));
+	writeFileSync(join(beads, "metadata.json"), JSON.stringify({}));
 	return beads;
 }
 
@@ -488,7 +448,7 @@ describe("a deep formula pour shares the store's lock domain", () => {
 	}
 
 	test("a real pour waits for the bash mutation holding the store", async () => {
-		const beads = store("embedded");
+		const beads = store();
 		const checkout = join(beads, "..");
 		const seen: string[] = [];
 		setBdSpawnForTests(pourSpawn(seen));
@@ -506,7 +466,7 @@ describe("a deep formula pour shares the store's lock domain", () => {
 	});
 
 	test("a pour that cannot take the lock never runs bd at all", async () => {
-		const beads = store("embedded");
+		const beads = store();
 		const seen: string[] = [];
 		setBdSpawnForTests(pourSpawn(seen));
 		chmodSync(beads, 0o500);
@@ -516,7 +476,7 @@ describe("a deep formula pour shares the store's lock domain", () => {
 	});
 
 	test("the pour's own read-back joins its hold instead of queueing behind it", async () => {
-		const beads = store("embedded");
+		const beads = store();
 		const seen: string[] = [];
 		setBdSpawnForTests(pourSpawn(seen));
 		// A nested run that took a second hold would never be reached, so arriving
@@ -527,7 +487,7 @@ describe("a deep formula pour shares the store's lock domain", () => {
 	});
 
 	test("a cook check is serialised too, because this repository classifies cook as a write", async () => {
-		const beads = store("embedded");
+		const beads = store();
 		const seen: string[] = [];
 		setBdSpawnForTests(pourSpawn(seen));
 		const { lockCall, lockResult } = wire();
@@ -554,7 +514,7 @@ describe("a session-boundary gate check shares the store's lock domain", () => {
 	}
 
 	test("a mutating gate check waits for the bash mutation holding the store", async () => {
-		const beads = store("embedded");
+		const beads = store();
 		const seen: string[] = [];
 		setBdStreamForTests(streamSeam(seen));
 		const { lockCall, lockResult } = wire();
@@ -571,7 +531,7 @@ describe("a session-boundary gate check shares the store's lock domain", () => {
 	});
 
 	test("a read-only gate list is never delayed by a held store", async () => {
-		const beads = store("embedded");
+		const beads = store();
 		const seen: string[] = [];
 		setBdStreamForTests(streamSeam(seen));
 		const { lockCall } = wire();
@@ -580,16 +540,9 @@ describe("a session-boundary gate check shares the store's lock domain", () => {
 		expect(seen).toEqual(["gate list --json"]);
 	});
 
-	test("a gate check on a server store is not serialised by this lock", async () => {
-		const seen: string[] = [];
-		setBdStreamForTests(streamSeam(seen));
-		expect(await runBd(join(beads, ".."), ["gate", "check", "--json"], Date.now() + 5_000, { BEADS_DIR: beads })).toBe("{}");
-		expect(existsSync(join(beads, LOCK))).toBe(false);
-		expect(seen).toEqual(["gate check --json"]);
-	});
 
 	test("a gate check that cannot take the lock never runs bd at all", async () => {
-		const beads = store("embedded");
+		const beads = store();
 		const seen: string[] = [];
 		setBdStreamForTests(streamSeam(seen));
 		chmodSync(beads, 0o500);
@@ -641,24 +594,24 @@ async function tick(): Promise<void> {
 
 describe("embeddedStores", () => {
 	test("names the store a mutating bd command writes", () => {
-		const beads = store("embedded");
+		const beads = store();
 		expect(embeddedStores("bd create x -t task", "/repo", { BEADS_DIR: beads })).toEqual([beads]);
 	});
 
 	test("leaves a read alone", () => {
-		const beads = store("embedded");
+		const beads = store();
 		expect(embeddedStores("bd list --all --json", "/repo", { BEADS_DIR: beads })).toEqual([]);
 	});
 
 	test("follows a global -C to the store that command really writes", () => {
-		const beads = store("embedded");
+		const beads = store();
 		const checkout = join(beads, "..");
 		expect(embeddedStores(`bd -C ${checkout} close omp-1`, "/elsewhere", {})).toEqual([beads]);
 	});
 
 	test("a command line naming two stores is refused, not partially locked", () => {
-		const first = store("embedded");
-		const second = store("embedded");
+		const first = store();
+		const second = store();
 		const command = `bd -C ${join(first, "..")} create a -t task && bd -C ${join(second, "..")} create b -t task`;
 		// Two invocations are not the accepted shape, and locking only one of the two
 		// stores would be exactly the confident wrong answer this design removes.
@@ -668,7 +621,7 @@ describe("embeddedStores", () => {
 
 describe("cross-process hold", () => {
 	test("a live hold from another process makes a waiter fail closed rather than write", async () => {
-		const beads = store("embedded");
+		const beads = store();
 		writeFileSync(join(beads, LOCK), JSON.stringify({ host: HOST, pid: process.pid, toolCallId: "other", taken: Date.now() }));
 		const got = await hold(beads, "mine", 60);
 		expect(got.kind).toBe("failed");
@@ -676,7 +629,7 @@ describe("cross-process hold", () => {
 	});
 
 	test("a hold left by a dead process is taken over", async () => {
-		const beads = store("embedded");
+		const beads = store();
 		writeFileSync(join(beads, LOCK), JSON.stringify({ host: HOST, pid: DEAD_PID, toolCallId: "crashed", taken: Date.now() }));
 		const got = await hold(beads, "mine", 2_000);
 		expect(got.kind).toBe("held");
@@ -685,7 +638,7 @@ describe("cross-process hold", () => {
 	});
 
 	test("a nested writer joins the hold it is already inside, and the lock outlives it", async () => {
-		const beads = store("embedded");
+		const beads = store();
 		expect((await hold(beads, "call-1")).kind).toBe("held");
 		expect((await hold(beads, "call-1", 60)).kind).toBe("held");
 		release(beads, "call-1");
@@ -697,7 +650,7 @@ describe("cross-process hold", () => {
 
 describe("bdEmbeddedWriteLock", () => {
 	test("a second bash mutation waits for the first to report its result", async () => {
-		const beads = store("embedded");
+		const beads = store();
 		const { lockCall, lockResult } = wire();
 
 		expect(await lockCall(bashCall("a", "bd create a -t task", beads))).toBeUndefined();
@@ -718,7 +671,7 @@ describe("bdEmbeddedWriteLock", () => {
 	});
 
 	test("a lock the process cannot create refuses the write instead of running it", async () => {
-		const beads = store("embedded");
+		const beads = store();
 		chmodSync(beads, 0o500);
 		const { lockCall } = wire();
 		const blocked = (await lockCall(bashCall("a", "bd create a -t task", beads))) as { block?: boolean; reason?: string };
@@ -729,7 +682,7 @@ describe("bdEmbeddedWriteLock", () => {
 
 describe("the lease stamp shares the store's lock domain", () => {
 	test("a stamp for another call waits for the bash mutation holding the store", async () => {
-		const beads = store("embedded");
+		const beads = store();
 		const order: string[] = [];
 		setBdRunForTests(() => {
 			order.push("stamp");
@@ -754,7 +707,7 @@ describe("the lease stamp shares the store's lock domain", () => {
 	});
 
 	test("a stamp inside the claim's own hold runs without waiting on itself", async () => {
-		const beads = store("embedded");
+		const beads = store();
 		const stamps: string[][] = [];
 		setBdRunForTests(argv => {
 			stamps.push(argv);
@@ -851,19 +804,19 @@ async function runAgents(beads: string, serialized: boolean): Promise<{ gaps: st
 
 describe("concurrent isolated writers keep parity", () => {
 	test("unserialised writers lose issues, labels, dependencies and comments", async () => {
-		const { gaps } = await runAgents(store("embedded"), false);
+		const { gaps } = await runAgents(store(), false);
 		expect(gaps.length).toBeGreaterThan(0);
 	});
 
 	test("the lock preserves every issue, label, dependency and comment", async () => {
-		const { gaps } = await runAgents(store("embedded"), true);
+		const { gaps } = await runAgents(store(), true);
 		expect(gaps).toEqual([]);
 	});
 });
 
 describe("the hold covers an async write, not just its launch", () => {
 	test("another writer cannot enter until the async bd run has finished", async () => {
-		const beads = store("embedded");
+		const beads = store();
 		const order: string[] = [];
 		const running = Promise.withResolvers<string>();
 
@@ -899,7 +852,7 @@ describe("the hold covers an async write, not just its launch", () => {
 	});
 
 	test("a rejected write gives the hold back instead of stranding the store", async () => {
-		const beads = store("embedded");
+		const beads = store();
 		const failed = withEmbeddedWriteLock(join(beads, ".."), "internal", async () => {
 			throw new Error("bd died");
 		}, { BEADS_DIR: beads });
@@ -934,7 +887,7 @@ describe("a writer that outlasts its lease keeps its turn", () => {
 	}
 
 	test("an async write longer than the lease keeps renewing what other processes read", async () => {
-		const beads = store("embedded");
+		const beads = store();
 		setLeaseTimingForTests(200, 10);
 		const done = Promise.withResolvers<string>();
 		const writing = withEmbeddedWriteLock(join(beads, ".."), "slow", () => done.promise, { BEADS_DIR: beads });
@@ -954,7 +907,7 @@ describe("a writer that outlasts its lease keeps its turn", () => {
 	});
 
 	test("a release does not delete a lock this process no longer owns", async () => {
-		const beads = store("embedded");
+		const beads = store();
 		// A renewal interval longer than the test, so no heartbeat runs: this isolates
 		// the release path from the heartbeat's own ownership check.
 		setLeaseTimingForTests(120, 60_000);
@@ -967,7 +920,7 @@ describe("a writer that outlasts its lease keeps its turn", () => {
 	});
 
 	test("a heartbeat that wakes after a takeover does not overwrite the new owner", async () => {
-		const beads = store("embedded");
+		const beads = store();
 		setLeaseTimingForTests(200, 10);
 		expect((await hold(beads, "stalled")).kind).toBe("held");
 
