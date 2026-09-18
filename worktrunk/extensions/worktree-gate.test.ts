@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
 import { chmodSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, relative, sep } from "node:path";
 
 import worktreeGate, {
 	bootstrapAllowed,
@@ -742,6 +742,33 @@ describe("topology changes", () => {
 		expect(decideWorktreeCall("write", { path: target, content: "" }, plain)?.block).toBe(true);
 	}, 60000);
 
+
+	test("a cached linked-worktree directory replaced by a submodule is re-resolved to the submodule owner", () => {
+		const outer = repository();
+		const inner = repository();
+		const submodule = join(outer.worktree, "sub");
+		mkdirSync(submodule);
+
+		// Cache this ordinary directory as part of the superproject's linked worktree.
+		expect(decideWorktreeCall("write", { path: join(submodule, "probe.ts"), content: "" }, outer.canonical)).toBeUndefined();
+
+		// Replace the cached directory with a real submodule checkout.
+		rmSync(submodule, { recursive: true, force: true });
+		execFileSync(
+			"git",
+			["-C", outer.worktree, "-c", "protocol.file.allow=always", "submodule", "add", "--quiet", inner.canonical, "sub"],
+			{ stdio: "ignore" },
+		);
+		execFileSync("git", ["-C", outer.worktree, "commit", "-q", "-m", "add submodule"], { stdio: "ignore" });
+
+		const resolution = resolveCanonicalRoot(submodule);
+		expect(resolution.state).toBe("repository");
+		if (resolution.state !== "repository") return;
+		const commonParts = relative(outer.canonical, resolution.commonDir).split(sep);
+		expect(commonParts).toContain("worktrees");
+		expect(commonParts).toContain("modules");
+		expect(decideWorktreeCall("write", { path: join(submodule, "probe.ts"), content: "" }, outer.canonical)?.block).toBe(true);
+	}, 60000);
 
 	test("a submodule belongs to its own repository, whose checkout is refused like any canonical", () => {
 		const { superproject, submodule } = withSubmodule();

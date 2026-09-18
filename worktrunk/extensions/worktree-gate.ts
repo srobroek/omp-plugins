@@ -732,7 +732,12 @@ export function stillLinkedWorktree(worktree: string, commonDir: string | null |
 	const admin = /^gitdir:[ \t]*(.+?)[ \t\r]*$/m.exec(raw)?.[1];
 	if (admin === undefined) return false;
 	const real = realDeepest(path.isAbsolute(admin) ? admin : path.resolve(worktree, admin));
-	return real !== null && insideAny(real, [commonDir]);
+	if (real === null || !insideAny(real, [commonDir])) return false;
+	// A submodule checked out inside a linked worktree stores its gitdir under
+	// `<common>/worktrees/<id>/modules/<name>`. That is a distinct repository,
+	// not another linked worktree of the superproject.
+	const relative = path.relative(commonDir, real).split(path.sep);
+	return !(relative[0] === "worktrees" && relative[2] === "modules");
 }
 
 /** Where a target sits relative to the repository that owns it. */
