@@ -19,7 +19,6 @@ To read a rule, open its `rule://<name>` address.
 |---|---|
 | `beads-core` | Claiming work and managing fields. Routing dependencies and syncing data. Using JSONL as a fallback and maintaining the database. |
 | `beads-setup` | Setting up beads. Verifying the install. |
-| `beads-storage-mode` | Choosing embedded or server storage, diagnosing copied checkouts, and migrating a database. |
 | `beads-lifecycle` | Status transitions and gate beads. |
 | `beads-carriers` | Choosing where to keep authoritative records. Using comments, decision beads, wisps, or artifacts. |
 | `beads-composition` | Choosing an issue or epic. Using formulas and molecules. Working with bonds or wisps. |
@@ -68,8 +67,6 @@ Use the builtin learn/retain/recall/reflect tools for persistent knowledge. This
 
   The extension uses each session's identity to keep notices and attempts to mutate data separate.
   Each session start resets only that session, even outside a beads workspace.
-- `dolt-server-lifecycle`: reports once when a repository for beads uses the embedded backend.
-  With `BEADS_STOP_SERVER_ON_EXIT=1`, it also attempts to stop that project's server at session end.
   The stop subprocess has a 1.2-second timeout.
   A timeout leaves server state unverified.
 

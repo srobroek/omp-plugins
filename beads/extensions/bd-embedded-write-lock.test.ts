@@ -263,7 +263,7 @@ describe("only a direct bd invocation is accepted", () => {
 		"the documented backup init": "bd backup init /tmp/beads-backup",
 		"the documented backup sync": "bd backup sync",
 		"the documented backup restore": "bd backup restore --force /tmp/beads-backup",
-		"the documented re-init": "bd init --shared-server --reinit-local --skip-hooks --skip-agents --prefix rp",
+		"the documented re-init": "bd init --init-if-missing --skip-hooks --skip-agents --prefix rp",
 		"the documented dolt push": "bd dolt push",
 		"the documented bootstrap": "bd bootstrap --yes",
 		"a command word spelled with quotes": 'b"d" close x',
@@ -660,11 +660,6 @@ describe("embeddedStores", () => {
 		expect(embeddedStores("bd list --all --json", "/repo", { BEADS_DIR: beads })).toEqual([]);
 	});
 
-	test("leaves server mode to its server", () => {
-		const beads = store("server");
-		expect(embeddedStores("bd create x -t task", "/repo", { BEADS_DIR: beads })).toEqual([]);
-	});
-
 	test("follows a global -C to the store that command really writes", () => {
 		const beads = store("embedded");
 		const checkout = join(beads, "..");
@@ -730,12 +725,6 @@ describe("bdEmbeddedWriteLock", () => {
 		lockResult({ toolName: "bash", toolCallId: "b", input: {}, content: [] });
 		expect(existsSync(join(beads, LOCK))).toBe(false);
 	});
-
-	test("server mode takes no lock, so concurrent clients keep reaching the server", async () => {
-		const beads = store("server");
-		const { lockCall } = wire();
-		expect(await lockCall(bashCall("a", "bd create a -t task", beads))).toBeUndefined();
-		expect(existsSync(join(beads, LOCK))).toBe(false);
 	});
 
 	test("a lock the process cannot create refuses the write instead of running it", async () => {

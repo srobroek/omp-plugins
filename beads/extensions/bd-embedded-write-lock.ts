@@ -11,9 +11,6 @@
  * nor an exclusive `flock` held on `.beads/embeddeddolt/.lock`. Nothing below this
  * extension serialises those writers.
  *
- * Server mode needs none of this -- one `sql-server` is the serialisation point, and
- * concurrent clients are what it is for -- so the lock is taken only for a store that
- * classifies as embedded.
  *
  * The lock lives INSIDE the resolved store rather than beside the working directory.
  * That is what keeps one lock domain per database: a linked worktree and an isolated
@@ -47,7 +44,6 @@ import {
 	invocationFromArgv,
 } from "./bd-actor-gate.ts";
 import { sessionPinFor } from "./beads-store.ts";
-import { classifyBackend, pidAlive } from "./dolt-server-lifecycle.ts";
 import { tokenize } from "./shell-command.ts";
 
 /** The hold itself. */
@@ -95,6 +91,10 @@ export function setLeaseTimingForTests(lease?: number, renew?: number): void {
 }
 
 const HOST = hostname().split(".")[0] ?? "localhost";
+
+function pidAlive(pid: number): boolean {
+	try { process.kill(pid, 0); return true; } catch { return false; }
+}
 
 /** What a hold records, for the next waiter to judge. */
 interface Holder {
@@ -351,7 +351,7 @@ function embedded(store: string): boolean {
 	} catch {
 		// Same.
 	}
-	return classifyBackend(metadata, config) === "embedded";
+	return metadata !== "" || config !== "";
 }
 
 /**
@@ -762,9 +762,6 @@ function renewLease(lock: string, toolCallId: string, token: string): void {
  * Run `write`, a plugin-internal `bd` mutation, inside the store's lock.
  *
  * `cwd` is the directory the mutation runs in. A store that is not embedded, or a
- * `cwd` with no store at all, runs `write` unserialised: server mode has its own
- * writer of record.
- *
  * `write` is AWAITED before the hold is given up. Returning the promise instead
  * would release while the bd process it represents was still running -- the hold
  * would cover spawning the writer rather than the write -- and every internal

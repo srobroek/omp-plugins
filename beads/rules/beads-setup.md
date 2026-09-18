@@ -5,19 +5,8 @@ description: Initialising beads in a repository and verifying the install.
 
 # Beads Setup
 
-MUST Let the `bd` CLI own initialization and generated integration: bootstrap
-with `bd init --shared-server --init-if-missing --skip-hooks`, then verify with
-`bd where` and `bd dolt status` (`Mode: shared server`). Omitting `--skip-hooks`
-draws one advisory from `bd-init-advisory`; nothing is blocked because the flag
-is contextual.
-
-MUST Create every new store on the shared Dolt server. `bd-init-server-gate`
-refuses a `bd init` that carries neither `--shared-server` nor `--server` unless
-`BEADS_DOLT_SHARED_SERVER=true` is in the environment `bd` inherits: OMP's
-isolated subagents fork an embedded store with every clone. The gate also refuses
-an init whose database name (the `--prefix`, else the directory basename) already
-exists on the shared server and is not this checkout's own; pass another
-`--prefix`. Load `rule://beads-storage-mode` to migrate an existing embedded store.
+MUST Let the bd CLI own initialization: use bd init --init-if-missing --skip-hooks, then verify with bd where and bd dolt status. Omitting --skip-hooks draws one advisory from bd-init-advisory; nothing is blocked.
+MUST Create every new store with embedded Dolt. Embedded storage is the sole supported topology for this plugin, and bd-embedded-write-lock serializes mutations across linked worktrees and isolated clones.
 
 GOTCHA `bd init` derives a Dolt remote from `git remote origin`. Where that
 database already exists it fails with `can't create database <prefix>; database

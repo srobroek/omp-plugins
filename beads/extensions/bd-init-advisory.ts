@@ -33,7 +33,7 @@ const PRE_VERB_VALUE_FLAGS: Record<string, true> = {
 };
 
 /** `bd init` flags that consume the next token, so a value is never read as the verb. */
-const VALUE_FLAGS: Record<string, true> = { "--prefix": true, "--server-host": true, "--server-port": true };
+const VALUE_FLAGS: Record<string, true> = { "--prefix": true, "": true, "": true };
 
 /** `NAME=value bd init`: an environment prefix is not the command. */
 const ENV_ASSIGNMENT = /^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/s;
@@ -299,7 +299,7 @@ export function initAdvisory(_missing: MissingFlags): string {
 	return (
 		`bd init advisory — nothing was blocked, and this speaks once per session. ` +
 		`This \`bd init\` omits \`--skip-hooks\`. ${SKIP_HOOKS_ADVICE} ${BEADS_DIR_ADVICE} ` +
-		`The full form is \`bd init --shared-server --init-if-missing --skip-hooks\` ` +
+		`The full form is \`bd init --init-if-missing --skip-hooks\` ` +
 		`(rule://beads-setup). Both the flag and the pin are contextual, so decide ` +
 		`rather than re-run blind: an already-initialised repository or hooks the ` +
 		`project deliberately owns can each make the plainer form the right call.`
@@ -319,7 +319,7 @@ export function decideBdInit(command: string): string | undefined {
 
 /**
  * Process-global once-guard, keyed on `globalThis` for the same reason
- * `dolt-server-lifecycle` is: when the plugin is momentarily reachable through
+ * `the plugin` is: when the plugin is momentarily reachable through
  * two load paths (a marketplace install plus a dev link, or an install plus a
  * settings.json entry) the module is instantiated twice, and a per-instance flag
  * lets each instance advise separately.
