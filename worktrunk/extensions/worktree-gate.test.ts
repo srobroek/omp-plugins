@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -407,6 +407,25 @@ describe("git answers", () => {
 		} finally {
 			process.env.PATH = path;
 		}
+	});
+
+	test("unreadable repository metadata refuses and does not poison a later permission", () => {
+		const { canonical, worktree } = repository();
+		const metadata = join(canonical, ".git");
+		chmodSync(metadata, 0o000);
+		try {
+			const resolution = resolveCanonicalRoot(canonical);
+			expect(resolution.state).toBe("unknown");
+			const blocked = decideWorktreeCall("write", { path: "src/probe.ts", content: "" }, canonical);
+			expect(blocked?.block).toBe(true);
+			expect(blocked?.reason).toContain("Uncertainty refuses");
+		} finally {
+			chmodSync(metadata, 0o755);
+		}
+		expect(
+			decideWorktreeCall("write", { path: join(worktree, "src", "probe.ts"), content: "" }, canonical),
+		).toBeUndefined();
+		expect(decideWorktreeCall("write", { path: "src/probe.ts", content: "" }, canonical)?.block).toBe(true);
 	});
 
 	test("a git failure blocks the write and is not cached, so recovery needs no invalidation", () => {

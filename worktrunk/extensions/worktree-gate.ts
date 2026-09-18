@@ -33,7 +33,7 @@
  * the one that changes.
  */
 import { spawnSync } from "node:child_process";
-import { realpathSync } from "node:fs";
+import { lstatSync, realpathSync } from "node:fs";
 import path from "node:path";
 import type { ExtensionAPI, ExtensionContext, ToolCallEvent } from "@oh-my-pi/pi-coding-agent";
 import {
@@ -242,6 +242,34 @@ type GitOutcome =
 	| { ok: false; kind: "no-repository" }
 	| { ok: false; kind: "unavailable"; detail: string };
 
+type RepositoryMetadata = "present" | "absent" | "unknown";
+
+/**
+ * Inspect repository metadata without opening it. An existing `.git` entry is
+ * evidence that a failed `git` lookup may be a repository whose metadata is
+ * unreadable; an absent entry is evidence of no repository only when the
+ * lookup itself ran and reported the usual no-repository diagnosis.
+ */
+function repositoryMetadata(cwd: string): RepositoryMetadata {
+	let current: string;
+	try {
+		current = realpathSync.native(cwd);
+	} catch {
+		return "unknown";
+	}
+	for (;;) {
+		try {
+			lstatSync(path.join(current, ".git"));
+			return "present";
+		} catch (error) {
+			if (!(error instanceof Error) || !("code" in error) || error.code !== "ENOENT") return "unknown";
+		}
+		const parent = path.dirname(current);
+		if (parent === current) return "absent";
+		current = parent;
+	}
+}
+
 /**
  * `git` said this directory is in no repository at all — a definite answer, not
  * a failure. Deliberately narrow: a `cwd` git cannot even enter ("No such file
@@ -271,13 +299,16 @@ function runGit(cwd: string, args: string[]): GitOutcome {
 	}
 	if (result.status !== 0) {
 		const stderr = (result.stderr ?? "").trim();
-		// git's own diagnosis is the only thing that turns a non-zero exit into a
-		// definite answer; every other non-zero exit is an unknown.
-		if (NOT_A_REPOSITORY.test(stderr)) return { ok: false, kind: "no-repository" };
+		// The diagnosis is only a no-repository answer when the filesystem also
+		// shows no metadata entry. A present or unreadable entry keeps this an
+		// unknown; git's status 128 and wording cannot distinguish those cases.
+		if (NOT_A_REPOSITORY.test(stderr) && repositoryMetadata(cwd) === "absent") {
+			return { ok: false, kind: "no-repository" };
+		}
 		return {
 			ok: false,
 			kind: "unavailable",
-			detail: `\`git ${args[0]}\` exited ${result.status}${stderr.length > 0 ? `: ${stderr.split("\n")[0]}` : ""}`,
+			detail: `\`git ${args[0]}\` exited ${result.status}${stderr.length > 0 ? `: ${stderr.split("\\n")[0]}` : ""}`,
 		};
 	}
 	return { ok: true, stdout: result.stdout ?? "" };
