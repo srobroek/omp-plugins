@@ -47,6 +47,7 @@ import {
 import { unwrapHashlineHeaderPath } from "@oh-my-pi/pi-coding-agent/tools/plan-mode-guard";
 import { editInspect } from "@oh-my-pi/pi-natives";
 
+import { trustedPrimaryPolicy } from "./trusted-primary-policy.ts";
 /** Refusal shape the `tool_call` gate API understands. */
 export interface GateRefusal {
 	block: true;
@@ -310,8 +311,17 @@ function repositoryMetadata(cwd: string): RepositoryMetadata {
 }
 
 function runGit(cwd: string, args: string[]): GitOutcome {
+	const env: NodeJS.ProcessEnv = {};
+	for (const [key, value] of Object.entries(process.env)) if (!key.startsWith("GIT_")) env[key] = value;
+	env.GIT_CONFIG_NOSYSTEM = "1";
+	env.GIT_CONFIG_GLOBAL = "/dev/null";
+	env.GIT_CONFIG_SYSTEM = "/dev/null";
+	env.GIT_CONFIG_COUNT = "0";
+	env.GIT_NO_REPLACE_OBJECTS = "1";
+	env.GIT_TERMINAL_PROMPT = "0";
 	const result = spawnSync("git", ["-C", cwd, ...args], {
 		encoding: "utf8",
+		env,
 		stdio: ["ignore", "pipe", "pipe"],
 		timeout: 5000,
 	});
@@ -871,6 +881,16 @@ export function scanPathArguments(input: unknown, depth = 0): string[] {
 	return found;
 }
 
+	function structuredEnvironment(input: unknown): Record<string, string> {
+		const env = asRecord(input)?.env;
+		if (env === null || typeof env !== "object" || Array.isArray(env)) return {};
+		const values: Record<string, string> = {};
+		for (const [key, value] of Object.entries(env as Record<string, unknown>)) {
+			if (typeof value === "string") values[key] = value;
+		}
+		return values;
+	}
+function canonicalAuthorization(input: unknown, effectiveCwd: string, canonical: string, authorize: (canonical: string) => boolean): boolean { const env = asRecord(input)?.env; const realCwd = realDeepest(effectiveCwd); const realCanonical = realDeepest(canonical); return realCwd !== null && realCanonical !== null && realCwd === realCanonical && env !== null && typeof env === "object" && !Array.isArray(env) && (env as Record<string, unknown>).DELIVERY_ALLOW_PRIMARY_CHECKOUT === "1" && authorize(canonical); }
 /**
  * The refusal this tool call earns, or `undefined` when it may run.
  *
@@ -885,6 +905,7 @@ export function decideWorktreeCall(
 	input: unknown,
 	sessionCwd: string,
 	topology: GateTopology = defaultTopology(sessionCwd),
+	authorizePrimary: (canonical: string) => boolean = trustedPrimaryPolicy,
 ): GateRefusal | undefined {
 	if (READ_ONLY_TOOLS[toolName] === true) return undefined;
 	const uncertainty = topology.uncertainty ?? null;
@@ -999,6 +1020,7 @@ export function decideWorktreeCall(
 				return { block: true, reason: topologyRefusal(cwdProject.detail) };
 			}
 			if (cwdProject.state === "repository" && cwdProject.canonical !== canonical) return undefined;
+			if (typeof rawCwd === "string" && rawCwd.length > 0 && canonicalAuthorization(input, effective, canonical, authorizePrimary)) return undefined;
 			const command = extractCommand(input);
 			if (command.length === 0) {
 				return { block: true, reason: uncertaintyRefusal("this `bash` call has no `command` string", canonical) };
