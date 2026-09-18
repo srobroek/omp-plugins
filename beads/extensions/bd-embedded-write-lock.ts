@@ -5,7 +5,6 @@
  * up to the same `.beads` opens the same journal files with its own engine. An
  * orchestration run with an architect and two isolated children is therefore three
  * unsynchronised writers on one journal, and that is how a run corrupted
- * `journal.idx` at offset 77631076 (bead omp-plugins-5fr) with no `sql-server`
  * anywhere. Measured on bd 1.3.0: six concurrent `bd create` processes against one
  * embedded store overlapped in all fifteen pairs, and bd honoured neither a shared
  * nor an exclusive `flock` held on `.beads/embeddeddolt/.lock`. Nothing below this
@@ -283,7 +282,6 @@ export function writesStore(invocation: BdInvocation | undefined): boolean {
  * Every path is canonicalised, so two spellings of one store are one lock domain.
  */
 function storeFor(globals: string[], cwd: string, env: NodeJS.ProcessEnv): string | undefined {
-	// names a database on a server. Neither can land in this checkout's store.
 	if (flagEnabled(globals, ["--global"])) return undefined;
 	if (globalValue(globals, ["--database"]) !== undefined) return undefined;
 	const directory = globalValue(globals, ["-C", "--directory"]);
@@ -475,7 +473,6 @@ export function embeddedWriteTargets(command: string, cwd: string, env: NodeJS.P
  * Literal collection, not analysis: every `-C` / `--directory` / `--db` / `--database`
  * value in the text is resolved, and the first embedded one is returned. Without this,
  * a compound command carrying `-C <embedded store>` escaped whenever the session's own
- * store was absent or server-backed.
  */
 function namedStore(command: string, cwd: string, env: NodeJS.ProcessEnv): string | undefined {
 	// One extra level: a quoted argument is tokenized too, because
