@@ -247,17 +247,26 @@ export function realDeepest(target: string): string | null {
 	}
 }
 
-/** Resolve the deepest existing ancestor of a possibly missing target. */
+/**
+ * Resolve the deepest existing DIRECTORY ancestor of a possibly missing target.
+ *
+ * A file is not a working directory: `git -C <file>` exits 128 with `Not a
+ * directory`, which the caller can only read as uncertainty and refuse. Every
+ * write names a file, so ascending to its directory is the difference between a
+ * gate that judges the write and a gate that refuses all of them.
+ */
 function existingAncestor(target: string): string | null {
 	let current = path.resolve(target);
 	for (;;) {
 		try {
-			return realpathSync.native(current);
+			const real = realpathSync.native(current);
+			if (lstatSync(real).isDirectory()) return real;
 		} catch {
-			const parent = path.dirname(current);
-			if (parent === current) return null;
-			current = parent;
+			// fall through to the parent
 		}
+		const parent = path.dirname(current);
+		if (parent === current) return null;
+		current = parent;
 	}
 }
 
@@ -376,7 +385,9 @@ export type CanonicalResolution =
  * anything, and only the first may make the gate inert.
  */
 export function resolveCanonicalRoot(cwd: string): CanonicalResolution {
-	const outcome = runGit(cwd, ["rev-parse", "--path-format=absolute", "--git-common-dir"]);
+	const directory = existingAncestor(cwd);
+	if (directory === null) return { state: "unknown", detail: `the path ${cwd} has no existing directory ancestor` };
+	const outcome = runGit(directory, ["rev-parse", "--path-format=absolute", "--git-common-dir"]);
 	if (!outcome.ok) {
 		return outcome.kind === "no-repository" ? { state: "no-repository" } : { state: "unknown", detail: outcome.detail };
 	}
