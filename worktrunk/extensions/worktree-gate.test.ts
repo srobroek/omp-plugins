@@ -750,6 +750,20 @@ describe("topology changes", () => {
 		const decision = gate({ toolName: "write", input: { path: join(plain, "probe.ts"), content: "" } }, { cwd: plain });
 		expect(decision?.block).toBe(true);
 	}, 60000);
+	test("a directory that becomes a repository under another agent stops being scratch space", () => {
+		const plain = mkdtempSync(join(tmpdir(), "worktrunk-late-init-"));
+		roots.push(plain);
+		const target = join(plain, "probe.ts");
+		// Scratch space today: outside every repository, nothing to guard.
+		expect(decideWorktreeCall("write", { path: target, content: "" }, plain)).toBeUndefined();
+
+		// Another agent initialises a repository here; this session never sees that
+		// command, so only revalidation can notice.
+		execFileSync("git", ["-C", plain, "init", "-q", "-b", "main"], { stdio: "ignore" });
+
+		expect(decideWorktreeCall("write", { path: target, content: "" }, plain)?.block).toBe(true);
+	}, 60000);
+
 
 	test("a submodule belongs to its own repository, whose checkout is refused like any canonical", () => {
 		const { superproject, submodule } = withSubmodule();
@@ -859,6 +873,32 @@ describe("pathless mutating tools", () => {
 		for (const tool of readApproved) {
 			expect(decideWorktreeCall(tool, {}, canonical, topology)).toBeUndefined();
 		}
+	});
+
+	test("a mode-dependent tool is judged by the mode it was called in", () => {
+		const { canonical, topology } = project();
+		// `bd_formula_check` reads unless `deep`, and `journeys_index` reads for
+		// `lint` and an unconfirmed `prune`; each mirrors that tool's own approval.
+		expect(decideWorktreeCall("bd_formula_check", { formula: "x" }, canonical, topology)).toBeUndefined();
+		expect(decideWorktreeCall("bd_formula_check", { formula: "x", deep: true }, canonical, topology)?.block).toBe(true);
+		expect(
+			decideWorktreeCall("journeys_index", { command: "lint", journeysDir: join(canonical, "journeys") }, canonical, topology),
+		).toBeUndefined();
+		expect(
+			decideWorktreeCall("journeys_index", { command: "prune", journeysDir: join(canonical, "journeys") }, canonical, topology),
+		).toBeUndefined();
+		expect(
+			decideWorktreeCall(
+				"journeys_index",
+				{ command: "prune", yes: true, journeysDir: join(canonical, "journeys") },
+				canonical,
+				topology,
+			)?.block,
+		).toBe(true);
+		expect(
+			decideWorktreeCall("journeys_index", { command: "index", journeysDir: join(canonical, "journeys") }, canonical, topology)
+				?.block,
+		).toBe(true);
 	});
 });
 

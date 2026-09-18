@@ -102,6 +102,30 @@ const READ_ONLY_TOOLS: Record<string, true> = {
 };
 
 /**
+ * Tools whose approval depends on their arguments: reading in one mode, mutating
+ * in another, so they cannot sit in the table above. Each predicate mirrors that
+ * tool's own approval callback, and only the reading modes are exempt.
+ *
+ *   `bd_formula_check` — `beads/extensions/formula-check-tool.ts`: `deep` pours
+ *   for real, everything else is a dry run.
+ *   `journeys_index` — `project/extensions/journeys-tool.ts`: `lint` and a
+ *   `prune` without `yes` read; `index` and a confirmed `prune` write.
+ */
+const CONDITIONAL_READ_ONLY: Record<string, (input: Record<string, unknown>) => boolean> = {
+	bd_formula_check: input => input.deep !== true,
+	journeys_index: input =>
+		input.command === "lint" || (input.command === "prune" && input.yes !== true),
+};
+
+/** True when this call is one of the reading modes of a mode-dependent tool. */
+function readsOnlyInThisMode(toolName: string, input: unknown): boolean {
+	const predicate = CONDITIONAL_READ_ONLY[toolName];
+	if (predicate === undefined) return false;
+	const record = asRecord(input);
+	return record !== null && predicate(record);
+}
+
+/**
  * The bead-ledger tool family: the device spelling of a `bd` command, which the
  * bootstrap allowlist already permits from the canonical checkout for the same
  * two reasons — the store lives in the canonical `.beads`, and an agent must
@@ -560,6 +584,15 @@ export function resetTopologyCache(): void {
 /** The topology of the repository owning `cwd`. */
 export function repositoryTopology(cwd: string): RepositoryTopology {
 	let resolution = canonicalCache.get(cwd);
+	// A cached `no-repository` holds only while the filesystem still shows no
+	// repository above this directory. Another agent's `git init` is a command this
+	// session never sees, and trusting the stale negative would walk later writes
+	// straight into a brand-new canonical checkout. The metadata walk is a few
+	// `lstat` calls, and anything but a confirmed absence re-asks git.
+	if (resolution?.state === "no-repository" && repositoryMetadata(cwd) !== "absent") {
+		canonicalCache.delete(cwd);
+		resolution = undefined;
+	}
 	if (resolution === undefined) {
 		resolution = resolveCanonicalRoot(cwd);
 		// A failure is never cached. Caching it would let one transient `git`
@@ -1092,7 +1125,7 @@ export function decideWorktreeCall(
 	topology: GateTopology = defaultTopology(sessionCwd),
 	authorizePrimary: (canonical: string) => boolean = trustedPrimaryPolicy,
 ): GateRefusal | undefined {
-	if (READ_ONLY_TOOLS[toolName] === true) return undefined;
+	if (READ_ONLY_TOOLS[toolName] === true || readsOnlyInThisMode(toolName, input)) return undefined;
 	const session = topology.session;
 	const uncertainty = session.uncertainty ?? null;
 	if (uncertainty !== null) return { block: true, reason: topologyRefusal(uncertainty) };
@@ -1248,10 +1281,14 @@ export default function worktreeGate(pi: ExtensionAPI): void {
 			return decideWorktreeCall(event.toolName, event.input, sessionCwd);
 		} catch (error) {
 			// A thrown classification is an unknown, and an unknown refuses. Only a
-			// confirmed non-repository session stands down here.
-			if (READ_ONLY_TOOLS[event.toolName] === true) return undefined;
+			// confirmed non-repository session stands down here — confirmed against the
+			// filesystem as well as the cache, since a repository may have appeared
+			// under that directory since the answer was stored.
+			if (READ_ONLY_TOOLS[event.toolName] === true || readsOnlyInThisMode(event.toolName, event.input)) {
+				return undefined;
+			}
 			const cached = canonicalCache.get(sessionCwd);
-			if (cached?.state === "no-repository") return undefined;
+			if (cached?.state === "no-repository" && repositoryMetadata(sessionCwd) === "absent") return undefined;
 			return {
 				block: true,
 				reason: uncertaintyRefusal(
