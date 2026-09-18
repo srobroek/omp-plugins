@@ -201,7 +201,7 @@
       "name": "worktrunk",
       "description": "Worktree discipline for every agent: a membership-based canonical-mutation guardrail and an isolation precheck.",
       "source": "./worktrunk",
-      "version": "0.2.0",
+      "version": "0.2.1",
       "category": "development"
     },
     {
