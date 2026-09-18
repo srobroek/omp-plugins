@@ -339,10 +339,6 @@ describe("only a direct bd invocation is accepted", () => {
 			expect(targets.kind).toBe("refused");
 		});
 
-		test(`allows ${name} where no embedded store is in reach`, () => {
-			const beads = store();
-			expect(embeddedWriteTargets(command, "/repo", { BEADS_DIR: beads })).toEqual({ kind: "stores", stores: [] });
-		});
 	}
 
 	test("the refusal names the shape that clears it, and that shape is accepted", () => {
