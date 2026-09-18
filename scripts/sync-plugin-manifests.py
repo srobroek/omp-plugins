@@ -71,6 +71,10 @@ PLUGINS: dict[str, tuple[str, str]] = {
     ),
     "browser-tools": ("development", "Cross-engine browser coverage and Chrome performance tracing over MCP."),
     "diagram": ("productivity", "Interactive diagramming and architecture-sketching canvas over MCP."),
+    "worktrunk": (
+        "development",
+        "Worktree discipline for every agent: a membership-based canonical-mutation guardrail and an isolation precheck.",
+    ),
 }
 
 # Keep this set for any temporarily unpublished plugins.
