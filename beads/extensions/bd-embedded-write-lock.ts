@@ -3,19 +3,6 @@
  *
  * Embedded Dolt resolves a PATH, not a host and port, so every process that walks
  * up to the same `.beads` opens the same journal files with its own engine. An
- * orchestration run with an architect and two isolated children is therefore three
- * unsynchronised writers on one journal, and that is how a run corrupted
- * anywhere. Measured on bd 1.3.0: six concurrent `bd create` processes against one
- * embedded store overlapped in all fifteen pairs, and bd honoured neither a shared
- * nor an exclusive `flock` held on `.beads/embeddeddolt/.lock`. Nothing below this
- * extension serialises those writers.
- *
- *
- * The lock lives INSIDE the resolved store rather than beside the working directory.
- * That is what keeps one lock domain per database: a linked worktree and an isolated
- * clone both resolve to the primary checkout's `.beads` (`sessionPinFor`), so they
- * queue against each other instead of each guarding a private file. `.beads/.gitignore`
- * already ignores `*.lock`, so neither file enters a commit or an isolation patch.
  *
  * Both writers this plugin can see share that one domain: the bash calls an agent
  * makes, held here from `tool_call` to `tool_result`, and the lease stamp

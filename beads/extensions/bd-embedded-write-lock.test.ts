@@ -795,7 +795,7 @@ async function runAgents(beads: string, serialized: boolean): Promise<{ gaps: st
 	return { gaps };
 }
 
-describe("concurrent isolated writers keep parity", () => {
+describe("concurrent linked-worktree writers keep parity", () => {
 	test("unserialised writers lose issues, labels, dependencies and comments", async () => {
 		const { gaps } = await runAgents(store(), false);
 		expect(gaps.length).toBeGreaterThan(0);

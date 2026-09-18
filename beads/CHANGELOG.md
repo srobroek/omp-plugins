@@ -14,7 +14,6 @@
 * **beads:** explain unreadable session claims ([#345](https://github.com/srobroek/omp-plugins/issues/345)) ([787c4da](https://github.com/srobroek/omp-plugins/commit/787c4da4215fae3fc198a9b4b0a828ffd0c3d72b))
 * **beads:** release a session's claims at shutdown and expose lease anchors ([#347](https://github.com/srobroek/omp-plugins/issues/347)) ([289f5c6](https://github.com/srobroek/omp-plugins/commit/289f5c646a53e4242eeb74fa6730af3b427f6185))
 * **beads:** scope session pins to their repository ([#340](https://github.com/srobroek/omp-plugins/issues/340)) ([6ef5528](https://github.com/srobroek/omp-plugins/commit/6ef5528ce5d933825ad98244212fe606f5058d70))
-* **beads:** serialize embedded Beads writers across isolated agents ([#343](https://github.com/srobroek/omp-plugins/issues/343)) ([799a0ea](https://github.com/srobroek/omp-plugins/commit/799a0eaf3d3f6fffe03ea987b56bf30f60dc4b15))
 
 ## [1.4.0](https://github.com/srobroek/omp-plugins/compare/beads--v1.3.6...beads--v1.4.0) (2026-09-16)
 
@@ -271,7 +270,6 @@ release-please attributed nothing and opened no release PR.
 
 ### Bug Fixes
 
-* **beads:** isolate lifecycle state and preserve failure evidence ([999c9c8](https://github.com/srobroek/omp-plugins/commit/999c9c837a582a50e29b909eafd6acaa0a76b2d9))
 * **ci:** reject stale packages and incomplete checker runs ([8274c02](https://github.com/srobroek/omp-plugins/commit/8274c02e6e1af64adb7f6524e7ebabe830d26356))
 * correct plugin discovery, safety checks, and workflow contracts ([bfaa850](https://github.com/srobroek/omp-plugins/commit/bfaa850be719d7b79ac2245f2092be838673dd5d))
 
