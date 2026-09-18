@@ -127,7 +127,6 @@ describe("store resolution follows the store bd will really write", () => {
 		expect(embeddedStores(`bd --db ${file} close x`, "/repo", {})).toEqual([beads]);
 	});
 
-	test("a --db that is no path is a server database name, not this store", () => {
 		const beads = store("embedded");
 		expect(embeddedStores("bd --db some_server_database close x", "/repo", { BEADS_DIR: beads })).toEqual([]);
 	});
@@ -143,7 +142,6 @@ describe("store resolution follows the store bd will really write", () => {
 		expect(embeddedStores("bd --global close x", "/repo", { BEADS_DIR: beads })).toEqual([]);
 	});
 
-	test("--database names a server database, so this store is left alone", () => {
 		const beads = store("embedded");
 		expect(embeddedStores("bd --database other close x", "/repo", { BEADS_DIR: beads })).toEqual([]);
 	});
@@ -356,7 +354,6 @@ describe("only a direct bd invocation is accepted", () => {
 		});
 
 		test(`allows ${name} where no embedded store is in reach`, () => {
-			const beads = store("server");
 			expect(embeddedWriteTargets(command, "/repo", { BEADS_DIR: beads })).toEqual({ kind: "stores", stores: [] });
 		});
 	}
@@ -387,7 +384,6 @@ describe("only a direct bd invocation is accepted", () => {
 	});
 
 	test("a compound command naming an explicit server store is allowed", () => {
-		const beads = store("server");
 		expect(embeddedWriteTargets(`cd /tmp && bd -C ${join(beads, "..")} close x`, "/nowhere", {})).toEqual({ kind: "stores", stores: [] });
 	});
 
@@ -406,7 +402,6 @@ describe("only a direct bd invocation is accepted", () => {
 	});
 
 	test("a nested payload naming a server store stays allowed", () => {
-		const beads = store("server");
 		expect(embeddedWriteTargets(`bash -c 'bd -C ${join(beads, "..")} close x'`, "/nowhere", {})).toEqual({ kind: "stores", stores: [] });
 	});
 
@@ -417,7 +412,6 @@ describe("only a direct bd invocation is accepted", () => {
 
 describe("jurisdiction does not depend on the session's own store", () => {
 	test("a server-backed session store does not hide an explicit embedded target", () => {
-		const session = store("server");
 		const other = store("embedded");
 		// The session's own store is server-backed, so it needs no lock -- but the
 		// command names an embedded store, and that write still has to be serialised.
@@ -428,7 +422,6 @@ describe("jurisdiction does not depend on the session's own store", () => {
 	});
 
 	test("a server-backed session store does not hide an explicit embedded target in a compound command", () => {
-		const session = store("server");
 		const other = store("embedded");
 		const targets = embeddedWriteTargets(`cd /tmp && bd -C ${join(other, "..")} close x`, "/repo", { BEADS_DIR: session });
 		expect(targets.kind).toBe("refused");
@@ -436,7 +429,6 @@ describe("jurisdiction does not depend on the session's own store", () => {
 	});
 
 	test("a server-backed session store does not hide an explicit embedded target in a nested payload", () => {
-		const session = store("server");
 		const other = store("embedded");
 		expect(embeddedWriteTargets(`bash -c 'bd -C ${join(other, "..")} close x'`, "/repo", { BEADS_DIR: session }).kind).toBe("refused");
 	});
@@ -453,7 +445,6 @@ describe("the gate refuses what it cannot place", () => {
 	});
 
 	test("the same command is allowed on a server store, where the lock is irrelevant", async () => {
-		const beads = store("server");
 		const { lockCall } = wire();
 		expect(await lockCall(bashCall("compound", "cd other && bd close x", beads))).toBeUndefined();
 	});
@@ -590,7 +581,6 @@ describe("a session-boundary gate check shares the store's lock domain", () => {
 	});
 
 	test("a gate check on a server store is not serialised by this lock", async () => {
-		const beads = store("server");
 		const seen: string[] = [];
 		setBdStreamForTests(streamSeam(seen));
 		expect(await runBd(join(beads, ".."), ["gate", "check", "--json"], Date.now() + 5_000, { BEADS_DIR: beads })).toBe("{}");

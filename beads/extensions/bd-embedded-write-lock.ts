@@ -283,13 +283,11 @@ export function writesStore(invocation: BdInvocation | undefined): boolean {
  * Every path is canonicalised, so two spellings of one store are one lock domain.
  */
 function storeFor(globals: string[], cwd: string, env: NodeJS.ProcessEnv): string | undefined {
-	// `--global` addresses `beads_global` on the shared server, and `--database`
 	// names a database on a server. Neither can land in this checkout's store.
 	if (flagEnabled(globals, ["--global"])) return undefined;
 	if (globalValue(globals, ["--database"]) !== undefined) return undefined;
 	const directory = globalValue(globals, ["-C", "--directory"]);
 	// `--db` is documented as a database PATH, and only a value that is not an
-	// existing path is a server database name. A path-valued `--db` therefore names
 	// the store this write lands in, and ignoring it let those writes escape.
 	const db = globalValue(globals, ["--db"]);
 	const base = directory === undefined ? cwd : absolute(directory, cwd);
@@ -456,7 +454,6 @@ export function embeddedWriteTargets(command: string, cwd: string, env: NodeJS.P
 		return { kind: "stores", stores: store !== undefined && embedded(store) ? [store] : [] };
 	}
 	// An embedded store in reach is what gives this gate jurisdiction. The session's own
-	// store counts only when it IS embedded: with a server-backed session store a `??`
 	// here short-circuited, and an explicit `-C <embedded store>` in the command went
 	// unseen. `namedStore` already returns embedded stores only.
 	const ambient = storeFor([], cwd, env);

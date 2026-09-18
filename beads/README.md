@@ -67,8 +67,6 @@ Use the builtin learn/retain/recall/reflect tools for persistent knowledge. This
 
   The extension uses each session's identity to keep notices and attempts to mutate data separate.
   Each session start resets only that session, even outside a beads workspace.
-  The stop subprocess has a 1.2-second timeout.
-  A timeout leaves server state unverified.
 
 - `bd-lease-gate`: writes `lease_host` and `lease_pid` metadata after a claim succeeds, so a
   later session can prove a holder gone instead of guessing from staleness.

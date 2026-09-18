@@ -1,17 +1,3 @@
-/**
- * Advise on `bd init` flags, once per process, blocking nothing.
- *
- * This replaces two TTSR rules. `beads-init-skip-hooks` (`interruptMode: always`)
- * and `beads-init-prefer-server` both matched the substring `bd init` anywhere in
- * a bash command, so both fired on `echo how to bd init a repo`, `rg 'bd init'`,
- * `git log --grep='bd init'` and `man bd init` — and on each other's correct form.
- * skip-hooks demanded `--skip-hooks`, prefer-server demanded a server flag, and
- * the invocation this estate actually wants, `bd init --init-if-missing --skip-hooks`
- * under the pinned database, was blocked by skip-hooks' sibling anyway.
- * Verified live 2026-08-25. Since 2026-09-10 the plugin pins `BEADS_DIR` itself.
- *
- * Two things follow. Argv is the only honest trigger: a mention inside a quoted
- * string, a `--grep` pattern, or another program's arguments is not an
  * invocation, so this reads the `bd` at command position, its verb, and its
  * flags. And the wrongness is contextual — an already-initialised repository,
  * hooks the project deliberately manages — so this is advice: `bd init` always
