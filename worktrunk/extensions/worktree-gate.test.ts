@@ -419,8 +419,22 @@ describe("bootstrapAllowed", () => {
 		expect(bootstrapAllowed(`printf x > f ; ${list}`)).toBe(false);
 	});
 
+	test("resolves env prefixes and stdin-only pipeline filters", () => {
+		expect(bootstrapAllowed("env -u BEADS_DIR bd --readonly --sandbox stats 2>&1 | head -40")).toBe(true);
+		expect(bootstrapAllowed("bd --readonly --sandbox show omp-plugins-p98r 2>&1 | cut -c1-140")).toBe(true);
+		expect(bootstrapAllowed("bd --readonly --sandbox list --status open")).toBe(true);
+		expect(bootstrapAllowed("git commit -m x")).toBe(false);
+		expect(bootstrapAllowed("bash -c \"bd list\"")).toBe(false);
+		expect(bootstrapAllowed("bd list $(echo nope)")).toBe(false);
+		expect(bootstrapAllowed("bd list | xargs touch")).toBe(false);
+		expect(bootstrapAllowed("bd list > checkout.txt")).toBe(false);
+		expect(bootstrapAllowed("not-a-bootstrap-binary")).toBe(false);
+	});
+
 	test("a companion that can write in place is not a companion", () => {
 		expect(bootstrapAllowed("wt list | sed -i s/a/b/ f")).toBe(false);
+		expect(bootstrapAllowed("wt list | sed -i s/a/b/")).toBe(false);
+		expect(bootstrapAllowed("wt list | grep -f patterns")).toBe(false);
 		expect(bootstrapAllowed("wt list | grep switch")).toBe(true);
 	});
 
