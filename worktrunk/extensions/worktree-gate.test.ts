@@ -239,136 +239,6 @@ describe("bash", () => {
 	});
 });
 
-describe("canonical authorization", () => {
-	test("a trusted structured env allows a canonical bash mutation", () => {
-		const { canonical, topology } = project();
-		expect(
-			decideWorktreeCall(
-				"bash",
-				{ cwd: canonical, command: "touch authorized", env: { DELIVERY_ALLOW_PRIMARY_CHECKOUT: "1" } },
-				canonical,
-				topology,
-				root => root === canonical,
-			),
-		).toBeUndefined();
-	});
-
-	test.each([undefined, ""])("authorization requires a nonempty structured cwd: %s", cwd => {
-		const { canonical, topology } = project();
-		let authorizationCalls = 0;
-		const input = { command: "touch denied", env: { DELIVERY_ALLOW_PRIMARY_CHECKOUT: "1" }, ...(cwd === undefined ? {} : { cwd }) };
-		const decision = decideWorktreeCall("bash", input, canonical, topology, () => {
-			authorizationCalls++;
-			return true;
-		});
-		expect(decision?.block).toBe(true);
-		expect(authorizationCalls).toBe(0);
-	});
-
-	test("a canonical subdirectory is not an exact canonical cwd", () => {
-		const { canonical, topology } = project();
-		let authorizationCalls = 0;
-		const decision = decideWorktreeCall(
-			"bash",
-			{ cwd: join(canonical, "src"), command: "touch denied", env: { DELIVERY_ALLOW_PRIMARY_CHECKOUT: "1" } },
-			canonical,
-			topology,
-			() => {
-				authorizationCalls++;
-				return true;
-			},
-		);
-		expect(decision?.block).toBe(true);
-		expect(authorizationCalls).toBe(0);
-	});
-
-	test("a symlink-equivalent canonical root is accepted", () => {
-		const { canonical, topology } = project();
-		const parent = join(canonical, "..", "canonical-link");
-		symlinkSync(canonical, parent);
-		expect(
-			decideWorktreeCall(
-				"bash",
-				{ cwd: parent, command: "touch authorized", env: { DELIVERY_ALLOW_PRIMARY_CHECKOUT: "1" } },
-				canonical,
-				topology,
-				root => root === canonical,
-			),
-		).toBeUndefined();
-	});
-
-	test.each([undefined, "0", "true"])("missing or wrong structured env value remains blocked: %s", value => {
-		const { canonical, topology } = project();
-		const env = value === undefined ? {} : { DELIVERY_ALLOW_PRIMARY_CHECKOUT: value };
-		const decision = decideWorktreeCall("bash", { cwd: canonical, command: "touch denied", env }, canonical, topology, () => true);
-		expect(decision?.block).toBe(true);
-	});
-
-	test("a worktree-only or absent directive remains blocked", () => {
-		const { canonical, topology } = project();
-		const decision = decideWorktreeCall(
-			"bash",
-			{ cwd: canonical, command: "touch denied", env: { DELIVERY_ALLOW_PRIMARY_CHECKOUT: "1" } },
-			canonical,
-			topology,
-			() => false,
-		);
-		expect(decision?.block).toBe(true);
-	});
-
-	test("canonical authorization does not parse wrappers or shell composition", () => {
-		const { canonical, topology } = project();
-		for (const command of ["env -- git commit -m x", "touch one; touch two", "DELIVERY_ALLOW_PRIMARY_CHECKOUT=1 touch x"]) {
-			const decision = decideWorktreeCall(
-				"bash",
-				{ cwd: canonical, command, env: command.startsWith("DELIVERY") ? {} : { DELIVERY_ALLOW_PRIMARY_CHECKOUT: "1" } },
-				canonical,
-				topology,
-				() => true,
-			);
-			if (command.startsWith("DELIVERY")) expect(decision?.block).toBe(true);
-			else expect(decision).toBeUndefined();
-		}
-	});
-
-	test("linked-worktree wrappers remain allowed without granting canonical authorization", () => {
-		const { canonical, worktree, topology } = project();
-		let authorizationCalls = 0;
-		expect(
-			decideWorktreeCall(
-				"bash",
-				{ cwd: worktree, command: `env -- git -C ${canonical} commit -m x`, env: { DELIVERY_ALLOW_PRIMARY_CHECKOUT: "1" } },
-				canonical,
-				topology,
-				() => {
-					authorizationCalls++;
-					return true;
-				},
-			),
-		).toBeUndefined();
-		expect(authorizationCalls).toBe(0);
-	});
-
-	test("canonical read-only git -C remains a bootstrap allowance", () => {
-		const { canonical, worktree, topology } = project();
-		expect(
-			decideWorktreeCall("bash", { cwd: canonical, command: `git -C ${worktree} status --short` }, canonical, topology),
-		).toBeUndefined();
-	});
-
-	test("an authorized commit reaches the downstream direct-main gate", () => {
-		const { canonical, topology } = project();
-		expect(
-			decideWorktreeCall(
-				"bash",
-				{ cwd: canonical, command: "git commit -m authorized", env: { DELIVERY_ALLOW_PRIMARY_CHECKOUT: "1" } },
-				canonical,
-				topology,
-				() => true,
-			),
-		).toBeUndefined();
-	});
-});
 
 describe("bootstrapAllowed", () => {
 	test("accepts the create and pull-request switch forms", () => {
@@ -415,6 +285,21 @@ describe("bootstrapAllowed", () => {
 		expect(bootstrapAllowed(`echo '${wt}'`)).toBe(false);
 		expect(bootstrapAllowed(`cat <<'EOF'\n${wt}\nEOF`)).toBe(false);
 		expect(bootstrapAllowed(`${wt} ; touch x`)).toBe(false);
+	});
+
+	test.each([
+		"wt switch -y --create --no-cd --base $(printf main) --format json omp/agent/x.1",
+		"wt switch -y --create --no-cd --base `printf main` --format json omp/agent/x.1",
+		"wt switch -y --create --no-cd --base '`printf main`' --format json omp/agent/x.1",
+		"wt switch -y --create --no-cd --base $(printf $(printf main)) --format json omp/agent/x.1",
+	])("rejects literal command substitution before tokenization: %s", command => {
+		expect(bootstrapAllowed(command)).toBe(false);
+	});
+
+	test("rejects quoted command substitution but accepts an ordinary quoted argument", () => {
+		expect(bootstrapAllowed("wt switch -y --create --no-cd --base '$(printf main)' --format json omp/agent/x.1")).toBe(false);
+		expect(bootstrapAllowed("wt switch -y --create --no-cd --base '`printf main`' --format json omp/agent/x.1")).toBe(false);
+		expect(bootstrapAllowed("wt switch -y --create --no-cd --base 'main branch' --format json omp/agent/x.1")).toBe(true);
 	});
 
 	test("a redirection to a file disqualifies the command, while discards and descriptors do not", () => {
@@ -643,12 +528,20 @@ describe("git answers", () => {
 		}
 	}, 60000);
 
-	test("ownership queries ignore inherited Git environment controls", () => {
+	test("ownership queries ignore inherited Git environment controls while retaining PATH", () => {
 		const { canonical, worktree } = repository();
-		const previous = { GIT_DIR: process.env.GIT_DIR, GIT_CONFIG_GLOBAL: process.env.GIT_CONFIG_GLOBAL, GIT_CONFIG_COUNT: process.env.GIT_CONFIG_COUNT };
-		process.env.GIT_DIR = join(canonical, "missing-git-dir");
-		process.env.GIT_CONFIG_GLOBAL = join(canonical, "missing-config");
-		process.env.GIT_CONFIG_COUNT = "1";
+		const keys = ["GIT_DIR", "GIT_WORK_TREE", "GIT_OBJECT_DIRECTORY", "GIT_CONFIG_GLOBAL", "GIT_CONFIG_SYSTEM", "GIT_CONFIG_COUNT", "GIT_CONFIG_KEY_0", "GIT_CONFIG_VALUE_0"] as const;
+		const previous = Object.fromEntries(keys.map(key => [key, process.env[key]]));
+		Object.assign(process.env, {
+			GIT_DIR: join(canonical, "missing-git-dir"),
+			GIT_WORK_TREE: join(canonical, "missing-work-tree"),
+			GIT_OBJECT_DIRECTORY: join(canonical, "missing-objects"),
+			GIT_CONFIG_GLOBAL: join(canonical, "missing-config"),
+			GIT_CONFIG_SYSTEM: join(canonical, "missing-system-config"),
+			GIT_CONFIG_COUNT: "1",
+			GIT_CONFIG_KEY_0: "core.worktree",
+			GIT_CONFIG_VALUE_0: join(canonical, "wrong-work-tree"),
+		});
 		try {
 			expect(resolveCanonicalRoot(worktree).state).toBe("repository");
 			expect(projectWorktrees(canonical)).toHaveLength(1);

@@ -46,7 +46,6 @@ import {
 } from "@oh-my-pi/pi-coding-agent/tools/path-utils";
 import { unwrapHashlineHeaderPath } from "@oh-my-pi/pi-coding-agent/tools/plan-mode-guard";
 import { editInspect } from "@oh-my-pi/pi-natives";
-import { trustedPrimaryPolicy } from "./trusted-primary-policy.ts";
 
 /** Refusal shape the `tool_call` gate API understands. */
 export interface GateRefusal {
@@ -1183,12 +1182,6 @@ export function scanPathArguments(input: unknown, depth = 0): string[] {
 	return found;
 }
 
-function canonicalAuthorization(input: unknown, effectiveCwd: string, canonical: string, authorize: (canonical: string) => boolean): boolean {
-	const env = asRecord(input)?.env;
-	const realCwd = realDeepest(effectiveCwd);
-	const realCanonical = realDeepest(canonical);
-	return realCwd !== null && realCanonical !== null && realCwd === realCanonical && env !== null && typeof env === "object" && !Array.isArray(env) && (env as Record<string, unknown>).DELIVERY_ALLOW_PRIMARY_CHECKOUT === "1" && authorize(canonical);
-}
 
 /**
  * The refusal this tool call earns, or `undefined` when it may run.
@@ -1210,7 +1203,6 @@ export function decideWorktreeCall(
 	input: unknown,
 	sessionCwd: string,
 	topology: GateTopology = defaultTopology(sessionCwd),
-	authorizePrimary: (canonical: string) => boolean = trustedPrimaryPolicy,
 ): GateRefusal | undefined {
 	if (READ_ONLY_TOOLS[toolName] === true || readsOnlyInThisMode(toolName, input)) return undefined;
 	const session = topology.session;
@@ -1262,7 +1254,7 @@ export function decideWorktreeCall(
 				} catch {
 					return undefined;
 				}
-				return decideWorktreeCall(device, nested, sessionCwd, topology, authorizePrimary);
+				return decideWorktreeCall(device, nested, sessionCwd, topology);
 			}
 			return refuseAll([record.path]);
 		}
@@ -1305,7 +1297,6 @@ export function decideWorktreeCall(
 			// A cwd outside every repository has no canonical checkout to protect, so
 			// scratch directories stay usable.
 			if (where.repository.canonical === null) return undefined;
-			if (typeof rawCwd === "string" && rawCwd.length > 0 && canonicalAuthorization(input, effective, where.repository.canonical, authorizePrimary)) return undefined;
 			const command = extractCommand(input);
 			if (command.length === 0) {
 				return { block: true, reason: uncertaintyRefusal("this `bash` call has no `command` string", canonical) };
