@@ -78,6 +78,7 @@ const READ_ONLY_TOOLS: Record<string, true> = {
 	read: true,
 	recall: true,
 	reflect: true,
+	resume_session: true,
 	task: true,
 	think: true,
 	todo: true,
