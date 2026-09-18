@@ -65,11 +65,11 @@ function handlers(): { toolCall: Handler; toolResult: Handler } {
 	return { toolCall, toolResult };
 }
 
-function claimResult(toolCallId: string, text: string, details?: unknown): unknown {
+function claimResult(toolCallId: string, text: string, details?: unknown, command = "bd update omp-1 --claim"): unknown {
 	return {
 		toolName: "bash",
 		toolCallId,
-		input: { command: "bd update omp-1 --claim", cwd: "/claiming/repo" },
+		input: { command, cwd: "/claiming/repo" },
 		content: [{ type: "text", text }],
 		isError: false,
 		details,
@@ -149,10 +149,38 @@ describe("bdLeaseGate", () => {
 		}
 	});
 
-	test("advises when a successful claim result has no parseable bead id", async () => {
-		const { toolCall, toolResult } = handlers();
-		toolCall({ toolName: "bash", toolCallId: "missing", input: { command: "bd update omp-1 --claim", cwd: "/claiming/repo" } });
-		const result = (await toolResult(claimResult("missing", "claim completed"))) as { content: Array<{ text?: string }> } | undefined;
-		expect(result?.content[0]?.text).toContain("could not parse a bead id");
+	test("anchors a computed id from structured claim stdout", async () => {
+		const calls: string[][] = [];
+		setBdRunForTests((argv) => {
+			calls.push(argv);
+			return { exitCode: 0, stdout: "", stderr: "" };
+		});
+		try {
+			const { toolCall, toolResult } = handlers();
+			const command = "id=$(printf omp-1); bd update \"$id\" --claim";
+			toolCall({ toolName: "bash", toolCallId: "computed", input: { command, cwd: "/claiming/repo" } });
+			await toolResult(claimResult("computed", "claim completed", { exitCode: 0, stdout: "{\"id\":\"omp-1\"}" }, command));
+			expect(calls).toHaveLength(1);
+			expect(calls[0]?.[2]).toBe("omp-1");
+		} finally {
+			setBdRunForTests(null);
+		}
+	});
+
+	test("never anchors a failed claim even when its result reports an id", async () => {
+		const calls: string[][] = [];
+		setBdRunForTests((argv) => {
+			calls.push(argv);
+			return { exitCode: 0, stdout: "", stderr: "" };
+		});
+		try {
+			const { toolCall, toolResult } = handlers();
+			const command = "bd update \"$id\" --claim";
+			toolCall({ toolName: "bash", toolCallId: "failed", input: { command, cwd: "/claiming/repo" } });
+			expect(await toolResult(claimResult("failed", "Claimed omp-1 (in_progress)", { exitCode: 1, stdout: "{\"id\":\"omp-1\"}" }, command))).toBeUndefined();
+			expect(calls).toHaveLength(0);
+		} finally {
+			setBdRunForTests(null);
+		}
 	});
 });
