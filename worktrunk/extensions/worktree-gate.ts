@@ -424,16 +424,6 @@ export type CanonicalResolution =
 	| { state: "no-repository" }
 	| { state: "unknown"; detail: string };
 
-/** True when `dir` is a working tree: git records its identity in a `.git` entry beside the files. */
-function hasGitEntry(dir: string): boolean {
-	try {
-		lstatSync(path.join(dir, ".git"));
-		return true;
-	} catch {
-		return false;
-	}
-}
-
 /**
  * Resolve the absolute canonical root of the repository `cwd` belongs to — its
  * MAIN worktree — together with the common git directory that identifies the
@@ -504,15 +494,24 @@ export function canonicalRoot(cwd: string): string | null {
 
 /**
  * Linked, non-canonical worktrees of the repository whose main worktree is
- * `canonical`, as physical paths, or `null` when `git worktree list` did not
- * answer.
+ * `canonical` and whose common git directory is `commonDir`, as physical paths,
+ * or `null` when the answer could not be established.
  *
- * Entries that are not working trees are dropped, not only the canonical root
- * itself: inside a submodule git reports the main entry as the git directory
- * `<super>/.git/modules/<name>`, which holds no `.git` entry and is repository
- * internals rather than a place to work.
+ * Every entry is verified against that identity, not merely listed. `git worktree
+ * list` reports what is registered, and registration outlives the directory: an
+ * agent that deletes a worktree without unregistering it, and then initialises a
+ * NEW repository at the same path, leaves the old repository still naming it —
+ * and writes there would land in the replacement's canonical checkout. A path
+ * counts only when its `.git` gitfile points inside `commonDir`, which is also
+ * what drops the git-directory entry git reports as a submodule's main worktree.
  */
-export function projectWorktrees(canonical: string): string[] | null {
+export function projectWorktrees(canonical: string, commonDir?: string | null): string[] | null {
+	let identity = commonDir ?? null;
+	if (identity === null) {
+		const resolution = resolveCanonicalRoot(canonical);
+		identity = resolution.state === "repository" ? resolution.commonDir : null;
+	}
+	if (identity === null) return null;
 	const outcome = runGit(canonical, ["worktree", "list", "--porcelain"]);
 	if (!outcome.ok) return null;
 	const realCanonical = realDeepest(canonical);
@@ -520,7 +519,7 @@ export function projectWorktrees(canonical: string): string[] | null {
 	for (const line of outcome.stdout.split("\n")) {
 		if (!line.startsWith("worktree ")) continue;
 		const real = realDeepest(line.slice("worktree ".length).trim());
-		if (real === null || real === realCanonical || !hasGitEntry(real)) continue;
+		if (real === null || real === realCanonical || !stillLinkedWorktree(real, identity)) continue;
 		found.push(real);
 	}
 	return found;
@@ -610,7 +609,7 @@ export function repositoryTopology(cwd: string): RepositoryTopology {
 	const commonDir = resolution.commonDir;
 	let listFailure: string | null = null;
 	const read = (): readonly string[] => {
-		const fresh = projectWorktrees(root);
+		const fresh = projectWorktrees(root, commonDir);
 		if (fresh === null) {
 			listFailure = `\`git worktree list\` did not answer in ${root}`;
 			return [];

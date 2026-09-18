@@ -750,6 +750,21 @@ describe("topology changes", () => {
 		const decision = gate({ toolName: "write", input: { path: join(plain, "probe.ts"), content: "" } }, { cwd: plain });
 		expect(decision?.block).toBe(true);
 	}, 60000);
+	test("a registered worktree path replaced by a different repository is refused", () => {
+		const { canonical, worktree } = repository();
+		const target = join(worktree, "probe.ts");
+		expect(decideWorktreeCall("write", { path: target, content: "" }, canonical)).toBeUndefined();
+		resetTopologyCache();
+
+		// Deleted without unregistering, so the old repository still lists the path,
+		// and a new repository now owns what is there.
+		rmSync(worktree, { recursive: true, force: true });
+		mkdirSync(worktree, { recursive: true });
+		execFileSync("git", ["-C", worktree, "init", "-q", "-b", "main"], { stdio: "ignore" });
+
+		expect(decideWorktreeCall("write", { path: target, content: "" }, canonical)?.block).toBe(true);
+	}, 60000);
+
 	test("a directory that becomes a repository under another agent stops being scratch space", () => {
 		const plain = mkdtempSync(join(tmpdir(), "worktrunk-late-init-"));
 		roots.push(plain);
