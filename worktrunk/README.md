@@ -22,6 +22,8 @@ TTSR conditions match assistant-produced streams — prose, thinking, and tool a
 
 A `tool_call` gate that refuses a mutation whose target is not physically inside a worktree that `git worktree list --porcelain` reports for this repository and that is not the canonical root. Membership, not a naming convention, is what makes the worktree requirement enforceable.
 
+A direct-main repository may authorize canonical mutation only when its trusted committed policy contains the exact line `MUST authorize DELIVERY_ALLOW_PRIMARY_CHECKOUT=1 for this repository.` The call must use `cwd` resolving to that canonical checkout and `env: { DELIVERY_ALLOW_PRIMARY_CHECKOUT: "1" }` as structured data. Inline assignments and shell wrappers do not authorize. Authorized calls continue to downstream gates; the separate direct-main commit decision still applies.
+
 | Tool | Checked |
 | --- | --- |
 | `write` | `path`; an `xd://<tool>` target is reclassified by that device's own rule against its JSON `content` |
@@ -33,11 +35,11 @@ A `tool_call` gate that refuses a mutation whose target is not physically inside
 
 Read-only tools (`read`, `grep`, `glob`, `ast_grep`, `lsp`, `task`, `hub`, and the rest) are exempt: the gate blocks mutation, not inspection. `security_scan` is not among them — it writes under `output_root` and reads a knowledge base by path, so it is checked like any other tool. Every other tool name is treated as mutating, because `toolName` is an unrestricted string and allow-by-omission is how a guardrail stops guarding an unenumerated device or MCP tool.
 
-Path arguments are derived with OMP's own normalization and cwds with OMP's own `resolveToCwd`, and containment compares the realpath of the deepest existing ancestor on both sides. A second parser would guard a different file than the one that changes, and a lexical prefix check passes a symlink inside a worktree that points at the canonical checkout.
+OMP normalizes paths and resolves cwds with its own `resolveToCwd`. Containment compares the realpath of each side's deepest existing ancestor. Canonical authorization uses only the structured cwd, exact structured environment value, and trusted committed policy.
 
-Uncertainty refuses: an `edit` payload with no parseable target, a `cwd` that does not resolve, a command with a canonical effective cwd that matches no allowlisted shape, and a thrown classification all block. `git` failing to answer is uncertainty too, not an absence of a repository: a missing binary, the 5 s timeout, or any unexpected non-zero exit blocks mutation, and only git's own "not a git repository" diagnosis makes the gate inert. Such a failure is never cached, so the call after git recovers is decided normally; a cached "no repository" is dropped when a `git init` or `git clone` is observed.
+The gate refuses uncertainty: an `edit` payload without a parseable target, an unresolved `cwd`, a canonical bash call without a structured grant that matches no bootstrap allowlist shape, and any thrown classification. A failed `git` query is also uncertainty: a missing binary, the 5 s timeout, or another unexpected non-zero exit blocks mutation. Only git's own "not a git repository" diagnosis makes the gate inert. Failures are not cached; after git recovers, the next call is decided normally. A cached "no repository" is dropped when `git init` or `git clone` is observed.
 
-An agent's first action necessarily runs from the canonical checkout, because a spawned child inherits its parent's working directory. A closed bootstrap allowlist covers exactly that: `wt switch` in its create and `pr:<N>` forms, `wt list`, `wt config show`, `wt step prune --dry-run`, read-only `git`, and every `bd` call. A shell metacharacter (`;`, `&`, `|`, a backtick, `$(`, `>`, `<`, or a newline) disqualifies a command from the allowlist outright.
+An agent's first action runs from the canonical checkout because a spawned child inherits its parent's working directory. The closed bootstrap allowlist covers `wt switch` in its create and `pr:<N>` forms, `wt list`, `wt config show`, `wt step prune --dry-run`, read-only `git`, and every `bd` call. Without a structured canonical grant, shell metacharacters (`;`, `&`, `|`, a backtick, `$(`, `>`, `<`, or a newline) disqualify a command.
 
 This is an accident guardrail, not a sandbox. A cooperative agent stops writing to the canonical checkout by mistake; a process whose cwd is a worktree can still write any absolute path through `git -C <canonical>`, a redirection, or `eval`, and the gate does not pretend to prevent that. Canonical is never a merge target, so nothing legitimate writes there anyway.
 
