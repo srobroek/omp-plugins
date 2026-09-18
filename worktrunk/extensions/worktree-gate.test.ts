@@ -86,10 +86,18 @@ describe("write", () => {
 		).toBeUndefined();
 	});
 
-	test("a worktree of a different repository is refused", () => {
+	test("a target in a different repository is not this project's to guard", () => {
 		const { canonical, foreign, topology } = project();
-		const decision = decideWorktreeCall("write", { path: join(foreign, "src", "probe.ts"), content: "" }, canonical, topology);
-		expect(decision?.block).toBe(true);
+		expect(
+			decideWorktreeCall("write", { path: join(foreign, "src", "probe.ts"), content: "" }, canonical, topology),
+		).toBeUndefined();
+	});
+
+	test("a target outside every repository is allowed", () => {
+		const { canonical, topology } = project();
+		const scratch = mkdtempSync(join(tmpdir(), "worktrunk-outside-"));
+		roots.push(scratch);
+		expect(decideWorktreeCall("write", { path: join(scratch, "probe.ts"), content: "" }, canonical, topology)).toBeUndefined();
 	});
 
 	test("a symlink inside a worktree pointing at canonical is refused", () => {
@@ -237,10 +245,48 @@ describe("bootstrapAllowed", () => {
 		expect(bootstrapAllowed("bun test")).toBe(false);
 	});
 
-	test("a shell metacharacter disqualifies an otherwise allowlisted command", () => {
-		for (const suffix of [" ; touch x", " && touch x", " | tee x", " > x", " < x", " `touch x`", " $(touch x)", "\ntouch x"]) {
-			expect(bootstrapAllowed(`git status${suffix}`)).toBe(false);
-		}
+	test("judges each invocation and permits safe shell composition", () => {
+		const wt = "wt switch -y --create --no-cd --base main --format json omp/agent/probe-1";
+		expect(bootstrapAllowed(`${wt} 2>&1 | tail -5`)).toBe(true);
+		expect(bootstrapAllowed(`printf ready; ${wt}`)).toBe(true);
+		expect(bootstrapAllowed(`WT_TRACE=1 ${wt}`)).toBe(true);
+		expect(bootstrapAllowed(`echo '${wt}'`)).toBe(false);
+		expect(bootstrapAllowed(`cat <<'EOF'\n${wt}\nEOF`)).toBe(false);
+		expect(bootstrapAllowed(`${wt} ; touch x`)).toBe(false);
+	});
+
+	test("a redirection to a file disqualifies the command, while discards and descriptors do not", () => {
+		const list = "wt list --format json";
+		expect(bootstrapAllowed(`${list} 2>&1 | tail -5`)).toBe(true);
+		expect(bootstrapAllowed(`${list} > /dev/null`)).toBe(true);
+		expect(bootstrapAllowed(`${list} > /Users/sjors/personal/dev/omp-orchestrate/f`)).toBe(false);
+		expect(bootstrapAllowed(`${list} >> notes.txt`)).toBe(false);
+		expect(bootstrapAllowed(`printf x > f ; ${list}`)).toBe(false);
+	});
+
+	test("a companion that can write in place is not a companion", () => {
+		expect(bootstrapAllowed("wt list | sed -i s/a/b/ f")).toBe(false);
+		expect(bootstrapAllowed("wt list | grep switch")).toBe(true);
+	});
+
+	test("an unbalanced quote is not judged, so it refuses", () => {
+		expect(bootstrapAllowed('wt list --format "json')).toBe(false);
+	});
+
+	test("admits GitHub read verbs but not mutation", () => {
+		for (const command of [
+			"gh pr view 1",
+			"gh pr checks 1",
+			"gh pr list",
+			"gh pr diff 1",
+			"gh issue view 1",
+			"gh issue list",
+			"gh run view 1",
+			"gh run list",
+			"gh repo view",
+			"gh api --method GET repos/srobroek/omp-plugins",
+		]) expect(bootstrapAllowed(command)).toBe(true);
+		expect(bootstrapAllowed("gh pr merge 1")).toBe(false);
 	});
 });
 
@@ -408,6 +454,18 @@ describe("git answers", () => {
 			process.env.PATH = path;
 		}
 	});
+
+	test("a working directory in a different repository is not gated by this project's allowlist", () => {
+		const mine = repository();
+		const other = repository();
+		expect(decideWorktreeCall("bash", { command: "bun test", cwd: other.canonical }, mine.canonical)).toBeUndefined();
+		const refusal = decideWorktreeCall("bash", { command: "bun test", cwd: mine.canonical }, mine.canonical);
+		expect(refusal?.block).toBe(true);
+		// The refusal names the directory the call would have run in, so a reader
+		// is not sent to inspect the wrong tree.
+		expect(refusal?.reason).toContain(mine.canonical);
+		// Two real repositories plus their lookups; the default budget is too small.
+	}, 20000);
 
 	test("unreadable repository metadata refuses and does not poison a later permission", () => {
 		const { canonical, worktree } = repository();

@@ -120,13 +120,21 @@ const PATH_KEYS: Record<string, true> = {
 /** Depth bound on the recursive argument walk; deeper nesting is not a path argument. */
 const MAX_SCAN_DEPTH = 6;
 
-/**
- * A shell metacharacter makes a command more than the single simple command the
- * bootstrap allowlist reasons about. `$(` is listed explicitly; a bare `$` is
- * not, because the allowlisted shapes are matched token by token and a variable
- * cannot spell `--create` or an `omp/` branch name.
- */
-const SHELL_METACHARACTERS = /[;&|`<>\n]|\$\(/;
+/** Shell token separators emitted by the shared tokenizer. */
+const SHELL_SEPARATORS: Record<string, true> = { ";": true, "&": true, "|": true, "(": true, ")": true, "\n": true };
+
+/** Non-mutating command companions allowed around a bootstrap invocation. */
+const READ_ONLY_COMPANIONS: Record<string, true> = {
+	cat: true,
+	echo: true,
+	false: true,
+	grep: true,
+	head: true,
+	printf: true,
+	rg: true,
+	tail: true,
+	true: true,
+};
 
 /** Branch names an agent may create from the canonical checkout. */
 const AGENT_BRANCH = /^omp\/[A-Za-z0-9._/-]+$/;
@@ -190,10 +198,10 @@ export function topologyRefusal(detail: string): string {
 }
 
 /** The refusal a non-allowlisted command with a canonical effective cwd earns. */
-export function bootstrapRefusal(command: string, canonical: string): string {
+export function bootstrapRefusal(command: string, cwd: string): string {
 	return (
-		`worktrunk refused this call: its effective working directory is the canonical checkout ` +
-		`(${canonical}) and \`${command.split("\n")[0]}\` is not one of the bootstrap commands allowed there ` +
+		`worktrunk refused this call: it would run in the canonical checkout ` +
+		`(${cwd}) and \`${command.split("\n")[0]}\` is not one of the bootstrap commands allowed there ` +
 		`(\`wt switch\`/\`wt list\`/\`wt config show\`/\`wt step prune --dry-run\`, read-only \`git\`, and \`bd\`). ` +
 		`${CREATE_HINT} ${SANDBOX_LIMIT}`
 	);
@@ -224,6 +232,20 @@ export function realDeepest(target: string): string | null {
 	}
 }
 
+/** Resolve the deepest existing ancestor of a possibly missing target. */
+function existingAncestor(target: string): string | null {
+	let current = path.resolve(target);
+	for (;;) {
+		try {
+			return realpathSync.native(current);
+		} catch {
+			const parent = path.dirname(current);
+			if (parent === current) return null;
+			current = parent;
+		}
+	}
+}
+
 /** True when `target` is physically inside (or equal to) one of `roots`. */
 export function insideAny(target: string, roots: readonly string[]): boolean {
 	const real = realDeepest(target);
@@ -242,6 +264,23 @@ type GitOutcome =
 	| { ok: false; kind: "no-repository" }
 	| { ok: false; kind: "unavailable"; detail: string };
 
+/**
+ * `git` said this directory is in no repository at all — a definite answer, not
+ * a failure. Deliberately narrow: a `cwd` git cannot even enter ("No such file
+ * or directory") is an unknown, not a licence to stand down.
+ */
+const NOT_A_REPOSITORY = /not a git repository|not a working tree/i;
+
+/**
+ * Run `git` and classify the outcome, distinguishing a definite "no repository
+ * here" from a `git` that did not answer.
+ *
+ * `spawnSync` rather than `execFileSync` because the distinction lives in
+ * `error` (ENOENT when git is not on PATH, ETIMEDOUT), in `signal` (the timeout
+ * kill), and in `stderr` (git's own diagnosis) — an exception collapses all
+ * three into one indistinguishable failure, which is how a gate ends up
+ * standing down when its own toolchain breaks.
+ */
 type RepositoryMetadata = "present" | "absent" | "unknown";
 
 /**
@@ -270,23 +309,6 @@ function repositoryMetadata(cwd: string): RepositoryMetadata {
 	}
 }
 
-/**
- * `git` said this directory is in no repository at all — a definite answer, not
- * a failure. Deliberately narrow: a `cwd` git cannot even enter ("No such file
- * or directory") is an unknown, not a licence to stand down.
- */
-const NOT_A_REPOSITORY = /not a git repository|not a working tree/i;
-
-/**
- * Run `git` and classify the outcome, distinguishing a definite "no repository
- * here" from a `git` that did not answer.
- *
- * `spawnSync` rather than `execFileSync` because the distinction lives in
- * `error` (ENOENT when git is not on PATH, ETIMEDOUT), in `signal` (the timeout
- * kill), and in `stderr` (git's own diagnosis) — an exception collapses all
- * three into one indistinguishable failure, which is how a gate ends up
- * standing down when its own toolchain breaks.
- */
 function runGit(cwd: string, args: string[]): GitOutcome {
 	const result = spawnSync("git", ["-C", cwd, ...args], {
 		encoding: "utf8",
@@ -546,37 +568,95 @@ export function editTargets(input: unknown): string[] | null {
 	return null;
 }
 
-/** Whitespace-split honouring quotes. `null` on an unbalanced quote. */
+/**
+ * Package-local copy of the tokenizer shape from beads/extensions/bd-close-gate.ts.
+ * The plugins install separately and worktrunk declares no beads dependency; keep
+ * this small copy until the shared parser gets its own released package.
+ */
 export function tokenize(command: string): string[] | null {
-	const tokens: string[] = [];
+	const out: string[] = [];
 	let current = "";
 	let started = false;
-	let quote: '"' | "'" | undefined;
-	for (const char of command) {
-		if (quote !== undefined) {
-			if (char === quote) quote = undefined;
-			else current += char;
+	let quote: '"' | "'" | null = null;
+	const pending: Array<{ delimiter: string; stripTabs: boolean }> = [];
+	const flush = (): void => {
+		if (started) { out.push(current); current = ""; started = false; }
+	};
+	for (let i = 0; i < command.length; i++) {
+		const ch = command[i] as string;
+		if (quote !== null) { if (ch === quote) quote = null; else { current += ch; started = true; } continue; }
+		if (ch === '"' || ch === "'") { quote = ch; started = true; continue; }
+		if (ch === "\\" && i + 1 < command.length) { current += command[++i] as string; started = true; continue; }
+		if (ch === "<" && command[i + 1] === "<" && command[i + 2] === "<") { flush(); out.push("<<<"); i += 2; continue; }
+		if (ch === "<" && command[i + 1] === "<") {
+			const operator = hereDocumentOperator(command, i);
+			if (operator !== null) { flush(); pending.push(operator); i = operator.end - 1; continue; }
+		}
+		if (ch === "\n") {
+			flush(); out.push(ch);
+			while (pending.length) { const document = pending.shift(); if (document === undefined) break; i = hereDocumentBodyEnd(command, i + 1, document); }
 			continue;
 		}
-		if (char === '"' || char === "'") {
-			quote = char;
-			started = true;
-			continue;
-		}
-		if (/\s/.test(char)) {
-			if (started) {
-				tokens.push(current);
-				current = "";
-				started = false;
-			}
-			continue;
-		}
-		current += char;
-		started = true;
+		if (/\s/.test(ch)) { flush(); continue; }
+		if ({ ";": true, "&": true, "|": true, "(": true, ")": true }[ch] === true) { flush(); out.push(ch); continue; }
+		current += ch; started = true;
 	}
-	if (quote !== undefined) return null;
-	if (started) tokens.push(current);
-	return tokens;
+	flush();
+	return quote === null ? out : null;
+}
+
+function hereDocumentOperator(command: string, start: number): { delimiter: string; stripTabs: boolean; end: number } | null {
+	let i = start + 2;
+	const stripTabs = command[i] === "-";
+	if (stripTabs) i++;
+	while (command[i] === " " || command[i] === "\t") i++;
+	const quote = command[i];
+	let delimiter = "";
+	if (quote === '"' || quote === "'") { const close = command.indexOf(quote, i + 1); if (close === -1) return null; delimiter = command.slice(i + 1, close); i = close + 1; }
+	else while (i < command.length && !/[\s;&|<>()]/.test(command[i] as string)) delimiter += command[i++];
+	return delimiter ? { delimiter, stripTabs, end: i } : null;
+}
+
+function hereDocumentBodyEnd(command: string, from: number, document: { delimiter: string; stripTabs: boolean }): number {
+	let cursor = from;
+	while (cursor < command.length) { let next = command.indexOf("\n", cursor); if (next === -1) next = command.length; let line = command.slice(cursor, next); if (document.stripTabs) line = line.replace(/^\t+/, ""); if (line === document.delimiter) return next; cursor = next + 1; }
+	return command.length;
+}
+
+/**
+ * Separators only, with redirections consumed. `null` when the command cannot be
+ * judged: an unbalanced quote, or a redirection whose target is a real file.
+ *
+ * A redirection is how a read-only companion mutates. `commandTokens` drops the
+ * operator and its target, so `printf x > <canonical>/f` would otherwise reduce
+ * to a `printf` segment and pass as safe. Discarding the target means the
+ * allowlist cannot see what is written, so a file target disqualifies the
+ * command and only the discard device and descriptor duplications stay.
+ */
+function commandTokens(command: string): string[] | null {
+	const raw = tokenize(command);
+	if (raw === null) return null;
+	const out: string[] = [];
+	for (let i = 0; i < raw.length; i++) {
+		const token = raw[i] as string;
+		if (!/^(?:\d+)?(?:<<<|<<|>>|>|<)/.test(token)) {
+			out.push(token);
+			continue;
+		}
+		const next = raw[++i];
+		if (next === "&") {
+			const target = raw[++i];
+			if (target !== undefined && SHELL_SEPARATORS[target] === true) out.push(target);
+			continue;
+		}
+		if (next === undefined) continue;
+		if (SHELL_SEPARATORS[next] === true) {
+			out.push(next);
+			continue;
+		}
+		if (next !== "/dev/null") return null;
+	}
+	return out;
 }
 
 /** Consume `wt`'s global options, returning the subcommand tokens. */
@@ -661,43 +741,81 @@ function wtSwitchAllowed(args: readonly string[]): boolean {
 	return PR_BRANCH.test(branch);
 }
 
-/**
- * True when this command is one an agent must be able to run from the canonical
- * checkout, because its first action necessarily starts there: `task` cannot
- * hand a child another cwd, so bootstrapping a worktree, reading git state, and
- * reaching the embedded Beads store in canonical `.beads` all happen from there.
- *
- * The list is closed. Any token outside a matched shape refuses.
- */
-export function bootstrapAllowed(command: string): boolean {
-	if (SHELL_METACHARACTERS.test(command)) return false;
-	const tokens = tokenize(command);
-	if (tokens === null) return false;
-	const program = tokens[0];
-	if (program === undefined) return false;
-	const rest = tokens.slice(1);
-	if (program === "bd") return true;
+const GH_READ_VERBS: Record<string, Record<string, true>> = {
+	pr: { view: true, checks: true, list: true, diff: true },
+	issue: { view: true, list: true },
+	run: { view: true, list: true },
+	repo: { view: true },
+};
+
+function ghReadAllowed(args: readonly string[]): boolean {
+	const sub = args[0];
+	if (sub === "api") {
+		let method = "GET";
+		for (let i = 1; i < args.length; i++) {
+			const token = args[i] as string;
+			if (token === "-X" || token === "--method") method = args[++i] ?? "";
+			else if (token.startsWith("--method=")) method = token.slice("--method=".length);
+		}
+		return method.toUpperCase() === "GET";
+	}
+	const verb = args[1];
+	return sub !== undefined && verb !== undefined && GH_READ_VERBS[sub]?.[verb] === true;
+}
+
+function invocationKind(segment: readonly string[]): "allowed" | "safe" | "other" {
+	let index = 0;
+	while (index < segment.length && /^[A-Za-z_][A-Za-z0-9_]*=.*$/.test(segment[index] as string)) index++;
+	const program = segment[index];
+	if (program === undefined) return "safe";
+	const rest = segment.slice(index + 1);
+	if (program === "bd") return "allowed";
 	if (program === "wt") {
 		const args = afterWtGlobals(rest);
-		if (args === null) return false;
+		if (args === null) return "other";
 		const sub = args[0];
 		const tail = args.slice(1);
-		if (sub === "switch") return wtSwitchAllowed(tail);
-		if (sub === "list") return tail.length === 0 || (tail.length === 2 && tail[0] === "--format" && tail[1] === "json");
-		if (sub === "config") return tail.length === 1 && tail[0] === "show";
-		if (sub === "step") return tail.length === 2 && tail[0] === "prune" && tail[1] === "--dry-run";
-		return false;
+		if (sub === "switch") return wtSwitchAllowed(tail) ? "allowed" : "other";
+		if (sub === "list") return tail.length === 0 || (tail.length === 2 && tail[0] === "--format" && tail[1] === "json") ? "allowed" : "other";
+		if (sub === "config") return tail.length === 1 && tail[0] === "show" ? "allowed" : "other";
+		if (sub === "step") return tail.length === 2 && tail[0] === "prune" && tail[1] === "--dry-run" ? "allowed" : "other";
+		return "other";
 	}
 	if (program === "git") {
 		const args = afterGitGlobals(rest);
-		if (args === null) return false;
+		if (args === null) return "other";
 		const sub = args[0];
-		if (sub === "rev-parse" || sub === "status" || sub === "fetch" || sub === "log") return true;
-		if (sub === "worktree") return args[1] === "list";
-		if (sub === "branch") return args[1] === "--list";
-		return false;
+		if (sub === "rev-parse" || sub === "status" || sub === "fetch" || sub === "log") return "allowed";
+		if (sub === "worktree") return args[1] === "list" ? "allowed" : "other";
+		if (sub === "branch") return args[1] === "--list" ? "allowed" : "other";
+		return "other";
 	}
-	return false;
+	if (program === "gh") return ghReadAllowed(rest) ? "allowed" : "other";
+	return READ_ONLY_COMPANIONS[program] === true ? "safe" : "other";
+}
+
+/** True when every command is a permitted bootstrap/read companion and one is a bootstrap invocation. */
+export function bootstrapAllowed(command: string): boolean {
+	const tokens = commandTokens(command);
+	if (tokens === null) return false;
+	let segment: string[] = [];
+	let found = false;
+	const finish = (): boolean => {
+		if (segment.length === 0) return true;
+		const kind = invocationKind(segment);
+		segment = [];
+		if (kind === "allowed") {
+			found = true;
+			return true;
+		}
+		return kind === "safe";
+	};
+	for (const token of tokens) {
+		if (SHELL_SEPARATORS[token] === true) {
+			if (!finish()) return false;
+		} else segment.push(token);
+	}
+	return finish() && found;
 }
 
 /** True when the command creates a worktree, so the cached list is stale. */
@@ -781,6 +899,23 @@ export function decideWorktreeCall(
 		// this project has no worktree holding the target.
 		const late = topology.uncertainty ?? null;
 		if (late !== null) return { block: true, reason: topologyRefusal(late) };
+		if (insideAny(target, [canonical])) {
+			return { block: true, reason: containmentRefusal(realDeepest(target) ?? target, canonical, topology.worktrees) };
+		}
+		// Paths outside every repository are not this gate's project. In particular,
+		// a missing file under /tmp is still classified through its existing ancestor.
+		const ancestor = existingAncestor(target);
+		if (ancestor !== null) {
+			const targetProject = resolveCanonicalRoot(ancestor);
+			if (targetProject.state === "no-repository") return undefined;
+			if (targetProject.state === "unknown") return { block: true, reason: topologyRefusal(targetProject.detail) };
+			// A path in a different repository belongs to that repository's own
+			// canonical checkout, which this session is not working in. Guarding it
+			// from here refuses ordinary cross-repository work — landing a fix in a
+			// sibling plugin from a session rooted in this one — while protecting
+			// nothing: the same gate protects that tree when a session works there.
+			if (targetProject.state === "repository" && targetProject.canonical !== canonical) return undefined;
+		}
 		return {
 			block: true,
 			// The physical target, so it is comparable with the realpath'd roots
@@ -788,7 +923,6 @@ export function decideWorktreeCall(
 			reason: containmentRefusal(realDeepest(target) ?? target, canonical, topology.worktrees),
 		};
 	};
-
 	const refuseAll = (raws: readonly string[]): GateRefusal | undefined => {
 		for (const raw of raws) {
 			const target = resolveTarget(raw, sessionCwd);
@@ -855,12 +989,22 @@ export function decideWorktreeCall(
 				return { block: true, reason: uncertaintyRefusal("this `bash` call's `cwd` does not resolve", canonical) };
 			}
 			if (contained(effective, topology)) return undefined;
+			// A working directory in a different repository is that repository's
+			// business, not this project's: a session rooted here legitimately runs
+			// builds and tests in a sibling checkout, and gating those against this
+			// project's bootstrap list refuses ordinary work while protecting
+			// nothing. Only a cwd inside this project reaches the allowlist.
+			const cwdProject = resolveCanonicalRoot(effective);
+			if (cwdProject.state === "unknown") {
+				return { block: true, reason: topologyRefusal(cwdProject.detail) };
+			}
+			if (cwdProject.state === "repository" && cwdProject.canonical !== canonical) return undefined;
 			const command = extractCommand(input);
 			if (command.length === 0) {
 				return { block: true, reason: uncertaintyRefusal("this `bash` call has no `command` string", canonical) };
 			}
 			if (bootstrapAllowed(command)) return undefined;
-			return { block: true, reason: bootstrapRefusal(command, canonical) };
+			return { block: true, reason: bootstrapRefusal(command, effective) };
 		}
 		case "eval": {
 			const record = asRecord(input);
