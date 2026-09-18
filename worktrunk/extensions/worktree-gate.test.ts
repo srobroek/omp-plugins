@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
-import { chmodSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, cpSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative, sep } from "node:path";
 
@@ -767,6 +767,45 @@ describe("topology changes", () => {
 		const commonParts = relative(outer.canonical, resolution.commonDir).split(sep);
 		expect(commonParts).toContain("worktrees");
 		expect(commonParts).toContain("modules");
+		expect(decideWorktreeCall("write", { path: join(submodule, "probe.ts"), content: "" }, outer.canonical)?.block).toBe(true);
+	}, 60000);
+
+	test("a cached linked-worktree directory replaced by a main-worktree submodule is refused", () => {
+		const inner = repository();
+		const outer = repository();
+		execFileSync(
+			"git",
+			["-C", outer.canonical, "-c", "protocol.file.allow=always", "submodule", "add", "--quiet", inner.canonical, "sub"],
+			{ stdio: "ignore" },
+		);
+		execFileSync("git", ["-C", outer.canonical, "commit", "-q", "-m", "add submodule"], { stdio: "ignore" });
+
+		execFileSync("git", ["-C", outer.worktree, "merge", "-q", "main"], { stdio: "ignore" });
+
+		const submodule = join(outer.worktree, "sub");
+		rmSync(submodule, { recursive: true, force: true });
+		mkdirSync(submodule);
+		// Cache the superproject owner while this is still an ordinary directory.
+		expect(decideWorktreeCall("write", { path: join(submodule, "probe.ts"), content: "" }, outer.canonical)).toBeUndefined();
+
+		rmSync(submodule, { recursive: true, force: true });
+		execFileSync(
+			"git",
+			["-C", outer.worktree, "-c", "protocol.file.allow=always", "submodule", "update", "--init", "--quiet", "sub"],
+			{ stdio: "ignore" },
+		);
+		const linkedAdmin = execFileSync("git", ["-C", submodule, "rev-parse", "--git-dir"], { encoding: "utf8" }).trim();
+		const canonicalAdmin = join(outer.canonical, ".git", "modules", "sub");
+		mkdirSync(join(outer.canonical, ".git", "modules"), { recursive: true });
+		rmSync(canonicalAdmin, { recursive: true, force: true });
+		cpSync(linkedAdmin, canonicalAdmin, { recursive: true });
+		execFileSync("git", ["config", "--file", join(canonicalAdmin, "config"), "core.worktree", submodule], { stdio: "ignore" });
+		writeFileSync(join(submodule, ".git"), `gitdir: ${canonicalAdmin}\n`);
+		const resolution = resolveCanonicalRoot(submodule);
+		expect(resolution.state).toBe("repository");
+		if (resolution.state !== "repository") return;
+		expect(relative(outer.canonical, resolution.commonDir).split(sep)).toContain("modules");
+		expect(relative(outer.canonical, resolution.commonDir).split(sep)).not.toContain("worktrees");
 		expect(decideWorktreeCall("write", { path: join(submodule, "probe.ts"), content: "" }, outer.canonical)?.block).toBe(true);
 	}, 60000);
 
