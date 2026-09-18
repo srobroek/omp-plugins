@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -723,7 +723,13 @@ describe("topology changes", () => {
 	});
 
 	test("a worktree removed after a cached allow no longer trusts a recreated ordinary directory", () => {
-		const { canonical, worktree } = repository();
+		const { canonical } = repository();
+		// Inside the canonical checkout, so the recreated directory is a canonical
+		// mutation rather than scratch space outside every repository.
+		const worktree = join(canonical, "nested-wt");
+		execFileSync("git", ["-C", canonical, "worktree", "add", "-q", "-b", "omp/agent/nested", worktree], {
+			stdio: "ignore",
+		});
 		const target = join(worktree, "src", "probe.ts");
 		mkdirSync(join(worktree, "src"), { recursive: true });
 		// The allow caches the membership; git is not consulted again on a hit.
@@ -763,6 +769,50 @@ describe("topology changes", () => {
 		execFileSync("git", ["-C", worktree, "init", "-q", "-b", "main"], { stdio: "ignore" });
 
 		expect(decideWorktreeCall("write", { path: target, content: "" }, canonical)?.block).toBe(true);
+	}, 60000);
+
+	test("a repository whose working tree git cannot name is guarded through its git directory", () => {
+		const parent = mkdtempSync(join(tmpdir(), "worktrunk-sgd-"));
+		roots.push(parent);
+		const main = join(parent, "main");
+		const meta = join(parent, "meta");
+		execFileSync("git", ["init", "-q", "-b", "main", `--separate-git-dir=${meta}`, main], { stdio: "ignore" });
+		execFileSync("git", ["-C", main, "config", "user.email", "probe@example.invalid"], { stdio: "ignore" });
+		execFileSync("git", ["-C", main, "config", "user.name", "probe"], { stdio: "ignore" });
+		execFileSync("git", ["-C", main, "commit", "-q", "--allow-empty", "-m", "root"], { stdio: "ignore" });
+		const linked = join(parent, "wt");
+		execFileSync("git", ["-C", main, "worktree", "add", "-q", "-b", "omp/agent/sgd", linked], { stdio: "ignore" });
+
+		// Verified against git 2.55.0: with `--separate-git-dir` git sets no
+		// `core.worktree` and the registration names the git directory, so the main
+		// working tree cannot be named from here at all. The git directory becomes the
+		// identity root — work in the linked worktree stays allowed, while the real
+		// main checkout is still refused because a target there resolves from its own
+		// directory, and the git directory itself is refused like any non-worktree.
+		expect(resolveCanonicalRoot(linked)).toEqual({
+			state: "repository",
+			canonical: realpathSync(meta),
+			commonDir: realpathSync(meta),
+		});
+		expect(decideWorktreeCall("write", { path: join(linked, "probe.ts"), content: "" }, linked)).toBeUndefined();
+		expect(decideWorktreeCall("write", { path: join(main, "probe.ts"), content: "" }, linked)?.block).toBe(true);
+		expect(decideWorktreeCall("write", { path: join(meta, "probe"), content: "" }, linked)?.block).toBe(true);
+	}, 60000);
+
+	test("a worktree path handed from one repository to another resolves its new owner", () => {
+		const first = repository();
+		const second = repository();
+		const shared = first.worktree;
+		expect(decideWorktreeCall("write", { path: join(shared, "probe.ts"), content: "" }, first.canonical)).toBeUndefined();
+
+		// The path changes hands: removed from the first repository, added to the
+		// second. A cached owner that outlives the move blocks legitimate work.
+		execFileSync("git", ["-C", first.canonical, "worktree", "remove", "--force", shared], { stdio: "ignore" });
+		execFileSync("git", ["-C", second.canonical, "worktree", "add", "-q", "-b", "omp/agent/moved", shared], {
+			stdio: "ignore",
+		});
+
+		expect(decideWorktreeCall("write", { path: join(shared, "probe.ts"), content: "" }, second.canonical)).toBeUndefined();
 	}, 60000);
 
 	test("a directory that becomes a repository under another agent stops being scratch space", () => {

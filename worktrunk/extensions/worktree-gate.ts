@@ -469,15 +469,21 @@ export function resolveCanonicalRoot(cwd: string): CanonicalResolution {
 	if (sibling !== null && realDeepest(path.join(sibling, ".git")) === commonDir) {
 		return { state: "repository", canonical: sibling, commonDir };
 	}
-	// A git directory that does not sit beside its working tree: ask git, which
-	// reads `core.worktree` from that directory and answers for submodules and
-	// `--separate-git-dir` alike.
+	// A git directory that does not sit beside its working tree. Ask git from that
+	// directory: it reads `core.worktree`, which is how a submodule names its
+	// checkout.
 	const fromCommon = runGit(commonDir, ["rev-parse", "--path-format=absolute", "--show-toplevel"]);
-	const main = fromCommon.ok ? realDeepest(fromCommon.stdout.trim()) : null;
-	if (main === null) {
-		return { state: "unknown", detail: `the main worktree of ${commonDir} could not be named` };
-	}
-	return { state: "repository", canonical: main, commonDir };
+	const named = fromCommon.ok ? realDeepest(fromCommon.stdout.trim()) : null;
+	if (named !== null) return { state: "repository", canonical: named, commonDir };
+	// `git init --separate-git-dir` sets no `core.worktree`, and the registration
+	// names the git directory rather than the checkout, so from a linked worktree the
+	// main working tree cannot be named at all. Verified against git 2.55.0. Use the
+	// git directory as the repository's identity root: nothing inside it is a place
+	// to work, so a mutation there is refused, linked worktrees still verify against
+	// it, and a target inside the real main worktree is resolved from its own
+	// directory — where `--git-dir` equals `--git-common-dir` and git does name the
+	// root. Refusing outright instead would refuse every write in a valid worktree.
+	return { state: "repository", canonical: commonDir, commonDir };
 }
 
 /**
@@ -580,6 +586,40 @@ export function resetTopologyCache(): void {
 	worktreeCache.clear();
 }
 
+/**
+ * True when `dir` still belongs to the repository whose common git directory is
+ * `commonDir`, judged from the filesystem: the nearest `.git` entry at or above it
+ * must resolve inside that directory — the directory itself for a main worktree,
+ * an admin directory under it for a linked one.
+ *
+ * `false` means "no longer confidently this repository", never "refuse": the
+ * caller re-asks git. A path can change hands — a worktree removed from one
+ * repository and re-added to another, a directory that becomes a submodule — and a
+ * cached owner that outlives the change either guards the wrong tree or refuses
+ * legitimate work in the new one for the rest of the session.
+ */
+function stillInRepository(dir: string, commonDir: string): boolean {
+	let current = realDeepest(dir);
+	while (current !== null) {
+		const pointer = path.join(current, ".git");
+		let gitDirEntry: boolean | null = null;
+		try {
+			gitDirEntry = lstatSync(pointer).isDirectory();
+		} catch {
+			gitDirEntry = null;
+		}
+		if (gitDirEntry !== null) {
+			// A directory `.git` is this repository's own git directory; a file is a
+			// gitfile, which `stillLinkedWorktree` resolves against the same identity.
+			return gitDirEntry ? realDeepest(pointer) === commonDir : stillLinkedWorktree(current, commonDir);
+		}
+		const parent = path.dirname(current);
+		if (parent === current) return false;
+		current = parent;
+	}
+	return false;
+}
+
 /** The topology of the repository owning `cwd`. */
 export function repositoryTopology(cwd: string): RepositoryTopology {
 	let resolution = canonicalCache.get(cwd);
@@ -589,6 +629,14 @@ export function repositoryTopology(cwd: string): RepositoryTopology {
 	// straight into a brand-new canonical checkout. The metadata walk is a few
 	// `lstat` calls, and anything but a confirmed absence re-asks git.
 	if (resolution?.state === "no-repository" && repositoryMetadata(cwd) !== "absent") {
+		canonicalCache.delete(cwd);
+		resolution = undefined;
+	}
+	// A cached repository holds only while this directory still belongs to it. A
+	// worktree removed from one repository and re-added to another keeps its path,
+	// and a cached owner that outlived the change refuses legitimate work in the new
+	// repository for the rest of the session.
+	if (resolution?.state === "repository" && !stillInRepository(cwd, resolution.commonDir)) {
 		canonicalCache.delete(cwd);
 		resolution = undefined;
 	}
