@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.5.2](https://github.com/srobroek/omp-plugins/compare/beads--v1.5.1...beads--v1.5.2) (2026-09-18)
+
+
+### Bug Fixes
+
+* **beads:** anchor computed claim ids ([#361](https://github.com/srobroek/omp-plugins/issues/361)) ([6ea6cd1](https://github.com/srobroek/omp-plugins/commit/6ea6cd182a722991baa7bd357f3ff449271cad8f))
+
 ## [1.5.1](https://github.com/srobroek/omp-plugins/compare/beads--v1.5.0...beads--v1.5.1) (2026-09-18)
 
 
