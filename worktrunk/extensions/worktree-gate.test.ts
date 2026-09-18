@@ -4,7 +4,7 @@ import { chmodSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync }
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import {
+import worktreeGate, {
 	bootstrapAllowed,
 	changesRepositoryTopology,
 	createsWorktree,
@@ -14,6 +14,7 @@ import {
 	globBase,
 	insideAny,
 	projectWorktrees,
+	type RepositoryTopology,
 	resetTopologyCache,
 	resolveCanonicalRoot,
 	tokenize,
@@ -35,6 +36,10 @@ interface Project {
  * A real on-disk project: containment is decided by realpath, so temporary
  * directories are the only way to exercise it. No git is involved — the topology
  * is injected, which is what the seam exists for.
+ *
+ * The injected resolver answers per directory, the way the real one does: this
+ * project owns its canonical checkout and its worktree, and everything else —
+ * `foreign`, a scratch temp directory — is inside no repository at all.
  */
 function project(): Project {
 	const parent = mkdtempSync(join(tmpdir(), "worktrunk-gate-"));
@@ -46,11 +51,13 @@ function project(): Project {
 		mkdirSync(dir, { recursive: true });
 	}
 	const worktrees = [worktree];
+	const owner: RepositoryTopology = { canonical, worktrees, refresh: () => worktrees };
+	const nowhere: RepositoryTopology = { canonical: null, uncertainty: null, worktrees: [], refresh: () => [] };
 	return {
 		canonical,
 		worktree,
 		foreign,
-		topology: { canonical, worktrees, refresh: () => worktrees },
+		topology: { session: owner, forTarget: dir => (insideAny(dir, [canonical, worktree]) ? owner : nowhere) },
 	};
 }
 
@@ -86,7 +93,7 @@ describe("write", () => {
 		).toBeUndefined();
 	});
 
-	test("a target in a different repository is not this project's to guard", () => {
+	test("a target under no repository of its own is scratch space, not a mutation to guard", () => {
 		const { canonical, foreign, topology } = project();
 		expect(
 			decideWorktreeCall("write", { path: join(foreign, "src", "probe.ts"), content: "" }, canonical, topology),
@@ -542,17 +549,19 @@ describe("eval", () => {
 
 describe("scope", () => {
 	test("the gate is inert when git confirmed the session is in no repository", () => {
-		const inert: GateTopology = { canonical: null, uncertainty: null, worktrees: [], refresh: () => [] };
+		const nowhere: RepositoryTopology = { canonical: null, uncertainty: null, worktrees: [], refresh: () => [] };
+		const inert: GateTopology = { session: nowhere, forTarget: () => nowhere };
 		expect(decideWorktreeCall("write", { path: "/anywhere/x.ts", content: "" }, "/anywhere", inert)).toBeUndefined();
 	});
 
-	test("an undetermined topology refuses mutation and still allows reading", () => {
-		const unknown: GateTopology = {
+	test("an undetermined session topology refuses mutation and still allows reading", () => {
+		const undetermined: RepositoryTopology = {
 			canonical: null,
 			uncertainty: "`git` did not run (spawn git ENOENT)",
 			worktrees: [],
 			refresh: () => [],
 		};
+		const unknown: GateTopology = { session: undetermined, forTarget: () => undetermined };
 		const decision = decideWorktreeCall("write", { path: "/anywhere/x.ts", content: "" }, "/anywhere", unknown);
 		expect(decision?.block).toBe(true);
 		expect(decision?.reason).toContain("ENOENT");
@@ -563,7 +572,7 @@ describe("scope", () => {
 	test("a worktree list that does not answer refuses rather than reporting no worktrees", () => {
 		const { canonical } = project();
 		let listFailure: string | null = null;
-		const broken: GateTopology = {
+		const owner: RepositoryTopology = {
 			canonical,
 			get uncertainty(): string | null {
 				return listFailure;
@@ -574,6 +583,7 @@ describe("scope", () => {
 				return [];
 			},
 		};
+		const broken: GateTopology = { session: owner, forTarget: () => owner };
 		const decision = decideWorktreeCall("write", { path: join(canonical, "src", "x.ts"), content: "" }, canonical, broken);
 		expect(decision?.block).toBe(true);
 		expect(decision?.reason).toContain("`git worktree list` did not answer");
@@ -605,8 +615,14 @@ describe("git answers", () => {
 
 	test("a repository, a plain directory and an unavailable git are three different answers", () => {
 		const { canonical, worktree } = repository();
-		expect(resolveCanonicalRoot(canonical)).toEqual({ state: "repository", canonical: expect.stringContaining("canonical") });
-		expect(resolveCanonicalRoot(worktree)).toEqual({ state: "repository", canonical: expect.stringContaining("canonical") });
+		// Asked from the main worktree and from a linked one, the same canonical root
+		// and the same repository identity come back.
+		expect(resolveCanonicalRoot(canonical)).toEqual({
+			state: "repository",
+			canonical: expect.stringContaining("canonical"),
+			commonDir: expect.stringContaining(".git"),
+		});
+		expect(resolveCanonicalRoot(worktree)).toEqual(resolveCanonicalRoot(canonical));
 		expect(projectWorktrees(canonical)?.length).toBe(1);
 
 		const plain = mkdtempSync(join(tmpdir(), "worktrunk-plain-"));
@@ -624,49 +640,42 @@ describe("git answers", () => {
 		}
 	});
 
-	test("a file target inside a linked worktree is allowed when cwd is that file", () => {
-		const { worktree } = repository();
-		const file = join(worktree, "src", "existing.ts");
-		mkdirSync(join(worktree, "src"), { recursive: true });
-		writeFileSync(file, "export const probe = true;\n");
-		expect(decideWorktreeCall("write", { path: file, content: "" }, file)).toBeUndefined();
-	});
-
-	test("a not-yet-existing target inside a linked worktree is allowed", () => {
-		const { worktree } = repository();
-		const file = join(worktree, "src", "new", "probe.ts");
-		expect(decideWorktreeCall("write", { path: file, content: "" }, file)).toBeUndefined();
-	});
-
-	test("a file target inside this project's canonical checkout remains refused", () => {
-		const { canonical } = repository();
-		const file = join(canonical, "src", "existing.ts");
-		writeFileSync(file, "export const probe = true;\n");
-		const refusal = decideWorktreeCall("write", { path: file, content: "" }, file);
-		expect(refusal?.block).toBe(true);
-		expect(refusal?.reason).toContain(canonical);
-	});
-
-	test("a file target in a foreign repository is outside this project's guard", () => {
-		const mine = repository();
-		const foreign = repository();
-		const file = join(foreign.canonical, "src", "existing.ts");
-		writeFileSync(file, "export const probe = true;\n");
-		expect(decideWorktreeCall("write", { path: file, content: "" }, mine.canonical)).toBeUndefined();
-		// Two real repositories plus their lookups; the default budget is too small.
-	}, 20000);
-
-	test("a working directory in a different repository is not gated by this project's allowlist", () => {
+	test("a second repository is judged against its own topology, not this project's", () => {
 		const mine = repository();
 		const other = repository();
-		expect(decideWorktreeCall("bash", { command: "bun test", cwd: other.canonical }, mine.canonical)).toBeUndefined();
+		// Its linked worktree is where a worker dispatched there works.
+		expect(decideWorktreeCall("bash", { command: "bun test", cwd: other.worktree }, mine.canonical)).toBeUndefined();
+		expect(
+			decideWorktreeCall("write", { path: join(other.worktree, "probe.ts"), content: "" }, mine.canonical),
+		).toBeUndefined();
+		// Its canonical checkout is as protected as this project's, and the refusal
+		// names that repository rather than the session's.
+		const otherCanonical = decideWorktreeCall("bash", { command: "bun test", cwd: other.canonical }, mine.canonical);
+		expect(otherCanonical?.block).toBe(true);
+		expect(otherCanonical?.reason).toContain(other.canonical);
+		const otherWrite = decideWorktreeCall("write", { path: join(other.canonical, "probe.ts"), content: "" }, mine.canonical);
+		expect(otherWrite?.block).toBe(true);
+		expect(otherWrite?.reason).toContain(other.canonical);
+		expect(otherWrite?.reason).not.toContain(mine.canonical);
+		// Bootstrapping there is the same exception it is here.
+		expect(decideWorktreeCall("bash", { command: "bd list --json", cwd: other.canonical }, mine.canonical)).toBeUndefined();
 		const refusal = decideWorktreeCall("bash", { command: "bun test", cwd: mine.canonical }, mine.canonical);
 		expect(refusal?.block).toBe(true);
 		// The refusal names the directory the call would have run in, so a reader
 		// is not sent to inspect the wrong tree.
 		expect(refusal?.reason).toContain(mine.canonical);
-		// Two real repositories plus their lookups; the default budget is too small.
-	}, 20000);
+		// Two real repositories plus their lookups, with a wrapped `git` on PATH.
+	}, 60000);
+
+	test("a scratch directory outside every repository stays writable", () => {
+		const mine = repository();
+		const scratch = mkdtempSync(join(tmpdir(), "worktrunk-scratch-"));
+		roots.push(scratch);
+		expect(
+			decideWorktreeCall("write", { path: join(scratch, "probe.ts"), content: "" }, mine.canonical),
+		).toBeUndefined();
+		expect(decideWorktreeCall("bash", { command: "bun test", cwd: scratch }, mine.canonical)).toBeUndefined();
+	}, 60000);
 
 	test("unreadable repository metadata refuses and does not poison a later permission", () => {
 		const { canonical, worktree } = repository();
@@ -705,6 +714,151 @@ describe("git answers", () => {
 			decideWorktreeCall("write", { path: join(worktree, "src", "probe.ts"), content: "" }, canonical),
 		).toBeUndefined();
 		expect(decideWorktreeCall("write", { path: "src/probe.ts", content: "" }, canonical)?.block).toBe(true);
+	});
+});
+
+describe("topology changes", () => {
+	afterEach(() => {
+		resetTopologyCache();
+	});
+
+	test("a worktree removed after a cached allow no longer trusts a recreated ordinary directory", () => {
+		const { canonical, worktree } = repository();
+		const target = join(worktree, "src", "probe.ts");
+		mkdirSync(join(worktree, "src"), { recursive: true });
+		// The allow caches the membership; git is not consulted again on a hit.
+		expect(decideWorktreeCall("write", { path: target, content: "" }, canonical)).toBeUndefined();
+
+		// Another agent removes it — a removal is not a command this gate can see.
+		execFileSync("git", ["-C", canonical, "worktree", "remove", "--force", worktree], { stdio: "ignore" });
+		mkdirSync(join(worktree, "src"), { recursive: true });
+
+		const decision = decideWorktreeCall("write", { path: target, content: "" }, canonical);
+		expect(decision?.block).toBe(true);
+		expect(decision?.reason).toContain(canonical);
+	}, 60000);
+
+	test("a repository created by the call being judged does not leave the gate inert", () => {
+		const plain = mkdtempSync(join(tmpdir(), "worktrunk-init-"));
+		roots.push(plain);
+		const gate = handler();
+
+		// Judged before it runs: no repository yet, so nothing to guard.
+		expect(gate({ toolName: "bash", input: { command: "git init -b main" } }, { cwd: plain })).toBeUndefined();
+		execFileSync("git", ["-C", plain, "init", "-q", "-b", "main"], { stdio: "ignore" });
+
+		const decision = gate({ toolName: "write", input: { path: join(plain, "probe.ts"), content: "" } }, { cwd: plain });
+		expect(decision?.block).toBe(true);
+	}, 60000);
+
+	test("a submodule belongs to its own repository, whose checkout is refused like any canonical", () => {
+		const { superproject, submodule } = withSubmodule();
+		// The submodule's own main worktree is the checked-out directory, so a write
+		// there is a canonical mutation. Deriving the owner from the common git
+		// directory instead names `<super>/.git/modules`, where `git worktree list`
+		// reports the superproject — and every one of these writes passes.
+		expect(resolveCanonicalRoot(submodule)).toEqual({
+			state: "repository",
+			canonical: expect.stringContaining("/sub"),
+			commonDir: expect.stringContaining("modules"),
+		});
+		expect(projectWorktrees(submodule)).toEqual([]);
+		expect(decideWorktreeCall("write", { path: join(submodule, "probe.ts"), content: "" }, superproject)?.block).toBe(true);
+		expect(decideWorktreeCall("write", { path: join(superproject, "probe.ts"), content: "" }, superproject)?.block).toBe(
+			true,
+		);
+		// The submodule's git directory is repository internals, not a worktree.
+		expect(
+			decideWorktreeCall(
+				"write",
+				{ path: join(superproject, ".git", "modules", "sub", "probe"), content: "" },
+				superproject,
+			)?.block,
+		).toBe(true);
+	}, 60000);
+
+	test("a linked worktree of a submodule is writable, and the submodule's own checkout is not", () => {
+		const { submodule } = withSubmodule();
+		const linked = join(mkdtempSync(join(tmpdir(), "worktrunk-sublinked-")), "wt");
+		roots.push(linked);
+		execFileSync("git", ["-C", submodule, "worktree", "add", "-q", "-b", "omp/agent/sub", linked], { stdio: "ignore" });
+		expect(decideWorktreeCall("write", { path: join(linked, "probe.ts"), content: "" }, submodule)).toBeUndefined();
+		expect(decideWorktreeCall("write", { path: join(submodule, "probe.ts"), content: "" }, submodule)?.block).toBe(true);
+	}, 60000);
+});
+
+/**
+ * A superproject with a checked-out submodule. The submodule's git directory
+ * lives at `<super>/.git/modules/sub`, which is what makes `dirname` of the
+ * common git directory the wrong owner.
+ */
+function withSubmodule(): { superproject: string; submodule: string } {
+	const inner = repository();
+	const superproject = repository().canonical;
+	execFileSync(
+		"git",
+		["-C", superproject, "-c", "protocol.file.allow=always", "submodule", "add", "--quiet", inner.canonical, "sub"],
+		{ stdio: "ignore" },
+	);
+	execFileSync("git", ["-C", superproject, "commit", "-q", "-m", "add submodule"], { stdio: "ignore" });
+	return { superproject, submodule: join(superproject, "sub") };
+}
+
+/**
+ * The registered `tool_call` listener. The cache interplay around a
+ * topology-changing command lives in the handler, not in `decideWorktreeCall`, so
+ * it can only be exercised here.
+ */
+function handler(): (event: { toolName: string; input: unknown }, ctx: { cwd: string }) => { block?: boolean } | undefined {
+	let listener: unknown;
+	worktreeGate({
+		on: (_name: string, fn: unknown) => {
+			listener = fn;
+		},
+	} as unknown as Parameters<typeof worktreeGate>[0]);
+	if (typeof listener !== "function") throw new Error("the gate registered no tool_call listener");
+	return listener as (event: { toolName: string; input: unknown }, ctx: { cwd: string }) => { block?: boolean } | undefined;
+}
+
+describe("pathless mutating tools", () => {
+	test("a mutating tool that names no target is judged by the cwd it defaults to", () => {
+		const { canonical, worktree, topology } = project();
+		// `typescript_quality({mode:"fix"})` defaults its path to the session cwd and
+		// writes fixes there; from canonical that is a canonical mutation.
+		const decision = decideWorktreeCall("typescript_quality", { mode: "fix" }, canonical, topology);
+		expect(decision?.block).toBe(true);
+		expect(decision?.reason).toContain(canonical);
+		expect(decideWorktreeCall("typescript_quality", { mode: "fix" }, worktree, topology)).toBeUndefined();
+	});
+
+	test("a pathless ledger call is allowed from canonical, and a ledger path argument is not", () => {
+		const { canonical, topology } = project();
+		// Claim-before-worktree: the bead must be claimable before a worktree exists,
+		// exactly as the bootstrap allowlist permits `bd` from canonical.
+		expect(decideWorktreeCall("orc_claim", { bead: "proj-1" }, canonical, topology)).toBeUndefined();
+		expect(
+			decideWorktreeCall("orc_status", { output_root: join(canonical, "out") }, canonical, topology)?.block,
+		).toBe(true);
+	});
+
+	test("a pathless read-approved scan of the canonical checkout is inspection, not mutation", () => {
+		const { canonical, topology } = project();
+		// Every `approval: "read"` registration these plugins ship: they default an
+		// optional path to the session cwd and only read it.
+		const readApproved = [
+			"dep_scan",
+			"version_gap_scan",
+			"resume_session",
+			"chezmoi_status",
+			"find_tools_scan",
+			"agentic_lint",
+			"headed_read",
+			"sniff_read_report_artifact",
+			"sniff_read_analyzer_artifact",
+		];
+		for (const tool of readApproved) {
+			expect(decideWorktreeCall(tool, {}, canonical, topology)).toBeUndefined();
+		}
 	});
 });
 
