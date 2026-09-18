@@ -10,7 +10,7 @@ import tempfile
 from pathlib import Path, PurePosixPath
 from typing import NoReturn, Sequence
 
-EXPECTED_VERSION = "agnix 0.52.2"
+EXPECTED_VERSION = "agnix 0.54.0"
 
 
 class CheckerError(Exception):
@@ -228,7 +228,7 @@ def agnix_command() -> list[str]:
         command = ["mise", "exec", "--no-deps", "--", "agnix"]
     else:
         if shutil.which("agnix") is None:
-            fail("agnix is required for the pre-commit agentic check.\nInstall the expected tool before committing: cargo install agnix-cli --version 0.52.2")
+            fail("agnix is required for the pre-commit agentic check.\nInstall the expected tool before committing: cargo install agnix-cli --version 0.54.0")
         command = ["agnix"]
     version = subprocess.run(command + ["--version"], text=True, capture_output=True, check=False)
     if version.returncode:
