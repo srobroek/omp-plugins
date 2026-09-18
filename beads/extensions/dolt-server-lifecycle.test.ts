@@ -6,6 +6,10 @@ import { join } from "node:path";
 import beadsDoltLifecycle, {
 	backendNotice,
 	classifyBackend,
+	DOLT_START_HOLDER_NAME,
+	DOLT_START_UNKNOWN_REFUSAL,
+	doltStartLockPath,
+	doltStartRefusal,
 	pidAlive,
 	readBackend,
 	shouldStopServer,
@@ -29,7 +33,8 @@ async function repo(files: Record<string, string> | null): Promise<string> {
 }
 
 afterEach(async () => {
-	for (const dir of dirs.splice(0)) await rm(dir, { recursive: true, force: true });
+	for (const dir of dirs.splice(0))
+		await rm(dir, { recursive: true, force: true });
 });
 
 describe("classifyBackend", () => {
@@ -41,21 +46,35 @@ describe("classifyBackend", () => {
 	});
 
 	test("a nested block a human might hand-write is read too", () => {
-		expect(classifyBackend("{}", "dolt:\n  shared-server: true\n")).toBe("shared");
+		expect(classifyBackend("{}", "dolt:\n  shared-server: true\n")).toBe(
+			"shared",
+		);
 	});
 
 	test("a commented-out key is not a shared server", () => {
-		expect(classifyBackend('{"dolt_mode":"embedded"}', "# dolt.shared-server: true\n")).toBe("embedded");
+		expect(
+			classifyBackend(
+				'{"dolt_mode":"embedded"}',
+				"# dolt.shared-server: true\n",
+			),
+		).toBe("embedded");
 	});
 
 	test("per-project server mode is declared only in metadata", () => {
 		// `bd init --server` sets the metadata field and no config key at all, so a
 		// config-only reader would call this project embedded and nag it forever.
-		expect(classifyBackend('{"dolt_mode":"server","dolt_database":"omp_orchestrate"}', "")).toBe("per-project");
+		expect(
+			classifyBackend(
+				'{"dolt_mode":"server","dolt_database":"omp_orchestrate"}',
+				"",
+			),
+		).toBe("per-project");
 	});
 
 	test("shared wins when both carriers are present", () => {
-		expect(classifyBackend('{"dolt_mode":"server"}', "dolt.shared-server: true\n")).toBe("shared");
+		expect(
+			classifyBackend('{"dolt_mode":"server"}', "dolt.shared-server: true\n"),
+		).toBe("shared");
 	});
 
 	test("malformed or absent metadata proves nothing either way", () => {
@@ -72,16 +91,25 @@ describe("classifyBackend", () => {
 
 describe("readBackend", () => {
 	test("a repository with no .beads is untracked", async () => {
-		expect(await readBackend(await repo(null))).toEqual({ backend: "unknown", tracked: false });
+		expect(await readBackend(await repo(null))).toEqual({
+			backend: "unknown",
+			tracked: false,
+		});
 	});
 
 	test("the default bd init layout reads as embedded", async () => {
 		const cwd = await repo({ "metadata.json": '{"dolt_mode":"embedded"}' });
-		expect(await readBackend(cwd)).toEqual({ backend: "embedded", tracked: true });
+		expect(await readBackend(cwd)).toEqual({
+			backend: "embedded",
+			tracked: true,
+		});
 	});
 
 	test("a tracked repo with unreadable carriers is tracked but unknown", async () => {
-		expect(await readBackend(await repo({}))).toEqual({ backend: "unknown", tracked: true });
+		expect(await readBackend(await repo({}))).toEqual({
+			backend: "unknown",
+			tracked: true,
+		});
 	});
 });
 
@@ -125,8 +153,16 @@ describe("shouldStopServer", () => {
 	});
 
 	test("only an exact opt-in counts", () => {
-		expect(shouldStopServer("per-project", { BEADS_STOP_SERVER_ON_EXIT: "true" } as NodeJS.ProcessEnv)).toBe(false);
-		expect(shouldStopServer("per-project", { BEADS_STOP_SERVER_ON_EXIT: "0" } as NodeJS.ProcessEnv)).toBe(false);
+		expect(
+			shouldStopServer("per-project", {
+				BEADS_STOP_SERVER_ON_EXIT: "true",
+			} as NodeJS.ProcessEnv),
+		).toBe(false);
+		expect(
+			shouldStopServer("per-project", {
+				BEADS_STOP_SERVER_ON_EXIT: "0",
+			} as NodeJS.ProcessEnv),
+		).toBe(false);
 	});
 });
 
@@ -163,7 +199,10 @@ describe("cross-instance once-guard", () => {
 		const sent: unknown[] = [];
 		const handlers: Array<(event: unknown, ctx: unknown) => Promise<void>> = [];
 		const pi = {
-			on: (name: string, handler: (event: unknown, ctx: unknown) => Promise<void>) => {
+			on: (
+				name: string,
+				handler: (event: unknown, ctx: unknown) => Promise<void>,
+			) => {
 				if (name === "session_start") handlers.push(handler);
 			},
 			sendMessage: (message: unknown) => {
@@ -179,6 +218,141 @@ describe("cross-instance once-guard", () => {
 	});
 });
 
+describe("concurrent dolt start launch lock", () => {
+	type Handler = (event: unknown, ctx?: unknown) => unknown;
+
+	function lifecycle(): { toolCall: Handler; toolResult: Handler } {
+		const registered: Record<string, Handler[]> = {};
+		beadsDoltLifecycle({
+			on: (name: string, handler: Handler) => {
+				const list = registered[name] ?? [];
+				list.push(handler);
+				registered[name] = list;
+			},
+			sendMessage: () => {},
+			logger: { error: () => {}, info: () => {} },
+		} as never);
+		const toolCall = registered.tool_call?.[0];
+		const toolResult = registered.tool_result?.[0];
+		if (toolCall === undefined || toolResult === undefined)
+			throw new Error("dolt start handlers were not registered");
+		return { toolCall, toolResult };
+	}
+
+	const start = (toolCallId: string, cwd: string, lock: string) => ({
+		toolName: "bash",
+		toolCallId,
+		input: {
+			command: "bd dolt start",
+			cwd,
+			env: { BEADS_DOLT_START_LOCK: lock },
+		},
+	});
+
+	test("the first start is unchanged and the second refuses with holder pid/cwd", async () => {
+		const home = await mkdtemp(join(tmpdir(), "beads-dolt-start-home-"));
+		dirs.push(home);
+		const savedHome = process.env.HOME;
+		process.env.HOME = home;
+		try {
+			const handlers = lifecycle();
+			expect(
+				handlers.toolCall(start("first", "/owner", doltStartLockPath(home))),
+			).toBeUndefined();
+			const lock = doltStartLockPath(home);
+			const holder = JSON.parse(
+				await Bun.file(join(lock, DOLT_START_HOLDER_NAME)).text(),
+			) as { pid: number; cwd: string };
+			expect(holder).toEqual({ pid: process.pid, cwd: "/owner" });
+			expect(
+				handlers.toolCall(start("second", "/loser", doltStartLockPath(home))),
+			).toEqual({
+				block: true,
+				reason: doltStartRefusal(holder),
+			});
+			handlers.toolResult({
+				toolName: "bash",
+				toolCallId: "second",
+				input: {},
+				content: [],
+			});
+			expect(await Bun.file(join(lock, DOLT_START_HOLDER_NAME)).exists()).toBe(
+				true,
+			);
+			handlers.toolResult({
+				toolName: "bash",
+				toolCallId: "first",
+				input: {},
+				content: [],
+			});
+			expect(await Bun.file(join(lock, DOLT_START_HOLDER_NAME)).exists()).toBe(
+				false,
+			);
+		} finally {
+			if (savedHome === undefined) delete process.env.HOME;
+			else process.env.HOME = savedHome;
+		}
+	});
+
+	test("a solo start remains allowed", async () => {
+		const home = await mkdtemp(join(tmpdir(), "beads-dolt-start-home-"));
+		dirs.push(home);
+		const savedHome = process.env.HOME;
+		process.env.HOME = home;
+		try {
+			const handlers = lifecycle();
+			expect(
+				handlers.toolCall(start("solo", "/solo", doltStartLockPath(home))),
+			).toBeUndefined();
+			handlers.toolResult({
+				toolName: "bash",
+				toolCallId: "solo",
+				input: {},
+				content: [],
+			});
+			expect(
+				await Bun.file(
+					join(doltStartLockPath(home), DOLT_START_HOLDER_NAME),
+				).exists(),
+			).toBe(false);
+		} finally {
+			if (savedHome === undefined) delete process.env.HOME;
+			else process.env.HOME = savedHome;
+		}
+	});
+
+	test("a missing or malformed holder refuses with named uncertainty", async () => {
+		const home = await mkdtemp(join(tmpdir(), "beads-dolt-start-home-"));
+		dirs.push(home);
+		const savedHome = process.env.HOME;
+		process.env.HOME = home;
+		const lock = doltStartLockPath(home);
+		try {
+			await mkdir(lock, { recursive: true });
+			const handlers = lifecycle();
+			const missing = handlers.toolCall(
+				start("missing", "/repo", doltStartLockPath(home)),
+			);
+			expect(missing).toEqual({
+				block: true,
+				reason: DOLT_START_UNKNOWN_REFUSAL,
+			});
+			await writeFile(join(lock, DOLT_START_HOLDER_NAME), "not json");
+			const malformed = handlers.toolCall(
+				start("malformed", "/repo", doltStartLockPath(home)),
+			);
+			expect(malformed).toEqual({
+				block: true,
+				reason: DOLT_START_UNKNOWN_REFUSAL,
+			});
+		} finally {
+			await rm(lock, { recursive: true, force: true });
+			if (savedHome === undefined) delete process.env.HOME;
+			else process.env.HOME = savedHome;
+		}
+	});
+});
+
 describe("session_shutdown store selection", () => {
 	test("stops this checkout's server, never the one an inherited BEADS_DIR names", async () => {
 		// Independent review reproduced `bd dolt stop` being issued against another
@@ -190,18 +364,27 @@ describe("session_shutdown store selection", () => {
 		const bin = await mkdtemp(join(tmpdir(), "beads-fakebin-"));
 		dirs.push(bin);
 		const log = join(bin, "calls.txt");
-		await writeFile(join(bin, "bd"),
-			`#!/bin/sh\nprintf '%s|%s\\n' "$*" "$BEADS_DIR" >> ${JSON.stringify(log)}\nexit 0\n`);
+		await writeFile(
+			join(bin, "bd"),
+			`#!/bin/sh\nprintf '%s|%s\\n' "$*" "$BEADS_DIR" >> ${JSON.stringify(log)}\nexit 0\n`,
+		);
 		await Bun.spawn(["chmod", "+x", join(bin, "bd")]).exited;
 
-		const saved = { path: process.env.PATH, beads: process.env.BEADS_DIR, stop: process.env.BEADS_STOP_SERVER_ON_EXIT };
+		const saved = {
+			path: process.env.PATH,
+			beads: process.env.BEADS_DIR,
+			stop: process.env.BEADS_STOP_SERVER_ON_EXIT,
+		};
 		const handlers: Array<(event: unknown, ctx: unknown) => Promise<void>> = [];
 		try {
 			process.env.PATH = `${bin}:${saved.path ?? ""}`;
 			process.env.BEADS_DIR = join(foreign, ".beads");
 			process.env.BEADS_STOP_SERVER_ON_EXIT = "1";
 			const pi = {
-				on: (name: string, handler: (event: unknown, ctx: unknown) => Promise<void>) => {
+				on: (
+					name: string,
+					handler: (event: unknown, ctx: unknown) => Promise<void>,
+				) => {
 					if (name === "session_shutdown") handlers.push(handler);
 				},
 				sendMessage: () => {},
@@ -210,12 +393,18 @@ describe("session_shutdown store selection", () => {
 			beadsDoltLifecycle(pi as never);
 			for (const handler of handlers) await handler({}, { cwd: checkout });
 
-			const recorded = await Bun.file(log).text().catch(() => "");
+			const recorded = await Bun.file(log)
+				.text()
+				.catch(() => "");
 			expect(recorded).toContain("dolt stop");
 			expect(recorded).toContain(join(checkout, ".beads"));
 			expect(recorded).not.toContain(join(foreign, ".beads"));
 		} finally {
-			for (const [key, value] of [["PATH", saved.path], ["BEADS_DIR", saved.beads], ["BEADS_STOP_SERVER_ON_EXIT", saved.stop]] as const) {
+			for (const [key, value] of [
+				["PATH", saved.path],
+				["BEADS_DIR", saved.beads],
+				["BEADS_STOP_SERVER_ON_EXIT", saved.stop],
+			] as const) {
 				if (value === undefined) delete process.env[key];
 				else process.env[key] = value;
 			}
