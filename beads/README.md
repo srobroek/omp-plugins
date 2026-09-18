@@ -1,91 +1,39 @@
-# beads
+# Beads
 
-Track work with the [beads](https://github.com/steveyegge/beads) issue tracker (`bd`). Its dependency graph persists across processes and crashes.
+Beads records work with the bd CLI. Its graph survives process restarts and crashes.
 
-Install this plugin in a repository with `.beads/`; it pins that database for sessions and Bash calls in the same repository family. Bash calls whose working directory belongs to another repository remain unpinned. A human who wants a different shared store exports an absolute `BEADS_DIR` before starting omp, and the plugin keeps it within that session repository.
+Install this plugin in a repository with `.beads/`. The plugin pins that repository embedded store for session commands. Calls in another repository remain unpinned.
 
 ## Skills
 
-| Skill | Use when |
-|---|---|
-| `build-formula` | Writing a bd formula, choosing whether to use one, or debugging a formula that pours the wrong DAG. |
-| `adr` | Recording an architecture decision as a decision bead, superseding one, or acting on `bd lint` findings. |
-
-## Rules
-
-To read a rule, open its `rule://<name>` address.
-
-| Rule | Covers |
-|---|---|
-| `beads-core` | Claiming work and managing fields. Routing dependencies and syncing data. Using JSONL as a fallback and maintaining the database. |
-| `beads-setup` | Setting up beads. Verifying the install. |
-| `beads-lifecycle` | Status transitions and gate beads. |
-| `beads-carriers` | Choosing where to keep authoritative records. Using comments, decision beads, wisps, or artifacts. |
-| `beads-composition` | Choosing an issue or epic. Using formulas and molecules. Working with bonds or wisps. |
-| `beads-coordination` | Swarms and merge slots. |
-| `beads-audit` | Explicit semantic events and read-only reporting for non-orchestrated runs. |
-| `beads-github-mirror` | Mirroring beads out to GitHub issues. |
-
-## Sync and session boundaries
-
-The rule bodies define sync policy through `bd config`: Dolt-first, one detached push per session, with JSONL-over-git as fallback.
-
-The `session-beads-lifecycle` extension handles session boundaries rather than session-event hooks for Claude or Codex. At startup, it reports unresolved gates. It also reports whether the previous session's detached push succeeded. At close, it reports held claims.
-
-Use the builtin learn/retain/recall/reflect tools for persistent knowledge. This plugin leaves stored memories untouched. It does not replay beads memories at startup or compaction.
+| Skill | Use |
+| --- | --- |
+| `build-formula` | Author and debug formulas. |
+| `adr` | Record architecture decisions. |
+| `beads-setup` | Initialize a workspace. |
+| `beads-lifecycle` | Manage bead status and gates. |
+| `beads-carriers` | Choose authoritative records. |
+| `beads-composition` | Choose issues and formulas. |
 
 ## Extensions
 
-- `bd-close-gate`: blocks a `bash` call that runs `bd close` on a gate bead.
-  It resolves literal command-line ids through `bd show --json`.
-  It uses the command's own `-C`/`--db` and the call's cwd to query the same database.
-  Variable ids, an id-less `bd close`, and an unreachable database all allow the call.
-  It accepts bare and enveloped JSON responses.
-  Malformed responses produce an uncertainty advisory, not proof that closure is safe.
-- `bd-actor-gate`: blocks a claim, or any verb that constructs a bead, made without
-  `BEADS_ACTOR` or `BD_ACTOR`. That covers `bd create`, its alias `bd new`, and
-  `bd create-form`; blocking the literal verb alone would leave the alias as a
-  silent permit.
-  An actorless `bd create` silently sets the new bead's `Owner` to the invoking human's git
-  identity; there is no `--owner` flag, and `--assignee` sets a different field, so the
-  mis-attribution is permanent. It advises on other mutating `bd` commands that lack an actor.
-  It inspects literal command chains and global flags.
-  These guards do not interpret shell expansions or functions.
-- `bd-init-advisory`: advises once per session when a real `bd init` omits `--skip-hooks`.
-  It reads argv at command position. It ignores mentions in `echo` or `rg`, as well as `git log --grep` or `man bd init`.
-  It blocks nothing: whether the flag is appropriate depends on repository state that the token stream cannot see.
+- `bd-embedded-write-lock` serializes mutations across linked checkouts.
+- `bd-actor-gate` requires an actor for mutations.
+- `bd-lease-gate` records lease metadata after claims.
+- `bd-close-gate` protects close operations.
+- `session-beads-lifecycle` reports unresolved claims and failures.
+- `pr-bead-link-gate` links pull requests to beads.
 
-  The advisory also states that the plugin pins `BEADS_DIR` for the session. The
-  checkout's `.beads` is added to Bash calls in the same repository family, while
-  foreign-repository calls remain unpinned. A pre-existing export is kept.
-  The advisory does not block `bd init --init-if-missing --skip-hooks`.
-- `session-beads-lifecycle`: reports unresolved gates at startup, along with whether the previous session's detached push succeeded.
-  At close, it reports held claims. Assigned work remains a held claim when blocked or deferred.
-  Earlier commands in a failed chain can still change work.
-  If it cannot read claims, the extension reports that uncertainty.
-  Startup subprocesses share an eight-second deadline.
+## Session behavior
 
-  The extension uses each session's identity to keep notices and attempts to mutate data separate.
-  Each session start resets only that session, even outside a beads workspace.
+The session extension reports unresolved gates at startup. It reports held claims and pending failures at session end.
 
-- `bd-lease-gate`: writes `lease_host` and `lease_pid` metadata after a claim succeeds, so a
-  later session can prove a holder gone instead of guessing from staleness.
-  It reads the bead ids from `bd`'s own output and stamps them with a separate
-  `bd update`, so no command is ever rewritten; when detection misses, the bead
-  simply carries no anchors, which the claiming rule treats as unprovable rather
-  than dead. The pid is the agent process, not the shell child that exits with
-  the command.
-- `pr-bead-link-gate`: blocks `gh pr create` and the `github` device's `pr_create` when the
-  body names no bead, and only where a `.beads` workspace exists. External repositories
-  without `.beads` are untouched; their user-facing prose must omit internal linkage.
-  It refuses rather than injecting an id, because a body it had to guess at
-  outlives the PR. A body built by `--fill`, `--body-file`, or a command
-  substitution is not visible to a tool call, so those stay a rule matter.
+The embedded write lock covers plugin-managed Beads mutations. It rejects ambiguous command shapes instead of guessing their target.
 
-Both lifecycle extensions honor `BEADS_DIR`, as does the advisory for unreported failures. None of them copies the store.
+Read the core rule for the execution contract.
+Before initialization, read the setup rule.
+Before status changes, read the lifecycle rule.
 
-## Tools
+## Guidance
 
-The plugin registers `bd_formula_check` through its extension modules. This tool rejects unrecognized zero-step output and malformed dependency data.
-
-Deep checking creates persistent state. If the check fails, the tool reports any root it recovered. The caller must handle recovery. The tool never deletes the molecule.
+Claim work first. Keep the task bead open until its commit is ready. Close completed work with a factual reason and its delivery commit.

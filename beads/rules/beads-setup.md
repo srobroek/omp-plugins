@@ -1,19 +1,27 @@
 ---
 name: beads-setup
-description: Initialising beads in a repository and verifying the install.
+description: Initialize Beads in a repository and verify the install.
 ---
 
 # Beads Setup
 
-MUST Let the bd CLI own initialization: use bd init --init-if-missing --skip-hooks, then verify with bd where and bd dolt status. Omitting --skip-hooks draws one advisory from bd-init-advisory; nothing is blocked.
-MUST Create every new store with embedded Dolt. Embedded storage is the sole supported topology for this plugin, and bd-embedded-write-lock serializes mutations across Worktrunk-linked checkouts.
+MUST Initialize the embedded store with the Beads CLI:
 
-GOTCHA `bd init` derives a Dolt remote from `git remote origin`. Where that
-database already exists it fails with `can't create database <prefix>; database
-exists`, leaving `.beads` without `config.yaml`.
-MUST Use `bd hooks install --beads` only when the active project chose the
-product Git-hook bundle.
-DEFAULT Project setup follows the repository's Beads version; global setup is
-for repositories that do not install project integration, not redundancy.
-NOT Use `bd preflight` as an application quality gate. Beads hard-codes checks
-for its own repository; use repository-owned quality commands.
+    bd init --init-if-missing --skip-hooks
+
+Then verify that it has `bd where` and `bd dolt status`. The init advisory explains why `--skip-hooks` matters. It never blocks the command.
+
+MUST Use embedded Dolt as the only supported storage topology. The embedded
+write lock serializes mutations across Worktrunk-linked checkouts.
+
+NOTE If the remote database already exists, bd init reports database exists and may leave .beads without config.yaml.
+NOTE If the remote database already exists, bd init reports database exists and may leave `.beads` without `config.yaml`.
+
+MUST Run `bd hooks install --beads` only when the project owns the Git-hook
+bundle.
+
+Projects without their own integration may use global setup.
+Projects without their own integration may use global setup.
+
+NOT Use `bd preflight` as a project quality gate. It checks Beads itself, not
+the repository's quality contract.
