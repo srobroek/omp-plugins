@@ -33,6 +33,43 @@ import {
 } from "./bd-actor-gate.ts";
 import { withEmbeddedWriteLock, writesStore } from "./bd-embedded-write-lock.ts";
 import { repoIdentity, sessionPinFor } from "./beads-store.ts";
+export function lifecycleBdEnvironment(cwd: string, base: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
+	const env: NodeJS.ProcessEnv = { ...base };
+	delete env.BEADS_DIR;
+	const resolved = sessionPinFor(cwd);
+	if (resolved !== undefined) env.BEADS_DIR = resolved;
+	if (env.BEADS_DOLT_SERVER_USER === undefined || env.BEADS_DOLT_SERVER_USER.trim() === "") env.BEADS_DOLT_SERVER_USER = "beads";
+	env.BD_NO_PAGER = "1";
+	env.BD_NON_INTERACTIVE = "1";
+	env.BD_DOLT_AUTO_START = "false";
+	env.NO_COLOR = "1";
+	return env;
+}
+
+function bdStoreDir(cwd: string, env: NodeJS.ProcessEnv): string | undefined {
+	const dir = env.BEADS_DIR ?? join(cwd, ".beads");
+	try {
+		return statSync(dir).isDirectory() ? dir : undefined;
+	} catch {
+		return undefined;
+	}
+}
+
+function authFailure(reason: string): boolean {
+	return /error\s*1045|access denied|connection refused/i.test(reason);
+}
+
+function bdReadFailure(scope: "start" | "close", reason: string): string {
+	const bounded = boundedFailure(reason);
+	if (authFailure(reason)) {
+		return scope === "start"
+			? `Beads gates could not be verified at session start: bd authentication/connection failed (${bounded}); supply BEADS_DOLT_SERVER_USER=beads in the bd environment (the client ignores dolt.user config; upstream issue 6598).`
+			: `Beads claims could not be read at session close: bd authentication/connection failed (${bounded}); supply BEADS_DOLT_SERVER_USER=beads in the bd environment (the client ignores dolt.user config; upstream issue 6598). The session will close without claim reconciliation.`;
+	}
+	return scope === "start"
+		? "Beads gates could not be verified at session start."
+		: `Beads claims could not be read at session close: ${bounded}. A mutating command was attempted; inspect assigned and touched work before stopping.`;
+}
 
 /** No session boundary may hang on the database or on `gh`. */
 const TIMEOUT_MS = 8000;
@@ -560,8 +597,8 @@ export function handleSessionStop(
 	const data = listOutput === undefined ? undefined : envelopeData(parseTrailingJson(listOutput));
 	if (!Array.isArray(data) || data.some(row => !row || typeof row !== "object" ||
 		typeof row.id !== "string" || typeof row.status !== "string")) {
-		const reason = listFailure === undefined ? "the command returned no readable result" : boundedFailure(listFailure);
-		return { continue: true, additionalContext: `Beads claims could not be read at session close: ${reason}. A mutating command was attempted; inspect assigned and touched work before stopping.` };
+		const reason = listFailure === undefined ? "the command returned no readable result" : listFailure;
+		return { continue: true, additionalContext: bdReadFailure("close", reason) };
 	}
 	const held = heldClaims(readBeads(listOutput!), seen, actor);
 	if (held.length === 0) return;
@@ -569,8 +606,8 @@ export function handleSessionStop(
 	return { continue: true, additionalContext: formatSessionCloseAdvisory(held, {}, new Date().toISOString(), casSupported, actors) };
 }
 
-async function releaseCasSupported(cwd: string, deadline: number): Promise<boolean> {
-	const help = await runBd(cwd, ["update", "--help"], deadline);
+async function releaseCasSupported(cwd: string, deadline: number, env: NodeJS.ProcessEnv): Promise<boolean> {
+	const help = await runBd(cwd, ["update", "--help"], deadline, env);
 	return help?.includes("--if-assignee") === true;
 }
 
@@ -578,15 +615,16 @@ async function releaseClaimsAtExit(cwd: string, state: SessionState): Promise<vo
 	if (state.claimsReleased || !state.bdWrote || state.actors.size === 0) return;
 	state.claimsReleased = true;
 	const deadline = Date.now() + TIMEOUT_MS;
-	const listed = await runBdResult(cwd, ["list", "--status", "open,in_progress,blocked,deferred", "--limit", "0", "--json"], deadline);
+	const env = lifecycleBdEnvironment(cwd);
+	const listed = await runBdResult(cwd, ["list", "--status", "open,in_progress,blocked,deferred", "--limit", "0", "--json"], deadline, env);
 	if (!("output" in listed)) return;
 	const claims = heldClaims(readBeads(listed.output), new Set(), state.actors);
-	const casSupported = await releaseCasSupported(cwd, deadline);
+	const casSupported = await releaseCasSupported(cwd, deadline, env);
 	for (const bead of claims) {
 		if (bead.assignee === undefined) continue;
 		const args = releaseClaimArgs(bead.id, bead.assignee, { BD_ACTOR: bead.assignee }, new Date().toISOString(), casSupported);
 		if (args === undefined) continue;
-		await runBdResult(cwd, args, deadline, { ...process.env, BEADS_ACTOR: bead.assignee, BD_ACTOR: bead.assignee });
+		await runBdResult(cwd, args, deadline, { ...env, BEADS_ACTOR: bead.assignee, BD_ACTOR: bead.assignee });
 	}
 }
 
@@ -694,33 +732,23 @@ function consumeLastPush(dir: string): string | undefined {
 	return notice;
 }
 
-/**
- * Open gates, after letting the automatic ones resolve.
- *
- * The cheap read comes first: a repository with no gates, which is most of them,
- * costs one read-only call and never a network-bound `gh` check.
- */
-async function gateAdvisory(cwd: string, deadline: number): Promise<string | undefined> {
-	const listed = await runBd(cwd, ["gate", "list", "--json"], deadline);
-	if (listed === undefined) return "Beads gates could not be verified at session start.";
-	let gates = readGateList(listed);
+async function gateAdvisory(cwd: string, deadline: number, env: NodeJS.ProcessEnv): Promise<string | undefined> {
+	const listed = await runBdResult(cwd, ["gate", "list", "--json"], deadline, env);
+	if (!("output" in listed)) return bdReadFailure("start", listed.failure);
+	let gates = readGateList(listed.output);
 	if (gates === undefined) return "Beads gate list returned malformed data; unresolved gates remain unverified.";
 	if (gates.length === 0) return undefined;
 	let outcome: CheckOutcome | undefined;
 	if (gatesCanResolve(gates)) {
-		const checked = await runBd(cwd, ["gate", "check", "--json"], deadline);
-		if (checked !== undefined) {
-			outcome = readCheckOutcome(checked);
-			if (outcome.resolved > 0) {
-				const relisted = await runBd(cwd, ["gate", "list", "--json"], deadline);
-				if (relisted !== undefined) {
-					const relistedGates = readGateList(relisted);
-					if (relistedGates === undefined) {
-						return "Beads gate list returned malformed data; unresolved gates remain unverified.";
-					}
-					gates = relistedGates;
-				}
-			}
+		const checked = await runBdResult(cwd, ["gate", "check", "--json"], deadline, env);
+		if (!("output" in checked)) return bdReadFailure("start", checked.failure);
+		outcome = readCheckOutcome(checked.output);
+		if (outcome.resolved > 0) {
+			const relisted = await runBdResult(cwd, ["gate", "list", "--json"], deadline, env);
+			if (!("output" in relisted)) return bdReadFailure("start", relisted.failure);
+			const relistedGates = readGateList(relisted.output);
+			if (relistedGates === undefined) return "Beads gate list returned malformed data; unresolved gates remain unverified.";
+			gates = relistedGates;
 		}
 	}
 	return formatGateAdvisory(gates, outcome);
@@ -780,10 +808,11 @@ export default function sessionBeadsLifecycle(pi: ExtensionAPI): void {
 				);
 				return;
 			}
-			const dir = beadsDir(ctx?.cwd ?? process.cwd());
+			const bdEnv = lifecycleBdEnvironment(cwd);
+			const dir = bdStoreDir(cwd, bdEnv);
 			if (dir === undefined) return;
 			const deadline = Date.now() + TIMEOUT_MS;
-			const notices = [consumeLastPush(dir), await gateAdvisory(ctx.cwd, deadline)]
+			const notices = [consumeLastPush(dir), await gateAdvisory(cwd, deadline, bdEnv)]
 				.filter((notice): notice is string => notice !== undefined);
 			if (sessions.get(key) !== state || notices.length === 0) return;
 			// A message rather than `ctx.ui.notify`: the agent runs the commands this
@@ -860,11 +889,12 @@ export default function sessionBeadsLifecycle(pi: ExtensionAPI): void {
 			const key = sessionKey(ctx);
 			const state = sessions.get(key);
 			const cwd = ctx?.cwd ?? process.cwd();
+			const bdEnv = lifecycleBdEnvironment(cwd);
 			if (!state?.bdWrote || state.stopFired || event.stop_hook_active === true ||
-				event.stopHookActive === true || beadsDir(cwd) === undefined) return;
+				event.stopHookActive === true || bdStoreDir(cwd, bdEnv) === undefined) return;
 			const deadline = Date.now() + TIMEOUT_MS;
-			const casSupported = await releaseCasSupported(cwd, deadline);
-			const listed = await runBdResult(cwd, ["list", "--status", "open,in_progress,blocked,deferred", "--limit", "0", "--json"], deadline);
+			const casSupported = await releaseCasSupported(cwd, deadline, bdEnv);
+			const listed = await runBdResult(cwd, ["list", "--status", "open,in_progress,blocked,deferred", "--limit", "0", "--json"], deadline, bdEnv);
 			if (sessions.get(key) !== state || state.stopFired) return;
 			const advisory = "output" in listed
 				? handleSessionStop(event, listed.output, state.touched, state.actors, casSupported)

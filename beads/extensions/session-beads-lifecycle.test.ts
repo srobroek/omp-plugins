@@ -11,6 +11,7 @@ import sessionBeadsLifecycle, {
 	envelopeData,
 	formatGateAdvisory,
 	formatSessionCloseAdvisory,
+	lifecycleBdEnvironment,
 	gatesCanResolve,
 	handleSessionStop,
 	heldClaims,
@@ -165,6 +166,23 @@ describe("pinBashInput", () => {
 		expect(pinBashInput({ command: "bd list", env: { BEADS_DIR: "/mine/.beads" } }, "/repo/.beads")).toBeUndefined();
 		expect(pinBashInput({ command: "bd list" }, undefined)).toBeUndefined();
 		expect(pinBashInput({ command: "bd list", env: "nope" }, "/repo/.beads")).toBeUndefined();
+	});
+});
+
+describe("lifecycleBdEnvironment", () => {
+	test("sets the server credential and safety flags without inheriting a foreign store", () => {
+		const cwd = mkdtempSync(join(tmpdir(), "beads-lifecycle-env-"));
+		mkdirSync(join(cwd, ".beads"));
+		try {
+			const env = lifecycleBdEnvironment(cwd, { BEADS_DIR: "/foreign/.beads" });
+			expect(env.BEADS_DIR).not.toBe("/foreign/.beads");
+			expect(env.BEADS_DIR).toBe(join(cwd, ".beads"));
+			expect(env.BEADS_DOLT_SERVER_USER).toBe("beads");
+			expect(env.BD_NO_PAGER).toBe("1");
+			expect(env.BD_NON_INTERACTIVE).toBe("1");
+			expect(env.BD_DOLT_AUTO_START).toBe("false");
+			expect(env.NO_COLOR).toBe("1");
+		} finally { rmSync(cwd, { recursive: true, force: true }); }
 	});
 });
 
@@ -541,6 +559,14 @@ test("passes the effective actor into actual release commands", () => {
 		expect(handleSessionStop({ stopHookActive: true }, BEAD_LIST, new Set(["bd-probe-2m7"]))).toBeUndefined();
 	});
 
+	test("classifies access denial as an environment credential failure without blocking close", () => {
+		const text = handleSessionStop({}, undefined, new Set(), undefined, true, 'bd exited with code 1: Error 1045 (28000): Access denied for user root')?.additionalContext ?? "";
+		expect(text).toContain("authentication/connection failed");
+		expect(text).toContain("BEADS_DOLT_SERVER_USER=beads");
+		expect(text).toContain("ignores dolt.user config");
+		expect(text).toContain("upstream issue 6598");
+		expect(text).toContain("session will close");
+	});
 	test("nothing held, nothing said", () => {
 		expect(handleSessionStop({}, BEAD_LIST, new Set(), undefined)).toBeUndefined();
 	});
