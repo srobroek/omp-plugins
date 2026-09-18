@@ -1,6 +1,6 @@
 {
   "name": "@srobroek/worktrunk",
-  "version": "0.2.3",
+  "version": "0.2.4",
   "description": "Worktree discipline for every agent: a membership-based canonical-mutation guardrail and an isolation precheck.",
   "private": true,
   "omp": {
