@@ -141,6 +141,30 @@ describe("xd:// devices", () => {
 			),
 		).toBeUndefined();
 	});
+
+	test("a read-only resume_session device may expose canonical paths", () => {
+		const { canonical, topology } = project();
+		expect(
+			decideWorktreeCall(
+				"write",
+				{ path: "xd://resume_session", content: JSON.stringify({ mode: "list", path: canonical }) },
+				canonical,
+				topology,
+			),
+		).toBeUndefined();
+	});
+
+	test("an unknown xd device exposing a canonical path remains refused", () => {
+		const { canonical, topology } = project();
+		const decision = decideWorktreeCall(
+			"write",
+			{ path: "xd://unknown_device", content: JSON.stringify({ path: canonical }) },
+			canonical,
+			topology,
+		);
+		expect(decision?.block).toBe(true);
+	});
+
 });
 
 describe("unenumerated tools", () => {
