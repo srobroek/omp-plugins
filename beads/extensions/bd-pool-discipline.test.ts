@@ -65,7 +65,9 @@ describe("claim pool precondition", () => {
 		const state: RunState = { pool: undefined, assignee: "pool:orc-reviewer", setExit: 1, calls: [] };
 		const { toolCall } = handlers(state);
 		const decision = await toolCall(call("bd update bead-1 --claim"), { cwd: "/repo" });
-		expect(decision).toEqual({ block: true, reason: expect.stringContaining("key claim.pools, store /Users/sjors/personal/dev/omp-orchestrate/.beads") });
+		// The store path comes from the environment, so assert the shape rather than
+		// one machine's path: a hardcoded home directory fails everywhere else.
+		expect(decision).toEqual({ block: true, reason: expect.stringContaining("key claim.pools") });
 		expect(state.calls.some(argv => argv.includes("--claim"))).toBe(false);
 	});
 
