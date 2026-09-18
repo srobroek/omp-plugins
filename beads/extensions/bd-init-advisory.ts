@@ -2,10 +2,6 @@
  * Advise on bd init hook flags once per process without blocking the command.
  * The parser recognizes actual invocations rather than mentions in unrelated text.
  */
-/**
- * Advise on bd init hook flags once per process without blocking the command.
- * The parser recognizes actual invocations rather than mentions in unrelated text.
- */
 import path from "node:path";
 import type { ExtensionAPI, ToolCallEvent } from "@oh-my-pi/pi-coding-agent";
 import { extractCommand, tokenize } from "./bd-close-gate.ts";
