@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.6.0](https://github.com/srobroek/omp-plugins/compare/beads--v1.5.2...beads--v1.6.0) (2026-09-18)
+
+
+### Features
+
+* **beads:** enforce pool and reclaim phase discipline ([#363](https://github.com/srobroek/omp-plugins/issues/363)) ([828e2c3](https://github.com/srobroek/omp-plugins/commit/828e2c3d3c8f5f6810ddabf90467747f28295ff3))
+
 ## [1.5.2](https://github.com/srobroek/omp-plugins/compare/beads--v1.5.1...beads--v1.5.2) (2026-09-18)
 
 
