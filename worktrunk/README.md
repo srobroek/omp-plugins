@@ -2,7 +2,7 @@
 
 The worktrunk plugin keeps every agent's writes inside a git linked worktree of the project it is working on, and refuses to start work under OMP native isolation.
 
-Both concerns are OMP-wide rather than orchestration-specific: "the agent mutated the shared checkout" and "a checkout outside Worktrunk bypassed linked-worktree ownership" happen in ordinary sessions too, so they ship here and other plugins consume them instead of reimplementing them.
+Both concerns are OMP-wide rather than orchestration-specific: shared-checkout mutations and checkout ownership outside Worktrunk are prevented here and other plugins consume these rules.
 
 ## Rules
 
