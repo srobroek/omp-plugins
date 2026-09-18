@@ -624,6 +624,38 @@ describe("git answers", () => {
 		}
 	});
 
+	test("a file target inside a linked worktree is allowed when cwd is that file", () => {
+		const { worktree } = repository();
+		const file = join(worktree, "src", "existing.ts");
+		mkdirSync(join(worktree, "src"), { recursive: true });
+		writeFileSync(file, "export const probe = true;\n");
+		expect(decideWorktreeCall("write", { path: file, content: "" }, file)).toBeUndefined();
+	});
+
+	test("a not-yet-existing target inside a linked worktree is allowed", () => {
+		const { worktree } = repository();
+		const file = join(worktree, "src", "new", "probe.ts");
+		expect(decideWorktreeCall("write", { path: file, content: "" }, file)).toBeUndefined();
+	});
+
+	test("a file target inside this project's canonical checkout remains refused", () => {
+		const { canonical } = repository();
+		const file = join(canonical, "src", "existing.ts");
+		writeFileSync(file, "export const probe = true;\n");
+		const refusal = decideWorktreeCall("write", { path: file, content: "" }, file);
+		expect(refusal?.block).toBe(true);
+		expect(refusal?.reason).toContain(canonical);
+	});
+
+	test("a file target in a foreign repository is outside this project's guard", () => {
+		const mine = repository();
+		const foreign = repository();
+		const file = join(foreign.canonical, "src", "existing.ts");
+		writeFileSync(file, "export const probe = true;\n");
+		expect(decideWorktreeCall("write", { path: file, content: "" }, mine.canonical)).toBeUndefined();
+		// Two real repositories plus their lookups; the default budget is too small.
+	}, 20000);
+
 	test("a working directory in a different repository is not gated by this project's allowlist", () => {
 		const mine = repository();
 		const other = repository();
