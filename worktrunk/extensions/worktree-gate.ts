@@ -126,14 +126,24 @@ function readsOnlyInThisMode(toolName: string, input: unknown): boolean {
 }
 
 /**
- * The bead-ledger tool family: the device spelling of a `bd` command, which the
- * bootstrap allowlist already permits from the canonical checkout for the same
- * two reasons — the store lives in the canonical `.beads`, and an agent must
- * claim its bead BEFORE it has a worktree to work in. Only the pathless form is
- * exempt: a ledger call that does name a filesystem target is checked like any
- * other, so the exemption cannot reach the working tree.
+ * Device tools that only update the Beads ledger. They do not name a working
+ * tree, so a pathless call is safe from the worktree gate; any explicit path
+ * argument is still checked below.
  */
-const LEDGER_TOOL = /^orc_[a-z0-9_]+$/;
+const LEDGER_ONLY_TOOLS: Record<string, true> = {
+	orc_claim: true,
+	orc_decide: true,
+	orc_finish: true,
+	orc_release: true,
+};
+
+/** Device tools whose operation is explicitly read-only. */
+const READ_ONLY_DEVICE_TOOLS: Record<string, true> = {
+	orc_bot_review_probe: true,
+	orc_conflict_probe: true,
+	orc_review_round_policy: true,
+	orc_status: true,
+};
 
 /**
  * Argument keys that name a filesystem target on an unenumerated tool. A value
@@ -181,14 +191,12 @@ const READ_ONLY_COMPANIONS: Record<string, true> = {
 	false: true,
 	printf: true,
 	rg: true,
-	sort: true,
 	true: true,
-	uniq: true,
 	wc: true,
 };
 
 /** Filters that consume stdin, with conservative argument shapes that exclude file operands. */
-const STDIN_FILTERS: Record<string, true> = { cut: true, grep: true, head: true, jq: true, sed: true, sort: true, tail: true, tr: true, uniq: true, wc: true };
+const STDIN_FILTERS: Record<string, true> = { cut: true, grep: true, head: true, jq: true, sed: true, tail: true, tr: true, uniq: true, wc: true };
 
 function stdinFilterAllowed(program: string, args: readonly string[]): boolean {
 	if (!STDIN_FILTERS[program]) return false;
@@ -468,9 +476,17 @@ export type CanonicalResolution =
  * Three outcomes, because two would be a fail-open bug: `no-repository` is git
  * saying there is nothing to protect, while `unknown` is git not saying
  * anything, and only the first may make the gate inert.
+ *
+ * The question is asked from the deepest existing DIRECTORY at or above `cwd`,
+ * because `cwd` is commonly a file — every write names one — and `git -C <file>`
+ * exits 128 with `Not a directory`, which this could only read as uncertainty.
+ * A target that does not exist yet is judged through its parent for the same
+ * reason. No directory ancestor at all is still `unknown`.
  */
 export function resolveCanonicalRoot(cwd: string): CanonicalResolution {
-	const outcome = runGit(cwd, ["rev-parse", "--path-format=absolute", "--git-common-dir", "--git-dir", "--show-toplevel"]);
+	const directory = existingAncestorDir(cwd);
+	if (directory === null) return { state: "unknown", detail: `the path ${cwd} has no existing directory ancestor` };
+	const outcome = runGit(directory, ["rev-parse", "--path-format=absolute", "--git-common-dir", "--git-dir", "--show-toplevel"]);
 	if (!outcome.ok) {
 		return outcome.kind === "no-repository" ? { state: "no-repository" } : { state: "unknown", detail: outcome.detail };
 	}
@@ -709,15 +725,26 @@ export function defaultTopology(sessionCwd: string): GateTopology {
 
 /**
  * Still a linked worktree of the repository whose common git directory is
- * `commonDir`, judged from the filesystem alone: a linked worktree's `.git` is a
- * FILE holding `gitdir: <admin dir>`, and that admin dir lives inside the common
- * directory.
+ * `commonDir`, judged from the filesystem alone.
+ *
+ * The accepted relation is git's own registration, not "somewhere under the
+ * common directory". A linked worktree's `.git` is a FILE holding
+ * `gitdir: <admin dir>`, that admin dir is exactly `<commonDir>/worktrees/<id>`,
+ * and git writes the inverse pointer `<admin dir>/gitdir` naming this worktree's
+ * `.git` file — the same pointer `git worktree prune` judges by. Both directions
+ * must agree, because either one alone is forgeable by an unrelated repository:
+ * `git init --separate-git-dir=<commonDir>/worktrees/<anything> <path>` writes a
+ * gitfile of exactly the linked shape at a registered worktree's path while the
+ * writes there land in a DIFFERENT repository's canonical checkout, and it writes
+ * no inverse pointer (verified against git 2.55.0). The strict two-segment shape
+ * is also what drops a submodule's git directory, which lives at
+ * `<commonDir>/modules/<name>` or `<commonDir>/worktrees/<id>/modules/<name>` and
+ * is a distinct repository rather than a linked worktree of this one.
  *
  * `false` means "not confidently linked", never "refuse": the caller falls back to
  * `git worktree list`, which is authoritative. So an unusual layout cannot turn
  * into a false refusal, while the case this exists for is caught — a worktree
- * removed and an ordinary directory recreated at its path, which git no longer
- * reports at all.
+ * removed and an ordinary directory or a foreign repository recreated at its path.
  */
 export function stillLinkedWorktree(worktree: string, commonDir: string | null | undefined): boolean {
 	if (commonDir === null || commonDir === undefined) return false;
@@ -732,13 +759,20 @@ export function stillLinkedWorktree(worktree: string, commonDir: string | null |
 	const admin = /^gitdir:[ \t]*(.+?)[ \t\r]*$/m.exec(raw)?.[1];
 	if (admin === undefined) return false;
 	const real = realDeepest(path.isAbsolute(admin) ? admin : path.resolve(worktree, admin));
-	if (real === null || !insideAny(real, [commonDir])) return false;
-	// A submodule checked out inside a linked worktree stores its gitdir under
-	// `<common>/worktrees/<id>/modules/<name>`. A main-worktree submodule stores
-	// it under `<common>/modules/<name>`. Both are distinct repositories, not
-	// linked worktrees of the repository identified by `commonDir`.
+	if (real === null) return false;
 	const relative = path.relative(commonDir, real).split(path.sep);
-	return !(relative[0] === "modules" || (relative[0] === "worktrees" && relative[2] === "modules"));
+	if (relative.length !== 2 || relative[0] !== "worktrees" || relative[1] === "" || relative[1] === "..") {
+		return false;
+	}
+	let back: string;
+	try {
+		back = readFileSync(path.join(real, "gitdir"), "utf8").trim();
+	} catch {
+		return false;
+	}
+	if (back === "") return false;
+	const home = realDeepest(path.dirname(path.isAbsolute(back) ? back : path.resolve(real, back)));
+	return home !== null && home === realDeepest(worktree);
 }
 
 /** Where a target sits relative to the repository that owns it. */
@@ -1210,7 +1244,7 @@ export function decideWorktreeCall(
 	sessionCwd: string,
 	topology: GateTopology = defaultTopology(sessionCwd),
 ): GateRefusal | undefined {
-	if (READ_ONLY_TOOLS[toolName] === true || readsOnlyInThisMode(toolName, input)) return undefined;
+    if (READ_ONLY_TOOLS[toolName] === true || readsOnlyInThisMode(toolName, input)) return undefined;
 	const session = topology.session;
 	const uncertainty = session.uncertainty ?? null;
 	if (uncertainty !== null) return { block: true, reason: topologyRefusal(uncertainty) };
@@ -1250,15 +1284,16 @@ export function decideWorktreeCall(
 			}
 			const device = xdDeviceTool(record.path);
 			if (device !== null) {
-				// A device call carries the real arguments in `content`; classify it by
-				// the device's own rule. A payload that is not JSON names no path and
-				// the device rejects it before anything is written.
-				if (typeof record.content !== "string") return undefined;
+				// A device call carries the real arguments in `content`; malformed wire
+				// data is refused before the device can be invoked.
+				if (typeof record.content !== "string") {
+					return { block: true, reason: uncertaintyRefusal("this `write` device call has no `content` string", canonical) };
+				}
 				let nested: unknown;
 				try {
 					nested = JSON.parse(record.content);
 				} catch {
-					return undefined;
+					return { block: true, reason: uncertaintyRefusal("this `write` device call has malformed JSON `content`", canonical) };
 				}
 				return decideWorktreeCall(device, nested, sessionCwd, topology);
 			}
@@ -1323,30 +1358,28 @@ export function decideWorktreeCall(
 			}
 			return refuseTarget(effective);
 		}
-		default: {
-			const targets: string[] = [];
-			for (const raw of scanPathArguments(input)) {
-				const target = resolveTarget(raw, sessionCwd);
-				if (target !== null) targets.push(target);
-			}
-			if (targets.length > 0) {
-				for (const target of targets) {
-					const refusal = refuseTarget(target);
-					if (refusal) return refusal;
-				}
-				return undefined;
-			}
-			// No target named at all. A mutating tool whose path argument is optional
-			// writes wherever it defaults, and OMP defaults it to the session cwd —
-			// which for an agent that has not moved into its worktree is the canonical
-			// checkout. `typescript_quality({mode:"fix"})` and `speckit_setup` are
-			// exactly this shape, so allowing an empty target list is how the gate
-			// stops guarding. Read-approved tools are exempt by name above; the ledger
-			// family is exempt here, for the reason the allowlist already permits `bd`.
-			if (LEDGER_TOOL.test(toolName)) return undefined;
-			return refuseTarget(sessionCwd);
-		}
-	}
+        default: {
+            // Ledger-only calls carry domain identifiers (for example
+            // `orc_finish.targets`), not filesystem paths.
+            if (LEDGER_ONLY_TOOLS[toolName] === true) return undefined;
+            const targets: string[] = [];
+            for (const raw of scanPathArguments(input)) {
+                const target = resolveTarget(raw, sessionCwd);
+                if (target !== null) targets.push(target);
+            }
+            if (targets.length > 0) {
+                for (const target of targets) {
+                    const refusal = refuseTarget(target);
+                    if (refusal) return refusal;
+                }
+                return undefined;
+            }
+            // Read-only devices may expose explicit paths, which were checked above;
+            // pathless probes may run without a worktree.
+            if (READ_ONLY_DEVICE_TOOLS[toolName] === true) return undefined;
+            return refuseTarget(sessionCwd);
+        }
+    }
 }
 
 export default function worktreeGate(pi: ExtensionAPI): void {
@@ -1368,7 +1401,7 @@ export default function worktreeGate(pi: ExtensionAPI): void {
 			// confirmed non-repository session stands down here — confirmed against the
 			// filesystem as well as the cache, since a repository may have appeared
 			// under that directory since the answer was stored.
-			if (READ_ONLY_TOOLS[event.toolName] === true || readsOnlyInThisMode(event.toolName, event.input)) {
+			if (READ_ONLY_TOOLS[event.toolName] === true || READ_ONLY_DEVICE_TOOLS[event.toolName] === true || readsOnlyInThisMode(event.toolName, event.input)) {
 				return undefined;
 			}
 			const cached = canonicalCache.get(sessionCwd);

@@ -17,6 +17,7 @@ import worktreeGate, {
 	type RepositoryTopology,
 	resetTopologyCache,
 	resolveCanonicalRoot,
+	stillLinkedWorktree,
 	tokenize,
 } from "./worktree-gate.ts";
 
@@ -174,6 +175,67 @@ describe("xd:// devices", () => {
 
 });
 
+describe("explicit orc device classification", () => {
+	test("unknown orc devices fail closed", () => {
+		const { canonical, topology } = project();
+		expect(decideWorktreeCall("orc_arbitrary", {}, canonical, topology)?.block).toBe(true);
+	});
+
+    test("orc_bind requires a linked worktree session cwd", () => {
+        const { canonical, worktree, topology } = project();
+        const payload = { epic: "run" };
+        expect(decideWorktreeCall("orc_bind", payload, canonical, topology)?.block).toBe(true);
+        expect(decideWorktreeCall("orc_bind", payload, worktree, topology)).toBeUndefined();
+    });
+
+    test("known ledger-only and read-only controls are explicit", () => {
+        const { canonical, topology } = project();
+        const controls: ReadonlyArray<readonly [string, Record<string, unknown>]> = [
+            ["orc_claim", { bead: "proj-1" }],
+            ["orc_decide", { bead: "x", action: "retry", reason: "test" }],
+            ["orc_finish", { bead: "review", state: "done", reason: "ok", verdict: "approve", targets: ["task-id"] }],
+            ["orc_release", { bead: "x", holder: "actor", reason: "test" }],
+            ["orc_status", { epic: "run" }],
+            ["orc_bot_review_probe", { pr: "357", repo: "srobroek/omp-plugins" }],
+            ["orc_review_round_policy", { rounds_completed: 0, actionable_issues: [] }],
+            ["orc_conflict_probe", { mode: "ci", pr: "357" }],
+        ];
+        for (const [tool, input] of controls) {
+            expect(decideWorktreeCall(tool, input, canonical, topology)).toBeUndefined();
+        }
+    });
+
+    test("cwd-bearing read-only probes still require worktree containment", () => {
+        const { canonical, worktree, topology } = project();
+        const controls: ReadonlyArray<readonly [string, Record<string, unknown>, Record<string, unknown>]> = [
+            ["orc_bot_review_probe", { pr: "357", repo: "srobroek/omp-plugins", cwd: canonical }, { pr: "357", repo: "srobroek/omp-plugins", cwd: worktree }],
+            ["orc_conflict_probe", { mode: "ci", pr: "357", cwd: canonical }, { mode: "ci", pr: "357", cwd: worktree }],
+        ];
+        for (const [tool, canonicalInput, worktreeInput] of controls) {
+            expect(decideWorktreeCall(tool, canonicalInput, canonical, topology)?.block).toBe(true);
+            expect(decideWorktreeCall(tool, worktreeInput, worktree, topology)).toBeUndefined();
+        }
+    });
+
+});
+
+describe("xd wire validation", () => {
+	test("missing, non-string, and malformed content refuse", () => {
+		const { canonical, topology } = project();
+		for (const content of [undefined, 42, "{bad"]) {
+			const input = content === undefined ? { path: "xd://unknown_device" } : { path: "xd://unknown_device", content };
+			expect(decideWorktreeCall("write", input, canonical, topology)?.block).toBe(true);
+		}
+	});
+
+	test("known mutating and unknown valid devices refuse from canonical", () => {
+		const { canonical, topology } = project();
+		for (const path of ["xd://orc_bot_review_request", "xd://unknown_device"]) {
+			expect(decideWorktreeCall("write", { path, content: "{}" }, canonical, topology)?.block).toBe(true);
+		}
+	});
+});
+
 describe("unenumerated tools", () => {
 	test("a nested absolute canonical path in an unknown tool is refused", () => {
 		const { canonical, topology } = project();
@@ -224,6 +286,28 @@ describe("bash", () => {
 			topology,
 		);
 		expect(decision?.block).toBe(true);
+	});
+
+	test("canonical bootstrap refuses sort and output-file forms but permits allowlisted stdin filters", () => {
+		const { canonical, topology } = project();
+		for (const command of [
+			"wt list | sort -o README.md",
+			"wt list | sort -oREADME.md",
+			"wt list | sort -noREADME.md",
+			"wt list | sort --output README.md",
+			"wt list | sort --output=README.md",
+			"wt list | sort --out=README.md",
+			"wt list | sort --o=README.md",
+			"wt list | sort -n",
+			"wt list | sort -$'\\x6fREADME.md'",
+			"wt list | sort --$'\\x6futput=README.md'",
+			"wt list | uniq input.txt output.txt",
+		]) {
+			expect(decideWorktreeCall("bash", { command }, canonical, topology)?.block).toBe(true);
+		}
+		for (const command of ["wt list | uniq -c"]) {
+			expect(decideWorktreeCall("bash", { command }, canonical, topology)).toBeUndefined();
+		}
 	});
 
 	test("a cwd inside a worktree runs anything", () => {
@@ -553,6 +637,54 @@ describe("git answers", () => {
 		}
 	});
 
+	test("a file target inside a linked worktree is allowed when cwd is that file", () => {
+		const { worktree } = repository();
+		const file = join(worktree, "src", "existing.ts");
+		mkdirSync(join(worktree, "src"), { recursive: true });
+		writeFileSync(file, "export const probe = true;\n");
+		expect(decideWorktreeCall("write", { path: file, content: "" }, file)).toBeUndefined();
+	}, 60000);
+
+	test("a not-yet-existing target inside a linked worktree is allowed", () => {
+		const { worktree } = repository();
+		const file = join(worktree, "src", "new", "probe.ts");
+		expect(decideWorktreeCall("write", { path: file, content: "" }, file)).toBeUndefined();
+	}, 60000);
+
+	test("a file target inside this project's canonical checkout remains refused", () => {
+		const { canonical } = repository();
+		const file = join(canonical, "src", "existing.ts");
+		writeFileSync(file, "export const probe = true;\n");
+		const refusal = decideWorktreeCall("write", { path: file, content: "" }, file);
+		expect(refusal?.block).toBe(true);
+		expect(refusal?.reason).toContain(canonical);
+		// The classified refusal, not an uncertainty one: git was asked from the
+		// file's directory and named this repository, so the gate decided rather
+		// than gave up.
+		expect(refusal?.reason).toContain("is not inside a linked worktree of this project");
+		expect(refusal?.reason).not.toContain("Uncertainty refuses");
+	}, 60000);
+
+	test("a file target in a foreign repository is judged against that repository", () => {
+		const mine = repository();
+		const foreign = repository();
+		mkdirSync(join(foreign.worktree, "src"), { recursive: true });
+		const inWorktree = join(foreign.worktree, "src", "existing.ts");
+		writeFileSync(inWorktree, "export const probe = true;\n");
+		// Ownership comes from the file's own repository, so its linked worktree is
+		// where a worker dispatched there writes.
+		expect(decideWorktreeCall("write", { path: inWorktree, content: "" }, mine.canonical)).toBeUndefined();
+		// And that repository's canonical checkout is as protected as this one's:
+		// resolving a file target through its directory must not lose the owner.
+		const inCanonical = join(foreign.canonical, "src", "existing.ts");
+		writeFileSync(inCanonical, "export const probe = true;\n");
+		const refusal = decideWorktreeCall("write", { path: inCanonical, content: "" }, mine.canonical);
+		expect(refusal?.block).toBe(true);
+		expect(refusal?.reason).toContain(foreign.canonical);
+		expect(refusal?.reason).not.toContain(mine.canonical);
+		// Two real repositories plus their lookups.
+	}, 60000);
+
 	test("a second repository is judged against its own topology, not this project's", () => {
 		const mine = repository();
 		const other = repository();
@@ -682,6 +814,41 @@ describe("topology changes", () => {
 		execFileSync("git", ["-C", worktree, "init", "-q", "-b", "main"], { stdio: "ignore" });
 
 		expect(decideWorktreeCall("write", { path: target, content: "" }, canonical)?.block).toBe(true);
+	}, 60000);
+
+	test("a registered worktree path replaced through a git directory under the old common directory is refused", () => {
+		// `--separate-git-dir` lets an unrelated repository put its git directory
+		// anywhere, including inside this repository's common git directory, while
+		// leaving a `.git` FILE of exactly the linked-worktree shape at a registered
+		// worktree's path. Both placements below are rejected: an arbitrary
+		// descendant, and one wearing the `worktrees/<id>` shape of a registration.
+		for (const inside of [["replacement"], ["worktrees", "impostor"]]) {
+			const { canonical, worktree } = repository();
+			const commonDir = execFileSync("git", ["-C", canonical, "rev-parse", "--path-format=absolute", "--git-common-dir"], {
+				encoding: "utf8",
+			}).trim();
+			const admin = join(commonDir, ...inside);
+			const target = join(worktree, "probe.ts");
+			// The real registration is trusted, and the allow caches the membership.
+			expect(stillLinkedWorktree(worktree, commonDir)).toBe(true);
+			expect(decideWorktreeCall("write", { path: target, content: "" }, canonical)).toBeUndefined();
+
+			// Replaced without unregistering: git still lists the path, its `.git`
+			// still names a directory under the old common directory, but writes there
+			// now land in a different repository's canonical checkout.
+			rmSync(worktree, { recursive: true, force: true });
+			mkdirSync(worktree, { recursive: true });
+			execFileSync("git", ["-C", worktree, "init", "-q", "-b", "main", `--separate-git-dir=${admin}`], {
+				stdio: "ignore",
+			});
+
+			expect(stillLinkedWorktree(worktree, commonDir)).toBe(false);
+			expect(projectWorktrees(canonical, commonDir)).toEqual([]);
+			const decision = decideWorktreeCall("write", { path: target, content: "" }, canonical);
+			expect(decision?.block).toBe(true);
+			expect(decision?.reason).toContain(realpathSync(worktree));
+			resetTopologyCache();
+		}
 	}, 60000);
 
 	test("a repository whose working tree git cannot name is guarded through its git directory", () => {
@@ -889,15 +1056,13 @@ describe("pathless mutating tools", () => {
 		expect(decideWorktreeCall("typescript_quality", { mode: "fix" }, worktree, topology)).toBeUndefined();
 	});
 
-	test("a pathless ledger call is allowed from canonical, and a ledger path argument is not", () => {
-		const { canonical, topology } = project();
-		// Claim-before-worktree: the bead must be claimable before a worktree exists,
-		// exactly as the bootstrap allowlist permits `bd` from canonical.
-		expect(decideWorktreeCall("orc_claim", { bead: "proj-1" }, canonical, topology)).toBeUndefined();
-		expect(
-			decideWorktreeCall("orc_status", { output_root: join(canonical, "out") }, canonical, topology)?.block,
-		).toBe(true);
-	});
+    test("pathless ledger and status calls are allowed from canonical", () => {
+        const { canonical, topology } = project();
+        // Claim-before-worktree: the bead must be claimable before a worktree exists,
+        // exactly as the bootstrap allowlist permits `bd` from canonical.
+        expect(decideWorktreeCall("orc_claim", { bead: "proj-1" }, canonical, topology)).toBeUndefined();
+        expect(decideWorktreeCall("orc_status", { epic: "run" }, canonical, topology)).toBeUndefined();
+    });
 
 	test("a pathless read-approved scan of the canonical checkout is inspection, not mutation", () => {
 		const { canonical, topology } = project();
