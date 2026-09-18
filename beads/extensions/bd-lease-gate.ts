@@ -67,6 +67,19 @@ export function claimedIds(output: string): string[] {
 	return [...ids];
 }
 
+/**
+ * Text emitted by the claim result, including stdout retained in structured
+ * tool details when the rendered content was capped or spilled.
+ */
+function claimResultOutput(event: ToolResultEvent): string {
+	const content = (event.content ?? [])
+		.map((part) => ("text" in part && typeof part.text === "string" ? part.text : ""))
+		.join("\n");
+	const details = event.details;
+	const stdout = details !== null && typeof details === "object" && "stdout" in details && typeof details.stdout === "string" ? details.stdout : "";
+	return [content, stdout].filter(Boolean).join("\n");
+}
+
 export function anchorArgs(id: string, host: string, pid: number): string[] {
 	return [
 		"bd",
@@ -106,16 +119,10 @@ export default function bdLeaseGate(pi: ExtensionAPI): void {
 		const { cwd, env } = claim;
 		pending.delete(event.toolCallId);
 		try {
-			const text = (event.content ?? [])
-				.map((part) => ("text" in part && typeof part.text === "string" ? part.text : ""))
-				.join("\n");
+			const text = claimResultOutput(event);
+			if (event.isError || bashExitCode(event) !== 0) return;
 			const ids = claimedIds(text);
-			if (ids.length === 0) {
-				if (!event.isError && bashExitCode(event) === 0) {
-					return advisoryResult(event, "Beads lease gate saw a successful claim but could not parse a bead id; inspect the claim and re-stamp it with `bd update <id> --set-metadata lease_host=... lease_pid=...`.");
-				}
-				return;
-			}
+			if (ids.length === 0) return;
 			const run = injectedRun ?? defaultRun;
 			const host = hostname().split(".")[0] ?? "localhost";
 			const advisories: string[] = [];
