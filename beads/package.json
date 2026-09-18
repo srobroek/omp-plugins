@@ -14,6 +14,7 @@
       "./extensions/bd-init-advisory.ts",
       "./extensions/bd-init-server-gate.ts",
       "./extensions/dolt-server-lifecycle.ts",
+      "./extensions/bd-pool-discipline.ts",
       "./extensions/session-beads-lifecycle.ts",
       "./extensions/unreported-failure-advisory.ts"
     ]
