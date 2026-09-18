@@ -33,7 +33,7 @@
       "name": "beads",
       "description": "Beads issue tracking: dependency DAGs, formulas, and decisions recorded as beads.",
       "source": "./beads",
-      "version": "1.5.0",
+      "version": "1.5.1",
       "category": "productivity"
     },
     {
@@ -201,7 +201,7 @@
       "name": "worktrunk",
       "description": "Worktree discipline for every agent: a membership-based canonical-mutation guardrail and an isolation precheck.",
       "source": "./worktrunk",
-      "version": "0.2.1",
+      "version": "0.2.2",
       "category": "development"
     },
     {
