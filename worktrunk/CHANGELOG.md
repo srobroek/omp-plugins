@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.2](https://github.com/srobroek/omp-plugins/compare/worktrunk--v0.2.1...worktrunk--v0.2.2) (2026-09-18)
+
+
+### Bug Fixes
+
+* **worktrunk:** judge invocations and scope the gate to its own project ([#360](https://github.com/srobroek/omp-plugins/issues/360)) ([1a04cd2](https://github.com/srobroek/omp-plugins/commit/1a04cd2b336072b8b8e64ba2f6556fcc32b545d8))
+
 ## [0.2.1](https://github.com/srobroek/omp-plugins/compare/worktrunk--v0.2.0...worktrunk--v0.2.1) (2026-09-18)
 
 

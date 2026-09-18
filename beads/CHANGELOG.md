@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.5.1](https://github.com/srobroek/omp-plugins/compare/beads--v1.5.0...beads--v1.5.1) (2026-09-18)
+
+
+### Bug Fixes
+
+* **beads:** read argv for the claim-before-branch trigger ([#358](https://github.com/srobroek/omp-plugins/issues/358)) ([3c2a18b](https://github.com/srobroek/omp-plugins/commit/3c2a18b00080d7738d447bbf22dbae439e5f9f39))
+
 ## [1.5.0](https://github.com/srobroek/omp-plugins/compare/beads--v1.4.1...beads--v1.5.0) (2026-09-18)
 
 
