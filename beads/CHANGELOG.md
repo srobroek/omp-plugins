@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.5.0](https://github.com/srobroek/omp-plugins/compare/beads--v1.4.1...beads--v1.5.0) (2026-09-18)
+
+
+### Features
+
+* **beads:** advise when the Dolt server user is missing from a bd call ([#349](https://github.com/srobroek/omp-plugins/issues/349)) ([a13fec5](https://github.com/srobroek/omp-plugins/commit/a13fec5a2b25d8f70a86190ed486d58d17ecb2e4))
+
 ## [1.4.1](https://github.com/srobroek/omp-plugins/compare/beads--v1.4.0...beads--v1.4.1) (2026-09-17)
 
 
