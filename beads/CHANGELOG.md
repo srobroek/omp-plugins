@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.7.1](https://github.com/srobroek/omp-plugins/compare/beads--v1.7.0...beads--v1.7.1) (2026-09-18)
+
+
+### Bug Fixes
+
+* **beads:** refuse a concurrent dolt server start ([#368](https://github.com/srobroek/omp-plugins/issues/368)) ([82d794c](https://github.com/srobroek/omp-plugins/commit/82d794cabe032b967564e30e5d9c4b84f812dc89))
+
 ## [1.7.0](https://github.com/srobroek/omp-plugins/compare/beads--v1.6.0...beads--v1.7.0) (2026-09-18)
 
 
