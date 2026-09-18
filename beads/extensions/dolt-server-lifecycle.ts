@@ -16,10 +16,19 @@
  * while continuing to run, since other projects may hold it.
  */
 
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
-import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
+import type {
+	ExtensionAPI,
+	ExtensionContext,
+	ToolCallEvent,
+	ToolResultEvent,
+} from "@oh-my-pi/pi-coding-agent";
+import { extractCommand } from "./bd-close-gate.ts";
 import { sessionPinFor } from "./beads-store.ts";
+import { commandSegments, invocation } from "./shell-command.ts";
 
 /** Where beads records the backend it resolved. */
 export interface DoltMetadata {
@@ -46,7 +55,11 @@ export function classifyBackend(metadata: string, config: string): Backend {
 	let mode: string | undefined;
 	try {
 		const parsed: unknown = JSON.parse(metadata);
-		if (parsed !== null && typeof parsed === "object" && "dolt_mode" in parsed) {
+		if (
+			parsed !== null &&
+			typeof parsed === "object" &&
+			"dolt_mode" in parsed
+		) {
 			const value = (parsed as DoltMetadata).dolt_mode;
 			if (typeof value === "string") mode = value;
 		}
@@ -82,7 +95,9 @@ async function backendAt(beads: string): Promise<Backend> {
  * ACTS on a server must instead classify the store it will act on; see the
  * shutdown handler.
  */
-export async function readBackend(cwd: string): Promise<{ backend: Backend; tracked: boolean }> {
+export async function readBackend(
+	cwd: string,
+): Promise<{ backend: Backend; tracked: boolean }> {
 	const beads = sessionPinFor(cwd);
 	if (beads === undefined) return { backend: "unknown", tracked: false };
 	return { backend: await backendAt(beads), tracked: true };
@@ -96,7 +111,10 @@ export async function readBackend(cwd: string): Promise<{ backend: Backend; trac
  * fails with `database not found`, and OMP's isolated subagents fork an embedded
  * store with every clone; the migration below fixes both. Reads are never blocked.
  */
-export function backendNotice(backend: Backend, tracked: boolean): string | undefined {
+export function backendNotice(
+	backend: Backend,
+	tracked: boolean,
+): string | undefined {
 	if (!tracked || backend !== "embedded") return undefined;
 	return [
 		"beads is on the embedded backend. With this machine's shared-server default every `bd` command here fails with `database not found`, and an OMP isolated subagent forks the store with its clone. Migrate the store to the shared Dolt server:",
@@ -114,7 +132,10 @@ export function backendNotice(backend: Backend, tracked: boolean): string | unde
  * Opt-in, and never for the shared server: a `bd dolt stop` there reports success
  * while the process keeps running, because other projects may still hold it.
  */
-export function shouldStopServer(backend: Backend, env: NodeJS.ProcessEnv = process.env): boolean {
+export function shouldStopServer(
+	backend: Backend,
+	env: NodeJS.ProcessEnv = process.env,
+): boolean {
 	return backend === "per-project" && env[STOP_ON_EXIT] === "1";
 }
 
@@ -133,9 +154,133 @@ export function pidAlive(pid: number): boolean {
 	}
 }
 
+/** The process-wide launch lock shared by every checkout using the shared server. */
+export const DOLT_START_LOCK_NAME = "omp-dolt-start.lock";
+export const DOLT_START_LOCK_ENV = "BEADS_DOLT_START_LOCK";
+/** Metadata written inside the launch lock directory. */
+export const DOLT_START_HOLDER_NAME = "holder.json";
+
+/** The lock directory used to serialize `bd dolt start` launches. */
+export function doltStartLockPath(
+	home = process.env.HOME || os.homedir(),
+): string {
+	return path.join(
+		home,
+		".beads",
+		"shared-server",
+		"dolt",
+		DOLT_START_LOCK_NAME,
+	);
+}
+
+export interface DoltStartHolder {
+	pid: number;
+	cwd: string;
+}
+
+/** Stable refusal when another launch owns the lock and its metadata is readable. */
+export function doltStartRefusal(holder: DoltStartHolder): string {
+	return `bd dolt start refused: another launch is already in progress (holder pid ${holder.pid}, cwd ${holder.cwd}).`;
+}
+
+/** Stable refusal when the lock exists but its holder cannot be identified. */
+export const DOLT_START_UNKNOWN_REFUSAL =
+	"bd dolt start refused: another launch is already in progress, but holder.json is missing or malformed; holder pid/cwd are unknown.";
+
+interface TrackedStart {
+	lock: string;
+}
+
+interface StartRegistry {
+	starts: Map<string, TrackedStart>;
+}
+
+const START_REGISTRY_KEY = Symbol.for("com.srobroek.beads.dolt-start-lock.v1");
+
+function startRegistry(): StartRegistry {
+	const holder = globalThis as { [START_REGISTRY_KEY]?: StartRegistry };
+	const existing = holder[START_REGISTRY_KEY];
+	if (existing !== undefined) return existing;
+	const created: StartRegistry = { starts: new Map() };
+	holder[START_REGISTRY_KEY] = created;
+	return created;
+}
+
+function holderPath(lock: string): string {
+	return path.join(lock, DOLT_START_HOLDER_NAME);
+}
+
+function readStartHolder(lock: string): DoltStartHolder | undefined {
+	try {
+		const parsed: unknown = JSON.parse(readFileSync(holderPath(lock), "utf8"));
+		if (parsed === null || typeof parsed !== "object") return undefined;
+		const value = parsed as { pid?: unknown; cwd?: unknown };
+		if (
+			!Number.isSafeInteger(value.pid) ||
+			(value.pid as number) <= 0 ||
+			typeof value.cwd !== "string" ||
+			value.cwd.length === 0
+		)
+			return undefined;
+		return { pid: value.pid as number, cwd: value.cwd };
+	} catch {
+		return undefined;
+	}
+}
+
+/** Acquire without waiting; an existing lock always refuses immediately. */
+function acquireDoltStart(
+	toolCallId: string,
+	cwd: string,
+	lockPath = doltStartLockPath(),
+): { block: true; reason: string } | undefined {
+	const registry = startRegistry();
+	if (registry.starts.has(toolCallId)) return undefined;
+	const lock = lockPath;
+	try {
+		mkdirSync(path.dirname(lock), { recursive: true });
+		mkdirSync(lock);
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code !== "EEXIST")
+			return { block: true, reason: DOLT_START_UNKNOWN_REFUSAL };
+		const holder = readStartHolder(lock);
+		return {
+			block: true,
+			reason:
+				holder === undefined
+					? DOLT_START_UNKNOWN_REFUSAL
+					: doltStartRefusal(holder),
+		};
+	}
+	try {
+		writeFileSync(
+			holderPath(lock),
+			JSON.stringify({ pid: process.pid, cwd }),
+			"utf8",
+		);
+	} catch {
+		// The lock itself remains authoritative; a later caller must refuse with uncertainty.
+	}
+	registry.starts.set(toolCallId, { lock });
+}
+
+function releaseDoltStart(toolCallId: string): void {
+	const registry = startRegistry();
+	const held = registry.starts.get(toolCallId);
+	if (held === undefined) return;
+	registry.starts.delete(toolCallId);
+	try {
+		rmSync(held.lock, { recursive: true, force: true });
+	} catch {
+		// A matching result has ended our launch; inability to remove the marker is harmless here.
+	}
+}
+
 /** The server pid recorded in `store`, a resolved `.beads` directory, when usable. */
 async function serverPid(store: string): Promise<number | undefined> {
-	const raw = await fs.readFile(path.join(store, "dolt-server.pid"), "utf8").catch(() => "");
+	const raw = await fs
+		.readFile(path.join(store, "dolt-server.pid"), "utf8")
+		.catch(() => "");
 	const pid = Number.parseInt(raw.trim(), 10);
 	return Number.isSafeInteger(pid) && pid > 0 ? pid : undefined;
 }
@@ -154,19 +299,39 @@ async function serverPid(store: string): Promise<number | undefined> {
  * repository's store. Pinning it explicitly for the child settles which store
  * `bd` acts on rather than leaving it to whatever the environment holds.
  */
-async function stopServer(cwd: string, store: string): Promise<{ said: string; verdict: string }> {
+async function stopServer(
+	cwd: string,
+	store: string,
+): Promise<{ said: string; verdict: string }> {
 	const before = await serverPid(store);
 	const proc = Bun.spawn(["bd", "dolt", "stop"], {
-		cwd, env: { ...process.env, BEADS_DIR: store },
-		stdout: "pipe", stderr: "pipe", timeout: 1200, killSignal: "SIGKILL",
+		cwd,
+		env: { ...process.env, BEADS_DIR: store },
+		stdout: "pipe",
+		stderr: "pipe",
+		timeout: 1200,
+		killSignal: "SIGKILL",
 	});
-	const [out, err] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text()]);
+	const [out, err] = await Promise.all([
+		new Response(proc.stdout).text(),
+		new Response(proc.stderr).text(),
+	]);
 	const code = await proc.exited;
 	const said = `${out}${err}`.trim();
-	if (code !== 0) return { said, verdict: `stop failed or timed out (exit ${code}); server state is unverified` };
+	if (code !== 0)
+		return {
+			said,
+			verdict: `stop failed or timed out (exit ${code}); server state is unverified`,
+		};
 
-	if (before === undefined) return { said, verdict: "unverifiable: no pid recorded before the call" };
-	return { said, verdict: pidAlive(before) ? `still running: pid ${before} survived the stop` : `stopped: pid ${before} exited` };
+	if (before === undefined)
+		return { said, verdict: "unverifiable: no pid recorded before the call" };
+	return {
+		said,
+		verdict: pidAlive(before)
+			? `still running: pid ${before} survived the stop`
+			: `stopped: pid ${before} exited`,
+	};
 }
 
 /**
@@ -179,6 +344,39 @@ async function stopServer(cwd: string, store: string): Promise<{ said: string; v
 const REPORTED_KEY = Symbol.for("com.srobroek.beads.storage-mode.reported");
 
 export default function beadsDoltLifecycle(pi: ExtensionAPI): void {
+	pi.on("tool_call", (event: ToolCallEvent, ctx: ExtensionContext) => {
+		try {
+			if (event.toolName !== "bash") return;
+			const command = extractCommand(event.input);
+			if (
+				!commandSegments(command).some(
+					(segment) => invocation(segment, ["bd", "dolt", "start"]) !== null,
+				)
+			)
+				return;
+			const input = event.input as { cwd?: unknown; env?: unknown };
+			const cwd =
+				typeof input.cwd === "string" && input.cwd.length > 0
+					? input.cwd
+					: (ctx?.cwd ?? process.cwd());
+			const lock =
+				input.env !== null &&
+				typeof input.env === "object" &&
+				!Array.isArray(input.env) &&
+				typeof (input.env as Record<string, unknown>)[DOLT_START_LOCK_ENV] ===
+					"string"
+					? (input.env as Record<string, string>)[DOLT_START_LOCK_ENV]
+					: doltStartLockPath();
+			return acquireDoltStart(event.toolCallId, cwd, lock);
+		} catch {
+			return { block: true, reason: DOLT_START_UNKNOWN_REFUSAL };
+		}
+	});
+
+	pi.on("tool_result", (event: ToolResultEvent) => {
+		releaseDoltStart(event.toolCallId);
+	});
+
 	pi.on("session_start", async (_event, ctx: ExtensionContext) => {
 		const holder = globalThis as { [REPORTED_KEY]?: boolean };
 		if (holder[REPORTED_KEY]) return;
@@ -217,7 +415,8 @@ export default function beadsDoltLifecycle(pi: ExtensionAPI): void {
 			// `BEADS_STOP_SERVER_ON_EXIT` is per-project intent, so when this checkout
 			// has no store of its own the correct action is to stop nothing.
 			const store = sessionPinFor(ctx.cwd);
-			if (store === undefined || !shouldStopServer(await backendAt(store))) return;
+			if (store === undefined || !shouldStopServer(await backendAt(store)))
+				return;
 			const { said, verdict } = await stopServer(ctx.cwd, store);
 			// The verdict comes from the pid, not from what bd printed.
 			pi.logger.info("beads dolt server stop", { verdict, said });
