@@ -14,7 +14,7 @@ const PRE_VERB_VALUE_FLAGS: Record<string, true> = {
 };
 
 /** `bd init` flags that consume the next token, so a value is never read as the verb. */
-const VALUE_FLAGS: Record<string, true> = { "--prefix": true, "": true, "": true };
+const VALUE_FLAGS: Record<string, true> = { "--prefix": true };
 
 /** `NAME=value bd init`: an environment prefix is not the command. */
 const ENV_ASSIGNMENT = /^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/s;
