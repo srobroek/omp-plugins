@@ -4,9 +4,9 @@ Worktrunk manages linked worktrees.
 
 ## Rules
 
-Mutations need a worktree.
+Use a worktree for mutations.
 The project disables native isolation.
-Contention needs retry.
+Retry contention.
 
 ## Gate
 
@@ -17,5 +17,5 @@ Unknown paths block.
 
 ## Precheck
 
-The precheck reports native isolation.
+The precheck reports isolation.
 The precheck rejects task calls that request isolation.
