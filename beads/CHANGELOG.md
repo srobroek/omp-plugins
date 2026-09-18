@@ -290,7 +290,6 @@ release-please attributed nothing and opened no release PR.
 
 ### Bug Fixes
 
-* **beads:** name BEADS_DIR as the storage-mode remedy ([#51](https://github.com/srobroek/omp-plugins/issues/51)) ([7e03f63](https://github.com/srobroek/omp-plugins/commit/7e03f637b857498124c637d01b4a6622d2bd3053))
 * **beads:** pin BEADS_DIR for every checkout shape, as an absolute path ([#53](https://github.com/srobroek/omp-plugins/issues/53)) ([ecfc640](https://github.com/srobroek/omp-plugins/commit/ecfc64080ae2f854d74c9d08913d858ed98e0225))
 
 ## [0.7.0](https://github.com/srobroek/omp-plugins/compare/beads--v0.6.2...beads--v0.7.0) (2026-08-26)
@@ -314,8 +313,6 @@ release-please attributed nothing and opened no release PR.
 
 ### Bug Fixes
 
-* **beads:** storage-mode notice fires once across module instances ([eec8571](https://github.com/srobroek/omp-plugins/commit/eec8571deb0b7e4afe6f49b4e324d47140f5408b))
-* **beads:** storage-mode notice fires once across module instances ([eb1d981](https://github.com/srobroek/omp-plugins/commit/eb1d9815990d8db2c738305396d64c17ac606e9f))
 * **speckit:** retire the spec-id TTSR as a contextual false positive ([f292cca](https://github.com/srobroek/omp-plugins/commit/f292ccac9deb988459859ee1836aaa99deb36317))
 * **speckit:** retire the spec-id TTSR as a contextual false positive ([76caeec](https://github.com/srobroek/omp-plugins/commit/76caeec135b0b1943b6df551578cd6b6e7facd1b))
 * **ttsr:** audit wave - retire and re-anchor the blocking rules ([a6ae591](https://github.com/srobroek/omp-plugins/commit/a6ae5911aa0ece0e8af982a43040ae8515970d3a))

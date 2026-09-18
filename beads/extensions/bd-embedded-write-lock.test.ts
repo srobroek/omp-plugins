@@ -287,8 +287,6 @@ describe("only a direct bd invocation is accepted", () => {
 		"bare bd": "bd",
 			};
 
-	for (const [name, command] of Object.entries(FREE)) {
-	}
 
 	/**
 	 * Compound shapes. None of these is modelled; each fails closed BECAUSE it is not
@@ -393,10 +391,6 @@ describe("only a direct bd invocation is accepted", () => {
 	});
 });
 
-describe("jurisdiction does not depend on the session's own store", () => {
-
-
-});
 
 describe("the gate refuses what it cannot place", () => {
 	test("a compound command is blocked, with the remediation the agent needs", async () => {
@@ -667,7 +661,6 @@ describe("bdEmbeddedWriteLock", () => {
 		expect(secondEntered).toBe(true);
 		lockResult({ toolName: "bash", toolCallId: "b", input: {}, content: [] });
 		expect(existsSync(join(beads, LOCK))).toBe(false);
-	});
 	});
 
 	test("a lock the process cannot create refuses the write instead of running it", async () => {

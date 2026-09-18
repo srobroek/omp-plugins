@@ -6,7 +6,7 @@ description: Initialising beads in a repository and verifying the install.
 # Beads Setup
 
 MUST Let the bd CLI own initialization: use bd init --init-if-missing --skip-hooks, then verify with bd where and bd dolt status. Omitting --skip-hooks draws one advisory from bd-init-advisory; nothing is blocked.
-MUST Create every new store with embedded Dolt. Embedded storage is the sole supported topology for this plugin, and bd-embedded-write-lock serializes mutations across linked worktrees and isolated clones.
+MUST Create every new store with embedded Dolt. Embedded storage is the sole supported topology for this plugin, and bd-embedded-write-lock serializes mutations across Worktrunk-linked checkouts.
 
 GOTCHA `bd init` derives a Dolt remote from `git remote origin`. Where that
 database already exists it fails with `can't create database <prefix>; database

@@ -1,11 +1,6 @@
- * invocation, so this reads the `bd` at command position, its verb, and its
- * flags. And the wrongness is contextual — an already-initialised repository,
- * hooks the project deliberately manages — so this is advice: `bd init` always
- * proceeds, and the advisory speaks at most once per process.
- *
- * Command position is per line as well as per separator: `cd /repo\nbd init` is a
- * real invocation. Here-document bodies are data and are dropped by the tokenizer, so
- * a `bd init` line inside one is not.
+/**
+ * Advise on bd init hook flags once per process without blocking the command.
+ * The parser recognizes actual invocations rather than mentions in unrelated text.
  */
 import path from "node:path";
 import type { ExtensionAPI, ToolCallEvent } from "@oh-my-pi/pi-coding-agent";
