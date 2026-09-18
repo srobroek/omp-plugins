@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.5](https://github.com/srobroek/omp-plugins/compare/worktrunk--v0.2.4...worktrunk--v0.2.5) (2026-09-18)
+
+
+### Bug Fixes
+
+* **worktrunk:** resolve command segments in the canonical bootstrap allowlist ([#375](https://github.com/srobroek/omp-plugins/issues/375)) ([298a967](https://github.com/srobroek/omp-plugins/commit/298a9679bd0fb0bd4aac7bc32963ba7286f83998))
+
 ## [0.2.4](https://github.com/srobroek/omp-plugins/compare/worktrunk--v0.2.3...worktrunk--v0.2.4) (2026-09-18)
 
 

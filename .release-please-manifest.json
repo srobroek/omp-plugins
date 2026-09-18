@@ -2,7 +2,7 @@
   "architecture": "0.4.0",
   "authoring": "2.0.4",
   "backend": "0.3.1",
-  "beads": "1.7.1",
+  "beads": "1.7.2",
   "browser-tools": "0.3.7",
   "build": "0.6.1",
   "chezmoi": "0.4.9",
@@ -26,5 +26,5 @@
   "toolchain": "0.3.7",
   "typescript": "0.3.3",
   "whats-new": "0.3.3",
-  "worktrunk": "0.2.4"
+  "worktrunk": "0.2.5"
 }
