@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.4](https://github.com/srobroek/omp-plugins/compare/worktrunk--v0.2.3...worktrunk--v0.2.4) (2026-09-18)
+
+
+### Bug Fixes
+
+* **worktrunk:** allow resume session inspection ([#372](https://github.com/srobroek/omp-plugins/issues/372)) ([52c5b41](https://github.com/srobroek/omp-plugins/commit/52c5b4126c6ed2e30e3d0773a05af4e54352b107))
+
 ## [0.2.3](https://github.com/srobroek/omp-plugins/compare/worktrunk--v0.2.2...worktrunk--v0.2.3) (2026-09-18)
 
 
