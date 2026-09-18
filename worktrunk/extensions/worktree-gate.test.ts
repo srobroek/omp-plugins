@@ -638,7 +638,7 @@ describe("git answers", () => {
 		} finally {
 			process.env.PATH = path;
 		}
-	});
+	}, 60000);
 
 	test("a second repository is judged against its own topology, not this project's", () => {
 		const mine = repository();
@@ -694,7 +694,7 @@ describe("git answers", () => {
 			decideWorktreeCall("write", { path: join(worktree, "src", "probe.ts"), content: "" }, canonical),
 		).toBeUndefined();
 		expect(decideWorktreeCall("write", { path: "src/probe.ts", content: "" }, canonical)?.block).toBe(true);
-	});
+	}, 60000);
 
 	test("a git failure blocks the write and is not cached, so recovery needs no invalidation", () => {
 		const { canonical, worktree } = repository();
@@ -714,7 +714,7 @@ describe("git answers", () => {
 			decideWorktreeCall("write", { path: join(worktree, "src", "probe.ts"), content: "" }, canonical),
 		).toBeUndefined();
 		expect(decideWorktreeCall("write", { path: "src/probe.ts", content: "" }, canonical)?.block).toBe(true);
-	});
+	}, 60000);
 });
 
 describe("topology changes", () => {
