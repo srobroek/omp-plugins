@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.7.0](https://github.com/srobroek/omp-plugins/compare/beads--v1.6.0...beads--v1.7.0) (2026-09-18)
+
+
+### Features
+
+* **beads:** restore a reclaimed merge slot to its owner ([#365](https://github.com/srobroek/omp-plugins/issues/365)) ([d2962b0](https://github.com/srobroek/omp-plugins/commit/d2962b00ece33d3eb0dd20600b6522e11ec3d981))
+
 ## [1.6.0](https://github.com/srobroek/omp-plugins/compare/beads--v1.5.2...beads--v1.6.0) (2026-09-18)
 
 
