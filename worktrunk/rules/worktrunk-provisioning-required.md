@@ -9,6 +9,10 @@ the project's hooks and step configuration, and `.worktreeinclude` listing the
 gitignored directories a fresh worktree needs. Neither is global; without them a
 repository gets no project provisioning.
 
+MUST author either file when it is missing, customised for that repository, before
+proceeding with the work. A verification that stops at "absent" provisions nothing.
+Where a project cannot carry them, record that and the reason on the governing bead.
+
 `.worktreeinclude` is what makes `copy-ignored` do anything. The step is gated by
 `--require-include` and silently no-ops without that file. Name the dependency
 directories the repository needs: `node_modules/` for bun or npm, `target/` for
