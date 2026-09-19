@@ -32,6 +32,7 @@
  * disagreed with the tool performing the write would guard a different file than
  * the one that changes.
  */
+import { spawnSync } from "node:child_process";
 import { lstatSync, readFileSync, realpathSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -181,15 +182,17 @@ const READ_ONLY_COMPANIONS: Record<string, true> = {
 	true: true,
 	wc: true,
 };
-const READ_ONLY_PROBES: Record<string, true> = { basename: true, cat: true, dirname: true, echo: true, env: true, false: true, git: true, grep: true, head: true, jq: true, printf: true, pwd: true, readlink: true, rg: true, sed: true, sort: true, stat: true, tail: true, test: true, tr: true, true: true, uniq: true, wc: true, which: true };
-const BD_READ_VERBS: Record<string, true> = { show: true, list: true, ready: true, status: true, comments: true, dep: true, prime: true, doctor: true, version: true, lint: true, claim: true, unclaim: true, heartbeat: true };
+const READ_ONLY_PROBES: Record<string, true> = { basename: true, cat: true, dirname: true, echo: true, env: true, false: true, git: true, grep: true, head: true, jq: true, printf: true, pwd: true, readlink: true, rg: true, sed: true, stat: true, tail: true, test: true, tr: true, true: true, uniq: true, wc: true, which: true };
+const BD_READ_VERBS: Record<string, true> = { show: true, list: true, ready: true, status: true, stats: true, comments: true, dep: true, prime: true, doctor: true, version: true, lint: true, claim: true, unclaim: true, heartbeat: true };
 function bdReadAllowed(args: readonly string[]): boolean {
 	const verb = args.find(token => !token.startsWith("-"));
 	return verb === "update" ? args.includes("--claim") : verb !== undefined && BD_READ_VERBS[verb] === true;
 }
 function probeAllowed(program: string, args: readonly string[]): boolean {
 	if (!READ_ONLY_PROBES[program]) return false;
+	if ((program === "echo" || program === "printf") && args.some(token => token.includes("wt") || token.includes("bd"))) return false;
 	if (program === "git") { const git = afterGitGlobals(args); return git !== null && ["status", "log", "diff", "show", "rev-parse", "branch", "worktree"].includes(git[0] ?? ""); }
+	if (program === "grep") return !args.includes("-f") && !args.includes("--file");
 	if (program === "sed") return !args.includes("-i") && !args.includes("--in-place");
 	return true;
 }
@@ -1072,7 +1075,18 @@ function invocationKind(segment: readonly string[]): "allowed" | "safe" | "other
 	const program = segment[index];
 	if (program === undefined) return "safe";
 	const rest = segment.slice(index + 1);
-	if (program === "env") return invocationKind(rest);
+	if (program === "env") {
+		let envIndex = 0;
+		while (envIndex < rest.length) {
+			const option = rest[envIndex];
+			if (option === undefined) return "other";
+			if (/^[A-Za-z_][A-Za-z0-9_]*=.*$/.test(option)) { envIndex++; continue; }
+			if (option === "-i" || option === "--ignore-environment") { envIndex++; continue; }
+			if (option === "-u" || option === "--unset") { if (rest[envIndex + 1] === undefined) return "other"; envIndex += 2; continue; }
+			break;
+		}
+		return envIndex < rest.length ? invocationKind(rest.slice(envIndex)) : "other";
+	}
 	if (program === "bd") return bdReadAllowed(rest) ? "allowed" : "other";
 	if (program === "wt") {
 		const args = afterWtGlobals(rest); if (args === null) return "other";
@@ -1094,7 +1108,7 @@ function invocationKind(segment: readonly string[]): "allowed" | "safe" | "other
 	if (program === "gh") return ghReadAllowed(rest) ? "allowed" : "other";
 	if (probeAllowed(program, rest)) return "safe";
 	if (stdinFilterAllowed(program, rest)) return "safe";
-	return READ_ONLY_COMPANIONS[program] === true ? "safe" : "other";
+	return !READ_ONLY_PROBES[program] && READ_ONLY_COMPANIONS[program] === true ? "safe" : "other";
 }
 // probe classifiers above intentionally remain conservative: separators and
 // redirections are rejected by commandTokens before this function is reached.
