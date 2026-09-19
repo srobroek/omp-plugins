@@ -65,18 +65,6 @@
         }
       ]
     },
-    "backend": {
-      "release-type": "simple",
-      "component": "backend",
-      "changelog-path": "CHANGELOG.md",
-      "extra-files": [
-        {
-          "type": "json",
-          "path": ".omp-plugin/plugin.json",
-          "jsonpath": "$.version"
-        }
-      ]
-    },
     "beads": {
       "release-type": "simple",
       "component": "beads",
@@ -212,30 +200,6 @@
     "go": {
       "release-type": "simple",
       "component": "go",
-      "changelog-path": "CHANGELOG.md",
-      "extra-files": [
-        {
-          "type": "json",
-          "path": ".omp-plugin/plugin.json",
-          "jsonpath": "$.version"
-        }
-      ]
-    },
-    "infrastructure": {
-      "release-type": "simple",
-      "component": "infrastructure",
-      "changelog-path": "CHANGELOG.md",
-      "extra-files": [
-        {
-          "type": "json",
-          "path": ".omp-plugin/plugin.json",
-          "jsonpath": "$.version"
-        }
-      ]
-    },
-    "ops": {
-      "release-type": "simple",
-      "component": "ops",
       "changelog-path": "CHANGELOG.md",
       "extra-files": [
         {

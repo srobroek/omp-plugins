@@ -63,7 +63,7 @@ export async function launchLocal(request: LocalLaunchRequest): Promise<Browser>
 		executablePath: request.executablePath,
 		headless: request.config.headless,
 		userDataDir: request.profileDir,
-		protocol: request.engine === "chrome" ? "webDriverBiDi" : undefined,
+		protocol: undefined,
 		downloadBehavior: request.config.allowDownloads
 			? { policy: "allow", downloadPath: request.downloadsDir }
 			: { policy: "deny" },

@@ -1,7 +1,6 @@
 {
   "architecture": "0.4.0",
   "authoring": "2.0.4",
-  "backend": "0.3.1",
   "beads": "2.0.2",
   "browser-tools": "0.3.7",
   "build": "0.6.1",
@@ -14,8 +13,6 @@
   "eli5": "0.3.1",
   "find-tools": "1.0.3",
   "go": "0.3.3",
-  "infrastructure": "0.4.2",
-  "ops": "0.6.3",
   "project": "1.2.0",
   "python": "0.3.3",
   "quality": "1.1.3",

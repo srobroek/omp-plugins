@@ -23,8 +23,7 @@
         "type": "enum",
         "default": "firefox",
         "values": [
-          "firefox",
-          "chrome"
+          "firefox"
         ],
         "description": "Default browser engine; each launch can override it.",
         "env": "HEADED_BROWSER_DEFAULT_ENGINE"
@@ -41,15 +40,9 @@
           "firefox-nightly",
           "librewolf",
           "waterfox",
-          "chrome",
-          "chrome-canary",
-          "chromium",
-          "edge",
-          "brave",
-          "vivaldi",
           "custom"
         ],
-        "description": "Default browser channel; auto selects the first installed channel for the engine.",
+        "description": "Default browser channel; auto selects the first installed Firefox-family channel.",
         "env": "HEADED_BROWSER_DEFAULT_BROWSER_CHANNEL"
       },
       "defaultHeadless": {

@@ -54,7 +54,7 @@ Establish, and record on this bead: which specific assertions the previous round
 got wrong, whether the miss is intent or execution, which of the three dials
 (variance, motion, density) moved and to what value, and what observable state
 counts as done this round. A change of intent is what earns an iteration; a
-change of execution belongs in mol-design-fix-findings instead, so classify
+change of execution belongs in the current molecule's findings step instead, so classify
 before revising. Read node {{node}} for the previous round's evidence rather than
 asking the user to restate it.
 

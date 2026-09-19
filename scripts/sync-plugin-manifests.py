@@ -30,8 +30,6 @@ PLUGINS: dict[str, tuple[str, str]] = {
         "build tooling, testing, and a TypeScript review skill.",
     ),
     # --- topic plugins ---
-    "backend": ("development", "Backend rules: API contracts, background jobs, and service boundaries."),
-    "infrastructure": ("devops", "Infrastructure rules for provisioning, environments, and operational surface."),
     "architecture": (
         "development",
         "Architecture rules: module boundaries, compose-don't-fork, project structure, "
@@ -44,7 +42,6 @@ PLUGINS: dict[str, tuple[str, str]] = {
         "Quality gates for final verification, lint and docs adjudication, "
         "and browser-verification discipline.",
     ),
-    "ops": ("devops", "Operational telemetry and toolchain cache policy: metrics reading and log digests."),
     "build": ("development", "Execution agents: operator and external-repo worker."),
     "project": (
         "productivity",
@@ -55,7 +52,10 @@ PLUGINS: dict[str, tuple[str, str]] = {
         "SpecKit workflow: spec-driven setup, bugfix flow, tasks.md protection, and PR title discipline.",
     ),
     "beads": ("productivity", "Beads issue tracking: dependency DAGs, formulas, and decisions recorded as beads."),
-    "toolchain": ("development", "Toolchain defaults, tools-versus-scripts layout, and pragmatic output rules."),
+    "toolchain": (
+        "development",
+        "Toolchain defaults, backend services, infrastructure, operations, tools-versus-scripts layout, and pragmatic output rules.",
+    ),
     "safety": ("security", "Defence-in-depth advisories for destructive commands, attribution, and remote execution."),
     "chezmoi": ("productivity", "Edit chezmoi-managed dotfiles at their authoritative source."),
     # --- standalone plugins ---

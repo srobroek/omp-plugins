@@ -28,12 +28,6 @@ pattern = "^[0-9]{3}-[a-z0-9-]+$"
 required = false
 default = "no"
 
-# Whether the agent-assign extension is installed. "no" drops assign and validate.
-# The unconditional implement step executes its child task beads directly without
-# the extension, after analysis approval unless that gate was explicitly waived.
-[vars.agent_assign]
-required = false
-default = "yes"
 
 [[steps]]
 id = "specify"
@@ -119,33 +113,11 @@ condition = "{{autonomous}} == no"
 type = "human"
 
 [[steps]]
-id = "assign"
-title = "agent assign {{feature}}"
-type = "task"
-needs = ["analyze", "analyze-approval"]
-condition = "{{agent_assign}} == yes"
-description = "Run /speckit.agent-assign.assign to map implementation task beads to agents. Requires the agent-assign extension."
-
-[steps.metadata]
-skill_hints = "speckit.agent-assign.assign"
-
-[[steps]]
-id = "validate"
-title = "validate assignments {{feature}}"
-type = "task"
-needs = ["analyze", "analyze-approval", "assign"]
-condition = "{{agent_assign}} == yes"
-description = "Run /speckit.agent-assign.validate to confirm every assigned agent exists. Requires the agent-assign extension."
-
-[steps.metadata]
-skill_hints = "speckit.agent-assign.validate"
-
-[[steps]]
 id = "implement"
 title = "implement {{feature}}"
 type = "task"
-needs = ["analyze", "analyze-approval", "validate"]
-description = "When agent_assign=yes, run /speckit.agent-assign.execute after assignment validation. When agent_assign=no, work the implementation task beads directly. In either route these beads are children of this step; work them via bd ready -> bd update <id> --claim -> bd close <id> --reason. Begin child work only after this step's prerequisites are satisfied; keep this step open until every child is closed. Per-file progress and retries ride a [wisp:worklog] gc_report wisp linked relates-to this step; the step thread keeps the outcome only."
+needs = ["analyze", "analyze-approval"]
+description = "Work the implementation task beads directly. These beads are children of this step; work them via the beads CLI ready -> update <id> --claim -> close <id> --reason. Begin child work only after prerequisites are satisfied; keep this step open until every child is closed."
 
 [[steps]]
 id = "verify-tasks"

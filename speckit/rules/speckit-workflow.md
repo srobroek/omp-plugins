@@ -10,10 +10,7 @@ molecule is the phase DAG and the only statement of step order.
 EXECUTION
 MUST Invoke SpecKit commands through their runtime-native skill interface.
 NOT Invoke deprecated `/speckit.implement`.
-MUST For lean/feature with `agent_assign=yes`, use the runtime-native
-  agent-assign chain (assign -> validate -> execute).
-MUST For `speckit-basic` or `agent_assign=no`, work the task beads directly
-  under the unconditional `implement` step.
+MUST Work the task beads directly under the unconditional `implement` step.
 MUST Begin implementation child work only after the implement step's
   prerequisites are satisfied, including every unwaived analysis approval gate.
 NOT Proceed with open questions, unresolved gaps, or unapproved intent changes.

@@ -14,25 +14,19 @@ const importPluginDirs: ImportPluginDirs = async () => pluginDirs;
 
 export const PLUGIN_PACKAGE = "@srobroek/browser-tools";
 
-export const ENGINES = ["firefox", "chrome"] as const;
+export const ENGINES = ["firefox"] as const;
 export type Engine = (typeof ENGINES)[number];
 
 export const CHANNELS = [
-	"auto",
-	"zen",
-	"firefox",
-	"firefox-esr",
-	"firefox-developer",
-	"firefox-nightly",
-	"librewolf",
-	"waterfox",
-	"chrome",
-	"chrome-canary",
-	"chromium",
-	"edge",
-	"brave",
-	"vivaldi",
-	"custom",
+  "auto",
+  "zen",
+  "firefox",
+  "firefox-esr",
+  "firefox-developer",
+  "firefox-nightly",
+  "librewolf",
+  "waterfox",
+  "custom",
 ] as const;
 export type Channel = (typeof CHANNELS)[number];
 
