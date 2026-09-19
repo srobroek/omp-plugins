@@ -8,8 +8,9 @@
  * are the whole difficulty, so they are handled once here rather than in each gate.
  */
 
+import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { tokenizeShell } from "./shell-tokenizer.ts";
+import { shellQuoteBalanced, tokenizeShell } from "./shell-tokenizer.ts";
 
 /**
  * This module's public token shape, unchanged by the shared-tokenizer migration.
@@ -130,4 +131,137 @@ export function leadingCdCwd(command: string, cwd: string): string {
 	const dir = match[1];
 	if (dir === undefined || /^[-~$]/.test(dir) || /[\\`"'*?[\]{}]/.test(dir)) return cwd;
 	return dir.startsWith("/") ? dir : resolve(cwd, dir);
+}
+
+/** A parsed shell command. Tokens are command-position words, never prose. */
+export type ParsedCommand = {
+	command: string;
+	segments: string[][];
+	unknown: boolean;
+	nested: ParsedCommand[];
+};
+
+export type CommandClass = "read-only" | "mutating" | "unknown";
+
+const MUTATING_BD = new Set([
+	"create", "new", "create-form", "update", "close", "done", "claim", "release", "edit",
+	"delete", "rm", "purge", "init", "sync", "import", "export", "reopen", "dep", "stack",
+]);
+const READ_BD = new Set(["show", "list", "ready", "status", "comments", "lint", "version", "doctor", "prime"]);
+
+function commandWords(source: string): string[][] {
+	const words = tokenizeShell(source).map(token => token.startsQuoted ? `\u0000${token.value}` : token.value);
+	const out: string[][] = [];
+	let current: string[] = [];
+	for (const word of words) {
+		if ([";", "&&", "||", "&", "|", "\n"].includes(word)) {
+			if (current.length) out.push(current);
+			current = [];
+			continue;
+		}
+		if (word === "(") {
+			if (current.length) out.push(current);
+			current = [];
+			continue;
+		}
+		if (word === ")") {
+			if (current.length) out.push(current);
+			current = [];
+			continue;
+		}
+		current.push(word);
+	}
+	if (current.length) out.push(current);
+	return out;
+}
+
+function nestedCommands(source: string): { commands: string[]; unknown: boolean } {
+	const commands: string[] = [];
+	let unknown = false;
+	for (const match of source.matchAll(/\$\(([^()]*)\)/g)) {
+		if (match[1] !== undefined) commands.push(match[1]);
+	}
+	if (!source.includes("'`")) {
+		for (const match of source.matchAll(/`([^`]*)`/g)) if (match[1] !== undefined) commands.push(match[1]);
+	}
+	for (const match of source.matchAll(/\b(?:bash|sh|zsh|dash|ksh)\s+-c\s+("[^"]*"|'[^']*'|[^\s;&|]+)/g)) {
+		const value = match[1];
+		if (!value || value.startsWith("\"$") || value.startsWith("'$")) unknown = true;
+		else commands.push(value.replace(/^['"]|['"]$/g, ""));
+	}
+	for (const match of source.matchAll(/\beval\s+("[^"]*"|'[^']*'|[^\s;&|]+)/g)) {
+		const value = match[1];
+		if (value) commands.push(value.replace(/^['"]|['"]$/g, ""));
+	}
+	return { commands, unknown };
+}
+
+/** Parse shell syntax without executing it; literals and quoted heredocs stay inert. */
+export function parse(command: string): ParsedCommand {
+	if (command.length > 64_000 || !shellQuoteBalanced(command)) return { command, segments: [], unknown: true, nested: [] };
+	const segments = commandWords(command);
+	const nested = nestedCommands(command);
+	const children = nested.commands.map(parse);
+	return { command, segments, unknown: nested.unknown || children.some(child => child.unknown), nested: children };
+}
+
+/** Classify a parsed command, including recursively executable substitutions. */
+export function classify(parsed: ParsedCommand): CommandClass {
+	if (parsed.unknown) return "unknown";
+	let result: CommandClass = "read-only";
+	for (const words of parsed.segments) {
+		const executable = words.find(word => !word.startsWith("\u0000") && !/^[A-Za-z_][A-Za-z0-9_]*=.*/.test(word) && !word.startsWith("-"));
+		if (!executable) continue;
+		const base = executable.split("/").pop() ?? executable;
+		if (base === "bd") {
+			const verb = words.slice(words.indexOf(executable) + 1).find(word => !word.startsWith("\u0000") && !word.startsWith("-"));
+			if (!verb || !READ_BD.has(verb)) result = "mutating";
+		} else if (["npm", "bun", "uv", "cargo", "rm", "mv", "cp", "mkdir", "touch"].includes(base)) {
+			result = "mutating";
+		}
+	}
+	for (const child of parsed.nested) {
+		const nestedClass = classify(child);
+		if (nestedClass === "unknown") return "unknown";
+		if (nestedClass === "mutating") result = "mutating";
+	}
+	return result;
+}
+
+type SettingsCache = { at: number; value: Record<string, unknown> };
+const settingsCache = new Map<string, SettingsCache>();
+function settingValue(root: Record<string, unknown>, plugin: string, gate: string): unknown {
+	const plugins = root.plugins;
+	if (!plugins || typeof plugins !== "object") return undefined;
+	const config = (plugins as Record<string, unknown>)[plugin];
+	if (!config || typeof config !== "object") return undefined;
+	const gates = (config as Record<string, unknown>).gates;
+	if (!gates || typeof gates !== "object") return undefined;
+	const selected = (gates as Record<string, unknown>)[gate];
+	return selected && typeof selected === "object" ? (selected as Record<string, unknown>).enabled : undefined;
+}
+
+/** Read the documented on-disk gate toggle, with a short cache for live edits. */
+export function settingsEnabled(plugin: string, gate: string, cwd = process.cwd()): boolean {
+	const now = Date.now();
+	const cached = settingsCache.get(cwd);
+	let merged: Record<string, unknown> = {};
+	if (cached && now - cached.at < 5_000) merged = cached.value;
+	else {
+		const files = [resolve(cwd, ".omp/config.yml"), resolve(cwd, ".omp/settings.json"), resolve(process.env.HOME ?? "~", ".omp/agent/config.yml")];
+		for (const file of files) {
+			try {
+				const text = readFileSync(file, "utf8");
+				const parsed = file.endsWith(".json") ? JSON.parse(text) : (Bun as typeof Bun & { YAML?: { parse(text: string): unknown } }).YAML?.parse(text);
+				if (parsed && typeof parsed === "object") merged = { ...merged, ...(parsed as Record<string, unknown>) };
+			} catch { /* missing or malformed settings retain safe defaults */ }
+		}
+		settingsCache.set(cwd, { at: now, value: merged });
+	}
+	return settingValue(merged, plugin, gate) !== false;
+}
+
+export function blockReason(input: { gate: string; plugin?: string; cause: string; resolution: string }): string {
+	const plugin = input.plugin ?? "beads";
+	return `${input.cause}; ${input.resolution}. Disable locally: set plugins.${plugin}.gates.${input.gate}.enabled=false`;
 }
