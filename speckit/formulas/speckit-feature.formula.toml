@@ -4,7 +4,7 @@
 # Pour one molecule per feature:
 #   bd mol pour speckit-feature --var feature=<NNN-slug>
 #
-# Authoring gotchas (verified against bd 1.1.0):
+# Authoring gotchas (verified against the bd 1.3.0 floor):
 #   - [steps.gate] must be a TOML table, not a string.
 #   - Unknown keys are silently dropped; after editing, verify with
 #     `bd cook` and `bd mol pour --dry-run` for each supported selection.

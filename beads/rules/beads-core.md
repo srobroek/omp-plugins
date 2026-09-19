@@ -70,11 +70,9 @@ MUST Parsers set `BD_JSON_ENVELOPE=1` and read `.data`/`.error` plus
   `schema_version`; ad hoc readers may use bare `--json`.
 DEFAULT Non-interactive contexts export `BD_NO_PAGER=1 BD_NON_INTERACTIVE=1`.
 
-SYNC CADENCE
-See [Dolt synchronization cadence]rule://beads-dolt-sync-cadence for the required pull-before-work and push-after-delivery cadence and embedded-store constraints.
-MUST Prefer native `bd dolt pull`/`push`; `bd github` mirrors issues to GitHub and is a separate authority.
-NOT Use `bd import` as routine synchronization. Import is a restore operation; deliberate restores must name the snapshot and why it is authoritative.
-MUST When authority is absent, record pending sync and report the exact command instead of running it. Lifecycle hooks must not pull or push.
+SYNC AUTHORITY
+MUST Use the embedded `.beads` store pinned by the session lifecycle through `BEADS_DIR`; linked worktrees share that store and do not use an external Dolt server.
+For persistence and migration details, read `skill://beads-storage-mode` when that skill is installed.
 
 MAINTENANCE
 DEFAULT Probe with `bd flatten --dry-run --json`, then escalate only with human
