@@ -12,21 +12,33 @@ An OMP marketplace catalog for the Oh My Pi coding agent.
 OMP reads the `.omp-plugin/` catalog and falls back to `.claude-plugin/`. A repository that ships both
 therefore serves OMP and Claude Code from one source.
 
+## Precedence
+
+When guidance conflicts, layers apply in this order:
+
+| Order | Layer |
+| --- | --- |
+| 1 | Global `~/.omp/agent/AGENTS.md` |
+| 2 | Repository `AGENTS.md` |
+| 3 | TTSR rules |
+| 4 | Plugin rules |
+| 5 | Skills |
+| 6 | Agent prompts |
+
+Lower layers add; they never override a higher layer.
+
+
 ## Plugin layout
 
-A plugin is a directory whose capabilities sit in fixed subdirectories. OMP locates each capability by
-path, and a catalog entry cannot redirect that lookup.
+OMP locates each capability by path; catalog entries cannot redirect that lookup.
 
-| Path | Contributes |
-| --- | --- |
-| `skills/<name>/SKILL.md` | one skill, located without recursion |
-| `agents/<name>.md` | one task agent |
-| `commands/<name>.md` | one slash command |
-| `rules/<name>.md` | one rule |
-| `hooks/pre/`, `hooks/post/` | extension modules written in TypeScript or JavaScript |
-| `tools/` | custom tools |
-| `.mcp.json` | MCP server definitions |
-
+- `skills/<name>/SKILL.md`: one skill, located without recursion.
+- `agents/<name>.md`: one task agent.
+- `commands/<name>.md`: one slash command.
+- `rules/<name>.md`: one rule.
+- `hooks/pre/` and `hooks/post/`: TypeScript or JavaScript extension modules.
+- `tools/`: custom tools.
+- `.mcp.json`: MCP server definitions.
 `plugin.json` remaps two of these paths, `skills` and `commands`. The catalog keeps its `agents` and
 `hooks` fields as inventory metadata, so moving either directory breaks discovery.
 
