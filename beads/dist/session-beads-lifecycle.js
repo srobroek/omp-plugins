@@ -1213,23 +1213,29 @@ async function releaseCasSupported(cwd, deadline, env) {
 }
 async function releaseClaimsAtExit(cwd, state) {
   if (state.claimsReleased || !state.bdWrote || state.actors.size === 0)
-    return;
+    return [];
+  const incomplete = [];
   state.claimsReleased = true;
   const deadline = Date.now() + TIMEOUT_MS;
   const env = lifecycleBdEnvironment(cwd);
   const listed = await runBdResult(cwd, ["list", "--status", "open,in_progress,blocked,deferred", "--limit", "0", "--json"], deadline, env);
   if (!("output" in listed))
-    return;
+    return [`claim listing failed: ${listed.failure}`];
   const claims = heldClaims(readBeads(listed.output), new Set, state.actors);
   const casSupported = await releaseCasSupported(cwd, deadline, env);
   for (const bead of claims) {
     if (bead.assignee === undefined)
       continue;
     const args = releaseClaimArgs(bead.id, bead.assignee, { BD_ACTOR: bead.assignee }, new Date().toISOString(), casSupported);
-    if (args === undefined)
+    if (args === undefined) {
+      incomplete.push(`${bead.id}: release command could not be constructed`);
       continue;
-    await runBdResult(cwd, args, deadline, { ...env, BEADS_ACTOR: bead.assignee, BD_ACTOR: bead.assignee });
+    }
+    const released = await runBdResult(cwd, args, deadline, { ...env, BEADS_ACTOR: bead.assignee, BD_ACTOR: bead.assignee });
+    if (!("output" in released))
+      incomplete.push(`${bead.id}: ${released.failure}`);
   }
+  return incomplete;
 }
 var internalRuns = 0;
 var injectedStream = null;
@@ -1407,16 +1413,20 @@ function sessionBeadsLifecycle(pi) {
       });
     }
   });
-  pi.on("session_shutdown", (_event, ctx) => {
+  pi.on("session_shutdown", async (_event, ctx) => {
     const key = sessionKey(ctx);
     const state = sessions.get(key);
     sessions.delete(key);
     endAutoPinSession(key, (id) => sessions.has(id));
     if (state === undefined)
       return;
-    releaseClaimsAtExit(ctx?.cwd ?? process.cwd(), state).catch((error) => {
+    try {
+      const incomplete = await releaseClaimsAtExit(ctx?.cwd ?? process.cwd(), state);
+      if (incomplete.length > 0)
+        pi.logger.error("beads claim release incomplete at session exit", { incomplete });
+    } catch (error) {
       pi.logger.error("beads claim release at session exit failed", { error: error instanceof Error ? error.message : String(error) });
-    });
+    }
   });
   pi.on("turn_start", (_event, ctx) => {
     stateFor(ctx).stopFired = false;

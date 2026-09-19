@@ -5,6 +5,8 @@ import {
 	deepAssertFromMol,
 	gateTypeFailures,
 	parseDryRun,
+	parseDryRunJson,
+	parsePourHelp,
 	unsubstitutedFailures,
 } from "./formula-check-tool.ts";
 
@@ -22,6 +24,41 @@ describe("parseDryRun", () => {
 		expect(gates).toEqual(["Gate: human"]);
 		expect(steps.some((s) => s.includes("gate-runner"))).toBe(true);
 		expect(bodySteps(steps).length).toBe(2);
+	});
+});
+
+describe("parseDryRunJson", () => {
+	test("parses a JSON fixture into steps and gates", () => {
+		const parsed = parseDryRunJson(JSON.stringify({
+			schema_version: 1,
+			data: {
+				steps: [{ title: "Root", origin: "demo" }, { title: "Write code", origin: "demo.write" }],
+				gates: [{ type: "human", origin: "demo.gate-review" }],
+			},
+		}));
+		expect(parsed).toEqual({
+			steps: ["Root <- demo", "Write code <- demo.write"],
+			gates: ["Gate: human"],
+		});
+		expect(bodySteps(parsed?.steps ?? []).length).toBe(1);
+	});
+
+	test("rejects malformed or unrecognised JSON", () => {
+		expect(parseDryRunJson("not JSON")).toBeUndefined();
+		expect(parseDryRunJson(JSON.stringify({ steps: [{ title: "missing origin" }], gates: [] }))).toBeUndefined();
+	});
+});
+
+describe("parsePourHelp", () => {
+	test("selects JSON when help advertises the flag", () => {
+		expect(parsePourHelp("Usage: bd mol pour <proto>\nGlobal Flags: --json")).toEqual({ json: true });
+	});
+
+	test("retains textual fallback and exact error", () => {
+		expect(parsePourHelp("Usage: bd mol pour <proto>\nFlags: --dry-run")).toEqual({ json: false });
+		expect(parsePourHelp("unexpected output")).toEqual({
+			error: "formula-check: unrecognised pour output; run the command manually",
+		});
 	});
 });
 

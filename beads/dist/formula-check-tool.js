@@ -576,6 +576,38 @@ function parseDryRun(out) {
   }
   return { steps, gates };
 }
+function jsonItem(item, gate) {
+  if (typeof item === "string")
+    return gate && !item.startsWith("Gate:") ? `Gate: ${item}` : item;
+  if (!item || typeof item !== "object" || Array.isArray(item))
+    return;
+  const record = item;
+  const title = [record.title, record.name, record.label, record.type].find((value) => typeof value === "string" && value.trim() !== "");
+  if (!title)
+    return;
+  if (gate)
+    return title.startsWith("Gate:") ? title : `Gate: ${title}`;
+  const origin = [record.origin, record.source, record.id, record.path].find((value) => typeof value === "string" && value.trim() !== "");
+  return origin ? `${title} <- ${origin}` : undefined;
+}
+function parseDryRunJson(out) {
+  const parsed = parseTrailingJson(out);
+  if (parsed === undefined)
+    return;
+  const value = envelopeData(parsed);
+  if (!value || typeof value !== "object" || Array.isArray(value))
+    return;
+  const record = value;
+  const steps = record.steps;
+  const gates = record.gates;
+  if (!Array.isArray(steps) || !Array.isArray(gates))
+    return;
+  const normalizedSteps = steps.map((item) => jsonItem(item, false));
+  const normalizedGates = gates.map((item) => jsonItem(item, true));
+  if (normalizedSteps.some((item) => item === undefined) || normalizedGates.some((item) => item === undefined))
+    return;
+  return { steps: normalizedSteps, gates: normalizedGates };
+}
 function bodySteps(steps) {
   return steps.filter((s) => {
     const origin = s.split(" <- ", 2)[1] ?? "";
@@ -641,6 +673,16 @@ function deepAssertFromMol(mol) {
   }
   return [];
 }
+var UNRECOGNISED_POUR_OUTPUT = "formula-check: unrecognised pour output; run the command manually";
+function parsePourHelp(stdout, stderr = "") {
+  const text = [stdout, stderr].filter(Boolean).join(`
+`).trim();
+  if (/\B--json\b/.test(text) && /\bmol\s+pour\b/i.test(text))
+    return { json: true };
+  if (/\b(?:usage|options|flags)\b/i.test(text) && /\bmol\s+pour\b/i.test(text))
+    return { json: false };
+  return { error: UNRECOGNISED_POUR_OUTPUT };
+}
 async function deepAssert(formula, varargs, toolCallId, workspace, env = process.env) {
   const locked = await withEmbeddedWriteLock(workspace ?? process.cwd(), toolCallId, async () => {
     const poured = await runBd(["mol", "pour", formula, ...varargs], workspace, toolCallId, env);
@@ -680,7 +722,14 @@ async function assertFormula(params, toolCallId) {
 `);
     return { ok: false, text, failures: cookFails, steps: 0, gates: 0 };
   }
-  const dry = await runBd(["mol", "pour", params.formula, "--dry-run", ...varargs], cwd);
+  const help = await runBd(["mol", "pour", "--help"], cwd);
+  const capability = parsePourHelp(help.stdout, help.stderr);
+  if (help.error || !help.ok || "error" in capability) {
+    const failure = help.error ?? ("error" in capability ? capability.error : "bd mol pour --help failed");
+    return { ok: false, text: `FAIL ${failure}`, failures: [failure], steps: 0, gates: 0 };
+  }
+  const dryArgs = ["mol", "pour", params.formula, "--dry-run", ...capability.json ? ["--json"] : [], ...varargs];
+  const dry = await runBd(dryArgs, cwd);
   if (dry.error || !dry.ok) {
     const out = dry.error ? dry.error : [dry.stdout, dry.stderr].filter(Boolean).join(`
 `).trim();
@@ -688,9 +737,12 @@ async function assertFormula(params, toolCallId) {
 ${out}`;
     return { ok: false, text: `FAIL ${fail}`, failures: [fail], steps: 0, gates: 0 };
   }
-  const listing = [dry.stdout, dry.stderr].join(`
+  const listing = [dry.stdout, dry.stderr].filter(Boolean).join(`
 `);
-  const parsed = parseDryRun(listing);
+  const parsed = capability.json ? parseDryRunJson(listing) : parseDryRun(listing);
+  if (!parsed || !capability.json && parsed.steps.length === 0 && parsed.gates.length === 0) {
+    return { ok: false, text: `FAIL ${UNRECOGNISED_POUR_OUTPUT}`, failures: [UNRECOGNISED_POUR_OUTPUT], steps: 0, gates: 0 };
+  }
   const body = bodySteps(parsed.steps);
   if (body.length === 0)
     failures.push("pour --dry-run returned no recognized body steps; cannot verify this formula");
@@ -771,6 +823,8 @@ export {
   formulaCheckTool as default,
   gateTypeFailures,
   parseDryRun,
+  parseDryRunJson,
+  parsePourHelp,
   runBd,
   setBdSpawnForTests,
   unsubstitutedFailures
