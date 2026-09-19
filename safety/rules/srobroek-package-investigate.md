@@ -1,7 +1,7 @@
 ---
 name: srobroek-package-investigate
 description: Before adding or changing a dependency, vet the package and prefer the package-manager CLI.
-condition: ["(?i)(?:^|[;|&])\\s*(?:(?:(?:pnpm|npm|bun|yarn)\\s+(?:add|i|install)|uv\\s+add|pip3?\\s+install|poetry\\s+add|cargo\\s+add|go\\s+get|composer\\s+require|(?:pnpm|npm|bun|yarn)\\s+(?:search|view)|pip3?\\s+index|cargo\\s+search)\\s+(?:-{1,2}[A-Za-z][^\\s;|&<>()`$]*\\s+)*(?!-)[A-Za-z@./_~][^\\s;|&<>()`$]*(?:\\s+-{1,2}[A-Za-z][^\\s;|&<>()`$]*)*)"]
+condition: ["(?!)"]
 scope: "tool:bash"
 interruptMode: never
 ---
@@ -26,7 +26,7 @@ not fire, with or without flags (`--frozen-lockfile`, `--production=false`). An
 install that names a package still does, flags first or not (`npm i -D
 typescript`), as do every `add`/`require`/`get` form. Package-manager search and
 view commands also fire because they select a package to investigate. The
-matcher recognizes commands at the start of the shell string or after `;`, `|`,
-or `&`; excluding `(` avoids prose examples in quoted payloads. As with any
-regex over an entire shell string, nested quoting and heredoc syntax cannot be
-parsed perfectly; keep package examples in prose from looking command-like.
+Package-manager operations are recognized by the registered `package-investigate`
+extension, which tokenizes shell command positions and ignores quoted data and
+quoted heredoc bodies. The frontmatter condition is intentionally inert because
+rules cannot delegate matching to TypeScript.

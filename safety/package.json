@@ -6,7 +6,8 @@
     "extensions": [
       "./extensions/close-keywords.ts",
       "./extensions/quality-edit-advisory.ts",
-      "./extensions/quota-notice-resume.ts"
+      "./extensions/quota-notice-resume.ts",
+      "./extensions/package-investigate.ts"
     ]
   },
   "version": "0.6.5",
