@@ -1244,7 +1244,14 @@ function setBdStreamForTests(fn) {
 }
 async function runBdResult(cwd, args, deadline = Date.now() + TIMEOUT_MS, env = process.env) {
   const stream = injectedStream;
-  const execute = () => stream === null ? spawnBd(cwd, args, deadline, env) : stream(cwd, args, deadline, env).then((output) => output === undefined ? { failure: "bd command could not be run" } : { output });
+  const execute = async () => {
+    if (stream === null)
+      return spawnBd(cwd, args, deadline, env);
+    const result = await stream(cwd, args, deadline, env);
+    if (result === undefined)
+      return { failure: "bd command could not be run" };
+    return typeof result === "string" ? { output: result } : result;
+  };
   if (writesStore(invocationFromArgv(args))) {
     const locked = await withEmbeddedWriteLock(cwd, `beads-session-run-${process.pid}-${internalRuns++}`, execute, env);
     return locked.kind === "failed" ? { failure: boundedFailure(locked.reason) } : locked.value;
