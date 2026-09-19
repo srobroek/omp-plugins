@@ -103,6 +103,18 @@ const READ_ONLY_TOOLS: Record<string, true> = {
 	sniff_read_report_artifact: true,
 	version_gap_scan: true,
 };
+const LEDGER_TOOLS: Record<string, true> = {
+	orc_bind: true,
+	orc_claim: true,
+	orc_status: true,
+	orc_decide: true,
+	orc_finish: true,
+	orc_release: true,
+	orc_conflict_probe: true,
+	orc_bot_review_probe: true,
+	orc_bot_review_request: true,
+	orc_review_round_policy: true,
+};
 
 /**
  * Tools whose approval depends on their arguments: reading in one mode, mutating
@@ -1119,13 +1131,11 @@ export function bootstrapAllowed(command: string): boolean {
 	const tokens = commandTokens(command);
 	if (tokens === null) return false;
 	let segment: string[] = [];
-	let found = false;
 	const finish = (): boolean => {
 		if (segment.length === 0) return true;
 		const kind = invocationKind(segment);
 		segment = [];
 		if (kind === "allowed") {
-			found = true;
 			return true;
 		}
 		return kind === "safe";
@@ -1213,7 +1223,9 @@ export function decideWorktreeCall(
 	sessionCwd: string,
 	topology: GateTopology = defaultTopology(sessionCwd),
 ): GateRefusal | undefined {
-    if (READ_ONLY_TOOLS[toolName] === true || readsOnlyInThisMode(toolName, input)) return undefined;
+	const ledgerInput = asRecord(input);
+	if (READ_ONLY_TOOLS[toolName] === true || readsOnlyInThisMode(toolName, input)) return undefined;
+	if (LEDGER_TOOLS[toolName] === true && ledgerInput !== null && typeof ledgerInput.cwd === "string" && Object.keys(ledgerInput).every(key => key === "cwd" || PATH_KEYS[key] !== true)) return undefined;
 	const session = topology.session;
 	const uncertainty = session.uncertainty ?? null;
 	if (uncertainty !== null) return { block: true, reason: topologyRefusal(uncertainty) };
