@@ -1,3 +1,4 @@
+import pkg from "../package.json" with { type: "json" };
 /**
  * Refuse a mutation whose target is not physically inside a linked worktree of
  * this project.
@@ -44,6 +45,9 @@ import {
 import { unwrapHashlineHeaderPath } from "@oh-my-pi/pi-coding-agent/tools/plan-mode-guard";
 import { editInspect } from "@oh-my-pi/pi-natives";
 import { shellQuoteBalanced, tokenizeShell } from "./shell-tokenizer.ts";
+
+const WORKTRUNK_PRESENT = Symbol.for("com.srobroek.worktrunk.present.v1");
+(globalThis as Record<symbol, unknown>)[WORKTRUNK_PRESENT] = { version: pkg.version };
 
 /** Refusal shape the `tool_call` gate API understands. */
 export interface GateRefusal {
