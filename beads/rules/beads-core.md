@@ -1,6 +1,6 @@
 ---
 name: beads-core
-description: "Core bd contract: claiming, field taxonomy, routing, dependencies, sync authority, JSONL-over-git fallback, and database maintenance. Read when tracking work in a repo with .beads/."
+description: "Core bd contract: claiming, field taxonomy, routing, dependencies, and database maintenance. Read when tracking work in a repo with .beads/."
 ---
 
 # Beads (bd)
@@ -100,21 +100,11 @@ MUST Parsers set `BD_JSON_ENVELOPE=1` and read `.data`/`.error` plus
   `schema_version`; ad hoc readers may use bare `--json`.
 DEFAULT Non-interactive contexts export `BD_NO_PAGER=1 BD_NON_INTERACTIVE=1`.
 
-SYNC AUTHORITY
-DEFAULT Do not routinely pull a local store; use one authority-aware push at
-  orchestrator handoff. Cross-machine work uses one pull before fan-out and one
-  push after durable updates at handoff.
-MUST Prefer native `bd dolt pull`/`push`. These move the Dolt database, while
-  `bd github` mirrors issues to GitHub and is a separate authority.
-MUST Treat `issues.jsonl` as a fallback only where native Dolt sync cannot run;
-  it carries issue rows, not Dolt branches, history, or other tables.
-MUST Configure JSONL-over-git with `custom.jsonl-git-sync`, commit
-  `.beads/issues.jsonl merge=union` in `.gitattributes`, and verify it is not
-  ignored. Repository hooks or the agent own the commit.
-NOT Use `bd import` as routine synchronization. Import is a restore operation;
-  deliberate restores must name the snapshot and why it is authoritative.
-MUST When authority is absent, record pending sync and report the exact command
-  instead of running it. Lifecycle hooks must not pull or push.
+SYNC CADENCE
+See [Dolt synchronization cadence]rule://beads-dolt-sync-cadence for the required pull-before-work and push-after-delivery cadence and embedded-store constraints.
+MUST Prefer native `bd dolt pull`/`push`; `bd github` mirrors issues to GitHub and is a separate authority.
+NOT Use `bd import` as routine synchronization. Import is a restore operation; deliberate restores must name the snapshot and why it is authoritative.
+MUST When authority is absent, record pending sync and report the exact command instead of running it. Lifecycle hooks must not pull or push.
 
 MAINTENANCE
 DEFAULT Probe with `bd flatten --dry-run --json`, then escalate only with human

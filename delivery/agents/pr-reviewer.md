@@ -1,6 +1,6 @@
 ---
 name: pr-reviewer
-description: Reviews pull requests for code quality, security, correctness, and coverage. Read-only; returns a verdict.
+description: Reviews a GitHub pull request diff for code quality, security, correctness, and coverage. Read-only; returns a verdict. Not for Beads run nodes.
 model: "@reviewer"
 thinking-level: high
 tools: read, grep, glob, web_search, github, lsp
