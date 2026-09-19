@@ -56,7 +56,6 @@ OMP walks the sibling `rules/` and `agents/` roots of an extension package it re
 nothing else. Recognition comes from a `package.json` carrying an `omp` key. The key may be empty
 for a plugin that ships no extension modules: it is a marker, not a payload.
 `scripts/sync-plugin-manifests.py` writes it for every plugin, so run that script after adding one.
-
 A marketplace install copies the whole plugin directory, `package.json` included, which is why the
 recognition condition decides both carriers rather than the carrier deciding it.
 
@@ -81,6 +80,10 @@ omp -p 'read rule://beads-core'
 
 A rule from an uninstalled plugin answers `No such rule` and lists the rules that did load,
 which is the same evidence in the negative.
+
+## Developer tools
+
+Run `mise install` after cloning or creating a worktree. Mise installs the pinned `slopvac` and `biome` tools used by local checks.
 
 ## Developer hook setup
 
