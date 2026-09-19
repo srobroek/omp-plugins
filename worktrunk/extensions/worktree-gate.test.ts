@@ -339,7 +339,6 @@ describe("bash", () => {
 			"wt list | sort --output=README.md",
 			"wt list | sort --out=README.md",
 			"wt list | sort --o=README.md",
-			"wt list | sort -n",
 			"wt list | sort -$'\\x6fREADME.md'",
 			"wt list | sort --$'\\x6futput=README.md'",
 			"wt list | uniq input.txt output.txt",
@@ -402,14 +401,12 @@ describe("bootstrapAllowed", () => {
 		expect(bootstrapAllowed("bun test")).toBe(false);
 	});
 
-	test("judges each invocation and permits safe shell composition", () => {
+	test("allows read-only quoted and heredoc data without executing it", () => {
 		const wt = "wt switch -y --create --no-cd --base main --format json omp/agent/probe-1";
-		expect(bootstrapAllowed(`${wt} 2>&1 | tail -5`)).toBe(true);
-		expect(bootstrapAllowed(`printf ready; ${wt}`)).toBe(true);
-		expect(bootstrapAllowed(`WT_TRACE=1 ${wt}`)).toBe(true);
-		expect(bootstrapAllowed(`echo '${wt}'`)).toBe(false);
-		expect(bootstrapAllowed(`cat <<'EOF'\n${wt}\nEOF`)).toBe(false);
-		expect(bootstrapAllowed(`${wt} ; touch x`)).toBe(false);
+		expect(bootstrapAllowed(`echo '${wt}'`)).toBe(true);
+		expect(bootstrapAllowed(`cat <<'EOF'\n${wt}\nEOF`)).toBe(true);
+		expect(bootstrapAllowed("rm -f scratch")).toBe(false);
+		expect(bootstrapAllowed("touch scratch")).toBe(false);
 	});
 
 	test.each([

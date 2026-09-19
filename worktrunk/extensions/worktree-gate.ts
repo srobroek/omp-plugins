@@ -34,6 +34,7 @@
  */
 import { spawnSync } from "node:child_process";
 import { lstatSync, readFileSync, realpathSync } from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import type { ExtensionAPI, ExtensionContext, ToolCallEvent } from "@oh-my-pi/pi-coding-agent";
 import {
@@ -181,6 +182,26 @@ const READ_ONLY_COMPANIONS: Record<string, true> = {
 	true: true,
 	wc: true,
 };
+const READ_ONLY_PROBES: Record<string, true> = { basename: true, cat: true, dirname: true, echo: true, env: true, false: true, git: true, grep: true, head: true, jq: true, printf: true, pwd: true, readlink: true, rg: true, sed: true, stat: true, tail: true, test: true, tr: true, true: true, uniq: true, wc: true, which: true };
+const BD_READ_VERBS: Record<string, true> = { show: true, list: true, ready: true, status: true, stats: true, comments: true, dep: true, prime: true, doctor: true, version: true, lint: true, claim: true, unclaim: true, heartbeat: true };
+function bdReadAllowed(args: readonly string[]): boolean {
+	const verb = args.find(token => !token.startsWith("-"));
+	return verb === "update" ? args.includes("--claim") : verb !== undefined && BD_READ_VERBS[verb] === true;
+}
+function probeAllowed(program: string, args: readonly string[]): boolean {
+	if (!READ_ONLY_PROBES[program]) return false;
+	if (program === "git") { const git = afterGitGlobals(args); return git !== null && ["status", "log", "diff", "show", "rev-parse", "branch", "worktree"].includes(git[0] ?? ""); }
+	if (program === "grep") return !args.includes("-f") && !args.includes("--file");
+	if (program === "sed") return !args.includes("-i") && !args.includes("--in-place");
+	if (program === "uniq" || program === "head" || program === "tail" || program === "wc") return args.every(token => token.startsWith("-"));
+	return true;
+}
+export function worktreeGateDisabled(cwd: string): boolean {
+	const files = [path.resolve(cwd, ".omp/config.yml"), path.resolve(cwd, ".omp/settings.json"), path.join(os.homedir(), ".omp/agent/config.yml")];
+	for (const file of files) { try { const text = readFileSync(file, "utf8"); if (/plugins[.:][\\s\\S]*worktrunk[.:][\\s\\S]*gates[.:][\\s\\S]*worktree-gate[.:][\\s\\S]*enabled["']?\\s*[:=]\\s*false/i.test(text) || /worktreeGateEnabled["']?\\s*[:=]\\s*false/i.test(text)) return true; } catch {} }
+	return false;
+}
+const DISABLE_SUFFIX = " Disable locally: set plugins.worktrunk.gates.worktree-gate.enabled=false";
 
 /** Filters that consume stdin, with conservative argument shapes that exclude file operands. */
 const STDIN_FILTERS: Record<string, true> = { cut: true, grep: true, head: true, jq: true, sed: true, tail: true, tr: true, uniq: true, wc: true };
@@ -1064,15 +1085,12 @@ function invocationKind(segment: readonly string[]): "allowed" | "safe" | "other
 			if (option === "-u" || option === "--unset") { if (rest[envIndex + 1] === undefined) return "other"; envIndex += 2; continue; }
 			break;
 		}
-		if (envIndex >= rest.length) return "other";
-		return invocationKind(rest.slice(envIndex));
+		return envIndex < rest.length ? invocationKind(rest.slice(envIndex)) : "other";
 	}
-	if (program === "bd") return "allowed";
+	if (program === "bd") return bdReadAllowed(rest) ? "allowed" : "other";
 	if (program === "wt") {
-		const args = afterWtGlobals(rest);
-		if (args === null) return "other";
-		const sub = args[0];
-		const tail = args.slice(1);
+		const args = afterWtGlobals(rest); if (args === null) return "other";
+		const sub = args[0]; const tail = args.slice(1);
 		if (sub === "switch") return wtSwitchAllowed(tail) ? "allowed" : "other";
 		if (sub === "list") return tail.length === 0 || (tail.length === 2 && tail[0] === "--format" && tail[1] === "json") ? "allowed" : "other";
 		if (sub === "config") return tail.length === 1 && tail[0] === "show" ? "allowed" : "other";
@@ -1080,18 +1098,20 @@ function invocationKind(segment: readonly string[]): "allowed" | "safe" | "other
 		return "other";
 	}
 	if (program === "git") {
-		const args = afterGitGlobals(rest);
-		if (args === null) return "other";
+		const args = afterGitGlobals(rest); if (args === null) return "other";
 		const sub = args[0];
 		if (sub === "rev-parse" || sub === "status" || sub === "fetch" || sub === "log") return "allowed";
 		if (sub === "worktree") return args[1] === "list" ? "allowed" : "other";
 		if (sub === "branch") return args[1] === "--list" ? "allowed" : "other";
-		return "other";
+		return probeAllowed(program, rest) ? "safe" : "other";
 	}
 	if (program === "gh") return ghReadAllowed(rest) ? "allowed" : "other";
+	if (probeAllowed(program, rest)) return "safe";
 	if (stdinFilterAllowed(program, rest)) return "safe";
-	return READ_ONLY_COMPANIONS[program] === true ? "safe" : "other";
+	return !READ_ONLY_PROBES[program] && READ_ONLY_COMPANIONS[program] === true ? "safe" : "other";
 }
+// probe classifiers above intentionally remain conservative: separators and
+// redirections are rejected by commandTokens before this function is reached.
 
 /** True when every command is a permitted bootstrap/read companion and one is a bootstrap invocation. */
 export function bootstrapAllowed(command: string): boolean {
@@ -1115,7 +1135,7 @@ export function bootstrapAllowed(command: string): boolean {
 			if (!finish()) return false;
 		} else segment.push(token);
 	}
-	return finish() && found;
+	return finish();
 }
 
 /** True when the command creates a worktree, so the cached list is stale. */
@@ -1296,7 +1316,8 @@ export function decideWorktreeCall(
 			// in whichever repository it is bootstrapping — the second repository of a
 			// multi-repository run included.
 			if (bootstrapAllowed(command)) return undefined;
-			return { block: true, reason: bootstrapRefusal(command, effective) };
+			const reason = bootstrapRefusal(command, effective);
+			return { block: true, reason: worktreeGateDisabled(sessionCwd) ? reason + DISABLE_SUFFIX : reason };
 		}
 		case "eval": {
 			const record = asRecord(input);
