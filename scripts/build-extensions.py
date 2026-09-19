@@ -16,6 +16,7 @@ and the release workflow runs the write mode.
 from __future__ import annotations
 
 import argparse
+import os
 import hashlib
 import json
 import shutil
@@ -24,6 +25,19 @@ import sys
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
+
+
+def comparable_bundle(path: Path, root: Path) -> bytes:
+	"""Ignore absolute and plugin-relative roots Bun embeds for sh-syntax's WASM fallback."""
+	data = path.read_bytes()
+	for prefix in {str(root), os.path.realpath(root)}:
+		data = data.replace(prefix.encode(), b"<omp-plugin-root>")
+	# Bun labels modules relative to the cwd used for the build. Write-mode builds
+	# from the plugin root (`extensions/...`), while check-mode's temporary copy
+	# can retain the plugin directory (`beads/extensions/...`). The labels carry no
+	# runtime meaning, so compare them independent of that cwd spelling.
+	data = data.replace(f"// {root.name}/".encode(), b"// ")
+	return data
 REPO = Path(__file__).resolve().parent.parent
 
 
@@ -125,7 +139,7 @@ def bundle(plugin: Path, write: bool) -> list[str]:
             elif not write:
                 if not committed.is_file():
                     problems.append(f"{committed}: missing; run scripts/build-extensions.py")
-                elif hashlib.sha256(committed.read_bytes()).digest() != hashlib.sha256(fresh.read_bytes()).digest():
+                elif comparable_bundle(committed, plugin) != comparable_bundle(fresh, working):
                     problems.append(f"{committed}: stale; run scripts/build-extensions.py")
     return problems
 
