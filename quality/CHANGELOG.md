@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.1.4](https://github.com/srobroek/omp-plugins/compare/quality--v1.1.3...quality--v1.1.4) (2026-09-19)
+
+
+### Documentation
+
+* **delivery:** align review loop limits ([#405](https://github.com/srobroek/omp-plugins/issues/405)) ([5cd2b7b](https://github.com/srobroek/omp-plugins/commit/5cd2b7b2589aa27edc1d0c549a7f533171b672a4))
+* trim duplicated steering contracts ([#413](https://github.com/srobroek/omp-plugins/issues/413)) ([2176376](https://github.com/srobroek/omp-plugins/commit/2176376e4968fed8879409085a9973bf95bb77b8))
+
 ## [1.1.3](https://github.com/srobroek/omp-plugins/compare/quality--v1.1.2...quality--v1.1.3) (2026-09-13)
 
 

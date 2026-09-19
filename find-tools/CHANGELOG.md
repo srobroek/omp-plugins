@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.4](https://github.com/srobroek/omp-plugins/compare/find-tools--v1.0.3...find-tools--v1.0.4) (2026-09-19)
+
+
+### Documentation
+
+* **delivery:** align review loop limits ([#405](https://github.com/srobroek/omp-plugins/issues/405)) ([5cd2b7b](https://github.com/srobroek/omp-plugins/commit/5cd2b7b2589aa27edc1d0c549a7f533171b672a4))
+
 ## [1.0.3](https://github.com/srobroek/omp-plugins/compare/find-tools--v1.0.2...find-tools--v1.0.3) (2026-09-14)
 
 

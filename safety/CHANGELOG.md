@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.6.7](https://github.com/srobroek/omp-plugins/compare/safety--v0.6.6...safety--v0.6.7) (2026-09-19)
+
+
+### Bug Fixes
+
+* **plugins:** harden security-sensitive extensions ([#416](https://github.com/srobroek/omp-plugins/issues/416)) ([b7837ef](https://github.com/srobroek/omp-plugins/commit/b7837ef55c334293a1381d66fb52d207226aa694))
+* **safety:** investigate package operations inside subshells ([#424](https://github.com/srobroek/omp-plugins/issues/424)) ([d099477](https://github.com/srobroek/omp-plugins/commit/d099477c9a805b1e7791ac1534d42b3291cec049))
+
+
+### Documentation
+
+* **delivery:** align review loop limits ([#405](https://github.com/srobroek/omp-plugins/issues/405)) ([5cd2b7b](https://github.com/srobroek/omp-plugins/commit/5cd2b7b2589aa27edc1d0c549a7f533171b672a4))
+
 ## [0.6.6](https://github.com/srobroek/omp-plugins/compare/safety--v0.6.5...safety--v0.6.6) (2026-09-19)
 
 

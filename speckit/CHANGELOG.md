@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.7.4](https://github.com/srobroek/omp-plugins/compare/speckit--v0.7.3...speckit--v0.7.4) (2026-09-19)
+
+
+### Refactors
+
+* **beads:** remove Dolt server steering; document embedded store ([#409](https://github.com/srobroek/omp-plugins/issues/409)) ([5aa3e39](https://github.com/srobroek/omp-plugins/commit/5aa3e398cf8520bd4bc40c40e27ac7d2f4248983))
+* merge topic plugins into toolchain ([#412](https://github.com/srobroek/omp-plugins/issues/412)) ([a18a685](https://github.com/srobroek/omp-plugins/commit/a18a685d7195d20f63955198ab0f9de0edd57c96))
+
+
+### Documentation
+
+* **delivery:** align review loop limits ([#405](https://github.com/srobroek/omp-plugins/issues/405)) ([5cd2b7b](https://github.com/srobroek/omp-plugins/commit/5cd2b7b2589aa27edc1d0c549a7f533171b672a4))
+* trim duplicated steering contracts ([#413](https://github.com/srobroek/omp-plugins/issues/413)) ([2176376](https://github.com/srobroek/omp-plugins/commit/2176376e4968fed8879409085a9973bf95bb77b8))
+
 ## [0.7.3](https://github.com/srobroek/omp-plugins/compare/speckit--v0.7.2...speckit--v0.7.3) (2026-09-19)
 
 

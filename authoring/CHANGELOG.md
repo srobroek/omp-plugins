@@ -1,5 +1,23 @@
 # Changelog
 
+## [2.0.5](https://github.com/srobroek/omp-plugins/compare/authoring--v2.0.4...authoring--v2.0.5) (2026-09-19)
+
+
+### Bug Fixes
+
+* bound agentic lint traversal ([#414](https://github.com/srobroek/omp-plugins/issues/414)) ([edb9156](https://github.com/srobroek/omp-plugins/commit/edb91562ff82e0b59d119e22a32890231b301cc6))
+
+
+### Refactors
+
+* **steering:** centralize precedence; retire delivery and delegation rules ([#408](https://github.com/srobroek/omp-plugins/issues/408)) ([5aaead3](https://github.com/srobroek/omp-plugins/commit/5aaead3483be6818c681dc8749327388b428d9a1))
+
+
+### Documentation
+
+* **delivery:** align review loop limits ([#405](https://github.com/srobroek/omp-plugins/issues/405)) ([5cd2b7b](https://github.com/srobroek/omp-plugins/commit/5cd2b7b2589aa27edc1d0c549a7f533171b672a4))
+* trim duplicated steering contracts ([#413](https://github.com/srobroek/omp-plugins/issues/413)) ([2176376](https://github.com/srobroek/omp-plugins/commit/2176376e4968fed8879409085a9973bf95bb77b8))
+
 ## [2.0.4](https://github.com/srobroek/omp-plugins/compare/authoring--v2.0.3...authoring--v2.0.4) (2026-09-17)
 
 

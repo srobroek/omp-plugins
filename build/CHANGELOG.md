@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.6.2](https://github.com/srobroek/omp-plugins/compare/build--v0.6.1...build--v0.6.2) (2026-09-19)
+
+
+### Refactors
+
+* **steering:** centralize precedence; retire delivery and delegation rules ([#408](https://github.com/srobroek/omp-plugins/issues/408)) ([5aaead3](https://github.com/srobroek/omp-plugins/commit/5aaead3483be6818c681dc8749327388b428d9a1))
+
+
+### Documentation
+
+* **delivery:** align review loop limits ([#405](https://github.com/srobroek/omp-plugins/issues/405)) ([5cd2b7b](https://github.com/srobroek/omp-plugins/commit/5cd2b7b2589aa27edc1d0c549a7f533171b672a4))
+
 ## [0.6.1](https://github.com/srobroek/omp-plugins/compare/build--v0.6.0...build--v0.6.1) (2026-09-16)
 
 
