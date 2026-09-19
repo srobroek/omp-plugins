@@ -187,7 +187,7 @@ jobs:
           "$RUNNER_TEMP/vale/vale" --version
 
       - name: Prose checker failure contracts
-        run: uvx --from slopvac==1.0.1 python scripts/check-prose-gate.py
+        run: uvx --from slopvac==2.3.2 python scripts/check-prose-gate.py
 
       - name: Prose gate
-        run: uvx --from slopvac==1.0.1 python scripts/prose-gate.py README.md --profile normal
+        run: uvx --from slopvac==2.3.2 python scripts/prose-gate.py README.md --profile normal

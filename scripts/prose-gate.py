@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run slopvac 1.0.1 with Unicode-safe Vale patterns and fail-closed coverage."""
+"""Run slopvac 2.3.2 with Unicode-safe Vale patterns and fail-closed coverage."""
 
 from __future__ import annotations
 
@@ -14,7 +14,7 @@ from importlib.metadata import version
 from types import SimpleNamespace
 from unittest.mock import patch
 
-SUPPORTED_VERSION = "1.0.1"
+SUPPORTED_VERSION = "2.3.2"
 PATTERNS = {
     "prose-format.emoji-heading": r"[\U0001F300-\U0001FAFF☀-➿⬀-⯿️]",
     "ai-tells-formatting.emoji-list-markers": (

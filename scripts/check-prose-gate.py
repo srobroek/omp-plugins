@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run with: uvx --from slopvac==1.0.1 python scripts/check-prose-gate.py."""
+"""Run with: uvx --from slopvac==2.3.2 python scripts/check-prose-gate.py."""
 
 from __future__ import annotations
 from types import SimpleNamespace

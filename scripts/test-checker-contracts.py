@@ -367,5 +367,25 @@ class CheckerContracts(unittest.TestCase):
         self.assertIn("tools", result.stderr)
         agent.write_text(valid_agent)
 
+    def test_duplicate_names_detects_agents_in_temp_root(self) -> None:
+        self.copy_script("check-duplicate-names.py")
+        for plugin in ("first", "second"):
+            agent = self.root / plugin / "agents" / "worker.md"
+            agent.parent.mkdir(parents=True)
+            agent.write_text("---\nname: shared-agent\n---\n", encoding="utf-8")
+        result = self.run_script("check-duplicate-names.py", "--root", "first", "--root", "second")
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertIn("collision: agent 'shared-agent' declared 2 times", result.stdout)
+
+    def test_duplicate_names_detects_tools_from_direct_root(self) -> None:
+        self.copy_script("check-duplicate-names.py")
+        for plugin in ("first", "second"):
+            tools = self.root / plugin / "src" / "tools"
+            tools.mkdir(parents=True)
+            (tools / "first.ts").write_text('export const tool = { name: "shared_tool" };\n', encoding="utf-8")
+        result = self.run_script("check-duplicate-names.py", "--root", str(self.root / "first"), "--root", str(self.root / "second"))
+        self.assertEqual(result.returncode, 1, result.stdout)
+        self.assertIn("collision: tools 'shared_tool' declared 2 times", result.stdout)
+
 if __name__ == "__main__":
     unittest.main()
