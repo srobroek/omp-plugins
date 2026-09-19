@@ -15,6 +15,9 @@ describe("package investigation", () => {
 		"npm search typescript",
 		"pip index versions requests",
 		"cargo search serde",
+		"(bun add left-pad)",
+		"$(npm i -D typescript)",
+		"cd x; (pip install requests)",
 	]) {
 		test(`fires: ${command}`, () => expect(shouldInvestigate(command)).toBe(true));
 	}
@@ -28,6 +31,8 @@ describe("package investigation", () => {
 		"pnpm install --frozen-lockfile",
 		"npm install",
 		"cat <<'EOF'\nbun add foo\nEOF",
+		"toString bun add left-pad",
+		"constructor npm i -D typescript",
 	]) {
 		test(`silent: ${command}`, () => expect(shouldInvestigate(command)).toBe(false));
 	}
