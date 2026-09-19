@@ -16,9 +16,19 @@ const repo = resolve(process.env.OMP_SMOKE_REPO ?? join(import.meta.dir, ".."));
 // the dependency bot moves the smoke host and the development pins in one commit instead of
 // leaving this smoke to certify a host nobody develops against.
 const VERSION: string = (await json(join(repo, "package.json"))).devDependencies["@oh-my-pi/pi-coding-agent"];
-// Published checkout plugins (`./` catalog sources) come from the marketplace catalog.
 const catalog = await json(join(repo, ".omp-plugin/marketplace.json"));
-const EXPECTED_PLUGINS = (catalog.plugins as CatalogEntry[]).filter((entry) => entry.source.startsWith("./")).length;
+const entries: CatalogEntry[] = (catalog.plugins as CatalogEntry[]).filter((entry) => typeof entry.source === "string" && entry.source.startsWith("./"));
+const profileArg = process.argv.indexOf("--profile");
+if (profileArg >= 0) {
+  const profilePath = process.argv[profileArg + 1];
+  check(profilePath, "--profile requires a TOML path");
+  const profile = await readFile(resolve(repo, profilePath), "utf8");
+  const match = /plugins\s*=\s*\[([^\]]*)\]/s.exec(profile);
+  check(match, `${profilePath}: missing marketplaces.plugins list`);
+  const profileNames = [...match[1].matchAll(/"([^"\\]*(?:\\.[^"\\]*)*)"/g)].map((m) => JSON.parse(`"${m[1]}"`));
+  same(profileNames, entries.map((entry) => entry.name), `${profilePath} local plugin profile`);
+}
+const EXPECTED_PLUGINS = entries.length;
 const started = performance.now();
 const timeoutMs = Number(process.env.OMP_SMOKE_TIMEOUT_MS ?? 600_000);
 const host = process.env.OMP_HOST_ROOT;
