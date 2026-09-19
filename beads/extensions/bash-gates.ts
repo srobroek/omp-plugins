@@ -6,7 +6,7 @@ import { decideBdInitParsed } from "./bd-init-advisory.ts";
 import { decideLeaseClaim } from "./bd-lease-gate.ts";
 import { beadsActive, decideCommandParsed, repositoryControlled, repositoryFromCurrentCheckout, repositoryFromGhCreate } from "./pr-bead-link-gate.ts";
 import { rewriteBashInput } from "./session-beads-lifecycle.ts";
-import { blockReason, commandFromInput, type ParsedCommand, parseCommand, settingsEnabled } from "./shell-command.ts";
+import { blockReason, commandFromInput, type ParsedCommand, parse, settingsEnabled } from "./shell-command.ts";
 
 type BashInput = { command?: unknown; cmd?: unknown; cwd?: unknown };
 type GateDecision = { block: true; reason: string } | undefined;
@@ -62,7 +62,7 @@ export default function bashGates(pi: ExtensionAPI): void {
 			if (event.toolName !== "bash") return;
 			const { command } = inputOf(event, ctx);
 			if (!command) return;
-			return await decide(await parseCommand(command), event, ctx, pi);
+			return await decide(parse(command), event, ctx, pi);
 		} catch (error) {
 			return suffix("bash-gates", `command could not be parsed (${error instanceof Error ? error.message : String(error)})`, "split the command or run the mutation as a plain single command");
 		}

@@ -8,7 +8,7 @@ import bdEmbeddedWriteLock, { decideEmbeddedWrite, embeddedStores, embeddedWrite
 import bdLeaseGate, { setBdRunForTests } from "./bd-lease-gate.ts";
 import { cookCheck, deepAssert, type SpawnResult, setBdSpawnForTests } from "./formula-check-tool.ts";
 import { runBd, setBdStreamForTests } from "./session-beads-lifecycle.ts";
-import { parseCommand } from "./shell-command.ts";
+import { parse } from "./shell-command.ts";
 
 const LOCK = "omp-embedded-write.lock";
 const HOST = hostname().split(".")[0] ?? "localhost";
@@ -175,7 +175,7 @@ describe("a call that never executes cannot strand its hold", () => {
 		registered.tool_call = [async (event, context = {}) => {
 			const input = event && typeof event === "object" && "input" in event && event.input && typeof event.input === "object" ? event.input : {};
 			const command = "command" in input && typeof input.command === "string" ? input.command : "";
-			return decideEmbeddedWrite(await parseCommand(command), event as never, context as never);
+			return decideEmbeddedWrite(parse(command), event as never, context as never);
 		}];
 		return registered;
 	}

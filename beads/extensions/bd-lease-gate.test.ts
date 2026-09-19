@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 
 import bdLeaseGate, { anchorArgs, claimedIds, decideLeaseClaim, setBdRunForTests } from "./bd-lease-gate.ts";
-import { parseCommand } from "./shell-command.ts";
+import { parse } from "./shell-command.ts";
 
 /** Shapes bd 1.1.2 prints for a claim, envelope and plain. */
 const ENVELOPE = '{"data":[{"id":"omp-plugins-dd1","status":"in_progress","assignee":"omp/Main/01a08b2b"}]}';
@@ -61,7 +61,7 @@ function handlers(): { toolCall: Handler; toolResult: Handler } {
 	if (toolResult === undefined) throw new Error("lease gate tool_result handler was not registered");
 	const toolCall: Handler = async (event, context = { cwd: "/session/repo" }) => {
 		const command = (event as { input?: { command?: string } }).input?.command ?? "";
-		return decideLeaseClaim(await parseCommand(command), event as never, context as never);
+		return decideLeaseClaim(parse(command), event as never, context as never);
 	};
 	return { toolCall, toolResult };
 }

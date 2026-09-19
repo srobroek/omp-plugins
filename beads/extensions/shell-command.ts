@@ -1,6 +1,5 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { LangVariant, parse as parseShSyntax } from "sh-syntax";
 import { shellQuoteBalanced, tokenizeShell } from "./shell-tokenizer.ts";
 
 /** A token in a command-position argv. Quoted words are data, not executable names. */
@@ -240,17 +239,6 @@ export function parse(command: string): ParsedCommand | ParseFailure {
 	return staticParse(command);
 }
 
-/** Validate shell grammar with mvdan/sh before dispatching any gate. */
-export async function parseCommand(command: string): Promise<ParsedCommand | ParseFailure> {
-	const parsed = staticParse(command);
-	if (parsed.unknown || "kind" in parsed) return parsed;
-	try {
-		await parseShSyntax(command, { variant: LangVariant.LangBash });
-	} catch (error) {
-		return { ...parsed, kind: "parse-failure", reason: error instanceof Error ? error.message : String(error), unknown: true };
-	}
-	return parsed;
-}
 
 function commandClass(position: CommandPosition): CommandClass {
 	const executable = position.executable;

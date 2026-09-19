@@ -16,7 +16,6 @@ and the release workflow runs the write mode.
 from __future__ import annotations
 
 import argparse
-import os
 import hashlib
 import json
 import shutil
@@ -25,19 +24,6 @@ import sys
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-
-
-def comparable_bundle(path: Path, root: Path) -> bytes:
-	"""Ignore absolute and plugin-relative roots Bun embeds for sh-syntax's WASM fallback."""
-	data = path.read_bytes()
-	for prefix in {str(root), os.path.realpath(root)}:
-		data = data.replace(prefix.encode(), b"<omp-plugin-root>")
-	# Bun labels modules relative to the cwd used for the build. Write-mode builds
-	# from the plugin root (`extensions/...`), while check-mode's temporary copy
-	# can retain the plugin directory (`beads/extensions/...`). The labels carry no
-	# runtime meaning, so compare them independent of that cwd spelling.
-	data = data.replace(f"// {root.name}/".encode(), b"// ")
-	return data
 REPO = Path(__file__).resolve().parent.parent
 
 
@@ -52,18 +38,21 @@ def plugins_with_deps(check: bool = False) -> list[Path]:
         dependencies = data.get("dependencies", {})
         if not isinstance(dependencies, dict):
             raise ValueError(f"{plugin}: dependencies must be an object")
-        declared = sources(plugin)
-        if check and dependencies:
+        declared = sources(plugin, require_bundles=check)
+        entries = data.get("omp", {}).get("extensions", []) if isinstance(data.get("omp"), dict) else []
+        explicit_dist = any(isinstance(entry, str) and Path(entry).parts[:1] == ("dist",) for entry in entries)
+        bundled = bool(dependencies) or explicit_dist
+        if check and bundled:
             for src in declared:
                 bundle_path = plugin / "dist" / f"{src.stem}.js"
                 if not bundle_path.is_file():
                     raise ValueError(f"{plugin}: missing bundle {bundle_path}")
-        if dependencies:
+        if bundled:
             found.append(plugin)
     return found
 
 
-def sources(plugin: Path) -> list[Path]:
+def sources(plugin: Path, require_bundles: bool = True) -> list[Path]:
     data = json.loads((plugin / "package.json").read_text(encoding="utf-8"))
     if not isinstance(data, dict):
         raise ValueError(f"{plugin}: package.json must be an object")
@@ -82,13 +71,11 @@ def sources(plugin: Path) -> list[Path]:
             or not path.stem
         ):
             raise ValueError(f"{plugin}: unsupported extension entry {entry!r}")
-        if data.get("dependencies") and path.parts[0] != "dist":
-            raise ValueError(f"{plugin}: dependency plugin extension {entry!r} must point to packaged dist/*.js")
+        if path.parts[0] == "dist" and require_bundles and not (plugin / path).is_file():
+            raise ValueError(f"{plugin}: missing bundle for {entry!r}")
         src = plugin / "extensions" / f"{path.stem}.ts"
         if not src.is_file():
             raise ValueError(f"{plugin}: missing source for {entry!r}: {src}")
-        if path.parts[0] == "dist" and not data.get("dependencies") and not (plugin / path).is_file():
-            raise ValueError(f"{plugin}: missing bundle for {entry!r}")
         if src in out:
             raise ValueError(f"{plugin}: duplicate extension source {src}")
         out.append(src)
@@ -97,7 +84,7 @@ def sources(plugin: Path) -> list[Path]:
 
 def bundle(plugin: Path, write: bool) -> list[str]:
     try:
-        declared = sources(plugin)
+        declared = sources(plugin, require_bundles=not write)
     except (ValueError, OSError) as err:
         return [str(err)]
     if not declared:
@@ -139,7 +126,7 @@ def bundle(plugin: Path, write: bool) -> list[str]:
             elif not write:
                 if not committed.is_file():
                     problems.append(f"{committed}: missing; run scripts/build-extensions.py")
-                elif comparable_bundle(committed, plugin) != comparable_bundle(fresh, working):
+                elif hashlib.sha256(committed.read_bytes()).digest() != hashlib.sha256(fresh.read_bytes()).digest():
                     problems.append(f"{committed}: stale; run scripts/build-extensions.py")
     return problems
 

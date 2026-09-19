@@ -183,108 +183,6 @@ function hereDocumentBody(command, from, document) {
 // extensions/shell-command.ts
 import { readFileSync } from "fs";
 import { resolve } from "path";
-
-// node_modules/sh-syntax/lib/index.js
-import fs from "fs/promises";
-import path from "path";
-import { fileURLToPath } from "url";
-
-// node_modules/sh-syntax/lib/shim.js
-import { randomFillSync } from "crypto";
-import _fs from "fs";
-import { performance } from "perf_hooks";
-globalThis.fs ??= _fs;
-globalThis.crypto ??= {
-  getRandomValues: randomFillSync
-};
-globalThis.performance ??= performance;
-
-// node_modules/sh-syntax/lib/types.js
-var LangVariant = {
-  LangBash: 1,
-  LangPOSIX: 1 << 1,
-  LangMirBSDKorn: 1 << 2,
-  LangBats: 1 << 3,
-  LangZsh: 1 << 4,
-  LangAuto: 1 << 5
-};
-
-// node_modules/sh-syntax/lib/processor.js
-class ParseError extends Error {
-  constructor({ Filename, Incomplete, Text, Pos }) {
-    super(Text);
-    this.Filename = Filename;
-    this.Incomplete = Incomplete;
-    this.Text = Text;
-    this.Pos = Pos;
-  }
-}
-var encoder;
-var decoder;
-var getProcessor = (getWasm) => {
-  let wasmBufferSource;
-  let wasmBufferSourcePromise;
-  encoder ??= new TextEncoder;
-  decoder ??= new TextDecoder;
-  async function processor(textOrAst, { filepath, print = false, originalText, keepComments = true, variant = LangVariant.LangBash, stopAt = "", recoverErrors = 0, useTabs = false, tabWidth = 2, indent = useTabs ? 0 : tabWidth, binaryNextLine = true, switchCaseIndent = true, spaceRedirects = true, keepPadding = false, minify = false, singleLine = false, functionNextLine = false } = {}) {
-    if (!wasmBufferSource && !wasmBufferSourcePromise && getWasm.length === 0) {
-      wasmBufferSourcePromise = Promise.resolve(getWasm()).then((source) => ("arrayBuffer" in source) ? source.arrayBuffer() : source);
-    }
-    if (wasmBufferSourcePromise) {
-      wasmBufferSource = await wasmBufferSourcePromise;
-    }
-    if (typeof textOrAst !== "string" && !print) {
-      print = true;
-      if (originalText == null) {
-        throw new TypeError("`originalText` is required for now, hope we will find better solution later");
-      }
-    }
-    const go = new Go;
-    const wasm = getWasm.length === 0 ? await WebAssembly.instantiate(wasmBufferSource, go.importObject) : {
-      instance: await getWasm(go.importObject)
-    };
-    go.run(wasm.instance);
-    const { memory, wasmAlloc, wasmFree, process: process2 } = wasm.instance.exports;
-    const filePath = encoder.encode(filepath);
-    const text = encoder.encode(originalText || textOrAst);
-    const uStopAt = encoder.encode(stopAt);
-    const filePathPointer = wasmAlloc(filePath.byteLength);
-    new Uint8Array(memory.buffer).set(filePath, filePathPointer);
-    const textPointer = wasmAlloc(text.byteLength);
-    new Uint8Array(memory.buffer).set(text, textPointer);
-    const stopAtPointer = wasmAlloc(uStopAt.byteLength);
-    new Uint8Array(memory.buffer).set(uStopAt, stopAtPointer);
-    const resultPointer = process2(filePathPointer, filePath.byteLength, filePath.byteLength, textPointer, text.byteLength, text.byteLength, print, keepComments, variant, stopAtPointer, uStopAt.byteLength, uStopAt.byteLength, recoverErrors, indent, binaryNextLine, switchCaseIndent, spaceRedirects, keepPadding, minify, singleLine, functionNextLine);
-    wasmFree(filePathPointer);
-    wasmFree(textPointer);
-    wasmFree(stopAtPointer);
-    const result = new Uint8Array(memory.buffer).subarray(resultPointer);
-    const end = result.indexOf(0);
-    const string = decoder.decode(result.subarray(0, end));
-    if (!string.startsWith('{"') || !string.endsWith("}")) {
-      throw new ParseError({
-        Filename: filepath,
-        Incomplete: true,
-        Text: string
-      });
-    }
-    const { file, text: processedText, parseError, message } = JSON.parse(string);
-    if (parseError || message) {
-      throw parseError == null ? new SyntaxError(message) : new ParseError(parseError);
-    }
-    return print ? processedText : file;
-  }
-  return processor;
-};
-
-// node_modules/sh-syntax/lib/index.js
-var __dirname = "/Users/sjors/tmp/worktrees/omp-plugins/omp-agent-shared-bash-parser/beads/node_modules/sh-syntax/lib";
-var importMetaUrl = import.meta.url;
-var _dirname = importMetaUrl ? path.dirname(fileURLToPath(importMetaUrl)) : __dirname;
-var processor2 = getProcessor(() => fs.readFile(path.resolve(_dirname, "../main.wasm")));
-var parse = (text, options) => processor2(text, options);
-
-// extensions/shell-command.ts
 var OPERATORS = { ";": true, "&&": true, "||": true, "&": true, "|": true, "\n": true, "(": true, ")": true, "{": true, "}": true };
 var WRAPPERS = {
   mise: true,
@@ -521,19 +419,8 @@ function staticParse(command) {
     nested: children
   };
 }
-function parse2(command) {
+function parse(command) {
   return staticParse(command);
-}
-async function parseCommand(command) {
-  const parsed = staticParse(command);
-  if (parsed.unknown || "kind" in parsed)
-    return parsed;
-  try {
-    await parse(command, { variant: LangVariant.LangBash });
-  } catch (error) {
-    return { ...parsed, kind: "parse-failure", reason: error instanceof Error ? error.message : String(error), unknown: true };
-  }
-  return parsed;
 }
 function commandFromInput(input) {
   if (!input || typeof input !== "object")
@@ -586,7 +473,7 @@ var CLOSE_VERBS = { close: true, done: true };
 var DB_VALUE_FLAGS = { "--db": true, "-C": true, "--directory": true };
 var VALUE_FLAGS = { "--reason": true, "-r": true, "--message": true, "--session": true, "--assignee": true, "--status": true, "--type": true };
 function closeInvocations(command) {
-  const parsed = parse2(command);
+  const parsed = parse(command);
   if (parsed.unknown)
     return [];
   const out = [];
@@ -1480,12 +1367,17 @@ function renewLease(lock, toolCallId, token) {
 }
 var activeHolds = new Map;
 function surrender(toolCallId) {
-  const stores = activeHolds.get(toolCallId);
-  if (stores === undefined)
+  const holds = activeHolds.get(toolCallId);
+  if (holds === undefined)
     return;
   activeHolds.delete(toolCallId);
-  for (const store of stores)
-    release(store, toolCallId);
+  for (const hold of holds) {
+    hold.released = true;
+    if (hold.held) {
+      release(hold.store, toolCallId);
+      hold.held = false;
+    }
+  }
 }
 async function decideEmbeddedWrite(parsed, event, ctx) {
   try {
@@ -1512,17 +1404,35 @@ async function decideEmbeddedWrite(parsed, event, ctx) {
     const unique = [...new Set(targets)];
     if (unique.length === 0)
       return;
-    const taken = [];
-    for (const store of unique) {
-      const got = await hold(store, event.toolCallId);
+    const pending = unique.map((store) => ({ store, held: false, released: false }));
+    const existing = activeHolds.get(event.toolCallId);
+    activeHolds.set(event.toolCallId, existing === undefined ? pending : [...existing, ...pending]);
+    for (const current of pending) {
+      const got = await hold(current.store, event.toolCallId);
       if (got.kind === "failed") {
-        for (const done of taken)
-          release(done, event.toolCallId);
+        for (const pendingHold of pending) {
+          pendingHold.released = true;
+          if (pendingHold.held) {
+            release(pendingHold.store, event.toolCallId);
+            pendingHold.held = false;
+          }
+        }
+        const active = activeHolds.get(event.toolCallId);
+        if (active !== undefined) {
+          const remaining = active.filter((activeHold) => !pending.includes(activeHold));
+          if (remaining.length === 0)
+            activeHolds.delete(event.toolCallId);
+          else
+            activeHolds.set(event.toolCallId, remaining);
+        }
         return { block: true, reason: got.reason };
       }
-      taken.push(store);
+      current.held = true;
+      if (current.released) {
+        release(current.store, event.toolCallId);
+        current.held = false;
+      }
     }
-    activeHolds.set(event.toolCallId, taken);
     ctx?.setTimeout?.(() => surrender(event.toolCallId), LEASE_MS);
   } catch {
     return { block: true, reason: "embedded write target could not be resolved" };
@@ -1531,7 +1441,7 @@ async function decideEmbeddedWrite(parsed, event, ctx) {
 }
 
 // extensions/bd-init-advisory.ts
-import path2 from "path";
+import path from "path";
 var PRE_VERB_VALUE_FLAGS = {
   "-C": true,
   "--db": true,
@@ -1565,11 +1475,11 @@ function followCd(current, target) {
     return process.env.HOME;
   if (target === "-" || target.includes("$") || target.startsWith("~"))
     return;
-  if (path2.isAbsolute(target))
-    return path2.normalize(target);
+  if (path.isAbsolute(target))
+    return path.normalize(target);
   if (current === undefined)
     return;
-  return path2.resolve(current, target);
+  return path.resolve(current, target);
 }
 function findInitInvocations(command, cwd = undefined) {
   const out = [];
@@ -2049,7 +1959,7 @@ function bashGates(pi) {
       const { command } = inputOf(event, ctx);
       if (!command)
         return;
-      return await decide(await parseCommand(command), event, ctx, pi);
+      return await decide(parse(command), event, ctx, pi);
     } catch (error) {
       return suffix("bash-gates", `command could not be parsed (${error instanceof Error ? error.message : String(error)})`, "split the command or run the mutation as a plain single command");
     }
