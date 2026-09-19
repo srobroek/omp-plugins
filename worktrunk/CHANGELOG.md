@@ -5,9 +5,9 @@
 
 ### ⚠ BREAKING CHANGES
 
-* **beads:** remove Dolt server policy surfaces ([#396](https://github.com/srobroek/omp-plugins/issues/396))
+* **worktrunk:** the gate judges only filesystem paths resolved from call arguments. Calls resolving to no path are allowed, including `xd://retain` and `typescript_quality {"mode": "fix"}` from a canonical checkout. A canonical path nested in a device payload is still refused. `bash` and `eval` are judged by explicit `cwd`; `write`, `edit`, and `ast_edit` are judged by their explicit targets. This behavior shipped in 0.2.8 ([c419031](https://github.com/srobroek/omp-plugins/commit/c41903147eb714386cd625f10e7a2d08ec5fb345)) and applies to upgrades from 0.2.7.
 
-### Features
+### Documentation
 
 * **beads:** remove Dolt server policy surfaces ([#396](https://github.com/srobroek/omp-plugins/issues/396)) ([831467e](https://github.com/srobroek/omp-plugins/commit/831467eb815b4237991fd64d2df5bd7b6e0eebc3))
 
