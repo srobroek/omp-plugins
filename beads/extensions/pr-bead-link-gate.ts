@@ -1,7 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { existsSync, statSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
-import type { ExtensionAPI, ToolCallEvent } from "@oh-my-pi/pi-coding-agent";
+import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
 import { commandSegments, invocation, type Token } from "./shell-command.ts";
 
 /**
@@ -191,39 +191,21 @@ export function repositoryControlled(repo: string | null): RepositoryControl {
 	}
 }
 
-export default function prBeadLinkGate(pi: ExtensionAPI): void {
-	pi.on("tool_call", (event: ToolCallEvent) => {
-		try {
-			const input = event.input as {
-				command?: unknown;
-				content?: unknown;
-				path?: unknown;
-				cwd?: unknown;
-			};
-			// The bash tool's own cwd, not this process's: a gate that reads
-			// process.cwd() both blocks in the wrong repository and misses in the
-			// right one.
-			const cwd = typeof input.cwd === "string" && input.cwd ? input.cwd : process.cwd();
-			if (event.toolName === "bash") {
-				const command = typeof input.command === "string" ? input.command : null;
-				if (!command?.includes("gh")) return;
-				return decideCommand(command, (segment) => beadsActive(cwd) && repositoryControlled(repositoryFromGhCreate(segment) ?? repositoryFromCurrentCheckout(cwd))) ?? undefined;
-			}
-			if (event.toolName === "write") {
-				const path = typeof input.path === "string" ? input.path : "";
-				if (!path.startsWith("xd://github")) return;
-				const content = typeof input.content === "string" ? input.content : "";
-				if (!content) return;
-				const args = JSON.parse(content) as { op?: string; body?: string; fill?: boolean; repo?: string };
-				if (args.op !== "pr_create") return;
-				// `fill: true` builds the body from commits, so it is not visible here;
-				// anything else without a body is a bead-less body, not an unknown one.
-				if (args.fill === true) return;
-				const body = typeof args.body === "string" ? args.body : "";
-				return decidePrCreate(body, beadsActive(cwd) && repositoryControlled(typeof args.repo === "string" ? args.repo : repositoryFromCurrentCheckout(cwd))) ?? undefined;
-			}
-		} catch {
-			return;
-		}
-	});
+import type { ParsedCommand } from "./shell-command.ts";
+
+export function decideCommandParsed(parsed: ParsedCommand, active: boolean | RepositoryControl | ((segment: string) => boolean | RepositoryControl)): { block: true; reason: string } | null {
+	for (const segment of parsed.segments) {
+		const decision = decideCommand(segment.join(" "), active);
+		if (decision) return decision;
+	}
+	for (const child of parsed.nested) {
+		const decision = decideCommandParsed(child, active);
+		if (decision) return decision;
+	}
+	return null;
+}
+
+export default function prBeadLinkGate(_pi: ExtensionAPI): void {
+	// Bash calls are dispatched by bash-gates.ts. Non-bash github integration
+	// remains available through the exported decision helpers.
 }

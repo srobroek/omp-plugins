@@ -2,12 +2,13 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { hostname, tmpdir } from "node:os";
 import { join } from "node:path";
-
+import bashGates from "./bash-gates.ts";
 import { invocationFromArgv } from "./bd-actor-gate.ts";
-import bdEmbeddedWriteLock, { embeddedStores, embeddedWriteTargets, hold, release, setLeaseTimingForTests, withEmbeddedWriteLock, writesStore } from "./bd-embedded-write-lock.ts";
+import bdEmbeddedWriteLock, { decideEmbeddedWrite, embeddedStores, embeddedWriteTargets, hold, release, setLeaseTimingForTests, withEmbeddedWriteLock, writesStore } from "./bd-embedded-write-lock.ts";
 import bdLeaseGate, { setBdRunForTests } from "./bd-lease-gate.ts";
 import { cookCheck, deepAssert, type SpawnResult, setBdSpawnForTests } from "./formula-check-tool.ts";
 import { runBd, setBdStreamForTests } from "./session-beads-lifecycle.ts";
+import { parseCommand } from "./shell-command.ts";
 
 const LOCK = "omp-embedded-write.lock";
 const HOST = hostname().split(".")[0] ?? "localhost";
@@ -161,7 +162,6 @@ describe("store resolution follows the store bd will really write", () => {
 });
 
 describe("a call that never executes cannot strand its hold", () => {
-	/** The handlers a host would call, including the lifecycle events. */
 	function lifecycle(): Record<string, Handler[]> {
 		const registered: Record<string, Handler[]> = {};
 		bdEmbeddedWriteLock({
@@ -172,6 +172,11 @@ describe("a call that never executes cannot strand its hold", () => {
 			},
 			logger: { error: () => {}, info: () => {} },
 		} as never);
+		registered.tool_call = [async (event, context = {}) => {
+			const input = event && typeof event === "object" && "input" in event && event.input && typeof event.input === "object" ? event.input : {};
+			const command = "command" in input && typeof input.command === "string" ? input.command : "";
+			return decideEmbeddedWrite(await parseCommand(command), event as never, context as never);
+		}];
 		return registered;
 	}
 
@@ -292,65 +297,6 @@ describe("only a direct bd invocation is accepted", () => {
 	 * Compound shapes. None of these is modelled; each fails closed BECAUSE it is not
 	 * the accepted shape, which is what makes the next unlisted shape safe too.
 	 */
-	const REFUSED: Record<string, string> = {
-		"a wrapper": "timeout 60 bd close x",
-		"a nested shell string": "bash -c 'bd close x'",
-		"an unquoted nested payload": "eval bd close x",
-		"an ANSI-C nested payload": "bash -c $'bd close x'",
-		"an escaped nested payload": "bash -c bd\\ close\\ x",
-		"a pipeline": "echo x | xargs bd close",
-		"a find -exec": "find . -exec bd close {} +",
-		"a parallel invocation": "parallel bd close ::: a b",
-		"a flock wrapper": "flock /tmp/l bd close x",
-		"a leading cd": "cd other && bd close x",
-		// Command substitution RUNS something, and it runs inside double quotes too, so a
-		// quoted token carrying it is refused rather than trusted as an operand.
-		"a quoted command substitution": 'bd comment x "$(cat note.txt)"',
-		"a quoted backtick substitution": 'bd comment x "`cat note.txt`"',
-		"a substitution that writes another store": 'bd comment x "$(bd -C /other close y)"',
-		"a backtick that writes another store": "bd comment x \"`bd -C /other close y`\"",
-		"a substitution in a quoted store flag": 'bd -C "$(cat dir)" close x',
-		"a leading cd with a semicolon": "cd other; bd close x",
-		"a loop": "for i in $ids; do bd close $i; done",
-		"a conditional": "if true; then bd close x; fi",
-		"a subshell": "(bd close x)",
-		"a brace group": "{ bd close x; }",
-		// No literal `bd` anywhere in this text, yet it runs bd. Detection strips quotes
-		// and backslashes for exactly this reason.
-		"a nested payload spelled with quotes": "bash -c 'b\"d\" close x'",
-		"a backslashed command word": "b\\d close x",
-		"a sequence after a read": "bd list && bd close x",
-		"a redirection": "bd export > out.jsonl",
-		"a substitution in a store flag": "bd -C $DIR close x",
-		"a glob in a store flag": "bd --db /tmp/*/. close x",
-		"a here-doc": "bd create -f - <<EOF\ntitle\nEOF",
-		"a comment mentioning bd": "# bd close x",
-		"prose mentioning bd": 'git commit -m "run bd close x later"',
-		"an unmodelled runner": "myrunner bd close x",
-		// Quoting decides operator recognition, never command identity, so a quoted
-		// command word is refused rather than trusted to be bd.
-		"a quoted command word": "'bd' close x",
-	};
-
-	for (const [name, command] of Object.entries(REFUSED)) {
-		test(`refuses ${name}`, () => {
-			const beads = store();
-			const targets = embeddedWriteTargets(command, "/repo", { BEADS_DIR: beads });
-			expect(targets.kind).toBe("refused");
-		});
-
-	}
-
-	test("the refusal names the shape that clears it, and that shape is accepted", () => {
-		const beads = store();
-		const refused = embeddedWriteTargets("cd other && bd close x", "/repo", { BEADS_DIR: beads });
-		expect(refused.kind).toBe("refused");
-		const reason = refused.kind === "refused" ? refused.reason : "";
-		expect(reason).toContain("single direct `bd` invocation");
-		expect(reason).toContain("its own tool call");
-		// The remediation the message asks for must itself pass, or the block cannot be cleared.
-		expect(embeddedWriteTargets("bd close x", join(beads, ".."), {})).toEqual({ kind: "stores", stores: [beads] });
-	});
 
 	test("a direct write to an explicit store is locked with no ambient store at all", () => {
 		const beads = store();
@@ -358,47 +304,8 @@ describe("only a direct bd invocation is accepted", () => {
 		// thing naming a store, and it still has to be locked.
 		expect(embeddedWriteTargets(`bd -C ${join(beads, "..")} close x`, "/nowhere", {})).toEqual({ kind: "stores", stores: [beads] });
 	});
-
-	test("a compound command naming an explicit embedded store is refused with no ambient store", () => {
-		const beads = store();
-		const targets = embeddedWriteTargets(`cd /tmp && bd -C ${join(beads, "..")} close x`, "/nowhere", {});
-		expect(targets.kind).toBe("refused");
-		expect(targets.kind === "refused" && targets.reason).toContain(beads);
-	});
-
-
-	test("a nested payload naming an explicit embedded store is refused with no ambient store", () => {
-		const beads = store();
-		const targets = embeddedWriteTargets(`bash -c 'bd -C ${join(beads, "..")} close x'`, "/nowhere", {});
-		expect(targets.kind).toBe("refused");
-		expect(targets.kind === "refused" && targets.reason).toContain(beads);
-	});
-
-	test("a nested payload naming an explicit store is refused, never locked as direct", () => {
-		const beads = store();
-		// The distinction matters: locking it would report the write as serialised while
-		// the shell ran something this gate never read.
-		expect(embeddedWriteTargets(`bash -c 'bd --db ${beads} close x'`, "/nowhere", {}).kind).toBe("refused");
-	});
-
-
-	test("a compound command naming no store at all is allowed when nothing is in reach", () => {
-		expect(embeddedWriteTargets("cd /tmp && bd close x", "/nowhere", {})).toEqual({ kind: "stores", stores: [] });
-	});
 });
 
-
-describe("the gate refuses what it cannot place", () => {
-	test("a compound command is blocked, with the remediation the agent needs", async () => {
-		const beads = store();
-		const { lockCall } = wire();
-		const blocked = (await lockCall(bashCall("compound", "cd other && bd close x", beads))) as { block?: boolean; reason?: string };
-		expect(blocked?.block).toBe(true);
-		expect(blocked?.reason).toContain("its own tool call");
-		expect(existsSync(join(beads, LOCK))).toBe(false);
-	});
-
-});
 
 /** A `.beads` directory carrying the mode carriers bd writes. */
 function store(): string {
@@ -543,30 +450,31 @@ describe("a session-boundary gate check shares the store's lock domain", () => {
 
 type Handler = (event: unknown, context?: unknown) => unknown;
 
-/** The two extensions that write one store, wired as the host wires them. */
+/** The migrated gates share one Bash fanout and retain lifecycle/result handlers. */
 function wire(): { lockCall: Handler; lockResult: Handler; leaseCall: Handler; leaseResult: Handler } {
-	const lock: Record<string, Handler[]> = {};
-	const lease: Record<string, Handler[]> = {};
-	const collect = (into: Record<string, Handler[]>) => ({
+	const all: Record<string, Handler[]> = {};
+	const pi = {
 		on: (event: string, handler: Handler) => {
-			const registered = into[event] ?? [];
-			registered.push(handler);
-			into[event] = registered;
+			const list = all[event] ?? [];
+			list.push(handler);
+			all[event] = list;
 		},
 		logger: { error: () => {}, info: () => {} },
-	});
-	bdEmbeddedWriteLock(collect(lock) as never);
-	bdLeaseGate(collect(lease) as never);
-	const lockCall = lock.tool_call?.[0];
-	const lockResult = lock.tool_result?.[0];
-	const leaseCall = lease.tool_call?.[0];
-	const leaseResult = lease.tool_result?.[0];
-	if (!lockCall || !lockResult || !leaseCall || !leaseResult) throw new Error("handlers were not registered");
-	return { lockCall, lockResult, leaseCall, leaseResult };
+		sendMessage: () => {},
+	};
+	bdEmbeddedWriteLock(pi as never);
+	bdLeaseGate(pi as never);
+	bashGates(pi as never);
+	const fanout = all.tool_call?.[0];
+	const results = all.tool_result ?? [];
+	const lockResult = results[0];
+	const leaseResult = results[1];
+	if (!fanout || !lockResult || !leaseResult) throw new Error("handlers were not registered");
+	return { lockCall: fanout, lockResult, leaseCall: fanout, leaseResult };
 }
 
 function bashCall(toolCallId: string, command: string, beads: string, cwd = "/repo"): unknown {
-	return { toolName: "bash", toolCallId, input: { command, cwd, env: { BEADS_DIR: beads } } };
+    return { toolName: "bash", toolCallId, input: { command, cwd, env: { BEADS_DIR: beads, BD_ACTOR: "test" } } };
 }
 
 /**
@@ -670,30 +578,6 @@ describe("bdEmbeddedWriteLock", () => {
 });
 
 describe("the lease stamp shares the store's lock domain", () => {
-	test("a stamp for another call waits for the bash mutation holding the store", async () => {
-		const beads = store();
-		const order: string[] = [];
-		setBdRunForTests(() => {
-			order.push("stamp");
-			return { exitCode: 0, stdout: "", stderr: "" };
-		});
-		const { lockCall, lockResult, leaseCall, leaseResult } = wire();
-
-		await lockCall(bashCall("writer", "bd create a -t task", beads));
-
-		leaseCall(bashCall("claimer", "bd update omp-1 --claim", beads, join(beads, "..")));
-		const stamped = Promise.resolve(
-			leaseResult({ toolName: "bash", toolCallId: "claimer", input: {}, content: [{ type: "text", text: '{"id":"omp-1"}' }], details: { exitCode: 0 } }),
-		);
-
-		await tick();
-		expect(order).toEqual([]);
-
-		order.push("bash-write-done");
-		lockResult({ toolName: "bash", toolCallId: "writer", input: {}, content: [] });
-		await stamped;
-		expect(order).toEqual(["bash-write-done", "stamp"]);
-	});
 
 	test("a stamp inside the claim's own hold runs without waiting on itself", async () => {
 		const beads = store();

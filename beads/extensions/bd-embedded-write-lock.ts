@@ -24,13 +24,12 @@ import type {
 import {
 	type BdInvocation,
 	environmentForInput,
-	extractCommand,
 	flagEnabled,
 	globalValue,
 	invocationFromArgv,
 } from "./bd-actor-gate.ts";
 import { sessionPinFor } from "./beads-store.ts";
-import { tokenize } from "./shell-command.ts";
+import { commandSegments, invocation, type ParsedCommand, tokenize } from "./shell-command.ts";
 
 /** The hold itself. */
 const LOCK_NAME = "omp-embedded-write.lock";
@@ -348,28 +347,6 @@ export function embeddedStoreFor(cwd: string, env: NodeJS.ProcessEnv = process.e
 	return store !== undefined && embedded(store) ? store : undefined;
 }
 
-/**
- * A `bd` word anywhere in the command text.
- *
- * Literal matching with no semantics attached: it only decides whether this gate has
- * anything to say about the command. Quoting deliberately does not exempt a mention,
- * because using quotes to decide command IDENTITY is how a guard talks itself into
- * reading `bash -c 'bd close x'` as prose.
- */
-const MENTIONS_BD = /(?<![\w.\-/])(?:[^\s;&|'"`]*\/)?bd(?![\w.-])/;
-
-/**
- * Whether a command has anything to do with `bd`.
- *
- * Quotes and backslashes are removed before the test, and that is a text
- * substitution rather than a reading of the shell: `b"d" close x` and
- * `bash -c 'b"d" close x'` both run bd while containing no literal `bd`, and a
- * detector that misses them lets the whole gate be bypassed by punctuation. Removing
- * them can only widen what this gate looks at, which is the safe direction.
- */
-function mentionsBd(command: string): boolean {
-	return MENTIONS_BD.test(command) || MENTIONS_BD.test(command.replace(/['"\\]/g, ""));
-}
 
 /**
  * Characters that make a command line something other than one simple invocation:
@@ -431,7 +408,8 @@ export type WriteTargets =
  * more than one.
  */
 export function embeddedWriteTargets(command: string, cwd: string, env: NodeJS.ProcessEnv): WriteTargets {
-	if (!mentionsBd(command)) return { kind: "stores", stores: [] };
+	const hasBd = commandSegments(command).some(segment => invocation(segment, ["bd"]) !== null);
+	if (!hasBd) return { kind: "stores", stores: [] };
 	const direct = directInvocation(command);
 	if (direct !== undefined) {
 		if (direct === "no-write" || !writesStore(direct)) return { kind: "stores", stores: [] };
@@ -767,50 +745,38 @@ export async function withEmbeddedWriteLock<T>(
 	}
 }
 
-export default function bdEmbeddedWriteLock(pi: ExtensionAPI): void {
-	/** Stores held per tool call, so the release names exactly what was taken. */
-	const holding = new Map<string, string[]>();
+const activeHolds = new Map<string, string[]>();
 
-	/**
-	 * Give a call's holds back, whatever ended it.
-	 *
-	 * Acquiring in `tool_call` means the hold outlives this handler, and the paths
-	 * that never reach `tool_result` are ordinary: another extension blocks the call
-	 * after this one acquired, approval is denied, the host times the command out, or
-	 * the turn is aborted. None of those is a write in progress, so each must give the
-	 * hold back -- otherwise a live pid advertises a hold nobody is using and every
-	 * other writer waits out its lease for nothing.
-	 */
-	function surrender(toolCallId: string): void {
-		const stores = holding.get(toolCallId);
-		if (stores === undefined) return;
-		holding.delete(toolCallId);
-		for (const store of stores) release(store, toolCallId);
-	}
+function surrender(toolCallId: string): void {
+	const stores = activeHolds.get(toolCallId);
+	if (stores === undefined) return;
+	activeHolds.delete(toolCallId);
+	for (const store of stores) release(store, toolCallId);
+}
 
-	pi.on("tool_call", async (event: ToolCallEvent, ctx: ExtensionContext) => {
+/** Shared Bash dispatcher called by bash-gates.ts after the command is parsed. */
+export async function decideEmbeddedWrite(parsed: ParsedCommand, event: ToolCallEvent, ctx: ExtensionContext): Promise<{ block: true; reason: string } | undefined> {
+	try {
 		if (event.toolName !== "bash") return;
-		let targets: WriteTargets;
-		try {
-			const command = extractCommand(event.input);
-			if (command === "") return;
-			// The runtime's own fields, never a directory inferred from the command text.
-			const input = event.input as { cwd?: unknown };
-			const cwd = typeof input.cwd === "string" && input.cwd ? input.cwd : (ctx?.cwd ?? process.cwd());
-			targets = embeddedWriteTargets(command, cwd, environmentForInput(event.input));
-		} catch (error) {
-			// Reading the command must never be the reason a call fails.
-			pi.logger.error("beads embedded write lock could not classify a command", {
-				error: error instanceof Error ? error.message : String(error),
-			});
-			return;
+		const input = event.input as { cwd?: unknown };
+		const cwd = typeof input.cwd === "string" && input.cwd ? input.cwd : (ctx?.cwd ?? process.cwd());
+		const env = environmentForInput(event.input);
+		const sources = [...parsed.commands.map(position => position.raw)];
+		const visit = (child: ParsedCommand): void => {
+			sources.push(...child.commands.map(position => position.raw));
+			for (const nested of child.nested) visit(nested);
+		};
+		for (const nested of parsed.nested) visit(nested);
+		const targets: string[] = [];
+		for (const source of sources) {
+			const result = embeddedWriteTargets(source, cwd, env);
+			if (result.kind === "refused") return { block: true, reason: result.reason };
+			targets.push(...result.stores);
 		}
-		if (targets.kind === "refused") return { block: true, reason: targets.reason };
-		const stores = targets.stores;
-		if (stores.length === 0) return;
-
+		const unique = [...new Set(targets)];
+		if (unique.length === 0) return;
 		const taken: string[] = [];
-		for (const store of stores) {
+		for (const store of unique) {
 			const got = await hold(store, event.toolCallId);
 			if (got.kind === "failed") {
 				for (const done of taken) release(done, event.toolCallId);
@@ -818,31 +784,20 @@ export default function bdEmbeddedWriteLock(pi: ExtensionAPI): void {
 			}
 			taken.push(store);
 		}
-		holding.set(event.toolCallId, taken);
-		// Last resort for a call that vanishes without any event at all. The lease
-		// would expire on its own; this returns the turn sooner. `ctx.setTimeout`
-		// clears itself at session shutdown, and the body cannot throw.
-		ctx?.setTimeout?.(() => {
-			surrender(event.toolCallId);
-		}, LEASE_MS);
-		return;
-	});
+		activeHolds.set(event.toolCallId, taken);
+		ctx?.setTimeout?.(() => surrender(event.toolCallId), LEASE_MS);
+	} catch {
+		return { block: true, reason: "embedded write target could not be resolved" };
+	}
+	return;
+}
 
-	pi.on("tool_result", (event: ToolResultEvent) => {
-		surrender(event.toolCallId);
-	});
-
-	// A denied approval never executes the command, so its hold is not a write.
+export default function bdEmbeddedWriteLock(pi: ExtensionAPI): void {
+	pi.on("tool_result", (event: ToolResultEvent) => surrender(event.toolCallId));
 	pi.on("tool_approval_resolved", (event: { toolCallId?: string; approved?: boolean }) => {
 		if (event.approved === false && typeof event.toolCallId === "string") surrender(event.toolCallId);
 	});
-
-	// A turn cannot end with one of its tool calls still executing, so anything
-	// still held here belongs to a call that was blocked, denied, timed out or
-	// aborted. This is the deterministic backstop behind every specific path above.
-	const drain = () => {
-		for (const toolCallId of [...holding.keys()]) surrender(toolCallId);
-	};
+	const drain = () => { for (const id of [...activeHolds.keys()]) surrender(id); };
 	pi.on("turn_end", drain);
 	pi.on("agent_end", drain);
 	pi.on("session_shutdown", drain);

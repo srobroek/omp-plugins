@@ -5,12 +5,15 @@
   "private": true,
   "omp": {
     "extensions": [
-		"./extensions/bash-gates.ts",
-		"./extensions/formula-check-tool.ts",
-		"./extensions/bd-pool-discipline.ts",
-		"./extensions/session-beads-lifecycle.ts",
-		"./extensions/unreported-failure-advisory.ts",
-		"./extensions/claim-before-branch.ts"
+      "./dist/bash-gates.js",
+      "./dist/formula-check-tool.js",
+      "./dist/bd-pool-discipline.js",
+      "./dist/session-beads-lifecycle.js",
+      "./dist/unreported-failure-advisory.js",
+      "./dist/claim-before-branch.js"
     ]
+  },
+  "dependencies": {
+    "sh-syntax": "0.6.0"
   }
 }

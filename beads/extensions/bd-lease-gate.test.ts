@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 
-import bdLeaseGate, { anchorArgs, claimedIds, setBdRunForTests } from "./bd-lease-gate.ts";
+import bdLeaseGate, { anchorArgs, claimedIds, decideLeaseClaim, setBdRunForTests } from "./bd-lease-gate.ts";
+import { parseCommand } from "./shell-command.ts";
 
 /** Shapes bd 1.1.2 prints for a claim, envelope and plain. */
 const ENVELOPE = '{"data":[{"id":"omp-plugins-dd1","status":"in_progress","assignee":"omp/Main/01a08b2b"}]}';
@@ -49,19 +50,19 @@ describe("anchorArgs", () => {
 });
 
 type Handler = (event: unknown, context?: unknown) => unknown;
-
 function handlers(): { toolCall: Handler; toolResult: Handler } {
 	const registered: Record<string, Handler[]> = {};
-	const pi = {
-		on(event: string, handler: Handler) {
-			registered[event] ??= [];
-			registered[event].push(handler);
-		},
-	};
-	bdLeaseGate(pi as never);
-	const toolCall = registered.tool_call?.[0];
+	bdLeaseGate({ on(event: string, handler: Handler) {
+		const list = registered[event] ?? [];
+		list.push(handler);
+		registered[event] = list;
+	} } as never);
 	const toolResult = registered.tool_result?.[0];
-	if (toolCall === undefined || toolResult === undefined) throw new Error("lease gate handlers were not registered");
+	if (toolResult === undefined) throw new Error("lease gate tool_result handler was not registered");
+	const toolCall: Handler = async (event, context = { cwd: "/session/repo" }) => {
+		const command = (event as { input?: { command?: string } }).input?.command ?? "";
+		return decideLeaseClaim(await parseCommand(command), event as never, context as never);
+	};
 	return { toolCall, toolResult };
 }
 
@@ -85,7 +86,7 @@ describe("bdLeaseGate", () => {
 		});
 		try {
 			const { toolCall, toolResult } = handlers();
-			toolCall({ toolName: "bash", toolCallId: "cwd", input: { command: "bd update omp-1 --claim", cwd: "/claiming/repo" } }, { cwd: "/session/repo" });
+			await toolCall({ toolName: "bash", toolCallId: "cwd", input: { command: "bd update omp-1 --claim", cwd: "/claiming/repo" } }, { cwd: "/session/repo" });
 			await toolResult(claimResult("cwd", '{"id":"omp-1"}'));
 			expect(calls).toHaveLength(1);
 			expect(calls[0]?.cwd).toBe("/claiming/repo");
@@ -102,7 +103,7 @@ describe("bdLeaseGate", () => {
 		});
 		try {
 			const { toolCall, toolResult } = handlers();
-			toolCall({ toolName: "bash", toolCallId: "fallback", input: { command: "cd /claiming/repo && bd update omp-1 --claim" } }, { cwd: "/session/repo" });
+			await toolCall({ toolName: "bash", toolCallId: "fallback", input: { command: "cd /claiming/repo && bd update omp-1 --claim" } }, { cwd: "/session/repo" });
 			await toolResult(claimResult("fallback", '{"id":"omp-1"}'));
 			expect(calls).toEqual(["/claiming/repo"]);
 		} finally {
@@ -114,7 +115,7 @@ describe("bdLeaseGate", () => {
 		setBdRunForTests(() => ({ exitCode: 7, stdout: "", stderr: "permission denied" }));
 		try {
 			const { toolCall, toolResult } = handlers();
-			toolCall({ toolName: "bash", toolCallId: "failure", input: { command: "bd update omp-1 --claim", cwd: "/claiming/repo" } });
+			await toolCall({ toolName: "bash", toolCallId: "failure", input: { command: "bd update omp-1 --claim", cwd: "/claiming/repo" } });
 			const result = (await toolResult(claimResult("failure", '{"id":"omp-1"}'))) as { content: Array<{ text?: string }> } | undefined;
 			expect(result?.content[0]?.text).toContain("omp-1");
 			expect(result?.content[0]?.text).toContain("bd exited 7");
@@ -128,7 +129,7 @@ describe("bdLeaseGate", () => {
 		setBdRunForTests(() => ({ exitCode: 0, stdout: "", stderr: "" }));
 		try {
 			const { toolCall, toolResult } = handlers();
-			toolCall({ toolName: "bash", toolCallId: "success", input: { command: "bd update omp-1 --claim", cwd: "/claiming/repo" } });
+			await toolCall({ toolName: "bash", toolCallId: "success", input: { command: "bd update omp-1 --claim", cwd: "/claiming/repo" } });
 			expect(await toolResult(claimResult("success", '{"id":"omp-1"}'))).toBeUndefined();
 		} finally {
 			setBdRunForTests(null);
@@ -141,7 +142,7 @@ describe("bdLeaseGate", () => {
 		});
 		try {
 			const { toolCall, toolResult } = handlers();
-			toolCall({ toolName: "bash", toolCallId: "throw", input: { command: "bd update omp-1 --claim", cwd: "/claiming/repo" } });
+			await toolCall({ toolName: "bash", toolCallId: "throw", input: { command: "bd update omp-1 --claim", cwd: "/claiming/repo" } });
 			const result = (await toolResult(claimResult("throw", '{"id":"omp-1"}'))) as { content: Array<{ text?: string }> } | undefined;
 			expect(result?.content[0]?.text).toContain("spawn unavailable");
 		} finally {
@@ -158,7 +159,7 @@ describe("bdLeaseGate", () => {
 		try {
 			const { toolCall, toolResult } = handlers();
 			const command = "id=$(printf omp-1); bd update \"$id\" --claim";
-			toolCall({ toolName: "bash", toolCallId: "computed", input: { command, cwd: "/claiming/repo" } });
+			await toolCall({ toolName: "bash", toolCallId: "computed", input: { command, cwd: "/claiming/repo" } });
 			await toolResult(claimResult("computed", "claim completed", { exitCode: 0, stdout: "{\"id\":\"omp-1\"}" }, command));
 			expect(calls).toHaveLength(1);
 			expect(calls[0]?.[2]).toBe("omp-1");
@@ -176,7 +177,7 @@ describe("bdLeaseGate", () => {
 		try {
 			const { toolCall, toolResult } = handlers();
 			const command = "bd update \"$id\" --claim";
-			toolCall({ toolName: "bash", toolCallId: "failed", input: { command, cwd: "/claiming/repo" } });
+			await toolCall({ toolName: "bash", toolCallId: "failed", input: { command, cwd: "/claiming/repo" } });
 			expect(await toolResult(claimResult("failed", "Claimed omp-1 (in_progress)", { exitCode: 1, stdout: "{\"id\":\"omp-1\"}" }, command))).toBeUndefined();
 			expect(calls).toHaveLength(0);
 		} finally {

@@ -3,7 +3,7 @@ import type { ExtensionAPI, ExtensionContext, ToolCallEvent, ToolResultEvent } f
 
 import { environmentForInput } from "./bd-actor-gate.ts";
 import { withEmbeddedWriteLock } from "./bd-embedded-write-lock.ts";
-import { leadingCdCwd } from "./shell-command.ts";
+import { leadingCdCwd, type ParsedCommand } from "./shell-command.ts";
 
 /**
  * A claim is a lease, and a lease has a holder you can check.
@@ -92,32 +92,27 @@ export function anchorArgs(id: string, host: string, pid: number): string[] {
 	];
 }
 
+const pendingClaims = new Map<string, { cwd: string; env: NodeJS.ProcessEnv }>();
+
+/** Record claim context from the shared parsed Bash dispatch. */
+export function decideLeaseClaim(parsed: ParsedCommand, event: ToolCallEvent, ctx: ExtensionContext): void {
+	try {
+		if (event.toolName !== "bash") return;
+		const command = parsed.command;
+		if (!command || !PREFILTER.test(command)) return;
+		const input = event.input as { cwd?: unknown };
+		const sessionCwd = ctx?.cwd ?? process.cwd();
+		const inputCwd = typeof input.cwd === "string" && input.cwd ? input.cwd : sessionCwd;
+		pendingClaims.set(event.toolCallId, { cwd: leadingCdCwd(command, inputCwd), env: environmentForInput(event.input) });
+	} catch { /* fail closed at parser layer */ }
+}
+
 export default function bdLeaseGate(pi: ExtensionAPI): void {
-	/** The directory and environment each pending claim's stamp must run under. */
-	const pending = new Map<string, { cwd: string; env: NodeJS.ProcessEnv }>();
-
-	pi.on("tool_call", (event: ToolCallEvent, ctx: ExtensionContext) => {
-		try {
-			if (event.toolName !== "bash") return;
-			const input = event.input as { command?: unknown; cwd?: unknown };
-			const command = typeof input.command === "string" ? input.command : "";
-			if (!command || !PREFILTER.test(command)) return;
-			const sessionCwd = ctx?.cwd ?? process.cwd();
-			const inputCwd = typeof input.cwd === "string" && input.cwd ? input.cwd : sessionCwd;
-			pending.set(event.toolCallId, {
-				cwd: leadingCdCwd(command, inputCwd),
-				env: environmentForInput(event.input),
-			});
-		} catch {
-			return;
-		}
-	});
-
 	pi.on("tool_result", async (event: ToolResultEvent) => {
-		const claim = pending.get(event.toolCallId);
+		const claim = pendingClaims.get(event.toolCallId);
 		if (claim === undefined) return;
 		const { cwd, env } = claim;
-		pending.delete(event.toolCallId);
+		pendingClaims.delete(event.toolCallId);
 		try {
 			const text = claimResultOutput(event);
 			if (event.isError || bashExitCode(event) !== 0) return;
@@ -127,23 +122,18 @@ export default function bdLeaseGate(pi: ExtensionAPI): void {
 			const host = hostname().split(".")[0] ?? "localhost";
 			const advisories: string[] = [];
 			for (const id of ids) {
-				const argv = anchorArgs(id, host, process.pid);
 				const stamped = await withEmbeddedWriteLock(cwd, event.toolCallId, async () => {
 					try {
-						const result = await run(argv, cwd, env);
+						const result = await run(anchorArgs(id, host, process.pid), cwd, env);
 						return result.exitCode === 0 ? undefined : stampFailure(id, `bd exited ${result.exitCode}`, result.stderr);
-					} catch (error) {
-						return stampFailure(id, "bd threw", error instanceof Error ? error.message : String(error));
-					}
+					} catch (error) { return stampFailure(id, "bd threw", error instanceof Error ? error.message : String(error)); }
 				}, env);
 				if (stamped.kind === "failed") advisories.push(stampFailure(id, "the embedded write lock refused the stamp", stamped.reason));
 				else if (stamped.value !== undefined) advisories.push(stamped.value);
 			}
 			if (advisories.length === 0) return;
 			return advisoryResult(event, advisories.join("\n"));
-		} catch {
-			return;
-		}
+		} catch { return; }
 	});
 }
 

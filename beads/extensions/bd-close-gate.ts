@@ -14,35 +14,11 @@
  * allow the call: a guard that blocks when it cannot see is worse than the TTSR
  * rule it backs up.
  */
-import type { ExtensionAPI, ToolCallEvent } from "@oh-my-pi/pi-coding-agent";
+import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
 import { tokenizeShell } from "./shell-tokenizer.ts";
 
 const TIMEOUT_MS = 10_000;
 
-/** `bd` flags that consume the following token, so it is never an issue id. */
-const VALUE_FLAGS = new Set([
-	"--actor",
-	"--db",
-	"-C",
-	"--directory",
-	"--dolt-auto-commit",
-	"-r",
-	"--reason",
-	"--reason-file",
-	"--session",
-]);
-
-/** Flags selecting which database `bd` opens; `bd show` must be told the same. */
-const DB_VALUE_FLAGS = new Set(["--db", "-C", "--directory"]);
-const DB_BOOL_FLAGS = new Set(["--global"]);
-
-/** `bd close` verbs. `done` is a documented alias. */
-const CLOSE_VERBS = new Set(["close", "done"]);
-
-const SEPARATORS = new Set([";", "&", "|", "(", ")", "$(", "\n"]);
-
-/** `<prefix>-<suffix>` bd id, e.g. `bdp-47b` or `sk-gate-probe-7gu`. */
-const BD_ID = /^[A-Za-z][A-Za-z0-9]*(?:-[A-Za-z0-9]+)+$/;
 
 /** Cheap prefilter: never spawn on a command that cannot be a bd close. */
 const PREFILTER = /\bbd\b[\s\S]{0,400}?\b(?:close|done)\b/;
@@ -64,95 +40,17 @@ function defaultRun(argv: string[], cwd: string): { exitCode: number; stdout: st
 		timeout: TIMEOUT_MS,
 		env: { ...process.env, BD_JSON_ENVELOPE: "1", BD_NO_PAGER: "1", BD_NON_INTERACTIVE: "1" },
 	});
-	return { exitCode: proc.exitCode ?? 1, stdout: proc.stdout.toString() };
+	if (proc.exitCode === null) throw new Error(`bd show lookup timed out after ${TIMEOUT_MS}ms`);
+	return { exitCode: proc.exitCode, stdout: proc.stdout.toString() };
 }
 
-export function extractCommand(input: ToolCallEvent["input"]): string {
-	if ("command" in input && typeof input.command === "string") return input.command;
-	if ("cmd" in input && typeof input.cmd === "string") return input.cmd;
-	return "";
-}
+export { commandFromInput as extractCommand } from "./shell-command.ts";
 
-/**
- * Public compatibility wrapper around the shared static shell tokenizer.
- * Consumers historically receive only token text, so preserve that surface.
- */
+/** Shared parser compatibility surfaces for existing direct unit callers. */
 export function tokenize(command: string): string[] {
 	return tokenizeShell(command).map(({ value }) => value);
 }
-
-export type CloseInvocation = {
-	/** Literal ids on the command line; empty when they are variables or absent. */
-	ids: string[];
-	/** Database selectors to replay on `bd show`. */
-	dbArgs: string[];
-};
-
-/** Every `bd ... close`/`done` invocation in the command, with its ids. */
-export function findCloseInvocations(command: string): CloseInvocation[] {
-	const tokens = tokenize(command);
-	const out: CloseInvocation[] = [];
-	let atCommand = true;
-	for (let i = 0; i < tokens.length; i++) {
-		const commandWord = tokens[i] as string;
-		if (SEPARATORS.has(commandWord)) {
-			atCommand = true;
-			continue;
-		}
-		if (!atCommand) continue;
-		if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(commandWord)) continue;
-		if (["command", "env", "sudo", "exec"].includes(commandWord)) {
-			// Common wrapper options belong to the wrapper, never to bd.
-			while (tokens[i + 1]?.startsWith("-")) {
-				const option = tokens[++i] as string;
-				if (option === "--") break;
-				if ((commandWord === "sudo" && ["-u", "-g", "-h", "-p", "-C", "-T", "-r", "-t",
-					"--user", "--group", "--host", "--prompt", "--chdir"].includes(option)) ||
-					(commandWord === "env" && ["-u", "--unset", "-C", "--chdir"].includes(option))) i++;
-			}
-			continue;
-		}
-		atCommand = false;
-		if (commandWord !== "bd") continue;
-		const dbArgs: string[] = [];
-		const ids: string[] = [];
-		let verb: string | null = null;
-		let j = i + 1;
-		for (; j < tokens.length; j++) {
-			const token = tokens[j] as string;
-			if (SEPARATORS.has(token)) break;
-			if (token.startsWith("-") && token !== "-") {
-				const eq = token.indexOf("=");
-				const name = eq === -1 ? token : token.slice(0, eq);
-				if (DB_VALUE_FLAGS.has(name)) {
-					if (eq !== -1) dbArgs.push(token);
-					else {
-						const value = tokens[j + 1];
-						if (value !== undefined && !SEPARATORS.has(value)) {
-							dbArgs.push(name, value);
-							j++;
-						}
-					}
-					continue;
-				}
-				if (DB_BOOL_FLAGS.has(name)) {
-					dbArgs.push(name);
-					continue;
-				}
-				if (eq === -1 && VALUE_FLAGS.has(name)) j++;
-				continue;
-			}
-			if (verb === null) {
-				verb = token.toLowerCase();
-				continue;
-			}
-			if (BD_ID.test(token)) ids.push(token);
-		}
-		i = j - 1;
-		if (verb !== null && CLOSE_VERBS.has(verb)) out.push({ ids, dbArgs });
-	}
-	return out;
-}
+export { type CloseInvocation, closeInvocations as findCloseInvocations } from "./shell-command.ts";
 
 /**
  * Canonical ids among `ids` whose `issue_type` is `gate`.
@@ -210,12 +108,82 @@ export function denyReason(gateIds: string[]): string {
 	);
 }
 
+import { closeInvocations, type ParsedCommand } from "./shell-command.ts";
+
+async function asyncShowRun(argv: string[], cwd: string): Promise<{ exitCode: number; stdout: string }> {
+	const proc = Bun.spawn(argv, {
+		cwd,
+		stdout: "pipe",
+		stderr: "pipe",
+		env: { ...process.env, BD_JSON_ENVELOPE: "1", BD_NO_PAGER: "1", BD_NON_INTERACTIVE: "1" },
+	});
+	let timer: ReturnType<typeof setTimeout> | undefined;
+	try {
+		const timeout = new Promise<never>((_, reject) => {
+			timer = setTimeout(() => {
+				proc.kill("SIGKILL");
+				reject(new Error(`bd show lookup timed out after ${TIMEOUT_MS}ms`));
+			}, TIMEOUT_MS);
+		});
+		const result = await Promise.race([
+			Promise.all([proc.exited, new Response(proc.stdout).text()]),
+			timeout,
+		]);
+		return { exitCode: result[0], stdout: result[1] };
+	} finally {
+		if (timer !== undefined) clearTimeout(timer);
+	}
+}
+
+async function gateIdsAmongAsync(ids: string[], dbArgs: string[], cwd: string): Promise<string[]> {
+	if (ids.length === 0) return [];
+	const run = injectedRun === null ? asyncShowRun : async (argv: string[], dir: string) => injectedRun?.(argv, dir) ?? asyncShowRun(argv, dir);
+	const result = await run(["bd", ...dbArgs, "show", ...ids, "--json"], cwd);
+	if (result.exitCode !== 0) return [];
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(result.stdout);
+	} catch {
+		throw new Error("bd show returned unreadable JSON; gate types remain unverified");
+	}
+	if (parsed !== null && typeof parsed === "object" && !Array.isArray(parsed) && "schema_version" in parsed && "data" in parsed) parsed = parsed.data;
+	if (!Array.isArray(parsed)) throw new Error("bd show returned no issue array; gate types remain unverified");
+	const gates: string[] = [];
+	for (const row of parsed) {
+		if (!row || typeof row !== "object") throw new Error("bd show returned malformed issues; gate types remain unverified");
+		const issue = row as { id?: unknown; issue_type?: unknown };
+		if (typeof issue.id !== "string" || typeof issue.issue_type !== "string") throw new Error("bd show omitted issue identity or type; gate types remain unverified");
+		if (issue.issue_type === "gate") gates.push(issue.id);
+	}
+	return gates;
+}
+
+/** Evaluate parsed command positions recursively, using async lookups at the bash boundary. */
+export async function decideBdCloseParsed(parsed: ParsedCommand, cwd = process.cwd()): Promise<{ block: true; reason: string } | undefined> {
+	for (const position of parsed.commands) {
+        const invocations = closeInvocations(position.raw);
+		if (invocations.length === 0) continue;
+		const gates = new Set<string>();
+		for (const invocation of invocations) {
+			for (const id of await gateIdsAmongAsync(invocation.ids, invocation.dbArgs, cwd)) gates.add(id);
+		}
+		if (gates.size > 0) return { block: true, reason: denyReason([...gates]) };
+	}
+	for (const child of parsed.nested) {
+		const decision = await decideBdCloseParsed(child, cwd);
+		if (decision) return decision;
+	}
+	return undefined;
+}
+
+
+
 export function decideBdClose(
 	command: string,
 	cwd: string = process.cwd(),
 ): { block: true; reason: string } | undefined {
 	if (!PREFILTER.test(command)) return;
-	const invocations = findCloseInvocations(command);
+    const invocations = closeInvocations(command);
 	if (invocations.length === 0) return;
 	const gates = new Set<string>();
 	for (const invocation of invocations) {
@@ -225,32 +193,6 @@ export function decideBdClose(
 	return { block: true, reason: denyReason([...gates]) };
 }
 
-export default function bdCloseGate(pi: ExtensionAPI): void {
-	pi.on("tool_call", (event: ToolCallEvent) => {
-		try {
-			if (event.toolName !== "bash") return;
-			const command = extractCommand(event.input);
-			if (!command) return;
-			const cwd =
-				"cwd" in event.input && typeof event.input.cwd === "string" && event.input.cwd
-					? event.input.cwd
-					: process.cwd();
-			return decideBdClose(command, cwd);
-		} catch (error) {
-			try {
-				pi.sendMessage(
-					{
-						customType: "com.srobroek.beads.close-lookup",
-						content: `Beads close guard could not verify gate types: ${error instanceof Error ? error.message : String(error)}. Inspect the target before closing; this advisory does not authorize gate closure.`,
-						display: true,
-						attribution: "user",
-					},
-					{ triggerTurn: false },
-				);
-			} catch {
-				// Advisory delivery cannot turn a lookup failure into a tool outage.
-			}
-			return;
-		}
-	});
+export default function bdCloseGate(_pi: ExtensionAPI): void {
+	// Bash calls are dispatched by bash-gates.ts.
 }

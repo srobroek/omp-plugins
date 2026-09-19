@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 
-import bdCloseGate, {
+import {
 	type BdShowRun,
 	decideBdClose,
 	denyReason,
@@ -343,74 +343,25 @@ describe("denyReason", () => {
 });
 
 describe("integration", () => {
-	function register(): Array<(e: unknown) => unknown> {
-		const handlers: Record<string, Array<(e: unknown) => unknown>> = {};
-		const fakePi = {
-			zod: {},
-			registerTool: () => {},
-			on: (event: string, handler: (e: unknown) => unknown) => {
-				const eventHandlers = handlers[event];
-				if (eventHandlers) {
-					eventHandlers.push(handler);
-				} else {
-					handlers[event] = [handler];
-				}
-			},
-		};
-		bdCloseGate(fakePi as never);
-		return handlers.tool_call as Array<(e: unknown) => unknown>;
-	}
-
 	test("blocks gate-closing bash, allows the rest", () => {
 		const { run } = fakeBd({ "bdp-2b": "gate", "bdp-1a": "task" });
 		setBdShowRunForTests(run);
-		const [handler] = register();
-
-		expect(
-			handler?.({ toolName: "bash", toolCallId: "c1", input: { command: "bd close bdp-2b" } }),
-		).toEqual(expect.objectContaining({ block: true }));
-		expect(
-			handler?.({ toolName: "bash", toolCallId: "c2", input: { command: "bd close bdp-1a" } }),
-		).toBeUndefined();
+		expect(decideBdClose("bd close bdp-2b")).toEqual(expect.objectContaining({ block: true }));
+		expect(decideBdClose("bd close bdp-1a")).toBeUndefined();
 	});
-
-	test("handler decisions use the bash cwd rather than the session database", () => {
-		setBdShowRunForTests((_argv, cwd) => ({
-			exitCode: 0,
-			stdout: JSON.stringify([row("bdp-2b", cwd === "/other/repo" ? "gate" : "task")]),
-		}));
-		const [handler] = register();
-		expect(handler?.({
-			toolName: "bash",
-			toolCallId: "c6",
-			input: { command: "bd close bdp-2b", cwd: "/other/repo" },
-		})).toEqual(expect.objectContaining({ block: true }));
-		expect(handler?.({
-			toolName: "bash",
-			toolCallId: "c7",
-			input: { command: "bd close bdp-2b" },
-		})).toBeUndefined();
+	test("decisions use the bash cwd", () => {
+		setBdShowRunForTests((_argv, cwd) => ({ exitCode: 0, stdout: JSON.stringify([row("bdp-2b", cwd === "/other/repo" ? "gate" : "task")]) }));
+		expect(decideBdClose("bd close bdp-2b", "/other/repo")).toEqual(expect.objectContaining({ block: true }));
+		expect(decideBdClose("bd close bdp-2b", process.cwd())).toBeUndefined();
 	});
-
-	test("ignores non-bash tools and empty input", () => {
+	test("ignores an empty command at the fanout boundary", () => {
 		const { run, calls } = fakeBd({ "bdp-2b": "gate" });
 		setBdShowRunForTests(run);
-		const [handler] = register();
-
-		expect(
-			handler?.({ toolName: "edit", toolCallId: "c3", input: { command: "bd close bdp-2b" } }),
-		).toBeUndefined();
-		expect(handler?.({ toolName: "bash", toolCallId: "c4", input: {} })).toBeUndefined();
+		expect(decideBdClose("")).toBeUndefined();
 		expect(calls).toEqual([]);
 	});
-
-	test("a throwing seam allows the call instead of taking bash down", () => {
-		setBdShowRunForTests(() => {
-			throw new Error("spawn failed");
-		});
-		const [handler] = register();
-		expect(
-			handler?.({ toolName: "bash", toolCallId: "c5", input: { command: "bd close bdp-2b" } }),
-		).toBeUndefined();
+	test("the direct helper exposes a failing lookup to its caller", () => {
+		setBdShowRunForTests(() => { throw new Error("spawn failed"); });
+		expect(() => decideBdClose("bd close bdp-2b")).toThrow("spawn failed");
 	});
 });
