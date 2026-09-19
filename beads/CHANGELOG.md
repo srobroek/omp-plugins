@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.7.3](https://github.com/srobroek/omp-plugins/compare/beads--v1.7.2...beads--v1.7.3) (2026-09-19)
+
+
+### Bug Fixes
+
+* **beads:** allow truthful no-bead PR trailers ([f0b0641](https://github.com/srobroek/omp-plugins/commit/f0b06419d7b9a25099297fbe4c2cc8ca0cb33d38))
+
 ## [1.7.2](https://github.com/srobroek/omp-plugins/compare/beads--v1.7.1...beads--v1.7.2) (2026-09-18)
 
 
