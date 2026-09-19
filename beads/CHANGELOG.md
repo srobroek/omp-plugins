@@ -1,5 +1,16 @@
 # Changelog
 
+## [2.0.0](https://github.com/srobroek/omp-plugins/compare/beads--v1.7.3...beads--v2.0.0) (2026-09-19)
+
+
+### ⚠ BREAKING CHANGES
+
+* **beads:** remove Dolt server policy surfaces ([#396](https://github.com/srobroek/omp-plugins/issues/396))
+
+### Features
+
+* **beads:** remove Dolt server policy surfaces ([#396](https://github.com/srobroek/omp-plugins/issues/396)) ([831467e](https://github.com/srobroek/omp-plugins/commit/831467eb815b4237991fd64d2df5bd7b6e0eebc3))
+
 ## [1.7.3](https://github.com/srobroek/omp-plugins/compare/beads--v1.7.2...beads--v1.7.3) (2026-09-19)
 
 

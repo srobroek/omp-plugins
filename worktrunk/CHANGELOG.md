@@ -1,5 +1,16 @@
 # Changelog
 
+## [1.0.0](https://github.com/srobroek/omp-plugins/compare/worktrunk--v0.2.8...worktrunk--v1.0.0) (2026-09-19)
+
+
+### ⚠ BREAKING CHANGES
+
+* **beads:** remove Dolt server policy surfaces ([#396](https://github.com/srobroek/omp-plugins/issues/396))
+
+### Features
+
+* **beads:** remove Dolt server policy surfaces ([#396](https://github.com/srobroek/omp-plugins/issues/396)) ([831467e](https://github.com/srobroek/omp-plugins/commit/831467eb815b4237991fd64d2df5bd7b6e0eebc3))
+
 ## [0.2.8](https://github.com/srobroek/omp-plugins/compare/worktrunk--v0.2.7...worktrunk--v0.2.8) (2026-09-19)
 
 
