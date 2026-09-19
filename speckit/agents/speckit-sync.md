@@ -18,17 +18,9 @@ Read "scope: ..." in the spawn prompt. Default: drift.
 
 ## Output
 
-MUST Begin your reply with `SYNC` -- the very first characters.
-MUST On a clean pass emit ONLY the header line.
+Return the structured sync result through the result channel. Include scope, verdict, non-empty findings, and evidence; never reprint source documents, code, diffs, or the caller's brief.
+CAP: none.
 
-First line:
-
-`SYNC [scope] SUMMARY — {CLEAN|FINDINGS}: {one-line verdict}`
-
-Then emit only non-empty sections. CAP 80w clean · 900w with findings.
-MUST Never reprint source documents, code, diffs, or the caller's brief.
-
-Read-only. Do not modify specs, tasks, code, commits, issues, or PRs.
 Analyze active specs by default.
 
 Task state lives in beads (`bd query 'spec_id="<NNN-slug>"'`), not tasks.md.

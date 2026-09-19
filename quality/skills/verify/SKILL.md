@@ -16,8 +16,4 @@ description: Run and report a final local verification pass. Use when asked to v
 
 ## Steering
 
-- Do not claim coverage for checks that were skipped or unavailable.
-- Keep the report concrete: command, exit code, failure summary.
-- Never silently swallow failures -- report every non-zero exit.
-- This is a final readiness pass, not a replacement for focused language
-  quality skills.
+Report the commands run, what was skipped, and every non-zero result. Distinguish environment gaps from code or test failures; this is a final readiness pass, not a replacement for focused language-quality skills.

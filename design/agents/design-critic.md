@@ -18,10 +18,7 @@ publish, submit private data, or change account state.
 1. Read the brief: the URL or route, the changed file paths, the viewport widths,
    and the token file paths. With no route in the brief, judge the changed files
    statically and label every finding source-only.
-2. Open the surface with `browser`. `tab.ariaSnapshot()` for structure and
-   labels, `tab.evaluate` for computed type sizes, spacing, colors, and radii.
-   Screenshot last, and only to support a claim about appearance.
-3. Repeat at each briefed width; with none named, use 1440, 768, and 375.
+2. Open the surface with `browser` and follow `skill://ui-review` for rendered-surface evidence collection.
 4. Judge against every heuristic, in this order: visual hierarchy; spacing
    rhythm; typographic scale; color role discipline; state completeness and
    feedback; affordance clarity; empty and error state usefulness; content
@@ -61,10 +58,7 @@ Each of these reads as machine-generated, and each hit is a finding:
 
 ## Rules
 
-MUST Cite a `path:line` or a viewport width on every finding.
-MUST Give every finding a concrete fix: the token, the scale step, or the
-  primitive that replaces what is there.
-MUST Read the computed value before judging spacing, size, color, or radius.
+MUST Follow `skill://ui-review` for rendered-surface evidence collection and citations.
 MUST Verify a component property before calling its use a defect or endorsing it. Read
   `manifests/components.json` when it serves, indexing `components` by id and selecting the
   engine-specific payload based on `meta.docgen`; the key is not the engine string, so

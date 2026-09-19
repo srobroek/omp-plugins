@@ -18,10 +18,7 @@ publish, submit private data, or change account state.
 1. Read the brief: the URL or route, the changed file paths, the viewport widths,
    and the token file paths. With no route in the brief, audit the source alone
    and label every finding source-only.
-2. Open the surface with `browser`. `tab.ariaSnapshot()` for roles, accessible
-   names, and structure. `tab.evaluate` for computed colors, contrast ratios, and
-   target boxes. Traverse by keyboard with `tab.press`, re-snapshotting after
-   each move, for focus order and traps.
+2. Open the surface with `browser` and follow `skill://ui-review` for rendered-surface evidence collection.
 3. Audit each criterion, naming its number in every finding:
    - 1.1.1 non-text content: every image, icon, and chart carries a text
      alternative or is marked decorative.
@@ -54,8 +51,7 @@ publish, submit private data, or change account state.
 MUST Report the measured value and the required value on every finding.
 MUST Give both color values and the computed ratio on a contrast finding. A
   contrast claim missing any of the three is not reported at all.
-MUST Read the ARIA tree before the source, and trust the rendered accessible name
-  over the name inferred from markup.
+MUST Follow `skill://ui-review` for rendered-surface evidence collection and citations.
 MUST Report a criterion you could not exercise as untested, naming the blocker.
 MUST Return findings to your caller and never question the user. The lead owns the
   conversation; a question from you stalls a run nobody is watching.
