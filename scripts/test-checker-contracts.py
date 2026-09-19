@@ -66,6 +66,15 @@ class CheckerContracts(unittest.TestCase):
             path.parent.mkdir(parents=True)
             path.write_text("export const shared = 1;\n", encoding="utf-8")
 
+        # Every registered set must exist in the fixture, because the checker treats a
+        # missing copy as a failure by design: a real tree that lost one has drifted.
+        # Populate the tokenizer set too, so this case exercises drift rather than
+        # tripping over an absent set it is not testing.
+        for plugin in ("beads", "speckit", "worktrunk"):
+            tokenizer = self.root / plugin / "extensions" / "shell-tokenizer.ts"
+            tokenizer.parent.mkdir(parents=True, exist_ok=True)
+            tokenizer.write_text("export const tokenize = 1;\n", encoding="utf-8")
+
         identical = self.run_script("check-shared-detector.py")
         self.assertEqual(identical.returncode, 0, identical.stdout)
         self.assertIn("PASS", identical.stdout)
