@@ -135,7 +135,8 @@ jobs:
           trap 'rm -f session/node_modules' EXIT
           while IFS= read -r d; do
             (cd "$d/.." && bun test extensions/) || exit 1
-          done < <(git ls-files '*/extensions/*.test.ts' | xargs -rn1 dirname | sort -u)
+          done < <(git ls-files '*/extensions/*.test.ts' | grep -v '\.git\.test\.ts$' | xargs -rn1 dirname | sort -u)
+          bun run test:git
       - name: Loader smoke against pinned OMP
         timeout-minutes: 10
         env:
