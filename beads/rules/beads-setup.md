@@ -11,7 +11,7 @@ MUST initialize the embedded store with the Beads CLI:
 
 Then verify that it has `bd where` and `bd dolt status`. The init advisory explains why `--skip-hooks` matters. It never blocks the command.
 
-MUST use embedded Dolt. The embedded write lock serializes mutations across Worktrunk-linked checkouts. There is no server-backed storage mode or shared-server metadata to configure.
+MUST use embedded Dolt. The embedded write lock serializes mutations across Worktrunk-linked checkouts. Configure no external database service.
 
 MUST run `bd hooks install --beads` only when the project owns the Git-hook
 bundle.
