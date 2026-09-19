@@ -4,6 +4,8 @@
   "description": "Execution agents: operator and external-repo worker.",
   "private": true,
   "omp": {
-    "extensions": ["./extensions/presence.ts"]
+    "extensions": [
+      "./extensions/presence.ts"
+    ]
   }
 }
