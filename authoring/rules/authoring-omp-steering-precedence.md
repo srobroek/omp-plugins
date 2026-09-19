@@ -1,5 +1,5 @@
 ---
-name: omp-steering-precedence
+name: authoring-omp-steering-precedence
 alwaysApply: true
 ---
 
