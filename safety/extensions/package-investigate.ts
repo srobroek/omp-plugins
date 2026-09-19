@@ -19,7 +19,7 @@ const PACKAGE_COMMANDS = new Map<string, Set<string>>([
 
 const ENV_ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*=/;
 const PACKAGE = /^(?!-)[A-Za-z@./_~][^;|&<>()`$]*$/;
-const SEPARATORS = new Set([";", "&", "|", "\n"]);
+const SEPARATORS: Record<string, true> = { ";": true, "&": true, "|": true, "(": true, ")": true, "$(": true, "\n": true };
 
 export function extractCommand(input: ToolCallEvent["input"]): string {
 	if ("command" in input && typeof input.command === "string") return input.command;
@@ -38,7 +38,7 @@ export function shouldInvestigate(command: string): boolean {
 	for (let i = 0; i < tokens.length; i++) {
 		const token = tokens[i];
 		if (!token) continue;
-		if (SEPARATORS.has(token.value)) {
+		if (SEPARATORS[token.value] === true) {
 			position = true;
 			continue;
 		}
