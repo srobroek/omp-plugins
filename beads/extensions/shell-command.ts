@@ -11,6 +11,19 @@
 import { resolve } from "node:path";
 import { tokenizeShell } from "./shell-tokenizer.ts";
 
+/**
+ * This module's public token shape, unchanged by the shared-tokenizer migration.
+ * `quoted` means the token BEGAN in quotes, which is the only distinction its
+ * consumers make: a command at token position must not be honoured when quoted,
+ * while a partially quoted argument such as `--body="..."` stays an option.
+ * The shared lexer reports `startsQuoted` and `sawQuote` separately; `tokenize`
+ * below narrows that to this contract deliberately rather than by alias.
+ */
+export type Token = {
+	value: string;
+	quoted: boolean;
+};
+
 const SEPARATORS: Record<string, true> = { ";": true, "&": true, "|": true, "\n": true };
 
 /**
