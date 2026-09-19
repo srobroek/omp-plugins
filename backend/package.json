@@ -1,7 +1,0 @@
-{
-  "name": "@srobroek/backend",
-  "version": "0.3.1",
-  "description": "Backend rules: API contracts, background jobs, and service boundaries.",
-  "private": true,
-  "omp": {}
-}

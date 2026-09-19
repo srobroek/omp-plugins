@@ -30,17 +30,6 @@ pattern = "^[0-9]{3}-[a-z0-9-]+$"
 required = false
 default = "no"
 
-# Accepted for interface parity with speckit-feature and speckit-lean, and it
-# conditions no step here.
-#
-# This profile has no assign/validate chain to drop: /speckit.agent-assign.* is the
-# agent-assign extension, and basic carries nothing optional. `implement` therefore
-# works the task beads under it directly, on every pour, whether or not the
-# extension is installed. Pour speckit-lean or speckit-feature to get the
-# assign -> validate -> execute chain.
-[vars.agent_assign]
-required = false
-default = "yes"
 
 [[steps]]
 id = "specify"

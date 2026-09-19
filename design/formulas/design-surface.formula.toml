@@ -63,11 +63,10 @@ react-native dependency. Record which marker was found. When nothing is
 detectable, ask at the INTENT gate rather than assuming: a hardcoded default
 silently misroutes every later recommendation. Platform is {{platform}}.
 
-Run skill://design-overview FIRST and record its Gaps section on this bead: every
+Run skill://design-system-audit and record its Gaps section on this bead: every
 absent upstream skill with the install command that supplies it, and every MCP
 server that did not connect. A wrapper whose upstream is missing STOPS when it is
-reached, so an unrecorded gap strands this molecule at the step that needs it
-rather than here.
+reached, so an unrecorded gap strands this molecule at the step that needs it.
 
 Promote an install to the INTENT gate only when a step that is actually ENABLED
 needs it. write-design-md is conditional on {{want_design_md}}, so its upstream
@@ -78,7 +77,7 @@ command and the same gap found mid-run costs a session.
 """
 
 [steps.metadata]
-skill_hints = "design-overview, design-system-audit"
+skill_hints = "design-system-audit"
 
 [[steps]]
 id = "grill-intent"
@@ -301,8 +300,7 @@ description = """
 Reconcile both verdicts yourself. Fix every FAIL and every agreed PARTIAL inside
 {{scope}}. Re-verify only the changed assertion, never the whole walk, and leave
 a citation per re-run. Do not accept a child verdict you cannot reproduce:
-report it as unreproduced rather than dropping it silently. Findings needing
-their own triage loop bond mol-design-fix-findings onto this step.
+report it as unreproduced rather than dropping it silently. Record findings on this step and resolve them before continuing.
 """
 
 [[steps]]

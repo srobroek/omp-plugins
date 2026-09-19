@@ -25,8 +25,6 @@ export const FORMULAS = [
 ] as const;
 
 export const EXTENSIONS = [
-	"agent-context",
-	"agent-assign",
 	"bugfix",
 	"cleanup",
 	"critique",

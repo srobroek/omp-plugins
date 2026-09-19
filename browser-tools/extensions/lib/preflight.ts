@@ -43,13 +43,13 @@ export async function runPreflight(
 		checks.push({ name: "driver", status: "fail", observed: error instanceof Error ? error.message : String(error), remedy: config.driverModulePath ? "Check the explicit driverModulePath module." : "Reinstall the browser-tools plugin or set the trusted driverModulePath configuration." });
 	}
 	const installed = inventory();
-	checks.push({ name: "browser-inventory", status: installed.length > 0 ? "ok" : "warn", observed: installed, remedy: installed.length > 0 ? undefined : "Install Firefox-family or Chrome-family browser." });
-	for (const engine of ["firefox", "chrome"] as const satisfies readonly Engine[]) {
+	checks.push({ name: "browser-inventory", status: installed.length > 0 ? "ok" : "warn", observed: installed, remedy: installed.length > 0 ? undefined : "Install a Firefox-family browser." });
+	for (const engine of ["firefox"] as const satisfies readonly Engine[]) {
 		try {
 			const browser = resolveBrowser(engine, "auto");
 			checks.push({ name: `auto-${engine}`, status: "ok", observed: { channel: browser.channel, path: browser.path } });
 		} catch (error) {
-			checks.push({ name: `auto-${engine}`, status: "warn", observed: error instanceof Error ? error.message : String(error), remedy: `Install one of: ${AUTO_ORDER[engine].join(", ")}.` });
+ 			checks.push({ name: `auto-${engine}`, status: "warn", observed: error instanceof Error ? error.message : String(error), remedy: `Install one of: ${AUTO_ORDER[engine]!.join(", ")}.` });
 		}
 	}
 	for (const entry of installed.filter((candidate) => candidate.engine === "firefox")) {

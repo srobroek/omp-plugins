@@ -54,7 +54,7 @@ PRESENT, PARTIAL, or ABSENT. Never invent a token a search could find. Platform
 is {{platform}}. ABSENT or PARTIAL means this tier is the wrong one: bond
 mol-design-tokens, or pour design-system, rather than establishing a scale here.
 
-Run skill://design-overview FIRST and record its Gaps section on this bead: every
+Run skill://design-system-audit and record its Gaps section on this bead: every
 absent upstream skill with the install command that supplies it. A wrapper whose
 upstream is missing STOPS when it is reached, so an unrecorded gap strands this
 molecule later rather than here.
@@ -71,7 +71,7 @@ Record every other gap for the reader without blocking on it.
 """
 
 [steps.metadata]
-skill_hints = "design-overview, design-system-audit"
+skill_hints = "design-system-audit"
 
 [[steps]]
 id = "specify-touch"
@@ -168,8 +168,7 @@ description = """
 Fix every FAIL and every agreed PARTIAL inside {{scope}}. Re-verify only the
 changed assertion, never the whole walk, and leave a citation per re-run. Do not
 accept a finding you cannot reproduce: report it as unreproduced rather than
-dropping it silently. A finding needing more than one pass bonds
-mol-design-fix-findings onto this step.
+dropping it silently. Record findings on this step and resolve them before continuing.
 """
 
 [[steps]]

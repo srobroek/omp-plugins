@@ -33,11 +33,11 @@ function directoryResolver(lockPath: string, cwd: string) {
 
 describe("headed browser configuration", () => {
 	test("applies default, environment, stored, then per-call precedence", async () => {
-		process.env.HEADED_BROWSER_DEFAULT_ENGINE = "chrome";
+		process.env.HEADED_BROWSER_DEFAULT_ENGINE = "firefox";
 		const config = await resolveConfig(
 			process.cwd(),
 			{ engine: "firefox", headless: true },
-			async () => ({ values: { defaultEngine: "chrome", defaultHeadless: false }, source: "test", warnings: [] }),
+			async () => ({ values: { defaultEngine: "firefox", defaultHeadless: false }, source: "test", warnings: [] }),
 		);
 		expect(config.engine).toBe("firefox");
 		expect(config.headless).toBe(true);
@@ -76,7 +76,7 @@ describe("headed browser configuration", () => {
 		const project = join(root, "project");
 		await mkdir(dirname(lockPath), { recursive: true });
 		await mkdir(join(project, ".omp"), { recursive: true });
-		await writeFile(lockPath, JSON.stringify({ settings: { "@srobroek/browser-tools": { defaultHeadless: true, defaultEngine: "chrome", driverModulePath: "/trusted/global.js" } } }));
+		await writeFile(lockPath, JSON.stringify({ settings: { "@srobroek/browser-tools": { defaultHeadless: true, defaultEngine: "firefox", driverModulePath: "/trusted/global.js" } } }));
 		await writeFile(join(project, ".omp", "plugin-overrides.json"), JSON.stringify({ settings: { "@srobroek/browser-tools": { defaultEngine: "firefox", driverModulePath: "/untrusted/project.js" } } }));
 		const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
 		process.env.PI_CODING_AGENT_DIR = agentDir;
@@ -102,8 +102,8 @@ describe("headed browser configuration", () => {
 		const lockPath = join(root, "plugins", "omp-plugins.lock.json");
 		await mkdir(dirname(lockPath), { recursive: true });
 		await writeFile(lockPath, JSON.stringify({ settings: { "@srobroek/browser-tools": { driverModulePath: "/trusted/global.js" } } }));
-		const stored = await loadStoredSettings("/project", async () => ({ getPluginSettings: async () => ({ defaultEngine: "chrome", driverModulePath: "/untrusted/project.js" }) }), directoryResolver(lockPath, "/project"));
-		expect(stored.values).toEqual({ defaultEngine: "chrome", driverModulePath: "/trusted/global.js" });
+		const stored = await loadStoredSettings("/project", async () => ({ getPluginSettings: async () => ({ defaultEngine: "firefox", driverModulePath: "/untrusted/project.js" }) }), directoryResolver(lockPath, "/project"));
+		expect(stored.values).toEqual({ defaultEngine: "firefox", driverModulePath: "/trusted/global.js" });
 		await rm(lockPath);
 		const noLock = await loadStoredSettings("/project", async () => ({ getPluginSettings: async () => ({ driverModulePath: "/untrusted/project.js" }) }), directoryResolver(lockPath, "/project"));
 		expect(noLock.values).toEqual({});

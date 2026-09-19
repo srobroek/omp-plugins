@@ -1,7 +1,0 @@
-{
-  "name": "@srobroek/ops",
-  "version": "0.6.3",
-  "description": "Operational telemetry and toolchain cache policy: metrics reading and log digests.",
-  "private": true,
-  "omp": {}
-}

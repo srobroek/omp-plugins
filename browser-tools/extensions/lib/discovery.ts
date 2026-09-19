@@ -1,9 +1,8 @@
-import { spawnSync } from "node:child_process";
 import { accessSync, constants, readFileSync } from "node:fs";
 import { homedir } from "node:os";
-import { basename, dirname, isAbsolute, join, resolve } from "node:path";
-import type { Channel, Engine } from "./config.ts";
+import { dirname, isAbsolute, join, resolve } from "node:path";
 
+import type { Channel, Engine } from "./config.ts";
 export type ConcreteChannel = Exclude<Channel, "auto" | "custom">;
 
 export const CHANNEL_ENGINE: Record<ConcreteChannel, Engine> = {
@@ -14,17 +13,10 @@ export const CHANNEL_ENGINE: Record<ConcreteChannel, Engine> = {
 	"firefox-nightly": "firefox",
 	librewolf: "firefox",
 	waterfox: "firefox",
-	chrome: "chrome",
-	"chrome-canary": "chrome",
-	chromium: "chrome",
-	edge: "chrome",
-	brave: "chrome",
-	vivaldi: "chrome",
 };
 
 export const AUTO_ORDER: Record<Engine, ConcreteChannel[]> = {
 	firefox: ["zen", "firefox", "firefox-developer", "firefox-esr", "firefox-nightly", "librewolf", "waterfox"],
-	chrome: ["chrome", "chromium", "edge", "brave", "vivaldi", "chrome-canary"],
 };
 
 export interface DiscoveryOptions {
@@ -71,12 +63,6 @@ const DARWIN_CANDIDATES: Record<ConcreteChannel, string[]> = {
 	"firefox-nightly": ["/Applications/Firefox Nightly.app/Contents/MacOS/firefox"],
 	librewolf: ["/Applications/LibreWolf.app/Contents/MacOS/librewolf"],
 	waterfox: ["/Applications/Waterfox.app/Contents/MacOS/waterfox"],
-	chrome: ["/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"],
-	"chrome-canary": ["/Applications/Google Chrome Canary.app/Contents/MacOS/Google Chrome Canary"],
-	chromium: ["/Applications/Chromium.app/Contents/MacOS/Chromium"],
-	edge: ["/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge"],
-	brave: ["/Applications/Brave Browser.app/Contents/MacOS/Brave Browser"],
-	vivaldi: ["/Applications/Vivaldi.app/Contents/MacOS/Vivaldi"],
 };
 
 const LINUX_NAMES: Record<ConcreteChannel, string[]> = {
@@ -87,21 +73,12 @@ const LINUX_NAMES: Record<ConcreteChannel, string[]> = {
 	"firefox-nightly": ["firefox-nightly"],
 	librewolf: ["librewolf"],
 	waterfox: ["waterfox"],
-	chrome: ["google-chrome"],
-	"chrome-canary": ["google-chrome-unstable"],
-	chromium: ["chromium", "chromium-browser"],
-	edge: ["microsoft-edge"],
-	brave: ["brave-browser"],
-	vivaldi: ["vivaldi-stable"],
 };
 
 const FLATPAK_IDS: Partial<Record<ConcreteChannel, string[]>> = {
 	zen: ["app.zen_browser.zen"],
 	firefox: ["org.mozilla.firefox"],
 	librewolf: ["io.gitlab.librewolf-community"],
-	chrome: ["com.google.Chrome"],
-	brave: ["com.brave.Browser"],
-	edge: ["com.microsoft.Edge"],
 };
 
 const WINDOWS_CANDIDATES: Record<ConcreteChannel, string[]> = {
@@ -112,25 +89,19 @@ const WINDOWS_CANDIDATES: Record<ConcreteChannel, string[]> = {
 	"firefox-nightly": ["%ProgramFiles%/Firefox Nightly/firefox.exe"],
 	librewolf: ["%ProgramFiles%/LibreWolf/librewolf.exe"],
 	waterfox: ["%ProgramFiles%/Waterfox/waterfox.exe"],
-	chrome: ["%ProgramFiles%/Google/Chrome/Application/chrome.exe"],
-	"chrome-canary": ["%LOCALAPPDATA%/Google/Chrome SxS/Application/chrome.exe"],
-	chromium: ["%ProgramFiles%/Chromium/Application/chrome.exe"],
-	edge: ["%ProgramFiles(x86)%/Microsoft/Edge/Application/msedge.exe"],
-	brave: ["%ProgramFiles%/BraveSoftware/Brave-Browser/Application/brave.exe"],
-	vivaldi: ["%ProgramFiles%/Vivaldi/Application/vivaldi.exe"],
 };
 
 export function candidatesForChannel(channel: ConcreteChannel, options: DiscoveryOptions = {}): string[] {
 	const platform = options.platform ?? process.platform;
 	const home = options.home ?? homedir();
 	const env = options.env ?? process.env;
-	if (platform === "darwin") return DARWIN_CANDIDATES[channel].map((path) => expandPath(path, home, env));
-	if (platform === "win32") return WINDOWS_CANDIDATES[channel].map((path) => expandPath(path, home, env));
+ 	if (platform === "darwin") return DARWIN_CANDIDATES[channel]!.map((path) => expandPath(path, home, env));
+ 	if (platform === "win32") return WINDOWS_CANDIDATES[channel]!.map((path) => expandPath(path, home, env));
 	if (platform === "linux") {
 		const pathEntries = options.pathEntries ?? (env.PATH ?? "").split(":").filter(Boolean);
 		const names = LINUX_NAMES[channel];
 		const candidates: string[] = [];
-		for (const name of names) {
+ 		for (const name of names ?? []) {
 			for (const pathDir of pathEntries) candidates.push(join(pathDir, name));
 			candidates.push(`/usr/bin/${name}`, `/usr/local/bin/${name}`, `/opt/${name}/${name}`);
 		}
@@ -167,7 +138,7 @@ export function resolveBrowser(
 	}
 	const channels = channel === "auto" ? AUTO_ORDER[engine] : [channel];
 	const probedPaths: string[] = [];
-	for (const candidateChannel of channels) {
+ 		for (const candidateChannel of channels ?? []) {
 		for (const candidatePath of candidatesForChannel(candidateChannel, options)) {
 			probedPaths.push(candidatePath);
 			if (exists(candidatePath)) return { engine, channel: candidateChannel, path: candidatePath, probedPaths };
@@ -182,10 +153,10 @@ export function inventory(options: DiscoveryOptions = {}): BrowserInventoryEntry
 	for (const channel of Object.keys(CHANNEL_ENGINE) as ConcreteChannel[]) {
 		const path = candidatesForChannel(channel, options).find(exists);
 		if (!path) continue;
-		const engine = CHANNEL_ENGINE[channel];
-		const version = engine === "firefox" ? readFirefoxMetadata(path, "application.ini", "Version") : chromeVersion(path);
-		const geckoMilestone = engine === "firefox" ? readFirefoxMetadata(path, "platform.ini", "Milestone") : undefined;
-		found.push({ engine, channel, path, version, geckoMilestone, bidiCapable: engine === "chrome" || Number.parseInt(geckoMilestone ?? "0", 10) >= 129, probedPaths: [path] });
+		const engine = "firefox" as const;
+		const version = readFirefoxMetadata(path, "application.ini", "Version");
+		const geckoMilestone = readFirefoxMetadata(path, "platform.ini", "Milestone");
+		found.push({ engine, channel, path, version, geckoMilestone, bidiCapable: Number.parseInt(geckoMilestone ?? "0", 10) >= 129, probedPaths: [path] });
 	}
 	return found;
 }
@@ -233,44 +204,23 @@ export function selectFirefoxProfile(
 }
 
 export function profileRoots(
-	engine: Engine,
+	_engine: Engine,
 	channel: Exclude<Channel, "auto" | "custom">,
 	options: DiscoveryOptions = {},
 ): string[] {
 	const platform = options.platform ?? process.platform;
 	const home = options.home ?? homedir();
 	const env = options.env ?? process.env;
-	if (engine === "firefox") {
-		const name = channel === "zen" ? "zen" : channel === "librewolf" ? "LibreWolf" : channel === "waterfox" ? "Waterfox" : "Firefox";
-		if (platform === "darwin") return [join(home, "Library/Application Support", name)];
-		if (platform === "win32") return [join(env.APPDATA ?? join(home, "AppData/Roaming"), name === "Firefox" ? "Mozilla/Firefox" : name.toLowerCase())];
-		const linux: Record<string, string[]> = {
-			zen: [join(home, ".zen"), join(home, ".var/app/app.zen_browser.zen/.zen")],
-			Firefox: [join(home, ".mozilla/firefox"), join(home, ".var/app/org.mozilla.firefox/.mozilla/firefox")],
-			LibreWolf: [join(home, ".librewolf")],
-			Waterfox: [join(home, ".waterfox")],
-		};
-		return linux[name] ?? [];
-	}
-	const rootName: Record<string, string> = {
-		chrome: "Google/Chrome",
-		"chrome-canary": "Google/Chrome Canary",
-		chromium: "Chromium",
-		edge: "Microsoft Edge",
-		brave: "BraveSoftware/Brave-Browser",
-		vivaldi: "Vivaldi",
+	const name = channel === "zen" ? "zen" : channel === "librewolf" ? "LibreWolf" : channel === "waterfox" ? "Waterfox" : "Firefox";
+	if (platform === "darwin") return [join(home, "Library/Application Support", name)];
+	if (platform === "win32") return [join(env.APPDATA ?? join(home, "AppData/Roaming"), name === "Firefox" ? "Mozilla/Firefox" : name.toLowerCase())];
+	const linux: Record<string, string[]> = {
+		zen: [join(home, ".zen"), join(home, ".var/app/app.zen_browser.zen/.zen")],
+		Firefox: [join(home, ".mozilla/firefox"), join(home, ".var/app/org.mozilla.firefox/.mozilla/firefox")],
+		LibreWolf: [join(home, ".librewolf")],
+		Waterfox: [join(home, ".waterfox")],
 	};
-	if (platform === "darwin") return [join(home, "Library/Application Support", rootName[channel] ?? channel)];
-	if (platform === "win32") return [join(env.LOCALAPPDATA ?? join(home, "AppData/Local"), rootName[channel] ?? channel, channel === "edge" ? "User Data" : "")];
-	const linuxRoot: Record<string, string> = {
-		chrome: "google-chrome",
-		"chrome-canary": "google-chrome-unstable",
-		chromium: "chromium",
-		edge: "microsoft-edge",
-		brave: "BraveSoftware/Brave-Browser",
-		vivaldi: "vivaldi",
-	};
-	return [join(home, ".config", linuxRoot[channel] ?? channel)];
+	return linux[name] ?? [];
 }
 
 export function resolveSourceProfile(
@@ -331,11 +281,6 @@ function readFirefoxMetadata(executablePath: string, filename: string, key: stri
 	return undefined;
 }
 
-function chromeVersion(executablePath: string): string | undefined {
-	const result = spawnSync(executablePath, ["--version"], { encoding: "utf8", timeout: 5000 });
-	const text = `${result.stdout ?? ""} ${result.stderr ?? ""}`.trim();
-	return text.match(/\d+(?:\.\d+)+/)?.[0];
-}
 
 function expandPath(path: string, home: string, env: NodeJS.ProcessEnv): string {
 	let expanded = path.startsWith("~/") ? join(home, path.slice(2)) : path;

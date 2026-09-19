@@ -206,7 +206,7 @@ export default function headedBrowserTools(pi: ExtensionAPI): void {
 	pi.registerTool({
 		name: "headed_read",
 		label: "Read headed browser",
-		description: "Read DOM snapshots, screenshots, metadata-only network logs, metrics, cookies, HTML, and PDF artifacts from a headed BiDi session. BiDi has no accessibility tree, coverage, tracing, or response bodies; use the design accessibility scanner for WCAG and chrome-devtools MCP for Chromium traces. Session artifacts disappear on close.",
+		description: "Read DOM snapshots, screenshots, metadata-only network logs, metrics, cookies, HTML, and PDF artifacts from a Firefox-family BiDi session. BiDi has no accessibility tree, coverage, tracing, or response bodies; use the design accessibility scanner for WCAG and the built-in browser tool for Chromium diagnostics. Session artifacts disappear on close.",
 		parameters: z.object({
 			op: z.enum(["snapshot", "screenshot", "evaluate", "cookies", "console", "network", "metrics", "pdf", "html"]),
 			sessionId: z.string().optional(), selector: z.string().optional(), expression: z.string().optional(),

@@ -22,11 +22,11 @@ Call `speckit_setup` (or walk the same steps if the tool is unavailable):
 
 1. `specify init --here --force --integration <codex|claude> --script sh`
 2. Register the community catalog (`catalog.community.json`).
-3. Install + enable the required extensions: `agent-context`, `agent-assign`,
-   `bugfix`, `cleanup`, `critique`, `fix-findings`, `iterate`, `qa`, `refine`,
-   `retro`, `review`, `roadmap`, `security-review`, `tinyspec`, plus
-   `status-report` from `latest-release:Open-Agent-Tools/spec-kit-status`.
-   Stop and report failure if any required CLI step fails.
+3. Install + enable the required extensions: `agent-context`, `bugfix`, `cleanup`,
+   `critique`, `fix-findings`, `iterate`, `qa`, `refine`, `retro`, `review`,
+   `roadmap`, `security-review`, `tinyspec`, plus `status-report` from
+   `latest-release:Open-Agent-Tools/spec-kit-status`. Stop and report failure if
+   any required CLI step fails.
 4. `bd init --skip-hooks` if no workspace; copy every formula from
    `skill://speckit-setup` sibling plugin `formulas/` into `.beads/formulas/`.
    Formulas: `speckit-feature`, `speckit-lean`, `speckit-basic`,

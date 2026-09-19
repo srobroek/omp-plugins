@@ -37,7 +37,7 @@ paths = [
   "beads/rules/beads-setup.md",
   "chezmoi/skills/chezmoi-editor/references/conventions.md",
   "design/skills/design-md/SKILL.md",
-  "design/skills/design-overview/SKILL.md",
+  "design/skills/design-system-audit/SKILL.md",
   "project/skills/journey-consolidate/SKILL.md",
   "project/skills/journey-init/templates/FORMAT.md",
   "project/skills/journey-init/templates/journey.template.md",

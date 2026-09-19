@@ -23,13 +23,6 @@
       "category": "productivity"
     },
     {
-      "name": "backend",
-      "description": "Backend rules: API contracts, background jobs, and service boundaries.",
-      "source": "./backend",
-      "version": "0.3.1",
-      "category": "development"
-    },
-    {
       "name": "beads",
       "description": "Beads issue tracking: dependency DAGs, formulas, and decisions recorded as beads.",
       "source": "./beads",
@@ -114,20 +107,6 @@
       "category": "language"
     },
     {
-      "name": "infrastructure",
-      "description": "Infrastructure rules for provisioning, environments, and operational surface.",
-      "source": "./infrastructure",
-      "version": "0.4.2",
-      "category": "devops"
-    },
-    {
-      "name": "ops",
-      "description": "Operational telemetry and toolchain cache policy: metrics reading and log digests.",
-      "source": "./ops",
-      "version": "0.6.3",
-      "category": "devops"
-    },
-    {
       "name": "project",
       "description": "Project lifecycle: brownfield onboarding, license selection, and user journeys.",
       "source": "./project",
@@ -178,7 +157,7 @@
     },
     {
       "name": "toolchain",
-      "description": "Toolchain defaults, tools-versus-scripts layout, and pragmatic output rules.",
+      "description": "Toolchain defaults, backend services, infrastructure, operations, tools-versus-scripts layout, and pragmatic output rules.",
       "source": "./toolchain",
       "version": "0.3.7",
       "category": "development"

@@ -44,12 +44,10 @@ The headed tools ship self-contained `puppeteer-core@25.3.0` bundles (about 2.8 
 The verified implementation target is `puppeteer-core@25.3.0`.
 | target | browsers | protocol | status |
 |---|---|---|---|
-| Firefox | Firefox, ESR, Developer, Nightly, LibreWolf, Waterfox | WebDriver BiDi | primary target; requires Gecko 129 or newer |
-| Zen 1.21.10b | Zen | WebDriver BiDi | detected on macOS, but this build timed out before publishing Puppeteer's WebSocket endpoint; select `firefox` instead |
-| Chrome | Chrome, Canary, Chromium, Edge, Brave, Vivaldi | WebDriver BiDi via `protocol: "webDriverBiDi"` | selectable per launch; built-in `browser` remains cheaper for plain Chromium diagnostics |
-| WebKit/Safari | Not applicable | Not applicable | Puppeteer cannot drive this family. `playwright-cross-engine` covers it. That server ships disabled, so see MCP servers below. |
+| Firefox | Zen, Firefox, ESR, Developer, Nightly, LibreWolf, Waterfox | WebDriver BiDi | selectable per launch |
+| Chromium | Not provided here | Use the built-in `browser` tool | built-in browser covers public Chromium diagnostics |
 
-WebDriver BiDi does not expose Puppeteer's accessibility tree, coverage, tracing, `Page.metrics()`, response bodies, drag APIs, offline mode, or network-condition emulation. Use the design plugin's accessibility scanner for WCAG checks and the `chrome-devtools` MCP server for Chromium traces.
+WebDriver BiDi does not expose Puppeteer's accessibility tree, coverage, tracing, `Page.metrics()`, response bodies, drag APIs, offline mode, or network-condition emulation. Use the design plugin's accessibility scanner for WCAG checks and the built-in `browser` tool for Chromium diagnostics.
 
 ## Privacy and lifecycle
 
@@ -60,34 +58,11 @@ WebDriver BiDi does not expose Puppeteer's accessibility tree, coverage, tracing
 - Audit records are appended to `<agentDir>/headed-browser-audit/<date>-<session>.jsonl` unless `auditDir` overrides it.
 - Remote mode is Firefox-only and experimental. It fails explicitly when the remote binary is absent or Puppeteer cannot connect to the advertised BiDi endpoint.
 
-## MCP servers
+## Chromium and MCP
 
-| name | capability | default |
-|---|---|---|
-| `chrome-devtools` | Chromium performance traces, Core Web Vitals insights, and source-mapped console stacks; telemetry is disabled with `--no-usage-statistics` | enabled |
-| `playwright-cross-engine` | WebKit engine and device-profile checks | **disabled** |
-
-`playwright-cross-engine` runs `@playwright/mcp`, and ships disabled. That package launches
-its browser lazily, at the first tool call rather than at startup. The server therefore
-connects and advertises all 24 tools with no WebKit build present. The failure arrives
-later, as `Browser webkit is not installed`, from whichever call came first.
-
-Disabling it keeps that failure out of sessions that never asked for WebKit. The default
-matches `storybook` and `excalidraw`.
-
-To enable it, first install the browser it needs:
-
-```sh
-npx -y playwright install webkit   # roughly 100 MB
-```
-
-Then set `enabled: true` for `playwright-cross-engine` in your own MCP configuration.
-
-The built-in `browser` remains the default for public headless Chromium work, ARIA snapshots, computed styles, screenshots, keyboard input, viewport sizing, and request interception. MCP servers connect only at session startup; if one is unavailable, run `/mcp reconnect <name>`.
+This plugin deliberately does not register an MCP server. The built-in `browser` tool covers Chromium work, including ARIA snapshots, computed styles, screenshots, keyboard input, viewport sizing, and request interception. Browser-tools focuses on Firefox-family sessions and their profile/cookie workflows.
 
 ## Licenses
 
 | package | license |
 |---|---|
-| `chrome-devtools-mcp` | Apache-2.0 |
-| `@playwright/mcp` | Apache-2.0 |

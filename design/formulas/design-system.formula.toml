@@ -82,11 +82,10 @@ react-native dependency. Record which marker was found. When nothing is
 detectable, ask at the INTENT gate rather than assuming. Platform is
 {{platform}}.
 
-Run skill://design-overview FIRST and record its Gaps section on this bead: every
+Run skill://design-system-audit and record its Gaps section on this bead: every
 absent upstream skill with the install command that supplies it, and every MCP
 server that did not connect. A wrapper whose upstream is missing STOPS when it is
-reached, so an unrecorded gap strands this molecule at the step that needs it
-rather than here.
+reached, so an unrecorded gap strands this molecule at the step that needs it.
 
 document-system is conditional on {{want_design_md}}. Its upstream
 create-design-md is required only when the user requests that artifact.
@@ -96,7 +95,7 @@ change the request. Record the system contract on beads regardless.
 """
 
 [steps.metadata]
-skill_hints = "design-overview, design-system-audit"
+skill_hints = "design-system-audit"
 
 [[steps]]
 id = "grill-intent"
@@ -431,8 +430,7 @@ Reconcile both verdicts yourself. Fix every FAIL and every agreed PARTIAL inside
 the token source and rebuilt, never patched in generated CSS. Re-verify only the
 changed assertion, never the whole walk, and leave a citation per re-run. Do not
 accept a child verdict you cannot reproduce: report it as unreproduced rather
-than dropping it silently. Findings needing their own triage loop bond
-mol-design-fix-findings onto this step.
+than dropping it silently. Record findings on this step and resolve them before continuing.
 """
 
 [[steps]]

@@ -39,10 +39,10 @@ describe("headed browser driver", () => {
 	});
 
 	test("routes allowed downloads into the session directory", async () => {
-		await launchLocal({ engine: "chrome", executablePath: "/browser", profileDir: "/profile", downloadsDir: "/downloads", config: config(await fakeDriver(), true) });
-		const options = (globalThis as { __headedLaunchOptions?: { downloadBehavior?: { policy?: string; downloadPath?: string }; protocol?: string } }).__headedLaunchOptions;
-		expect(options?.downloadBehavior).toEqual({ policy: "allow", downloadPath: "/downloads" });
-		expect(options?.protocol).toBe("webDriverBiDi");
+    await launchLocal({ engine: "firefox", executablePath: "/browser", profileDir: "/profile", downloadsDir: "/downloads", config: config(await fakeDriver(), true) });
+    const options = (globalThis as { __headedLaunchOptions?: { downloadBehavior?: { policy?: string; downloadPath?: string }; protocol?: string } }).__headedLaunchOptions;
+    expect(options?.downloadBehavior).toEqual({ policy: "allow", downloadPath: "/downloads" });
+    expect(options?.protocol).toBeUndefined();
 	});
 	test("rejects remote values that can alter the SSH command", () => {
 		expect(() => validateRemoteTarget("ci@runner.example.com", "/usr/bin/firefox")).not.toThrow();

@@ -17,7 +17,7 @@ const repo = resolve(process.env.OMP_SMOKE_REPO ?? join(import.meta.dir, ".."));
 // leaving this smoke to certify a host nobody develops against.
 const VERSION: string = (await json(join(repo, "package.json"))).devDependencies["@oh-my-pi/pi-coding-agent"];
 // Published checkout plugins (`./` catalog sources). A pin, so an accidental unpublish fails loudly.
-const EXPECTED_PLUGINS = 28;
+const EXPECTED_PLUGINS = 25;
 const started = performance.now();
 const timeoutMs = Number(process.env.OMP_SMOKE_TIMEOUT_MS ?? 600_000);
 const host = process.env.OMP_HOST_ROOT;

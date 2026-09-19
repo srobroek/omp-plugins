@@ -68,9 +68,8 @@ def plugin_dirs() -> list[Path]:
 # The names stay globally unique, which is the real invariant. New rules in the
 # owning plugin still take that plugin's prefix.
 ADOPTED_PREFIXES = {
-    "toolchain": ("coexistence-", "shell-"),
-    "infrastructure": ("terraform-",),
-    "authoring": ("research-",),
+	"toolchain": ("coexistence-", "shell-", "terraform-", "infrastructure-", "backend-", "ops-"),
+	"authoring": ("research-",),
 }
 
 def check_rule(path: Path, plugin: str, fail: list[str]) -> str | None:
