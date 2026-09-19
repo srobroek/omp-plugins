@@ -27,10 +27,11 @@ import sessionBeadsLifecycle, {
 	releaseClaimArgs,
 	releaseClaimCommand,
 	repoIdentity,
-	runBdResult,
-	sessionPinAfter,
-	sessionPinFor,
-	staleSkipNotice,
+  runBdResult,
+  sessionPinAfter,
+  sessionPinFor,
+  setBdStreamForTests,
+  staleSkipNotice,
 } from "./session-beads-lifecycle.ts";
 
 
@@ -612,7 +613,16 @@ describe("runBdResult", () => {
 			expect(result).toEqual({ failure: "bd command timed out" });
 		} finally { rmSync(root, { recursive: true, force: true }); }
 	});
+  test("accepts a classified failure from the bd seam", async () => {
+    setBdStreamForTests(async () => ({ failure: "bd exited with code 1: Error 1045 (28000): Access denied" }));
+    try {
+      expect(await runBdResult("/repo", ["list"])).toEqual({ failure: "bd exited with code 1: Error 1045 (28000): Access denied" });
+    } finally {
+      setBdStreamForTests(null);
+    }
+  });
 });
+
 
 describe("integration", () => {
 	/** Collect handlers the way the runtime would, then drive them directly. */
@@ -648,6 +658,40 @@ bashGates(fakePi as never);
 		if (!(env && typeof env === "object" && "BEADS_DIR" in env)) throw new Error("the rewritten env carries no BEADS_DIR");
 		return env.BEADS_DIR;
 	};
+  test("session start reports an injected bd authentication failure", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "beads-fake-start-"));
+    mkdirSync(join(dir, ".beads"));
+    setBdStreamForTests(async () => ({ failure: "bd exited with code 1: Error 1045 (28000): Access denied" }));
+    try {
+      const { handlers, logged } = wire();
+      const start = handlers.session_start?.[0];
+      if (start === undefined) throw new Error("session start handler was not registered");
+      await start({}, { cwd: dir });
+      expect(logged[0]).toContain("authentication/connection failed");
+    } finally {
+      setBdStreamForTests(null);
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("session close reports an injected bd read failure", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "beads-fake-close-"));
+    mkdirSync(join(dir, ".beads"));
+    setBdStreamForTests(async () => ({ failure: "bd exited with code 1: Error 1045 (28000): Access denied" }));
+    try {
+      const { handlers } = wire();
+      const ctx = { cwd: dir, sessionManager: { getSessionId: () => "fake-close" } };
+      const toolResult = handlers.tool_result?.[0];
+      const stop = handlers.session_stop?.[0];
+      if (toolResult === undefined || stop === undefined) throw new Error("lifecycle handlers were not registered");
+      toolResult({ toolName: "bash", toolCallId: "write", isError: false, input: { command: "bd update bd-fake --claim" }, content: [] }, ctx);
+      const result = await stop({}, ctx) as { additionalContext?: string };
+      expect(result.additionalContext).toContain("authentication/connection failed");
+    } finally {
+      setBdStreamForTests(null);
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 	test("the tool_call hook pins bash for the session's checkout and nothing else", async () => {
 		// This test asserts the branch where NO pin is inherited, so it has to establish
 		// that precondition. The plugin exports `BEADS_DIR` into every session it runs

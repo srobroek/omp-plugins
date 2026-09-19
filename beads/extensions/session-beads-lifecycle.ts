@@ -55,7 +55,7 @@ function bdStoreDir(cwd: string, env: NodeJS.ProcessEnv): string | undefined {
 }
 
 function authFailure(reason: string): boolean {
-	return /error\s*1045|access denied|connection refused/i.test(reason);
+  return /error\s*1045|access denied|connection refused/i.test(reason);
 }
 
 function bdReadFailure(scope: "start" | "close", reason: string): string {
@@ -637,7 +637,7 @@ async function releaseClaimsAtExit(cwd: string, state: SessionState): Promise<st
  */
 let internalRuns = 0;
 
-export type BdStream = (cwd: string, args: string[], deadline: number, env: NodeJS.ProcessEnv) => Promise<string | undefined>;
+export type BdStream = (cwd: string, args: string[], deadline: number, env: NodeJS.ProcessEnv) => Promise<string | BdRunResult | undefined>;
 
 let injectedStream: BdStream | null = null;
 
@@ -657,13 +657,14 @@ export async function runBdResult(
 	deadline = Date.now() + TIMEOUT_MS,
 	env: NodeJS.ProcessEnv = process.env,
 ): Promise<BdRunResult> {
-	const stream = injectedStream;
-	const execute = () => stream === null
-		? spawnBd(cwd, args, deadline, env)
-		: stream(cwd, args, deadline, env).then((output) => output === undefined
-			? { failure: "bd command could not be run" }
-			: { output });
-	if (writesStore(invocationFromArgv(args))) {
+  const stream = injectedStream;
+  const execute = async (): Promise<BdRunResult> => {
+    if (stream === null) return spawnBd(cwd, args, deadline, env);
+    const result = await stream(cwd, args, deadline, env);
+    if (result === undefined) return { failure: "bd command could not be run" };
+    return typeof result === "string" ? { output: result } : result;
+  };
+  if (writesStore(invocationFromArgv(args))) {
 		const locked = await withEmbeddedWriteLock(
 			cwd,
 			`beads-session-run-${process.pid}-${internalRuns++}`,
