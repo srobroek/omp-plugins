@@ -108,7 +108,9 @@ export async function cookCheck(formula: string, varargs: string[], cwd?: string
 	return [];
 }
 
-export function parseDryRun(out: string): { steps: string[]; gates: string[] } {
+export type DryRun = { steps: string[]; gates: string[] };
+
+export function parseDryRun(out: string): DryRun {
 	const steps: string[] = [];
 	const gates: string[] = [];
 	const re = /^\s+- (.*?) \(from ([^)]+)\)\s*$/;
@@ -125,6 +127,34 @@ export function parseDryRun(out: string): { steps: string[]; gates: string[] } {
 		}
 	}
 	return { steps, gates };
+}
+
+function jsonItem(item: unknown, gate: boolean): string | undefined {
+	if (typeof item === "string") return gate && !item.startsWith("Gate:") ? `Gate: ${item}` : item;
+	if (!item || typeof item !== "object" || Array.isArray(item)) return undefined;
+	const record = item as Record<string, unknown>;
+	const title = [record.title, record.name, record.label, record.type]
+		.find((value): value is string => typeof value === "string" && value.trim() !== "");
+	if (!title) return undefined;
+	if (gate) return title.startsWith("Gate:") ? title : `Gate: ${title}`;
+	const origin = [record.origin, record.source, record.id, record.path]
+		.find((value): value is string => typeof value === "string" && value.trim() !== "");
+	return origin ? `${title} <- ${origin}` : undefined;
+}
+
+export function parseDryRunJson(out: string): DryRun | undefined {
+	const parsed = parseTrailingJson(out);
+	if (parsed === undefined) return undefined;
+	const value = envelopeData(parsed);
+	if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+	const record = value as Record<string, unknown>;
+	const steps = record.steps;
+	const gates = record.gates;
+	if (!Array.isArray(steps) || !Array.isArray(gates)) return undefined;
+	const normalizedSteps = steps.map((item) => jsonItem(item, false));
+	const normalizedGates = gates.map((item) => jsonItem(item, true));
+	if (normalizedSteps.some((item) => item === undefined) || normalizedGates.some((item) => item === undefined)) return undefined;
+	return { steps: normalizedSteps as string[], gates: normalizedGates as string[] };
 }
 
 export function bodySteps(steps: string[]): string[] {
@@ -200,15 +230,15 @@ export function deepAssertFromMol(mol: MolShow): string[] {
 	return [];
 }
 
-export type PourHelp = { json: boolean; output?: unknown } | { error: string };
+export type PourHelp = { json: boolean } | { error: string };
+
+const UNRECOGNISED_POUR_OUTPUT = "formula-check: unrecognised pour output; run the command manually";
 
 export function parsePourHelp(stdout: string, stderr = ""): PourHelp {
 	const text = [stdout, stderr].filter(Boolean).join("\n").trim();
-	if (!text) return { error: "bd mol pour --help returned unrecognized output" };
-	const parsed = parseTrailingJson(text);
-	if (parsed !== undefined) return { json: true, output: parsed };
+	if (/\B--json\b/.test(text) && /\bmol\s+pour\b/i.test(text)) return { json: true };
 	if (/\b(?:usage|options|flags)\b/i.test(text) && /\bmol\s+pour\b/i.test(text)) return { json: false };
-	return { error: "bd mol pour --help returned unrecognized output" };
+	return { error: UNRECOGNISED_POUR_OUTPUT };
 }
 /**
  * Pour for real, then read back what it made.
@@ -274,7 +304,8 @@ export async function assertFormula(
 		const failure = help.error ?? ("error" in capability ? capability.error : "bd mol pour --help failed");
 		return { ok: false, text: `FAIL ${failure}`, failures: [failure], steps: 0, gates: 0 };
 	}
-	const dry = await runBd(["mol", "pour", params.formula, "--dry-run", ...varargs], cwd);
+	const dryArgs = ["mol", "pour", params.formula, "--dry-run", ...(capability.json ? ["--json"] : []), ...varargs];
+	const dry = await runBd(dryArgs, cwd);
 	if (dry.error || !dry.ok) {
 		const out = dry.error
 			? dry.error
@@ -282,8 +313,11 @@ export async function assertFormula(
 		const fail = `pour --dry-run failed:\n${out}`;
 		return { ok: false, text: `FAIL ${fail}`, failures: [fail], steps: 0, gates: 0 };
 	}
-	const listing = [dry.stdout, dry.stderr].join("\n");
-	const parsed = parseDryRun(listing);
+	const listing = [dry.stdout, dry.stderr].filter(Boolean).join("\n");
+	const parsed = capability.json ? parseDryRunJson(listing) : parseDryRun(listing);
+	if (!parsed || (!capability.json && parsed.steps.length === 0 && parsed.gates.length === 0)) {
+		return { ok: false, text: `FAIL ${UNRECOGNISED_POUR_OUTPUT}`, failures: [UNRECOGNISED_POUR_OUTPUT], steps: 0, gates: 0 };
+	}
 	const body = bodySteps(parsed.steps);
 	if (body.length === 0) failures.push("pour --dry-run returned no recognized body steps; cannot verify this formula");
 	const lines: string[] = [
