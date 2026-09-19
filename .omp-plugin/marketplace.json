@@ -159,7 +159,7 @@
       "name": "safety",
       "description": "Defence-in-depth advisories for destructive commands, attribution, and remote execution.",
       "source": "./safety",
-      "version": "0.6.4",
+      "version": "0.6.5",
       "category": "security"
     },
     {
