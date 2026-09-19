@@ -38598,7 +38598,7 @@ var init_DefaultProvider = __esm(() => {
 });
 
 // node_modules/@puppeteer/browsers/lib/fileUtil.js
-import { spawnSync as spawnSync2, spawn, execFile } from "child_process";
+import { spawnSync, spawn, execFile } from "child_process";
 import { promisify } from "util";
 var execFileAsync, debugFileUtil;
 var init_fileUtil = __esm(() => {
@@ -39739,7 +39739,7 @@ var init_PuppeteerNode = __esm(() => {
 });
 
 // node_modules/puppeteer-core/lib/puppeteer/node/ScreenRecorder.js
-import { spawn as spawn2, spawnSync as spawnSync3 } from "child_process";
+import { spawn as spawn2, spawnSync as spawnSync2 } from "child_process";
 import fs7 from "fs";
 import os9 from "os";
 import { dirname as dirname3 } from "path";
@@ -39848,7 +39848,7 @@ var init_ScreenRecorder = __esm(() => {
         colors ??= 256;
         overwrite ??= true;
         this.#fps = fps;
-        const { error } = spawnSync3(ffmpegPath);
+        const { error } = spawnSync2(ffmpegPath);
         if (error) {
           throw error;
         }
@@ -41002,7 +41002,7 @@ function __resetInstallIdCacheForTests() {
 // extensions/lib/config.ts
 var importPluginDirs = async () => exports_dirs;
 var PLUGIN_PACKAGE = "@srobroek/browser-tools";
-var ENGINES = ["firefox", "chrome"];
+var ENGINES = ["firefox"];
 var CHANNELS = [
   "auto",
   "zen",
@@ -41012,12 +41012,6 @@ var CHANNELS = [
   "firefox-nightly",
   "librewolf",
   "waterfox",
-  "chrome",
-  "chrome-canary",
-  "chromium",
-  "edge",
-  "brave",
-  "vivaldi",
   "custom"
 ];
 var PROFILE_MODES = ["ephemeral-clone", "persistent-dedicated", "clean"];
@@ -41207,7 +41201,6 @@ import { tmpdir as tmpdir3 } from "os";
 import { dirname as dirname4 } from "path";
 
 // extensions/lib/discovery.ts
-import { spawnSync } from "child_process";
 import { accessSync as accessSync2, constants as constants2, readFileSync as readFileSync2 } from "fs";
 import { homedir as homedir2 } from "os";
 import { dirname as dirname2, isAbsolute as isAbsolute3, join as join2, resolve as resolve2 } from "path";
@@ -41218,17 +41211,10 @@ var CHANNEL_ENGINE = {
   "firefox-developer": "firefox",
   "firefox-nightly": "firefox",
   librewolf: "firefox",
-  waterfox: "firefox",
-  chrome: "chrome",
-  "chrome-canary": "chrome",
-  chromium: "chrome",
-  edge: "chrome",
-  brave: "chrome",
-  vivaldi: "chrome"
+  waterfox: "firefox"
 };
 var AUTO_ORDER = {
-  firefox: ["zen", "firefox", "firefox-developer", "firefox-esr", "firefox-nightly", "librewolf", "waterfox"],
-  chrome: ["chrome", "chromium", "edge", "brave", "vivaldi", "chrome-canary"]
+  firefox: ["zen", "firefox", "firefox-developer", "firefox-esr", "firefox-nightly", "librewolf", "waterfox"]
 };
 var DARWIN_CANDIDATES = {
   zen: ["/Applications/Zen.app/Contents/MacOS/zen", "~/Applications/Zen.app/Contents/MacOS/zen"],
@@ -41237,13 +41223,7 @@ var DARWIN_CANDIDATES = {
   "firefox-developer": ["/Applications/Firefox Developer Edition.app/Contents/MacOS/firefox"],
   "firefox-nightly": ["/Applications/Firefox Nightly.app/Contents/MacOS/firefox"],
   librewolf: ["/Applications/LibreWolf.app/Contents/MacOS/librewolf"],
-  waterfox: ["/Applications/Waterfox.app/Contents/MacOS/waterfox"],
-  chrome: ["/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"],
-  "chrome-canary": ["/Applications/Google Chrome Canary.app/Contents/MacOS/Google Chrome Canary"],
-  chromium: ["/Applications/Chromium.app/Contents/MacOS/Chromium"],
-  edge: ["/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge"],
-  brave: ["/Applications/Brave Browser.app/Contents/MacOS/Brave Browser"],
-  vivaldi: ["/Applications/Vivaldi.app/Contents/MacOS/Vivaldi"]
+  waterfox: ["/Applications/Waterfox.app/Contents/MacOS/waterfox"]
 };
 var LINUX_NAMES = {
   zen: ["zen", "zen-browser"],
@@ -41252,21 +41232,12 @@ var LINUX_NAMES = {
   "firefox-developer": ["firefox-developer-edition"],
   "firefox-nightly": ["firefox-nightly"],
   librewolf: ["librewolf"],
-  waterfox: ["waterfox"],
-  chrome: ["google-chrome"],
-  "chrome-canary": ["google-chrome-unstable"],
-  chromium: ["chromium", "chromium-browser"],
-  edge: ["microsoft-edge"],
-  brave: ["brave-browser"],
-  vivaldi: ["vivaldi-stable"]
+  waterfox: ["waterfox"]
 };
 var FLATPAK_IDS = {
   zen: ["app.zen_browser.zen"],
   firefox: ["org.mozilla.firefox"],
-  librewolf: ["io.gitlab.librewolf-community"],
-  chrome: ["com.google.Chrome"],
-  brave: ["com.brave.Browser"],
-  edge: ["com.microsoft.Edge"]
+  librewolf: ["io.gitlab.librewolf-community"]
 };
 var WINDOWS_CANDIDATES = {
   zen: ["%ProgramFiles%/Zen Browser/zen.exe", "%LOCALAPPDATA%/Programs/Zen Browser/zen.exe"],
@@ -41275,13 +41246,7 @@ var WINDOWS_CANDIDATES = {
   "firefox-developer": ["%ProgramFiles%/Firefox Developer Edition/firefox.exe"],
   "firefox-nightly": ["%ProgramFiles%/Firefox Nightly/firefox.exe"],
   librewolf: ["%ProgramFiles%/LibreWolf/librewolf.exe"],
-  waterfox: ["%ProgramFiles%/Waterfox/waterfox.exe"],
-  chrome: ["%ProgramFiles%/Google/Chrome/Application/chrome.exe"],
-  "chrome-canary": ["%LOCALAPPDATA%/Google/Chrome SxS/Application/chrome.exe"],
-  chromium: ["%ProgramFiles%/Chromium/Application/chrome.exe"],
-  edge: ["%ProgramFiles(x86)%/Microsoft/Edge/Application/msedge.exe"],
-  brave: ["%ProgramFiles%/BraveSoftware/Brave-Browser/Application/brave.exe"],
-  vivaldi: ["%ProgramFiles%/Vivaldi/Application/vivaldi.exe"]
+  waterfox: ["%ProgramFiles%/Waterfox/waterfox.exe"]
 };
 function candidatesForChannel(channel, options = {}) {
   const platform = options.platform ?? process.platform;
@@ -41295,7 +41260,7 @@ function candidatesForChannel(channel, options = {}) {
     const pathEntries = options.pathEntries ?? (env.PATH ?? "").split(":").filter(Boolean);
     const names = LINUX_NAMES[channel];
     const candidates = [];
-    for (const name of names) {
+    for (const name of names ?? []) {
       for (const pathDir of pathEntries)
         candidates.push(join2(pathDir, name));
       candidates.push(`/usr/bin/${name}`, `/usr/local/bin/${name}`, `/opt/${name}/${name}`);
@@ -41328,7 +41293,7 @@ function resolveBrowser(engine, channel, executablePath = "", options = {}) {
   }
   const channels = channel === "auto" ? AUTO_ORDER[engine] : [channel];
   const probedPaths = [];
-  for (const candidateChannel of channels) {
+  for (const candidateChannel of channels ?? []) {
     for (const candidatePath of candidatesForChannel(candidateChannel, options)) {
       probedPaths.push(candidatePath);
       if (exists(candidatePath))
@@ -41344,10 +41309,10 @@ function inventory(options = {}) {
     const path = candidatesForChannel(channel, options).find(exists);
     if (!path)
       continue;
-    const engine = CHANNEL_ENGINE[channel];
-    const version = engine === "firefox" ? readFirefoxMetadata(path, "application.ini", "Version") : chromeVersion(path);
-    const geckoMilestone = engine === "firefox" ? readFirefoxMetadata(path, "platform.ini", "Milestone") : undefined;
-    found.push({ engine, channel, path, version, geckoMilestone, bidiCapable: engine === "chrome" || Number.parseInt(geckoMilestone ?? "0", 10) >= 129, probedPaths: [path] });
+    const engine = "firefox";
+    const version = readFirefoxMetadata(path, "application.ini", "Version");
+    const geckoMilestone = readFirefoxMetadata(path, "platform.ini", "Milestone");
+    found.push({ engine, channel, path, version, geckoMilestone, bidiCapable: Number.parseInt(geckoMilestone ?? "0", 10) >= 129, probedPaths: [path] });
   }
   return found;
 }
@@ -41384,45 +41349,22 @@ function selectFirefoxProfile(root, profilesText, installsText = "", sourceProfi
   }
   return { ...selected, resolvedPath: selected.isRelative ? resolve2(root, selected.path) : selected.path };
 }
-function profileRoots(engine, channel, options = {}) {
+function profileRoots(_engine, channel, options = {}) {
   const platform = options.platform ?? process.platform;
   const home = options.home ?? homedir2();
   const env = options.env ?? process.env;
-  if (engine === "firefox") {
-    const name = channel === "zen" ? "zen" : channel === "librewolf" ? "LibreWolf" : channel === "waterfox" ? "Waterfox" : "Firefox";
-    if (platform === "darwin")
-      return [join2(home, "Library/Application Support", name)];
-    if (platform === "win32")
-      return [join2(env.APPDATA ?? join2(home, "AppData/Roaming"), name === "Firefox" ? "Mozilla/Firefox" : name.toLowerCase())];
-    const linux = {
-      zen: [join2(home, ".zen"), join2(home, ".var/app/app.zen_browser.zen/.zen")],
-      Firefox: [join2(home, ".mozilla/firefox"), join2(home, ".var/app/org.mozilla.firefox/.mozilla/firefox")],
-      LibreWolf: [join2(home, ".librewolf")],
-      Waterfox: [join2(home, ".waterfox")]
-    };
-    return linux[name] ?? [];
-  }
-  const rootName = {
-    chrome: "Google/Chrome",
-    "chrome-canary": "Google/Chrome Canary",
-    chromium: "Chromium",
-    edge: "Microsoft Edge",
-    brave: "BraveSoftware/Brave-Browser",
-    vivaldi: "Vivaldi"
-  };
+  const name = channel === "zen" ? "zen" : channel === "librewolf" ? "LibreWolf" : channel === "waterfox" ? "Waterfox" : "Firefox";
   if (platform === "darwin")
-    return [join2(home, "Library/Application Support", rootName[channel] ?? channel)];
+    return [join2(home, "Library/Application Support", name)];
   if (platform === "win32")
-    return [join2(env.LOCALAPPDATA ?? join2(home, "AppData/Local"), rootName[channel] ?? channel, channel === "edge" ? "User Data" : "")];
-  const linuxRoot = {
-    chrome: "google-chrome",
-    "chrome-canary": "google-chrome-unstable",
-    chromium: "chromium",
-    edge: "microsoft-edge",
-    brave: "BraveSoftware/Brave-Browser",
-    vivaldi: "vivaldi"
+    return [join2(env.APPDATA ?? join2(home, "AppData/Roaming"), name === "Firefox" ? "Mozilla/Firefox" : name.toLowerCase())];
+  const linux = {
+    zen: [join2(home, ".zen"), join2(home, ".var/app/app.zen_browser.zen/.zen")],
+    Firefox: [join2(home, ".mozilla/firefox"), join2(home, ".var/app/org.mozilla.firefox/.mozilla/firefox")],
+    LibreWolf: [join2(home, ".librewolf")],
+    Waterfox: [join2(home, ".waterfox")]
   };
-  return [join2(home, ".config", linuxRoot[channel] ?? channel)];
+  return linux[name] ?? [];
 }
 function resolveSourceProfile(engine, channel, sourceProfileName = "", profileRootOverride = "", options = {}) {
   const exists = options.exists ?? pathExists;
@@ -41480,11 +41422,6 @@ function readFirefoxMetadata(executablePath, filename, key) {
     } catch {}
   }
   return;
-}
-function chromeVersion(executablePath) {
-  const result = spawnSync(executablePath, ["--version"], { encoding: "utf8", timeout: 5000 });
-  const text = `${result.stdout ?? ""} ${result.stderr ?? ""}`.trim();
-  return text.match(/\d+(?:\.\d+)+/)?.[0];
 }
 function expandPath(path, home, env) {
   let expanded = path.startsWith("~/") ? join2(home, path.slice(2)) : path;
@@ -41605,8 +41542,8 @@ async function runPreflight(cwd, ctx, overrides = {}) {
     checks.push({ name: "driver", status: "fail", observed: error instanceof Error ? error.message : String(error), remedy: config.driverModulePath ? "Check the explicit driverModulePath module." : "Reinstall the browser-tools plugin or set the trusted driverModulePath configuration." });
   }
   const installed = inventory();
-  checks.push({ name: "browser-inventory", status: installed.length > 0 ? "ok" : "warn", observed: installed, remedy: installed.length > 0 ? undefined : "Install Firefox-family or Chrome-family browser." });
-  for (const engine of ["firefox", "chrome"]) {
+  checks.push({ name: "browser-inventory", status: installed.length > 0 ? "ok" : "warn", observed: installed, remedy: installed.length > 0 ? undefined : "Install a Firefox-family browser." });
+  for (const engine of ["firefox"]) {
     try {
       const browser = resolveBrowser(engine, "auto");
       checks.push({ name: `auto-${engine}`, status: "ok", observed: { channel: browser.channel, path: browser.path } });
