@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.5](https://github.com/srobroek/omp-plugins/compare/safety--v0.6.4...safety--v0.6.5) (2026-09-19)
+
+
+### Bug Fixes
+
+* **safety:** narrow package investigation matcher ([#387](https://github.com/srobroek/omp-plugins/issues/387)) ([5641d2a](https://github.com/srobroek/omp-plugins/commit/5641d2a283b86fb59e9c095283468b8d2b3600df))
+
 ## [0.6.4](https://github.com/srobroek/omp-plugins/compare/safety--v0.6.3...safety--v0.6.4) (2026-09-13)
 
 
