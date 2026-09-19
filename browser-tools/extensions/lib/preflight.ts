@@ -49,7 +49,7 @@ export async function runPreflight(
 			const browser = resolveBrowser(engine, "auto");
 			checks.push({ name: `auto-${engine}`, status: "ok", observed: { channel: browser.channel, path: browser.path } });
 		} catch (error) {
-			checks.push({ name: `auto-${engine}`, status: "warn", observed: error instanceof Error ? error.message : String(error), remedy: `Install one of: ${AUTO_ORDER[engine].join(", ")}.` });
+ 			checks.push({ name: `auto-${engine}`, status: "warn", observed: error instanceof Error ? error.message : String(error), remedy: `Install one of: ${AUTO_ORDER[engine]!.join(", ")}.` });
 		}
 	}
 	for (const entry of installed.filter((candidate) => candidate.engine === "firefox")) {

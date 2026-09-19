@@ -2,6 +2,7 @@ import { accessSync, constants, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 
+import type { Channel, Engine } from "./config.ts";
 export type ConcreteChannel = Exclude<Channel, "auto" | "custom">;
 
 export const CHANNEL_ENGINE: Record<ConcreteChannel, Engine> = {
@@ -94,13 +95,13 @@ export function candidatesForChannel(channel: ConcreteChannel, options: Discover
 	const platform = options.platform ?? process.platform;
 	const home = options.home ?? homedir();
 	const env = options.env ?? process.env;
-	if (platform === "darwin") return DARWIN_CANDIDATES[channel].map((path) => expandPath(path, home, env));
-	if (platform === "win32") return WINDOWS_CANDIDATES[channel].map((path) => expandPath(path, home, env));
+ 	if (platform === "darwin") return DARWIN_CANDIDATES[channel]!.map((path) => expandPath(path, home, env));
+ 	if (platform === "win32") return WINDOWS_CANDIDATES[channel]!.map((path) => expandPath(path, home, env));
 	if (platform === "linux") {
 		const pathEntries = options.pathEntries ?? (env.PATH ?? "").split(":").filter(Boolean);
 		const names = LINUX_NAMES[channel];
 		const candidates: string[] = [];
-		for (const name of names) {
+ 		for (const name of names ?? []) {
 			for (const pathDir of pathEntries) candidates.push(join(pathDir, name));
 			candidates.push(`/usr/bin/${name}`, `/usr/local/bin/${name}`, `/opt/${name}/${name}`);
 		}
@@ -137,7 +138,7 @@ export function resolveBrowser(
 	}
 	const channels = channel === "auto" ? AUTO_ORDER[engine] : [channel];
 	const probedPaths: string[] = [];
-	for (const candidateChannel of channels) {
+ 		for (const candidateChannel of channels ?? []) {
 		for (const candidatePath of candidatesForChannel(candidateChannel, options)) {
 			probedPaths.push(candidatePath);
 			if (exists(candidatePath)) return { engine, channel: candidateChannel, path: candidatePath, probedPaths };
