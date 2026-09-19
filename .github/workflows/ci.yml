@@ -76,6 +76,10 @@ jobs:
 
       - name: Plugin inventory matches release metadata
         run: bun scripts/validate-plugins.ts
+      - name: Full-estate profile and rule census
+        run: |
+          bun scripts/write-full-profile.ts --check
+          bun scripts/rule-test-census.ts
 
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
@@ -148,17 +152,23 @@ jobs:
         env:
           OMP_HOST_ROOT: ${{ runner.temp }}/omp-session-host/node_modules/@oh-my-pi/pi-coding-agent
           OMP_BIN: ${{ runner.temp }}/omp-session-host/node_modules/.bin/omp
-        run: bun scripts/check-plugin-loading.ts
+          OMP_PROFILE: ci/plugins-full.toml
+        run: bun scripts/check-plugin-loading.ts --profile "$OMP_PROFILE"
+
 
       # A rule's `condition` is a regex with no compiler and no type check: the only
       # thing that catches a false positive is a corpus. These tests read the
       # condition straight out of the rule's frontmatter, so a regex edit that
       # reintroduces a known false positive fails here.
       - name: Rule corpus tests
+        env:
+          OMP_PROFILE: ci/plugins-full.toml
         run: |
           while IFS= read -r d; do
             (cd "$d/.." && bun test rules/) || exit 1
           done < <(git ls-files '*/rules/*.test.ts' | xargs -rn1 dirname | sort -u)
+      - name: Bash gate-chain latency benchmark
+        run: if [ -f scripts/bench-bash-gates.ts ]; then bun run bench:gates; else echo "bench:gates fixture not present yet"; fi
 
       # `uvx` is not preinstalled on GitHub runners.
       - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
