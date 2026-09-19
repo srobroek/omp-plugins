@@ -29,6 +29,11 @@ ROOT = Path(__file__).resolve().parent.parent
 # Each tuple is one set of copies that must be identical.
 DUPLICATED: tuple[tuple[str, ...], ...] = (
     (
+        "beads/extensions/shell-tokenizer.ts",
+        "speckit/extensions/shell-tokenizer.ts",
+        "worktrunk/extensions/shell-tokenizer.ts",
+    ),
+    (
         "dep-update/extensions/detect.ts",
         "whats-new/extensions/detect.ts",
     ),

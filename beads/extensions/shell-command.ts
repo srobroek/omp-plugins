@@ -9,6 +9,7 @@
  */
 
 import { resolve } from "node:path";
+import { tokenizeShell } from "./shell-tokenizer.ts";
 
 const SEPARATORS: Record<string, true> = { ";": true, "&": true, "|": true, "\n": true };
 
@@ -47,49 +48,13 @@ export function commandSegments(command: string): string[] {
 	out.push(current);
 	return out;
 }
-
 /**
- * `quoted` records whether the token BEGINS inside quotes, which is what
- * separates an argument from a flag: `'--claim'` is text, while `--body="x"`
- * is still the `--body` flag carrying a quoted value.
+ * Public compatibility wrapper retaining shell-command's token shape.
+ * It records only whether a token began in quotes; a partial quote such as
+ * `--body="..."` remains an option token.
  */
-export type Token = { value: string; quoted: boolean };
-
-/** Words of one segment, with quotes removed and the quoting recorded. */
 export function tokenize(segment: string): Token[] {
-	const out: Token[] = [];
-	let value = "";
-	let quoted = false;
-	let quote: string | null = null;
-	let started = false;
-	for (let i = 0; i < segment.length; i++) {
-		const char = segment[i] as string;
-		if (quote) {
-			if (char === quote && segment[i - 1] !== "\\") {
-				quote = null;
-				continue;
-			}
-			value += char;
-			continue;
-		}
-		if (char === "'" || char === '"') {
-			quote = char;
-			if (!started) quoted = true;
-			started = true;
-			continue;
-		}
-		if (/\s/.test(char)) {
-			if (started) out.push({ value, quoted });
-			value = "";
-			quoted = false;
-			started = false;
-			continue;
-		}
-		value += char;
-		started = true;
-	}
-	if (started) out.push({ value, quoted });
-	return out;
+	return tokenizeShell(segment, { preserveBackslashes: true }).map(({ value, startsQuoted }) => ({ value, quoted: startsQuoted }));
 }
 
 /**

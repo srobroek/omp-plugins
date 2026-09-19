@@ -76,34 +76,40 @@ describe("tokenize", () => {
 			"b-2",
 		]);
 	});
+test("a quoted here-document body is data, not commands", () => {
+	const command = "git commit -F - <<'EOF'\nfix: x\n\nrun bd close a-1 after\nEOF\necho done";
+	expect(tokenize(command)).toEqual(["git", "commit", "-F", "-", "\n", "echo", "done"]);
+});
 
-	test("a here-document body is data, not commands", () => {
-		const command = "git commit -F - <<'EOF'\nfix: x\n\nrun bd close a-1 after\nEOF\necho done";
-		expect(tokenize(command)).toEqual(["git", "commit", "-F", "-", "\n", "echo", "done"]);
-	});
+test("an unquoted here-document body is executable source", () => {
+	const command = "git commit -F - <<EOF\nrun bd close a-1 after\nEOF\necho done";
+	expect(tokenize(command)).toEqual(["git", "commit", "-F", "-", "\n", "run", "bd", "close", "a-1", "after", "\n", "echo", "done"]);
+});
 
-	test("the rest of the redirection's line stays commands", () => {
-		const command = "cat <<EOF | bd close a-1\nbd close b-2\nEOF\n";
-		expect(tokenize(command)).toEqual(["cat", "|", "bd", "close", "a-1", "\n"]);
-	});
-
-	test("<<- strips leading tabs before matching the terminator", () => {
-		expect(tokenize("cat <<-EOF\n\tbd close a-1\n\tEOF\nbd close b-2")).toEqual([
-			"cat",
-			"\n",
-			"bd",
-			"close",
-			"b-2",
-		]);
-	});
-
-	test("an unterminated body runs to the end", () => {
-		expect(tokenize("cat <<EOF\nbd close a-1")).toEqual(["cat", "\n"]);
-	});
-
+test("the rest of the redirection's line stays commands", () => {
+	const command = "cat <<EOF | bd close a-1\nbd close b-2\nEOF\n";
+	expect(tokenize(command)).toEqual(["cat", "|", "bd", "close", "a-1", "\n", "bd", "close", "b-2", "\n"]);
+});
+test("<<- strips leading tabs before matching the terminator", () => {
+	expect(tokenize("cat <<-EOF\n\tbd close a-1\n\tEOF\nbd close b-2")).toEqual([
+		"cat",
+		"\n",
+		"bd",
+		"close",
+		"a-1",
+		"\n",
+		"bd",
+		"close",
+		"b-2",
+	]);
+});
+test("an unterminated unquoted body is still executable source", () => {
+	expect(tokenize("cat <<EOF\nbd close a-1")).toEqual(["cat", "\n", "bd", "close", "a-1"]);
+});
 	test("a here-string is not a here-document", () => {
 		expect(tokenize("bd close a-1 <<< x")).toEqual(["bd", "close", "a-1", "<<<", "x"]);
 	});
+
 });
 
 describe("findCloseInvocations", () => {
@@ -151,12 +157,12 @@ describe("findCloseInvocations", () => {
 		]);
 	});
 
-	test("two invocations chained", () => {
-		expect(findCloseInvocations("bd close a-1 && bd -C /r close b-2")).toEqual([
-			{ ids: ["a-1"], dbArgs: [] },
-			{ ids: ["b-2"], dbArgs: ["-C", "/r"] },
-		]);
-	});
+test("an unquoted heredoc body exposes bd close", () => {
+	expect(findCloseInvocations("cat <<EOF\nbd close gate-1\nEOF")).toEqual([
+		{ ids: ["gate-1"], dbArgs: [] },
+	]);
+	expect(findCloseInvocations("cat <<'EOF'\nbd close gate-1\nEOF")).toEqual([]);
+});
 
 	test("other bd verbs are not close", () => {
 		for (const cmd of [

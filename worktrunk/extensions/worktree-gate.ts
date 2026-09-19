@@ -43,6 +43,7 @@ import {
 } from "@oh-my-pi/pi-coding-agent/tools/path-utils";
 import { unwrapHashlineHeaderPath } from "@oh-my-pi/pi-coding-agent/tools/plan-mode-guard";
 import { editInspect } from "@oh-my-pi/pi-natives";
+import { shellQuoteBalanced, tokenizeShell } from "./shell-tokenizer.ts";
 
 /** Refusal shape the `tool_call` gate API understands. */
 export interface GateRefusal {
@@ -164,7 +165,7 @@ const PATH_KEYS: Record<string, true> = {
 const MAX_SCAN_DEPTH = 6;
 
 /** Shell token separators emitted by the shared tokenizer. */
-const SHELL_SEPARATORS: Record<string, true> = { ";": true, "&": true, "|": true, "(": true, ")": true, "\n": true };
+const SHELL_SEPARATORS: Record<string, true> = { ";": true, "&": true, "|": true, "(": true, ")": true, "$(": true, "\n": true };
 
 /** Non-mutating command companions allowed around a bootstrap invocation. */
 const READ_ONLY_COMPANIONS: Record<string, true> = {
@@ -897,59 +898,10 @@ export function editTargets(input: unknown): string[] | null {
 	return null;
 }
 
-/**
- * Package-local copy of the tokenizer shape from beads/extensions/bd-close-gate.ts.
- * The plugins install separately and worktrunk declares no beads dependency; keep
- * this small copy until the shared parser gets its own released package.
- */
+/** Public compatibility wrapper retaining worktrunk's string-token surface. */
 export function tokenize(command: string): string[] | null {
-	const out: string[] = [];
-	let current = "";
-	let started = false;
-	let quote: '"' | "'" | null = null;
-	const pending: Array<{ delimiter: string; stripTabs: boolean }> = [];
-	const flush = (): void => {
-		if (started) { out.push(current); current = ""; started = false; }
-	};
-	for (let i = 0; i < command.length; i++) {
-		const ch = command[i] as string;
-		if (quote !== null) { if (ch === quote) quote = null; else { current += ch; started = true; } continue; }
-		if (ch === '"' || ch === "'") { quote = ch; started = true; continue; }
-		if (ch === "\\" && i + 1 < command.length) { current += command[++i] as string; started = true; continue; }
-		if (ch === "<" && command[i + 1] === "<" && command[i + 2] === "<") { flush(); out.push("<<<"); i += 2; continue; }
-		if (ch === "<" && command[i + 1] === "<") {
-			const operator = hereDocumentOperator(command, i);
-			if (operator !== null) { flush(); pending.push(operator); i = operator.end - 1; continue; }
-		}
-		if (ch === "\n") {
-			flush(); out.push(ch);
-			while (pending.length) { const document = pending.shift(); if (document === undefined) break; i = hereDocumentBodyEnd(command, i + 1, document); }
-			continue;
-		}
-		if (/\s/.test(ch)) { flush(); continue; }
-		if ({ ";": true, "&": true, "|": true, "(": true, ")": true }[ch] === true) { flush(); out.push(ch); continue; }
-		current += ch; started = true;
-	}
-	flush();
-	return quote === null ? out : null;
-}
-
-function hereDocumentOperator(command: string, start: number): { delimiter: string; stripTabs: boolean; end: number } | null {
-	let i = start + 2;
-	const stripTabs = command[i] === "-";
-	if (stripTabs) i++;
-	while (command[i] === " " || command[i] === "\t") i++;
-	const quote = command[i];
-	let delimiter = "";
-	if (quote === '"' || quote === "'") { const close = command.indexOf(quote, i + 1); if (close === -1) return null; delimiter = command.slice(i + 1, close); i = close + 1; }
-	else while (i < command.length && !/[\s;&|<>()]/.test(command[i] as string)) delimiter += command[i++];
-	return delimiter ? { delimiter, stripTabs, end: i } : null;
-}
-
-function hereDocumentBodyEnd(command: string, from: number, document: { delimiter: string; stripTabs: boolean }): number {
-	let cursor = from;
-	while (cursor < command.length) { let next = command.indexOf("\n", cursor); if (next === -1) next = command.length; let line = command.slice(cursor, next); if (document.stripTabs) line = line.replace(/^\t+/, ""); if (line === document.delimiter) return next; cursor = next + 1; }
-	return command.length;
+	if (!shellQuoteBalanced(command)) return null;
+	return tokenizeShell(command).map(({ value }) => value);
 }
 
 /**

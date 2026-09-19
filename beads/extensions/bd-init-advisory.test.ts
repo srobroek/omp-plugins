@@ -56,12 +56,14 @@ describe("findInitInvocations", () => {
 		}
 	});
 
-	test("heredoc bodies are not command positions", () => {
-		expect(findInitInvocations("cat <<'EOF'\nbd init\nEOF")).toEqual([]);
-		expect(findInitInvocations("cat <<'EOF'\nbd init\nEOF\nbd init --skip-hooks")).toEqual([
-			{ flags: ["--skip-hooks"], env: {}, cleared: false },
-		]);
-	});
+test("an unquoted heredoc body is executable source", () => {
+	expect(findInitInvocations("cat <<EOF\nbd init\nEOF")).toEqual([{ flags: [], env: {}, cleared: false }]);
+	expect(findInitInvocations("cat <<'EOF'\nbd init\nEOF")).toEqual([]);
+	expect(findInitInvocations("cat <<EOF\nbd init\nEOF\nbd init --skip-hooks")).toEqual([
+		{ flags: [], env: {}, cleared: false },
+		{ flags: ["--skip-hooks"], env: {}, cleared: false },
+	]);
+});
 
 	test("a different verb is a different command", () => {
 		for (const command of ["bd init-db", "bd help init", "bd where", "bd hooks list"]) {

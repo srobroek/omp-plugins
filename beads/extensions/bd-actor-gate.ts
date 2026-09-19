@@ -83,7 +83,7 @@ export function commandSegments(command: string): string[][] {
 	const segments: string[][] = [];
 	let segment: string[] = [];
 	for (const token of tokenize(command)) {
-		if ([";", "&", "|", "(", ")", "\n"].includes(token)) {
+		if ([";", "&", "|", "(", ")", "$(", "\n"].includes(token)) {
 			if (segment.length) segments.push(segment);
 			segment = [];
 		} else segment.push(token);

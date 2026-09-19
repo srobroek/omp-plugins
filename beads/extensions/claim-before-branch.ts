@@ -2,7 +2,7 @@ import type { ExtensionAPI, ToolCallEvent } from "@oh-my-pi/pi-coding-agent";
 
 import { extractCommand, tokenize } from "./bd-close-gate.ts";
 
-const SEPARATORS = new Set([";", "&", "|", "(", ")", "\n"]);
+const SEPARATORS = new Set([";", "&", "|", "(", ")", "$(", "\n"]);
 const ENV_ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*=/;
 const HELP_OR_VERSION = new Set(["--help", "-h", "--version", "-V"]);
 
