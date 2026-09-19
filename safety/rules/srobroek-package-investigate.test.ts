@@ -17,21 +17,35 @@ function condition(): RegExp {
 }
 
 const MUST_FIRE = [
-	"bun add zod",
 	"npm i -D typescript",
-	"pip install requests",
+	"bun add left-pad",
+	"uv add httpx",
 	"cargo add serde",
+	"go get example.com/x",
+	"pip install requests",
 	"cd x && bun add left-pad",
+	"npm install typescript --save-dev",
+	"npm search typescript",
+	"npm view typescript",
+	"pip index versions requests",
+	"cargo search serde",
 ];
 
 const MUST_NOT_FIRE = [
+	"bun install --silent",
+	"bun install --silent 2>&1 | tail -2",
+	"bun install",
+	"pnpm install --frozen-lockfile",
+	"npm install",
+	'bd create "... (npm i -D typescript)..."',
+	'git commit -m "docs: explain npm i -D typescript"',
+	"echo 'see npm install docs'",
+	"cat <<'EOF'\nbun add foo\nEOF",
 	"bun install --frozen-lockfile >/dev/null 2>&1; bun x tsc",
 	'bd create --description "investigate bun install --frozen-lockfile before release"',
-	"bun install",
 	"npm install --production=false && npm test",
 	"pnpm install --frozen-lockfile > log 2>&1",
 ];
-
 describe("srobroek-package-investigate", () => {
 	const re = condition();
 	for (const text of MUST_FIRE) {
