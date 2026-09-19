@@ -60,7 +60,7 @@ check("skill frontmatter name equals its directory", not mismatched, "; ".join(m
 
 # 4. Vendored skills carry their licence obligations.
 VENDORED = {
-    "ux-copy": ("Apache License", "anthropics/knowledge-work-plugins"),
+    "ui-microcopy": ("Apache License", "anthropics/knowledge-work-plugins"),
     "wireloom": ("MIT License", "StardockCorp/Wireloom"),
 }
 for name, (licence_marker, upstream) in VENDORED.items():
@@ -79,11 +79,9 @@ for name, (licence_marker, upstream) in VENDORED.items():
             problems.append(f"SKILL.md does not name {upstream}")
     check(f"vendored {name} carries its obligations", not problems, "; ".join(problems))
 
-# ux-copy must carry no LINK to the connector doc it cannot reach. Its modification notice
-# names that file in prose, which Apache-2.0 4(b) requires, so match the markdown link
-# form rather than any mention.
-uxcopy = (DESIGN / "skills" / "ux-copy" / "SKILL.md").read_text(encoding="utf-8")
-check("ux-copy drops the unresolvable connector link", "](../../CONNECTORS.md)" not in uxcopy)
+# The merged microcopy skill must carry no LINK to the connector doc it cannot reach.
+microcopy = (DESIGN / "skills" / "ui-microcopy" / "SKILL.md").read_text(encoding="utf-8")
+check("ui-microcopy drops the unresolvable connector link", "](../../CONNECTORS.md)" not in microcopy)
 
 # 5. No wrapper routes to an upstream this marketplace does not advertise. Routing to one
 #    would leave the refuse path with no install command, so the wrapper refuses forever.
