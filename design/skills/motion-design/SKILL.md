@@ -1,6 +1,6 @@
 ---
 name: motion-design
-description: Authors durations, easings, and reduced-motion branches from the project scale. Triggers on add an animation or make this feel smoother.
+description: Authors durations, easings, and reduced-motion branches from the project scale. Triggers when adding or changing animation.
 ---
 
 # Motion Design
@@ -8,8 +8,7 @@ description: Authors durations, easings, and reduced-motion branches from the pr
 Phase BUILD. Take motion from the system's scale and give every animation an opt-out.
 
 TRIGGER
-+ "add an animation", "make this feel smoother", "why does this feel janky"
-+ a transition, transform, or keyframe is about to be written
++ adding or changing an animation, transition, transform, or keyframe
 - verifying motion already implemented -> `ui-review`
 - platform motion conventions -> `platform-conformance`
 - discovering whether a motion scale exists -> `design-system-audit`
@@ -17,31 +16,14 @@ TRIGGER
 ## Workflow
 
 1. Route by what the motion actually is. -> the chosen route is named in the report header.
-   - PRIMARY, any rendered surface: MotionLint, for a deterministic scored pass. It leads
-     because it measures what shipped: it caught an unbranched 420ms transform and scored
-     the surface. `npx --yes playwright install chromium` once, then
-     `npx --yes motionlint audit "<url>" --json audit.json --ci`.
-     It also writes `.motionlint/audit/index.html` into the CALLER's working directory
-     rather than a temp dir, and nothing gitignores it. Run it from a scratch directory, or
-     add `.motionlint/` to `.gitignore` first, or the pass leaves a report to be committed
-     by accident.
-     `--ci` does NOT gate on findings. Measured: it exited 0 while the same run reported the
-     accessibility warning `No prefers-reduced-motion path`. Read `audit.json` and judge the
-     findings; the exit code alone proves nothing.
-   - AUTHORING React `motion.X` JSX values, and nothing else: `ss-motion`, whose own title
-     is "Motion Seed Applier". It applies values; it does not review a surface. Its own
-     **When NOT to use** says: "For non-React motion (CSS-only transitions, GSAP) - this
-     skill targets motion.X JSX only." So on CSS transitions, which is most motion, it
-     contributes nothing at all, and MotionLint above plus the rules below do the work.
-2. Check `ss-motion` is in your available skills BEFORE loading it, and only once the target
-   is React `motion.X`. Reading a `skill://` path that does not exist throws `Unknown skill`.
-   -> present: LOAD and follow. Absent: do NOT invent a duration table or an easing set.
-   Report the gap, name the install command from
-   `skill://motion-design/references/upstream.md`, and ASK the user to run it. An install
-   applies from the NEXT session, since OMP discovers plugins at startup, so never install
-   and retry within this one. MotionLint measures a surface and never authors values, so it
-   is a measurement route rather than a stand-in for the applier: the authoring itself waits
-   for the install.
+   - PRIMARY, any rendered surface: use the project's established motion measurement route.
+   - AUTHORING: use the project's established motion authoring route when one exists.
+2. Read the project's existing durations and easings first via
+   `skill://design-system-audit`. -> every value used is a token that already exists, or
+   the gate below fires.
+3. Verify the result on the running surface with `skill://ui-review`, including the
+   reduced-motion branch. -> `prefers-reduced-motion` observed to change behaviour, not
+   assumed to.
 3. Read the project's existing durations and easings first via
    `skill://design-system-audit`. -> every value used is a token that already exists, or
    the gate below fires.

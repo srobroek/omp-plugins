@@ -60,15 +60,5 @@ normative for everything you write.
 
 ## Output contract
 
-Your final message is machine-consumed by the spawning skill, CAP ≤200
-words. Begin your reply with `JOURNEY` -- the very first characters,
-before any other text, thought, or markdown. Compose in one pass; check
-the first line before sending: if anything precedes `JOURNEY`, delete it.
-First line:
-
-`JOURNEY J<id> v<version> @<sha> — PASS|FAIL|BLOCKED: one-line verdict`
-
-Then compact lists only: per-step results, amendments (with evidence
-refs), finding payloads or assigned ids (triage + severity), environment issues. Never reprint
-journey bodies, run files, or evidence -- reference `runs/<file>`, finding
-ids, and path:line only.
+Return the structured validation result through the result channel. Include per-step results, amendments with evidence references, finding payloads or assigned ids, triage/severity, and environment issues. Never reprint journey bodies, run files, or evidence; reference paths and ids only.
+CAP: none.

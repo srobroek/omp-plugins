@@ -1,6 +1,6 @@
 ---
 name: ui-review
-description: Verifies a rendered surface with ARIA snapshots, computed styles, and keyboard walks. Triggers on review this UI or check how this looks.
+description: Verifies a rendered surface with ARIA snapshots, computed styles, and keyboard walks. Triggers when asked to review a rendered UI.
 ---
 
 # UI Review
@@ -30,13 +30,7 @@ TRIGGER
 4. `tab.evaluate` for computed styles; LOAD `skill://ui-review/references/probes.md`.
    -> each claimed color, size, spacing, radius, and font value is a number read
    from `getComputedStyle`, never inferred from an image.
-5. Keyboard traversal: `tab.press("Tab")` forward. Backward is NOT
-   `tab.press("Shift+Tab")`, which throws `Unknown key: "Shift+Tab"`. Hold the modifier on
-   the raw page instead: `await page.keyboard.down("Shift")`, then
-   `await page.keyboard.press("Tab")`, then `await page.keyboard.up("Shift")`. `Escape` on
-   every dismissible surface. -> focus order matches visual order, every stop paints a
-   visible ring measured after its transition settled, nothing traps focus, and dismissal
-   restores focus.
+5. Keyboard traversal: walk forward with `tab.press("Tab")`, reading `document.activeElement` after each move via `tab.evaluate`. Repeat until focus returns to the starting element; use `Escape` on every dismissible surface. -> focus order matches visual order, every stop paints a visible ring measured after its transition settled, nothing traps focus, and dismissal restores focus.
 6. Widths 1440, 768, 375 via `page.setViewport`; LOAD
    `skill://ui-review/references/viewport-checks.md`. -> per width: no overflow,
    no clipping, no overlap, and every target at least 24x24 CSS px.

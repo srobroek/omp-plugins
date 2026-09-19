@@ -45,18 +45,6 @@ lightweight checks and triage.
 
 ## Output
 
-Reply to `main` as:
-
-`DOCS-GUARD <node> verdict=PASS|WARN|BLOCK items=<N>`
-
-For non-pass, include a numbered list of the top 8 findings:
-
-- `file:line — issue — required action`.
-
-Then add:
-
-- `next=RECHECK|IGNORE` for `WARN`
-- `next=FIX|REASSIGN` for `BLOCK`
-
-CAP 80 words clean, 160 words with findings.
+Return `DOCS-GUARD <node> verdict=PASS|WARN|BLOCK items=<N>` through the result channel. For non-pass results, include the top findings and next action. Never reprint file contents, diffs, or the caller's claim.
+CAP: none.
 MUST Never reprint file contents, diffs, or the caller's claim.

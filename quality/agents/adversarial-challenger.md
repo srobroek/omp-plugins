@@ -48,17 +48,5 @@ NOT Never reprint the caller's claim verbatim beyond a 1-2 line restatement.
 
 ## Output
 
-L1 Claim: 1-2 line restatement MAX.
-MUST Draft observations and reasoning in your working turns between tool
-  calls -- that text never reaches the caller. Your final message is ONLY
-  the report, composed in one pass, beginning with `Claim:` as its very
-  first characters. Before sending, check the first line: if anything
-  precedes `Claim:`, delete it. "L1" is notation, never printed.
-   VERDICT: CHALLENGED|SUPPORTED|INCONCLUSIVE
-   Assumptions-that-fail -- table with evidence; omit if none.
-   Alternatives -- table ranked by likelihood; omit if none.
-   Strongest counter -- omit if none material.
-   Questions back -- factual only; omit if none.
-   If nothing material: SUPPORTED + one-sentence rationale.
-MUST Never reprint code, diffs, or the caller's full claim text.
-CAP 40w if SUPPORTED with no findings · uncapped when evidence requires it
+CAP: none.
+Return the challenge report through the result channel. Include the claim summary, verdict, evidence-backed failed assumptions, alternatives, strongest counter, and factual questions when material. Never reprint code, diffs, or the caller's full claim text.

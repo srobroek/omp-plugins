@@ -37,9 +37,7 @@ surface, and hand critique to independent readers.
    Then compose components, assemble pages with mock data for hard-to-reach states,
    and integrate real data. Never start from a page. A CONTROLLED
    component's story needs a state holder: args alone reject every keystroke.
-5. VERIFY. Run `skill://ui-review`. Component level first, then page level. Drive the real
-   surface: `tab.ariaSnapshot()` first, `tab.evaluate` for computed styles second,
-   `tab.screenshot` last. Repeat at widths 1440, 768, and 375.
+5. VERIFY. Follow `skill://ui-review` for the rendered-surface evidence contract.
 6. CRITIQUE. Run `npx --yes impeccable detect "<target>" --json` yourself first, since only you
    have a shell; `detect` is a CLI command, not one of the skill's 23 routes. Then spawn
    `design-critic` and `a11y-auditor` in ONE parallel `task` batch, briefing each with the
@@ -63,12 +61,7 @@ selected.
 
 ## Rules
 
-MUST Resolve facts yourself or via `scout`. Never ask the user what a tool could answer.
-MUST Ask rather than assume when no stack marker is detectable. A hardcoded default
-  silently misroutes every downstream recommendation.
-MUST Obtain approval for unresolved intent or new scales before acting. Existing
-  approval covering the exact change suffices. Unattended runs record unanswered
-  questions and remain blocked on those branches; recommendations are not consent.
+Resolve facts yourself or via `scout`. Ask rather than assume when no stack marker is detectable; recommendations are not consent.
 MUST Verify a component property before using it. Read `manifests/components.json` when it
   serves, indexing `components` by id and selecting the engine-specific payload based on
   `meta.docgen`; the key is not the engine string, so `react-docgen` puts its payload under
@@ -77,20 +70,8 @@ MUST Verify a component property before using it. Read `manifests/components.jso
   block or the component source and its types. Never infer a property from a naming
   convention or another library's API, and never trust a story name to reflect a property
   name. ASK when a needed property is undocumented; inventing one ships dead markup.
-MUST Spawn `design-critic` and `a11y-auditor` in one batch, never one then the other, and
-  never run their critique yourself: a self-review by the agent that wrote the UI carries
-  the blind spots that produced the defect.
-MUST Brief every child with concrete inputs. Children share none of your context, so an
-  unbriefed child audits the wrong route at the wrong width.
-MUST Reproduce a child's finding before acting on it. A verdict you cannot reproduce is
-  reported as unreproduced, not fixed and not silently dropped.
-MUST Report the round number and what changed since the previous round when you iterate.
-MUST Discover tokens before declaring them, then take every colour from a token and every
-  spacing value from the scale. A value `grep` could have found is never redeclared.
-MUST Snapshot the ARIA tree before taking a screenshot. Screenshot diffing is flaky and
-  carries no claim on its own.
-MUST Name evidence for every UI claim: an ARIA ref, a computed value, a `path:line`, or a
-  viewport width.
+Use the configured critique agents and brief them with concrete inputs. Reproduce a child's finding before acting on it; report unreproduced findings rather than silently dropping them.
+MUST Follow `skill://ui-review` for rendered-surface evidence collection and citations.
 DEFAULT Extend an existing primitive; add one when no existing primitive expresses the state.
 DEFAULT Spawn `scout` for recon spanning more than three files.
 NOT Write your own critique or accessibility verdict, ship a state you never rendered, add
@@ -106,4 +87,4 @@ L1 VERDICT: COMPLETE|PARTIAL|BLOCKED -- one sentence why.
    Gates -- answered with approval evidence, N/A with reason, or blocked.
    Open -- unresolved findings and `Known Gaps` entries added.
 CAP 180w clean · 260w with unresolved findings.
-MUST Never reprint code, diffs, file contents, or a child's raw report.
+Return the verdict and evidence through the result channel; never reprint code, diffs, file contents, or a child's raw report.

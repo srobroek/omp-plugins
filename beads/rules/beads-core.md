@@ -17,18 +17,8 @@ MUST Set `BEADS_ACTOR` (`<harness>/<agent-name>/<session-id>`) on every
   `BD_ACTOR` until the project hook accepts `BEADS_ACTOR`.
 
 CLAIMING AND LEASES
-MUST Refuse claim, assign, close, or reopen on a live lease; comments remain available.
-MUST Classify a held bead before touching it:
-| state | evidence | action |
-|---|---|---|
-| live | the holder's agent is running or idle in `hub list`, or its job is running in `hub jobs`, or `orc_status.held` shows `worker … running` | refuse |
-| worker ended | `orc_status.held` shows its worker ended `completed`/`failed`/`aborted`, or `hub jobs` shows the job settled with the bead still `in_progress` | release with a comment naming the ended worker |
-| own | assignee is your actor (`omp/<session id>`) | release or restamp freely |
-| unprovable | different host (`lease_host`), no anchors, no worker record | ask, or release with `force`/an explicit takeover comment only when a human or the run lead asked for recovery |
-| closed | `status: closed` | never reassign; reopen is a separate decision |
-DEFAULT `lease_pid` is the OMP process id; every subagent of one OMP process shares it, so `kill -0` only proves a *different* OMP process died. Never treat a live pid as proof that a specific subagent is alive.
-MUST Release with show, update, then show: `bd show <id> --json` (record the assignee), then `BEADS_ACTOR='<actor>' BD_ACTOR='<actor>' bd update '<id>' --assignee '' --status open --set-metadata 'release_actor=<actor>' --set-metadata 'released_at=<UTC ISO>' --set-metadata 'released_from=<holder>'`. Run `bd show <id> --json` again. An assignee still present means a concurrent claim, so inspect rather than repeat. Add `--if-assignee '<holder>'` when `bd update --help` lists it.
-MUST Record a release or takeover comment (`bd comments add <id> -m …`) naming the evidence before the update.
+Claim and lease lifecycle choreography is supplied by the session lifecycle and orchestration harness. Read `rule://beads-lifecycle` for the bead-state contract; do not duplicate hook-managed claim, release, or takeover steps here.
+
 
 FIELD TAXONOMY
 | purpose | mechanism | writer |
@@ -58,28 +48,8 @@ NOT Use labels as locks or gate substitutes. Gate beads and `bd gate check`
   own blocking waits; `bd set-state` is non-blocking.
 
 REPORTING TO THE USER
-MUST In prose, immediately follow every Beads ID with a brief parenthetical
-  description. For example: `chezmoi-l3ig (find-tools routes discovery
-  incorrectly)`. Keep the brief description on every mention, including when an
-  expanded description has already been given.
-MUST When prose specifically references a Beads ID as the subject of a statement or
-  question, or as the conversation's main topic, give one expanded description
-  at that point covering its scope and current status, plus its relevance. Do
-  not repeat that expanded description while the same subject remains active.
-  Reset the one-time expanded-description rule only after the conversation
-  subject changes away from that bead and later returns to it.
-MUST Label unavailable metadata as unavailable. NEVER infer unavailable metadata.
-MUST Give every table containing Beads IDs a separate Description column and
-  populate it with each ID's brief parenthetical description; do not use a pure-ID
-  table as a substitute.
-MUST Give a bead an id, title, and one clause saying what it relates to:
-  project area, producing work, or blocked work. Bare ids and titles are not a
-  useful open-work report.
-MUST Report your beads first, then others in a separate section naming each
-  holder and whether its lease is live.
-DEFAULT Keep agent-to-agent reports terse while retaining the required brief
-  description and relation clause; use the [reporter contract]rule://beads-audit
-  for machine-readable detail.
+Semantic event and report requirements live in `rule://beads-audit`; use that rule instead of duplicating its output contract here.
+
 
 DEPENDENCIES
 DEFAULT Use `blocks` for ordering and `parent-child` for epics; use

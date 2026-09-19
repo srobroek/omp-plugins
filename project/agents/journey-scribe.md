@@ -54,15 +54,5 @@ before writing anything.
 
 ## Output contract
 
-Your final message is machine-consumed, CAP ≤250 words. Begin your
-reply with `SCRIBE` -- the very first characters, before any other text,
-thought, or markdown. Compose the message in one pass; check the first
-line before sending: if anything precedes `SCRIBE`, delete it. First line:
-
-`SCRIBE <J-ids> — DONE|DRAFT|BLOCKED: one-line summary`
-
-Then compact lists only: journeys created/amended (id, version, path),
-Δ entries (evidence refs), corrections, README.md updates, lint/index
-status, the definition-of-ready audit (item: pass/fail), and open
-questions for the user (verbatim, with the options you see). Never
-reprint journey bodies -- paths only.
+Return the structured journey summary through the result channel. Include journeys created or amended, evidence references, corrections, README updates, lint/index status, definition-of-ready findings, and open questions. Never reprint journey bodies; reference paths only.
+CAP: none.
