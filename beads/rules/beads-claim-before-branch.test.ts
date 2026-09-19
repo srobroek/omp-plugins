@@ -48,4 +48,9 @@ describe("beads claim-before-branch extension", () => {
 		expect(OLD_MATCHER.test(command)).toBe(true);
 		expect(hasUnclaimedBranchCreation(command)).toBe(false);
 	});
+
+	test("an unquoted heredoc body exposes branch creation", () => {
+		expect(hasUnclaimedBranchCreation("cat <<EOF\ngit checkout -b hidden\nEOF")).toBe(true);
+		expect(hasUnclaimedBranchCreation("cat <<'EOF'\ngit checkout -b hidden\nEOF")).toBe(false);
+	});
 });

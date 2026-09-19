@@ -21,7 +21,7 @@ const ENV_ASSIGNMENT = /^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/s;
 
 const HELP_FLAGS: Record<string, true> = { "--help": true, "-h": true };
 
-const SEPARATOR: Record<string, true> = { ";": true, "&": true, "|": true, "(": true, ")": true, "\n": true };
+const SEPARATOR: Record<string, true> = { ";": true, "&": true, "|": true, "(": true, ")": true, "$(": true, "\n": true };
 
 /**
  * Launchers that run the REAL command after their own arguments. Each entry names

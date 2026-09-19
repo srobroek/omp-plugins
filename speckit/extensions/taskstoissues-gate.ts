@@ -9,11 +9,12 @@
  * Fails open: a throwing tool_call handler is a bash outage.
  */
 import type { ExtensionAPI, ToolCallEvent } from "@oh-my-pi/pi-coding-agent";
+import { tokenizeShell } from "./shell-tokenizer.ts";
 
 export const DENY_REASON =
 	"blocked by speckit (taskstoissues converts tasks.md into a second tracker): do not run speckit-taskstoissues / speckit.taskstoissues / specify … /speckit.taskstoissues. Task state lives in beads. Link an existing GitHub issue with `bd update <id> --external-ref gh-<number>` instead.";
 
-const SEPARATOR: Record<string, true> = { ";": true, "&": true, "|": true, "(": true, ")": true };
+const SEPARATOR: Record<string, true> = { ";": true, "&": true, "|": true, "(": true, ")": true, "$(": true };
 const RESERVED_PREFIXES = new Set(["if", "then", "elif", "else", "while", "until", "do", "!"]);
 
 /**
@@ -64,68 +65,17 @@ export function extractCommand(input: ToolCallEvent["input"]): string {
 	if ("cmd" in input && typeof input.cmd === "string") return input.cmd;
 	return "";
 }
-
 /**
- * Shell-ish tokenizer: enough to tell a command-position invocation from the
- * same words inside a quoted --title/--reason/-m. Duplicated from the delivery
- * plugin because plugins install independently.
+ * Public compatibility wrapper retaining speckit's token shape.
+ * `quoted` historically meant any quoted portion, not only a quoted start.
  */
 export interface Token {
 	text: string;
-	/** Any part of the token was quoted: a mention, not something the agent typed as a command name. */
 	quoted: boolean;
 }
 
 export function tokenize(command: string): Token[] {
-	const out: Token[] = [];
-	let cur = "";
-	let started = false;
-	let sawQuote = false;
-	let quote: '"' | "'" | null = null;
-	const flush = (): void => {
-		if (started) {
-			out.push({ text: cur, quoted: sawQuote });
-			cur = "";
-			started = false;
-			sawQuote = false;
-		}
-	};
-	for (let i = 0; i < command.length; i++) {
-		const ch = command[i] as string;
-		if (quote) {
-			if (ch === quote) quote = null;
-			else {
-				cur += ch;
-				started = true;
-			}
-			continue;
-		}
-		if (ch === '"' || ch === "'") {
-			quote = ch;
-			started = true;
-			sawQuote = true;
-			continue;
-		}
-		if (ch === "\\" && i + 1 < command.length) {
-			cur += command[i + 1] as string;
-			started = true;
-			i++;
-			continue;
-		}
-		if (/\s/.test(ch)) {
-			flush();
-			continue;
-		}
-		if (SEPARATOR[ch] === true) {
-			flush();
-			out.push({ text: ch, quoted: false });
-			continue;
-		}
-		cur += ch;
-		started = true;
-	}
-	flush();
-	return out;
+	return tokenizeShell(command).map(({ value, sawQuote }) => ({ text: value, quoted: sawQuote }));
 }
 
 function isBannedToken(token: string): boolean {
