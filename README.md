@@ -52,13 +52,16 @@ Either carrier works for every plugin in this repository. Measured on a 27-plugi
 | `omp plugin link <dir>` | load | load | load |
 | either carrier, with no `omp` key in `package.json` | nothing loads: `omp plugin doctor` reports "not an omp plugin" | | |
 
-OMP walks the sibling `rules/` and `agents/` roots of an extension package it recognizes, and
-nothing else. Recognition comes from a `package.json` carrying an `omp` key. The key may be empty
-for a plugin that ships no extension modules: it is a marker, not a payload.
-`scripts/sync-plugin-manifests.py` writes it for every plugin, so run that script after adding one.
+OMP recognizes an extension package when its `package.json` carries an `omp` key.
 
-A marketplace install copies the whole plugin directory, `package.json` included, which is why the
-recognition condition decides both carriers rather than the carrier deciding it.
+The key may be empty for a plugin that ships no extension modules. It marks the package.
+
+- OMP walks the package's sibling `rules/` and `agents/` roots, and nothing else.
+
+- `scripts/sync-plugin-manifests.py` writes the key for every plugin. Run it after adding one.
+
+- Marketplace installs copy the whole plugin directory, including `package.json`.
+  Both carriers use the same recognition rule.
 
 `omp plugin list` shows every plugin under either carrier. `omp plugin doctor` adds a
 `✔ plugin:<package>` line for a linked directory only, so use it while developing here: a
@@ -81,6 +84,10 @@ omp -p 'read rule://beads-core'
 
 A rule from an uninstalled plugin answers `No such rule` and lists the rules that did load,
 which is the same evidence in the negative.
+
+## Developer tools
+
+Run `mise install` after cloning or creating a worktree. Mise installs the pinned `slopvac` and `biome` tools used by local checks.
 
 ## Developer hook setup
 

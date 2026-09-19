@@ -1,0 +1,3 @@
+[tools]
+"pipx:slopvac" = "1.0.1"
+"npm:@biomejs/biome" = "2.5.14"
