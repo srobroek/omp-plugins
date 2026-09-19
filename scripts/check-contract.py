@@ -33,8 +33,9 @@ ROLES = {
 }
 
 # `node_modules` is created by OMP itself the first time it runs in this repository, and it
-# is gitignored, so treating it as a plugin fails the gate on a clean tree.
-NOT_A_PLUGIN = {"scripts", "examples", "node_modules"}
+# is gitignored, so treating it as a plugin fails the gate on a clean tree. `ci` holds the
+# full-estate census fixtures (#419), not a plugin.
+NOT_A_PLUGIN = {"scripts", "examples", "node_modules", "ci"}
 
 
 def split_frontmatter(path: Path) -> tuple[dict[str, str], str] | None:

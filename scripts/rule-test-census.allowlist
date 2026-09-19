@@ -3,7 +3,6 @@ infrastructure-tfstate-guard
 ops-no-global-cargo-target
 find-tools-no-install
 delivery-main-branch-push-advisory
-beads-dolt-needs-authority
 beads-adr-generated-guard
 beads-merge-slot-never-wait
 beads-import-not-sync
