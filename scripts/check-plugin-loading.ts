@@ -25,7 +25,9 @@ if (profileArg >= 0) {
   const profile = await readFile(resolve(repo, profilePath), "utf8");
   const match = /plugins\s*=\s*\[([^\]]*)\]/s.exec(profile);
   check(match, `${profilePath}: missing marketplaces.plugins list`);
-  const profileNames = [...match[1].matchAll(/"([^"\\]*(?:\\.[^"\\]*)*)"/g)].map((m) => JSON.parse(`"${m[1]}"`));
+  const profileList = match[1];
+  check(profileList !== undefined, `${profilePath}: malformed marketplaces.plugins list`);
+  const profileNames = [...profileList.matchAll(/"([^"\\]*(?:\\.[^"\\]*)*)"/g)].map((m) => JSON.parse(`"${m[1]}"`));
   same(profileNames, entries.map((entry) => entry.name), `${profilePath} local plugin profile`);
 }
 const EXPECTED_PLUGINS = entries.length;

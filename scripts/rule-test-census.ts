@@ -16,8 +16,11 @@ const conditional: Array<{ plugin: string; name: string; path: string }> = [];
 for (const path of files) {
   const text = await readFile(join(repo, path), "utf8");
   if (!/^condition:\s*/m.test(text)) continue;
-  const name = /^name:\s*(?:["']?)([^"'\n]+?)(?:["']?)\s*$/m.exec(text)?.[1]?.trim() ?? path.split("/").at(-1)!.replace(/\.md$/, "");
-  conditional.push({ plugin: path.split("/")[0], name, path });
+  const filename = path.split("/").at(-1);
+  const fallbackName = filename?.replace(/\.md$/, "");
+  const name = /^name:\s*(?:["']?)([^"'\n]+?)(?:["']?)\s*$/m.exec(text)?.[1]?.trim() ?? fallbackName;
+  if (!name) throw new Error(`Unable to determine rule name from ${path}`);
+  conditional.push({ plugin: path.split("/")[0] ?? "", name, path });
 }
 const allowText = await readFile(allowlistPath, "utf8").catch(() => "");
 const allowlist = new Set(allowText.split(/\r?\n/).map((line) => line.replace(/#.*/, "").trim()).filter(Boolean));
@@ -29,7 +32,7 @@ for (const rule of conditional) {
   for (const test of tests) {
     const text = await readFile(join(repo, test), "utf8");
     if (!text.includes(rule.name)) continue;
-    const titles = [...text.matchAll(/\b(?:test|it)\s*\(\s*["'`]([^"'`]+)["'`]/g)].map((match) => match[1].toLowerCase());
+    const titles = [...text.matchAll(/\b(?:test|it)\s*\(\s*["'`]([^"'`]+)["'`]/g)].flatMap((match) => match[1] ? [match[1].toLowerCase()] : []);
     const fires = titles.some((title) => /fire|match|block/.test(title));
     const allows = titles.some((title) => /not|ignore|allow/.test(title));
     if (fires && allows) candidates.push(test);
