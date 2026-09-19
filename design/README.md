@@ -39,11 +39,7 @@ A `⚠ … not an omp plugin` line means that directory's rules and agents are s
 
 ## Skills
 
-The wrapper skills route to the upstream skills below. When an upstream is absent,
-the wrapper stops and prints the installation command.
-
-Four skills are not wrappers. This package implements `design-overview` and
-`ui-review` locally and vendors `wireloom` and `ux-copy`. All four ship with this package.
+The copy skill is implemented locally as `ui-microcopy`, which includes the merged UX-copy guidance. It ships with this package.
 
 | Skill | Implementation or route | Use when |
 |---|---|---|
@@ -54,10 +50,9 @@ Four skills are not wrappers. This package implements `design-overview` and
 | `accessibility-audit` | the `accessibility-scanner` server measures; `accessibility` covers criteria; the `@axe-core/cli` gate is the fallback | Check WCAG 2.2 AA with measured values |
 | `platform-conformance` | routes to eight `*-design-guidelines` and `modern-web-guidance` | Check vendor conventions per platform |
 | `motion-design` | the `motionlint` CLI measures; `ss-motion` authors React `motion.X` only | Set durations, easings, reduced-motion branches |
-| `ui-microcopy` | routes to vendored `ux-copy` | Write interface copy, errors, empty states |
+| `ui-microcopy` | local, with merged UX-copy guidance | Write and review interface copy, errors, empty states, and CTAs |
 | `design-prototype` | routes by fidelity to five upstreams and two servers | Produce a wireframe, prototype, mockup, or deck |
 | `wireloom` | vendored, MIT | Render a wireframe as inline SVG inside Markdown |
-| `ux-copy` | vendored, Apache-2.0 | Apply the microcopy method itself |
 
 ## Agents
 
@@ -271,12 +266,12 @@ Use the first-choice asset for each topic:
 | Accessibility, web | `accessibility` |
 | Platform conformance | the eight `ehmo` `*-design-guidelines` |
 | Motion | `ss-motion` |
-| Microcopy | `ux-copy` |
+| Microcopy | `ui-microcopy` |
 | Wireframing | `html-wireframe`, `wireloom` |
 | Clickable prototyping | `html-prototype` |
 | Product-wide visual direction | `ui-ux-pro-max` |
 | Current web practice | `modern-web-guidance` |
-| Token build | Terrazzo |
+| Microcopy | `ui-microcopy` |
 | Browser-driven verification | `ui-review`, on OMP `browser` |
 
 The detector claims 59 executable rules. A fixture probe with about ten seeded defects recorded:
@@ -294,16 +289,11 @@ It is never located evidence or a substitute for driving the surface.
 
 No skill routes to these two `impeccable` commands:
 
-- `clarify` omits four outputs that `ux-copy` provides:
+- `clarify` omits four outputs that `ui-microcopy` provides:
   - an onboarding surface
   - tone-tagged alternatives
   - a requester checklist
   - a tone map
-- `document` does not write DESIGN.md. Its site lists six sections and its repository
-  prompt lists eight. Its sample frontmatter fails the linter, whose dimension pattern
-  rejects `clamp(...)`.
-
-## Narrow specializations
 
 A second asset joins a first choice only when its output stands alone.
 
@@ -368,21 +358,16 @@ resolve first-wins without a diagnostic. `ss-learn` installs but is unavailable 
 
 | Skill | Upstream | License |
 |---|---|---|
-| `ux-copy` | `anthropics/knowledge-work-plugins` | Apache-2.0 |
+| `ui-microcopy` | `anthropics/knowledge-work-plugins` guidance | Apache-2.0 |
 | `wireloom` | `StardockCorp/Wireloom` | MIT |
 
 Each ships a LICENSE and a NOTICE beside its SKILL.md, and each records its own
 modifications.
 
-This package vendors `ux-copy` because installing its repository also exposes four
-Figma-oriented review templates that this package does not use. It vendors `wireloom`
-because that upstream ships a bare `.md` file, which no catalog entry makes discoverable.
-
-## MCP servers
-
-This package declares three servers. OMP loads plugin MCP tools into one flat
-session-global registry, so the `browser-tools` and `diagram` packages hold the
-general-purpose servers.
+This package vendors the UX-copy guidance inside `ui-microcopy` because installing its
+upstream repository also exposes four Figma-oriented review templates that this package
+does not use. It vendors `wireloom` because that upstream ships a bare `.md` file, which
+no catalog entry makes discoverable.
 
 | Server | Provides what `browser` cannot |
 |---|---|
@@ -425,12 +410,12 @@ invocations, the `--package` rule, and required output flags.
 | `ss-a11y`, `ss-copy` | A first-choice asset above covers each topic |
 | `fixing-accessibility`, `fixing-motion-performance` | A first-choice asset above covers each topic |
 | `baseline-ui`, `improve-ui` | `impeccable` covers both |
-| `design-token`, `ux-writing` | `ss-tokens` and `ux-copy` cover these |
+| `design-token`, `ux-writing` | `ss-tokens` and `ui-microcopy` cover these |
 | five `knowledge-work-plugins` design skills | Figma-oriented review templates; this package uses other assets for these topics |
 | `fixing-metadata` | Audits metadata that nothing else covers, but emits no located finding. `web-asset-generator` produces the assets |
 | `LE-VAI/designesy-org` | MIT. Its output gives a URL only, with no selector or source line |
 | `canvas-design` | `xd://generate_image` already covers its raster output |
-| `pa11y` | Takes one URL. The axe CLI covers it |
+| `design-token`, `ux-writing` | `ss-tokens` and `ui-microcopy` cover these |
 | `lighthouse-mcp`, `motionlint mcp` | Each duplicates a CLI above |
 | `culori` | Duplicates `colorjs.io` |
 | `penpot/penpot-mcp`, Figma Dev Mode MCP | Neither tool is in use here |
