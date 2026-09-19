@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.0.1](https://github.com/srobroek/omp-plugins/compare/beads--v2.0.0...beads--v2.0.1) (2026-09-19)
+
+
+### Bug Fixes
+
+* **beads:** ignore retired ledgers in PR gate ([c171c80](https://github.com/srobroek/omp-plugins/commit/c171c80295ca8feb19eff6bbd283a65d3347c2d5))
+
 ## [2.0.0](https://github.com/srobroek/omp-plugins/compare/beads--v1.7.3...beads--v2.0.0) (2026-09-19)
 
 

@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.11.3](https://github.com/srobroek/omp-plugins/compare/delivery--v0.11.2...delivery--v0.11.3) (2026-09-19)
+
+
+### Bug Fixes
+
+* **beads:** ignore retired ledgers in PR gate ([c171c80](https://github.com/srobroek/omp-plugins/commit/c171c80295ca8feb19eff6bbd283a65d3347c2d5))
+* **beads:** retire ledger activity without no-bead escape hatch ([dba55f8](https://github.com/srobroek/omp-plugins/commit/dba55f85d3f493c9a6357093f6abcc10fa4b5df5))
+
 ## [0.11.2](https://github.com/srobroek/omp-plugins/compare/delivery--v0.11.1...delivery--v0.11.2) (2026-09-16)
 
 
