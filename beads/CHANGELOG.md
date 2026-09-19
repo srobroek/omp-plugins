@@ -1,5 +1,47 @@
 # Changelog
 
+## [1.7.2](https://github.com/srobroek/omp-plugins/compare/beads--v1.7.1...beads--v1.7.2) (2026-09-18)
+
+
+### Bug Fixes
+
+* **beads:** give session lifecycle bd calls the server credential ([#376](https://github.com/srobroek/omp-plugins/issues/376)) ([973a689](https://github.com/srobroek/omp-plugins/commit/973a68964f3363eb39ac17268fbe3109e17198f1))
+
+## [1.7.1](https://github.com/srobroek/omp-plugins/compare/beads--v1.7.0...beads--v1.7.1) (2026-09-18)
+
+
+### Bug Fixes
+
+* **beads:** refuse a concurrent dolt server start ([#368](https://github.com/srobroek/omp-plugins/issues/368)) ([82d794c](https://github.com/srobroek/omp-plugins/commit/82d794cabe032b967564e30e5d9c4b84f812dc89))
+
+## [1.7.0](https://github.com/srobroek/omp-plugins/compare/beads--v1.6.0...beads--v1.7.0) (2026-09-18)
+
+
+### Features
+
+* **beads:** restore a reclaimed merge slot to its owner ([#365](https://github.com/srobroek/omp-plugins/issues/365)) ([d2962b0](https://github.com/srobroek/omp-plugins/commit/d2962b00ece33d3eb0dd20600b6522e11ec3d981))
+
+## [1.6.0](https://github.com/srobroek/omp-plugins/compare/beads--v1.5.2...beads--v1.6.0) (2026-09-18)
+
+
+### Features
+
+* **beads:** enforce pool and reclaim phase discipline ([#363](https://github.com/srobroek/omp-plugins/issues/363)) ([828e2c3](https://github.com/srobroek/omp-plugins/commit/828e2c3d3c8f5f6810ddabf90467747f28295ff3))
+
+## [1.5.2](https://github.com/srobroek/omp-plugins/compare/beads--v1.5.1...beads--v1.5.2) (2026-09-18)
+
+
+### Bug Fixes
+
+* **beads:** anchor computed claim ids ([#361](https://github.com/srobroek/omp-plugins/issues/361)) ([6ea6cd1](https://github.com/srobroek/omp-plugins/commit/6ea6cd182a722991baa7bd357f3ff449271cad8f))
+
+## [1.5.1](https://github.com/srobroek/omp-plugins/compare/beads--v1.5.0...beads--v1.5.1) (2026-09-18)
+
+
+### Bug Fixes
+
+* **beads:** read argv for the claim-before-branch trigger ([#358](https://github.com/srobroek/omp-plugins/issues/358)) ([3c2a18b](https://github.com/srobroek/omp-plugins/commit/3c2a18b00080d7738d447bbf22dbae439e5f9f39))
+
 ## [1.5.0](https://github.com/srobroek/omp-plugins/compare/beads--v1.4.1...beads--v1.5.0) (2026-09-18)
 
 

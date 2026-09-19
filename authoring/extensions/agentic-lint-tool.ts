@@ -30,10 +30,10 @@ export type Finding = {
 export type Triple = [string, string, string];
 
 const HEDGES = new RegExp(
-	String.raw`\b(when (practical|appropriate|possible|needed|available)|consider|` +
-	String.raw`generally|usually|normally|if necessary|as needed|try to|ideally|` +
-	String.raw`where possible|genuinely|materially|substantial(ly)?|reasonabl[ye]|` +
-	String.raw`clearly|obvious(ly)?|large enough|significant(ly)?)\b`,
+	`\\b(when (practical|appropriate|possible|needed|available)|consider|` +
+	`generally|usually|normally|if necessary|as needed|try to|ideally|` +
+	`where possible|genuinely|materially|substantial(ly)?|reasonabl[ye]|` +
+	`clearly|obvious(ly)?|large enough|significant(ly)?)\\b`,
 	"i",
 );
 const MODEL_NAMES = /\b(opus|sonnet|haiku|fable|gpt-\d)\b/i;
@@ -42,12 +42,12 @@ const SIGIL_LINE = /^\s*[!~?−-]\s+\S/;
 const CAPS_ENUM = /\b[A-Z][A-Z-]{2,}(\|[A-Z][A-Z-]{2,})+\b/;
 const OVER_CONSTRAINED_THRESHOLD = 15;
 const TRIGGER_PATTERN = new RegExp(
-	String.raw`\b(?:should\s+be\s+)?used?\s+(?:this\s+skill\s+)?(?:immediately\s+)?` +
-	String.raw`(?:when|after|before|whenever|for|to)\b` +
-	String.raw`|\buse\s+proactively\b` +
-	String.raw`|\btrigger(?:s)?\s+(?:when|on)\b` +
-	String.raw`|\bauto[-\s]?loads?\s+(?:when|on)\b` +
-	String.raw`|\binvoke\b`,
+	`\\b(?:should\\s+be\\s+)?used?\\s+(?:this\\s+skill\\s+)?(?:immediately\\s+)?` +
+	`(?:when|after|before|whenever|for|to)\\b` +
+	`|\\buse\\s+proactively\\b` +
+	`|\\btrigger(?:s)?\\s+(?:when|on)\\b` +
+	`|\\bauto[-\\s]?loads?\\s+(?:when|on)\\b` +
+	`|\\binvoke\\b`,
 	"i",
 );
 const BLOATED_LINE_THRESHOLD = 800;

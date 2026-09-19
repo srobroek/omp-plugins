@@ -12,8 +12,7 @@ source edits; `secret-commit-gate` blocks a commit that stages a plaintext crede
 
 ## Workflow
 
-1. Before changing the authoritative chezmoi repository, read
-   `rule://chezmoi-direct-main-delivery`.
+1. Before changing the authoritative chezmoi repository, create or use a Worktrunk linked worktree; never edit the canonical checkout. Deliver changes through a feature branch and pull request.
 2. Determine whether the target is managed:
    - `chezmoi managed`
    - `chezmoi source-path <target>` when a specific target is known

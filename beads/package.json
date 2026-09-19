@@ -1,6 +1,6 @@
 {
   "name": "@srobroek/beads",
-  "version": "1.5.0",
+  "version": "1.7.2",
   "description": "Beads issue tracking: dependency DAGs, formulas, and decisions recorded as beads.",
   "private": true,
   "omp": {
@@ -12,6 +12,7 @@
       "./extensions/bd-embedded-write-lock.ts",
       "./extensions/pr-bead-link-gate.ts",
       "./extensions/bd-init-advisory.ts",
+      "./extensions/bd-pool-discipline.ts",
       "./extensions/session-beads-lifecycle.ts",
       "./extensions/unreported-failure-advisory.ts",
       "./extensions/claim-before-branch.ts"

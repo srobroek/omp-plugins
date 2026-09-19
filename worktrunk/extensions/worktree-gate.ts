@@ -33,15 +33,12 @@
  * the one that changes.
  */
 import { spawnSync } from "node:child_process";
-import { lstatSync, realpathSync } from "node:fs";
+import { lstatSync, readFileSync, realpathSync } from "node:fs";
 import path from "node:path";
 import type { ExtensionAPI, ExtensionContext, ToolCallEvent } from "@oh-my-pi/pi-coding-agent";
 import {
 	hasGlobPathChars,
-	isInternalUrlPath,
-	isReadableUrlPath,
 	normalizePathLikeInput,
-	pathTargetsSsh,
 	resolveToCwd,
 } from "@oh-my-pi/pi-coding-agent/tools/path-utils";
 import { unwrapHashlineHeaderPath } from "@oh-my-pi/pi-coding-agent/tools/plan-mode-guard";
@@ -61,6 +58,13 @@ export interface GateRefusal {
  * `xd://` device and any MCP tool, is treated as mutating: `toolName` is an
  * unrestricted string, so allow-by-omission is how a guardrail silently stops
  * guarding.
+ *
+ * The second group are the tools registered with read approval that default an
+ * optional path — or take none at all — to the session cwd: every
+ * `approval: "read"` registration these plugins ship. They have to be named,
+ * because a mutating call that points at nothing is judged by the cwd it would
+ * default to, and a scan that only inspects the checkout must not be refused for
+ * doing exactly what the gate lets `read` and `grep` do.
  */
 const READ_ONLY_TOOLS: Record<string, true> = {
 	ask: true,
@@ -82,13 +86,52 @@ const READ_ONLY_TOOLS: Record<string, true> = {
 	todo: true,
 	web_search: true,
 	yield: true,
+
+	agentic_lint: true,
+	chezmoi_status: true,
+	dep_scan: true,
+	find_tools_scan: true,
+	headed_read: true,
+	resume_session: true,
+	sniff_read_analyzer_artifact: true,
+	sniff_read_report_artifact: true,
+	version_gap_scan: true,
 };
+
+/**
+ * Tools whose approval depends on their arguments: reading in one mode, mutating
+ * in another, so they cannot sit in the table above. Each predicate mirrors that
+ * tool's own approval callback, and only the reading modes are exempt.
+ *
+ *   `bd_formula_check` — `beads/extensions/formula-check-tool.ts`: `deep` pours
+ *   for real, everything else is a dry run.
+ *   `journeys_index` — `project/extensions/journeys-tool.ts`: `lint` and a
+ *   `prune` without `yes` read; `index` and a confirmed `prune` write.
+ */
+const CONDITIONAL_READ_ONLY: Record<string, (input: Record<string, unknown>) => boolean> = {
+	bd_formula_check: input => input.deep !== true,
+	journeys_index: input =>
+		input.command === "lint" || (input.command === "prune" && input.yes !== true),
+};
+
+/** True when this call is one of the reading modes of a mode-dependent tool. */
+function readsOnlyInThisMode(toolName: string, input: unknown): boolean {
+	const predicate = CONDITIONAL_READ_ONLY[toolName];
+	if (predicate === undefined) return false;
+	const record = asRecord(input);
+	return record !== null && predicate(record);
+}
 
 /**
  * Argument keys that name a filesystem target on an unenumerated tool. A value
  * under one of these keys is checked even when it is relative, because a
  * relative path resolves against the session cwd — which for an agent that has
  * not yet moved into its worktree IS the canonical checkout.
+ *
+ * The key is what makes a string a path, because its shape cannot: a bead id and
+ * a relative output directory are both bare single segments. `targets` is
+ * deliberately absent for that reason — the ledger tools carry bead ids under it
+ * — while `journeysDir` is present because it names a directory a command writes.
  */
 const PATH_KEYS: Record<string, true> = {
 	cwd: true,
@@ -100,6 +143,7 @@ const PATH_KEYS: Record<string, true> = {
 	file_path: true,
 	filepath: true,
 	files: true,
+	journeysDir: true,
 	knowledge_base_paths: true,
 	out: true,
 	outfile: true,
@@ -114,19 +158,37 @@ const PATH_KEYS: Record<string, true> = {
 	sources: true,
 	src: true,
 	target: true,
-	targets: true,
 };
 
 /** Depth bound on the recursive argument walk; deeper nesting is not a path argument. */
 const MAX_SCAN_DEPTH = 6;
 
-/**
- * A shell metacharacter makes a command more than the single simple command the
- * bootstrap allowlist reasons about. `$(` is listed explicitly; a bare `$` is
- * not, because the allowlisted shapes are matched token by token and a variable
- * cannot spell `--create` or an `omp/` branch name.
- */
-const SHELL_METACHARACTERS = /[;&|`<>\n]|\$\(/;
+/** Shell token separators emitted by the shared tokenizer. */
+const SHELL_SEPARATORS: Record<string, true> = { ";": true, "&": true, "|": true, "(": true, ")": true, "\n": true };
+
+/** Non-mutating command companions allowed around a bootstrap invocation. */
+const READ_ONLY_COMPANIONS: Record<string, true> = {
+	cat: true,
+	echo: true,
+	false: true,
+	printf: true,
+	rg: true,
+	true: true,
+	wc: true,
+};
+
+/** Filters that consume stdin, with conservative argument shapes that exclude file operands. */
+const STDIN_FILTERS: Record<string, true> = { cut: true, grep: true, head: true, jq: true, sed: true, tail: true, tr: true, uniq: true, wc: true };
+
+function stdinFilterAllowed(program: string, args: readonly string[]): boolean {
+	if (!STDIN_FILTERS[program]) return false;
+	const positionals = args.filter(token => !token.startsWith("-"));
+	if (program === "sed" && args.some(token => token === "-i" || token === "--in-place")) return false;
+	if (program === "grep" && args.some(token => token === "-f" || token === "--file")) return false;
+	if (program === "tr") return positionals.length === 2;
+	if (program === "grep" || program === "jq" || program === "sed") return positionals.length === 1;
+	return positionals.length === 0;
+}
 
 /** Branch names an agent may create from the canonical checkout. */
 const AGENT_BRANCH = /^omp\/[A-Za-z0-9._/-]+$/;
@@ -190,10 +252,10 @@ export function topologyRefusal(detail: string): string {
 }
 
 /** The refusal a non-allowlisted command with a canonical effective cwd earns. */
-export function bootstrapRefusal(command: string, canonical: string): string {
+export function bootstrapRefusal(command: string, cwd: string): string {
 	return (
-		`worktrunk refused this call: its effective working directory is the canonical checkout ` +
-		`(${canonical}) and \`${command.split("\n")[0]}\` is not one of the bootstrap commands allowed there ` +
+		`worktrunk refused this call: it would run in the canonical checkout ` +
+		`(${cwd}) and \`${command.split("\n")[0]}\` is not one of the bootstrap commands allowed there ` +
 		`(\`wt switch\`/\`wt list\`/\`wt config show\`/\`wt step prune --dry-run\`, read-only \`git\`, and \`bd\`). ` +
 		`${CREATE_HINT} ${SANDBOX_LIMIT}`
 	);
@@ -224,16 +286,61 @@ export function realDeepest(target: string): string | null {
 	}
 }
 
-/** True when `target` is physically inside (or equal to) one of `roots`. */
-export function insideAny(target: string, roots: readonly string[]): boolean {
+/** Resolve the deepest existing ancestor of a possibly missing target. */
+function existingAncestor(target: string): string | null {
+	let current = path.resolve(target);
+	for (;;) {
+		try {
+			return realpathSync.native(current);
+		} catch {
+			const parent = path.dirname(current);
+			if (parent === current) return null;
+			current = parent;
+		}
+	}
+}
+
+/**
+ * The deepest existing DIRECTORY at or above `target`: the directory a `git`
+ * question about `target` has to run in.
+ *
+ * A write commonly names a file — one that exists, or one under directories that
+ * do not exist yet — and `git -C` needs a directory either way. Asking from the
+ * deepest existing directory asks about the same repository.
+ */
+function existingAncestorDir(target: string): string | null {
+	let current = existingAncestor(target);
+	while (current !== null) {
+		try {
+			if (lstatSync(current).isDirectory()) return current;
+		} catch {
+			// Raced away between the realpath and here: keep walking up.
+		}
+		const parent = path.dirname(current);
+		if (parent === current) return null;
+		current = parent;
+	}
+	return null;
+}
+
+/**
+ * The root in `roots` that physically contains (or equals) `target`, or `null`.
+ * Physical identities on both sides, for the reason `realDeepest` explains.
+ */
+export function enclosingRoot(target: string, roots: readonly string[]): string | null {
 	const real = realDeepest(target);
-	if (real === null) return false;
+	if (real === null) return null;
 	for (const root of roots) {
 		const realRoot = realDeepest(root);
 		if (realRoot === null) continue;
-		if (real === realRoot || real.startsWith(`${realRoot}${path.sep}`)) return true;
+		if (real === realRoot || real.startsWith(`${realRoot}${path.sep}`)) return root;
 	}
-	return false;
+	return null;
+}
+
+/** True when `target` is physically inside (or equal to) one of `roots`. */
+export function insideAny(target: string, roots: readonly string[]): boolean {
+	return enclosingRoot(target, roots) !== null;
 }
 
 /** What a `git` invocation established: an answer, a refusal to be in a repository, or nothing. */
@@ -242,6 +349,23 @@ type GitOutcome =
 	| { ok: false; kind: "no-repository" }
 	| { ok: false; kind: "unavailable"; detail: string };
 
+/**
+ * `git` said this directory is in no repository at all — a definite answer, not
+ * a failure. Deliberately narrow: a `cwd` git cannot even enter ("No such file
+ * or directory") is an unknown, not a licence to stand down.
+ */
+const NOT_A_REPOSITORY = /not a git repository|not a working tree/i;
+
+/**
+ * Run `git` and classify the outcome, distinguishing a definite "no repository
+ * here" from a `git` that did not answer.
+ *
+ * `spawnSync` rather than `execFileSync` because the distinction lives in
+ * `error` (ENOENT when git is not on PATH, ETIMEDOUT), in `signal` (the timeout
+ * kill), and in `stderr` (git's own diagnosis) — an exception collapses all
+ * three into one indistinguishable failure, which is how a gate ends up
+ * standing down when its own toolchain breaks.
+ */
 type RepositoryMetadata = "present" | "absent" | "unknown";
 
 /**
@@ -270,25 +394,19 @@ function repositoryMetadata(cwd: string): RepositoryMetadata {
 	}
 }
 
-/**
- * `git` said this directory is in no repository at all — a definite answer, not
- * a failure. Deliberately narrow: a `cwd` git cannot even enter ("No such file
- * or directory") is an unknown, not a licence to stand down.
- */
-const NOT_A_REPOSITORY = /not a git repository|not a working tree/i;
-
-/**
- * Run `git` and classify the outcome, distinguishing a definite "no repository
- * here" from a `git` that did not answer.
- *
- * `spawnSync` rather than `execFileSync` because the distinction lives in
- * `error` (ENOENT when git is not on PATH, ETIMEDOUT), in `signal` (the timeout
- * kill), and in `stderr` (git's own diagnosis) — an exception collapses all
- * three into one indistinguishable failure, which is how a gate ends up
- * standing down when its own toolchain breaks.
- */
 function runGit(cwd: string, args: string[]): GitOutcome {
+	const env: NodeJS.ProcessEnv = {};
+	for (const [key, value] of Object.entries(process.env)) {
+		if (!key.startsWith("GIT_")) env[key] = value;
+	}
+	env.GIT_CONFIG_NOSYSTEM = "1";
+	env.GIT_CONFIG_GLOBAL = "/dev/null";
+	env.GIT_CONFIG_SYSTEM = "/dev/null";
+	env.GIT_CONFIG_COUNT = "0";
+	env.GIT_NO_REPLACE_OBJECTS = "1";
+	env.GIT_TERMINAL_PROMPT = "0";
 	const result = spawnSync("git", ["-C", cwd, ...args], {
+		env,
 		encoding: "utf8",
 		stdio: ["ignore", "pipe", "pipe"],
 		timeout: 5000,
@@ -316,33 +434,78 @@ function runGit(cwd: string, args: string[]): GitOutcome {
 
 /** What resolving the canonical root established. `unknown` is a refusal state, not an inert one. */
 export type CanonicalResolution =
-	| { state: "repository"; canonical: string }
+	| { state: "repository"; canonical: string; commonDir: string }
 	| { state: "no-repository" }
 	| { state: "unknown"; detail: string };
 
 /**
- * Resolve the absolute canonical root of the repository `cwd` belongs to: the
- * directory holding the common git directory. A linked worktree reports the
- * canonical checkout's `.git`, which is exactly the identity the gate needs.
+ * Resolve the absolute canonical root of the repository `cwd` belongs to — its
+ * MAIN worktree — together with the common git directory that identifies the
+ * repository.
+ *
+ * In the main worktree `--git-dir` and `--git-common-dir` are the same path, so
+ * the working-tree root git reports IS the canonical root. In a linked worktree
+ * they differ, and the main worktree is the directory whose `.git` entry is that
+ * common directory — checked on the filesystem rather than assumed, because
+ * `dirname(--git-common-dir)` is wrong wherever the git directory does not sit
+ * beside its working tree. Inside a checked-out submodule the common directory is
+ * `<super>/.git/modules/<name>`, whose parent is `<super>/.git/modules`: a
+ * directory where `git worktree list` reports the SUPERPROJECT's checkout, so
+ * mutations of the superproject's canonical files read as "inside a linked
+ * worktree" and were permitted. `--separate-git-dir` breaks it the same way, and
+ * for both git itself can name the working tree through `core.worktree`.
  *
  * Three outcomes, because two would be a fail-open bug: `no-repository` is git
  * saying there is nothing to protect, while `unknown` is git not saying
  * anything, and only the first may make the gate inert.
+ *
+ * The question is asked from the deepest existing DIRECTORY at or above `cwd`,
+ * because `cwd` is commonly a file — every write names one — and `git -C <file>`
+ * exits 128 with `Not a directory`, which this could only read as uncertainty.
+ * A target that does not exist yet is judged through its parent for the same
+ * reason. No directory ancestor at all is still `unknown`.
  */
 export function resolveCanonicalRoot(cwd: string): CanonicalResolution {
-	const outcome = runGit(cwd, ["rev-parse", "--path-format=absolute", "--git-common-dir"]);
+	const directory = existingAncestorDir(cwd);
+	if (directory === null) return { state: "unknown", detail: `the path ${cwd} has no existing directory ancestor` };
+	const outcome = runGit(directory, ["rev-parse", "--path-format=absolute", "--git-common-dir", "--git-dir", "--show-toplevel"]);
 	if (!outcome.ok) {
 		return outcome.kind === "no-repository" ? { state: "no-repository" } : { state: "unknown", detail: outcome.detail };
 	}
-	const commonDir = outcome.stdout.trim();
-	if (commonDir.length === 0) {
-		return { state: "unknown", detail: "`git rev-parse --git-common-dir` printed nothing" };
+	const [rawCommon, rawGitDir, rawToplevel] = outcome.stdout.trim().split("\n");
+	const commonDir = realDeepest((rawCommon ?? "").trim());
+	const gitDir = realDeepest((rawGitDir ?? "").trim());
+	if (commonDir === null || gitDir === null) {
+		return { state: "unknown", detail: "`git rev-parse` named no git directory that resolves on disk" };
 	}
-	const canonical = realDeepest(path.dirname(commonDir));
-	if (canonical === null) {
-		return { state: "unknown", detail: `the common git directory ${commonDir} does not resolve on disk` };
+	if (gitDir === commonDir) {
+		// The main worktree: git already named its root. A bare repository prints no
+		// toplevel, and a mutation there is not a working-tree write to permit.
+		const toplevel = realDeepest((rawToplevel ?? "").trim());
+		if (toplevel === null || (rawToplevel ?? "").trim().length === 0) {
+			return { state: "unknown", detail: `\`git rev-parse --show-toplevel\` named no working tree in ${cwd}` };
+		}
+		return { state: "repository", canonical: toplevel, commonDir };
 	}
-	return { state: "repository", canonical };
+	const sibling = realDeepest(path.dirname(commonDir));
+	if (sibling !== null && realDeepest(path.join(sibling, ".git")) === commonDir) {
+		return { state: "repository", canonical: sibling, commonDir };
+	}
+	// A git directory that does not sit beside its working tree. Ask git from that
+	// directory: it reads `core.worktree`, which is how a submodule names its
+	// checkout.
+	const fromCommon = runGit(commonDir, ["rev-parse", "--path-format=absolute", "--show-toplevel"]);
+	const named = fromCommon.ok ? realDeepest(fromCommon.stdout.trim()) : null;
+	if (named !== null) return { state: "repository", canonical: named, commonDir };
+	// `git init --separate-git-dir` sets no `core.worktree`, and the registration
+	// names the git directory rather than the checkout, so from a linked worktree the
+	// main working tree cannot be named at all. Verified against git 2.55.0. Use the
+	// git directory as the repository's identity root: nothing inside it is a place
+	// to work, so a mutation there is refused, linked worktrees still verify against
+	// it, and a target inside the real main worktree is resolved from its own
+	// directory — where `--git-dir` equals `--git-common-dir` and git does name the
+	// root. Refusing outright instead would refuse every write in a valid worktree.
+	return { state: "repository", canonical: commonDir, commonDir };
 }
 
 /**
@@ -358,13 +521,25 @@ export function canonicalRoot(cwd: string): string | null {
 }
 
 /**
- * Linked, non-canonical worktrees of this repository, as physical paths, or
- * `null` when `git worktree list` did not answer.
+ * Linked, non-canonical worktrees of the repository whose main worktree is
+ * `canonical` and whose common git directory is `commonDir`, as physical paths,
+ * or `null` when the answer could not be established.
  *
- * A bare or missing entry is skipped; the canonical root itself is excluded,
- * because it is the one place no agent may mutate.
+ * Every entry is verified against that identity, not merely listed. `git worktree
+ * list` reports what is registered, and registration outlives the directory: an
+ * agent that deletes a worktree without unregistering it, and then initialises a
+ * NEW repository at the same path, leaves the old repository still naming it —
+ * and writes there would land in the replacement's canonical checkout. A path
+ * counts only when its `.git` gitfile points inside `commonDir`, which is also
+ * what drops the git-directory entry git reports as a submodule's main worktree.
  */
-export function projectWorktrees(canonical: string): string[] | null {
+export function projectWorktrees(canonical: string, commonDir?: string | null): string[] | null {
+	let identity = commonDir ?? null;
+	if (identity === null) {
+		const resolution = resolveCanonicalRoot(canonical);
+		identity = resolution.state === "repository" ? resolution.commonDir : null;
+	}
+	if (identity === null) return null;
 	const outcome = runGit(canonical, ["worktree", "list", "--porcelain"]);
 	if (!outcome.ok) return null;
 	const realCanonical = realDeepest(canonical);
@@ -372,16 +547,18 @@ export function projectWorktrees(canonical: string): string[] | null {
 	for (const line of outcome.stdout.split("\n")) {
 		if (!line.startsWith("worktree ")) continue;
 		const real = realDeepest(line.slice("worktree ".length).trim());
-		if (real === null || real === realCanonical) continue;
+		if (real === null || real === realCanonical || !stillLinkedWorktree(real, identity)) continue;
 		found.push(real);
 	}
 	return found;
 }
 
-/** Project topology the decision runs against. Injectable so tests need no repository. */
-export interface GateTopology {
-	/** Canonical root, or `null` when the session is in no repository or the topology is unknown. */
+/** One repository's topology: its canonical root, its identity, and its linked worktrees. */
+export interface RepositoryTopology {
+	/** Canonical root, or `null` when this directory is in no repository or the answer is unknown. */
 	canonical: string | null;
+	/** The common git directory identifying the repository, when one was resolved. */
+	commonDir?: string | null;
 	/**
 	 * Why the topology could not be determined, or `null`/absent when it was.
 	 * Non-null means mutation refuses: a `null` canonical alone cannot say
@@ -392,6 +569,25 @@ export interface GateTopology {
 	worktrees: readonly string[];
 	/** Re-read the worktree list and return it. */
 	refresh(): readonly string[];
+}
+
+/**
+ * Topology the decision runs against: the session's own repository, plus the
+ * repository that owns any given directory. Injectable so tests need no
+ * repository.
+ *
+ * A target is judged against ITS OWN repository, never the session's. A run
+ * dispatches workers into more than one repository, and a worker sent into a
+ * second repository works in a linked worktree of that repository from a session
+ * whose cwd is still the first one. Judging by the session's worktree list either
+ * refuses all of that work or, if the gate stands down instead, leaves the second
+ * repository's canonical checkout unguarded from here.
+ */
+export interface GateTopology {
+	/** The repository the session's cwd belongs to. Decides whether the gate applies at all. */
+	session: RepositoryTopology;
+	/** The repository owning `dir`, which must be an existing directory. */
+	forTarget(dir: string): RepositoryTopology;
 }
 
 const canonicalCache = new Map<string, CanonicalResolution>();
@@ -412,14 +608,66 @@ export function resetTopologyCache(): void {
 	worktreeCache.clear();
 }
 
-export function defaultTopology(sessionCwd: string): GateTopology {
-	let resolution = canonicalCache.get(sessionCwd);
+/**
+ * True when `dir` still belongs to the repository whose common git directory is
+ * `commonDir`, judged from the filesystem: the nearest `.git` entry at or above it
+ * must resolve inside that directory — the directory itself for a main worktree,
+ * an admin directory under it for a linked one.
+ *
+ * `false` means "no longer confidently this repository", never "refuse": the
+ * caller re-asks git. A path can change hands — a worktree removed from one
+ * repository and re-added to another, a directory that becomes a submodule — and a
+ * cached owner that outlives the change either guards the wrong tree or refuses
+ * legitimate work in the new one for the rest of the session.
+ */
+function stillInRepository(dir: string, commonDir: string): boolean {
+	let current = realDeepest(dir);
+	while (current !== null) {
+		const pointer = path.join(current, ".git");
+		let gitDirEntry: boolean | null = null;
+		try {
+			gitDirEntry = lstatSync(pointer).isDirectory();
+		} catch {
+			gitDirEntry = null;
+		}
+		if (gitDirEntry !== null) {
+			// A directory `.git` is this repository's own git directory; a file is a
+			// gitfile, which `stillLinkedWorktree` resolves against the same identity.
+			return gitDirEntry ? realDeepest(pointer) === commonDir : stillLinkedWorktree(current, commonDir);
+		}
+		const parent = path.dirname(current);
+		if (parent === current) return false;
+		current = parent;
+	}
+	return false;
+}
+
+/** The topology of the repository owning `cwd`. */
+export function repositoryTopology(cwd: string): RepositoryTopology {
+	let resolution = canonicalCache.get(cwd);
+	// A cached `no-repository` holds only while the filesystem still shows no
+	// repository above this directory. Another agent's `git init` is a command this
+	// session never sees, and trusting the stale negative would walk later writes
+	// straight into a brand-new canonical checkout. The metadata walk is a few
+	// `lstat` calls, and anything but a confirmed absence re-asks git.
+	if (resolution?.state === "no-repository" && repositoryMetadata(cwd) !== "absent") {
+		canonicalCache.delete(cwd);
+		resolution = undefined;
+	}
+	// A cached repository holds only while this directory still belongs to it. A
+	// worktree removed from one repository and re-added to another keeps its path,
+	// and a cached owner that outlived the change refuses legitimate work in the new
+	// repository for the rest of the session.
+	if (resolution?.state === "repository" && !stillInRepository(cwd, resolution.commonDir)) {
+		canonicalCache.delete(cwd);
+		resolution = undefined;
+	}
 	if (resolution === undefined) {
-		resolution = resolveCanonicalRoot(sessionCwd);
+		resolution = resolveCanonicalRoot(cwd);
 		// A failure is never cached. Caching it would let one transient `git`
 		// failure disable the gate for the rest of the session, which is exactly
 		// the shape a guardrail must not have.
-		if (resolution.state !== "unknown") canonicalCache.set(sessionCwd, resolution);
+		if (resolution.state !== "unknown") canonicalCache.set(cwd, resolution);
 	}
 	if (resolution.state === "unknown") {
 		return { canonical: null, uncertainty: resolution.detail, worktrees: [], refresh: () => [] };
@@ -428,9 +676,10 @@ export function defaultTopology(sessionCwd: string): GateTopology {
 		return { canonical: null, uncertainty: null, worktrees: [], refresh: () => [] };
 	}
 	const root = resolution.canonical;
+	const commonDir = resolution.commonDir;
 	let listFailure: string | null = null;
 	const read = (): readonly string[] => {
-		const fresh = projectWorktrees(root);
+		const fresh = projectWorktrees(root, commonDir);
 		if (fresh === null) {
 			listFailure = `\`git worktree list\` did not answer in ${root}`;
 			return [];
@@ -441,6 +690,7 @@ export function defaultTopology(sessionCwd: string): GateTopology {
 	};
 	return {
 		canonical: root,
+		commonDir,
 		get uncertainty(): string | null {
 			return listFailure;
 		},
@@ -451,28 +701,129 @@ export function defaultTopology(sessionCwd: string): GateTopology {
 	};
 }
 
-/**
- * True when `target` is inside a project worktree, re-reading the worktree list
- * once before concluding it is not. A worktree created by a command this gate
- * never saw is otherwise a false refusal, and the re-read costs one `git` call
- * only on the path that was about to refuse.
- */
-function contained(target: string, topology: GateTopology): boolean {
-	if (insideAny(target, topology.worktrees)) return true;
-	return insideAny(target, topology.refresh());
+export function defaultTopology(sessionCwd: string): GateTopology {
+	return { session: repositoryTopology(sessionCwd), forTarget: repositoryTopology };
 }
 
 /**
+ * Still a linked worktree of the repository whose common git directory is
+ * `commonDir`, judged from the filesystem alone.
+ *
+ * The accepted relation is git's own registration, not "somewhere under the
+ * common directory". A linked worktree's `.git` is a FILE holding
+ * `gitdir: <admin dir>`, that admin dir is exactly `<commonDir>/worktrees/<id>`,
+ * and git writes the inverse pointer `<admin dir>/gitdir` naming this worktree's
+ * `.git` file — the same pointer `git worktree prune` judges by. Both directions
+ * must agree, because either one alone is forgeable by an unrelated repository:
+ * `git init --separate-git-dir=<commonDir>/worktrees/<anything> <path>` writes a
+ * gitfile of exactly the linked shape at a registered worktree's path while the
+ * writes there land in a DIFFERENT repository's canonical checkout, and it writes
+ * no inverse pointer (verified against git 2.55.0). The strict two-segment shape
+ * is also what drops a submodule's git directory, which lives at
+ * `<commonDir>/modules/<name>` or `<commonDir>/worktrees/<id>/modules/<name>` and
+ * is a distinct repository rather than a linked worktree of this one.
+ *
+ * `false` means "not confidently linked", never "refuse": the caller falls back to
+ * `git worktree list`, which is authoritative. So an unusual layout cannot turn
+ * into a false refusal, while the case this exists for is caught — a worktree
+ * removed and an ordinary directory or a foreign repository recreated at its path.
+ */
+export function stillLinkedWorktree(worktree: string, commonDir: string | null | undefined): boolean {
+	if (commonDir === null || commonDir === undefined) return false;
+	const pointer = path.join(worktree, ".git");
+	let raw: string;
+	try {
+		if (!lstatSync(pointer).isFile()) return false;
+		raw = readFileSync(pointer, "utf8");
+	} catch {
+		return false;
+	}
+	const admin = /^gitdir:[ \t]*(.+?)[ \t\r]*$/m.exec(raw)?.[1];
+	if (admin === undefined) return false;
+	const real = realDeepest(path.isAbsolute(admin) ? admin : path.resolve(worktree, admin));
+	if (real === null) return false;
+	const relative = path.relative(commonDir, real).split(path.sep);
+	if (relative.length !== 2 || relative[0] !== "worktrees" || relative[1] === "" || relative[1] === "..") {
+		return false;
+	}
+	let back: string;
+	try {
+		back = readFileSync(path.join(real, "gitdir"), "utf8").trim();
+	} catch {
+		return false;
+	}
+	if (back === "") return false;
+	const home = realDeepest(path.dirname(path.isAbsolute(back) ? back : path.resolve(real, back)));
+	return home !== null && home === realDeepest(worktree);
+}
+
+/** Where a target sits relative to the repository that owns it. */
+type Containment =
+	| { inside: true }
+	| { inside: false; uncertainty: string; repository: null }
+	| { inside: false; uncertainty: null; repository: RepositoryTopology };
+
+/**
+ * Whether `target` is inside a linked worktree of the repository that OWNS it.
+ *
+ * The owner is resolved from the target, not from the session, so a worker
+ * dispatched into a second repository works there while that repository's own
+ * canonical checkout stays guarded. The worktree list is re-read once before
+ * concluding a target is outside, because a worktree created by a command this
+ * gate never saw is otherwise a false refusal, and that costs one `git` call only
+ * on the path that was about to refuse.
+ *
+ * A cached positive is not trusted on its own. Removals are not commands this gate
+ * can recognize — another agent, or an allowed command in a sibling worktree, may
+ * run `wt remove` or `git worktree remove` — so a cache entry whose path is no
+ * longer a linked worktree would keep a recreated ordinary directory trusted for
+ * the rest of the session. The `.git` pointer check is two syscalls, cheap enough
+ * for every tool call, and anything it cannot confirm falls through to git.
+ */
+function containment(target: string, topology: GateTopology): Containment {
+	const dir = existingAncestorDir(target);
+	if (dir === null) {
+		return {
+			inside: false,
+			uncertainty: `no existing directory above \`${target}\` to resolve a repository from`,
+			repository: null,
+		};
+	}
+	const repository = topology.forTarget(dir);
+	const early = repository.uncertainty ?? null;
+	if (early !== null) return { inside: false, uncertainty: early, repository: null };
+	const cached = enclosingRoot(target, repository.worktrees);
+	if (cached !== null && stillLinkedWorktree(cached, repository.commonDir)) return { inside: true };
+	if (insideAny(target, repository.refresh())) return { inside: true };
+	const late = repository.uncertainty ?? null;
+	// The re-read is what failed: the honest refusal names that, rather than a
+	// claim about which worktrees hold the target.
+	if (late !== null) return { inside: false, uncertainty: late, repository: null };
+	return { inside: false, uncertainty: null, repository };
+}
+
+/**
+ * A URI scheme followed by an authority: `xd://`, `memory://`, `https://`,
+ * `ssh://`, and a scheme this gate has never heard of alike. A Windows drive
+ * letter is not one, because a drive needs no `//`.
+ */
+const URI_SCHEME = /^[A-Za-z][A-Za-z0-9+.-]*:\/\//;
+
+/**
  * The absolute filesystem path this argument names, or `null` when it names no
- * filesystem path at all (an internal URL, a web URL, an `ssh://` target, or an
- * unresolvable string). Resolution goes through OMP's own `resolveToCwd`, which
- * expands `~` — a hand-rolled `path.resolve` does not, and would guard the wrong
- * file for every `~`-spelled target.
+ * filesystem path at all — any URL, an `ssh://` target, or an unresolvable
+ * string. Resolution goes through OMP's own `resolveToCwd`, which expands `~` — a
+ * hand-rolled `path.resolve` does not, and would guard the wrong file for every
+ * `~`-spelled target.
+ *
+ * Scheme detection is deliberately generic rather than a list of the schemes OMP
+ * ships today: a new `xd://` device, a new internal URL, or a plugin's own scheme
+ * must not become a path under the canonical checkout the moment it appears.
  */
 export function resolveTarget(raw: string, sessionCwd: string): string | null {
 	const normalized = normalizePathLikeInput(unwrapHashlineHeaderPath(raw));
 	if (normalized.length === 0) return null;
-	if (isInternalUrlPath(normalized) || isReadableUrlPath(normalized) || pathTargetsSsh(normalized)) return null;
+	if (URI_SCHEME.test(normalized)) return null;
 	try {
 		return resolveToCwd(normalized, sessionCwd);
 	} catch {
@@ -546,37 +897,95 @@ export function editTargets(input: unknown): string[] | null {
 	return null;
 }
 
-/** Whitespace-split honouring quotes. `null` on an unbalanced quote. */
+/**
+ * Package-local copy of the tokenizer shape from beads/extensions/bd-close-gate.ts.
+ * The plugins install separately and worktrunk declares no beads dependency; keep
+ * this small copy until the shared parser gets its own released package.
+ */
 export function tokenize(command: string): string[] | null {
-	const tokens: string[] = [];
+	const out: string[] = [];
 	let current = "";
 	let started = false;
-	let quote: '"' | "'" | undefined;
-	for (const char of command) {
-		if (quote !== undefined) {
-			if (char === quote) quote = undefined;
-			else current += char;
+	let quote: '"' | "'" | null = null;
+	const pending: Array<{ delimiter: string; stripTabs: boolean }> = [];
+	const flush = (): void => {
+		if (started) { out.push(current); current = ""; started = false; }
+	};
+	for (let i = 0; i < command.length; i++) {
+		const ch = command[i] as string;
+		if (quote !== null) { if (ch === quote) quote = null; else { current += ch; started = true; } continue; }
+		if (ch === '"' || ch === "'") { quote = ch; started = true; continue; }
+		if (ch === "\\" && i + 1 < command.length) { current += command[++i] as string; started = true; continue; }
+		if (ch === "<" && command[i + 1] === "<" && command[i + 2] === "<") { flush(); out.push("<<<"); i += 2; continue; }
+		if (ch === "<" && command[i + 1] === "<") {
+			const operator = hereDocumentOperator(command, i);
+			if (operator !== null) { flush(); pending.push(operator); i = operator.end - 1; continue; }
+		}
+		if (ch === "\n") {
+			flush(); out.push(ch);
+			while (pending.length) { const document = pending.shift(); if (document === undefined) break; i = hereDocumentBodyEnd(command, i + 1, document); }
 			continue;
 		}
-		if (char === '"' || char === "'") {
-			quote = char;
-			started = true;
-			continue;
-		}
-		if (/\s/.test(char)) {
-			if (started) {
-				tokens.push(current);
-				current = "";
-				started = false;
-			}
-			continue;
-		}
-		current += char;
-		started = true;
+		if (/\s/.test(ch)) { flush(); continue; }
+		if ({ ";": true, "&": true, "|": true, "(": true, ")": true }[ch] === true) { flush(); out.push(ch); continue; }
+		current += ch; started = true;
 	}
-	if (quote !== undefined) return null;
-	if (started) tokens.push(current);
-	return tokens;
+	flush();
+	return quote === null ? out : null;
+}
+
+function hereDocumentOperator(command: string, start: number): { delimiter: string; stripTabs: boolean; end: number } | null {
+	let i = start + 2;
+	const stripTabs = command[i] === "-";
+	if (stripTabs) i++;
+	while (command[i] === " " || command[i] === "\t") i++;
+	const quote = command[i];
+	let delimiter = "";
+	if (quote === '"' || quote === "'") { const close = command.indexOf(quote, i + 1); if (close === -1) return null; delimiter = command.slice(i + 1, close); i = close + 1; }
+	else while (i < command.length && !/[\s;&|<>()]/.test(command[i] as string)) delimiter += command[i++];
+	return delimiter ? { delimiter, stripTabs, end: i } : null;
+}
+
+function hereDocumentBodyEnd(command: string, from: number, document: { delimiter: string; stripTabs: boolean }): number {
+	let cursor = from;
+	while (cursor < command.length) { let next = command.indexOf("\n", cursor); if (next === -1) next = command.length; let line = command.slice(cursor, next); if (document.stripTabs) line = line.replace(/^\t+/, ""); if (line === document.delimiter) return next; cursor = next + 1; }
+	return command.length;
+}
+
+/**
+ * Separators only, with redirections consumed. `null` when the command cannot be
+ * judged: an unbalanced quote, or a redirection whose target is a real file.
+ *
+ * A redirection is how a read-only companion mutates. `commandTokens` drops the
+ * operator and its target, so `printf x > <canonical>/f` would otherwise reduce
+ * to a `printf` segment and pass as safe. Discarding the target means the
+ * allowlist cannot see what is written, so a file target disqualifies the
+ * command and only the discard device and descriptor duplications stay.
+ */
+function commandTokens(command: string): string[] | null {
+	const raw = tokenize(command);
+	if (raw === null) return null;
+	const out: string[] = [];
+	for (let i = 0; i < raw.length; i++) {
+		const token = raw[i] as string;
+		if (!/^(?:\d+)?(?:<<<|<<|>>|>|<)/.test(token)) {
+			out.push(token);
+			continue;
+		}
+		const next = raw[++i];
+		if (next === "&") {
+			const target = raw[++i];
+			if (target !== undefined && SHELL_SEPARATORS[target] === true) out.push(target);
+			continue;
+		}
+		if (next === undefined) continue;
+		if (SHELL_SEPARATORS[next] === true) {
+			out.push(next);
+			continue;
+		}
+		if (next !== "/dev/null") return null;
+	}
+	return out;
 }
 
 /** Consume `wt`'s global options, returning the subcommand tokens. */
@@ -661,43 +1070,96 @@ function wtSwitchAllowed(args: readonly string[]): boolean {
 	return PR_BRANCH.test(branch);
 }
 
-/**
- * True when this command is one an agent must be able to run from the canonical
- * checkout, because its first action necessarily starts there: `task` cannot
- * hand a child another cwd, so bootstrapping a worktree, reading git state, and
- * reaching the embedded Beads store in canonical `.beads` all happen from there.
- *
- * The list is closed. Any token outside a matched shape refuses.
- */
-export function bootstrapAllowed(command: string): boolean {
-	if (SHELL_METACHARACTERS.test(command)) return false;
-	const tokens = tokenize(command);
-	if (tokens === null) return false;
-	const program = tokens[0];
-	if (program === undefined) return false;
-	const rest = tokens.slice(1);
-	if (program === "bd") return true;
+const GH_READ_VERBS: Record<string, Record<string, true>> = {
+	pr: { view: true, checks: true, list: true, diff: true },
+	issue: { view: true, list: true },
+	run: { view: true, list: true },
+	repo: { view: true },
+};
+
+function ghReadAllowed(args: readonly string[]): boolean {
+	const sub = args[0];
+	if (sub === "api") {
+		let method = "GET";
+		for (let i = 1; i < args.length; i++) {
+			const token = args[i] as string;
+			if (token === "-X" || token === "--method") method = args[++i] ?? "";
+			else if (token.startsWith("--method=")) method = token.slice("--method=".length);
+		}
+		return method.toUpperCase() === "GET";
+	}
+	const verb = args[1];
+	return sub !== undefined && verb !== undefined && GH_READ_VERBS[sub]?.[verb] === true;
+}
+
+function invocationKind(segment: readonly string[]): "allowed" | "safe" | "other" {
+	let index = 0;
+	while (index < segment.length && /^[A-Za-z_][A-Za-z0-9_]*=.*$/.test(segment[index] as string)) index++;
+	const program = segment[index];
+	if (program === undefined) return "safe";
+	const rest = segment.slice(index + 1);
+	if (program === "env") {
+		let envIndex = 0;
+		while (envIndex < rest.length) {
+			const option = rest[envIndex];
+			if (option === undefined) return "other";
+			if (/^[A-Za-z_][A-Za-z0-9_]*=.*$/.test(option)) { envIndex++; continue; }
+			if (option === "-i" || option === "--ignore-environment") { envIndex++; continue; }
+			if (option === "-u" || option === "--unset") { if (rest[envIndex + 1] === undefined) return "other"; envIndex += 2; continue; }
+			break;
+		}
+		if (envIndex >= rest.length) return "other";
+		return invocationKind(rest.slice(envIndex));
+	}
+	if (program === "bd") return "allowed";
 	if (program === "wt") {
 		const args = afterWtGlobals(rest);
-		if (args === null) return false;
+		if (args === null) return "other";
 		const sub = args[0];
 		const tail = args.slice(1);
-		if (sub === "switch") return wtSwitchAllowed(tail);
-		if (sub === "list") return tail.length === 0 || (tail.length === 2 && tail[0] === "--format" && tail[1] === "json");
-		if (sub === "config") return tail.length === 1 && tail[0] === "show";
-		if (sub === "step") return tail.length === 2 && tail[0] === "prune" && tail[1] === "--dry-run";
-		return false;
+		if (sub === "switch") return wtSwitchAllowed(tail) ? "allowed" : "other";
+		if (sub === "list") return tail.length === 0 || (tail.length === 2 && tail[0] === "--format" && tail[1] === "json") ? "allowed" : "other";
+		if (sub === "config") return tail.length === 1 && tail[0] === "show" ? "allowed" : "other";
+		if (sub === "step") return tail.length === 2 && tail[0] === "prune" && tail[1] === "--dry-run" ? "allowed" : "other";
+		return "other";
 	}
 	if (program === "git") {
 		const args = afterGitGlobals(rest);
-		if (args === null) return false;
+		if (args === null) return "other";
 		const sub = args[0];
-		if (sub === "rev-parse" || sub === "status" || sub === "fetch" || sub === "log") return true;
-		if (sub === "worktree") return args[1] === "list";
-		if (sub === "branch") return args[1] === "--list";
-		return false;
+		if (sub === "rev-parse" || sub === "status" || sub === "fetch" || sub === "log") return "allowed";
+		if (sub === "worktree") return args[1] === "list" ? "allowed" : "other";
+		if (sub === "branch") return args[1] === "--list" ? "allowed" : "other";
+		return "other";
 	}
-	return false;
+	if (program === "gh") return ghReadAllowed(rest) ? "allowed" : "other";
+	if (stdinFilterAllowed(program, rest)) return "safe";
+	return READ_ONLY_COMPANIONS[program] === true ? "safe" : "other";
+}
+
+/** True when every command is a permitted bootstrap/read companion and one is a bootstrap invocation. */
+export function bootstrapAllowed(command: string): boolean {
+	if (/\$\(|`/.test(command)) return false;
+	const tokens = commandTokens(command);
+	if (tokens === null) return false;
+	let segment: string[] = [];
+	let found = false;
+	const finish = (): boolean => {
+		if (segment.length === 0) return true;
+		const kind = invocationKind(segment);
+		segment = [];
+		if (kind === "allowed") {
+			found = true;
+			return true;
+		}
+		return kind === "safe";
+	};
+	for (const token of tokens) {
+		if (SHELL_SEPARATORS[token] === true) {
+			if (!finish()) return false;
+		} else segment.push(token);
+	}
+	return finish() && found;
 }
 
 /** True when the command creates a worktree, so the cached list is stale. */
@@ -753,14 +1215,21 @@ export function scanPathArguments(input: unknown, depth = 0): string[] {
 	return found;
 }
 
+
 /**
  * The refusal this tool call earns, or `undefined` when it may run.
  *
- * The gate is inert only when git has confirmed the session is in no repository:
+ * The gate is inert only when git has confirmed the SESSION is in no repository:
  * there is then no project to protect and no worktree anyone could be asked to
- * occupy. An undetermined topology is not that state and refuses. Inside a
- * project, every mutation must land in a non-canonical worktree of it, and
- * anything the gate cannot classify refuses.
+ * occupy. An undetermined session topology is not that state and refuses.
+ *
+ * Once it applies, each target is judged against the repository that OWNS that
+ * target, which need not be the session's: a worker dispatched into a second
+ * repository works in a linked worktree of that repository, and its canonical
+ * checkout deserves the same protection as this one's. A target inside no
+ * repository at all — a scratch file under `/tmp` — belongs to no worktree and to
+ * no canonical checkout, so there is nothing there to guard. Anything the gate
+ * cannot classify refuses.
  */
 export function decideWorktreeCall(
 	toolName: string,
@@ -768,27 +1237,28 @@ export function decideWorktreeCall(
 	sessionCwd: string,
 	topology: GateTopology = defaultTopology(sessionCwd),
 ): GateRefusal | undefined {
-	if (READ_ONLY_TOOLS[toolName] === true) return undefined;
-	const uncertainty = topology.uncertainty ?? null;
+    if (READ_ONLY_TOOLS[toolName] === true || readsOnlyInThisMode(toolName, input)) return undefined;
+	const session = topology.session;
+	const uncertainty = session.uncertainty ?? null;
 	if (uncertainty !== null) return { block: true, reason: topologyRefusal(uncertainty) };
-	const canonical = topology.canonical;
+	const canonical = session.canonical;
 	if (canonical === null) return undefined;
 
 	const refuseTarget = (target: string): GateRefusal | undefined => {
-		if (contained(target, topology)) return undefined;
-		// Containment refused, so the worktree list was re-read: if that read is
-		// what failed, the honest refusal is the uncertainty one, not a claim that
-		// this project has no worktree holding the target.
-		const late = topology.uncertainty ?? null;
-		if (late !== null) return { block: true, reason: topologyRefusal(late) };
+		const where = containment(target, topology);
+		if (where.inside) return undefined;
+		if (where.repository === null) return { block: true, reason: topologyRefusal(where.uncertainty) };
+		// Outside every repository: no canonical checkout to protect and no worktree
+		// to occupy, so scratch space stays writable.
+		const owner = where.repository.canonical;
+		if (owner === null) return undefined;
 		return {
 			block: true,
 			// The physical target, so it is comparable with the realpath'd roots
 			// beside it: `/tmp` vs `/private/tmp` otherwise reads as a bug.
-			reason: containmentRefusal(realDeepest(target) ?? target, canonical, topology.worktrees),
+			reason: containmentRefusal(realDeepest(target) ?? target, owner, where.repository.worktrees),
 		};
 	};
-
 	const refuseAll = (raws: readonly string[]): GateRefusal | undefined => {
 		for (const raw of raws) {
 			const target = resolveTarget(raw, sessionCwd);
@@ -807,9 +1277,11 @@ export function decideWorktreeCall(
 			}
 			const device = xdDeviceTool(record.path);
 			if (device !== null) {
-				// A device call carries the real arguments in `content`; classify it by
-				// the device's own rule. A payload that is not JSON names no path and
-				// the device rejects it before anything is written.
+				// A device call carries the real arguments in `content`, so a payload
+				// that parses is judged by the device's own rule. One that does not
+				// parse names no filesystem path either, and the device rejects it on
+				// arrival: refusing it here would only mistake a wire error for a
+				// containment breach.
 				if (typeof record.content !== "string") return undefined;
 				let nested: unknown;
 				try {
@@ -854,13 +1326,21 @@ export function decideWorktreeCall(
 			if (effective === null) {
 				return { block: true, reason: uncertaintyRefusal("this `bash` call's `cwd` does not resolve", canonical) };
 			}
-			if (contained(effective, topology)) return undefined;
+			const where = containment(effective, topology);
+			if (where.inside) return undefined;
+			if (where.repository === null) return { block: true, reason: topologyRefusal(where.uncertainty) };
+			// A cwd outside every repository has no canonical checkout to protect, so
+			// scratch directories stay usable.
+			if (where.repository.canonical === null) return undefined;
 			const command = extractCommand(input);
 			if (command.length === 0) {
 				return { block: true, reason: uncertaintyRefusal("this `bash` call has no `command` string", canonical) };
 			}
+			// The bootstrap allowlist is what an agent runs before it has a worktree,
+			// in whichever repository it is bootstrapping — the second repository of a
+			// multi-repository run included.
 			if (bootstrapAllowed(command)) return undefined;
-			return { block: true, reason: bootstrapRefusal(command, canonical) };
+			return { block: true, reason: bootstrapRefusal(command, effective) };
 		}
 		case "eval": {
 			const record = asRecord(input);
@@ -872,27 +1352,50 @@ export function decideWorktreeCall(
 			}
 			return refuseTarget(effective);
 		}
-		default:
-			return refuseAll(scanPathArguments(input));
-	}
+		default: {
+			// An unenumerated tool is judged by the filesystem paths its arguments
+			// name, and by nothing else. A tool whose arguments resolve to no path —
+			// a ledger identifier, an OMP internal URL such as `xd://retain` or
+			// `memory://`, a web URL, a bare option — mutates no working tree this
+			// gate can attribute, so there is nothing to contain. Judging such a
+			// call against the session cwd instead refuses every pathless device
+			// call an agent makes before it has moved into a worktree, which is the
+			// canonical checkout's own directory.
+			for (const raw of scanPathArguments(input)) {
+				const target = resolveTarget(raw, sessionCwd);
+				if (target === null) continue;
+				const refusal = refuseTarget(target);
+				if (refusal) return refusal;
+			}
+			return undefined;
+		}
+    }
 }
 
 export default function worktreeGate(pi: ExtensionAPI): void {
 	pi.on("tool_call", (event: ToolCallEvent, ctx: ExtensionContext) => {
 		const sessionCwd = ctx?.cwd ?? process.cwd();
+		// A topology-changing call is judged BEFORE it runs, so its answer describes
+		// a repository that is about to stop being the truth. Caching that answer
+		// pins a pre-`git init` "no repository" and leaves the gate inert for the
+		// rest of the session, hence the clear on both sides of the decision.
+		const topologyChange = event.toolName === "bash" && changesRepositoryTopology(extractCommand(event.input));
+		if (topologyChange) resetTopologyCache();
 		try {
-			if (event.toolName === "bash") {
-				const command = extractCommand(event.input);
-				if (changesRepositoryTopology(command)) resetTopologyCache();
-				else if (createsWorktree(command)) invalidateWorktreeCache();
+			if (event.toolName === "bash" && !topologyChange && createsWorktree(extractCommand(event.input))) {
+				invalidateWorktreeCache();
 			}
 			return decideWorktreeCall(event.toolName, event.input, sessionCwd);
 		} catch (error) {
 			// A thrown classification is an unknown, and an unknown refuses. Only a
-			// confirmed non-repository session stands down here.
-			if (READ_ONLY_TOOLS[event.toolName] === true) return undefined;
+			// confirmed non-repository session stands down here — confirmed against the
+			// filesystem as well as the cache, since a repository may have appeared
+			// under that directory since the answer was stored.
+			if (READ_ONLY_TOOLS[event.toolName] === true || readsOnlyInThisMode(event.toolName, event.input)) {
+				return undefined;
+			}
 			const cached = canonicalCache.get(sessionCwd);
-			if (cached?.state === "no-repository") return undefined;
+			if (cached?.state === "no-repository" && repositoryMetadata(sessionCwd) === "absent") return undefined;
 			return {
 				block: true,
 				reason: uncertaintyRefusal(
@@ -900,6 +1403,8 @@ export default function worktreeGate(pi: ExtensionAPI): void {
 					cached?.state === "repository" ? cached.canonical : null,
 				),
 			};
+		} finally {
+			if (topologyChange) resetTopologyCache();
 		}
 	});
 }

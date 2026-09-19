@@ -16,6 +16,8 @@ const FIRE = [
 
 const HOLD = [
 	"wt switch --help",
+	"wt switch -h",
+	"WT_TRACE=1 wt switch --help",
 	"wt switch --version",
 	"git checkout -b --help",
 	"git worktree add --version",

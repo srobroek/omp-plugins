@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.9](https://github.com/srobroek/omp-plugins/compare/chezmoi--v0.4.8...chezmoi--v0.4.9) (2026-09-18)
+
+
+### Bug Fixes
+
+* **chezmoi:** remove direct-main delivery guidance ([#374](https://github.com/srobroek/omp-plugins/issues/374)) ([2a3d026](https://github.com/srobroek/omp-plugins/commit/2a3d026ddca406f349d14f615d49efcd46eacc8c))
+
 ## [0.4.8](https://github.com/srobroek/omp-plugins/compare/chezmoi--v0.4.7...chezmoi--v0.4.8) (2026-09-16)
 
 

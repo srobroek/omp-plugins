@@ -31,3 +31,8 @@ node_modules/
 # OMP project-scope plugin registry (machine-local paths)
 .omp/plugins/
 *.gate.lock*
+
+# Agentic-layer generated output (agentic-scaffold .gitignore.block)
+graphify-out/
+repomix.xml
+.omp/scaffold-run.json

@@ -40291,6 +40291,7 @@ __export(exports_dirs, {
   getConfigDirName: () => getConfigDirName,
   getConfigRootDir: () => getConfigRootDir,
   getCrashLogPath: () => getCrashLogPath,
+  getCustomSessionFilesDir: () => getCustomSessionFilesDir,
   getCustomThemesDir: () => getCustomThemesDir,
   getDaemonRuntimeDir: () => getDaemonRuntimeDir,
   getDaemonRuntimeRoot: () => getDaemonRuntimeRoot,
@@ -40351,6 +40352,7 @@ __export(exports_dirs, {
   normalizeProfileName: () => normalizeProfileName,
   pathIsWithin: () => pathIsWithin,
   refreshDirsFromEnv: () => refreshDirsFromEnv,
+  relativePathWithinNormalizedRoot: () => relativePathWithinNormalizedRoot,
   relativePathWithinRoot: () => relativePathWithinRoot,
   resolveEquivalentPath: () => resolveEquivalentPath,
   resolveProfileEnv: () => resolveProfileEnv,
@@ -40363,7 +40365,7 @@ import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
 // node_modules/@oh-my-pi/pi-utils/package.json
-var version = "18.1.21";
+var version = "18.2.4";
 var engines = {
   bun: ">=1.3.14"
 };
@@ -40454,19 +40456,21 @@ function normalizePathForComparison(inputPath) {
   const resolvedPath = resolveEquivalentPath(inputPath);
   return process.platform === "win32" ? resolvedPath.toLowerCase() : resolvedPath;
 }
+function relativePathWithinNormalizedRoot(normalizedRoot, normalizedCandidate) {
+  const relative2 = path.relative(normalizedRoot, normalizedCandidate);
+  if (relative2 !== "" && (relative2.startsWith("..") || path.isAbsolute(relative2)))
+    return null;
+  return relative2;
+}
 function pathIsWithin(root, candidate) {
   const normalizedRoot = normalizePathForComparison(root);
   const normalizedCandidate = normalizePathForComparison(candidate);
-  const relative2 = path.relative(normalizedRoot, normalizedCandidate);
-  return relative2 === "" || !relative2.startsWith("..") && !path.isAbsolute(relative2);
+  return relativePathWithinNormalizedRoot(normalizedRoot, normalizedCandidate) !== null;
 }
 function relativePathWithinRoot(root, candidate) {
-  if (!pathIsWithin(root, candidate))
-    return null;
   const normalizedRoot = normalizePathForComparison(root);
   const normalizedCandidate = normalizePathForComparison(candidate);
-  const relative2 = path.relative(normalizedRoot, normalizedCandidate);
-  return relative2 || null;
+  return relativePathWithinNormalizedRoot(normalizedRoot, normalizedCandidate) || null;
 }
 var projectDir;
 function getProjectDir() {
@@ -40876,6 +40880,9 @@ function getMemoriesDir(agentDir) {
 }
 function getTerminalSessionsDir(agentDir) {
   return dirs.agentSubdir(agentDir, "terminal-sessions", "state");
+}
+function getCustomSessionFilesDir(agentDir) {
+  return dirs.agentSubdir(agentDir, "custom-session-files", "state");
 }
 function getCrashLogPath(agentDir) {
   return dirs.agentSubdir(agentDir, "omp-crash.log", "state");

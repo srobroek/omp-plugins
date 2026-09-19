@@ -29,6 +29,20 @@ Install this plugin in a repository with `.beads/`. The plugin pins that reposit
 The session extension reports unresolved gates at startup. It reports held claims and pending failures at session end.
 
 The embedded write lock covers plugin-managed Beads mutations. It rejects ambiguous command shapes instead of guessing their target.
+- `bd-lease-gate`: writes `lease_host` and `lease_pid` metadata after a claim succeeds, so a
+  later session can prove a holder gone instead of guessing from staleness.
+  It reads the bead ids from `bd`'s own output and stamps them with a separate
+  `bd update`, so no command is ever rewritten; when detection misses, the bead
+  simply carries no anchors, which the claiming rule treats as unprovable rather
+  than dead. The pid is the agent process, not the shell child that exits with
+  the command.
+- `pr-bead-link-gate`: blocks `gh pr create` and the `github` device's `pr_create` when the
+  body names neither a bead nor a truthful `No-Bead:` reason, and only where a `.beads`
+  workspace exists. External repositories
+  without `.beads` are untouched; their user-facing prose must omit internal linkage.
+  It refuses rather than injecting an id, because a body it had to guess at
+  outlives the PR. A body built by `--fill`, `--body-file`, or a command
+  substitution is not visible to a tool call, so those stay a rule matter.
 
 Read the core rule for the execution contract.
 Before initialization, read the setup rule.

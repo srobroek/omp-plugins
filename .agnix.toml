@@ -1,4 +1,4 @@
-# agnix 0.52.2 configuration for the OMP plugin source tree.
+# agnix 0.54.0 configuration for the OMP plugin source tree.
 # Keep the generic validator active; carve out only OMP-owned paths and fields
 # that have no agnix platform equivalent.
 severity = "Warning"
@@ -30,7 +30,7 @@ disabled_validators = []
 paths = ["agents/*.md", "**/agents/*.md"]
 disabled_rules = ["CC-AG-003", "CC-AG-009", "CC-AG-010", "CC-AG-019"]
 
-# Literal CLI/template placeholders reported as unclosed XML by agnix 0.52.2.
+# Literal CLI/template placeholders first reported as unclosed XML by agnix 0.52.2.
 [[overrides]]
 paths = [
   "beads/rules/beads-audit.md",

@@ -147,7 +147,9 @@ describe("failureSignals", () => {
 	test("a runaway line is truncated rather than dropped", () => {
 		const signals = failureSignals(`FAILED ${"x".repeat(400)}`);
 		expect(signals).toHaveLength(1);
-		expect(signals[0]!.length).toBe(120);
+		const [signal] = signals;
+		if (signal === undefined) throw new Error("failure signal missing");
+		expect(signal.length).toBe(120);
 	});
 });
 
@@ -337,6 +339,11 @@ describe("integration", () => {
 		unreportedFailureAdvisory(fakePi as never);
 		return { handlers, sent, errors };
 	};
+	const handler = (handlers: Record<string, Array<(e: unknown, c: unknown) => unknown>>, name: string) => {
+		const [registered] = handlers[name] ?? [];
+		if (registered === undefined) throw new Error(`missing ${name} handler`);
+		return registered;
+	};
 
 	const ctx = { cwd: "/nonexistent-repo", sessionManager: { getSessionId: () => "s1" } };
 
@@ -357,48 +364,48 @@ describe("integration", () => {
 
 	test("a failing check result is never patched and never blocked", () => {
 		const { handlers } = wire();
-		expect(handlers.tool_result![0]!(result("bun test", BUN_FAIL), ctx)).toBeUndefined();
+		expect(handler(handlers, "tool_result")(result("bun test", BUN_FAIL), ctx)).toBeUndefined();
 	});
 
 	test("a tool with no command line is ignored", () => {
 		const { handlers } = wire();
 		const event = { type: "tool_result", toolName: "read", toolCallId: "c1", isError: false, input: { path: "x.ts" }, content: [{ type: "text", text: BUN_FAIL }] };
-		expect(handlers.tool_result![0]!(event, ctx)).toBeUndefined();
+		expect(handler(handlers, "tool_result")(event, ctx)).toBeUndefined();
 	});
 
 	test("a malformed event cannot disturb the result", () => {
 		const { handlers, errors } = wire();
-		expect(handlers.tool_result![0]!({ toolName: "bash" }, undefined)).toBeUndefined();
+		expect(handler(handlers, "tool_result")({ toolName: "bash" }, undefined)).toBeUndefined();
 		expect(errors).toEqual([]);
 	});
 
 	test("a repository with no .beads stays silent, however red the run was", async () => {
 		const { handlers, sent, errors } = wire();
-		handlers.tool_result![0]!(result("bun test", BUN_FAIL), ctx);
-		handlers.tool_result![0]!(result("bun run typecheck", TSC_FAIL), ctx);
-		await handlers.session_shutdown![0]!({ type: "session_shutdown" }, ctx);
+		handler(handlers, "tool_result")(result("bun test", BUN_FAIL), ctx);
+		handler(handlers, "tool_result")(result("bun run typecheck", TSC_FAIL), ctx);
+		await handler(handlers, "session_shutdown")({ type: "session_shutdown" }, ctx);
 		expect(sent).toEqual([]);
 		expect(errors).toEqual([]);
 	});
 
 	test("a session that saw only a clean run reports nothing", async () => {
 		const { handlers, sent } = wire();
-		handlers.tool_result![0]!(result("bun test", BUN_CLEAN), ctx);
-		await handlers.session_shutdown![0]!({ type: "session_shutdown" }, ctx);
+		handler(handlers, "tool_result")(result("bun test", BUN_CLEAN), ctx);
+		await handler(handlers, "session_shutdown")({ type: "session_shutdown" }, ctx);
 		expect(sent).toEqual([]);
 	});
 
 	test("session_start clears what a previous session in this process saw", async () => {
 		const { handlers, sent } = wire();
-		handlers.tool_result![0]!(result("bun test", BUN_FAIL), ctx);
-		handlers.session_start![0]!({ type: "session_start" }, ctx);
-		await handlers.session_shutdown![0]!({ type: "session_shutdown" }, ctx);
+		handler(handlers, "tool_result")(result("bun test", BUN_FAIL), ctx);
+		handler(handlers, "session_start")({ type: "session_start" }, ctx);
+		await handler(handlers, "session_shutdown")({ type: "session_shutdown" }, ctx);
 		expect(sent).toEqual([]);
 	});
 
 	test("a non-zero exit in details is read even when the notice is gone", () => {
 		const { handlers } = wire();
 		// The text carries no verdict at all: `details.exitCode` is the only evidence.
-		expect(handlers.tool_result![0]!(result("bun test", "output was spilled", { exitCode: 1 }), ctx)).toBeUndefined();
+		expect(handler(handlers, "tool_result")(result("bun test", "output was spilled", { exitCode: 1 }), ctx)).toBeUndefined();
 	});
 });
