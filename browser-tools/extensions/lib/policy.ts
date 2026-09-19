@@ -112,7 +112,7 @@ export async function applyPagePolicy(page: Page, session: HeadedSession, audit:
 				await audit.write(session, "in-page-navigation", "block", request.url(), reason);
 				await request.abort("blockedbyclient");
 			}
-		})().catch(() => undefined);
+		})().catch(async () => { await request.continue().catch(() => undefined); });
 	});
 	if (!session.config.allowDownloads) {
 		page.on("response", (response) => {

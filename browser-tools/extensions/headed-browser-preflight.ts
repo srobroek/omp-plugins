@@ -1,7 +1,8 @@
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
-import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
+import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
+import { resolveConfig } from "./lib/config.ts";
 import type { PreflightResult } from "./lib/preflight.ts";
 import { runPreflight } from "./lib/preflight.ts";
 
@@ -17,14 +18,15 @@ interface PreflightCache {
 export default function headedBrowserPreflight(pi: ExtensionAPI): void {
 	pi.on("session_start", async (_event, ctx) => {
 		try {
-			const result = await runPreflight(ctx.cwd, ctx);
 			const cachePath = preflightCachePath();
-			const key = preflightCacheKey(result);
+			const config = await resolveConfig(ctx.cwd, {});
 			const cached = await readCache(cachePath);
-			if (cached?.ok && cached.key === key && Date.now() - cached.checkedAt < CACHE_TTL_MS) return;
-			await writeCache(cachePath, { checkedAt: Date.now(), key, ok: result.ok });
-			if (result.ok) return;
-			const holder = globalThis as { [ADVISED_KEY]?: boolean };
+			const configKey = preflightConfigKey(config);
+			if (cached?.ok && cached.key === configKey && Date.now() - cached.checkedAt < CACHE_TTL_MS) return;
+			const result = await runPreflight(ctx.cwd, ctx);
+            await writeCache(cachePath, { checkedAt: Date.now(), key: configKey, ok: result.ok });
+            if (result.ok) return;
+            const holder = globalThis as { [ADVISED_KEY]?: boolean };
 			if (holder[ADVISED_KEY]) return;
 			holder[ADVISED_KEY] = true;
 			const failures = result.checks.filter((check) => check.status === "fail");
@@ -55,11 +57,14 @@ export function preflightCacheKey(result: PreflightResult): string {
 	});
 }
 
+export function preflightConfigKey(config: { engine: string; browserChannel: string; executablePath: string; sourceProfileName: string; profileRootOverride?: string }): string {
+	return JSON.stringify({ platform: process.platform, defaultEngine: config.engine, browserChannel: config.browserChannel, executablePath: config.executablePath, sourceProfileName: config.sourceProfileName, profileRoot: config.profileRootOverride });
+}
+
 export function preflightCachePath(): string {
 	const agentDir = process.env.PI_CODING_AGENT_DIR ?? join(homedir(), ".omp", "agent");
 	return join(agentDir, "headed-browser-preflight.json");
 }
-
 async function readCache(path: string): Promise<PreflightCache | undefined> {
 	try {
 		const value: unknown = JSON.parse(await readFile(path, "utf8"));

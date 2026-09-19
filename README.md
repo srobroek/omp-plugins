@@ -32,6 +32,7 @@ Lower layers add; they never override a higher layer.
 
 OMP locates each capability by path; catalog entries cannot redirect that lookup.
 
+
 - `skills/<name>/SKILL.md`: one skill, located without recursion.
 - `agents/<name>.md`: one task agent.
 - `commands/<name>.md`: one slash command.

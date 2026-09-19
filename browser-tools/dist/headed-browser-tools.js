@@ -41570,6 +41570,9 @@ async function launchRemote(request, config) {
   await Bun.sleep(250);
   if (tunnelProcess.exitCode !== null) {
     browserProcess.kill();
+    await sshCapture(sshArgs, request.remoteHost, ["rm", "-rf", remoteProfileDir], request.navigationTimeoutMs).catch(() => {
+      return;
+    });
     throw new Error(`headed-browser: SSH tunnel exited with ${tunnelProcess.exitCode}`);
   }
   try {
@@ -41822,8 +41825,10 @@ async function applyPagePolicy(page, session, audit) {
         await audit.write(session, "in-page-navigation", "block", request.url(), reason);
         await request.abort("blockedbyclient");
       }
-    })().catch(() => {
-      return;
+    })().catch(async () => {
+      await request.continue().catch(() => {
+        return;
+      });
     });
   });
   if (!session.config.allowDownloads) {
@@ -42042,8 +42047,7 @@ async function scopeFirefoxCookies(databasePath, domains) {
     const columns = database.query("PRAGMA table_info(moz_cookies)").all();
     const names = new Set(columns.map((column) => column.name));
     if (!names.has("host") || !names.has("originAttributes")) {
-      warnings.push("headed-browser: cookies.sqlite lacks host or originAttributes; cookie scoping skipped");
-      return { containerCookiesSkipped: 0, removed: 0, warnings };
+      throw new Error("headed-browser: cookies.sqlite lacks host or originAttributes; refusing to launch because cookie scoping cannot be proven");
     }
     const rows = database.query("SELECT id, host, originAttributes FROM moz_cookies").all();
     const remove = database.prepare("DELETE FROM moz_cookies WHERE id = ?");
@@ -42063,8 +42067,7 @@ async function scopeFirefoxCookies(databasePath, domains) {
     })();
     return { containerCookiesSkipped, removed, warnings };
   } catch (error) {
-    warnings.push(`headed-browser: cookie scoping failed: ${error instanceof Error ? error.message : String(error)}`);
-    return { containerCookiesSkipped: 0, removed: 0, warnings };
+    throw new Error(`headed-browser: cookie scoping failed; refusing to launch because cookie isolation cannot be proven: ${error instanceof Error ? error.message : String(error)}`, { cause: error });
   } finally {
     database?.close();
   }
@@ -42373,10 +42376,19 @@ async function closeSession(sessionId, reason = "close") {
   sessions.delete(sessionId);
   if (session.remote)
     await closeRemote(session.remote);
-  else
-    await session.browser.close().catch(() => {
-      return;
-    });
+  else {
+    let closed = false;
+    await Promise.race([
+      session.browser.close().then(() => {
+        closed = true;
+      }).catch(() => {
+        return;
+      }),
+      Bun.sleep(5000)
+    ]);
+    if (!closed)
+      session.browser.process()?.kill();
+  }
   const deleted = await removeMaterializedProfile(session.profile, session.config.keepArtifactsOnClose);
   return { deleted, reason };
 }
@@ -42948,6 +42960,17 @@ function requireString(value, name) {
 function resultEnvelope(payload, details) {
   return { content: [{ type: "text", text: JSON.stringify(payload, null, 2) }], details: { ...details } };
 }
+function classifyError(params, message) {
+  if (message.includes("unknown session"))
+    return "unknown session";
+  if (message.includes("timed out after"))
+    return "session timeout";
+  if (params.op === "launch")
+    return "launch failed";
+  if (message.includes(" is required") || message.includes("unsupported headed_") || message.includes("selector or text is required"))
+    return "invalid request";
+  return "operation failed";
+}
 async function safeResult(params, operation) {
   try {
     const result = await operation();
@@ -42959,7 +42982,11 @@ async function safeResult(params, operation) {
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     const session = params.sessionId ? sessions.get(params.sessionId) : undefined;
-    return { content: [{ type: "text", text: redact(message, session?.config ?? { redactSecrets: true }) }], details: { ok: false, error: message, sessionId: params.sessionId } };
+    console.error(`headed-browser: ${message}`);
+    return {
+      content: [{ type: "text", text: redact(message, session?.config ?? { redactSecrets: true }) }],
+      details: { ok: false, sessionId: params.sessionId, error: classifyError(params, message) }
+    };
   }
 }
 export {

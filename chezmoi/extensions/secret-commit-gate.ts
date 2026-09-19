@@ -431,27 +431,30 @@ export function secretStagedPaths(staged: string[], prefix: string): string[] {
 }
 
 /** Root-relative, NUL-delimited candidate names; null means Git could not establish them. */
+/** Root-relative candidate names from staged and working-tree path-scoped changes. */
 export function committedPaths(top: string, all: boolean, paths: string[] = [], cwd = top): string[] | null {
-	const scope = paths.length ? ["--", ...paths] : [];
-	const args = ["--literal-pathspecs", "-C", paths.length ? cwd : top];
-	let output: string | null;
-	if (!all && paths.length === 0) {
-		output = spawnGit([...args, "diff", "--cached", "--no-relative", "--no-renames",
-			"--diff-filter=d", "--name-only", "-z"]);
-	} else {
-		output = spawnGit([...args, "diff", "--no-relative", "--no-renames",
-			"--diff-filter=d", "--name-only", "-z", "HEAD", ...scope]);
-		if (output === null) {
-			// An unborn repository has no HEAD: its tracked, present files are additions.
-			if (spawnGit([...args, "rev-parse", "--verify", "HEAD"]) !== null) return null;
-			const tracked = spawnGit([...args, "ls-files", "--cached", "--full-name", "-z", ...scope]);
-			const deleted = spawnGit([...args, "ls-files", "--deleted", "--full-name", "-z", ...scope]);
-			if (tracked === null || deleted === null) return null;
-			const removed = new Set(deleted.split("\0"));
-			return [...new Set(tracked.split("\0").filter(path => path !== "" && !removed.has(path)))];
-		}
-	}
-	return output === null ? null : output.split("\0").filter(path => path !== "");
+    const scope = paths.length ? ["--", ...paths] : [];
+    const args = ["--literal-pathspecs", "-C", paths.length ? cwd : top];
+    let output: string | null;
+    if (!all && paths.length === 0) {
+        output = spawnGit([...args, "diff", "--cached", "--no-relative", "--no-renames", "--diff-filter=d", "--name-only", "-z"]);
+    } else if (paths.length > 0) {
+        const staged = spawnGit([...args, "diff", "--cached", "--no-relative", "--no-renames", "--diff-filter=d", "--name-only", "-z", ...scope]);
+        const working = spawnGit([...args, "diff", "--no-relative", "--no-renames", "--diff-filter=d", "--name-only", "-z", ...scope]);
+        if (staged === null || working === null) return null;
+        return [...new Set(`${staged}\0${working}`.split("\0").filter(Boolean))];
+    } else {
+        output = spawnGit([...args, "diff", "--no-relative", "--no-renames", "--diff-filter=d", "--name-only", "-z", "HEAD", ...scope]);
+        if (output === null) {
+            if (spawnGit([...args, "rev-parse", "--verify", "HEAD"]) !== null) return null;
+            const tracked = spawnGit([...args, "ls-files", "--cached", "--full-name", "-z", ...scope]);
+            const deleted = spawnGit([...args, "ls-files", "--deleted", "--full-name", "-z", ...scope]);
+            if (tracked === null || deleted === null) return null;
+            const removed = new Set(deleted.split("\0"));
+            return [...new Set(tracked.split("\0").filter(path => path !== "" && !removed.has(path)))];
+        }
+    }
+    return output === null ? null : output.split("\0").filter((path) => path !== "");
 }
 
 export const SECRET_ADVICE =

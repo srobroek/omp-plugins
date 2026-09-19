@@ -487,6 +487,16 @@ function resultEnvelope(payload: unknown, details: SessionSummary | Record<strin
 	return { content: [{ type: "text", text: JSON.stringify(payload, null, 2) }], details: { ...details } };
 }
 
+type SafeErrorCategory = "invalid request" | "unknown session" | "session timeout" | "launch failed" | "operation failed";
+
+function classifyError(params: ToolParams, message: string): SafeErrorCategory {
+	if (message.includes("unknown session")) return "unknown session";
+	if (message.includes("timed out after")) return "session timeout";
+	if (params.op === "launch") return "launch failed";
+	if (message.includes(" is required") || message.includes("unsupported headed_") || message.includes("selector or text is required")) return "invalid request";
+	return "operation failed";
+}
+
 async function safeResult(params: ToolParams, operation: () => Promise<ToolResult>): Promise<ToolResult> {
 	try {
 		const result = await operation();
@@ -497,6 +507,10 @@ async function safeResult(params: ToolParams, operation: () => Promise<ToolResul
 	} catch (error) {
 		const message = error instanceof Error ? error.message : String(error);
 		const session = params.sessionId ? sessions.get(params.sessionId) : undefined;
-		return { content: [{ type: "text", text: redact(message, session?.config ?? { redactSecrets: true }) }], details: { ok: false, error: message, sessionId: params.sessionId } };
+		console.error(`headed-browser: ${message}`);
+		return {
+			content: [{ type: "text", text: redact(message, session?.config ?? { redactSecrets: true }) }],
+			details: { ok: false, sessionId: params.sessionId, error: classifyError(params, message) },
+		};
 	}
 }

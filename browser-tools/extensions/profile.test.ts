@@ -100,6 +100,14 @@ describe("headed browser profile cloning", () => {
 		expect(check.query("SELECT * FROM moz_cookies").all()).toEqual([]);
 		check.close();
 	});
+    test("aborts when cookie schema cannot prove scoping", async () => {
+        const root = await temporary();
+        const path = join(root, "cookies.sqlite");
+        const database = new Database(path, { create: true });
+        database.run("CREATE TABLE moz_cookies (id INTEGER PRIMARY KEY, host TEXT)");
+        database.close();
+        await expect(scopeFirefoxCookies(path, ["example.com"])).rejects.toThrow("cookie isolation cannot be proven");
+    });
 
 	test("copies an active WAL database before injecting scoped cookies", async () => {
 		const root = await temporary();

@@ -115,6 +115,7 @@ export async function launchRemote(
 	await Bun.sleep(250);
 	if (tunnelProcess.exitCode !== null) {
 		browserProcess.kill();
+		await sshCapture(sshArgs, request.remoteHost, ["rm", "-rf", remoteProfileDir], request.navigationTimeoutMs).catch(() => undefined);
 		throw new Error(`headed-browser: SSH tunnel exited with ${tunnelProcess.exitCode}`);
 	}
 	try {

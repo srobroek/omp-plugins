@@ -1,4 +1,5 @@
-import { basename, isAbsolute, resolve } from "node:path";
+import { realpath } from "node:fs/promises";
+import { basename, isAbsolute, relative, resolve, sep } from "node:path";
 import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
 import {
 	acceptedPaths,
@@ -261,8 +262,20 @@ export interface ReadOptions {
 
 /** Resolve a session id (full or prefix) globally, then gate transcript access to the requested repo family. */
 export async function resolveSession(cwd: string, options: ReadOptions): Promise<{ file: string } | { error: string }> {
-	if (options.file) return { file: options.file };
-	const wanted = (options.session ?? "").trim();
+    if (options.file) {
+        try {
+            const root = await realpath(sessionsRoot(options.profile));
+            const file = await realpath(options.file);
+            const relativeFile = relative(root, file);
+            if (relativeFile === "" || relativeFile === ".." || relativeFile.startsWith(`..${sep}`) || isAbsolute(relativeFile)) {
+                return { error: "file outside sessions root; pass an explicit sessionId or confirm external file" };
+            }
+            return { file };
+        } catch {
+            return { error: "file outside sessions root; pass an explicit sessionId or confirm external file" };
+        }
+    }
+    const wanted = (options.session ?? "").trim();
 	if (!wanted) return { error: 'resume_session: mode "read" needs `session` (an id or id prefix) or `file`.' };
 	const root = sessionsRoot(options.profile);
 	const matches = (await candidates(root)).filter(
