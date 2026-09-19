@@ -1,8 +1,12 @@
+import pkg from "../package.json" with { type: "json" };
 import type { TSchema } from "@oh-my-pi/pi-ai";
 import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
 import { invocationFromArgv } from "./bd-actor-gate.ts";
 import { withEmbeddedWriteLock, writesStore } from "./bd-embedded-write-lock.ts";
 import { envelopeData, parseTrailingJson } from "./session-beads-lifecycle.ts";
+
+const BEADS_PRESENT = Symbol.for("com.srobroek.beads.present.v1");
+(globalThis as Record<symbol, unknown>)[BEADS_PRESENT] = { version: pkg.version };
 
 const TIMEOUT_MS = 120_000;
 
