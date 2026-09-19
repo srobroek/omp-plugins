@@ -1223,7 +1223,7 @@ var USER_AGENT = "dep-update-skill (+https://github.com/srobroek/agentic-package
 var FETCH_TIMEOUT_MS = 1e4;
 var NODE_VERSION = /^=?v?(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-((?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*))*))?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/;
 var PYTHON_VERSION = /^(?:={1,2})?v?(\d+)(?:\.(\d+))?(?:\.(\d+))?(?:[-_.]?(a|b|rc|alpha|beta|pre|preview)[-_.]?\d*)?(?:[-_.]?post[-_.]?\d*)?(?:[-_.]?(dev)[-_.]?\d*)?(?:\+[a-z0-9]+(?:[-_.][a-z0-9]+)*)?$/i;
-var PROTECTED_NAME = /^\.project-setup|answers\.toml|sources\.toml/;
+var PROTECTED_NAME = /(?:^|[\\/])(?:\.project-setup[\\/]answers|\.project-setup[\\/]sources)\.toml$/;
 function normalizeVersion(raw, ecosystem = "npm") {
   if (typeof raw !== "string")
     return null;

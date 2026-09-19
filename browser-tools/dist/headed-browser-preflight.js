@@ -40240,13 +40240,6 @@ import { mkdir as mkdir4, readFile as readFile2, rename as rename2, writeFile as
 import { homedir as homedir4 } from "os";
 import { dirname as dirname5, join as join5 } from "path";
 
-// extensions/lib/preflight.ts
-import { Database } from "bun:sqlite";
-import { constants as constants3 } from "fs";
-import { access, mkdir as mkdir3, statfs } from "fs/promises";
-import { tmpdir as tmpdir3 } from "os";
-import { dirname as dirname4 } from "path";
-
 // extensions/lib/config.ts
 import { readFile } from "fs/promises";
 import { isAbsolute as isAbsolute2, normalize as normalize2 } from "path";
@@ -41206,6 +41199,13 @@ function splitDomains(value) {
   return [...new Set(value.split(",").map((part) => part.trim().toLowerCase().replace(/^\.+/, "")).filter(Boolean))];
 }
 
+// extensions/lib/preflight.ts
+import { Database } from "bun:sqlite";
+import { constants as constants3 } from "fs";
+import { access, mkdir as mkdir3, statfs } from "fs/promises";
+import { tmpdir as tmpdir3 } from "os";
+import { dirname as dirname4 } from "path";
+
 // extensions/lib/discovery.ts
 import { spawnSync } from "child_process";
 import { accessSync as accessSync2, constants as constants2, readFileSync as readFileSync2 } from "fs";
@@ -41674,13 +41674,14 @@ var ADVISED_KEY = Symbol.for("com.srobroek.browser-tools.headed-preflight.sent")
 function headedBrowserPreflight(pi) {
   pi.on("session_start", async (_event, ctx) => {
     try {
-      const result = await runPreflight(ctx.cwd, ctx);
       const cachePath = preflightCachePath();
-      const key = preflightCacheKey(result);
+      const config = await resolveConfig(ctx.cwd, {});
       const cached = await readCache(cachePath);
-      if (cached?.ok && cached.key === key && Date.now() - cached.checkedAt < CACHE_TTL_MS)
+      const configKey = preflightConfigKey(config);
+      if (cached?.ok && cached.key === configKey && Date.now() - cached.checkedAt < CACHE_TTL_MS)
         return;
-      await writeCache(cachePath, { checkedAt: Date.now(), key, ok: result.ok });
+      const result = await runPreflight(ctx.cwd, ctx);
+      await writeCache(cachePath, { checkedAt: Date.now(), key: configKey, ok: result.ok });
       if (result.ok)
         return;
       const holder = globalThis;
@@ -41708,6 +41709,9 @@ function preflightCacheKey(result) {
     executablePath: result.config.executablePath,
     profileRoot: source
   });
+}
+function preflightConfigKey(config) {
+  return JSON.stringify({ platform: process.platform, defaultEngine: config.engine, browserChannel: config.browserChannel, executablePath: config.executablePath, sourceProfileName: config.sourceProfileName, profileRoot: config.profileRootOverride });
 }
 function preflightCachePath() {
   const agentDir = process.env.PI_CODING_AGENT_DIR ?? join5(homedir4(), ".omp", "agent");
@@ -41739,5 +41743,6 @@ async function writeCache(path, cache) {
 export {
   headedBrowserPreflight as default,
   preflightCacheKey,
-  preflightCachePath
+  preflightCachePath,
+  preflightConfigKey
 };
