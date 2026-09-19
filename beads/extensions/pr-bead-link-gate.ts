@@ -1,27 +1,20 @@
 import { execFileSync } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, statSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import type { ExtensionAPI, ToolCallEvent } from "@oh-my-pi/pi-coding-agent";
 import { commandSegments, invocation, type Token } from "./shell-command.ts";
 
 /**
- * A PR that names neither a bead nor a reason is a PR nobody can trace back to a decision.
+ * A PR that names no bead is a PR nobody can trace back to a decision.
  *
- * The pointer has to exist at creation, because that is the only moment the
- * author knows which beads the branch implements; a later audit finds a merged
- * PR and an orphan bead. So `gh pr create` and the `github` device's `pr_create`
- * are refused when the body names neither a bead nor a reason for having none.
- *
- * Refusing, not injecting: rewriting the body would have to guess the bead from
- * a lease the agent may not hold, or from several it does, and a wrong pointer
- * outlives the PR. The gate only fires where beads is active, so a repository
- * without `.beads/` is untouched, and bot-authored release and dependency PRs
- * never reach a tool call in the first place.
+ * A live ledger requires a Bead, Closes-Bead, or Bead-Id trailer.
+ * A regular-file .beads/RETIRED marker opts out the nearest ledger.
+ * No-Bead: is not accepted; this marker belongs to the gate, not bd.
  */
 
 const MAX_COMMAND_LENGTH = 64_000;
 const BEAD_REF = /(?:^|\s)(?:Bead|Closes-Bead|Bead-Id):\s*[A-Za-z][A-Za-z0-9_-]*-[A-Za-z0-9]+/i;
-const NO_BEAD_REF = /(?:^|\s)No-Bead:\s*\S+/i;
+
 
 /** Flags whose following token is a value, so a `--body` inside one is not the body. */
 const VALUE_FLAGS: Record<string, true> = {
@@ -50,12 +43,15 @@ const VALUE_FLAGS: Record<string, true> = {
 };
 
 export const REASON =
-	"This PR names no bead or reason for having none. Where beads is active, a PR and its beads point at each other: the body names what it implements, and each bead carries `pr` metadata, so a later session finds the decision without scanning GitHub history. Add a `Bead: <id>` line (several are fine) and stamp `bd update <id> --set-metadata pr=<n>` after creation, or state a truthful `No-Bead: <reason>` when no governing bead exists.";
+	"This PR names no bead. A live ledger requires a Bead: <id>, Closes-Bead: <id>, or Bead-Id: <id> trailer. To opt out, retire the nearest ledger with this gate's regular-file .beads/RETIRED marker; No-Bead: is not accepted.";
 
 export function beadsActive(dir: string): boolean {
 	let current = resolve(dir);
 	for (;;) {
-		if (existsSync(join(current, ".beads"))) return true;
+		const beads = join(current, ".beads");
+		if (existsSync(beads)) {
+			try { return !statSync(join(beads, "RETIRED")).isFile(); } catch { return true; }
+		}
 		const parent = dirname(current);
 		if (parent === current) return false;
 		current = parent;
@@ -106,7 +102,7 @@ export function decidePrCreate(
 ): { block: true; reason: string } | null {
 	if (!active) return null;
 	if (body === null) return null;
-	if (BEAD_REF.test(body) || NO_BEAD_REF.test(body)) return null;
+	if (BEAD_REF.test(body)) return null;
 	return { block: true, reason: REASON };
 }
 

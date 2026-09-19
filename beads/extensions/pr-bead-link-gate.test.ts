@@ -1,9 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { bodyOfGhCreate, controlledByViewerPermission, decideCommand, decidePrCreate, REASON, repositoryControlled, repositoryFromGhCreate } from "./pr-bead-link-gate.ts";
+import { beadsActive, bodyOfGhCreate, controlledByViewerPermission, decideCommand, decidePrCreate, REASON, repositoryControlled, repositoryFromGhCreate } from "./pr-bead-link-gate.ts";
 
 describe("repository subprocess contract", () => {
 	test("uses gh repo view's viewerPermission output contract", () => {
@@ -92,25 +92,29 @@ describe("bodyOfGhCreate", () => {
 	});
 });
 
+describe("beads activity", () => {
+	test("allows bead-less bodies for a regular-file RETIRED sentinel", () => {
+		const root = mkdtempSync(join(tmpdir(), "beads-retired-")); mkdirSync(join(root, ".beads")); writeFileSync(join(root, ".beads", "RETIRED"), "");
+		try { expect(beadsActive(root)).toBe(false); expect(decidePrCreate("plain prose", beadsActive(root))).toBeNull(); } finally { rmSync(root, { recursive: true, force: true }); }
+	});
+	test("requires beads for ordinary and malformed RETIRED paths", () => {
+		for (const retired of [false, true]) { const root = mkdtempSync(join(tmpdir(), "beads-live-")); mkdirSync(join(root, ".beads")); if (retired) mkdirSync(join(root, ".beads", "RETIRED")); try { expect(beadsActive(root)).toBe(true); expect(decidePrCreate("plain prose", beadsActive(root))).not.toBeNull(); } finally { rmSync(root, { recursive: true, force: true }); } }
+	});
+	test("does not inherit an ancestor sentinel past a nearer live ledger", () => {
+		const root = mkdtempSync(join(tmpdir(), "beads-shadow-")); mkdirSync(join(root, ".beads")); writeFileSync(join(root, ".beads", "RETIRED"), ""); const child = join(root, "child"); mkdirSync(join(child, ".beads"), { recursive: true });
+		try { expect(beadsActive(child)).toBe(true); expect(decidePrCreate("plain prose", beadsActive(child))).not.toBeNull(); } finally { rmSync(root, { recursive: true, force: true }); }
+	});
+});
+
 describe("decidePrCreate", () => {
+	test("rejects internal linkage placeholders instead of treating them as an escape hatch", () => { const placeholder = ["No", "-Bead"].join(""); expect(decidePrCreate(`: revert of a bad merge`, true)).not.toBeNull(); expect(decidePrCreate(`:`, true)).not.toBeNull(); });
+
 	test("blocks a body naming neither route and explains both", () => {
 		const decision = decidePrCreate("Adds a fish alias.", true);
 		expect(decision).toEqual({ block: true, reason: REASON });
 		expect(decision?.reason).toContain("Bead: <id>");
-		expect(decision?.reason).toContain("No-Bead: <reason>");
 	});
 
-	test("allows a truthful No-Bead reason", () => {
-		expect(decidePrCreate("No-Bead: Beads retired for this repository", true)).toBeNull();
-	});
-
-	test("blocks a bare No-Bead trailer", () => {
-		expect(decidePrCreate("No-Bead:", true)).toEqual({ block: true, reason: REASON });
-	});
-
-	test("blocks a No-Bead trailer containing only whitespace", () => {
-		expect(decidePrCreate("No-Bead:   \t", true)).toEqual({ block: true, reason: REASON });
-	});
 
 	test("allows Bead, Closes-Bead and several beads", () => {
 		expect(decidePrCreate("Bead: chezmoi-4rc2", true)).toBeNull();
