@@ -15,9 +15,9 @@ Each assignment names its verification commands.
 Each assignment states whether the main agent authorizes commits.
 Keep sibling assignments disjoint.
 
-## Rules
+## Skills
 
 | Name | When |
 |------|------|
-| `build-main-task-delegation` | Route nontrivial main-agent work to cost-efficient parallel workers |
+| `delegation-choreography` | Delegate non-trivial work and keep related prose edits scoped |
 

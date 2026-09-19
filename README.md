@@ -12,6 +12,22 @@ An OMP marketplace catalog for the Oh My Pi coding agent.
 OMP reads the `.omp-plugin/` catalog and falls back to `.claude-plugin/`. A repository that ships both
 therefore serves OMP and Claude Code from one source.
 
+## Precedence
+
+When guidance conflicts, layers apply in this order:
+
+| Order | Layer |
+| --- | --- |
+| 1 | Global `~/.omp/agent/AGENTS.md` |
+| 2 | Repository `AGENTS.md` |
+| 3 | TTSR rules |
+| 4 | Plugin rules |
+| 5 | Skills |
+| 6 | Agent prompts |
+
+Lower layers add; they never override a higher layer.
+
+
 ## Plugin layout
 
 A plugin is a directory whose capabilities sit in fixed subdirectories. OMP locates each capability by

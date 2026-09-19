@@ -17,6 +17,7 @@ Author and audit agentic assets (skills, rules, agents).
 | `authoring-repomix-include` | Advisory on a `repomix` command with no `--include` |
 | `authoring-extension-ctx-timers` | Raw `setTimeout`/`setInterval` in an extension module (TTSR) |
 | `authoring-extension-argv-exec` | Shell-string `exec`/`spawn` in an extension module (TTSR) |
+| `omp-steering-precedence` | Which guidance layer wins when instructions conflict (always applied) |
 
 ## Extensions
 
