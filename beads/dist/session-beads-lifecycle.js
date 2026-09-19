@@ -817,6 +817,7 @@ async function withEmbeddedWriteLock(cwd, toolCallId, write, env = process.env) 
   }
 }
 var activeHolds = new Map;
+var surrenderedCalls = new Set;
 
 // extensions/session-beads-lifecycle.ts
 function lifecycleBdEnvironment(cwd, base = process.env) {

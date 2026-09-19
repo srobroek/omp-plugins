@@ -567,6 +567,19 @@ describe("bdEmbeddedWriteLock", () => {
 		expect(existsSync(join(beads, LOCK))).toBe(false);
 	});
 
+	test("releases a nested hold that finishes after its tool result", async () => {
+		const beads = store();
+		const { lockCall, lockResult } = wire();
+		const claim = bashCall("claim", "bd create a -t task", beads);
+
+		await lockCall(claim);
+		const nested = lockCall(claim);
+		lockResult({ toolName: "bash", toolCallId: "claim", input: {}, content: [] });
+		await nested;
+
+		expect(existsSync(join(beads, LOCK))).toBe(false);
+	});
+
 	test("a lock the process cannot create refuses the write instead of running it", async () => {
 		const beads = store();
 		chmodSync(beads, 0o500);

@@ -1366,7 +1366,12 @@ function renewLease(lock, toolCallId, token) {
   }
 }
 var activeHolds = new Map;
+var surrenderedCalls = new Set;
+function beginEmbeddedWrite(toolCallId) {
+  surrenderedCalls.delete(toolCallId);
+}
 function surrender(toolCallId) {
+  surrenderedCalls.add(toolCallId);
   const holds = activeHolds.get(toolCallId);
   if (holds === undefined)
     return;
@@ -1382,6 +1387,8 @@ function surrender(toolCallId) {
 async function decideEmbeddedWrite(parsed, event, ctx) {
   try {
     if (event.toolName !== "bash")
+      return;
+    if (surrenderedCalls.delete(event.toolCallId))
       return;
     const input = event.input;
     const cwd = typeof input.cwd === "string" && input.cwd ? input.cwd : ctx?.cwd ?? process.cwd();
@@ -1959,6 +1966,7 @@ function bashGates(pi) {
       const { command } = inputOf(event, ctx);
       if (!command)
         return;
+      beginEmbeddedWrite(event.toolCallId);
       return await decide(parse(command), event, ctx, pi);
     } catch (error) {
       return suffix("bash-gates", `command could not be parsed (${error instanceof Error ? error.message : String(error)})`, "split the command or run the mutation as a plain single command");

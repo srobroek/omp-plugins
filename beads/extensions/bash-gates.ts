@@ -1,7 +1,7 @@
 import type { ExtensionAPI, ExtensionContext, ToolCallEvent } from "@oh-my-pi/pi-coding-agent";
 import { decideActorParsed, environmentForInput } from "./bd-actor-gate.ts";
 import { decideBdCloseParsed } from "./bd-close-gate.ts";
-import { decideEmbeddedWrite } from "./bd-embedded-write-lock.ts";
+import { beginEmbeddedWrite, decideEmbeddedWrite } from "./bd-embedded-write-lock.ts";
 import { decideBdInitParsed } from "./bd-init-advisory.ts";
 import { decideLeaseClaim } from "./bd-lease-gate.ts";
 import { beadsActive, decideCommandParsed, repositoryControlled, repositoryFromCurrentCheckout, repositoryFromGhCreate } from "./pr-bead-link-gate.ts";
@@ -62,6 +62,7 @@ export default function bashGates(pi: ExtensionAPI): void {
 			if (event.toolName !== "bash") return;
 			const { command } = inputOf(event, ctx);
 			if (!command) return;
+			beginEmbeddedWrite(event.toolCallId);
 			return await decide(parse(command), event, ctx, pi);
 		} catch (error) {
 			return suffix("bash-gates", `command could not be parsed (${error instanceof Error ? error.message : String(error)})`, "split the command or run the mutation as a plain single command");

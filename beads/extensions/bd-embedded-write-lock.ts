@@ -745,19 +745,38 @@ export async function withEmbeddedWriteLock<T>(
 	}
 }
 
-const activeHolds = new Map<string, string[]>();
+interface ActiveHold {
+	store: string;
+	held: boolean;
+	released: boolean;
+}
+
+const activeHolds = new Map<string, ActiveHold[]>();
+const surrenderedCalls = new Set<string>();
+
+export function beginEmbeddedWrite(toolCallId: string): void {
+	surrenderedCalls.delete(toolCallId);
+}
 
 function surrender(toolCallId: string): void {
-	const stores = activeHolds.get(toolCallId);
-	if (stores === undefined) return;
+	surrenderedCalls.add(toolCallId);
+	const holds = activeHolds.get(toolCallId);
+	if (holds === undefined) return;
 	activeHolds.delete(toolCallId);
-	for (const store of stores) release(store, toolCallId);
+	for (const hold of holds) {
+		hold.released = true;
+		if (hold.held) {
+			release(hold.store, toolCallId);
+			hold.held = false;
+		}
+	}
 }
 
 /** Shared Bash dispatcher called by bash-gates.ts after the command is parsed. */
 export async function decideEmbeddedWrite(parsed: ParsedCommand, event: ToolCallEvent, ctx: ExtensionContext): Promise<{ block: true; reason: string } | undefined> {
 	try {
 		if (event.toolName !== "bash") return;
+		if (surrenderedCalls.delete(event.toolCallId)) return;
 		const input = event.input as { cwd?: unknown };
 		const cwd = typeof input.cwd === "string" && input.cwd ? input.cwd : (ctx?.cwd ?? process.cwd());
 		const env = environmentForInput(event.input);
@@ -775,16 +794,33 @@ export async function decideEmbeddedWrite(parsed: ParsedCommand, event: ToolCall
 		}
 		const unique = [...new Set(targets)];
 		if (unique.length === 0) return;
-		const taken: string[] = [];
-		for (const store of unique) {
-			const got = await hold(store, event.toolCallId);
+		const pending = unique.map(store => ({ store, held: false, released: false }));
+		const existing = activeHolds.get(event.toolCallId);
+		activeHolds.set(event.toolCallId, existing === undefined ? pending : [...existing, ...pending]);
+		for (const current of pending) {
+			const got = await hold(current.store, event.toolCallId);
 			if (got.kind === "failed") {
-				for (const done of taken) release(done, event.toolCallId);
+				for (const pendingHold of pending) {
+					pendingHold.released = true;
+					if (pendingHold.held) {
+						release(pendingHold.store, event.toolCallId);
+						pendingHold.held = false;
+					}
+				}
+				const active = activeHolds.get(event.toolCallId);
+				if (active !== undefined) {
+					const remaining = active.filter(activeHold => !pending.includes(activeHold));
+					if (remaining.length === 0) activeHolds.delete(event.toolCallId);
+					else activeHolds.set(event.toolCallId, remaining);
+				}
 				return { block: true, reason: got.reason };
 			}
-			taken.push(store);
+			current.held = true;
+			if (current.released) {
+				release(current.store, event.toolCallId);
+				current.held = false;
+			}
 		}
-		activeHolds.set(event.toolCallId, taken);
 		ctx?.setTimeout?.(() => surrender(event.toolCallId), LEASE_MS);
 	} catch {
 		return { block: true, reason: "embedded write target could not be resolved" };

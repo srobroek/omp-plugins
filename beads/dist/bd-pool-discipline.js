@@ -649,6 +649,7 @@ async function withEmbeddedWriteLock(cwd, toolCallId, write, env = process.env) 
   }
 }
 var activeHolds = new Map;
+var surrenderedCalls = new Set;
 
 // extensions/bd-pool-discipline.ts
 var CLAIM_POOLS_KEY = "claim.pools";
