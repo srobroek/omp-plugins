@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.4.10](https://github.com/srobroek/omp-plugins/compare/chezmoi--v0.4.9...chezmoi--v0.4.10) (2026-09-19)
+
+
+### Bug Fixes
+
+* **plugins:** harden security-sensitive extensions ([#416](https://github.com/srobroek/omp-plugins/issues/416)) ([b7837ef](https://github.com/srobroek/omp-plugins/commit/b7837ef55c334293a1381d66fb52d207226aa694))
+
+
+### Refactors
+
+* **steering:** centralize precedence; retire delivery and delegation rules ([#408](https://github.com/srobroek/omp-plugins/issues/408)) ([5aaead3](https://github.com/srobroek/omp-plugins/commit/5aaead3483be6818c681dc8749327388b428d9a1))
+
+
+### Documentation
+
+* **delivery:** align review loop limits ([#405](https://github.com/srobroek/omp-plugins/issues/405)) ([5cd2b7b](https://github.com/srobroek/omp-plugins/commit/5cd2b7b2589aa27edc1d0c549a7f533171b672a4))
+
 ## [0.4.9](https://github.com/srobroek/omp-plugins/compare/chezmoi--v0.4.8...chezmoi--v0.4.9) (2026-09-18)
 
 

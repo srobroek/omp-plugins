@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.3.8](https://github.com/srobroek/omp-plugins/compare/toolchain--v0.3.7...toolchain--v0.3.8) (2026-09-19)
+
+
+### Refactors
+
+* merge topic plugins into toolchain ([#412](https://github.com/srobroek/omp-plugins/issues/412)) ([a18a685](https://github.com/srobroek/omp-plugins/commit/a18a685d7195d20f63955198ab0f9de0edd57c96))
+
+
+### Documentation
+
+* **delivery:** align review loop limits ([#405](https://github.com/srobroek/omp-plugins/issues/405)) ([5cd2b7b](https://github.com/srobroek/omp-plugins/commit/5cd2b7b2589aa27edc1d0c549a7f533171b672a4))
+
 ## [0.3.7](https://github.com/srobroek/omp-plugins/compare/toolchain--v0.3.6...toolchain--v0.3.7) (2026-09-16)
 
 

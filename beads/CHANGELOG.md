@@ -1,5 +1,26 @@
 # Changelog
 
+## [2.0.3](https://github.com/srobroek/omp-plugins/compare/beads--v2.0.2...beads--v2.0.3) (2026-09-19)
+
+
+### Bug Fixes
+
+* **beads:** centralize shell gate parsing ([#411](https://github.com/srobroek/omp-plugins/issues/411)) ([9215f03](https://github.com/srobroek/omp-plugins/commit/9215f033d76f945e9258852e17733d3217a68f80))
+* **beads:** complete lifecycle and formula leftovers ([#423](https://github.com/srobroek/omp-plugins/issues/423)) ([0ee770d](https://github.com/srobroek/omp-plugins/commit/0ee770d5a5063f13c0355113cf25ab2c2a495613))
+* bound agentic lint traversal ([#414](https://github.com/srobroek/omp-plugins/issues/414)) ([edb9156](https://github.com/srobroek/omp-plugins/commit/edb91562ff82e0b59d119e22a32890231b301cc6))
+
+
+### Refactors
+
+* **beads:** remove Dolt server steering; document embedded store ([#409](https://github.com/srobroek/omp-plugins/issues/409)) ([5aa3e39](https://github.com/srobroek/omp-plugins/commit/5aa3e398cf8520bd4bc40c40e27ac7d2f4248983))
+
+
+### Documentation
+
+* **beads:** require durable carriers for bead evidence ([#420](https://github.com/srobroek/omp-plugins/issues/420)) ([70d2f2e](https://github.com/srobroek/omp-plugins/commit/70d2f2edb193f6b133225d05f67bf3e2df7fd1b9))
+* **delivery:** align review loop limits ([#405](https://github.com/srobroek/omp-plugins/issues/405)) ([5cd2b7b](https://github.com/srobroek/omp-plugins/commit/5cd2b7b2589aa27edc1d0c549a7f533171b672a4))
+* trim duplicated steering contracts ([#413](https://github.com/srobroek/omp-plugins/issues/413)) ([2176376](https://github.com/srobroek/omp-plugins/commit/2176376e4968fed8879409085a9973bf95bb77b8))
+
 ## [2.0.2](https://github.com/srobroek/omp-plugins/compare/beads--v2.0.1...beads--v2.0.2) (2026-09-19)
 
 

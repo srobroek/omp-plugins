@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.4](https://github.com/srobroek/omp-plugins/compare/rust--v0.6.3...rust--v0.6.4) (2026-09-19)
+
+
+### Documentation
+
+* **delivery:** align review loop limits ([#405](https://github.com/srobroek/omp-plugins/issues/405)) ([5cd2b7b](https://github.com/srobroek/omp-plugins/commit/5cd2b7b2589aa27edc1d0c549a7f533171b672a4))
+
 ## [0.6.3](https://github.com/srobroek/omp-plugins/compare/rust--v0.6.2...rust--v0.6.3) (2026-09-13)
 
 
