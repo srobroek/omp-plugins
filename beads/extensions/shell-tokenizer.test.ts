@@ -1,9 +1,8 @@
 import { describe, expect, test } from "bun:test";
-
-import { tokenize as tokenizeBeads } from "./bd-close-gate.ts";
-import { tokenize as tokenizeShellCommand } from "./shell-command.ts";
 import { tokenize as tokenizeSpeckit } from "../../speckit/extensions/taskstoissues-gate.ts";
 import { tokenize as tokenizeWorktrunk } from "../../worktrunk/extensions/worktree-gate.ts";
+import { tokenize as tokenizeBeads } from "./bd-close-gate.ts";
+import { tokenize as tokenizeShellCommand } from "./shell-command.ts";
 
 type Tokenizer = (command: string) => unknown[] | null;
 
