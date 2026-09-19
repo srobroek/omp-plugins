@@ -2,5 +2,25 @@
   "name": "browser-tools",
   "description": "Cross-engine browser coverage and Chrome performance tracing over MCP.",
   "version": "0.3.7",
-  "category": "development"
+  "category": "development",
+  "mcpServers": {
+    "chrome-devtools": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "chrome-devtools-mcp@latest",
+        "--no-usage-statistics"
+      ]
+    },
+    "playwright-cross-engine": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@playwright/mcp@latest",
+        "--browser",
+        "webkit"
+      ],
+      "enabled": false
+    }
+  }
 }
