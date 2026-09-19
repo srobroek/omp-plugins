@@ -38,10 +38,7 @@ import path from "node:path";
 import type { ExtensionAPI, ExtensionContext, ToolCallEvent } from "@oh-my-pi/pi-coding-agent";
 import {
 	hasGlobPathChars,
-	isInternalUrlPath,
-	isReadableUrlPath,
 	normalizePathLikeInput,
-	pathTargetsSsh,
 	resolveToCwd,
 } from "@oh-my-pi/pi-coding-agent/tools/path-utils";
 import { unwrapHashlineHeaderPath } from "@oh-my-pi/pi-coding-agent/tools/plan-mode-guard";
@@ -126,30 +123,15 @@ function readsOnlyInThisMode(toolName: string, input: unknown): boolean {
 }
 
 /**
- * Device tools that only update the Beads ledger. They do not name a working
- * tree, so a pathless call is safe from the worktree gate; any explicit path
- * argument is still checked below.
- */
-const LEDGER_ONLY_TOOLS: Record<string, true> = {
-	orc_claim: true,
-	orc_decide: true,
-	orc_finish: true,
-	orc_release: true,
-};
-
-/** Device tools whose operation is explicitly read-only. */
-const READ_ONLY_DEVICE_TOOLS: Record<string, true> = {
-	orc_bot_review_probe: true,
-	orc_conflict_probe: true,
-	orc_review_round_policy: true,
-	orc_status: true,
-};
-
-/**
  * Argument keys that name a filesystem target on an unenumerated tool. A value
  * under one of these keys is checked even when it is relative, because a
  * relative path resolves against the session cwd — which for an agent that has
  * not yet moved into its worktree IS the canonical checkout.
+ *
+ * The key is what makes a string a path, because its shape cannot: a bead id and
+ * a relative output directory are both bare single segments. `targets` is
+ * deliberately absent for that reason — the ledger tools carry bead ids under it
+ * — while `journeysDir` is present because it names a directory a command writes.
  */
 const PATH_KEYS: Record<string, true> = {
 	cwd: true,
@@ -161,6 +143,7 @@ const PATH_KEYS: Record<string, true> = {
 	file_path: true,
 	filepath: true,
 	files: true,
+	journeysDir: true,
 	knowledge_base_paths: true,
 	out: true,
 	outfile: true,
@@ -175,7 +158,6 @@ const PATH_KEYS: Record<string, true> = {
 	sources: true,
 	src: true,
 	target: true,
-	targets: true,
 };
 
 /** Depth bound on the recursive argument walk; deeper nesting is not a path argument. */
@@ -821,16 +803,27 @@ function containment(target: string, topology: GateTopology): Containment {
 }
 
 /**
+ * A URI scheme followed by an authority: `xd://`, `memory://`, `https://`,
+ * `ssh://`, and a scheme this gate has never heard of alike. A Windows drive
+ * letter is not one, because a drive needs no `//`.
+ */
+const URI_SCHEME = /^[A-Za-z][A-Za-z0-9+.-]*:\/\//;
+
+/**
  * The absolute filesystem path this argument names, or `null` when it names no
- * filesystem path at all (an internal URL, a web URL, an `ssh://` target, or an
- * unresolvable string). Resolution goes through OMP's own `resolveToCwd`, which
- * expands `~` — a hand-rolled `path.resolve` does not, and would guard the wrong
- * file for every `~`-spelled target.
+ * filesystem path at all — any URL, an `ssh://` target, or an unresolvable
+ * string. Resolution goes through OMP's own `resolveToCwd`, which expands `~` — a
+ * hand-rolled `path.resolve` does not, and would guard the wrong file for every
+ * `~`-spelled target.
+ *
+ * Scheme detection is deliberately generic rather than a list of the schemes OMP
+ * ships today: a new `xd://` device, a new internal URL, or a plugin's own scheme
+ * must not become a path under the canonical checkout the moment it appears.
  */
 export function resolveTarget(raw: string, sessionCwd: string): string | null {
 	const normalized = normalizePathLikeInput(unwrapHashlineHeaderPath(raw));
 	if (normalized.length === 0) return null;
-	if (isInternalUrlPath(normalized) || isReadableUrlPath(normalized) || pathTargetsSsh(normalized)) return null;
+	if (URI_SCHEME.test(normalized)) return null;
 	try {
 		return resolveToCwd(normalized, sessionCwd);
 	} catch {
@@ -1284,16 +1277,17 @@ export function decideWorktreeCall(
 			}
 			const device = xdDeviceTool(record.path);
 			if (device !== null) {
-				// A device call carries the real arguments in `content`; malformed wire
-				// data is refused before the device can be invoked.
-				if (typeof record.content !== "string") {
-					return { block: true, reason: uncertaintyRefusal("this `write` device call has no `content` string", canonical) };
-				}
+				// A device call carries the real arguments in `content`, so a payload
+				// that parses is judged by the device's own rule. One that does not
+				// parse names no filesystem path either, and the device rejects it on
+				// arrival: refusing it here would only mistake a wire error for a
+				// containment breach.
+				if (typeof record.content !== "string") return undefined;
 				let nested: unknown;
 				try {
 					nested = JSON.parse(record.content);
 				} catch {
-					return { block: true, reason: uncertaintyRefusal("this `write` device call has malformed JSON `content`", canonical) };
+					return undefined;
 				}
 				return decideWorktreeCall(device, nested, sessionCwd, topology);
 			}
@@ -1358,27 +1352,23 @@ export function decideWorktreeCall(
 			}
 			return refuseTarget(effective);
 		}
-        default: {
-            // Ledger-only calls carry domain identifiers (for example
-            // `orc_finish.targets`), not filesystem paths.
-            if (LEDGER_ONLY_TOOLS[toolName] === true) return undefined;
-            const targets: string[] = [];
-            for (const raw of scanPathArguments(input)) {
-                const target = resolveTarget(raw, sessionCwd);
-                if (target !== null) targets.push(target);
-            }
-            if (targets.length > 0) {
-                for (const target of targets) {
-                    const refusal = refuseTarget(target);
-                    if (refusal) return refusal;
-                }
-                return undefined;
-            }
-            // Read-only devices may expose explicit paths, which were checked above;
-            // pathless probes may run without a worktree.
-            if (READ_ONLY_DEVICE_TOOLS[toolName] === true) return undefined;
-            return refuseTarget(sessionCwd);
-        }
+		default: {
+			// An unenumerated tool is judged by the filesystem paths its arguments
+			// name, and by nothing else. A tool whose arguments resolve to no path —
+			// a ledger identifier, an OMP internal URL such as `xd://retain` or
+			// `memory://`, a web URL, a bare option — mutates no working tree this
+			// gate can attribute, so there is nothing to contain. Judging such a
+			// call against the session cwd instead refuses every pathless device
+			// call an agent makes before it has moved into a worktree, which is the
+			// canonical checkout's own directory.
+			for (const raw of scanPathArguments(input)) {
+				const target = resolveTarget(raw, sessionCwd);
+				if (target === null) continue;
+				const refusal = refuseTarget(target);
+				if (refusal) return refusal;
+			}
+			return undefined;
+		}
     }
 }
 
@@ -1401,7 +1391,7 @@ export default function worktreeGate(pi: ExtensionAPI): void {
 			// confirmed non-repository session stands down here — confirmed against the
 			// filesystem as well as the cache, since a repository may have appeared
 			// under that directory since the answer was stored.
-			if (READ_ONLY_TOOLS[event.toolName] === true || READ_ONLY_DEVICE_TOOLS[event.toolName] === true || readsOnlyInThisMode(event.toolName, event.input)) {
+			if (READ_ONLY_TOOLS[event.toolName] === true || readsOnlyInThisMode(event.toolName, event.input)) {
 				return undefined;
 			}
 			const cached = canonicalCache.get(sessionCwd);

@@ -175,18 +175,50 @@ describe("xd:// devices", () => {
 
 });
 
-describe("explicit orc device classification", () => {
-	test("unknown orc devices fail closed", () => {
+describe("device classification", () => {
+	/**
+	 * The gate judges the filesystem paths a call names. A device call that names
+	 * none — a ledger write, `xd://retain`, a probe — mutates no working tree the
+	 * gate can attribute, and judging it against the session cwd would refuse
+	 * every such call an agent makes before it has a worktree, because the cwd it
+	 * starts in is the canonical checkout.
+	 */
+	test("a device is judged by the paths it names, not by whether the gate knows it", () => {
 		const { canonical, topology } = project();
-		expect(decideWorktreeCall("orc_arbitrary", {}, canonical, topology)?.block).toBe(true);
+		expect(decideWorktreeCall("orc_arbitrary", {}, canonical, topology)).toBeUndefined();
+		expect(decideWorktreeCall("orc_arbitrary", { path: join(canonical, "src", "a.ts") }, canonical, topology)?.block).toBe(true);
 	});
 
-    test("orc_bind requires a linked worktree session cwd", () => {
-        const { canonical, worktree, topology } = project();
-        const payload = { epic: "run" };
-        expect(decideWorktreeCall("orc_bind", payload, canonical, topology)?.block).toBe(true);
-        expect(decideWorktreeCall("orc_bind", payload, worktree, topology)).toBeUndefined();
-    });
+	/**
+	 * The refusal this fix exists for: `write { path: "xd://retain" }` recursed into
+	 * the `retain` device, that device names no path, and the gate judged it against
+	 * the session cwd — so storing a memory from the directory an agent starts in
+	 * was refused as a canonical mutation.
+	 */
+	test("an OMP native URL names no filesystem path, whatever its scheme", () => {
+		const { canonical, topology } = project();
+		const memory = JSON.stringify({ items: [{ content: "a fact" }] });
+		expect(decideWorktreeCall("write", { path: "xd://retain", content: memory }, canonical, topology)).toBeUndefined();
+		// Scheme-agnostic: a device, an internal URL and a scheme nobody has shipped
+		// yet are all judged the same way, so a new one cannot become a canonical path.
+		for (const url of ["xd://recall", "memory://01a0", "local://plan.md", "artifact://253", "future+scheme://whatever"]) {
+			expect(decideWorktreeCall("some_tool", { path: url }, canonical, topology)).toBeUndefined();
+		}
+	});
+
+	/**
+	 * `targets` carries bead ids on the ledger tools, and a bead id is shaped exactly
+	 * like a relative path — `omp-plugins-v9p5` and `scan-out` are both bare
+	 * segments. The key therefore decides, and `targets` means ledger identifiers:
+	 * a tool that does name a filesystem target names it under a key that means one.
+	 */
+	test("a ledger identifier is not a path, and a path key still is", () => {
+		const { canonical, topology } = project();
+		const finish = { bead: "review", state: "done", reason: "ok", verdict: "approve", targets: ["task-id"] };
+		expect(decideWorktreeCall("orc_finish", finish, canonical, topology)).toBeUndefined();
+		expect(decideWorktreeCall("some_tool", { targets: [join(canonical, "src", "probe.ts")] }, canonical, topology)).toBeUndefined();
+		expect(decideWorktreeCall("some_tool", { path: join(canonical, "src", "probe.ts") }, canonical, topology)?.block).toBe(true);
+	});
 
     test("known ledger-only and read-only controls are explicit", () => {
         const { canonical, topology } = project();
@@ -220,18 +252,27 @@ describe("explicit orc device classification", () => {
 });
 
 describe("xd wire validation", () => {
-	test("missing, non-string, and malformed content refuse", () => {
+	/**
+	 * A payload the gate cannot parse names no filesystem path, and the device
+	 * rejects it on arrival. Refusing it here would report a wire error as a
+	 * containment breach.
+	 */
+	test("a payload that names no path is left to the device", () => {
 		const { canonical, topology } = project();
 		for (const content of [undefined, 42, "{bad"]) {
 			const input = content === undefined ? { path: "xd://unknown_device" } : { path: "xd://unknown_device", content };
-			expect(decideWorktreeCall("write", input, canonical, topology)?.block).toBe(true);
+			expect(decideWorktreeCall("write", input, canonical, topology)).toBeUndefined();
 		}
 	});
 
-	test("known mutating and unknown valid devices refuse from canonical", () => {
-		const { canonical, topology } = project();
+	test("a device payload is judged by the paths it carries, whatever the device is", () => {
+		const { canonical, worktree, topology } = project();
 		for (const path of ["xd://orc_bot_review_request", "xd://unknown_device"]) {
-			expect(decideWorktreeCall("write", { path, content: "{}" }, canonical, topology)?.block).toBe(true);
+			expect(decideWorktreeCall("write", { path, content: "{}" }, canonical, topology)).toBeUndefined();
+			const nested = JSON.stringify({ path: join(canonical, "src", "a.ts") });
+			expect(decideWorktreeCall("write", { path, content: nested }, canonical, topology)?.block).toBe(true);
+			const inWorktree = JSON.stringify({ path: join(worktree, "src", "a.ts") });
+			expect(decideWorktreeCall("write", { path, content: inWorktree }, canonical, topology)).toBeUndefined();
 		}
 	});
 });
@@ -1045,15 +1086,20 @@ function handler(): (event: { toolName: string; input: unknown }, ctx: { cwd: st
 	return listener as (event: { toolName: string; input: unknown }, ctx: { cwd: string }) => { block?: boolean } | undefined;
 }
 
-describe("pathless mutating tools", () => {
-	test("a mutating tool that names no target is judged by the cwd it defaults to", () => {
+describe("pathless tools", () => {
+	/**
+	 * A tool that names no path may still write through its session cwd, and this
+	 * gate does not stop it: an argument scan cannot tell `typescript_quality`
+	 * defaulting its path to the cwd from `retain` writing to a database, and
+	 * guessing refused every pathless device call from the directory an agent
+	 * starts in. The enumerated mutators — `bash`, `eval`, `write`, `edit`,
+	 * `ast_edit` — carry an explicit cwd or target and stay judged by it.
+	 */
+	test("a pathless call is allowed, whatever the tool does with its cwd", () => {
 		const { canonical, worktree, topology } = project();
-		// `typescript_quality({mode:"fix"})` defaults its path to the session cwd and
-		// writes fixes there; from canonical that is a canonical mutation.
-		const decision = decideWorktreeCall("typescript_quality", { mode: "fix" }, canonical, topology);
-		expect(decision?.block).toBe(true);
-		expect(decision?.reason).toContain(canonical);
+		expect(decideWorktreeCall("typescript_quality", { mode: "fix" }, canonical, topology)).toBeUndefined();
 		expect(decideWorktreeCall("typescript_quality", { mode: "fix" }, worktree, topology)).toBeUndefined();
+		expect(decideWorktreeCall("eval", { code: "1" }, canonical, topology)?.block).toBe(true);
 	});
 
     test("pathless ledger and status calls are allowed from canonical", () => {
@@ -1086,10 +1132,12 @@ describe("pathless mutating tools", () => {
 
 	test("a mode-dependent tool is judged by the mode it was called in", () => {
 		const { canonical, topology } = project();
-		// `bd_formula_check` reads unless `deep`, and `journeys_index` reads for
-		// `lint` and an unconfirmed `prune`; each mirrors that tool's own approval.
+		// `journeys_index` reads for `lint` and an unconfirmed `prune`, so its
+		// canonical `journeysDir` is inspection in those modes and a mutation in the
+		// others. `bd_formula_check` names no path in either mode, so the gate has
+		// nothing to judge and the tool's own approval decides.
 		expect(decideWorktreeCall("bd_formula_check", { formula: "x" }, canonical, topology)).toBeUndefined();
-		expect(decideWorktreeCall("bd_formula_check", { formula: "x", deep: true }, canonical, topology)?.block).toBe(true);
+		expect(decideWorktreeCall("bd_formula_check", { formula: "x", deep: true }, canonical, topology)).toBeUndefined();
 		expect(
 			decideWorktreeCall("journeys_index", { command: "lint", journeysDir: join(canonical, "journeys") }, canonical, topology),
 		).toBeUndefined();
