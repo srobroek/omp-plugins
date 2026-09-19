@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.0.1](https://github.com/srobroek/omp-plugins/compare/worktrunk--v1.0.0...worktrunk--v1.0.1) (2026-09-19)
+
+
+### Bug Fixes
+
+* **beads:** one shared shell tokenizer, and close two gate fail-opens ([#402](https://github.com/srobroek/omp-plugins/issues/402)) ([264facb](https://github.com/srobroek/omp-plugins/commit/264facb1ac2a07a53f3dd668fdf98d6b8443ec1c))
+
+
+### Documentation
+
+* **worktrunk:** correct 1.0.0 changelog ([#399](https://github.com/srobroek/omp-plugins/issues/399)) ([ad1a44e](https://github.com/srobroek/omp-plugins/commit/ad1a44e5fbf14c79fcf6a14f6e58bfd0fd447b6c))
+
 ## [1.0.0](https://github.com/srobroek/omp-plugins/compare/worktrunk--v0.2.8...worktrunk--v1.0.0) (2026-09-19)
 
 

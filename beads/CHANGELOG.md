@@ -1,5 +1,13 @@
 # Changelog
 
+## [2.0.2](https://github.com/srobroek/omp-plugins/compare/beads--v2.0.1...beads--v2.0.2) (2026-09-19)
+
+
+### Bug Fixes
+
+* **beads:** fail closed on unknown repository permission ([#400](https://github.com/srobroek/omp-plugins/issues/400)) ([e65c614](https://github.com/srobroek/omp-plugins/commit/e65c6144254bbe1bb6030b8fe3315fc4f1c53f94))
+* **beads:** one shared shell tokenizer, and close two gate fail-opens ([#402](https://github.com/srobroek/omp-plugins/issues/402)) ([264facb](https://github.com/srobroek/omp-plugins/commit/264facb1ac2a07a53f3dd668fdf98d6b8443ec1c))
+
 ## [2.0.1](https://github.com/srobroek/omp-plugins/compare/beads--v2.0.0...beads--v2.0.1) (2026-09-19)
 
 
