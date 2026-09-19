@@ -22,20 +22,31 @@ no ledger data, and the next push re-creates it.
 | Step | Reclaims | Costs |
 |---|---|---|
 | Delete `.dolt/git-remote-cache` | push scratch | nothing; re-created on next push |
-| `bd compact --dolt` | unreachable chunks | nothing |
 | `dolt gc --full --archive-level=1` in the store directory | every generation, with archive compression | nothing |
 | `bd compact --days <n> --force` | old auto-commit history | that history, permanently |
+| `bd admin compact` | closed-issue content, summarized | the original content, permanently |
 | `bd gc --older-than <n>` | closed issues older than n days | those issues, permanently |
 
-MUST Treat the last two rows as owner decisions rather than routine maintenance.
-`bd compact` squashes commits and prunes remote-tracking refs; `bd gc` runs a
-decay phase that deletes closed issues. Neither is reversible. Preview with
-`--dry-run`.
+The first two rows discard nothing and need no permission. The rest are owner
+decisions: `bd compact` squashes commits and prunes remote-tracking refs,
+`bd admin compact` replaces closed issues with summaries, and `bd gc` runs a decay
+phase that deletes them outright. None is reversible.
 
-MUST Pass `--full` to any collection on a store collected before. Dolt storage is
-generational and a default pass never revisits the old generation, so space freed
-by decay or squashing is not returned without it. `bd gc --full` carries the same
-flag.
+MUST Confirm a native backup exists and no other writer is active before any row
+below the first two, and preview with `--dry-run` first. `rule://beads-no-unprompted-prune`
+governs the same class of irreversible maintenance.
+
+MUST Hold the store exclusively for a filesystem `dolt gc`. A raw `dolt` command
+does not take the Beads write lock, and every linked worktree shares one
+single-writer store, so a concurrent `bd` write during collection can corrupt the
+journal. `bd compact --dolt` collects through Beads instead, but its help
+documents `.beads/dolt`; it is unverified against an embedded store at
+`.beads/embeddeddolt`, which is why the measured route above is the offline one.
+
+MUST Pass `--full` to any collection on a store collected before, and MUST collect
+again after any lossy row. Dolt storage is generational and a default pass never
+revisits the old generation, so the space that squashing or decay frees is only
+returned by a later full pass. `bd gc --full` carries the same flag.
 
 Measured on a 527 MB store holding 1663 issues: dropping the push cache reached
 433 MB, then `dolt gc --full --archive-level=1` reached 149 MB in 3.4 seconds,
@@ -63,14 +74,14 @@ storage and proves nothing about the space it would reclaim.
 
 ## When to run it
 
-Dolt collects garbage automatically and non-intrusively from version 1.75, so no
-fixed cadence applies. Run maintenance on a trigger instead:
+Recent Dolt versions collect garbage automatically and non-intrusively, and no
+documented interval, size threshold, or journal-growth trigger exists. Any
+schedule is local policy. Run maintenance on a trigger instead:
 
 - after a large import or a bulk close,
 - when a store's size or query latency has visibly grown,
 - after deleting branches that carried novel chunks,
 - before migrating or backing up a store, where a smaller copy is cheaper.
 
-DEFAULT Reach for `bd compact --dolt` first, since it reclaims space without
-discarding anything. Escalate to history or issue deletion only when a measured
-size target requires it.
+DEFAULT Reclaim with the two lossless rows first, and escalate to history or issue
+deletion only when a measured size target still requires it.

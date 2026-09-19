@@ -23,6 +23,11 @@ const FIRE = [
 	"bd purge --force; bd prune --dry-run",
 	"BEADS_ACTOR=omp/a bd flatten --force",
 	"if ready; then bd prune --older-than 90d",
+	"bd gc --older-than 30",
+	"bd gc --full --force",
+	"bd compact --days 7 --force",
+	"bd admin compact --auto --all",
+	"bd -C . admin compact --id bd-42 --summary s.txt",
 ];
 
 const HOLD = [
@@ -30,6 +35,9 @@ const HOLD = [
 	"bd purge --help",
 	"echo 'bd purge --force'",
 	"git commit -m 'document bd flatten'",
+	"bd gc --dry-run",
+	"bd compact --help",
+	"bd admin compact --dolt --dry-run",
 ];
 
 describe("beads-no-unprompted-prune", () => {
