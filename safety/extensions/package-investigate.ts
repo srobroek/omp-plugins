@@ -1,6 +1,6 @@
 import type { ExtensionAPI, ToolCallEvent } from "@oh-my-pi/pi-coding-agent";
 
-import { tokenizeShell, type ShellToken } from "./shell-tokenizer.ts";
+import { type ShellToken, tokenizeShell } from "./shell-tokenizer.ts";
 
 const MANAGERS = new Set(["pnpm", "npm", "bun", "yarn", "uv", "pip", "pip3", "poetry", "cargo", "go", "composer"]);
 const PACKAGE_COMMANDS = new Map<string, Set<string>>([
