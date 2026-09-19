@@ -271,11 +271,7 @@ const MOL_WRITES: Record<string, true> = {
 };
 const pendingAdvisory = new Map<string, string>();
 
-export function extractCommand(input: ToolCallEvent["input"]): string {
-	if ("command" in input && typeof input.command === "string") return input.command;
-	if ("cmd" in input && typeof input.cmd === "string") return input.cmd;
-	return "";
-}
+export { commandFromInput as extractCommand } from "./shell-command.ts";
 
 /** The environment a bash tool call supplies to its child process. */
 export function environmentForInput(
@@ -418,6 +414,24 @@ const CREATE_REASON =
 const ADVISORY_TEXT =
 	"BEADS_ACTOR and BD_ACTOR are unset on this mutating `bd` command. Subagents must set either variable so writes and claims are attributable. Export one before mutating work.";
 
+import type { ParsedCommand } from "./shell-command.ts";
+
+/** Decide across command-position segments and recursively executable children. */
+export function decideActorParsed(parsed: ParsedCommand, env: NodeJS.ProcessEnv = process.env): ActorGateDecision {
+	let advisory = false;
+	for (const segment of parsed.segments) {
+		const decision = decideActorGate(segment.join(" "), env);
+		if (decision.kind === "block") return decision;
+		if (decision.kind === "advisory") advisory = true;
+	}
+	for (const child of parsed.nested) {
+		const decision = decideActorParsed(child, env);
+		if (decision.kind === "block") return decision;
+		if (decision.kind === "advisory") advisory = true;
+	}
+	return advisory ? { kind: "advisory", text: ADVISORY_TEXT } : { kind: "allow" };
+}
+
 export function decideActorGate(
 	command: string,
 	env: NodeJS.ProcessEnv = process.env,
@@ -450,24 +464,6 @@ function prepend(
 
 export default function bdActorGate(pi: ExtensionAPI): void {
 	const arbiter = installActorNoticeArbiter();
-	pi.on("tool_call", (event: ToolCallEvent) => {
-		try {
-			if (event.toolName !== "bash") return;
-			const command = extractCommand(event.input);
-			if (!command || !/\bbd\s+/.test(command)) return;
-			// The bash tool's own `env` argument reaches the child like an export does.
-			const env = environmentForInput(event.input);
-			const decision = decideActorGate(command, env);
-			if (decision.kind === "block") {
-				return { block: true, reason: decision.reason };
-			}
-			if (decision.kind === "advisory") {
-				pendingAdvisory.set(event.toolCallId, decision.text);
-			}
-		} catch {
-			return;
-		}
-	});
 
 	pi.on("tool_result", (event: ToolResultEvent) => {
 		try {

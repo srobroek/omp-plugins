@@ -19,7 +19,6 @@ import { isAbsolute, join, resolve } from "node:path";
 import type {
 	ExtensionAPI,
 	ExtensionContext,
-	ToolCallEvent,
 	ToolResultEvent,
 } from "@oh-my-pi/pi-coding-agent";
 
@@ -765,6 +764,23 @@ function resultText(event: ToolResultEvent): string {
 	return text;
 }
 
+/** Resolve the lifecycle's canonical embedded-store pin for a Bash call. */
+type SessionPinGetter = (cwd: string, ctx: ExtensionContext) => string | undefined;
+
+let sessionPinGetter: SessionPinGetter | undefined;
+
+export function pinnedBeadsDir(cwd: string, ctx?: ExtensionContext): string | undefined {
+	const pin = ctx === undefined ? undefined : sessionPinGetter?.(cwd, ctx);
+	return pin ?? (ctx === undefined ? sessionPinFor(cwd) : undefined);
+}
+
+/** Shared Bash rewrite used by bash-gates.ts; the lifecycle supplies session ownership. */
+export function rewriteBashInput(input: unknown, ctx: ExtensionContext): Record<string, unknown> | undefined {
+	const cwd = bashCallCwd(input, ctx?.cwd ?? process.cwd());
+	const pin = pinnedBeadsDir(cwd, ctx);
+	return pinBashInput(input, pin === "" ? undefined : pin);
+}
+
 export default function sessionBeadsLifecycle(pi: ExtensionAPI): void {
 	const sessions = new Map<string, SessionState>();
 	function stateFor(ctx: ExtensionContext): SessionState {
@@ -776,6 +792,7 @@ export default function sessionBeadsLifecycle(pi: ExtensionAPI): void {
 		}
 		return state;
 	}
+
 	function identityFor(state: SessionState, cwd: string): string {
 		const key = resolve(cwd);
 		const cached = state.repos.get(key);
@@ -784,6 +801,11 @@ export default function sessionBeadsLifecycle(pi: ExtensionAPI): void {
 		state.repos.set(key, identity);
 		return identity;
 	}
+	sessionPinGetter = (cwd, ctx) => {
+		const state = sessions.get(sessionKey(ctx));
+		if (state?.repo !== undefined && identityFor(state, cwd) !== state.repo) return undefined;
+		return state?.pin ?? process.env.BEADS_DIR ?? sessionPinFor(cwd);
+	};
 
 	pi.on("session_start", async (_event, ctx: ExtensionContext) => {
 		const key = sessionKey(ctx);
@@ -831,17 +853,6 @@ export default function sessionBeadsLifecycle(pi: ExtensionAPI): void {
 				error: error instanceof Error ? error.message : String(error),
 			});
 		}
-	});
-
-	pi.on("tool_call", (event: ToolCallEvent, ctx: ExtensionContext) => {
-		if (event.toolName !== "bash") return;
-		const state = sessions.get(sessionKey(ctx));
-		const sessionCwd = ctx?.cwd ?? process.cwd();
-		const callCwd = bashCallCwd(event.input, sessionCwd);
-		if (state?.repo !== undefined && identityFor(state, callCwd) !== state.repo) return;
-		const pin = state?.pin ?? process.env.BEADS_DIR ?? sessionPinFor(callCwd);
-		const revised = pinBashInput(event.input, pin === "" ? undefined : pin);
-		return revised ? { input: revised } : undefined;
 	});
 
 	pi.on("session_shutdown", (_event, ctx: ExtensionContext) => {

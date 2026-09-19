@@ -3,8 +3,8 @@
  * The parser recognizes actual invocations rather than mentions in unrelated text.
  */
 import path from "node:path";
-import type { ExtensionAPI, ToolCallEvent } from "@oh-my-pi/pi-coding-agent";
-import { extractCommand, tokenize } from "./bd-close-gate.ts";
+import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
+import { tokenize } from "./bd-close-gate.ts";
 
 /** Flags consuming the next token, so `bd -C <dir> init` still reads as `init`. */
 const PRE_VERB_VALUE_FLAGS: Record<string, true> = {
@@ -287,7 +287,7 @@ export function initAdvisory(_missing: MissingFlags): string {
 	);
 }
 
-/** The advisory this command deserves, or `undefined` when it deserves none. */
+/** Decide an init advisory from one validated command-position source. */
 export function decideBdInit(command: string): string | undefined {
 	if (!PREFILTER.test(command)) return;
 	for (const invocation of findInitInvocations(command)) {
@@ -295,7 +295,19 @@ export function decideBdInit(command: string): string | undefined {
 		const missing = missingInitFlags(invocation.flags);
 		if (missing !== undefined) return initAdvisory(missing);
 	}
-	return;
+	return undefined;
+}
+/** Decide init advisories from the shared parsed command positions. */
+export function decideBdInitParsed(parsed: import("./shell-command.ts").ParsedCommand): string | undefined {
+	for (const position of parsed.commands) {
+		const advisory = decideBdInit(position.raw);
+		if (advisory) return advisory;
+	}
+	for (const child of parsed.nested) {
+		const advisory = decideBdInitParsed(child);
+		if (advisory) return advisory;
+	}
+	return undefined;
 }
 
 /**
@@ -311,33 +323,6 @@ export function resetInitAdvisoryForTests(): void {
 	delete (globalThis as { [ADVISED_KEY]?: boolean })[ADVISED_KEY];
 }
 
-export default function bdInitAdvisory(pi: ExtensionAPI): void {
-	pi.on("tool_call", (event: ToolCallEvent) => {
-		try {
-			if (event.toolName !== "bash") return;
-			const command = extractCommand(event.input);
-			if (!command) return;
-			const advisory = decideBdInit(command);
-			if (advisory === undefined) return;
-			const holder = globalThis as { [ADVISED_KEY]?: boolean };
-			if (holder[ADVISED_KEY] === true) return;
-			holder[ADVISED_KEY] = true;
-			// A message, not `ctx.ui.notify`: the agent is what runs `bd`, and a UI
-			// notification reaches neither the agent nor a `--print`/RPC session.
-			// `triggerTurn` belongs in the options argument, not the payload.
-			pi.sendMessage(
-				{
-					customType: "com.srobroek.beads.init-advisory",
-					content: advisory,
-					display: true,
-					attribution: "user",
-				},
-				{ triggerTurn: false },
-			);
-		} catch {
-			// Advisory only: a bug here must never disturb a bash call.
-		}
-		// Returns nothing on every path: `bd init` is never blocked.
-		return;
-	});
+export default function bdInitAdvisory(_pi: ExtensionAPI): void {
+	// Bash calls are dispatched by bash-gates.ts.
 }

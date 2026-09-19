@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-
+import bashGates from "./bash-gates.ts";
 import sessionBeadsLifecycle, {
 	autoPinBeadsDir,
 	bdVerbs,
@@ -631,6 +631,7 @@ describe("integration", () => {
 			},
 		};
 		sessionBeadsLifecycle(fakePi as never);
+bashGates(fakePi as never);
 		return { handlers, logged };
 	};
 	/**

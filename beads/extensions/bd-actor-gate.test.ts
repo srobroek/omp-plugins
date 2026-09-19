@@ -321,144 +321,25 @@ describe("decideActorGate", () => {
 });
 
 describe("integration", () => {
-	test("blocks claim-shaped bash; advisories via tool_result", () => {
-		// The handler reads the harness's real environment. The gate honours BOTH
-		// BEADS_ACTOR and BD_ACTOR, so clearing one still let a shell that exported
-		// the other turn every case here green -- which is the shell every agent is
-		// told to run. Clear both.
-		const saved = {
-			BEADS_ACTOR: process.env.BEADS_ACTOR,
-			BD_ACTOR: process.env.BD_ACTOR,
-		};
-		delete process.env.BEADS_ACTOR;
-		delete process.env.BD_ACTOR;
-		try {
-			runIntegration();
-		} finally {
-			for (const [name, value] of Object.entries(saved)) {
-				if (value !== undefined) process.env[name] = value;
-			}
-		}
+	test("decides claim-shaped bash and advisories without a migrated tool_call registration", () => {
+		expect(decideActorGate("bd update chezmoi-2ji --claim", emptyEnv)).toEqual(
+			expect.objectContaining({ kind: "block", reason: expect.stringContaining("BEADS_ACTOR") }),
+		);
+		expect(decideActorGate("bd show x", emptyEnv).kind).toBe("allow");
+		expect(decideActorGate("bd close x", { BD_ACTOR: "omp/x/y" } as NodeJS.ProcessEnv).kind).toBe("allow");
+		expect(decideActorGate("bd close x", emptyEnv).kind).toBe("advisory");
 	});
 
-	test.each(["orchestrate-first", "beads-first"] as const)(
-		"arbitrates ordinary mutations and claims with %s handler order",
-		(order) => {
-			const handlers: Record<string, Array<(event: unknown) => unknown>> = {};
-			const fakePi = {
-				zod: {},
-				registerTool: () => {},
-				on: (event: string, handler: (value: unknown) => unknown) => {
-					const registered = handlers[event] ?? [];
-					registered.push(handler);
-					handlers[event] = registered;
-				},
-			};
-			bdActorGate(fakePi as never);
-			const installed: unknown = Reflect.get(globalThis, ACTOR_NOTICE_ARBITER);
-			if (installed === null || typeof installed !== "object" || !("handledToolCalls" in installed)) {
-				throw new Error("beads actor arbiter was not installed");
-			}
-			const toolCall = handlers.tool_call?.[0];
-			const toolResult = handlers.tool_result?.[0];
-			if (toolCall === undefined || toolResult === undefined) {
-				throw new Error("beads actor handlers were not registered");
-			}
-			const handledToolCalls = installed.handledToolCalls;
-			if (!(handledToolCalls instanceof Set)) throw new Error("invalid beads actor arbiter");
-
-			const id = `coinstalled-${order}`;
-			if (order === "orchestrate-first") handledToolCalls.add(id);
-			toolCall({
-				toolName: "bash",
-				toolCallId: id,
-				input: { command: "bd close x", env: { BEADS_ACTOR: "", BD_ACTOR: "" } },
-			});
-			if (order === "beads-first") handledToolCalls.add(id);
-			const result = toolResult({
-				toolName: "bash",
-				toolCallId: id,
-				content: [{ type: "text", text: "closed" }],
-			});
-			expect(result).toBeUndefined();
-			expect(handledToolCalls.has(id)).toBe(false);
-
-			for (const [claimKind, command] of [
-				["update", "bd update x --claim"],
-				["top-level", "bd claim x"],
-			] as const) {
-				const claimId = `claim-${claimKind}-${order}`;
-				const claim = toolCall({
-					toolName: "bash",
-					toolCallId: claimId,
-					input: { command, env: { BEADS_ACTOR: "", BD_ACTOR: "" } },
-				});
-				expect(claim).toMatchObject({ block: true });
-				expect(handledToolCalls.has(claimId)).toBe(false);
-			}
-		},
-	);
-
-	function runIntegration() {
-		const handlers: Record<string, Array<(e: unknown) => unknown>> = {};
-		const fakePi = {
-			zod: {},
-			registerTool: () => {},
-			on: (event: string, handler: (value: unknown) => unknown) => {
-				const registered = handlers[event] ?? [];
-				registered.push(handler);
-				handlers[event] = registered;
-			},
-		};
-		bdActorGate(fakePi as never);
-		const toolCall = handlers.tool_call?.[0];
+	test("the retained tool_result handler ignores non-bash tools", () => {
+		const handlers: Record<string, Array<(event: unknown) => unknown>> = {};
+		bdActorGate({ on: (event: string, handler: (value: unknown) => unknown) => {
+			const list = handlers[event] ?? [];
+			list.push(handler);
+			handlers[event] = list;
+		} } as never);
 		const toolResult = handlers.tool_result?.[0];
-		if (toolCall === undefined || toolResult === undefined) {
-			throw new Error("beads actor handlers were not registered");
-		}
-
-		const blocked = toolCall({
-			toolName: "bash",
-			toolCallId: "c1",
-			input: { command: "bd update chezmoi-2ji --claim" },
-		});
-		expect(blocked).toEqual(
-			expect.objectContaining({ block: true, reason: expect.stringContaining("BEADS_ACTOR") }),
-		);
-
-		const allowedShow = toolCall({
-			toolName: "bash",
-			toolCallId: "c2",
-			input: { command: "bd show x" },
-		});
-		expect(allowedShow).toBeUndefined();
-
-		const allowedToolEnv = toolCall({
-			toolName: "bash",
-			toolCallId: "c-env",
-			input: { command: "bd close x", env: { BD_ACTOR: "omp/x/y" } },
-		});
-		expect(allowedToolEnv).toBeUndefined();
-		const toolEnvResult = toolResult({
-			toolName: "bash",
-			toolCallId: "c-env",
-			content: [{ type: "text", text: "closed" }],
-		});
-		expect(toolEnvResult).toBeUndefined();
-
-		const adv = toolCall({
-			toolName: "bash",
-			toolCallId: "c3",
-			input: { command: "bd close x" },
-		});
-		expect(adv).toBeUndefined();
-		const patched = toolResult({
-			toolName: "bash",
-			toolCallId: "c3",
-			content: [{ type: "text", text: "closed" }],
-		});
-		expect(JSON.stringify(patched)).toContain("BEADS_ACTOR");
-	}
+		expect(toolResult?.({ toolName: "edit", toolCallId: "c3", content: [] })).toBeUndefined();
+	});
 });
 
 describe("export in an earlier segment", () => {

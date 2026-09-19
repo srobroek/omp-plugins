@@ -5,17 +5,12 @@
   "private": true,
   "omp": {
     "extensions": [
-      "./extensions/formula-check-tool.ts",
-      "./extensions/bd-actor-gate.ts",
-      "./extensions/bd-close-gate.ts",
-      "./extensions/bd-lease-gate.ts",
-      "./extensions/bd-embedded-write-lock.ts",
-      "./extensions/pr-bead-link-gate.ts",
-      "./extensions/bd-init-advisory.ts",
-      "./extensions/bd-pool-discipline.ts",
-      "./extensions/session-beads-lifecycle.ts",
-      "./extensions/unreported-failure-advisory.ts",
-      "./extensions/claim-before-branch.ts"
+      "./dist/bash-gates.js",
+      "./dist/formula-check-tool.js",
+      "./dist/bd-pool-discipline.js",
+      "./dist/session-beads-lifecycle.js",
+      "./dist/unreported-failure-advisory.js",
+      "./dist/claim-before-branch.js"
     ]
   }
 }

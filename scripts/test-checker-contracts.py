@@ -175,7 +175,7 @@ class CheckerContracts(unittest.TestCase):
             ({}, ["./extensions/missing.ts"], "missing source"),
             ({}, ["./other/tool.ts"], "unsupported extension"),
             ({}, ["./dist/tool.js"], "missing bundle"),
-            ({"dep": "1.0.0"}, ["./extensions/tool.ts"], "packaged dist"),
+            ({"dep": "1.0.0"}, ["./extensions/tool.ts"], "missing bundle"),
             ({"dep": "1.0.0"}, ["./dist/tool.js"], "missing bundle"),
             ({}, ["./extensions/tool.ts", "./extensions/tool.ts"], "duplicate"),
         )

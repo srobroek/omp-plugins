@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from "bun:test";
 
-import bdInitAdvisory, {
+import {
 	decideBdInit,
 	findInitInvocations,
 	missingInitFlags,
@@ -122,91 +122,15 @@ describe("decideBdInit", () => {
 });
 
 describe("integration", () => {
-	type Sent = { payload: Record<string, unknown>; options?: Record<string, unknown> };
-
-	function register(): {
-		handlers: Array<(e: unknown) => unknown>;
-		sent: Sent[];
-	} {
-		const sent: Sent[] = [];
-		const handlers: Record<string, Array<(e: unknown) => unknown>> = {};
-		const fakePi = {
-			zod: {},
-			registerTool: () => {},
-			sendMessage: (payload: Record<string, unknown>, options?: Record<string, unknown>) => {
-				sent.push({ payload, options });
-			},
-			on: (event: string, handler: (e: unknown) => unknown) => {
-				const eventHandlers = handlers[event] ?? [];
-				eventHandlers.push(handler);
-				handlers[event] = eventHandlers;
-			},
-		};
-		bdInitAdvisory(fakePi as never);
-		return { handlers: handlers.tool_call as Array<(e: unknown) => unknown>, sent };
-	}
-
-	test("one advisory, displayed, non-blocking, and never a second time", () => {
-		const { handlers, sent } = register();
-		const [handler] = handlers;
-
-		expect(
-			handler?.({ toolName: "bash", toolCallId: "c1", input: { command: "bd init" } }),
-		).toBeUndefined();
-		expect(sent).toHaveLength(1);
-		expect(sent[0]?.payload).toEqual(
-			expect.objectContaining({
-				customType: "com.srobroek.beads.init-advisory",
-				display: true,
-				attribution: "user",
-			}),
-		);
-		expect(sent[0]?.options).toEqual({ triggerTurn: false });
-
-		expect(
-			handler?.({ toolName: "bash", toolCallId: "c2", input: { command: "bd init" } }),
-		).toBeUndefined();
-		expect(sent).toHaveLength(1);
+	test("returns one advisory decision for an incomplete init", () => {
+		const advisory = decideBdInit("bd init");
+		expect(advisory).toContain("omits `--skip-hooks`");
 	});
-
-	test("the guard is process-global, so a second instance stays quiet", () => {
-		const first = register();
-		first.handlers[0]?.({ toolName: "bash", toolCallId: "c1", input: { command: "bd init" } });
-		expect(first.sent).toHaveLength(1);
-
-		const second = register();
-		second.handlers[0]?.({ toolName: "bash", toolCallId: "c2", input: { command: "bd init" } });
-		expect(second.sent).toEqual([]);
+	test("complete init flags are allowed", () => {
+		expect(decideBdInit("bd init --init-if-missing --skip-hooks")).toBeUndefined();
 	});
-
-	test("mentions, other tools, and empty input send nothing", () => {
-		const { handlers, sent } = register();
-		const [handler] = handlers;
-
-		handler?.({ toolName: "bash", toolCallId: "c1", input: { command: "echo bd init" } });
-		handler?.({ toolName: "edit", toolCallId: "c2", input: { command: "bd init" } });
-		handler?.({ toolName: "bash", toolCallId: "c3", input: {} });
-		expect(sent).toEqual([]);
-	});
-
-	test("a throwing sendMessage does not take the bash call down", () => {
-		const handlers: Record<string, Array<(e: unknown) => unknown>> = {};
-		const fakePi = {
-			zod: {},
-			registerTool: () => {},
-			sendMessage: () => {
-				throw new Error("send failed");
-			},
-			on: (event: string, handler: (e: unknown) => unknown) => {
-				const eventHandlers = handlers[event] ?? [];
-				eventHandlers.push(handler);
-				handlers[event] = eventHandlers;
-			},
-		};
-		bdInitAdvisory(fakePi as never);
-		const [handler] = handlers.tool_call as Array<(e: unknown) => unknown>;
-		expect(
-			handler?.({ toolName: "bash", toolCallId: "c1", input: { command: "bd init" } }),
-		).toBeUndefined();
+	test("mentions and unrelated commands stay silent", () => {
+		expect(decideBdInit("echo bd init")).toBeUndefined();
+		expect(decideBdInit("gh pr list")).toBeUndefined();
 	});
 });
