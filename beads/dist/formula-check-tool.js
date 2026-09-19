@@ -1,4 +1,22 @@
 // @bun
+// package.json
+var package_default = {
+  name: "@srobroek/beads",
+  version: "2.0.2",
+  description: "Beads issue tracking: dependency DAGs, formulas, and decisions recorded as beads.",
+  private: true,
+  omp: {
+    extensions: [
+      "./dist/bash-gates.js",
+      "./dist/formula-check-tool.js",
+      "./dist/bd-pool-discipline.js",
+      "./dist/session-beads-lifecycle.js",
+      "./dist/unreported-failure-advisory.js",
+      "./dist/claim-before-branch.js"
+    ]
+  }
+};
+
 // extensions/shell-tokenizer.ts
 var SEPARATORS = new Set([";", "&", "|", "(", ")", `
 `]);
@@ -488,6 +506,8 @@ function envelopeData(value) {
 }
 
 // extensions/formula-check-tool.ts
+var BEADS_PRESENT = Symbol.for("com.srobroek.beads.present.v1");
+globalThis[BEADS_PRESENT] = { version: package_default.version };
 var TIMEOUT_MS = 120000;
 var VALID_GATE_TYPES = ["human", "timer", "gh:run", "gh:pr"];
 var injectedSpawn = null;
