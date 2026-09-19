@@ -22,9 +22,55 @@ export type QualityReport = {
 	steps: StepResult[];
 };
 
+const PROBE_TIMEOUT_MS = 5_000;
+
+/**
+ * Argument sets tried in order until one exits 0, which is how
+ * `sniff-install-tool` probes its own catalog.
+ *
+ * No single flag covers these binaries: `ruff`, `cargo`, `tsc` and `rustfmt`
+ * answer `--version`; `go` answers `version` and rejects `--version`; `gofmt`
+ * has no version verb at all and only answers help. A generic `--version` probe
+ * therefore reports `go` and `gofmt` missing and silently skips Go checks, which
+ * is worse than the bug it replaces.
+ */
+const PROBE_ARGS: readonly (readonly string[])[] = [["--version"], ["version"], ["-h"]];
+
+/**
+ * Whether `bin` can actually RUN, not merely resolve on PATH.
+ *
+ * `which` succeeds for a mise shim whose tool is not installed. A resolve-only
+ * check therefore reports the tool present, the step fails when it executes, and
+ * the report records an analyzer FAILURE where the truth is a missing tool --
+ * the inverse of this tool's contract, which is that missing tools produce an
+ * incomplete report rather than findings. Measured on one machine: mypy, pylint
+ * and vulture each resolved and each failed, so the report implied code problems
+ * that did not exist.
+ *
+ * A shim for an uninstalled tool fails every argument set, so the cascade cannot
+ * be fooled into reporting one usable.
+ */
 function have(bin: string): boolean {
-	const proc = Bun.spawnSync(["which", bin], { stdout: "pipe", stderr: "pipe" });
-	return proc.exitCode === 0;
+	for (const args of PROBE_ARGS) {
+		try {
+			const proc = Bun.spawnSync([bin, ...args], {
+				// Closed stdin, because a probe must never wait on input: `gofmt` with
+				// no arguments reads stdin, and an inherited terminal would block until
+				// the timeout on every call.
+				stdin: new Uint8Array(),
+				stdout: "pipe",
+				stderr: "pipe",
+				timeout: PROBE_TIMEOUT_MS,
+			});
+			// A timeout is not a usable tool, whatever exit code accompanies it. This
+			// mirrors `sniff-install-tool`, which treats `exitedDueToTimeout` as its
+			// own status rather than folding it into the exit code.
+			if (proc.exitCode === 0 && proc.exitedDueToTimeout !== true) return true;
+		} catch {
+			return false;
+		}
+	}
+	return false;
 }
 
 function installed(bin: string, cwd: string): string | null {
