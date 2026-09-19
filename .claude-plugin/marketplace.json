@@ -33,7 +33,7 @@
       "name": "beads",
       "description": "Beads issue tracking: dependency DAGs, formulas, and decisions recorded as beads.",
       "source": "./beads",
-      "version": "2.0.1",
+      "version": "2.0.2",
       "category": "productivity"
     },
     {
@@ -173,7 +173,7 @@
       "name": "speckit",
       "description": "SpecKit workflow: spec-driven setup, bugfix flow, tasks.md protection, and PR title discipline.",
       "source": "./speckit",
-      "version": "0.7.2",
+      "version": "0.7.3",
       "category": "development"
     },
     {
@@ -201,7 +201,7 @@
       "name": "worktrunk",
       "description": "Worktree discipline for every agent: a membership-based canonical-mutation guardrail and an isolation precheck.",
       "source": "./worktrunk",
-      "version": "1.0.0",
+      "version": "1.0.1",
       "category": "development"
     },
     {
