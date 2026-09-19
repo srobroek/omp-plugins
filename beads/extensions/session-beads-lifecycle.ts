@@ -610,21 +610,24 @@ async function releaseCasSupported(cwd: string, deadline: number, env: NodeJS.Pr
 	return help?.includes("--if-assignee") === true;
 }
 
-async function releaseClaimsAtExit(cwd: string, state: SessionState): Promise<void> {
-	if (state.claimsReleased || !state.bdWrote || state.actors.size === 0) return;
+async function releaseClaimsAtExit(cwd: string, state: SessionState): Promise<string[]> {
+	if (state.claimsReleased || !state.bdWrote || state.actors.size === 0) return [];
+	const incomplete: string[] = [];
 	state.claimsReleased = true;
 	const deadline = Date.now() + TIMEOUT_MS;
 	const env = lifecycleBdEnvironment(cwd);
 	const listed = await runBdResult(cwd, ["list", "--status", "open,in_progress,blocked,deferred", "--limit", "0", "--json"], deadline, env);
-	if (!("output" in listed)) return;
+	if (!("output" in listed)) return [`claim listing failed: ${listed.failure}`];
 	const claims = heldClaims(readBeads(listed.output), new Set(), state.actors);
 	const casSupported = await releaseCasSupported(cwd, deadline, env);
 	for (const bead of claims) {
 		if (bead.assignee === undefined) continue;
 		const args = releaseClaimArgs(bead.id, bead.assignee, { BD_ACTOR: bead.assignee }, new Date().toISOString(), casSupported);
-		if (args === undefined) continue;
-		await runBdResult(cwd, args, deadline, { ...env, BEADS_ACTOR: bead.assignee, BD_ACTOR: bead.assignee });
+		if (args === undefined) { incomplete.push(`${bead.id}: release command could not be constructed`); continue; }
+		const released = await runBdResult(cwd, args, deadline, { ...env, BEADS_ACTOR: bead.assignee, BD_ACTOR: bead.assignee });
+		if (!("output" in released)) incomplete.push(`${bead.id}: ${released.failure}`);
 	}
+	return incomplete;
 }
 
 /**
@@ -855,15 +858,18 @@ export default function sessionBeadsLifecycle(pi: ExtensionAPI): void {
 		}
 	});
 
-	pi.on("session_shutdown", (_event, ctx: ExtensionContext) => {
+	pi.on("session_shutdown", async (_event, ctx: ExtensionContext) => {
 		const key = sessionKey(ctx);
 		const state = sessions.get(key);
 		sessions.delete(key);
 		endAutoPinSession(key, (id) => sessions.has(id));
 		if (state === undefined) return;
-		void releaseClaimsAtExit(ctx?.cwd ?? process.cwd(), state).catch((error) => {
+		try {
+			const incomplete = await releaseClaimsAtExit(ctx?.cwd ?? process.cwd(), state);
+			if (incomplete.length > 0) pi.logger.error("beads claim release incomplete at session exit", { incomplete });
+		} catch (error) {
 			pi.logger.error("beads claim release at session exit failed", { error: error instanceof Error ? error.message : String(error) });
-		});
+		}
 	});
 
 	// Only the fired-once latch resets per turn; what the session touched must

@@ -200,6 +200,16 @@ export function deepAssertFromMol(mol: MolShow): string[] {
 	return [];
 }
 
+export type PourHelp = { json: boolean; output?: unknown } | { error: string };
+
+export function parsePourHelp(stdout: string, stderr = ""): PourHelp {
+	const text = [stdout, stderr].filter(Boolean).join("\n").trim();
+	if (!text) return { error: "bd mol pour --help returned unrecognized output" };
+	const parsed = parseTrailingJson(text);
+	if (parsed !== undefined) return { json: true, output: parsed };
+	if (/\b(?:usage|options|flags)\b/i.test(text) && /\bmol\s+pour\b/i.test(text)) return { json: false };
+	return { error: "bd mol pour --help returned unrecognized output" };
+}
 /**
  * Pour for real, then read back what it made.
  *
@@ -257,6 +267,12 @@ export async function assertFormula(
 	if (cookFails.length) {
 		const text = cookFails.map((f) => `FAIL ${f}`).join("\n");
 		return { ok: false, text, failures: cookFails, steps: 0, gates: 0 };
+	}
+	const help = await runBd(["mol", "pour", "--help"], cwd);
+	const capability = parsePourHelp(help.stdout, help.stderr);
+	if (help.error || !help.ok || "error" in capability) {
+		const failure = help.error ?? ("error" in capability ? capability.error : "bd mol pour --help failed");
+		return { ok: false, text: `FAIL ${failure}`, failures: [failure], steps: 0, gates: 0 };
 	}
 	const dry = await runBd(["mol", "pour", params.formula, "--dry-run", ...varargs], cwd);
 	if (dry.error || !dry.ok) {
