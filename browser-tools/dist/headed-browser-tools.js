@@ -42960,6 +42960,17 @@ function requireString(value, name) {
 function resultEnvelope(payload, details) {
   return { content: [{ type: "text", text: JSON.stringify(payload, null, 2) }], details: { ...details } };
 }
+function classifyError(params, message) {
+  if (message.includes("unknown session"))
+    return "unknown session";
+  if (message.includes("timed out after"))
+    return "session timeout";
+  if (params.op === "launch")
+    return "launch failed";
+  if (message.includes(" is required") || message.includes("unsupported headed_") || message.includes("selector or text is required"))
+    return "invalid request";
+  return "operation failed";
+}
 async function safeResult(params, operation) {
   try {
     const result = await operation();
@@ -42972,7 +42983,10 @@ async function safeResult(params, operation) {
     const message = error instanceof Error ? error.message : String(error);
     const session = params.sessionId ? sessions.get(params.sessionId) : undefined;
     console.error(`headed-browser: ${message}`);
-    return { content: [{ type: "text", text: redact(message, session?.config ?? { redactSecrets: true }) }], details: { ok: false, sessionId: params.sessionId } };
+    return {
+      content: [{ type: "text", text: redact(message, session?.config ?? { redactSecrets: true }) }],
+      details: { ok: false, sessionId: params.sessionId, error: classifyError(params, message) }
+    };
   }
 }
 export {

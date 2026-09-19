@@ -41,18 +41,20 @@ describe("headed browser tool registration", () => {
 		expect(tools.get("headed_act")?.approval).toBe("write");
 	});
 
-	test("returns a structured error for missing required parameters", async () => {
+	test("returns a sanitized category for missing required parameters", async () => {
 		const tool = register().get("headed_session")!;
 		const result = await tool.execute("id", { op: "close" });
 		expect(result.details.ok).toBe(false);
-		expect(result.details.error).toBe("headed-browser: sessionId is required");
+		expect(result.details.error).toBe("invalid request");
 	});
 
-	test("returns a structured error for an unknown session", async () => {
+	test("returns a sanitized category for an unknown session", async () => {
 		const tool = register().get("headed_session")!;
-		const result = await tool.execute("id", { op: "close", sessionId: "hb-ffffff" });
+		const rawDriverMessage = "/tmp/driver-message: disconnected";
+		const result = await tool.execute("id", { op: "close", sessionId: rawDriverMessage });
 		expect(result.details.ok).toBe(false);
-		expect(result.details.error).toBe("headed-browser: unknown session hb-ffffff");
+		expect(result.details.error).toBe("unknown session");
+		expect(result.details.error).not.toContain(rawDriverMessage);
 	});
 	test("applies request policy before using a new tab", async () => {
 		const attachedEvents: string[] = [];
@@ -134,7 +136,7 @@ describe("headed browser tool registration", () => {
 		await Promise.resolve();
 		triggerTimeout();
 		const timedOut = await cookieRead;
-		expect(timedOut.details.error).toContain("timed out after 5 ms");
+		expect(timedOut.details.error).toBe("session timeout");
 		expect(disconnected).toBe(true);
 		expect(sessions.has(session.id)).toBe(false);
 		releaseScreenshot();
