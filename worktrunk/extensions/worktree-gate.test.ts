@@ -236,15 +236,33 @@ describe("device classification", () => {
             expect(decideWorktreeCall(tool, input, canonical, topology)).toBeUndefined();
         }
     });
+    test("all ledger tools are exempt from working-tree containment", () => {
+        const { canonical, topology } = project();
+        const ledgerTools = [
+            "orc_bind",
+            "orc_claim",
+            "orc_status",
+            "orc_decide",
+            "orc_finish",
+            "orc_release",
+            "orc_conflict_probe",
+            "orc_bot_review_probe",
+            "orc_bot_review_request",
+            "orc_review_round_policy",
+        ] as const;
+        for (const tool of ledgerTools) {
+            expect(decideWorktreeCall(tool, { cwd: canonical }, canonical, topology)).toBeUndefined();
+        }
+    });
 
-    test("cwd-bearing read-only probes still require worktree containment", () => {
+    test("cwd-bearing ledger probes are exempt while worktree paths remain allowed", () => {
         const { canonical, worktree, topology } = project();
         const controls: ReadonlyArray<readonly [string, Record<string, unknown>, Record<string, unknown>]> = [
             ["orc_bot_review_probe", { pr: "357", repo: "srobroek/omp-plugins", cwd: canonical }, { pr: "357", repo: "srobroek/omp-plugins", cwd: worktree }],
             ["orc_conflict_probe", { mode: "ci", pr: "357", cwd: canonical }, { mode: "ci", pr: "357", cwd: worktree }],
         ];
         for (const [tool, canonicalInput, worktreeInput] of controls) {
-            expect(decideWorktreeCall(tool, canonicalInput, canonical, topology)?.block).toBe(true);
+            expect(decideWorktreeCall(tool, canonicalInput, canonical, topology)).toBeUndefined();
             expect(decideWorktreeCall(tool, worktreeInput, worktree, topology)).toBeUndefined();
         }
     });
