@@ -190,10 +190,10 @@ function bdReadAllowed(args: readonly string[]): boolean {
 }
 function probeAllowed(program: string, args: readonly string[]): boolean {
 	if (!READ_ONLY_PROBES[program]) return false;
-	if ((program === "echo" || program === "printf") && args.some(token => token.includes("wt") || token.includes("bd"))) return false;
 	if (program === "git") { const git = afterGitGlobals(args); return git !== null && ["status", "log", "diff", "show", "rev-parse", "branch", "worktree"].includes(git[0] ?? ""); }
 	if (program === "grep") return !args.includes("-f") && !args.includes("--file");
 	if (program === "sed") return !args.includes("-i") && !args.includes("--in-place");
+	if (program === "uniq" || program === "head" || program === "tail" || program === "wc") return args.every(token => token.startsWith("-"));
 	return true;
 }
 export function worktreeGateDisabled(cwd: string): boolean {
