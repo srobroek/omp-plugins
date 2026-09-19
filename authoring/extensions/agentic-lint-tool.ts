@@ -444,7 +444,11 @@ export function main(argv: string[]): { exitCode: number; stdout: string } {
 	return { exitCode: worst, stdout: `${lines.join("\n")}\n` };
 }
 
-function collectFiles(entry: string): string[] {
+
+const MAX_TRAVERSAL_DEPTH = 8;
+const MAX_FILES = 2000;
+
+export function collectFiles(entry: string): string[] {
 	let st: Stats;
 	try {
 		st = lstatSync(entry);
@@ -455,9 +459,13 @@ function collectFiles(entry: string): string[] {
 	if (st.isFile()) return [entry];
 	if (!st.isDirectory()) return [entry];
 	const out: string[] = [];
-	const stack = [entry];
+	const stack: Array<{ dir: string; depth: number }> = [{ dir: entry, depth: 0 }];
 	while (stack.length > 0) {
-		const dir = stack.pop() ?? "";
+		const item = stack.pop() ?? { dir: "", depth: 0 };
+		if (item.depth > MAX_TRAVERSAL_DEPTH) {
+			throw new Error(`lint traversal exceeds depth cap ${MAX_TRAVERSAL_DEPTH} at root ${entry}`);
+		}
+		const dir = item.dir;
 		let ents: string[] = [];
 		try {
 			ents = readdirSync(dir);
@@ -475,8 +483,18 @@ function collectFiles(entry: string): string[] {
 				continue;
 			}
 			if (child.isSymbolicLink()) continue;
-			if (child.isDirectory()) stack.push(p);
-			else if (name.endsWith(".md") || name.endsWith(".mdc")) out.push(p);
+			if (child.isDirectory()) {
+				if (item.depth + 1 > MAX_TRAVERSAL_DEPTH) {
+					throw new Error(`lint traversal exceeds depth cap ${MAX_TRAVERSAL_DEPTH} at root ${entry}`);
+				}
+				stack.push({ dir: p, depth: item.depth + 1 });
+			}
+			else if (name.endsWith(".md") || name.endsWith(".mdc")) {
+				out.push(p);
+				if (out.length > MAX_FILES) {
+					throw new Error(`lint traversal exceeds file cap ${MAX_FILES} at root ${entry}`);
+				}
+			}
 		}
 	}
 	return out;

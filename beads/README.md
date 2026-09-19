@@ -51,4 +51,8 @@ Before status changes, read the lifecycle rule.
 
 ## Guidance
 
-Claim work first. Keep the task bead open until its commit is ready. Close completed work with a factual reason and its delivery commit. See [Dolt synchronization cadence]rule://beads-dolt-sync-cadence for sync requirements.
+Claim work first. Keep the task bead open until its commit is ready. Close completed work with a factual reason and its delivery commit.
+
+## `bd_formula_check` deep recovery
+
+After a real pour, recover with `git restore --staged . && git checkout -- .beads/`; once the ledger is reachable, remove any created wisps with the beads CLI.
