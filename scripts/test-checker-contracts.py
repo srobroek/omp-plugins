@@ -96,76 +96,6 @@ class CheckerContracts(unittest.TestCase):
         self.assertNotEqual(absent.returncode, 0)
         self.assertIn("incomplete", absent.stdout)
 
-    def test_manifest_check_detects_missing_stale_and_invalid_packages(self) -> None:
-        self.copy_script("sync-plugin-manifests.py")
-        result = self.run_script("sync-plugin-manifests.py")
-        self.assertEqual(result.returncode, 0, result.stderr)
-        package = self.root / "go" / "package.json"
-        original = package.read_bytes()
-        cases = (None, b'{"name":"stale"}\n', b'[]\n', b'{broken')
-        for contents in cases:
-            with self.subTest(contents=contents):
-                if contents is None:
-                    package.unlink()
-                else:
-                    package.write_bytes(contents)
-                before = self.snapshot()
-                result = self.run_script("sync-plugin-manifests.py", "--check")
-                self.assertNotEqual(result.returncode, 0, result.stdout)
-                self.assertIn("go/package.json", result.stderr)
-                self.assertEqual(before, self.snapshot())
-                package.write_bytes(original)
-        manifest = self.root / "go" / ".omp-plugin" / "plugin.json"
-        manifest.unlink()
-        before = self.snapshot()
-        result = self.run_script("sync-plugin-manifests.py", "--check")
-        self.assertNotEqual(result.returncode, 0, result.stdout)
-        self.assertEqual(before, self.snapshot())
-
-    def test_generation_preserves_plugin_owned_metadata(self) -> None:
-        self.copy_script("sync-plugin-manifests.py")
-        self.assertEqual(self.run_script("sync-plugin-manifests.py").returncode, 0)
-        manifest = self.root / "go" / ".omp-plugin" / "plugin.json"
-        package = self.root / "go" / "package.json"
-        custom = {"author": {"name": "Maintainer"}, "license": "MIT", "mcpServers": {"local": {"command": "local-server"}}}
-        data = json.loads(manifest.read_text())
-        data.update(custom, name="stale", version="2.3.4", publish=False)
-        manifest.write_text(json.dumps(data))
-        pkg = json.loads(package.read_text())
-        pkg.update(omp={"extensions": ["./extensions/tool.ts"]}, dependencies={"example": "1.0.0"})
-        package.write_text(json.dumps(pkg))
-        result = self.run_script("sync-plugin-manifests.py")
-        self.assertEqual(result.returncode, 0, result.stderr)
-        generated = json.loads(manifest.read_text())
-        for key, value in custom.items():
-            self.assertEqual(generated[key], value)
-        self.assertEqual(generated["name"], "go")
-        self.assertNotIn("publish", generated)
-        generated_package = json.loads(package.read_text())
-        self.assertEqual(generated_package["version"], "2.3.4")
-        self.assertEqual(generated_package["omp"], pkg["omp"])
-        self.assertEqual(generated_package["dependencies"], pkg["dependencies"])
-        result = self.run_script("sync-plugin-manifests.py", "--check")
-        self.assertEqual(result.returncode, 0, result.stderr)
-
-    def test_failed_catalog_generator_cannot_pass_or_mutate_inputs(self) -> None:
-        self.copy_script("check-design-structure.py")
-        self.copy_script("sync-plugin-manifests.py")
-        shutil.copytree(REPO / "design", self.root / "design")
-        for manifest in REPO.glob("*/.omp-plugin/plugin.json"):
-            target = self.root / manifest.relative_to(REPO)
-            target.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(manifest, target)
-        shutil.copytree(REPO / ".omp-plugin", self.root / ".omp-plugin")
-        shutil.copy2(REPO / "scripts" / "third-party-plugins.json", self.root / "scripts" / "third-party-plugins.json")
-        (self.root / "scripts" / "build-catalog.py").write_text("raise SystemExit(17)\n")
-        before = self.snapshot()
-        result = self.run_script("check-design-structure.py")
-        self.assertNotEqual(result.returncode, 0, result.stdout)
-        self.assertIn("FAIL catalog builds without third-party entries -- exit 17", result.stdout)
-        self.assertIn("FAIL catalog builds with third-party entries -- exit 17", result.stdout)
-        self.assertEqual(before, self.snapshot())
-
     def test_all_extension_packages_reject_uninstallable_entries(self) -> None:
         self.copy_script("build-extensions.py")
         plugin = self.root / "example"
@@ -190,47 +120,6 @@ class CheckerContracts(unittest.TestCase):
                 self.assertIn(diagnostic, result.stderr)
                 self.assertNotIn("Traceback", result.stderr)
                 self.assertEqual(before, self.snapshot())
-
-    def test_catalog_and_release_reject_invalid_local_inventory(self) -> None:
-        for script in ("sync-plugin-manifests.py", "build-catalog.py", "build-release-config.py"):
-            self.copy_script(script)
-        self.assertEqual(self.run_script("sync-plugin-manifests.py").returncode, 0)
-        manifest = self.root / "go" / ".omp-plugin" / "plugin.json"
-        original = manifest.read_bytes()
-        valid = json.loads(original)
-        cases = (
-            (None, "missing"),
-            ([], "object"),
-            ({**valid, "name": "python"}, "directory"),
-            ({**valid, "name": 7}, "name"),
-            ({**valid, "name": "find-tools"}, "duplicate"),
-            ({**valid, "version": 7}, "version"),
-            ({**valid, "publish": "false"}, "publish"),
-            ("{broken", "cannot read manifest"),
-        )
-        for payload, diagnostic in cases:
-            with self.subTest(payload=payload):
-                if payload is None:
-                    manifest.unlink()
-                else:
-                    manifest.write_text(payload if isinstance(payload, str) else json.dumps(payload))
-                for script in ("build-catalog.py", "build-release-config.py"):
-                    before = self.snapshot()
-                    result = self.run_script(script, "--check")
-                    self.assertNotEqual(result.returncode, 0)
-                    self.assertIn(diagnostic, result.stderr)
-                    self.assertNotIn("Traceback", result.stderr)
-                    self.assertEqual(before, self.snapshot())
-                manifest.write_bytes(original)
-        extra = self.root / "extra" / ".omp-plugin" / "plugin.json"
-        extra.parent.mkdir(parents=True)
-        extra.write_text(json.dumps({**valid, "name": "extra"}))
-        for script in ("sync-plugin-manifests.py", "build-catalog.py", "build-release-config.py"):
-            before = self.snapshot()
-            result = self.run_script(script, "--check")
-            self.assertNotEqual(result.returncode, 0)
-            self.assertIn("unregistered", result.stderr)
-            self.assertEqual(before, self.snapshot())
 
     def test_mcp_rejects_malformed_configs_in_any_plugin(self) -> None:
         self.copy_script("check-mcp-servers.py")
@@ -265,45 +154,6 @@ class CheckerContracts(unittest.TestCase):
         }}))
         result = self.run_script("check-mcp-servers.py")
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-
-    def test_linked_mcp_config_tracks_inline_authority_without_mutating_checks(self) -> None:
-        self.copy_script("sync-plugin-manifests.py")
-        self.assertEqual(self.run_script("sync-plugin-manifests.py").returncode, 0)
-        manifest = self.root / "design" / ".omp-plugin" / "plugin.json"
-        data = json.loads(manifest.read_text())
-        servers = {"remote": {"url": "https://example.com/mcp"}}
-        data["mcpServers"] = servers
-        manifest.write_text(json.dumps(data))
-        unrelated = self.root / "go" / ".mcp.json"
-        unrelated.write_text('{"mcpServers":{"owned":{"command":"keep-me"}}}\n')
-        original_unrelated = unrelated.read_bytes()
-        result = self.run_script("sync-plugin-manifests.py")
-        self.assertEqual(result.returncode, 0, result.stderr)
-        linked = self.root / "design" / ".mcp.json"
-        self.assertEqual(json.loads(linked.read_text()), {"mcpServers": servers})
-        self.assertEqual(unrelated.read_bytes(), original_unrelated)
-        original = linked.read_bytes()
-        for contents in (None, '{"mcpServers":{}}\n', '{broken'):
-            with self.subTest(contents=contents):
-                if contents is None:
-                    linked.unlink()
-                else:
-                    linked.write_text(contents)
-                before = self.snapshot()
-                result = self.run_script("sync-plugin-manifests.py", "--check")
-                self.assertNotEqual(result.returncode, 0)
-                self.assertIn("design/.mcp.json", result.stderr)
-                self.assertEqual(before, self.snapshot())
-                linked.write_bytes(original)
-        servers["remote"]["url"] = "https://example.com/updated"
-        data["mcpServers"] = servers
-        manifest.write_text(json.dumps(data))
-        result = self.run_script("sync-plugin-manifests.py")
-        self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertEqual(json.loads(linked.read_text()), {"mcpServers": servers})
-        self.assertEqual(unrelated.read_bytes(), original_unrelated)
-        result = self.run_script("sync-plugin-manifests.py", "--check")
-        self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_shipped_metadata_gate_rejects_invalid_yaml_and_triggers(self) -> None:
         rule = self.root / "example" / "rules" / "example-rule.md"

@@ -4,13 +4,12 @@
 Plugins without `dependencies` keep `omp.extensions` pointed at their `.ts` sources:
 OMP imports those directly with Bun and nothing needs building. A plugin WITH
 dependencies cannot rely on `node_modules` existing on the consumer's machine
-(git installs run no install step), so its entries point at committed `dist/`
-bundles instead, and this script produces them: `bun install` then one
-`bun build --target=bun` per extension source, with `@oh-my-pi/*` left external
-(the host provides it).
+(`git` installs run no install step on the consumer's machine), so its entries point at committed `dist/`
+bundles instead, and this script builds them in CI and on release branches: `bun install` then one
+`bun build --target=bun` per extension source, with `@oh-my-pi/*` left external (the host provides it).
 
-`--check` verifies the committed bundles are current; CI runs that on every push
-and the release workflow runs the write mode.
+`--check` verifies the committed bundles are current; CI runs that on every push and the release workflow
+runs the write mode. The repository currently tracks six `dist/` bundles; they are not gitignored.
 """
 
 from __future__ import annotations
