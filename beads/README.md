@@ -14,6 +14,7 @@ Install this plugin in a repository with `.beads/`. The plugin pins that reposit
 | `beads-lifecycle` | Manage bead status and gates. |
 | `beads-carriers` | Choose authoritative records. |
 | `beads-composition` | Choose issues and formulas. |
+| `beads-storage-mode` | Configure the embedded store and session `BEADS_DIR` pin. |
 
 ## Extensions
 
