@@ -75,17 +75,15 @@ into the same ruff confirm. Unparseable YAML → print the manual change instead
 
 ## CVE scanners
 
-| Ecosystem | Scanner                                       | Install hint                                          |
-|-----------|-----------------------------------------------|-------------------------------------------------------|
-| python    | `pip-audit` / `uvx pip-audit`                 | `pip install pip-audit`                               |
-| node      | `pnpm audit` / `npm audit` / `yarn npm audit` | install via Node.js / Corepack                        |
-| rust      | `cargo audit`                                 | `cargo install cargo-audit`                           |
-| go        | `govulncheck`                                 | `go install golang.org/x/vuln/cmd/govulncheck@latest` |
-| any       | `osv-scanner` (supplemental)                  | https://google.github.io/osv-scanner/                 |
+| Ecosystem | Scanner | Ephemeral runner |
+|-----------|---------|------------------|
+| python | `pip-audit` | `uvx pip-audit` |
+| node | `pnpm audit` / `npm audit` / `yarn npm audit` | Use the project package manager's audit command; do not install a persistent scanner. |
+| rust | `cargo-audit` | `cargo binstall cargo-audit` (fallback: `cargo install --locked cargo-audit`) |
+| go | `govulncheck` | `go run golang.org/x/vuln/cmd/govulncheck@latest` |
+| any | `osv-scanner` (supplemental) | `bunx osv-scanner` |
 
-Guard each with `command -v`; missing → report "scanner not available:
-`<name>`" plus the install hint. Ephemeral runners and the ban on persistent
-scanner installs are enforced by `rule://dep-update-no-scanner-install`.
+Guard each with `command -v`; missing → report "scanner not available: `<name>`" plus the runner. The plugin's `dep-update-no-scanner-install` rule is advisory (`interruptMode: never`) and asks for these ephemeral forms because a read-only audit should not mutate the toolchain.
 
 ## Tools
 
