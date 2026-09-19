@@ -54,7 +54,6 @@
 
 ### Features
 
-* **beads:** advise when the Dolt server user is missing from a bd call ([#349](https://github.com/srobroek/omp-plugins/issues/349)) ([a13fec5](https://github.com/srobroek/omp-plugins/commit/a13fec5a2b25d8f70a86190ed486d58d17ecb2e4))
 
 ## [1.4.1](https://github.com/srobroek/omp-plugins/compare/beads--v1.4.0...beads--v1.4.1) (2026-09-17)
 
@@ -64,7 +63,6 @@
 * **beads:** explain unreadable session claims ([#345](https://github.com/srobroek/omp-plugins/issues/345)) ([787c4da](https://github.com/srobroek/omp-plugins/commit/787c4da4215fae3fc198a9b4b0a828ffd0c3d72b))
 * **beads:** release a session's claims at shutdown and expose lease anchors ([#347](https://github.com/srobroek/omp-plugins/issues/347)) ([289f5c6](https://github.com/srobroek/omp-plugins/commit/289f5c646a53e4242eeb74fa6730af3b427f6185))
 * **beads:** scope session pins to their repository ([#340](https://github.com/srobroek/omp-plugins/issues/340)) ([6ef5528](https://github.com/srobroek/omp-plugins/commit/6ef5528ce5d933825ad98244212fe606f5058d70))
-* **beads:** serialize embedded Beads writers across isolated agents ([#343](https://github.com/srobroek/omp-plugins/issues/343)) ([799a0ea](https://github.com/srobroek/omp-plugins/commit/799a0eaf3d3f6fffe03ea987b56bf30f60dc4b15))
 
 ## [1.4.0](https://github.com/srobroek/omp-plugins/compare/beads--v1.3.6...beads--v1.4.0) (2026-09-16)
 
@@ -140,7 +138,6 @@
 
 ### Features
 
-* **beads:** refuse embedded and colliding bd init; shared-server migration notice ([#264](https://github.com/srobroek/omp-plugins/issues/264)) ([d01758f](https://github.com/srobroek/omp-plugins/commit/d01758fb0dc5bd0c0247acfb2095396c61bfce69))
 
 ## [1.2.5](https://github.com/srobroek/omp-plugins/compare/beads--v1.2.4...beads--v1.2.5) (2026-09-13)
 
@@ -322,7 +319,6 @@ release-please attributed nothing and opened no release PR.
 
 ### Bug Fixes
 
-* **beads:** isolate lifecycle state and preserve failure evidence ([999c9c8](https://github.com/srobroek/omp-plugins/commit/999c9c837a582a50e29b909eafd6acaa0a76b2d9))
 * **ci:** reject stale packages and incomplete checker runs ([8274c02](https://github.com/srobroek/omp-plugins/commit/8274c02e6e1af64adb7f6524e7ebabe830d26356))
 * correct plugin discovery, safety checks, and workflow contracts ([bfaa850](https://github.com/srobroek/omp-plugins/commit/bfaa850be719d7b79ac2245f2092be838673dd5d))
 
@@ -341,9 +337,6 @@ release-please attributed nothing and opened no release PR.
 
 ### Bug Fixes
 
-* **beads:** name BEADS_DIR as the storage-mode remedy ([#51](https://github.com/srobroek/omp-plugins/issues/51)) ([7e03f63](https://github.com/srobroek/omp-plugins/commit/7e03f637b857498124c637d01b4a6622d2bd3053))
-* **beads:** pin BEADS_DIR for every checkout shape, as an absolute path ([#53](https://github.com/srobroek/omp-plugins/issues/53)) ([ecfc640](https://github.com/srobroek/omp-plugins/commit/ecfc64080ae2f854d74c9d08913d858ed98e0225))
-* **beads:** pin BEADS_DIR instead of a Dolt server for worktrees ([#50](https://github.com/srobroek/omp-plugins/issues/50)) ([7aebccf](https://github.com/srobroek/omp-plugins/commit/7aebccf86a7b3498e39a5af9b98344fd2190c9f9))
 
 ## [0.7.0](https://github.com/srobroek/omp-plugins/compare/beads--v0.6.2...beads--v0.7.0) (2026-08-26)
 
@@ -366,11 +359,7 @@ release-please attributed nothing and opened no release PR.
 
 ### Bug Fixes
 
-* **beads:** storage-mode notice fires once across module instances ([eec8571](https://github.com/srobroek/omp-plugins/commit/eec8571deb0b7e4afe6f49b4e324d47140f5408b))
-* **beads:** storage-mode notice fires once across module instances ([eb1d981](https://github.com/srobroek/omp-plugins/commit/eb1d9815990d8db2c738305396d64c17ac606e9f))
 * **speckit:** retire the spec-id TTSR as a contextual false positive ([f292cca](https://github.com/srobroek/omp-plugins/commit/f292ccac9deb988459859ee1836aaa99deb36317))
-* **speckit:** retire the spec-id TTSR as a contextual false positive ([76caeec](https://github.com/srobroek/omp-plugins/commit/76caeec135b0b1943b6df551578cd6b6e7facd1b))
-* **ttsr:** audit wave - retire and re-anchor the blocking rules ([a6ae591](https://github.com/srobroek/omp-plugins/commit/a6ae5911aa0ece0e8af982a43040ae8515970d3a))
 
 ## [0.6.0](https://github.com/srobroek/omp-plugins/compare/beads--v0.5.0...beads--v0.6.0) (2026-08-25)
 
@@ -394,10 +383,8 @@ release-please attributed nothing and opened no release PR.
 * **authoring:** lint machine-specific paths and unrepairable frontmatter ([a456af3](https://github.com/srobroek/omp-plugins/commit/a456af3e109c44d1ad1dfbed2078b0a0b8202ccd))
 * **beads:** guard the two bd commands that strand or overwrite a run ([3d8e6ec](https://github.com/srobroek/omp-plugins/commit/3d8e6ecbea321aa6007ee2760a5237e93413d731))
 * **beads:** make an agent triage the pre-existing problems it runs into ([93cc493](https://github.com/srobroek/omp-plugins/commit/93cc49318936aecea664925d28b42b87a6e227a4))
-* **beads:** make server mode the documented init default ([67a8530](https://github.com/srobroek/omp-plugins/commit/67a85309edfa48de61b922a3f91f1b89ca03be3c))
 * **beads:** refresh project memories at session start and after compaction ([477ded9](https://github.com/srobroek/omp-plugins/commit/477ded972309014ebe1e1a3db82b77cce0738259))
 * **beads:** session lifecycle extension + four TTSR guards ([9300c07](https://github.com/srobroek/omp-plugins/commit/9300c07a5847262c2870dad5bf368fdc106db5d6))
-* **beads:** steer storage mode and manage the Dolt server under omp ([0c0249d](https://github.com/srobroek/omp-plugins/commit/0c0249ddd6d7fb879f558ed290a440fdc4791d53))
 * **speckit:** recover spec-modes rule lost in the docs rollup ([84c01b8](https://github.com/srobroek/omp-plugins/commit/84c01b85067a877cd2ab4d20c0bfeca88934aa0d))
 
 

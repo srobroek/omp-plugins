@@ -1,56 +1,26 @@
-# worktrunk
+# Worktrunk
 
-The worktrunk plugin keeps every agent's writes inside a git linked worktree of the project it is working on, and refuses to start work under OMP native isolation.
-
-Both concerns are OMP-wide rather than orchestration-specific: "the agent mutated the shared checkout" and "the isolated clone forked the ledger" happen in ordinary sessions too, so they ship here and other plugins consume them instead of reimplementing them.
+Worktrunk manages linked worktrees.
 
 ## Rules
 
-| Name | When |
-| --- | --- |
-| `worktrunk-worktree-required` | Always applied. Claim, create a worktree, work by absolute path, never touch the canonical checkout. |
-| `worktrunk-isolation-disabled` | A `task` call authors `isolated: true`. |
-| `worktrunk-bd-contention-retry` | Assistant text or thinking names one of the store's five verbatim contention messages. |
+Use worktrees for mutations.
+Native isolation is off.
+Retry contention.
 
-`worktrunk-bd-contention-retry` matches only the five strings that are source constants in the store: the two workspace-gate messages a command actually prints, plus `lock busy: held by another process`, `lock already held by another process`, and `workspace gate busy`. It does not match `database is locked`, which is a documentation paraphrase, nor either `warning: workspace gate … continuing ungated` line, which report commands that ran.
+## Gate
 
-TTSR conditions match assistant-produced streams — prose, thinking, and tool arguments — not tool results, so this rule fires when the agent reports or reasons about contention rather than the instant the store prints it. That is the moment the decision to escalate or retry is made.
+The gate checks mutations.
+The gate rejects the canonical root.
+Read-only tools are exempt.
+Unknown paths block.
 
-## Extensions
+## Precheck
 
 ### `worktree-gate`
 
-A `tool_call` gate that refuses a mutation whose target is not physically inside a worktree that `git worktree list --porcelain` reports for the repository that owns that target, and that is not that repository's canonical root. Membership, not a naming convention, is what makes the worktree requirement enforceable.
+The gate judges only the filesystem paths a call's arguments resolve to. A path must be physically inside a linked, non-canonical worktree of the repository that owns it; a path outside that worktree is refused. Path ownership is resolved from the deepest existing directory above the target, not from the session's repository or cwd.
 
-Ownership is resolved from the target, not from the session. A run dispatches workers into more than one repository, and a worker sent into a second repository works in a linked worktree of *that* repository while its session cwd is still the first one. So each target — a path argument, a `bash` cwd, an `eval` cwd — is resolved to its own repository, from the deepest existing directory above it, and must land in a linked, non-canonical worktree of that repository. That repository's canonical checkout is refused by name, exactly like this one's. A target inside no repository at all is scratch space: nothing to guard, so it is allowed. The session's own repository decides only whether the gate applies — git confirming the session is in no repository is the one state that makes it inert.
+Calls that resolve to no filesystem path are allowed. There are no device allowlists, ledger-family exemptions, or pathless-cwd refusals. Read-only tools remain exempt, and tools with filesystem targets are checked according to those resolved targets.
 
-The `tool_call` handler returns a refusal for every write to a repository's canonical checkout. No policy file, environment variable, or other authorization escape hatch exists. The gate allows only narrow bootstrap commands from a canonical cwd to inspect repository state, update the ledger, or create a linked worktree.
-
-The owning repository is its **main worktree**, which git names directly: in the main worktree `--git-dir` and `--git-common-dir` are the same path, and in a linked worktree the main worktree is the directory whose `.git` entry *is* that common directory. Never `dirname(--git-common-dir)`: inside a checked-out submodule the common directory is `<super>/.git/modules/<name>`, whose parent is a directory where `git worktree list` reports the superproject, so mutations of the superproject's own files read as "inside a linked worktree". A submodule's common directory does name its checkout — git writes `core.worktree` there — so asking git from the common directory covers that layout. `git init --separate-git-dir` does not: it writes no `core.worktree` and registers the *git directory* as the main entry, so on git 2.55.0 neither `core.worktree` nor `git worktree list` can name that main working tree from a linked worktree. The common directory is then the repository's identity root. Nothing inside a git directory is a place to work, so a mutation there is refused, linked worktrees still verify against it, and the real main checkout is still refused by name — a target there is resolved from its own directory, where `--git-dir` equals `--git-common-dir` and git does name the root. Every listed worktree is then verified against that repository's identity — its `.git` gitfile must point inside the common directory — because registration outlives the directory: a worktree deleted without being unregistered, with a new repository initialised at the same path, is still listed by the old one. That check also drops the git-directory entry git reports as a submodule's main worktree.
-
-| Tool | Checked |
-| --- | --- |
-| `write` | `path`; an `xd://<tool>` target is reclassified by that device's own rule against its JSON `content` |
-| `edit` | every target `editInspect` reports for the payload, including a `MV` destination |
-| `ast_edit` | the non-glob base of every `paths` entry |
-| `bash` | the effective cwd — `resolveToCwd(input.cwd, sessionCwd)`, or the session cwd when `cwd` is omitted |
-| `eval` | the effective cwd |
-| any other tool | every argument under a path-shaped key, plus every absolute or `~`-rooted string; when it names no target at all, the cwd it would default to |
-
-Read-only tools (`read`, `grep`, `glob`, `ast_grep`, `lsp`, `task`, `hub`, and the rest) are exempt: the gate blocks mutation, not inspection. That list also names every tool these plugins register with read approval — `dep_scan`, `version_gap_scan`, `resume_session`, `chezmoi_status`, `find_tools_scan`, `agentic_lint`, `headed_read`, and the `sniff` artifact readers — because a call that names no target is judged by the cwd it would default to, and a scan that only inspects the checkout must not be refused for doing what `read` may do. Tools whose approval callback picks a mode are classified per call against a predicate mirroring that callback: `bd_formula_check` reads unless `deep`, and `journeys_index` reads for `lint` and for a `prune` without `yes`. `security_scan` is not exempt at all: it writes under `output_root` and reads a knowledge base by path, so it is checked like any other tool. Every other tool name is treated as mutating, because `toolName` is an unrestricted string and allow-by-omission is how a guardrail stops guarding an unenumerated device or MCP tool. A mutating tool whose path argument is optional writes wherever it defaults — `typescript_quality {"mode": "fix"}` is that shape — so a call that names no target is judged by that cwd rather than allowed. The one exemption there is the pathless bead-ledger family (`orc_*`), for the two reasons the bootstrap allowlist already permits `bd`: the store lives in the canonical `.beads`, and a bead must be claimable before its worktree exists. A ledger call that does name a filesystem path is checked like any other.
-
-Path arguments are derived with OMP's own normalization and cwds with OMP's own `resolveToCwd`, and containment compares the realpath of the deepest existing ancestor on both sides. A second parser would guard a different file than the one that changes, and a lexical prefix check passes a symlink inside a worktree that points at the canonical checkout.
-
-Uncertainty refuses: an `edit` payload with no parseable target, a `cwd` that does not resolve, a command with a canonical effective cwd that matches no allowlisted shape, and a thrown classification all block. `git` failing to answer is uncertainty too, not an absence of a repository: a missing binary, the 5 s timeout, or any unexpected non-zero exit blocks mutation, and only git's own "not a git repository" diagnosis makes the gate inert. Such a failure is never cached, so the call after git recovers is decided normally.
-
-Caching is bounded on both sides of the answer it stores. A `git init` or `git clone` is judged before it runs, so the answer that call produces describes a repository about to stop being the truth: the cache is cleared before the decision and again after it. A cached `no-repository` is revalidated against repository metadata on the filesystem before it is trusted, because another agent's `git init` in that directory is a command this session never sees and the stale negative would let writes into a brand-new canonical checkout. A cached *positive* membership is not trusted on its own either: removals — `wt remove`, `git worktree remove`, another agent's cleanup — are not commands this gate can observe, so a cached worktree path is re-checked against the filesystem before a write is allowed, and a `.git` pointer that does not resolve inside that repository's common git directory falls through to `git worktree list`, which is authoritative. An unusual layout therefore costs a `git` call rather than a false refusal, and an ordinary directory recreated where a worktree used to be is refused. A cached *ownership* answer is bounded the same way, because a path can change hands: a worktree removed from one repository and re-added to another keeps its path, and a plain directory can become a submodule. A cached repository therefore holds only while the nearest `.git` at or above that directory still resolves inside the same common git directory; otherwise git is asked again. Without that, the first owner's rules would guard the new owner's worktree for the rest of the session — refusing legitimate work rather than permitting a canonical mutation, but refusing it silently and until the session ends.
-
-An agent's first action necessarily runs from the canonical checkout because a spawned child inherits its parent's working directory. The bootstrap allowlist covers `wt switch` in its create and `pr:<N>` forms, `wt list`, `wt config show`, `wt step prune --dry-run`, read-only `git`, and every `bd` call. The gate rejects literal `$(` and backticks before tokenization. The gate permits separators only when every segment is allowlisted or a read-only companion. Redirections may target only a descriptor or `/dev/null`.
-
-This is an accident guardrail, not a sandbox. A cooperative agent stops writing to the canonical checkout by mistake; a process whose cwd is a worktree can still write any absolute path through `git -C <canonical>`, a redirection, or `eval`, and the gate does not pretend to prevent that. Canonical is never a merge target, so nothing legitimate writes there anyway.
-
-One bounded gap follows from the same D3 accident-guardrail scope. On an unenumerated tool, a **relative** path under a key the gate does not recognize as path-shaped — `mcp__fs_write {"name": "src/probe.ts"}` — is not checked, because on an arbitrary tool any short string could be a name rather than a path and refusing every one of them would refuse ordinary work. Absolute paths, `~`-rooted paths, and every recognized path key are checked whatever the tool. Add the key to the gate's path-key table when a tool in use spells its target differently.
-
-### `isolation-precheck`
-
-Reports `task.isolation.enabled` at session start when it is on, and refuses any `task` call carrying `isolated: true` in either wire shape. The refusal is the enforceable half: the setting can be re-enabled after a session starts, so a start-time check alone would miss it.
+The gate is an accident guardrail, not a sandbox. A cooperative process can still write an absolute path through an allowed command or a shell redirection, so canonical checkouts remain protected by the worktree policy rather than by a claim of complete containment.

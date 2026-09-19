@@ -3,23 +3,6 @@
  *
  * Embedded Dolt resolves a PATH, not a host and port, so every process that walks
  * up to the same `.beads` opens the same journal files with its own engine. An
- * orchestration run with an architect and two isolated children is therefore three
- * unsynchronised writers on one journal, and that is how a run corrupted
- * `journal.idx` at offset 77631076 (bead omp-plugins-5fr) with no `sql-server`
- * anywhere. Measured on bd 1.3.0: six concurrent `bd create` processes against one
- * embedded store overlapped in all fifteen pairs, and bd honoured neither a shared
- * nor an exclusive `flock` held on `.beads/embeddeddolt/.lock`. Nothing below this
- * extension serialises those writers.
- *
- * Server mode needs none of this -- one `sql-server` is the serialisation point, and
- * concurrent clients are what it is for -- so the lock is taken only for a store that
- * classifies as embedded.
- *
- * The lock lives INSIDE the resolved store rather than beside the working directory.
- * That is what keeps one lock domain per database: a linked worktree and an isolated
- * clone both resolve to the primary checkout's `.beads` (`sessionPinFor`), so they
- * queue against each other instead of each guarding a private file. `.beads/.gitignore`
- * already ignores `*.lock`, so neither file enters a commit or an isolation patch.
  *
  * Both writers this plugin can see share that one domain: the bash calls an agent
  * makes, held here from `tool_call` to `tool_result`, and the lease stamp
@@ -47,7 +30,6 @@ import {
 	invocationFromArgv,
 } from "./bd-actor-gate.ts";
 import { sessionPinFor } from "./beads-store.ts";
-import { classifyBackend, pidAlive } from "./dolt-server-lifecycle.ts";
 import { tokenize } from "./shell-command.ts";
 
 /** The hold itself. */
@@ -95,6 +77,10 @@ export function setLeaseTimingForTests(lease?: number, renew?: number): void {
 }
 
 const HOST = hostname().split(".")[0] ?? "localhost";
+
+function pidAlive(pid: number): boolean {
+	try { process.kill(pid, 0); return true; } catch { return false; }
+}
 
 /** What a hold records, for the next waiter to judge. */
 interface Holder {
@@ -283,13 +269,10 @@ export function writesStore(invocation: BdInvocation | undefined): boolean {
  * Every path is canonicalised, so two spellings of one store are one lock domain.
  */
 function storeFor(globals: string[], cwd: string, env: NodeJS.ProcessEnv): string | undefined {
-	// `--global` addresses `beads_global` on the shared server, and `--database`
-	// names a database on a server. Neither can land in this checkout's store.
 	if (flagEnabled(globals, ["--global"])) return undefined;
 	if (globalValue(globals, ["--database"]) !== undefined) return undefined;
 	const directory = globalValue(globals, ["-C", "--directory"]);
 	// `--db` is documented as a database PATH, and only a value that is not an
-	// existing path is a server database name. A path-valued `--db` therefore names
 	// the store this write lands in, and ignoring it let those writes escape.
 	const db = globalValue(globals, ["--db"]);
 	const base = directory === undefined ? cwd : absolute(directory, cwd);
@@ -351,7 +334,7 @@ function embedded(store: string): boolean {
 	} catch {
 		// Same.
 	}
-	return classifyBackend(metadata, config) === "embedded";
+	return metadata !== "" || config !== "";
 }
 
 /**
@@ -456,7 +439,6 @@ export function embeddedWriteTargets(command: string, cwd: string, env: NodeJS.P
 		return { kind: "stores", stores: store !== undefined && embedded(store) ? [store] : [] };
 	}
 	// An embedded store in reach is what gives this gate jurisdiction. The session's own
-	// store counts only when it IS embedded: with a server-backed session store a `??`
 	// here short-circuited, and an explicit `-C <embedded store>` in the command went
 	// unseen. `namedStore` already returns embedded stores only.
 	const ambient = storeFor([], cwd, env);
@@ -478,7 +460,6 @@ export function embeddedWriteTargets(command: string, cwd: string, env: NodeJS.P
  * Literal collection, not analysis: every `-C` / `--directory` / `--db` / `--database`
  * value in the text is resolved, and the first embedded one is returned. Without this,
  * a compound command carrying `-C <embedded store>` escaped whenever the session's own
- * store was absent or server-backed.
  */
 function namedStore(command: string, cwd: string, env: NodeJS.ProcessEnv): string | undefined {
 	// One extra level: a quoted argument is tokenized too, because
@@ -762,9 +743,6 @@ function renewLease(lock: string, toolCallId: string, token: string): void {
  * Run `write`, a plugin-internal `bd` mutation, inside the store's lock.
  *
  * `cwd` is the directory the mutation runs in. A store that is not embedded, or a
- * `cwd` with no store at all, runs `write` unserialised: server mode has its own
- * writer of record.
- *
  * `write` is AWAITED before the hold is given up. Returning the promise instead
  * would release while the bd process it represents was still running -- the hold
  * would cover spawning the writer rather than the write -- and every internal

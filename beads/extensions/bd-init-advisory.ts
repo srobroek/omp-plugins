@@ -1,25 +1,6 @@
 /**
- * Advise on `bd init` flags, once per process, blocking nothing.
- *
- * This replaces two TTSR rules. `beads-init-skip-hooks` (`interruptMode: always`)
- * and `beads-init-prefer-server` both matched the substring `bd init` anywhere in
- * a bash command, so both fired on `echo how to bd init a repo`, `rg 'bd init'`,
- * `git log --grep='bd init'` and `man bd init` — and on each other's correct form.
- * skip-hooks demanded `--skip-hooks`, prefer-server demanded a server flag, and
- * the invocation this estate actually wants, `bd init --init-if-missing --skip-hooks`
- * under the pinned database, was blocked by skip-hooks' sibling anyway.
- * Verified live 2026-08-25. Since 2026-09-10 the plugin pins `BEADS_DIR` itself.
- *
- * Two things follow. Argv is the only honest trigger: a mention inside a quoted
- * string, a `--grep` pattern, or another program's arguments is not an
- * invocation, so this reads the `bd` at command position, its verb, and its
- * flags. And the wrongness is contextual — an already-initialised repository,
- * hooks the project deliberately manages — so this is advice: `bd init` always
- * proceeds, and the advisory speaks at most once per process.
- *
- * Command position is per line as well as per separator: `cd /repo\nbd init` is a
- * real invocation. Here-document bodies are data and are dropped by the tokenizer, so
- * a `bd init` line inside one is not.
+ * Advise on bd init hook flags once per process without blocking the command.
+ * The parser recognizes actual invocations rather than mentions in unrelated text.
  */
 import path from "node:path";
 import type { ExtensionAPI, ToolCallEvent } from "@oh-my-pi/pi-coding-agent";
@@ -33,7 +14,7 @@ const PRE_VERB_VALUE_FLAGS: Record<string, true> = {
 };
 
 /** `bd init` flags that consume the next token, so a value is never read as the verb. */
-const VALUE_FLAGS: Record<string, true> = { "--prefix": true, "--server-host": true, "--server-port": true };
+const VALUE_FLAGS: Record<string, true> = { "--prefix": true };
 
 /** `NAME=value bd init`: an environment prefix is not the command. */
 const ENV_ASSIGNMENT = /^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/s;
@@ -299,7 +280,7 @@ export function initAdvisory(_missing: MissingFlags): string {
 	return (
 		`bd init advisory — nothing was blocked, and this speaks once per session. ` +
 		`This \`bd init\` omits \`--skip-hooks\`. ${SKIP_HOOKS_ADVICE} ${BEADS_DIR_ADVICE} ` +
-		`The full form is \`bd init --shared-server --init-if-missing --skip-hooks\` ` +
+		`The full form is \`bd init --init-if-missing --skip-hooks\` ` +
 		`(rule://beads-setup). Both the flag and the pin are contextual, so decide ` +
 		`rather than re-run blind: an already-initialised repository or hooks the ` +
 		`project deliberately owns can each make the plainer form the right call.`
@@ -319,7 +300,7 @@ export function decideBdInit(command: string): string | undefined {
 
 /**
  * Process-global once-guard, keyed on `globalThis` for the same reason
- * `dolt-server-lifecycle` is: when the plugin is momentarily reachable through
+ * `the plugin` is: when the plugin is momentarily reachable through
  * two load paths (a marketplace install plus a dev link, or an install plus a
  * settings.json entry) the module is instantiated twice, and a per-instance flag
  * lets each instance advise separately.

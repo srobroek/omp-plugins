@@ -159,8 +159,8 @@ function sessionKey(ctx: { sessionManager?: { getSessionId?: () => string } } | 
  * - a pin this extension did not set is never touched;
  * - the pin belongs to the session that earned it and holds while that session is
  *   live. A concurrent session in another checkout of the SAME repository (an
- *   isolated worktree is the common case) inherits it, which is what the
- *   storage-mode rule asks for. A concurrent session in an UNRELATED repository
+ *   Worktrunk-linked checkout is the common case) inherits it, which is what the
+ *   embedded-store ownership guidance asks for. A concurrent session in an UNRELATED repository
  *   gets a `conflict` back: the process pin cannot serve two databases, and the
  *   caller warns that session to pass its own `BEADS_DIR` per `bd` call;
  * - when the owning session ends, the pin is withdrawn and the next session start
