@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.3](https://github.com/srobroek/omp-plugins/compare/speckit--v0.7.2...speckit--v0.7.3) (2026-09-19)
+
+
+### Bug Fixes
+
+* **beads:** one shared shell tokenizer, and close two gate fail-opens ([#402](https://github.com/srobroek/omp-plugins/issues/402)) ([264facb](https://github.com/srobroek/omp-plugins/commit/264facb1ac2a07a53f3dd668fdf98d6b8443ec1c))
+
 ## [0.7.2](https://github.com/srobroek/omp-plugins/compare/speckit--v0.7.1...speckit--v0.7.2) (2026-09-13)
 
 
