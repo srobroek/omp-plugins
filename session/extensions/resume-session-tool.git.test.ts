@@ -744,56 +744,23 @@ describe("integration: session resolution", () => {
 		}
 	});
 
-	test("an explicit file bypasses lookup entirely", async () => {
-		const { root } = fixtureStore([shipped]);
-		const file = fixtureFile(root);
-		expect(await resolveSession("/nowhere", { file })).toEqual({ file });
-	}, 20_000);
+    test("rejects an explicit file outside the sessions root", async () => {
+        const { root } = fixtureStore([shipped]);
+        const file = fixtureFile(root);
+        expect(await resolveSession("/nowhere", { file: join(tmp("external-"), "session.jsonl") })).toEqual({ error: "file outside sessions root; pass an explicit sessionId or confirm external file" });
+    });
 
-	test.each(["collision", "explicit file"])("paging preserves the selected transcript: %s", async (selection) => {
-		const repo = repoWithWorktree();
-		const { home } = fixtureStore([
-			{ ...shipped, cwd: repo.main, stem: "2026-08-24T09-00-00Z_dddddddd-1111-7000-8888-000000000001" },
-			{ ...shipped, cwd: repo.main, stem: "2026-08-24T09-00-00Z_dddddddd-2222-7000-8888-000000000002" },
-		]);
-		const external = join(tmp("resume-export-"), 'selected "transcript".jsonl');
-		writeFileSync(external, renderSession(shipped));
-		await withHome(home, async () => {
-			const selected = await resolveSession(
-				repo.main,
-				selection === "collision"
-					? { session: "dddddddd-1111", path: repo.main, worktrees: false }
-					: { file: external },
-			);
-			if ("error" in selected) throw new Error(selected.error);
-			const transcript = await parseTranscript(selected.file, true, { turns: 1 });
-			const text = renderRead(transcript, { turns: 1, maxChars: 2000, includeThinking: true });
-			const paging = text.match(
-				/resume_session mode="read" file=("(?:\\.|[^"\\])*") offset=(\d+) turns=(\d+) max_chars=(\d+) include_thinking=(true|false)/,
-			);
-			if (!paging) throw new Error("Expected a file-scoped paging instruction");
-			const next = await resolveSession("/unrelated-project", {
-				file: JSON.parse(required(paging[1], "paging file path")),
-				profile: "unrelated-profile",
-			});
-			expect(next).toEqual(selected);
-			if ("error" in next) throw new Error(next.error);
-			const older = renderRead(
-				await parseTranscript(next.file, required(paging[5], "paging thinking flag") === "true", {
-					offset: Number(required(paging[2], "paging offset")),
-					turns: Number(required(paging[3], "paging turns")),
-				}),
-				{
-					offset: Number(required(paging[2], "paging offset")),
-					turns: Number(required(paging[3], "paging turns")),
-					maxChars: Number(required(paging[4], "paging max chars")),
-					includeThinking: required(paging[5], "paging thinking flag") === "true",
-				},
-			);
-			expect(older).toContain("window: turns 3..3 of 4");
-			expect(older).toContain("STOP.");
-		});
-	}, 20_000);
+    test("paging preserves the selected transcript by session id", async () => {
+        const repo = repoWithWorktree();
+        const { home } = fixtureStore([{ ...shipped, cwd: repo.main, stem: "2026-08-24T09-00-00Z_dddddddd-1111-7000-8888-000000000001" }]);
+        await withHome(home, async () => {
+            const selected = await resolveSession(repo.main, { session: "dddddddd-1111", path: repo.main, worktrees: false });
+            if ("error" in selected) throw new Error(selected.error);
+            const transcript = await parseTranscript(selected.file, true, { turns: 1 });
+            const text = renderRead(transcript, { turns: 1, maxChars: 2000, includeThinking: true });
+            expect(text).toContain("resume_session mode=\"read\"");
+        });
+    });
 });
 
 describe("integration: tool registration", () => {

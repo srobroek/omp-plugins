@@ -133,17 +133,16 @@ export function editedFiles(input: ToolCallEvent["input"]): string[] {
 }
 
 export function changedLineCount(input: ToolCallEvent["input"]): number {
-	// `in` narrows one literal key at a time, so the three payload spellings stay unrolled.
-	if ("new_string" in input && typeof input.new_string === "string" && input.new_string) {
-		return input.new_string.split("\n").length || 1;
-	}
-	if ("content" in input && typeof input.content === "string" && input.content) {
-		return input.content.split("\n").length || 1;
-	}
-	if ("out" in input && typeof input.out === "string" && input.out) {
-		return input.out.split("\n").length || 1;
-	}
-	return 1;
+    const record = input as Record<string, unknown>;
+    let count = 0;
+    if (typeof record.input === "string") {
+        count += record.input.split("\n").filter((line) => line.startsWith("+")).length;
+    }
+    for (const key of ["new_string", "content", "out"] as const) {
+        const value = record[key];
+        if (typeof value === "string" && value) return Math.max(count, value.split("\n").length || 1);
+    }
+    return Math.max(count, 1);
 }
 
 

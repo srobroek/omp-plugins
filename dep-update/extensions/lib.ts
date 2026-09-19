@@ -17,7 +17,7 @@ export const FETCH_TIMEOUT_MS = 10_000;
 
 const NODE_VERSION = /^=?v?(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-((?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*))*))?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/;
 const PYTHON_VERSION = /^(?:={1,2})?v?(\d+)(?:\.(\d+))?(?:\.(\d+))?(?:[-_.]?(a|b|rc|alpha|beta|pre|preview)[-_.]?\d*)?(?:[-_.]?post[-_.]?\d*)?(?:[-_.]?(dev)[-_.]?\d*)?(?:\+[a-z0-9]+(?:[-_.][a-z0-9]+)*)?$/i;
-const PROTECTED_NAME = /^\.project-setup|answers\.toml|sources\.toml/;
+const PROTECTED_NAME = /(?:^|[\\/])(?:\.project-setup[\\/]answers|\.project-setup[\\/]sources)\.toml$/;
 
 export interface BumpRecord {
 	ecosystem: string;

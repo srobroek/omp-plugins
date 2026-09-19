@@ -101,6 +101,9 @@ describe("language selection", () => {
 		expect(covered.has("python")).toBe(true);
 		expect(covered.has("ts")).toBe(true);
 	});
+    test("counts hashline input body rows", () => {
+        expect(changedLineCount({ input: "+one\n+two\n context\n-old" } as never)).toBe(2);
+    });
 });
 
 describe("counters / hash state", () => {

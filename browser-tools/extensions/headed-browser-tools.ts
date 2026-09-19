@@ -494,9 +494,10 @@ async function safeResult(params: ToolParams, operation: () => Promise<ToolResul
 		const config = session?.config;
 		if (config) result.content[0]!.text = redact(result.content[0]!.text, config);
 		return result;
-	} catch (error) {
-		const message = error instanceof Error ? error.message : String(error);
-		const session = params.sessionId ? sessions.get(params.sessionId) : undefined;
-		return { content: [{ type: "text", text: redact(message, session?.config ?? { redactSecrets: true }) }], details: { ok: false, error: message, sessionId: params.sessionId } };
-	}
+    } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        const session = params.sessionId ? sessions.get(params.sessionId) : undefined;
+        console.error(`headed-browser: ${message}`);
+        return { content: [{ type: "text", text: redact(message, session?.config ?? { redactSecrets: true }) }], details: { ok: false, sessionId: params.sessionId } };
+    }
 }

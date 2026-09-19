@@ -473,7 +473,7 @@ test("real Git candidates honor paths, worktree content, deletions, and NUL file
 		expect(decideCommit("git commit -m x", dir)?.block).toBe(true);
 		unlinkSync(join(dir, "odd\nname", "private_dot_env"));
 		expect(decideCommit("git commit -am x", dir)).toBeUndefined();
-		expect(decideCommit("git commit -m x -- 'odd\nname/private_dot_env'", dir)).toBeUndefined();
+        expect(decideCommit("git commit -m x -- 'odd\nname/private_dot_env'", dir)?.block).toBe(true);
 		git("add", "-u");
 		expect(decideCommit("git commit -m x", dir)).toBeUndefined();
 	} finally {

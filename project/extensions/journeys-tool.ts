@@ -80,22 +80,22 @@ export async function runJourneys(
 }
 
 /** Resolve the physical directory a command or formula install will operate in. */
-function managedRoot(dir: string): string | null {
-	const absolute = resolve(isAbsolute(dir) ? dir : join(process.cwd(), dir));
-	if (dir.split(sep === "\\" ? /[\\/]/ : "/").includes("..")) return null;
-	try {
-		return realpathSync(absolute);
-	} catch {
-		return null;
-	}
+function managedRoot(dir: string, base = process.cwd()): string | null {
+    const absolute = resolve(isAbsolute(dir) ? dir : join(base, dir));
+    if (dir.split(sep === "\\" ? /[\\/]/ : "/").includes("..")) return null;
+    try {
+        return realpathSync(absolute);
+    } catch {
+        return null;
+    }
 }
 
 function safePath(path: string, base: string): void {
-	const absolute = resolve(isAbsolute(path) ? path : join(process.cwd(), path));
-	const inside = relative(base, absolute);
-	if (inside === ".." || inside.startsWith(`..${sep}`) || isAbsolute(inside)) {
-		throw new Error(`outside the managed root: ${absolute}`);
-	}
+    const absolute = resolve(isAbsolute(path) ? path : join(base, path));
+    const inside = relative(base, absolute);
+    if (inside === ".." || inside.startsWith(`..${sep}`) || isAbsolute(inside)) {
+        throw new Error(`outside the managed root: ${absolute}`);
+    }
 	let current = base;
 	if (lstatSync(current, { throwIfNoEntry: false })?.isSymbolicLink()) {
 		throw new Error(`unsafe symlink: ${current}`);
@@ -119,12 +119,13 @@ export function formulaSources(dir = FORMULAS_DIR): string[] {
 }
 
 export function installFormulas(
-	rawRepoRoot: string,
-	force = false,
-	rawSourcesDir = FORMULAS_DIR,
+    rawRepoRoot: string,
+    force = false,
+    rawSourcesDir = FORMULAS_DIR,
+    base = process.cwd(),
 ): { ok: boolean; text: string; copied?: number; unchanged?: number } {
-	const repoRoot = managedRoot(rawRepoRoot);
-	const sourcesDir = managedRoot(rawSourcesDir);
+    const repoRoot = managedRoot(rawRepoRoot, base);
+    const sourcesDir = managedRoot(rawSourcesDir, base);
 	if (repoRoot === null) return { ok: false, text: `ERROR not a Beads workspace: ${rawRepoRoot}` };
 	if (sourcesDir === null) return { ok: false, text: `ERROR no formula sources: ${rawSourcesDir}` };
 	try {
@@ -225,29 +226,31 @@ export default function journeysTool(pi: ExtensionAPI): void {
 			const yes = "yes" in record && Boolean(record.yes);
 			if (cmd === "lint") return "read";
 			if (cmd === "prune" && !yes) return "read";
-			return "exec";
-		},
-		execute: async (_id, params: JourneysIndexParams, signal, _onUpdate, ctx) => {
-			const result = await runJourneys(ctx.cwd, params, signal);
-			const text = result.stdout && result.stderr ? `${result.stdout}\n${result.stderr}` : result.stdout || result.stderr;
-			return {
-				content: [{ type: "text" as const, text }],
-				details: { ok: result.exitCode === 0, command: params.command, stdout: result.stdout, stderr: result.stderr, exitCode: result.exitCode },
-			};
-		},
+            return "exec";
+        },
+        execute: async (_id, params: JourneysIndexParams, signal, _onUpdate, ctx) => {
+            const resolvedParams = { ...params, journeysDir: resolve(ctx.cwd, params.journeysDir) };
+            const result = await runJourneys(ctx.cwd, resolvedParams, signal);
+            const text = result.stdout && result.stderr ? `${result.stdout}\n${result.stderr}` : result.stdout || result.stderr;
+            return {
+                content: [{ type: "text" as const, text }],
+                details: { ok: result.exitCode === 0, command: params.command, stdout: result.stdout, stderr: result.stderr, exitCode: result.exitCode },
+            };
+        },
 	});
 
-	pi.registerTool({
-		name: "journey_install_formulas",
-		label: "Install journey formulas",
-		description: "Copy package-owned journey formula TOMLs into a Beads workspace .beads/formulas/.",
-		parameters: z.object({
-			repoRoot: z.string().describe("Repository root containing .beads/"),
-			force: z.boolean().optional().describe("Overwrite divergent destination files"),
-		}) as unknown as TSchema,
-		execute: async (_id, params: { repoRoot: string; force?: boolean }) => {
-			const result = installFormulas(params.repoRoot, Boolean(params.force));
-			return { content: [{ type: "text", text: result.text }], details: { ok: result.ok, copied: result.copied, unchanged: result.unchanged } };
-		},
-	});
+    pi.registerTool({
+        name: "journey_install_formulas",
+        label: "Install journey formulas",
+        description: "Copy package-owned journey formula TOMLs into a Beads workspace .beads/formulas/.",
+        parameters: z.object({
+            repoRoot: z.string().describe("Repository root containing .beads/"),
+            force: z.boolean().optional().describe("Overwrite divergent destination files"),
+        }) as unknown as TSchema,
+        approval: "exec",
+        execute: async (_id, params: { repoRoot: string; force?: boolean }, _signal, _onUpdate, ctx) => {
+            const result = installFormulas(params.repoRoot, Boolean(params.force), undefined, ctx.cwd);
+            return { content: [{ type: "text", text: result.text }], details: { ok: result.ok, copied: result.copied, unchanged: result.unchanged } };
+        },
+    });
 }

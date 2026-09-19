@@ -195,8 +195,7 @@ export async function scopeFirefoxCookies(
 		const columns = database.query("PRAGMA table_info(moz_cookies)").all() as Array<{ name: string }>;
 		const names = new Set(columns.map((column) => column.name));
 		if (!names.has("host") || !names.has("originAttributes")) {
-			warnings.push("headed-browser: cookies.sqlite lacks host or originAttributes; cookie scoping skipped");
-			return { containerCookiesSkipped: 0, removed: 0, warnings };
+			throw new Error("headed-browser: cookies.sqlite lacks host or originAttributes; refusing to launch because cookie scoping cannot be proven");
 		}
 		const rows = database.query("SELECT id, host, originAttributes FROM moz_cookies").all() as Array<{ id: number; host: string; originAttributes: string }>;
 		const remove = database.prepare("DELETE FROM moz_cookies WHERE id = ?");
@@ -215,8 +214,7 @@ export async function scopeFirefoxCookies(
 		})();
 		return { containerCookiesSkipped, removed, warnings };
 	} catch (error) {
-		warnings.push(`headed-browser: cookie scoping failed: ${error instanceof Error ? error.message : String(error)}`);
-		return { containerCookiesSkipped: 0, removed: 0, warnings };
+		throw new Error(`headed-browser: cookie scoping failed; refusing to launch because cookie isolation cannot be proven: ${error instanceof Error ? error.message : String(error)}`, { cause: error });
 	} finally {
 		database?.close();
 	}

@@ -183,16 +183,22 @@ export function sessionSummary(session: HeadedSession): SessionSummary {
 export async function closeSession(sessionId: string, reason = "close"): Promise<{ deleted: string[]; reason: string }> {
 	const session = getSession(sessionId);
 	sessions.delete(sessionId);
-	if (session.remote) await closeRemote(session.remote);
-	else await session.browser.close().catch(() => undefined);
-	const deleted = await removeMaterializedProfile(session.profile, session.config.keepArtifactsOnClose);
-	return { deleted, reason };
+    if (session.remote) await closeRemote(session.remote);
+    else {
+        let closed = false;
+        await Promise.race([
+            session.browser.close().then(() => { closed = true; }).catch(() => undefined),
+            Bun.sleep(5_000),
+        ]);
+        if (!closed) session.browser.process()?.kill();
+    }
+    const deleted = await removeMaterializedProfile(session.profile, session.config.keepArtifactsOnClose);
+    return { deleted, reason };
 }
 
 export async function closeAllSessions(reason = "session-shutdown"): Promise<void> {
 	await Promise.allSettled([...sessions.keys()].map((sessionId) => closeSession(sessionId, reason)));
 }
-
 export function installIdleSweep(
 	ctx: ExtensionContext,
 	onIdleClose?: (session: HeadedSession) => Promise<void>,
