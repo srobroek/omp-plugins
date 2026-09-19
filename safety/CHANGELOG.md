@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.6](https://github.com/srobroek/omp-plugins/compare/safety--v0.6.5...safety--v0.6.6) (2026-09-19)
+
+
+### Bug Fixes
+
+* **safety:** decide package investigation from tokens, not text ([#403](https://github.com/srobroek/omp-plugins/issues/403)) ([095edb4](https://github.com/srobroek/omp-plugins/commit/095edb48ed4d8b2c1a883e8167d1b3d1ba4c6c1b))
+
 ## [0.6.5](https://github.com/srobroek/omp-plugins/compare/safety--v0.6.4...safety--v0.6.5) (2026-09-19)
 
 
