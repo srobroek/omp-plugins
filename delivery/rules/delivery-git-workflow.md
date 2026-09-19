@@ -22,14 +22,16 @@ LEGEND: Rules carry stable IDs (GW-n).
 
 ## Automated review loop
 
-MUST GW-4: the agent that creates a PR owns its automated-review loop until landing or explicit human escalation. It may delegate observation to a landing shepherd, but never to a polling watcher holding a live session.
+For PRs not linked to an orchestrate run bead: MUST GW-4: the agent that creates a PR owns its automated-review loop until landing or explicit human escalation. It may delegate observation to a landing shepherd, but never to a polling watcher holding a live session.
 
 1. Keep the draft until local review, CI, and configured automated reviewers have completed against the exact head. Cover CodeRabbit, Codex, Copilot review, Greptile, and repository-configured reviewers when present.
 2. Park pending waits and continue unrelated work. Later read the review state; no agent polls while holding the session open.
 3. Collect the complete actionable set for the head, assign one fix owner, then push the new head and rerun every configured reviewer.
 4. Identify findings by GitHub review-thread node id. Without a thread, use the review URL plus a stable bot/path/location/finding fingerprint. Count attempts per material issue; a new issue starts at one.
 5. Reply when evidence is needed, call `resolveReviewThread`, and read back `isResolved=true`. A reply or outdated diff does not resolve a conversation.
-6. After three unsuccessful fixes of one material issue, hold only that PR for human review and record issue identities, attempts, heads, fixes, and unresolved URLs. New issues have their own three attempts.
+6. For PRs not linked to an orchestrate run bead: After three unsuccessful fixes of one material issue, hold only that PR for human review and record issue identities, attempts, heads, fixes, and unresolved URLs. New issues have their own three attempts.
+
+PRs linked to an orchestrate run bead are owned by the run's shepherd (`orc-shepherd`); workers MUST NOT request or act on review rounds for them.
 
 ## Beads linkage
 
