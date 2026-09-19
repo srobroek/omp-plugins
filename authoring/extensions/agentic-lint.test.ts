@@ -3,6 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import agenticLintTool, {
+	collectFiles,
 	detectKind,
 	frontmatterDefects,
 	hostSpecificPaths,
@@ -129,8 +130,15 @@ describe("bounded frontmatter and directory traversal", () => {
 		const linked = await tool.execute("id", { paths: [join(root, "outside")] });
 		expect(linked.details.ok).toBe(false);
 	});
-});
 
+	test("rejects directories deeper than the traversal cap", async () => {
+		const base = tmpDir();
+		let root = base;
+		for (let i = 0; i < 18; i++) root = join(root, `level-${i}`);
+		write(root, "SKILL.md", "---\nname: deep\ndescription: A valid skill.\n---\nBody");
+		expect(() => collectFiles(base)).toThrow("depth cap 8");
+	});
+});
 describe("code examples are exempt from local link validation", () => {
 	test.each(["inline", "fenced"])("keeps prose links checked around %s code after astral text", (kind) => {
 		const example = kind === "inline" ? "`[example](example-missing.md)`"
