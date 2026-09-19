@@ -16,7 +16,6 @@ from __future__ import annotations
 import argparse
 import json
 import re
-import runpy
 import sys
 from pathlib import Path
 
@@ -45,18 +44,8 @@ HEADER = {
 
 def manifests(repo: Path | None = None) -> list[dict[str, object]]:
     """Every plugin manifest in the repository, in catalog order."""
-    inventory = runpy.run_path(str(Path(__file__).with_name("sync-plugin-manifests.py")))["PLUGINS"]
-    paths = sorted((repo or REPO).glob("*/.omp-plugin/plugin.json"))
-    discovered = {path.parent.parent.name for path in paths}
-    package_names = {path.parent.name for path in (repo or REPO).glob("*/package.json")}
-    missing = set(inventory) - discovered
-    unregistered = (discovered | package_names) - set(inventory)
-    if missing or unregistered:
-        raise SystemExit(
-            f"local plugin inventory mismatch: missing {sorted(missing)}, "
-            f"unregistered {sorted(unregistered)}"
-        )
     found = []
+    paths = sorted((repo or REPO).glob("*/.omp-plugin/plugin.json"))
     seen = set()
     for path in paths:
         try:

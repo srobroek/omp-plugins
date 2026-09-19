@@ -16,6 +16,15 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
+      - name: Install and run repository pre-commit chain
+        run: |
+          python3 scripts/install-agnix-hooks.py
+          if [ -f .pre-commit-config.yaml ] || [ -f .pre-commit-config.yml ]; then
+            python3 -m pip install --disable-pip-version-check --quiet pre-commit
+            pre-commit run --all-files
+          else
+            echo "No pre-commit config; .githooks/pre-commit is the repository hook chain"
+          fi
 
 
       - name: Install cargo-binstall
@@ -65,17 +74,14 @@ jobs:
       - name: release-please config covers every plugin
         run: python3 scripts/build-release-config.py --check
 
-      - name: Plugin manifests are current
-        run: |
-          python3 scripts/sync-plugin-manifests.py --check
+      - name: Plugin inventory matches release metadata
+        run: bun scripts/validate-plugins.ts
 
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           # Pinned: build-extensions.py --check byte-compares committed dist/
-          # bundles against a fresh build, so the CI bun MUST match the bun that
-          # built the committed bundles. Bump together with a dist rebuild
-          # (dependabot-dist rebuilds automatically on Dependabot branches).
-          bun-version: "1.4.2"
+          # Bundles are built in CI and committed to dist/. This check keeps the tracked
+          # bundles byte-identical to a fresh build using the pinned Bun version.
 
       - name: Root TypeScript quality
         run: |

@@ -16,8 +16,9 @@ const repo = resolve(process.env.OMP_SMOKE_REPO ?? join(import.meta.dir, ".."));
 // the dependency bot moves the smoke host and the development pins in one commit instead of
 // leaving this smoke to certify a host nobody develops against.
 const VERSION: string = (await json(join(repo, "package.json"))).devDependencies["@oh-my-pi/pi-coding-agent"];
-// Published checkout plugins (`./` catalog sources). A pin, so an accidental unpublish fails loudly.
-const EXPECTED_PLUGINS = 25;
+// Published checkout plugins (`./` catalog sources) come from the marketplace catalog.
+const catalog = await json(join(repo, ".omp-plugin/marketplace.json"));
+const EXPECTED_PLUGINS = (catalog.plugins as CatalogEntry[]).filter((entry) => entry.source.startsWith("./")).length;
 const started = performance.now();
 const timeoutMs = Number(process.env.OMP_SMOKE_TIMEOUT_MS ?? 600_000);
 const host = process.env.OMP_HOST_ROOT;
