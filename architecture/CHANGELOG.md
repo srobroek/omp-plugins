@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.1](https://github.com/srobroek/omp-plugins/compare/architecture--v0.4.0...architecture--v0.4.1) (2026-09-19)
+
+
+### Documentation
+
+* **delivery:** align review loop limits ([#405](https://github.com/srobroek/omp-plugins/issues/405)) ([5cd2b7b](https://github.com/srobroek/omp-plugins/commit/5cd2b7b2589aa27edc1d0c549a7f533171b672a4))
+
 ## [0.4.0](https://github.com/srobroek/omp-plugins/compare/architecture--v0.3.2...architecture--v0.4.0) (2026-09-16)
 
 

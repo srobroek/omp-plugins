@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.1.0](https://github.com/srobroek/omp-plugins/compare/worktrunk--v1.0.1...worktrunk--v1.1.0) (2026-09-19)
+
+
+### Features
+
+* **worktrunk:** allow canonical read-only probes ([#422](https://github.com/srobroek/omp-plugins/issues/422)) ([e7ae00e](https://github.com/srobroek/omp-plugins/commit/e7ae00e66ee5c9dc3ee92fe7a663f0ba299d82b0))
+
+
+### Documentation
+
+* **delivery:** align review loop limits ([#405](https://github.com/srobroek/omp-plugins/issues/405)) ([5cd2b7b](https://github.com/srobroek/omp-plugins/commit/5cd2b7b2589aa27edc1d0c549a7f533171b672a4))
+
 ## [1.0.1](https://github.com/srobroek/omp-plugins/compare/worktrunk--v1.0.0...worktrunk--v1.0.1) (2026-09-19)
 
 

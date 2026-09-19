@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.4.1](https://github.com/srobroek/omp-plugins/compare/design--v0.4.0...design--v0.4.1) (2026-09-19)
+
+
+### Refactors
+
+* **design:** merge UX copy into ui-microcopy ([#415](https://github.com/srobroek/omp-plugins/issues/415)) ([fb74489](https://github.com/srobroek/omp-plugins/commit/fb74489d3352f5b69568aa08cc44006247e34307))
+* merge topic plugins into toolchain ([#412](https://github.com/srobroek/omp-plugins/issues/412)) ([a18a685](https://github.com/srobroek/omp-plugins/commit/a18a685d7195d20f63955198ab0f9de0edd57c96))
+
+
+### Documentation
+
+* **delivery:** align review loop limits ([#405](https://github.com/srobroek/omp-plugins/issues/405)) ([5cd2b7b](https://github.com/srobroek/omp-plugins/commit/5cd2b7b2589aa27edc1d0c549a7f533171b672a4))
+* trim duplicated steering contracts ([#413](https://github.com/srobroek/omp-plugins/issues/413)) ([2176376](https://github.com/srobroek/omp-plugins/commit/2176376e4968fed8879409085a9973bf95bb77b8))
+
 ## [0.4.0](https://github.com/srobroek/omp-plugins/compare/design--v0.3.5...design--v0.4.0) (2026-09-16)
 
 
