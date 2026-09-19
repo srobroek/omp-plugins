@@ -3,5 +3,7 @@
   "version": "0.6.1",
   "description": "Execution agents: operator and external-repo worker.",
   "private": true,
-  "omp": {}
+  "omp": {
+    "extensions": ["./extensions/presence.ts"]
+  }
 }
