@@ -17,6 +17,7 @@
     "test:git": "bun test --timeout 60000 --max-concurrency=1 session/extensions/resume-session-tool.git.test.ts beads/extensions/session-beads-lifecycle.git.test.ts",
     "typecheck": "tsc --noEmit",
 	"lint": "biome check --config-path biome.json --max-diagnostics=1000",
-	"bench:bash-gates": "bun scripts/bench-bash-gates.ts"
+	"bench:bash-gates": "bun scripts/bench-bash-gates.ts",
+	"bench:gates": "bun scripts/bench-bash-gates.ts"
   }
 }
