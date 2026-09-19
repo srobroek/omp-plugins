@@ -93,21 +93,31 @@ describe("bodyOfGhCreate", () => {
 });
 
 describe("decidePrCreate", () => {
-	test("blocks a body naming no bead", () => {
-		expect(decidePrCreate("Adds a fish alias.", true)).toEqual({ block: true, reason: REASON });
+	test("blocks a body naming neither route and explains both", () => {
+		const decision = decidePrCreate("Adds a fish alias.", true);
+		expect(decision).toEqual({ block: true, reason: REASON });
+		expect(decision?.reason).toContain("Bead: <id>");
+		expect(decision?.reason).toContain("No-Bead: <reason>");
+	});
+
+	test("allows a truthful No-Bead reason", () => {
+		expect(decidePrCreate("No-Bead: Beads retired for this repository", true)).toBeNull();
+	});
+
+	test("blocks a bare No-Bead trailer", () => {
+		expect(decidePrCreate("No-Bead:", true)).toEqual({ block: true, reason: REASON });
+	});
+
+	test("blocks a No-Bead trailer containing only whitespace", () => {
+		expect(decidePrCreate("No-Bead:   \t", true)).toEqual({ block: true, reason: REASON });
 	});
 
 	test("allows Bead, Closes-Bead and several beads", () => {
-		expect(decidePrCreate("Bead: omp-plugins-dd1", true)).toBeNull();
+		expect(decidePrCreate("Bead: chezmoi-4rc2", true)).toBeNull();
 		expect(decidePrCreate("Closes-Bead: chezmoi-5vn", true)).toBeNull();
 		expect(decidePrCreate("Bead: omp-1\nBead: omp-2", true)).toBeNull();
 	});
 
-	test("rejects internal linkage placeholders instead of treating them as an escape hatch", () => {
-		const placeholder = ["No", "-Bead"].join("");
-		expect(decidePrCreate(`${placeholder}: revert of a bad merge`, true)).not.toBeNull();
-		expect(decidePrCreate(`${placeholder}:`, true)).not.toBeNull();
-	});
 
 	test("stays silent where beads is not active", () => {
 		expect(decidePrCreate("Adds a fish alias.", false)).toBeNull();

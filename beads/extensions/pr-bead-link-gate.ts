@@ -5,7 +5,7 @@ import type { ExtensionAPI, ToolCallEvent } from "@oh-my-pi/pi-coding-agent";
 import { commandSegments, invocation, type Token } from "./shell-command.ts";
 
 /**
- * A PR that names no bead is a PR nobody can trace back to a decision.
+ * A PR that names neither a bead nor a reason is a PR nobody can trace back to a decision.
  *
  * The pointer has to exist at creation, because that is the only moment the
  * author knows which beads the branch implements; a later audit finds a merged
@@ -21,6 +21,7 @@ import { commandSegments, invocation, type Token } from "./shell-command.ts";
 
 const MAX_COMMAND_LENGTH = 64_000;
 const BEAD_REF = /(?:^|\s)(?:Bead|Closes-Bead|Bead-Id):\s*[A-Za-z][A-Za-z0-9_-]*-[A-Za-z0-9]+/i;
+const NO_BEAD_REF = /(?:^|\s)No-Bead:\s*\S+/i;
 
 /** Flags whose following token is a value, so a `--body` inside one is not the body. */
 const VALUE_FLAGS: Record<string, true> = {
@@ -49,7 +50,7 @@ const VALUE_FLAGS: Record<string, true> = {
 };
 
 export const REASON =
-	"This PR names no bead. Where beads is active, a PR and its beads point at each other: the body names what it implements, and each bead carries `pr` metadata, so a later session finds the decision without scanning GitHub history. Add a `Bead: <id>` line (several are fine) and stamp `bd update <id> --set-metadata pr=<n>` after creation.";
+	"This PR names no bead or reason for having none. Where beads is active, a PR and its beads point at each other: the body names what it implements, and each bead carries `pr` metadata, so a later session finds the decision without scanning GitHub history. Add a `Bead: <id>` line (several are fine) and stamp `bd update <id> --set-metadata pr=<n>` after creation, or state a truthful `No-Bead: <reason>` when no governing bead exists.";
 
 export function beadsActive(dir: string): boolean {
 	let current = resolve(dir);
@@ -105,11 +106,11 @@ export function decidePrCreate(
 ): { block: true; reason: string } | null {
 	if (!active) return null;
 	if (body === null) return null;
-	if (BEAD_REF.test(body)) return null;
+	if (BEAD_REF.test(body) || NO_BEAD_REF.test(body)) return null;
 	return { block: true, reason: REASON };
 }
 
-/** Blocks when any `gh pr create` in the command carries a bead-less body. */
+/** Blocks when any `gh pr create` in the command carries neither a bead nor a truthful no-bead reason. */
 export function decideCommand(
 	command: string,
 	active: boolean | ((segment: string) => boolean),
