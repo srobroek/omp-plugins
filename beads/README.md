@@ -23,7 +23,7 @@ Install this plugin in a repository with `.beads/`. The plugin pins that reposit
 - `bd-close-gate` protects close operations.
 - `session-beads-lifecycle` reports unresolved claims and failures.
 - `pr-bead-link-gate` links pull requests to beads.
-
+- `pr-bead-link-gate` links pull requests to beads. A live ledger requires a Bead, Closes-Bead, or Bead-Id trailer; a regular-file `.beads/RETIRED` marker opts out the nearest ledger. This marker belongs to the gate, not to bd configuration; `No-Bead:` is not accepted.
 ## Session behavior
 
 The session extension reports unresolved gates at startup. It reports held claims and pending failures at session end.
