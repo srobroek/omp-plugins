@@ -115,7 +115,7 @@ formulas = sorted(p.stem.replace(".formula", "") for p in DESIGN.glob("formulas/
 poured = [f for f in formulas if not f.startswith("mol-")]
 bonded = [f for f in formulas if f.startswith("mol-")]
 check("three poured tiers carry no mol- prefix", len(poured) == 3, f"poured={poured}")
-check("seven bondable mols carry the prefix", len(bonded) == 7, f"bonded={bonded}")
+check("six bondable mols carry the prefix", len(bonded) == 6, f"bonded={bonded}")
 check("retired mol-design-node is gone", "mol-design-node" not in formulas)
 
 readme = (DESIGN / "README.md").read_text(encoding="utf-8")
