@@ -18,9 +18,9 @@ describe("repository subprocess contract", () => {
 		process.env.PATH = `${dir}:${previousPath ?? ""}`;
 		process.env.GH_ARGS_FILE = args;
 		try {
-			expect(repositoryControlled("owner/repo")).toBe(true);
+			expect(repositoryControlled("owner/repo")).toEqual({ kind: "controlled" });
 			process.env.GH_PERMISSION = "READ";
-			expect(repositoryControlled("owner/repo")).toBe(false);
+			expect(repositoryControlled("owner/repo")).toEqual({ kind: "uncontrolled" });
 			expect(readFileSync(args, "utf8").trim().split("\n")).toEqual(["repo", "view", "owner/repo", "--json", "viewerPermission", "--jq", ".viewerPermission"]);
 		} finally {
 			if (previousPath === undefined) delete process.env.PATH;
@@ -29,6 +29,27 @@ describe("repository subprocess contract", () => {
 			else process.env.GH_PERMISSION = previousPermission;
 			if (previousArgsFile === undefined) delete process.env.GH_ARGS_FILE;
 			else process.env.GH_ARGS_FILE = previousArgsFile;
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	test("refuses when the permission lookup fails and names the failure", () => {
+		const dir = mkdtempSync(join(tmpdir(), "beads-gh-failure-"));
+		const gh = join(dir, "gh");
+		writeFileSync(gh, '#!/bin/sh\nprintf "%s" "permission lookup failed" >&2\nexit 1\n');
+		chmodSync(gh, 0o755);
+		const previousPath = process.env.PATH;
+		process.env.PATH = `${dir}:${previousPath ?? ""}`;
+		try {
+			const control = repositoryControlled("owner/repo");
+			expect(control.kind).toBe("unknown");
+			const decision = decidePrCreate("plain prose", control);
+			expect(decision?.block).toBe(true);
+			expect(decision?.reason).toContain("Repository permission could not be determined");
+			expect(decision?.reason).toContain("permission lookup failed");
+		} finally {
+			if (previousPath === undefined) delete process.env.PATH;
+			else process.env.PATH = previousPath;
 			rmSync(dir, { recursive: true, force: true });
 		}
 	});

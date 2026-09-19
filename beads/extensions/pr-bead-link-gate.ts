@@ -96,20 +96,31 @@ export function bodyOfGhCreate(segment: string): string | null {
 	return body;
 }
 
+export type RepositoryControl =
+	| { kind: "controlled" }
+	| { kind: "uncontrolled" }
+	| { kind: "unknown"; reason: string };
+
 export function decidePrCreate(
 	body: string | null,
-	active: boolean,
+	active: boolean | RepositoryControl,
 ): { block: true; reason: string } | null {
-	if (!active) return null;
+	if (active === false || (typeof active !== "boolean" && active.kind === "uncontrolled")) return null;
 	if (body === null) return null;
 	if (BEAD_REF.test(body)) return null;
+	if (typeof active !== "boolean" && active.kind === "unknown") {
+		return {
+			block: true,
+			reason: `${active.reason}. This PR must name a bead while repository control is unknown.`,
+		};
+	}
 	return { block: true, reason: REASON };
 }
 
 /** Blocks when any `gh pr create` in the command carries neither a bead nor a truthful no-bead reason. */
 export function decideCommand(
 	command: string,
-	active: boolean | ((segment: string) => boolean),
+	active: boolean | RepositoryControl | ((segment: string) => boolean | RepositoryControl),
 ): { block: true; reason: string } | null {
 	if (command.length > MAX_COMMAND_LENGTH) return null;
 	for (const segment of commandSegments(command)) {
@@ -120,9 +131,14 @@ export function decideCommand(
 	return null;
 }
 
+/**
+ * The permission lookup deliberately fails closed: today's catch silently passed, but
+ * a bead-linkage gate is safer when an unreadable repository requires operator action.
+ */
 export function controlledByViewerPermission(permission: unknown): boolean {
 	return permission === "WRITE" || permission === "MAINTAIN" || permission === "ADMIN";
 }
+
 
 export function repositoryFromGhCreate(command: string): string | null {
 	const tokens = invocation(command, ["gh", "pr", "create"]);
@@ -163,12 +179,16 @@ export function repositoryFromCurrentCheckout(cwd: string): string | null {
 	} catch { return null; }
 }
 
-export function repositoryControlled(repo: string | null): boolean {
-	if (!repo) return false;
+
+export function repositoryControlled(repo: string | null): RepositoryControl {
+	if (!repo) return { kind: "unknown", reason: "Repository permission could not be determined because the repository could not be identified" };
 	try {
 		const permission = execFileSync("gh", ["repo", "view", repo, "--json", "viewerPermission", "--jq", ".viewerPermission"], { encoding: "utf8" }).trim();
-		return controlledByViewerPermission(permission);
-	} catch { return false; }
+		return controlledByViewerPermission(permission) ? { kind: "controlled" } : { kind: "uncontrolled" };
+	} catch (error) {
+		const failure = error instanceof Error ? error.message : String(error);
+		return { kind: "unknown", reason: `Repository permission could not be determined: ${failure}` };
+	}
 }
 
 export default function prBeadLinkGate(pi: ExtensionAPI): void {
