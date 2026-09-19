@@ -1,0 +1,8 @@
+# Worktrunk project configuration. Committed, so it travels with the repository.
+# Merged after built-in defaults and before user config; see https://worktrunk.dev/config/
+
+[step.copy-ignored]
+# Installed OMP plugins are a machine-local cache that a worktree must not
+# inherit: a stale copy shadows the versions under test. Generated scaffold
+# output is regenerable and large.
+exclude = [".omp/plugins/", "graphify-out/", "repomix.xml", ".omp/scaffold-run.json"]

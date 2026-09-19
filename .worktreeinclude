@@ -1,0 +1,8 @@
+# Gitignored paths a fresh worktree needs, copied by `wt step copy-ignored`.
+# On APFS these are reflink clones, so size costs almost nothing; without the
+# copy, a focused `bun test` fails with a missing-export error that reads as
+# broken code rather than an unprovisioned checkout.
+node_modules/
+browser-tools/node_modules/
+dep-update/node_modules/
+whats-new/node_modules/
