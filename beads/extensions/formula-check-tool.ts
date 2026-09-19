@@ -1,6 +1,6 @@
-import pkg from "../package.json" with { type: "json" };
 import type { TSchema } from "@oh-my-pi/pi-ai";
 import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
+import pkg from "../package.json" with { type: "json" };
 import { invocationFromArgv } from "./bd-actor-gate.ts";
 import { withEmbeddedWriteLock, writesStore } from "./bd-embedded-write-lock.ts";
 import { envelopeData, parseTrailingJson } from "./session-beads-lifecycle.ts";
