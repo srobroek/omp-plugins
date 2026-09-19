@@ -15,6 +15,7 @@ const load = async (path: string): Promise<JsonObject> => {
     return value as JsonObject;
   } catch (error) {
     fail(`${path}: invalid JSON (${error instanceof Error ? error.message : String(error)})`);
+    throw error;
   }
 };
 const sorted = (values: Iterable<string>) => [...values].sort();
@@ -33,6 +34,7 @@ const manifestPaths = await Array.fromAsync(new Bun.Glob("*/.omp-plugin/plugin.j
 const plugins = new Set<string>();
 for (const relative of manifestPaths) {
   const name = relative.split("/")[0];
+  if (name === undefined) throw new Error(`${relative}: manifest path has no plugin directory`);
   plugins.add(name);
   const manifestPath = join(repo, relative);
   const manifest = await load(manifestPath);
@@ -55,6 +57,7 @@ for (const entry of marketplace.plugins as unknown[]) {
   const name = (entry as JsonObject).name;
   if (typeof source === "string" && source.startsWith("./")) {
     if (typeof name !== "string" || source !== `./${name}`) fail(`marketplace local source ${JSON.stringify(source)} has mismatched name`);
+    if (typeof name !== "string") throw new Error("unreachable: marketplace name was validated");
     marketplaceNames.add(name);
   }
 }
@@ -68,7 +71,12 @@ const profilePath = join(repo, "ci/plugins-full.toml");
 const profile = await readFile(profilePath, "utf8").catch(() => fail(`${profilePath}: missing`));
 const profileMatch = /plugins\s*=\s*\[([^\]]*)\]/s.exec(profile);
 if (!profileMatch) fail(`${profilePath}: missing marketplaces.plugins list`);
+const profileList = profileMatch?.[1];
+if (profileList === undefined) throw new Error(`${profilePath}: malformed marketplaces.plugins list`);
 const profileNames = new Set<string>();
-for (const match of profileMatch[1].matchAll(/"([^"\\]*(?:\\.[^"\\]*)*)"/g)) profileNames.add(JSON.parse(`"${match[1]}"`));
+for (const match of profileList.matchAll(/"([^"\\]*(?:\\.[^"\\]*)*)"/g)) {
+  const encoded = match[1];
+  if (encoded !== undefined) profileNames.add(JSON.parse(`"${encoded}"`));
+}
 describeMismatch("full CI profile and plugin manifests", profileNames, plugins);
 console.log(`PASS: validated ${plugins.size} plugins against marketplace, release-please, and package versions`);

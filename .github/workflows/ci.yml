@@ -74,18 +74,20 @@ jobs:
       - name: release-please config covers every plugin
         run: python3 scripts/build-release-config.py --check
 
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          # Pinned: build-extensions.py --check byte-compares committed dist/
+          # bundles against a fresh build, so the CI bun MUST match the bun that
+          # built the committed bundles. Bump together with a dist rebuild
+          # (dependabot-dist rebuilds automatically on Dependabot branches).
+          bun-version: "1.4.2"
+
       - name: Plugin inventory matches release metadata
         run: bun scripts/validate-plugins.ts
       - name: Full-estate profile and rule census
         run: |
           bun scripts/write-full-profile.ts --check
           bun scripts/rule-test-census.ts
-
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
-        with:
-          # Pinned: build-extensions.py --check byte-compares committed dist/
-          # Bundles are built in CI and committed to dist/. This check keeps the tracked
-          # bundles byte-identical to a fresh build using the pinned Bun version.
 
       - name: Root TypeScript quality
         run: |
