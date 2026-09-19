@@ -84,8 +84,10 @@ jobs:
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           # Pinned: build-extensions.py --check byte-compares committed dist/
-          # Bundles are built in CI and committed to dist/. This check keeps the tracked
-          # bundles byte-identical to a fresh build using the pinned Bun version.
+          # bundles against a fresh build, so the CI bun MUST match the bun that
+          # built the committed bundles. Bump together with a dist rebuild
+          # (dependabot-dist rebuilds automatically on Dependabot branches).
+          bun-version: "1.4.2"
 
       - name: Root TypeScript quality
         run: |
