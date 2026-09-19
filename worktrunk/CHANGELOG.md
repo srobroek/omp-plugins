@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.8](https://github.com/srobroek/omp-plugins/compare/worktrunk--v0.2.7...worktrunk--v0.2.8) (2026-09-19)
+
+
+### Bug Fixes
+
+* **worktrunk:** judge only resolvable filesystem paths ([c419031](https://github.com/srobroek/omp-plugins/commit/c41903147eb714386cd625f10e7a2d08ec5fb345))
+
 ## [0.2.7](https://github.com/srobroek/omp-plugins/compare/worktrunk--v0.2.6...worktrunk--v0.2.7) (2026-09-18)
 
 

@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.2.0](https://github.com/srobroek/omp-plugins/compare/project--v1.1.3...project--v1.2.0) (2026-09-19)
+
+
+### Features
+
+* **project:** add managed asset promotion tooling ([#389](https://github.com/srobroek/omp-plugins/issues/389)) ([0b86cbd](https://github.com/srobroek/omp-plugins/commit/0b86cbd425b2b7295e196f1b45c4f3ba8de74fef))
+
+
+### Refactors
+
+* **project:** make managed-asset promotion steering, not a script ([#391](https://github.com/srobroek/omp-plugins/issues/391)) ([f1e514e](https://github.com/srobroek/omp-plugins/commit/f1e514e71c2c09049e2034eac2a311ab3a243b5e))
+
 ## [1.1.3](https://github.com/srobroek/omp-plugins/compare/project--v1.1.2...project--v1.1.3) (2026-09-13)
 
 
