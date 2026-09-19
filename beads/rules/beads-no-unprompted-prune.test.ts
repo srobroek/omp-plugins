@@ -28,6 +28,10 @@ const FIRE = [
 	"bd compact --days 7 --force",
 	"bd admin compact --auto --all",
 	"bd -C . admin compact --id bd-42 --summary s.txt",
+	// Deliberate: `--dolt` is lossless, but the destructive variant differs only by
+	// a flag, so a flag-level exception would be bypassed by reordering or quoting.
+	"bd compact --dolt",
+	"bd admin compact --dolt",
 ];
 
 const HOLD = [
