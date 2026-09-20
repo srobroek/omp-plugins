@@ -171,14 +171,13 @@ describe("pinBashInput", () => {
 });
 
 describe("lifecycleBdEnvironment", () => {
-	test("sets the server credential and safety flags without inheriting a foreign store", () => {
+	test("sets embedded-store safety flags without inheriting a foreign store", () => {
 		const cwd = mkdtempSync(join(tmpdir(), "beads-lifecycle-env-"));
 		mkdirSync(join(cwd, ".beads"));
 		try {
 			const env = lifecycleBdEnvironment(cwd, { BEADS_DIR: "/foreign/.beads" });
 			expect(env.BEADS_DIR).not.toBe("/foreign/.beads");
 			expect(env.BEADS_DIR).toBe(join(cwd, ".beads"));
-			expect(env.BEADS_DOLT_SERVER_USER).toBe("beads");
 			expect(env.BD_NO_PAGER).toBe("1");
 			expect(env.BD_NON_INTERACTIVE).toBe("1");
 			expect(env.BD_DOLT_AUTO_START).toBe("false");
@@ -560,13 +559,9 @@ test("passes the effective actor into actual release commands", () => {
 		expect(handleSessionStop({ stopHookActive: true }, BEAD_LIST, new Set(["bd-probe-2m7"]))).toBeUndefined();
 	});
 
-	test("classifies access denial as an environment credential failure without blocking close", () => {
+	test("reports embedded-store read failures without server credential advice", () => {
 		const text = handleSessionStop({}, undefined, new Set(), undefined, true, 'bd exited with code 1: Error 1045 (28000): Access denied for user root')?.additionalContext ?? "";
-		expect(text).toContain("authentication/connection failed");
-		expect(text).toContain("BEADS_DOLT_SERVER_USER=beads");
-		expect(text).toContain("ignores dolt.user config");
-		expect(text).toContain("upstream issue 6598");
-		expect(text).toContain("session will close");
+		expect(text).toContain("Beads claims could not be read at session close");
 	});
 	test("nothing held, nothing said", () => {
 		expect(handleSessionStop({}, BEAD_LIST, new Set(), undefined)).toBeUndefined();
@@ -658,7 +653,7 @@ bashGates(fakePi as never);
 		if (!(env && typeof env === "object" && "BEADS_DIR" in env)) throw new Error("the rewritten env carries no BEADS_DIR");
 		return env.BEADS_DIR;
 	};
-  test("session start reports an injected bd authentication failure", async () => {
+  test("session start reports an injected embedded-store failure", async () => {
     const dir = mkdtempSync(join(tmpdir(), "beads-fake-start-"));
     mkdirSync(join(dir, ".beads"));
     setBdStreamForTests(async () => ({ failure: "bd exited with code 1: Error 1045 (28000): Access denied" }));
@@ -667,14 +662,14 @@ bashGates(fakePi as never);
       const start = handlers.session_start?.[0];
       if (start === undefined) throw new Error("session start handler was not registered");
       await start({}, { cwd: dir });
-      expect(logged[0]).toContain("authentication/connection failed");
+      expect(logged[0]).toContain("Beads gates could not be verified at session start");
     } finally {
       setBdStreamForTests(null);
       rmSync(dir, { recursive: true, force: true });
     }
   });
 
-  test("session close reports an injected bd read failure", async () => {
+  test("session close reports an injected embedded-store read failure", async () => {
     const dir = mkdtempSync(join(tmpdir(), "beads-fake-close-"));
     mkdirSync(join(dir, ".beads"));
     setBdStreamForTests(async () => ({ failure: "bd exited with code 1: Error 1045 (28000): Access denied" }));
@@ -686,7 +681,7 @@ bashGates(fakePi as never);
       if (toolResult === undefined || stop === undefined) throw new Error("lifecycle handlers were not registered");
       toolResult({ toolName: "bash", toolCallId: "write", isError: false, input: { command: "bd update bd-fake --claim" }, content: [] }, ctx);
       const result = await stop({}, ctx) as { additionalContext?: string };
-      expect(result.additionalContext).toContain("authentication/connection failed");
+      expect(result.additionalContext).toContain("Beads claims could not be read at session close");
     } finally {
       setBdStreamForTests(null);
       rmSync(dir, { recursive: true, force: true });
