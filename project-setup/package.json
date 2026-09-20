@@ -1,0 +1,7 @@
+{
+  "name": "@srobroek/project-setup",
+  "version": "0.1.0",
+  "description": "Interview-led repository setup: classify, agree a plan, then apply a static asset library.",
+  "private": true,
+  "omp": {}
+}

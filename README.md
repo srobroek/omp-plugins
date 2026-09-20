@@ -112,12 +112,12 @@ Three generators own the files below, so do not hand-edit them. CI fails when a 
 
 Each plugin owns its version in `<plugin>/.omp-plugin/plugin.json`. The release tool bumps only the
 files its config names. OMP, meanwhile, compares `plugins[].version` in the single top-level
-catalog, so a release assembles that catalog from the 25 manifests.
+catalog, so a release assembles that catalog from the 26 manifests.
 
-The catalog carries 36 entries: the 25 plugins here, plus 11 third-party plugins it advertises from
-`scripts/third-party-plugins.json`. An advertised entry is a pointer, not a dependency: installing a
-plugin from this catalog pulls in none of the others. `scripts/check-catalog-validation.py` rejects a
-malformed third-party file rather than publishing the catalog without those entries.
+The catalog carries 37 entries: the 26 plugins here, plus 11 third-party plugins from
+`scripts/third-party-plugins.json`. Install resolution is package-local.
+`scripts/check-catalog-validation.py` rejects malformed third-party input instead of publishing
+an incomplete catalog.
 
 `scripts/check-contract.py` guards three failures that stay silent at runtime. A rule with no
 `description` lands in no bucket. A frontmatter `name` that disagrees with its filename is not the

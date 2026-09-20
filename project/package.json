@@ -1,7 +1,7 @@
 {
   "name": "@srobroek/project",
   "version": "1.2.1",
-  "description": "Project lifecycle: brownfield onboarding, license selection, and user journeys.",
+  "description": "Project lifecycle: license selection and user journeys.",
   "private": true,
   "omp": {
     "extensions": [

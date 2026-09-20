@@ -14,6 +14,7 @@
   "find-tools": "1.0.4",
   "go": "0.3.4",
   "project": "1.2.1",
+  "project-setup": "0.1.0",
   "python": "0.3.4",
   "quality": "1.2.0",
   "rust": "0.6.4",

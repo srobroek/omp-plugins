@@ -1,0 +1,27 @@
+# Included by .gitlab-ci.yml through `include: - local: .gitlab/ci/*.yml`.
+# GitLab jobs install their toolchain through mise rather than a setup action.
+
+.ts-setup:
+  image: debian:stable-slim
+  before_script:
+    - apt-get update -qq && apt-get install -yqq curl git unzip
+    - curl -sSf https://mise.run | sh
+    - export PATH="$HOME/.local/bin:$HOME/.local/share/mise/shims:$PATH"
+    - mise install --yes
+    - eval "$(mise activate bash --shims)"
+    - bun install --frozen-lockfile
+
+ts-lint:
+  extends: .ts-setup
+  stage: lint
+  script:
+    - bunx biome ci .
+    - bunx oxlint
+    - bunx tsc --noEmit
+    - bunx knip
+
+ts-test:
+  extends: .ts-setup
+  stage: test
+  script:
+    - bun test

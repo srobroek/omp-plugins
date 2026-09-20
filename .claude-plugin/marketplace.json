@@ -108,10 +108,17 @@
     },
     {
       "name": "project",
-      "description": "Project lifecycle: brownfield onboarding, license selection, and user journeys.",
+      "description": "Project lifecycle: license selection and user journeys.",
       "source": "./project",
       "version": "1.2.1",
       "category": "productivity"
+    },
+    {
+      "name": "project-setup",
+      "description": "Interview-led repository setup: classify, agree a plan, then apply a static asset library.",
+      "source": "./project-setup",
+      "version": "0.1.0",
+      "category": "development"
     },
     {
       "name": "python",

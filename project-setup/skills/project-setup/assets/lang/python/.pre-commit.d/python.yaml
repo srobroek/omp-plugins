@@ -1,0 +1,28 @@
+# Folded into .pre-commit-config.yaml by `just hooks-merge`, or read directly by
+# prek's workspace mode when this sits in a monorepo member.
+#
+# ruff format rewrites files, so it stays a hook. The type check and the
+# dependency check read committed state and run in CI, which is what gates a
+# merge.
+repos:
+  - repo: local
+    hooks:
+      - id: ruff-format
+        name: ruff format
+        entry: uv run ruff format
+        language: system
+        types: [python]
+
+      - id: ruff-check
+        name: ruff check
+        entry: uv run ruff check --fix
+        language: system
+        types: [python]
+
+      - id: ty
+        name: ty (type check)
+        entry: uv run ty check
+        language: system
+        types: [python]
+        pass_filenames: false
+        stages: [pre-push]

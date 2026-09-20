@@ -1,0 +1,27 @@
+# Included by .gitlab-ci.yml through `include: - local: .gitlab/ci/*.yml`.
+# GitLab jobs install their toolchain through mise rather than a setup action.
+
+.python-setup:
+  image: debian:stable-slim
+  before_script:
+    - apt-get update -qq && apt-get install -yqq curl git
+    - curl -sSf https://mise.run | sh
+    - export PATH="$HOME/.local/bin:$HOME/.local/share/mise/shims:$PATH"
+    - mise install --yes
+    - eval "$(mise activate bash --shims)"
+    - uv sync --frozen
+
+python-lint:
+  extends: .python-setup
+  stage: lint
+  script:
+    - uv run ruff format --check .
+    - uv run ruff check .
+    - uv run ty check
+    - uv run deptry .
+
+python-test:
+  extends: .python-setup
+  stage: test
+  script:
+    - uv run pytest

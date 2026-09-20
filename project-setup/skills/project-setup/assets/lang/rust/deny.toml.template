@@ -1,0 +1,42 @@
+# cargo-deny checks advisories, licences, bans, and sources. osv-scanner overlaps
+# only on advisories; the licence, ban, and registry policy below has no
+# osv-scanner equivalent.
+#
+#   cargo deny check              all of it
+#   cargo deny check licenses     just the allowlist
+
+[graph]
+all-features = true
+
+[advisories]
+# `deny` on an unmaintained crate is too aggressive for a gate: it fires on
+# transitive dependencies nobody in the tree can fix.
+yanked = "deny"
+unmaintained = "workspace"
+
+[licenses]
+# A dependency carrying anything outside this list fails the build. Add to the
+# list deliberately rather than widening it to silence a failure.
+allow = [
+  "@@SPDX_ID@@",
+  "Apache-2.0",
+  "Apache-2.0 WITH LLVM-exception",
+  "MIT",
+  "BSD-2-Clause",
+  "BSD-3-Clause",
+  "ISC",
+  "Unicode-3.0",
+  "Zlib",
+]
+confidence-threshold = 0.9
+
+[bans]
+# Two versions of one crate means both get compiled and linked. Usually a
+# transitive lag rather than a mistake, so it warns.
+multiple-versions = "warn"
+wildcards = "deny"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]

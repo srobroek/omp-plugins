@@ -1,0 +1,43 @@
+# go
+#
+# The upstream deny-list template, vendored here so the fold reads it from the repository and
+# needs no network. Vendor mode is the one choice the upstream template cannot express, so it
+# follows as an optional block.
+#
+# Source: github/gitignore Go.gitignore
+# If you prefer the allow list template instead of the deny list, see community template:
+# https://github.com/github/gitignore/blob/main/community/Golang/Go.AllowList.gitignore
+#
+# Binaries for programs and plugins
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Test binary, built with `go test -c`
+*.test
+
+# Output of the go coverage tool, specifically when used with LiteIDE
+*.out
+coverage.*
+*.coverprofile
+profile.cov
+
+# Dependency directories (remove the comment below to include it)
+# vendor/
+
+# Go workspace file
+go.work
+go.work.sum
+
+# env file
+.env
+
+# Editor/IDE
+# .idea/
+# .vscode/
+
+# OPTIONAL BEGIN vendor/ not committed -- delete both lines and the entry between them under vendor mode
+vendor/
+# OPTIONAL END

@@ -9,12 +9,6 @@ The plugin can apply changes for PyPI and npm. For Rust and Go, it only provides
 |------|------|
 | `dep-update` | Upgrade dependencies, check outdated packages |
 
-## Extensions
-
-- `fixture-write-gate`: blocks `edit`/`write` of `.project-setup/answers.toml`
-  and `.project-setup/sources.toml` at any depth.
-  The project-setup runner owns these fixtures. This plugin reads them only to report baseline pins and drift.
-
 ## Rules
 
 | Name | When |

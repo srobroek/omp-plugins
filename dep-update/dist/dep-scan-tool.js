@@ -1223,7 +1223,6 @@ var USER_AGENT = "dep-update-skill (+https://github.com/srobroek/agentic-package
 var FETCH_TIMEOUT_MS = 1e4;
 var NODE_VERSION = /^=?v?(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-((?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*))*))?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/;
 var PYTHON_VERSION = /^(?:={1,2})?v?(\d+)(?:\.(\d+))?(?:\.(\d+))?(?:[-_.]?(a|b|rc|alpha|beta|pre|preview)[-_.]?\d*)?(?:[-_.]?post[-_.]?\d*)?(?:[-_.]?(dev)[-_.]?\d*)?(?:\+[a-z0-9]+(?:[-_.][a-z0-9]+)*)?$/i;
-var PROTECTED_NAME = /(?:^|[\\/])(?:\.project-setup[\\/]answers|\.project-setup[\\/]sources)\.toml$/;
 function normalizeVersion(raw, ecosystem = "npm") {
   if (typeof raw !== "string")
     return null;
@@ -1421,21 +1420,10 @@ async function readTomlFile(path) {
     return null;
   }
 }
-async function detectNodePm(root) {
+function detectNodePm(root) {
   const override = process.env.DEP_UPDATE_PKG_MANAGER ?? "";
   if (override)
     return override;
-  const answers = join2(root, ".project-setup/answers.toml");
-  if (isFile(answers)) {
-    try {
-      const data = await readTomlFile(answers);
-      const module = data?.module ?? {};
-      const langTs = module["lang-ts"] ?? {};
-      const pinned = langTs.package_manager || langTs.package_manager_pin || "";
-      if (pinned)
-        return (String(pinned).split("@")[0] ?? "").trim();
-    } catch {}
-  }
   if (isFile(join2(root, "pnpm-lock.yaml")))
     return "pnpm";
   if (isFile(join2(root, "bun.lock")) || isFile(join2(root, "bun.lockb")))
@@ -1643,9 +1631,6 @@ async function applyBump(ecosystem, name, version, root, options = {}) {
   if (!isDir(root)) {
     return { exit: 2, text: `ERROR: '${root}' is not a directory` };
   }
-  if (PROTECTED_NAME.test(name)) {
-    return { exit: 2, text: "ERROR: refusing to touch project-setup files" };
-  }
   const lines = [`dep-update/apply: ${ecosystem} ${name} -> ${version}`];
   if (ecosystem === "pypi" || ecosystem === "python") {
     if (!which("uv")) {
@@ -1673,7 +1658,7 @@ async function applyBump(ecosystem, name, version, root, options = {}) {
 `) };
   }
   if (["npm", "node", "pnpm", "yarn", "bun"].includes(ecosystem)) {
-    let pm = await detectNodePm(root);
+    let pm = detectNodePm(root);
     const cmds = {
       pnpm: ["pnpm", "update", `${name}@${version}`],
       bun: ["bun", "add", `${name}@${version}`],

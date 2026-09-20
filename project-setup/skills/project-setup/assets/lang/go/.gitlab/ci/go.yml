@@ -1,0 +1,26 @@
+# Included by .gitlab-ci.yml through `include: - local: .gitlab/ci/*.yml`.
+# GitLab jobs install their toolchain through mise rather than a setup action.
+
+.go-setup:
+  image: debian:stable-slim
+  before_script:
+    - apt-get update -qq && apt-get install -yqq curl git
+    - curl -sSf https://mise.run | sh
+    - export PATH="$HOME/.local/bin:$HOME/.local/share/mise/shims:$PATH"
+    - mise install --yes
+    - eval "$(mise activate bash --shims)"
+
+go-lint:
+  extends: .go-setup
+  stage: lint
+  script:
+    - test -z "$(gofmt -l .)" || { gofmt -l .; exit 1; }
+    - golangci-lint run ./...
+    - go mod tidy -diff
+    - govulncheck ./...
+
+go-test:
+  extends: .go-setup
+  stage: test
+  script:
+    - go test -race ./...

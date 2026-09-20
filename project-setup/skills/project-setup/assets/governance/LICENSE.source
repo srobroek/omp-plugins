@@ -1,0 +1,16 @@
+# License selection source
+
+Choose one supported SPDX identifier and copy the complete corresponding bundled asset to the
+target repository's `LICENSE` file. This source file is not copied as `LICENSE`; applying a plan
+never fetches license text from the network.
+
+| SPDX identifier | Bundled asset | Apply-time substitution |
+|---|---|---|
+| `MIT` | `assets/governance/licenses/MIT.txt` | Replace `<year>` and `<copyright holders>` with the accepted year and copyright holder. |
+| `Apache-2.0` | `assets/governance/licenses/Apache-2.0.txt` | Replace `[yyyy]` and `[name of copyright owner]` in the appendix with the accepted year and copyright holder. |
+| `MPL-2.0` | `assets/governance/licenses/MPL-2.0.txt` | Copy byte for byte; no substitution is required by the license text. |
+| `AGPL-3.0-only` | `assets/governance/licenses/AGPL-3.0-only.txt` | Copy byte for byte; no substitution is required by the license text. |
+
+Record the selected SPDX identifier and copyright holder in the plan. Copy only the exact mapped
+asset and perform only the substitution listed above; do not replace the license text with a URL,
+a summary, or an unresolved token.

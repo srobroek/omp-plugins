@@ -1,0 +1,14 @@
+# .pre-commit.d/api.yaml -- folded into .pre-commit-config.yaml by `just hooks-merge`.
+#
+# Only the lint runs at commit time. The breaking-change check needs a baseline ref, and
+# a commit on a fresh branch has no merge base to compare against yet, so it belongs in
+# CI where the pull request defines one.
+repos:
+  - repo: local
+    hooks:
+      - id: vacuum
+        name: vacuum (OpenAPI lint)
+        entry: vacuum lint --fail-severity @@API_FAIL_SEVERITY@@
+        language: system
+        files: ^openapi\.(yaml|yml|json)$
+        groups: [quality]

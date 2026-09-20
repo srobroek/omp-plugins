@@ -1,0 +1,24 @@
+name: CI gate
+description: Fails when any job in the caller's needs context failed or was cancelled.
+
+inputs:
+  needs:
+    description: The caller's needs context, passed as toJSON(needs).
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Check job results
+      shell: bash
+      env:
+        NEEDS: ${{ inputs.needs }}
+      run: |
+        set -euo pipefail
+        failed=$(printf '%s' "$NEEDS" \
+          | python3 -c 'import json,sys; d=json.load(sys.stdin); print(" ".join(k for k,v in d.items() if v.get("result") not in ("success","skipped")))')
+        if [ -n "$failed" ]; then
+          echo "::error::Required jobs did not pass: $failed"
+          exit 1
+        fi
+        echo "All required jobs passed."

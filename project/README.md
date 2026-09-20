@@ -1,10 +1,9 @@
 # project
 
-Set up existing repositories and author, validate, and maintain user journeys.
+Select a license, and author, validate, and maintain user journeys.
 
 ## Skills
 
-- `brownfield-project`: retrofit an existing repository with agentic tooling
 - `license-picker`: select an OSI-approved license from constraints
 - `journey-init`: scaffold a `user-journeys` directory
 - `journey-write`: author or amend journeys from feature evidence

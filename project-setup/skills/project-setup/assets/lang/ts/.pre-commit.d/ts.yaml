@@ -1,0 +1,29 @@
+# Folded into .pre-commit-config.yaml by `just hooks-merge`, or read directly by
+# prek's workspace mode when this sits in a monorepo member.
+#
+# biome rewrites files, so it stays a hook. oxlint, tsc, and knip read committed
+# state and run in CI, which is what gates a merge.
+repos:
+  - repo: local
+    hooks:
+      - id: biome
+        name: biome (format and assists)
+        entry: bunx biome check --write --no-errors-on-unmatched
+        language: system
+        types_or: [ts, tsx, javascript, jsx, json, css]
+
+      - id: oxlint
+        name: oxlint
+        entry: bunx oxlint
+        language: system
+        types_or: [ts, tsx, javascript, jsx]
+        pass_filenames: false
+        stages: [pre-push]
+
+      - id: tsc
+        name: tsc --noEmit
+        entry: bunx tsc --noEmit
+        language: system
+        types_or: [ts, tsx]
+        pass_filenames: false
+        stages: [pre-push]
