@@ -1,7 +1,7 @@
 {
   "architecture": "0.4.1",
   "authoring": "2.0.5",
-  "beads": "2.0.3",
+  "beads": "2.0.4",
   "browser-tools": "0.3.8",
   "build": "0.6.2",
   "chezmoi": "0.4.10",
@@ -15,13 +15,13 @@
   "go": "0.3.4",
   "project": "1.2.1",
   "python": "0.3.4",
-  "quality": "1.1.4",
+  "quality": "1.2.0",
   "rust": "0.6.4",
-  "safety": "0.6.7",
+  "safety": "0.6.8",
   "session": "1.2.1",
   "speckit": "0.7.4",
   "toolchain": "0.3.8",
   "typescript": "0.3.4",
   "whats-new": "0.3.4",
-  "worktrunk": "1.1.0"
+  "worktrunk": "1.1.1"
 }

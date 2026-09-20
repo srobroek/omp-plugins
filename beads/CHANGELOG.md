@@ -1,5 +1,18 @@
 # Changelog
 
+## [2.0.4](https://github.com/srobroek/omp-plugins/compare/beads--v2.0.3...beads--v2.0.4) (2026-09-20)
+
+
+### Bug Fixes
+
+* **beads:** remove dead shared-server credential steering ([#432](https://github.com/srobroek/omp-plugins/issues/432)) ([0f01cd5](https://github.com/srobroek/omp-plugins/commit/0f01cd5732667a4a6e5c563075a9574914fc28ff))
+* **beads:** say why the prune gate also stops lossless compaction ([#431](https://github.com/srobroek/omp-plugins/issues/431)) ([bd837d8](https://github.com/srobroek/omp-plugins/commit/bd837d814c252d8be23e66dc333a4d40052d565b))
+
+
+### Documentation
+
+* **beads:** add storage-maintenance steering ([#430](https://github.com/srobroek/omp-plugins/issues/430)) ([1cedb68](https://github.com/srobroek/omp-plugins/commit/1cedb68534e3393d0f6a49c06dc9230fa45527a3))
+
 ## [2.0.3](https://github.com/srobroek/omp-plugins/compare/beads--v2.0.2...beads--v2.0.3) (2026-09-19)
 
 

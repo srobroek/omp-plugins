@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.6.8](https://github.com/srobroek/omp-plugins/compare/safety--v0.6.7...safety--v0.6.8) (2026-09-20)
+
+
+### Bug Fixes
+
+* **safety:** guard worktree, branch and stash destruction ([#434](https://github.com/srobroek/omp-plugins/issues/434)) ([2de0096](https://github.com/srobroek/omp-plugins/commit/2de0096484e595a437cef3f27d9b33d807dc58ff))
+* **safety:** stop the destruction guard blocking automatic worktree cleanup ([#435](https://github.com/srobroek/omp-plugins/issues/435)) ([ac4ad51](https://github.com/srobroek/omp-plugins/commit/ac4ad510fb2fca4056817d01d19dfde7e3e6d8be))
+
 ## [0.6.7](https://github.com/srobroek/omp-plugins/compare/safety--v0.6.6...safety--v0.6.7) (2026-09-19)
 
 

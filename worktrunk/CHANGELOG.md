@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.1.1](https://github.com/srobroek/omp-plugins/compare/worktrunk--v1.1.0...worktrunk--v1.1.1) (2026-09-20)
+
+
+### Bug Fixes
+
+* **worktree-gate:** exempt orchestrate ledger calls ([#428](https://github.com/srobroek/omp-plugins/issues/428)) ([04ba42f](https://github.com/srobroek/omp-plugins/commit/04ba42f362e93ab39070d1662879df2f6091802b))
+
 ## [1.1.0](https://github.com/srobroek/omp-plugins/compare/worktrunk--v1.0.1...worktrunk--v1.1.0) (2026-09-19)
 
 

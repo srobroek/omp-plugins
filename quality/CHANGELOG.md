@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.2.0](https://github.com/srobroek/omp-plugins/compare/quality--v1.1.4...quality--v1.2.0) (2026-09-20)
+
+
+### Features
+
+* **quality:** add watchdog-files skill for project advisor configuration ([#433](https://github.com/srobroek/omp-plugins/issues/433)) ([2894bc6](https://github.com/srobroek/omp-plugins/commit/2894bc66dad02e6754ff2fd1bda3d3fb6adcfcc4))
+
 ## [1.1.4](https://github.com/srobroek/omp-plugins/compare/quality--v1.1.3...quality--v1.1.4) (2026-09-19)
 
 
