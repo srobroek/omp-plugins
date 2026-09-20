@@ -26,7 +26,7 @@
       "name": "beads",
       "description": "Beads issue tracking: dependency DAGs, formulas, and decisions recorded as beads.",
       "source": "./beads",
-      "version": "2.0.3",
+      "version": "2.0.4",
       "category": "productivity"
     },
     {
@@ -124,7 +124,7 @@
       "name": "quality",
       "description": "Quality gates for final verification, lint and docs adjudication, and browser-verification discipline.",
       "source": "./quality",
-      "version": "1.1.4",
+      "version": "1.2.0",
       "category": "development"
     },
     {
@@ -138,7 +138,7 @@
       "name": "safety",
       "description": "Defence-in-depth advisories for destructive commands, attribution, and remote execution.",
       "source": "./safety",
-      "version": "0.6.7",
+      "version": "0.6.8",
       "category": "security"
     },
     {
@@ -180,7 +180,7 @@
       "name": "worktrunk",
       "description": "Worktree discipline for every agent: a membership-based canonical-mutation guardrail and an isolation precheck.",
       "source": "./worktrunk",
-      "version": "1.1.0",
+      "version": "1.1.1",
       "category": "development"
     },
     {
