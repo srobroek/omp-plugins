@@ -37,13 +37,13 @@ export function lifecycleBdEnvironment(cwd: string, base: NodeJS.ProcessEnv = pr
 	delete env.BEADS_DIR;
 	const resolved = sessionPinFor(cwd);
 	if (resolved !== undefined) env.BEADS_DIR = resolved;
-	if (env.BEADS_DOLT_SERVER_USER === undefined || env.BEADS_DOLT_SERVER_USER.trim() === "") env.BEADS_DOLT_SERVER_USER = "beads";
 	env.BD_NO_PAGER = "1";
 	env.BD_NON_INTERACTIVE = "1";
 	env.BD_DOLT_AUTO_START = "false";
 	env.NO_COLOR = "1";
 	return env;
 }
+
 
 function bdStoreDir(cwd: string, env: NodeJS.ProcessEnv): string | undefined {
 	const dir = env.BEADS_DIR ?? join(cwd, ".beads");
@@ -54,19 +54,11 @@ function bdStoreDir(cwd: string, env: NodeJS.ProcessEnv): string | undefined {
 	}
 }
 
-function authFailure(reason: string): boolean {
-  return /error\s*1045|access denied|connection refused/i.test(reason);
-}
 
 function bdReadFailure(scope: "start" | "close", reason: string): string {
 	const bounded = boundedFailure(reason);
-	if (authFailure(reason)) {
-		return scope === "start"
-			? `Beads gates could not be verified at session start: bd authentication/connection failed (${bounded}); supply BEADS_DOLT_SERVER_USER=beads in the bd environment (the client ignores dolt.user config; upstream issue 6598).`
-			: `Beads claims could not be read at session close: bd authentication/connection failed (${bounded}); supply BEADS_DOLT_SERVER_USER=beads in the bd environment (the client ignores dolt.user config; upstream issue 6598). The session will close without claim reconciliation.`;
-	}
 	return scope === "start"
-		? "Beads gates could not be verified at session start."
+		? `Beads gates could not be verified at session start: ${bounded}.`
 		: `Beads claims could not be read at session close: ${bounded}. A mutating command was attempted; inspect assigned and touched work before stopping.`;
 }
 
