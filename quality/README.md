@@ -7,6 +7,7 @@ Local verification and mechanical quality gates.
 | Name | When |
 |------|------|
 | `verify` | Before handoff, run final local verification |
+| `watchdog-files` | Create, audit, or retune a project's `WATCHDOG.yml` / `WATCHDOG.md` advisor files |
 
 ## Agents
 
