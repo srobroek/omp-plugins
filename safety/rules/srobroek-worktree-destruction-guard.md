@@ -1,7 +1,7 @@
 ---
 name: srobroek-worktree-destruction-guard
 description: Removing a worktree, deleting a branch, dropping a stash, or hard-resetting discards work that exists in no other place, so the call is aborted unless the user authorized that exact target in this session.
-condition: ["(?i)(?:^|\"command\"\\s*:\\s*\"|\\\\n|\\n|[;&|(]\\s*|\\bthen\\s+|\\bdo\\s+)(?:(?:then|do|else|sudo|command|env|exec|time|nohup|xargs)\\s+(?:-[-A-Za-z0-9]+\\s+)*){0,3}(?:wt|git)\\s(?:(?!\\\\n)[^;|&\\n]){0,200}?(?:worktree\\s+remove|\\bremove\\b(?:(?!\\\\n)[^;|&\\n]){0,80}?(?:--force|-D|--force-delete)|branch\\s+(?:(?!\\\\n)[^;|&\\n]){0,40}?-(?:D|-delete|d\\b)|stash\\s+(?:drop|clear)|reset\\s+(?:(?!\\\\n)[^;|&\\n]){0,40}?--hard|reflog\\s+(?:delete|expire))"]
+condition: ["(?:^|\"command\"\\s*:\\s*\"|\\\\n|\\n|[;&|(]\\s*|\\bthen\\s+|\\bdo\\s+)(?:(?:then|do|else|sudo|command|env|exec|time|nohup|xargs)\\s+(?:-[-A-Za-z0-9]+\\s+)*){0,3}(?:wt|git)\\s(?:(?!\\\\n)[^;|&\\n]){0,200}?(?:worktree\\s+remove|\\bremove\\b(?:(?!\\\\n)[^;|&\\n]){0,80}?(?:--force\\b|--force-delete\\b|\\s-[A-Za-z]*D\\b)|branch\\s+(?:(?!\\\\n)[^;|&\\n]){0,40}?(?:--delete\\b|-[A-Za-z]*[Dd]\\b)|stash\\s+(?:drop|clear)|reset\\s+(?:(?!\\\\n)[^;|&\\n]){0,40}?--hard|reflog\\s+(?:delete|expire))"]
 scope: "tool:bash"
 interruptMode: always
 ---
