@@ -197,6 +197,36 @@ const MUST_NOT_FIRE: Case[] = [
 		why: "read-only inspection",
 	},
 	{
+		id: "wt-step-prune",
+		command: "wt step prune",
+		fire: false,
+		why: "the automatic cleanup step: removes merged worktrees and branches, and must stay unblocked",
+	},
+	{
+		id: "wt-step-prune-dry-run",
+		command: "wt step prune --dry-run",
+		fire: false,
+		why: "its preview mode",
+	},
+	{
+		id: "wt-step-prune-min-age",
+		command: "wt -y -C /repo step prune --min-age 7d",
+		fire: false,
+		why: "age-limited sweep with global flags",
+	},
+	{
+		id: "wt-remove-merged-no-force",
+		command: "wt remove -y omp/agent/x",
+		fire: false,
+		why: "wt remove without --force refuses a dirty worktree and only deletes a merged branch",
+	},
+	{
+		id: "wt-remove-no-delete-branch",
+		command: "wt remove --no-delete-branch omp/agent/x",
+		fire: false,
+		why: "the safest removal form; a case-insensitive -D matched the -d inside --no-delete-branch until this case was added",
+	},
+	{
 		id: "reset-soft",
 		command: "git reset --soft HEAD~1",
 		fire: false,
