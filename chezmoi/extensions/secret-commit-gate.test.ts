@@ -295,15 +295,17 @@ describe("decideCommit", () => {
 		expect(decideCommit("git commit -m x", "/tmp/chezmoi")?.block).toBe(true);
 	});
 
-	test("allows when chezmoi or git cannot answer", () => {
+	test("refuses a plaintext secret commit when Git cannot answer", () => {
 		seedChezmoiCacheForTests(null, null);
 		setGitSpawnForTests(() => null);
 		expect(decideCommit("git commit -m x", ROOT)).toBeUndefined();
 
+		resetSecretCommitGateForTests();
 		seedChezmoiCacheForTests(null, SOURCE);
 		setGitSpawnForTests(() => null);
-		expect(chezmoiRepo()).toBeNull();
-		expect(decideCommit("git commit -m x", ROOT)).toBeUndefined();
+		const decision = decideCommit("git commit -m x", ROOT);
+		expect(decision?.block).toBe(true);
+		expect(decision?.reason.toLowerCase()).toContain("git");
 	});
 
 	test("refuses a commit reached through a nested shell, which the walk cannot follow", () => {

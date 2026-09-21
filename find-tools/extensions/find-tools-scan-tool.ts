@@ -285,16 +285,19 @@ async function scanGithub(
 	}
 	try {
 		const json = JSON.parse(r.stdout) as { items?: Array<{ name?: string; html_url?: string; repository?: { full_name?: string } }> };
+		if (!Array.isArray(json.items)) {
+			return { surface: "github", ok: false, reason: "Invalid GitHub search response", hits: [] };
+		}
 		return {
 			surface: "github",
 			ok: true,
-			hits: (json.items ?? []).slice(0, 20).map((it) => ({
+			hits: json.items.slice(0, 20).map((it) => ({
 				name: it.repository?.full_name ?? it.name ?? "item",
 				url: it.html_url,
 			})),
 		};
 	} catch {
-		return { surface: "github", ok: true, hits: [{ name: "raw", detail: r.stdout.slice(0, 1000) }] };
+		return { surface: "github", ok: false, reason: "Invalid GitHub search response", hits: [] };
 	}
 }
 

@@ -1,5 +1,5 @@
 import { accessSync, constants, statSync } from "node:fs";
-import { basename } from "node:path";
+import { basename, relative } from "node:path";
 
 import type { ExtensionAPI, ToolCallEvent } from "@oh-my-pi/pi-coding-agent";
 
@@ -125,6 +125,7 @@ const VALUE_OPTIONS: Record<string, true> = {
 let testGit: ((args: string[]) => string | null) | null = null;
 let repo: ChezmoiRepo | null = null;
 let repoResolved = false;
+let repoUnknown = false;
 
 export function setGitSpawnForTests(fn: ((args: string[]) => string | null) | null): void {
 	testGit = fn;
@@ -134,6 +135,7 @@ export function resetSecretCommitGateForTests(): void {
 	testGit = null;
 	repo = null;
 	repoResolved = false;
+	repoUnknown = false;
 }
 
 export function spawnGit(args: string[]): string | null {
@@ -167,13 +169,28 @@ export function chezmoiRepo(): ChezmoiRepo | null {
 	if (repoResolved) return repo;
 	repoResolved = true;
 	repo = null;
+	repoUnknown = false;
 	const source = loadSourceDir();
+	// No configured source is the existing local-disable state: there is no
+	// chezmoi tree to protect, so this is a definite pass rather than a git gap.
 	if (!source) return null;
 	const top = spawnGit(["-C", source, "rev-parse", "--show-toplevel"]);
 	const prefix = spawnGit(["-C", source, "rev-parse", "--show-prefix"]);
-	if (top === null || prefix === null || top.trim() === "") return null;
+	if (top === null || prefix === null || top.trim() === "") {
+		repoUnknown = true;
+		return null;
+	}
 	repo = { top: top.trim(), prefix: prefix.trim() };
 	return repo;
+}
+
+function couldBeChezmoiPath(path: string, top: string): boolean {
+	try {
+		const rel = relative(top, path);
+		return rel === "" || (!rel.startsWith("..") && !relative(top, path).startsWith("/"));
+	} catch {
+		return false;
+	}
 }
 
 function unquote(token: string): string {
@@ -551,11 +568,6 @@ function handsOffToShell(bare: string): boolean {
 	for (const segment of bare.split(/[;&|\n]+/)) {
 		const words = segment.trim().split(/\s+/).filter(Boolean);
 		let at = 0;
-		// Skip a leading `env`/`command` and any VAR=VALUE assignments: they precede the
-		// real command word rather than being it. Names are compared without their
-		// directory throughout, because `/usr/bin/env bash -c` and `/bin/sh -c` are as
-		// common as the bare spellings, and anchoring on the bare ones is what let
-		// `env FOO=1 sh -c`, `FOO=1 sh -c` and `/bin/sh -c` through.
 		while (at < words.length) {
 			const word = words[at]!;
 			const leading = word.split("/").pop() ?? word;
@@ -574,10 +586,12 @@ function handsOffToShell(bare: string): boolean {
 export function decideCommit(command: string, cwd: string): { block: true; reason: string } | undefined {
 	if (!/\bcommit\b/.test(command) || !/\bd?git\b/.test(command)) return;
 	const chezmoi = chezmoiRepo();
-	if (!chezmoi) return;
-	// Placed after the chezmoi lookup on purpose: outside a chezmoi source tree there
-	// is nothing to protect, so an ordinary repository's subshell commits are
-	// untouched. Inside one, a shape the walk cannot follow must not be allowed.
+	if (!chezmoi) {
+		if (repoUnknown) {
+			return { block: true, reason: "Git could not establish the chezmoi repository; refusing to allow a possible plaintext secret commit." };
+		}
+		return;
+	}
 	if (nestsShell(command)) {
 		return {
 			block: true,
@@ -588,11 +602,18 @@ export function decideCommit(command: string, cwd: string): { block: true; reaso
 		if (call.cwd === null) {
 			return { block: true, reason: "Cannot determine the commit's working directory safely; refusing to allow a possible secret commit." };
 		}
-		// git answers where the commit lands, so a symlinked path still compares equal.
 		const top = spawnGit(["-C", call.cwd, "rev-parse", "--show-toplevel"]);
-		if (top === null || top.trim() !== chezmoi.top) continue;
+		if (top === null) {
+			if (couldBeChezmoiPath(call.cwd, chezmoi.top)) {
+				return { block: true, reason: "Git could not establish where this commit lands; refusing to allow a possible plaintext secret commit." };
+			}
+			continue;
+		}
+		if (top.trim() !== chezmoi.top) continue;
 		const candidates = committedPaths(chezmoi.top, call.all, call.paths, call.cwd);
-		if (candidates === null) continue;
+		if (candidates === null) {
+			return { block: true, reason: "Git could not inspect the files this commit would carry; refusing to allow a possible plaintext secret commit." };
+		}
 		const offenders = secretStagedPaths(candidates, chezmoi.prefix);
 		if (offenders.length > 0) {
 			return {

@@ -144,9 +144,15 @@ export async function renderList(
 	const project = repoRoot(options.path ?? cwd);
 	const root = sessionsRoot(options.profile);
 	const family = options.worktrees === false ? [] : listWorktrees(project);
+	if (family === undefined) {
+		return {
+			text: `resume_session: could not enumerate Git worktrees for ${project}; repository history may be incomplete. No sessions were read.`,
+			count: 0,
+			ids: [],
+		};
+	}
 	const accept = acceptedPaths(family, project);
 	const byPath = new Map(family.flatMap((w) => pathKeys(w.path).map((key) => [key, w] as const)));
-
 	const found: Candidate[] = await candidates(root, accept);
 	const rows: Row[] = [];
 	const errors: string[] = [];
@@ -295,6 +301,9 @@ export async function resolveSession(cwd: string, options: ReadOptions): Promise
 	const recordedCwd = match.head.cwd;
 	const target = isAbsolute(recordedCwd) ? recordedCwd : "(missing or invalid recorded cwd)";
 	const family = isAbsolute(requested) && isAbsolute(project) ? listWorktrees(project) : [];
+	if (family === undefined) {
+		return { error: `resume_session: could not enumerate Git worktrees for ${project}; target membership is unknown. Transcript content was not read.` };
+	}
 	const accepted = isAbsolute(requested) && isAbsolute(project) ? acceptedPaths(family, project) : new Set<string>();
 	if (!isAbsolute(recordedCwd) || !isAbsolute(requested) || !isAbsolute(project) || !pathKeys(recordedCwd).some((key) => accepted.has(key))) {
 		return {

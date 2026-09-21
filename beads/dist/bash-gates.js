@@ -952,24 +952,64 @@ import { hostname } from "os";
 import { isAbsolute as isAbsolute2, join, resolve as resolve3 } from "path";
 
 // extensions/beads-store.ts
-import { execFileSync } from "child_process";
-import { realpathSync, statSync } from "fs";
-import { isAbsolute, resolve as resolve2 } from "path";
+import { spawnSync } from "child_process";
+import { lstatSync, realpathSync, statSync } from "fs";
+import { dirname, isAbsolute, resolve as resolve2 } from "path";
 function repoIdentity(cwd) {
+  const result = spawnSync("git", ["-C", cwd, "rev-parse", "--git-common-dir"], {
+    encoding: "utf8",
+    timeout: 2000,
+    stdio: ["ignore", "pipe", "pipe"]
+  });
+  if (result.error || result.signal !== null)
+    return;
+  if (result.status !== 0) {
+    const stderr = String(result.stderr ?? "");
+    if (/not a git repository/i.test(stderr) && repositoryState(cwd) === "absent")
+      return cwd;
+    return;
+  }
+  const out = String(result.stdout ?? "").trim();
   try {
-    const out = execFileSync("git", ["-C", cwd, "rev-parse", "--git-common-dir"], { encoding: "utf8", timeout: 2000, stdio: ["ignore", "pipe", "ignore"] }).trim();
     return realpathSync(isAbsolute(out) ? out : resolve2(cwd, out));
   } catch {
-    return cwd;
+    return;
+  }
+}
+function repositoryState(cwd) {
+  let current;
+  try {
+    current = realpathSync(cwd);
+  } catch {
+    return "unknown";
+  }
+  for (;; ) {
+    try {
+      lstatSync(resolve2(current, ".git"));
+      return "present";
+    } catch (error) {
+      if (!(error instanceof Error) || !("code" in error) || error.code !== "ENOENT")
+        return "unknown";
+    }
+    const parent = dirname(current);
+    if (parent === current)
+      return "absent";
+    current = parent;
   }
 }
 function sessionPinFor(cwd) {
   const local = resolve2(cwd, ".beads");
   const common = repoIdentity(cwd);
+  if (common === undefined)
+    return;
   if (common !== cwd && common.endsWith("/.git")) {
     const primaryRoot = resolve2(common, "..");
-    if (realpathSync(cwd) === primaryRoot && isDir(local))
-      return local;
+    try {
+      if (realpathSync(cwd) === primaryRoot && isDir(local))
+        return local;
+    } catch {
+      return;
+    }
     const primary = resolve2(primaryRoot, ".beads");
     if (isDir(primary))
       return primary;
@@ -1717,9 +1757,9 @@ function decideLeaseClaim(parsed, event, ctx) {
 }
 
 // extensions/pr-bead-link-gate.ts
-import { execFileSync as execFileSync2 } from "child_process";
+import { execFileSync } from "child_process";
 import { existsSync as existsSync2, statSync as statSync3 } from "fs";
-import { dirname, join as join2, resolve as resolve4 } from "path";
+import { dirname as dirname2, join as join2, resolve as resolve4 } from "path";
 var MAX_COMMAND_LENGTH = 64000;
 var BEAD_REF = /(?:^|\s)(?:Bead|Closes-Bead|Bead-Id):\s*[A-Za-z][A-Za-z0-9_-]*-[A-Za-z0-9]+/i;
 var GH_TIMEOUT_MS = 1e4;
@@ -1759,7 +1799,7 @@ function beadsActive(dir) {
         return true;
       }
     }
-    const parent = dirname(current);
+    const parent = dirname2(current);
     if (parent === current)
       return false;
     current = parent;
@@ -1864,7 +1904,7 @@ function repositoryFromView(view) {
 }
 function repositoryFromCurrentCheckout(cwd) {
   try {
-    const raw = execFileSync2("gh", ["repo", "view", "--json", "nameWithOwner,isFork,parent"], {
+    const raw = execFileSync("gh", ["repo", "view", "--json", "nameWithOwner,isFork,parent"], {
       cwd,
       encoding: "utf8",
       timeout: GH_TIMEOUT_MS,
@@ -1879,7 +1919,7 @@ function repositoryControlled(repo) {
   if (!repo)
     return { kind: "unknown", reason: "Repository permission could not be determined because the repository could not be identified" };
   try {
-    const permission = execFileSync2("gh", ["repo", "view", repo, "--json", "viewerPermission", "--jq", ".viewerPermission"], {
+    const permission = execFileSync("gh", ["repo", "view", repo, "--json", "viewerPermission", "--jq", ".viewerPermission"], {
       encoding: "utf8",
       timeout: GH_TIMEOUT_MS,
       stdio: ["ignore", "pipe", "pipe"]

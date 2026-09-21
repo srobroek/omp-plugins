@@ -484,9 +484,9 @@ async function listBugs(cwd) {
     });
     const out = await new Response(proc.stdout).text();
     const code = await proc.exited;
-    return code === 0 ? out : "";
+    return code === 0 ? out : undefined;
   } catch {
-    return "";
+    return;
   }
 }
 function unreportedFailureAdvisory(pi) {
@@ -527,9 +527,26 @@ function unreportedFailureAdvisory(pi) {
       const cwd = ctx?.cwd ?? process.cwd();
       if (beadsDir(cwd) === undefined)
         return;
-      const bugs = bugTexts(await listBugs(cwd));
-      if (bugs === undefined)
+      const listed = await listBugs(cwd);
+      if (listed === undefined) {
+        pi.sendMessage({
+          customType: "com.srobroek.beads.unreported-failure",
+          content: "Could not determine whether this session's failing checks were reported: `bd list` failed or timed out. This is advisory only; no command is blocked.",
+          display: true,
+          attribution: "user"
+        }, { triggerTurn: false });
         return;
+      }
+      const bugs = bugTexts(listed);
+      if (bugs === undefined) {
+        pi.sendMessage({
+          customType: "com.srobroek.beads.unreported-failure",
+          content: "Could not determine whether this session's failing checks were reported: `bd list` returned an unreadable response. This is advisory only; no command is blocked.",
+          display: true,
+          attribution: "user"
+        }, { triggerTurn: false });
+        return;
+      }
       const unreported = unreportedFailures([...seen.keys()], bugs);
       if (unreported.length === 0)
         return;
@@ -552,6 +569,7 @@ export {
   unreportedFailureAdvisory as default,
   failureSignals,
   formatUnreportedAdvisory,
+  listBugs,
   resetUnreportedFailureAdvisoryForTests,
   signalSubjects,
   unreportedFailures

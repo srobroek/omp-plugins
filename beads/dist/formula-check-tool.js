@@ -95,24 +95,64 @@ import { hostname } from "os";
 import { isAbsolute as isAbsolute2, join, resolve as resolve2 } from "path";
 
 // extensions/beads-store.ts
-import { execFileSync } from "child_process";
-import { realpathSync, statSync } from "fs";
-import { isAbsolute, resolve } from "path";
+import { spawnSync } from "child_process";
+import { lstatSync, realpathSync, statSync } from "fs";
+import { dirname, isAbsolute, resolve } from "path";
 function repoIdentity(cwd) {
+  const result = spawnSync("git", ["-C", cwd, "rev-parse", "--git-common-dir"], {
+    encoding: "utf8",
+    timeout: 2000,
+    stdio: ["ignore", "pipe", "pipe"]
+  });
+  if (result.error || result.signal !== null)
+    return;
+  if (result.status !== 0) {
+    const stderr = String(result.stderr ?? "");
+    if (/not a git repository/i.test(stderr) && repositoryState(cwd) === "absent")
+      return cwd;
+    return;
+  }
+  const out = String(result.stdout ?? "").trim();
   try {
-    const out = execFileSync("git", ["-C", cwd, "rev-parse", "--git-common-dir"], { encoding: "utf8", timeout: 2000, stdio: ["ignore", "pipe", "ignore"] }).trim();
     return realpathSync(isAbsolute(out) ? out : resolve(cwd, out));
   } catch {
-    return cwd;
+    return;
+  }
+}
+function repositoryState(cwd) {
+  let current;
+  try {
+    current = realpathSync(cwd);
+  } catch {
+    return "unknown";
+  }
+  for (;; ) {
+    try {
+      lstatSync(resolve(current, ".git"));
+      return "present";
+    } catch (error) {
+      if (!(error instanceof Error) || !("code" in error) || error.code !== "ENOENT")
+        return "unknown";
+    }
+    const parent = dirname(current);
+    if (parent === current)
+      return "absent";
+    current = parent;
   }
 }
 function sessionPinFor(cwd) {
   const local = resolve(cwd, ".beads");
   const common = repoIdentity(cwd);
+  if (common === undefined)
+    return;
   if (common !== cwd && common.endsWith("/.git")) {
     const primaryRoot = resolve(common, "..");
-    if (realpathSync(cwd) === primaryRoot && isDir(local))
-      return local;
+    try {
+      if (realpathSync(cwd) === primaryRoot && isDir(local))
+        return local;
+    } catch {
+      return;
+    }
     const primary = resolve(primaryRoot, ".beads");
     if (isDir(primary))
       return primary;

@@ -426,7 +426,7 @@ describe("unit: store enumeration", () => {
 describe("integration: worktrees", () => {
 	test("listWorktrees returns the family with main first", () => {
 		const { main, linked, linkedBranch } = repoWithWorktree();
-		const family = listWorktrees(linked); // enumerating from the LINKED tree still finds main
+		const family = required(listWorktrees(linked), "worktree family");
 		expect(family).toHaveLength(2);
 		expect(required(family[0], "main worktree").isMain).toBe(true);
 		expect(family.filter((w) => w.branch === linkedBranch)).toHaveLength(1);
@@ -436,6 +436,13 @@ describe("integration: worktrees", () => {
 
 	test("a non-repo directory yields no family", () => {
 		expect(listWorktrees(tmp("resume-bare-"))).toEqual([]);
+	});
+
+	test("an unreadable repository reports unknown worktree membership", () => {
+		const dir = tmp("resume-unreadable-");
+		writeFileSync(join(dir, ".git"), "gitdir: /missing");
+		expect(listWorktrees(dir)).toBeUndefined();
+		rmSync(dir, { recursive: true, force: true });
 	});
 
 	test("branchLabel reports drift when the checkout moved on", () => {

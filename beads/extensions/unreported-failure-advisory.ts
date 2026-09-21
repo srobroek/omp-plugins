@@ -277,7 +277,7 @@ export function unreportedFailures(observedSignals: readonly string[], beadsFile
  *
  * The distinction carries the whole fail-quiet contract: an empty list means the
  * repository holds no bugs, while an unreadable store means this cannot tell and
- * must not accuse.
+ * must be reported as an advisory gap.
  */
 export function bugTexts(stdout: string): string[] | undefined {
 	const data = envelopeData(parseTrailingJson(stdout));
@@ -338,7 +338,7 @@ function sessionKey(ctx: { sessionManager?: { getSessionId?: () => string } } | 
 }
 
 /** Every bug bead, open or closed: a closed bead still records the observation. */
-async function listBugs(cwd: string): Promise<string> {
+export async function listBugs(cwd: string): Promise<string | undefined> {
 	try {
 		const proc = Bun.spawn(["bd", "list", "--type", "bug", "--all", "--limit", "0", "--json"], {
 			cwd,
@@ -350,9 +350,9 @@ async function listBugs(cwd: string): Promise<string> {
 		});
 		const out = await new Response(proc.stdout).text();
 		const code = await proc.exited;
-		return code === 0 ? out : "";
+		return code === 0 ? out : undefined;
 	} catch {
-		return "";
+		return undefined;
 	}
 }
 
@@ -396,9 +396,32 @@ export default function unreportedFailureAdvisory(pi: ExtensionAPI): void {
 			const cwd = ctx?.cwd ?? process.cwd();
 			// No beads: filing is unavailable, so there is nothing to ask for.
 			if (beadsDir(cwd) === undefined) return;
-			const bugs = bugTexts(await listBugs(cwd));
-			// Unreadable store. Silence beats accusing an agent that did file.
-			if (bugs === undefined) return;
+			const listed = await listBugs(cwd);
+			if (listed === undefined) {
+				pi.sendMessage(
+					{
+						customType: "com.srobroek.beads.unreported-failure",
+						content: "Could not determine whether this session's failing checks were reported: `bd list` failed or timed out. This is advisory only; no command is blocked.",
+						display: true,
+						attribution: "user",
+					},
+					{ triggerTurn: false },
+				);
+				return;
+			}
+			const bugs = bugTexts(listed);
+			if (bugs === undefined) {
+				pi.sendMessage(
+					{
+						customType: "com.srobroek.beads.unreported-failure",
+						content: "Could not determine whether this session's failing checks were reported: `bd list` returned an unreadable response. This is advisory only; no command is blocked.",
+						display: true,
+						attribution: "user",
+					},
+					{ triggerTurn: false },
+				);
+				return;
+			}
 			const unreported = unreportedFailures([...seen.keys()], bugs);
 			if (unreported.length === 0) return;
 			pi.sendMessage(
