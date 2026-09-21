@@ -16,6 +16,16 @@ Install this plugin in a repository with `.beads/`. The plugin pins that reposit
 | `beads-composition` | Choose issues and formulas. |
 | `beads-storage-mode` | Configure the embedded store and session `BEADS_DIR` pin. |
 
+## Rules
+
+| Rule | When |
+| --- | --- |
+| `beads-reconcile-from-receipts` | When reconciling numeric-v1 landing receipts through available `bd_reconcile`; require exact proof before closure. |
+
+### `bd_reconcile`
+
+When `bd_reconcile` is available, read-only `show` and `list` operations scan landing receipts and plan repairs. `apply` defaults to `false` and writes nothing. Inspect the plan and get execution approval before setting `apply: true`. Safe convergent repairs still require exact close proof for automatic closure.
+
 ## Extensions
 
 - `bd-embedded-write-lock` serializes mutations across linked checkouts.
@@ -23,7 +33,6 @@ Install this plugin in a repository with `.beads/`. The plugin pins that reposit
 - `bd-lease-gate` records lease metadata after claims.
 - `bd-close-gate` protects close operations.
 - `session-beads-lifecycle` reports unresolved claims and failures.
-- `pr-bead-link-gate` links pull requests to beads.
 - `pr-bead-link-gate` links pull requests to beads. A live ledger requires a Bead, Closes-Bead, or Bead-Id trailer; a regular-file `.beads/RETIRED` marker opts out the nearest ledger. This marker belongs to the gate, not to bd configuration; `No-Bead:` is not accepted.
 ## Session behavior
 
@@ -35,8 +44,8 @@ The embedded write lock covers plugin-managed Beads mutations. It rejects ambigu
   It reads the bead ids from `bd`'s own output and stamps them with a separate
   `bd update`, so no command is ever rewritten; when detection misses, the bead
   simply carries no anchors, which the claiming rule treats as unprovable rather
-  than dead. The pid is the agent process, not the shell child that exits with
-  the command.
+  than dead. The pid identifies the agent process. It does not identify the shell
+  child that exits with the command.
 - `pr-bead-link-gate`: blocks `gh pr create` and the `github` device's `pr_create` when the
   body names neither a bead nor a truthful `No-Bead:` reason, and only where a `.beads`
   workspace exists. External repositories
