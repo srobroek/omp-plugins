@@ -1,6 +1,6 @@
 ---
 name: delivery-git-workflow
-description: When creating or reviewing PRs, owning automated review, proving landing, cleaning native isolation clones, or linking delivery to Beads.
+description: When creating or reviewing PRs, owning automated review, proving landing, cleaning up a landed worktree and branch, or linking delivery to Beads.
 ---
 
 # Git Workflow
@@ -43,4 +43,4 @@ For PRs entering the PR-shepherd merge queue, create before PR creation one open
 
 MUST GW-3: prove the exact reviewed work reached its final destination. For PR-backed work, read `state`, `baseRefName`, `headRefOid`, and `mergeCommit` with `gh pr view`; `MERGED` proves that the recorded PR head landed in its base, but compare the branch tip with `headRefOid` because later commits remain unlanded. An intermediate merge needs proof that it reached the final destination. Without a PR, `git cherry` or stable patch IDs can prove an individual equivalent patch, not a multi-commit squash. Inspect the recorded merge commit or exact expected hunks; fetch before reading any remote-tracking ref—without that preceding fetch, the read proves nothing. Do not use ancestry, merge-tree output, path existence, or non-empty history as sole proof.
 
-MUST GW-6: let OMP prune its native isolation clone after its branch lands. Do not use Git or Worktrunk worktree cleanup commands.
+MUST GW-6: after a branch lands, cleanup runs through `bd_reconcile`, then `delivery_cleanup`. No agent removes a worktree or deletes a branch by hand with a Git or Worktrunk command. Every agent works in a linked Worktrunk worktree (`rule://worktrunk-isolation-disabled`). Ownership, preconditions, and stopping conditions for that cleanup are in `rule://delivery-worktree-hygiene`.
