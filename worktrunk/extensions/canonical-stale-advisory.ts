@@ -45,7 +45,10 @@ export const runBehindProbe: ProbeRunner = (cwd: string): ProbeResult => {
 		return {
 			exitCode: proc.exitCode,
 			stdout: proc.stdout.toString(),
-			signal: proc.signal,
+			// Bun names this `signalCode`. A probe killed at its timeout reports
+			// the signal here and leaves `exitCode` null, which is the case that
+			// must never be read as a count.
+			signal: proc.signalCode,
 		};
 	} catch {
 		return { exitCode: null, stdout: "", signal: "probe-error" };
