@@ -87,9 +87,6 @@ function fmtTable(steps: StepResult[]): string {
 export function runGoQuality(mode: QualityMode, cwd: string): QualityReport {
     const deadline = Date.now() + TIMEOUT_MS;
     const steps: StepResult[] = [];
-    const gofmtOk = have("gofmt", deadline);
-    const goOk = have("go", deadline);
-    const lintOk = have("golangci-lint", deadline);
     const hasMod = existsSync(resolve(cwd, "go.mod"));
     if (!hasMod) {
         if (mode === "fix") steps.push({ name: "gofmt -w", status: "skip", detail: "no go.mod" });
@@ -100,6 +97,12 @@ export function runGoQuality(mode: QualityMode, cwd: string): QualityReport {
         }
         return { ok: false, complete: false, cwd, mode, steps };
     }
+    // Probe only once the project exists. With no go.mod every probe is wasted work, and
+    // three binaries at three argument sets and 1,000 ms each can reach 9,000 ms, which
+    // outlasts a CI test's own 5,000 ms limit on a runner where no Go toolchain is present.
+    const gofmtOk = have("gofmt", deadline);
+    const goOk = have("go", deadline);
+    const lintOk = have("golangci-lint", deadline);
     if (mode === "fix") {
         if (!gofmtOk) steps.push({ name: "gofmt -w", status: "skip", detail: "gofmt not on PATH" });
         else {

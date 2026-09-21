@@ -99,7 +99,6 @@ function record(steps: StepResult[], name: string, r: { exitCode: number | null;
 export function runRustQuality(mode: QualityMode, cwd: string): QualityReport {
     const deadline = Date.now() + TIMEOUT_MS;
     const steps: StepResult[] = [];
-    const cargoOk = have("cargo", deadline);
     if (!existsSync(resolve(cwd, "Cargo.toml"))) {
         if (mode === "fix") steps.push({ name: "cargo fmt", status: "skip", detail: "no Cargo.toml" });
         else {
@@ -109,6 +108,10 @@ export function runRustQuality(mode: QualityMode, cwd: string): QualityReport {
         }
         return { ok: false, complete: false, cwd, mode, steps };
     }
+    // Probe only once the manifest exists: with no Cargo.toml the probe is wasted work, and
+    // three argument sets at 1,000 ms each outlast a CI test's own limit where no Rust
+    // toolchain is installed.
+    const cargoOk = have("cargo", deadline);
     if (!cargoOk) {
         if (mode === "fix") steps.push({ name: "cargo fmt", status: "skip", detail: "cargo not on PATH" });
         else {

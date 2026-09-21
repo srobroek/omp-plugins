@@ -107,11 +107,8 @@ function record(steps: StepResult[], name: string, r: { exitCode: number | null;
 export function runPythonQuality(mode: QualityMode, cwd: string): QualityReport {
     const deadline = Date.now() + TIMEOUT_MS;
     const steps: StepResult[] = [];
-    const ruff = installed("ruff", cwd, deadline);
-    const pyright = installed("pyright", cwd, deadline);
-    const pytest = installed("pytest", cwd, deadline);
-    const hasTests = existsSync(join(cwd, "pyproject.toml")) || existsSync(join(cwd, "tests"));
     const hasPyProject = existsSync(join(cwd, "pyproject.toml"));
+    const hasTests = hasPyProject || existsSync(join(cwd, "tests"));
     if (!hasPyProject && !hasTests) {
         if (mode === "fix") {
             steps.push({ name: "ruff check --fix", status: "skip", detail: "no pyproject.toml or tests/" });
@@ -124,6 +121,13 @@ export function runPythonQuality(mode: QualityMode, cwd: string): QualityReport 
         }
         return { ok: false, complete: false, cwd, mode, steps };
     }
+    // Probe only once the project exists. With neither a pyproject.toml nor a tests/ directory
+    // every probe is wasted work, and three binaries at three argument sets and 1,000 ms each
+    // reach 9,000 ms, which outlasts a CI test's own 5,000 ms limit on a runner with no
+    // Python tooling installed.
+    const ruff = installed("ruff", cwd, deadline);
+    const pyright = installed("pyright", cwd, deadline);
+    const pytest = installed("pytest", cwd, deadline);
     if (mode === "fix") {
         if (!ruff) {
             steps.push({ name: "ruff check --fix", status: "skip", detail: "ruff not on PATH" });
