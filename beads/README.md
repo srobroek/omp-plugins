@@ -20,11 +20,11 @@ Install this plugin in a repository with `.beads/`. The plugin pins that reposit
 
 | Rule | When |
 | --- | --- |
-| `beads-reconcile-from-receipts` | When reconciling versioned landing receipts through `bd_reconcile`; require exact proof before closure. |
+| `beads-reconcile-from-receipts` | When reconciling numeric-v1 landing receipts through available `bd_reconcile`; require exact proof before closure. |
 
 ### `bd_reconcile`
 
-`bd_reconcile` scans landing receipts with read-only `show` and `list` operations. `apply` defaults to `false`, so a scan plans repairs without writing the ledger. Set `apply: true` only after inspecting the plan and obtaining execution approval; convergent repairs then pass through `bd_reconcile`.
+When `bd_reconcile` is available, read-only `show` and `list` operations scan landing receipts and plan repairs. `apply` defaults to `false` and writes nothing. Inspect the plan and get execution approval before setting `apply: true`. Safe convergent repairs still require exact close proof for automatic closure.
 
 ## Extensions
 
