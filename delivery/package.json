@@ -5,7 +5,8 @@
   "private": true,
   "omp": {
     "extensions": [
-      "./extensions/unpushed-work-advisory.ts"
+      "./extensions/unpushed-work-advisory.ts",
+      "./extensions/delivery-land-tool.ts"
     ]
   }
 }
