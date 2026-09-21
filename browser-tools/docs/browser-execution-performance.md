@@ -73,6 +73,7 @@ The plan runs ordered navigation, read, and action steps in one outer tool call.
 `browser-tools/extensions/lib/session.ts` owns live `Browser` and `Page` values, tab selection, selector refs, network events, warnings, profile state, tab generations, and document epochs.
 Top-level navigation increments the document epoch and clears selector refs before later operations can resolve them.
 The shared tab lock serializes standalone mutations and plan steps against the same selected page identity.
+A plan takes one hold on that lock. Its steps re-enter the hold, so the plan owns the tab from its first step through its last.
 
 `applyPagePolicy` enables Puppeteer interception for requests governed by the configured policy.
 It resolves each request once before invoking the asynchronous audit sink, so audit persistence cannot stall navigation.
@@ -88,6 +89,7 @@ The package pins `puppeteer-core` 25.3.0. Current public Puppeteer documentation
 
 - shared policy-aware operation primitives;
 - one FIFO writer chain per session tab with a 30-second acquisition bound;
+- one re-entrant plan hold on that chain, taken once per plan and released once;
 - fixed plan tab identity and top-level-navigation ref invalidation;
 - one `headed_plan` tool with 20-step and inline-output limits;
 - fail-fast execution and host cancellation checks;
@@ -146,7 +148,7 @@ The plan contract is:
 - the standalone operation names and parameters;
 - the standalone policy and timeouts;
 - the standalone cursor behavior;
-- the standalone tab lock;
+- the standalone tab lock, taken once by the plan and held across every step;
 - one selected tab identity fixed at plan start;
 - stop on the first failure or cancellation;
 
@@ -185,12 +187,30 @@ The chain serializes:
 - cursor visualization.
 Standalone tools and plans use the same chain.
 
+A plan acquires one hold before its first step and keeps it until its last step ends.
+Each step re-enters that hold instead of queueing behind the plan that owns the tab.
+A standalone call queued after the plan acquired the tab runs after the plan's last step, never between two steps.
+Acquiring, re-entering, and releasing a tab each record session activity, so a plan of short steps does not age into the idle sweep.
+A session with a held tab is skipped by the idle sweep entirely, so an operation allowed to wait longer than `idleCloseSec` is not closed underneath itself.
+
+A turn holds the chain of every tab it touches, including one it selects part-way through.
+`newTab` takes the created tab's hold before publishing the selection, so the created tab's policy and first navigation finish before any queued call reaches it.
+`closeTab` takes the hold of the tab it closes, so a call already working on that tab finishes first.
+Those two nested acquisitions cannot deadlock: a turn reaches them only while it holds the currently selected tab, at most one turn holds that, and a turn holding any other tab is rejected as stale beforehand.
+
 A caller waits at most 30 seconds to acquire an occupied tab.
 Expiry returns the `tab busy` category without starting that caller's browser work.
 The plan pins both the selected tab ID and its `Page` object; replacement or selection changes return `stale tab`.
 
-Cancellation is checked before every plan step.
-It is checked again after any queued operation acquires the lock.
+A session is marked closing before anything a close awaits, including the close tool's own audit record: explicit close, idle close, and page-timeout containment all mark it first, and the teardown then runs whatever that record does.
+A session has one teardown. Ownership is taken synchronously, so a caller holding the session adopts the running teardown and its result instead of looking the session up again and reporting it as unknown; the browser, the remote resources, and the profile are cleaned up once, and the reported reason names whichever path started it.
+An id no session answers to is still `unknown session`, which is what a caller naming a session that is already gone hears.
+A queued caller is woken by that mark instead of by the holder's release, and a caller arriving afterwards is refused, both with the `unknown session` category.
+A woken caller hands its queue slot to the holder it waited on, so the callers behind it keep their order.
+
+Cancellation is checked before the plan acquires the tab, again the moment it holds the tab, and again before every step.
+The middle check covers the queue wait, where a host cancellation usually lands: a plan cancelled while queued writes no plan record, runs no step, and reports `cancelled` with no executed steps.
+Each operation rechecks it once it holds or re-enters the tab.
 Target-bearing actions also recheck cancellation after cursor visualization and before dispatching the action.
 The first failure or cancellation ends the plan, and no later step starts.
 

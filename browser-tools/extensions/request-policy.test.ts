@@ -1,9 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import type { ExtensionContext } from "@oh-my-pi/pi-coding-agent";
-import type { EffectiveConfig } from "./config.ts";
-import type { InterceptedRequest, NavigationAuditSink } from "./policy.ts";
-import { createAuditWriter, deriveDomainPolicy, interceptRequest } from "./policy.ts";
-import type { HeadedSession } from "./session.ts";
+import type { EffectiveConfig } from "./lib/config.ts";
+import type { InterceptedRequest, NavigationAuditSink } from "./lib/policy.ts";
+import { createAuditWriter, deriveDomainPolicy, interceptRequest } from "./lib/policy.ts";
+import type { HeadedSession } from "./lib/session.ts";
 
 const MAIN_FRAME = { frame: "main" };
 const OTHER_FRAME = { frame: "child" };

@@ -5,11 +5,13 @@ import { dirname, join } from "node:path";
 import type { ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 import type { Browser, Page } from "puppeteer-core";
 import type { EffectiveConfig, ProfileMode } from "./config.ts";
+import { errorMessage } from "./config.ts";
 import type { CursorRuntime } from "./cursor.ts";
 import { createCursorRuntime, installCursor } from "./cursor.ts";
 import type { ResolvedBrowser } from "./discovery.ts";
 import type { RemoteResources } from "./driver.ts";
 import { closeRemote } from "./driver.ts";
+import { redact } from "./policy.ts";
 import type { MaterializedProfile } from "./profile.ts";
 import { removeMaterializedProfile } from "./profile.ts";
 
@@ -46,6 +48,13 @@ export interface NetworkEntry {
 	failure?: string;
 }
 
+/**
+ * A session is `open` until a close starts. Every teardown path — explicit close, idle
+ * sweep, page timeout, shutdown — flips it to `closing` before it touches the browser,
+ * so a caller parked on a tab lock fails instead of waking into a browser being killed.
+ */
+export type SessionLifecycle = "open" | "closing" | "closed";
+
 export interface HeadedSession {
 	id: string;
 	browser: Browser;
@@ -62,6 +71,13 @@ export interface HeadedSession {
 	refs: Map<string, Map<string, string>>;
 	network: NetworkEntry[];
 	remote?: RemoteResources;
+	lifecycle: SessionLifecycle;
+	/**
+	 * Tab locks a running operation holds right now, maintained by the tab lock in
+	 * `operations.ts`. The idle sweep reads it so a long operation that makes no lock
+	 * transitions still counts as activity.
+	 */
+	activeTabHolds: number;
 	/** Driver-owned cursor registration and mode state; never page-supplied. */
 	cursor: CursorRuntime;
 	warnings: string[];
@@ -111,7 +127,9 @@ export async function createSession(input: {
 		refs: new Map(),
 		network: [],
 		remote: input.remote,
-		cursor: createCursorRuntime({ mode: input.config.cursorMode, headless: input.config.headless, warnings }),
+		lifecycle: "open",
+		activeTabHolds: 0,
+		cursor: createCursorRuntime({ mode: input.config.cursorMode, headless: input.config.headless, warnings, redact: (text) => redact(text, input.config) }),
 		warnings,
 	};
 	await syncPages(session);
@@ -124,10 +142,40 @@ export async function createSession(input: {
 	return session;
 }
 
+/**
+ * Resolvers for the promise `whenSessionClosing` hands out. Kept beside the sessions
+ * rather than on them: only a caller that actually parks on a session needs the gate.
+ */
+const closeGates = new WeakMap<HeadedSession, PromiseWithResolvers<void>>();
+
+/**
+ * Resolves as soon as the session leaves `open`. A caller parked on a tab lock races it so
+ * a close never leaves it waiting for a turn in a browser that is going away.
+ */
+export function whenSessionClosing(session: HeadedSession): Promise<void> {
+	const existing = closeGates.get(session);
+	if (existing !== undefined) return existing.promise;
+	const gate = Promise.withResolvers<void>();
+	closeGates.set(session, gate);
+	if (session.lifecycle !== "open") gate.resolve();
+	return gate.promise;
+}
+
+/**
+ * Flips a session out of `open` and wakes everything parked on it, before the first
+ * teardown step. Idempotent: the first caller owns the transition.
+ */
+export function beginSessionClose(session: HeadedSession): void {
+	if (session.lifecycle !== "open") return;
+	session.lifecycle = "closing";
+	closeGates.get(session)?.resolve();
+}
+
 export function getSession(sessionId: string | undefined): HeadedSession {
 	if (!sessionId) throw new Error("headed-browser: sessionId is required");
 	const session = sessions.get(sessionId);
-	if (!session) throw new Error(`headed-browser: unknown session ${sessionId}`);
+	// A closing session is still in the map while its teardown runs; a new call must not get it.
+	if (!session || session.lifecycle !== "open") throw new Error(`headed-browser: unknown session ${sessionId}`);
 	session.lastActivityAt = Date.now();
 	return session;
 }
@@ -208,9 +256,36 @@ export function sessionSummary(session: HeadedSession): SessionSummary {
 	};
 }
 
-export async function closeSession(sessionId: string, reason = "close"): Promise<{ deleted: string[]; reason: string }> {
-	const session = getSession(sessionId);
-	sessions.delete(sessionId);
+export interface SessionClosure {
+	deleted: string[];
+	reason: string;
+}
+
+/**
+ * The one teardown per session. A caller that captured the session before the teardown began
+ * adopts this task instead of starting a second one, so the browser, the remote resources and
+ * the profile are cleaned up once.
+ */
+const closures = new WeakMap<HeadedSession, Promise<SessionClosure>>();
+
+/**
+ * Closes a session the caller already holds, whoever started the teardown. Ownership is taken
+ * synchronously — mark, unpublish, start, record — so a second caller arriving at any later
+ * point adopts the same task and the same result rather than finding the id gone from the map
+ * and reporting a session it was holding as unknown. That is the normal case, not a corner: the
+ * close tool awaits its audit record, and a page timeout can contain the session in that window.
+ */
+export function closeCapturedSession(session: HeadedSession, reason = "close"): Promise<SessionClosure> {
+	const running = closures.get(session);
+	if (running !== undefined) return running;
+	beginSessionClose(session);
+	sessions.delete(session.id);
+	const closure = teardownSession(session, reason);
+	closures.set(session, closure);
+	return closure;
+}
+
+async function teardownSession(session: HeadedSession, reason: string): Promise<SessionClosure> {
 	if (session.remote) await closeRemote(session.remote);
 	else {
 		let closed = false;
@@ -221,6 +296,7 @@ export async function closeSession(sessionId: string, reason = "close"): Promise
 		if (!closed) session.browser.process()?.kill();
 	}
 	const deleted = await removeMaterializedProfile(session.profile, session.config.keepArtifactsOnClose);
+	session.lifecycle = "closed";
 	return { deleted, reason };
 }
 
@@ -247,7 +323,10 @@ export async function closeAllSessions(
 ): Promise<CloseAllSessionsReport> {
 	const snapshot = [...sessions.values()];
 	if (snapshot.length === 0) return { started: 0, completed: 0, leaked: [] };
-	const close = options.close ?? closeSession;
+	// The seam stays keyed by id for a caller that owns teardown scheduling. Without one, each
+	// captured session goes through the single-flight closure: a session some other path is
+	// already tearing down is adopted, not looked up again by an id it no longer answers to.
+	const close = options.close;
 	const records = snapshot.map((session) => leakRecord(session, reason, "pending"));
 	await updateLeakManifest((current) => [
 		...current.filter((record) => !records.some((next) => next.sessionId === record.sessionId)),
@@ -259,7 +338,7 @@ export async function closeAllSessions(
 	const outcomes = new Map<string, { ok: boolean; error?: string }>();
 	const tasks = snapshot.map((session) => (async () => {
 		try {
-			await close(session.id, reason);
+			await (close ? close(session.id, reason) : closeCapturedSession(session, reason));
 			outcomes.set(session.id, { ok: true });
 		} catch (error) {
 			outcomes.set(session.id, { ok: false, error: error instanceof Error ? error.message : String(error) });
@@ -372,8 +451,23 @@ export function installIdleSweep(
 		const now = Date.now();
 		for (const session of [...sessions.values()]) {
 			if (now - session.lastActivityAt <= session.config.idleCloseSec * 1000) continue;
-			await onIdleClose?.(session);
-			await closeSession(session.id, "idle-close");
+			// A held tab is a call in progress, whatever its own timeout allows: an operation may
+			// wait longer than the idle threshold without touching the lock, and closing under it
+			// would kill the browser mid-operation. Waiters alone do not count; the holder stamps
+			// `lastActivityAt` when it releases, which starts a fresh idle window for them.
+			if (session.activeTabHolds > 0) continue;
+			// Marked before the hook: its audit write awaits, and no call may start meanwhile.
+			beginSessionClose(session);
+			try {
+				await onIdleClose?.(session);
+			} catch (error) {
+				// Decided is decided: a hook that fails must not leave a retired session's browser
+				// running, so the failure is recorded the way a failed teardown step is.
+				session.warnings.push(`headed-browser: idle-close hook failed: ${errorMessage(error)}`);
+			}
+			// By session, not by id: a page timeout may have contained it while the hook awaited,
+			// and this sweep still has to wait for that teardown rather than trip over the id.
+			await closeCapturedSession(session, "idle-close");
 		}
 	}, 30_000);
 }

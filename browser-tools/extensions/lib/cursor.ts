@@ -1,6 +1,7 @@
 import type { ElementHandle, Page } from "puppeteer-core";
 import type { CursorMode } from "./config.ts";
 import { errorMessage } from "./config.ts";
+import { redact as redactSecrets } from "./policy.ts";
 
 /**
  * Cursor visualization is decorative and untrusted. Nothing the page returns may
@@ -65,6 +66,8 @@ export interface CursorRuntime {
 	epochs: WeakMap<Page, number>;
 	warnings: string[];
 	actionCount: number;
+	/** Redacts page-controlled failures before they enter session-visible warnings. */
+	redact: (text: string) => string;
 }
 
 interface Box {
@@ -196,6 +199,8 @@ export function createCursorRuntime(input: {
 	mode: CursorMode;
 	headless: boolean;
 	warnings: string[];
+	/** Session policy redactor; the fail-closed default protects callers not yet wired to config. */
+	redact?: (text: string) => string;
 }): CursorRuntime {
 	return {
 		requested: input.mode,
@@ -204,6 +209,7 @@ export function createCursorRuntime(input: {
 		epochs: new WeakMap(),
 		warnings: input.warnings,
 		actionCount: 0,
+		redact: input.redact ?? ((text) => redactSecrets(text, { redactSecrets: true })),
 	};
 }
 
@@ -216,7 +222,7 @@ export async function installCursor(runtime: CursorRuntime, page: Page): Promise
 	if (runtime.mode === "off") return false;
 	if (runtime.registrations.has(page)) return true;
 	try {
-		const registration = await page.evaluateOnNewDocument(CURSOR_PRELOAD_SOURCE);
+		const registration = await withCursorDeadline(page.evaluateOnNewDocument(CURSOR_PRELOAD_SOURCE), "preload registration");
 		runtime.registrations.set(page, registration.identifier);
 		runtime.epochs.set(page, 0);
 		page.on("framenavigated", (frame) => {
@@ -224,7 +230,7 @@ export async function installCursor(runtime: CursorRuntime, page: Page): Promise
 		});
 		// A preload only covers documents created after registration, so the document
 		// already loaded in this page is bootstrapped exactly once, here.
-		await page.evaluate(CURSOR_PRELOAD_SOURCE);
+		await withCursorDeadline(page.evaluate(CURSOR_PRELOAD_SOURCE), "current-document bootstrap");
 	} catch (error) {
 		disableCursor(runtime, `preload installation failed: ${errorMessage(error)}`);
 		return false;
@@ -247,8 +253,10 @@ export async function pointCursorAtTarget(
 	page: Page,
 	resolve: () => Promise<ElementHandle<Element>>,
 	signal?: unknown,
+	runDriver: <T>(operation: () => Promise<T>) => Promise<T> = (operation) => operation(),
 ): Promise<ElementHandle<Element>> {
-	let element = await resolve();
+	let element = await runDriver(resolve);
+	let elementDisposed = false;
 	const cancelled =
 		typeof signal === "object" && signal !== null && "aborted" in signal && (signal as { aborted?: unknown }).aborted === true;
 	if (runtime.mode === "off" || cancelled) return element;
@@ -256,23 +264,44 @@ export async function pointCursorAtTarget(
 		if (attempt > 0) {
 			// The reposition resolves a fresh handle; the superseded one would otherwise
 			// keep its remote object alive for the life of the page.
-			await disposeHandle(element);
-			element = await resolve();
+			if (!elementDisposed) await runDriver(() => disposeHandle(element));
+			element = await runDriver(resolve);
+			elementDisposed = false;
 		}
-		await scrollTargetIntoView(element);
-		const before = await readBox(element);
+		await runDriver(() => scrollTargetIntoView(element));
+		const before = await runDriver(() => readBox(element));
 		// An unrendered target has nothing to point at; the action reports its own error.
 		if (!before) return element;
 		const travelMs = runtime.mode === "animated" ? CURSOR_TOKENS.travelMs : 0;
 		// Downgraded, cancelled, or failed visualization must never gate the action.
-		if (!(await send(runtime, page, "move", boxCenter(before), travelMs))) return element;
-		const after = await readBox(element);
+		if (!(await send(runtime, page, "move", boxCenter(before), travelMs))) {
+			const failedMoveBox = await runDriver(() => readBox(element));
+			if (failedMoveBox && isSameTarget(before, failedMoveBox)) return element;
+			await runDriver(() => disposeHandle(element));
+			elementDisposed = true;
+			continue;
+		}
+		const after = await runDriver(() => readBox(element));
 		if (after && isSameTarget(before, after)) {
-			await send(runtime, page, "pulse", boxCenter(after), CURSOR_TOKENS.pulseMs);
-			return element;
+			if (!(await send(runtime, page, "pulse", boxCenter(after), CURSOR_TOKENS.pulseMs))) {
+				const failedPulseBox = await runDriver(() => readBox(element));
+				if (failedPulseBox && isSameTarget(after, failedPulseBox)) return element;
+				await runDriver(() => disposeHandle(element));
+				elementDisposed = true;
+				continue;
+			}
+			// A page mutation can replace or move the actionable node during the pulse.
+			// Re-read the same driver-owned handle: a detached handle reports no box,
+			// while a moved handle fails the same geometry invariant used before acting.
+			const pulseBox = await runDriver(() => readBox(element));
+			if (pulseBox && isSameTarget(after, pulseBox)) return element;
+			await runDriver(() => disposeHandle(element));
+			elementDisposed = true;
+			// Retry from a fresh driver-resolved handle within the existing attempt bound.
+			continue;
 		}
 	}
-	await disposeHandle(element);
+	if (!elementDisposed) await runDriver(() => disposeHandle(element));
 	throw new Error(
 		`headed-browser: target_moved; the target shifted beyond ${CURSOR_CENTER_TOLERANCE_PX} CSS pixels after ${CURSOR_MAX_ATTEMPTS} positioning attempts and no action was performed`,
 	);
@@ -280,16 +309,31 @@ export async function pointCursorAtTarget(
 
 /** Removes the overlay on completion, failure, cancellation, or teardown. Never throws. */
 export async function clearCursor(runtime: CursorRuntime, page: Page): Promise<void> {
-	if (runtime.mode === "off" || !runtime.registrations.has(page)) return;
+	if (!runtime.registrations.has(page)) return;
 	await runCommand(page, buildCommand(runtime, page, "hide", { x: 0, y: 0 }, 0));
 }
 
 async function prefersReducedMotion(page: Page): Promise<boolean> {
 	try {
-		return await page.evaluate(readReducedMotion);
+		return await withCursorDeadline(page.evaluate(readReducedMotion), "reduced-motion probe");
 	} catch {
 		return false;
 	}
+}
+
+async function withCursorDeadline<T>(operation: Promise<T>, label: string): Promise<T> {
+	const result = await Promise.race([
+		operation.then(
+			(value) => ({ kind: "value" as const, value }),
+			(error: unknown) => ({ kind: "error" as const, error }),
+		),
+		Bun.sleep(CURSOR_TOKENS.commandDeadlineMs).then(() => ({ kind: "timeout" as const })),
+	]);
+	if (result.kind === "error") throw result.error;
+	if (result.kind === "timeout") {
+		throw new Error(`headed-browser: cursor ${label} gave no response within ${CURSOR_TOKENS.commandDeadlineMs} ms`);
+	}
+	return result.value;
 }
 
 function buildCommand(
@@ -344,7 +388,22 @@ async function runCommand(
 	// A wedged page must not stall the action long enough to trip the session timeout.
 	const outcome = await Promise.race([tracked, Bun.sleep(CURSOR_TOKENS.commandDeadlineMs).then(() => "timeout" as const)]);
 	if (outcome === "ok") return { ok: true };
-	if (outcome === "timeout") return { ok: false, detail: `no response within ${CURSOR_TOKENS.commandDeadlineMs} ms` };
+	if (outcome === "timeout") {
+		if (command.kind !== "hide") {
+			void tracked.then((settled) => {
+				if (settled !== "ok") return;
+				const cleanup: CursorVisualCommand = {
+					...command,
+					actionId: `${command.actionId}-late-cleanup`,
+					kind: "hide",
+					target: { x: 0, y: 0 },
+					durationMs: 0,
+				};
+				void withCursorDeadline(page.evaluate(renderCursorCommand, cleanup), "late cleanup").catch(() => undefined);
+			});
+		}
+		return { ok: false, detail: `no response within ${CURSOR_TOKENS.commandDeadlineMs} ms` };
+	}
 	return { ok: false, detail: errorMessage(failure) };
 }
 
@@ -368,7 +427,13 @@ function readReducedMotion(): boolean {
 
 function disableCursor(runtime: CursorRuntime, detail: string): void {
 	runtime.mode = "off";
-	const warning = `headed-browser: cursor visualization disabled (${detail})`;
+	let safeDetail: string;
+	try {
+		safeDetail = runtime.redact(detail);
+	} catch {
+		safeDetail = "<REDACTED>";
+	}
+	const warning = `headed-browser: cursor visualization disabled (${safeDetail})`;
 	if (!runtime.warnings.includes(warning)) runtime.warnings.push(warning);
 }
 

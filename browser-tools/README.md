@@ -36,7 +36,7 @@ headed_read op:"snapshot" sessionId:"hb-…"
 headed_session op:"close" sessionId:"hb-…"
 ```
 
-Use `headed_plan` when one selected tab needs a fixed sequence of navigation, reads, and actions. The tool validates every step before browser work, stops at the first failure or cancellation, and returns ordered per-step results. Plans reject tab management and page evaluation; use the standalone tools for those operations. A completed navigation invalidates refs from the preceding document.
+Use `headed_plan` when one selected tab needs a fixed sequence of navigation, reads, and actions. The tool validates every step before browser work, stops at the first failure or cancellation, and returns ordered per-step results. A plan owns its tab from its first step until its last. A standalone call on that tab waits instead of landing between two steps. Plans reject tab management and page evaluation; use the standalone tools for those operations. A completed navigation invalidates refs from the preceding document.
 
 Sessions persist across turns until closed or idle for `idleCloseSec`. `op:"close"` deletes the temporary profile, downloads, and artifacts unless `keepArtifactsOnClose` is enabled. Before closing, use `op:"artifacts"`. Copy needed files out of the session.
 

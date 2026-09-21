@@ -7,7 +7,7 @@ import { clearCursor, pointCursorAtTarget } from "./cursor.ts";
 import type { AuditWriter } from "./policy.ts";
 import { applyPagePolicy, checkNavigation, deriveDomainPolicy, requireFeature, visibleCookies } from "./policy.ts";
 import type { HeadedSession } from "./session.ts";
-import { closeSession, registerPage, selectedPage, selectTab, syncPages } from "./session.ts";
+import { closeCapturedSession, registerPage, selectedPage, selectTab, syncPages, whenSessionClosing } from "./session.ts";
 
 /**
  * The single implementation of every navigate, read, and act operation. Registered
@@ -69,6 +69,11 @@ export interface OperationContext {
 	signal?: unknown;
 	/** Fixed tab identity for a plan step; standalone operations capture the selected tab at entry. */
 	expectedTab?: { id: string; page: Page };
+	/**
+	 * The caller's own hold on this tab, set by an outer sequence such as a plan. The
+	 * operation re-enters that hold instead of queueing behind the caller that owns it.
+	 */
+	tabHold?: TabLockHold;
 }
 
 /** A caller-fixable input; classified as `invalid request` however deep it is thrown. */
@@ -82,6 +87,13 @@ export class CancelledError extends Error {}
 
 /** The tab a caller pinned is no longer the session's selected tab. */
 export class StaleTabError extends Error {}
+
+/**
+ * The session was closing or closed when the caller asked for its tab. Reported as
+ * `unknown session`, the same category a call gets when it names a session that is gone:
+ * from a caller's side a session whose teardown started is no longer usable.
+ */
+export class SessionClosedError extends Error {}
 
 export type SafeErrorCategory =
 	| "invalid request"
@@ -100,8 +112,46 @@ export function requireString(value: unknown, name: string): string {
 }
 
 export function isAborted(signal: unknown): boolean {
-	return typeof signal === "object" && signal !== null && "aborted" in signal && (signal as { aborted?: unknown }).aborted === true;
+	if ((typeof signal !== "object" && typeof signal !== "function") || signal === null) return false;
+	try {
+		return Reflect.get(signal, "aborted") === true;
+	} catch {
+		return false;
+	}
 }
+
+type HostSignal = {
+	addEventListener?: (type: string, callback: () => void, options?: { once: boolean }) => void;
+	removeEventListener?: (type: string, callback: () => void) => void;
+};
+
+function listenForAbort(signal: unknown, onAbort: () => void): () => void {
+	if ((typeof signal !== "object" && typeof signal !== "function") || signal === null) return () => undefined;
+	let add: HostSignal["addEventListener"];
+	let remove: HostSignal["removeEventListener"];
+	try {
+		const candidate = signal as HostSignal;
+		add = candidate.addEventListener;
+		remove = candidate.removeEventListener;
+	} catch {
+		return () => undefined;
+	}
+	if (add === undefined || remove === undefined) return () => undefined;
+	const listener = () => onAbort();
+	try {
+		add.call(signal, "abort", listener, { once: true });
+	} catch {
+		return () => undefined;
+	}
+	return () => {
+		try {
+			remove!.call(signal, "abort", listener);
+		} catch {
+			// A host signal may disappear while the operation settles; cleanup is best effort.
+		}
+	};
+}
+
 
 function operationTabId(context: OperationContext): string {
 	return context.expectedTab?.id ?? context.session.selectedTabId;
@@ -126,6 +176,7 @@ export function classifyError(op: string, error: unknown): SafeErrorCategory {
 	if (error instanceof TabBusyError) return "tab busy";
 	if (error instanceof CancelledError) return "cancelled";
 	if (error instanceof StaleTabError) return "stale tab";
+	if (error instanceof SessionClosedError) return "unknown session";
 	const message = errorMessage(error);
 	if (message.includes("unknown session")) return "unknown session";
 	if (message.includes("target_moved")) return "target_moved";
@@ -171,40 +222,180 @@ export function validateAct(op: string, params: OperationParams): asserts op is 
 
 /**
  * One FIFO writer lock per session tab. Every mutation and every page-touching read
- * holds it, so two outer tool calls — a plan step and a standalone action included —
- * never interleave work on the same user-controlled tab.
+ * holds it, so two outer tool calls — a plan and a standalone action included — never
+ * interleave work on the same user-controlled tab. A caller may hold the tab across
+ * several operations: `runPlan` acquires one hold through `withTabHold` and hands it to
+ * every step, and those steps re-enter that hold rather than releasing the tab between
+ * them, so a standalone call queued after the plan started runs only once it ends.
+ *
+ * A turn holds the lock of every tab it touches, including one it selects part-way
+ * through: `newTab` takes the created tab's lock before publishing the selection, and
+ * `closeTab` takes the lock of the tab it closes. Those are the only nested acquisitions,
+ * and they cannot cycle: `runNav` reaches them only after `operationPage` confirmed the
+ * turn holds the session's currently selected tab, at most one turn holds that at a time,
+ * and a turn holding any other tab is stale and rejected before it gets there. The
+ * acquisition bound applies to a nested wait too, so the worst case is `tab busy`.
+ *
+ * Entering, leaving, and re-entering a tab each stamp `session.lastActivityAt`, and
+ * `session.activeTabHolds` counts the holds running right now, so a long operation and a
+ * long sequence of short ones both stay out of the idle sweep without a timer of their own.
+ *
+ * A session whose teardown started takes no new holds and wakes the ones it has parked:
+ * a waiter fails with `unknown session` instead of resuming in a dying browser.
  */
-const tabLocks = new WeakMap<HeadedSession, Map<string, Promise<void>>>();
+const tabLocks = new WeakMap<HeadedSession, TabLockState>();
 
-async function withTabLock<T>(session: HeadedSession, ctx: ExtensionContext, tabId: string, operation: () => Promise<T>): Promise<T> {
-	const locks = tabLocks.get(session) ?? new Map<string, Promise<void>>();
-	tabLocks.set(session, locks);
-	const holder = locks.get(tabId);
+interface TabLockState {
+	/** Tail of each tab's FIFO queue: the slot the next waiter must await. */
+	queue: Map<string, Promise<void>>;
+	/** The hold currently running on each tab; its identity is what re-entry matches. */
+	holders: Map<string, TabLockHold>;
+}
+
+/**
+ * One caller's exclusive hold on one tab. Its fields belong to the lock functions below
+ * and to nobody else; a holder passes the value itself along to re-enter.
+ */
+export interface TabLockHold {
+	readonly tabId: string;
+	/** This hold's slot in the tab's FIFO queue; resolved by `release`. */
+	readonly slot: Promise<void>;
+	readonly release: () => void;
+}
+
+function lockState(session: HeadedSession): TabLockState {
+	const existing = tabLocks.get(session);
+	if (existing !== undefined) return existing;
+	const created: TabLockState = { queue: new Map(), holders: new Map() };
+	tabLocks.set(session, created);
+	return created;
+}
+
+function sessionClosed(session: HeadedSession, tabId: string): SessionClosedError {
+	return new SessionClosedError(`headed-browser: unknown session ${session.id} closed before tab ${tabId} could be used`);
+}
+
+async function acquireTab(session: HeadedSession, ctx: ExtensionContext, tabId: string, signal?: unknown): Promise<TabLockHold> {
+	// Checked before a slot is taken, so a call arriving during a teardown adds nothing to drain.
+	if (session.lifecycle !== "open") throw sessionClosed(session, tabId);
+	if (isAborted(signal)) throw new CancelledError("headed-browser: cancelled before tab acquisition");
+	const state = lockState(session);
+	const holder = state.queue.get(tabId);
 	// Resolved only after this turn finishes, so the next waiter starts strictly later.
-	const { promise: released, resolve: release } = Promise.withResolvers<void>();
-	locks.set(tabId, released);
+	const { promise: slot, resolve: settle } = Promise.withResolvers<void>();
+	state.queue.set(tabId, slot);
 	if (holder) {
 		const { promise: expired, resolve: expire } = Promise.withResolvers<"expired">();
+		const { promise: cancelled, resolve: cancel } = Promise.withResolvers<"cancelled">();
 		const timer = ctx.setTimeout(() => expire("expired"), TAB_LOCK_WAIT_MS);
-		// Neither branch rejects: a holder chain only ever resolves, and the expiry is a timer.
-		const outcome = await Promise.race([holder.then(() => "ready" as const), expired]);
-		ctx.clearTimer(timer);
-		if (outcome === "expired") {
-			// This turn never runs, so waiters behind it adopt the holder's completion
-			// instead of a turn that will never release.
-			release(holder);
-			throw new TabBusyError(`headed-browser: tab ${tabId} stayed busy for ${TAB_LOCK_WAIT_MS} ms and nothing was done`);
+		let waiting = true;
+		const removeAbortListener = listenForAbort(signal, () => {
+			if (!waiting) return;
+			cancel("cancelled");
+		});
+		try {
+			// The signal may have aborted between the initial check and listener registration.
+			if (isAborted(signal)) cancel("cancelled");
+			// None of the four rejects: a holder chain only ever resolves, the expiry is a timer,
+			// the close gate resolves the moment a teardown starts, and the host signal resolves on abort.
+			const outcome = await Promise.race([
+				holder.then(() => "ready" as const),
+				expired,
+				whenSessionClosing(session).then(() => "closed" as const),
+				cancelled,
+			]);
+			waiting = false;
+			if (outcome !== "ready") {
+				// This turn never runs, so waiters behind it adopt the holder's completion
+				// instead of a turn that will never release.
+				settle(holder);
+				if (outcome === "closed") throw sessionClosed(session, tabId);
+				if (outcome === "cancelled") throw new CancelledError("headed-browser: cancelled while waiting for tab");
+				throw new TabBusyError(`headed-browser: tab ${tabId} stayed busy for ${TAB_LOCK_WAIT_MS} ms and nothing was done`);
+			}
+			// The turn ahead may have been the one that closed the session, or the close may have
+			// landed in the same tick the queue advanced; either way this turn does no page work.
+			if (session.lifecycle !== "open") {
+				settle(holder);
+				throw sessionClosed(session, tabId);
+			}
+		} finally {
+			waiting = false;
+			removeAbortListener();
+			ctx.clearTimer(timer);
 		}
 	}
+	const hold: TabLockHold = { tabId, slot, release: () => { settle(); } };
+	state.holders.set(tabId, hold);
+	session.activeTabHolds += 1;
+	session.lastActivityAt = Date.now();
+	return hold;
+}
+
+function releaseTab(session: HeadedSession, hold: TabLockHold): void {
+	const state = lockState(session);
+	// The map entry is this hold's one record of being active, so the count stays balanced
+	// however often a release is attempted.
+	if (state.holders.get(hold.tabId) === hold) {
+		state.holders.delete(hold.tabId);
+		session.activeTabHolds -= 1;
+	}
+	hold.release();
+	if (state.queue.get(hold.tabId) === hold.slot) state.queue.delete(hold.tabId);
+	session.lastActivityAt = Date.now();
+}
+
+/**
+ * Holds one tab for the whole of `operation`. Every operation run with the hold handed
+ * to the callback belongs to this one turn, so a caller that queues after the hold is
+ * taken cannot land between two of them.
+ */
+export async function withTabHold<T>(
+	session: HeadedSession,
+	ctx: ExtensionContext,
+	tabId: string,
+	operation: (hold: TabLockHold) => Promise<T>,
+	signal?: unknown,
+): Promise<T> {
+	const hold = await acquireTab(session, ctx, tabId, signal);
 	try {
-		return await operation();
+		return await operation(hold);
 	} finally {
-		release();
-		if (locks.get(tabId) === released) locks.delete(tabId);
+		releaseTab(session, hold);
 	}
 }
 
-async function withPageTimeout<T>(
+
+/**
+ * Runs one operation under the tab lock and hands it the hold it runs under, so the
+ * operation can extend that turn onto a second tab it selects. A caller holding this tab
+ * already — a plan running its own step, or a `newTab` finishing on the tab it created —
+ * re-enters its turn and keeps the hold; every other caller takes the lock for this
+ * operation alone and releases it afterwards.
+ */
+async function withTabLock<T>(
+	session: HeadedSession,
+	ctx: ExtensionContext,
+	tabId: string,
+	hold: TabLockHold | undefined,
+	operation: (hold: TabLockHold) => Promise<T>,
+	signal?: unknown,
+): Promise<T> {
+	if (hold !== undefined && lockState(session).holders.get(tabId) === hold) {
+		// A teardown that started while this sequence held the tab ends it here rather than
+		// letting its next step reach a browser being killed.
+		if (session.lifecycle !== "open") throw sessionClosed(session, tabId);
+		session.lastActivityAt = Date.now();
+		try {
+			return await operation(hold);
+		} finally {
+			session.lastActivityAt = Date.now();
+		}
+	}
+	return withTabHold(session, ctx, tabId, operation, signal);
+}
+
+export async function withPageTimeout<T>(
 	session: HeadedSession,
 	ctx: ExtensionContext,
 	label: string,
@@ -221,7 +412,10 @@ async function withPageTimeout<T>(
 		if (result.kind === "timeout") {
 			const warning = `headed-browser: ${label} timed out after ${timeoutMs} ms; session ${session.id} closed`;
 			if (!session.warnings.includes(warning)) session.warnings.push(warning);
-			const cleanup = closeSession(session.id, `${label}-timeout`);
+			// Containment by session, not by id: this operation holds the session, so it owns the
+			// one teardown or adopts the one already running, and the mark that comes with it
+			// lands before the kills below.
+			const cleanup = closeCapturedSession(session, `${label}-timeout`);
 			session.remote?.tunnelProcess.kill();
 			session.remote?.browserProcess.kill();
 			session.browser.process()?.kill();
@@ -242,9 +436,11 @@ export async function runNav(context: OperationContext, op: string, params: Oper
 	const { session, ctx, audit } = context;
 	const timeout = params.timeoutMs ?? session.config.navigationTimeoutMs;
 	const tabId = operationTabId(context);
-	await withTabLock(session, ctx, tabId, async () => {
+	await withTabLock(session, ctx, tabId, context.tabHold, async (hold) => {
 		if (isAborted(context.signal)) throw new CancelledError("headed-browser: cancelled before navigation started");
-		let page = operationPage(context, tabId);
+		// Also the deadlock guard for the nested acquisitions below: a turn that no longer holds
+		// the selected tab is rejected here, before it can ask for a second tab's lock.
+		const page = operationPage(context, tabId);
 		if (op === "goto") {
 			const url = requireString(params.url, "url");
 			try {
@@ -266,23 +462,36 @@ export async function runNav(context: OperationContext, op: string, params: Oper
 				await withPageTimeout(session, ctx, "wait", timeout, () => page.waitForFunction((text) => document.body?.innerText.includes(text), { timeout }, needle));
 			}
 		} else if (op === "viewport") {
-			await page.setViewport({ width: params.width!, height: params.height!, deviceScaleFactor: params.deviceScaleFactor ?? 1 });
+			await withPageTimeout(session, ctx, "viewport", timeout, () =>
+				page.setViewport({ width: params.width!, height: params.height!, deviceScaleFactor: params.deviceScaleFactor ?? 1 }));
 		} else if (op === "newTab") {
-			page = await withPageTimeout(session, ctx, "newTab", timeout, () => session.browser.newPage());
-			const tabId = await registerPage(session, page);
-			session.selectedTabId = tabId;
-			if (audit) await applyPagePolicy(page, session, audit);
-			if (params.url) {
-				const url = checkNavigation(params.url, deriveDomainPolicy(session.config)).href;
-				await withPageTimeout(session, ctx, "newTab navigation", timeout, () => page.goto(url, { timeout, waitUntil: "domcontentloaded" }));
-			}
+			const created = await withPageTimeout(session, ctx, "newTab", timeout, () => session.browser.newPage());
+			const createdTabId = await withPageTimeout(session, ctx, "newTab registration", timeout, () => registerPage(session, created));
+			// A tab becomes reachable only once it is the selected one, so this hold is taken
+			// before the selection is published and can never be contended. From the moment
+			// another caller can resolve the new tab, this turn owns it: its policy and its first
+			// navigation finish before any queued call touches it.
+			await withTabLock(session, ctx, createdTabId, hold, async () => {
+				session.selectedTabId = createdTabId;
+				if (audit) await withPageTimeout(session, ctx, "newTab policy", timeout, () => applyPagePolicy(created, session, audit));
+				if (params.url) {
+					const url = checkNavigation(params.url, deriveDomainPolicy(session.config)).href;
+					await withPageTimeout(session, ctx, "newTab navigation", timeout, () => created.goto(url, { timeout, waitUntil: "domcontentloaded" }));
+				}
+			}, context.signal);
 		} else if (op === "selectTab") selectTab(session, params.tabId);
 		else if (op === "closeTab") {
-			page = params.tabId ? selectTab(session, params.tabId) : page;
-			await withPageTimeout(session, ctx, "closeTab", timeout, () => page.close());
-			await syncPages(session);
+			const targetTabId = params.tabId ?? tabId;
+			// The tab is held before it is selected and closed, so a call already working on it
+			// finishes first and none starts on a page that is going away. Closing the tab this
+			// turn already holds re-enters that hold instead of waiting for itself.
+			await withTabLock(session, ctx, targetTabId, hold, async () => {
+				const target = selectTab(session, targetTabId);
+				await withPageTimeout(session, ctx, "closeTab", timeout, () => target.close());
+				await syncPages(session);
+			}, context.signal);
 		}
-	});
+	}, context.signal);
 }
 
 export async function runRead(
@@ -335,7 +544,7 @@ export async function runRead(
 		}
 		return withPageTimeout(session, ctx, "html", timeout, () => (params.selector ? page.$eval(params.selector, (element) => element.outerHTML) : page.content()));
 	};
-	return withTabLock(session, ctx, tabId, read);
+	return withTabLock(session, ctx, tabId, context.tabHold, read, context.signal);
 }
 
 export async function runAct(context: OperationContext, op: string, params: OperationParams): Promise<void> {
@@ -343,46 +552,62 @@ export async function runAct(context: OperationContext, op: string, params: Oper
 	const { session, ctx, signal } = context;
 	const timeout = params.timeoutMs ?? session.config.navigationTimeoutMs;
 	const tabId = operationTabId(context);
-	await withTabLock(session, ctx, tabId, async () => {
+	await withTabLock(session, ctx, tabId, context.tabHold, async () => {
 		if (isAborted(signal)) throw new CancelledError("headed-browser: cancelled before action started");
 		const page = operationPage(context, tabId);
-		await withPageTimeout(session, ctx, `act ${op}`, timeout, async () => {
-			if (op === "press") await page.keyboard.press(requireString(params.key, "key") as KeyInput);
-			else if (op === "scroll") await page.mouse.wheel({ deltaX: params.deltaX ?? 0, deltaY: params.deltaY ?? 0 });
-			else if (op === "dialog") await handleDialog(page, params.accept !== false, params.promptText, ctx, timeout);
-			else {
-				try {
-					// Target-bearing ops resolve through the driver, show the driver-resolved
-					// target, and revalidate driver geometry before acting on it. The handle
-					// handed back is owned here, so it is released once the action ends.
-					const element = await pointCursorAtTarget(session.cursor, page, () => targetElement(session, page, params), signal);
-					try {
-						if (isAborted(signal)) throw new CancelledError("headed-browser: cancelled after cursor visualization");
-						if (op === "click") await element.click();
-						else if (op === "hover") await element.hover();
-						else if (op === "focus") await element.focus();
-						else if (op === "clear") await element.evaluate((node) => { const input = node as HTMLInputElement; input.value = ""; input.dispatchEvent(new Event("input", { bubbles: true })); });
-						else if (op === "type") {
-							const password = await element.evaluate((node) => node instanceof HTMLInputElement && node.type === "password");
-							if (password) requireFeature(session.config, "PasswordEntry");
-							await element.type(requireString(params.text, "text"));
-						} else if (op === "select") {
-							await element.select(...(params.values ?? (params.value ? [params.value] : [])));
-						} else if (op === "upload") {
-							requireFeature(session.config, "FileUpload");
-							// `targetElement` yields `ElementHandle<Element>`; `uploadFile` is typed
-							// for an input handle, and the element type is only knowable at runtime.
-							await (element as ElementHandle<HTMLInputElement>).uploadFile(...params.files!);
-						}
-					} finally {
-						await element.dispose().catch(() => undefined);
-					}
-				} finally {
-					await clearCursor(session.cursor, page);
+		if (op === "press" || op === "scroll" || op === "dialog") {
+			await withPageTimeout(session, ctx, `act ${op}`, timeout, async () => {
+				if (op === "press") await page.keyboard.press(requireString(params.key, "key") as KeyInput);
+				else if (op === "scroll") await page.mouse.wheel({ deltaX: params.deltaX ?? 0, deltaY: params.deltaY ?? 0 });
+				else await handleDialog(page, params.accept !== false, params.promptText, ctx, timeout);
+			});
+			return;
+		}
+
+		let element: ElementHandle<Element> | undefined;
+		// Cursor animation is decorative and deliberately outside the action deadline.
+		// Cursor driver calls and the actual action retain independent containment timers.
+		const runCursorDriver = <T>(operation: () => Promise<T>) =>
+			withPageTimeout(session, ctx, `act ${op} target`, timeout, operation);
+		try {
+			element = await pointCursorAtTarget(
+				session.cursor,
+				page,
+				() => targetElement(session, page, params),
+				signal,
+				runCursorDriver,
+			);
+			if (isAborted(signal)) throw new CancelledError("headed-browser: cancelled after cursor visualization");
+			const target = element;
+			await withPageTimeout(session, ctx, `act ${op}`, timeout, async () => {
+				if (op === "click") await target.click();
+				else if (op === "hover") await target.hover();
+				else if (op === "focus") await target.focus();
+				else if (op === "clear") await target.evaluate((node) => { const input = node as HTMLInputElement; input.value = ""; input.dispatchEvent(new Event("input", { bubbles: true })); });
+				else if (op === "type") {
+					const password = await target.evaluate((node) => node instanceof HTMLInputElement && node.type === "password");
+					if (password) requireFeature(session.config, "PasswordEntry");
+					await target.type(requireString(params.text, "text"));
+				} else if (op === "select") {
+					await target.select(...(params.values ?? (params.value ? [params.value] : [])));
+				} else if (op === "upload") {
+					requireFeature(session.config, "FileUpload");
+					// `targetElement` yields `ElementHandle<Element>`; `uploadFile` is typed
+					// for an input handle, and the element type is only knowable at runtime.
+					await (target as ElementHandle<HTMLInputElement>).uploadFile(...params.files!);
 				}
+			});
+		} finally {
+			try {
+				if (element !== undefined) {
+					const held = element;
+					await runCursorDriver(() => held.dispose().catch(() => undefined));
+				}
+			} finally {
+				await clearCursor(session.cursor, page);
 			}
-		});
-	});
+		}
+	}, signal);
 }
 
 async function domSnapshot(session: HeadedSession, page: Page, selector?: string): Promise<{ lines: string[] }> {

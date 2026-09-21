@@ -2,19 +2,19 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import type { ExtensionAPI, ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 import type { Channel, ConfigOverrides, EffectiveConfig, Engine, ProfileMode } from "./lib/config.ts";
-import { CHANNELS, COPY_STRATEGIES, CURSOR_MODES, ENGINES, PROFILE_MODES, resolveConfig, splitDomains } from "./lib/config.ts";
+import { CHANNELS, COPY_STRATEGIES, CURSOR_MODES, ENGINES, errorMessage, PROFILE_MODES, resolveConfig, splitDomains } from "./lib/config.ts";
 import type { ResolvedBrowser } from "./lib/discovery.ts";
 import { assertChannelEngine, resolveBrowser, resolveSourceProfile } from "./lib/discovery.ts";
 import { launchLocal, launchRemote } from "./lib/driver.ts";
 import type { OperationParams } from "./lib/operations.ts";
-import { ACT_OPS, classifyError, NAV_OPS, READ_OPS, requireString, runAct, runNav, runRead } from "./lib/operations.ts";
+import { ACT_OPS, CancelledError, classifyError, isAborted, NAV_OPS, READ_OPS, requireString, runAct, runNav, runRead, StaleTabError, withPageTimeout, withTabHold } from "./lib/operations.ts";
 import { PLAN_KINDS, PLAN_STEP_LIMIT, runPlan, validatePlan } from "./lib/plan.ts";
 import type { AuditWriter } from "./lib/policy.ts";
 import { applyPagePolicy, createAuditWriter, deriveDomainPolicy, redact } from "./lib/policy.ts";
 import { runPreflight } from "./lib/preflight.ts";
 import { grantCookiesFromSource, materializeProfile, removeMaterializedProfile } from "./lib/profile.ts";
 import type { HeadedSession, SessionSummary } from "./lib/session.ts";
-import { closeAllSessions, closeSession, createSession, getSession, installIdleSweep, listArtifacts, listLeakedSessions, registerPage, selectedPage, selectTab, sessionSummary, sessions, syncPages } from "./lib/session.ts";
+import { beginSessionClose, closeAllSessions, closeCapturedSession, createSession, getSession, installIdleSweep, listArtifacts, listLeakedSessions, selectedPage, sessionSummary, sessions, syncPages } from "./lib/session.ts";
 
 interface ToolParams extends ConfigOverrides, OperationParams {
 	/** Absent only on `headed_plan`, whose steps each carry their own operation. */
@@ -74,7 +74,7 @@ export default function headedBrowserTools(pi: ExtensionAPI): void {
 			remoteBrowserPath: z.string().optional(), sshOptions: z.string().optional(), ...baseOverrides,
 		}),
 		approval: "exec",
-		execute: async (_id, params: ToolParams, _signal, _onUpdate, ctx) => safeResult(params, async () => {
+		execute: async (_id, params: ToolParams, signal, _onUpdate, ctx) => safeResult(params, async () => {
 			const cwd = ctx?.cwd ?? process.cwd();
 			if (params.op === "preflight") {
 				if (!ctx) throw new Error("headed-browser: extension context unavailable");
@@ -98,9 +98,24 @@ export default function headedBrowserTools(pi: ExtensionAPI): void {
 			const session = getSession(params.sessionId);
 			const audit = audits.get(session.id) ?? (ctx ? createAuditWriter(ctx, session.config) : undefined);
 			if (params.op === "close") {
-				await audit?.write(session, "close", "allow", selectedPage(session).url());
+				// The decision precedes the record: while the append is pending the session is
+				// already `closing`, so a caller queued on its tab is refused instead of waking
+				// into a session whose teardown is one await away. The URL comes from the page map
+				// rather than `selectedPage`, which throws when a session has no selected tab.
+				beginSessionClose(session);
+				try {
+					await audit?.write(session, "close", "allow", session.pages.get(session.selectedTabId)?.url());
+				} catch (error) {
+					// The writer records its own IO failure as a session warning, so this covers a
+					// replaced writer only: a failed record must not strand the browser of a
+					// session the mark above already retired.
+					session.warnings.push(`headed-browser: close audit failed: ${errorMessage(error)}`);
+				}
 				audits.delete(session.id);
-				const closed = await closeSession(session.id);
+				// By session, not by id: a page timeout can contain this session while the record
+				// above is still being appended, and this caller then adopts that one teardown
+				// instead of reporting the session it is holding as unknown.
+				const closed = await closeCapturedSession(session);
 				return resultEnvelope(closed, { ...sessionSummary(session), url: "" });
 			}
 			if (params.op === "tabs") {
@@ -110,13 +125,24 @@ export default function headedBrowserTools(pi: ExtensionAPI): void {
 			}
 			if (params.op === "artifacts") return resultEnvelope({ files: await listArtifacts(session) }, sessionSummary(session));
 			if (params.op === "grantCookies") {
-				if (!session.sourceProfile) throw new Error("headed-browser: grantCookies requires a cloned source profile");
+				const sourceProfile = session.sourceProfile;
+				if (!sourceProfile) throw new Error("headed-browser: grantCookies requires a cloned source profile");
+				if (isAborted(signal)) throw new CancelledError("headed-browser: cancelled before cookie grant queued");
 				const domains = splitDomains(requireString(params.domains, "domains"));
-				const granted = await grantCookiesFromSource(selectedPage(session), session.sourceProfile, domains);
-				for (const domain of domains) if (!session.profile.cookieDomains.includes(domain)) session.profile.cookieDomains.push(domain);
-				session.warnings.push(...granted.warnings);
-				await audit?.write(session, "grantCookies", "allow", selectedPage(session).url(), `${granted.injected} injected`);
-				return resultEnvelope(granted, sessionSummary(session));
+				const tabId = session.selectedTabId;
+				const page = selectedPage(session);
+				return await withTabHold(session, ctx, tabId, async () => {
+					if (isAborted(signal)) throw new CancelledError("headed-browser: cancelled before cookie grant started");
+					if (session.selectedTabId !== tabId || session.pages.get(tabId) !== page) {
+						throw new StaleTabError("headed-browser: selected tab changed while cookie grant queued; retry the grant");
+					}
+					const granted = await withPageTimeout(session, ctx, "grantCookies", params.timeoutMs ?? session.config.navigationTimeoutMs, () =>
+						grantCookiesFromSource(page, sourceProfile, domains));
+					for (const domain of domains) if (!session.profile.cookieDomains.includes(domain)) session.profile.cookieDomains.push(domain);
+					session.warnings.push(...granted.warnings);
+					await audit?.write(session, "grantCookies", "allow", page.url(), `${granted.injected} injected`);
+					return resultEnvelope(granted, sessionSummary(session));
+				}, signal);
 			}
 			throw new Error(`headed-browser: unsupported headed_session op ${params.op}`);
 		}),
@@ -133,11 +159,11 @@ export default function headedBrowserTools(pi: ExtensionAPI): void {
 			deviceScaleFactor: z.number().optional(), tabId: z.string().optional(),
 		}),
 		approval: "write",
-		execute: async (_id, params: ToolParams, _signal, _onUpdate, ctx) => safeResult(params, async () => {
+		execute: async (_id, params: ToolParams, signal, _onUpdate, ctx) => safeResult(params, async () => {
 			if (!ctx) throw new Error("headed-browser: extension context unavailable");
 			const session = getSession(params.sessionId);
 			const audit = audits.get(session.id) ?? createAuditWriter(ctx, session.config);
-			await runNav({ session, ctx, audit }, requireString(params.op, "op"), params);
+			await runNav({ session, ctx, audit, signal }, requireString(params.op, "op"), params);
 			return resultEnvelope({ op: params.op }, sessionSummary(session));
 		}),
 	});
@@ -153,10 +179,10 @@ export default function headedBrowserTools(pi: ExtensionAPI): void {
 			limit: z.number().optional(), since: z.number().optional(), timeoutMs: z.number().optional(),
 		}),
 		approval: "read",
-		execute: async (_id, params: ToolParams, _signal, _onUpdate, ctx) => safeResult(params, async () => {
+		execute: async (_id, params: ToolParams, signal, _onUpdate, ctx) => safeResult(params, async () => {
 			if (!ctx) throw new Error("headed-browser: extension context unavailable");
 			const session = getSession(params.sessionId);
-			const payload = await runRead({ session, ctx }, requireString(params.op, "op"), params);
+			const payload = await runRead({ session, ctx, signal }, requireString(params.op, "op"), params);
 			return resultEnvelope(payload, sessionSummary(session));
 		}),
 	});
@@ -183,7 +209,7 @@ export default function headedBrowserTools(pi: ExtensionAPI): void {
 	pi.registerTool({
 		name: "headed_plan",
 		label: "Run a headed browser plan",
-		description: `Run up to ${PLAN_STEP_LIMIT} ordered navigate, read, and act steps against one existing session and the tab it already has selected, in one call. The whole plan is validated before the first step runs; the first failing step or a cancellation ends the plan and no later step runs. Tab creation, tab switching, page evaluation, and session lifecycle stay in headed_nav, headed_read, and headed_session.`,
+		description: `Run up to ${PLAN_STEP_LIMIT} ordered navigate, read, and act steps against one existing session and the tab it already has selected, in one call. The whole plan is validated before the first step runs; the plan then owns that tab until its last step, so another call on it waits rather than running between two steps. The first failing step or a cancellation ends the plan and no later step runs. Tab creation, tab switching, page evaluation, and session lifecycle stay in headed_nav, headed_read, and headed_session.`,
 		parameters: z.object({
 			sessionId: z.string().optional(),
 			steps: z.array(z.object({
@@ -205,14 +231,16 @@ export default function headedBrowserTools(pi: ExtensionAPI): void {
 			const audit = audits.get(session.id) ?? createAuditWriter(ctx, session.config);
 			const outcome = await runPlan({ session, ctx, steps, audit, signal });
 			const failure = outcome.error === undefined ? {} : { ok: false, error: outcome.error, failedIndex: outcome.failedIndex };
-			return resultEnvelope(outcome, { ...sessionSummary(session), ...failure });
+			return resultEnvelope(outcome, { ...sessionSummary(session), ...failure }, true);
 		}),
 	});
 
 	pi.on("session_start", (_event, ctx) => {
 		installIdleSweep(ctx, async (session) => {
 			const audit = audits.get(session.id) ?? createAuditWriter(ctx, session.config);
-			await audit.write(session, "idle-close", "allow", selectedPage(session).url(), "idle timeout");
+			// From the page map, not `selectedPage`: the sweep already marked this session, so a
+			// throw here would leave it retired with its browser still running.
+			await audit.write(session, "idle-close", "allow", session.pages.get(session.selectedTabId)?.url(), "idle timeout");
 			audits.delete(session.id);
 		});
 	});
@@ -259,26 +287,26 @@ async function launchSession(cwd: string, ctx: ExtensionContext, params: ToolPar
 		throw error;
 	}
 }
-
-function resultEnvelope(payload: unknown, details: SessionSummary | Record<string, unknown>): ToolResult {
+function resultEnvelope(payload: unknown, details: SessionSummary | Record<string, unknown>, compact = false): ToolResult {
 	// Spread into a fresh literal: an `interface` never gains the implicit index
 	// signature that `Record<string, unknown>` needs, but an object literal does.
-	return { content: [{ type: "text", text: JSON.stringify(payload, null, 2) }], details: { ...details } };
+	return { content: [{ type: "text", text: JSON.stringify(payload, null, compact ? undefined : 2) }], details: { ...details } };
 }
 
 async function safeResult(params: ToolParams, operation: () => Promise<ToolResult>): Promise<ToolResult> {
+	const capturedConfig = params.sessionId ? sessions.get(params.sessionId)?.config : undefined;
 	try {
 		const result = await operation();
-		const session = params.sessionId ? sessions.get(params.sessionId) : undefined;
-		const config = session?.config;
+		const currentConfig = params.sessionId ? sessions.get(params.sessionId)?.config : undefined;
+		const config = capturedConfig ?? currentConfig;
 		if (config) result.content[0]!.text = redact(result.content[0]!.text, config);
 		return result;
 	} catch (error) {
 		const message = error instanceof Error ? error.message : String(error);
-		const session = params.sessionId ? sessions.get(params.sessionId) : undefined;
+		const currentConfig = params.sessionId ? sessions.get(params.sessionId)?.config : undefined;
 		console.error(`headed-browser: ${message}`);
 		return {
-			content: [{ type: "text", text: redact(message, session?.config ?? { redactSecrets: true }) }],
+			content: [{ type: "text", text: redact(message, capturedConfig ?? currentConfig ?? { redactSecrets: true }) }],
 			details: { ok: false, sessionId: params.sessionId, error: classifyError(params.op ?? "", error) },
 		};
 	}

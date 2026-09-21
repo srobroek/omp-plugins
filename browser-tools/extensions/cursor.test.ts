@@ -39,7 +39,17 @@ interface FakeDriverPage {
  * reduced-motion probe, and a function `evaluate` with a command for rendering.
  */
 function fakeDriverPage(
-	options: { registerFails?: boolean; bootstrapFails?: boolean; renderFails?: boolean; reducedMotion?: boolean } = {},
+	options: {
+		registerFails?: boolean;
+		bootstrapFails?: boolean;
+		bootstrapStalls?: boolean;
+		renderFails?: boolean;
+		renderError?: string;
+		failCommand?: CursorVisualCommand["kind"];
+		reducedMotion?: boolean;
+		onCommand?: (command: CursorVisualCommand) => void;
+		onFailedCommand?: (command: CursorVisualCommand) => void;
+	} = {},
 ): FakeDriverPage {
 	const preloads: string[] = [];
 	const bootstraps: string[] = [];
@@ -53,12 +63,17 @@ function fakeDriverPage(
 		evaluate: async (target: unknown, command?: CursorVisualCommand) => {
 			if (typeof target === "string") {
 				if (options.bootstrapFails === true) throw new Error("bootstrap refused");
+				if (options.bootstrapStalls === true) return await new Promise<never>(() => undefined);
 				bootstraps.push(target);
 				return undefined;
 			}
 			if (command === undefined) return options.reducedMotion === true;
-			if (options.renderFails === true) throw new Error("render refused");
+			if (options.renderFails === true || command.kind === options.failCommand) {
+				options.onFailedCommand?.(command);
+				throw new Error(options.renderError ?? "render refused");
+			}
 			commands.push(command);
+			options.onCommand?.(command);
 			return undefined;
 		},
 		on: () => undefined,
@@ -72,36 +87,57 @@ interface FakeTarget {
 	counts: { scrolls: number; reads: number };
 	handles: Array<ElementHandle<Element>>;
 	disposed: Array<ElementHandle<Element>>;
+	replace: () => void;
 }
 
-/** Each resolution hands out a distinct handle, so handle ownership is observable. */
-function fakeTarget(boxes: Array<TestBox | null>): FakeTarget {
+function fakeTarget(boxes: Array<TestBox | null>, options: { disposeStalls?: boolean; onDispose?: () => void } = {}): FakeTarget {
 	const counts = { scrolls: 0, reads: 0 };
 	const handles: Array<ElementHandle<Element>> = [];
 	const disposed: Array<ElementHandle<Element>> = [];
+	let active: ElementHandle<Element> | undefined;
+	let detachActive: (() => void) | undefined;
+	const replace = () => {
+		detachActive?.();
+		active = undefined;
+		detachActive = undefined;
+	};
 	const resolve = async () => {
+		if (active !== undefined) return active;
+		let attached = true;
 		const state = {
 			scrollIntoView: async () => {
 				counts.scrolls += 1;
 			},
 			boundingBox: async () => {
+				if (!attached) return null;
 				const box = boxes[Math.min(counts.reads, boxes.length - 1)] ?? null;
 				counts.reads += 1;
 				return box;
 			},
 			dispose: async () => {
+				attached = false;
+				options.onDispose?.();
+				if (options.disposeStalls === true) await new Promise<never>(() => undefined);
 				disposed.push(handle);
+				if (active === handle) active = undefined;
 			},
 		};
 		const handle = state as unknown as ElementHandle<Element>;
+		detachActive = () => { attached = false; };
+		active = handle;
 		handles.push(handle);
 		return handle;
 	};
-	return { resolve, counts, handles, disposed };
+	return { resolve, counts, handles, disposed, replace };
 }
 
-async function readyRuntime(mode: CursorMode, page: FakeDriverPage): Promise<CursorRuntime> {
-	const runtime = createCursorRuntime({ mode, headless: false, warnings: [] });
+
+async function readyRuntime(
+	mode: CursorMode,
+	page: FakeDriverPage,
+	redact?: (text: string) => string,
+): Promise<CursorRuntime> {
+	const runtime = createCursorRuntime({ mode, headless: false, warnings: [], redact });
 	await installCursor(runtime, page.page);
 	return runtime;
 }
@@ -321,6 +357,16 @@ describe("cursor preload installation", () => {
 		expect(runtime.warnings).toHaveLength(1);
 	});
 
+	test("downgrades to off when current-document bootstrap stalls", async () => {
+		const page = fakeDriverPage({ bootstrapStalls: true });
+		const runtime = createCursorRuntime({ mode: "animated", headless: false, warnings: [] });
+		const startedAt = Date.now();
+		expect(await installCursor(runtime, page.page)).toBe(false);
+		expect(Date.now() - startedAt).toBeLessThan(CURSOR_TOKENS.commandDeadlineMs + 500);
+		expect(runtime.mode).toBe("off");
+		expect(runtime.warnings[0]).toContain("current-document bootstrap gave no response");
+	});
+
 	test("drops travel animation for a reduced-motion page", async () => {
 		const reduced = await readyRuntime("animated", fakeDriverPage({ reducedMotion: true }));
 		expect(reduced.mode).toBe("instant");
@@ -422,6 +468,28 @@ describe("cursor targeting", () => {
 		expect(target.disposed).toEqual([]);
 	});
 
+	test("revalidates the driver handle after a pulse replacement", async () => {
+		let target: FakeTarget | undefined;
+		let replaced = false;
+		const page = fakeDriverPage({ onCommand: (entry) => { if (entry.kind === "pulse" && !replaced) { replaced = true; target?.replace(); } } });
+		const runtime = await readyRuntime("instant", page);
+		target = fakeTarget([
+			{ x: 20, y: 40, width: 10, height: 20 },
+			{ x: 20, y: 40, width: 10, height: 20 },
+			{ x: 20, y: 40, width: 10, height: 20 },
+			{ x: 20, y: 40, width: 10, height: 20 },
+			{ x: 20, y: 40, width: 10, height: 20 },
+			{ x: 20, y: 40, width: 10, height: 20 },
+		]);
+		const handle = await pointCursorAtTarget(runtime, page.page, target.resolve);
+		const first = target.handles[0];
+		const last = target.handles.at(-1);
+		if (first === undefined || last === undefined) throw new Error("expected replacement handles");
+		expect(handle).toBe(last);
+		expect(handle).not.toBe(first);
+		expect(target.disposed).toEqual([first]);
+	});
+
 	test("uses the travel token in animated mode", async () => {
 		const page = fakeDriverPage();
 		const runtime = await readyRuntime("animated", page);
@@ -484,6 +552,23 @@ describe("cursor targeting", () => {
 		expect(target.disposed).toEqual(target.handles);
 	});
 
+	test("routes reposition disposal through the finite driver boundary", async () => {
+		const page = fakeDriverPage();
+		const runtime = await readyRuntime("instant", page);
+		let disposalStarted = false;
+		const target = fakeTarget([
+			{ x: 0, y: 0, width: 20, height: 20 },
+			{ x: 20, y: 0, width: 20, height: 20 },
+		], { disposeStalls: true, onDispose: () => { disposalStarted = true; } });
+		const boundedDriver = async <T>(operation: () => Promise<T>): Promise<T> => {
+			const pending = operation();
+			if (disposalStarted) throw new Error("driver deadline");
+			return pending;
+		};
+		await expect(pointCursorAtTarget(runtime, page.page, target.resolve, undefined, boundedDriver)).rejects.toThrow("driver deadline");
+		expect(disposalStarted).toBe(true);
+	});
+
 	test("skips geometry and visualization entirely when off", async () => {
 		const page = fakeDriverPage();
 		const runtime = await readyRuntime("off", page);
@@ -506,8 +591,9 @@ describe("cursor targeting", () => {
 		expect(target.disposed).toEqual([]);
 	});
 
-	test("hands the target back and disables visualization when a render fails", async () => {
-		const page = fakeDriverPage({ renderFails: true });
+	test("hands the target back and redacts a secret from render failures", async () => {
+		const secret = "eyABCDEFGHIJK.abcdefghijklmnop.qrstuvwxyzABCDE";
+		const page = fakeDriverPage({ renderFails: true, renderError: `render refused ${secret}` });
 		const runtime = await readyRuntime("instant", page);
 		const target = fakeTarget([{ x: 0, y: 0, width: 20, height: 20 }]);
 		const handle = await pointCursorAtTarget(runtime, page.page, target.resolve);
@@ -515,10 +601,43 @@ describe("cursor targeting", () => {
 		expect(target.disposed).toEqual([]);
 		expect(runtime.mode).toBe("off");
 		expect(runtime.warnings).toHaveLength(1);
-		// Only the pre-command geometry read happened; no verdict came from the page.
-		expect(target.counts.reads).toBe(1);
+		expect(runtime.warnings.join(" ")).not.toContain(secret);
 		await clearCursor(runtime, page.page);
 		expect(page.commands).toEqual([]);
+	});
+
+	test("re-resolves a target replaced by a failed render command", async () => {
+		let target: FakeTarget | undefined;
+		const page = fakeDriverPage({
+			failCommand: "move",
+			onFailedCommand: () => target?.replace(),
+		});
+		const runtime = await readyRuntime("instant", page);
+		target = fakeTarget([
+			{ x: 0, y: 0, width: 20, height: 20 },
+			{ x: 0, y: 0, width: 20, height: 20 },
+			{ x: 0, y: 0, width: 20, height: 20 },
+		]);
+		const handle = await pointCursorAtTarget(runtime, page.page, target.resolve);
+		const first = target.handles[0];
+		const last = target.handles.at(-1);
+		if (first === undefined || last === undefined) throw new Error("expected replacement handles");
+		expect(handle).toBe(last);
+		expect(handle).not.toBe(first);
+		expect(target.disposed).toEqual([first]);
+	});
+
+	test("hides an existing overlay after a later render command disables visualization", async () => {
+		const page = fakeDriverPage({ failCommand: "pulse" });
+		const runtime = await readyRuntime("instant", page);
+		const target = fakeTarget([
+			{ x: 0, y: 0, width: 20, height: 20 },
+			{ x: 0, y: 0, width: 20, height: 20 },
+		]);
+		await pointCursorAtTarget(runtime, page.page, target.resolve);
+		expect(runtime.mode).toBe("off");
+		await clearCursor(runtime, page.page);
+		expect(page.commands.map((entry) => entry.kind)).toEqual(["move", "hide"]);
 	});
 
 	test("hides the overlay through the driver on cleanup", async () => {

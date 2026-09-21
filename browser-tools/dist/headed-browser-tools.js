@@ -40236,9 +40236,8 @@ var init_puppeteer_core = __esm(() => {
 });
 
 // extensions/headed-browser-tools.ts
-import { mkdir as mkdir5 } from "fs/promises";
 import { homedir as homedir5 } from "os";
-import { join as join7 } from "path";
+import { join as join8 } from "path";
 
 // extensions/lib/config.ts
 import { readFile } from "fs/promises";
@@ -41016,6 +41015,7 @@ var CHANNELS = [
 ];
 var PROFILE_MODES = ["ephemeral-clone", "persistent-dedicated", "clean"];
 var COPY_STRATEGIES = ["auto", "clonefile", "reflink", "robocopy", "node"];
+var CURSOR_MODES = ["auto", "off", "instant", "animated"];
 var SETTING_SCHEMA = {
   defaultEngine: setting("enum", "firefox", "HEADED_BROWSER_DEFAULT_ENGINE", ENGINES),
   defaultBrowserChannel: setting("enum", "auto", "HEADED_BROWSER_DEFAULT_BROWSER_CHANNEL", CHANNELS),
@@ -41042,6 +41042,7 @@ var SETTING_SCHEMA = {
   keepArtifactsOnClose: setting("boolean", false, "HEADED_BROWSER_KEEP_ARTIFACTS_ON_CLOSE"),
   idleCloseSec: numberSetting(7200, "HEADED_BROWSER_IDLE_CLOSE_SEC", 120, 86400, 60),
   navigationTimeoutMs: numberSetting(30000, "HEADED_BROWSER_NAVIGATION_TIMEOUT_MS", 1000, 300000, 1000),
+  cursorMode: setting("enum", "auto", "HEADED_BROWSER_CURSOR_MODE", CURSOR_MODES),
   driverModulePath: setting("string", "", "HEADED_BROWSER_DRIVER_MODULE_PATH")
 };
 function setting(type, defaultValue, env, values) {
@@ -41691,6 +41692,10 @@ async function reserveLocalPort() {
   });
 }
 
+// extensions/lib/operations.ts
+import { mkdir as mkdir4 } from "fs/promises";
+import { join as join7 } from "path";
+
 // extensions/lib/policy.ts
 import { appendFile, chmod, mkdir } from "fs/promises";
 import { homedir as homedir3 } from "os";
@@ -41747,30 +41752,63 @@ function visibleCookies(cookies, config) {
     sameSite: cookie.sameSite
   }));
 }
+function interceptRequest(request, options) {
+  if (!isMainFrameNavigation(request, options.mainFrame)) {
+    return { decision: "allow", governed: false, resolved: resolveRequest(request, "allow"), audited: Promise.resolve() };
+  }
+  let url = "";
+  let decision = "allow";
+  let reason;
+  try {
+    url = request.url();
+    checkNavigation(url, options.policy);
+  } catch (error) {
+    decision = "block";
+    reason = asError(error).message;
+  }
+  const resolved = resolveRequest(request, decision);
+  const audited = options.audit ? runAudit(options.audit, decision, url, reason) : Promise.resolve();
+  return { decision, governed: true, resolved, audited };
+}
+function runAudit(audit, decision, url, reason) {
+  try {
+    return Promise.resolve(audit(decision, url, reason)).then(() => {
+      return;
+    }, () => {
+      return;
+    });
+  } catch {
+    return Promise.resolve();
+  }
+}
+function isMainFrameNavigation(request, mainFrame) {
+  try {
+    return request.isNavigationRequest() && request.frame() === mainFrame;
+  } catch {
+    return false;
+  }
+}
+function resolveRequest(request, decision) {
+  try {
+    const sent = decision === "allow" ? request.continue() : request.abort("blockedbyclient");
+    return Promise.resolve(sent).then(() => {
+      return;
+    }, (error) => asError(error));
+  } catch (error) {
+    return Promise.resolve(asError(error));
+  }
+}
+function asError(error) {
+  return error instanceof Error ? error : new Error(String(error));
+}
 async function applyPagePolicy(page, session, audit) {
   const domainPolicy = deriveDomainPolicy(session.config);
   await page.setRequestInterception(true);
   page.on("request", (request) => {
-    (async () => {
-      if (!request.isNavigationRequest() || request.frame() !== page.mainFrame()) {
-        await request.continue().catch(() => {
-          return;
-        });
-        return;
-      }
-      try {
-        checkNavigation(request.url(), domainPolicy);
-        await audit.write(session, "in-page-navigation", "allow", request.url());
-        await request.continue();
-      } catch (error) {
-        const reason = error instanceof Error ? error.message : String(error);
-        await audit.write(session, "in-page-navigation", "block", request.url(), reason);
-        await request.abort("blockedbyclient");
-      }
-    })().catch(async () => {
-      await request.continue().catch(() => {
-        return;
-      });
+    interceptRequest(request, {
+      mainFrame: page.mainFrame(),
+      policy: domainPolicy,
+      audit: (decision, url, reason) => audit.write(session, "in-page-navigation", decision, url, reason)
     });
   });
   if (!session.config.allowDownloads) {
@@ -41824,12 +41862,347 @@ function createAuditWriter(ctx, config) {
   };
 }
 
-// extensions/lib/preflight.ts
-import { Database as Database2 } from "bun:sqlite";
-import { constants as constants3 } from "fs";
-import { access, mkdir as mkdir3, statfs } from "fs/promises";
-import { tmpdir as tmpdir4 } from "os";
-import { dirname as dirname4 } from "path";
+// extensions/lib/cursor.ts
+var CURSOR_PRELOAD_VERSION = 1;
+var CURSOR_TOKENS = {
+  diameterPx: 24,
+  borderRadius: "50%",
+  borderWidthPx: 3,
+  borderColor: "white",
+  haloWidthPx: 4,
+  haloColor: "cyan",
+  travelColor: "cyan",
+  pulseColor: "magenta",
+  pulseScale: 1.35,
+  travelMs: 600,
+  travelEasing: "ease-in-out",
+  pulseMs: 100,
+  colorEasing: "linear",
+  overlayZIndex: 2147483647,
+  settleSlackMs: 50,
+  commandDeadlineMs: 1000
+};
+var CURSOR_CENTER_TOLERANCE_PX = 4;
+var CURSOR_MAX_ATTEMPTS = 2;
+var HOST_STYLE = [
+  "position:fixed",
+  "left:0",
+  "top:0",
+  "width:0",
+  "height:0",
+  "margin:0",
+  "padding:0",
+  "border:0",
+  "pointer-events:none",
+  `z-index:${CURSOR_TOKENS.overlayZIndex}`,
+  ""
+].join(";");
+var SHADOW_STYLE = `:host{--omp-cursor-size:${CURSOR_TOKENS.diameterPx}px;--omp-cursor-radius:${CURSOR_TOKENS.borderRadius};--omp-cursor-border-width:${CURSOR_TOKENS.borderWidthPx}px;--omp-cursor-border-color:${CURSOR_TOKENS.borderColor};--omp-cursor-halo-width:${CURSOR_TOKENS.haloWidthPx}px;--omp-cursor-halo-color:${CURSOR_TOKENS.haloColor};--omp-cursor-travel-color:${CURSOR_TOKENS.travelColor};--omp-cursor-pulse-color:${CURSOR_TOKENS.pulseColor};--omp-cursor-easing:${CURSOR_TOKENS.travelEasing};--omp-cursor-color-easing:${CURSOR_TOKENS.colorEasing};--omp-cursor-duration:0ms}
+.omp-cursor{all:initial;position:fixed;left:0;top:0;width:var(--omp-cursor-size);height:var(--omp-cursor-size);margin:calc(var(--omp-cursor-size) / -2) 0 0 calc(var(--omp-cursor-size) / -2);box-sizing:border-box;border-radius:var(--omp-cursor-radius);border:var(--omp-cursor-border-width) solid var(--omp-cursor-border-color);background:var(--omp-cursor-travel-color);box-shadow:0 0 0 var(--omp-cursor-halo-width) var(--omp-cursor-halo-color);pointer-events:none;transform:translate3d(0, 0, 0);transition:transform var(--omp-cursor-duration) var(--omp-cursor-easing),background-color var(--omp-cursor-duration) var(--omp-cursor-color-easing)}
+.omp-cursor[data-state="pulse"]{background:var(--omp-cursor-pulse-color)}`;
+var CURSOR_AGENT_BODY = `
+const KEY = "__ompHeadedCursor";
+const VERSION = ${CURSOR_PRELOAD_VERSION};
+const PULSE_SCALE = ${CURSOR_TOKENS.pulseScale};
+const HOST_STYLE = ${JSON.stringify(HOST_STYLE)};
+const SHADOW_STYLE = ${JSON.stringify(SHADOW_STYLE)};
+const previous = scope[KEY];
+if (previous && previous.version === VERSION) return;
+if (previous && typeof previous.dispose === "function") { try { previous.dispose(); } catch { /* a stale root is replaced below */ } }
+const doc = scope.document;
+if (!doc || typeof doc.createElement !== "function") return;
+let host = null;
+let dot = null;
+const drop = () => {
+	if (host && typeof host.remove === "function") { try { host.remove(); } catch { /* already detached */ } }
+	host = null;
+	dot = null;
+};
+const place = (node, x, y, scale, duration) => {
+	node.style.setProperty("--omp-cursor-duration", duration + "ms");
+	node.style.transform = "translate3d(" + x + "px, " + y + "px, 0) scale(" + scale + ")";
+};
+const viewportCenter = () => {
+	const root = doc.documentElement;
+	const width = typeof scope.innerWidth === "number" && scope.innerWidth > 0 ? scope.innerWidth : (root && root.clientWidth) || 0;
+	const height = typeof scope.innerHeight === "number" && scope.innerHeight > 0 ? scope.innerHeight : (root && root.clientHeight) || 0;
+	return { x: width / 2, y: height / 2 };
+};
+const ensure = () => {
+	if (dot && host && host.isConnected !== false) return dot;
+	drop();
+	const root = doc.documentElement || doc.body;
+	if (!root || typeof root.appendChild !== "function") return null;
+	host = doc.createElement("div");
+	host.setAttribute("aria-hidden", "true");
+	host.setAttribute("data-omp-headed-cursor", String(VERSION));
+	host.style.cssText = HOST_STYLE;
+	const shadow = host.attachShadow({ mode: "closed" });
+	const style = doc.createElement("style");
+	style.textContent = SHADOW_STYLE;
+	const node = doc.createElement("div");
+	node.className = "omp-cursor";
+	shadow.appendChild(style);
+	shadow.appendChild(node);
+	root.appendChild(host);
+	// A new dot starts at the viewport center, never at the origin, so the very
+	// first target action still travels visibly.
+	node.dataset.state = "travel";
+	const seed = viewportCenter();
+	place(node, seed.x, seed.y, 1, 0);
+	// A forced reflow establishes the before-change style; without it the seed and
+	// the first target transform collapse into one style change and never animate.
+	void node.offsetWidth;
+	dot = node;
+	return dot;
+};
+const instantOnly = () => {
+	if (doc.visibilityState === "hidden") return true;
+	try { return scope.matchMedia("(prefers-reduced-motion: reduce)").matches === true; } catch { return false; }
+};
+const api = {
+	version: VERSION,
+	dispose: drop,
+	render(command) {
+		if (!command || command.version !== VERSION) return;
+		if (command.kind === "hide") { drop(); return; }
+		const node = ensure();
+		if (!node) return;
+		const point = command.target || {};
+		const x = typeof point.x === "number" && isFinite(point.x) ? point.x : 0;
+		const y = typeof point.y === "number" && isFinite(point.y) ? point.y : 0;
+		const requested = typeof command.durationMs === "number" && command.durationMs > 0 ? command.durationMs : 0;
+		const duration = instantOnly() ? 0 : requested;
+		const scale = command.kind === "pulse" && duration > 0 ? PULSE_SCALE : 1;
+		node.dataset.state = command.kind === "pulse" ? "pulse" : "travel";
+		place(node, x, y, scale, duration);
+	},
+};
+Object.defineProperty(scope, KEY, { value: api, configurable: true, enumerable: false, writable: false });
+if (typeof scope.addEventListener === "function") scope.addEventListener("pagehide", drop);
+`;
+var CURSOR_PRELOAD_SOURCE = `((scope) => {${CURSOR_AGENT_BODY}})(globalThis)`;
+function resolveCursorMode(mode, headless) {
+  if (mode === "auto")
+    return headless ? "off" : "animated";
+  return mode;
+}
+function createCursorRuntime(input) {
+  return {
+    requested: input.mode,
+    mode: resolveCursorMode(input.mode, input.headless),
+    registrations: new WeakMap,
+    epochs: new WeakMap,
+    warnings: input.warnings,
+    actionCount: 0,
+    redact: input.redact ?? ((text) => redact(text, { redactSecrets: true }))
+  };
+}
+async function installCursor(runtime, page) {
+  if (runtime.mode === "off")
+    return false;
+  if (runtime.registrations.has(page))
+    return true;
+  try {
+    const registration = await withCursorDeadline(page.evaluateOnNewDocument(CURSOR_PRELOAD_SOURCE), "preload registration");
+    runtime.registrations.set(page, registration.identifier);
+    runtime.epochs.set(page, 0);
+    page.on("framenavigated", (frame) => {
+      if (frame === page.mainFrame())
+        runtime.epochs.set(page, (runtime.epochs.get(page) ?? 0) + 1);
+    });
+    await withCursorDeadline(page.evaluate(CURSOR_PRELOAD_SOURCE), "current-document bootstrap");
+  } catch (error) {
+    disableCursor(runtime, `preload installation failed: ${errorMessage(error)}`);
+    return false;
+  }
+  if (runtime.mode === "animated" && await prefersReducedMotion(page))
+    runtime.mode = "instant";
+  return true;
+}
+async function pointCursorAtTarget(runtime, page, resolve, signal, runDriver = (operation) => operation()) {
+  let element = await runDriver(resolve);
+  let elementDisposed = false;
+  const cancelled = typeof signal === "object" && signal !== null && "aborted" in signal && signal.aborted === true;
+  if (runtime.mode === "off" || cancelled)
+    return element;
+  for (let attempt = 0;attempt < CURSOR_MAX_ATTEMPTS; attempt += 1) {
+    if (attempt > 0) {
+      if (!elementDisposed)
+        await runDriver(() => disposeHandle(element));
+      element = await runDriver(resolve);
+      elementDisposed = false;
+    }
+    await runDriver(() => scrollTargetIntoView(element));
+    const before = await runDriver(() => readBox(element));
+    if (!before)
+      return element;
+    const travelMs = runtime.mode === "animated" ? CURSOR_TOKENS.travelMs : 0;
+    if (!await send(runtime, page, "move", boxCenter(before), travelMs)) {
+      const failedMoveBox = await runDriver(() => readBox(element));
+      if (failedMoveBox && isSameTarget(before, failedMoveBox))
+        return element;
+      await runDriver(() => disposeHandle(element));
+      elementDisposed = true;
+      continue;
+    }
+    const after = await runDriver(() => readBox(element));
+    if (after && isSameTarget(before, after)) {
+      if (!await send(runtime, page, "pulse", boxCenter(after), CURSOR_TOKENS.pulseMs)) {
+        const failedPulseBox = await runDriver(() => readBox(element));
+        if (failedPulseBox && isSameTarget(after, failedPulseBox))
+          return element;
+        await runDriver(() => disposeHandle(element));
+        elementDisposed = true;
+        continue;
+      }
+      const pulseBox = await runDriver(() => readBox(element));
+      if (pulseBox && isSameTarget(after, pulseBox))
+        return element;
+      await runDriver(() => disposeHandle(element));
+      elementDisposed = true;
+      continue;
+    }
+  }
+  if (!elementDisposed)
+    await runDriver(() => disposeHandle(element));
+  throw new Error(`headed-browser: target_moved; the target shifted beyond ${CURSOR_CENTER_TOLERANCE_PX} CSS pixels after ${CURSOR_MAX_ATTEMPTS} positioning attempts and no action was performed`);
+}
+async function clearCursor(runtime, page) {
+  if (!runtime.registrations.has(page))
+    return;
+  await runCommand(page, buildCommand(runtime, page, "hide", { x: 0, y: 0 }, 0));
+}
+async function prefersReducedMotion(page) {
+  try {
+    return await withCursorDeadline(page.evaluate(readReducedMotion), "reduced-motion probe");
+  } catch {
+    return false;
+  }
+}
+async function withCursorDeadline(operation, label) {
+  const result = await Promise.race([
+    operation.then((value) => ({ kind: "value", value }), (error) => ({ kind: "error", error })),
+    Bun.sleep(CURSOR_TOKENS.commandDeadlineMs).then(() => ({ kind: "timeout" }))
+  ]);
+  if (result.kind === "error")
+    throw result.error;
+  if (result.kind === "timeout") {
+    throw new Error(`headed-browser: cursor ${label} gave no response within ${CURSOR_TOKENS.commandDeadlineMs} ms`);
+  }
+  return result.value;
+}
+function buildCommand(runtime, page, kind, target, durationMs) {
+  runtime.actionCount += 1;
+  return {
+    version: CURSOR_PRELOAD_VERSION,
+    actionId: `cursor-${runtime.actionCount}`,
+    kind,
+    target,
+    durationMs,
+    documentEpoch: runtime.epochs.get(page) ?? 0
+  };
+}
+async function send(runtime, page, kind, target, durationMs) {
+  if (runtime.mode === "off")
+    return false;
+  const outcome = await runCommand(page, buildCommand(runtime, page, kind, target, durationMs));
+  if (!outcome.ok) {
+    disableCursor(runtime, `${kind} command failed: ${outcome.detail}`);
+    return false;
+  }
+  if (durationMs > 0)
+    await Bun.sleep(durationMs + CURSOR_TOKENS.settleSlackMs);
+  return true;
+}
+async function runCommand(page, command) {
+  let failure;
+  const tracked = page.evaluate(renderCursorCommand, command).then(() => "ok", (error) => {
+    failure = error;
+    return "failed";
+  });
+  const outcome = await Promise.race([tracked, Bun.sleep(CURSOR_TOKENS.commandDeadlineMs).then(() => "timeout")]);
+  if (outcome === "ok")
+    return { ok: true };
+  if (outcome === "timeout") {
+    if (command.kind !== "hide") {
+      tracked.then((settled) => {
+        if (settled !== "ok")
+          return;
+        const cleanup = {
+          ...command,
+          actionId: `${command.actionId}-late-cleanup`,
+          kind: "hide",
+          target: { x: 0, y: 0 },
+          durationMs: 0
+        };
+        withCursorDeadline(page.evaluate(renderCursorCommand, cleanup), "late cleanup").catch(() => {
+          return;
+        });
+      });
+    }
+    return { ok: false, detail: `no response within ${CURSOR_TOKENS.commandDeadlineMs} ms` };
+  }
+  return { ok: false, detail: errorMessage(failure) };
+}
+function renderCursorCommand(command) {
+  const bridge = globalThis.__ompHeadedCursor;
+  if (!bridge || bridge.version !== command.version) {
+    throw new Error("headed-browser: cursor bridge unavailable");
+  }
+  bridge.render(command);
+}
+function readReducedMotion() {
+  try {
+    return matchMedia("(prefers-reduced-motion: reduce)").matches === true;
+  } catch {
+    return false;
+  }
+}
+function disableCursor(runtime, detail) {
+  runtime.mode = "off";
+  let safeDetail;
+  try {
+    safeDetail = runtime.redact(detail);
+  } catch {
+    safeDetail = "<REDACTED>";
+  }
+  const warning = `headed-browser: cursor visualization disabled (${safeDetail})`;
+  if (!runtime.warnings.includes(warning))
+    runtime.warnings.push(warning);
+}
+async function disposeHandle(element) {
+  try {
+    await element.dispose();
+  } catch {}
+}
+async function scrollTargetIntoView(element) {
+  try {
+    await element.scrollIntoView();
+  } catch {}
+}
+async function readBox(element) {
+  try {
+    return await element.boundingBox();
+  } catch {
+    return null;
+  }
+}
+function boxCenter(box) {
+  return { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+}
+function isSameTarget(before, after) {
+  const overlapping = before.x < after.x + after.width && after.x < before.x + before.width && before.y < after.y + after.height && after.y < before.y + before.height;
+  const start = boxCenter(before);
+  const end = boxCenter(after);
+  return overlapping && Math.hypot(end.x - start.x, end.y - start.y) <= CURSOR_CENTER_TOLERANCE_PX;
+}
+
+// extensions/lib/session.ts
+import { randomBytes as randomBytes2 } from "crypto";
+import { mkdir as mkdir3, readdir, readFile as readFile2, rename as rename2, stat as stat2, writeFile as writeFile2 } from "fs/promises";
+import { homedir as homedir4 } from "os";
+import { dirname as dirname4, join as join6 } from "path";
 
 // extensions/lib/profile.ts
 import { Database } from "bun:sqlite";
@@ -42113,85 +42486,7 @@ async function removeMaterializedProfile(profile, keepArtifacts) {
   return deleted;
 }
 
-// extensions/lib/preflight.ts
-async function runPreflight(cwd, ctx, overrides = {}) {
-  const config = await resolveConfig(cwd, overrides);
-  const checks = [];
-  try {
-    await loadPuppeteer(config);
-    checks.push({ name: "driver", status: "ok", observed: config.driverModulePath || "bundled puppeteer-core driver" });
-  } catch (error) {
-    checks.push({ name: "driver", status: "fail", observed: error instanceof Error ? error.message : String(error), remedy: config.driverModulePath ? "Check the explicit driverModulePath module." : "Reinstall the browser-tools plugin or set the trusted driverModulePath configuration." });
-  }
-  const installed = inventory();
-  checks.push({ name: "browser-inventory", status: installed.length > 0 ? "ok" : "warn", observed: installed, remedy: installed.length > 0 ? undefined : "Install a Firefox-family browser." });
-  for (const engine of ["firefox"]) {
-    try {
-      const browser = resolveBrowser(engine, "auto");
-      checks.push({ name: `auto-${engine}`, status: "ok", observed: { channel: browser.channel, path: browser.path } });
-    } catch (error) {
-      checks.push({ name: `auto-${engine}`, status: "warn", observed: error instanceof Error ? error.message : String(error), remedy: `Install one of: ${AUTO_ORDER[engine].join(", ")}.` });
-    }
-  }
-  for (const entry of installed.filter((candidate) => candidate.engine === "firefox")) {
-    checks.push({
-      name: `gecko-${entry.channel}`,
-      status: entry.bidiCapable ? "ok" : "warn",
-      observed: entry.geckoMilestone ?? "unknown",
-      remedy: entry.bidiCapable ? undefined : "Upgrade to Gecko 129 or newer."
-    });
-  }
-  try {
-    const browser = resolveBrowser(config.engine, config.browserChannel, config.executablePath);
-    const profile = browser.channel === "custom" ? { warnings: ["headed-browser: custom channel profile must be supplied through profileRootOverride"], cleanFallback: true } : resolveSourceProfile(config.engine, browser.channel, config.sourceProfileName, config.profileRootOverride);
-    let size;
-    if ("profilePath" in profile && profile.profilePath)
-      size = await directorySize(profile.profilePath);
-    checks.push({ name: "source-profile", status: profile.cleanFallback ? "warn" : "ok", observed: { ...profile, size }, remedy: profile.cleanFallback ? "A clean profile will be used." : undefined });
-  } catch (error) {
-    checks.push({ name: "source-profile", status: "warn", observed: error instanceof Error ? error.message : String(error), remedy: "A clean profile will be used." });
-  }
-  const ephemeralRoot = config.ephemeralRoot || tmpdir4();
-  try {
-    await mkdir3(ephemeralRoot, { recursive: true, mode: 448 });
-    const space = await statfs(ephemeralRoot);
-    checks.push({ name: "ephemeral-space", status: "ok", observed: { path: ephemeralRoot, freeBytes: space.bavail * space.bsize } });
-  } catch (error) {
-    checks.push({ name: "ephemeral-space", status: "fail", observed: error instanceof Error ? error.message : String(error), remedy: "Set ephemeralRoot to a writable filesystem." });
-  }
-  checks.push({ name: "copy-strategy", status: "ok", observed: resolvedCopyStrategy(config.copyStrategy) });
-  try {
-    const database = new Database2(":memory:");
-    database.run("CREATE TABLE moz_cookies (host TEXT, originAttributes TEXT)");
-    const columns = database.query("PRAGMA table_info(moz_cookies)").all();
-    database.close();
-    checks.push({ name: "bun-sqlite", status: "ok", observed: columns.map((column) => column.name) });
-  } catch (error) {
-    checks.push({ name: "bun-sqlite", status: "fail", observed: error instanceof Error ? error.message : String(error), remedy: "Run the extension under Bun with bun:sqlite available." });
-  }
-  const audit = createAuditWriter(ctx, config);
-  try {
-    await mkdir3(dirname4(audit.path), { recursive: true, mode: 448 });
-    await access(dirname4(audit.path), constants3.W_OK);
-    checks.push({ name: "audit", status: "ok", observed: audit.path });
-  } catch (error) {
-    checks.push({ name: "audit", status: "warn", observed: error instanceof Error ? error.message : String(error), remedy: "Set auditDir to a writable directory." });
-  }
-  checks.push({ name: "settings-source", status: "ok", observed: config.settingsSource });
-  try {
-    const policy = deriveDomainPolicy(config);
-    checks.push({ name: "policy", status: "ok", observed: { domainMode: policy.mode, disabledFeatures: ["allowDownloads", "allowFormSubmit", "allowPasswordEntry", "allowFileUpload", "allowEvaluate"].filter((key) => config[key] === false) } });
-  } catch (error) {
-    checks.push({ name: "policy", status: "fail", observed: error instanceof Error ? error.message : String(error), remedy: "Clear allowedDomains or deniedDomains." });
-  }
-  return { ok: checks.every((check) => check.status !== "fail"), checks, config, inventory: installed, warnings: config.warnings };
-}
-
 // extensions/lib/session.ts
-import { randomBytes as randomBytes2 } from "crypto";
-import { mkdir as mkdir4, readdir, readFile as readFile2, rename as rename2, stat as stat2, writeFile as writeFile2 } from "fs/promises";
-import { homedir as homedir4 } from "os";
-import { dirname as dirname5, join as join6 } from "path";
 var SESSION_SHUTDOWN_BUDGET_MS = 1000;
 var LEAK_MANIFEST_NAME = "headed-browser-leaks.json";
 var sessions = new Map;
@@ -42200,6 +42495,7 @@ async function createSession(input) {
   do
     id = `hb-${randomBytes2(3).toString("hex")}`;
   while (sessions.has(id));
+  const warnings = [...input.config.warnings, ...input.profile.warnings];
   const session = {
     id,
     browser: input.browser,
@@ -42216,7 +42512,10 @@ async function createSession(input) {
     refs: new Map,
     network: [],
     remote: input.remote,
-    warnings: [...input.config.warnings, ...input.profile.warnings]
+    lifecycle: "open",
+    activeTabHolds: 0,
+    cursor: createCursorRuntime({ mode: input.config.cursorMode, headless: input.config.headless, warnings, redact: (text) => redact(text, input.config) }),
+    warnings
   };
   await syncPages(session);
   if (session.pages.size === 0) {
@@ -42227,11 +42526,28 @@ async function createSession(input) {
   sessions.set(id, session);
   return session;
 }
+var closeGates = new WeakMap;
+function whenSessionClosing(session) {
+  const existing = closeGates.get(session);
+  if (existing !== undefined)
+    return existing.promise;
+  const gate = Promise.withResolvers();
+  closeGates.set(session, gate);
+  if (session.lifecycle !== "open")
+    gate.resolve();
+  return gate.promise;
+}
+function beginSessionClose(session) {
+  if (session.lifecycle !== "open")
+    return;
+  session.lifecycle = "closing";
+  closeGates.get(session)?.resolve();
+}
 function getSession(sessionId) {
   if (!sessionId)
     throw new Error("headed-browser: sessionId is required");
   const session = sessions.get(sessionId);
-  if (!session)
+  if (!session || session.lifecycle !== "open")
     throw new Error(`headed-browser: unknown session ${sessionId}`);
   session.lastActivityAt = Date.now();
   return session;
@@ -42259,6 +42575,10 @@ async function registerPage(session, page) {
   session.pages.set(tabId, page);
   session.pageIds.set(page, tabId);
   session.refs.set(tabId, new Map);
+  page.on("framenavigated", (frame) => {
+    if (frame === page.mainFrame())
+      session.refs.get(tabId)?.clear();
+  });
   const started = new WeakMap;
   page.on("request", (request) => {
     started.set(request, Date.now());
@@ -42285,6 +42605,7 @@ async function registerPage(session, page) {
     }, 1000);
   });
   await installConsoleCapture(page);
+  await installCursor(session.cursor, page);
   return tabId;
 }
 function selectedPage(session) {
@@ -42317,9 +42638,18 @@ function sessionSummary(session) {
     lastActivityAt: session.lastActivityAt
   };
 }
-async function closeSession(sessionId, reason = "close") {
-  const session = getSession(sessionId);
-  sessions.delete(sessionId);
+var closures = new WeakMap;
+function closeCapturedSession(session, reason = "close") {
+  const running = closures.get(session);
+  if (running !== undefined)
+    return running;
+  beginSessionClose(session);
+  sessions.delete(session.id);
+  const closure = teardownSession(session, reason);
+  closures.set(session, closure);
+  return closure;
+}
+async function teardownSession(session, reason) {
   if (session.remote)
     await closeRemote(session.remote);
   else {
@@ -42336,13 +42666,14 @@ async function closeSession(sessionId, reason = "close") {
       session.browser.process()?.kill();
   }
   const deleted = await removeMaterializedProfile(session.profile, session.config.keepArtifactsOnClose);
+  session.lifecycle = "closed";
   return { deleted, reason };
 }
 async function closeAllSessions(reason = "session-shutdown", options = {}) {
   const snapshot = [...sessions.values()];
   if (snapshot.length === 0)
     return { started: 0, completed: 0, leaked: [] };
-  const close = options.close ?? closeSession;
+  const close = options.close;
   const records = snapshot.map((session) => leakRecord(session, reason, "pending"));
   await updateLeakManifest((current) => [
     ...current.filter((record) => !records.some((next) => next.sessionId === record.sessionId)),
@@ -42353,7 +42684,7 @@ async function closeAllSessions(reason = "session-shutdown", options = {}) {
   const outcomes = new Map;
   const tasks = snapshot.map((session) => (async () => {
     try {
-      await close(session.id, reason);
+      await (close ? close(session.id, reason) : closeCapturedSession(session, reason));
       outcomes.set(session.id, { ok: true });
     } catch (error) {
       outcomes.set(session.id, { ok: false, error: error instanceof Error ? error.message : String(error) });
@@ -42446,7 +42777,7 @@ function updateLeakManifest(mutator) {
     const current = await readLeakManifest();
     const next = mutator(current);
     const path = leakedSessionsPath();
-    await mkdir4(dirname5(path), { recursive: true, mode: 448 });
+    await mkdir3(dirname4(path), { recursive: true, mode: 448 });
     const temporary = `${path}.${process.pid}.tmp`;
     await writeFile2(temporary, `${JSON.stringify(next, null, 2)}
 `, { mode: 384 });
@@ -42463,8 +42794,15 @@ function installIdleSweep(ctx, onIdleClose) {
     for (const session of [...sessions.values()]) {
       if (now - session.lastActivityAt <= session.config.idleCloseSec * 1000)
         continue;
-      await onIdleClose?.(session);
-      await closeSession(session.id, "idle-close");
+      if (session.activeTabHolds > 0)
+        continue;
+      beginSessionClose(session);
+      try {
+        await onIdleClose?.(session);
+      } catch (error) {
+        session.warnings.push(`headed-browser: idle-close hook failed: ${errorMessage(error)}`);
+      }
+      await closeCapturedSession(session, "idle-close");
     }
   }, 30000);
 }
@@ -42508,360 +42846,444 @@ function pushRing(ring, value, limit) {
     ring.splice(0, ring.length - limit);
 }
 
-// extensions/headed-browser-tools.ts
-function headedBrowserTools(pi) {
-  const z = pi.zod;
-  const audits = new Map;
-  const baseOverrides = {
-    engine: z.enum(ENGINES).optional(),
-    browserChannel: z.enum(CHANNELS).optional(),
-    headless: z.boolean().optional(),
-    executablePath: z.string().optional(),
-    profileMode: z.enum(PROFILE_MODES).optional(),
-    sourceProfileName: z.string().optional(),
-    profileRootOverride: z.string().optional(),
-    ephemeralRoot: z.string().optional(),
-    copyStrategy: z.enum(COPY_STRATEGIES).optional(),
-    cookieDomains: z.string().optional(),
-    copyFirefoxLogins: z.boolean().optional(),
-    noRemote: z.boolean().optional(),
-    allowedDomains: z.string().optional(),
-    deniedDomains: z.string().optional(),
-    allowDownloads: z.boolean().optional(),
-    allowFormSubmit: z.boolean().optional(),
-    allowPasswordEntry: z.boolean().optional(),
-    allowFileUpload: z.boolean().optional(),
-    allowEvaluate: z.boolean().optional(),
-    exposeCookieValues: z.boolean().optional(),
-    redactSecrets: z.boolean().optional(),
-    auditDir: z.string().optional(),
-    keepArtifactsOnClose: z.boolean().optional(),
-    idleCloseSec: z.number().optional(),
-    navigationTimeoutMs: z.number().optional()
+// extensions/lib/operations.ts
+var NAV_OPS = ["goto", "back", "forward", "reload", "wait", "viewport", "newTab", "selectTab", "closeTab"];
+var READ_OPS = ["snapshot", "screenshot", "evaluate", "cookies", "console", "network", "metrics", "pdf", "html"];
+var ACT_OPS = ["click", "type", "press", "scroll", "select", "upload", "dialog", "clear", "hover", "focus"];
+var TAB_LOCK_WAIT_MS = 30000;
+
+class InvalidRequestError extends Error {
+}
+
+class TabBusyError extends Error {
+}
+
+class CancelledError extends Error {
+}
+
+class StaleTabError extends Error {
+}
+
+class SessionClosedError extends Error {
+}
+function requireString(value, name) {
+  if (typeof value !== "string" || value.length === 0)
+    throw new InvalidRequestError(`headed-browser: ${name} is required`);
+  return value;
+}
+function isAborted(signal) {
+  if (typeof signal !== "object" && typeof signal !== "function" || signal === null)
+    return false;
+  try {
+    return Reflect.get(signal, "aborted") === true;
+  } catch {
+    return false;
+  }
+}
+function listenForAbort(signal, onAbort) {
+  if (typeof signal !== "object" && typeof signal !== "function" || signal === null)
+    return () => {
+      return;
+    };
+  let add;
+  let remove;
+  try {
+    const candidate = signal;
+    add = candidate.addEventListener;
+    remove = candidate.removeEventListener;
+  } catch {
+    return () => {
+      return;
+    };
+  }
+  if (add === undefined || remove === undefined)
+    return () => {
+      return;
+    };
+  const listener = () => onAbort();
+  try {
+    add.call(signal, "abort", listener, { once: true });
+  } catch {
+    return () => {
+      return;
+    };
+  }
+  return () => {
+    try {
+      remove.call(signal, "abort", listener);
+    } catch {}
   };
-  pi.registerTool({
-    name: "headed_session",
-    label: "Manage headed browser session",
-    description: "Preflight, launch, inspect, grant scoped cookies to, and close long-lived headed BiDi sessions. Session data is ephemeral and disappears on close unless keepArtifactsOnClose is enabled.",
-    parameters: z.object({
-      op: z.enum(["preflight", "status", "launch", "close", "tabs", "artifacts", "grantCookies"]),
-      sessionId: z.string().optional(),
-      domains: z.string().optional(),
-      remoteHost: z.string().optional(),
-      remoteBrowserPath: z.string().optional(),
-      sshOptions: z.string().optional(),
-      ...baseOverrides
-    }),
-    approval: "exec",
-    execute: async (_id, params, _signal, _onUpdate, ctx) => safeResult(params, async () => {
-      const cwd = ctx?.cwd ?? process.cwd();
-      if (params.op === "preflight") {
-        if (!ctx)
-          throw new Error("headed-browser: extension context unavailable");
-        const result = await runPreflight(cwd, ctx, params);
-        return resultEnvelope(result, { warnings: result.warnings });
+}
+function operationTabId(context) {
+  return context.expectedTab?.id ?? context.session.selectedTabId;
+}
+function operationPage(context, tabId) {
+  const { session, expectedTab } = context;
+  const page = session.pages.get(tabId);
+  if (session.selectedTabId !== tabId || !page || expectedTab && page !== expectedTab.page) {
+    throw new StaleTabError(`headed-browser: tab ${tabId} is no longer the session's selected tab`);
+  }
+  return page;
+}
+function classifyError(op, error) {
+  if (error instanceof InvalidRequestError)
+    return "invalid request";
+  if (error instanceof TabBusyError)
+    return "tab busy";
+  if (error instanceof CancelledError)
+    return "cancelled";
+  if (error instanceof StaleTabError)
+    return "stale tab";
+  if (error instanceof SessionClosedError)
+    return "unknown session";
+  const message = errorMessage(error);
+  if (message.includes("unknown session"))
+    return "unknown session";
+  if (message.includes("target_moved"))
+    return "target_moved";
+  if (message.includes("timed out after"))
+    return "session timeout";
+  if (op === "launch")
+    return "launch failed";
+  if (message.includes(" is required") || message.includes("unsupported headed_") || message.includes("selector or text is required")) {
+    return "invalid request";
+  }
+  return "operation failed";
+}
+function validateNav(op, params) {
+  if (!NAV_OPS.includes(op))
+    throw new InvalidRequestError(`headed-browser: unsupported headed_nav op ${op}`);
+  if (op === "goto")
+    requireString(params.url, "url");
+  if (op === "wait" && !params.selector && !params.text)
+    throw new InvalidRequestError("headed-browser: selector or text is required for wait");
+  if (op === "viewport" && (!params.width || !params.height))
+    throw new InvalidRequestError("headed-browser: width and height are required for viewport");
+  if (op === "selectTab")
+    requireString(params.tabId, "tabId");
+}
+function validateRead(op, params) {
+  if (!READ_OPS.includes(op))
+    throw new InvalidRequestError(`headed-browser: unsupported headed_read op ${op}`);
+  if (op === "evaluate")
+    requireString(params.expression, "expression");
+}
+function validateAct(op, params) {
+  if (!ACT_OPS.includes(op))
+    throw new InvalidRequestError(`headed-browser: unsupported headed_act op ${op}`);
+  if (op === "press")
+    requireString(params.key, "key");
+  if (op === "type")
+    requireString(params.text, "text");
+  if (op === "select" && (params.values?.length ?? 0) === 0 && !params.value) {
+    throw new InvalidRequestError("headed-browser: value or values is required for select");
+  }
+  if (op === "upload" && !params.files?.length)
+    throw new InvalidRequestError("headed-browser: files is required for upload");
+  if (op !== "press" && op !== "scroll" && op !== "dialog" && !params.selector && !params.ref) {
+    throw new InvalidRequestError("headed-browser: selector or valid ref is required");
+  }
+}
+var tabLocks = new WeakMap;
+function lockState(session) {
+  const existing = tabLocks.get(session);
+  if (existing !== undefined)
+    return existing;
+  const created = { queue: new Map, holders: new Map };
+  tabLocks.set(session, created);
+  return created;
+}
+function sessionClosed(session, tabId) {
+  return new SessionClosedError(`headed-browser: unknown session ${session.id} closed before tab ${tabId} could be used`);
+}
+async function acquireTab(session, ctx, tabId, signal) {
+  if (session.lifecycle !== "open")
+    throw sessionClosed(session, tabId);
+  if (isAborted(signal))
+    throw new CancelledError("headed-browser: cancelled before tab acquisition");
+  const state = lockState(session);
+  const holder = state.queue.get(tabId);
+  const { promise: slot, resolve: settle } = Promise.withResolvers();
+  state.queue.set(tabId, slot);
+  if (holder) {
+    const { promise: expired, resolve: expire } = Promise.withResolvers();
+    const { promise: cancelled, resolve: cancel } = Promise.withResolvers();
+    const timer = ctx.setTimeout(() => expire("expired"), TAB_LOCK_WAIT_MS);
+    let waiting = true;
+    const removeAbortListener = listenForAbort(signal, () => {
+      if (!waiting)
+        return;
+      cancel("cancelled");
+    });
+    try {
+      if (isAborted(signal))
+        cancel("cancelled");
+      const outcome = await Promise.race([
+        holder.then(() => "ready"),
+        expired,
+        whenSessionClosing(session).then(() => "closed"),
+        cancelled
+      ]);
+      waiting = false;
+      if (outcome !== "ready") {
+        settle(holder);
+        if (outcome === "closed")
+          throw sessionClosed(session, tabId);
+        if (outcome === "cancelled")
+          throw new CancelledError("headed-browser: cancelled while waiting for tab");
+        throw new TabBusyError(`headed-browser: tab ${tabId} stayed busy for ${TAB_LOCK_WAIT_MS} ms and nothing was done`);
       }
-      if (params.op === "status") {
-        const summaries = [...sessions.values()].map(sessionSummary);
-        const leakedSessions = await listLeakedSessions();
-        return resultEnvelope({ sessions: summaries, leakedSessions }, { warnings: leakedSessions.length > 0 ? ["headed-browser: previous session teardown is still pending or leaked; inspect leakedSessions before reusing those profiles."] : [] });
+      if (session.lifecycle !== "open") {
+        settle(holder);
+        throw sessionClosed(session, tabId);
       }
-      if (params.op === "launch") {
-        if (!ctx)
-          throw new Error("headed-browser: extension context unavailable");
-        const session = await launchSession(cwd, ctx, params);
-        const audit = createAuditWriter(ctx, session.config);
-        audits.set(session.id, audit);
-        for (const page of session.pages.values())
-          await applyPagePolicy(page, session, audit);
-        await audit.write(session, "launch", "allow", selectedPage(session).url());
-        return resultEnvelope({ launched: true, auditFile: audit.path }, sessionSummary(session));
+    } finally {
+      waiting = false;
+      removeAbortListener();
+      ctx.clearTimer(timer);
+    }
+  }
+  const hold = { tabId, slot, release: () => {
+    settle();
+  } };
+  state.holders.set(tabId, hold);
+  session.activeTabHolds += 1;
+  session.lastActivityAt = Date.now();
+  return hold;
+}
+function releaseTab(session, hold) {
+  const state = lockState(session);
+  if (state.holders.get(hold.tabId) === hold) {
+    state.holders.delete(hold.tabId);
+    session.activeTabHolds -= 1;
+  }
+  hold.release();
+  if (state.queue.get(hold.tabId) === hold.slot)
+    state.queue.delete(hold.tabId);
+  session.lastActivityAt = Date.now();
+}
+async function withTabHold(session, ctx, tabId, operation, signal) {
+  const hold = await acquireTab(session, ctx, tabId, signal);
+  try {
+    return await operation(hold);
+  } finally {
+    releaseTab(session, hold);
+  }
+}
+async function withTabLock(session, ctx, tabId, hold, operation, signal) {
+  if (hold !== undefined && lockState(session).holders.get(tabId) === hold) {
+    if (session.lifecycle !== "open")
+      throw sessionClosed(session, tabId);
+    session.lastActivityAt = Date.now();
+    try {
+      return await operation(hold);
+    } finally {
+      session.lastActivityAt = Date.now();
+    }
+  }
+  return withTabHold(session, ctx, tabId, operation, signal);
+}
+async function withPageTimeout(session, ctx, label, timeoutMs, operation) {
+  const { promise: timeout, resolve } = Promise.withResolvers();
+  const timer = ctx.setTimeout(() => resolve({ kind: "timeout" }), timeoutMs);
+  try {
+    const result = await Promise.race([
+      operation().then((value) => ({ kind: "value", value })),
+      timeout
+    ]);
+    if (result.kind === "timeout") {
+      const warning = `headed-browser: ${label} timed out after ${timeoutMs} ms; session ${session.id} closed`;
+      if (!session.warnings.includes(warning))
+        session.warnings.push(warning);
+      const cleanup = closeCapturedSession(session, `${label}-timeout`);
+      session.remote?.tunnelProcess.kill();
+      session.remote?.browserProcess.kill();
+      session.browser.process()?.kill();
+      session.browser.disconnect().catch(() => {
+        return;
+      });
+      cleanup.catch((error) => {
+        session.warnings.push(`headed-browser: timeout cleanup failed: ${errorMessage(error)}`);
+      });
+      throw new Error(warning);
+    }
+    return result.value;
+  } finally {
+    ctx.clearTimer(timer);
+  }
+}
+async function runNav(context, op, params) {
+  validateNav(op, params);
+  const { session, ctx, audit } = context;
+  const timeout = params.timeoutMs ?? session.config.navigationTimeoutMs;
+  const tabId = operationTabId(context);
+  await withTabLock(session, ctx, tabId, context.tabHold, async (hold) => {
+    if (isAborted(context.signal))
+      throw new CancelledError("headed-browser: cancelled before navigation started");
+    const page = operationPage(context, tabId);
+    if (op === "goto") {
+      const url = requireString(params.url, "url");
+      try {
+        checkNavigation(url, deriveDomainPolicy(session.config));
+        await audit?.write(session, "goto", "allow", url);
+        await withPageTimeout(session, ctx, "goto", timeout, () => page.goto(url, { timeout, waitUntil: "domcontentloaded" }));
+      } catch (error) {
+        await audit?.write(session, "goto", "block", url, errorMessage(error));
+        throw error;
       }
-      const session = getSession(params.sessionId);
-      const audit = audits.get(session.id) ?? (ctx ? createAuditWriter(ctx, session.config) : undefined);
-      if (params.op === "close") {
-        await audit?.write(session, "close", "allow", selectedPage(session).url());
-        audits.delete(session.id);
-        const closed = await closeSession(session.id);
-        return resultEnvelope(closed, { ...sessionSummary(session), url: "" });
+    } else if (op === "back")
+      await withPageTimeout(session, ctx, "back", timeout, () => page.goBack({ timeout, waitUntil: "domcontentloaded" }));
+    else if (op === "forward")
+      await withPageTimeout(session, ctx, "forward", timeout, () => page.goForward({ timeout, waitUntil: "domcontentloaded" }));
+    else if (op === "reload")
+      await withPageTimeout(session, ctx, "reload", timeout, () => page.reload({ timeout, waitUntil: "domcontentloaded" }));
+    else if (op === "wait") {
+      if (params.selector)
+        await withPageTimeout(session, ctx, "wait", timeout, () => page.waitForSelector(params.selector, { timeout }));
+      else {
+        const needle = requireString(params.text, "text");
+        await withPageTimeout(session, ctx, "wait", timeout, () => page.waitForFunction((text) => document.body?.innerText.includes(text), { timeout }, needle));
       }
-      if (params.op === "tabs") {
-        await syncPages(session);
-        const tabs = [...session.pages].map(([tabId, page]) => ({ tabId, selected: tabId === session.selectedTabId, url: page.url() }));
-        return resultEnvelope({ tabs }, sessionSummary(session));
-      }
-      if (params.op === "artifacts")
-        return resultEnvelope({ files: await listArtifacts(session) }, sessionSummary(session));
-      if (params.op === "grantCookies") {
-        if (!session.sourceProfile)
-          throw new Error("headed-browser: grantCookies requires a cloned source profile");
-        const domains = splitDomains(requireString(params.domains, "domains"));
-        const granted = await grantCookiesFromSource(selectedPage(session), session.sourceProfile, domains);
-        for (const domain of domains)
-          if (!session.profile.cookieDomains.includes(domain))
-            session.profile.cookieDomains.push(domain);
-        session.warnings.push(...granted.warnings);
-        await audit?.write(session, "grantCookies", "allow", selectedPage(session).url(), `${granted.injected} injected`);
-        return resultEnvelope(granted, sessionSummary(session));
-      }
-      throw new Error(`headed-browser: unsupported headed_session op ${params.op}`);
-    })
-  });
-  pi.registerTool({
-    name: "headed_nav",
-    label: "Navigate headed browser",
-    description: "Navigate, wait, resize, and manage tabs in a headed BiDi session. Session data is ephemeral and disappears on close.",
-    parameters: z.object({
-      op: z.enum(["goto", "back", "forward", "reload", "wait", "viewport", "newTab", "selectTab", "closeTab"]),
-      sessionId: z.string().optional(),
-      url: z.string().optional(),
-      text: z.string().optional(),
-      selector: z.string().optional(),
-      timeoutMs: z.number().optional(),
-      width: z.number().optional(),
-      height: z.number().optional(),
-      deviceScaleFactor: z.number().optional(),
-      tabId: z.string().optional()
-    }),
-    approval: "write",
-    execute: async (_id, params, _signal, _onUpdate, ctx) => safeResult(params, async () => {
-      if (!ctx)
-        throw new Error("headed-browser: extension context unavailable");
-      const session = getSession(params.sessionId);
-      const audit = audits.get(session.id) ?? createAuditWriter(ctx, session.config);
-      let page = selectedPage(session);
-      const timeout = params.timeoutMs ?? session.config.navigationTimeoutMs;
-      if (params.op === "goto") {
-        const url = requireString(params.url, "url");
-        try {
-          checkNavigation(url, deriveDomainPolicy(session.config));
-          await audit.write(session, "goto", "allow", url);
-          await withPageTimeout(session, ctx, "goto", timeout, () => page.goto(url, { timeout, waitUntil: "domcontentloaded" }));
-        } catch (error) {
-          await audit.write(session, "goto", "block", url, error instanceof Error ? error.message : String(error));
-          throw error;
-        }
-      } else if (params.op === "back")
-        await withPageTimeout(session, ctx, "back", timeout, () => page.goBack({ timeout, waitUntil: "domcontentloaded" }));
-      else if (params.op === "forward")
-        await withPageTimeout(session, ctx, "forward", timeout, () => page.goForward({ timeout, waitUntil: "domcontentloaded" }));
-      else if (params.op === "reload")
-        await withPageTimeout(session, ctx, "reload", timeout, () => page.reload({ timeout, waitUntil: "domcontentloaded" }));
-      else if (params.op === "wait") {
-        if (params.selector)
-          await withPageTimeout(session, ctx, "wait", timeout, () => page.waitForSelector(params.selector, { timeout }));
-        else if (params.text) {
-          const needle = params.text;
-          await withPageTimeout(session, ctx, "wait", timeout, () => page.waitForFunction((text) => document.body?.innerText.includes(text), { timeout }, needle));
-        } else
-          throw new Error("headed-browser: selector or text is required for wait");
-      } else if (params.op === "viewport") {
-        if (!params.width || !params.height)
-          throw new Error("headed-browser: width and height are required for viewport");
-        await page.setViewport({ width: params.width, height: params.height, deviceScaleFactor: params.deviceScaleFactor ?? 1 });
-      } else if (params.op === "newTab") {
-        page = await withPageTimeout(session, ctx, "newTab", timeout, () => session.browser.newPage());
-        const tabId = await registerPage(session, page);
-        session.selectedTabId = tabId;
-        await applyPagePolicy(page, session, audit);
+    } else if (op === "viewport") {
+      await withPageTimeout(session, ctx, "viewport", timeout, () => page.setViewport({ width: params.width, height: params.height, deviceScaleFactor: params.deviceScaleFactor ?? 1 }));
+    } else if (op === "newTab") {
+      const created = await withPageTimeout(session, ctx, "newTab", timeout, () => session.browser.newPage());
+      const createdTabId = await withPageTimeout(session, ctx, "newTab registration", timeout, () => registerPage(session, created));
+      await withTabLock(session, ctx, createdTabId, hold, async () => {
+        session.selectedTabId = createdTabId;
+        if (audit)
+          await withPageTimeout(session, ctx, "newTab policy", timeout, () => applyPagePolicy(created, session, audit));
         if (params.url) {
           const url = checkNavigation(params.url, deriveDomainPolicy(session.config)).href;
-          await withPageTimeout(session, ctx, "newTab navigation", timeout, () => page.goto(url, { timeout, waitUntil: "domcontentloaded" }));
+          await withPageTimeout(session, ctx, "newTab navigation", timeout, () => created.goto(url, { timeout, waitUntil: "domcontentloaded" }));
         }
-      } else if (params.op === "selectTab")
-        page = selectTab(session, params.tabId);
-      else if (params.op === "closeTab") {
-        page = params.tabId ? selectTab(session, params.tabId) : page;
-        await withPageTimeout(session, ctx, "closeTab", timeout, () => page.close());
+      }, context.signal);
+    } else if (op === "selectTab")
+      selectTab(session, params.tabId);
+    else if (op === "closeTab") {
+      const targetTabId = params.tabId ?? tabId;
+      await withTabLock(session, ctx, targetTabId, hold, async () => {
+        const target = selectTab(session, targetTabId);
+        await withPageTimeout(session, ctx, "closeTab", timeout, () => target.close());
         await syncPages(session);
-      }
-      return resultEnvelope({ op: params.op }, sessionSummary(session));
-    })
-  });
-  pi.registerTool({
-    name: "headed_read",
-    label: "Read headed browser",
-    description: "Read DOM snapshots, screenshots, metadata-only network logs, metrics, cookies, HTML, and PDF artifacts from a Firefox-family BiDi session. BiDi has no accessibility tree, coverage, tracing, or response bodies; use the design accessibility scanner for WCAG and the built-in browser tool for Chromium diagnostics. Session artifacts disappear on close.",
-    parameters: z.object({
-      op: z.enum(["snapshot", "screenshot", "evaluate", "cookies", "console", "network", "metrics", "pdf", "html"]),
-      sessionId: z.string().optional(),
-      selector: z.string().optional(),
-      expression: z.string().optional(),
-      fullPage: z.boolean().optional(),
-      clip: z.object({ x: z.number(), y: z.number(), width: z.number(), height: z.number() }).optional(),
-      limit: z.number().optional(),
-      since: z.number().optional(),
-      timeoutMs: z.number().optional()
-    }),
-    approval: "read",
-    execute: async (_id, params, _signal, _onUpdate, ctx) => safeResult(params, async () => {
-      if (!ctx)
-        throw new Error("headed-browser: extension context unavailable");
-      const session = getSession(params.sessionId);
-      const page = selectedPage(session);
-      const timeout = params.timeoutMs ?? session.config.navigationTimeoutMs;
-      let payload;
-      if (params.op === "snapshot")
-        payload = await withPageTimeout(session, ctx, "snapshot", timeout, () => domSnapshot(session, page, params.selector));
-      else if (params.op === "screenshot") {
-        await mkdir5(session.profile.artifactsDir, { recursive: true, mode: 448 });
-        const path = join7(session.profile.artifactsDir, `screenshot-${Date.now()}.png`);
-        const data = await withPageTimeout(session, ctx, "screenshot", timeout, () => page.screenshot({ path, fullPage: params.fullPage, clip: params.clip, encoding: "binary" }));
-        payload = { path, base64: Buffer.from(data).toString("base64") };
-      } else if (params.op === "evaluate") {
-        requireFeature(session.config, "Evaluate");
-        const expression = requireString(params.expression, "expression");
-        const value = await withPageTimeout(session, ctx, "evaluate", timeout, () => page.evaluate(expression));
-        payload = /document\.cookie/.test(expression) ? "<REDACTED>" : value;
-      } else if (params.op === "cookies")
-        payload = visibleCookies(await withPageTimeout(session, ctx, "cookies", timeout, () => page.cookies()), session.config);
-      else if (params.op === "console") {
-        payload = await withPageTimeout(session, ctx, "console", timeout, () => page.evaluate(() => {
-          if (!("__ompHeadedConsole" in globalThis))
-            return [];
-          const entries = globalThis.__ompHeadedConsole;
-          return Array.isArray(entries) ? entries : [];
-        }));
-      } else if (params.op === "network") {
-        const since = params.since ?? 0;
-        const limit = params.limit ?? 100;
-        payload = session.network.filter((entry) => entry.ts >= since).slice(-limit);
-      } else if (params.op === "metrics")
-        payload = await withPageTimeout(session, ctx, "metrics", timeout, () => readMetrics(page));
-      else if (params.op === "pdf") {
-        const path = join7(session.profile.artifactsDir, `page-${Date.now()}.pdf`);
-        await withPageTimeout(session, ctx, "pdf", timeout, () => page.pdf({ path, printBackground: true }));
-        payload = { path };
-      } else if (params.op === "html") {
-        payload = await withPageTimeout(session, ctx, "html", timeout, () => params.selector ? page.$eval(params.selector, (element) => element.outerHTML) : page.content());
-      } else
-        throw new Error(`headed-browser: unsupported headed_read op ${params.op}`);
-      return resultEnvelope(payload, sessionSummary(session));
-    })
-  });
-  pi.registerTool({
-    name: "headed_act",
-    label: "Act in headed browser",
-    description: "Click, type, press, scroll, select, upload, handle dialogs, clear, hover, or focus in a headed BiDi session. Drag is unavailable over BiDi. Session data is ephemeral and disappears on close.",
-    parameters: z.object({
-      op: z.enum(["click", "type", "press", "scroll", "select", "upload", "dialog", "clear", "hover", "focus"]),
-      sessionId: z.string().optional(),
-      ref: z.string().optional(),
-      selector: z.string().optional(),
-      text: z.string().optional(),
-      key: z.string().optional(),
-      value: z.string().optional(),
-      values: z.array(z.string()).optional(),
-      files: z.array(z.string()).optional(),
-      deltaX: z.number().optional(),
-      deltaY: z.number().optional(),
-      accept: z.boolean().optional(),
-      promptText: z.string().optional(),
-      timeoutMs: z.number().optional()
-    }),
-    approval: "write",
-    execute: async (_id, params, _signal, _onUpdate, ctx) => safeResult(params, async () => {
-      if (!ctx)
-        throw new Error("headed-browser: extension context unavailable");
-      const session = getSession(params.sessionId);
-      const page = selectedPage(session);
-      const timeout = params.timeoutMs ?? session.config.navigationTimeoutMs;
-      await withPageTimeout(session, ctx, `act ${params.op}`, timeout, async () => {
-        if (params.op === "press")
+      }, context.signal);
+    }
+  }, context.signal);
+}
+async function runRead(context, op, params, options = {}) {
+  validateRead(op, params);
+  const { session, ctx } = context;
+  const tabId = operationTabId(context);
+  const read = async () => {
+    if (isAborted(context.signal))
+      throw new CancelledError("headed-browser: cancelled before read started");
+    const page = operationPage(context, tabId);
+    const timeout = params.timeoutMs ?? session.config.navigationTimeoutMs;
+    if (op === "snapshot")
+      return withPageTimeout(session, ctx, "snapshot", timeout, () => domSnapshot(session, page, params.selector));
+    if (op === "screenshot") {
+      await mkdir4(session.profile.artifactsDir, { recursive: true, mode: 448 });
+      const path = join7(session.profile.artifactsDir, `screenshot-${Date.now()}.png`);
+      const data = await withPageTimeout(session, ctx, "screenshot", timeout, () => page.screenshot({ path, fullPage: params.fullPage, clip: params.clip, encoding: "binary" }));
+      return options.inlineBinary === false ? { path } : { path, base64: Buffer.from(data).toString("base64") };
+    }
+    if (op === "evaluate") {
+      requireFeature(session.config, "Evaluate");
+      const expression = requireString(params.expression, "expression");
+      const value = await withPageTimeout(session, ctx, "evaluate", timeout, () => page.evaluate(expression));
+      return /document\.cookie/.test(expression) ? "<REDACTED>" : value;
+    }
+    if (op === "cookies")
+      return visibleCookies(await withPageTimeout(session, ctx, "cookies", timeout, () => page.cookies()), session.config);
+    if (op === "console") {
+      return withPageTimeout(session, ctx, "console", timeout, () => page.evaluate(() => {
+        if (!("__ompHeadedConsole" in globalThis))
+          return [];
+        const entries = globalThis.__ompHeadedConsole;
+        return Array.isArray(entries) ? entries : [];
+      }));
+    }
+    if (op === "network") {
+      const since = params.since ?? 0;
+      const limit = params.limit ?? 100;
+      return session.network.filter((entry) => entry.ts >= since).slice(-limit);
+    }
+    if (op === "metrics")
+      return withPageTimeout(session, ctx, "metrics", timeout, () => readMetrics(page));
+    if (op === "pdf") {
+      const path = join7(session.profile.artifactsDir, `page-${Date.now()}.pdf`);
+      await withPageTimeout(session, ctx, "pdf", timeout, () => page.pdf({ path, printBackground: true }));
+      return { path };
+    }
+    return withPageTimeout(session, ctx, "html", timeout, () => params.selector ? page.$eval(params.selector, (element) => element.outerHTML) : page.content());
+  };
+  return withTabLock(session, ctx, tabId, context.tabHold, read, context.signal);
+}
+async function runAct(context, op, params) {
+  validateAct(op, params);
+  const { session, ctx, signal } = context;
+  const timeout = params.timeoutMs ?? session.config.navigationTimeoutMs;
+  const tabId = operationTabId(context);
+  await withTabLock(session, ctx, tabId, context.tabHold, async () => {
+    if (isAborted(signal))
+      throw new CancelledError("headed-browser: cancelled before action started");
+    const page = operationPage(context, tabId);
+    if (op === "press" || op === "scroll" || op === "dialog") {
+      await withPageTimeout(session, ctx, `act ${op}`, timeout, async () => {
+        if (op === "press")
           await page.keyboard.press(requireString(params.key, "key"));
-        else if (params.op === "scroll")
+        else if (op === "scroll")
           await page.mouse.wheel({ deltaX: params.deltaX ?? 0, deltaY: params.deltaY ?? 0 });
-        else if (params.op === "dialog")
+        else
           await handleDialog(page, params.accept !== false, params.promptText, ctx, timeout);
-        else {
-          const element = await targetElement(session, page, params);
-          if (params.op === "click")
-            await element.click();
-          else if (params.op === "hover")
-            await element.hover();
-          else if (params.op === "focus")
-            await element.focus();
-          else if (params.op === "clear")
-            await element.evaluate((node) => {
-              const input = node;
-              input.value = "";
-              input.dispatchEvent(new Event("input", { bubbles: true }));
-            });
-          else if (params.op === "type") {
-            const password = await element.evaluate((node) => node instanceof HTMLInputElement && node.type === "password");
-            if (password)
-              requireFeature(session.config, "PasswordEntry");
-            await element.type(requireString(params.text, "text"));
-          } else if (params.op === "select") {
-            const values = params.values ?? (params.value ? [params.value] : []);
-            if (values.length === 0)
-              throw new Error("headed-browser: value or values is required for select");
-            await element.select(...values);
-          } else if (params.op === "upload") {
-            requireFeature(session.config, "FileUpload");
-            if (!params.files?.length)
-              throw new Error("headed-browser: files is required for upload");
-            await element.uploadFile(...params.files);
-          } else
-            throw new Error(`headed-browser: unsupported headed_act op ${params.op}`);
+      });
+      return;
+    }
+    let element;
+    const runCursorDriver = (operation) => withPageTimeout(session, ctx, `act ${op} target`, timeout, operation);
+    try {
+      element = await pointCursorAtTarget(session.cursor, page, () => targetElement(session, page, params), signal, runCursorDriver);
+      if (isAborted(signal))
+        throw new CancelledError("headed-browser: cancelled after cursor visualization");
+      const target = element;
+      await withPageTimeout(session, ctx, `act ${op}`, timeout, async () => {
+        if (op === "click")
+          await target.click();
+        else if (op === "hover")
+          await target.hover();
+        else if (op === "focus")
+          await target.focus();
+        else if (op === "clear")
+          await target.evaluate((node) => {
+            const input = node;
+            input.value = "";
+            input.dispatchEvent(new Event("input", { bubbles: true }));
+          });
+        else if (op === "type") {
+          const password = await target.evaluate((node) => node instanceof HTMLInputElement && node.type === "password");
+          if (password)
+            requireFeature(session.config, "PasswordEntry");
+          await target.type(requireString(params.text, "text"));
+        } else if (op === "select") {
+          await target.select(...params.values ?? (params.value ? [params.value] : []));
+        } else if (op === "upload") {
+          requireFeature(session.config, "FileUpload");
+          await target.uploadFile(...params.files);
         }
       });
-      return resultEnvelope({ op: params.op }, sessionSummary(session));
-    })
-  });
-  pi.on("session_start", (_event, ctx) => {
-    installIdleSweep(ctx, async (session) => {
-      const audit = audits.get(session.id) ?? createAuditWriter(ctx, session.config);
-      await audit.write(session, "idle-close", "allow", selectedPage(session).url(), "idle timeout");
-      audits.delete(session.id);
-    });
-  });
-  pi.on("session_shutdown", async () => {
-    audits.clear();
-    const report = await closeAllSessions();
-    if (report.leaked.length > 0)
-      console.error(`headed-browser: ${report.leaked.length} session teardown(s) exceeded the shutdown budget; inspect headed_session status for leakedSessions`);
-  });
-}
-async function launchSession(cwd, ctx, params) {
-  const config = await resolveConfig(cwd, params);
-  deriveDomainPolicy(config);
-  assertChannelEngine(config.engine, config.browserChannel);
-  const agentDir = process.env.PI_CODING_AGENT_DIR ?? join7(homedir5(), ".omp", "agent");
-  let resolvedBrowser;
-  let sourceProfile;
-  let profileMode = config.profileMode;
-  if (params.remoteHost) {
-    if (config.engine !== "firefox")
-      throw new Error("headed-browser: remote mode currently supports only the Firefox engine");
-    const channel = config.browserChannel === "auto" ? "firefox" : config.browserChannel;
-    if (channel === "custom" && !params.remoteBrowserPath)
-      throw new Error("headed-browser: remoteBrowserPath is required for remote launch");
-    resolvedBrowser = { engine: "firefox", channel, path: requireString(params.remoteBrowserPath, "remoteBrowserPath"), probedPaths: [] };
-    profileMode = "clean";
-  } else {
-    resolvedBrowser = resolveBrowser(config.engine, config.browserChannel, config.executablePath);
-    if (resolvedBrowser.channel !== "custom") {
-      const profile = resolveSourceProfile(config.engine, resolvedBrowser.channel, config.sourceProfileName, config.profileRootOverride);
-      config.warnings.push(...profile.warnings);
-      if (profile.cleanFallback)
-        profileMode = "clean";
-      else
-        sourceProfile = profile.profilePath;
+    } finally {
+      try {
+        if (element !== undefined) {
+          const held = element;
+          await runCursorDriver(() => held.dispose().catch(() => {
+            return;
+          }));
+        }
+      } finally {
+        await clearCursor(session.cursor, page);
+      }
     }
-  }
-  const materialized = await materializeProfile({ engine: config.engine, channel: resolvedBrowser.channel, profileMode, sourceProfile, agentDir, config });
-  try {
-    if (params.remoteHost) {
-      const remote = await launchRemote({ remoteHost: params.remoteHost, remoteBrowserPath: requireString(params.remoteBrowserPath, "remoteBrowserPath"), sshOptions: params.sshOptions, allowDownloads: config.allowDownloads, navigationTimeoutMs: config.navigationTimeoutMs }, config);
-      return createSession({ browser: remote.browser, resolvedBrowser, profileMode, profile: materialized, config, remote });
-    }
-    const browser = await launchLocal({ engine: config.engine, executablePath: resolvedBrowser.path, profileDir: materialized.profileDir, downloadsDir: materialized.downloadsDir, config });
-    return createSession({ browser, resolvedBrowser, profileMode, profile: materialized, sourceProfile, config });
-  } catch (error) {
-    await removeMaterializedProfile(materialized, false);
-    throw error;
-  }
+  }, signal);
 }
 async function domSnapshot(session, page, selector) {
   const nodes = await page.evaluate((rootSelector) => {
@@ -42939,7 +43361,7 @@ async function domSnapshot(session, page, selector) {
 async function targetElement(session, page, params) {
   const selector = params.selector ?? (params.ref ? session.refs.get(session.selectedTabId)?.get(params.ref) : undefined);
   if (!selector)
-    throw new Error("headed-browser: selector or valid ref is required");
+    throw new InvalidRequestError("headed-browser: selector or valid ref is required");
   const element = await page.$(selector);
   if (!element)
     throw new Error(`headed-browser: no element matches ${selector}`);
@@ -42962,35 +43384,6 @@ async function readMetrics(page) {
     const supported = PerformanceObserver.supportedEntryTypes ?? [];
     return { navigation, paint: paint.length > 0 ? paint : "unsupported", resources: summary, layoutShift: supported.includes("layout-shift") ? performance.getEntriesByType("layout-shift").map((entry) => entry.toJSON()) : "unsupported", largestContentfulPaint: supported.includes("largest-contentful-paint") ? performance.getEntriesByType("largest-contentful-paint").map((entry) => entry.toJSON()) : "unsupported", pageMetrics: "unsupported", coverage: "unsupported", tracing: "unsupported" };
   });
-}
-async function withPageTimeout(session, ctx, label, timeoutMs, operation) {
-  const { promise: timeout, resolve } = Promise.withResolvers();
-  const timer = ctx.setTimeout(() => resolve({ kind: "timeout" }), timeoutMs);
-  try {
-    const result = await Promise.race([
-      operation().then((value) => ({ kind: "value", value })),
-      timeout
-    ]);
-    if (result.kind === "timeout") {
-      const warning = `headed-browser: ${label} timed out after ${timeoutMs} ms; session ${session.id} closed`;
-      if (!session.warnings.includes(warning))
-        session.warnings.push(warning);
-      const cleanup = closeSession(session.id, `${label}-timeout`);
-      session.remote?.tunnelProcess.kill();
-      session.remote?.browserProcess.kill();
-      session.browser.process()?.kill();
-      session.browser.disconnect().catch(() => {
-        return;
-      });
-      cleanup.catch((error) => {
-        session.warnings.push(`headed-browser: timeout cleanup failed: ${error instanceof Error ? error.message : String(error)}`);
-      });
-      throw new Error(warning);
-    }
-    return result.value;
-  } finally {
-    ctx.clearTimer(timer);
-  }
 }
 async function handleDialog(page, accept, promptText, ctx, timeoutMs) {
   const { promise, resolve, reject } = Promise.withResolvers();
@@ -43017,40 +43410,577 @@ async function handleDialog(page, accept, promptText, ctx, timeoutMs) {
     ctx.clearTimer(timer);
   }
 }
-function requireString(value, name) {
-  if (typeof value !== "string" || value.length === 0)
-    throw new Error(`headed-browser: ${name} is required`);
-  return value;
+
+// extensions/lib/plan.ts
+var PLAN_STEP_LIMIT = 20;
+var PLAN_STEP_OUTPUT_LIMIT = 8192;
+var PLAN_OUTPUT_LIMIT = 65536;
+var PLAN_MESSAGE_LIMIT = 300;
+var PLAN_SECRET_KEY = /^(?:cookie|set-cookie|authorization|proxy-authorization|x-api-key)$/i;
+function redactPlanPayload(value, session) {
+  if (typeof value === "string")
+    return redact(value, session.config);
+  if (Array.isArray(value))
+    return value.map((entry) => redactPlanPayload(entry, session));
+  if (value === null || typeof value !== "object")
+    return value;
+  const redacted = {};
+  for (const [key, entry] of Object.entries(value)) {
+    redacted[key] = session.config.redactSecrets && PLAN_SECRET_KEY.test(key) ? "<REDACTED>" : redactPlanPayload(entry, session);
+  }
+  return redacted;
 }
-function resultEnvelope(payload, details) {
-  return { content: [{ type: "text", text: JSON.stringify(payload, null, 2) }], details: { ...details } };
+function truncateForJsonString(text, limit) {
+  if (limit < 2)
+    return;
+  let encodedLength = 2;
+  let end = 0;
+  for (let index = 0;index < text.length; index += 1) {
+    const unit = text.charCodeAt(index);
+    let width = 1;
+    let nextEnd = index + 1;
+    if (unit === 34 || unit === 92 || unit === 8 || unit === 9 || unit === 10 || unit === 12 || unit === 13)
+      width = 2;
+    else if (unit < 32 || unit >= 55296 && unit <= 57343) {
+      if (unit >= 55296 && unit <= 56319 && index + 1 < text.length) {
+        const following = text.charCodeAt(index + 1);
+        if (following >= 56320 && following <= 57343) {
+          width = 2;
+          nextEnd += 1;
+        } else
+          width = 6;
+      } else
+        width = 6;
+    }
+    if (encodedLength + width > limit)
+      break;
+    encodedLength += width;
+    end = nextEnd;
+    index = nextEnd - 1;
+  }
+  return text.slice(0, end);
 }
-function classifyError(params, message) {
-  if (message.includes("unknown session"))
-    return "unknown session";
-  if (message.includes("timed out after"))
-    return "session timeout";
-  if (params.op === "launch")
-    return "launch failed";
-  if (message.includes(" is required") || message.includes("unsupported headed_") || message.includes("selector or text is required"))
-    return "invalid request";
-  return "operation failed";
+var PLAN_KINDS = ["nav", "read", "act"];
+var PLAN_BLOCKED_OPS = {
+  newTab: "changes the session's tab set",
+  selectTab: "changes the session's tab set",
+  closeTab: "changes the session's tab set",
+  evaluate: "runs arbitrary page script"
+};
+var PLAN_STEP_FIELDS = {
+  kind: true,
+  op: true,
+  url: true,
+  text: true,
+  selector: true,
+  expression: true,
+  ref: true,
+  key: true,
+  value: true,
+  values: true,
+  files: true,
+  timeoutMs: true,
+  width: true,
+  height: true,
+  deviceScaleFactor: true,
+  fullPage: true,
+  clip: true,
+  limit: true,
+  since: true,
+  deltaX: true,
+  deltaY: true,
+  accept: true,
+  promptText: true
+};
+function validatePlan(steps) {
+  if (!Array.isArray(steps) || steps.length === 0)
+    throw new InvalidRequestError("headed-browser: steps is required and holds at least one step");
+  if (steps.length > PLAN_STEP_LIMIT) {
+    throw new InvalidRequestError(`headed-browser: a plan holds at most ${PLAN_STEP_LIMIT} steps; received ${steps.length}`);
+  }
+  return steps.map((raw, index) => {
+    if (typeof raw !== "object" || raw === null || Array.isArray(raw))
+      throw new InvalidRequestError(`headed-browser: plan step ${index} is not an object`);
+    const fields = raw;
+    for (const field of Object.keys(fields)) {
+      if (PLAN_STEP_FIELDS[field] !== true)
+        throw new InvalidRequestError(`headed-browser: plan step ${index} has unknown field ${field}`);
+    }
+    const kind = fields.kind;
+    if (kind !== "nav" && kind !== "read" && kind !== "act") {
+      throw new InvalidRequestError(`headed-browser: plan step ${index} kind is required and is one of ${PLAN_KINDS.join(", ")}`);
+    }
+    const op = fields.op;
+    if (typeof op !== "string" || op.length === 0)
+      throw new InvalidRequestError(`headed-browser: plan step ${index} op is required`);
+    const blocked = PLAN_BLOCKED_OPS[op];
+    if (blocked !== undefined)
+      throw new InvalidRequestError(`headed-browser: plan step ${index} op ${op} ${blocked}; run it as a standalone call`);
+    const step = { ...raw, kind, op };
+    if (kind === "nav")
+      validateNav(op, step);
+    else if (kind === "read")
+      validateRead(op, step);
+    else
+      validateAct(op, step);
+    return step;
+  });
+}
+async function runPlan(input) {
+  const { session, ctx, steps, audit, signal } = input;
+  const tabId = session.selectedTabId;
+  const tab = selectedPage(session);
+  if (isAborted(signal))
+    throw new CancelledError("headed-browser: cancelled before the plan acquired its tab");
+  return withTabHold(session, ctx, tabId, async (tabHold) => {
+    const results = [];
+    const outcome = { tabId, total: steps.length, executed: 0, steps: results };
+    if (isAborted(signal)) {
+      outcome.error = "cancelled";
+      return outcome;
+    }
+    await audit?.write(session, "plan", "allow", tab.url(), `${steps.length} steps`);
+    let used = 0;
+    for (const [index, step] of steps.entries()) {
+      const startedAt = Date.now();
+      const record = { index, kind: step.kind, op: step.op, ok: false, ms: 0 };
+      results.push(record);
+      try {
+        if (isAborted(signal))
+          throw new CancelledError(`headed-browser: cancelled before plan step ${index}`);
+        if (session.selectedTabId !== tabId || session.pages.get(tabId) !== tab) {
+          throw new StaleTabError(`headed-browser: plan tab ${tabId} is no longer the session's selected tab`);
+        }
+        const context = { session, ctx, audit, signal, expectedTab: { id: tabId, page: tab }, tabHold };
+        if (step.kind === "nav")
+          await runNav(context, step.op, step);
+        else if (step.kind === "act")
+          await runAct(context, step.op, step);
+        else {
+          const payload = redactPlanPayload(await runRead(context, step.op, step, { inlineBinary: false }), session);
+          const text = JSON.stringify(payload) ?? "null";
+          const allowance = Math.max(0, Math.min(PLAN_STEP_OUTPUT_LIMIT, PLAN_OUTPUT_LIMIT - used));
+          if (text.length <= allowance) {
+            record.result = payload;
+            used += text.length;
+          } else {
+            const result = truncateForJsonString(text, allowance);
+            if (result !== undefined) {
+              record.result = result;
+              used += JSON.stringify(result).length;
+            }
+            record.truncated = true;
+          }
+        }
+        record.ok = true;
+        record.ms = Date.now() - startedAt;
+        outcome.executed += 1;
+      } catch (error) {
+        record.ms = Date.now() - startedAt;
+        record.error = classifyError(step.op, error);
+        record.message = redact(errorMessage(error), session.config).slice(0, PLAN_MESSAGE_LIMIT);
+        outcome.failedIndex = index;
+        outcome.error = record.error;
+        break;
+      }
+    }
+    const summary = outcome.error === undefined ? `${outcome.executed}/${steps.length} steps` : `${outcome.executed}/${steps.length} steps; step ${outcome.failedIndex} ${outcome.error}`;
+    await audit?.write(session, "plan", "allow", session.pages.get(tabId)?.url(), summary);
+    return outcome;
+  }, signal);
+}
+
+// extensions/lib/preflight.ts
+import { Database as Database2 } from "bun:sqlite";
+import { constants as constants3 } from "fs";
+import { access, mkdir as mkdir5, statfs } from "fs/promises";
+import { tmpdir as tmpdir4 } from "os";
+import { dirname as dirname5 } from "path";
+async function runPreflight(cwd, ctx, overrides = {}) {
+  const config = await resolveConfig(cwd, overrides);
+  const checks = [];
+  try {
+    await loadPuppeteer(config);
+    checks.push({ name: "driver", status: "ok", observed: config.driverModulePath || "bundled puppeteer-core driver" });
+  } catch (error) {
+    checks.push({ name: "driver", status: "fail", observed: error instanceof Error ? error.message : String(error), remedy: config.driverModulePath ? "Check the explicit driverModulePath module." : "Reinstall the browser-tools plugin or set the trusted driverModulePath configuration." });
+  }
+  const installed = inventory();
+  checks.push({ name: "browser-inventory", status: installed.length > 0 ? "ok" : "warn", observed: installed, remedy: installed.length > 0 ? undefined : "Install a Firefox-family browser." });
+  for (const engine of ["firefox"]) {
+    try {
+      const browser = resolveBrowser(engine, "auto");
+      checks.push({ name: `auto-${engine}`, status: "ok", observed: { channel: browser.channel, path: browser.path } });
+    } catch (error) {
+      checks.push({ name: `auto-${engine}`, status: "warn", observed: error instanceof Error ? error.message : String(error), remedy: `Install one of: ${AUTO_ORDER[engine].join(", ")}.` });
+    }
+  }
+  for (const entry of installed.filter((candidate) => candidate.engine === "firefox")) {
+    checks.push({
+      name: `gecko-${entry.channel}`,
+      status: entry.bidiCapable ? "ok" : "warn",
+      observed: entry.geckoMilestone ?? "unknown",
+      remedy: entry.bidiCapable ? undefined : "Upgrade to Gecko 129 or newer."
+    });
+  }
+  try {
+    const browser = resolveBrowser(config.engine, config.browserChannel, config.executablePath);
+    const profile = browser.channel === "custom" ? { warnings: ["headed-browser: custom channel profile must be supplied through profileRootOverride"], cleanFallback: true } : resolveSourceProfile(config.engine, browser.channel, config.sourceProfileName, config.profileRootOverride);
+    let size;
+    if ("profilePath" in profile && profile.profilePath)
+      size = await directorySize(profile.profilePath);
+    checks.push({ name: "source-profile", status: profile.cleanFallback ? "warn" : "ok", observed: { ...profile, size }, remedy: profile.cleanFallback ? "A clean profile will be used." : undefined });
+  } catch (error) {
+    checks.push({ name: "source-profile", status: "warn", observed: error instanceof Error ? error.message : String(error), remedy: "A clean profile will be used." });
+  }
+  const ephemeralRoot = config.ephemeralRoot || tmpdir4();
+  try {
+    await mkdir5(ephemeralRoot, { recursive: true, mode: 448 });
+    const space = await statfs(ephemeralRoot);
+    checks.push({ name: "ephemeral-space", status: "ok", observed: { path: ephemeralRoot, freeBytes: space.bavail * space.bsize } });
+  } catch (error) {
+    checks.push({ name: "ephemeral-space", status: "fail", observed: error instanceof Error ? error.message : String(error), remedy: "Set ephemeralRoot to a writable filesystem." });
+  }
+  checks.push({ name: "copy-strategy", status: "ok", observed: resolvedCopyStrategy(config.copyStrategy) });
+  try {
+    const database = new Database2(":memory:");
+    database.run("CREATE TABLE moz_cookies (host TEXT, originAttributes TEXT)");
+    const columns = database.query("PRAGMA table_info(moz_cookies)").all();
+    database.close();
+    checks.push({ name: "bun-sqlite", status: "ok", observed: columns.map((column) => column.name) });
+  } catch (error) {
+    checks.push({ name: "bun-sqlite", status: "fail", observed: error instanceof Error ? error.message : String(error), remedy: "Run the extension under Bun with bun:sqlite available." });
+  }
+  const audit = createAuditWriter(ctx, config);
+  try {
+    await mkdir5(dirname5(audit.path), { recursive: true, mode: 448 });
+    await access(dirname5(audit.path), constants3.W_OK);
+    checks.push({ name: "audit", status: "ok", observed: audit.path });
+  } catch (error) {
+    checks.push({ name: "audit", status: "warn", observed: error instanceof Error ? error.message : String(error), remedy: "Set auditDir to a writable directory." });
+  }
+  checks.push({ name: "settings-source", status: "ok", observed: config.settingsSource });
+  try {
+    const policy = deriveDomainPolicy(config);
+    checks.push({ name: "policy", status: "ok", observed: { domainMode: policy.mode, disabledFeatures: ["allowDownloads", "allowFormSubmit", "allowPasswordEntry", "allowFileUpload", "allowEvaluate"].filter((key) => config[key] === false) } });
+  } catch (error) {
+    checks.push({ name: "policy", status: "fail", observed: error instanceof Error ? error.message : String(error), remedy: "Clear allowedDomains or deniedDomains." });
+  }
+  return { ok: checks.every((check) => check.status !== "fail"), checks, config, inventory: installed, warnings: config.warnings };
+}
+
+// extensions/headed-browser-tools.ts
+function headedBrowserTools(pi) {
+  const z = pi.zod;
+  const audits = new Map;
+  const baseOverrides = {
+    engine: z.enum(ENGINES).optional(),
+    browserChannel: z.enum(CHANNELS).optional(),
+    headless: z.boolean().optional(),
+    executablePath: z.string().optional(),
+    profileMode: z.enum(PROFILE_MODES).optional(),
+    sourceProfileName: z.string().optional(),
+    profileRootOverride: z.string().optional(),
+    ephemeralRoot: z.string().optional(),
+    copyStrategy: z.enum(COPY_STRATEGIES).optional(),
+    cookieDomains: z.string().optional(),
+    copyFirefoxLogins: z.boolean().optional(),
+    noRemote: z.boolean().optional(),
+    allowedDomains: z.string().optional(),
+    deniedDomains: z.string().optional(),
+    allowDownloads: z.boolean().optional(),
+    allowFormSubmit: z.boolean().optional(),
+    allowPasswordEntry: z.boolean().optional(),
+    allowFileUpload: z.boolean().optional(),
+    allowEvaluate: z.boolean().optional(),
+    exposeCookieValues: z.boolean().optional(),
+    redactSecrets: z.boolean().optional(),
+    auditDir: z.string().optional(),
+    keepArtifactsOnClose: z.boolean().optional(),
+    idleCloseSec: z.number().optional(),
+    navigationTimeoutMs: z.number().optional(),
+    cursorMode: z.enum(CURSOR_MODES).optional()
+  };
+  pi.registerTool({
+    name: "headed_session",
+    label: "Manage headed browser session",
+    description: "Preflight, launch, inspect, grant scoped cookies to, and close long-lived headed BiDi sessions. Session data is ephemeral and disappears on close unless keepArtifactsOnClose is enabled.",
+    parameters: z.object({
+      op: z.enum(["preflight", "status", "launch", "close", "tabs", "artifacts", "grantCookies"]),
+      sessionId: z.string().optional(),
+      domains: z.string().optional(),
+      remoteHost: z.string().optional(),
+      remoteBrowserPath: z.string().optional(),
+      sshOptions: z.string().optional(),
+      ...baseOverrides
+    }),
+    approval: "exec",
+    execute: async (_id, params, signal, _onUpdate, ctx) => safeResult(params, async () => {
+      const cwd = ctx?.cwd ?? process.cwd();
+      if (params.op === "preflight") {
+        if (!ctx)
+          throw new Error("headed-browser: extension context unavailable");
+        const result = await runPreflight(cwd, ctx, params);
+        return resultEnvelope(result, { warnings: result.warnings });
+      }
+      if (params.op === "status") {
+        const summaries = [...sessions.values()].map(sessionSummary);
+        const leakedSessions = await listLeakedSessions();
+        return resultEnvelope({ sessions: summaries, leakedSessions }, { warnings: leakedSessions.length > 0 ? ["headed-browser: previous session teardown is still pending or leaked; inspect leakedSessions before reusing those profiles."] : [] });
+      }
+      if (params.op === "launch") {
+        if (!ctx)
+          throw new Error("headed-browser: extension context unavailable");
+        const session = await launchSession(cwd, ctx, params);
+        const audit = createAuditWriter(ctx, session.config);
+        audits.set(session.id, audit);
+        for (const page of session.pages.values())
+          await applyPagePolicy(page, session, audit);
+        await audit.write(session, "launch", "allow", selectedPage(session).url());
+        return resultEnvelope({ launched: true, auditFile: audit.path }, sessionSummary(session));
+      }
+      const session = getSession(params.sessionId);
+      const audit = audits.get(session.id) ?? (ctx ? createAuditWriter(ctx, session.config) : undefined);
+      if (params.op === "close") {
+        beginSessionClose(session);
+        try {
+          await audit?.write(session, "close", "allow", session.pages.get(session.selectedTabId)?.url());
+        } catch (error) {
+          session.warnings.push(`headed-browser: close audit failed: ${errorMessage(error)}`);
+        }
+        audits.delete(session.id);
+        const closed = await closeCapturedSession(session);
+        return resultEnvelope(closed, { ...sessionSummary(session), url: "" });
+      }
+      if (params.op === "tabs") {
+        await syncPages(session);
+        const tabs = [...session.pages].map(([tabId, page]) => ({ tabId, selected: tabId === session.selectedTabId, url: page.url() }));
+        return resultEnvelope({ tabs }, sessionSummary(session));
+      }
+      if (params.op === "artifacts")
+        return resultEnvelope({ files: await listArtifacts(session) }, sessionSummary(session));
+      if (params.op === "grantCookies") {
+        const sourceProfile = session.sourceProfile;
+        if (!sourceProfile)
+          throw new Error("headed-browser: grantCookies requires a cloned source profile");
+        if (isAborted(signal))
+          throw new CancelledError("headed-browser: cancelled before cookie grant queued");
+        const domains = splitDomains(requireString(params.domains, "domains"));
+        const tabId = session.selectedTabId;
+        const page = selectedPage(session);
+        return await withTabHold(session, ctx, tabId, async () => {
+          if (isAborted(signal))
+            throw new CancelledError("headed-browser: cancelled before cookie grant started");
+          if (session.selectedTabId !== tabId || session.pages.get(tabId) !== page) {
+            throw new StaleTabError("headed-browser: selected tab changed while cookie grant queued; retry the grant");
+          }
+          const granted = await withPageTimeout(session, ctx, "grantCookies", params.timeoutMs ?? session.config.navigationTimeoutMs, () => grantCookiesFromSource(page, sourceProfile, domains));
+          for (const domain of domains)
+            if (!session.profile.cookieDomains.includes(domain))
+              session.profile.cookieDomains.push(domain);
+          session.warnings.push(...granted.warnings);
+          await audit?.write(session, "grantCookies", "allow", page.url(), `${granted.injected} injected`);
+          return resultEnvelope(granted, sessionSummary(session));
+        }, signal);
+      }
+      throw new Error(`headed-browser: unsupported headed_session op ${params.op}`);
+    })
+  });
+  pi.registerTool({
+    name: "headed_nav",
+    label: "Navigate headed browser",
+    description: "Navigate, wait, resize, and manage tabs in a headed BiDi session. Session data is ephemeral and disappears on close.",
+    parameters: z.object({
+      op: z.enum(NAV_OPS),
+      sessionId: z.string().optional(),
+      url: z.string().optional(),
+      text: z.string().optional(),
+      selector: z.string().optional(),
+      timeoutMs: z.number().optional(),
+      width: z.number().optional(),
+      height: z.number().optional(),
+      deviceScaleFactor: z.number().optional(),
+      tabId: z.string().optional()
+    }),
+    approval: "write",
+    execute: async (_id, params, signal, _onUpdate, ctx) => safeResult(params, async () => {
+      if (!ctx)
+        throw new Error("headed-browser: extension context unavailable");
+      const session = getSession(params.sessionId);
+      const audit = audits.get(session.id) ?? createAuditWriter(ctx, session.config);
+      await runNav({ session, ctx, audit, signal }, requireString(params.op, "op"), params);
+      return resultEnvelope({ op: params.op }, sessionSummary(session));
+    })
+  });
+  pi.registerTool({
+    name: "headed_read",
+    label: "Read headed browser",
+    description: "Read DOM snapshots, screenshots, metadata-only network logs, metrics, cookies, HTML, and PDF artifacts from a Firefox-family BiDi session. BiDi has no accessibility tree, coverage, tracing, or response bodies; use the design accessibility scanner for WCAG and the built-in browser tool for Chromium diagnostics. Session artifacts disappear on close.",
+    parameters: z.object({
+      op: z.enum(READ_OPS),
+      sessionId: z.string().optional(),
+      selector: z.string().optional(),
+      expression: z.string().optional(),
+      fullPage: z.boolean().optional(),
+      clip: z.object({ x: z.number(), y: z.number(), width: z.number(), height: z.number() }).optional(),
+      limit: z.number().optional(),
+      since: z.number().optional(),
+      timeoutMs: z.number().optional()
+    }),
+    approval: "read",
+    execute: async (_id, params, signal, _onUpdate, ctx) => safeResult(params, async () => {
+      if (!ctx)
+        throw new Error("headed-browser: extension context unavailable");
+      const session = getSession(params.sessionId);
+      const payload = await runRead({ session, ctx, signal }, requireString(params.op, "op"), params);
+      return resultEnvelope(payload, sessionSummary(session));
+    })
+  });
+  pi.registerTool({
+    name: "headed_act",
+    label: "Act in headed browser",
+    description: "Click, type, press, scroll, select, upload, handle dialogs, clear, hover, or focus in a headed BiDi session. Drag is unavailable over BiDi. Session data is ephemeral and disappears on close.",
+    parameters: z.object({
+      op: z.enum(ACT_OPS),
+      sessionId: z.string().optional(),
+      ref: z.string().optional(),
+      selector: z.string().optional(),
+      text: z.string().optional(),
+      key: z.string().optional(),
+      value: z.string().optional(),
+      values: z.array(z.string()).optional(),
+      files: z.array(z.string()).optional(),
+      deltaX: z.number().optional(),
+      deltaY: z.number().optional(),
+      accept: z.boolean().optional(),
+      promptText: z.string().optional(),
+      timeoutMs: z.number().optional()
+    }),
+    approval: "write",
+    execute: async (_id, params, signal, _onUpdate, ctx) => safeResult(params, async () => {
+      if (!ctx)
+        throw new Error("headed-browser: extension context unavailable");
+      const session = getSession(params.sessionId);
+      await runAct({ session, ctx, signal }, requireString(params.op, "op"), params);
+      return resultEnvelope({ op: params.op }, sessionSummary(session));
+    })
+  });
+  pi.registerTool({
+    name: "headed_plan",
+    label: "Run a headed browser plan",
+    description: `Run up to ${PLAN_STEP_LIMIT} ordered navigate, read, and act steps against one existing session and the tab it already has selected, in one call. The whole plan is validated before the first step runs; the plan then owns that tab until its last step, so another call on it waits rather than running between two steps. The first failing step or a cancellation ends the plan and no later step runs. Tab creation, tab switching, page evaluation, and session lifecycle stay in headed_nav, headed_read, and headed_session.`,
+    parameters: z.object({
+      sessionId: z.string().optional(),
+      steps: z.array(z.object({
+        kind: z.enum(PLAN_KINDS),
+        op: z.string(),
+        url: z.string().optional(),
+        text: z.string().optional(),
+        selector: z.string().optional(),
+        ref: z.string().optional(),
+        key: z.string().optional(),
+        value: z.string().optional(),
+        values: z.array(z.string()).optional(),
+        files: z.array(z.string()).optional(),
+        timeoutMs: z.number().optional(),
+        width: z.number().optional(),
+        height: z.number().optional(),
+        deviceScaleFactor: z.number().optional(),
+        fullPage: z.boolean().optional(),
+        clip: z.object({ x: z.number(), y: z.number(), width: z.number(), height: z.number() }).optional(),
+        limit: z.number().optional(),
+        since: z.number().optional(),
+        deltaX: z.number().optional(),
+        deltaY: z.number().optional(),
+        accept: z.boolean().optional(),
+        promptText: z.string().optional()
+      }).passthrough())
+    }),
+    approval: "write",
+    execute: async (_id, params, signal, _onUpdate, ctx) => safeResult(params, async () => {
+      if (!ctx)
+        throw new Error("headed-browser: extension context unavailable");
+      const steps = validatePlan(params.steps);
+      const session = getSession(params.sessionId);
+      const audit = audits.get(session.id) ?? createAuditWriter(ctx, session.config);
+      const outcome = await runPlan({ session, ctx, steps, audit, signal });
+      const failure = outcome.error === undefined ? {} : { ok: false, error: outcome.error, failedIndex: outcome.failedIndex };
+      return resultEnvelope(outcome, { ...sessionSummary(session), ...failure }, true);
+    })
+  });
+  pi.on("session_start", (_event, ctx) => {
+    installIdleSweep(ctx, async (session) => {
+      const audit = audits.get(session.id) ?? createAuditWriter(ctx, session.config);
+      await audit.write(session, "idle-close", "allow", session.pages.get(session.selectedTabId)?.url(), "idle timeout");
+      audits.delete(session.id);
+    });
+  });
+  pi.on("session_shutdown", async () => {
+    audits.clear();
+    const report = await closeAllSessions();
+    if (report.leaked.length > 0)
+      console.error(`headed-browser: ${report.leaked.length} session teardown(s) exceeded the shutdown budget; inspect headed_session status for leakedSessions`);
+  });
+}
+async function launchSession(cwd, ctx, params) {
+  const config = await resolveConfig(cwd, params);
+  deriveDomainPolicy(config);
+  assertChannelEngine(config.engine, config.browserChannel);
+  const agentDir = process.env.PI_CODING_AGENT_DIR ?? join8(homedir5(), ".omp", "agent");
+  let resolvedBrowser;
+  let sourceProfile;
+  let profileMode = config.profileMode;
+  if (params.remoteHost) {
+    if (config.engine !== "firefox")
+      throw new Error("headed-browser: remote mode currently supports only the Firefox engine");
+    const channel = config.browserChannel === "auto" ? "firefox" : config.browserChannel;
+    if (channel === "custom" && !params.remoteBrowserPath)
+      throw new Error("headed-browser: remoteBrowserPath is required for remote launch");
+    resolvedBrowser = { engine: "firefox", channel, path: requireString(params.remoteBrowserPath, "remoteBrowserPath"), probedPaths: [] };
+    profileMode = "clean";
+  } else {
+    resolvedBrowser = resolveBrowser(config.engine, config.browserChannel, config.executablePath);
+    if (resolvedBrowser.channel !== "custom") {
+      const profile = resolveSourceProfile(config.engine, resolvedBrowser.channel, config.sourceProfileName, config.profileRootOverride);
+      config.warnings.push(...profile.warnings);
+      if (profile.cleanFallback)
+        profileMode = "clean";
+      else
+        sourceProfile = profile.profilePath;
+    }
+  }
+  const materialized = await materializeProfile({ engine: config.engine, channel: resolvedBrowser.channel, profileMode, sourceProfile, agentDir, config });
+  try {
+    if (params.remoteHost) {
+      const remote = await launchRemote({ remoteHost: params.remoteHost, remoteBrowserPath: requireString(params.remoteBrowserPath, "remoteBrowserPath"), sshOptions: params.sshOptions, allowDownloads: config.allowDownloads, navigationTimeoutMs: config.navigationTimeoutMs }, config);
+      return createSession({ browser: remote.browser, resolvedBrowser, profileMode, profile: materialized, config, remote });
+    }
+    const browser = await launchLocal({ engine: config.engine, executablePath: resolvedBrowser.path, profileDir: materialized.profileDir, downloadsDir: materialized.downloadsDir, config });
+    return createSession({ browser, resolvedBrowser, profileMode, profile: materialized, sourceProfile, config });
+  } catch (error) {
+    await removeMaterializedProfile(materialized, false);
+    throw error;
+  }
+}
+function resultEnvelope(payload, details, compact = false) {
+  return { content: [{ type: "text", text: JSON.stringify(payload, null, compact ? undefined : 2) }], details: { ...details } };
 }
 async function safeResult(params, operation) {
+  const capturedConfig = params.sessionId ? sessions.get(params.sessionId)?.config : undefined;
   try {
     const result = await operation();
-    const session = params.sessionId ? sessions.get(params.sessionId) : undefined;
-    const config = session?.config;
+    const currentConfig = params.sessionId ? sessions.get(params.sessionId)?.config : undefined;
+    const config = capturedConfig ?? currentConfig;
     if (config)
       result.content[0].text = redact(result.content[0].text, config);
     return result;
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    const session = params.sessionId ? sessions.get(params.sessionId) : undefined;
+    const currentConfig = params.sessionId ? sessions.get(params.sessionId)?.config : undefined;
     console.error(`headed-browser: ${message}`);
     return {
-      content: [{ type: "text", text: redact(message, session?.config ?? { redactSecrets: true }) }],
-      details: { ok: false, sessionId: params.sessionId, error: classifyError(params, message) }
+      content: [{ type: "text", text: redact(message, capturedConfig ?? currentConfig ?? { redactSecrets: true }) }],
+      details: { ok: false, sessionId: params.sessionId, error: classifyError(params.op ?? "", error) }
     };
   }
 }
