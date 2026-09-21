@@ -6,6 +6,7 @@ import bdReconcileTool, {
 	type BdSpawn,
 	type BeadRecord,
 	type CleanupObservation,
+	type CommandSpawn,
 	parseReceipt,
 	type ReconcileDependencies,
 	type ReconcileOperation,
@@ -141,6 +142,7 @@ function serializedLock(): WriteLock {
 
 class Harness {
 	readonly calls: string[][] = [];
+	readonly environments: NodeJS.ProcessEnv[] = [];
 	readonly beads = new Map<string, BeadRecord>();
 	readonly gates: Array<{ id: string; blocks: string; reason: string }> = [];
 	failOnce?: string;
@@ -152,7 +154,8 @@ class Harness {
 		for (const bead of beads) this.beads.set(bead.id, structuredClone(bead));
 	}
 
-	spawn: BdSpawn = async (argv): Promise<SpawnResult> => {
+	spawn: BdSpawn = async (argv, _cwd, env): Promise<SpawnResult> => {
+		this.environments.push({ ...env });
 		this.calls.push([...argv]);
 		const command = argv.slice(0, 2).join(" ");
 		if (this.failOnce !== undefined && (argv[0] === this.failOnce || command === this.failOnce)) {
@@ -343,6 +346,20 @@ describe("receipt v1 intake", () => {
 		expect(parseReceipt(value).receipt?.proof.evidence).toEqual({ future: true });
 	});
 
+	test("carries receipt extension keys and validates optional notes", () => {
+		const value = receipt({ notes: "cleanup retained for operator review", continuation: { attempt: 2 } });
+		const repo = value.repo as Record<string, unknown>;
+		repo.transportHint = "ssh";
+		const parsed = parseReceipt(value);
+		expect(parsed.reason).toBeUndefined();
+		expect(parsed.receipt).toMatchObject({
+			notes: "cleanup retained for operator review",
+			continuation: { attempt: 2 },
+			repo: { transportHint: "ssh" },
+		});
+		expect(parseReceipt(receipt({ notes: { text: "outside v1" } })).reason).toContain("notes");
+	});
+
 	test.each([
 		["empty evidence", { method: "forge query", observedAt: NOW, evidence: {} }, "proof.evidence"],
 		["self-asserted method", { method: "session summary assertion", observedAt: NOW, evidence: { summary: "merged" } }, "proof.method"],
@@ -352,10 +369,31 @@ describe("receipt v1 intake", () => {
 
 	test.each([
 		["invalid emittedAt", { emittedAt: "not-an-instant" }, "emittedAt"],
+		["calendar-invalid emittedAt", { emittedAt: "2026-02-30T12:00:00.000Z" }, "emittedAt"],
+		["out-of-range emittedAt offset", { emittedAt: "2026-09-21T12:00:00+24:00" }, "emittedAt"],
 		["receiptId epoch mismatch", { receiptId: `${Date.parse(NOW) - 1}-222222222222` }, "receiptId"],
 		["receiptId merge suffix mismatch", { receiptId: `${Date.parse(NOW)}-333333333333` }, "receiptId"],
 	] as const)("refuses %s", (_label, override, expected) => {
 		expect(parseReceipt(receipt(override)).reason).toContain(expected);
+	});
+
+	test.each([
+		["uppercase head", "headRefOid", "A".repeat(40)],
+		["short head", "headRefOid", "a".repeat(39)],
+		["non-hex merge", "mergeCommitOid", "g".repeat(40)],
+		["uppercase merge", "mergeCommitOid", "B".repeat(40)],
+	] as const)("refuses a %s object id before receiptId binding", (_label, field, oid) => {
+		const value = receipt();
+		(value.pr as Record<string, unknown>)[field] = oid;
+		expect(parseReceipt(value).reason).toContain(`pr.${field}`);
+	});
+
+	test("accepts lowercase SHA-256 object ids", () => {
+		const value = receipt();
+		const pr = value.pr as Record<string, unknown>;
+		pr.headRefOid = "1".repeat(64);
+		pr.mergeCommitOid = "2".repeat(64);
+		expect(parseReceipt(value).reason).toBeUndefined();
 	});
 
 	test("derives the current repo key and rejects supplied, inline, and embedded mismatches", async () => {
@@ -453,6 +491,45 @@ describe("scan and apply", () => {
 		expect(report.failures[0]).toContain("lock unavailable");
 		expect(mutationCalls(harness)).toEqual([]);
 	});
+
+	test("rebuilds lock, ledger, and audit environments from cwd", async () => {
+		const root = temporary("cwd-environment");
+		const foreign = temporary("foreign-environment");
+		const foreignStore = join(foreign, ".beads");
+		mkdirSync(foreignStore, { recursive: true });
+		const foreignAudit = `${JSON.stringify({
+			kind: "semantic_event",
+			issue_id: "repo-task",
+			response: { event: "merge_outcome", outcome: "merged", mergeCommitOid: MERGE },
+		})}\n`;
+		writeFileSync(join(foreignStore, "interactions.jsonl"), foreignAudit);
+		writeReceipt(root, receipt());
+		const harness = new Harness(join(root, "repo"), exactBead());
+		let lockEnvironment: NodeJS.ProcessEnv | undefined;
+		const captureLock = (async <T>(
+			_cwd: string,
+			_holder: string,
+			write: () => T | PromiseLike<T>,
+			env: NodeJS.ProcessEnv,
+		) => {
+			lockEnvironment = { ...env };
+			return { kind: "done" as const, value: await write() };
+		}) as WriteLock;
+		const report = await reconcileReceipts(
+			{ repoKey: REPO_KEY, apply: true },
+			"foreign-environment",
+			harness.cwd,
+			{ BD_ACTOR: "omp/Test/session", BEADS_DIR: foreignStore },
+			dependencies(root, harness, { lock: captureLock }),
+		);
+		const expectedStore = join(harness.cwd, ".beads");
+		expect(report.applied.map((item) => item.kind)).toContain("record-merge-audit");
+		expect(lockEnvironment?.BEADS_DIR).toBe(expectedStore);
+		expect(harness.environments.length).toBeGreaterThan(0);
+		expect(harness.environments.every((env) => env.BEADS_DIR === expectedStore)).toBe(true);
+		expect(readFileSync(join(expectedStore, "interactions.jsonl"), "utf8")).toContain(MERGE);
+		expect(readFileSync(join(foreignStore, "interactions.jsonl"), "utf8")).toBe(foreignAudit);
+	});
 	test("uses one bounded deadline and fails closed on malformed bd output", async () => {
 		const root = temporary("malformed-bd");
 		writeReceipt(root, receipt());
@@ -504,6 +581,45 @@ describe("close-out proof", () => {
 		expect(report.operations).toEqual([]);
 		expect(harness.calls).toEqual([]);
 		expect(report.refusals.some((item) => item.reason.includes("authoritative repo.nameWithOwner"))).toBe(true);
+	});
+
+	test("resolves the asserted remote through current Git configuration before querying it", async () => {
+		const root = temporary("configured-remote");
+		writeReceipt(root, receipt());
+		const harness = new Harness(join(root, "repo"), exactBead());
+		const configuredUrl = "ssh://git@github.com/srobroek/omp-plugins.git";
+		const calls: string[][] = [];
+		const command: CommandSpawn = async (_executable, argv) => {
+			calls.push([...argv]);
+			if (argv[0] === "remote") return { ok: true, exitCode: 0, stdout: `${configuredUrl}\n`, stderr: "" };
+			if (argv[0] === "ls-remote") return { ok: false, exitCode: 2, stdout: "", stderr: "" };
+			if (argv[0] === "show-ref") return { ok: false, exitCode: 1, stdout: "", stderr: "" };
+			if (argv[0] === "worktree") {
+				return { ok: true, exitCode: 0, stdout: `worktree ${harness.cwd}\nHEAD ${HEAD}\nbranch refs/heads/main\n`, stderr: "" };
+			}
+			return { ok: false, exitCode: 2, stdout: "", stderr: `unexpected git argv: ${argv.join(" ")}` };
+		};
+		const report = await reconcile(root, harness, {}, { observeCleanup: undefined, cleanupCommand: command });
+		expect(closeOperations(report.operations)).toHaveLength(1);
+		expect(calls[0]).toEqual(["remote", "get-url", "origin"]);
+		const remoteQuery = calls.find((argv) => argv[0] === "ls-remote");
+		expect(remoteQuery).toEqual(["ls-remote", "--exit-code", "--heads", "--", configuredUrl, "refs/heads/feature/reconcile"]);
+		expect(remoteQuery).not.toContain("origin");
+	});
+
+	test("refuses cleanup proof when the asserted remote is not currently configured", async () => {
+		const root = temporary("missing-configured-remote");
+		writeReceipt(root, receipt());
+		const harness = new Harness(join(root, "repo"), exactBead());
+		const calls: string[][] = [];
+		const command: CommandSpawn = async (_executable, argv) => {
+			calls.push([...argv]);
+			return { ok: false, exitCode: 2, stdout: "", stderr: "No such remote 'origin'" };
+		};
+		const report = await reconcile(root, harness, {}, { observeCleanup: undefined, cleanupCommand: command });
+		expect(closeOperations(report.operations)).toEqual([]);
+		expect(report.refusals.some((item) => item.reason.includes("git remote get-url"))).toBe(true);
+		expect(calls).toEqual([["remote", "get-url", "origin"]]);
 	});
 
 	test.each([
@@ -588,6 +704,33 @@ describe("close-out proof", () => {
 		const report = await reconcile(root, harness, {}, { pidAlive: () => true });
 		expect(closeOperations(report.operations)).toEqual([]);
 		expect(report.refusals.some((item) => item.reason.includes("live assignment/lease"))).toBe(true);
+	});
+
+	test.each([
+		["EPERM", false],
+		["ESRCH", true],
+	] as const)("treats kill(0) %s as %s for dead-claim release", async (code, expectRelease) => {
+		const root = temporary(`pid-${code.toLowerCase()}`);
+		writeReceipt(root, receipt());
+		const bead = exactBead("repo-task", {
+			status: "in_progress",
+			assignee: "omp/Lease/session",
+			metadata: { ...exactBead().metadata, lease_host: "test-host", lease_pid: "1234" },
+		});
+		const harness = new Harness(join(root, "repo"), bead);
+		const report = await reconcile(root, harness, {}, {
+			pidAlive: undefined,
+			pidProbe: () => {
+				const error = new Error(`kill(0) ${code}`) as NodeJS.ErrnoException;
+				error.code = code;
+				throw error;
+			},
+		});
+		expect(report.operations.some((item) => item.kind === "release-dead-claim")).toBe(expectRelease);
+		if (!expectRelease) {
+			expect(closeOperations(report.operations)).toEqual([]);
+			expect(report.refusals.some((item) => item.reason.includes("live assignment/lease"))).toBe(true);
+		}
 	});
 
 	test("refuses a live blocker", async () => {

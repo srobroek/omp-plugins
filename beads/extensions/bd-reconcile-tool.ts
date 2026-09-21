@@ -13,6 +13,7 @@ import {
 import {
 	claimAnchor,
 	envelopeData,
+	lifecycleBdEnvironment,
 	parseTrailingJson,
 	readGateList,
 	releaseClaimArgs,
@@ -24,7 +25,8 @@ const TOOL_TIMEOUT_MS = 25_000;
 const COMMAND_TIMEOUT_MS = 5_000;
 const REPO_KEY = /^[0-9a-f]{16}$/;
 const RECEIPT_ID = /^(\d+)-(?:[0-9a-f]{12}|nomerge)$/;
-const ISO_INSTANT = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/;
+const ISO_INSTANT = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d+)?(?:Z|([+-])(\d{2}):(\d{2}))$/;
+const GIT_OID = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
 const BEAD_ID = /^[A-Za-z][A-Za-z0-9]*(?:-[A-Za-z0-9]+)+(?:\.[A-Za-z0-9]+)*$/;
 const RECONCILE_ARBITER = Symbol.for("com.srobroek.beads.bd-reconcile-tool.v1");
 
@@ -50,11 +52,20 @@ export type BdSpawn = (
 	deadline: number,
 ) => Promise<SpawnResult>;
 
+export type CommandSpawn = (
+	executable: string,
+	argv: string[],
+	cwd: string,
+	env: NodeJS.ProcessEnv,
+	deadline: number,
+) => Promise<SpawnResult>;
+
 export type WriteLock = typeof withEmbeddedWriteLock;
 
 type JsonObject = Record<string, unknown>;
 
 export type ReceiptV1 = {
+	[key: string]: unknown;
 	schema: typeof RECEIPT_SCHEMA;
 	version: 1;
 	receiptId: string;
@@ -93,6 +104,7 @@ export type ReceiptV1 = {
 	proof: { method: string; observedAt: string; evidence: JsonObject };
 	outcome: "landed" | "cleaned" | "partial";
 	supersedes: string | null;
+	notes?: string;
 };
 
 export type ForgeObservation = {
@@ -197,9 +209,11 @@ export type ReconcileDependencies = {
 	lock?: WriteLock;
 	observeProof?: ProofObserver;
 	observeCleanup?: CleanupObserver;
+	cleanupCommand?: CommandSpawn;
 	receiptRoot?: string;
 	repoKey?: (cwd: string, deadline: number) => Promise<string | undefined>;
 	pidAlive?: (pid: number) => boolean;
+	pidProbe?: (pid: number) => void;
 	host?: string;
 	/**
 	 * Reserved for a repository-native authoritative source carrier. Receipt v1
@@ -224,6 +238,27 @@ function string(value: unknown): string | undefined {
 
 function nullableString(value: unknown): string | null | undefined {
 	return value === null ? null : string(value);
+}
+
+function isoInstantMillis(value: string): number | undefined {
+	const match = ISO_INSTANT.exec(value);
+	if (match === null) return undefined;
+	const year = Number(match[1]);
+	const month = Number(match[2]);
+	const day = Number(match[3]);
+	const hour = Number(match[4]);
+	const minute = Number(match[5]);
+	const second = Number(match[6]);
+	const offsetHour = Number(match[8] ?? 0);
+	const offsetMinute = Number(match[9] ?? 0);
+	const leap = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
+	const monthDays = [31, leap ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+	if (month < 1 || month > 12 || day < 1 || day > (monthDays[month - 1] ?? 0)
+		|| hour > 23 || minute > 59 || second > 59 || offsetHour > 23 || offsetMinute > 59) {
+		return undefined;
+	}
+	const millis = Date.parse(value);
+	return Number.isFinite(millis) ? millis : undefined;
 }
 
 function field(record: JsonObject | undefined, key: string): unknown {
@@ -281,8 +316,8 @@ export function parseReceipt(value: unknown): { receipt?: ReceiptV1; reason?: st
 	const receiptId = needString("receiptId", root.receiptId);
 	if (!RECEIPT_ID.test(receiptId)) failures.push(requirement("receiptId", root.receiptId, "<epochMillis>-<12 lowercase merge hex> or <epochMillis>-nomerge"));
 	const emittedAt = needString("emittedAt", root.emittedAt);
-	const emittedAtMillis = ISO_INSTANT.test(emittedAt) ? Date.parse(emittedAt) : Number.NaN;
-	if (!Number.isFinite(emittedAtMillis)) failures.push(requirement("emittedAt", root.emittedAt, "a valid ISO 8601 instant"));
+	const emittedAtMillis = isoInstantMillis(emittedAt);
+	if (emittedAtMillis === undefined) failures.push(requirement("emittedAt", root.emittedAt, "a calendar-valid ISO 8601 instant"));
 	const emitterPlugin = needString("emitter.plugin", field(emitter, "plugin"));
 	const emitterVersion = needString("emitter.version", field(emitter, "version"));
 	const emitterTool = needString("emitter.tool", field(emitter, "tool"));
@@ -304,9 +339,12 @@ export function parseReceipt(value: unknown): { receipt?: ReceiptV1; reason?: st
 	const baseRefName = needString("pr.baseRefName", field(pr, "baseRefName"));
 	const headRefName = needString("pr.headRefName", field(pr, "headRefName"));
 	const headRefOid = needString("pr.headRefOid", field(pr, "headRefOid"));
+	if (!GIT_OID.test(headRefOid)) failures.push(requirement("pr.headRefOid", field(pr, "headRefOid"), "a 40- or 64-character lowercase hexadecimal Git object id"));
 	const mergeCommitOid = needNullable("pr.mergeCommitOid", field(pr, "mergeCommitOid"));
+	const validMergeCommitOid = mergeCommitOid === null || GIT_OID.test(mergeCommitOid);
+	if (!validMergeCommitOid) failures.push(requirement("pr.mergeCommitOid", field(pr, "mergeCommitOid"), "null or a 40- or 64-character lowercase hexadecimal Git object id"));
 	const mergedAt = needNullable("pr.mergedAt", field(pr, "mergedAt"));
-	if (Number.isFinite(emittedAtMillis)) {
+	if (emittedAtMillis !== undefined && validMergeCommitOid) {
 		const expectedReceiptId = `${emittedAtMillis}-${mergeCommitOid === null ? "nomerge" : mergeCommitOid.slice(0, 12)}`;
 		if (receiptId !== expectedReceiptId) failures.push(requirement("receiptId", receiptId, JSON.stringify(expectedReceiptId)));
 	}
@@ -348,17 +386,20 @@ export function parseReceipt(value: unknown): { receipt?: ReceiptV1; reason?: st
 	if (outcome !== "landed" && outcome !== "cleaned" && outcome !== "partial") {
 		failures.push(requirement("outcome", outcome, '"landed", "cleaned", or "partial"'));
 	}
+	const notes = root.notes === undefined ? undefined : needString("notes", root.notes);
 	const supersedes = needNullable("supersedes", root.supersedes);
 	if (failures.length > 0) return { reason: failures.join("; ") };
-
 	return {
+
 		receipt: {
+			...root,
 			schema: RECEIPT_SCHEMA,
 			version: RECEIPT_VERSION,
 			receiptId,
 			emittedAt,
-			emitter: { plugin: emitterPlugin, version: emitterVersion, tool: emitterTool },
+			emitter: { ...emitter, plugin: emitterPlugin, version: emitterVersion, tool: emitterTool },
 			repo: {
+				...repo,
 				key: repoKey,
 				canonicalRoot,
 				remote,
@@ -366,6 +407,7 @@ export function parseReceipt(value: unknown): { receipt?: ReceiptV1; reason?: st
 				nameWithOwner,
 			},
 			pr: {
+				...pr,
 				number: Number(prNumber),
 				url: prUrl,
 				state: prState,
@@ -376,21 +418,24 @@ export function parseReceipt(value: unknown): { receipt?: ReceiptV1; reason?: st
 				mergedAt,
 			},
 			branch: {
+				...branch,
 				name: branchName,
 				deletedRemote,
 				remoteAbsenceVerifiedAt: remoteAbsence,
 				autoDeleteSetting: autoDelete as ReceiptV1["branch"]["autoDeleteSetting"],
 			},
 			worktree: {
+				...worktree,
 				path: worktreePath,
 				removed,
 				localRefDeleted,
 				absenceVerifiedAt: absence,
 			},
-			beads: { ids, ledgerActive },
-			proof: { method, observedAt: proofObservedAt, evidence: evidence ?? {} },
+			beads: { ...beads, ids, ledgerActive },
+			proof: { ...proof, method, observedAt: proofObservedAt, evidence: evidence ?? {} },
 			outcome: outcome as ReceiptV1["outcome"],
 			supersedes,
+			...(notes === undefined ? {} : { notes }),
 		},
 	};
 }
@@ -711,15 +756,26 @@ async function defaultObserveCleanup(
 	cwd: string,
 	env: NodeJS.ProcessEnv,
 	deadline: number,
+	command: CommandSpawn = spawnExecutable,
 ): Promise<{ observation?: CleanupObservation; failure?: string }> {
 	if (!/^[A-Za-z0-9][A-Za-z0-9._/-]*$/.test(receipt.repo.remote)) {
 		return { failure: requirement("repo.remote", receipt.repo.remote, "a safe configured git remote name") };
 	}
+	const configured = await command("git", ["remote", "get-url", receipt.repo.remote], cwd, env, deadline);
+	if (!configured.ok) {
+		const detail = configured.error ?? [configured.stderr, configured.stdout].filter(Boolean).join(" ").replace(/\s+/g, " ").trim();
+		return { failure: `git remote get-url could not resolve configured remote ${JSON.stringify(receipt.repo.remote)}: ${detail || `exit ${configured.exitCode}`}` };
+	}
+	const configuredUrls = configured.stdout.split("\n").map((line) => line.trim()).filter(Boolean);
+	if (configuredUrls.length !== 1) {
+		return { failure: `git remote get-url returned ${configuredUrls.length} URLs for ${JSON.stringify(receipt.repo.remote)}, expected exactly one` };
+	}
+	const remoteUrl = configuredUrls[0] as string;
 	const branchRef = `refs/heads/${receipt.branch.name}`;
 	const [remote, local, worktrees] = await Promise.all([
-		spawnExecutable("git", ["ls-remote", "--exit-code", "--heads", "--", receipt.repo.remote, branchRef], cwd, env, deadline),
-		spawnExecutable("git", ["show-ref", "--verify", "--quiet", branchRef], cwd, env, deadline),
-		spawnExecutable("git", ["worktree", "list", "--porcelain"], cwd, env, deadline),
+		command("git", ["ls-remote", "--exit-code", "--heads", "--", remoteUrl, branchRef], cwd, env, deadline),
+		command("git", ["show-ref", "--verify", "--quiet", branchRef], cwd, env, deadline),
+		command("git", ["worktree", "list", "--porcelain"], cwd, env, deadline),
 	]);
 	const remoteAbsent = remote.exitCode === 2 && remote.stdout.trim() === "";
 	if (!remoteAbsent && remote.exitCode !== 0) {
@@ -875,12 +931,13 @@ function prMatches(value: string | undefined, receipt: ReceiptV1): boolean {
 	);
 }
 
-function isPidAlive(pid: number): boolean {
+function isPidAlive(pid: number, probe?: (pid: number) => void): boolean {
 	try {
-		process.kill(pid, 0);
+		if (probe === undefined) process.kill(pid, 0);
+		else probe(pid);
 		return true;
-	} catch {
-		return false;
+	} catch (error) {
+		return (error as NodeJS.ErrnoException)?.code !== "ESRCH";
 	}
 }
 
@@ -1018,12 +1075,8 @@ async function reconcileReceiptsUnlocked(
 	deps: ReconcileDependencies,
 	deadline: number,
 ): Promise<ReconcileReport> {
-	const bdEnv = {
-		...env,
-		BD_JSON_ENVELOPE: "1",
-		BD_NO_PAGER: "1",
-		BD_NON_INTERACTIVE: "1",
-	};
+	const bdEnv = lifecycleBdEnvironment(cwd, env);
+	bdEnv.BD_JSON_ENVELOPE = "1";
 	const loaded = await readReceiptSources(params, cwd, bdEnv, deadline, deps);
 	const refusals: ReconcileRefusal[] = [];
 	if (loaded.refusal !== undefined) refusals.push({ receipt: params.receipt ?? "(scan)", reason: loaded.refusal });
@@ -1069,7 +1122,9 @@ async function reconcileReceiptsUnlocked(
 			continue;
 		}
 		if (receipt.outcome === "landed") {
-			const cleanup = await (deps.observeCleanup ?? defaultObserveCleanup)(receipt, cwd, bdEnv, deadline);
+			const cleanup = deps.observeCleanup === undefined
+				? await defaultObserveCleanup(receipt, cwd, bdEnv, deadline, deps.cleanupCommand)
+				: await deps.observeCleanup(receipt, cwd, bdEnv, deadline);
 			cleanupFailuresByReceipt.set(source.path, cleanupObservationFailures(cleanup.observation, cleanup.failure));
 		}
 		authoritativeSources.push(source);
@@ -1135,7 +1190,6 @@ async function reconcileReceiptsUnlocked(
 	const plannedClosed = new Set<string>();
 	const audit = auditResponses(embeddedStoreFor(cwd, bdEnv));
 	const localHost = deps.host ?? hostname().split(".")[0] ?? hostname();
-	const alive = deps.pidAlive ?? isPidAlive;
 
 	for (const id of sorted) {
 		const source = targets.get(id);
@@ -1177,7 +1231,8 @@ async function reconcileReceiptsUnlocked(
 				: undefined,
 		});
 		const localAnchor = anchor !== undefined && anchor.host.split(".")[0] === localHost.split(".")[0];
-		const deadLocalClaim = bead.status !== "closed" && bead.assignee !== undefined && anchor !== undefined && localAnchor && !alive(anchor.pid);
+		const anchorAlive = anchor === undefined ? true : (deps.pidAlive?.(anchor.pid) ?? isPidAlive(anchor.pid, deps.pidProbe));
+		const deadLocalClaim = bead.status !== "closed" && bead.assignee !== undefined && anchor !== undefined && localAnchor && !anchorAlive;
 		let guardedReleasePlanned = false;
 		if (deadLocalClaim && bead.assignee !== undefined) {
 			const release = releaseClaimArgs(id, bead.assignee, bdEnv);
@@ -1274,12 +1329,8 @@ export async function reconcileReceipts(
 ): Promise<ReconcileReport> {
 	const deadline = Date.now() + TOOL_TIMEOUT_MS;
 	if (!params.apply) return reconcileReceiptsUnlocked(params, toolCallId, cwd, env, deps, deadline);
-	const bdEnv = {
-		...env,
-		BD_JSON_ENVELOPE: "1",
-		BD_NO_PAGER: "1",
-		BD_NON_INTERACTIVE: "1",
-	};
+	const bdEnv = lifecycleBdEnvironment(cwd, env);
+	bdEnv.BD_JSON_ENVELOPE = "1";
 	const locked = await (deps.lock ?? withEmbeddedWriteLock)(
 		cwd,
 		`${toolCallId}-bd-reconcile-transaction-${internalRuns++}`,
