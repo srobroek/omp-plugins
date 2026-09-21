@@ -3,33 +3,41 @@ name: delivery-worktree-hygiene
 description: When holding a worktree, acting on a hygiene reminder, or cleaning up a worktree and branch after work lands.
 ---
 
-# Worktree Hygiene
+# Worktree hygiene
 
 LEGEND: Rules carry stable IDs (WH-n).
 
-## Ownership
+## Own the cleanup
 
-MUST WH-1: cleanup of a landed branch's worktree and local ref belongs to the agent that merged that branch; when no merging agent is live, the main agent owns it. Name the owner by the capability the session holds — it reads the merge proof, writes the governing bead, and runs the cleanup tool — never by a role this repository does not ship.
+MUST WH-1: cleanup of a landed branch's worktree and local ref belongs to the agent that merged that branch. When no merging agent is live, the main agent owns it. Name that owner by the capability the session holds: it reads the merge proof, writes the governing bead, and runs the cleanup tool. Never name it by a role this repository does not ship.
 
-## Holding a worktree
+## Hold one worktree
 
-MUST WH-2: hold one working worktree at a time. A second live worktree is a signal to finish or hand off the first; keeping both needs a reason recorded on the governing bead. The discipline is advisory: no gate enforces it, and nothing prunes a worktree on its own.
+MUST WH-2: one linked worktree per bead, shared by every agent that touches it. A retry, a review round, and a handoff all adopt that bead's existing worktree and branch. None of them opens a second tree, a second tip, or a second owner. Record an exceptional reason on the governing bead before you create a concurrent second tree. The discipline is advisory: no gate enforces it, and nothing prunes a worktree on its own.
 
-MUST WH-3: commit and push in small atomic steps, so a worktree is never the only copy of the work.
+MUST WH-3: commit after each bounded coherent change. Push before every session boundary. An uncommitted edit or an unpushed commit blocks landing, and therefore blocks cleanup.
 
-MUST WH-4: keep scratch files, logs, dumps, and repro scripts outside every worktree. A file written inside one dirties the tree or lands in a commit, and a dirty or unpushed tree blocks landing and therefore blocks cleanup.
+MUST WH-4: keep scratch files, logs, and repro scripts outside every worktree. A file written inside one dirties the tree or lands in a commit.
 
-MUST WH-5: act on the first hygiene reminder. A session receives at most three; after the third, the main agent or the run lead invokes the report-only `worktree-reaper` agent, which never mutates — its report is an inventory, not authorization to remove anything.
+MUST WH-5: act on the first hygiene reminder. A session receives at most three. After the third, the main agent or the run lead invokes the report-only `worktree-reaper` agent, which never mutates. Its report is an inventory, not authorization to remove anything.
 
-## Removing landed state
+## Remove landed state
 
-MUST WH-6: remove landed state only through `bd_reconcile`, then `delivery_cleanup`, which removes one worktree, then its local ref, and verifies absence. The order is fixed: `delivery_cleanup` refuses while the ledger is unreconciled, and names `bd_reconcile` in the refusal. Provenance obligations for a destructive ref mutation stay in `rule://worktrunk-destructive-branch-provenance`.
+MUST WH-6: remove landed state only through `bd_reconcile`, then `delivery_cleanup`. That tool removes one worktree. Then it deletes the local ref. Then it verifies absence. The order is fixed: `delivery_cleanup` refuses while the ledger stays unreconciled, and names `bd_reconcile` in the refusal. Provenance obligations for a destructive ref mutation stay in `rule://worktrunk-destructive-branch-provenance`.
 
-Preconditions and stopping conditions for WH-6:
+WH-6 has preconditions and stopping conditions:
 
-- Start from exact landing proof for that branch (`rule://delivery-git-workflow` GW-3): a `MERGED` PR whose `headRefOid` equals the branch tip, plus its merge commit in the base. An intermediate merge is not the final destination.
-- Absence is verified, never inferred. `delivery_cleanup` records a verified-absence timestamp for the removed worktree and for the remote branch; `unknown` is never promoted to a verified absence, and a successful mutation is not its own proof.
-- Fail closed. A dirty tree, an unpushed commit, a tip that landing proof does not cover, or an ambiguous owner is held for the user: name the worktree path, the branch, the tip SHA, and the one unmet condition. Do not force, and do not stash.
-- Orient first. `ExtensionContext` carries no role identity, so nothing tells a session whether it is the main agent, a run lead, or a worker. Call `delivery_orient` to establish that before claiming a main-agent-only or lead-only step, and `delivery_hygiene_report` for the on-demand inventory; both are read-only.
-- Clean only the work item you own. Another actor's worktrees, branches, and uncommitted state are not yours to inventory, report, or remove (`rule://coexistence-worktree`).
-- Switch worktrees only when the work requires it. Each one carries its own provisioning and build output from `wt step copy-ignored`; re-pointing a worktree at another branch discards both.
+- Start from exact landing proof for that branch (`rule://delivery-git-workflow` GW-3). An exact merged pull request is the only proof that closes a bead automatically. It names the recorded base, a `headRefOid` equal to the branch tip, and that merge commit reached in the base. An intermediate merge is not the final destination.
+- Where there is no pull request, `git cherry` or a stable patch ID proves one equivalent patch, never a multi-commit squash. That proof supports a reconciliation the owner states explicitly. It never closes a bead automatically.
+- Whichever proof you hold, cleanup runs only after `bd_reconcile` has reconciled the ledger.
+- Verify absence, never infer it. `delivery_cleanup` stamps a verified-absence time for the removed worktree and for the remote branch. It never promotes `unknown` to a verified absence. A successful mutation is not its own proof.
+- Fail closed on any of these, and hold the work for the user:
+  - a dirty tree
+  - an unpushed commit
+  - a tip that landing proof does not cover
+  - an ambiguous owner
+- Report the worktree path, the branch tip SHA, and the unmet condition.
+- Never force a removal, and never stash to make a tree look clean.
+- Orient first. `ExtensionContext` carries no role identity. Nothing tells a session whether it is the main agent, a run lead, or a worker. Call `delivery_orient` before you claim a main-agent-only or lead-only step. Call `delivery_hygiene_report` for the on-demand inventory. Both tools are read-only.
+- Clean only the bead you own. Another actor's worktrees and uncommitted state are not yours to inventory, to report, or to remove (`rule://coexistence-worktree`).
+- Switch worktrees only when the work requires it. Each one carries its own provisioning and build output from `wt step copy-ignored`. Re-pointing a worktree at another branch discards both.
