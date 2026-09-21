@@ -381,23 +381,22 @@ describe("bash", () => {
 	});
 });
 
-test("canonical permits git transports to push refs but still refuses commits", () => {
+test("canonical refuses git transports and commits", () => {
 	const { canonical, topology } = project();
 	for (const command of [
 		"git push",
 		"git push --force-with-lease origin main",
-		"git -C /some/path push origin main",
 		"dgit push",
 		"dgit push --force-with-lease origin main",
-		"dgit -C /some/path push origin main",
+		`git -C ${canonical} push origin main`,
+		`dgit -C ${canonical} push origin main`,
+		"git commit -m x",
+		"dgit commit -m x",
 	]) {
-		expect(decideWorktreeCall("bash", { command }, canonical, topology)).toBeUndefined();
-	}
-	for (const command of ["git commit -m x", "dgit commit -m x"]) {
 		expect(decideWorktreeCall("bash", { command }, canonical, topology)?.block).toBe(true);
 	}
 });
-test("canonical bootstrap commands ignore literal foreign paths", () => {
+test("canonical bootstrap respects literal foreign paths", () => {
 	const { canonical, worktree, topology } = project();
 	const foreignCanonical = mkdtempSync(join(tmpdir(), "worktrunk-foreign-canonical-"));
 	roots.push(foreignCanonical);
@@ -410,10 +409,14 @@ test("canonical bootstrap commands ignore literal foreign paths", () => {
 		expect(
 			decideWorktreeCall("bash", { cwd, command: `git -C ${foreignCanonical} status --porcelain` }, canonical, withForeign),
 		).toBeUndefined();
-		expect(
-			decideWorktreeCall("bash", { cwd, command: `dgit -C ${foreignCanonical} push origin main` }, canonical, withForeign),
-		).toBeUndefined();
 	}
+	expect(
+		decideWorktreeCall("bash", { cwd: canonical, command: `dgit -C ${foreignCanonical} push origin main` }, canonical, withForeign)
+			?.block,
+	).toBe(true);
+	expect(
+		decideWorktreeCall("bash", { cwd: worktree, command: `dgit -C ${foreignCanonical} push origin main` }, canonical, withForeign),
+	).toBeUndefined();
 	for (const command of [
 		`git -C ${canonical} checkout -b new-branch`,
 		`git checkout ${worktree}/new-file`,
@@ -502,7 +505,7 @@ describe("bootstrapAllowed", () => {
 		expect(bootstrapAllowed("wt switch -y --create --no-cd --base main --format json omp/agent/x --clobber")).toBe(false);
 	});
 
-	test("accepts the listed wt commands, git transports, and every bd command", () => {
+	test("accepts the listed wt and git commands plus Beads claim", () => {
 		expect(bootstrapAllowed("wt list")).toBe(true);
 		expect(bootstrapAllowed("wt list --format json")).toBe(true);
 		expect(bootstrapAllowed("wt config show")).toBe(true);
@@ -510,18 +513,24 @@ describe("bootstrapAllowed", () => {
 		expect(bootstrapAllowed("git worktree list --porcelain")).toBe(true);
 		expect(bootstrapAllowed("git -C /repo status --porcelain=v1 -b")).toBe(true);
 		expect(bootstrapAllowed("git fetch origin")).toBe(true);
-		expect(bootstrapAllowed("git push --force-with-lease origin main")).toBe(true);
-		expect(bootstrapAllowed("git -C /repo push origin main")).toBe(true);
-		expect(bootstrapAllowed("git --namespace origin push main")).toBe(true);
-		expect(bootstrapAllowed("dgit push")).toBe(true);
-		expect(bootstrapAllowed("dgit push --force-with-lease origin main")).toBe(true);
-		expect(bootstrapAllowed("dgit -C /repo push origin main")).toBe(true);
-		expect(bootstrapAllowed("dgit --namespace origin push main")).toBe(true);
 		expect(bootstrapAllowed("dgit fetch origin")).toBe(true);
 		expect(bootstrapAllowed("git branch --list omp/*")).toBe(true);
 		expect(bootstrapAllowed("bd update x --claim --json")).toBe(true);
 	});
 
+	test("allows bd create and exactly bd dolt pull, but no other Beads mutations", () => {
+		expect(bootstrapAllowed('bd create "probe" --type task')).toBe(true);
+		expect(bootstrapAllowed("bd dolt pull")).toBe(true);
+		for (const command of [
+			"bd dolt pull --remote origin",
+			"bd dolt push",
+			"bd close omp-plugins-xhcj.4",
+			"bd delete omp-plugins-xhcj.4",
+			"bd update omp-plugins-xhcj.4 --status closed",
+			"bd --actor create close omp-plugins-xhcj.4",
+			"bd --format create close omp-plugins-xhcj.4",
+		]) expect(bootstrapAllowed(command)).toBe(false);
+	});
 	test("rejects mutating git transports, unlisted wt, and every other program", () => {
 		expect(bootstrapAllowed("wt step prune")).toBe(false);
 		expect(bootstrapAllowed("wt remove -y omp/agent/x")).toBe(false);
@@ -529,6 +538,15 @@ describe("bootstrapAllowed", () => {
 		expect(bootstrapAllowed("git worktree remove x")).toBe(false);
 		expect(bootstrapAllowed("git branch -D omp/agent/x")).toBe(false);
 		expect(bootstrapAllowed("git commit -m x")).toBe(false);
+		for (const command of [
+			"git push --force-with-lease origin main",
+			"git -C /repo push origin main",
+			"git --namespace origin push main",
+			"dgit push",
+			"dgit push --force-with-lease origin main",
+			"dgit -C /repo push origin main",
+			"dgit --namespace origin push main",
+		]) expect(bootstrapAllowed(command)).toBe(false);
 		expect(bootstrapAllowed("git --namespace push log")).toBe(true);
 		expect(bootstrapAllowed("git --namespace push commit")).toBe(false);
 		expect(bootstrapAllowed("dgit --namespace push log")).toBe(true);

@@ -196,8 +196,23 @@ const READ_ONLY_COMPANIONS: Record<string, true> = {
 };
 const READ_ONLY_PROBES: Record<string, true> = { basename: true, cat: true, dirname: true, echo: true, env: true, false: true, git: true, grep: true, head: true, jq: true, printf: true, pwd: true, readlink: true, rg: true, sed: true, stat: true, tail: true, test: true, tr: true, true: true, uniq: true, wc: true, which: true };
 const BD_READ_VERBS: Record<string, true> = { show: true, list: true, ready: true, status: true, stats: true, comments: true, dep: true, prime: true, doctor: true, version: true, lint: true, claim: true, unclaim: true, heartbeat: true };
-function bdReadAllowed(args: readonly string[]): boolean {
-	const verb = args.find(token => !token.startsWith("-"));
+const BD_VALUE_OPTIONS = ["--actor", "--database", "--db", "-C", "--directory", "--dolt-auto-commit", "--format", "--mem-profile"] as const;
+function afterBdGlobals(tokens: readonly string[]): string[] | null {
+	let index = 0;
+	while (tokens[index]?.startsWith("-")) {
+		const flag = tokens[index++] as string;
+		if (flag.includes("=") || !BD_VALUE_OPTIONS.includes(flag as (typeof BD_VALUE_OPTIONS)[number])) continue;
+		if (tokens[index] === undefined) return null;
+		index++;
+	}
+	return tokens.slice(index);
+}
+function bdReadAllowed(tokens: readonly string[]): boolean {
+	const args = afterBdGlobals(tokens);
+	if (args === null) return false;
+	const verb = args[0];
+	if (verb === "create") return true;
+	if (verb === "dolt") return args.length === 2 && args[1] === "pull";
 	return verb === "update" ? args.includes("--claim") : verb !== undefined && BD_READ_VERBS[verb] === true;
 }
 function probeAllowed(program: string, args: readonly string[]): boolean {
@@ -1218,7 +1233,7 @@ if (program === "wt") {
 	if (program === "git" || program === "dgit") {
 		const args = afterGitGlobals(rest); if (args === null) return "other";
 		const sub = args[0];
-		if (sub === "rev-parse" || sub === "status" || sub === "fetch" || sub === "push" || sub === "log") return "allowed";
+		if (sub === "rev-parse" || sub === "status" || sub === "fetch" || sub === "log") return "allowed";
 		if (sub === "worktree") return args[1] === "list" ? "allowed" : "other";
 		if (sub === "branch") return args[1] === "--list" ? "allowed" : "other";
 		return probeAllowed("git", rest) ? "safe" : "other";
