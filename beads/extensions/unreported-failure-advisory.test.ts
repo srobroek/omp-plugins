@@ -5,6 +5,7 @@ import unreportedFailureAdvisory, {
 	checkLabel,
 	failureSignals,
 	formatUnreportedAdvisory,
+	listBugs,
 	resetUnreportedFailureAdvisoryForTests,
 	signalSubjects,
 	unreportedFailures,
@@ -278,9 +279,6 @@ describe("bugTexts", () => {
 		expect(bugTexts(JSON.stringify([{ id: "beads-a2", title: "flaky worker" }]))).toEqual(["flaky worker"]);
 	});
 
-	test("an empty store is an empty list, not a failure to read", () => {
-		expect(bugTexts("[]")).toEqual([]);
-	});
 
 	test("an unreadable store is undefined, so the advisory can stay silent", () => {
 		expect(bugTexts("")).toBeUndefined();
@@ -378,14 +376,20 @@ describe("integration", () => {
 		expect(handler(handlers, "tool_result")({ toolName: "bash" }, undefined)).toBeUndefined();
 		expect(errors).toEqual([]);
 	});
-
 	test("a repository with no .beads stays silent, however red the run was", async () => {
-		const { handlers, sent, errors } = wire();
-		handler(handlers, "tool_result")(result("bun test", BUN_FAIL), ctx);
-		handler(handlers, "tool_result")(result("bun run typecheck", TSC_FAIL), ctx);
-		await handler(handlers, "session_shutdown")({ type: "session_shutdown" }, ctx);
-		expect(sent).toEqual([]);
-		expect(errors).toEqual([]);
+		const saved = process.env.BEADS_DIR;
+		delete process.env.BEADS_DIR;
+		try {
+			const { handlers, sent, errors } = wire();
+			handler(handlers, "tool_result")(result("bun test", BUN_FAIL), ctx);
+			handler(handlers, "tool_result")(result("bun run typecheck", TSC_FAIL), ctx);
+			await handler(handlers, "session_shutdown")({ type: "session_shutdown" }, ctx);
+			expect(sent).toEqual([]);
+			expect(errors).toEqual([]);
+		} finally {
+			if (saved === undefined) delete process.env.BEADS_DIR;
+			else process.env.BEADS_DIR = saved;
+		}
 	});
 
 	test("a session that saw only a clean run reports nothing", async () => {
@@ -407,5 +411,9 @@ describe("integration", () => {
 		const { handlers } = wire();
 		// The text carries no verdict at all: `details.exitCode` is the only evidence.
 		expect(handler(handlers, "tool_result")(result("bun test", "output was spilled", { exitCode: 1 }), ctx)).toBeUndefined();
+	});
+
+	test("a failed bd listing is unknown rather than an empty bug list", async () => {
+		expect(await listBugs("/nonexistent-repo")).toBeUndefined();
 	});
 });

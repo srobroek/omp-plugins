@@ -161,6 +161,15 @@ describe("pinBashInput", () => {
 		rmSync(plain, { recursive: true, force: true });
 	});
 
+	test("a Git identity failure is unknown, never the local beads directory", () => {
+		const plain = mkdtempSync(join(tmpdir(), "beads-unreadable-"));
+		writeFileSync(join(plain, ".git"), "gitdir: /missing");
+		mkdirSync(join(plain, ".beads"));
+		expect(repoIdentity(plain)).toBeUndefined();
+		expect(sessionPinFor(plain)).toBeUndefined();
+		rmSync(plain, { recursive: true, force: true });
+	});
+
 	test("adds the session pin to a bash call, keeps a caller pin, ignores malformed env", () => {
 		expect(pinBashInput({ command: "bd list" }, "/repo/.beads")).toEqual({ command: "bd list", env: { BEADS_DIR: "/repo/.beads" } });
 		expect(pinBashInput({ command: "bd list", env: { A: "1" } }, "/repo/.beads")).toEqual({ command: "bd list", env: { A: "1", BEADS_DIR: "/repo/.beads" } });

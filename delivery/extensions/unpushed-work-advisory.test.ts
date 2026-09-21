@@ -333,6 +333,12 @@ describe("handleSessionStop", () => {
 		expect(handleSessionStop({}, "/repo", text, new Set(), noStat)).toBeUndefined();
 	});
 
+	test("reports unreadable Git status without blocking shutdown", () => {
+		const result = handleSessionStop({}, "/repo", null, new Set());
+		expect(result?.continue).toBe(true);
+		expect(result?.additionalContext).toContain("git status failed");
+	});
+
 	test("does not fire twice in a row", () => {
 		const state = createAdvisoryState();
 		const text = porcelain("## feat...origin/feat [ahead 1]");

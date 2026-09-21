@@ -63,6 +63,17 @@ describe("scanSurfaces isolation", () => {
 		expect(npm?.hits.map((hit) => hit.name)).toEqual(["retained-hit"]);
 		expect(gaps.some((gap) => gap.surface === "npm")).toBe(true);
 	});
+
+	test("malformed GitHub JSON is an explicit coverage gap, not a hit", async () => {
+		const { results, gaps } = await scanSurfaces(
+			{ query: "browser", surfaces: ["github"] },
+			{ run: async () => ({ ok: true, stdout: "{not-json", stderr: "" }), which: () => true, env: {} },
+		);
+		const github = results.find((result) => result.surface === "github");
+		expect(github?.ok).toBe(false);
+		expect(github?.hits).toEqual([]);
+		expect(gaps.some((gap) => gap.surface === "github")).toBe(true);
+	});
 });
 
 describe("local MCP inventory privacy", () => {

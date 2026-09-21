@@ -45,13 +45,17 @@ export function createAdvisoryState(): AdvisoryState {
 	return { lastFired: false, agentPaths: new Set(), sessionHead: null };
 }
 
-export function revParseHead(cwd: string): string | null {
+function timeoutFor(deadline: number | undefined): number {
+	return Math.max(1, deadline === undefined ? TIMEOUT_MS : Math.min(TIMEOUT_MS, deadline - Date.now()));
+}
+
+export function revParseHead(cwd: string, deadline?: number): string | null {
 	try {
 		const proc = Bun.spawnSync(["git", "rev-parse", "HEAD"], {
 			cwd,
 			stdout: "pipe",
 			stderr: "pipe",
-			timeout: TIMEOUT_MS,
+			timeout: timeoutFor(deadline),
 		});
 		if (proc.exitCode !== 0) return null;
 		const sha = proc.stdout.toString().trim();
@@ -61,21 +65,21 @@ export function revParseHead(cwd: string): string | null {
 	}
 }
 
-/** Count commits since the baseline, capped by ahead; this does not identify their author. */
-export function sessionCommitsUnpushed(cwd: string, base: string | null, ahead: number): number {
+/** Count commits since the baseline, capped by ahead; null means Git was unreadable. */
+export function sessionCommitsUnpushed(cwd: string, base: string | null, ahead: number, deadline?: number): number | null {
 	if (base === null || ahead <= 0) return 0;
 	try {
 		const proc = Bun.spawnSync(["git", "rev-list", "--count", `${base}..HEAD`], {
 			cwd,
 			stdout: "pipe",
 			stderr: "pipe",
-			timeout: TIMEOUT_MS,
+			timeout: timeoutFor(deadline),
 		});
-		if (proc.exitCode !== 0) return 0;
-		const made = Number(proc.stdout.toString().trim()) || 0;
-		return Math.min(made, ahead);
+		if (proc.exitCode !== 0) return null;
+		const made = Number(proc.stdout.toString().trim());
+		return Number.isFinite(made) ? Math.min(Math.max(0, made), ahead) : null;
 	} catch {
-		return 0;
+		return null;
 	}
 }
 
@@ -253,22 +257,21 @@ export function totalChangedLines(stats: FileStat[]): number {
  * Per-file diff stat for touched paths, staged and unstaged.
  *
  * Counts include concurrent edits in the same file; they do not identify authorship.
- * Returns an empty list when the diff cannot be taken — a repository with no
- * commits yet, for instance — leaving the file-count gate as the only signal.
+ * Null means Git could not provide the stat, while an empty list is a real no-change result.
  */
-export function agentDiffStat(cwd: string, paths: string[]): FileStat[] {
+export function agentDiffStat(cwd: string, paths: string[], deadline?: number): FileStat[] | null {
 	if (paths.length === 0) return [];
 	try {
 		const proc = Bun.spawnSync(["git", "diff", "--numstat", "HEAD", "--", ...paths], {
 			cwd,
 			stdout: "pipe",
 			stderr: "pipe",
-			timeout: TIMEOUT_MS,
+			timeout: timeoutFor(deadline),
 		});
-		if (proc.exitCode !== 0) return [];
+		if (proc.exitCode !== 0) return null;
 		return parseNumstat(proc.stdout.toString());
 	} catch {
-		return [];
+		return null;
 	}
 }
 
@@ -341,13 +344,13 @@ export function formatAdvisory(
 	return parts.join(" ");
 }
 
-export function gitStatusPorcelain(cwd: string): string | null {
+export function gitStatusPorcelain(cwd: string, deadline?: number): string | null {
 	try {
 		const proc = Bun.spawnSync(["git", "status", "--porcelain", "-b", "-z"], {
 			cwd,
 			stdout: "pipe",
 			stderr: "pipe",
-			timeout: TIMEOUT_MS,
+			timeout: timeoutFor(deadline),
 		});
 		if (proc.exitCode !== 0) return null;
 		return proc.stdout.toString();
@@ -366,18 +369,39 @@ export function handleSessionStop(
 	cwd: string,
 	statusText: string | null,
 	authored: Set<string>,
-	diffStat: (cwd: string, paths: string[]) => FileStat[] = agentDiffStat,
-	ownCommits: (cwd: string, base: string | null, ahead: number) => number = sessionCommitsUnpushed,
+	diffStat: (cwd: string, paths: string[], deadline?: number) => FileStat[] | null = agentDiffStat,
+	ownCommits: (cwd: string, base: string | null, ahead: number, deadline?: number) => number | null = sessionCommitsUnpushed,
 	base: string | null = null,
 	state: AdvisoryState = createAdvisoryState(),
+	deadline = Date.now() + TIMEOUT_MS,
 ): { continue: true; additionalContext: string } | undefined {
 	if (event.stop_hook_active === true || event.stopHookActive === true) return;
 	if (state.lastFired) return;
-	if (!statusText) return;
+	if (statusText === null) {
+		state.lastFired = true;
+		return {
+			continue: true,
+			additionalContext: "Could not determine unpushed work because git status failed or timed out. This is advisory only; no tool call is blocked.",
+		};
+	}
 	const status = parsePorcelain(statusText);
 	const agentDirty = agentAuthoredDirty(status, cwd, authored);
-	const stats = diffStat(cwd, agentDirty);
-	const ownUnpushed = ownCommits(cwd, base, status.ahead);
+	const stats = diffStat(cwd, agentDirty, deadline);
+	if (stats === null) {
+		state.lastFired = true;
+		return {
+			continue: true,
+			additionalContext: "Could not determine unpushed work because git diff failed or timed out. This is advisory only; no tool call is blocked.",
+		};
+	}
+	const ownUnpushed = ownCommits(cwd, base, status.ahead, deadline);
+	if (ownUnpushed === null) {
+		state.lastFired = true;
+		return {
+			continue: true,
+			additionalContext: "Could not determine unpushed work because git rev-list failed or timed out. This is advisory only; no tool call is blocked.",
+		};
+	}
 	if (!shouldAdvise(agentDirty, totalChangedLines(stats), ownUnpushed)) return;
 	state.lastFired = true;
 	return {
@@ -388,18 +412,18 @@ export function handleSessionStop(
 
 export default function unpushedWorkAdvisory(pi: ExtensionAPI): void {
 	const states = new Map<string, AdvisoryState>();
-	const stateFor = (cwd: string): AdvisoryState => {
+	const stateFor = (cwd: string, deadline?: number): AdvisoryState => {
 		let state = states.get(cwd);
 		if (!state) {
 			state = createAdvisoryState();
-			state.sessionHead = hasGitDir(cwd) ? revParseHead(cwd) : null;
+			state.sessionHead = hasGitDir(cwd) ? revParseHead(cwd, deadline) : null;
 			states.set(cwd, state);
 		}
 		return state;
 	};
 	pi.on("session_start", (_event, ctx) => {
 		states.clear();
-		stateFor(resolve(ctx?.cwd ?? process.cwd()));
+		stateFor(resolve(ctx?.cwd ?? process.cwd()), Date.now() + TIMEOUT_MS);
 	});
 	pi.on("turn_start", () => {
 		for (const state of states.values()) state.lastFired = false;
@@ -436,9 +460,10 @@ export default function unpushedWorkAdvisory(pi: ExtensionAPI): void {
 		try {
 			const cwd = resolve(ctx?.cwd || process.cwd());
 			if (!hasGitDir(cwd)) return;
-			const state = stateFor(cwd);
-			return handleSessionStop(event, cwd, gitStatusPorcelain(cwd), state.agentPaths,
-				agentDiffStat, sessionCommitsUnpushed, state.sessionHead, state);
+			const deadline = Date.now() + TIMEOUT_MS;
+			const state = stateFor(cwd, deadline);
+			return handleSessionStop(event, cwd, gitStatusPorcelain(cwd, deadline), state.agentPaths,
+				agentDiffStat, sessionCommitsUnpushed, state.sessionHead, state, deadline);
 		} catch {
 			return;
 		}

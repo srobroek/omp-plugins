@@ -1,7 +1,7 @@
 /** Selective handoffs from persisted top-level sessions, using native read-only APIs. */
 import { execFileSync } from "node:child_process";
-import { type Dir, type Dirent, existsSync, opendirSync, readdirSync, realpathSync, statSync } from "node:fs";
-import { basename, join } from "node:path";
+import { type Dir, type Dirent, existsSync, lstatSync, opendirSync, readdirSync, realpathSync, statSync } from "node:fs";
+import { basename, dirname, join } from "node:path";
 import {
 	type FileEntry,
 	FileSessionStorage,
@@ -101,6 +101,27 @@ function git(args: string[]): string | null {
 		return null;
 	}
 }
+type RepositoryState = "present" | "absent" | "unknown";
+
+function repositoryState(project: string): RepositoryState {
+	let current: string;
+	try {
+		current = realpathSync(project);
+	} catch {
+		return "unknown";
+	}
+	for (;;) {
+		try {
+			lstatSync(join(current, ".git"));
+			return "present";
+		} catch (error) {
+			if (!(error instanceof Error) || !("code" in error) || error.code !== "ENOENT") return "unknown";
+		}
+		const parent = dirname(current);
+		if (parent === current) return "absent";
+		current = parent;
+	}
+}
 
 /**
  * Live worktrees of the repo containing `project`, main checkout first.
@@ -108,12 +129,16 @@ function git(args: string[]): string | null {
  * A session for this project may live in ANY worktree of the same repo: each has
  * its own cwd, so each gets its own transcripts. `git worktree list` from
  * anywhere in the family returns the whole family, so enumerate once and accept
- * every member. Returns [] when `project` is not inside a git repo — the caller
- * then falls back to `project` alone.
+ * every member. An empty list is a proven non-repository result; undefined means
+ * Git failed while repository metadata was present or could not be inspected.
  */
-export function listWorktrees(project: string): Worktree[] {
+export function listWorktrees(project: string): Worktree[] | undefined {
 	const out = git(["-C", project, "worktree", "list", "--porcelain"]);
-	if (out === null) return [];
+	if (out === null) {
+		const state = repositoryState(project);
+		if (state === "absent") return [];
+		return undefined;
+	}
 	const parsed: (Worktree & { prunable: boolean })[] = [];
 	let current: (Worktree & { prunable: boolean }) | null = null;
 	for (const line of out.split("\n")) {
