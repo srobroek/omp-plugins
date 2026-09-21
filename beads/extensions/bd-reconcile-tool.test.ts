@@ -1,16 +1,16 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import bdReconcileTool, {
+	type BdSpawn,
+	type BeadRecord,
 	parseReceipt,
+	type ReconcileDependencies,
+	type ReconcileOperation,
 	reconcileApproval,
 	reconcileReceipts,
 	resetReconcileArbiterForTests,
-	type BdSpawn,
-	type BeadRecord,
-	type ReconcileDependencies,
-	type ReconcileOperation,
 	type SpawnResult,
 	type WriteLock,
 } from "./bd-reconcile-tool.ts";
