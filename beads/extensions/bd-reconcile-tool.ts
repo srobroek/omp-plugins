@@ -23,7 +23,8 @@ const RECEIPT_VERSION = 1;
 const TOOL_TIMEOUT_MS = 25_000;
 const COMMAND_TIMEOUT_MS = 5_000;
 const REPO_KEY = /^[0-9a-f]{16}$/;
-const BEAD_ID = /^[A-Za-z][A-Za-z0-9]*(?:-[A-Za-z0-9]+)+$/;
+const RECEIPT_ID = /^\d+-(?:[0-9a-f]{12}|nomerge)$/;
+const BEAD_ID = /^[A-Za-z][A-Za-z0-9]*(?:-[A-Za-z0-9]+)+(?:\.[A-Za-z0-9]+)*$/;
 const RECONCILE_ARBITER = Symbol.for("com.srobroek.beads.bd-reconcile-tool.v1");
 
 export type ReconcileParams = {
@@ -241,11 +242,13 @@ export function parseReceipt(value: unknown): { receipt?: ReceiptV1; reason?: st
 		return value === true;
 	};
 	const receiptId = needString("receiptId", root.receiptId);
+	if (!RECEIPT_ID.test(receiptId)) failures.push(requirement("receiptId", root.receiptId, "<epochMillis>-<12 lowercase merge hex> or <epochMillis>-nomerge"));
 	const emittedAt = needString("emittedAt", root.emittedAt);
 	const emitterPlugin = needString("emitter.plugin", field(emitter, "plugin"));
 	const emitterVersion = needString("emitter.version", field(emitter, "version"));
 	const emitterTool = needString("emitter.tool", field(emitter, "tool"));
 	const repoKey = needString("repo.key", field(repo, "key"));
+	if (!REPO_KEY.test(repoKey)) failures.push(requirement("repo.key", field(repo, "key"), "16 lowercase hexadecimal characters"));
 	const canonicalRoot = needString("repo.canonicalRoot", field(repo, "canonicalRoot"));
 	const remote = needString("repo.remote", field(repo, "remote"));
 	const forge = field(repo, "forge");
@@ -751,6 +754,13 @@ export async function reconcileReceipts(
 			refusals.push({ receipt: source.path, reason: requirement("repo.key", source.receipt.repo.key, JSON.stringify(loaded.repoKey)) });
 			continue;
 		}
+		if (!source.path.startsWith("<tool-result:")) {
+			const expectedPath = resolve(receiptRoot(bdEnv, deps), source.receipt.repo.key, `${source.receipt.receiptId}.json`);
+			if (resolve(source.path) !== expectedPath) {
+				refusals.push({ receipt: source.path, reason: requirement("receipt path", source.path, JSON.stringify(expectedPath)) });
+				continue;
+			}
+		}
 		if (params.bead !== undefined && !source.receipt.beads.ids.includes(params.bead)) {
 			refusals.push({ receipt: source.path, reason: `beads.ids: observed ${JSON.stringify(source.receipt.beads.ids)}, expected to include ${JSON.stringify(params.bead)}` });
 			continue;
@@ -877,12 +887,16 @@ export async function reconcileReceipts(
 		}
 
 		const authoritativeSource = deps.authoritativeSource?.(bead, allBeads);
-		if (authoritativeSource !== undefined) {
-			if (!BEAD_ID.test(authoritativeSource) || !allBeads.has(authoritativeSource)) {
-				refusals.push({ bead: id, receipt: source.path, reason: requirement("authoritative discovered-from source", authoritativeSource, "an existing bead id") });
-			} else if (!existingDiscoveredSource(bead, authoritativeSource)) {
-				operations.push(operation("add-discovered-from", id, source.path, `add authoritative discovered-from edge to ${authoritativeSource}`, ["dep", "add", id, authoritativeSource, "--type", "discovered-from", "--json"]));
-			}
+		if (authoritativeSource === undefined) {
+			refusals.push({
+				bead: id,
+				receipt: source.path,
+				reason: "discovered-from source is non-derivable: receipt v1 carries no authoritative source-target relationship; no edge was planned",
+			});
+		} else if (!BEAD_ID.test(authoritativeSource) || !allBeads.has(authoritativeSource)) {
+			refusals.push({ bead: id, receipt: source.path, reason: requirement("authoritative discovered-from source", authoritativeSource, "an existing bead id") });
+		} else if (!existingDiscoveredSource(bead, authoritativeSource)) {
+			operations.push(operation("add-discovered-from", id, source.path, `add authoritative discovered-from edge to ${authoritativeSource}`, ["dep", "add", id, authoritativeSource, "--type", "discovered-from", "--json"]));
 		}
 
 		const exactMerge = conflicts.length === 0 && exactMergeIdentityFailures(bead, receipt).length === 0;

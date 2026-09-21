@@ -306,6 +306,28 @@ describe("receipt v1 intake", () => {
 		const value = receipt({ proof: { method: "forge query", observedAt: NOW, evidence: { future: true } } });
 		expect(parseReceipt(value).receipt?.proof.evidence).toEqual({ future: true });
 	});
+	test("accepts hierarchical bead ids used by child tasks", () => {
+		const parsed = parseReceipt(receipt({ beads: { ids: ["omp-plugins-9ej3.9"], ledgerActive: true } }));
+		expect(parsed.reason).toBeUndefined();
+		expect(parsed.receipt?.beads.ids).toEqual(["omp-plugins-9ej3.9"]);
+	});
+
+	test.each([
+		["receiptId", receipt({ receiptId: "../escape" }), "receiptId"],
+		["repo.key", receipt({ repo: { key: "../../escape", canonicalRoot: "/repo", remote: "origin", forge: "github", nameWithOwner: "srobroek/omp-plugins" } }), "repo.key"],
+	] as const)("refuses an invalid path-bearing %s", (_label, value, expected) => {
+		expect(parseReceipt(value).reason).toContain(expected);
+	});
+
+	test("refuses a valid receipt stored under a filename other than its receiptId", async () => {
+		const root = temporary("wrong-filename");
+		writeReceipt(root, receipt(), "1001-222222222222.json");
+		const harness = new Harness(join(root, "repo"), exactBead());
+		const report = await reconcile(root, harness);
+		expect(report.refusals[0]?.reason).toContain("receipt path");
+		expect(harness.calls).toEqual([]);
+	});
+
 });
 
 describe("scan and apply", () => {
@@ -356,6 +378,25 @@ describe("scan and apply", () => {
 		expect(report.failures[0]).toContain("lock unavailable");
 		expect(mutationCalls(harness)).toEqual([]);
 	});
+	test("uses one bounded deadline and fails closed on malformed bd output", async () => {
+		const root = temporary("malformed-bd");
+		writeReceipt(root, receipt());
+		const harness = new Harness(join(root, "repo"), exactBead());
+		const deadlines: number[] = [];
+		const started = Date.now();
+		const malformed: BdSpawn = async (_argv, _cwd, _env, deadline) => {
+			deadlines.push(deadline);
+			return { ok: true, exitCode: 0, stdout: "bd human preamble\n{not-json", stderr: "" };
+		};
+		const report = await reconcile(root, harness, {}, { spawn: malformed });
+		expect(report.operations).toEqual([]);
+		expect(report.failures.some((failure) => failure.includes("malformed JSON") || failure.includes("unreadable state"))).toBe(true);
+		expect(deadlines).toHaveLength(3);
+		expect(deadlines.every((deadline) => deadline === deadlines[0])).toBe(true);
+		expect((deadlines[0] ?? 0) - started).toBeGreaterThan(0);
+		expect((deadlines[0] ?? 0) - started).toBeLessThanOrEqual(25_000);
+	});
+
 });
 
 describe("close-out proof", () => {
@@ -370,6 +411,36 @@ describe("close-out proof", () => {
 		const report = await reconcile(root, harness);
 		expect(closeOperations(report.operations)).toEqual([]);
 		expect(report.operations.some((item) => item.kind === "record-merge-audit")).toBe(mergeAudit);
+		expect(report.refusals.some((item) => item.reason.includes(expected))).toBe(true);
+	});
+
+	test.each([
+		[
+			"pull request state",
+			{ pr: { number: 42, url: "https://github.com/srobroek/omp-plugins/pull/42", state: "OPEN", baseRefName: "main", headRefName: "feature/reconcile", headRefOid: HEAD, mergeCommitOid: MERGE, mergedAt: NOW } },
+			{},
+			"pr.state",
+		],
+		[
+			"head oid",
+			{ pr: { number: 42, url: "https://github.com/srobroek/omp-plugins/pull/42", state: "MERGED", baseRefName: "main", headRefName: "feature/reconcile", headRefOid: "", mergeCommitOid: MERGE, mergedAt: NOW } },
+			{},
+			"pr.headRefOid",
+		],
+		[
+			"merge commit oid",
+			{ pr: { number: 42, url: "https://github.com/srobroek/omp-plugins/pull/42", state: "MERGED", baseRefName: "main", headRefName: "feature/reconcile", headRefOid: HEAD, mergeCommitOid: null, mergedAt: NOW } },
+			{ metadata: { pr: 42, base: "main", branch: "feature/reconcile", head_sha: HEAD } },
+			"pr.mergeCommitOid",
+		],
+		["bead pull request anchor", {}, { metadata: { ...exactBead().metadata, pr: 41 } }, "metadata.pr"],
+		["clean receipt outcome", { outcome: "partial" }, {}, "outcome"],
+	] as const)("refuses close when %s alone fails", async (_label, override, beadOverride, expected) => {
+		const root = temporary("close-precondition");
+		writeReceipt(root, receipt(override));
+		const harness = new Harness(join(root, "repo"), exactBead("repo-task", beadOverride));
+		const report = await reconcile(root, harness);
+		expect(closeOperations(report.operations)).toEqual([]);
 		expect(report.refusals.some((item) => item.reason.includes(expected))).toBe(true);
 	});
 
@@ -410,6 +481,19 @@ describe("close-out proof", () => {
 		expect(report.refusals.some((item) => item.reason.includes("live assignment/lease"))).toBe(true);
 	});
 
+	test("refuses a live blocker", async () => {
+		const root = temporary("blocker");
+		writeReceipt(root, receipt());
+		const blocker = exactBead("repo-blocker", { metadata: {} });
+		const target = exactBead("repo-task", {
+			dependencies: [{ id: blocker.id, dependsOnId: blocker.id, type: "blocks", status: blocker.status }],
+		});
+		const harness = new Harness(join(root, "repo"), target, blocker);
+		const report = await reconcile(root, harness);
+		expect(closeOperations(report.operations)).toEqual([]);
+		expect(report.refusals.some((item) => item.reason.includes("live blockers"))).toBe(true);
+	});
+
 	test("orders receipt-named leaves before their parents", async () => {
 		const root = temporary("leaf-first");
 		writeReceipt(root, receipt({ beads: { ids: ["repo-parent", "repo-child"], ledgerActive: true } }));
@@ -447,6 +531,11 @@ describe("convergent repairs", () => {
 		const anchors = report.operations.find((item) => item.kind === "set-merge-anchors")?.argv ?? [];
 		expect(anchors).toContain("pr=42");
 		expect(anchors).toContain(`merge_sha=${MERGE}`);
+		const applied = await reconcile(root, harness, { apply: true }, { pidAlive: () => false });
+		expect(applied.applied.map((item) => item.kind)).toContain("release-dead-claim");
+		expect(applied.applied.map((item) => item.kind)).toContain("set-merge-anchors");
+		const converged = await reconcile(root, harness, {}, { pidAlive: () => false });
+		expect(converged.operations.some((item) => item.kind === "release-dead-claim" || item.kind === "set-merge-anchors")).toBe(false);
 	});
 
 	test("conflicting anchors are never overwritten and persist one ambiguity comment/gate", async () => {
@@ -482,6 +571,15 @@ describe("convergent repairs", () => {
 		expect(report.operations.map((item) => item.kind)).toEqual(["comment-ambiguity", "gate-ambiguity"]);
 	});
 
+	test("reports receipt-v1 discovered-from as non-derivable and plans no edge", async () => {
+		const root = temporary("non-derivable-source");
+		writeReceipt(root, receipt());
+		const harness = new Harness(join(root, "repo"), exactBead());
+		const report = await reconcile(root, harness);
+		expect(report.refusals.some((item) => item.reason.includes("discovered-from source is non-derivable"))).toBe(true);
+		expect(report.operations.some((item) => item.kind === "add-discovered-from")).toBe(false);
+	});
+
 	test("adds discovered-from only from an injected recognized ledger carrier", async () => {
 		const root = temporary("source");
 		writeReceipt(root, receipt());
@@ -496,16 +594,47 @@ describe("convergent repairs", () => {
 		expect(converged.operations.some((item) => item.kind === "add-discovered-from")).toBe(false);
 	});
 
-	test("emitted argv never contains a forbidden destructive verb", async () => {
-		const root = temporary("forbidden");
-		writeReceipt(root, receipt());
-		const bead = exactBead();
-		bead.metadata.merge_sha = "different";
-		const harness = new Harness(join(root, "repo"), bead, exactBead("repo-source", { status: "closed" }));
-		const report = await reconcile(root, harness, {}, { authoritativeSource: () => "repo-source" });
-		const forbidden = new Set(["reopen", "supersede", "--force", "prune", "purge", "flatten", "gc", "compact", "delete"]);
-		for (const item of report.operations) {
-			expect(item.argv.some((argument) => forbidden.has(argument))).toBe(false);
+	test("scan, apply, conflict, dead-claim, and source plans emit no forbidden argv", async () => {
+		const emitted: string[][] = [];
+		const inspect = async (
+			name: string,
+			bead: BeadRecord,
+			params: Record<string, unknown>,
+			additions: Partial<ReconcileDependencies> = {},
+			extra: BeadRecord[] = [],
+		) => {
+			const root = temporary(`forbidden-${name}`);
+			writeReceipt(root, receipt());
+			const harness = new Harness(join(root, "repo"), bead, ...extra);
+			const report = await reconcile(root, harness, params, additions);
+			emitted.push(...report.operations.map((item) => item.argv), ...harness.calls);
+		};
+		await inspect("scan", exactBead(), {});
+		await inspect("apply", exactBead(), { apply: true });
+		const conflicting = exactBead();
+		conflicting.metadata.merge_sha = "different";
+		await inspect("conflict", conflicting, { apply: true });
+		await inspect("dead", exactBead("repo-task", {
+			status: "in_progress",
+			assignee: "omp/Dead/session",
+			metadata: { ...exactBead().metadata, lease_host: "test-host", lease_pid: "999999" },
+		}), { apply: true }, { pidAlive: () => false });
+		const source = exactBead("repo-source", { status: "closed", metadata: {} });
+		await inspect("source", exactBead(), { apply: true }, { authoritativeSource: () => source.id }, [source]);
+
+		const forbidden: Record<string, true> = {
+			reopen: true,
+			supersede: true,
+			"--force": true,
+			prune: true,
+			purge: true,
+			flatten: true,
+			gc: true,
+			compact: true,
+			delete: true,
+		};
+		for (const argv of emitted) {
+			expect(argv.some((argument) => forbidden[argument] === true)).toBe(false);
 		}
 	});
 });
