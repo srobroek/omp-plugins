@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { beadIdsFromBranch, type LandParams, landPullRequest, repoPathFromRemote } from "./delivery-land-tool.ts";
@@ -97,6 +97,7 @@ function runner(answers: Answers, canonical: string): { run: CliRunner; calls: C
 }
 function land(answers: Answers, params: Partial<LandParams> = {}, env: NodeJS.ProcessEnv = {}) {
 	const { canonical, receipts } = repository();
+	mkdirSync(join(canonical, ".beads"));
 	const { run, calls } = runner(answers, canonical);
 	const outcome = landPullRequest({ pr: 470, ...params }, { run, cwd: canonical, now: () => NOW, receiptsDirectory: receipts, env });
 	return { outcome, calls, receipts, canonical, files: () => readdirSync(receipts) };
@@ -141,12 +142,86 @@ describe("delivery_land", () => {
 		expect(receipt.worktree.path).toBe("/tmp/worktrees/omp-agent-omp-plugins-9ej3.5");
 		expect(receipt.outcome).toBe("landed");
 		expect(receipt.supersedes).toBeNull();
+		expect(outcome.next).toEqual(["bd_reconcile", "delivery_cleanup"]);
+		expect(outcome.text.indexOf("bd_reconcile")).toBeLessThan(outcome.text.indexOf("delivery_cleanup"));
 
 		// The file on disk is the object returned, and a reader accepts it.
 		const reread = readReceipt(outcome.receiptPath);
 		expect(reread.ok).toBe(true);
 		if (!reread.ok) throw new Error(reread.reason);
 		expect(reread.receipt).toEqual(receipt);
+	});
+
+	test("a regular-file RETIRED marker makes the landing receipt ledger-inactive", () => {
+		const { canonical, receipts } = repository();
+		mkdirSync(join(canonical, ".beads"));
+		writeFileSync(join(canonical, ".beads", "RETIRED"), "retired\n");
+		const { run } = runner({ prView: [completed(mergedGithubPr())] }, canonical);
+		const outcome = landPullRequest(
+			{ pr: 470, worktree: "/tmp/worktrees/omp-agent-omp-plugins-9ej3.5" },
+			{ run, cwd: canonical, now: () => NOW, receiptsDirectory: receipts, env: {} },
+		);
+
+		expect(outcome.ok).toBe(true);
+		if (!outcome.ok) throw new Error(outcome.reason);
+		expect(outcome.receipt.beads).toEqual({ ids: ["omp-plugins-9ej3.5"], ledgerActive: false });
+		expect(outcome.next).toEqual(["delivery_cleanup"]);
+		expect(outcome.text).not.toContain("bd_reconcile");
+	});
+
+
+	test("a nearer active ledger overrides a retired ancestor and keeps reconciliation first", () => {
+		const { canonical, receipts } = repository();
+		mkdirSync(join(canonical, ".beads"));
+		writeFileSync(join(canonical, ".beads", "RETIRED"), "retired\n");
+		const nested = join(canonical, "nested");
+		mkdirSync(join(nested, ".beads"), { recursive: true });
+		const { run } = runner({ prView: [completed(mergedGithubPr())] }, canonical);
+		const outcome = landPullRequest({ pr: 470 }, { run, cwd: nested, now: () => NOW, receiptsDirectory: receipts, env: {} });
+
+		expect(outcome.ok).toBe(true);
+		if (!outcome.ok) throw new Error(outcome.reason);
+		expect(outcome.receipt.beads.ledgerActive).toBe(true);
+		expect(outcome.next).toEqual(["bd_reconcile", "delivery_cleanup"]);
+		expect(outcome.text).toContain("bd_reconcile");
+	});
+
+	test("a symlinked RETIRED marker does not deactivate the ledger", () => {
+		const { canonical, receipts } = repository();
+		const beads = join(canonical, ".beads");
+		mkdirSync(beads);
+		const target = join(canonical, "retired-target");
+		writeFileSync(target, "retired\n");
+		symlinkSync(target, join(beads, "RETIRED"));
+		const { run } = runner({ prView: [completed(mergedGithubPr())] }, canonical);
+		const outcome = landPullRequest({ pr: 470 }, { run, cwd: canonical, now: () => NOW, receiptsDirectory: receipts, env: {} });
+
+		expect(outcome.ok).toBe(true);
+		if (!outcome.ok) throw new Error(outcome.reason);
+		expect(outcome.receipt.beads.ledgerActive).toBe(true);
+		expect(outcome.next).toEqual(["bd_reconcile", "delivery_cleanup"]);
+	});
+
+	test("a dangling .beads path keeps the ledger active", () => {
+		const { canonical, receipts } = repository();
+		symlinkSync(join(canonical, "missing-beads"), join(canonical, ".beads"));
+		const { run } = runner({ prView: [completed(mergedGithubPr())] }, canonical);
+		const outcome = landPullRequest({ pr: 470 }, { run, cwd: canonical, now: () => NOW, receiptsDirectory: receipts, env: {} });
+
+		expect(outcome.ok).toBe(true);
+		if (!outcome.ok) throw new Error(outcome.reason);
+		expect(outcome.receipt.beads.ledgerActive).toBe(true);
+	});
+
+	test("a non-directory .beads path keeps the ledger active", () => {
+		const { canonical, receipts } = repository();
+		writeFileSync(join(canonical, ".beads"), "not a directory\n");
+		const { run } = runner({ prView: [completed(mergedGithubPr())] }, canonical);
+		const outcome = landPullRequest({ pr: 470 }, { run, cwd: canonical, now: () => NOW, receiptsDirectory: receipts, env: {} });
+
+		expect(outcome.ok).toBe(true);
+		if (!outcome.ok) throw new Error(outcome.reason);
+		expect(outcome.receipt.beads.ledgerActive).toBe(true);
 	});
 
 	test("the result text routes the caller to bd_reconcile and then delivery_cleanup", () => {

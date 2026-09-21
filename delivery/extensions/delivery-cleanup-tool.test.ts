@@ -303,6 +303,21 @@ describe("delivery_cleanup irreversible boundary", () => {
 		expect(listReceipts(receiptDirectory(f.env, f.receipt.repo.key))).toHaveLength(2);
 	});
 
+	test("an inactive receipt cleans up without issuing any bd command", () => {
+		const f = fixture("inactive-ledger");
+		rmSync(f.receiptPath);
+		f.receipt.beads.ledgerActive = false;
+		writeReceipt(f.receipt, receiptDirectory(f.env, f.receipt.repo.key));
+
+		const { result, calls } = invoke(f);
+
+		expect(result.ok).toBe(true);
+		expect(commandCalls(calls, "bd")).toEqual([]);
+		if (!result.ok) return;
+		expect(result.receipt.beads.ledgerActive).toBe(false);
+		expect(existsSync(f.linked)).toBe(false);
+	});
+
 	test("a valid receipt extension named ok cannot collide with cleanup's private resolution tag", () => {
 		const f = fixture("receipt-ok-extension");
 		rmSync(f.receiptPath);
