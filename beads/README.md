@@ -16,6 +16,16 @@ Install this plugin in a repository with `.beads/`. The plugin pins that reposit
 | `beads-composition` | Choose issues and formulas. |
 | `beads-storage-mode` | Configure the embedded store and session `BEADS_DIR` pin. |
 
+## Rules
+
+| Rule | When |
+| --- | --- |
+| `beads-reconcile-from-receipts` | When reconciling versioned landing receipts through `bd_reconcile`; require exact proof before closure. |
+
+### `bd_reconcile`
+
+`bd_reconcile` scans landing receipts with read-only `show` and `list` operations. `apply` defaults to `false`, so a scan plans repairs without writing the ledger. Set `apply: true` only after inspecting the plan and obtaining execution approval; convergent repairs then pass through `bd_reconcile`.
+
 ## Extensions
 
 - `bd-embedded-write-lock` serializes mutations across linked checkouts.
