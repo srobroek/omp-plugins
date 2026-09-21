@@ -6,7 +6,8 @@
   "omp": {
     "extensions": [
       "./extensions/unpushed-work-advisory.ts",
-      "./extensions/delivery-land-tool.ts"
+      "./extensions/delivery-land-tool.ts",
+      "./extensions/delivery-cleanup-tool.ts"
     ]
   }
 }
