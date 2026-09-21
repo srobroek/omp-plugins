@@ -54,30 +54,27 @@ interface Fixture {
 
 /**
  * Make a real canonical checkout whose local HEAD is one commit behind its
- * fetched origin/main. The writer clone proves that the behind commit is in
- * the upstream, not merely an unpushed local commit.
+ * upstream. The upstream ref is written with `update-ref` rather than produced
+ * by pushing from a second clone: this host gates `git push` behind Git
+ * Defender, which hangs a non-interactive fixture until the runner kills it,
+ * and a clone plus two pushes does not fit bun's five-second per-test limit.
+ * Nothing here ever contacts the remote, and the advisory does not either, so
+ * the recorded remote URL only has to exist as configuration.
  */
 function fixture(): Fixture {
 	const root = mkdtempSync(join(tmpdir(), "worktrunk-canonical-stale-"));
 	roots.push(root);
 	const canonical = join(root, "canonical");
-	const origin = join(root, "origin.git");
-	const writer = join(root, "writer");
 	const linked = join(root, "linked");
 	mkdirSync(canonical);
-	git(root, "init", "--bare", origin);
 	git(canonical, "init", "-b", "main");
 	configure(canonical);
 	commit(canonical, "tracked.txt", "first\n", "first");
-	git(canonical, "remote", "add", "origin", origin);
-	git(canonical, "push", "-u", "origin", "main");
-	git(origin, "symbolic-ref", "HEAD", "refs/heads/main");
-
-	git(root, "clone", origin, writer);
-	configure(writer);
-	commit(writer, "tracked.txt", "first\nsecond\n", "upstream update");
-	git(writer, "push", "origin", "main");
-	git(canonical, "fetch", "origin");
+	commit(canonical, "tracked.txt", "first\nsecond\n", "upstream update");
+	git(canonical, "update-ref", "refs/remotes/origin/main", "HEAD");
+	git(canonical, "remote", "add", "origin", join(root, "origin.git"));
+	git(canonical, "branch", "--set-upstream-to=origin/main", "main");
+	git(canonical, "reset", "--hard", "HEAD~1");
 	return { canonical, linked };
 }
 
