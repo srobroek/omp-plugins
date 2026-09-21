@@ -25,6 +25,10 @@ on:
 
 permissions:
   contents: read
+  # dorny/paths-filter reads the pull-request files API on `pull_request`.
+  # An explicit block sets every unnamed permission to none, so this scope
+  # has to be named or the changes job 403s and every filtered job skips.
+  pull-requests: read
 
 jobs:
   changes:

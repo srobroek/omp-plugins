@@ -196,7 +196,8 @@ HEADER = f"""\
 # reports `skipped`, which the gate counts as a pass."""
 
 SETTINGS = """\
-# The floor every called workflow inherits. Only `security` needs more than this.
+# The floor every called workflow inherits. `changes` and `security` raise theirs
+# on the job: paths-filter needs pull-requests, and the scans upload SARIF.
 permissions:
   contents: read
 
@@ -326,6 +327,9 @@ def changes_job(
         "  # decide what is built, the workflow that runs it, and this file: the pull request",
         "  # wiring a language has to exercise the jobs it adds.",
         "  changes:",
+        "    permissions:",
+        "      contents: read",
+        "      pull-requests: read",
         f"    uses: ./{WORKFLOWS}/wc-changes.yml",
         "    with:",
         "      filters: |",

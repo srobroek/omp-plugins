@@ -162,15 +162,15 @@ jobs:
             --format=sarif
             --output=osv-results.sarif
             .
-        # A finding is a non-zero exit, and the upload below still has to run so
-        # the alerts reach the security tab.
-        continue-on-error: true
+        # Upload even when the scan fails so findings still reach the security
+        # tab. Do not continue-on-error: that would turn a finding into a green
+        # job and a green required gate.
 
       - name: Upload results
+        if: always() && hashFiles('osv-results.sarif') != ''
         uses: github/codeql-action/upload-sarif@e4fba868fa4b1b91e1fdab776edc8cfbe6e9fb81 # v4.37.3
         with:
           sarif_file: osv-results.sarif
-        if: always()
 
   # opengrep rather than semgrep: same rule format and registry namespace, and the packs
   # below are the ones each language fragment asked for.

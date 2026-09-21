@@ -126,6 +126,12 @@ somewhere other than `AGENTS.md`, is a conflict rather than a file to replace. A
 `AGENTS.md` before linking, OVERWRITE states the loss, and SKIP leaves the file untouched so
 the two harnesses read separate files. bd's own copy of `AGENTS.md` needs no answer.
 
+A brownfield `AGENTS.md` that is already a symlink is the same class of conflict. Ask
+`MERGE|OVERWRITE|SKIP` and pass the answer as `--agents`. MERGE replaces the symlink with a
+regular file holding the body then the previous target text. OVERWRITE replaces it with the
+body only. SKIP leaves the symlink untouched. The installer writes only a regular
+`AGENTS.md` in the destination root; it never follows a symlink.
+
 ## Governance and release
 
 `assets/governance/` supplies the committed governance documents and a licence selection source.

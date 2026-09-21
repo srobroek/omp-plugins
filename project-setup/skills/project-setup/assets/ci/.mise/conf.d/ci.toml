@@ -8,4 +8,5 @@
 # for this pin. The upstream `main/install.sh` piped into bash plus a `cli/latest` path would
 # change the rules and the SARIF shape with no diff in the repository.
 [tools]
+"aqua:suzuki-shunsuke/pinact" = "5.0.0"
 "ubi:opengrep/opengrep" = "1.26.0"

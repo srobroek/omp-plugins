@@ -246,10 +246,12 @@ nothing.
 | `scripts/gen_steering.py` | `scripts/gen_steering.py` |
 | `scripts/install_agents_index.py` | `scripts/install_agents_index.py` |
 
-`install_agents_index.py <dest> [--claude MERGE|OVERWRITE|SKIP]` writes `AGENTS.md` from the
-rendered body and links `CLAUDE.md` to it. An existing `CLAUDE.md` whose text `AGENTS.md` does
-not already carry, or a symlink pointing elsewhere, returns `conflict`: that destination's class
-is asked and passed as `--claude`, never assumed.
+`install_agents_index.py <dest> [--claude MERGE|OVERWRITE|SKIP] [--agents MERGE|OVERWRITE|SKIP]`
+writes `AGENTS.md` from the rendered body and links `CLAUDE.md` to it. An existing
+`CLAUDE.md` whose text `AGENTS.md` does not already carry, or a symlink pointing elsewhere,
+returns `conflict`: that destination's class is asked and passed as `--claude`, never
+assumed. An `AGENTS.md` that is already a symlink is the same class of conflict and is
+asked as `--agents`; writing through the link is never the default.
 
 ### api
 

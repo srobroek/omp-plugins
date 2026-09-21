@@ -54,6 +54,7 @@ secret is a gap, and so is a repository that was not created.
 | `prek install` prints a note and writes no shim | an ambient global `core.hooksPath`; install with `--git-dir "$(git rev-parse --absolute-git-dir)"` |
 | `hooks-merge` fails on a missing `yaml` module | it was run with a bare python3 instead of `uv run --no-project --with pyyaml` |
 | `install_agents_index.py` returns `conflict` on `CLAUDE.md` | a brownfield `CLAUDE.md` whose class was never asked; ask `MERGE|OVERWRITE|SKIP` and pass it as `--claude` |
+| `install_agents_index.py` returns `conflict` on `AGENTS.md` | a brownfield `AGENTS.md` that is a symlink; ask `MERGE|OVERWRITE|SKIP` and pass it as `--agents` |
 | `no_force_push.sh` exits 2 with a usage line | the hook entry lost its branch argument; `git-actions.yaml` passes the accepted default branch |
 | A `just` recipe reports success having done nothing | a `mapfile` or `readarray` call under macOS bash 3.2 |
 | `mise install` succeeds and installs nothing | the config was untrusted; `mise trust --yes` first |
