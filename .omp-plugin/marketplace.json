@@ -59,7 +59,7 @@
     },
     {
       "name": "delivery",
-      "description": "Delivery and git-workflow rules, plus a pull-request review agent.",
+      "description": "Delivery workflow guidance with pull-request review, landing, cleanup, and hygiene tools.",
       "source": "./delivery",
       "version": "0.11.5",
       "category": "devops"
