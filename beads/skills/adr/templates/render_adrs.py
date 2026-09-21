@@ -339,25 +339,37 @@ def render_all(repo: Path, *, write: bool = True) -> tuple[list[Path], str | Non
     return changed, None
 
 
-def stage(paths: list[Path], repo: Path) -> None:
+def stage(paths: list[Path], repo: Path) -> str | None:
     """Stage what was written, so it lands in the triggering commit.
 
     Required, not a convenience: prek fails a commit outright when a hook
     modifies a tracked file and leaves it unstaged, and silently omits a new
     untracked one. Staging is what makes a writing hook viable.
+
+    Returns a description of the failure, or None when the files are staged.
+    Swallowing the failure produced exactly the outcome the paragraph above
+    warns about, with prek reporting a hook that modified files while the real
+    cause stayed invisible.
     """
     if not paths:
-        return
+        return None
     try:
-        subprocess.run(  # noqa: S603
+        result = subprocess.run(  # noqa: S603
             ["git", "add", "--", *[str(p) for p in paths]],
             cwd=repo,
             capture_output=True,
             check=False,
             timeout=30,
+            text=True,
         )
-    except (OSError, subprocess.SubprocessError):
-        pass
+    except subprocess.TimeoutExpired:
+        return "git add did not finish within 30s"
+    except OSError as exc:
+        return f"git could not be run: {exc}"
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout or "").strip() or f"exit {result.returncode}"
+        return f"git add failed: {detail}"
+    return None
 
 
 def main(argv: list[str]) -> int:
@@ -387,9 +399,16 @@ def main(argv: list[str]) -> int:
             return 1
         return 0
 
-    stage(written, repo)
+    failure = stage(written, repo)
     for path in written:
         print(f"render-adrs: {'removed' if not path.exists() else 'wrote'} {path}")
+    if failure is not None:
+        print(f"render-adrs: {failure}", file=sys.stderr)
+        print(
+            "The rendered files exist but are unstaged, which prek reports as a hook that modified files.",
+            file=sys.stderr,
+        )
+        return 1
     return 0
 
 
