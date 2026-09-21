@@ -37,12 +37,13 @@ const NON_FILE_SCHEME = /^[a-z][a-z0-9+.-]*:\/\//i;
 
 export type AdvisoryState = {
 	lastFired: boolean;
+	reminderCount: number;
 	agentPaths: Set<string>;
 	sessionHead: string | null;
 };
 
 export function createAdvisoryState(): AdvisoryState {
-	return { lastFired: false, agentPaths: new Set(), sessionHead: null };
+	return { lastFired: false, reminderCount: 0, agentPaths: new Set(), sessionHead: null };
 }
 
 function timeoutFor(deadline: number | undefined): number {
@@ -363,6 +364,34 @@ type SessionStopEvent = {
 	stop_hook_active?: boolean;
 	stopHookActive?: boolean;
 };
+const MAX_REMINDERS = 3;
+
+type StopResult = { continue: true; additionalContext: string };
+
+function reminder(
+	state: AdvisoryState,
+	context: string,
+	ambiguous: boolean,
+): StopResult | undefined {
+	if (state.reminderCount >= MAX_REMINDERS) return;
+	state.reminderCount += 1;
+	state.lastFired = true;
+	const number = state.reminderCount;
+	let additionalContext = `Reminder ${number} of ${MAX_REMINDERS}: ${context}`;
+	if (ambiguous && number === MAX_REMINDERS) {
+		additionalContext +=
+			" Ambiguity remains after two reminders; dispatch the report-only worktree-reaper to inspect and report the residual instead of removing anything.";
+	}
+	if (number === MAX_REMINDERS) {
+		additionalContext +=
+			" Final residual warning: residual work may remain at session end; no further hygiene reminders will be emitted this session.";
+	}
+	return { continue: true, additionalContext };
+}
+
+function resetAfterProgress(state: AdvisoryState): void {
+	state.reminderCount = 0;
+}
 
 export function handleSessionStop(
 	event: SessionStopEvent,
@@ -374,40 +403,39 @@ export function handleSessionStop(
 	base: string | null = null,
 	state: AdvisoryState = createAdvisoryState(),
 	deadline = Date.now() + TIMEOUT_MS,
-): { continue: true; additionalContext: string } | undefined {
+): StopResult | undefined {
 	if (event.stop_hook_active === true || event.stopHookActive === true) return;
 	if (state.lastFired) return;
 	if (statusText === null) {
-		state.lastFired = true;
-		return {
-			continue: true,
-			additionalContext: "Could not determine unpushed work because git status failed or timed out. This is advisory only; no tool call is blocked.",
-		};
+		return reminder(
+			state,
+			"Could not determine unpushed work because git status failed or timed out. Obtain a fresh git status and inspect any residual paths before ending the session. This is advisory only; no tool call is blocked.",
+			true,
+		);
 	}
 	const status = parsePorcelain(statusText);
 	const agentDirty = agentAuthoredDirty(status, cwd, authored);
 	const stats = diffStat(cwd, agentDirty, deadline);
 	if (stats === null) {
-		state.lastFired = true;
-		return {
-			continue: true,
-			additionalContext: "Could not determine unpushed work because git diff failed or timed out. This is advisory only; no tool call is blocked.",
-		};
+		return reminder(
+			state,
+			"Could not determine unpushed work because git diff failed or timed out. Obtain a fresh diff and inspect any residual paths before ending the session. This is advisory only; no tool call is blocked.",
+			true,
+		);
 	}
 	const ownUnpushed = ownCommits(cwd, base, status.ahead, deadline);
 	if (ownUnpushed === null) {
-		state.lastFired = true;
-		return {
-			continue: true,
-			additionalContext: "Could not determine unpushed work because git rev-list failed or timed out. This is advisory only; no tool call is blocked.",
-		};
+		return reminder(
+			state,
+			"Could not determine unpushed work because git rev-list failed or timed out. Obtain a fresh commit range and inspect any residual commits before ending the session. This is advisory only; no tool call is blocked.",
+			true,
+		);
 	}
-	if (!shouldAdvise(agentDirty, totalChangedLines(stats), ownUnpushed)) return;
-	state.lastFired = true;
-	return {
-		continue: true,
-		additionalContext: formatAdvisory(status, agentDirty, stats, ownUnpushed),
-	};
+	if (!shouldAdvise(agentDirty, totalChangedLines(stats), ownUnpushed)) {
+		resetAfterProgress(state);
+		return;
+	}
+	return reminder(state, formatAdvisory(status, agentDirty, stats, ownUnpushed), false);
 }
 
 export default function unpushedWorkAdvisory(pi: ExtensionAPI): void {
@@ -447,11 +475,12 @@ export default function unpushedWorkAdvisory(pi: ExtensionAPI): void {
 		try {
 			const input = event.input as Record<string, unknown> | undefined;
 			const rawCwd = input?.cwd;
-			const cwd = resolve(typeof rawCwd === "string" && rawCwd
-				? rawCwd : ctx?.cwd || process.cwd());
+			const cwd = resolve(typeof rawCwd === "string" && rawCwd ? rawCwd : ctx?.cwd || process.cwd());
 			const state = stateFor(cwd);
 			const paths = extractWrittenPaths(event.toolName, event.isError, input, event.details);
+			const before = state.agentPaths.size;
 			for (const path of paths) recordAgentPath(cwd, path, state.agentPaths);
+			if (state.agentPaths.size > before) resetAfterProgress(state);
 		} catch {
 			// Attribution is best-effort and must never disturb a tool result.
 		}
