@@ -71,6 +71,29 @@ test("failed discovery and missing prerequisites remain failures with bounded ou
 	expect(failed.report.length).toBeLessThan(40000);
 });
 
+test("a tool that resolves but cannot run is missing, not a failure", () => {
+	const dir = mkdtempSync(join(tmpdir(), "verify-shim-"));
+	temps.push(dir);
+	symlinkSync("/bin/sh", join(dir, "sh"));
+	const just = join(dir, "just");
+	writeFileSync(join(dir, "justfile"), "verify:\n true\n");
+	// Stands in for a mise shim whose tool is not installed: it resolves on PATH and
+	// is executable, but every invocation fails, exactly as `mise ERROR No version is
+	// set for shim` does. The documented contract is that a missing tool yields an
+	// incomplete report, never a finding, so this must not be counted as a failure.
+	writeFileSync(just, "#!/bin/sh\nexit 1\n");
+	chmodSync(just, 0o755);
+	const source = `import { runVerify } from ${JSON.stringify(import.meta.dir + "/verify-repo-tool.ts")}; console.log(JSON.stringify(runVerify(${JSON.stringify(dir)})));`;
+	const proc = Bun.spawnSync([process.execPath, "-e", source], { env: { ...process.env, PATH: dir }, stdout: "pipe", stderr: "pipe", timeout: 10000 });
+	expect(proc.exitCode).toBe(0);
+	const result = JSON.parse(proc.stdout.toString());
+	expect(result.complete).toBe(false);
+	// The load-bearing assertion: a resolve-only check would have run the shim, seen a
+	// non-zero exit, and reported a verification failure for working code.
+	expect(result.failed).toBe(0);
+	expect(result.ran).toBe(0);
+});
+
 test.each(["absolute", "relative", "session-relative"])("project Python tools win without activation: %s path", (mode) => {
 	const dir = mkdtempSync(join(tmpdir(), "verify-python-"));
 	temps.push(dir);
