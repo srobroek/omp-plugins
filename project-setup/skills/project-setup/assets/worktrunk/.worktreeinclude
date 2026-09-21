@@ -20,6 +20,7 @@ report that conflict because the project include cannot override it.
 # `setup-worktree` catches a branch whose lockfile moved without paying for a cold install.
 #
 node_modules/
+.a11y/node_modules/
 .venv/
 target/
 vendor/

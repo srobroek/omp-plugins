@@ -12,7 +12,7 @@ TRIGGER
 - one tool to add to a working repository → that tool's own skill
 
 GATES
-ASK each topic's questions as one round, and accept the topic before the next opens
+ASK every currently unblocked frontier question in one round; accept a topic only when no frontier remains
 ASK the plan, before the first file is written
 ASK the licence, a published repository, a credential, a machine-global registration
 
@@ -22,12 +22,14 @@ ASK the licence, a published repository, a credential, a machine-global registra
    Otherwise run `git rev-parse --is-inside-work-tree` and count tracked files: no
    repository or zero tracked files is GREENFIELD; anything else is BROWNFIELD. Show
    the evidence. BROWNFIELD reads committed configuration before asking anything.
-2. Confirm prior instruction. Number every claim the command arguments and this
-   conversation already make, read them back, and ask which hold. An unconfirmed claim
-   is a gap. LOAD skill://project-setup/references/interview.md
+2. Confirm command arguments. Number each claim they make, read it back, and ask which hold.
+   Treat direct user statements in this conversation as settled answers and read them back without
+   re-confirming them. LOAD skill://project-setup/references/interview.md
 3. Ask for `SINGLE|MONOREPO|POLYREPO`; never infer ownership topology from directories.
-   Then classify deployables, application classes, and known languages without choosing
-   runtimes or frameworks. LOAD skill://project-setup/references/application.md
+   Then classify deployables, application classes, runtime surfaces, and any languages the user
+   already named without choosing runtimes or frameworks. A repository, application, or deployable
+   with multiple runtime surfaces has no single `primary language`: map languages per surface.
+   LOAD skill://project-setup/references/application.md
 4. Settle the deployment host before any stack. Ask one repository-level host by default.
    MULTI_HOST maps each deployable to a host. Forge, visibility, default branch, and
    governance remain separate repository inputs.
@@ -37,6 +39,7 @@ ASK the licence, a published repository, a credential, a machine-global registra
    - interfaces, protocols, data, persistence, events, and workflows
    - frontend and UI
    - testing, quality, and observability
+   - internationalization and accessibility for human-facing surfaces
    - infrastructure, environments, and secrets
    - git, CI, releases, and dependencies
    - agent instructions, harnesses, skills, and plugins
@@ -47,14 +50,17 @@ ASK the licence, a published repository, a credential, a machine-global registra
    LOAD the matching stack reference per language: skill://project-setup/references/stack-typescript.md,
    skill://project-setup/references/stack-python.md, skill://project-setup/references/stack-rust.md,
    skill://project-setup/references/stack-go.md
-   LOAD skill://project-setup/references/protocols-and-events.md when an interface, event,
-   queue, stream, or scheduled job applies; LOAD skill://project-setup/references/delivery-and-tooling.md
-   for repository delivery and tooling.
+   LOAD skill://project-setup/references/protocols-and-events.md when an interface,
+   authentication method, persistence role, event, queue, stream, or scheduled job applies;
+   LOAD skill://project-setup/references/delivery-and-tooling.md for repository delivery and tooling.
+   LOAD skill://project-setup/references/i18n-and-accessibility.md when a deployable emits
+   human-facing text or renders a web, WebView, native desktop, CLI, or TUI surface.
+   LOAD skill://project-setup/references/infrastructure.md when infrastructure code is accepted.
    LOAD skill://project-setup/references/plugins.md for the final project-scope plugin topic.
 6. Write the exact plan. One row per destination path: the asset it comes from, the class
-   CREATE|OVERWRITE|MERGE|SKIP, and each token's resolved value. List every command the
-   apply step will run, and every file a generator will rewrite. A plan carrying an
-   unresolved token or class is not ready to show.
+   CREATE|OVERWRITE|MERGE|SKIP, and each token's resolved value. Add an ADR manifest for every
+   accepted architecture decision. List every command the apply step will run, and every file a
+   generator will rewrite. A plan carrying an unresolved token, class, or ADR field is not ready.
    LOAD skill://project-setup/references/assets.md
 7. Show the plan and wait. Apply it only after the user approves it, and write no path
    the plan does not list.

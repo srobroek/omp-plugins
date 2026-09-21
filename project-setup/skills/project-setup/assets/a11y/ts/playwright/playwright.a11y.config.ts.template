@@ -1,0 +1,16 @@
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+import { defineConfig } from "@playwright/test";
+
+const repositoryRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+const webServers = @@A11Y_WEB_SERVERS_JSON@@;
+
+export default defineConfig({
+  testDir: "./tests",
+  testMatch: "**/*.pw.ts",
+  webServer: webServers.map((server) => ({
+    ...server,
+    cwd: resolve(repositoryRoot, server.cwd),
+    reuseExistingServer: !process.env.CI,
+  })),
+});

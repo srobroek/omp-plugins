@@ -5,10 +5,10 @@ this says how.
 
 ## Confirming prior instruction
 
-The command arguments and the conversation before it arrive as claims, not answers. A
-claim the user has not confirmed in this conversation is a gap.
+Command arguments arrive as claims. A claim that the user has not confirmed is a gap. Direct user
+statements in this conversation are settled answers; read them back once without asking again.
 
-Read them back once, numbered, as `<claim> -- right?`, and group them:
+Read command claims back once, numbered, as `<claim> -- right?`, and group them:
 
 | Source of the claim | Status until confirmed |
 |---|---|
@@ -18,29 +18,55 @@ Read them back once, numbered, as `<claim> -- right?`, and group them:
 | Recalled memory, a stored preference, a past project | RECOMMENDATION, never a claim |
 | A tool lookup, such as the logged-in forge account | RECOMMENDATION |
 
-MUST Offer a RECOMMENDATION as the default inside its question. What a user often picks
-stays theirs to pick, and recording one as decided removes the question without asking it.
+MUST Offer a RECOMMENDATION as the default inside its question. What a user often picks stays theirs
+to pick, and recording one as decided removes the question without asking it.
+EXCEPT A supply-chain source question has no recommendation when the global gate requires a
+user-supplied source. Label it `USER INPUT REQUIRED`.
+
+## Choice cardinality
+
+DEFAULT Use multi-selection when two or more options can coexist in one accepted design. Use
+single-selection only when accepting one option makes every other option invalid; state that
+exclusivity invariant in the question's reference.
+
+MUST Make multi-select options atomic. Do not offer `Multiple`, `A + B`, or another compound option;
+the selected set represents the combination.
+MUST Treat `None` as exclusive with every positive option. If a positive option and `None` are both
+selected, re-ask rather than guessing which answer wins.
+MUST Open the union of follow-up questions required by all selected options.
+NOT Use single-selection because one option is recommended, common, or simpler.
 
 ## Asking a topic
 
 A topic opens when every one of its prerequisites is settled. Inside it:
 
 1. List every question whose own prerequisites are settled. That list is the frontier.
-2. Number them, and carry a recommended answer on each, so `1, 2, 4 yes` accepts three
-   and leaves one open.
-3. Ask them as one message. A question the topic's reference marks derived or fixed is
-   not asked at all.
-4. A question whose answer decides which other questions exist is a frontier of exactly
-   itself. An either/or between two mutually exclusive tool choices is such a question,
-   and the winner's own settings open in the next round.
-5. Re-list the frontier after each round. An answer can add questions that did not exist
-   before it.
-6. The topic's frontier is empty → read the topic's answers back as a table and ask the
-   user to accept or revise it.
+2. Number them and label one proposed value `RECOMMENDED — UNACCEPTED`, so
+   `1, 2, 4 yes` accepts three and leaves one open.
+3. Ask them as one message. A question the topic's reference marks derived or fixed is not asked.
+   A recommendation never removes its question and never becomes an answer without a user reply.
+4. A question whose answer decides which other questions exist is a frontier of exactly itself. An
+   either/or between two mutually exclusive tool choices is such a question, and the winner's own
+   settings open in the next round.
+5. Re-list the frontier after each round. An answer can add questions that did not exist before it.
+6. `Accept topic recommendations` accepts every currently unaccepted recommendation in that topic,
+   then opens any follow-up questions implied by those answers. It is never inferred from silence.
+7. The frontier is empty only when every setting is `USER`, `ACCEPTED_RECOMMENDATION`, `DERIVED`,
+   `FIXED`, or `ACCEPTED_GAP`. A `RECOMMENDED — UNACCEPTED` or `GAP` row keeps it open.
+8. `ACCEPTED_GAP` means the user explicitly accepted a named unsupported capability and its
+   consequence. It permits planning but never permits a claim that the capability works.
+9. Read the settled topic back as `Setting | Value | Source`, then ask the user to accept or revise
+   it. Use one of the five settled statuses as Source.
+
+Before accepting a topic, derive every affected ADR draft from its settled answers. Derive the title
+and decision from the accepted setting, the rationale from its accepted driver, alternatives from
+the rejected options, consequences from the tradeoffs shown, and confirmation from the planned
+verification. Show those ADR rows in the settled-topic readback. Any field that cannot be derived is
+an unblocked frontier question. A topic is not accepted until its ADR rows are accepted.
 
 ## Accepting and revising a topic
 
-ASK `Accept this topic, or name what to change?`
+ASK `Accept this settled topic, or name what to change?`
 
 | Reply | Effect |
 |---|---|

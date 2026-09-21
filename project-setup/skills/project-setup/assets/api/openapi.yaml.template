@@ -12,7 +12,9 @@ info:
   description: "@@API_DESCRIPTION@@"
   contact:
     name: @@ORG@@
+    # OPTIONAL BEGIN REMOTE_EXISTS -- remove only the URL when no remote exists
     url: @@REPO_URL@@
+    # OPTIONAL END
   license:
     name: @@SPDX_ID@@
     url: https://spdx.org/licenses/@@SPDX_ID@@.html
