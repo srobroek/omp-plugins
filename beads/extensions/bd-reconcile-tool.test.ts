@@ -68,7 +68,7 @@ function receipt(overrides: Record<string, unknown> = {}): Record<string, unknow
 			absenceVerifiedAt: NOW,
 		},
 		beads: { ids: ["repo-task"], ledgerActive: true },
-		proof: { method: "forge query", observedAt: NOW, evidence: {} },
+		proof: { method: "forge query", observedAt: NOW, evidence: { query: "fixture-forge-observation" } },
 		outcome: "cleaned",
 		supersedes: null,
 	};
@@ -115,6 +115,27 @@ const passLock = (async <T>(
 	_holder: string,
 	write: () => T | PromiseLike<T>,
 ) => ({ kind: "done" as const, value: await write() })) as WriteLock;
+
+function serializedLock(): WriteLock {
+	let tail = Promise.resolve();
+	return (async <T>(
+		_cwd: string,
+		_holder: string,
+		write: () => T | PromiseLike<T>,
+	) => {
+		const previous = tail;
+		let release: (() => void) | undefined;
+		tail = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		await previous;
+		try {
+			return { kind: "done" as const, value: await write() };
+		} finally {
+			release?.();
+		}
+	}) as WriteLock;
+}
 
 class Harness {
 	readonly calls: string[][] = [];
@@ -230,6 +251,12 @@ function dependencies(root: string, harness: Harness, additions: Partial<Reconci
 		lock: passLock,
 		receiptRoot: join(root, "receipts"),
 		repoKey: async () => REPO_KEY,
+		observeProof: async (value) => ({
+			observation: {
+				repo: { nameWithOwner: value.repo.nameWithOwner },
+				pr: { ...value.pr },
+			},
+		}),
 		host: "test-host",
 		pidAlive: () => true,
 		...additions,
@@ -305,6 +332,13 @@ describe("receipt v1 intake", () => {
 	test("parses a valid receipt while preserving unconstrained proof evidence", () => {
 		const value = receipt({ proof: { method: "forge query", observedAt: NOW, evidence: { future: true } } });
 		expect(parseReceipt(value).receipt?.proof.evidence).toEqual({ future: true });
+	});
+
+	test.each([
+		["empty evidence", { method: "forge query", observedAt: NOW, evidence: {} }, "proof.evidence"],
+		["self-asserted method", { method: "session summary assertion", observedAt: NOW, evidence: { summary: "merged" } }, "proof.method"],
+	] as const)("refuses %s as authoritative merge proof", (_label, proof, expected) => {
+		expect(parseReceipt(receipt({ proof })).reason).toContain(expected);
 	});
 	test("accepts hierarchical bead ids used by child tasks", () => {
 		const parsed = parseReceipt(receipt({ beads: { ids: ["omp-plugins-9ej3.9"], ledgerActive: true } }));
@@ -412,6 +446,23 @@ describe("close-out proof", () => {
 		expect(closeOperations(report.operations)).toEqual([]);
 		expect(report.operations.some((item) => item.kind === "record-merge-audit")).toBe(mergeAudit);
 		expect(report.refusals.some((item) => item.reason.includes(expected))).toBe(true);
+	});
+
+	test("refuses a locally forged receipt before reading or mutating the ledger", async () => {
+		const root = temporary("forged-proof");
+		writeReceipt(root, receipt());
+		const harness = new Harness(join(root, "repo"), exactBead());
+		const report = await reconcile(root, harness, { apply: true }, {
+			observeProof: async (value) => ({
+				observation: {
+					repo: { nameWithOwner: "attacker/forged" },
+					pr: { ...value.pr },
+				},
+			}),
+		});
+		expect(report.operations).toEqual([]);
+		expect(harness.calls).toEqual([]);
+		expect(report.refusals.some((item) => item.reason.includes("authoritative repo.nameWithOwner"))).toBe(true);
 	});
 
 	test.each([
@@ -536,6 +587,62 @@ describe("convergent repairs", () => {
 		expect(applied.applied.map((item) => item.kind)).toContain("set-merge-anchors");
 		const converged = await reconcile(root, harness, {}, { pidAlive: () => false });
 		expect(converged.operations.some((item) => item.kind === "release-dead-claim" || item.kind === "set-merge-anchors")).toBe(false);
+	});
+
+	test("does not treat a dead claim as releasable or closable without actor-bound CAS argv", async () => {
+		const root = temporary("dead-no-actor");
+		writeReceipt(root, receipt());
+		const bead = exactBead("repo-task", {
+			status: "in_progress",
+			assignee: "omp/Dead/session",
+			metadata: { ...exactBead().metadata, lease_host: "test-host", lease_pid: "999999" },
+		});
+		const harness = new Harness(join(root, "repo"), bead);
+		const report = await reconcileReceipts(
+			{ repoKey: REPO_KEY },
+			"dead-no-actor",
+			harness.cwd,
+			{},
+			dependencies(root, harness, { pidAlive: () => false }),
+		);
+		expect(report.operations.some((item) => item.kind === "release-dead-claim" || item.kind === "close")).toBe(false);
+		expect(report.refusals.some((item) => item.reason.includes("no safe actor-bound CAS argv"))).toBe(true);
+	});
+
+	test("serializes concurrent apply calls so audit and anchors cannot race", async () => {
+		const root = temporary("concurrent");
+		const firstPath = writeReceipt(root, receipt());
+		const secondMerge = "3333333333333333333333333333333333333333";
+		const secondReceipt = receipt({
+			receiptId: "2000-333333333333",
+			emittedAt: "2026-09-21T13:00:00.000Z",
+			pr: {
+				number: 43,
+				url: "https://github.com/srobroek/omp-plugins/pull/43",
+				state: "MERGED",
+				baseRefName: "main",
+				headRefName: "feature/reconcile",
+				headRefOid: HEAD,
+				mergeCommitOid: secondMerge,
+				mergedAt: NOW,
+			},
+		});
+		const secondPath = writeReceipt(root, secondReceipt, "2000-333333333333.json");
+		const harness = new Harness(join(root, "repo"), exactBead("repo-task", {
+			metadata: { base: "main", branch: "feature/reconcile", head_sha: HEAD },
+		}));
+		const lock = serializedLock();
+		const reports = await Promise.all([
+			reconcile(root, harness, { receipt: firstPath, apply: true }, { lock }),
+			reconcile(root, harness, { receipt: secondPath, apply: true }, { lock }),
+		]);
+		const mutations = mutationCalls(harness);
+		expect(mutations.filter((argv) => argv[0] === "audit" && argv[1] === "record")).toHaveLength(1);
+		expect(mutations.filter((argv) => argv[0] === "close")).toHaveLength(1);
+		expect(mutations.filter((argv) => argv[0] === "update" && argv.includes("--set-metadata"))).toHaveLength(1);
+		expect(harness.beads.get("repo-task")?.metadata.pr).toBe("42");
+		expect(harness.beads.get("repo-task")?.metadata.merge_sha).toBe(MERGE);
+		expect(reports[1]?.operations.some((item) => item.kind === "set-merge-anchors")).toBe(false);
 	});
 
 	test("conflicting anchors are never overwritten and persist one ambiguity comment/gate", async () => {

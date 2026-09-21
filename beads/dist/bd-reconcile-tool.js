@@ -720,8 +720,13 @@ function parseReceipt(value) {
   const method = needString("proof.method", field(proof, "method"));
   const proofObservedAt = needString("proof.observedAt", field(proof, "observedAt"));
   const evidence = object(field(proof, "evidence"));
-  if (evidence === undefined)
-    failures.push(requirement("proof.evidence", field(proof, "evidence"), "an object"));
+  if (evidence === undefined || Object.keys(evidence).length === 0) {
+    failures.push(requirement("proof.evidence", field(proof, "evidence"), "a non-empty object naming independently observed forge evidence"));
+  }
+  const forgeMethod = forge === "github" ? /(?:^|\b)(?:gh|github|forge)(?:\b|$)/i : forge === "gitlab" ? /(?:^|\b)(?:glab|gitlab|forge)(?:\b|$)/i : /./;
+  if (!forgeMethod.test(method) || /(?:^|\b)(?:assert(?:ed|ion)?|receipt|session|summary|local)(?:\b|$)/i.test(method)) {
+    failures.push(requirement("proof.method", method, `an independently observed ${String(forge)} forge query method`));
+  }
   const outcome = root.outcome;
   if (outcome !== "landed" && outcome !== "cleaned" && outcome !== "partial") {
     failures.push(requirement("outcome", outcome, '"landed", "cleaned", or "partial"'));
@@ -873,13 +878,13 @@ async function readReceiptSources(params, cwd, env, deadline, deps) {
   }
   return { sources, repoKey: key };
 }
-async function defaultSpawn(argv, cwd, env, deadline) {
+async function spawnExecutable(executable, argv, cwd, env, deadline) {
   const remaining = deadline - Date.now();
   if (remaining <= 0) {
-    return { ok: false, exitCode: null, stdout: "", stderr: "", error: "bd command timed out" };
+    return { ok: false, exitCode: null, stdout: "", stderr: "", error: `${executable} command timed out` };
   }
   try {
-    const proc = Bun.spawn(["bd", ...argv], {
+    const proc = Bun.spawn([executable, ...argv], {
       cwd,
       env,
       stdout: "pipe",
@@ -897,7 +902,7 @@ async function defaultSpawn(argv, cwd, env, deadline) {
       exitCode,
       stdout,
       stderr,
-      ...exitCode === null ? { error: "bd command timed out" } : {}
+      ...exitCode === null ? { error: `${executable} command timed out` } : {}
     };
   } catch (error) {
     return {
@@ -908,6 +913,133 @@ async function defaultSpawn(argv, cwd, env, deadline) {
       error: error instanceof Error ? error.message : String(error)
     };
   }
+}
+async function defaultSpawn(argv, cwd, env, deadline) {
+  return spawnExecutable("bd", argv, cwd, env, deadline);
+}
+function commandObject(result, label) {
+  if (!result.ok) {
+    const detail = result.error ?? [result.stderr, result.stdout].filter(Boolean).join(" ").replace(/\s+/g, " ").trim();
+    return { failure: `${label} failed: ${detail || `exit ${result.exitCode}`}` };
+  }
+  const value = object(parseTrailingJson(result.stdout));
+  return value === undefined ? { failure: `${label} returned malformed JSON` } : { value };
+}
+function githubObservation(repo, pr) {
+  const nameWithOwner = string(repo.nameWithOwner);
+  const number = pr.number;
+  const merge = pr.mergeCommit;
+  const mergeCommitOid = merge === null ? null : string(object(merge)?.oid);
+  const mergedAt = nullableString(pr.mergedAt);
+  const values = {
+    url: string(pr.url),
+    state: string(pr.state),
+    baseRefName: string(pr.baseRefName),
+    headRefName: string(pr.headRefName),
+    headRefOid: string(pr.headRefOid)
+  };
+  if (nameWithOwner === undefined || !Number.isInteger(number) || Number(number) <= 0 || Object.values(values).some((value) => value === undefined) || mergeCommitOid === undefined || mergedAt === undefined) {
+    return { failure: "gh returned incomplete repository or pull-request identity" };
+  }
+  return {
+    observation: {
+      repo: { nameWithOwner },
+      pr: {
+        number: Number(number),
+        url: values.url,
+        state: values.state,
+        baseRefName: values.baseRefName,
+        headRefName: values.headRefName,
+        headRefOid: values.headRefOid,
+        mergeCommitOid,
+        mergedAt
+      }
+    }
+  };
+}
+function gitlabObservation(repo, pr) {
+  const nameWithOwner = string(repo.path_with_namespace) ?? string(repo.pathWithNamespace) ?? string(repo.fullPath) ?? string(repo.nameWithOwner);
+  const number = pr.iid ?? pr.number;
+  const mergeCommitOid = nullableString(pr.merge_commit_sha ?? pr.mergeCommitSha);
+  const mergedAt = nullableString(pr.merged_at ?? pr.mergedAt);
+  const values = {
+    url: string(pr.web_url) ?? string(pr.webUrl) ?? string(pr.url),
+    state: string(pr.state),
+    baseRefName: string(pr.target_branch) ?? string(pr.targetBranch),
+    headRefName: string(pr.source_branch) ?? string(pr.sourceBranch),
+    headRefOid: string(pr.sha) ?? string(pr.headRefOid)
+  };
+  if (nameWithOwner === undefined || !Number.isInteger(number) || Number(number) <= 0 || Object.values(values).some((value) => value === undefined) || mergeCommitOid === undefined || mergedAt === undefined) {
+    return { failure: "glab returned incomplete repository or merge-request identity" };
+  }
+  return {
+    observation: {
+      repo: { nameWithOwner },
+      pr: {
+        number: Number(number),
+        url: values.url,
+        state: values.state,
+        baseRefName: values.baseRefName,
+        headRefName: values.headRefName,
+        headRefOid: values.headRefOid,
+        mergeCommitOid,
+        mergedAt
+      }
+    }
+  };
+}
+async function defaultObserveProof(receipt, cwd, env, deadline) {
+  if (receipt.repo.forge === "github") {
+    const repoResult = commandObject(await spawnExecutable("gh", ["repo", "view", "--json", "nameWithOwner"], cwd, env, deadline), "gh repo view");
+    if (repoResult.value === undefined)
+      return { failure: repoResult.failure };
+    const nameWithOwner = string(repoResult.value.nameWithOwner);
+    if (nameWithOwner === undefined)
+      return { failure: "gh repo view returned no nameWithOwner" };
+    const prResult = commandObject(await spawnExecutable("gh", ["pr", "view", String(receipt.pr.number), "--repo", nameWithOwner, "--json", "number,url,state,baseRefName,headRefName,headRefOid,mergeCommit,mergedAt"], cwd, env, deadline), "gh pr view");
+    return prResult.value === undefined ? { failure: prResult.failure } : githubObservation(repoResult.value, prResult.value);
+  }
+  if (receipt.repo.forge === "gitlab") {
+    const repoResult = commandObject(await spawnExecutable("glab", ["repo", "view", "--output", "json"], cwd, env, deadline), "glab repo view");
+    if (repoResult.value === undefined)
+      return { failure: repoResult.failure };
+    const nameWithOwner = string(repoResult.value.path_with_namespace) ?? string(repoResult.value.pathWithNamespace) ?? string(repoResult.value.fullPath) ?? string(repoResult.value.nameWithOwner);
+    if (nameWithOwner === undefined)
+      return { failure: "glab repo view returned no repository path" };
+    const prResult = commandObject(await spawnExecutable("glab", ["api", `projects/${encodeURIComponent(nameWithOwner)}/merge_requests/${receipt.pr.number}`], cwd, env, deadline), "glab api merge request");
+    return prResult.value === undefined ? { failure: prResult.failure } : gitlabObservation(repoResult.value, prResult.value);
+  }
+  return { failure: `repo.forge ${JSON.stringify(receipt.repo.forge)} has no authoritative observer` };
+}
+function observationFailures(receipt, observation) {
+  const failures = [];
+  const expected = {
+    "repo.nameWithOwner": receipt.repo.nameWithOwner,
+    "pr.number": receipt.pr.number,
+    "pr.url": receipt.pr.url,
+    "pr.state": receipt.pr.state.toUpperCase(),
+    "pr.baseRefName": receipt.pr.baseRefName,
+    "pr.headRefName": receipt.pr.headRefName,
+    "pr.headRefOid": receipt.pr.headRefOid,
+    "pr.mergeCommitOid": receipt.pr.mergeCommitOid,
+    "pr.mergedAt": receipt.pr.mergedAt
+  };
+  const actual = {
+    "repo.nameWithOwner": observation.repo.nameWithOwner,
+    "pr.number": observation.pr.number,
+    "pr.url": observation.pr.url,
+    "pr.state": observation.pr.state.toUpperCase(),
+    "pr.baseRefName": observation.pr.baseRefName,
+    "pr.headRefName": observation.pr.headRefName,
+    "pr.headRefOid": observation.pr.headRefOid,
+    "pr.mergeCommitOid": observation.pr.mergeCommitOid,
+    "pr.mergedAt": observation.pr.mergedAt
+  };
+  for (const key of Object.keys(expected)) {
+    if (actual[key] !== expected[key])
+      failures.push(requirement(`authoritative ${key}`, actual[key], JSON.stringify(expected[key])));
+  }
+  return failures;
 }
 var internalRuns = 0;
 async function runBd(argv, cwd, env, deadline, toolCallId, deps = {}) {
@@ -1137,8 +1269,7 @@ function formatReport(report) {
   return lines.join(`
 `);
 }
-async function reconcileReceipts(params, toolCallId, cwd, env = process.env, deps = {}) {
-  const deadline = Date.now() + TOOL_TIMEOUT_MS;
+async function reconcileReceiptsUnlocked(params, toolCallId, cwd, env, deps, deadline) {
   const bdEnv = {
     ...env,
     BD_JSON_ENVELOPE: "1",
@@ -1176,9 +1307,28 @@ async function reconcileReceipts(params, toolCallId, cwd, env = process.env, dep
     const base = { ok: refusals.length === 0, apply: Boolean(params.apply), receipts: loaded.sources.map((source) => source.path), operations: [], applied: [], refusals, failures: [] };
     return { ...base, text: formatReport(base) };
   }
+  const authoritativeSources = [];
+  for (const source of validSources) {
+    const receipt = source.receipt;
+    const observedProof = await (deps.observeProof ?? defaultObserveProof)(receipt, cwd, bdEnv, deadline);
+    if (observedProof.observation === undefined) {
+      refusals.push({ receipt: source.path, reason: `authoritative forge proof unavailable: ${observedProof.failure ?? "observer returned no identity"}` });
+      continue;
+    }
+    const mismatches = observationFailures(receipt, observedProof.observation);
+    if (mismatches.length > 0) {
+      refusals.push({ receipt: source.path, reason: `receipt does not match current repository and PR: ${mismatches.join("; ")}` });
+      continue;
+    }
+    authoritativeSources.push(source);
+  }
+  if (authoritativeSources.length === 0) {
+    const base = { ok: false, apply: Boolean(params.apply), receipts: validSources.map((source) => source.path), operations: [], applied: [], refusals, failures: [] };
+    return { ...base, text: formatReport(base) };
+  }
   const targets = new Map;
   const receiptConflicts = new Map;
-  for (const source of validSources) {
+  for (const source of authoritativeSources) {
     const receipt = source.receipt;
     const ids = params.bead === undefined ? receipt.beads.ids : [params.bead];
     for (const id of ids) {
@@ -1197,7 +1347,7 @@ async function reconcileReceipts(params, toolCallId, cwd, env = process.env, dep
   }
   const ids = [...targets.keys()];
   if (ids.length === 0) {
-    const base = { ok: false, apply: Boolean(params.apply), receipts: validSources.map((source) => source.path), operations: [], applied: [], refusals, failures: [] };
+    const base = { ok: false, apply: Boolean(params.apply), receipts: authoritativeSources.map((source) => source.path), operations: [], applied: [], refusals, failures: [] };
     return { ...base, text: formatReport(base) };
   }
   const [shown, listed, gateResult] = await Promise.all([
@@ -1210,7 +1360,7 @@ async function reconcileReceipts(params, toolCallId, cwd, env = process.env, dep
   const gates = gateResult.ok ? gatesFromOutput(gateResult.stdout) : undefined;
   const failures = [showRows.failure, listRows.failure, gates === undefined ? "bd gate list returned unreadable state" : undefined].filter((failure) => failure !== undefined);
   if (failures.length > 0) {
-    const base = { ok: false, apply: Boolean(params.apply), receipts: validSources.map((source) => source.path), operations: [], applied: [], refusals, failures };
+    const base = { ok: false, apply: Boolean(params.apply), receipts: authoritativeSources.map((source) => source.path), operations: [], applied: [], refusals, failures };
     return { ...base, text: formatReport(base) };
   }
   const allBeads = new Map;
@@ -1271,12 +1421,14 @@ async function reconcileReceipts(params, toolCallId, cwd, env = process.env, dep
     });
     const localAnchor = anchor !== undefined && anchor.host.split(".")[0] === localHost.split(".")[0];
     const deadLocalClaim = bead.assignee !== undefined && anchor !== undefined && localAnchor && !alive(anchor.pid);
+    let guardedReleasePlanned = false;
     if (deadLocalClaim && bead.assignee !== undefined) {
       const release = releaseClaimArgs(id, bead.assignee, bdEnv);
       if (release === undefined) {
         refusals.push({ bead: id, receipt: source.path, reason: "dead claim release: observed no safe actor-bound CAS argv, expected BD_ACTOR or BEADS_ACTOR and a valid assignee" });
       } else {
         operations.push(operation("release-dead-claim", id, source.path, `release dead claim ${bead.assignee} with --if-assignee`, [...release, "--json"]));
+        guardedReleasePlanned = true;
       }
     }
     if (conflicts.length === 0 && receipt.pr.mergeCommitOid !== null) {
@@ -1315,9 +1467,9 @@ async function reconcileReceipts(params, toolCallId, cwd, env = process.env, dep
       closeFailures.push(requirement("metadata.pr", effectivePr, String(receipt.pr.number)));
     if (effectiveMerge !== receipt.pr.mergeCommitOid)
       closeFailures.push(requirement("metadata.merge_sha", effectiveMerge, JSON.stringify(receipt.pr.mergeCommitOid)));
-    if (bead.assignee !== undefined && !deadLocalClaim) {
+    if (bead.assignee !== undefined && !guardedReleasePlanned) {
       const lease = anchor === undefined ? "absent" : `${anchor.host}:${anchor.pid}`;
-      closeFailures.push(requirement("live assignment/lease", `${bead.assignee} (${lease})`, "absent or a locally proven dead lease released with --if-assignee"));
+      closeFailures.push(requirement("live assignment/lease", `${bead.assignee} (${lease})`, "absent or a locally proven dead lease with a planned --if-assignee release"));
     }
     const openGates = (gates ?? []).filter((gate) => gate.blocks === id);
     if (openGates.length > 0)
@@ -1340,7 +1492,7 @@ async function reconcileReceipts(params, toolCallId, cwd, env = process.env, dep
   const applied = [];
   if (params.apply) {
     for (const item of operations) {
-      const result = await runBd(item.argv, cwd, bdEnv, deadline, toolCallId, deps);
+      const result = await (deps.spawn ?? defaultSpawn)(item.argv, cwd, bdEnv, deadline);
       if (!result.ok) {
         const detail = result.error ?? [result.stderr, result.stdout].filter(Boolean).join(" ").replace(/\s+/g, " ").trim();
         failures.push(`${item.bead} ${item.kind} failed: ${detail || `exit ${result.exitCode}`}; applied work remains convergent and a retry will resume from ledger state`);
@@ -1352,11 +1504,35 @@ async function reconcileReceipts(params, toolCallId, cwd, env = process.env, dep
   const base = {
     ok: failures.length === 0,
     apply: Boolean(params.apply),
-    receipts: validSources.map((source) => source.path),
+    receipts: authoritativeSources.map((source) => source.path),
     operations,
     applied,
     refusals,
     failures
+  };
+  return { ...base, text: formatReport(base) };
+}
+async function reconcileReceipts(params, toolCallId, cwd, env = process.env, deps = {}) {
+  const deadline = Date.now() + TOOL_TIMEOUT_MS;
+  if (!params.apply)
+    return reconcileReceiptsUnlocked(params, toolCallId, cwd, env, deps, deadline);
+  const bdEnv = {
+    ...env,
+    BD_JSON_ENVELOPE: "1",
+    BD_NO_PAGER: "1",
+    BD_NON_INTERACTIVE: "1"
+  };
+  const locked = await (deps.lock ?? withEmbeddedWriteLock)(cwd, `${toolCallId}-bd-reconcile-transaction-${internalRuns++}`, () => reconcileReceiptsUnlocked(params, toolCallId, cwd, bdEnv, deps, deadline), bdEnv, deadline);
+  if (locked.kind === "done")
+    return locked.value;
+  const base = {
+    ok: false,
+    apply: true,
+    receipts: [],
+    operations: [],
+    applied: [],
+    refusals: [],
+    failures: [`apply refused before ledger reads: ${locked.reason}`]
   };
   return { ...base, text: formatReport(base) };
 }
