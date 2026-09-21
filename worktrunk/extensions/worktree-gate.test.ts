@@ -381,6 +381,66 @@ describe("bash", () => {
 	});
 });
 
+test("an explicit wt -C worktree target allows a non-bootstrap mutation", () => {
+  const { canonical, worktree, topology } = project();
+  const decision = decideWorktreeCall(
+    "bash",
+    { command: `wt -C ${worktree} -y step copy-ignored` },
+    canonical,
+    topology,
+  );
+  expect(decision).toBeUndefined();
+});
+
+test("git work-tree and git-dir options select the effective target", () => {
+  const { canonical, worktree, topology } = project();
+  for (const command of [
+    `git --work-tree ${worktree} status`,
+    `git --git-dir ${worktree}/.git status`,
+  ]) {
+    expect(decideWorktreeCall("bash", { command }, canonical, topology)).toBeUndefined();
+  }
+});
+
+test("a chain of explicit worktree targets is judged per command", () => {
+  const { canonical, worktree, topology } = project();
+  const command = `wt -C ${worktree} -y step copy-ignored && wt -C ${worktree} -y step copy-ignored`;
+  expect(decideWorktreeCall("bash", { command }, canonical, topology)).toBeUndefined();
+});
+
+test("a wt global directory option before switch is recognized", () => {
+  const { worktree } = project();
+  expect(
+    bootstrapAllowed(`wt --directory ${worktree} -y switch --create --no-cd --base main --format json omp/agent/probe-1`),
+  ).toBe(true);
+});
+
+test("dynamic, substituted, and unparseable explicit targets refuse", () => {
+  const { canonical, worktree, topology } = project();
+  for (const command of [
+    `wt -C "$DIR" -y step copy-ignored`,
+    `wt -C $(printf ${worktree}) -y step copy-ignored`,
+    `wt -C "${worktree} -y step copy-ignored`,
+  ]) {
+    expect(decideWorktreeCall("bash", { command }, canonical, topology)?.block).toBe(true);
+  }
+});
+
+test("a read-only absolute path outside the project is not judged canonical", () => {
+  const { canonical, foreign, topology } = project();
+  const file = join(foreign, "mise");
+  writeFileSync(file, "#!/bin/sh\nprintf\n");
+  expect(decideWorktreeCall("bash", { command: `wc -c ${file}` }, canonical, topology)).toBeUndefined();
+});
+
+test("an eval cell that only reads an external file is not judged canonical", () => {
+  const { canonical, foreign, topology } = project();
+  const file = join(foreign, "mise");
+  writeFileSync(file, "#!/bin/sh\nprintf\n");
+  const code = `from pathlib import Path\ndata = Path(${JSON.stringify(file)}).read_bytes()\nprint([(i, byte) for i, byte in enumerate(data)])`;
+  expect(decideWorktreeCall("eval", { language: "py", code }, canonical, topology)).toBeUndefined();
+});
+
 
 describe("bootstrapAllowed", () => {
 	test("accepts the create and pull-request switch forms", () => {

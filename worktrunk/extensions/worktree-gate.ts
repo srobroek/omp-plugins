@@ -977,46 +977,151 @@ function commandTokens(command: string): string[] | null {
 	return out;
 }
 
-/** Consume `wt`'s global options, returning the subcommand tokens. */
-function afterWtGlobals(tokens: readonly string[]): string[] | null {
-	const rest = [...tokens];
-	for (;;) {
-		const head = rest[0];
-		if (head === undefined) return null;
-		if (head === "-y" || head === "--yes" || head === "-v" || head === "--verbose") {
-			rest.shift();
-			continue;
-		}
-		if (head === "-C" || head === "--config" || head === "--config-set") {
-			if (rest[1] === undefined) return null;
-			rest.splice(0, 2);
-			continue;
-		}
-		return rest;
-	}
+type GlobalOption = { name: string; value?: string };
+type ScannedGlobals = { rest: string[]; options: GlobalOption[] };
+
+/** Skip leading options once; unknown options end the scan rather than guessing their arity. */
+function scanLeadingGlobals(tokens: readonly string[], valueOptions: readonly string[], booleanOptions: readonly string[]): ScannedGlobals | null {
+  const options: GlobalOption[] = [];
+  let index = 0;
+  while (index < tokens.length) {
+    const token = tokens[index] as string;
+    const equals = token.indexOf("=");
+    const name = equals > 0 ? token.slice(0, equals) : token;
+    if (valueOptions.includes(name)) {
+      if (equals > 0) {
+        options.push({ name, value: token.slice(equals + 1) });
+        index++;
+        continue;
+      }
+      const value = tokens[index + 1];
+      if (value === undefined) return null;
+      options.push({ name, value });
+      index += 2;
+      continue;
+    }
+    if (booleanOptions.includes(token)) {
+      options.push({ name: token });
+      index++;
+      continue;
+    }
+    break;
+  }
+  return { rest: tokens.slice(index), options };
 }
 
-/** Consume `git`'s global options, returning the subcommand tokens. */
-function afterGitGlobals(tokens: readonly string[]): string[] | null {
-	const rest = [...tokens];
-	for (;;) {
-		const head = rest[0];
-		if (head === undefined) return null;
-		if (head === "--no-pager" || head === "--no-replace-objects") {
-			rest.shift();
-			continue;
-		}
-		if (head === "-C" || head === "-c") {
-			if (rest[1] === undefined) return null;
-			rest.splice(0, 2);
-			continue;
-		}
-		return rest;
-	}
+const WT_VALUE_OPTIONS = ["-C", "--config", "--config-set", "--directory"] as const;
+const WT_BOOLEAN_OPTIONS = ["-y", "--yes", "-v", "--verbose"] as const;
+const GIT_VALUE_OPTIONS = ["-C", "-c", "--git-dir", "--work-tree", "--exec-path", "--namespace"] as const;
+const GIT_BOOLEAN_OPTIONS = ["--no-pager", "--no-replace-objects"] as const;
+
+function commandProgram(segment: readonly string[]): { name: string; index: number } | null {
+  let index = 0;
+  while (/^[A-Za-z_][A-Za-z0-9_]*=.*$/.test(segment[index] ?? "")) index++;
+  for (;;) {
+    const name = segment[index]?.split("/").pop();
+    if (name === undefined) return null;
+    if (name === "command") {
+      index++;
+      continue;
+    }
+    if (name !== "env") return { name, index };
+    index++;
+    while (index < segment.length) {
+      const token = segment[index] as string;
+      if (/^[A-Za-z_][A-Za-z0-9_]*=.*$/.test(token)) index++;
+      else if (token === "-u" || token === "--unset") index += 2;
+      else if (token === "-i" || token === "--ignore-environment") index++;
+      else break;
+    }
+  }
 }
 
-function wtSwitchAllowed(args: readonly string[]): boolean {
-	let yes = false;
+function literalCommandValue(value: string | undefined): string | null {
+  if (value === undefined || value.length === 0 || /[$`*?{}]/.test(value)) return null;
+  return value;
+}
+
+function commandSegments(command: string): string[][] | null {
+  if (/\$\(|`/.test(command)) return null;
+  const tokens = commandTokens(command);
+  if (tokens === null) return null;
+  const segments: string[][] = [];
+  let segment: string[] = [];
+  for (const token of tokens) {
+    if (SHELL_SEPARATORS[token] === true) {
+      if (segment.length > 0) segments.push(segment);
+      segment = [];
+    } else segment.push(token);
+  }
+  if (segment.length > 0) segments.push(segment);
+  return segments;
+}
+
+function readOnlyFileInvocation(name: string, args: readonly string[]): boolean {
+  if (!["basename", "cat", "dirname", "head", "readlink", "rg", "stat", "tail", "wc"].includes(name)) return false;
+  return name !== "wc" || !args.some(token => token === "-o" || token === "--output" || token === "--files0-from" || token.startsWith("--output="));
+}
+
+type CommandTarget = { raw: string; explicit: boolean };
+type CommandTargetScan = { targets: CommandTarget[]; inheritedMutation: boolean };
+
+/** Resolve literal command options and known read-only file operands. */
+function scanCommandTargets(command: string): CommandTargetScan | null {
+  const segments = commandSegments(command);
+  if (segments === null) return null;
+  const targets: CommandTarget[] = [];
+  let inheritedMutation = false;
+  for (const segment of segments) {
+    const invocation = commandProgram(segment);
+    if (invocation === null) {
+      inheritedMutation = true;
+      continue;
+    }
+    const rest = segment.slice(invocation.index + 1);
+    const beforeTargets = targets.length;
+    const scan = invocation.name === "wt"
+      ? scanLeadingGlobals(rest, WT_VALUE_OPTIONS, WT_BOOLEAN_OPTIONS)
+      : invocation.name === "git"
+        ? scanLeadingGlobals(rest, GIT_VALUE_OPTIONS, GIT_BOOLEAN_OPTIONS)
+        : null;
+    if (scan === null && (invocation.name === "wt" || invocation.name === "git")) return null;
+    if (scan !== null) {
+      for (const option of scan.options) {
+        if (!["-C", "--directory", "--git-dir", "--work-tree"].includes(option.name)) continue;
+        const value = literalCommandValue(option.value);
+        if (value === null) return null;
+        targets.push({ raw: value, explicit: true });
+      }
+    } else if (invocation.name !== "wt" && invocation.name !== "git") {
+      if (readOnlyFileInvocation(invocation.name, rest)) {
+        for (const value of rest.filter(token => !token.startsWith("-"))) {
+          const literal = literalCommandValue(value);
+          if (literal === null) return null;
+          targets.push({ raw: literal, explicit: false });
+        }
+        continue;
+      }
+      inheritedMutation = true;
+      continue;
+    }
+    if ((invocation.name === "wt" || invocation.name === "git") && targets.length === beforeTargets) inheritedMutation = true;
+  }
+  return { targets, inheritedMutation };
+}
+
+ /** Consume `wt`'s global options, returning the subcommand tokens. */
+ function afterWtGlobals(tokens: readonly string[]): string[] | null {
+  return scanLeadingGlobals(tokens, WT_VALUE_OPTIONS, WT_BOOLEAN_OPTIONS)?.rest ?? null;
+ }
+
+ /** Consume `git`'s global options, returning the subcommand tokens. */
+ function afterGitGlobals(tokens: readonly string[]): string[] | null {
+  return scanLeadingGlobals(tokens, GIT_VALUE_OPTIONS, GIT_BOOLEAN_OPTIONS)?.rest ?? null;
+ }
+
+function wtSwitchAllowed(args: readonly string[], globalYes = false): boolean {
+	let yes = globalYes;
 	let create = false;
 	let noCd = false;
 	let formatJson = false;
@@ -1100,10 +1205,11 @@ function invocationKind(segment: readonly string[]): "allowed" | "safe" | "other
 		return envIndex < rest.length ? invocationKind(rest.slice(envIndex)) : "other";
 	}
 	if (program === "bd") return bdReadAllowed(rest) ? "allowed" : "other";
-	if (program === "wt") {
-		const args = afterWtGlobals(rest); if (args === null) return "other";
-		const sub = args[0]; const tail = args.slice(1);
-		if (sub === "switch") return wtSwitchAllowed(tail) ? "allowed" : "other";
+if (program === "wt") {
+		const scanned = scanLeadingGlobals(rest, WT_VALUE_OPTIONS, WT_BOOLEAN_OPTIONS); if (scanned === null) return "other";
+		const args = scanned.rest; const sub = args[0]; const tail = args.slice(1);
+		const globalYes = scanned.options.some(option => option.name === "-y" || option.name === "--yes");
+		if (sub === "switch") return wtSwitchAllowed(tail, globalYes) ? "allowed" : "other";
 		if (sub === "list") return tail.length === 0 || (tail.length === 2 && tail[0] === "--format" && tail[1] === "json") ? "allowed" : "other";
 		if (sub === "config") return tail.length === 1 && tail[0] === "show" ? "allowed" : "other";
 		if (sub === "step") return tail.length === 2 && tail[0] === "prune" && tail[1] === "--dry-run" ? "allowed" : "other";
@@ -1199,6 +1305,19 @@ export function scanPathArguments(input: unknown, depth = 0): string[] {
 		found.push(...scanPathArguments(value, depth + 1));
 	}
 	return found;
+}
+
+
+/** Literal external paths in an eval cell that is visibly read-only. */
+function evalReadOnlyTargets(code: string): string[] | null {
+  if (code.length === 0 || /[`$][({]|\b(?:write|unlink|remove|mkdir|rmdir|rename|chmod|spawn|exec|eval)\b/i.test(code)) return null;
+  if (!/(?:read_bytes|read_text|readFile|Bun\.file|\.read\s*\(|open\s*\()/i.test(code)) return null;
+  const paths: string[] = [];
+  for (const match of code.matchAll(/["'](\/[^"'`]+)["']/g)) {
+    const pathValue = match[1];
+    if (pathValue !== undefined) paths.push(pathValue);
+  }
+  return paths.length > 0 ? paths : null;
 }
 
 
@@ -1306,41 +1425,64 @@ export function decideWorktreeCall(
 			}
 			return refuseAll(bases);
 		}
-		case "bash": {
-			const record = asRecord(input);
-			const rawCwd = record?.cwd;
-			const effective =
-				typeof rawCwd === "string" && rawCwd.length > 0 ? resolveTarget(rawCwd, sessionCwd) : sessionCwd;
-			if (effective === null) {
-				return { block: true, reason: uncertaintyRefusal("this `bash` call's `cwd` does not resolve", canonical) };
-			}
-			const where = containment(effective, topology);
-			if (where.inside) return undefined;
-			if (where.repository === null) return { block: true, reason: topologyRefusal(where.uncertainty) };
-			// A cwd outside every repository has no canonical checkout to protect, so
-			// scratch directories stay usable.
-			if (where.repository.canonical === null) return undefined;
-			const command = extractCommand(input);
-			if (command.length === 0) {
-				return { block: true, reason: uncertaintyRefusal("this `bash` call has no `command` string", canonical) };
-			}
-			// The bootstrap allowlist is what an agent runs before it has a worktree,
-			// in whichever repository it is bootstrapping — the second repository of a
-			// multi-repository run included.
-			if (bootstrapAllowed(command)) return undefined;
-			const reason = bootstrapRefusal(command, effective);
-			return { block: true, reason: worktreeGateDisabled(sessionCwd) ? reason + DISABLE_SUFFIX : reason };
-		}
-		case "eval": {
-			const record = asRecord(input);
-			const rawCwd = record?.cwd;
-			const effective =
-				typeof rawCwd === "string" && rawCwd.length > 0 ? resolveTarget(rawCwd, sessionCwd) : sessionCwd;
-			if (effective === null) {
-				return { block: true, reason: uncertaintyRefusal("this `eval` call's `cwd` does not resolve", canonical) };
-			}
-			return refuseTarget(effective);
-		}
+case "bash": {
+  const record = asRecord(input);
+  const rawCwd = record?.cwd;
+  const effective = typeof rawCwd === "string" && rawCwd.length > 0 ? resolveTarget(rawCwd, sessionCwd) : sessionCwd;
+  if (effective === null) {
+    return { block: true, reason: uncertaintyRefusal("this `bash` call's `cwd` does not resolve", canonical) };
+  }
+  const where = containment(effective, topology);
+  if (where.inside) return undefined;
+  if (where.repository === null) return { block: true, reason: topologyRefusal(where.uncertainty) };
+  if (where.repository.canonical === null) return undefined;
+  const command = extractCommand(input);
+  if (command.length === 0) {
+    return { block: true, reason: uncertaintyRefusal("this `bash` call has no `command` string", canonical) };
+  }
+  const scanned = scanCommandTargets(command);
+  // Dynamic options, shell substitution, redirection, and malformed syntax do
+  // not identify a target safely; refusing preserves the accident guardrail.
+  if (scanned === null) {
+    const reason = bootstrapRefusal(command, effective);
+    return { block: true, reason: worktreeGateDisabled(sessionCwd) ? reason + DISABLE_SUFFIX : reason };
+  }
+  for (const target of scanned.targets) {
+    const resolved = resolveTarget(target.raw, effective);
+    if (resolved === null) {
+      const reason = bootstrapRefusal(command, effective);
+      return { block: true, reason: worktreeGateDisabled(sessionCwd) ? reason + DISABLE_SUFFIX : reason };
+    }
+    const refusal = refuseTarget(resolved);
+    if (refusal) return refusal;
+  }
+  if (!scanned.inheritedMutation || bootstrapAllowed(command)) return undefined;
+  const reason = bootstrapRefusal(command, effective);
+  return { block: true, reason: worktreeGateDisabled(sessionCwd) ? reason + DISABLE_SUFFIX : reason };
+}
+case "eval": {
+  const record = asRecord(input);
+  const rawCwd = record?.cwd;
+  const effective = typeof rawCwd === "string" && rawCwd.length > 0 ? resolveTarget(rawCwd, sessionCwd) : sessionCwd;
+  if (effective === null) {
+    return { block: true, reason: uncertaintyRefusal("this `eval` call's `cwd` does not resolve", canonical) };
+  }
+  if (containment(effective, topology).inside) return undefined;
+  const code = record?.code;
+  const readTargets = typeof code === "string" ? evalReadOnlyTargets(code) : null;
+  if (readTargets !== null) {
+    for (const raw of readTargets) {
+      const resolved = resolveTarget(raw, effective);
+      if (resolved === null) {
+        return { block: true, reason: uncertaintyRefusal("this `eval` cell has an unresolvable read target", canonical) };
+      }
+      const refusal = refuseTarget(resolved);
+      if (refusal) return refusal;
+    }
+    return undefined;
+  }
+  return refuseTarget(effective);
+}
 		default: {
 			// An unenumerated tool is judged by the filesystem paths its arguments
 			// name, and by nothing else. A tool whose arguments resolve to no path —
