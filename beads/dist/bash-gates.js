@@ -978,7 +978,7 @@ var LOCK_NAME = "omp-embedded-write.lock";
 var STEAL_NAME = "omp-embedded-write-steal.lock";
 var LEASE_MS = 120000;
 var RENEW_MS = 20000;
-var WAIT_MS = 120000;
+var WAIT_MS = 20000;
 var POLL_MS = 20;
 var leaseMs = LEASE_MS;
 var renewMs = RENEW_MS;
@@ -1707,6 +1707,7 @@ import { existsSync as existsSync2, statSync as statSync3 } from "fs";
 import { dirname, join as join2, resolve as resolve4 } from "path";
 var MAX_COMMAND_LENGTH = 64000;
 var BEAD_REF = /(?:^|\s)(?:Bead|Closes-Bead|Bead-Id):\s*[A-Za-z][A-Za-z0-9_-]*-[A-Za-z0-9]+/i;
+var GH_TIMEOUT_MS = 1e4;
 var VALUE_FLAGS4 = {
   "--title": true,
   "-t": true,
@@ -1802,8 +1803,10 @@ function decideCommand(command, active) {
   if (command.length > MAX_COMMAND_LENGTH)
     return null;
   for (const segment of commandSegments(command)) {
-    const segmentActive = typeof active === "function" ? active(segment) : active;
-    const decision = decidePrCreate(bodyOfGhCreate(segment), segmentActive);
+    const body = bodyOfGhCreate(segment);
+    if (body === null || BEAD_REF.test(body))
+      continue;
+    const decision = decidePrCreate(body, typeof active === "function" ? active(segment) : active);
     if (decision)
       return decision;
   }
@@ -1846,7 +1849,12 @@ function repositoryFromView(view) {
 }
 function repositoryFromCurrentCheckout(cwd) {
   try {
-    const raw = execFileSync2("gh", ["repo", "view", "--json", "nameWithOwner,isFork,parent"], { cwd, encoding: "utf8" });
+    const raw = execFileSync2("gh", ["repo", "view", "--json", "nameWithOwner,isFork,parent"], {
+      cwd,
+      encoding: "utf8",
+      timeout: GH_TIMEOUT_MS,
+      stdio: ["ignore", "pipe", "pipe"]
+    });
     return repositoryFromView(JSON.parse(raw));
   } catch {
     return null;
@@ -1856,7 +1864,11 @@ function repositoryControlled(repo) {
   if (!repo)
     return { kind: "unknown", reason: "Repository permission could not be determined because the repository could not be identified" };
   try {
-    const permission = execFileSync2("gh", ["repo", "view", repo, "--json", "viewerPermission", "--jq", ".viewerPermission"], { encoding: "utf8" }).trim();
+    const permission = execFileSync2("gh", ["repo", "view", repo, "--json", "viewerPermission", "--jq", ".viewerPermission"], {
+      encoding: "utf8",
+      timeout: GH_TIMEOUT_MS,
+      stdio: ["ignore", "pipe", "pipe"]
+    }).trim();
     return controlledByViewerPermission(permission) ? { kind: "controlled" } : { kind: "uncontrolled" };
   } catch (error) {
     const failure = error instanceof Error ? error.message : String(error);

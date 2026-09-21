@@ -190,6 +190,25 @@ describe("per-segment repository control", () => {
 	});
 });
 
+describe("repository control lookup cost", () => {
+	test("classifies only a segment whose decision depends on it", () => {
+		const asked: string[] = [];
+		const active = (segment: string) => {
+			asked.push(segment);
+			return true;
+		};
+		// Resolving control spawns `gh`, twice, and this gate decides every bash call in the
+		// session: a command with no PR to judge must cost no lookup at all.
+		expect(decideCommand("git status && bd list && echo done", active)).toBeNull();
+		expect(asked).toEqual([]);
+		// A create that already names a bead is allowed whatever the answer would have been.
+		expect(decideCommand("gh pr create --body 'Bead: omp-1'", active)).toBeNull();
+		expect(asked).toEqual([]);
+		expect(decideCommand("gh pr create --body 'plain prose'", active)).not.toBeNull();
+		expect(asked).toHaveLength(1);
+	});
+});
+
 describe("short flag clusters", () => {
 	test("reads a body attached to a clustered -b", () => {
 		expect(bodyOfGhCreate("gh pr create -dbNoBead")).toBe("NoBead");
