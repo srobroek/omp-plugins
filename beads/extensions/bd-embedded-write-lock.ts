@@ -57,8 +57,14 @@ const LEASE_MS = 120_000;
 /** Renewal cadence, a fraction of the lease so missing one tick cannot expire it. */
 const RENEW_MS = 20_000;
 
-/** How long a writer waits for its turn before failing closed. */
-const WAIT_MS = 120_000;
+/**
+ * How long a writer waits for its turn before failing closed.
+ *
+ * It MUST stay under the 30s the harness allows a tool_call handler: a longer wait is killed
+ * mid-wait, so the caller reads "handler timed out" instead of the refusal this writes, and the
+ * lock this call may already hold elsewhere keeps being renewed until the lease surrenders it.
+ */
+const WAIT_MS = 20_000;
 
 const POLL_MS = 20;
 

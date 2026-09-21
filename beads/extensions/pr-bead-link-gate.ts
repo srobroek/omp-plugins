@@ -15,6 +15,12 @@ import { commandSegments, invocation, type Token } from "./shell-command.ts";
 const MAX_COMMAND_LENGTH = 64_000;
 const BEAD_REF = /(?:^|\s)(?:Bead|Closes-Bead|Bead-Id):\s*[A-Za-z][A-Za-z0-9_-]*-[A-Za-z0-9]+/i;
 
+/**
+ * A `gh` API call that hangs must not spend the whole tool_call budget: the harness kills a
+ * gate handler at 30s, and two lookups plus the other gates have to fit inside that.
+ */
+const GH_TIMEOUT_MS = 10_000;
+
 
 /** Flags whose following token is a value, so a `--body` inside one is not the body. */
 const VALUE_FLAGS: Record<string, true> = {
@@ -117,15 +123,24 @@ export function decidePrCreate(
 	return { block: true, reason: REASON };
 }
 
-/** Blocks when any `gh pr create` in the command carries neither a bead nor a truthful no-bead reason. */
+/**
+ * Blocks when any `gh pr create` in the command carries neither a bead nor a truthful no-bead reason.
+ *
+ * `active` is resolved per segment and only for a segment whose answer actually depends on it,
+ * because resolving it reaches the network and this decides every bash call in the session.
+ */
 export function decideCommand(
 	command: string,
 	active: boolean | RepositoryControl | ((segment: string) => boolean | RepositoryControl),
 ): { block: true; reason: string } | null {
 	if (command.length > MAX_COMMAND_LENGTH) return null;
 	for (const segment of commandSegments(command)) {
-		const segmentActive = typeof active === "function" ? active(segment) : active;
-		const decision = decidePrCreate(bodyOfGhCreate(segment), segmentActive);
+		const body = bodyOfGhCreate(segment);
+		// A segment that creates no PR, and one whose body already names a bead, decide null for
+		// every `active`. Resolving `active` ahead of them spent two synchronous `gh` API calls per
+		// segment on every bash call, so a slow `gh` exhausted the handler's budget.
+		if (body === null || BEAD_REF.test(body)) continue;
+		const decision = decidePrCreate(body, typeof active === "function" ? active(segment) : active);
 		if (decision) return decision;
 	}
 	return null;
@@ -174,7 +189,14 @@ export function repositoryFromView(view: RepositoryView): string | null {
 
 export function repositoryFromCurrentCheckout(cwd: string): string | null {
 	try {
-		const raw = execFileSync("gh", ["repo", "view", "--json", "nameWithOwner,isFork,parent"], { cwd, encoding: "utf8" });
+		const raw = execFileSync("gh", ["repo", "view", "--json", "nameWithOwner,isFork,parent"], {
+			cwd,
+			encoding: "utf8",
+			timeout: GH_TIMEOUT_MS,
+			// Only stdin is closed, so a `gh` that wants to prompt fails instead of hanging;
+			// stderr stays piped because `repositoryControlled` reports it as the refusal's cause.
+			stdio: ["ignore", "pipe", "pipe"],
+		});
 		return repositoryFromView(JSON.parse(raw) as RepositoryView);
 	} catch { return null; }
 }
@@ -183,7 +205,11 @@ export function repositoryFromCurrentCheckout(cwd: string): string | null {
 export function repositoryControlled(repo: string | null): RepositoryControl {
 	if (!repo) return { kind: "unknown", reason: "Repository permission could not be determined because the repository could not be identified" };
 	try {
-		const permission = execFileSync("gh", ["repo", "view", repo, "--json", "viewerPermission", "--jq", ".viewerPermission"], { encoding: "utf8" }).trim();
+		const permission = execFileSync("gh", ["repo", "view", repo, "--json", "viewerPermission", "--jq", ".viewerPermission"], {
+			encoding: "utf8",
+			timeout: GH_TIMEOUT_MS,
+			stdio: ["ignore", "pipe", "pipe"],
+		}).trim();
 		return controlledByViewerPermission(permission) ? { kind: "controlled" } : { kind: "uncontrolled" };
 	} catch (error) {
 		const failure = error instanceof Error ? error.message : String(error);
