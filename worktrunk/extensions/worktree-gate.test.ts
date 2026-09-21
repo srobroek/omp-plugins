@@ -381,6 +381,66 @@ describe("bash", () => {
 	});
 });
 
+test("an explicit wt -C worktree target allows a non-bootstrap mutation", () => {
+  const { canonical, worktree, topology } = project();
+  const decision = decideWorktreeCall(
+    "bash",
+    { command: `wt -C ${worktree} -y step copy-ignored` },
+    canonical,
+    topology,
+  );
+  expect(decision).toBeUndefined();
+});
+
+test("git work-tree and git-dir options select the effective target", () => {
+  const { canonical, worktree, topology } = project();
+  for (const command of [
+    `git --work-tree ${worktree} status`,
+    `git --git-dir ${worktree}/.git status`,
+  ]) {
+    expect(decideWorktreeCall("bash", { command }, canonical, topology)).toBeUndefined();
+  }
+});
+
+test("a chain of explicit worktree targets is judged per command", () => {
+  const { canonical, worktree, topology } = project();
+  const command = `wt -C ${worktree} -y step copy-ignored && wt -C ${worktree} -y step copy-ignored`;
+  expect(decideWorktreeCall("bash", { command }, canonical, topology)).toBeUndefined();
+});
+
+test("a wt global directory option before switch is recognized", () => {
+  const { worktree } = project();
+  expect(
+    bootstrapAllowed(`wt --directory ${worktree} -y switch --create --no-cd --base main --format json omp/agent/probe-1`),
+  ).toBe(true);
+});
+
+test("dynamic, substituted, and unparseable explicit targets refuse", () => {
+  const { canonical, worktree, topology } = project();
+  for (const command of [
+    `wt -C "$DIR" -y step copy-ignored`,
+    `wt -C $(printf ${worktree}) -y step copy-ignored`,
+    `wt -C "${worktree} -y step copy-ignored`,
+  ]) {
+    expect(decideWorktreeCall("bash", { command }, canonical, topology)?.block).toBe(true);
+  }
+});
+
+test("a read-only absolute path outside the project is not judged canonical", () => {
+  const { canonical, foreign, topology } = project();
+  const file = join(foreign, "mise");
+  writeFileSync(file, "#!/bin/sh\nprintf\n");
+  expect(decideWorktreeCall("bash", { command: `wc -c ${file}` }, canonical, topology)).toBeUndefined();
+});
+
+test("an eval cell that only reads an external file is not judged canonical", () => {
+  const { canonical, foreign, topology } = project();
+  const file = join(foreign, "mise");
+  writeFileSync(file, "#!/bin/sh\nprintf\n");
+  const code = `from pathlib import Path\ndata = Path(${JSON.stringify(file)}).read_bytes()\nprint([(i, byte) for i, byte in enumerate(data)])`;
+  expect(decideWorktreeCall("eval", { language: "py", code }, canonical, topology)).toBeUndefined();
+});
+
 
 describe("bootstrapAllowed", () => {
 	test("accepts the create and pull-request switch forms", () => {
@@ -570,8 +630,62 @@ describe("ast_edit", () => {
 describe("eval", () => {
 	test("a canonical session cwd is refused and a worktree cwd is allowed", () => {
 		const { canonical, worktree, topology } = project();
-		expect(decideWorktreeCall("eval", { code: "1" }, canonical, topology)?.block).toBe(true);
+		expect(decideWorktreeCall("eval", { code: "1" }, canonical, topology)).toBeUndefined();
 		expect(decideWorktreeCall("eval", { code: "1" }, worktree, topology)).toBeUndefined();
+	});
+});
+
+function realProjectCanonical(): string {
+	const resolution = resolveCanonicalRoot(process.cwd());
+	if (resolution.state !== "repository") throw new Error(`tests need a real repository: ${resolution.state}`);
+	return resolution.canonical;
+}
+
+describe("eval path literals on the real topology", () => {
+	test("a pathless browser-driving cell is allowed", () => {
+		const canonical = realProjectCanonical();
+		expect(decideWorktreeCall("eval", { code: "await browser.open({ app: { relay: true } })" }, canonical)).toBeUndefined();
+	});
+
+
+	test("an explicit cwd decides: canonical is guarded, a cwd in no repository is not", () => {
+		const canonical = realProjectCanonical();
+		const scratch = mkdtempSync(join(tmpdir(), "worktrunk-eval-cwd-"));
+		roots.push(scratch);
+		const code = "await browser.open({ app: { relay: true } })";
+		expect(decideWorktreeCall("eval", { cwd: canonical, code }, canonical)?.block).toBe(true);
+		// Not `process.cwd()`: CI runs this suite inside the canonical checkout, where no
+		// linked worktree exists, so that spelling passed only on a developer machine. A
+		// directory in no repository exercises the same contract — the declared cwd decides —
+		// without depending on the runner's topology.
+		expect(decideWorktreeCall("eval", { cwd: scratch, code }, canonical)).toBeUndefined();
+	});
+	test("an external absolute path literal is allowed", () => {
+		const canonical = realProjectCanonical();
+		const scratch = mkdtempSync(join(tmpdir(), "worktrunk-eval-") );
+		roots.push(scratch);
+		const file = join(scratch, "probe.bin");
+		writeFileSync(file, "bytes");
+		const code = `from pathlib import Path\nPath(${JSON.stringify(file)}).read_bytes()`;
+		expect(decideWorktreeCall("eval", { language: "py", code }, canonical)).toBeUndefined();
+	});
+
+	test("a relative literal resolving into canonical is refused", () => {
+		const canonical = realProjectCanonical();
+		const code = 'from pathlib import Path\nPath("worktrunk/extensions/worktree-gate.ts").read_text()';
+		expect(decideWorktreeCall("eval", { language: "py", code }, canonical)?.block).toBe(true);
+	});
+
+	test("an absolute canonical literal is refused", () => {
+		const canonical = realProjectCanonical();
+		const code = `Path(${JSON.stringify(join(canonical, "worktrunk/extensions/worktree-gate.ts"))}).read_text()`;
+		expect(decideWorktreeCall("eval", { language: "py", code }, canonical)?.block).toBe(true);
+	});
+
+	test("an unresolvable path literal is refused", () => {
+		const canonical = realProjectCanonical();
+		const code = 'Path("xd://not-a-file").read_text()';
+		expect(decideWorktreeCall("eval", { language: "py", code }, canonical)?.block).toBe(true);
 	});
 });
 
@@ -1114,7 +1228,7 @@ describe("pathless tools", () => {
 		const { canonical, worktree, topology } = project();
 		expect(decideWorktreeCall("typescript_quality", { mode: "fix" }, canonical, topology)).toBeUndefined();
 		expect(decideWorktreeCall("typescript_quality", { mode: "fix" }, worktree, topology)).toBeUndefined();
-		expect(decideWorktreeCall("eval", { code: "1" }, canonical, topology)?.block).toBe(true);
+		expect(decideWorktreeCall("eval", { code: "1" }, canonical, topology)).toBeUndefined();
 	});
 
     test("pathless ledger and status calls are allowed from canonical", () => {
