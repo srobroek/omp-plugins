@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import { defaultRun, SURFACES, scanSurfaces } from "./find-tools-scan-tool.ts";
+import { defaultRun, npmSearchText, SURFACES, scanSurfaces } from "./find-tools-scan-tool.ts";
 
 
 describe("scanSurfaces isolation", () => {
@@ -59,9 +59,73 @@ describe("scanSurfaces isolation", () => {
 				? JSON.stringify({ objects: [{ package: { name: "retained-hit" } }] }) : invalid), { preconnect: () => {} }) as typeof fetch,
 		});
 		const npm = results.find((result) => result.surface === "npm");
-		expect(npm?.ok).toBe(false);
+		expect(npm?.status).toBe("partial");
 		expect(npm?.hits.map((hit) => hit.name)).toEqual(["retained-hit"]);
-		expect(gaps.some((gap) => gap.surface === "npm")).toBe(true);
+		expect(npm?.failures?.length).toBe(5);
+		expect(gaps.some((gap) => gap.surface === "npm" && gap.kind === "partial")).toBe(true);
+	});
+
+	test("every npm keyword failing fails the surface", async () => {
+		const { results, gaps, coverage } = await scanSurfaces({ query: "example", surfaces: ["npm"] }, {
+			fetchFn: Object.assign(async () => new Response("{}", { status: 500 }), { preconnect: () => {} }) as typeof fetch,
+		});
+		const npm = results.find((result) => result.surface === "npm");
+		expect(npm?.status).toBe("failed");
+		expect(npm?.ok).toBe(false);
+		expect(npm?.reason).toContain("HTTP 500");
+		expect(coverage.failed).toBe(1);
+		expect(gaps.some((gap) => gap.surface === "npm" && gap.kind === "failed")).toBe(true);
+	});
+});
+
+describe("npm search request shape", () => {
+	const naturalLanguage = "browser extension native messaging MCP bridge for Chrome DevTools";
+
+	test("keeps every keyword search inside npm's text length limit", () => {
+		for (const keyword of ["mcp-server", "claude-plugin", "claude-skill", "agent-skill", "omp-plugin", "oh-my-pi"]) {
+			const search = npmSearchText(keyword, naturalLanguage);
+			expect(search).not.toBeNull();
+			expect(search?.text.length).toBeLessThanOrEqual(64);
+			expect(search?.text.startsWith(`keywords:${keyword}`)).toBe(true);
+			expect(search?.dropped).toBeGreaterThan(0);
+		}
+	});
+
+	test("sends a bounded text parameter instead of the rejected full query", async () => {
+		const texts: string[] = [];
+		const { results } = await scanSurfaces({ query: naturalLanguage, surfaces: ["npm"] }, {
+			fetchFn: Object.assign(async (url: string | URL) => {
+				const text = new URL(String(url)).searchParams.get("text") ?? "";
+				texts.push(text);
+				if (text.length < 2 || text.length > 64) {
+					return new Response(JSON.stringify({ error: "The 'text' parameter must be between 2 and 64 characters" }), { status: 400 });
+				}
+				return new Response(JSON.stringify({ objects: [{ package: { name: `${text}-hit` } }] }), { status: 200 });
+			}, { preconnect: () => {} }) as typeof fetch,
+		});
+		expect(texts).toHaveLength(6);
+		expect(texts.every((text) => text.length <= 64)).toBe(true);
+		const npm = results.find((result) => result.surface === "npm");
+		expect(npm?.status).toBe("ok");
+		expect(npm?.hits).toHaveLength(6);
+		expect(npm?.reason).toContain("truncated");
+	});
+});
+
+describe("empty results versus source failure", () => {
+	test("a source that answers with nothing is not reported as a gap", async () => {
+		const { results, gaps, coverage } = await scanSurfaces({ query: "browser", surfaces: ["mcp_registry", "npm"] }, {
+			fetchFn: Object.assign(async (url: string | URL) => (String(url).includes("modelcontextprotocol")
+				? new Response(JSON.stringify({ servers: [], metadata: { count: 0 } }), { status: 200 })
+				: new Response("nope", { status: 503 })), { preconnect: () => {} }) as typeof fetch,
+		});
+		const registry = results.find((result) => result.surface === "mcp_registry");
+		expect(registry?.status).toBe("empty");
+		expect(registry?.ok).toBe(true);
+		expect(gaps.some((gap) => gap.surface === "mcp_registry")).toBe(false);
+		expect(results.find((result) => result.surface === "npm")?.status).toBe("failed");
+		expect(coverage.empty).toBe(1);
+		expect(coverage.failed).toBe(1);
 	});
 
 	test("malformed GitHub JSON is an explicit coverage gap, not a hit", async () => {
