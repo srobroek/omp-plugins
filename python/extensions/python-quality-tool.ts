@@ -3,7 +3,8 @@ import { join, resolve } from "node:path";
 import type { TSchema } from "@oh-my-pi/pi-ai";
 import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
 
-const TIMEOUT_MS = 300_000;
+/** A tool_call has a 30,000 ms budget; leave 5,000 ms for dispatch and reporting. */
+export const TIMEOUT_MS = 25_000;
 
 export type QualityMode = "check" | "fix";
 
@@ -22,7 +23,8 @@ export type QualityReport = {
 	steps: StepResult[];
 };
 
-const PROBE_TIMEOUT_MS = 5_000;
+/** PATH probes are local lookups; cap each one tightly to avoid stale mounts. */
+const PROBE_TIMEOUT_MS = 1_000;
 
 /**
  * Argument sets tried in order until one exits 0, which is how
@@ -50,149 +52,107 @@ const PROBE_ARGS: readonly (readonly string[])[] = [["--version"], ["version"], 
  * A shim for an uninstalled tool fails every argument set, so the cascade cannot
  * be fooled into reporting one usable.
  */
-function have(bin: string): boolean {
-	for (const args of PROBE_ARGS) {
-		try {
-			const proc = Bun.spawnSync([bin, ...args], {
-				// Closed stdin, because a probe must never wait on input: `gofmt` with
-				// no arguments reads stdin, and an inherited terminal would block until
-				// the timeout on every call.
-				stdin: new Uint8Array(),
-				stdout: "pipe",
-				stderr: "pipe",
-				timeout: PROBE_TIMEOUT_MS,
-			});
-			// A timeout is not a usable tool, whatever exit code accompanies it. This
-			// mirrors `sniff-install-tool`, which treats `exitedDueToTimeout` as its
-			// own status rather than folding it into the exit code.
-			if (proc.exitCode === 0 && proc.exitedDueToTimeout !== true) return true;
-		} catch {
-			return false;
-		}
-	}
-	return false;
+function have(bin: string, deadline = Date.now() + TIMEOUT_MS): boolean {
+    for (const args of PROBE_ARGS) {
+        const remaining = deadline - Date.now();
+        if (remaining <= 0) return false;
+        try {
+            const proc = Bun.spawnSync([bin, ...args], { stdin: new Uint8Array(), stdout: "pipe", stderr: "pipe", timeout: Math.min(PROBE_TIMEOUT_MS, remaining) });
+            if (proc.exitCode === 0 && proc.exitedDueToTimeout !== true && Date.now() < deadline) return true;
+        } catch {
+            return false;
+        }
+    }
+    return false;
 }
-
-function installed(bin: string, cwd: string): string | null {
-	for (const dir of [join(cwd, ".venv", "bin"), join(cwd, "node_modules", ".bin")]) {
-		const path = join(dir, bin);
-		if (existsSync(path)) return path;
-	}
-	return have(bin) ? bin : null;
+function installed(bin: string, cwd: string, deadline: number): string | null {
+    for (const dir of [join(cwd, ".venv", "bin"), join(cwd, "node_modules", ".bin")]) {
+        const path = join(dir, bin);
+        if (existsSync(path)) return path;
+    }
+    return have(bin, deadline) ? bin : null;
 }
 
 function run(
-	argv: string[],
-	cwd: string,
+    argv: string[],
+    cwd: string,
+    deadline = Date.now() + TIMEOUT_MS,
 ): { exitCode: number | null; stdout: string; stderr: string; error?: string } {
-	try {
-		const proc = Bun.spawnSync(argv, {
-			cwd,
-			stdout: "pipe",
-			stderr: "pipe",
-			timeout: TIMEOUT_MS,
-		});
-		return {
-			exitCode: proc.exitCode,
-			stdout: proc.stdout.toString().slice(0, 16_384),
-			stderr: proc.stderr.toString().slice(0, 16_384),
-		};
-	} catch (err) {
-		return {
-			exitCode: null,
-			stdout: "",
-			stderr: "",
-			error: err instanceof Error ? err.message : String(err),
-		};
-	}
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) return { exitCode: null, stdout: "", stderr: "", error: "quality event budget exhausted" };
+    try {
+        const proc = Bun.spawnSync(argv, { cwd, stdout: "pipe", stderr: "pipe", timeout: Math.min(TIMEOUT_MS, remaining) });
+        return { exitCode: proc.exitCode, stdout: proc.stdout.toString().slice(0, 16_384), stderr: proc.stderr.toString().slice(0, 16_384), ...(proc.exitedDueToTimeout === true ? { error: "quality command timed out" } : {}) };
+    } catch (err) {
+        return { exitCode: null, stdout: "", stderr: "", error: err instanceof Error ? err.message : String(err) };
+    }
 }
 
 function fmtTable(steps: StepResult[]): string {
-	return steps
-		.map((s) => `${s.status.padEnd(4)}  ${s.name}${s.detail ? ` — ${s.detail}` : ""}`)
-		.join("\n");
+    return steps.map((s) => `${s.status.padEnd(4)}  ${s.name}${s.detail ? ` — ${s.detail}` : ""}`).join("\n");
 }
 
-function record(
-	steps: StepResult[],
-	name: string,
-	r: { exitCode: number | null; stdout: string; stderr: string; error?: string },
-): void {
-	if (r.error) {
-		steps.push({ name, status: "fail", detail: r.error });
-		return;
-	}
-	if (r.exitCode === 0) {
-		steps.push({ name, status: "pass", detail: "" });
-		return;
-	}
-	steps.push({
-		name,
-		status: "fail",
-		detail: (r.stderr || r.stdout).trim() || `exit ${r.exitCode}`,
-	});
+function record(steps: StepResult[], name: string, r: { exitCode: number | null; stdout: string; stderr: string; error?: string }): void {
+    if (r.error) {
+        steps.push({ name, status: "fail", detail: r.error });
+        return;
+    }
+    if (r.exitCode === 0) {
+        steps.push({ name, status: "pass", detail: "" });
+        return;
+    }
+    steps.push({ name, status: "fail", detail: (r.stderr || r.stdout).trim() || `exit ${r.exitCode}` });
 }
 
 export function runPythonQuality(mode: QualityMode, cwd: string): QualityReport {
-	const steps: StepResult[] = [];
-	const ruff = installed("ruff", cwd);
-	const pyright = installed("pyright", cwd);
-	const pytest = installed("pytest", cwd);
-	const hasTests = existsSync(join(cwd, "pyproject.toml")) || existsSync(join(cwd, "tests"));
-	const hasPyProject = existsSync(join(cwd, "pyproject.toml"));
-	if (!hasPyProject && !hasTests) {
-		if (mode === "fix") {
-			steps.push({ name: "ruff check --fix", status: "skip", detail: "no pyproject.toml or tests/" });
-			steps.push({ name: "ruff format", status: "skip", detail: "no pyproject.toml or tests/" });
-		} else {
-			steps.push({ name: "ruff check", status: "skip", detail: "no pyproject.toml or tests/" });
-			steps.push({ name: "ruff format --check", status: "skip", detail: "no pyproject.toml or tests/" });
-			steps.push({ name: "pyright", status: "skip", detail: "no pyproject.toml or tests/" });
-			steps.push({ name: "pytest", status: "skip", detail: "no pyproject.toml or tests/" });
-		}
-		return { ok: false, complete: false, cwd, mode, steps };
-	}
-
-
-	if (mode === "fix") {
-		if (!ruff) {
-			steps.push({ name: "ruff check --fix", status: "skip", detail: "ruff not on PATH" });
-			steps.push({ name: "ruff format", status: "skip", detail: "ruff not on PATH" });
-		} else {
-			record(steps, "ruff check --fix", run([ruff, "check", "--fix", "."], cwd));
-			record(steps, "ruff format", run([ruff, "format", "."], cwd));
-		}
-	} else {
-		if (!ruff) {
-			steps.push({ name: "ruff check", status: "skip", detail: "ruff not on PATH" });
-			steps.push({ name: "ruff format --check", status: "skip", detail: "ruff not on PATH" });
-		} else {
-			record(steps, "ruff check", run([ruff, "check", "."], cwd));
-			record(steps, "ruff format --check", run([ruff, "format", "--check", "."], cwd));
-		}
-
-		if (!pyright) {
-			steps.push({ name: "pyright", status: "skip", detail: "pyright not on PATH" });
-		} else {
-			record(steps, "pyright", run([pyright], cwd));
-		}
-
-		if (!hasTests) {
-			steps.push({
-				name: "pytest",
-				status: "skip",
-				detail: "no pyproject.toml or tests/",
-			});
-		} else if (!pytest) {
-			steps.push({ name: "pytest", status: "skip", detail: "pytest not on PATH" });
-		} else {
-			record(steps, "pytest", run([pytest], cwd));
-		}
-	}
-
-	const complete = steps.length > 0 && steps.every((s) => s.status !== "skip");
-	const ok = complete && steps.every((s) => s.status === "pass");
-	return { ok, complete, cwd, mode, steps };
+    const deadline = Date.now() + TIMEOUT_MS;
+    const steps: StepResult[] = [];
+    const hasPyProject = existsSync(join(cwd, "pyproject.toml"));
+    const hasTests = hasPyProject || existsSync(join(cwd, "tests"));
+    if (!hasPyProject && !hasTests) {
+        if (mode === "fix") {
+            steps.push({ name: "ruff check --fix", status: "skip", detail: "no pyproject.toml or tests/" });
+            steps.push({ name: "ruff format", status: "skip", detail: "no pyproject.toml or tests/" });
+        } else {
+            steps.push({ name: "ruff check", status: "skip", detail: "no pyproject.toml or tests/" });
+            steps.push({ name: "ruff format --check", status: "skip", detail: "no pyproject.toml or tests/" });
+            steps.push({ name: "pyright", status: "skip", detail: "no pyproject.toml or tests/" });
+            steps.push({ name: "pytest", status: "skip", detail: "no pyproject.toml or tests/" });
+        }
+        return { ok: false, complete: false, cwd, mode, steps };
+    }
+    // Probe only once the project exists. With neither a pyproject.toml nor a tests/ directory
+    // every probe is wasted work, and three binaries at three argument sets and 1,000 ms each
+    // reach 9,000 ms, which outlasts a CI test's own 5,000 ms limit on a runner with no
+    // Python tooling installed.
+    const ruff = installed("ruff", cwd, deadline);
+    const pyright = installed("pyright", cwd, deadline);
+    const pytest = installed("pytest", cwd, deadline);
+    if (mode === "fix") {
+        if (!ruff) {
+            steps.push({ name: "ruff check --fix", status: "skip", detail: "ruff not on PATH" });
+            steps.push({ name: "ruff format", status: "skip", detail: "ruff not on PATH" });
+        } else {
+            record(steps, "ruff check --fix", run([ruff, "check", "--fix", "."], cwd, deadline));
+            record(steps, "ruff format", run([ruff, "format", "."], cwd, deadline));
+        }
+    } else {
+        if (!ruff) {
+            steps.push({ name: "ruff check", status: "skip", detail: "ruff not on PATH" });
+            steps.push({ name: "ruff format --check", status: "skip", detail: "ruff not on PATH" });
+        } else {
+            record(steps, "ruff check", run([ruff, "check", "."], cwd, deadline));
+            record(steps, "ruff format --check", run([ruff, "format", "--check", "."], cwd, deadline));
+        }
+        if (!pyright) steps.push({ name: "pyright", status: "skip", detail: "pyright not on PATH" });
+        else record(steps, "pyright", run([pyright], cwd, deadline));
+        if (!hasTests) steps.push({ name: "pytest", status: "skip", detail: "no pyproject.toml or tests/" });
+        else if (!pytest) steps.push({ name: "pytest", status: "skip", detail: "pytest not on PATH" });
+        else record(steps, "pytest", run([pytest], cwd, deadline));
+    }
+    const complete = steps.length > 0 && steps.every((s) => s.status !== "skip") && Date.now() < deadline;
+    const ok = complete && steps.every((s) => s.status === "pass");
+    return { ok, complete, cwd, mode, steps };
 }
 
 export default function pythonQualityTool(pi: ExtensionAPI): void {

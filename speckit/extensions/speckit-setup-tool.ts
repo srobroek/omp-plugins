@@ -12,7 +12,28 @@ import { fileURLToPath } from "node:url";
 import type { TSchema } from "@oh-my-pi/pi-ai";
 import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
 
-const TIMEOUT_MS = 180_000;
+/** A tool_call has a 30,000 ms budget; leave 5,000 ms for dispatch and reporting. */
+export const TIMEOUT_MS = 25_000;
+export function run(
+    argv: string[],
+    cwd?: string,
+    deadline = Date.now() + TIMEOUT_MS,
+): { exitCode: number; stdout: string; stderr: string } {
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) return { exitCode: 124, stdout: "", stderr: "setup event budget exhausted; earlier changes may have landed" };
+    if (testSpawn) return testSpawn(argv, { cwd, timeout: Math.min(TIMEOUT_MS, remaining) });
+    try {
+        const proc = Bun.spawnSync(argv, { cwd, stdout: "pipe", stderr: "pipe", timeout: Math.min(TIMEOUT_MS, remaining) });
+        if (proc.exitedDueToTimeout === true) return { exitCode: 124, stdout: proc.stdout.toString(), stderr: `${proc.stderr.toString()}\nsetup event budget exhausted; earlier changes may have landed` };
+        return { exitCode: proc.exitCode ?? 1, stdout: proc.stdout.toString(), stderr: proc.stderr.toString() };
+    } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        return { exitCode: 1, stdout: "", stderr: message };
+    }
+}
+export function which(bin: string, deadline = Date.now() + TIMEOUT_MS): boolean {
+    return run(["which", bin], undefined, deadline).exitCode === 0;
+}
 
 export const FORMULAS = [
 	"speckit-feature",
@@ -65,42 +86,7 @@ export function pluginRoot(): string {
 	return join(dirname(fileURLToPath(import.meta.url)), "..");
 }
 
-export function run(
-	argv: string[],
-	cwd?: string,
-): { exitCode: number; stdout: string; stderr: string } {
-	if (testSpawn) return testSpawn(argv, { cwd, timeout: TIMEOUT_MS });
-	try {
-		const proc = Bun.spawnSync(argv, {
-			cwd,
-			stdout: "pipe",
-			stderr: "pipe",
-			timeout: TIMEOUT_MS,
-		});
-		return {
-			exitCode: proc.exitCode ?? 1,
-			stdout: proc.stdout.toString(),
-			stderr: proc.stderr.toString(),
-		};
-	} catch (err) {
-		const message = err instanceof Error ? err.message : String(err);
-		return { exitCode: 1, stdout: "", stderr: message };
-	}
-}
 
-export function which(bin: string): boolean {
-	if (testSpawn) return testSpawn(["which", bin]).exitCode === 0;
-	try {
-		const proc = Bun.spawnSync(["which", bin], {
-			stdout: "pipe",
-			stderr: "pipe",
-			timeout: 5_000,
-		});
-		return proc.exitCode === 0;
-	} catch {
-		return false;
-	}
-}
 
 export function parseSpecifyMajorMinor(
 	versionOut: string,
@@ -172,93 +158,57 @@ export type SetupParams = {
 };
 
 export function runSetup(params: SetupParams): { ok: boolean; text: string } {
-	const repo = params.workspace ?? process.cwd();
-	const log: string[] = [];
-	const integration = params.integration ?? "codex";
-	const script = params.script ?? "sh";
-	const fail = (text: string) => ({ ok: false, text: [...log, `ERROR: ${text}`].join("\n") });
-	try {
-	safePath(repo);
-	safePath(join(repo, ".specify"));
-	safePath(join(repo, ".beads"));
-	safePath(join(repo, ".gitignore"));
-
-	if (!params.skipSpecify) {
-		if (!which("specify")) {
-			return { ok: false, text: "ERROR: specify not on PATH. uv tool install specify-cli" };
-		}
-		const ver = run(["specify", "--version"], repo);
-		if (ver.exitCode !== 0 || !specifyVersionOk(`${ver.stdout}\n${ver.stderr}`)) {
-			return {
-				ok: false,
-				text: `ERROR: specify-cli >= 0.12.0 required. Got: ${ver.stdout || ver.stderr}`,
-			};
-		}
-		const specifyDir = join(repo, ".specify");
-		if (!existsSync(specifyDir) || params.force) {
-			const init = run(
-				["specify", "init", "--here", "--force", "--integration", integration, "--script", script],
-				repo,
-			);
-			log.push(`specify init exit=${init.exitCode}`);
-			if (init.stdout) log.push(init.stdout.trim());
-			if (init.exitCode !== 0) return fail(`specify init: ${init.stderr.trim()}`);
-		} else {
-			log.push(".specify already present (pass force=true to re-scaffold)");
-		}
-
-		const catalog = run(
-			[
-				"specify",
-				"extension",
-				"catalog",
-				"add",
-				"--name",
-				"community",
-				"--install-allowed",
-				CATALOG_URL,
-			],
-			repo,
-		);
-		if (catalog.exitCode !== 0) return fail(`catalog add: ${catalog.stderr.trim()}`);
-		log.push("catalog community ok");
-
-		for (const ext of EXTENSIONS) {
-			const add = run(["specify", "extension", "add", ext], repo);
-			if (add.exitCode !== 0) return fail(`extension ${ext}: ${add.stderr.trim()}`);
-			else log.push(`extension ${ext} ok`);
-		}
-		const status = run(
-			["specify", "extension", "add", "status-report", "--from", STATUS_REPORT_FROM],
-			repo,
-		);
-		if (status.exitCode !== 0) return fail(`status-report: ${status.stderr.trim()}`);
-		else log.push("extension status-report ok");
-	} else {
-		log.push("skipSpecify: specify CLI steps omitted");
-	}
-
-	if (params.skipBeads) {
-		log.push("SKIP: beads explicitly omitted; molecule workflows are unavailable");
-	} else if (which("bd")) {
-		const where = run(["bd", "where"], repo);
-		if (where.exitCode !== 0) {
-			const init = run(["bd", "init", "--skip-hooks"], repo);
-			log.push(`bd init exit=${init.exitCode}`);
-			if (init.exitCode !== 0) return fail(`bd init: ${init.stderr.trim()}`);
-		} else {
-			log.push("beads workspace already present");
-		}
-		log.push(...installFormulas(repo, join(pluginRoot(), "formulas")));
-	} else {
-		return fail("bd not on PATH; install beads or explicitly set skipBeads=true for SpecKit-only setup");
-	}
-
-	log.push(ensureGitignore(repo));
-	return { ok: true, text: log.join("\n") };
-	} catch (err) {
-		return fail(err instanceof Error ? err.message : String(err));
-	}
+    const repo = params.workspace ?? process.cwd();
+    const deadline = Date.now() + TIMEOUT_MS;
+    const log: string[] = [];
+    const integration = params.integration ?? "codex";
+    const script = params.script ?? "sh";
+    const fail = (text: string) => ({ ok: false, text: [...log, `ERROR: ${text}`].join("\n") });
+    try {
+        safePath(repo);
+        safePath(join(repo, ".specify"));
+        safePath(join(repo, ".beads"));
+        safePath(join(repo, ".gitignore"));
+        if (!params.skipSpecify) {
+            if (!which("specify", deadline)) return fail("specify not on PATH or setup event budget exhausted");
+            const ver = run(["specify", "--version"], repo, deadline);
+            if (ver.exitCode !== 0 || !specifyVersionOk(`${ver.stdout}\n${ver.stderr}`)) return fail(`specify-cli >= 0.12.0 required. Got: ${ver.stdout || ver.stderr}`);
+            const specifyDir = join(repo, ".specify");
+            if (!existsSync(specifyDir) || params.force) {
+                const init = run(["specify", "init", "--here", "--force", "--integration", integration, "--script", script], repo, deadline);
+                log.push(`specify init exit=${init.exitCode}`);
+                if (init.stdout) log.push(init.stdout.trim());
+                if (init.exitCode !== 0) return fail(`specify init: ${init.stderr.trim()}`);
+            } else log.push(".specify already present (pass force=true to re-scaffold)");
+            const catalog = run(["specify", "extension", "catalog", "add", "--name", "community", "--install-allowed", CATALOG_URL], repo, deadline);
+            if (catalog.exitCode !== 0) return fail(`catalog add: ${catalog.stderr.trim()}`);
+            log.push("catalog community ok");
+            for (const ext of EXTENSIONS) {
+                const add = run(["specify", "extension", "add", ext], repo, deadline);
+                if (add.exitCode !== 0) return fail(`extension ${ext}: ${add.stderr.trim()}`);
+                log.push(`extension ${ext} ok`);
+            }
+            const status = run(["specify", "extension", "add", "status-report", "--from", STATUS_REPORT_FROM], repo, deadline);
+            if (status.exitCode !== 0) return fail(`status-report: ${status.stderr.trim()}`);
+            log.push("extension status-report ok");
+        } else log.push("skipSpecify: specify CLI steps omitted");
+        if (params.skipBeads) log.push("SKIP: beads explicitly omitted; molecule workflows are unavailable");
+        else if (which("bd", deadline)) {
+            const where = run(["bd", "where"], repo, deadline);
+            if (where.exitCode !== 0) {
+                const init = run(["bd", "init", "--skip-hooks"], repo, deadline);
+                log.push(`bd init exit=${init.exitCode}`);
+                if (init.exitCode !== 0) return fail(`bd init: ${init.stderr.trim()}`);
+            } else log.push("beads workspace already present");
+            if (Date.now() >= deadline) return fail("setup event budget exhausted; earlier changes may have landed");
+            log.push(...installFormulas(repo, join(pluginRoot(), "formulas")));
+        } else return fail("bd not on PATH; install beads or explicitly set skipBeads=true for SpecKit-only setup");
+        if (Date.now() >= deadline) return fail("setup event budget exhausted; earlier changes may have landed");
+        log.push(ensureGitignore(repo));
+        return { ok: true, text: log.join("\n") };
+    } catch (err) {
+        return fail(err instanceof Error ? err.message : String(err));
+    }
 }
 
 export default function speckitSetupTool(pi: ExtensionAPI): void {

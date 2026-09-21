@@ -549,16 +549,17 @@ function envelopeData(value) {
 // extensions/formula-check-tool.ts
 var BEADS_PRESENT = Symbol.for("com.srobroek.beads.present.v1");
 globalThis[BEADS_PRESENT] = { version: package_default.version };
-var TIMEOUT_MS = 120000;
+var TIMEOUT_MS = 5000;
+var FORMULA_TIMEOUT_MS = 25000;
 var VALID_GATE_TYPES = ["human", "timer", "gh:run", "gh:pr"];
 var injectedSpawn = null;
 function setBdSpawnForTests(fn) {
   injectedSpawn = fn;
 }
-async function runBd(cmd, cwd, holder, env = process.env) {
+async function runBd(cmd, cwd, holder, env = process.env, deadline) {
   if (!writesStore(invocationFromArgv(cmd)))
     return spawnBd(cmd, cwd, env);
-  const locked = await withEmbeddedWriteLock(cwd ?? process.cwd(), holder ?? `bd-formula-check-${process.pid}-${runs++}`, () => spawnBd(cmd, cwd, env), env);
+  const locked = await withEmbeddedWriteLock(cwd ?? process.cwd(), holder ?? `bd-formula-check-${process.pid}-${runs++}`, () => spawnBd(cmd, cwd, env), env, deadline ?? Date.now() + TIMEOUT_MS);
   if (locked.kind === "failed")
     return { ok: false, exitCode: null, stdout: "", stderr: "", error: locked.reason };
   return locked.value;
@@ -578,14 +579,15 @@ async function spawnBd(cmd, cwd, env) {
     });
     const [stdout, stderr] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text()]);
     const exitCode = await proc.exited;
-    return { ok: exitCode === 0, exitCode, stdout, stderr };
+    const timedOut = exitCode === null;
+    return { ok: exitCode === 0 && !timedOut, exitCode, stdout, stderr, ...timedOut ? { error: `bd command timed out after ${TIMEOUT_MS}ms` } : {} };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     return { ok: false, exitCode: null, stdout: "", stderr: "", error: message };
   }
 }
-async function cookCheck(formula, varargs, cwd, env = process.env) {
-  const result = await runBd(["cook", formula, "--dry-run", ...varargs], cwd, undefined, env);
+async function cookCheck(formula, varargs, cwd, env = process.env, deadline) {
+  const result = await runBd(["cook", formula, "--dry-run", ...varargs], cwd, undefined, env, deadline);
   if (result.error)
     return [`cook failed to spawn: ${result.error}`];
   if (!result.ok) {
@@ -724,9 +726,9 @@ function parsePourHelp(stdout, stderr = "") {
     return { json: false };
   return { error: UNRECOGNISED_POUR_OUTPUT };
 }
-async function deepAssert(formula, varargs, toolCallId, workspace, env = process.env) {
+async function deepAssert(formula, varargs, toolCallId, workspace, env = process.env, deadline = Date.now() + FORMULA_TIMEOUT_MS) {
   const locked = await withEmbeddedWriteLock(workspace ?? process.cwd(), toolCallId, async () => {
-    const poured = await runBd(["mol", "pour", formula, ...varargs], workspace, toolCallId, env);
+    const poured = await runBd(["mol", "pour", formula, ...varargs], workspace, toolCallId, env, deadline);
     const combined = [poured.stdout, poured.stderr].join(`
 `);
     const root = combined.match(/Root issue: (\S+)/)?.[1];
@@ -736,7 +738,7 @@ async function deepAssert(formula, varargs, toolCallId, workspace, env = process
 ${recovery}`];
     if (!root)
       return [recovery];
-    const shown = await runBd(["mol", "show", root, "--json"], workspace, toolCallId, env);
+    const shown = await runBd(["mol", "show", root, "--json"], workspace, toolCallId, env, deadline);
     if (shown.error || !shown.ok)
       return [`mol show failed: ${shown.error ?? [shown.stdout, shown.stderr].join(`
 `)}
@@ -745,34 +747,34 @@ ${recovery}`];
     const failures = deepAssertFromMol(mol);
     return failures.map((failure) => `${failure}
 ${recovery}`);
-  }, env);
+  }, env, deadline);
   if (locked.kind === "failed")
     return [`real pour was not attempted: ${locked.reason}`];
   return locked.value;
 }
 async function assertFormula(params, toolCallId) {
+  const deadline = Date.now() + FORMULA_TIMEOUT_MS;
   const varargs = [];
-  for (const v of params.varargs ?? []) {
+  for (const v of params.varargs ?? [])
     varargs.push("--var", v);
-  }
   const cwd = params.workspace;
   const failures = [];
-  const cookFails = await cookCheck(params.formula, varargs, cwd);
+  const cookFails = await cookCheck(params.formula, varargs, cwd, process.env, deadline);
   if (cookFails.length) {
     const text = cookFails.map((f) => `FAIL ${f}`).join(`
 `);
     return { ok: false, text, failures: cookFails, steps: 0, gates: 0 };
   }
-  const help = await runBd(["mol", "pour", "--help"], cwd);
+  const help = await runBd(["mol", "pour", "--help"], cwd, undefined, process.env, deadline);
   const capability = parsePourHelp(help.stdout, help.stderr);
   if (help.error || !help.ok || "error" in capability) {
     const failure = help.error ?? ("error" in capability ? capability.error : "bd mol pour --help failed");
     return { ok: false, text: `FAIL ${failure}`, failures: [failure], steps: 0, gates: 0 };
   }
   const dryArgs = ["mol", "pour", params.formula, "--dry-run", ...capability.json ? ["--json"] : [], ...varargs];
-  const dry = await runBd(dryArgs, cwd);
+  const dry = await runBd(dryArgs, cwd, undefined, process.env, deadline);
   if (dry.error || !dry.ok) {
-    const out = dry.error ? dry.error : [dry.stdout, dry.stderr].filter(Boolean).join(`
+    const out = dry.error ?? [dry.stdout, dry.stderr].filter(Boolean).join(`
 `).trim();
     const fail = `pour --dry-run failed:
 ${out}`;
@@ -781,46 +783,33 @@ ${out}`;
   const listing = [dry.stdout, dry.stderr].filter(Boolean).join(`
 `);
   const parsed = capability.json ? parseDryRunJson(listing) : parseDryRun(listing);
-  if (!parsed || !capability.json && parsed.steps.length === 0 && parsed.gates.length === 0) {
+  if (!parsed || !capability.json && parsed.steps.length === 0 && parsed.gates.length === 0)
     return { ok: false, text: `FAIL ${UNRECOGNISED_POUR_OUTPUT}`, failures: [UNRECOGNISED_POUR_OUTPUT], steps: 0, gates: 0 };
-  }
   const body = bodySteps(parsed.steps);
   if (body.length === 0)
     failures.push("pour --dry-run returned no recognized body steps; cannot verify this formula");
-  const lines = [
-    `selection: ${(params.varargs ?? []).join(" ") || "(defaults)"}`,
-    `  steps poured: ${body.length}   gates: ${parsed.gates.length}`
-  ];
-  if (params.expectSteps !== undefined && body.length !== params.expectSteps) {
+  const lines = [`selection: ${(params.varargs ?? []).join(" ") || "(defaults)"}`, `  steps poured: ${body.length}   gates: ${parsed.gates.length}`];
+  if (params.expectSteps !== undefined && body.length !== params.expectSteps)
     failures.push(`step count ${body.length} != expected ${params.expectSteps}`);
-  }
-  if (params.expectGates !== undefined && parsed.gates.length !== params.expectGates) {
+  if (params.expectGates !== undefined && parsed.gates.length !== params.expectGates)
     failures.push(`gate count ${parsed.gates.length} != expected ${params.expectGates}`);
-  }
   failures.push(...gateTypeFailures(parsed.gates));
   failures.push(...unsubstitutedFailures(listing));
-  if (params.deep && failures.length === 0) {
-    failures.push(...await deepAssert(params.formula, varargs, toolCallId, cwd));
-  }
+  if (params.deep && failures.length === 0)
+    failures.push(...await deepAssert(params.formula, varargs, toolCallId, cwd, process.env, deadline));
   for (const f of failures)
     lines.push(`FAIL ${f}`);
   if (!failures.length)
     lines.push("  OK");
-  return {
-    ok: failures.length === 0,
-    text: lines.join(`
-`),
-    failures,
-    steps: body.length,
-    gates: parsed.gates.length
-  };
+  return { ok: failures.length === 0, text: lines.join(`
+`), failures, steps: body.length, gates: parsed.gates.length };
 }
 function formulaCheckTool(pi) {
   const z = pi.zod;
   pi.registerTool({
     name: "bd_formula_check",
     label: "Assert bd formula pour",
-    description: "Cook-validate a bd formula, parse `bd mol pour --dry-run`, check gates and unsubstituted braces. Default is dry-run (read). deep=true performs a real pour in the workspace and uses exec approval.",
+    description: "Cook-validate a bd formula, parse `bd mol pour --dry-run`, check gates and unsubstituted braces. " + "Each call shares a 25 s deadline inside the 30 s tool_call budget. Default is dry-run (read); " + "deep=true performs a bounded real pour and reports any recovered root for safe inspection if interrupted.",
     parameters: z.object({
       formula: z.string().describe("Formula stem to assert"),
       varargs: z.array(z.string()).optional().describe("Selection vars as k=v pairs (passed as --var)"),
@@ -831,9 +820,8 @@ function formulaCheckTool(pi) {
     }),
     approval: (toolCall) => {
       let input;
-      if (typeof toolCall === "object" && toolCall !== null && "input" in toolCall) {
+      if (typeof toolCall === "object" && toolCall !== null && "input" in toolCall)
         input = toolCall.input;
-      }
       const deep = typeof input === "object" && input !== null && "deep" in input && Boolean(input.deep);
       return deep ? "exec" : "read";
     },

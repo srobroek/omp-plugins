@@ -1221,6 +1221,25 @@ async function detectProject(target) {
 // extensions/lib.ts
 var USER_AGENT = "dep-update-skill (+https://github.com/srobroek/agentic-packages)";
 var FETCH_TIMEOUT_MS = 1e4;
+var SCAN_TIMEOUT_MS = 25000;
+
+class ScanDeadlineError extends Error {
+  constructor() {
+    super("dependency scan aggregate deadline exceeded");
+  }
+}
+
+class RegistryError extends Error {
+  code;
+  constructor(message, code) {
+    super(message);
+    this.code = code;
+  }
+}
+function ensureDeadline(deadline) {
+  if (deadline !== undefined && Date.now() >= deadline)
+    throw new ScanDeadlineError;
+}
 var NODE_VERSION = /^=?v?(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-((?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*))*))?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/;
 var PYTHON_VERSION = /^(?:={1,2})?v?(\d+)(?:\.(\d+))?(?:\.(\d+))?(?:[-_.]?(a|b|rc|alpha|beta|pre|preview)[-_.]?\d*)?(?:[-_.]?post[-_.]?\d*)?(?:[-_.]?(dev)[-_.]?\d*)?(?:\+[a-z0-9]+(?:[-_.][a-z0-9]+)*)?$/i;
 function normalizeVersion(raw, ecosystem = "npm") {
@@ -1266,16 +1285,9 @@ function pickStable(latest, installed, versions, ecosystem = "npm") {
   });
   return stable[0] ?? latest;
 }
-
-class RegistryError extends Error {
-  code;
-  constructor(message, code) {
-    super(message);
-    this.code = code;
-  }
-}
-async function fetchJson(ecosystem, name, url, fixtureDir, signal) {
+async function fetchJson(ecosystem, name, url, fixtureDir, signal, deadline) {
   signal?.throwIfAborted();
+  ensureDeadline(deadline);
   const dir = fixtureDir ?? process.env.DEP_UPDATE_FIXTURE_DIR ?? "";
   if (dir) {
     const safe = name.replaceAll("/", "__").replaceAll("@", "__at__");
@@ -1283,29 +1295,33 @@ async function fetchJson(ecosystem, name, url, fixtureDir, signal) {
     if (isFile(fixture)) {
       const data = JSON.parse(await Bun.file(fixture).text());
       signal?.throwIfAborted();
+      ensureDeadline(deadline);
       return data;
     }
     throw new RegistryError("fixture not found (offline simulation)");
   }
-  const deadline = AbortSignal.timeout(FETCH_TIMEOUT_MS);
-  const res = await fetch(url, {
-    headers: { "User-Agent": USER_AGENT },
-    signal: signal ? AbortSignal.any([signal, deadline]) : deadline
-  });
+  const remaining = deadline === undefined ? FETCH_TIMEOUT_MS : deadline - Date.now();
+  if (remaining <= 0)
+    throw new ScanDeadlineError;
+  const requestDeadline = AbortSignal.timeout(Math.min(FETCH_TIMEOUT_MS, remaining));
+  const res = await fetch(url, { headers: { "User-Agent": USER_AGENT }, signal: signal ? AbortSignal.any([signal, requestDeadline]) : requestDeadline });
+  ensureDeadline(deadline);
   if (!res.ok)
     throw new RegistryError(`HTTP ${res.status}`, res.status);
   const data = await res.json();
   signal?.throwIfAborted();
+  ensureDeadline(deadline);
   return data;
 }
-async function queryRegistry(ecosystem, name, installed, fixtureDir, signal) {
+async function queryRegistry(ecosystem, name, installed, fixtureDir, signal, deadline) {
   signal?.throwIfAborted();
+  ensureDeadline(deadline);
   const result = { ecosystem, name, installed, status: "UNRESOLVABLE" };
   try {
     let latest = "";
     let candidates = [];
     if (ecosystem === "pypi") {
-      const data = await fetchJson(ecosystem, name, `https://pypi.org/pypi/${name}/json`, fixtureDir, signal);
+      const data = await fetchJson(ecosystem, name, `https://pypi.org/pypi/${name}/json`, fixtureDir, signal, deadline);
       const info = data.info;
       const ver = info?.version;
       if (typeof ver !== "string" || !ver) {
@@ -1324,7 +1340,7 @@ async function queryRegistry(ecosystem, name, installed, fixtureDir, signal) {
       }
       candidates = Object.keys(releases);
     } else if (ecosystem === "npm" || ecosystem === "node") {
-      const data = await fetchJson(ecosystem, name, `https://registry.npmjs.org/${name}`, fixtureDir, signal);
+      const data = await fetchJson(ecosystem, name, `https://registry.npmjs.org/${name}`, fixtureDir, signal, deadline);
       const tags = data["dist-tags"] ?? {};
       const ver = tags.latest;
       if (typeof ver !== "string" || !ver) {
@@ -1337,16 +1353,18 @@ async function queryRegistry(ecosystem, name, installed, fixtureDir, signal) {
       result.reason = `registry fetch not implemented for ${ecosystem} (advisory-only)`;
       return result;
     }
+    ensureDeadline(deadline);
     latest = pickStable(latest, installed, candidates, ecosystem);
     const verdict = classify(installed, latest, ecosystem);
     result.latest = latest;
     result.status = verdict === "CURRENT" || verdict === "UNRESOLVABLE" ? verdict : "OK";
-    if (verdict === "UNRESOLVABLE") {
+    if (verdict === "UNRESOLVABLE")
       result.reason = "Exact versions are required to classify an upgrade; resolve the declaration before applying.";
-    }
     result.class = verdict;
     return result;
   } catch (exc) {
+    if (exc instanceof ScanDeadlineError)
+      throw exc;
     signal?.throwIfAborted();
     if (exc instanceof RegistryError && exc.code !== undefined) {
       result.reason = exc.code === 401 || exc.code === 403 ? "auth-required" : `HTTP ${exc.code}`;
@@ -1360,41 +1378,52 @@ async function queryRegistry(ecosystem, name, installed, fixtureDir, signal) {
     return result;
   }
 }
-async function researchProject(target, fixtureDir, signal) {
+async function researchProject(target, fixtureDir, signal, timeoutMs = SCAN_TIMEOUT_MS) {
   signal?.throwIfAborted();
-  if (!isDir(target)) {
-    return { exit: 2, records: [], stderr: `research: '${target}' is not a directory` };
-  }
+  const deadline = Date.now() + Math.min(timeoutMs, SCAN_TIMEOUT_MS);
+  if (!isDir(target))
+    return { exit: 2, records: [], stderr: `research: '${target}' is not a directory`, complete: true };
   const notes = ["dep-update/research: querying registries...", ""];
   const detected = await detectProject(target);
+  ensureDeadline(deadline);
   signal?.throwIfAborted();
   notes.push(detected.stderr);
   const tallies = { OK: 0, CURRENT: 0, UNRESOLVABLE: 0, DISCONFIRMED: 0 };
   const records = [];
+  let complete = true;
   for (const [ecosystem, name, installed] of detected.rows) {
-    signal?.throwIfAborted();
-    if (!ecosystem || !name)
-      continue;
-    const record = await queryRegistry(ecosystem, name, installed, fixtureDir, signal);
-    signal?.throwIfAborted();
-    records.push(record);
-    const status = record.status;
-    if (status in tallies)
-      tallies[status] += 1;
+    try {
+      signal?.throwIfAborted();
+      ensureDeadline(deadline);
+      if (!ecosystem || !name)
+        continue;
+      const record = await queryRegistry(ecosystem, name, installed, fixtureDir, signal, deadline);
+      records.push(record);
+      const status = record.status;
+      if (status in tallies)
+        tallies[status] += 1;
+    } catch (exc) {
+      if (exc instanceof ScanDeadlineError) {
+        complete = false;
+        break;
+      }
+      throw exc;
+    }
   }
-  const unresolvable = tallies.UNRESOLVABLE + tallies.DISCONFIRMED;
   notes.push("");
-  notes.push(`dep-update/research: ${records.length} dep(s) queried`);
+  notes.push(`dep-update/research: ${records.length} dep(s) queried${complete ? "" : " before aggregate deadline"}`);
   notes.push(`  classified:    ${tallies.OK}`);
   notes.push(`  already-current: ${tallies.CURRENT}`);
-  notes.push(`  unresolvable:  ${unresolvable}`);
-  if (records.length > 0 && tallies.OK === 0 && tallies.CURRENT === 0 && unresolvable === records.length) {
+  notes.push(`  unresolvable:  ${tallies.UNRESOLVABLE + tallies.DISCONFIRMED}`);
+  if (!complete)
+    notes.push("PARTIAL: aggregate scan deadline reached; remaining dependencies were not queried.");
+  if (records.length > 0 && tallies.OK === 0 && tallies.CURRENT === 0 && tallies.UNRESOLVABLE + tallies.DISCONFIRMED === records.length) {
     notes.push("");
     notes.push("WARNING: no dependency versions could be classified.");
     notes.push("Resolve declared ranges and inspect each record's reason before planning upgrades.");
   }
   return { exit: 0, records, stderr: notes.join(`
-`) };
+`), complete };
 }
 function canonical(name) {
   return name.replace(/[-_.]+/g, "-").toLowerCase();
@@ -1586,7 +1615,7 @@ async function runPm(command, root, options) {
       cleanup = schedule(() => finish(1), 1000);
     };
     const abort = () => stop("Cancelled");
-    const deadline = schedule(() => stop("Package manager deadline exceeded"), Math.max(1, Math.min(options.timeoutMs ?? 120000, 120000)));
+    const deadline = schedule(() => stop("Package manager deadline exceeded; partial dependency changes may remain and were reported"), Math.max(1, Math.min(options.timeoutMs ?? 25000, 25000)));
     const collect = (chunk) => {
       const remaining = limit - bytes;
       if (remaining > 0) {
@@ -1718,7 +1747,7 @@ function depScanTool(pi) {
   pi.registerTool({
     name: "dep_scan",
     label: "Dependency Scan",
-    description: "Enumerate a project's declared dependencies, query PyPI/npm for the latest versions, and " + "classify exact-version bumps as PATCH-SAFE, MINOR-CHECK, or MAJOR-ADVISORY. " + "Unresolved versions are UNRESOLVABLE, never an upgrade recommendation. Read-only; applies nothing. " + "Rust and go deps are enumerated but not classified (advisory-only by policy).",
+    description: "Enumerate a project's declared dependencies, query PyPI/npm for the latest versions, and " + "classify exact-version bumps as PATCH-SAFE, MINOR-CHECK, or MAJOR-ADVISORY. " + "Read-only; each scan has a 25 s aggregate deadline inside the 30 s tool_call budget and " + "returns a partial report when a large manifest exceeds it. Rust and go deps are advisory-only.",
     parameters: z.object({
       path: z.string().optional().describe("Project root to scan; defaults to the session cwd"),
       offline_fixture_dir: z.string().optional().describe("DEP_UPDATE_FIXTURE_DIR: read registry responses from fixture files instead of the network")
@@ -1727,7 +1756,7 @@ function depScanTool(pi) {
     async execute(_id, params, signal, _onUpdate, ctx) {
       const dir = params.path ?? ctx.cwd;
       try {
-        const { exit, records, stderr } = await researchProject(dir, params.offline_fixture_dir, signal);
+        const { exit, records, stderr, complete } = await researchProject(dir, params.offline_fixture_dir, signal);
         if (exit !== 0) {
           return {
             content: [{ type: "text", text: `dep_scan failed (exit ${exit}):
@@ -1761,7 +1790,7 @@ ${stderr}` }],
         return {
           content: [{ type: "text", text: lines.join(`
 `) }],
-          details: { records, summary: { upgradable: upgradable.length, skipped } }
+          details: { records, complete, summary: { upgradable: upgradable.length, skipped } }
         };
       } catch (error) {
         signal?.throwIfAborted();
@@ -1776,7 +1805,7 @@ ${stderr}` }],
   pi.registerTool({
     name: "dep_apply",
     label: "Apply Dependency Bump",
-    description: "Apply one confirmed dependency bump via the ecosystem package manager (uv/pnpm/npm/yarn/bun). " + "Cargo and go print an advisory command only. One bump per call.",
+    description: "Apply one confirmed dependency bump via the ecosystem package manager. " + "The mutation is bounded to 25 s inside the 30 s tool_call budget; if interrupted, " + "the result reports that partial changes may remain so the caller can inspect manifests and lockfiles.",
     parameters: z.object({
       ecosystem: z.string().describe("pypi, npm, cargo, or go"),
       name: z.string().describe("Package name"),
@@ -1792,7 +1821,7 @@ ${stderr}` }],
           throw new Error("Interactive approval is required; no process started");
         const approved = await ctx.ui.confirm("Apply dependency bump", `${params.ecosystem}: ${params.name} -> ${params.version}
 Project: ${params.path ?? ctx.cwd}
-Package-manager failure or cancellation can leave partial changes.`, { signal, timeout: 120000 });
+Package-manager failure or cancellation can leave partial changes.`, { signal, timeout: 20000 });
         if (!approved)
           throw new Error("Dependency bump denied; no process started");
         const result = await applyBump(params.ecosystem, params.name, params.version, params.path ?? ctx.cwd, {

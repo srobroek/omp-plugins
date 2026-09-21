@@ -41934,14 +41934,15 @@ async function copyProfile(source, destination, strategy, copyFirefoxLogins, war
     return;
   }
   let result;
+  const profileCopyTimeoutMs = 25000;
   if (selected === "clonefile") {
-    result = spawnSync3("cp", ["-c", "-R", `${source}/.`, destination], { encoding: "utf8", timeout: 300000 });
+    result = spawnSync3("cp", ["-c", "-R", `${source}/.`, destination], { encoding: "utf8", timeout: profileCopyTimeoutMs });
   } else if (selected === "reflink") {
-    result = spawnSync3("cp", ["-a", "--reflink=auto", `${source}/.`, destination], { encoding: "utf8", timeout: 300000 });
+    result = spawnSync3("cp", ["-a", "--reflink=auto", `${source}/.`, destination], { encoding: "utf8", timeout: profileCopyTimeoutMs });
   } else {
     const excludedDirs = EXCLUDED_DIRS.map((entry) => join5(source, entry));
     const excludedFiles = [...EXCLUDED_FILES, ...!copyFirefoxLogins ? LOGIN_FILES : []];
-    result = spawnSync3("robocopy", [source, destination, "/E", "/XJ", "/R:1", "/W:1", "/NFL", "/NDL", "/NJH", "/NJS", "/NP", "/XD", ...excludedDirs, "/XF", ...excludedFiles], { encoding: "utf8", timeout: 300000 });
+    result = spawnSync3("robocopy", [source, destination, "/E", "/XJ", "/R:1", "/W:1", "/NFL", "/NDL", "/NJH", "/NJS", "/NP", "/XD", ...excludedDirs, "/XF", ...excludedFiles], { encoding: "utf8", timeout: profileCopyTimeoutMs });
   }
   const successfulRobocopy = selected === "robocopy" && result.status !== null && result.status >= 0 && result.status <= 7;
   if (result.error || !successfulRobocopy && result.status !== 0) {

@@ -6,7 +6,8 @@ import type { TSchema } from "@oh-my-pi/pi-ai";
 import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
 
 const execFileAsync = promisify(execFile);
-const TIMEOUT_MS = 10 * 60 * 1000;
+/** A tool_call has a 30,000 ms budget; leave 5,000 ms for dispatch and reporting. */
+export const TIMEOUT_MS = 25_000;
 const MAX_BUFFER = 10 * 1024 * 1024;
 const JOURNEYS_SCRIPT = ["skills", "journey-init", "scripts", "journeys.py"] as const;
 
@@ -61,14 +62,14 @@ export async function runJourneys(
 	signal?: AbortSignal,
 	runner: JourneysRunner = exec,
 ): Promise<JourneysExecution> {
-	try {
-		const result = await runner("python3", journeysArgs(params), {
-			cwd,
-			shell: false,
-			timeout: TIMEOUT_MS,
-			maxBuffer: MAX_BUFFER,
-			signal,
-		});
+    try {
+        const result = await runner("python3", journeysArgs(params), {
+            cwd,
+            shell: false,
+            timeout: TIMEOUT_MS,
+            maxBuffer: MAX_BUFFER,
+            signal,
+        });
 		return { stdout: result.stdout, stderr: result.stderr, exitCode: 0 };
 	} catch (error) {
 		const failure = typeof error === "object" && error !== null ? (error as typeof JOURNEYS_ERROR) : JOURNEYS_ERROR;
