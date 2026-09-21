@@ -168,7 +168,9 @@ def render_one(bead: dict, number: int) -> str:
     lines = [
         "---",
         f"number: {number}",
-        f"title: {title}",
+        # JSON string quoting is also valid YAML and keeps colons, hashes,
+        # booleans, and newlines in a title from corrupting frontmatter.
+        f"title: {json.dumps(title, ensure_ascii=False)}",
         f"status: {status}",
         f"date: {date}",
         f"bead: {bead.get('id')}",
