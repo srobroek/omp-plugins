@@ -41607,34 +41607,62 @@ async function runPreflight(cwd, ctx, overrides = {}) {
 
 // extensions/headed-browser-preflight.ts
 var CACHE_TTL_MS = 12 * 60 * 60 * 1000;
+var PREFLIGHT_SESSION_START_BUDGET_MS = 25000;
 var ADVISED_KEY = Symbol.for("com.srobroek.browser-tools.headed-preflight.sent");
-function headedBrowserPreflight(pi) {
+function headedBrowserPreflight(pi, runtime = {}) {
   pi.on("session_start", async (_event, ctx) => {
-    try {
-      const cachePath = preflightCachePath();
-      const config = await resolveConfig(ctx.cwd, {});
-      const cached = await readCache(cachePath);
-      const configKey = preflightConfigKey(config);
-      if (cached?.ok && cached.key === configKey && Date.now() - cached.checkedAt < CACHE_TTL_MS)
-        return;
-      const result = await runPreflight(ctx.cwd, ctx);
-      await writeCache(cachePath, { checkedAt: Date.now(), key: configKey, ok: result.ok });
-      if (result.ok)
-        return;
-      const holder = globalThis;
-      if (holder[ADVISED_KEY])
-        return;
-      holder[ADVISED_KEY] = true;
-      const failures = result.checks.filter((check) => check.status === "fail");
-      const content = [
-        "Headed browser preflight failed:",
-        ...failures.map((check) => `- ${check.name}: ${String(check.observed)}${check.remedy ? ` Remedy: ${check.remedy}` : ""}`),
-        'Run headed_session op:"preflight" for the full structured report.'
-      ].join(`
+    const now = runtime.now ?? Date.now;
+    const budgetMs = runtime.budgetMs ?? PREFLIGHT_SESSION_START_BUDGET_MS;
+    const deadline = now() + budgetMs;
+    const run = (async () => {
+      try {
+        const cachePath = runtime.cachePath?.() ?? preflightCachePath();
+        const config = await (runtime.resolveConfig ?? resolveConfig)(ctx.cwd, {});
+        if (now() >= deadline)
+          return { kind: "timeout" };
+        const cached = await (runtime.readCache ?? readCache)(cachePath);
+        if (now() >= deadline)
+          return { kind: "timeout" };
+        const configKey = preflightConfigKey(config);
+        if (cached?.ok && cached.key === configKey && now() - cached.checkedAt < CACHE_TTL_MS)
+          return { kind: "ok" };
+        const result = await (runtime.runPreflight ?? runPreflight)(ctx.cwd, ctx);
+        if (now() >= deadline)
+          return { kind: "timeout" };
+        await (runtime.writeCache ?? writeCache)(cachePath, { checkedAt: now(), key: configKey, ok: result.ok });
+        return result.ok ? { kind: "ok" } : { kind: "failed", result };
+      } catch {
+        return { kind: "error" };
+      }
+    })();
+    const outcome = await Promise.race([
+      run,
+      Bun.sleep(Math.max(1, deadline - now())).then(() => ({ kind: "timeout" }))
+    ]);
+    if (outcome.kind === "timeout") {
+      sendPreflightAdvisory(pi, `Headed browser preflight could not complete within ${budgetMs} ms; the preflight cache was not updated. Run headed_session op:"preflight" for the full structured report.`);
+      return;
+    }
+    if (outcome.kind !== "failed")
+      return;
+    const failures = outcome.result.checks.filter((check) => check.status === "fail");
+    const content = [
+      "Headed browser preflight failed:",
+      ...failures.map((check) => `- ${check.name}: ${String(check.observed)}${check.remedy ? ` Remedy: ${check.remedy}` : ""}`),
+      'Run headed_session op:"preflight" for the full structured report.'
+    ].join(`
 `);
-      pi.sendMessage({ customType: "com.srobroek.browser-tools.headed-preflight", content, display: true, attribution: "user" }, { triggerTurn: false });
-    } catch {}
+    sendPreflightAdvisory(pi, content);
   });
+}
+function sendPreflightAdvisory(pi, content) {
+  const holder = globalThis;
+  if (holder[ADVISED_KEY])
+    return;
+  holder[ADVISED_KEY] = true;
+  try {
+    pi.sendMessage({ customType: "com.srobroek.browser-tools.headed-preflight", content, display: true, attribution: "user" }, { triggerTurn: false });
+  } catch {}
 }
 function preflightCacheKey(result) {
   const selected = result.checks.find((check) => check.name === `auto-${result.config.engine}`)?.observed;
@@ -41678,6 +41706,7 @@ async function writeCache(path, cache) {
   await rename2(temporary, path);
 }
 export {
+  PREFLIGHT_SESSION_START_BUDGET_MS,
   headedBrowserPreflight as default,
   preflightCacheKey,
   preflightCachePath,

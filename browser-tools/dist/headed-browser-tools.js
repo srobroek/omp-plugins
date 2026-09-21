@@ -40236,8 +40236,8 @@ var init_puppeteer_core = __esm(() => {
 });
 
 // extensions/headed-browser-tools.ts
-import { mkdir as mkdir4 } from "fs/promises";
-import { homedir as homedir4 } from "os";
+import { mkdir as mkdir5 } from "fs/promises";
+import { homedir as homedir5 } from "os";
 import { join as join7 } from "path";
 
 // extensions/lib/config.ts
@@ -41476,9 +41476,10 @@ async function launchRemote(request, config) {
   validateRemoteTarget(request.remoteHost, request.remoteBrowserPath);
   const sshArgs = parseSshOptions(request.sshOptions ?? "-o BatchMode=yes -o StrictHostKeyChecking=yes");
   validateSshOptions(sshArgs);
-  const remoteProfileDir = await sshCapture(sshArgs, request.remoteHost, ["mktemp", "-d", "/tmp/omp-headed-firefox-XXXXXXXX"], request.navigationTimeoutMs);
+  const stageTimeoutMs = Math.min(request.navigationTimeoutMs, 29000);
+  const remoteProfileDir = await sshCapture(sshArgs, request.remoteHost, ["mktemp", "-d", "/tmp/omp-headed-firefox-XXXXXXXX"], stageTimeoutMs);
   validateRemotePath(remoteProfileDir, "remote profile directory");
-  await sshCapture(sshArgs, request.remoteHost, ["mkdir", "-p", `${remoteProfileDir}/downloads`], request.navigationTimeoutMs);
+  await sshCapture(sshArgs, request.remoteHost, ["mkdir", "-p", `${remoteProfileDir}/downloads`], stageTimeoutMs);
   const browserProcess = Bun.spawn([
     "ssh",
     ...sshArgs,
@@ -41493,10 +41494,10 @@ async function launchRemote(request, config) {
   ], { stdout: "pipe", stderr: "pipe" });
   let endpoint;
   try {
-    endpoint = await readBidiEndpoint(browserProcess.stderr, request.navigationTimeoutMs);
+    endpoint = await readBidiEndpoint(browserProcess.stderr, stageTimeoutMs);
   } catch (error) {
     browserProcess.kill();
-    await sshCapture(sshArgs, request.remoteHost, ["rm", "-rf", remoteProfileDir], request.navigationTimeoutMs).catch(() => {
+    await sshCapture(sshArgs, request.remoteHost, ["rm", "-rf", remoteProfileDir], stageTimeoutMs).catch(() => {
       return;
     });
     throw error;
@@ -41504,26 +41505,30 @@ async function launchRemote(request, config) {
   const remotePort = new URL(endpoint).port;
   const localPort = await reserveLocalPort();
   const tunnelProcess = Bun.spawn(["ssh", ...sshArgs, "-N", "-L", `127.0.0.1:${localPort}:127.0.0.1:${remotePort}`, request.remoteHost], { stdout: "ignore", stderr: "pipe" });
-  await Bun.sleep(250);
   if (tunnelProcess.exitCode !== null) {
     browserProcess.kill();
-    await sshCapture(sshArgs, request.remoteHost, ["rm", "-rf", remoteProfileDir], request.navigationTimeoutMs).catch(() => {
+    await sshCapture(sshArgs, request.remoteHost, ["rm", "-rf", remoteProfileDir], stageTimeoutMs).catch(() => {
       return;
     });
     throw new Error(`headed-browser: SSH tunnel exited with ${tunnelProcess.exitCode}`);
   }
   try {
     const puppeteer = await loadPuppeteer(config);
-    const browser = await puppeteer.connect({
-      browserWSEndpoint: `ws://127.0.0.1:${localPort}/session`,
-      protocol: "webDriverBiDi",
-      downloadBehavior: config.allowDownloads ? { policy: "allow", downloadPath: `${remoteProfileDir}/downloads` } : { policy: "deny" }
-    });
+    const browser = await Promise.race([
+      puppeteer.connect({
+        browserWSEndpoint: `ws://127.0.0.1:${localPort}/session`,
+        protocol: "webDriverBiDi",
+        downloadBehavior: config.allowDownloads ? { policy: "allow", downloadPath: `${remoteProfileDir}/downloads` } : { policy: "deny" }
+      }),
+      Bun.sleep(stageTimeoutMs).then(() => {
+        throw new Error(`headed-browser: remote BiDi connect timed out after ${stageTimeoutMs} ms`);
+      })
+    ]);
     return { browser, browserProcess, tunnelProcess, remoteProfileDir, remoteHost: request.remoteHost, sshArgs, timeoutMs: request.navigationTimeoutMs };
   } catch {
     tunnelProcess.kill();
     browserProcess.kill();
-    await sshCapture(sshArgs, request.remoteHost, ["rm", "-rf", remoteProfileDir], request.navigationTimeoutMs).catch(() => {
+    await sshCapture(sshArgs, request.remoteHost, ["rm", "-rf", remoteProfileDir], stageTimeoutMs).catch(() => {
       return;
     });
     throw new Error("headed-browser: remote BiDi connect unsupported by puppeteer-core; use a local session");
@@ -42183,8 +42188,11 @@ async function runPreflight(cwd, ctx, overrides = {}) {
 
 // extensions/lib/session.ts
 import { randomBytes as randomBytes2 } from "crypto";
-import { readdir, stat as stat2 } from "fs/promises";
-import { join as join6 } from "path";
+import { mkdir as mkdir4, readdir, readFile as readFile2, rename as rename2, stat as stat2, writeFile as writeFile2 } from "fs/promises";
+import { homedir as homedir4 } from "os";
+import { dirname as dirname5, join as join6 } from "path";
+var SESSION_SHUTDOWN_BUDGET_MS = 1000;
+var LEAK_MANIFEST_NAME = "headed-browser-leaks.json";
 var sessions = new Map;
 async function createSession(input) {
   let id = "";
@@ -42329,8 +42337,124 @@ async function closeSession(sessionId, reason = "close") {
   const deleted = await removeMaterializedProfile(session.profile, session.config.keepArtifactsOnClose);
   return { deleted, reason };
 }
-async function closeAllSessions(reason = "session-shutdown") {
-  await Promise.allSettled([...sessions.keys()].map((sessionId) => closeSession(sessionId, reason)));
+async function closeAllSessions(reason = "session-shutdown", options = {}) {
+  const snapshot = [...sessions.values()];
+  if (snapshot.length === 0)
+    return { started: 0, completed: 0, leaked: [] };
+  const close = options.close ?? closeSession;
+  const records = snapshot.map((session) => leakRecord(session, reason, "pending"));
+  await updateLeakManifest((current) => [
+    ...current.filter((record) => !records.some((next) => next.sessionId === record.sessionId)),
+    ...records
+  ]).catch((error) => console.error(`headed-browser: could not record session shutdown: ${String(error)}`));
+  let timedOut = false;
+  const settled = new Set;
+  const outcomes = new Map;
+  const tasks = snapshot.map((session) => (async () => {
+    try {
+      await close(session.id, reason);
+      outcomes.set(session.id, { ok: true });
+    } catch (error) {
+      outcomes.set(session.id, { ok: false, error: error instanceof Error ? error.message : String(error) });
+    } finally {
+      settled.add(session.id);
+    }
+  })());
+  const all = Promise.all(tasks);
+  const completed = await Promise.race([
+    all.then(() => true),
+    Bun.sleep(options.budgetMs ?? SESSION_SHUTDOWN_BUDGET_MS).then(() => false)
+  ]);
+  if (completed) {
+    const leaked = snapshot.filter((session) => !outcomes.get(session.id)?.ok).map((session) => session.id);
+    await updateLeakManifest((current) => current.flatMap((record) => {
+      const session = snapshot.find((candidate) => candidate.id === record.sessionId);
+      if (!session)
+        return [record];
+      const outcome = outcomes.get(record.sessionId);
+      if (outcome?.ok)
+        return [];
+      return [{ ...record, status: "leaked", reason: outcome?.error ?? reason }];
+    }));
+    return { started: snapshot.length, completed: snapshot.length - leaked.length, leaked };
+  }
+  timedOut = true;
+  const leaked = snapshot.filter((session) => !settled.has(session.id) || !outcomes.get(session.id)?.ok).map((session) => session.id);
+  await updateLeakManifest((current) => current.map((record) => {
+    if (!snapshot.some((session) => session.id === record.sessionId))
+      return record;
+    const outcome = outcomes.get(record.sessionId);
+    if (outcome?.ok)
+      return record;
+    return { ...record, status: "leaked", reason: outcome?.error ?? `${reason} exceeded ${options.budgetMs ?? SESSION_SHUTDOWN_BUDGET_MS} ms` };
+  }));
+  for (const [index, task] of tasks.entries()) {
+    const session = snapshot[index];
+    if (!session)
+      continue;
+    task.then(() => {
+      if (!timedOut)
+        return;
+      const outcome = outcomes.get(session.id);
+      const update = outcome?.ok ? (current) => current.filter((record) => record.sessionId !== session.id) : (current) => current.map((record) => record.sessionId === session.id ? { ...record, status: "leaked", reason: outcome?.error ?? reason } : record);
+      updateLeakManifest(update).catch((error) => console.error(`headed-browser: could not update leak record ${session.id}: ${String(error)}`));
+    });
+  }
+  return { started: snapshot.length, completed: snapshot.length - leaked.length, leaked };
+}
+function leakedSessionsPath() {
+  const agentDir = process.env.PI_CODING_AGENT_DIR ?? join6(homedir4(), ".omp", "agent");
+  return join6(agentDir, LEAK_MANIFEST_NAME);
+}
+async function listLeakedSessions() {
+  await leakManifestQueue.catch(() => {
+    return;
+  });
+  return readLeakManifest();
+}
+async function readLeakManifest() {
+  try {
+    const value = JSON.parse(await readFile2(leakedSessionsPath(), "utf8"));
+    if (!Array.isArray(value))
+      return [];
+    return value.filter(isLeakedSession);
+  } catch {
+    return [];
+  }
+}
+function leakRecord(session, reason, status) {
+  return {
+    sessionId: session.id,
+    status,
+    reason,
+    detectedAt: Date.now(),
+    sessionDir: session.profile.sessionDir,
+    profileDir: session.profile.profileDir,
+    ...session.remote ? { remoteHost: session.remote.remoteHost, remoteProfileDir: session.remote.remoteProfileDir } : {}
+  };
+}
+function isLeakedSession(value) {
+  if (!value || typeof value !== "object")
+    return false;
+  const record = value;
+  return typeof record.sessionId === "string" && (record.status === "pending" || record.status === "leaked") && typeof record.reason === "string" && typeof record.detectedAt === "number" && typeof record.sessionDir === "string" && typeof record.profileDir === "string";
+}
+var leakManifestQueue = Promise.resolve();
+function updateLeakManifest(mutator) {
+  const update = leakManifestQueue.then(async () => {
+    const current = await readLeakManifest();
+    const next = mutator(current);
+    const path = leakedSessionsPath();
+    await mkdir4(dirname5(path), { recursive: true, mode: 448 });
+    const temporary = `${path}.${process.pid}.tmp`;
+    await writeFile2(temporary, `${JSON.stringify(next, null, 2)}
+`, { mode: 384 });
+    await rename2(temporary, path);
+  });
+  leakManifestQueue = update.catch(() => {
+    return;
+  });
+  return update;
 }
 function installIdleSweep(ctx, onIdleClose) {
   ctx.setInterval(async () => {
@@ -42438,7 +42562,8 @@ function headedBrowserTools(pi) {
       }
       if (params.op === "status") {
         const summaries = [...sessions.values()].map(sessionSummary);
-        return resultEnvelope({ sessions: summaries }, { warnings: [] });
+        const leakedSessions = await listLeakedSessions();
+        return resultEnvelope({ sessions: summaries, leakedSessions }, { warnings: leakedSessions.length > 0 ? ["headed-browser: previous session teardown is still pending or leaked; inspect leakedSessions before reusing those profiles."] : [] });
       }
       if (params.op === "launch") {
         if (!ctx)
@@ -42578,7 +42703,7 @@ function headedBrowserTools(pi) {
       if (params.op === "snapshot")
         payload = await withPageTimeout(session, ctx, "snapshot", timeout, () => domSnapshot(session, page, params.selector));
       else if (params.op === "screenshot") {
-        await mkdir4(session.profile.artifactsDir, { recursive: true, mode: 448 });
+        await mkdir5(session.profile.artifactsDir, { recursive: true, mode: 448 });
         const path = join7(session.profile.artifactsDir, `screenshot-${Date.now()}.png`);
         const data = await withPageTimeout(session, ctx, "screenshot", timeout, () => page.screenshot({ path, fullPage: params.fullPage, clip: params.clip, encoding: "binary" }));
         payload = { path, base64: Buffer.from(data).toString("base64") };
@@ -42692,14 +42817,16 @@ function headedBrowserTools(pi) {
   });
   pi.on("session_shutdown", async () => {
     audits.clear();
-    await closeAllSessions();
+    const report = await closeAllSessions();
+    if (report.leaked.length > 0)
+      console.error(`headed-browser: ${report.leaked.length} session teardown(s) exceeded the shutdown budget; inspect headed_session status for leakedSessions`);
   });
 }
 async function launchSession(cwd, ctx, params) {
   const config = await resolveConfig(cwd, params);
   deriveDomainPolicy(config);
   assertChannelEngine(config.engine, config.browserChannel);
-  const agentDir = process.env.PI_CODING_AGENT_DIR ?? join7(homedir4(), ".omp", "agent");
+  const agentDir = process.env.PI_CODING_AGENT_DIR ?? join7(homedir5(), ".omp", "agent");
   let resolvedBrowser;
   let sourceProfile;
   let profileMode = config.profileMode;

@@ -13,7 +13,7 @@ import { applyPagePolicy, checkNavigation, createAuditWriter, deriveDomainPolicy
 import { runPreflight } from "./lib/preflight.ts";
 import { grantCookiesFromSource, materializeProfile, removeMaterializedProfile } from "./lib/profile.ts";
 import type { HeadedSession, SessionSummary } from "./lib/session.ts";
-import { closeAllSessions, closeSession, createSession, getSession, installIdleSweep, listArtifacts, registerPage, selectedPage, selectTab, sessionSummary, sessions, syncPages } from "./lib/session.ts";
+import { closeAllSessions, closeSession, createSession, getSession, installIdleSweep, listArtifacts, listLeakedSessions, registerPage, selectedPage, selectTab, sessionSummary, sessions, syncPages } from "./lib/session.ts";
 
 declare global {
 	/** Buffer injected into the page by the console policy; absent until then. */
@@ -106,7 +106,8 @@ export default function headedBrowserTools(pi: ExtensionAPI): void {
 			}
 			if (params.op === "status") {
 				const summaries = [...sessions.values()].map(sessionSummary);
-				return resultEnvelope({ sessions: summaries }, { warnings: [] });
+				const leakedSessions = await listLeakedSessions();
+				return resultEnvelope({ sessions: summaries, leakedSessions }, { warnings: leakedSessions.length > 0 ? ["headed-browser: previous session teardown is still pending or leaked; inspect leakedSessions before reusing those profiles."] : [] });
 			}
 			if (params.op === "launch") {
 				if (!ctx) throw new Error("headed-browser: extension context unavailable");
@@ -310,7 +311,8 @@ export default function headedBrowserTools(pi: ExtensionAPI): void {
 	});
 	pi.on("session_shutdown", async () => {
 		audits.clear();
-		await closeAllSessions();
+		const report = await closeAllSessions();
+		if (report.leaked.length > 0) console.error(`headed-browser: ${report.leaked.length} session teardown(s) exceeded the shutdown budget; inspect headed_session status for leakedSessions`);
 	});
 }
 

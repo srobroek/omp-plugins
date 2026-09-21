@@ -1,6 +1,7 @@
 import { randomBytes } from "node:crypto";
-import { readdir, stat } from "node:fs/promises";
-import { join } from "node:path";
+import { mkdir, readdir, readFile, rename, stat, writeFile } from "node:fs/promises";
+import { homedir } from "node:os";
+import { dirname, join } from "node:path";
 import type { ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 import type { Browser, Page } from "puppeteer-core";
 import type { EffectiveConfig, ProfileMode } from "./config.ts";
@@ -9,6 +10,23 @@ import type { RemoteResources } from "./driver.ts";
 import { closeRemote } from "./driver.ts";
 import type { MaterializedProfile } from "./profile.ts";
 import { removeMaterializedProfile } from "./profile.ts";
+
+/** Leave a margin below the 2s session_shutdown handler budget. */
+export const SESSION_SHUTDOWN_BUDGET_MS = 1_000;
+const LEAK_MANIFEST_NAME = "headed-browser-leaks.json";
+
+export type LeakedSessionStatus = "pending" | "leaked";
+
+export interface LeakedSession {
+	sessionId: string;
+	status: LeakedSessionStatus;
+	reason: string;
+	detectedAt: number;
+	sessionDir: string;
+	profileDir: string;
+	remoteHost?: string;
+	remoteProfileDir?: string;
+}
 
 export interface ConsoleEntry {
 	ts: number;
@@ -183,21 +201,158 @@ export function sessionSummary(session: HeadedSession): SessionSummary {
 export async function closeSession(sessionId: string, reason = "close"): Promise<{ deleted: string[]; reason: string }> {
 	const session = getSession(sessionId);
 	sessions.delete(sessionId);
-    if (session.remote) await closeRemote(session.remote);
-    else {
-        let closed = false;
-        await Promise.race([
-            session.browser.close().then(() => { closed = true; }).catch(() => undefined),
-            Bun.sleep(5_000),
-        ]);
-        if (!closed) session.browser.process()?.kill();
-    }
-    const deleted = await removeMaterializedProfile(session.profile, session.config.keepArtifactsOnClose);
-    return { deleted, reason };
+	if (session.remote) await closeRemote(session.remote);
+	else {
+		let closed = false;
+		await Promise.race([
+			session.browser.close().then(() => { closed = true; }).catch(() => undefined),
+			Bun.sleep(5_000),
+		]);
+		if (!closed) session.browser.process()?.kill();
+	}
+	const deleted = await removeMaterializedProfile(session.profile, session.config.keepArtifactsOnClose);
+	return { deleted, reason };
 }
 
-export async function closeAllSessions(reason = "session-shutdown"): Promise<void> {
-	await Promise.allSettled([...sessions.keys()].map((sessionId) => closeSession(sessionId, reason)));
+export interface CloseAllSessionsOptions {
+	/** Test seam and a hook for callers that need to own teardown scheduling. */
+	close?: (sessionId: string, reason: string) => Promise<unknown>;
+	budgetMs?: number;
+}
+
+export interface CloseAllSessionsReport {
+	started: number;
+	completed: number;
+	leaked: string[];
+}
+
+/**
+ * Start complete teardown, but never make session_shutdown wait for browser or SSH
+ * cleanup. A pending manifest entry survives an extension kill; status can report it
+ * on the next session, and a detached teardown removes it when it eventually finishes.
+ */
+export async function closeAllSessions(
+	reason = "session-shutdown",
+	options: CloseAllSessionsOptions = {},
+): Promise<CloseAllSessionsReport> {
+	const snapshot = [...sessions.values()];
+	if (snapshot.length === 0) return { started: 0, completed: 0, leaked: [] };
+	const close = options.close ?? closeSession;
+	const records = snapshot.map((session) => leakRecord(session, reason, "pending"));
+	await updateLeakManifest((current) => [
+		...current.filter((record) => !records.some((next) => next.sessionId === record.sessionId)),
+		...records,
+	]).catch((error) => console.error(`headed-browser: could not record session shutdown: ${String(error)}`));
+
+	let timedOut = false;
+	const settled = new Set<string>();
+	const outcomes = new Map<string, { ok: boolean; error?: string }>();
+	const tasks = snapshot.map((session) => (async () => {
+		try {
+			await close(session.id, reason);
+			outcomes.set(session.id, { ok: true });
+		} catch (error) {
+			outcomes.set(session.id, { ok: false, error: error instanceof Error ? error.message : String(error) });
+		} finally {
+			settled.add(session.id);
+		}
+	})());
+	const all = Promise.all(tasks);
+	const completed = await Promise.race([
+		all.then(() => true),
+		Bun.sleep(options.budgetMs ?? SESSION_SHUTDOWN_BUDGET_MS).then(() => false),
+	]);
+	if (completed) {
+		const leaked = snapshot.filter((session) => !outcomes.get(session.id)?.ok).map((session) => session.id);
+		await updateLeakManifest((current) => current.flatMap((record) => {
+			const session = snapshot.find((candidate) => candidate.id === record.sessionId);
+			if (!session) return [record];
+			const outcome = outcomes.get(record.sessionId);
+			if (outcome?.ok) return [];
+			return [{ ...record, status: "leaked" as const, reason: outcome?.error ?? reason }];
+		}));
+		return { started: snapshot.length, completed: snapshot.length - leaked.length, leaked };
+	}
+
+	timedOut = true;
+	const leaked = snapshot.filter((session) => !settled.has(session.id) || !outcomes.get(session.id)?.ok).map((session) => session.id);
+	await updateLeakManifest((current) => current.map((record) => {
+		if (!snapshot.some((session) => session.id === record.sessionId)) return record;
+		const outcome = outcomes.get(record.sessionId);
+		if (outcome?.ok) return record;
+		return { ...record, status: "leaked" as const, reason: outcome?.error ?? `${reason} exceeded ${options.budgetMs ?? SESSION_SHUTDOWN_BUDGET_MS} ms` };
+	}));
+	for (const [index, task] of tasks.entries()) {
+		const session = snapshot[index];
+		if (!session) continue;
+		void task.then(() => {
+			if (!timedOut) return;
+			const outcome = outcomes.get(session.id);
+			const update = outcome?.ok
+				? (current: LeakedSession[]) => current.filter((record) => record.sessionId !== session.id)
+				: (current: LeakedSession[]) => current.map((record) => record.sessionId === session.id
+					? { ...record, status: "leaked" as const, reason: outcome?.error ?? reason }
+					: record);
+			void updateLeakManifest(update).catch((error) => console.error(`headed-browser: could not update leak record ${session.id}: ${String(error)}`));
+		});
+	}
+	return { started: snapshot.length, completed: snapshot.length - leaked.length, leaked };
+}
+
+export function leakedSessionsPath(): string {
+	const agentDir = process.env.PI_CODING_AGENT_DIR ?? join(homedir(), ".omp", "agent");
+	return join(agentDir, LEAK_MANIFEST_NAME);
+}
+
+export async function listLeakedSessions(): Promise<LeakedSession[]> {
+	await leakManifestQueue.catch(() => undefined);
+	return readLeakManifest();
+}
+
+async function readLeakManifest(): Promise<LeakedSession[]> {
+	try {
+		const value: unknown = JSON.parse(await readFile(leakedSessionsPath(), "utf8"));
+		if (!Array.isArray(value)) return [];
+		return value.filter(isLeakedSession);
+	} catch {
+		return [];
+	}
+}
+
+function leakRecord(session: HeadedSession, reason: string, status: LeakedSessionStatus): LeakedSession {
+	return {
+		sessionId: session.id,
+		status,
+		reason,
+		detectedAt: Date.now(),
+		sessionDir: session.profile.sessionDir,
+		profileDir: session.profile.profileDir,
+		...(session.remote ? { remoteHost: session.remote.remoteHost, remoteProfileDir: session.remote.remoteProfileDir } : {}),
+	};
+}
+
+function isLeakedSession(value: unknown): value is LeakedSession {
+	if (!value || typeof value !== "object") return false;
+	const record = value as Partial<LeakedSession>;
+	return typeof record.sessionId === "string" && (record.status === "pending" || record.status === "leaked")
+		&& typeof record.reason === "string" && typeof record.detectedAt === "number"
+		&& typeof record.sessionDir === "string" && typeof record.profileDir === "string";
+}
+
+let leakManifestQueue: Promise<void> = Promise.resolve();
+
+function updateLeakManifest(mutator: (records: LeakedSession[]) => LeakedSession[]): Promise<void> {
+	const update = leakManifestQueue.then(async () => {
+		const current = await readLeakManifest();
+		const next = mutator(current);
+		const path = leakedSessionsPath();
+		await mkdir(dirname(path), { recursive: true, mode: 0o700 });
+		const temporary = `${path}.${process.pid}.tmp`;
+		await writeFile(temporary, `${JSON.stringify(next, null, 2)}\n`, { mode: 0o600 });
+		await rename(temporary, path);
+	});
+	leakManifestQueue = update.catch(() => undefined);
+	return update;
 }
 export function installIdleSweep(
 	ctx: ExtensionContext,
