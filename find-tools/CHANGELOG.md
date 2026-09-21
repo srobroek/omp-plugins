@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.5](https://github.com/srobroek/omp-plugins/compare/find-tools--v1.0.4...find-tools--v1.0.5) (2026-09-21)
+
+
+### Bug Fixes
+
+* fail closed on unavailable repository probes ([#446](https://github.com/srobroek/omp-plugins/issues/446)) ([fc30b7b](https://github.com/srobroek/omp-plugins/commit/fc30b7b984a7ea4f27385321f139da64c57f9e0f))
+
 ## [1.0.4](https://github.com/srobroek/omp-plugins/compare/find-tools--v1.0.3...find-tools--v1.0.4) (2026-09-19)
 
 

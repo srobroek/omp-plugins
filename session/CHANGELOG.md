@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.2.2](https://github.com/srobroek/omp-plugins/compare/session--v1.2.1...session--v1.2.2) (2026-09-21)
+
+
+### Bug Fixes
+
+* fail closed on unavailable repository probes ([#446](https://github.com/srobroek/omp-plugins/issues/446)) ([fc30b7b](https://github.com/srobroek/omp-plugins/commit/fc30b7b984a7ea4f27385321f139da64c57f9e0f))
+
 ## [1.2.1](https://github.com/srobroek/omp-plugins/compare/session--v1.2.0...session--v1.2.1) (2026-09-19)
 
 

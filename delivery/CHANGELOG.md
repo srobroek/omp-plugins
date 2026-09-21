@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.11.5](https://github.com/srobroek/omp-plugins/compare/delivery--v0.11.4...delivery--v0.11.5) (2026-09-21)
+
+
+### Bug Fixes
+
+* fail closed on unavailable repository probes ([#446](https://github.com/srobroek/omp-plugins/issues/446)) ([fc30b7b](https://github.com/srobroek/omp-plugins/commit/fc30b7b984a7ea4f27385321f139da64c57f9e0f))
+
 ## [0.11.4](https://github.com/srobroek/omp-plugins/compare/delivery--v0.11.3...delivery--v0.11.4) (2026-09-19)
 
 

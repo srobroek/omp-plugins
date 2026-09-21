@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.11](https://github.com/srobroek/omp-plugins/compare/chezmoi--v0.4.10...chezmoi--v0.4.11) (2026-09-21)
+
+
+### Bug Fixes
+
+* fail closed on unavailable repository probes ([#446](https://github.com/srobroek/omp-plugins/issues/446)) ([fc30b7b](https://github.com/srobroek/omp-plugins/commit/fc30b7b984a7ea4f27385321f139da64c57f9e0f))
+
 ## [0.4.10](https://github.com/srobroek/omp-plugins/compare/chezmoi--v0.4.9...chezmoi--v0.4.10) (2026-09-19)
 
 
