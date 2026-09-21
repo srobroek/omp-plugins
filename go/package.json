@@ -1,6 +1,6 @@
 {
   "name": "@srobroek/go",
-  "version": "0.3.5",
+  "version": "0.3.6",
   "description": "Go rules: module layout, error wrapping, table-driven tests, and a Go review skill.",
   "private": true,
   "omp": {
