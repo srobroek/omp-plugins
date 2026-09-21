@@ -1082,10 +1082,10 @@ function scanCommandTargets(command: string): CommandTargetScan | null {
     const beforeTargets = targets.length;
     const scan = invocation.name === "wt"
       ? scanLeadingGlobals(rest, WT_VALUE_OPTIONS, WT_BOOLEAN_OPTIONS)
-      : invocation.name === "git"
+      : invocation.name === "git" || invocation.name === "dgit"
         ? scanLeadingGlobals(rest, GIT_VALUE_OPTIONS, GIT_BOOLEAN_OPTIONS)
         : null;
-    if (scan === null && (invocation.name === "wt" || invocation.name === "git")) return null;
+    if (scan === null && (invocation.name === "wt" || invocation.name === "git" || invocation.name === "dgit")) return null;
     if (scan !== null) {
       for (const option of scan.options) {
         if (!["-C", "--directory", "--git-dir", "--work-tree"].includes(option.name)) continue;
@@ -1093,7 +1093,7 @@ function scanCommandTargets(command: string): CommandTargetScan | null {
         if (value === null) return null;
         targets.push({ raw: value, explicit: true });
       }
-    } else if (invocation.name !== "wt" && invocation.name !== "git") {
+    } else if (invocation.name !== "wt" && invocation.name !== "git" && invocation.name !== "dgit") {
       if (readOnlyFileInvocation(invocation.name, rest)) {
         for (const value of rest.filter(token => !token.startsWith("-"))) {
           const literal = literalCommandValue(value);
@@ -1105,7 +1105,7 @@ function scanCommandTargets(command: string): CommandTargetScan | null {
       inheritedMutation = true;
       continue;
     }
-    if ((invocation.name === "wt" || invocation.name === "git") && targets.length === beforeTargets) inheritedMutation = true;
+    if ((invocation.name === "wt" || invocation.name === "git" || invocation.name === "dgit") && targets.length === beforeTargets) inheritedMutation = true;
   }
   return { targets, inheritedMutation };
 }
@@ -1115,7 +1115,7 @@ function scanCommandTargets(command: string): CommandTargetScan | null {
   return scanLeadingGlobals(tokens, WT_VALUE_OPTIONS, WT_BOOLEAN_OPTIONS)?.rest ?? null;
  }
 
- /** Consume `git`'s global options, returning the subcommand tokens. */
+ /** Consume `git`/`dgit` global options, returning the subcommand tokens. */
  function afterGitGlobals(tokens: readonly string[]): string[] | null {
   return scanLeadingGlobals(tokens, GIT_VALUE_OPTIONS, GIT_BOOLEAN_OPTIONS)?.rest ?? null;
  }
@@ -1215,13 +1215,13 @@ if (program === "wt") {
 		if (sub === "step") return tail.length === 2 && tail[0] === "prune" && tail[1] === "--dry-run" ? "allowed" : "other";
 		return "other";
 	}
-	if (program === "git") {
+	if (program === "git" || program === "dgit") {
 		const args = afterGitGlobals(rest); if (args === null) return "other";
 		const sub = args[0];
-		if (sub === "rev-parse" || sub === "status" || sub === "fetch" || sub === "log") return "allowed";
+		if (sub === "rev-parse" || sub === "status" || sub === "fetch" || sub === "push" || sub === "log") return "allowed";
 		if (sub === "worktree") return args[1] === "list" ? "allowed" : "other";
 		if (sub === "branch") return args[1] === "--list" ? "allowed" : "other";
-		return probeAllowed(program, rest) ? "safe" : "other";
+		return probeAllowed("git", rest) ? "safe" : "other";
 	}
 	if (program === "gh") return ghReadAllowed(rest) ? "allowed" : "other";
 	if (probeAllowed(program, rest)) return "safe";
@@ -1270,7 +1270,7 @@ export function createsWorktree(command: string): boolean {
  * comes back on PATH needs no invalidation — availability recovers by itself.
  */
 export function changesRepositoryTopology(command: string): boolean {
-	return /\bgit\s+(?:[^\n]*\s)?(?:init|clone)\b/.test(command);
+	return /\b(?:git|dgit)\s+(?:[^\n]*\s)?(?:init|clone)\b/.test(command);
 }
 
 /** The bash call's command string, whatever spelling the input uses. */
@@ -1309,12 +1309,12 @@ export function scanPathArguments(input: unknown, depth = 0): string[] {
 
 
 /**
- * Scan eval source for path-like string literals without pretending to decide
- * whether the code reads or writes. Containment is the guard's contract; a
- * dynamically constructed path remains outside this scan, as SANDBOX_LIMIT
- * documents for bash redirections.
+ * Scan eval source for path-like string literals that resolve to existing
+ * filesystem entries, without pretending to decide whether the code reads or
+ * writes. Containment is the guard's contract; a dynamically constructed path
+ * remains outside this scan, as SANDBOX_LIMIT documents for bash redirections.
  */
-function evalPathLiterals(code: string): string[] {
+function evalPathLiterals(code: string, cwd: string): string[] {
   const paths: string[] = [];
   const literalPattern = /(?:[rRuUbBfF]{0,3})("""|'''|["'`])([\s\S]*?)\1/g;
   for (const match of code.matchAll(literalPattern)) {
@@ -1323,7 +1323,15 @@ function evalPathLiterals(code: string): string[] {
     const offset = match.index ?? 0;
     const context = code.slice(Math.max(0, offset - 64), offset);
     const pathLike = value.startsWith("/") || value.startsWith("~/") || value.startsWith("./") || value.startsWith("../") || value.includes("/") || value.includes("\\") || URI_SCHEME.test(value) || /(?:Path|PurePath|open|read|write|Bun\.file|readFile)\s*\(\s*$/i.test(context);
-    if (pathLike) paths.push(value);
+    if (!pathLike) continue;
+    const resolved = resolveTarget(value, cwd);
+    if (resolved === null) continue;
+    try {
+      lstatSync(resolved);
+    } catch {
+      continue;
+    }
+    paths.push(value);
   }
   return paths;
 }
@@ -1448,6 +1456,7 @@ case "bash": {
   if (command.length === 0) {
     return { block: true, reason: uncertaintyRefusal("this `bash` call has no `command` string", canonical) };
   }
+  const bootstrap = bootstrapAllowed(command);
   const scanned = scanCommandTargets(command);
   // Dynamic options, shell substitution, redirection, and malformed syntax do
   // not identify a target safely; refusing preserves the accident guardrail.
@@ -1455,6 +1464,8 @@ case "bash": {
     const reason = bootstrapRefusal(command, effective);
     return { block: true, reason: worktreeGateDisabled(sessionCwd) ? reason + DISABLE_SUFFIX : reason };
   }
+  // Literal targets in a known bootstrap command are inspection/transport
+  // operands; an unclassifiable command still refuses before it can run.
   for (const target of scanned.targets) {
     const resolved = resolveTarget(target.raw, effective);
     if (resolved === null) {
@@ -1462,9 +1473,9 @@ case "bash": {
       return { block: true, reason: worktreeGateDisabled(sessionCwd) ? reason + DISABLE_SUFFIX : reason };
     }
     const refusal = refuseTarget(resolved);
-    if (refusal) return refusal;
+    if (refusal && !bootstrap) return refusal;
   }
-  if (!scanned.inheritedMutation || bootstrapAllowed(command)) return undefined;
+  if (!scanned.inheritedMutation || bootstrap) return undefined;
   const reason = bootstrapRefusal(command, effective);
   return { block: true, reason: worktreeGateDisabled(sessionCwd) ? reason + DISABLE_SUFFIX : reason };
 }
@@ -1481,7 +1492,7 @@ case "eval": {
   if (where.repository === null) return { block: true, reason: topologyRefusal(where.uncertainty) };
   if (hasExplicitCwd && where.repository.canonical !== null) return refuseTarget(effective);
   const code = record?.code;
-  const literals = typeof code === "string" ? evalPathLiterals(code) : [];
+  const literals = typeof code === "string" ? evalPathLiterals(code, sessionCwd) : [];
   if (literals.length === 0) return undefined;
   for (const raw of literals) {
     const resolved = resolveTarget(raw, sessionCwd);
