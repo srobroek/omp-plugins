@@ -630,8 +630,55 @@ describe("ast_edit", () => {
 describe("eval", () => {
 	test("a canonical session cwd is refused and a worktree cwd is allowed", () => {
 		const { canonical, worktree, topology } = project();
-		expect(decideWorktreeCall("eval", { code: "1" }, canonical, topology)?.block).toBe(true);
+		expect(decideWorktreeCall("eval", { code: "1" }, canonical, topology)).toBeUndefined();
 		expect(decideWorktreeCall("eval", { code: "1" }, worktree, topology)).toBeUndefined();
+	});
+});
+
+function realProjectCanonical(): string {
+	const resolution = resolveCanonicalRoot(process.cwd());
+	if (resolution.state !== "repository") throw new Error(`tests need a real repository: ${resolution.state}`);
+	return resolution.canonical;
+}
+
+describe("eval path literals on the real topology", () => {
+	test("a pathless browser-driving cell is allowed", () => {
+		const canonical = realProjectCanonical();
+		expect(decideWorktreeCall("eval", { code: "await browser.open({ app: { relay: true } })" }, canonical)).toBeUndefined();
+	});
+
+
+	test("an explicit canonical cwd remains guarded while a worktree cwd is allowed", () => {
+		const canonical = realProjectCanonical();
+		expect(decideWorktreeCall("eval", { cwd: canonical, code: "await browser.open({ app: { relay: true } })" }, canonical)?.block).toBe(true);
+		expect(decideWorktreeCall("eval", { cwd: process.cwd(), code: "await browser.open({ app: { relay: true } })" }, canonical)).toBeUndefined();
+	});
+	test("an external absolute path literal is allowed", () => {
+		const canonical = realProjectCanonical();
+		const scratch = mkdtempSync(join(tmpdir(), "worktrunk-eval-") );
+		roots.push(scratch);
+		const file = join(scratch, "probe.bin");
+		writeFileSync(file, "bytes");
+		const code = `from pathlib import Path\nPath(${JSON.stringify(file)}).read_bytes()`;
+		expect(decideWorktreeCall("eval", { language: "py", code }, canonical)).toBeUndefined();
+	});
+
+	test("a relative literal resolving into canonical is refused", () => {
+		const canonical = realProjectCanonical();
+		const code = 'from pathlib import Path\nPath("worktrunk/extensions/worktree-gate.ts").read_text()';
+		expect(decideWorktreeCall("eval", { language: "py", code }, canonical)?.block).toBe(true);
+	});
+
+	test("an absolute canonical literal is refused", () => {
+		const canonical = realProjectCanonical();
+		const code = `Path(${JSON.stringify(join(canonical, "worktrunk/extensions/worktree-gate.ts"))}).read_text()`;
+		expect(decideWorktreeCall("eval", { language: "py", code }, canonical)?.block).toBe(true);
+	});
+
+	test("an unresolvable path literal is refused", () => {
+		const canonical = realProjectCanonical();
+		const code = 'Path("xd://not-a-file").read_text()';
+		expect(decideWorktreeCall("eval", { language: "py", code }, canonical)?.block).toBe(true);
 	});
 });
 
@@ -1174,7 +1221,7 @@ describe("pathless tools", () => {
 		const { canonical, worktree, topology } = project();
 		expect(decideWorktreeCall("typescript_quality", { mode: "fix" }, canonical, topology)).toBeUndefined();
 		expect(decideWorktreeCall("typescript_quality", { mode: "fix" }, worktree, topology)).toBeUndefined();
-		expect(decideWorktreeCall("eval", { code: "1" }, canonical, topology)?.block).toBe(true);
+		expect(decideWorktreeCall("eval", { code: "1" }, canonical, topology)).toBeUndefined();
 	});
 
     test("pathless ledger and status calls are allowed from canonical", () => {

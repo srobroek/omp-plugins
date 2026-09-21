@@ -1308,16 +1308,24 @@ export function scanPathArguments(input: unknown, depth = 0): string[] {
 }
 
 
-/** Literal external paths in an eval cell that is visibly read-only. */
-function evalReadOnlyTargets(code: string): string[] | null {
-  if (code.length === 0 || /[`$][({]|\b(?:write|unlink|remove|mkdir|rmdir|rename|chmod|spawn|exec|eval)\b/i.test(code)) return null;
-  if (!/(?:read_bytes|read_text|readFile|Bun\.file|\.read\s*\(|open\s*\()/i.test(code)) return null;
+/**
+ * Scan eval source for path-like string literals without pretending to decide
+ * whether the code reads or writes. Containment is the guard's contract; a
+ * dynamically constructed path remains outside this scan, as SANDBOX_LIMIT
+ * documents for bash redirections.
+ */
+function evalPathLiterals(code: string): string[] {
   const paths: string[] = [];
-  for (const match of code.matchAll(/["'](\/[^"'`]+)["']/g)) {
-    const pathValue = match[1];
-    if (pathValue !== undefined) paths.push(pathValue);
+  const literalPattern = /(?:[rRuUbBfF]{0,3})("""|'''|["'`])([\s\S]*?)\1/g;
+  for (const match of code.matchAll(literalPattern)) {
+    const value = match[2]?.trim();
+    if (value === undefined || value.length === 0) continue;
+    const offset = match.index ?? 0;
+    const context = code.slice(Math.max(0, offset - 64), offset);
+    const pathLike = value.startsWith("/") || value.startsWith("~/") || value.startsWith("./") || value.startsWith("../") || value.includes("/") || value.includes("\\") || URI_SCHEME.test(value) || /(?:Path|PurePath|open|read|write|Bun\.file|readFile)\s*\(\s*$/i.test(context);
+    if (pathLike) paths.push(value);
   }
-  return paths.length > 0 ? paths : null;
+  return paths;
 }
 
 
@@ -1463,25 +1471,27 @@ case "bash": {
 case "eval": {
   const record = asRecord(input);
   const rawCwd = record?.cwd;
-  const effective = typeof rawCwd === "string" && rawCwd.length > 0 ? resolveTarget(rawCwd, sessionCwd) : sessionCwd;
+  const hasExplicitCwd = typeof rawCwd === "string" && rawCwd.length > 0;
+  const effective = hasExplicitCwd ? resolveTarget(rawCwd as string, sessionCwd) : sessionCwd;
   if (effective === null) {
     return { block: true, reason: uncertaintyRefusal("this `eval` call's `cwd` does not resolve", canonical) };
   }
-  if (containment(effective, topology).inside) return undefined;
+  const where = containment(effective, topology);
+  if (where.inside) return undefined;
+  if (where.repository === null) return { block: true, reason: topologyRefusal(where.uncertainty) };
+  if (hasExplicitCwd && where.repository.canonical !== null) return refuseTarget(effective);
   const code = record?.code;
-  const readTargets = typeof code === "string" ? evalReadOnlyTargets(code) : null;
-  if (readTargets !== null) {
-    for (const raw of readTargets) {
-      const resolved = resolveTarget(raw, effective);
-      if (resolved === null) {
-        return { block: true, reason: uncertaintyRefusal("this `eval` cell has an unresolvable read target", canonical) };
-      }
-      const refusal = refuseTarget(resolved);
-      if (refusal) return refusal;
+  const literals = typeof code === "string" ? evalPathLiterals(code) : [];
+  if (literals.length === 0) return undefined;
+  for (const raw of literals) {
+    const resolved = resolveTarget(raw, sessionCwd);
+    if (resolved === null) {
+      return { block: true, reason: uncertaintyRefusal("this `eval` cell has an unresolvable path literal", canonical) };
     }
-    return undefined;
+    const refusal = refuseTarget(resolved);
+    if (refusal) return refusal;
   }
-  return refuseTarget(effective);
+  return undefined;
 }
 		default: {
 			// An unenumerated tool is judged by the filesystem paths its arguments
