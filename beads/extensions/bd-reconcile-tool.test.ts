@@ -517,21 +517,28 @@ describe("tool registration and committed bundle", () => {
 		expect(reconcileApproval({ input: { apply: true } })).toBe("exec");
 	});
 
-	test("process-global arbitration registers one tool across duplicate loads", () => {
+	test("schema rejection releases the process-global registration arbiter for one retry", () => {
 		const registered: Array<Record<string, unknown>> = [];
 		const chain: Record<string, unknown> = {};
 		chain.optional = () => chain;
 		chain.describe = () => chain;
+		let attempts = 0;
 		const pi = {
 			zod: {
 				string: () => chain,
 				boolean: () => chain,
 				object: () => chain,
 			},
-			registerTool: (tool: Record<string, unknown>) => registered.push(tool),
+			registerTool: (tool: Record<string, unknown>) => {
+				attempts++;
+				if (attempts === 1) throw new Error("schema rejection");
+				registered.push(tool);
+			},
 		};
+		expect(() => bdReconcileTool(pi as never)).toThrow("schema rejection");
 		bdReconcileTool(pi as never);
 		bdReconcileTool(pi as never);
+		expect(attempts).toBe(2);
 		expect(registered).toHaveLength(1);
 		expect(registered[0]?.name).toBe("bd_reconcile");
 		expect(registered[0]?.approval).toBe(reconcileApproval);

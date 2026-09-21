@@ -1353,6 +1353,9 @@ function takeRegistration() {
   Reflect.set(globalThis, RECONCILE_ARBITER, true);
   return true;
 }
+function releaseRegistration() {
+  Reflect.deleteProperty(globalThis, RECONCILE_ARBITER);
+}
 function reconcileApproval(toolCall) {
   const input = object(object(toolCall)?.input);
   return input?.apply === true ? "exec" : "read";
@@ -1361,25 +1364,30 @@ function bdReconcileTool(pi) {
   if (!takeRegistration())
     return;
   const z = pi.zod;
-  pi.registerTool({
-    name: "bd_reconcile",
-    label: "Reconcile landing receipts into Beads",
-    description: "Scan landing receipt v1 files and plan convergent Beads ledger repairs. Default apply=false is read-only. " + "apply=true requires exec approval and is the only receipt-derived ledger writer; it never force-closes, reopens, supersedes, prunes, purges, flattens, compacts, runs gc, or deletes beads.",
-    parameters: z.object({
-      receipt: z.string().optional().describe("Receipt id, exact receipt path, or receipt JSON returned by a delivery tool"),
-      bead: z.string().optional().describe("Limit reconciliation to this receipt-named bead"),
-      repoKey: z.string().optional().describe("16-character repository key; defaults to the current git common directory"),
-      apply: z.boolean().optional().describe("Apply the planned ledger repairs (exec approval); defaults to false")
-    }),
-    approval: reconcileApproval,
-    execute: async (toolCallId, params, _signal, _onUpdate, ctx) => {
-      const result = await reconcileReceipts(params, toolCallId, ctx?.cwd ?? process.cwd());
-      return {
-        content: [{ type: "text", text: result.text }],
-        details: result
-      };
-    }
-  });
+  try {
+    pi.registerTool({
+      name: "bd_reconcile",
+      label: "Reconcile landing receipts into Beads",
+      description: "Scan landing receipt v1 files and plan convergent Beads ledger repairs. Default apply=false is read-only. " + "apply=true requires exec approval and is the only receipt-derived ledger writer; it never force-closes, reopens, supersedes, prunes, purges, flattens, compacts, runs gc, or deletes beads.",
+      parameters: z.object({
+        receipt: z.string().optional().describe("Receipt id, exact receipt path, or receipt JSON returned by a delivery tool"),
+        bead: z.string().optional().describe("Limit reconciliation to this receipt-named bead"),
+        repoKey: z.string().optional().describe("16-character repository key; defaults to the current git common directory"),
+        apply: z.boolean().optional().describe("Apply the planned ledger repairs (exec approval); defaults to false")
+      }),
+      approval: reconcileApproval,
+      execute: async (toolCallId, params, _signal, _onUpdate, ctx) => {
+        const result = await reconcileReceipts(params, toolCallId, ctx?.cwd ?? process.cwd());
+        return {
+          content: [{ type: "text", text: result.text }],
+          details: result
+        };
+      }
+    });
+  } catch (error) {
+    releaseRegistration();
+    throw error;
+  }
 }
 export {
   bdReconcileTool as default,
