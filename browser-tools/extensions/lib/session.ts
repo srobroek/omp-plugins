@@ -5,6 +5,8 @@ import { dirname, join } from "node:path";
 import type { ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 import type { Browser, Page } from "puppeteer-core";
 import type { EffectiveConfig, ProfileMode } from "./config.ts";
+import type { CursorRuntime } from "./cursor.ts";
+import { createCursorRuntime, installCursor } from "./cursor.ts";
 import type { ResolvedBrowser } from "./discovery.ts";
 import type { RemoteResources } from "./driver.ts";
 import { closeRemote } from "./driver.ts";
@@ -60,6 +62,8 @@ export interface HeadedSession {
 	refs: Map<string, Map<string, string>>;
 	network: NetworkEntry[];
 	remote?: RemoteResources;
+	/** Driver-owned cursor registration and mode state; never page-supplied. */
+	cursor: CursorRuntime;
 	warnings: string[];
 }
 
@@ -90,6 +94,7 @@ export async function createSession(input: {
 }): Promise<HeadedSession> {
 	let id = "";
 	do id = `hb-${randomBytes(3).toString("hex")}`; while (sessions.has(id));
+	const warnings = [...input.config.warnings, ...input.profile.warnings];
 	const session: HeadedSession = {
 		id,
 		browser: input.browser,
@@ -106,7 +111,8 @@ export async function createSession(input: {
 		refs: new Map(),
 		network: [],
 		remote: input.remote,
-		warnings: [...input.config.warnings, ...input.profile.warnings],
+		cursor: createCursorRuntime({ mode: input.config.cursorMode, headless: input.config.headless, warnings }),
+		warnings,
 	};
 	await syncPages(session);
 	if (session.pages.size === 0) {
@@ -145,6 +151,9 @@ export async function registerPage(session: HeadedSession, page: Page): Promise<
 	session.pages.set(tabId, page);
 	session.pageIds.set(page, tabId);
 	session.refs.set(tabId, new Map());
+	page.on("framenavigated", (frame) => {
+		if (frame === page.mainFrame()) session.refs.get(tabId)?.clear();
+	});
 	const started = new WeakMap<object, number>();
 	page.on("request", (request) => {
 		started.set(request, Date.now());
@@ -165,6 +174,7 @@ export async function registerPage(session: HeadedSession, page: Page): Promise<
 		}, 1000);
 	});
 	await installConsoleCapture(page);
+	await installCursor(session.cursor, page);
 	return tabId;
 }
 

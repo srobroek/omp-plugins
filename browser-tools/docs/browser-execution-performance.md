@@ -1,13 +1,13 @@
-# browser-tools deterministic execution performance plan
+# browser-tools deterministic execution contract
 
-Status: Proposed
+Status: Implemented; the benchmark program remains an evaluation protocol
 Scope: `browser-tools/extensions/**` and its package documentation
 Baseline: `@srobroek/browser-tools` 0.3.8 with `puppeteer-core` 25.3.0
 Owner: browser-tools maintainers
 
 ## Decision
 
-Add one deterministic, typed plan executor for browser-tools-owned Firefox-family sessions. The executor runs a bounded sequence inside one tool invocation.
+The implementation adds one deterministic, typed plan executor for browser-tools-owned Firefox-family sessions. The executor runs a bounded sequence inside one tool invocation.
 It serializes mutations per tab. It resolves targets against the current document. It returns bounded per-step results.
 
 This plan excludes the following systems:
@@ -19,8 +19,8 @@ This plan excludes the following systems:
 
 Those systems have different owners.
 
-Add optional page-local cursor visualization only if a pinned 25.3.0 WebDriver BiDi probe proves the preload interface.
-Install the preload once per page. Treat all visualization state as decorative and untrusted.
+The implementation also adds a page-local cursor visualization after verifying the pinned 25.3.0 WebDriver BiDi preload interface.
+It installs the preload once per page and treats all visualization state as decorative and untrusted.
 
 ## Why batching helps
 
@@ -57,24 +57,28 @@ The only guaranteed savings are $N-1$ model turns and $N-1$ outer transports. Co
 
 `Promise.all` is parallel dispatch, not batching. It sends the same protocol commands and is safe only for independent work.
 
-## Current implementation
+## Implemented surfaces
 
-`browser-tools/extensions/headed-browser-tools.ts` registers the following tools:
+`browser-tools/extensions/headed-browser-tools.ts` registers five tools:
 
 - `headed_session`;
 - `headed_nav`;
 - `headed_read`;
-- `headed_act`.
+- `headed_act`;
+- `headed_plan`.
 
-Their handlers invoke Puppeteer directly. A deterministic sequence therefore requires one outer call per operation.
+The standalone tools and `headed_plan` call the shared policy-aware primitives in `browser-tools/extensions/lib/operations.ts`.
+The plan runs ordered navigation, read, and action steps in one outer tool call.
 
-`browser-tools/extensions/lib/session.ts` owns live `Browser` and `Page` values, tab selection, selector refs, network events, warnings, and profile state. It has no tab writer lock, document epoch, or snapshot identity.
+`browser-tools/extensions/lib/session.ts` owns live `Browser` and `Page` values, tab selection, selector refs, network events, warnings, profile state, tab generations, and document epochs.
+Top-level navigation increments the document epoch and clears selector refs before later operations can resolve them.
+The shared tab lock serializes standalone mutations and plan steps against the same selected page identity.
 
-`domSnapshot` creates CSS-path refs. `targetElement` resolves the selector later. Navigation or re-render can therefore make a ref stale or resolve it to a different element.
+`applyPagePolicy` enables Puppeteer interception for requests governed by the configured policy.
+It resolves each request once before invoking the asynchronous audit sink, so audit persistence cannot stall navigation.
 
-`applyPagePolicy` enables Puppeteer interception for every request. Puppeteer documents that every intercepted request stalls until it is continued, responded to, or aborted. The allowed main-frame path awaits an audit write before continuing. No interception handler may await unbounded I/O.
-
-`withPageTimeout` can close or kill an entire session because an unresolved operation may complete after timeout. That blast radius is inappropriate for every profile mode and must become ownership-aware before plans ship.
+`withPageTimeout` closes the isolated session and its owned local or remote browser resources when an operation outlives its timeout.
+This prevents a timed-out operation from mutating the page after its lock has been released.
 
 The package pins `puppeteer-core` 25.3.0. Current public Puppeteer documentation targets a newer version. Every depended-on interface requires tagged-source or runtime verification against 25.3.0.
 
@@ -83,16 +87,12 @@ The package pins `puppeteer-core` 25.3.0. Current public Puppeteer documentation
 ### Included
 
 - shared policy-aware operation primitives;
-- a per-tab writer lock and bounded queue;
-- tab and document epochs;
-- pull-time semantic target revalidation;
-- one `headed_plan` tool;
-- bounded results;
-- progress;
-- cancellation;
-- audit context;
-- optional page-local cursor preload after compatibility proof;
-- focused benchmark fixtures and instrumentation;
+- one FIFO writer chain per session tab with a 30-second acquisition bound;
+- fixed plan tab identity and top-level-navigation ref invalidation;
+- one `headed_plan` tool with 20-step and inline-output limits;
+- fail-fast execution and host cancellation checks;
+- bounded plan audit summaries;
+- page-local cursor preload and driver-side geometry checks;
 - existing standalone tool compatibility.
 
 ### Excluded
@@ -113,350 +113,182 @@ The package pins `puppeteer-core` 25.3.0. Current public Puppeteer documentation
 - SSH settings inside plans;
 - static HTTP routing, browser pooling, and new production concurrency defaults.
 
-## Pinned-interface preflight
+## Pinned compatibility evidence
 
-Before implementation, record a table for each depended-on Puppeteer operation:
+The package pins `puppeteer-core` 25.3.0.
+Focused tests cover:
 
-| Interface | 25.3.0 tagged source | Firefox/BiDi runtime probe | Required behavior |
-|---|---|---|---|
-| `Page.evaluateOnNewDocument` or BiDi preload equivalent | Required | Required | Runs once in each new top-level document |
-| `Page.waitForNavigation` | Required | Required | Wait is armed before the initiating click |
-| locator or element click | Required | Required | Visibility and geometry behavior is known |
-| request interception | Required | Required | Every paused request reaches one resolution |
-| abortable waits | Required | Required | Cancellation support is documented per operation |
+- preload installation and overlay deduplication;
+- target geometry and movement rejection;
+- cancellation and request resolution;
+- plan serialization.
 
-A failed or unavailable preload probe removes cursor preload from this proposal. The executor does not emulate unverified support.
+A real Firefox/BiDi smoke run verifies:
+
+- preload and cleanup;
+- the visible click path;
+- ordered plan execution.
 
 ## Deep module and interface
 
-Create `browser-tools/extensions/lib/plan.ts` as the deep `BrowserPlanExecutor` module. Existing tool handlers and `headed_plan` call shared operation primitives; no registered tool calls another registered tool.
+`browser-tools/extensions/lib/plan.ts` owns plan validation and execution.
+Existing tool handlers and `headed_plan` call shared operation primitives.
+No registered tool calls another registered tool.
 
-```ts
-interface BrowserPlanRequest {
-  sessionId: string;
-  tabId?: string;
-  steps: readonly BrowserPlanStep[];
-  failurePolicy?: "stop" | "continue";
-  totalTimeoutMs?: number;
-  maxAggregateOutputBytes?: number;
-  visualization?: VisualizationPolicy;
-}
+The host schema accepts plan-step fields without stripping unknown keys.
+`validatePlan` rejects unknown fields.
+It validates every step before session lookup or browser work.
 
-interface BrowserPlanExecutor {
-  execute(
-    request: BrowserPlanRequest,
-    context: {
-      ownerToken: string;
-      signal: AbortSignal;
-      onProgress(update: PlanProgress): void;
-    },
-  ): Promise<BrowserPlanResult>;
-}
-```
+The plan contract is:
 
-Use closed discriminated unions for request steps and results. Reuse existing operation names and parameter meanings. Reject unknown fields.
+- one to 20 ordered steps;
+- `nav`, `read`, and `act` step kinds;
+- the standalone operation names and parameters;
+- the standalone policy and timeouts;
+- the standalone cursor behavior;
+- the standalone tab lock;
+- one selected tab identity fixed at plan start;
+- stop on the first failure or cancellation;
 
-```ts
-type PlanStepOutput =
-  | { kind: "none"; bytes: 0 }
-  | { kind: "summary"; bytes: number; url?: string; tabId: string }
-  | { kind: "text"; bytes: number; text: string; truncated: boolean }
-  | { kind: "snapshot"; bytes: number; snapshotId: string; refs: readonly SnapshotRef[]; truncated: boolean }
-  | { kind: "artifact"; bytes: number; path: string; mediaType: string; artifactBytes: number };
-```
+The plan excludes:
 
-Every output variant passes runtime schema validation. Every output variant passes redaction. Every output variant receives post-redaction byte measurement.
+- tab creation, switching, and closure;
+- arbitrary page evaluation;
+- session lifecycle steps.
 
-The following payloads return scoped artifact references rather than plan-result base64:
+Each executed step returns:
 
-- screenshots;
-- PDFs;
-- traces;
-- large HTML.
+- its index;
+- its kind and operation;
+- elapsed milliseconds;
+- success state.
+A failed step also returns a sanitized error category and a message capped at 300 characters.
+Later steps are absent because they did not execute.
 
-Initial limits:
+Read results use character-counted inline limits:
 
-- 1 to 16 steps;
-- `1s` to `300s` per step, matching existing bounds;
-- 5 minutes total;
-- 64 KiB hard inline-output limit per step;
-- 512 KiB default aggregate output limit;
-- 1 MiB maximum permitted aggregate output limit.
+- 8,192 characters per step;
+- 65,536 characters across the plan.
 
-`maxAggregateOutputBytes` sets the aggregate limit. Reject values outside 1 byte to 1 MiB. Truncate text and snapshot outputs at the smaller of the per-step limit or remaining aggregate allowance. Set `truncated: true` when truncation occurs. Return `output_limit` before appending any other output variant that would exceed either limit. Artifact payload bytes do not count toward these limits; the redacted artifact reference does.
+An oversized read result becomes truncated JSON text and sets `truncated: true`.
+Screenshot and PDF reads return their session-scoped artifact paths instead of inline binary payloads.
+The limits are fixed; the request exposes no aggregate-output or total-timeout override.
 
-Reject a plan when its full approval rendering exceeds the host approval-prompt bound. Show these fields for each step:
+## Serialization and cancellation
 
-- ordinal;
-- operation;
-- target or destination domain;
-- effect class.
+Operations use one FIFO writer chain per session tab.
+The chain serializes:
 
-Do not truncate hidden steps from the view.
+- navigation;
+- reads;
+- actions;
+- cursor visualization.
+Standalone tools and plans use the same chain.
 
-Do not add an idempotency key until replay scope, retention, and process-loss semantics have a separate design.
+A caller waits at most 30 seconds to acquire an occupied tab.
+Expiry returns the `tab busy` category without starting that caller's browser work.
+The plan pins both the selected tab ID and its `Page` object; replacement or selection changes return `stale tab`.
 
-## Lock and queue contract
-
-Use one reentrant writer lock per `(sessionId, tabId)`.
-
-- The outer tool entry point acquires the lock with an opaque owner token.
-- Internal operation primitives accept that token and never reacquire the lock.
-- The default acquisition timeout is 30 seconds.
-- A timeout returns `tab_busy` with `retryable: true` and performs no browser work.
-- The queue is FIFO and holds at most eight waiters per tab.
-- A ninth waiter is rejected immediately as `tab_busy`.
-- Cancellation removes a queued waiter without changing order for remaining waiters.
-- Navigation holds the writer lock.
-- Actions hold the writer lock.
-- Tab mutation holds the writer lock.
-- Visualization holds the writer lock.
-- Ordinary tools use the same lock as plans.
-
-Read concurrency defaults to one for WebDriver BiDi. A later benchmark may raise a fixed configured cap. If concurrent reads are enabled, each read must revalidate the document epoch after completion. Discard the entire read group when any epoch changes.
-
-An active lock owner refreshes session activity so the idle sweep cannot close the session. The lock does not own browser destruction.
+Cancellation is checked before every plan step.
+It is checked again after any queued operation acquires the lock.
+Target-bearing actions also recheck cancellation after cursor visualization and before dispatching the action.
+The first failure or cancellation ends the plan, and no later step starts.
 
 ## Document and target validity
 
-Track this state per tab:
+A snapshot stores CSS-path refs under the tab that produced them.
+Top-level `framenavigated` events clear that tab's refs, including navigation caused by an action.
+An action resolves its selector or ref to a fresh driver handle immediately before use and disposes that handle afterwards.
 
-```ts
-interface TabEpoch {
-  tabGeneration: number;
-  documentEpoch: number;
-  sameDocumentEpoch: number;
-}
-```
+Cursor visualization adds a geometry check for target-bearing actions:
 
-Increment `documentEpoch` for top-level document replacement. Increment `sameDocumentEpoch` for hash and History API transitions. Increment `tabGeneration` when the tab closes, is replaced, or changes ownership.
+1. Resolve and scroll the target through Puppeteer.
+2. Read its driver-side bounding box.
+3. Render the decorative cursor command.
+4. Read the same handle's bounding box again.
+5. Accept a center movement of at most 4 CSS pixels with overlapping boxes.
+6. Otherwise dispose the handle, resolve once more, and repeat.
+7. If the second position is also unstable, return `target_moved` without acting.
 
-Do not install a MutationObserver for correctness. At action time, recompute the target's semantic fingerprint and compare it with the snapshot fingerprint. The fingerprint includes the tab and document epochs, role, normalized accessible name, relevant state, frame identity, visibility, and conservative structure.
-
-Before every action:
-
-1. Verify the lock owner.
-2. Verify tab generation and document epochs.
-3. Resolve a fresh target.
-4. Find exactly one connected, visible semantic match.
-5. Compare the current fingerprint with the snapshot fingerprint.
-6. Read final geometry immediately before the pointer action.
-7. Reject targets without silent remapping when they are:
-   - stale;
-   - detached;
-   - hidden;
-   - moved;
-   - ambiguous.
-
-Do not retain the following handles or identifiers across navigation:
-
-- `ElementHandle`;
-- `JSHandle`;
-- BiDi remote references;
-- execution contexts;
-- CDP identifiers;
-- MCP UIDs.
-
-For a click expected to navigate, arm the wait before dispatch:
-
-```ts
-const [response] = await Promise.all([
-  page.waitForNavigation(options),
-  locator.click(),
-]);
-```
-
-Declare an expected URL, document transition, or semantic postcondition for each step. Do not wait for navigation after every click. Verify both the URL and application state for same-document transitions because they may return no main response.
+The implementation does not retain an `ElementHandle` across operations.
+Take a fresh snapshot after document or component changes; CSS refs are invalidated automatically only on top-level navigation.
 
 ## Policy, audit, and redaction
 
-Every step uses the same policy as its standalone operation. The policy covers:
+Each plan step uses the same policy and feature gates as its standalone operation.
+These configuration values remain fixed throughout a plan:
 
-- domain;
-- scheme;
-- feature;
-- profile;
-- cookie;
-- redaction.
-
-Enumerate and test the following cases:
-
-- HTTP(S)-only navigation;
-- allowlist and denylist decisions;
-- redirects;
-- page-driven top-level navigation;
-- downloads;
-- form submission;
-- password entry;
-- file upload;
-- evaluation;
-- cookie value exposure;
-- secret-shaped output redaction.
-
-A plan cannot set the following values or controls:
-
-- driver paths;
 - executable paths;
-- SSH values;
-- profile roots;
-- cookie domains;
-- domain rules;
-- feature gates.
+- SSH settings;
+- profiles and cookie domains;
+- domain rules and feature gates.
 
-Audit records may include these optional fields:
+Arbitrary page evaluation and tab-set mutations stay in standalone tools.
 
-- `planId`;
-- `stepId`;
-- ordinal;
-- outcome.
+Explicit `goto` operations validate scheme and domain before navigation.
+Page-driven top-level requests use the same domain policy through interception.
+The request is continued or aborted exactly once before its audit sink runs, so audit persistence cannot hold the request open.
 
-Preserve existing allow and block decisions. Record the following outcomes separately from policy approval:
+The plan writes a bounded start and completion summary to the existing audit log.
+Those summaries contain operation metadata, not page payloads.
+Tool results pass through the existing secret redactor before delivery.
 
-- completion;
-- failure;
-- cancellation;
-- audit warnings.
+## Failure and timeout behavior
 
-The in-path audit write must complete within `250ms`. In the existing best-effort audit mode, continue or abort on timeout according to the already-computed policy decision. Enqueue the redacted audit record synchronously and add a counted warning. Limit the fallback queue to 64 records per session. On overflow, discard the oldest record and add another counted warning.
+The entire plan is validated before session lookup or browser work.
+Completed browser actions are not rolled back.
 
-At each step boundary, schedule one background flush if none is active. Do not await that flush from the plan or interception path. Bound every queued write to `250ms` and retain failed records for the next boundary.
+Every driver operation uses the existing bounded page timeout.
+When an operation exceeds that timeout, browser-tools closes the isolated session and terminates resources it launched.
+This containment prevents the unresolved operation from mutating the page after the tab lock is released.
 
-A future fail-closed audit mode requires its own explicit policy. That mode is outside this proposal.
+The public result uses the implementation's small error vocabulary:
 
-Before every `continue` or `abort`, check interception resolution synchronously. Re-check after any await. A request receives exactly one terminal resolution.
-
-The current interception catch can continue after an unexpected policy-handler failure. Phase 1 must preserve documented behavior, expose a warning, and add a separate decision before claiming fail-closed navigation enforcement.
-
-## Failure, timeout, and cancellation
-
-Validate the whole plan before effects. Default `failurePolicy` to `stop`.
-
-Check cancellation at these points:
-
-- before every step;
-- after every awaited browser operation;
-- after every awaited audit operation.
-
-No later step starts after any of the following:
-
-- cancellation;
-- timeout;
-- browser disconnect;
-- lock loss.
-
-Use ownership-aware containment for an uninterruptible timed-out operation:
-
-- For an owned empty or throwaway profile, close the session when late mutation cannot otherwise be contained.
-- For a headed profile-aware session, close the affected tab first.
-- Increment the affected tab's generation.
-- Preserve sibling tabs.
-- Kill the whole session only when the affected tab cannot be closed or the browser connection is unhealthy.
-
-Return the containment action and whether retry is safe. Do not retry a non-idempotent action after an unknown outcome.
-
-Required error categories:
-
-- `invalid_request`;
-- `tab_busy`;
-- `stale_target`;
+- `invalid request`;
+- `unknown session`;
+- `session timeout`;
+- `launch failed`;
 - `target_moved`;
-- `policy_blocked`;
-- `timeout`;
+- `tab busy`;
 - `cancelled`;
-- `browser_disconnected`;
-- `audit_unavailable`;
-- `operation_failed`;
-- `output_limit`;
+- `stale tab`;
+- `operation failed`.
 
-The executor does not roll back completed browser actions or external side effects. Those effects remain completed.
+## Cursor preload
 
-## Progress
+The cursor is decorative.
+These decisions use only driver state:
 
-Use the existing OMP extension update callback as a best-effort host-local channel. This proposal makes no MCP progress claim.
+- plan execution;
+- target selection;
+- geometry checks;
+- policy;
+- action success.
 
-Emit at most one update per completed step. Each update must include:
+Page-reported cursor state remains decorative.
+Preload or command failure disables visualization, records one warning, and continues the browser action.
 
-- plan ID;
-- step ID;
-- ordinal;
-- total steps;
-- status;
-- elapsed time.
+`registerPage` installs one versioned `evaluateOnNewDocument` preload and bootstraps the already-loaded document.
+A version guard prevents duplicate roots and listeners.
+The overlay is fixed, `pointer-events: none`, and hidden from accessibility APIs.
 
-Each update must exclude:
+Supported modes:
 
-- page text;
-- query strings;
-- cookie values;
-- field values;
-- raw errors.
+| Mode | Behavior |
+|---|---|
+| `off` | No page visualization |
+| `instant` | Move and pulse without a travel delay |
+| `animated` | Bounded cursor travel before the pulse |
 
-No update arrives after the terminal result. Progress failure does not block browser work.
+Headless sessions resolve `auto` to `off`; visible sessions resolve it to `animated`.
+Reduced-motion and hidden-document state remove animation delay.
+Cleanup hides the overlay:
 
-## Optional cursor preload
+- after completion or failure;
+- after cancellation;
+- during navigation.
 
-### Trust and fallback
-
-Visualization is decorative and untrusted. Executor behavior must not depend on preload state or a value returned by page script. This restriction covers:
-
-- executor decisions;
-- epoch checks;
-- geometry validation;
-- target fingerprints;
-- policy results;
-- postconditions.
-
-If preload or current-document bootstrap fails, set visualization to `off`. Emit one counted warning and continue the browser action. Page script may suppress, imitate, or alter the cursor without gaining browser capability.
-
-### Installation
-
-After the pinned-interface preflight passes, add a fixed versioned preload during `registerPage`. Store its registration identifier.
-Install the preload once. Use a global version guard to prevent duplicate roots and listeners.
-Bootstrap the already-loaded document once when visualization is enabled.
-
-The preload accepts compact data only:
-
-```ts
-interface VisualCommand {
-  version: 1;
-  actionId: string;
-  kind: "move" | "pulse" | "hide";
-  target: { x: number; y: number };
-  durationMs: number;
-  documentEpoch: number;
-}
-```
-
-It renders a fixed, `pointer-events: none`, accessibility-hidden overlay. A closed shadow root reduces style collisions but does not provide integrity.
-
-### Sequence
-
-1. Resolve and scroll the target into the visual viewport.
-2. Read geometry through the trusted driver.
-3. Send the visual command.
-4. At the animation endpoint, re-resolve the target and read driver geometry again.
-5. Verify overlap and a center delta of at most 4 CSS pixels.
-6. If the target moved, re-resolve and re-animate once.
-7. After a second movement, return `target_moved` without clicking.
-8. Pulse, click, and clean up on completion, failure, cancellation, or navigation.
-
-Use visual-viewport CSS pixels for all coordinate values. Do not mix them with:
-
-- screenshot coordinates;
-- device-pixel coordinates;
-- layout-viewport coordinates.
-
-Only driver-side bookkeeping may overlap cursor motion. Page reads must not run under the same writer lock during animation.
-
-Modes:
-
-| Mode | Behavior | Default |
-|---|---|---|
-| `off` | No page visualization | Headless and unattended sessions |
-| `instant` | Pulse without travel delay | Debugging |
-| `animated` | Bounded cursor motion | Explicit user-visible sessions |
-
-Respect reduced-motion and hidden-page state. Those states use `instant`. Animation has a hard deadline and never blocks cancellation or teardown.
+Cursors in sibling tabs retain separate preload and document-epoch state.
 
 ## Minimum benchmark program
 
@@ -483,7 +315,7 @@ Pin the following benchmark inputs:
 - machine;
 - machine-load envelope.
 
-Phase 0 runs only three arms:
+The initial benchmark uses three arms:
 
 1. eight standalone read calls versus one eight-step plan;
 2. eight serial DOM reads versus one compact evaluation returning equivalent data;
@@ -507,13 +339,13 @@ Record only values observable in this repository:
 - output bytes;
 - timeout, stale-target, and unresolved-request counts.
 
-Phase 0 acceptance:
+Initial acceptance:
 
 - The eight-step plan uses one outer tool invocation rather than eight.
 - The compact read uses one page evaluation rather than eight and returns equivalent values.
 - Report measured latency without a preset percentage win.
 - Every intercepted request receives one terminal resolution.
-- The non-resolving audit sink cannot stall navigation beyond the `250ms` audit bound plus measured scheduling error.
+- A non-resolving audit sink does not delay request-resolution dispatch; report measured scheduling overhead separately.
 
 Deferred benchmarks may cover:
 
@@ -525,177 +357,6 @@ Deferred benchmarks may cover:
 - larger percentile programs.
 
 These benchmarks do not block the initial executor.
-
-## Integration plan
-
-### Phase 0: compatibility and measurement
-
-Create the pinned-interface table and runtime probes. Add the deterministic fixture and the three minimum benchmark arms.
-
-Acceptance: every depended-on interface is verified or removed; each arm completes within its budget and reports reproducible attribution.
-
-### Phase 1: shared operation primitives
-
-Extract the following policy-aware operation primitives from `headed-browser-tools.ts`:
-
-- navigation;
-- read;
-- action;
-- target resolution;
-- timeout;
-- redaction;
-- audit;
-- result shaping.
-
-Keep the following existing behavior:
-
-- tool names;
-- schemas;
-- approvals;
-- registration tests;
-- observable behavior.
-
-Add the following safeguards and test:
-
-- the `250ms` audit bound;
-- queued fallback;
-- exactly-once interception guards;
-- a never-resolving audit-sink test.
-
-Acceptance requires the following:
-
-- existing tests remain;
-- standalone operations produce equivalent results and policy decisions;
-- no registered tool invokes another registered tool.
-
-### Phase 2: tab state and serialization
-
-Extend `HeadedSession` with the following per-tab capabilities:
-
-- epochs;
-- snapshot identities;
-- writer locks;
-- bounded queues;
-- active-operation leases.
-
-Invalidate refs on the following changes:
-
-- document changes;
-- history changes;
-- tab-generation changes;
-- pull-time fingerprint changes.
-
-Acceptance requires observable-operation tests for:
-
-- lock timeout;
-- queue bound;
-- cancellation;
-- reentrancy;
-- idle-sweep;
-- competing caller;
-- stale refs.
-
-### Phase 3: deterministic `headed_plan`
-
-Register one write-approved `headed_plan` backed by `BrowserPlanExecutor`. Add the following capabilities:
-
-- closed schemas;
-- limits;
-- approval rendering;
-- fail-fast behavior;
-- cancellation;
-- bounded outputs;
-- progress;
-- per-step audit context.
-
-Acceptance requires the following:
-
-- a ten-step plan uses one outer invocation;
-- the plan executes in order;
-- the plan preserves each enumerated policy gate;
-- the plan returns typed ordered outcomes without browser-native handles.
-
-### Phase 4: optional cursor visualization
-
-Proceed only after Phase 0 verifies preload support on the pinned Firefox/BiDi path. Add the following capabilities:
-
-- one versioned preload per page;
-- current-document bootstrap;
-- `off`, `instant`, and `animated` modes;
-- driver-side geometry validation;
-- one bounded reposition;
-- cleanup.
-
-Acceptance requires all of the following:
-
-- preload failure degrades to `off`;
-- repeated setup creates one overlay;
-- sibling tabs remain independent;
-- visualization never influences action correctness;
-- geometry differs by no more than 4 CSS pixels before click;
-- target movement cancels after one retry.
-
-### Phase 5: benchmark-gated throughput
-
-Benchmark read concurrency, interception refinements, and warm owned-session reuse separately. Keep WebDriver BiDi read concurrency at one until evidence supports a fixed higher cap.
-
-Acceptance requires all of the following:
-
-- an enabled optimization has a pinned benchmark;
-- no policy regression occurs;
-- no state leak occurs;
-- an explicit rollback to the prior default exists.
-
-## Required behavioral tests
-
-Retain the existing tests for:
-
-- registration;
-- schema;
-- approval;
-- router.
-
-Add tests for the following:
-
-- full-plan validation before effects;
-- ordered execution and typed bounded outputs;
-- approval rendering and prompt-bound rejection;
-- each enumerated policy and feature gate;
-- allowed and denied redirects;
-- atomic click-navigation synchronization;
-- pull-time fingerprint mismatch after each of these changes:
-  - document change;
-  - history change;
-  - re-render;
-  - tab change.
-- writer behavior for each of the following:
-  - reentrancy;
-  - FIFO queueing;
-  - queue rejection;
-  - lock timeout.
-- ordinary-tool and plan non-interleaving;
-- cancellation between steps and during an uninterruptible operation;
-- tab-scoped timeout containment and sibling-tab survival;
-- no observed late mutation across a stated trial count, with the upper confidence bound reported;
-- progress ordering, terminal cutoff, and redaction;
-- audit behavior for each of the following:
-  - timeout;
-  - queued fallback;
-  - warning;
-  - flush;
-  - exactly-once resolution.
-- preload behavior for each of the following:
-  - compatibility;
-  - installation;
-  - deduplication;
-  - failure fallback;
-  - target movement;
-  - reduced motion;
-  - hidden page;
-  - cleanup.
-- secret canaries in known redaction categories.
-
-Canaries detect regressions in known categories only. They do not prove sound redaction for arbitrary web content.
 
 ## Upstream proposals
 
@@ -738,7 +399,7 @@ browser-tools does not provide that boundary.
 
 ### Speculative and standby agents
 
-This proposal leaves planner fan-out outside browser-tools. A safe coordinator belongs in OMP orchestration and uses three planes:
+This upstream proposal leaves planner fan-out outside browser-tools. A safe coordinator belongs in OMP orchestration and uses three planes:
 
 - observation;
 - reasoning;

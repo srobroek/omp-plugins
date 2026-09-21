@@ -69,6 +69,18 @@ describe("headed browser configuration", () => {
 		expect(config.navigationTimeoutMs).toBe(45000);
 		expect(config.warnings[0]).toContain("rejected invalid navigationTimeoutMs");
 	});
+
+	test("resolves cursor mode through stored settings and per-call overrides", async () => {
+		const defaults = await resolveConfig(process.cwd(), {}, async () => ({ values: {}, source: "test", warnings: [] }));
+		expect(defaults.cursorMode).toBe("auto");
+		const stored = await resolveConfig(process.cwd(), {}, async () => ({ values: { cursorMode: "off" }, source: "test", warnings: [] }));
+		expect(stored.cursorMode).toBe("off");
+		const perCall = await resolveConfig(process.cwd(), { cursorMode: "animated" }, async () => ({ values: { cursorMode: "off" }, source: "test", warnings: [] }));
+		expect(perCall.cursorMode).toBe("animated");
+		const rejected = await resolveConfig(process.cwd(), { cursorMode: "sparkle" }, async () => ({ values: { cursorMode: "instant" }, source: "test", warnings: [] }));
+		expect(rejected.cursorMode).toBe("instant");
+		expect(rejected.warnings.join(" ")).toContain("rejected invalid cursorMode");
+	});
 	test("reads lock settings and project overrides while filtering untrusted driver paths", async () => {
 		const root = await temporary();
 		const agentDir = join(root, "agent");
