@@ -22,12 +22,44 @@ export type VerifyResult = {
 	error?: string;
 };
 
+const PROBE_TIMEOUT_MS = 5_000;
+
+/**
+ * Argument sets tried in order until one exits 0, matching the four quality
+ * tools and `sniff-install-tool`.
+ *
+ * No single flag covers these binaries: most answer `--version`; `go` answers
+ * `version` and rejects `--version`; `gofmt` has no version verb and answers
+ * only help. A generic `--version` probe would report `go` and `gofmt` missing
+ * and silently skip their checks.
+ */
+const PROBE_ARGS: readonly (readonly string[])[] = [["--version"], ["version"], ["-h"]];
+
+/**
+ * Whether `bin` can actually RUN, not merely resolve.
+ *
+ * `command -v` succeeds for a mise shim whose tool is not installed, so a
+ * resolve-only check counted a shim as available and the step then failed on
+ * execution -- reporting a verification FAILURE where the truth was a missing
+ * tool. Measured on one machine: mypy, pylint and vulture each resolve and each
+ * fail with `mise ERROR No version is set for shim`.
+ */
 function have(bin: string): boolean {
-	const proc = Bun.spawnSync(["sh", "-c", `command -v ${JSON.stringify(bin)}`], {
-		stdout: "pipe",
-		stderr: "pipe",
-	});
-	return proc.exitCode === 0;
+	for (const args of PROBE_ARGS) {
+		try {
+			const proc = Bun.spawnSync([bin, ...args], {
+				// Closed stdin, so a probe never waits on input.
+				stdin: new Uint8Array(),
+				stdout: "pipe",
+				stderr: "pipe",
+				timeout: PROBE_TIMEOUT_MS,
+			});
+			if (proc.exitCode === 0 && proc.exitedDueToTimeout !== true) return true;
+		} catch {
+			return false;
+		}
+	}
+	return false;
 }
 
 function installedPythonTool(bin: string, cwd: string): string | null {
