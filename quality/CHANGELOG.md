@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.3.1](https://github.com/srobroek/omp-plugins/compare/quality--v1.3.0...quality--v1.3.1) (2026-09-21)
+
+
+### Bug Fixes
+
+* **quality:** check that a tool RUNS, not merely that it resolves ([#441](https://github.com/srobroek/omp-plugins/issues/441)) ([e8eb2bc](https://github.com/srobroek/omp-plugins/commit/e8eb2bc91e2e42d5c278cd61675ea367e7d56a8c))
+
 ## [1.3.0](https://github.com/srobroek/omp-plugins/compare/quality--v1.2.0...quality--v1.3.0) (2026-09-21)
 
 

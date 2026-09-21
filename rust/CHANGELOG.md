@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.5](https://github.com/srobroek/omp-plugins/compare/rust--v0.6.4...rust--v0.6.5) (2026-09-21)
+
+
+### Bug Fixes
+
+* **quality:** check that a tool RUNS, not merely that it resolves ([#441](https://github.com/srobroek/omp-plugins/issues/441)) ([e8eb2bc](https://github.com/srobroek/omp-plugins/commit/e8eb2bc91e2e42d5c278cd61675ea367e7d56a8c))
+
 ## [0.6.4](https://github.com/srobroek/omp-plugins/compare/rust--v0.6.3...rust--v0.6.4) (2026-09-19)
 
 

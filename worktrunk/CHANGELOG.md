@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.2.1](https://github.com/srobroek/omp-plugins/compare/worktrunk--v1.2.0...worktrunk--v1.2.1) (2026-09-21)
+
+
+### Bug Fixes
+
+* **worktrunk:** judge a call by its declared target, not the session cwd ([#443](https://github.com/srobroek/omp-plugins/issues/443)) ([07c8310](https://github.com/srobroek/omp-plugins/commit/07c83103d482b3ff1747e0823103f70cd8742458))
+
 ## [1.2.0](https://github.com/srobroek/omp-plugins/compare/worktrunk--v1.1.1...worktrunk--v1.2.0) (2026-09-21)
 
 
