@@ -730,7 +730,7 @@ export default function deliveryCleanupTool(pi: ExtensionAPI): void {
 		name: "delivery_cleanup",
 		label: "Clean landed worktree and branch",
 		description:
-			"Main-agent or run-lead cleanup after bd_reconcile: resolve exact landing proof, remove one clean pushed linked worktree without force, delete its local branch with -d, independently verify absences, and write one continuation receipt. The tool performs only read-only bd show calls.",
+			"Cleanup after bd_reconcile: resolve exact landing proof, remove one clean pushed worktree identified by the receipt without force, delete its local branch with -d, record local and remote observations, and write one continuation receipt. The tool performs only read-only bd show calls; repository policy assigns actor ownership.",
 		parameters: z.object({
 			receipt: z.string().min(1).optional().describe("Path to a canonical landing receipt; omit to select the newest for this repository"),
 			pr: z.number().int().positive().optional().describe("PR number, which must equal the selected receipt"),
