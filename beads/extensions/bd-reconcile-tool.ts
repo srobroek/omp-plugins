@@ -944,13 +944,23 @@ export function resetReconcileArbiterForTests(): void {
 	Reflect.deleteProperty(globalThis, RECONCILE_ARBITER);
 }
 
-function takeRegistration(): boolean {
-	if (Reflect.get(globalThis, RECONCILE_ARBITER) === true) return false;
-	Reflect.set(globalThis, RECONCILE_ARBITER, true);
+function registrationArbiter(): WeakSet<object> {
+	const existing = Reflect.get(globalThis, RECONCILE_ARBITER);
+	if (existing instanceof WeakSet) return existing;
+	const arbiter = new WeakSet<object>();
+	Reflect.set(globalThis, RECONCILE_ARBITER, arbiter);
+	return arbiter;
+}
+
+function takeRegistration(pi: ExtensionAPI): boolean {
+	const arbiter = registrationArbiter();
+	if (arbiter.has(pi)) return false;
+	arbiter.add(pi);
 	return true;
 }
-function releaseRegistration(): void {
-	Reflect.deleteProperty(globalThis, RECONCILE_ARBITER);
+
+function releaseRegistration(pi: ExtensionAPI): void {
+	registrationArbiter().delete(pi);
 }
 
 export function reconcileApproval(toolCall: unknown): "read" | "exec" {
@@ -959,7 +969,7 @@ export function reconcileApproval(toolCall: unknown): "read" | "exec" {
 }
 
 export default function bdReconcileTool(pi: ExtensionAPI): void {
-	if (!takeRegistration()) return;
+	if (!takeRegistration(pi)) return;
 	const z = pi.zod;
 	try {
 		pi.registerTool({
@@ -990,7 +1000,7 @@ export default function bdReconcileTool(pi: ExtensionAPI): void {
 			},
 		});
 	} catch (error) {
-		releaseRegistration();
+		releaseRegistration(pi);
 		throw error;
 	}
 }

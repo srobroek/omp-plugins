@@ -544,6 +544,28 @@ describe("tool registration and committed bundle", () => {
 		expect(registered[0]?.approval).toBe(reconcileApproval);
 	});
 
+	test("independent extension API instances each register once", () => {
+		const registered: Array<Record<string, unknown>> = [];
+		const chain: Record<string, unknown> = {};
+		chain.optional = () => chain;
+		chain.describe = () => chain;
+		const api = () => ({
+			zod: {
+				string: () => chain,
+				boolean: () => chain,
+				object: () => chain,
+			},
+			registerTool: (tool: Record<string, unknown>) => registered.push(tool),
+		});
+		const first = api();
+		const second = api();
+		bdReconcileTool(first as never);
+		bdReconcileTool(first as never);
+		bdReconcileTool(second as never);
+		bdReconcileTool(second as never);
+		expect(registered).toHaveLength(2);
+	});
+
 	test("manifest keeps the reconcile bundle last and the committed bundle matches a focused rebuild", () => {
 		const packageRoot = resolve(import.meta.dir, "..");
 		const manifest = JSON.parse(readFileSync(join(packageRoot, "package.json"), "utf8"));

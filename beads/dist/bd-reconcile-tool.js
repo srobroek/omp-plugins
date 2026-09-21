@@ -1347,21 +1347,30 @@ async function reconcileReceipts(params, toolCallId, cwd, env = process.env, dep
 function resetReconcileArbiterForTests() {
   Reflect.deleteProperty(globalThis, RECONCILE_ARBITER);
 }
-function takeRegistration() {
-  if (Reflect.get(globalThis, RECONCILE_ARBITER) === true)
+function registrationArbiter() {
+  const existing = Reflect.get(globalThis, RECONCILE_ARBITER);
+  if (existing instanceof WeakSet)
+    return existing;
+  const arbiter = new WeakSet;
+  Reflect.set(globalThis, RECONCILE_ARBITER, arbiter);
+  return arbiter;
+}
+function takeRegistration(pi) {
+  const arbiter = registrationArbiter();
+  if (arbiter.has(pi))
     return false;
-  Reflect.set(globalThis, RECONCILE_ARBITER, true);
+  arbiter.add(pi);
   return true;
 }
-function releaseRegistration() {
-  Reflect.deleteProperty(globalThis, RECONCILE_ARBITER);
+function releaseRegistration(pi) {
+  registrationArbiter().delete(pi);
 }
 function reconcileApproval(toolCall) {
   const input = object(object(toolCall)?.input);
   return input?.apply === true ? "exec" : "read";
 }
 function bdReconcileTool(pi) {
-  if (!takeRegistration())
+  if (!takeRegistration(pi))
     return;
   const z = pi.zod;
   try {
@@ -1385,7 +1394,7 @@ function bdReconcileTool(pi) {
       }
     });
   } catch (error) {
-    releaseRegistration();
+    releaseRegistration(pi);
     throw error;
   }
 }
