@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.0](https://github.com/srobroek/omp-plugins/compare/safety--v0.6.8...safety--v0.7.0) (2026-09-21)
+
+
+### Features
+
+* **project-setup:** replace scaffold runtime ([#436](https://github.com/srobroek/omp-plugins/issues/436)) ([f8fd91b](https://github.com/srobroek/omp-plugins/commit/f8fd91b75ec57d667a209ba68c771a04c0501464))
+
 ## [0.6.8](https://github.com/srobroek/omp-plugins/compare/safety--v0.6.7...safety--v0.6.8) (2026-09-20)
 
 

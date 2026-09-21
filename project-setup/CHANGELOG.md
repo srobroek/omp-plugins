@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.2.0](https://github.com/srobroek/omp-plugins/compare/project-setup--v0.1.0...project-setup--v0.2.0) (2026-09-21)
+
+
+### Features
+
+* **project-setup:** replace scaffold runtime ([#436](https://github.com/srobroek/omp-plugins/issues/436)) ([f8fd91b](https://github.com/srobroek/omp-plugins/commit/f8fd91b75ec57d667a209ba68c771a04c0501464))
+
+
+### Documentation
+
+* **delivery:** align review loop limits ([#405](https://github.com/srobroek/omp-plugins/issues/405)) ([5cd2b7b](https://github.com/srobroek/omp-plugins/commit/5cd2b7b2589aa27edc1d0c549a7f533171b672a4))
+
 ## 0.1.0
 
 ### Features
@@ -21,4 +33,3 @@
 * OSV scan failure preserved: the SARIF upload still runs, but `continue-on-error` is gone
 * `install_agents_index.py --agents` for a brownfield `AGENTS.md` symlink; the installer
   never writes through the link
-
