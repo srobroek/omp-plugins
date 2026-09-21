@@ -583,11 +583,15 @@ describe("close-out proof", () => {
 		expect(report.refusals.some((item) => item.reason.includes("authoritative repo.nameWithOwner"))).toBe(true);
 	});
 
-	test("resolves the asserted remote through current Git configuration before querying it", async () => {
+	test.each([
+		["HTTPS", "https://github.com/srobroek/omp-plugins.git"],
+		["SSH URL", "ssh://git@github.com/srobroek/omp-plugins.git"],
+		["SCP-style SSH", "git@github.com:srobroek/omp-plugins.git"],
+		["Git protocol without suffix", "git://github.com/srobroek/omp-plugins"],
+	] as const)("accepts a configured %s remote only after repository identity binding", async (_label, configuredUrl) => {
 		const root = temporary("configured-remote");
 		writeReceipt(root, receipt());
 		const harness = new Harness(join(root, "repo"), exactBead());
-		const configuredUrl = "ssh://git@github.com/srobroek/omp-plugins.git";
 		const calls: string[][] = [];
 		const command: CommandSpawn = async (_executable, argv) => {
 			calls.push([...argv]);
@@ -605,6 +609,30 @@ describe("close-out proof", () => {
 		const remoteQuery = calls.find((argv) => argv[0] === "ls-remote");
 		expect(remoteQuery).toEqual(["ls-remote", "--exit-code", "--heads", "--", configuredUrl, "refs/heads/feature/reconcile"]);
 		expect(remoteQuery).not.toContain("origin");
+	});
+
+	test.each([
+		["a second empty repository", "https://github.com/attacker/empty.git", "configured remote nameWithOwner"],
+		["a different forge", "https://gitlab.com/srobroek/omp-plugins.git", "configured remote forge"],
+	] as const)("refuses %s before accepting its absent branch", async (_label, configuredUrl, expected) => {
+		const root = temporary("foreign-configured-remote");
+		writeReceipt(root, receipt());
+		const harness = new Harness(join(root, "repo"), exactBead());
+		const calls: string[][] = [];
+		const command: CommandSpawn = async (_executable, argv) => {
+			calls.push([...argv]);
+			if (argv[0] === "remote") return { ok: true, exitCode: 0, stdout: `${configuredUrl}\n`, stderr: "" };
+			if (argv[0] === "ls-remote") return { ok: false, exitCode: 2, stdout: "", stderr: "" };
+			if (argv[0] === "show-ref") return { ok: false, exitCode: 1, stdout: "", stderr: "" };
+			if (argv[0] === "worktree") {
+				return { ok: true, exitCode: 0, stdout: `worktree ${harness.cwd}\nHEAD ${HEAD}\nbranch refs/heads/main\n`, stderr: "" };
+			}
+			return { ok: false, exitCode: 2, stdout: "", stderr: `unexpected git argv: ${argv.join(" ")}` };
+		};
+		const report = await reconcile(root, harness, {}, { observeCleanup: undefined, cleanupCommand: command });
+		expect(closeOperations(report.operations)).toEqual([]);
+		expect(report.refusals.some((item) => item.reason.includes(expected))).toBe(true);
+		expect(calls).toEqual([["remote", "get-url", "origin"]]);
 	});
 
 	test("refuses cleanup proof when the asserted remote is not currently configured", async () => {

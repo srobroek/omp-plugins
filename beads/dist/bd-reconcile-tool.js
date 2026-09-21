@@ -1093,7 +1093,46 @@ function observationFailures(receipt, observation) {
   }
   return failures;
 }
-async function defaultObserveCleanup(receipt, cwd, env, deadline, command = spawnExecutable) {
+function resolvedRemoteIdentity(value) {
+  let host;
+  let path;
+  if (/^[A-Za-z][A-Za-z0-9+.-]*:\/\//.test(value)) {
+    try {
+      const parsed = new URL(value);
+      if (parsed.search !== "" || parsed.hash !== "")
+        return;
+      host = parsed.hostname.toLowerCase();
+      path = parsed.pathname;
+    } catch {
+      return;
+    }
+  } else {
+    const scp = /^(?:[^@\s/]+@)?([^:\s/]+):(.+)$/.exec(value);
+    if (scp === null)
+      return;
+    host = (scp[1] ?? "").toLowerCase();
+    path = scp[2] ?? "";
+  }
+  const forge = host === "github.com" ? "github" : host === "gitlab.com" ? "gitlab" : undefined;
+  if (forge === undefined)
+    return;
+  const rawSegments = path.replace(/^\/+|\/+$/g, "").replace(/\.git$/, "").split("/");
+  if (rawSegments.length < 2 || forge === "github" && rawSegments.length !== 2)
+    return;
+  const segments = [];
+  for (const segment of rawSegments) {
+    try {
+      const decoded = decodeURIComponent(segment);
+      if (decoded === "" || decoded === "." || decoded === ".." || decoded.includes("/") || decoded.includes("\\"))
+        return;
+      segments.push(decoded);
+    } catch {
+      return;
+    }
+  }
+  return { forge, nameWithOwner: segments.join("/") };
+}
+async function defaultObserveCleanup(receipt, authoritativeNameWithOwner, cwd, env, deadline, command = spawnExecutable) {
   if (!/^[A-Za-z0-9][A-Za-z0-9._/-]*$/.test(receipt.repo.remote)) {
     return { failure: requirement("repo.remote", receipt.repo.remote, "a safe configured git remote name") };
   }
@@ -1108,6 +1147,16 @@ async function defaultObserveCleanup(receipt, cwd, env, deadline, command = spaw
     return { failure: `git remote get-url returned ${configuredUrls.length} URLs for ${JSON.stringify(receipt.repo.remote)}, expected exactly one` };
   }
   const remoteUrl = configuredUrls[0];
+  const remoteIdentity = resolvedRemoteIdentity(remoteUrl);
+  if (remoteIdentity === undefined) {
+    return { failure: requirement("configured remote URL", remoteUrl, "a parseable github.com or gitlab.com repository URL") };
+  }
+  if (remoteIdentity.forge !== receipt.repo.forge) {
+    return { failure: requirement("configured remote forge", remoteIdentity.forge, JSON.stringify(receipt.repo.forge)) };
+  }
+  if (remoteIdentity.nameWithOwner !== authoritativeNameWithOwner) {
+    return { failure: requirement("configured remote nameWithOwner", remoteIdentity.nameWithOwner, JSON.stringify(authoritativeNameWithOwner)) };
+  }
   const branchRef = `refs/heads/${receipt.branch.name}`;
   const [remote, local, worktrees] = await Promise.all([
     command("git", ["ls-remote", "--exit-code", "--heads", "--", remoteUrl, branchRef], cwd, env, deadline),
@@ -1456,7 +1505,7 @@ async function reconcileReceiptsUnlocked(params, toolCallId, cwd, env, deps, dea
       continue;
     }
     if (receipt.outcome === "landed") {
-      const cleanup = deps.observeCleanup === undefined ? await defaultObserveCleanup(receipt, cwd, bdEnv, deadline, deps.cleanupCommand) : await deps.observeCleanup(receipt, cwd, bdEnv, deadline);
+      const cleanup = deps.observeCleanup === undefined ? await defaultObserveCleanup(receipt, observedProof.observation.repo.nameWithOwner, cwd, bdEnv, deadline, deps.cleanupCommand) : await deps.observeCleanup(receipt, cwd, bdEnv, deadline);
       cleanupFailuresByReceipt.set(source.path, cleanupObservationFailures(cleanup.observation, cleanup.failure));
     }
     authoritativeSources.push(source);
