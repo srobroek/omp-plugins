@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.1.4](https://github.com/srobroek/omp-plugins/compare/beads--v2.1.3...beads--v2.1.4) (2026-09-21)
+
+
+### Bug Fixes
+
+* **adr:** report a failed git add instead of swallowing it ([#453](https://github.com/srobroek/omp-plugins/issues/453)) ([fa07268](https://github.com/srobroek/omp-plugins/commit/fa07268616d260f25ae60c059ddae0666d9e807e))
+
 ## [2.1.3](https://github.com/srobroek/omp-plugins/compare/beads--v2.1.2...beads--v2.1.3) (2026-09-21)
 
 

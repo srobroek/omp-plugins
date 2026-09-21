@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.0](https://github.com/srobroek/omp-plugins/compare/project-setup--v0.2.0...project-setup--v0.3.0) (2026-09-21)
+
+
+### Features
+
+* **project-setup:** accessibility and internationalisation assets ([#452](https://github.com/srobroek/omp-plugins/issues/452)) ([199222b](https://github.com/srobroek/omp-plugins/commit/199222be936f78db0ebd9af5bda291d8a7e4073f))
+
 ## [0.2.0](https://github.com/srobroek/omp-plugins/compare/project-setup--v0.1.0...project-setup--v0.2.0) (2026-09-21)
 
 
