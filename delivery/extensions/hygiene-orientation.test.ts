@@ -1,8 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import hygieneOrientation, { parsePorcelainPaths, scanHygiene } from "./hygiene-orientation";
+import { receiptDirectory, repoKey } from "./landing-receipt";
 
 const temp = () => mkdtempSync(join(tmpdir(), "delivery-hygiene-"));
 const git = (cwd: string, ...args: string[]) => Bun.spawnSync(["git", "-c", "core.hooksPath=/dev/null", "-c", "commit.gpgsign=false", "-c", "user.name=Test", "-c", "user.email=test@example.com", ...args], { cwd, stdout: "pipe", stderr: "pipe", timeout: 2000 });
@@ -43,5 +44,19 @@ describe("delivery hygiene orientation", () => {
     const cwd = repo(); const before = readFileSync(join(cwd, "tracked.txt"), "utf8");
     scanHygiene(cwd);
     expect(readFileSync(join(cwd, "tracked.txt"), "utf8")).toBe(before);
+  });
+  test("hostile receipt entries are ambiguous", () => {
+    const cwd = repo(); const agent = process.env.PI_CODING_AGENT_DIR as string; const key = repoKey(cwd); if (!key) throw new Error("missing repo key");
+    const dir = join(agent, "receipts", key); mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "oversize.json"), "x".repeat(1024 * 1024 + 1));
+    symlinkSync(join(cwd, "tracked.txt"), join(dir, "linked.json"));
+    const fifo = join(dir, "pipe.json"); Bun.spawnSync(["mkfifo", fifo]);
+    const result = scanHygiene(cwd);
+    expect(result.status).toBe("ambiguous");
+    const receipt = result.findings.find(f => f.kind === "receipts");
+    expect(receipt?.paths).toEqual(expect.arrayContaining([join(dir, "oversize.json"), join(dir, "linked.json"), fifo]));
+  });
+  test("receipt directory falls back to platform home when HOME is unset", () => {
+    expect(receiptDirectory({ HOME: "", PI_CODING_AGENT_DIR: "" })).toContain(".omp/receipts");
   });
 });
