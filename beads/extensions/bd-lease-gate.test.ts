@@ -185,3 +185,20 @@ describe("bdLeaseGate", () => {
 		}
 	});
 });
+
+test("passes one shared deadline to each post-claim stamp", async () => {
+	const deadlines: Array<number | undefined> = [];
+	setBdRunForTests(async (_argv, _cwd, _env, deadline) => {
+		deadlines.push(deadline);
+		return { exitCode: 0, stdout: "", stderr: "" };
+	});
+	try {
+		const { toolCall, toolResult } = handlers();
+		await toolCall({ toolName: "bash", toolCallId: "budget", input: { command: "bd update omp-1 omp-2 --claim", cwd: "/claiming/repo" } });
+		await toolResult(claimResult("budget", '{"id":"omp-1"}\n{"id":"omp-2"}'));
+		expect(deadlines).toHaveLength(2);
+		expect(deadlines.every(deadline => typeof deadline === "number")).toBe(true);
+	} finally {
+		setBdRunForTests(null);
+	}
+});

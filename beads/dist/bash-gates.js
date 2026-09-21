@@ -566,15 +566,21 @@ function blockReason(input) {
   return `${input.cause}; ${input.resolution}. Disable locally: set plugins.${plugin}.gates.${input.gate}.enabled=false`;
 }
 // extensions/bd-close-gate.ts
-var TIMEOUT_MS = 1e4;
+var TIMEOUT_MS = 25000;
 var injectedRun = null;
+function timeoutError() {
+  return new Error("bd show lookup timed out; gate types remain unverified");
+}
 function tokenize2(command) {
   return tokenizeShell(command).map(({ value }) => value);
 }
 function denyReason(gateIds) {
   return `blocked by beads (a gate bead is resolved, never closed): ${gateIds.join(", ")} ` + "is a gate. `bd close` on it flips status to closed and does unblock the waiting " + "bead, so nothing fails loudly -- but no gate resolution happens. A `human` gate " + "loses the decision it stood for, and a `timer`/`gh:run`/`gh:pr`/`bead` gate is " + "asserted satisfied without anything evaluating it. Run `bd gate check` to have the " + "conditions evaluated, or `bd gate resolve <gate-id>` for the manual human answer; " + "then `bd close <step-id> --reason ...` on the step the gate blocked. `--force` does " + "not lift this guard: it forces the same unrecorded close.";
 }
-async function asyncShowRun(argv, cwd) {
+async function asyncShowRun(argv, cwd, deadline = Date.now() + TIMEOUT_MS) {
+  const remaining = deadline - Date.now();
+  if (remaining <= 0)
+    throw timeoutError();
   const proc = Bun.spawn(argv, {
     cwd,
     stdout: "pipe",
@@ -586,24 +592,30 @@ async function asyncShowRun(argv, cwd) {
     const timeout = new Promise((_, reject) => {
       timer = setTimeout(() => {
         proc.kill("SIGKILL");
-        reject(new Error(`bd show lookup timed out after ${TIMEOUT_MS}ms`));
-      }, TIMEOUT_MS);
+        reject(timeoutError());
+      }, remaining);
     });
     const result = await Promise.race([
       Promise.all([proc.exited, new Response(proc.stdout).text()]),
       timeout
     ]);
+    if (Date.now() >= deadline)
+      throw timeoutError();
     return { exitCode: result[0], stdout: result[1] };
   } finally {
     if (timer !== undefined)
       clearTimeout(timer);
   }
 }
-async function gateIdsAmongAsync(ids, dbArgs, cwd) {
+async function gateIdsAmongAsync(ids, dbArgs, cwd, deadline) {
   if (ids.length === 0)
     return [];
-  const run = injectedRun === null ? asyncShowRun : async (argv, dir) => injectedRun?.(argv, dir) ?? asyncShowRun(argv, dir);
-  const result = await run(["bd", ...dbArgs, "show", ...ids, "--json"], cwd);
+  if (Date.now() >= deadline)
+    throw timeoutError();
+  const run = injectedRun === null ? asyncShowRun : async (argv, dir, limit) => injectedRun?.(argv, dir, limit) ?? asyncShowRun(argv, dir, limit);
+  const result = await run(["bd", ...dbArgs, "show", ...ids, "--json"], cwd, deadline);
+  if (Date.now() >= deadline)
+    throw timeoutError();
   if (result.exitCode !== 0)
     return [];
   let parsed;
@@ -628,21 +640,22 @@ async function gateIdsAmongAsync(ids, dbArgs, cwd) {
   }
   return gates;
 }
-async function decideBdCloseParsed(parsed, cwd = process.cwd()) {
+async function decideBdCloseParsed(parsed, cwd = process.cwd(), deadline) {
+  const sharedDeadline = deadline ?? Date.now() + TIMEOUT_MS;
   for (const position of parsed.commands) {
     const invocations = closeInvocations(position.raw);
     if (invocations.length === 0)
       continue;
     const gates = new Set;
     for (const invocation of invocations) {
-      for (const id of await gateIdsAmongAsync(invocation.ids, invocation.dbArgs, cwd))
+      for (const id of await gateIdsAmongAsync(invocation.ids, invocation.dbArgs, cwd, sharedDeadline))
         gates.add(id);
     }
     if (gates.size > 0)
       return { block: true, reason: denyReason([...gates]) };
   }
   for (const child of parsed.nested) {
-    const decision = await decideBdCloseParsed(child, cwd);
+    const decision = await decideBdCloseParsed(child, cwd, sharedDeadline);
     if (decision)
       return decision;
   }
@@ -979,6 +992,7 @@ var STEAL_NAME = "omp-embedded-write-steal.lock";
 var LEASE_MS = 120000;
 var RENEW_MS = 20000;
 var WAIT_MS = 20000;
+var ACQUISITION_TIMEOUT_MS = 25000;
 var POLL_MS = 20;
 var leaseMs = LEASE_MS;
 var renewMs = RENEW_MS;
@@ -1411,11 +1425,12 @@ async function decideEmbeddedWrite(parsed, event, ctx) {
     const unique = [...new Set(targets)];
     if (unique.length === 0)
       return;
+    const deadline = Date.now() + ACQUISITION_TIMEOUT_MS;
     const pending = unique.map((store) => ({ store, held: false, released: false }));
     const existing = activeHolds.get(event.toolCallId);
     activeHolds.set(event.toolCallId, existing === undefined ? pending : [...existing, ...pending]);
     for (const current of pending) {
-      const got = await hold(current.store, event.toolCallId);
+      const got = await hold(current.store, event.toolCallId, Math.max(0, deadline - Date.now()));
       if (got.kind === "failed") {
         for (const pendingHold of pending) {
           pendingHold.released = true;

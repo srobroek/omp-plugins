@@ -36,11 +36,12 @@ import { leadingCdCwd, type ParsedCommand } from "./shell-command.ts";
  * the claim it is anchoring -- and would then queue on that other store's lock.
  */
 
-const TIMEOUT_MS = 10_000;
+/** A tool_result has a 30,000 ms budget; leave 5,000 ms for every stamp and dispatch. */
+const TIMEOUT_MS = 25_000;
 /** Cheap prefilter: never spawn on a command that cannot be a claim. */
 const PREFILTER = /\bbd\b[\s\S]{0,400}?--claim\b/;
 const BD_ID = /^[A-Za-z][A-Za-z0-9]*(?:-[A-Za-z0-9]+)+$/;
-export type BdRun = (argv: string[], cwd: string, env: NodeJS.ProcessEnv) => Promise<{ exitCode: number; stdout: string; stderr?: string }> | { exitCode: number; stdout: string; stderr?: string };
+export type BdRun = (argv: string[], cwd: string, env: NodeJS.ProcessEnv, deadline?: number) => Promise<{ exitCode: number; stdout: string; stderr?: string }> | { exitCode: number; stdout: string; stderr?: string };
 
 let injectedRun: BdRun | null = null;
 
@@ -106,7 +107,6 @@ export function decideLeaseClaim(parsed: ParsedCommand, event: ToolCallEvent, ct
 		pendingClaims.set(event.toolCallId, { cwd: leadingCdCwd(command, inputCwd), env: environmentForInput(event.input) });
 	} catch { /* fail closed at parser layer */ }
 }
-
 export default function bdLeaseGate(pi: ExtensionAPI): void {
 	pi.on("tool_result", async (event: ToolResultEvent) => {
 		const claim = pendingClaims.get(event.toolCallId);
@@ -118,16 +118,22 @@ export default function bdLeaseGate(pi: ExtensionAPI): void {
 			if (event.isError || bashExitCode(event) !== 0) return;
 			const ids = claimedIds(text);
 			if (ids.length === 0) return;
+			const deadline = Date.now() + TIMEOUT_MS;
 			const run = injectedRun ?? defaultRun;
 			const host = hostname().split(".")[0] ?? "localhost";
 			const advisories: string[] = [];
 			for (const id of ids) {
+				if (Date.now() >= deadline) {
+					advisories.push(stampFailure(id, "stamp deadline expired"));
+					continue;
+				}
 				const stamped = await withEmbeddedWriteLock(cwd, event.toolCallId, async () => {
 					try {
-						const result = await run(anchorArgs(id, host, process.pid), cwd, env);
+						const result = await run(anchorArgs(id, host, process.pid), cwd, env, deadline);
+						if (Date.now() >= deadline || result.exitCode === 124) return stampFailure(id, "stamp deadline expired");
 						return result.exitCode === 0 ? undefined : stampFailure(id, `bd exited ${result.exitCode}`, result.stderr);
 					} catch (error) { return stampFailure(id, "bd threw", error instanceof Error ? error.message : String(error)); }
-				}, env);
+				}, env, deadline);
 				if (stamped.kind === "failed") advisories.push(stampFailure(id, "the embedded write lock refused the stamp", stamped.reason));
 				else if (stamped.value !== undefined) advisories.push(stamped.value);
 			}
@@ -160,15 +166,18 @@ function advisoryResult(event: ToolResultEvent, text: string): { content: ToolRe
  * inside the lease, but the invariant worth keeping is simple rather than arithmetic:
  * no writer this plugin owns blocks the loop while holding the lock.
  */
-async function defaultRun(argv: string[], cwd: string, env: NodeJS.ProcessEnv): Promise<{ exitCode: number; stdout: string; stderr: string }> {
+async function defaultRun(argv: string[], cwd: string, env: NodeJS.ProcessEnv, deadline = Date.now() + TIMEOUT_MS): Promise<{ exitCode: number; stdout: string; stderr: string }> {
+	const remaining = deadline - Date.now();
+	if (remaining <= 0) return { exitCode: 124, stdout: "", stderr: "bd command timed out" };
 	const proc = Bun.spawn(argv, {
 		cwd,
 		stdout: "pipe",
 		stderr: "pipe",
-		timeout: TIMEOUT_MS,
+		timeout: remaining,
 		killSignal: "SIGKILL",
 		env: { ...env, BD_NO_PAGER: "1", BD_NON_INTERACTIVE: "1" },
 	});
 	const [stdout, stderr] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text()]);
+	if (Date.now() >= deadline) return { exitCode: 124, stdout: "", stderr: "bd command timed out" };
 	return { exitCode: (await proc.exited) ?? 1, stdout, stderr };
 }

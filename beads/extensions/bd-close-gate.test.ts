@@ -3,6 +3,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import {
 	type BdShowRun,
 	decideBdClose,
+	decideBdCloseParsed,
 	denyReason,
 	extractCommand,
 	findCloseInvocations,
@@ -11,6 +12,7 @@ import {
 	tokenize,
 } from "./bd-close-gate.ts";
 
+import { parse } from "./shell-command.ts";
 /** Shapes recorded from bd 1.1.2 `bd show --json`. */
 function row(id: string, issueType: string): Record<string, unknown> {
 	return { id, title: `t ${id}`, status: "open", priority: 2, issue_type: issueType };
@@ -329,6 +331,10 @@ describe("decideBdClose", () => {
 	test("fails open when the database cannot answer", () => {
 		setBdShowRunForTests(() => ({ exitCode: 1, stdout: "" }));
 		expect(decideBdClose("bd close bdp-2b")).toBeUndefined();
+	});
+	test("reports the existing uncertainty refusal when the shared deadline has lapsed", async () => {
+		setBdShowRunForTests(() => ({ exitCode: 0, stdout: JSON.stringify([row("bdp-1a", "task")]) }));
+		await expect(decideBdCloseParsed(parse("bd close bdp-1a bdp-2b"), "/repo", Date.now() - 1)).rejects.toThrow("gate types remain unverified");
 	});
 });
 

@@ -635,11 +635,12 @@ function renewLease(lock, toolCallId, token) {
     closeSync(fd);
   }
 }
-async function withEmbeddedWriteLock(cwd, toolCallId, write, env = process.env) {
+async function withEmbeddedWriteLock(cwd, toolCallId, write, env = process.env, deadline) {
   const store = embeddedStoreFor(cwd, env);
   if (store === undefined)
     return { kind: "done", value: await write() };
-  const got = await hold(store, toolCallId);
+  const waitMs = deadline === undefined ? WAIT_MS : Math.max(0, deadline - Date.now());
+  const got = await hold(store, toolCallId, waitMs);
   if (got.kind === "failed")
     return got;
   try {
@@ -666,7 +667,7 @@ var DECLARED_POOL_ALIASES = [
   "pool:orc-lead"
 ];
 var DECLARED_POOL_SET = DECLARED_POOL_ALIASES.join(",");
-var TIMEOUT_MS = 1e4;
+var TIMEOUT_MS = 25000;
 var PREFILTER = /\bbd\b[\s\S]{0,400}?(?:--claim\b|\bclaim\b|\breclaim\b)/;
 var BEAD_ID = /^[A-Za-z][A-Za-z0-9]*(?:-[A-Za-z0-9]+)+$/;
 var POOLS_FAILURE = "bd pool discipline refused: cannot establish claim.pools in the client's database for this store";
@@ -753,13 +754,13 @@ function assigneeFromShow(output, id) {
     return;
   }
 }
-async function isPooledClaim(invocation, cwd, env) {
+async function isPooledClaim(invocation, cwd, env, deadline) {
   const ids = claimIds(invocation);
   if (ids.length === 0)
     return false;
   const run = injectedRun ?? defaultRun;
   for (const id of ids) {
-    const shown = await run(["bd", ...invocation.globals, "show", id, "--json"], cwd, env);
+    const shown = await runWithDeadline(run, ["bd", ...invocation.globals, "show", id, "--json"], cwd, env, deadline);
     if (shown.exitCode !== 0)
       continue;
     const assignee = assigneeFromShow(shown.stdout, id);
@@ -767,6 +768,28 @@ async function isPooledClaim(invocation, cwd, env) {
       return true;
   }
   return false;
+}
+async function establishPool(invocation, cwd, env, deadline) {
+  const run = injectedRun ?? defaultRun;
+  const read = await runWithDeadline(run, ["bd", ...poolConfigArgs(invocation)], cwd, env, deadline);
+  if (Date.now() >= deadline)
+    return { ok: false, reason: `${POOLS_FAILURE}: handler deadline expired before the database pool set could be verified.` };
+  const existing = read.exitCode === 0 ? parsePoolConfig(read.stdout) : undefined;
+  if (existing?.source === "database" && existing.value.trim() !== "")
+    return { ok: true };
+  const store = storeName(cwd, env, invocation);
+  const written = await withEmbeddedWriteLock(cwd, `pool-discipline-${Date.now()}`, () => runWithDeadline(run, ["bd", ...poolSetArgs(invocation)], cwd, env, deadline), env, deadline);
+  if (written.kind === "failed" || written.value.exitCode !== 0) {
+    const detail = written.kind === "failed" ? written.reason : written.value.stderr?.trim();
+    return { ok: false, reason: `${POOLS_FAILURE}: key ${CLAIM_POOLS_KEY}, store ${store}${detail ? ` (${detail})` : ""}.` };
+  }
+  const verify = await runWithDeadline(run, ["bd", ...poolConfigArgs(invocation)], cwd, env, deadline);
+  if (Date.now() >= deadline)
+    return { ok: false, reason: `${POOLS_FAILURE}: handler deadline expired before the database pool set could be verified.` };
+  const after = verify.exitCode === 0 ? parsePoolConfig(verify.stdout) : undefined;
+  if (after?.source === "database" && after.value.trim() !== "")
+    return { ok: true };
+  return { ok: false, reason: `${POOLS_FAILURE}: key ${CLAIM_POOLS_KEY}, store ${store}. Readback did not show a database value.` };
 }
 function poolConfigArgs(invocation) {
   return [...invocation.globals, "config", "show", "--json"];
@@ -864,28 +887,21 @@ function valueAfter(args, flags) {
   }
   return;
 }
-async function defaultRun(argv, cwd, env) {
-  const child = Bun.spawn(argv, { cwd, env: { ...env, BD_NO_PAGER: "1", BD_NON_INTERACTIVE: "1" }, stdout: "pipe", stderr: "pipe", timeout: TIMEOUT_MS, killSignal: "SIGKILL" });
+async function defaultRun(argv, cwd, env, deadline = Date.now() + TIMEOUT_MS) {
+  const remaining = deadline - Date.now();
+  if (remaining <= 0)
+    return { exitCode: 124, stdout: "", stderr: "bd command timed out" };
+  const child = Bun.spawn(argv, { cwd, env: { ...env, BD_NO_PAGER: "1", BD_NON_INTERACTIVE: "1" }, stdout: "pipe", stderr: "pipe", timeout: remaining, killSignal: "SIGKILL" });
   const [stdout, stderr, exitCode] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+  if (Date.now() >= deadline)
+    return { exitCode: 124, stdout: "", stderr: "bd command timed out" };
   return { stdout, stderr, exitCode: exitCode ?? 1 };
 }
-async function establishPool(invocation, cwd, env) {
-  const run = injectedRun ?? defaultRun;
-  const read = await run(["bd", ...poolConfigArgs(invocation)], cwd, env);
-  const existing = read.exitCode === 0 ? parsePoolConfig(read.stdout) : undefined;
-  if (existing?.source === "database" && existing.value.trim() !== "")
-    return { ok: true };
-  const store = storeName(cwd, env, invocation);
-  const written = await withEmbeddedWriteLock(cwd, `pool-discipline-${Date.now()}`, () => run(["bd", ...poolSetArgs(invocation)], cwd, env), env);
-  if (written.kind === "failed" || written.value.exitCode !== 0) {
-    const detail = written.kind === "failed" ? written.reason : written.value.stderr?.trim();
-    return { ok: false, reason: `${POOLS_FAILURE}: key ${CLAIM_POOLS_KEY}, store ${store}${detail ? ` (${detail})` : ""}.` };
-  }
-  const verify = await run(["bd", ...poolConfigArgs(invocation)], cwd, env);
-  const after = verify.exitCode === 0 ? parsePoolConfig(verify.stdout) : undefined;
-  if (after?.source === "database" && after.value.trim() !== "")
-    return { ok: true };
-  return { ok: false, reason: `${POOLS_FAILURE}: key ${CLAIM_POOLS_KEY}, store ${store}. Readback did not show a database value.` };
+async function runWithDeadline(run, argv, cwd, env, deadline) {
+  if (Date.now() >= deadline)
+    return { exitCode: 124, stdout: "", stderr: "bd command timed out" };
+  const result = await run(argv, cwd, env, deadline);
+  return Date.now() >= deadline ? { exitCode: 124, stdout: "", stderr: "bd command timed out" } : result;
 }
 function advisoryResult(event, text) {
   return { content: [{ type: "text", text: `${text}
@@ -901,6 +917,7 @@ function bdPoolDiscipline(pi) {
       const command = commandFromInput(event.input);
       if (!command || !PREFILTER.test(command))
         return;
+      const deadline = Date.now() + TIMEOUT_MS;
       const invocations = bdInvocations(command);
       const input = event.input;
       const inputCwd = typeof input.cwd === "string" && input.cwd ? input.cwd : ctx?.cwd ?? process.cwd();
@@ -908,9 +925,12 @@ function bdPoolDiscipline(pi) {
       const env = environmentForInput(event.input);
       const claims = invocations.filter(isClaimOperation);
       for (const invocation of claims) {
-        if (!await isPooledClaim(invocation, cwd, env))
+        if (!await isPooledClaim(invocation, cwd, env, deadline)) {
+          if (Date.now() >= deadline)
+            return { block: true, reason: `${POOLS_FAILURE}: handler deadline expired before the claim's pool could be verified.` };
           continue;
-        const decision = await establishPool(invocation, cwd, env);
+        }
+        const decision = await establishPool(invocation, cwd, env, deadline);
         if (!decision.ok)
           return { block: true, reason: decision.reason };
       }
@@ -933,13 +953,22 @@ function bdPoolDiscipline(pi) {
       const ids = [...new Set(reclaim.invocations.flatMap((invocation) => reclaimedIds(output, invocation)))];
       if (ids.length === 0)
         return;
+      const deadline = Date.now() + TIMEOUT_MS;
       const run = injectedRun ?? defaultRun;
       const notices = [];
       for (const id of ids) {
         const invocation = reclaim.invocations[0];
         if (invocation === undefined)
           continue;
-        const shown = await run(["bd", ...invocation.globals, "show", id, "--json"], reclaim.cwd, reclaim.env);
+        if (Date.now() >= deadline) {
+          notices.push(`bd pool discipline advisory: reclaim restoration deadline expired before reclaimed bead ${id} could be verified; it remains unassigned.`);
+          continue;
+        }
+        const shown = await runWithDeadline(run, ["bd", ...invocation.globals, "show", id, "--json"], reclaim.cwd, reclaim.env, deadline);
+        if (shown.exitCode === 124) {
+          notices.push(`bd pool discipline advisory: reclaim restoration deadline expired before reclaimed bead ${id} could be verified; it remains unassigned.`);
+          continue;
+        }
         if (shown.exitCode !== 0 || !hasUnassignedAssignee(shown.stdout, id))
           continue;
         if (isMergeSlot(shown.stdout, id)) {
@@ -948,7 +977,7 @@ function bdPoolDiscipline(pi) {
             notices.push(NO_OWNER_ADVISORY(id));
             continue;
           }
-          const restored = await withEmbeddedWriteLock(reclaim.cwd, event.toolCallId, () => run(["bd", ...ownerArgs(invocation, id, owner)], reclaim.cwd, reclaim.env), reclaim.env);
+          const restored = await withEmbeddedWriteLock(reclaim.cwd, event.toolCallId, () => runWithDeadline(run, ["bd", ...ownerArgs(invocation, id, owner)], reclaim.cwd, reclaim.env, deadline), reclaim.env, deadline);
           if (restored.kind === "failed" || restored.value.exitCode !== 0)
             notices.push(OWNER_RESTORE_FAILURE(id, restored.kind === "failed" ? restored.reason : restored.value.stderr?.trim() ?? `bd exited ${restored.value.exitCode}`));
           continue;
@@ -958,7 +987,7 @@ function bdPoolDiscipline(pi) {
           notices.push(NO_PHASE_ADVISORY(id));
           continue;
         }
-        const restored = await withEmbeddedWriteLock(reclaim.cwd, event.toolCallId, () => run(["bd", ...phaseArgs(invocation, id, phase)], reclaim.cwd, reclaim.env), reclaim.env);
+        const restored = await withEmbeddedWriteLock(reclaim.cwd, event.toolCallId, () => runWithDeadline(run, ["bd", ...phaseArgs(invocation, id, phase)], reclaim.cwd, reclaim.env, deadline), reclaim.env, deadline);
         if (restored.kind === "failed" || restored.value.exitCode !== 0)
           notices.push(RESTAMP_FAILURE(id, restored.kind === "failed" ? restored.reason : restored.value.stderr?.trim() ?? `bd exited ${restored.value.exitCode}`));
       }

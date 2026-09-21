@@ -17,13 +17,14 @@
 import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
 import { tokenizeShell } from "./shell-tokenizer.ts";
 
-const TIMEOUT_MS = 10_000;
+/** A tool_call has a 30,000 ms budget; leave 5,000 ms for all gate lookups and dispatch. */
+const TIMEOUT_MS = 25_000;
 
 
 /** Cheap prefilter: never spawn on a command that cannot be a bd close. */
 const PREFILTER = /\bbd\b[\s\S]{0,400}?\b(?:close|done)\b/;
 
-export type BdShowRun = (argv: string[], cwd: string) => { exitCode: number; stdout: string };
+export type BdShowRun = (argv: string[], cwd: string, deadline?: number) => { exitCode: number; stdout: string };
 
 let injectedRun: BdShowRun | null = null;
 
@@ -32,15 +33,22 @@ export function setBdShowRunForTests(fn: BdShowRun | null): void {
 	injectedRun = fn;
 }
 
-function defaultRun(argv: string[], cwd: string): { exitCode: number; stdout: string } {
+function timeoutError(): Error {
+	return new Error("bd show lookup timed out; gate types remain unverified");
+}
+
+function defaultRun(argv: string[], cwd: string, deadline = Date.now() + TIMEOUT_MS): { exitCode: number; stdout: string } {
+	const remaining = deadline - Date.now();
+	if (remaining <= 0) throw timeoutError();
 	const proc = Bun.spawnSync(argv, {
 		cwd,
 		stdout: "pipe",
 		stderr: "pipe",
-		timeout: TIMEOUT_MS,
+		timeout: Math.min(TIMEOUT_MS, remaining),
 		env: { ...process.env, BD_JSON_ENVELOPE: "1", BD_NO_PAGER: "1", BD_NON_INTERACTIVE: "1" },
 	});
-	if (proc.exitCode === null) throw new Error(`bd show lookup timed out after ${TIMEOUT_MS}ms`);
+	if (proc.exitCode === null) throw timeoutError();
+	if (Date.now() >= deadline) throw timeoutError();
 	return { exitCode: proc.exitCode, stdout: proc.stdout.toString() };
 }
 
@@ -61,17 +69,19 @@ export { type CloseInvocation, closeInvocations as findCloseInvocations } from "
  *
  * `cwd` is the directory the bash tool would have run in, because bd
  * auto-discovers `.beads/*.db` from there. An explicit `-C`/`--db` on the
- * original command is replayed in `dbArgs` and still wins, exactly as it would
- * for the `bd close` this is deciding about.
+ * original command is replayed in `dbArgs` and still wins.
  */
 export function gateIdsAmong(
 	ids: string[],
 	dbArgs: string[] = [],
 	cwd: string = process.cwd(),
+	deadline = Date.now() + TIMEOUT_MS,
 ): string[] {
 	if (ids.length === 0) return [];
+	if (Date.now() >= deadline) throw timeoutError();
 	const run = injectedRun ?? defaultRun;
-	const result = run(["bd", ...dbArgs, "show", ...ids, "--json"], cwd);
+	const result = run(["bd", ...dbArgs, "show", ...ids, "--json"], cwd, deadline);
+	if (Date.now() >= deadline) throw timeoutError();
 	if (result.exitCode !== 0) return [];
 	let parsed: unknown;
 	try {
@@ -81,7 +91,6 @@ export function gateIdsAmong(
 	}
 	if (parsed !== null && typeof parsed === "object" && !Array.isArray(parsed) &&
 		"schema_version" in parsed && "data" in parsed) parsed = parsed.data;
-	// A failed lookup answers with an `{error}` object instead of the array.
 	if (!Array.isArray(parsed)) throw new Error("bd show returned no issue array; gate types remain unverified");
 	const gates: string[] = [];
 	for (const row of parsed) {
@@ -90,7 +99,7 @@ export function gateIdsAmong(
 		if (typeof issue.id !== "string" || typeof issue.issue_type !== "string") {
 			throw new Error("bd show omitted issue identity or type; gate types remain unverified");
 		}
-		if (issue.issue_type === "gate" && typeof issue.id === "string") gates.push(issue.id);
+		if (issue.issue_type === "gate") gates.push(issue.id);
 	}
 	return gates;
 }
@@ -110,7 +119,9 @@ export function denyReason(gateIds: string[]): string {
 
 import { closeInvocations, type ParsedCommand } from "./shell-command.ts";
 
-async function asyncShowRun(argv: string[], cwd: string): Promise<{ exitCode: number; stdout: string }> {
+async function asyncShowRun(argv: string[], cwd: string, deadline = Date.now() + TIMEOUT_MS): Promise<{ exitCode: number; stdout: string }> {
+	const remaining = deadline - Date.now();
+	if (remaining <= 0) throw timeoutError();
 	const proc = Bun.spawn(argv, {
 		cwd,
 		stdout: "pipe",
@@ -122,23 +133,28 @@ async function asyncShowRun(argv: string[], cwd: string): Promise<{ exitCode: nu
 		const timeout = new Promise<never>((_, reject) => {
 			timer = setTimeout(() => {
 				proc.kill("SIGKILL");
-				reject(new Error(`bd show lookup timed out after ${TIMEOUT_MS}ms`));
-			}, TIMEOUT_MS);
+				reject(timeoutError());
+			}, remaining);
 		});
 		const result = await Promise.race([
 			Promise.all([proc.exited, new Response(proc.stdout).text()]),
 			timeout,
 		]);
+		if (Date.now() >= deadline) throw timeoutError();
 		return { exitCode: result[0], stdout: result[1] };
 	} finally {
 		if (timer !== undefined) clearTimeout(timer);
 	}
 }
 
-async function gateIdsAmongAsync(ids: string[], dbArgs: string[], cwd: string): Promise<string[]> {
+async function gateIdsAmongAsync(ids: string[], dbArgs: string[], cwd: string, deadline: number): Promise<string[]> {
 	if (ids.length === 0) return [];
-	const run = injectedRun === null ? asyncShowRun : async (argv: string[], dir: string) => injectedRun?.(argv, dir) ?? asyncShowRun(argv, dir);
-	const result = await run(["bd", ...dbArgs, "show", ...ids, "--json"], cwd);
+	if (Date.now() >= deadline) throw timeoutError();
+	const run = injectedRun === null
+		? asyncShowRun
+		: async (argv: string[], dir: string, limit: number) => injectedRun?.(argv, dir, limit) ?? asyncShowRun(argv, dir, limit);
+	const result = await run(["bd", ...dbArgs, "show", ...ids, "--json"], cwd, deadline);
+	if (Date.now() >= deadline) throw timeoutError();
 	if (result.exitCode !== 0) return [];
 	let parsed: unknown;
 	try {
@@ -159,35 +175,36 @@ async function gateIdsAmongAsync(ids: string[], dbArgs: string[], cwd: string): 
 }
 
 /** Evaluate parsed command positions recursively, using async lookups at the bash boundary. */
-export async function decideBdCloseParsed(parsed: ParsedCommand, cwd = process.cwd()): Promise<{ block: true; reason: string } | undefined> {
+export async function decideBdCloseParsed(parsed: ParsedCommand, cwd = process.cwd(), deadline?: number): Promise<{ block: true; reason: string } | undefined> {
+	const sharedDeadline = deadline ?? Date.now() + TIMEOUT_MS;
 	for (const position of parsed.commands) {
-        const invocations = closeInvocations(position.raw);
+		const invocations = closeInvocations(position.raw);
 		if (invocations.length === 0) continue;
 		const gates = new Set<string>();
 		for (const invocation of invocations) {
-			for (const id of await gateIdsAmongAsync(invocation.ids, invocation.dbArgs, cwd)) gates.add(id);
+			for (const id of await gateIdsAmongAsync(invocation.ids, invocation.dbArgs, cwd, sharedDeadline)) gates.add(id);
 		}
 		if (gates.size > 0) return { block: true, reason: denyReason([...gates]) };
 	}
 	for (const child of parsed.nested) {
-		const decision = await decideBdCloseParsed(child, cwd);
+		const decision = await decideBdCloseParsed(child, cwd, sharedDeadline);
 		if (decision) return decision;
 	}
 	return undefined;
 }
 
-
-
 export function decideBdClose(
 	command: string,
 	cwd: string = process.cwd(),
+	deadline?: number,
 ): { block: true; reason: string } | undefined {
 	if (!PREFILTER.test(command)) return;
-    const invocations = closeInvocations(command);
+	const invocations = closeInvocations(command);
 	if (invocations.length === 0) return;
+	const sharedDeadline = deadline ?? Date.now() + TIMEOUT_MS;
 	const gates = new Set<string>();
 	for (const invocation of invocations) {
-		for (const id of gateIdsAmong(invocation.ids, invocation.dbArgs, cwd)) gates.add(id);
+		for (const id of gateIdsAmong(invocation.ids, invocation.dbArgs, cwd, sharedDeadline)) gates.add(id);
 	}
 	if (gates.size === 0) return;
 	return { block: true, reason: denyReason([...gates]) };

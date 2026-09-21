@@ -65,6 +65,9 @@ function bdReadFailure(scope: "start" | "close", reason: string): string {
 /** No session boundary may hang on the database or on `gh`. */
 const TIMEOUT_MS = 8000;
 
+/** `session_stop` and `session_shutdown` have a 2,000 ms budget; leave 800 ms for dispatch. */
+const SESSION_EXIT_TIMEOUT_MS = 1200;
+
 /** Longest advisory list before it stops being read. */
 const MAX_LISTED = 8;
 
@@ -602,24 +605,28 @@ async function releaseCasSupported(cwd: string, deadline: number, env: NodeJS.Pr
 	return help?.includes("--if-assignee") === true;
 }
 
-async function releaseClaimsAtExit(cwd: string, state: SessionState): Promise<string[]> {
-	if (state.claimsReleased || !state.bdWrote || state.actors.size === 0) return [];
+type ExitReleaseOutcome = { released: string[]; incomplete: string[] };
+
+async function releaseClaimsAtExit(cwd: string, state: SessionState): Promise<ExitReleaseOutcome> {
+	if (state.claimsReleased || !state.bdWrote || state.actors.size === 0) return { released: [], incomplete: [] };
+	const released: string[] = [];
 	const incomplete: string[] = [];
 	state.claimsReleased = true;
-	const deadline = Date.now() + TIMEOUT_MS;
+	const deadline = Date.now() + SESSION_EXIT_TIMEOUT_MS;
 	const env = lifecycleBdEnvironment(cwd);
 	const listed = await runBdResult(cwd, ["list", "--status", "open,in_progress,blocked,deferred", "--limit", "0", "--json"], deadline, env);
-	if (!("output" in listed)) return [`claim listing failed: ${listed.failure}`];
+	if (!("output" in listed)) return { released, incomplete: [`claim listing: ${listed.failure}`] };
 	const claims = heldClaims(readBeads(listed.output), new Set(), state.actors);
 	const casSupported = await releaseCasSupported(cwd, deadline, env);
 	for (const bead of claims) {
 		if (bead.assignee === undefined) continue;
 		const args = releaseClaimArgs(bead.id, bead.assignee, { BD_ACTOR: bead.assignee }, new Date().toISOString(), casSupported);
 		if (args === undefined) { incomplete.push(`${bead.id}: release command could not be constructed`); continue; }
-		const released = await runBdResult(cwd, args, deadline, { ...env, BEADS_ACTOR: bead.assignee, BD_ACTOR: bead.assignee });
-		if (!("output" in released)) incomplete.push(`${bead.id}: ${released.failure}`);
+		const releasedResult = await runBdResult(cwd, args, deadline, { ...env, BEADS_ACTOR: bead.assignee, BD_ACTOR: bead.assignee });
+		if ("output" in releasedResult) released.push(bead.id);
+		else incomplete.push(`${bead.id}: ${releasedResult.failure}`);
 	}
-	return incomplete;
+	return { released, incomplete };
 }
 
 /**
@@ -649,23 +656,27 @@ export async function runBdResult(
 	deadline = Date.now() + TIMEOUT_MS,
 	env: NodeJS.ProcessEnv = process.env,
 ): Promise<BdRunResult> {
-  const stream = injectedStream;
-  const execute = async (): Promise<BdRunResult> => {
-    if (stream === null) return spawnBd(cwd, args, deadline, env);
-    const result = await stream(cwd, args, deadline, env);
-    if (result === undefined) return { failure: "bd command could not be run" };
-    return typeof result === "string" ? { output: result } : result;
-  };
-  if (writesStore(invocationFromArgv(args))) {
+	const stream = injectedStream;
+	const execute = async (): Promise<BdRunResult> => {
+		if (stream === null) return spawnBd(cwd, args, deadline, env);
+		const result = await stream(cwd, args, deadline, env);
+		if (result === undefined) return { failure: "bd command could not be run" };
+		return typeof result === "string" ? { output: result } : result;
+	};
+	let result: BdRunResult;
+	if (writesStore(invocationFromArgv(args))) {
 		const locked = await withEmbeddedWriteLock(
 			cwd,
 			`beads-session-run-${process.pid}-${internalRuns++}`,
 			execute,
 			env,
+			deadline,
 		);
-		return locked.kind === "failed" ? { failure: boundedFailure(locked.reason) } : locked.value;
+		result = locked.kind === "failed" ? { failure: boundedFailure(locked.reason) } : locked.value;
+	} else {
+		result = await execute();
 	}
-	return execute();
+	return Date.now() >= deadline ? { failure: "bd command timed out" } : result;
 }
 
 export async function runBd(
@@ -858,8 +869,15 @@ export default function sessionBeadsLifecycle(pi: ExtensionAPI): void {
 		endAutoPinSession(key, (id) => sessions.has(id));
 		if (state === undefined) return;
 		try {
-			const incomplete = await releaseClaimsAtExit(ctx?.cwd ?? process.cwd(), state);
-			if (incomplete.length > 0) pi.logger.error("beads claim release incomplete at session exit", { incomplete });
+			const outcome = await releaseClaimsAtExit(ctx?.cwd ?? process.cwd(), state);
+			if (outcome.incomplete.length === 0) return;
+			const summary = [
+				"Beads claim release at session shutdown reached its 1,200 ms budget.",
+				outcome.released.length > 0 ? `Released: ${outcome.released.join(", ")}.` : "Released: none.",
+				`Remaining: ${outcome.incomplete.join("; ")}`,
+			].join(" ");
+			pi.logger.error("beads claim release incomplete at session exit", outcome);
+			pi.sendMessage({ customType: "com.srobroek.beads.session-lifecycle", content: summary, display: true, attribution: "user" }, { triggerTurn: false });
 		} catch (error) {
 			pi.logger.error("beads claim release at session exit failed", { error: error instanceof Error ? error.message : String(error) });
 		}
@@ -902,7 +920,7 @@ export default function sessionBeadsLifecycle(pi: ExtensionAPI): void {
 			const bdEnv = lifecycleBdEnvironment(cwd);
 			if (!state?.bdWrote || state.stopFired || event.stop_hook_active === true ||
 				event.stopHookActive === true || bdStoreDir(cwd, bdEnv) === undefined) return;
-			const deadline = Date.now() + TIMEOUT_MS;
+			const deadline = Date.now() + SESSION_EXIT_TIMEOUT_MS;
 			const casSupported = await releaseCasSupported(cwd, deadline, bdEnv);
 			const listed = await runBdResult(cwd, ["list", "--status", "open,in_progress,blocked,deferred", "--limit", "0", "--json"], deadline, bdEnv);
 			if (sessions.get(key) !== state || state.stopFired) return;

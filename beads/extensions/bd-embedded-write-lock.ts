@@ -58,13 +58,14 @@ const LEASE_MS = 120_000;
 const RENEW_MS = 20_000;
 
 /**
- * How long a writer waits for its turn before failing closed.
- *
- * It MUST stay under the 30s the harness allows a tool_call handler: a longer wait is killed
- * mid-wait, so the caller reads "handler timed out" instead of the refusal this writes, and the
- * lock this call may already hold elsewhere keeps being renewed until the lease surrenders it.
+ * Default wait for a caller that is acquiring one store outside an event
+ * handler. Bash dispatches use ACQUISITION_TIMEOUT_MS below instead, so a
+ * multi-store command has one shared deadline rather than one wait per store.
  */
 const WAIT_MS = 20_000;
+
+/** A tool_call has a 30,000 ms budget; leave 5,000 ms for dispatch and cleanup. */
+const ACQUISITION_TIMEOUT_MS = 25_000;
 
 const POLL_MS = 20;
 
@@ -739,10 +740,12 @@ export async function withEmbeddedWriteLock<T>(
 	toolCallId: string,
 	write: () => T | PromiseLike<T>,
 	env: NodeJS.ProcessEnv = process.env,
+	deadline?: number,
 ): Promise<{ kind: "done"; value: T } | { kind: "failed"; reason: string }> {
 	const store = embeddedStoreFor(cwd, env);
 	if (store === undefined) return { kind: "done", value: await write() };
-	const got = await hold(store, toolCallId);
+	const waitMs = deadline === undefined ? WAIT_MS : Math.max(0, deadline - Date.now());
+	const got = await hold(store, toolCallId, waitMs);
 	if (got.kind === "failed") return got;
 	try {
 		return { kind: "done", value: await write() };
@@ -800,11 +803,14 @@ export async function decideEmbeddedWrite(parsed: ParsedCommand, event: ToolCall
 		}
 		const unique = [...new Set(targets)];
 		if (unique.length === 0) return;
+		const deadline = Date.now() + ACQUISITION_TIMEOUT_MS;
 		const pending = unique.map(store => ({ store, held: false, released: false }));
 		const existing = activeHolds.get(event.toolCallId);
 		activeHolds.set(event.toolCallId, existing === undefined ? pending : [...existing, ...pending]);
 		for (const current of pending) {
-			const got = await hold(current.store, event.toolCallId);
+			// Share one 25 s deadline across every store in this tool_call, including
+			// each lock wait; the 30 s event budget still has dispatch/cleanup margin.
+			const got = await hold(current.store, event.toolCallId, Math.max(0, deadline - Date.now()));
 			if (got.kind === "failed") {
 				for (const pendingHold of pending) {
 					pendingHold.released = true;
