@@ -5,6 +5,7 @@ import { dirname, join, resolve } from "node:path";
 import bdReconcileTool, {
 	type BdSpawn,
 	type BeadRecord,
+	type CleanupObservation,
 	parseReceipt,
 	type ReconcileDependencies,
 	type ReconcileOperation,
@@ -19,6 +20,7 @@ const REPO_KEY = "0123456789abcdef";
 const HEAD = "1111111111111111111111111111111111111111";
 const MERGE = "2222222222222222222222222222222222222222";
 const NOW = "2026-09-21T12:00:00.000Z";
+const RECEIPT_ID = `${Date.parse(NOW)}-222222222222`;
 const roots: string[] = [];
 
 function temporary(name: string): string {
@@ -35,9 +37,9 @@ function receipt(overrides: Record<string, unknown> = {}): Record<string, unknow
 	const base = {
 		schema: "omp.receipt.landing",
 		version: 1,
-		receiptId: "1000-222222222222",
+		receiptId: RECEIPT_ID,
 		emittedAt: NOW,
-		emitter: { plugin: "@srobroek/delivery", version: "1.0.0", tool: "delivery_cleanup" },
+		emitter: { plugin: "@srobroek/delivery", version: "1.0.0", tool: "delivery_land" },
 		repo: {
 			key: REPO_KEY,
 			canonicalRoot: "/repo",
@@ -69,7 +71,7 @@ function receipt(overrides: Record<string, unknown> = {}): Record<string, unknow
 		},
 		beads: { ids: ["repo-task"], ledgerActive: true },
 		proof: { method: "forge query", observedAt: NOW, evidence: { query: "fixture-forge-observation" } },
-		outcome: "cleaned",
+		outcome: "landed",
 		supersedes: null,
 	};
 	return { ...base, ...overrides };
@@ -238,8 +240,8 @@ class Harness {
 	}
 }
 
-function writeReceipt(root: string, value: Record<string, unknown>, name = "1000-222222222222.json"): string {
-	const path = join(root, "receipts", REPO_KEY, name);
+function writeReceipt(root: string, value: Record<string, unknown>, name?: string): string {
+	const path = join(root, "receipts", REPO_KEY, name ?? `${String(value.receiptId)}.json`);
 	mkdirSync(dirname(path), { recursive: true });
 	writeFileSync(path, JSON.stringify(value));
 	return path;
@@ -255,6 +257,13 @@ function dependencies(root: string, harness: Harness, additions: Partial<Reconci
 			observation: {
 				repo: { nameWithOwner: value.repo.nameWithOwner },
 				pr: { ...value.pr },
+			},
+		}),
+		observeCleanup: async () => ({
+			observation: {
+				remoteBranchAbsent: true,
+				localRefAbsent: true,
+				worktreeAbsent: true,
 			},
 		}),
 		host: "test-host",
@@ -325,7 +334,7 @@ describe("receipt v1 intake", () => {
 			{ BD_ACTOR: "omp/Test/session" },
 			dependencies(root, harness),
 		);
-		expect(report.receipts).toEqual(["<tool-result:1000-222222222222>"]);
+		expect(report.receipts).toEqual([`<tool-result:${RECEIPT_ID}>`]);
 		expect(closeOperations(report.operations)).toHaveLength(1);
 	});
 
@@ -339,6 +348,38 @@ describe("receipt v1 intake", () => {
 		["self-asserted method", { method: "session summary assertion", observedAt: NOW, evidence: { summary: "merged" } }, "proof.method"],
 	] as const)("refuses %s as authoritative merge proof", (_label, proof, expected) => {
 		expect(parseReceipt(receipt({ proof })).reason).toContain(expected);
+	});
+
+	test.each([
+		["invalid emittedAt", { emittedAt: "not-an-instant" }, "emittedAt"],
+		["receiptId epoch mismatch", { receiptId: `${Date.parse(NOW) - 1}-222222222222` }, "receiptId"],
+		["receiptId merge suffix mismatch", { receiptId: `${Date.parse(NOW)}-333333333333` }, "receiptId"],
+	] as const)("refuses %s", (_label, override, expected) => {
+		expect(parseReceipt(receipt(override)).reason).toContain(expected);
+	});
+
+	test("derives the current repo key and rejects supplied, inline, and embedded mismatches", async () => {
+		const root = temporary("repo-key-binding");
+		const harness = new Harness(join(root, "repo"), exactBead());
+		const foreignKey = "fedcba9876543210";
+		const supplied = await reconcile(root, harness, { repoKey: foreignKey });
+		const foreignReceipt = receipt({
+			repo: { key: foreignKey, canonicalRoot: "/repo", remote: "origin", forge: "github", nameWithOwner: "srobroek/omp-plugins" },
+		});
+		const inline = await reconcileReceipts(
+			{ receipt: JSON.stringify(foreignReceipt) },
+			"inline-foreign",
+			harness.cwd,
+			{ BD_ACTOR: "omp/Test/session" },
+			dependencies(root, harness),
+		);
+		writeReceipt(root, foreignReceipt);
+		const embedded = await reconcile(root, harness);
+		for (const report of [supplied, inline, embedded]) {
+			expect(report.refusals.some((item) => item.reason.includes(REPO_KEY))).toBe(true);
+			expect(report.operations).toEqual([]);
+		}
+		expect(harness.calls).toEqual([]);
 	});
 	test("accepts hierarchical bead ids used by child tasks", () => {
 		const parsed = parseReceipt(receipt({ beads: { ids: ["omp-plugins-9ej3.9"], ledgerActive: true } }));
@@ -355,7 +396,7 @@ describe("receipt v1 intake", () => {
 
 	test("refuses a valid receipt stored under a filename other than its receiptId", async () => {
 		const root = temporary("wrong-filename");
-		writeReceipt(root, receipt(), "1001-222222222222.json");
+		writeReceipt(root, receipt(), `${Date.parse(NOW) + 1}-222222222222.json`);
 		const harness = new Harness(join(root, "repo"), exactBead());
 		const report = await reconcile(root, harness);
 		expect(report.refusals[0]?.reason).toContain("receipt path");
@@ -383,7 +424,7 @@ describe("scan and apply", () => {
 		expect(first.failures).toEqual([]);
 		expect(first.applied.map((item) => item.kind)).toEqual(["record-merge-audit", "close"]);
 		const close = harness.calls.find((argv) => argv[0] === "close");
-		expect(close).toContain("PR #42 merged as 2222222222222222222222222222222222222222; exact receipt 1000-222222222222 reconciled.");
+		expect(close).toContain(`PR #42 merged as ${MERGE}; exact receipt ${RECEIPT_ID} reconciled.`);
 		const second = await reconcile(root, harness, { apply: true });
 		expect(second.operations).toEqual([]);
 		expect(second.text).toContain("state is converged");
@@ -466,6 +507,23 @@ describe("close-out proof", () => {
 	});
 
 	test.each([
+		["remote branch", { remoteBranchAbsent: false, localRefAbsent: true, worktreeAbsent: true }, "current remote branch"],
+		["local ref", { remoteBranchAbsent: true, localRefAbsent: false, worktreeAbsent: true }, "current local ref"],
+		["worktree", { remoteBranchAbsent: true, localRefAbsent: true, worktreeAbsent: false }, "current worktree"],
+	] as const)("refuses close when fresh git observation finds a stale %s assertion", async (_label: string, state: CleanupObservation, expected: string) => {
+		const root = temporary("stale-cleanup");
+		writeReceipt(root, receipt());
+		const harness = new Harness(join(root, "repo"), exactBead());
+		const report = await reconcile(root, harness, {}, {
+			observeCleanup: async () => ({ observation: state }),
+		});
+		expect(report.operations.some((item) => item.kind === "record-merge-audit")).toBe(true);
+		expect(closeOperations(report.operations)).toEqual([]);
+		expect(report.refusals.some((item) => item.reason.includes(expected))).toBe(true);
+		expect(report.text).not.toContain("state is converged");
+	});
+
+	test.each([
 		[
 			"pull request state",
 			{ pr: { number: 42, url: "https://github.com/srobroek/omp-plugins/pull/42", state: "OPEN", baseRefName: "main", headRefName: "feature/reconcile", headRefOid: HEAD, mergeCommitOid: MERGE, mergedAt: NOW } },
@@ -480,7 +538,7 @@ describe("close-out proof", () => {
 		],
 		[
 			"merge commit oid",
-			{ pr: { number: 42, url: "https://github.com/srobroek/omp-plugins/pull/42", state: "MERGED", baseRefName: "main", headRefName: "feature/reconcile", headRefOid: HEAD, mergeCommitOid: null, mergedAt: NOW } },
+			{ receiptId: `${Date.parse(NOW)}-nomerge`, pr: { number: 42, url: "https://github.com/srobroek/omp-plugins/pull/42", state: "MERGED", baseRefName: "main", headRefName: "feature/reconcile", headRefOid: HEAD, mergeCommitOid: null, mergedAt: NOW } },
 			{ metadata: { pr: 42, base: "main", branch: "feature/reconcile", head_sha: HEAD } },
 			"pr.mergeCommitOid",
 		],
@@ -543,6 +601,20 @@ describe("close-out proof", () => {
 		const report = await reconcile(root, harness);
 		expect(closeOperations(report.operations)).toEqual([]);
 		expect(report.refusals.some((item) => item.reason.includes("live blockers"))).toBe(true);
+	});
+
+	test("selects the newest receipt by instant rather than timestamp text", async () => {
+		const root = temporary("chronology");
+		const earlier = "2026-09-21T13:00:00+02:00";
+		const later = "2026-09-21T12:00:00Z";
+		const earlierId = `${Date.parse(earlier)}-222222222222`;
+		const laterId = `${Date.parse(later)}-222222222222`;
+		writeReceipt(root, receipt({ receiptId: earlierId, emittedAt: earlier, outcome: "cleaned" }), `${earlierId}.json`);
+		writeReceipt(root, receipt({ receiptId: laterId, emittedAt: later, outcome: "landed" }), `${laterId}.json`);
+		const harness = new Harness(join(root, "repo"), exactBead());
+		const report = await reconcile(root, harness);
+		expect(closeOperations(report.operations)).toHaveLength(1);
+		expect(closeOperations(report.operations)[0]?.receipt).toContain(laterId);
 	});
 
 	test("orders receipt-named leaves before their parents", async () => {
@@ -609,13 +681,64 @@ describe("convergent repairs", () => {
 		expect(report.refusals.some((item) => item.reason.includes("no safe actor-bound CAS argv"))).toBe(true);
 	});
 
+	test("preserves a closed bead with a stale dead-claim anchor", async () => {
+		const root = temporary("closed-dead-claim");
+		writeReceipt(root, receipt());
+		const bead = exactBead("repo-task", {
+			status: "closed",
+			assignee: "omp/Dead/session",
+			metadata: { ...exactBead().metadata, lease_host: "test-host", lease_pid: "999999" },
+		});
+		const harness = new Harness(join(root, "repo"), bead);
+		const report = await reconcile(root, harness, { apply: true }, { pidAlive: () => false });
+		expect(report.operations.some((item) => item.kind === "release-dead-claim" || item.kind === "close")).toBe(false);
+		expect(harness.calls.some((argv) => argv.includes("--if-assignee"))).toBe(false);
+		expect(harness.beads.get("repo-task")?.status).toBe("closed");
+		expect(harness.beads.get("repo-task")?.assignee).toBe("omp/Dead/session");
+	});
+
+	test("uses a cleaned receipt for convergent repairs but never automatic close", async () => {
+		const root = temporary("cleaned-repairs");
+		writeReceipt(root, receipt({
+			emitter: { plugin: "@srobroek/delivery", version: "1.0.0", tool: "delivery_cleanup" },
+			outcome: "cleaned",
+		}));
+		const harness = new Harness(join(root, "repo"), exactBead("repo-task", {
+			metadata: { base: "main", branch: "feature/reconcile", head_sha: HEAD },
+		}));
+		const report = await reconcile(root, harness, {}, {
+			observeCleanup: async () => {
+				throw new Error("cleaned receipts must not request close-out cleanup proof");
+			},
+		});
+		expect(report.operations.map((item) => item.kind)).toEqual(["set-merge-anchors", "record-merge-audit"]);
+		expect(closeOperations(report.operations)).toEqual([]);
+		expect(report.refusals.some((item) => item.reason.includes("outcome"))).toBe(true);
+	});
+
+	test.each([
+		["truncated", '{"kind":"semantic_event"'],
+		["malformed", "not-json\n"],
+	] as const)("refuses %s audit history instead of treating it as empty", async (_label: string, history: string) => {
+		const root = temporary("audit-history");
+		writeReceipt(root, receipt());
+		const harness = new Harness(join(root, "repo"), exactBead());
+		writeFileSync(join(harness.cwd, ".beads", "interactions.jsonl"), history);
+		const report = await reconcile(root, harness);
+		expect(report.operations.some((item) => item.kind === "record-merge-audit" || item.kind === "close")).toBe(false);
+		expect(report.refusals.some((item) => item.reason.includes("audit history"))).toBe(true);
+		expect(report.text).not.toContain("state is converged");
+	});
+
 	test("serializes concurrent apply calls so audit and anchors cannot race", async () => {
 		const root = temporary("concurrent");
 		const firstPath = writeReceipt(root, receipt());
 		const secondMerge = "3333333333333333333333333333333333333333";
+		const secondEmittedAt = "2026-09-21T13:00:00.000Z";
+		const secondReceiptId = `${Date.parse(secondEmittedAt)}-333333333333`;
 		const secondReceipt = receipt({
-			receiptId: "2000-333333333333",
-			emittedAt: "2026-09-21T13:00:00.000Z",
+			receiptId: secondReceiptId,
+			emittedAt: secondEmittedAt,
 			pr: {
 				number: 43,
 				url: "https://github.com/srobroek/omp-plugins/pull/43",
@@ -627,7 +750,7 @@ describe("convergent repairs", () => {
 				mergedAt: NOW,
 			},
 		});
-		const secondPath = writeReceipt(root, secondReceipt, "2000-333333333333.json");
+		const secondPath = writeReceipt(root, secondReceipt, `${secondReceiptId}.json`);
 		const harness = new Harness(join(root, "repo"), exactBead("repo-task", {
 			metadata: { base: "main", branch: "feature/reconcile", head_sha: HEAD },
 		}));
@@ -661,16 +784,18 @@ describe("convergent repairs", () => {
 
 	test("conflicting receipt identities block every derived merge write", async () => {
 		const root = temporary("receipt-conflict");
-		writeReceipt(root, receipt(), "1000-222222222222.json");
+		writeReceipt(root, receipt(), `${RECEIPT_ID}.json`);
+		const otherEmittedAt = "2026-09-21T13:00:00.000Z";
+		const otherReceiptId = `${Date.parse(otherEmittedAt)}-333333333333`;
 		const other = receipt({
-			receiptId: "2000-333333333333",
-			emittedAt: "2026-09-21T13:00:00.000Z",
+			receiptId: otherReceiptId,
+			emittedAt: otherEmittedAt,
 		});
 		const otherPr = other.pr as Record<string, unknown>;
 		otherPr.number = 43;
 		otherPr.url = "https://github.com/srobroek/omp-plugins/pull/43";
 		otherPr.mergeCommitOid = "3333333333333333333333333333333333333333";
-		writeReceipt(root, other, "2000-333333333333.json");
+		writeReceipt(root, other, `${otherReceiptId}.json`);
 		const harness = new Harness(join(root, "repo"), exactBead());
 		const report = await reconcile(root, harness);
 		expect(report.refusals.some((item) => item.reason.includes("ambiguous receipts"))).toBe(true);
@@ -678,12 +803,12 @@ describe("convergent repairs", () => {
 		expect(report.operations.map((item) => item.kind)).toEqual(["comment-ambiguity", "gate-ambiguity"]);
 	});
 
-	test("reports receipt-v1 discovered-from as non-derivable and plans no edge", async () => {
+	test("plans no discovered-from edge when receipt v1 has no authoritative relationship", async () => {
 		const root = temporary("non-derivable-source");
 		writeReceipt(root, receipt());
 		const harness = new Harness(join(root, "repo"), exactBead());
 		const report = await reconcile(root, harness);
-		expect(report.refusals.some((item) => item.reason.includes("discovered-from source is non-derivable"))).toBe(true);
+		expect(report.refusals).toEqual([]);
 		expect(report.operations.some((item) => item.kind === "add-discovered-from")).toBe(false);
 	});
 

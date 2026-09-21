@@ -23,7 +23,8 @@ const RECEIPT_VERSION = 1;
 const TOOL_TIMEOUT_MS = 25_000;
 const COMMAND_TIMEOUT_MS = 5_000;
 const REPO_KEY = /^[0-9a-f]{16}$/;
-const RECEIPT_ID = /^\d+-(?:[0-9a-f]{12}|nomerge)$/;
+const RECEIPT_ID = /^(\d+)-(?:[0-9a-f]{12}|nomerge)$/;
+const ISO_INSTANT = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/;
 const BEAD_ID = /^[A-Za-z][A-Za-z0-9]*(?:-[A-Za-z0-9]+)+(?:\.[A-Za-z0-9]+)*$/;
 const RECONCILE_ARBITER = Symbol.for("com.srobroek.beads.bd-reconcile-tool.v1");
 
@@ -115,6 +116,19 @@ export type ProofObserver = (
 	deadline: number,
 ) => Promise<{ observation?: ForgeObservation; failure?: string }>;
 
+export type CleanupObservation = {
+	remoteBranchAbsent: boolean;
+	localRefAbsent: boolean;
+	worktreeAbsent: boolean;
+};
+
+export type CleanupObserver = (
+	receipt: ReceiptV1,
+	cwd: string,
+	env: NodeJS.ProcessEnv,
+	deadline: number,
+) => Promise<{ observation?: CleanupObservation; failure?: string }>;
+
 type ReceiptSource = {
 	path: string;
 	receipt?: ReceiptV1;
@@ -182,6 +196,7 @@ export type ReconcileDependencies = {
 	spawn?: BdSpawn;
 	lock?: WriteLock;
 	observeProof?: ProofObserver;
+	observeCleanup?: CleanupObserver;
 	receiptRoot?: string;
 	repoKey?: (cwd: string, deadline: number) => Promise<string | undefined>;
 	pidAlive?: (pid: number) => boolean;
@@ -266,6 +281,8 @@ export function parseReceipt(value: unknown): { receipt?: ReceiptV1; reason?: st
 	const receiptId = needString("receiptId", root.receiptId);
 	if (!RECEIPT_ID.test(receiptId)) failures.push(requirement("receiptId", root.receiptId, "<epochMillis>-<12 lowercase merge hex> or <epochMillis>-nomerge"));
 	const emittedAt = needString("emittedAt", root.emittedAt);
+	const emittedAtMillis = ISO_INSTANT.test(emittedAt) ? Date.parse(emittedAt) : Number.NaN;
+	if (!Number.isFinite(emittedAtMillis)) failures.push(requirement("emittedAt", root.emittedAt, "a valid ISO 8601 instant"));
 	const emitterPlugin = needString("emitter.plugin", field(emitter, "plugin"));
 	const emitterVersion = needString("emitter.version", field(emitter, "version"));
 	const emitterTool = needString("emitter.tool", field(emitter, "tool"));
@@ -289,6 +306,10 @@ export function parseReceipt(value: unknown): { receipt?: ReceiptV1; reason?: st
 	const headRefOid = needString("pr.headRefOid", field(pr, "headRefOid"));
 	const mergeCommitOid = needNullable("pr.mergeCommitOid", field(pr, "mergeCommitOid"));
 	const mergedAt = needNullable("pr.mergedAt", field(pr, "mergedAt"));
+	if (Number.isFinite(emittedAtMillis)) {
+		const expectedReceiptId = `${emittedAtMillis}-${mergeCommitOid === null ? "nomerge" : mergeCommitOid.slice(0, 12)}`;
+		if (receiptId !== expectedReceiptId) failures.push(requirement("receiptId", receiptId, JSON.stringify(expectedReceiptId)));
+	}
 	const branchName = needString("branch.name", field(branch, "name"));
 	const deletedRemote = needBoolean("branch.deletedRemote", field(branch, "deletedRemote"));
 	const remoteAbsence = needNullable(
@@ -422,11 +443,15 @@ async function readReceiptSources(
 	deadline: number,
 	deps: ReconcileDependencies,
 ): Promise<{ sources: ReceiptSource[]; repoKey?: string; refusal?: string }> {
-	if (params.repoKey !== undefined && !REPO_KEY.test(params.repoKey)) {
-		return { sources: [], refusal: requirement("repoKey", params.repoKey, "16 lowercase hexadecimal characters") };
-	}
 	if (params.bead !== undefined && !BEAD_ID.test(params.bead)) {
 		return { sources: [], refusal: requirement("bead", params.bead, "a bead id") };
+	}
+	const currentKey = await (deps.repoKey ?? defaultRepoKey)(cwd, deadline);
+	if (currentKey === undefined) {
+		return { sources: [], refusal: "repoKey: observed absent, expected a key derived from the current git common directory" };
+	}
+	if (params.repoKey !== undefined && (!REPO_KEY.test(params.repoKey) || params.repoKey !== currentKey)) {
+		return { sources: [], repoKey: currentKey, refusal: requirement("repoKey", params.repoKey, JSON.stringify(currentKey)) };
 	}
 	if (params.receipt?.trim().startsWith("{")) {
 		let parsed: unknown;
@@ -436,20 +461,14 @@ async function readReceiptSources(
 			return { sources: [], refusal: `receipt result is unreadable JSON: ${error instanceof Error ? error.message : String(error)}` };
 		}
 		const result = parseReceipt(parsed);
-		const key = params.repoKey ?? result.receipt?.repo.key;
-		if (key === undefined || !REPO_KEY.test(key)) {
-			return { sources: [], refusal: "repo.key: observed absent, expected 16 lowercase hexadecimal characters" };
-		}
+		const key = currentKey;
 		return {
 			repoKey: key,
 			sources: [{ path: `<tool-result:${result.receipt?.receiptId ?? "unknown"}>`, ...result }],
 		};
 	}
 
-	const key = params.repoKey ?? await (deps.repoKey ?? defaultRepoKey)(cwd, deadline);
-	if (key === undefined) {
-		return { sources: [], refusal: "repoKey: observed absent, expected the current repository key or an explicit repoKey" };
-	}
+	const key = currentKey;
 	const root = receiptRoot(env, deps);
 	const repository = resolve(root, key);
 	let paths: string[] = [];
@@ -687,6 +706,64 @@ function observationFailures(receipt: ReceiptV1, observation: ForgeObservation):
 	return failures;
 }
 
+async function defaultObserveCleanup(
+	receipt: ReceiptV1,
+	cwd: string,
+	env: NodeJS.ProcessEnv,
+	deadline: number,
+): Promise<{ observation?: CleanupObservation; failure?: string }> {
+	if (!/^[A-Za-z0-9][A-Za-z0-9._/-]*$/.test(receipt.repo.remote)) {
+		return { failure: requirement("repo.remote", receipt.repo.remote, "a safe configured git remote name") };
+	}
+	const branchRef = `refs/heads/${receipt.branch.name}`;
+	const [remote, local, worktrees] = await Promise.all([
+		spawnExecutable("git", ["ls-remote", "--exit-code", "--heads", "--", receipt.repo.remote, branchRef], cwd, env, deadline),
+		spawnExecutable("git", ["show-ref", "--verify", "--quiet", branchRef], cwd, env, deadline),
+		spawnExecutable("git", ["worktree", "list", "--porcelain"], cwd, env, deadline),
+	]);
+	const remoteAbsent = remote.exitCode === 2 && remote.stdout.trim() === "";
+	if (!remoteAbsent && remote.exitCode !== 0) {
+		const detail = remote.error ?? [remote.stderr, remote.stdout].filter(Boolean).join(" ").replace(/\s+/g, " ").trim();
+		return { failure: `git ls-remote could not prove branch presence or absence: ${detail || `exit ${remote.exitCode}`}` };
+	}
+	const localAbsent = local.exitCode === 1 && local.stdout.trim() === "";
+	if (!localAbsent && local.exitCode !== 0) {
+		const detail = local.error ?? [local.stderr, local.stdout].filter(Boolean).join(" ").replace(/\s+/g, " ").trim();
+		return { failure: `git show-ref could not prove local ref presence or absence: ${detail || `exit ${local.exitCode}`}` };
+	}
+	if (!worktrees.ok) {
+		const detail = worktrees.error ?? [worktrees.stderr, worktrees.stdout].filter(Boolean).join(" ").replace(/\s+/g, " ").trim();
+		return { failure: `git worktree list failed: ${detail || `exit ${worktrees.exitCode}`}` };
+	}
+	const records = worktrees.stdout.trim().split(/\n\s*\n/).filter(Boolean);
+	if (records.length === 0 || records.some((record) => !record.startsWith("worktree "))) {
+		return { failure: "git worktree list returned malformed porcelain output" };
+	}
+	const receiptPath = receipt.worktree.path === null ? undefined : resolve(receipt.worktree.path);
+	const worktreeAbsent = records.every((record) => {
+		const lines = record.split("\n");
+		const path = lines.find((line) => line.startsWith("worktree "))?.slice("worktree ".length);
+		const branch = lines.find((line) => line.startsWith("branch "))?.slice("branch ".length);
+		return branch !== branchRef && (receiptPath === undefined || path === undefined || resolve(path) !== receiptPath);
+	});
+	return {
+		observation: {
+			remoteBranchAbsent: remoteAbsent,
+			localRefAbsent: localAbsent,
+			worktreeAbsent,
+		},
+	};
+}
+
+function cleanupObservationFailures(observation: CleanupObservation | undefined, failure: string | undefined): string[] {
+	if (observation === undefined) return [`current cleanup observation: ${failure ?? "observer returned no state"}`];
+	const failures: string[] = [];
+	if (!observation.remoteBranchAbsent) failures.push(requirement("current remote branch", "present", "absent"));
+	if (!observation.localRefAbsent) failures.push(requirement("current local ref", "present", "absent"));
+	if (!observation.worktreeAbsent) failures.push(requirement("current worktree", "present", "absent"));
+	return failures;
+}
+
 let internalRuns = 0;
 
 export async function runBd(
@@ -831,8 +908,8 @@ function exactMergeIdentityFailures(bead: BeadRecord, receipt: ReceiptV1): strin
 
 function exactProofFailures(bead: BeadRecord, receipt: ReceiptV1): string[] {
 	const failures = exactMergeIdentityFailures(bead, receipt);
-	if (receipt.outcome !== "landed" && receipt.outcome !== "cleaned") {
-		failures.push(requirement("outcome", receipt.outcome, '"landed" or "cleaned"'));
+	if (receipt.outcome !== "landed") {
+		failures.push(requirement("outcome", receipt.outcome, '"landed" for automatic close'));
 	}
 	if (receipt.branch.autoDeleteSetting === "unknown") {
 		failures.push(requirement("branch.autoDeleteSetting", "unknown", '"on" or "off"'));
@@ -846,14 +923,25 @@ function exactProofFailures(bead: BeadRecord, receipt: ReceiptV1): string[] {
 	return failures;
 }
 
-function auditResponses(store: string | undefined): JsonObject[] {
-	if (store === undefined) return [];
+function auditResponses(store: string | undefined): { entries?: JsonObject[]; failure?: string } {
+	if (store === undefined) return { failure: "audit history store is unavailable" };
 	const path = join(store, "interactions.jsonl");
-	if (!existsSync(path)) return [];
+	if (!existsSync(path)) return { entries: [] };
 	try {
-		return readFileSync(path, "utf8").split("\n").filter(Boolean).map((line) => object(JSON.parse(line))).filter((row): row is JsonObject => row !== undefined);
-	} catch {
-		return [];
+		const content = readFileSync(path, "utf8");
+		if (content !== "" && !content.endsWith("\n")) {
+			return { failure: `audit history ${path} is truncated: final JSONL record has no newline` };
+		}
+		const entries: JsonObject[] = [];
+		for (const [index, line] of content.split("\n").entries()) {
+			if (line === "") continue;
+			const entry = object(JSON.parse(line));
+			if (entry === undefined) return { failure: `audit history ${path} line ${index + 1} is not an object` };
+			entries.push(entry);
+		}
+		return { entries };
+	} catch (error) {
+		return { failure: `audit history ${path} is unreadable: ${error instanceof Error ? error.message : String(error)}` };
 	}
 }
 
@@ -912,8 +1000,10 @@ function formatReport(report: Omit<ReconcileReport, "text">): string {
 	for (const item of report.operations) lines.push(`PLAN ${item.bead}: ${item.description}`);
 	for (const item of report.applied) lines.push(`APPLIED ${item.bead}: ${item.description}`);
 	for (const failure of report.failures) lines.push(`FAIL ${failure}`);
-	if (report.operations.length === 0 && report.failures.length === 0) {
+	if (report.operations.length === 0 && report.failures.length === 0 && report.refusals.length === 0) {
 		lines.push("No ledger writes are needed; receipt-derived state is converged.");
+	} else if (report.operations.length === 0 && report.failures.length === 0 && report.refusals.length > 0) {
+		lines.push("No ledger writes were planned; resolve the refusals above before treating receipt-derived state as converged.");
 	} else if (!report.apply && report.operations.length > 0) {
 		lines.push("Scan mode wrote nothing. Re-run with apply=true to request exec approval and apply this plan.");
 	}
@@ -965,6 +1055,7 @@ async function reconcileReceiptsUnlocked(
 		return { ...base, text: formatReport(base) };
 	}
 	const authoritativeSources: ReceiptSource[] = [];
+	const cleanupFailuresByReceipt = new Map<string, string[]>();
 	for (const source of validSources) {
 		const receipt = source.receipt as ReceiptV1;
 		const observedProof = await (deps.observeProof ?? defaultObserveProof)(receipt, cwd, bdEnv, deadline);
@@ -976,6 +1067,10 @@ async function reconcileReceiptsUnlocked(
 		if (mismatches.length > 0) {
 			refusals.push({ receipt: source.path, reason: `receipt does not match current repository and PR: ${mismatches.join("; ")}` });
 			continue;
+		}
+		if (receipt.outcome === "landed") {
+			const cleanup = await (deps.observeCleanup ?? defaultObserveCleanup)(receipt, cwd, bdEnv, deadline);
+			cleanupFailuresByReceipt.set(source.path, cleanupObservationFailures(cleanup.observation, cleanup.failure));
 		}
 		authoritativeSources.push(source);
 	}
@@ -999,7 +1094,10 @@ async function reconcileReceiptsUnlocked(
 				refusals.push({ bead: id, receipt: source.path, reason: conflict });
 				continue;
 			}
-			if (prior === undefined || prior.emittedAt <= receipt.emittedAt) targets.set(id, source);
+			if (prior === undefined || Date.parse(prior.emittedAt) < Date.parse(receipt.emittedAt)
+				|| (Date.parse(prior.emittedAt) === Date.parse(receipt.emittedAt) && prior.receiptId < receipt.receiptId)) {
+				targets.set(id, source);
+			}
 		}
 	}
 	const ids = [...targets.keys()];
@@ -1079,7 +1177,7 @@ async function reconcileReceiptsUnlocked(
 				: undefined,
 		});
 		const localAnchor = anchor !== undefined && anchor.host.split(".")[0] === localHost.split(".")[0];
-		const deadLocalClaim = bead.assignee !== undefined && anchor !== undefined && localAnchor && !alive(anchor.pid);
+		const deadLocalClaim = bead.status !== "closed" && bead.assignee !== undefined && anchor !== undefined && localAnchor && !alive(anchor.pid);
 		let guardedReleasePlanned = false;
 		if (deadLocalClaim && bead.assignee !== undefined) {
 			const release = releaseClaimArgs(id, bead.assignee, bdEnv);
@@ -1101,26 +1199,25 @@ async function reconcileReceiptsUnlocked(
 		}
 
 		const authoritativeSource = deps.authoritativeSource?.(bead, allBeads);
-		if (authoritativeSource === undefined) {
-			refusals.push({
-				bead: id,
-				receipt: source.path,
-				reason: "discovered-from source is non-derivable: receipt v1 carries no authoritative source-target relationship; no edge was planned",
-			});
-		} else if (!BEAD_ID.test(authoritativeSource) || !allBeads.has(authoritativeSource)) {
+		if (authoritativeSource !== undefined && (!BEAD_ID.test(authoritativeSource) || !allBeads.has(authoritativeSource))) {
 			refusals.push({ bead: id, receipt: source.path, reason: requirement("authoritative discovered-from source", authoritativeSource, "an existing bead id") });
-		} else if (!existingDiscoveredSource(bead, authoritativeSource)) {
+		} else if (authoritativeSource !== undefined && !existingDiscoveredSource(bead, authoritativeSource)) {
 			operations.push(operation("add-discovered-from", id, source.path, `add authoritative discovered-from edge to ${authoritativeSource}`, ["dep", "add", id, authoritativeSource, "--type", "discovered-from", "--json"]));
 		}
 
 		const exactMerge = conflicts.length === 0 && exactMergeIdentityFailures(bead, receipt).length === 0;
-		if (exactMerge && receipt.pr.mergeCommitOid !== null && !hasMergeAudit(audit, id, receipt.pr.mergeCommitOid)) {
+		if (exactMerge && receipt.pr.mergeCommitOid !== null && audit.failure === undefined && !hasMergeAudit(audit.entries ?? [], id, receipt.pr.mergeCommitOid)) {
 			const response = JSON.stringify({ event: "merge_outcome", outcome: "merged", artifact: source.path, mergeCommitOid: receipt.pr.mergeCommitOid });
 			operations.push(operation("record-merge-audit", id, source.path, "record the missing merge audit event", ["audit", "record", "--kind", "semantic_event", "--issue-id", id, "--response", response, "--json"]));
+		}
+		if (audit.failure !== undefined) {
+			refusals.push({ bead: id, receipt: source.path, reason: audit.failure });
+			continue;
 		}
 
 		if (bead.status === "closed" || conflicts.length > 0) continue;
 		const closeFailures = exactProofFailures(bead, receipt);
+		closeFailures.push(...(cleanupFailuresByReceipt.get(source.path) ?? []));
 		const effectivePr = currentPr ?? String(receipt.pr.number);
 		const effectiveMerge = currentMerge ?? receipt.pr.mergeCommitOid ?? undefined;
 		if (!prMatches(effectivePr, receipt)) closeFailures.push(requirement("metadata.pr", effectivePr, String(receipt.pr.number)));
@@ -1157,7 +1254,7 @@ async function reconcileReceiptsUnlocked(
 		}
 	}
 	const base = {
-		ok: failures.length === 0,
+		ok: failures.length === 0 && refusals.length === 0,
 		apply: Boolean(params.apply),
 		receipts: authoritativeSources.map((source) => source.path),
 		operations,
