@@ -96,6 +96,8 @@ const READ_ONLY_TOOLS: Record<string, true> = {
 	agentic_lint: true,
 	chezmoi_status: true,
 	dep_scan: true,
+	delivery_orient: true,
+	delivery_hygiene_report: true,
 	find_tools_scan: true,
 	headed_read: true,
 	resume_session: true,
@@ -114,6 +116,7 @@ const LEDGER_TOOLS: Record<string, true> = {
 	orc_bot_review_probe: true,
 	orc_bot_review_request: true,
 	orc_review_round_policy: true,
+	bd_reconcile: true,
 };
 
 /**

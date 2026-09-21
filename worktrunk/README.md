@@ -13,6 +13,8 @@ Retry contention.
 The gate checks mutations.
 The gate rejects the canonical root.
 Read-only tools are exempt.
+
+The delivery tools `delivery_orient` and `delivery_hygiene_report` are read-only and may run from the canonical checkout. `bd_reconcile` is a ledger tool: scans, plans, and applies are all allowed from the canonical checkout, subject to its own input validation. `delivery_land` and `delivery_cleanup` are intentionally not enumerated as read-only, so they require a linked non-canonical worktree. Malformed or unknown payloads are not granted a read-only exemption and are handled by the normal conservative path checks.
 Unknown paths block.
 
 ## Precheck
