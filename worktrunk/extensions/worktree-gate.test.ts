@@ -648,10 +648,17 @@ describe("eval path literals on the real topology", () => {
 	});
 
 
-	test("an explicit canonical cwd remains guarded while a worktree cwd is allowed", () => {
+	test("an explicit cwd decides: canonical is guarded, a cwd in no repository is not", () => {
 		const canonical = realProjectCanonical();
-		expect(decideWorktreeCall("eval", { cwd: canonical, code: "await browser.open({ app: { relay: true } })" }, canonical)?.block).toBe(true);
-		expect(decideWorktreeCall("eval", { cwd: process.cwd(), code: "await browser.open({ app: { relay: true } })" }, canonical)).toBeUndefined();
+		const scratch = mkdtempSync(join(tmpdir(), "worktrunk-eval-cwd-"));
+		roots.push(scratch);
+		const code = "await browser.open({ app: { relay: true } })";
+		expect(decideWorktreeCall("eval", { cwd: canonical, code }, canonical)?.block).toBe(true);
+		// Not `process.cwd()`: CI runs this suite inside the canonical checkout, where no
+		// linked worktree exists, so that spelling passed only on a developer machine. A
+		// directory in no repository exercises the same contract — the declared cwd decides —
+		// without depending on the runner's topology.
+		expect(decideWorktreeCall("eval", { cwd: scratch, code }, canonical)).toBeUndefined();
 	});
 	test("an external absolute path literal is allowed", () => {
 		const canonical = realProjectCanonical();
