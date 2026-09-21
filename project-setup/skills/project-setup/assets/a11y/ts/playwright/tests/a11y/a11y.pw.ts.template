@@ -1,0 +1,14 @@
+import AxeBuilder from "@axe-core/playwright";
+import { expect, test } from "@playwright/test";
+
+const surfaces = @@A11Y_SURFACES_JSON@@;
+
+for (const surface of surfaces) {
+  for (const route of surface.routes) {
+    test(`${surface.name} ${route} has no detectable accessibility violations`, async ({ page }) => {
+      await page.goto(new URL(route, surface.baseURL).href);
+      const results = await new AxeBuilder({ page }).analyze();
+      expect(results.violations).toEqual([]);
+    });
+  }
+}

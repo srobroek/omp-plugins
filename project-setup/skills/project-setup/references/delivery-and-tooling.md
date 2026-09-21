@@ -109,8 +109,8 @@ added under its closing comment. Both Worktrunk files are required for project p
 ## Infrastructure choice
 
 Ask whether infrastructure is described with OpenTofu or a provider CDK. Use the OpenTofu name
-consistently. The package supplies no provider-specific CDK implementation and no infrastructure
-generator; an unsupported provider or host is recorded as an explicit gap.
+consistently. AWS CDK v2 for TypeScript has a native generator and recurring synth gate. Load
+`skill://project-setup/references/infrastructure.md` for the provider frontier and assets.
 
 ## Agent steering
 
@@ -143,6 +143,15 @@ no release automation is claimed for it.
 
 ## Decision records
 
-Conditional on the beads plugin being installed. When it is, the ADR pre-commit fragment and
-renderer are copied from `skill://adr/templates/`; project-setup ships neither. Without the
-plugin, `docs/adr` is a plain directory of hand-written records.
+Every ADR manifest row becomes a committed file under `docs/adr/`.
+
+When the beads plugin is installed, create a validated `decision` bead for each row. Copy the hook
+fragment and renderer from `skill://adr/templates/`, close accepted decisions, and let the hook
+render their MADR files. The bead is authoritative; never edit its generated file.
+
+Without the beads plugin, copy `assets/governance/ADR.md.template` once per row. Number records in
+creation order and substitute only accepted manifest fields. Existing records are immutable history;
+a changed decision creates a new ADR that supersedes the old one.
+
+The plan lists every bead command or hand-written ADR destination before apply. A missing rationale,
+alternative, consequence, or confirmation keeps that ADR row open and blocks the plan.

@@ -58,7 +58,7 @@ setup:
       just "$task"
     done
 
-    for task in hooks-install; do
+    for task in hooks-install aws-cdk-install i18n-prepare a11y-deps a11y-prepare a11y-install; do
       if just --show "$task" >/dev/null 2>&1; then
         echo "==> $task"
         just "$task"
@@ -86,7 +86,7 @@ setup-worktree:
       just "$task"
     done
 
-    for task in hooks-install; do
+    for task in hooks-install aws-cdk-install i18n-prepare a11y-deps a11y-prepare a11y-install; do
       if just --show "$task" >/dev/null 2>&1; then
         echo "==> $task"
         just "$task"
@@ -117,7 +117,7 @@ check:
       just hooks-all
     fi
     ran=0
-    for name in rust python go ts api; do
+    for name in rust python go ts api aws-cdk i18n a11y; do
       if just --show "$name" >/dev/null 2>&1; then
         echo "==> $name"
         just "$name"
@@ -125,7 +125,7 @@ check:
       fi
     done
     if [ "$ran" = 0 ]; then
-      echo "no language tasks found; nothing to check" >&2
+      echo "no quality tasks found; nothing to check" >&2
     fi
 
 # Run one phase across every language: fmt, lint, test, types, or cov

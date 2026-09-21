@@ -1,0 +1,2 @@
+# Isolated Playwright dependency tree; the lockfile remains committed.
+.a11y/node_modules/

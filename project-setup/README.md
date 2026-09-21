@@ -30,15 +30,16 @@ committed files are the record, and a second run re-reads them.
 ## Asset library
 
 `skills/project-setup/assets/` holds the files the approved plan copies: repository and
-governance baselines, bundled license texts, GitHub and GitLab templates, Renovate and
-release-please inputs, Worktrunk configuration, the Just task surface, prek hook
-fragments, TypeScript/Python/Rust/Go quality and CI fragments, an OpenAPI contract set,
-CI composition workflows, and the `docs/agents/` steering tree.
+governance baselines, an ADR template, bundled license texts, GitHub and GitLab templates,
+Renovate and release-please inputs, Worktrunk configuration, the Just task surface, prek hook
+fragments, language quality and CI fragments, API contracts, an AWS CDK v2 TypeScript generator,
+and the `docs/agents/` steering tree.
 
 A file ending in `.template` carries `@@UPPER_SNAKE@@` tokens, or blocks fenced by
 `# OPTIONAL BEGIN` and `# OPTIONAL END` that are kept or deleted whole. Everything else is
 copied byte for byte. No template engine runs: the agent resolves each file against the
 plan it showed.
 
-Decision records are not shipped here. When the beads plugin is installed, the ADR hook
-fragment and its renderer come from `skill://adr/templates/`, which owns both.
+Every accepted architecture decision is committed under `docs/adr/`. With the beads plugin,
+decision beads are authoritative and `skill://adr/templates/` renders the files. Without it,
+project-setup copies its MADR template once per accepted decision.

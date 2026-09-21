@@ -35,7 +35,7 @@ and language layout choices.
 | `@@INSTALL_COMMANDS@@` | accepted runtime and package-manager install commands |
 | `@@USAGE_EXAMPLE@@` | accepted minimal invocation for the primary deployable or package |
 | `@@ORG@@` | repository and hosting topic |
-| `@@REPO_URL@@` | the remote, once it exists |
+| `@@REPO_URL@@` | accepted remote; omit its optional block when no remote exists |
 | `@@SPDX_ID@@` | selected licence |
 | `@@DEFAULT_BRANCH@@` | repository and hosting topic |
 | `@@JOB_TIMEOUT_MINUTES@@` | repository and hosting topic |
@@ -63,13 +63,32 @@ and language layout choices.
 | `@@CARGO_DENY_VERSION@@` | exact latest-stable `cargo-deny` value accepted and resolved during setup |
 | `@@CARGO_MACHETE_VERSION@@` | exact latest-stable `cargo-machete` value accepted and resolved during setup |
 | `@@CARGO_LLVM_COV_VERSION@@` | exact latest-stable `cargo-llvm-cov` value accepted and resolved during setup |
-| `@@API_DESCRIPTION@@` | accepted one-line API purpose |
+| `@@API_DESCRIPTION@@` | accepted one-line deployable purpose |
 | `@@API_TITLE@@` | protocols and events topic |
 | `@@API_VERSION@@` | protocols and events topic |
-| `@@API_SERVER_URL@@` | protocols and events topic |
+| `@@API_SERVER_URL@@` | accepted deployment endpoint; unresolved is a blocking gap |
 | `@@API_FAIL_SEVERITY@@` | protocols and events topic |
 | `@@API_BASELINE_REF@@` | protocols and events topic |
 | `@@MONOREPO_MEMBERS@@` | accepted MONOREPO member rows, each with a name, repository-relative path, and capability map |
+| `@@BASE_LOCALE@@` | accepted internationalization base locale |
+| `@@LOCALES_JSON@@` | accepted shipped locales as a JSON string array, including the base locale |
+| `@@INLANG_MESSAGE_FORMAT_MODULE_URL@@` | exact user-supplied module URL; no recommendation |
+| `@@AWS_CDK_DEST_SHELL@@` | accepted repository-relative CDK destination rendered with Python `shlex.quote` |
+| `@@I18N_PREPARE_COMMANDS@@` | accepted clean-checkout dependency and catalog preparation commands, indented four spaces |
+| `@@I18N_CHECK_COMMANDS@@` | one accepted recurring catalog command per configured deployable, indented four spaces |
+| `@@A11Y_SURFACES_JSON@@` | accepted array of `{name, baseURL, routes}` objects; each route independently establishes its state |
+| `@@A11Y_WEB_SERVERS_JSON@@` | accepted array of Playwright `{command, url, cwd}` objects; `cwd` is repository-relative |
+| `@@A11Y_PREPARE_COMMANDS@@` | accepted dependency or fixture setup commands for every scanned product member, indented four spaces |
+| `@@PLAYWRIGHT_VERSION@@` | resolved stable `@playwright/test` version accepted in the plan |
+| `@@AXE_PLAYWRIGHT_VERSION@@` | resolved stable `@axe-core/playwright` version accepted in the plan |
+| `@@ADR_TITLE@@` | accepted ADR title |
+| `@@ADR_STATUS@@` | `accepted` for setup decisions |
+| `@@ADR_DATE@@` | ISO 8601 calendar date when accepted |
+| `@@ADR_DECISION@@` | accepted decision statement |
+| `@@ADR_RATIONALE@@` | accepted driver and evidence |
+| `@@ADR_ALTERNATIVES@@` | alternatives shown in the interview and why they lost |
+| `@@ADR_CONSEQUENCES@@` | accepted benefits, costs, and constraints |
+| `@@ADR_CONFIRMATION@@` | verification that proves the decision was applied |
 
 A `*_VERSION` token holds the bare version, with no leading `v` and no range operator.
 `.mise/conf.d/*.toml` and the CI setup actions read it as written; a consumer needing a
@@ -108,7 +127,7 @@ Per-language files are listed in the four stack references. The remaining files 
 | `README.md.template` | `README.md` |
 | `scripts/fold_gitignore.py` | `scripts/fold_gitignore.py` |
 
-`fold_gitignore.py <dest>` rebuilds the managed gitignore section from the `.gitignore.d/`
+`fold_gitignore.py "<dest>"` rebuilds the managed gitignore section from the `.gitignore.d/`
 fragments installed in the destination, and takes no other argument. It fetches nothing: every
 upstream GitHub rule set it needs is vendored inside a fragment, `.gitignore.d/os` here and one
 per language in each stack set, so the same input produces the same output offline. A fragment
@@ -129,6 +148,7 @@ setup asset contract; a target repository adds any unrelated ignore rule through
 | `SECURITY.md.template` | `SECURITY.md` | security policy selected |
 | `CONTRIBUTING.md` | `CONTRIBUTING.md` | contribution policy selected |
 | `CODE_OF_CONDUCT.md.template` | `CODE_OF_CONDUCT.md` | accepted reporting contact |
+| `ADR.md.template` | one `docs/adr/NNNN-kebab-title.md` per ADR manifest row | beads plugin not installed; substitute only accepted ADR fields |
 
 ### worktrunk
 
@@ -246,7 +266,7 @@ nothing.
 | `scripts/gen_steering.py` | `scripts/gen_steering.py` |
 | `scripts/install_agents_index.py` | `scripts/install_agents_index.py` |
 
-`install_agents_index.py <dest> [--claude MERGE|OVERWRITE|SKIP] [--agents MERGE|OVERWRITE|SKIP]`
+`install_agents_index.py "<dest>" [--claude MERGE|OVERWRITE|SKIP] [--agents MERGE|OVERWRITE|SKIP]`
 writes `AGENTS.md` from the rendered body and links `CLAUDE.md` to it. An existing
 `CLAUDE.md` whose text `AGENTS.md` does not already carry, or a symlink pointing elsewhere,
 returns `conflict`: that destination's class is asked and passed as `--claude`, never
@@ -265,6 +285,69 @@ asked as `--agents`; writing through the link is never the default.
 | `.github/security.d/api.yml` | same path on GitHub |
 | `.github/workflows/wc-lint-api.yml.template` | `.github/workflows/wc-lint-api.yml` on GitHub |
 | `.gitlab/ci/api.yml.template` | `.gitlab/ci/api.yml` on GitLab |
+
+### infrastructure/aws-cdk
+
+| Asset | Destination | Condition |
+|---|---|---|
+| `scripts/init_aws_cdk.py` | `scripts/init_aws_cdk.py` | `AWS_CDK_TYPESCRIPT` selected |
+| `.just.d/aws-cdk.just.template` | `.just.d/aws-cdk.just` | generated AWS CDK member exists |
+| `.gitlab/ci/aws-cdk.yml` | `.gitlab/ci/aws-cdk.yml` | GitLab and AWS CDK selected |
+| `.gitignore.d/aws-cdk` | `.gitignore.d/aws-cdk` | AWS CDK selected |
+
+The approved generator command is the only writer for a new CDK member. The destination must be
+absent and pass the repository-relative path grammar. The generator runs native `cdk init` with an
+exact accepted version, generates `bun.lock`, and atomically installs the completed member. It has no
+bootstrap or deploy command.
+
+Render `@@AWS_CDK_DEST_SHELL@@` into the Just fragment. GitHub quality CI invokes install and synth
+when that fragment exists. GitLab uses the copied job.
+
+
+### i18n
+
+| Asset | Destination | Condition |
+|---|---|---|
+| `ts/paraglide/project.inlang/settings.json.template` | `<deployable>/project.inlang/settings.json` | Paraglide selected; merge or skip an existing Inlang project |
+| `ts/paraglide/scripts/check-i18n-locale-drift.mjs` | `scripts/check-i18n-locale-drift.mjs` | at least one Paraglide deployable selected |
+| `.just.d/i18n.just.template` | `.just.d/i18n.just` | at least one recurring completeness command accepted |
+| `.gitlab/ci/i18n.yml` | `.gitlab/ci/i18n.yml` | GitLab and recurring completeness command accepted |
+
+The plan creates one `<deployable>/messages/<locale>.json` catalog per shipped locale. Catalog bodies
+are product copy, not static assets; show their initial keys and require explicit acceptance.
+`@@I18N_PREPARE_COMMANDS@@` installs each selected tool from its committed lockfile.
+`@@I18N_CHECK_COMMANDS@@` contains every accepted recurring command. For Paraglide it includes:
+
+```sh
+    node scripts/check-i18n-locale-drift.mjs '<deployable>'
+```
+
+An accepted path MUST equal `.` or match `[A-Za-z0-9._/-]+`. A non-root path remains relative and
+contains no empty, `.` or `..` segment. Render the value with Python `shlex.quote`; reject it before
+the plan when it fails the grammar.
+
+The aggregate `just check` invokes the rendered `i18n` recipe. GitHub quality CI invokes the same
+recipe when the fragment exists.
+
+### a11y
+
+| Asset | Destination | Condition |
+|---|---|---|
+| `ts/playwright/package.json.template` | `.a11y/package.json` | Playwright route scan accepted |
+| `ts/playwright/playwright.a11y.config.ts.template` | `.a11y/playwright.config.ts` | at least one stable route accepted |
+| `ts/playwright/tests/a11y/a11y.pw.ts.template` | `.a11y/tests/a11y.pw.ts` | at least one stable route accepted |
+| `ts/playwright/.just.d/a11y.just.template` | `.just.d/a11y.just` | Playwright route scan accepted |
+| `ts/playwright/.gitlab/ci/a11y.yml` | `.gitlab/ci/a11y.yml` | GitLab and Playwright route scan accepted |
+| `ts/playwright/.mise/conf.d/a11y.toml.template` | `.mise/conf.d/a11y.toml` | Playwright route scan accepted |
+| `ts/playwright/.gitignore.d/a11y` | `.gitignore.d/a11y` | Playwright route scan accepted |
+
+The isolated `.a11y` package works when no root package exists. After copying it, run
+`bun install --cwd .a11y` once and commit `.a11y/bun.lock`. Later installs use the frozen lockfile.
+`@@A11Y_PREPARE_COMMANDS@@` installs each product member's dependencies and prepares accepted fixture
+data before Playwright starts its servers. The config resolves every repository-relative `cwd`
+against the repository root. GitHub and GitLab CI run preparation, install Chromium, and run `a11y`.
+
+When no stable route exists, record axe scanning as a gap and do not copy this set.
 
 Generated `.gitignore`, `.pre-commit-config.yaml`, GitHub `ci.yml`, the Just import block,
 and generated steering blocks are rewritten only by their listed commands after the plan is

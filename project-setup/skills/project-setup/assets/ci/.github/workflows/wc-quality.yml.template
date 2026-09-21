@@ -71,6 +71,35 @@ jobs:
             echo "no .pre-commit-config.yaml, skipping"
           fi
 
+      - name: AWS CDK synthesis
+        run: |
+          if [ -f .just.d/aws-cdk.just ]; then
+            just aws-cdk-install
+            just aws-cdk-synth
+          else
+            echo "no AWS CDK app, skipping"
+          fi
+
+      - name: Internationalization catalogs
+        run: |
+          if [ -f .just.d/i18n.just ]; then
+            just i18n-prepare
+            just i18n
+          else
+            echo "no i18n gate, skipping"
+          fi
+
+      - name: Rendered accessibility
+        run: |
+          if [ -f .just.d/a11y.just ]; then
+            just a11y-deps
+            just a11y-prepare
+            just a11y-install
+            just a11y
+          else
+            echo "no rendered accessibility gate, skipping"
+          fi
+
       # Enforces the SHA-pinning policy every workflow here follows. It
       # resolves each tag through the GitHub API, which makes it too slow and too
       # network-dependent for a commit hook.

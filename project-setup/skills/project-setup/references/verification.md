@@ -6,10 +6,9 @@ library copied cleanly first, so reading an asset back proves nothing.
 ## Order
 
 1. Compare every copied non-template destination byte for byte with its package asset by using
-   `cmp`. Stop on the first mismatch. A shorter replacement that behaves similarly still fails.
+   `cmp`. Stop on the first mismatch.
 
-2. Run each generator the plan listed, in this order. A later one reads what an earlier one
-   wrote:
+2. Run each generator the plan listed, in this order:
 
    | Command | Rebuilds |
    |---|---|
@@ -20,14 +19,38 @@ library copied cleanly first, so reading an asset back proves nothing.
    | `just steering` | the generated blocks under `docs/agents/` |
    | `python3 scripts/fold_gitignore.py .` | `.gitignore` |
 
-3. `just setup`. It installs the toolchain through mise, then each language's
-   dependencies, then the hook shims.
-4. `just check`. This is what CI runs, and it is the pre-merge gate Worktrunk enforces.
-5. Run the staleness checks, which fail when a generated file no longer matches its sources:
-   `just just-check`, and `just steering-check`.
-6. Make a real commit that stages a file a hook watches, to prove the shims fire. A hook that
-   passes when run standalone can still fail inside a commit, because the commit's git
-   environment differs.
+3. Materialize every ADR manifest row. With beads, create and close validated decision beads and run
+   the renderer. Without beads, copy the MADR template to every planned ADR destination. Verify each
+   planned record. Preserve and exclude pre-existing ADRs from this comparison.
+
+4. Run `just setup`. It installs the toolchain, dependencies, browser runtime, and hook shims.
+
+5. When AWS CDK is selected, run `just aws-cdk-install` and `just aws-cdk-synth` without AWS
+   credentials. Never bootstrap or deploy during setup.
+
+6. Run `just check`. This is the CI and Worktrunk pre-merge gate. It includes every rendered API,
+   i18n, and accessibility recipe.
+
+7. For `I18N_READY` or `MULTIPLE_LOCALES`, compile or extract catalogs with the selected library.
+   Run the product through the base locale and every accepted test locale. The recurring `i18n`
+   recipe runs every accepted completeness command. Report each `ACCEPTED_GAP` without claiming
+   completeness.
+
+8. For every web or WebView surface, run its accepted static accessibility command or report its
+   `ACCEPTED_GAP`. Walk the accepted keyboard path. When a stable route was accepted, run the
+   rendered axe recipe. Otherwise report the accepted route gap. Record each screen-reader and
+   platform check as tested or untested. An automated clean result is not a WCAG pass.
+
+9. For every native desktop surface, inspect the accepted platform accessibility tree and actions.
+   Walk the accepted keyboard path and run each accepted screen-reader check.
+
+10. For every CLI or TUI surface, run its resize, non-color, static-output, keyboard, and reading-order
+   checks in each accepted terminal. Run the accepted screen-reader smoke command.
+
+11. Run the staleness checks: `just just-check` and `just steering-check`.
+
+12. Make a real commit that stages a file a hook watches. This proves that the shims fire inside a
+   commit, where Git supplies a different environment than a standalone hook run.
 
 ## What a report contains
 

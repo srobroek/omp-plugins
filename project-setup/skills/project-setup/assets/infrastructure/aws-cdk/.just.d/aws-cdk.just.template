@@ -1,0 +1,15 @@
+# AWS CDK validation without cloud mutation.
+
+# Restore the generated CDK application from its committed lockfile
+[group('infrastructure')]
+aws-cdk-install:
+    cd @@AWS_CDK_DEST_SHELL@@ && bun install --frozen-lockfile
+
+# Synthesize CloudFormation locally; never bootstrap or deploy
+[group('infrastructure')]
+aws-cdk-synth:
+    cd @@AWS_CDK_DEST_SHELL@@ && bun run cdk synth
+
+# Aggregate used by just check
+[group('infrastructure')]
+aws-cdk: aws-cdk-synth
