@@ -267,6 +267,33 @@ describe("device classification", () => {
         }
     });
 
+    test("canonical permits delivery orientation and hygiene reports", () => {
+        const { canonical, topology } = project();
+        for (const tool of ["delivery_orient", "delivery_hygiene_report"]) {
+            expect(decideWorktreeCall(tool, { cwd: canonical }, canonical, topology)).toBeUndefined();
+        }
+    });
+
+    test("canonical permits reconcile scans, plans, and apply", () => {
+        const { canonical, topology } = project();
+        expect(decideWorktreeCall("bd_reconcile", { cwd: canonical, apply: false }, canonical, topology)).toBeUndefined();
+        expect(decideWorktreeCall("bd_reconcile", { cwd: canonical, plan: true }, canonical, topology)).toBeUndefined();
+        expect(decideWorktreeCall("bd_reconcile", { cwd: canonical, apply: true }, canonical, topology)).toBeUndefined();
+    });
+
+    test("canonical rejects mutating delivery tools", () => {
+        const { canonical, topology } = project();
+        for (const tool of ["delivery_land", "delivery_cleanup"]) {
+            expect(decideWorktreeCall(tool, { cwd: canonical }, canonical, topology)?.block).toBe(true);
+        }
+    });
+
+    test("malformed reconcile input is handled conservatively", () => {
+        const { canonical, topology } = project();
+        expect(decideWorktreeCall("bd_reconcile", { path: canonical, apply: "false" }, canonical, topology)?.block).toBe(true);
+        expect(decideWorktreeCall("bd_reconcile", null, canonical, topology)).toBeUndefined();
+    });
+
 });
 
 describe("xd wire validation", () => {
