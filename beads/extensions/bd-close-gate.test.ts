@@ -13,6 +13,7 @@ import {
 } from "./bd-close-gate.ts";
 
 import { parse } from "./shell-command.ts";
+
 /** Shapes recorded from bd 1.1.2 `bd show --json`. */
 function row(id: string, issueType: string): Record<string, unknown> {
 	return { id, title: `t ${id}`, status: "open", priority: 2, issue_type: issueType };
