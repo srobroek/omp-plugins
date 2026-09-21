@@ -135,19 +135,21 @@ export async function copyProfile(
 		return;
 	}
 	let result: SpawnSyncReturns<string>;
-	if (selected === "clonefile") {
-		result = spawnSync("cp", ["-c", "-R", `${source}/.`, destination], { encoding: "utf8", timeout: 300_000 });
-	} else if (selected === "reflink") {
-		result = spawnSync("cp", ["-a", "--reflink=auto", `${source}/.`, destination], { encoding: "utf8", timeout: 300_000 });
-	} else {
-		const excludedDirs = EXCLUDED_DIRS.map((entry) => join(source, entry));
-		const excludedFiles = [...EXCLUDED_FILES, ...(!copyFirefoxLogins ? LOGIN_FILES : [])];
-		result = spawnSync(
-			"robocopy",
-			[source, destination, "/E", "/XJ", "/R:1", "/W:1", "/NFL", "/NDL", "/NJH", "/NJS", "/NP", "/XD", ...excludedDirs, "/XF", ...excludedFiles],
-			{ encoding: "utf8", timeout: 300_000 },
-		);
-	}
+    // Profile cloning is synchronous; cap it below the 30,000 ms tool_call budget and report failure rather than hide a late mutation.
+    const profileCopyTimeoutMs = 25_000;
+    if (selected === "clonefile") {
+        result = spawnSync("cp", ["-c", "-R", `${source}/.`, destination], { encoding: "utf8", timeout: profileCopyTimeoutMs });
+    } else if (selected === "reflink") {
+        result = spawnSync("cp", ["-a", "--reflink=auto", `${source}/.`, destination], { encoding: "utf8", timeout: profileCopyTimeoutMs });
+    } else {
+        const excludedDirs = EXCLUDED_DIRS.map((entry) => join(source, entry));
+        const excludedFiles = [...EXCLUDED_FILES, ...(!copyFirefoxLogins ? LOGIN_FILES : [])];
+        result = spawnSync(
+            "robocopy",
+            [source, destination, "/E", "/XJ", "/R:1", "/W:1", "/NFL", "/NDL", "/NJH", "/NJS", "/NP", "/XD", ...excludedDirs, "/XF", ...excludedFiles],
+            { encoding: "utf8", timeout: profileCopyTimeoutMs },
+        );
+    }
 	const successfulRobocopy = selected === "robocopy" && result.status !== null && result.status >= 0 && result.status <= 7;
 	if (result.error || (!successfulRobocopy && result.status !== 0)) {
 		warnings.push(`headed-browser: ${selected} profile copy failed; fell back to node (${result.error?.message ?? result.stderr ?? `exit ${result.status}`})`);

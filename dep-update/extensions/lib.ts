@@ -14,6 +14,21 @@ import { detectProject, isDir, isFile, REQ_NAME, readText } from "./detect";
 
 export const USER_AGENT = "dep-update-skill (+https://github.com/srobroek/agentic-packages)";
 export const FETCH_TIMEOUT_MS = 10_000;
+/** A tool_call has a 30,000 ms budget; leave 5,000 ms for scan reporting. */
+export const SCAN_TIMEOUT_MS = 25_000;
+
+class ScanDeadlineError extends Error {
+    constructor() { super("dependency scan aggregate deadline exceeded"); }
+}
+class RegistryError extends Error {
+    constructor(message: string, readonly code?: number) {
+        super(message);
+    }
+}
+
+function ensureDeadline(deadline?: number): void {
+    if (deadline !== undefined && Date.now() >= deadline) throw new ScanDeadlineError();
+}
 
 const NODE_VERSION = /^=?v?(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-((?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*))*))?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/;
 const PYTHON_VERSION = /^(?:={1,2})?v?(\d+)(?:\.(\d+))?(?:\.(\d+))?(?:[-_.]?(a|b|rc|alpha|beta|pre|preview)[-_.]?\d*)?(?:[-_.]?post[-_.]?\d*)?(?:[-_.]?(dev)[-_.]?\d*)?(?:\+[a-z0-9]+(?:[-_.][a-z0-9]+)*)?$/i;
@@ -62,153 +77,149 @@ export function pickStable(latest: string, installed: string, versions: string[]
 		const nb = normalizeVersion(b, ecosystem)!;
 		return nb[0] - na[0] || nb[1] - na[1] || nb[2] - na[2];
 	});
-	return stable[0] ?? latest;
+    return stable[0] ?? latest;
 }
-
-export class RegistryError extends Error {
-	code?: number;
-	constructor(message: string, code?: number) {
-		super(message);
-		this.code = code;
-	}
-}
-
 export async function fetchJson(
-	ecosystem: string,
-	name: string,
-	url: string,
-	fixtureDir?: string,
-	signal?: AbortSignal,
+    ecosystem: string,
+    name: string,
+    url: string,
+    fixtureDir?: string,
+    signal?: AbortSignal,
+    deadline?: number,
 ): Promise<Record<string, unknown>> {
-	signal?.throwIfAborted();
-	const dir = fixtureDir ?? process.env.DEP_UPDATE_FIXTURE_DIR ?? "";
-	if (dir) {
-		const safe = name.replaceAll("/", "__").replaceAll("@", "__at__");
-		const fixture = join(dir, `${ecosystem}_${safe}.json`);
-		if (isFile(fixture)) {
-			const data = JSON.parse(await Bun.file(fixture).text()) as Record<string, unknown>;
-			signal?.throwIfAborted();
-			return data;
-		}
-		throw new RegistryError("fixture not found (offline simulation)");
-	}
-	const deadline = AbortSignal.timeout(FETCH_TIMEOUT_MS);
-	const res = await fetch(url, {
-		headers: { "User-Agent": USER_AGENT },
-		signal: signal ? AbortSignal.any([signal, deadline]) : deadline,
-	});
-	if (!res.ok) throw new RegistryError(`HTTP ${res.status}`, res.status);
-	const data = (await res.json()) as Record<string, unknown>;
-	signal?.throwIfAborted();
-	return data;
+    signal?.throwIfAborted();
+    ensureDeadline(deadline);
+    const dir = fixtureDir ?? process.env.DEP_UPDATE_FIXTURE_DIR ?? "";
+    if (dir) {
+        const safe = name.replaceAll("/", "__").replaceAll("@", "__at__");
+        const fixture = join(dir, `${ecosystem}_${safe}.json`);
+        if (isFile(fixture)) {
+            const data = JSON.parse(await Bun.file(fixture).text()) as Record<string, unknown>;
+            signal?.throwIfAborted();
+            ensureDeadline(deadline);
+            return data;
+        }
+        throw new RegistryError("fixture not found (offline simulation)");
+    }
+    const remaining = deadline === undefined ? FETCH_TIMEOUT_MS : deadline - Date.now();
+    if (remaining <= 0) throw new ScanDeadlineError();
+    const requestDeadline = AbortSignal.timeout(Math.min(FETCH_TIMEOUT_MS, remaining));
+    const res = await fetch(url, { headers: { "User-Agent": USER_AGENT }, signal: signal ? AbortSignal.any([signal, requestDeadline]) : requestDeadline });
+    ensureDeadline(deadline);
+    if (!res.ok) throw new RegistryError(`HTTP ${res.status}`, res.status);
+    const data = (await res.json()) as Record<string, unknown>;
+    signal?.throwIfAborted();
+    ensureDeadline(deadline);
+    return data;
 }
 
 export async function queryRegistry(
-	ecosystem: string,
-	name: string,
-	installed: string,
-	fixtureDir?: string,
-	signal?: AbortSignal,
+    ecosystem: string,
+    name: string,
+    installed: string,
+    fixtureDir?: string,
+    signal?: AbortSignal,
+    deadline?: number,
 ): Promise<BumpRecord> {
-	signal?.throwIfAborted();
-	const result: BumpRecord = { ecosystem, name, installed, status: "UNRESOLVABLE" };
-	try {
-		let latest = "";
-		let candidates: string[] = [];
-		if (ecosystem === "pypi") {
-			const data = await fetchJson(ecosystem, name, `https://pypi.org/pypi/${name}/json`, fixtureDir, signal);
-			const info = data.info as Record<string, unknown> | undefined;
-			const ver = info?.version;
-			if (typeof ver !== "string" || !ver) {
-				result.reason = "no info.version";
-				return result;
-			}
-			latest = ver;
-			const releases = (data.releases ?? {}) as Record<string, unknown>;
-			const files = (releases[latest] as Array<Record<string, unknown>>) || [];
-			if (files.length && files.every((f) => f.yanked)) {
-				result.status = "DISCONFIRMED";
-				result.latest = latest;
-				result.reason = "all files for latest are yanked on PyPI";
-				result.class = "DISCONFIRMED";
-				return result;
-			}
-			candidates = Object.keys(releases);
-		} else if (ecosystem === "npm" || ecosystem === "node") {
-			const data = await fetchJson(ecosystem, name, `https://registry.npmjs.org/${name}`, fixtureDir, signal);
-			const tags = (data["dist-tags"] ?? {}) as Record<string, unknown>;
-			const ver = tags.latest;
-			if (typeof ver !== "string" || !ver) {
-				result.reason = "no dist-tags.latest";
-				return result;
-			}
-			latest = ver;
-			candidates = Object.keys((data.versions ?? {}) as Record<string, unknown>);
-		} else {
-			result.reason = `registry fetch not implemented for ${ecosystem} (advisory-only)`;
-			return result;
-		}
-		latest = pickStable(latest, installed, candidates, ecosystem);
-		const verdict = classify(installed, latest, ecosystem);
-		result.latest = latest;
-		result.status = verdict === "CURRENT" || verdict === "UNRESOLVABLE" ? verdict : "OK";
-		if (verdict === "UNRESOLVABLE") {
-			result.reason = "Exact versions are required to classify an upgrade; resolve the declaration before applying.";
-		}
-		result.class = verdict;
-		return result;
-	} catch (exc) {
-		signal?.throwIfAborted();
-		if (exc instanceof RegistryError && exc.code !== undefined) {
-			result.reason = exc.code === 401 || exc.code === 403 ? "auth-required" : `HTTP ${exc.code}`;
-			return result;
-		}
-		if (exc instanceof RegistryError) {
-			result.reason = `network error: ${exc.message}`;
-			return result;
-		}
-		result.reason = exc instanceof Error ? exc.message : String(exc);
-		return result;
-	}
+    signal?.throwIfAborted();
+    ensureDeadline(deadline);
+    const result: BumpRecord = { ecosystem, name, installed, status: "UNRESOLVABLE" };
+    try {
+        let latest = "";
+        let candidates: string[] = [];
+        if (ecosystem === "pypi") {
+            const data = await fetchJson(ecosystem, name, `https://pypi.org/pypi/${name}/json`, fixtureDir, signal, deadline);
+            const info = data.info as Record<string, unknown> | undefined;
+            const ver = info?.version;
+            if (typeof ver !== "string" || !ver) { result.reason = "no info.version"; return result; }
+            latest = ver;
+            const releases = (data.releases ?? {}) as Record<string, unknown>;
+            const files = (releases[latest] as Array<Record<string, unknown>>) || [];
+            if (files.length && files.every((f) => f.yanked)) {
+                result.status = "DISCONFIRMED";
+                result.latest = latest;
+                result.reason = "all files for latest are yanked on PyPI";
+                result.class = "DISCONFIRMED";
+                return result;
+            }
+            candidates = Object.keys(releases);
+        } else if (ecosystem === "npm" || ecosystem === "node") {
+            const data = await fetchJson(ecosystem, name, `https://registry.npmjs.org/${name}`, fixtureDir, signal, deadline);
+            const tags = (data["dist-tags"] ?? {}) as Record<string, unknown>;
+            const ver = tags.latest;
+            if (typeof ver !== "string" || !ver) { result.reason = "no dist-tags.latest"; return result; }
+            latest = ver;
+            candidates = Object.keys((data.versions ?? {}) as Record<string, unknown>);
+        } else {
+            result.reason = `registry fetch not implemented for ${ecosystem} (advisory-only)`;
+            return result;
+        }
+        ensureDeadline(deadline);
+        latest = pickStable(latest, installed, candidates, ecosystem);
+        const verdict = classify(installed, latest, ecosystem);
+        result.latest = latest;
+        result.status = verdict === "CURRENT" || verdict === "UNRESOLVABLE" ? verdict : "OK";
+        if (verdict === "UNRESOLVABLE") result.reason = "Exact versions are required to classify an upgrade; resolve the declaration before applying.";
+        result.class = verdict;
+        return result;
+    } catch (exc) {
+        if (exc instanceof ScanDeadlineError) throw exc;
+        signal?.throwIfAborted();
+        if (exc instanceof RegistryError && exc.code !== undefined) {
+            result.reason = exc.code === 401 || exc.code === 403 ? "auth-required" : `HTTP ${exc.code}`;
+            return result;
+        }
+        if (exc instanceof RegistryError) { result.reason = `network error: ${exc.message}`; return result; }
+        result.reason = exc instanceof Error ? exc.message : String(exc);
+        return result;
+    }
 }
 
 export async function researchProject(
-	target: string,
-	fixtureDir?: string,
-	signal?: AbortSignal,
-): Promise<{ exit: number; records: BumpRecord[]; stderr: string }> {
-	signal?.throwIfAborted();
-	if (!isDir(target)) {
-		return { exit: 2, records: [], stderr: `research: '${target}' is not a directory` };
-	}
-	const notes: string[] = ["dep-update/research: querying registries...", ""];
-	const detected = await detectProject(target);
-	signal?.throwIfAborted();
-	notes.push(detected.stderr);
-	const tallies = { OK: 0, CURRENT: 0, UNRESOLVABLE: 0, DISCONFIRMED: 0 };
-	const records: BumpRecord[] = [];
-	for (const [ecosystem, name, installed] of detected.rows) {
-		signal?.throwIfAborted();
-		if (!ecosystem || !name) continue;
-		const record = await queryRegistry(ecosystem, name, installed, fixtureDir, signal);
-		signal?.throwIfAborted();
-		records.push(record);
-		const status = record.status;
-		if (status in tallies) tallies[status as keyof typeof tallies] += 1;
-	}
-	const unresolvable = tallies.UNRESOLVABLE + tallies.DISCONFIRMED;
-	notes.push("");
-	notes.push(`dep-update/research: ${records.length} dep(s) queried`);
-	notes.push(`  classified:    ${tallies.OK}`);
-	notes.push(`  already-current: ${tallies.CURRENT}`);
-	notes.push(`  unresolvable:  ${unresolvable}`);
-	if (records.length > 0 && tallies.OK === 0 && tallies.CURRENT === 0 && unresolvable === records.length) {
-		notes.push("");
-		notes.push("WARNING: no dependency versions could be classified.");
-		notes.push("Resolve declared ranges and inspect each record's reason before planning upgrades.");
-	}
-	return { exit: 0, records, stderr: notes.join("\n") };
+    target: string,
+    fixtureDir?: string,
+    signal?: AbortSignal,
+    timeoutMs = SCAN_TIMEOUT_MS,
+): Promise<{ exit: number; records: BumpRecord[]; stderr: string; complete: boolean }> {
+    signal?.throwIfAborted();
+    const deadline = Date.now() + Math.min(timeoutMs, SCAN_TIMEOUT_MS);
+    if (!isDir(target)) return { exit: 2, records: [], stderr: `research: '${target}' is not a directory`, complete: true };
+    const notes: string[] = ["dep-update/research: querying registries...", ""];
+    const detected = await detectProject(target);
+    ensureDeadline(deadline);
+    signal?.throwIfAborted();
+    notes.push(detected.stderr);
+    const tallies = { OK: 0, CURRENT: 0, UNRESOLVABLE: 0, DISCONFIRMED: 0 };
+    const records: BumpRecord[] = [];
+    let complete = true;
+    for (const [ecosystem, name, installed] of detected.rows) {
+        try {
+            signal?.throwIfAborted();
+            ensureDeadline(deadline);
+            if (!ecosystem || !name) continue;
+            const record = await queryRegistry(ecosystem, name, installed, fixtureDir, signal, deadline);
+            records.push(record);
+            const status = record.status;
+            if (status in tallies) tallies[status as keyof typeof tallies] += 1;
+        } catch (exc) {
+            if (exc instanceof ScanDeadlineError) { complete = false; break; }
+            throw exc;
+        }
+    }
+    notes.push("");
+    notes.push(`dep-update/research: ${records.length} dep(s) queried${complete ? "" : " before aggregate deadline"}`);
+    notes.push(`  classified:    ${tallies.OK}`);
+    notes.push(`  already-current: ${tallies.CURRENT}`);
+    notes.push(`  unresolvable:  ${tallies.UNRESOLVABLE + tallies.DISCONFIRMED}`);
+    if (!complete) notes.push("PARTIAL: aggregate scan deadline reached; remaining dependencies were not queried.");
+    if (records.length > 0 && tallies.OK === 0 && tallies.CURRENT === 0 && tallies.UNRESOLVABLE + tallies.DISCONFIRMED === records.length) {
+        notes.push("");
+        notes.push("WARNING: no dependency versions could be classified.");
+        notes.push("Resolve declared ranges and inspect each record's reason before planning upgrades.");
+    }
+    return { exit: 0, records, stderr: notes.join("\n"), complete };
 }
+
 
 export function canonical(name: string): string {
 	return name.replace(/[-_.]+/g, "-").toLowerCase();
@@ -331,11 +342,12 @@ export async function checkNodeVersion(root: string, name: string, version: stri
 }
 
 type ApplyOptions = {
-	signal?: AbortSignal;
-	timeoutMs?: number;
-	maxOutputBytes?: number;
-	setTimeout?: (callback: () => void, ms: number) => Timer;
-	clearTimer?: (timer: Timer) => void;
+    signal?: AbortSignal;
+    /** Package-manager work must fit below the 30,000 ms tool_call budget. */
+    timeoutMs?: number;
+    maxOutputBytes?: number;
+    setTimeout?: (callback: () => void, ms: number) => Timer;
+    clearTimer?: (timer: Timer) => void;
 };
 
 async function runPm(command: string[], root: string, options: ApplyOptions): Promise<{ code: number; log: string }> {
@@ -380,9 +392,11 @@ async function runPm(command: string[], root: string, options: ApplyOptions): Pr
 			kill();
 			cleanup = schedule(() => finish(1), 1_000);
 		};
-		const abort = () => stop("Cancelled");
-		const deadline = schedule(() => stop("Package manager deadline exceeded"),
-			Math.max(1, Math.min(options.timeoutMs ?? 120_000, 120_000)));
+        const abort = () => stop("Cancelled");
+        const deadline = schedule(
+            () => stop("Package manager deadline exceeded; partial dependency changes may remain and were reported"),
+            Math.max(1, Math.min(options.timeoutMs ?? 25_000, 25_000)),
+        );
 		const collect = (chunk: Buffer) => {
 			const remaining = limit - bytes;
 			if (remaining > 0) {

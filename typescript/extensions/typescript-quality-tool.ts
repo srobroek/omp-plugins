@@ -3,7 +3,8 @@ import { join, resolve } from "node:path";
 import type { TSchema } from "@oh-my-pi/pi-ai";
 import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
 
-const TIMEOUT_MS = 300_000;
+/** A tool_call has a 30,000 ms budget; leave 5,000 ms for dispatch and reporting. */
+export const TIMEOUT_MS = 25_000;
 
 export type QualityMode = "check" | "fix";
 
@@ -22,7 +23,8 @@ export type QualityReport = {
 	steps: StepResult[];
 };
 
-const PROBE_TIMEOUT_MS = 5_000;
+/** PATH probes are local lookups; cap each one tightly to avoid stale mounts. */
+const PROBE_TIMEOUT_MS = 1_000;
 
 /**
  * Argument sets tried in order until one exits 0, which is how
@@ -50,115 +52,90 @@ const PROBE_ARGS: readonly (readonly string[])[] = [["--version"], ["version"], 
  * A shim for an uninstalled tool fails every argument set, so the cascade cannot
  * be fooled into reporting one usable.
  */
-function have(bin: string): boolean {
-	for (const args of PROBE_ARGS) {
-		try {
-			const proc = Bun.spawnSync([bin, ...args], {
-				// Closed stdin, because a probe must never wait on input: `gofmt` with
-				// no arguments reads stdin, and an inherited terminal would block until
-				// the timeout on every call.
-				stdin: new Uint8Array(),
-				stdout: "pipe",
-				stderr: "pipe",
-				timeout: PROBE_TIMEOUT_MS,
-			});
-			// A timeout is not a usable tool, whatever exit code accompanies it. This
-			// mirrors `sniff-install-tool`, which treats `exitedDueToTimeout` as its
-			// own status rather than folding it into the exit code.
-			if (proc.exitCode === 0 && proc.exitedDueToTimeout !== true) return true;
-		} catch {
-			return false;
-		}
-	}
-	return false;
+function have(bin: string, deadline = Date.now() + TIMEOUT_MS): boolean {
+    for (const args of PROBE_ARGS) {
+        const remaining = deadline - Date.now();
+        if (remaining <= 0) return false;
+        try {
+            const proc = Bun.spawnSync([bin, ...args], {
+                stdin: new Uint8Array(),
+                stdout: "pipe",
+                stderr: "pipe",
+                timeout: Math.min(PROBE_TIMEOUT_MS, remaining),
+            });
+            if (proc.exitCode === 0 && proc.exitedDueToTimeout !== true && Date.now() < deadline) return true;
+        } catch {
+            return false;
+        }
+    }
+    return false;
 }
-
 function run(
-	argv: string[],
-	cwd: string,
+    argv: string[],
+    cwd: string,
+    deadline = Date.now() + TIMEOUT_MS,
 ): { exitCode: number | null; stdout: string; stderr: string; error?: string } {
-	try {
-		const proc = Bun.spawnSync(argv, {
-			cwd,
-			stdout: "pipe",
-			stderr: "pipe",
-			timeout: TIMEOUT_MS,
-		});
-		return {
-			exitCode: proc.exitCode,
-			stdout: proc.stdout.toString().slice(0, 16_384),
-			stderr: proc.stderr.toString().slice(0, 16_384),
-		};
-	} catch (err) {
-		return {
-			exitCode: null,
-			stdout: "",
-			stderr: "",
-			error: err instanceof Error ? err.message : String(err),
-		};
-	}
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) return { exitCode: null, stdout: "", stderr: "", error: "quality event budget exhausted" };
+    try {
+        const proc = Bun.spawnSync(argv, { cwd, stdout: "pipe", stderr: "pipe", timeout: Math.min(TIMEOUT_MS, remaining) });
+        return {
+            exitCode: proc.exitCode,
+            stdout: proc.stdout.toString().slice(0, 16_384),
+            stderr: proc.stderr.toString().slice(0, 16_384),
+            ...(proc.exitedDueToTimeout === true ? { error: "quality command timed out" } : {}),
+        };
+    } catch (err) {
+        return { exitCode: null, stdout: "", stderr: "", error: err instanceof Error ? err.message : String(err) };
+    }
 }
 
 function fmtTable(steps: StepResult[]): string {
-	return steps
-		.map((s) => `${s.status.padEnd(4)}  ${s.name}${s.detail ? ` — ${s.detail}` : ""}`)
-		.join("\n");
+    return steps.map((s) => `${s.status.padEnd(4)}  ${s.name}${s.detail ? ` — ${s.detail}` : ""}`).join("\n");
 }
 
-function record(
-	steps: StepResult[],
-	name: string,
-	r: { exitCode: number | null; stdout: string; stderr: string; error?: string },
-): void {
-	if (r.error) {
-		steps.push({ name, status: "fail", detail: r.error });
-		return;
-	}
-	if (r.exitCode === 0) {
-		steps.push({ name, status: "pass", detail: "" });
-		return;
-	}
-	steps.push({
-		name,
-		status: "fail",
-		detail: (r.stderr || r.stdout).trim() || `exit ${r.exitCode}`,
-	});
+function record(steps: StepResult[], name: string, r: { exitCode: number | null; stdout: string; stderr: string; error?: string }): void {
+    if (r.error) {
+        steps.push({ name, status: "fail", detail: r.error });
+        return;
+    }
+    if (r.exitCode === 0) {
+        steps.push({ name, status: "pass", detail: "" });
+        return;
+    }
+    steps.push({ name, status: "fail", detail: (r.stderr || r.stdout).trim() || `exit ${r.exitCode}` });
 }
 
-function installed(bin: string, cwd: string): string | null {
-	const local = join(cwd, "node_modules", ".bin", bin);
-	if (existsSync(local)) return local;
-	return have(bin) ? bin : null;
+function installed(bin: string, cwd: string, deadline: number): string | null {
+    const local = join(cwd, "node_modules", ".bin", bin);
+    if (existsSync(local)) return local;
+    return have(bin, deadline) ? bin : null;
 }
 
 export function runTypescriptQuality(mode: QualityMode, cwd: string): QualityReport {
-	const steps: StepResult[] = [];
-	if (!existsSync(join(cwd, "package.json"))) {
-		steps.push({ name: "biome", status: "skip", detail: "no package.json" });
-		steps.push({ name: "tsc", status: "skip", detail: "no package.json" });
-		steps.push({ name: "eslint", status: "skip", detail: "no package.json" });
-		return { ok: false, complete: false, cwd, mode, steps };
-	}
-
-	const biome = installed("biome", cwd);
-	const eslint = installed("eslint", cwd);
-	const tsc = installed("tsc", cwd);
-	const lint = biome ?? eslint;
-	if (lint) {
-		const args = biome
-			? ["check", ...(mode === "fix" ? ["--write"] : []), "."]
-			: [".", ...(mode === "fix" ? ["--fix"] : [])];
-		record(steps, biome ? "biome" : "eslint", run([lint, ...args], cwd));
-	} else {
-		steps.push({ name: "biome/eslint", status: "skip", detail: "no installed biome or eslint" });
-	}
-	if (mode === "check") {
-		if (tsc) record(steps, "tsc --noEmit", run([tsc, "--noEmit"], cwd));
-		else steps.push({ name: "tsc --noEmit", status: "skip", detail: "no installed tsc" });
-	}
-	const complete = steps.length > 0 && steps.every((s) => s.status !== "skip");
-	const ok = complete && steps.every((s) => s.status === "pass");
-	return { ok, complete, cwd, mode, steps };
+    const deadline = Date.now() + TIMEOUT_MS;
+    const steps: StepResult[] = [];
+    if (!existsSync(join(cwd, "package.json"))) {
+        steps.push({ name: "biome", status: "skip", detail: "no package.json" });
+        steps.push({ name: "tsc", status: "skip", detail: "no package.json" });
+        steps.push({ name: "eslint", status: "skip", detail: "no package.json" });
+        return { ok: false, complete: false, cwd, mode, steps };
+    }
+    const biome = installed("biome", cwd, deadline);
+    const eslint = installed("eslint", cwd, deadline);
+    const tsc = installed("tsc", cwd, deadline);
+    const lint = biome ?? eslint;
+    if (lint) {
+        const args = biome ? ["check", ...(mode === "fix" ? ["--write"] : []), "."] : [".", ...(mode === "fix" ? ["--fix"] : [])];
+        record(steps, biome ? "biome" : "eslint", run([lint, ...args], cwd, deadline));
+    } else steps.push({ name: "biome/eslint", status: "skip", detail: "no installed biome or eslint" });
+    if (mode === "check") {
+        if (tsc) record(steps, "tsc --noEmit", run([tsc, "--noEmit"], cwd, deadline));
+        else steps.push({ name: "tsc --noEmit", status: "skip", detail: "no installed tsc" });
+    }
+    const complete = steps.length > 0 && steps.every((s) => s.status !== "skip") && Date.now() < deadline;
+    const ok = complete && steps.every((s) => s.status === "pass");
+    return { ok, complete, cwd, mode, steps };
 }
 
 export default function typescriptQualityTool(pi: ExtensionAPI): void {

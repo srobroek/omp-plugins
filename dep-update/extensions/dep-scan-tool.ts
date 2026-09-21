@@ -13,11 +13,11 @@ export default function depScanTool(pi: ExtensionAPI): void {
 	pi.registerTool({
 		name: "dep_scan",
 		label: "Dependency Scan",
-		description:
-			"Enumerate a project's declared dependencies, query PyPI/npm for the latest versions, and " +
-			"classify exact-version bumps as PATCH-SAFE, MINOR-CHECK, or MAJOR-ADVISORY. " +
-			"Unresolved versions are UNRESOLVABLE, never an upgrade recommendation. Read-only; applies nothing. " +
-			"Rust and go deps are enumerated but not classified (advisory-only by policy).",
+        description:
+            "Enumerate a project's declared dependencies, query PyPI/npm for the latest versions, and " +
+            "classify exact-version bumps as PATCH-SAFE, MINOR-CHECK, or MAJOR-ADVISORY. " +
+            "Read-only; each scan has a 25 s aggregate deadline inside the 30 s tool_call budget and " +
+            "returns a partial report when a large manifest exceeds it. Rust and go deps are advisory-only.",
 		parameters: z.object({
 			path: z.string().optional().describe("Project root to scan; defaults to the session cwd"),
 			offline_fixture_dir: z.string().optional().describe("DEP_UPDATE_FIXTURE_DIR: read registry responses from fixture files instead of the network"),
@@ -26,7 +26,7 @@ export default function depScanTool(pi: ExtensionAPI): void {
 		async execute(_id, params: DepScanParams, signal, _onUpdate, ctx) {
 			const dir = params.path ?? ctx.cwd;
 			try {
-				const { exit, records, stderr } = await researchProject(dir, params.offline_fixture_dir, signal);
+                const { exit, records, stderr, complete } = await researchProject(dir, params.offline_fixture_dir, signal);
 				if (exit !== 0) {
 					return {
 						content: [{ type: "text" as const, text: `dep_scan failed (exit ${exit}):\n${stderr}` }],
@@ -57,7 +57,7 @@ export default function depScanTool(pi: ExtensionAPI): void {
 				if (stderr.trim()) lines.push(stderr.trim());
 				return {
 					content: [{ type: "text" as const, text: lines.join("\n") }],
-					details: { records, summary: { upgradable: upgradable.length, skipped } },
+                    details: { records, complete, summary: { upgradable: upgradable.length, skipped } },
 				};
 			} catch (error) {
 				signal?.throwIfAborted();
@@ -73,9 +73,10 @@ export default function depScanTool(pi: ExtensionAPI): void {
 	pi.registerTool({
 		name: "dep_apply",
 		label: "Apply Dependency Bump",
-		description:
-			"Apply one confirmed dependency bump via the ecosystem package manager (uv/pnpm/npm/yarn/bun). " +
-			"Cargo and go print an advisory command only. One bump per call.",
+        description:
+            "Apply one confirmed dependency bump via the ecosystem package manager. " +
+            "The mutation is bounded to 25 s inside the 30 s tool_call budget; if interrupted, " +
+            "the result reports that partial changes may remain so the caller can inspect manifests and lockfiles.",
 		parameters: z.object({
 			ecosystem: z.string().describe("pypi, npm, cargo, or go"),
 			name: z.string().describe("Package name"),
@@ -90,7 +91,7 @@ export default function depScanTool(pi: ExtensionAPI): void {
 				const approved = await ctx.ui.confirm(
 					"Apply dependency bump",
 					`${params.ecosystem}: ${params.name} -> ${params.version}\nProject: ${params.path ?? ctx.cwd}\nPackage-manager failure or cancellation can leave partial changes.`,
-					{ signal, timeout: 120_000 },
+                    { signal, timeout: 20_000 },
 				);
 				if (!approved) throw new Error("Dependency bump denied; no process started");
 				const result = await applyBump(params.ecosystem, params.name, params.version, params.path ?? ctx.cwd, {

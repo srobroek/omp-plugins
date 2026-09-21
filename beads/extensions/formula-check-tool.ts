@@ -8,7 +8,9 @@ import { envelopeData, parseTrailingJson } from "./session-beads-lifecycle.ts";
 const BEADS_PRESENT = Symbol.for("com.srobroek.beads.present.v1");
 (globalThis as Record<symbol, unknown>)[BEADS_PRESENT] = { version: pkg.version };
 
-const TIMEOUT_MS = 120_000;
+/** Up to five sequential bd calls fit a 30,000 ms tool_call budget. */
+const TIMEOUT_MS = 5_000;
+const FORMULA_TIMEOUT_MS = 25_000;
 
 export const VALID_GATE_TYPES = ["human", "timer", "gh:run", "gh:pr"] as const;
 
@@ -50,22 +52,16 @@ export function setBdSpawnForTests(fn: BdSpawn | null): void {
  * refusal is reported as the run's own error.
  */
 export async function runBd(
-	cmd: string[],
-	cwd?: string,
-	holder?: string,
-	env: NodeJS.ProcessEnv = process.env,
+    cmd: string[],
+    cwd?: string,
+    holder?: string,
+    env: NodeJS.ProcessEnv = process.env,
+    deadline?: number,
 ): Promise<SpawnResult> {
-	// The same fail-closed predicate the bash boundary uses, so a verb bd adds later
-	// is serialised here without anyone editing this module.
-	if (!writesStore(invocationFromArgv(cmd))) return spawnBd(cmd, cwd, env);
-	const locked = await withEmbeddedWriteLock(
-		cwd ?? process.cwd(),
-		holder ?? `bd-formula-check-${process.pid}-${runs++}`,
-		() => spawnBd(cmd, cwd, env),
-		env,
-	);
-	if (locked.kind === "failed") return { ok: false, exitCode: null, stdout: "", stderr: "", error: locked.reason };
-	return locked.value;
+    if (!writesStore(invocationFromArgv(cmd))) return spawnBd(cmd, cwd, env);
+    const locked = await withEmbeddedWriteLock(cwd ?? process.cwd(), holder ?? `bd-formula-check-${process.pid}-${runs++}`, () => spawnBd(cmd, cwd, env), env, deadline ?? Date.now() + TIMEOUT_MS);
+    if (locked.kind === "failed") return { ok: false, exitCode: null, stdout: "", stderr: "", error: locked.reason };
+    return locked.value;
 }
 
 let runs = 0;
@@ -79,33 +75,34 @@ let runs = 0;
  * is actively using lapse and be taken over by another writer.
  */
 async function spawnBd(cmd: string[], cwd: string | undefined, env: NodeJS.ProcessEnv): Promise<SpawnResult> {
-	if (injectedSpawn !== null) return injectedSpawn(cmd, cwd, env);
-	try {
-		const proc = Bun.spawn(["bd", ...cmd], {
-			cwd,
-			env,
-			stdout: "pipe",
-			stderr: "pipe",
-			timeout: TIMEOUT_MS,
-			killSignal: "SIGKILL",
-		});
-		const [stdout, stderr] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text()]);
-		const exitCode = await proc.exited;
-		return { ok: exitCode === 0, exitCode, stdout, stderr };
-	} catch (err) {
-		const message = err instanceof Error ? err.message : String(err);
-		return { ok: false, exitCode: null, stdout: "", stderr: "", error: message };
-	}
+    if (injectedSpawn !== null) return injectedSpawn(cmd, cwd, env);
+    try {
+        const proc = Bun.spawn(["bd", ...cmd], {
+            cwd,
+            env,
+            stdout: "pipe",
+            stderr: "pipe",
+            timeout: TIMEOUT_MS,
+            killSignal: "SIGKILL",
+        });
+        const [stdout, stderr] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text()]);
+        const exitCode = await proc.exited;
+        const timedOut = exitCode === null;
+        return { ok: exitCode === 0 && !timedOut, exitCode, stdout, stderr, ...(timedOut ? { error: `bd command timed out after ${TIMEOUT_MS}ms` } : {}) };
+    } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        return { ok: false, exitCode: null, stdout: "", stderr: "", error: message };
+    }
 }
 
-export async function cookCheck(formula: string, varargs: string[], cwd?: string, env: NodeJS.ProcessEnv = process.env): Promise<string[]> {
-	const result = await runBd(["cook", formula, "--dry-run", ...varargs], cwd, undefined, env);
-	if (result.error) return [`cook failed to spawn: ${result.error}`];
-	if (!result.ok) {
-		const out = [result.stdout, result.stderr].filter(Boolean).join("\n").trim();
-		return [`cook failed — the real error:\n${out}`];
-	}
-	return [];
+export async function cookCheck(formula: string, varargs: string[], cwd?: string, env: NodeJS.ProcessEnv = process.env, deadline?: number): Promise<string[]> {
+    const result = await runBd(["cook", formula, "--dry-run", ...varargs], cwd, undefined, env, deadline);
+    if (result.error) return [`cook failed to spawn: ${result.error}`];
+    if (!result.ok) {
+        const out = [result.stdout, result.stderr].filter(Boolean).join("\n").trim();
+        return [`cook failed — the real error:\n${out}`];
+    }
+    return [];
 }
 
 export type DryRun = { steps: string[]; gates: string[] };
@@ -252,99 +249,80 @@ export function parsePourHelp(stdout: string, stderr = ""): PourHelp {
  * half-poured workspace and is reported as such.
  */
 export async function deepAssert(
-	formula: string,
-	varargs: string[],
-	toolCallId: string,
-	workspace?: string,
-	env: NodeJS.ProcessEnv = process.env,
+    formula: string,
+    varargs: string[],
+    toolCallId: string,
+    workspace?: string,
+    env: NodeJS.ProcessEnv = process.env,
+    deadline = Date.now() + FORMULA_TIMEOUT_MS,
 ): Promise<string[]> {
-	const locked = await withEmbeddedWriteLock(workspace ?? process.cwd(), toolCallId, async () => {
-		const poured = await runBd(["mol", "pour", formula, ...varargs], workspace, toolCallId, env);
-		const combined = [poured.stdout, poured.stderr].join("\n");
-		const root = combined.match(/Root issue: (\S+)/)?.[1];
-		const recovery = root
-			? `Created root ${root} remains in ${workspace ?? "the current workspace"}; inspect with bd mol show ${root}. No cleanup was attempted.`
-			: "Pour may have created state, but no root id was recovered. Inspect the workspace before retrying; no cleanup was attempted.";
-		if (poured.error || !poured.ok) return [`real pour failed: ${poured.error ?? combined}\n${recovery}`];
-		if (!root) return [recovery];
-		const shown = await runBd(["mol", "show", root, "--json"], workspace, toolCallId, env);
-		if (shown.error || !shown.ok) return [`mol show failed: ${shown.error ?? [shown.stdout, shown.stderr].join("\n")}\n${recovery}`];
-		const mol = envelopeData(parseTrailingJson(shown.stdout));
-		const failures = deepAssertFromMol(mol as MolShow);
-		return failures.map(failure => `${failure}\n${recovery}`);
-	}, env);
-	if (locked.kind === "failed") return [`real pour was not attempted: ${locked.reason}`];
-	return locked.value;
+    const locked = await withEmbeddedWriteLock(workspace ?? process.cwd(), toolCallId, async () => {
+        const poured = await runBd(["mol", "pour", formula, ...varargs], workspace, toolCallId, env, deadline);
+        const combined = [poured.stdout, poured.stderr].join("\n");
+        const root = combined.match(/Root issue: (\S+)/)?.[1];
+        const recovery = root
+            ? `Created root ${root} remains in ${workspace ?? "the current workspace"}; inspect with bd mol show ${root}. No cleanup was attempted.`
+            : "Pour may have created state, but no root id was recovered. Inspect the workspace before retrying; no cleanup was attempted.";
+        if (poured.error || !poured.ok) return [`real pour failed: ${poured.error ?? combined}\n${recovery}`];
+        if (!root) return [recovery];
+        const shown = await runBd(["mol", "show", root, "--json"], workspace, toolCallId, env, deadline);
+        if (shown.error || !shown.ok) return [`mol show failed: ${shown.error ?? [shown.stdout, shown.stderr].join("\n")}\n${recovery}`];
+        const mol = envelopeData(parseTrailingJson(shown.stdout));
+        const failures = deepAssertFromMol(mol as MolShow);
+        return failures.map((failure) => `${failure}\n${recovery}`);
+    }, env, deadline);
+    if (locked.kind === "failed") return [`real pour was not attempted: ${locked.reason}`];
+    return locked.value;
+}
+export async function assertFormula(
+    params: FormulaCheckParams,
+    toolCallId: string,
+): Promise<{
+    ok: boolean;
+    text: string;
+    failures: string[];
+    steps: number;
+    gates: number;
+}> {
+    const deadline = Date.now() + FORMULA_TIMEOUT_MS;
+    const varargs: string[] = [];
+    for (const v of params.varargs ?? []) varargs.push("--var", v);
+    const cwd = params.workspace;
+    const failures: string[] = [];
+    const cookFails = await cookCheck(params.formula, varargs, cwd, process.env, deadline);
+    if (cookFails.length) {
+        const text = cookFails.map((f) => `FAIL ${f}`).join("\n");
+        return { ok: false, text, failures: cookFails, steps: 0, gates: 0 };
+    }
+    const help = await runBd(["mol", "pour", "--help"], cwd, undefined, process.env, deadline);
+    const capability = parsePourHelp(help.stdout, help.stderr);
+    if (help.error || !help.ok || "error" in capability) {
+        const failure = help.error ?? ("error" in capability ? capability.error : "bd mol pour --help failed");
+        return { ok: false, text: `FAIL ${failure}`, failures: [failure], steps: 0, gates: 0 };
+    }
+    const dryArgs = ["mol", "pour", params.formula, "--dry-run", ...(capability.json ? ["--json"] : []), ...varargs];
+    const dry = await runBd(dryArgs, cwd, undefined, process.env, deadline);
+    if (dry.error || !dry.ok) {
+        const out = dry.error ?? [dry.stdout, dry.stderr].filter(Boolean).join("\n").trim();
+        const fail = `pour --dry-run failed:\n${out}`;
+        return { ok: false, text: `FAIL ${fail}`, failures: [fail], steps: 0, gates: 0 };
+    }
+    const listing = [dry.stdout, dry.stderr].filter(Boolean).join("\n");
+    const parsed = capability.json ? parseDryRunJson(listing) : parseDryRun(listing);
+    if (!parsed || (!capability.json && parsed.steps.length === 0 && parsed.gates.length === 0)) return { ok: false, text: `FAIL ${UNRECOGNISED_POUR_OUTPUT}`, failures: [UNRECOGNISED_POUR_OUTPUT], steps: 0, gates: 0 };
+    const body = bodySteps(parsed.steps);
+    if (body.length === 0) failures.push("pour --dry-run returned no recognized body steps; cannot verify this formula");
+    const lines: string[] = [`selection: ${(params.varargs ?? []).join(" ") || "(defaults)"}`, `  steps poured: ${body.length}   gates: ${parsed.gates.length}`];
+    if (params.expectSteps !== undefined && body.length !== params.expectSteps) failures.push(`step count ${body.length} != expected ${params.expectSteps}`);
+    if (params.expectGates !== undefined && parsed.gates.length !== params.expectGates) failures.push(`gate count ${parsed.gates.length} != expected ${params.expectGates}`);
+    failures.push(...gateTypeFailures(parsed.gates));
+    failures.push(...unsubstitutedFailures(listing));
+    if (params.deep && failures.length === 0) failures.push(...(await deepAssert(params.formula, varargs, toolCallId, cwd, process.env, deadline)));
+    for (const f of failures) lines.push(`FAIL ${f}`);
+    if (!failures.length) lines.push("  OK");
+    return { ok: failures.length === 0, text: lines.join("\n"), failures, steps: body.length, gates: parsed.gates.length };
 }
 
-export async function assertFormula(
-	params: FormulaCheckParams,
-	toolCallId: string,
-): Promise<{
-	ok: boolean;
-	text: string;
-	failures: string[];
-	steps: number;
-	gates: number;
-}> {
-	const varargs: string[] = [];
-	for (const v of params.varargs ?? []) {
-		varargs.push("--var", v);
-	}
-	const cwd = params.workspace;
-	const failures: string[] = [];
-	const cookFails = await cookCheck(params.formula, varargs, cwd);
-	if (cookFails.length) {
-		const text = cookFails.map((f) => `FAIL ${f}`).join("\n");
-		return { ok: false, text, failures: cookFails, steps: 0, gates: 0 };
-	}
-	const help = await runBd(["mol", "pour", "--help"], cwd);
-	const capability = parsePourHelp(help.stdout, help.stderr);
-	if (help.error || !help.ok || "error" in capability) {
-		const failure = help.error ?? ("error" in capability ? capability.error : "bd mol pour --help failed");
-		return { ok: false, text: `FAIL ${failure}`, failures: [failure], steps: 0, gates: 0 };
-	}
-	const dryArgs = ["mol", "pour", params.formula, "--dry-run", ...(capability.json ? ["--json"] : []), ...varargs];
-	const dry = await runBd(dryArgs, cwd);
-	if (dry.error || !dry.ok) {
-		const out = dry.error
-			? dry.error
-			: [dry.stdout, dry.stderr].filter(Boolean).join("\n").trim();
-		const fail = `pour --dry-run failed:\n${out}`;
-		return { ok: false, text: `FAIL ${fail}`, failures: [fail], steps: 0, gates: 0 };
-	}
-	const listing = [dry.stdout, dry.stderr].filter(Boolean).join("\n");
-	const parsed = capability.json ? parseDryRunJson(listing) : parseDryRun(listing);
-	if (!parsed || (!capability.json && parsed.steps.length === 0 && parsed.gates.length === 0)) {
-		return { ok: false, text: `FAIL ${UNRECOGNISED_POUR_OUTPUT}`, failures: [UNRECOGNISED_POUR_OUTPUT], steps: 0, gates: 0 };
-	}
-	const body = bodySteps(parsed.steps);
-	if (body.length === 0) failures.push("pour --dry-run returned no recognized body steps; cannot verify this formula");
-	const lines: string[] = [
-		`selection: ${(params.varargs ?? []).join(" ") || "(defaults)"}`,
-		`  steps poured: ${body.length}   gates: ${parsed.gates.length}`,
-	];
-	if (params.expectSteps !== undefined && body.length !== params.expectSteps) {
-		failures.push(`step count ${body.length} != expected ${params.expectSteps}`);
-	}
-	if (params.expectGates !== undefined && parsed.gates.length !== params.expectGates) {
-		failures.push(`gate count ${parsed.gates.length} != expected ${params.expectGates}`);
-	}
-	failures.push(...gateTypeFailures(parsed.gates));
-	failures.push(...unsubstitutedFailures(listing));
-	if (params.deep && failures.length === 0) {
-		failures.push(...(await deepAssert(params.formula, varargs, toolCallId, cwd)));
-	}
-	for (const f of failures) lines.push(`FAIL ${f}`);
-	if (!failures.length) lines.push("  OK");
-	return {
-		ok: failures.length === 0,
-		text: lines.join("\n"),
-		failures,
-		steps: body.length,
-		gates: parsed.gates.length,
-	};
-}
 
 export default function formulaCheckTool(pi: ExtensionAPI): void {
 	const z = pi.zod;
@@ -352,40 +330,38 @@ export default function formulaCheckTool(pi: ExtensionAPI): void {
 	pi.registerTool({
 		name: "bd_formula_check",
 		label: "Assert bd formula pour",
-		description:
-			"Cook-validate a bd formula, parse `bd mol pour --dry-run`, check gates and unsubstituted braces. Default is dry-run (read). deep=true performs a real pour in the workspace and uses exec approval.",
-		parameters: z.object({
-			formula: z.string().describe("Formula stem to assert"),
-			varargs: z.array(z.string()).optional().describe("Selection vars as k=v pairs (passed as --var)"),
-			deep: z.boolean().optional().describe("If true, pour for real and assert a single entry point (mutates workspace; exec approval)"),
-			workspace: z.string().optional().describe("Repo cwd for bd; defaults to the current working directory"),
-			expectSteps: z.number().optional().describe("Expected body step count"),
-			expectGates: z.number().optional().describe("Expected gate count"),
-		}) as unknown as TSchema, // pi.zod and the host TypeBox schema types differ.
-		approval: (toolCall) => {
-			let input: unknown;
-			if (typeof toolCall === "object" && toolCall !== null && "input" in toolCall) {
-				input = toolCall.input;
-			}
-			const deep = typeof input === "object" && input !== null && "deep" in input && Boolean(input.deep);
-			// The bare `exec` tier leaves the decision to the configured approval
-			// policy; a literal `policy: "prompt"` would override yolo/write modes.
-			return deep ? "exec" : "read";
-		},
-		execute: async (toolCallId, params: FormulaCheckParams) => {
-			const result = await assertFormula(params, toolCallId);
-			return {
-				content: [{ type: "text", text: result.text }],
-				details: {
-					ok: result.ok,
-					formula: params.formula,
-					varargs: params.varargs ?? [],
-					deep: Boolean(params.deep),
-					steps: result.steps,
-					gates: result.gates,
-					failures: result.failures,
-				},
-			};
-		},
+        description:
+            "Cook-validate a bd formula, parse `bd mol pour --dry-run`, check gates and unsubstituted braces. " +
+            "Each call shares a 25 s deadline inside the 30 s tool_call budget. Default is dry-run (read); " +
+            "deep=true performs a bounded real pour and reports any recovered root for safe inspection if interrupted.",
+        parameters: z.object({
+            formula: z.string().describe("Formula stem to assert"),
+            varargs: z.array(z.string()).optional().describe("Selection vars as k=v pairs (passed as --var)"),
+            deep: z.boolean().optional().describe("If true, pour for real and assert a single entry point (mutates workspace; exec approval)"),
+            workspace: z.string().optional().describe("Repo cwd for bd; defaults to the current working directory"),
+            expectSteps: z.number().optional().describe("Expected body step count"),
+            expectGates: z.number().optional().describe("Expected gate count"),
+        }) as unknown as TSchema,
+        approval: (toolCall) => {
+            let input: unknown;
+            if (typeof toolCall === "object" && toolCall !== null && "input" in toolCall) input = toolCall.input;
+            const deep = typeof input === "object" && input !== null && "deep" in input && Boolean(input.deep);
+            return deep ? "exec" : "read";
+        },
+        execute: async (toolCallId, params: FormulaCheckParams) => {
+            const result = await assertFormula(params, toolCallId);
+            return {
+                content: [{ type: "text", text: result.text }],
+                details: {
+                    ok: result.ok,
+                    formula: params.formula,
+                    varargs: params.varargs ?? [],
+                    deep: Boolean(params.deep),
+                    steps: result.steps,
+                    gates: result.gates,
+                    failures: result.failures,
+                },
+            };
+        },
 	});
 }
