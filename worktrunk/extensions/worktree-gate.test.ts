@@ -381,6 +381,51 @@ describe("bash", () => {
 	});
 });
 
+test("canonical permits git transports to push refs but still refuses commits", () => {
+	const { canonical, topology } = project();
+	for (const command of [
+		"git push",
+		"git push --force-with-lease origin main",
+		"git -C /some/path push origin main",
+		"dgit push",
+		"dgit push --force-with-lease origin main",
+		"dgit -C /some/path push origin main",
+	]) {
+		expect(decideWorktreeCall("bash", { command }, canonical, topology)).toBeUndefined();
+	}
+	for (const command of ["git commit -m x", "dgit commit -m x"]) {
+		expect(decideWorktreeCall("bash", { command }, canonical, topology)?.block).toBe(true);
+	}
+});
+test("canonical bootstrap commands ignore literal foreign paths", () => {
+	const { canonical, worktree, topology } = project();
+	const foreignCanonical = mkdtempSync(join(tmpdir(), "worktrunk-foreign-canonical-"));
+	roots.push(foreignCanonical);
+	const foreign: RepositoryTopology = { canonical: foreignCanonical, worktrees: [], refresh: () => [] };
+	const withForeign: GateTopology = {
+		...topology,
+		forTarget: dir => (insideAny(dir, [foreignCanonical]) ? foreign : topology.forTarget(dir)),
+	};
+	for (const cwd of [canonical, worktree]) {
+		expect(
+			decideWorktreeCall("bash", { cwd, command: `git -C ${foreignCanonical} status --porcelain` }, canonical, withForeign),
+		).toBeUndefined();
+		expect(
+			decideWorktreeCall("bash", { cwd, command: `dgit -C ${foreignCanonical} push origin main` }, canonical, withForeign),
+		).toBeUndefined();
+	}
+	for (const command of [
+		`git -C ${canonical} checkout -b new-branch`,
+		`git checkout ${worktree}/new-file`,
+		"git commit -m x",
+		"git add .",
+		"git checkout -- .",
+		`printf x > ${canonical}/probe.txt`,
+	]) {
+		expect(decideWorktreeCall("bash", { cwd: canonical, command }, canonical, withForeign)?.block).toBe(true);
+	}
+});
+
 test("an explicit wt -C worktree target allows a non-bootstrap mutation", () => {
   const { canonical, worktree, topology } = project();
   const decision = decideWorktreeCall(
@@ -457,7 +502,7 @@ describe("bootstrapAllowed", () => {
 		expect(bootstrapAllowed("wt switch -y --create --no-cd --base main --format json omp/agent/x --clobber")).toBe(false);
 	});
 
-	test("accepts the listed read-only wt, git, and every bd command", () => {
+	test("accepts the listed wt commands, git transports, and every bd command", () => {
 		expect(bootstrapAllowed("wt list")).toBe(true);
 		expect(bootstrapAllowed("wt list --format json")).toBe(true);
 		expect(bootstrapAllowed("wt config show")).toBe(true);
@@ -465,17 +510,29 @@ describe("bootstrapAllowed", () => {
 		expect(bootstrapAllowed("git worktree list --porcelain")).toBe(true);
 		expect(bootstrapAllowed("git -C /repo status --porcelain=v1 -b")).toBe(true);
 		expect(bootstrapAllowed("git fetch origin")).toBe(true);
+		expect(bootstrapAllowed("git push --force-with-lease origin main")).toBe(true);
+		expect(bootstrapAllowed("git -C /repo push origin main")).toBe(true);
+		expect(bootstrapAllowed("git --namespace origin push main")).toBe(true);
+		expect(bootstrapAllowed("dgit push")).toBe(true);
+		expect(bootstrapAllowed("dgit push --force-with-lease origin main")).toBe(true);
+		expect(bootstrapAllowed("dgit -C /repo push origin main")).toBe(true);
+		expect(bootstrapAllowed("dgit --namespace origin push main")).toBe(true);
+		expect(bootstrapAllowed("dgit fetch origin")).toBe(true);
 		expect(bootstrapAllowed("git branch --list omp/*")).toBe(true);
 		expect(bootstrapAllowed("bd update x --claim --json")).toBe(true);
 	});
 
-	test("rejects mutating git, unlisted wt, and every other program", () => {
+	test("rejects mutating git transports, unlisted wt, and every other program", () => {
 		expect(bootstrapAllowed("wt step prune")).toBe(false);
 		expect(bootstrapAllowed("wt remove -y omp/agent/x")).toBe(false);
 		expect(bootstrapAllowed("wt merge")).toBe(false);
 		expect(bootstrapAllowed("git worktree remove x")).toBe(false);
 		expect(bootstrapAllowed("git branch -D omp/agent/x")).toBe(false);
 		expect(bootstrapAllowed("git commit -m x")).toBe(false);
+		expect(bootstrapAllowed("git --namespace push log")).toBe(true);
+		expect(bootstrapAllowed("git --namespace push commit")).toBe(false);
+		expect(bootstrapAllowed("dgit --namespace push log")).toBe(true);
+		expect(bootstrapAllowed("dgit --namespace push commit")).toBe(false);
 		expect(bootstrapAllowed("bun test")).toBe(false);
 	});
 
@@ -682,10 +739,16 @@ describe("eval path literals on the real topology", () => {
 		expect(decideWorktreeCall("eval", { language: "py", code }, canonical)?.block).toBe(true);
 	});
 
-	test("an unresolvable path literal is refused", () => {
+	test("a URI-shaped literal is not treated as a filesystem path", () => {
 		const canonical = realProjectCanonical();
 		const code = 'Path("xd://not-a-file").read_text()';
-		expect(decideWorktreeCall("eval", { language: "py", code }, canonical)?.block).toBe(true);
+		expect(decideWorktreeCall("eval", { language: "py", code }, canonical)).toBeUndefined();
+	});
+
+	test("a slash-bearing description is not treated as a filesystem path", () => {
+		const { canonical, topology } = project();
+		const code = 'subprocess.run(["bd", "create", "-d", "dot_local/libexec/executable_git-container"])';
+		expect(decideWorktreeCall("eval", { language: "py", code }, canonical, topology)).toBeUndefined();
 	});
 });
 
@@ -1327,6 +1390,8 @@ describe("helpers", () => {
 
 	test("changesRepositoryTopology recognizes only what can create or move a repository", () => {
 		expect(changesRepositoryTopology("git init -b main")).toBe(true);
+		expect(changesRepositoryTopology("dgit init -b main")).toBe(true);
+		expect(changesRepositoryTopology("dgit clone https://example.invalid/r.git")).toBe(true);
 		expect(changesRepositoryTopology("git clone https://example.invalid/r.git")).toBe(true);
 		expect(changesRepositoryTopology("git status --porcelain")).toBe(false);
 		expect(changesRepositoryTopology("wt switch -y --create --no-cd --base main --format json omp/agent/x")).toBe(false);
