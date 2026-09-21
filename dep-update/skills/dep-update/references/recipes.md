@@ -1,8 +1,8 @@
 # dep-update: what the scripts do not implement
 
 `research.py` queries PyPI and npm only. Everything below covers the gaps:
-the rust/go endpoints, the apply commands per package manager, the changelog
-fetch order, and the `answers.toml` key names.
+the rust/go endpoints, the apply commands per package manager, and the changelog
+fetch order.
 
 All version data comes from machine-readable JSON endpoints -- never scrape
 rendered HTML for a version number. Reserve web-fetch for changelog prose
@@ -38,15 +38,14 @@ curl -fsSL -A 'dep-update-skill (+https://github.com/srobroek/omp-plugins)' \
 | `Cargo.toml` | rust | `cargo update -p name --precise ver` | Advisory only; Cargo.lock is not scanned |
 | `go.mod` | go | `go get module@ver && go mod tidy` | Advisory only; go.sum is not scanned |
 
-Node package manager precedence: `[module.lang-ts].package_manager` in
-`answers.toml` first, else lockfile order `pnpm-lock.yaml` →
-`bun.lock`/`bun.lockb` → `yarn.lock` → `package-lock.json`.
+Node package manager precedence: `DEP_UPDATE_PKG_MANAGER` first, else lockfile
+order `pnpm-lock.yaml` → `bun.lock`/`bun.lockb` → `yarn.lock` →
+`package-lock.json`.
 
 Node lockfiles in this table select the package manager, not resolved scan versions. `Pipfile.lock` is not scanned.
 
-Pre-release candidates (`rc`, `alpha`, `beta`, `a`, `b`, `dev`) are excluded
-from the upgrade offer unless the installed version is itself pre-release; the
-latest stable is offered instead.
+Offer a pre-release candidate (`rc`, `alpha`, `beta`, `a`, `b`, `dev`) only when
+the installed version is pre-release. Otherwise offer the latest stable version.
 
 ## Changelog fetch order (MINOR-CHECK + MAJOR-ADVISORY)
 
@@ -63,15 +62,3 @@ latest stable is offered instead.
    the project's own guide; flag third-party blogs as derivative. Only then is a
    targeted web fetch justified.
 4. Nothing found → report "no changelog found" and point the user upstream.
-
-## answers.toml keys (read-only, opportunistic)
-
-Read `.project-setup/answers.toml` with `tomllib`. Under `module`:
-
-| Section | Keys |
-|---------|------|
-| `lang-python` | `pinned_deps`, `dev_deps`, `framework`, `python_version`, `ruff_version` |
-| `lang-ts` | `pinned_deps`, `dev_deps`, `package_manager`, `package_manager_pin` |
-
-`pinned_deps` entries are `"name@exact-version"` strings. Absent file, section,
-or key → empty defaults, never an error.

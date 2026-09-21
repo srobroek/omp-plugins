@@ -1,0 +1,15 @@
+# @@PROJECT_NAME@@
+
+@@DESCRIPTION@@
+
+## Install
+
+@@INSTALL_COMMANDS@@
+
+## Usage
+
+@@USAGE_EXAMPLE@@
+
+## License
+
+See [LICENSE](LICENSE).

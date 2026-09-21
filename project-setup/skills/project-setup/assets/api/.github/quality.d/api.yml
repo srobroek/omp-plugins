@@ -1,0 +1,4 @@
+# A job fragment the host layer's wc-quality.yml folds into its matrix.
+#
+# No lizard entry: a contract has no cyclomatic complexity to measure, and the discovery
+# step skips a fragment that declares none.

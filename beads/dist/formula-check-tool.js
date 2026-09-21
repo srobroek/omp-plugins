@@ -2,7 +2,7 @@
 // package.json
 var package_default = {
   name: "@srobroek/beads",
-  version: "2.0.3",
+  version: "2.0.4",
   description: "Beads issue tracking: dependency DAGs, formulas, and decisions recorded as beads.",
   private: true,
   omp: {

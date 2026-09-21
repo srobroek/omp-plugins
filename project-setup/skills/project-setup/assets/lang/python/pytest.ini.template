@@ -1,0 +1,8 @@
+[pytest]
+testpaths = tests
+addopts = -q --strict-markers --strict-config
+# OPTIONAL BEGIN src layout -- delete both lines for a flat layout
+pythonpath = src
+# OPTIONAL END
+filterwarnings =
+    error

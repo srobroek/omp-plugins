@@ -1,0 +1,261 @@
+name: Quality
+
+# Two jobs. `quality` carries the checks that need no language knowledge;
+# `complexity` is a matrix built at runtime from `.github/quality.d/*.yml`, one
+# entry per language present in the repository.
+#
+# The matrix is discovered rather than written in, so adding a language layer adds
+# its own entry. Lizard is the only quality check here that cannot be
+# language-blind: its thresholds differ per language, so each layer states them.
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  quality:
+    name: Quality
+    runs-on: ubuntu-latest
+    # GitHub defaults to 360 minutes, so a hung job burns six runner hours.
+    timeout-minutes: @@JOB_TIMEOUT_MINUTES@@
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          # The default leaves GITHUB_TOKEN in .git/config, where any later step
+          # can read it. zizmor reports the default as a finding.
+          persist-credentials: false
+
+      - name: Install tools
+        uses: jdx/mise-action@9e7f7633ff6f6d6048a9418a68d48f288f50eb14 # v4.2.3
+        with:
+          # The repo pins these in .mise/conf.d/, so CI runs the versions the
+          # hooks run rather than whatever is newest.
+          cache: true
+
+      # Both generated files are rebuilt from a fragment directory, so a fragment
+      # added without re-running the generator leaves them stale. Each check
+      # compares in a copy rather than rewriting, so a failure here is reproducible.
+      - name: Generated files current
+        run: |
+          if [ -f justfile ] && grep -q 'just-check' justfile; then
+            just just-check
+          fi
+          # Present only when the repository also carries a GitLab pipeline, which a
+          # repository mirrored to both forges does.
+          if [ -f .gitlab-ci.yml ] && [ -f scripts/gen_gitlab_stages.py ]; then
+            just gitlab-check
+          fi
+          # The marketplace catalogs, in a plugin repository. They are committed
+          # generated artefacts, so a plugin added or a version bumped without a rebuild
+          # leaves them behind and an install resolving from a clone never sees it. The
+          # generator's `--check` writes nothing, so a failure here is reproducible and
+          # leaves no dirty tree behind.
+          if [ -f scripts/build_catalog.py ]; then
+            just marketplace-check
+          fi
+
+      # The layer that actually enforces. A local hook is advisory: --no-verify
+      # defeats it, and a fresh clone has no shims until someone runs `just setup`.
+      # Running the whole set here is what makes the checks hold.
+      #
+      # Skipped when no config exists, since a repository may carry no hooks.
+      # `--all-files` rather than a diff range: a hook that was bypassed when the
+      # file was committed would otherwise stay bypassed forever.
+      - name: Hooks
+        run: |
+          if [ -f .pre-commit-config.yaml ]; then
+            prek run --all-files --show-diff-on-failure
+          else
+            echo "no .pre-commit-config.yaml, skipping"
+          fi
+
+      # Enforces the SHA-pinning policy every workflow here follows. It
+      # resolves each tag through the GitHub API, which makes it too slow and too
+      # network-dependent for a commit hook.
+      - name: Actions pinned to SHAs
+        run: pinact run --check
+
+      - name: Workflow lint
+        run: actionlint
+
+      # zizmor audits the workflows for the credential and injection patterns
+      # actionlint does not model, persist-credentials among them.
+      - name: Workflow audit
+        run: zizmor --min-severity medium .github/workflows
+
+      # Without a project .yamllint the defaults flag 80-column lines and a
+      # missing document start, neither of which is a project rule, and GitHub
+      # workflows routinely exceed 80 columns.
+      - name: YAML lint
+        run: |
+          if [ -f .yamllint ] || [ -f .yamllint.yaml ]; then
+            yamllint -f github .
+          else
+            yamllint -f github \
+              -d "{extends: relaxed, rules: {line-length: disable, document-start: disable}}" .
+          fi
+
+      - name: TOML lint
+        run: taplo fmt --check --diff
+
+      - name: Markdown lint
+        run: npx --yes markdownlint-cli2 "**/*.md" "#node_modules"
+
+      - name: Spell check
+        run: npx --yes cspell lint --no-progress --no-summary .
+
+      # The commit hook runs lychee with --offline, which resolves relative links
+      # and skips network URLs. This is the run that actually reaches them.
+      - name: Link check
+        run: lychee --no-progress --accept 200,204,206,429 '**/*.md'
+
+  # A commit-message hook runs at `commit-msg`, which `--no-verify` defeats, and it sees
+  # only the message being written. Neither property survives a pull request: a bypassed
+  # commit stays bypassed, and a branch carries several messages. This job reads the whole
+  # range, which is the enforcing copy.
+  commits:
+    name: Commit messages
+    runs-on: ubuntu-latest
+    timeout-minutes: @@JOB_TIMEOUT_MINUTES@@
+    # Only a pull request defines a range. On a push there is no base to compare against,
+    # and guessing one would either check nothing or check the entire history.
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          # The full history: the range is resolved from the merge base, which a shallow
+          # clone does not contain.
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Conventional Commits across the range
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          python3 -m pip install --quiet conventional-pre-commit
+
+          failed=0
+          # A merge commit's subject is generated by the forge rather than written by a
+          # person, so it is skipped: --no-merges.
+          for sha in $(git rev-list --no-merges "$BASE..$HEAD"); do
+            subject=$(git log -1 --format=%s "$sha")
+            message=$(mktemp)
+            git log -1 --format=%B "$sha" > "$message"
+            if ! python3 -m conventional_pre_commit.hook --strict "$message" >/dev/null 2>&1; then
+              echo "::error::$sha does not follow Conventional Commits: $subject"
+              failed=$((failed + 1))
+            fi
+            rm -f "$message"
+          done
+
+          if [ "$failed" -gt 0 ]; then
+            echo "$failed commit message(s) in this range are not Conventional Commits" >&2
+            exit 1
+          fi
+          echo "every commit in the range follows Conventional Commits"
+
+      # release-please derives the next version from these subjects and from tags, so a
+      # hand-made version tag reaching the default branch makes it compute the wrong one.
+      # Checked here because a tag is pushed rather than committed, so no hook sees it.
+      #
+      # The range is the tags whose own commit is new in this pull request: reachable from
+      # HEAD and not from BASE. `--contains BASE --no-contains HEAD` is the wrong pair, and
+      # the first pull request after a release fails on it: the release tag points at BASE,
+      # so it contains BASE while its descendant HEAD is not in it, and every tag on an
+      # unrelated branch matches for the same reason.
+      - name: No hand-made version tag in the range
+        if: hashFiles('release-please-config.json') != ''
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          found=$(git tag --merged "$HEAD" --no-merged "$BASE" 2>/dev/null || true)
+          if [ -n "$found" ]; then
+            echo "::error::a version tag was pushed by hand: $found"
+            echo "release-please owns tagging; delete it and let the release pull request cut one" >&2
+            exit 1
+          fi
+          echo "no hand-made version tag in this range"
+
+  discover:
+    name: Discover complexity targets
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      targets: ${{ steps.scan.outputs.targets }}
+      any: ${{ steps.scan.outputs.any }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      # Each language asset set drops one fragment naming its own thresholds. An empty
+      # or absent directory yields an empty matrix, which is why `any` gates the
+      # job below: a matrix of zero entries is a workflow error, not a skip.
+      - name: Read quality.d fragments
+        id: scan
+        run: |
+          set -euo pipefail
+          # The runner image carries PyYAML, but an image change should not turn a
+          # discovery failure into an empty matrix that silently skips the checks.
+          python3 -c 'import yaml' 2>/dev/null || pip install --quiet pyyaml
+          targets=$(python3 - <<'PY'
+          import json, pathlib, sys
+          import yaml
+
+          out = []
+          for path in sorted(pathlib.Path(".github/quality.d").glob("*.yml")):
+              fragment = yaml.safe_load(path.read_text()) or {}
+              lizard = fragment.get("lizard")
+              if not isinstance(lizard, dict):
+                  continue
+              out.append(
+                  {
+                      "language": lizard.get("language", path.stem),
+                      "extensions": lizard.get("extensions", ""),
+                      "ccn": lizard.get("ccn", 15),
+                      "length": lizard.get("length", 80),
+                      "arguments": lizard.get("arguments", 6),
+                  }
+              )
+          print(json.dumps(out))
+          PY
+          )
+          echo "targets=$targets" >> "$GITHUB_OUTPUT"
+          if [ "$targets" = "[]" ]; then
+            echo "any=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "any=true" >> "$GITHUB_OUTPUT"
+          fi
+
+  complexity:
+    name: Complexity (${{ matrix.target.language }})
+    needs: discover
+    if: needs.discover.outputs.any == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: @@JOB_TIMEOUT_MINUTES@@
+    strategy:
+      fail-fast: false
+      matrix:
+        target: ${{ fromJSON(needs.discover.outputs.targets) }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      # Whole-repo rather than staged: a hook bounds a commit, this reports the
+      # codebase. `-l` restricts the run to one language so each fragment's
+      # thresholds apply only to its own files.
+      - name: Complexity
+        run: |
+          uvx lizard \
+            -l "${{ matrix.target.language }}" \
+            -C "${{ matrix.target.ccn }}" \
+            -L "${{ matrix.target.length }}" \
+            -a "${{ matrix.target.arguments }}" \
+            -w .

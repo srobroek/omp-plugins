@@ -8,8 +8,7 @@
   },
   "omp": {
     "extensions": [
-      "./dist/dep-scan-tool.js",
-      "./dist/fixture-write-gate.js"
+      "./dist/dep-scan-tool.js"
     ]
   }
 }

@@ -1,0 +1,58 @@
+name: Setup Python
+description: Install uv, the pinned interpreter, and the locked dependencies.
+
+inputs:
+  working-directory:
+    description: >-
+      Directory holding this member's pyproject.toml and uv.lock. Set this per member
+      in a monorepo; the default is the repository root.
+    required: false
+    default: "."
+
+runs:
+  using: composite
+  steps:
+    # A composite action does not inherit the calling job's `defaults.run`, and a
+    # `uses:` step has no working directory at all, so every path below is resolved
+    # to an absolute one here rather than left for the nested action to guess.
+    - name: Resolve the working directory
+      id: dir
+      shell: bash
+      # Read through the environment: interpolating an input into the script body is
+      # the template-injection finding zizmor reports.
+      env:
+        INPUT_DIR: ${{ inputs.working-directory }}
+      run: |
+        set -euo pipefail
+        case "/$INPUT_DIR/" in
+          //* | */../*)
+            echo "working-directory must be a relative path inside the repository, got: $INPUT_DIR" >&2
+            exit 1
+            ;;
+        esac
+        cd -- "$INPUT_DIR"
+        echo "path=$PWD" >> "$GITHUB_OUTPUT"
+
+    - uses: astral-sh/setup-uv@e92bafb6253dcd438e0484186d7669ea7a8ca1cc # v6.4.3
+      with:
+        # The same exact version `.mise/conf.d/python.toml` pins. Left out, setup-uv
+        # installs whatever is newest at the moment the job runs: uv resolves the
+        # dependency graph and the interpreter, so a floating version changes what CI
+        # installs with no diff in this repository.
+        version: "@@UV_VERSION@@"
+        # setup-uv defaults this to the workspace root and resolves
+        # cache-dependency-glob against it, so naming the member directory is what
+        # keys the cache on this member's lockfile instead of every member's.
+        working-directory: ${{ steps.dir.outputs.path }}
+        enable-cache: true
+        cache-dependency-glob: "**/uv.lock"
+
+    - name: Install the interpreter from .python-version or pyproject.toml
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: uv python install
+
+    - name: Sync the locked dependencies
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: uv sync --frozen

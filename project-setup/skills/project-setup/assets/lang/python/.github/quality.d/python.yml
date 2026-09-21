@@ -1,0 +1,9 @@
+# A job fragment the host layer's wc-quality.yml folds into its matrix. Lizard's
+# complexity thresholds differ per language, which is why this cannot live in the
+# language-blind host layer.
+lizard:
+  language: python
+  extensions: "py"
+  ccn: 12
+  length: 80
+  arguments: 5

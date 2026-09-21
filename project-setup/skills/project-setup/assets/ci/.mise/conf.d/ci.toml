@@ -1,0 +1,12 @@
+# .mise/conf.d/ci.toml -- mise reads every file in this directory, so the CI layer pins the
+# binaries its own workflows call without touching another layer's fragment.
+#
+# opengrep rather than semgrep: same rule format and registry namespace. Installed through
+# ubi, since aqua carries no registry entry for it.
+#
+# No hook calls opengrep; the security workflow's scan job does, and it installs through mise
+# for this pin. The upstream `main/install.sh` piped into bash plus a `cli/latest` path would
+# change the rules and the SARIF shape with no diff in the repository.
+[tools]
+"aqua:suzuki-shunsuke/pinact" = "5.0.0"
+"ubi:opengrep/opengrep" = "1.26.0"

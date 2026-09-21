@@ -35,4 +35,3 @@ node_modules/
 # Agentic-layer generated output (agentic-scaffold .gitignore.block)
 graphify-out/
 repomix.xml
-.omp/scaffold-run.json

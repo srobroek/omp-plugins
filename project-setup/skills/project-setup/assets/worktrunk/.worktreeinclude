@@ -1,0 +1,32 @@
+# What a new worktree copies from the primary checkout.
+#
+# Gitignore-style patterns. This narrows rather than adds: a path is copied only
+# when it is both gitignored and listed here. The user config runs
+# `wt step copy-ignored --require-include`, so without this file nothing copies
+# and a new worktree starts cold.
+#
+# Name what is expensive to rebuild or impossible to recreate. Leave out anything
+# a `just setup` can produce.
+#
+An exclude beats an include. If a user config excludes one of these paths, project setup must
+report that conflict because the project include cannot override it.
+
+# Local environment, which cannot be regenerated.
+.env
+.env.local
+
+# Installed dependency trees. Copying beats reinstalling: a cold `node_modules` install is
+# slow, and a warm refresh afterwards is 43ms for uv and 0.55s for cargo, so
+# `setup-worktree` catches a branch whose lockfile moved without paying for a cold install.
+#
+node_modules/
+.venv/
+target/
+vendor/
+
+# Caches, valid at the HEAD a new worktree branches from.
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Add this repository's own expensive gitignored directories below.

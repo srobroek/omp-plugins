@@ -263,7 +263,7 @@ describe("worktree destruction guard", () => {
 	}
 
 	for (const c of MUST_NOT_FIRE) {
-		test(`silent: ${c.id}`, () => {
+		test(`does not fire: ${c.id}`, () => {
 			for (const buffer of buffers(c)) {
 				expect(fires(buffer)).toBe(false);
 			}

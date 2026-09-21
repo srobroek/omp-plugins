@@ -1,0 +1,9 @@
+# A job fragment the host layer's wc-quality.yml folds into its matrix. Lizard's
+# complexity thresholds differ per language, which is why this cannot live in the
+# language-blind host layer.
+lizard:
+  language: rust
+  extensions: "rs"
+  ccn: 15
+  length: 120
+  arguments: 6

@@ -5,13 +5,14 @@ description: When packing a whole tree or many files at once for bulk context wi
 
 # Repomix for bulk context
 
-Use Repomix for bulk source review, not a single lookup. A scaffolded
-project maintains a scoped, ignored `repomix.xml` through prek hooks; check
-`graphify-out/context-status.json` before using it. Otherwise pack on demand.
+Use Repomix for bulk source review, not a single lookup. Pack on demand. Where a
+project commits a `repomix.config.json` and a justfile for it, the pack is
+reproducible from those patterns and `just pack-check` reports how many commits
+behind it is; a snapshot whose age you cannot state is worse than no snapshot.
 
 | Need | Command |
 |------|---------|
-| refresh a scaffolded snapshot | `python3 .omp/context.py refresh` |
+| rebuild a project's configured pack | `just pack` |
 | scope to the files that matter | `repomix . --include "src/**/*.ts"` |
 | read it without writing a file | `repomix . --stdout` |
 | pack another repository | `repomix --remote <url> --remote-branch <ref>` |

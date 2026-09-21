@@ -12,12 +12,9 @@ beads-github-repo-bare-name
 beads-no-bd-edit
 authoring-repomix-include
 srobroek-package-investigate
-srobroek-bash-indirection-guard
 srobroek-sudo-destructive-advisory
-srobroek-remote-exec-guard
 srobroek-attribution-guard
 srobroek-worktree-tmp-guard
-srobroek-git-force-push-advisory
 worktrunk-bd-contention-retry
 worktrunk-isolation-disabled
 speckit-implement-deprecated-bash

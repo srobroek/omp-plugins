@@ -1,0 +1,8 @@
+# mise reads every .mise/conf.d/*.toml, so a layer contributes its own tools
+# without touching a shared file.
+[tools]
+rust = "@@RUST_VERSION@@"
+"cargo:cargo-nextest" = "@@CARGO_NEXTEST_VERSION@@"
+"cargo:cargo-deny" = "@@CARGO_DENY_VERSION@@"
+"cargo:cargo-machete" = "@@CARGO_MACHETE_VERSION@@"
+"cargo:cargo-llvm-cov" = "@@CARGO_LLVM_COV_VERSION@@"

@@ -17,7 +17,6 @@ export const FETCH_TIMEOUT_MS = 10_000;
 
 const NODE_VERSION = /^=?v?(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-((?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*))*))?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/;
 const PYTHON_VERSION = /^(?:={1,2})?v?(\d+)(?:\.(\d+))?(?:\.(\d+))?(?:[-_.]?(a|b|rc|alpha|beta|pre|preview)[-_.]?\d*)?(?:[-_.]?post[-_.]?\d*)?(?:[-_.]?(dev)[-_.]?\d*)?(?:\+[a-z0-9]+(?:[-_.][a-z0-9]+)*)?$/i;
-const PROTECTED_NAME = /(?:^|[\\/])(?:\.project-setup[\\/]answers|\.project-setup[\\/]sources)\.toml$/;
 
 export interface BumpRecord {
 	ecosystem: string;
@@ -238,21 +237,9 @@ async function readTomlFile(path: string): Promise<Record<string, unknown> | nul
 	}
 }
 
-export async function detectNodePm(root: string): Promise<string> {
+export function detectNodePm(root: string): string {
 	const override = process.env.DEP_UPDATE_PKG_MANAGER ?? "";
 	if (override) return override;
-	const answers = join(root, ".project-setup/answers.toml");
-	if (isFile(answers)) {
-		try {
-			const data = await readTomlFile(answers);
-			const module = (data?.module ?? {}) as Record<string, unknown>;
-			const langTs = (module["lang-ts"] ?? {}) as Record<string, unknown>;
-			const pinned = langTs.package_manager || langTs.package_manager_pin || "";
-			if (pinned) return (String(pinned).split("@")[0] ?? "").trim();
-		} catch {
-			/* fail open */
-		}
-	}
 	if (isFile(join(root, "pnpm-lock.yaml"))) return "pnpm";
 	if (isFile(join(root, "bun.lock")) || isFile(join(root, "bun.lockb"))) return "bun";
 	if (isFile(join(root, "yarn.lock"))) return "yarn";
@@ -439,9 +426,6 @@ export async function applyBump(
 	if (!isDir(root)) {
 		return { exit: 2, text: `ERROR: '${root}' is not a directory` };
 	}
-	if (PROTECTED_NAME.test(name)) {
-		return { exit: 2, text: "ERROR: refusing to touch project-setup files" };
-	}
 	const lines = [`dep-update/apply: ${ecosystem} ${name} -> ${version}`];
 
 	if (ecosystem === "pypi" || ecosystem === "python") {
@@ -467,7 +451,7 @@ export async function applyBump(
 	}
 
 	if (["npm", "node", "pnpm", "yarn", "bun"].includes(ecosystem)) {
-		let pm = await detectNodePm(root);
+		let pm = detectNodePm(root);
 		const cmds: Record<string, string[]> = {
 			pnpm: ["pnpm", "update", `${name}@${version}`],
 			bun: ["bun", "add", `${name}@${version}`],

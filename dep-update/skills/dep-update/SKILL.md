@@ -8,22 +8,20 @@ description: Classify dependencies by semver safety and produce a cited upgrade 
 TRIGGER
 + "upgrade dependencies", "update my dependencies", "bump versions", "apply safe bumps"
 + "what's outdated", "check for stale packages", "check for outdated packages", "update lockfile", "dep update", "renovate"
-- reproducing a frozen bootstrap → project-setup `--refresh` (this output is
-  time-varying by design; the same repo yields a different plan next month)
+- choosing a project's initial dependencies → `project-setup` (this skill only
+  moves versions a repo already declares, and its output is time-varying by
+  design: the same repo yields a different plan next month)
 
 ## Workflow
 
 1. Run the `dep_scan` tool (params: `path`, optional `offline_fixture_dir`) -- it
    enumerates deps and classifies every bump. For rust and go, use the endpoints in
    `skill://dep-update/references/recipes.md`.
-2. If `.project-setup/answers.toml` exists, read the baseline pins from
-   `[module.lang-python]` / `[module.lang-ts]` (keys in `skill://dep-update/references/recipes.md`).
-   Absent file or section → continue using detector declarations without baseline drift claims.
-3. Run the CVE scanners below.
-4. For MINOR-CHECK and MAJOR-ADVISORY, fetch changelog prose in the order given
+2. Run the CVE scanners below.
+3. For MINOR-CHECK and MAJOR-ADVISORY, fetch changelog prose in the order given
    in `skill://dep-update/references/recipes.md` and cite every source by URL or git tag.
-5. Present the plan, then run the apply loop.
-6. Summarize: N applied, M skipped, K advisory majors, J CVEs needing action.
+4. Present the plan, then run the apply loop.
+5. Summarize: N applied, M skipped, K advisory majors, J CVEs needing action.
 
 ## Plan format
 
@@ -31,14 +29,14 @@ Four groups in this priority order, sorted by name within each group:
 
 ```
 CVE-FLAGGED     <name>  <current> → <latest>  [CVE-XXXX-XXXX] <scanner> <advisory-url>
-PATCH-SAFE      <name>  <current> → <latest>  [cite]  [drifted from answers.toml: <baseline>]
+PATCH-SAFE      <name>  <current> → <latest>  [cite]
 MINOR-CHECK     <name>  <current> → <latest>  [cite]
 MAJOR-ADVISORY  <name>  <current> → <latest>  breaking: <summary>  [cite]
 UNRESOLVABLE   <name>  <declaration> → <latest>  reason: <unresolved version or registry failure>
 ```
 
-A dep whose independently resolved version differs from its `answers.toml` baseline carries
-the drift note. Manifest ranges alone do not establish installed-version drift. Classes for `A.B.C` against latest `X.Y.Z`:
+Manifest ranges alone do not establish installed versions; resolve the declared
+version before classifying it. Classes for `A.B.C` against latest `X.Y.Z`:
 `C<Z` PATCH-SAFE · `B<Y` MINOR-CHECK · `A<X` MAJOR-ADVISORY · equal omitted.
 Unresolved declarations are `UNRESOLVABLE`, not minor upgrades. Resolve exact versions before planning or applying a bump.
 
@@ -61,8 +59,7 @@ NOT approving a host prompt on the user's behalf.
 MUST treat a dep-update skill read as workflow handoff, never as approval for a bump.
 MUST inspect manifests and lockfiles after cancellation, deadline, output-limit, or package-manager failure; partial changes can remain.
 MUST keep majors, rust, and go out of the loop: named, cited, stopped (FR-014).
-NOT writing `.project-setup/answers.toml` or `sources.toml` -- enforced by the
-`fixture-write-gate` extension.
+NOT writing a lockfile or manifest by hand -- apply every bump with `dep_apply`.
 NOT importing a Python SDK -- native TypeScript tools only.
 MUST report coverage as observed: ecosystems detected, lockfiles read, scanners
 that ran, scanners that were absent. An unrun scanner never reads as clean.
@@ -93,8 +90,8 @@ Guard each with `command -v`; missing → report "scanner not available: `<name>
 | `dep_apply` | Apply one bump via the package manager, then verify the manifest. |
 
 `skill://dep-update/references/recipes.md` holds what the tools do not: the go-proxy and
-crates.io endpoints, the advisory-only apply commands, the changelog fetch
-order, and the `answers.toml` key names.
+crates.io endpoints, the advisory-only apply commands, and the changelog fetch
+order.
 
 ## Out of scope
 

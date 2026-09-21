@@ -1,0 +1,28 @@
+# Folded into .pre-commit-config.yaml by `just hooks-merge`, or read directly by
+# prek's workspace mode when this sits in a monorepo member.
+#
+# gofmt rewrites files, so it stays a hook. The linters read committed state and
+# run in CI, which is what gates a merge.
+repos:
+  - repo: local
+    hooks:
+      - id: go-fmt
+        name: gofmt
+        entry: gofmt -w
+        language: system
+        types: [go]
+
+      - id: go-mod-tidy
+        name: go mod tidy
+        entry: go mod tidy
+        language: system
+        files: '(\.go|go\.mod|go\.sum)$'
+        pass_filenames: false
+
+      - id: golangci-lint
+        name: golangci-lint
+        entry: golangci-lint run
+        language: system
+        types: [go]
+        pass_filenames: false
+        stages: [pre-push]

@@ -1,0 +1,33 @@
+# Schema is golangci-lint v2: settings nest under `linters.settings`. A top-level
+# `linters-settings` key is rejected outright with "additional properties
+# 'linters-settings' not allowed", which is what a v1 config looks like.
+version: "2"
+
+run:
+  timeout: 5m
+
+linters:
+  default: standard
+  enable:
+    - errcheck
+    - govet
+    - ineffassign
+    - staticcheck
+    - unused
+    # gosec ships inside golangci-lint, and the standard set leaves it off, so a
+    # repository without this line has no security lint at all.
+    - gosec
+    - revive
+
+  settings:
+    revive:
+      rules:
+        # A missing doc comment on an exported symbol is worth reporting and not
+        # worth blocking a commit over.
+        - name: exported
+          severity: warning
+          disabled: false
+
+issues:
+  max-issues-per-linter: 50
+  max-same-issues: 5

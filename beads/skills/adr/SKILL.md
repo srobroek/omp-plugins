@@ -73,7 +73,7 @@ still apply afterward.
 1. **`## Decision`** -- the choice, stated in one unhedged sentence.
 2. **`## Rationale`** -- the driver that settled it and the evidence, written
    against criteria chosen before the winner was known.
-3. **`## Alternatives Considered`** -- every option genuinely weighed, and why each
+3. **`## Alternatives Considered`** -- every option weighed, and why each
    lost. A straw option added to flatter the winner makes the record worthless.
 
 `## Consequences` and `## Confirmation` are optional to the tool and expected by
@@ -116,20 +116,22 @@ OMP injects this via the `beads-adr-generated-guard` TTSR rule (advisory,
 not abort): the file is regenerated from the bead. Hand-authored ADRs stay
 editable.
 
-## Installing the hook
+## Install the hook
 
 ```bash
 prek install --git-dir .git
 ```
 
-`--git-dir` is required wherever `core.hooksPath` points outside the repository, as
-a corporate secret scanner does. Bare `prek install` refuses there and suggests
-unsetting `core.hooksPath`, which would disable the scanner; both layers coexist
-with the shim in place.
+`--git-dir` is required when `core.hooksPath` points to a shared scanner directory.
+Bare `prek install` refuses there and suggests unsetting `core.hooksPath`, which would disable
+the scanner. The shim keeps both layers active.
 
-The `repos:` fragment is at `templates/pre-commit-adr.yaml`. project-setup merges
-it into `.pre-commit-config.yaml` and vendors `render_adrs.py` into the repository,
-rewriting `entry:` to the vendored path.
+This skill ships both halves of the hook: `templates/pre-commit-adr.yaml` and the
+renderer it runs, `templates/render_adrs.py`. Copy the fragment into the target
+repository's `.pre-commit-config.yaml` or `.pre-commit.d/adr.yaml`, copy the
+renderer to the path `entry:` names, and keep it executable -- `language: script`
+runs the file directly. Nothing installs either file for you: during an approved
+`project-setup` step the agent copies both itself.
 
 Pre-commit rather than CI: the bead lives in the local Dolt store and is not pushed
 yet, `refs/dolt/data` is versioned independently of git commits so CI cannot pin

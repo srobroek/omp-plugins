@@ -1,0 +1,24 @@
+# Included by .gitlab-ci.yml through `include: - local: .gitlab/ci/*.yml`.
+# GitLab jobs install their toolchain through mise rather than a setup action.
+
+.rust-setup:
+  image: debian:stable-slim
+  before_script:
+    - apt-get update -qq && apt-get install -yqq curl git build-essential
+    - curl -sSf https://mise.run | sh
+    - export PATH="$HOME/.local/bin:$HOME/.local/share/mise/shims:$PATH"
+    - mise install --yes
+    - eval "$(mise activate bash --shims)"
+
+rust-lint:
+  extends: .rust-setup
+  stage: lint
+  script:
+    - cargo fmt --all --check
+    - cargo clippy --all-targets --all-features -- -D warnings
+
+rust-test:
+  extends: .rust-setup
+  stage: test
+  script:
+    - cargo nextest run --all-features

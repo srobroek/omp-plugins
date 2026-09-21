@@ -1,0 +1,40 @@
+target-version = "py@@PYTHON_VERSION_NODOT@@"
+line-length = 100
+
+[lint]
+# S is bandit ported into ruff, so the security lint needs no separate tool.
+# DOC is its pydoclint port: it compares documented params, returns, and raises
+# against the real signature, catching a docstring that drifted after a refactor
+# rather than one that is merely missing.
+select = [
+  "E", "F", "I", "N", "W", "UP", "B", "SIM", "TC",
+  "ANN", "RUF", "PERF", "C4", "PT", "S", "DOC",
+]
+
+# DOC rules are preview-gated. Without this ruff prints "Selection `DOC` has no
+# effect because preview is not enabled" and checks nothing.
+preview = true
+
+# D is deliberately absent. ruff has no per-rule severity, so selecting it makes a
+# bare `ruff check` fail, and docstring presence is meant to be advisory. The
+# advisory recipe passes --select D --exit-zero instead.
+
+[lint.pydocstyle]
+convention = "google"
+
+[lint.per-file-ignores]
+# A specific rule goes by NAME, not code: `preview = true` above turns on RUF201,
+# which rejects "S101" here. A group prefix such as ANN is still accepted, and
+# `ruff check --fix` rewrites a code to its name for you.
+# A test asserts, and a bare assert is the point.
+"tests/**" = ["assert", "ANN"]
+# scripts/ is copied plumbing (hook merge, steering, CI caller), carried with its
+# provenance and re-synced from the asset library rather than authored here, so the
+# project's docstring contract and subprocess pedantry do not apply to it. Verified on
+# a fresh copy: those scripts fail DOC and the subprocess S rules under this
+# very config, so without this block `just check` is red before the first commit.
+"scripts/**" = ["DOC", "start-process-with-partial-path", "subprocess-without-shell-equals-true"]
+
+
+[format]
+quote-style = "double"
