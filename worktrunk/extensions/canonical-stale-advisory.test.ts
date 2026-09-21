@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test, vi } from "bun:test";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -62,7 +62,11 @@ interface Fixture {
  * the recorded remote URL only has to exist as configuration.
  */
 function fixture(): Fixture {
-	const root = mkdtempSync(join(tmpdir(), "worktrunk-canonical-stale-"));
+	// The advisory names the checkout by its resolved path, which is what an
+	// agent needs in order to act on it. On this platform the temporary
+	// directory is reached through a symlink, so resolve here and the fixture
+	// and the advisory speak about one path rather than two spellings of it.
+	const root = realpathSync(mkdtempSync(join(tmpdir(), "worktrunk-canonical-stale-")));
 	roots.push(root);
 	const canonical = join(root, "canonical");
 	const linked = join(root, "linked");
