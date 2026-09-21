@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.9](https://github.com/srobroek/omp-plugins/compare/browser-tools--v0.3.8...browser-tools--v0.3.9) (2026-09-21)
+
+
+### Bug Fixes
+
+* **browser-tools:** bound shutdown and preflight to their event budgets ([#447](https://github.com/srobroek/omp-plugins/issues/447)) ([10873a3](https://github.com/srobroek/omp-plugins/commit/10873a33997a4d7b4a51731ea22a4fa4db53b0c9))
+
 ## [0.3.8](https://github.com/srobroek/omp-plugins/compare/browser-tools--v0.3.7...browser-tools--v0.3.8) (2026-09-19)
 
 

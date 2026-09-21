@@ -1,5 +1,13 @@
 # Changelog
 
+## [2.1.2](https://github.com/srobroek/omp-plugins/compare/beads--v2.1.1...beads--v2.1.2) (2026-09-21)
+
+
+### Bug Fixes
+
+* **beads:** bound extension handler work to its event budget ([#445](https://github.com/srobroek/omp-plugins/issues/445)) ([2c68cdb](https://github.com/srobroek/omp-plugins/commit/2c68cdb9ef206c265c554389058519b06ce87dfc))
+* fail closed on unavailable repository probes ([#446](https://github.com/srobroek/omp-plugins/issues/446)) ([fc30b7b](https://github.com/srobroek/omp-plugins/commit/fc30b7b984a7ea4f27385321f139da64c57f9e0f))
+
 ## [2.1.1](https://github.com/srobroek/omp-plugins/compare/beads--v2.1.0...beads--v2.1.1) (2026-09-21)
 
 

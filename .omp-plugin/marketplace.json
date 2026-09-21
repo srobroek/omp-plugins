@@ -26,14 +26,14 @@
       "name": "beads",
       "description": "Beads issue tracking: dependency DAGs, formulas, and decisions recorded as beads.",
       "source": "./beads",
-      "version": "2.1.1",
+      "version": "2.1.2",
       "category": "productivity"
     },
     {
       "name": "browser-tools",
       "description": "Cross-engine browser coverage and Chrome performance tracing over MCP.",
       "source": "./browser-tools",
-      "version": "0.3.8",
+      "version": "0.3.9",
       "category": "development"
     },
     {
@@ -47,7 +47,7 @@
       "name": "chezmoi",
       "description": "Edit chezmoi-managed dotfiles at their authoritative source.",
       "source": "./chezmoi",
-      "version": "0.4.10",
+      "version": "0.4.11",
       "category": "productivity"
     },
     {
@@ -61,7 +61,7 @@
       "name": "delivery",
       "description": "Delivery and git-workflow rules, plus a pull-request review agent.",
       "source": "./delivery",
-      "version": "0.11.4",
+      "version": "0.11.5",
       "category": "devops"
     },
     {
@@ -96,7 +96,7 @@
       "name": "find-tools",
       "description": "Discover and vet skills, agents, MCP servers, and plugins across real registries.",
       "source": "./find-tools",
-      "version": "1.0.4",
+      "version": "1.0.5",
       "category": "productivity"
     },
     {
@@ -152,7 +152,7 @@
       "name": "session",
       "description": "Create a selective fresh-session handoff from a prior OMP transcript without replaying its full history.",
       "source": "./session",
-      "version": "1.2.1",
+      "version": "1.2.2",
       "category": "productivity"
     },
     {
