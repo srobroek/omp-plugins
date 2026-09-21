@@ -41016,6 +41016,7 @@ var CHANNELS = [
 ];
 var PROFILE_MODES = ["ephemeral-clone", "persistent-dedicated", "clean"];
 var COPY_STRATEGIES = ["auto", "clonefile", "reflink", "robocopy", "node"];
+var CURSOR_MODES = ["auto", "off", "instant", "animated"];
 var SETTING_SCHEMA = {
   defaultEngine: setting("enum", "firefox", "HEADED_BROWSER_DEFAULT_ENGINE", ENGINES),
   defaultBrowserChannel: setting("enum", "auto", "HEADED_BROWSER_DEFAULT_BROWSER_CHANNEL", CHANNELS),
@@ -41042,6 +41043,7 @@ var SETTING_SCHEMA = {
   keepArtifactsOnClose: setting("boolean", false, "HEADED_BROWSER_KEEP_ARTIFACTS_ON_CLOSE"),
   idleCloseSec: numberSetting(7200, "HEADED_BROWSER_IDLE_CLOSE_SEC", 120, 86400, 60),
   navigationTimeoutMs: numberSetting(30000, "HEADED_BROWSER_NAVIGATION_TIMEOUT_MS", 1000, 300000, 1000),
+  cursorMode: setting("enum", "auto", "HEADED_BROWSER_CURSOR_MODE", CURSOR_MODES),
   driverModulePath: setting("string", "", "HEADED_BROWSER_DRIVER_MODULE_PATH")
 };
 function setting(type, defaultValue, env, values) {
