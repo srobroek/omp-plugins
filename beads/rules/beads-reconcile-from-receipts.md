@@ -8,9 +8,31 @@ alwaysApply: true
 
 MUST route every ledger write derived from a landing receipt through `bd_reconcile`. A landing tool never writes the ledger.
 
-MUST read a numeric-v1 receipt with these exact fields: `schema: "omp.receipt.landing"`, `version: 1`, `emittedAt: ISO 8601 string`, `emitter: { plugin: string, version: string, tool: string }`, `repo: { key, canonicalRoot, remote, forge, nameWithOwner }`, `pr: { number, url, state, baseRefName, headRefName, headRefOid, mergeCommitOid, mergedAt }`, `branch: { name, deletedRemote: boolean, remoteAbsenceVerifiedAt: string | null, autoDeleteSetting: on | off | unknown }`, `worktree: { path: string | null, removed: boolean, localRefDeleted: boolean, absenceVerifiedAt: string | null }`, `beads: { ids: string[], ledgerActive: boolean }`, `proof: { method: string, observedAt: string, evidence: object }`, `outcome: landed | cleaned | partial`, `supersedes: string | null`, `receiptId: string`, and optional `notes: string`. `repo.forge` is `github`, `gitlab`, or `unknown`. Do not invent `continues` or a string-valued `version` field.
+MUST read a numeric-v1 receipt whose documented keys carry exactly these concrete types:
+- `schema`: the literal string `"omp.receipt.landing"`.
+- `version`: the number `1`.
+- `receiptId`: string.
+- `emittedAt`: string holding an ISO 8601 instant.
+- `emitter`: `{ plugin: string, version: string, tool: string }`.
+- `repo`: `{ key: string of 16 lowercase hexadecimal characters, canonicalRoot: string, remote: string, forge: "github" | "gitlab" | "unknown", nameWithOwner: string }`.
+- `pr`: `{ number: positive integer, url: string, state: string, baseRefName: string, headRefName: string, headRefOid: string, mergeCommitOid: string | null, mergedAt: string | null }`.
+- `branch`: `{ name: string, deletedRemote: boolean, remoteAbsenceVerifiedAt: string | null, autoDeleteSetting: "on" | "off" | "unknown" }`.
+- `worktree`: `{ path: string | null, removed: boolean, localRefDeleted: boolean, absenceVerifiedAt: string | null }`.
+- `beads`: `{ ids: string[] of bead ids, ledgerActive: boolean }`.
+- `proof`: `{ method: string, observedAt: string, evidence: object }`.
+- `outcome`: `"landed"`, `"cleaned"`, or `"partial"`.
+- `supersedes`: string naming the receipt this one continues, or `null`.
+- `notes`: the one optional key, a string. A `notes` object is not v1. Refuse it and state the observed type.
+Do not invent `continues` or a string-valued `version` field.
 
-MUST read one JSON receipt from `<agentDir>/receipts/<repoKey>/<receiptId>.json`. `agentDir` is `PI_CODING_AGENT_DIR` when set and `$HOME/.omp` otherwise. Create the directory recursively with mode `0700`; atomically rename a temporary file in the same directory. A receipt is never written inside a worktree. `repoKey` is the first 16 hexadecimal characters of the SHA-256 of the real path from `git rev-parse --git-common-dir`; the canonical checkout and every linked worktree share it. `receiptId` is `<epochMillis>-<first 12 characters of mergeCommitOid>` or `<epochMillis>-nomerge`.
+MUST treat every unknown top-level key as extension data:
+- Its presence is not a refusal, and its content is never proof.
+- Validate the documented keys above. A consumer that retains or re-emits the receipt object carries the unknown keys with it.
+- A writer that re-emits receipt data copies each unknown top-level key verbatim into its continuation receipt. That continuation names the receipt it continues in `supersedes`.
+- `bd_reconcile` writes the ledger and emits no receipt, so it re-emits nothing.
+- Extension data never hides inside a documented v1 key.
+
+MUST read one JSON receipt from `<agentDir>/receipts/<repoKey>/<receiptId>.json`. `agentDir` is `PI_CODING_AGENT_DIR` when set and `$HOME/.omp` otherwise. Create the directory recursively with mode `0700`; atomically rename a temporary file in the same directory. A receipt is never written inside a worktree. `repoKey` is the first 16 lowercase hexadecimal characters of the SHA-256 of the real path from `git rev-parse --git-common-dir`; the canonical checkout and every linked worktree share it. `receiptId` is `<epochMillis>-<first 12 characters of mergeCommitOid>` or `<epochMillis>-nomerge`.
 
 MUST refuse a receipt whose schema differs or whose version is later than numeric version `1`, and state the observed version in the refusal. Do not guess a later version. A partial receipt, a cleaned receipt, or an unknown-cleanup receipt may still drive safe convergent anchor and audit repairs; none supplies close proof by itself.
 
