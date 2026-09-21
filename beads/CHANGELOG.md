@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.1.1](https://github.com/srobroek/omp-plugins/compare/beads--v2.1.0...beads--v2.1.1) (2026-09-21)
+
+
+### Bug Fixes
+
+* **beads:** stop the pr gate spending the bash handler's budget on gh ([#440](https://github.com/srobroek/omp-plugins/issues/440)) ([1921892](https://github.com/srobroek/omp-plugins/commit/1921892149f5514048f40eb7f629eb91dd171fd8))
+
 ## [2.1.0](https://github.com/srobroek/omp-plugins/compare/beads--v2.0.4...beads--v2.1.0) (2026-09-21)
 
 
