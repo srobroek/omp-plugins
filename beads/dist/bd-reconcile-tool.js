@@ -1248,7 +1248,15 @@ async function reconcileReceipts(params, toolCallId, cwd, env = process.env, dep
         }
       }
     }
-    const anchor = claimAnchor(bead);
+    const leaseHost = metadataValue(bead, "lease_host");
+    const leasePid = metadataValue(bead, "lease_pid");
+    const anchor = claimAnchor({
+      id: bead.id,
+      title: "",
+      status: bead.status,
+      assignee: bead.assignee,
+      metadata: leaseHost !== undefined && leasePid !== undefined ? { lease_host: leaseHost, lease_pid: leasePid } : undefined
+    });
     const localAnchor = anchor !== undefined && anchor.host.split(".")[0] === localHost.split(".")[0];
     const deadLocalClaim = bead.assignee !== undefined && anchor !== undefined && localAnchor && !alive(anchor.pid);
     if (deadLocalClaim && bead.assignee !== undefined) {
