@@ -415,6 +415,8 @@ test("canonical bootstrap commands ignore literal foreign paths", () => {
 		).toBeUndefined();
 	}
 	for (const command of [
+		`git -C ${canonical} checkout -b new-branch`,
+		`git checkout ${worktree}/new-file`,
 		"git commit -m x",
 		"git add .",
 		"git checkout -- .",
