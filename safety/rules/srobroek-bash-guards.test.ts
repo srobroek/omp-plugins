@@ -667,7 +667,7 @@ export function measure(): Measurement {
 
 describe("must fire", () => {
 	for (const c of MUST_FIRE) {
-		test(`${c.id} — ${c.why}`, () => {
+		test(`fires: ${c.id} — ${c.why}`, () => {
 			for (const buffer of buffers(c)) {
 				expect(firedBy(buffer)).toEqual(GUARDS.filter(g => c.fire.includes(g)));
 			}
@@ -677,7 +677,7 @@ describe("must fire", () => {
 
 describe("must not fire", () => {
 	for (const c of MUST_NOT_FIRE) {
-		test(`${c.id} — ${c.why}`, () => {
+		test(`does not fire: ${c.id} — ${c.why}`, () => {
 			for (const buffer of buffers(c)) {
 				expect(firedBy(buffer)).toEqual([]);
 			}
