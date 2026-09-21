@@ -42188,8 +42188,8 @@ async function runPreflight(cwd, ctx, overrides = {}) {
 
 // extensions/lib/session.ts
 import { randomBytes as randomBytes2 } from "crypto";
-import { homedir as homedir4 } from "os";
 import { mkdir as mkdir4, readdir, readFile as readFile2, rename as rename2, stat as stat2, writeFile as writeFile2 } from "fs/promises";
+import { homedir as homedir4 } from "os";
 import { dirname as dirname5, join as join6 } from "path";
 var SESSION_SHUTDOWN_BUDGET_MS = 1000;
 var LEAK_MANIFEST_NAME = "headed-browser-leaks.json";

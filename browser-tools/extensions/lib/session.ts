@@ -1,6 +1,6 @@
 import { randomBytes } from "node:crypto";
-import { homedir } from "node:os";
 import { mkdir, readdir, readFile, rename, stat, writeFile } from "node:fs/promises";
+import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import type { ExtensionContext } from "@oh-my-pi/pi-coding-agent";
 import type { Browser, Page } from "puppeteer-core";
