@@ -80,9 +80,11 @@ export async function launchRemote(
 	validateRemoteTarget(request.remoteHost, request.remoteBrowserPath);
 	const sshArgs = parseSshOptions(request.sshOptions ?? "-o BatchMode=yes -o StrictHostKeyChecking=yes");
 	validateSshOptions(sshArgs);
-	const remoteProfileDir = await sshCapture(sshArgs, request.remoteHost, ["mktemp", "-d", "/tmp/omp-headed-firefox-XXXXXXXX"], request.navigationTimeoutMs);
+	// A configured navigation timeout may be 300s, but one launch stage must return before tool_call's 30s budget.
+	const stageTimeoutMs = Math.min(request.navigationTimeoutMs, 29_000);
+	const remoteProfileDir = await sshCapture(sshArgs, request.remoteHost, ["mktemp", "-d", "/tmp/omp-headed-firefox-XXXXXXXX"], stageTimeoutMs);
 	validateRemotePath(remoteProfileDir, "remote profile directory");
-	await sshCapture(sshArgs, request.remoteHost, ["mkdir", "-p", `${remoteProfileDir}/downloads`], request.navigationTimeoutMs);
+	await sshCapture(sshArgs, request.remoteHost, ["mkdir", "-p", `${remoteProfileDir}/downloads`], stageTimeoutMs);
 	const browserProcess = Bun.spawn(
 		[
 			"ssh",
@@ -100,10 +102,10 @@ export async function launchRemote(
 	);
 	let endpoint: string;
 	try {
-		endpoint = await readBidiEndpoint(browserProcess.stderr, request.navigationTimeoutMs);
+		endpoint = await readBidiEndpoint(browserProcess.stderr, stageTimeoutMs);
 	} catch (error) {
 		browserProcess.kill();
-		await sshCapture(sshArgs, request.remoteHost, ["rm", "-rf", remoteProfileDir], request.navigationTimeoutMs).catch(() => undefined);
+		await sshCapture(sshArgs, request.remoteHost, ["rm", "-rf", remoteProfileDir], stageTimeoutMs).catch(() => undefined);
 		throw error;
 	}
 	const remotePort = new URL(endpoint).port;
@@ -112,26 +114,29 @@ export async function launchRemote(
 		["ssh", ...sshArgs, "-N", "-L", `127.0.0.1:${localPort}:127.0.0.1:${remotePort}`, request.remoteHost],
 		{ stdout: "ignore", stderr: "pipe" },
 	);
-	await Bun.sleep(250);
 	if (tunnelProcess.exitCode !== null) {
 		browserProcess.kill();
-		await sshCapture(sshArgs, request.remoteHost, ["rm", "-rf", remoteProfileDir], request.navigationTimeoutMs).catch(() => undefined);
+		await sshCapture(sshArgs, request.remoteHost, ["rm", "-rf", remoteProfileDir], stageTimeoutMs).catch(() => undefined);
 		throw new Error(`headed-browser: SSH tunnel exited with ${tunnelProcess.exitCode}`);
 	}
 	try {
 		const puppeteer = await loadPuppeteer(config);
-		const browser = await puppeteer.connect({
-			browserWSEndpoint: `ws://127.0.0.1:${localPort}/session`,
-			protocol: "webDriverBiDi",
-			downloadBehavior: config.allowDownloads
-				? { policy: "allow", downloadPath: `${remoteProfileDir}/downloads` }
-				: { policy: "deny" },
-		});
+		// Puppeteer connect has no reliable BiDi timeout, so cap this single stage as well.
+		const browser = await Promise.race([
+			puppeteer.connect({
+				browserWSEndpoint: `ws://127.0.0.1:${localPort}/session`,
+				protocol: "webDriverBiDi",
+				downloadBehavior: config.allowDownloads
+					? { policy: "allow", downloadPath: `${remoteProfileDir}/downloads` }
+					: { policy: "deny" },
+			}),
+			Bun.sleep(stageTimeoutMs).then(() => { throw new Error(`headed-browser: remote BiDi connect timed out after ${stageTimeoutMs} ms`); }),
+		]);
 		return { browser, browserProcess, tunnelProcess, remoteProfileDir, remoteHost: request.remoteHost, sshArgs, timeoutMs: request.navigationTimeoutMs };
 	} catch {
 		tunnelProcess.kill();
 		browserProcess.kill();
-		await sshCapture(sshArgs, request.remoteHost, ["rm", "-rf", remoteProfileDir], request.navigationTimeoutMs).catch(() => undefined);
+		await sshCapture(sshArgs, request.remoteHost, ["rm", "-rf", remoteProfileDir], stageTimeoutMs).catch(() => undefined);
 		throw new Error("headed-browser: remote BiDi connect unsupported by puppeteer-core; use a local session");
 	}
 }
