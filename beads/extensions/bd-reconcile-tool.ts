@@ -210,6 +210,7 @@ export type ReconcileDependencies = {
 	observeProof?: ProofObserver;
 	observeCleanup?: CleanupObserver;
 	cleanupCommand?: CommandSpawn;
+	remotePlatform?: NodeJS.Platform;
 	receiptRoot?: string;
 	repoKey?: (cwd: string, deadline: number) => Promise<string | undefined>;
 	pidAlive?: (pid: number) => boolean;
@@ -797,19 +798,34 @@ function resolvedRemoteIdentity(value: string): ResolvedRemoteIdentity | undefin
 	return { forge, nameWithOwner: segments.join("/"), transport };
 }
 
-function isolatedRemoteEnvironment(base: NodeJS.ProcessEnv, cwd: string, transport: ResolvedRemoteIdentity["transport"]): NodeJS.ProcessEnv {
+function trustedRemoteGit(platform: NodeJS.Platform): string | undefined {
+	if (platform === "win32") return undefined;
+	try {
+		const executable = realpathSync("/usr/bin/git");
+		return isAbsolute(executable) ? executable : undefined;
+	} catch {
+		return undefined;
+	}
+}
+
+function isolatedRemoteEnvironment(
+	base: NodeJS.ProcessEnv,
+	cwd: string,
+	transport: ResolvedRemoteIdentity["transport"],
+	platform: NodeJS.Platform,
+): NodeJS.ProcessEnv {
 	const isolated: NodeJS.ProcessEnv = {};
 	for (const key of ["HOME", "LANG", "LC_ALL", "LOGNAME", "SSH_AUTH_SOCK", "SYSTEMROOT", "TEMP", "TMP", "TMPDIR", "USER"] as const) {
 		const value = base[key];
 		if (value !== undefined) isolated[key] = value;
 	}
 	isolated.GIT_CONFIG_NOSYSTEM = "1";
-	isolated.GIT_CONFIG_GLOBAL = process.platform === "win32" ? "NUL" : "/dev/null";
+	isolated.GIT_CONFIG_GLOBAL = platform === "win32" ? "NUL" : "/dev/null";
 	isolated.GIT_CEILING_DIRECTORIES = cwd;
 	isolated.GIT_DISCOVERY_ACROSS_FILESYSTEM = "0";
 	isolated.GIT_TERMINAL_PROMPT = "0";
-	isolated.PATH = process.platform === "win32" ? base.PATH : "/usr/bin:/bin";
-	if (transport === "ssh" && process.platform !== "win32") {
+	isolated.PATH = platform === "win32" ? "" : "/usr/bin:/bin";
+	if (transport === "ssh" && platform !== "win32") {
 		isolated.GIT_SSH_COMMAND = "/usr/bin/ssh -F /dev/null -o BatchMode=yes -o ClearAllForwardings=yes -o ProxyCommand=none -o ProxyJump=none -o PermitLocalCommand=no -o CanonicalizeHostname=no";
 		isolated.GIT_SSH_VARIANT = "ssh";
 	}
@@ -823,11 +839,16 @@ async function defaultObserveCleanup(
 	env: NodeJS.ProcessEnv,
 	deadline: number,
 	command: CommandSpawn = spawnExecutable,
+	platform: NodeJS.Platform = process.platform,
 ): Promise<{ observation?: CleanupObservation; failure?: string }> {
+	const trustedGit = trustedRemoteGit(platform);
+	if (trustedGit === undefined) {
+		return { failure: `trusted absolute Git executable unavailable for ${platform}; refusing cleanup proof` };
+	}
 	if (!/^[A-Za-z0-9][A-Za-z0-9._/-]*$/.test(receipt.repo.remote)) {
 		return { failure: requirement("repo.remote", receipt.repo.remote, "a safe configured git remote name") };
 	}
-	const configured = await command("git", ["remote", "get-url", receipt.repo.remote], cwd, env, deadline);
+	const configured = await command(trustedGit, ["remote", "get-url", receipt.repo.remote], cwd, env, deadline);
 	if (!configured.ok) {
 		const detail = configured.error ?? [configured.stderr, configured.stdout].filter(Boolean).join(" ").replace(/\s+/g, " ").trim();
 		return { failure: `git remote get-url could not resolve configured remote ${JSON.stringify(receipt.repo.remote)}: ${detail || `exit ${configured.exitCode}`}` };
@@ -854,18 +875,17 @@ async function defaultObserveCleanup(
 	} catch (error) {
 		return { failure: `could not create isolated remote probe directory: ${error instanceof Error ? error.message : String(error)}` };
 	}
-	const remoteEnv = isolatedRemoteEnvironment(env, remoteCwd, remoteIdentity.transport);
-	const remoteGit = process.platform === "win32" ? "git" : "/usr/bin/git";
+	const remoteEnv = isolatedRemoteEnvironment(env, remoteCwd, remoteIdentity.transport, platform);
 	let results: [SpawnResult, SpawnResult, SpawnResult] | undefined;
 	try {
 		results = await Promise.all([
-			command(remoteGit, [
+			command(trustedGit, [
 				"-c", "protocol.allow=never",
 				"-c", `protocol.${remoteIdentity.transport}.allow=always`,
 				"ls-remote", "--exit-code", "--heads", "--", remoteUrl, branchRef,
 			], remoteCwd, remoteEnv, deadline),
-			command("git", ["show-ref", "--verify", "--quiet", branchRef], cwd, env, deadline),
-			command("git", ["worktree", "list", "--porcelain"], cwd, env, deadline),
+			command(trustedGit, ["show-ref", "--verify", "--quiet", branchRef], cwd, env, deadline),
+			command(trustedGit, ["worktree", "list", "--porcelain"], cwd, env, deadline),
 		]);
 	} finally {
 		try { rmSync(remoteCwd, { recursive: true, force: true }); } catch { /* The OS can reclaim an empty probe directory. */ }
@@ -1218,7 +1238,7 @@ async function reconcileReceiptsUnlocked(
 		}
 		if (receipt.outcome === "landed") {
 			const cleanup = deps.observeCleanup === undefined
-				? await defaultObserveCleanup(receipt, observedProof.observation.repo.nameWithOwner, cwd, bdEnv, deadline, deps.cleanupCommand)
+				? await defaultObserveCleanup(receipt, observedProof.observation.repo.nameWithOwner, cwd, bdEnv, deadline, deps.cleanupCommand, deps.remotePlatform)
 				: await deps.observeCleanup(receipt, cwd, bdEnv, deadline);
 			cleanupFailuresByReceipt.set(source.path, cleanupObservationFailures(cleanup.observation, cleanup.failure));
 		}

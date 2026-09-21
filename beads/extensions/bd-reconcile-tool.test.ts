@@ -617,6 +617,36 @@ describe("close-out proof", () => {
 		expect(remoteQuery?.env.GIT_CONFIG_GLOBAL).toBe(process.platform === "win32" ? "NUL" : "/dev/null");
 		expect(remoteQuery?.env.GIT_CONFIG_COUNT).toBeUndefined();
 		expect(remoteQuery?.env.GIT_EXEC_PATH).toBeUndefined();
+		expect(calls.every((call) => call.executable.startsWith("/"))).toBe(true);
+		expect(remoteQuery?.env.PATH).toBe("/usr/bin:/bin");
+	});
+
+	test("fails closed on Windows instead of resolving a caller PATH git.exe shim", async () => {
+		const root = temporary("windows-git-shim");
+		writeReceipt(root, receipt());
+		const harness = new Harness(join(root, "repo"), exactBead());
+		const shimDirectory = join(root, "attacker-bin");
+		mkdirSync(shimDirectory);
+		writeFileSync(join(shimDirectory, "git.exe"), "attacker-controlled executable");
+		const calls: string[][] = [];
+		const command: CommandSpawn = async (_executable, argv) => {
+			calls.push([...argv]);
+			return { ok: false, exitCode: 2, stdout: "", stderr: "shim forged absence" };
+		};
+		const report = await reconcileReceipts(
+			{ repoKey: REPO_KEY },
+			"windows-git-shim",
+			harness.cwd,
+			{ BD_ACTOR: "omp/Test/session", PATH: shimDirectory },
+			dependencies(root, harness, {
+				observeCleanup: undefined,
+				cleanupCommand: command,
+				remotePlatform: "win32",
+			}),
+		);
+		expect(closeOperations(report.operations)).toEqual([]);
+		expect(report.refusals.some((item) => item.reason.includes("trusted absolute Git executable unavailable for win32"))).toBe(true);
+		expect(calls).toEqual([]);
 	});
 
 	test("prevents a second insteadOf rewrite from redirecting the verified remote to an empty repository", async () => {

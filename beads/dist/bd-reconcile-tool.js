@@ -1138,7 +1138,17 @@ function resolvedRemoteIdentity(value) {
   }
   return { forge, nameWithOwner: segments.join("/"), transport };
 }
-function isolatedRemoteEnvironment(base, cwd, transport) {
+function trustedRemoteGit(platform) {
+  if (platform === "win32")
+    return;
+  try {
+    const executable = realpathSync3("/usr/bin/git");
+    return isAbsolute3(executable) ? executable : undefined;
+  } catch {
+    return;
+  }
+}
+function isolatedRemoteEnvironment(base, cwd, transport, platform) {
   const isolated = {};
   for (const key of ["HOME", "LANG", "LC_ALL", "LOGNAME", "SSH_AUTH_SOCK", "SYSTEMROOT", "TEMP", "TMP", "TMPDIR", "USER"]) {
     const value = base[key];
@@ -1146,22 +1156,26 @@ function isolatedRemoteEnvironment(base, cwd, transport) {
       isolated[key] = value;
   }
   isolated.GIT_CONFIG_NOSYSTEM = "1";
-  isolated.GIT_CONFIG_GLOBAL = process.platform === "win32" ? "NUL" : "/dev/null";
+  isolated.GIT_CONFIG_GLOBAL = platform === "win32" ? "NUL" : "/dev/null";
   isolated.GIT_CEILING_DIRECTORIES = cwd;
   isolated.GIT_DISCOVERY_ACROSS_FILESYSTEM = "0";
   isolated.GIT_TERMINAL_PROMPT = "0";
-  isolated.PATH = process.platform === "win32" ? base.PATH : "/usr/bin:/bin";
-  if (transport === "ssh" && process.platform !== "win32") {
+  isolated.PATH = platform === "win32" ? "" : "/usr/bin:/bin";
+  if (transport === "ssh" && platform !== "win32") {
     isolated.GIT_SSH_COMMAND = "/usr/bin/ssh -F /dev/null -o BatchMode=yes -o ClearAllForwardings=yes -o ProxyCommand=none -o ProxyJump=none -o PermitLocalCommand=no -o CanonicalizeHostname=no";
     isolated.GIT_SSH_VARIANT = "ssh";
   }
   return isolated;
 }
-async function defaultObserveCleanup(receipt, authoritativeNameWithOwner, cwd, env, deadline, command = spawnExecutable) {
+async function defaultObserveCleanup(receipt, authoritativeNameWithOwner, cwd, env, deadline, command = spawnExecutable, platform = process.platform) {
+  const trustedGit = trustedRemoteGit(platform);
+  if (trustedGit === undefined) {
+    return { failure: `trusted absolute Git executable unavailable for ${platform}; refusing cleanup proof` };
+  }
   if (!/^[A-Za-z0-9][A-Za-z0-9._/-]*$/.test(receipt.repo.remote)) {
     return { failure: requirement("repo.remote", receipt.repo.remote, "a safe configured git remote name") };
   }
-  const configured = await command("git", ["remote", "get-url", receipt.repo.remote], cwd, env, deadline);
+  const configured = await command(trustedGit, ["remote", "get-url", receipt.repo.remote], cwd, env, deadline);
   if (!configured.ok) {
     const detail = configured.error ?? [configured.stderr, configured.stdout].filter(Boolean).join(" ").replace(/\s+/g, " ").trim();
     return { failure: `git remote get-url could not resolve configured remote ${JSON.stringify(receipt.repo.remote)}: ${detail || `exit ${configured.exitCode}`}` };
@@ -1189,12 +1203,11 @@ async function defaultObserveCleanup(receipt, authoritativeNameWithOwner, cwd, e
   } catch (error) {
     return { failure: `could not create isolated remote probe directory: ${error instanceof Error ? error.message : String(error)}` };
   }
-  const remoteEnv = isolatedRemoteEnvironment(env, remoteCwd, remoteIdentity.transport);
-  const remoteGit = process.platform === "win32" ? "git" : "/usr/bin/git";
+  const remoteEnv = isolatedRemoteEnvironment(env, remoteCwd, remoteIdentity.transport, platform);
   let results;
   try {
     results = await Promise.all([
-      command(remoteGit, [
+      command(trustedGit, [
         "-c",
         "protocol.allow=never",
         "-c",
@@ -1206,8 +1219,8 @@ async function defaultObserveCleanup(receipt, authoritativeNameWithOwner, cwd, e
         remoteUrl,
         branchRef
       ], remoteCwd, remoteEnv, deadline),
-      command("git", ["show-ref", "--verify", "--quiet", branchRef], cwd, env, deadline),
-      command("git", ["worktree", "list", "--porcelain"], cwd, env, deadline)
+      command(trustedGit, ["show-ref", "--verify", "--quiet", branchRef], cwd, env, deadline),
+      command(trustedGit, ["worktree", "list", "--porcelain"], cwd, env, deadline)
     ]);
   } finally {
     try {
@@ -1559,7 +1572,7 @@ async function reconcileReceiptsUnlocked(params, toolCallId, cwd, env, deps, dea
       continue;
     }
     if (receipt.outcome === "landed") {
-      const cleanup = deps.observeCleanup === undefined ? await defaultObserveCleanup(receipt, observedProof.observation.repo.nameWithOwner, cwd, bdEnv, deadline, deps.cleanupCommand) : await deps.observeCleanup(receipt, cwd, bdEnv, deadline);
+      const cleanup = deps.observeCleanup === undefined ? await defaultObserveCleanup(receipt, observedProof.observation.repo.nameWithOwner, cwd, bdEnv, deadline, deps.cleanupCommand, deps.remotePlatform) : await deps.observeCleanup(receipt, cwd, bdEnv, deadline);
       cleanupFailuresByReceipt.set(source.path, cleanupObservationFailures(cleanup.observation, cleanup.failure));
     }
     authoritativeSources.push(source);
