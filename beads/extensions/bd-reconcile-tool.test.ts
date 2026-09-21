@@ -619,6 +619,7 @@ describe("close-out proof", () => {
 		expect(remoteQuery?.env.GIT_EXEC_PATH).toBeUndefined();
 		expect(calls.every((call) => call.executable.startsWith("/"))).toBe(true);
 		expect(remoteQuery?.env.PATH).toBe("/usr/bin:/bin");
+		expect(calls.every((call) => call.env.GIT_NAMESPACE === undefined && call.env.GIT_DIR === undefined)).toBe(true);
 	});
 
 	test("fails closed on Windows instead of resolving a caller PATH git.exe shim", async () => {
@@ -647,6 +648,74 @@ describe("close-out proof", () => {
 		expect(closeOperations(report.operations)).toEqual([]);
 		expect(report.refusals.some((item) => item.reason.includes("trusted absolute Git executable unavailable for win32"))).toBe(true);
 		expect(calls).toEqual([]);
+	});
+
+	test("sanitizes cwd-local Git proof against namespace, repository, config, helper, and loader injection", async () => {
+		const root = temporary("local-git-environment");
+		writeReceipt(root, receipt());
+		const harness = new Harness(join(root, "repo"), exactBead());
+		const configuredUrl = "https://github.com/srobroek/omp-plugins.git";
+		const calls: Array<{ argv: string[]; env: NodeJS.ProcessEnv }> = [];
+		const command: CommandSpawn = async (_executable, argv, _cwd, env) => {
+			calls.push({ argv: [...argv], env: { ...env } });
+			const redirected = env.GIT_NAMESPACE !== undefined
+				|| env.GIT_DIR !== undefined
+				|| env.GIT_COMMON_DIR !== undefined
+				|| env.GIT_CONFIG_COUNT !== undefined
+				|| env.GIT_CONFIG_GLOBAL !== "/dev/null"
+				|| env.GIT_EXEC_PATH !== undefined
+				|| env.GIT_SSH_COMMAND === "attacker-ssh"
+				|| env.DYLD_INSERT_LIBRARIES !== undefined
+				|| env.LD_PRELOAD !== undefined;
+			if (argv[0] === "remote") return { ok: true, exitCode: 0, stdout: `${configuredUrl}\n`, stderr: "" };
+			if (argv.includes("ls-remote")) return { ok: false, exitCode: 2, stdout: "", stderr: "" };
+			if (argv[0] === "show-ref") {
+				return redirected
+					? { ok: false, exitCode: 1, stdout: "", stderr: "" }
+					: { ok: true, exitCode: 0, stdout: "", stderr: "" };
+			}
+			if (argv[0] === "worktree") {
+				const branch = redirected ? "refs/heads/main" : "refs/heads/feature/reconcile";
+				return { ok: true, exitCode: 0, stdout: `worktree ${harness.cwd}\nHEAD ${HEAD}\nbranch ${branch}\n`, stderr: "" };
+			}
+			return { ok: false, exitCode: 2, stdout: "", stderr: `unexpected git argv: ${argv.join(" ")}` };
+		};
+		const report = await reconcileReceipts(
+			{ repoKey: REPO_KEY },
+			"local-git-environment",
+			harness.cwd,
+			{
+				BD_ACTOR: "omp/Test/session",
+				PATH: join(root, "attacker-bin"),
+				GIT_NAMESPACE: "empty-namespace",
+				GIT_DIR: join(root, "attacker.git"),
+				GIT_COMMON_DIR: join(root, "attacker-common"),
+				GIT_CONFIG_COUNT: "1",
+				GIT_CONFIG_KEY_0: "core.sshCommand",
+				GIT_CONFIG_VALUE_0: "attacker-ssh",
+				GIT_CONFIG_GLOBAL: join(root, "attacker.gitconfig"),
+				GIT_EXEC_PATH: join(root, "attacker-exec"),
+				GIT_SSH_COMMAND: "attacker-ssh",
+				DYLD_INSERT_LIBRARIES: join(root, "attacker.dylib"),
+				LD_PRELOAD: join(root, "attacker.so"),
+			},
+			dependencies(root, harness, { observeCleanup: undefined, cleanupCommand: command }),
+		);
+		expect(closeOperations(report.operations)).toEqual([]);
+		expect(report.refusals.some((item) => item.reason.includes("current local ref"))).toBe(true);
+		expect(report.refusals.some((item) => item.reason.includes("current worktree"))).toBe(true);
+		expect(calls.length).toBe(4);
+		for (const call of calls) {
+			expect(call.env.GIT_NAMESPACE).toBeUndefined();
+			expect(call.env.GIT_DIR).toBeUndefined();
+			expect(call.env.GIT_COMMON_DIR).toBeUndefined();
+			expect(call.env.GIT_CONFIG_COUNT).toBeUndefined();
+			expect(call.env.GIT_CONFIG_GLOBAL).toBe("/dev/null");
+			expect(call.env.GIT_EXEC_PATH).toBeUndefined();
+			expect(call.env.DYLD_INSERT_LIBRARIES).toBeUndefined();
+			expect(call.env.LD_PRELOAD).toBeUndefined();
+			expect(call.env.PATH).toBe("/usr/bin:/bin");
+		}
 	});
 
 	test("prevents a second insteadOf rewrite from redirecting the verified remote to an empty repository", async () => {

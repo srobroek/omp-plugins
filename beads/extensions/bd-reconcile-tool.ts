@@ -808,23 +808,28 @@ function trustedRemoteGit(platform: NodeJS.Platform): string | undefined {
 	}
 }
 
+function trustedGitEnvironment(base: NodeJS.ProcessEnv, platform: NodeJS.Platform): NodeJS.ProcessEnv {
+	const trusted: NodeJS.ProcessEnv = {};
+	for (const key of ["HOME", "LANG", "LC_ALL", "LOGNAME", "SSH_AUTH_SOCK", "SYSTEMROOT", "TEMP", "TMP", "TMPDIR", "USER"] as const) {
+		const value = base[key];
+		if (value !== undefined) trusted[key] = value;
+	}
+	trusted.GIT_CONFIG_NOSYSTEM = "1";
+	trusted.GIT_CONFIG_GLOBAL = platform === "win32" ? "NUL" : "/dev/null";
+	trusted.GIT_TERMINAL_PROMPT = "0";
+	trusted.PATH = platform === "win32" ? "" : "/usr/bin:/bin";
+	return trusted;
+}
+
 function isolatedRemoteEnvironment(
 	base: NodeJS.ProcessEnv,
 	cwd: string,
 	transport: ResolvedRemoteIdentity["transport"],
 	platform: NodeJS.Platform,
 ): NodeJS.ProcessEnv {
-	const isolated: NodeJS.ProcessEnv = {};
-	for (const key of ["HOME", "LANG", "LC_ALL", "LOGNAME", "SSH_AUTH_SOCK", "SYSTEMROOT", "TEMP", "TMP", "TMPDIR", "USER"] as const) {
-		const value = base[key];
-		if (value !== undefined) isolated[key] = value;
-	}
-	isolated.GIT_CONFIG_NOSYSTEM = "1";
-	isolated.GIT_CONFIG_GLOBAL = platform === "win32" ? "NUL" : "/dev/null";
+	const isolated = trustedGitEnvironment(base, platform);
 	isolated.GIT_CEILING_DIRECTORIES = cwd;
 	isolated.GIT_DISCOVERY_ACROSS_FILESYSTEM = "0";
-	isolated.GIT_TERMINAL_PROMPT = "0";
-	isolated.PATH = platform === "win32" ? "" : "/usr/bin:/bin";
 	if (transport === "ssh" && platform !== "win32") {
 		isolated.GIT_SSH_COMMAND = "/usr/bin/ssh -F /dev/null -o BatchMode=yes -o ClearAllForwardings=yes -o ProxyCommand=none -o ProxyJump=none -o PermitLocalCommand=no -o CanonicalizeHostname=no";
 		isolated.GIT_SSH_VARIANT = "ssh";
@@ -845,10 +850,11 @@ async function defaultObserveCleanup(
 	if (trustedGit === undefined) {
 		return { failure: `trusted absolute Git executable unavailable for ${platform}; refusing cleanup proof` };
 	}
+	const localEnv = trustedGitEnvironment(env, platform);
 	if (!/^[A-Za-z0-9][A-Za-z0-9._/-]*$/.test(receipt.repo.remote)) {
 		return { failure: requirement("repo.remote", receipt.repo.remote, "a safe configured git remote name") };
 	}
-	const configured = await command(trustedGit, ["remote", "get-url", receipt.repo.remote], cwd, env, deadline);
+	const configured = await command(trustedGit, ["remote", "get-url", receipt.repo.remote], cwd, localEnv, deadline);
 	if (!configured.ok) {
 		const detail = configured.error ?? [configured.stderr, configured.stdout].filter(Boolean).join(" ").replace(/\s+/g, " ").trim();
 		return { failure: `git remote get-url could not resolve configured remote ${JSON.stringify(receipt.repo.remote)}: ${detail || `exit ${configured.exitCode}`}` };
@@ -875,7 +881,7 @@ async function defaultObserveCleanup(
 	} catch (error) {
 		return { failure: `could not create isolated remote probe directory: ${error instanceof Error ? error.message : String(error)}` };
 	}
-	const remoteEnv = isolatedRemoteEnvironment(env, remoteCwd, remoteIdentity.transport, platform);
+	const remoteEnv = isolatedRemoteEnvironment(localEnv, remoteCwd, remoteIdentity.transport, platform);
 	let results: [SpawnResult, SpawnResult, SpawnResult] | undefined;
 	try {
 		results = await Promise.all([
@@ -884,8 +890,8 @@ async function defaultObserveCleanup(
 				"-c", `protocol.${remoteIdentity.transport}.allow=always`,
 				"ls-remote", "--exit-code", "--heads", "--", remoteUrl, branchRef,
 			], remoteCwd, remoteEnv, deadline),
-			command(trustedGit, ["show-ref", "--verify", "--quiet", branchRef], cwd, env, deadline),
-			command(trustedGit, ["worktree", "list", "--porcelain"], cwd, env, deadline),
+			command(trustedGit, ["show-ref", "--verify", "--quiet", branchRef], cwd, localEnv, deadline),
+			command(trustedGit, ["worktree", "list", "--porcelain"], cwd, localEnv, deadline),
 		]);
 	} finally {
 		try { rmSync(remoteCwd, { recursive: true, force: true }); } catch { /* The OS can reclaim an empty probe directory. */ }
