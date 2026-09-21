@@ -1,8 +1,8 @@
 // @bun
 // extensions/bd-reconcile-tool.ts
 import { createHash } from "crypto";
-import { existsSync as existsSync2, readdirSync, readFileSync as readFileSync2, realpathSync as realpathSync3 } from "fs";
-import { homedir, hostname as hostname2 } from "os";
+import { existsSync as existsSync2, mkdtempSync, readdirSync, readFileSync as readFileSync2, realpathSync as realpathSync3, rmSync } from "fs";
+import { homedir, hostname as hostname2, tmpdir } from "os";
 import { basename, dirname as dirname2, isAbsolute as isAbsolute3, join as join2, resolve as resolve3, sep } from "path";
 
 // extensions/shell-tokenizer.ts
@@ -1096,11 +1096,16 @@ function observationFailures(receipt, observation) {
 function resolvedRemoteIdentity(value) {
   let host;
   let path;
+  let transport;
   if (/^[A-Za-z][A-Za-z0-9+.-]*:\/\//.test(value)) {
     try {
       const parsed = new URL(value);
       if (parsed.search !== "" || parsed.hash !== "")
         return;
+      const protocol = parsed.protocol.slice(0, -1).toLowerCase();
+      if (protocol !== "git" && protocol !== "http" && protocol !== "https" && protocol !== "ssh")
+        return;
+      transport = protocol;
       host = parsed.hostname.toLowerCase();
       path = parsed.pathname;
     } catch {
@@ -1112,6 +1117,7 @@ function resolvedRemoteIdentity(value) {
       return;
     host = (scp[1] ?? "").toLowerCase();
     path = scp[2] ?? "";
+    transport = "ssh";
   }
   const forge = host === "github.com" ? "github" : host === "gitlab.com" ? "gitlab" : undefined;
   if (forge === undefined)
@@ -1130,7 +1136,26 @@ function resolvedRemoteIdentity(value) {
       return;
     }
   }
-  return { forge, nameWithOwner: segments.join("/") };
+  return { forge, nameWithOwner: segments.join("/"), transport };
+}
+function isolatedRemoteEnvironment(base, cwd, transport) {
+  const isolated = {};
+  for (const key of ["HOME", "LANG", "LC_ALL", "LOGNAME", "SSH_AUTH_SOCK", "SYSTEMROOT", "TEMP", "TMP", "TMPDIR", "USER"]) {
+    const value = base[key];
+    if (value !== undefined)
+      isolated[key] = value;
+  }
+  isolated.GIT_CONFIG_NOSYSTEM = "1";
+  isolated.GIT_CONFIG_GLOBAL = process.platform === "win32" ? "NUL" : "/dev/null";
+  isolated.GIT_CEILING_DIRECTORIES = cwd;
+  isolated.GIT_DISCOVERY_ACROSS_FILESYSTEM = "0";
+  isolated.GIT_TERMINAL_PROMPT = "0";
+  isolated.PATH = process.platform === "win32" ? base.PATH : "/usr/bin:/bin";
+  if (transport === "ssh" && process.platform !== "win32") {
+    isolated.GIT_SSH_COMMAND = "/usr/bin/ssh -F /dev/null -o BatchMode=yes -o ClearAllForwardings=yes -o ProxyCommand=none -o ProxyJump=none -o PermitLocalCommand=no -o CanonicalizeHostname=no";
+    isolated.GIT_SSH_VARIANT = "ssh";
+  }
+  return isolated;
 }
 async function defaultObserveCleanup(receipt, authoritativeNameWithOwner, cwd, env, deadline, command = spawnExecutable) {
   if (!/^[A-Za-z0-9][A-Za-z0-9._/-]*$/.test(receipt.repo.remote)) {
@@ -1158,11 +1183,40 @@ async function defaultObserveCleanup(receipt, authoritativeNameWithOwner, cwd, e
     return { failure: requirement("configured remote nameWithOwner", remoteIdentity.nameWithOwner, JSON.stringify(authoritativeNameWithOwner)) };
   }
   const branchRef = `refs/heads/${receipt.branch.name}`;
-  const [remote, local, worktrees] = await Promise.all([
-    command("git", ["ls-remote", "--exit-code", "--heads", "--", remoteUrl, branchRef], cwd, env, deadline),
-    command("git", ["show-ref", "--verify", "--quiet", branchRef], cwd, env, deadline),
-    command("git", ["worktree", "list", "--porcelain"], cwd, env, deadline)
-  ]);
+  let remoteCwd;
+  try {
+    remoteCwd = mkdtempSync(join2(tmpdir(), "bd-reconcile-remote-"));
+  } catch (error) {
+    return { failure: `could not create isolated remote probe directory: ${error instanceof Error ? error.message : String(error)}` };
+  }
+  const remoteEnv = isolatedRemoteEnvironment(env, remoteCwd, remoteIdentity.transport);
+  const remoteGit = process.platform === "win32" ? "git" : "/usr/bin/git";
+  let results;
+  try {
+    results = await Promise.all([
+      command(remoteGit, [
+        "-c",
+        "protocol.allow=never",
+        "-c",
+        `protocol.${remoteIdentity.transport}.allow=always`,
+        "ls-remote",
+        "--exit-code",
+        "--heads",
+        "--",
+        remoteUrl,
+        branchRef
+      ], remoteCwd, remoteEnv, deadline),
+      command("git", ["show-ref", "--verify", "--quiet", branchRef], cwd, env, deadline),
+      command("git", ["worktree", "list", "--porcelain"], cwd, env, deadline)
+    ]);
+  } finally {
+    try {
+      rmSync(remoteCwd, { recursive: true, force: true });
+    } catch {}
+  }
+  if (results === undefined)
+    return { failure: "isolated remote probe returned no command results" };
+  const [remote, local, worktrees] = results;
   const remoteAbsent = remote.exitCode === 2 && remote.stdout.trim() === "";
   if (!remoteAbsent && remote.exitCode !== 0) {
     const detail = remote.error ?? [remote.stderr, remote.stdout].filter(Boolean).join(" ").replace(/\s+/g, " ").trim();

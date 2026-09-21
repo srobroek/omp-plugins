@@ -584,19 +584,19 @@ describe("close-out proof", () => {
 	});
 
 	test.each([
-		["HTTPS", "https://github.com/srobroek/omp-plugins.git"],
-		["SSH URL", "ssh://git@github.com/srobroek/omp-plugins.git"],
-		["SCP-style SSH", "git@github.com:srobroek/omp-plugins.git"],
-		["Git protocol without suffix", "git://github.com/srobroek/omp-plugins"],
-	] as const)("accepts a configured %s remote only after repository identity binding", async (_label, configuredUrl) => {
+		["HTTPS", "https://github.com/srobroek/omp-plugins.git", "https"],
+		["SSH URL", "ssh://git@github.com/srobroek/omp-plugins.git", "ssh"],
+		["SCP-style SSH", "git@github.com:srobroek/omp-plugins.git", "ssh"],
+		["Git protocol without suffix", "git://github.com/srobroek/omp-plugins", "git"],
+	] as const)("accepts a configured %s remote only after repository identity binding", async (_label, configuredUrl, transport) => {
 		const root = temporary("configured-remote");
 		writeReceipt(root, receipt());
 		const harness = new Harness(join(root, "repo"), exactBead());
-		const calls: string[][] = [];
-		const command: CommandSpawn = async (_executable, argv) => {
-			calls.push([...argv]);
+		const calls: Array<{ executable: string; argv: string[]; cwd: string; env: NodeJS.ProcessEnv }> = [];
+		const command: CommandSpawn = async (executable, argv, cwd, env) => {
+			calls.push({ executable, argv: [...argv], cwd, env: { ...env } });
 			if (argv[0] === "remote") return { ok: true, exitCode: 0, stdout: `${configuredUrl}\n`, stderr: "" };
-			if (argv[0] === "ls-remote") return { ok: false, exitCode: 2, stdout: "", stderr: "" };
+			if (argv.includes("ls-remote")) return { ok: false, exitCode: 2, stdout: "", stderr: "" };
 			if (argv[0] === "show-ref") return { ok: false, exitCode: 1, stdout: "", stderr: "" };
 			if (argv[0] === "worktree") {
 				return { ok: true, exitCode: 0, stdout: `worktree ${harness.cwd}\nHEAD ${HEAD}\nbranch refs/heads/main\n`, stderr: "" };
@@ -605,10 +605,68 @@ describe("close-out proof", () => {
 		};
 		const report = await reconcile(root, harness, {}, { observeCleanup: undefined, cleanupCommand: command });
 		expect(closeOperations(report.operations)).toHaveLength(1);
-		expect(calls[0]).toEqual(["remote", "get-url", "origin"]);
-		const remoteQuery = calls.find((argv) => argv[0] === "ls-remote");
-		expect(remoteQuery).toEqual(["ls-remote", "--exit-code", "--heads", "--", configuredUrl, "refs/heads/feature/reconcile"]);
-		expect(remoteQuery).not.toContain("origin");
+		expect(calls[0]?.argv).toEqual(["remote", "get-url", "origin"]);
+		const remoteQuery = calls.find((call) => call.argv.includes("ls-remote"));
+		expect(remoteQuery?.argv).toEqual([
+			"-c", "protocol.allow=never",
+			"-c", `protocol.${transport}.allow=always`,
+			"ls-remote", "--exit-code", "--heads", "--", configuredUrl, "refs/heads/feature/reconcile",
+		]);
+		expect(remoteQuery?.cwd).not.toBe(harness.cwd);
+		expect(remoteQuery?.env.GIT_CONFIG_NOSYSTEM).toBe("1");
+		expect(remoteQuery?.env.GIT_CONFIG_GLOBAL).toBe(process.platform === "win32" ? "NUL" : "/dev/null");
+		expect(remoteQuery?.env.GIT_CONFIG_COUNT).toBeUndefined();
+		expect(remoteQuery?.env.GIT_EXEC_PATH).toBeUndefined();
+	});
+
+	test("prevents a second insteadOf rewrite from redirecting the verified remote to an empty repository", async () => {
+		const root = temporary("chained-remote-rewrite");
+		writeReceipt(root, receipt());
+		const harness = new Harness(join(root, "repo"), exactBead());
+		const configuredUrl = "https://github.com/srobroek/omp-plugins.git";
+		const calls: Array<{ argv: string[]; cwd: string; env: NodeJS.ProcessEnv }> = [];
+		const command: CommandSpawn = async (_executable, argv, cwd, env) => {
+			calls.push({ argv: [...argv], cwd, env: { ...env } });
+			if (argv[0] === "remote") return { ok: true, exitCode: 0, stdout: `${configuredUrl}\n`, stderr: "" };
+			if (argv.includes("ls-remote")) {
+				const rewriteCanReapply = cwd === harness.cwd
+					|| env.GIT_CONFIG_COUNT !== undefined
+					|| env.GIT_CONFIG_PARAMETERS !== undefined
+					|| env.GIT_EXEC_PATH !== undefined
+					|| env.HTTPS_PROXY !== undefined;
+				return rewriteCanReapply
+					? { ok: false, exitCode: 2, stdout: "", stderr: "" }
+					: { ok: true, exitCode: 0, stdout: `${HEAD}\trefs/heads/feature/reconcile\n`, stderr: "" };
+			}
+			if (argv[0] === "show-ref") return { ok: false, exitCode: 1, stdout: "", stderr: "" };
+			if (argv[0] === "worktree") {
+				return { ok: true, exitCode: 0, stdout: `worktree ${harness.cwd}\nHEAD ${HEAD}\nbranch refs/heads/main\n`, stderr: "" };
+			}
+			return { ok: false, exitCode: 2, stdout: "", stderr: `unexpected git argv: ${argv.join(" ")}` };
+		};
+		const report = await reconcileReceipts(
+			{ repoKey: REPO_KEY },
+			"chained-remote-rewrite",
+			harness.cwd,
+			{
+				BD_ACTOR: "omp/Test/session",
+				GIT_CONFIG_COUNT: "1",
+				GIT_CONFIG_KEY_0: "url.file:///attacker/empty.insteadOf",
+				GIT_CONFIG_VALUE_0: configuredUrl,
+				GIT_CONFIG_PARAMETERS: "'url.file:///attacker/empty.insteadOf'='https://github.com/srobroek/omp-plugins.git'",
+				GIT_EXEC_PATH: "/attacker/bin",
+				HTTPS_PROXY: "http://attacker.invalid",
+			},
+			dependencies(root, harness, { observeCleanup: undefined, cleanupCommand: command }),
+		);
+		expect(closeOperations(report.operations)).toEqual([]);
+		expect(report.refusals.some((item) => item.reason.includes("current remote branch"))).toBe(true);
+		const remoteQuery = calls.find((call) => call.argv.includes("ls-remote"));
+		expect(remoteQuery?.cwd).not.toBe(harness.cwd);
+		expect(remoteQuery?.env.GIT_CONFIG_COUNT).toBeUndefined();
+		expect(remoteQuery?.env.GIT_CONFIG_PARAMETERS).toBeUndefined();
+		expect(remoteQuery?.env.GIT_EXEC_PATH).toBeUndefined();
+		expect(remoteQuery?.env.HTTPS_PROXY).toBeUndefined();
 	});
 
 	test.each([
