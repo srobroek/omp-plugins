@@ -687,6 +687,35 @@ bashGates(fakePi as never);
       rmSync(dir, { recursive: true, force: true });
     }
   });
+	test("shutdown reports unreleased claims within its shared deadline", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "beads-shutdown-budget-"));
+		mkdirSync(join(dir, ".beads"));
+		const deadlines: number[] = [];
+		setBdStreamForTests(async (_cwd, args, deadline) => {
+			deadlines.push(deadline);
+			if (args[0] === "list") return BEAD_LIST;
+			if (args[0] === "update" && args[1] === "--help") return "--if-assignee";
+			return { failure: "bd command timed out" };
+		});
+		try {
+			const { handlers, logged } = wire();
+			const ctx = { cwd: dir, sessionManager: { getSessionId: () => "shutdown-budget" } };
+			handlers.tool_result?.[0]?.({
+				toolName: "bash",
+				toolCallId: "claim",
+				input: { command: "BD_ACTOR=omp/Main/s1 bd update bd-probe-2m7 --claim", cwd: dir, env: { BD_ACTOR: "omp/Main/s1" } },
+				content: [],
+			}, ctx);
+			await handlers.session_shutdown?.[0]?.({}, ctx);
+			expect(logged.join("\n")).toContain("Remaining:");
+			expect(logged.join("\n")).toContain("bd-probe-2m7");
+			expect(deadlines.length).toBeGreaterThan(0);
+			expect(deadlines.every(deadline => Number.isFinite(deadline))).toBe(true);
+		} finally {
+			setBdStreamForTests(null);
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
 	test("the tool_call hook pins bash for the session's checkout and nothing else", async () => {
 		// This test asserts the branch where NO pin is inherited, so it has to establish
 		// that precondition. The plugin exports `BEADS_DIR` into every session it runs

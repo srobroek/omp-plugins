@@ -134,3 +134,21 @@ describe("reclaim phase restoration", () => {
 		expect(state.calls.some(argv => argv.includes("--assignee"))).toBe(false);
 	});
 });
+
+test("passes one shared deadline to every claim preflight lookup", async () => {
+	const state: RunState = { pool: DECLARED_POOL_SET, assignee: "pool:orc-reviewer", calls: [] };
+	const { toolCall } = handlers(state);
+	const deadlines: Array<number | undefined> = [];
+	setBdRunForTests(async (argv, _cwd, _env, deadline) => {
+		deadlines.push(deadline);
+		if (argv.includes("config")) return { exitCode: 0, stdout: JSON.stringify({ data: { "claim.pools": { value: DECLARED_POOL_SET, source: "database" } } }) };
+		return { exitCode: 0, stdout: JSON.stringify({ data: [{ id: "bead-1", assignee: "pool:orc-reviewer" }] }) };
+	});
+	try {
+		expect(await toolCall(call("bd update bead-1 --claim"), { cwd: "/repo" })).toBeUndefined();
+		expect(deadlines.length).toBe(2);
+		expect(deadlines.every(deadline => typeof deadline === "number")).toBe(true);
+	} finally {
+		setBdRunForTests(null);
+	}
+});

@@ -544,6 +544,15 @@ describe("cross-process hold", () => {
 		release(beads, "call-1");
 		expect(existsSync(join(beads, LOCK))).toBe(false);
 	});
+	test("refuses a held store immediately when its shared deadline has lapsed", async () => {
+		const beads = store();
+		writeFileSync(join(beads, LOCK), JSON.stringify({ host: HOST, pid: process.pid, toolCallId: "other", taken: Date.now() }));
+		let wrote = false;
+		const result = await withEmbeddedWriteLock(beads, "deadline", () => { wrote = true; }, { BEADS_DIR: beads }, Date.now() - 1);
+		expect(result.kind).toBe("failed");
+		expect(wrote).toBe(false);
+		expect(result.kind === "failed" && result.reason).toContain("was refused");
+	});
 });
 
 describe("bdEmbeddedWriteLock", () => {

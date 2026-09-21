@@ -458,11 +458,12 @@ function renewLease(lock, toolCallId, token) {
     closeSync(fd);
   }
 }
-async function withEmbeddedWriteLock(cwd, toolCallId, write, env = process.env) {
+async function withEmbeddedWriteLock(cwd, toolCallId, write, env = process.env, deadline) {
   const store = embeddedStoreFor(cwd, env);
   if (store === undefined)
     return { kind: "done", value: await write() };
-  const got = await hold(store, toolCallId);
+  const waitMs = deadline === undefined ? WAIT_MS : Math.max(0, deadline - Date.now());
+  const got = await hold(store, toolCallId, waitMs);
   if (got.kind === "failed")
     return got;
   try {
