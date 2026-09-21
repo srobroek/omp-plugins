@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.10](https://github.com/srobroek/omp-plugins/compare/browser-tools--v0.3.9...browser-tools--v0.3.10) (2026-09-21)
+
+
+### Bug Fixes
+
+* bound registered tool work to the tool_call budget ([#449](https://github.com/srobroek/omp-plugins/issues/449)) ([0773734](https://github.com/srobroek/omp-plugins/commit/0773734fea61ebda62cdf72930e522dc3f266754))
+
 ## [0.3.9](https://github.com/srobroek/omp-plugins/compare/browser-tools--v0.3.8...browser-tools--v0.3.9) (2026-09-21)
 
 

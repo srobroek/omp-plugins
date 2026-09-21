@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.1](https://github.com/srobroek/omp-plugins/compare/dep-update--v0.7.0...dep-update--v0.7.1) (2026-09-21)
+
+
+### Bug Fixes
+
+* bound registered tool work to the tool_call budget ([#449](https://github.com/srobroek/omp-plugins/issues/449)) ([0773734](https://github.com/srobroek/omp-plugins/commit/0773734fea61ebda62cdf72930e522dc3f266754))
+
 ## [0.7.0](https://github.com/srobroek/omp-plugins/compare/dep-update--v0.6.5...dep-update--v0.7.0) (2026-09-21)
 
 

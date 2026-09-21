@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.6](https://github.com/srobroek/omp-plugins/compare/rust--v0.6.5...rust--v0.6.6) (2026-09-21)
+
+
+### Bug Fixes
+
+* bound registered tool work to the tool_call budget ([#449](https://github.com/srobroek/omp-plugins/issues/449)) ([0773734](https://github.com/srobroek/omp-plugins/commit/0773734fea61ebda62cdf72930e522dc3f266754))
+
 ## [0.6.5](https://github.com/srobroek/omp-plugins/compare/rust--v0.6.4...rust--v0.6.5) (2026-09-21)
 
 

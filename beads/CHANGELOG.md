@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.1.3](https://github.com/srobroek/omp-plugins/compare/beads--v2.1.2...beads--v2.1.3) (2026-09-21)
+
+
+### Bug Fixes
+
+* bound registered tool work to the tool_call budget ([#449](https://github.com/srobroek/omp-plugins/issues/449)) ([0773734](https://github.com/srobroek/omp-plugins/commit/0773734fea61ebda62cdf72930e522dc3f266754))
+
 ## [2.1.2](https://github.com/srobroek/omp-plugins/compare/beads--v2.1.1...beads--v2.1.2) (2026-09-21)
 
 
