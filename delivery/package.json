@@ -6,16 +6,9 @@
   "omp": {
     "extensions": [
       "./extensions/unpushed-work-advisory.ts",
-<<<<<<< HEAD
-<<<<<<< HEAD
       "./extensions/landing-receipt.ts",
       "./extensions/delivery-land-tool.ts",
       "./extensions/delivery-cleanup-tool.ts",
-=======
->>>>>>> e3816a4b (fix(delivery): prove orientation publication, worktree and receipt state)
-=======
-      "./extensions/landing-receipt.ts",
->>>>>>> b74e22ad (Resolve delivery manifest extension order)
       "./extensions/hygiene-orientation.ts"
     ]
   }
