@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.2.1](https://github.com/srobroek/omp-plugins/compare/beads--v2.2.0...beads--v2.2.1) (2026-09-22)
+
+
+### Bug Fixes
+
+* **beads:** serialize embedded writes through runner ([6c66226](https://github.com/srobroek/omp-plugins/commit/6c66226e0b559fde83e20214561c4862aff19f83))
+
 ## [2.2.0](https://github.com/srobroek/omp-plugins/compare/beads--v2.1.4...beads--v2.2.0) (2026-09-22)
 
 
