@@ -30,13 +30,6 @@
       "category": "productivity"
     },
     {
-      "name": "browser-tools",
-      "description": "Cross-engine browser coverage and Chrome performance tracing over MCP.",
-      "source": "./browser-tools",
-      "version": "0.4.0",
-      "category": "development"
-    },
-    {
       "name": "build",
       "description": "Execution agents: operator and external-repo worker.",
       "source": "./build",
