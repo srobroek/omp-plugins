@@ -368,6 +368,16 @@ describe("bash", () => {
 		}
 	});
 
+	test("canonical bootstrap rejects a tool-level Beads store override", () => {
+		const { canonical, topology } = project();
+		expect(
+			decideWorktreeCall("bash", { command: 'bd create "probe"', env: { BEADS_DIR: "/foreign" } }, canonical, topology)?.block,
+		).toBe(true);
+		expect(
+			decideWorktreeCall("bash", { command: "bd list", env: { OTHER: "value" } }, canonical, topology),
+		).toBeUndefined();
+	});
+
 	test("a cwd inside a worktree runs anything", () => {
 		const { canonical, worktree, topology } = project();
 		expect(
@@ -521,7 +531,35 @@ describe("bootstrapAllowed", () => {
 	test("allows bd create and exactly bd dolt pull, but no other Beads mutations", () => {
 		expect(bootstrapAllowed('bd create "probe" --type task')).toBe(true);
 		expect(bootstrapAllowed("bd dolt pull")).toBe(true);
+		expect(bootstrapAllowed("bd ready --json")).toBe(true);
+		expect(bootstrapAllowed("bd dep show x")).toBe(true);
+		expect(bootstrapAllowed("bd create")).toBe(false);
 		for (const command of [
+			'bd -C /foreign create "probe"',
+			'bd --directory=/foreign create "probe"',
+			'bd -C/foreign create "probe"',
+			"bd --db /foreign update x --claim",
+			"bd --database=/foreign dolt pull",
+			'bd create "probe" -C /foreign',
+			'bd create "probe" --directory=/foreign',
+			'bd create "probe" --db /foreign',
+			'bd create "probe" --database=/foreign',
+			'bd create "probe" -C/foreign',
+			"bd update x --claim --status closed",
+			"bd update x --claim --assignee other",
+			"bd claim x",
+			"bd unclaim x",
+			"bd ready --claim",
+			"bd ready --claim=true",
+			"bd ready --claim=1",
+			"bd heartbeat x",
+			"bd comments add x note",
+			"bd dep add x y",
+			"bd doctor --fix --yes",
+			"bd doctor",
+			'BEADS_DIR=/foreign bd create "probe"',
+			'env BEADS_DIR=/foreign bd create "probe"',
+			"bd doctor --output report.json",
 			"bd dolt pull --remote origin",
 			"bd dolt push",
 			"bd close omp-plugins-xhcj.4",
