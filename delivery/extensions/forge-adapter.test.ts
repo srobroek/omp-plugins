@@ -1,6 +1,6 @@
 import { afterAll, describe, expect, test } from "bun:test";
-import { chmodSync, existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { devNull, tmpdir } from "node:os";
 import { join } from "node:path";
 
 import * as adapter from "./forge-adapter.ts";
@@ -21,6 +21,7 @@ import {
 	remoteBranchAbsent,
 	repoPathFromRemote,
 	runCli,
+	singleRemoteRecord,
 } from "./forge-adapter.ts";
 
 type Call = {
@@ -398,6 +399,43 @@ describe("redactRemote", () => {
 	test("an scp-like remote keeps its host and path and loses its username", () => {
 		expect(redactRemote("git@github.com:srobroek/omp-plugins.git")).toBe("github.com:srobroek/omp-plugins.git");
 		expect(redactRemote("github.com:srobroek/omp-plugins.git")).toBe("github.com:srobroek/omp-plugins.git");
+	});
+});
+
+describe("singleRemoteRecord", () => {
+	test("one record, with at most one terminal newline removed", () => {
+		expect(singleRemoteRecord("https://github.com/o/r.git")).toBe("https://github.com/o/r.git");
+		expect(singleRemoteRecord("https://github.com/o/r.git\n")).toBe("https://github.com/o/r.git");
+		expect(singleRemoteRecord("https://github.com/o/r.git\r\n")).toBe("https://github.com/o/r.git");
+		expect(singleRemoteRecord("git@github.com:o/r.git\n")).toBe("git@github.com:o/r.git");
+	});
+
+	/**
+	 * Every rejection here is a spelling `URL` would have accepted after deleting the
+	 * character Git would have kept. Trimming first is what makes them dangerous: the
+	 * classifier then agrees the value is an ordinary forge URL, while Git resolves
+	 * something else or nothing.
+	 */
+	test("an embedded tab, newline, or carriage return is refused, never stripped", () => {
+		for (const stdout of [
+			"https://git\thub.com/o/r.git\n",
+			"https://github.com/o/r.git\n@evil.example/x\n",
+			"https://github.com/o\r/r.git\n",
+			"https://github.com/o/r.git\n\n",
+			"https://github.com/o/r.git\nhttps://evil.example/o/r.git\n",
+			"https://github.com/o/r.git\r\n\r\n",
+		]) {
+			expect(singleRemoteRecord(stdout)).toBeNull();
+		}
+		// The premise: `URL` really does delete those characters rather than reject them.
+		expect(new URL("https://git\thub.com/o/r.git").hostname).toBe("github.com");
+		expect(new URL("https://github.com/o/r.git\n@evil.example/x").hostname).toBe("github.com");
+	});
+
+	test("edge whitespace, emptiness, and a bare terminator are refused", () => {
+		for (const stdout of ["", "\n", "\r\n", " https://github.com/o/r.git\n", "https://github.com/o/r.git \n", "  \n"]) {
+			expect(singleRemoteRecord(stdout)).toBeNull();
+		}
 	});
 });
 
@@ -797,6 +835,89 @@ describe("remoteBranchAbsent", () => {
 		}
 	});
 
+	/**
+	 * A URL names its repository outright, and `url.<base>.insteadOf` rewrites URLs,
+	 * not only remote names — `extensions.worktreeConfig` can even scope such a rewrite
+	 * to the single worktree that happens to answer. So a URL probe is answered from a
+	 * directory that is not a checkout, with no global and no system config file: there
+	 * is then no config source left that could redirect it, and a caller that resolved
+	 * upstream cannot be told about a fork.
+	 *
+	 * The URL reaches Git through the child's environment rather than its command line,
+	 * because argv is readable by every user on the host through `ps`.
+	 */
+	test("a verified forge URL is probed from a neutral directory with no global or system config", () => {
+		const url = "https://github.com/srobroek/omp-plugins.git";
+		const { run, calls } = spy(completed(2));
+		expect(remoteBranchAbsent(url, "feature", REPO_CWD, run)).toBe("absent");
+		expect(calls).toHaveLength(1);
+		const probe = calls[0];
+		expect(probe?.cwd).not.toBe(REPO_CWD);
+		// Discovery is removed, not fenced: Git is handed a repository this module wrote.
+		expect(probe?.env?.GIT_DIR).toBe(join(probe?.cwd ?? "", "probe.git"));
+		expect(existsSync(join(probe?.env?.GIT_DIR ?? "", "HEAD"))).toBe(false);
+		expect(probe?.env?.GIT_CEILING_DIRECTORIES).toBe(probe?.cwd);
+		expect(probe?.env?.GIT_CONFIG_GLOBAL).toBe(devNull);
+		expect(probe?.env?.GIT_CONFIG_COUNT).toBe("1");
+		expect(probe?.env?.GIT_CONFIG_KEY_0).toBe("remote.omp-absence-probe.url");
+		expect(probe?.env?.GIT_CONFIG_VALUE_0).toBe(url);
+		// The pins and the preserved process state the observation already relied on.
+		expect(probe?.env?.GIT_ALLOW_PROTOCOL).toBe("file:https:ssh");
+		expect(probe?.env?.GIT_TERMINAL_PROMPT).toBe("0");
+		expect(probe?.argv).toContain("credential.helper=");
+		// A real directory while the probe ran, and gone once it returned.
+		expect(probe?.cwd).toMatch(/forge-ls-remote-/);
+		expect(existsSync(probe?.cwd ?? "")).toBe(false);
+	});
+
+	/**
+	 * The reason the URL is not an operand. A remote may legitimately carry userinfo or
+	 * a token query, and `ps` publishes argv to the whole host; a verdict is a word, so
+	 * nothing the caller receives can carry the secret either.
+	 */
+	test("a credential-bearing URL appears in no argv element and in no returned value", () => {
+		for (const url of [
+			"https://srobroek:ghp_secrettoken@github.com/srobroek/omp-plugins.git",
+			"https://github.com/srobroek/omp-plugins.git?token=ghp_secrettoken",
+			"ssh://git:ghp_secrettoken@gitlab.com/group/project.git",
+		]) {
+			const { run, calls } = spy(completed(2));
+			const verdict = remoteBranchAbsent(url, "feature", REPO_CWD, run);
+			expect(verdict).toBe("absent");
+			expect(verdict).not.toContain("ghp_secrettoken");
+			expect(calls).toHaveLength(1);
+			expect(calls[0]?.argv.join(" ")).not.toContain("ghp_secrettoken");
+			expect(calls[0]?.argv.at(-2)).toBe("omp-absence-probe");
+			// The one carrier, and it is the child's environment.
+			expect(calls[0]?.env?.GIT_CONFIG_VALUE_0).toBe(url);
+		}
+	});
+
+	test("an alternate transport host is a URL, a remote name and a local path are not", () => {
+		const ssh = spy(completed(2));
+		expect(remoteBranchAbsent("ssh://git@altssh.gitlab.com:443/group/project.git", "feature", REPO_CWD, ssh.run)).toBe("absent");
+		expect(ssh.calls[0]?.cwd).not.toBe(REPO_CWD);
+		expect(ssh.calls[0]?.argv.at(-2)).toBe("omp-absence-probe");
+
+		// Name mode is what delivery_land uses: the caller's directory, the caller's
+		// operand, and no injected config.
+		const name = spy(completed(2));
+		expect(remoteBranchAbsent("origin", "feature", REPO_CWD, name.run)).toBe("absent");
+		expect(name.calls[0]?.cwd).toBe(REPO_CWD);
+		expect(name.calls[0]?.argv.at(-2)).toBe("origin");
+		expect(name.calls[0]?.env?.GIT_CONFIG_GLOBAL).toBeUndefined();
+		expect(name.calls[0]?.env?.GIT_CONFIG_COUNT).toBeUndefined();
+
+		// A path and an unverified scheme are not URL mode: nothing about them was
+		// verified, so neither may select the branch that skips the caller's directory.
+		for (const remote of ["/srv/git/repo.git", "git://github.com/o/r.git", "https://evil.example/o/r.git"]) {
+			const other = spy(completed(2));
+			expect(remoteBranchAbsent(remote, "feature", REPO_CWD, other.run)).toBe("absent");
+			expect(other.calls[0]?.cwd).toBe(REPO_CWD);
+			expect(other.calls[0]?.argv.at(-2)).toBe(remote);
+		}
+	});
+
 	test("the observation environment removes executable Git overrides", () => {
 		const previous = process.env.GIT_SSH_COMMAND;
 		process.env.GIT_SSH_COMMAND = "/tmp/checkout-controlled-ssh";
@@ -958,6 +1079,7 @@ describe("every issued command", () => {
 			"remoteBranchAbsent",
 			"repoPathFromRemote",
 			"runCli",
+			"singleRemoteRecord",
 		]);
 	});
 });
@@ -1013,6 +1135,71 @@ describe("runCli against real processes", () => {
 		expect(nothing.exitCode).toBeNull();
 		expect(nothing.error).toBe("no command to run");
 	});
+
+	/**
+	 * `os.tmpdir()` answers from ambient `TMPDIR`, so whoever sets it chooses where the
+	 * probe directory is created — including inside a checkout whose local
+	 * `url.<base>.insteadOf` rewrites the probe URL. The decoy here rewrites it to a
+	 * local repository that really does carry the branch, so a redirected probe answers
+	 * `"present"`.
+	 *
+	 * This test was written against `GIT_CEILING_DIRECTORIES` and failed: with the
+	 * ceiling set to the probe directory, the parent checkout's rewrite still applied and
+	 * the decoy still answered. Fencing discovery was the wrong instrument — the probe
+	 * now runs with `GIT_DIR` pointing at a repository the module writes inside the
+	 * probe directory, so there is no discovery to fence.
+	 *
+	 * The real half contacts github.com for a path that is not a repository, so it is
+	 * `"unknown"` with or without network. What it cannot be, unless the rewrite
+	 * applied, is `"present"`.
+	 */
+	test("a nested TMPDIR inside a rewriting checkout cannot redirect a URL probe", () => {
+		const decoyUrl = "https://github.com/omp-absence-probe/decoy.git";
+		const decoy = join(dir, "decoy.git");
+		const outer = join(dir, "outer-checkout");
+		const nested = join(outer, "nested-tmp");
+		const seed = join(dir, "seed");
+		expect(git("init", "--bare", "-q", decoy).exitCode).toBe(0);
+		expect(git("init", "-q", "-b", "feature", seed).exitCode).toBe(0);
+		expect(git("-C", seed, "commit", "-q", "--allow-empty", "-m", "seed").exitCode).toBe(0);
+		expect(git("-C", seed, "-c", "protocol.file.allow=always", "push", "-q", decoy, "feature").exitCode).toBe(0);
+		expect(git("init", "-q", outer).exitCode).toBe(0);
+		expect(git("-C", outer, "config", `url.${decoy}.insteadOf`, decoyUrl).exitCode).toBe(0);
+		mkdirSync(nested, { recursive: true });
+
+		// The control that makes the assertion below mean something: asked directly, the
+		// decoy really does answer "present" for this branch.
+		expect(remoteBranchAbsent(decoy, "feature", outer, runCli)).toBe("present");
+
+		const previous = { TMPDIR: process.env.TMPDIR, TMP: process.env.TMP, TEMP: process.env.TEMP };
+		process.env.TMPDIR = nested;
+		process.env.TMP = nested;
+		process.env.TEMP = nested;
+		try {
+			// The probe directory really was created under the hostile TMPDIR, and the
+			// isolation that matters is the repository Git was handed.
+			const { run, calls } = spy(completed(2));
+			expect(remoteBranchAbsent(decoyUrl, "feature", outer, run)).toBe("absent");
+			const probeCwd = calls[0]?.cwd ?? "";
+			expect(probeCwd.startsWith(realpathSync(nested))).toBe(true);
+			expect(calls[0]?.env?.GIT_DIR).toBe(join(probeCwd, "probe.git"));
+			expect(calls[0]?.env?.GIT_CEILING_DIRECTORIES).toBe(probeCwd);
+
+			// And with real git: the rewrite in `outer` does not reach the probe, so the
+			// decoy does not answer it. This is the assertion that failed under the ceiling.
+			expect(remoteBranchAbsent(decoyUrl, "feature", outer, runCli)).not.toBe("present");
+
+			// Name mode is untouched by any of this: given the decoy path as an operand it
+			// still observes both verdicts from the caller's own directory, rewrite and all.
+			expect(remoteBranchAbsent(decoy, "feature", nested, runCli)).toBe("present");
+			expect(remoteBranchAbsent(decoy, "gone", nested, runCli)).toBe("absent");
+		} finally {
+			for (const [key, value] of Object.entries(previous)) {
+				if (value === undefined) delete process.env[key];
+				else process.env[key] = value;
+			}
+		}
+	}, 120_000);
 
 	test("the timeout is real: a sleeping command is killed and reports no status", () => {
 		const slept = runCli(["sleep", "30"], { timeoutMs: 250 });

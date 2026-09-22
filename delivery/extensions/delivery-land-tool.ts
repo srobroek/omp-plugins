@@ -67,6 +67,7 @@ import {
 	remoteBranchAbsent,
 	repoPathFromRemote,
 	runCli,
+	singleRemoteRecord,
 } from "./forge-adapter.ts";
 import {
 	buildReceipt,
@@ -359,11 +360,6 @@ function gitOutput(
 	return result.stdout;
 }
 
-/** Trimmed stdout for scalar Git reads whose values are not filesystem paths. */
-function gitText(run: CliRunner, cwd: string, argv: readonly string[], env: Readonly<Record<string, string>>): string | null {
-	return gitOutput(run, cwd, argv, env)?.trim() ?? null;
-}
-
 /**
  * The repository's stable key, canonical checkout root, and ledger verdict.
  *
@@ -489,9 +485,22 @@ export function landPullRequest(params: LandParams, deps: LandDeps = {}): LandOu
 	const repository = observeRepository(run, cwd, gitEnv);
 	if ("reason" in repository) return refuse(repository.reason);
 
-	const remoteText = gitText(run, cwd, ["remote", "get-url", remote], gitEnv);
-	if (remoteText === null || remoteText === "") {
-		return refuse(`git remote get-url ${remote}: observed no URL, expected a configured remote in ${cwd}`);
+	// The raw stdout, parsed as exactly one record rather than trimmed: `URL` deletes
+	// embedded tabs and newlines before parsing, so a remote spelled with one, or a
+	// remote printing two URLs, would classify here as an ordinary forge URL while Git
+	// contacts something else. This identity binds the merge argv, so the disagreement
+	// would not merely misreport — it would merge somewhere nobody named.
+	//
+	// The refusal names the shape, never the bytes: a remote URL may carry userinfo or a
+	// token query, and output no parser here accepts cannot be redacted, because
+	// `redactRemote` can only locate a secret in a spelling it understands.
+	const printed = gitOutput(run, cwd, ["remote", "get-url", remote], gitEnv);
+	const remoteText = printed === null ? null : singleRemoteRecord(printed);
+	if (remoteText === null) {
+		const observed = printed === null ? "no completed read" : "malformed Git remote output";
+		return refuse(
+			`git remote get-url ${remote}: observed ${observed}, expected exactly one URL record for a configured remote in ${cwd}`,
+		);
 	}
 	const target = forgeTarget(remoteText);
 	// The URL is classified before it is redacted: `forgeTarget` owns that

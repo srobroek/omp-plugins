@@ -13,7 +13,7 @@ import {
 	symlinkSync,
 	writeFileSync,
 } from "node:fs";
-import { tmpdir } from "node:os";
+import { devNull, tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
 import deliveryCleanupTool, {
@@ -80,6 +80,10 @@ type RunnerOptions = {
 	 * to the receipt's own repository; present, a name it omits is no remote at all.
 	 */
 	remotes?: Record<string, string>;
+	/** Let git answer `remote get-url` itself, so a worktree-scoped rewrite is real. */
+	realRemoteUrls?: boolean;
+	/** Verbatim stdout for `remote get-url`, for output that is not one clean record. */
+	remoteStdout?: string;
 	beadStatus?: string;
 	beadRows?: Record<string, unknown>[];
 	beadMergeSha?: string;
@@ -273,6 +277,9 @@ function gitlabPayload(f: Fixture, over: RunnerOptions["pr"] = {}): string {
  * a path as a host. The remote NAME is what a receipt records; the URL is what
  * classification and every forge query are bound to, so it is scripted here, and
  * `remotes` is how a contributor fork on `origin` is expressed.
+ *
+ * `realRemoteUrls` hands the read back to git, for the one case whose whole point is
+ * that git resolves a URL differently per worktree.
  */
 function remoteUrl(f: Fixture, remote: string, options: RunnerOptions): string | null {
 	if (options.remotes !== undefined) return options.remotes[remote] ?? null;
@@ -302,11 +309,15 @@ function runner(f: Fixture, options: RunnerOptions = {}): { run: CliRunner; call
 					metadata: { merge_sha: options.beadMergeSha ?? f.merge },
 				}],
 			}));
-		} else if (argv[0] === "git" && argv[1] === "remote" && argv[2] === "get-url") {
-			const url = remoteUrl(f, argv[3] ?? "", options);
-			result = url === null
-				? { ok: true, exitCode: 1, stdout: "", stderr: `error: No such remote '${argv[3]}'\n` }
-				: success(`${url}\n`);
+		} else if (argv[0] === "git" && argv[1] === "remote" && argv[2] === "get-url" && options.realRemoteUrls !== true) {
+			if (options.remoteStdout !== undefined) {
+				result = success(options.remoteStdout);
+			} else {
+				const url = remoteUrl(f, argv[3] ?? "", options);
+				result = url === null
+					? { ok: true, exitCode: 1, stdout: "", stderr: `error: No such remote '${argv[3]}'\n` }
+					: success(`${url}\n`);
+			}
 		} else if (argv[0] === "git" && argv.includes("ls-remote")) {
 			const remote = options.remote ?? "absent";
 			if (remote === "absent") result = success("", 2);
@@ -370,7 +381,8 @@ describe("delivery_cleanup irreversible boundary", () => {
 			worktree: f.linked,
 			remote: "origin",
 		});
-		expect(calls.slice(0, 2)).toEqual([
+		expect(calls.slice(0, 3)).toEqual([
+			["git", "worktree", "list", "--porcelain"],
 			["git", "remote", "get-url", "origin"],
 			[
 				"gh", "pr", "view", "17", "--repo", "github.com/owner/repo", "--json",
@@ -437,7 +449,10 @@ describe("delivery_cleanup irreversible boundary", () => {
 		const { result, calls } = invoke(f, { receipt: path });
 
 		expect(refusal(result)).toContain('repo.nameWithOwner: observed "owner/repo", expected receipt value "attacker/elsewhere"');
-		expect(calls).toEqual([["git", "remote", "get-url", "origin"]]);
+		expect(calls).toEqual([
+			["git", "worktree", "list", "--porcelain"],
+			["git", "remote", "get-url", "origin"],
+		]);
 		expect(commandCalls(calls, "bd")).toEqual([]);
 		expect(mutationCalls(calls)).toEqual([]);
 		expect(existsSync(f.linked)).toBe(true);
@@ -447,13 +462,13 @@ describe("delivery_cleanup irreversible boundary", () => {
 		const f = fixture("remote-identity", "feat/remote-identity", "retired");
 		// A leading dash is an option to `git remote get-url`; whitespace padding is a
 		// receipt that does not say which remote. Neither is trimmed into something
-		// usable, and neither reaches a command.
+		// usable, and neither reaches a command that names a remote: the one call made
+		// first is the target-identity listing the observation is resolved inside.
 		//
 		// The four line terminators are here because a receipt is a file: a generator
 		// that wrote `origin\n` produced a value that must refuse, and U+2028/U+2029 are
 		// line terminators to a JavaScript regex while surviving a JSON round trip
-		// untouched. The assertion is that no command is issued at all, not merely that
-		// the name was normalised.
+		// untouched.
 		for (const remote of [
 			"--upload-pack=touch",
 			" origin",
@@ -473,7 +488,7 @@ describe("delivery_cleanup irreversible boundary", () => {
 			const path = writeReceipt(receipt, receiptDirectory(f.env, receipt.repo.key));
 			const { result, calls } = invoke(f, { receipt: path });
 			expect(refusal(result)).toContain(`repo.remote: observed ${JSON.stringify(remote)}, expected a git remote name`);
-			expect(calls).toEqual([]);
+			expect(calls).toEqual([["git", "worktree", "list", "--porcelain"]]);
 			rmSync(path);
 		}
 
@@ -486,7 +501,54 @@ describe("delivery_cleanup irreversible boundary", () => {
 		] as const) {
 			const { result, calls } = invoke(f, { receipt: f.receiptPath }, { remotes });
 			expect(refusal(result)).toContain(field);
-			expect(calls).toEqual([["git", "remote", "get-url", "origin"]]);
+			expect(calls).toEqual([
+				["git", "worktree", "list", "--porcelain"],
+				["git", "remote", "get-url", "origin"],
+			]);
+		}
+		expect(existsSync(f.linked)).toBe(true);
+	}, 60_000);
+
+	/**
+	 * `URL` deletes embedded tabs and newlines before parsing, so each of these reads as
+	 * an ordinary GitHub remote once the output is trimmed. Trimming would let the
+	 * identity comparison pass and authorise a removal whose absence probe could then
+	 * only ever answer "unknown" — a worktree deleted on an observation of nothing. The
+	 * output is read as exactly one record instead, and refusal precedes the forge read.
+	 *
+	 * The refusal also says nothing about the bytes. Output no parser accepted cannot be
+	 * redacted — a redactor can only find a secret in a spelling it understands — so the
+	 * cases below carry userinfo and a token query, and the refusal text must hold
+	 * neither those tokens nor the URL that framed them.
+	 */
+	test("git remote get-url output that is not exactly one record refuses before the forge read", () => {
+		const f = fixture("remote-record", "feat/remote-record", "retired");
+		for (const remoteStdout of [
+			"https://git\thub.com/owner/repo.git\n",
+			"https://github.com/owner/repo.git\n@evil.example/x\n",
+			"https://github.com/owner/repo.git\nhttps://evil.example/owner/repo.git\n",
+			"https://github.com/owner/repo.git\r\n\r\n",
+			" https://github.com/owner/repo.git\n",
+			"https://github.com/owner/repo.git \n",
+			"\n",
+			"",
+			"https://srobroek:ghp_secrettoken@git\thub.com/owner/repo.git\n",
+			"https://github.com/owner/repo.git?token=ghp_secrettoken\nhttps://evil.example/x\n",
+			" ssh://git:ghp_secrettoken@github.com/owner/repo.git\n",
+		]) {
+			const { result, calls } = invoke(f, { receipt: f.receiptPath }, { remoteStdout });
+			const reason = refusal(result);
+			expect(reason).toContain('repo.remote: observed "malformed Git remote output"');
+			expect(reason).toContain("exactly one URL record");
+			// Neither the secret nor the spelling that carried it.
+			expect(reason).not.toContain("ghp_secrettoken");
+			expect(reason).not.toContain("github.com/owner/repo");
+			expect(reason).not.toContain("evil.example");
+			expect(calls).toEqual([
+				["git", "worktree", "list", "--porcelain"],
+				["git", "remote", "get-url", "origin"],
+			]);
+			expect(mutationCalls(calls)).toEqual([]);
 		}
 		expect(existsSync(f.linked)).toBe(true);
 	}, 60_000);
@@ -512,7 +574,8 @@ describe("delivery_cleanup irreversible boundary", () => {
 		const { result, calls, details } = invoke(f);
 
 		expect(result.ok).toBe(true);
-		expect(calls.slice(0, 2)).toEqual([
+		expect(calls.slice(0, 3)).toEqual([
+			["git", "worktree", "list", "--porcelain"],
 			["git", "remote", "get-url", "origin"],
 			["glab", "mr", "view", "17", "--repo", "gitlab.com/group/project", "--output", "json"],
 		]);
@@ -551,7 +614,7 @@ describe("delivery_cleanup irreversible boundary", () => {
 			f.receiptPath = writeReceipt(receipt, receiptDirectory(f.env, receipt.repo.key));
 			f.receipt = receipt;
 
-			const { result, calls } = invoke(f, { receipt: f.receiptPath }, {
+			const { result, calls, details } = invoke(f, { receipt: f.receiptPath }, {
 				remotes: {
 					origin: `https://${host}/contributor/fork.git`,
 					upstream: `https://${host}/${nameWithOwner}.git`,
@@ -559,7 +622,8 @@ describe("delivery_cleanup irreversible boundary", () => {
 			});
 
 			expect(result.ok).toBe(true);
-			expect(calls.slice(0, 2)).toEqual([
+			expect(calls.slice(0, 3)).toEqual([
+				["git", "worktree", "list", "--porcelain"],
 				["git", "remote", "get-url", "upstream"],
 				forge === "github"
 					? [
@@ -573,12 +637,90 @@ describe("delivery_cleanup irreversible boundary", () => {
 			]);
 			expect(calls.flat().join(" ")).not.toContain("contributor/fork");
 			expect(calls.flat()).not.toContain("origin");
+			// The absence probe is bound to the resolved URL, not the remote name: after
+			// removal a name would be re-resolved by a surviving worktree's configuration.
+			// The URL travels in the child's environment, so argv names only the alias.
+			const absence = details.find(call => call.argv.includes("ls-remote"));
+			expect(absence?.argv.at(-2)).toBe("omp-absence-probe");
+			expect(absence?.argv).not.toContain("upstream");
+			expect(absence?.env?.GIT_CONFIG_VALUE_0).toBe(`https://${host}/${nameWithOwner}.git`);
 			expect(existsSync(f.linked)).toBe(false);
 			if (!result.ok) return;
 			expect(result.receipt.repo.remote).toBe("upstream");
 			expect(result.receipt.proof.method).toBe(forge === "github" ? "gh pr view" : "glab mr view");
 		}, 60_000);
 	}
+
+	/**
+	 * A remote NAME resolves per repository; a remote URL resolves per worktree.
+	 *
+	 * `extensions.worktreeConfig` scopes `url.<other>.insteadOf` to a single worktree,
+	 * and `git remote get-url` expands those rewrites, so the landed worktree and the
+	 * directory cleanup must run from print different URLs for the same name. Nothing
+	 * here is scripted: git configures the rewrite and git answers both reads, and the
+	 * two `expect`s before the call record the premise as an observation rather than an
+	 * assumption. Resolved from the invocation worktree this receipt is unusable —
+	 * `origin` is the fork there — and the landed worktree it names becomes impossible
+	 * to clean.
+	 */
+	test("the remote URL is resolved in the landed worktree, where a worktree-scoped rewrite applies", () => {
+		const f = fixture("worktree-config", "feat/worktree-config", "retired");
+		const fork = "https://github.com/contributor/fork.git";
+		const upstream = "https://github.com/owner/repo.git";
+		git(f.main, ["config", "extensions.worktreeConfig", "true"]);
+		git(f.main, ["remote", "set-url", "origin", fork]);
+		git(f.linked, ["config", "--worktree", `url.${upstream}.insteadOf`, fork]);
+		// The surviving worktree rewrites the other way: any probe that loaded this
+		// repository's configuration would be sent from upstream to the fork. It is the
+		// worktree cleanup runs from, and the only one left once the target is removed.
+		git(f.main, ["config", "--worktree", `url.${fork}.insteadOf`, upstream]);
+		expect(git(f.linked, ["remote", "get-url", "origin"])).toBe(upstream);
+		expect(git(f.main, ["remote", "get-url", "origin"])).toBe(fork);
+		// Captured before the call, because a successful cleanup removes this directory
+		// and `realpathSync` then throws on a path that no longer exists.
+		const landedPath = realpathSync(f.linked);
+
+		const { result, calls, details } = invoke(f, { receipt: f.receiptPath }, { realRemoteUrls: true });
+
+		expect(result.ok).toBe(true);
+		const identityRead = details.find(call => call.argv[1] === "remote" && call.argv[2] === "get-url");
+		expect(identityRead?.argv).toEqual(["git", "remote", "get-url", "origin"]);
+		// The directory is what makes the answer upstream's rather than the fork's.
+		expect(identityRead?.cwd).toBe(landedPath);
+		expect(calls.slice(0, 3)).toEqual([
+			["git", "worktree", "list", "--porcelain"],
+			["git", "remote", "get-url", "origin"],
+			[
+				"gh", "pr", "view", "17", "--repo", "github.com/owner/repo", "--json",
+				"number,url,state,baseRefName,headRefName,headRefOid,mergeCommit,mergedAt",
+			],
+		]);
+		expect(calls.flat().join(" ")).not.toContain("contributor/fork");
+		// The post-removal absence probe is the second place a remote name would be
+		// re-resolved, and by then the worktree that rewrites it is gone. It is bound to
+		// the URL the target resolved — but through Git's environment config, because
+		// `ps` shows argv to every user on the host and a remote URL may carry a token.
+		// The command line therefore names an opaque alias and nothing else.
+		const probe = details.find(call => call.argv.includes("ls-remote"));
+		expect(probe?.argv.at(-2)).toBe("omp-absence-probe");
+		expect(probe?.argv.join(" ")).not.toContain(upstream);
+		expect(probe?.argv).not.toContain("origin");
+		expect(probe?.env?.GIT_CONFIG_COUNT).toBe("1");
+		expect(probe?.env?.GIT_CONFIG_KEY_0).toBe("remote.omp-absence-probe.url");
+		expect(probe?.env?.GIT_CONFIG_VALUE_0).toBe(upstream);
+		// Config cannot reach that probe: no global file, no system file, and — because a
+		// ceiling around the probe directory was measured not to stop a parent checkout's
+		// rewrite — a repository of this module's own making, so there is no discovery to
+		// redirect. The directory is gone once the call returns.
+		expect(probe?.env?.GIT_CONFIG_GLOBAL).toBe(devNull);
+		expect(probe?.env?.GIT_CONFIG_NOSYSTEM).toBe("1");
+		expect(probe?.env?.GIT_DIR).toBe(join(probe?.cwd ?? "", "probe.git"));
+		expect(probe?.env?.GIT_CEILING_DIRECTORIES).toBe(probe?.cwd);
+		expect(probe?.cwd).not.toBe(f.main);
+		expect(probe?.cwd).not.toBe(landedPath);
+		expect(existsSync(probe?.cwd ?? "")).toBe(false);
+		expect(existsSync(f.linked)).toBe(false);
+	}, 60_000);
 
 	test("cleanup strips every ambient forge and Git selector from the identity and pull-request reads", () => {
 		const f = fixture("ambient-redirectors", "feat/ambient-redirectors", "retired");
@@ -704,7 +846,18 @@ describe("delivery_cleanup irreversible boundary", () => {
 		for (const mismatch of mismatches) {
 			const observed = invoke(f, { receipt: f.receiptPath }, { pr: mismatch.pr });
 			expect(refusal(observed.result)).toContain(`${mismatch.field}: observed`);
+			// The pull-request read is now preceded by the target's identity, because the
+			// remote is resolved inside the target. That is the only thing allowed to
+			// precede it, and it is a listing: no dirty check, no unpushed check, no
+			// ledger read, and nothing that mutates.
+			expect(observed.calls.map(argv => argv.slice(0, 3))).toEqual([
+				["git", "worktree", "list"],
+				["git", "remote", "get-url"],
+				["gh", "pr", "view"],
+			]);
 			expect(observed.calls.some(argv => argv[0] === "git" && argv[1] === "status")).toBe(false);
+			expect(observed.calls.some(argv => argv[0] === "bd")).toBe(false);
+			expect(mutationCalls(observed.calls)).toEqual([]);
 		}
 	});
 
@@ -728,7 +881,7 @@ describe("delivery_cleanup irreversible boundary", () => {
 		rmSync(f.root, { recursive: true, force: true });
 	});
 
-	test("dirty, unpushed, and unreconciled refusals occur in that exact order", () => {
+	test("a moved head, a dirty tree, an unpushed commit, and an open bead each refuse at their own gate", () => {
 		const f = fixture("refusal-order");
 		writeFileSync(join(f.linked, "dirty.txt"), "dirty\n");
 		const dirty = invoke(f, { receipt: f.receiptPath }, { beadStatus: "open" });
@@ -736,19 +889,33 @@ describe("delivery_cleanup irreversible boundary", () => {
 		expect(refusal(dirty.result)).toContain("dirty.txt");
 		expect(commandCalls(dirty.calls, "bd")).toEqual([]);
 
+		// A commit moves the worktree off the head the receipt names, and the target's
+		// identity is now proved before the pull request is read — because the remote is
+		// resolved inside the target — so this refuses at `worktree.HEAD` rather than
+		// reaching the unpushed count. The earlier gate is the point: the receipt no
+		// longer describes this worktree at all.
 		rmSync(join(f.linked, "dirty.txt"));
 		writeFileSync(join(f.linked, "ahead.txt"), "ahead\n");
 		git(f.linked, ["add", "ahead.txt"]);
 		git(f.linked, ["commit", "-q", "-m", "ahead"]);
+		const moved = invoke(f, { receipt: f.receiptPath }, { beadStatus: "open" });
+		expect(refusal(moved.result)).toContain("worktree.HEAD: observed");
+		expect(refusal(moved.result)).toContain(f.head);
+		expect(moved.calls.map(argv => argv.slice(0, 3))).toEqual([["git", "worktree", "list"]]);
+
+		// Unpushed with the head the receipt does name: the commit is dropped and the
+		// tracking ref is rewound instead, which is what `@{upstream}..HEAD` counts.
+		git(f.linked, ["reset", "-q", "--hard", f.head]);
+		git(f.linked, ["update-ref", `refs/remotes/origin/${f.branch}`, `${f.head}^`]);
 		const unpushed = invoke(f, { receipt: f.receiptPath }, { beadStatus: "open" });
 		expect(refusal(unpushed.result)).toContain("branch.unpushed: observed 1, expected 0 commits");
 		expect(commandCalls(unpushed.calls, "bd")).toEqual([]);
 
-		git(f.linked, ["push", "-q", "origin", f.branch]);
+		git(f.linked, ["update-ref", `refs/remotes/origin/${f.branch}`, f.head]);
 		const ledger = invoke(f, { receipt: f.receiptPath }, { beadStatus: "open" });
 		expect(refusal(ledger.result)).toContain('beads.delivery-17.status: observed "open", expected "closed" after bd_reconcile');
 		expect(mutationCalls(ledger.calls)).toEqual([]);
-	});
+	}, 60_000);
 
 	test("a branch with no upstream refuses before the ledger read", () => {
 		const f = fixture("no-upstream");
@@ -1247,22 +1414,36 @@ describe("delivery_cleanup never removes the worktree it was called from", () =>
 		expect(existsSync(f.linked)).toBe(true);
 	});
 
-	test("the remote-absence probe is asked from a surviving worktree of this repository", () => {
+	/**
+	 * The probe used to be asked from a surviving worktree, because a remote NAME only
+	 * resolves inside the repository that configures it. It is now given the URL the
+	 * landed worktree resolved, so it is asked from nowhere in particular on purpose:
+	 * any checkout it ran in could rewrite that URL through `url.<base>.insteadOf` and
+	 * send the question to another repository, whose answer would become a false
+	 * absence here.
+	 */
+	test("the remote-absence probe is asked outside every checkout, and its directory does not survive", () => {
 		const f = fixture("probe-cwd");
 		const scripted = runner(f);
-		const directories: (string | undefined)[] = [];
+		// Classified inside the hook, while the directory still exists: afterwards it is
+		// gone, and "no repository" would be true of any deleted path.
+		const probes: { cwd: string | undefined; key: string | null }[] = [];
 		const run: CliRunner = (argv, options) => {
-			if (argv.includes("ls-remote")) directories.push(options.cwd);
+			if (argv.includes("ls-remote")) {
+				probes.push({ cwd: options.cwd, key: options.cwd === undefined ? null : repoKey(options.cwd) });
+			}
 			return scripted.run(argv, options);
 		};
 		const result = cleanupDelivery({ receipt: f.receiptPath }, f.main, { run, now: () => NOW + 10, env: f.env });
 
 		expect(result.ok).toBe(true);
-		expect(directories).toHaveLength(1);
-		const asked = directories[0];
+		expect(probes).toHaveLength(1);
+		const asked = probes[0]?.cwd;
 		if (asked === undefined) throw new Error("the probe was issued with no working directory");
-		expect(realpathSync(asked)).toBe(realpathSync(f.main));
-		expect(repoKey(asked)).toBe(f.receipt.repo.key);
+		expect(asked).not.toBe(f.main);
+		expect(asked.startsWith(f.root)).toBe(false);
+		expect(probes[0]?.key).toBeNull();
+		expect(existsSync(asked)).toBe(false);
 	});
 });
 

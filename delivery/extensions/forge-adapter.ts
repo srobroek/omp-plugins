@@ -35,6 +35,10 @@
  * import it, and it is never declared in `omp.extensions`.
  */
 
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { devNull, tmpdir } from "node:os";
+import { join } from "node:path";
+
 export type Forge = "github" | "gitlab" | "unknown";
 export type ForgeTarget =
 	| Readonly<{ forge: "github"; canonicalHost: "github.com" }>
@@ -231,6 +235,33 @@ function hasControlCharacter(value: string): boolean {
 		if (code < 0x20 || code === 0x7f) return true;
 	}
 	return false;
+}
+
+/**
+ * The one remote URL `git remote get-url` printed, or null when its stdout is not
+ * exactly one record.
+ *
+ * Trimming this output is what makes it dangerous. WHATWG `URL` removes every ASCII
+ * tab, LF, and CR from its input before parsing, so `https://git<TAB>hub.com/o/r`
+ * and `https://github.com/o/r<LF>@evil.example/x` are read here as ordinary GitHub
+ * URLs while Git, handed the raw bytes, resolves something else or nothing at all.
+ * Two records — a repository configured with several URLs, or output nobody
+ * expected — collapse the same way once the separator is stripped. Where two parsers
+ * disagree about what was named there is no safe answer to pick, so this one refuses.
+ *
+ * At most one terminal LF or CRLF is removed, because that is Git's record
+ * terminator. Everything else must already be exact: no control character anywhere,
+ * nothing empty, and no leading or trailing whitespace. Nothing is normalised —
+ * a value that needs repair to be usable is a value nobody verified.
+ */
+export function singleRemoteRecord(stdout: string): string | null {
+	const record = stdout.endsWith("\r\n")
+		? stdout.slice(0, -2)
+		: stdout.endsWith("\n")
+			? stdout.slice(0, -1)
+			: stdout;
+	if (record === "" || hasControlCharacter(record) || record !== record.trim()) return null;
+	return record;
 }
 
 /**
@@ -695,15 +726,144 @@ function stdoutProvesExactHead(stdout: string, expectedRef: string): boolean {
 }
 
 /**
- * Whether `branch` is gone from `remote`, observed against the exact ref, from
+ * The verdict one `ls-remote` result proves about the ref that was asked for.
+ *
+ * Both probe modes read a result the same way, and the reading is the whole
+ * contract: this is the only place in the module that can return `"absent"`.
+ */
+function absenceVerdict(result: CliResult, ref: string): "absent" | "present" | "unknown" {
+	if (!result.ok || result.error !== undefined) return "unknown";
+	if (result.exitCode === 0) return stdoutProvesExactHead(result.stdout, ref) ? "present" : "unknown";
+	if (result.exitCode === 2 && result.stdout === "" && result.stderr === "") return "absent";
+	return "unknown";
+}
+
+/**
+ * The exact-ref query both probe modes issue, for a remote Git can already resolve.
+ *
+ * `remote` is an operand, so it is a name in both modes: in name mode the caller's,
+ * in URL mode {@link PROBE_REMOTE}, whose URL is configured in the environment. No
+ * URL is ever built into this argv.
+ */
+function lsRemoteArgv(remote: string, ref: string): string[] {
+	return [
+		"git",
+		...LS_REMOTE_PROTOCOL_POLICY,
+		"ls-remote",
+		"--exit-code",
+		"--heads",
+		"--upload-pack=git-upload-pack",
+		remote,
+		ref,
+	];
+}
+
+/**
+ * The remote name a URL probe puts on the command line.
+ *
+ * Opaque and fixed: it identifies nothing and is safe in a process listing, a
+ * refusal, or a log. The URL it stands for is configured in the child's
+ * environment instead.
+ */
+const PROBE_REMOTE = "omp-absence-probe";
+
+/**
+ * The repository a URL probe runs inside: the least Git accepts, and nothing else.
+ *
+ * Written with filesystem calls rather than `git init`, because a probe must not
+ * depend on spawning a second Git to isolate the first, and because an injected
+ * runner would have to answer that spawn too. Git accepts a directory with these
+ * four entries as a bare repository, which is all `ls-remote` needs: it never reads
+ * an object, a ref, or a work tree here.
+ */
+const PROBE_HEAD = "ref: refs/heads/main\n";
+const PROBE_CONFIG = "[core]\n\trepositoryformatversion = 0\n\tbare = true\n";
+
+function isolatedProbeRepository(directory: string): string | null {
+	const gitDir = join(directory, "probe.git");
+	try {
+		mkdirSync(join(gitDir, "objects"), { recursive: true });
+		mkdirSync(join(gitDir, "refs"), { recursive: true });
+		writeFileSync(join(gitDir, "HEAD"), PROBE_HEAD);
+		writeFileSync(join(gitDir, "config"), PROBE_CONFIG);
+		return gitDir;
+	} catch {
+		return null;
+	}
+}
+
+/**
+ * The environment for a URL probe: the URL itself, and no config file that could
+ * rewrite it.
+ *
+ * `GIT_CONFIG_COUNT` and its numbered key/value pair are a config source Git reads
+ * directly, so `remote.<opaque>.url` exists for exactly this child process and for
+ * no one else. That is the point: argv is world-readable — `ps` shows it to every
+ * user on the host, and it reaches logs and crash reports — while a child's
+ * environment is visible to the process itself and to root. A remote URL may carry
+ * `user:token@` userinfo or a `?token=` query, so the URL travels here and the
+ * command line carries {@link PROBE_REMOTE}.
+ *
+ * Written on top of {@link gitObservationEnvironment}, never beside it, because
+ * that function discards every inherited `GIT_*` name and would strip all of these
+ * if they were set first. `GIT_CONFIG_GLOBAL` and `GIT_CONFIG_NOSYSTEM` remove the
+ * file-based config sources, so the injected pair is the only configuration Git has:
+ * no `url.<base>.insteadOf` from a worktree, a home directory, or `/etc` can rewrite
+ * the URL the caller resolved.
+ *
+ * `GIT_DIR` closes the last way in, and it has to be `GIT_DIR` rather than a fence
+ * around discovery. A neutral directory is only neutral if Git cannot walk out of it,
+ * and `os.tmpdir()` answers from ambient `TMPDIR`, `TMP`, or `TEMP`: whoever sets
+ * those chooses where the probe directory is created, including inside a checkout.
+ * `GIT_CEILING_DIRECTORIES` alone was measured doing nothing for this read — with the
+ * ceiling set to the probe directory, a parent checkout's local
+ * `url.<base>.insteadOf` still rewrote the probe URL and `ls-remote` answered from the
+ * repository that rewrite named. Pointing `GIT_DIR` at a repository this module
+ * created removes discovery instead of fencing it: Git uses the repository it is
+ * given, and the only local config in play is the two `core` lines written into it.
+ * The ceiling is kept as a second line, not as the defence.
+ *
+ * Ordinary process state, credentials, and SSH's own configuration are untouched: an
+ * unauthenticated or unreachable probe is a different answer, and this one must stay
+ * able to succeed.
+ */
+function urlProbeEnvironment(
+	source: NodeJS.ProcessEnv,
+	url: string,
+	probeDirectory: string,
+	gitDir: string,
+): Readonly<Record<string, string>> {
+	const env = Object.assign(Object.create(null) as Record<string, string>, gitObservationEnvironment(source));
+	env.GIT_CONFIG_GLOBAL = devNull;
+	env.GIT_CONFIG_NOSYSTEM = "1";
+	env.GIT_CONFIG_COUNT = "1";
+	env.GIT_CONFIG_KEY_0 = `remote.${PROBE_REMOTE}.url`;
+	env.GIT_CONFIG_VALUE_0 = url;
+	env.GIT_CEILING_DIRECTORIES = probeDirectory;
+	env.GIT_DIR = gitDir;
+	return env;
+}
+
+/**
+ * Whether `branch` is gone from `remoteOrUrl`, observed against the exact ref, from
  * inside `cwd`.
  *
- * `remote` is a configured remote name, which only resolves inside the repository
- * that configures it, so the directory the question is answered in is an explicit
- * argument rather than whatever directory the process happens to be in. An
- * `"absent"` verdict reached from the wrong directory is a false absence, and a
- * false absence is what marks a branch deleted that still exists. An empty `cwd`
- * is `"unknown"` for the same reason: there is no directory to be right about.
+ * `remoteOrUrl` is either a configured remote name or a URL, and which one a caller
+ * passes decides what the answer is about. A name is re-resolved by whichever
+ * repository and worktree answers the question — `git remote get-url` expands
+ * `insteadOf`, and `extensions.worktreeConfig` scopes such a rewrite to one
+ * worktree — so a caller that already resolved a URL, or whose target worktree is
+ * gone, passes the URL and asks about the repository it means. An `"absent"` verdict
+ * reached against the wrong repository is a false absence, and a false absence is
+ * what marks a branch deleted that still exists.
+ *
+ * `cwd` stays an explicit argument for both spellings rather than whatever directory
+ * the process happens to be in: a name has nowhere else to resolve, and a URL still
+ * needs a repository for the protocol and helper pins below. An empty `cwd` is
+ * `"unknown"` for the same reason: there is no directory to be right about.
+ *
+ * Only the verdict is returned. A URL may carry credentials, and this function never
+ * puts what it was given into its result, so no caller can leak one by quoting it.
  *
  * `git ls-remote --exit-code` reports exit 2 when no ref matched. That status
  * proves `"absent"` only with empty stdout and stderr. Exit 0 proves
@@ -720,27 +880,70 @@ function stdoutProvesExactHead(stdout: string, expectedRef: string): boolean {
  * setting value reaches it.
  */
 export function remoteBranchAbsent(
-	remote: string,
+	remoteOrUrl: string,
 	branch: string,
 	cwd: string,
 	run: CliRunner = runCli,
 	environment: NodeJS.ProcessEnv = process.env,
 ): "absent" | "present" | "unknown" {
-	if (!isSafeArgument(remote) || !isValidBranchName(branch) || cwd.trim() === "") return "unknown";
+	if (!isSafeArgument(remoteOrUrl) || !isValidBranchName(branch)) return "unknown";
 	const ref = `refs/heads/${branch}`;
-	const argv = [
-		"git",
-		...LS_REMOTE_PROTOCOL_POLICY,
-		"ls-remote",
-		"--exit-code",
-		"--heads",
-		"--upload-pack=git-upload-pack",
-		remote,
-		ref,
-	];
-	const result = run(argv, { cwd, timeoutMs: FORGE_TIMEOUT_MS, env: gitObservationEnvironment(environment) });
-	if (!result.ok || result.error !== undefined) return "unknown";
-	if (result.exitCode === 0) return stdoutProvesExactHead(result.stdout, ref) ? "present" : "unknown";
-	if (result.exitCode === 2 && result.stdout === "" && result.stderr === "") return "absent";
-	return "unknown";
+	// URL mode is entered only for a spelling {@link forgeTarget} has already verified
+	// — an allowlisted host reached over an allowlisted transport — never by guessing
+	// that a string looks URL-ish, so no unverified scheme can select it.
+	//
+	// A URL names its repository outright, and the one thing that could still change
+	// which repository is contacted is `url.<base>.insteadOf`, which rewrites URLs and
+	// not just remote names. `extensions.worktreeConfig` can scope such a rewrite to
+	// whichever worktree happens to answer the question, which is how a probe asked
+	// after a worktree is gone ends up at a different repository and reports a branch
+	// absent that still exists.
+	//
+	// So the probe runs from a directory that is not a checkout, with no global and no
+	// system file, and the directory is removed whatever the outcome — and the URL
+	// itself never reaches the command line. It is configured for this one child
+	// through {@link urlProbeEnvironment}, and argv names {@link PROBE_REMOTE}: `ps`
+	// shows argv to every user on the host, so a `user:token@` or `?token=` URL on a
+	// command line is a credential published to the machine.
+	if (forgeTarget(remoteOrUrl) !== null) {
+		let neutral: string;
+		try {
+			// Resolved to its physical path: `os.tmpdir()` answers from ambient TMPDIR and
+			// that path is commonly a symlink, while the ceiling below must name the path
+			// Git resolves.
+			neutral = realpathSync(mkdtempSync(join(tmpdir(), "forge-ls-remote-")));
+		} catch {
+			// A probe with nowhere neutral to run cannot prove absence.
+			return "unknown";
+		}
+		try {
+			// Without a repository of its own, Git goes looking for one, and the ambient
+			// TMPDIR decides what it finds.
+			const gitDir = isolatedProbeRepository(neutral);
+			if (gitDir === null) return "unknown";
+			const result = run(lsRemoteArgv(PROBE_REMOTE, ref), {
+				cwd: neutral,
+				timeoutMs: FORGE_TIMEOUT_MS,
+				env: urlProbeEnvironment(environment, remoteOrUrl, neutral, gitDir),
+			});
+			return absenceVerdict(result, ref);
+		} finally {
+			try {
+				rmSync(neutral, { recursive: true, force: true });
+			} catch {
+				// The probe repository holds four entries and no object; a verdict is not
+				// worth throwing over a directory the OS will reclaim.
+			}
+		}
+	}
+	// Name mode, unchanged: a remote name resolves only inside the repository that
+	// configures it, so the directory stays required and stays the caller's. A name is
+	// not a secret, so it stays an operand.
+	if (cwd.trim() === "") return "unknown";
+	const result = run(lsRemoteArgv(remoteOrUrl, ref), {
+		cwd,
+		timeoutMs: FORGE_TIMEOUT_MS,
+		env: gitObservationEnvironment(environment),
+	});
+	return absenceVerdict(result, ref);
 }

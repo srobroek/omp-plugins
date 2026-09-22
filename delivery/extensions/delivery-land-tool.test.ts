@@ -639,6 +639,45 @@ describe("delivery_land", () => {
 		expect(calls.filter(call => call.argv[0] === "gh")).toHaveLength(0);
 	});
 
+	/**
+	 * `URL` deletes embedded tabs and newlines before parsing, so each of these would
+	 * classify as an ordinary GitHub remote once the output was trimmed — and this
+	 * identity binds the merge argv, so agreeing with the wrong parser here merges
+	 * somewhere nobody named. The output is therefore read as exactly one record.
+	 *
+	 * The refusal quotes none of it. Output no parser accepted cannot be redacted, since
+	 * a redactor can only find a secret in a spelling it understands, so the cases with
+	 * userinfo and a token query must leave neither the token nor its URL in the reason
+	 * or in any receipt — and there is no receipt, because nothing was written.
+	 */
+	test("git remote get-url output that is not exactly one record merges nothing", () => {
+		for (const remoteUrl of [
+			"https://git\thub.com/srobroek/omp-plugins.git",
+			"https://github.com/srobroek/omp-plugins.git\n@evil.example/x",
+			"https://github.com/srobroek/omp-plugins.git\nhttps://evil.example/o/r.git",
+			" https://github.com/srobroek/omp-plugins.git",
+			"https://github.com/srobroek/omp-plugins.git ",
+			"",
+			"https://srobroek:ghp_secrettoken@git\thub.com/srobroek/omp-plugins.git",
+			"https://github.com/srobroek/omp-plugins.git?token=ghp_secrettoken\nhttps://evil.example/x",
+			" ssh://git:ghp_secrettoken@github.com/srobroek/omp-plugins.git",
+		]) {
+			const { outcome, calls, files } = land({ remoteUrl, prView: [completed(githubPr())] });
+
+			expect(outcome.ok).toBe(false);
+			if (outcome.ok) throw new Error("expected a refusal");
+			expect(outcome.reason).toContain("git remote get-url origin: observed malformed Git remote output");
+			expect(outcome.reason).toContain("exactly one URL record");
+			expect(outcome.reason).not.toContain("ghp_secrettoken");
+			expect(outcome.reason).not.toContain("github.com/srobroek");
+			expect(outcome.reason).not.toContain("evil.example");
+			// Before any forge command, so nothing was read, merged, or written.
+			expect(calls.filter(call => call.argv[0] === "gh")).toHaveLength(0);
+			expect(calls.filter(call => merged(call.argv))).toHaveLength(0);
+			expect(files()).toHaveLength(0);
+		}
+	});
+
 	test("ambient Git selectors cannot redirect repository identity or landing proof", () => {
 		const { canonical, receipts } = repository();
 		const attacker = repository();
