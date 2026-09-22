@@ -1,5 +1,13 @@
 # Changelog
 
+## [2.2.2](https://github.com/srobroek/omp-plugins/compare/beads--v2.2.1...beads--v2.2.2) (2026-09-22)
+
+
+### Bug Fixes
+
+* **beads:** make the scratch probe recipe pin its own store ([#507](https://github.com/srobroek/omp-plugins/issues/507)) ([9cd589e](https://github.com/srobroek/omp-plugins/commit/9cd589e22072311fb6da3c92fa4efef37512f900))
+* **beads:** remove session-close ledger reads ([#511](https://github.com/srobroek/omp-plugins/issues/511)) ([8f59903](https://github.com/srobroek/omp-plugins/commit/8f599038df17c584b0a7cfcf9a4b4939b9a6e37f))
+
 ## [2.2.1](https://github.com/srobroek/omp-plugins/compare/beads--v2.2.0...beads--v2.2.1) (2026-09-22)
 
 

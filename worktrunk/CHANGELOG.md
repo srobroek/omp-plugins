@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.3.2](https://github.com/srobroek/omp-plugins/compare/worktrunk--v1.3.1...worktrunk--v1.3.2) (2026-09-22)
+
+
+### Bug Fixes
+
+* **worktrunk:** separate the fail-closed clause from the example note ([#503](https://github.com/srobroek/omp-plugins/issues/503)) ([a557e54](https://github.com/srobroek/omp-plugins/commit/a557e549de221e524859a036ffb2f750b9a3567d))
+* **worktrunk:** use patch equivalence for branch provenance ([#501](https://github.com/srobroek/omp-plugins/issues/501)) ([90ba95f](https://github.com/srobroek/omp-plugins/commit/90ba95f166aa823a2147de9d76e19c5430da2e07))
+
 ## [1.3.1](https://github.com/srobroek/omp-plugins/compare/worktrunk--v1.3.0...worktrunk--v1.3.1) (2026-09-22)
 
 

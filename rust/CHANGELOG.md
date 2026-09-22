@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.7](https://github.com/srobroek/omp-plugins/compare/rust--v0.6.6...rust--v0.6.7) (2026-09-22)
+
+
+### Bug Fixes
+
+* **quality:** give each tool probe 5s, the slowest measured probe plus headroom ([#513](https://github.com/srobroek/omp-plugins/issues/513)) ([00493b5](https://github.com/srobroek/omp-plugins/commit/00493b577de70de0b382c01ca57584be94f93f67))
+
 ## [0.6.6](https://github.com/srobroek/omp-plugins/compare/rust--v0.6.5...rust--v0.6.6) (2026-09-21)
 
 
