@@ -277,6 +277,9 @@ export function repoKey(cwd: string, run: GitRunner = spawnGit): string | null {
  * A regular-file `.beads/RETIRED` marker opts out of the nearest ledger. This
  * intentionally mirrors the PR-link gate: a malformed marker (or any read error)
  * keeps the ledger active rather than silently weakening closure and cleanup gates.
+ *
+ * The directory this walk starts from decides the answer, so no caller passes it an
+ * invocation directory: {@link canonicalLedger} is the one seam that chooses it.
  */
 export function ledgerActive(dir: string): boolean {
 	let current = resolve(dir);
@@ -299,6 +302,42 @@ export function ledgerActive(dir: string): boolean {
 			return true;
 		}
 	}
+}
+
+/** A repository's canonical root and the ledger verdict computed at it. */
+export type CanonicalLedger = { root: string; active: boolean };
+
+/**
+ * The repository's canonical root, and its ledger verdict classified there.
+ *
+ * The root is the realpath of `git rev-parse --git-common-dir`, or that path's
+ * parent when it is the usual `.git` directory, so every linked worktree of one
+ * repository classifies from exactly one directory — the same directory
+ * {@link repoKey} keys the repository from.
+ *
+ * Classifying from the invocation directory instead is the bypass this function
+ * exists to close. A nested retired `.beads` anywhere below a cwd would answer
+ * "no ledger" for a repository whose authoritative ledger is active, and a landing
+ * recorded that way authorises a cleanup that deletes a worktree and a branch while
+ * the bead it closes stays open and nobody ran `bd_reconcile`. A directory a caller
+ * happens to stand in is not a repository's ledger.
+ *
+ * Returns null when Git reports no repository, or when the observed common
+ * directory does not resolve. Both producer and consumer then refuse: a guessed
+ * `false` here is exactly the destructive path this classification guards.
+ */
+export function canonicalLedger(cwd: string, run: GitRunner = spawnGit): CanonicalLedger | null {
+	const printed = run(["rev-parse", "--git-common-dir"], cwd, GIT_TIMEOUT_MS);
+	if (printed === null || printed === "") return null;
+	const common = isAbsolute(printed) ? printed : resolve(cwd, printed);
+	let real: string;
+	try {
+		real = realpathSync(common);
+	} catch {
+		return null;
+	}
+	const root = basename(real) === ".git" ? dirname(real) : real;
+	return { root, active: ledgerActive(root) };
 }
 
 /**
@@ -712,6 +751,42 @@ function sameMergeCommit(id: string, mergeCommitOid: unknown): { ok: false; reas
 }
 
 /**
+ * The `proof.method` sentinel: no provider observed this landing.
+ *
+ * Exported because it is half of an invariant two packages rely on — a receipt
+ * carrying it never claims `landed` — and a consumer that spells the sentinel
+ * itself would be free to drift from the producer.
+ */
+export const RECEIPT_METHOD_UNKNOWN = "unknown";
+
+/**
+ * The two cross-field claims a receipt may not make, checked after every field has
+ * the right shape so each refusal names a real value.
+ *
+ * An active ledger with no bead id is a claim with nothing to reconcile: cleanup
+ * would ask `bd` about an empty list, find nothing open, and pass a gate that never
+ * ran. The producer derives the ids from the branch or takes an explicit one, so no
+ * honest landing reaches the pair — and a tampered or stale file that carries it is
+ * refused here, at the trust boundary, rather than acted on later.
+ *
+ * An unobserved proof with `outcome: "landed"` is the same bypass in the other
+ * field: `proof.method` names the provider CLI and verb that saw the landing, and
+ * {@link RECEIPT_METHOD_UNKNOWN} says nobody did. A receipt may not give an
+ * unproven merge the authority of a proven one.
+ */
+function crossFieldClaims(value: Record<string, unknown>): { ok: false; reason: string } | null {
+	const beads = value.beads as ReceiptBeads;
+	if (beads.ledgerActive && beads.ids.length === 0) {
+		return refuse("beads.ids", beads.ids, "at least one bead id when beads.ledgerActive is true");
+	}
+	const proof = value.proof as ReceiptProof;
+	if (value.outcome === "landed" && proof.method.trim() === RECEIPT_METHOD_UNKNOWN) {
+		return refuse("proof.method", proof.method, 'the provider CLI and verb that observed the landing, never "unknown", when outcome is "landed"');
+	}
+	return null;
+}
+
+/**
  * Accept a receipt this version can act on, or refuse it naming the exact field, the
  * observed value, and what was expected.
  *
@@ -747,6 +822,8 @@ export function validateReceipt(value: unknown): ReceiptValidation {
 	if (drift !== null) return drift;
 	const mergeIdentity = sameMergeCommit(value.receiptId as string, (value.pr as ReceiptPr).mergeCommitOid);
 	if (mergeIdentity !== null) return mergeIdentity;
+	const claims = crossFieldClaims(value);
+	if (claims !== null) return claims;
 	const notesProperty = Object.getOwnPropertyDescriptor(value, "notes");
 	if (
 		notesProperty !== undefined &&

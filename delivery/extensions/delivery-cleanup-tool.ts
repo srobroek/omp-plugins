@@ -1,5 +1,5 @@
 import { lstatSync, realpathSync, type Stats } from "node:fs";
-import { dirname, isAbsolute, resolve } from "node:path";
+import { dirname, isAbsolute, resolve, sep } from "node:path";
 import type { TSchema } from "@oh-my-pi/pi-ai";
 import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
 import {
@@ -11,6 +11,7 @@ import {
 } from "./forge-adapter.ts";
 import {
 	buildReceipt,
+	canonicalLedger,
 	type LandingReceipt,
 	listReceipts,
 	type ReceiptPr,
@@ -61,7 +62,12 @@ type WorktreeRecord = {
 
 type TargetIdentity = { records: WorktreeRecord[]; target: WorktreeRecord; main: WorktreeRecord };
 
-type PullRequestObservation = ReceiptPr & { nameWithOwner: string };
+/**
+ * One observed pull request, in receipt spelling, plus the CLI and verb that
+ * observed it — which is what the continuation receipt records as `proof.method`,
+ * so the field names a command this call actually issued.
+ */
+type PullRequestObservation = ReceiptPr & { nameWithOwner: string; method: string };
 type ReceiptResolution =
 	| { tag: "resolved"; receipt: LandingReceipt }
 	| { tag: "refused"; failure: CleanupFailure };
@@ -155,6 +161,7 @@ function githubObservation(receipt: LandingReceipt, run: CliRunner, cwd: string)
 		"--json",
 		"number,url,state,baseRefName,headRefName,headRefOid,mergeCommit,mergedAt",
 	];
+	const method = argv.slice(0, 3).join(" ");
 	const result = run(argv, { cwd, timeoutMs: FORGE_TIMEOUT_MS });
 	if (!completed(result)) return commandFailure("pr", argv, result, "a successful bounded GitHub pull-request read");
 	const root = parseJsonObject("pr", result);
@@ -170,6 +177,7 @@ function githubObservation(receipt: LandingReceipt, run: CliRunner, cwd: string)
 		mergeCommitOid: mergeCommit === null ? null : normalizedOid(own(mergeCommit, "oid")),
 		mergedAt: text(root, "mergedAt"),
 		nameWithOwner: receipt.repo.nameWithOwner,
+		method,
 	};
 }
 
@@ -184,6 +192,7 @@ function gitlabObservation(receipt: LandingReceipt, run: CliRunner, cwd: string)
 		"--output",
 		"json",
 	];
+	const method = argv.slice(0, 3).join(" ");
 	const result = run(argv, { cwd, timeoutMs: FORGE_TIMEOUT_MS });
 	if (!completed(result)) return commandFailure("pr", argv, result, "a successful bounded GitLab merge-request read");
 	const root = parseJsonObject("pr", result);
@@ -199,6 +208,7 @@ function gitlabObservation(receipt: LandingReceipt, run: CliRunner, cwd: string)
 		mergeCommitOid: mergeCommit ?? normalizedOid(own(root, "squash_commit_sha")),
 		mergedAt: text(root, "merged_at"),
 		nameWithOwner: receipt.repo.nameWithOwner,
+		method,
 	};
 }
 
@@ -414,9 +424,47 @@ function unwrapEnvelope(value: unknown): unknown {
 	return own(root, "data");
 }
 
+/**
+ * The reconciliation gate: classify the ledger at the canonical root, require the
+ * receipt to agree, and then require every bead it names to be closed against this
+ * merge.
+ *
+ * The stored boolean is never the gate on its own. A receipt is a file written by an
+ * earlier call, possibly from a different directory and possibly tampered with, and
+ * `beads.ledgerActive: false` read straight off it used to return success here — so
+ * landing from a directory shadowed by a nested retired `.beads` and cleaning from
+ * the repository whose canonical ledger is active removed the worktree and deleted
+ * the branch with no `bd_reconcile` while the authoritative bead stayed open. The
+ * classification is therefore recomputed on every call, at the canonical root
+ * {@link canonicalLedger} derives, and a disagreement refuses naming both values.
+ *
+ * A repository that cannot be classified refuses too: an unclassifiable ledger is
+ * not an absent one, and the only irreversible step in this tool is on the other
+ * side of this check.
+ *
+ * An active ledger with no bead ids is not handled here. `validateReceipt` refuses
+ * that pair at the trust boundary, so a receipt read by this tool never carries it.
+ */
 function verifyLedger(receipt: LandingReceipt, cwd: string, run: CliRunner): CleanupFailure | null {
-	if (!receipt.beads.ledgerActive) return null;
-	if (receipt.beads.ids.length === 0) return refuse("beads.ids", [], "at least one reconciled bead id when ledgerActive is true");
+	const classification = canonicalLedger(cwd);
+	if (classification === null) {
+		return refuse(
+			"beads.ledgerActive",
+			`no ledger classification from ${cwd}`,
+			"a repository whose canonical root can be resolved, so the receipt's ledger claim can be recomputed rather than trusted",
+		);
+	}
+	if (classification.active !== receipt.beads.ledgerActive) {
+		return {
+			ok: false,
+			reason: `beads.ledgerActive: observed ${receipt.beads.ledgerActive} stored in the receipt, expected ${classification.active}, recomputed at canonical root ${show(classification.root)}; ${
+				classification.active
+					? "this repository's ledger is active, so run bd_reconcile to write it from the receipt and then delivery_cleanup"
+					: "the receipt was written against a ledger this repository does not have, so bd_reconcile cannot record it and nothing was removed"
+			}`,
+		};
+	}
+	if (!classification.active) return null;
 	const argv = ["bd", "show", ...receipt.beads.ids, "--json"];
 	const result = run(argv, {
 		cwd,
@@ -504,6 +552,27 @@ function physicalPath(path: string): string | null {
 	} catch {
 		return null;
 	}
+}
+
+/**
+ * Whether this call was made from inside the worktree it would remove.
+ *
+ * `git worktree remove` aimed at the caller's own directory leaves the process
+ * standing in a deleted path, and every absence check after that point is then
+ * answered from somewhere that no longer exists — so the removal is both the
+ * destruction and the loss of its own proof. Comparison is by realpath and by
+ * containment: a subdirectory of the target is inside the target, and a symlinked
+ * alias of either resolves to the same place.
+ *
+ * A path that does not resolve is not treated as inside: the later listing and
+ * directory checks refuse an unresolvable target by name, and guessing here would
+ * hide that refusal behind a less specific one.
+ */
+function invocationInsideTarget(cwd: string, target: string): boolean {
+	const invocation = physicalPath(cwd);
+	const resolved = physicalPath(target);
+	if (invocation === null || resolved === null) return false;
+	return invocation === resolved || invocation.startsWith(`${resolved}${sep}`);
 }
 
 function recordForTarget(records: WorktreeRecord[], target: string): WorktreeRecord | null {
@@ -626,6 +695,15 @@ export function cleanupDelivery(
 
 	const argsFailure = verifyArguments(params, receipt);
 	if (argsFailure !== null) return argsFailure;
+	// Before any observation, and long before the irreversible step: a call from inside
+	// its own target can neither remove it safely nor verify the removal afterwards.
+	if (invocationInsideTarget(cwd, receipt.worktree.path as string)) {
+		return refuse(
+			"worktree.invocationCwd",
+			cwd,
+			`a directory outside the worktree this call would remove (${receipt.worktree.path}, resolved to ${physicalPath(receipt.worktree.path as string)})`,
+		);
+	}
 	const observed = observePullRequest(receipt, run, cwd);
 	if (isFailure(observed)) return observed;
 	const observedFailure = verifyObservation(receipt, observed);
@@ -669,7 +747,10 @@ export function cleanupDelivery(
 	const localAbsence = localRefAbsence(executionCwd, receipt.branch.name, run);
 	if (localAbsence !== "absent") return refuse("worktree.localRefAbsence", localAbsence, '"absent" after branch -d');
 
-	const remoteAbsence = remoteBranchAbsent(receipt.repo.remote, receipt.branch.name, run);
+	// `repo.remote` is a remote name, so the probe is asked from the worktree the rest
+	// of this call ran its Git reads in — the target is gone by now, and a name only
+	// resolves inside the repository that configures it.
+	const remoteAbsence = remoteBranchAbsent(receipt.repo.remote, receipt.branch.name, executionCwd, run);
 	const issuedAt = nextReceiptEpoch(receipt, now);
 	const verifiedAt = new Date(issuedAt).toISOString();
 	const continued = buildReceipt({
@@ -701,7 +782,10 @@ export function cleanupDelivery(
 		},
 		beads: receipt.beads,
 		proof: {
-			method: "delivery_cleanup independent absence verification",
+			// The same field means the same thing on every receipt: the provider CLI and
+			// verb that observed this landing. What this call added — four independent
+			// absence verdicts — is the evidence, and `emitter.tool` names who verified it.
+			method: observed.method,
 			observedAt: verifiedAt,
 			evidence: {
 				worktreeRegistration: registration,
@@ -730,13 +814,16 @@ export default function deliveryCleanupTool(pi: ExtensionAPI): void {
 		name: "delivery_cleanup",
 		label: "Clean landed worktree and branch",
 		description:
-			"Cleanup after the landing receipt: when beads.ledgerActive is true, run bd_reconcile first; then resolve exact landing proof, remove one clean pushed worktree identified by the receipt without force, delete its local branch with -d, record local and remote observations, and write one continuation receipt. No-ledger or retired receipts skip reconciliation. The tool performs only read-only bd show calls; repository policy assigns actor ownership.",
+			"Cleanup after the landing receipt. The lifecycle is conditional: delivery_land, then bd_reconcile, then delivery_cleanup when the ledger classification recomputed at the repository's canonical root is active; a retired or ledger-free repository goes delivery_land, then delivery_cleanup directly. " +
+			"This tool recomputes that classification at the canonical root on every call and refuses when it differs from beads.ledgerActive in the receipt, naming the stored value, the recomputed value and bd_reconcile: the stored boolean alone never opens the success path. " +
+			"It then resolves exact landing proof, refuses to remove the worktree it was invoked from, removes one clean pushed worktree identified by the receipt without force, deletes its local branch with -d, records local and remote observations, and writes one continuation receipt. " +
+			"The tool performs only read-only bd show calls; repository policy assigns actor ownership.",
 		parameters: z.object({
 			receipt: z.string().min(1).optional().describe("Path to a canonical landing receipt; omit to select the newest for this repository"),
 			pr: z.number().int().positive().optional().describe("PR number, which must equal the selected receipt"),
 			branch: z.string().min(1).optional().describe("Branch, which must equal the selected receipt"),
 			worktree: z.string().min(1).optional().describe("Worktree path, which must equal the selected receipt"),
-			remote: z.string().min(1).optional().describe("Remote URL, which must equal the selected receipt"),
+			remote: z.string().min(1).optional().describe("Remote name, which must equal the selected receipt"),
 		}) as unknown as TSchema,
 		approval: "exec",
 		execute: async (_id, params: DeliveryCleanupParams, _signal, _onUpdate, ctx) => {

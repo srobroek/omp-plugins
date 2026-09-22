@@ -1,10 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { beadIdsFromBranch, type LandParams, landPullRequest, repoPathFromRemote } from "./delivery-land-tool.ts";
 import type { CliResult, CliRunner } from "./forge-adapter.ts";
-import { RECEIPT_SCHEMA, readReceipt } from "./landing-receipt.ts";
+import { RECEIPT_SCHEMA, readReceipt, repoKey, writeReceipt } from "./landing-receipt.ts";
 
 type Call = { argv: string[]; cwd: string | undefined; timeoutMs: number; env: Readonly<Record<string, string>> | undefined };
 
@@ -131,7 +131,9 @@ describe("delivery_land", () => {
 		});
 		expect(receipt.repo.forge).toBe("github");
 		expect(receipt.repo.nameWithOwner).toBe("srobroek/omp-plugins");
-		expect(receipt.repo.remote).toBe(REMOTE_URL);
+		expect(receipt.repo.remote).toBe("origin");
+		expect(receipt.proof.evidence).toMatchObject({ remote: "origin", remoteUrl: REMOTE_URL });
+		expect(receipt.proof.method).toBe("gh pr view");
 		expect(receipt.branch).toEqual({
 			name: BRANCH,
 			deletedRemote: true,
@@ -170,7 +172,12 @@ describe("delivery_land", () => {
 	});
 
 
-	test("a nearer active ledger overrides a retired ancestor and keeps reconciliation first", () => {
+	/**
+	 * The inverse of what this file used to pin, and the security fix itself: the
+	 * canonical root's verdict is the repository's verdict. A nested `.beads` under the
+	 * directory the tool was called in does not get a vote, in either direction.
+	 */
+	test("a nested active ledger does not override a retired canonical root", () => {
 		const { canonical, receipts } = repository();
 		mkdirSync(join(canonical, ".beads"));
 		writeFileSync(join(canonical, ".beads", "RETIRED"), "retired\n");
@@ -181,7 +188,25 @@ describe("delivery_land", () => {
 
 		expect(outcome.ok).toBe(true);
 		if (!outcome.ok) throw new Error(outcome.reason);
+		expect(outcome.receipt.beads.ledgerActive).toBe(false);
+		expect(outcome.receipt.proof.evidence).toMatchObject({ ledger: { root: realpathSync(canonical), active: false } });
+		expect(outcome.next).toEqual(["delivery_cleanup"]);
+		expect(outcome.text).not.toContain("bd_reconcile");
+	});
+
+	test("a nested retired ledger does not deactivate an active canonical root", () => {
+		const { canonical, receipts } = repository();
+		mkdirSync(join(canonical, ".beads"));
+		const nested = join(canonical, "nested");
+		mkdirSync(join(nested, ".beads"), { recursive: true });
+		writeFileSync(join(nested, ".beads", "RETIRED"), "retired\n");
+		const { run } = runner({ prView: [completed(mergedGithubPr())] }, canonical);
+		const outcome = landPullRequest({ pr: 470 }, { run, cwd: nested, now: () => NOW, receiptsDirectory: receipts, env: {} });
+
+		expect(outcome.ok).toBe(true);
+		if (!outcome.ok) throw new Error(outcome.reason);
 		expect(outcome.receipt.beads.ledgerActive).toBe(true);
+		expect(outcome.receipt.proof.evidence).toMatchObject({ ledger: { root: realpathSync(canonical), active: true } });
 		expect(outcome.next).toEqual(["bd_reconcile", "delivery_cleanup"]);
 		expect(outcome.text).toContain("bd_reconcile");
 	});
@@ -655,9 +680,189 @@ describe("delivery_land", () => {
 
 		expect(outcome.ok).toBe(true);
 		if (!outcome.ok) throw new Error(outcome.reason);
-		expect(outcome.receipt.repo.remote).toBe("https://github.com/srobroek/omp-plugins.git");
+		expect(outcome.receipt.repo.remote).toBe("origin");
+		expect(outcome.receipt.proof.evidence).toMatchObject({ remoteUrl: "https://github.com/srobroek/omp-plugins.git" });
 		expect(outcome.receipt.repo.nameWithOwner).toBe("srobroek/omp-plugins");
 		expect(JSON.stringify(outcome.receipt)).not.toContain("ghp_secrettoken");
+	});
+
+	/**
+	 * The exact object a real land emits, key by key against decision omp-plugins-9ej3.1
+	 * section 2 as amended by omp-plugins-9ej3.45. Two packages read this shape, so the
+	 * assertion is the whole object and the whole top-level key set: a field added,
+	 * renamed or dropped here is a contract change and must fail a test, not a consumer.
+	 */
+	test("a real land emits exactly the amended v1 receipt object", () => {
+		const { canonical, receipts } = repository();
+		mkdirSync(join(canonical, ".beads"));
+		const { run } = runner({ prView: [completed(githubPr()), completed(mergedGithubPr())] }, canonical);
+		const outcome = landPullRequest(
+			{ pr: 470, worktree: "/tmp/worktrees/omp-agent-omp-plugins-9ej3.5" },
+			{ run, cwd: canonical, now: () => NOW, receiptsDirectory: receipts, env: {} },
+		);
+
+		expect(outcome.ok).toBe(true);
+		if (!outcome.ok) throw new Error(outcome.reason);
+		const receipt = outcome.receipt;
+		const key = repoKey(canonical, () => join(canonical, ".git"));
+		if (key === null) throw new Error("the fixture repository has no key");
+
+		expect(Object.keys(receipt).sort()).toEqual([
+			"beads",
+			"branch",
+			"emittedAt",
+			"emitter",
+			"notes",
+			"outcome",
+			"pr",
+			"proof",
+			"receiptId",
+			"repo",
+			"schema",
+			"supersedes",
+			"version",
+			"worktree",
+		]);
+		expect(receipt.schema).toBe("omp.receipt.landing");
+		expect(receipt.version).toBe(1);
+		expect(receipt.receiptId).toBe(`${NOW}-${MERGE_OID.slice(0, 12)}`);
+		expect(receipt.emittedAt).toBe(new Date(NOW).toISOString());
+		expect(receipt.emitter).toEqual({ plugin: "@srobroek/delivery", version: "0.11.5", tool: "delivery_land" });
+		expect(receipt.repo).toEqual({
+			key,
+			canonicalRoot: canonical,
+			remote: "origin",
+			forge: "github",
+			nameWithOwner: "srobroek/omp-plugins",
+		});
+		expect(receipt.pr).toEqual({
+			number: 470,
+			url: "https://github.com/srobroek/omp-plugins/pull/470",
+			state: "MERGED",
+			baseRefName: "omp/integration/omp-plugins-9ej3",
+			headRefName: BRANCH,
+			headRefOid: HEAD_OID,
+			mergeCommitOid: MERGE_OID,
+			mergedAt: "2026-09-21T20:00:00Z",
+		});
+		expect(receipt.branch).toEqual({
+			name: BRANCH,
+			deletedRemote: true,
+			remoteAbsenceVerifiedAt: new Date(NOW).toISOString(),
+			autoDeleteSetting: "off",
+		});
+		expect(receipt.worktree).toEqual({
+			path: "/tmp/worktrees/omp-agent-omp-plugins-9ej3.5",
+			removed: false,
+			localRefDeleted: false,
+			absenceVerifiedAt: null,
+		});
+		expect(receipt.beads).toEqual({ ids: ["omp-plugins-9ej3.5"], ledgerActive: true });
+		expect(receipt.proof.method).toBe("gh pr view");
+		expect(receipt.proof.observedAt).toBe(new Date(NOW).toISOString());
+		expect(receipt.outcome).toBe("landed");
+		expect(receipt.supersedes).toBeNull();
+		expect(typeof receipt.notes).toBe("string");
+
+		// A forward key a later version added must survive the transport untouched.
+		const forward = { ...receipt, mergeQueueEntry: { id: "q-1" } };
+		const written = writeReceipt(forward, mkdtempSync(join(tmpdir(), "delivery-land-forward-")));
+		expect(readReceipt(written)).toEqual({ ok: true, receipt: forward });
+	});
+
+	/**
+	 * Not a path-shape test: the receipt directory is chosen from the environment, and a
+	 * whitespace-only agent directory is no directory at all. Producer and consumer must
+	 * trim it identically or they look for receipts in two different trees.
+	 */
+	test("a whitespace-only PI_CODING_AGENT_DIR puts the receipt under $HOME/.omp", () => {
+		const { canonical } = repository();
+		const home = mkdtempSync(join(tmpdir(), "delivery-land-home-"));
+		const { run } = runner({ prView: [completed(mergedGithubPr())] }, canonical);
+		const outcome = landPullRequest(
+			{ pr: 470 },
+			{ run, cwd: canonical, now: () => NOW, env: { PI_CODING_AGENT_DIR: "   ", HOME: home } },
+		);
+
+		expect(outcome.ok).toBe(true);
+		if (!outcome.ok) throw new Error(outcome.reason);
+		expect(outcome.receiptPath).toBe(join(home, ".omp", "receipts", outcome.receipt.repo.key, `${outcome.receipt.receiptId}.json`));
+	});
+
+	test("the remote-absence probe is asked in the directory this call was made from", () => {
+		const { canonical, receipts } = repository();
+		mkdirSync(join(canonical, ".beads"));
+		const nested = join(canonical, "nested");
+		mkdirSync(nested);
+		const { run, calls } = runner({ prView: [completed(mergedGithubPr())] }, canonical);
+		const outcome = landPullRequest({ pr: 470 }, { run, cwd: nested, now: () => NOW, receiptsDirectory: receipts, env: {} });
+
+		expect(outcome.ok).toBe(true);
+		expect(calls.filter(call => call.argv.includes("ls-remote")).map(call => call.cwd)).toEqual([nested]);
+	});
+
+	/**
+	 * An active ledger and no bead to reconcile is the pair the escalation exploited from
+	 * the other side: cleanup would ask `bd` about an empty list and pass. A non-agent
+	 * branch on a repository that tracks its work must name its bead or refuse.
+	 */
+	test("an active ledger with no derivable bead identity refuses before merging and writes nothing", () => {
+		const { canonical, receipts } = repository();
+		mkdirSync(join(canonical, ".beads"));
+		const { run, calls } = runner({ prView: [completed(githubPr({ headRefName: "feature/no-bead" }))] }, canonical);
+		const outcome = landPullRequest({ pr: 470 }, { run, cwd: canonical, now: () => NOW, receiptsDirectory: receipts, env: {} });
+
+		expect(outcome.ok).toBe(false);
+		if (outcome.ok) throw new Error("expected a refusal");
+		expect(outcome.reason).toContain('beads.ids: observed no bead identity for branch "feature/no-bead"');
+		expect(outcome.reason).toContain("an explicit beadId");
+		expect(outcome.reason).toContain(realpathSync(canonical));
+		expect(outcome.reason).toContain("no merge was issued and no receipt was written");
+		expect(calls.filter(call => merged(call.argv))).toHaveLength(0);
+		expect(readdirSync(receipts)).toEqual([]);
+	});
+
+	test("beadId names the bead a non-agent branch cannot", () => {
+		const { canonical, receipts } = repository();
+		mkdirSync(join(canonical, ".beads"));
+		const { run } = runner({ prView: [completed(mergedGithubPr({ headRefName: "feature/no-bead" }))] }, canonical);
+		const outcome = landPullRequest(
+			{ pr: 470, beadId: "omp-plugins-9ej3.38" },
+			{ run, cwd: canonical, now: () => NOW, receiptsDirectory: receipts, env: {} },
+		);
+
+		expect(outcome.ok).toBe(true);
+		if (!outcome.ok) throw new Error(outcome.reason);
+		expect(outcome.receipt.beads).toEqual({ ids: ["omp-plugins-9ej3.38"], ledgerActive: true });
+		expect(outcome.next).toEqual(["bd_reconcile", "delivery_cleanup"]);
+	});
+
+	test("a ledger-free repository needs no bead identity at all", () => {
+		const { canonical, receipts } = repository();
+		const { run } = runner({ prView: [completed(mergedGithubPr({ headRefName: "feature/no-bead" }))] }, canonical);
+		const outcome = landPullRequest({ pr: 470 }, { run, cwd: canonical, now: () => NOW, receiptsDirectory: receipts, env: {} });
+
+		expect(outcome.ok).toBe(true);
+		if (!outcome.ok) throw new Error(outcome.reason);
+		expect(outcome.receipt.beads).toEqual({ ids: [], ledgerActive: false });
+		expect(outcome.next).toEqual(["delivery_cleanup"]);
+	});
+
+	test("a beadId that is not a bead id, or that contradicts the branch, refuses and merges nothing", () => {
+		for (const beadId of ["-malicious", "bead id", "../escape", "a;b"]) {
+			const { outcome, calls, files } = land({ prView: [completed(githubPr())] }, { beadId });
+			expect(outcome.ok).toBe(false);
+			if (outcome.ok) throw new Error("expected a refusal");
+			expect(outcome.reason).toContain("beadId: observed");
+			expect(calls.filter(call => merged(call.argv))).toHaveLength(0);
+			expect(files()).toHaveLength(0);
+		}
+
+		const contradicted = land({ prView: [completed(githubPr())] }, { beadId: "omp-plugins-9ej3.99" });
+		expect(contradicted.outcome.ok).toBe(false);
+		if (contradicted.outcome.ok) throw new Error("expected a refusal");
+		expect(contradicted.outcome.reason).toContain('expected "omp-plugins-9ej3.5" from branch');
+		expect(contradicted.files()).toHaveLength(0);
 	});
 });
 

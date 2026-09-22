@@ -22,6 +22,7 @@ import deliveryCleanupTool, {
 	cleanupDelivery,
 	type DeliveryCleanupParams,
 } from "./delivery-cleanup-tool.ts";
+import { landPullRequest } from "./delivery-land-tool.ts";
 import { type CliResult, type CliRunner, runCli } from "./forge-adapter.ts";
 import {
 	buildReceipt,
@@ -99,7 +100,16 @@ function gitExit(cwd: string, args: string[]): number | null {
 	return result.exitCode;
 }
 
-function fixture(name: string, branch = `feat/${name}`): Fixture {
+/**
+ * A real repository whose ledger state on disk is the state its receipt claims.
+ *
+ * `ledger` decides both halves at once — an active `.beads` directory at the
+ * canonical root with `beads.ledgerActive: true`, or a retired one with `false` —
+ * because cleanup now recomputes the classification at that root and refuses a
+ * receipt that disagrees with it. A fixture whose receipt claimed a ledger the
+ * directory did not have would be testing the refusal, not the path it names.
+ */
+function fixture(name: string, branch = `feat/${name}`, ledger: "active" | "retired" = "active"): Fixture {
 	const root = scratch(name);
 	const bare = join(root, "remote.git");
 	mkdirSync(bare);
@@ -114,6 +124,8 @@ function fixture(name: string, branch = `feat/${name}`): Fixture {
 	git(main, ["commit", "-q", "-m", "base"]);
 	git(main, ["remote", "add", "origin", bare]);
 	git(main, ["push", "-q", "-u", "origin", "main"]);
+	mkdirSync(join(main, ".beads"));
+	if (ledger === "retired") writeFileSync(join(main, ".beads", "RETIRED"), "retired\n");
 
 	const linked = join(root, "linked worktree");
 	git(main, ["worktree", "add", "-q", "-b", branch, linked]);
@@ -136,7 +148,7 @@ function fixture(name: string, branch = `feat/${name}`): Fixture {
 		repo: {
 			key,
 			canonicalRoot: realpathSync(main),
-			remote: bare,
+			remote: "origin",
 			forge: "github",
 			nameWithOwner: "owner/repo",
 		},
@@ -157,9 +169,9 @@ function fixture(name: string, branch = `feat/${name}`): Fixture {
 			autoDeleteSetting: "on",
 		},
 		worktree: { path: linked, removed: false, localRefDeleted: false, absenceVerifiedAt: null },
-		beads: { ids: ["delivery-17"], ledgerActive: true },
+		beads: { ids: ["delivery-17"], ledgerActive: ledger === "active" },
 		proof: {
-			method: "forge merged pull request",
+			method: "gh pr view",
 			observedAt: "2027-01-15T08:00:00.000Z",
 			evidence: { state: "MERGED" },
 		},
@@ -266,7 +278,7 @@ describe("delivery_cleanup irreversible boundary", () => {
 			pr: 17,
 			branch: f.branch,
 			worktree: f.linked,
-			remote: f.bare,
+			remote: "origin",
 		});
 		expect(result.ok).toBe(true);
 		if (!result.ok) return;
@@ -303,11 +315,8 @@ describe("delivery_cleanup irreversible boundary", () => {
 		expect(listReceipts(receiptDirectory(f.env, f.receipt.repo.key))).toHaveLength(2);
 	});
 
-	test("an inactive receipt cleans up without issuing any bd command", () => {
-		const f = fixture("inactive-ledger");
-		rmSync(f.receiptPath);
-		f.receipt.beads.ledgerActive = false;
-		writeReceipt(f.receipt, receiptDirectory(f.env, f.receipt.repo.key));
+	test("a retired ledger, agreed by the receipt and the canonical root, cleans up with no bd command", () => {
+		const f = fixture("inactive-ledger", "feat/inactive-ledger", "retired");
 
 		const { result, calls } = invoke(f);
 
@@ -460,7 +469,9 @@ describe("delivery_cleanup irreversible boundary", () => {
 		});
 		const mainPath = writeReceipt(mainReceipt, receiptDirectory(mainTarget.env, mainReceipt.repo.key));
 		const mainRun = runner(mainTarget, { pr: { headRefName: "main", headRefOid: mainTarget.merge } });
-		const mainResult = cleanupDelivery({ receipt: mainPath }, mainTarget.main, {
+		// Asked from the linked worktree: a call standing in its own target is refused
+		// earlier, by the invocation check, and would not reach the main-worktree rule.
+		const mainResult = cleanupDelivery({ receipt: mainPath }, mainTarget.linked, {
 			run: mainRun.run,
 			now: () => NOW + 20,
 			env: mainTarget.env,
@@ -630,6 +641,221 @@ describe("delivery_cleanup irreversible boundary", () => {
 
 	test("a leading-dash branch remains an operand after the branch-delete option terminator", () => {
 		expect(branchDeleteArgs("-malicious-option")).toEqual(["branch", "-d", "--", "-malicious-option"]);
+	});
+});
+
+/**
+ * One runner for a real `delivery_land` call against a fixture repository: the forge
+ * reads are scripted, every Git read is answered by the fixture's own repository.
+ *
+ * Scripted `git remote get-url` is the one exception. The fixture's `origin` is a
+ * local bare path, which `detectForge` correctly refuses as no forge; the URL is what
+ * the landing classifies, and the remote NAME is what the receipt records.
+ */
+function landRunner(f: Fixture): { run: CliRunner; calls: string[][] } {
+	const calls: string[][] = [];
+	const run: CliRunner = (argv, options) => {
+		calls.push([...argv]);
+		if (argv[0] === "gh" && argv[1] === "pr" && argv[2] === "view") return success(githubPayload(f));
+		if (argv[0] === "gh" && argv[1] === "api") return success("false\n");
+		if (argv[0] === "git" && argv[1] === "remote" && argv[2] === "get-url") return success("https://github.com/owner/repo.git\n");
+		if (argv[0] === "git" && argv.includes("ls-remote")) return success("", 2);
+		return runCli(argv, options);
+	};
+	return { run, calls };
+}
+
+/**
+ * The classification seam is the security boundary this whole tool stands on, so it
+ * is exercised against real repositories: a real `.beads` at a real canonical root, a
+ * real nested retired marker, and a real linked worktree that really disappears or
+ * really survives.
+ */
+describe("the ledger is classified at the canonical root, never at a caller's directory", () => {
+	/**
+	 * The escalation the final integration review proved, end to end and now closed:
+	 * land from a directory shadowed by a nested retired `.beads`, then clean from the
+	 * repository whose canonical ledger is active. Before the fix the receipt recorded
+	 * `ledgerActive: false` from the shadowed directory and cleanup returned success
+	 * from the ledger gate without issuing a single `bd` call, deleting the worktree and
+	 * the branch while the bead stayed open.
+	 */
+	test("a landing from a shadowed directory records the canonical verdict, and cleanup then requires reconciliation", () => {
+		const f = fixture("bypass", "omp/agent/delivery-17");
+		const shadowed = join(f.main, "nested");
+		mkdirSync(join(shadowed, ".beads"), { recursive: true });
+		writeFileSync(join(shadowed, ".beads", "RETIRED"), "retired\n");
+
+		const landing = landRunner(f);
+		const landed = landPullRequest(
+			{ pr: f.receipt.pr.number, worktree: f.linked },
+			{ run: landing.run, cwd: shadowed, now: () => NOW + 5, env: f.env },
+		);
+		expect(landed.ok).toBe(true);
+		if (!landed.ok) throw new Error(landed.reason);
+		expect(landed.receipt.beads).toEqual({ ids: ["delivery-17"], ledgerActive: true });
+		expect(landed.receipt.proof.evidence).toMatchObject({ ledger: { root: realpathSync(f.main), active: true } });
+		expect(landed.receipt.repo.remote).toBe("origin");
+		expect(landed.next).toEqual(["bd_reconcile", "delivery_cleanup"]);
+
+		const cleaning = runner(f);
+		const cleaned = cleanupDelivery({ receipt: landed.receiptPath }, f.main, {
+			run: cleaning.run,
+			now: () => NOW + 10,
+			env: f.env,
+		});
+		expect(cleaned.ok).toBe(true);
+		// The gate ran: the bypass was a cleanup that reached success with no bd call.
+		expect(commandCalls(cleaning.calls, "bd")).toEqual([["bd", "show", "delivery-17", "--json"]]);
+		expect(existsSync(f.linked)).toBe(false);
+		expect(gitExit(f.main, ["show-ref", "--verify", "--quiet", `refs/heads/${f.branch}`])).toBe(1);
+	});
+
+	test("an unreconciled bead still refuses that same landing, so the gate is the ledger's and not the receipt's", () => {
+		const f = fixture("bypass-open-bead", "omp/agent/delivery-17");
+		const shadowed = join(f.main, "nested");
+		mkdirSync(join(shadowed, ".beads"), { recursive: true });
+		writeFileSync(join(shadowed, ".beads", "RETIRED"), "retired\n");
+
+		const landed = landPullRequest(
+			{ pr: f.receipt.pr.number, worktree: f.linked },
+			{ run: landRunner(f).run, cwd: shadowed, now: () => NOW + 5, env: f.env },
+		);
+		expect(landed.ok).toBe(true);
+		if (!landed.ok) throw new Error(landed.reason);
+
+		const cleaning = runner(f, { beadStatus: "open" });
+		const refused = cleanupDelivery({ receipt: landed.receiptPath }, f.main, {
+			run: cleaning.run,
+			now: () => NOW + 10,
+			env: f.env,
+		});
+		expect(refusal(refused)).toContain('beads.delivery-17.status: observed "open", expected "closed" after bd_reconcile');
+		expect(mutationCalls(cleaning.calls)).toEqual([]);
+		expect(existsSync(f.linked)).toBe(true);
+		expect(gitExit(f.main, ["show-ref", "--verify", "--quiet", `refs/heads/${f.branch}`])).toBe(0);
+	});
+
+	/**
+	 * The same receipt an unfixed producer would have written, and the same receipt an
+	 * attacker would forge: `ledgerActive: false` over a repository whose canonical
+	 * ledger is active. The stored boolean alone never opens the success path.
+	 */
+	test("a stale or tampered false claim is refused against the recomputed verdict, and nothing is removed", () => {
+		const f = fixture("stale-false-claim");
+		const stale = buildReceipt({
+			...f.receipt,
+			now: NOW + 1,
+			beads: { ids: f.receipt.beads.ids, ledgerActive: false },
+		});
+		const stalePath = writeReceipt(stale, receiptDirectory(f.env, stale.repo.key));
+
+		const { run, calls } = runner(f);
+		const result = cleanupDelivery({ receipt: stalePath }, f.main, { run, now: () => NOW + 10, env: f.env });
+
+		const reason = refusal(result);
+		expect(reason).toContain("beads.ledgerActive: observed false stored in the receipt, expected true");
+		expect(reason).toContain(`recomputed at canonical root "${realpathSync(f.main)}"`);
+		expect(reason).toContain("bd_reconcile");
+		expect(mutationCalls(calls)).toEqual([]);
+		expect(commandCalls(calls, "bd")).toEqual([]);
+		expect(existsSync(f.linked)).toBe(true);
+		expect(gitExit(f.main, ["show-ref", "--verify", "--quiet", `refs/heads/${f.branch}`])).toBe(0);
+	});
+
+	test("a true claim over a retired canonical root is refused just as loudly", () => {
+		const f = fixture("stale-true-claim", "feat/stale-true-claim", "retired");
+		const claimed = buildReceipt({
+			...f.receipt,
+			now: NOW + 1,
+			beads: { ids: f.receipt.beads.ids, ledgerActive: true },
+		});
+		const claimedPath = writeReceipt(claimed, receiptDirectory(f.env, claimed.repo.key));
+
+		const { run, calls } = runner(f);
+		const result = cleanupDelivery({ receipt: claimedPath }, f.main, { run, now: () => NOW + 10, env: f.env });
+
+		const reason = refusal(result);
+		expect(reason).toContain("beads.ledgerActive: observed true stored in the receipt, expected false");
+		expect(reason).toContain(`recomputed at canonical root "${realpathSync(f.main)}"`);
+		expect(mutationCalls(calls)).toEqual([]);
+		expect(existsSync(f.linked)).toBe(true);
+	});
+
+	/**
+	 * An active ledger with nothing to reconcile is refused by the receipt's own
+	 * validator, so a tampered file carrying that pair never reaches the ledger gate.
+	 */
+	test("a tampered receipt claiming an active ledger with no bead ids is refused when it is read", () => {
+		const f = fixture("tampered-empty-ids");
+		const directory = receiptDirectory(f.env, f.receipt.repo.key);
+		const tampered = { ...f.receipt, beads: { ids: [], ledgerActive: true } };
+		rmSync(f.receiptPath);
+		writeFileSync(join(directory, `${f.receipt.receiptId}.json`), JSON.stringify(tampered));
+
+		const { run, calls } = runner(f);
+		const result = cleanupDelivery({ receipt: f.receiptPath }, f.main, { run, now: () => NOW + 10, env: f.env });
+
+		expect(refusal(result)).toContain("beads.ids: observed array of 0, expected at least one bead id when beads.ledgerActive is true");
+		expect(calls).toEqual([]);
+		expect(existsSync(f.linked)).toBe(true);
+	});
+});
+
+describe("delivery_cleanup never removes the worktree it was called from", () => {
+	test("a call from inside its own target refuses, naming the invocation and the resolved target", () => {
+		const f = fixture("invocation-target");
+		const { run, calls } = runner(f);
+		const result = cleanupDelivery({ receipt: f.receiptPath }, f.linked, { run, now: () => NOW + 10, env: f.env });
+
+		const reason = refusal(result);
+		expect(reason).toContain(`worktree.invocationCwd: observed "${f.linked}"`);
+		expect(reason).toContain(realpathSync(f.linked));
+		expect(calls).toEqual([]);
+		expect(existsSync(f.linked)).toBe(true);
+		expect(gitExit(f.main, ["show-ref", "--verify", "--quiet", `refs/heads/${f.branch}`])).toBe(0);
+	});
+
+	test("a subdirectory of the target is inside the target", () => {
+		const f = fixture("invocation-nested");
+		const nested = join(f.linked, "deep", "deeper");
+		mkdirSync(nested, { recursive: true });
+		const { run, calls } = runner(f);
+		const result = cleanupDelivery({ receipt: f.receiptPath }, nested, { run, now: () => NOW + 10, env: f.env });
+
+		expect(refusal(result)).toContain("expected a directory outside the worktree this call would remove");
+		expect(calls).toEqual([]);
+		expect(existsSync(f.linked)).toBe(true);
+	});
+
+	test("a symlinked alias of the target is still the target", () => {
+		const f = fixture("invocation-alias");
+		const alias = join(f.root, "alias");
+		symlinkSync(f.linked, alias, "dir");
+		const { run, calls } = runner(f);
+		const result = cleanupDelivery({ receipt: f.receiptPath }, alias, { run, now: () => NOW + 10, env: f.env });
+
+		expect(refusal(result)).toContain("worktree.invocationCwd");
+		expect(calls).toEqual([]);
+		expect(existsSync(f.linked)).toBe(true);
+	});
+
+	test("the remote-absence probe is asked from a surviving worktree of this repository", () => {
+		const f = fixture("probe-cwd");
+		const scripted = runner(f);
+		const directories: (string | undefined)[] = [];
+		const run: CliRunner = (argv, options) => {
+			if (argv.includes("ls-remote")) directories.push(options.cwd);
+			return scripted.run(argv, options);
+		};
+		const result = cleanupDelivery({ receipt: f.receiptPath }, f.main, { run, now: () => NOW + 10, env: f.env });
+
+		expect(result.ok).toBe(true);
+		expect(directories).toHaveLength(1);
+		const asked = directories[0];
+		if (asked === undefined) throw new Error("the probe was issued with no working directory");
+		expect(realpathSync(asked)).toBe(realpathSync(f.main));
+		expect(repoKey(asked)).toBe(f.receipt.repo.key);
 	});
 });
 

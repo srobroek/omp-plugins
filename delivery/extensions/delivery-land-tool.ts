@@ -35,10 +35,17 @@
  * value issues no repository-setting write, and the observed setting is recorded
  * either way. `"unknown"` is recorded as `"unknown"` and never promoted.
  *
- * The ledger is not this package's to write. Per decision omp-plugins-9ej3.1
- * delivery proves and beads records, so this tool runs no `bd` verb at all — the
- * receipt is the hand-off, and the result text names `bd_reconcile` as the next
- * step and `delivery_cleanup` as the step after it.
+ * The ledger is not this package's to write, and not this call's directory to
+ * classify. Per decision omp-plugins-9ej3.1 delivery proves and beads records, so
+ * this tool runs no `bd` verb at all — the receipt is the hand-off, and the result
+ * text names `bd_reconcile` as the next step and `delivery_cleanup` as the step
+ * after it. Amendment omp-plugins-9ej3.45 fixes where the verdict comes from:
+ * `beads.ledgerActive` is classified at the repository's canonical root, so a
+ * nested retired `.beads` under the directory this tool was called in cannot record
+ * a landing as ledger-free and send cleanup past a reconciliation that never
+ * happened. On an active ledger the landing must also be able to name the bead it
+ * closes, from the branch convention or from `beadId`, because a receipt with an
+ * active ledger and no ids is a gate with nothing to check.
  */
 
 import { basename, dirname, isAbsolute, resolve } from "node:path";
@@ -58,8 +65,11 @@ import {
 } from "./forge-adapter.ts";
 import {
 	buildReceipt,
+	type CanonicalLedger,
+	canonicalLedger,
+	type GitRunner,
 	type LandingReceipt,
-	ledgerActive,
+	RECEIPT_METHOD_UNKNOWN,
 	type ReceiptAutoDelete,
 	receiptDirectory,
 	repoKey,
@@ -93,13 +103,22 @@ const REMOTE_NAME = /^[A-Za-z0-9._][A-Za-z0-9._/-]*$/;
 /**
  * The branch convention that names the work a landing closes.
  *
- * Bead ids are not a parameter — the decision fixes this tool's parameter set —
- * so the branch is the only place they can come from, and `omp/agent/<bead-id>`
- * is where this estate puts them. A branch that does not match records no ids
- * rather than a guessed one: `bd_reconcile` refuses on an empty list, which is a
- * better outcome than reconciling the wrong bead.
+ * `omp/agent/<bead-id>` is where this estate puts bead ids, so a branch following it
+ * needs no `beadId` argument. A branch that does not follow it records no id from
+ * the convention, and on a repository whose canonical ledger is active the landing
+ * then refuses unless the caller supplies one: a receipt claiming an active ledger
+ * with nothing to reconcile would send cleanup past a gate that never ran.
  */
 const AGENT_BRANCH = /^omp\/agent\/([A-Za-z0-9][A-Za-z0-9._-]*)$/;
+
+/**
+ * What an explicit `beadId` may be.
+ *
+ * The value is recorded in a receipt that `delivery_cleanup` passes to `bd show` as
+ * an argv element, so it is shape-checked here rather than where it is spent: the
+ * same charset the branch convention captures, and never a leading `-`.
+ */
+const BEAD_ID = /^[A-Za-z0-9][A-Za-z0-9._-]*$/;
 
 /** The GitHub fields a landing proof needs, in one `--json` projection. */
 const PR_FIELDS = "number,url,state,baseRefName,headRefName,headRefOid,mergeCommit,mergedAt";
@@ -167,6 +186,12 @@ export type LandParams = {
 	expectHeadSha?: string;
 	setupAutoDelete?: boolean;
 	worktree?: string;
+	/**
+	 * The bead this landing closes, for a branch the `omp/agent/<bead-id>` convention
+	 * does not name. Amendment omp-plugins-9ej3.45 adds it as this tool's one new
+	 * input; it is not a way to override the convention's answer.
+	 */
+	beadId?: string;
 };
 
 /**
@@ -381,27 +406,38 @@ function gitText(run: CliRunner, cwd: string, argv: readonly string[]): string |
 }
 
 /**
- * The repository's stable key and its canonical checkout root.
+ * The repository's stable key, its canonical checkout root, and the ledger verdict
+ * classified at that root.
  *
- * One `rev-parse --git-common-dir` answers both: {@link repoKey} hashes that path,
+ * One `rev-parse --git-common-dir` answers all three: {@link repoKey} hashes that
+ * path, {@link canonicalLedger} classifies the ledger from the directory it names,
  * and the canonical root is its parent when it is the usual `.git` directory.
- * `repoKey` is handed the already-observed answer rather than a second runner, so
- * the key is the module's own hashing rule applied to exactly the path recorded
- * here — two reads could disagree, and the receipt would then name a directory it
- * was not keyed from. The seam answers that one question and nothing else: another
- * argv returns null, so a future `repoKey` that asked Git something further would
- * report no key rather than silently receive this path as the answer.
+ * Both are handed the already-observed answer rather than a second runner, so the
+ * key, the recorded root and the ledger verdict all come from one observation — two
+ * reads could disagree, and the receipt would then name a directory it was not keyed
+ * from, or a ledger belonging to some other repository. The seam answers that one
+ * question and nothing else: another argv returns null, so a future caller that
+ * asked Git something further would report no key rather than silently receive this
+ * path as the answer.
  */
-function observeRepository(run: CliRunner, cwd: string): { key: string; canonicalRoot: string } | { reason: string } {
+function observeRepository(
+	run: CliRunner,
+	cwd: string,
+): { key: string; canonicalRoot: string; ledger: CanonicalLedger } | { reason: string } {
 	const question = "rev-parse --git-common-dir";
 	const printed = gitText(run, cwd, question.split(" "));
 	if (printed === null || printed === "") {
 		return { reason: `git ${question} in ${cwd}: observed no output, expected a git common directory` };
 	}
 	const common = isAbsolute(printed) ? printed : resolve(cwd, printed);
-	const key = repoKey(cwd, argv => (argv.join(" ") === question ? common : null));
+	const seam: GitRunner = argv => (argv.join(" ") === question ? common : null);
+	const key = repoKey(cwd, seam);
 	if (key === null) return { reason: `repo.key: observed no resolvable path at ${common}, expected a readable git common directory` };
-	return { key, canonicalRoot: basename(common) === ".git" ? dirname(common) : common };
+	const ledger = canonicalLedger(cwd, seam);
+	if (ledger === null) {
+		return { reason: `beads.ledgerActive: observed no resolvable path at ${common}, expected a readable git common directory to classify the ledger at` };
+	}
+	return { key, canonicalRoot: basename(common) === ".git" ? dirname(common) : common, ledger };
 }
 
 /**
@@ -460,6 +496,59 @@ export function redactRemote(remoteUrl: string): string {
 export function beadIdsFromBranch(branch: string): string[] {
 	const id = AGENT_BRANCH.exec(branch.trim())?.[1];
 	return id === undefined ? [] : [id];
+}
+
+/**
+ * The bead ids this landing closes: an explicit `beadId` when the caller gave one,
+ * otherwise whatever the branch convention names.
+ *
+ * An explicit id wins over the convention only when the branch carries none, because
+ * the two agreeing is the normal case and the two disagreeing is a caller naming a
+ * bead other than the one its own branch is for — which is a mistake to report, not
+ * to pick a side in.
+ */
+function beadIdentity(beadId: string | undefined, branch: string): { ids: string[] } | { reason: string } {
+	const fromBranch = beadIdsFromBranch(branch);
+	const explicit = beadId?.trim() ?? "";
+	if (explicit === "") return { ids: fromBranch };
+	if (!BEAD_ID.test(explicit)) {
+		return { reason: `beadId: observed ${show(beadId)}, expected a bead id of letters, digits, ".", "_" or "-", starting with a letter or digit` };
+	}
+	if (fromBranch.length > 0 && fromBranch[0] !== explicit) {
+		return {
+			reason: `beadId: observed ${show(explicit)}, expected ${show(fromBranch[0])} from branch ${show(branch)}, which already names the bead this landing closes`,
+		};
+	}
+	return { ids: [explicit] };
+}
+
+/**
+ * Why a landing with no bead to reconcile may not be recorded, or null when it may.
+ *
+ * A receipt whose ledger is active and whose id list is empty claims that work was
+ * landed into a repository that tracks it, and names nothing for `bd_reconcile` to
+ * close. `delivery_cleanup` would then ask `bd` about an empty list and pass a gate
+ * that verified nothing, so the landing refuses here instead — before the merge when
+ * the branch is already known, and again before the receipt is built.
+ */
+function missingBeadIdentity(ids: readonly string[], branch: string, ledger: CanonicalLedger): string | null {
+	if (!ledger.active || ids.length > 0) return null;
+	return `beads.ids: observed no bead identity for branch ${show(branch)}, expected an "omp/agent/<bead-id>" branch or an explicit beadId; the ledger at canonical root ${show(ledger.root)} is active, so this landing has a bead to reconcile`;
+}
+
+/**
+ * The provider CLI and verb that observed this landing — `gh pr view`,
+ * `glab mr view` — taken from the argv of the read that proved it.
+ *
+ * Read off the issued command rather than composed from the forge name, so
+ * `proof.method` cannot describe a command this tool did not run. An argv that names
+ * no CLI and verb yields {@link RECEIPT_METHOD_UNKNOWN}, which `validateReceipt`
+ * refuses to combine with `outcome: "landed"`.
+ */
+function observationMethod(argv: readonly string[]): string {
+	const head = argv.slice(0, 3);
+	const named = head.length === 3 && head.every(element => element !== "" && !/\s/.test(element));
+	return named ? head.join(" ") : RECEIPT_METHOD_UNKNOWN;
 }
 
 /**
@@ -546,6 +635,14 @@ export function landPullRequest(params: LandParams, deps: LandDeps = {}): LandOu
 		}
 	}
 
+	// The bead identity is settled before anything is merged: the branch the forge
+	// just named is the branch the receipt will record, so a landing that cannot name
+	// the work it closes refuses while refusing is still free.
+	const identity = beadIdentity(params.beadId, first.pr.headRefName);
+	if ("reason" in identity) return refuse(`${identity.reason}; no merge was issued and no receipt was written`);
+	const unnamed = missingBeadIdentity(identity.ids, first.pr.headRefName, repository.ledger);
+	if (unnamed !== null) return refuse(`${unnamed}; no merge was issued and no receipt was written`);
+
 	const observedAutoDelete: ReceiptAutoDelete = autoDeleteSetting(forge, nameWithOwner, forgeRun);
 	const notes: string[] = [];
 	if (params.setupAutoDelete === true) {
@@ -610,19 +707,30 @@ export function landPullRequest(params: LandParams, deps: LandDeps = {}): LandOu
 		return refuse(`${source}: ${proof.reason}; no receipt was written`);
 	}
 
-	const verdict = remoteBranchAbsent(remote, proved.headRefName, forgeRun);
+	// The probe is asked from this call's own working directory: `remote` is a name,
+	// and a name only resolves in the repository that configures it.
+	const verdict = remoteBranchAbsent(remote, proved.headRefName, cwd, forgeRun);
 	if (verdict !== "absent") {
 		notes.push(
 			`The remote branch ${proved.headRefName} on ${remote} is ${verdict}, not proved absent, so branch.deletedRemote stays false and remoteAbsenceVerifiedAt stays null.`,
 		);
 	}
 
+	// The proof of the landing is the read that observed it: the re-read when a merge
+	// was issued here, the first read when the forge had already merged it.
+	const observingArgv = rereadArgv ?? first.argv;
 	const evidence: Record<string, unknown> = {
 		remote,
+		// The URL lives here and not in `repo.remote`, which records the configured
+		// remote NAME: the name is what a later `git ls-remote` is given, and the URL is
+		// the redacted spelling of what was contacted.
 		remoteUrl,
 		// Both the repository and the head the merge was bound to are recorded, because a
 		// reader of this receipt cannot otherwise tell a bound merge from an ambient one.
 		boundRepo: nameWithOwner,
+		// The directory the ledger verdict was classified at, so a reader can tell that
+		// `beads.ledgerActive` is the repository's answer and not the caller's cwd.
+		ledger: { root: repository.ledger.root, active: repository.ledger.active },
 		prView: { argv: first.argv.join(" "), number: first.pr.number, state: first.pr.state, headRefOid: first.pr.headRefOid, baseRefName: first.pr.baseRefName },
 		expectHeadSha: params.expectHeadSha?.trim() ?? null,
 		autoDelete: { observed: observedAutoDelete, requested: params.setupAutoDelete === true },
@@ -634,11 +742,19 @@ export function landPullRequest(params: LandParams, deps: LandDeps = {}): LandOu
 		remoteBranch: { ref: `refs/heads/${proved.headRefName}`, verdict },
 	};
 
+	// Re-derived from the branch the re-read proved, which need not be the branch the
+	// first read named, and checked again: no receipt claims an active ledger with
+	// nothing for bd_reconcile to close.
+	const proven = beadIdentity(params.beadId, proved.headRefName);
+	if ("reason" in proven) return refuse(`${proven.reason}; no receipt was written`);
+	const unproven = missingBeadIdentity(proven.ids, proved.headRefName, repository.ledger);
+	if (unproven !== null) return refuse(`${unproven}; no receipt was written`);
+
 	let receipt: LandingReceipt;
 	try {
 		receipt = buildReceipt({
 			emitter: { plugin: pkg.name, version: pkg.version, tool: "delivery_land" },
-			repo: { key: repository.key, canonicalRoot: repository.canonicalRoot, remote: remoteUrl, forge, nameWithOwner },
+			repo: { key: repository.key, canonicalRoot: repository.canonicalRoot, remote, forge, nameWithOwner },
 			pr: {
 				number: proved.number,
 				url: proved.url,
@@ -661,11 +777,9 @@ export function landPullRequest(params: LandParams, deps: LandDeps = {}): LandOu
 				localRefDeleted: false,
 				absenceVerifiedAt: null,
 			},
-			beads: { ids: beadIdsFromBranch(proved.headRefName), ledgerActive: ledgerActive(cwd) },
+			beads: { ids: proven.ids, ledgerActive: repository.ledger.active },
 			proof: {
-				method: mergeArgv === null
-					? "already-merged pull request read, remote ref observed with git ls-remote"
-					: "merge issued, pull request re-read, remote ref observed with git ls-remote",
+				method: observationMethod(observingArgv),
 				observedAt,
 				evidence,
 			},
@@ -709,8 +823,10 @@ export default function deliveryLandTool(pi: ExtensionAPI): void {
 			"Prove a pull request landed and emit one landing receipt. Reads the pull request, refuses on an expectHeadSha mismatch, " +
 			"merges at most once (an already MERGED request is proved, not re-merged) with the repository and the observed head bound " +
 			"explicitly rather than taken from the working directory or GH_REPO, re-reads it and refuses unless the same request is " +
-			"MERGED at that same head on the same base, observes the remote branch with git ls-remote, then writes exactly one receipt " +
-			"under the agent directory and returns it as details.receipt. " +
+			"MERGED at that same head on the same base, observes the remote branch with git ls-remote from this working directory, then " +
+			"writes exactly one receipt under the agent directory and returns it as details.receipt. " +
+			"beads.ledgerActive is classified at the repository's canonical root, never at the working directory, so a nested retired .beads cannot make an active ledger look absent. " +
+			"On an active ledger the landing refuses unless it can name the bead it closes, from the omp/agent/<bead-id> branch convention or from beadId. " +
 			"Writes no Beads ledger: when receipt beads.ledgerActive is true, run bd_reconcile before delivery_cleanup; when it is false for a no-ledger or retired repository, go directly to delivery_cleanup. The caller supplies worktree when recording the cleanup association.",
 		parameters: z.object({
 			pr: z.union([z.number(), z.string()]).describe("Pull request or merge request number"),
@@ -719,6 +835,7 @@ export default function deliveryLandTool(pi: ExtensionAPI): void {
 			expectHeadSha: z.string().optional().describe("Refuse unless the pull request head is exactly this sha; nothing is merged on a mismatch"),
 			setupAutoDelete: z.boolean().optional().describe("Only true writes the repository's deletion-on-merge setting; absent or false writes nothing"),
 			worktree: z.string().optional().describe("Worktree this landing belongs to, recorded for delivery_cleanup"),
+			beadId: z.string().optional().describe("Bead this landing closes, for a branch the omp/agent/<bead-id> convention does not name; required on an active ledger when the branch names none"),
 		}) as unknown as TSchema,
 		approval: "exec",
 		execute: async (_toolCallId, params: LandParams, _signal, _onUpdate, ctx) => {

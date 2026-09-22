@@ -6,6 +6,7 @@ import {
 	mkdtempSync,
 	readdirSync,
 	readFileSync,
+	realpathSync,
 	rmSync,
 	statSync,
 	symlinkSync,
@@ -16,9 +17,11 @@ import { join } from "node:path";
 
 import {
 	buildReceipt,
+	canonicalLedger,
 	type GitRunner,
 	type LandingReceipt,
 	listReceipts,
+	RECEIPT_METHOD_UNKNOWN,
 	RECEIPT_SCHEMA,
 	RECEIPT_VERSION,
 	readReceipt,
@@ -820,6 +823,88 @@ describe("repoKey", () => {
 		expect(canonicalKey).toMatch(/^[0-9a-f]{16}$/);
 		expect(repoKey(linked)).toBe(canonicalKey);
 		expect(repoKey(join(repository, ".git"))).toBe(canonicalKey);
+	});
+});
+
+/**
+ * The ledger classification is a security boundary, not a convenience: a wrong
+ * verdict here is a worktree deleted and a branch removed with no reconciliation.
+ */
+describe("canonicalLedger", () => {
+	test("classifies at the canonical root, so a nested marker below the cwd does not vote", () => {
+		const repository = scratch("ledger-canonical");
+		const nested = join(repository, "deep", "deeper");
+		mkdirSync(join(repository, ".beads"), { recursive: true });
+		mkdirSync(join(nested, ".beads"), { recursive: true });
+		writeFileSync(join(nested, ".beads", "RETIRED"), "retired\n");
+		git(repository, "init", "-b", "main");
+
+		expect(canonicalLedger(repository)).toEqual({ root: realpathSync(repository), active: true });
+		expect(canonicalLedger(nested)).toEqual({ root: realpathSync(repository), active: true });
+	});
+
+	test("a retired canonical root stays retired however active a nested ledger is", () => {
+		const repository = scratch("ledger-canonical-retired");
+		const nested = join(repository, "nested");
+		mkdirSync(join(repository, ".beads"), { recursive: true });
+		writeFileSync(join(repository, ".beads", "RETIRED"), "retired\n");
+		mkdirSync(join(nested, ".beads"), { recursive: true });
+		git(repository, "init", "-b", "main");
+
+		expect(canonicalLedger(nested)).toEqual({ root: realpathSync(repository), active: false });
+	});
+
+	test("a linked worktree classifies from the same root as its canonical checkout", () => {
+		const repository = scratch("ledger-linked");
+		const linked = join(ROOT, "ledger-linked-worktree");
+		mkdirSync(join(repository, ".beads"), { recursive: true });
+		git(repository, "init", "-b", "main");
+		writeFileSync(join(repository, "file.txt"), "one\n");
+		git(repository, "add", "file.txt");
+		git(repository, "commit", "-m", "one");
+		git(repository, "worktree", "add", linked, "-b", "side");
+
+		expect(canonicalLedger(linked)).toEqual({ root: realpathSync(repository), active: true });
+	});
+
+	test("null, never a verdict, when git names no repository or the path does not resolve", () => {
+		expect(canonicalLedger("/anywhere", () => null)).toBeNull();
+		expect(canonicalLedger("/anywhere", () => "")).toBeNull();
+		expect(canonicalLedger("/anywhere", () => join(ROOT, "ledger-absent", ".git"))).toBeNull();
+	});
+});
+
+/**
+ * Two claims a receipt may not make. Both are refusals at the trust boundary rather
+ * than checks in a consumer, because each one is a gate that would otherwise be
+ * satisfied by a file instead of by an observation.
+ */
+describe("cross-field claims", () => {
+	test("an active ledger with no bead ids is refused, naming the field", () => {
+		const reason = refusalFor({ ...landed(), beads: { ids: [], ledgerActive: true } });
+		expect(reason).toContain("beads.ids");
+		expect(reason).toContain("at least one bead id when beads.ledgerActive is true");
+		expect(acceptedFrom({ ...landed(), beads: { ids: [], ledgerActive: false } }).beads.ids).toEqual([]);
+	});
+
+	test('an unobserved proof is never "landed", so an unproven merge cannot borrow the authority', () => {
+		const unobserved = { ...landed(), proof: { ...landed().proof, method: RECEIPT_METHOD_UNKNOWN } };
+		const reason = refusalFor(unobserved);
+		expect(reason).toContain("proof.method");
+		expect(reason).toContain('never "unknown", when outcome is "landed"');
+		expect(acceptedFrom({ ...unobserved, outcome: "partial" }).proof.method).toBe("unknown");
+	});
+
+	test("writeReceipt refuses both pairs before persisting anything", () => {
+		const directory = receiptsIn("write-cross-field");
+		mkdirSync(directory, { recursive: true });
+		for (const hostile of [
+			{ ...landed(), beads: { ids: [], ledgerActive: true } },
+			{ ...landed(), proof: { ...landed().proof, method: RECEIPT_METHOD_UNKNOWN } },
+		]) {
+			expect(() => writeReceipt(hostile as LandingReceipt, directory)).toThrow(/refusing to persist an invalid receipt/);
+		}
+		expect(readdirSync(directory)).toEqual([]);
 	});
 });
 
