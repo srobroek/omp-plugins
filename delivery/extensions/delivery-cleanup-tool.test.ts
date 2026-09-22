@@ -57,6 +57,13 @@ type Fixture = {
 
 type FixtureLayout = "normal" | "separate-git-dir" | "separate-dot-git-dir" | "submodule";
 
+type RecordedCall = {
+	argv: string[];
+	cwd: string | undefined;
+	timeoutMs: number;
+	env: Readonly<Record<string, string>> | undefined;
+};
+
 type RunnerOptions = {
 	pr?: Partial<{
 		nameWithOwner: string;
@@ -68,6 +75,7 @@ type RunnerOptions = {
 		mergedAt: string | null;
 		url: string;
 	}>;
+	repository?: Record<string, unknown>;
 	beadStatus?: string;
 	beadRows?: Record<string, unknown>[];
 	beadMergeSha?: string;
@@ -241,14 +249,35 @@ function githubPayload(f: Fixture, over: RunnerOptions["pr"] = {}): string {
 	});
 }
 
-function runner(f: Fixture, options: RunnerOptions = {}): { run: CliRunner; calls: string[][] } {
+function gitlabPayload(f: Fixture, over: RunnerOptions["pr"] = {}): string {
+	return JSON.stringify({
+		iid: f.receipt.pr.number,
+		web_url: over.url ?? f.receipt.pr.url,
+		state: over.state ?? f.receipt.pr.state,
+		target_branch: over.baseRefName ?? f.receipt.pr.baseRefName,
+		source_branch: over.headRefName ?? f.receipt.pr.headRefName,
+		sha: over.headRefOid ?? f.receipt.pr.headRefOid,
+		merge_commit_sha: over.mergeCommitOid === undefined ? f.receipt.pr.mergeCommitOid : over.mergeCommitOid,
+		merged_at: over.mergedAt === undefined ? f.receipt.pr.mergedAt : over.mergedAt,
+	});
+}
+
+function runner(f: Fixture, options: RunnerOptions = {}): { run: CliRunner; calls: string[][]; details: RecordedCall[] } {
 	const calls: string[][] = [];
+	const details: RecordedCall[] = [];
 	const run: CliRunner = (argv, commandOptions) => {
 		calls.push([...argv]);
+		details.push({ argv: [...argv], cwd: commandOptions.cwd, timeoutMs: commandOptions.timeoutMs, env: commandOptions.env });
 		options.before?.(argv, calls);
 		let result: CliResult;
-		if (argv[0] === "gh") {
+		if (argv[0] === "gh" && argv[1] === "repo") {
+			result = success(JSON.stringify(options.repository ?? { nameWithOwner: "owner/repo" }));
+		} else if (argv[0] === "gh") {
 			result = success(githubPayload(f, options.pr));
+		} else if (argv[0] === "glab" && argv[1] === "repo") {
+			result = success(JSON.stringify(options.repository ?? { path_with_namespace: "group/project" }));
+		} else if (argv[0] === "glab") {
+			result = success(gitlabPayload(f, options.pr));
 		} else if (argv[0] === "bd") {
 			result = success(JSON.stringify({
 				schema_version: 1,
@@ -281,16 +310,17 @@ function runner(f: Fixture, options: RunnerOptions = {}): { run: CliRunner; call
 		options.after?.(argv, result, calls);
 		return result;
 	};
-	return { run, calls };
+	return { run, calls, details };
 }
 
 function invoke(f: Fixture, params: DeliveryCleanupParams = { receipt: f.receiptPath }, options: RunnerOptions = {}): {
 	result: CleanupResult;
 	calls: string[][];
+	details: RecordedCall[];
 } {
 	const scripted = runner(f, options);
 	const result = cleanupDelivery(params, f.main, { run: scripted.run, now: () => NOW + 10, env: f.env });
-	return { result, calls: scripted.calls };
+	return { result, calls: scripted.calls, details: scripted.details };
 }
 
 function refusal(result: CleanupResult): string {
@@ -320,6 +350,13 @@ describe("delivery_cleanup irreversible boundary", () => {
 			worktree: f.linked,
 			remote: "origin",
 		});
+		expect(calls.slice(0, 2)).toEqual([
+			["gh", "repo", "view", "--json", "nameWithOwner"],
+			[
+				"gh", "pr", "view", "17", "--repo", "owner/repo", "--json",
+				"number,url,state,baseRefName,headRefName,headRefOid,mergeCommit,mergedAt",
+			],
+		]);
 		expect(result.ok).toBe(true);
 		if (!result.ok) return;
 		expect(existsSync(f.linked)).toBe(false);
@@ -353,7 +390,7 @@ describe("delivery_cleanup irreversible boundary", () => {
 		});
 		expect(readReceipt(result.path)).toEqual({ ok: true, receipt: result.receipt });
 		expect(listReceipts(receiptDirectory(f.env, f.receipt.repo.key))).toHaveLength(2);
-	});
+	}, 60_000);
 
 	test("a retired ledger, agreed by the receipt and the canonical root, cleans up with no bd command", () => {
 		const f = fixture("inactive-ledger", "feat/inactive-ledger", "retired");
@@ -366,6 +403,98 @@ describe("delivery_cleanup irreversible boundary", () => {
 		expect(result.receipt.beads.ledgerActive).toBe(false);
 		expect(existsSync(f.linked)).toBe(false);
 	});
+
+	test("a ledger-free receipt for another repository is denied before local mutation", () => {
+		const f = fixture("cross-repo-receipt", "feat/cross-repo-receipt", "retired");
+		const receipt = buildReceipt({
+			...f.receipt,
+			now: NOW + 1,
+			continues: f.receipt,
+			repo: { ...f.receipt.repo, nameWithOwner: "attacker/elsewhere" },
+		});
+		const path = writeReceipt(receipt, receiptDirectory(f.env, receipt.repo.key));
+
+		const { result, calls } = invoke(f, { receipt: path });
+
+		expect(refusal(result)).toContain('repo.nameWithOwner: observed "owner/repo", expected receipt value "attacker/elsewhere"');
+		expect(calls.slice(0, 2)).toEqual([
+			["gh", "repo", "view", "--json", "nameWithOwner"],
+			[
+				"gh", "pr", "view", "17", "--repo", "owner/repo", "--json",
+				"number,url,state,baseRefName,headRefName,headRefOid,mergeCommit,mergedAt",
+			],
+		]);
+		expect(commandCalls(calls, "bd")).toEqual([]);
+		expect(mutationCalls(calls)).toEqual([]);
+		expect(existsSync(f.linked)).toBe(true);
+	}, 60_000);
+
+	test("an incomplete local repository identity refuses before the pull-request query", () => {
+		const f = fixture("incomplete-local-repo", "feat/incomplete-local-repo", "retired");
+
+		const { result, calls } = invoke(f, { receipt: f.receiptPath }, { repository: {} });
+
+		expect(refusal(result)).toContain("repo.nameWithOwner");
+		expect(calls).toEqual([["gh", "repo", "view", "--json", "nameWithOwner"]]);
+		expect(mutationCalls(calls)).toEqual([]);
+		expect(existsSync(f.linked)).toBe(true);
+	}, 60_000);
+
+	test("GitLab observes the local project before querying its merge request", () => {
+		const f = fixture("gitlab-local-repo", "feat/gitlab-local-repo", "retired");
+		const receipt = buildReceipt({
+			...f.receipt,
+			now: NOW + 1,
+			continues: f.receipt,
+			repo: { ...f.receipt.repo, forge: "gitlab", nameWithOwner: "group/project" },
+			pr: {
+				...f.receipt.pr,
+				url: "https://gitlab.com/group/project/-/merge_requests/17",
+				state: "merged",
+			},
+			proof: { ...f.receipt.proof, method: "glab mr view" },
+		});
+		const path = writeReceipt(receipt, receiptDirectory(f.env, receipt.repo.key));
+		f.receipt = receipt;
+		f.receiptPath = path;
+
+		const { result, calls } = invoke(f);
+
+		expect(result.ok).toBe(true);
+		expect(calls.slice(0, 2)).toEqual([
+			["glab", "repo", "view", "--output", "json"],
+			["glab", "mr", "view", "17", "--repo", "group/project", "--output", "json"],
+		]);
+	}, 60_000);
+
+	test("cleanup strips every ambient forge redirector from both local and pull-request reads", () => {
+		const f = fixture("ambient-redirectors", "feat/ambient-redirectors", "retired");
+		Object.assign(f.env, {
+			GH_REPO: "attacker/elsewhere",
+			GH_HOST: "evil.example",
+			GITLAB_HOST: "evil.example",
+			GL_HOST: "evil.example",
+			GITLAB_URI: "https://evil.example",
+			GITLAB_API_HOST: "api.evil.example",
+			GH_TOKEN: "keep-gh",
+			GITLAB_TOKEN: "keep-gitlab",
+			GL_TOKEN: "keep-gl",
+		});
+
+		const { result, details } = invoke(f);
+
+		expect(result.ok).toBe(true);
+		const forgeCalls = details.filter(call => call.argv[0] === "gh");
+		expect(forgeCalls).toHaveLength(2);
+		for (const call of forgeCalls) {
+			for (const key of ["GH_REPO", "GH_HOST", "GITLAB_HOST", "GL_HOST", "GITLAB_URI", "GITLAB_API_HOST"]) {
+				expect(call.env?.[key]).toBeUndefined();
+			}
+			expect(call.env?.GH_TOKEN).toBe("keep-gh");
+			expect(call.env?.GITLAB_TOKEN).toBe("keep-gitlab");
+			expect(call.env?.GL_TOKEN).toBe("keep-gl");
+		}
+	}, 60_000);
 
 	test("a valid receipt extension named ok cannot collide with cleanup's private resolution tag", () => {
 		const f = fixture("receipt-ok-extension");

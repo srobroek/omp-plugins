@@ -7,6 +7,7 @@ import {
 	type CliResult,
 	type CliRunner,
 	FORGE_TIMEOUT_MS,
+	forgeEnvironment,
 	remoteBranchAbsent,
 	runCli,
 } from "./forge-adapter.ts";
@@ -131,6 +132,24 @@ function integer(holder: Record<string, unknown>, key: string): number | null {
 	return typeof value === "number" && Number.isSafeInteger(value) && value > 0 ? value : null;
 }
 
+const REPOSITORY_SEGMENT = /^(?=[^/]*[A-Za-z0-9])[A-Za-z0-9._][A-Za-z0-9._-]*$/;
+
+function repositoryPath(value: unknown, maxSegments: number): string | null {
+	if (typeof value !== "string") return null;
+	const segments = value.trim().split("/");
+	if (segments.length < 2 || segments.length > maxSegments) return null;
+	if (segments.some(segment => !REPOSITORY_SEGMENT.test(segment))) return null;
+	return segments.join("/");
+}
+
+function firstRepositoryPath(holder: Record<string, unknown>, keys: readonly string[], maxSegments: number): string | null {
+	for (const key of keys) {
+		const path = repositoryPath(own(holder, key), maxSegments);
+		if (path !== null) return path;
+	}
+	return null;
+}
+
 function parseJsonObject(field: string, result: CliResult): Record<string, unknown> | CleanupFailure {
 	if (!completed(result)) return commandFailure(field, [], result, "a successful bounded forge read");
 	if (Buffer.byteLength(result.stdout) > MAX_CLI_JSON_BYTES) {
@@ -151,19 +170,34 @@ function normalizedOid(value: unknown): string | null {
 	return oid === "" ? null : oid;
 }
 
-function githubObservation(receipt: LandingReceipt, run: CliRunner, cwd: string): PullRequestObservation | CleanupFailure {
+function githubObservation(
+	receipt: LandingReceipt,
+	run: CliRunner,
+	cwd: string,
+	env: Readonly<Record<string, string>>,
+): PullRequestObservation | CleanupFailure {
+	const repoArgv = ["gh", "repo", "view", "--json", "nameWithOwner"];
+	const repoResult = run(repoArgv, { cwd, timeoutMs: FORGE_TIMEOUT_MS, env });
+	if (!completed(repoResult)) return commandFailure("repo", repoArgv, repoResult, "a successful bounded local GitHub repository read");
+	const repoRoot = parseJsonObject("repo", repoResult);
+	if (isFailure(repoRoot)) return repoRoot;
+	const nameWithOwner = repositoryPath(own(repoRoot, "nameWithOwner"), 2);
+	if (nameWithOwner === null) {
+		return refuse("repo.nameWithOwner", own(repoRoot, "nameWithOwner"), "a complete owner/name from gh repo view");
+	}
+
 	const argv = [
 		"gh",
 		"pr",
 		"view",
 		String(receipt.pr.number),
 		"--repo",
-		receipt.repo.nameWithOwner,
+		nameWithOwner,
 		"--json",
 		"number,url,state,baseRefName,headRefName,headRefOid,mergeCommit,mergedAt",
 	];
 	const method = argv.slice(0, 3).join(" ");
-	const result = run(argv, { cwd, timeoutMs: FORGE_TIMEOUT_MS });
+	const result = run(argv, { cwd, timeoutMs: FORGE_TIMEOUT_MS, env });
 	if (!completed(result)) return commandFailure("pr", argv, result, "a successful bounded GitHub pull-request read");
 	const root = parseJsonObject("pr", result);
 	if (isFailure(root)) return root;
@@ -177,24 +211,34 @@ function githubObservation(receipt: LandingReceipt, run: CliRunner, cwd: string)
 		headRefOid: text(root, "headRefOid") ?? "",
 		mergeCommitOid: mergeCommit === null ? null : normalizedOid(own(mergeCommit, "oid")),
 		mergedAt: text(root, "mergedAt"),
-		nameWithOwner: receipt.repo.nameWithOwner,
+		nameWithOwner,
 		method,
 	};
 }
 
-function gitlabObservation(receipt: LandingReceipt, run: CliRunner, cwd: string): PullRequestObservation | CleanupFailure {
-	const argv = [
-		"glab",
-		"mr",
-		"view",
-		String(receipt.pr.number),
-		"--repo",
-		receipt.repo.nameWithOwner,
-		"--output",
-		"json",
-	];
+function gitlabObservation(
+	receipt: LandingReceipt,
+	run: CliRunner,
+	cwd: string,
+	env: Readonly<Record<string, string>>,
+): PullRequestObservation | CleanupFailure {
+	const repoArgv = ["glab", "repo", "view", "--output", "json"];
+	const repoResult = run(repoArgv, { cwd, timeoutMs: FORGE_TIMEOUT_MS, env });
+	if (!completed(repoResult)) return commandFailure("repo", repoArgv, repoResult, "a successful bounded local GitLab repository read");
+	const repoRoot = parseJsonObject("repo", repoResult);
+	if (isFailure(repoRoot)) return repoRoot;
+	const nameWithOwner = firstRepositoryPath(
+		repoRoot,
+		["path_with_namespace", "pathWithNamespace", "fullPath", "nameWithOwner"],
+		21,
+	);
+	if (nameWithOwner === null) {
+		return refuse("repo.nameWithOwner", repoRoot, "a complete group/project path from glab repo view");
+	}
+
+	const argv = ["glab", "mr", "view", String(receipt.pr.number), "--repo", nameWithOwner, "--output", "json"];
 	const method = argv.slice(0, 3).join(" ");
-	const result = run(argv, { cwd, timeoutMs: FORGE_TIMEOUT_MS });
+	const result = run(argv, { cwd, timeoutMs: FORGE_TIMEOUT_MS, env });
 	if (!completed(result)) return commandFailure("pr", argv, result, "a successful bounded GitLab merge-request read");
 	const root = parseJsonObject("pr", result);
 	if (isFailure(root)) return root;
@@ -208,7 +252,7 @@ function gitlabObservation(receipt: LandingReceipt, run: CliRunner, cwd: string)
 		headRefOid: text(root, "sha") ?? "",
 		mergeCommitOid: mergeCommit ?? normalizedOid(own(root, "squash_commit_sha")),
 		mergedAt: text(root, "merged_at"),
-		nameWithOwner: receipt.repo.nameWithOwner,
+		nameWithOwner,
 		method,
 	};
 }
@@ -217,9 +261,11 @@ export function observePullRequest(
 	receipt: LandingReceipt,
 	run: CliRunner = runCli,
 	cwd: string = receipt.repo.canonicalRoot,
+	env: NodeJS.ProcessEnv = process.env,
 ): PullRequestObservation | CleanupFailure {
-	if (receipt.repo.forge === "github") return githubObservation(receipt, run, cwd);
-	if (receipt.repo.forge === "gitlab") return gitlabObservation(receipt, run, cwd);
+	const forgeEnv = forgeEnvironment(env);
+	if (receipt.repo.forge === "github") return githubObservation(receipt, run, cwd, forgeEnv);
+	if (receipt.repo.forge === "gitlab") return gitlabObservation(receipt, run, cwd, forgeEnv);
 	return refuse("repo.forge", receipt.repo.forge, '"github" or "gitlab"');
 }
 
@@ -712,7 +758,7 @@ export function cleanupDelivery(
 			`a directory outside the worktree this call would remove (${receipt.worktree.path}, resolved to ${physicalPath(receipt.worktree.path as string)})`,
 		);
 	}
-	const observed = observePullRequest(receipt, run, cwd);
+	const observed = observePullRequest(receipt, run, cwd, env);
 	if (isFailure(observed)) return observed;
 	const observedFailure = verifyObservation(receipt, observed);
 	if (observedFailure !== null) return observedFailure;
