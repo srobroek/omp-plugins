@@ -171,26 +171,36 @@ describe("pinBashInput", () => {
 	});
 
 	test("adds the session pin to a bash call, keeps a caller pin, ignores malformed env", () => {
-		expect(pinBashInput({ command: "bd list" }, "/repo/.beads")).toEqual({ command: "bd list", env: { BEADS_DIR: "/repo/.beads" } });
-		expect(pinBashInput({ command: "bd list", env: { A: "1" } }, "/repo/.beads")).toEqual({ command: "bd list", env: { A: "1", BEADS_DIR: "/repo/.beads" } });
+		expect(pinBashInput({ command: "bd list" }, "/repo/.beads")).toEqual({ command: "bd list", env: { BEADS_DOLT_SHARED_SERVER: "", BEADS_DIR: "/repo/.beads" } });
+		expect(pinBashInput({ command: "bd list", env: { A: "1" } }, "/repo/.beads")).toEqual({ command: "bd list", env: { A: "1", BEADS_DOLT_SHARED_SERVER: "", BEADS_DIR: "/repo/.beads" } });
 		expect(pinBashInput({ command: "bd list", env: { BEADS_DIR: "/mine/.beads" } }, "/repo/.beads")).toBeUndefined();
 		expect(pinBashInput({ command: "bd list" }, undefined)).toBeUndefined();
 		expect(pinBashInput({ command: "bd list", env: "nope" }, "/repo/.beads")).toBeUndefined();
 	});
+
+	test("clears a shared-server export the call carries against the committed embedded pin", () => {
+		expect(pinBashInput({ command: "bd show x", env: { BEADS_DOLT_SHARED_SERVER: "true" } }, "/repo/.beads"))
+			.toEqual({ command: "bd show x", env: { BEADS_DOLT_SHARED_SERVER: "", BEADS_DIR: "/repo/.beads" } });
+	});
+
+	test("a caller that pins its own store is left alone, shared-server value included", () => {
+		expect(pinBashInput({ command: "bd show x", env: { BEADS_DOLT_SHARED_SERVER: "true", BEADS_DIR: "/mine/.beads" } }, "/repo/.beads")).toBeUndefined();
+	});
 });
 
 describe("lifecycleBdEnvironment", () => {
-	test("sets embedded-store safety flags without inheriting a foreign store", () => {
+	test("sets embedded-store safety flags without inheriting a foreign store or shared-server mode", () => {
 		const cwd = mkdtempSync(join(tmpdir(), "beads-lifecycle-env-"));
 		mkdirSync(join(cwd, ".beads"));
 		try {
-			const env = lifecycleBdEnvironment(cwd, { BEADS_DIR: "/foreign/.beads" });
+			const env = lifecycleBdEnvironment(cwd, { BEADS_DIR: "/foreign/.beads", BEADS_DOLT_SHARED_SERVER: "true" });
 			expect(env.BEADS_DIR).not.toBe("/foreign/.beads");
 			expect(env.BEADS_DIR).toBe(join(cwd, ".beads"));
 			expect(env.BD_NO_PAGER).toBe("1");
 			expect(env.BD_NON_INTERACTIVE).toBe("1");
 			expect(env.BD_DOLT_AUTO_START).toBe("false");
 			expect(env.NO_COLOR).toBe("1");
+			expect(env.BEADS_DOLT_SHARED_SERVER).toBe("");
 		} finally { rmSync(cwd, { recursive: true, force: true }); }
 	});
 });
@@ -740,7 +750,7 @@ bashGates(fakePi as never);
 			const call = handlers.tool_call![0]!;
 			const ctx = { cwd: root, sessionManager: { getSessionId: () => "pin-session" } };
 			expect(await call({ toolName: "bash", toolCallId: "1", input: { command: "printenv BEADS_DIR" } }, ctx)).toEqual({
-				input: { command: "printenv BEADS_DIR", env: { BEADS_DIR: join(root, ".beads") } },
+				input: { command: "printenv BEADS_DIR", env: { BEADS_DIR: join(root, ".beads"), BEADS_DOLT_SHARED_SERVER: "" } },
 			});
 			expect(await call({ toolName: "read", toolCallId: "2", input: { path: "x" } }, ctx)).toBeUndefined();
 			const human = mkdtempSync(join(tmpdir(), "beads-callpin-human-"));

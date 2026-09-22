@@ -861,6 +861,7 @@ var activeHolds = new Map;
 var surrenderedCalls = new Set;
 
 // extensions/session-beads-lifecycle.ts
+var EMBEDDED_PIN_ENV = { BEADS_DOLT_SHARED_SERVER: "" };
 function lifecycleBdEnvironment(cwd, base = process.env) {
   const env = { ...base };
   delete env.BEADS_DIR;
@@ -871,6 +872,7 @@ function lifecycleBdEnvironment(cwd, base = process.env) {
   env.BD_NON_INTERACTIVE = "1";
   env.BD_DOLT_AUTO_START = "false";
   env.NO_COLOR = "1";
+  Object.assign(env, EMBEDDED_PIN_ENV);
   return env;
 }
 function bdStoreDir(cwd, env) {
@@ -912,7 +914,7 @@ function pinBashInput(input, pin) {
   const current = env?.BEADS_DIR;
   if (typeof current === "string" && current !== "")
     return;
-  return { ...record, env: { ...env ?? {}, BEADS_DIR: pin } };
+  return { ...record, env: { ...env ?? {}, ...EMBEDDED_PIN_ENV, BEADS_DIR: pin } };
 }
 function bashCallCwd(input, fallback) {
   if (input === null || typeof input !== "object")
