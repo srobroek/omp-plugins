@@ -398,6 +398,24 @@ describe("unenumerated tools", () => {
 		expect(decision?.block).toBe(true);
 	});
 
+	// The permissive half of the same rule. Measured against this branch before it landed:
+	// a vendor tool naming no path is allowed, whether it carries plain data, a bead id, an
+	// internal URL or a web URL, and is refused only once it names a canonical path. Pinned
+	// because a future reading of "an unenumerated tool is still mutating" could flip this to
+	// a refusal and silently break every MCP tool that names no working tree.
+	test("an unknown tool naming no filesystem path is allowed", () => {
+		const { canonical, topology } = project();
+		const pathless: ReadonlyArray<unknown> = [
+			{ note: "hello", count: 3 },
+			{ targets: ["omp-plugins-y6q4"] },
+			{ path: "artifact://360" },
+			{ url: "https://example.com/x" },
+		];
+		for (const input of pathless) {
+			expect(decideWorktreeCall("mcp__vendor_do_thing", input, canonical, topology)).toBeUndefined();
+		}
+	});
+
 	test("a read-only builtin naming a canonical path is allowed", () => {
 		const { canonical, topology } = project();
 		expect(decideWorktreeCall("read", { path: join(canonical, "src") }, canonical, topology)).toBeUndefined();
