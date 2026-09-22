@@ -76,7 +76,7 @@ The adapter supports verified GitHub and GitLab remotes only. It uses `gh` for G
 
 | Factory | Behavior |
 | --- | --- |
-| `unpushed-work-advisory` | At session stop, reports dirty paths observed from writing tools and unpushed commits since the session baseline. It is advisory, grants no commit or publish authority, and never blocks a tool. It emits at most three reminders per unresolved streak, and proved progress resets the count. The third reminder escalates whether the residual was measured or only suspected: it dispatches the report-only `worktree-reaper` and names the lifecycle that removes state, `bd_reconcile` ahead of `delivery_cleanup` only for an active ledger. An unmeasured residual is reported rather than acted on. |
+| `unpushed-work-advisory` | At session stop, reports dirty paths observed from writing tools and unpushed commits since the session baseline. It is advisory, grants no commit or publish authority, and never blocks a tool. It emits at most three reminders per unresolved streak, and proved progress resets the count. The third reminder instructs the main agent or run lead to invoke the report-only `worktree-reaper`, whether the residual was measured or only suspected, and names the lifecycle that removes state, with `bd_reconcile` ahead of `delivery_cleanup` only for an active ledger. An unmeasured residual is reported rather than acted on. |
 | `delivery-land-tool` | Registers `delivery_land`. |
 | `delivery-cleanup-tool` | Registers `delivery_cleanup`. |
 | `hygiene-orientation` | Registers `delivery_orient` and `delivery_hygiene_report`. |
@@ -88,7 +88,7 @@ The adapter supports verified GitHub and GitLab remotes only. It uses `gh` for G
 | --- | --- |
 | `pr-reviewer` | Read-only pull-request reviewer. It returns a `VERDICT:` line and does not edit the checkout. |
 | `integrator` | When `beads.ledgerActive` is true, verifies completed reconciliation before cleaning the merged worktree and branch; inactive retired/no-ledger receipts skip directly to cleanup. |
-| `worktree-reaper` | Report-only escalation the third hygiene reminder dispatches. It inventories residual state and never authorizes removal. |
+| `worktree-reaper` | Report-only escalation invoked by the main agent or run lead after the third hygiene reminder. It inventories residual state and never authorizes removal. |
 
 The agent that creates a non-orchestrated PR owns its automated review loop through landing or explicit human escalation. An orchestrated run's `orc-shepherd` owns review rounds. Workers do not request or act on those rounds. The agent that merges a branch owns cleanup under repository policy. If no merging agent is live, the main agent owns cleanup. The main agent or run lead must orient before a role-restricted step. `delivery_cleanup` does not enforce actor identity or require the caller to run from a linked worktree; it validates the caller-supplied receipt target. Repository policy assigns ownership.
 

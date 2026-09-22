@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpath
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import pkg from "../package.json" with { type: "json" };
-import { beadIdsFromBranch, type LandParams, landPullRequest, repoPathFromRemote } from "./delivery-land-tool.ts";
+import { beadIdsFromBranch, type LandParams, landPullRequest } from "./delivery-land-tool.ts";
 import type { CliResult, CliRunner } from "./forge-adapter.ts";
 import { RECEIPT_SCHEMA, readReceipt, repoKey, writeReceipt } from "./landing-receipt.ts";
 
@@ -491,18 +491,68 @@ describe("delivery_land", () => {
 			"--squash",
 			"--delete-branch",
 			"--repo",
-			"srobroek/omp-plugins",
+			"github.com/srobroek/omp-plugins",
 			"--match-head-commit",
 			HEAD_OID,
 		]);
+		expect(calls.filter(call => call.argv[1] === "pr" && call.argv[2] === "view").map(call => call.argv)).toEqual([
+			["gh", "pr", "view", "470", "--repo", "github.com/srobroek/omp-plugins", "--json", "number,url,state,baseRefName,headRefName,headRefOid,mergeCommit,mergedAt"],
+			["gh", "pr", "view", "470", "--repo", "github.com/srobroek/omp-plugins", "--json", "number,url,state,baseRefName,headRefName,headRefOid,mergeCommit,mergedAt"],
+		]);
 		if (!outcome.ok) throw new Error(outcome.reason);
+		// The receipt records the unqualified identity: the host belongs to the command
+		// that was issued, not to the repository the landing is about.
 		expect(outcome.receipt.proof.evidence).toMatchObject({ boundRepo: "srobroek/omp-plugins", merge: { boundHead: HEAD_OID } });
+	});
+
+	test("a canonical GitHub repo prefix and a pinned GH_HOST defeat a configured host alias", () => {
+		const { outcome, calls } = land(
+			{ prView: [completed(githubPr()), completed(mergedGithubPr())] },
+			{ setupAutoDelete: true },
+			{ GH_HOST: "evil.example", GH_REPO: "attacker/elsewhere", GH_TOKEN: "keep-gh", PATH: "/usr/bin" },
+		);
+
+		expect(outcome.ok).toBe(true);
+		const ghCalls = calls.filter(call => call.argv[0] === "gh");
+		expect(ghCalls.length).toBeGreaterThan(3);
+		for (const call of ghCalls) {
+			// Replaced by the verified host, not merely stripped: an absent GH_HOST still
+			// lets `gh` fall back to a host from its own configuration.
+			expect(call.env?.GH_HOST).toBe("github.com");
+			expect(call.env?.GH_REPO).toBeUndefined();
+			expect(call.env?.GH_TOKEN).toBe("keep-gh");
+			const repoIndex = call.argv.indexOf("--repo");
+			if (repoIndex >= 0) expect(call.argv[repoIndex + 1]).toBe("github.com/srobroek/omp-plugins");
+		}
+		// The settings reads address the repository in the request path, where the host
+		// is the adapter's to add, so they carry the unqualified path.
+		for (const call of ghCalls.filter(call => call.argv[1] === "api")) {
+			expect(call.argv.some(part => part.includes("repos/srobroek/omp-plugins"))).toBe(true);
+		}
+	});
+
+	test("an alternate SSH transport host still addresses the canonical API host", () => {
+		const { canonical, receipts } = repository();
+		const { run, calls } = runner(
+			{
+				remoteUrl: "ssh://git@ssh.github.com:443/srobroek/omp-plugins.git",
+				prView: [completed(githubPr()), completed(mergedGithubPr())],
+			},
+			canonical,
+		);
+		const outcome = landPullRequest({ pr: 470 }, { run, cwd: canonical, now: () => NOW, receiptsDirectory: receipts, env: {} });
+
+		expect(outcome.ok).toBe(true);
+		for (const call of calls.filter(call => call.argv[0] === "gh" && call.argv.includes("--repo"))) {
+			expect(call.argv[call.argv.indexOf("--repo") + 1]).toBe("github.com/srobroek/omp-plugins");
+			expect(call.env?.GH_HOST).toBe("github.com");
+		}
 	});
 
 	test("a GitLab merge binds the repository and the head in glab's spelling", () => {
 		const { canonical, receipts } = repository();
 		const { run, calls } = runner(
-			{ remoteUrl: "git@gitlab.com:group/project.git", prView: [completed(gitlabMr({ state: "opened", merge_commit_sha: null })), completed(gitlabMr())] },
+			{ remoteUrl: "ssh://git@altssh.gitlab.com:443/group/sub/project.git", prView: [completed(gitlabMr({ state: "opened", merge_commit_sha: null })), completed(gitlabMr())] },
 			canonical,
 		);
 		const outcome = landPullRequest({ pr: 12 }, { run, cwd: canonical, now: () => NOW, receiptsDirectory: receipts, env: {} });
@@ -516,10 +566,149 @@ describe("delivery_land", () => {
 			"--squash",
 			"--remove-source-branch",
 			"--repo",
-			"group/project",
+			"gitlab.com/group/sub/project",
 			"--sha",
 			HEAD_OID,
 		]);
+		expect(calls.filter(call => call.argv[1] === "mr" && call.argv[2] === "view").map(call => call.argv)).toEqual([
+			["glab", "mr", "view", "12", "--repo", "gitlab.com/group/sub/project", "--output", "json"],
+			["glab", "mr", "view", "12", "--repo", "gitlab.com/group/sub/project", "--output", "json"],
+		]);
+	});
+
+	test("a canonical GitLab repo prefix defeats a configured dotless host alias", () => {
+		const { canonical, receipts } = repository();
+		const fixture = runner(
+			{
+				remoteUrl: "git@gitlab.com:corp/group/project.git",
+				prView: [completed(gitlabMr({ state: "opened", merge_commit_sha: null })), completed(gitlabMr())],
+			},
+			canonical,
+		);
+		const run: CliRunner = (argv, options) => {
+			const repoIndex = argv.indexOf("--repo");
+			if (argv[0] === "glab" && repoIndex >= 0 && argv[repoIndex + 1] === "corp/group/project") {
+				// Model glab treating the first path segment as a configured host alias.
+				fixture.calls.push({ argv: [...argv], cwd: options.cwd, timeoutMs: options.timeoutMs, env: options.env });
+				return completed(gitlabMr({ iid: 999 }));
+			}
+			return fixture.run(argv, options);
+		};
+		const outcome = landPullRequest(
+			{ pr: 12 },
+			{ run, cwd: canonical, now: () => NOW, receiptsDirectory: receipts, env: {} },
+		);
+
+		expect(outcome.ok).toBe(true);
+		if (!outcome.ok) throw new Error(outcome.reason);
+		expect(outcome.receipt.repo.nameWithOwner).toBe("corp/group/project");
+		expect(
+			fixture.calls
+				.filter(call => call.argv[0] === "glab" && call.argv.includes("--repo"))
+				.map(call => call.argv[call.argv.indexOf("--repo") + 1]),
+		).toEqual([
+			"gitlab.com/corp/group/project",
+			"gitlab.com/corp/group/project",
+			"gitlab.com/corp/group/project",
+		]);
+	});
+
+	test("a structurally malformed identity refuses before an unreadable remote", () => {
+		for (const repo of ["https://github.com/owner/repo", "owner", "owner//repo", "owner/../repo"]) {
+			const { canonical } = repository();
+			const calls: Call[] = [];
+			const run: CliRunner = (argv, options) => {
+				calls.push({ argv: [...argv], cwd: options.cwd, timeoutMs: options.timeoutMs, env: options.env });
+				return { ok: false, exitCode: null, stdout: "", stderr: "", error: "the remote is unreadable" };
+			};
+			const outcome = landPullRequest({ pr: 470, repo }, { run, cwd: canonical, now: () => NOW, env: {} });
+
+			expect(outcome.ok).toBe(false);
+			if (outcome.ok) throw new Error("expected a refusal");
+			expect(outcome.reason).toContain("repo: observed");
+			expect(calls).toHaveLength(0);
+		}
+	});
+
+	test("a host-qualified GitHub remote path cannot become --repo when params.repo is absent", () => {
+		const { outcome, calls } = land({ remoteUrl: "https://github.com/github.com/owner/repo.git" });
+
+		expect(outcome.ok).toBe(false);
+		if (outcome.ok) throw new Error("expected a refusal");
+		expect(outcome.reason).toContain("repo: observed");
+		expect(calls.filter(call => call.argv[0] === "gh")).toHaveLength(0);
+	});
+
+	/**
+	 * `URL` deletes embedded tabs and newlines before parsing, so each of these would
+	 * classify as an ordinary GitHub remote once the output was trimmed — and this
+	 * identity binds the merge argv, so agreeing with the wrong parser here merges
+	 * somewhere nobody named. The output is therefore read as exactly one record.
+	 *
+	 * The refusal quotes none of it. Output no parser accepted cannot be redacted, since
+	 * a redactor can only find a secret in a spelling it understands, so the cases with
+	 * userinfo and a token query must leave neither the token nor its URL in the reason
+	 * or in any receipt — and there is no receipt, because nothing was written.
+	 */
+	test("git remote get-url output that is not exactly one record merges nothing", () => {
+		for (const remoteUrl of [
+			"https://git\thub.com/srobroek/omp-plugins.git",
+			"https://github.com/srobroek/omp-plugins.git\n@evil.example/x",
+			"https://github.com/srobroek/omp-plugins.git\nhttps://evil.example/o/r.git",
+			" https://github.com/srobroek/omp-plugins.git",
+			"https://github.com/srobroek/omp-plugins.git ",
+			"",
+			"https://srobroek:ghp_secrettoken@git\thub.com/srobroek/omp-plugins.git",
+			"https://github.com/srobroek/omp-plugins.git?token=ghp_secrettoken\nhttps://evil.example/x",
+			" ssh://git:ghp_secrettoken@github.com/srobroek/omp-plugins.git",
+		]) {
+			const { outcome, calls, files } = land({ remoteUrl, prView: [completed(githubPr())] });
+
+			expect(outcome.ok).toBe(false);
+			if (outcome.ok) throw new Error("expected a refusal");
+			expect(outcome.reason).toContain("git remote get-url origin: observed malformed Git remote output");
+			expect(outcome.reason).toContain("exactly one URL record");
+			expect(outcome.reason).not.toContain("ghp_secrettoken");
+			expect(outcome.reason).not.toContain("github.com/srobroek");
+			expect(outcome.reason).not.toContain("evil.example");
+			// Before any forge command, so nothing was read, merged, or written.
+			expect(calls.filter(call => call.argv[0] === "gh")).toHaveLength(0);
+			expect(calls.filter(call => merged(call.argv))).toHaveLength(0);
+			expect(files()).toHaveLength(0);
+		}
+	});
+
+	test("ambient Git selectors cannot redirect repository identity or landing proof", () => {
+		const { canonical, receipts } = repository();
+		const attacker = repository();
+		const ambient = {
+			GIT_DIR: join(attacker.canonical, ".git"),
+			GIT_WORK_TREE: attacker.canonical,
+			GIT_CONFIG_COUNT: "1",
+			GIT_CONFIG_KEY_0: "remote.origin.url",
+			GIT_CONFIG_VALUE_0: "https://github.com/attacker/elsewhere.git",
+			PATH: "/usr/bin",
+		};
+		const fixture = runner({ prView: [completed(mergedGithubPr())] }, canonical);
+		const run: CliRunner = (argv, options) => {
+			const effectiveEnv = options.env ?? ambient;
+			const redirected = argv[0] === "git" && Object.keys(effectiveEnv).some(key => key === "GIT_DIR" || key === "GIT_WORK_TREE" || key.startsWith("GIT_CONFIG_"));
+			if (!redirected) return fixture.run(argv, options);
+			fixture.calls.push({ argv: [...argv], cwd: options.cwd, timeoutMs: options.timeoutMs, env: options.env });
+			if (argv.includes("--show-toplevel")) return completed(`${join(attacker.canonical, ".git")}\n${attacker.canonical}\n`);
+			if (argv.includes("get-url")) return completed("https://github.com/attacker/elsewhere.git\n");
+			return completed(`${HEAD_OID}\trefs/heads/${BRANCH}\n`);
+		};
+		const outcome = landPullRequest(
+			{ pr: 470 },
+			{ run, cwd: canonical, now: () => NOW, receiptsDirectory: receipts, env: ambient },
+		);
+
+		expect(outcome.ok).toBe(true);
+		if (!outcome.ok) throw new Error(outcome.reason);
+		expect(outcome.receipt.repo.canonicalRoot).toBe(realpathSync(canonical));
+		expect(outcome.receipt.repo.nameWithOwner).toBe("srobroek/omp-plugins");
+		expect(outcome.receipt.branch.deletedRemote).toBe(true);
 	});
 
 	test("a head that moved between the merge and the re-read refuses and writes nothing", () => {
@@ -618,8 +807,25 @@ describe("delivery_land", () => {
 			// view, merge, re-read, settings read, settings write.
 			expect(forgeCalls.length).toBeGreaterThan(3);
 			for (const call of forgeCalls) {
+				const glabCall = cli === "glab";
+				const pinnedGitLabApi = glabCall && call.argv[1] === "api";
+				// Each CLI's own host variable is not stripped but overwritten with the host
+				// `forgeTarget` verified: absent, a CLI still reads a default host from its
+				// own configuration. Every other redirector, including the other forge's,
+				// is gone.
+				const pinned = glabCall ? ["GITLAB_HOST", "GITLAB_API_HOST"] : ["GH_HOST"];
+				const canonicalHost = glabCall ? "gitlab.com" : "github.com";
 				for (const key of Object.keys(redirectors)) {
-					expect(call.env?.[key]).toBeUndefined();
+					if (pinned.includes(key)) {
+						expect(call.env?.[key]).toBe(canonicalHost);
+					} else {
+						expect(call.env?.[key]).toBeUndefined();
+					}
+				}
+				if (pinnedGitLabApi) {
+					const hostname = call.argv.indexOf("--hostname");
+					expect(hostname).toBeGreaterThan(0);
+					expect(call.argv[hostname + 1]).toBe("gitlab.com");
 				}
 				// Credentials are kept: an unauthenticated command is a different failure.
 				expect(call.env?.GH_TOKEN).toBe("keep-gh");
@@ -885,19 +1091,11 @@ describe("delivery_land", () => {
 	});
 });
 
-describe("branch and remote reading", () => {
+describe("branch reading", () => {
 	test("bead ids come from the agent branch convention and nowhere else", () => {
 		expect(beadIdsFromBranch("omp/agent/omp-plugins-9ej3.5")).toEqual(["omp-plugins-9ej3.5"]);
 		for (const branch of ["main", "omp/integration/omp-plugins-9ej3", "omp/agent/", "feature/omp/agent/x"]) {
 			expect(beadIdsFromBranch(branch)).toEqual([]);
 		}
-	});
-
-	test("the owner and name come from the remote path in each spelling git accepts", () => {
-		expect(repoPathFromRemote("https://github.com/srobroek/omp-plugins.git")).toBe("srobroek/omp-plugins");
-		expect(repoPathFromRemote("git@github.com:srobroek/omp-plugins.git")).toBe("srobroek/omp-plugins");
-		expect(repoPathFromRemote("ssh://git@gitlab.com/group/sub/project")).toBe("group/sub/project");
-		expect(repoPathFromRemote("https://github.com/")).toBeNull();
-		expect(repoPathFromRemote("")).toBeNull();
 	});
 });

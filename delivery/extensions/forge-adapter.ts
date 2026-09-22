@@ -35,7 +35,14 @@
  * import it, and it is never declared in `omp.extensions`.
  */
 
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { devNull, tmpdir } from "node:os";
+import { join } from "node:path";
+
 export type Forge = "github" | "gitlab" | "unknown";
+export type ForgeTarget =
+	| Readonly<{ forge: "github"; canonicalHost: "github.com" }>
+	| Readonly<{ forge: "gitlab"; canonicalHost: "gitlab.com" }>;
 
 /**
  * What one bounded CLI invocation observed.
@@ -68,26 +75,49 @@ export type CliRunner = (
  */
 export const FORGE_TIMEOUT_MS = 10_000;
 
+/**
+ * Ambient variables that redirect a forge command away from the repository the
+ * caller resolved locally. Every forge command must use this same environment.
+ * Credentials and ordinary process state are retained; only repository and host
+ * selectors are removed.
+ */
+const FORGE_REDIRECTORS: readonly string[] = ["GH_REPO", "GH_HOST", "GITLAB_HOST", "GL_HOST", "GITLAB_URI", "GITLAB_API_HOST"];
+
+/** Return a null-prototype copy of `env` without forge host/repository redirectors. */
+export function forgeEnvironment(env: NodeJS.ProcessEnv): Readonly<Record<string, string>> {
+	const clean = Object.create(null) as Record<string, string>;
+	for (const [key, value] of Object.entries(env)) {
+		if (value === undefined || FORGE_REDIRECTORS.includes(key)) continue;
+		clean[key] = value;
+	}
+	return clean;
+}
+
 /** Upper bound on nested GitLab group segments plus the project (20 + 1). */
 const GITLAB_MAX_PATH_SEGMENTS = 21;
 
 /**
- * Hosts whose remotes this module can act on.
+ * Hosts whose remotes this module can act on and the canonical CLI/API target
+ * each verified transport host names.
  *
  * `ssh.github.com` and `altssh.gitlab.com` are each vendor's documented
- * alternate SSH endpoint for networks that block port 22. A self-hosted instance
- * is deliberately not recognised, because its API dialect is not verified here.
+ * alternate SSH endpoint for networks that block port 22. They are transport
+ * hosts only: forge CLI and API calls stay pinned to the vendor's canonical
+ * host. A self-hosted instance is deliberately not recognised, because its API
+ * dialect is not verified here.
  *
  * A host is attacker-influenced input. The allowlist therefore has a null
  * prototype, is frozen, and is read through an own-property descriptor rather
  * than a dynamic property access that could consult polluted prototypes.
  */
-const FORGE_HOSTS: Readonly<Record<string, "github" | "gitlab">> = Object.freeze(
-	Object.assign(Object.create(null) as Record<string, "github" | "gitlab">, {
-		"github.com": "github",
-		"ssh.github.com": "github",
-		"gitlab.com": "gitlab",
-		"altssh.gitlab.com": "gitlab",
+const GITHUB_TARGET: ForgeTarget = Object.freeze({ forge: "github", canonicalHost: "github.com" });
+const GITLAB_TARGET: ForgeTarget = Object.freeze({ forge: "gitlab", canonicalHost: "gitlab.com" });
+const FORGE_HOSTS: Readonly<Record<string, ForgeTarget>> = Object.freeze(
+	Object.assign(Object.create(null) as Record<string, ForgeTarget>, {
+		"github.com": GITHUB_TARGET,
+		"ssh.github.com": GITHUB_TARGET,
+		"gitlab.com": GITLAB_TARGET,
+		"altssh.gitlab.com": GITLAB_TARGET,
 	}),
 );
 
@@ -115,6 +145,25 @@ const ANY_SCHEME = /^[a-z][a-z0-9+.-]*:\/\//i;
  */
 const SCP_LIKE = /^(?:[^@/:]+@)?([^@/:]+):(?!\/)/;
 const REPO_SEGMENT = /^[A-Za-z0-9._-]+$/;
+
+/**
+ * What a Git remote name may be.
+ *
+ * `git remote get-url` and `git ls-remote` take the name as an argument, so a
+ * leading `-` would be read as a flag. The charset is the one Git spells a
+ * configured remote with, which also excludes whitespace and control characters:
+ * a value outside it names no remote this repository configures, and guessing
+ * which remote was meant is how a read ends up answered by another repository.
+ *
+ * The tail is asserted with `(?![\s\S])` rather than `$`. Both are exact today —
+ * ECMAScript's `$` matches only at the end of input unless `multiline` is set,
+ * unlike Perl and Python, where it also matches before a final newline. The
+ * difference is what `$` would mean after an edit this pattern cannot see: it is
+ * exported and spent by two tools, and adding an `m` flag, or reusing the source in
+ * a multiline pattern, would silently widen `origin` to `origin\n` and hand a
+ * trailing newline to a command. `(?![\s\S])` cannot be relaxed by a flag.
+ */
+export const REMOTE_NAME = /^[A-Za-z0-9._][A-Za-z0-9._/-]*(?![\s\S])/;
 
 /**
  * Characters that disqualify a branch name.
@@ -153,17 +202,18 @@ const LS_REMOTE_PROTOCOL_POLICY = [
 ] as const;
 
 /**
- * A clean environment for Git's remote observation.
+ * A clean environment for Git observations.
  *
- * Git's `GIT_SSH*`, `GIT_PROXY_COMMAND`, `GIT_EXEC_PATH`, and environment-backed
- * config variables all select executables without appearing in argv. Preserve
- * ordinary process state, discard every inherited `GIT_*` control plus SSH's
- * askpass hook, then add back only the non-executable protocol allowlist and the
- * non-interactive prompt setting this operation owns.
+ * Git's `GIT_SSH*`, `GIT_PROXY_COMMAND`, `GIT_EXEC_PATH`, repository/worktree
+ * selectors, and environment-backed config variables all change what a read
+ * observes or select executables without appearing in argv. Preserve ordinary
+ * process state, discard every inherited `GIT_*` control plus SSH's askpass
+ * hook, then add back only the non-executable protocol allowlist and the
+ * non-interactive prompt setting these observations own.
  */
-function gitObservationEnvironment(): Readonly<Record<string, string>> {
+export function gitObservationEnvironment(source: NodeJS.ProcessEnv = process.env): Readonly<Record<string, string>> {
 	const env = Object.create(null) as Record<string, string>;
-	for (const [key, value] of Object.entries(process.env)) {
+	for (const [key, value] of Object.entries(source)) {
 		if (value === undefined || key.startsWith("GIT_") || key === "SSH_ASKPASS" || key === "SSH_ASKPASS_REQUIRE") continue;
 		env[key] = value;
 	}
@@ -185,6 +235,33 @@ function hasControlCharacter(value: string): boolean {
 		if (code < 0x20 || code === 0x7f) return true;
 	}
 	return false;
+}
+
+/**
+ * The one remote URL `git remote get-url` printed, or null when its stdout is not
+ * exactly one record.
+ *
+ * Trimming this output is what makes it dangerous. WHATWG `URL` removes every ASCII
+ * tab, LF, and CR from its input before parsing, so `https://git<TAB>hub.com/o/r`
+ * and `https://github.com/o/r<LF>@evil.example/x` are read here as ordinary GitHub
+ * URLs while Git, handed the raw bytes, resolves something else or nothing at all.
+ * Two records — a repository configured with several URLs, or output nobody
+ * expected — collapse the same way once the separator is stripped. Where two parsers
+ * disagree about what was named there is no safe answer to pick, so this one refuses.
+ *
+ * At most one terminal LF or CRLF is removed, because that is Git's record
+ * terminator. Everything else must already be exact: no control character anywhere,
+ * nothing empty, and no leading or trailing whitespace. Nothing is normalised —
+ * a value that needs repair to be usable is a value nobody verified.
+ */
+export function singleRemoteRecord(stdout: string): string | null {
+	const record = stdout.endsWith("\r\n")
+		? stdout.slice(0, -2)
+		: stdout.endsWith("\n")
+			? stdout.slice(0, -1)
+			: stdout;
+	if (record === "" || hasControlCharacter(record) || record !== record.trim()) return null;
+	return record;
 }
 
 /**
@@ -219,14 +296,19 @@ function isValidBranchName(branch: string): boolean {
 }
 
 /**
- * Validate an `owner/name` (or nested `group/.../project`) path.
+ * Validate the repository path one forge accepts.
  *
- * Returns the normalised path, or null when it cannot be one. A `.` or `..`
- * segment is refused because it would walk the forge API path the caller asked
- * for into a different resource.
+ * GitHub accepts exactly `owner/name`. GitLab additionally accepts bounded
+ * nested groups. The path remains host-free data; GitLab callers disambiguate
+ * it from a configured host alias by prefixing the canonical host returned by
+ * {@link forgeTarget}. A `.` or `..` segment is refused because it would walk
+ * the forge API path the caller asked for into a different resource.
  */
-function normalizeRepoPath(repo: string, maxSegments: number): string | null {
+export function normalizeRepoPath(forge: Forge, repo: string): string | null {
+	const supported = supportedForge(forge);
+	if (supported === null) return null;
 	const segments = repo.trim().split("/");
+	const maxSegments = supported === "github" ? 2 : GITLAB_MAX_PATH_SEGMENTS;
 	if (segments.length < 2 || segments.length > maxSegments) return null;
 	for (const segment of segments) {
 		if (!REPO_SEGMENT.test(segment)) return null;
@@ -318,17 +400,112 @@ export const runCli: CliRunner = (argv, options) => {
 };
 
 /**
- * Classify a remote URL. Anything not verified is `"unknown"`, which callers
- * must treat as "no adapter", never as a default forge.
+ * Resolve an allowlisted remote to the forge and canonical host its CLI/API
+ * must target. Alternate SSH transport hosts never escape into forge commands.
  */
-export function detectForge(remoteUrl: string | null): Forge {
-	if (remoteUrl === null) return "unknown";
+export function forgeTarget(remoteUrl: string | null): ForgeTarget | null {
+	if (remoteUrl === null) return null;
 	const host = hostOf(remoteUrl);
-	if (host === null) return "unknown";
+	if (host === null) return null;
 	const descriptor = Object.getOwnPropertyDescriptor(FORGE_HOSTS, host);
-	if (descriptor === undefined || !("value" in descriptor)) return "unknown";
-	const forge: unknown = descriptor.value;
-	return forge === "github" || forge === "gitlab" ? forge : "unknown";
+	if (descriptor === undefined || !("value" in descriptor)) return null;
+	const target: unknown = descriptor.value;
+	if (target === GITHUB_TARGET) return GITHUB_TARGET;
+	if (target === GITLAB_TARGET) return GITLAB_TARGET;
+	return null;
+}
+
+/** Classify a remote URL. An unverified remote has no adapter. */
+export function detectForge(remoteUrl: string | null): Forge {
+	return forgeTarget(remoteUrl)?.forge ?? "unknown";
+}
+
+/**
+ * `owner/name` from a remote URL.
+ *
+ * Only the path is taken. The host and the transport were already judged by
+ * {@link forgeTarget}, which is the function that owns that decision; re-deciding
+ * them here would be a second opinion about which forge and CLI host a URL names.
+ */
+export function repoPathFromRemote(remoteUrl: string): string | null {
+	const url = remoteUrl.trim();
+	if (url === "") return null;
+	let path: string;
+	if (ALLOWED_SCHEME.test(url)) {
+		try {
+			path = new URL(url).pathname;
+		} catch {
+			return null;
+		}
+	} else {
+		const scp = /^(?:[^@/:]+@)?[^@/:]+:(?!\/)(.+)$/.exec(url);
+		const tail = scp?.[1];
+		if (tail === undefined) return null;
+		path = tail;
+	}
+	const trimmed = path.replace(/^\/+/, "").replace(/\/+$/, "").replace(/\.git$/i, "");
+	return trimmed === "" ? null : trimmed;
+}
+
+/**
+ * The whole scp-like spelling, matched end to end, with the parts named.
+ *
+ * {@link SCP_LIKE} anchors only the prefix, which is all {@link hostOf} needs. A
+ * redaction cannot work from a prefix match: `user:pass@host:path` matches that
+ * prefix with `user` as the host and leaves `pass@host:path` as the remainder, so
+ * echoing the remainder would echo the password. This pattern accounts for every
+ * character instead, and three exclusions are what make it safe to echo: the user
+ * and host charsets have no `:`, and the path has no `@`, so no arrangement of a
+ * `user:secret@host:path` string can match it — the host cannot span the `:`, and
+ * the path cannot span the `@`.
+ *
+ * A bracketed IPv6 literal is deliberately not accepted. Git's scp-like syntax
+ * cannot express one unambiguously, and no address literal is ever an allowlisted
+ * forge host, so the only thing supporting it would add is a second way to match.
+ */
+const WHOLE_SCP_LIKE = /^(?:([A-Za-z0-9._-]+)@)?([A-Za-z0-9.-]+):([^@?#\s]+)$/;
+
+/** What a remote URL is replaced by when no spelling this module reads accounts for it. */
+const UNREADABLE_REMOTE = "<unreadable remote url>";
+
+/**
+ * A remote URL reduced to what may be quoted: transport, host, port, and path.
+ *
+ * A remote URL is written into receipts and into refusal messages, and a receipt
+ * is a file: a remote spelled `https://user:token@github.com/o/r` would copy that
+ * token into a second place it then lives forever. A query string and a fragment
+ * go the same way — `?token=...` is a documented way to smuggle a credential into
+ * a URL, and neither part addresses a Git repository.
+ *
+ * Nothing is ever returned that this function did not account for in full. A URL
+ * that parses is rebuilt from `URL`, keeping the exact host, port, and path that
+ * were classified and dropping userinfo, query, and fragment. A scp-like remote is
+ * rebuilt from a whole-string match as `host:path`, dropping the username. Every
+ * other spelling — an unverified scheme, a URL `URL` rejects, anything shaped like
+ * nothing at all — becomes {@link UNREADABLE_REMOTE}, because a value no parser
+ * here agrees on is a value whose secret-bearing parts cannot be located, and a
+ * diagnostic is not worth copying an unknown string into a file that outlives it.
+ */
+export function redactRemote(remoteUrl: string): string {
+	const url = remoteUrl.trim();
+	if (ALLOWED_SCHEME.test(url)) {
+		let parsed: URL;
+		try {
+			parsed = new URL(url);
+		} catch {
+			return UNREADABLE_REMOTE;
+		}
+		if (parsed.username === "" && parsed.password === "" && parsed.search === "" && parsed.hash === "") return url;
+		parsed.username = "";
+		parsed.password = "";
+		parsed.search = "";
+		parsed.hash = "";
+		return parsed.toString();
+	}
+	const scp = WHOLE_SCP_LIKE.exec(url);
+	const host = scp?.[2];
+	const path = scp?.[3];
+	return host === undefined || path === undefined ? UNREADABLE_REMOTE : `${host}:${path}`;
 }
 
 /**
@@ -417,11 +594,11 @@ function removeSourceBranchAfterMerge(payload: unknown): boolean | null {
 export function autoDeleteSetting(forge: Forge, repo: string, run: CliRunner = runCli): "on" | "off" | "unknown" {
 	const supported = supportedForge(forge);
 	if (supported === null) return "unknown";
-	const path = normalizeRepoPath(repo, supported === "github" ? 2 : GITLAB_MAX_PATH_SEGMENTS);
+	const path = normalizeRepoPath(supported, repo);
 	if (path === null) return "unknown";
 	const argv = supported === "github"
 		? ["gh", "api", `repos/${path}`, "--jq", ".delete_branch_on_merge"]
-		: ["glab", "api", `projects/${encodeURIComponent(path)}`];
+		: ["glab", "api", `projects/${encodeURIComponent(path)}`, "--hostname", GITLAB_TARGET.canonicalHost];
 	const result = run(argv, { timeoutMs: FORGE_TIMEOUT_MS });
 	if (!result.ok || result.exitCode !== 0 || result.error !== undefined) return "unknown";
 	const text = result.stdout.trim();
@@ -463,14 +640,14 @@ export function enableAutoDelete(forge: Forge, repo: string, run: CliRunner = ru
 			reason: `forge is ${JSON.stringify(forge)}, expected "github" or "gitlab": no settings API is known for this remote`,
 		};
 	}
-	const path = normalizeRepoPath(repo, supported === "github" ? 2 : GITLAB_MAX_PATH_SEGMENTS);
+	const path = normalizeRepoPath(supported, repo);
 	if (path === null) {
 		const expected = supported === "github" ? '"<owner>/<name>"' : '"<group>/<project>", optionally with nested groups';
 		return { ok: false, reason: `repo is ${JSON.stringify(repo)}, expected ${expected}` };
 	}
 	const argv = supported === "github"
 		? ["gh", "api", "-X", "PATCH", `repos/${path}`, "-F", "delete_branch_on_merge=true"]
-		: ["glab", "api", "-X", "PUT", `projects/${encodeURIComponent(path)}`, "-F", "remove_source_branch_after_merge=true"];
+		: ["glab", "api", "-X", "PUT", `projects/${encodeURIComponent(path)}`, "--hostname", GITLAB_TARGET.canonicalHost, "-F", "remove_source_branch_after_merge=true"];
 	const result = run(argv, { timeoutMs: FORGE_TIMEOUT_MS });
 	if (!result.ok || result.exitCode !== 0 || result.error !== undefined) {
 		return { ok: false, reason: describeFailure(argv, result) };
@@ -549,15 +726,144 @@ function stdoutProvesExactHead(stdout: string, expectedRef: string): boolean {
 }
 
 /**
- * Whether `branch` is gone from `remote`, observed against the exact ref, from
+ * The verdict one `ls-remote` result proves about the ref that was asked for.
+ *
+ * Both probe modes read a result the same way, and the reading is the whole
+ * contract: this is the only place in the module that can return `"absent"`.
+ */
+function absenceVerdict(result: CliResult, ref: string): "absent" | "present" | "unknown" {
+	if (!result.ok || result.error !== undefined) return "unknown";
+	if (result.exitCode === 0) return stdoutProvesExactHead(result.stdout, ref) ? "present" : "unknown";
+	if (result.exitCode === 2 && result.stdout === "" && result.stderr === "") return "absent";
+	return "unknown";
+}
+
+/**
+ * The exact-ref query both probe modes issue, for a remote Git can already resolve.
+ *
+ * `remote` is an operand, so it is a name in both modes: in name mode the caller's,
+ * in URL mode {@link PROBE_REMOTE}, whose URL is configured in the environment. No
+ * URL is ever built into this argv.
+ */
+function lsRemoteArgv(remote: string, ref: string): string[] {
+	return [
+		"git",
+		...LS_REMOTE_PROTOCOL_POLICY,
+		"ls-remote",
+		"--exit-code",
+		"--heads",
+		"--upload-pack=git-upload-pack",
+		remote,
+		ref,
+	];
+}
+
+/**
+ * The remote name a URL probe puts on the command line.
+ *
+ * Opaque and fixed: it identifies nothing and is safe in a process listing, a
+ * refusal, or a log. The URL it stands for is configured in the child's
+ * environment instead.
+ */
+const PROBE_REMOTE = "omp-absence-probe";
+
+/**
+ * The repository a URL probe runs inside: the least Git accepts, and nothing else.
+ *
+ * Written with filesystem calls rather than `git init`, because a probe must not
+ * depend on spawning a second Git to isolate the first, and because an injected
+ * runner would have to answer that spawn too. Git accepts a directory with these
+ * four entries as a bare repository, which is all `ls-remote` needs: it never reads
+ * an object, a ref, or a work tree here.
+ */
+const PROBE_HEAD = "ref: refs/heads/main\n";
+const PROBE_CONFIG = "[core]\n\trepositoryformatversion = 0\n\tbare = true\n";
+
+function isolatedProbeRepository(directory: string): string | null {
+	const gitDir = join(directory, "probe.git");
+	try {
+		mkdirSync(join(gitDir, "objects"), { recursive: true });
+		mkdirSync(join(gitDir, "refs"), { recursive: true });
+		writeFileSync(join(gitDir, "HEAD"), PROBE_HEAD);
+		writeFileSync(join(gitDir, "config"), PROBE_CONFIG);
+		return gitDir;
+	} catch {
+		return null;
+	}
+}
+
+/**
+ * The environment for a URL probe: the URL itself, and no config file that could
+ * rewrite it.
+ *
+ * `GIT_CONFIG_COUNT` and its numbered key/value pair are a config source Git reads
+ * directly, so `remote.<opaque>.url` exists for exactly this child process and for
+ * no one else. That is the point: argv is world-readable — `ps` shows it to every
+ * user on the host, and it reaches logs and crash reports — while a child's
+ * environment is visible to the process itself and to root. A remote URL may carry
+ * `user:token@` userinfo or a `?token=` query, so the URL travels here and the
+ * command line carries {@link PROBE_REMOTE}.
+ *
+ * Written on top of {@link gitObservationEnvironment}, never beside it, because
+ * that function discards every inherited `GIT_*` name and would strip all of these
+ * if they were set first. `GIT_CONFIG_GLOBAL` and `GIT_CONFIG_NOSYSTEM` remove the
+ * file-based config sources, so the injected pair is the only configuration Git has:
+ * no `url.<base>.insteadOf` from a worktree, a home directory, or `/etc` can rewrite
+ * the URL the caller resolved.
+ *
+ * `GIT_DIR` closes the last way in, and it has to be `GIT_DIR` rather than a fence
+ * around discovery. A neutral directory is only neutral if Git cannot walk out of it,
+ * and `os.tmpdir()` answers from ambient `TMPDIR`, `TMP`, or `TEMP`: whoever sets
+ * those chooses where the probe directory is created, including inside a checkout.
+ * `GIT_CEILING_DIRECTORIES` alone was measured doing nothing for this read — with the
+ * ceiling set to the probe directory, a parent checkout's local
+ * `url.<base>.insteadOf` still rewrote the probe URL and `ls-remote` answered from the
+ * repository that rewrite named. Pointing `GIT_DIR` at a repository this module
+ * created removes discovery instead of fencing it: Git uses the repository it is
+ * given, and the only local config in play is the two `core` lines written into it.
+ * The ceiling is kept as a second line, not as the defence.
+ *
+ * Ordinary process state, credentials, and SSH's own configuration are untouched: an
+ * unauthenticated or unreachable probe is a different answer, and this one must stay
+ * able to succeed.
+ */
+function urlProbeEnvironment(
+	source: NodeJS.ProcessEnv,
+	url: string,
+	probeDirectory: string,
+	gitDir: string,
+): Readonly<Record<string, string>> {
+	const env = Object.assign(Object.create(null) as Record<string, string>, gitObservationEnvironment(source));
+	env.GIT_CONFIG_GLOBAL = devNull;
+	env.GIT_CONFIG_NOSYSTEM = "1";
+	env.GIT_CONFIG_COUNT = "1";
+	env.GIT_CONFIG_KEY_0 = `remote.${PROBE_REMOTE}.url`;
+	env.GIT_CONFIG_VALUE_0 = url;
+	env.GIT_CEILING_DIRECTORIES = probeDirectory;
+	env.GIT_DIR = gitDir;
+	return env;
+}
+
+/**
+ * Whether `branch` is gone from `remoteOrUrl`, observed against the exact ref, from
  * inside `cwd`.
  *
- * `remote` is a configured remote name, which only resolves inside the repository
- * that configures it, so the directory the question is answered in is an explicit
- * argument rather than whatever directory the process happens to be in. An
- * `"absent"` verdict reached from the wrong directory is a false absence, and a
- * false absence is what marks a branch deleted that still exists. An empty `cwd`
- * is `"unknown"` for the same reason: there is no directory to be right about.
+ * `remoteOrUrl` is either a configured remote name or a URL, and which one a caller
+ * passes decides what the answer is about. A name is re-resolved by whichever
+ * repository and worktree answers the question — `git remote get-url` expands
+ * `insteadOf`, and `extensions.worktreeConfig` scopes such a rewrite to one
+ * worktree — so a caller that already resolved a URL, or whose target worktree is
+ * gone, passes the URL and asks about the repository it means. An `"absent"` verdict
+ * reached against the wrong repository is a false absence, and a false absence is
+ * what marks a branch deleted that still exists.
+ *
+ * `cwd` stays an explicit argument for both spellings rather than whatever directory
+ * the process happens to be in: a name has nowhere else to resolve, and a URL still
+ * needs a repository for the protocol and helper pins below. An empty `cwd` is
+ * `"unknown"` for the same reason: there is no directory to be right about.
+ *
+ * Only the verdict is returned. A URL may carry credentials, and this function never
+ * puts what it was given into its result, so no caller can leak one by quoting it.
  *
  * `git ls-remote --exit-code` reports exit 2 when no ref matched. That status
  * proves `"absent"` only with empty stdout and stderr. Exit 0 proves
@@ -574,26 +880,70 @@ function stdoutProvesExactHead(stdout: string, expectedRef: string): boolean {
  * setting value reaches it.
  */
 export function remoteBranchAbsent(
-	remote: string,
+	remoteOrUrl: string,
 	branch: string,
 	cwd: string,
 	run: CliRunner = runCli,
+	environment: NodeJS.ProcessEnv = process.env,
 ): "absent" | "present" | "unknown" {
-	if (!isSafeArgument(remote) || !isValidBranchName(branch) || cwd.trim() === "") return "unknown";
+	if (!isSafeArgument(remoteOrUrl) || !isValidBranchName(branch)) return "unknown";
 	const ref = `refs/heads/${branch}`;
-	const argv = [
-		"git",
-		...LS_REMOTE_PROTOCOL_POLICY,
-		"ls-remote",
-		"--exit-code",
-		"--heads",
-		"--upload-pack=git-upload-pack",
-		remote,
-		ref,
-	];
-	const result = run(argv, { cwd, timeoutMs: FORGE_TIMEOUT_MS, env: gitObservationEnvironment() });
-	if (!result.ok || result.error !== undefined) return "unknown";
-	if (result.exitCode === 0) return stdoutProvesExactHead(result.stdout, ref) ? "present" : "unknown";
-	if (result.exitCode === 2 && result.stdout === "" && result.stderr === "") return "absent";
-	return "unknown";
+	// URL mode is entered only for a spelling {@link forgeTarget} has already verified
+	// — an allowlisted host reached over an allowlisted transport — never by guessing
+	// that a string looks URL-ish, so no unverified scheme can select it.
+	//
+	// A URL names its repository outright, and the one thing that could still change
+	// which repository is contacted is `url.<base>.insteadOf`, which rewrites URLs and
+	// not just remote names. `extensions.worktreeConfig` can scope such a rewrite to
+	// whichever worktree happens to answer the question, which is how a probe asked
+	// after a worktree is gone ends up at a different repository and reports a branch
+	// absent that still exists.
+	//
+	// So the probe runs from a directory that is not a checkout, with no global and no
+	// system file, and the directory is removed whatever the outcome — and the URL
+	// itself never reaches the command line. It is configured for this one child
+	// through {@link urlProbeEnvironment}, and argv names {@link PROBE_REMOTE}: `ps`
+	// shows argv to every user on the host, so a `user:token@` or `?token=` URL on a
+	// command line is a credential published to the machine.
+	if (forgeTarget(remoteOrUrl) !== null) {
+		let neutral: string;
+		try {
+			// Resolved to its physical path: `os.tmpdir()` answers from ambient TMPDIR and
+			// that path is commonly a symlink, while the ceiling below must name the path
+			// Git resolves.
+			neutral = realpathSync(mkdtempSync(join(tmpdir(), "forge-ls-remote-")));
+		} catch {
+			// A probe with nowhere neutral to run cannot prove absence.
+			return "unknown";
+		}
+		try {
+			// Without a repository of its own, Git goes looking for one, and the ambient
+			// TMPDIR decides what it finds.
+			const gitDir = isolatedProbeRepository(neutral);
+			if (gitDir === null) return "unknown";
+			const result = run(lsRemoteArgv(PROBE_REMOTE, ref), {
+				cwd: neutral,
+				timeoutMs: FORGE_TIMEOUT_MS,
+				env: urlProbeEnvironment(environment, remoteOrUrl, neutral, gitDir),
+			});
+			return absenceVerdict(result, ref);
+		} finally {
+			try {
+				rmSync(neutral, { recursive: true, force: true });
+			} catch {
+				// The probe repository holds four entries and no object; a verdict is not
+				// worth throwing over a directory the OS will reclaim.
+			}
+		}
+	}
+	// Name mode, unchanged: a remote name resolves only inside the repository that
+	// configures it, so the directory stays required and stays the caller's. A name is
+	// not a secret, so it stays an operand.
+	if (cwd.trim() === "") return "unknown";
+	const result = run(lsRemoteArgv(remoteOrUrl, ref), {
+		cwd,
+		timeoutMs: FORGE_TIMEOUT_MS,
+		env: gitObservationEnvironment(environment),
+	});
+	return absenceVerdict(result, ref);
 }

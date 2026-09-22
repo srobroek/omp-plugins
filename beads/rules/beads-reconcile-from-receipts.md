@@ -52,7 +52,12 @@ MUST require exact close proof before automatic close:
 - every child bead closed.
 A receipt's own cleanup flags and a live absence verdict are never close proof; they only contradict a receipt that claims a cleanup which did not happen. Partial, cleaned, and unobserved (`proof.method` `unknown`) receipts provide repair evidence only.
 
-MUST keep repairs convergent with this four-item allowlist: release a dead assignment or lease under CAS; set the `pr`, `merge_sha`, `base`, `branch`, and `head_sha` anchors only when absent, and report any present value that differs instead of overwriting it; add a `discovered-from` edge only when the source identity is authoritative; add a merge audit event only when missing. Record semantic events with [rule://beads-audit]rule://beads-audit.
+MUST keep repairs convergent with this four-item allowlist:
+- release a dead assignment or lease under CAS;
+- set the `pr`, `merge_sha`, `base`, `branch`, and `head_sha` anchors only when absent, and report any present value that differs instead of overwriting it;
+- add a `discovered-from` edge only when the source identity is authoritative; and
+- add a merge audit event only when missing.
+Record semantic events with [rule://beads-audit]rule://beads-audit.
 
 NEVER auto-reopen, auto-supersede, force-close, or prune. Report a conflicting field with its observed and expected values. Every refusal names the exact missing proof. Never overwrite a conflict, promote `unknown` to `true`, or infer absence from a successful mutation.
 

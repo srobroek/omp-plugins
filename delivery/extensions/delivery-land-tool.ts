@@ -55,13 +55,19 @@ import pkg from "../package.json" with { type: "json" };
 import {
 	autoDeleteSetting,
 	type CliRunner,
-	detectForge,
 	enableAutoDelete,
 	FORGE_TIMEOUT_MS,
-	type Forge,
+	forgeEnvironment,
+	forgeTarget,
+	gitObservationEnvironment,
 	mergeArgs,
+	normalizeRepoPath,
+	REMOTE_NAME,
+	redactRemote,
 	remoteBranchAbsent,
+	repoPathFromRemote,
 	runCli,
+	singleRemoteRecord,
 } from "./forge-adapter.ts";
 import {
 	buildReceipt,
@@ -88,16 +94,6 @@ const GIT_TIMEOUT_MS = 5_000;
  * just as readily.
  */
 const POSITIVE_INTEGER = /^[1-9][0-9]*$/;
-
-/**
- * What a remote name may be.
- *
- * `git remote get-url` takes the name as an argument, so a leading `-` would be a
- * flag. {@link remoteBranchAbsent} rejects such a value itself and would return
- * `"unknown"`, but this file reaches Git first and refuses by name instead, which
- * is the more useful diagnostic.
- */
-const REMOTE_NAME = /^[A-Za-z0-9._][A-Za-z0-9._/-]*$/;
 
 /**
  * The branch convention that names the work a landing closes.
@@ -132,51 +128,6 @@ const PR_FIELDS = "number,url,state,baseRefName,headRefName,headRefOid,mergeComm
  */
 const FULL_OID = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
 
-/**
- * One segment of an `owner/name` path this file will bind as an argv element.
- *
- * The lookahead requires an alphanumeric somewhere in the segment, which is what
- * rejects `.` and `..` — either would walk the repository the caller named into a
- * different one. A leading `-` is rejected by the first character class, because
- * `--repo -x` would be read as a flag rather than a repository.
- */
-const REPO_SEGMENT = /^(?=[^/]*[A-Za-z0-9])[A-Za-z0-9._][A-Za-z0-9._-]*$/;
-
-/**
- * Ambient variables that redirect a forge command away from the repository this
- * call resolved from the remote.
- *
- * `gh` reads `GH_REPO` and `GH_HOST`. `glab` reads four: `GITLAB_HOST`, its older
- * `GL_HOST` spelling, `GITLAB_URI`, and `GITLAB_API_HOST`, which redirects API
- * traffic on its own even when the web host looks right. All six are dropped for
- * every forge command on both forges, because a session that exported a GitLab
- * variable is not required to be landing on GitLab — an ambient value belongs to
- * whoever exported it, not to this call.
- *
- * Stripping, rather than binding a host into `--repo`: `gh` accepts
- * `HOST/OWNER/REPO`, but the adapter builds its settings reads as
- * `repos/<owner>/<name>` and `projects/<encoded path>`, which a host-prefixed value
- * would corrupt. Removing the override pins every command, those included, to the
- * host {@link detectForge} verified.
- *
- * Nothing else is removed: dropping `GH_TOKEN`, `GITLAB_TOKEN` or `GL_TOKEN` would
- * turn a bound command into an unauthenticated one, which is a different failure
- * and not a safer one.
- */
-const FORGE_REDIRECTORS: readonly string[] = ["GH_REPO", "GH_HOST", "GITLAB_HOST", "GL_HOST", "GITLAB_URI", "GITLAB_API_HOST"];
-
-/**
- * The environment a forge command runs with: everything inherited except the
- * variables in {@link FORGE_REDIRECTORS}.
- */
-function forgeEnvironment(env: NodeJS.ProcessEnv): Readonly<Record<string, string>> {
-	const clean = Object.create(null) as Record<string, string>;
-	for (const [key, value] of Object.entries(env)) {
-		if (value === undefined || FORGE_REDIRECTORS.includes(key)) continue;
-		clean[key] = value;
-	}
-	return clean;
-}
 
 export type LandParams = {
 	pr: number | string;
@@ -398,15 +349,15 @@ function mergeProof(pr: PrObservation): { oid: string } | { reason: string } {
 }
 
 /** Exact stdout of one successful local Git read, or null when Git did not complete it. */
-function gitOutput(run: CliRunner, cwd: string, argv: readonly string[]): string | null {
-	const result = run(["git", ...argv], { cwd, timeoutMs: GIT_TIMEOUT_MS });
+function gitOutput(
+	run: CliRunner,
+	cwd: string,
+	argv: readonly string[],
+	env: Readonly<Record<string, string>>,
+): string | null {
+	const result = run(["git", ...argv], { cwd, timeoutMs: GIT_TIMEOUT_MS, env });
 	if (!result.ok || result.error !== undefined || result.exitCode !== 0) return null;
 	return result.stdout;
-}
-
-/** Trimmed stdout for scalar Git reads whose values are not filesystem paths. */
-function gitText(run: CliRunner, cwd: string, argv: readonly string[]): string | null {
-	return gitOutput(run, cwd, argv)?.trim() ?? null;
 }
 
 /**
@@ -420,66 +371,15 @@ function gitText(run: CliRunner, cwd: string, argv: readonly string[]): string |
 function observeRepository(
 	run: CliRunner,
 	cwd: string,
+	env: Readonly<Record<string, string>>,
 ): { key: string; canonicalRoot: string; ledger: CanonicalLedger } | { reason: string } {
-	const repository = repositoryContext(cwd, (argv, gitCwd) => gitOutput(run, gitCwd, argv));
+	const repository = repositoryContext(cwd, (argv, gitCwd) => gitOutput(run, gitCwd, argv, env));
 	if (repository === null) {
 		return {
 			reason: `git ${REPOSITORY_OBSERVATION_ARGS.join(" ")} in ${cwd}: observed no unambiguous repository paths, expected absolute git common directory and checkout top level`,
 		};
 	}
 	return { key: repository.key, canonicalRoot: repository.ledger.root, ledger: repository.ledger };
-}
-
-/**
- * `owner/name` from a remote URL.
- *
- * Only the path is taken. The host and the transport were already judged by
- * {@link detectForge}, which is the module that owns that decision; re-deciding it
- * here would be a second opinion about which forge a URL names.
- */
-export function repoPathFromRemote(remoteUrl: string): string | null {
-	const url = remoteUrl.trim();
-	if (url === "") return null;
-	let path: string;
-	if (/^(?:https|ssh):\/\//i.test(url)) {
-		try {
-			path = new URL(url).pathname;
-		} catch {
-			return null;
-		}
-	} else {
-		const scp = /^(?:[^@/:]+@)?[^@/:]+:(?!\/)(.+)$/.exec(url);
-		const tail = scp?.[1];
-		if (tail === undefined) return null;
-		path = tail;
-	}
-	const trimmed = path.replace(/^\/+/, "").replace(/\/+$/, "").replace(/\.git$/i, "");
-	return trimmed === "" ? null : trimmed;
-}
-
-/**
- * A remote URL with its userinfo removed.
- *
- * `repo.remote` is a receipt field and a receipt is a file: a remote spelled
- * `https://user:token@github.com/o/r` would copy that token into a second place
- * it then lives forever. Only the URL forms can carry a password, and rebuilding
- * from `URL` keeps the exact host, port, and path that were classified. A remote
- * that does not parse is returned unchanged rather than guessed at — it named no
- * userinfo this function could find, and dropping the value would lose the only
- * record of what was contacted.
- */
-export function redactRemote(remoteUrl: string): string {
-	const url = remoteUrl.trim();
-	if (!/^(?:https|ssh):\/\//i.test(url)) return url;
-	try {
-		const parsed = new URL(url);
-		if (parsed.username === "" && parsed.password === "") return url;
-		parsed.username = "";
-		parsed.password = "";
-		return parsed.toString();
-	} catch {
-		return url;
-	}
 }
 
 /** The bead ids a landing closes, read from the agent branch convention. */
@@ -552,6 +452,7 @@ export function landPullRequest(params: LandParams, deps: LandDeps = {}): LandOu
 	const cwd = deps.cwd ?? process.cwd();
 	const env = deps.env ?? process.env;
 	const forgeEnv = forgeEnvironment(env);
+	const gitEnv = gitObservationEnvironment(env);
 	// Every adapter call runs with the same neutralised environment, except where the
 	// adapter passes one of its own: `remoteBranchAbsent` hardens Git's environment
 	// itself, and that choice belongs to the module that owns the observation.
@@ -567,50 +468,99 @@ export function landPullRequest(params: LandParams, deps: LandDeps = {}): LandOu
 		return refuse(`pr: observed ${show(params.pr)}, expected a positive integer of at most ${Number.MAX_SAFE_INTEGER}`);
 	}
 
+	// Before reading any repository state, reject an explicit identity that cannot
+	// be valid for either supported forge. GitLab's bounded nested-group form is
+	// the superset; the forge-specific boundary below tightens GitHub to exactly
+	// two segments once the trusted remote identifies the forge.
+	const explicitRepo = params.repo === undefined || params.repo.trim() === "" ? null : params.repo.trim();
+	if (explicitRepo !== null && normalizeRepoPath("gitlab", explicitRepo) === null) {
+		return refuse(
+			`repo: observed ${show(explicitRepo)}, expected an unqualified "<owner>/<name>" or bounded GitLab "<group>/.../<project>" path`,
+		);
+	}
+
 	const remote = params.remote === undefined || params.remote.trim() === "" ? "origin" : params.remote.trim();
 	if (!REMOTE_NAME.test(remote)) return refuse(`remote: observed ${show(params.remote)}, expected a git remote name`);
 
-	const repository = observeRepository(run, cwd);
+	const repository = observeRepository(run, cwd, gitEnv);
 	if ("reason" in repository) return refuse(repository.reason);
 
-	const remoteText = gitText(run, cwd, ["remote", "get-url", remote]);
-	if (remoteText === null || remoteText === "") {
-		return refuse(`git remote get-url ${remote}: observed no URL, expected a configured remote in ${cwd}`);
+	// The raw stdout, parsed as exactly one record rather than trimmed: `URL` deletes
+	// embedded tabs and newlines before parsing, so a remote spelled with one, or a
+	// remote printing two URLs, would classify here as an ordinary forge URL while Git
+	// contacts something else. This identity binds the merge argv, so the disagreement
+	// would not merely misreport — it would merge somewhere nobody named.
+	//
+	// The refusal names the shape, never the bytes: a remote URL may carry userinfo or a
+	// token query, and output no parser here accepts cannot be redacted, because
+	// `redactRemote` can only locate a secret in a spelling it understands.
+	const printed = gitOutput(run, cwd, ["remote", "get-url", remote], gitEnv);
+	const remoteText = printed === null ? null : singleRemoteRecord(printed);
+	if (remoteText === null) {
+		const observed = printed === null ? "no completed read" : "malformed Git remote output";
+		return refuse(
+			`git remote get-url ${remote}: observed ${observed}, expected exactly one URL record for a configured remote in ${cwd}`,
+		);
 	}
-	const forge: Forge = detectForge(remoteText);
-	// The URL is classified before it is redacted: `detectForge` owns that judgement
-	// and must see the spelling Git will actually contact.
+	const target = forgeTarget(remoteText);
+	// The URL is classified before it is redacted: `forgeTarget` owns that
+	// judgement and must see the spelling Git will actually contact.
 	const remoteUrl = redactRemote(remoteText);
-	if (forge !== "github" && forge !== "gitlab") {
-		return refuse(`repo.forge: observed ${show(forge)} for remote ${remote} at ${show(remoteUrl)}, expected "github" or "gitlab"`);
+	if (target === null) {
+		return refuse(`repo.forge: observed "unknown" for remote ${remote} at ${show(remoteUrl)}, expected "github" or "gitlab"`);
 	}
+	const { forge } = target;
 
 	const fromRemote = repoPathFromRemote(remoteText);
-	const nameWithOwner = params.repo === undefined || params.repo.trim() === "" ? fromRemote : params.repo.trim();
-	if (nameWithOwner === null) {
+	if (fromRemote === null && explicitRepo === null) {
 		return refuse(`repo.nameWithOwner: observed no owner/name in remote ${remote} at ${show(remoteUrl)}, expected "<owner>/<name>"`);
 	}
-	// Every forge command this tool issues binds the repository explicitly with
-	// `--repo`, so neither the working directory nor `GH_REPO` decides which
-	// repository is read and merged. That makes the value an argv element and a
-	// security boundary: it is shape-checked before any command is built.
-	const segments = nameWithOwner.split("/");
-	if (segments.length < 2 || !segments.every(segment => REPO_SEGMENT.test(segment))) {
-		return refuse(
-			`repo: observed ${show(nameWithOwner)}, expected an "<owner>/<name>" path whose segments hold letters, digits, ".", "_" or "-" and can be bound as one argv element`,
-		);
+	const normalizedRemote = fromRemote === null ? null : normalizeRepoPath(forge, fromRemote);
+	if (fromRemote !== null && normalizedRemote === null) {
+		const expected = forge === "github" ? 'exactly "<owner>/<name>"' : 'a bounded "<group>/.../<project>" path';
+		return refuse(`repo: observed ${show(fromRemote)} from remote ${remote}, expected ${expected}`);
+	}
+	const candidate = explicitRepo ?? normalizedRemote;
+	if (candidate === null) {
+		return refuse(`repo.nameWithOwner: observed no owner/name in remote ${remote} at ${show(remoteUrl)}, expected "<owner>/<name>"`);
+	}
+	// This adapter-owned normalization is the one path boundary every forge
+	// command below shares, and it runs before any host is prefixed: an explicit
+	// `repo` is reduced to exactly two segments on GitHub and a bounded group path
+	// on GitLab, so no caller-supplied string can occupy the host position.
+	const nameWithOwner = normalizeRepoPath(forge, candidate);
+	if (nameWithOwner === null) {
+		const expected = forge === "github" ? 'exactly "<owner>/<name>"' : 'a bounded "<group>/.../<project>" path';
+		return refuse(`repo: observed ${show(candidate)}, expected ${expected}`);
 	}
 	// A `repo` override that disagrees with the remote is still refused, naming both:
 	// the remote is what `git ls-remote` will be asked about when the branch's absence
 	// is verified, so a receipt built from two different repositories would be proof
 	// of neither.
-	if (fromRemote !== null && nameWithOwner !== fromRemote) {
+	if (normalizedRemote !== null && nameWithOwner !== normalizedRemote) {
 		return refuse(
-			`repo: observed ${show(nameWithOwner)}, expected ${show(fromRemote)} from remote ${remote}; the branch absence is verified against ${remote}, so both must name one repository`,
+			`repo: observed ${show(nameWithOwner)}, expected ${show(normalizedRemote)} from remote ${remote}; the branch absence is verified against ${remote}, so both must name one repository`,
 		);
 	}
+	// Only now, on top of a normalized path, is the host added — and it is added to
+	// both forges. `gh` documents `--repo [HOST/]OWNER/REPO` and `glab` the same
+	// shape, so each CLI is told the host explicitly rather than resolving a bare
+	// path against whichever host it has configured. The value is not caller data:
+	// it is what `forgeTarget` returned for the transport host Git will contact, so
+	// an alternate SSH endpoint such as `altssh.gitlab.com` still addresses the
+	// vendor's canonical API host. The same verified host is pinned in the
+	// environment, which is where a CLI would otherwise read a default from.
+	const cliRepo = `${target.canonicalHost}/${nameWithOwner}`;
+	const forgeCommandEnv = Object.assign(
+		Object.create(null) as Record<string, string>,
+		forgeEnv,
+		forge === "github"
+			? { GH_HOST: target.canonicalHost }
+			: { GITLAB_HOST: target.canonicalHost, GITLAB_API_HOST: target.canonicalHost },
+	);
+	const boundForgeRun: CliRunner = (argv, options) => run(argv, { ...options, env: options.env ?? forgeCommandEnv });
 
-	const first = readPr(run, forge, nameWithOwner, number, FORGE_TIMEOUT_MS, forgeEnv);
+	const first = readPr(run, forge, cliRepo, number, FORGE_TIMEOUT_MS, forgeCommandEnv);
 	if ("reason" in first) return refuse(first.reason);
 	const subject = subjectDrift(first.pr, requested, null, first.argv.join(" "));
 	if (subject !== null) return refuse(`${subject}; no merge was issued and no receipt was written`);
@@ -633,10 +583,10 @@ export function landPullRequest(params: LandParams, deps: LandDeps = {}): LandOu
 	const unnamed = missingBeadIdentity(identity.ids, first.pr.headRefName, repository.ledger);
 	if (unnamed !== null) return refuse(`${unnamed}; no merge was issued and no receipt was written`);
 
-	const observedAutoDelete: ReceiptAutoDelete = autoDeleteSetting(forge, nameWithOwner, forgeRun);
+	const observedAutoDelete: ReceiptAutoDelete = autoDeleteSetting(forge, nameWithOwner, boundForgeRun);
 	const notes: string[] = [];
 	if (params.setupAutoDelete === true) {
-		const enabled = enableAutoDelete(forge, nameWithOwner, forgeRun);
+		const enabled = enableAutoDelete(forge, nameWithOwner, boundForgeRun);
 		notes.push(
 			enabled.ok
 				? `setupAutoDelete: the forge accepted a deletion-on-merge write; the setting observed before the request was ${observedAutoDelete}, which is what this receipt records because acceptance is not a re-read.`
@@ -668,18 +618,18 @@ export function landPullRequest(params: LandParams, deps: LandDeps = {}): LandOu
 			// `gh pr merge --match-head-commit` and `glab mr merge --sha` each fail the merge
 			// unless the source head is still this commit. Neither is a default.
 			const binding = forge === "github" ? ["--match-head-commit", head] : ["--sha", head];
-			mergeArgv = [...mergeArgs(forge, number), "--repo", nameWithOwner, ...binding];
+			mergeArgv = [...mergeArgs(forge, number), "--repo", cliRepo, ...binding];
 		} catch (error) {
 			return refuse(error instanceof Error ? error.message : String(error));
 		}
-		const merged = run(mergeArgv, { cwd, timeoutMs: FORGE_TIMEOUT_MS, env: forgeEnv });
+		const merged = run(mergeArgv, { cwd, timeoutMs: FORGE_TIMEOUT_MS, env: forgeCommandEnv });
 		if (!merged.ok || merged.error !== undefined || merged.exitCode !== 0) {
 			const observed = merged.error ?? (merged.exitCode === null ? "no exit status" : `exit ${merged.exitCode}`);
 			const stderr = merged.stderr.trim();
 			const detail = stderr === "" ? "" : `; stderr: ${stderr.slice(0, 400)}`;
 			return refuse(`${mergeArgv.join(" ")}: observed ${observed}, expected exit 0${detail}; no receipt was written`);
 		}
-		const second = readPr(run, forge, nameWithOwner, number, FORGE_TIMEOUT_MS, forgeEnv);
+		const second = readPr(run, forge, cliRepo, number, FORGE_TIMEOUT_MS, forgeCommandEnv);
 		rereadArgv = second.argv;
 		if ("reason" in second) return refuse(second.reason);
 		// The re-read must describe the same pull request, at the same head, on the same
@@ -699,7 +649,7 @@ export function landPullRequest(params: LandParams, deps: LandDeps = {}): LandOu
 
 	// The probe is asked from this call's own working directory: `remote` is a name,
 	// and a name only resolves in the repository that configures it.
-	const verdict = remoteBranchAbsent(remote, proved.headRefName, cwd, forgeRun);
+	const verdict = remoteBranchAbsent(remote, proved.headRefName, cwd, forgeRun, env);
 	if (verdict !== "absent") {
 		notes.push(
 			`The remote branch ${proved.headRefName} on ${remote} is ${verdict}, not proved absent, so branch.deletedRemote stays false and remoteAbsenceVerifiedAt stays null.`,
