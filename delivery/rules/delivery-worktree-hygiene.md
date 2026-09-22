@@ -19,7 +19,7 @@ MUST WH-3: commit after each bounded coherent change. Push before every session 
 
 MUST WH-4: keep scratch files, logs, and repro scripts outside every worktree. A file written inside one dirties the tree or lands in a commit.
 
-MUST WH-5: act on the first hygiene reminder. A session receives at most three, and proved progress resets the count. The third reminder escalates whether the residual was measured or only suspected: it dispatches the report-only `worktree-reaper` to inspect and report the residual, and it names the lifecycle that removes state. When the residual could not be measured, report it rather than act on it. The reaper mutates nothing, so its inventory authorizes no removal; removal happens only through `delivery_cleanup` under WH-6, after a landing is proved.
+MUST WH-5: act on the first hygiene reminder. A session receives at most three, and proved progress resets the count. The third reminder escalates whether the residual was measured or only suspected: it instructs the main agent or run lead to invoke the report-only `worktree-reaper` to inspect and report the residual, and it names the lifecycle that removes state. When the residual could not be measured, report it rather than act on it. The reaper mutates nothing, so its inventory authorizes no removal; removal happens only through `delivery_cleanup` under WH-6, after a landing is proved.
 
 ## Remove landed state
 
