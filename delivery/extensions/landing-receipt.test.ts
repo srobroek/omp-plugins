@@ -882,6 +882,37 @@ describe("canonicalLedger", () => {
 		expect(canonicalLedger(linked)).toEqual({ root: realpathSync(repository), active: true });
 	});
 
+	test("a linked worktree of a separate-git-dir repository fails closed", () => {
+		const parent = scratch("ledger-linked-separate-git-dir");
+		const checkout = join(parent, "checkout");
+		const common = join(parent, "store.git");
+		const linked = join(parent, "linked");
+		mkdirSync(checkout);
+		git(checkout, "init", "-b", "main", `--separate-git-dir=${common}`);
+		writeFileSync(join(checkout, "file.txt"), "one\n");
+		git(checkout, "add", "file.txt");
+		git(checkout, "commit", "-m", "one");
+		git(checkout, "worktree", "add", linked, "-b", "side");
+
+		expect(canonicalLedger(linked)).toBeNull();
+	});
+
+	test("a linked worktree of a bare repository fails closed", () => {
+		const parent = scratch("ledger-linked-bare");
+		const source = join(parent, "source");
+		const bare = join(parent, "bare.git");
+		const linked = join(parent, "linked");
+		mkdirSync(source);
+		git(source, "init", "-b", "main");
+		writeFileSync(join(source, "file.txt"), "one\n");
+		git(source, "add", "file.txt");
+		git(source, "commit", "-m", "one");
+		git(parent, "clone", "--bare", source, bare);
+		git(bare, "worktree", "add", linked, "-b", "side");
+
+		expect(canonicalLedger(linked)).toBeNull();
+	});
+
 	test("a separate git directory still classifies from its checkout root", () => {
 		const parent = scratch("ledger-separate-git-dir");
 		const checkout = join(parent, "checkout");
