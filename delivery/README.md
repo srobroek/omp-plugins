@@ -1,7 +1,7 @@
 # delivery
 
-The delivery plugin warns when a `git push` names `main` or `master` as its destination.
-It also documents pull-request review, landing proof, native isolation cleanup, and Beads linkage.
+The delivery plugin limits task scope and warns when a `git push` names `main` or
+`master`. It also covers pull-request review, landing proof, native isolation cleanup, and Beads linkage.
 
 ## Agents
 
@@ -14,6 +14,7 @@ It also documents pull-request review, landing proof, native isolation cleanup, 
 | Name | When |
 | --- | --- |
 | `delivery-git-workflow` | Create or review pull requests, run automated-review loops, prove landing, clean native isolation clones, or link delivery to Beads. |
+| `delivery-task-scope` | Every task: modify only artifacts directly required by the current request or claimed work item. |
 | `delivery-main-branch-push-advisory` | A bash call names `main` or `master` as a `git push` destination. |
 
 The advisory never blocks a command (`interruptMode: never`). It matches bash arguments as text and recognizes destinations such as `origin main`, `HEAD:main`, `refs/heads/main`, `:main`, and `+HEAD:main`.
