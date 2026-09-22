@@ -62,7 +62,10 @@ import {
 	gitObservationEnvironment,
 	mergeArgs,
 	normalizeRepoPath,
+	REMOTE_NAME,
+	redactRemote,
 	remoteBranchAbsent,
+	repoPathFromRemote,
 	runCli,
 } from "./forge-adapter.ts";
 import {
@@ -90,16 +93,6 @@ const GIT_TIMEOUT_MS = 5_000;
  * just as readily.
  */
 const POSITIVE_INTEGER = /^[1-9][0-9]*$/;
-
-/**
- * What a remote name may be.
- *
- * `git remote get-url` takes the name as an argument, so a leading `-` would be a
- * flag. {@link remoteBranchAbsent} rejects such a value itself and would return
- * `"unknown"`, but this file reaches Git first and refuses by name instead, which
- * is the more useful diagnostic.
- */
-const REMOTE_NAME = /^[A-Za-z0-9._][A-Za-z0-9._/-]*$/;
 
 /**
  * The branch convention that names the work a landing closes.
@@ -393,57 +386,6 @@ function observeRepository(
 	return { key: repository.key, canonicalRoot: repository.ledger.root, ledger: repository.ledger };
 }
 
-/**
- * `owner/name` from a remote URL.
- * Only the path is taken. The host and the transport were already judged by
- * {@link forgeTarget}, which is the module that owns that decision; re-deciding
- * them here would be a second opinion about which forge and CLI host a URL names.
- */
-export function repoPathFromRemote(remoteUrl: string): string | null {
-	const url = remoteUrl.trim();
-	if (url === "") return null;
-	let path: string;
-	if (/^(?:https|ssh):\/\//i.test(url)) {
-		try {
-			path = new URL(url).pathname;
-		} catch {
-			return null;
-		}
-	} else {
-		const scp = /^(?:[^@/:]+@)?[^@/:]+:(?!\/)(.+)$/.exec(url);
-		const tail = scp?.[1];
-		if (tail === undefined) return null;
-		path = tail;
-	}
-	const trimmed = path.replace(/^\/+/, "").replace(/\/+$/, "").replace(/\.git$/i, "");
-	return trimmed === "" ? null : trimmed;
-}
-
-/**
- * A remote URL with its userinfo removed.
- *
- * `repo.remote` is a receipt field and a receipt is a file: a remote spelled
- * `https://user:token@github.com/o/r` would copy that token into a second place
- * it then lives forever. Only the URL forms can carry a password, and rebuilding
- * from `URL` keeps the exact host, port, and path that were classified. A remote
- * that does not parse is returned unchanged rather than guessed at — it named no
- * userinfo this function could find, and dropping the value would lose the only
- * record of what was contacted.
- */
-export function redactRemote(remoteUrl: string): string {
-	const url = remoteUrl.trim();
-	if (!/^(?:https|ssh):\/\//i.test(url)) return url;
-	try {
-		const parsed = new URL(url);
-		if (parsed.username === "" && parsed.password === "") return url;
-		parsed.username = "";
-		parsed.password = "";
-		return parsed.toString();
-	} catch {
-		return url;
-	}
-}
-
 /** The bead ids a landing closes, read from the agent branch convention. */
 export function beadIdsFromBranch(branch: string): string[] {
 	const id = AGENT_BRANCH.exec(branch.trim())?.[1];
@@ -574,8 +516,9 @@ export function landPullRequest(params: LandParams, deps: LandDeps = {}): LandOu
 		return refuse(`repo.nameWithOwner: observed no owner/name in remote ${remote} at ${show(remoteUrl)}, expected "<owner>/<name>"`);
 	}
 	// This adapter-owned normalization is the one path boundary every forge
-	// command below shares. GitLab's canonical host is added separately so a
-	// nested group cannot collide with a configured host alias.
+	// command below shares, and it runs before any host is prefixed: an explicit
+	// `repo` is reduced to exactly two segments on GitHub and a bounded group path
+	// on GitLab, so no caller-supplied string can occupy the host position.
 	const nameWithOwner = normalizeRepoPath(forge, candidate);
 	if (nameWithOwner === null) {
 		const expected = forge === "github" ? 'exactly "<owner>/<name>"' : 'a bounded "<group>/.../<project>" path';
@@ -590,13 +533,22 @@ export function landPullRequest(params: LandParams, deps: LandDeps = {}): LandOu
 			`repo: observed ${show(nameWithOwner)}, expected ${show(normalizedRemote)} from remote ${remote}; the branch absence is verified against ${remote}, so both must name one repository`,
 		);
 	}
-	const cliRepo = forge === "gitlab" ? `${target.canonicalHost}/${nameWithOwner}` : nameWithOwner;
-	const forgeCommandEnv = forge === "gitlab"
-		? Object.assign(Object.create(null) as Record<string, string>, forgeEnv, {
-			GITLAB_HOST: target.canonicalHost,
-			GITLAB_API_HOST: target.canonicalHost,
-		})
-		: forgeEnv;
+	// Only now, on top of a normalized path, is the host added — and it is added to
+	// both forges. `gh` documents `--repo [HOST/]OWNER/REPO` and `glab` the same
+	// shape, so each CLI is told the host explicitly rather than resolving a bare
+	// path against whichever host it has configured. The value is not caller data:
+	// it is what `forgeTarget` returned for the transport host Git will contact, so
+	// an alternate SSH endpoint such as `altssh.gitlab.com` still addresses the
+	// vendor's canonical API host. The same verified host is pinned in the
+	// environment, which is where a CLI would otherwise read a default from.
+	const cliRepo = `${target.canonicalHost}/${nameWithOwner}`;
+	const forgeCommandEnv = Object.assign(
+		Object.create(null) as Record<string, string>,
+		forgeEnv,
+		forge === "github"
+			? { GH_HOST: target.canonicalHost }
+			: { GITLAB_HOST: target.canonicalHost, GITLAB_API_HOST: target.canonicalHost },
+	);
 	const boundForgeRun: CliRunner = (argv, options) => run(argv, { ...options, env: options.env ?? forgeCommandEnv });
 
 	const first = readPr(run, forge, cliRepo, number, FORGE_TIMEOUT_MS, forgeCommandEnv);

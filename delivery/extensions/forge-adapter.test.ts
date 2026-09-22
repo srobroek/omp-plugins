@@ -16,7 +16,10 @@ import {
 	forgeTarget,
 	mergeArgs,
 	normalizeRepoPath,
+	REMOTE_NAME,
+	redactRemote,
 	remoteBranchAbsent,
+	repoPathFromRemote,
 	runCli,
 } from "./forge-adapter.ts";
 
@@ -316,6 +319,85 @@ describe("normalizeRepoPath", () => {
 				expect(normalizeRepoPath(forge, repo)).toBeNull();
 			}
 		}
+	});
+});
+
+describe("REMOTE_NAME", () => {
+	test("the names Git configures are accepted", () => {
+		for (const name of ["origin", "upstream", "fork-2", "my.remote", "_private", "team/mirror"]) {
+			expect(REMOTE_NAME.test(name)).toBe(true);
+		}
+	});
+
+	/**
+	 * A trailing line terminator is the case worth pinning. ECMAScript's `$` is
+	 * end-of-input without the `m` flag, so none of these ever matched — but `$` with
+	 * `m` accepts every one of them, and the pattern is exported and spent by two
+	 * tools. These assertions fail the moment the tail stops being exact, whatever
+	 * made it stop.
+	 */
+	test("nothing may follow the name, including a final line terminator", () => {
+		for (const suffix of ["\n", "\r", "\r\n", "\u2028", "\u2029", " ", "\t", "\0"]) {
+			expect(REMOTE_NAME.test(`origin${suffix}`)).toBe(false);
+		}
+	});
+
+	test("a leading dash, padding, or an empty name is refused", () => {
+		for (const name of ["-upload-pack=touch", "--repo", " origin", "or igin", "", "-", "/origin"]) {
+			expect(REMOTE_NAME.test(name)).toBe(false);
+		}
+	});
+});
+
+describe("repoPathFromRemote", () => {
+	test("the owner and name come from the remote path in each spelling git accepts", () => {
+		expect(repoPathFromRemote("https://github.com/srobroek/omp-plugins.git")).toBe("srobroek/omp-plugins");
+		expect(repoPathFromRemote("git@github.com:srobroek/omp-plugins.git")).toBe("srobroek/omp-plugins");
+		expect(repoPathFromRemote("ssh://git@gitlab.com/group/sub/project")).toBe("group/sub/project");
+		expect(repoPathFromRemote("https://github.com/")).toBeNull();
+		expect(repoPathFromRemote("")).toBeNull();
+	});
+});
+
+describe("redactRemote", () => {
+	test("userinfo is dropped while the host, port and path that were classified survive", () => {
+		expect(redactRemote("https://srobroek:ghp_secret@github.com:8443/srobroek/omp-plugins.git"))
+			.toBe("https://github.com:8443/srobroek/omp-plugins.git");
+		expect(redactRemote("https://github.com/srobroek/omp-plugins.git")).toBe("https://github.com/srobroek/omp-plugins.git");
+	});
+
+	test("a query string and a fragment are dropped with the userinfo", () => {
+		expect(redactRemote("https://github.com/srobroek/omp-plugins.git?token=ghp_secret"))
+			.toBe("https://github.com/srobroek/omp-plugins.git");
+		expect(redactRemote("https://github.com/srobroek/omp-plugins.git#ghp_secret"))
+			.toBe("https://github.com/srobroek/omp-plugins.git");
+		expect(redactRemote("ssh://git:ghp_secret@github.com/o/r.git?token=ghp_secret#ghp_secret"))
+			.toBe("ssh://github.com/o/r.git");
+	});
+
+	/**
+	 * Every string below carries a secret in a position this module cannot locate:
+	 * the URL does not parse, so `URL` names no userinfo to remove, and the scp-like
+	 * grammar does not account for a password. Returning the input would copy the
+	 * secret into the refusal message and into the receipt that quotes it.
+	 */
+	test("a spelling no parser here accounts for is replaced, never echoed", () => {
+		for (const remote of [
+			"https://srobroek:ghp_secret@github.com:99999/o/r.git",
+			"ssh://git:ghp_secret@github.com:-1/o/r.git",
+			"srobroek:ghp_secret@github.com:o/r.git",
+			"git://srobroek:ghp_secret@github.com/o/r.git",
+			"ghp_secret",
+		]) {
+			const redacted = redactRemote(remote);
+			expect(redacted).toBe("<unreadable remote url>");
+			expect(redacted).not.toContain("ghp_secret");
+		}
+	});
+
+	test("an scp-like remote keeps its host and path and loses its username", () => {
+		expect(redactRemote("git@github.com:srobroek/omp-plugins.git")).toBe("github.com:srobroek/omp-plugins.git");
+		expect(redactRemote("github.com:srobroek/omp-plugins.git")).toBe("github.com:srobroek/omp-plugins.git");
 	});
 });
 
@@ -863,6 +945,7 @@ describe("every issued command", () => {
 	test("the runtime surface is exactly the contract the delivery tools import", () => {
 		expect(Object.keys(adapter).sort()).toEqual([
 			"FORGE_TIMEOUT_MS",
+			"REMOTE_NAME",
 			"autoDeleteSetting",
 			"detectForge",
 			"enableAutoDelete",
@@ -871,7 +954,9 @@ describe("every issued command", () => {
 			"gitObservationEnvironment",
 			"mergeArgs",
 			"normalizeRepoPath",
+			"redactRemote",
 			"remoteBranchAbsent",
+			"repoPathFromRemote",
 			"runCli",
 		]);
 	});

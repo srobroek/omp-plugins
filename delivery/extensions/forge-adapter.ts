@@ -143,6 +143,25 @@ const SCP_LIKE = /^(?:[^@/:]+@)?([^@/:]+):(?!\/)/;
 const REPO_SEGMENT = /^[A-Za-z0-9._-]+$/;
 
 /**
+ * What a Git remote name may be.
+ *
+ * `git remote get-url` and `git ls-remote` take the name as an argument, so a
+ * leading `-` would be read as a flag. The charset is the one Git spells a
+ * configured remote with, which also excludes whitespace and control characters:
+ * a value outside it names no remote this repository configures, and guessing
+ * which remote was meant is how a read ends up answered by another repository.
+ *
+ * The tail is asserted with `(?![\s\S])` rather than `$`. Both are exact today —
+ * ECMAScript's `$` matches only at the end of input unless `multiline` is set,
+ * unlike Perl and Python, where it also matches before a final newline. The
+ * difference is what `$` would mean after an edit this pattern cannot see: it is
+ * exported and spent by two tools, and adding an `m` flag, or reusing the source in
+ * a multiline pattern, would silently widen `origin` to `origin\n` and hand a
+ * trailing newline to a command. `(?![\s\S])` cannot be relaxed by a flag.
+ */
+export const REMOTE_NAME = /^[A-Za-z0-9._][A-Za-z0-9._/-]*(?![\s\S])/;
+
+/**
  * Characters that disqualify a branch name.
  *
  * `~^:?*[]\` and whitespace are what `git check-ref-format` itself forbids. The
@@ -368,6 +387,94 @@ export function forgeTarget(remoteUrl: string | null): ForgeTarget | null {
 /** Classify a remote URL. An unverified remote has no adapter. */
 export function detectForge(remoteUrl: string | null): Forge {
 	return forgeTarget(remoteUrl)?.forge ?? "unknown";
+}
+
+/**
+ * `owner/name` from a remote URL.
+ *
+ * Only the path is taken. The host and the transport were already judged by
+ * {@link forgeTarget}, which is the function that owns that decision; re-deciding
+ * them here would be a second opinion about which forge and CLI host a URL names.
+ */
+export function repoPathFromRemote(remoteUrl: string): string | null {
+	const url = remoteUrl.trim();
+	if (url === "") return null;
+	let path: string;
+	if (ALLOWED_SCHEME.test(url)) {
+		try {
+			path = new URL(url).pathname;
+		} catch {
+			return null;
+		}
+	} else {
+		const scp = /^(?:[^@/:]+@)?[^@/:]+:(?!\/)(.+)$/.exec(url);
+		const tail = scp?.[1];
+		if (tail === undefined) return null;
+		path = tail;
+	}
+	const trimmed = path.replace(/^\/+/, "").replace(/\/+$/, "").replace(/\.git$/i, "");
+	return trimmed === "" ? null : trimmed;
+}
+
+/**
+ * The whole scp-like spelling, matched end to end, with the parts named.
+ *
+ * {@link SCP_LIKE} anchors only the prefix, which is all {@link hostOf} needs. A
+ * redaction cannot work from a prefix match: `user:pass@host:path` matches that
+ * prefix with `user` as the host and leaves `pass@host:path` as the remainder, so
+ * echoing the remainder would echo the password. This pattern accounts for every
+ * character instead, and three exclusions are what make it safe to echo: the user
+ * and host charsets have no `:`, and the path has no `@`, so no arrangement of a
+ * `user:secret@host:path` string can match it — the host cannot span the `:`, and
+ * the path cannot span the `@`.
+ *
+ * A bracketed IPv6 literal is deliberately not accepted. Git's scp-like syntax
+ * cannot express one unambiguously, and no address literal is ever an allowlisted
+ * forge host, so the only thing supporting it would add is a second way to match.
+ */
+const WHOLE_SCP_LIKE = /^(?:([A-Za-z0-9._-]+)@)?([A-Za-z0-9.-]+):([^@?#\s]+)$/;
+
+/** What a remote URL is replaced by when no spelling this module reads accounts for it. */
+const UNREADABLE_REMOTE = "<unreadable remote url>";
+
+/**
+ * A remote URL reduced to what may be quoted: transport, host, port, and path.
+ *
+ * A remote URL is written into receipts and into refusal messages, and a receipt
+ * is a file: a remote spelled `https://user:token@github.com/o/r` would copy that
+ * token into a second place it then lives forever. A query string and a fragment
+ * go the same way — `?token=...` is a documented way to smuggle a credential into
+ * a URL, and neither part addresses a Git repository.
+ *
+ * Nothing is ever returned that this function did not account for in full. A URL
+ * that parses is rebuilt from `URL`, keeping the exact host, port, and path that
+ * were classified and dropping userinfo, query, and fragment. A scp-like remote is
+ * rebuilt from a whole-string match as `host:path`, dropping the username. Every
+ * other spelling — an unverified scheme, a URL `URL` rejects, anything shaped like
+ * nothing at all — becomes {@link UNREADABLE_REMOTE}, because a value no parser
+ * here agrees on is a value whose secret-bearing parts cannot be located, and a
+ * diagnostic is not worth copying an unknown string into a file that outlives it.
+ */
+export function redactRemote(remoteUrl: string): string {
+	const url = remoteUrl.trim();
+	if (ALLOWED_SCHEME.test(url)) {
+		let parsed: URL;
+		try {
+			parsed = new URL(url);
+		} catch {
+			return UNREADABLE_REMOTE;
+		}
+		if (parsed.username === "" && parsed.password === "" && parsed.search === "" && parsed.hash === "") return url;
+		parsed.username = "";
+		parsed.password = "";
+		parsed.search = "";
+		parsed.hash = "";
+		return parsed.toString();
+	}
+	const scp = WHOLE_SCP_LIKE.exec(url);
+	const host = scp?.[2];
+	const path = scp?.[3];
+	return host === undefined || path === undefined ? UNREADABLE_REMOTE : `${host}:${path}`;
 }
 
 /**

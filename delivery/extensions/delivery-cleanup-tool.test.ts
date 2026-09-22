@@ -66,7 +66,6 @@ type RecordedCall = {
 
 type RunnerOptions = {
 	pr?: Partial<{
-		nameWithOwner: string;
 		state: string;
 		baseRefName: string;
 		headRefName: string;
@@ -75,7 +74,12 @@ type RunnerOptions = {
 		mergedAt: string | null;
 		url: string;
 	}>;
-	repository?: Record<string, unknown>;
+	/**
+	 * What each remote name resolves to, for a checkout whose remotes do not all
+	 * name the repository the receipt was written for. Absent, every name resolves
+	 * to the receipt's own repository; present, a name it omits is no remote at all.
+	 */
+	remotes?: Record<string, string>;
 	beadStatus?: string;
 	beadRows?: Record<string, unknown>[];
 	beadMergeSha?: string;
@@ -262,6 +266,21 @@ function gitlabPayload(f: Fixture, over: RunnerOptions["pr"] = {}): string {
 	});
 }
 
+/**
+ * The URL a remote name resolves to, which is the one Git read this runner scripts.
+ *
+ * The fixture's real `origin` is a local bare path, and no forge adapter verifies
+ * a path as a host. The remote NAME is what a receipt records; the URL is what
+ * classification and every forge query are bound to, so it is scripted here, and
+ * `remotes` is how a contributor fork on `origin` is expressed.
+ */
+function remoteUrl(f: Fixture, remote: string, options: RunnerOptions): string | null {
+	if (options.remotes !== undefined) return options.remotes[remote] ?? null;
+	const { forge, nameWithOwner } = f.receipt.repo;
+	const host = forge === "gitlab" ? "gitlab.com" : "github.com";
+	return `https://${host}/${nameWithOwner}.git`;
+}
+
 function runner(f: Fixture, options: RunnerOptions = {}): { run: CliRunner; calls: string[][]; details: RecordedCall[] } {
 	const calls: string[][] = [];
 	const details: RecordedCall[] = [];
@@ -270,12 +289,8 @@ function runner(f: Fixture, options: RunnerOptions = {}): { run: CliRunner; call
 		details.push({ argv: [...argv], cwd: commandOptions.cwd, timeoutMs: commandOptions.timeoutMs, env: commandOptions.env });
 		options.before?.(argv, calls);
 		let result: CliResult;
-		if (argv[0] === "gh" && argv[1] === "repo") {
-			result = success(JSON.stringify(options.repository ?? { nameWithOwner: "owner/repo" }));
-		} else if (argv[0] === "gh") {
+		if (argv[0] === "gh") {
 			result = success(githubPayload(f, options.pr));
-		} else if (argv[0] === "glab" && argv[1] === "repo") {
-			result = success(JSON.stringify(options.repository ?? { path_with_namespace: "group/project" }));
 		} else if (argv[0] === "glab") {
 			result = success(gitlabPayload(f, options.pr));
 		} else if (argv[0] === "bd") {
@@ -287,6 +302,11 @@ function runner(f: Fixture, options: RunnerOptions = {}): { run: CliRunner; call
 					metadata: { merge_sha: options.beadMergeSha ?? f.merge },
 				}],
 			}));
+		} else if (argv[0] === "git" && argv[1] === "remote" && argv[2] === "get-url") {
+			const url = remoteUrl(f, argv[3] ?? "", options);
+			result = url === null
+				? { ok: true, exitCode: 1, stdout: "", stderr: `error: No such remote '${argv[3]}'\n` }
+				: success(`${url}\n`);
 		} else if (argv[0] === "git" && argv.includes("ls-remote")) {
 			const remote = options.remote ?? "absent";
 			if (remote === "absent") result = success("", 2);
@@ -351,9 +371,9 @@ describe("delivery_cleanup irreversible boundary", () => {
 			remote: "origin",
 		});
 		expect(calls.slice(0, 2)).toEqual([
-			["gh", "repo", "view", "--json", "nameWithOwner"],
+			["git", "remote", "get-url", "origin"],
 			[
-				"gh", "pr", "view", "17", "--repo", "owner/repo", "--json",
+				"gh", "pr", "view", "17", "--repo", "github.com/owner/repo", "--json",
 				"number,url,state,baseRefName,headRefName,headRefOid,mergeCommit,mergedAt",
 			],
 		]);
@@ -417,30 +437,61 @@ describe("delivery_cleanup irreversible boundary", () => {
 		const { result, calls } = invoke(f, { receipt: path });
 
 		expect(refusal(result)).toContain('repo.nameWithOwner: observed "owner/repo", expected receipt value "attacker/elsewhere"');
-		expect(calls.slice(0, 2)).toEqual([
-			["gh", "repo", "view", "--json", "nameWithOwner"],
-			[
-				"gh", "pr", "view", "17", "--repo", "owner/repo", "--json",
-				"number,url,state,baseRefName,headRefName,headRefOid,mergeCommit,mergedAt",
-			],
-		]);
+		expect(calls).toEqual([["git", "remote", "get-url", "origin"]]);
 		expect(commandCalls(calls, "bd")).toEqual([]);
 		expect(mutationCalls(calls)).toEqual([]);
 		expect(existsSync(f.linked)).toBe(true);
 	}, 60_000);
 
-	test("an incomplete local repository identity refuses before the pull-request query", () => {
-		const f = fixture("incomplete-local-repo", "feat/incomplete-local-repo", "retired");
+	test("a receipt remote that cannot name one verified repository fails closed", () => {
+		const f = fixture("remote-identity", "feat/remote-identity", "retired");
+		// A leading dash is an option to `git remote get-url`; whitespace padding is a
+		// receipt that does not say which remote. Neither is trimmed into something
+		// usable, and neither reaches a command.
+		//
+		// The four line terminators are here because a receipt is a file: a generator
+		// that wrote `origin\n` produced a value that must refuse, and U+2028/U+2029 are
+		// line terminators to a JavaScript regex while surviving a JSON round trip
+		// untouched. The assertion is that no command is issued at all, not merely that
+		// the name was normalised.
+		for (const remote of [
+			"--upload-pack=touch",
+			" origin",
+			"origin\n",
+			"origin\r",
+			"origin\r\n",
+			"origin\u2028",
+			"origin\u2029",
+			"or igin",
+		]) {
+			const receipt = buildReceipt({
+				...f.receipt,
+				now: NOW + 1,
+				continues: f.receipt,
+				repo: { ...f.receipt.repo, remote },
+			});
+			const path = writeReceipt(receipt, receiptDirectory(f.env, receipt.repo.key));
+			const { result, calls } = invoke(f, { receipt: path });
+			expect(refusal(result)).toContain(`repo.remote: observed ${JSON.stringify(remote)}, expected a git remote name`);
+			expect(calls).toEqual([]);
+			rmSync(path);
+		}
 
-		const { result, calls } = invoke(f, { receipt: f.receiptPath }, { repository: {} });
-
-		expect(refusal(result)).toContain("repo.nameWithOwner");
-		expect(calls).toEqual([["gh", "repo", "view", "--json", "nameWithOwner"]]);
-		expect(mutationCalls(calls)).toEqual([]);
+		for (const [field, remotes] of [
+			["repo.remote", {}],
+			["repo.forge", { origin: "https://evil.example/owner/repo.git" }],
+			["repo.forge", { origin: "https://gitlab.com/owner/repo.git" }],
+			["repo.nameWithOwner", { origin: "https://github.com/" }],
+			["repo.nameWithOwner", { origin: "https://github.com/attacker/elsewhere.git" }],
+		] as const) {
+			const { result, calls } = invoke(f, { receipt: f.receiptPath }, { remotes });
+			expect(refusal(result)).toContain(field);
+			expect(calls).toEqual([["git", "remote", "get-url", "origin"]]);
+		}
 		expect(existsSync(f.linked)).toBe(true);
 	}, 60_000);
 
-	test("GitLab observes the local project before querying its merge request", () => {
+	test("GitLab queries the receipt's project on the canonical host", () => {
 		const f = fixture("gitlab-local-repo", "feat/gitlab-local-repo", "retired");
 		const receipt = buildReceipt({
 			...f.receipt,
@@ -458,16 +509,78 @@ describe("delivery_cleanup irreversible boundary", () => {
 		f.receipt = receipt;
 		f.receiptPath = path;
 
-		const { result, calls } = invoke(f);
+		const { result, calls, details } = invoke(f);
 
 		expect(result.ok).toBe(true);
 		expect(calls.slice(0, 2)).toEqual([
-			["glab", "repo", "view", "--output", "json"],
-			["glab", "mr", "view", "17", "--repo", "group/project", "--output", "json"],
+			["git", "remote", "get-url", "origin"],
+			["glab", "mr", "view", "17", "--repo", "gitlab.com/group/project", "--output", "json"],
 		]);
+		const mr = details.find(call => call.argv[0] === "glab");
+		expect(mr?.env?.GITLAB_HOST).toBe("gitlab.com");
+		expect(mr?.env?.GITLAB_API_HOST).toBe("gitlab.com");
+		expect(mr?.cwd).toBeUndefined();
 	}, 60_000);
 
-	test("cleanup strips every ambient forge redirector from both local and pull-request reads", () => {
+	/**
+	 * The finding this pins: a checkout whose `origin` is a contributor fork and
+	 * whose `upstream` is the remote the landing was run with. `gh repo view` and
+	 * `glab repo view` answer for `origin`, so the observation came out of the fork
+	 * and a valid upstream receipt was refused, blocking cleanup after a landing
+	 * that had already succeeded — while the receipt named the right remote all
+	 * along.
+	 */
+	for (const forge of ["github", "gitlab"] as const) {
+		test(`${forge}: the observation follows the receipt's remote while origin is a fork`, () => {
+			const f = fixture(`fork-origin-${forge}`, `feat/fork-origin-${forge}`, "retired");
+			git(f.main, ["remote", "add", "upstream", f.bare]);
+			const nameWithOwner = forge === "github" ? "owner/repo" : "group/project";
+			const host = forge === "github" ? "github.com" : "gitlab.com";
+			const receipt = buildReceipt({
+				...f.receipt,
+				now: NOW + 1,
+				continues: f.receipt,
+				repo: { ...f.receipt.repo, remote: "upstream", forge, nameWithOwner },
+				pr: forge === "github" ? f.receipt.pr : {
+					...f.receipt.pr,
+					url: `https://gitlab.com/${nameWithOwner}/-/merge_requests/17`,
+					state: "merged",
+				},
+				proof: { ...f.receipt.proof, method: forge === "github" ? "gh pr view" : "glab mr view" },
+			});
+			f.receiptPath = writeReceipt(receipt, receiptDirectory(f.env, receipt.repo.key));
+			f.receipt = receipt;
+
+			const { result, calls } = invoke(f, { receipt: f.receiptPath }, {
+				remotes: {
+					origin: `https://${host}/contributor/fork.git`,
+					upstream: `https://${host}/${nameWithOwner}.git`,
+				},
+			});
+
+			expect(result.ok).toBe(true);
+			expect(calls.slice(0, 2)).toEqual([
+				["git", "remote", "get-url", "upstream"],
+				forge === "github"
+					? [
+						"gh", "pr", "view", "17", "--repo", "github.com/owner/repo", "--json",
+						"number,url,state,baseRefName,headRefName,headRefOid,mergeCommit,mergedAt",
+					]
+					: ["glab", "mr", "view", "17", "--repo", "gitlab.com/group/project", "--output", "json"],
+			]);
+			expect(calls.filter(argv => argv[1] === "remote" && argv[2] === "get-url")).toEqual([
+				["git", "remote", "get-url", "upstream"],
+			]);
+			expect(calls.flat().join(" ")).not.toContain("contributor/fork");
+			expect(calls.flat()).not.toContain("origin");
+			expect(existsSync(f.linked)).toBe(false);
+			if (!result.ok) return;
+			expect(result.receipt.repo.remote).toBe("upstream");
+			expect(result.receipt.proof.method).toBe(forge === "github" ? "gh pr view" : "glab mr view");
+		}, 60_000);
+	}
+
+	test("cleanup strips every ambient forge and Git selector from the identity and pull-request reads", () => {
 		const f = fixture("ambient-redirectors", "feat/ambient-redirectors", "retired");
 		Object.assign(f.env, {
 			GH_REPO: "attacker/elsewhere",
@@ -476,6 +589,9 @@ describe("delivery_cleanup irreversible boundary", () => {
 			GL_HOST: "evil.example",
 			GITLAB_URI: "https://evil.example",
 			GITLAB_API_HOST: "api.evil.example",
+			GIT_DIR: "/elsewhere/.git",
+			GIT_WORK_TREE: "/elsewhere",
+			GIT_CONFIG_GLOBAL: "/elsewhere/config",
 			GH_TOKEN: "keep-gh",
 			GITLAB_TOKEN: "keep-gitlab",
 			GL_TOKEN: "keep-gl",
@@ -485,14 +601,22 @@ describe("delivery_cleanup irreversible boundary", () => {
 
 		expect(result.ok).toBe(true);
 		const forgeCalls = details.filter(call => call.argv[0] === "gh");
-		expect(forgeCalls).toHaveLength(2);
+		expect(forgeCalls).toHaveLength(1);
 		for (const call of forgeCalls) {
-			for (const key of ["GH_REPO", "GH_HOST", "GITLAB_HOST", "GL_HOST", "GITLAB_URI", "GITLAB_API_HOST"]) {
+			for (const key of ["GH_REPO", "GITLAB_HOST", "GL_HOST", "GITLAB_URI", "GITLAB_API_HOST"]) {
 				expect(call.env?.[key]).toBeUndefined();
 			}
+			// Not merely stripped: replaced by the host `forgeTarget` verified, so the
+			// CLI cannot fall back to a configured default host either.
+			expect(call.env?.GH_HOST).toBe("github.com");
 			expect(call.env?.GH_TOKEN).toBe("keep-gh");
 			expect(call.env?.GITLAB_TOKEN).toBe("keep-gitlab");
 			expect(call.env?.GL_TOKEN).toBe("keep-gl");
+		}
+		const identityRead = details.find(call => call.argv[1] === "remote" && call.argv[2] === "get-url");
+		expect(identityRead?.argv).toEqual(["git", "remote", "get-url", "origin"]);
+		for (const key of ["GIT_DIR", "GIT_WORK_TREE", "GIT_CONFIG_GLOBAL"]) {
+			expect(identityRead?.env?.[key]).toBeUndefined();
 		}
 	}, 60_000);
 
@@ -635,7 +759,7 @@ describe("delivery_cleanup irreversible boundary", () => {
 		expect(refusal(result)).toContain("expected a configured upstream branch");
 		expect(commandCalls(calls, "bd")).toEqual([]);
 		expect(mutationCalls(calls)).toEqual([]);
-	});
+	}, 60_000);
 
 	test("reconciliation requires every bead merge_sha to equal the receipt exactly", () => {
 		const f = fixture("ledger-sha");

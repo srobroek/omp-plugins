@@ -8,7 +8,13 @@ import {
 	type CliRunner,
 	FORGE_TIMEOUT_MS,
 	forgeEnvironment,
+	forgeTarget,
+	gitObservationEnvironment,
+	normalizeRepoPath,
+	REMOTE_NAME,
+	redactRemote,
 	remoteBranchAbsent,
+	repoPathFromRemote,
 	runCli,
 } from "./forge-adapter.ts";
 import {
@@ -29,6 +35,9 @@ const MAX_CLI_JSON_BYTES = 1024 * 1024;
 const MAX_DIRTY_PATHS = 8;
 const DELIVERY_VERSION = "0.12.0";
 const LOCAL_REF_PREFIX = "refs/heads/";
+
+/** The GitHub fields this observation needs, in one `--json` projection. */
+const PR_FIELDS = "number,url,state,baseRefName,headRefName,headRefOid,mergeCommit,mergedAt";
 
 export type DeliveryCleanupParams = {
 	receipt?: string;
@@ -68,8 +77,11 @@ type TargetIdentity = { records: WorktreeRecord[]; target: WorktreeRecord; main:
  * One observed pull request, in receipt spelling, plus the CLI and verb that
  * observed it — which is what the continuation receipt records as `proof.method`,
  * so the field names a command this call actually issued.
+ *
+ * It carries no repository identity: the repository was decided, and cross-checked
+ * against the receipt, before this read was issued.
  */
-type PullRequestObservation = ReceiptPr & { nameWithOwner: string; method: string };
+type PullRequestObservation = ReceiptPr & { method: string };
 type ReceiptResolution =
 	| { tag: "resolved"; receipt: LandingReceipt }
 	| { tag: "refused"; failure: CleanupFailure };
@@ -132,24 +144,6 @@ function integer(holder: Record<string, unknown>, key: string): number | null {
 	return typeof value === "number" && Number.isSafeInteger(value) && value > 0 ? value : null;
 }
 
-const REPOSITORY_SEGMENT = /^(?=[^/]*[A-Za-z0-9])[A-Za-z0-9._][A-Za-z0-9._-]*$/;
-
-function repositoryPath(value: unknown, maxSegments: number): string | null {
-	if (typeof value !== "string") return null;
-	const segments = value.trim().split("/");
-	if (segments.length < 2 || segments.length > maxSegments) return null;
-	if (segments.some(segment => !REPOSITORY_SEGMENT.test(segment))) return null;
-	return segments.join("/");
-}
-
-function firstRepositoryPath(holder: Record<string, unknown>, keys: readonly string[], maxSegments: number): string | null {
-	for (const key of keys) {
-		const path = repositoryPath(own(holder, key), maxSegments);
-		if (path !== null) return path;
-	}
-	return null;
-}
-
 function parseJsonObject(field: string, result: CliResult): Record<string, unknown> | CleanupFailure {
 	if (!completed(result)) return commandFailure(field, [], result, "a successful bounded forge read");
 	if (Buffer.byteLength(result.stdout) > MAX_CLI_JSON_BYTES) {
@@ -170,34 +164,113 @@ function normalizedOid(value: unknown): string | null {
 	return oid === "" ? null : oid;
 }
 
-function githubObservation(
+/**
+ * The repository one receipt's own remote names, pinned to the forge's canonical
+ * CLI host.
+ *
+ * `cliRepo` is what `--repo` receives, and both CLIs take `<host>/<path>` there:
+ * `gh` documents `[HOST/]OWNER/REPO` and `glab` the same shape. Qualifying it is
+ * what stops a bare path from being resolved against a configured host alias.
+ * `nameWithOwner` stays unqualified: that is the spelling the receipt records, and
+ * the spelling this identity had to equal to exist at all.
+ */
+type RemoteIdentity = {
+	forge: "github" | "gitlab";
+	nameWithOwner: string;
+	cliRepo: string;
+	env: Readonly<Record<string, string>>;
+};
+
+/**
+ * Resolve the repository to observe from `repo.remote` — never from whichever
+ * repository a forge CLI infers from the directory it runs in.
+ *
+ * `gh repo view` and `glab repo view` answer about whichever repository their CLI
+ * treats as the local default, which is `origin`. On a checkout whose `origin` is
+ * a contributor fork and whose `upstream` is the remote the landing was run with,
+ * that is not the repository the receipt proves: the pull request came out of the
+ * fork, and the identity comparison then refused a valid receipt, so cleanup
+ * stayed blocked after a landing that had already succeeded. The remote *name* is
+ * the field the receipt records, so the URL is resolved from that name, inside the
+ * repository that configures it, and every forge command is bound to the identity
+ * that URL names. That also moves the identity decision ahead of every forge call,
+ * instead of catching a foreign repository only after one was issued against it.
+ *
+ * The Git read runs with {@link gitObservationEnvironment}: an ambient `GIT_DIR`,
+ * `GIT_WORK_TREE`, or `GIT_CONFIG_*` selector decides which repository's remotes
+ * are read, which is the same substitution by another route. The forge reads run
+ * with {@link forgeEnvironment} and, on GitLab, an explicitly pinned canonical
+ * host, and they are given no working directory at all: the repository is named
+ * in the request, and nothing about the answer may depend on where the call was
+ * made.
+ *
+ * Every part of the identity is refused rather than guessed at: a receipt whose
+ * remote is not a remote name, names no configured remote, names a host no
+ * adapter verifies, names a different forge than the receipt recorded, carries no
+ * `<owner>/<name>`, or names a repository other than the one the receipt proves is
+ * not an observation. The last of those is the cross-check that makes a receipt
+ * non-transferable: it is decided here, before one forge command is issued, so a
+ * receipt carried into another checkout asks that checkout's forge nothing.
+ */
+function resolveRemoteIdentity(
 	receipt: LandingReceipt,
 	run: CliRunner,
 	cwd: string,
-	env: Readonly<Record<string, string>>,
-): PullRequestObservation | CleanupFailure {
-	const repoArgv = ["gh", "repo", "view", "--json", "nameWithOwner"];
-	const repoResult = run(repoArgv, { cwd, timeoutMs: FORGE_TIMEOUT_MS, env });
-	if (!completed(repoResult)) return commandFailure("repo", repoArgv, repoResult, "a successful bounded local GitHub repository read");
-	const repoRoot = parseJsonObject("repo", repoResult);
-	if (isFailure(repoRoot)) return repoRoot;
-	const nameWithOwner = repositoryPath(own(repoRoot, "nameWithOwner"), 2);
-	if (nameWithOwner === null) {
-		return refuse("repo.nameWithOwner", own(repoRoot, "nameWithOwner"), "a complete owner/name from gh repo view");
+	forgeEnv: Readonly<Record<string, string>>,
+	env: NodeJS.ProcessEnv,
+): RemoteIdentity | CleanupFailure {
+	// Tested exactly as recorded, not trimmed first: `" origin"` is not the name of a
+	// remote, it is a receipt that does not say which remote, and normalising it here
+	// would let this call answer a question the receipt never asked.
+	const remote = receipt.repo.remote;
+	if (!REMOTE_NAME.test(remote)) return refuse("repo.remote", remote, "a git remote name");
+	const argv = ["git", "remote", "get-url", remote];
+	const expected = `one URL for the configured remote ${remote} in ${cwd}`;
+	const result = run(argv, { cwd, timeoutMs: LOCAL_TIMEOUT_MS, env: gitObservationEnvironment(env) });
+	if (!completed(result)) return commandFailure("repo.remote", argv, result, expected);
+	const remoteText = result.stdout.trim();
+	if (remoteText === "") return refuse("repo.remote", "no URL", expected);
+	// Classified before it is redacted: `forgeTarget` owns that judgement and must
+	// see the spelling Git will actually contact.
+	const target = forgeTarget(remoteText);
+	const remoteUrl = redactRemote(remoteText);
+	if (target === null) {
+		return refuse("repo.forge", `"unknown" for remote ${remote} at ${show(remoteUrl)}`, '"github" or "gitlab"');
 	}
+	const forgeFailure = compare("repo.forge", target.forge, receipt.repo.forge);
+	if (forgeFailure !== null) return forgeFailure;
+	const fromRemote = repoPathFromRemote(remoteText);
+	const nameWithOwner = fromRemote === null ? null : normalizeRepoPath(target.forge, fromRemote);
+	if (nameWithOwner === null) {
+		const shape = target.forge === "github" ? 'exactly "<owner>/<name>"' : 'a bounded "<group>/.../<project>" path';
+		return refuse("repo.nameWithOwner", fromRemote, `${shape} from remote ${remote} at ${show(remoteUrl)}`);
+	}
+	const identityFailure = compare("repo.nameWithOwner", nameWithOwner, receipt.repo.nameWithOwner);
+	if (identityFailure !== null) return identityFailure;
+	// Both forges are addressed by canonical host and path, and both have that host
+	// pinned in the environment as well. The host is not caller data: it is the
+	// verified value `forgeTarget` returned for the transport host Git will contact,
+	// so `gh` and `glab` are told the same thing twice and can infer neither from a
+	// configured alias nor from the directory.
+	const cliRepo = `${target.canonicalHost}/${nameWithOwner}`;
+	const commandEnv = Object.assign(
+		Object.create(null) as Record<string, string>,
+		forgeEnv,
+		target.forge === "github"
+			? { GH_HOST: target.canonicalHost }
+			: { GITLAB_HOST: target.canonicalHost, GITLAB_API_HOST: target.canonicalHost },
+	);
+	return { forge: target.forge, nameWithOwner, cliRepo, env: commandEnv };
+}
 
-	const argv = [
-		"gh",
-		"pr",
-		"view",
-		String(receipt.pr.number),
-		"--repo",
-		nameWithOwner,
-		"--json",
-		"number,url,state,baseRefName,headRefName,headRefOid,mergeCommit,mergedAt",
-	];
+function githubObservation(
+	receipt: LandingReceipt,
+	identity: RemoteIdentity,
+	run: CliRunner,
+): PullRequestObservation | CleanupFailure {
+	const argv = ["gh", "pr", "view", String(receipt.pr.number), "--repo", identity.cliRepo, "--json", PR_FIELDS];
 	const method = argv.slice(0, 3).join(" ");
-	const result = run(argv, { cwd, timeoutMs: FORGE_TIMEOUT_MS, env });
+	const result = run(argv, { timeoutMs: FORGE_TIMEOUT_MS, env: identity.env });
 	if (!completed(result)) return commandFailure("pr", argv, result, "a successful bounded GitHub pull-request read");
 	const root = parseJsonObject("pr", result);
 	if (isFailure(root)) return root;
@@ -211,34 +284,18 @@ function githubObservation(
 		headRefOid: text(root, "headRefOid") ?? "",
 		mergeCommitOid: mergeCommit === null ? null : normalizedOid(own(mergeCommit, "oid")),
 		mergedAt: text(root, "mergedAt"),
-		nameWithOwner,
 		method,
 	};
 }
 
 function gitlabObservation(
 	receipt: LandingReceipt,
+	identity: RemoteIdentity,
 	run: CliRunner,
-	cwd: string,
-	env: Readonly<Record<string, string>>,
 ): PullRequestObservation | CleanupFailure {
-	const repoArgv = ["glab", "repo", "view", "--output", "json"];
-	const repoResult = run(repoArgv, { cwd, timeoutMs: FORGE_TIMEOUT_MS, env });
-	if (!completed(repoResult)) return commandFailure("repo", repoArgv, repoResult, "a successful bounded local GitLab repository read");
-	const repoRoot = parseJsonObject("repo", repoResult);
-	if (isFailure(repoRoot)) return repoRoot;
-	const nameWithOwner = firstRepositoryPath(
-		repoRoot,
-		["path_with_namespace", "pathWithNamespace", "fullPath", "nameWithOwner"],
-		21,
-	);
-	if (nameWithOwner === null) {
-		return refuse("repo.nameWithOwner", repoRoot, "a complete group/project path from glab repo view");
-	}
-
-	const argv = ["glab", "mr", "view", String(receipt.pr.number), "--repo", nameWithOwner, "--output", "json"];
+	const argv = ["glab", "mr", "view", String(receipt.pr.number), "--repo", identity.cliRepo, "--output", "json"];
 	const method = argv.slice(0, 3).join(" ");
-	const result = run(argv, { cwd, timeoutMs: FORGE_TIMEOUT_MS, env });
+	const result = run(argv, { timeoutMs: FORGE_TIMEOUT_MS, env: identity.env });
 	if (!completed(result)) return commandFailure("pr", argv, result, "a successful bounded GitLab merge-request read");
 	const root = parseJsonObject("pr", result);
 	if (isFailure(root)) return root;
@@ -252,7 +309,6 @@ function gitlabObservation(
 		headRefOid: text(root, "sha") ?? "",
 		mergeCommitOid: mergeCommit ?? normalizedOid(own(root, "squash_commit_sha")),
 		mergedAt: text(root, "merged_at"),
-		nameWithOwner,
 		method,
 	};
 }
@@ -263,21 +319,28 @@ export function observePullRequest(
 	cwd: string = receipt.repo.canonicalRoot,
 	env: NodeJS.ProcessEnv = process.env,
 ): PullRequestObservation | CleanupFailure {
-	const forgeEnv = forgeEnvironment(env);
-	if (receipt.repo.forge === "github") return githubObservation(receipt, run, cwd, forgeEnv);
-	if (receipt.repo.forge === "gitlab") return gitlabObservation(receipt, run, cwd, forgeEnv);
-	return refuse("repo.forge", receipt.repo.forge, '"github" or "gitlab"');
+	const identity = resolveRemoteIdentity(receipt, run, cwd, forgeEnvironment(env), env);
+	if (isFailure(identity)) return identity;
+	return identity.forge === "github"
+		? githubObservation(receipt, identity, run)
+		: gitlabObservation(receipt, identity, run);
 }
 
 function compare(field: string, observed: unknown, expected: unknown): CleanupFailure | null {
 	return observed === expected ? null : refuse(field, observed, `receipt value ${show(expected)}`);
 }
 
+/**
+ * Whether the observation is the landing the receipt proves.
+ *
+ * Only the pull request is compared here. The repository it was read from is not
+ * one of the comparisons, because it was never in doubt: the read was bound to the
+ * identity {@link resolveRemoteIdentity} had already matched against the receipt.
+ */
 function verifyObservation(receipt: LandingReceipt, observed: PullRequestObservation): CleanupFailure | null {
 	const observedState = observed.state.trim().toUpperCase();
 	const receiptState = receipt.pr.state.trim().toUpperCase();
 	const comparisons: readonly [string, unknown, unknown][] = [
-		["repo.nameWithOwner", observed.nameWithOwner, receipt.repo.nameWithOwner],
 		["pr.number", observed.number, receipt.pr.number],
 		["pr.url", observed.url, receipt.pr.url],
 		["pr.state", observedState, "MERGED"],
@@ -870,7 +933,7 @@ export default function deliveryCleanupTool(pi: ExtensionAPI): void {
 		description:
 			"Cleanup after the landing receipt. The lifecycle is conditional: delivery_land, then bd_reconcile, then delivery_cleanup when the ledger classification recomputed at the repository's canonical root is active; a retired or ledger-free repository goes delivery_land, then delivery_cleanup directly. " +
 			"This tool recomputes that classification at the canonical root on every call and refuses when it differs from beads.ledgerActive in the receipt, naming the stored value, the recomputed value and bd_reconcile: the stored boolean alone never opens the success path. " +
-			"It then resolves exact landing proof, refuses to remove the worktree it was invoked from, removes one clean pushed worktree identified by the receipt without force, deletes its local branch with -d, records local and remote observations, and writes one continuation receipt. " +
+			"It then resolves exact landing proof from the repository the receipt's own remote resolves to — never from whichever repository a forge CLI infers from the current directory — refuses to remove the worktree it was invoked from, removes one clean pushed worktree identified by the receipt without force, deletes its local branch with -d, records local and remote observations, and writes one continuation receipt. " +
 			"The tool performs only read-only bd show calls; repository policy assigns actor ownership.",
 		parameters: z.object({
 			receipt: z.string().min(1).optional().describe("Path to a canonical landing receipt; omit to select the newest for this repository"),

@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { beadIdsFromBranch, type LandParams, landPullRequest, repoPathFromRemote } from "./delivery-land-tool.ts";
+import { beadIdsFromBranch, type LandParams, landPullRequest } from "./delivery-land-tool.ts";
 import type { CliResult, CliRunner } from "./forge-adapter.ts";
 import { RECEIPT_SCHEMA, readReceipt, repoKey, writeReceipt } from "./landing-receipt.ts";
 
@@ -490,16 +490,62 @@ describe("delivery_land", () => {
 			"--squash",
 			"--delete-branch",
 			"--repo",
-			"srobroek/omp-plugins",
+			"github.com/srobroek/omp-plugins",
 			"--match-head-commit",
 			HEAD_OID,
 		]);
 		expect(calls.filter(call => call.argv[1] === "pr" && call.argv[2] === "view").map(call => call.argv)).toEqual([
-			["gh", "pr", "view", "470", "--repo", "srobroek/omp-plugins", "--json", "number,url,state,baseRefName,headRefName,headRefOid,mergeCommit,mergedAt"],
-			["gh", "pr", "view", "470", "--repo", "srobroek/omp-plugins", "--json", "number,url,state,baseRefName,headRefName,headRefOid,mergeCommit,mergedAt"],
+			["gh", "pr", "view", "470", "--repo", "github.com/srobroek/omp-plugins", "--json", "number,url,state,baseRefName,headRefName,headRefOid,mergeCommit,mergedAt"],
+			["gh", "pr", "view", "470", "--repo", "github.com/srobroek/omp-plugins", "--json", "number,url,state,baseRefName,headRefName,headRefOid,mergeCommit,mergedAt"],
 		]);
 		if (!outcome.ok) throw new Error(outcome.reason);
+		// The receipt records the unqualified identity: the host belongs to the command
+		// that was issued, not to the repository the landing is about.
 		expect(outcome.receipt.proof.evidence).toMatchObject({ boundRepo: "srobroek/omp-plugins", merge: { boundHead: HEAD_OID } });
+	});
+
+	test("a canonical GitHub repo prefix and a pinned GH_HOST defeat a configured host alias", () => {
+		const { outcome, calls } = land(
+			{ prView: [completed(githubPr()), completed(mergedGithubPr())] },
+			{ setupAutoDelete: true },
+			{ GH_HOST: "evil.example", GH_REPO: "attacker/elsewhere", GH_TOKEN: "keep-gh", PATH: "/usr/bin" },
+		);
+
+		expect(outcome.ok).toBe(true);
+		const ghCalls = calls.filter(call => call.argv[0] === "gh");
+		expect(ghCalls.length).toBeGreaterThan(3);
+		for (const call of ghCalls) {
+			// Replaced by the verified host, not merely stripped: an absent GH_HOST still
+			// lets `gh` fall back to a host from its own configuration.
+			expect(call.env?.GH_HOST).toBe("github.com");
+			expect(call.env?.GH_REPO).toBeUndefined();
+			expect(call.env?.GH_TOKEN).toBe("keep-gh");
+			const repoIndex = call.argv.indexOf("--repo");
+			if (repoIndex >= 0) expect(call.argv[repoIndex + 1]).toBe("github.com/srobroek/omp-plugins");
+		}
+		// The settings reads address the repository in the request path, where the host
+		// is the adapter's to add, so they carry the unqualified path.
+		for (const call of ghCalls.filter(call => call.argv[1] === "api")) {
+			expect(call.argv.some(part => part.includes("repos/srobroek/omp-plugins"))).toBe(true);
+		}
+	});
+
+	test("an alternate SSH transport host still addresses the canonical API host", () => {
+		const { canonical, receipts } = repository();
+		const { run, calls } = runner(
+			{
+				remoteUrl: "ssh://git@ssh.github.com:443/srobroek/omp-plugins.git",
+				prView: [completed(githubPr()), completed(mergedGithubPr())],
+			},
+			canonical,
+		);
+		const outcome = landPullRequest({ pr: 470 }, { run, cwd: canonical, now: () => NOW, receiptsDirectory: receipts, env: {} });
+
+		expect(outcome.ok).toBe(true);
+		for (const call of calls.filter(call => call.argv[0] === "gh" && call.argv.includes("--repo"))) {
+			expect(call.argv[call.argv.indexOf("--repo") + 1]).toBe("github.com/srobroek/omp-plugins");
+			expect(call.env?.GH_HOST).toBe("github.com");
+		}
 	});
 
 	test("a GitLab merge binds the repository and the head in glab's spelling", () => {
@@ -723,9 +769,15 @@ describe("delivery_land", () => {
 			for (const call of forgeCalls) {
 				const glabCall = cli === "glab";
 				const pinnedGitLabApi = glabCall && call.argv[1] === "api";
+				// Each CLI's own host variable is not stripped but overwritten with the host
+				// `forgeTarget` verified: absent, a CLI still reads a default host from its
+				// own configuration. Every other redirector, including the other forge's,
+				// is gone.
+				const pinned = glabCall ? ["GITLAB_HOST", "GITLAB_API_HOST"] : ["GH_HOST"];
+				const canonicalHost = glabCall ? "gitlab.com" : "github.com";
 				for (const key of Object.keys(redirectors)) {
-					if (glabCall && (key === "GITLAB_HOST" || key === "GITLAB_API_HOST")) {
-						expect(call.env?.[key]).toBe("gitlab.com");
+					if (pinned.includes(key)) {
+						expect(call.env?.[key]).toBe(canonicalHost);
 					} else {
 						expect(call.env?.[key]).toBeUndefined();
 					}
@@ -999,19 +1051,11 @@ describe("delivery_land", () => {
 	});
 });
 
-describe("branch and remote reading", () => {
+describe("branch reading", () => {
 	test("bead ids come from the agent branch convention and nowhere else", () => {
 		expect(beadIdsFromBranch("omp/agent/omp-plugins-9ej3.5")).toEqual(["omp-plugins-9ej3.5"]);
 		for (const branch of ["main", "omp/integration/omp-plugins-9ej3", "omp/agent/", "feature/omp/agent/x"]) {
 			expect(beadIdsFromBranch(branch)).toEqual([]);
 		}
-	});
-
-	test("the owner and name come from the remote path in each spelling git accepts", () => {
-		expect(repoPathFromRemote("https://github.com/srobroek/omp-plugins.git")).toBe("srobroek/omp-plugins");
-		expect(repoPathFromRemote("git@github.com:srobroek/omp-plugins.git")).toBe("srobroek/omp-plugins");
-		expect(repoPathFromRemote("ssh://git@gitlab.com/group/sub/project")).toBe("group/sub/project");
-		expect(repoPathFromRemote("https://github.com/")).toBeNull();
-		expect(repoPathFromRemote("")).toBeNull();
 	});
 });
