@@ -12,11 +12,12 @@ import {
 	openSync,
 	readSync,
 	realpathSync,
+	type Stats,
 	unlinkSync,
 	writeFileSync,
 } from "node:fs";
 import { homedir } from "node:os";
-import { basename, isAbsolute, join, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 
 /**
  * The landing receipt: the proof a branch landed, written by delivery and read by
@@ -268,6 +269,36 @@ export function repoKey(cwd: string, run: GitRunner = spawnGit): string | null {
 		return null;
 	}
 	return createHash("sha256").update(real).digest("hex").slice(0, 16);
+}
+
+/**
+ * Whether the nearest `.beads` ledger is active for a repository path.
+ *
+ * A regular-file `.beads/RETIRED` marker opts out of the nearest ledger. This
+ * intentionally mirrors the PR-link gate: a malformed marker (or any read error)
+ * keeps the ledger active rather than silently weakening closure and cleanup gates.
+ */
+export function ledgerActive(dir: string): boolean {
+	let current = resolve(dir);
+	for (;;) {
+		const beads = join(current, ".beads");
+		let beadsStat: Stats;
+		try {
+			beadsStat = lstatSync(beads);
+		} catch (error) {
+			if ((error as NodeJS.ErrnoException).code !== "ENOENT") return true;
+			const parent = dirname(current);
+			if (parent === current) return false;
+			current = parent;
+			continue;
+		}
+		if (!beadsStat.isDirectory()) return true;
+		try {
+			return !lstatSync(join(beads, "RETIRED")).isFile();
+		} catch {
+			return true;
+		}
+	}
 }
 
 /**

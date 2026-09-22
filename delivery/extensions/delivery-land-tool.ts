@@ -41,8 +41,7 @@
  * step and `delivery_cleanup` as the step after it.
  */
 
-import { existsSync } from "node:fs";
-import { basename, dirname, isAbsolute, join, resolve } from "node:path";
+import { basename, dirname, isAbsolute, resolve } from "node:path";
 import type { TSchema } from "@oh-my-pi/pi-ai";
 import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
 import pkg from "../package.json" with { type: "json" };
@@ -60,6 +59,7 @@ import {
 import {
 	buildReceipt,
 	type LandingReceipt,
+	ledgerActive,
 	type ReceiptAutoDelete,
 	receiptDirectory,
 	repoKey,
@@ -187,7 +187,7 @@ export type LandDeps = {
 };
 
 export type LandOutcome =
-	| { ok: true; receipt: LandingReceipt; receiptPath: string; text: string }
+	| { ok: true; receipt: LandingReceipt; receiptPath: string; text: string; next: readonly string[] }
 	| { ok: false; reason: string; text: string };
 
 /** One observed pull request, in receipt spelling, from either forge's dialect. */
@@ -661,7 +661,7 @@ export function landPullRequest(params: LandParams, deps: LandDeps = {}): LandOu
 				localRefDeleted: false,
 				absenceVerifiedAt: null,
 			},
-			beads: { ids: beadIdsFromBranch(proved.headRefName), ledgerActive: existsSync(join(repository.canonicalRoot, ".beads")) },
+			beads: { ids: beadIdsFromBranch(proved.headRefName), ledgerActive: ledgerActive(cwd) },
 			proof: {
 				method: mergeArgv === null
 					? "already-merged pull request read, remote ref observed with git ls-remote"
@@ -687,13 +687,16 @@ export function landPullRequest(params: LandParams, deps: LandDeps = {}): LandOu
 		return refuse(`the receipt could not be written: ${error instanceof Error ? error.message : String(error)}`);
 	}
 
+	const next = validation.receipt.beads.ledgerActive ? ["bd_reconcile", "delivery_cleanup"] as const : ["delivery_cleanup"] as const;
 	const text = [
 		`delivery_land proved ${nameWithOwner}#${proved.number} merged as ${proof.oid.slice(0, 12)} on ${forge}.`,
 		`branch ${proved.headRefName}: remote ${verdict}, deletedRemote ${verdict === "absent"}, autoDeleteSetting ${observedAutoDelete}.`,
 		`receipt: ${receiptPath}`,
-		`next: run bd_reconcile to write the ledger from this receipt — delivery never writes it — then delivery_cleanup to remove the worktree and the local branch.`,
+		validation.receipt.beads.ledgerActive
+			? "next: run bd_reconcile to write the ledger from this receipt — delivery never writes it — then delivery_cleanup to remove the worktree and the local branch."
+			: "next: run delivery_cleanup to remove the worktree and the local branch.",
 	].join("\n");
-	return { ok: true, receipt: validation.receipt, receiptPath, text };
+	return { ok: true, receipt: validation.receipt, receiptPath, text, next };
 }
 
 export default function deliveryLandTool(pi: ExtensionAPI): void {
@@ -708,7 +711,7 @@ export default function deliveryLandTool(pi: ExtensionAPI): void {
 			"explicitly rather than taken from the working directory or GH_REPO, re-reads it and refuses unless the same request is " +
 			"MERGED at that same head on the same base, observes the remote branch with git ls-remote, then writes exactly one receipt " +
 			"under the agent directory and returns it as details.receipt. " +
-			"Writes no Beads ledger: run bd_reconcile next, then delivery_cleanup. Runs only from a linked worktree.",
+			"Writes no Beads ledger: active receipts route through bd_reconcile before delivery_cleanup; retired receipts go directly to delivery_cleanup. Runs only from a linked worktree.",
 		parameters: z.object({
 			pr: z.union([z.number(), z.string()]).describe("Pull request or merge request number"),
 			repo: z.string().optional().describe('Repository as "<owner>/<name>"; defaults to the path of the remote URL'),
@@ -723,7 +726,7 @@ export default function deliveryLandTool(pi: ExtensionAPI): void {
 			return {
 				content: [{ type: "text", text: result.text }],
 				details: result.ok
-					? { ok: true, receipt: result.receipt, receiptPath: result.receiptPath, next: ["bd_reconcile", "delivery_cleanup"] }
+					? { ok: true, receipt: result.receipt, receiptPath: result.receiptPath, next: result.next }
 					: { ok: false, reason: result.reason },
 			};
 		},
