@@ -72,11 +72,24 @@ suite once per supported selection, so a later edit cannot silently drop a gate 
 ## Verify in a throwaway workspace
 
 ```bash
-mkdir -p /tmp/fcheck/.beads/formulas && cd /tmp/fcheck && git init -q . && bd init
+mkdir -p /tmp/fcheck/.beads/formulas
+git -C /tmp/fcheck init -q .
 cp <formula>.formula.toml /tmp/fcheck/.beads/formulas/
+BEADS_DIR=/tmp/fcheck/.beads BD_NON_INTERACTIVE=1 BD_NO_PAGER=1 BD_DOLT_AUTO_START=false NO_COLOR=1 bd init --init-if-missing --skip-hooks
+BEADS_DIR=/tmp/fcheck/.beads BD_NON_INTERACTIVE=1 BD_NO_PAGER=1 BD_DOLT_AUTO_START=false NO_COLOR=1 bd mol pour <formula> --var k=v
 ```
 
+`cd` alone does not isolate. Under a session pin `bd` resolves `BEADS_DIR`, not the working directory, so
+`cd /tmp/fcheck && bd init` writes the pinned project store -- that is how a scratch probe once landed its
+records in this repository's live database. Only the environment isolates, so every `bd` call above carries
+its own explicit `BEADS_DIR`.
+
+Keep `BD_ACTOR` / `BEADS_ACTOR` inherited. A `bd create` without an actor is rejected, so wiping the
+environment (`env -i`) is not a safe isolation: override the store, nothing else.
+
 A real pour writes beads. Never assert against a live project database.
+`beads/extensions/session-beads-lifecycle.git.test.ts` keeps that executable: it runs this recipe form
+against a scratch store while an ambient pin names another, and asserts the pinned store never changed.
 
 ## Reading the pour listing
 
