@@ -310,21 +310,27 @@ interface Candidate {
 	bead: string;
 }
 
-/** What `wt step prune` would remove, as a precondition probe. Never a removal; see the header. */
-async function pruneCandidates(canonical: string, run: CommandRunner): Promise<{ clear: boolean; named: string[] }> {
+/**
+ * What `wt step prune` would remove, as a precondition probe. Never a removal; see the header.
+ *
+ * A probe that could not be read is reported as `unreadable` rather than as a named worktree.
+ * Both stand the sweep down, but they are different sentences, and a reader who is told the
+ * prune "names wt step prune --dry-run failed ..." has been handed one error inside another.
+ */
+async function pruneCandidates(canonical: string, run: CommandRunner): Promise<{ clear: boolean; named: string[]; unreadable?: string }> {
 	const argv = ["wt", "-C", canonical, "step", "prune", "--dry-run", "--format", "json"];
 	const result = await run(argv, canonical, PROBE_TIMEOUT_MS);
 	if (result.code !== 0) {
 		const detail = result.stderr.trim() || result.stdout.trim() || `exit ${result.code}`;
-		return { clear: false, named: [`wt step prune --dry-run failed in ${canonical}: ${detail}`] };
+		return { clear: false, named: [], unreadable: detail };
 	}
 	let parsed: unknown;
 	try {
 		parsed = JSON.parse(result.stdout.trim() || "[]");
 	} catch {
-		return { clear: false, named: [`wt step prune --dry-run printed output this build cannot parse: ${result.stdout.trim().slice(0, 200)}`] };
+		return { clear: false, named: [], unreadable: `it printed output this build cannot parse: ${result.stdout.trim().slice(0, 200)}` };
 	}
-	if (!Array.isArray(parsed)) return { clear: false, named: ["wt step prune --dry-run printed a non-array payload"] };
+	if (!Array.isArray(parsed)) return { clear: false, named: [], unreadable: "it printed a non-array payload" };
 	const named = parsed.map(entry => {
 		if (entry !== null && typeof entry === "object") {
 			const record = entry as Record<string, unknown>;
@@ -411,10 +417,14 @@ export async function sweepStaleWorktrees(canonical: string, deps: SweepDeps = {
 
 	const prune = await pruneCandidates(canonical, run);
 	if (!prune.clear) {
+		const why =
+			prune.unreadable === undefined
+				? `wt step prune --dry-run names ${prune.named.join(", ")}`
+				: `wt step prune --dry-run could not be read in ${canonical} (${prune.unreadable})`;
 		return {
 			swept: [],
 			retained: [],
-			stoodDown: `wt step prune --dry-run names ${prune.named.join(", ")}; a sweep here could race another party's worktree, so ${candidates.length} agent worktree(s) were left alone`,
+			stoodDown: `${why}; a sweep here could race another party's worktree, so ${candidates.length} agent worktree(s) were left alone`,
 		};
 	}
 

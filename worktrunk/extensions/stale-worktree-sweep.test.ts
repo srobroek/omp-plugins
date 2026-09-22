@@ -58,6 +58,8 @@ interface Row {
 interface Options {
 	/** Raw stdout for `wt step prune --dry-run --format json`; defaults to nothing due. */
 	prune?: string;
+	/** Stderr for a prune probe that fails outright, as a timeout under load does. */
+	pruneFails?: string;
 	/** What the first (batched) ledger read answers. An absent bead answers nothing at all. */
 	ledger?: Record<string, Row>;
 	/** What the confirmation read answers, when it differs from the batched one. */
@@ -100,7 +102,10 @@ function harness(entries: readonly Entry[], options: Options = {}): Harness {
 				.map(entry => ({ ...entry, path: (listings > 1 ? options.moved?.[entry.branch] : undefined) ?? entry.path }));
 			return ok(listing(live, rest.includes("-z")));
 		}
-		if (tool === "wt" && rest.includes("prune")) return ok(options.prune ?? "[]");
+		if (tool === "wt" && rest.includes("prune")) {
+			if (options.pruneFails !== undefined) return { code: 1, stdout: "", stderr: options.pruneFails };
+			return ok(options.prune ?? "[]");
+		}
 		if (tool === "wt" && rest.includes("remove")) {
 			const branch = command[command.length - 1] ?? "";
 			if ((options.locked ?? []).includes(branch)) {
@@ -240,6 +245,24 @@ describe("the races carried over from the orchestrate sweep", () => {
 		expect(removals(argv)).toEqual([]);
 		expect(argv.filter(command => command.includes("prune"))).toEqual([["wt", "-C", REPO, "step", "prune", "--dry-run", "--format", "json"]]);
 		expect(sweepNotice(result)).toBeUndefined();
+	});
+
+	// Observed live: `wt step prune --dry-run` takes 1.6 to 3.8s against 14 worktrees, so under
+	// load it exceeds its 5s bound and this is the path a real session takes. It must stand down
+	// and it must say why, rather than reporting the failure as a worktree the prune named.
+	test("a prune probe that cannot be read stands the sweep down and is not reported as a named worktree", async () => {
+		const { run, readLedger, argv } = harness(ENTRIES, {
+			ledger: { a: { status: "closed", closedAt: CLOSED_LONG_AGO } },
+			pruneFails: "wt timed out after 5000ms",
+		});
+		const result = await sweepStaleWorktrees(REPO, { run, readLedger, now: NOW });
+
+		expect(result.swept).toEqual([]);
+		expect(result.retained).toEqual([]);
+		expect(result.stoodDown).toContain("could not be read");
+		expect(result.stoodDown).toContain("wt timed out after 5000ms");
+		expect(result.stoodDown).not.toContain("names wt step prune");
+		expect(removals(argv)).toEqual([]);
 	});
 
 	test("the status is re-read immediately before removal, so a reopened bead keeps its tree", async () => {
