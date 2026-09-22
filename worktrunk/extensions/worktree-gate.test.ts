@@ -236,35 +236,36 @@ describe("device classification", () => {
             expect(decideWorktreeCall(tool, input, canonical, topology)).toBeUndefined();
         }
     });
-    test("all ledger tools are exempt from working-tree containment", () => {
+    test("a ledger tool naming no filesystem path is exempt, whatever else it carries", () => {
         const { canonical, topology } = project();
-        const ledgerTools = [
-            "orc_bind",
-            "orc_claim",
-            "orc_status",
-            "orc_decide",
-            "orc_finish",
-            "orc_release",
-            "orc_conflict_probe",
-            "orc_bot_review_probe",
-            "orc_bot_review_request",
-            "orc_review_round_policy",
-        ] as const;
-        for (const tool of ledgerTools) {
-            expect(decideWorktreeCall(tool, { cwd: canonical }, canonical, topology)).toBeUndefined();
+        // The exemption is the payload's shape, not a `cwd` argument: none of these
+        // tools declares one, so requiring it exempted nothing at all.
+        const ledgerCalls: ReadonlyArray<readonly [string, unknown]> = [
+            ["orc_bind", { epic: "run" }],
+            ["orc_claim", { bead: "proj-1" }],
+            ["orc_status", { epic: "run" }],
+            ["orc_decide", { bead: "x", action: "retry", reason: "test" }],
+            ["orc_finish", { bead: "review", state: "done", reason: "ok", verdict: "approve", targets: ["task-id"] }],
+            ["orc_release", { bead: "x", holder: "actor", reason: "test" }],
+            ["orc_conflict_probe", { mode: "ci", pr: "357" }],
+            ["orc_bot_review_probe", { pr: "357", repo: "srobroek/omp-plugins" }],
+            ["orc_bot_review_request", { pr: "357", provider: "codex" }],
+            ["orc_review_round_policy", { rounds_completed: 0, actionable_issues: [] }],
+            ["bd_reconcile", null],
+        ];
+        for (const [tool, input] of ledgerCalls) {
+            expect(decideWorktreeCall(tool, input, canonical, topology)).toBeUndefined();
         }
     });
 
-    test("cwd-bearing ledger probes are exempt while worktree paths remain allowed", () => {
+    test("a ledger tool that does name a filesystem target is judged on it", () => {
         const { canonical, worktree, topology } = project();
-        const controls: ReadonlyArray<readonly [string, Record<string, unknown>, Record<string, unknown>]> = [
-            ["orc_bot_review_probe", { pr: "357", repo: "srobroek/omp-plugins", cwd: canonical }, { pr: "357", repo: "srobroek/omp-plugins", cwd: worktree }],
-            ["orc_conflict_probe", { mode: "ci", pr: "357", cwd: canonical }, { mode: "ci", pr: "357", cwd: worktree }],
-        ];
-        for (const [tool, canonicalInput, worktreeInput] of controls) {
-            expect(decideWorktreeCall(tool, canonicalInput, canonical, topology)).toBeUndefined();
-            expect(decideWorktreeCall(tool, worktreeInput, worktree, topology)).toBeUndefined();
-        }
+        // A probe pointed at the canonical checkout is a call into the canonical
+        // checkout, ledger family or not; the same probe in the worktree is work.
+        const atCanonical = { mode: "conflicts", base: "main", branch: "x", cwd: canonical };
+        const atWorktree = { mode: "conflicts", base: "main", branch: "x", cwd: worktree };
+        expect(decideWorktreeCall("orc_conflict_probe", atCanonical, worktree, topology)?.block).toBe(true);
+        expect(decideWorktreeCall("orc_conflict_probe", atWorktree, worktree, topology)).toBeUndefined();
     });
 
     test("canonical permits delivery orientation and hygiene reports", () => {
@@ -274,18 +275,42 @@ describe("device classification", () => {
         }
     });
 
-    test("canonical permits reconcile scans, plans, and apply", () => {
+    test("canonical permits reconcile scans and applies built from the tool's own parameters", () => {
         const { canonical, topology } = project();
-        expect(decideWorktreeCall("bd_reconcile", { cwd: canonical, apply: false }, canonical, topology)).toBeUndefined();
-        expect(decideWorktreeCall("bd_reconcile", { cwd: canonical, plan: true }, canonical, topology)).toBeUndefined();
-        expect(decideWorktreeCall("bd_reconcile", { cwd: canonical, apply: true }, canonical, topology)).toBeUndefined();
+        // `bd_reconcile` declares receipt, bead, repoKey and apply, and no `cwd`.
+        expect(decideWorktreeCall("bd_reconcile", { apply: false }, canonical, topology)).toBeUndefined();
+        expect(decideWorktreeCall("bd_reconcile", { receipt: "01a0c8", apply: true }, canonical, topology)).toBeUndefined();
+        expect(
+            decideWorktreeCall("bd_reconcile", { bead: "proj-1", repoKey: "0123456789abcdef" }, canonical, topology),
+        ).toBeUndefined();
     });
 
-    test("canonical rejects mutating delivery tools", () => {
-        const { canonical, topology } = project();
-        for (const tool of ["delivery_land", "delivery_cleanup"]) {
-            expect(decideWorktreeCall(tool, { cwd: canonical }, canonical, topology)?.block).toBe(true);
+    test("a pathless delivery call is judged by the session cwd it would run in", () => {
+        const { canonical, worktree, topology } = project();
+        // Both payloads are the documented parameters, verbatim: not one names a
+        // filesystem path, and both resolve what they mutate from the cwd they run in.
+        const calls: ReadonlyArray<readonly [string, unknown]> = [
+            ["delivery_land", { pr: 479, repo: "srobroek/omp-plugins", remote: "origin", expectHeadSha: "d1394c4" }],
+            ["delivery_cleanup", { pr: 479, branch: "omp/agent/bead-1", remote: "origin" }],
+        ];
+        for (const [tool, input] of calls) {
+            const refusal = decideWorktreeCall(tool, input, canonical, topology);
+            expect(refusal?.block).toBe(true);
+            expect(refusal?.reason).toContain(canonical);
+            expect(refusal?.reason).toContain(worktree);
+            // The same payload one directory over, where both tools belong.
+            expect(decideWorktreeCall(tool, input, worktree, topology)).toBeUndefined();
         }
+    });
+
+    test("a delivery call from a worktree is still judged on the paths it names", () => {
+        const { canonical, worktree, foreign, topology } = project();
+        const outside = decideWorktreeCall("delivery_cleanup", { pr: 479, worktree: join(canonical, "src") }, worktree, topology);
+        expect(outside?.block).toBe(true);
+        expect(outside?.reason).toContain(canonical);
+        expect(decideWorktreeCall("delivery_land", { pr: 479, worktree: join(worktree, "src") }, worktree, topology)).toBeUndefined();
+        // Scratch space outside every repository stays writable, as everywhere else.
+        expect(decideWorktreeCall("delivery_cleanup", { pr: 479, worktree: join(foreign, "src") }, worktree, topology)).toBeUndefined();
     });
 
     test("malformed reconcile input is handled conservatively", () => {
@@ -822,6 +847,46 @@ describe("scope", () => {
 	});
 });
 
+describe("the session's own cwd", () => {
+	afterEach(() => {
+		resetTopologyCache();
+	});
+
+	/**
+	 * A session cwd that is gone is not a session in no repository. Resolving it the
+	 * way a write target is resolved walks up to a parent that genuinely is outside
+	 * every repository, and that answer — nothing here to protect — is the one state
+	 * that stands the gate down, reached on evidence about a directory no call runs
+	 * in. The real resolver decides here: this is the seam the injected topology
+	 * cannot reach.
+	 */
+	test("a session cwd that no longer exists refuses instead of standing the gate down", () => {
+		const parent = mkdtempSync(join(tmpdir(), "worktrunk-cwd-"));
+		roots.push(parent);
+		const gone = join(parent, "gone");
+		mkdirSync(gone);
+		rmSync(gone, { recursive: true, force: true });
+		const decision = decideWorktreeCall("write", { path: join(gone, "x.ts"), content: "" }, gone);
+		expect(decision?.block).toBe(true);
+		expect(decision?.reason).toContain(gone);
+		expect(decision?.reason).toContain("Uncertainty refuses");
+		// A pathless delivery call from the same cwd never reaches the session-cwd
+		// judgement either: an unknown topology refuses before any target is judged.
+		expect(decideWorktreeCall("delivery_cleanup", { pr: 479 }, gone)?.block).toBe(true);
+		// Unchanged: a session cwd git can enter and confirms is in no repository has
+		// no canonical checkout to protect, so the gate stands down.
+		expect(decideWorktreeCall("write", { path: join(parent, "x.ts"), content: "" }, parent)).toBeUndefined();
+		expect(decideWorktreeCall("delivery_cleanup", { pr: 479 }, parent)).toBeUndefined();
+	}, 60000);
+
+	test("a session cwd that does not resolve refuses", () => {
+		const decision = decideWorktreeCall("write", { path: "x.ts", content: "" }, "no-such-session-directory");
+		expect(decision?.block).toBe(true);
+		expect(decision?.reason).toContain("no-such-session-directory");
+		expect(decision?.reason).toContain("Uncertainty refuses");
+	});
+});
+
 /** A real repository with one linked worktree: the git-answer classification needs real git. */
 function repository(): { canonical: string; worktree: string } {
 	const parent = mkdtempSync(join(tmpdir(), "worktrunk-git-"));
@@ -908,7 +973,10 @@ describe("git answers", () => {
 	test("a not-yet-existing target inside a linked worktree is allowed", () => {
 		const { worktree } = repository();
 		const file = join(worktree, "src", "new", "probe.ts");
-		expect(decideWorktreeCall("write", { path: file, content: "" }, file)).toBeUndefined();
+		// The target does not exist yet; the cwd the call runs in does, as a session
+		// cwd always does. Ownership comes from the deepest existing directory above
+		// the target, which is the worktree itself.
+		expect(decideWorktreeCall("write", { path: file, content: "" }, worktree)).toBeUndefined();
 	}, 60000);
 
 	test("a file target inside this project's canonical checkout remains refused", () => {
@@ -1321,12 +1389,22 @@ describe("pathless tools", () => {
 		expect(decideWorktreeCall("eval", { code: "1" }, canonical, topology)).toBeUndefined();
 	});
 
-    test("pathless ledger and status calls are allowed from canonical", () => {
+    test("pathless device, ledger and status calls are allowed from canonical", () => {
         const { canonical, topology } = project();
         // Claim-before-worktree: the bead must be claimable before a worktree exists,
-        // exactly as the bootstrap allowlist permits `bd` from canonical.
+        // exactly as the bootstrap allowlist permits `bd` from canonical. Only the two
+        // tools SESSION_CWD_TOOLS names are judged by the cwd they would run in, so a
+        // device call and a ledger call from the canonical checkout still pass.
         expect(decideWorktreeCall("orc_claim", { bead: "proj-1" }, canonical, topology)).toBeUndefined();
         expect(decideWorktreeCall("orc_status", { epic: "run" }, canonical, topology)).toBeUndefined();
+        expect(decideWorktreeCall("bd_reconcile", { apply: true }, canonical, topology)).toBeUndefined();
+        const memory = JSON.stringify({ items: [{ content: "a fact" }] });
+        expect(decideWorktreeCall("write", { path: "xd://retain", content: memory }, canonical, topology)).toBeUndefined();
+        expect(decideWorktreeCall("write", { path: "xd://brand_new_device", content: "{}" }, canonical, topology)).toBeUndefined();
+        // Allow-by-omission did not appear with it: that same new device is mutating
+        // the moment it names a path in the canonical checkout.
+        const nested = JSON.stringify({ path: join(canonical, "src", "probe.ts") });
+        expect(decideWorktreeCall("write", { path: "xd://brand_new_device", content: nested }, canonical, topology)?.block).toBe(true);
     });
 
 	test("a pathless read-approved scan of the canonical checkout is inspection, not mutation", () => {

@@ -120,6 +120,26 @@ const LEDGER_TOOLS: Record<string, true> = {
 };
 
 /**
+ * The two delivery tools judged by the SESSION's cwd as well as by the paths
+ * their payloads name.
+ *
+ * Both mutate the repository they run in — `delivery_land` writes a receipt
+ * under the agent directory, `delivery_cleanup` removes a worktree and deletes a
+ * branch — and every parameter they declare is optional or names a receipt, a
+ * pull request, a branch or a remote. A complete, live call therefore names no
+ * filesystem path at all, and the pathless-allow default that keeps
+ * `xd://retain` writable from the directory an agent starts in would let exactly
+ * these two run in the canonical checkout, which is the one place this gate
+ * exists to keep them out of.
+ *
+ * Naming them is narrower than gating every pathless call by the session cwd:
+ * they stay OUT of READ_ONLY_TOOLS and LEDGER_TOOLS, they are still judged
+ * against every path they do name, and every other unenumerated tool keeps the
+ * default.
+ */
+const SESSION_CWD_TOOLS: Record<string, true> = { delivery_cleanup: true, delivery_land: true };
+
+/**
  * Tools whose approval depends on their arguments: reading in one mode, mutating
  * in another, so they cannot sit in the table above. Each predicate mirrors that
  * tool's own approval callback, and only the reading modes are exempt.
@@ -742,8 +762,30 @@ export function repositoryTopology(cwd: string): RepositoryTopology {
 	};
 }
 
+/**
+ * The topology of the session's OWN cwd, which is not resolved the way a target
+ * is.
+ *
+ * A write target legitimately does not exist yet, so its parents describe where
+ * it will land and `git` is asked from the deepest existing directory above it.
+ * A session cwd that does not resolve describes nothing: the question would be
+ * answered for a DIFFERENT directory, and a "no repository here" from an ancestor
+ * reaches the one branch that stands this gate down — on evidence about a
+ * directory no call runs in. A vanished cwd is an undetermined topology, and
+ * uncertainty refuses.
+ */
+export function sessionTopology(sessionCwd: string): RepositoryTopology {
+	try {
+		realpathSync.native(sessionCwd);
+	} catch {
+		const detail = `the session cwd \`${sessionCwd}\` does not exist`;
+		return { canonical: null, uncertainty: detail, worktrees: [], refresh: () => [] };
+	}
+	return repositoryTopology(sessionCwd);
+}
+
 export function defaultTopology(sessionCwd: string): GateTopology {
-	return { session: repositoryTopology(sessionCwd), forTarget: repositoryTopology };
+	return { session: sessionTopology(sessionCwd), forTarget: repositoryTopology };
 }
 
 /**
@@ -1354,6 +1396,10 @@ function evalPathLiterals(code: string, cwd: string): string[] {
  * repository at all — a scratch file under `/tmp` — belongs to no worktree and to
  * no canonical checkout, so there is nothing there to guard. Anything the gate
  * cannot classify refuses.
+ *
+ * A call's targets are the paths its arguments name, plus — for the two tools
+ * SESSION_CWD_TOOLS names — the session cwd itself, because those two resolve
+ * what they mutate from the directory they run in.
  */
 export function decideWorktreeCall(
 	toolName: string,
@@ -1363,7 +1409,13 @@ export function decideWorktreeCall(
 ): GateRefusal | undefined {
 	const ledgerInput = asRecord(input);
 	if (READ_ONLY_TOOLS[toolName] === true || readsOnlyInThisMode(toolName, input)) return undefined;
-	if (LEDGER_TOOLS[toolName] === true && ledgerInput !== null && typeof ledgerInput.cwd === "string" && Object.keys(ledgerInput).every(key => key === "cwd" || PATH_KEYS[key] !== true)) return undefined;
+	// The ledger exemption cannot condition on a `cwd` argument. `bd_reconcile`
+	// declares none, so requiring one made the allowance inert and left the tool
+	// judged by its receipt path. What the exemption tests is the absence of a
+	// filesystem target: a ledger call that names one under a path key is judged on
+	// it like any other call, and one that names only bead ids, a repository key or
+	// a pull request mutates no working tree this gate can attribute.
+	if (LEDGER_TOOLS[toolName] === true && (ledgerInput === null || Object.keys(ledgerInput).every(key => PATH_KEYS[key] !== true))) return undefined;
 	const session = topology.session;
 	const uncertainty = session.uncertainty ?? null;
 	if (uncertainty !== null) return { block: true, reason: topologyRefusal(uncertainty) };
@@ -1394,6 +1446,15 @@ export function decideWorktreeCall(
 		}
 		return undefined;
 	};
+
+	// The cwd a session-cwd-judged delivery tool inherits IS one of its targets: it
+	// resolves the receipt, the worktree and the branch from the directory it runs
+	// in, so a payload that names no path still mutates that repository. The cwd is
+	// judged first and the payload's own paths after it, so a call from a live
+	// linked worktree that points at some other checkout is still refused.
+	if (SESSION_CWD_TOOLS[toolName] === true) {
+		return refuseTarget(sessionCwd) ?? refuseAll(scanPathArguments(input));
+	}
 
 	switch (toolName) {
 		case "write": {
@@ -1515,7 +1576,8 @@ case "eval": {
 			// gate can attribute, so there is nothing to contain. Judging such a
 			// call against the session cwd instead refuses every pathless device
 			// call an agent makes before it has moved into a worktree, which is the
-			// canonical checkout's own directory.
+			// canonical checkout's own directory. SESSION_CWD_TOOLS names the two
+			// calls that earn that judgement, and they never reach this branch.
 			for (const raw of scanPathArguments(input)) {
 				const target = resolveTarget(raw, sessionCwd);
 				if (target === null) continue;
