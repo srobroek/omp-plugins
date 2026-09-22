@@ -847,7 +847,7 @@ bashGates(fakePi as never);
 			else process.env.BEADS_DIR = originalBeads;
 			for (const dir of [a, aWorktree, b, c]) rmSync(dir, { recursive: true, force: true });
 		}
-	}, 20_000); // creates a git worktree and runs several session_start hooks; slow under full-suite load
+	}, 90_000); // git init/commit/worktree add plus several session_start hooks; measured 37.9s on an idle M4 Pro, so 20s could not hold
 
 	test("session start accepts bd's null empty-list response", async () => {
 		const dir = mkdtempSync(join(tmpdir(), "beads-empty-gates-"));
@@ -969,7 +969,7 @@ esac
 			else process.env.BEADS_ACTOR = originalActor;
 			rmSync(dir, { recursive: true, force: true });
 		}
-	});
+	}, 30_000); // drives ~30 handler invocations, each spawning a shell `bd`; measured 6.5s idle, and it exceeded the 5s default under load
 
 	test("tracks tool-level BD_ACTOR for ready --claim without a bead id", async () => {
 		const dir = mkdtempSync(join(tmpdir(), "beads-actor-alias-"));
