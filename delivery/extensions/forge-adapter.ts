@@ -171,17 +171,18 @@ const LS_REMOTE_PROTOCOL_POLICY = [
 ] as const;
 
 /**
- * A clean environment for Git's remote observation.
+ * A clean environment for Git observations.
  *
- * Git's `GIT_SSH*`, `GIT_PROXY_COMMAND`, `GIT_EXEC_PATH`, and environment-backed
- * config variables all select executables without appearing in argv. Preserve
- * ordinary process state, discard every inherited `GIT_*` control plus SSH's
- * askpass hook, then add back only the non-executable protocol allowlist and the
- * non-interactive prompt setting this operation owns.
+ * Git's `GIT_SSH*`, `GIT_PROXY_COMMAND`, `GIT_EXEC_PATH`, repository/worktree
+ * selectors, and environment-backed config variables all change what a read
+ * observes or select executables without appearing in argv. Preserve ordinary
+ * process state, discard every inherited `GIT_*` control plus SSH's askpass
+ * hook, then add back only the non-executable protocol allowlist and the
+ * non-interactive prompt setting these observations own.
  */
-function gitObservationEnvironment(): Readonly<Record<string, string>> {
+export function gitObservationEnvironment(source: NodeJS.ProcessEnv = process.env): Readonly<Record<string, string>> {
 	const env = Object.create(null) as Record<string, string>;
-	for (const [key, value] of Object.entries(process.env)) {
+	for (const [key, value] of Object.entries(source)) {
 		if (value === undefined || key.startsWith("GIT_") || key === "SSH_ASKPASS" || key === "SSH_ASKPASS_REQUIRE") continue;
 		env[key] = value;
 	}
@@ -237,15 +238,24 @@ function isValidBranchName(branch: string): boolean {
 }
 
 /**
- * Validate an `owner/name` (or nested `group/.../project`) path.
+ * Validate the repository path one forge accepts.
  *
- * Returns the normalised path, or null when it cannot be one. A `.` or `..`
- * segment is refused because it would walk the forge API path the caller asked
- * for into a different resource.
+ * GitHub accepts exactly `owner/name`. GitLab additionally accepts bounded
+ * nested groups. A three-or-more-segment path whose first segment looks like a
+ * host is ambiguous with both CLIs' `[HOST/]OWNER/REPO` selector and is refused:
+ * a repository identity must never double as a host selector. A `.` or `..`
+ * segment is also refused because it would walk the forge API path the caller
+ * asked for into a different resource.
  */
-function normalizeRepoPath(repo: string, maxSegments: number): string | null {
+export function normalizeRepoPath(forge: Forge, repo: string): string | null {
+	const supported = supportedForge(forge);
+	if (supported === null) return null;
 	const segments = repo.trim().split("/");
+	const maxSegments = supported === "github" ? 2 : GITLAB_MAX_PATH_SEGMENTS;
 	if (segments.length < 2 || segments.length > maxSegments) return null;
+	const first = segments[0];
+	if (first === undefined) return null;
+	if (segments.length > 2 && (first.includes(".") || first.toLowerCase() === "localhost")) return null;
 	for (const segment of segments) {
 		if (!REPO_SEGMENT.test(segment)) return null;
 		if (segment === "." || segment === ".." || segment.startsWith("-")) return null;
@@ -435,7 +445,7 @@ function removeSourceBranchAfterMerge(payload: unknown): boolean | null {
 export function autoDeleteSetting(forge: Forge, repo: string, run: CliRunner = runCli): "on" | "off" | "unknown" {
 	const supported = supportedForge(forge);
 	if (supported === null) return "unknown";
-	const path = normalizeRepoPath(repo, supported === "github" ? 2 : GITLAB_MAX_PATH_SEGMENTS);
+	const path = normalizeRepoPath(supported, repo);
 	if (path === null) return "unknown";
 	const argv = supported === "github"
 		? ["gh", "api", `repos/${path}`, "--jq", ".delete_branch_on_merge"]
@@ -481,7 +491,7 @@ export function enableAutoDelete(forge: Forge, repo: string, run: CliRunner = ru
 			reason: `forge is ${JSON.stringify(forge)}, expected "github" or "gitlab": no settings API is known for this remote`,
 		};
 	}
-	const path = normalizeRepoPath(repo, supported === "github" ? 2 : GITLAB_MAX_PATH_SEGMENTS);
+	const path = normalizeRepoPath(supported, repo);
 	if (path === null) {
 		const expected = supported === "github" ? '"<owner>/<name>"' : '"<group>/<project>", optionally with nested groups';
 		return { ok: false, reason: `repo is ${JSON.stringify(repo)}, expected ${expected}` };
@@ -596,6 +606,7 @@ export function remoteBranchAbsent(
 	branch: string,
 	cwd: string,
 	run: CliRunner = runCli,
+	environment: NodeJS.ProcessEnv = process.env,
 ): "absent" | "present" | "unknown" {
 	if (!isSafeArgument(remote) || !isValidBranchName(branch) || cwd.trim() === "") return "unknown";
 	const ref = `refs/heads/${branch}`;
@@ -609,7 +620,7 @@ export function remoteBranchAbsent(
 		remote,
 		ref,
 	];
-	const result = run(argv, { cwd, timeoutMs: FORGE_TIMEOUT_MS, env: gitObservationEnvironment() });
+	const result = run(argv, { cwd, timeoutMs: FORGE_TIMEOUT_MS, env: gitObservationEnvironment(environment) });
 	if (!result.ok || result.error !== undefined) return "unknown";
 	if (result.exitCode === 0) return stdoutProvesExactHead(result.stdout, ref) ? "present" : "unknown";
 	if (result.exitCode === 2 && result.stdout === "" && result.stderr === "") return "absent";

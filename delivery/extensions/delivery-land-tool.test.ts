@@ -494,6 +494,10 @@ describe("delivery_land", () => {
 			"--match-head-commit",
 			HEAD_OID,
 		]);
+		expect(calls.filter(call => call.argv[1] === "pr" && call.argv[2] === "view").map(call => call.argv)).toEqual([
+			["gh", "pr", "view", "470", "--repo", "srobroek/omp-plugins", "--json", "number,url,state,baseRefName,headRefName,headRefOid,mergeCommit,mergedAt"],
+			["gh", "pr", "view", "470", "--repo", "srobroek/omp-plugins", "--json", "number,url,state,baseRefName,headRefName,headRefOid,mergeCommit,mergedAt"],
+		]);
 		if (!outcome.ok) throw new Error(outcome.reason);
 		expect(outcome.receipt.proof.evidence).toMatchObject({ boundRepo: "srobroek/omp-plugins", merge: { boundHead: HEAD_OID } });
 	});
@@ -501,7 +505,7 @@ describe("delivery_land", () => {
 	test("a GitLab merge binds the repository and the head in glab's spelling", () => {
 		const { canonical, receipts } = repository();
 		const { run, calls } = runner(
-			{ remoteUrl: "git@gitlab.com:group/project.git", prView: [completed(gitlabMr({ state: "opened", merge_commit_sha: null })), completed(gitlabMr())] },
+			{ remoteUrl: "git@gitlab.com:group/sub/project.git", prView: [completed(gitlabMr({ state: "opened", merge_commit_sha: null })), completed(gitlabMr())] },
 			canonical,
 		);
 		const outcome = landPullRequest({ pr: 12 }, { run, cwd: canonical, now: () => NOW, receiptsDirectory: receipts, env: {} });
@@ -515,10 +519,78 @@ describe("delivery_land", () => {
 			"--squash",
 			"--remove-source-branch",
 			"--repo",
-			"group/project",
+			"group/sub/project",
 			"--sha",
 			HEAD_OID,
 		]);
+		expect(calls.filter(call => call.argv[1] === "mr" && call.argv[2] === "view").map(call => call.argv)).toEqual([
+			["glab", "mr", "view", "12", "--repo", "group/sub/project", "--output", "json"],
+			["glab", "mr", "view", "12", "--repo", "group/sub/project", "--output", "json"],
+		]);
+	});
+
+	test("an explicit host-qualified or malformed identity refuses before an unreadable remote", () => {
+		for (const repo of ["github.com/owner/repo", "https://github.com/owner/repo", "owner", "owner//repo", "owner/../repo"]) {
+			const { canonical } = repository();
+			const calls: Call[] = [];
+			const run: CliRunner = (argv, options) => {
+				calls.push({ argv: [...argv], cwd: options.cwd, timeoutMs: options.timeoutMs, env: options.env });
+				return { ok: false, exitCode: null, stdout: "", stderr: "", error: "the remote is unreadable" };
+			};
+			const outcome = landPullRequest({ pr: 470, repo }, { run, cwd: canonical, now: () => NOW, env: {} });
+
+			expect(outcome.ok).toBe(false);
+			if (outcome.ok) throw new Error("expected a refusal");
+			expect(outcome.reason).toContain("repo: observed");
+			expect(calls).toHaveLength(0);
+		}
+	});
+
+	test("a host-qualified remote path cannot become --repo when params.repo is absent", () => {
+		for (const [remoteUrl, cli] of [
+			["https://github.com/github.com/owner/repo.git", "gh"],
+			["https://gitlab.com/gitlab.com/group/project.git", "glab"],
+		] as const) {
+			const { outcome, calls } = land({ remoteUrl });
+
+			expect(outcome.ok).toBe(false);
+			if (outcome.ok) throw new Error("expected a refusal");
+			expect(outcome.reason).toContain("repo: observed");
+			expect(calls.filter(call => call.argv[0] === cli)).toHaveLength(0);
+		}
+	});
+
+	test("ambient Git selectors cannot redirect repository identity or landing proof", () => {
+		const { canonical, receipts } = repository();
+		const attacker = repository();
+		const ambient = {
+			GIT_DIR: join(attacker.canonical, ".git"),
+			GIT_WORK_TREE: attacker.canonical,
+			GIT_CONFIG_COUNT: "1",
+			GIT_CONFIG_KEY_0: "remote.origin.url",
+			GIT_CONFIG_VALUE_0: "https://github.com/attacker/elsewhere.git",
+			PATH: "/usr/bin",
+		};
+		const fixture = runner({ prView: [completed(mergedGithubPr())] }, canonical);
+		const run: CliRunner = (argv, options) => {
+			const effectiveEnv = options.env ?? ambient;
+			const redirected = argv[0] === "git" && Object.keys(effectiveEnv).some(key => key === "GIT_DIR" || key === "GIT_WORK_TREE" || key.startsWith("GIT_CONFIG_"));
+			if (!redirected) return fixture.run(argv, options);
+			fixture.calls.push({ argv: [...argv], cwd: options.cwd, timeoutMs: options.timeoutMs, env: options.env });
+			if (argv.includes("--show-toplevel")) return completed(`${join(attacker.canonical, ".git")}\n${attacker.canonical}\n`);
+			if (argv.includes("get-url")) return completed("https://github.com/attacker/elsewhere.git\n");
+			return completed(`${HEAD_OID}\trefs/heads/${BRANCH}\n`);
+		};
+		const outcome = landPullRequest(
+			{ pr: 470 },
+			{ run, cwd: canonical, now: () => NOW, receiptsDirectory: receipts, env: ambient },
+		);
+
+		expect(outcome.ok).toBe(true);
+		if (!outcome.ok) throw new Error(outcome.reason);
+		expect(outcome.receipt.repo.canonicalRoot).toBe(realpathSync(canonical));
+		expect(outcome.receipt.repo.nameWithOwner).toBe("srobroek/omp-plugins");
+		expect(outcome.receipt.branch.deletedRemote).toBe(true);
 	});
 
 	test("a head that moved between the merge and the re-read refuses and writes nothing", () => {
