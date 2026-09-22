@@ -313,6 +313,45 @@ describe("device classification", () => {
         expect(decideWorktreeCall("delivery_cleanup", { pr: 479, worktree: join(foreign, "src") }, worktree, topology)).toBeUndefined();
     });
 
+    /**
+     * A spelling is not a target. `../../canonical` from a linked worktree resolves
+     * to exactly the checkout whose absolute spelling is refused, so the two must
+     * earn the same refusal — for `worktree`, which both tools declare, and for
+     * `receipt`, which `delivery_cleanup` declares as "Path to a canonical landing
+     * receipt".
+     */
+    test("a relative declared path earns the refusal its absolute spelling earns, for both delivery tools", () => {
+        const { canonical, worktree, topology } = project();
+        const upward = relative(worktree, canonical);
+        expect(upward.startsWith(`..${sep}`)).toBe(true);
+        for (const tool of ["delivery_land", "delivery_cleanup"]) {
+            const absolute = decideWorktreeCall(tool, { pr: 488, worktree: canonical }, worktree, topology);
+            const spelled = decideWorktreeCall(tool, { pr: 488, worktree: upward }, worktree, topology);
+            expect(absolute?.block).toBe(true);
+            expect(spelled).toEqual(absolute);
+            expect(spelled?.reason).toContain(canonical);
+            // A relative value that stays inside the worktree is what the parameter is
+            // for, and it is allowed: this judges where the path lands, not its shape.
+            expect(decideWorktreeCall(tool, { pr: 488, worktree: "." }, worktree, topology)).toBeUndefined();
+            expect(decideWorktreeCall(tool, { pr: 488, worktree: join("src", "..") }, worktree, topology)).toBeUndefined();
+        }
+        const receipt = decideWorktreeCall("delivery_cleanup", { receipt: join(upward, "receipt.json") }, worktree, topology);
+        expect(receipt?.block).toBe(true);
+        expect(receipt?.reason).toContain(canonical);
+        expect(decideWorktreeCall("delivery_cleanup", { receipt: join("receipts", "r.json") }, worktree, topology)).toBeUndefined();
+    });
+
+    test("`worktree` names a path on the tools that declare it, not wherever the key appears", () => {
+        const { canonical, worktree, topology } = project();
+        const upward = relative(worktree, canonical);
+        // An unenumerated tool keeps the default: a relative string under an
+        // arbitrary key is not a filesystem target the gate invented for it.
+        expect(decideWorktreeCall("some_other_tool", { worktree: upward }, worktree, topology)).toBeUndefined();
+        // A ledger call is exempt on the absence of a declared path, so worktree
+        // bookkeeping it carries under that key does not withdraw the exemption.
+        expect(decideWorktreeCall("bd_reconcile", { bead: "proj-1", worktree: upward }, canonical, topology)).toBeUndefined();
+    });
+
     test("malformed reconcile input is handled conservatively", () => {
         const { canonical, topology } = project();
         expect(decideWorktreeCall("bd_reconcile", { path: canonical, apply: "false" }, canonical, topology)?.block).toBe(true);

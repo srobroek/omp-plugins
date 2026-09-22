@@ -140,6 +140,27 @@ const LEDGER_TOOLS: Record<string, true> = {
 const SESSION_CWD_TOOLS: Record<string, true> = { delivery_cleanup: true, delivery_land: true };
 
 /**
+ * The path-valued parameters each session-cwd-judged delivery tool DECLARES, per
+ * tool, so a relative spelling is judged like an absolute one.
+ *
+ * `delivery_land` and `delivery_cleanup` both declare `worktree`, and
+ * `delivery_cleanup` also declares `receipt` ("Path to a canonical landing
+ * receipt"). Neither name is in PATH_KEYS, which holds the keys that make a
+ * string a path on an UNENUMERATED tool, and neither may be added there: a
+ * ledger payload that carries worktree bookkeeping under a `worktree` key names
+ * no filesystem target, and widening PATH_KEYS would both break its exemption
+ * and turn an arbitrary key on any tool into a path. A declared parameter is
+ * different: the tool's own schema says it is a path, and
+ * `delivery_cleanup { worktree: "../../../../personal/dev/omp-plugins" }` from a
+ * linked worktree resolves against the session cwd to exactly the canonical
+ * checkout its absolute spelling is refused for.
+ */
+const DECLARED_PATH_KEYS: Record<string, Record<string, true>> = {
+	delivery_cleanup: { receipt: true, worktree: true },
+	delivery_land: { worktree: true },
+};
+
+/**
  * Tools whose approval depends on their arguments: reading in one mode, mutating
  * in another, so they cannot sit in the table above. Each predicate mirrors that
  * tool's own approval callback, and only the reading modes are exempt.
@@ -1325,29 +1346,47 @@ export function extractCommand(input: unknown): string {
 	return typeof command === "string" ? command : "";
 }
 
-/** Every string in `input` that names a filesystem path on an unenumerated tool. */
-export function scanPathArguments(input: unknown, depth = 0): string[] {
+/** No tool-declared path parameters: what an unenumerated tool is scanned with. */
+const NO_DECLARED_PATHS: Record<string, true> = {};
+
+/**
+ * Every string in `input` that names a filesystem path, given the path-valued
+ * parameters the calling tool DECLARES.
+ *
+ * `declared` holds that tool's own schema names and applies to the payload's top
+ * level only, because that is the level a schema speaks for: a `worktree` key
+ * nested inside some value is not a declared parameter of anything. A declared
+ * key is treated exactly like a PATH_KEYS key — its value is a target however it
+ * is spelled, so a relative path is resolved against the session cwd rather than
+ * waved through.
+ */
+export function scanPathArguments(
+	input: unknown,
+	declared: Record<string, true> = NO_DECLARED_PATHS,
+	depth = 0,
+): string[] {
 	if (depth > MAX_SCAN_DEPTH) return [];
 	if (Array.isArray(input)) {
-		return input.flatMap(entry => scanPathArguments(entry, depth + 1));
+		return input.flatMap(entry => scanPathArguments(entry, NO_DECLARED_PATHS, depth + 1));
 	}
 	const record = asRecord(input);
 	if (record === null) return [];
 	const found: string[] = [];
 	for (const [key, value] of Object.entries(record)) {
+		const names = PATH_KEYS[key] === true || declared[key] === true;
 		if (typeof value === "string") {
 			const normalized = normalizePathLikeInput(value);
 			if (normalized.length === 0) continue;
-			if (PATH_KEYS[key] === true || path.isAbsolute(normalized) || normalized.startsWith("~/")) {
+			if (names || path.isAbsolute(normalized) || normalized.startsWith("~/")) {
 				found.push(normalized);
 			}
 			continue;
 		}
-		if (PATH_KEYS[key] === true && Array.isArray(value)) {
+		if (names && Array.isArray(value)) {
 			for (const entry of value) if (typeof entry === "string") found.push(entry);
 			continue;
 		}
-		found.push(...scanPathArguments(value, depth + 1));
+		found.push(...scanPathArguments(value, NO_DECLARED_PATHS, depth + 1));
 	}
 	return found;
 }
@@ -1451,9 +1490,13 @@ export function decideWorktreeCall(
 	// resolves the receipt, the worktree and the branch from the directory it runs
 	// in, so a payload that names no path still mutates that repository. The cwd is
 	// judged first and the payload's own paths after it, so a call from a live
-	// linked worktree that points at some other checkout is still refused.
+	// linked worktree that points at some other checkout is still refused —
+	// including one that spells that checkout relatively, because the tool's
+	// declared path parameters are scanned whatever their spelling and `refuseAll`
+	// resolves each against the same session cwd the tool would inherit.
 	if (SESSION_CWD_TOOLS[toolName] === true) {
-		return refuseTarget(sessionCwd) ?? refuseAll(scanPathArguments(input));
+		const declared = DECLARED_PATH_KEYS[toolName] ?? NO_DECLARED_PATHS;
+		return refuseTarget(sessionCwd) ?? refuseAll(scanPathArguments(input, declared));
 	}
 
 	switch (toolName) {
