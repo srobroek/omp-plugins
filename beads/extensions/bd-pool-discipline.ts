@@ -14,7 +14,6 @@ export const DECLARED_POOL_ALIASES = [
 	"pool:orc-reviewer",
 	"pool:orc-researcher",
 	"pool:orc-shepherd",
-	"pool:orc-merger",
 	"pool:orc-lead",
 ] as const;
 export const DECLARED_POOL_SET = DECLARED_POOL_ALIASES.join(",");

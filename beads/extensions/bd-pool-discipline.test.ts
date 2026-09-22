@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 
 import bdPoolDiscipline, {
+	DECLARED_POOL_ALIASES,
 	DECLARED_POOL_SET,
 	INTEGRATION_OWNER_METADATA_KEY,
 	PHASE_METADATA_KEY,
@@ -62,6 +63,17 @@ function result(toolCallId: string, text: string): Record<string, unknown> {
 }
 
 afterEach(() => setBdRunForTests(null));
+test("declares exactly the supported pool aliases", () => {
+	expect(DECLARED_POOL_ALIASES).toEqual([
+		"pool:orc-implementer",
+		"pool:orc-implementer-deep",
+		"pool:orc-implementer-max",
+		"pool:orc-reviewer",
+		"pool:orc-researcher",
+		"pool:orc-shepherd",
+		"pool:orc-lead",
+	]);
+});
 
 describe("claim pool precondition", () => {
 	test("refuses an unset pool set before the claim can run", async () => {
