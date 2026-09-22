@@ -2,24 +2,44 @@
  * One writer at a time for an embedded Beads store.
  *
  * Embedded Dolt resolves a PATH, not a host and port, so every process that walks
- * up to the same `.beads` opens the same journal files with its own engine. An
+ * up to the same `.beads` opens the same journal files with its own engine. Two of
+ * them writing at once corrupts the journal, so every writer in reach has to take
+ * one turn on one file.
  *
- * Both writers this plugin can see share that one domain: the bash calls an agent
- * makes, held here from `tool_call` to `tool_result`, and the lease stamp
- * `bd-lease-gate` runs itself. The stamp fires in a `tool_result` for the same call
- * whose hold may still be open, so holds are counted per tool call and a nested
- * writer joins the hold it is already inside rather than waiting on itself.
+ * Two writers are in reach, and they take their turns in DIFFERENT processes.
+ *
+ * A plugin-internal `bd` run is this process's own, so `withEmbeddedWriteLock`
+ * wraps it directly: acquire, await the run, release in `finally`.
+ *
+ * A `bd` mutation an agent issues through Bash is not. The only pre-execution seam
+ * an extension has is `tool_call`, which fires at arg-prep time -- before
+ * concurrency scheduling and before the approval prompt -- and the only settlement
+ * signal is `tool_result`, which native Bash reports as soon as it BACKGROUNDS a
+ * long command rather than when the command finishes. A hold taken at `tool_call`
+ * and dropped at `tool_result` therefore covers the wrong interval at both ends: it
+ * starts while the agent is still waiting for approval, and it can end while bd is
+ * still writing.
+ *
+ * So the hold moves into the writing process. The validated command is rewritten to
+ * run `bd` under `bd-embedded-write-runner`, a process this package owns which
+ * acquires the store's lock, spawns the real `bd`, awaits its exit, and releases in
+ * `finally` and on its own death. The runner IS bd's parent, so the hold begins
+ * immediately before the mutation and ends when it settles, whatever Bash does with
+ * the foreground: an explicitly async or auto-backgrounded call keeps its lock
+ * because the runner outlives the tool result, and a killed call releases because
+ * the runner dies with it.
+ *
+ * Nothing about a Bash-originated write is recorded in this process, so there is no
+ * session bookkeeping to leak. What stays process-global is the lock domain itself:
+ * the descriptors this process owns and the queue of callers waiting on them, both
+ * on {@link Registry}, because a plugin reachable through two load paths is
+ * instantiated twice and the copies must share one coordinator.
  */
 
 import { closeSync, existsSync, openSync, readFileSync, realpathSync, statSync, unlinkSync, writeSync } from "node:fs";
 import { hostname } from "node:os";
-import { isAbsolute, join, resolve } from "node:path";
-import type {
-	ExtensionAPI,
-	ExtensionContext,
-	ToolCallEvent,
-	ToolResultEvent,
-} from "@oh-my-pi/pi-coding-agent";
+import { basename, dirname, isAbsolute, join, resolve } from "node:path";
+import type { ExtensionContext, ToolCallEvent } from "@oh-my-pi/pi-coding-agent";
 
 import {
 	type BdInvocation,
@@ -40,12 +60,10 @@ const STEAL_NAME = "omp-embedded-write-steal.lock";
  * A hold's lease, renewed while its writer is still running.
  *
  * A long fixed age was the wrong instrument. A live pid reports only that the
- * PROCESS exists, so a hold whose release path never ran --
- * a bash call the host timed out, blocked, denied approval for, or aborted after
- * this extension had already acquired -- advertised a live holder and stalled every
- * other writer. A lease that must be renewed inverts that: a hold nobody is
- * refreshing expires on its own, while `bd gc` taking ten minutes keeps its turn
- * because its heartbeat keeps saying so.
+ * PROCESS exists, so a hold whose release path never ran advertised a live holder
+ * and stalled every other writer. A lease that must be renewed inverts that: a hold
+ * nobody is refreshing expires on its own, while `bd gc` taking ten minutes keeps
+ * its turn because its heartbeat keeps saying so.
  *
  * The lease is several renewals wide on purpose. The heartbeat is an event-loop
  * timer, so it cannot fire while something blocks the loop; every writer this
@@ -58,14 +76,24 @@ const LEASE_MS = 120_000;
 const RENEW_MS = 20_000;
 
 /**
- * Default wait for a caller that is acquiring one store outside an event
- * handler. Bash dispatches use ACQUISITION_TIMEOUT_MS below instead, so a
- * multi-store command has one shared deadline rather than one wait per store.
+ * Default wait for a caller acquiring one store outside a bounded dispatch.
+ *
+ * The runner is given its own wait on the command line instead, so a mutation an
+ * agent issued waits for its turn as long as the Bash call itself is willing to
+ * wait rather than being refused after a fixed twenty seconds.
  */
 const WAIT_MS = 20_000;
 
-/** A tool_call has a 30,000 ms budget; leave 5,000 ms for dispatch and cleanup. */
-const ACQUISITION_TIMEOUT_MS = 25_000;
+/**
+ * How long the runner waits for its turn before giving up.
+ *
+ * Long, because the caller is awaiting a real result and a queued mutation that
+ * runs two minutes late is better than one that has to be reissued. Bounded, so a
+ * hold left by a host this process cannot see still surfaces as a failure rather
+ * than hanging the call forever. Bash's own timeout can end the wait sooner, and
+ * killing the runner releases nothing because it holds nothing yet.
+ */
+const RUNNER_WAIT_MS = 300_000;
 
 const POLL_MS = 20;
 
@@ -92,7 +120,18 @@ function pidAlive(pid: number): boolean {
 interface Holder {
 	host: string;
 	pid: number;
-	toolCallId: string;
+	/** Whoever took the hold: a runner process, or a named internal writer. */
+	owner: string;
+	/**
+	 * The `bd` process this hold exists for, once one is running.
+	 *
+	 * A hold is judged by whether anyone is still writing, and the holder's own pid
+	 * does not answer that on its own. A runner killed outright leaves `bd` orphaned
+	 * and still writing while nothing renews the lease, so a waiter that looked only
+	 * at the dead holder would take the store from a live mutation. Recording the
+	 * writer keeps the turn with the process that is actually using it.
+	 */
+	writer?: number;
 	/**
 	 * Identifies THIS acquisition, not just the process.
 	 *
@@ -113,23 +152,43 @@ interface OwnedLock {
 	renew: Timer;
 	/** The token written into the file, so a renewal can prove the hold is still ours. */
 	token: string;
+	/** The `bd` process this hold is for, once {@link attachWriter} has named it. */
+	writer: number | undefined;
 }
 
 /**
- * Holds this OS process owns, keyed by lock path.
+ * One caller's place in the line for a lock.
+ *
+ * Only the ticket at the head of its queue attempts the exclusive create. Without
+ * that, every waiter raced every poll and the winner was whoever the scheduler
+ * happened to wake, so a caller could be passed over indefinitely while later
+ * arrivals took turn after turn.
+ */
+interface Ticket {
+	/** Ends this ticket's current sleep early, when the lock or the queue moved. */
+	wake: (() => void) | undefined;
+}
+
+/**
+ * Everything about the lock domain that this OS process mutates.
  *
  * Process-global, for the same reason the sibling extensions key their state on
- * `globalThis`: a plugin reachable through two load paths is instantiated twice,
- * and two instances handling ONE tool call must share one hold rather than have
- * the second wait forever on the first.
+ * `globalThis`: a plugin reachable through two load paths is instantiated twice, and
+ * the copies have to share one coordinator. Every mutable field of the protocol
+ * lives here rather than in module scope, because a module-scoped map is per copy:
+ * the copy that released would not be the copy that had acquired.
  *
- * `holders` counts per tool call, which is what separates the two things that look
- * alike. A second acquisition under the SAME tool call is a nested writer -- the
- * lease stamp inside a claim's own `tool_result`, or a second plugin instance -- and
- * joins the hold. A different tool call is a concurrent writer and waits.
+ * `owned` holds the descriptors this process owns, keyed by lock path. Its
+ * `holders` count is per owner id, which is what separates the two things that look
+ * alike. A second acquisition under the SAME id is a nested writer -- a second
+ * plugin copy, or an inner mutation inside an outer one -- and joins the hold. A
+ * different id is a concurrent writer and waits.
+ *
+ * `queues` holds those waiters, in arrival order, keyed by the same lock path.
  */
 interface Registry {
 	owned: Map<string, OwnedLock>;
+	queues: Map<string, Ticket[]>;
 }
 
 const REGISTRY_KEY = Symbol.for("com.srobroek.beads.embedded-write-lock.v1");
@@ -138,7 +197,7 @@ function registry(): Registry {
 	const holder = globalThis as { [REGISTRY_KEY]?: Registry };
 	const existing = holder[REGISTRY_KEY];
 	if (existing !== undefined) return existing;
-	const created: Registry = { owned: new Map() };
+	const created: Registry = { owned: new Map(), queues: new Map() };
 	holder[REGISTRY_KEY] = created;
 	// A normal exit while a hold is open would otherwise leave the file behind. An
 	// abrupt death is covered instead by the lease and the pid check in `abandoned`.
@@ -509,11 +568,17 @@ function ageOf(path: string): number {
 /**
  * Whether an existing hold may be taken over.
  *
- * Two independent grounds, and the lease is the one that matters for a hold whose
- * owner is still running: an expired lease means nobody renewed it, so nobody is
- * waiting on the write it guarded. A dead pid on THIS host is the faster answer
- * when the whole process went away. An unreadable or unparseable file is judged by
- * the lease length alone.
+ * Three grounds, in the order a waiter can trust them.
+ *
+ * A live `bd` on THIS host settles it outright: the store is in use, whatever the
+ * lease says. That case is not hypothetical -- a runner killed outright leaves its
+ * `bd` orphaned and still writing with nothing left to renew the lease, and taking
+ * the store then is exactly the concurrent write this lock exists to prevent.
+ *
+ * Otherwise a dead holder pid on this host is the fast answer for a process that
+ * went away, and an expired lease is the general one: nobody renewed it, so nobody
+ * is waiting on the write it guarded. An unreadable or unparseable file, and a hold
+ * from a version that recorded no lease, are judged by the lease length alone.
  */
 function abandoned(lock: string): boolean {
 	let raw: string;
@@ -529,7 +594,9 @@ function abandoned(lock: string): boolean {
 	} catch {
 		return ageOf(lock) > leaseMs;
 	}
-	if (holder.host === HOST && typeof holder.pid === "number" && !pidAlive(holder.pid)) return true;
+	const local = holder.host === HOST;
+	if (local && typeof holder.writer === "number" && pidAlive(holder.writer)) return false;
+	if (local && typeof holder.pid === "number" && !pidAlive(holder.pid)) return true;
 	if (typeof holder.expires === "number") return Date.now() > holder.expires;
 	// A hold from a version that recorded no lease still has to be recoverable.
 	return ageOf(lock) > leaseMs;
@@ -562,7 +629,7 @@ function takeOverIfAbandoned(lock: string, steal: string): void {
 		return;
 	}
 	try {
-		writeSync(fd, JSON.stringify(holderNow(`steal-${process.pid}`, `steal-${(nextToken++).toString(36)}`)));
+		writeSync(fd, JSON.stringify(holderNow(`steal-${process.pid}`, `steal-${(nextToken++).toString(36)}`, undefined)));
 		if (abandoned(lock)) unlinkSync(lock);
 	} catch {
 		// The hold went away on its own.
@@ -576,9 +643,9 @@ function takeOverIfAbandoned(lock: string, steal: string): void {
 	}
 }
 
-function holderNow(toolCallId: string, token: string): Holder {
+function holderNow(owner: string, token: string, writer: number | undefined): Holder {
 	const taken = Date.now();
-	return { host: HOST, pid: process.pid, toolCallId, token, taken, expires: taken + leaseMs };
+	return { host: HOST, pid: process.pid, owner, token, taken, expires: taken + leaseMs, ...(writer === undefined ? {} : { writer }) };
 }
 
 /** Whether the file at `lock` still records the hold this process took. */
@@ -594,103 +661,187 @@ function stillOurs(lock: string, token: string): boolean {
 export type Hold = { kind: "held" } | { kind: "failed"; reason: string };
 
 /**
- * Hold `store` for `toolCallId`, waiting for whoever has it.
+ * Sleep up to `ms`, ending early when this ticket is woken or `signal` aborts.
  *
- * Fails closed. A lock error that is not a live hold, and a wait that runs out,
- * both return `failed`: a write that could not be serialised must not proceed,
- * because the damage it risks is the database rather than the one command.
+ * A raw timer with no `ctx` in scope: every callback here is a resolver, so none of
+ * them can throw and none can reach `uncaughtException`.
  */
-export async function hold(store: string, toolCallId: string, waitMs: number = WAIT_MS): Promise<Hold> {
-	const lock = join(store, LOCK_NAME);
-	const owned = registry().owned;
-	const deadline = Date.now() + waitMs;
-	while (true) {
-		const owner = owned.get(lock);
-		if (owner !== undefined) {
-			const nested = owner.holders.get(toolCallId);
-			if (nested !== undefined) {
-				owner.holders.set(toolCallId, nested + 1);
-				return { kind: "held" };
-			}
-		} else {
-			try {
-				// Exclusive create is the whole cross-process guarantee, and nothing
-				// between it and the registry write awaits, so it also settles two
-				// writers racing inside this process.
-				const fd = openSync(lock, "wx");
-				const token = `${process.pid}-${Date.now()}-${(nextToken++).toString(36)}`;
-				writeSync(fd, JSON.stringify(holderNow(toolCallId, token)));
-				// A raw interval in a helper with no `ctx`: the body is fully guarded, so
-				// no renewal failure can escape as an uncaughtException, and `release`
-				// and the exit handler both clear it.
-				const renew = setInterval(() => {
-					try {
-						renewLease(lock, toolCallId, token);
-					} catch {
-						// A lease that cannot be renewed simply expires, which is the
-						// safe direction: another writer takes over rather than stalls.
-					}
-				}, renewMs);
-				// The heartbeat must not be a reason the process stays alive.
-				renew.unref?.();
-				owned.set(lock, { fd, holders: new Map([[toolCallId, 1]]), renew, token });
-				return { kind: "held" };
-			} catch (error) {
-				const code = (error as NodeJS.ErrnoException).code;
-				if (code !== "EEXIST") {
-					return {
-						kind: "failed",
-						reason: `Beads embedded write lock could not be taken at ${lock} (${code ?? "unknown error"}). The write was refused rather than risk a second writer on the embedded Dolt journal.`,
-					};
-				}
-				takeOverIfAbandoned(lock, join(store, STEAL_NAME));
-			}
-		}
-		if (Date.now() >= deadline) {
-			return {
-				kind: "failed",
-				reason: `Beads embedded write lock at ${lock} stayed held for ${Math.round(waitMs / 1000)}s. Another writer is still working, or a hold was left behind by a process on another host; the write was refused rather than run concurrently. Read the lock file, then remove it once its holder is really gone.`,
-			};
-		}
-		const { promise, resolve: wake } = Promise.withResolvers<void>();
-		// A raw timer with no `ctx` in scope: the callback is a resolver, so it cannot
-		// throw and cannot reach `uncaughtException`.
-		setTimeout(wake, POLL_MS);
+async function pause(ticket: Ticket, ms: number, signal: AbortSignal | undefined): Promise<void> {
+	const { promise, resolve } = Promise.withResolvers<void>();
+	const done = (): void => resolve();
+	ticket.wake = done;
+	const timer = setTimeout(done, ms);
+	signal?.addEventListener("abort", done, { once: true });
+	try {
 		await promise;
+	} finally {
+		ticket.wake = undefined;
+		clearTimeout(timer);
+		signal?.removeEventListener("abort", done);
 	}
 }
 
-/** Give up one share of `store`, releasing the lock when it was the last. */
-export function release(store: string, toolCallId: string): void {
+/** Let the caller at the head of `lock`'s queue try again now. */
+function wakeHead(lock: string): void {
+	registry().queues.get(lock)?.[0]?.wake?.();
+}
+
+/**
+ * Hold `store` for `owner`, waiting in line for whoever has it.
+ *
+ * `owner` names the writer, and two acquisitions under one name are one writer
+ * nested inside itself rather than two competing for the store.
+ *
+ * Fails closed. A lock error that is not a live hold, a wait that runs out, and an
+ * aborted caller all return `failed`: a write that could not be serialised must not
+ * proceed, because the damage it risks is the database rather than the one command.
+ *
+ * `signal` is what makes a wait abandonable. A caller whose work has been cancelled
+ * -- its command killed, its session shutting down -- stops waiting at once, leaves
+ * the queue, and never acquires afterwards, so the turn it gave up goes to the next
+ * caller instead of being taken by a caller nobody is waiting on.
+ */
+export async function hold(
+	store: string,
+	owner: string,
+	waitMs: number = WAIT_MS,
+	signal?: AbortSignal,
+): Promise<Hold> {
+	const lock = join(store, LOCK_NAME);
+	const { owned, queues } = registry();
+	const deadline = Date.now() + waitMs;
+	const queue = queues.get(lock) ?? [];
+	if (queue.length === 0) queues.set(lock, queue);
+	const ticket: Ticket = { wake: undefined };
+	queue.push(ticket);
+	try {
+		while (true) {
+			const held = owned.get(lock);
+			if (held !== undefined) {
+				const nested = held.holders.get(owner);
+				// A nested writer joins its own hold rather than queueing behind itself,
+				// whichever place in the line its ticket happens to hold.
+				if (nested !== undefined) {
+					held.holders.set(owner, nested + 1);
+					return { kind: "held" };
+				}
+			} else if (queue[0] === ticket) {
+				try {
+					// Exclusive create is the whole cross-process guarantee, and nothing
+					// between it and the registry write awaits, so it also settles two
+					// writers racing inside this process.
+					const fd = openSync(lock, "wx");
+					const token = `${process.pid}-${Date.now()}-${(nextToken++).toString(36)}`;
+					writeSync(fd, JSON.stringify(holderNow(owner, token, undefined)));
+					// A raw interval in a helper with no `ctx`: the body is fully guarded, so
+					// no renewal failure can escape as an uncaughtException, and `release`
+					// and the exit handler both clear it.
+					const renew = setInterval(() => {
+						try {
+							renewLease(lock, owner, token);
+						} catch {
+							// A lease that cannot be renewed simply expires, which is the
+							// safe direction: another writer takes over rather than stalls.
+						}
+					}, renewMs);
+					// The heartbeat must not be a reason the process stays alive.
+					renew.unref?.();
+					owned.set(lock, { fd, holders: new Map([[owner, 1]]), renew, token, writer: undefined });
+					return { kind: "held" };
+				} catch (error) {
+					const code = (error as NodeJS.ErrnoException).code;
+					if (code !== "EEXIST") {
+						return {
+							kind: "failed",
+							reason: `Beads embedded write lock could not be taken at ${lock} (${code ?? "unknown error"}). The write was refused rather than risk a second writer on the embedded Dolt journal.`,
+						};
+					}
+					takeOverIfAbandoned(lock, join(store, STEAL_NAME));
+				}
+			}
+			// Checked after the attempt, so a caller aborted while its turn was already
+			// available still gets the hold it can release, rather than leaving the file
+			// created and unowned.
+			if (signal?.aborted === true) {
+				return {
+					kind: "failed",
+					reason: `Waiting for the Beads embedded write lock at ${lock} was cancelled before this writer got its turn. Nothing was written.`,
+				};
+			}
+			if (Date.now() >= deadline) {
+				return {
+					kind: "failed",
+					reason: `Beads embedded write lock at ${lock} stayed held for ${Math.round(waitMs / 1000)}s. Another writer is still working, or a hold was left behind by a process on another host; the write was refused rather than run concurrently. Read the lock file, then remove it once its holder is really gone.`,
+				};
+			}
+			await pause(ticket, Math.min(POLL_MS, deadline - Date.now()), signal);
+		}
+	} finally {
+		const index = queue.indexOf(ticket);
+		if (index >= 0) queue.splice(index, 1);
+		if (queue.length === 0) queues.delete(lock);
+		// A ticket that left the head -- acquired, timed out, or abandoned -- promotes
+		// the next one, which is still asleep on its poll timer.
+		else if (index === 0) queue[0]?.wake?.();
+	}
+}
+
+type OwnershipResult = "done" | "busy" | "lost";
+
+/** Serialize record replacement and deletion with stale-holder takeover. */
+function withOwnership(storeLock: string, token: string, change: () => void): OwnershipResult {
+	const steal = join(dirname(storeLock), STEAL_NAME);
+	let fd: number;
+	try {
+		fd = openSync(steal, "wx");
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code === "EEXIST") return "busy";
+		throw error;
+	}
+	try {
+		if (!stillOurs(storeLock, token)) return "lost";
+		change();
+		return "done";
+	} finally {
+		closeSync(fd);
+		try { unlinkSync(steal); } catch { /* A competing cleanup already removed it. */ }
+	}
+}
+
+/**
+ * Give up one share of `store`, releasing the lock when it was the last.
+ *
+ * The next caller in line is woken rather than left to find out on its own poll, so
+ * a released store changes hands in arrival order and within one tick.
+ */
+export function release(store: string, owner: string): void {
 	const lock = join(store, LOCK_NAME);
 	const owned = registry().owned;
-	const owner = owned.get(lock);
-	if (owner === undefined) return;
-	const shares = owner.holders.get(toolCallId);
+	const held = owned.get(lock);
+	if (held === undefined) return;
+	const shares = held.holders.get(owner);
 	if (shares === undefined) return;
 	if (shares > 1) {
-		owner.holders.set(toolCallId, shares - 1);
+		held.holders.set(owner, shares - 1);
 		return;
 	}
-	owner.holders.delete(toolCallId);
-	if (owner.holders.size > 0) return;
+	held.holders.delete(owner);
+	if (held.holders.size > 0) return;
 	owned.delete(lock);
-	clearInterval(owner.renew);
+	clearInterval(held.renew);
 	try {
-		closeSync(owner.fd);
+		closeSync(held.fd);
 	} catch {
 		// Nothing to do; the file is what other processes see.
 	}
-	// Only unlink a file that is still THIS hold. A lease that lapsed while its
-	// writer was stalled may already have been taken over legitimately, and
-	// unlinking then would hand the store to a third writer.
-	if (stillOurs(lock, owner.token)) {
-		try {
-			unlinkSync(lock);
-		} catch {
-			// Taken over between the check and the unlink; the next acquisition settles it.
-		}
+	// Serialize the token check and unlink with stale-holder takeover. Without the
+	// steal lock, a stalled release could unlink a successor's newly-created hold.
+	try {
+		withOwnership(lock, held.token, () => unlinkSync(lock));
+	} catch {
+		// The lease makes a failed cleanup recoverable without risking another owner.
 	}
+	wakeHead(lock);
 }
 
 /**
@@ -702,91 +853,189 @@ export function release(store: string, toolCallId: string): void {
  * believing they held the store. Losing the token means we no longer hold it, so
  * the heartbeat stops and the registry entry goes with it.
  */
-function renewLease(lock: string, toolCallId: string, token: string): void {
+function renewLease(lock: string, owner: string, token: string): void {
 	const owned = registry().owned;
-	const owner = owned.get(lock);
-	if (owner === undefined || owner.token !== token) return;
-	if (!stillOurs(lock, token)) {
-		clearInterval(owner.renew);
-		owned.delete(lock);
+	const held = owned.get(lock);
+	if (held === undefined || held.token !== token) return;
+	const result = withOwnership(lock, token, () => {
+		const fd = openSync(lock, "w");
 		try {
-			closeSync(owner.fd);
-		} catch {
-			// The descriptor is already gone.
+			writeSync(fd, JSON.stringify(holderNow(owner, token, held.writer)));
+		} finally {
+			closeSync(fd);
 		}
-		return;
-	}
-	const fd = openSync(lock, "w");
-	try {
-		writeSync(fd, JSON.stringify(holderNow(toolCallId, token)));
-	} finally {
-		closeSync(fd);
-	}
+	});
+	if (result !== "lost") return;
+	clearInterval(held.renew);
+	owned.delete(lock);
+	try { closeSync(held.fd); } catch { /* The descriptor is already gone. */ }
+}
+
+/**
+ * Publish the gated child before allowing it to exec `bd`.
+ *
+ * `false` means this process lost ownership or could not update atomically. The
+ * runner must kill the still-gated child and refuse the mutation in that case.
+ */
+export function attachWriter(store: string, owner: string, pid: number): boolean {
+	const lock = join(store, LOCK_NAME);
+	const held = registry().owned.get(lock);
+	if (held === undefined || !held.holders.has(owner)) return false;
+	const result = withOwnership(lock, held.token, () => {
+		const fd = openSync(lock, "w");
+		try {
+			writeSync(fd, JSON.stringify(holderNow(owner, held.token, pid)));
+		} finally {
+			closeSync(fd);
+		}
+	});
+	if (result !== "done") return false;
+	held.writer = pid;
+	return true;
 }
 
 /**
  * Run `write`, a plugin-internal `bd` mutation, inside the store's lock.
  *
- * `cwd` is the directory the mutation runs in. A store that is not embedded, or a
+ * `cwd` is the directory the mutation runs in; a store that is not embedded needs no
+ * turn and the mutation runs straight away.
+ *
  * `write` is AWAITED before the hold is given up. Returning the promise instead
  * would release while the bd process it represents was still running -- the hold
- * would cover spawning the writer rather than the write -- and every internal
- * caller here spawns asynchronously. A synchronous `write` is unaffected: `await`
- * on a plain value resolves immediately, and `value` reaches the caller settled
- * either way. A `write` that rejects releases too, and its rejection propagates.
+ * would cover spawning the writer rather than the write -- and every internal caller
+ * here spawns asynchronously. A synchronous `write` is unaffected: `await` on a plain
+ * value resolves immediately, and `value` reaches the caller settled either way. A
+ * `write` that rejects releases too, and its rejection propagates.
+ *
+ * `signal` abandons the wait for a turn; it does not interrupt a `write` that has
+ * already started, because a half-applied mutation is worse than a slow one.
  */
 export async function withEmbeddedWriteLock<T>(
 	cwd: string,
-	toolCallId: string,
+	owner: string,
 	write: () => T | PromiseLike<T>,
 	env: NodeJS.ProcessEnv = process.env,
 	deadline?: number,
+	signal?: AbortSignal,
 ): Promise<{ kind: "done"; value: T } | { kind: "failed"; reason: string }> {
 	const store = embeddedStoreFor(cwd, env);
 	if (store === undefined) return { kind: "done", value: await write() };
 	const waitMs = deadline === undefined ? WAIT_MS : Math.max(0, deadline - Date.now());
-	const got = await hold(store, toolCallId, waitMs);
+	const got = await hold(store, owner, waitMs, signal);
 	if (got.kind === "failed") return got;
 	try {
 		return { kind: "done", value: await write() };
 	} finally {
-		release(store, toolCallId);
+		release(store, owner);
 	}
 }
 
-interface ActiveHold {
-	store: string;
-	held: boolean;
-	released: boolean;
+/** The runner's own file name, without the extension its build gives it. */
+const RUNNER_STEM = "bd-embedded-write-runner";
+
+/** The runner's store flag, which is also how a rewritten command is recognised. */
+export const RUNNER_STORE_FLAG = "--beads-store";
+
+/** The runner's wait flag, in milliseconds. */
+export const RUNNER_WAIT_FLAG = "--beads-wait-ms";
+
+/**
+ * The Bun binary and the runner script, or `undefined` when either is unreachable.
+ *
+ * The interpreter cannot be assumed from `process.execPath`. OMP ships as a compiled
+ * single-file executable, so that path is the `omp` binary, which cannot run a
+ * script; on a source install it IS Bun, which can. Both are handled, and PATH and
+ * `BUN_INSTALL` cover the compiled case.
+ *
+ * The script sits beside this module whichever way the plugin was loaded: next to the
+ * bundle in `dist/` when the package ships built, and next to the source in
+ * `extensions/` when OMP imports the TypeScript directly.
+ */
+export function embeddedWriteRunner(): { interpreter: string; script: string } | undefined {
+	const here = import.meta.dir;
+	const script = [
+		join(here, `${RUNNER_STEM}.js`),
+		join(here, `${RUNNER_STEM}.ts`),
+		join(here, "..", "dist", `${RUNNER_STEM}.js`),
+		join(here, "..", "extensions", `${RUNNER_STEM}.ts`),
+	].find(candidate => existsSync(candidate));
+	if (script === undefined) return undefined;
+	const interpreter = bunBinary();
+	return interpreter === undefined ? undefined : { interpreter, script: resolve(script) };
 }
 
-const activeHolds = new Map<string, ActiveHold[]>();
-const surrenderedCalls = new Set<string>();
-
-export function beginEmbeddedWrite(toolCallId: string): void {
-	surrenderedCalls.delete(toolCallId);
+function bunBinary(): string | undefined {
+	const own = basename(process.execPath);
+	if (own === "bun" || own === "bun.exe") return process.execPath;
+	const onPath = typeof Bun === "undefined" ? undefined : Bun.which("bun");
+	if (onPath !== null && onPath !== undefined) return onPath;
+	const install = process.env.BUN_INSTALL;
+	if (install === undefined || install === "") return undefined;
+	const guess = join(install, "bin", "bun");
+	return existsSync(guess) ? guess : undefined;
 }
 
-function surrender(toolCallId: string): void {
-	surrenderedCalls.add(toolCallId);
-	const holds = activeHolds.get(toolCallId);
-	if (holds === undefined) return;
-	activeHolds.delete(toolCallId);
-	for (const hold of holds) {
-		hold.released = true;
-		if (hold.held) {
-			release(hold.store, toolCallId);
-			hold.held = false;
-		}
-	}
+/**
+ * One shell word, quoted so the shell hands it back unchanged.
+ *
+ * Single quotes suspend every expansion the shell would otherwise perform, and an
+ * embedded single quote is closed, escaped and reopened. The rewritten command is
+ * built entirely from words that went through here, so nothing in a bead id, a note,
+ * or a store path can be read as syntax.
+ */
+function quote(word: string): string {
+	return `'${word.replaceAll("'", "'\\''")}'`;
 }
 
-/** Shared Bash dispatcher called by bash-gates.ts after the command is parsed. */
-export async function decideEmbeddedWrite(parsed: ParsedCommand, event: ToolCallEvent, ctx: ExtensionContext): Promise<{ block: true; reason: string } | undefined> {
+/**
+ * Split a validated direct call into its assignment prefix and original command text.
+ *
+ * The outer shell must expand operands before the runner receives argv. Rebuilding every
+ * token as a quoted word would turn `bd close $ID` into a request for the literal `$ID`.
+ * Keeping the validated call text after `--` preserves expansion without asking the
+ * runner to evaluate shell syntax. Assignment spelling is preserved for the same reason.
+ */
+function directShell(command: string): { assignments: string; call: string } | undefined {
+	const tokens = tokenize(command);
+	if (tokens.some(token => SUBSTITUTION.test(token.value))) return undefined;
+	if (tokens.some(token => !token.quoted && OPERATOR.test(token.value))) return undefined;
+	let assignments = 0;
+	while (tokens[assignments] !== undefined && tokens[assignments]?.quoted === false && /^[A-Za-z_]\w*=/.test(tokens[assignments]?.value ?? "")) assignments++;
+	const head = tokens[assignments];
+	if (head === undefined || head.quoted || (head.value.split("/").pop() ?? head.value) !== "bd") return undefined;
+	const match = /^\s*((?:[A-Za-z_]\w*=(?:'[^']*'|"[^"]*"|[^\s]+)\s+)*)((?:[^\s]+\/)?bd(?:\s[\s\S]*)?)\s*$/.exec(command);
+	if (match === null || tokenize(match[1] ?? "").length !== assignments) return undefined;
+	return { assignments: match[1] ?? "", call: match[2] ?? "" };
+}
+
+/** What the Bash gate does with a call: nothing, refuse it, or run it under the runner. */
+export type EmbeddedWriteDecision =
+	| { kind: "block"; reason: string }
+	| { kind: "rewrite"; input: Record<string, unknown> };
+
+/**
+ * Shared Bash dispatcher called by bash-gates.ts after the command is parsed.
+ *
+ * Takes no hold of its own. A hold taken here would start before the approval prompt
+ * and would have to be given up on a `tool_result` that native Bash reports as soon as
+ * it backgrounds the command, so it would guard the wrong interval at both ends.
+ * Instead the command is rewritten to run under the runner, which holds the store for
+ * exactly as long as the `bd` process it is the parent of.
+ *
+ * Fails closed throughout. A refusal from the target classifier, a command that
+ * resolved a store without being the single direct invocation the classifier accepts,
+ * an unreachable runner, and any thrown error all block the call: an unserialised
+ * write risks the database rather than the one command.
+ */
+export async function decideEmbeddedWrite(
+	parsed: ParsedCommand,
+	event: ToolCallEvent,
+	ctx: ExtensionContext,
+): Promise<EmbeddedWriteDecision | undefined> {
 	try {
 		if (event.toolName !== "bash") return;
-		if (surrenderedCalls.delete(event.toolCallId)) return;
-		const input = event.input as { cwd?: unknown };
+		const input = event.input as { command?: unknown; cmd?: unknown; cwd?: unknown };
+		const whole = typeof input.command === "string" ? input.command : typeof input.cmd === "string" ? input.cmd : "";
 		const cwd = typeof input.cwd === "string" && input.cwd ? input.cwd : (ctx?.cwd ?? process.cwd());
 		const env = environmentForInput(event.input);
 		const sources = [...parsed.commands.map(position => position.raw)];
@@ -798,55 +1047,37 @@ export async function decideEmbeddedWrite(parsed: ParsedCommand, event: ToolCall
 		const targets: string[] = [];
 		for (const source of sources) {
 			const result = embeddedWriteTargets(source, cwd, env);
-			if (result.kind === "refused") return { block: true, reason: result.reason };
+			if (result.kind === "refused") return { kind: "block", reason: result.reason };
 			targets.push(...result.stores);
 		}
 		const unique = [...new Set(targets)];
 		if (unique.length === 0) return;
-		const deadline = Date.now() + ACQUISITION_TIMEOUT_MS;
-		const pending = unique.map(store => ({ store, held: false, released: false }));
-		const existing = activeHolds.get(event.toolCallId);
-		activeHolds.set(event.toolCallId, existing === undefined ? pending : [...existing, ...pending]);
-		for (const current of pending) {
-			// Share one 25 s deadline across every store in this tool_call, including
-			// each lock wait; the 30 s event budget still has dispatch/cleanup margin.
-			const got = await hold(current.store, event.toolCallId, Math.max(0, deadline - Date.now()));
-			if (got.kind === "failed") {
-				for (const pendingHold of pending) {
-					pendingHold.released = true;
-					if (pendingHold.held) {
-						release(pendingHold.store, event.toolCallId);
-						pendingHold.held = false;
-					}
-				}
-				const active = activeHolds.get(event.toolCallId);
-				if (active !== undefined) {
-					const remaining = active.filter(activeHold => !pending.includes(activeHold));
-					if (remaining.length === 0) activeHolds.delete(event.toolCallId);
-					else activeHolds.set(event.toolCallId, remaining);
-				}
-				return { block: true, reason: got.reason };
-			}
-			current.held = true;
-			if (current.released) {
-				release(current.store, event.toolCallId);
-				current.held = false;
-			}
+		const store = unique[0];
+		const direct = directShell(whole);
+		// The classifier only returns a store for a whole-command direct invocation, so
+		// disagreement here means the two no longer read the same shape. Refuse rather
+		// than run the mutation with no hold at all.
+		if (store === undefined || unique.length > 1 || direct === undefined) {
+			return {
+				kind: "block",
+				reason: `This command reaches the embedded store${unique.length > 1 ? "s" : ""} ${unique.join(", ")} in a form the Beads write lock cannot run under its serialising runner. Issue the \`bd\` command as its own tool call, as a single direct invocation.`,
+			};
 		}
-		ctx?.setTimeout?.(() => surrender(event.toolCallId), LEASE_MS);
+		const runner = embeddedWriteRunner();
+		if (runner === undefined) {
+			return {
+				kind: "block",
+				reason: `${store} is an embedded store, where two concurrent writers corrupt the Dolt journal, and the Beads write-lock runner that serialises writers could not be located: no \`bun\` binary was found on PATH, in BUN_INSTALL, or as this process's own interpreter, or the runner script is missing from the installed plugin. Install \`bun\` or reinstall the @srobroek/beads plugin; the write was refused rather than run unserialised.`,
+			};
+		}
+		const rewritten = `${direct.assignments}${quote(runner.interpreter)} ${quote(runner.script)} ${RUNNER_STORE_FLAG} ${quote(store)} ${RUNNER_WAIT_FLAG} ${RUNNER_WAIT_MS} -- ${direct.call}`;
+		const next: Record<string, unknown> = { ...(event.input as Record<string, unknown>) };
+		// `cmd` is the alias some hosts send; whichever one carried the command carries
+		// the rewrite, so the runner is what actually runs.
+		if (typeof input.command === "string") next.command = rewritten;
+		else next.cmd = rewritten;
+		return { kind: "rewrite", input: next };
 	} catch {
-		return { block: true, reason: "embedded write target could not be resolved" };
+		return { kind: "block", reason: "embedded write target could not be resolved" };
 	}
-	return;
-}
-
-export default function bdEmbeddedWriteLock(pi: ExtensionAPI): void {
-	pi.on("tool_result", (event: ToolResultEvent) => surrender(event.toolCallId));
-	pi.on("tool_approval_resolved", (event: { toolCallId?: string; approved?: boolean }) => {
-		if (event.approved === false && typeof event.toolCallId === "string") surrender(event.toolCallId);
-	});
-	const drain = () => { for (const id of [...activeHolds.keys()]) surrender(id); };
-	pi.on("turn_end", drain);
-	pi.on("agent_end", drain);
-	pi.on("session_shutdown", drain);
 }

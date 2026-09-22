@@ -437,7 +437,7 @@ function isMutatingBdCommand(command) {
 // extensions/bd-embedded-write-lock.ts
 import { closeSync, existsSync, openSync, readFileSync, realpathSync as realpathSync2, statSync as statSync2, unlinkSync, writeSync } from "fs";
 import { hostname } from "os";
-import { isAbsolute as isAbsolute2, join, resolve as resolve2 } from "path";
+import { basename, dirname as dirname2, isAbsolute as isAbsolute2, join, resolve as resolve2 } from "path";
 
 // extensions/beads-store.ts
 import { spawnSync } from "child_process";
@@ -539,7 +539,7 @@ function registry() {
   const existing = holder[REGISTRY_KEY];
   if (existing !== undefined)
     return existing;
-  const created = { owned: new Map };
+  const created = { owned: new Map, queues: new Map };
   holder[REGISTRY_KEY] = created;
   process.on("exit", () => {
     for (const [lock, held] of created.owned) {
@@ -706,7 +706,10 @@ function abandoned(lock) {
   } catch {
     return ageOf(lock) > leaseMs;
   }
-  if (holder.host === HOST && typeof holder.pid === "number" && !pidAlive(holder.pid))
+  const local = holder.host === HOST;
+  if (local && typeof holder.writer === "number" && pidAlive(holder.writer))
+    return false;
+  if (local && typeof holder.pid === "number" && !pidAlive(holder.pid))
     return true;
   if (typeof holder.expires === "number")
     return Date.now() > holder.expires;
@@ -727,7 +730,7 @@ function takeOverIfAbandoned(lock, steal) {
     return;
   }
   try {
-    writeSync(fd, JSON.stringify(holderNow(`steal-${process.pid}`, `steal-${(nextToken++).toString(36)}`)));
+    writeSync(fd, JSON.stringify(holderNow(`steal-${process.pid}`, `steal-${(nextToken++).toString(36)}`, undefined)));
     if (abandoned(lock))
       unlinkSync(lock);
   } catch {} finally {
@@ -737,9 +740,9 @@ function takeOverIfAbandoned(lock, steal) {
     } catch {}
   }
 }
-function holderNow(toolCallId, token) {
+function holderNow(owner, token, writer) {
   const taken = Date.now();
-  return { host: HOST, pid: process.pid, toolCallId, token, taken, expires: taken + leaseMs };
+  return { host: HOST, pid: process.pid, owner, token, taken, expires: taken + leaseMs, ...writer === undefined ? {} : { writer } };
 }
 function stillOurs(lock, token) {
   try {
@@ -749,116 +752,172 @@ function stillOurs(lock, token) {
     return false;
   }
 }
-async function hold(store, toolCallId, waitMs = WAIT_MS) {
-  const lock = join(store, LOCK_NAME);
-  const owned = registry().owned;
-  const deadline = Date.now() + waitMs;
-  while (true) {
-    const owner = owned.get(lock);
-    if (owner !== undefined) {
-      const nested = owner.holders.get(toolCallId);
-      if (nested !== undefined) {
-        owner.holders.set(toolCallId, nested + 1);
-        return { kind: "held" };
-      }
-    } else {
-      try {
-        const fd = openSync(lock, "wx");
-        const token = `${process.pid}-${Date.now()}-${(nextToken++).toString(36)}`;
-        writeSync(fd, JSON.stringify(holderNow(toolCallId, token)));
-        const renew = setInterval(() => {
-          try {
-            renewLease(lock, toolCallId, token);
-          } catch {}
-        }, renewMs);
-        renew.unref?.();
-        owned.set(lock, { fd, holders: new Map([[toolCallId, 1]]), renew, token });
-        return { kind: "held" };
-      } catch (error) {
-        const code = error.code;
-        if (code !== "EEXIST") {
-          return {
-            kind: "failed",
-            reason: `Beads embedded write lock could not be taken at ${lock} (${code ?? "unknown error"}). The write was refused rather than risk a second writer on the embedded Dolt journal.`
-          };
-        }
-        takeOverIfAbandoned(lock, join(store, STEAL_NAME));
-      }
-    }
-    if (Date.now() >= deadline) {
-      return {
-        kind: "failed",
-        reason: `Beads embedded write lock at ${lock} stayed held for ${Math.round(waitMs / 1000)}s. Another writer is still working, or a hold was left behind by a process on another host; the write was refused rather than run concurrently. Read the lock file, then remove it once its holder is really gone.`
-      };
-    }
-    const { promise, resolve: wake } = Promise.withResolvers();
-    setTimeout(wake, POLL_MS);
+async function pause(ticket, ms, signal) {
+  const { promise, resolve } = Promise.withResolvers();
+  const done = () => resolve();
+  ticket.wake = done;
+  const timer = setTimeout(done, ms);
+  signal?.addEventListener("abort", done, { once: true });
+  try {
     await promise;
+  } finally {
+    ticket.wake = undefined;
+    clearTimeout(timer);
+    signal?.removeEventListener("abort", done);
   }
 }
-function release(store, toolCallId) {
+function wakeHead(lock) {
+  registry().queues.get(lock)?.[0]?.wake?.();
+}
+async function hold(store, owner, waitMs = WAIT_MS, signal) {
+  const lock = join(store, LOCK_NAME);
+  const { owned, queues } = registry();
+  const deadline = Date.now() + waitMs;
+  const queue = queues.get(lock) ?? [];
+  if (queue.length === 0)
+    queues.set(lock, queue);
+  const ticket = { wake: undefined };
+  queue.push(ticket);
+  try {
+    while (true) {
+      const held = owned.get(lock);
+      if (held !== undefined) {
+        const nested = held.holders.get(owner);
+        if (nested !== undefined) {
+          held.holders.set(owner, nested + 1);
+          return { kind: "held" };
+        }
+      } else if (queue[0] === ticket) {
+        try {
+          const fd = openSync(lock, "wx");
+          const token = `${process.pid}-${Date.now()}-${(nextToken++).toString(36)}`;
+          writeSync(fd, JSON.stringify(holderNow(owner, token, undefined)));
+          const renew = setInterval(() => {
+            try {
+              renewLease(lock, owner, token);
+            } catch {}
+          }, renewMs);
+          renew.unref?.();
+          owned.set(lock, { fd, holders: new Map([[owner, 1]]), renew, token, writer: undefined });
+          return { kind: "held" };
+        } catch (error) {
+          const code = error.code;
+          if (code !== "EEXIST") {
+            return {
+              kind: "failed",
+              reason: `Beads embedded write lock could not be taken at ${lock} (${code ?? "unknown error"}). The write was refused rather than risk a second writer on the embedded Dolt journal.`
+            };
+          }
+          takeOverIfAbandoned(lock, join(store, STEAL_NAME));
+        }
+      }
+      if (signal?.aborted === true) {
+        return {
+          kind: "failed",
+          reason: `Waiting for the Beads embedded write lock at ${lock} was cancelled before this writer got its turn. Nothing was written.`
+        };
+      }
+      if (Date.now() >= deadline) {
+        return {
+          kind: "failed",
+          reason: `Beads embedded write lock at ${lock} stayed held for ${Math.round(waitMs / 1000)}s. Another writer is still working, or a hold was left behind by a process on another host; the write was refused rather than run concurrently. Read the lock file, then remove it once its holder is really gone.`
+        };
+      }
+      await pause(ticket, Math.min(POLL_MS, deadline - Date.now()), signal);
+    }
+  } finally {
+    const index = queue.indexOf(ticket);
+    if (index >= 0)
+      queue.splice(index, 1);
+    if (queue.length === 0)
+      queues.delete(lock);
+    else if (index === 0)
+      queue[0]?.wake?.();
+  }
+}
+function withOwnership(storeLock, token, change) {
+  const steal = join(dirname2(storeLock), STEAL_NAME);
+  let fd;
+  try {
+    fd = openSync(steal, "wx");
+  } catch (error) {
+    if (error.code === "EEXIST")
+      return "busy";
+    throw error;
+  }
+  try {
+    if (!stillOurs(storeLock, token))
+      return "lost";
+    change();
+    return "done";
+  } finally {
+    closeSync(fd);
+    try {
+      unlinkSync(steal);
+    } catch {}
+  }
+}
+function release(store, owner) {
   const lock = join(store, LOCK_NAME);
   const owned = registry().owned;
-  const owner = owned.get(lock);
-  if (owner === undefined)
+  const held = owned.get(lock);
+  if (held === undefined)
     return;
-  const shares = owner.holders.get(toolCallId);
+  const shares = held.holders.get(owner);
   if (shares === undefined)
     return;
   if (shares > 1) {
-    owner.holders.set(toolCallId, shares - 1);
+    held.holders.set(owner, shares - 1);
     return;
   }
-  owner.holders.delete(toolCallId);
-  if (owner.holders.size > 0)
+  held.holders.delete(owner);
+  if (held.holders.size > 0)
     return;
   owned.delete(lock);
-  clearInterval(owner.renew);
+  clearInterval(held.renew);
   try {
-    closeSync(owner.fd);
+    closeSync(held.fd);
   } catch {}
-  if (stillOurs(lock, owner.token)) {
-    try {
-      unlinkSync(lock);
-    } catch {}
-  }
-}
-function renewLease(lock, toolCallId, token) {
-  const owned = registry().owned;
-  const owner = owned.get(lock);
-  if (owner === undefined || owner.token !== token)
-    return;
-  if (!stillOurs(lock, token)) {
-    clearInterval(owner.renew);
-    owned.delete(lock);
-    try {
-      closeSync(owner.fd);
-    } catch {}
-    return;
-  }
-  const fd = openSync(lock, "w");
   try {
-    writeSync(fd, JSON.stringify(holderNow(toolCallId, token)));
-  } finally {
-    closeSync(fd);
-  }
+    withOwnership(lock, held.token, () => unlinkSync(lock));
+  } catch {}
+  wakeHead(lock);
 }
-async function withEmbeddedWriteLock(cwd, toolCallId, write, env = process.env, deadline) {
+function renewLease(lock, owner, token) {
+  const owned = registry().owned;
+  const held = owned.get(lock);
+  if (held === undefined || held.token !== token)
+    return;
+  const result = withOwnership(lock, token, () => {
+    const fd = openSync(lock, "w");
+    try {
+      writeSync(fd, JSON.stringify(holderNow(owner, token, held.writer)));
+    } finally {
+      closeSync(fd);
+    }
+  });
+  if (result !== "lost")
+    return;
+  clearInterval(held.renew);
+  owned.delete(lock);
+  try {
+    closeSync(held.fd);
+  } catch {}
+}
+async function withEmbeddedWriteLock(cwd, owner, write, env = process.env, deadline, signal) {
   const store = embeddedStoreFor(cwd, env);
   if (store === undefined)
     return { kind: "done", value: await write() };
   const waitMs = deadline === undefined ? WAIT_MS : Math.max(0, deadline - Date.now());
-  const got = await hold(store, toolCallId, waitMs);
+  const got = await hold(store, owner, waitMs, signal);
   if (got.kind === "failed")
     return got;
   try {
     return { kind: "done", value: await write() };
   } finally {
-    release(store, toolCallId);
+    release(store, owner);
   }
 }
-var activeHolds = new Map;
-var surrenderedCalls = new Set;
 
 // extensions/session-beads-lifecycle.ts
 function lifecycleBdEnvironment(cwd, base = process.env) {

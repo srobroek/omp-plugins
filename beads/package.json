@@ -11,6 +11,9 @@
       "./dist/session-beads-lifecycle.js",
       "./dist/unreported-failure-advisory.js",
       "./dist/claim-before-branch.js"
+    ],
+    "programs": [
+      "./extensions/bd-embedded-write-runner.ts"
     ]
   }
 }
