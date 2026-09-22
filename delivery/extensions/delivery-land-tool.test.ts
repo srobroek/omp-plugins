@@ -82,7 +82,9 @@ function runner(answers: Answers, canonical: string): { run: CliRunner; calls: C
 	const run: CliRunner = (argv, options) => {
 		calls.push({ argv: [...argv], cwd: options.cwd, timeoutMs: options.timeoutMs, env: options.env });
 		const command = argv.join(" ");
-		if (command.startsWith("git rev-parse --git-common-dir")) return completed(`${join(canonical, ".git")}\n`);
+		if (command.startsWith("git rev-parse --path-format=absolute --git-common-dir --show-toplevel")) {
+			return completed(`${join(canonical, ".git")}\n${canonical}\n`);
+		}
 		if (command.startsWith("git remote get-url")) return completed(`${answers.remoteUrl ?? REMOTE_URL}\n`);
 		if (argv[1] === "pr" && argv[2] === "view") return views.shift() ?? completed(mergedGithubPr());
 		if (argv[1] === "mr" && argv[2] === "view") return views.shift() ?? completed(gitlabMr());
@@ -643,7 +645,7 @@ describe("delivery_land", () => {
 
 		expect(outcome.ok).toBe(false);
 		if (outcome.ok) throw new Error("expected a refusal");
-		expect(outcome.reason).toContain("git rev-parse --git-common-dir");
+		expect(outcome.reason).toContain("git rev-parse --path-format=absolute --git-common-dir --show-toplevel");
 		expect(calls).toHaveLength(1);
 	});
 
@@ -684,6 +686,22 @@ describe("delivery_land", () => {
 		expect(outcome.receipt.proof.evidence).toMatchObject({ remoteUrl: "https://github.com/srobroek/omp-plugins.git" });
 		expect(outcome.receipt.repo.nameWithOwner).toBe("srobroek/omp-plugins");
 		expect(JSON.stringify(outcome.receipt)).not.toContain("ghp_secrettoken");
+	});
+
+	test("a configured upstream remote name is recorded and reused, never hardcoded to origin", () => {
+		const { outcome, calls } = land(
+			{ prView: [completed(mergedGithubPr())] },
+			{ remote: "upstream" },
+		);
+
+		expect(outcome.ok).toBe(true);
+		if (!outcome.ok) throw new Error(outcome.reason);
+		expect(outcome.receipt.repo.remote).toBe("upstream");
+		expect(outcome.receipt.proof.evidence).toMatchObject({ remote: "upstream" });
+		expect(calls.find(call => call.argv[1] === "remote")?.argv).toEqual(["git", "remote", "get-url", "upstream"]);
+		const absence = calls.find(call => call.argv.includes("ls-remote"));
+		expect(absence?.argv).toContain("upstream");
+		expect(absence?.argv).not.toContain("origin");
 	});
 
 	/**
@@ -730,7 +748,7 @@ describe("delivery_land", () => {
 		expect(receipt.emitter).toEqual({ plugin: "@srobroek/delivery", version: "0.11.5", tool: "delivery_land" });
 		expect(receipt.repo).toEqual({
 			key,
-			canonicalRoot: canonical,
+			canonicalRoot: realpathSync(canonical),
 			remote: "origin",
 			forge: "github",
 			nameWithOwner: "srobroek/omp-plugins",

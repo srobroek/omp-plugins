@@ -55,6 +55,8 @@ type Fixture = {
 	receiptPath: string;
 };
 
+type FixtureLayout = "normal" | "separate-git-dir" | "submodule";
+
 type RunnerOptions = {
 	pr?: Partial<{
 		nameWithOwner: string;
@@ -103,30 +105,65 @@ function gitExit(cwd: string, args: string[]): number | null {
 /**
  * A real repository whose ledger state on disk is the state its receipt claims.
  *
- * `ledger` decides both halves at once — an active `.beads` directory at the
- * canonical root with `beads.ledgerActive: true`, or a retired one with `false` —
- * because cleanup now recomputes the classification at that root and refuses a
- * receipt that disagrees with it. A fixture whose receipt claimed a ledger the
- * directory did not have would be testing the refusal, not the path it names.
+ * Nonstandard layouts plant a retired ledger above an active checkout ledger. That
+ * is the live fail-open shape: using the common metadata directory as the checkout
+ * root sees the parent verdict, while Git's top level names the active ledger.
  */
-function fixture(name: string, branch = `feat/${name}`, ledger: "active" | "retired" = "active"): Fixture {
+function fixture(
+	name: string,
+	branch = `feat/${name}`,
+	ledger: "active" | "retired" = "active",
+	layout: FixtureLayout = "normal",
+): Fixture {
 	const root = scratch(name);
 	const bare = join(root, "remote.git");
 	mkdirSync(bare);
 	git(bare, ["init", "--bare", "-q"]);
-	const main = join(root, "main");
-	mkdirSync(main);
-	git(main, ["init", "-q", "-b", "main"]);
+
+	let main: string;
+	if (layout === "submodule") {
+		const source = join(root, "source");
+		const superproject = join(root, "superproject");
+		main = join(superproject, "sub");
+		mkdirSync(source);
+		git(source, ["init", "-q", "-b", "main"]);
+		git(source, ["config", "user.email", "delivery@example.test"]);
+		git(source, ["config", "user.name", "Delivery Test"]);
+		writeFileSync(join(source, "source.txt"), "source\n");
+		git(source, ["add", "source.txt"]);
+		git(source, ["commit", "-q", "-m", "source"]);
+		mkdirSync(superproject);
+		git(superproject, ["init", "-q", "-b", "main"]);
+		git(superproject, ["config", "user.email", "delivery@example.test"]);
+		git(superproject, ["config", "user.name", "Delivery Test"]);
+		writeFileSync(join(superproject, "super.txt"), "super\n");
+		git(superproject, ["add", "super.txt"]);
+		git(superproject, ["commit", "-q", "-m", "super"]);
+		git(superproject, ["-c", "protocol.file.allow=always", "submodule", "add", "-q", source, "sub"]);
+		mkdirSync(join(superproject, ".beads"));
+		writeFileSync(join(superproject, ".beads", "RETIRED"), "retired\n");
+	} else {
+		main = join(root, "main");
+		mkdirSync(main);
+		if (layout === "separate-git-dir") {
+			git(main, ["init", "-q", "-b", "main", `--separate-git-dir=${join(root, "store.git")}`]);
+			mkdirSync(join(root, ".beads"));
+			writeFileSync(join(root, ".beads", "RETIRED"), "retired\n");
+		} else {
+			git(main, ["init", "-q", "-b", "main"]);
+		}
+	}
+
 	git(main, ["config", "user.email", "delivery@example.test"]);
 	git(main, ["config", "user.name", "Delivery Test"]);
 	writeFileSync(join(main, "base.txt"), "base\n");
 	git(main, ["add", "base.txt"]);
 	git(main, ["commit", "-q", "-m", "base"]);
-	git(main, ["remote", "add", "origin", bare]);
+	if (layout === "submodule") git(main, ["remote", "set-url", "origin", bare]);
+	else git(main, ["remote", "add", "origin", bare]);
 	git(main, ["push", "-q", "-u", "origin", "main"]);
 	mkdirSync(join(main, ".beads"));
 	if (ledger === "retired") writeFileSync(join(main, ".beads", "RETIRED"), "retired\n");
-
 	const linked = join(root, "linked worktree");
 	git(main, ["worktree", "add", "-q", "-b", branch, linked]);
 	writeFileSync(join(linked, "feature.txt"), "feature\n");
@@ -735,6 +772,34 @@ describe("the ledger is classified at the canonical root, never at a caller's di
 		expect(existsSync(f.linked)).toBe(true);
 		expect(gitExit(f.main, ["show-ref", "--verify", "--quiet", `refs/heads/${f.branch}`])).toBe(0);
 	});
+
+	for (const layout of ["separate-git-dir", "submodule"] as const) {
+		test(`${layout}: an active checkout ledger requires reconciliation and preserves an open bead's worktree and branch`, () => {
+			const f = fixture(`live-${layout}`, "omp/agent/delivery-17", "active", layout);
+			const landed = landPullRequest(
+				{ pr: f.receipt.pr.number, worktree: f.linked },
+				{ run: landRunner(f).run, cwd: f.main, now: () => NOW + 5, env: f.env },
+			);
+
+			expect(landed.ok).toBe(true);
+			if (!landed.ok) throw new Error(landed.reason);
+			expect(landed.receipt.repo.canonicalRoot).toBe(realpathSync(f.main));
+			expect(landed.receipt.beads).toEqual({ ids: ["delivery-17"], ledgerActive: true });
+			expect(landed.next).toEqual(["bd_reconcile", "delivery_cleanup"]);
+
+			const cleaning = runner(f, { beadStatus: "open" });
+			const refused = cleanupDelivery({ receipt: landed.receiptPath }, f.main, {
+				run: cleaning.run,
+				now: () => NOW + 10,
+				env: f.env,
+			});
+			expect(refusal(refused)).toContain('beads.delivery-17.status: observed "open", expected "closed" after bd_reconcile');
+			expect(commandCalls(cleaning.calls, "bd")).toEqual([["bd", "show", "delivery-17", "--json"]]);
+			expect(mutationCalls(cleaning.calls)).toEqual([]);
+			expect(existsSync(f.linked)).toBe(true);
+			expect(gitExit(f.main, ["show-ref", "--verify", "--quiet", `refs/heads/${f.branch}`])).toBe(0);
+		});
+	}
 
 	/**
 	 * The same receipt an unfixed producer would have written, and the same receipt an

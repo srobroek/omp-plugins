@@ -225,8 +225,9 @@ export type WriteOptions = { tempName?: () => string };
 /**
  * The git seam: argv without the `git` word, a working directory, and a bound.
  *
- * Returns trimmed stdout, or null when git failed for any reason. Injected so no
- * test depends on the ambient repository.
+ * Returns stdout exactly as Git wrote it, or null when Git failed for any reason.
+ * Repository paths may contain spaces, so parsing owns any delimiters rather than
+ * trimming them at this process boundary.
  */
 export type GitRunner = (argv: readonly string[], cwd: string, timeoutMs: number) => string | null;
 
@@ -239,36 +240,93 @@ const spawnGit: GitRunner = (argv, cwd, timeoutMs) => {
 			timeout: Math.max(1, timeoutMs),
 		});
 		if (proc.exitCode !== 0) return null;
-		return proc.stdout.toString().trim();
+		return proc.stdout.toString();
 	} catch {
 		return null;
 	}
 };
 
-/**
- * Stable identity for one repository, shared by its canonical checkout and every
- * linked worktree.
- *
- * Derived from the realpath of the common git directory, because a receipt written
- * from one worktree must be found from another. The remote URL is absent on a local
- * repository and renamed on a fork; the repository path differs per worktree;
- * `nameWithOwner` is unset without a remote. None of those identify a repository, so
- * none of them is used.
- *
- * Returns null when git reports no repository.
- */
-export function repoKey(cwd: string, run: GitRunner = spawnGit): string | null {
-	const printed = run(["rev-parse", "--git-common-dir"], cwd, GIT_TIMEOUT_MS);
-	if (printed === null || printed === "") return null;
-	// Git prints `.git` at a worktree top level and an absolute path elsewhere.
-	const common = isAbsolute(printed) ? printed : resolve(cwd, printed);
-	let real: string;
+/** One Git read that binds repository identity and checkout placement together. */
+export const REPOSITORY_OBSERVATION_ARGS = [
+	"rev-parse",
+	"--path-format=absolute",
+	"--git-common-dir",
+	"--show-toplevel",
+] as const;
+
+/** The physical repository paths and classification derived from one Git read. */
+export type RepositoryContext = {
+	key: string;
+	commonDir: string;
+	topLevel: string;
+	ledger: CanonicalLedger;
+};
+
+/** A real, existing directory, or null when the path cannot prove one. */
+function physicalDirectory(path: string): string | null {
 	try {
-		real = realpathSync(common);
+		const real = realpathSync(path);
+		return lstatSync(real).isDirectory() ? real : null;
 	} catch {
 		return null;
 	}
-	return createHash("sha256").update(real).digest("hex").slice(0, 16);
+}
+
+/**
+ * Parse Git's two newline-delimited paths without guessing through malformed or
+ * ambiguous output. A path containing a newline cannot be represented by this
+ * command without colliding with its delimiter, so it fails closed.
+ */
+function repositoryPaths(output: string): { commonDir: string; topLevel: string } | null {
+	const body = output.endsWith("\n") ? output.slice(0, -1) : output;
+	const records = body.split("\n");
+	if (records.length !== 2) return null;
+	const [common, top] = records;
+	if (common === undefined || top === undefined || common === "" || top === "") return null;
+	if (!isAbsolute(common) || !isAbsolute(top)) return null;
+	if (common.includes("\0") || top.includes("\0") || common.includes("\r") || top.includes("\r")) return null;
+	const commonDir = physicalDirectory(common);
+	const topLevel = physicalDirectory(top);
+	return commonDir === null || topLevel === null ? null : { commonDir, topLevel };
+}
+
+/**
+ * Stable repository identity and canonical-ledger classification from one Git
+ * observation containing both the absolute common directory and checkout root.
+ *
+ * A common directory literally named `.git` identifies the primary checkout for
+ * normal repositories and linked worktrees. Other layouts cannot use the basename
+ * as a discriminator: a separate git directory may be named `store.git`, and a
+ * submodule's common directory lives under `.git/modules`. For those layouts Git's
+ * observed top level is the checkout root. Every input and the selected output is
+ * realpathed, and any malformed, missing, non-directory, or ambiguous observation
+ * returns null rather than a ledger-free verdict.
+ */
+export function repositoryContext(cwd: string, run: GitRunner = spawnGit): RepositoryContext | null {
+	const printed = run(REPOSITORY_OBSERVATION_ARGS, cwd, GIT_TIMEOUT_MS);
+	if (printed === null || printed === "") return null;
+	const paths = repositoryPaths(printed);
+	if (paths === null) return null;
+	const candidate = basename(paths.commonDir) === ".git" ? dirname(paths.commonDir) : paths.topLevel;
+	const root = physicalDirectory(candidate);
+	if (root === null) return null;
+	const key = createHash("sha256").update(paths.commonDir).digest("hex").slice(0, 16);
+	return {
+		key,
+		commonDir: paths.commonDir,
+		topLevel: paths.topLevel,
+		ledger: { root, active: ledgerActive(root) },
+	};
+}
+
+/** Stable identity shared by a repository's primary checkout and linked worktrees. */
+export function repoKey(cwd: string, run: GitRunner = spawnGit): string | null {
+	const printed = run(["rev-parse", "--git-common-dir"], cwd, GIT_TIMEOUT_MS);
+	if (printed === null || printed === "") return null;
+	const common = printed.endsWith("\n") ? printed.slice(0, -1) : printed;
+	if (common === "" || common.includes("\n") || common.includes("\r") || common.includes("\0")) return null;
+	const real = physicalDirectory(isAbsolute(common) ? common : resolve(cwd, common));
+	return real === null ? null : createHash("sha256").update(real).digest("hex").slice(0, 16);
 }
 
 /**
@@ -310,34 +368,13 @@ export type CanonicalLedger = { root: string; active: boolean };
 /**
  * The repository's canonical root, and its ledger verdict classified there.
  *
- * The root is the realpath of `git rev-parse --git-common-dir`, or that path's
- * parent when it is the usual `.git` directory, so every linked worktree of one
- * repository classifies from exactly one directory — the same directory
- * {@link repoKey} keys the repository from.
- *
- * Classifying from the invocation directory instead is the bypass this function
- * exists to close. A nested retired `.beads` anywhere below a cwd would answer
- * "no ledger" for a repository whose authoritative ledger is active, and a landing
- * recorded that way authorises a cleanup that deletes a worktree and a branch while
- * the bead it closes stays open and nobody ran `bd_reconcile`. A directory a caller
- * happens to stand in is not a repository's ledger.
- *
- * Returns null when Git reports no repository, or when the observed common
- * directory does not resolve. Both producer and consumer then refuse: a guessed
- * `false` here is exactly the destructive path this classification guards.
+ * Producer and cleanup consumer both use {@link repositoryContext}; neither can
+ * substitute the invocation directory or reinterpret the Git layout. Returns null
+ * whenever the combined common-dir/top-level observation cannot be resolved
+ * unambiguously, which keeps the destructive cleanup path closed.
  */
 export function canonicalLedger(cwd: string, run: GitRunner = spawnGit): CanonicalLedger | null {
-	const printed = run(["rev-parse", "--git-common-dir"], cwd, GIT_TIMEOUT_MS);
-	if (printed === null || printed === "") return null;
-	const common = isAbsolute(printed) ? printed : resolve(cwd, printed);
-	let real: string;
-	try {
-		real = realpathSync(common);
-	} catch {
-		return null;
-	}
-	const root = basename(real) === ".git" ? dirname(real) : real;
-	return { root, active: ledgerActive(root) };
+	return repositoryContext(cwd, run)?.ledger ?? null;
 }
 
 /**

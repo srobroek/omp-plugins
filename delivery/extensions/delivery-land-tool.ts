@@ -48,7 +48,7 @@
  * active ledger and no ids is a gate with nothing to check.
  */
 
-import { basename, dirname, isAbsolute, resolve } from "node:path";
+import { resolve } from "node:path";
 import type { TSchema } from "@oh-my-pi/pi-ai";
 import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
 import pkg from "../package.json" with { type: "json" };
@@ -66,13 +66,12 @@ import {
 import {
 	buildReceipt,
 	type CanonicalLedger,
-	canonicalLedger,
-	type GitRunner,
 	type LandingReceipt,
 	RECEIPT_METHOD_UNKNOWN,
+	REPOSITORY_OBSERVATION_ARGS,
 	type ReceiptAutoDelete,
 	receiptDirectory,
-	repoKey,
+	repositoryContext,
 	validateReceipt,
 	writeReceipt,
 } from "./landing-receipt.ts";
@@ -398,46 +397,37 @@ function mergeProof(pr: PrObservation): { oid: string } | { reason: string } {
 	};
 }
 
-/** Trimmed stdout of one successful local Git read, or null when Git did not complete it. */
-function gitText(run: CliRunner, cwd: string, argv: readonly string[]): string | null {
+/** Exact stdout of one successful local Git read, or null when Git did not complete it. */
+function gitOutput(run: CliRunner, cwd: string, argv: readonly string[]): string | null {
 	const result = run(["git", ...argv], { cwd, timeoutMs: GIT_TIMEOUT_MS });
 	if (!result.ok || result.error !== undefined || result.exitCode !== 0) return null;
-	return result.stdout.trim();
+	return result.stdout;
+}
+
+/** Trimmed stdout for scalar Git reads whose values are not filesystem paths. */
+function gitText(run: CliRunner, cwd: string, argv: readonly string[]): string | null {
+	return gitOutput(run, cwd, argv)?.trim() ?? null;
 }
 
 /**
- * The repository's stable key, its canonical checkout root, and the ledger verdict
- * classified at that root.
+ * The repository's stable key, canonical checkout root, and ledger verdict.
  *
- * One `rev-parse --git-common-dir` answers all three: {@link repoKey} hashes that
- * path, {@link canonicalLedger} classifies the ledger from the directory it names,
- * and the canonical root is its parent when it is the usual `.git` directory.
- * Both are handed the already-observed answer rather than a second runner, so the
- * key, the recorded root and the ledger verdict all come from one observation — two
- * reads could disagree, and the receipt would then name a directory it was not keyed
- * from, or a ledger belonging to some other repository. The seam answers that one
- * question and nothing else: another argv returns null, so a future caller that
- * asked Git something further would report no key rather than silently receive this
- * path as the answer.
+ * {@link repositoryContext} is the producer/consumer seam: this producer feeds it
+ * the exact stdout from one combined common-dir/top-level Git read, while cleanup
+ * invokes the same seam directly. The key, recorded root, and ledger verdict cannot
+ * therefore come from different observations or layout heuristics.
  */
 function observeRepository(
 	run: CliRunner,
 	cwd: string,
 ): { key: string; canonicalRoot: string; ledger: CanonicalLedger } | { reason: string } {
-	const question = "rev-parse --git-common-dir";
-	const printed = gitText(run, cwd, question.split(" "));
-	if (printed === null || printed === "") {
-		return { reason: `git ${question} in ${cwd}: observed no output, expected a git common directory` };
+	const repository = repositoryContext(cwd, (argv, gitCwd) => gitOutput(run, gitCwd, argv));
+	if (repository === null) {
+		return {
+			reason: `git ${REPOSITORY_OBSERVATION_ARGS.join(" ")} in ${cwd}: observed no unambiguous repository paths, expected absolute git common directory and checkout top level`,
+		};
 	}
-	const common = isAbsolute(printed) ? printed : resolve(cwd, printed);
-	const seam: GitRunner = argv => (argv.join(" ") === question ? common : null);
-	const key = repoKey(cwd, seam);
-	if (key === null) return { reason: `repo.key: observed no resolvable path at ${common}, expected a readable git common directory` };
-	const ledger = canonicalLedger(cwd, seam);
-	if (ledger === null) {
-		return { reason: `beads.ledgerActive: observed no resolvable path at ${common}, expected a readable git common directory to classify the ledger at` };
-	}
-	return { key, canonicalRoot: basename(common) === ".git" ? dirname(common) : common, ledger };
+	return { key: repository.key, canonicalRoot: repository.ledger.root, ledger: repository.ledger };
 }
 
 /**

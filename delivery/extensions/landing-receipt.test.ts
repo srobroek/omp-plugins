@@ -23,6 +23,7 @@ import {
 	listReceipts,
 	RECEIPT_METHOD_UNKNOWN,
 	RECEIPT_SCHEMA,
+	REPOSITORY_OBSERVATION_ARGS,
 	RECEIPT_VERSION,
 	readReceipt,
 	receiptDirectory,
@@ -788,7 +789,7 @@ describe("repoKey", () => {
 		const seen: { argv: readonly string[]; cwd: string; timeoutMs: number }[] = [];
 		const run: GitRunner = (argv, cwd, timeoutMs) => {
 			seen.push({ argv, cwd, timeoutMs });
-			return common;
+			return `${common}\n`;
 		};
 
 		const key = repoKey("/anywhere", run);
@@ -831,6 +832,20 @@ describe("repoKey", () => {
  * verdict here is a worktree deleted and a branch removed with no reconciliation.
  */
 describe("canonicalLedger", () => {
+	test("uses one combined absolute common-dir and top-level Git observation", () => {
+		const repository = scratch("ledger-combined-observation");
+		const common = join(repository, ".git");
+		mkdirSync(common);
+		mkdirSync(join(repository, ".beads"));
+		const seen: { argv: readonly string[]; cwd: string; timeoutMs: number }[] = [];
+		const run: GitRunner = (argv, cwd, timeoutMs) => {
+			seen.push({ argv, cwd, timeoutMs });
+			return `${common}\n${repository}\n`;
+		};
+
+		expect(canonicalLedger("/anywhere", run)).toEqual({ root: realpathSync(repository), active: true });
+		expect(seen).toEqual([{ argv: REPOSITORY_OBSERVATION_ARGS, cwd: "/anywhere", timeoutMs: 2000 }]);
+	});
 	test("classifies at the canonical root, so a nested marker below the cwd does not vote", () => {
 		const repository = scratch("ledger-canonical");
 		const nested = join(repository, "deep", "deeper");
@@ -867,10 +882,48 @@ describe("canonicalLedger", () => {
 		expect(canonicalLedger(linked)).toEqual({ root: realpathSync(repository), active: true });
 	});
 
-	test("null, never a verdict, when git names no repository or the path does not resolve", () => {
+	test("a separate git directory still classifies from its checkout root", () => {
+		const parent = scratch("ledger-separate-git-dir");
+		const checkout = join(parent, "checkout");
+		const common = join(parent, "store.git");
+		mkdirSync(checkout);
+		git(checkout, "init", "-b", "main", `--separate-git-dir=${common}`);
+		mkdirSync(join(checkout, ".beads"));
+		mkdirSync(join(parent, ".beads"));
+		writeFileSync(join(parent, ".beads", "RETIRED"), "retired\n");
+
+		expect(canonicalLedger(checkout)).toEqual({ root: realpathSync(checkout), active: true });
+	});
+
+	test("a submodule classifies from the submodule checkout, not its common-dir metadata", () => {
+		const parent = scratch("ledger-submodule");
+		const source = join(parent, "source");
+		const superproject = join(parent, "superproject");
+		const submodule = join(superproject, "sub");
+		mkdirSync(source);
+		git(source, "init", "-b", "main");
+		writeFileSync(join(source, "file.txt"), "one\n");
+		git(source, "add", "file.txt");
+		git(source, "commit", "-m", "one");
+		mkdirSync(superproject);
+		git(superproject, "init", "-b", "main");
+		git(superproject, "-c", "protocol.file.allow=always", "submodule", "add", source, "sub");
+		mkdirSync(join(submodule, ".beads"));
+		mkdirSync(join(superproject, ".beads"));
+		writeFileSync(join(superproject, ".beads", "RETIRED"), "retired\n");
+
+		expect(canonicalLedger(submodule)).toEqual({ root: realpathSync(submodule), active: true });
+	});
+
+	test("null, never a verdict, when Git output is absent, malformed, ambiguous, or unresolvable", () => {
+		const common = scratch("ledger-observation-common");
+		const topLevel = scratch("ledger-observation-top");
 		expect(canonicalLedger("/anywhere", () => null)).toBeNull();
 		expect(canonicalLedger("/anywhere", () => "")).toBeNull();
-		expect(canonicalLedger("/anywhere", () => join(ROOT, "ledger-absent", ".git"))).toBeNull();
+		expect(canonicalLedger("/anywhere", () => common)).toBeNull();
+		expect(canonicalLedger("/anywhere", () => `${common}\nrelative`)).toBeNull();
+		expect(canonicalLedger("/anywhere", () => `${common}\n${topLevel}\n${topLevel}`)).toBeNull();
+		expect(canonicalLedger("/anywhere", () => `${common}\n${join(ROOT, "ledger-absent")}`)).toBeNull();
 	});
 });
 
