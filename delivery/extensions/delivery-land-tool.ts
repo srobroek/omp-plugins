@@ -711,7 +711,7 @@ export default function deliveryLandTool(pi: ExtensionAPI): void {
 			"explicitly rather than taken from the working directory or GH_REPO, re-reads it and refuses unless the same request is " +
 			"MERGED at that same head on the same base, observes the remote branch with git ls-remote, then writes exactly one receipt " +
 			"under the agent directory and returns it as details.receipt. " +
-			"Writes no Beads ledger: active receipts route through bd_reconcile before delivery_cleanup; retired receipts go directly to delivery_cleanup. Runs only from a linked worktree.",
+			"Writes no Beads ledger: when receipt beads.ledgerActive is true, run bd_reconcile before delivery_cleanup; when it is false for a no-ledger or retired repository, go directly to delivery_cleanup. The caller supplies worktree when recording the cleanup association.",
 		parameters: z.object({
 			pr: z.union([z.number(), z.string()]).describe("Pull request or merge request number"),
 			repo: z.string().optional().describe('Repository as "<owner>/<name>"; defaults to the path of the remote URL'),
