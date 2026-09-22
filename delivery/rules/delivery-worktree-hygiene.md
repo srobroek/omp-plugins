@@ -19,7 +19,7 @@ MUST WH-3: commit after each bounded coherent change. Push before every session 
 
 MUST WH-4: keep scratch files, logs, and repro scripts outside every worktree. A file written inside one dirties the tree or lands in a commit.
 
-MUST WH-5: act on the first hygiene reminder. A session receives at most three. Keep an actionable third reminder with the session; invoke the report-only `worktree-reaper` only when ambiguity remains after the third reminder. The reaper never mutates; its report provides an inventory and does not authorize removal.
+MUST WH-5: act on the first hygiene reminder. A session receives at most three, and proved progress resets the count. The third reminder escalates whether the residual was measured or only suspected: it dispatches the report-only `worktree-reaper` to inspect and report the residual, and it names the lifecycle that removes state. When the residual could not be measured, report it rather than act on it. The reaper mutates nothing, so its inventory authorizes no removal; removal happens only through `delivery_cleanup` under WH-6, after a landing is proved.
 
 ## Remove landed state
 
@@ -29,7 +29,7 @@ WH-6 has preconditions and stopping conditions:
 
 - Start from exact landing proof for that branch (`rule://delivery-git-workflow` GW-3). An exact merged pull request is the only proof that closes a bead automatically. It names the recorded base, a `headRefOid` equal to the branch tip, and that merge commit reached in the base. An intermediate merge is not the final destination.
 - Where there is no pull request, `git cherry` or a stable patch ID proves one equivalent patch, never a multi-commit squash. That proof supports a reconciliation the owner states explicitly. It never closes a bead automatically.
-- If the receipt has `beads.ledgerActive: true`, cleanup runs only after `bd_reconcile` has reconciled the ledger; if it is `false`, skip reconciliation and run cleanup directly.
+- `beads.ledgerActive` is the ledger classification taken at the repository's canonical root, the realpath of `git rev-parse --git-common-dir`, never at the invocation directory: a linked worktree sits outside the checkout, so an upward `.beads` walk started there would report every worktree session as ledger-free. Only a regular-file `.beads/RETIRED` marker retires a ledger.
 - Verify absence, never infer it. `delivery_cleanup` stamps a verified-absence time for the removed worktree and for the remote branch. It never promotes `unknown` to a verified absence. A successful mutation is not its own proof.
 - Fail closed on any of these, and hold the work for the user:
   - a dirty tree
@@ -38,6 +38,6 @@ WH-6 has preconditions and stopping conditions:
   - an ambiguous owner
 - Report the worktree path, the branch tip SHA, and the unmet condition.
 - Never force a removal, and never stash to make a tree look clean.
-- Orient first. `ExtensionContext` carries no role identity. Nothing tells a session whether it is the main agent, a run lead, or a worker. Call `delivery_orient` before you claim a main-agent-only or lead-only step. Call `delivery_hygiene_report` for the on-demand inventory. Both tools are read-only.
+- Orient first. `ExtensionContext` carries no role identity. Nothing tells a session whether it is the main agent, a run lead, or a worker, so the audience of a main-agent-only or lead-only step is a convention no tool verifies. `delivery_orient` states this contract as text and probes nothing; `delivery_hygiene_report` inventories the repository on demand, one row per worktree, and names no holder it cannot observe. Both are read-only.
 - Clean only the bead you own. Another actor's worktrees and uncommitted state are not yours to inventory, to report, or to remove (`rule://coexistence-worktree`).
 - Switch worktrees only when the work requires it. Each one carries its own provisioning and build output from `wt step copy-ignored`. Re-pointing a worktree at another branch discards both.
