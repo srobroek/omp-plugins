@@ -13,7 +13,9 @@ import {
 	FORGE_TIMEOUT_MS,
 	type Forge,
 	forgeEnvironment,
+	forgeTarget,
 	mergeArgs,
+	normalizeRepoPath,
 	remoteBranchAbsent,
 	runCli,
 } from "./forge-adapter.ts";
@@ -183,6 +185,12 @@ describe("detectForge", () => {
 		expect(detectForge("ssh://git@altssh.gitlab.com:443/g/p.git")).toBe("gitlab");
 	});
 
+	test("alternate transport hosts resolve to canonical CLI and API hosts", () => {
+		expect(forgeTarget("ssh://git@ssh.github.com:443/o/r.git")).toEqual({ forge: "github", canonicalHost: "github.com" });
+		expect(forgeTarget("ssh://git@altssh.gitlab.com:443/g/p.git")).toEqual({ forge: "gitlab", canonicalHost: "gitlab.com" });
+		expect(forgeTarget("ssh://git@evil.example:443/g/p.git")).toBeNull();
+	});
+
 	test("a lookalike host is not the forge", () => {
 		expect(detectForge("https://github.com.evil.example/o/r")).toBe("unknown");
 		expect(detectForge("git@notgithub.com:o/r.git")).toBe("unknown");
@@ -297,6 +305,20 @@ describe("detectForge", () => {
 	});
 });
 
+describe("normalizeRepoPath", () => {
+	test("full URLs and Git remote URLs are never repository paths", () => {
+		for (const forge of ["github", "gitlab"] as const) {
+			for (const repo of [
+				"https://gitlab.com/group/project",
+				"ssh://git@gitlab.com/group/project.git",
+				"git@gitlab.com:group/project.git",
+			]) {
+				expect(normalizeRepoPath(forge, repo)).toBeNull();
+			}
+		}
+	});
+});
+
 describe("autoDeleteSetting", () => {
 	test("github reads delete_branch_on_merge with the documented argv", () => {
 		const { run, calls } = spy(completed(0, "true\n"));
@@ -316,7 +338,7 @@ describe("autoDeleteSetting", () => {
 		const { run, calls } = spy(completed(0, gitlabProject(true)));
 		expect(autoDeleteSetting("gitlab", "group/sub/project", run)).toBe("on");
 		expect(calls).toHaveLength(1);
-		expect(calls[0]?.argv).toEqual(["glab", "api", "projects/group%2Fsub%2Fproject"]);
+		expect(calls[0]?.argv).toEqual(["glab", "api", "projects/group%2Fsub%2Fproject", "--hostname", "gitlab.com"]);
 		expect(calls[0]?.argv).not.toContain("--jq");
 		expect(calls[0]?.argv).not.toContain("-q");
 		expect(calls[0]?.timeoutMs).toBe(FORGE_TIMEOUT_MS);
@@ -481,6 +503,8 @@ describe("enableAutoDelete", () => {
 			"-X",
 			"PUT",
 			"projects/group%2Fsub%2Fproject",
+			"--hostname",
+			"gitlab.com",
 			"-F",
 			"remove_source_branch_after_merge=true",
 		]);
@@ -843,6 +867,7 @@ describe("every issued command", () => {
 			"detectForge",
 			"enableAutoDelete",
 			"forgeEnvironment",
+			"forgeTarget",
 			"gitObservationEnvironment",
 			"mergeArgs",
 			"normalizeRepoPath",

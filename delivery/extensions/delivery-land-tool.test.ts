@@ -505,7 +505,7 @@ describe("delivery_land", () => {
 	test("a GitLab merge binds the repository and the head in glab's spelling", () => {
 		const { canonical, receipts } = repository();
 		const { run, calls } = runner(
-			{ remoteUrl: "git@gitlab.com:group/sub/project.git", prView: [completed(gitlabMr({ state: "opened", merge_commit_sha: null })), completed(gitlabMr())] },
+			{ remoteUrl: "ssh://git@altssh.gitlab.com:443/group/sub/project.git", prView: [completed(gitlabMr({ state: "opened", merge_commit_sha: null })), completed(gitlabMr())] },
 			canonical,
 		);
 		const outcome = landPullRequest({ pr: 12 }, { run, cwd: canonical, now: () => NOW, receiptsDirectory: receipts, env: {} });
@@ -519,18 +519,55 @@ describe("delivery_land", () => {
 			"--squash",
 			"--remove-source-branch",
 			"--repo",
-			"group/sub/project",
+			"gitlab.com/group/sub/project",
 			"--sha",
 			HEAD_OID,
 		]);
 		expect(calls.filter(call => call.argv[1] === "mr" && call.argv[2] === "view").map(call => call.argv)).toEqual([
-			["glab", "mr", "view", "12", "--repo", "group/sub/project", "--output", "json"],
-			["glab", "mr", "view", "12", "--repo", "group/sub/project", "--output", "json"],
+			["glab", "mr", "view", "12", "--repo", "gitlab.com/group/sub/project", "--output", "json"],
+			["glab", "mr", "view", "12", "--repo", "gitlab.com/group/sub/project", "--output", "json"],
 		]);
 	});
 
-	test("an explicit host-qualified or malformed identity refuses before an unreadable remote", () => {
-		for (const repo of ["github.com/owner/repo", "https://github.com/owner/repo", "owner", "owner//repo", "owner/../repo"]) {
+	test("a canonical GitLab repo prefix defeats a configured dotless host alias", () => {
+		const { canonical, receipts } = repository();
+		const fixture = runner(
+			{
+				remoteUrl: "git@gitlab.com:corp/group/project.git",
+				prView: [completed(gitlabMr({ state: "opened", merge_commit_sha: null })), completed(gitlabMr())],
+			},
+			canonical,
+		);
+		const run: CliRunner = (argv, options) => {
+			const repoIndex = argv.indexOf("--repo");
+			if (argv[0] === "glab" && repoIndex >= 0 && argv[repoIndex + 1] === "corp/group/project") {
+				// Model glab treating the first path segment as a configured host alias.
+				fixture.calls.push({ argv: [...argv], cwd: options.cwd, timeoutMs: options.timeoutMs, env: options.env });
+				return completed(gitlabMr({ iid: 999 }));
+			}
+			return fixture.run(argv, options);
+		};
+		const outcome = landPullRequest(
+			{ pr: 12 },
+			{ run, cwd: canonical, now: () => NOW, receiptsDirectory: receipts, env: {} },
+		);
+
+		expect(outcome.ok).toBe(true);
+		if (!outcome.ok) throw new Error(outcome.reason);
+		expect(outcome.receipt.repo.nameWithOwner).toBe("corp/group/project");
+		expect(
+			fixture.calls
+				.filter(call => call.argv[0] === "glab" && call.argv.includes("--repo"))
+				.map(call => call.argv[call.argv.indexOf("--repo") + 1]),
+		).toEqual([
+			"gitlab.com/corp/group/project",
+			"gitlab.com/corp/group/project",
+			"gitlab.com/corp/group/project",
+		]);
+	});
+
+	test("a structurally malformed identity refuses before an unreadable remote", () => {
+		for (const repo of ["https://github.com/owner/repo", "owner", "owner//repo", "owner/../repo"]) {
 			const { canonical } = repository();
 			const calls: Call[] = [];
 			const run: CliRunner = (argv, options) => {
@@ -546,18 +583,13 @@ describe("delivery_land", () => {
 		}
 	});
 
-	test("a host-qualified remote path cannot become --repo when params.repo is absent", () => {
-		for (const [remoteUrl, cli] of [
-			["https://github.com/github.com/owner/repo.git", "gh"],
-			["https://gitlab.com/gitlab.com/group/project.git", "glab"],
-		] as const) {
-			const { outcome, calls } = land({ remoteUrl });
+	test("a host-qualified GitHub remote path cannot become --repo when params.repo is absent", () => {
+		const { outcome, calls } = land({ remoteUrl: "https://github.com/github.com/owner/repo.git" });
 
-			expect(outcome.ok).toBe(false);
-			if (outcome.ok) throw new Error("expected a refusal");
-			expect(outcome.reason).toContain("repo: observed");
-			expect(calls.filter(call => call.argv[0] === cli)).toHaveLength(0);
-		}
+		expect(outcome.ok).toBe(false);
+		if (outcome.ok) throw new Error("expected a refusal");
+		expect(outcome.reason).toContain("repo: observed");
+		expect(calls.filter(call => call.argv[0] === "gh")).toHaveLength(0);
 	});
 
 	test("ambient Git selectors cannot redirect repository identity or landing proof", () => {
@@ -689,8 +721,18 @@ describe("delivery_land", () => {
 			// view, merge, re-read, settings read, settings write.
 			expect(forgeCalls.length).toBeGreaterThan(3);
 			for (const call of forgeCalls) {
+				const pinnedGitLabApi = cli === "glab" && call.argv[1] === "api";
 				for (const key of Object.keys(redirectors)) {
-					expect(call.env?.[key]).toBeUndefined();
+					if (pinnedGitLabApi && (key === "GITLAB_HOST" || key === "GITLAB_API_HOST")) {
+						expect(call.env?.[key]).toBe("gitlab.com");
+					} else {
+						expect(call.env?.[key]).toBeUndefined();
+					}
+				}
+				if (pinnedGitLabApi) {
+					const hostname = call.argv.indexOf("--hostname");
+					expect(hostname).toBeGreaterThan(0);
+					expect(call.argv[hostname + 1]).toBe("gitlab.com");
 				}
 				// Credentials are kept: an unauthenticated command is a different failure.
 				expect(call.env?.GH_TOKEN).toBe("keep-gh");

@@ -55,11 +55,10 @@ import pkg from "../package.json" with { type: "json" };
 import {
 	autoDeleteSetting,
 	type CliRunner,
-	detectForge,
 	enableAutoDelete,
 	FORGE_TIMEOUT_MS,
-	type Forge,
 	forgeEnvironment,
+	forgeTarget,
 	gitObservationEnvironment,
 	mergeArgs,
 	normalizeRepoPath,
@@ -396,10 +395,9 @@ function observeRepository(
 
 /**
  * `owner/name` from a remote URL.
- *
  * Only the path is taken. The host and the transport were already judged by
- * {@link detectForge}, which is the module that owns that decision; re-deciding it
- * here would be a second opinion about which forge a URL names.
+ * {@link forgeTarget}, which is the module that owns that decision; re-deciding
+ * them here would be a second opinion about which forge and CLI host a URL names.
  */
 export function repoPathFromRemote(remoteUrl: string): string | null {
 	const url = remoteUrl.trim();
@@ -553,13 +551,14 @@ export function landPullRequest(params: LandParams, deps: LandDeps = {}): LandOu
 	if (remoteText === null || remoteText === "") {
 		return refuse(`git remote get-url ${remote}: observed no URL, expected a configured remote in ${cwd}`);
 	}
-	const forge: Forge = detectForge(remoteText);
-	// The URL is classified before it is redacted: `detectForge` owns that judgement
-	// and must see the spelling Git will actually contact.
+	const target = forgeTarget(remoteText);
+	// The URL is classified before it is redacted: `forgeTarget` owns that
+	// judgement and must see the spelling Git will actually contact.
 	const remoteUrl = redactRemote(remoteText);
-	if (forge !== "github" && forge !== "gitlab") {
-		return refuse(`repo.forge: observed ${show(forge)} for remote ${remote} at ${show(remoteUrl)}, expected "github" or "gitlab"`);
+	if (target === null) {
+		return refuse(`repo.forge: observed "unknown" for remote ${remote} at ${show(remoteUrl)}, expected "github" or "gitlab"`);
 	}
+	const { forge } = target;
 
 	const fromRemote = repoPathFromRemote(remoteText);
 	if (fromRemote === null && explicitRepo === null) {
@@ -567,18 +566,19 @@ export function landPullRequest(params: LandParams, deps: LandDeps = {}): LandOu
 	}
 	const normalizedRemote = fromRemote === null ? null : normalizeRepoPath(forge, fromRemote);
 	if (fromRemote !== null && normalizedRemote === null) {
-		const expected = forge === "github" ? 'exactly "<owner>/<name>"' : 'a bounded, host-unqualified "<group>/.../<project>" path';
+		const expected = forge === "github" ? 'exactly "<owner>/<name>"' : 'a bounded "<group>/.../<project>" path';
 		return refuse(`repo: observed ${show(fromRemote)} from remote ${remote}, expected ${expected}`);
 	}
 	const candidate = explicitRepo ?? normalizedRemote;
 	if (candidate === null) {
 		return refuse(`repo.nameWithOwner: observed no owner/name in remote ${remote} at ${show(remoteUrl)}, expected "<owner>/<name>"`);
 	}
-	// This adapter-owned normalization is the one boundary every forge command
-	// below shares. No raw parameter or remote path becomes a `--repo` value.
+	// This adapter-owned normalization is the one path boundary every forge
+	// command below shares. GitLab's canonical host is added separately so a
+	// nested group cannot collide with a configured host alias.
 	const nameWithOwner = normalizeRepoPath(forge, candidate);
 	if (nameWithOwner === null) {
-		const expected = forge === "github" ? 'exactly "<owner>/<name>"' : 'a bounded, host-unqualified "<group>/.../<project>" path';
+		const expected = forge === "github" ? 'exactly "<owner>/<name>"' : 'a bounded "<group>/.../<project>" path';
 		return refuse(`repo: observed ${show(candidate)}, expected ${expected}`);
 	}
 	// A `repo` override that disagrees with the remote is still refused, naming both:
@@ -590,8 +590,16 @@ export function landPullRequest(params: LandParams, deps: LandDeps = {}): LandOu
 			`repo: observed ${show(nameWithOwner)}, expected ${show(normalizedRemote)} from remote ${remote}; the branch absence is verified against ${remote}, so both must name one repository`,
 		);
 	}
+	const cliRepo = forge === "gitlab" ? `${target.canonicalHost}/${nameWithOwner}` : nameWithOwner;
+	const settingsEnv = forge === "gitlab"
+		? Object.assign(Object.create(null) as Record<string, string>, forgeEnv, {
+			GITLAB_HOST: target.canonicalHost,
+			GITLAB_API_HOST: target.canonicalHost,
+		})
+		: forgeEnv;
+	const settingsRun: CliRunner = (argv, options) => run(argv, { ...options, env: options.env ?? settingsEnv });
 
-	const first = readPr(run, forge, nameWithOwner, number, FORGE_TIMEOUT_MS, forgeEnv);
+	const first = readPr(run, forge, cliRepo, number, FORGE_TIMEOUT_MS, forgeEnv);
 	if ("reason" in first) return refuse(first.reason);
 	const subject = subjectDrift(first.pr, requested, null, first.argv.join(" "));
 	if (subject !== null) return refuse(`${subject}; no merge was issued and no receipt was written`);
@@ -614,10 +622,10 @@ export function landPullRequest(params: LandParams, deps: LandDeps = {}): LandOu
 	const unnamed = missingBeadIdentity(identity.ids, first.pr.headRefName, repository.ledger);
 	if (unnamed !== null) return refuse(`${unnamed}; no merge was issued and no receipt was written`);
 
-	const observedAutoDelete: ReceiptAutoDelete = autoDeleteSetting(forge, nameWithOwner, forgeRun);
+	const observedAutoDelete: ReceiptAutoDelete = autoDeleteSetting(forge, nameWithOwner, settingsRun);
 	const notes: string[] = [];
 	if (params.setupAutoDelete === true) {
-		const enabled = enableAutoDelete(forge, nameWithOwner, forgeRun);
+		const enabled = enableAutoDelete(forge, nameWithOwner, settingsRun);
 		notes.push(
 			enabled.ok
 				? `setupAutoDelete: the forge accepted a deletion-on-merge write; the setting observed before the request was ${observedAutoDelete}, which is what this receipt records because acceptance is not a re-read.`
@@ -649,7 +657,7 @@ export function landPullRequest(params: LandParams, deps: LandDeps = {}): LandOu
 			// `gh pr merge --match-head-commit` and `glab mr merge --sha` each fail the merge
 			// unless the source head is still this commit. Neither is a default.
 			const binding = forge === "github" ? ["--match-head-commit", head] : ["--sha", head];
-			mergeArgv = [...mergeArgs(forge, number), "--repo", nameWithOwner, ...binding];
+			mergeArgv = [...mergeArgs(forge, number), "--repo", cliRepo, ...binding];
 		} catch (error) {
 			return refuse(error instanceof Error ? error.message : String(error));
 		}
@@ -660,7 +668,7 @@ export function landPullRequest(params: LandParams, deps: LandDeps = {}): LandOu
 			const detail = stderr === "" ? "" : `; stderr: ${stderr.slice(0, 400)}`;
 			return refuse(`${mergeArgv.join(" ")}: observed ${observed}, expected exit 0${detail}; no receipt was written`);
 		}
-		const second = readPr(run, forge, nameWithOwner, number, FORGE_TIMEOUT_MS, forgeEnv);
+		const second = readPr(run, forge, cliRepo, number, FORGE_TIMEOUT_MS, forgeEnv);
 		rereadArgv = second.argv;
 		if ("reason" in second) return refuse(second.reason);
 		// The re-read must describe the same pull request, at the same head, on the same

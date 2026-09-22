@@ -36,6 +36,9 @@
  */
 
 export type Forge = "github" | "gitlab" | "unknown";
+export type ForgeTarget =
+	| Readonly<{ forge: "github"; canonicalHost: "github.com" }>
+	| Readonly<{ forge: "gitlab"; canonicalHost: "gitlab.com" }>;
 
 /**
  * What one bounded CLI invocation observed.
@@ -90,22 +93,27 @@ export function forgeEnvironment(env: NodeJS.ProcessEnv): Readonly<Record<string
 const GITLAB_MAX_PATH_SEGMENTS = 21;
 
 /**
- * Hosts whose remotes this module can act on.
+ * Hosts whose remotes this module can act on and the canonical CLI/API target
+ * each verified transport host names.
  *
  * `ssh.github.com` and `altssh.gitlab.com` are each vendor's documented
- * alternate SSH endpoint for networks that block port 22. A self-hosted instance
- * is deliberately not recognised, because its API dialect is not verified here.
+ * alternate SSH endpoint for networks that block port 22. They are transport
+ * hosts only: forge CLI and API calls stay pinned to the vendor's canonical
+ * host. A self-hosted instance is deliberately not recognised, because its API
+ * dialect is not verified here.
  *
  * A host is attacker-influenced input. The allowlist therefore has a null
  * prototype, is frozen, and is read through an own-property descriptor rather
  * than a dynamic property access that could consult polluted prototypes.
  */
-const FORGE_HOSTS: Readonly<Record<string, "github" | "gitlab">> = Object.freeze(
-	Object.assign(Object.create(null) as Record<string, "github" | "gitlab">, {
-		"github.com": "github",
-		"ssh.github.com": "github",
-		"gitlab.com": "gitlab",
-		"altssh.gitlab.com": "gitlab",
+const GITHUB_TARGET: ForgeTarget = Object.freeze({ forge: "github", canonicalHost: "github.com" });
+const GITLAB_TARGET: ForgeTarget = Object.freeze({ forge: "gitlab", canonicalHost: "gitlab.com" });
+const FORGE_HOSTS: Readonly<Record<string, ForgeTarget>> = Object.freeze(
+	Object.assign(Object.create(null) as Record<string, ForgeTarget>, {
+		"github.com": GITHUB_TARGET,
+		"ssh.github.com": GITHUB_TARGET,
+		"gitlab.com": GITLAB_TARGET,
+		"altssh.gitlab.com": GITLAB_TARGET,
 	}),
 );
 
@@ -241,11 +249,10 @@ function isValidBranchName(branch: string): boolean {
  * Validate the repository path one forge accepts.
  *
  * GitHub accepts exactly `owner/name`. GitLab additionally accepts bounded
- * nested groups. A three-or-more-segment path whose first segment looks like a
- * host is ambiguous with both CLIs' `[HOST/]OWNER/REPO` selector and is refused:
- * a repository identity must never double as a host selector. A `.` or `..`
- * segment is also refused because it would walk the forge API path the caller
- * asked for into a different resource.
+ * nested groups. The path remains host-free data; GitLab callers disambiguate
+ * it from a configured host alias by prefixing the canonical host returned by
+ * {@link forgeTarget}. A `.` or `..` segment is refused because it would walk
+ * the forge API path the caller asked for into a different resource.
  */
 export function normalizeRepoPath(forge: Forge, repo: string): string | null {
 	const supported = supportedForge(forge);
@@ -253,9 +260,6 @@ export function normalizeRepoPath(forge: Forge, repo: string): string | null {
 	const segments = repo.trim().split("/");
 	const maxSegments = supported === "github" ? 2 : GITLAB_MAX_PATH_SEGMENTS;
 	if (segments.length < 2 || segments.length > maxSegments) return null;
-	const first = segments[0];
-	if (first === undefined) return null;
-	if (segments.length > 2 && (first.includes(".") || first.toLowerCase() === "localhost")) return null;
 	for (const segment of segments) {
 		if (!REPO_SEGMENT.test(segment)) return null;
 		if (segment === "." || segment === ".." || segment.startsWith("-")) return null;
@@ -346,17 +350,24 @@ export const runCli: CliRunner = (argv, options) => {
 };
 
 /**
- * Classify a remote URL. Anything not verified is `"unknown"`, which callers
- * must treat as "no adapter", never as a default forge.
+ * Resolve an allowlisted remote to the forge and canonical host its CLI/API
+ * must target. Alternate SSH transport hosts never escape into forge commands.
  */
-export function detectForge(remoteUrl: string | null): Forge {
-	if (remoteUrl === null) return "unknown";
+export function forgeTarget(remoteUrl: string | null): ForgeTarget | null {
+	if (remoteUrl === null) return null;
 	const host = hostOf(remoteUrl);
-	if (host === null) return "unknown";
+	if (host === null) return null;
 	const descriptor = Object.getOwnPropertyDescriptor(FORGE_HOSTS, host);
-	if (descriptor === undefined || !("value" in descriptor)) return "unknown";
-	const forge: unknown = descriptor.value;
-	return forge === "github" || forge === "gitlab" ? forge : "unknown";
+	if (descriptor === undefined || !("value" in descriptor)) return null;
+	const target: unknown = descriptor.value;
+	if (target === GITHUB_TARGET) return GITHUB_TARGET;
+	if (target === GITLAB_TARGET) return GITLAB_TARGET;
+	return null;
+}
+
+/** Classify a remote URL. An unverified remote has no adapter. */
+export function detectForge(remoteUrl: string | null): Forge {
+	return forgeTarget(remoteUrl)?.forge ?? "unknown";
 }
 
 /**
@@ -449,7 +460,7 @@ export function autoDeleteSetting(forge: Forge, repo: string, run: CliRunner = r
 	if (path === null) return "unknown";
 	const argv = supported === "github"
 		? ["gh", "api", `repos/${path}`, "--jq", ".delete_branch_on_merge"]
-		: ["glab", "api", `projects/${encodeURIComponent(path)}`];
+		: ["glab", "api", `projects/${encodeURIComponent(path)}`, "--hostname", GITLAB_TARGET.canonicalHost];
 	const result = run(argv, { timeoutMs: FORGE_TIMEOUT_MS });
 	if (!result.ok || result.exitCode !== 0 || result.error !== undefined) return "unknown";
 	const text = result.stdout.trim();
@@ -498,7 +509,7 @@ export function enableAutoDelete(forge: Forge, repo: string, run: CliRunner = ru
 	}
 	const argv = supported === "github"
 		? ["gh", "api", "-X", "PATCH", `repos/${path}`, "-F", "delete_branch_on_merge=true"]
-		: ["glab", "api", "-X", "PUT", `projects/${encodeURIComponent(path)}`, "-F", "remove_source_branch_after_merge=true"];
+		: ["glab", "api", "-X", "PUT", `projects/${encodeURIComponent(path)}`, "--hostname", GITLAB_TARGET.canonicalHost, "-F", "remove_source_branch_after_merge=true"];
 	const result = run(argv, { timeoutMs: FORGE_TIMEOUT_MS });
 	if (!result.ok || result.exitCode !== 0 || result.error !== undefined) {
 		return { ok: false, reason: describeFailure(argv, result) };
