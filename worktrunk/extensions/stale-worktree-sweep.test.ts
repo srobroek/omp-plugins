@@ -64,12 +64,18 @@ interface Options {
 	ledger?: Record<string, Row>;
 	/** What the confirmation read answers, when it differs from the batched one. */
 	confirm?: Record<string, Row>;
-	/** Branches whose removal reports success but whose branch ref survives. */
+	/** Branches whose removal reports success but whose worktree and branch both survive. */
 	survives?: readonly string[];
+	/** Branches whose worktree is removed but whose branch ref survives. */
+	branchSurvives?: readonly string[];
 	/** Branches whose removal is refused because the worktree is locked. */
 	locked?: readonly string[];
 	/** Path a branch has moved to by the time the sweep re-lists, keyed by branch. */
 	moved?: Record<string, string>;
+	/** Forge answer for `gh pr list`; omitted answers with an unexpected-command failure. */
+	forge?: CommandResult;
+	/** Failure for the explicit post-forge `git branch -D`. */
+	branchDeleteFails?: string;
 }
 
 interface Harness {
@@ -83,16 +89,25 @@ function harness(entries: readonly Entry[], options: Options = {}): Harness {
 	const argv: string[][] = [];
 	const reads: string[][] = [];
 	const removed = new Set<string>();
+	const branchDeleted = new Set<string>();
 	let listings = 0;
 	const run: CommandRunner = async command => {
 		argv.push([...command]);
 		const [tool, ...rest] = command;
 		const joined = rest.join(" ");
-		// `wt remove` and the listing are the only git this sweep runs: the canonical root comes
-		// from the gate's own topology reader, not from a probe of its own.
+		if (tool === "gh" && joined.includes("pr list")) {
+			return options.forge ?? { code: 1, stdout: "", stderr: `unexpected ${command.join(" ")}` };
+		}
+		if (tool === "git" && rest.includes("-D") && rest.includes("branch")) {
+			const branch = command[command.length - 1] ?? "";
+			if (options.branchDeleteFails !== undefined) return { code: 1, stdout: "", stderr: options.branchDeleteFails };
+			branchDeleted.add(branch);
+			return ok();
+		}
 		if (tool === "git" && joined.includes("branch --list")) {
 			const branch = command[command.length - 1] ?? "";
-			return ok((options.survives ?? []).includes(branch) ? `  ${branch}\n` : "");
+			const survives = [...(options.survives ?? []), ...(options.branchSurvives ?? [])];
+			return ok(survives.includes(branch) && !branchDeleted.has(branch) ? `  ${branch}\n` : "");
 		}
 		if (tool === "git" && joined.includes("worktree list")) {
 			listings += 1;
@@ -352,7 +367,11 @@ describe("a tree that survives its removal", () => {
 
 		expect(result.swept).toEqual([]);
 		expect(result.retained[0]).toContain("omp/agent/a");
-		expect(result.retained[0]).toContain("unmerged");
+		// Both halves survived, so the forge is never asked and the message must claim nothing about
+		// merge state — only tell the reader how to establish it, and how to act once they have.
+		expect(result.retained[0]).toContain("check whether a merged pull request names it");
+		expect(result.retained[0]).not.toContain("unmerged");
+		expect(result.retained[0]).toContain(`wt -C ${REPO} remove -y -D omp/agent/a`);
 		expect(result.retained[0]).toContain("git worktree lock");
 	});
 
@@ -365,6 +384,75 @@ describe("a tree that survives its removal", () => {
 		expect(result).toEqual({ swept: [], retained: [] });
 		expect(removals(argv)).toEqual([]);
 		expect(sweepNotice(result)).toBeUndefined();
+	});
+});
+
+describe("squash-landed branch residue", () => {
+	const branch = "omp/agent/a";
+	const ghArgv = ["gh", "pr", "list", "--head", branch, "--state", "all", "--json", "number,state", "--limit", "20"];
+
+	test("drops a branch after the forge proves its squash-landed PR", async () => {
+		const { run, readLedger, argv } = harness(ENTRIES, {
+			ledger: { a: { status: "closed", closedAt: CLOSED_LONG_AGO } },
+			branchSurvives: [branch],
+			forge: ok('[{"number":471,"state":"MERGED"}]'),
+		});
+		const result = await sweepStaleWorktrees(REPO, { run, readLedger, now: NOW });
+
+		expect(result.swept).toEqual([branch]);
+		expect(result.retained).toEqual([]);
+		expect(argv.some(command => command.join("\0") === ghArgv.join("\0"))).toBe(true);
+		expect(argv.some(command => command.join("\0") === ["git", "-C", REPO, "branch", "-D", branch].join("\0"))).toBe(true);
+		expect(sweepNotice(result)).toContain("PR #471");
+		expect(sweepNotice(result)).toContain("squash rewrote the patch id");
+	});
+
+	test("retains a branch when the forge reports an open PR", async () => {
+		const { run, readLedger, argv } = harness(ENTRIES, {
+			ledger: { a: { status: "closed", closedAt: CLOSED_LONG_AGO } },
+			branchSurvives: [branch],
+			forge: ok('[{"number":9,"state":"OPEN"}]'),
+		});
+		const result = await sweepStaleWorktrees(REPO, { run, readLedger, now: NOW });
+
+		expect(result.swept).toEqual([]);
+		expect(result.squashLanded).toBeUndefined();
+		expect(result.retained[0]).toContain("no merged pull request names");
+		expect(result.retained[0]).toContain("really is unmerged");
+		// A retained branch is only useful to a reader who is told what to run.
+		expect(result.retained[0]).toContain(`wt -C ${REPO} remove -y -D ${branch}`);
+		expect(result.retained[0]).not.toContain("PR #9 is merged");
+		expect(argv.some(command => command.join("\0") === ["git", "-C", REPO, "branch", "-D", branch].join("\0"))).toBe(false);
+	});
+
+	test("retains a branch when the forge cannot be asked", async () => {
+		const { run, readLedger, argv } = harness(ENTRIES, {
+			ledger: { a: { status: "closed", closedAt: CLOSED_LONG_AGO } },
+			branchSurvives: [branch],
+			forge: { code: 127, stdout: "", stderr: "" },
+		});
+		const result = await sweepStaleWorktrees(REPO, { run, readLedger, now: NOW });
+
+		expect(result.swept).toEqual([]);
+		expect(result.retained[0]).toContain("gh is not installed");
+		expect(result.retained[0]).toContain("the forge could not be asked");
+		expect(result.retained[0]).toContain(`wt -C ${REPO} remove -y -D ${branch}`);
+		expect(result.retained[0]).not.toContain("unmerged");
+		expect(argv.some(command => command.join("\0") === ["git", "-C", REPO, "branch", "-D", branch].join("\0"))).toBe(false);
+	});
+
+	test("does not ask the forge while the worktree still survives", async () => {
+		const { run, readLedger, argv } = harness(ENTRIES, {
+			ledger: { a: { status: "closed", closedAt: CLOSED_LONG_AGO } },
+			survives: [branch],
+			forge: ok('[{"number":471,"state":"MERGED"}]'),
+		});
+		const result = await sweepStaleWorktrees(REPO, { run, readLedger, now: NOW });
+
+		expect(result.swept).toEqual([]);
+		expect(result.retained).toHaveLength(1);
+		expect(argv.some(command => command[0] === "gh")).toBe(false);
+		expect(argv.some(command => command.join("\0") === ["git", "-C", REPO, "branch", "-D", branch].join("\0"))).toBe(false);
 	});
 });
 
