@@ -8,12 +8,12 @@ The plugin registers four tools.
 
 | Tool | Approval | Purpose |
 | --- | --- | --- |
-| `delivery_orient` | `read` | Read-only orientation for a main agent or run lead. |
-| `delivery_hygiene_report` | `read` | Read-only hygiene inventory when state remains ambiguous. |
+| `delivery_orient` | `read` | Read-only statement of the six-point hygiene contract. |
+| `delivery_hygiene_report` | `read` | Read-only worktree and receipt inventory, on demand. |
 | `delivery_land` | `exec` | Prove a pull request landing and write one receipt. |
-| `delivery_cleanup` | `exec` | Remove and verify one landed worktree and branch after reconciliation when `beads.ledgerActive` is true. |
+| `delivery_cleanup` | `exec` | Remove and verify one landed worktree and branch; reconcile first only when `beads.ledgerActive` is true, otherwise clean directly. |
 
-Call `delivery_orient` before a main-agent or run-lead-only action. It reports the owned repository scope, linked worktrees, branch publication state, dirty paths, receipt residue, and scan limitations. It never mutates state. Call `delivery_hygiene_report` for the same bounded inventory on demand. `ExtensionContext` does not provide role identity, so these tools report facts instead of deciding a role.
+`delivery_orient` states the hygiene contract as text: cleanup ownership, one worktree per agent, small pushed commits, scratch files outside the worktree, the three session-stop reminders, and the conditional lifecycle order. It runs no command. Call `delivery_hygiene_report` for the inventory: one row per worktree with its branch, main-worktree flag, dirty count, and ahead/behind counts, plus the receipt ids present for this repository, and a verdict of `actionable`, `ambiguous`, or `clean`. It hands every tree it does not itself run in to the party holding it and names no removal. `ExtensionContext` does not provide role identity, so both tools report facts instead of deciding a role, and each names itself in its first output line.
 
 `delivery_land` accepts `pr` and, when needed, `repo`, `remote`, `expectHeadSha`, `setupAutoDelete`, and `worktree`. The caller supplies `worktree` when recording the landing association. The tool reads the pull or merge request and refuses invalid caller inputs. It merges at most once. If it issues a merge, it rereads the same request and base on that merge-issued path. An already-`MERGED` request uses its initial read as proof. The tool observes the remote branch and writes one validated receipt. It never writes the Beads ledger.
 
@@ -23,9 +23,9 @@ Call `delivery_orient` before a main-agent or run-lead-only action. It reports t
 
 Run these steps in order after a reviewed branch lands:
 
-1. **Orient.** Call `delivery_orient` before a role-restricted action.
+1. **Orient.** Call `delivery_orient` for the hygiene contract before a role-restricted action; the role it names is a convention no tool verifies.
 2. **Land.** Call `delivery_land` with the requested pull or merge request. Supply `worktree` when recording the landing association.
-3. **Reconcile when active.** If the landing receipt has `beads.ledgerActive: true`, run `bd_reconcile` to write the Beads ledger from the receipt. If `beads.ledgerActive` is `false` for a no-ledger or retired repository, skip reconciliation. Delivery writes receipts, never the ledger.
+3. **Reconcile when active.** `beads.ledgerActive` records the ledger classification taken at the repository's canonical root rather than at the invocation directory, because a linked worktree sits outside the checkout. When it is `true`, run `bd_reconcile` to write the Beads ledger from the receipt. When it is `false` for a no-ledger or retired repository, skip reconciliation. Delivery writes receipts, never the ledger.
 4. **Clean.** Call `delivery_cleanup` with the receipt or matching identity fields.
 
 Cleanup requires exact landing proof. The request must be merged at its recorded base. Its `headRefOid` must cover the branch tip. The merge must reach the final destination. A dirty tree, an unpushed commit, an uncovered tip, a failed identity check, or unknown local absence stops cleanup. The caller supplies the worktree and follows repository ownership policy. Remote absence `unknown` remains unverified. The receipt records that result and never presents it as absence. Never force removal, stash changes to make a tree clean, or remove a worktree or branch by hand.
@@ -74,7 +74,7 @@ The adapter supports verified GitHub and GitLab remotes only. It uses `gh` for G
 
 | Factory | Behavior |
 | --- | --- |
-| `unpushed-work-advisory` | At session stop, reports dirty paths observed from writing tools and unpushed commits since the session baseline. It is advisory, grants no commit or publish authority, and never blocks a tool. It emits at most three reminders per unresolved streak. After the third reminder, unresolved ambiguity escalates to the report-only `worktree-reaper`. |
+| `unpushed-work-advisory` | At session stop, reports dirty paths observed from writing tools and unpushed commits since the session baseline. It is advisory, grants no commit or publish authority, and never blocks a tool. It emits at most three reminders per unresolved streak, and proved progress resets the count. The third reminder escalates whether the residual was measured or only suspected: it dispatches the report-only `worktree-reaper` and names the lifecycle that removes state, `bd_reconcile` ahead of `delivery_cleanup` only for an active ledger. An unmeasured residual is reported rather than acted on. |
 | `delivery-land-tool` | Registers `delivery_land`. |
 | `delivery-cleanup-tool` | Registers `delivery_cleanup`. |
 | `hygiene-orientation` | Registers `delivery_orient` and `delivery_hygiene_report`. |
@@ -86,7 +86,7 @@ The adapter supports verified GitHub and GitLab remotes only. It uses `gh` for G
 | --- | --- |
 | `pr-reviewer` | Read-only pull-request reviewer. It returns a `VERDICT:` line and does not edit the checkout. |
 | `integrator` | When `beads.ledgerActive` is true, verifies completed reconciliation before cleaning the merged worktree and branch; inactive retired/no-ledger receipts skip directly to cleanup. |
-| `worktree-reaper` | Report-only escalation after the third ambiguous hygiene reminder. It inventories residual state and never authorizes removal. |
+| `worktree-reaper` | Report-only escalation the third hygiene reminder dispatches. It inventories residual state and never authorizes removal. |
 
 The agent that creates a non-orchestrated PR owns its automated review loop through landing or explicit human escalation. An orchestrated run's `orc-shepherd` owns review rounds. Workers do not request or act on those rounds. The agent that merges a branch owns cleanup under repository policy. If no merging agent is live, the main agent owns cleanup. The main agent or run lead must orient before a role-restricted step. `delivery_cleanup` does not enforce actor identity or require the caller to run from a linked worktree; it validates the caller-supplied receipt target. Repository policy assigns ownership.
 
