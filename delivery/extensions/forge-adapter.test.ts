@@ -843,7 +843,9 @@ describe("every issued command", () => {
 			"detectForge",
 			"enableAutoDelete",
 			"forgeEnvironment",
+			"gitObservationEnvironment",
 			"mergeArgs",
+			"normalizeRepoPath",
 			"remoteBranchAbsent",
 			"runCli",
 		]);
