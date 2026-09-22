@@ -27,8 +27,12 @@
  *      works against this sweep by construction: a locked tree makes `git worktree remove` answer
  *      "fatal: cannot remove a locked working tree" and `wt remove -y` answer "Cannot remove <x>,
  *      worktree is locked". That only holds while removal carries no force flag, so removal is
- *      `wt remove -y --foreground <branch>` with neither `-f` nor `-D`, and every message about a
- *      tree that was kept names the lock, because that is the moment a reader needs to learn it.
+ *      `wt remove -y --foreground <branch>` with neither `-f` nor `-D`. `-D` is withheld for the
+ *      same reason: it would drop an unmerged branch. When the tree is gone but its branch
+ *      survives, the forge is asked whether its PR is merged; a merged PR is safe to drop even
+ *      when squash merging rewrote the patch id and git ancestry cannot see the landing. Every
+ *      message about a tree that was kept names the lock, because that is the moment a reader
+ *      needs to learn it.
  *   6. It is silent unless something was actually removed or actually kept. A stand-down — no
  *      candidates, an unreadable `git worktree list`, a cwd in no repository — says nothing at
  *      all: a fresh `omp -p` session has exactly one assistant turn, and a notice spends it
@@ -59,6 +63,8 @@ import { insideAny, type RepositoryTopology, realDeepest, repositoryTopology } f
 
 /** Every probe must finish well inside the session-start budget. */
 export const PROBE_TIMEOUT_MS = 5_000;
+/** The forge probe is a network call, so it gets its own bounded share of the session budget. */
+export const FORGE_TIMEOUT_MS = 5_000;
 /** A removal deletes a directory and a branch, so it gets more room than a probe. */
 export const REMOVE_TIMEOUT_MS = 15_000;
 /** One `bd show` against an embedded store, which is slower than any git probe. */
@@ -118,6 +124,42 @@ async function spawnProcess(argv: readonly string[], cwd: string, timeoutMs: num
 }
 
 export const spawnCommand: CommandRunner = (argv, cwd, timeoutMs) => spawnProcess(argv, cwd, timeoutMs, gitEnvironment());
+
+export type ForgeLanding =
+	| { kind: "merged"; pr: number }
+	| { kind: "unlanded" }
+	| { kind: "unknown"; detail: string };
+
+/** Ask the forge only after git has removed the worktree but cannot account for its branch. */
+export async function forgeLanding(canonical: string, branch: string, run: CommandRunner, timeoutMs: number): Promise<ForgeLanding> {
+	const result = await run(
+		["gh", "pr", "list", "--head", branch, "--state", "all", "--json", "number,state", "--limit", "20"],
+		canonical,
+		timeoutMs,
+	);
+	if (result.code === 127) return { kind: "unknown", detail: "gh is not installed" };
+	if (result.code !== 0) {
+		const detail = (result.stderr.trim() || `gh exited ${result.code}`).replace(/\s+/gu, " ");
+		return { kind: "unknown", detail };
+	}
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(result.stdout.trim());
+	} catch {
+		return { kind: "unknown", detail: "gh returned unparseable JSON" };
+	}
+	if (!Array.isArray(parsed)) return { kind: "unknown", detail: "gh returned a non-array payload" };
+	for (const entry of parsed) {
+		if (entry === null || typeof entry !== "object") continue;
+		const record = entry as Record<string, unknown>;
+		if (record.state !== "MERGED") continue;
+		if (typeof record.number !== "number" || !Number.isInteger(record.number)) {
+			return { kind: "unknown", detail: "gh returned a merged PR without a numeric number" };
+		}
+		return { kind: "merged", pr: record.number };
+	}
+	return { kind: "unlanded" };
+}
 
 /** One `git worktree list --porcelain -z` record: `branch` is `null` when detached or bare. */
 export interface WorktreeEntry {
@@ -287,6 +329,8 @@ function lockHint(worktreePath: string): string {
 export interface SweepResult {
 	/** `<branch>` of every worktree this sweep released, tree and branch both confirmed gone. */
 	swept: string[];
+	/** Branches dropped after the forge proved their squash-landed PR, with the PR number for notice. */
+	squashLanded?: { branch: string; pr: number }[];
 	/** `<branch>: <why>` for a closed bead's tree that was deliberately or unavoidably kept. */
 	retained: string[];
 	/** Why the sweep did nothing. Diagnostic only: a stand-down produces no session notice. */
@@ -367,7 +411,13 @@ async function removalResidue(canonical: string, worktreePath: string, branch: s
  */
 const LOCK_REFUSAL = /worktree is locked|cannot remove a locked working tree/iu;
 
-function retainedForResidue(canonical: string, candidate: Candidate, failure: string | undefined, residue: RemovalResidue): string {
+function retainedForResidue(
+	canonical: string,
+	candidate: Candidate,
+	failure: string | undefined,
+	residue: RemovalResidue,
+	landing?: ForgeLanding,
+): string {
 	if (failure !== undefined && LOCK_REFUSAL.test(failure)) {
 		return (
 			`${candidate.branch}: ${failure} — a \`git worktree lock\` is holding it, which is the supported way to keep a tree ` +
@@ -379,7 +429,18 @@ function retainedForResidue(canonical: string, candidate: Candidate, failure: st
 		steps.push(`the worktree ${candidate.path} is still registered: commit or discard its changes, then \`wt -C ${canonical} remove -y --foreground ${candidate.branch}\``);
 	}
 	if (residue.branch) {
-		steps.push(`the branch ${candidate.branch} survives because it is unmerged: merge it, or drop it deliberately with \`wt -C ${canonical} remove -y -D ${candidate.branch}\``);
+		// Every branch of this is a sentence a reader must be able to act on, so each one ends in a
+		// command. Only the wording about *why* the branch survived varies with what the forge said.
+		const drop = `drop it deliberately with \`wt -C ${canonical} remove -y -D ${candidate.branch}\``;
+		const branchMessage =
+			landing?.kind === "unlanded"
+				? `no merged pull request names ${candidate.branch}, so the branch survives because it really is unmerged: merge it, or ${drop}`
+				: landing?.kind === "unknown"
+					? `the branch ${candidate.branch} survives and the forge could not be asked (${landing.detail}), so a squash-landed branch would look identical from git alone: check its pull request, then merge it or ${drop}`
+					: landing?.kind === "merged"
+						? `the branch ${candidate.branch} is already landed — pull request #${landing.pr} is MERGED — and survives only because squashing rewrote its patch id, which no git containment test can see: drop it with \`git -C ${canonical} branch -D ${candidate.branch}\``
+						: `the branch ${candidate.branch} survives: once the worktree is released, check whether a merged pull request names it, then merge it or ${drop}`;
+		steps.push(branchMessage);
 	}
 	const remediation = steps.join("; ");
 	const prefix = failure === undefined ? "" : `${failure} — `;
@@ -490,7 +551,9 @@ export async function sweepStaleWorktrees(canonical: string, deps: SweepDeps = {
 		}
 
 		// Neither `-f` nor `-D`. Both halves of that are load-bearing: force would delete a dirty
-		// tree and a lock would stop mattering, and `-D` would drop an unmerged branch.
+		// tree and a lock would stop mattering, and `-D` would drop an unmerged branch. Once the
+		// tree is gone, the forge can prove a squash-landed PR: squash rewrote the patch id, so git
+		// ancestry cannot see that it is merged, but the forge proof makes dropping only the branch safe.
 		const removal = await run(["wt", "-C", canonical, "remove", "-y", "--foreground", candidate.branch], canonical, Math.min(REMOVE_TIMEOUT_MS, Math.max(1, remainingMs())));
 		const residue = removal.code === 0 ? await removalResidue(canonical, candidate.path, candidate.branch, run) : { worktree: true, branch: true };
 		if (!residue.worktree && !residue.branch) {
@@ -499,6 +562,53 @@ export async function sweepStaleWorktrees(canonical: string, deps: SweepDeps = {
 		}
 		// Flattened: `wt` answers a refusal over several lines, and the notice is read as one.
 		const failure = removal.code === 0 ? undefined : (removal.stderr.trim() || removal.stdout.trim() || `wt remove exited ${removal.code}`).replace(/\s+/gu, " ");
+		if (!residue.worktree && residue.branch) {
+			if (remainingMs() <= FORGE_TIMEOUT_MS) {
+				result.retained.push(retainedForResidue(canonical, candidate, "the session-start budget ran out before the forge could be asked", residue));
+				continue;
+			}
+			const landing = await forgeLanding(canonical, candidate.branch, run, Math.min(FORGE_TIMEOUT_MS, Math.max(1, remainingMs())));
+			if (landing.kind === "merged") {
+				const deletion = await run(["git", "-C", canonical, "branch", "-D", candidate.branch], canonical, Math.min(REMOVE_TIMEOUT_MS, Math.max(1, remainingMs())));
+				if (deletion.code !== 0) {
+					const detail = (deletion.stderr.trim() || deletion.stdout.trim() || `git branch -D exited ${deletion.code}`).replace(/\s+/gu, " ");
+					result.retained.push(
+						retainedForResidue(
+							canonical,
+							candidate,
+							`forge confirms PR #${landing.pr} is merged, but deleting the squash-landed branch failed (${detail})`,
+							residue,
+							landing,
+						),
+					);
+					continue;
+				}
+				const branchProbe = await run(["git", "-C", canonical, "branch", "--list", candidate.branch], canonical, Math.min(PROBE_TIMEOUT_MS, Math.max(1, remainingMs())));
+				if (branchProbe.code === 0 && branchProbe.stdout.trim().length === 0) {
+					result.swept.push(candidate.branch);
+					const landed = result.squashLanded ?? [];
+					landed.push({ branch: candidate.branch, pr: landing.pr });
+					result.squashLanded = landed;
+					continue;
+				}
+				const detail =
+					branchProbe.code === 0
+						? "the post-delete branch probe still names it"
+						: (branchProbe.stderr.trim() || branchProbe.stdout.trim() || `git branch --list exited ${branchProbe.code}`).replace(/\s+/gu, " ");
+				result.retained.push(
+					retainedForResidue(
+						canonical,
+						candidate,
+						`forge confirms PR #${landing.pr} is merged, but the branch deletion could not be proven (${detail})`,
+						residue,
+						landing,
+					),
+				);
+				continue;
+			}
+			result.retained.push(retainedForResidue(canonical, candidate, failure, residue, landing));
+			continue;
+		}
 		result.retained.push(retainedForResidue(canonical, candidate, failure, residue));
 	}
 	return result;
@@ -513,8 +623,17 @@ export async function sweepStaleWorktrees(canonical: string, deps: SweepDeps = {
  */
 export function sweepNotice(result: SweepResult): string | undefined {
 	const parts: string[] = [];
-	if (result.swept.length > 0) {
-		parts.push(`worktrunk reclaimed ${result.swept.length} stale agent worktree(s), closed longer than ${GRACE_WINDOW_MS / 3_600_000}h: ${result.swept.join(", ")}.`);
+	const squashBranches = new Set((result.squashLanded ?? []).map(entry => entry.branch));
+	const ordinarySwept = result.swept.filter(branch => !squashBranches.has(branch));
+	if (ordinarySwept.length > 0) {
+		parts.push(`worktrunk reclaimed ${ordinarySwept.length} stale agent worktree(s), closed longer than ${GRACE_WINDOW_MS / 3_600_000}h: ${ordinarySwept.join(", ")}.`);
+	}
+	if (result.squashLanded !== undefined && result.squashLanded.length > 0) {
+		parts.push(
+			`worktrunk reclaimed ${result.squashLanded.length} squash-landed branch(es) after forge confirmation: ${result.squashLanded
+				.map(entry => `${entry.branch} (PR #${entry.pr}; squash rewrote the patch id so git ancestry cannot see it)`)
+				.join(", ")}.`,
+		);
 	}
 	if (result.retained.length > 0) {
 		parts.push(`worktrunk kept ${result.retained.length} closed bead's worktree(s) — ${result.retained.join("; ")}.`);
