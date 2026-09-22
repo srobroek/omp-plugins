@@ -61,19 +61,19 @@ interface SessionState {
 }
 
 /**
- * The database a session's checkout provides: `<cwd>/.beads` when it exists.
- * Per-session, unlike the process pin, so concurrent sessions never share it by accident.
+ * The database a session's checkout provides. Linked worktrees always use the
+ * primary checkout's store, even when ignored state copied a local `.beads`.
  */
 export function sessionPinFor(cwd: string): string | undefined {
 	const local = resolve(cwd, ".beads");
-	if (isDir(local)) return local;
-	// A linked worktree keeps no database of its own; the primary checkout beside the
-	// common git dir does. bd's cwd walk would not find it, so the pin has to.
 	const common = repoIdentity(cwd);
 	if (common !== cwd && common.endsWith("/.git")) {
-		const primary = resolve(common, "..", ".beads");
+		const primaryRoot = resolve(common, "..");
+		if (realpathSync(cwd) === primaryRoot && isDir(local)) return local;
+		const primary = resolve(primaryRoot, ".beads");
 		if (isDir(primary)) return primary;
 	}
+	if (isDir(local)) return local;
 	return undefined;
 }
 
