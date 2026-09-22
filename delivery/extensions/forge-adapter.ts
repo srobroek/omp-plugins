@@ -68,6 +68,24 @@ export type CliRunner = (
  */
 export const FORGE_TIMEOUT_MS = 10_000;
 
+/**
+ * Ambient variables that redirect a forge command away from the repository the
+ * caller resolved locally. Every forge command must use this same environment.
+ * Credentials and ordinary process state are retained; only repository and host
+ * selectors are removed.
+ */
+const FORGE_REDIRECTORS: readonly string[] = ["GH_REPO", "GH_HOST", "GITLAB_HOST", "GL_HOST", "GITLAB_URI", "GITLAB_API_HOST"];
+
+/** Return a null-prototype copy of `env` without forge host/repository redirectors. */
+export function forgeEnvironment(env: NodeJS.ProcessEnv): Readonly<Record<string, string>> {
+	const clean = Object.create(null) as Record<string, string>;
+	for (const [key, value] of Object.entries(env)) {
+		if (value === undefined || FORGE_REDIRECTORS.includes(key)) continue;
+		clean[key] = value;
+	}
+	return clean;
+}
+
 /** Upper bound on nested GitLab group segments plus the project (20 + 1). */
 const GITLAB_MAX_PATH_SEGMENTS = 21;
 

@@ -59,6 +59,7 @@ import {
 	enableAutoDelete,
 	FORGE_TIMEOUT_MS,
 	type Forge,
+	forgeEnvironment,
 	mergeArgs,
 	remoteBranchAbsent,
 	runCli,
@@ -142,41 +143,6 @@ const FULL_OID = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
  */
 const REPO_SEGMENT = /^(?=[^/]*[A-Za-z0-9])[A-Za-z0-9._][A-Za-z0-9._-]*$/;
 
-/**
- * Ambient variables that redirect a forge command away from the repository this
- * call resolved from the remote.
- *
- * `gh` reads `GH_REPO` and `GH_HOST`. `glab` reads four: `GITLAB_HOST`, its older
- * `GL_HOST` spelling, `GITLAB_URI`, and `GITLAB_API_HOST`, which redirects API
- * traffic on its own even when the web host looks right. All six are dropped for
- * every forge command on both forges, because a session that exported a GitLab
- * variable is not required to be landing on GitLab — an ambient value belongs to
- * whoever exported it, not to this call.
- *
- * Stripping, rather than binding a host into `--repo`: `gh` accepts
- * `HOST/OWNER/REPO`, but the adapter builds its settings reads as
- * `repos/<owner>/<name>` and `projects/<encoded path>`, which a host-prefixed value
- * would corrupt. Removing the override pins every command, those included, to the
- * host {@link detectForge} verified.
- *
- * Nothing else is removed: dropping `GH_TOKEN`, `GITLAB_TOKEN` or `GL_TOKEN` would
- * turn a bound command into an unauthenticated one, which is a different failure
- * and not a safer one.
- */
-const FORGE_REDIRECTORS: readonly string[] = ["GH_REPO", "GH_HOST", "GITLAB_HOST", "GL_HOST", "GITLAB_URI", "GITLAB_API_HOST"];
-
-/**
- * The environment a forge command runs with: everything inherited except the
- * variables in {@link FORGE_REDIRECTORS}.
- */
-function forgeEnvironment(env: NodeJS.ProcessEnv): Readonly<Record<string, string>> {
-	const clean = Object.create(null) as Record<string, string>;
-	for (const [key, value] of Object.entries(env)) {
-		if (value === undefined || FORGE_REDIRECTORS.includes(key)) continue;
-		clean[key] = value;
-	}
-	return clean;
-}
 
 export type LandParams = {
 	pr: number | string;

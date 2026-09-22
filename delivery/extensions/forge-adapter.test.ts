@@ -12,6 +12,7 @@ import {
 	enableAutoDelete,
 	FORGE_TIMEOUT_MS,
 	type Forge,
+	forgeEnvironment,
 	mergeArgs,
 	remoteBranchAbsent,
 	runCli,
@@ -126,6 +127,31 @@ const UNSUPPORTED_FORGES = [
 const SHELL_METACHARACTER = /[;&|<>$`(){}[\]!*?~#\\'"\s]/;
 
 const MUTATING_HTTP_METHOD = /^(?:PATCH|PUT|POST|DELETE)$/;
+
+describe("forgeEnvironment", () => {
+	test("strips every forge repository and host redirector while preserving credentials", () => {
+		const clean = forgeEnvironment({
+			GH_REPO: "attacker/elsewhere",
+			GH_HOST: "evil.example",
+			GITLAB_HOST: "evil.example",
+			GL_HOST: "evil.example",
+			GITLAB_URI: "https://evil.example",
+			GITLAB_API_HOST: "api.evil.example",
+			GH_TOKEN: "keep-gh",
+			GITLAB_TOKEN: "keep-gitlab",
+			GL_TOKEN: "keep-gl",
+			PATH: "/usr/bin",
+		});
+
+		for (const key of ["GH_REPO", "GH_HOST", "GITLAB_HOST", "GL_HOST", "GITLAB_URI", "GITLAB_API_HOST"]) {
+			expect(clean[key]).toBeUndefined();
+		}
+		expect(clean.GH_TOKEN).toBe("keep-gh");
+		expect(clean.GITLAB_TOKEN).toBe("keep-gitlab");
+		expect(clean.GL_TOKEN).toBe("keep-gl");
+		expect(clean.PATH).toBe("/usr/bin");
+	});
+});
 
 describe("detectForge", () => {
 	test("https remotes", () => {
@@ -816,6 +842,7 @@ describe("every issued command", () => {
 			"autoDeleteSetting",
 			"detectForge",
 			"enableAutoDelete",
+			"forgeEnvironment",
 			"mergeArgs",
 			"remoteBranchAbsent",
 			"runCli",
