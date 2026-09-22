@@ -92,23 +92,6 @@
         }
       ]
     },
-    "browser-tools": {
-      "release-type": "simple",
-      "component": "browser-tools",
-      "changelog-path": "CHANGELOG.md",
-      "extra-files": [
-        {
-          "type": "json",
-          "path": ".omp-plugin/plugin.json",
-          "jsonpath": "$.version"
-        },
-        {
-          "type": "json",
-          "path": "package.json",
-          "jsonpath": "$.version"
-        }
-      ]
-    },
     "build": {
       "release-type": "simple",
       "component": "build",
