@@ -13,7 +13,7 @@ test("missing project cannot report successful verification or repair", () => {
    expect(report.complete).toBe(false);
   }
  } finally { rmSync(dir, { recursive: true, force: true }); }
-});
+}, 120_000); // child probes tools at 5s per argument set; a cascade over absent tools costs 15s per binary
 
 test("missing requested tools and command failures cannot pass", () => {
  const dir = mkdtempSync(join(tmpdir(), "go-quality-"));
@@ -24,7 +24,7 @@ test("missing requested tools and command failures cannot pass", () => {
   writeFileSync(which, '#!/bin/sh\n[ -x "' + bin + '/$1" ]\n'); chmodSync(which, 0o755);
   const invoke = () => {
    const source = `import goQualityTool, { runGoQuality } from ${JSON.stringify(import.meta.dir + "/go-quality-tool.ts")}; console.log(JSON.stringify(runGoQuality("check", ${JSON.stringify(dir)})));`;
-   const proc = Bun.spawnSync([process.execPath, "-e", source], { env: { ...process.env, PATH: bin }, stdout: "pipe", stderr: "pipe", timeout: 10000 });
+   const proc = Bun.spawnSync([process.execPath, "-e", source], { env: { ...process.env, PATH: bin }, stdout: "pipe", stderr: "pipe", timeout: 60_000 });
    expect(proc.exitCode).toBe(0);
    return JSON.parse(proc.stdout.toString());
   };
@@ -42,7 +42,7 @@ test("missing requested tools and command failures cannot pass", () => {
   expect(failed.ok).toBe(false);
   expect(failed.steps.some((step: { status: string }) => step.status === "fail")).toBe(true);
  } finally { rmSync(dir, { recursive: true, force: true }); }
-});
+}, 120_000); // child probes tools at 5s per argument set; a cascade over absent tools costs 15s per binary
 
 function fakeZod(): { zod: unknown } {
 	const chain: Record<string, unknown> = {};

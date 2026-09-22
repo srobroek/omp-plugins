@@ -13,7 +13,7 @@ test("missing project cannot report successful verification or repair", () => {
    expect(report.complete).toBe(false);
   }
  } finally { rmSync(dir, { recursive: true, force: true }); }
-});
+}, 120_000); // child probes tools at 5s per argument set; a cascade over absent tools costs 15s per binary
 
 test("missing requested tools and command failures cannot pass", () => {
  const dir = mkdtempSync(join(tmpdir(), "python-quality-"));
@@ -24,7 +24,7 @@ test("missing requested tools and command failures cannot pass", () => {
   writeFileSync(which, '#!/bin/sh\n[ -x "' + bin + '/$1" ]\n'); chmodSync(which, 0o755);
   const invoke = () => {
    const source = `import { runPythonQuality } from ${JSON.stringify(import.meta.dir + "/python-quality-tool.ts")}; console.log(JSON.stringify(runPythonQuality("check", ${JSON.stringify(dir)})));`;
-   const proc = Bun.spawnSync([process.execPath, "-e", source], { env: { ...process.env, PATH: bin }, stdout: "pipe", stderr: "pipe", timeout: 10000 });
+   const proc = Bun.spawnSync([process.execPath, "-e", source], { env: { ...process.env, PATH: bin }, stdout: "pipe", stderr: "pipe", timeout: 60_000 });
    expect(proc.exitCode).toBe(0);
    return JSON.parse(proc.stdout.toString());
   };
@@ -42,7 +42,7 @@ test("missing requested tools and command failures cannot pass", () => {
   expect(failed.ok).toBe(false);
   expect(failed.steps.some((step: { status: string }) => step.status === "fail")).toBe(true);
  } finally { rmSync(dir, { recursive: true, force: true }); }
-});
+}, 120_000); // child probes tools at 5s per argument set; a cascade over absent tools costs 15s per binary
 
 test("a shim that resolves but cannot run counts as absent, not as a failure", () => {
 	// mise puts a shim on PATH for every tool it knows, installed or not. A
@@ -71,7 +71,7 @@ test("a shim that resolves but cannot run counts as absent, not as a failure", (
 			env: { ...process.env, PATH: bin },
 			stdout: "pipe",
 			stderr: "pipe",
-			timeout: 10000,
+			timeout: 60_000,
 		});
 		expect(proc.exitCode).toBe(0);
 		const report = JSON.parse(proc.stdout.toString());
@@ -84,4 +84,4 @@ test("a shim that resolves but cannot run counts as absent, not as a failure", (
 	} finally {
 		rmSync(dir, { recursive: true, force: true });
 	}
-});
+}, 120_000); // child probes tools at 5s per argument set; a cascade over absent tools costs 15s per binary

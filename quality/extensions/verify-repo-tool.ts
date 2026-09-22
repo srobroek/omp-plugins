@@ -23,8 +23,21 @@ export type VerifyResult = {
 	error?: string;
 };
 
-/** PATH probes are local lookups; cap each one tightly to avoid stale mounts. */
-const PROBE_TIMEOUT_MS = 1_000;
+/**
+ * Per-probe bound. Each probe is one spawn, and every one of these binaries is a
+ * mise shim that pays its own resolution on each spawn, so the cost is not a
+ * local lookup. Measured warm, first successful argument set: pyright 2689 ms,
+ * tsc 2388 ms, biome 2089 ms, rustfmt 1651 ms, cargo 1110 ms, ruff 953 ms, go
+ * 736 ms. At 1000 ms five of those seven installed tools were killed and
+ * reported not runnable, which inverts what this probe is for: it exists so a
+ * resolvable-but-broken shim cannot count as present, not so a working tool can
+ * be called absent. 5000 ms clears the slowest measured probe by 1.9x.
+ *
+ * Affordable only because the manifest is checked first. A repository with no
+ * project for this language probes nothing, so an empty runner pays zero rather
+ * than three binaries times three argument sets.
+ */
+const PROBE_TIMEOUT_MS = 5_000;
 
 /**
  * Argument sets tried in order until one exits 0, matching the four quality

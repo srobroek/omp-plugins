@@ -8,7 +8,7 @@ const temps: string[] = [];
 
 afterAll(() => {
 	for (const d of temps) rmSync(d, { recursive: true, force: true });
-});
+}, 120_000); // child probes tools at 5s per argument set; a cascade over absent tools costs 15s per binary
 
 
 describe("runVerify", () => {
@@ -29,7 +29,7 @@ describe("runVerify", () => {
 		const result = runVerify(dir);
 		expect(result.ran).toBe(0);
 		expect(result.ok).toBe(false);
-	});
+	}, 120_000); // probes tools at 5s per argument set; a cascade over absent tools costs 15s per binary
 
 	test("package.json without scripts reports no ran checks", () => {
 		const dir = mkdtempSync(join(tmpdir(), "verify-pkg-"));
@@ -38,7 +38,7 @@ describe("runVerify", () => {
 		const result = runVerify(dir);
 		expect(result.ok).toBe(false);
 		expect(result.ran).toBe(0);
-	});
+	}, 120_000); // probes tools at 5s per argument set; a cascade over absent tools costs 15s per binary
 });
 
 test("failed discovery and missing prerequisites remain failures with bounded output", () => {
@@ -51,7 +51,7 @@ test("failed discovery and missing prerequisites remain failures with bounded ou
 	chmodSync(just, 0o755);
 	const invoke = () => {
 		const source = `import { runVerify } from ${JSON.stringify(import.meta.dir + "/verify-repo-tool.ts")}; console.log(JSON.stringify(runVerify(${JSON.stringify(dir)})));`;
-		const proc = Bun.spawnSync([process.execPath, "-e", source], { env: { ...process.env, PATH: dir }, stdout: "pipe", stderr: "pipe", timeout: 10000 });
+		const proc = Bun.spawnSync([process.execPath, "-e", source], { env: { ...process.env, PATH: dir }, stdout: "pipe", stderr: "pipe", timeout: 60_000 });
 		expect(proc.exitCode).toBe(0);
 		return JSON.parse(proc.stdout.toString());
 	};
@@ -69,7 +69,7 @@ test("failed discovery and missing prerequisites remain failures with bounded ou
 	expect(failed.ok).toBe(false);
 	expect(failed.failed).toBe(1);
 	expect(failed.report.length).toBeLessThan(40000);
-});
+}, 120_000); // child probes tools at 5s per argument set; a cascade over absent tools costs 15s per binary
 
 test("a tool that resolves but cannot run is missing, not a failure", () => {
 	const dir = mkdtempSync(join(tmpdir(), "verify-shim-"));
@@ -84,7 +84,7 @@ test("a tool that resolves but cannot run is missing, not a failure", () => {
 	writeFileSync(just, "#!/bin/sh\nexit 1\n");
 	chmodSync(just, 0o755);
 	const source = `import { runVerify } from ${JSON.stringify(import.meta.dir + "/verify-repo-tool.ts")}; console.log(JSON.stringify(runVerify(${JSON.stringify(dir)})));`;
-	const proc = Bun.spawnSync([process.execPath, "-e", source], { env: { ...process.env, PATH: dir }, stdout: "pipe", stderr: "pipe", timeout: 10000 });
+	const proc = Bun.spawnSync([process.execPath, "-e", source], { env: { ...process.env, PATH: dir }, stdout: "pipe", stderr: "pipe", timeout: 60_000 });
 	expect(proc.exitCode).toBe(0);
 	const result = JSON.parse(proc.stdout.toString());
 	expect(result.complete).toBe(false);
@@ -92,7 +92,7 @@ test("a tool that resolves but cannot run is missing, not a failure", () => {
 	// non-zero exit, and reported a verification failure for working code.
 	expect(result.failed).toBe(0);
 	expect(result.ran).toBe(0);
-});
+}, 120_000); // child probes tools at 5s per argument set; a cascade over absent tools costs 15s per binary
 
 test.each(["absolute", "relative", "session-relative"])("project Python tools win without activation: %s path", (mode) => {
 	const dir = mkdtempSync(join(tmpdir(), "verify-python-"));
@@ -118,7 +118,7 @@ test.each(["absolute", "relative", "session-relative"])("project Python tools wi
 	const invoke = () => {
 		const proc = Bun.spawnSync([process.execPath, "-e", source], {
 			cwd: mode === "session-relative" ? "/" : dirname(dir),
-			env: { ...process.env, PATH: path }, stdout: "pipe", stderr: "pipe", timeout: 10000,
+			env: { ...process.env, PATH: path }, stdout: "pipe", stderr: "pipe", timeout: 60_000,
 		});
 		expect(proc.exitCode).toBe(0);
 		return JSON.parse(proc.stdout.toString());
@@ -130,5 +130,5 @@ test.each(["absolute", "relative", "session-relative"])("project Python tools wi
 	const failed = invoke();
 	expect(failed.ok).toBe(false);
 	expect(failed.failed).toBe(1);
-});
+}, 120_000); // child probes tools at 5s per argument set; a cascade over absent tools costs 15s per binary
 
