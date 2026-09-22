@@ -18,11 +18,12 @@
  * {@link enableAutoDelete}, so no read, merge, or verification path can mutate a
  * repository's configuration as a side effect.
  *
- * Absence is observed, never inferred. A merge that requested deletion, and a
- * settings field reading `"on"`, are requests and intentions. Only
- * `git ls-remote` failing to find the exact ref returns `"absent"`. A timeout, a
- * malformed response, a permission failure, and a protected or ruleset-blocked
- * deletion all stay `"unknown"`, and `"unknown"` is never promoted.
+ * Absence is observed, never inferred, and observed somewhere a caller named. A
+ * merge that requested deletion, and a settings field reading `"on"`, are requests
+ * and intentions. Only `git ls-remote` failing to find the exact ref, asked from an
+ * explicit working directory where the remote name resolves, returns `"absent"`. A
+ * timeout, a malformed response, a permission failure, and a protected or
+ * ruleset-blocked deletion all stay `"unknown"`, and `"unknown"` is never promoted.
  *
  * A forge is a runtime value, not a compile-time promise. {@link Forge} arrives
  * from a receipt, a JSON payload, or another package, so every function that
@@ -548,7 +549,15 @@ function stdoutProvesExactHead(stdout: string, expectedRef: string): boolean {
 }
 
 /**
- * Whether `branch` is gone from `remote`, observed against the exact ref.
+ * Whether `branch` is gone from `remote`, observed against the exact ref, from
+ * inside `cwd`.
+ *
+ * `remote` is a configured remote name, which only resolves inside the repository
+ * that configures it, so the directory the question is answered in is an explicit
+ * argument rather than whatever directory the process happens to be in. An
+ * `"absent"` verdict reached from the wrong directory is a false absence, and a
+ * false absence is what marks a branch deleted that still exists. An empty `cwd`
+ * is `"unknown"` for the same reason: there is no directory to be right about.
  *
  * `git ls-remote --exit-code` reports exit 2 when no ref matched. That status
  * proves `"absent"` only with empty stdout and stderr. Exit 0 proves
@@ -564,8 +573,13 @@ function stdoutProvesExactHead(stdout: string, expectedRef: string): boolean {
  * ever does so from this observation. No merge result, deletion response, or
  * setting value reaches it.
  */
-export function remoteBranchAbsent(remote: string, branch: string, run: CliRunner = runCli): "absent" | "present" | "unknown" {
-	if (!isSafeArgument(remote) || !isValidBranchName(branch)) return "unknown";
+export function remoteBranchAbsent(
+	remote: string,
+	branch: string,
+	cwd: string,
+	run: CliRunner = runCli,
+): "absent" | "present" | "unknown" {
+	if (!isSafeArgument(remote) || !isValidBranchName(branch) || cwd.trim() === "") return "unknown";
 	const ref = `refs/heads/${branch}`;
 	const argv = [
 		"git",
@@ -577,7 +591,7 @@ export function remoteBranchAbsent(remote: string, branch: string, run: CliRunne
 		remote,
 		ref,
 	];
-	const result = run(argv, { timeoutMs: FORGE_TIMEOUT_MS, env: gitObservationEnvironment() });
+	const result = run(argv, { cwd, timeoutMs: FORGE_TIMEOUT_MS, env: gitObservationEnvironment() });
 	if (!result.ok || result.error !== undefined) return "unknown";
 	if (result.exitCode === 0) return stdoutProvesExactHead(result.stdout, ref) ? "present" : "unknown";
 	if (result.exitCode === 2 && result.stdout === "" && result.stderr === "") return "absent";

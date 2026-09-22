@@ -10,6 +10,7 @@ import {
 	mkdirSync,
 	opendirSync,
 	openSync,
+	readFileSync,
 	readSync,
 	realpathSync,
 	type Stats,
@@ -225,8 +226,9 @@ export type WriteOptions = { tempName?: () => string };
 /**
  * The git seam: argv without the `git` word, a working directory, and a bound.
  *
- * Returns trimmed stdout, or null when git failed for any reason. Injected so no
- * test depends on the ambient repository.
+ * Returns stdout exactly as Git wrote it, or null when Git failed for any reason.
+ * Repository paths may contain spaces, so parsing owns any delimiters rather than
+ * trimming them at this process boundary.
  */
 export type GitRunner = (argv: readonly string[], cwd: string, timeoutMs: number) => string | null;
 
@@ -239,36 +241,124 @@ const spawnGit: GitRunner = (argv, cwd, timeoutMs) => {
 			timeout: Math.max(1, timeoutMs),
 		});
 		if (proc.exitCode !== 0) return null;
-		return proc.stdout.toString().trim();
+		return proc.stdout.toString();
 	} catch {
 		return null;
 	}
 };
 
-/**
- * Stable identity for one repository, shared by its canonical checkout and every
- * linked worktree.
- *
- * Derived from the realpath of the common git directory, because a receipt written
- * from one worktree must be found from another. The remote URL is absent on a local
- * repository and renamed on a fork; the repository path differs per worktree;
- * `nameWithOwner` is unset without a remote. None of those identify a repository, so
- * none of them is used.
- *
- * Returns null when git reports no repository.
- */
-export function repoKey(cwd: string, run: GitRunner = spawnGit): string | null {
-	const printed = run(["rev-parse", "--git-common-dir"], cwd, GIT_TIMEOUT_MS);
-	if (printed === null || printed === "") return null;
-	// Git prints `.git` at a worktree top level and an absolute path elsewhere.
-	const common = isAbsolute(printed) ? printed : resolve(cwd, printed);
-	let real: string;
+/** One Git read that binds repository identity and the current checkout placement together. */
+export const REPOSITORY_OBSERVATION_ARGS = [
+	"rev-parse",
+	"--path-format=absolute",
+	"--git-common-dir",
+	"--show-toplevel",
+] as const;
+
+/** The physical repository paths and classification derived from one Git read. */
+export type RepositoryContext = {
+	key: string;
+	commonDir: string;
+	topLevel: string;
+	ledger: CanonicalLedger;
+};
+
+/** A real, existing directory, or null when the path cannot prove one. */
+function physicalDirectory(path: string): string | null {
 	try {
-		real = realpathSync(common);
+		const real = realpathSync(path);
+		return lstatSync(real).isDirectory() ? real : null;
 	} catch {
 		return null;
 	}
-	return createHash("sha256").update(real).digest("hex").slice(0, 16);
+}
+
+/** Resolve a checkout's `.git` directory through either a directory or a strict Git file. */
+function checkoutGitDirectory(checkout: string): string | null {
+	const marker = join(checkout, ".git");
+	try {
+		const stat = lstatSync(marker);
+		if (stat.isDirectory()) return physicalDirectory(marker);
+		if (!stat.isFile() || stat.size > 4096) return null;
+		const match = /^gitdir: (.+)\r?\n?$/.exec(readFileSync(marker, "utf8"));
+		if (match === null) return null;
+		const target = match[1];
+		if (target === undefined || target === "" || target.includes("\0")) return null;
+		return physicalDirectory(isAbsolute(target) ? target : resolve(checkout, target));
+	} catch {
+		return null;
+	}
+}
+
+/**
+ * Parse Git's two newline-delimited paths without guessing through malformed or
+ * ambiguous output. A path containing a newline cannot be represented by this
+ * command without colliding with its delimiter, so it fails closed.
+ */
+function repositoryPaths(output: string): { commonDir: string; topLevel: string } | null {
+	const body = output.endsWith("\n") ? output.slice(0, -1) : output;
+	const records = body.split("\n");
+	if (records.length !== 2) return null;
+	const [common, top] = records;
+	if (common === undefined || top === undefined || common === "" || top === "") return null;
+	if (!isAbsolute(common) || !isAbsolute(top)) return null;
+	if (common.includes("\0") || top.includes("\0") || common.includes("\r") || top.includes("\r")) return null;
+	const commonDir = physicalDirectory(common);
+	const topLevel = physicalDirectory(top);
+	return commonDir === null || topLevel === null ? null : { commonDir, topLevel };
+}
+
+/**
+ * Stable repository identity and canonical-ledger classification from one Git
+ * observation containing the absolute common directory and checkout root.
+ *
+ * A normal checkout owns its common directory when resolving its `.git` marker
+ * reaches that directory. Separate Git directories and submodules have the same
+ * relationship, so Git's observed top level remains their canonical checkout.
+ * A linked worktree's `.git` marker instead resolves below the common directory;
+ * only then may the common directory's parent become the canonical checkout, and
+ * only when that candidate's own `.git` marker resolves back to the common
+ * directory. This prevents a separate Git directory literally named `.git` from
+ * impersonating a canonical checkout.
+ *
+ * Every input and selected output is realpathed. Missing, malformed, non-directory,
+ * or ambiguous observations return null rather than a ledger-free verdict.
+ */
+export function repositoryContext(cwd: string, run: GitRunner = spawnGit): RepositoryContext | null {
+	const printed = run(REPOSITORY_OBSERVATION_ARGS, cwd, GIT_TIMEOUT_MS);
+	if (printed === null || printed === "") return null;
+	const paths = repositoryPaths(printed);
+	if (paths === null) return null;
+
+	const topLevelGitDir = checkoutGitDirectory(paths.topLevel);
+	if (topLevelGitDir === null) return null;
+	let candidate = paths.topLevel;
+	if (topLevelGitDir !== paths.commonDir) {
+		const canonicalCandidate = physicalDirectory(dirname(paths.commonDir));
+		if (canonicalCandidate !== null && checkoutGitDirectory(canonicalCandidate) === paths.commonDir) {
+			candidate = canonicalCandidate;
+		}
+	}
+
+	const root = physicalDirectory(candidate);
+	if (root === null) return null;
+	const key = createHash("sha256").update(paths.commonDir).digest("hex").slice(0, 16);
+	return {
+		key,
+		commonDir: paths.commonDir,
+		topLevel: paths.topLevel,
+		ledger: { root, active: ledgerActive(root) },
+	};
+}
+
+/** Stable identity shared by a repository's primary checkout and linked worktrees. */
+export function repoKey(cwd: string, run: GitRunner = spawnGit): string | null {
+	const printed = run(["rev-parse", "--git-common-dir"], cwd, GIT_TIMEOUT_MS);
+	if (printed === null || printed === "") return null;
+	const common = printed.endsWith("\n") ? printed.slice(0, -1) : printed;
+	if (common === "" || common.includes("\n") || common.includes("\r") || common.includes("\0")) return null;
+	const real = physicalDirectory(isAbsolute(common) ? common : resolve(cwd, common));
+	return real === null ? null : createHash("sha256").update(real).digest("hex").slice(0, 16);
 }
 
 /**
@@ -277,6 +367,9 @@ export function repoKey(cwd: string, run: GitRunner = spawnGit): string | null {
  * A regular-file `.beads/RETIRED` marker opts out of the nearest ledger. This
  * intentionally mirrors the PR-link gate: a malformed marker (or any read error)
  * keeps the ledger active rather than silently weakening closure and cleanup gates.
+ *
+ * The directory this walk starts from decides the answer, so no caller passes it an
+ * invocation directory: {@link canonicalLedger} is the one seam that chooses it.
  */
 export function ledgerActive(dir: string): boolean {
 	let current = resolve(dir);
@@ -299,6 +392,21 @@ export function ledgerActive(dir: string): boolean {
 			return true;
 		}
 	}
+}
+
+/** A repository's canonical root and the ledger verdict computed at it. */
+export type CanonicalLedger = { root: string; active: boolean };
+
+/**
+ * The repository's canonical root, and its ledger verdict classified there.
+ *
+ * Producer and cleanup consumer both use {@link repositoryContext}; neither can
+ * substitute the invocation directory or reinterpret the Git layout. Returns null
+ * whenever the combined common-dir/top-level observation cannot be resolved
+ * unambiguously, which keeps the destructive cleanup path closed.
+ */
+export function canonicalLedger(cwd: string, run: GitRunner = spawnGit): CanonicalLedger | null {
+	return repositoryContext(cwd, run)?.ledger ?? null;
 }
 
 /**
@@ -712,6 +820,42 @@ function sameMergeCommit(id: string, mergeCommitOid: unknown): { ok: false; reas
 }
 
 /**
+ * The `proof.method` sentinel: no provider observed this landing.
+ *
+ * Exported because it is half of an invariant two packages rely on — a receipt
+ * carrying it never claims `landed` — and a consumer that spells the sentinel
+ * itself would be free to drift from the producer.
+ */
+export const RECEIPT_METHOD_UNKNOWN = "unknown";
+
+/**
+ * The two cross-field claims a receipt may not make, checked after every field has
+ * the right shape so each refusal names a real value.
+ *
+ * An active ledger with no bead id is a claim with nothing to reconcile: cleanup
+ * would ask `bd` about an empty list, find nothing open, and pass a gate that never
+ * ran. The producer derives the ids from the branch or takes an explicit one, so no
+ * honest landing reaches the pair — and a tampered or stale file that carries it is
+ * refused here, at the trust boundary, rather than acted on later.
+ *
+ * An unobserved proof with `outcome: "landed"` is the same bypass in the other
+ * field: `proof.method` names the provider CLI and verb that saw the landing, and
+ * {@link RECEIPT_METHOD_UNKNOWN} says nobody did. A receipt may not give an
+ * unproven merge the authority of a proven one.
+ */
+function crossFieldClaims(value: Record<string, unknown>): { ok: false; reason: string } | null {
+	const beads = value.beads as ReceiptBeads;
+	if (beads.ledgerActive && beads.ids.length === 0) {
+		return refuse("beads.ids", beads.ids, "at least one bead id when beads.ledgerActive is true");
+	}
+	const proof = value.proof as ReceiptProof;
+	if (value.outcome === "landed" && proof.method.trim() === RECEIPT_METHOD_UNKNOWN) {
+		return refuse("proof.method", proof.method, 'the provider CLI and verb that observed the landing, never "unknown", when outcome is "landed"');
+	}
+	return null;
+}
+
+/**
  * Accept a receipt this version can act on, or refuse it naming the exact field, the
  * observed value, and what was expected.
  *
@@ -747,6 +891,8 @@ export function validateReceipt(value: unknown): ReceiptValidation {
 	if (drift !== null) return drift;
 	const mergeIdentity = sameMergeCommit(value.receiptId as string, (value.pr as ReceiptPr).mergeCommitOid);
 	if (mergeIdentity !== null) return mergeIdentity;
+	const claims = crossFieldClaims(value);
+	if (claims !== null) return claims;
 	const notesProperty = Object.getOwnPropertyDescriptor(value, "notes");
 	if (
 		notesProperty !== undefined &&
