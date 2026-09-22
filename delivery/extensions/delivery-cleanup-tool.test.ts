@@ -184,7 +184,7 @@ function fixture(
 	if (key === null) throw new Error("fixture repo has no key");
 	const receipt = buildReceipt({
 		now: NOW,
-		emitter: { plugin: "@srobroek/delivery", version: "0.11.5", tool: "delivery_land" },
+		emitter: { plugin: "@srobroek/delivery", version: "0.12.0", tool: "delivery_land" },
 		repo: {
 			key,
 			canonicalRoot: realpathSync(main),

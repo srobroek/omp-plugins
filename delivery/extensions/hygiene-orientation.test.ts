@@ -362,7 +362,7 @@ describe("delivery hygiene orientation", () => {
 		if (!key) throw new Error("missing repo key");
 		const receipt = buildReceipt({
 			now: 1_800_000_000_000,
-			emitter: { plugin: "@srobroek/delivery", version: "0.11.5", tool: "delivery_land" },
+			emitter: { plugin: "@srobroek/delivery", version: "0.12.0", tool: "delivery_land" },
 			repo: { key, canonicalRoot: realpathSync(cwd), remote: "origin", forge: "github", nameWithOwner: "owner/repo" },
 			pr: {
 				number: 7,
