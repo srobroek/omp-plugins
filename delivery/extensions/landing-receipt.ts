@@ -10,6 +10,7 @@ import {
 	mkdirSync,
 	opendirSync,
 	openSync,
+	readFileSync,
 	readSync,
 	realpathSync,
 	type Stats,
@@ -246,7 +247,7 @@ const spawnGit: GitRunner = (argv, cwd, timeoutMs) => {
 	}
 };
 
-/** One Git read that binds repository identity and checkout placement together. */
+/** One Git read that binds repository identity and the current checkout placement together. */
 export const REPOSITORY_OBSERVATION_ARGS = [
 	"rev-parse",
 	"--path-format=absolute",
@@ -272,6 +273,23 @@ function physicalDirectory(path: string): string | null {
 	}
 }
 
+/** Resolve a checkout's `.git` directory through either a directory or a strict Git file. */
+function checkoutGitDirectory(checkout: string): string | null {
+	const marker = join(checkout, ".git");
+	try {
+		const stat = lstatSync(marker);
+		if (stat.isDirectory()) return physicalDirectory(marker);
+		if (!stat.isFile() || stat.size > 4096) return null;
+		const match = /^gitdir: (.+)\r?\n?$/.exec(readFileSync(marker, "utf8"));
+		if (match === null) return null;
+		const target = match[1];
+		if (target === undefined || target === "" || target.includes("\0")) return null;
+		return physicalDirectory(isAbsolute(target) ? target : resolve(checkout, target));
+	} catch {
+		return null;
+	}
+}
+
 /**
  * Parse Git's two newline-delimited paths without guessing through malformed or
  * ambiguous output. A path containing a newline cannot be represented by this
@@ -292,22 +310,36 @@ function repositoryPaths(output: string): { commonDir: string; topLevel: string 
 
 /**
  * Stable repository identity and canonical-ledger classification from one Git
- * observation containing both the absolute common directory and checkout root.
+ * observation containing the absolute common directory and checkout root.
  *
- * A common directory literally named `.git` identifies the primary checkout for
- * normal repositories and linked worktrees. Other layouts cannot use the basename
- * as a discriminator: a separate git directory may be named `store.git`, and a
- * submodule's common directory lives under `.git/modules`. For those layouts Git's
- * observed top level is the checkout root. Every input and the selected output is
- * realpathed, and any malformed, missing, non-directory, or ambiguous observation
- * returns null rather than a ledger-free verdict.
+ * A normal checkout owns its common directory when resolving its `.git` marker
+ * reaches that directory. Separate Git directories and submodules have the same
+ * relationship, so Git's observed top level remains their canonical checkout.
+ * A linked worktree's `.git` marker instead resolves below the common directory;
+ * only then may the common directory's parent become the canonical checkout, and
+ * only when that candidate's own `.git` marker resolves back to the common
+ * directory. This prevents a separate Git directory literally named `.git` from
+ * impersonating a canonical checkout.
+ *
+ * Every input and selected output is realpathed. Missing, malformed, non-directory,
+ * or ambiguous observations return null rather than a ledger-free verdict.
  */
 export function repositoryContext(cwd: string, run: GitRunner = spawnGit): RepositoryContext | null {
 	const printed = run(REPOSITORY_OBSERVATION_ARGS, cwd, GIT_TIMEOUT_MS);
 	if (printed === null || printed === "") return null;
 	const paths = repositoryPaths(printed);
 	if (paths === null) return null;
-	const candidate = basename(paths.commonDir) === ".git" ? dirname(paths.commonDir) : paths.topLevel;
+
+	const topLevelGitDir = checkoutGitDirectory(paths.topLevel);
+	if (topLevelGitDir === null) return null;
+	let candidate = paths.topLevel;
+	if (topLevelGitDir !== paths.commonDir) {
+		const canonicalCandidate = physicalDirectory(dirname(paths.commonDir));
+		if (canonicalCandidate !== null && checkoutGitDirectory(canonicalCandidate) === paths.commonDir) {
+			candidate = canonicalCandidate;
+		}
+	}
+
 	const root = physicalDirectory(candidate);
 	if (root === null) return null;
 	const key = createHash("sha256").update(paths.commonDir).digest("hex").slice(0, 16);

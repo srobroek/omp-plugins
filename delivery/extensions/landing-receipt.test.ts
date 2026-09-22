@@ -13,7 +13,7 @@ import {
 	writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 import {
 	buildReceipt,
@@ -891,6 +891,20 @@ describe("canonicalLedger", () => {
 		mkdirSync(join(checkout, ".beads"));
 		mkdirSync(join(parent, ".beads"));
 		writeFileSync(join(parent, ".beads", "RETIRED"), "retired\n");
+
+		expect(canonicalLedger(checkout)).toEqual({ root: realpathSync(checkout), active: true });
+	});
+
+	test("a separate git directory ending in .git still classifies from its checkout root", () => {
+		const parent = scratch("ledger-separate-dot-git-dir");
+		const checkout = join(parent, "checkout");
+		const common = join(parent, "store", ".git");
+		mkdirSync(checkout);
+		mkdirSync(dirname(common), { recursive: true });
+		git(checkout, "init", "-b", "main", `--separate-git-dir=${common}`);
+		mkdirSync(join(checkout, ".beads"));
+		mkdirSync(join(dirname(common), ".beads"));
+		writeFileSync(join(dirname(common), ".beads", "RETIRED"), "retired\n");
 
 		expect(canonicalLedger(checkout)).toEqual({ root: realpathSync(checkout), active: true });
 	});

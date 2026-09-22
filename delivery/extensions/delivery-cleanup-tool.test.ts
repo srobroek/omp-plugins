@@ -14,7 +14,7 @@ import {
 	writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { basename, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
 import deliveryCleanupTool, {
 	branchDeleteArgs,
@@ -55,7 +55,7 @@ type Fixture = {
 	receiptPath: string;
 };
 
-type FixtureLayout = "normal" | "separate-git-dir" | "submodule";
+type FixtureLayout = "normal" | "separate-git-dir" | "separate-dot-git-dir" | "submodule";
 
 type RunnerOptions = {
 	pr?: Partial<{
@@ -146,10 +146,12 @@ function fixture(
 	} else {
 		main = join(root, "main");
 		mkdirSync(main);
-		if (layout === "separate-git-dir") {
-			git(main, ["init", "-q", "-b", "main", `--separate-git-dir=${join(root, "store.git")}`]);
-			mkdirSync(join(root, ".beads"));
-			writeFileSync(join(root, ".beads", "RETIRED"), "retired\n");
+		if (layout === "separate-git-dir" || layout === "separate-dot-git-dir") {
+			const common = layout === "separate-dot-git-dir" ? join(root, "store", ".git") : join(root, "store.git");
+			mkdirSync(dirname(common), { recursive: true });
+			git(main, ["init", "-q", "-b", "main", `--separate-git-dir=${common}`]);
+			mkdirSync(join(dirname(common), ".beads"));
+			writeFileSync(join(dirname(common), ".beads", "RETIRED"), "retired\n");
 		} else {
 			git(main, ["init", "-q", "-b", "main"]);
 		}
@@ -860,7 +862,7 @@ describe("the ledger is classified at the canonical root, never at a caller's di
 		expect(gitExit(f.main, ["show-ref", "--verify", "--quiet", `refs/heads/${f.branch}`])).toBe(0);
 	});
 
-	for (const layout of ["separate-git-dir", "submodule"] as const) {
+	for (const layout of ["separate-git-dir", "separate-dot-git-dir", "submodule"] as const) {
 		test(`${layout}: an active checkout ledger requires reconciliation and preserves an open bead's worktree and branch`, () => {
 			const f = fixture(`live-${layout}`, "omp/agent/delivery-17", "active", layout);
 			const landed = landPullRequest(
