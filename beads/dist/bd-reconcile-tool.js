@@ -504,6 +504,7 @@ var activeHolds = new Map;
 var surrenderedCalls = new Set;
 
 // extensions/session-beads-lifecycle.ts
+var EMBEDDED_PIN_ENV = { BEADS_DOLT_SHARED_SERVER: "" };
 function lifecycleBdEnvironment(cwd, base = process.env) {
   const env = { ...base };
   delete env.BEADS_DIR;
@@ -514,6 +515,7 @@ function lifecycleBdEnvironment(cwd, base = process.env) {
   env.BD_NON_INTERACTIVE = "1";
   env.BD_DOLT_AUTO_START = "false";
   env.NO_COLOR = "1";
+  Object.assign(env, EMBEDDED_PIN_ENV);
   return env;
 }
 function parseTrailingJson(stdout) {
