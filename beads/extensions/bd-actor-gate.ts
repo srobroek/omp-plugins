@@ -222,6 +222,7 @@ export const MUTATING_VERBS: Record<string, true> = {
 	batch: true,
 	claim: true,
 	close: true,
+	done: true,
 	comment: true,
 	cook: true,
 	create: true,
@@ -303,7 +304,7 @@ export function environmentForInput(
  * the ambient `BD_ACTOR`. Collecting both values reported two actors for one write,
  * and the second had written nothing.
  */
-function invocationActor(invocation: BdInvocation, env: NodeJS.ProcessEnv): string | null {
+export function invocationActor(invocation: BdInvocation, env: NodeJS.ProcessEnv): string | null {
 	const resolve = (variable: ActorVar): string | null => {
 		const assignment = invocation.prefix.findLast(token => token.startsWith(`${variable}=`));
 		const value = assignment !== undefined
@@ -357,7 +358,7 @@ export function isMutatingInvocation({ verb, args }: BdInvocation): boolean {
 	if (args.includes("--help") || args.includes("-h")) return false;
 	if (verb === "duplicates") return args.includes("--auto-merge") && !args.includes("--dry-run");
 	if (MUTATING_VERBS[verb] === true) return true;
-	if (verb === "ready") return args.includes("--claim");
+	if (verb === "ready") return flagEnabled(args, ["--claim"]);
 	if (verb === "dep" && args.includes("--blocks")) return true;
 	if (verb === "mol") {
 		if (args.includes("--dry-run")) return false;
@@ -384,7 +385,7 @@ export function isClaimCommand(command: string): boolean {
 	return bdInvocations(command).some(
 		({ verb, args }) =>
 			verb === "claim" ||
-			((verb === "update" || verb === "ready") && args.includes("--claim")),
+			((verb === "update" || verb === "ready") && flagEnabled(args, ["--claim"])),
 	);
 }
 
@@ -444,7 +445,7 @@ export function decideActorGate(
 		const { verb, args } = invocation;
 		const claim =
 			verb === "claim" ||
-			((verb === "update" || verb === "ready") && args.includes("--claim"));
+			((verb === "update" || verb === "ready") && flagEnabled(args, ["--claim"]));
 		if (claim) return { kind: "block", reason: CLAIM_REASON };
 		if (CREATING_VERBS[verb] === true)
 			return { kind: "block", reason: CREATE_REASON };

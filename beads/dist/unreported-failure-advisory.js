@@ -219,6 +219,9 @@ import { hostname } from "os";
 var HOST = hostname().split(".")[0] ?? "localhost";
 var REGISTRY_KEY = Symbol.for("com.srobroek.beads.embedded-write-lock.v1");
 
+// extensions/bd-lease-gate.ts
+var pendingClaims = new Map;
+
 // extensions/session-beads-lifecycle.ts
 function beadsDir(cwd) {
   const pin = process.env.BEADS_DIR;

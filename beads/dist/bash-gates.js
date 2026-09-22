@@ -468,7 +468,7 @@ function parsedInvocations(parsed, executable = "bd") {
     found.push(...parsedInvocations(child, executable));
   return found;
 }
-var BEAD_ID = /^[A-Za-z][A-Za-z0-9]*(?:-[A-Za-z0-9]+)+$/;
+var BEAD_ID = /^[A-Za-z][A-Za-z0-9]*(?:-[A-Za-z0-9]+)+(?:\.\d+)*$/;
 var CLOSE_VERBS = { close: true, done: true };
 var DB_VALUE_FLAGS = { "--db": true, "-C": true, "--directory": true };
 var VALUE_FLAGS = { "--reason": true, "-r": true, "--message": true, "--session": true, "--assignee": true, "--status": true, "--type": true };
@@ -804,6 +804,7 @@ var MUTATING_VERBS = {
   batch: true,
   claim: true,
   close: true,
+  done: true,
   comment: true,
   cook: true,
   create: true,
@@ -886,7 +887,7 @@ function isMutatingInvocation({ verb, args }) {
   if (MUTATING_VERBS[verb] === true)
     return true;
   if (verb === "ready")
-    return args.includes("--claim");
+    return flagEnabled(args, ["--claim"]);
   if (verb === "dep" && args.includes("--blocks"))
     return true;
   if (verb === "mol") {
@@ -936,7 +937,7 @@ function decideActorGate(command, env = process.env) {
       continue;
     }
     const { verb, args } = invocation;
-    const claim = verb === "claim" || (verb === "update" || verb === "ready") && args.includes("--claim");
+    const claim = verb === "claim" || (verb === "update" || verb === "ready") && flagEnabled(args, ["--claim"]);
     if (claim)
       return { kind: "block", reason: CLAIM_REASON };
     if (CREATING_VERBS[verb] === true)

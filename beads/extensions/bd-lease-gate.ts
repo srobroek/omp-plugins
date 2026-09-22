@@ -40,7 +40,7 @@ import { leadingCdCwd, type ParsedCommand } from "./shell-command.ts";
 const TIMEOUT_MS = 25_000;
 /** Cheap prefilter: never spawn on a command that cannot be a claim. */
 const PREFILTER = /\bbd\b[\s\S]{0,400}?--claim\b/;
-const BD_ID = /^[A-Za-z][A-Za-z0-9]*(?:-[A-Za-z0-9]+)+$/;
+const BD_ID = /^[A-Za-z][A-Za-z0-9]*(?:-[A-Za-z0-9]+)+(?:\.\d+)*$/;
 export type BdRun = (argv: string[], cwd: string, env: NodeJS.ProcessEnv, deadline?: number) => Promise<{ exitCode: number; stdout: string; stderr?: string }> | { exitCode: number; stdout: string; stderr?: string };
 
 let injectedRun: BdRun | null = null;
@@ -61,7 +61,14 @@ export function claimedIds(output: string): string[] {
 		const id = match[1];
 		if (id && BD_ID.test(id)) ids.add(id);
 	}
-	for (const match of output.matchAll(/\b(?:Claimed|claimed)\s+([A-Za-z][A-Za-z0-9-]+)\b/g)) {
+	for (const id of claimedTextIds(output)) ids.add(id);
+	return [...ids];
+}
+
+/** Bead ids carried by explicit `Claimed` result lines, excluding unrelated JSON objects. */
+export function claimedTextIds(output: string): string[] {
+	const ids = new Set<string>();
+	for (const match of output.matchAll(/\bclaimed(?:\s+issue:)?\s+([A-Za-z][A-Za-z0-9-]+(?:\.\d+)*)\b/gi)) {
 		const id = match[1];
 		if (id && BD_ID.test(id)) ids.add(id);
 	}
@@ -72,7 +79,7 @@ export function claimedIds(output: string): string[] {
  * Text emitted by the claim result, including stdout retained in structured
  * tool details when the rendered content was capped or spilled.
  */
-function claimResultOutput(event: ToolResultEvent): string {
+export function claimResultOutput(event: ToolResultEvent): string {
 	const content = (event.content ?? [])
 		.map((part) => ("text" in part && typeof part.text === "string" ? part.text : ""))
 		.join("\n");

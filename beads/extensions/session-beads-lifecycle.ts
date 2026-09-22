@@ -27,11 +27,16 @@ import {
 	bdInvocations,
 	environmentForInput,
 	extractCommand,
+	flagEnabled,
+	invocationActor,
 	invocationFromArgv,
 	isMutatingBdCommand,
 } from "./bd-actor-gate.ts";
 import { withEmbeddedWriteLock, writesStore } from "./bd-embedded-write-lock.ts";
+import { claimedIds, claimedTextIds, claimResultOutput } from "./bd-lease-gate.ts";
 import { repoIdentity, sessionPinFor } from "./beads-store.ts";
+import { closeInvocations, leadingCdCwd, parse as parseShellCommand } from "./shell-command.ts";
+import { tokenizeShell } from "./shell-tokenizer.ts";
 
 /**
  * Variables the plugin wins on, in every environment it shapes for bd.
@@ -48,7 +53,6 @@ import { repoIdentity, sessionPinFor } from "./beads-store.ts";
  * reads the empty string as unset.
  */
 const EMBEDDED_PIN_ENV: Readonly<Record<string, string>> = { BEADS_DOLT_SHARED_SERVER: "" };
-
 export function lifecycleBdEnvironment(cwd: string, base: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
 	const env: NodeJS.ProcessEnv = { ...base };
 	delete env.BEADS_DIR;
@@ -83,8 +87,7 @@ function bdReadFailure(scope: "start" | "close", reason: string): string {
 /** No session boundary may hang on the database or on `gh`. */
 const TIMEOUT_MS = 8000;
 
-/** `session_stop` and `session_shutdown` have a 2,000 ms budget; leave 800 ms for dispatch. */
-const SESSION_EXIT_TIMEOUT_MS = 1200;
+
 
 /** Longest advisory list before it stops being read. */
 const MAX_LISTED = 8;
@@ -104,6 +107,8 @@ export const AUTO_GATE_TYPES: Record<string, true> = {
 interface SessionState {
 	actors: Set<string>;
 	bdWrote: boolean;
+	/** Claims made successfully by this session, keyed by bead id; undefined means output proved the claim but not its actor. */
+	claims: Map<string, string | undefined>;
 	/** The database this session's bash calls are pinned to, when its checkout has one. */
 	pin?: string;
 	/** Git common-dir identity for the checkout that started this session. */
@@ -113,7 +118,6 @@ interface SessionState {
 	staleAdvised: boolean;
 	stopFired: boolean;
 	touched: Set<string>;
-	claimsReleased: boolean;
 }
 
 export { repoIdentity, sessionPinFor };
@@ -432,9 +436,109 @@ export function beadIdCandidates(command: string): string[] {
 	const ids: string[] = [];
 	for (const token of command.split(/[\s;&|(`'"]+/)) {
 		if (token.startsWith("-")) continue;
-		if (/^[a-z][a-z0-9]*(?:-[a-z0-9]+)+(?:\.\d+)?$/i.test(token)) ids.push(token);
+		if (/^[a-z][a-z0-9]*(?:-[a-z0-9]+)+(?:\.\d+)*$/i.test(token)) ids.push(token);
 	}
 	return ids;
+}
+
+function optionValue(args: readonly string[], names: readonly string[]): string | undefined {
+	for (const name of names) {
+		const index = args.indexOf(name);
+		if (index >= 0) return args[index + 1];
+		const inline = args.find(arg => arg.startsWith(`${name}=`));
+		if (inline !== undefined) return inline.slice(name.length + 1);
+	}
+	return undefined;
+}
+
+function mutationTargetIds(args: readonly string[]): string[] {
+	const ids: string[] = [];
+	for (let index = 0; index < args.length; index++) {
+		const token = args[index] ?? "";
+		if (["--assignee", "-a", "--status", "-s"].includes(token)) {
+			index++;
+			continue;
+		}
+		if (/^(?:--assignee|--status|-a|-s)=/u.test(token) || /^(?:--claim|--json)(?:=|$)/u.test(token)) continue;
+		// An unknown option may consume later bead-shaped tokens, but it cannot
+		// change positional IDs already seen. Preserve those and stop parsing.
+		if (token.startsWith("-")) break;
+		const [id] = beadIdCandidates(token);
+		if (id !== undefined) ids.push(id);
+	}
+	return ids;
+}
+
+function commandSucceeded(event: ToolResultEvent): boolean {
+	if (event.isError === true) return false;
+	const details = event.details;
+	if (details !== null && typeof details === "object" && "exitCode" in details) {
+		const exitCode = details.exitCode;
+		if (typeof exitCode === "number" && exitCode !== 0) return false;
+	}
+	return !/\bCommand exited with code -?[1-9]\d*\b/u.test(resultText(event));
+}
+
+/** Update the claims this session can prove from a successful Bash result; no database read is needed at shutdown. */
+function recordClaimTransitions(state: SessionState, command: string, env: NodeJS.ProcessEnv, event: ToolResultEvent): void {
+	const invocations = bdInvocations(command);
+	const parsedCommand = parseShellCommand(command);
+	const commandTokens = tokenizeShell(command);
+	const terminalToken = commandTokens.findLast(token => token.value !== "\n")?.value;
+	const executables = parsedCommand.commands.map(position => position.executable?.split("/").pop());
+	const directCommand = (executables.length === 1 && executables[0] === "bd") || (executables.length === 2 && executables[0] === "cd" && executables[1] === "bd" && leadingCdCwd(command, "") !== "");
+	const mutationSucceededDirectly = !parsedCommand.unknown && parsedCommand.nested.length === 0 && directCommand && invocations.length === 1 && terminalToken !== "&";
+	const output = claimResultOutput(event);
+	const allOutputIds = new Set(claimedIds(output));
+	const labeledOutputIds = new Set(claimedTextIds(output));
+	const claimInvocations = invocations.flatMap(invocation => {
+		const enabled = invocation.verb === "claim" || ((invocation.verb === "update" || invocation.verb === "ready") && flagEnabled(invocation.args, ["--claim"]));
+		const actor = enabled ? invocationActor(invocation, env) : null;
+		return actor === null ? [] : [{ actor, directIds: mutationTargetIds(invocation.args) }];
+	});
+	const actorsById = new Map<string, Set<string>>();
+	for (const { actor, directIds } of claimInvocations) {
+		for (const id of directIds) {
+			const actors = actorsById.get(id) ?? new Set<string>();
+			actors.add(actor);
+			actorsById.set(id, actors);
+		}
+	}
+	for (const { actor, directIds } of claimInvocations) {
+		if (mutationSucceededDirectly) {
+			for (const id of directIds.length > 0 ? directIds : allOutputIds) state.claims.set(id, actor);
+			continue;
+		}
+		for (const id of directIds) {
+			if (!labeledOutputIds.has(id)) continue;
+			const actors = actorsById.get(id);
+			state.claims.set(id, actors?.size === 1 ? actor : undefined);
+		}
+	}
+	if (!mutationSucceededDirectly) return;
+	for (const close of closeInvocations(command)) {
+		for (const id of close.ids) state.claims.delete(id);
+	}
+	const [invocation] = invocations;
+	if (invocation?.verb === "assign") {
+		const [idToken, assignee] = invocation.args;
+		const [id] = idToken === undefined ? [] : beadIdCandidates(idToken);
+		if (id !== undefined && assignee !== undefined) {
+			if (state.actors.has(assignee)) state.claims.set(id, assignee);
+			else state.claims.delete(id);
+		}
+		return;
+	}
+	if (invocation?.verb !== "update") return;
+	const status = optionValue(invocation.args, ["--status", "-s"]);
+	const assignee = optionValue(invocation.args, ["--assignee", "-a"]);
+	for (const id of mutationTargetIds(invocation.args)) {
+		if (status === "closed" || assignee === "") state.claims.delete(id);
+		else if (assignee !== undefined) {
+			if (state.actors.has(assignee)) state.claims.set(id, assignee);
+			else state.claims.delete(id);
+		}
+	}
 }
 
 const SAFE_RELEASE_IDENTIFIER = /^[A-Za-z0-9][A-Za-z0-9._/-]*$/;
@@ -588,6 +692,17 @@ export function formatSessionCloseAdvisory(
 	return lines.join("\n");
 }
 
+function trackedClaimAdvisory(state: SessionState): string | undefined {
+	if (state.claims.size === 0) return undefined;
+	const claims: Bead[] = [...state.claims].map(([id, assignee]) => ({
+		id,
+		title: "claim recorded by this session",
+		status: "in_progress",
+		assignee,
+	}));
+	return formatSessionCloseAdvisory(claims, {}, new Date().toISOString(), true, state.actors);
+}
+
 type SessionStopEvent = {
 	stop_hook_active?: boolean;
 	stopHookActive?: boolean;
@@ -621,34 +736,7 @@ export function handleSessionStop(
 	return { continue: true, additionalContext: formatSessionCloseAdvisory(held, {}, new Date().toISOString(), casSupported, actors) };
 }
 
-async function releaseCasSupported(cwd: string, deadline: number, env: NodeJS.ProcessEnv): Promise<boolean> {
-	const help = await runBd(cwd, ["update", "--help"], deadline, env);
-	return help?.includes("--if-assignee") === true;
-}
 
-type ExitReleaseOutcome = { released: string[]; incomplete: string[] };
-
-async function releaseClaimsAtExit(cwd: string, state: SessionState): Promise<ExitReleaseOutcome> {
-	if (state.claimsReleased || !state.bdWrote || state.actors.size === 0) return { released: [], incomplete: [] };
-	const released: string[] = [];
-	const incomplete: string[] = [];
-	state.claimsReleased = true;
-	const deadline = Date.now() + SESSION_EXIT_TIMEOUT_MS;
-	const env = lifecycleBdEnvironment(cwd);
-	const listed = await runBdResult(cwd, ["list", "--status", "open,in_progress,blocked,deferred", "--limit", "0", "--json"], deadline, env);
-	if (!("output" in listed)) return { released, incomplete: [`claim listing: ${listed.failure}`] };
-	const claims = heldClaims(readBeads(listed.output), new Set(), state.actors);
-	const casSupported = await releaseCasSupported(cwd, deadline, env);
-	for (const bead of claims) {
-		if (bead.assignee === undefined) continue;
-		const args = releaseClaimArgs(bead.id, bead.assignee, { BD_ACTOR: bead.assignee }, new Date().toISOString(), casSupported);
-		if (args === undefined) { incomplete.push(`${bead.id}: release command could not be constructed`); continue; }
-		const releasedResult = await runBdResult(cwd, args, deadline, { ...env, BEADS_ACTOR: bead.assignee, BD_ACTOR: bead.assignee });
-		if ("output" in releasedResult) released.push(bead.id);
-		else incomplete.push(`${bead.id}: ${releasedResult.failure}`);
-	}
-	return { released, incomplete };
-}
 
 /**
  * A holder id per internal run. Session boundaries carry no tool call, and such a
@@ -815,7 +903,7 @@ export default function sessionBeadsLifecycle(pi: ExtensionAPI): void {
 		const key = sessionKey(ctx);
 		let state = sessions.get(key);
 		if (!state) {
-			state = { actors: new Set(), bdWrote: false, repos: new Map(), staleAdvised: false, stopFired: false, touched: new Set(), claimsReleased: false };
+			state = { actors: new Set(), bdWrote: false, claims: new Map(), repos: new Map(), staleAdvised: false, stopFired: false, touched: new Set() };
 			sessions.set(key, state);
 		}
 		return state;
@@ -883,25 +971,16 @@ export default function sessionBeadsLifecycle(pi: ExtensionAPI): void {
 		}
 	});
 
-	pi.on("session_shutdown", async (_event, ctx: ExtensionContext) => {
+	pi.on("session_shutdown", (_event, ctx: ExtensionContext) => {
 		const key = sessionKey(ctx);
 		const state = sessions.get(key);
 		sessions.delete(key);
 		endAutoPinSession(key, (id) => sessions.has(id));
 		if (state === undefined) return;
-		try {
-			const outcome = await releaseClaimsAtExit(ctx?.cwd ?? process.cwd(), state);
-			if (outcome.incomplete.length === 0) return;
-			const summary = [
-				"Beads claim release at session shutdown reached its 1,200 ms budget.",
-				outcome.released.length > 0 ? `Released: ${outcome.released.join(", ")}.` : "Released: none.",
-				`Remaining: ${outcome.incomplete.join("; ")}`,
-			].join(" ");
-			pi.logger.error("beads claim release incomplete at session exit", outcome);
-			pi.sendMessage({ customType: "com.srobroek.beads.session-lifecycle", content: summary, display: true, attribution: "user" }, { triggerTurn: false });
-		} catch (error) {
-			pi.logger.error("beads claim release at session exit failed", { error: error instanceof Error ? error.message : String(error) });
-		}
+		const advisory = trackedClaimAdvisory(state);
+		if (advisory === undefined) return;
+		pi.logger.error("beads claims remained at session shutdown", { claims: [...state.claims.keys()] });
+		pi.sendMessage({ customType: "com.srobroek.beads.session-lifecycle", content: advisory, display: true, attribution: "user" }, { triggerTurn: false });
 	});
 
 	// Only the fired-once latch resets per turn; what the session touched must
@@ -919,8 +998,10 @@ export default function sessionBeadsLifecycle(pi: ExtensionAPI): void {
 			const state = stateFor(ctx);
 			if (isBdWrite(command)) {
 				state.bdWrote = true;
-				for (const actor of actorValues(command, environmentForInput(input))) state.actors.add(actor);
+				const env = environmentForInput(input);
+				for (const actor of actorValues(command, env)) state.actors.add(actor);
 				for (const id of beadIdCandidates(command)) state.touched.add(id);
+				if (commandSucceeded(event)) recordClaimTransitions(state, command, env, event);
 			}
 			if (state.staleAdvised) return;
 			const notice = staleSkipNotice(resultText(event));
@@ -933,28 +1014,12 @@ export default function sessionBeadsLifecycle(pi: ExtensionAPI): void {
 		}
 	});
 
-	pi.on("session_stop", async (event: SessionStopEvent, ctx: ExtensionContext) => {
-		try {
-			const key = sessionKey(ctx);
-			const state = sessions.get(key);
-			const cwd = ctx?.cwd ?? process.cwd();
-			const bdEnv = lifecycleBdEnvironment(cwd);
-			if (!state?.bdWrote || state.stopFired || event.stop_hook_active === true ||
-				event.stopHookActive === true || bdStoreDir(cwd, bdEnv) === undefined) return;
-			const deadline = Date.now() + SESSION_EXIT_TIMEOUT_MS;
-			const casSupported = await releaseCasSupported(cwd, deadline, bdEnv);
-			const listed = await runBdResult(cwd, ["list", "--status", "open,in_progress,blocked,deferred", "--limit", "0", "--json"], deadline, bdEnv);
-			if (sessions.get(key) !== state || state.stopFired) return;
-			const advisory = "output" in listed
-				? handleSessionStop(event, listed.output, state.touched, state.actors, casSupported)
-				: handleSessionStop(event, undefined, state.touched, state.actors, casSupported, listed.failure);
-			if (advisory) state.stopFired = true;
-			return advisory;
-		} catch (error) {
-			pi.logger.error("beads session-close check failed", {
-				error: error instanceof Error ? error.message : String(error),
-			});
-			return;
-		}
+	pi.on("session_stop", (event: SessionStopEvent, ctx: ExtensionContext) => {
+		const state = sessions.get(sessionKey(ctx));
+		if (state === undefined || state.stopFired || event.stop_hook_active === true || event.stopHookActive === true) return;
+		const additionalContext = trackedClaimAdvisory(state);
+		if (additionalContext === undefined) return;
+		state.stopFired = true;
+		return { continue: true as const, additionalContext };
 	});
 }

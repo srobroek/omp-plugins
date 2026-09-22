@@ -309,7 +309,7 @@ export function parsedInvocations(parsed: ParsedCommand | ParseFailure, executab
 	return found;
 }
 export type CloseInvocation = { ids: string[]; dbArgs: string[] };
-const BEAD_ID = /^[A-Za-z][A-Za-z0-9]*(?:-[A-Za-z0-9]+)+$/;
+const BEAD_ID = /^[A-Za-z][A-Za-z0-9]*(?:-[A-Za-z0-9]+)+(?:\.\d+)*$/;
 const CLOSE_VERBS: Record<string, true> = { close: true, done: true };
 const DB_VALUE_FLAGS: Record<string, true> = { "--db": true, "-C": true, "--directory": true };
 const VALUE_FLAGS: Record<string, true> = { "--reason": true, "-r": true, "--message": true, "--session": true, "--assignee": true, "--status": true, "--type": true };
