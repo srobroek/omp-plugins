@@ -4,7 +4,7 @@ import { hostname, tmpdir } from "node:os";
 import { join } from "node:path";
 import bashGates from "./bash-gates.ts";
 import { invocationFromArgv } from "./bd-actor-gate.ts";
-import bdEmbeddedWriteLock, { decideEmbeddedWrite, embeddedStores, embeddedWriteTargets, hold, release, setLeaseTimingForTests, withEmbeddedWriteLock, writesStore } from "./bd-embedded-write-lock.ts";
+import { attachWriter, decideEmbeddedWrite, embeddedStores, embeddedWriteRunner, embeddedWriteTargets, hold, RUNNER_STORE_FLAG, release, setLeaseTimingForTests, withEmbeddedWriteLock, writesStore } from "./bd-embedded-write-lock.ts";
 import bdLeaseGate, { setBdRunForTests } from "./bd-lease-gate.ts";
 import { cookCheck, deepAssert, type SpawnResult, setBdSpawnForTests } from "./formula-check-tool.ts";
 import { runBd, setBdStreamForTests } from "./session-beads-lifecycle.ts";
@@ -161,55 +161,75 @@ describe("store resolution follows the store bd will really write", () => {
 	});
 });
 
-describe("a call that never executes cannot strand its hold", () => {
-	function lifecycle(): Record<string, Handler[]> {
-		const registered: Record<string, Handler[]> = {};
-		bdEmbeddedWriteLock({
-			on: (event: string, handler: Handler) => {
-				const list = registered[event] ?? [];
-				list.push(handler);
-				registered[event] = list;
-			},
-			logger: { error: () => {}, info: () => {} },
-		} as never);
-		registered.tool_call = [async (event, context = {}) => {
-			const input = event && typeof event === "object" && "input" in event && event.input && typeof event.input === "object" ? event.input : {};
-			const command = "command" in input && typeof input.command === "string" ? input.command : "";
-			return decideEmbeddedWrite(parse(command), event as never, context as never);
-		}];
-		return registered;
+describe("a Bash mutation is run by the store's own writer, never held by the session", () => {
+	async function decide(command: string, beads: string, extra: Record<string, unknown> = {}): Promise<unknown> {
+		const event = { toolName: "bash", toolCallId: "call-1", input: { command, cwd: "/repo", env: { BEADS_DIR: beads, BD_ACTOR: "test" }, ...extra } };
+		return decideEmbeddedWrite(parse(command), event as never, { cwd: "/repo" } as never);
 	}
 
-	test("a turn that ends without a tool result gives the hold back", async () => {
+	test("a mutating command is rewritten to run under the runner, and nothing is held here", async () => {
 		const beads = store();
-		const handlers = lifecycle();
-		await handlers.tool_call?.[0]?.(bashCall("timed-out", "bd create a -t task", beads));
-		expect(existsSync(join(beads, LOCK))).toBe(true);
-
-		// No tool_result: the host timed the command out, or another extension blocked
-		// it after this one had acquired. The turn still ends.
-		handlers.turn_end?.[0]?.({});
+		const decision = (await decide("bd create a -t task", beads)) as { kind: string; input: { command: string } };
+		expect(decision.kind).toBe("rewrite");
+		expect(decision.input.command).toContain(RUNNER_STORE_FLAG);
+		expect(decision.input.command).toContain(beads);
+		expect(decision.input.command.endsWith("-- bd create a -t task")).toBe(true);
+		// The session holds nothing: the lock belongs to the process that runs bd, so a
+		// call the host never executes, times out, or denies cannot strand a turn.
 		expect(existsSync(join(beads, LOCK))).toBe(false);
 		expect((await hold(beads, "next", 60)).kind).toBe("held");
 		release(beads, "next");
 	});
 
-	test("a denied approval gives the hold back without waiting for the turn", async () => {
+	test("a backgrounded mutation is rewritten like any other, because the runner outlives the tool result", async () => {
 		const beads = store();
-		const handlers = lifecycle();
-		await handlers.tool_call?.[0]?.(bashCall("denied", "bd create a -t task", beads));
-		handlers.tool_approval_resolved?.[0]?.({ toolCallId: "denied", approved: false });
-		expect(existsSync(join(beads, LOCK))).toBe(false);
+		const decision = (await decide("bd create a -t task", beads, { async: true })) as { kind: string; input: Record<string, unknown> };
+		expect(decision.kind).toBe("rewrite");
+		expect(decision.input.async).toBe(true);
+		expect(decision.input.command).toContain(RUNNER_STORE_FLAG);
 	});
 
-	test("an approved call keeps its hold until the result arrives", async () => {
+	test("a read is left to run as the agent wrote it", async () => {
 		const beads = store();
-		const handlers = lifecycle();
-		await handlers.tool_call?.[0]?.(bashCall("approved", "bd create a -t task", beads));
-		handlers.tool_approval_resolved?.[0]?.({ toolCallId: "approved", approved: true });
-		expect(existsSync(join(beads, LOCK))).toBe(true);
-		handlers.tool_result?.[0]?.({ toolName: "bash", toolCallId: "approved", input: {}, content: [] });
-		expect(existsSync(join(beads, LOCK))).toBe(false);
+		expect(await decide("bd list --all --json", beads)).toBeUndefined();
+	});
+
+	test("a command already under the runner is not wrapped a second time", async () => {
+		const beads = store();
+		const once = (await decide("bd create a -t task", beads)) as { input: { command: string } };
+		expect(await decide(once.input.command, beads)).toBeUndefined();
+	});
+
+	test("runner words elsewhere cannot bypass serialization", async () => {
+		const beads = store();
+		const decision = (await decide("bd create a -t task; echo bd-embedded-write-runner --beads-store", beads)) as { kind: string };
+		expect(decision.kind).toBe("block");
+	});
+
+	test("operands retain their shell spelling without becoming runner syntax", async () => {
+		const beads = store();
+		const decision = (await decide(`bd create x -t task -d "it's $(whoami) && done"`, beads)) as { kind: string };
+		expect(decision.kind).toBe("block");
+		const plain = (await decide(`bd create x -t task -d "it's fine"`, beads)) as { input: { command: string } };
+		expect(plain.input.command.endsWith(`-- bd create x -t task -d "it's fine"`)).toBe(true);
+		const expanded = (await decide("bd close $ID", beads)) as { input: { command: string } };
+		expect(expanded.input.command.endsWith("-- bd close $ID")).toBe(true);
+	});
+
+	test("the outer shell expands operands before the runner starts bd", async () => {
+		const beads = store();
+		const seen = join(beads, "seen");
+		const bd = join(beads, "bd");
+		writeFileSync(bd, `#!/bin/sh\nprintf '%s' "$2" > "$OUT"\n`);
+		chmodSync(bd, 0o755);
+		const decision = (await decide("bd close $ID", beads)) as { input: { command: string } };
+		const child = Bun.spawn(["/bin/sh", "-c", decision.input.command], {
+			env: { ...process.env, PATH: `${beads}:${process.env.PATH ?? ""}`, ID: "omp-expanded", OUT: seen },
+			stdout: "ignore",
+			stderr: "ignore",
+		});
+		expect(await child.exited).toBe(0);
+		expect(readFileSync(seen, "utf8")).toBe("omp-expanded");
 	});
 
 	test("a hold whose lease lapsed is taken over even though its pid is alive", async () => {
@@ -218,11 +238,24 @@ describe("a call that never executes cannot strand its hold", () => {
 		// with a lease nobody renewed.
 		writeFileSync(
 			join(beads, LOCK),
-			JSON.stringify({ host: HOST, pid: process.pid, toolCallId: "stranded", taken: Date.now() - 600_000, expires: Date.now() - 300_000 }),
+			JSON.stringify({ host: HOST, pid: process.pid, owner: "stranded", taken: Date.now() - 600_000, expires: Date.now() - 300_000 }),
 		);
 		expect((await hold(beads, "next", 2_000)).kind).toBe("held");
 		release(beads, "next");
 		expect(existsSync(join(beads, LOCK))).toBe(false);
+	});
+
+	test("a hold naming a live bd keeps the store even after its lease lapsed", async () => {
+		const beads = store();
+		// A runner killed outright: nothing renews the lease, but its bd is still
+		// writing, so the store must not change hands.
+		writeFileSync(
+			join(beads, LOCK),
+			JSON.stringify({ host: HOST, pid: DEAD_PID, owner: "killed-runner", writer: process.pid, taken: Date.now() - 600_000, expires: Date.now() - 300_000 }),
+		);
+		const got = await hold(beads, "next", 120);
+		expect(got.kind).toBe("failed");
+		expect(existsSync(join(beads, LOCK))).toBe(true);
 	});
 });
 
@@ -290,13 +323,31 @@ describe("only a direct bd invocation is accepted", () => {
 		"bd --version": "bd --version",
 		"bd --help": "bd --help",
 		"bare bd": "bd",
-			};
+	};
 
+	for (const [name, command] of Object.entries(FREE)) {
+		test(`leaves ${name} unlocked`, () => {
+			const beads = store();
+			expect(embeddedWriteTargets(command, "/repo", { BEADS_DIR: beads })).toEqual({ kind: "stores", stores: [] });
+		});
+	}
 
 	/**
 	 * Compound shapes. None of these is modelled; each fails closed BECAUSE it is not
 	 * the accepted shape, which is what makes the next unlisted shape safe too.
+	 *
+	 * The rows here are the ones the classifier really does see. It recognises `bd` only
+	 * as a segment's own command word, so `timeout 60 bd close x`, `eval bd close x` and
+	 * `bash -c 'bd close x'` reach neither this refusal nor the runner: they are read as
+	 * mentioning no `bd` at all. That predates the lock owning execution and is not
+	 * pinned here, because pinning it would record the gap as intended.
 	 */
+	for (const command of ["cd other && bd close x", "echo x | xargs bd close", "bd close $(cat id)"]) {
+		test(`refuses the unmodelled shape ${command}`, () => {
+			const beads = store();
+			expect(embeddedWriteTargets(command, "/repo", { BEADS_DIR: beads }).kind).toBe("refused");
+		});
+	}
 
 	test("a direct write to an explicit store is locked with no ambient store at all", () => {
 		const beads = store();
@@ -344,20 +395,19 @@ describe("a deep formula pour shares the store's lock domain", () => {
 		};
 	}
 
-	test("a real pour waits for the bash mutation holding the store", async () => {
+	test("a real pour waits for the runner holding the store", async () => {
 		const beads = store();
 		const checkout = join(beads, "..");
 		const seen: string[] = [];
 		setBdSpawnForTests(pourSpawn(seen));
-		const { lockCall, lockResult } = wire();
+		const writer = await runnerHold(beads);
 
-		await lockCall(bashCall("writer", "bd create a -t task", beads));
 		const poured = deepAssert("formula", [], "pour-call", checkout, { BEADS_DIR: beads });
 
 		await tick();
 		expect(seen).toEqual([]);
 
-		lockResult({ toolName: "bash", toolCallId: "writer", input: {}, content: [] });
+		writer.release();
 		expect(await poured).toEqual([]);
 		expect(seen).toEqual(["mol pour formula", "mol show rp-1 --json"]);
 	});
@@ -387,15 +437,14 @@ describe("a deep formula pour shares the store's lock domain", () => {
 		const beads = store();
 		const seen: string[] = [];
 		setBdSpawnForTests(pourSpawn(seen));
-		const { lockCall, lockResult } = wire();
+		const writer = await runnerHold(beads);
 
-		await lockCall(bashCall("writer", "bd create a -t task", beads));
 		const cooked = cookCheck("formula", [], join(beads, ".."), { BEADS_DIR: beads });
 
 		await tick();
 		expect(seen).toEqual([]);
 
-		lockResult({ toolName: "bash", toolCallId: "writer", input: {}, content: [] });
+		writer.release();
 		expect(await cooked).toEqual([]);
 		expect(seen).toEqual(["cook formula --dry-run"]);
 	});
@@ -410,19 +459,18 @@ describe("a session-boundary gate check shares the store's lock domain", () => {
 		};
 	}
 
-	test("a mutating gate check waits for the bash mutation holding the store", async () => {
+	test("a mutating gate check waits for the runner holding the store", async () => {
 		const beads = store();
 		const seen: string[] = [];
 		setBdStreamForTests(streamSeam(seen));
-		const { lockCall, lockResult } = wire();
+		const writer = await runnerHold(beads);
 
-		await lockCall(bashCall("writer", "bd create a -t task", beads));
 		const checked = runBd(join(beads, ".."), ["gate", "check", "--json"], Date.now() + 5_000, { BEADS_DIR: beads });
 
 		await tick();
 		expect(seen).toEqual([]);
 
-		lockResult({ toolName: "bash", toolCallId: "writer", input: {}, content: [] });
+		writer.release();
 		expect(await checked).toBe("{}");
 		expect(seen).toEqual(["gate check --json"]);
 	});
@@ -431,10 +479,10 @@ describe("a session-boundary gate check shares the store's lock domain", () => {
 		const beads = store();
 		const seen: string[] = [];
 		setBdStreamForTests(streamSeam(seen));
-		const { lockCall } = wire();
-		await lockCall(bashCall("writer", "bd create a -t task", beads));
+		const writer = await runnerHold(beads);
 		expect(await runBd(join(beads, ".."), ["gate", "list", "--json"], Date.now() + 5_000, { BEADS_DIR: beads })).toBe("{}");
 		expect(seen).toEqual(["gate list --json"]);
+		writer.release();
 	});
 
 
@@ -450,8 +498,8 @@ describe("a session-boundary gate check shares the store's lock domain", () => {
 
 type Handler = (event: unknown, context?: unknown) => unknown;
 
-/** The migrated gates share one Bash fanout and retain lifecycle/result handlers. */
-function wire(): { lockCall: Handler; lockResult: Handler; leaseCall: Handler; leaseResult: Handler } {
+/** The migrated gates share one Bash fanout; the lease gate keeps its result handler. */
+function wire(): { bashGate: Handler; leaseResult: Handler } {
 	const all: Record<string, Handler[]> = {};
 	const pi = {
 		on: (event: string, handler: Handler) => {
@@ -462,19 +510,30 @@ function wire(): { lockCall: Handler; lockResult: Handler; leaseCall: Handler; l
 		logger: { error: () => {}, info: () => {} },
 		sendMessage: () => {},
 	};
-	bdEmbeddedWriteLock(pi as never);
 	bdLeaseGate(pi as never);
 	bashGates(pi as never);
 	const fanout = all.tool_call?.[0];
-	const results = all.tool_result ?? [];
-	const lockResult = results[0];
-	const leaseResult = results[1];
-	if (!fanout || !lockResult || !leaseResult) throw new Error("handlers were not registered");
-	return { lockCall: fanout, lockResult, leaseCall: fanout, leaseResult };
+	const leaseResult = all.tool_result?.[0];
+	if (!fanout || !leaseResult) throw new Error("handlers were not registered");
+	return { bashGate: fanout, leaseResult };
 }
 
 function bashCall(toolCallId: string, command: string, beads: string, cwd = "/repo"): unknown {
     return { toolName: "bash", toolCallId, input: { command, cwd, env: { BEADS_DIR: beads, BD_ACTOR: "test" } } };
+}
+
+/**
+ * Hold `beads` the way the runner process does, so another writer has to wait.
+ *
+ * The runner is the only thing that holds a store on a Bash mutation's behalf, and it
+ * names its `bd` in the record; both are reproduced here so a waiter faces the same
+ * hold it would face in a session.
+ */
+async function runnerHold(beads: string): Promise<{ release: () => void }> {
+	const owner = "runner-1";
+	expect((await hold(beads, owner)).kind).toBe("held");
+	attachWriter(beads, owner, process.pid);
+	return { release: () => release(beads, owner) };
 }
 
 /**
@@ -520,7 +579,7 @@ describe("embeddedStores", () => {
 describe("cross-process hold", () => {
 	test("a live hold from another process makes a waiter fail closed rather than write", async () => {
 		const beads = store();
-		writeFileSync(join(beads, LOCK), JSON.stringify({ host: HOST, pid: process.pid, toolCallId: "other", taken: Date.now() }));
+		writeFileSync(join(beads, LOCK), JSON.stringify({ host: HOST, pid: process.pid, owner: "other", taken: Date.now() }));
 		const got = await hold(beads, "mine", 60);
 		expect(got.kind).toBe("failed");
 		expect(got.kind === "failed" && got.reason).toContain("was refused");
@@ -528,7 +587,7 @@ describe("cross-process hold", () => {
 
 	test("a hold left by a dead process is taken over", async () => {
 		const beads = store();
-		writeFileSync(join(beads, LOCK), JSON.stringify({ host: HOST, pid: DEAD_PID, toolCallId: "crashed", taken: Date.now() }));
+		writeFileSync(join(beads, LOCK), JSON.stringify({ host: HOST, pid: DEAD_PID, owner: "crashed", taken: Date.now() }));
 		const got = await hold(beads, "mine", 2_000);
 		expect(got.kind).toBe("held");
 		release(beads, "mine");
@@ -546,80 +605,229 @@ describe("cross-process hold", () => {
 	});
 	test("refuses a held store immediately when its shared deadline has lapsed", async () => {
 		const beads = store();
-		writeFileSync(join(beads, LOCK), JSON.stringify({ host: HOST, pid: process.pid, toolCallId: "other", taken: Date.now() }));
+		writeFileSync(join(beads, LOCK), JSON.stringify({ host: HOST, pid: process.pid, owner: "other", taken: Date.now() }));
 		let wrote = false;
 		const result = await withEmbeddedWriteLock(beads, "deadline", () => { wrote = true; }, { BEADS_DIR: beads }, Date.now() - 1);
 		expect(result.kind).toBe("failed");
 		expect(wrote).toBe(false);
 		expect(result.kind === "failed" && result.reason).toContain("was refused");
 	});
-});
 
-describe("bdEmbeddedWriteLock", () => {
-	test("a second bash mutation waits for the first to report its result", async () => {
+	test("a waiter that gave up never takes the turn it stopped waiting for", async () => {
 		const beads = store();
-		const { lockCall, lockResult } = wire();
+		const writer = await runnerHold(beads);
+		const record = readFileSync(join(beads, LOCK), "utf8");
 
-		expect(await lockCall(bashCall("a", "bd create a -t task", beads))).toBeUndefined();
-		let secondEntered = false;
-		const second = Promise.resolve(lockCall(bashCall("b", "bd create b -t task", beads))).then(() => {
-			secondEntered = true;
-		});
+		const late = await hold(beads, "gave-up", 40);
+		expect(late.kind).toBe("failed");
+
+		// The hold it walked away from is still the original one, unchanged, and stays
+		// that way: a waiter whose loop kept running would have replaced this record the
+		// moment the store was freed, with nobody left to release it.
+		expect(readFileSync(join(beads, LOCK), "utf8")).toBe(record);
+		writer.release();
+		await tick();
+		expect(existsSync(join(beads, LOCK))).toBe(false);
+	});
+
+	test("a waiter whose caller was cancelled stops at once and leaves the turn free", async () => {
+		const beads = store();
+		const writer = await runnerHold(beads);
+		const abort = new AbortController();
+		const waiting = hold(beads, "cancelled", 30_000, abort.signal);
 
 		await tick();
-		expect(secondEntered).toBe(false);
+		abort.abort();
+		const got = await waiting;
+		expect(got.kind).toBe("failed");
+		expect(got.kind === "failed" && got.reason).toContain("cancelled");
 
-		lockResult({ toolName: "bash", toolCallId: "a", input: {}, content: [] });
-		await second;
-		expect(secondEntered).toBe(true);
-		lockResult({ toolName: "bash", toolCallId: "b", input: {}, content: [] });
+		writer.release();
+		expect((await hold(beads, "next", 200)).kind).toBe("held");
+		release(beads, "next");
+	});
+
+	test("waiters are served in the order they arrived", async () => {
+		const beads = store();
+		const writer = await runnerHold(beads);
+		const served: string[] = [];
+		const queued = ["first", "second", "third"].map(async name => {
+			const got = await hold(beads, name, 5_000);
+			expect(got.kind).toBe("held");
+			served.push(name);
+			release(beads, name);
+		});
+		// Each waiter is queued before the next one asks, which is the order the lock
+		// has to honour; without a queue the winner was whichever poll the scheduler
+		// happened to run first.
+		await tick();
+		writer.release();
+		await Promise.all(queued);
+		expect(served).toEqual(["first", "second", "third"]);
+	});
+});
+
+/**
+ * The runner process, exercised as a process.
+ *
+ * These spawn the real runner against a real store, because the whole point of the
+ * design is what happens to a lock when the process holding it ends -- cleanly, with a
+ * failure, or killed -- and an in-process stub cannot be killed.
+ *
+ * `bd` is a stand-in script rather than the real binary: the lock knows nothing about
+ * what it is serialising, and a script can be made to sit still until the test says
+ * otherwise, which the real `bd` cannot.
+ */
+describe("the runner holds the store for exactly as long as bd runs", () => {
+	interface Run {
+		exited: Promise<number>;
+		kill: (signal: NodeJS.Signals) => void;
+	}
+
+	/** A fake `bd` that waits for `release` to appear, then exits with `code`. */
+	function fakeBd(directory: string, code: number): string {
+		const path = join(directory, "bd");
+		writeFileSync(path, `#!/bin/sh\nwhile [ ! -f "$1" ]; do sleep 0.02; done\nexit ${code}\n`);
+		chmodSync(path, 0o755);
+		return path;
+	}
+
+	function runner(beads: string, argv: string[], waitMs = 5_000): Run {
+		const script = embeddedWriteRunner()?.script;
+		if (script === undefined) throw new Error("the runner script was not found beside its module");
+		const child = Bun.spawn([process.execPath, script, RUNNER_STORE_FLAG, beads, "--beads-wait-ms", String(waitMs), "--", ...argv], {
+			stdout: "ignore",
+			stderr: "ignore",
+		});
+		return { exited: child.exited, kill: signal => child.kill(signal) };
+	}
+
+	/** Wait until the runner has published the child that will exec bd. */
+	async function untilLocked(beads: string): Promise<boolean> {
+		for (let attempt = 0; attempt < 200; attempt++) {
+			try {
+				const holder = JSON.parse(readFileSync(join(beads, LOCK), "utf8")) as { writer?: unknown };
+				if (typeof holder.writer === "number") return true;
+			} catch { /* Acquisition or publication is still in progress. */ }
+			await tick();
+		}
+		return false;
+	}
+
+	test("a command that succeeds gives the store back", async () => {
+		const beads = store();
+		const bd = fakeBd(beads, 0);
+		const go = join(beads, "go");
+		const run = runner(beads, [bd, go]);
+		expect(await untilLocked(beads)).toBe(true);
+		writeFileSync(go, "");
+		expect(await run.exited).toBe(0);
 		expect(existsSync(join(beads, LOCK))).toBe(false);
 	});
 
-	test("releases a nested hold that finishes after its tool result", async () => {
+	test("a command that fails gives the store back and reports its own status", async () => {
 		const beads = store();
-		const { lockCall, lockResult } = wire();
-		const claim = bashCall("claim", "bd create a -t task", beads);
-
-		await lockCall(claim);
-		const nested = lockCall(claim);
-		lockResult({ toolName: "bash", toolCallId: "claim", input: {}, content: [] });
-		await nested;
-
+		const bd = fakeBd(beads, 7);
+		const go = join(beads, "go");
+		const run = runner(beads, [bd, go]);
+		expect(await untilLocked(beads)).toBe(true);
+		writeFileSync(go, "");
+		expect(await run.exited).toBe(7);
 		expect(existsSync(join(beads, LOCK))).toBe(false);
 	});
 
-	test("a lock the process cannot create refuses the write instead of running it", async () => {
+	test("a killed command gives the store back instead of leaving a renewing lock", async () => {
 		const beads = store();
-		chmodSync(beads, 0o500);
-		const { lockCall } = wire();
-		const blocked = (await lockCall(bashCall("a", "bd create a -t task", beads))) as { block?: boolean; reason?: string };
-		expect(blocked?.block).toBe(true);
-		expect(blocked?.reason).toContain("could not be taken");
+		// No `go` file is ever written: bd is still running when the host kills the call.
+		const run = runner(beads, [fakeBd(beads, 0), join(beads, "never")]);
+		expect(await untilLocked(beads)).toBe(true);
+		run.kill("SIGTERM");
+		expect(await run.exited).toBe(128 + 15);
+		expect(existsSync(join(beads, LOCK))).toBe(false);
+	});
+
+	test("a long-running command keeps the store while it runs", async () => {
+		const beads = store();
+		const bd = fakeBd(beads, 0);
+		const go = join(beads, "go");
+		const run = runner(beads, [bd, go]);
+		expect(await untilLocked(beads)).toBe(true);
+
+		const rival = await hold(beads, "rival", 120);
+		expect(rival.kind).toBe("failed");
+
+		writeFileSync(go, "");
+		expect(await run.exited).toBe(0);
+	});
+
+	test("a second caller waits for the first and then runs, without being reissued", async () => {
+		const beads = store();
+		const bd = fakeBd(beads, 0);
+		const first = join(beads, "go-1");
+		const second = join(beads, "go-2");
+		const runA = runner(beads, [bd, first], 30_000);
+		expect(await untilLocked(beads)).toBe(true);
+		const runB = runner(beads, [bd, second], 30_000);
+
+		// B is queued behind A's hold: it cannot have started its own bd yet, which is
+		// what the untouched second flag file proves.
+		await tick();
+		writeFileSync(second, "");
+		writeFileSync(first, "");
+		expect(await runA.exited).toBe(0);
+		expect(await runB.exited).toBe(0);
+		expect(existsSync(join(beads, LOCK))).toBe(false);
+	});
+
+	test("a runner that cannot take its turn refuses rather than writing unserialised", async () => {
+		const beads = store();
+		const writer = await runnerHold(beads);
+		const run = runner(beads, [fakeBd(beads, 0), join(beads, "never")], 60);
+		expect(await run.exited).toBe(120);
+		writer.release();
 	});
 });
 
 describe("the lease stamp shares the store's lock domain", () => {
-
-	test("a stamp inside the claim's own hold runs without waiting on itself", async () => {
+	test("a stamp runs on its own turn and hands the store straight back", async () => {
 		const beads = store();
 		const stamps: string[][] = [];
 		setBdRunForTests(argv => {
 			stamps.push(argv);
 			return { exitCode: 0, stdout: "", stderr: "" };
 		});
-		const { lockCall, lockResult, leaseCall, leaseResult } = wire();
+		const { bashGate, leaseResult } = wire();
 
 		const claim = bashCall("claim", "bd update omp-1 --claim", beads, join(beads, ".."));
-		await lockCall(claim);
-		leaseCall(claim);
+		await bashGate(claim);
 		await leaseResult({ toolName: "bash", toolCallId: "claim", input: {}, content: [{ type: "text", text: '{"id":"omp-1"}' }], details: { exitCode: 0 } });
 
 		expect(stamps).toHaveLength(1);
-		// The claim's own hold is still open; the stamp joined it rather than ending it.
-		expect(existsSync(join(beads, LOCK))).toBe(true);
-		lockResult({ toolName: "bash", toolCallId: "claim", input: {}, content: [] });
+		// The claim's own bd ran in a runner process that has already exited, so the
+		// stamp took and gave back the only hold there was.
 		expect(existsSync(join(beads, LOCK))).toBe(false);
+	});
+
+	test("a stamp waits for the runner still writing the store it stamps", async () => {
+		const beads = store();
+		const stamps: string[][] = [];
+		setBdRunForTests(argv => {
+			stamps.push(argv);
+			return { exitCode: 0, stdout: "", stderr: "" };
+		});
+		const { bashGate, leaseResult } = wire();
+		const writer = await runnerHold(beads);
+
+		const claim = bashCall("claim", "bd update omp-1 --claim", beads, join(beads, ".."));
+		await bashGate(claim);
+		const stamped = leaseResult({ toolName: "bash", toolCallId: "claim", input: {}, content: [{ type: "text", text: '{"id":"omp-1"}' }], details: { exitCode: 0 } });
+
+		await tick();
+		expect(stamps).toEqual([]);
+
+		writer.release();
+		await stamped;
+		expect(stamps).toHaveLength(1);
 	});
 });
 
@@ -656,7 +864,8 @@ async function applyWrite(path: string, kind: string, issue: string, value: stri
 async function runAgents(beads: string, serialized: boolean): Promise<{ gaps: string[] }> {
 	const path = join(beads, "state.json");
 	emptyStore(path);
-	const wired = serialized ? wire() : undefined;
+	// The serialised arm takes the store the way a runner does -- one hold spanning one
+	// whole read-modify-write -- so the control arm differs only in that hold.
 	const agents = 4;
 	const rounds = 3;
 	const expected = { issues: [] as string[], labels: [] as string[], deps: [] as string[], comments: [] as string[] };
@@ -672,11 +881,10 @@ async function runAgents(beads: string, serialized: boolean): Promise<{ gaps: st
 			];
 			if (previous !== undefined) writes.push(["dep", previous]);
 			for (const [kind, value] of writes) {
-				const id = `${kind}-${issue}`;
-				const event = bashCall(id, `bd ${kind === "issue" ? "create" : "update"} ${issue} --json`, beads);
-				if (wired !== undefined) await wired.lockCall(event);
+				const owner = `runner-${kind}-${issue}`;
+				if (serialized) expect((await hold(beads, owner, 30_000)).kind).toBe("held");
 				await applyWrite(path, kind, issue, value);
-				if (wired !== undefined) wired.lockResult({ toolName: "bash", toolCallId: id, input: {}, content: [] });
+				if (serialized) release(beads, owner);
 			}
 			expected.issues.push(issue);
 			expected.labels.push(`lab-${issue}`);
@@ -812,6 +1020,17 @@ describe("a writer that outlasts its lease keeps its turn", () => {
 
 		release(beads, "stalled");
 		expect(JSON.parse(readFileSync(join(beads, LOCK), "utf8"))).toEqual(foreign);
+	});
+
+	test("writer publication refuses a hold another process took over", async () => {
+		const beads = store();
+		setLeaseTimingForTests(120, 60_000);
+		expect((await hold(beads, "stalled")).kind).toBe("held");
+		const foreign = { host: "other-host", pid: 4242, owner: "rival", token: "rival-token", taken: Date.now(), expires: Date.now() + 60_000 };
+		writeFileSync(join(beads, LOCK), JSON.stringify(foreign));
+		expect(attachWriter(beads, "stalled", process.pid)).toBe(false);
+		expect(JSON.parse(readFileSync(join(beads, LOCK), "utf8"))).toEqual(foreign);
+		release(beads, "stalled");
 	});
 
 	test("a heartbeat that wakes after a takeover does not overwrite the new owner", async () => {

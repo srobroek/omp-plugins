@@ -12,6 +12,9 @@
       "./dist/unreported-failure-advisory.js",
       "./dist/claim-before-branch.js",
       "./dist/bd-reconcile-tool.js"
+    ],
+    "programs": [
+      "./extensions/bd-embedded-write-runner.ts"
     ]
   }
 }
