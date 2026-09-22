@@ -179,15 +179,46 @@ function scanGlobals(tokens: string[], from: number): { globals: string[]; next:
 	return { globals, next: i };
 }
 
-/** The value a global flag carries, in either the `--flag value` or `--flag=value` spelling. */
-export function globalValue(globals: string[], names: string[]): string | undefined {
-	for (const [index, token] of globals.entries()) {
-		for (const name of names) {
-			if (token === name) return globals[index + 1];
-			if (token.startsWith(`${name}=`)) return token.slice(name.length + 1);
+/** First positional argument after Cobra persistent options and their values. */
+export function firstArgumentAfterPersistentOptions(args: string[]): string | undefined {
+	return args[scanGlobals(args, 0).next];
+}
+
+export interface GlobalOption {
+	name: string;
+	token: string;
+	value?: string;
+}
+
+/** Parsed global options with value provenance retained. */
+export function globalOptions(globals: string[]): GlobalOption[] {
+	const options: GlobalOption[] = [];
+	for (let index = 0; index < globals.length; index++) {
+		const token = globals[index] as string;
+		if (token.startsWith("-C") && token.length > 2) {
+			const value = token.slice(2);
+			options.push({ name: "-C", token, value: value.startsWith("=") ? value.slice(1) : value });
+			continue;
 		}
+		const equals = token.indexOf("=");
+		if (equals >= 0) {
+			options.push({ name: token.slice(0, equals), token, value: token.slice(equals + 1) });
+			continue;
+		}
+		if (VALUE_FLAGS.has(token)) options.push({ name: token, token, value: globals[++index] });
+		else options.push({ name: token, token });
 	}
-	return undefined;
+	return options;
+}
+
+/** The final value a global flag carries, in either spelling. */
+export function globalValue(globals: string[], names: string[]): string | undefined {
+	return globalOptions(globals).findLast(option => names.includes(option.name))?.value;
+}
+
+/** Whether a global boolean flag is enabled, excluding tokens consumed as option values. */
+export function globalFlagEnabled(globals: string[], names: string[]): boolean {
+	return globalOptions(globals).some(option => names.includes(option.name) && flagEnabled([option.token], names));
 }
 
 /**
@@ -305,6 +336,11 @@ export function environmentForInput(
  * and the second had written nothing.
  */
 export function invocationActor(invocation: BdInvocation, env: NodeJS.ProcessEnv): string | null {
+	const explicitActor = globalValue(invocation.globals, ["--actor"]);
+	if (explicitActor !== undefined) {
+		const actor = explicitActor.trim();
+		return actor !== "" && !/[$`]/.test(actor) ? actor : null;
+	}
 	const resolve = (variable: ActorVar): string | null => {
 		const assignment = invocation.prefix.findLast(token => token.startsWith(`${variable}=`));
 		const value = assignment !== undefined
@@ -354,14 +390,13 @@ export function firstBdVerb(command: string): string | null {
 	return bdInvocations(command)[0]?.verb ?? null;
 }
 
-export function isMutatingInvocation({ verb, args }: BdInvocation): boolean {
-	if (args.includes("--help") || args.includes("-h")) return false;
-	if (verb === "duplicates") return args.includes("--auto-merge") && !args.includes("--dry-run");
+export function isMutatingInvocation({ verb, args, globals }: BdInvocation): boolean {
+	if (globalFlagEnabled(globals, ["--help", "-h"]) || globalFlagEnabled(globals, ["--readonly"])) return false;
+	if (verb === "duplicates") return args.includes("--auto-merge");
 	if (MUTATING_VERBS[verb] === true) return true;
 	if (verb === "ready") return flagEnabled(args, ["--claim"]);
 	if (verb === "dep" && args.includes("--blocks")) return true;
 	if (verb === "mol") {
-		if (args.includes("--dry-run")) return false;
 		const action = args[0] ?? "";
 		if (MOL_WRITES[action] === true) return true;
 		if (action !== "wisp") return false;

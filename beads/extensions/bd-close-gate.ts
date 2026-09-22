@@ -117,7 +117,7 @@ export function denyReason(gateIds: string[]): string {
 	);
 }
 
-import { closeInvocations, type ParsedCommand } from "./shell-command.ts";
+import { closeInvocations, closeInvocationsFromParsed, type ParsedCommand } from "./shell-command.ts";
 
 async function asyncShowRun(argv: string[], cwd: string, deadline = Date.now() + TIMEOUT_MS): Promise<{ exitCode: number; stdout: string }> {
 	const remaining = deadline - Date.now();
@@ -177,18 +177,13 @@ async function gateIdsAmongAsync(ids: string[], dbArgs: string[], cwd: string, d
 /** Evaluate parsed command positions recursively, using async lookups at the bash boundary. */
 export async function decideBdCloseParsed(parsed: ParsedCommand, cwd = process.cwd(), deadline?: number): Promise<{ block: true; reason: string } | undefined> {
 	const sharedDeadline = deadline ?? Date.now() + TIMEOUT_MS;
-	for (const position of parsed.commands) {
-		const invocations = closeInvocations(position.raw);
-		if (invocations.length === 0) continue;
+	const invocations = closeInvocationsFromParsed(parsed);
+	if (invocations.length > 0) {
 		const gates = new Set<string>();
 		for (const invocation of invocations) {
 			for (const id of await gateIdsAmongAsync(invocation.ids, invocation.dbArgs, cwd, sharedDeadline)) gates.add(id);
 		}
 		if (gates.size > 0) return { block: true, reason: denyReason([...gates]) };
-	}
-	for (const child of parsed.nested) {
-		const decision = await decideBdCloseParsed(child, cwd, sharedDeadline);
-		if (decision) return decision;
 	}
 	return undefined;
 }

@@ -2,12 +2,13 @@ import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { shellQuoteBalanced, tokenizeShell } from "./shell-tokenizer.ts";
 
-/** A token in a command-position argv. Quoted words are data, not executable names. */
-export type Token = { value: string; quoted: boolean };
+/** One shell token with both source-preserving and execution-normalized values. */
+export type Token = { value: string; normalized: string; quoted: boolean };
 
 const OPERATORS: Record<string, true> = { ";": true, "&&": true, "||": true, "&": true, "|": true, "\n": true, "(": true, ")": true, "{": true, "}": true };
 const WRAPPERS: Record<string, true> = {
 	mise: true,
+	builtin: true,
 	env: true,
 	command: true,
 	exec: true,
@@ -15,6 +16,12 @@ const WRAPPERS: Record<string, true> = {
 	nice: true,
     sudo: true,
 	xargs: true,
+};
+
+const SHELL_CONTROL_WORDS: Record<string, true> = {
+	if: true, else: true, elif: true, fi: true, for: true, while: true,
+	until: true, do: true, done: true, case: true, esac: true, in: true,
+	function: true, select: true, coproc: true, time: true,
 };
 
 /** Split shell source at operators outside quoted words. */
@@ -62,9 +69,23 @@ export function commandSegments(command: string): string[] {
 	return out;
 }
 
-/** Preserve the historical token surface used by non-bash lifecycle helpers. */
+/** Preserve source spelling for safety checks and shell-normalized spelling for execution matching. */
 export function tokenize(segment: string): Token[] {
-	return tokenizeShell(segment, { preserveBackslashes: true }).map(({ value, startsQuoted }) => ({ value, quoted: startsQuoted }));
+	const normalized = tokenizeShell(segment);
+	return tokenizeShell(segment, { preserveBackslashes: true }).map(({ value, startsQuoted }, index) => ({
+		value,
+		normalized: normalized[index]?.value ?? value,
+		quoted: startsQuoted,
+	}));
+}
+
+function structuralTokens(segment: string): Token[] {
+	const normalized = tokenizeShell(segment, { preserveInputRedirects: true });
+	return tokenizeShell(segment, { preserveBackslashes: true, preserveInputRedirects: true }).map(({ value, startsQuoted }, index) => ({
+		value,
+		normalized: normalized[index]?.value ?? value,
+		quoted: startsQuoted,
+	}));
 }
 
 /** Return argv beginning at a command name, accepting literal env/wrapper prefixes. */
@@ -75,15 +96,15 @@ export function invocation(segment: string, argv: string[]): Token[] | null {
 	let start = 0;
 	for (; start < tokens.length; start++) {
 		const token = tokens[start];
-		if (!token || token.quoted) return null;
-		const basename = token.value.split("/").pop() ?? token.value;
+		if (!token) return null;
+		const basename = token.normalized.split("/").pop() ?? token.normalized;
 		if (basename === head) break;
-		if (!/^[A-Za-z_][A-Za-z0-9_]*=/.test(token.value) && !token.value.startsWith("-") && WRAPPERS[basename] !== true) return null;
+		if (!/^[A-Za-z_][A-Za-z0-9_]*=/.test(token.normalized) && !token.normalized.startsWith("-") && WRAPPERS[basename] !== true) return null;
 	}
 	for (const [offset, word] of argv.entries()) {
 		const token = tokens[start + offset];
-		if (!token || token.quoted) return null;
-		const value = offset === 0 ? (token.value.split("/").pop() ?? token.value) : token.value;
+		if (!token) return null;
+		const value = offset === 0 ? (token.normalized.split("/").pop() ?? token.normalized) : token.normalized;
 		if (value !== word) return null;
 	}
 	return tokens.slice(start);
@@ -102,6 +123,9 @@ export type CommandPosition = {
 	words: Token[];
 	argv: string[];
 	executable?: string;
+	executableIndex?: number;
+	opaqueWrapperOptions: boolean;
+	stdinFed: boolean;
 };
 
 export type ParsedCommand = {
@@ -111,6 +135,8 @@ export type ParsedCommand = {
 	/** Raw command-position segments, preserving quoting for gate decisions. */
 	commands: CommandPosition[];
 	unknown: boolean;
+	/** True when uncertainty remains after ignoring recognized wrapper-option syntax. */
+	unknownBeyondWrapperOptions: boolean;
 	nested: ParsedCommand[];
 };
 
@@ -120,36 +146,140 @@ export type CommandClass = "read-only" | "mutating" | "unknown";
 const READ_BD: Record<string, true> = { show: true, list: true, ready: true, status: true, comments: true, lint: true, version: true, doctor: true, prime: true };
 const MUTATING_TOOLS: Record<string, true> = { npm: true, bun: true, uv: true, cargo: true, rm: true, mv: true, cp: true, mkdir: true, touch: true, install: true };
 
+const WRAPPER_BOOLEAN_OPTIONS: Record<string, Record<string, true>> = {
+	env: { "-i": true, "--ignore-environment": true, "-0": true, "--null": true, "-v": true, "--debug": true },
+	xargs: { "-0": true, "--null": true, "-r": true, "--no-run-if-empty": true, "-t": true, "--verbose": true, "-p": true, "--interactive": true, "-x": true, "--exit": true, "-o": true, "--open-tty": true },
+	sudo: { "-A": true, "-b": true, "-E": true, "-e": true, "-H": true, "-K": true, "-k": true, "-n": true, "-P": true, "-S": true, "-V": true, "-v": true, "--askpass": true, "--background": true, "--edit": true, "--help": true, "--login": true, "--non-interactive": true, "--preserve-env": true, "--remove-timestamp": true, "--reset-timestamp": true, "--stdin": true, "--validate": true, "--version": true },
+};
+const WRAPPER_VALUE_OPTIONS: Record<string, string[]> = {
+	env: ["-u", "--unset", "-C", "--chdir", "-S", "--split-string", "-a", "--argv0"],
+	xargs: ["-a", "--arg-file", "-d", "--delimiter", "-E", "--eof", "-I", "--replace", "-L", "--max-lines", "-n", "--max-args", "-P", "--max-procs", "-s", "--max-chars", "--process-slot-var"],
+	sudo: ["-C", "--close-from", "-D", "--chdir", "-g", "--group", "-h", "--host", "-p", "--prompt", "-R", "--chroot", "-r", "--role", "-t", "--type", "-T", "--command-timeout", "-u", "--user", "-U", "--other-user"],
+};
+
+function skipWrapperOptions(words: Token[], index: number, wrapper: string): { index: number; opaque: boolean } {
+	const booleans = WRAPPER_BOOLEAN_OPTIONS[wrapper];
+	const values = WRAPPER_VALUE_OPTIONS[wrapper];
+	if (booleans === undefined || values === undefined) return { index, opaque: words[index]?.normalized.startsWith("-") === true };
+	let opaque = false;
+	while (index < words.length) {
+		const token = words[index]?.normalized ?? "";
+		if (wrapper === "env" && /^[A-Za-z_][A-Za-z0-9_]*=/.test(token)) { index++; continue; }
+		if (token === "--") return { index: index + 1, opaque };
+		if (!token.startsWith("-") && !(wrapper === "sudo" && token.startsWith("+"))) break;
+		if (booleans[token] === true) { index++; continue; }
+		const valueOption = values.find(option => token === option || (option.startsWith("--") ? token.startsWith(`${option}=`) : token.startsWith(option)));
+		if (valueOption !== undefined) { index += token === valueOption ? 2 : 1; continue; }
+		opaque = true;
+		index++;
+	}
+	return { index, opaque };
+}
+
+/** Resolve a command word through assignments, negation, and literal wrappers. */
+export function commandExecutableIndex(words: Token[], start = 0): { index: number; opaqueWrapperOptions: boolean } {
+	let opaqueWrapperOptions = false;
+	let index = start;
+	while (index < words.length) {
+		while (index < words.length && (/^[A-Za-z_][A-Za-z0-9_]*=/.test(words[index]?.normalized ?? "") || words[index]?.normalized === "!")) index++;
+		const redirect = words[index]?.normalized ?? "";
+		if (/^\d*(?:>&|>\|)#redirect$/.test(redirect) || /^\d*(?:<&|<>)#stdin$/.test(redirect)) {
+			index += 2;
+			continue;
+		}
+		if (/^\d*<<#stdin$/.test(redirect)) {
+			index++;
+			continue;
+		}
+		if (/^\d*(?:<|<<<)#stdin$/.test(redirect)) {
+			index += 2;
+			continue;
+		}
+		if (/^\d*(?:>>?|>\|)$/.test(redirect)) {
+			index += 2;
+			continue;
+		}
+		if (/^\d*(?:>>?|>\|).+/.test(redirect)) {
+			index++;
+			continue;
+		}
+		const wrapper = words[index]?.normalized.split("/").pop() ?? words[index]?.normalized ?? "";
+		if (WRAPPERS[wrapper] !== true) break;
+		const skipped = skipWrapperOptions(words, index + 1, wrapper);
+		index = skipped.index;
+		opaqueWrapperOptions ||= skipped.opaque;
+	}
+	return { index, opaqueWrapperOptions };
+}
+
 function splitCommands(source: string): CommandPosition[] {
 	const positions: CommandPosition[] = [];
 	let current: Token[] = [];
-	const flush = (): void => {
-		if (current.length === 0) return;
+	let pendingStdin = false;
+	const groupStdin: boolean[] = [];
+	const flush = (): boolean => {
+		if (current.length === 0) return false;
 		const words = [...current];
-		const argv = words.map(word => word.value);
-		let index = 0;
-		while (index < words.length && (/^[A-Za-z_][A-Za-z0-9_]*=/.test(words[index]?.value ?? "") || words[index]?.value === "!")) index++;
-		while (index < words.length && WRAPPERS[words[index]?.value.split("/").pop() ?? words[index]?.value ?? ""] === true) {
-			const wrapper = words[index]?.value.split("/").pop() ?? words[index]?.value ?? "";
-			index++;
-			if (wrapper === "env") while (index < words.length && (/^[A-Za-z_][A-Za-z0-9_]*=/.test(words[index]?.value ?? "") || words[index]?.value?.startsWith("-") === true)) index++;
-			if (wrapper === "xargs") while (index < words.length && words[index]?.value?.startsWith("-") === true) index++;
-			if (wrapper === "sudo") while (index < words.length && words[index]?.value?.startsWith("-") === true) { index++; if (index < words.length && words[index]?.value?.startsWith("-") === false) index++; }
-		}
-		const executable = words[index] && !words[index]?.quoted ? words[index]?.value : undefined;
+		const argv = words.map(word => word.normalized);
+		const resolved = commandExecutableIndex(words);
+		const { index, opaqueWrapperOptions } = resolved;
+		const executable = words[index]?.normalized;
 		const raw = words.map(word => word.quoted ? `'${word.value.replaceAll("'", "'\\''")}'` : word.value).join(" ");
-		positions.push({ raw, words, argv, executable });
+		positions.push({ raw, words, argv, executable, executableIndex: executable === undefined ? undefined : index, opaqueWrapperOptions, stdinFed: pendingStdin || groupStdin.includes(true) || words.some(word => /^0*(?:<{1,3}|(?:<|<<|<<<)#stdin)/.test(word.normalized)) });
 		current = [];
+		pendingStdin = false;
+		return true;
 	};
-	for (const token of tokenize(source)) {
+	for (const token of structuralTokens(source)) {
 		if (OPERATORS[token.value] === true) {
-			flush();
+			const hadCommand = flush();
+			if (token.value === "|") pendingStdin = true;
+			else if (token.value === "(" || token.value === "{") {
+				groupStdin.push(pendingStdin || groupStdin.includes(true));
+				pendingStdin = false;
+			} else if (token.value === ")" || token.value === "}") groupStdin.pop();
+			else if (hadCommand) pendingStdin = false;
 			continue;
 		}
 		current.push(token);
 	}
 	flush();
 	return positions;
+}
+
+/** Return the source operand executed by a shell's command-mode option. */
+export function shellCommandOperand(words: Token[], shellIndex: number): Token | undefined {
+	for (let argument = shellIndex + 1; argument < words.length; argument++) {
+		const word = words[argument];
+		if (word === undefined || word.normalized === "--") return undefined;
+		if (["-o", "+o", "-O", "+O", "--rcfile", "--init-file"].includes(word.normalized)) {
+			argument++;
+			continue;
+		}
+		if (/^[-+][^-]*c/.test(word.normalized)) return words[argument + 1];
+		if (word.normalized.startsWith("-") || word.normalized.startsWith("+")) continue;
+		return undefined;
+	}
+	return undefined;
+}
+
+/** Whether a shell invocation executes a filename operand rather than inline source. */
+export function shellHasScriptOperand(words: Token[], shellIndex: number): boolean {
+	if (words.slice(0, shellIndex).some(word => /^(?:BASH_ENV|ENV)=.+/.test(word.normalized))) return true;
+	for (let argument = shellIndex + 1; argument < words.length; argument++) {
+		const word = words[argument];
+		if (word === undefined) return false;
+		if (word.normalized === "--") return words[argument + 1] !== undefined;
+		if (["--rcfile", "--init-file"].includes(word.normalized)) return words[argument + 1] !== undefined;
+		if (["-o", "+o", "-O", "+O"].includes(word.normalized)) {
+			argument++;
+			continue;
+		}
+		if (/^[-+][^-]*c/.test(word.normalized)) return false;
+		if (word.normalized.startsWith("-") || word.normalized.startsWith("+")) continue;
+		return true;
+	}
+	return false;
 }
 
 function nestedSources(source: string): { sources: string[]; unknown: boolean } {
@@ -194,42 +324,77 @@ function nestedSources(source: string): { sources: string[]; unknown: boolean } 
 		}
 	}
 	if (depth !== 0) unknown = true;
-// Command substitutions and backticks remain executable inside double quotes.
-for (const match of source.matchAll(/"((?:\\.|[^"\\])*)"/g)) {
-	const body = match[1] ?? "";
-	for (const substitution of body.matchAll(/\$\(([^()]*)\)/g)) if (substitution[1] !== undefined) sources.push(substitution[1]);
-	for (const substitution of body.matchAll(/`([^`]*)`/g)) if (substitution[1] !== undefined) sources.push(substitution[1]);
-}
-for (const match of source.matchAll(/\b(?:bash|sh|zsh|dash|ksh)\s+-c\s+((?:'[^']*')|(?:"[^"]*")|[^\s;&|]+)/g)) {
-	const value = match[1];
-	if (!value || value.startsWith("\"$") || value.startsWith("'$")) unknown = true;
-	else sources.push(value.replace(/^['"]|['"]$/g, ""));
-}
-for (const match of source.matchAll(/\beval\s+((?:'[^']*')|(?:"[^"]*")|[^\s;&|]+)/g)) {
-	const value = match[1];
-	if (value?.startsWith("$")) unknown = true;
-	else if (value) sources.push(value.replace(/^['"]|['"]$/g, ""));
-}
-for (const match of source.matchAll(/\bxargs(?:\s+-[^\s;&|]+)*\s+([^;&|]+?)(?=\s*(?:[;&|]|$))/g)) {
-	const value = match[1]?.trim();
-	if (value?.startsWith("$")) unknown = true;
-	else if (value) sources.push(value.replace(/^['"]|['"]$/g, ""));
-}
+	// Command substitutions and backticks remain executable inside double quotes.
+	for (const match of source.matchAll(/"((?:\\.|[^"\\])*)"/g)) {
+		const body = match[1] ?? "";
+		for (const substitution of body.matchAll(/\$\(([^()]*)\)/g)) if (substitution[1] !== undefined) sources.push(substitution[1]);
+		for (const substitution of body.matchAll(/`([^`]*)`/g)) if (substitution[1] !== undefined) sources.push(substitution[1]);
+	}
+	for (const position of splitCommands(source)) {
+		if ((position.executable?.split("/").pop() ?? position.executable) === "alias") unknown = true;
+		const xargs = position.words.findIndex(word => (word.normalized.split("/").pop() ?? word.normalized) === "xargs");
+		for (let index = 0; index < position.words.length; index++) {
+			const shell = position.words[index]?.normalized.split("/").pop() ?? "";
+			if (!["bash", "sh", "zsh", "dash", "ksh"].includes(shell)) continue;
+			if (shellHasScriptOperand(position.words, index)) unknown = true;
+			const command = shellCommandOperand(position.words, index);
+			if (command === undefined) {
+				if (xargs >= 0 && xargs < index && position.words.slice(index + 1).some(word => /^[-+][^-]*c/.test(word.normalized))) unknown = true;
+				if (position.stdinFed || shellHasScriptOperand(position.words, index)) unknown = true;
+				continue;
+			}
+			if (/(^|[^\\])[$`*?[\]{}~]/.test(command.value)) unknown = true;
+			else sources.push(command.normalized);
+		}
+	}
+	for (const position of splitCommands(source)) {
+		const index = position.executableIndex;
+		if (index === undefined || (position.words[index]?.normalized.split("/").pop() ?? "") !== "trap") continue;
+		const handler = position.words.slice(index + 1).find(word => !word.normalized.startsWith("-"));
+		if (handler === undefined) continue;
+		if (/(^|[^\\])[$`*?[\]{}~]/.test(handler.value)) unknown = true;
+		else sources.push(handler.normalized);
+	}
+	for (const match of source.matchAll(/\beval\s+((?:'[^']*')|(?:"[^"]*")|[^\s;&|]+)/g)) {
+		const value = match[1];
+		if (value?.startsWith("$")) unknown = true;
+		else if (value) sources.push(value.replace(/^['"]|['"]$/g, ""));
+	}
+	for (const match of source.matchAll(/\bxargs(?:\s+-[^\s;&|]+)*\s+([^;&|]+?)(?=\s*(?:[;&|]|$))/g)) {
+		const value = match[1]?.trim();
+		if (value?.startsWith("$")) unknown = true;
+		else if (value) sources.push(value.replace(/^['"]|['"]$/g, ""));
+	}
 	return { sources, unknown };
 }
 
 function staticParse(command: string): ParsedCommand | ParseFailure {
-	if (command.length > 64_000) return { kind: "parse-failure", reason: "input exceeds 64000 characters", command, segments: [], commands: [], unknown: true, nested: [] };
-	if (!shellQuoteBalanced(command)) return { kind: "parse-failure", reason: "unbalanced shell quote", command, segments: [], commands: [], unknown: true, nested: [] };
+	if (command.length > 64_000) return { kind: "parse-failure", reason: "input exceeds 64000 characters", command, segments: [], commands: [], unknown: true, unknownBeyondWrapperOptions: true, nested: [] };
+	if (!shellQuoteBalanced(command)) return { kind: "parse-failure", reason: "unbalanced shell quote", command, segments: [], commands: [], unknown: true, unknownBeyondWrapperOptions: true, nested: [] };
 	const commands = splitCommands(command);
 	const nested = nestedSources(command);
 	const children = nested.sources.map(staticParse);
-	const unknown = nested.unknown || children.some(child => child.unknown);
+	const unknownBeyondWrapperOptions = nested.unknown || children.some(child => child.unknownBeyondWrapperOptions) || commands.some(position => {
+		if (position.opaqueWrapperOptions && position.words.some(word => /(^|[^\\])[$`*?[\]{}~]/.test(word.value))) return true;
+		if (position.opaqueWrapperOptions && position.words.some(word => ["bash", "sh", "zsh", "dash", "ksh"].includes(word.normalized.split("/").pop() ?? word.normalized))) return true;
+		const index = position.executableIndex;
+		const source = index === undefined ? undefined : position.words[index]?.value;
+		const executable = position.executable?.split("/").pop();
+		if (executable === "eval" || executable === "source" || executable === ".") return true;
+		if (executable === "then" || (executable !== undefined && SHELL_CONTROL_WORDS[executable] === true)) return true;
+		if (executable === "find" && position.argv.some(word => word === "-exec" || word === "-execdir")) return true;
+		const envIndex = position.argv.findIndex(word => (word.split("/").pop() ?? word) === "env");
+		if (envIndex >= 0 && position.argv.slice(envIndex + 1).some(word => word.startsWith("-S") || word === "--split-string" || word.startsWith("--split-string="))) return true;
+		if (position.executable?.includes(" ")) return true;
+		return source !== undefined && /(^|[^\\])[$`*?[\]{}~]/.test(source);
+	});
+	const unknown = unknownBeyondWrapperOptions || children.some(child => child.unknown) || commands.some(position => position.opaqueWrapperOptions);
 	return {
 		command,
 		segments: commands.map(position => position.argv),
 		commands,
 		unknown,
+		unknownBeyondWrapperOptions,
 		nested: children,
 	};
 }
@@ -282,10 +447,10 @@ export function parsedInvocations(parsed: ParsedCommand | ParseFailure, executab
 	if (parsed.unknown) return [];
 	const found: ParsedInvocation[] = [];
 	for (const position of parsed.commands) {
-        const executableName = position.executable?.split("/").pop();
-        if (executableName !== executable) continue;
-        const index = position.argv.findIndex((word, i) => !position.words[i]?.quoted && (word.split("/").pop() ?? word) === executable);
-        if (index < 0) continue;
+		const executableName = position.executable?.split("/").pop();
+		if (executableName !== executable) continue;
+		const index = position.executableIndex;
+		if (index === undefined) continue;
 		const args = position.argv.slice(index + 1);
 		const globals: string[] = [];
 		let verb: string | undefined;
@@ -314,9 +479,8 @@ const CLOSE_VERBS: Record<string, true> = { close: true, done: true };
 const DB_VALUE_FLAGS: Record<string, true> = { "--db": true, "-C": true, "--directory": true };
 const VALUE_FLAGS: Record<string, true> = { "--reason": true, "-r": true, "--message": true, "--session": true, "--assignee": true, "--status": true, "--type": true };
 
-/** Extract close invocations from the shared parser, including recursively executed children. */
-export function closeInvocations(command: string): CloseInvocation[] {
-	const parsed = parse(command);
+/** Extract close invocations from an already validated shared parse. */
+export function closeInvocationsFromParsed(parsed: ParsedCommand | ParseFailure): CloseInvocation[] {
 	if (parsed.unknown) return [];
 	const out: CloseInvocation[] = [];
 	for (const invocation of parsedInvocations(parsed)) {
@@ -361,6 +525,11 @@ export function closeInvocations(command: string): CloseInvocation[] {
 		out.push({ ids, dbArgs });
 	}
 	return out;
+}
+
+/** Extract close invocations from the shared parser, including recursively executed children. */
+export function closeInvocations(command: string): CloseInvocation[] {
+	return closeInvocationsFromParsed(parse(command));
 }
 
 

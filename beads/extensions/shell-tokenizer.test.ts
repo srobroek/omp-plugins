@@ -3,6 +3,7 @@ import { tokenize as tokenizeSpeckit } from "../../speckit/extensions/taskstoiss
 import { tokenize as tokenizeWorktrunk } from "../../worktrunk/extensions/worktree-gate.ts";
 import { tokenize as tokenizeBeads } from "./bd-close-gate.ts";
 import { tokenize as tokenizeShellCommand } from "./shell-command.ts";
+import { tokenizeShell } from "./shell-tokenizer.ts";
 
 type Tokenizer = (command: string) => unknown[] | null;
 
@@ -87,5 +88,10 @@ describe("shared shell tokenizer corpus", () => {
 				"done",
 			]);
 		}
+	});
+
+	test("input redirect markers are strictly opt-in", () => {
+		expect(values(tokenizeShell("foo<bar 0<<<x"))).toEqual(["foo<bar", "0", "<<<", "x"]);
+		expect(values(tokenizeShell("foo<bar 0<<<x", { preserveInputRedirects: true }))).toEqual(["foo", "<#stdin", "bar", "0<<<#stdin", "x"]);
 	});
 });

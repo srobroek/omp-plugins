@@ -54,20 +54,99 @@ function tokenizeShell(command, options = {}) {
       i++;
       continue;
     }
+    if (options.preserveInputRedirects && ch === "<" && command[i + 1] === ">") {
+      let descriptor = "";
+      if (started && /^\d+$/.test(current)) {
+        descriptor = current;
+        current = "";
+        started = false;
+        startsQuoted = false;
+        sawQuote = false;
+      } else
+        flush();
+      out.push(token(`${descriptor}<>#stdin`));
+      i++;
+      continue;
+    }
     if (ch === "<" && command[i + 1] === "<" && command[i + 2] === "<") {
-      flush();
-      out.push(token("<<<"));
+      if (!options.preserveInputRedirects) {
+        flush();
+        out.push(token("<<<"));
+      } else {
+        let descriptor = "";
+        if (started && /^\d+$/.test(current)) {
+          descriptor = current;
+          current = "";
+          started = false;
+          startsQuoted = false;
+          sawQuote = false;
+        } else
+          flush();
+        out.push(token(`${descriptor}<<<#stdin`));
+      }
       i += 2;
       continue;
     }
     if (ch === "<" && command[i + 1] === "<") {
       const operator = hereDocumentOperator(command, i);
       if (operator !== null) {
-        flush();
+        let descriptor = "";
+        if (options.preserveInputRedirects && started && /^\d+$/.test(current)) {
+          descriptor = current;
+          current = "";
+          started = false;
+          startsQuoted = false;
+          sawQuote = false;
+        } else
+          flush();
+        if (options.preserveInputRedirects)
+          out.push(token(`${descriptor}<<#stdin`));
         pending.push(operator);
         i = operator.end - 1;
         continue;
       }
+    }
+    if (options.preserveInputRedirects && ch === ">" && command[i + 1] === "|") {
+      let descriptor = "";
+      if (started && /^\d+$/.test(current)) {
+        descriptor = current;
+        current = "";
+        started = false;
+        startsQuoted = false;
+        sawQuote = false;
+      } else
+        flush();
+      out.push(token(`${descriptor}>|#redirect`));
+      i++;
+      continue;
+    }
+    if (options.preserveInputRedirects && (ch === ">" || ch === "<") && command[i + 1] === "&") {
+      let descriptor = "";
+      if (started && /^\d+$/.test(current)) {
+        descriptor = current;
+        current = "";
+        started = false;
+        startsQuoted = false;
+        sawQuote = false;
+      } else
+        flush();
+      out.push(token(`${descriptor}${ch}&#${ch === "<" ? "stdin" : "redirect"}`));
+      i++;
+      continue;
+    }
+    if (ch === "<" && options.preserveInputRedirects) {
+      let descriptor = "";
+      if (started && /^\d+$/.test(current)) {
+        descriptor = current;
+        current = "";
+        started = false;
+        startsQuoted = false;
+        sawQuote = false;
+      } else
+        flush();
+      if (options.preserveInputRedirects)
+        out.push(token(`${descriptor}<#stdin`));
+      continue;
     }
     if (ch === `
 `) {
@@ -212,7 +291,7 @@ var pendingAdvisory = new Map;
 
 // extensions/session-beads-lifecycle.ts
 import { existsSync, readFileSync, rmSync, statSync } from "fs";
-import { isAbsolute, join, resolve } from "path";
+import { dirname, isAbsolute, join, resolve } from "path";
 
 // extensions/bd-embedded-write-lock.ts
 import { hostname } from "os";
@@ -261,6 +340,8 @@ function envelopeData(value) {
     return record.data;
   return value;
 }
+var backgroundReads = new Set;
+var LIFECYCLE_BRIDGE = Symbol.for("com.srobroek.beads.session-lifecycle.bridge.v1");
 
 // extensions/unreported-failure-advisory.ts
 var BD_TIMEOUT_MS = 1200;

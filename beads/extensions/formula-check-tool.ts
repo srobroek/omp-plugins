@@ -1,9 +1,10 @@
+import { resolve } from "node:path";
 import type { TSchema } from "@oh-my-pi/pi-ai";
 import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
 import pkg from "../package.json" with { type: "json" };
 import { invocationFromArgv } from "./bd-actor-gate.ts";
 import { withEmbeddedWriteLock, writesStore } from "./bd-embedded-write-lock.ts";
-import { envelopeData, parseTrailingJson } from "./session-beads-lifecycle.ts";
+import { envelopeData, lifecycleBdEnvironment, parseTrailingJson } from "./session-beads-lifecycle.ts";
 
 const BEADS_PRESENT = Symbol.for("com.srobroek.beads.present.v1");
 (globalThis as Record<symbol, unknown>)[BEADS_PRESENT] = { version: pkg.version };
@@ -287,21 +288,22 @@ export async function assertFormula(
     const deadline = Date.now() + FORMULA_TIMEOUT_MS;
     const varargs: string[] = [];
     for (const v of params.varargs ?? []) varargs.push("--var", v);
-    const cwd = params.workspace;
-    const failures: string[] = [];
-    const cookFails = await cookCheck(params.formula, varargs, cwd, process.env, deadline);
+	const cwd = params.workspace === undefined ? undefined : resolve(params.workspace);
+	const env = cwd === undefined ? process.env : lifecycleBdEnvironment(cwd);
+	const failures: string[] = [];
+	const cookFails = await cookCheck(params.formula, varargs, cwd, env, deadline);
     if (cookFails.length) {
         const text = cookFails.map((f) => `FAIL ${f}`).join("\n");
         return { ok: false, text, failures: cookFails, steps: 0, gates: 0 };
     }
-    const help = await runBd(["mol", "pour", "--help"], cwd, undefined, process.env, deadline);
+	const help = await runBd(["mol", "pour", "--help"], cwd, undefined, env, deadline);
     const capability = parsePourHelp(help.stdout, help.stderr);
     if (help.error || !help.ok || "error" in capability) {
         const failure = help.error ?? ("error" in capability ? capability.error : "bd mol pour --help failed");
         return { ok: false, text: `FAIL ${failure}`, failures: [failure], steps: 0, gates: 0 };
     }
     const dryArgs = ["mol", "pour", params.formula, "--dry-run", ...(capability.json ? ["--json"] : []), ...varargs];
-    const dry = await runBd(dryArgs, cwd, undefined, process.env, deadline);
+	const dry = await runBd(dryArgs, cwd, undefined, env, deadline);
     if (dry.error || !dry.ok) {
         const out = dry.error ?? [dry.stdout, dry.stderr].filter(Boolean).join("\n").trim();
         const fail = `pour --dry-run failed:\n${out}`;
@@ -317,7 +319,7 @@ export async function assertFormula(
     if (params.expectGates !== undefined && parsed.gates.length !== params.expectGates) failures.push(`gate count ${parsed.gates.length} != expected ${params.expectGates}`);
     failures.push(...gateTypeFailures(parsed.gates));
     failures.push(...unsubstitutedFailures(listing));
-    if (params.deep && failures.length === 0) failures.push(...(await deepAssert(params.formula, varargs, toolCallId, cwd, process.env, deadline)));
+	if (params.deep && failures.length === 0) failures.push(...(await deepAssert(params.formula, varargs, toolCallId, cwd, env, deadline)));
     for (const f of failures) lines.push(`FAIL ${f}`);
     if (!failures.length) lines.push("  OK");
     return { ok: failures.length === 0, text: lines.join("\n"), failures, steps: body.length, gates: parsed.gates.length };
@@ -338,7 +340,7 @@ export default function formulaCheckTool(pi: ExtensionAPI): void {
             formula: z.string().describe("Formula stem to assert"),
             varargs: z.array(z.string()).optional().describe("Selection vars as k=v pairs (passed as --var)"),
             deep: z.boolean().optional().describe("If true, pour for real and assert a single entry point (mutates workspace; exec approval)"),
-            workspace: z.string().optional().describe("Repo cwd for bd; defaults to the current working directory"),
+            workspace: z.string().optional().describe("Repo cwd for bd; required when deep=true"),
             expectSteps: z.number().optional().describe("Expected body step count"),
             expectGates: z.number().optional().describe("Expected gate count"),
         }) as unknown as TSchema,

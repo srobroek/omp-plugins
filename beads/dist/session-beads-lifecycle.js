@@ -1,7 +1,7 @@
 // @bun
 // extensions/session-beads-lifecycle.ts
 import { existsSync as existsSync2, readFileSync as readFileSync2, rmSync, statSync as statSync3 } from "fs";
-import { isAbsolute as isAbsolute3, join as join2, resolve as resolve4 } from "path";
+import { dirname as dirname3, isAbsolute as isAbsolute3, join as join2, resolve as resolve4 } from "path";
 
 // extensions/shell-tokenizer.ts
 var SEPARATORS = new Set([";", "&", "|", "(", ")", `
@@ -58,20 +58,99 @@ function tokenizeShell(command, options = {}) {
       i++;
       continue;
     }
+    if (options.preserveInputRedirects && ch === "<" && command[i + 1] === ">") {
+      let descriptor = "";
+      if (started && /^\d+$/.test(current)) {
+        descriptor = current;
+        current = "";
+        started = false;
+        startsQuoted = false;
+        sawQuote = false;
+      } else
+        flush();
+      out.push(token(`${descriptor}<>#stdin`));
+      i++;
+      continue;
+    }
     if (ch === "<" && command[i + 1] === "<" && command[i + 2] === "<") {
-      flush();
-      out.push(token("<<<"));
+      if (!options.preserveInputRedirects) {
+        flush();
+        out.push(token("<<<"));
+      } else {
+        let descriptor = "";
+        if (started && /^\d+$/.test(current)) {
+          descriptor = current;
+          current = "";
+          started = false;
+          startsQuoted = false;
+          sawQuote = false;
+        } else
+          flush();
+        out.push(token(`${descriptor}<<<#stdin`));
+      }
       i += 2;
       continue;
     }
     if (ch === "<" && command[i + 1] === "<") {
       const operator = hereDocumentOperator(command, i);
       if (operator !== null) {
-        flush();
+        let descriptor = "";
+        if (options.preserveInputRedirects && started && /^\d+$/.test(current)) {
+          descriptor = current;
+          current = "";
+          started = false;
+          startsQuoted = false;
+          sawQuote = false;
+        } else
+          flush();
+        if (options.preserveInputRedirects)
+          out.push(token(`${descriptor}<<#stdin`));
         pending.push(operator);
         i = operator.end - 1;
         continue;
       }
+    }
+    if (options.preserveInputRedirects && ch === ">" && command[i + 1] === "|") {
+      let descriptor = "";
+      if (started && /^\d+$/.test(current)) {
+        descriptor = current;
+        current = "";
+        started = false;
+        startsQuoted = false;
+        sawQuote = false;
+      } else
+        flush();
+      out.push(token(`${descriptor}>|#redirect`));
+      i++;
+      continue;
+    }
+    if (options.preserveInputRedirects && (ch === ">" || ch === "<") && command[i + 1] === "&") {
+      let descriptor = "";
+      if (started && /^\d+$/.test(current)) {
+        descriptor = current;
+        current = "";
+        started = false;
+        startsQuoted = false;
+        sawQuote = false;
+      } else
+        flush();
+      out.push(token(`${descriptor}${ch}&#${ch === "<" ? "stdin" : "redirect"}`));
+      i++;
+      continue;
+    }
+    if (ch === "<" && options.preserveInputRedirects) {
+      let descriptor = "";
+      if (started && /^\d+$/.test(current)) {
+        descriptor = current;
+        current = "";
+        started = false;
+        startsQuoted = false;
+        sawQuote = false;
+      } else
+        flush();
+      if (options.preserveInputRedirects)
+        out.push(token(`${descriptor}<#stdin`));
+      continue;
     }
     if (ch === `
 `) {
@@ -189,6 +268,7 @@ import { resolve } from "path";
 var OPERATORS = { ";": true, "&&": true, "||": true, "&": true, "|": true, "\n": true, "(": true, ")": true, "{": true, "}": true };
 var WRAPPERS = {
   mise: true,
+  builtin: true,
   env: true,
   command: true,
   exec: true,
@@ -197,8 +277,39 @@ var WRAPPERS = {
   sudo: true,
   xargs: true
 };
+var SHELL_CONTROL_WORDS = {
+  if: true,
+  else: true,
+  elif: true,
+  fi: true,
+  for: true,
+  while: true,
+  until: true,
+  do: true,
+  done: true,
+  case: true,
+  esac: true,
+  in: true,
+  function: true,
+  select: true,
+  coproc: true,
+  time: true
+};
 function tokenize(segment) {
-  return tokenizeShell(segment, { preserveBackslashes: true }).map(({ value, startsQuoted }) => ({ value, quoted: startsQuoted }));
+  const normalized = tokenizeShell(segment);
+  return tokenizeShell(segment, { preserveBackslashes: true }).map(({ value, startsQuoted }, index) => ({
+    value,
+    normalized: normalized[index]?.value ?? value,
+    quoted: startsQuoted
+  }));
+}
+function structuralTokens(segment) {
+  const normalized = tokenizeShell(segment, { preserveInputRedirects: true });
+  return tokenizeShell(segment, { preserveBackslashes: true, preserveInputRedirects: true }).map(({ value, startsQuoted }, index) => ({
+    value,
+    normalized: normalized[index]?.value ?? value,
+    quoted: startsQuoted
+  }));
 }
 function leadingCdCwd(command, cwd) {
   const match = /^\s*cd\s+([^\s;&|]+)\s*&&/.exec(command);
@@ -209,47 +320,159 @@ function leadingCdCwd(command, cwd) {
     return cwd;
   return dir.startsWith("/") ? dir : resolve(cwd, dir);
 }
+var WRAPPER_BOOLEAN_OPTIONS = {
+  env: { "-i": true, "--ignore-environment": true, "-0": true, "--null": true, "-v": true, "--debug": true },
+  xargs: { "-0": true, "--null": true, "-r": true, "--no-run-if-empty": true, "-t": true, "--verbose": true, "-p": true, "--interactive": true, "-x": true, "--exit": true, "-o": true, "--open-tty": true },
+  sudo: { "-A": true, "-b": true, "-E": true, "-e": true, "-H": true, "-K": true, "-k": true, "-n": true, "-P": true, "-S": true, "-V": true, "-v": true, "--askpass": true, "--background": true, "--edit": true, "--help": true, "--login": true, "--non-interactive": true, "--preserve-env": true, "--remove-timestamp": true, "--reset-timestamp": true, "--stdin": true, "--validate": true, "--version": true }
+};
+var WRAPPER_VALUE_OPTIONS = {
+  env: ["-u", "--unset", "-C", "--chdir", "-S", "--split-string", "-a", "--argv0"],
+  xargs: ["-a", "--arg-file", "-d", "--delimiter", "-E", "--eof", "-I", "--replace", "-L", "--max-lines", "-n", "--max-args", "-P", "--max-procs", "-s", "--max-chars", "--process-slot-var"],
+  sudo: ["-C", "--close-from", "-D", "--chdir", "-g", "--group", "-h", "--host", "-p", "--prompt", "-R", "--chroot", "-r", "--role", "-t", "--type", "-T", "--command-timeout", "-u", "--user", "-U", "--other-user"]
+};
+function skipWrapperOptions(words, index, wrapper) {
+  const booleans = WRAPPER_BOOLEAN_OPTIONS[wrapper];
+  const values = WRAPPER_VALUE_OPTIONS[wrapper];
+  if (booleans === undefined || values === undefined)
+    return { index, opaque: words[index]?.normalized.startsWith("-") === true };
+  let opaque = false;
+  while (index < words.length) {
+    const token = words[index]?.normalized ?? "";
+    if (wrapper === "env" && /^[A-Za-z_][A-Za-z0-9_]*=/.test(token)) {
+      index++;
+      continue;
+    }
+    if (token === "--")
+      return { index: index + 1, opaque };
+    if (!token.startsWith("-") && !(wrapper === "sudo" && token.startsWith("+")))
+      break;
+    if (booleans[token] === true) {
+      index++;
+      continue;
+    }
+    const valueOption = values.find((option) => token === option || (option.startsWith("--") ? token.startsWith(`${option}=`) : token.startsWith(option)));
+    if (valueOption !== undefined) {
+      index += token === valueOption ? 2 : 1;
+      continue;
+    }
+    opaque = true;
+    index++;
+  }
+  return { index, opaque };
+}
+function commandExecutableIndex(words, start = 0) {
+  let opaqueWrapperOptions = false;
+  let index = start;
+  while (index < words.length) {
+    while (index < words.length && (/^[A-Za-z_][A-Za-z0-9_]*=/.test(words[index]?.normalized ?? "") || words[index]?.normalized === "!"))
+      index++;
+    const redirect = words[index]?.normalized ?? "";
+    if (/^\d*(?:>&|>\|)#redirect$/.test(redirect) || /^\d*(?:<&|<>)#stdin$/.test(redirect)) {
+      index += 2;
+      continue;
+    }
+    if (/^\d*<<#stdin$/.test(redirect)) {
+      index++;
+      continue;
+    }
+    if (/^\d*(?:<|<<<)#stdin$/.test(redirect)) {
+      index += 2;
+      continue;
+    }
+    if (/^\d*(?:>>?|>\|)$/.test(redirect)) {
+      index += 2;
+      continue;
+    }
+    if (/^\d*(?:>>?|>\|).+/.test(redirect)) {
+      index++;
+      continue;
+    }
+    const wrapper = words[index]?.normalized.split("/").pop() ?? words[index]?.normalized ?? "";
+    if (WRAPPERS[wrapper] !== true)
+      break;
+    const skipped = skipWrapperOptions(words, index + 1, wrapper);
+    index = skipped.index;
+    opaqueWrapperOptions ||= skipped.opaque;
+  }
+  return { index, opaqueWrapperOptions };
+}
 function splitCommands(source) {
   const positions = [];
   let current = [];
+  let pendingStdin = false;
+  const groupStdin = [];
   const flush = () => {
     if (current.length === 0)
-      return;
+      return false;
     const words = [...current];
-    const argv = words.map((word) => word.value);
-    let index = 0;
-    while (index < words.length && (/^[A-Za-z_][A-Za-z0-9_]*=/.test(words[index]?.value ?? "") || words[index]?.value === "!"))
-      index++;
-    while (index < words.length && WRAPPERS[words[index]?.value.split("/").pop() ?? words[index]?.value ?? ""] === true) {
-      const wrapper = words[index]?.value.split("/").pop() ?? words[index]?.value ?? "";
-      index++;
-      if (wrapper === "env")
-        while (index < words.length && (/^[A-Za-z_][A-Za-z0-9_]*=/.test(words[index]?.value ?? "") || words[index]?.value?.startsWith("-") === true))
-          index++;
-      if (wrapper === "xargs")
-        while (index < words.length && words[index]?.value?.startsWith("-") === true)
-          index++;
-      if (wrapper === "sudo")
-        while (index < words.length && words[index]?.value?.startsWith("-") === true) {
-          index++;
-          if (index < words.length && words[index]?.value?.startsWith("-") === false)
-            index++;
-        }
-    }
-    const executable = words[index] && !words[index]?.quoted ? words[index]?.value : undefined;
+    const argv = words.map((word) => word.normalized);
+    const resolved = commandExecutableIndex(words);
+    const { index, opaqueWrapperOptions } = resolved;
+    const executable = words[index]?.normalized;
     const raw = words.map((word) => word.quoted ? `'${word.value.replaceAll("'", "'\\''")}'` : word.value).join(" ");
-    positions.push({ raw, words, argv, executable });
+    positions.push({ raw, words, argv, executable, executableIndex: executable === undefined ? undefined : index, opaqueWrapperOptions, stdinFed: pendingStdin || groupStdin.includes(true) || words.some((word) => /^0*(?:<{1,3}|(?:<|<<|<<<)#stdin)/.test(word.normalized)) });
     current = [];
+    pendingStdin = false;
+    return true;
   };
-  for (const token of tokenize(source)) {
+  for (const token of structuralTokens(source)) {
     if (OPERATORS[token.value] === true) {
-      flush();
+      const hadCommand = flush();
+      if (token.value === "|")
+        pendingStdin = true;
+      else if (token.value === "(" || token.value === "{") {
+        groupStdin.push(pendingStdin || groupStdin.includes(true));
+        pendingStdin = false;
+      } else if (token.value === ")" || token.value === "}")
+        groupStdin.pop();
+      else if (hadCommand)
+        pendingStdin = false;
       continue;
     }
     current.push(token);
   }
   flush();
   return positions;
+}
+function shellCommandOperand(words, shellIndex) {
+  for (let argument = shellIndex + 1;argument < words.length; argument++) {
+    const word = words[argument];
+    if (word === undefined || word.normalized === "--")
+      return;
+    if (["-o", "+o", "-O", "+O", "--rcfile", "--init-file"].includes(word.normalized)) {
+      argument++;
+      continue;
+    }
+    if (/^[-+][^-]*c/.test(word.normalized))
+      return words[argument + 1];
+    if (word.normalized.startsWith("-") || word.normalized.startsWith("+"))
+      continue;
+    return;
+  }
+  return;
+}
+function shellHasScriptOperand(words, shellIndex) {
+  if (words.slice(0, shellIndex).some((word) => /^(?:BASH_ENV|ENV)=.+/.test(word.normalized)))
+    return true;
+  for (let argument = shellIndex + 1;argument < words.length; argument++) {
+    const word = words[argument];
+    if (word === undefined)
+      return false;
+    if (word.normalized === "--")
+      return words[argument + 1] !== undefined;
+    if (["--rcfile", "--init-file"].includes(word.normalized))
+      return words[argument + 1] !== undefined;
+    if (["-o", "+o", "-O", "+O"].includes(word.normalized)) {
+      argument++;
+      continue;
+    }
+    if (/^[-+][^-]*c/.test(word.normalized))
+      return false;
+    if (word.normalized.startsWith("-") || word.normalized.startsWith("+"))
+      continue;
+    return true;
+  }
+  return false;
 }
 function nestedSources(source) {
   const sources = [];
@@ -309,12 +532,41 @@ function nestedSources(source) {
       if (substitution[1] !== undefined)
         sources.push(substitution[1]);
   }
-  for (const match of source.matchAll(/\b(?:bash|sh|zsh|dash|ksh)\s+-c\s+((?:'[^']*')|(?:"[^"]*")|[^\s;&|]+)/g)) {
-    const value = match[1];
-    if (!value || value.startsWith('"$') || value.startsWith("'$"))
+  for (const position of splitCommands(source)) {
+    if ((position.executable?.split("/").pop() ?? position.executable) === "alias")
+      unknown = true;
+    const xargs = position.words.findIndex((word) => (word.normalized.split("/").pop() ?? word.normalized) === "xargs");
+    for (let index = 0;index < position.words.length; index++) {
+      const shell = position.words[index]?.normalized.split("/").pop() ?? "";
+      if (!["bash", "sh", "zsh", "dash", "ksh"].includes(shell))
+        continue;
+      if (shellHasScriptOperand(position.words, index))
+        unknown = true;
+      const command = shellCommandOperand(position.words, index);
+      if (command === undefined) {
+        if (xargs >= 0 && xargs < index && position.words.slice(index + 1).some((word) => /^[-+][^-]*c/.test(word.normalized)))
+          unknown = true;
+        if (position.stdinFed || shellHasScriptOperand(position.words, index))
+          unknown = true;
+        continue;
+      }
+      if (/(^|[^\\])[$`*?[\]{}~]/.test(command.value))
+        unknown = true;
+      else
+        sources.push(command.normalized);
+    }
+  }
+  for (const position of splitCommands(source)) {
+    const index = position.executableIndex;
+    if (index === undefined || (position.words[index]?.normalized.split("/").pop() ?? "") !== "trap")
+      continue;
+    const handler = position.words.slice(index + 1).find((word) => !word.normalized.startsWith("-"));
+    if (handler === undefined)
+      continue;
+    if (/(^|[^\\])[$`*?[\]{}~]/.test(handler.value))
       unknown = true;
     else
-      sources.push(value.replace(/^['"]|['"]$/g, ""));
+      sources.push(handler.normalized);
   }
   for (const match of source.matchAll(/\beval\s+((?:'[^']*')|(?:"[^"]*")|[^\s;&|]+)/g)) {
     const value = match[1];
@@ -334,18 +586,40 @@ function nestedSources(source) {
 }
 function staticParse(command) {
   if (command.length > 64000)
-    return { kind: "parse-failure", reason: "input exceeds 64000 characters", command, segments: [], commands: [], unknown: true, nested: [] };
+    return { kind: "parse-failure", reason: "input exceeds 64000 characters", command, segments: [], commands: [], unknown: true, unknownBeyondWrapperOptions: true, nested: [] };
   if (!shellQuoteBalanced(command))
-    return { kind: "parse-failure", reason: "unbalanced shell quote", command, segments: [], commands: [], unknown: true, nested: [] };
+    return { kind: "parse-failure", reason: "unbalanced shell quote", command, segments: [], commands: [], unknown: true, unknownBeyondWrapperOptions: true, nested: [] };
   const commands = splitCommands(command);
   const nested = nestedSources(command);
   const children = nested.sources.map(staticParse);
-  const unknown = nested.unknown || children.some((child) => child.unknown);
+  const unknownBeyondWrapperOptions = nested.unknown || children.some((child) => child.unknownBeyondWrapperOptions) || commands.some((position) => {
+    if (position.opaqueWrapperOptions && position.words.some((word) => /(^|[^\\])[$`*?[\]{}~]/.test(word.value)))
+      return true;
+    if (position.opaqueWrapperOptions && position.words.some((word) => ["bash", "sh", "zsh", "dash", "ksh"].includes(word.normalized.split("/").pop() ?? word.normalized)))
+      return true;
+    const index = position.executableIndex;
+    const source = index === undefined ? undefined : position.words[index]?.value;
+    const executable = position.executable?.split("/").pop();
+    if (executable === "eval" || executable === "source" || executable === ".")
+      return true;
+    if (executable === "then" || executable !== undefined && SHELL_CONTROL_WORDS[executable] === true)
+      return true;
+    if (executable === "find" && position.argv.some((word) => word === "-exec" || word === "-execdir"))
+      return true;
+    const envIndex = position.argv.findIndex((word) => (word.split("/").pop() ?? word) === "env");
+    if (envIndex >= 0 && position.argv.slice(envIndex + 1).some((word) => word.startsWith("-S") || word === "--split-string" || word.startsWith("--split-string=")))
+      return true;
+    if (position.executable?.includes(" "))
+      return true;
+    return source !== undefined && /(^|[^\\])[$`*?[\]{}~]/.test(source);
+  });
+  const unknown = unknownBeyondWrapperOptions || children.some((child) => child.unknown) || commands.some((position) => position.opaqueWrapperOptions);
   return {
     command,
     segments: commands.map((position) => position.argv),
     commands,
     unknown,
+    unknownBeyondWrapperOptions,
     nested: children
   };
 }
@@ -370,8 +644,8 @@ function parsedInvocations(parsed, executable = "bd") {
     const executableName = position.executable?.split("/").pop();
     if (executableName !== executable)
       continue;
-    const index = position.argv.findIndex((word, i) => !position.words[i]?.quoted && (word.split("/").pop() ?? word) === executable);
-    if (index < 0)
+    const index = position.executableIndex;
+    if (index === undefined)
       continue;
     const args = position.argv.slice(index + 1);
     const globals = [];
@@ -402,8 +676,7 @@ var BEAD_ID = /^[A-Za-z][A-Za-z0-9]*(?:-[A-Za-z0-9]+)+(?:\.\d+)*$/;
 var CLOSE_VERBS = { close: true, done: true };
 var DB_VALUE_FLAGS = { "--db": true, "-C": true, "--directory": true };
 var VALUE_FLAGS = { "--reason": true, "-r": true, "--message": true, "--session": true, "--assignee": true, "--status": true, "--type": true };
-function closeInvocations(command) {
-  const parsed = parse(command);
+function closeInvocationsFromParsed(parsed) {
   if (parsed.unknown)
     return [];
   const out = [];
@@ -456,6 +729,9 @@ function closeInvocations(command) {
     out.push({ ids, dbArgs });
   }
   return out;
+}
+function closeInvocations(command) {
+  return closeInvocationsFromParsed(parse(command));
 }
 var settingsCache = new Map;
 // extensions/bd-close-gate.ts
@@ -574,16 +850,35 @@ function scanGlobals(tokens, from) {
   }
   return { globals, next: i };
 }
-function globalValue(globals, names) {
-  for (const [index, token] of globals.entries()) {
-    for (const name of names) {
-      if (token === name)
-        return globals[index + 1];
-      if (token.startsWith(`${name}=`))
-        return token.slice(name.length + 1);
+function firstArgumentAfterPersistentOptions(args) {
+  return args[scanGlobals(args, 0).next];
+}
+function globalOptions(globals) {
+  const options = [];
+  for (let index = 0;index < globals.length; index++) {
+    const token = globals[index];
+    if (token.startsWith("-C") && token.length > 2) {
+      const value = token.slice(2);
+      options.push({ name: "-C", token, value: value.startsWith("=") ? value.slice(1) : value });
+      continue;
     }
+    const equals = token.indexOf("=");
+    if (equals >= 0) {
+      options.push({ name: token.slice(0, equals), token, value: token.slice(equals + 1) });
+      continue;
+    }
+    if (VALUE_FLAGS2.has(token))
+      options.push({ name: token, token, value: globals[++index] });
+    else
+      options.push({ name: token, token });
   }
-  return;
+  return options;
+}
+function globalValue(globals, names) {
+  return globalOptions(globals).findLast((option) => names.includes(option.name))?.value;
+}
+function globalFlagEnabled(globals, names) {
+  return globalOptions(globals).some((option) => names.includes(option.name) && flagEnabled([option.token], names));
 }
 function flagEnabled(tokens, names) {
   for (const token of tokens) {
@@ -664,6 +959,11 @@ function environmentForInput(input, base = process.env) {
   return env;
 }
 function invocationActor(invocation, env) {
+  const explicitActor = globalValue(invocation.globals, ["--actor"]);
+  if (explicitActor !== undefined) {
+    const actor = explicitActor.trim();
+    return actor !== "" && !/[$`]/.test(actor) ? actor : null;
+  }
   const resolve = (variable) => {
     const assignment = invocation.prefix.findLast((token) => token.startsWith(`${variable}=`));
     const value = assignment !== undefined ? assignment.slice(variable.length + 1) : invocation.exported[variable] ?? env[variable];
@@ -684,11 +984,11 @@ function invocationFromArgv(args) {
     return;
   return { verb: verb.toLowerCase(), args: args.slice(scanned.next + 1), globals: scanned.globals, prefix: [], exported: {} };
 }
-function isMutatingInvocation({ verb, args }) {
-  if (args.includes("--help") || args.includes("-h"))
+function isMutatingInvocation({ verb, args, globals }) {
+  if (globalFlagEnabled(globals, ["--help", "-h"]) || globalFlagEnabled(globals, ["--readonly"]))
     return false;
   if (verb === "duplicates")
-    return args.includes("--auto-merge") && !args.includes("--dry-run");
+    return args.includes("--auto-merge");
   if (MUTATING_VERBS[verb] === true)
     return true;
   if (verb === "ready")
@@ -696,8 +996,6 @@ function isMutatingInvocation({ verb, args }) {
   if (verb === "dep" && args.includes("--blocks"))
     return true;
   if (verb === "mol") {
-    if (args.includes("--dry-run"))
-      return false;
     const action = args[0] ?? "";
     if (MOL_WRITES[action] === true)
       return true;
@@ -708,9 +1006,6 @@ function isMutatingInvocation({ verb, args }) {
   }
   const action = args[0] ?? "";
   return GROUP_WRITES[verb]?.[action] === true;
-}
-function isMutatingBdCommand(command) {
-  return bdInvocations(command).some(isMutatingInvocation);
 }
 
 // extensions/bd-embedded-write-lock.ts
@@ -872,6 +1167,7 @@ var READS = {
   types: true,
   version: true,
   where: true,
+  audit: { list: true },
   config: { get: true, list: true },
   dep: { list: true, show: true, tree: true },
   dolt: { diff: true, log: true, status: true },
@@ -879,8 +1175,9 @@ var READS = {
   formula: { list: true, show: true },
   gate: { list: true, show: true },
   kv: { get: true, list: true },
-  mol: { list: true, show: true },
-  swarm: { list: true, show: true }
+  label: { list: true },
+  mol: { current: true, "last-activity": true, list: true, progress: true, ready: true, seed: true, show: true, stale: true },
+  swarm: { list: true, show: true, validate: true }
 };
 var WRITE_FLAGS = {
   orphans: ["--fix", "-f"],
@@ -892,22 +1189,83 @@ function writesStore(invocation) {
   if (invocation === undefined)
     return true;
   const { verb, args, globals } = invocation;
-  if (flagEnabled(globals, ["--help", "-h"]) || flagEnabled(args, ["--help", "-h"]))
+  if (globalFlagEnabled(globals, ["--help", "-h"]))
     return false;
-  if (flagEnabled(globals, ["--readonly"]))
+  if (globalFlagEnabled(globals, ["--readonly"]))
     return false;
+  if (verb === "mol" && args[0] === "wisp")
+    return args[1] !== "list";
   const rule = READS[verb];
   if (rule === undefined)
     return true;
   const writeFlags = WRITE_FLAGS[verb];
   if (writeFlags !== undefined && flagEnabled(args, writeFlags))
     return true;
-  const subaction = args.find((arg) => !arg.startsWith("-"));
+  const subaction = firstArgumentAfterPersistentOptions(args);
   if (rule === true)
     return false;
   if (rule === "idOnly")
     return subaction === undefined || !BEAD_ID2.test(subaction);
   return subaction === undefined || rule[subaction] !== true;
+}
+function storeSelection(invocation) {
+  let directory;
+  let db;
+  let database;
+  let global;
+  for (const option of globalOptions(invocation.globals)) {
+    if (option.name === "--global") {
+      global = option.token;
+      continue;
+    }
+    if (option.value === undefined)
+      continue;
+    switch (option.name) {
+      case "-C":
+      case "--directory":
+        directory = [option.name, option.value];
+        break;
+      case "--db":
+        db = [option.name, option.value];
+        break;
+      case "--database":
+        database = [option.name, option.value];
+        break;
+    }
+  }
+  return [...global === undefined ? [] : [global], ...directory ?? [], ...db ?? [], ...database ?? []];
+}
+function hasPostVerbStoreSelector(args) {
+  for (const token of args) {
+    if (token === "--")
+      return false;
+    if (token === "--global" || token.startsWith("--global="))
+      return true;
+    if (STORE_FLAGS.some((flag) => token === flag || token.startsWith(`${flag}=`)))
+      return true;
+  }
+  return false;
+}
+function commandBeadsDir(invocation) {
+  let found = false;
+  let value = "";
+  for (const assignment of invocation.prefix) {
+    if (!assignment.startsWith("BEADS_DIR="))
+      continue;
+    found = true;
+    value = assignment.slice("BEADS_DIR=".length);
+  }
+  return { found, dynamic: found && DEFERRED_VALUE.test(value), value };
+}
+function bdStoreForInvocation(invocation, cwd, env) {
+  const local = commandBeadsDir(invocation);
+  if (local.dynamic)
+    return;
+  return storeFor(storeSelection(invocation), cwd, local.found ? { ...env, BEADS_DIR: local.value } : env);
+}
+function bdInvocationUsesExternalStore(invocation) {
+  const selectors = storeSelection(invocation);
+  return flagEnabled(selectors, ["--global"]) || globalValue(selectors, ["--database"]) !== undefined;
 }
 function storeFor(globals, cwd, env) {
   if (flagEnabled(globals, ["--global"]))
@@ -964,6 +1322,64 @@ function embedded(store) {
 function embeddedStoreFor(cwd, env = process.env) {
   const store = storeFor([], cwd, env);
   return store !== undefined && embedded(store) ? store : undefined;
+}
+var OPERATOR = /[;&|<>(){}\\\n]/;
+var SUBSTITUTION = /\$\(|`/;
+var DEFERRED_VALUE = /[$`~*?[\]]/;
+var STORE_FLAGS = ["-C", "--directory", "--db", "--database"];
+function embeddedWriteTargets(command, cwd, env) {
+  const hasBd = parse(command).commands.some((position) => (position.executable?.split("/").pop() ?? position.executable) === "bd");
+  if (!hasBd)
+    return { kind: "stores", stores: [] };
+  const direct = directInvocation(command);
+  if (direct !== undefined) {
+    if (direct === "no-write" || !writesStore(direct))
+      return { kind: "stores", stores: [] };
+    if (commandBeadsDir(direct).dynamic)
+      return { kind: "refused", reason: "This bd mutation selects BEADS_DIR dynamically, so its target store cannot be serialized safely. Use a literal BEADS_DIR value and retry." };
+    const store = bdStoreForInvocation(direct, cwd, env);
+    return { kind: "stores", stores: store !== undefined && embedded(store) ? [store] : [] };
+  }
+  return {
+    kind: "refused",
+    reason: [
+      "This command mentions `bd` in a form the Beads write lock cannot resolve, so its target embedded store cannot be serialized safely.",
+      "The lock accepts exactly one shape: a bash call whose whole command is a single direct `bd` invocation, optionally preceded by literal `VAR=value` assignments, with no separators, pipes, redirections, grouping, command substitutions, escapes or newlines, and with a literal value for `-C` / `--directory` / `--db` / `--database`.",
+      "Issue the `bd` command as its own tool call in that form, and run the surrounding work as a separate call. `bd export -o issues.jsonl` rather than a redirection, and one call each rather than `&&`, are accepted."
+    ].join(" ")
+  };
+}
+function directInvocation(command) {
+  const tokens = tokenize(command);
+  if (tokens.some((token) => SUBSTITUTION.test(token.value)))
+    return;
+  if (tokens.some((token) => !token.quoted && OPERATOR.test(token.value)))
+    return;
+  const { index: i } = commandExecutableIndex(tokens);
+  const head = tokens[i];
+  if (head === undefined)
+    return;
+  const base = head.normalized.split("/").pop() ?? head.normalized;
+  if (base !== "bd")
+    return;
+  if (tokens.slice(0, i).some((token) => token.quoted || !/^[A-Za-z_]\w*=/.test(token.value)))
+    return;
+  if (tokens.slice(i + 1).some((token) => !token.quoted && /(^|[^\\])[$`*?[\]{}~]/.test(token.value)))
+    return;
+  const parsed = invocationFromArgv(tokens.slice(i + 1).map((token) => token.normalized));
+  const prefix = tokens.slice(0, i).filter((token) => token.quoted === false && /^[A-Za-z_]\w*=/.test(token.value)).map((token) => token.normalized);
+  const invocation = parsed === undefined ? undefined : { ...parsed, prefix };
+  if (invocation === undefined)
+    return "no-write";
+  if (hasPostVerbStoreSelector(invocation.args))
+    return;
+  const selectors = storeSelection(invocation);
+  for (const flag of STORE_FLAGS) {
+    const value = globalValue(selectors, [flag]);
+    if (value !== undefined && DEFERRED_VALUE.test(value))
+      return;
+  }
+  return invocation;
 }
 function ageOf(path) {
   try {
@@ -1232,23 +1648,29 @@ var pendingClaims = new Map;
 
 // extensions/session-beads-lifecycle.ts
 var EMBEDDED_PIN_ENV = { BEADS_DOLT_SHARED_SERVER: "" };
+function boundedBdEnvironment(base) {
+  return {
+    ...base,
+    ...EMBEDDED_PIN_ENV,
+    BD_NO_PAGER: "1",
+    BD_NON_INTERACTIVE: "1",
+    BD_DOLT_AUTO_START: "false",
+    NO_COLOR: "1"
+  };
+}
 function lifecycleBdEnvironment(cwd, base = process.env) {
   const env = { ...base };
   delete env.BEADS_DIR;
   const resolved = sessionPinFor(cwd);
   if (resolved !== undefined)
     env.BEADS_DIR = resolved;
-  env.BD_NO_PAGER = "1";
-  env.BD_NON_INTERACTIVE = "1";
-  env.BD_DOLT_AUTO_START = "false";
-  env.NO_COLOR = "1";
-  Object.assign(env, EMBEDDED_PIN_ENV);
-  return env;
+  return boundedBdEnvironment(env);
 }
 function bdStoreDir(cwd, env) {
-  const dir = env.BEADS_DIR ?? join2(cwd, ".beads");
+  const selected = env.BEADS_DIR;
+  const dir = selected ? isAbsolute3(selected) ? selected : resolve4(cwd, selected) : join2(cwd, ".beads");
   try {
-    return statSync3(dir).isDirectory() ? dir : undefined;
+    return statSync3(dir).isDirectory() ? resolve4(dir) : undefined;
   } catch {
     return;
   }
@@ -1258,6 +1680,8 @@ function bdReadFailure(scope, reason) {
   return scope === "start" ? `Beads gates could not be verified at session start: ${bounded}.` : `Beads claims could not be read at session close: ${bounded}. A mutating command was attempted; inspect assigned and touched work before stopping.`;
 }
 var TIMEOUT_MS = 8000;
+var BD_COMMAND_CEILING_MS = 120000;
+var GATE_ADMISSION_MS = 20000;
 var MAX_LISTED = 8;
 var AUTO_GATE_TYPES = {
   timer: true,
@@ -1423,9 +1847,12 @@ function gatesCanResolve(gates) {
 }
 function readCheckOutcome(stdout) {
   const data = envelopeData(parseTrailingJson(stdout));
-  const record = data !== null && typeof data === "object" ? data : {};
-  const count = (key) => typeof record[key] === "number" ? record[key] : 0;
-  return { resolved: count("resolved"), escalated: count("escalated"), errors: count("errors") };
+  if (data === null || typeof data !== "object")
+    return;
+  const record = data;
+  if (typeof record.resolved !== "number" || typeof record.escalated !== "number" || typeof record.errors !== "number")
+    return;
+  return { resolved: record.resolved, escalated: record.escalated, errors: record.errors };
 }
 function formatGateAdvisory(gates, outcome) {
   if (gates.length === 0)
@@ -1481,7 +1908,7 @@ function bdVerbs(command) {
   return bdInvocations(command).map((invocation) => invocation.verb);
 }
 function isBdWrite(command) {
-  return isMutatingBdCommand(command);
+  return bdInvocations(command).some((invocation) => writesStore(invocation));
 }
 function beadIdCandidates(command) {
   const ids = [];
@@ -1533,74 +1960,186 @@ function commandSucceeded(event) {
   }
   return !/\bCommand exited with code -?[1-9]\d*\b/u.test(resultText(event));
 }
-function recordClaimTransitions(state, command, env, event) {
-  const invocations = bdInvocations(command);
+function claimTarget(invocation, cwd, env) {
+  const localStore = invocation.prefix.findLast((token) => token.startsWith("BEADS_DIR="))?.slice("BEADS_DIR=".length);
+  const global = flagEnabled(invocation.globals, ["--global"]);
+  const database = globalValue(invocation.globals, ["--database"]);
+  const db = globalValue(invocation.globals, ["--db"]);
+  const directory = globalValue(invocation.globals, ["-C", "--directory"]);
+  const base = directory === undefined ? cwd : resolve4(cwd, directory);
+  const selector = global ? ["global"] : database !== undefined ? ["database", database] : db !== undefined ? ["db", resolve4(base, db)] : directory !== undefined ? ["directory", base] : undefined;
+  const store = bdStoreForInvocation(invocation, cwd, env);
+  if (selector !== undefined)
+    return { key: `external:${JSON.stringify(selector)}`, store };
+  if (store !== undefined)
+    return { key: store, store };
+  return { key: `external:${JSON.stringify(["beadsDir", localStore === undefined ? undefined : resolve4(cwd, localStore)])}`, store: undefined };
+}
+function trackedClaimKey(target, id) {
+  return `${target.key}\x00${id}`;
+}
+function setTrackedClaim(state, target, id, actor) {
+  if (target.store !== undefined) {
+    for (const [key, claim] of state.claims) {
+      if (claim.id === id && claim.store === target.store)
+        state.claims.delete(key);
+    }
+  }
+  state.claims.set(trackedClaimKey(target, id), { id, actor, store: target.store });
+}
+function deleteTrackedClaim(state, target, id) {
+  state.claims.delete(trackedClaimKey(target, id));
+  if (target.store === undefined)
+    return;
+  for (const [key, claim] of state.claims) {
+    if (claim.id === id && claim.store === target.store)
+      state.claims.delete(key);
+  }
+}
+var TRANSITION_VALUE_FLAGS = {
+  "--actor": true,
+  "--database": true,
+  "--db": true,
+  "-C": true,
+  "--directory": true,
+  "--dolt-auto-commit": true,
+  "--mem-profile": true,
+  "--acceptance": true,
+  "--add-label": true,
+  "--append-notes": true,
+  "--assignee": true,
+  "-a": true,
+  "--await-id": true,
+  "--body-file": true,
+  "--defer": true,
+  "--description": true,
+  "-d": true,
+  "--design": true,
+  "--design-file": true,
+  "--due": true,
+  "--estimate": true,
+  "-e": true,
+  "--external-ref": true,
+  "--if-assignee": true,
+  "--if-status": true,
+  "--metadata": true,
+  "--notes": true,
+  "--parent": true,
+  "--priority": true,
+  "-p": true,
+  "--remove-label": true,
+  "--session": true,
+  "--set-labels": true,
+  "--set-metadata": true,
+  "--spec-id": true,
+  "--status": true,
+  "-s": true,
+  "--title": true,
+  "--type": true,
+  "-t": true,
+  "--unset-metadata": true,
+  "--reason": true,
+  "-r": true,
+  "--message": true
+};
+function commandTransitionFlags(args) {
+  let actorOverride;
+  let claim = false;
+  for (let index = 0;index < args.length; index++) {
+    const token = args[index];
+    const name = token.split("=", 1)[0] ?? token;
+    if (TRANSITION_VALUE_FLAGS[name] === true) {
+      if (name === "--actor")
+        actorOverride = token.includes("=") ? token.slice(token.indexOf("=") + 1) : args[index + 1];
+      if (!token.includes("="))
+        index++;
+      continue;
+    }
+    if (flagEnabled([token], ["--help", "-h"]))
+      return { actorOverride, claim, help: true };
+    if (flagEnabled([token], ["--claim"]))
+      claim = true;
+  }
+  return { actorOverride, claim, help: false };
+}
+function recordClaimTransitions(state, command, cwd, env, event, invocations) {
+  const transitionInvocations = invocations.flatMap((invocation) => {
+    const flags = commandTransitionFlags(invocation.args);
+    return globalFlagEnabled(invocation.globals, ["--help", "-h"]) || flags.help ? [] : [{ flags, invocation }];
+  });
   const parsedCommand = parse(command);
   const commandTokens = tokenizeShell(command);
   const terminalToken = commandTokens.findLast((token) => token.value !== `
 `)?.value;
   const executables = parsedCommand.commands.map((position) => position.executable?.split("/").pop());
   const directCommand = executables.length === 1 && executables[0] === "bd" || executables.length === 2 && executables[0] === "cd" && executables[1] === "bd" && leadingCdCwd(command, "") !== "";
-  const mutationSucceededDirectly = !parsedCommand.unknown && parsedCommand.nested.length === 0 && directCommand && invocations.length === 1 && terminalToken !== "&";
+  const mutationSucceededDirectly = !parsedCommand.unknown && parsedCommand.nested.length === 0 && directCommand && transitionInvocations.length === 1 && terminalToken !== "&";
   const output = claimResultOutput(event);
   const allOutputIds = new Set(claimedIds(output));
   const labeledOutputIds = new Set(claimedTextIds(output));
-  const claimInvocations = invocations.flatMap((invocation) => {
-    const enabled = invocation.verb === "claim" || (invocation.verb === "update" || invocation.verb === "ready") && flagEnabled(invocation.args, ["--claim"]);
-    const actor = enabled ? invocationActor(invocation, env) : null;
-    return actor === null ? [] : [{ actor, directIds: mutationTargetIds(invocation.args) }];
+  const claimInvocations = transitionInvocations.flatMap(({ flags, invocation }) => {
+    const enabled = invocation.verb === "claim" || (invocation.verb === "update" || invocation.verb === "ready") && flags.claim;
+    const actor = enabled ? flags.actorOverride ?? invocationActor(invocation, env) : null;
+    return actor === null ? [] : [{ actor, directIds: mutationTargetIds(invocation.args), invocation, target: claimTarget(invocation, cwd, env) }];
   });
-  const actorsById = new Map;
-  for (const { actor, directIds } of claimInvocations) {
+  const actorsByClaim = new Map;
+  for (const { actor, directIds, target } of claimInvocations) {
     for (const id of directIds) {
-      const actors = actorsById.get(id) ?? new Set;
+      const key = trackedClaimKey(target, id);
+      const actors = actorsByClaim.get(key) ?? new Set;
       actors.add(actor);
-      actorsById.set(id, actors);
+      actorsByClaim.set(key, actors);
     }
   }
-  for (const { actor, directIds } of claimInvocations) {
+  for (const { actor, directIds, target } of claimInvocations) {
     if (mutationSucceededDirectly) {
+      state.actors.add(actor);
       for (const id of directIds.length > 0 ? directIds : allOutputIds)
-        state.claims.set(id, actor);
+        setTrackedClaim(state, target, id, actor);
       continue;
     }
     for (const id of directIds) {
       if (!labeledOutputIds.has(id))
         continue;
-      const actors = actorsById.get(id);
-      state.claims.set(id, actors?.size === 1 ? actor : undefined);
+      const actors = actorsByClaim.get(trackedClaimKey(target, id));
+      state.actors.add(actor);
+      setTrackedClaim(state, target, id, actors?.size === 1 ? actor : undefined);
     }
   }
   if (!mutationSucceededDirectly)
     return;
+  const entry = transitionInvocations[0];
+  if (entry === undefined)
+    return;
+  const { invocation } = entry;
+  const target = claimTarget(invocation, cwd, env);
   for (const close of closeInvocations(command)) {
     for (const id of close.ids)
-      state.claims.delete(id);
+      deleteTrackedClaim(state, target, id);
   }
-  const [invocation] = invocations;
-  if (invocation?.verb === "assign") {
+  if (invocation.verb === "assign") {
     const [idToken, assignee] = invocation.args;
     const [id] = idToken === undefined ? [] : beadIdCandidates(idToken);
     if (id !== undefined && assignee !== undefined) {
       if (state.actors.has(assignee))
-        state.claims.set(id, assignee);
+        setTrackedClaim(state, target, id, assignee);
       else
-        state.claims.delete(id);
+        deleteTrackedClaim(state, target, id);
     }
     return;
   }
-  if (invocation?.verb !== "update")
+  if (invocation.verb !== "update")
     return;
   const status = optionValue(invocation.args, ["--status", "-s"]);
   const assignee = optionValue(invocation.args, ["--assignee", "-a"]);
   for (const id of mutationTargetIds(invocation.args)) {
     if (status === "closed" || assignee === "")
-      state.claims.delete(id);
+      deleteTrackedClaim(state, target, id);
     else if (assignee !== undefined) {
       if (state.actors.has(assignee))
-        state.claims.set(id, assignee);
+        setTrackedClaim(state, target, id, assignee);
       else
-        state.claims.delete(id);
+        deleteTrackedClaim(state, target, id);
     }
   }
 }
@@ -1632,12 +2171,15 @@ function releaseClaimArgs(id, holder, env = process.env, releasedAt = new Date()
 function shellQuote(value) {
   return `'${value.replaceAll("'", "'\\''")}'`;
 }
-function releaseClaimCommand(id, holder, env = process.env, releasedAt = new Date().toISOString(), casSupported = true) {
+function releaseClaimCommand(id, holder, env = process.env, releasedAt = new Date().toISOString(), casSupported = true, targetStore) {
   const args = releaseClaimArgs(id, holder, env, releasedAt, casSupported);
   if (args === undefined)
     return;
   const actor = env.BD_ACTOR?.trim() || env.BEADS_ACTOR?.trim() || "";
-  return [`BEADS_ACTOR=${shellQuote(actor)}`, `BD_ACTOR=${shellQuote(actor)}`, "bd", ...args].map((value, index) => index < 2 ? value : shellQuote(value)).join(" ");
+  const assignments = [`BEADS_ACTOR=${shellQuote(actor)}`, `BD_ACTOR=${shellQuote(actor)}`];
+  if (targetStore !== undefined)
+    assignments.unshift(`BEADS_DIR=${shellQuote(targetStore)}`);
+  return [...assignments, "bd", ...args.map(shellQuote)].join(" ");
 }
 function readBeads(stdout) {
   const data = envelopeData(parseTrailingJson(stdout));
@@ -1690,7 +2232,7 @@ function formatSessionCloseAdvisory(beads, env = process.env, releasedAt = new D
     if (anchor !== undefined)
       lines.push(`  Lease anchor: host=${anchor.host} pid=${anchor.pid}; check that process on that host before takeover.`);
     const actor = bead.assignee !== undefined && effectiveActors.has(bead.assignee) ? bead.assignee : undefined;
-    const release = bead.assignee === undefined || actor === undefined ? undefined : releaseClaimCommand(bead.id, bead.assignee, { ...env, BD_ACTOR: actor }, releasedAt, casSupported);
+    const release = bead.assignee === undefined || actor === undefined || bead.releaseStore === null ? undefined : releaseClaimCommand(bead.id, bead.assignee, { ...env, BD_ACTOR: actor }, releasedAt, casSupported, bead.releaseStore);
     if (release === undefined) {
       lines.push("  Release unavailable: the effective actor is missing or ambiguous; verify the current assignee and actor before retrying.");
     } else {
@@ -1708,11 +2250,12 @@ function formatSessionCloseAdvisory(beads, env = process.env, releasedAt = new D
 function trackedClaimAdvisory(state) {
   if (state.claims.size === 0)
     return;
-  const claims = [...state.claims].map(([id, assignee]) => ({
-    id,
+  const claims = [...state.claims.values()].map((claim) => ({
+    id: claim.id,
     title: "claim recorded by this session",
     status: "in_progress",
-    assignee
+    assignee: claim.actor,
+    releaseStore: claim.store ?? null
   }));
   return formatSessionCloseAdvisory(claims, {}, new Date().toISOString(), true, state.actors);
 }
@@ -1733,6 +2276,31 @@ function handleSessionStop(event, listOutput, seen, actor = process.env.BEADS_AC
     return;
   const actors = typeof actor === "string" ? new Set(actor.trim() ? [actor.trim()] : []) : actor;
   return { continue: true, additionalContext: formatSessionCloseAdvisory(held, {}, new Date().toISOString(), casSupported, actors) };
+}
+var backgroundReads = new Set;
+function track(pending) {
+  backgroundReads.add(pending);
+  const forget = () => {
+    backgroundReads.delete(pending);
+  };
+  pending.then(forget, forget);
+  return pending;
+}
+async function settleBackgroundWorkForTests() {
+  while (backgroundReads.size > 0)
+    await Promise.allSettled([...backgroundReads]);
+}
+async function settleWithin(pending, budgetMs) {
+  if (budgetMs <= 0)
+    return;
+  const { promise, resolve } = Promise.withResolvers();
+  const timer = setTimeout(resolve, budgetMs);
+  timer.unref();
+  try {
+    return await Promise.race([pending, promise]);
+  } finally {
+    clearTimeout(timer);
+  }
 }
 var internalRuns = 0;
 var injectedStream = null;
@@ -1773,9 +2341,11 @@ async function spawnBd(cwd, args, deadline, env) {
       stdout: "pipe",
       stderr: "pipe",
       env: { ...env, BD_NO_PAGER: "1", BD_NON_INTERACTIVE: "1", BD_JSON_ENVELOPE: "1" },
-      timeout: Math.min(TIMEOUT_MS, remaining),
+      timeout: Math.min(BD_COMMAND_CEILING_MS, remaining),
       killSignal: "SIGKILL"
     });
+    if (!writesStore(invocationFromArgv(args)))
+      proc.unref();
     const [out, stderr] = await Promise.all([
       new Response(proc.stdout).text(),
       new Response(proc.stderr).text()
@@ -1808,32 +2378,38 @@ function consumeLastPush(dir) {
   } catch {}
   return notice;
 }
-async function gateAdvisory(cwd, deadline, env) {
-  const listed = await runBdResult(cwd, ["gate", "list", "--json"], deadline, env);
+async function gateAdvisory(cwd, env) {
+  const runGate = (args) => runBdResult(cwd, args, Date.now() + BD_COMMAND_CEILING_MS, env);
+  const listed = await runGate(["gate", "list", "--json"]);
   if (!("output" in listed))
-    return bdReadFailure("start", listed.failure);
+    return { notice: bdReadFailure("start", listed.failure), verified: false };
   let gates = readGateList(listed.output);
   if (gates === undefined)
-    return "Beads gate list returned malformed data; unresolved gates remain unverified.";
+    return { notice: "Beads gate list returned malformed data; unresolved gates remain unverified.", verified: false };
   if (gates.length === 0)
-    return;
+    return { verified: true };
   let outcome;
   if (gatesCanResolve(gates)) {
-    const checked = await runBdResult(cwd, ["gate", "check", "--json"], deadline, env);
+    const checked = await runGate(["gate", "check", "--json"]);
     if (!("output" in checked))
-      return bdReadFailure("start", checked.failure);
+      return { notice: bdReadFailure("start", checked.failure), verified: false };
     outcome = readCheckOutcome(checked.output);
+    if (outcome === undefined)
+      return { notice: "Beads gate check returned malformed data; unresolved gates remain unverified.", verified: false };
+    if (outcome.errors > 0) {
+      return { notice: `Beads gate check reported ${outcome.errors} error(s); unresolved gates remain unverified.`, verified: false };
+    }
     if (outcome.resolved > 0) {
-      const relisted = await runBdResult(cwd, ["gate", "list", "--json"], deadline, env);
+      const relisted = await runGate(["gate", "list", "--json"]);
       if (!("output" in relisted))
-        return bdReadFailure("start", relisted.failure);
+        return { notice: bdReadFailure("start", relisted.failure), verified: false };
       const relistedGates = readGateList(relisted.output);
       if (relistedGates === undefined)
-        return "Beads gate list returned malformed data; unresolved gates remain unverified.";
+        return { notice: "Beads gate list returned malformed data; unresolved gates remain unverified.", verified: false };
       gates = relistedGates;
     }
   }
-  return formatGateAdvisory(gates, outcome);
+  return { notice: formatGateAdvisory(gates, outcome), verified: true };
 }
 function resultText(event) {
   let text = "";
@@ -1844,9 +2420,18 @@ function resultText(event) {
   }
   return text;
 }
-var sessionPinGetter;
+var LIFECYCLE_BRIDGE = Symbol.for("com.srobroek.beads.session-lifecycle.bridge.v1");
+function lifecycleBridge() {
+  const globals = globalThis;
+  const existing = globals[LIFECYCLE_BRIDGE];
+  if (existing !== undefined)
+    return existing;
+  const created = {};
+  globals[LIFECYCLE_BRIDGE] = created;
+  return created;
+}
 function pinnedBeadsDir(cwd, ctx) {
-  const pin = ctx === undefined ? undefined : sessionPinGetter?.(cwd, ctx);
+  const pin = ctx === undefined ? undefined : lifecycleBridge().sessionPinGetter?.(cwd, ctx);
   return pin ?? (ctx === undefined ? sessionPinFor(cwd) : undefined);
 }
 function rewriteBashInput(input, ctx) {
@@ -1854,13 +2439,40 @@ function rewriteBashInput(input, ctx) {
   const pin = pinnedBeadsDir(cwd, ctx);
   return pinBashInput(input, pin === "" ? undefined : pin);
 }
+async function admitBeadsWork(ctx, cwd = ctx?.cwd ?? process.cwd(), env = lifecycleBdEnvironment(cwd), refresh = true) {
+  const gateAdmitter = lifecycleBridge().gateAdmitter;
+  if (gateAdmitter === undefined)
+    return;
+  return await gateAdmitter(resolve4(cwd), boundedBdEnvironment(env), ctx, refresh);
+}
+async function admitBdMutation(input, ctx, targetEnabled) {
+  const command = commandFromInput(input ?? {});
+  if (!command)
+    return;
+  const writes = bdInvocations(command).filter((invocation) => writesStore(invocation));
+  if (writes.length === 0)
+    return;
+  const effectiveInput = rewriteBashInput(input, ctx) ?? input;
+  const cwd = bashCallCwd(effectiveInput, ctx?.cwd ?? process.cwd());
+  const env = environmentForInput(effectiveInput);
+  const writeTargets = embeddedWriteTargets(command, cwd, env);
+  if (writeTargets.kind === "refused")
+    return { block: true, reason: writeTargets.reason };
+  const direct = writes.length === 1 ? writes[0] : undefined;
+  if (direct !== undefined && bdInvocationUsesExternalStore(direct))
+    return;
+  const store = direct === undefined ? undefined : bdStoreForInvocation(direct, cwd, env);
+  if (targetEnabled?.(store === undefined ? cwd : dirname3(store)) === false)
+    return;
+  return await admitBeadsWork(ctx, cwd, store === undefined ? env : { ...env, BEADS_DIR: store }, false);
+}
 function sessionBeadsLifecycle(pi) {
   const sessions = new Map;
   function stateFor(ctx) {
     const key = sessionKey(ctx);
     let state = sessions.get(key);
     if (!state) {
-      state = { actors: new Set, bdWrote: false, claims: new Map, repos: new Map, staleAdvised: false, stopFired: false, touched: new Set };
+      state = { actors: new Set, bdWrote: false, claims: new Map, gates: new Map, repos: new Map, staleAdvised: false, stopFired: false, touched: new Set };
       sessions.set(key, state);
     }
     return state;
@@ -1874,11 +2486,41 @@ function sessionBeadsLifecycle(pi) {
     state.repos.set(key, identity);
     return identity;
   }
-  sessionPinGetter = (cwd, ctx) => {
+  const advise = (content) => {
+    pi.sendMessage({ customType: "com.srobroek.beads.session-lifecycle", content, display: true, attribution: "user" }, { triggerTurn: false });
+  };
+  lifecycleBridge().sessionPinGetter = (cwd, ctx) => {
     const state = sessions.get(sessionKey(ctx));
     if (state?.repo !== undefined && identityFor(state, cwd) !== state.repo)
       return;
     return state?.pin ?? process.env.BEADS_DIR ?? sessionPinFor(cwd);
+  };
+  const verificationFor = (key, state, cwd, env, refresh = false) => {
+    const dir = bdStoreDir(cwd, env);
+    if (dir === undefined)
+      return;
+    const existing = state.gates.get(dir);
+    if (existing !== undefined && (existing.verdict === undefined || !refresh && existing.verdict.verified === true || existing.verdict.verified === true && existing.admitted !== true))
+      return existing;
+    if (existing !== undefined)
+      state.gates.delete(dir);
+    const verification = (async () => {
+      try {
+        return await gateAdvisory(cwd, env);
+      } catch (error) {
+        const reason = error instanceof Error ? error.message : String(error);
+        pi.logger.error("beads gate check failed", { error: reason, store: dir });
+        return { notice: bdReadFailure("start", reason), verified: false };
+      }
+    })();
+    const gate = { pending: verification };
+    state.gates.set(dir, gate);
+    track(verification.then((verdict) => {
+      gate.verdict = verdict;
+      if (verdict.notice !== undefined && sessions.get(key) === state)
+        advise(verdict.notice);
+    }));
+    return gate;
   };
   pi.on("session_start", async (_event, ctx) => {
     const key = sessionKey(ctx);
@@ -1890,36 +2532,39 @@ function sessionBeadsLifecycle(pi) {
       state.repo = identityFor(state, cwd);
       state.pin = sessionPinAfter(pin, cwd);
       if (pin.conflict !== undefined) {
-        pi.sendMessage({
-          customType: "com.srobroek.beads.session-lifecycle",
-          content: `This process is pinned to another repository's beads database (\`BEADS_DIR=${pin.conflict}\`) by a live session. ` + "Bash calls in this checkout use its own `.beads`; calls in other repositories remain unpinned unless they provide `BEADS_DIR`.",
-          display: true,
-          attribution: "user"
-        }, { triggerTurn: false });
-        return;
+        advise(`This process is pinned to another repository's beads database (\`BEADS_DIR=${pin.conflict}\`) by a live session. ` + "Bash calls in this checkout use its own `.beads`; calls in other repositories remain unpinned unless they provide `BEADS_DIR`.");
       }
       const bdEnv = lifecycleBdEnvironment(cwd);
       const dir = bdStoreDir(cwd, bdEnv);
       if (dir === undefined)
         return;
-      const deadline = Date.now() + TIMEOUT_MS;
-      const notices = [consumeLastPush(dir), await gateAdvisory(cwd, deadline, bdEnv)].filter((notice) => notice !== undefined);
-      if (sessions.get(key) !== state || notices.length === 0)
-        return;
-      pi.sendMessage({
-        customType: "com.srobroek.beads.session-lifecycle",
-        content: notices.join(`
-
-`),
-        display: true,
-        attribution: "user"
-      }, { triggerTurn: false });
+      const pushed = consumeLastPush(dir);
+      if (pushed !== undefined)
+        advise(pushed);
+      verificationFor(key, state, cwd, bdEnv);
     } catch (error) {
       pi.logger.error("beads session-start check failed", {
         error: error instanceof Error ? error.message : String(error)
       });
     }
   });
+  lifecycleBridge().gateAdmitter = async (cwd, env, ctx, refresh) => {
+    const key = sessionKey(ctx);
+    const state = sessions.get(key);
+    if (state === undefined)
+      return;
+    const gate = verificationFor(key, state, cwd, env, refresh);
+    if (gate === undefined)
+      return;
+    if (gate.verdict === undefined)
+      await settleWithin(gate.pending, GATE_ADMISSION_MS);
+    if (gate.verdict?.verified === true) {
+      gate.admitted = true;
+      return;
+    }
+    const reason = gate.verdict?.notice === undefined ? `automatic beads gates are still being verified for ${cwd} after ${GATE_ADMISSION_MS} ms, so an automatic gate may still be unresolved and this operation would pick or change work ahead of it. The read is slow, not failed` : `automatic beads gates could not be verified for ${cwd}, so this operation could pick or change work while a gate remains unresolved. ${gate.verdict.notice}`;
+    return { block: true, reason };
+  };
   pi.on("session_shutdown", (_event, ctx) => {
     const key = sessionKey(ctx);
     const state = sessions.get(key);
@@ -1942,18 +2587,23 @@ function sessionBeadsLifecycle(pi) {
         return;
       const input = event.input ?? {};
       const command = commandFromInput(input);
-      if (!command || !/\bbd\s+/.test(command))
+      if (!command)
+        return;
+      const invocations = bdInvocations(command);
+      if (invocations.length === 0)
         return;
       const state = stateFor(ctx);
       if (isBdWrite(command)) {
         state.bdWrote = true;
-        const env = environmentForInput(input);
+        const effectiveInput = rewriteBashInput(input, ctx) ?? input;
+        const cwd = bashCallCwd(effectiveInput, ctx?.cwd ?? process.cwd());
+        const env = environmentForInput(effectiveInput);
         for (const actor of actorValues(command, env))
           state.actors.add(actor);
         for (const id of beadIdCandidates(command))
           state.touched.add(id);
         if (commandSucceeded(event))
-          recordClaimTransitions(state, command, env, event);
+          recordClaimTransitions(state, command, cwd, env, event, invocations);
       }
       if (state.staleAdvised)
         return;
@@ -1981,6 +2631,8 @@ function sessionBeadsLifecycle(pi) {
 }
 export {
   AUTO_GATE_TYPES,
+  admitBdMutation,
+  admitBeadsWork,
   autoPinBeadsDir,
   bdVerbs,
   beadIdCandidates,
@@ -2014,5 +2666,6 @@ export {
   sessionPinAfter,
   sessionPinFor,
   setBdStreamForTests,
+  settleBackgroundWorkForTests,
   staleSkipNotice
 };

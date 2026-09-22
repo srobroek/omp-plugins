@@ -54,20 +54,99 @@ function tokenizeShell(command, options = {}) {
       i++;
       continue;
     }
+    if (options.preserveInputRedirects && ch === "<" && command[i + 1] === ">") {
+      let descriptor = "";
+      if (started && /^\d+$/.test(current)) {
+        descriptor = current;
+        current = "";
+        started = false;
+        startsQuoted = false;
+        sawQuote = false;
+      } else
+        flush();
+      out.push(token(`${descriptor}<>#stdin`));
+      i++;
+      continue;
+    }
     if (ch === "<" && command[i + 1] === "<" && command[i + 2] === "<") {
-      flush();
-      out.push(token("<<<"));
+      if (!options.preserveInputRedirects) {
+        flush();
+        out.push(token("<<<"));
+      } else {
+        let descriptor = "";
+        if (started && /^\d+$/.test(current)) {
+          descriptor = current;
+          current = "";
+          started = false;
+          startsQuoted = false;
+          sawQuote = false;
+        } else
+          flush();
+        out.push(token(`${descriptor}<<<#stdin`));
+      }
       i += 2;
       continue;
     }
     if (ch === "<" && command[i + 1] === "<") {
       const operator = hereDocumentOperator(command, i);
       if (operator !== null) {
-        flush();
+        let descriptor = "";
+        if (options.preserveInputRedirects && started && /^\d+$/.test(current)) {
+          descriptor = current;
+          current = "";
+          started = false;
+          startsQuoted = false;
+          sawQuote = false;
+        } else
+          flush();
+        if (options.preserveInputRedirects)
+          out.push(token(`${descriptor}<<#stdin`));
         pending.push(operator);
         i = operator.end - 1;
         continue;
       }
+    }
+    if (options.preserveInputRedirects && ch === ">" && command[i + 1] === "|") {
+      let descriptor = "";
+      if (started && /^\d+$/.test(current)) {
+        descriptor = current;
+        current = "";
+        started = false;
+        startsQuoted = false;
+        sawQuote = false;
+      } else
+        flush();
+      out.push(token(`${descriptor}>|#redirect`));
+      i++;
+      continue;
+    }
+    if (options.preserveInputRedirects && (ch === ">" || ch === "<") && command[i + 1] === "&") {
+      let descriptor = "";
+      if (started && /^\d+$/.test(current)) {
+        descriptor = current;
+        current = "";
+        started = false;
+        startsQuoted = false;
+        sawQuote = false;
+      } else
+        flush();
+      out.push(token(`${descriptor}${ch}&#${ch === "<" ? "stdin" : "redirect"}`));
+      i++;
+      continue;
+    }
+    if (ch === "<" && options.preserveInputRedirects) {
+      let descriptor = "";
+      if (started && /^\d+$/.test(current)) {
+        descriptor = current;
+        current = "";
+        started = false;
+        startsQuoted = false;
+        sawQuote = false;
+      } else
+        flush();
+      if (options.preserveInputRedirects)
+        out.push(token(`${descriptor}<#stdin`));
+      continue;
     }
     if (ch === `
 `) {
@@ -302,16 +381,29 @@ function scanGlobals(tokens, from) {
   }
   return { globals, next: i };
 }
-function globalValue(globals, names) {
-  for (const [index, token] of globals.entries()) {
-    for (const name of names) {
-      if (token === name)
-        return globals[index + 1];
-      if (token.startsWith(`${name}=`))
-        return token.slice(name.length + 1);
+function globalOptions(globals) {
+  const options = [];
+  for (let index = 0;index < globals.length; index++) {
+    const token = globals[index];
+    if (token.startsWith("-C") && token.length > 2) {
+      const value = token.slice(2);
+      options.push({ name: "-C", token, value: value.startsWith("=") ? value.slice(1) : value });
+      continue;
     }
+    const equals = token.indexOf("=");
+    if (equals >= 0) {
+      options.push({ name: token.slice(0, equals), token, value: token.slice(equals + 1) });
+      continue;
+    }
+    if (VALUE_FLAGS.has(token))
+      options.push({ name: token, token, value: globals[++index] });
+    else
+      options.push({ name: token, token });
   }
-  return;
+  return options;
+}
+function globalValue(globals, names) {
+  return globalOptions(globals).findLast((option) => names.includes(option.name))?.value;
 }
 function flagEnabled(tokens, names) {
   for (const token of tokens) {

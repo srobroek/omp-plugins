@@ -1,4 +1,7 @@
 // @bun
+// extensions/bash-gates.ts
+import { resolve as resolve6 } from "path";
+
 // extensions/shell-tokenizer.ts
 var SEPARATORS = new Set([";", "&", "|", "(", ")", `
 `]);
@@ -54,20 +57,99 @@ function tokenizeShell(command, options = {}) {
       i++;
       continue;
     }
+    if (options.preserveInputRedirects && ch === "<" && command[i + 1] === ">") {
+      let descriptor = "";
+      if (started && /^\d+$/.test(current)) {
+        descriptor = current;
+        current = "";
+        started = false;
+        startsQuoted = false;
+        sawQuote = false;
+      } else
+        flush();
+      out.push(token(`${descriptor}<>#stdin`));
+      i++;
+      continue;
+    }
     if (ch === "<" && command[i + 1] === "<" && command[i + 2] === "<") {
-      flush();
-      out.push(token("<<<"));
+      if (!options.preserveInputRedirects) {
+        flush();
+        out.push(token("<<<"));
+      } else {
+        let descriptor = "";
+        if (started && /^\d+$/.test(current)) {
+          descriptor = current;
+          current = "";
+          started = false;
+          startsQuoted = false;
+          sawQuote = false;
+        } else
+          flush();
+        out.push(token(`${descriptor}<<<#stdin`));
+      }
       i += 2;
       continue;
     }
     if (ch === "<" && command[i + 1] === "<") {
       const operator = hereDocumentOperator(command, i);
       if (operator !== null) {
-        flush();
+        let descriptor = "";
+        if (options.preserveInputRedirects && started && /^\d+$/.test(current)) {
+          descriptor = current;
+          current = "";
+          started = false;
+          startsQuoted = false;
+          sawQuote = false;
+        } else
+          flush();
+        if (options.preserveInputRedirects)
+          out.push(token(`${descriptor}<<#stdin`));
         pending.push(operator);
         i = operator.end - 1;
         continue;
       }
+    }
+    if (options.preserveInputRedirects && ch === ">" && command[i + 1] === "|") {
+      let descriptor = "";
+      if (started && /^\d+$/.test(current)) {
+        descriptor = current;
+        current = "";
+        started = false;
+        startsQuoted = false;
+        sawQuote = false;
+      } else
+        flush();
+      out.push(token(`${descriptor}>|#redirect`));
+      i++;
+      continue;
+    }
+    if (options.preserveInputRedirects && (ch === ">" || ch === "<") && command[i + 1] === "&") {
+      let descriptor = "";
+      if (started && /^\d+$/.test(current)) {
+        descriptor = current;
+        current = "";
+        started = false;
+        startsQuoted = false;
+        sawQuote = false;
+      } else
+        flush();
+      out.push(token(`${descriptor}${ch}&#${ch === "<" ? "stdin" : "redirect"}`));
+      i++;
+      continue;
+    }
+    if (ch === "<" && options.preserveInputRedirects) {
+      let descriptor = "";
+      if (started && /^\d+$/.test(current)) {
+        descriptor = current;
+        current = "";
+        started = false;
+        startsQuoted = false;
+        sawQuote = false;
+      } else
+        flush();
+      if (options.preserveInputRedirects)
+        out.push(token(`${descriptor}<#stdin`));
+      continue;
     }
     if (ch === `
 `) {
@@ -186,6 +268,7 @@ import { resolve } from "path";
 var OPERATORS = { ";": true, "&&": true, "||": true, "&": true, "|": true, "\n": true, "(": true, ")": true, "{": true, "}": true };
 var WRAPPERS = {
   mise: true,
+  builtin: true,
   env: true,
   command: true,
   exec: true,
@@ -193,6 +276,24 @@ var WRAPPERS = {
   nice: true,
   sudo: true,
   xargs: true
+};
+var SHELL_CONTROL_WORDS = {
+  if: true,
+  else: true,
+  elif: true,
+  fi: true,
+  for: true,
+  while: true,
+  until: true,
+  do: true,
+  done: true,
+  case: true,
+  esac: true,
+  in: true,
+  function: true,
+  select: true,
+  coproc: true,
+  time: true
 };
 function commandSegments(command) {
   const out = [];
@@ -242,7 +343,20 @@ function commandSegments(command) {
   return out;
 }
 function tokenize(segment) {
-  return tokenizeShell(segment, { preserveBackslashes: true }).map(({ value, startsQuoted }) => ({ value, quoted: startsQuoted }));
+  const normalized = tokenizeShell(segment);
+  return tokenizeShell(segment, { preserveBackslashes: true }).map(({ value, startsQuoted }, index) => ({
+    value,
+    normalized: normalized[index]?.value ?? value,
+    quoted: startsQuoted
+  }));
+}
+function structuralTokens(segment) {
+  const normalized = tokenizeShell(segment, { preserveInputRedirects: true });
+  return tokenizeShell(segment, { preserveBackslashes: true, preserveInputRedirects: true }).map(({ value, startsQuoted }, index) => ({
+    value,
+    normalized: normalized[index]?.value ?? value,
+    quoted: startsQuoted
+  }));
 }
 function invocation(segment, argv) {
   const tokens = tokenize(segment);
@@ -252,19 +366,19 @@ function invocation(segment, argv) {
   let start = 0;
   for (;start < tokens.length; start++) {
     const token = tokens[start];
-    if (!token || token.quoted)
+    if (!token)
       return null;
-    const basename = token.value.split("/").pop() ?? token.value;
+    const basename = token.normalized.split("/").pop() ?? token.normalized;
     if (basename === head)
       break;
-    if (!/^[A-Za-z_][A-Za-z0-9_]*=/.test(token.value) && !token.value.startsWith("-") && WRAPPERS[basename] !== true)
+    if (!/^[A-Za-z_][A-Za-z0-9_]*=/.test(token.normalized) && !token.normalized.startsWith("-") && WRAPPERS[basename] !== true)
       return null;
   }
   for (const [offset, word] of argv.entries()) {
     const token = tokens[start + offset];
-    if (!token || token.quoted)
+    if (!token)
       return null;
-    const value = offset === 0 ? token.value.split("/").pop() ?? token.value : token.value;
+    const value = offset === 0 ? token.normalized.split("/").pop() ?? token.normalized : token.normalized;
     if (value !== word)
       return null;
   }
@@ -279,47 +393,159 @@ function leadingCdCwd(command, cwd) {
     return cwd;
   return dir.startsWith("/") ? dir : resolve(cwd, dir);
 }
+var WRAPPER_BOOLEAN_OPTIONS = {
+  env: { "-i": true, "--ignore-environment": true, "-0": true, "--null": true, "-v": true, "--debug": true },
+  xargs: { "-0": true, "--null": true, "-r": true, "--no-run-if-empty": true, "-t": true, "--verbose": true, "-p": true, "--interactive": true, "-x": true, "--exit": true, "-o": true, "--open-tty": true },
+  sudo: { "-A": true, "-b": true, "-E": true, "-e": true, "-H": true, "-K": true, "-k": true, "-n": true, "-P": true, "-S": true, "-V": true, "-v": true, "--askpass": true, "--background": true, "--edit": true, "--help": true, "--login": true, "--non-interactive": true, "--preserve-env": true, "--remove-timestamp": true, "--reset-timestamp": true, "--stdin": true, "--validate": true, "--version": true }
+};
+var WRAPPER_VALUE_OPTIONS = {
+  env: ["-u", "--unset", "-C", "--chdir", "-S", "--split-string", "-a", "--argv0"],
+  xargs: ["-a", "--arg-file", "-d", "--delimiter", "-E", "--eof", "-I", "--replace", "-L", "--max-lines", "-n", "--max-args", "-P", "--max-procs", "-s", "--max-chars", "--process-slot-var"],
+  sudo: ["-C", "--close-from", "-D", "--chdir", "-g", "--group", "-h", "--host", "-p", "--prompt", "-R", "--chroot", "-r", "--role", "-t", "--type", "-T", "--command-timeout", "-u", "--user", "-U", "--other-user"]
+};
+function skipWrapperOptions(words, index, wrapper) {
+  const booleans = WRAPPER_BOOLEAN_OPTIONS[wrapper];
+  const values = WRAPPER_VALUE_OPTIONS[wrapper];
+  if (booleans === undefined || values === undefined)
+    return { index, opaque: words[index]?.normalized.startsWith("-") === true };
+  let opaque = false;
+  while (index < words.length) {
+    const token = words[index]?.normalized ?? "";
+    if (wrapper === "env" && /^[A-Za-z_][A-Za-z0-9_]*=/.test(token)) {
+      index++;
+      continue;
+    }
+    if (token === "--")
+      return { index: index + 1, opaque };
+    if (!token.startsWith("-") && !(wrapper === "sudo" && token.startsWith("+")))
+      break;
+    if (booleans[token] === true) {
+      index++;
+      continue;
+    }
+    const valueOption = values.find((option) => token === option || (option.startsWith("--") ? token.startsWith(`${option}=`) : token.startsWith(option)));
+    if (valueOption !== undefined) {
+      index += token === valueOption ? 2 : 1;
+      continue;
+    }
+    opaque = true;
+    index++;
+  }
+  return { index, opaque };
+}
+function commandExecutableIndex(words, start = 0) {
+  let opaqueWrapperOptions = false;
+  let index = start;
+  while (index < words.length) {
+    while (index < words.length && (/^[A-Za-z_][A-Za-z0-9_]*=/.test(words[index]?.normalized ?? "") || words[index]?.normalized === "!"))
+      index++;
+    const redirect = words[index]?.normalized ?? "";
+    if (/^\d*(?:>&|>\|)#redirect$/.test(redirect) || /^\d*(?:<&|<>)#stdin$/.test(redirect)) {
+      index += 2;
+      continue;
+    }
+    if (/^\d*<<#stdin$/.test(redirect)) {
+      index++;
+      continue;
+    }
+    if (/^\d*(?:<|<<<)#stdin$/.test(redirect)) {
+      index += 2;
+      continue;
+    }
+    if (/^\d*(?:>>?|>\|)$/.test(redirect)) {
+      index += 2;
+      continue;
+    }
+    if (/^\d*(?:>>?|>\|).+/.test(redirect)) {
+      index++;
+      continue;
+    }
+    const wrapper = words[index]?.normalized.split("/").pop() ?? words[index]?.normalized ?? "";
+    if (WRAPPERS[wrapper] !== true)
+      break;
+    const skipped = skipWrapperOptions(words, index + 1, wrapper);
+    index = skipped.index;
+    opaqueWrapperOptions ||= skipped.opaque;
+  }
+  return { index, opaqueWrapperOptions };
+}
 function splitCommands(source) {
   const positions = [];
   let current = [];
+  let pendingStdin = false;
+  const groupStdin = [];
   const flush = () => {
     if (current.length === 0)
-      return;
+      return false;
     const words = [...current];
-    const argv = words.map((word) => word.value);
-    let index = 0;
-    while (index < words.length && (/^[A-Za-z_][A-Za-z0-9_]*=/.test(words[index]?.value ?? "") || words[index]?.value === "!"))
-      index++;
-    while (index < words.length && WRAPPERS[words[index]?.value.split("/").pop() ?? words[index]?.value ?? ""] === true) {
-      const wrapper = words[index]?.value.split("/").pop() ?? words[index]?.value ?? "";
-      index++;
-      if (wrapper === "env")
-        while (index < words.length && (/^[A-Za-z_][A-Za-z0-9_]*=/.test(words[index]?.value ?? "") || words[index]?.value?.startsWith("-") === true))
-          index++;
-      if (wrapper === "xargs")
-        while (index < words.length && words[index]?.value?.startsWith("-") === true)
-          index++;
-      if (wrapper === "sudo")
-        while (index < words.length && words[index]?.value?.startsWith("-") === true) {
-          index++;
-          if (index < words.length && words[index]?.value?.startsWith("-") === false)
-            index++;
-        }
-    }
-    const executable = words[index] && !words[index]?.quoted ? words[index]?.value : undefined;
+    const argv = words.map((word) => word.normalized);
+    const resolved = commandExecutableIndex(words);
+    const { index, opaqueWrapperOptions } = resolved;
+    const executable = words[index]?.normalized;
     const raw = words.map((word) => word.quoted ? `'${word.value.replaceAll("'", "'\\''")}'` : word.value).join(" ");
-    positions.push({ raw, words, argv, executable });
+    positions.push({ raw, words, argv, executable, executableIndex: executable === undefined ? undefined : index, opaqueWrapperOptions, stdinFed: pendingStdin || groupStdin.includes(true) || words.some((word) => /^0*(?:<{1,3}|(?:<|<<|<<<)#stdin)/.test(word.normalized)) });
     current = [];
+    pendingStdin = false;
+    return true;
   };
-  for (const token of tokenize(source)) {
+  for (const token of structuralTokens(source)) {
     if (OPERATORS[token.value] === true) {
-      flush();
+      const hadCommand = flush();
+      if (token.value === "|")
+        pendingStdin = true;
+      else if (token.value === "(" || token.value === "{") {
+        groupStdin.push(pendingStdin || groupStdin.includes(true));
+        pendingStdin = false;
+      } else if (token.value === ")" || token.value === "}")
+        groupStdin.pop();
+      else if (hadCommand)
+        pendingStdin = false;
       continue;
     }
     current.push(token);
   }
   flush();
   return positions;
+}
+function shellCommandOperand(words, shellIndex) {
+  for (let argument = shellIndex + 1;argument < words.length; argument++) {
+    const word = words[argument];
+    if (word === undefined || word.normalized === "--")
+      return;
+    if (["-o", "+o", "-O", "+O", "--rcfile", "--init-file"].includes(word.normalized)) {
+      argument++;
+      continue;
+    }
+    if (/^[-+][^-]*c/.test(word.normalized))
+      return words[argument + 1];
+    if (word.normalized.startsWith("-") || word.normalized.startsWith("+"))
+      continue;
+    return;
+  }
+  return;
+}
+function shellHasScriptOperand(words, shellIndex) {
+  if (words.slice(0, shellIndex).some((word) => /^(?:BASH_ENV|ENV)=.+/.test(word.normalized)))
+    return true;
+  for (let argument = shellIndex + 1;argument < words.length; argument++) {
+    const word = words[argument];
+    if (word === undefined)
+      return false;
+    if (word.normalized === "--")
+      return words[argument + 1] !== undefined;
+    if (["--rcfile", "--init-file"].includes(word.normalized))
+      return words[argument + 1] !== undefined;
+    if (["-o", "+o", "-O", "+O"].includes(word.normalized)) {
+      argument++;
+      continue;
+    }
+    if (/^[-+][^-]*c/.test(word.normalized))
+      return false;
+    if (word.normalized.startsWith("-") || word.normalized.startsWith("+"))
+      continue;
+    return true;
+  }
+  return false;
 }
 function nestedSources(source) {
   const sources = [];
@@ -379,12 +605,41 @@ function nestedSources(source) {
       if (substitution[1] !== undefined)
         sources.push(substitution[1]);
   }
-  for (const match of source.matchAll(/\b(?:bash|sh|zsh|dash|ksh)\s+-c\s+((?:'[^']*')|(?:"[^"]*")|[^\s;&|]+)/g)) {
-    const value = match[1];
-    if (!value || value.startsWith('"$') || value.startsWith("'$"))
+  for (const position of splitCommands(source)) {
+    if ((position.executable?.split("/").pop() ?? position.executable) === "alias")
+      unknown = true;
+    const xargs = position.words.findIndex((word) => (word.normalized.split("/").pop() ?? word.normalized) === "xargs");
+    for (let index = 0;index < position.words.length; index++) {
+      const shell = position.words[index]?.normalized.split("/").pop() ?? "";
+      if (!["bash", "sh", "zsh", "dash", "ksh"].includes(shell))
+        continue;
+      if (shellHasScriptOperand(position.words, index))
+        unknown = true;
+      const command = shellCommandOperand(position.words, index);
+      if (command === undefined) {
+        if (xargs >= 0 && xargs < index && position.words.slice(index + 1).some((word) => /^[-+][^-]*c/.test(word.normalized)))
+          unknown = true;
+        if (position.stdinFed || shellHasScriptOperand(position.words, index))
+          unknown = true;
+        continue;
+      }
+      if (/(^|[^\\])[$`*?[\]{}~]/.test(command.value))
+        unknown = true;
+      else
+        sources.push(command.normalized);
+    }
+  }
+  for (const position of splitCommands(source)) {
+    const index = position.executableIndex;
+    if (index === undefined || (position.words[index]?.normalized.split("/").pop() ?? "") !== "trap")
+      continue;
+    const handler = position.words.slice(index + 1).find((word) => !word.normalized.startsWith("-"));
+    if (handler === undefined)
+      continue;
+    if (/(^|[^\\])[$`*?[\]{}~]/.test(handler.value))
       unknown = true;
     else
-      sources.push(value.replace(/^['"]|['"]$/g, ""));
+      sources.push(handler.normalized);
   }
   for (const match of source.matchAll(/\beval\s+((?:'[^']*')|(?:"[^"]*")|[^\s;&|]+)/g)) {
     const value = match[1];
@@ -404,18 +659,40 @@ function nestedSources(source) {
 }
 function staticParse(command) {
   if (command.length > 64000)
-    return { kind: "parse-failure", reason: "input exceeds 64000 characters", command, segments: [], commands: [], unknown: true, nested: [] };
+    return { kind: "parse-failure", reason: "input exceeds 64000 characters", command, segments: [], commands: [], unknown: true, unknownBeyondWrapperOptions: true, nested: [] };
   if (!shellQuoteBalanced(command))
-    return { kind: "parse-failure", reason: "unbalanced shell quote", command, segments: [], commands: [], unknown: true, nested: [] };
+    return { kind: "parse-failure", reason: "unbalanced shell quote", command, segments: [], commands: [], unknown: true, unknownBeyondWrapperOptions: true, nested: [] };
   const commands = splitCommands(command);
   const nested = nestedSources(command);
   const children = nested.sources.map(staticParse);
-  const unknown = nested.unknown || children.some((child) => child.unknown);
+  const unknownBeyondWrapperOptions = nested.unknown || children.some((child) => child.unknownBeyondWrapperOptions) || commands.some((position) => {
+    if (position.opaqueWrapperOptions && position.words.some((word) => /(^|[^\\])[$`*?[\]{}~]/.test(word.value)))
+      return true;
+    if (position.opaqueWrapperOptions && position.words.some((word) => ["bash", "sh", "zsh", "dash", "ksh"].includes(word.normalized.split("/").pop() ?? word.normalized)))
+      return true;
+    const index = position.executableIndex;
+    const source = index === undefined ? undefined : position.words[index]?.value;
+    const executable = position.executable?.split("/").pop();
+    if (executable === "eval" || executable === "source" || executable === ".")
+      return true;
+    if (executable === "then" || executable !== undefined && SHELL_CONTROL_WORDS[executable] === true)
+      return true;
+    if (executable === "find" && position.argv.some((word) => word === "-exec" || word === "-execdir"))
+      return true;
+    const envIndex = position.argv.findIndex((word) => (word.split("/").pop() ?? word) === "env");
+    if (envIndex >= 0 && position.argv.slice(envIndex + 1).some((word) => word.startsWith("-S") || word === "--split-string" || word.startsWith("--split-string=")))
+      return true;
+    if (position.executable?.includes(" "))
+      return true;
+    return source !== undefined && /(^|[^\\])[$`*?[\]{}~]/.test(source);
+  });
+  const unknown = unknownBeyondWrapperOptions || children.some((child) => child.unknown) || commands.some((position) => position.opaqueWrapperOptions);
   return {
     command,
     segments: commands.map((position) => position.argv),
     commands,
     unknown,
+    unknownBeyondWrapperOptions,
     nested: children
   };
 }
@@ -440,8 +717,8 @@ function parsedInvocations(parsed, executable = "bd") {
     const executableName = position.executable?.split("/").pop();
     if (executableName !== executable)
       continue;
-    const index = position.argv.findIndex((word, i) => !position.words[i]?.quoted && (word.split("/").pop() ?? word) === executable);
-    if (index < 0)
+    const index = position.executableIndex;
+    if (index === undefined)
       continue;
     const args = position.argv.slice(index + 1);
     const globals = [];
@@ -472,8 +749,7 @@ var BEAD_ID = /^[A-Za-z][A-Za-z0-9]*(?:-[A-Za-z0-9]+)+(?:\.\d+)*$/;
 var CLOSE_VERBS = { close: true, done: true };
 var DB_VALUE_FLAGS = { "--db": true, "-C": true, "--directory": true };
 var VALUE_FLAGS = { "--reason": true, "-r": true, "--message": true, "--session": true, "--assignee": true, "--status": true, "--type": true };
-function closeInvocations(command) {
-  const parsed = parse(command);
+function closeInvocationsFromParsed(parsed) {
   if (parsed.unknown)
     return [];
   const out = [];
@@ -642,10 +918,8 @@ async function gateIdsAmongAsync(ids, dbArgs, cwd, deadline) {
 }
 async function decideBdCloseParsed(parsed, cwd = process.cwd(), deadline) {
   const sharedDeadline = deadline ?? Date.now() + TIMEOUT_MS;
-  for (const position of parsed.commands) {
-    const invocations = closeInvocations(position.raw);
-    if (invocations.length === 0)
-      continue;
+  const invocations = closeInvocationsFromParsed(parsed);
+  if (invocations.length > 0) {
     const gates = new Set;
     for (const invocation of invocations) {
       for (const id of await gateIdsAmongAsync(invocation.ids, invocation.dbArgs, cwd, sharedDeadline))
@@ -653,11 +927,6 @@ async function decideBdCloseParsed(parsed, cwd = process.cwd(), deadline) {
     }
     if (gates.size > 0)
       return { block: true, reason: denyReason([...gates]) };
-  }
-  for (const child of parsed.nested) {
-    const decision = await decideBdCloseParsed(child, cwd, sharedDeadline);
-    if (decision)
-      return decision;
   }
   return;
 }
@@ -773,16 +1042,35 @@ function scanGlobals(tokens, from) {
   }
   return { globals, next: i };
 }
-function globalValue(globals, names) {
-  for (const [index, token] of globals.entries()) {
-    for (const name of names) {
-      if (token === name)
-        return globals[index + 1];
-      if (token.startsWith(`${name}=`))
-        return token.slice(name.length + 1);
+function firstArgumentAfterPersistentOptions(args) {
+  return args[scanGlobals(args, 0).next];
+}
+function globalOptions(globals) {
+  const options = [];
+  for (let index = 0;index < globals.length; index++) {
+    const token = globals[index];
+    if (token.startsWith("-C") && token.length > 2) {
+      const value = token.slice(2);
+      options.push({ name: "-C", token, value: value.startsWith("=") ? value.slice(1) : value });
+      continue;
     }
+    const equals = token.indexOf("=");
+    if (equals >= 0) {
+      options.push({ name: token.slice(0, equals), token, value: token.slice(equals + 1) });
+      continue;
+    }
+    if (VALUE_FLAGS2.has(token))
+      options.push({ name: token, token, value: globals[++index] });
+    else
+      options.push({ name: token, token });
   }
-  return;
+  return options;
+}
+function globalValue(globals, names) {
+  return globalOptions(globals).findLast((option) => names.includes(option.name))?.value;
+}
+function globalFlagEnabled(globals, names) {
+  return globalOptions(globals).some((option) => names.includes(option.name) && flagEnabled([option.token], names));
 }
 function flagEnabled(tokens, names) {
   for (const token of tokens) {
@@ -863,6 +1151,11 @@ function environmentForInput(input, base = process.env) {
   return env;
 }
 function invocationActor(invocation, env) {
+  const explicitActor = globalValue(invocation.globals, ["--actor"]);
+  if (explicitActor !== undefined) {
+    const actor = explicitActor.trim();
+    return actor !== "" && !/[$`]/.test(actor) ? actor : null;
+  }
   const resolve = (variable) => {
     const assignment = invocation.prefix.findLast((token) => token.startsWith(`${variable}=`));
     const value = assignment !== undefined ? assignment.slice(variable.length + 1) : invocation.exported[variable] ?? env[variable];
@@ -879,11 +1172,11 @@ function invocationFromArgv(args) {
     return;
   return { verb: verb.toLowerCase(), args: args.slice(scanned.next + 1), globals: scanned.globals, prefix: [], exported: {} };
 }
-function isMutatingInvocation({ verb, args }) {
-  if (args.includes("--help") || args.includes("-h"))
+function isMutatingInvocation({ verb, args, globals }) {
+  if (globalFlagEnabled(globals, ["--help", "-h"]) || globalFlagEnabled(globals, ["--readonly"]))
     return false;
   if (verb === "duplicates")
-    return args.includes("--auto-merge") && !args.includes("--dry-run");
+    return args.includes("--auto-merge");
   if (MUTATING_VERBS[verb] === true)
     return true;
   if (verb === "ready")
@@ -891,8 +1184,6 @@ function isMutatingInvocation({ verb, args }) {
   if (verb === "dep" && args.includes("--blocks"))
     return true;
   if (verb === "mol") {
-    if (args.includes("--dry-run"))
-      return false;
     const action = args[0] ?? "";
     if (MOL_WRITES[action] === true)
       return true;
@@ -1069,6 +1360,7 @@ var READS = {
   types: true,
   version: true,
   where: true,
+  audit: { list: true },
   config: { get: true, list: true },
   dep: { list: true, show: true, tree: true },
   dolt: { diff: true, log: true, status: true },
@@ -1076,8 +1368,9 @@ var READS = {
   formula: { list: true, show: true },
   gate: { list: true, show: true },
   kv: { get: true, list: true },
-  mol: { list: true, show: true },
-  swarm: { list: true, show: true }
+  label: { list: true },
+  mol: { current: true, "last-activity": true, list: true, progress: true, ready: true, seed: true, show: true, stale: true },
+  swarm: { list: true, show: true, validate: true }
 };
 var WRITE_FLAGS = {
   orphans: ["--fix", "-f"],
@@ -1089,22 +1382,83 @@ function writesStore(invocation) {
   if (invocation === undefined)
     return true;
   const { verb, args, globals } = invocation;
-  if (flagEnabled(globals, ["--help", "-h"]) || flagEnabled(args, ["--help", "-h"]))
+  if (globalFlagEnabled(globals, ["--help", "-h"]))
     return false;
-  if (flagEnabled(globals, ["--readonly"]))
+  if (globalFlagEnabled(globals, ["--readonly"]))
     return false;
+  if (verb === "mol" && args[0] === "wisp")
+    return args[1] !== "list";
   const rule = READS[verb];
   if (rule === undefined)
     return true;
   const writeFlags = WRITE_FLAGS[verb];
   if (writeFlags !== undefined && flagEnabled(args, writeFlags))
     return true;
-  const subaction = args.find((arg) => !arg.startsWith("-"));
+  const subaction = firstArgumentAfterPersistentOptions(args);
   if (rule === true)
     return false;
   if (rule === "idOnly")
     return subaction === undefined || !BEAD_ID2.test(subaction);
   return subaction === undefined || rule[subaction] !== true;
+}
+function storeSelection(invocation) {
+  let directory;
+  let db;
+  let database;
+  let global;
+  for (const option of globalOptions(invocation.globals)) {
+    if (option.name === "--global") {
+      global = option.token;
+      continue;
+    }
+    if (option.value === undefined)
+      continue;
+    switch (option.name) {
+      case "-C":
+      case "--directory":
+        directory = [option.name, option.value];
+        break;
+      case "--db":
+        db = [option.name, option.value];
+        break;
+      case "--database":
+        database = [option.name, option.value];
+        break;
+    }
+  }
+  return [...global === undefined ? [] : [global], ...directory ?? [], ...db ?? [], ...database ?? []];
+}
+function hasPostVerbStoreSelector(args) {
+  for (const token of args) {
+    if (token === "--")
+      return false;
+    if (token === "--global" || token.startsWith("--global="))
+      return true;
+    if (STORE_FLAGS.some((flag) => token === flag || token.startsWith(`${flag}=`)))
+      return true;
+  }
+  return false;
+}
+function commandBeadsDir(invocation) {
+  let found = false;
+  let value = "";
+  for (const assignment of invocation.prefix) {
+    if (!assignment.startsWith("BEADS_DIR="))
+      continue;
+    found = true;
+    value = assignment.slice("BEADS_DIR=".length);
+  }
+  return { found, dynamic: found && DEFERRED_VALUE.test(value), value };
+}
+function bdStoreForInvocation(invocation, cwd, env) {
+  const local = commandBeadsDir(invocation);
+  if (local.dynamic)
+    return;
+  return storeFor(storeSelection(invocation), cwd, local.found ? { ...env, BEADS_DIR: local.value } : env);
+}
+function bdInvocationUsesExternalStore(invocation) {
+  const selectors = storeSelection(invocation);
+  return flagEnabled(selectors, ["--global"]) || globalValue(selectors, ["--database"]) !== undefined;
 }
 function storeFor(globals, cwd, env) {
   if (flagEnabled(globals, ["--global"]))
@@ -1163,42 +1517,26 @@ var SUBSTITUTION = /\$\(|`/;
 var DEFERRED_VALUE = /[$`~*?[\]]/;
 var STORE_FLAGS = ["-C", "--directory", "--db", "--database"];
 function embeddedWriteTargets(command, cwd, env) {
-  const hasBd = commandSegments(command).some((segment) => invocation(segment, ["bd"]) !== null);
+  const hasBd = parse(command).commands.some((position) => (position.executable?.split("/").pop() ?? position.executable) === "bd");
   if (!hasBd)
     return { kind: "stores", stores: [] };
   const direct = directInvocation(command);
   if (direct !== undefined) {
     if (direct === "no-write" || !writesStore(direct))
       return { kind: "stores", stores: [] };
-    const store = storeFor(direct.globals, cwd, env);
+    if (commandBeadsDir(direct).dynamic)
+      return { kind: "refused", reason: "This bd mutation selects BEADS_DIR dynamically, so its target store cannot be serialized safely. Use a literal BEADS_DIR value and retry." };
+    const store = bdStoreForInvocation(direct, cwd, env);
     return { kind: "stores", stores: store !== undefined && embedded(store) ? [store] : [] };
   }
-  const ambient = storeFor([], cwd, env);
-  const at = ambient !== undefined && embedded(ambient) ? ambient : namedStore(command, cwd, env);
-  if (at === undefined)
-    return { kind: "stores", stores: [] };
   return {
     kind: "refused",
     reason: [
-      `This command mentions \`bd\` in a form the Beads write lock cannot resolve, and ${at} is an embedded store, where two concurrent writers corrupt the Dolt journal.`,
+      "This command mentions `bd` in a form the Beads write lock cannot resolve, so its target embedded store cannot be serialized safely.",
       "The lock accepts exactly one shape: a bash call whose whole command is a single direct `bd` invocation, optionally preceded by literal `VAR=value` assignments, with no separators, pipes, redirections, grouping, command substitutions, escapes or newlines, and with a literal value for `-C` / `--directory` / `--db` / `--database`.",
       "Issue the `bd` command as its own tool call in that form, and run the surrounding work as a separate call. `bd export -o issues.jsonl` rather than a redirection, and one call each rather than `&&`, are accepted."
     ].join(" ")
   };
-}
-function namedStore(command, cwd, env) {
-  const words = tokenize(command).flatMap((token) => token.quoted ? tokenize(token.value).map((inner) => inner.value) : [token.value]);
-  for (const [index, word] of words.entries()) {
-    for (const flag of STORE_FLAGS) {
-      const value = word === flag ? words[index + 1] : word.startsWith(`${flag}=`) ? word.slice(flag.length + 1) : undefined;
-      if (value === undefined || DEFERRED_VALUE.test(value))
-        continue;
-      const store = storeFor([flag, value], cwd, env);
-      if (store !== undefined && embedded(store))
-        return store;
-    }
-  }
-  return;
 }
 function directInvocation(command) {
   const tokens = tokenize(command);
@@ -1206,20 +1544,27 @@ function directInvocation(command) {
     return;
   if (tokens.some((token) => !token.quoted && OPERATOR.test(token.value)))
     return;
-  let i = 0;
-  while (tokens[i] !== undefined && tokens[i]?.quoted === false && /^[A-Za-z_]\w*=/.test(tokens[i]?.value ?? ""))
-    i++;
+  const { index: i } = commandExecutableIndex(tokens);
   const head = tokens[i];
-  if (head === undefined || head.quoted)
+  if (head === undefined)
     return;
-  const base = head.value.split("/").pop() ?? head.value;
+  const base = head.normalized.split("/").pop() ?? head.normalized;
   if (base !== "bd")
     return;
-  const invocation = invocationFromArgv(tokens.slice(i + 1).map((token) => token.value));
+  if (tokens.slice(0, i).some((token) => token.quoted || !/^[A-Za-z_]\w*=/.test(token.value)))
+    return;
+  if (tokens.slice(i + 1).some((token) => !token.quoted && /(^|[^\\])[$`*?[\]{}~]/.test(token.value)))
+    return;
+  const parsed = invocationFromArgv(tokens.slice(i + 1).map((token) => token.normalized));
+  const prefix = tokens.slice(0, i).filter((token) => token.quoted === false && /^[A-Za-z_]\w*=/.test(token.value)).map((token) => token.normalized);
+  const invocation = parsed === undefined ? undefined : { ...parsed, prefix };
   if (invocation === undefined)
     return "no-write";
+  if (hasPostVerbStoreSelector(invocation.args))
+    return;
+  const selectors = storeSelection(invocation);
   for (const flag of STORE_FLAGS) {
-    const value = globalValue(invocation.globals, [flag]);
+    const value = globalValue(selectors, [flag]);
     if (value !== undefined && DEFERRED_VALUE.test(value))
       return;
   }
@@ -1770,8 +2115,26 @@ function decideCommandParsed(parsed, active) {
 }
 
 // extensions/session-beads-lifecycle.ts
-import { isAbsolute as isAbsolute3, join as join3, resolve as resolve5 } from "path";
+import { dirname as dirname4, isAbsolute as isAbsolute3, join as join3, resolve as resolve5 } from "path";
 var EMBEDDED_PIN_ENV = { BEADS_DOLT_SHARED_SERVER: "" };
+function boundedBdEnvironment(base) {
+  return {
+    ...base,
+    ...EMBEDDED_PIN_ENV,
+    BD_NO_PAGER: "1",
+    BD_NON_INTERACTIVE: "1",
+    BD_DOLT_AUTO_START: "false",
+    NO_COLOR: "1"
+  };
+}
+function lifecycleBdEnvironment(cwd, base = process.env) {
+  const env = { ...base };
+  delete env.BEADS_DIR;
+  const resolved = sessionPinFor(cwd);
+  if (resolved !== undefined)
+    env.BEADS_DIR = resolved;
+  return boundedBdEnvironment(env);
+}
 function pinBashInput(input, pin) {
   if (pin === undefined || input === null || typeof input !== "object")
     return;
@@ -1790,15 +2153,52 @@ function bashCallCwd(input, fallback) {
   const cwd = input.cwd;
   return typeof cwd === "string" && cwd !== "" ? resolve5(fallback, cwd) : fallback;
 }
-var sessionPinGetter;
+var backgroundReads = new Set;
+var LIFECYCLE_BRIDGE = Symbol.for("com.srobroek.beads.session-lifecycle.bridge.v1");
+function lifecycleBridge() {
+  const globals = globalThis;
+  const existing = globals[LIFECYCLE_BRIDGE];
+  if (existing !== undefined)
+    return existing;
+  const created = {};
+  globals[LIFECYCLE_BRIDGE] = created;
+  return created;
+}
 function pinnedBeadsDir(cwd, ctx) {
-  const pin = ctx === undefined ? undefined : sessionPinGetter?.(cwd, ctx);
+  const pin = ctx === undefined ? undefined : lifecycleBridge().sessionPinGetter?.(cwd, ctx);
   return pin ?? (ctx === undefined ? sessionPinFor(cwd) : undefined);
 }
 function rewriteBashInput(input, ctx) {
   const cwd = bashCallCwd(input, ctx?.cwd ?? process.cwd());
   const pin = pinnedBeadsDir(cwd, ctx);
   return pinBashInput(input, pin === "" ? undefined : pin);
+}
+async function admitBeadsWork(ctx, cwd = ctx?.cwd ?? process.cwd(), env = lifecycleBdEnvironment(cwd), refresh = true) {
+  const gateAdmitter = lifecycleBridge().gateAdmitter;
+  if (gateAdmitter === undefined)
+    return;
+  return await gateAdmitter(resolve5(cwd), boundedBdEnvironment(env), ctx, refresh);
+}
+async function admitBdMutation(input, ctx, targetEnabled) {
+  const command = commandFromInput(input ?? {});
+  if (!command)
+    return;
+  const writes = bdInvocations(command).filter((invocation) => writesStore(invocation));
+  if (writes.length === 0)
+    return;
+  const effectiveInput = rewriteBashInput(input, ctx) ?? input;
+  const cwd = bashCallCwd(effectiveInput, ctx?.cwd ?? process.cwd());
+  const env = environmentForInput(effectiveInput);
+  const writeTargets = embeddedWriteTargets(command, cwd, env);
+  if (writeTargets.kind === "refused")
+    return { block: true, reason: writeTargets.reason };
+  const direct = writes.length === 1 ? writes[0] : undefined;
+  if (direct !== undefined && bdInvocationUsesExternalStore(direct))
+    return;
+  const store = direct === undefined ? undefined : bdStoreForInvocation(direct, cwd, env);
+  if (targetEnabled?.(store === undefined ? cwd : dirname4(store)) === false)
+    return;
+  return await admitBeadsWork(ctx, cwd, store === undefined ? env : { ...env, BEADS_DIR: store }, false);
 }
 
 // extensions/bash-gates.ts
@@ -1809,15 +2209,112 @@ function inputOf(event, ctx) {
     cwd: typeof input.cwd === "string" && input.cwd ? input.cwd : ctx?.cwd ?? process.cwd()
   };
 }
+function beadsWorkAdmissionTarget(toolName, input, contextCwd, runtimeCwd = process.cwd(), runtimeEnv = process.env) {
+  if (toolName === "bd_formula_check") {
+    if (typeof input.workspace !== "string")
+      return { cwd: runtimeCwd, env: runtimeEnv, requiresWorkspace: true };
+    const cwd = resolve6(runtimeCwd, input.workspace);
+    return { cwd, env: lifecycleBdEnvironment(cwd, runtimeEnv) };
+  }
+  return { cwd: contextCwd, env: lifecycleBdEnvironment(contextCwd, runtimeEnv) };
+}
 function suffix(gate, reason, resolution = "inspect the command and retry") {
   return { block: true, reason: blockReason({ gate, cause: reason, resolution }) };
+}
+var STDIN_SHELL_COMPOUNDS = { if: true, while: true, until: true, case: true, for: true, select: true, coproc: true };
+function unknownMayReachGatedCommand(parsed) {
+  if ("kind" in parsed)
+    return true;
+  for (const position of parsed.commands) {
+    const normalized = position.words.map((word) => word.normalized);
+    const words = normalized.map((word) => word.split("/").pop() ?? word);
+    if (position.stdinFed && STDIN_SHELL_COMPOUNDS[position.executable?.split("/").pop() ?? ""] === true)
+      return true;
+    if (words.some((word) => word === "bd" || word.startsWith("bd ")))
+      return true;
+    if (words.some((word) => /(^|\s)gh\s+pr\s+create(?:\s|$)/.test(word)))
+      return true;
+    const gh = words.indexOf("gh");
+    if (gh >= 0 && words.slice(gh + 1).includes("pr") && words.slice(gh + 1).includes("create"))
+      return true;
+    if (position.words.some((word) => /`|\$\(/.test(word.value)))
+      return true;
+    if (position.opaqueWrapperOptions && position.words.some((word) => /(^|[^\\])[$`*?[\]{}~]/.test(word.value)))
+      return true;
+    if (position.opaqueWrapperOptions && words.some((word) => ["bash", "sh", "zsh", "dash", "ksh"].includes(word)))
+      return true;
+    const env = words.indexOf("env");
+    if (env >= 0 && normalized.slice(env + 1).some((word) => word.startsWith("-S") || word === "--split-string" || word.startsWith("--split-string=")))
+      return true;
+    let candidateIndex = position.executableIndex;
+    while (candidateIndex !== undefined && candidateIndex < position.words.length) {
+      const word = words[candidateIndex];
+      if (word !== undefined && ["if", "then", "else", "elif", "while", "until", "do", "time", "coproc", "!"].includes(word)) {
+        candidateIndex++;
+        continue;
+      }
+      const resolved = commandExecutableIndex(position.words, candidateIndex);
+      if (resolved.index === candidateIndex)
+        break;
+      if (resolved.opaqueWrapperOptions && position.words.slice(candidateIndex).some((token) => /(^|[^\\])[$`*?[\]{}~]/.test(token.value) || ["bash", "sh", "zsh", "dash", "ksh"].includes(token.normalized.split("/").pop() ?? token.normalized)))
+        return true;
+      candidateIndex = resolved.index;
+    }
+    const candidate = candidateIndex === undefined ? undefined : words[candidateIndex];
+    if (candidate === "eval" || candidate === "source" || candidate === ".")
+      return true;
+    if (candidate === "trap")
+      return true;
+    if (candidate === "alias")
+      return true;
+    const candidateSource = candidateIndex === undefined ? undefined : position.words[candidateIndex]?.value;
+    if (candidateSource !== undefined && /(^|[^\\])[$`*?[\]{}~]/.test(candidateSource))
+      return true;
+    if (candidate === "find" && normalized.some((word) => word === "-exec" || word === "-execdir"))
+      return true;
+    if (candidate !== undefined && ["bash", "sh", "zsh", "dash", "ksh"].includes(candidate)) {
+      if (position.stdinFed)
+        return true;
+      if (candidateIndex !== undefined && shellHasScriptOperand(position.words, candidateIndex))
+        return true;
+      const command = shellCommandOperand(position.words, candidateIndex ?? 0);
+      if (command !== undefined && /(^|[^\\])[$`*?[\]{}~]/.test(command.value))
+        return true;
+      const xargs = words.indexOf("xargs");
+      if (command === undefined && candidateIndex !== undefined && xargs >= 0 && xargs < candidateIndex && position.words.slice(candidateIndex + 1).some((word) => /^[-+][^-]*c/.test(word.normalized)))
+        return true;
+    }
+  }
+  return parsed.nested.some(unknownMayReachGatedCommand);
+}
+function wrapperCwdChangeMayReachGatedCommand(parsed) {
+  if ("kind" in parsed)
+    return false;
+  for (const position of parsed.commands) {
+    const executableIndex = position.executableIndex;
+    if (executableIndex === undefined)
+      continue;
+    const executable = position.words[executableIndex]?.normalized.split("/").pop();
+    if (executable !== "bd" && executable !== "gh" && !["bash", "sh", "zsh", "dash", "ksh"].includes(executable ?? ""))
+      continue;
+    const env = position.words.findIndex((word) => (word.normalized.split("/").pop() ?? word.normalized) === "env");
+    if (env < 0 || env >= executableIndex)
+      continue;
+    if (position.words.slice(env + 1, executableIndex).some((word) => word.normalized === "-C" || word.normalized.startsWith("-C") || word.normalized === "--chdir" || word.normalized.startsWith("--chdir=")))
+      return true;
+  }
+  return parsed.nested.some(wrapperCwdChangeMayReachGatedCommand);
 }
 async function decide(parsed, event, ctx, pi) {
   let input = event.input;
   const { cwd } = inputOf(event, ctx);
-  if (parsed.unknown)
-    return suffix("bash-gates", "command could not be parsed", "split the command or run the mutation as a plain single command");
   const env = environmentForInput(event.input);
+  if ((env.BASH_ENV ?? "") !== "" || (env.ENV ?? "") !== "")
+    return suffix("bash-gates", "the shell startup environment can execute an uninspected file", "unset BASH_ENV and ENV, then retry the command");
+  if (parsed.unknown && unknownMayReachGatedCommand(parsed))
+    return suffix("bash-gates", "command could not be parsed", "split the command or run the mutation as a plain single command");
+  if (wrapperCwdChangeMayReachGatedCommand(parsed))
+    return suffix("bash-gates", "a command wrapper changes the gated command's working directory", "pass the working directory through the Bash tool's cwd field or use a separate cd command");
   if (settingsEnabled("beads", "bd-actor-gate", cwd)) {
     const actor = decideActorParsed(parsed, env);
     if (actor.kind === "block")
@@ -1849,6 +2346,9 @@ async function decide(parsed, event, ctx, pi) {
     if (pr)
       return suffix("pr-bead-link-gate", pr.reason);
   }
+  const admission = await admitBdMutation(event.input, ctx, (targetCwd) => settingsEnabled("beads", "beads-gate-admission", targetCwd));
+  if (admission)
+    return suffix("beads-gate-admission", admission.reason, "retry the command; the verification continues and the next attempt waits on the same read");
   const rewritten = rewriteBashInput(input, ctx) ?? input;
   if (JSON.stringify(rewritten) !== JSON.stringify(event.input))
     return { input: rewritten };
@@ -1857,6 +2357,18 @@ async function decide(parsed, event, ctx, pi) {
 function bashGates(pi) {
   pi.on("tool_call", async (event, ctx) => {
     try {
+      const toolInput = event.input;
+      const gatedTool = event.toolName === "task" || event.toolName === "bd_reconcile" && toolInput.apply === true || event.toolName === "bd_formula_check" && toolInput.deep === true;
+      if (gatedTool) {
+        const contextCwd = ctx?.cwd ?? process.cwd();
+        const target = beadsWorkAdmissionTarget(event.toolName, toolInput, contextCwd);
+        if (target.requiresWorkspace)
+          return suffix("beads-gate-admission", "deep formula checks require an explicit workspace so admission and execution cannot select different stores", "set workspace to the target checkout and retry");
+        if (!settingsEnabled("beads", "beads-gate-admission", target.cwd))
+          return;
+        const admission = await admitBeadsWork(ctx, target.cwd, target.env);
+        return admission ? suffix("beads-gate-admission", admission.reason, "retry the operation; verification continues and the next attempt waits on the same read") : undefined;
+      }
       if (event.toolName !== "bash")
         return;
       const { command } = inputOf(event, ctx);
@@ -1869,5 +2381,6 @@ function bashGates(pi) {
   });
 }
 export {
+  beadsWorkAdmissionTarget,
   bashGates as default
 };

@@ -7,7 +7,7 @@ import { invocationFromArgv } from "./bd-actor-gate.ts";
 import { attachWriter, decideEmbeddedWrite, embeddedStores, embeddedWriteRunner, embeddedWriteTargets, hold, RUNNER_STORE_FLAG, release, setLeaseTimingForTests, withEmbeddedWriteLock, writesStore } from "./bd-embedded-write-lock.ts";
 import bdLeaseGate, { setBdRunForTests } from "./bd-lease-gate.ts";
 import { cookCheck, deepAssert, type SpawnResult, setBdSpawnForTests } from "./formula-check-tool.ts";
-import { runBd, setBdStreamForTests } from "./session-beads-lifecycle.ts";
+import { releaseClaimCommand, runBd, setBdStreamForTests } from "./session-beads-lifecycle.ts";
 import { parse } from "./shell-command.ts";
 
 const LOCK = "omp-embedded-write.lock";
@@ -38,6 +38,9 @@ const WRITES: Record<string, string[]> = {
 	"ready --claim=1": ["ready", "--claim=1"],
 	"a disabled --readonly": ["--readonly=false", "close", "x"],
 	"a disabled --help": ["--help=false", "close", "x"],
+	"help token consumed as a description": ["create", "x", "--description", "--help"],
+	"readonly token consumed as a description": ["create", "x", "--description", "--readonly"],
+	"help token consumed as a global actor": ["--actor", "--help", "create", "x"],
 	"a disabled --global still writes this store": ["--global=false", "close", "x"],
 	"admin repair": ["admin", "repair"],
 	batch: ["batch"],
@@ -57,6 +60,8 @@ const WRITES: Record<string, string[]> = {
 	import: ["import"],
 	migrate: ["migrate"],
 	"mol pour": ["mol", "pour", "f"],
+	"mol pour dry-run is conservatively serialized": ["mol", "pour", "formula", "--dry-run"],
+	"mol persistent option value cannot spoof a read subaction": ["mol", "--actor", "current", "pour", "formula"],
 	provenance: ["provenance"],
 	prune: ["prune"],
 	purge: ["purge"],
@@ -73,6 +78,15 @@ const WRITES: Record<string, string[]> = {
 };
 
 const READ_ARGV: Record<string, string[]> = {
+	"audit list": ["audit", "list"],
+	"label list": ["label", "list", "x"],
+	"mol current": ["mol", "current", "mol-1"],
+	"mol last-activity": ["mol", "last-activity", "mol-1"],
+	"mol progress": ["mol", "progress", "mol-1"],
+	"mol ready": ["mol", "ready"],
+	"mol seed": ["mol", "seed", "formula"],
+	"mol stale": ["mol", "stale"],
+	"mol wisp list": ["mol", "wisp", "list"],
 	blocked: ["blocked"],
 	"comments listing an issue": ["comments", "bd-1"],
 	"orphans without --fix": ["orphans"],
@@ -80,13 +94,13 @@ const READ_ARGV: Record<string, string[]> = {
 	"orphans with --fix disabled": ["orphans", "--fix=false"],
 	"ready with --claim disabled": ["ready", "--claim=false"],
 	"an enabled --readonly": ["--readonly=true", "close", "x"],
+	"global help on a write": ["--help", "close", "x"],
 	"comments listing as JSON": ["comments", "bd-1", "--json"],
 	"config get": ["config", "get", "k"],
 	"dep list": ["dep", "list", "x"],
 	"dolt status": ["dolt", "status"],
 	export: ["export"],
 	"gate list": ["gate", "list", "--json"],
-	"help flag on a write": ["close", "--help"],
 	list: ["list", "--all", "--json"],
 	"mol show": ["mol", "show", "x", "--json"],
 	ready: ["ready"],
@@ -140,6 +154,48 @@ describe("store resolution follows the store bd will really write", () => {
 		expect(embeddedStores("bd --global close x", "/repo", { BEADS_DIR: beads })).toEqual([]);
 	});
 
+	test("post-verb selectors are refused because option values make them ambiguous", () => {
+		const beads = store();
+		const checkout = join(beads, "..");
+		for (const command of [
+			`bd close x --directory ${checkout}`,
+			`bd close x -C ${checkout}`,
+			`bd close x --db ${beads}`,
+			"bd close x --global",
+			"bd close x --database remote",
+			"bd create x --description --database=remote",
+		]) {
+			expect(embeddedWriteTargets(command, "/repo", { BEADS_DIR: beads }).kind).toBe("refused");
+		}
+	});
+
+	test("selector-looking data and repeated pre-verb selectors follow pflag semantics", () => {
+		const ambient = store();
+		const first = store();
+		const second = store();
+		expect(embeddedStores("bd comments add bd-1 -- --global", "/repo", { BEADS_DIR: ambient })).toEqual([ambient]);
+		expect(embeddedStores(`bd -C ${join(first, "..")} --directory ${join(second, "..")} close x`, "/repo", {})).toEqual([second]);
+		expect(embeddedStores(`bd --actor --db --directory ${join(second, "..")} close x`, "/repo", {})).toEqual([second]);
+		expect(embeddedStores(`bd -C${join(second, "..")} close x`, "/repo", {})).toEqual([second]);
+		expect(embeddedStores(`BEADS_DIR=${second} bd close x`, "/repo", {})).toEqual([second]);
+		expect(embeddedWriteTargets("BEADS_DIR=$TARGET bd close x", "/repo", { BEADS_DIR: ambient }).kind).toBe("refused");
+		expect(embeddedWriteTargets("BEADS_DIR=~/target bd close x", "/repo", { BEADS_DIR: ambient }).kind).toBe("refused");
+		const equalsStore = store("target=store-");
+		expect(embeddedStores(`bd -C${join(equalsStore, "..")} close x`, "/repo", {})).toEqual([equalsStore]);
+		expect(embeddedStores("bd --global --global=false close x", "/repo", { BEADS_DIR: ambient })).toEqual([ambient]);
+		expect(embeddedStores("bd --global=false --global close x", "/repo", { BEADS_DIR: ambient })).toEqual([]);
+	});
+
+	test("a selector may name a literal directory called double dash", () => {
+		const root = realpathSync(mkdtempSync(join(tmpdir(), "beads-dash-directory-")));
+		roots.push(root);
+		const beads = join(root, "--", ".beads");
+		mkdirSync(beads, { recursive: true });
+		writeFileSync(join(beads, "metadata.json"), JSON.stringify({}));
+		expect(embeddedStores("bd -C=-- close x", root, {})).toEqual([beads]);
+		expect(embeddedStores("bd -C -- close x", root, {})).toEqual([beads]);
+	});
+
 
 	test("a global flag's value is never mistaken for the verb", () => {
 		const beads = store();
@@ -181,6 +237,15 @@ describe("a Bash mutation is run by the store's own writer, never held by the se
 		release(beads, "next");
 	});
 
+	test("a generated claim release command is runnable under the writer", async () => {
+		const beads = store();
+		const command = releaseClaimCommand("bd-a-1", "omp/Main/s1", { BD_ACTOR: "omp/Main/s1" }, "2026-09-14T12:34:56.789Z", true, beads);
+		expect(command).toBeDefined();
+		const decision = await decide(command ?? "", beads) as { kind?: string; input?: { command?: string } };
+		expect(decision.kind).toBe("rewrite");
+		expect(decision.input?.command).toContain("-- bd ");
+	});
+
 	test("a backgrounded mutation is rewritten like any other, because the runner outlives the tool result", async () => {
 		const beads = store();
 		const decision = (await decide("bd create a -t task", beads, { async: true })) as { kind: string; input: Record<string, unknown> };
@@ -212,25 +277,8 @@ describe("a Bash mutation is run by the store's own writer, never held by the se
 		expect(decision.kind).toBe("block");
 		const plain = (await decide(`bd create x -t task -d "it's fine"`, beads)) as { input: { command: string } };
 		expect(plain.input.command.endsWith(`-- bd create x -t task -d "it's fine"`)).toBe(true);
-		const expanded = (await decide("bd close $ID", beads)) as { input: { command: string } };
-		expect(expanded.input.command.endsWith("-- bd close $ID")).toBe(true);
 	});
 
-	test("the outer shell expands operands before the runner starts bd", async () => {
-		const beads = store();
-		const seen = join(beads, "seen");
-		const bd = join(beads, "bd");
-		writeFileSync(bd, `#!/bin/sh\nprintf '%s' "$2" > "$OUT"\n`);
-		chmodSync(bd, 0o755);
-		const decision = (await decide("bd close $ID", beads)) as { input: { command: string } };
-		const child = Bun.spawn(["/bin/sh", "-c", decision.input.command], {
-			env: { ...process.env, PATH: `${beads}:${process.env.PATH ?? ""}`, ID: "omp-expanded", OUT: seen },
-			stdout: "ignore",
-			stderr: "ignore",
-		});
-		expect(await child.exited).toBe(0);
-		expect(readFileSync(seen, "utf8")).toBe("omp-expanded");
-	});
 
 	test("a hold whose lease lapsed is taken over even though its pid is alive", async () => {
 		const beads = store();
@@ -276,7 +324,6 @@ describe("only a direct bd invocation is accepted", () => {
 		"bd reached by path": "/usr/local/bin/bd close x",
 		"an assignment prefix": "BEADS_ACTOR=me bd close x",
 		"two assignment prefixes": "BEADS_ACTOR=me BD_NO_PAGER=1 bd close x",
-		"a dynamic issue id": "bd close $ID",
 		"a quoted argument": 'bd comment x "a note with spaces"',
 		// Quoted OPERANDS carrying punctuation. These are ordinary standalone writes, and
 		// refusing them made the remediation impossible to follow.
@@ -355,14 +402,47 @@ describe("only a direct bd invocation is accepted", () => {
 		// thing naming a store, and it still has to be locked.
 		expect(embeddedWriteTargets(`bd -C ${join(beads, "..")} close x`, "/nowhere", {})).toEqual({ kind: "stores", stores: [beads] });
 	});
+	test("leading output redirections cannot hide a direct write target", () => {
+		const beads = store();
+		for (const command of ["> /tmp/out bd close x", ">/tmp/out bd close x", "2>> /tmp/out bd close x", "2>>/tmp/out bd close x", "&> /tmp/out bd close x", "1>&2 bd close x", ">&2 bd close x", "0<&1 bd close x", ">| /tmp/out bd close x", ">|/tmp/out bd close x", "<> /tmp/out bd close x", "3<>/tmp/out bd close x"]) {
+			expect(embeddedWriteTargets(command, "/repo", { BEADS_DIR: beads }).kind, command).toBe("refused");
+		}
+	});
+
+
+	test("changed-directory writes fail closed without an ambient store", () => {
+		const beads = store();
+		const checkout = join(beads, "..");
+		expect(embeddedWriteTargets(`cd ${checkout} && bd close x`, "/nowhere", {}).kind).toBe("refused");
+		expect(embeddedWriteTargets('cd "$TARGET" && bd close x', "/nowhere", {}).kind).toBe("refused");
+		expect(embeddedWriteTargets(`FOO=1 cd ${checkout} && bd close x`, "/nowhere", {}).kind).toBe("refused");
+		expect(embeddedWriteTargets(`command cd ${checkout} && bd close x`, "/nowhere", {}).kind).toBe("refused");
+		expect(embeddedWriteTargets("cd >/tmp/log && bd close x", "/nowhere", {}).kind).toBe("refused");
+		expect(embeddedWriteTargets(`'cd' ${checkout} && bd close x`, "/nowhere", {}).kind).toBe("refused");
+		expect(embeddedWriteTargets(`c\\d ${checkout} && bd close x`, "/nowhere", {}).kind).toBe("refused");
+	});
+
+	test("unquoted argv expansion cannot choose runner arguments", () => {
+		const beads = store();
+		expect(embeddedWriteTargets("OPTS='--db /repo-b/.beads' bd $OPTS update bd-x --claim", "/repo", { BEADS_DIR: beads, OPTS: "--db /repo-b/.beads" }).kind).toBe("refused");
+		expect(embeddedWriteTargets("bd close $ID", "/repo", { BEADS_DIR: beads, ID: "bd-x" }).kind).toBe("refused");
+	});
+
+	test("quoted and escaped bd command words cannot bypass the runner", async () => {
+		const beads = store();
+		for (const command of ["'bd' close x", "b\\d close x", "command 'bd' close x"]) {
+			const event = { toolName: "bash", toolCallId: "quoted-bd", input: { command, cwd: "/repo", env: { BEADS_DIR: beads } } };
+			expect((await decideEmbeddedWrite(parse(command), event as never, { cwd: "/repo" } as never))?.kind).toBe("block");
+		}
+	});
 });
 
 
 /** A `.beads` directory carrying the mode carriers bd writes. */
-function store(): string {
+function store(prefix = "beads-write-lock-"): string {
 	// Canonical, because the lock canonicalises every store path so two spellings of
 	// one database cannot become two lock domains; on macOS `/var` is a symlink.
-	const root = realpathSync(mkdtempSync(join(tmpdir(), "beads-write-lock-")));
+	const root = realpathSync(mkdtempSync(join(tmpdir(), prefix)));
 	roots.push(root);
 	const beads = join(root, ".beads");
 	mkdirSync(beads);

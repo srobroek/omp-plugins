@@ -44,12 +44,15 @@ import type { ExtensionContext, ToolCallEvent } from "@oh-my-pi/pi-coding-agent"
 import {
 	type BdInvocation,
 	environmentForInput,
+	firstArgumentAfterPersistentOptions,
 	flagEnabled,
+	globalFlagEnabled,
+	globalOptions,
 	globalValue,
 	invocationFromArgv,
 } from "./bd-actor-gate.ts";
 import { sessionPinFor } from "./beads-store.ts";
-import { commandSegments, invocation, type ParsedCommand, tokenize } from "./shell-command.ts";
+import { commandExecutableIndex, type ParsedCommand, parse as parseShellCommand, tokenize } from "./shell-command.ts";
 
 /** The hold itself. */
 const LOCK_NAME = "omp-embedded-write.lock";
@@ -278,6 +281,7 @@ const READS: Record<string, true | "idOnly" | Record<string, true>> = {
 	types: true,
 	version: true,
 	where: true,
+	audit: { list: true },
 	config: { get: true, list: true },
 	dep: { list: true, show: true, tree: true },
 	dolt: { diff: true, log: true, status: true },
@@ -285,8 +289,9 @@ const READS: Record<string, true | "idOnly" | Record<string, true>> = {
 	formula: { list: true, show: true },
 	gate: { list: true, show: true },
 	kv: { get: true, list: true },
-	mol: { list: true, show: true },
-	swarm: { list: true, show: true },
+	label: { list: true },
+	mol: { current: true, "last-activity": true, list: true, progress: true, ready: true, seed: true, show: true, stale: true },
+	swarm: { list: true, show: true, validate: true },
 };
 
 /**
@@ -308,23 +313,87 @@ const BEAD_ID = /^[A-Za-z][A-Za-z0-9]*(?:-[A-Za-z0-9]+)+$/;
  *
  * Fails closed on every uncertainty: an argv that produced no invocation at all,
  * an unknown verb, and an unknown subaction of a partly-read verb all count as
- * writes. `--help` and bd's own `--readonly` are the only blanket exemptions, and
- * both are decided by bd rather than guessed at here.
+ * writes. Only global `--help` and `--readonly` are blanket exemptions: command-local
+ * copies can be values consumed by string options, so treating their raw presence as
+ * authoritative lets a real mutation bypass admission and serialization.
  */
 export function writesStore(invocation: BdInvocation | undefined): boolean {
 	if (invocation === undefined) return true;
 	const { verb, args, globals } = invocation;
-	if (flagEnabled(globals, ["--help", "-h"]) || flagEnabled(args, ["--help", "-h"])) return false;
-	// `--readonly` makes bd itself block writes, so nothing can reach the journal.
-	if (flagEnabled(globals, ["--readonly"])) return false;
+	if (globalFlagEnabled(globals, ["--help", "-h"])) return false;
+	// Global `--readonly` makes bd itself block writes, so nothing can reach the journal.
+	if (globalFlagEnabled(globals, ["--readonly"])) return false;
+	// Dry-run tokens can likewise be consumed as values; serializing them is conservative.
+	if (verb === "mol" && args[0] === "wisp") return args[1] !== "list";
 	const rule = READS[verb];
 	if (rule === undefined) return true;
 	const writeFlags = WRITE_FLAGS[verb];
 	if (writeFlags !== undefined && flagEnabled(args, writeFlags)) return true;
-	const subaction = args.find(arg => !arg.startsWith("-"));
+	const subaction = firstArgumentAfterPersistentOptions(args);
 	if (rule === true) return false;
 	if (rule === "idOnly") return subaction === undefined || !BEAD_ID.test(subaction);
 	return subaction === undefined || rule[subaction] !== true;
+}
+
+/**
+ * Persistent store selectors before `--`, normalized to each pflag variable's
+ * final value. Selectors after the sentinel are positional data, while repeated
+ * aliases such as `-C a --directory b` use the last value.
+ */
+function storeSelection(invocation: BdInvocation): string[] {
+	let directory: string[] | undefined;
+	let db: string[] | undefined;
+	let database: string[] | undefined;
+	let global: string | undefined;
+	for (const option of globalOptions(invocation.globals)) {
+		if (option.name === "--global") {
+			global = option.token;
+			continue;
+		}
+		if (option.value === undefined) continue;
+		switch (option.name) {
+			case "-C":
+			case "--directory": directory = [option.name, option.value]; break;
+			case "--db": db = [option.name, option.value]; break;
+			case "--database": database = [option.name, option.value]; break;
+		}
+	}
+	return [...(global === undefined ? [] : [global]), ...(directory ?? []), ...(db ?? []), ...(database ?? [])];
+}
+
+
+/** A post-verb store-looking token is ambiguous with a command option's value. */
+function hasPostVerbStoreSelector(args: string[]): boolean {
+	for (const token of args) {
+		if (token === "--") return false;
+		if (token === "--global" || token.startsWith("--global=")) return true;
+		if (STORE_FLAGS.some(flag => token === flag || token.startsWith(`${flag}=`))) return true;
+	}
+	return false;
+}
+function commandBeadsDir(invocation: BdInvocation): { found: boolean; dynamic: boolean; value: string } {
+	let found = false;
+	let value = "";
+	for (const assignment of invocation.prefix) {
+		if (!assignment.startsWith("BEADS_DIR=")) continue;
+		found = true;
+		value = assignment.slice("BEADS_DIR=".length);
+	}
+	return { found, dynamic: found && DEFERRED_VALUE.test(value), value };
+}
+
+
+/** Resolve one parsed bd invocation through the exact store-selection rules used by the lock. */
+export function bdStoreForInvocation(invocation: BdInvocation, cwd: string, env: NodeJS.ProcessEnv): string | undefined {
+	const local = commandBeadsDir(invocation);
+	if (local.dynamic) return undefined;
+	return storeFor(storeSelection(invocation), cwd, local.found ? { ...env, BEADS_DIR: local.value } : env);
+}
+
+/** Whether bd explicitly bypasses repository-local storage for this invocation. */
+export function bdInvocationUsesExternalStore(invocation: BdInvocation): boolean {
+	const selectors = storeSelection(invocation);
+	return flagEnabled(selectors, ["--global"]) || globalValue(selectors, ["--database"]) !== undefined;
 }
 
 /**
@@ -460,67 +529,38 @@ export type WriteTargets =
  * `--directory` / `--database`, which is sound because none of it is inferred from
  * the command text.
  *
- * Everything else that mentions `bd` is refused on an embedded store. That is the
- * whole point of the shape: three rounds of counter-examples -- `timeout 60 bd`,
- * `bash -c 'set -e; bd close x'`, `eval bd close x`, `echo x | xargs bd close`,
- * `find . -exec bd close {} +`, `cd other && bd close x` -- each showed that reading
- * shell semantics out of a string produces confident wrong answers in BOTH
- * directions. An unmodelled form now fails closed by construction, so there is no
- * next hole to find. Over-refusal is expected, immediately visible, and cleared by
- * issuing the `bd` command as its own tool call.
+ * The shared Bash parser rejects dynamic command words and opaque launchers before
+ * this classifier runs. Among statically parsed commands, every non-direct shape
+ * that exposes a `bd` command position is refused. This is deliberately not a shell
+ * sandbox: the supported mutation contract is a direct `bd` tool call, while known
+ * indirection such as `eval`, `find -exec`, `env -S`, substitutions and shell
+ * compounds fails closed. Over-refusal is visible and cleared by issuing `bd` as its
+ * own tool call.
  *
  * Only one store is ever locked for a bash call, because the accepted shape is a
  * single invocation; the array shape is kept for the internal writers that can hold
  * more than one.
  */
 export function embeddedWriteTargets(command: string, cwd: string, env: NodeJS.ProcessEnv): WriteTargets {
-	const hasBd = commandSegments(command).some(segment => invocation(segment, ["bd"]) !== null);
+	const hasBd = parseShellCommand(command).commands.some(position => (position.executable?.split("/").pop() ?? position.executable) === "bd");
 	if (!hasBd) return { kind: "stores", stores: [] };
 	const direct = directInvocation(command);
 	if (direct !== undefined) {
 		if (direct === "no-write" || !writesStore(direct)) return { kind: "stores", stores: [] };
-		const store = storeFor(direct.globals, cwd, env);
+		if (commandBeadsDir(direct).dynamic) return { kind: "refused", reason: "This bd mutation selects BEADS_DIR dynamically, so its target store cannot be serialized safely. Use a literal BEADS_DIR value and retry." };
+		const store = bdStoreForInvocation(direct, cwd, env);
 		return { kind: "stores", stores: store !== undefined && embedded(store) ? [store] : [] };
 	}
-	// An embedded store in reach is what gives this gate jurisdiction. The session's own
-	// here short-circuited, and an explicit `-C <embedded store>` in the command went
-	// unseen. `namedStore` already returns embedded stores only.
-	const ambient = storeFor([], cwd, env);
-	const at = ambient !== undefined && embedded(ambient) ? ambient : namedStore(command, cwd, env);
-	if (at === undefined) return { kind: "stores", stores: [] };
 	return {
 		kind: "refused",
 		reason: [
-			`This command mentions \`bd\` in a form the Beads write lock cannot resolve, and ${at} is an embedded store, where two concurrent writers corrupt the Dolt journal.`,
+			"This command mentions `bd` in a form the Beads write lock cannot resolve, so its target embedded store cannot be serialized safely.",
 			"The lock accepts exactly one shape: a bash call whose whole command is a single direct `bd` invocation, optionally preceded by literal `VAR=value` assignments, with no separators, pipes, redirections, grouping, command substitutions, escapes or newlines, and with a literal value for `-C` / `--directory` / `--db` / `--database`.",
 			"Issue the `bd` command as its own tool call in that form, and run the surrounding work as a separate call. `bd export -o issues.jsonl` rather than a redirection, and one call each rather than `&&`, are accepted.",
 		].join(" "),
 	};
 }
 
-/**
- * A store the command names explicitly, whatever else it does.
- *
- * Literal collection, not analysis: every `-C` / `--directory` / `--db` / `--database`
- * value in the text is resolved, and the first embedded one is returned. Without this,
- * a compound command carrying `-C <embedded store>` escaped whenever the session's own
- */
-function namedStore(command: string, cwd: string, env: NodeJS.ProcessEnv): string | undefined {
-	// One extra level: a quoted argument is tokenized too, because
-	// `bash -c 'bd -C /embedded close x'` keeps its `-C` inside a single token and the
-	// store it names would otherwise go unseen. This can only add a refusal; a payload
-	// is never treated as a direct call.
-	const words = tokenize(command).flatMap(token => (token.quoted ? tokenize(token.value).map(inner => inner.value) : [token.value]));
-	for (const [index, word] of words.entries()) {
-		for (const flag of STORE_FLAGS) {
-			const value = word === flag ? words[index + 1] : word.startsWith(`${flag}=`) ? word.slice(flag.length + 1) : undefined;
-			if (value === undefined || DEFERRED_VALUE.test(value)) continue;
-			const store = storeFor([flag, value], cwd, env);
-			if (store !== undefined && embedded(store)) return store;
-		}
-	}
-	return undefined;
-}
 
 /**
  * The invocation when the WHOLE command is one direct `bd` call, else `undefined`.
@@ -533,19 +573,23 @@ function directInvocation(command: string): BdInvocation | "no-write" | undefine
 	// Substitution disqualifies a token whatever its quoting; operators only unquoted.
 	if (tokens.some(token => SUBSTITUTION.test(token.value))) return undefined;
 	if (tokens.some(token => !token.quoted && OPERATOR.test(token.value))) return undefined;
-	let i = 0;
-	// A real assignment token, not a regex over the raw command.
-	while (tokens[i] !== undefined && tokens[i]?.quoted === false && /^[A-Za-z_]\w*=/.test(tokens[i]?.value ?? "")) i++;
+	const { index: i } = commandExecutableIndex(tokens);
 	const head = tokens[i];
-	if (head === undefined || head.quoted) return undefined;
-	const base = head.value.split("/").pop() ?? head.value;
+	if (head === undefined) return undefined;
+	const base = head.normalized.split("/").pop() ?? head.normalized;
 	if (base !== "bd") return undefined;
-	const invocation = invocationFromArgv(tokens.slice(i + 1).map(token => token.value));
+	if (tokens.slice(0, i).some(token => token.quoted || !/^[A-Za-z_]\w*=/.test(token.value))) return undefined;
+	if (tokens.slice(i + 1).some(token => !token.quoted && /(^|[^\\])[$`*?[\]{}~]/.test(token.value))) return undefined;
+	const parsed = invocationFromArgv(tokens.slice(i + 1).map(token => token.normalized));
+	const prefix = tokens.slice(0, i).filter(token => token.quoted === false && /^[A-Za-z_]\w*=/.test(token.value)).map(token => token.normalized);
+	const invocation = parsed === undefined ? undefined : { ...parsed, prefix };
 	// `bd`, `bd --version` and `bd --help` carry no verb: recognised, and no write.
 	if (invocation === undefined) return "no-write";
+	if (hasPostVerbStoreSelector(invocation.args)) return undefined;
 	// The store must be resolvable now; a value the shell expands later is not.
+	const selectors = storeSelection(invocation);
 	for (const flag of STORE_FLAGS) {
-		const value = globalValue(invocation.globals, [flag]);
+		const value = globalValue(selectors, [flag]);
 		if (value !== undefined && DEFERRED_VALUE.test(value)) return undefined;
 	}
 	return invocation;

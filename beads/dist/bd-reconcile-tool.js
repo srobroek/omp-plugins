@@ -54,16 +54,35 @@ function scanGlobals(tokens, from) {
   }
   return { globals, next: i };
 }
-function globalValue(globals, names) {
-  for (const [index, token] of globals.entries()) {
-    for (const name of names) {
-      if (token === name)
-        return globals[index + 1];
-      if (token.startsWith(`${name}=`))
-        return token.slice(name.length + 1);
+function firstArgumentAfterPersistentOptions(args) {
+  return args[scanGlobals(args, 0).next];
+}
+function globalOptions(globals) {
+  const options = [];
+  for (let index = 0;index < globals.length; index++) {
+    const token = globals[index];
+    if (token.startsWith("-C") && token.length > 2) {
+      const value = token.slice(2);
+      options.push({ name: "-C", token, value: value.startsWith("=") ? value.slice(1) : value });
+      continue;
     }
+    const equals = token.indexOf("=");
+    if (equals >= 0) {
+      options.push({ name: token.slice(0, equals), token, value: token.slice(equals + 1) });
+      continue;
+    }
+    if (VALUE_FLAGS.has(token))
+      options.push({ name: token, token, value: globals[++index] });
+    else
+      options.push({ name: token, token });
   }
-  return;
+  return options;
+}
+function globalValue(globals, names) {
+  return globalOptions(globals).findLast((option) => names.includes(option.name))?.value;
+}
+function globalFlagEnabled(globals, names) {
+  return globalOptions(globals).some((option) => names.includes(option.name) && flagEnabled([option.token], names));
 }
 function flagEnabled(tokens, names) {
   for (const token of tokens) {
@@ -248,6 +267,7 @@ var READS = {
   types: true,
   version: true,
   where: true,
+  audit: { list: true },
   config: { get: true, list: true },
   dep: { list: true, show: true, tree: true },
   dolt: { diff: true, log: true, status: true },
@@ -255,8 +275,9 @@ var READS = {
   formula: { list: true, show: true },
   gate: { list: true, show: true },
   kv: { get: true, list: true },
-  mol: { list: true, show: true },
-  swarm: { list: true, show: true }
+  label: { list: true },
+  mol: { current: true, "last-activity": true, list: true, progress: true, ready: true, seed: true, show: true, stale: true },
+  swarm: { list: true, show: true, validate: true }
 };
 var WRITE_FLAGS = {
   orphans: ["--fix", "-f"],
@@ -268,17 +289,19 @@ function writesStore(invocation) {
   if (invocation === undefined)
     return true;
   const { verb, args, globals } = invocation;
-  if (flagEnabled(globals, ["--help", "-h"]) || flagEnabled(args, ["--help", "-h"]))
+  if (globalFlagEnabled(globals, ["--help", "-h"]))
     return false;
-  if (flagEnabled(globals, ["--readonly"]))
+  if (globalFlagEnabled(globals, ["--readonly"]))
     return false;
+  if (verb === "mol" && args[0] === "wisp")
+    return args[1] !== "list";
   const rule = READS[verb];
   if (rule === undefined)
     return true;
   const writeFlags = WRITE_FLAGS[verb];
   if (writeFlags !== undefined && flagEnabled(args, writeFlags))
     return true;
-  const subaction = args.find((arg) => !arg.startsWith("-"));
+  const subaction = firstArgumentAfterPersistentOptions(args);
   if (rule === true)
     return false;
   if (rule === "idOnly")
@@ -579,18 +602,23 @@ var pendingClaims = new Map;
 
 // extensions/session-beads-lifecycle.ts
 var EMBEDDED_PIN_ENV = { BEADS_DOLT_SHARED_SERVER: "" };
+function boundedBdEnvironment(base) {
+  return {
+    ...base,
+    ...EMBEDDED_PIN_ENV,
+    BD_NO_PAGER: "1",
+    BD_NON_INTERACTIVE: "1",
+    BD_DOLT_AUTO_START: "false",
+    NO_COLOR: "1"
+  };
+}
 function lifecycleBdEnvironment(cwd, base = process.env) {
   const env = { ...base };
   delete env.BEADS_DIR;
   const resolved = sessionPinFor(cwd);
   if (resolved !== undefined)
     env.BEADS_DIR = resolved;
-  env.BD_NO_PAGER = "1";
-  env.BD_NON_INTERACTIVE = "1";
-  env.BD_DOLT_AUTO_START = "false";
-  env.NO_COLOR = "1";
-  Object.assign(env, EMBEDDED_PIN_ENV);
-  return env;
+  return boundedBdEnvironment(env);
 }
 function parseTrailingJson(stdout) {
   const text = stdout.trim();
@@ -689,6 +717,8 @@ function claimAnchor(bead) {
   const pid = Number(bead.metadata?.lease_pid);
   return host && Number.isInteger(pid) && pid > 0 ? { host, pid } : undefined;
 }
+var backgroundReads = new Set;
+var LIFECYCLE_BRIDGE = Symbol.for("com.srobroek.beads.session-lifecycle.bridge.v1");
 
 // extensions/bd-reconcile-tool.ts
 var RECEIPT_SCHEMA = "omp.receipt.landing";

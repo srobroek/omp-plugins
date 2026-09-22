@@ -82,6 +82,13 @@ describe("actorValues / environmentForInput", () => {
 		).toEqual(["omp/Main/yes"]);
 	});
 
+	test("an explicit global actor overrides actor environment variables", () => {
+		expect(actorValues("bd --actor=omp/Explicit/owner update x --claim", {
+			BD_ACTOR: "omp/Main/ambient",
+			BEADS_ACTOR: "omp/Main/ambient",
+		})).toEqual(["omp/Explicit/owner"]);
+	});
+
 	test("distinct invocations still report distinct actors", () => {
 		// The plural name stays earned: one command line can carry several writes
 		// under different identities. What is gone is two actors for ONE write.
@@ -145,6 +152,8 @@ describe("firstBdVerb / isMutatingBdCommand", () => {
 			"bd swarm validate",
 			"echo hello",
 			"git status",
+			"bd --help close x",
+			"bd --readonly close x",
 		]) {
 			expect(isMutatingBdCommand(cmd)).toBe(false);
 		}
@@ -160,7 +169,6 @@ describe("firstBdVerb / isMutatingBdCommand", () => {
 			"bd mol stale",
 			"bd mol last-activity mol-1",
 			"bd mol seed formula",
-			"bd mol pour formula --dry-run",
 			"bd mol wisp list",
 			"bd mol --help",
 			"bd dep tree x",
@@ -186,6 +194,9 @@ describe("firstBdVerb / isMutatingBdCommand", () => {
 	test("grouped write actions trigger", () => {
 		for (const cmd of [
 			"bd mol pour formula",
+			"bd mol pour formula --dry-run",
+			"bd create x --description --help",
+			"bd --actor --help create x",
 			"bd mol bond a b",
 			"bd mol wisp formula",
 			"bd mol wisp create formula",

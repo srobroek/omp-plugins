@@ -12,27 +12,34 @@
  * - the stale-skip warning from `bd import`: the committed export is behind this
  *   database, so the next export would overwrite a peer's rows (beads-core).
  * - claims still held at session close (beads-core SESSION CLOSE).
+ *
+ * Gate verification is the only database read initiated at a boundary. It starts
+ * asynchronously and the first dispatch or mutation waits for its verdict; session close
+ * derives held claims from successful command results without another ledger read.
  */
 
 import { existsSync, readFileSync, rmSync, statSync } from "node:fs";
-import { isAbsolute, join, resolve } from "node:path";
+import { dirname, isAbsolute, join, resolve } from "node:path";
 import type {
 	ExtensionAPI,
 	ExtensionContext,
+	ToolCallEvent,
 	ToolResultEvent,
 } from "@oh-my-pi/pi-coding-agent";
 
 import {
 	actorValues,
+	type BdInvocation,
 	bdInvocations,
 	environmentForInput,
 	extractCommand,
 	flagEnabled,
+	globalFlagEnabled,
+	globalValue,
 	invocationActor,
 	invocationFromArgv,
-	isMutatingBdCommand,
 } from "./bd-actor-gate.ts";
-import { withEmbeddedWriteLock, writesStore } from "./bd-embedded-write-lock.ts";
+import { bdInvocationUsesExternalStore, bdStoreForInvocation, embeddedWriteTargets, withEmbeddedWriteLock, writesStore } from "./bd-embedded-write-lock.ts";
 import { claimedIds, claimedTextIds, claimResultOutput } from "./bd-lease-gate.ts";
 import { repoIdentity, sessionPinFor } from "./beads-store.ts";
 import { closeInvocations, leadingCdCwd, parse as parseShellCommand } from "./shell-command.ts";
@@ -53,24 +60,31 @@ import { tokenizeShell } from "./shell-tokenizer.ts";
  * reads the empty string as unset.
  */
 const EMBEDDED_PIN_ENV: Readonly<Record<string, string>> = { BEADS_DOLT_SHARED_SERVER: "" };
+
+function boundedBdEnvironment(base: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+	return {
+		...base,
+		...EMBEDDED_PIN_ENV,
+		BD_NO_PAGER: "1",
+		BD_NON_INTERACTIVE: "1",
+		BD_DOLT_AUTO_START: "false",
+		NO_COLOR: "1",
+	};
+}
 export function lifecycleBdEnvironment(cwd: string, base: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
 	const env: NodeJS.ProcessEnv = { ...base };
 	delete env.BEADS_DIR;
 	const resolved = sessionPinFor(cwd);
 	if (resolved !== undefined) env.BEADS_DIR = resolved;
-	env.BD_NO_PAGER = "1";
-	env.BD_NON_INTERACTIVE = "1";
-	env.BD_DOLT_AUTO_START = "false";
-	env.NO_COLOR = "1";
-	Object.assign(env, EMBEDDED_PIN_ENV);
-	return env;
+	return boundedBdEnvironment(env);
 }
 
 
 function bdStoreDir(cwd: string, env: NodeJS.ProcessEnv): string | undefined {
-	const dir = env.BEADS_DIR ?? join(cwd, ".beads");
+	const selected = env.BEADS_DIR;
+	const dir = selected ? (isAbsolute(selected) ? selected : resolve(cwd, selected)) : join(cwd, ".beads");
 	try {
-		return statSync(dir).isDirectory() ? dir : undefined;
+		return statSync(dir).isDirectory() ? resolve(dir) : undefined;
 	} catch {
 		return undefined;
 	}
@@ -84,10 +98,29 @@ function bdReadFailure(scope: "start" | "close", reason: string): string {
 		: `Beads claims could not be read at session close: ${bounded}. A mutating command was attempted; inspect assigned and touched work before stopping.`;
 }
 
-/** No session boundary may hang on the database or on `gh`. */
+/** Default deadline for a `bd` call with no boundary budget of its own. */
 const TIMEOUT_MS = 8000;
 
 
+
+/**
+ * The fixed ceiling on one `bd` command, and the only bound that outlives an event.
+ *
+ * Every call site gets a fixed ceiling. Gate verification deliberately runs off the
+ * session-start boundary with this wider deadline: an event budget cannot distinguish a
+ * slow store from a hung one, and measured cold embedded-store reads run 30-50 seconds.
+ */
+const BD_COMMAND_CEILING_MS = 120_000;
+
+/**
+ * How long a mutating bd command waits for this session's gate verification.
+ *
+ * A `tool_call` has a 30,000 ms budget and the other beads gates plus dispatch need the
+ * rest of it. A command that outlasts this is refused rather than admitted unverified,
+ * and the refusal says the verification is still running, because it is: the next
+ * attempt waits on the same read and converges.
+ */
+const GATE_ADMISSION_MS = 20_000;
 
 /** Longest advisory list before it stops being read. */
 const MAX_LISTED = 8;
@@ -107,8 +140,8 @@ export const AUTO_GATE_TYPES: Record<string, true> = {
 interface SessionState {
 	actors: Set<string>;
 	bdWrote: boolean;
-	/** Claims made successfully by this session, keyed by bead id; undefined means output proved the claim but not its actor. */
-	claims: Map<string, string | undefined>;
+	/** Claims made successfully by this session, keyed by resolved store and bead id. */
+	claims: Map<string, TrackedClaim>;
 	/** The database this session's bash calls are pinned to, when its checkout has one. */
 	pin?: string;
 	/** Git common-dir identity for the checkout that started this session. */
@@ -118,6 +151,8 @@ interface SessionState {
 	staleAdvised: boolean;
 	stopFired: boolean;
 	touched: Set<string>;
+	/** Gate verification by resolved target store; foreign workspaces cannot borrow the session checkout's verdict. */
+	gates: Map<string, GateVerification>;
 }
 
 export { repoIdentity, sessionPinFor };
@@ -346,11 +381,12 @@ export interface CheckOutcome {
 	errors: number;
 }
 
-export function readCheckOutcome(stdout: string): CheckOutcome {
+export function readCheckOutcome(stdout: string): CheckOutcome | undefined {
 	const data = envelopeData(parseTrailingJson(stdout));
-	const record = data !== null && typeof data === "object" ? (data as Record<string, unknown>) : {};
-	const count = (key: string): number => (typeof record[key] === "number" ? (record[key] as number) : 0);
-	return { resolved: count("resolved"), escalated: count("escalated"), errors: count("errors") };
+	if (data === null || typeof data !== "object") return undefined;
+	const record = data as Record<string, unknown>;
+	if (typeof record.resolved !== "number" || typeof record.escalated !== "number" || typeof record.errors !== "number") return undefined;
+	return { resolved: record.resolved, escalated: record.escalated, errors: record.errors };
 }
 
 export function formatGateAdvisory(gates: Gate[], outcome: CheckOutcome | undefined): string | undefined {
@@ -423,7 +459,7 @@ export function bdVerbs(command: string): string[] {
 
 /** Whether this command line wrote the beads database. */
 export function isBdWrite(command: string): boolean {
-	return isMutatingBdCommand(command);
+	return bdInvocations(command).some(invocation => writesStore(invocation));
 }
 
 /**
@@ -479,64 +515,145 @@ function commandSucceeded(event: ToolResultEvent): boolean {
 	return !/\bCommand exited with code -?[1-9]\d*\b/u.test(resultText(event));
 }
 
+interface TrackedClaim {
+	id: string;
+	actor: string | undefined;
+	store: string | undefined;
+}
+
+interface ClaimTarget {
+	key: string;
+	store: string | undefined;
+}
+
+function claimTarget(invocation: BdInvocation, cwd: string, env: NodeJS.ProcessEnv): ClaimTarget {
+	const localStore = invocation.prefix.findLast(token => token.startsWith("BEADS_DIR="))?.slice("BEADS_DIR=".length);
+	const global = flagEnabled(invocation.globals, ["--global"]);
+	const database = globalValue(invocation.globals, ["--database"]);
+	const db = globalValue(invocation.globals, ["--db"]);
+	const directory = globalValue(invocation.globals, ["-C", "--directory"]);
+	const base = directory === undefined ? cwd : resolve(cwd, directory);
+	const selector = global ? ["global"] : database !== undefined ? ["database", database] : db !== undefined ? ["db", resolve(base, db)] : directory !== undefined ? ["directory", base] : undefined;
+	const store = bdStoreForInvocation(invocation, cwd, env);
+	if (selector !== undefined) return { key: `external:${JSON.stringify(selector)}`, store };
+	if (store !== undefined) return { key: store, store };
+	return { key: `external:${JSON.stringify(["beadsDir", localStore === undefined ? undefined : resolve(cwd, localStore)])}`, store: undefined };
+}
+
+function trackedClaimKey(target: ClaimTarget, id: string): string {
+	return `${target.key}\0${id}`;
+}
+
+function setTrackedClaim(state: SessionState, target: ClaimTarget, id: string, actor: string | undefined): void {
+	if (target.store !== undefined) {
+		for (const [key, claim] of state.claims) {
+			if (claim.id === id && claim.store === target.store) state.claims.delete(key);
+		}
+	}
+	state.claims.set(trackedClaimKey(target, id), { id, actor, store: target.store });
+}
+
+function deleteTrackedClaim(state: SessionState, target: ClaimTarget, id: string): void {
+	state.claims.delete(trackedClaimKey(target, id));
+	if (target.store === undefined) return;
+	for (const [key, claim] of state.claims) {
+		if (claim.id === id && claim.store === target.store) state.claims.delete(key);
+	}
+}
+
+const TRANSITION_VALUE_FLAGS: Record<string, true> = {
+	"--actor": true, "--database": true, "--db": true, "-C": true, "--directory": true, "--dolt-auto-commit": true, "--mem-profile": true,
+	"--acceptance": true, "--add-label": true, "--append-notes": true, "--assignee": true, "-a": true, "--await-id": true, "--body-file": true, "--defer": true,
+	"--description": true, "-d": true, "--design": true, "--design-file": true, "--due": true, "--estimate": true, "-e": true, "--external-ref": true, "--if-assignee": true,
+	"--if-status": true, "--metadata": true, "--notes": true, "--parent": true, "--priority": true, "-p": true, "--remove-label": true, "--session": true, "--set-labels": true,
+	"--set-metadata": true, "--spec-id": true, "--status": true, "-s": true, "--title": true, "--type": true, "-t": true, "--unset-metadata": true, "--reason": true, "-r": true, "--message": true,
+};
+
+/** Command-local help and actor overrides, excluding tokens consumed as string option values. */
+function commandTransitionFlags(args: string[]): { actorOverride: string | undefined; claim: boolean; help: boolean } {
+	let actorOverride: string | undefined;
+	let claim = false;
+	for (let index = 0; index < args.length; index++) {
+		const token = args[index] as string;
+		const name = token.split("=", 1)[0] ?? token;
+		if (TRANSITION_VALUE_FLAGS[name] === true) {
+			if (name === "--actor") actorOverride = token.includes("=") ? token.slice(token.indexOf("=") + 1) : args[index + 1];
+			if (!token.includes("=")) index++;
+			continue;
+		}
+		if (flagEnabled([token], ["--help", "-h"])) return { actorOverride, claim, help: true };
+		if (flagEnabled([token], ["--claim"])) claim = true;
+	}
+	return { actorOverride, claim, help: false };
+}
+
 /** Update the claims this session can prove from a successful Bash result; no database read is needed at shutdown. */
-function recordClaimTransitions(state: SessionState, command: string, env: NodeJS.ProcessEnv, event: ToolResultEvent): void {
-	const invocations = bdInvocations(command);
+function recordClaimTransitions(state: SessionState, command: string, cwd: string, env: NodeJS.ProcessEnv, event: ToolResultEvent, invocations: BdInvocation[]): void {
+	const transitionInvocations = invocations.flatMap(invocation => {
+		const flags = commandTransitionFlags(invocation.args);
+		return globalFlagEnabled(invocation.globals, ["--help", "-h"]) || flags.help ? [] : [{ flags, invocation }];
+	});
 	const parsedCommand = parseShellCommand(command);
 	const commandTokens = tokenizeShell(command);
 	const terminalToken = commandTokens.findLast(token => token.value !== "\n")?.value;
 	const executables = parsedCommand.commands.map(position => position.executable?.split("/").pop());
 	const directCommand = (executables.length === 1 && executables[0] === "bd") || (executables.length === 2 && executables[0] === "cd" && executables[1] === "bd" && leadingCdCwd(command, "") !== "");
-	const mutationSucceededDirectly = !parsedCommand.unknown && parsedCommand.nested.length === 0 && directCommand && invocations.length === 1 && terminalToken !== "&";
+	const mutationSucceededDirectly = !parsedCommand.unknown && parsedCommand.nested.length === 0 && directCommand && transitionInvocations.length === 1 && terminalToken !== "&";
 	const output = claimResultOutput(event);
 	const allOutputIds = new Set(claimedIds(output));
 	const labeledOutputIds = new Set(claimedTextIds(output));
-	const claimInvocations = invocations.flatMap(invocation => {
-		const enabled = invocation.verb === "claim" || ((invocation.verb === "update" || invocation.verb === "ready") && flagEnabled(invocation.args, ["--claim"]));
-		const actor = enabled ? invocationActor(invocation, env) : null;
-		return actor === null ? [] : [{ actor, directIds: mutationTargetIds(invocation.args) }];
+	const claimInvocations = transitionInvocations.flatMap(({ flags, invocation }) => {
+		const enabled = invocation.verb === "claim" || ((invocation.verb === "update" || invocation.verb === "ready") && flags.claim);
+		const actor = enabled ? (flags.actorOverride ?? invocationActor(invocation, env)) : null;
+		return actor === null ? [] : [{ actor, directIds: mutationTargetIds(invocation.args), invocation, target: claimTarget(invocation, cwd, env) }];
 	});
-	const actorsById = new Map<string, Set<string>>();
-	for (const { actor, directIds } of claimInvocations) {
+	const actorsByClaim = new Map<string, Set<string>>();
+	for (const { actor, directIds, target } of claimInvocations) {
 		for (const id of directIds) {
-			const actors = actorsById.get(id) ?? new Set<string>();
+			const key = trackedClaimKey(target, id);
+			const actors = actorsByClaim.get(key) ?? new Set<string>();
 			actors.add(actor);
-			actorsById.set(id, actors);
+			actorsByClaim.set(key, actors);
 		}
 	}
-	for (const { actor, directIds } of claimInvocations) {
+	for (const { actor, directIds, target } of claimInvocations) {
 		if (mutationSucceededDirectly) {
-			for (const id of directIds.length > 0 ? directIds : allOutputIds) state.claims.set(id, actor);
+			state.actors.add(actor);
+			for (const id of directIds.length > 0 ? directIds : allOutputIds) setTrackedClaim(state, target, id, actor);
 			continue;
 		}
 		for (const id of directIds) {
 			if (!labeledOutputIds.has(id)) continue;
-			const actors = actorsById.get(id);
-			state.claims.set(id, actors?.size === 1 ? actor : undefined);
+			const actors = actorsByClaim.get(trackedClaimKey(target, id));
+			state.actors.add(actor);
+			setTrackedClaim(state, target, id, actors?.size === 1 ? actor : undefined);
 		}
 	}
 	if (!mutationSucceededDirectly) return;
+	const entry = transitionInvocations[0];
+	if (entry === undefined) return;
+	const { invocation } = entry;
+	const target = claimTarget(invocation, cwd, env);
 	for (const close of closeInvocations(command)) {
-		for (const id of close.ids) state.claims.delete(id);
+		for (const id of close.ids) deleteTrackedClaim(state, target, id);
 	}
-	const [invocation] = invocations;
-	if (invocation?.verb === "assign") {
+	if (invocation.verb === "assign") {
 		const [idToken, assignee] = invocation.args;
 		const [id] = idToken === undefined ? [] : beadIdCandidates(idToken);
 		if (id !== undefined && assignee !== undefined) {
-			if (state.actors.has(assignee)) state.claims.set(id, assignee);
-			else state.claims.delete(id);
+			if (state.actors.has(assignee)) setTrackedClaim(state, target, id, assignee);
+			else deleteTrackedClaim(state, target, id);
 		}
 		return;
 	}
-	if (invocation?.verb !== "update") return;
+	if (invocation.verb !== "update") return;
 	const status = optionValue(invocation.args, ["--status", "-s"]);
 	const assignee = optionValue(invocation.args, ["--assignee", "-a"]);
 	for (const id of mutationTargetIds(invocation.args)) {
-		if (status === "closed" || assignee === "") state.claims.delete(id);
+		if (status === "closed" || assignee === "") deleteTrackedClaim(state, target, id);
 		else if (assignee !== undefined) {
-			if (state.actors.has(assignee)) state.claims.set(id, assignee);
-			else state.claims.delete(id);
+			if (state.actors.has(assignee)) setTrackedClaim(state, target, id, assignee);
+			else deleteTrackedClaim(state, target, id);
 		}
 	}
 }
@@ -583,11 +700,14 @@ export function releaseClaimCommand(
 	env: NodeJS.ProcessEnv = process.env,
 	releasedAt = new Date().toISOString(),
 	casSupported = true,
+	targetStore?: string,
 ): string | undefined {
 	const args = releaseClaimArgs(id, holder, env, releasedAt, casSupported);
 	if (args === undefined) return undefined;
 	const actor = env.BD_ACTOR?.trim() || env.BEADS_ACTOR?.trim() || "";
-	return [`BEADS_ACTOR=${shellQuote(actor)}`, `BD_ACTOR=${shellQuote(actor)}`, "bd", ...args].map((value, index) => index < 2 ? value : shellQuote(value)).join(" ");
+	const assignments = [`BEADS_ACTOR=${shellQuote(actor)}`, `BD_ACTOR=${shellQuote(actor)}`];
+	if (targetStore !== undefined) assignments.unshift(`BEADS_DIR=${shellQuote(targetStore)}`);
+	return [...assignments, "bd", ...args.map(shellQuote)].join(" ");
 }
 
 
@@ -596,6 +716,8 @@ export interface Bead {
 	title: string;
 	status: string;
 	assignee?: string;
+	/** Exact tracked store; null means the originating target could not be reproduced safely. */
+	releaseStore?: string | null;
 	labels?: string[];
 	metadata?: Record<string, string>;
 }
@@ -676,8 +798,8 @@ export function formatSessionCloseAdvisory(
 		const actor = bead.assignee !== undefined && effectiveActors.has(bead.assignee)
 			? bead.assignee
 			: undefined;
-		const release = bead.assignee === undefined || actor === undefined ? undefined
-			: releaseClaimCommand(bead.id, bead.assignee, { ...env, BD_ACTOR: actor }, releasedAt, casSupported);
+		const release = bead.assignee === undefined || actor === undefined || bead.releaseStore === null ? undefined
+			: releaseClaimCommand(bead.id, bead.assignee, { ...env, BD_ACTOR: actor }, releasedAt, casSupported, bead.releaseStore);
 		if (release === undefined) {
 			lines.push("  Release unavailable: the effective actor is missing or ambiguous; verify the current assignee and actor before retrying.");
 		} else {
@@ -694,11 +816,12 @@ export function formatSessionCloseAdvisory(
 
 function trackedClaimAdvisory(state: SessionState): string | undefined {
 	if (state.claims.size === 0) return undefined;
-	const claims: Bead[] = [...state.claims].map(([id, assignee]) => ({
-		id,
+	const claims: Bead[] = [...state.claims.values()].map(claim => ({
+		id: claim.id,
 		title: "claim recorded by this session",
 		status: "in_progress",
-		assignee,
+		assignee: claim.actor,
+		releaseStore: claim.store ?? null,
 	}));
 	return formatSessionCloseAdvisory(claims, {}, new Date().toISOString(), true, state.actors);
 }
@@ -735,6 +858,45 @@ export function handleSessionStop(
 	const actors = typeof actor === "string" ? new Set(actor.trim() ? [actor.trim()] : []) : actor;
 	return { continue: true, additionalContext: formatSessionCloseAdvisory(held, {}, new Date().toISOString(), casSupported, actors) };
 }
+/** Reads no boundary waits for. Only tests join them. */
+const backgroundReads = new Set<Promise<unknown>>();
+
+function track<T>(pending: Promise<T>): Promise<T> {
+	backgroundReads.add(pending);
+	const forget = (): void => { backgroundReads.delete(pending); };
+	void pending.then(forget, forget);
+	return pending;
+}
+
+export async function settleBackgroundWorkForTests(): Promise<void> {
+	while (backgroundReads.size > 0) await Promise.allSettled([...backgroundReads]);
+}
+
+async function settleWithin<T>(pending: Promise<T>, budgetMs: number): Promise<T | undefined> {
+	if (budgetMs <= 0) return undefined;
+	const { promise, resolve } = Promise.withResolvers<undefined>();
+	// The raw timer only resolves this local promise; its callback cannot throw or reach extension state.
+	const timer = setTimeout(resolve, budgetMs);
+	timer.unref();
+	try {
+		return await Promise.race([pending, promise]);
+	} finally {
+		clearTimeout(timer);
+	}
+}
+
+interface GateVerdict {
+	notice?: string;
+	verified: boolean;
+}
+
+interface GateVerification {
+	pending: Promise<GateVerdict>;
+	verdict?: GateVerdict;
+	/** True after an operation was admitted using this completed verdict. */
+	admitted?: boolean;
+}
+
 
 
 
@@ -808,9 +970,14 @@ async function spawnBd(cwd: string, args: string[], deadline: number, env: NodeJ
 			stdout: "pipe",
 			stderr: "pipe",
 			env: { ...env, BD_NO_PAGER: "1", BD_NON_INTERACTIVE: "1", BD_JSON_ENVELOPE: "1" },
-			timeout: Math.min(TIMEOUT_MS, remaining),
+			timeout: Math.min(BD_COMMAND_CEILING_MS, remaining),
 			killSignal: "SIGKILL",
 		});
+		// Only a read is unreferenced, so that a slow one cannot hold the harness open after
+		// the session is done with it. A mutating command runs inside the embedded write lock
+		// this process holds: letting the harness exit while it writes would drop the lock
+		// from under a live writer, which is how the Dolt journal gets corrupted.
+		if (!writesStore(invocationFromArgv(args))) proc.unref();
 		const [out, stderr] = await Promise.all([
 			new Response(proc.stdout).text(),
 			new Response(proc.stderr).text(),
@@ -847,26 +1014,31 @@ function consumeLastPush(dir: string): string | undefined {
 	return notice;
 }
 
-async function gateAdvisory(cwd: string, deadline: number, env: NodeJS.ProcessEnv): Promise<string | undefined> {
-	const listed = await runBdResult(cwd, ["gate", "list", "--json"], deadline, env);
-	if (!("output" in listed)) return bdReadFailure("start", listed.failure);
+async function gateAdvisory(cwd: string, env: NodeJS.ProcessEnv): Promise<GateVerdict> {
+	const runGate = (args: string[]): Promise<BdRunResult> => runBdResult(cwd, args, Date.now() + BD_COMMAND_CEILING_MS, env);
+	const listed = await runGate(["gate", "list", "--json"]);
+	if (!("output" in listed)) return { notice: bdReadFailure("start", listed.failure), verified: false };
 	let gates = readGateList(listed.output);
-	if (gates === undefined) return "Beads gate list returned malformed data; unresolved gates remain unverified.";
-	if (gates.length === 0) return undefined;
+	if (gates === undefined) return { notice: "Beads gate list returned malformed data; unresolved gates remain unverified.", verified: false };
+	if (gates.length === 0) return { verified: true };
 	let outcome: CheckOutcome | undefined;
 	if (gatesCanResolve(gates)) {
-		const checked = await runBdResult(cwd, ["gate", "check", "--json"], deadline, env);
-		if (!("output" in checked)) return bdReadFailure("start", checked.failure);
+		const checked = await runGate(["gate", "check", "--json"]);
+		if (!("output" in checked)) return { notice: bdReadFailure("start", checked.failure), verified: false };
 		outcome = readCheckOutcome(checked.output);
+		if (outcome === undefined) return { notice: "Beads gate check returned malformed data; unresolved gates remain unverified.", verified: false };
+		if (outcome.errors > 0) {
+			return { notice: `Beads gate check reported ${outcome.errors} error(s); unresolved gates remain unverified.`, verified: false };
+		}
 		if (outcome.resolved > 0) {
-			const relisted = await runBdResult(cwd, ["gate", "list", "--json"], deadline, env);
-			if (!("output" in relisted)) return bdReadFailure("start", relisted.failure);
+			const relisted = await runGate(["gate", "list", "--json"]);
+			if (!("output" in relisted)) return { notice: bdReadFailure("start", relisted.failure), verified: false };
 			const relistedGates = readGateList(relisted.output);
-			if (relistedGates === undefined) return "Beads gate list returned malformed data; unresolved gates remain unverified.";
+			if (relistedGates === undefined) return { notice: "Beads gate list returned malformed data; unresolved gates remain unverified.", verified: false };
 			gates = relistedGates;
 		}
 	}
-	return formatGateAdvisory(gates, outcome);
+	return { notice: formatGateAdvisory(gates, outcome), verified: true };
 }
 
 /** Text blocks of a tool result, joined. */
@@ -883,10 +1055,27 @@ function resultText(event: ToolResultEvent): string {
 /** Resolve the lifecycle's canonical embedded-store pin for a Bash call. */
 type SessionPinGetter = (cwd: string, ctx: ExtensionContext) => string | undefined;
 
-let sessionPinGetter: SessionPinGetter | undefined;
+type GateAdmitter = (cwd: string, env: NodeJS.ProcessEnv, ctx: ExtensionContext, refresh: boolean) => Promise<GateAdmission>;
+
+interface LifecycleBridge {
+	gateAdmitter?: GateAdmitter;
+	sessionPinGetter?: SessionPinGetter;
+}
+
+const LIFECYCLE_BRIDGE = Symbol.for("com.srobroek.beads.session-lifecycle.bridge.v1");
+
+/** Process-wide bridge because each configured extension is emitted as a separate bundle. */
+function lifecycleBridge(): LifecycleBridge {
+	const globals = globalThis as typeof globalThis & { [key: symbol]: LifecycleBridge | undefined };
+	const existing = globals[LIFECYCLE_BRIDGE];
+	if (existing !== undefined) return existing;
+	const created: LifecycleBridge = {};
+	globals[LIFECYCLE_BRIDGE] = created;
+	return created;
+}
 
 export function pinnedBeadsDir(cwd: string, ctx?: ExtensionContext): string | undefined {
-	const pin = ctx === undefined ? undefined : sessionPinGetter?.(cwd, ctx);
+	const pin = ctx === undefined ? undefined : lifecycleBridge().sessionPinGetter?.(cwd, ctx);
 	return pin ?? (ctx === undefined ? sessionPinFor(cwd) : undefined);
 }
 
@@ -897,13 +1086,53 @@ export function rewriteBashInput(input: unknown, ctx: ExtensionContext): Record<
 	return pinBashInput(input, pin === "" ? undefined : pin);
 }
 
+/**
+ * Whether a mutating bd command may run yet.
+ *
+ * `session_start` does not block on the gate check any more, so this is where the
+ * beads-lifecycle obligation is actually kept: automatic gates are verified before work is
+ * picked. Called by bash-gates.ts, which owns the plugin's sole Bash `tool_call`.
+ */
+export type GateAdmission = { block: true; reason: string } | undefined;
+
+
+export async function admitBeadsWork(
+	ctx: ExtensionContext,
+	cwd: string = ctx?.cwd ?? process.cwd(),
+	env: NodeJS.ProcessEnv = lifecycleBdEnvironment(cwd),
+	refresh = true,
+): Promise<GateAdmission> {
+	const gateAdmitter = lifecycleBridge().gateAdmitter;
+	if (gateAdmitter === undefined) return undefined;
+	return await gateAdmitter(resolve(cwd), boundedBdEnvironment(env), ctx, refresh);
+}
+
+export async function admitBdMutation(input: unknown, ctx: ExtensionContext, targetEnabled?: (cwd: string) => boolean): Promise<GateAdmission> {
+	const command = extractCommand(input ?? {});
+	if (!command) return undefined;
+	const writes = bdInvocations(command).filter(invocation => writesStore(invocation));
+	if (writes.length === 0) return undefined;
+	// Classify the caller's command before any runner rewrite, but verify the environment
+	// the mutation will actually receive after the lifecycle applies its per-session pin.
+	const effectiveInput = rewriteBashInput(input, ctx) ?? input;
+	const cwd = bashCallCwd(effectiveInput, ctx?.cwd ?? process.cwd());
+	const env = environmentForInput(effectiveInput as ToolCallEvent["input"]);
+	const writeTargets = embeddedWriteTargets(command, cwd, env);
+	if (writeTargets.kind === "refused") return { block: true, reason: writeTargets.reason };
+	const direct = writes.length === 1 ? writes[0] : undefined;
+	if (direct !== undefined && bdInvocationUsesExternalStore(direct)) return undefined;
+	const store = direct === undefined ? undefined : bdStoreForInvocation(direct, cwd, env);
+	if (targetEnabled?.(store === undefined ? cwd : dirname(store)) === false) return undefined;
+	return await admitBeadsWork(ctx, cwd, store === undefined ? env : { ...env, BEADS_DIR: store }, false);
+}
+
 export default function sessionBeadsLifecycle(pi: ExtensionAPI): void {
 	const sessions = new Map<string, SessionState>();
 	function stateFor(ctx: ExtensionContext): SessionState {
 		const key = sessionKey(ctx);
 		let state = sessions.get(key);
 		if (!state) {
-			state = { actors: new Set(), bdWrote: false, claims: new Map(), repos: new Map(), staleAdvised: false, stopFired: false, touched: new Set() };
+			state = { actors: new Set(), bdWrote: false, claims: new Map(), gates: new Map(), repos: new Map(), staleAdvised: false, stopFired: false, touched: new Set() };
 			sessions.set(key, state);
 		}
 		return state;
@@ -917,10 +1146,46 @@ export default function sessionBeadsLifecycle(pi: ExtensionAPI): void {
 		state.repos.set(key, identity);
 		return identity;
 	}
-	sessionPinGetter = (cwd, ctx) => {
+
+	/**
+	 * A message rather than `ctx.ui.notify`: the agent runs the commands these advisories
+	 * are about, and a UI notification reaches neither it nor a --print session.
+	 */
+	const advise = (content: string): void => {
+		pi.sendMessage(
+			{ customType: "com.srobroek.beads.session-lifecycle", content, display: true, attribution: "user" },
+			{ triggerTurn: false },
+		);
+	};
+
+	lifecycleBridge().sessionPinGetter = (cwd, ctx) => {
 		const state = sessions.get(sessionKey(ctx));
 		if (state?.repo !== undefined && identityFor(state, cwd) !== state.repo) return undefined;
 		return state?.pin ?? process.env.BEADS_DIR ?? sessionPinFor(cwd);
+	};
+
+	const verificationFor = (key: string, state: SessionState, cwd: string, env: NodeJS.ProcessEnv, refresh = false): GateVerification | undefined => {
+		const dir = bdStoreDir(cwd, env);
+		if (dir === undefined) return undefined;
+		const existing = state.gates.get(dir);
+		if (existing !== undefined && (existing.verdict === undefined || (!refresh && existing.verdict.verified === true) || (existing.verdict.verified === true && existing.admitted !== true))) return existing;
+		if (existing !== undefined) state.gates.delete(dir);
+		const verification = (async (): Promise<GateVerdict> => {
+			try {
+				return await gateAdvisory(cwd, env);
+			} catch (error) {
+				const reason = error instanceof Error ? error.message : String(error);
+				pi.logger.error("beads gate check failed", { error: reason, store: dir });
+				return { notice: bdReadFailure("start", reason), verified: false };
+			}
+		})();
+		const gate: GateVerification = { pending: verification };
+		state.gates.set(dir, gate);
+		track(verification.then(verdict => {
+			gate.verdict = verdict;
+			if (verdict.notice !== undefined && sessions.get(key) === state) advise(verdict.notice);
+		}));
+		return gate;
 	};
 
 	pi.on("session_start", async (_event, ctx: ExtensionContext) => {
@@ -933,43 +1198,45 @@ export default function sessionBeadsLifecycle(pi: ExtensionAPI): void {
 			state.repo = identityFor(state, cwd);
 			state.pin = sessionPinAfter(pin, cwd);
 			if (pin.conflict !== undefined) {
-				pi.sendMessage(
-					{
-						customType: "com.srobroek.beads.session-lifecycle",
-						content:
-							`This process is pinned to another repository's beads database (\`BEADS_DIR=${pin.conflict}\`) by a live session. ` +
-							"Bash calls in this checkout use its own `.beads`; calls in other repositories remain unpinned unless they provide `BEADS_DIR`.",
-						display: true,
-						attribution: "user",
-					},
-					{ triggerTurn: false },
+				advise(
+					`This process is pinned to another repository's beads database (\`BEADS_DIR=${pin.conflict}\`) by a live session. ` +
+					"Bash calls in this checkout use its own `.beads`; calls in other repositories remain unpinned unless they provide `BEADS_DIR`.",
 				);
-				return;
 			}
 			const bdEnv = lifecycleBdEnvironment(cwd);
 			const dir = bdStoreDir(cwd, bdEnv);
 			if (dir === undefined) return;
-			const deadline = Date.now() + TIMEOUT_MS;
-			const notices = [consumeLastPush(dir), await gateAdvisory(cwd, deadline, bdEnv)]
-				.filter((notice): notice is string => notice !== undefined);
-			if (sessions.get(key) !== state || notices.length === 0) return;
-			// A message rather than `ctx.ui.notify`: the agent runs the commands this
-			// is about, and a UI notification reaches neither it nor a --print session.
-			pi.sendMessage(
-				{
-					customType: "com.srobroek.beads.session-lifecycle",
-					content: notices.join("\n\n"),
-					display: true,
-					attribution: "user",
-				},
-				{ triggerTurn: false },
-			);
+			const pushed = consumeLastPush(dir);
+			if (pushed !== undefined) advise(pushed);
+			// The gate check runs off this boundary. It is up to three `bd` calls, and one
+			// ordinary read on a cold embedded store already outlasts the whole handler
+			// budget, so waiting here reported a healthy store as unverifiable. Nothing is
+			// admitted on that silence: the first operation for each target store waits on
+			// that store's own verdict.
+			verificationFor(key, state, cwd, bdEnv);
 		} catch (error) {
 			pi.logger.error("beads session-start check failed", {
 				error: error instanceof Error ? error.message : String(error),
 			});
 		}
 	});
+
+	lifecycleBridge().gateAdmitter = async (cwd, env, ctx, refresh) => {
+		const key = sessionKey(ctx);
+		const state = sessions.get(key);
+		if (state === undefined) return undefined;
+		const gate = verificationFor(key, state, cwd, env, refresh);
+		if (gate === undefined) return undefined;
+		if (gate.verdict === undefined) await settleWithin(gate.pending, GATE_ADMISSION_MS);
+		if (gate.verdict?.verified === true) {
+			gate.admitted = true;
+			return undefined;
+		}
+		const reason = gate.verdict?.notice === undefined
+			? `automatic beads gates are still being verified for ${cwd} after ${GATE_ADMISSION_MS} ms, so an automatic gate may still be unresolved and this operation would pick or change work ahead of it. The read is slow, not failed`
+			: `automatic beads gates could not be verified for ${cwd}, so this operation could pick or change work while a gate remains unresolved. ${gate.verdict.notice}`;
+		return { block: true, reason };
+	};
 
 	pi.on("session_shutdown", (_event, ctx: ExtensionContext) => {
 		const key = sessionKey(ctx);
@@ -983,8 +1250,6 @@ export default function sessionBeadsLifecycle(pi: ExtensionAPI): void {
 		pi.sendMessage({ customType: "com.srobroek.beads.session-lifecycle", content: advisory, display: true, attribution: "user" }, { triggerTurn: false });
 	});
 
-	// Only the fired-once latch resets per turn; what the session touched must
-	// accumulate across the whole session.
 	pi.on("turn_start", (_event, ctx: ExtensionContext) => {
 		stateFor(ctx).stopFired = false;
 	});
@@ -994,14 +1259,18 @@ export default function sessionBeadsLifecycle(pi: ExtensionAPI): void {
 			if (event.toolName !== "bash") return;
 			const input = event.input ?? {};
 			const command = extractCommand(input);
-			if (!command || !/\bbd\s+/.test(command)) return;
+			if (!command) return;
+			const invocations = bdInvocations(command);
+			if (invocations.length === 0) return;
 			const state = stateFor(ctx);
 			if (isBdWrite(command)) {
 				state.bdWrote = true;
-				const env = environmentForInput(input);
+				const effectiveInput = rewriteBashInput(input, ctx) ?? input;
+				const cwd = bashCallCwd(effectiveInput, ctx?.cwd ?? process.cwd());
+				const env = environmentForInput(effectiveInput as ToolCallEvent["input"]);
 				for (const actor of actorValues(command, env)) state.actors.add(actor);
 				for (const id of beadIdCandidates(command)) state.touched.add(id);
-				if (commandSucceeded(event)) recordClaimTransitions(state, command, env, event);
+				if (commandSucceeded(event)) recordClaimTransitions(state, command, cwd, env, event, invocations);
 			}
 			if (state.staleAdvised) return;
 			const notice = staleSkipNotice(resultText(event));

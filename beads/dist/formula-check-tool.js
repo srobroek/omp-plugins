@@ -1,4 +1,6 @@
 // @bun
+// extensions/formula-check-tool.ts
+import { resolve as resolve3 } from "path";
 // package.json
 var package_default = {
   name: "@srobroek/beads",
@@ -58,16 +60,35 @@ function scanGlobals(tokens, from) {
   }
   return { globals, next: i };
 }
-function globalValue(globals, names) {
-  for (const [index, token] of globals.entries()) {
-    for (const name of names) {
-      if (token === name)
-        return globals[index + 1];
-      if (token.startsWith(`${name}=`))
-        return token.slice(name.length + 1);
+function firstArgumentAfterPersistentOptions(args) {
+  return args[scanGlobals(args, 0).next];
+}
+function globalOptions(globals) {
+  const options = [];
+  for (let index = 0;index < globals.length; index++) {
+    const token = globals[index];
+    if (token.startsWith("-C") && token.length > 2) {
+      const value = token.slice(2);
+      options.push({ name: "-C", token, value: value.startsWith("=") ? value.slice(1) : value });
+      continue;
     }
+    const equals = token.indexOf("=");
+    if (equals >= 0) {
+      options.push({ name: token.slice(0, equals), token, value: token.slice(equals + 1) });
+      continue;
+    }
+    if (VALUE_FLAGS.has(token))
+      options.push({ name: token, token, value: globals[++index] });
+    else
+      options.push({ name: token, token });
   }
-  return;
+  return options;
+}
+function globalValue(globals, names) {
+  return globalOptions(globals).findLast((option) => names.includes(option.name))?.value;
+}
+function globalFlagEnabled(globals, names) {
+  return globalOptions(globals).some((option) => names.includes(option.name) && flagEnabled([option.token], names));
 }
 function flagEnabled(tokens, names) {
   for (const token of tokens) {
@@ -252,6 +273,7 @@ var READS = {
   types: true,
   version: true,
   where: true,
+  audit: { list: true },
   config: { get: true, list: true },
   dep: { list: true, show: true, tree: true },
   dolt: { diff: true, log: true, status: true },
@@ -259,8 +281,9 @@ var READS = {
   formula: { list: true, show: true },
   gate: { list: true, show: true },
   kv: { get: true, list: true },
-  mol: { list: true, show: true },
-  swarm: { list: true, show: true }
+  label: { list: true },
+  mol: { current: true, "last-activity": true, list: true, progress: true, ready: true, seed: true, show: true, stale: true },
+  swarm: { list: true, show: true, validate: true }
 };
 var WRITE_FLAGS = {
   orphans: ["--fix", "-f"],
@@ -272,17 +295,19 @@ function writesStore(invocation) {
   if (invocation === undefined)
     return true;
   const { verb, args, globals } = invocation;
-  if (flagEnabled(globals, ["--help", "-h"]) || flagEnabled(args, ["--help", "-h"]))
+  if (globalFlagEnabled(globals, ["--help", "-h"]))
     return false;
-  if (flagEnabled(globals, ["--readonly"]))
+  if (globalFlagEnabled(globals, ["--readonly"]))
     return false;
+  if (verb === "mol" && args[0] === "wisp")
+    return args[1] !== "list";
   const rule = READS[verb];
   if (rule === undefined)
     return true;
   const writeFlags = WRITE_FLAGS[verb];
   if (writeFlags !== undefined && flagEnabled(args, writeFlags))
     return true;
-  const subaction = args.find((arg) => !arg.startsWith("-"));
+  const subaction = firstArgumentAfterPersistentOptions(args);
   if (rule === true)
     return false;
   if (rule === "idOnly")
@@ -582,6 +607,25 @@ async function withEmbeddedWriteLock(cwd, owner, write, env = process.env, deadl
 var pendingClaims = new Map;
 
 // extensions/session-beads-lifecycle.ts
+var EMBEDDED_PIN_ENV = { BEADS_DOLT_SHARED_SERVER: "" };
+function boundedBdEnvironment(base) {
+  return {
+    ...base,
+    ...EMBEDDED_PIN_ENV,
+    BD_NO_PAGER: "1",
+    BD_NON_INTERACTIVE: "1",
+    BD_DOLT_AUTO_START: "false",
+    NO_COLOR: "1"
+  };
+}
+function lifecycleBdEnvironment(cwd, base = process.env) {
+  const env = { ...base };
+  delete env.BEADS_DIR;
+  const resolved = sessionPinFor(cwd);
+  if (resolved !== undefined)
+    env.BEADS_DIR = resolved;
+  return boundedBdEnvironment(env);
+}
 function parseTrailingJson(stdout) {
   const text = stdout.trim();
   if (!text)
@@ -611,6 +655,8 @@ function envelopeData(value) {
     return record.data;
   return value;
 }
+var backgroundReads = new Set;
+var LIFECYCLE_BRIDGE = Symbol.for("com.srobroek.beads.session-lifecycle.bridge.v1");
 
 // extensions/formula-check-tool.ts
 var BEADS_PRESENT = Symbol.for("com.srobroek.beads.present.v1");
@@ -823,22 +869,23 @@ async function assertFormula(params, toolCallId) {
   const varargs = [];
   for (const v of params.varargs ?? [])
     varargs.push("--var", v);
-  const cwd = params.workspace;
+  const cwd = params.workspace === undefined ? undefined : resolve3(params.workspace);
+  const env = cwd === undefined ? process.env : lifecycleBdEnvironment(cwd);
   const failures = [];
-  const cookFails = await cookCheck(params.formula, varargs, cwd, process.env, deadline);
+  const cookFails = await cookCheck(params.formula, varargs, cwd, env, deadline);
   if (cookFails.length) {
     const text = cookFails.map((f) => `FAIL ${f}`).join(`
 `);
     return { ok: false, text, failures: cookFails, steps: 0, gates: 0 };
   }
-  const help = await runBd(["mol", "pour", "--help"], cwd, undefined, process.env, deadline);
+  const help = await runBd(["mol", "pour", "--help"], cwd, undefined, env, deadline);
   const capability = parsePourHelp(help.stdout, help.stderr);
   if (help.error || !help.ok || "error" in capability) {
     const failure = help.error ?? ("error" in capability ? capability.error : "bd mol pour --help failed");
     return { ok: false, text: `FAIL ${failure}`, failures: [failure], steps: 0, gates: 0 };
   }
   const dryArgs = ["mol", "pour", params.formula, "--dry-run", ...capability.json ? ["--json"] : [], ...varargs];
-  const dry = await runBd(dryArgs, cwd, undefined, process.env, deadline);
+  const dry = await runBd(dryArgs, cwd, undefined, env, deadline);
   if (dry.error || !dry.ok) {
     const out = dry.error ?? [dry.stdout, dry.stderr].filter(Boolean).join(`
 `).trim();
@@ -862,7 +909,7 @@ ${out}`;
   failures.push(...gateTypeFailures(parsed.gates));
   failures.push(...unsubstitutedFailures(listing));
   if (params.deep && failures.length === 0)
-    failures.push(...await deepAssert(params.formula, varargs, toolCallId, cwd, process.env, deadline));
+    failures.push(...await deepAssert(params.formula, varargs, toolCallId, cwd, env, deadline));
   for (const f of failures)
     lines.push(`FAIL ${f}`);
   if (!failures.length)
@@ -880,7 +927,7 @@ function formulaCheckTool(pi) {
       formula: z.string().describe("Formula stem to assert"),
       varargs: z.array(z.string()).optional().describe("Selection vars as k=v pairs (passed as --var)"),
       deep: z.boolean().optional().describe("If true, pour for real and assert a single entry point (mutates workspace; exec approval)"),
-      workspace: z.string().optional().describe("Repo cwd for bd; defaults to the current working directory"),
+      workspace: z.string().optional().describe("Repo cwd for bd; required when deep=true"),
       expectSteps: z.number().optional().describe("Expected body step count"),
       expectGates: z.number().optional().describe("Expected gate count")
     }),
