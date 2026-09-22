@@ -335,9 +335,8 @@ export function repositoryContext(cwd: string, run: GitRunner = spawnGit): Repos
 	let candidate = paths.topLevel;
 	if (topLevelGitDir !== paths.commonDir) {
 		const canonicalCandidate = physicalDirectory(dirname(paths.commonDir));
-		if (canonicalCandidate !== null && checkoutGitDirectory(canonicalCandidate) === paths.commonDir) {
-			candidate = canonicalCandidate;
-		}
+		if (canonicalCandidate === null || checkoutGitDirectory(canonicalCandidate) !== paths.commonDir) return null;
+		candidate = canonicalCandidate;
 	}
 
 	const root = physicalDirectory(candidate);
