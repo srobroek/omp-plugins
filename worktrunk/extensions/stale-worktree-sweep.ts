@@ -55,7 +55,7 @@ import { statSync } from "node:fs";
 import path from "node:path";
 import type { ExtensionAPI, ExtensionContext, SessionStartEvent } from "@oh-my-pi/pi-coding-agent";
 
-import { insideAny, realDeepest, type RepositoryTopology, repositoryTopology } from "./worktree-gate.ts";
+import { insideAny, type RepositoryTopology, realDeepest, repositoryTopology } from "./worktree-gate.ts";
 
 /** Every probe must finish well inside the session-start budget. */
 export const PROBE_TIMEOUT_MS = 5_000;
