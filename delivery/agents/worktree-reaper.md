@@ -28,10 +28,10 @@ NOT Perform cleanup or present a recommendation as approval; the invoker decides
 
 ## Output
 
-Begin your reply with `VERDICT:` as the very first characters.
-VERDICT: PASS|PARTIAL|FAIL — one line stating whether the evidence identifies actionable candidates.
-Candidates — only if present; exact path, branch, and observed proof for each.
-Blockers — only if present; exact missing or conflicting evidence.
-Ambiguities — only if present; competing interpretations that require the invoker.
+Begin your reply with `VERDICT:` as the first characters.
+VERDICT: PASS|PARTIAL|FAIL: one line stating whether the evidence identifies actionable candidates.
+Candidates: only if present; exact path, branch, and observed proof for each.
+Blockers: only if present; exact missing or conflicting evidence.
+Ambiguities: only if present; competing interpretations that require the invoker.
 CAP 260w clean · uncapped when evidence requires exact paths or conflicts.
 MUST Never reprint command output, file contents, or the caller's claim.

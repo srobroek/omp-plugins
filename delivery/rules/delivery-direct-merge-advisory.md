@@ -12,7 +12,8 @@ The rule is advisory-only and never blocks the command (`interruptMode: never`).
 
 ## What it reads
 
-Only the command that starts the bash tool call, in both encodings a live match buffer can hold: the argument JSON's root `command` member, and the bare command string. Before `git` it accepts a bounded prefix — environment assignments with bare, single-quoted, or double-quoted values; `sudo` or `env` with bounded options; a quoted or path-qualified executable such as `/usr/bin/git` — and then Git's global options, including `-C <path>`, `-c <key>=<value>`, `-P`, `--no-pager`, `--literal-pathspecs`, `--no-replace-objects`, and `--git-dir=<path>`.
+The matcher reads only the top-level bash command. It accepts both live-buffer encodings: the root `command` member of argument JSON and the bare command string.
+Before `git`, it accepts a bounded prefix. The prefix may contain environment assignments with bare, single-quoted, or double-quoted values; `sudo` or `env` with bounded options; and a quoted or path-qualified executable such as `/usr/bin/git`. It then accepts Git's global options, including `-C <path>`, `-c <key>=<value>`, `-P`, `--no-pager`, `--literal-pathspecs`, `--no-replace-objects`, and `--git-dir=<path>`.
 
 The buffer is re-tested as it streams and a fire cannot be retracted, so the verb alone is never enough. The rule fires only once `merge` is followed by whitespace and a first argument that has already settled: a ref or path character, or an option token that a delimiter has closed. Until then the same buffer can still turn into `git merge-base` or `git merge --abort`. A ref or path is recognized by its first character, one of `A-Za-z0-9_./~@+^:`, optionally behind an opening quote; an argument that starts with anything else, `$` among them, is left alone.
 
@@ -27,6 +28,6 @@ A regex cannot parse shell, and for a routine command a false fire costs more th
 - heredoc bodies, including a heredoc that feeds a shell;
 - quoted and structured data: `echo` prose, a commit message, the `i` (intent) argument, the `env` argument, and any nested JSON object that carries its own `command` key;
 - a root argument object that places a JSON object or array before `command`;
-- recovery and help — `--abort`, `--continue`, `--quit`, `--help`, `-h` — at any spacing and with the flag quoted;
+- recovery and help: `--abort`, `--continue`, `--quit`, `--help`, and `-h` at any spacing, including quoted flags;
 - other verbs that merely start with the same letters: `git merge-base`, `git mergetool`, `git rebase`;
 - the sanctioned forge path: GitHub `gh pr merge` and GitLab `glab mr merge`.

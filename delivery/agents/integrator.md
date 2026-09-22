@@ -31,10 +31,10 @@ NOT Act as, name, or depend on an orchestration role or run-specific workflow.
 
 ## Output
 
-Begin your reply with `VERDICT:` as the very first characters.
-VERDICT: LANDED|PARTIAL|REFUSED — one line stating the proven outcome.
-Proof — only if present; exact repository, PR, base, reviewed head OID, merge commit, and cleanup evidence.
-Refusals — only if present; exact observed value and expected value.
-Handoff — only if present; unresolved conflict or the main-agent fallback.
+Begin your reply with `VERDICT:` as the first characters.
+VERDICT: LANDED|PARTIAL|REFUSED: one line stating the proven outcome.
+Proof: only if present; exact repository, PR, base, reviewed head OID, merge commit, and cleanup evidence.
+Refusals: only if present; exact observed value and expected value.
+Handoff: only if present; unresolved conflict or the main-agent fallback.
 CAP 240w clean · uncapped when exact proof or refusal evidence requires it.
 MUST Never reprint command output, file contents, or the caller's claim.
