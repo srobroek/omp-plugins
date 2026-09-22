@@ -5,8 +5,8 @@ condition: ["(?i)\\b(?:not|neither|none of (?:them|these)|isn'?t|aren'?t|wasn'?t
 scope: "text"
 interruptMode: never
 ---
-You just disclaimed a problem you encountered. Apply `delivery-task-scope` before
-editing it.
+You just disclaimed a problem you encountered. Decide whether the current request
+requires the repair before editing it.
 
 Keep the repair in the current task only when the current change caused the problem
 or the requested result requires the repair. Update affected tests and prose when
