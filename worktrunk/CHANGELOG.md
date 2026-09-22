@@ -1,5 +1,20 @@
 # Changelog
 
+## [1.3.0](https://github.com/srobroek/omp-plugins/compare/worktrunk--v1.2.1...worktrunk--v1.3.0) (2026-09-22)
+
+
+### Features
+
+* **worktrunk:** add a general session-start stale-worktree sweep ([#482](https://github.com/srobroek/omp-plugins/issues/482)) ([ee47a34](https://github.com/srobroek/omp-plugins/commit/ee47a3430a851bc0cb0fc59d4b0741a88845cd56))
+
+
+### Bug Fixes
+
+* **worktrunk:** allow canonical push and literal bootstrap paths ([#457](https://github.com/srobroek/omp-plugins/issues/457)) ([fe089ff](https://github.com/srobroek/omp-plugins/commit/fe089ff07d9676bcbcf96105f269efe417e8fca1))
+* **worktrunk:** narrow canonical Beads bootstrap ([#495](https://github.com/srobroek/omp-plugins/issues/495)) ([1d2323c](https://github.com/srobroek/omp-plugins/commit/1d2323c117fea2df2ca158fc669d01c02beed130))
+* **worktrunk:** tell an agent when its canonical checkout is behind main ([#459](https://github.com/srobroek/omp-plugins/issues/459)) ([6e5eb4d](https://github.com/srobroek/omp-plugins/commit/6e5eb4dffe78cf2329dd02e580f41171ae9c3cb0))
+* **worktrunk:** unblock canonical beads bootstrap ([#460](https://github.com/srobroek/omp-plugins/issues/460)) ([d31c04e](https://github.com/srobroek/omp-plugins/commit/d31c04e5707f14dea4e7e79a1d1ef48c619624d6))
+
 ## [1.2.1](https://github.com/srobroek/omp-plugins/compare/worktrunk--v1.2.0...worktrunk--v1.2.1) (2026-09-21)
 
 

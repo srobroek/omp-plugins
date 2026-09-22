@@ -36,6 +36,9 @@ export type ProfileMode = (typeof PROFILE_MODES)[number];
 export const COPY_STRATEGIES = ["auto", "clonefile", "reflink", "robocopy", "node"] as const;
 export type CopyStrategy = (typeof COPY_STRATEGIES)[number];
 
+export const CURSOR_MODES = ["auto", "off", "instant", "animated"] as const;
+export type CursorMode = (typeof CURSOR_MODES)[number];
+
 export const SETTING_SCHEMA = {
 	defaultEngine: setting("enum", "firefox", "HEADED_BROWSER_DEFAULT_ENGINE", ENGINES),
 	defaultBrowserChannel: setting(
@@ -73,6 +76,7 @@ export const SETTING_SCHEMA = {
 		300000,
 		1000,
 	),
+	cursorMode: setting("enum", "auto", "HEADED_BROWSER_CURSOR_MODE", CURSOR_MODES),
 	driverModulePath: setting("string", "", "HEADED_BROWSER_DRIVER_MODULE_PATH"),
 } as const satisfies Record<string, PluginSettingSchema>;
 
@@ -104,6 +108,7 @@ export interface EffectiveConfig {
 	keepArtifactsOnClose: boolean;
 	idleCloseSec: number;
 	navigationTimeoutMs: number;
+	cursorMode: CursorMode;
 	driverModulePath: string;
 	engine: Engine;
 	browserChannel: Channel;

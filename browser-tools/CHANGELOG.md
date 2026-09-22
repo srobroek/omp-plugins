@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.0](https://github.com/srobroek/omp-plugins/compare/browser-tools--v0.3.10...browser-tools--v0.4.0) (2026-09-22)
+
+
+### Features
+
+* **browser-tools:** add deterministic plans and visible cursor ([#461](https://github.com/srobroek/omp-plugins/issues/461)) ([fa85e7c](https://github.com/srobroek/omp-plugins/commit/fa85e7c32501979a2f19323653675aee7b8e3b77))
+
 ## [0.3.10](https://github.com/srobroek/omp-plugins/compare/browser-tools--v0.3.9...browser-tools--v0.3.10) (2026-09-21)
 
 

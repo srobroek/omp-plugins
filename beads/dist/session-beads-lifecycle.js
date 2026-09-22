@@ -1221,7 +1221,7 @@ function formatSessionCloseAdvisory(beads, env = process.env, releasedAt = new D
   }
   if (beads.length > MAX_LISTED)
     lines.push(`- ...and ${beads.length - MAX_LISTED} more`);
-  lines.push("Close what is finished with a factual --reason, release only with the guarded command above, and write residual context onto any bead whose work continues elsewhere (bd comments add <id> -m ...). The bead is the handover, not a PR body. File remaining or discovered work as its own bead before stopping.");
+  lines.push('Close what is finished with a factual --reason, release only with the guarded command above, and write residual context onto any bead whose work continues elsewhere (bd comments add <id> "..."). The bead is the handover, not a PR body. File remaining or discovered work as its own bead before stopping.');
   return lines.join(`
 `);
 }

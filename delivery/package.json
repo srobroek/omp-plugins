@@ -1,14 +1,11 @@
 {
   "name": "@srobroek/delivery",
-  "version": "0.11.5",
-  "description": "Delivery workflow guidance with pull-request review, landing, cleanup, and hygiene tools.",
+  "version": "0.12.0",
+  "description": "Delivery and git-workflow rules, plus a pull-request review agent.",
   "private": true,
   "omp": {
     "extensions": [
-      "./extensions/unpushed-work-advisory.ts",
-      "./extensions/delivery-land-tool.ts",
-      "./extensions/delivery-cleanup-tool.ts",
-      "./extensions/hygiene-orientation.ts"
+      "./extensions/unpushed-work-advisory.ts"
     ]
   }
 }

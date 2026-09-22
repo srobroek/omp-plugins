@@ -20,14 +20,13 @@ request; the canonical checkout is then refreshed with
 `git -C <canonical> fetch origin`, which writes no working-tree file. There is no
 local fast-forward and no reason to edit, build, or stash there.
 
-DEFAULT From the canonical checkout only bootstrap commands are available:
-creating or listing worktrees, `wt config show`, `wt step prune --dry-run`,
-`git`/`dgit` commands (`rev-parse`, `status`, `worktree list`, `fetch`,
-`push`, `log`, `branch --list`), where `push` writes no working-tree file
-because refs are shared across every worktree, and `bd`, which needs the
-canonical checkout to reach the project's embedded store. An agent's first
-action necessarily starts there, because a spawned child inherits its parent's
-working directory.
+DEFAULT From the canonical checkout only these bootstrap commands are available:
+- worktree creation and listing, `wt config show`, and `wt step prune --dry-run`;
+- read-only `git`/`dgit`: `rev-parse`, `status`, `worktree list`, `fetch`, `log`,
+  and `branch --list`;
+- Beads reads, `bd create <title> <args>`, exactly `bd dolt pull`, and
+  `bd update <id> --claim`.
+The first action starts there because a spawned child inherits its parent's cwd.
 
 A worktree belongs to the work, not to the agent instance holding it. A retry, a
 review round, and an escalation to a different agent all continue the same branch

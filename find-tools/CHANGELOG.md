@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.1.0](https://github.com/srobroek/omp-plugins/compare/find-tools--v1.0.5...find-tools--v1.1.0) (2026-09-22)
+
+
+### Features
+
+* **safety:** refuse worktree removals that orphan a commit ([#456](https://github.com/srobroek/omp-plugins/issues/456)) ([fe5c0bd](https://github.com/srobroek/omp-plugins/commit/fe5c0bd81271ce846f0522f18f768547230ab84b))
+
 ## [1.0.5](https://github.com/srobroek/omp-plugins/compare/find-tools--v1.0.4...find-tools--v1.0.5) (2026-09-21)
 
 

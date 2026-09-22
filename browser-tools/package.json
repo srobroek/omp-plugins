@@ -1,6 +1,6 @@
 {
   "name": "@srobroek/browser-tools",
-  "version": "0.3.10",
+  "version": "0.4.0",
   "description": "Cross-engine browser coverage and Chrome performance tracing over MCP.",
   "private": true,
   "dependencies": {
@@ -200,6 +200,18 @@
         "step": 1000,
         "description": "Default navigation and launch timeout in milliseconds.",
         "env": "HEADED_BROWSER_NAVIGATION_TIMEOUT_MS"
+      },
+      "cursorMode": {
+        "type": "enum",
+        "default": "auto",
+        "values": [
+          "auto",
+          "off",
+          "instant",
+          "animated"
+        ],
+        "description": "Decorative cursor visualization for headed target actions; auto animates headed sessions and disables it when headless.",
+        "env": "HEADED_BROWSER_CURSOR_MODE"
       },
       "driverModulePath": {
         "type": "string",

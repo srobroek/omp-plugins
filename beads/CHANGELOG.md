@@ -1,5 +1,19 @@
 # Changelog
 
+## [2.2.0](https://github.com/srobroek/omp-plugins/compare/beads--v2.1.4...beads--v2.2.0) (2026-09-22)
+
+
+### Features
+
+* **beads:** route incidental work through maintenance intake ([#492](https://github.com/srobroek/omp-plugins/issues/492)) ([2a33448](https://github.com/srobroek/omp-plugins/commit/2a334484670fcae76b04d36c663292beaf2eac45))
+* **delivery:** enforce narrow task scope ([#480](https://github.com/srobroek/omp-plugins/issues/480)) ([30509cb](https://github.com/srobroek/omp-plugins/commit/30509cbfd07a1371895c26f6bf08bb54d3ed6593))
+
+
+### Bug Fixes
+
+* **beads:** keep scope triage self-contained ([#481](https://github.com/srobroek/omp-plugins/issues/481)) ([a0a0c4d](https://github.com/srobroek/omp-plugins/commit/a0a0c4de33cfb93a04583f9530cb27913f32d9b3))
+* **beads:** stop instructing two commands bd does not have ([#204](https://github.com/srobroek/omp-plugins/issues/204)) ([b412623](https://github.com/srobroek/omp-plugins/commit/b4126231a61e738892f7b40cd2a3e744488ac2aa))
+
 ## [2.1.4](https://github.com/srobroek/omp-plugins/compare/beads--v2.1.3...beads--v2.1.4) (2026-09-21)
 
 
