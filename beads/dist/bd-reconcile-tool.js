@@ -574,6 +574,9 @@ async function withEmbeddedWriteLock(cwd, owner, write, env = process.env, deadl
   }
 }
 
+// extensions/bd-lease-gate.ts
+var pendingClaims = new Map;
+
 // extensions/session-beads-lifecycle.ts
 var EMBEDDED_PIN_ENV = { BEADS_DOLT_SHARED_SERVER: "" };
 function lifecycleBdEnvironment(cwd, base = process.env) {

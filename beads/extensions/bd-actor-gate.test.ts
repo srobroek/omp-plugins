@@ -269,6 +269,11 @@ describe("decideActorGate", () => {
 		const d = decideActorGate("bd update chezmoi-2ji --claim", emptyEnv);
 		expect(d.kind).toBe("block");
 	});
+	test("blocks boolean claim flags without actor", () => {
+		for (const command of ["bd update chezmoi-2ji --claim=true", "bd ready --claim=1"]) {
+			expect(decideActorGate(command, emptyEnv).kind).toBe("block");
+		}
+	});
 	test("allows claim with actor env", () => {
 		expect(decideActorGate("bd update chezmoi-2ji --claim", actorEnv).kind).toBe("allow");
 	});

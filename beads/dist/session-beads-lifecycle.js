@@ -1,7 +1,7 @@
 // @bun
 // extensions/session-beads-lifecycle.ts
 import { existsSync as existsSync2, readFileSync as readFileSync2, rmSync, statSync as statSync3 } from "fs";
-import { isAbsolute as isAbsolute3, join as join2, resolve as resolve3 } from "path";
+import { isAbsolute as isAbsolute3, join as join2, resolve as resolve4 } from "path";
 
 // extensions/shell-tokenizer.ts
 var SEPARATORS = new Set([";", "&", "|", "(", ")", `
@@ -106,6 +106,22 @@ function tokenizeShell(command, options = {}) {
   flush();
   return out;
 }
+function shellQuoteBalanced(command) {
+  let quote = null;
+  for (let i = 0;i < command.length; i++) {
+    const ch = command[i];
+    if (quote !== null) {
+      if (ch === quote)
+        quote = null;
+      continue;
+    }
+    if (ch === '"' || ch === "'")
+      quote = ch;
+    else if (ch === "\\")
+      i++;
+  }
+  return quote === null;
+}
 function hereDocumentOperator(command, start) {
   let i = start + 2;
   const stripTabs = command[i] === "-";
@@ -169,6 +185,173 @@ function hereDocumentBody(command, from, document) {
 }
 
 // extensions/shell-command.ts
+import { resolve } from "path";
+var OPERATORS = { ";": true, "&&": true, "||": true, "&": true, "|": true, "\n": true, "(": true, ")": true, "{": true, "}": true };
+var WRAPPERS = {
+  mise: true,
+  env: true,
+  command: true,
+  exec: true,
+  nohup: true,
+  nice: true,
+  sudo: true,
+  xargs: true
+};
+function tokenize(segment) {
+  return tokenizeShell(segment, { preserveBackslashes: true }).map(({ value, startsQuoted }) => ({ value, quoted: startsQuoted }));
+}
+function leadingCdCwd(command, cwd) {
+  const match = /^\s*cd\s+([^\s;&|]+)\s*&&/.exec(command);
+  if (!match)
+    return cwd;
+  const dir = match[1];
+  if (!dir || /^[-~$]/.test(dir) || /[\\`"'*?\x5b\x5d{}]/.test(dir))
+    return cwd;
+  return dir.startsWith("/") ? dir : resolve(cwd, dir);
+}
+function splitCommands(source) {
+  const positions = [];
+  let current = [];
+  const flush = () => {
+    if (current.length === 0)
+      return;
+    const words = [...current];
+    const argv = words.map((word) => word.value);
+    let index = 0;
+    while (index < words.length && (/^[A-Za-z_][A-Za-z0-9_]*=/.test(words[index]?.value ?? "") || words[index]?.value === "!"))
+      index++;
+    while (index < words.length && WRAPPERS[words[index]?.value.split("/").pop() ?? words[index]?.value ?? ""] === true) {
+      const wrapper = words[index]?.value.split("/").pop() ?? words[index]?.value ?? "";
+      index++;
+      if (wrapper === "env")
+        while (index < words.length && (/^[A-Za-z_][A-Za-z0-9_]*=/.test(words[index]?.value ?? "") || words[index]?.value?.startsWith("-") === true))
+          index++;
+      if (wrapper === "xargs")
+        while (index < words.length && words[index]?.value?.startsWith("-") === true)
+          index++;
+      if (wrapper === "sudo")
+        while (index < words.length && words[index]?.value?.startsWith("-") === true) {
+          index++;
+          if (index < words.length && words[index]?.value?.startsWith("-") === false)
+            index++;
+        }
+    }
+    const executable = words[index] && !words[index]?.quoted ? words[index]?.value : undefined;
+    const raw = words.map((word) => word.quoted ? `'${word.value.replaceAll("'", "'\\''")}'` : word.value).join(" ");
+    positions.push({ raw, words, argv, executable });
+    current = [];
+  };
+  for (const token of tokenize(source)) {
+    if (OPERATORS[token.value] === true) {
+      flush();
+      continue;
+    }
+    current.push(token);
+  }
+  flush();
+  return positions;
+}
+function nestedSources(source) {
+  const sources = [];
+  let unknown = false;
+  let depth = 0;
+  let start = -1;
+  let quote = null;
+  for (let i = 0;i < source.length; i++) {
+    const ch = source[i];
+    if (quote === "'") {
+      if (ch === "'")
+        quote = null;
+      continue;
+    }
+    if (quote === '"') {
+      if (ch === "\\")
+        i++;
+      else if (ch === '"')
+        quote = null;
+      continue;
+    }
+    if (ch === "'") {
+      quote = "'";
+      continue;
+    }
+    if (ch === '"') {
+      quote = '"';
+      continue;
+    }
+    if (ch === "`") {
+      const end = source.indexOf("`", i + 1);
+      if (end < 0)
+        return { sources, unknown: true };
+      sources.push(source.slice(i + 1, end));
+      i = end;
+      continue;
+    }
+    if (source.startsWith("$(", i)) {
+      if (depth++ === 0)
+        start = i + 2;
+      i++;
+      continue;
+    }
+    if (depth > 0 && ch === ")") {
+      if (--depth === 0)
+        sources.push(source.slice(start, i));
+    }
+  }
+  if (depth !== 0)
+    unknown = true;
+  for (const match of source.matchAll(/"((?:\\.|[^"\\])*)"/g)) {
+    const body = match[1] ?? "";
+    for (const substitution of body.matchAll(/\$\(([^()]*)\)/g))
+      if (substitution[1] !== undefined)
+        sources.push(substitution[1]);
+    for (const substitution of body.matchAll(/`([^`]*)`/g))
+      if (substitution[1] !== undefined)
+        sources.push(substitution[1]);
+  }
+  for (const match of source.matchAll(/\b(?:bash|sh|zsh|dash|ksh)\s+-c\s+((?:'[^']*')|(?:"[^"]*")|[^\s;&|]+)/g)) {
+    const value = match[1];
+    if (!value || value.startsWith('"$') || value.startsWith("'$"))
+      unknown = true;
+    else
+      sources.push(value.replace(/^['"]|['"]$/g, ""));
+  }
+  for (const match of source.matchAll(/\beval\s+((?:'[^']*')|(?:"[^"]*")|[^\s;&|]+)/g)) {
+    const value = match[1];
+    if (value?.startsWith("$"))
+      unknown = true;
+    else if (value)
+      sources.push(value.replace(/^['"]|['"]$/g, ""));
+  }
+  for (const match of source.matchAll(/\bxargs(?:\s+-[^\s;&|]+)*\s+([^;&|]+?)(?=\s*(?:[;&|]|$))/g)) {
+    const value = match[1]?.trim();
+    if (value?.startsWith("$"))
+      unknown = true;
+    else if (value)
+      sources.push(value.replace(/^['"]|['"]$/g, ""));
+  }
+  return { sources, unknown };
+}
+function staticParse(command) {
+  if (command.length > 64000)
+    return { kind: "parse-failure", reason: "input exceeds 64000 characters", command, segments: [], commands: [], unknown: true, nested: [] };
+  if (!shellQuoteBalanced(command))
+    return { kind: "parse-failure", reason: "unbalanced shell quote", command, segments: [], commands: [], unknown: true, nested: [] };
+  const commands = splitCommands(command);
+  const nested = nestedSources(command);
+  const children = nested.sources.map(staticParse);
+  const unknown = nested.unknown || children.some((child) => child.unknown);
+  return {
+    command,
+    segments: commands.map((position) => position.argv),
+    commands,
+    unknown,
+    nested: children
+  };
+}
+function parse(command) {
+  return staticParse(command);
+}
 function commandFromInput(input) {
   if (!input || typeof input !== "object")
     return "";
@@ -179,16 +362,111 @@ function commandFromInput(input) {
     return value.cmd;
   return "";
 }
+function parsedInvocations(parsed, executable = "bd") {
+  if (parsed.unknown)
+    return [];
+  const found = [];
+  for (const position of parsed.commands) {
+    const executableName = position.executable?.split("/").pop();
+    if (executableName !== executable)
+      continue;
+    const index = position.argv.findIndex((word, i) => !position.words[i]?.quoted && (word.split("/").pop() ?? word) === executable);
+    if (index < 0)
+      continue;
+    const args = position.argv.slice(index + 1);
+    const globals = [];
+    let verb;
+    for (let i = 0;i < args.length; i++) {
+      const word = args[i];
+      if (word === undefined)
+        continue;
+      if (word.startsWith("-") && verb === undefined) {
+        globals.push(word);
+        const next = args[i + 1];
+        if (!["--global", "--claim", "--force", "--json"].includes(word) && !word.includes("=") && next !== undefined && !next.startsWith("-")) {
+          globals.push(next);
+          i++;
+        }
+        continue;
+      }
+      if (verb === undefined && !word.startsWith("\x00"))
+        verb = word;
+    }
+    found.push({ position, command: position.raw, args, verb, globals });
+  }
+  for (const child of parsed.nested)
+    found.push(...parsedInvocations(child, executable));
+  return found;
+}
+var BEAD_ID = /^[A-Za-z][A-Za-z0-9]*(?:-[A-Za-z0-9]+)+(?:\.\d+)*$/;
+var CLOSE_VERBS = { close: true, done: true };
+var DB_VALUE_FLAGS = { "--db": true, "-C": true, "--directory": true };
+var VALUE_FLAGS = { "--reason": true, "-r": true, "--message": true, "--session": true, "--assignee": true, "--status": true, "--type": true };
+function closeInvocations(command) {
+  const parsed = parse(command);
+  if (parsed.unknown)
+    return [];
+  const out = [];
+  for (const invocation of parsedInvocations(parsed)) {
+    if (!invocation.verb || CLOSE_VERBS[invocation.verb.toLowerCase()] !== true)
+      continue;
+    const ids = [];
+    const dbArgs = [];
+    const args = invocation.args;
+    let verbSeen = false;
+    for (let i = 0;i < args.length; i++) {
+      const token = args[i];
+      if (token === undefined)
+        continue;
+      if (!verbSeen) {
+        if (token.toLowerCase() === invocation.verb.toLowerCase())
+          verbSeen = true;
+        else if (token.startsWith("-")) {
+          const flag = token.split("=", 1)[0] ?? "";
+          if (DB_VALUE_FLAGS[flag] === true) {
+            dbArgs.push(token);
+            const next = args[i + 1];
+            if (!token.includes("=") && next !== undefined) {
+              dbArgs.push(next);
+              i++;
+            }
+          } else if (token === "--global")
+            dbArgs.push(token);
+        }
+        continue;
+      }
+      if (token.startsWith("-")) {
+        const flag = token.split("=", 1)[0] ?? "";
+        if (DB_VALUE_FLAGS[flag] === true) {
+          dbArgs.push(token);
+          const next = args[i + 1];
+          if (!token.includes("=") && next !== undefined) {
+            dbArgs.push(next);
+            i++;
+          }
+        } else if (token === "--global")
+          dbArgs.push(token);
+        else if (VALUE_FLAGS[flag] === true && !token.includes("=") && args[i + 1] !== undefined)
+          i++;
+        continue;
+      }
+      if (BEAD_ID.test(token))
+        ids.push(token);
+    }
+    out.push({ ids, dbArgs });
+  }
+  return out;
+}
 var settingsCache = new Map;
 // extensions/bd-close-gate.ts
-function tokenize(command) {
+function tokenize2(command) {
   return tokenizeShell(command).map(({ value }) => value);
 }
 
 // extensions/bd-actor-gate.ts
 var ACTOR_NOTICE_ARBITER = Symbol.for("com.srobroek.beads.actor-notice-arbiter.v1");
 var ACTOR_VARS = ["BEADS_ACTOR", "BD_ACTOR"];
-var VALUE_FLAGS = new Set([
+var VALUE_FLAGS2 = new Set([
   "--actor",
   "--database",
   "--db",
@@ -218,7 +496,7 @@ var WRAPPER_VALUE_FLAGS = {
 function commandSegments(command) {
   const segments = [];
   let segment = [];
-  for (const token of tokenize(command)) {
+  for (const token of tokenize2(command)) {
     if ([";", "&", "|", "(", ")", "$(", `
 `].includes(token)) {
       if (segment.length)
@@ -287,7 +565,7 @@ function scanGlobals(tokens, from) {
     i++;
     if (flag.includes("="))
       continue;
-    if (!VALUE_FLAGS.has(flag))
+    if (!VALUE_FLAGS2.has(flag))
       continue;
     const value = tokens[i];
     if (value !== undefined)
@@ -327,6 +605,7 @@ var MUTATING_VERBS = {
   batch: true,
   claim: true,
   close: true,
+  done: true,
   comment: true,
   cook: true,
   create: true,
@@ -413,7 +692,7 @@ function isMutatingInvocation({ verb, args }) {
   if (MUTATING_VERBS[verb] === true)
     return true;
   if (verb === "ready")
-    return args.includes("--claim");
+    return flagEnabled(args, ["--claim"]);
   if (verb === "dep" && args.includes("--blocks"))
     return true;
   if (verb === "mol") {
@@ -437,12 +716,12 @@ function isMutatingBdCommand(command) {
 // extensions/bd-embedded-write-lock.ts
 import { closeSync, existsSync, openSync, readFileSync, realpathSync as realpathSync2, statSync as statSync2, unlinkSync, writeSync } from "fs";
 import { hostname } from "os";
-import { basename, dirname as dirname2, isAbsolute as isAbsolute2, join, resolve as resolve2 } from "path";
+import { basename, dirname as dirname2, isAbsolute as isAbsolute2, join, resolve as resolve3 } from "path";
 
 // extensions/beads-store.ts
 import { spawnSync } from "child_process";
 import { lstatSync, realpathSync, statSync } from "fs";
-import { dirname, isAbsolute, resolve } from "path";
+import { dirname, isAbsolute, resolve as resolve2 } from "path";
 function repoIdentity(cwd) {
   const result = spawnSync("git", ["-C", cwd, "rev-parse", "--git-common-dir"], {
     encoding: "utf8",
@@ -459,7 +738,7 @@ function repoIdentity(cwd) {
   }
   const out = String(result.stdout ?? "").trim();
   try {
-    return realpathSync(isAbsolute(out) ? out : resolve(cwd, out));
+    return realpathSync(isAbsolute(out) ? out : resolve2(cwd, out));
   } catch {
     return;
   }
@@ -473,7 +752,7 @@ function repositoryState(cwd) {
   }
   for (;; ) {
     try {
-      lstatSync(resolve(current, ".git"));
+      lstatSync(resolve2(current, ".git"));
       return "present";
     } catch (error) {
       if (!(error instanceof Error) || !("code" in error) || error.code !== "ENOENT")
@@ -486,19 +765,19 @@ function repositoryState(cwd) {
   }
 }
 function sessionPinFor(cwd) {
-  const local = resolve(cwd, ".beads");
+  const local = resolve2(cwd, ".beads");
   const common = repoIdentity(cwd);
   if (common === undefined)
     return;
   if (common !== cwd && common.endsWith("/.git")) {
-    const primaryRoot = resolve(common, "..");
+    const primaryRoot = resolve2(common, "..");
     try {
       if (realpathSync(cwd) === primaryRoot && isDir(local))
         return local;
     } catch {
       return;
     }
-    const primary = resolve(primaryRoot, ".beads");
+    const primary = resolve2(primaryRoot, ".beads");
     if (isDir(primary))
       return primary;
   }
@@ -608,7 +887,7 @@ var WRITE_FLAGS = {
   preflight: ["--fix"],
   ready: ["--claim"]
 };
-var BEAD_ID = /^[A-Za-z][A-Za-z0-9]*(?:-[A-Za-z0-9]+)+$/;
+var BEAD_ID2 = /^[A-Za-z][A-Za-z0-9]*(?:-[A-Za-z0-9]+)+$/;
 function writesStore(invocation) {
   if (invocation === undefined)
     return true;
@@ -627,7 +906,7 @@ function writesStore(invocation) {
   if (rule === true)
     return false;
   if (rule === "idOnly")
-    return subaction === undefined || !BEAD_ID.test(subaction);
+    return subaction === undefined || !BEAD_ID2.test(subaction);
   return subaction === undefined || rule[subaction] !== true;
 }
 function storeFor(globals, cwd, env) {
@@ -652,7 +931,7 @@ function storeFor(globals, cwd, env) {
   return canonicalStore(sessionPinFor(cwd));
 }
 function absolute(path, cwd) {
-  return isAbsolute2(path) ? path : resolve2(cwd, path);
+  return isAbsolute2(path) ? path : resolve3(cwd, path);
 }
 function isDirectory(path) {
   try {
@@ -665,7 +944,7 @@ function canonical(path) {
   try {
     return realpathSync2(path);
   } catch {
-    return resolve2(path);
+    return resolve3(path);
   }
 }
 function canonicalStore(store) {
@@ -919,6 +1198,38 @@ async function withEmbeddedWriteLock(cwd, owner, write, env = process.env, deadl
   }
 }
 
+// extensions/bd-lease-gate.ts
+var BD_ID = /^[A-Za-z][A-Za-z0-9]*(?:-[A-Za-z0-9]+)+(?:\.\d+)*$/;
+function claimedIds(output) {
+  const ids = new Set;
+  for (const match of output.matchAll(/"id"\s*:\s*"([^"]+)"/g)) {
+    const id = match[1];
+    if (id && BD_ID.test(id))
+      ids.add(id);
+  }
+  for (const id of claimedTextIds(output))
+    ids.add(id);
+  return [...ids];
+}
+function claimedTextIds(output) {
+  const ids = new Set;
+  for (const match of output.matchAll(/\bclaimed(?:\s+issue:)?\s+([A-Za-z][A-Za-z0-9-]+(?:\.\d+)*)\b/gi)) {
+    const id = match[1];
+    if (id && BD_ID.test(id))
+      ids.add(id);
+  }
+  return [...ids];
+}
+function claimResultOutput(event) {
+  const content = (event.content ?? []).map((part) => ("text" in part) && typeof part.text === "string" ? part.text : "").join(`
+`);
+  const details = event.details;
+  const stdout = details !== null && typeof details === "object" && "stdout" in details && typeof details.stdout === "string" ? details.stdout : "";
+  return [content, stdout].filter(Boolean).join(`
+`);
+}
+var pendingClaims = new Map;
+
 // extensions/session-beads-lifecycle.ts
 var EMBEDDED_PIN_ENV = { BEADS_DOLT_SHARED_SERVER: "" };
 function lifecycleBdEnvironment(cwd, base = process.env) {
@@ -947,7 +1258,6 @@ function bdReadFailure(scope, reason) {
   return scope === "start" ? `Beads gates could not be verified at session start: ${bounded}.` : `Beads claims could not be read at session close: ${bounded}. A mutating command was attempted; inspect assigned and touched work before stopping.`;
 }
 var TIMEOUT_MS = 8000;
-var SESSION_EXIT_TIMEOUT_MS = 1200;
 var MAX_LISTED = 8;
 var AUTO_GATE_TYPES = {
   timer: true,
@@ -979,7 +1289,7 @@ function bashCallCwd(input, fallback) {
   if (input === null || typeof input !== "object")
     return fallback;
   const cwd = input.cwd;
-  return typeof cwd === "string" && cwd !== "" ? resolve3(fallback, cwd) : fallback;
+  return typeof cwd === "string" && cwd !== "" ? resolve4(fallback, cwd) : fallback;
 }
 function sessionKey(ctx) {
   return ctx?.sessionManager?.getSessionId?.() ?? "default";
@@ -1034,7 +1344,7 @@ function releaseAutoPin(env = process.env, state = autoPinState) {
 var autoPinState = {};
 function beadsDir(cwd) {
   const pin = process.env.BEADS_DIR;
-  const dir = pin ? isAbsolute3(pin) ? pin : resolve3(cwd, pin) : join2(cwd, ".beads");
+  const dir = pin ? isAbsolute3(pin) ? pin : resolve4(cwd, pin) : join2(cwd, ".beads");
   try {
     return statSync3(dir).isDirectory() ? dir : undefined;
   } catch {
@@ -1178,10 +1488,121 @@ function beadIdCandidates(command) {
   for (const token of command.split(/[\s;&|(`'"]+/)) {
     if (token.startsWith("-"))
       continue;
-    if (/^[a-z][a-z0-9]*(?:-[a-z0-9]+)+(?:\.\d+)?$/i.test(token))
+    if (/^[a-z][a-z0-9]*(?:-[a-z0-9]+)+(?:\.\d+)*$/i.test(token))
       ids.push(token);
   }
   return ids;
+}
+function optionValue(args, names) {
+  for (const name of names) {
+    const index = args.indexOf(name);
+    if (index >= 0)
+      return args[index + 1];
+    const inline = args.find((arg) => arg.startsWith(`${name}=`));
+    if (inline !== undefined)
+      return inline.slice(name.length + 1);
+  }
+  return;
+}
+function mutationTargetIds(args) {
+  const ids = [];
+  for (let index = 0;index < args.length; index++) {
+    const token = args[index] ?? "";
+    if (["--assignee", "-a", "--status", "-s"].includes(token)) {
+      index++;
+      continue;
+    }
+    if (/^(?:--assignee|--status|-a|-s)=/u.test(token) || /^(?:--claim|--json)(?:=|$)/u.test(token))
+      continue;
+    if (token.startsWith("-"))
+      break;
+    const [id] = beadIdCandidates(token);
+    if (id !== undefined)
+      ids.push(id);
+  }
+  return ids;
+}
+function commandSucceeded(event) {
+  if (event.isError === true)
+    return false;
+  const details = event.details;
+  if (details !== null && typeof details === "object" && "exitCode" in details) {
+    const exitCode = details.exitCode;
+    if (typeof exitCode === "number" && exitCode !== 0)
+      return false;
+  }
+  return !/\bCommand exited with code -?[1-9]\d*\b/u.test(resultText(event));
+}
+function recordClaimTransitions(state, command, env, event) {
+  const invocations = bdInvocations(command);
+  const parsedCommand = parse(command);
+  const commandTokens = tokenizeShell(command);
+  const terminalToken = commandTokens.findLast((token) => token.value !== `
+`)?.value;
+  const executables = parsedCommand.commands.map((position) => position.executable?.split("/").pop());
+  const directCommand = executables.length === 1 && executables[0] === "bd" || executables.length === 2 && executables[0] === "cd" && executables[1] === "bd" && leadingCdCwd(command, "") !== "";
+  const mutationSucceededDirectly = !parsedCommand.unknown && parsedCommand.nested.length === 0 && directCommand && invocations.length === 1 && terminalToken !== "&";
+  const output = claimResultOutput(event);
+  const allOutputIds = new Set(claimedIds(output));
+  const labeledOutputIds = new Set(claimedTextIds(output));
+  const claimInvocations = invocations.flatMap((invocation) => {
+    const enabled = invocation.verb === "claim" || (invocation.verb === "update" || invocation.verb === "ready") && flagEnabled(invocation.args, ["--claim"]);
+    const actor = enabled ? invocationActor(invocation, env) : null;
+    return actor === null ? [] : [{ actor, directIds: mutationTargetIds(invocation.args) }];
+  });
+  const actorsById = new Map;
+  for (const { actor, directIds } of claimInvocations) {
+    for (const id of directIds) {
+      const actors = actorsById.get(id) ?? new Set;
+      actors.add(actor);
+      actorsById.set(id, actors);
+    }
+  }
+  for (const { actor, directIds } of claimInvocations) {
+    if (mutationSucceededDirectly) {
+      for (const id of directIds.length > 0 ? directIds : allOutputIds)
+        state.claims.set(id, actor);
+      continue;
+    }
+    for (const id of directIds) {
+      if (!labeledOutputIds.has(id))
+        continue;
+      const actors = actorsById.get(id);
+      state.claims.set(id, actors?.size === 1 ? actor : undefined);
+    }
+  }
+  if (!mutationSucceededDirectly)
+    return;
+  for (const close of closeInvocations(command)) {
+    for (const id of close.ids)
+      state.claims.delete(id);
+  }
+  const [invocation] = invocations;
+  if (invocation?.verb === "assign") {
+    const [idToken, assignee] = invocation.args;
+    const [id] = idToken === undefined ? [] : beadIdCandidates(idToken);
+    if (id !== undefined && assignee !== undefined) {
+      if (state.actors.has(assignee))
+        state.claims.set(id, assignee);
+      else
+        state.claims.delete(id);
+    }
+    return;
+  }
+  if (invocation?.verb !== "update")
+    return;
+  const status = optionValue(invocation.args, ["--status", "-s"]);
+  const assignee = optionValue(invocation.args, ["--assignee", "-a"]);
+  for (const id of mutationTargetIds(invocation.args)) {
+    if (status === "closed" || assignee === "")
+      state.claims.delete(id);
+    else if (assignee !== undefined) {
+      if (state.actors.has(assignee))
+        state.claims.set(id, assignee);
+      else
+        state.claims.delete(id);
+    }
+  }
 }
 var SAFE_RELEASE_IDENTIFIER = /^[A-Za-z0-9][A-Za-z0-9._/-]*$/;
 function releaseClaimArgs(id, holder, env = process.env, releasedAt = new Date().toISOString(), casSupported = true) {
@@ -1284,6 +1705,17 @@ function formatSessionCloseAdvisory(beads, env = process.env, releasedAt = new D
   return lines.join(`
 `);
 }
+function trackedClaimAdvisory(state) {
+  if (state.claims.size === 0)
+    return;
+  const claims = [...state.claims].map(([id, assignee]) => ({
+    id,
+    title: "claim recorded by this session",
+    status: "in_progress",
+    assignee
+  }));
+  return formatSessionCloseAdvisory(claims, {}, new Date().toISOString(), true, state.actors);
+}
 function boundedFailure(reason) {
   const oneLine = reason.replace(/\s+/g, " ").trim();
   return oneLine.length > 160 ? `${oneLine.slice(0, 157)}...` : oneLine;
@@ -1301,39 +1733,6 @@ function handleSessionStop(event, listOutput, seen, actor = process.env.BEADS_AC
     return;
   const actors = typeof actor === "string" ? new Set(actor.trim() ? [actor.trim()] : []) : actor;
   return { continue: true, additionalContext: formatSessionCloseAdvisory(held, {}, new Date().toISOString(), casSupported, actors) };
-}
-async function releaseCasSupported(cwd, deadline, env) {
-  const help = await runBd(cwd, ["update", "--help"], deadline, env);
-  return help?.includes("--if-assignee") === true;
-}
-async function releaseClaimsAtExit(cwd, state) {
-  if (state.claimsReleased || !state.bdWrote || state.actors.size === 0)
-    return { released: [], incomplete: [] };
-  const released = [];
-  const incomplete = [];
-  state.claimsReleased = true;
-  const deadline = Date.now() + SESSION_EXIT_TIMEOUT_MS;
-  const env = lifecycleBdEnvironment(cwd);
-  const listed = await runBdResult(cwd, ["list", "--status", "open,in_progress,blocked,deferred", "--limit", "0", "--json"], deadline, env);
-  if (!("output" in listed))
-    return { released, incomplete: [`claim listing: ${listed.failure}`] };
-  const claims = heldClaims(readBeads(listed.output), new Set, state.actors);
-  const casSupported = await releaseCasSupported(cwd, deadline, env);
-  for (const bead of claims) {
-    if (bead.assignee === undefined)
-      continue;
-    const args = releaseClaimArgs(bead.id, bead.assignee, { BD_ACTOR: bead.assignee }, new Date().toISOString(), casSupported);
-    if (args === undefined) {
-      incomplete.push(`${bead.id}: release command could not be constructed`);
-      continue;
-    }
-    const releasedResult = await runBdResult(cwd, args, deadline, { ...env, BEADS_ACTOR: bead.assignee, BD_ACTOR: bead.assignee });
-    if ("output" in releasedResult)
-      released.push(bead.id);
-    else
-      incomplete.push(`${bead.id}: ${releasedResult.failure}`);
-  }
-  return { released, incomplete };
 }
 var internalRuns = 0;
 var injectedStream = null;
@@ -1461,13 +1860,13 @@ function sessionBeadsLifecycle(pi) {
     const key = sessionKey(ctx);
     let state = sessions.get(key);
     if (!state) {
-      state = { actors: new Set, bdWrote: false, repos: new Map, staleAdvised: false, stopFired: false, touched: new Set, claimsReleased: false };
+      state = { actors: new Set, bdWrote: false, claims: new Map, repos: new Map, staleAdvised: false, stopFired: false, touched: new Set };
       sessions.set(key, state);
     }
     return state;
   }
   function identityFor(state, cwd) {
-    const key = resolve3(cwd);
+    const key = resolve4(cwd);
     const cached = state.repos.get(key);
     if (cached !== undefined)
       return cached;
@@ -1521,27 +1920,18 @@ function sessionBeadsLifecycle(pi) {
       });
     }
   });
-  pi.on("session_shutdown", async (_event, ctx) => {
+  pi.on("session_shutdown", (_event, ctx) => {
     const key = sessionKey(ctx);
     const state = sessions.get(key);
     sessions.delete(key);
     endAutoPinSession(key, (id) => sessions.has(id));
     if (state === undefined)
       return;
-    try {
-      const outcome = await releaseClaimsAtExit(ctx?.cwd ?? process.cwd(), state);
-      if (outcome.incomplete.length === 0)
-        return;
-      const summary = [
-        "Beads claim release at session shutdown reached its 1,200 ms budget.",
-        outcome.released.length > 0 ? `Released: ${outcome.released.join(", ")}.` : "Released: none.",
-        `Remaining: ${outcome.incomplete.join("; ")}`
-      ].join(" ");
-      pi.logger.error("beads claim release incomplete at session exit", outcome);
-      pi.sendMessage({ customType: "com.srobroek.beads.session-lifecycle", content: summary, display: true, attribution: "user" }, { triggerTurn: false });
-    } catch (error) {
-      pi.logger.error("beads claim release at session exit failed", { error: error instanceof Error ? error.message : String(error) });
-    }
+    const advisory = trackedClaimAdvisory(state);
+    if (advisory === undefined)
+      return;
+    pi.logger.error("beads claims remained at session shutdown", { claims: [...state.claims.keys()] });
+    pi.sendMessage({ customType: "com.srobroek.beads.session-lifecycle", content: advisory, display: true, attribution: "user" }, { triggerTurn: false });
   });
   pi.on("turn_start", (_event, ctx) => {
     stateFor(ctx).stopFired = false;
@@ -1557,10 +1947,13 @@ function sessionBeadsLifecycle(pi) {
       const state = stateFor(ctx);
       if (isBdWrite(command)) {
         state.bdWrote = true;
-        for (const actor of actorValues(command, environmentForInput(input)))
+        const env = environmentForInput(input);
+        for (const actor of actorValues(command, env))
           state.actors.add(actor);
         for (const id of beadIdCandidates(command))
           state.touched.add(id);
+        if (commandSucceeded(event))
+          recordClaimTransitions(state, command, env, event);
       }
       if (state.staleAdvised)
         return;
@@ -1575,29 +1968,15 @@ function sessionBeadsLifecycle(pi) {
       return;
     }
   });
-  pi.on("session_stop", async (event, ctx) => {
-    try {
-      const key = sessionKey(ctx);
-      const state = sessions.get(key);
-      const cwd = ctx?.cwd ?? process.cwd();
-      const bdEnv = lifecycleBdEnvironment(cwd);
-      if (!state?.bdWrote || state.stopFired || event.stop_hook_active === true || event.stopHookActive === true || bdStoreDir(cwd, bdEnv) === undefined)
-        return;
-      const deadline = Date.now() + SESSION_EXIT_TIMEOUT_MS;
-      const casSupported = await releaseCasSupported(cwd, deadline, bdEnv);
-      const listed = await runBdResult(cwd, ["list", "--status", "open,in_progress,blocked,deferred", "--limit", "0", "--json"], deadline, bdEnv);
-      if (sessions.get(key) !== state || state.stopFired)
-        return;
-      const advisory = "output" in listed ? handleSessionStop(event, listed.output, state.touched, state.actors, casSupported) : handleSessionStop(event, undefined, state.touched, state.actors, casSupported, listed.failure);
-      if (advisory)
-        state.stopFired = true;
-      return advisory;
-    } catch (error) {
-      pi.logger.error("beads session-close check failed", {
-        error: error instanceof Error ? error.message : String(error)
-      });
+  pi.on("session_stop", (event, ctx) => {
+    const state = sessions.get(sessionKey(ctx));
+    if (state === undefined || state.stopFired || event.stop_hook_active === true || event.stopHookActive === true)
       return;
-    }
+    const additionalContext = trackedClaimAdvisory(state);
+    if (additionalContext === undefined)
+      return;
+    state.stopFired = true;
+    return { continue: true, additionalContext };
   });
 }
 export {

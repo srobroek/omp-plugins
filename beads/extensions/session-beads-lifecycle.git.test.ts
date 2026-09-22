@@ -778,48 +778,271 @@ bashGates(fakePi as never);
     }
   });
 
-  test("session close reports an injected embedded-store read failure", async () => {
-    const dir = mkdtempSync(join(tmpdir(), "beads-fake-close-"));
-    mkdirSync(join(dir, ".beads"));
-    setBdStreamForTests(async () => ({ failure: "bd exited with code 1: Error 1045 (28000): Access denied" }));
-    try {
-      const { handlers } = wire();
-      const ctx = { cwd: dir, sessionManager: { getSessionId: () => "fake-close" } };
-      const toolResult = handlers.tool_result?.[0];
-      const stop = handlers.session_stop?.[0];
-      if (toolResult === undefined || stop === undefined) throw new Error("lifecycle handlers were not registered");
-      toolResult({ toolName: "bash", toolCallId: "write", isError: false, input: { command: "bd update bd-fake --claim" }, content: [] }, ctx);
-      const result = await stop({}, ctx) as { additionalContext?: string };
-      expect(result.additionalContext).toContain("Beads claims could not be read at session close");
-    } finally {
-      setBdStreamForTests(null);
-      rmSync(dir, { recursive: true, force: true });
-    }
-  });
-	test("shutdown reports unreleased claims within its shared deadline", async () => {
-		const dir = mkdtempSync(join(tmpdir(), "beads-shutdown-budget-"));
+	test("session close reports a successful claim without another bd read", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "beads-close-claim-cache-"));
 		mkdirSync(join(dir, ".beads"));
-		const deadlines: number[] = [];
-		setBdStreamForTests(async (_cwd, args, deadline) => {
-			deadlines.push(deadline);
-			if (args[0] === "list") return BEAD_LIST;
-			if (args[0] === "update" && args[1] === "--help") return "--if-assignee";
+		let calls = 0;
+		setBdStreamForTests(async () => {
+			calls++;
+			return { failure: "bd command timed out" };
+		});
+		try {
+			const { handlers } = wire();
+			const ctx = { cwd: dir, sessionManager: { getSessionId: () => "cached-close" } };
+			handlers.tool_result?.[0]?.({
+				toolName: "bash",
+				toolCallId: "claim",
+				isError: false,
+				input: {
+					command: `cd ${dir} && BEADS_ACTOR=omp/Main/s1 BD_ACTOR=omp/Main/s1 bd update bd-probe-2m7 --claim`,
+					cwd: dir,
+					env: { BEADS_ACTOR: "omp/Main/s1", BD_ACTOR: "omp/Main/s1" },
+				},
+				content: [{ type: "text", text: "Updated issue: bd-probe-2m7" }],
+			}, ctx);
+			const stop = handlers.session_stop?.[0];
+			if (stop === undefined) throw new Error("session stop handler was not registered");
+			const result = await stop({}, ctx) as { additionalContext?: string };
+			expect(calls).toBe(0);
+			expect(result.additionalContext).toContain("bd-probe-2m7");
+			expect(result.additionalContext).not.toContain("bd command timed out");
+		} finally {
+			setBdStreamForTests(null);
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+	test("a failed claim is neither reported nor released", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "beads-failed-claim-"));
+		mkdirSync(join(dir, ".beads"));
+		let calls = 0;
+		setBdStreamForTests(async () => {
+			calls++;
+			return "unexpected";
+		});
+		try {
+			const { handlers } = wire();
+			const ctx = { cwd: dir, sessionManager: { getSessionId: () => "failed-claim" } };
+			handlers.tool_result?.[0]?.({
+				toolName: "bash",
+				toolCallId: "claim",
+				isError: true,
+				input: { command: "BD_ACTOR=omp/Main/s1 bd update bd-probe-2m7 --claim", cwd: dir, env: { BD_ACTOR: "omp/Main/s1" } },
+				content: [{ type: "text", text: "Command exited with code 1" }],
+			}, ctx);
+			expect(await handlers.session_stop?.[0]?.({}, ctx)).toBeUndefined();
+			await handlers.session_shutdown?.[0]?.({}, ctx);
+			expect(calls).toBe(0);
+		} finally {
+			setBdStreamForTests(null);
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+	test("a masked bd failure cannot clear a tracked claim", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "beads-masked-close-"));
+		mkdirSync(join(dir, ".beads"));
+		try {
+			const { handlers } = wire();
+			const ctx = { cwd: dir, sessionManager: { getSessionId: () => "masked-close" } };
+			const result = handlers.tool_result?.[0];
+			result?.({ toolName: "bash", toolCallId: "claim", isError: false, input: { command: "bd update bd-probe-2m7 --claim", env: { BD_ACTOR: "omp/Main/s1" } }, content: [{ type: "text", text: "Updated issue: bd-probe-2m7" }] }, ctx);
+			result?.({ toolName: "bash", toolCallId: "masked", isError: false, input: { command: "bd close bd-probe-2m7 || true", env: { BD_ACTOR: "omp/Main/s1" } }, content: [{ type: "text", text: "close failed" }] }, ctx);
+			result?.({ toolName: "bash", toolCallId: "masked-claim", isError: false, input: { command: "bd update bd-false-9z9 --claim || true", env: { BD_ACTOR: "omp/Main/s1" } }, content: [{ type: "text", text: "claim failed" }] }, ctx);
+			result?.({ toolName: "bash", toolCallId: "background-claim", isError: false, input: { command: "BD_ACTOR=omp/Main/s1 bd update bd-background-8q8 --claim &", env: { BD_ACTOR: "omp/Main/s1" } }, content: [{ type: "text", text: "backgrounded" }] }, ctx);
+			result?.({ toolName: "bash", toolCallId: "skipped-close", isError: false, input: { command: "true || bd close bd-probe-2m7", env: { BD_ACTOR: "omp/Main/s1" } }, content: [{ type: "text", text: "" }] }, ctx);
+			result?.({ toolName: "bash", toolCallId: "skipped-claim", isError: false, input: { command: "true || bd update bd-skipped-7w7 --claim", env: { BD_ACTOR: "omp/Main/s1" } }, content: [{ type: "text", text: "" }] }, ctx);
+			result?.({ toolName: "bash", toolCallId: "substitution-close", isError: false, input: { command: "echo $(BD_ACTOR=omp/Main/s1 bd close bd-probe-2m7)", env: { BD_ACTOR: "omp/Main/s1" } }, content: [{ type: "text", text: "" }] }, ctx);
+			result?.({ toolName: "bash", toolCallId: "heredoc-close", isError: false, input: { command: "cat <<EOF\nbd close bd-probe-2m7\nEOF", env: { BD_ACTOR: "omp/Main/s1" } }, content: [{ type: "text", text: "bd close bd-probe-2m7\n" }] }, ctx);
+			const advisory = await handlers.session_stop?.[0]?.({}, ctx) as { additionalContext?: string } | undefined;
+			expect(advisory?.additionalContext).toContain("bd-probe-2m7");
+			expect(advisory?.additionalContext).not.toContain("bd-false-9z9");
+			expect(advisory?.additionalContext).not.toContain("bd-background-8q8");
+			expect(advisory?.additionalContext).not.toContain("bd-skipped-7w7");
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+	test("tracks boolean claim flags and structured claim stdout", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "beads-claim-spellings-"));
+		mkdirSync(join(dir, ".beads"));
+		try {
+			const { handlers } = wire();
+			const ctx = { cwd: dir, sessionManager: { getSessionId: () => "claim-spellings" } };
+			const result = handlers.tool_result?.[0];
+			for (const command of ["bd update bd-true-1 --claim=true", "bd update bd-one-1 --claim=1", "bd update bd-multi-1 bd-multi-2 --claim"]) {
+				result?.({ toolName: "bash", toolCallId: command, isError: false, input: { command, env: { BD_ACTOR: "omp/Main/s1" } }, content: [{ type: "text", text: "updated" }] }, ctx);
+			}
+			result?.({ toolName: "bash", toolCallId: "ready", isError: false, input: { command: "bd ready --claim", env: { BD_ACTOR: "omp/Main/s1" } }, content: [{ type: "text", text: "output spilled" }], details: { exitCode: 0, stdout: '{"id":"orc-e2e-3ef.1.1"}' } }, ctx);
+			const advisory = await handlers.session_stop?.[0]?.({}, ctx) as { additionalContext?: string } | undefined;
+			expect(advisory?.additionalContext).toContain("bd-true-1");
+			expect(advisory?.additionalContext).toContain("bd-one-1");
+			expect(advisory?.additionalContext).toContain("bd-multi-1");
+			expect(advisory?.additionalContext).toContain("bd-multi-2");
+			expect(advisory?.additionalContext).toContain("orc-e2e-3ef.1.1");
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+	test("tracks direct assignment to a session actor", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "beads-direct-assign-"));
+		mkdirSync(join(dir, ".beads"));
+		try {
+			const { handlers } = wire();
+			const ctx = { cwd: dir, sessionManager: { getSessionId: () => "direct-assign" } };
+			handlers.tool_result?.[0]?.({
+				toolName: "bash",
+				toolCallId: "assign",
+				isError: false,
+				input: { command: "BD_ACTOR=omp/Main/s1 bd assign bd-assigned-1 omp/Main/s1", env: { BD_ACTOR: "omp/Main/s1" } },
+				content: [{ type: "text", text: "Assigned bd-assigned-1 to omp/Main/s1" }],
+			}, ctx);
+			const advisory = await handlers.session_stop?.[0]?.({}, ctx) as { additionalContext?: string } | undefined;
+			expect(advisory?.additionalContext).toContain("bd-assigned-1 [omp/Main/s1]");
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+	test("compound claims retain each invocation's actor", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "beads-compound-actors-"));
+		mkdirSync(join(dir, ".beads"));
+		try {
+			const { handlers } = wire();
+			const ctx = { cwd: dir, sessionManager: { getSessionId: () => "compound-actors" } };
+			handlers.tool_result?.[0]?.({
+				toolName: "bash", toolCallId: "claims", isError: false,
+				input: { command: "BD_ACTOR=actor/a bd update bd-a-1 --claim; BD_ACTOR=actor/b bd update bd-b-2 --claim", env: {} },
+				content: [{ type: "text", text: "Claimed bd-a-1\nClaimed bd-b-2" }],
+			}, ctx);
+			const advisory = await handlers.session_stop?.[0]?.({}, ctx) as { additionalContext?: string } | undefined;
+			expect(advisory?.additionalContext).toContain("bd-a-1 [actor/a]");
+			expect(advisory?.additionalContext).toContain("bd-b-2 [actor/b]");
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+	test("ambiguous compound claims retain the id without guessing an actor", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "beads-ambiguous-actor-"));
+		mkdirSync(join(dir, ".beads"));
+		try {
+			const { handlers } = wire();
+			const ctx = { cwd: dir, sessionManager: { getSessionId: () => "ambiguous-actor" } };
+			handlers.tool_result?.[0]?.({
+				toolName: "bash", toolCallId: "ambiguous-claim", isError: false,
+				input: { command: "BD_ACTOR=actor/a bd update bd-x-1 --claim; BD_ACTOR=actor/b bd update bd-x-1 --claim || true", env: {} },
+				content: [{ type: "text", text: "Claimed bd-x-1" }],
+			}, ctx);
+			const advisory = await handlers.session_stop?.[0]?.({}, ctx) as { additionalContext?: string } | undefined;
+			expect(advisory?.additionalContext).toContain("- bd-x-1 claim recorded by this session");
+			expect(advisory?.additionalContext).toContain("Release unavailable: the effective actor is missing or ambiguous");
+			expect(advisory?.additionalContext).not.toContain("bd-x-1 [actor/");
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+	test("multi-ID updates honor short status and assignee flags", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "beads-multi-update-"));
+		mkdirSync(join(dir, ".beads"));
+		try {
+			const { handlers } = wire();
+			const ctx = { cwd: dir, sessionManager: { getSessionId: () => "multi-update" } };
+			const result = handlers.tool_result?.[0];
+			for (const id of ["bd-a-1", "bd-b-2", "bd-c-3", "bd-d-4"]) {
+				result?.({ toolName: "bash", toolCallId: `claim-${id}`, isError: false, input: { command: `bd update ${id} --claim`, env: { BD_ACTOR: "actor/a" } }, content: [{ type: "text", text: "updated" }] }, ctx);
+			}
+			result?.({ toolName: "bash", toolCallId: "release", isError: false, input: { command: "bd update -a '' bd-a-1 bd-b-2", env: { BD_ACTOR: "actor/a" } }, content: [{ type: "text", text: "updated" }] }, ctx);
+			result?.({ toolName: "bash", toolCallId: "close", isError: false, input: { command: "bd update bd-c-3 bd-d-4 -s closed", env: { BD_ACTOR: "actor/a" } }, content: [{ type: "text", text: "updated" }] }, ctx);
+			expect(await handlers.session_stop?.[0]?.({}, ctx)).toBeUndefined();
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+	test("unknown update options cannot consume tracked claim IDs", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "beads-ambiguous-update-"));
+		mkdirSync(join(dir, ".beads"));
+		try {
+			const { handlers } = wire();
+			const ctx = { cwd: dir, sessionManager: { getSessionId: () => "ambiguous-update" } };
+			const result = handlers.tool_result?.[0];
+			for (const id of ["bd-a-1", "bd-b-2"]) {
+				result?.({ toolName: "bash", toolCallId: `claim-${id}`, isError: false, input: { command: `bd update ${id} --claim`, env: { BD_ACTOR: "actor/a" } }, content: [{ type: "text", text: "updated" }] }, ctx);
+			}
+			result?.({ toolName: "bash", toolCallId: "ambiguous", isError: false, input: { command: "bd update bd-a-1 --assignee '' --status open --set-metadata release_actor=actor/a --set-metadata released_at=2026-09-22T18:00:00.000Z --set-metadata released_from=actor/a --if-assignee actor/a --spec-id bd-b-2", env: { BD_ACTOR: "actor/a" } }, content: [{ type: "text", text: "updated" }] }, ctx);
+			const advisory = await handlers.session_stop?.[0]?.({}, ctx) as { additionalContext?: string } | undefined;
+			expect(advisory?.additionalContext).not.toContain("bd-a-1");
+			expect(advisory?.additionalContext).toContain("bd-b-2");
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+	test("compound JSON from a no-ID claim is not attributed as claim evidence", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "beads-ambiguous-output-"));
+		mkdirSync(join(dir, ".beads"));
+		try {
+			const { handlers } = wire();
+			const ctx = { cwd: dir, sessionManager: { getSessionId: () => "ambiguous-output" } };
+			handlers.tool_result?.[0]?.({
+				toolName: "bash", toolCallId: "compound", isError: false,
+				input: { command: "BD_ACTOR=actor/a bd ready --claim --json; bd show bd-other-1 --json", env: {} },
+				content: [{ type: "text", text: '{"id":"bd-claimed-1"}\n{"id":"bd-other-1"}' }],
+			}, ctx);
+			expect(await handlers.session_stop?.[0]?.({}, ctx)).toBeUndefined();
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+	test("session close forgets claims that the session closed", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "beads-close-cleared-claim-"));
+		mkdirSync(join(dir, ".beads"));
+		let calls = 0;
+		setBdStreamForTests(async () => {
+			calls++;
+			return { failure: "bd command timed out" };
+		});
+		try {
+			const { handlers } = wire();
+			const ctx = { cwd: dir, sessionManager: { getSessionId: () => "cleared-close" } };
+			const result = handlers.tool_result?.[0];
+			const input = (command: string) => ({
+				toolName: "bash",
+				toolCallId: command,
+				isError: false,
+				input: { command, cwd: dir, env: { BD_ACTOR: "omp/Main/s1" } },
+				content: [{ type: "text", text: "command succeeded" }],
+			});
+			result?.(input("BD_ACTOR=omp/Main/s1 bd update bd-probe-2m7.1.1 --claim"), ctx);
+			result?.(input("BD_ACTOR=omp/Main/s1 bd update bd-other-4k2 --claim"), ctx);
+			result?.(input("BD_ACTOR=omp/Main/s1 bd done bd-probe-2m7.1.1"), ctx);
+			result?.(input("BD_ACTOR=omp/Main/s1 bd close --reason finished bd-other-4k2"), ctx);
+			const stop = handlers.session_stop?.[0];
+			if (stop === undefined) throw new Error("session stop handler was not registered");
+			expect(await stop({}, ctx)).toBeUndefined();
+			expect(calls).toBe(0);
+		} finally {
+			setBdStreamForTests(null);
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+	test("shutdown reports tracked claims without spawning git or bd", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "beads-shutdown-claims-"));
+		mkdirSync(join(dir, ".beads"));
+		let calls = 0;
+		setBdStreamForTests(async () => {
+			calls++;
 			return { failure: "bd command timed out" };
 		});
 		try {
 			const { handlers, logged } = wire();
-			const ctx = { cwd: dir, sessionManager: { getSessionId: () => "shutdown-budget" } };
+			const ctx = { cwd: dir, sessionManager: { getSessionId: () => "shutdown-claims" } };
 			handlers.tool_result?.[0]?.({
 				toolName: "bash",
 				toolCallId: "claim",
+				isError: false,
 				input: { command: "BD_ACTOR=omp/Main/s1 bd update bd-probe-2m7 --claim", cwd: dir, env: { BD_ACTOR: "omp/Main/s1" } },
-				content: [],
+				content: [{ type: "text", text: "Updated issue: bd-probe-2m7" }],
 			}, ctx);
 			await handlers.session_shutdown?.[0]?.({}, ctx);
-			expect(logged.join("\n")).toContain("Remaining:");
+			expect(calls).toBe(0);
 			expect(logged.join("\n")).toContain("bd-probe-2m7");
-			expect(deadlines.length).toBeGreaterThan(0);
-			expect(deadlines.every(deadline => Number.isFinite(deadline))).toBe(true);
+			expect(logged.join("\n")).toContain("--if-assignee");
 		} finally {
 			setBdStreamForTests(null);
 			rmSync(dir, { recursive: true, force: true });
@@ -996,8 +1219,8 @@ esac
 			const invoke = async (name: string, id: string, event: unknown = {}, cwd = dir) =>
 				await handlers[name]?.[0]?.(event, context(id, cwd)) as { additionalContext?: string; content?: unknown[] } | undefined;
 			const mutation = (id: string) => ({
-				toolName: "bash", isError: true,
-				input: { command: `bd update bd-${id} --claim && false` },
+				toolName: "bash", isError: false,
+				input: { command: `BD_ACTOR=omp/Main/${id} bd update bd-${id} --claim` },
 				content: [{ type: "text", text: "Imported 3 issues (2 stale skipped)" }],
 			});
 
@@ -1072,11 +1295,11 @@ esac
 				toolCallId: "alias-claim",
 				isError: false,
 				input: { command: "bd ready --claim", env: { BD_ACTOR: "omp/Main/alias" } },
-				content: [{ type: "text", text: "claimed" }],
+				content: [{ type: "text", text: "Claimed issue: bd-owned" }],
 			}, { cwd: dir });
 
 			const advisory = await sessionStop({}, { cwd: dir }) as { additionalContext?: string };
-			expect(advisory.additionalContext).toContain("bd-owned [omp/Main/alias] owned claim");
+			expect(advisory.additionalContext).toContain("bd-owned [omp/Main/alias] claim recorded by this session");
 		} finally {
 			if (originalPath === undefined) delete process.env.PATH;
 			else process.env.PATH = originalPath;
@@ -1157,82 +1380,32 @@ esac
 	});
 
 
-	test("registered stop emits per-bead CAS commands only when help advertises support", async () => {
+	test("registered stop emits per-bead CAS commands without a capability probe", async () => {
 		const dir = mkdtempSync(join(tmpdir(), "beads-release-cas-"));
-		const originalPath = process.env.PATH;
-		const originalBeadsActor = process.env.BEADS_ACTOR;
-		const originalBdActor = process.env.BD_ACTOR;
+		mkdirSync(join(dir, ".beads"));
+		let calls = 0;
+		setBdStreamForTests(async () => {
+			calls++;
+			return { failure: "bd command timed out" };
+		});
 		try {
-			mkdirSync(join(dir, ".beads"));
-			writeFileSync(join(dir, "bd"), `#!/bin/sh
-printf '%s\\n' "$*" >> '${dir}/calls'
-if [ "$1" = update ] && [ "$2" = --help ]; then printf '%s\\n' 'Usage: bd update [--if-assignee HOLDER]'; exit 0; fi
-if [ "$1" = list ]; then printf '%s\\n' '[{"id":"bd-a-1","title":"a","status":"in_progress","assignee":"actor/a"},{"id":"bd-b-2","title":"b","status":"in_progress","assignee":"actor/b"}]'; exit 0; fi
-printf '%s\\n' '[]'
-`);
-			chmodSync(join(dir, "bd"), 0o755);
-			process.env.PATH = `${dir}:${originalPath ?? ""}`;
-			// Ambient identities must not leak into the generated release command.
-			process.env.BEADS_ACTOR = "ambient/canonical";
-			process.env.BD_ACTOR = "ambient/legacy";
 			const { handlers } = wire();
 			const ctx = { cwd: dir, sessionManager: { getSessionId: () => "release-cas" } };
-			handlers.tool_result?.[0]?.({ toolName: "bash", toolCallId: "a", isError: false, input: { command: "bd ready --claim", env: { BD_ACTOR: "actor/a" } }, content: [] }, ctx);
-			handlers.tool_result?.[0]?.({ toolName: "bash", toolCallId: "b", isError: false, input: { command: "bd ready --claim", env: { BD_ACTOR: "actor/b" } }, content: [] }, ctx);
+			const result = handlers.tool_result?.[0];
+			result?.({ toolName: "bash", toolCallId: "a", isError: false, input: { command: "bd ready --claim", env: { BD_ACTOR: "actor/a" } }, content: [{ type: "text", text: "Claimed bd-a-1" }] }, ctx);
+			result?.({ toolName: "bash", toolCallId: "b", isError: false, input: { command: "bd ready --claim", env: { BD_ACTOR: "actor/b" } }, content: [{ type: "text", text: "Claimed bd-b-2" }] }, ctx);
 			const sessionStop = handlers.session_stop?.[0];
 			if (sessionStop === undefined) throw new Error("session stop handler was not registered");
-			const result = await sessionStop({}, ctx) as { additionalContext: string };
-			expect(result.additionalContext).toContain("BEADS_ACTOR='actor/a' BD_ACTOR='actor/a' 'bd'");
-			expect(result.additionalContext).toContain("BEADS_ACTOR='actor/b' BD_ACTOR='actor/b' 'bd'");
-			expect(result.additionalContext).toContain("'release_actor=actor/a'");
-			expect(result.additionalContext).toContain("'release_actor=actor/b'");
-			expect(result.additionalContext).toContain("'released_from=actor/a'");
-			expect(result.additionalContext).toContain("'released_from=actor/b'");
-		expect(result.additionalContext).toContain("'--if-assignee' 'actor/a'");
-			expect(result.additionalContext).toContain("'--if-assignee' 'actor/b'");
-			expect(result.additionalContext).not.toContain("<actor>");
-			expect(result.additionalContext).not.toContain("<current-assignee>");
-			const commands = readFileSync(join(dir, "calls"), "utf8").split("\\n");
-			expect(commands.filter(line => line.includes("update --help"))).toHaveLength(1);
-			const timestamps = [...(result.additionalContext.matchAll(/released_at=([^']+)/g))].map(match => match[1]);
-			expect(new Set(timestamps).size).toBe(1);
+			const advisory = await sessionStop({}, ctx) as { additionalContext: string };
+			expect(advisory.additionalContext).toContain("BEADS_ACTOR='actor/a' BD_ACTOR='actor/a' 'bd'");
+			expect(advisory.additionalContext).toContain("BEADS_ACTOR='actor/b' BD_ACTOR='actor/b' 'bd'");
+			expect(advisory.additionalContext).toContain("'--if-assignee' 'actor/a'");
+			expect(advisory.additionalContext).toContain("'--if-assignee' 'actor/b'");
+			expect(calls).toBe(0);
 		} finally {
-			if (originalPath === undefined) delete process.env.PATH;
-			else process.env.PATH = originalPath;
-			if (originalBeadsActor === undefined) delete process.env.BEADS_ACTOR;
-			else process.env.BEADS_ACTOR = originalBeadsActor;
-			if (originalBdActor === undefined) delete process.env.BD_ACTOR;
-			else process.env.BD_ACTOR = originalBdActor;
+			setBdStreamForTests(null);
 			rmSync(dir, { recursive: true, force: true });
 		}
 	});
 
-	test("registered stop emits a readback-verified release when CAS is unavailable", async () => {
-		const dir = mkdtempSync(join(tmpdir(), "beads-release-stable-"));
-		const originalPath = process.env.PATH;
-		try {
-			mkdirSync(join(dir, ".beads"));
-			writeFileSync(join(dir, "bd"), `#!/bin/sh
-		if [ "$1" = update ] && [ "$2" = --help ]; then printf '%s\\n' 'Usage: bd update [--status STATUS]'; exit 0; fi
-		if [ "$1" = list ]; then printf '%s\\n' '[{"id":"bd-stable-1","title":"stable","status":"in_progress","assignee":"actor/a"}]'; exit 0; fi
-		printf '%s\\n' '[]'
-		`);
-			chmodSync(join(dir, "bd"), 0o755);
-			process.env.PATH = `${dir}:${originalPath ?? ""}`;
-			const { handlers } = wire();
-			const ctx = { cwd: dir, sessionManager: { getSessionId: () => "release-stable" } };
-			const toolResult = handlers.tool_result?.[0];
-			const sessionStop = handlers.session_stop?.[0];
-			if (toolResult === undefined || sessionStop === undefined) throw new Error("lifecycle handlers were not registered");
-			toolResult({ toolName: "bash", toolCallId: "stable", isError: false, input: { command: "bd update bd-stable-1 --claim", env: { BD_ACTOR: "actor/a" } }, content: [] }, ctx);
-			const stable = await sessionStop({}, ctx) as { additionalContext?: string };
-			expect(stable.additionalContext).toContain("Release with:");
-			expect(stable.additionalContext).not.toContain("does not advertise atomic");
-			expect(stable.additionalContext).toContain("Then verify: bd show <id> --json must show no assignee.");
-		} finally {
-			if (originalPath === undefined) delete process.env.PATH;
-			else process.env.PATH = originalPath;
-			rmSync(dir, { recursive: true, force: true });
-		}
-	});
 });

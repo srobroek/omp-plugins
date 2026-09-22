@@ -578,6 +578,9 @@ async function withEmbeddedWriteLock(cwd, owner, write, env = process.env, deadl
   }
 }
 
+// extensions/bd-lease-gate.ts
+var pendingClaims = new Map;
+
 // extensions/session-beads-lifecycle.ts
 function parseTrailingJson(stdout) {
   const text = stdout.trim();
