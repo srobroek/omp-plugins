@@ -1,7 +1,19 @@
 // @bun
 // extensions/bd-reconcile-tool.ts
 import { createHash } from "crypto";
-import { existsSync as existsSync2, mkdtempSync, readdirSync, readFileSync as readFileSync2, realpathSync as realpathSync3, rmSync } from "fs";
+import {
+  closeSync as closeSync2,
+  constants,
+  existsSync as existsSync2,
+  fstatSync,
+  mkdtempSync,
+  opendirSync,
+  openSync as openSync2,
+  readFileSync as readFileSync2,
+  readSync,
+  realpathSync as realpathSync3,
+  rmSync
+} from "fs";
 import { homedir, hostname as hostname2, tmpdir } from "os";
 import { basename, dirname as dirname2, isAbsolute as isAbsolute3, join as join2, resolve as resolve3, sep } from "path";
 
@@ -626,6 +638,8 @@ var RECEIPT_ID = /^(\d+)-(?:[0-9a-f]{12}|nomerge)$/;
 var ISO_INSTANT = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d+)?(?:Z|([+-])(\d{2}):(\d{2}))$/;
 var GIT_OID = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
 var BEAD_ID2 = /^[A-Za-z][A-Za-z0-9]*(?:-[A-Za-z0-9]+)+(?:\.[A-Za-z0-9]+)*$/;
+var MAX_RECEIPT_BYTES = 256 * 1024;
+var MAX_SCANNED_RECEIPTS = 200;
 var RECONCILE_ARBITER = Symbol.for("com.srobroek.beads.bd-reconcile-tool.v1");
 function object(value) {
   return value !== null && typeof value === "object" && !Array.isArray(value) ? value : undefined;
@@ -763,18 +777,15 @@ function parseReceipt(value) {
   const absence = needNullable("worktree.absenceVerifiedAt", field(worktree, "absenceVerifiedAt"));
   const idsValue = field(beads, "ids");
   const ids = Array.isArray(idsValue) && idsValue.every((id) => typeof id === "string" && BEAD_ID2.test(id)) ? [...new Set(idsValue)] : [];
-  if (ids.length === 0)
-    failures.push(requirement("beads.ids", idsValue, "a non-empty array of bead ids"));
   const ledgerActive = needBoolean("beads.ledgerActive", field(beads, "ledgerActive"));
+  if (ids.length === 0 && (ledgerActive || !Array.isArray(idsValue) || idsValue.length > 0)) {
+    failures.push(requirement("beads.ids", idsValue, ledgerActive ? "a non-empty array of bead ids when beads.ledgerActive is true" : "an array of bead ids"));
+  }
   const method = needString("proof.method", field(proof, "method"));
   const proofObservedAt = needString("proof.observedAt", field(proof, "observedAt"));
   const evidence = object(field(proof, "evidence"));
   if (evidence === undefined || Object.keys(evidence).length === 0) {
     failures.push(requirement("proof.evidence", field(proof, "evidence"), "a non-empty object naming independently observed forge evidence"));
-  }
-  const forgeMethod = forge === "github" ? /(?:^|\b)(?:gh|github|forge)(?:\b|$)/i : forge === "gitlab" ? /(?:^|\b)(?:glab|gitlab|forge)(?:\b|$)/i : /./;
-  if (!forgeMethod.test(method) || /(?:^|\b)(?:assert(?:ed|ion)?|receipt|session|summary|local)(?:\b|$)/i.test(method)) {
-    failures.push(requirement("proof.method", method, `an independently observed ${String(forge)} forge query method`));
   }
   const outcome = root.outcome;
   if (outcome !== "landed" && outcome !== "cleaned" && outcome !== "partial") {
@@ -861,7 +872,12 @@ async function defaultRepoKey(cwd, deadline) {
   }
 }
 function receiptRoot(env, deps) {
-  return deps.receiptRoot ?? join2(env.PI_CODING_AGENT_DIR || join2(homedir(), ".omp"), "receipts");
+  if (deps.receiptRoot !== undefined)
+    return deps.receiptRoot;
+  const agentDir = env.PI_CODING_AGENT_DIR?.trim() ?? "";
+  const home = env.HOME?.trim() ?? "";
+  const base = agentDir === "" ? join2(home === "" ? homedir() : home, ".omp") : agentDir;
+  return join2(base, "receipts");
 }
 function safeReceiptPath(root, repoKey, input) {
   const repository = resolve3(root, repoKey);
@@ -876,59 +892,127 @@ function safeReceiptPath(root, repoKey, input) {
     return;
   return candidate;
 }
+function readBoundedReceipt(path) {
+  let fd;
+  try {
+    fd = openSync2(path, constants.O_RDONLY | constants.O_NONBLOCK | constants.O_NOFOLLOW);
+  } catch (error) {
+    return { reason: `receipt file is unreadable: ${error instanceof Error ? error.message : String(error)}` };
+  }
+  try {
+    const stat = fstatSync(fd);
+    if (!stat.isFile())
+      return { reason: requirement("receipt file", `${path} (not a regular file)`, "a regular file") };
+    const buffer = Buffer.allocUnsafe(MAX_RECEIPT_BYTES + 1);
+    let filled = 0;
+    while (filled < buffer.length) {
+      let read;
+      try {
+        read = readSync(fd, buffer, filled, buffer.length - filled, null);
+      } catch (error) {
+        return { reason: `receipt file is unreadable: ${error instanceof Error ? error.message : String(error)}` };
+      }
+      if (read === 0)
+        break;
+      filled += read;
+    }
+    if (filled > MAX_RECEIPT_BYTES) {
+      return { reason: requirement("receipt file", `${path} (over ${MAX_RECEIPT_BYTES} bytes)`, `at most ${MAX_RECEIPT_BYTES} bytes`) };
+    }
+    return { text: buffer.toString("utf8", 0, filled) };
+  } finally {
+    try {
+      closeSync2(fd);
+    } catch {}
+  }
+}
+function scanReceiptNames(repository) {
+  let directory;
+  try {
+    directory = opendirSync(repository);
+  } catch (error) {
+    return { reason: `receipt directory ${repository} is unreadable: ${error instanceof Error ? error.message : String(error)}` };
+  }
+  const names = [];
+  try {
+    for (;; ) {
+      const entry = directory.readSync();
+      if (entry === null)
+        break;
+      if (!entry.name.endsWith(".json") || !entry.isFile())
+        continue;
+      if (names.length === MAX_SCANNED_RECEIPTS) {
+        return { reason: `receipt directory ${repository} holds more than ${MAX_SCANNED_RECEIPTS} receipt files; refusing rather than reconciling a subset. Name one receipt id.` };
+      }
+      names.push(entry.name);
+    }
+  } catch (error) {
+    return { reason: `receipt directory ${repository} is unreadable: ${error instanceof Error ? error.message : String(error)}` };
+  } finally {
+    try {
+      directory.closeSync();
+    } catch {}
+  }
+  return { names: names.sort() };
+}
 async function readReceiptSources(params, cwd, env, deadline, deps) {
   if (params.bead !== undefined && !BEAD_ID2.test(params.bead)) {
     return { sources: [], refusal: requirement("bead", params.bead, "a bead id") };
   }
-  const currentKey = await (deps.repoKey ?? defaultRepoKey)(cwd, deadline);
-  if (currentKey === undefined) {
+  const key = await (deps.repoKey ?? defaultRepoKey)(cwd, deadline);
+  if (key === undefined) {
     return { sources: [], refusal: "repoKey: observed absent, expected a key derived from the current git common directory" };
   }
-  if (params.repoKey !== undefined && (!REPO_KEY.test(params.repoKey) || params.repoKey !== currentKey)) {
-    return { sources: [], repoKey: currentKey, refusal: requirement("repoKey", params.repoKey, JSON.stringify(currentKey)) };
+  if (params.repoKey !== undefined && (!REPO_KEY.test(params.repoKey) || params.repoKey !== key)) {
+    return { sources: [], repoKey: key, refusal: requirement("repoKey", params.repoKey, JSON.stringify(key)) };
   }
-  if (params.receipt?.trim().startsWith("{")) {
-    let parsed;
-    try {
-      parsed = JSON.parse(params.receipt);
-    } catch (error) {
-      return { sources: [], refusal: `receipt result is unreadable JSON: ${error instanceof Error ? error.message : String(error)}` };
-    }
-    const result = parseReceipt(parsed);
-    const key = currentKey;
-    return {
-      repoKey: key,
-      sources: [{ path: `<tool-result:${result.receipt?.receiptId ?? "unknown"}>`, ...result }]
-    };
-  }
-  const key = currentKey;
   const root = receiptRoot(env, deps);
   const repository = resolve3(root, key);
-  let paths = [];
+  if (params.receipt !== undefined && (typeof params.receipt !== "string" || /^[[{"]/.test(params.receipt.trim()))) {
+    return {
+      sources: [],
+      repoKey: key,
+      refusal: `receipt: observed inline JSON, expected a receipt id or the path of a file a delivery tool wrote at ${join2(repository, "<receiptId>.json")}`
+    };
+  }
+  let names;
   if (params.receipt !== undefined) {
     const candidate = safeReceiptPath(root, key, params.receipt);
     if (candidate === undefined) {
       return { sources: [], repoKey: key, refusal: `receipt: observed ${JSON.stringify(params.receipt)}, expected a v1 JSON file directly under ${repository}${sep}` };
     }
-    paths = [candidate];
+    names = [basename(candidate)];
   } else {
-    try {
-      paths = readdirSync(repository).filter((name) => name.endsWith(".json")).sort().map((name) => join2(repository, name));
-    } catch (error) {
-      return { sources: [], repoKey: key, refusal: `receipt directory ${repository} is unreadable: ${error instanceof Error ? error.message : String(error)}` };
-    }
+    const scanned = scanReceiptNames(repository);
+    if (scanned.names === undefined)
+      return { sources: [], repoKey: key, refusal: scanned.reason };
+    names = scanned.names;
   }
-  if (paths.length === 0) {
+  if (names.length === 0) {
     return { sources: [], repoKey: key, refusal: `receipt directory ${repository} contains no receipt v1 JSON files` };
   }
   const sources = [];
-  for (const path of paths) {
+  for (const name of names) {
+    const path = join2(repository, name);
+    const bounded = readBoundedReceipt(path);
+    if (bounded.text === undefined) {
+      sources.push({ path, reason: bounded.reason });
+      continue;
+    }
+    let parsed;
     try {
-      const parsed = JSON.parse(readFileSync2(path, "utf8"));
-      sources.push({ path, ...parseReceipt(parsed) });
+      parsed = JSON.parse(bounded.text);
     } catch (error) {
       sources.push({ path, reason: `receipt file is unreadable JSON: ${error instanceof Error ? error.message : String(error)}` });
+      continue;
     }
+    const result = parseReceipt(parsed);
+    const stem = name.slice(0, -".json".length);
+    if (result.receipt !== undefined && result.receipt.receiptId !== stem) {
+      sources.push({ path, reason: requirement("receiptId", result.receipt.receiptId, `${JSON.stringify(stem)}, the receiptId in its filename`) });
+      continue;
+    }
+    sources.push({ path, ...result });
   }
   return { sources, repoKey: key };
 }
@@ -1271,16 +1355,29 @@ async function defaultObserveCleanup(receipt, authoritativeNameWithOwner, cwd, e
     }
   };
 }
-function cleanupObservationFailures(observation, failure) {
+var CLAIMED_CLEANUP_LABEL = {
+  remoteBranchAbsent: "remote branch",
+  localRefAbsent: "local ref",
+  worktreeAbsent: "worktree"
+};
+function claimedCleanup(receipt) {
+  const claimed = [];
+  if (receipt.branch.deletedRemote || receipt.branch.remoteAbsenceVerifiedAt !== null)
+    claimed.push("remoteBranchAbsent");
+  if (receipt.worktree.localRefDeleted)
+    claimed.push("localRefAbsent");
+  if (receipt.worktree.removed || receipt.worktree.absenceVerifiedAt !== null)
+    claimed.push("worktreeAbsent");
+  return claimed;
+}
+function claimedCleanupFailures(claimed, observation, failure) {
   if (observation === undefined)
     return [`current cleanup observation: ${failure ?? "observer returned no state"}`];
   const failures = [];
-  if (!observation.remoteBranchAbsent)
-    failures.push(requirement("current remote branch", "present", "absent"));
-  if (!observation.localRefAbsent)
-    failures.push(requirement("current local ref", "present", "absent"));
-  if (!observation.worktreeAbsent)
-    failures.push(requirement("current worktree", "present", "absent"));
+  for (const step of claimed) {
+    if (!observation[step])
+      failures.push(requirement(`current ${CLAIMED_CLEANUP_LABEL[step]}`, "present", "absent, as this receipt claims"));
+  }
   return failures;
 }
 var internalRuns = 0;
@@ -1377,6 +1474,26 @@ function prMatches(value, receipt) {
   const expectedNumber = String(receipt.pr.number);
   return value.split(",").map((item) => item.trim()).some((item) => item === expectedNumber || item === receipt.pr.url);
 }
+var ANCHOR_KEYS = ["pr", "merge_sha", "base", "branch", "head_sha"];
+function anchorValue(key, receipt) {
+  switch (key) {
+    case "pr":
+      return String(receipt.pr.number);
+    case "merge_sha":
+      return receipt.pr.mergeCommitOid ?? undefined;
+    case "base":
+      return receipt.pr.baseRefName;
+    case "branch":
+      return receipt.pr.headRefName;
+    case "head_sha":
+      return receipt.pr.headRefOid;
+  }
+}
+function anchorSatisfied(key, current, receipt) {
+  if (key === "pr")
+    return prMatches(current, receipt);
+  return current === anchorValue(key, receipt);
+}
 function isPidAlive(pid, probe) {
   try {
     if (probe === undefined)
@@ -1388,7 +1505,15 @@ function isPidAlive(pid, probe) {
     return error?.code !== "ESRCH";
   }
 }
-function exactMergeIdentityFailures(bead, receipt) {
+var FORGE_CLI = { github: "gh", gitlab: "glab" };
+function forgeObservedLanding(receipt) {
+  const cli = FORGE_CLI[receipt.repo.forge];
+  if (cli === undefined)
+    return false;
+  const tokens = receipt.proof.method.trim().split(/\s+/);
+  return tokens[0] === cli && tokens.length > 1;
+}
+function landingProofFailures(receipt) {
   const failures = [];
   if (receipt.emitter.tool !== "delivery_land" && receipt.emitter.tool !== "delivery_cleanup") {
     failures.push(requirement("emitter.tool", receipt.emitter.tool, '"delivery_land" or "delivery_cleanup"'));
@@ -1404,37 +1529,18 @@ function exactMergeIdentityFailures(bead, receipt) {
     failures.push(requirement("pr.mergeCommitOid", null, "a non-empty string"));
   if (receipt.pr.mergedAt === null)
     failures.push(requirement("pr.mergedAt", null, "a non-empty string"));
-  const base = metadataValue(bead, "base");
-  if (base !== receipt.pr.baseRefName)
-    failures.push(requirement("metadata.base", base, JSON.stringify(receipt.pr.baseRefName)));
-  const branch = metadataValue(bead, "branch");
-  if (branch !== receipt.pr.headRefName)
-    failures.push(requirement("metadata.branch", branch, JSON.stringify(receipt.pr.headRefName)));
   if (receipt.branch.name !== receipt.pr.headRefName)
     failures.push(requirement("branch.name", receipt.branch.name, JSON.stringify(receipt.pr.headRefName)));
-  const head = metadataValue(bead, "head_sha");
-  if (head !== receipt.pr.headRefOid)
-    failures.push(requirement("metadata.head_sha", head, JSON.stringify(receipt.pr.headRefOid)));
   return failures;
 }
-function exactProofFailures(bead, receipt) {
-  const failures = exactMergeIdentityFailures(bead, receipt);
+function closeProofFailures(receipt) {
+  const failures = landingProofFailures(receipt);
   if (receipt.outcome !== "landed") {
     failures.push(requirement("outcome", receipt.outcome, '"landed" for automatic close'));
   }
-  if (receipt.branch.autoDeleteSetting === "unknown") {
-    failures.push(requirement("branch.autoDeleteSetting", "unknown", '"on" or "off"'));
+  if (!forgeObservedLanding(receipt)) {
+    failures.push(requirement("proof.method", receipt.proof.method, `a ${FORGE_CLI[receipt.repo.forge] ?? "provider"} CLI query that observed the landing`));
   }
-  if (!receipt.branch.deletedRemote)
-    failures.push(requirement("branch.deletedRemote", false, "true"));
-  if (receipt.branch.remoteAbsenceVerifiedAt === null)
-    failures.push(requirement("branch.remoteAbsenceVerifiedAt", null, "a non-empty string"));
-  if (!receipt.worktree.removed)
-    failures.push(requirement("worktree.removed", false, "true"));
-  if (!receipt.worktree.localRefDeleted)
-    failures.push(requirement("worktree.localRefDeleted", false, "true"));
-  if (receipt.worktree.absenceVerifiedAt === null)
-    failures.push(requirement("worktree.absenceVerifiedAt", null, "a non-empty string"));
   if (!receipt.beads.ledgerActive)
     failures.push(requirement("beads.ledgerActive", false, "true"));
   return failures;
@@ -1547,12 +1653,10 @@ async function reconcileReceiptsUnlocked(params, toolCallId, cwd, env, deps, dea
       refusals.push({ receipt: source.path, reason: requirement("repo.key", source.receipt.repo.key, JSON.stringify(loaded.repoKey)) });
       continue;
     }
-    if (!source.path.startsWith("<tool-result:")) {
-      const expectedPath = resolve3(receiptRoot(bdEnv, deps), source.receipt.repo.key, `${source.receipt.receiptId}.json`);
-      if (resolve3(source.path) !== expectedPath) {
-        refusals.push({ receipt: source.path, reason: requirement("receipt path", source.path, JSON.stringify(expectedPath)) });
-        continue;
-      }
+    const expectedPath = resolve3(receiptRoot(bdEnv, deps), source.receipt.repo.key, `${source.receipt.receiptId}.json`);
+    if (resolve3(source.path) !== expectedPath) {
+      refusals.push({ receipt: source.path, reason: requirement("receipt path", source.path, JSON.stringify(expectedPath)) });
+      continue;
     }
     if (params.bead !== undefined && !source.receipt.beads.ids.includes(params.bead)) {
       refusals.push({ receipt: source.path, reason: `beads.ids: observed ${JSON.stringify(source.receipt.beads.ids)}, expected to include ${JSON.stringify(params.bead)}` });
@@ -1578,14 +1682,15 @@ async function reconcileReceiptsUnlocked(params, toolCallId, cwd, env, deps, dea
       refusals.push({ receipt: source.path, reason: `receipt does not match current repository and PR: ${mismatches.join("; ")}` });
       continue;
     }
-    if (receipt.outcome === "landed") {
+    const claimed = claimedCleanup(receipt);
+    if (claimed.length > 0) {
       const cleanup = deps.observeCleanup === undefined ? await defaultObserveCleanup(receipt, observedProof.observation.repo.nameWithOwner, cwd, bdEnv, deadline, deps.cleanupCommand, deps.remotePlatform) : await deps.observeCleanup(receipt, cwd, bdEnv, deadline);
-      cleanupFailuresByReceipt.set(source.path, cleanupObservationFailures(cleanup.observation, cleanup.failure));
+      cleanupFailuresByReceipt.set(source.path, claimedCleanupFailures(claimed, cleanup.observation, cleanup.failure));
     }
     authoritativeSources.push(source);
   }
   if (authoritativeSources.length === 0) {
-    const base = { ok: false, apply: Boolean(params.apply), receipts: validSources.map((source) => source.path), operations: [], applied: [], refusals, failures: [] };
+    const base = { ok: refusals.length === 0, apply: Boolean(params.apply), receipts: validSources.map((source) => source.path), operations: [], applied: [], refusals, failures: [] };
     return { ...base, text: formatReport(base) };
   }
   const targets = new Map;
@@ -1610,7 +1715,7 @@ async function reconcileReceiptsUnlocked(params, toolCallId, cwd, env, deps, dea
   }
   const ids = [...targets.keys()];
   if (ids.length === 0) {
-    const base = { ok: false, apply: Boolean(params.apply), receipts: authoritativeSources.map((source) => source.path), operations: [], applied: [], refusals, failures: [] };
+    const base = { ok: refusals.length === 0, apply: Boolean(params.apply), receipts: authoritativeSources.map((source) => source.path), operations: [], applied: [], refusals, failures: [] };
     return { ...base, text: formatReport(base) };
   }
   const [shown, listed, gateResult] = await Promise.all([
@@ -1653,12 +1758,19 @@ async function reconcileReceiptsUnlocked(params, toolCallId, cwd, env, deps, dea
       continue;
     }
     const conflicts = [...receiptConflicts.get(id) ?? []];
-    const currentPr = metadataValue(bead, "pr");
-    if (currentPr !== undefined && !prMatches(currentPr, receipt))
-      conflicts.push(requirement("metadata.pr", currentPr, String(receipt.pr.number)));
-    const currentMerge = metadataValue(bead, "merge_sha");
-    if (currentMerge !== undefined && currentMerge !== receipt.pr.mergeCommitOid)
-      conflicts.push(requirement("metadata.merge_sha", currentMerge, JSON.stringify(receipt.pr.mergeCommitOid)));
+    const missingAnchors = [];
+    for (const key of ANCHOR_KEYS) {
+      const expected = anchorValue(key, receipt);
+      const current = metadataValue(bead, key);
+      if (current === undefined) {
+        if (expected !== undefined)
+          missingAnchors.push(key);
+        continue;
+      }
+      if (!anchorSatisfied(key, current, receipt)) {
+        conflicts.push(requirement(`metadata.${key}`, current, expected === undefined ? "absent" : JSON.stringify(expected)));
+      }
+    }
     if (conflicts.length > 0) {
       const marker = `bd_reconcile ambiguity ${receipt.receiptId}`;
       const reason = `${marker}: ${conflicts.join("; ")}; receipt ${source.path}`;
@@ -1694,15 +1806,9 @@ async function reconcileReceiptsUnlocked(params, toolCallId, cwd, env, deps, dea
         guardedReleasePlanned = true;
       }
     }
-    if (conflicts.length === 0 && receipt.pr.mergeCommitOid !== null) {
-      const anchors = [];
-      if (currentPr === undefined)
-        anchors.push("--set-metadata", `pr=${receipt.pr.number}`);
-      if (currentMerge === undefined)
-        anchors.push("--set-metadata", `merge_sha=${receipt.pr.mergeCommitOid}`);
-      if (anchors.length > 0) {
-        operations.push(operation("set-merge-anchors", id, source.path, "set exact receipt-derived pr and merge_sha anchors", ["update", id, ...anchors, "--json"]));
-      }
+    if (conflicts.length === 0 && receipt.pr.mergeCommitOid !== null && missingAnchors.length > 0) {
+      const argv = missingAnchors.flatMap((key) => ["--set-metadata", `${key}=${anchorValue(key, receipt)}`]);
+      operations.push(operation("set-merge-anchors", id, source.path, `set the missing receipt-derived ${missingAnchors.join(", ")} anchor(s)`, ["update", id, ...argv, "--json"]));
     }
     const authoritativeSource = deps.authoritativeSource?.(bead, allBeads);
     if (authoritativeSource !== undefined && (!BEAD_ID2.test(authoritativeSource) || !allBeads.has(authoritativeSource))) {
@@ -1710,7 +1816,7 @@ async function reconcileReceiptsUnlocked(params, toolCallId, cwd, env, deps, dea
     } else if (authoritativeSource !== undefined && !existingDiscoveredSource(bead, authoritativeSource)) {
       operations.push(operation("add-discovered-from", id, source.path, `add authoritative discovered-from edge to ${authoritativeSource}`, ["dep", "add", id, authoritativeSource, "--type", "discovered-from", "--json"]));
     }
-    const exactMerge = conflicts.length === 0 && exactMergeIdentityFailures(bead, receipt).length === 0;
+    const exactMerge = conflicts.length === 0 && landingProofFailures(receipt).length === 0;
     if (exactMerge && receipt.pr.mergeCommitOid !== null && audit.failure === undefined && !hasMergeAudit(audit.entries ?? [], id, receipt.pr.mergeCommitOid)) {
       const response = JSON.stringify({ event: "merge_outcome", outcome: "merged", artifact: source.path, mergeCommitOid: receipt.pr.mergeCommitOid });
       operations.push(operation("record-merge-audit", id, source.path, "record the missing merge audit event", ["audit", "record", "--kind", "semantic_event", "--issue-id", id, "--response", response, "--json"]));
@@ -1721,14 +1827,8 @@ async function reconcileReceiptsUnlocked(params, toolCallId, cwd, env, deps, dea
     }
     if (bead.status === "closed" || conflicts.length > 0)
       continue;
-    const closeFailures = exactProofFailures(bead, receipt);
+    const closeFailures = closeProofFailures(receipt);
     closeFailures.push(...cleanupFailuresByReceipt.get(source.path) ?? []);
-    const effectivePr = currentPr ?? String(receipt.pr.number);
-    const effectiveMerge = currentMerge ?? receipt.pr.mergeCommitOid ?? undefined;
-    if (!prMatches(effectivePr, receipt))
-      closeFailures.push(requirement("metadata.pr", effectivePr, String(receipt.pr.number)));
-    if (effectiveMerge !== receipt.pr.mergeCommitOid)
-      closeFailures.push(requirement("metadata.merge_sha", effectiveMerge, JSON.stringify(receipt.pr.mergeCommitOid)));
     if (bead.assignee !== undefined && !guardedReleasePlanned) {
       const lease = anchor === undefined ? "absent" : `${anchor.host}:${anchor.pid}`;
       closeFailures.push(requirement("live assignment/lease", `${bead.assignee} (${lease})`, "absent or a locally proven dead lease with a planned --if-assignee release"));
@@ -1827,9 +1927,9 @@ function bdReconcileTool(pi) {
     pi.registerTool({
       name: "bd_reconcile",
       label: "Reconcile landing receipts into Beads",
-      description: "Scan landing receipt v1 files and plan convergent Beads ledger repairs. Default apply=false is read-only. " + "apply=true requires exec approval and is the only receipt-derived ledger writer; it never force-closes, reopens, supersedes, prunes, purges, flattens, compacts, runs gc, or deletes beads.",
+      description: "Scan landing receipt v1 files a delivery tool wrote and plan convergent Beads ledger repairs. Default apply=false is read-only. " + "apply=true requires exec approval and is the only receipt-derived ledger writer; it never force-closes, reopens, supersedes, prunes, purges, flattens, compacts, runs gc, or deletes beads.",
       parameters: z.object({
-        receipt: z.string().optional().describe("Receipt id, exact receipt path, or receipt JSON returned by a delivery tool"),
+        receipt: z.string().optional().describe("Receipt id, or the exact path of a receipt file under the receipt root; inline receipt JSON is refused"),
         bead: z.string().optional().describe("Limit reconciliation to this receipt-named bead"),
         repoKey: z.string().optional().describe("16-character repository key; defaults to the current git common directory"),
         apply: z.boolean().optional().describe("Apply the planned ledger repairs (exec approval); defaults to false")
