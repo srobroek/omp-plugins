@@ -8,8 +8,14 @@ dependencies cannot rely on `node_modules` existing on the consumer's machine
 bundles instead, and this script builds them in CI and on release branches: `bun install` then one
 `bun build --target=bun` per extension source, with `@oh-my-pi/*` left external (the host provides it).
 
+`omp.programs` names sources that are bundled the same way but are NOT extensions: a
+plugin may ship a helper process it spawns rather than a module OMP loads, and listing
+such a file under `omp.extensions` would have the host import and register it at
+startup. Entries are `extensions/<stem>.ts` sources and land at `dist/<stem>.js`, and a
+plugin that declares only programs is bundled too.
+
 `--check` verifies the committed bundles are current; CI runs that on every push and the release workflow
-runs the write mode. The repository currently tracks six `dist/` bundles; they are not gitignored.
+runs the write mode. The committed `dist/` bundles are not gitignored.
 """
 
 from __future__ import annotations
@@ -38,9 +44,11 @@ def plugins_with_deps(check: bool = False) -> list[Path]:
         if not isinstance(dependencies, dict):
             raise ValueError(f"{plugin}: dependencies must be an object")
         declared = sources(plugin, require_bundles=check)
-        entries = data.get("omp", {}).get("extensions", []) if isinstance(data.get("omp"), dict) else []
+        omp = data.get("omp", {}) if isinstance(data.get("omp"), dict) else {}
+        entries = omp.get("extensions", []) if isinstance(omp.get("extensions"), list) else []
+        programs = omp.get("programs", []) if isinstance(omp.get("programs"), list) else []
         explicit_dist = any(isinstance(entry, str) and Path(entry).parts[:1] == ("dist",) for entry in entries)
-        bundled = bool(dependencies) or explicit_dist
+        bundled = bool(dependencies) or explicit_dist or bool(programs)
         if check and bundled:
             for src in declared:
                 bundle_path = plugin / "dist" / f"{src.stem}.js"
@@ -58,15 +66,21 @@ def sources(plugin: Path, require_bundles: bool = True) -> list[Path]:
     omp = data.get("omp", {})
     if not isinstance(omp, dict) or not isinstance(omp.get("extensions", []), list):
         raise ValueError(f"{plugin}: omp.extensions must be a list")
+    if not isinstance(omp.get("programs", []), list):
+        raise ValueError(f"{plugin}: omp.programs must be a list")
     out = []
-    for entry in omp.get("extensions", []):
+    # An extension entry may already name its built bundle; a program never does,
+    # because nothing loads a program by manifest path -- the plugin spawns it.
+    declarations = [(entry, {("extensions", ".ts"), ("dist", ".js")}) for entry in omp.get("extensions", [])]
+    declarations += [(entry, {("extensions", ".ts")}) for entry in omp.get("programs", [])]
+    for entry, allowed in declarations:
         if not isinstance(entry, str):
             raise ValueError(f"{plugin}: unsupported extension entry {entry!r}")
         path = Path(entry)
         if (
             path.is_absolute()
             or len(path.parts) != 2
-            or (path.parts[0], path.suffix) not in {("extensions", ".ts"), ("dist", ".js")}
+            or (path.parts[0], path.suffix) not in allowed
             or not path.stem
         ):
             raise ValueError(f"{plugin}: unsupported extension entry {entry!r}")

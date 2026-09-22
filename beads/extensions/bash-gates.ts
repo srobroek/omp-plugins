@@ -1,7 +1,7 @@
 import type { ExtensionAPI, ExtensionContext, ToolCallEvent } from "@oh-my-pi/pi-coding-agent";
 import { decideActorParsed, environmentForInput } from "./bd-actor-gate.ts";
 import { decideBdCloseParsed } from "./bd-close-gate.ts";
-import { beginEmbeddedWrite, decideEmbeddedWrite } from "./bd-embedded-write-lock.ts";
+import { decideEmbeddedWrite } from "./bd-embedded-write-lock.ts";
 import { decideBdInitParsed } from "./bd-init-advisory.ts";
 import { decideLeaseClaim } from "./bd-lease-gate.ts";
 import { beadsActive, decideCommandParsed, repositoryControlled, repositoryFromCurrentCheckout, repositoryFromGhCreate } from "./pr-bead-link-gate.ts";
@@ -23,8 +23,15 @@ function suffix(gate: string, reason: string, resolution = "inspect the command 
 	return { block: true, reason: blockReason({ gate, cause: reason, resolution }) };
 }
 
-/** Every beads gate sees the same validated parse; rewrites happen only after all decisions allow. */
+/**
+ * Every beads gate sees the same validated parse; rewrites happen only after all decisions allow.
+ *
+ * A gate that rewrites hands its result to the next one, so the embedded-write runner
+ * wrapper and the session's `BEADS_DIR` pin compose into one revised input instead of
+ * the later rewrite dropping the earlier one.
+ */
 async function decide(parsed: ParsedCommand, event: ToolCallEvent, ctx: ExtensionContext, pi: ExtensionAPI): Promise<GateDecision | { input: Record<string, unknown> } | undefined> {
+	let input = event.input as Record<string, unknown>;
 	const { cwd } = inputOf(event, ctx);
 	if (parsed.unknown) return suffix("bash-gates", "command could not be parsed", "split the command or run the mutation as a plain single command");
 	const env = environmentForInput(event.input);
@@ -44,14 +51,15 @@ async function decide(parsed: ParsedCommand, event: ToolCallEvent, ctx: Extensio
 	if (settingsEnabled("beads", "bd-lease-gate", cwd)) await decideLeaseClaim(parsed, event, ctx);
 	if (settingsEnabled("beads", "bd-embedded-write-lock", cwd)) {
 		const embedded = await decideEmbeddedWrite(parsed, event, ctx);
-		if (embedded) return suffix("bd-embedded-write-lock", embedded.reason);
+		if (embedded?.kind === "block") return suffix("bd-embedded-write-lock", embedded.reason);
+		if (embedded?.kind === "rewrite") input = embedded.input;
 	}
 	if (settingsEnabled("beads", "pr-bead-link-gate", cwd)) {
 		const pr = decideCommandParsed(parsed, segment => beadsActive(cwd) && repositoryControlled(repositoryFromGhCreate(segment) ?? repositoryFromCurrentCheckout(cwd)));
 		if (pr) return suffix("pr-bead-link-gate", pr.reason);
 	}
-	const rewritten = rewriteBashInput(event.input, ctx);
-	if (rewritten && JSON.stringify(rewritten) !== JSON.stringify(event.input)) return { input: rewritten };
+	const rewritten = rewriteBashInput(input, ctx) ?? input;
+	if (JSON.stringify(rewritten) !== JSON.stringify(event.input)) return { input: rewritten };
 	return undefined;
 }
 
@@ -62,7 +70,6 @@ export default function bashGates(pi: ExtensionAPI): void {
 			if (event.toolName !== "bash") return;
 			const { command } = inputOf(event, ctx);
 			if (!command) return;
-			beginEmbeddedWrite(event.toolCallId);
 			return await decide(parse(command), event, ctx, pi);
 		} catch (error) {
 			return suffix("bash-gates", `command could not be parsed (${error instanceof Error ? error.message : String(error)})`, "split the command or run the mutation as a plain single command");

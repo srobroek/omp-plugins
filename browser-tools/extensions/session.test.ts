@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Browser } from "puppeteer-core";
 import type { EffectiveConfig } from "./lib/config.ts";
+import { createCursorRuntime } from "./lib/cursor.ts";
 import type { HeadedSession } from "./lib/session.ts";
 import { closeAllSessions, listLeakedSessions, sessions } from "./lib/session.ts";
 
@@ -49,6 +50,9 @@ function fakeSession(id: string): HeadedSession {
 		selectedTabId: "",
 		refs: new Map(),
 		network: [],
+		lifecycle: "open",
+		activeTabHolds: 0,
+		cursor: createCursorRuntime({ mode: "off", headless: true, warnings: [] }),
 		warnings: [],
 	};
 }

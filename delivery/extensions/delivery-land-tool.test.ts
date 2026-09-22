@@ -860,7 +860,7 @@ describe("delivery_land", () => {
 		expect(receipt.version).toBe(1);
 		expect(receipt.receiptId).toBe(`${NOW}-${MERGE_OID.slice(0, 12)}`);
 		expect(receipt.emittedAt).toBe(new Date(NOW).toISOString());
-		expect(receipt.emitter).toEqual({ plugin: "@srobroek/delivery", version: "0.11.5", tool: "delivery_land" });
+		expect(receipt.emitter).toEqual({ plugin: "@srobroek/delivery", version: "0.12.0", tool: "delivery_land" });
 		expect(receipt.repo).toEqual({
 			key,
 			canonicalRoot: realpathSync(canonical),

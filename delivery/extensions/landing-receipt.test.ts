@@ -77,7 +77,7 @@ function landed(
 	return buildReceipt({
 		now,
 		notes: over.notes,
-		emitter: { plugin: "@srobroek/delivery", version: "0.11.5", tool: "delivery_land" },
+		emitter: { plugin: "@srobroek/delivery", version: "0.12.0", tool: "delivery_land" },
 		repo: {
 			key: KEY,
 			canonicalRoot: "/Users/sjors/personal/dev/omp-plugins",

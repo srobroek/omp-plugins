@@ -32,6 +32,7 @@ const describeMismatch = (label: string, actual: Set<string>, expected: Set<stri
 
 const manifestPaths = await Array.fromAsync(new Bun.Glob("*/.omp-plugin/plugin.json").scan({ cwd: repo, onlyFiles: true }));
 const plugins = new Set<string>();
+const publishedPlugins = new Set<string>();
 for (const relative of manifestPaths) {
   const name = relative.split("/")[0];
   if (name === undefined) throw new Error(`${relative}: manifest path has no plugin directory`);
@@ -39,6 +40,7 @@ for (const relative of manifestPaths) {
   const manifestPath = join(repo, relative);
   const manifest = await load(manifestPath);
   if (manifest.name !== name) fail(`${relative}: name ${JSON.stringify(manifest.name)} does not match directory ${name}`);
+  if (manifest.publish !== false) publishedPlugins.add(name);
   const version = manifest.version;
   if (typeof version !== "string" || !version) fail(`${relative}: version must be a non-empty string`);
   const packagePath = join(repo, name, "package.json");
@@ -61,12 +63,12 @@ for (const entry of marketplace.plugins as unknown[]) {
     marketplaceNames.add(name);
   }
 }
-describeMismatch("local marketplace entries and plugin manifests", marketplaceNames, plugins);
+describeMismatch("local marketplace entries and published plugin manifests", marketplaceNames, publishedPlugins);
 
 const release = await load(join(repo, "release-please-config.json"));
 if (!release.packages || typeof release.packages !== "object" || Array.isArray(release.packages)) fail("release-please-config.json: packages must be an object");
 const releaseNames = new Set(Object.keys(release.packages as JsonObject));
-describeMismatch("release-please packages and plugin manifests", releaseNames, plugins);
+describeMismatch("release-please packages and published plugin manifests", releaseNames, publishedPlugins);
 const profilePath = join(repo, "ci/plugins-full.toml");
 const profile = await readFile(profilePath, "utf8").catch(() => fail(`${profilePath}: missing`));
 const profileMatch = /plugins\s*=\s*\[([^\]]*)\]/s.exec(profile);
@@ -78,5 +80,5 @@ for (const match of profileList.matchAll(/"([^"\\]*(?:\\.[^"\\]*)*)"/g)) {
   const encoded = match[1];
   if (encoded !== undefined) profileNames.add(JSON.parse(`"${encoded}"`));
 }
-describeMismatch("full CI profile and plugin manifests", profileNames, plugins);
-console.log(`PASS: validated ${plugins.size} plugins against marketplace, release-please, and package versions`);
+describeMismatch("full CI profile and published plugin manifests", profileNames, publishedPlugins);
+console.log(`PASS: validated ${plugins.size} source plugins (${publishedPlugins.size} published) against marketplace, release-please, and package versions`);

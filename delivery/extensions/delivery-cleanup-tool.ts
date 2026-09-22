@@ -27,7 +27,7 @@ import {
 const LOCAL_TIMEOUT_MS = 2_000;
 const MAX_CLI_JSON_BYTES = 1024 * 1024;
 const MAX_DIRTY_PATHS = 8;
-const DELIVERY_VERSION = "0.11.5";
+const DELIVERY_VERSION = "0.12.0";
 const LOCAL_REF_PREFIX = "refs/heads/";
 
 export type DeliveryCleanupParams = {

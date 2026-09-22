@@ -1,6 +1,8 @@
 # delivery
 
-Delivery workflow guidance for reviewed pull requests, landing proof, worktree hygiene, and Beads handoff.
+The delivery plugin limits task scope and warns when a `git push` names `main` or `master`.
+It also covers pull-request review, landing proof, worktree hygiene, reconciling and cleaning
+a landed worktree, and Beads handoff.
 
 ## Tools
 
@@ -95,6 +97,7 @@ The agent that creates a non-orchestrated PR owns its automated review loop thro
 | Name | When |
 | --- | --- |
 | `delivery-git-workflow` | Create or review pull requests, run automated-review loops, prove landing, reconcile and clean a landed worktree, or link delivery to Beads. |
+| `delivery-task-scope` | Every task: modify only artifacts directly required by the current request or claimed work item. |
 | `delivery-main-branch-push-advisory` | A bash call names `main` or `master` as a `git push` destination. The advisory never blocks the command. |
 | `delivery-worktree-hygiene` | Hold a worktree, act on a hygiene reminder, or clean up a landed worktree and branch. |
 | `delivery-direct-merge-advisory` | A top-level bash call invokes a local `git merge`. Use `delivery_land` for the reviewed landing path and `delivery_cleanup` afterward. |

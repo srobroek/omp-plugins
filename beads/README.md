@@ -15,6 +15,17 @@ Install this plugin in a repository with `.beads/`. The plugin pins that reposit
 | `beads-carriers` | Choose authoritative records. |
 | `beads-composition` | Choose issues and formulas. |
 | `beads-storage-mode` | Configure the embedded store and session `BEADS_DIR` pin. |
+| `maintenance-intake` | Drain incidental work through a standing maintenance epic. |
+
+## Rules
+
+| Rule | When |
+| --- | --- |
+| `beads-reconcile-from-receipts` | When reconciling numeric-v1 landing receipts through available `bd_reconcile`; require exact proof before closure. |
+
+### `bd_reconcile`
+
+When `bd_reconcile` is available, read-only `show` and `list` operations scan landing receipts and plan repairs. `apply` defaults to `false` and writes nothing. Inspect the plan and get execution approval before setting `apply: true`. Safe convergent repairs still require exact close proof for automatic closure.
 
 ## Rules
 

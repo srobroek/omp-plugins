@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.12.0](https://github.com/srobroek/omp-plugins/compare/delivery--v0.11.5...delivery--v0.12.0) (2026-09-22)
+
+
+### Features
+
+* **delivery:** enforce narrow task scope ([#480](https://github.com/srobroek/omp-plugins/issues/480)) ([30509cb](https://github.com/srobroek/omp-plugins/commit/30509cbfd07a1371895c26f6bf08bb54d3ed6593))
+
 ## [0.11.5](https://github.com/srobroek/omp-plugins/compare/delivery--v0.11.4...delivery--v0.11.5) (2026-09-21)
 
 

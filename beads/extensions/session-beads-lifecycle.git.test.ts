@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { execFileSync, spawnSync } from "node:child_process";
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -203,6 +204,78 @@ describe("lifecycleBdEnvironment", () => {
 			expect(env.BEADS_DOLT_SHARED_SERVER).toBe("");
 		} finally { rmSync(cwd, { recursive: true, force: true }); }
 	});
+});
+
+/**
+ * The real `bd`, not a fabricated script: the scratch-isolation test below runs the documented probe
+ * recipe end to end. Every other shell-out in this file writes its own `bd` onto PATH, so this is the
+ * one test that needs the binary -- it skips cleanly where there is none. Resolved rather than
+ * executed: `bd --version` on the embedded store costs tens of seconds under load, and a probe that
+ * timed out would silently skip the test on a machine that does have `bd`.
+ */
+const BD_ON_PATH = Bun.which("bd") !== null;
+
+describe("scratch store isolation", () => {
+	/**
+	 * beads/skills/build-formula/references/verify.md documents a throwaway workspace for pouring a
+	 * formula. The recipe used to `cd` into /tmp and run a bare `bd init`, and under a session pin
+	 * `bd` resolves BEADS_DIR rather than the working directory -- so the probe wrote the live project
+	 * store. `cd` is not isolation; only the environment is. The invariant pinned here: a probe run
+	 * through the documented form never mutates the store the ambient pin names.
+	 *
+	 * Both stores are temporary. This test never names this repository's own `.beads`.
+	 */
+	test.skipIf(!BD_ON_PATH)("a probe run the documented way writes its own store, never the ambient pin", () => {
+		const probeTitle = "scratch pour probe";
+		const baselineTitle = "pinned baseline";
+		const pinned = mkdtempSync(join(tmpdir(), "beads-scratch-pinned-")); // stands in for a live project store
+		const scratch = mkdtempSync(join(tmpdir(), "beads-scratch-probe-"));
+		const pinnedStore = join(pinned, ".beads");
+		const scratchStore = join(scratch, ".beads");
+		// An actor survives the isolation on purpose: `bd create` without one is rejected, so a probe
+		// cannot isolate itself by wiping the environment. Only the store is overridden.
+		const ambient: NodeJS.ProcessEnv = {
+			...process.env,
+			BEADS_DIR: pinnedStore,
+			BD_ACTOR: "scratch-probe",
+			BEADS_ACTOR: "scratch-probe",
+			BD_NON_INTERACTIVE: "1",
+			BD_NO_PAGER: "1",
+			BD_DOLT_AUTO_START: "false",
+			NO_COLOR: "1",
+		};
+		const scratchEnv: NodeJS.ProcessEnv = {
+			...ambient,
+			BEADS_DIR: scratchStore, // the whole fix: every probe call names its own store
+		};
+		const bd = (env: NodeJS.ProcessEnv, cwd: string, args: string[]): string => {
+			const run = spawnSync("bd", args, { cwd, env, encoding: "utf8", timeout: 120_000, stdio: ["ignore", "pipe", "pipe"] });
+			if (run.status !== 0) throw new Error(`bd ${args.join(" ")} exited ${run.status}: ${run.stderr || run.stdout}`);
+			return run.stdout ?? "";
+		};
+		const titles = (listing: string): string[] => {
+			const text = listing.trim();
+			if (text === "") return [];
+			const parsed: unknown = JSON.parse(text);
+			if (!Array.isArray(parsed)) throw new Error(`bd list --json returned no array: ${text.slice(0, 200)}`);
+			return parsed.map(row => (row !== null && typeof row === "object" && "title" in row && typeof row.title === "string" ? row.title : ""));
+		};
+		const listing = ["list", "--all", "--limit", "0", "--json"];
+		try {
+			execFileSync("git", ["-C", pinned, "init", "-q", "."]);
+			execFileSync("git", ["-C", scratch, "init", "-q", "."]);
+			mkdirSync(join(scratchStore, "formulas"), { recursive: true }); // the recipe's formula drop-off
+			bd(ambient, pinned, ["init", "--init-if-missing", "--skip-hooks"]);
+			bd(scratchEnv, scratch, ["init", "--init-if-missing", "--skip-hooks"]);
+			bd(ambient, pinned, ["create", baselineTitle, "-t", "task", "--silent"]); // a real record to compare against
+			bd(scratchEnv, scratch, ["create", probeTitle, "-t", "task", "--silent"]);
+			expect(titles(bd(scratchEnv, scratch, listing))).toEqual([probeTitle]); // the probe landed in its own store
+			expect(titles(bd(ambient, pinned, listing))).toEqual([baselineTitle]); // and the pinned store never moved
+		} finally {
+			rmSync(pinned, { recursive: true, force: true });
+			rmSync(scratch, { recursive: true, force: true });
+		}
+	}, 600_000); // six real bd calls against two embedded stores; each costs tens of seconds under load
 });
 
 describe("parseTrailingJson / envelopeData", () => {
@@ -419,7 +492,10 @@ describe("bdVerbs / isBdWrite", () => {
 
 	test("the claim forms of read verbs are writes", () => {
 		expect(isBdWrite("bd ready --parent e --unassigned --claim --json")).toBe(true);
-		expect(isBdWrite('bd comments add x -m "note"')).toBe(true);
+		// Positional text, which is the form bd 1.2.2 accepts. The fixture used to
+		// spell it `-m "note"`, a flag bd rejects, so the suite taught the invalid
+		// invocation it was meant to classify.
+		expect(isBdWrite('bd comments add x "note"')).toBe(true);
 	});
 });
 
@@ -475,6 +551,20 @@ describe("claimAnchor", () => {
 	test("preserves host and pid from a claimed bead for liveness checks", () => {
 		const [bead] = readBeads(JSON.stringify({data: [{id: "bd-live-1", status: "in_progress", assignee: "omp/Other/s2", metadata: {lease_host: "worker-1", lease_pid: "4242"}}], schema_version: 1}));
 		expect(bead && claimAnchor(bead)).toEqual({ host: "worker-1", pid: 4242 });
+	});
+});
+describe("formatSessionCloseAdvisory", () => {
+	test("names the bead, the holder, and remedies that bd actually has", () => {
+		// The advisory previously told agents to run `bd unclaim`, which bd 1.2.2
+		// rejects as an unknown command, and `bd comments add -m`, where the text is
+		// positional and `-m` does not exist. An agent following either left its
+		// claim held, which is the one thing this advisory exists to prevent.
+		const text = formatSessionCloseAdvisory(heldClaims(readBeads(BEAD_LIST), new Set(["bd-probe-2m7"]), undefined), process.env, undefined, true, new Set(["omp/Main/s1"]));
+		expect(text).toContain("bd-probe-2m7 [omp/Main/s1] target work");
+		expect(text).not.toContain("bd unclaim");
+		expect(text).toContain("'--assignee' '' '--status' 'open'");
+		expect(text).toContain('bd comments add <id> "..."');
+		expect(text).toContain("discovered work");
 	});
 });
 
@@ -830,7 +920,7 @@ bashGates(fakePi as never);
 			else process.env.BEADS_DIR = originalBeads;
 			for (const dir of [a, aWorktree, b, c]) rmSync(dir, { recursive: true, force: true });
 		}
-	}, 20_000); // creates a git worktree and runs several session_start hooks; slow under full-suite load
+	}, 90_000); // git init/commit/worktree add plus several session_start hooks; measured 37.9s on an idle M4 Pro, so 20s could not hold
 
 	test("session start accepts bd's null empty-list response", async () => {
 		const dir = mkdtempSync(join(tmpdir(), "beads-empty-gates-"));
@@ -952,7 +1042,7 @@ esac
 			else process.env.BEADS_ACTOR = originalActor;
 			rmSync(dir, { recursive: true, force: true });
 		}
-	});
+	}, 30_000); // drives ~30 handler invocations, each spawning a shell `bd`; measured 6.5s idle, and it exceeded the 5s default under load
 
 	test("tracks tool-level BD_ACTOR for ready --claim without a bead id", async () => {
 		const dir = mkdtempSync(join(tmpdir(), "beads-actor-alias-"));

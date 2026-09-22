@@ -94,25 +94,100 @@ export function visibleCookies(
 	}));
 }
 
+/** Minimal surface of an intercepted request; puppeteer-core's HTTPRequest satisfies it structurally. */
+export interface InterceptedRequest {
+	url(): string;
+	isNavigationRequest(): boolean;
+	frame(): unknown;
+	continue(): Promise<void>;
+	abort(errorCode: "blockedbyclient"): Promise<void>;
+}
+
+/** Persists one navigation decision; latency or failure here never reaches the request. */
+export type NavigationAuditSink = (decision: "allow" | "block", url: string, reason?: string) => Promise<void>;
+
+export interface RequestInterception {
+	/** "allow" resolves the request with continue(), "block" with abort("blockedbyclient"). */
+	decision: "allow" | "block";
+	/** False for non-navigation or sub-frame requests: continued immediately and never audited. */
+	governed: boolean;
+	/** Settles with the transport error when continue()/abort() failed; never rejects, never retries the other outcome. */
+	resolved: Promise<Error | undefined>;
+	/** Settles once the audit sink settled; its rejection is absorbed here. */
+	audited: Promise<void>;
+}
+
+/**
+ * Decides and resolves an intercepted request in one synchronous step, then trails the audit behind
+ * it: continue()/abort() is issued exactly once, before the audit sink is invoked, so audit
+ * persistence can never delay the request nor resolve it a second time.
+ */
+export function interceptRequest(
+	request: InterceptedRequest,
+	options: { mainFrame: unknown; policy: DomainPolicy; audit?: NavigationAuditSink },
+): RequestInterception {
+	if (!isMainFrameNavigation(request, options.mainFrame)) {
+		return { decision: "allow", governed: false, resolved: resolveRequest(request, "allow"), audited: Promise.resolve() };
+	}
+	let url = "";
+	let decision: "allow" | "block" = "allow";
+	let reason: string | undefined;
+	try {
+		url = request.url();
+		checkNavigation(url, options.policy);
+	} catch (error) {
+		decision = "block";
+		reason = asError(error).message;
+	}
+	const resolved = resolveRequest(request, decision);
+	const audited = options.audit ? runAudit(options.audit, decision, url, reason) : Promise.resolve();
+	return { decision, governed: true, resolved, audited };
+}
+
+function runAudit(audit: NavigationAuditSink, decision: "allow" | "block", url: string, reason?: string): Promise<void> {
+	try {
+		return Promise.resolve(audit(decision, url, reason)).then(
+			() => undefined,
+			() => undefined,
+		);
+	} catch {
+		return Promise.resolve();
+	}
+}
+
+function isMainFrameNavigation(request: InterceptedRequest, mainFrame: unknown): boolean {
+	try {
+		return request.isNavigationRequest() && request.frame() === mainFrame;
+	} catch {
+		return false;
+	}
+}
+
+function resolveRequest(request: InterceptedRequest, decision: "allow" | "block"): Promise<Error | undefined> {
+	try {
+		const sent = decision === "allow" ? request.continue() : request.abort("blockedbyclient");
+		return Promise.resolve(sent).then(
+			() => undefined,
+			(error: unknown) => asError(error),
+		);
+	} catch (error) {
+		return Promise.resolve(asError(error));
+	}
+}
+
+function asError(error: unknown): Error {
+	return error instanceof Error ? error : new Error(String(error));
+}
+
 export async function applyPagePolicy(page: Page, session: HeadedSession, audit: AuditWriter): Promise<void> {
 	const domainPolicy = deriveDomainPolicy(session.config);
 	await page.setRequestInterception(true);
 	page.on("request", (request) => {
-		void (async () => {
-			if (!request.isNavigationRequest() || request.frame() !== page.mainFrame()) {
-				await request.continue().catch(() => undefined);
-				return;
-			}
-			try {
-				checkNavigation(request.url(), domainPolicy);
-				await audit.write(session, "in-page-navigation", "allow", request.url());
-				await request.continue();
-			} catch (error) {
-				const reason = error instanceof Error ? error.message : String(error);
-				await audit.write(session, "in-page-navigation", "block", request.url(), reason);
-				await request.abort("blockedbyclient");
-			}
-		})().catch(async () => { await request.continue().catch(() => undefined); });
+		interceptRequest(request, {
+			mainFrame: page.mainFrame(),
+			policy: domainPolicy,
+			audit: (decision, url, reason) => audit.write(session, "in-page-navigation", decision, url, reason),
+		});
 	});
 	if (!session.config.allowDownloads) {
 		page.on("response", (response) => {
