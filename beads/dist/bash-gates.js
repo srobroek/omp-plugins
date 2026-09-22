@@ -949,7 +949,7 @@ function decideActorGate(command, env = process.env) {
 // extensions/bd-embedded-write-lock.ts
 import { closeSync, existsSync, openSync, readFileSync as readFileSync2, realpathSync as realpathSync2, statSync as statSync2, unlinkSync, writeSync } from "fs";
 import { hostname } from "os";
-import { isAbsolute as isAbsolute2, join, resolve as resolve3 } from "path";
+import { basename, dirname as dirname2, isAbsolute as isAbsolute2, join, resolve as resolve3 } from "path";
 
 // extensions/beads-store.ts
 import { spawnSync } from "child_process";
@@ -1027,47 +1027,9 @@ function isDir(path) {
 }
 
 // extensions/bd-embedded-write-lock.ts
-var LOCK_NAME = "omp-embedded-write.lock";
-var STEAL_NAME = "omp-embedded-write-steal.lock";
-var LEASE_MS = 120000;
-var RENEW_MS = 20000;
-var WAIT_MS = 20000;
-var ACQUISITION_TIMEOUT_MS = 25000;
-var POLL_MS = 20;
-var leaseMs = LEASE_MS;
-var renewMs = RENEW_MS;
-var nextToken = 0;
+var RUNNER_WAIT_MS = 300000;
 var HOST = hostname().split(".")[0] ?? "localhost";
-function pidAlive(pid) {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
-}
 var REGISTRY_KEY = Symbol.for("com.srobroek.beads.embedded-write-lock.v1");
-function registry() {
-  const holder = globalThis;
-  const existing = holder[REGISTRY_KEY];
-  if (existing !== undefined)
-    return existing;
-  const created = { owned: new Map };
-  holder[REGISTRY_KEY] = created;
-  process.on("exit", () => {
-    for (const [lock, held] of created.owned) {
-      clearInterval(held.renew);
-      try {
-        closeSync(held.fd);
-      } catch {}
-      try {
-        unlinkSync(lock);
-      } catch {}
-    }
-    created.owned.clear();
-  });
-  return created;
-}
 var READS = {
   blocked: true,
   children: true,
@@ -1262,189 +1224,61 @@ function directInvocation(command) {
   }
   return invocation;
 }
-function ageOf(path) {
-  try {
-    return Date.now() - statSync2(path).mtimeMs;
-  } catch {
-    return 0;
-  }
-}
-function abandoned(lock) {
-  let raw;
-  try {
-    raw = readFileSync2(lock, "utf8");
-  } catch {
-    return false;
-  }
-  let holder;
-  try {
-    holder = JSON.parse(raw);
-  } catch {
-    return ageOf(lock) > leaseMs;
-  }
-  if (holder.host === HOST && typeof holder.pid === "number" && !pidAlive(holder.pid))
-    return true;
-  if (typeof holder.expires === "number")
-    return Date.now() > holder.expires;
-  return ageOf(lock) > leaseMs;
-}
-function takeOverIfAbandoned(lock, steal) {
-  let fd;
-  try {
-    fd = openSync(steal, "wx");
-  } catch (error) {
-    if (error.code !== "EEXIST")
-      return;
-    if (abandoned(steal)) {
-      try {
-        unlinkSync(steal);
-      } catch {}
-    }
+var RUNNER_STEM = "bd-embedded-write-runner";
+var RUNNER_STORE_FLAG = "--beads-store";
+var RUNNER_WAIT_FLAG = "--beads-wait-ms";
+function embeddedWriteRunner() {
+  const here = import.meta.dir;
+  const script = [
+    join(here, `${RUNNER_STEM}.js`),
+    join(here, `${RUNNER_STEM}.ts`),
+    join(here, "..", "dist", `${RUNNER_STEM}.js`),
+    join(here, "..", "extensions", `${RUNNER_STEM}.ts`)
+  ].find((candidate) => existsSync(candidate));
+  if (script === undefined)
     return;
-  }
-  try {
-    writeSync(fd, JSON.stringify(holderNow(`steal-${process.pid}`, `steal-${(nextToken++).toString(36)}`)));
-    if (abandoned(lock))
-      unlinkSync(lock);
-  } catch {} finally {
-    closeSync(fd);
-    try {
-      unlinkSync(steal);
-    } catch {}
-  }
+  const interpreter = bunBinary();
+  return interpreter === undefined ? undefined : { interpreter, script: resolve3(script) };
 }
-function holderNow(toolCallId, token) {
-  const taken = Date.now();
-  return { host: HOST, pid: process.pid, toolCallId, token, taken, expires: taken + leaseMs };
+function bunBinary() {
+  const own = basename(process.execPath);
+  if (own === "bun" || own === "bun.exe")
+    return process.execPath;
+  const onPath = typeof Bun === "undefined" ? undefined : Bun.which("bun");
+  if (onPath !== null && onPath !== undefined)
+    return onPath;
+  const install = process.env.BUN_INSTALL;
+  if (install === undefined || install === "")
+    return;
+  const guess = join(install, "bin", "bun");
+  return existsSync(guess) ? guess : undefined;
 }
-function stillOurs(lock, token) {
-  try {
-    const holder = JSON.parse(readFileSync2(lock, "utf8"));
-    return holder.token === token && holder.pid === process.pid && holder.host === HOST;
-  } catch {
-    return false;
-  }
+function quote(word) {
+  return `'${word.replaceAll("'", "'\\''")}'`;
 }
-async function hold(store, toolCallId, waitMs = WAIT_MS) {
-  const lock = join(store, LOCK_NAME);
-  const owned = registry().owned;
-  const deadline = Date.now() + waitMs;
-  while (true) {
-    const owner = owned.get(lock);
-    if (owner !== undefined) {
-      const nested = owner.holders.get(toolCallId);
-      if (nested !== undefined) {
-        owner.holders.set(toolCallId, nested + 1);
-        return { kind: "held" };
-      }
-    } else {
-      try {
-        const fd = openSync(lock, "wx");
-        const token = `${process.pid}-${Date.now()}-${(nextToken++).toString(36)}`;
-        writeSync(fd, JSON.stringify(holderNow(toolCallId, token)));
-        const renew = setInterval(() => {
-          try {
-            renewLease(lock, toolCallId, token);
-          } catch {}
-        }, renewMs);
-        renew.unref?.();
-        owned.set(lock, { fd, holders: new Map([[toolCallId, 1]]), renew, token });
-        return { kind: "held" };
-      } catch (error) {
-        const code = error.code;
-        if (code !== "EEXIST") {
-          return {
-            kind: "failed",
-            reason: `Beads embedded write lock could not be taken at ${lock} (${code ?? "unknown error"}). The write was refused rather than risk a second writer on the embedded Dolt journal.`
-          };
-        }
-        takeOverIfAbandoned(lock, join(store, STEAL_NAME));
-      }
-    }
-    if (Date.now() >= deadline) {
-      return {
-        kind: "failed",
-        reason: `Beads embedded write lock at ${lock} stayed held for ${Math.round(waitMs / 1000)}s. Another writer is still working, or a hold was left behind by a process on another host; the write was refused rather than run concurrently. Read the lock file, then remove it once its holder is really gone.`
-      };
-    }
-    const { promise, resolve: wake } = Promise.withResolvers();
-    setTimeout(wake, POLL_MS);
-    await promise;
-  }
-}
-function release(store, toolCallId) {
-  const lock = join(store, LOCK_NAME);
-  const owned = registry().owned;
-  const owner = owned.get(lock);
-  if (owner === undefined)
+function directShell(command) {
+  const tokens = tokenize(command);
+  if (tokens.some((token) => SUBSTITUTION.test(token.value)))
     return;
-  const shares = owner.holders.get(toolCallId);
-  if (shares === undefined)
+  if (tokens.some((token) => !token.quoted && OPERATOR.test(token.value)))
     return;
-  if (shares > 1) {
-    owner.holders.set(toolCallId, shares - 1);
+  let assignments = 0;
+  while (tokens[assignments] !== undefined && tokens[assignments]?.quoted === false && /^[A-Za-z_]\w*=/.test(tokens[assignments]?.value ?? ""))
+    assignments++;
+  const head = tokens[assignments];
+  if (head === undefined || head.quoted || (head.value.split("/").pop() ?? head.value) !== "bd")
     return;
-  }
-  owner.holders.delete(toolCallId);
-  if (owner.holders.size > 0)
+  const match = /^\s*((?:[A-Za-z_]\w*=(?:'[^']*'|"[^"]*"|[^\s]+)\s+)*)((?:[^\s]+\/)?bd(?:\s[\s\S]*)?)\s*$/.exec(command);
+  if (match === null || tokenize(match[1] ?? "").length !== assignments)
     return;
-  owned.delete(lock);
-  clearInterval(owner.renew);
-  try {
-    closeSync(owner.fd);
-  } catch {}
-  if (stillOurs(lock, owner.token)) {
-    try {
-      unlinkSync(lock);
-    } catch {}
-  }
-}
-function renewLease(lock, toolCallId, token) {
-  const owned = registry().owned;
-  const owner = owned.get(lock);
-  if (owner === undefined || owner.token !== token)
-    return;
-  if (!stillOurs(lock, token)) {
-    clearInterval(owner.renew);
-    owned.delete(lock);
-    try {
-      closeSync(owner.fd);
-    } catch {}
-    return;
-  }
-  const fd = openSync(lock, "w");
-  try {
-    writeSync(fd, JSON.stringify(holderNow(toolCallId, token)));
-  } finally {
-    closeSync(fd);
-  }
-}
-var activeHolds = new Map;
-var surrenderedCalls = new Set;
-function beginEmbeddedWrite(toolCallId) {
-  surrenderedCalls.delete(toolCallId);
-}
-function surrender(toolCallId) {
-  surrenderedCalls.add(toolCallId);
-  const holds = activeHolds.get(toolCallId);
-  if (holds === undefined)
-    return;
-  activeHolds.delete(toolCallId);
-  for (const hold of holds) {
-    hold.released = true;
-    if (hold.held) {
-      release(hold.store, toolCallId);
-      hold.held = false;
-    }
-  }
+  return { assignments: match[1] ?? "", call: match[2] ?? "" };
 }
 async function decideEmbeddedWrite(parsed, event, ctx) {
   try {
     if (event.toolName !== "bash")
       return;
-    if (surrenderedCalls.delete(event.toolCallId))
-      return;
     const input = event.input;
+    const whole = typeof input.command === "string" ? input.command : typeof input.cmd === "string" ? input.cmd : "";
     const cwd = typeof input.cwd === "string" && input.cwd ? input.cwd : ctx?.cwd ?? process.cwd();
     const env = environmentForInput(event.input);
     const sources = [...parsed.commands.map((position) => position.raw)];
@@ -1459,47 +1293,37 @@ async function decideEmbeddedWrite(parsed, event, ctx) {
     for (const source of sources) {
       const result = embeddedWriteTargets(source, cwd, env);
       if (result.kind === "refused")
-        return { block: true, reason: result.reason };
+        return { kind: "block", reason: result.reason };
       targets.push(...result.stores);
     }
     const unique = [...new Set(targets)];
     if (unique.length === 0)
       return;
-    const deadline = Date.now() + ACQUISITION_TIMEOUT_MS;
-    const pending = unique.map((store) => ({ store, held: false, released: false }));
-    const existing = activeHolds.get(event.toolCallId);
-    activeHolds.set(event.toolCallId, existing === undefined ? pending : [...existing, ...pending]);
-    for (const current of pending) {
-      const got = await hold(current.store, event.toolCallId, Math.max(0, deadline - Date.now()));
-      if (got.kind === "failed") {
-        for (const pendingHold of pending) {
-          pendingHold.released = true;
-          if (pendingHold.held) {
-            release(pendingHold.store, event.toolCallId);
-            pendingHold.held = false;
-          }
-        }
-        const active = activeHolds.get(event.toolCallId);
-        if (active !== undefined) {
-          const remaining = active.filter((activeHold) => !pending.includes(activeHold));
-          if (remaining.length === 0)
-            activeHolds.delete(event.toolCallId);
-          else
-            activeHolds.set(event.toolCallId, remaining);
-        }
-        return { block: true, reason: got.reason };
-      }
-      current.held = true;
-      if (current.released) {
-        release(current.store, event.toolCallId);
-        current.held = false;
-      }
+    const store = unique[0];
+    const direct = directShell(whole);
+    if (store === undefined || unique.length > 1 || direct === undefined) {
+      return {
+        kind: "block",
+        reason: `This command reaches the embedded store${unique.length > 1 ? "s" : ""} ${unique.join(", ")} in a form the Beads write lock cannot run under its serialising runner. Issue the \`bd\` command as its own tool call, as a single direct invocation.`
+      };
     }
-    ctx?.setTimeout?.(() => surrender(event.toolCallId), LEASE_MS);
+    const runner = embeddedWriteRunner();
+    if (runner === undefined) {
+      return {
+        kind: "block",
+        reason: `${store} is an embedded store, where two concurrent writers corrupt the Dolt journal, and the Beads write-lock runner that serialises writers could not be located: no \`bun\` binary was found on PATH, in BUN_INSTALL, or as this process's own interpreter, or the runner script is missing from the installed plugin. Install \`bun\` or reinstall the @srobroek/beads plugin; the write was refused rather than run unserialised.`
+      };
+    }
+    const rewritten = `${direct.assignments}${quote(runner.interpreter)} ${quote(runner.script)} ${RUNNER_STORE_FLAG} ${quote(store)} ${RUNNER_WAIT_FLAG} ${RUNNER_WAIT_MS} -- ${direct.call}`;
+    const next = { ...event.input };
+    if (typeof input.command === "string")
+      next.command = rewritten;
+    else
+      next.cmd = rewritten;
+    return { kind: "rewrite", input: next };
   } catch {
-    return { block: true, reason: "embedded write target could not be resolved" };
+    return { kind: "block", reason: "embedded write target could not be resolved" };
   }
-  return;
 }
 
 // extensions/bd-init-advisory.ts
@@ -1759,7 +1583,7 @@ function decideLeaseClaim(parsed, event, ctx) {
 // extensions/pr-bead-link-gate.ts
 import { execFileSync } from "child_process";
 import { existsSync as existsSync2, statSync as statSync3 } from "fs";
-import { dirname as dirname2, join as join2, resolve as resolve4 } from "path";
+import { dirname as dirname3, join as join2, resolve as resolve4 } from "path";
 var MAX_COMMAND_LENGTH = 64000;
 var BEAD_REF = /(?:^|\s)(?:Bead|Closes-Bead|Bead-Id):\s*[A-Za-z][A-Za-z0-9_-]*-[A-Za-z0-9]+/i;
 var GH_TIMEOUT_MS = 1e4;
@@ -1799,7 +1623,7 @@ function beadsActive(dir) {
         return true;
       }
     }
-    const parent = dirname2(current);
+    const parent = dirname3(current);
     if (parent === current)
       return false;
     current = parent;
@@ -1987,6 +1811,7 @@ function suffix(gate, reason, resolution = "inspect the command and retry") {
   return { block: true, reason: blockReason({ gate, cause: reason, resolution }) };
 }
 async function decide(parsed, event, ctx, pi) {
+  let input = event.input;
   const { cwd } = inputOf(event, ctx);
   if (parsed.unknown)
     return suffix("bash-gates", "command could not be parsed", "split the command or run the mutation as a plain single command");
@@ -2012,16 +1837,18 @@ async function decide(parsed, event, ctx, pi) {
     await decideLeaseClaim(parsed, event, ctx);
   if (settingsEnabled("beads", "bd-embedded-write-lock", cwd)) {
     const embedded = await decideEmbeddedWrite(parsed, event, ctx);
-    if (embedded)
+    if (embedded?.kind === "block")
       return suffix("bd-embedded-write-lock", embedded.reason);
+    if (embedded?.kind === "rewrite")
+      input = embedded.input;
   }
   if (settingsEnabled("beads", "pr-bead-link-gate", cwd)) {
     const pr = decideCommandParsed(parsed, (segment) => beadsActive(cwd) && repositoryControlled(repositoryFromGhCreate(segment) ?? repositoryFromCurrentCheckout(cwd)));
     if (pr)
       return suffix("pr-bead-link-gate", pr.reason);
   }
-  const rewritten = rewriteBashInput(event.input, ctx);
-  if (rewritten && JSON.stringify(rewritten) !== JSON.stringify(event.input))
+  const rewritten = rewriteBashInput(input, ctx) ?? input;
+  if (JSON.stringify(rewritten) !== JSON.stringify(event.input))
     return { input: rewritten };
   return;
 }
@@ -2033,7 +1860,6 @@ function bashGates(pi) {
       const { command } = inputOf(event, ctx);
       if (!command)
         return;
-      beginEmbeddedWrite(event.toolCallId);
       return await decide(parse(command), event, ctx, pi);
     } catch (error) {
       return suffix("bash-gates", `command could not be parsed (${error instanceof Error ? error.message : String(error)})`, "split the command or run the mutation as a plain single command");

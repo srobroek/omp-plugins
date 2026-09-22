@@ -218,8 +218,6 @@ import { isAbsolute, join, resolve } from "path";
 import { hostname } from "os";
 var HOST = hostname().split(".")[0] ?? "localhost";
 var REGISTRY_KEY = Symbol.for("com.srobroek.beads.embedded-write-lock.v1");
-var activeHolds = new Map;
-var surrenderedCalls = new Set;
 
 // extensions/session-beads-lifecycle.ts
 function beadsDir(cwd) {
