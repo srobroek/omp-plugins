@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.3.3](https://github.com/srobroek/omp-plugins/compare/quality--v1.3.2...quality--v1.3.3) (2026-09-22)
+
+
+### Bug Fixes
+
+* **quality:** give each tool probe 5s, the slowest measured probe plus headroom ([#513](https://github.com/srobroek/omp-plugins/issues/513)) ([00493b5](https://github.com/srobroek/omp-plugins/commit/00493b577de70de0b382c01ca57584be94f93f67))
+
 ## [1.3.2](https://github.com/srobroek/omp-plugins/compare/quality--v1.3.1...quality--v1.3.2) (2026-09-21)
 
 

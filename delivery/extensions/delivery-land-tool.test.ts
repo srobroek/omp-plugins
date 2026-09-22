@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import pkg from "../package.json" with { type: "json" };
 import { beadIdsFromBranch, type LandParams, landPullRequest } from "./delivery-land-tool.ts";
 import type { CliResult, CliRunner } from "./forge-adapter.ts";
 import { RECEIPT_SCHEMA, readReceipt, repoKey, writeReceipt } from "./landing-receipt.ts";
@@ -912,7 +913,7 @@ describe("delivery_land", () => {
 		expect(receipt.version).toBe(1);
 		expect(receipt.receiptId).toBe(`${NOW}-${MERGE_OID.slice(0, 12)}`);
 		expect(receipt.emittedAt).toBe(new Date(NOW).toISOString());
-		expect(receipt.emitter).toEqual({ plugin: "@srobroek/delivery", version: "0.12.0", tool: "delivery_land" });
+		expect(receipt.emitter).toEqual({ plugin: "@srobroek/delivery", version: pkg.version, tool: "delivery_land" });
 		expect(receipt.repo).toEqual({
 			key,
 			canonicalRoot: realpathSync(canonical),
