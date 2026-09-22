@@ -1,4 +1,4 @@
-# Explicit write-scope breach
+# Task-scope breach
 
 Send a `blocker` only when the delta quotes both:
 
@@ -6,10 +6,22 @@ Send a `blocker` only when the delta quotes both:
   edit other files".
 - A mutating tool call or diff naming a path outside that set.
 
-Never infer an allowlist from a feature description or likely file list.
+Send a `concern` when the delta quotes the current feature, request, or accepted Bead
+and either:
 
-Stay silent after the user expands the set or the agent reverts the mutation. Also
-stay silent for unowned generated output, reads, checks, reports, and duplicate notes.
+- A diff hunk or mutating tool call changes documentation, files, or code not required
+  by that work, including cleanup and opportunistic improvements.
+- A task assignment or dispatch prompt assigns implementation not required by that work.
+- A Bead creation or update writes state not required by that work.
 
-Fix: revert the mutation or get an explicit scope change. Without a closed path set,
-use the user-level `concern` rule for semantic scope drift.
+Required caller, test, documentation, generated-artifact, migration, and clean-cutover
+changes are in scope only when omitting them would leave the requested result incorrect
+or unverified. Proximity, small size, and general usefulness do not expand scope.
+
+Never infer a closed path allowlist from a feature description. Stay silent when the
+user authorized the extra scope, the agent reverted it, or the assignment/Bead only
+records the current work or a required dependency. Also stay silent for unowned
+generated output, reads, checks, reports, and duplicate notes.
+
+Fix: revert the mutation, remove the out-of-scope assignment, or get an explicit scope
+change.
