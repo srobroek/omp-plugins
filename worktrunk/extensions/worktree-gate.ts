@@ -195,25 +195,47 @@ const READ_ONLY_COMPANIONS: Record<string, true> = {
 	wc: true,
 };
 const READ_ONLY_PROBES: Record<string, true> = { basename: true, cat: true, dirname: true, echo: true, env: true, false: true, git: true, grep: true, head: true, jq: true, printf: true, pwd: true, readlink: true, rg: true, sed: true, stat: true, tail: true, test: true, tr: true, true: true, uniq: true, wc: true, which: true };
-const BD_READ_VERBS: Record<string, true> = { show: true, list: true, ready: true, status: true, stats: true, comments: true, dep: true, prime: true, doctor: true, version: true, lint: true, claim: true, unclaim: true, heartbeat: true };
+const BD_READ_VERBS: Record<string, true> = { show: true, list: true, status: true, stats: true, prime: true, version: true, lint: true };
 const BD_VALUE_OPTIONS = ["--actor", "--database", "--db", "-C", "--directory", "--dolt-auto-commit", "--format", "--mem-profile"] as const;
-function afterBdGlobals(tokens: readonly string[]): string[] | null {
+const BD_TARGET_OPTIONS: Record<string, true> = { "--database": true, "--db": true, "-C": true, "--directory": true };
+function isBdTargetOption(token: string): boolean {
+	if (token.startsWith("-C") && token.length > 2) return true;
+	const equals = token.indexOf("=");
+	return BD_TARGET_OPTIONS[equals === -1 ? token : token.slice(0, equals)] === true;
+}
+function afterBdGlobals(tokens: readonly string[]): readonly string[] | null {
 	let index = 0;
 	while (tokens[index]?.startsWith("-")) {
 		const flag = tokens[index++] as string;
-		if (flag.includes("=") || !BD_VALUE_OPTIONS.includes(flag as (typeof BD_VALUE_OPTIONS)[number])) continue;
+		const equals = flag.indexOf("=");
+		if (isBdTargetOption(flag)) return null;
+		if (equals !== -1 || !BD_VALUE_OPTIONS.includes(flag as (typeof BD_VALUE_OPTIONS)[number])) continue;
 		if (tokens[index] === undefined) return null;
 		index++;
 	}
 	return tokens.slice(index);
 }
+function bdClaimAllowed(args: readonly string[]): boolean {
+	if (args.length < 3 || args[0] !== "update" || args[1]?.startsWith("-")) return false;
+	const options = args.slice(2);
+	return options.filter(option => option === "--claim").length === 1 && options.every(option => option === "--claim" || option === "--json");
+}
+function bdStructuredReadAllowed(args: readonly string[]): boolean {
+	const verb = args[0];
+	if (verb === "ready") return !args.some(option => option === "--claim" || option.startsWith("--claim="));
+	if (verb === "comments") return args.length >= 2 && args[1] !== "add" && !args[1]?.startsWith("-");
+	if (verb === "dep") return ["cycles", "list", "show", "tree"].includes(args[1] ?? "");
+	return false;
+}
 function bdReadAllowed(tokens: readonly string[]): boolean {
+	if (tokens.some(isBdTargetOption)) return false;
 	const args = afterBdGlobals(tokens);
 	if (args === null) return false;
 	const verb = args[0];
-	if (verb === "create") return true;
+	if (verb === "create") return args.length > 1 && !args[1]?.startsWith("-");
 	if (verb === "dolt") return args.length === 2 && args[1] === "pull";
-	return verb === "update" ? args.includes("--claim") : verb !== undefined && BD_READ_VERBS[verb] === true;
+	if (verb === "update") return bdClaimAllowed(args);
+	return verb !== undefined && (BD_READ_VERBS[verb] === true || bdStructuredReadAllowed(args));
 }
 function probeAllowed(program: string, args: readonly string[]): boolean {
 	if (!READ_ONLY_PROBES[program]) return false;
@@ -1203,7 +1225,10 @@ function ghReadAllowed(args: readonly string[]): boolean {
 
 function invocationKind(segment: readonly string[]): "allowed" | "safe" | "other" {
 	let index = 0;
-	while (index < segment.length && /^[A-Za-z_][A-Za-z0-9_]*=.*$/.test(segment[index] as string)) index++;
+	while (index < segment.length && /^[A-Za-z_][A-Za-z0-9_]*=.*$/.test(segment[index] as string)) {
+		if ((segment[index] as string).startsWith("BEADS_DIR=")) return "other";
+		index++;
+	}
 	const program = segment[index];
 	if (program === undefined) return "safe";
 	const rest = segment.slice(index + 1);
@@ -1212,7 +1237,7 @@ function invocationKind(segment: readonly string[]): "allowed" | "safe" | "other
 		while (envIndex < rest.length) {
 			const option = rest[envIndex];
 			if (option === undefined) return "other";
-			if (/^[A-Za-z_][A-Za-z0-9_]*=.*$/.test(option)) { envIndex++; continue; }
+			if (/^[A-Za-z_][A-Za-z0-9_]*=.*$/.test(option)) { if (option.startsWith("BEADS_DIR=")) return "other"; envIndex++; continue; }
 			if (option === "-i" || option === "--ignore-environment") { envIndex++; continue; }
 			if (option === "-u" || option === "--unset") { if (rest[envIndex + 1] === undefined) return "other"; envIndex += 2; continue; }
 			break;
@@ -1467,6 +1492,10 @@ case "bash": {
   if (where.inside) return undefined;
   if (where.repository === null) return { block: true, reason: topologyRefusal(where.uncertainty) };
   if (where.repository.canonical === null) return undefined;
+  const explicitEnv = asRecord(record?.env);
+  if (explicitEnv !== null && Object.prototype.hasOwnProperty.call(explicitEnv, "BEADS_DIR")) {
+    return { block: true, reason: bootstrapRefusal(extractCommand(input), effective) };
+  }
   const command = extractCommand(input);
   if (command.length === 0) {
     return { block: true, reason: uncertaintyRefusal("this `bash` call has no `command` string", canonical) };
