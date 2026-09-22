@@ -6,12 +6,7 @@
   "omp": {
     "extensions": [
       "./dist/bash-gates.js",
-      "./dist/formula-check-tool.js",
-      "./dist/bd-pool-discipline.js",
-      "./dist/session-beads-lifecycle.js",
-      "./dist/unreported-failure-advisory.js",
-      "./dist/claim-before-branch.js",
-      "./dist/bd-reconcile-tool.js"
+      "./extensions/session-beads-lifecycle.ts"
     ],
     "programs": [
       "./extensions/bd-embedded-write-runner.ts"

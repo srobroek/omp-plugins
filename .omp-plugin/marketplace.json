@@ -100,6 +100,13 @@
       "category": "language"
     },
     {
+      "name": "orchestrate",
+      "description": "Ledger-backed delivery orchestration through role workers and verified integration.",
+      "source": "./orchestrate",
+      "version": "0.1.0",
+      "category": "development"
+    },
+    {
       "name": "project",
       "description": "Project lifecycle: license selection and user journeys.",
       "source": "./project",

@@ -6,9 +6,7 @@
   "omp": {
     "extensions": [
       "./extensions/worktree-gate.ts",
-      "./extensions/isolation-precheck.ts",
-      "./extensions/canonical-stale-advisory.ts",
-      "./extensions/stale-worktree-sweep.ts"
+      "./extensions/isolation-precheck.ts"
     ]
   }
 }
