@@ -19,17 +19,17 @@ MUST WH-3: commit after each bounded coherent change. Push before every session 
 
 MUST WH-4: keep scratch files, logs, and repro scripts outside every worktree. A file written inside one dirties the tree or lands in a commit.
 
-MUST WH-5: act on the first hygiene reminder. A session receives at most three. After the third, the main agent or the run lead invokes the report-only `worktree-reaper` agent, which never mutates. Its report provides an inventory and does not authorize removal.
+MUST WH-5: act on the first hygiene reminder. A session receives at most three. Keep an actionable third reminder with the session; invoke the report-only `worktree-reaper` only when ambiguity remains after the third reminder. The reaper never mutates; its report provides an inventory and does not authorize removal.
 
 ## Remove landed state
 
-MUST WH-6: remove landed state only through `bd_reconcile`, then `delivery_cleanup`. That tool removes one worktree. Then it deletes the local ref. Then it verifies absence. The order is fixed: `delivery_cleanup` refuses while the ledger stays unreconciled, and names `bd_reconcile` in the refusal. Provenance obligations for a destructive ref mutation stay in `rule://worktrunk-destructive-branch-provenance`.
+MUST WH-6: remove landed state only through `delivery_cleanup`, after running `bd_reconcile` when the receipt has `beads.ledgerActive: true`; no-ledger or retired receipts (`false`) go directly from landing to `delivery_cleanup`. That tool removes one worktree. Then it deletes the local ref. Then it verifies absence. For an active ledger, `delivery_cleanup` refuses while the ledger stays unreconciled and names `bd_reconcile` in the refusal. Provenance obligations for a destructive ref mutation stay in `rule://worktrunk-destructive-branch-provenance`.
 
 WH-6 has preconditions and stopping conditions:
 
 - Start from exact landing proof for that branch (`rule://delivery-git-workflow` GW-3). An exact merged pull request is the only proof that closes a bead automatically. It names the recorded base, a `headRefOid` equal to the branch tip, and that merge commit reached in the base. An intermediate merge is not the final destination.
 - Where there is no pull request, `git cherry` or a stable patch ID proves one equivalent patch, never a multi-commit squash. That proof supports a reconciliation the owner states explicitly. It never closes a bead automatically.
-- Whichever proof you hold, cleanup runs only after `bd_reconcile` has reconciled the ledger.
+- If the receipt has `beads.ledgerActive: true`, cleanup runs only after `bd_reconcile` has reconciled the ledger; if it is `false`, skip reconciliation and run cleanup directly.
 - Verify absence, never infer it. `delivery_cleanup` stamps a verified-absence time for the removed worktree and for the remote branch. It never promotes `unknown` to a verified absence. A successful mutation is not its own proof.
 - Fail closed on any of these, and hold the work for the user:
   - a dirty tree
