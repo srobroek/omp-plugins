@@ -24,14 +24,20 @@ incorrect or unverified. If not, record it and continue the current task.
 
 Recording it:
 
-- Where the repository has beads (a `.beads/` directory exists): file a bug bead as
-  you hit it, with what you observed and where. Leave it unassigned. Do not block
-  your own bead on it -- the problem is incidental, so blocking stalls unrelated
-  work.
-- Under an orchestrated run, that bead needs a routing envelope or no queue can see
-  it. Follow the run's own steering for parenting and routing labels.
-- Where the repository has no beads: say so in your summary, naming the file and the
-  symptom, so it survives this session.
+- Where the repository has Beads, run `bd info --json` and read
+  `config.issue_prefix`. The maintenance root ID is `"<prefix>-maintenance"`.
+- If that ID is absent, run:
+  `bd create "Maintenance intake" --id "<prefix>-maintenance" --force --type epic --labels maintenance-intake --description "Standing queue for incidental work. Keep this epic open and release it after each bounded drain." --json`
+  A concurrent creator may win. In every case, re-read the root and continue only
+  when it is an open, parentless epic labeled `maintenance-intake`. Stop if it has
+  any other shape.
+- File the incidental issue with:
+  `bd create "<symptom> in <path>" --type task --parent "<prefix>-maintenance" --deps "discovered-from:<source-id>" --metadata '{"tier":"basic"}' --description "<observation and location>" --acceptance "<observable result and check>" --json`
+  Leave it unassigned. Do not block the source bead on incidental work.
+- Keep work required by the current epic under that epic instead. The maintenance
+  root is only for unrelated work.
+- Where the repository has no Beads, name the file and symptom in your summary so
+  the finding survives this session.
 
 What is not acceptable is a third option: naming a problem, disclaiming it, and
 leaving no trace. If you already fixed it or already filed it, carry on.
