@@ -27,16 +27,6 @@ Install this plugin in a repository with `.beads/`. The plugin pins that reposit
 
 When `bd_reconcile` is available, read-only `show` and `list` operations scan landing receipts and plan repairs. `apply` defaults to `false` and writes nothing. Inspect the plan and get execution approval before setting `apply: true`. Safe convergent repairs still require exact close proof for automatic closure.
 
-## Rules
-
-| Rule | When |
-| --- | --- |
-| `beads-reconcile-from-receipts` | When reconciling numeric-v1 landing receipts through available `bd_reconcile`; require exact proof before closure. |
-
-### `bd_reconcile`
-
-When `bd_reconcile` is available, read-only `show` and `list` operations scan landing receipts and plan repairs. `apply` defaults to `false` and writes nothing. Inspect the plan and get execution approval before setting `apply: true`. Safe convergent repairs still require exact close proof for automatic closure.
-
 ## Extensions
 
 - `bd-embedded-write-lock` serializes mutations across linked checkouts.
