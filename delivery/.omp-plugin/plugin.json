@@ -1,6 +1,6 @@
 {
   "name": "delivery",
   "description": "Delivery and git-workflow rules, plus a pull-request review agent.",
-  "version": "0.11.5",
+  "version": "0.12.0",
   "category": "devops"
 }
