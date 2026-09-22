@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.13.0](https://github.com/srobroek/omp-plugins/compare/delivery--v0.12.0...delivery--v0.13.0) (2026-09-22)
+
+
+### Features
+
+* **delivery:** enforce task scope in review and watchdog ([#508](https://github.com/srobroek/omp-plugins/issues/508)) ([a501e39](https://github.com/srobroek/omp-plugins/commit/a501e39da411bd6c6461afd7526ae302ae4966f1))
+
 ## [0.12.0](https://github.com/srobroek/omp-plugins/compare/delivery--v0.11.5...delivery--v0.12.0) (2026-09-22)
 
 
