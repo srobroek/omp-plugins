@@ -42,7 +42,7 @@ NOT Do not nitpick style that a formatter handles.
 ## Output
 
 L1 VERDICT: APPROVE|REQUEST-CHANGES|COMMENT -- one sentence why.
-MUST Begin your reply with `VERDICT:` -- the very first characters, before any other text, thought, or markdown; "L1" is notation for "first line", never printed.
+MUST Begin your reply with `VERDICT:` -- the first characters, before any other text, thought, or markdown; "L1" is notation for "first line", never printed.
    Blockers -- only if present; file:line + why each is blocking.
    Suggestions -- only if present.
    Strengths -- only if notable; never mandatory.
