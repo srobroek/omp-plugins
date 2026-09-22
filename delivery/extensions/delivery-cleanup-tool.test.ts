@@ -69,6 +69,7 @@ type RunnerOptions = {
 		url: string;
 	}>;
 	beadStatus?: string;
+	beadRows?: Record<string, unknown>[];
 	beadMergeSha?: string;
 	remote?: "absent" | "present" | "unknown";
 	pathlessAfterRemove?: boolean;
@@ -249,7 +250,7 @@ function runner(f: Fixture, options: RunnerOptions = {}): { run: CliRunner; call
 		} else if (argv[0] === "bd") {
 			result = success(JSON.stringify({
 				schema_version: 1,
-				data: [{
+				data: options.beadRows ?? [{
 					id: "delivery-17",
 					status: options.beadStatus ?? "closed",
 					metadata: { merge_sha: options.beadMergeSha ?? f.merge },
@@ -452,6 +453,26 @@ describe("delivery_cleanup irreversible boundary", () => {
 		}
 	});
 
+	test("a schema-valid receipt without a merge commit refuses before any observation or mutation", () => {
+		const f = fixture("missing-merge-authorization", "feat/missing-merge-authorization", "retired");
+		const receipt = buildReceipt({
+			...f.receipt,
+			now: NOW + 1,
+			pr: { ...f.receipt.pr, mergeCommitOid: null },
+		});
+		const path = writeReceipt(receipt, receiptDirectory(f.env, receipt.repo.key));
+
+		const { result, calls } = invoke(f, { receipt: path }, { pr: { mergeCommitOid: null } });
+
+		expect(refusal(result)).toContain("pr.mergeCommitOid");
+		expect(refusal(result)).toContain("a non-empty merge commit oid before cleanup");
+		expect(calls).toEqual([]);
+		expect(mutationCalls(calls)).toEqual([]);
+		expect(existsSync(f.linked)).toBe(true);
+		expect(gitExit(f.main, ["show-ref", "--verify", "--quiet", `refs/heads/${f.branch}`])).toBe(0);
+		rmSync(f.root, { recursive: true, force: true });
+	});
+
 	test("dirty, unpushed, and unreconciled refusals occur in that exact order", () => {
 		const f = fixture("refusal-order");
 		writeFileSync(join(f.linked, "dirty.txt"), "dirty\n");
@@ -493,6 +514,72 @@ describe("delivery_cleanup irreversible boundary", () => {
 		expect(commandCalls(calls, "bd")).toEqual([["bd", "show", "delivery-17", "--json"]]);
 		expect(mutationCalls(calls)).toEqual([]);
 	});
+	for (const [order, statuses] of [
+		["open then closed", ["open", "closed"]],
+		["closed then open", ["closed", "open"]],
+	] as const) {
+		test(`conflicting duplicate bead statuses refuse in ${order} order without mutation`, () => {
+			const f = fixture(`duplicate-status-${statuses.join("-")}`);
+			const beadRows = statuses.map(status => ({
+				id: "delivery-17",
+				status,
+				metadata: { merge_sha: f.merge },
+			}));
+
+			const { result, calls } = invoke(f, { receipt: f.receiptPath }, { beadRows });
+
+			const reason = refusal(result);
+			expect(reason).toContain("beads.delivery-17");
+			expect(reason).toContain("duplicate bd show rows for one bead id to be identical");
+			expect(reason).toContain(JSON.stringify(beadRows));
+			expect(mutationCalls(calls)).toEqual([]);
+			expect(existsSync(f.linked)).toBe(true);
+			expect(gitExit(f.main, ["show-ref", "--verify", "--quiet", `refs/heads/${f.branch}`])).toBe(0);
+			rmSync(f.root, { recursive: true, force: true });
+		});
+	}
+
+	for (const [order, identities] of [
+		["first then second", ["issue-one", "issue-two"]],
+		["second then first", ["issue-two", "issue-one"]],
+	] as const) {
+		test(`conflicting duplicate bead identities refuse in ${order} order without mutation`, () => {
+			const f = fixture(`duplicate-identity-${identities.join("-")}`);
+			const beadRows = identities.map(identity => ({
+				id: "delivery-17",
+				identity,
+				status: "closed",
+				metadata: { merge_sha: f.merge },
+			}));
+
+			const { result, calls } = invoke(f, { receipt: f.receiptPath }, { beadRows });
+
+			const reason = refusal(result);
+			expect(reason).toContain("beads.delivery-17");
+			expect(reason).toContain("duplicate bd show rows for one bead id to be identical");
+			expect(reason).toContain(JSON.stringify(beadRows));
+			expect(mutationCalls(calls)).toEqual([]);
+			expect(existsSync(f.linked)).toBe(true);
+			expect(gitExit(f.main, ["show-ref", "--verify", "--quiet", `refs/heads/${f.branch}`])).toBe(0);
+			rmSync(f.root, { recursive: true, force: true });
+		});
+	}
+
+	test("identical duplicate bead rows coalesce without weakening cleanup authorization", () => {
+		const f = fixture("duplicate-identical");
+		const issue = { id: "delivery-17", status: "closed", metadata: { merge_sha: f.merge } };
+		const linked = realpathSync(f.linked);
+
+		const { result, calls } = invoke(f, { receipt: f.receiptPath }, { beadRows: [issue, structuredClone(issue)] });
+
+		expect(result.ok).toBe(true);
+		expect(mutationCalls(calls)).toEqual([
+			["git", "worktree", "remove", linked],
+			["git", "branch", "-d", "--", f.branch],
+		]);
+		rmSync(f.root, { recursive: true, force: true });
+	});
+
 
 	test("refuses the repository's main worktree", () => {
 		const mainTarget = fixture("main-target");

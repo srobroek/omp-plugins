@@ -1,5 +1,6 @@
 import { lstatSync, realpathSync, type Stats } from "node:fs";
 import { dirname, isAbsolute, resolve, sep } from "node:path";
+import { isDeepStrictEqual } from "node:util";
 import type { TSchema } from "@oh-my-pi/pi-ai";
 import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
 import {
@@ -487,7 +488,11 @@ function verifyLedger(receipt: LandingReceipt, cwd: string, run: CliRunner): Cle
 		const issue = record(item);
 		const id = issue === null ? null : text(issue, "id");
 		if (issue === null || id === null) return refuse("beads", item, "issues with string ids");
-		rows.set(id, issue);
+		const prior = rows.get(id);
+		if (prior !== undefined && !isDeepStrictEqual(prior, issue)) {
+			return refuse(`beads.${id}`, [prior, issue], "duplicate bd show rows for one bead id to be identical");
+		}
+		if (prior === undefined) rows.set(id, issue);
 	}
 	for (const id of receipt.beads.ids) {
 		const issue = rows.get(id);
@@ -695,6 +700,9 @@ export function cleanupDelivery(
 
 	const argsFailure = verifyArguments(params, receipt);
 	if (argsFailure !== null) return argsFailure;
+	if (typeof receipt.pr.mergeCommitOid !== "string" || receipt.pr.mergeCommitOid.trim() === "") {
+		return refuse("pr.mergeCommitOid", receipt.pr.mergeCommitOid, "a non-empty merge commit oid before cleanup");
+	}
 	// Before any observation, and long before the irreversible step: a call from inside
 	// its own target can neither remove it safely nor verify the removal afterwards.
 	if (invocationInsideTarget(cwd, receipt.worktree.path as string)) {
