@@ -11,7 +11,7 @@ and either:
 
 - A diff hunk or mutating tool call changes documentation, files, or code not required
   by that work, including cleanup and opportunistic improvements.
-- A task assignment or dispatch prompt assigns implementation not required by that work.
+- A task assignment or dispatch prompt assigns work not required by that work.
 - A Bead creation or update writes state not required by that work.
 
 Required caller, test, documentation, generated-artifact, migration, and clean-cutover
