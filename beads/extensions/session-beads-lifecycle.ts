@@ -32,6 +32,23 @@ import {
 } from "./bd-actor-gate.ts";
 import { withEmbeddedWriteLock, writesStore } from "./bd-embedded-write-lock.ts";
 import { repoIdentity, sessionPinFor } from "./beads-store.ts";
+
+/**
+ * Variables the plugin wins on, in every environment it shapes for bd.
+ *
+ * `BEADS_DOLT_SHARED_SERVER` overrides the committed `dolt_mode` pin in
+ * `.beads/metadata.json` -- bd says so itself, and then fails against a server
+ * this repository never provisioned -- so an inherited value is cleared rather
+ * than obeyed. Shared-server mode contradicts a committed pin and cannot be a
+ * per-call opt-in, which is why this differs from `BEADS_DIR`: that one selects
+ * which store to use, so a caller's value is honoured.
+ *
+ * Cleared to the empty string, not deleted: `pinBashInput` writes an overlay
+ * onto a bash call, where a deleted key still inherits the shell's value. bd
+ * reads the empty string as unset.
+ */
+const EMBEDDED_PIN_ENV: Readonly<Record<string, string>> = { BEADS_DOLT_SHARED_SERVER: "" };
+
 export function lifecycleBdEnvironment(cwd: string, base: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
 	const env: NodeJS.ProcessEnv = { ...base };
 	delete env.BEADS_DIR;
@@ -41,6 +58,7 @@ export function lifecycleBdEnvironment(cwd: string, base: NodeJS.ProcessEnv = pr
 	env.BD_NON_INTERACTIVE = "1";
 	env.BD_DOLT_AUTO_START = "false";
 	env.NO_COLOR = "1";
+	Object.assign(env, EMBEDDED_PIN_ENV);
 	return env;
 }
 
@@ -122,7 +140,10 @@ export function sessionPinAfter(result: AutoPinResult, cwd: string, env: NodeJS.
  *
  * The persistent shell of an interactive session is spawned before `session_start`
  * runs, so a value placed on `process.env` never reaches it; the call's own `env`
- * does. A caller-supplied `BEADS_DIR` is left alone.
+ * does. A caller-supplied `BEADS_DIR` is left alone. The same call carries
+ * `EMBEDDED_PIN_ENV`, so a shell that exported shared-server mode still reaches
+ * the pinned embedded store; a call that pins its own `BEADS_DIR` shapes its own
+ * environment and is left untouched, escape included.
  */
 export function pinBashInput(input: unknown, pin: string | undefined): Record<string, unknown> | undefined {
 	if (pin === undefined || input === null || typeof input !== "object") return undefined;
@@ -131,7 +152,7 @@ export function pinBashInput(input: unknown, pin: string | undefined): Record<st
 	if (env !== undefined && (env === null || typeof env !== "object" || Array.isArray(env))) return undefined;
 	const current = (env as Record<string, unknown> | undefined)?.BEADS_DIR;
 	if (typeof current === "string" && current !== "") return undefined;
-	return { ...record, env: { ...((env as Record<string, unknown> | undefined) ?? {}), BEADS_DIR: pin } };
+	return { ...record, env: { ...((env as Record<string, unknown> | undefined) ?? {}), ...EMBEDDED_PIN_ENV, BEADS_DIR: pin } };
 }
 
 function bashCallCwd(input: unknown, fallback: string): string {

@@ -1,0 +1,1540 @@
+import { afterEach, describe, expect, test } from "bun:test";
+import { spawnSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join, resolve } from "node:path";
+import bdReconcileTool, {
+	type BdSpawn,
+	type BeadRecord,
+	type CleanupObservation,
+	type CommandSpawn,
+	parseReceipt,
+	type ReconcileDependencies,
+	type ReconcileOperation,
+	reconcileApproval,
+	reconcileReceipts,
+	resetReconcileArbiterForTests,
+	type SpawnResult,
+	type WriteLock,
+} from "./bd-reconcile-tool.ts";
+
+const REPO_KEY = "0123456789abcdef";
+const HEAD = "1111111111111111111111111111111111111111";
+const MERGE = "2222222222222222222222222222222222222222";
+const NOW = "2026-09-21T12:00:00.000Z";
+const RECEIPT_ID = `${Date.parse(NOW)}-222222222222`;
+const roots: string[] = [];
+
+function temporary(name: string): string {
+	const path = mkdtempSync(join(tmpdir(), `bd-reconcile-${name}-`));
+	roots.push(path);
+	return path;
+}
+
+function envelope(data: unknown): string {
+	return `bd human preamble\n${JSON.stringify({ data, schema_version: 1 })}`;
+}
+
+function receipt(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+	const base = {
+		schema: "omp.receipt.landing",
+		version: 1,
+		receiptId: RECEIPT_ID,
+		emittedAt: NOW,
+		emitter: { plugin: "@srobroek/delivery", version: "1.0.0", tool: "delivery_land" },
+		repo: {
+			key: REPO_KEY,
+			canonicalRoot: "/repo",
+			remote: "origin",
+			forge: "github",
+			nameWithOwner: "srobroek/omp-plugins",
+		},
+		pr: {
+			number: 42,
+			url: "https://github.com/srobroek/omp-plugins/pull/42",
+			state: "MERGED",
+			baseRefName: "main",
+			headRefName: "feature/reconcile",
+			headRefOid: HEAD,
+			mergeCommitOid: MERGE,
+			mergedAt: NOW,
+		},
+		branch: {
+			name: "feature/reconcile",
+			deletedRemote: true,
+			remoteAbsenceVerifiedAt: NOW,
+			autoDeleteSetting: "on",
+		},
+		worktree: {
+			path: null,
+			removed: true,
+			localRefDeleted: true,
+			absenceVerifiedAt: NOW,
+		},
+		beads: { ids: ["repo-task"], ledgerActive: true },
+		proof: { method: "gh pr view", observedAt: NOW, evidence: { remote: "origin", remoteUrl: "https://github.com/srobroek/omp-plugins.git", prView: { number: 42, state: "MERGED" } } },
+		outcome: "landed",
+		supersedes: null,
+	};
+	return { ...base, ...overrides };
+}
+
+function exactBead(id = "repo-task", overrides: Partial<BeadRecord> = {}): BeadRecord {
+	return {
+		id,
+		status: "open",
+		metadata: {
+			pr: 42,
+			base: "main",
+			branch: "feature/reconcile",
+			head_sha: HEAD,
+			merge_sha: MERGE,
+		},
+		dependencies: [],
+		comments: [],
+		...overrides,
+	};
+}
+
+function row(bead: BeadRecord): Record<string, unknown> {
+	return {
+		id: bead.id,
+		status: bead.status,
+		assignee: bead.assignee,
+		metadata: bead.metadata,
+		dependencies: bead.dependencies.map((edge) => ({
+			id: edge.id,
+			issue_id: edge.issueId,
+			depends_on_id: edge.dependsOnId,
+			dependency_type: edge.type,
+			status: edge.status,
+		})),
+		comments: bead.comments.map((text) => ({ text })),
+		parent: bead.parent,
+	};
+}
+
+const passLock = (async <T>(
+	_cwd: string,
+	_holder: string,
+	write: () => T | PromiseLike<T>,
+) => ({ kind: "done" as const, value: await write() })) as WriteLock;
+
+function serializedLock(): WriteLock {
+	let tail = Promise.resolve();
+	return (async <T>(
+		_cwd: string,
+		_holder: string,
+		write: () => T | PromiseLike<T>,
+	) => {
+		const previous = tail;
+		let release: (() => void) | undefined;
+		tail = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+		await previous;
+		try {
+			return { kind: "done" as const, value: await write() };
+		} finally {
+			release?.();
+		}
+	}) as WriteLock;
+}
+
+class Harness {
+	readonly calls: string[][] = [];
+	readonly environments: NodeJS.ProcessEnv[] = [];
+	readonly beads = new Map<string, BeadRecord>();
+	readonly gates: Array<{ id: string; blocks: string; reason: string }> = [];
+	failOnce?: string;
+	private gateNumber = 0;
+
+	constructor(readonly cwd: string, ...beads: BeadRecord[]) {
+		mkdirSync(join(cwd, ".beads"), { recursive: true });
+		writeFileSync(join(cwd, ".beads", "metadata.json"), "{}");
+		for (const bead of beads) this.beads.set(bead.id, structuredClone(bead));
+	}
+
+	spawn: BdSpawn = async (argv, _cwd, env): Promise<SpawnResult> => {
+		this.environments.push({ ...env });
+		this.calls.push([...argv]);
+		const command = argv.slice(0, 2).join(" ");
+		if (this.failOnce !== undefined && (argv[0] === this.failOnce || command === this.failOnce)) {
+			this.failOnce = undefined;
+			return { ok: false, exitCode: 1, stdout: "", stderr: "injected interruption" };
+		}
+		if (argv[0] === "show") {
+			const ids = argv.slice(1, argv.findIndex((part) => part.startsWith("--")));
+			return this.ok(envelope(ids.map((id) => this.beads.get(id)).filter(Boolean).map((bead) => row(bead as BeadRecord))));
+		}
+		if (argv[0] === "list") return this.ok(envelope([...this.beads.values()].map(row)));
+		if (command === "gate list") {
+			const gates = this.gates.length === 0 ? null : this.gates.map((gate) => ({
+				id: gate.id,
+				status: "open",
+				await_type: "human",
+				description: `Ad-hoc gate blocking ${gate.blocks}\n\nReason: ${gate.reason}`,
+			}));
+			return this.ok(envelope(gates));
+		}
+		if (argv[0] === "update") {
+			const bead = this.required(this.argument(argv, 1));
+			for (let index = 2; index < argv.length; index++) {
+				if (argv[index] === "--set-metadata") {
+					const assignment = this.argument(argv, ++index);
+					const separator = assignment.indexOf("=");
+					if (separator < 1) throw new Error(`malformed metadata fixture argv: ${assignment}`);
+					bead.metadata[assignment.slice(0, separator)] = assignment.slice(separator + 1);
+				}
+				if (argv[index] === "--assignee" && argv[index + 1] === "") {
+					bead.assignee = undefined;
+					index++;
+				}
+				if (argv[index] === "--status") bead.status = this.argument(argv, ++index);
+			}
+			return this.ok(envelope([row(bead)]));
+		}
+		if (command === "comments add") {
+			this.required(this.argument(argv, 2)).comments.push(this.argument(argv, 3));
+			return this.ok(envelope({ ok: true }));
+		}
+		if (command === "gate create") {
+			const blocks = this.argument(argv, argv.indexOf("--blocks") + 1);
+			const reason = this.argument(argv, argv.indexOf("--reason") + 1);
+			this.gates.push({ id: `repo-gate-${++this.gateNumber}`, blocks, reason });
+			return this.ok(envelope({ id: `repo-gate-${this.gateNumber}` }));
+		}
+		if (command === "dep add") {
+			const target = this.required(this.argument(argv, 2));
+			const source = this.argument(argv, 3);
+			target.dependencies.push({ id: source, dependsOnId: source, type: "discovered-from", status: this.required(source).status });
+			return this.ok(envelope({ ok: true }));
+		}
+		if (command === "audit record") {
+			const issueId = this.argument(argv, argv.indexOf("--issue-id") + 1);
+			const response = this.argument(argv, argv.indexOf("--response") + 1);
+			const sidecar = join(this.cwd, ".beads", "interactions.jsonl");
+			const previous = (() => {
+				try { return readFileSync(sidecar, "utf8"); } catch { return ""; }
+			})();
+			writeFileSync(sidecar, `${previous}${JSON.stringify({ kind: "semantic_event", issue_id: issueId, response })}\n`);
+			return this.ok(envelope({ ok: true }));
+		}
+		if (argv[0] === "close") {
+			this.required(this.argument(argv, 1)).status = "closed";
+			return this.ok(envelope({ ok: true }));
+		}
+		return { ok: false, exitCode: 2, stdout: "", stderr: `unexpected argv: ${argv.join(" ")}` };
+	};
+
+	private argument(argv: string[], index: number): string {
+		const value = argv[index];
+		if (value === undefined) throw new Error(`missing fixture argv at index ${index}: ${argv.join(" ")}`);
+		return value;
+	}
+
+	private required(id: string): BeadRecord {
+		const bead = this.beads.get(id);
+		if (bead === undefined) throw new Error(`missing fixture bead ${id}`);
+		return bead;
+	}
+
+	private ok(stdout: string): SpawnResult {
+		return { ok: true, exitCode: 0, stdout, stderr: "" };
+	}
+}
+
+function writeReceipt(root: string, value: Record<string, unknown>, name?: string): string {
+	const path = join(root, "receipts", REPO_KEY, name ?? `${String(value.receiptId)}.json`);
+	mkdirSync(dirname(path), { recursive: true });
+	writeFileSync(path, JSON.stringify(value));
+	return path;
+}
+
+function dependencies(root: string, harness: Harness, additions: Partial<ReconcileDependencies> = {}): ReconcileDependencies {
+	return {
+		spawn: harness.spawn,
+		lock: passLock,
+		receiptRoot: join(root, "receipts"),
+		repoKey: async () => REPO_KEY,
+		observeProof: async (value) => ({
+			observation: {
+				repo: { nameWithOwner: value.repo.nameWithOwner },
+				pr: { ...value.pr },
+			},
+		}),
+		observeCleanup: async () => ({
+			observation: {
+				remoteBranchAbsent: true,
+				localRefAbsent: true,
+				worktreeAbsent: true,
+			},
+		}),
+		host: "test-host",
+		pidAlive: () => true,
+		...additions,
+	};
+}
+
+async function reconcile(
+	root: string,
+	harness: Harness,
+	params: Record<string, unknown> = {},
+	additions: Partial<ReconcileDependencies> = {},
+) {
+	return reconcileReceipts(
+		{ repoKey: REPO_KEY, ...params },
+		"call-1",
+		harness.cwd,
+		{ BD_ACTOR: "omp/Test/session" },
+		dependencies(root, harness, additions),
+	);
+}
+
+function mutationCalls(harness: Harness): string[][] {
+	return harness.calls.filter((argv) => !["show", "list", "gate"].includes(argv[0] ?? ""));
+}
+
+function closeOperations(operations: ReconcileOperation[]): ReconcileOperation[] {
+	return operations.filter((item) => item.kind === "close");
+}
+
+afterEach(() => {
+	resetReconcileArbiterForTests();
+	for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
+});
+
+describe("receipt v1 intake", () => {
+	test("refuses a forward receipt version without reading or writing Beads", async () => {
+		const root = temporary("forward");
+		writeReceipt(root, receipt({ version: 2 }));
+		const harness = new Harness(join(root, "repo"), exactBead());
+		const report = await reconcile(root, harness);
+		expect(report.refusals[0]?.reason).toContain("observed 2");
+		expect(report.operations).toEqual([]);
+		expect(harness.calls).toEqual([]);
+	});
+
+	test("reports missing, unreadable, and foreign-schema receipts without throwing", async () => {
+		const root = temporary("invalid");
+		const harness = new Harness(join(root, "repo"), exactBead());
+		const missing = await reconcile(root, harness, { receipt: "missing" });
+		expect(missing.refusals[0]?.reason).toContain("unreadable");
+		writeReceipt(root, { schema: "foreign", version: 1 }, "foreign.json");
+		const foreign = await reconcile(root, harness, { receipt: "foreign" });
+		expect(foreign.refusals[0]?.reason).toContain("omp.receipt.landing");
+		writeFileSync(join(root, "receipts", REPO_KEY, "bad.json"), "{");
+		const unreadable = await reconcile(root, harness, { receipt: "bad" });
+		expect(unreadable.refusals[0]?.reason).toContain("unreadable JSON");
+	});
+
+	test.each([
+		["a JSON object string", JSON.stringify(receipt())],
+		["a padded JSON object string", `  ${JSON.stringify(receipt())}  `],
+		["a JSON array string", JSON.stringify([receipt()])],
+		["a quoted JSON string", JSON.stringify("1758520800000-4f1c2a9b7d30")],
+	] as const)("refuses %s instead of reconciling an object no delivery tool wrote", async (_label, inline) => {
+		const root = temporary("inline");
+		const harness = new Harness(join(root, "repo"), exactBead());
+		const report = await reconcileReceipts(
+			{ receipt: inline, apply: true },
+			"inline",
+			harness.cwd,
+			{ BD_ACTOR: "omp/Test/session" },
+			dependencies(root, harness),
+		);
+		expect(report.ok).toBe(false);
+		expect(report.operations).toEqual([]);
+		expect(report.receipts).toEqual([]);
+		expect(harness.calls).toEqual([]);
+		const reason = report.refusals[0]?.reason ?? "";
+		expect(reason).toContain("inline JSON");
+		expect(reason).toContain(join(root, "receipts", REPO_KEY, "<receiptId>.json"));
+	});
+
+	test.each([
+		["an object", receipt()],
+		["a number", 42],
+	] as const)("refuses %s before any receipt read or bd call", async (_label, supplied) => {
+		const root = temporary("non-string");
+		const harness = new Harness(join(root, "repo"), exactBead());
+		const report = await reconcile(root, harness, { receipt: supplied, apply: true });
+		expect(report.ok).toBe(false);
+		expect(report.operations).toEqual([]);
+		expect(report.receipts).toEqual([]);
+		expect(harness.calls).toEqual([]);
+		expect(report.refusals[0]?.reason).toBe(
+			`receipt: observed inline JSON, expected a receipt id or the path of a file a delivery tool wrote at ${join(root, "receipts", REPO_KEY, "<receiptId>.json")}`,
+		);
+	});
+
+	test("the tool advertises a receipt file and never inline receipt JSON", () => {
+		const registered: Array<Record<string, unknown>> = [];
+		const described: string[] = [];
+		const chain: Record<string, unknown> = {};
+		chain.optional = () => chain;
+		chain.describe = (text: string) => {
+			described.push(text);
+			return chain;
+		};
+		const z = { object: () => chain, string: () => chain, boolean: () => chain };
+		bdReconcileTool({
+			zod: z,
+			registerTool: (tool: Record<string, unknown>) => registered.push(tool),
+		} as unknown as Parameters<typeof bdReconcileTool>[0]);
+		expect(String(registered[0]?.description)).not.toContain("receipt JSON");
+		expect(described.join("\n")).not.toContain("receipt JSON returned by a delivery tool");
+		expect(described.some((text) => text.includes("inline receipt JSON is refused"))).toBe(true);
+	});
+
+	test("parses a valid receipt while preserving unconstrained proof evidence", () => {
+		const value = receipt({ proof: { method: "gh pr view", observedAt: NOW, evidence: { future: true } } });
+		expect(parseReceipt(value).receipt?.proof.evidence).toEqual({ future: true });
+	});
+
+	test("carries receipt extension keys and validates optional notes", () => {
+		const value = receipt({ notes: "cleanup retained for operator review", continuation: { attempt: 2 } });
+		const repo = value.repo as Record<string, unknown>;
+		repo.transportHint = "ssh";
+		const parsed = parseReceipt(value);
+		expect(parsed.reason).toBeUndefined();
+		expect(parsed.receipt).toMatchObject({
+			notes: "cleanup retained for operator review",
+			continuation: { attempt: 2 },
+			repo: { transportHint: "ssh" },
+		});
+		expect(parseReceipt(receipt({ notes: { text: "outside v1" } })).reason).toContain("notes");
+	});
+
+	test("refuses empty proof evidence", () => {
+		expect(parseReceipt(receipt({ proof: { method: "gh pr view", observedAt: NOW, evidence: {} } })).reason).toContain("proof.evidence");
+	});
+
+	test.each([
+		["an unobserved provider", "unknown"],
+		["a cleanup continuation", "delivery_cleanup"],
+		["a self-asserted summary", "session summary assertion"],
+	] as const)("accepts %s as a v1 receipt so it can still drive repairs", (_label, method) => {
+		const parsed = parseReceipt(receipt({ proof: { method, observedAt: NOW, evidence: { summary: "merged" } } }));
+		expect(parsed.reason).toBeUndefined();
+		expect(parsed.receipt?.proof.method).toBe(method);
+	});
+
+	test.each([
+		["invalid emittedAt", { emittedAt: "not-an-instant" }, "emittedAt"],
+		["calendar-invalid emittedAt", { emittedAt: "2026-02-30T12:00:00.000Z" }, "emittedAt"],
+		["out-of-range emittedAt offset", { emittedAt: "2026-09-21T12:00:00+24:00" }, "emittedAt"],
+		["receiptId epoch mismatch", { receiptId: `${Date.parse(NOW) - 1}-222222222222` }, "receiptId"],
+		["receiptId merge suffix mismatch", { receiptId: `${Date.parse(NOW)}-333333333333` }, "receiptId"],
+	] as const)("refuses %s", (_label, override, expected) => {
+		expect(parseReceipt(receipt(override)).reason).toContain(expected);
+	});
+
+	test.each([
+		["uppercase head", "headRefOid", "A".repeat(40)],
+		["short head", "headRefOid", "a".repeat(39)],
+		["non-hex merge", "mergeCommitOid", "g".repeat(40)],
+		["uppercase merge", "mergeCommitOid", "B".repeat(40)],
+	] as const)("refuses a %s object id before receiptId binding", (_label, field, oid) => {
+		const value = receipt();
+		(value.pr as Record<string, unknown>)[field] = oid;
+		expect(parseReceipt(value).reason).toContain(`pr.${field}`);
+	});
+
+	test("accepts lowercase SHA-256 object ids", () => {
+		const value = receipt();
+		const pr = value.pr as Record<string, unknown>;
+		pr.headRefOid = "1".repeat(64);
+		pr.mergeCommitOid = "2".repeat(64);
+		expect(parseReceipt(value).reason).toBeUndefined();
+	});
+
+	test("derives the current repo key and rejects supplied and embedded mismatches", async () => {
+		const root = temporary("repo-key-binding");
+		const harness = new Harness(join(root, "repo"), exactBead());
+		const foreignKey = "fedcba9876543210";
+		const supplied = await reconcile(root, harness, { repoKey: foreignKey });
+		const foreignReceipt = receipt({
+			repo: { key: foreignKey, canonicalRoot: "/repo", remote: "origin", forge: "github", nameWithOwner: "srobroek/omp-plugins" },
+		});
+		writeReceipt(root, foreignReceipt);
+		const embedded = await reconcile(root, harness);
+		for (const report of [supplied, embedded]) {
+			expect(report.refusals.some((item) => item.reason.includes(REPO_KEY))).toBe(true);
+			expect(report.operations).toEqual([]);
+		}
+		expect(harness.calls).toEqual([]);
+	});
+
+	test("accepts hierarchical bead ids used by child tasks", () => {
+		const parsed = parseReceipt(receipt({ beads: { ids: ["omp-plugins-9ej3.9"], ledgerActive: true } }));
+		expect(parsed.reason).toBeUndefined();
+		expect(parsed.receipt?.beads.ids).toEqual(["omp-plugins-9ej3.9"]);
+	});
+
+	test.each([
+		["receiptId", receipt({ receiptId: "../escape" }), "receiptId"],
+		["repo.key", receipt({ repo: { key: "../../escape", canonicalRoot: "/repo", remote: "origin", forge: "github", nameWithOwner: "srobroek/omp-plugins" } }), "repo.key"],
+	] as const)("refuses an invalid path-bearing %s", (_label, value, expected) => {
+		expect(parseReceipt(value).reason).toContain(expected);
+	});
+
+	test("refuses a valid receipt stored under a filename other than its receiptId, naming both", async () => {
+		const root = temporary("wrong-filename");
+		const filenameId = `${Date.parse(NOW) + 1}-222222222222`;
+		writeReceipt(root, receipt(), `${filenameId}.json`);
+		const harness = new Harness(join(root, "repo"), exactBead());
+		const report = await reconcile(root, harness);
+		const reason = report.refusals[0]?.reason ?? "";
+		expect(reason).toContain(RECEIPT_ID);
+		expect(reason).toContain(filenameId);
+		expect(report.operations).toEqual([]);
+		expect(harness.calls).toEqual([]);
+	});
+
+});
+
+describe("hostile receipt intake", () => {
+	function receiptDirectory(root: string): string {
+		const directory = join(root, "receipts", REPO_KEY);
+		mkdirSync(directory, { recursive: true });
+		return directory;
+	}
+
+	test("refuses a symlink at a receipt path instead of following it outside the root", async () => {
+		const root = temporary("symlink");
+		const directory = receiptDirectory(root);
+		const outside = join(root, "planted.json");
+		writeFileSync(outside, JSON.stringify(receipt()));
+		symlinkSync(outside, join(directory, `${RECEIPT_ID}.json`));
+		const harness = new Harness(join(root, "repo"), exactBead());
+		const report = await reconcile(root, harness, { receipt: RECEIPT_ID });
+		expect(report.operations).toEqual([]);
+		expect(harness.calls).toEqual([]);
+		expect(report.refusals[0]?.reason ?? "").toContain("unreadable");
+	});
+
+	test("refuses a FIFO at a receipt path without parking the extension thread", async () => {
+		const root = temporary("fifo");
+		const directory = receiptDirectory(root);
+		const fifo = join(directory, `${RECEIPT_ID}.json`);
+		// A FIFO no writer ever opens: a blocking open here would hang this test
+		// rather than fail it, which is exactly the defect being pinned.
+		expect(spawnSync("mkfifo", [fifo]).status).toBe(0);
+		const harness = new Harness(join(root, "repo"), exactBead());
+		const started = Date.now();
+		const report = await reconcile(root, harness, { receipt: RECEIPT_ID });
+		expect(Date.now() - started).toBeLessThan(5_000);
+		expect(report.operations).toEqual([]);
+		expect(harness.calls).toEqual([]);
+		expect(report.refusals[0]?.reason ?? "").toMatch(/not a regular file|unreadable/);
+	}, 10_000);
+
+	test("refuses an oversized receipt file naming the cap", async () => {
+		const root = temporary("oversized");
+		const directory = receiptDirectory(root);
+		const padded = receipt({ notes: "n".repeat(300 * 1024) });
+		writeFileSync(join(directory, `${RECEIPT_ID}.json`), JSON.stringify(padded));
+		const harness = new Harness(join(root, "repo"), exactBead());
+		const report = await reconcile(root, harness, { receipt: RECEIPT_ID });
+		expect(report.operations).toEqual([]);
+		expect(harness.calls).toEqual([]);
+		expect(report.refusals[0]?.reason ?? "").toContain(String(256 * 1024));
+	});
+
+	test("refuses a receipt directory past the scan cap instead of reconciling a subset", async () => {
+		const root = temporary("scan-cap");
+		const directory = receiptDirectory(root);
+		for (let index = 0; index <= 200; index++) {
+			const emitted = Date.parse(NOW) + index;
+			writeFileSync(join(directory, `${emitted}-222222222222.json`), JSON.stringify(receipt({ receiptId: `${emitted}-222222222222`, emittedAt: new Date(emitted).toISOString() })));
+		}
+		const harness = new Harness(join(root, "repo"), exactBead());
+		const report = await reconcile(root, harness);
+		expect(report.operations).toEqual([]);
+		expect(harness.calls).toEqual([]);
+		expect(report.refusals[0]?.reason ?? "").toContain("200");
+	});
+
+	test("a non-JSON entry and a subdirectory are skipped rather than read", async () => {
+		const root = temporary("scan-skip");
+		const directory = receiptDirectory(root);
+		writeFileSync(join(directory, `${RECEIPT_ID}.json`), JSON.stringify(receipt()));
+		writeFileSync(join(directory, "notes.txt"), "not a receipt");
+		mkdirSync(join(directory, "nested.json"));
+		const harness = new Harness(join(root, "repo"), exactBead());
+		const report = await reconcile(root, harness);
+		expect(report.receipts).toEqual([join(directory, `${RECEIPT_ID}.json`)]);
+		expect(closeOperations(report.operations)).toHaveLength(1);
+	});
+
+	test("a whitespace-only PI_CODING_AGENT_DIR resolves to $HOME/.omp", async () => {
+		const root = temporary("blank-agent-dir");
+		const home = join(root, "home");
+		writeReceipt(join(home, ".omp"), receipt());
+		const harness = new Harness(join(root, "repo"), exactBead());
+		const report = await reconcileReceipts(
+			{ repoKey: REPO_KEY, receipt: RECEIPT_ID },
+			"blank-agent-dir",
+			harness.cwd,
+			{ BD_ACTOR: "omp/Test/session", HOME: home, PI_CODING_AGENT_DIR: "   " },
+			// No receiptRoot override: the tool must resolve the root itself.
+			{ ...dependencies(root, harness), receiptRoot: undefined },
+		);
+		expect(report.receipts).toEqual([join(home, ".omp", "receipts", REPO_KEY, `${RECEIPT_ID}.json`)]);
+		expect(closeOperations(report.operations)).toHaveLength(1);
+	});
+});
+
+describe("scan and apply", () => {
+	test("scan mode produces the complete plan and never sends mutating argv", async () => {
+		const root = temporary("scan");
+		writeReceipt(root, receipt());
+		const harness = new Harness(join(root, "repo"), exactBead());
+		const report = await reconcile(root, harness);
+		expect(report.operations.map((item) => item.kind)).toEqual(["record-merge-audit", "close"]);
+		expect(report.text).toContain("Scan mode wrote nothing");
+		expect(mutationCalls(harness)).toEqual([]);
+	});
+
+	test("apply closes only exact proof and a second run is converged", async () => {
+		const root = temporary("apply");
+		writeReceipt(root, receipt());
+		const harness = new Harness(join(root, "repo"), exactBead());
+		const first = await reconcile(root, harness, { apply: true });
+		expect(first.failures).toEqual([]);
+		expect(first.applied.map((item) => item.kind)).toEqual(["record-merge-audit", "close"]);
+		const close = harness.calls.find((argv) => argv[0] === "close");
+		expect(close).toContain(`PR #42 merged as ${MERGE}; exact receipt ${RECEIPT_ID} reconciled.`);
+		const second = await reconcile(root, harness, { apply: true });
+		expect(second.operations).toEqual([]);
+		expect(second.text).toContain("state is converged");
+	});
+
+	test("apply stops at a partial failure and a retry resumes from the durable audit", async () => {
+		const root = temporary("restart");
+		writeReceipt(root, receipt());
+		const harness = new Harness(join(root, "repo"), exactBead());
+		harness.failOnce = "close";
+		const first = await reconcile(root, harness, { apply: true });
+		expect(first.applied.map((item) => item.kind)).toEqual(["record-merge-audit"]);
+		expect(first.failures[0]).toContain("retry will resume");
+		const second = await reconcile(root, harness, { apply: true });
+		expect(second.operations.map((item) => item.kind)).toEqual(["close"]);
+		expect(second.applied.map((item) => item.kind)).toEqual(["close"]);
+	});
+
+	test("an unavailable embedded write lock refuses the first mutation and writes nothing", async () => {
+		const root = temporary("lock");
+		writeReceipt(root, receipt());
+		const harness = new Harness(join(root, "repo"), exactBead());
+		const denied = (async () => ({ kind: "failed" as const, reason: "lock unavailable" })) as WriteLock;
+		const report = await reconcile(root, harness, { apply: true }, { lock: denied });
+		expect(report.applied).toEqual([]);
+		expect(report.failures[0]).toContain("lock unavailable");
+		expect(mutationCalls(harness)).toEqual([]);
+	});
+
+	test("rebuilds lock, ledger, and audit environments from cwd", async () => {
+		const root = temporary("cwd-environment");
+		const foreign = temporary("foreign-environment");
+		const foreignStore = join(foreign, ".beads");
+		mkdirSync(foreignStore, { recursive: true });
+		const foreignAudit = `${JSON.stringify({
+			kind: "semantic_event",
+			issue_id: "repo-task",
+			response: { event: "merge_outcome", outcome: "merged", mergeCommitOid: MERGE },
+		})}\n`;
+		writeFileSync(join(foreignStore, "interactions.jsonl"), foreignAudit);
+		writeReceipt(root, receipt());
+		const harness = new Harness(join(root, "repo"), exactBead());
+		let lockEnvironment: NodeJS.ProcessEnv | undefined;
+		const captureLock = (async <T>(
+			_cwd: string,
+			_holder: string,
+			write: () => T | PromiseLike<T>,
+			env: NodeJS.ProcessEnv,
+		) => {
+			lockEnvironment = { ...env };
+			return { kind: "done" as const, value: await write() };
+		}) as WriteLock;
+		const report = await reconcileReceipts(
+			{ repoKey: REPO_KEY, apply: true },
+			"foreign-environment",
+			harness.cwd,
+			{ BD_ACTOR: "omp/Test/session", BEADS_DIR: foreignStore },
+			dependencies(root, harness, { lock: captureLock }),
+		);
+		const expectedStore = join(harness.cwd, ".beads");
+		expect(report.applied.map((item) => item.kind)).toContain("record-merge-audit");
+		expect(lockEnvironment?.BEADS_DIR).toBe(expectedStore);
+		expect(harness.environments.length).toBeGreaterThan(0);
+		expect(harness.environments.every((env) => env.BEADS_DIR === expectedStore)).toBe(true);
+		expect(readFileSync(join(expectedStore, "interactions.jsonl"), "utf8")).toContain(MERGE);
+		expect(readFileSync(join(foreignStore, "interactions.jsonl"), "utf8")).toBe(foreignAudit);
+	});
+	test("uses one bounded deadline and fails closed on malformed bd output", async () => {
+		const root = temporary("malformed-bd");
+		writeReceipt(root, receipt());
+		const harness = new Harness(join(root, "repo"), exactBead());
+		const deadlines: number[] = [];
+		const started = Date.now();
+		const malformed: BdSpawn = async (_argv, _cwd, _env, deadline) => {
+			deadlines.push(deadline);
+			return { ok: true, exitCode: 0, stdout: "bd human preamble\n{not-json", stderr: "" };
+		};
+		const report = await reconcile(root, harness, {}, { spawn: malformed });
+		expect(report.operations).toEqual([]);
+		expect(report.failures.some((failure) => failure.includes("malformed JSON") || failure.includes("unreadable state"))).toBe(true);
+		expect(deadlines).toHaveLength(3);
+		expect(deadlines.every((deadline) => deadline === deadlines[0])).toBe(true);
+		expect((deadlines[0] ?? 0) - started).toBeGreaterThan(0);
+		expect((deadlines[0] ?? 0) - started).toBeLessThanOrEqual(25_000);
+	});
+
+});
+
+describe("close-out proof", () => {
+	test.each([
+		["T3 asserted summary", { emitter: { plugin: "@srobroek/delivery", version: "1", tool: "session_summary" } }, "emitter.tool", false],
+		["unknown forge", { repo: { key: REPO_KEY, canonicalRoot: "/repo", remote: "origin", forge: "unknown", nameWithOwner: "srobroek/omp-plugins" } }, "repo.forge", false],
+		["an unobserved provider", { proof: { method: "unknown", observedAt: NOW, evidence: { note: "no provider" } } }, "proof.method", true],
+		["a self-asserted method no provider issued", { proof: { method: "session summary assertion", observedAt: NOW, evidence: { summary: "merged" } } }, "proof.method", true],
+		["a retired ledger", { beads: { ids: ["repo-task"], ledgerActive: false } }, "beads.ledgerActive", true],
+		["a non-landing outcome", { outcome: "partial" }, "outcome", true],
+	])("refuses %s evidence", async (_label, override, expected, mergeAudit) => {
+		const root = temporary("unknown");
+		writeReceipt(root, receipt(override));
+		const harness = new Harness(join(root, "repo"), exactBead());
+		const report = await reconcile(root, harness);
+		expect(closeOperations(report.operations)).toEqual([]);
+		expect(report.operations.some((item) => item.kind === "record-merge-audit")).toBe(mergeAudit);
+		expect(report.refusals.some((item) => item.reason.includes(expected))).toBe(true);
+	});
+
+	test("refuses a locally forged receipt before reading or mutating the ledger", async () => {
+		const root = temporary("forged-proof");
+		writeReceipt(root, receipt());
+		const harness = new Harness(join(root, "repo"), exactBead());
+		const report = await reconcile(root, harness, { apply: true }, {
+			observeProof: async (value) => ({
+				observation: {
+					repo: { nameWithOwner: "attacker/forged" },
+					pr: { ...value.pr },
+				},
+			}),
+		});
+		expect(report.operations).toEqual([]);
+		expect(harness.calls).toEqual([]);
+		expect(report.refusals.some((item) => item.reason.includes("authoritative repo.nameWithOwner"))).toBe(true);
+	});
+
+	test.each([
+		["HTTPS", "https://github.com/srobroek/omp-plugins.git", "https"],
+		["SSH URL", "ssh://git@github.com/srobroek/omp-plugins.git", "ssh"],
+		["SCP-style SSH", "git@github.com:srobroek/omp-plugins.git", "ssh"],
+		["Git protocol without suffix", "git://github.com/srobroek/omp-plugins", "git"],
+	] as const)("accepts a configured %s remote only after repository identity binding", async (_label, configuredUrl, transport) => {
+		const root = temporary("configured-remote");
+		writeReceipt(root, receipt());
+		const harness = new Harness(join(root, "repo"), exactBead());
+		const calls: Array<{ executable: string; argv: string[]; cwd: string; env: NodeJS.ProcessEnv }> = [];
+		const command: CommandSpawn = async (executable, argv, cwd, env) => {
+			calls.push({ executable, argv: [...argv], cwd, env: { ...env } });
+			if (argv[0] === "remote") return { ok: true, exitCode: 0, stdout: `${configuredUrl}\n`, stderr: "" };
+			if (argv.includes("ls-remote")) return { ok: false, exitCode: 2, stdout: "", stderr: "" };
+			if (argv[0] === "show-ref") return { ok: false, exitCode: 1, stdout: "", stderr: "" };
+			if (argv[0] === "worktree") {
+				return { ok: true, exitCode: 0, stdout: `worktree ${harness.cwd}\nHEAD ${HEAD}\nbranch refs/heads/main\n`, stderr: "" };
+			}
+			return { ok: false, exitCode: 2, stdout: "", stderr: `unexpected git argv: ${argv.join(" ")}` };
+		};
+		const report = await reconcile(root, harness, {}, { observeCleanup: undefined, cleanupCommand: command });
+		expect(closeOperations(report.operations)).toHaveLength(1);
+		expect(calls[0]?.argv).toEqual(["remote", "get-url", "origin"]);
+		const remoteQuery = calls.find((call) => call.argv.includes("ls-remote"));
+		expect(remoteQuery?.argv).toEqual([
+			"-c", "protocol.allow=never",
+			"-c", `protocol.${transport}.allow=always`,
+			"ls-remote", "--exit-code", "--heads", "--", configuredUrl, "refs/heads/feature/reconcile",
+		]);
+		expect(remoteQuery?.cwd).not.toBe(harness.cwd);
+		expect(remoteQuery?.env.GIT_CONFIG_NOSYSTEM).toBe("1");
+		expect(remoteQuery?.env.GIT_CONFIG_GLOBAL).toBe(process.platform === "win32" ? "NUL" : "/dev/null");
+		expect(remoteQuery?.env.GIT_CONFIG_COUNT).toBeUndefined();
+		expect(remoteQuery?.env.GIT_EXEC_PATH).toBeUndefined();
+		expect(calls.every((call) => call.executable.startsWith("/"))).toBe(true);
+		expect(remoteQuery?.env.PATH).toBe("/usr/bin:/bin");
+		expect(calls.every((call) => call.env.GIT_NAMESPACE === undefined && call.env.GIT_DIR === undefined)).toBe(true);
+	});
+
+	test("fails closed on Windows instead of resolving a caller PATH git.exe shim", async () => {
+		const root = temporary("windows-git-shim");
+		writeReceipt(root, receipt());
+		const harness = new Harness(join(root, "repo"), exactBead());
+		const shimDirectory = join(root, "attacker-bin");
+		mkdirSync(shimDirectory);
+		writeFileSync(join(shimDirectory, "git.exe"), "attacker-controlled executable");
+		const calls: string[][] = [];
+		const command: CommandSpawn = async (_executable, argv) => {
+			calls.push([...argv]);
+			return { ok: false, exitCode: 2, stdout: "", stderr: "shim forged absence" };
+		};
+		const report = await reconcileReceipts(
+			{ repoKey: REPO_KEY },
+			"windows-git-shim",
+			harness.cwd,
+			{ BD_ACTOR: "omp/Test/session", PATH: shimDirectory },
+			dependencies(root, harness, {
+				observeCleanup: undefined,
+				cleanupCommand: command,
+				remotePlatform: "win32",
+			}),
+		);
+		expect(closeOperations(report.operations)).toEqual([]);
+		expect(report.refusals.some((item) => item.reason.includes("trusted absolute Git executable unavailable for win32"))).toBe(true);
+		expect(calls).toEqual([]);
+	});
+
+	test("sanitizes cwd-local Git proof against namespace, repository, config, helper, and loader injection", async () => {
+		const root = temporary("local-git-environment");
+		writeReceipt(root, receipt());
+		const harness = new Harness(join(root, "repo"), exactBead());
+		const configuredUrl = "https://github.com/srobroek/omp-plugins.git";
+		const calls: Array<{ argv: string[]; env: NodeJS.ProcessEnv }> = [];
+		const command: CommandSpawn = async (_executable, argv, _cwd, env) => {
+			calls.push({ argv: [...argv], env: { ...env } });
+			const redirected = env.GIT_NAMESPACE !== undefined
+				|| env.GIT_DIR !== undefined
+				|| env.GIT_COMMON_DIR !== undefined
+				|| env.GIT_CONFIG_COUNT !== undefined
+				|| env.GIT_CONFIG_GLOBAL !== "/dev/null"
+				|| env.GIT_EXEC_PATH !== undefined
+				|| env.GIT_SSH_COMMAND === "attacker-ssh"
+				|| env.DYLD_INSERT_LIBRARIES !== undefined
+				|| env.LD_PRELOAD !== undefined;
+			if (argv[0] === "remote") return { ok: true, exitCode: 0, stdout: `${configuredUrl}\n`, stderr: "" };
+			if (argv.includes("ls-remote")) return { ok: false, exitCode: 2, stdout: "", stderr: "" };
+			if (argv[0] === "show-ref") {
+				return redirected
+					? { ok: false, exitCode: 1, stdout: "", stderr: "" }
+					: { ok: true, exitCode: 0, stdout: "", stderr: "" };
+			}
+			if (argv[0] === "worktree") {
+				const branch = redirected ? "refs/heads/main" : "refs/heads/feature/reconcile";
+				return { ok: true, exitCode: 0, stdout: `worktree ${harness.cwd}\nHEAD ${HEAD}\nbranch ${branch}\n`, stderr: "" };
+			}
+			return { ok: false, exitCode: 2, stdout: "", stderr: `unexpected git argv: ${argv.join(" ")}` };
+		};
+		const report = await reconcileReceipts(
+			{ repoKey: REPO_KEY },
+			"local-git-environment",
+			harness.cwd,
+			{
+				BD_ACTOR: "omp/Test/session",
+				PATH: join(root, "attacker-bin"),
+				GIT_NAMESPACE: "empty-namespace",
+				GIT_DIR: join(root, "attacker.git"),
+				GIT_COMMON_DIR: join(root, "attacker-common"),
+				GIT_CONFIG_COUNT: "1",
+				GIT_CONFIG_KEY_0: "core.sshCommand",
+				GIT_CONFIG_VALUE_0: "attacker-ssh",
+				GIT_CONFIG_GLOBAL: join(root, "attacker.gitconfig"),
+				GIT_EXEC_PATH: join(root, "attacker-exec"),
+				GIT_SSH_COMMAND: "attacker-ssh",
+				DYLD_INSERT_LIBRARIES: join(root, "attacker.dylib"),
+				LD_PRELOAD: join(root, "attacker.so"),
+			},
+			dependencies(root, harness, { observeCleanup: undefined, cleanupCommand: command }),
+		);
+		expect(closeOperations(report.operations)).toEqual([]);
+		expect(report.refusals.some((item) => item.reason.includes("current local ref"))).toBe(true);
+		expect(report.refusals.some((item) => item.reason.includes("current worktree"))).toBe(true);
+		expect(calls.length).toBe(4);
+		for (const call of calls) {
+			expect(call.env.GIT_NAMESPACE).toBeUndefined();
+			expect(call.env.GIT_DIR).toBeUndefined();
+			expect(call.env.GIT_COMMON_DIR).toBeUndefined();
+			expect(call.env.GIT_CONFIG_COUNT).toBeUndefined();
+			expect(call.env.GIT_CONFIG_GLOBAL).toBe("/dev/null");
+			expect(call.env.GIT_EXEC_PATH).toBeUndefined();
+			expect(call.env.DYLD_INSERT_LIBRARIES).toBeUndefined();
+			expect(call.env.LD_PRELOAD).toBeUndefined();
+			expect(call.env.PATH).toBe("/usr/bin:/bin");
+		}
+	});
+
+	test("prevents a second insteadOf rewrite from redirecting the verified remote to an empty repository", async () => {
+		const root = temporary("chained-remote-rewrite");
+		writeReceipt(root, receipt());
+		const harness = new Harness(join(root, "repo"), exactBead());
+		const configuredUrl = "https://github.com/srobroek/omp-plugins.git";
+		const calls: Array<{ argv: string[]; cwd: string; env: NodeJS.ProcessEnv }> = [];
+		const command: CommandSpawn = async (_executable, argv, cwd, env) => {
+			calls.push({ argv: [...argv], cwd, env: { ...env } });
+			if (argv[0] === "remote") return { ok: true, exitCode: 0, stdout: `${configuredUrl}\n`, stderr: "" };
+			if (argv.includes("ls-remote")) {
+				const rewriteCanReapply = cwd === harness.cwd
+					|| env.GIT_CONFIG_COUNT !== undefined
+					|| env.GIT_CONFIG_PARAMETERS !== undefined
+					|| env.GIT_EXEC_PATH !== undefined
+					|| env.HTTPS_PROXY !== undefined;
+				return rewriteCanReapply
+					? { ok: false, exitCode: 2, stdout: "", stderr: "" }
+					: { ok: true, exitCode: 0, stdout: `${HEAD}\trefs/heads/feature/reconcile\n`, stderr: "" };
+			}
+			if (argv[0] === "show-ref") return { ok: false, exitCode: 1, stdout: "", stderr: "" };
+			if (argv[0] === "worktree") {
+				return { ok: true, exitCode: 0, stdout: `worktree ${harness.cwd}\nHEAD ${HEAD}\nbranch refs/heads/main\n`, stderr: "" };
+			}
+			return { ok: false, exitCode: 2, stdout: "", stderr: `unexpected git argv: ${argv.join(" ")}` };
+		};
+		const report = await reconcileReceipts(
+			{ repoKey: REPO_KEY },
+			"chained-remote-rewrite",
+			harness.cwd,
+			{
+				BD_ACTOR: "omp/Test/session",
+				GIT_CONFIG_COUNT: "1",
+				GIT_CONFIG_KEY_0: "url.file:///attacker/empty.insteadOf",
+				GIT_CONFIG_VALUE_0: configuredUrl,
+				GIT_CONFIG_PARAMETERS: "'url.file:///attacker/empty.insteadOf'='https://github.com/srobroek/omp-plugins.git'",
+				GIT_EXEC_PATH: "/attacker/bin",
+				HTTPS_PROXY: "http://attacker.invalid",
+			},
+			dependencies(root, harness, { observeCleanup: undefined, cleanupCommand: command }),
+		);
+		expect(closeOperations(report.operations)).toEqual([]);
+		expect(report.refusals.some((item) => item.reason.includes("current remote branch"))).toBe(true);
+		const remoteQuery = calls.find((call) => call.argv.includes("ls-remote"));
+		expect(remoteQuery?.cwd).not.toBe(harness.cwd);
+		expect(remoteQuery?.env.GIT_CONFIG_COUNT).toBeUndefined();
+		expect(remoteQuery?.env.GIT_CONFIG_PARAMETERS).toBeUndefined();
+		expect(remoteQuery?.env.GIT_EXEC_PATH).toBeUndefined();
+		expect(remoteQuery?.env.HTTPS_PROXY).toBeUndefined();
+	});
+
+	test.each([
+		["a second empty repository", "https://github.com/attacker/empty.git", "configured remote nameWithOwner"],
+		["a different forge", "https://gitlab.com/srobroek/omp-plugins.git", "configured remote forge"],
+	] as const)("refuses %s before accepting its absent branch", async (_label, configuredUrl, expected) => {
+		const root = temporary("foreign-configured-remote");
+		writeReceipt(root, receipt());
+		const harness = new Harness(join(root, "repo"), exactBead());
+		const calls: string[][] = [];
+		const command: CommandSpawn = async (_executable, argv) => {
+			calls.push([...argv]);
+			if (argv[0] === "remote") return { ok: true, exitCode: 0, stdout: `${configuredUrl}\n`, stderr: "" };
+			if (argv[0] === "ls-remote") return { ok: false, exitCode: 2, stdout: "", stderr: "" };
+			if (argv[0] === "show-ref") return { ok: false, exitCode: 1, stdout: "", stderr: "" };
+			if (argv[0] === "worktree") {
+				return { ok: true, exitCode: 0, stdout: `worktree ${harness.cwd}\nHEAD ${HEAD}\nbranch refs/heads/main\n`, stderr: "" };
+			}
+			return { ok: false, exitCode: 2, stdout: "", stderr: `unexpected git argv: ${argv.join(" ")}` };
+		};
+		const report = await reconcile(root, harness, {}, { observeCleanup: undefined, cleanupCommand: command });
+		expect(closeOperations(report.operations)).toEqual([]);
+		expect(report.refusals.some((item) => item.reason.includes(expected))).toBe(true);
+		expect(calls).toEqual([["remote", "get-url", "origin"]]);
+	});
+
+	test("refuses cleanup proof when the asserted remote is not currently configured", async () => {
+		const root = temporary("missing-configured-remote");
+		writeReceipt(root, receipt());
+		const harness = new Harness(join(root, "repo"), exactBead());
+		const calls: string[][] = [];
+		const command: CommandSpawn = async (_executable, argv) => {
+			calls.push([...argv]);
+			return { ok: false, exitCode: 2, stdout: "", stderr: "No such remote 'origin'" };
+		};
+		const report = await reconcile(root, harness, {}, { observeCleanup: undefined, cleanupCommand: command });
+		expect(closeOperations(report.operations)).toEqual([]);
+		expect(report.refusals.some((item) => item.reason.includes("git remote get-url"))).toBe(true);
+		expect(calls).toEqual([["remote", "get-url", "origin"]]);
+	});
+
+	test.each([
+		["remote branch", { remoteBranchAbsent: false, localRefAbsent: true, worktreeAbsent: true }, "current remote branch"],
+		["local ref", { remoteBranchAbsent: true, localRefAbsent: false, worktreeAbsent: true }, "current local ref"],
+		["worktree", { remoteBranchAbsent: true, localRefAbsent: true, worktreeAbsent: false }, "current worktree"],
+	] as const)("refuses close when fresh git observation finds a stale %s assertion", async (_label: string, state: CleanupObservation, expected: string) => {
+		const root = temporary("stale-cleanup");
+		writeReceipt(root, receipt());
+		const harness = new Harness(join(root, "repo"), exactBead());
+		const report = await reconcile(root, harness, {}, {
+			observeCleanup: async () => ({ observation: state }),
+		});
+		expect(report.operations.some((item) => item.kind === "record-merge-audit")).toBe(true);
+		expect(closeOperations(report.operations)).toEqual([]);
+		expect(report.refusals.some((item) => item.reason.includes(expected))).toBe(true);
+		expect(report.text).not.toContain("state is converged");
+	});
+
+	test.each([
+		[
+			"pull request state",
+			{ pr: { number: 42, url: "https://github.com/srobroek/omp-plugins/pull/42", state: "OPEN", baseRefName: "main", headRefName: "feature/reconcile", headRefOid: HEAD, mergeCommitOid: MERGE, mergedAt: NOW } },
+			{},
+			"pr.state",
+		],
+		[
+			"head oid",
+			{ pr: { number: 42, url: "https://github.com/srobroek/omp-plugins/pull/42", state: "MERGED", baseRefName: "main", headRefName: "feature/reconcile", headRefOid: "", mergeCommitOid: MERGE, mergedAt: NOW } },
+			{},
+			"pr.headRefOid",
+		],
+		[
+			"merge commit oid",
+			{ receiptId: `${Date.parse(NOW)}-nomerge`, pr: { number: 42, url: "https://github.com/srobroek/omp-plugins/pull/42", state: "MERGED", baseRefName: "main", headRefName: "feature/reconcile", headRefOid: HEAD, mergeCommitOid: null, mergedAt: NOW } },
+			{ metadata: { pr: 42, base: "main", branch: "feature/reconcile", head_sha: HEAD } },
+			"pr.mergeCommitOid",
+		],
+		["bead pull request anchor", {}, { metadata: { ...exactBead().metadata, pr: 41 } }, "metadata.pr"],
+		["clean receipt outcome", { outcome: "partial" }, {}, "outcome"],
+	] as const)("refuses close when %s alone fails", async (_label, override, beadOverride, expected) => {
+		const root = temporary("close-precondition");
+		writeReceipt(root, receipt(override));
+		const harness = new Harness(join(root, "repo"), exactBead("repo-task", beadOverride));
+		const report = await reconcile(root, harness);
+		expect(closeOperations(report.operations)).toEqual([]);
+		expect(report.refusals.some((item) => item.reason.includes(expected))).toBe(true);
+	});
+
+	test("refuses an open gate", async () => {
+		const root = temporary("gate");
+		writeReceipt(root, receipt());
+		const harness = new Harness(join(root, "repo"), exactBead());
+		harness.gates.push({ id: "repo-gate", blocks: "repo-task", reason: "human answer required" });
+		const report = await reconcile(root, harness);
+		expect(closeOperations(report.operations)).toEqual([]);
+		expect(report.refusals.some((item) => item.reason.includes("open gates"))).toBe(true);
+	});
+
+	test("refuses an open child", async () => {
+		const root = temporary("child");
+		writeReceipt(root, receipt());
+		const harness = new Harness(
+			join(root, "repo"),
+			exactBead(),
+			exactBead("repo-child", { parent: "repo-task", metadata: {} }),
+		);
+		const report = await reconcile(root, harness);
+		expect(closeOperations(report.operations)).toEqual([]);
+		expect(report.refusals.some((item) => item.reason.includes("open children"))).toBe(true);
+	});
+
+	test("refuses a live assignment instead of closing work another holder owns", async () => {
+		const root = temporary("live-lease");
+		writeReceipt(root, receipt());
+		const bead = exactBead("repo-task", {
+			status: "in_progress",
+			assignee: "omp/Live/session",
+			metadata: { ...exactBead().metadata, lease_host: "test-host", lease_pid: "1234" },
+		});
+		const harness = new Harness(join(root, "repo"), bead);
+		const report = await reconcile(root, harness, {}, { pidAlive: () => true });
+		expect(closeOperations(report.operations)).toEqual([]);
+		expect(report.refusals.some((item) => item.reason.includes("live assignment/lease"))).toBe(true);
+	});
+
+	test.each([
+		["EPERM", false],
+		["ESRCH", true],
+	] as const)("treats kill(0) %s as %s for dead-claim release", async (code, expectRelease) => {
+		const root = temporary(`pid-${code.toLowerCase()}`);
+		writeReceipt(root, receipt());
+		const bead = exactBead("repo-task", {
+			status: "in_progress",
+			assignee: "omp/Lease/session",
+			metadata: { ...exactBead().metadata, lease_host: "test-host", lease_pid: "1234" },
+		});
+		const harness = new Harness(join(root, "repo"), bead);
+		const report = await reconcile(root, harness, {}, {
+			pidAlive: undefined,
+			pidProbe: () => {
+				const error = new Error(`kill(0) ${code}`) as NodeJS.ErrnoException;
+				error.code = code;
+				throw error;
+			},
+		});
+		expect(report.operations.some((item) => item.kind === "release-dead-claim")).toBe(expectRelease);
+		if (!expectRelease) {
+			expect(closeOperations(report.operations)).toEqual([]);
+			expect(report.refusals.some((item) => item.reason.includes("live assignment/lease"))).toBe(true);
+		}
+	});
+
+	test("refuses a live blocker", async () => {
+		const root = temporary("blocker");
+		writeReceipt(root, receipt());
+		const blocker = exactBead("repo-blocker", { metadata: {} });
+		const target = exactBead("repo-task", {
+			dependencies: [{ id: blocker.id, dependsOnId: blocker.id, type: "blocks", status: blocker.status }],
+		});
+		const harness = new Harness(join(root, "repo"), target, blocker);
+		const report = await reconcile(root, harness);
+		expect(closeOperations(report.operations)).toEqual([]);
+		expect(report.refusals.some((item) => item.reason.includes("live blockers"))).toBe(true);
+	});
+
+	test("selects the newest receipt by instant rather than timestamp text", async () => {
+		const root = temporary("chronology");
+		const earlier = "2026-09-21T13:00:00+02:00";
+		const later = "2026-09-21T12:00:00Z";
+		const earlierId = `${Date.parse(earlier)}-222222222222`;
+		const laterId = `${Date.parse(later)}-222222222222`;
+		writeReceipt(root, receipt({ receiptId: earlierId, emittedAt: earlier, outcome: "cleaned" }), `${earlierId}.json`);
+		writeReceipt(root, receipt({ receiptId: laterId, emittedAt: later, outcome: "landed" }), `${laterId}.json`);
+		const harness = new Harness(join(root, "repo"), exactBead());
+		const report = await reconcile(root, harness);
+		expect(closeOperations(report.operations)).toHaveLength(1);
+		expect(closeOperations(report.operations)[0]?.receipt).toContain(laterId);
+	});
+
+	test("orders receipt-named leaves before their parents", async () => {
+		const root = temporary("leaf-first");
+		writeReceipt(root, receipt({ beads: { ids: ["repo-parent", "repo-child"], ledgerActive: true } }));
+		const harness = new Harness(
+			join(root, "repo"),
+			exactBead("repo-parent"),
+			exactBead("repo-child", { parent: "repo-parent" }),
+		);
+		const report = await reconcile(root, harness);
+		expect(closeOperations(report.operations).map((item) => item.bead)).toEqual(["repo-child", "repo-parent"]);
+	});
+
+	test("closes a landing reconciled before cleanup, observing no cleanup at all", async () => {
+		const root = temporary("pre-cleanup");
+		// Exactly what delivery_land writes in the conditional order: the PR is merged,
+		// and the branch and worktree are still there because cleanup runs after this.
+		writeReceipt(root, receipt({
+			branch: { name: "feature/reconcile", deletedRemote: false, remoteAbsenceVerifiedAt: null, autoDeleteSetting: "on" },
+			worktree: { path: "/repo/wt", removed: false, localRefDeleted: false, absenceVerifiedAt: null },
+		}));
+		const harness = new Harness(join(root, "repo"), exactBead());
+		const report = await reconcile(root, harness, { apply: true }, {
+			observeCleanup: async () => {
+				throw new Error("a pre-cleanup landing must not request cleanup absence proof");
+			},
+		});
+		expect(report.failures).toEqual([]);
+		expect(report.refusals).toEqual([]);
+		expect(report.ok).toBe(true);
+		expect(closeOperations(report.operations)).toHaveLength(1);
+		expect(harness.beads.get("repo-task")?.status).toBe("closed");
+	});
+
+	test("an unknown auto-delete setting does not block a close it has no bearing on", async () => {
+		const root = temporary("unknown-auto-delete");
+		writeReceipt(root, receipt({
+			branch: { name: "feature/reconcile", deletedRemote: false, remoteAbsenceVerifiedAt: null, autoDeleteSetting: "unknown" },
+			worktree: { path: null, removed: false, localRefDeleted: false, absenceVerifiedAt: null },
+		}));
+		const harness = new Harness(join(root, "repo"), exactBead());
+		const report = await reconcile(root, harness);
+		expect(closeOperations(report.operations)).toHaveLength(1);
+		expect(report.refusals).toEqual([]);
+	});
+
+	test("a ledger-free receipt naming no bead reconciles nothing and reports success", async () => {
+		const root = temporary("ledger-free");
+		writeReceipt(root, receipt({ beads: { ids: [], ledgerActive: false } }));
+		const harness = new Harness(join(root, "repo"), exactBead());
+		const report = await reconcile(root, harness, { apply: true });
+		expect(report.ok).toBe(true);
+		expect(report.operations).toEqual([]);
+		expect(report.refusals).toEqual([]);
+		expect(mutationCalls(harness)).toEqual([]);
+		expect(report.text).toContain("converged");
+	});
+
+	test("an empty beads.ids is refused while the ledger is active", () => {
+		const parsed = parseReceipt(receipt({ beads: { ids: [], ledgerActive: true } }));
+		expect(parsed.reason).toContain("beads.ids");
+		expect(parsed.reason).toContain("beads.ledgerActive is true");
+	});
+});
+
+describe("convergent repairs", () => {
+	test("plans CAS dead-claim release and exact missing anchors without overwriting", async () => {
+		const root = temporary("repairs");
+		writeReceipt(root, receipt());
+		const bead = exactBead("repo-task", {
+			status: "in_progress",
+			assignee: "omp/Dead/session",
+			metadata: {
+				base: "main",
+				branch: "feature/reconcile",
+				head_sha: HEAD,
+				lease_host: "test-host",
+				lease_pid: "999999",
+			},
+		});
+		const harness = new Harness(join(root, "repo"), bead);
+		const report = await reconcile(root, harness, {}, { pidAlive: () => false });
+		expect(report.operations.map((item) => item.kind)).toContain("release-dead-claim");
+		const release = report.operations.find((item) => item.kind === "release-dead-claim")?.argv ?? [];
+		expect(release).toContain("--if-assignee");
+		expect(release).not.toContain("--force");
+		const anchors = report.operations.find((item) => item.kind === "set-merge-anchors")?.argv ?? [];
+		expect(anchors).toContain("pr=42");
+		expect(anchors).toContain(`merge_sha=${MERGE}`);
+		const applied = await reconcile(root, harness, { apply: true }, { pidAlive: () => false });
+		expect(applied.applied.map((item) => item.kind)).toContain("release-dead-claim");
+		expect(applied.applied.map((item) => item.kind)).toContain("set-merge-anchors");
+		const converged = await reconcile(root, harness, {}, { pidAlive: () => false });
+		expect(converged.operations.some((item) => item.kind === "release-dead-claim" || item.kind === "set-merge-anchors")).toBe(false);
+	});
+
+	test("sets every missing anchor from the receipt and closes on the same run", async () => {
+		const root = temporary("all-anchors");
+		writeReceipt(root, receipt());
+		// A bead that carries no anchor at all: before this, the missing base, branch
+		// and head_sha were close blockers no repair ever filled in.
+		const harness = new Harness(join(root, "repo"), exactBead("repo-task", { metadata: {} }));
+		const report = await reconcile(root, harness, { apply: true });
+		expect(report.failures).toEqual([]);
+		expect(report.refusals).toEqual([]);
+		const anchors = report.operations.find((item) => item.kind === "set-merge-anchors")?.argv ?? [];
+		expect(anchors).toContain("pr=42");
+		expect(anchors).toContain(`merge_sha=${MERGE}`);
+		expect(anchors).toContain("base=main");
+		expect(anchors).toContain("branch=feature/reconcile");
+		expect(anchors).toContain(`head_sha=${HEAD}`);
+		expect(harness.beads.get("repo-task")?.status).toBe("closed");
+		const second = await reconcile(root, harness, { apply: true });
+		expect(second.operations).toEqual([]);
+		expect(second.applied).toEqual([]);
+	});
+
+	test.each([
+		["base", { base: "release/2.0" }],
+		["branch", { branch: "feature/other" }],
+		["head_sha", { head_sha: "9".repeat(40) }],
+	] as const)("reports a differing %s anchor as a conflict and never overwrites it", async (key, metadata) => {
+		const root = temporary(`conflict-${key}`);
+		writeReceipt(root, receipt());
+		const harness = new Harness(join(root, "repo"), exactBead("repo-task", { metadata: { ...metadata } }));
+		const report = await reconcile(root, harness, { apply: true });
+		expect(report.operations.some((item) => item.kind === "set-merge-anchors")).toBe(false);
+		expect(closeOperations(report.operations)).toEqual([]);
+		expect(report.refusals.some((item) => item.reason.includes(`metadata.${key}`))).toBe(true);
+		expect(harness.beads.get("repo-task")?.metadata[key]).toBe(Object.values(metadata)[0]);
+		expect(harness.beads.get("repo-task")?.status).toBe("open");
+	});
+
+	test("plan mode writes nothing even with every repair pending", async () => {
+		const root = temporary("plan-writes-nothing");
+		writeReceipt(root, receipt());
+		const harness = new Harness(join(root, "repo"), exactBead("repo-task", { metadata: {} }));
+		const report = await reconcile(root, harness);
+		expect(report.operations.length).toBeGreaterThan(0);
+		expect(report.applied).toEqual([]);
+		expect(mutationCalls(harness)).toEqual([]);
+		expect(harness.beads.get("repo-task")?.metadata).toEqual({});
+		expect(harness.beads.get("repo-task")?.status).toBe("open");
+	});
+
+	test("does not treat a dead claim as releasable or closable without actor-bound CAS argv", async () => {
+		const root = temporary("dead-no-actor");
+		writeReceipt(root, receipt());
+		const bead = exactBead("repo-task", {
+			status: "in_progress",
+			assignee: "omp/Dead/session",
+			metadata: { ...exactBead().metadata, lease_host: "test-host", lease_pid: "999999" },
+		});
+		const harness = new Harness(join(root, "repo"), bead);
+		const report = await reconcileReceipts(
+			{ repoKey: REPO_KEY },
+			"dead-no-actor",
+			harness.cwd,
+			{},
+			dependencies(root, harness, { pidAlive: () => false }),
+		);
+		expect(report.operations.some((item) => item.kind === "release-dead-claim" || item.kind === "close")).toBe(false);
+		expect(report.refusals.some((item) => item.reason.includes("no safe actor-bound CAS argv"))).toBe(true);
+	});
+
+	test("preserves a closed bead with a stale dead-claim anchor", async () => {
+		const root = temporary("closed-dead-claim");
+		writeReceipt(root, receipt());
+		const bead = exactBead("repo-task", {
+			status: "closed",
+			assignee: "omp/Dead/session",
+			metadata: { ...exactBead().metadata, lease_host: "test-host", lease_pid: "999999" },
+		});
+		const harness = new Harness(join(root, "repo"), bead);
+		const report = await reconcile(root, harness, { apply: true }, { pidAlive: () => false });
+		expect(report.operations.some((item) => item.kind === "release-dead-claim" || item.kind === "close")).toBe(false);
+		expect(harness.calls.some((argv) => argv.includes("--if-assignee"))).toBe(false);
+		expect(harness.beads.get("repo-task")?.status).toBe("closed");
+		expect(harness.beads.get("repo-task")?.assignee).toBe("omp/Dead/session");
+	});
+
+	test("uses a cleaned receipt for convergent repairs but never automatic close", async () => {
+		const root = temporary("cleaned-repairs");
+		writeReceipt(root, receipt({
+			emitter: { plugin: "@srobroek/delivery", version: "1.0.0", tool: "delivery_cleanup" },
+			outcome: "cleaned",
+		}));
+		const harness = new Harness(join(root, "repo"), exactBead("repo-task", {
+			metadata: { base: "main", branch: "feature/reconcile", head_sha: HEAD },
+		}));
+		const report = await reconcile(root, harness);
+		expect(report.operations.map((item) => item.kind)).toEqual(["set-merge-anchors", "record-merge-audit"]);
+		expect(closeOperations(report.operations)).toEqual([]);
+		expect(report.refusals.some((item) => item.reason.includes("outcome"))).toBe(true);
+	});
+
+	test.each([
+		["remote branch", { remoteBranchAbsent: false, localRefAbsent: true, worktreeAbsent: true }, "current remote branch"],
+		["local ref", { remoteBranchAbsent: true, localRefAbsent: false, worktreeAbsent: true }, "current local ref"],
+		["worktree", { remoteBranchAbsent: true, localRefAbsent: true, worktreeAbsent: false }, "current worktree"],
+	] as const)("refuses a receipt claiming a %s cleanup the repository contradicts", async (_label, observation, expected) => {
+		const root = temporary("stale-cleanup-claim");
+		writeReceipt(root, receipt());
+		const harness = new Harness(join(root, "repo"), exactBead());
+		const report = await reconcile(root, harness, { apply: true }, {
+			observeCleanup: async () => ({ observation: { ...observation } }),
+		});
+		expect(closeOperations(report.operations)).toEqual([]);
+		expect(harness.calls.some((argv) => argv[0] === "close")).toBe(false);
+		expect(report.refusals.some((item) => item.reason.includes(expected))).toBe(true);
+	});
+
+	test.each([
+		["truncated", '{"kind":"semantic_event"'],
+		["malformed", "not-json\n"],
+	] as const)("refuses %s audit history instead of treating it as empty", async (_label: string, history: string) => {
+		const root = temporary("audit-history");
+		writeReceipt(root, receipt());
+		const harness = new Harness(join(root, "repo"), exactBead());
+		writeFileSync(join(harness.cwd, ".beads", "interactions.jsonl"), history);
+		const report = await reconcile(root, harness);
+		expect(report.operations.some((item) => item.kind === "record-merge-audit" || item.kind === "close")).toBe(false);
+		expect(report.refusals.some((item) => item.reason.includes("audit history"))).toBe(true);
+		expect(report.text).not.toContain("state is converged");
+	});
+
+	test("serializes concurrent apply calls so audit and anchors cannot race", async () => {
+		const root = temporary("concurrent");
+		const firstPath = writeReceipt(root, receipt());
+		const secondMerge = "3333333333333333333333333333333333333333";
+		const secondEmittedAt = "2026-09-21T13:00:00.000Z";
+		const secondReceiptId = `${Date.parse(secondEmittedAt)}-333333333333`;
+		const secondReceipt = receipt({
+			receiptId: secondReceiptId,
+			emittedAt: secondEmittedAt,
+			pr: {
+				number: 43,
+				url: "https://github.com/srobroek/omp-plugins/pull/43",
+				state: "MERGED",
+				baseRefName: "main",
+				headRefName: "feature/reconcile",
+				headRefOid: HEAD,
+				mergeCommitOid: secondMerge,
+				mergedAt: NOW,
+			},
+		});
+		const secondPath = writeReceipt(root, secondReceipt, `${secondReceiptId}.json`);
+		const harness = new Harness(join(root, "repo"), exactBead("repo-task", {
+			metadata: { base: "main", branch: "feature/reconcile", head_sha: HEAD },
+		}));
+		const lock = serializedLock();
+		const reports = await Promise.all([
+			reconcile(root, harness, { receipt: firstPath, apply: true }, { lock }),
+			reconcile(root, harness, { receipt: secondPath, apply: true }, { lock }),
+		]);
+		const mutations = mutationCalls(harness);
+		expect(mutations.filter((argv) => argv[0] === "audit" && argv[1] === "record")).toHaveLength(1);
+		expect(mutations.filter((argv) => argv[0] === "close")).toHaveLength(1);
+		expect(mutations.filter((argv) => argv[0] === "update" && argv.includes("--set-metadata"))).toHaveLength(1);
+		expect(harness.beads.get("repo-task")?.metadata.pr).toBe("42");
+		expect(harness.beads.get("repo-task")?.metadata.merge_sha).toBe(MERGE);
+		expect(reports[1]?.operations.some((item) => item.kind === "set-merge-anchors")).toBe(false);
+	});
+
+	test("conflicting anchors are never overwritten and persist one ambiguity comment/gate", async () => {
+		const root = temporary("conflict");
+		writeReceipt(root, receipt());
+		const bead = exactBead();
+		bead.metadata.merge_sha = "different";
+		const harness = new Harness(join(root, "repo"), bead);
+		const first = await reconcile(root, harness, { apply: true });
+		expect(first.operations.map((item) => item.kind)).toContain("comment-ambiguity");
+		expect(first.operations.map((item) => item.kind)).toContain("gate-ambiguity");
+		expect(first.operations.some((item) => item.kind === "set-merge-anchors" || item.kind === "close")).toBe(false);
+		const second = await reconcile(root, harness);
+		expect(second.operations.filter((item) => item.kind === "comment-ambiguity" || item.kind === "gate-ambiguity")).toEqual([]);
+	});
+
+	test("conflicting receipt identities block every derived merge write", async () => {
+		const root = temporary("receipt-conflict");
+		writeReceipt(root, receipt(), `${RECEIPT_ID}.json`);
+		const otherEmittedAt = "2026-09-21T13:00:00.000Z";
+		const otherReceiptId = `${Date.parse(otherEmittedAt)}-333333333333`;
+		const other = receipt({
+			receiptId: otherReceiptId,
+			emittedAt: otherEmittedAt,
+		});
+		const otherPr = other.pr as Record<string, unknown>;
+		otherPr.number = 43;
+		otherPr.url = "https://github.com/srobroek/omp-plugins/pull/43";
+		otherPr.mergeCommitOid = "3333333333333333333333333333333333333333";
+		writeReceipt(root, other, `${otherReceiptId}.json`);
+		const harness = new Harness(join(root, "repo"), exactBead());
+		const report = await reconcile(root, harness);
+		expect(report.refusals.some((item) => item.reason.includes("ambiguous receipts"))).toBe(true);
+		expect(report.operations.some((item) => ["set-merge-anchors", "record-merge-audit", "close"].includes(item.kind))).toBe(false);
+		expect(report.operations.map((item) => item.kind)).toEqual(["comment-ambiguity", "gate-ambiguity"]);
+	});
+
+	test("plans no discovered-from edge when receipt v1 has no authoritative relationship", async () => {
+		const root = temporary("non-derivable-source");
+		writeReceipt(root, receipt());
+		const harness = new Harness(join(root, "repo"), exactBead());
+		const report = await reconcile(root, harness);
+		expect(report.refusals).toEqual([]);
+		expect(report.operations.some((item) => item.kind === "add-discovered-from")).toBe(false);
+	});
+
+	test("adds discovered-from only from an injected recognized ledger carrier", async () => {
+		const root = temporary("source");
+		writeReceipt(root, receipt());
+		const harness = new Harness(join(root, "repo"), exactBead(), exactBead("repo-source", { status: "closed" }));
+		const resolver = () => "repo-source";
+		const first = await reconcile(root, harness, {}, { authoritativeSource: resolver });
+		expect(first.operations.find((item) => item.kind === "add-discovered-from")?.argv).toEqual([
+			"dep", "add", "repo-task", "repo-source", "--type", "discovered-from", "--json",
+		]);
+		await reconcile(root, harness, { apply: true }, { authoritativeSource: resolver });
+		const converged = await reconcile(root, harness, {}, { authoritativeSource: resolver });
+		expect(converged.operations.some((item) => item.kind === "add-discovered-from")).toBe(false);
+	});
+
+	test("scan, apply, conflict, dead-claim, and source plans emit no forbidden argv", async () => {
+		const emitted: string[][] = [];
+		const inspect = async (
+			name: string,
+			bead: BeadRecord,
+			params: Record<string, unknown>,
+			additions: Partial<ReconcileDependencies> = {},
+			extra: BeadRecord[] = [],
+		) => {
+			const root = temporary(`forbidden-${name}`);
+			writeReceipt(root, receipt());
+			const harness = new Harness(join(root, "repo"), bead, ...extra);
+			const report = await reconcile(root, harness, params, additions);
+			emitted.push(...report.operations.map((item) => item.argv), ...harness.calls);
+		};
+		await inspect("scan", exactBead(), {});
+		await inspect("apply", exactBead(), { apply: true });
+		const conflicting = exactBead();
+		conflicting.metadata.merge_sha = "different";
+		await inspect("conflict", conflicting, { apply: true });
+		await inspect("dead", exactBead("repo-task", {
+			status: "in_progress",
+			assignee: "omp/Dead/session",
+			metadata: { ...exactBead().metadata, lease_host: "test-host", lease_pid: "999999" },
+		}), { apply: true }, { pidAlive: () => false });
+		const source = exactBead("repo-source", { status: "closed", metadata: {} });
+		await inspect("source", exactBead(), { apply: true }, { authoritativeSource: () => source.id }, [source]);
+
+		const forbidden: Record<string, true> = {
+			reopen: true,
+			supersede: true,
+			"--force": true,
+			prune: true,
+			purge: true,
+			flatten: true,
+			gc: true,
+			compact: true,
+			delete: true,
+		};
+		for (const argv of emitted) {
+			expect(argv.some((argument) => forbidden[argument] === true)).toBe(false);
+		}
+	});
+});
+
+describe("tool registration and committed bundle", () => {
+	test("approval is read by default and exec only for apply=true", () => {
+		expect(reconcileApproval({ input: {} })).toBe("read");
+		expect(reconcileApproval({ input: { apply: false } })).toBe("read");
+		expect(reconcileApproval({ input: { apply: true } })).toBe("exec");
+	});
+
+	test("schema rejection releases the process-global registration arbiter for one retry", () => {
+		const registered: Array<Record<string, unknown>> = [];
+		const chain: Record<string, unknown> = {};
+		chain.optional = () => chain;
+		chain.describe = () => chain;
+		let attempts = 0;
+		const pi = {
+			zod: {
+				string: () => chain,
+				boolean: () => chain,
+				object: () => chain,
+			},
+			registerTool: (tool: Record<string, unknown>) => {
+				attempts++;
+				if (attempts === 1) throw new Error("schema rejection");
+				registered.push(tool);
+			},
+		};
+		expect(() => bdReconcileTool(pi as never)).toThrow("schema rejection");
+		bdReconcileTool(pi as never);
+		bdReconcileTool(pi as never);
+		expect(attempts).toBe(2);
+		expect(registered).toHaveLength(1);
+		expect(registered[0]?.name).toBe("bd_reconcile");
+		expect(registered[0]?.approval).toBe(reconcileApproval);
+	});
+
+	test("independent extension API instances each register once", () => {
+		const registered: Array<Record<string, unknown>> = [];
+		const chain: Record<string, unknown> = {};
+		chain.optional = () => chain;
+		chain.describe = () => chain;
+		const api = () => ({
+			zod: {
+				string: () => chain,
+				boolean: () => chain,
+				object: () => chain,
+			},
+			registerTool: (tool: Record<string, unknown>) => registered.push(tool),
+		});
+		const first = api();
+		const second = api();
+		bdReconcileTool(first as never);
+		bdReconcileTool(first as never);
+		bdReconcileTool(second as never);
+		bdReconcileTool(second as never);
+		expect(registered).toHaveLength(2);
+	});
+
+	test("manifest keeps the reconcile bundle last and the committed bundle matches a focused rebuild", () => {
+		const packageRoot = resolve(import.meta.dir, "..");
+		const manifest = JSON.parse(readFileSync(join(packageRoot, "package.json"), "utf8"));
+		expect(manifest.omp.extensions).toEqual([
+			"./dist/bash-gates.js",
+			"./dist/formula-check-tool.js",
+			"./dist/bd-pool-discipline.js",
+			"./dist/session-beads-lifecycle.js",
+			"./dist/unreported-failure-advisory.js",
+			"./dist/claim-before-branch.js",
+			"./dist/bd-reconcile-tool.js",
+		]);
+		const out = temporary("bundle");
+		const built = Bun.spawnSync([
+			"bun", "build", "--target=bun",
+			join(packageRoot, "extensions", "bd-reconcile-tool.ts"),
+			"--outdir", out,
+			"--external", "@oh-my-pi/*",
+		], { cwd: packageRoot, stdout: "pipe", stderr: "pipe" });
+		expect(built.exitCode, built.stderr.toString()).toBe(0);
+		expect(readFileSync(join(out, "bd-reconcile-tool.js"))).toEqual(
+			readFileSync(join(packageRoot, "dist", "bd-reconcile-tool.js")),
+		);
+	}, 20_000);
+});

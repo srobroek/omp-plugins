@@ -96,6 +96,8 @@ const READ_ONLY_TOOLS: Record<string, true> = {
 	agentic_lint: true,
 	chezmoi_status: true,
 	dep_scan: true,
+	delivery_orient: true,
+	delivery_hygiene_report: true,
 	find_tools_scan: true,
 	headed_read: true,
 	resume_session: true,
@@ -114,6 +116,48 @@ const LEDGER_TOOLS: Record<string, true> = {
 	orc_bot_review_probe: true,
 	orc_bot_review_request: true,
 	orc_review_round_policy: true,
+	bd_reconcile: true,
+};
+
+/**
+ * The two delivery tools judged by the SESSION's cwd as well as by the paths
+ * their payloads name.
+ *
+ * Both mutate the repository they run in — `delivery_land` writes a receipt
+ * under the agent directory, `delivery_cleanup` removes a worktree and deletes a
+ * branch — and every parameter they declare is optional or names a receipt, a
+ * pull request, a branch or a remote. A complete, live call therefore names no
+ * filesystem path at all, and the pathless-allow default that keeps
+ * `xd://retain` writable from the directory an agent starts in would let exactly
+ * these two run in the canonical checkout, which is the one place this gate
+ * exists to keep them out of.
+ *
+ * Naming them is narrower than gating every pathless call by the session cwd:
+ * they stay OUT of READ_ONLY_TOOLS and LEDGER_TOOLS, they are still judged
+ * against every path they do name, and every other unenumerated tool keeps the
+ * default.
+ */
+const SESSION_CWD_TOOLS: Record<string, true> = { delivery_cleanup: true, delivery_land: true };
+
+/**
+ * The path-valued parameters each session-cwd-judged delivery tool DECLARES, per
+ * tool, so a relative spelling is judged like an absolute one.
+ *
+ * `delivery_land` and `delivery_cleanup` both declare `worktree`, and
+ * `delivery_cleanup` also declares `receipt` ("Path to a canonical landing
+ * receipt"). Neither name is in PATH_KEYS, which holds the keys that make a
+ * string a path on an UNENUMERATED tool, and neither may be added there: a
+ * ledger payload that carries worktree bookkeeping under a `worktree` key names
+ * no filesystem target, and widening PATH_KEYS would both break its exemption
+ * and turn an arbitrary key on any tool into a path. A declared parameter is
+ * different: the tool's own schema says it is a path, and
+ * `delivery_cleanup { worktree: "../../../../personal/dev/omp-plugins" }` from a
+ * linked worktree resolves against the session cwd to exactly the canonical
+ * checkout its absolute spelling is refused for.
+ */
+const DECLARED_PATH_KEYS: Record<string, Record<string, true>> = {
+	delivery_cleanup: { receipt: true, worktree: true },
+	delivery_land: { worktree: true },
 };
 
 /**
@@ -776,8 +820,30 @@ export function repositoryTopology(cwd: string): RepositoryTopology {
 	};
 }
 
+/**
+ * The topology of the session's OWN cwd, which is not resolved the way a target
+ * is.
+ *
+ * A write target legitimately does not exist yet, so its parents describe where
+ * it will land and `git` is asked from the deepest existing directory above it.
+ * A session cwd that does not resolve describes nothing: the question would be
+ * answered for a DIFFERENT directory, and a "no repository here" from an ancestor
+ * reaches the one branch that stands this gate down — on evidence about a
+ * directory no call runs in. A vanished cwd is an undetermined topology, and
+ * uncertainty refuses.
+ */
+export function sessionTopology(sessionCwd: string): RepositoryTopology {
+	try {
+		realpathSync.native(sessionCwd);
+	} catch {
+		const detail = `the session cwd \`${sessionCwd}\` does not exist`;
+		return { canonical: null, uncertainty: detail, worktrees: [], refresh: () => [] };
+	}
+	return repositoryTopology(sessionCwd);
+}
+
 export function defaultTopology(sessionCwd: string): GateTopology {
-	return { session: repositoryTopology(sessionCwd), forTarget: repositoryTopology };
+	return { session: sessionTopology(sessionCwd), forTarget: repositoryTopology };
 }
 
 /**
@@ -1320,29 +1386,47 @@ export function extractCommand(input: unknown): string {
 	return typeof command === "string" ? command : "";
 }
 
-/** Every string in `input` that names a filesystem path on an unenumerated tool. */
-export function scanPathArguments(input: unknown, depth = 0): string[] {
+/** No tool-declared path parameters: what an unenumerated tool is scanned with. */
+const NO_DECLARED_PATHS: Record<string, true> = {};
+
+/**
+ * Every string in `input` that names a filesystem path, given the path-valued
+ * parameters the calling tool DECLARES.
+ *
+ * `declared` holds that tool's own schema names and applies to the payload's top
+ * level only, because that is the level a schema speaks for: a `worktree` key
+ * nested inside some value is not a declared parameter of anything. A declared
+ * key is treated exactly like a PATH_KEYS key — its value is a target however it
+ * is spelled, so a relative path is resolved against the session cwd rather than
+ * waved through.
+ */
+export function scanPathArguments(
+	input: unknown,
+	declared: Record<string, true> = NO_DECLARED_PATHS,
+	depth = 0,
+): string[] {
 	if (depth > MAX_SCAN_DEPTH) return [];
 	if (Array.isArray(input)) {
-		return input.flatMap(entry => scanPathArguments(entry, depth + 1));
+		return input.flatMap(entry => scanPathArguments(entry, NO_DECLARED_PATHS, depth + 1));
 	}
 	const record = asRecord(input);
 	if (record === null) return [];
 	const found: string[] = [];
 	for (const [key, value] of Object.entries(record)) {
+		const names = PATH_KEYS[key] === true || declared[key] === true;
 		if (typeof value === "string") {
 			const normalized = normalizePathLikeInput(value);
 			if (normalized.length === 0) continue;
-			if (PATH_KEYS[key] === true || path.isAbsolute(normalized) || normalized.startsWith("~/")) {
+			if (names || path.isAbsolute(normalized) || normalized.startsWith("~/")) {
 				found.push(normalized);
 			}
 			continue;
 		}
-		if (PATH_KEYS[key] === true && Array.isArray(value)) {
+		if (names && Array.isArray(value)) {
 			for (const entry of value) if (typeof entry === "string") found.push(entry);
 			continue;
 		}
-		found.push(...scanPathArguments(value, depth + 1));
+		found.push(...scanPathArguments(value, NO_DECLARED_PATHS, depth + 1));
 	}
 	return found;
 }
@@ -1391,6 +1475,10 @@ function evalPathLiterals(code: string, cwd: string): string[] {
  * repository at all — a scratch file under `/tmp` — belongs to no worktree and to
  * no canonical checkout, so there is nothing there to guard. Anything the gate
  * cannot classify refuses.
+ *
+ * A call's targets are the paths its arguments name, plus — for the two tools
+ * SESSION_CWD_TOOLS names — the session cwd itself, because those two resolve
+ * what they mutate from the directory they run in.
  */
 export function decideWorktreeCall(
 	toolName: string,
@@ -1400,7 +1488,13 @@ export function decideWorktreeCall(
 ): GateRefusal | undefined {
 	const ledgerInput = asRecord(input);
 	if (READ_ONLY_TOOLS[toolName] === true || readsOnlyInThisMode(toolName, input)) return undefined;
-	if (LEDGER_TOOLS[toolName] === true && ledgerInput !== null && typeof ledgerInput.cwd === "string" && Object.keys(ledgerInput).every(key => key === "cwd" || PATH_KEYS[key] !== true)) return undefined;
+	// The ledger exemption cannot condition on a `cwd` argument. `bd_reconcile`
+	// declares none, so requiring one made the allowance inert and left the tool
+	// judged by its receipt path. What the exemption tests is the absence of a
+	// filesystem target: a ledger call that names one under a path key is judged on
+	// it like any other call, and one that names only bead ids, a repository key or
+	// a pull request mutates no working tree this gate can attribute.
+	if (LEDGER_TOOLS[toolName] === true && (ledgerInput === null || Object.keys(ledgerInput).every(key => PATH_KEYS[key] !== true))) return undefined;
 	const session = topology.session;
 	const uncertainty = session.uncertainty ?? null;
 	if (uncertainty !== null) return { block: true, reason: topologyRefusal(uncertainty) };
@@ -1431,6 +1525,19 @@ export function decideWorktreeCall(
 		}
 		return undefined;
 	};
+
+	// The cwd a session-cwd-judged delivery tool inherits IS one of its targets: it
+	// resolves the receipt, the worktree and the branch from the directory it runs
+	// in, so a payload that names no path still mutates that repository. The cwd is
+	// judged first and the payload's own paths after it, so a call from a live
+	// linked worktree that points at some other checkout is still refused —
+	// including one that spells that checkout relatively, because the tool's
+	// declared path parameters are scanned whatever their spelling and `refuseAll`
+	// resolves each against the same session cwd the tool would inherit.
+	if (SESSION_CWD_TOOLS[toolName] === true) {
+		const declared = DECLARED_PATH_KEYS[toolName] ?? NO_DECLARED_PATHS;
+		return refuseTarget(sessionCwd) ?? refuseAll(scanPathArguments(input, declared));
+	}
 
 	switch (toolName) {
 		case "write": {
@@ -1556,7 +1663,8 @@ case "eval": {
 			// gate can attribute, so there is nothing to contain. Judging such a
 			// call against the session cwd instead refuses every pathless device
 			// call an agent makes before it has moved into a worktree, which is the
-			// canonical checkout's own directory.
+			// canonical checkout's own directory. SESSION_CWD_TOOLS names the two
+			// calls that earn that judgement, and they never reach this branch.
 			for (const raw of scanPathArguments(input)) {
 				const target = resolveTarget(raw, sessionCwd);
 				if (target === null) continue;

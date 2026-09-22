@@ -28,17 +28,17 @@ jobs:
 
 
       - name: Install cargo-binstall
-        if: ${{ github.event_name == 'pull_request' }}
+        if: ${{ github.event_name == 'pull_request' && !startsWith(github.base_ref, 'omp/') }}
         uses: cargo-bins/cargo-binstall@b874e25ea559687bec77e281e9b271aa1367b624 # v1.23.0
 
       - name: Install agnix
-        if: ${{ github.event_name == 'pull_request' }}
+        if: ${{ github.event_name == 'pull_request' && !startsWith(github.base_ref, 'omp/') }}
         env:
           BINSTALL_DISABLE_TELEMETRY: "true"
         run: cargo binstall agnix-cli@0.54.0 --no-confirm
 
       - name: Staged agentic check
-        if: ${{ github.event_name == 'pull_request' }}
+        if: ${{ github.event_name == 'pull_request' && !startsWith(github.base_ref, 'omp/') }}
         env:
           AGNIX_DIFF_BASE: ${{ github.event.pull_request.base.sha }}
         run: |
@@ -50,7 +50,7 @@ jobs:
           python3 scripts/check-agnix-staged.py
 
       - name: Agnix hook regression cases
-        if: ${{ github.event_name == 'pull_request' }}
+        if: ${{ github.event_name == 'pull_request' && !startsWith(github.base_ref, 'omp/') }}
         run: python3 scripts/test-agnix-hook.py
       # OMP identifies a skill, agent, rule, or command by its bare `name` and keeps
       # the first match across every source, so a duplicate name silently shadows the

@@ -12,7 +12,8 @@ var package_default = {
       "./dist/bd-pool-discipline.js",
       "./dist/session-beads-lifecycle.js",
       "./dist/unreported-failure-advisory.js",
-      "./dist/claim-before-branch.js"
+      "./dist/claim-before-branch.js",
+      "./dist/bd-reconcile-tool.js"
     ],
     programs: [
       "./extensions/bd-embedded-write-runner.ts"

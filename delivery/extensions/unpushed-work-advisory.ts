@@ -1,9 +1,21 @@
 import { existsSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 
 import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
 
+import { ledgerActive } from "./landing-receipt.ts";
+
 const TIMEOUT_MS = 2000;
+
+/**
+ * Ceiling on what one Git read may hand back.
+ *
+ * Every child process this module starts is bounded the same way: the same
+ * timeout and the same output ceiling. Bun kills a process that writes past the
+ * ceiling, so its exit code is null and the read is reported as unreadable —
+ * a truncated porcelain stream is never parsed into a claim about the tree.
+ */
+const MAX_GIT_OUTPUT_BYTES = 1 << 20;
 
 /**
  * Volume at which the advisory speaks up about dirty paths touched this session.
@@ -37,50 +49,84 @@ const NON_FILE_SCHEME = /^[a-z][a-z0-9+.-]*:\/\//i;
 
 export type AdvisoryState = {
 	lastFired: boolean;
+	reminderCount: number;
 	agentPaths: Set<string>;
 	sessionHead: string | null;
 };
 
 export function createAdvisoryState(): AdvisoryState {
-	return { lastFired: false, agentPaths: new Set(), sessionHead: null };
+	return { lastFired: false, reminderCount: 0, agentPaths: new Set(), sessionHead: null };
 }
 
 function timeoutFor(deadline: number | undefined): number {
 	return Math.max(1, deadline === undefined ? TIMEOUT_MS : Math.min(TIMEOUT_MS, deadline - Date.now()));
 }
 
-export function revParseHead(cwd: string, deadline?: number): string | null {
+/**
+ * One bounded, read-only Git read; null whenever the answer cannot be trusted.
+ *
+ * `--no-optional-locks` sits where Git accepts it — before the subcommand, as a
+ * global option — so an observation never takes `index.lock` and never refreshes
+ * the index on disk. An advisory that watches for residual work must not itself
+ * write repository state, and it must not lose a race with a real command the
+ * user or another agent is running in the same checkout.
+ *
+ * Both streams are capped and the call is bounded by the session-stop deadline.
+ * A process killed for exceeding either is terminated rather than exited, so its
+ * exit code is null, and its partial output is discarded rather than parsed.
+ */
+function gitRead(cwd: string, args: string[], deadline: number | undefined): string | null {
 	try {
-		const proc = Bun.spawnSync(["git", "rev-parse", "HEAD"], {
+		const proc = Bun.spawnSync(["git", "--no-optional-locks", ...args], {
 			cwd,
 			stdout: "pipe",
 			stderr: "pipe",
 			timeout: timeoutFor(deadline),
+			maxBuffer: MAX_GIT_OUTPUT_BYTES,
 		});
 		if (proc.exitCode !== 0) return null;
-		const sha = proc.stdout.toString().trim();
-		return sha === "" ? null : sha;
+		return proc.stdout.toString();
 	} catch {
 		return null;
 	}
 }
 
+export function revParseHead(cwd: string, deadline?: number): string | null {
+	const printed = gitRead(cwd, ["rev-parse", "HEAD"], deadline);
+	if (printed === null) return null;
+	const sha = printed.trim();
+	return sha === "" ? null : sha;
+}
+
 /** Count commits since the baseline, capped by ahead; null means Git was unreadable. */
 export function sessionCommitsUnpushed(cwd: string, base: string | null, ahead: number, deadline?: number): number | null {
 	if (base === null || ahead <= 0) return 0;
-	try {
-		const proc = Bun.spawnSync(["git", "rev-list", "--count", `${base}..HEAD`], {
-			cwd,
-			stdout: "pipe",
-			stderr: "pipe",
-			timeout: timeoutFor(deadline),
-		});
-		if (proc.exitCode !== 0) return null;
-		const made = Number(proc.stdout.toString().trim());
-		return Number.isFinite(made) ? Math.min(Math.max(0, made), ahead) : null;
-	} catch {
-		return null;
-	}
+	const printed = gitRead(cwd, ["rev-list", "--count", `${base}..HEAD`], deadline);
+	if (printed === null) return null;
+	const made = Number(printed.trim());
+	return Number.isFinite(made) ? Math.min(Math.max(0, made), ahead) : null;
+}
+
+/**
+ * Is a Beads ledger active for the repository this checkout belongs to?
+ *
+ * The classification is recomputed at the canonical root, never at the directory
+ * the session happens to run in: a linked worktree lives outside the checkout,
+ * so the upward `.beads` walk started there finds nothing and would report every
+ * ledger retired. `rev-parse --git-common-dir` names the canonical root — its
+ * parent when it is the usual `.git` directory — exactly as delivery_land
+ * observes it.
+ *
+ * When Git cannot answer, the walk falls back to the given directory so the
+ * classifier keeps its own documented bias (a read error leaves the ledger
+ * active) instead of this module inventing a second rule.
+ */
+export function canonicalLedgerActive(cwd: string, deadline?: number): boolean {
+	const printed = gitRead(cwd, ["rev-parse", "--git-common-dir"], deadline);
+	const trimmed = printed === null ? "" : printed.trim();
+	if (trimmed === "") return ledgerActive(cwd);
+	const common = isAbsolute(trimmed) ? trimmed : resolve(cwd, trimmed);
+	return ledgerActive(basename(common) === ".git" ? dirname(common) : common);
 }
 
 export function hasGitDir(cwd: string): boolean {
@@ -261,18 +307,8 @@ export function totalChangedLines(stats: FileStat[]): number {
  */
 export function agentDiffStat(cwd: string, paths: string[], deadline?: number): FileStat[] | null {
 	if (paths.length === 0) return [];
-	try {
-		const proc = Bun.spawnSync(["git", "diff", "--numstat", "HEAD", "--", ...paths], {
-			cwd,
-			stdout: "pipe",
-			stderr: "pipe",
-			timeout: timeoutFor(deadline),
-		});
-		if (proc.exitCode !== 0) return null;
-		return parseNumstat(proc.stdout.toString());
-	} catch {
-		return null;
-	}
+	const printed = gitRead(cwd, ["diff", "--numstat", "HEAD", "--", ...paths], deadline);
+	return printed === null ? null : parseNumstat(printed);
 }
 
 export function shouldAdvise(
@@ -345,24 +381,66 @@ export function formatAdvisory(
 }
 
 export function gitStatusPorcelain(cwd: string, deadline?: number): string | null {
-	try {
-		const proc = Bun.spawnSync(["git", "status", "--porcelain", "-b", "-z"], {
-			cwd,
-			stdout: "pipe",
-			stderr: "pipe",
-			timeout: timeoutFor(deadline),
-		});
-		if (proc.exitCode !== 0) return null;
-		return proc.stdout.toString();
-	} catch {
-		return null;
-	}
+	return gitRead(cwd, ["status", "--porcelain", "-b", "-z"], deadline);
 }
 
 type SessionStopEvent = {
 	stop_hook_active?: boolean;
 	stopHookActive?: boolean;
 };
+const MAX_REMINDERS = 3;
+
+type StopResult = { continue: true; additionalContext: string };
+
+/**
+ * The escalation the last reminder carries, and nothing the earlier two do.
+ *
+ * Two surfaces are named because they are the only sanctioned ones, and both are
+ * named with their limits: the worktree-reaper agent reports and removes nothing,
+ * and removal happens through delivery_cleanup after a landing is proved. The
+ * ledger tool is named only when a ledger is actually active, in the order
+ * decision omp-plugins-9ej3.45 fixes — bd_reconcile, then delivery_cleanup — so
+ * this text never states the unconditional form.
+ */
+function escalation(ledgerIsActive: boolean): string {
+	const lifecycle = ledgerIsActive
+		? "When the ledger is active the order is fixed: run bd_reconcile to write the ledger from the landing receipt, then delivery_cleanup to remove the worktree and its local branch."
+		: "The canonical root carries no active ledger, so nothing is reconciled first: removal runs through delivery_cleanup alone.";
+	return (
+		" Escalation: dispatch the report-only worktree-reaper to inspect and report the residual; the main agent or the run lead invokes it, and it removes nothing. " +
+		`${lifecycle} ` +
+		"This reminder grants no removal, merge, or publish authority."
+	);
+}
+
+function reminder(
+	state: AdvisoryState,
+	context: string,
+	ambiguous: boolean,
+	ledger: () => boolean,
+): StopResult | undefined {
+	if (state.reminderCount >= MAX_REMINDERS) return;
+	state.reminderCount += 1;
+	state.lastFired = true;
+	const number = state.reminderCount;
+	let additionalContext = `Reminder ${number} of ${MAX_REMINDERS}: ${context}`;
+	if (number === MAX_REMINDERS) {
+		if (ambiguous) {
+			additionalContext +=
+				" Ambiguity remains after two reminders: the residual could not be measured, so report it rather than act on it.";
+		}
+		// The classification costs a Git read, so it is paid for only here, on the
+		// one reminder that names a lifecycle.
+		additionalContext += escalation(ledger());
+		additionalContext +=
+			" Final residual warning: residual work may remain at session end; no further hygiene reminders will be emitted this session.";
+	}
+	return { continue: true, additionalContext };
+}
+
+function resetAfterProgress(state: AdvisoryState): void {
+	state.reminderCount = 0;
+}
 
 export function handleSessionStop(
 	event: SessionStopEvent,
@@ -374,40 +452,43 @@ export function handleSessionStop(
 	base: string | null = null,
 	state: AdvisoryState = createAdvisoryState(),
 	deadline = Date.now() + TIMEOUT_MS,
-): { continue: true; additionalContext: string } | undefined {
+	ledger: () => boolean = () => canonicalLedgerActive(cwd, deadline),
+): StopResult | undefined {
 	if (event.stop_hook_active === true || event.stopHookActive === true) return;
 	if (state.lastFired) return;
 	if (statusText === null) {
-		state.lastFired = true;
-		return {
-			continue: true,
-			additionalContext: "Could not determine unpushed work because git status failed or timed out. This is advisory only; no tool call is blocked.",
-		};
+		return reminder(
+			state,
+			"Could not determine unpushed work because git status failed or timed out. Obtain a fresh git status and inspect any residual paths before ending the session. This is advisory only; no tool call is blocked.",
+			true,
+			ledger,
+		);
 	}
 	const status = parsePorcelain(statusText);
 	const agentDirty = agentAuthoredDirty(status, cwd, authored);
 	const stats = diffStat(cwd, agentDirty, deadline);
 	if (stats === null) {
-		state.lastFired = true;
-		return {
-			continue: true,
-			additionalContext: "Could not determine unpushed work because git diff failed or timed out. This is advisory only; no tool call is blocked.",
-		};
+		return reminder(
+			state,
+			"Could not determine unpushed work because git diff failed or timed out. Obtain a fresh diff and inspect any residual paths before ending the session. This is advisory only; no tool call is blocked.",
+			true,
+			ledger,
+		);
 	}
 	const ownUnpushed = ownCommits(cwd, base, status.ahead, deadline);
 	if (ownUnpushed === null) {
-		state.lastFired = true;
-		return {
-			continue: true,
-			additionalContext: "Could not determine unpushed work because git rev-list failed or timed out. This is advisory only; no tool call is blocked.",
-		};
+		return reminder(
+			state,
+			"Could not determine unpushed work because git rev-list failed or timed out. Obtain a fresh commit range and inspect any residual commits before ending the session. This is advisory only; no tool call is blocked.",
+			true,
+			ledger,
+		);
 	}
-	if (!shouldAdvise(agentDirty, totalChangedLines(stats), ownUnpushed)) return;
-	state.lastFired = true;
-	return {
-		continue: true,
-		additionalContext: formatAdvisory(status, agentDirty, stats, ownUnpushed),
-	};
+	if (!shouldAdvise(agentDirty, totalChangedLines(stats), ownUnpushed)) {
+		resetAfterProgress(state);
+		return;
+	}
+	return reminder(state, formatAdvisory(status, agentDirty, stats, ownUnpushed), false, ledger);
 }
 
 export default function unpushedWorkAdvisory(pi: ExtensionAPI): void {
@@ -447,11 +528,12 @@ export default function unpushedWorkAdvisory(pi: ExtensionAPI): void {
 		try {
 			const input = event.input as Record<string, unknown> | undefined;
 			const rawCwd = input?.cwd;
-			const cwd = resolve(typeof rawCwd === "string" && rawCwd
-				? rawCwd : ctx?.cwd || process.cwd());
+			const cwd = resolve(typeof rawCwd === "string" && rawCwd ? rawCwd : ctx?.cwd || process.cwd());
 			const state = stateFor(cwd);
 			const paths = extractWrittenPaths(event.toolName, event.isError, input, event.details);
+			const before = state.agentPaths.size;
 			for (const path of paths) recordAgentPath(cwd, path, state.agentPaths);
+			if (state.agentPaths.size > before) resetAfterProgress(state);
 		} catch {
 			// Attribution is best-effort and must never disturb a tool result.
 		}

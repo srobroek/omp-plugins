@@ -1,10 +1,13 @@
 import { afterAll, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
+import { ledgerActive } from "./landing-receipt.ts";
+
 import unpushedWorkAdvisory, {
 	agentAuthoredDirty,
+	canonicalLedgerActive,
 	createAdvisoryState,
 	extractWrittenPaths,
 	formatAdvisory,
@@ -42,6 +45,34 @@ const evenStat = (lines: number, ...paths: string[]) =>
  * 5s test timeout. Hook paths are cut for the same reason.
  */
 const GIT_ISOLATED = ["-c", "core.hooksPath=/dev/null", "-c", "commit.gpgsign=false"];
+
+type Handler = (event: unknown, ctx?: unknown) => unknown;
+
+/**
+ * Install the extension against a recording host and return a dispatcher for
+ * the events it registered.
+ *
+ * Reminder state lives in a closure keyed by cwd, so what a `tool_result` does
+ * to it is only observable by dispatching through the registered handler.
+ */
+const registerAdvisory = (): { fire: (event: string, payload?: unknown, ctx?: unknown) => unknown } => {
+	const handlers = new Map<string, Handler>();
+	const fakePi = {
+		zod: {},
+		registerTool: () => { },
+		on: (event: string, handler: Handler) => {
+			if (!handlers.has(event)) handlers.set(event, handler);
+		},
+	};
+	unpushedWorkAdvisory(fakePi as never);
+	return {
+		fire: (event, payload = {}, ctx) => {
+			const handler = handlers.get(event);
+			if (!handler) throw new Error(`extension registered no ${event} handler`);
+			return handler(payload, ctx);
+		},
+	};
+};
 
 describe("parsePorcelain", () => {
 	test("branch, ahead, dirty paths and untracked", () => {
@@ -363,6 +394,131 @@ describe("handleSessionStop", () => {
 		);
 		expect(r?.additionalContext).toContain("big.ts");
 	});
+
+	// The ladder tests pin the classification rather than let it be observed: the
+	// third reminder's lifecycle depends on it, and a developer machine must not
+	// decide which tools the assertions expect.
+	const activeLedger = () => true;
+	const retiredLedger = () => false;
+
+	test("allows exactly three continuations, then stops", () => {
+		const state = createAdvisoryState();
+		const text = porcelain("## feat...origin/feat [ahead 1]");
+		const next = () => {
+			state.lastFired = false;
+			return handleSessionStop({}, "/tmp", text, new Set(), noStat, oneOwn, "base", state, Date.now() + 2_000, activeLedger);
+		};
+		const first = next();
+		const second = next();
+		const third = next();
+		expect(first?.additionalContext).toContain("Reminder 1 of 3");
+		expect(second?.additionalContext).toContain("Reminder 2 of 3");
+		expect(third?.additionalContext).toContain("Reminder 3 of 3");
+		expect(third?.additionalContext).toContain("Final residual warning");
+		expect(next()).toBeUndefined();
+	});
+
+	test("escalates the third ambiguous reminder to the report-only reaper", () => {
+		const state = createAdvisoryState();
+		const next = () => {
+			state.lastFired = false;
+			return handleSessionStop({}, "/tmp", null, new Set(), noStat, noOwn, null, state, Date.now() + 2_000, activeLedger);
+		};
+		next();
+		next();
+		const third = next();
+		expect(third?.additionalContext).toContain("report-only worktree-reaper");
+		expect(third?.additionalContext).toContain("Final residual warning");
+		expect(third?.additionalContext).not.toContain("claim");
+	});
+
+	test("the third reminder names the removal path, and the first two name none of it", () => {
+		const state = createAdvisoryState();
+		const text = porcelain("## feat...origin/feat [ahead 1]");
+		const next = () => {
+			state.lastFired = false;
+			return handleSessionStop({}, "/repo", text, new Set(), noStat, oneOwn, "base", state, Date.now() + 2_000, activeLedger);
+		};
+		const first = next()?.additionalContext ?? "";
+		const second = next()?.additionalContext ?? "";
+		const third = next()?.additionalContext ?? "";
+		for (const earlier of [first, second]) {
+			expect(earlier).not.toContain("worktree-reaper");
+			expect(earlier).not.toContain("delivery_cleanup");
+			expect(earlier).not.toContain("bd_reconcile");
+			expect(earlier).not.toContain("Escalation");
+		}
+		// An actionable third reminder escalates exactly like an ambiguous one: the
+		// residual was measured, which is a reason to name the lifecycle, not to
+		// withhold it.
+		expect(third).toContain("report-only worktree-reaper");
+		expect(third).toContain("removes nothing");
+		expect(third).toContain("delivery_cleanup");
+		expect(third).not.toContain("Ambiguity remains");
+		expect(third).toContain("grants no removal, merge, or publish authority");
+	});
+
+	test("an active ledger puts bd_reconcile ahead of delivery_cleanup", () => {
+		const state = createAdvisoryState();
+		const next = () => {
+			state.lastFired = false;
+			return handleSessionStop({}, "/repo", null, new Set(), noStat, noOwn, null, state, Date.now() + 2_000, activeLedger);
+		};
+		next();
+		next();
+		const third = next()?.additionalContext ?? "";
+		expect(third.indexOf("bd_reconcile")).toBeGreaterThan(-1);
+		expect(third.indexOf("bd_reconcile")).toBeLessThan(third.indexOf("delivery_cleanup"));
+	});
+
+	test("no active ledger names delivery_cleanup alone", () => {
+		const state = createAdvisoryState();
+		const next = () => {
+			state.lastFired = false;
+			return handleSessionStop({}, "/repo", null, new Set(), noStat, noOwn, null, state, Date.now() + 2_000, retiredLedger);
+		};
+		next();
+		next();
+		const third = next()?.additionalContext ?? "";
+		expect(third).toContain("delivery_cleanup");
+		expect(third).not.toContain("bd_reconcile");
+		expect(third).toContain("report-only worktree-reaper");
+	});
+
+	test("the classification is observed once, for the third reminder only", () => {
+		const state = createAdvisoryState();
+		let asked = 0;
+		const next = () => {
+			state.lastFired = false;
+			return handleSessionStop({}, "/repo", null, new Set(), noStat, noOwn, null, state, Date.now() + 2_000, () => {
+				asked += 1;
+				return true;
+			});
+		};
+		next();
+		next();
+		expect(asked).toBe(0);
+		next();
+		expect(asked).toBe(1);
+		expect(next()).toBeUndefined();
+		expect(asked).toBe(1);
+	});
+
+	test("clean observation resets even after the third reminder", () => {
+		const state = createAdvisoryState();
+		const ambiguous = () => {
+			state.lastFired = false;
+			return handleSessionStop({}, "/tmp", null, new Set(), noStat, noOwn, null, state);
+		};
+		ambiguous();
+		ambiguous();
+		ambiguous();
+		state.lastFired = false;
+		expect(handleSessionStop({}, "/tmp", porcelain("## clean"), new Set(), noStat, noOwn, null, state)).toBeUndefined();
+		state.lastFired = false;
+		const next = handleSessionStop({}, "/tmp", porcelain("## feat...origin/feat [ahead 1]"), new Set(), noStat, oneOwn, "base", state);
+		expect(next?.additionalContext).toContain("Reminder 1 of 3");
+	});
 });
 
 describe("integration temp git repo", () => {
@@ -396,49 +552,30 @@ describe("integration temp git repo", () => {
 
 		expect(hasGitDir(dir)).toBe(true);
 
-		const handlers: Record<string, Array<(e: unknown, ctx?: unknown) => unknown>> = {};
-		const fakePi = {
-			zod: {},
-			registerTool: () => { },
-			on: (e: string, h: (ev: unknown, ctx?: unknown) => unknown) => {
-				const registered = handlers[e] ?? [];
-				registered.push(h);
-				handlers[e] = registered;
-			},
-		};
-		unpushedWorkAdvisory(fakePi as never);
+		const { fire } = registerAdvisory();
 
 		// Nothing attributed yet: four dirty files, all of them somebody else's.
-		expect(handlers.session_stop![0]!({}, { cwd: dir })).toBeUndefined();
+		expect(fire("session_stop", {}, { cwd: dir })).toBeUndefined();
 
-		const toolResult = handlers.tool_result![0]!;
-		toolResult({ toolName: "write", isError: false, input: { path: "mine-a.txt" } }, { cwd: dir });
-		toolResult(
-			{
-				toolName: "edit",
-				isError: false,
-				input: {},
-				details: { diff: "", path: join(dir, "mine-b.txt") },
-			},
-			{ cwd: dir },
-		);
-		toolResult(
-			{
-				toolName: "edit",
-				isError: false,
-				input: {},
-				details: { diff: "", perFileResults: [{ path: join(dir, "mine-c.txt"), diff: "" }] },
-			},
-			{ cwd: dir },
-		);
+		const toolResult = (event: unknown) => fire("tool_result", event, { cwd: dir });
+		toolResult({ toolName: "write", isError: false, input: { path: "mine-a.txt" } });
+		toolResult({
+			toolName: "edit",
+			isError: false,
+			input: {},
+			details: { diff: "", path: join(dir, "mine-b.txt") },
+		});
+		toolResult({
+			toolName: "edit",
+			isError: false,
+			input: {},
+			details: { diff: "", perFileResults: [{ path: join(dir, "mine-c.txt"), diff: "" }] },
+		});
 		// A failed write and a bash mutation must not attribute the fourth file.
-		toolResult({ toolName: "write", isError: true, input: { path: "theirs.txt" } }, { cwd: dir });
-		toolResult(
-			{ toolName: "bash", isError: false, input: { command: "sed -i s/a/b/ theirs.txt" } },
-			{ cwd: dir },
-		);
+		toolResult({ toolName: "write", isError: true, input: { path: "theirs.txt" } });
+		toolResult({ toolName: "bash", isError: false, input: { command: "sed -i s/a/b/ theirs.txt" } });
 
-		const result = handlers.session_stop![0]!({}, { cwd: dir }) as {
+		const result = fire("session_stop", {}, { cwd: dir }) as {
 			continue: boolean;
 			additionalContext: string;
 		};
@@ -452,10 +589,10 @@ describe("integration temp git repo", () => {
 		expect(result.additionalContext).toContain("~6 changed line(s)");
 		expect(result.additionalContext).toContain("mine-a.txt (+1/-1)");
 
-		expect(handlers.session_stop![0]!({}, { cwd: dir })).toBeUndefined();
+		expect(fire("session_stop", {}, { cwd: dir })).toBeUndefined();
 
-		handlers.turn_start![0]!({});
-		expect(handlers.session_stop![0]!({}, { cwd: dir })).toBeDefined();
+		fire("turn_start");
+		expect(fire("session_stop", {}, { cwd: dir })).toBeDefined();
 	});
 
 	test.skipIf(!gitOk)("counts only commits made after the session opened", () => {
@@ -489,28 +626,18 @@ describe("integration temp git repo", () => {
 		run(["add", "."]);
 		run(["commit", "-m", "human work"]);
 
-		const handlers: Record<string, Array<(e: unknown, ctx?: unknown) => unknown>> = {};
-		const fakePi = {
-			zod: {},
-			registerTool: () => { },
-			on: (e: string, h: (ev: unknown, ctx?: unknown) => unknown) => {
-				const registered = handlers[e] ?? [];
-				registered.push(h);
-				handlers[e] = registered;
-			},
-		};
-		unpushedWorkAdvisory(fakePi as never);
-		handlers.session_start![0]!({}, { cwd: work });
+		const { fire } = registerAdvisory();
+		fire("session_start", {}, { cwd: work });
 
 		// One commit ahead of origin, none of it this session's: silence.
-		expect(handlers.session_stop![0]!({}, { cwd: work })).toBeUndefined();
+		expect(fire("session_stop", {}, { cwd: work })).toBeUndefined();
 
 		writeFileSync(join(work, "mine.txt"), "mine\n");
 		run(["add", "."]);
 		run(["commit", "-m", "agent work"]);
-		handlers.turn_start![0]!({});
+		fire("turn_start");
 
-		const result = handlers.session_stop![0]!({}, { cwd: work }) as {
+		const result = fire("session_stop", {}, { cwd: work }) as {
 			additionalContext: string;
 		};
 		// Two commits ahead of origin, exactly one of them made after the baseline.
@@ -519,5 +646,132 @@ describe("integration temp git repo", () => {
 
 		rmSync(work, { recursive: true, force: true });
 		rmSync(origin, { recursive: true, force: true });
+	});
+
+	test.skipIf(!gitOk)("only an attributed write resets the reminder count", () => {
+		const work = mkdtempSync(join(tmpdir(), "unpushed-adv-reset-"));
+		const origin = mkdtempSync(join(tmpdir(), "unpushed-adv-reset-origin-"));
+		// Repository-level isolation rather than `-c`, for the push reason documented
+		// in the preceding test.
+		const run = (args: string[], cwd = work) =>
+			Bun.spawnSync(["git", ...args], { cwd, stdout: "pipe", stderr: "pipe" });
+
+		run(["init", "--bare", "-b", "topic"], origin);
+		run(["config", "core.hooksPath", "/dev/null"], origin);
+		run(["config", "commit.gpgsign", "false"], origin);
+		run(["init", "-b", "topic"]);
+		run(["config", "core.hooksPath", "/dev/null"]);
+		run(["config", "commit.gpgsign", "false"]);
+		run(["config", "user.email", "t@t.test"]);
+		run(["config", "user.name", "t"]);
+		writeFileSync(join(work, "a.txt"), "one\n");
+		run(["add", "."]);
+		run(["commit", "-m", "c1"]);
+		run(["remote", "add", "origin", origin]);
+		run(["push", "-u", "origin", "topic"]);
+
+		const { fire } = registerAdvisory();
+		fire("session_start", {}, { cwd: work });
+
+		// One commit made after the baseline and never pushed, so every stop advises
+		// until the cap is reached.
+		writeFileSync(join(work, "mine.txt"), "mine\n");
+		run(["add", "."]);
+		run(["commit", "-m", "agent work"]);
+
+		const wrote = (path: string) =>
+			fire("tool_result", { toolName: "write", isError: false, input: { path } }, { cwd: work });
+		const stop = () => {
+			fire("turn_start");
+			return fire("session_stop", {}, { cwd: work }) as { additionalContext: string } | undefined;
+		};
+
+		expect(stop()?.additionalContext).toContain("Reminder 1 of 3");
+		expect(stop()?.additionalContext).toContain("Reminder 2 of 3");
+
+		// A tool-device URI is not a file, so it attributes nothing and is not
+		// progress: escalation continues to the third and final reminder.
+		wrote("xd://report_issue");
+		expect(stop()?.additionalContext).toContain("Reminder 3 of 3");
+		expect(stop()).toBeUndefined();
+
+		// A real repository path is progress, and the count starts over.
+		writeFileSync(join(work, "written.txt"), "written\n");
+		wrote("written.txt");
+		expect(stop()?.additionalContext).toContain("Reminder 1 of 3");
+
+		rmSync(work, { recursive: true, force: true });
+		rmSync(origin, { recursive: true, force: true });
+	});
+
+	test.skipIf(!gitOk)("classifies the ledger at the canonical root, not at the linked worktree", () => {
+		const canonical = mkdtempSync(join(tmpdir(), "unpushed-adv-canonical-"));
+		const linked = join(mkdtempSync(join(tmpdir(), "unpushed-adv-linked-")), "wt");
+		const run = (args: string[], cwd = canonical) =>
+			Bun.spawnSync(["git", ...GIT_ISOLATED, ...args], { cwd, stdout: "pipe", stderr: "pipe" });
+
+		run(["init", "-b", "topic"]);
+		run(["config", "user.email", "t@t.test"]);
+		run(["config", "user.name", "t"]);
+		writeFileSync(join(canonical, "a.txt"), "one\n");
+		run(["add", "."]);
+		run(["commit", "-m", "c1"]);
+		run(["worktree", "add", "--detach", linked]);
+		expect(hasGitDir(linked)).toBe(true);
+
+		// The worktree is outside the checkout, so the upward `.beads` walk started
+		// there sees nothing: only the canonical root carries the ledger.
+		mkdirSync(join(canonical, ".beads"));
+		expect(ledgerActive(linked)).toBe(false);
+		expect(canonicalLedgerActive(linked)).toBe(true);
+
+		writeFileSync(join(canonical, ".beads", "RETIRED"), "retired\n");
+		expect(canonicalLedgerActive(linked)).toBe(false);
+
+		// Outside any repository there is no canonical root to ask about.
+		expect(canonicalLedgerActive(mkdtempSync(join(tmpdir(), "unpushed-adv-bare-")))).toBe(false);
+
+		run(["worktree", "remove", "--force", linked]);
+		rmSync(canonical, { recursive: true, force: true });
+	});
+
+	test.skipIf(!gitOk)("observing the tree never writes the repository index", () => {
+		const work = mkdtempSync(join(tmpdir(), "unpushed-adv-locks-"));
+		const run = (args: string[]) =>
+			Bun.spawnSync(["git", ...GIT_ISOLATED, ...args], { cwd: work, stdout: "pipe", stderr: "pipe" });
+
+		run(["init", "-b", "topic"]);
+		run(["config", "user.email", "t@t.test"]);
+		run(["config", "user.name", "t"]);
+		const files = ["mine-a.txt", "mine-b.txt", "mine-c.txt", "stat-only.txt"];
+		for (const file of files) writeFileSync(join(work, file), "one\n");
+		run(["add", "."]);
+		run(["commit", "-m", "c1"]);
+		for (const file of files.slice(0, 3)) writeFileSync(join(work, file), "two\n");
+
+		// `stat-only.txt` keeps its committed content and gets a future timestamp, so
+		// a plain `git status` would refresh the stale stat data and write the index
+		// back. That is the optional lock, and an observation must not take it: the
+		// user or another agent may be running a real command in this checkout.
+		const future = new Date(Date.now() + 5_000);
+		utimesSync(join(work, "stat-only.txt"), future, future);
+		const index = join(work, ".git", "index");
+		const stamp = () => {
+			const stats = statSync(index);
+			return `${stats.mtimeMs}:${stats.size}:${stats.ino}`;
+		};
+		const before = stamp();
+
+		const { fire } = registerAdvisory();
+		for (const file of files.slice(0, 3)) {
+			fire("tool_result", { toolName: "write", isError: false, input: { path: file } }, { cwd: work });
+		}
+		const result = fire("session_stop", {}, { cwd: work }) as { additionalContext: string } | undefined;
+
+		// The reads really happened: the reminder names what they measured.
+		expect(result?.additionalContext).toContain("mine-a.txt (+1/-1)");
+		expect(stamp()).toBe(before);
+
+		rmSync(work, { recursive: true, force: true });
 	});
 });

@@ -1770,6 +1770,7 @@ function decideCommandParsed(parsed, active) {
 
 // extensions/session-beads-lifecycle.ts
 import { isAbsolute as isAbsolute3, join as join3, resolve as resolve5 } from "path";
+var EMBEDDED_PIN_ENV = { BEADS_DOLT_SHARED_SERVER: "" };
 function pinBashInput(input, pin) {
   if (pin === undefined || input === null || typeof input !== "object")
     return;
@@ -1780,7 +1781,7 @@ function pinBashInput(input, pin) {
   const current = env?.BEADS_DIR;
   if (typeof current === "string" && current !== "")
     return;
-  return { ...record, env: { ...env ?? {}, BEADS_DIR: pin } };
+  return { ...record, env: { ...env ?? {}, ...EMBEDDED_PIN_ENV, BEADS_DIR: pin } };
 }
 function bashCallCwd(input, fallback) {
   if (input === null || typeof input !== "object")

@@ -1,6 +1,6 @@
 {
   "name": "delivery",
-  "description": "Delivery and git-workflow rules, plus a pull-request review agent.",
+  "description": "Delivery workflow guidance with pull-request review, landing, cleanup, and hygiene tools.",
   "version": "0.12.0",
   "category": "devops"
 }
