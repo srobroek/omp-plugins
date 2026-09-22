@@ -721,9 +721,10 @@ describe("delivery_land", () => {
 			// view, merge, re-read, settings read, settings write.
 			expect(forgeCalls.length).toBeGreaterThan(3);
 			for (const call of forgeCalls) {
-				const pinnedGitLabApi = cli === "glab" && call.argv[1] === "api";
+				const glabCall = cli === "glab";
+				const pinnedGitLabApi = glabCall && call.argv[1] === "api";
 				for (const key of Object.keys(redirectors)) {
-					if (pinnedGitLabApi && (key === "GITLAB_HOST" || key === "GITLAB_API_HOST")) {
+					if (glabCall && (key === "GITLAB_HOST" || key === "GITLAB_API_HOST")) {
 						expect(call.env?.[key]).toBe("gitlab.com");
 					} else {
 						expect(call.env?.[key]).toBeUndefined();

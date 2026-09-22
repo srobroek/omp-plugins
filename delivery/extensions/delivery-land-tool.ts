@@ -591,15 +591,15 @@ export function landPullRequest(params: LandParams, deps: LandDeps = {}): LandOu
 		);
 	}
 	const cliRepo = forge === "gitlab" ? `${target.canonicalHost}/${nameWithOwner}` : nameWithOwner;
-	const settingsEnv = forge === "gitlab"
+	const forgeCommandEnv = forge === "gitlab"
 		? Object.assign(Object.create(null) as Record<string, string>, forgeEnv, {
 			GITLAB_HOST: target.canonicalHost,
 			GITLAB_API_HOST: target.canonicalHost,
 		})
 		: forgeEnv;
-	const settingsRun: CliRunner = (argv, options) => run(argv, { ...options, env: options.env ?? settingsEnv });
+	const boundForgeRun: CliRunner = (argv, options) => run(argv, { ...options, env: options.env ?? forgeCommandEnv });
 
-	const first = readPr(run, forge, cliRepo, number, FORGE_TIMEOUT_MS, forgeEnv);
+	const first = readPr(run, forge, cliRepo, number, FORGE_TIMEOUT_MS, forgeCommandEnv);
 	if ("reason" in first) return refuse(first.reason);
 	const subject = subjectDrift(first.pr, requested, null, first.argv.join(" "));
 	if (subject !== null) return refuse(`${subject}; no merge was issued and no receipt was written`);
@@ -622,10 +622,10 @@ export function landPullRequest(params: LandParams, deps: LandDeps = {}): LandOu
 	const unnamed = missingBeadIdentity(identity.ids, first.pr.headRefName, repository.ledger);
 	if (unnamed !== null) return refuse(`${unnamed}; no merge was issued and no receipt was written`);
 
-	const observedAutoDelete: ReceiptAutoDelete = autoDeleteSetting(forge, nameWithOwner, settingsRun);
+	const observedAutoDelete: ReceiptAutoDelete = autoDeleteSetting(forge, nameWithOwner, boundForgeRun);
 	const notes: string[] = [];
 	if (params.setupAutoDelete === true) {
-		const enabled = enableAutoDelete(forge, nameWithOwner, settingsRun);
+		const enabled = enableAutoDelete(forge, nameWithOwner, boundForgeRun);
 		notes.push(
 			enabled.ok
 				? `setupAutoDelete: the forge accepted a deletion-on-merge write; the setting observed before the request was ${observedAutoDelete}, which is what this receipt records because acceptance is not a re-read.`
@@ -661,14 +661,14 @@ export function landPullRequest(params: LandParams, deps: LandDeps = {}): LandOu
 		} catch (error) {
 			return refuse(error instanceof Error ? error.message : String(error));
 		}
-		const merged = run(mergeArgv, { cwd, timeoutMs: FORGE_TIMEOUT_MS, env: forgeEnv });
+		const merged = run(mergeArgv, { cwd, timeoutMs: FORGE_TIMEOUT_MS, env: forgeCommandEnv });
 		if (!merged.ok || merged.error !== undefined || merged.exitCode !== 0) {
 			const observed = merged.error ?? (merged.exitCode === null ? "no exit status" : `exit ${merged.exitCode}`);
 			const stderr = merged.stderr.trim();
 			const detail = stderr === "" ? "" : `; stderr: ${stderr.slice(0, 400)}`;
 			return refuse(`${mergeArgv.join(" ")}: observed ${observed}, expected exit 0${detail}; no receipt was written`);
 		}
-		const second = readPr(run, forge, cliRepo, number, FORGE_TIMEOUT_MS, forgeEnv);
+		const second = readPr(run, forge, cliRepo, number, FORGE_TIMEOUT_MS, forgeCommandEnv);
 		rereadArgv = second.argv;
 		if ("reason" in second) return refuse(second.reason);
 		// The re-read must describe the same pull request, at the same head, on the same
