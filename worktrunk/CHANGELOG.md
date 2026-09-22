@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.3.1](https://github.com/srobroek/omp-plugins/compare/worktrunk--v1.3.0...worktrunk--v1.3.1) (2026-09-22)
+
+
+### Bug Fixes
+
+* **worktrunk:** recognise a squash-landed branch instead of keeping it forever ([#496](https://github.com/srobroek/omp-plugins/issues/496)) ([8f1b304](https://github.com/srobroek/omp-plugins/commit/8f1b30441e941a1c6ba1f5f26ea7cd6657d00bba))
+
 ## [1.3.0](https://github.com/srobroek/omp-plugins/compare/worktrunk--v1.2.1...worktrunk--v1.3.0) (2026-09-22)
 
 
