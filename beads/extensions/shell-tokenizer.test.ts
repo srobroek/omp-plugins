@@ -1,6 +1,5 @@
 import { describe, expect, test } from "bun:test";
 import { tokenize as tokenizeSpeckit } from "../../speckit/extensions/taskstoissues-gate.ts";
-import { tokenize as tokenizeWorktrunk } from "../../worktrunk/extensions/worktree-gate.ts";
 import { tokenize as tokenizeBeads } from "./bd-close-gate.ts";
 import { tokenize as tokenizeShellCommand } from "./shell-command.ts";
 
@@ -8,7 +7,6 @@ type Tokenizer = (command: string) => unknown[] | null;
 
 const tokenizers: Record<string, Tokenizer> = {
 	beads: command => tokenizeBeads(command),
-	worktrunk: command => tokenizeWorktrunk(command),
 	speckit: command => tokenizeSpeckit(command),
 	shellCommand: command => tokenizeShellCommand(command),
 };
@@ -56,12 +54,12 @@ const command = "env FOO=1 cat <<EOF | tee /tmp/out && printf '%s' \"nested 'quo
 const quotedCommand = command.replace("<<EOF", "<<'EOF'");
 
 describe("shared shell tokenizer corpus", () => {
-	test("all four isolated tokenizer paths agree on executable values", () => {
+	test("all remaining isolated tokenizer paths agree on executable values", () => {
 		const results = Object.fromEntries(Object.entries(tokenizers).map(([name, tokenize]) => [name, values(tokenize(command))]));
 		for (const result of Object.values(results)) expect(result).toEqual(unquoted);
 	});
 
-	test("quoted heredoc bodies are inert for every tokenizer path", () => {
+	test("quoted heredoc bodies are inert for every remaining tokenizer path", () => {
 		for (const tokenize of Object.values(tokenizers)) {
 			const result = values(tokenize(quotedCommand));
 			expect(result).not.toContain("bd");

@@ -1,6 +1,6 @@
 {
   "name": "@srobroek/worktrunk",
-  "version": "1.3.1",
+  "version": "2.0.0",
   "description": "Refuse OMP native isolation, because a cloned .beads forks the embedded ledger. Worktree discipline itself is steering.",
   "private": true,
   "omp": {

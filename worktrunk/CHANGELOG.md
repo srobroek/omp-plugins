@@ -1,5 +1,17 @@
 # Changelog
 
+## [2.0.0]
+
+### ⚠ BREAKING CHANGES
+
+* **worktrunk:** remove the canonical-mutation gate and its helper/test modules: `worktree-gate.ts`, `worktree-gate.test.ts`, `presence.test.ts`, and `shell-tokenizer.ts`
+* **worktrunk:** remove `worktrunk-bd-contention-retry`, `worktrunk-destructive-branch-provenance`, and `worktrunk-provisioning-required`
+* **worktrunk:** make worktree discipline steering rather than an enforced gate because the gate's own audit recorded no accidental canonical write while it caused measured friction
+
+### Features
+
+* **worktrunk:** add the `worktrunk-preflight` skill
+
 ## [Unreleased]
 
 ### ⚠ BREAKING CHANGES
