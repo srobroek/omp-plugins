@@ -1,23 +1,19 @@
 ---
 name: worktrunk-isolation-disabled
-condition: ["(?s)\"isolated\"\\s*:\\s*true", "(?m)^\\s*isolated\\s*:\\s*true\\s*$"]
-scope: "tool:task"
-interruptMode: always
+alwaysApply: true
 ---
 
-MUST NOT spawn an isolated subagent. OMP native isolation is retired: its
-backends are filesystem clones of the whole checkout, so a child receives its own
-copy of the ledger directory. An embedded single-file database that has been
-copied is a second ledger — every claim, comment and closure the child writes is
-invisible to its siblings and is discarded with the clone, while the parent still
-believes the work is unclaimed.
+MUST keep `task.isolation.enabled: false`. Native isolation clones the checkout
+with a filesystem clone, so the clone carries its own `.beads`, and a copied
+embedded store is a second ledger: claims, comments and closures written in it are
+invisible to every sibling and are discarded with the clone. There is no
+git-worktree backend for native isolation, so it cannot be reconfigured into the
+worktree model, only turned off.
 
-MUST give each agent a git linked worktree instead. A worktree shares one
-`.git` and one ledger with every sibling:
-`wt switch -y --create --no-cd --base <base> --format json omp/agent/<bead-id>`.
+Verify with `omp config get task.isolation.enabled --json`. Give each agent a git
+linked worktree instead, per `worktrunk-worktree-required`.
 
-Verify the setting with `omp config get task.isolation.enabled --json`; it must
-report `false`. When it reports `true`, set `task.isolation.enabled: false` under
-`task.isolation` in `~/.omp/agent/config.yml`. Reconfiguring the backend does not
-help: there is no git-worktree isolation backend, so the only correct value is
-off.
+This is the standing instruction, and it is the only thing that sets the setting
+correctly in advance. The `isolation-precheck` extension refuses a `task` call
+requesting `isolated: true`, unconditionally and with no setting to switch it off,
+but it can only fire once an isolated child has already been attempted.

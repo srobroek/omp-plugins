@@ -1,10 +1,6 @@
 import type { ExtensionAPI, ExtensionContext, ToolCallEvent } from "@oh-my-pi/pi-coding-agent";
 import { decideActorParsed, environmentForInput } from "./bd-actor-gate.ts";
-import { decideBdCloseParsed } from "./bd-close-gate.ts";
 import { decideEmbeddedWrite } from "./bd-embedded-write-lock.ts";
-import { decideBdInitParsed } from "./bd-init-advisory.ts";
-import { decideLeaseClaim } from "./bd-lease-gate.ts";
-import { beadsActive, decideCommandParsed, repositoryControlled, repositoryFromCurrentCheckout, repositoryFromGhCreate } from "./pr-bead-link-gate.ts";
 import { rewriteBashInput } from "./session-beads-lifecycle.ts";
 import { blockReason, commandFromInput, type ParsedCommand, parse, settingsEnabled } from "./shell-command.ts";
 
@@ -27,11 +23,10 @@ function suffix(gate: string, reason: string, resolution = "inspect the command 
 }
 
 /**
- * Every beads gate sees the same validated parse; rewrites happen only after all decisions allow.
+ * Every store-safety gate sees the same validated parse; rewrites happen only after all decisions allow.
  *
- * A gate that rewrites hands its result to the next one, so the embedded-write runner
- * wrapper and the session's `BEADS_DIR` pin compose into one revised input instead of
- * the later rewrite dropping the earlier one.
+ * The write-lock wrapper and the session's `BEADS_DIR` pin compose into one revised input,
+ * so the later rewrite never drops the earlier one.
  */
 async function decide(parsed: ParsedCommand, event: ToolCallEvent, ctx: ExtensionContext, pi: ExtensionAPI, deadline: number): Promise<GateDecision | { input: Record<string, unknown> } | undefined> {
 	let input = event.input as Record<string, unknown>;
@@ -41,25 +36,13 @@ async function decide(parsed: ParsedCommand, event: ToolCallEvent, ctx: Extensio
 	if (settingsEnabled("beads", "bd-actor-gate", cwd)) {
 		const actor = decideActorParsed(parsed, env);
 		if (actor.kind === "block") return suffix("bd-actor-gate", actor.reason);
-        if (actor.kind === "advisory" && typeof pi.sendMessage === "function") pi.sendMessage({ customType: "beads-bd-actor-advisory", content: actor.text, display: true, attribution: "user" }, { triggerTurn: false });
+		if (actor.kind === "advisory" && typeof pi.sendMessage === "function") pi.sendMessage({ customType: "beads-bd-actor-advisory", content: actor.text, display: true, attribution: "user" }, { triggerTurn: false });
 	}
-	if (settingsEnabled("beads", "bd-close-gate", cwd)) {
-		const close = await decideBdCloseParsed(parsed, cwd, deadline);
-		if (close) return suffix("bd-close-gate", close.reason);
-	}
-    if (settingsEnabled("beads", "bd-init-advisory", cwd)) {
-        const advisory = decideBdInitParsed(parsed);
-        if (advisory && typeof pi.sendMessage === "function") pi.sendMessage({ customType: "beads-bd-init-advisory", content: advisory, display: true, attribution: "user" }, { triggerTurn: false });
-    }
-	if (settingsEnabled("beads", "bd-lease-gate", cwd)) await decideLeaseClaim(parsed, event, ctx);
+
 	if (settingsEnabled("beads", "bd-embedded-write-lock", cwd)) {
 		const embedded = await decideEmbeddedWrite(parsed, event, ctx, deadline);
 		if (embedded?.kind === "block") return suffix("bd-embedded-write-lock", embedded.reason);
 		if (embedded?.kind === "rewrite") input = embedded.input;
-	}
-	if (settingsEnabled("beads", "pr-bead-link-gate", cwd)) {
-		const pr = decideCommandParsed(parsed, segment => beadsActive(cwd) && repositoryControlled(repositoryFromGhCreate(segment) ?? repositoryFromCurrentCheckout(cwd)));
-		if (pr) return suffix("pr-bead-link-gate", pr.reason);
 	}
 	const rewritten = rewriteBashInput(input, ctx) ?? input;
 	if (JSON.stringify(rewritten) !== JSON.stringify(event.input)) return { input: rewritten };

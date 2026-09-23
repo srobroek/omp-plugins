@@ -1,68 +1,24 @@
 # Beads
 
-Beads records work with the bd CLI. Its graph survives process restarts and crashes.
+The Beads plugin provides direct `bd` issue tracking with a shared embedded ledger and store-safety controls.
 
-Install this plugin in a repository with `.beads/`. The plugin pins that repository embedded store for session commands. Calls in another repository remain unpinned.
+## Steering
 
-## Skills
+The `beads-lite` skill documents the direct workflow: run `bd prime`, choose an issue type and priority, add dependencies, label work with `role:<name>`, pull and claim ready work, and close it with evidence.
 
-| Skill | Use |
-| --- | --- |
-| `build-formula` | Author and debug formulas. |
-| `adr` | Record architecture decisions. |
-| `beads-setup` | Initialize a workspace. |
-| `beads-lifecycle` | Manage bead status and gates. |
-| `beads-carriers` | Choose authoritative records. |
-| `beads-composition` | Choose issues and formulas. |
-| `beads-storage-mode` | Configure the embedded store and session `BEADS_DIR` pin. |
-| `maintenance-intake` | Drain incidental work through a standing maintenance epic. |
+The `beads-ledger` rule makes the ledger the source of truth for work state. The `beads-evidence` rule requires checkable evidence on every close.
 
-## Rules
+The store is embedded and lives in the canonical checkout, and linked worktrees share it. The session lifecycle extension pins `BEADS_DIR` to the canonical checkout's `.beads` store; `BEADS_DIR` does not redirect `bd init` away from canonical. No Dolt server may be started. Two concurrent writers corrupt the Dolt journal, so a contended `bd` call is retried rather than worked around.
 
-| Rule | When |
-| --- | --- |
-| `beads-reconcile-from-receipts` | When reconciling numeric-v1 landing receipts through available `bd_reconcile`; require exact proof before closure. |
+## Store-safety extensions
 
-### `bd_reconcile`
+The package registers `bash-gates` as the dispatcher entrypoint and `session-beads-lifecycle` as the session lifecycle extension. `bash-gates` dispatches exactly two controls:
 
-When `bd_reconcile` is available, read-only `show` and `list` operations scan landing receipts and plan repairs. `apply` defaults to `false` and writes nothing. Inspect the plan and get execution approval before setting `apply: true`. Safe convergent repairs still require exact close proof for automatic closure.
+- `bd-embedded-write-lock` serializes writes to the embedded store and runs mutations through `bd-embedded-write-runner`.
+- `bd-actor-gate` requires an actor identity for writes that must be attributable.
 
-## Extensions
+The write runner is registered as the package program and must remain available. The session lifecycle extension pins `BEADS_DIR` to the repository's canonical `.beads` store so linked worktrees use one embedded ledger.
 
-- `bd-embedded-write-lock` serializes mutations across linked checkouts.
-- `bd-actor-gate` requires an actor for mutations.
-- `bd-lease-gate` records lease metadata after claims.
-- `bd-close-gate` protects close operations.
-- `session-beads-lifecycle` reports unresolved claims and failures.
-- `pr-bead-link-gate` links pull requests to beads. A live ledger requires a Bead, Closes-Bead, or Bead-Id trailer; a regular-file `.beads/RETIRED` marker opts out the nearest ledger. This marker belongs to the gate, not to bd configuration; `No-Bead:` is not accepted.
-## Session behavior
+## Removed surface
 
-The session extension reports unresolved gates at startup. It reports held claims and pending failures at session end.
-
-The embedded write lock covers plugin-managed Beads mutations. It rejects ambiguous command shapes instead of guessing their target.
-- `bd-lease-gate`: writes `lease_host` and `lease_pid` metadata after a claim succeeds, so a
-  later session can prove a holder gone instead of guessing from staleness.
-  It reads the bead ids from `bd`'s own output and stamps them with a separate
-  `bd update`, so no command is ever rewritten; when detection misses, the bead
-  simply carries no anchors, which the claiming rule treats as unprovable rather
-  than dead. The pid identifies the agent process. It does not identify the shell
-  child that exits with the command.
-- `pr-bead-link-gate`: blocks `gh pr create` and the `github` device's `pr_create` when the
-  body names neither a bead nor a truthful `No-Bead:` reason, and only where a `.beads`
-  workspace exists. External repositories
-  without `.beads` are untouched; their user-facing prose must omit internal linkage.
-  It refuses rather than injecting an id, because a body it had to guess at
-  outlives the PR. A body built by `--fill`, `--body-file`, or a command
-  substitution is not visible to a tool call, so those stay a rule matter.
-
-Read the core rule for the execution contract.
-Before initialization, read the setup rule.
-Before status changes, read the lifecycle rule.
-
-## Guidance
-
-Claim work first. Keep the task bead open until its commit is ready. Close completed work with a factual reason and its delivery commit.
-
-## `bd_formula_check` deep recovery
-
-After a real pour, recover with `git restore --staged . && git checkout -- .beads/`; once the ledger is reachable, remove any created wisps with the beads CLI.
+Only the direct `bd` workflow and the store-safety controls remain; the package no longer includes the removed workflow and advisory surface.

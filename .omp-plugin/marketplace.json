@@ -100,6 +100,13 @@
       "category": "language"
     },
     {
+      "name": "orchestrate",
+      "description": "Ledger-backed delivery orchestration through role workers and verified integration.",
+      "source": "./orchestrate",
+      "version": "0.1.0",
+      "category": "development"
+    },
+    {
       "name": "project",
       "description": "Project lifecycle: license selection and user journeys.",
       "source": "./project",
@@ -178,9 +185,9 @@
     },
     {
       "name": "worktrunk",
-      "description": "Worktree discipline for every agent: a membership-based canonical-mutation guardrail and an isolation precheck.",
+      "description": "Refuse OMP native isolation, because a cloned checkout carries a copied .beads and forks the embedded ledger.",
       "source": "./worktrunk",
-      "version": "1.3.2",
+      "version": "2.0.0",
       "category": "development"
     },
     {

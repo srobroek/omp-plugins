@@ -270,15 +270,6 @@ function invocation(segment, argv) {
   }
   return tokens.slice(start);
 }
-function leadingCdCwd(command, cwd) {
-  const match = /^\s*cd\s+([^\s;&|]+)\s*&&/.exec(command);
-  if (!match)
-    return cwd;
-  const dir = match[1];
-  if (!dir || /^[-~$]/.test(dir) || /[\\`"'*?\x5b\x5d{}]/.test(dir))
-    return cwd;
-  return dir.startsWith("/") ? dir : resolve(cwd, dir);
-}
 function splitCommands(source) {
   const positions = [];
   let current = [];
@@ -432,101 +423,6 @@ function commandFromInput(input) {
     return value.cmd;
   return "";
 }
-function parsedInvocations(parsed, executable = "bd") {
-  if (parsed.unknown)
-    return [];
-  const found = [];
-  for (const position of parsed.commands) {
-    const executableName = position.executable?.split("/").pop();
-    if (executableName !== executable)
-      continue;
-    const index = position.argv.findIndex((word, i) => !position.words[i]?.quoted && (word.split("/").pop() ?? word) === executable);
-    if (index < 0)
-      continue;
-    const args = position.argv.slice(index + 1);
-    const globals = [];
-    let verb;
-    for (let i = 0;i < args.length; i++) {
-      const word = args[i];
-      if (word === undefined)
-        continue;
-      if (word.startsWith("-") && verb === undefined) {
-        globals.push(word);
-        const next = args[i + 1];
-        if (!["--global", "--claim", "--force", "--json"].includes(word) && !word.includes("=") && next !== undefined && !next.startsWith("-")) {
-          globals.push(next);
-          i++;
-        }
-        continue;
-      }
-      if (verb === undefined && !word.startsWith("\x00"))
-        verb = word;
-    }
-    found.push({ position, command: position.raw, args, verb, globals });
-  }
-  for (const child of parsed.nested)
-    found.push(...parsedInvocations(child, executable));
-  return found;
-}
-var BEAD_ID = /^[A-Za-z][A-Za-z0-9]*(?:-[A-Za-z0-9]+)+(?:\.\d+)*$/;
-var CLOSE_VERBS = { close: true, done: true };
-var DB_VALUE_FLAGS = { "--db": true, "-C": true, "--directory": true };
-var VALUE_FLAGS = { "--reason": true, "-r": true, "--message": true, "--session": true, "--assignee": true, "--status": true, "--type": true };
-function closeInvocations(command) {
-  const parsed = parse(command);
-  if (parsed.unknown)
-    return [];
-  const out = [];
-  for (const invocation of parsedInvocations(parsed)) {
-    if (!invocation.verb || CLOSE_VERBS[invocation.verb.toLowerCase()] !== true)
-      continue;
-    const ids = [];
-    const dbArgs = [];
-    const args = invocation.args;
-    let verbSeen = false;
-    for (let i = 0;i < args.length; i++) {
-      const token = args[i];
-      if (token === undefined)
-        continue;
-      if (!verbSeen) {
-        if (token.toLowerCase() === invocation.verb.toLowerCase())
-          verbSeen = true;
-        else if (token.startsWith("-")) {
-          const flag = token.split("=", 1)[0] ?? "";
-          if (DB_VALUE_FLAGS[flag] === true) {
-            dbArgs.push(token);
-            const next = args[i + 1];
-            if (!token.includes("=") && next !== undefined) {
-              dbArgs.push(next);
-              i++;
-            }
-          } else if (token === "--global")
-            dbArgs.push(token);
-        }
-        continue;
-      }
-      if (token.startsWith("-")) {
-        const flag = token.split("=", 1)[0] ?? "";
-        if (DB_VALUE_FLAGS[flag] === true) {
-          dbArgs.push(token);
-          const next = args[i + 1];
-          if (!token.includes("=") && next !== undefined) {
-            dbArgs.push(next);
-            i++;
-          }
-        } else if (token === "--global")
-          dbArgs.push(token);
-        else if (VALUE_FLAGS[flag] === true && !token.includes("=") && args[i + 1] !== undefined)
-          i++;
-        continue;
-      }
-      if (BEAD_ID.test(token))
-        ids.push(token);
-    }
-    out.push({ ids, dbArgs });
-  }
-  return out;
-}
 var settingsCache = new Map;
 function settingValue(root, plugin, gate) {
   const plugins = root.plugins;
@@ -566,106 +462,14 @@ function blockReason(input) {
   return `${input.cause}; ${input.resolution}. Disable locally: set plugins.${plugin}.gates.${input.gate}.enabled=false`;
 }
 // extensions/bd-close-gate.ts
-var TIMEOUT_MS = 25000;
-var injectedRun = null;
-function timeoutError() {
-  return new Error("bd show lookup timed out; gate types remain unverified");
-}
 function tokenize2(command) {
   return tokenizeShell(command).map(({ value }) => value);
-}
-function denyReason(gateIds) {
-  return `blocked by beads (a gate bead is resolved, never closed): ${gateIds.join(", ")} ` + "is a gate. `bd close` on it flips status to closed and does unblock the waiting " + "bead, so nothing fails loudly -- but no gate resolution happens. A `human` gate " + "loses the decision it stood for, and a `timer`/`gh:run`/`gh:pr`/`bead` gate is " + "asserted satisfied without anything evaluating it. Run `bd gate check` to have the " + "conditions evaluated, or `bd gate resolve <gate-id>` for the manual human answer; " + "then `bd close <step-id> --reason ...` on the step the gate blocked. `--force` does " + "not lift this guard: it forces the same unrecorded close.";
-}
-async function asyncShowRun(argv, cwd, deadline = Date.now() + TIMEOUT_MS) {
-  const remaining = deadline - Date.now();
-  if (remaining <= 0)
-    throw timeoutError();
-  const proc = Bun.spawn(argv, {
-    cwd,
-    stdout: "pipe",
-    stderr: "pipe",
-    env: { ...process.env, BD_JSON_ENVELOPE: "1", BD_NO_PAGER: "1", BD_NON_INTERACTIVE: "1" }
-  });
-  let timer;
-  try {
-    const timeout = new Promise((_, reject) => {
-      timer = setTimeout(() => {
-        proc.kill("SIGKILL");
-        reject(timeoutError());
-      }, remaining);
-    });
-    const result = await Promise.race([
-      Promise.all([proc.exited, new Response(proc.stdout).text()]),
-      timeout
-    ]);
-    if (Date.now() >= deadline)
-      throw timeoutError();
-    return { exitCode: result[0], stdout: result[1] };
-  } finally {
-    if (timer !== undefined)
-      clearTimeout(timer);
-  }
-}
-async function gateIdsAmongAsync(ids, dbArgs, cwd, deadline) {
-  if (ids.length === 0)
-    return [];
-  if (Date.now() >= deadline)
-    throw timeoutError();
-  const run = injectedRun === null ? asyncShowRun : async (argv, dir, limit) => injectedRun?.(argv, dir, limit) ?? asyncShowRun(argv, dir, limit);
-  const result = await run(["bd", ...dbArgs, "show", ...ids, "--json"], cwd, deadline);
-  if (Date.now() >= deadline)
-    throw timeoutError();
-  if (result.exitCode !== 0)
-    return [];
-  let parsed;
-  try {
-    parsed = JSON.parse(result.stdout);
-  } catch {
-    throw new Error("bd show returned unreadable JSON; gate types remain unverified");
-  }
-  if (parsed !== null && typeof parsed === "object" && !Array.isArray(parsed) && "schema_version" in parsed && "data" in parsed)
-    parsed = parsed.data;
-  if (!Array.isArray(parsed))
-    throw new Error("bd show returned no issue array; gate types remain unverified");
-  const gates = [];
-  for (const row of parsed) {
-    if (!row || typeof row !== "object")
-      throw new Error("bd show returned malformed issues; gate types remain unverified");
-    const issue = row;
-    if (typeof issue.id !== "string" || typeof issue.issue_type !== "string")
-      throw new Error("bd show omitted issue identity or type; gate types remain unverified");
-    if (issue.issue_type === "gate")
-      gates.push(issue.id);
-  }
-  return gates;
-}
-async function decideBdCloseParsed(parsed, cwd = process.cwd(), deadline) {
-  const sharedDeadline = deadline ?? Date.now() + TIMEOUT_MS;
-  for (const position of parsed.commands) {
-    const invocations = closeInvocations(position.raw);
-    if (invocations.length === 0)
-      continue;
-    const gates = new Set;
-    for (const invocation of invocations) {
-      for (const id of await gateIdsAmongAsync(invocation.ids, invocation.dbArgs, cwd, sharedDeadline))
-        gates.add(id);
-    }
-    if (gates.size > 0)
-      return { block: true, reason: denyReason([...gates]) };
-  }
-  for (const child of parsed.nested) {
-    const decision = await decideBdCloseParsed(child, cwd, sharedDeadline);
-    if (decision)
-      return decision;
-  }
-  return;
 }
 
 // extensions/bd-actor-gate.ts
 var ACTOR_NOTICE_ARBITER = Symbol.for("com.srobroek.beads.actor-notice-arbiter.v1");
 var ACTOR_VARS = ["BEADS_ACTOR", "BD_ACTOR"];
-var VALUE_FLAGS2 = new Set([
+var VALUE_FLAGS = new Set([
   "--actor",
   "--database",
   "--db",
@@ -764,7 +568,7 @@ function scanGlobals(tokens, from) {
     i++;
     if (flag.includes("="))
       continue;
-    if (!VALUE_FLAGS2.has(flag))
+    if (!VALUE_FLAGS.has(flag))
       continue;
     const value = tokens[i];
     if (value !== undefined)
@@ -1127,7 +931,7 @@ var WRITE_FLAGS = {
   preflight: ["--fix"],
   ready: ["--claim"]
 };
-var BEAD_ID2 = /^[A-Za-z][A-Za-z0-9]*(?:-[A-Za-z0-9]+)+(?:\.\d+)*$/;
+var BEAD_ID = /^[A-Za-z][A-Za-z0-9]*(?:-[A-Za-z0-9]+)+(?:\.\d+)*$/;
 function writesStore(invocation) {
   if (invocation === undefined)
     return true;
@@ -1139,7 +943,7 @@ function writesStore(invocation) {
   if (verb === "comment")
     return args.length !== 1 || args[0] !== "list";
   if (verb === "comments")
-    return args.length !== 1 || !BEAD_ID2.test(args[0] ?? "");
+    return args.length !== 1 || !BEAD_ID.test(args[0] ?? "");
   const rule = READS[verb];
   if (rule === undefined)
     return true;
@@ -1625,450 +1429,13 @@ async function decideEmbeddedWrite(parsed, event, ctx, deadline = Date.now() + 2
   }
 }
 
-// extensions/bd-init-advisory.ts
-import path from "path";
-var PRE_VERB_VALUE_FLAGS = {
-  "-C": true,
-  "--db": true,
-  "--directory": true
-};
-var VALUE_FLAGS3 = { "--prefix": true };
-var ENV_ASSIGNMENT = /^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/s;
-var HELP_FLAGS = { "--help": true, "-h": true };
-var SEPARATOR = { ";": true, "&": true, "|": true, "(": true, ")": true, "$(": true, "\n": true };
-var WRAPPERS2 = {
-  command: {},
-  exec: { "-a": true },
-  nohup: {},
-  chronic: {},
-  unbuffer: {},
-  caffeinate: { "-t": true, "-w": true },
-  stdbuf: { "-i": true, "-o": true, "-e": true },
-  nice: { "-n": true, "--adjustment": true },
-  time: { "-f": true, "--format": true, "-o": true, "--output": true },
-  timeout: { "-k": true, "--kill-after": true, "-s": true, "--signal": true },
-  doas: { "-u": true, "-C": true },
-  sudo: { "-u": true, "-g": true, "-C": true, "-D": true, "-h": true, "-p": true, "-r": true, "-t": true, "-T": true, "-U": true },
-  env: { "-u": true, "--unset": true, "-C": true, "--chdir": true, "-S": true, "--split-string": true },
-  mise: {}
-};
-var POSITIONAL_BEFORE_COMMAND = { timeout: 1 };
-var SHELLS = { sh: true, bash: true, zsh: true, dash: true, ksh: true };
-var PREFILTER = /\bbd\b/;
-function followCd(current, target) {
-  if (target === undefined || target === "~")
-    return process.env.HOME;
-  if (target === "-" || target.includes("$") || target.startsWith("~"))
-    return;
-  if (path.isAbsolute(target))
-    return path.normalize(target);
-  if (current === undefined)
-    return;
-  return path.resolve(current, target);
-}
-function findInitInvocations(command, cwd = undefined) {
-  const out = [];
-  const tokens = tokenize2(command);
-  let shellCwd = cwd;
-  let i = 0;
-  while (i < tokens.length) {
-    while (i < tokens.length && SEPARATOR[tokens[i]] === true)
-      i++;
-    if (i >= tokens.length)
-      break;
-    const segmentEnd = (() => {
-      let k = i;
-      while (k < tokens.length && SEPARATOR[tokens[k]] !== true)
-        k++;
-      return k;
-    })();
-    const segment = tokens.slice(i, segmentEnd);
-    i = segmentEnd;
-    const env = {};
-    let cleared = false;
-    let segmentCwd = shellCwd;
-    let unresolved;
-    let k = 0;
-    while (k < segment.length) {
-      const word = segment[k];
-      const assignment = ENV_ASSIGNMENT.exec(word);
-      if (assignment !== null) {
-        env[assignment[1]] = assignment[2];
-        k++;
-        continue;
-      }
-      const basename = word.split("/").pop() ?? word;
-      if (basename === "cd") {
-        shellCwd = followCd(shellCwd, segment[k + 1]);
-        k = segment.length;
-        break;
-      }
-      if (SHELLS[basename] === true) {
-        let m = k + 1;
-        while (m < segment.length && segment[m].startsWith("-") && !/^-[A-Za-z]*c$/.test(segment[m]))
-          m++;
-        if (m < segment.length && /^-[A-Za-z]*c$/.test(segment[m]) && typeof segment[m + 1] === "string") {
-          const inner = segment[m + 1];
-          if (inner.includes("$"))
-            unresolved = true;
-          for (const nested of findInitInvocations(inner, segmentCwd)) {
-            nested.env = { ...env, ...nested.env };
-            nested.cleared = cleared || nested.cleared;
-            if (unresolved)
-              nested.unresolved = true;
-            out.push(nested);
-          }
-        }
-        k = segment.length;
-        break;
-      }
-      const valueFlags = WRAPPERS2[basename];
-      if (valueFlags === undefined)
-        break;
-      if (basename === "mise") {
-        const dash = segment.indexOf("--", k);
-        if (dash === -1) {
-          unresolved = true;
-          k = segment.length;
-          break;
-        }
-        k = dash + 1;
-        continue;
-      }
-      k++;
-      let positionals = POSITIONAL_BEFORE_COMMAND[basename] ?? 0;
-      while (k < segment.length) {
-        const opt = segment[k];
-        if (opt === "--") {
-          k++;
-          break;
-        }
-        if (opt.startsWith("-") && opt.length > 1) {
-          const eq = opt.indexOf("=");
-          const name = eq === -1 ? opt : opt.slice(0, eq);
-          const value = eq === -1 ? valueFlags[name] === true ? segment[++k] : undefined : opt.slice(eq + 1);
-          if (basename === "env") {
-            if (name === "-i")
-              cleared = true;
-            if ((name === "-u" || name === "--unset") && value !== undefined)
-              env[value] = undefined;
-            if ((name === "-C" || name === "--chdir") && value !== undefined)
-              segmentCwd = followCd(segmentCwd, value);
-            if (name === "-S" || name === "--split-string")
-              unresolved = true;
-          }
-          if (basename === "sudo" && name === "-D" && value !== undefined)
-            segmentCwd = followCd(segmentCwd, value);
-          k++;
-          continue;
-        }
-        const assign = ENV_ASSIGNMENT.exec(opt);
-        if (assign !== null && (basename === "env" || basename === "sudo")) {
-          env[assign[1]] = assign[2];
-          k++;
-          continue;
-        }
-        if (positionals > 0) {
-          positionals--;
-          k++;
-          continue;
-        }
-        break;
-      }
-    }
-    const word = segment[k];
-    if (word === undefined || (word.split("/").pop() ?? word) !== "bd") {
-      const mentionsInit = segment.some((token) => (token.split("/").pop() ?? token) === "bd" || /\bbd\b/.test(token)) && segment.some((token) => /\binit\b/.test(token));
-      if (unresolved && mentionsInit)
-        out.push({ flags: [], env, cleared, unresolved: true });
-      continue;
-    }
-    const flags = [];
-    let verb = null;
-    let prefix;
-    let dir;
-    for (let j = k + 1;j < segment.length; j++) {
-      const arg = segment[j];
-      if (arg.startsWith("-") && arg !== "-") {
-        const eq = arg.indexOf("=");
-        const name = eq === -1 ? arg : arg.slice(0, eq);
-        flags.push(name);
-        const takesValue = VALUE_FLAGS3[name] === true || verb === null && PRE_VERB_VALUE_FLAGS[name] === true;
-        let value;
-        if (eq !== -1)
-          value = arg.slice(eq + 1);
-        else if (takesValue && j + 1 < segment.length)
-          value = segment[++j];
-        if (name === "--prefix")
-          prefix = value;
-        if (name === "-C" || name === "--directory")
-          dir = value;
-        continue;
-      }
-      if (verb === null)
-        verb = arg.toLowerCase();
-    }
-    if (verb !== "init")
-      continue;
-    const invocation = { flags, env, cleared };
-    if (prefix !== undefined)
-      invocation.prefix = prefix;
-    if (dir !== undefined)
-      invocation.dir = dir;
-    if (segmentCwd !== undefined)
-      invocation.cwd = segmentCwd;
-    if (unresolved)
-      invocation.unresolved = true;
-    out.push(invocation);
-  }
-  return out;
-}
-function missingInitFlags(flags) {
-  if (flags.some((flag) => HELP_FLAGS[flag] === true))
-    return;
-  if (flags.includes("--skip-hooks"))
-    return;
-  return { skipHooks: true };
-}
-var BEADS_DIR_ADVICE = "The beads plugin pins `BEADS_DIR` for this session: the checkout's `.beads` " + "(a linked worktree resolves to the primary checkout's) is placed on Bash " + "calls in the same repository family. Calls whose working directory belongs " + "to another repository remain unpinned. A `BEADS_DIR` exported before omp " + "started is kept within the session repository. Verify with `printenv " + "BEADS_DIR`; an absolute path means the pin is in place. Do not ask the human " + "to export it or restart omp, and do not pass it on calls yourself. Unpinned, " + "a read from a directory with no `.beads/` reports `No active beads workspace " + "found`, and a copied checkout can resolve a personal database instead " + "(`$HOME/.beads` exists on this machine).";
-var SKIP_HOOKS_ADVICE = "`--skip-hooks` wherever hooks are already managed: plain `bd init` repoints " + "`core.hooksPath` and copies ~349MB of hooks, which is broken on arm64.";
-function initAdvisory(_missing) {
-  return `bd init advisory \u2014 nothing was blocked, and this speaks once per session. ` + `This \`bd init\` omits \`--skip-hooks\`. ${SKIP_HOOKS_ADVICE} ${BEADS_DIR_ADVICE} ` + `The full form is \`bd init --init-if-missing --skip-hooks\` ` + `(rule://beads-setup). Both the flag and the pin are contextual, so decide ` + `rather than re-run blind: an already-initialised repository or hooks the ` + `project deliberately owns can each make the plainer form the right call.`;
-}
-function decideBdInit(command) {
-  if (!PREFILTER.test(command))
-    return;
-  for (const invocation of findInitInvocations(command)) {
-    if (invocation.unresolved)
-      continue;
-    const missing = missingInitFlags(invocation.flags);
-    if (missing !== undefined)
-      return initAdvisory(missing);
-  }
-  return;
-}
-function decideBdInitParsed(parsed) {
-  for (const position of parsed.commands) {
-    const advisory = decideBdInit(position.raw);
-    if (advisory)
-      return advisory;
-  }
-  for (const child of parsed.nested) {
-    const advisory = decideBdInitParsed(child);
-    if (advisory)
-      return advisory;
-  }
-  return;
-}
-var ADVISED_KEY = Symbol.for("com.srobroek.beads.init-advisory.sent");
+// extensions/session-beads-lifecycle.ts
+import { isAbsolute as isAbsolute3, join as join2, resolve as resolve4 } from "path";
 
 // extensions/bd-lease-gate.ts
-var PREFILTER2 = /\bbd\b[\s\S]{0,400}?--claim\b/;
 var pendingClaims = new Map;
-function decideLeaseClaim(parsed, event, ctx) {
-  try {
-    if (event.toolName !== "bash")
-      return;
-    const command = parsed.command;
-    if (!command || !PREFILTER2.test(command))
-      return;
-    const input = event.input;
-    const sessionCwd = ctx?.cwd ?? process.cwd();
-    const inputCwd = typeof input.cwd === "string" && input.cwd ? input.cwd : sessionCwd;
-    pendingClaims.set(event.toolCallId, { cwd: leadingCdCwd(command, inputCwd), env: environmentForInput(event.input) });
-  } catch {}
-}
-
-// extensions/pr-bead-link-gate.ts
-import { execFileSync } from "child_process";
-import { existsSync as existsSync2, statSync as statSync3 } from "fs";
-import { dirname as dirname3, join as join2, resolve as resolve4 } from "path";
-var MAX_COMMAND_LENGTH = 64000;
-var BEAD_REF = /(?:^|\s)(?:Bead|Closes-Bead|Bead-Id):\s*[A-Za-z][A-Za-z0-9_-]*-[A-Za-z0-9]+/i;
-var GH_TIMEOUT_MS = 1e4;
-var VALUE_FLAGS4 = {
-  "--title": true,
-  "-t": true,
-  "--base": true,
-  "-B": true,
-  "--head": true,
-  "-H": true,
-  "--repo": true,
-  "-R": true,
-  "--reviewer": true,
-  "-r": true,
-  "--assignee": true,
-  "-a": true,
-  "--label": true,
-  "-l": true,
-  "--project": true,
-  "-p": true,
-  "--milestone": true,
-  "-m": true,
-  "--body-file": true,
-  "-F": true,
-  "--template": true,
-  "-T": true
-};
-var REASON = "This PR names no bead. A live ledger requires a Bead: <id>, Closes-Bead: <id>, or Bead-Id: <id> trailer. To opt out, retire the nearest ledger with this gate's regular-file .beads/RETIRED marker; No-Bead: is not accepted.";
-function beadsActive(dir) {
-  let current = resolve4(dir);
-  for (;; ) {
-    const beads = join2(current, ".beads");
-    if (existsSync2(beads)) {
-      try {
-        return !statSync3(join2(beads, "RETIRED")).isFile();
-      } catch {
-        return true;
-      }
-    }
-    const parent = dirname3(current);
-    if (parent === current)
-      return false;
-    current = parent;
-  }
-}
-function bodyOfGhCreate(segment) {
-  const tokens = invocation(segment, ["gh", "pr", "create"]);
-  if (!tokens)
-    return null;
-  let body = null;
-  for (let i = 3;i < tokens.length; i++) {
-    const token = tokens[i];
-    if (!token)
-      continue;
-    if (!token.quoted && token.value === "--")
-      break;
-    if (token.quoted)
-      continue;
-    if (VALUE_FLAGS4[token.value]) {
-      i++;
-      continue;
-    }
-    if (token.value === "--body" || token.value === "-b") {
-      body = tokens[i + 1]?.value ?? "";
-      i++;
-      continue;
-    }
-    if (token.value.startsWith("--body=")) {
-      body = token.value.slice("--body=".length);
-      continue;
-    }
-    const cluster = /^-([A-Za-z]*)b(=?)(.*)$/.exec(token.value);
-    if (cluster && !token.value.startsWith("--")) {
-      const attached = cluster[3] ?? "";
-      body = attached.length > 0 || cluster[2] === "=" ? attached : tokens[++i]?.value ?? "";
-    }
-  }
-  return body;
-}
-function decidePrCreate(body, active) {
-  if (active === false || typeof active !== "boolean" && active.kind === "uncontrolled")
-    return null;
-  if (body === null)
-    return null;
-  if (BEAD_REF.test(body))
-    return null;
-  if (typeof active !== "boolean" && active.kind === "unknown") {
-    return {
-      block: true,
-      reason: `${active.reason}. This PR must name a bead while repository control is unknown.`
-    };
-  }
-  return { block: true, reason: REASON };
-}
-function decideCommand(command, active) {
-  if (command.length > MAX_COMMAND_LENGTH)
-    return null;
-  for (const segment of commandSegments(command)) {
-    const body = bodyOfGhCreate(segment);
-    if (body === null || BEAD_REF.test(body))
-      continue;
-    const decision = decidePrCreate(body, typeof active === "function" ? active(segment) : active);
-    if (decision)
-      return decision;
-  }
-  return null;
-}
-function controlledByViewerPermission(permission) {
-  return permission === "WRITE" || permission === "MAINTAIN" || permission === "ADMIN";
-}
-function repositoryFromGhCreate(command) {
-  const tokens = invocation(command, ["gh", "pr", "create"]);
-  if (!tokens)
-    return null;
-  let selected = null;
-  for (let i = 3;i < tokens.length; i += 1) {
-    const token = tokens[i];
-    const value = token.value;
-    if (value === "--repo" || value === "-R") {
-      const next = tokens[++i];
-      selected = next?.value ?? null;
-    } else if (value.startsWith("--repo=")) {
-      selected = value.slice(7);
-    } else if (value.startsWith("-R") && value.length > 2) {
-      selected = value.slice(2);
-    } else if (/^-[A-Za-z]*R.+$/.test(value) && value.length > 3) {
-      selected = value.slice(value.indexOf("R") + 1);
-    } else if (value.startsWith("-") && VALUE_FLAGS4[value] === true) {
-      i += 1;
-    }
-  }
-  return selected && /^(?:[^/\s]+\/)?[^/\s]+\/[^/\s]+$/.test(selected) ? selected : null;
-}
-function repositoryFromView(view) {
-  if (typeof view.nameWithOwner !== "string")
-    return null;
-  if (view.isFork === true)
-    return typeof view.parent?.nameWithOwner === "string" ? view.parent.nameWithOwner : null;
-  if (view.isFork === false)
-    return view.nameWithOwner;
-  return null;
-}
-function repositoryFromCurrentCheckout(cwd) {
-  try {
-    const raw = execFileSync("gh", ["repo", "view", "--json", "nameWithOwner,isFork,parent"], {
-      cwd,
-      encoding: "utf8",
-      timeout: GH_TIMEOUT_MS,
-      stdio: ["ignore", "pipe", "pipe"]
-    });
-    return repositoryFromView(JSON.parse(raw));
-  } catch {
-    return null;
-  }
-}
-function repositoryControlled(repo) {
-  if (!repo)
-    return { kind: "unknown", reason: "Repository permission could not be determined because the repository could not be identified" };
-  try {
-    const permission = execFileSync("gh", ["repo", "view", repo, "--json", "viewerPermission", "--jq", ".viewerPermission"], {
-      encoding: "utf8",
-      timeout: GH_TIMEOUT_MS,
-      stdio: ["ignore", "pipe", "pipe"]
-    }).trim();
-    return controlledByViewerPermission(permission) ? { kind: "controlled" } : { kind: "uncontrolled" };
-  } catch (error) {
-    const failure = error instanceof Error ? error.message : String(error);
-    return { kind: "unknown", reason: `Repository permission could not be determined: ${failure}` };
-  }
-}
-function decideCommandParsed(parsed, active) {
-  for (const segment of parsed.segments) {
-    const decision = decideCommand(segment.join(" "), active);
-    if (decision)
-      return decision;
-  }
-  for (const child of parsed.nested) {
-    const decision = decideCommandParsed(child, active);
-    if (decision)
-      return decision;
-  }
-  return null;
-}
 
 // extensions/session-beads-lifecycle.ts
-import { isAbsolute as isAbsolute3, join as join3, resolve as resolve5 } from "path";
 var EMBEDDED_PIN_ENV = { BEADS_DOLT_SHARED_SERVER: "" };
 function pinBashInput(input, pin) {
   if (pin === undefined || input === null || typeof input !== "object")
@@ -2086,7 +1453,7 @@ function bashCallCwd(input, fallback) {
   if (input === null || typeof input !== "object")
     return fallback;
   const cwd = input.cwd;
-  return typeof cwd === "string" && cwd !== "" ? resolve5(fallback, cwd) : fallback;
+  return typeof cwd === "string" && cwd !== "" ? resolve4(fallback, cwd) : fallback;
 }
 var sessionPinGetter;
 function pinnedBeadsDir(cwd, ctx) {
@@ -2124,29 +1491,12 @@ async function decide(parsed, event, ctx, pi, deadline) {
     if (actor.kind === "advisory" && typeof pi.sendMessage === "function")
       pi.sendMessage({ customType: "beads-bd-actor-advisory", content: actor.text, display: true, attribution: "user" }, { triggerTurn: false });
   }
-  if (settingsEnabled("beads", "bd-close-gate", cwd)) {
-    const close = await decideBdCloseParsed(parsed, cwd, deadline);
-    if (close)
-      return suffix("bd-close-gate", close.reason);
-  }
-  if (settingsEnabled("beads", "bd-init-advisory", cwd)) {
-    const advisory = decideBdInitParsed(parsed);
-    if (advisory && typeof pi.sendMessage === "function")
-      pi.sendMessage({ customType: "beads-bd-init-advisory", content: advisory, display: true, attribution: "user" }, { triggerTurn: false });
-  }
-  if (settingsEnabled("beads", "bd-lease-gate", cwd))
-    await decideLeaseClaim(parsed, event, ctx);
   if (settingsEnabled("beads", "bd-embedded-write-lock", cwd)) {
     const embedded = await decideEmbeddedWrite(parsed, event, ctx, deadline);
     if (embedded?.kind === "block")
       return suffix("bd-embedded-write-lock", embedded.reason);
     if (embedded?.kind === "rewrite")
       input = embedded.input;
-  }
-  if (settingsEnabled("beads", "pr-bead-link-gate", cwd)) {
-    const pr = decideCommandParsed(parsed, (segment) => beadsActive(cwd) && repositoryControlled(repositoryFromGhCreate(segment) ?? repositoryFromCurrentCheckout(cwd)));
-    if (pr)
-      return suffix("pr-bead-link-gate", pr.reason);
   }
   const rewritten = rewriteBashInput(input, ctx) ?? input;
   if (JSON.stringify(rewritten) !== JSON.stringify(event.input))
