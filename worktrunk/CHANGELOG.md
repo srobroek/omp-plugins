@@ -1,31 +1,20 @@
 # Changelog
 
-## [2.0.0]
+## [2.0.0](https://github.com/srobroek/omp-plugins/compare/worktrunk--v1.3.2...worktrunk--v2.0.0) (2026-09-23)
+
 
 ### ⚠ BREAKING CHANGES
 
-* **worktrunk:** remove the canonical-mutation gate and its helper/test modules: `worktree-gate.ts`, `worktree-gate.test.ts`, `presence.test.ts`, and `shell-tokenizer.ts`
-* **worktrunk:** remove `worktrunk-bd-contention-retry`, `worktrunk-destructive-branch-provenance`, and `worktrunk-provisioning-required`
-* **worktrunk:** make worktree discipline steering rather than an enforced gate because the gate's own audit recorded no accidental canonical write while it caused measured friction
-
-### Features
-
-* **worktrunk:** add the `worktrunk-preflight` skill
-
-## [Unreleased]
-
-### ⚠ BREAKING CHANGES
-
-* **worktrunk:** remove the canonical-mutation gate, its command allowlist, branch-name policy, shell tokenizer and topology probe
+* **worktrunk:** remove the canonical-mutation gate with its command allowlist, branch-name policy, shell tokenizer and topology probe: `worktree-gate.ts`, `worktree-gate.test.ts`, `presence.test.ts`, and `shell-tokenizer.ts`
 * **worktrunk:** remove the `worktree-gate` opt-out setting along with the gate it disabled
-* **worktrunk:** move `worktrunk-bd-contention-retry` to the beads package as `bdlite-contention-retry`
+* **worktrunk:** remove `worktrunk-bd-contention-retry`, `worktrunk-destructive-branch-provenance`, and `worktrunk-provisioning-required`
+* **worktrunk:** make worktree discipline steering rather than an enforced gate, because the gate's own audit recorded no accidental canonical write while it caused measured friction
 
 ### Features
 
+* **worktrunk:** add the `worktrunk-preflight` skill, detecting pending hook approvals, discarded project-config keys, and an ignored project `[merge]` table
 * **worktrunk:** state worktree discipline as steering, requiring the run's recorded base commit and `wt step copy-ignored`
 * **worktrunk:** restore `worktrunk-isolation-disabled` as the standing setting instruction
-* **worktrunk:** ship the `worktrunk-preflight` skill by directory convention
-* **worktrunk:** detect pending hook approvals, discarded project-config keys, and an ignored project `[merge]` table
 
 ### Bug Fixes
 
@@ -35,6 +24,14 @@
 
 * **worktrunk:** remove the two unregistered extensions
 * **worktrunk:** drop the `session_start` advisory, leaving one `tool_call` handler
+
+## [1.3.2](https://github.com/srobroek/omp-plugins/compare/worktrunk--v1.3.1...worktrunk--v1.3.2) (2026-09-22)
+
+
+### Bug Fixes
+
+* **worktrunk:** separate the fail-closed clause from the example note ([#503](https://github.com/srobroek/omp-plugins/issues/503)) ([a557e54](https://github.com/srobroek/omp-plugins/commit/a557e549de221e524859a036ffb2f750b9a3567d))
+* **worktrunk:** use patch equivalence for branch provenance ([#501](https://github.com/srobroek/omp-plugins/issues/501)) ([90ba95f](https://github.com/srobroek/omp-plugins/commit/90ba95f166aa823a2147de9d76e19c5430da2e07))
 
 ## [1.3.1](https://github.com/srobroek/omp-plugins/compare/worktrunk--v1.3.0...worktrunk--v1.3.1) (2026-09-22)
 
