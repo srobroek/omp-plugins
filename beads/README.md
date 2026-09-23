@@ -8,14 +8,12 @@ The Beads plugin provides direct `bd` issue tracking with a shared embedded ledg
 workflow, and this package does not restate it. The two rules carry only the
 preferences `bd prime` leaves out.
 
-`beads-ledger` requires batched creation through a single `bd create --graph`
-call, records that plan schema and its two silent traps, and states the
-embedded-store write rules. It deliberately overrides `bd prime` where that
-briefing recommends fanning `bd create` across parallel subagents, which both
-amplifies writes and risks corrupting the Dolt journal.
-
-`beads-evidence` sets the bar for a close reason: the command run, the path
-changed, or the test result.
+Steering surfaces:
+- `beads-ledger` carries batched graph creation, embedded-store safety, metadata, acceptance, and delivery preferences not in `bd prime`.
+- `beads-evidence` requires checkable evidence and reviewed closure authority.
+- `beads-contention-retry` retries embedded-store contention and failed remote syncs without agent-built wrappers.
+- `beads-no-editor` interrupts `bd edit` before it can hang a non-interactive session.
+- `beads-preflight` runs read-only, bounded readiness checks before ledger work.
 
 ## Store-safety extensions
 
