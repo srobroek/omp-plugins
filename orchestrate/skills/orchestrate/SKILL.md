@@ -13,29 +13,26 @@ TRIGGER
 ## Workflow
 
 1. Read the goal, acceptance criteria, repository state, and verification command.
-2. Write the bead DAG: parent, epics, features, and tasks with explicit dependencies.
-3. Label every bead with its `role:` label before dispatch.
-4. Dispatch one worker per needed role in ONE task batch.
-5. Let workers pull ready beads for their own role, claim them, execute them, and yield evidence.
-6. Consume every worker yield; resolve missing evidence before advancing.
-7. Require independent review before a merge.
-8. Send mechanical steps to the bundled `sonic` agent.
-9. Verify the repository-wide command yourself after review and integration.
-10. Close the parent only after verification passes and all evidence is recorded.
+2. Create the parent and dependency DAG in beads before dispatch; make dependencies and research evidence durable on beads.
+3. Give every dispatchable bead its `agent:KIND` routing label, `execution_*` metadata, acceptance and routing context before dispatch; populate git and lease anchors as they become known.
+4. Explicitly instruct every main-agent, lead, parent, and sub-lead worker to pull its role queue; follow `rule://orchestrate-process` for the exact pull, claim, worktree, evidence, review, repair, and conflict protocol.
+5. Choose one-tier or two-tier topology from achievable coordination load: non-contending concurrent workers, internal DAG depth, and the lead's evidence bottleneck. Never choose two-tier from epic count alone.
+6. For two-tier work, retain `task.maxRecursionDepth=3`; the default 2 cannot contain root, orchestrator, worker, and helper.
+7. Dispatch one worker per needed role in one task batch. Workers keep pulling until no ready bead carries their role.
+8. Consume every worker yield, resolve missing evidence, and repeat review/fix rounds until every criterion passes.
+9. Require independent review before integration; only the lead resolves a merger-reported conflict.
+10. Verify the repository-wide command yourself after review and integration, then close the parent only when verification and durable evidence pass.
 
 ## Topologies
 
 | Situation | Choice |
 |---|---|
-| One delivery stream | One-tier: this session is the lead; write and drive the full DAG. |
-| Multiple independently deliverable streams | Two-tier: decompose into epics; dispatch one `orchestrator` per epic; each orchestrator decomposes its epic into features and tasks. |
-
-Set `task.maxRecursionDepth` to `3` before dispatching the two-tier topology. One-tier works with the default `task.maxRecursionDepth` of `2`.
+| Coordination load fits one lead and workers do not contend | One-tier: this session is the lead; drive the full DAG. |
+| Coordination load has non-contending concurrent workers, meaningful internal DAG depth, and a lead evidence bottleneck | Two-tier: dispatch one orchestrator per independently coordinated stream; each owns its child DAG. |
 
 ## Rules
 
-MUST dispatch all needed roles in one batch.
+MUST use the pull-based protocol in `rule://orchestrate-process`, not direct assignment or prompt-only state.
 MUST make independent review precede every merge.
-MUST have the shepherd aggregate review findings into one fix bead.
-DEFAULT use pull-based worker execution until no ready bead carries the worker role.
+MUST keep durable decisions, acceptance evidence, review findings, and closure reasons on beads or authoritative decision carriers; use `hub` for live coordination.
 NOT close a parent from worker claims alone; the lead runs the repository-wide command.

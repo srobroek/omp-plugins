@@ -7,6 +7,14 @@ description: Apply the Beads preferences that bd prime does not state, covering 
 workflow. Run it once per session and follow it. This rule states only the
 preferences it does not cover, and it OUTRANKS `bd prime` on the two points
 below where they disagree.
+# REVIEW ACCEPTANCE
+MUST set acceptance criteria at creation for every bead that will be reviewed, using `bd create ... --acceptance "CRITERIA"` or the graph-plan `acceptance_criteria` field. Judge completeness against those criteria; a reviewed bead without criteria cannot be judged complete.
+
+# METADATA
+MUST put useful facts in bead `metadata`, not comments or the description, including git anchors (`repo`, `branch`, `base_sha`, `worktree`, `pr`, `merge_sha`) and lease anchors (`lease_host`, `lease_pid`). Keep rationale in the description.
+
+# WISPS
+NEVER use wisps for durable agent-to-agent decisions, acceptance evidence, or closure. Use a durable bead carrier instead.
 
 # BATCHED CREATION
 MUST create more than one bead in a single `bd create --graph plan.json` call.
@@ -59,3 +67,6 @@ The store is embedded and lives in the canonical checkout, and linked worktrees
 share it. `BEADS_DIR` does not redirect `bd init` away from canonical. No Dolt
 server may be started. Two concurrent writers corrupt the Dolt journal, so a
 contended `bd` call is retried rather than worked around.
+# DELIVERY
+MUST run `bd dolt pull` before claiming when the read decides assignment, so the claim uses fresh ledger state. After delivery, MUST run `bd dolt push`.
+Routine commits and pushes need no permission. NEVER merge a pull request into the default branch autonomously; that is the only forbidden autonomous action.
