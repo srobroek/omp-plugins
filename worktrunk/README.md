@@ -1,31 +1,68 @@
 # Worktrunk
 
-Worktrunk protects the embedded Beads store and the canonical checkout while agents work in linked worktrees.
+Worktree discipline for agents working against a single embedded Beads store.
 
-## Registered extensions
+The package does exactly one thing in code: it refuses OMP native isolation. Everything else it
+used to enforce is steering, because steering is what the evidence supports.
 
-### `worktree-gate`
-
-The tool-call gate blocks filesystem mutations whose resolved targets are outside a linked, non-canonical worktree of the owning repository. It also checks shell-shaped commands and redirects so their actual filesystem targets are contained. Read-only tools and calls with no filesystem target remain allowed.
-
-The gate fails closed: an unresolvable path, failed repository probe, malformed payload, or missing session directory is refused rather than treated as safe. It is an accident guardrail, not a sandbox; a cooperative process can still write an absolute canonical path through an allowed command or evaluator.
+## Registered extension
 
 ### `isolation-precheck`
 
-The precheck blocks `task` calls that request `isolated: true`, because native isolation clones `.beads` and forks the embedded ledger away from sibling agents. When `task.isolation.enabled` is already true, it emits a session-start advisory with the linked-worktree remedy.
+Refuses a `task` call that requests `isolated: true`, in both the flat shape and the batch
+`tasks: [{ isolated: true }]` shape.
 
-The task-call refusal is fail closed. The session-start message is advisory and therefore fail open; unreadable settings do not block the session, while an actual isolation request is still refused.
+Native isolation copies the whole checkout with a filesystem clone. There is no git-worktree
+backend, so it cannot be reconfigured into the worktree model, only turned off. A cloned checkout
+carries its own `.beads`, and a copied embedded Dolt database is a second ledger: claims, comments
+and closures written in the clone are invisible to every sibling and are discarded with the clone.
+
+The refusal is unconditional and has no opt-out setting, because the failure it prevents is silent
+and unrecoverable and native isolation has no legitimate use against an embedded ledger.
+
+It is also the narrowest gate the harness allows: a single string compare on the tool name, then a
+structural walk of one argument. It reads no settings, touches no filesystem, spawns no
+subprocess, runs no `git`, and registers no `session_start` handler — so it cannot be slow, cannot
+time out, and cannot refuse a call it has no business refusing.
 
 ## Rules
 
+Discovered by directory convention; the manifest lists no rules.
+
 ### `worktrunk-worktree-required`
 
-Before editing, claim the bead and create a linked worktree with the required `wt switch` recipe. Address files through the returned absolute worktree path or `-C <worktree>`. From the canonical checkout, only the narrow bootstrap allowlist in this rule is permitted.
+Work in a git linked worktree, never in the canonical checkout. Gives the exact non-interactive
+`wt switch` invocation, requires the run's recorded base commit rather than the default branch tip,
+and requires `wt step copy-ignored` so a focused test run does not fail with a missing-module error
+that reads as broken code.
 
-### `worktrunk-bd-contention-retry`
+### `worktrunk-isolation-disabled`
 
-The embedded store is single-writer. When a listed contention message appears, wait briefly and retry the same `bd` command up to three attempts; do not escalate, call the run blocked, or work around the contention. Warnings that a command continued ungated mean the command already ran and are not contention.
+Keep `task.isolation.enabled: false`, verified with `omp config get task.isolation.enabled --json`.
+The extension's refusal only fires once an isolated child has been attempted; this rule makes the
+setting correct beforehand.
 
-## Removed controls
+## What is deliberately not here
 
-Provisioning enforcement, stale-worktree cleanup, the canonical-staleness advisory, and destructive-deletion provenance were removed because they protect neither the embedded store nor the canonical checkout.
+**The canonical-mutation gate.** Removed, with its command allowlist, branch-name policy, shell
+tokenizer and topology probe. Its own capability inventory records no accidental canonical write
+ever observed, while the guard itself produced five measured friction incidents: branch names
+refused for not matching `omp/*`, an unresolved topology escalated into a session-wide stop that
+also blocked read-only calls, a five-second synchronous probe stalling calls, a legitimate
+`verify.sh` and `git worktree add` refused inside an unrelated clone, and a claim coupled to
+filesystem setup.
+
+A stray write into the canonical checkout lands in the lead's own working tree, where
+`git status`, the diff and review all surface it, and it is recoverable. That is a different class
+of failure from a forked ledger, and it does not justify a gate that fires on every tool call.
+
+Anyone wanting mechanical enforcement should use a `bash.patterns` deny entry, which is the only
+hard pre-execution bash boundary that holds in every approval mode. It is user-owned config with no
+handler, no timeout and no blast radius beyond the pattern.
+
+**Provisioning enforcement, stale-worktree cleanup, the canonical-staleness advisory, and
+destructive-deletion provenance.** Removed earlier for the same reason: none of them protects the
+embedded store or the canonical checkout.
+
+**`worktrunk-bd-contention-retry`.** Moved to the beads package as `bdlite-contention-retry`. Its
+retry policy concerns embedded-store writer contention and remote sync, not worktree isolation.

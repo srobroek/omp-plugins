@@ -1,12 +1,26 @@
 # Changelog
 
-## [1.3.2](https://github.com/srobroek/omp-plugins/compare/worktrunk--v1.3.1...worktrunk--v1.3.2) (2026-09-22)
+## [Unreleased]
 
+### ⚠ BREAKING CHANGES
+
+* **worktrunk:** remove the canonical-mutation gate, its command allowlist, branch-name policy, shell tokenizer and topology probe
+* **worktrunk:** remove the `worktree-gate` opt-out setting along with the gate it disabled
+* **worktrunk:** move `worktrunk-bd-contention-retry` to the beads package as `bdlite-contention-retry`
+
+### Features
+
+* **worktrunk:** state worktree discipline as steering, requiring the run's recorded base commit and `wt step copy-ignored`
+* **worktrunk:** restore `worktrunk-isolation-disabled` as the standing setting instruction
 
 ### Bug Fixes
 
-* **worktrunk:** separate the fail-closed clause from the example note ([#503](https://github.com/srobroek/omp-plugins/issues/503)) ([a557e54](https://github.com/srobroek/omp-plugins/commit/a557e549de221e524859a036ffb2f750b9a3567d))
-* **worktrunk:** use patch equivalence for branch provenance ([#501](https://github.com/srobroek/omp-plugins/issues/501)) ([90ba95f](https://github.com/srobroek/omp-plugins/commit/90ba95f166aa823a2147de9d76e19c5430da2e07))
+* **worktrunk:** refuse native isolation unconditionally, with no setting able to switch it off
+
+### Refactors
+
+* **worktrunk:** remove the two unregistered extensions
+* **worktrunk:** drop the `session_start` advisory, leaving one `tool_call` handler
 
 ## [1.3.1](https://github.com/srobroek/omp-plugins/compare/worktrunk--v1.3.0...worktrunk--v1.3.1) (2026-09-22)
 
