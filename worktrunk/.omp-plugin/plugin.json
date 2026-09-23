@@ -1,6 +1,6 @@
 {
   "name": "worktrunk",
   "description": "Refuse OMP native isolation, because a cloned checkout carries a copied .beads and forks the embedded ledger.",
-  "version": "2.0.0",
+  "version": "1.3.2",
   "category": "development"
 }
