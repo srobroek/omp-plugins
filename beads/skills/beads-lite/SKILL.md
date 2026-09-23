@@ -16,7 +16,10 @@ TRIGGER
 1. Run `bd prime` once per session: it is the single source of truth for operational commands.
 2. Locate or create the store, then read existing beads for the project's own conventions.
 3. Shape the work: `epic` for a large stream with subtasks, `feature` for new functionality, `task` for a bounded work item, `bug` for something broken, `chore` for maintenance.
-4. Express order with `bd dep add <issue> <depends-on>`. Independent work gets no dependency.
+4. Create the whole shape in ONE `bd create --graph plan.json` call whenever it is more
+   than a single bead, carrying `parent_key` and a top-level `edges` array. Independent
+   work gets no edge. `rule://beads-ledger` has the schema and its two silent traps; a
+   loop of `bd create` plus `bd dep add` is the pattern that rule forbids.
 5. Label every bead with `role:<name>` so a worker can pull its own work.
 6. Pull with `bd ready`, claim atomically with `bd update <id> --claim`, do the work, then `bd close <id>` with evidence.
 7. Release a bead you cannot finish with `bd unclaim <id>`.
@@ -27,12 +30,12 @@ TRIGGER
 bd prime                              # complete workflow context (SSOT)
 bd ready                              # issues ready to work, no blockers
 bd list --status=open                 # all open issues
-bd create "title" -t task -p 2        # create an issue
+bd create "title" -t task -p 2        # create ONE issue; more than one uses --graph
 bd update <id> --claim                # claim work atomically
 bd unclaim <id>                       # release a stuck issue
 bd close <id> --reason "<evidence>"   # complete with evidence
 bd comment <id> "<finding>"           # record evidence or a verdict
-bd dep add <issue> <depends-on>       # add a dependency
+bd create --graph plan.json --dry-run # create a set with edges; verify the edge count
 bd show <id> --json                   # read one bead's assignment
 bd blocked                            # what is waiting and on what
 ```
