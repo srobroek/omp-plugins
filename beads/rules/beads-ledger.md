@@ -1,50 +1,61 @@
 ---
 name: beads-ledger
-description: Apply the Beads ledger as the authoritative source for work state and status transitions.
+description: Apply the Beads preferences that bd prime does not state, covering batched creation, graph plans, and embedded-store write safety.
 ---
 
-MUST treat the ledger as the single source of truth for work state.
-MUST create a bead for every unit of work before someone does it.
-MUST make status transitions through `bd`, not prose.
+`bd prime` is the single source of truth for `bd` commands and the default
+workflow. Run it once per session and follow it. This rule states only the
+preferences it does not cover, and it OUTRANKS `bd prime` on the two points
+below where they disagree.
 
-# BATCHED CREATION AND MUTATION
-MUST Create more than one bead in one `bd create --graph <plan.json>` call;
-NEVER loop plain `bd create`. One measured arm issued 37 separate `bd create`
-calls and 27 separate `bd dep add`/`dep remove` calls among 122 `bd`
-invocations. `bd batch`'s help states that this loop causes severe write
-amplification: each invocation is its own transaction and its own Dolt commit.
+# BATCHED CREATION
+MUST create more than one bead in a single `bd create --graph plan.json` call.
+NEVER loop plain `bd create`, and NEVER fan `bd create` out across parallel
+subagents. `bd prime` recommends exactly that fan-out; it is wrong here for two
+independent reasons. Each invocation is its own transaction and its own Dolt
+commit, which `bd batch --help` describes as severe write amplification, and
+parallel writers against an embedded store corrupt the Dolt journal. One
+measured session issued 37 separate `bd create` calls and 27 separate
+`bd dep add` and `bd dep remove` calls among 122 `bd` invocations.
 
-`bd create --graph` is the batched creation path because it carries the fields
-required by this steering. Its verified plan schema is:
-- Top level `nodes`, optionally `edges`; a top-level `issues` key is silently
-  dropped with a warning.
-- Each node MUST use `key` (not `id`) as its plan-local identifier; omitting
-  `key` is rejected. Accepted node fields are `key`, `type`, `priority`,
-  `title`, `description`, `acceptance_criteria`, `parent_key`, `labels`, and
-  `metadata`. `acceptance` is silently dropped; the field is
-  `acceptance_criteria`. Unknown fields anywhere are silently dropped with a
-  warning.
-- Dependencies MUST be in top-level `edges`, as
-  `{"from_key":"...","to_key":"...","type":"blocks"}`; use
-  `from_id`/`to_id` to reference an already-existing bead. A per-node `deps`
-  array of `{"target":...,"type":...}` reports success but creates zero
-  edges. NEVER use that trap.
+# GRAPH PLAN SCHEMA
+`bd create --graph` is the only batched path that carries the fields this
+steering requires. Its verified plan shape:
 
-MUST run `bd create --graph ... --dry-run` first and verify its intended edge
-count (for example, `would create 3 issue(s) and 1 edge(s) (2 parent-child
-link(s))`). Dry-run validates structure only; a live create can still reject
-parent-child blocking paths after resolving stored dependencies.
+- Top level is `nodes`, plus an optional `edges`. A top-level `issues` key is
+  silently dropped with a warning.
+- A node's plan-local identifier is `key`, never `id`; a node without `key` is
+  rejected. Accepted node fields are `key`, `type`, `priority`, `title`,
+  `description`, `acceptance_criteria`, `parent_key`, `labels`, `metadata`.
+- The field is `acceptance_criteria`. Plain `acceptance` is silently dropped.
+- Dependencies belong in the top-level `edges` array, each entry
+  `{"from_key": "a", "to_key": "b", "type": "blocks"}`. Use `from_id` and
+  `to_id` to reference a bead that already exists.
+- Unknown fields anywhere are silently dropped with a warning, so a typo costs
+  the field rather than raising.
 
-Use `bd batch` only for bulk mutation of existing beads, not for creating our
-beads. Its only grammar is `close ID [reason]`, `update ID KEY=VALUE`,
-`create TYPE PRIORITY TITLE`, `dep add`, and `dep remove`.
-Its `create` form takes no parent, dependencies, description, acceptance
-criteria, metadata, labels, or explicit id. `update` accepts only `status`,
-`priority`, `title`, `assignee`, and `force`. The whole batch is one transaction:
-any refusal rolls back every operation. An `update` that moves an issue to
-closed enforces open-children and live-blocker policy; a bare `close` does not
-apply that policy at all.
+MUST treat a per-node `deps` array as a trap. It reports success and creates
+ZERO edges, so the plan looks correct and the DAG has no dependencies at all.
 
-Reads (`show`, `list`, `ready`, `sync`) are not accepted. Therefore use
-`bd create --graph` for a set of beads, `bd batch` to close or update a set or
-add many dependencies to existing beads, and plain `bd create` for one bead.
+MUST dry-run first and check the reported edge count, for example
+`would create 3 issue(s) and 1 edge(s) (2 parent-child link(s))`. That count is
+the only signal that catches the dropped-dependency trap. A dry run validates
+structure only: a live create can still reject parent-child blocking paths after
+resolving stored dependencies.
+
+# BULK MUTATION
+Use `bd batch` for bulk mutation of beads that already exist, never to create
+ours. Its grammar is only `close ID [reason]`, `update ID KEY=VALUE`,
+`create TYPE PRIORITY TITLE`, `dep add`, and `dep remove`, and its `create` form
+carries no parent, dependencies, description, acceptance criteria, metadata,
+labels or explicit id. `update` accepts only `status`, `priority`, `title`,
+`assignee`, `force`. The batch is one transaction, so any refusal rolls back
+every operation in it. An `update` that moves an issue to closed enforces the
+open-children and live-blocker policy; a bare `close` does not apply that policy
+at all.
+
+# EMBEDDED STORE
+The store is embedded and lives in the canonical checkout, and linked worktrees
+share it. `BEADS_DIR` does not redirect `bd init` away from canonical. No Dolt
+server may be started. Two concurrent writers corrupt the Dolt journal, so a
+contended `bd` call is retried rather than worked around.

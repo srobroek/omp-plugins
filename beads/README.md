@@ -4,11 +4,18 @@ The Beads plugin provides direct `bd` issue tracking with a shared embedded ledg
 
 ## Steering
 
-The `beads-lite` skill documents the direct workflow: run `bd prime`, choose an issue type and priority, add dependencies, label work with `role:<name>`, pull and claim ready work, and close it with evidence.
+`bd prime` is the single source of truth for `bd` commands and the default
+workflow, and this package does not restate it. The two rules carry only the
+preferences `bd prime` leaves out.
 
-The `beads-ledger` rule makes the ledger the source of truth for work state. The `beads-evidence` rule requires checkable evidence on every close.
+`beads-ledger` requires batched creation through a single `bd create --graph`
+call, records that plan schema and its two silent traps, and states the
+embedded-store write rules. It deliberately overrides `bd prime` where that
+briefing recommends fanning `bd create` across parallel subagents, which both
+amplifies writes and risks corrupting the Dolt journal.
 
-The store is embedded and lives in the canonical checkout, and linked worktrees share it. The session lifecycle extension pins `BEADS_DIR` to the canonical checkout's `.beads` store; `BEADS_DIR` does not redirect `bd init` away from canonical. No Dolt server may be started. Two concurrent writers corrupt the Dolt journal, so a contended `bd` call is retried rather than worked around.
+`beads-evidence` sets the bar for a close reason: the command run, the path
+changed, or the test result.
 
 ## Store-safety extensions
 
