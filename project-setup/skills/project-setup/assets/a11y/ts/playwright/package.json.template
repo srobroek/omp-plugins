@@ -1,7 +1,0 @@
-{
-  "private": true,
-  "devDependencies": {
-    "@axe-core/playwright": "@@AXE_PLAYWRIGHT_VERSION@@",
-    "@playwright/test": "@@PLAYWRIGHT_VERSION@@"
-  }
-}

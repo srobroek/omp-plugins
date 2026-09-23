@@ -1,3 +1,0 @@
-# Deny a `.unwrap()` in anything that does I/O; a test may still use one.
-allow-unwrap-in-tests = true
-allow-expect-in-tests = true
