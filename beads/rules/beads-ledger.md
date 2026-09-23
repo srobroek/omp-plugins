@@ -1,5 +1,5 @@
 ---
-name: bdlite-ledger
+name: beads-ledger
 description: Apply the Beads ledger as the authoritative source for work state and status transitions.
 ---
 

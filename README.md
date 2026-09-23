@@ -80,7 +80,7 @@ A rule is addressable only when it lands in a bucket. Read one back to prove it,
 from a plugin you installed:
 
 ```
-omp -p 'read rule://bdlite-ledger'
+omp -p 'read rule://beads-ledger'
 ```
 
 A rule from an uninstalled plugin answers `No such rule` and lists the rules that did load,

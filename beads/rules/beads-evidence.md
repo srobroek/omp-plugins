@@ -1,5 +1,5 @@
 ---
-name: bdlite-evidence
+name: beads-evidence
 description: Require checkable evidence whenever Beads work is closed.
 ---
 
