@@ -2,15 +2,18 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { hostname, tmpdir } from "node:os";
 import { join } from "node:path";
+// @ts-expect-error The committed generated bundle intentionally ships without declarations.
+import generatedBashGates from "../dist/bash-gates.js";
 import bashGates from "./bash-gates.ts";
 import { invocationFromArgv } from "./bd-actor-gate.ts";
-import { attachWriter, decideEmbeddedWrite, embeddedStores, embeddedWriteRunner, embeddedWriteTargets, hold, RUNNER_STORE_FLAG, release, setLeaseTimingForTests, withEmbeddedWriteLock, writesStore } from "./bd-embedded-write-lock.ts";
+import { attachWriter, decideEmbeddedWrite, embeddedStores, embeddedWriteRunner, embeddedWriteTargets, hold, RUNNER_STORE_FLAG, RUNNER_WAIT_FLAG, release, setLeaseTimingForTests, setPreflightWaitForTests, withEmbeddedWriteLock, writesStore } from "./bd-embedded-write-lock.ts";
 import bdLeaseGate, { setBdRunForTests } from "./bd-lease-gate.ts";
 import { cookCheck, deepAssert, type SpawnResult, setBdSpawnForTests } from "./formula-check-tool.ts";
 import { runBd, setBdStreamForTests } from "./session-beads-lifecycle.ts";
 import { parse } from "./shell-command.ts";
 
 const LOCK = "omp-embedded-write.lock";
+const STEAL = "omp-embedded-write-steal.lock";
 const HOST = hostname().split(".")[0] ?? "localhost";
 /** Above the macOS and Linux pid ceilings, so `kill(pid, 0)` reports ESRCH. */
 const DEAD_PID = 999_999;
@@ -29,6 +32,18 @@ const WRITES: Record<string, string[]> = {
 	"comments add from a file": ["comments", "add", "bd-1", "-f", "notes.txt"],
 	"a comments subcommand bd adds later": ["comments", "delete", "bd-1"],
 	"comments with no issue id": ["comments"],
+	"bare singular comment": ["comment"],
+	"singular comment with issue id": ["comment", "bd-1"],
+	"singular comment list with extra operand": ["comment", "list", "extra"],
+	"singular comment list with a flag": ["comment", "list", "--json"],
+	"singular comment list after double dash": ["comment", "--", "list"],
+	"plural comments listing as JSON": ["comments", "bd-1", "--json"],
+	"plural comments with an extra operand": ["comments", "bd-1", "extra"],
+	"plural comments after double dash": ["comments", "--", "bd-1"],
+	"plural comments with an option": ["comments", "--json", "bd-1"],
+	"plural comments with an option value": ["comments", "--format", "json", "bd-1"],
+	"plural comments with malformed child id": ["comments", "omp-plugins-xhcj.child"],
+	"plural comments child id with an extra operand": ["comments", "omp-plugins-xhcj.34", "extra"],
 	"orphans --fix": ["orphans", "--fix"],
 	"orphans -f": ["orphans", "-f"],
 	"preflight --fix": ["preflight", "--fix"],
@@ -74,13 +89,14 @@ const WRITES: Record<string, string[]> = {
 
 const READ_ARGV: Record<string, string[]> = {
 	blocked: ["blocked"],
-	"comments listing an issue": ["comments", "bd-1"],
+	"comments listing a root issue": ["comments", "bd-1"],
+	"comments listing a child issue": ["comments", "omp-plugins-xhcj.34"],
+	"singular comment list": ["comment", "list"],
 	"orphans without --fix": ["orphans"],
 	"orphans with an unrelated fused short run": ["orphans", "-jq"],
 	"orphans with --fix disabled": ["orphans", "--fix=false"],
 	"ready with --claim disabled": ["ready", "--claim=false"],
 	"an enabled --readonly": ["--readonly=true", "close", "x"],
-	"comments listing as JSON": ["comments", "bd-1", "--json"],
 	"config get": ["config", "get", "k"],
 	"dep list": ["dep", "list", "x"],
 	"dolt status": ["dolt", "status"],
@@ -181,6 +197,16 @@ describe("a Bash mutation is run by the store's own writer, never held by the se
 		release(beads, "next");
 	});
 
+	test("preflight blocks with both resource paths when its token cannot be removed", async () => {
+		setPreflightWaitForTests(0);
+		const beads = store();
+		writeFileSync(join(beads, STEAL), "external waiter");
+		const decision = (await decide("bd update bd-1 --status open", beads)) as { kind: string; reason: string };
+		expect(decision.kind).toBe("block");
+		expect(decision.reason).toContain(join(beads, LOCK));
+		expect(decision.reason).toContain(join(beads, STEAL));
+	});
+
 	test("a backgrounded mutation is rewritten like any other, because the runner outlives the tool result", async () => {
 		const beads = store();
 		const decision = (await decide("bd create a -t task", beads, { async: true })) as { kind: string; input: Record<string, unknown> };
@@ -192,6 +218,56 @@ describe("a Bash mutation is run by the store's own writer, never held by the se
 	test("a read is left to run as the agent wrote it", async () => {
 		const beads = store();
 		expect(await decide("bd list --all --json", beads)).toBeUndefined();
+	});
+
+	test("source and generated Bash handlers serialize every non-exact comment form and diagnose a pre-held write lock", async () => {
+		setPreflightWaitForTests(0);
+		for (const [artifact, gate] of [["source", bashGates], ["generated", generatedBashGates]] as const) {
+			const beads = store();
+			const checkout = join(beads, "..");
+			const { bashGate } = wire(gate);
+			const context = { cwd: checkout };
+
+			for (const [call, command] of [
+				["comment-list", "bd comment list"],
+				["comments-id", "bd comments bd-1"],
+				["comments-child-id", "bd comments omp-plugins-xhcj.34"],
+			] as const) {
+				expect(await bashGate(bashCall(`${artifact}-${call}`, command, beads, checkout), context)).toBeUndefined();
+			}
+
+			for (const [call, command] of [
+				["comment-empty", "bd comment"],
+				["comment-id", "bd comment bd-1"],
+				["comment-list-extra", "bd comment list extra"],
+				["comment-list-flag", "bd comment list --json"],
+				["comment-double-dash", "bd comment -- list"],
+				["comments-empty", "bd comments"],
+				["comments-id-flag", "bd comments bd-1 --json"],
+				["comments-extra", "bd comments bd-1 extra"],
+				["comments-option", "bd comments --json bd-1"],
+				["comments-option-value", "bd comments --format json bd-1"],
+				["comments-double-dash", "bd comments -- bd-1"],
+				["comments-malformed-child", "bd comments omp-plugins-xhcj.child"],
+				["comments-child-extra", "bd comments omp-plugins-xhcj.34 extra"],
+			] as const) {
+				const rewritten = await bashGate(bashCall(`${artifact}-${call}`, command, beads, checkout), context) as { input?: { command?: string } } | undefined;
+				expect(rewritten?.input?.command).toContain(RUNNER_STORE_FLAG);
+			}
+
+			const normal = await bashGate(bashCall(`${artifact}-normal-update`, "bd update bd-1 --status open", beads, checkout), context) as { input?: { command?: string } } | undefined;
+			expect(normal?.input?.command).toContain(`${RUNNER_WAIT_FLAG} 20000`);
+			expect(normal?.input?.command).toContain(RUNNER_STORE_FLAG);
+
+			const writer = await runnerHold(beads);
+			try {
+				const held = await bashGate(bashCall(`${artifact}-held-update`, "bd update bd-1 --status open", beads, checkout), context) as { block?: boolean; reason?: string } | undefined;
+				expect(held?.block).toBe(true);
+				expect(held?.reason).toContain(join(beads, LOCK));
+			} finally {
+				writer.release();
+			}
+		}
 	});
 
 	test("a command already under the runner is not wrapped a second time", async () => {
@@ -375,6 +451,7 @@ afterEach(() => {
 	setBdSpawnForTests(null);
 	setBdStreamForTests(null);
 	setLeaseTimingForTests();
+	setPreflightWaitForTests();
 	for (const root of roots.splice(0)) {
 		try {
 			chmodSync(join(root, ".beads"), 0o700);
@@ -499,7 +576,7 @@ describe("a session-boundary gate check shares the store's lock domain", () => {
 type Handler = (event: unknown, context?: unknown) => unknown;
 
 /** The migrated gates share one Bash fanout; the lease gate keeps its result handler. */
-function wire(): { bashGate: Handler; leaseResult: Handler } {
+function wire(gate: typeof bashGates = bashGates): { bashGate: Handler; leaseResult: Handler } {
 	const all: Record<string, Handler[]> = {};
 	const pi = {
 		on: (event: string, handler: Handler) => {
@@ -511,7 +588,7 @@ function wire(): { bashGate: Handler; leaseResult: Handler } {
 		sendMessage: () => {},
 	};
 	bdLeaseGate(pi as never);
-	bashGates(pi as never);
+	gate(pi as never);
 	const fanout = all.tool_call?.[0];
 	const leaseResult = all.tool_result?.[0];
 	if (!fanout || !leaseResult) throw new Error("handlers were not registered");

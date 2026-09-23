@@ -800,6 +800,7 @@ var LEASE_MS = 120000;
 var RENEW_MS = 20000;
 var WAIT_MS = 20000;
 var POLL_MS = 20;
+var PREFLIGHT_WAIT_KEY = Symbol.for("com.srobroek.beads.embedded-write-lock.preflight-wait-ms.v1");
 var leaseMs = LEASE_MS;
 var renewMs = RENEW_MS;
 var nextToken = 0;
@@ -837,7 +838,6 @@ function registry() {
 var READS = {
   blocked: true,
   children: true,
-  comments: "idOnly",
   completion: true,
   context: true,
   count: true,
@@ -887,7 +887,7 @@ var WRITE_FLAGS = {
   preflight: ["--fix"],
   ready: ["--claim"]
 };
-var BEAD_ID2 = /^[A-Za-z][A-Za-z0-9]*(?:-[A-Za-z0-9]+)+$/;
+var BEAD_ID2 = /^[A-Za-z][A-Za-z0-9]*(?:-[A-Za-z0-9]+)+(?:\.\d+)*$/;
 function writesStore(invocation) {
   if (invocation === undefined)
     return true;
@@ -896,6 +896,10 @@ function writesStore(invocation) {
     return false;
   if (flagEnabled(globals, ["--readonly"]))
     return false;
+  if (verb === "comment")
+    return args.length !== 1 || args[0] !== "list";
+  if (verb === "comments")
+    return args.length !== 1 || !BEAD_ID2.test(args[0] ?? "");
   const rule = READS[verb];
   if (rule === undefined)
     return true;
@@ -905,8 +909,6 @@ function writesStore(invocation) {
   const subaction = args.find((arg) => !arg.startsWith("-"));
   if (rule === true)
     return false;
-  if (rule === "idOnly")
-    return subaction === undefined || !BEAD_ID2.test(subaction);
   return subaction === undefined || rule[subaction] !== true;
 }
 function storeFor(globals, cwd, env) {
