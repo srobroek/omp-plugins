@@ -185,9 +185,9 @@
     },
     {
       "name": "worktrunk",
-      "description": "Worktree discipline for every agent: a membership-based canonical-mutation guardrail and an isolation precheck.",
+      "description": "Refuse OMP native isolation, because a cloned checkout carries a copied .beads and forks the embedded ledger.",
       "source": "./worktrunk",
-      "version": "1.3.2",
+      "version": "2.0.0",
       "category": "development"
     },
     {
