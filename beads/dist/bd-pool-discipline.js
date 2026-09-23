@@ -428,6 +428,7 @@ var LEASE_MS = 120000;
 var RENEW_MS = 20000;
 var WAIT_MS = 20000;
 var POLL_MS = 20;
+var PREFLIGHT_WAIT_KEY = Symbol.for("com.srobroek.beads.embedded-write-lock.preflight-wait-ms.v1");
 var leaseMs = LEASE_MS;
 var renewMs = RENEW_MS;
 var nextToken = 0;

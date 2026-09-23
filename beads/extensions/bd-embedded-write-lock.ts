@@ -78,24 +78,38 @@ const RENEW_MS = 20_000;
 /**
  * Default wait for a caller acquiring one store outside a bounded dispatch.
  *
- * The runner is given its own wait on the command line instead, so a mutation an
- * agent issued waits for its turn as long as the Bash call itself is willing to
- * wait rather than being refused after a fixed twenty seconds.
+ * A Bash mutation gets a short preflight at tool_call and a separately bounded
+ * runner wait. Internal callers keep their own deadline or this default.
  */
 const WAIT_MS = 20_000;
 
+/** Maximum tool_call time spent proving that a Bash mutation's store is available. */
+const PREFLIGHT_WAIT_MS = 500;
+
 /**
- * How long the runner waits for its turn before giving up.
+ * How long the runner may wait if contention begins after the preflight.
  *
- * Long, because the caller is awaiting a real result and a queued mutation that
- * runs two minutes late is better than one that has to be reissued. Bounded, so a
- * hold left by a host this process cannot see still surfaces as a failure rather
- * than hanging the call forever. Bash's own timeout can end the wait sooner, and
- * killing the runner releases nothing because it holds nothing yet.
+ * This stays below the host's 30 second Bash/extension budget so the runner's
+ * lock-path diagnostic reaches the caller instead of being replaced by a bare
+ * host timeout.
  */
-const RUNNER_WAIT_MS = 300_000;
+const RUNNER_WAIT_MS = 20_000;
 
 const POLL_MS = 20;
+
+/** Shared test seam so source and the loaded generated bundle use one preflight condition. */
+const PREFLIGHT_WAIT_KEY = Symbol.for("com.srobroek.beads.embedded-write-lock.preflight-wait-ms.v1");
+
+function preflightWaitMs(): number {
+	const configured = Reflect.get(globalThis, PREFLIGHT_WAIT_KEY);
+	return typeof configured === "number" ? configured : PREFLIGHT_WAIT_MS;
+}
+
+/** Override the preflight wait condition in tests; omit the value to restore production. */
+export function setPreflightWaitForTests(waitMs?: number): void {
+	if (waitMs === undefined) Reflect.deleteProperty(globalThis, PREFLIGHT_WAIT_KEY);
+	else Reflect.set(globalThis, PREFLIGHT_WAIT_KEY, Math.max(0, waitMs));
+}
 
 let leaseMs = LEASE_MS;
 let renewMs = RENEW_MS;
@@ -234,16 +248,13 @@ function registry(): Registry {
  * an entry here costs a needless wait instead.
  *
  * A record value means only those subactions are reads; the parent verb's other
- * subactions write. `idOnly` is for a verb whose read form takes an issue id where
- * a subaction would otherwise sit -- `bd comments <id>` lists, `bd comments add <id>`
- * writes, and there is no `bd comments list` -- so the read is recognised by the
- * argument being bead-shaped. A subcommand word there, including one bd adds later,
- * is a write.
+ * subactions write. Comment grammar is handled separately and conservatively:
+ * only exact `bd comment list` and exact `bd comments <bead-id>` calls are reads.
+ * Every other comment form takes the write path.
  */
-const READS: Record<string, true | "idOnly" | Record<string, true>> = {
+const READS: Record<string, true | Record<string, true>> = {
 	blocked: true,
 	children: true,
-	comments: "idOnly",
 	completion: true,
 	context: true,
 	count: true,
@@ -300,8 +311,8 @@ const WRITE_FLAGS: Record<string, string[]> = {
 	ready: ["--claim"],
 };
 
-/** A bead id, which is what stands where a subaction would for an `idOnly` read. */
-const BEAD_ID = /^[A-Za-z][A-Za-z0-9]*(?:-[A-Za-z0-9]+)+$/;
+/** A bead id accepted by the exact plural comment-listing form. */
+const BEAD_ID = /^[A-Za-z][A-Za-z0-9]*(?:-[A-Za-z0-9]+)+(?:\.\d+)*$/;
 
 /**
  * Whether this invocation can write the database.
@@ -317,13 +328,14 @@ export function writesStore(invocation: BdInvocation | undefined): boolean {
 	if (flagEnabled(globals, ["--help", "-h"]) || flagEnabled(args, ["--help", "-h"])) return false;
 	// `--readonly` makes bd itself block writes, so nothing can reach the journal.
 	if (flagEnabled(globals, ["--readonly"])) return false;
+	if (verb === "comment") return args.length !== 1 || args[0] !== "list";
+	if (verb === "comments") return args.length !== 1 || !BEAD_ID.test(args[0] ?? "");
 	const rule = READS[verb];
 	if (rule === undefined) return true;
 	const writeFlags = WRITE_FLAGS[verb];
 	if (writeFlags !== undefined && flagEnabled(args, writeFlags)) return true;
 	const subaction = args.find(arg => !arg.startsWith("-"));
 	if (rule === true) return false;
-	if (rule === "idOnly") return subaction === undefined || !BEAD_ID.test(subaction);
 	return subaction === undefined || rule[subaction] !== true;
 }
 
@@ -845,6 +857,41 @@ export function release(store: string, owner: string): void {
 }
 
 /**
+ * Release a short Bash preflight and prove its token is gone before dispatch.
+ *
+ * `release` deliberately stays synchronous for existing callers. If its token-checked
+ * unlink races another process holding the steal lock, it can leave the main lock for
+ * lease recovery. A preflight cannot accept that: rewriting while its own live token
+ * remains would make the runner wait behind the gate that launched it.
+ */
+async function releasePreflight(store: string, owner: string, deadline: number): Promise<Hold> {
+	const lock = join(store, LOCK_NAME);
+	const token = registry().owned.get(lock)?.token;
+	if (token === undefined) {
+		return { kind: "failed", reason: `Beads embedded write lock at ${lock} lost its preflight ownership record. The write was refused before the serialising runner started.` };
+	}
+	release(store, owner);
+	const ticket: Ticket = { wake: undefined };
+	while (stillOurs(lock, token)) {
+		try {
+			const result = withOwnership(lock, token, () => unlinkSync(lock));
+			if (result !== "busy") break;
+		} catch (error) {
+			const code = (error as NodeJS.ErrnoException).code;
+			return { kind: "failed", reason: `Beads embedded write lock at ${lock} could not release its preflight token (${code ?? "unknown error"}). The write was refused before the serialising runner started.` };
+		}
+		if (Date.now() >= deadline) {
+			return { kind: "failed", reason: `Beads embedded write lock at ${lock} could not release its preflight token because ${join(store, STEAL_NAME)} stayed held. The write was refused before the serialising runner started.` };
+		}
+		await pause(ticket, Math.min(POLL_MS, deadline - Date.now()), undefined);
+	}
+	if (existsSync(lock)) {
+		return { kind: "failed", reason: `Beads embedded write lock at ${lock} changed ownership before preflight release completed. The write was refused before the serialising runner started.` };
+	}
+	return { kind: "held" };
+}
+
+/**
  * Push this hold's expiry out, so a lease only lapses when nobody is renewing it.
  *
  * Compare-and-set, never a blind write. If this hold's lease lapsed while its
@@ -1031,6 +1078,7 @@ export async function decideEmbeddedWrite(
 	parsed: ParsedCommand,
 	event: ToolCallEvent,
 	ctx: ExtensionContext,
+	deadline = Date.now() + 25_000,
 ): Promise<EmbeddedWriteDecision | undefined> {
 	try {
 		if (event.toolName !== "bash") return;
@@ -1070,6 +1118,12 @@ export async function decideEmbeddedWrite(
 				reason: `${store} is an embedded store, where two concurrent writers corrupt the Dolt journal, and the Beads write-lock runner that serialises writers could not be located: no \`bun\` binary was found on PATH, in BUN_INSTALL, or as this process's own interpreter, or the runner script is missing from the installed plugin. Install \`bun\` or reinstall the @srobroek/beads plugin; the write was refused rather than run unserialised.`,
 			};
 		}
+		const preflightOwner = `tool-call-preflight:${event.toolCallId}`;
+		const preflightDeadline = Math.min(deadline, Date.now() + preflightWaitMs());
+		const preflight = await hold(store, preflightOwner, Math.max(0, preflightDeadline - Date.now()));
+		if (preflight.kind === "failed") return { kind: "block", reason: preflight.reason };
+		const released = await releasePreflight(store, preflightOwner, preflightDeadline);
+		if (released.kind === "failed") return { kind: "block", reason: released.reason };
 		const rewritten = `${direct.assignments}${quote(runner.interpreter)} ${quote(runner.script)} ${RUNNER_STORE_FLAG} ${quote(store)} ${RUNNER_WAIT_FLAG} ${RUNNER_WAIT_MS} -- ${direct.call}`;
 		const next: Record<string, unknown> = { ...(event.input as Record<string, unknown>) };
 		// `cmd` is the alias some hosts send; whichever one carried the command carries

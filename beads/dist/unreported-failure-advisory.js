@@ -216,6 +216,7 @@ import { isAbsolute, join, resolve } from "path";
 
 // extensions/bd-embedded-write-lock.ts
 import { hostname } from "os";
+var PREFLIGHT_WAIT_KEY = Symbol.for("com.srobroek.beads.embedded-write-lock.preflight-wait-ms.v1");
 var HOST = hostname().split(".")[0] ?? "localhost";
 var REGISTRY_KEY = Symbol.for("com.srobroek.beads.embedded-write-lock.v1");
 

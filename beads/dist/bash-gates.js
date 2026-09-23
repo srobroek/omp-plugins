@@ -1028,13 +1028,56 @@ function isDir(path) {
 }
 
 // extensions/bd-embedded-write-lock.ts
-var RUNNER_WAIT_MS = 300000;
+var LOCK_NAME = "omp-embedded-write.lock";
+var STEAL_NAME = "omp-embedded-write-steal.lock";
+var LEASE_MS = 120000;
+var RENEW_MS = 20000;
+var WAIT_MS = 20000;
+var PREFLIGHT_WAIT_MS = 500;
+var RUNNER_WAIT_MS = 20000;
+var POLL_MS = 20;
+var PREFLIGHT_WAIT_KEY = Symbol.for("com.srobroek.beads.embedded-write-lock.preflight-wait-ms.v1");
+function preflightWaitMs() {
+  const configured = Reflect.get(globalThis, PREFLIGHT_WAIT_KEY);
+  return typeof configured === "number" ? configured : PREFLIGHT_WAIT_MS;
+}
+var leaseMs = LEASE_MS;
+var renewMs = RENEW_MS;
+var nextToken = 0;
 var HOST = hostname().split(".")[0] ?? "localhost";
+function pidAlive(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
 var REGISTRY_KEY = Symbol.for("com.srobroek.beads.embedded-write-lock.v1");
+function registry() {
+  const holder = globalThis;
+  const existing = holder[REGISTRY_KEY];
+  if (existing !== undefined)
+    return existing;
+  const created = { owned: new Map, queues: new Map };
+  holder[REGISTRY_KEY] = created;
+  process.on("exit", () => {
+    for (const [lock, held] of created.owned) {
+      clearInterval(held.renew);
+      try {
+        closeSync(held.fd);
+      } catch {}
+      try {
+        unlinkSync(lock);
+      } catch {}
+    }
+    created.owned.clear();
+  });
+  return created;
+}
 var READS = {
   blocked: true,
   children: true,
-  comments: "idOnly",
   completion: true,
   context: true,
   count: true,
@@ -1084,7 +1127,7 @@ var WRITE_FLAGS = {
   preflight: ["--fix"],
   ready: ["--claim"]
 };
-var BEAD_ID2 = /^[A-Za-z][A-Za-z0-9]*(?:-[A-Za-z0-9]+)+$/;
+var BEAD_ID2 = /^[A-Za-z][A-Za-z0-9]*(?:-[A-Za-z0-9]+)+(?:\.\d+)*$/;
 function writesStore(invocation) {
   if (invocation === undefined)
     return true;
@@ -1093,6 +1136,10 @@ function writesStore(invocation) {
     return false;
   if (flagEnabled(globals, ["--readonly"]))
     return false;
+  if (verb === "comment")
+    return args.length !== 1 || args[0] !== "list";
+  if (verb === "comments")
+    return args.length !== 1 || !BEAD_ID2.test(args[0] ?? "");
   const rule = READS[verb];
   if (rule === undefined)
     return true;
@@ -1102,8 +1149,6 @@ function writesStore(invocation) {
   const subaction = args.find((arg) => !arg.startsWith("-"));
   if (rule === true)
     return false;
-  if (rule === "idOnly")
-    return subaction === undefined || !BEAD_ID2.test(subaction);
   return subaction === undefined || rule[subaction] !== true;
 }
 function storeFor(globals, cwd, env) {
@@ -1225,6 +1270,251 @@ function directInvocation(command) {
   }
   return invocation;
 }
+function ageOf(path) {
+  try {
+    return Date.now() - statSync2(path).mtimeMs;
+  } catch {
+    return 0;
+  }
+}
+function abandoned(lock) {
+  let raw;
+  try {
+    raw = readFileSync2(lock, "utf8");
+  } catch {
+    return false;
+  }
+  let holder;
+  try {
+    holder = JSON.parse(raw);
+  } catch {
+    return ageOf(lock) > leaseMs;
+  }
+  const local = holder.host === HOST;
+  if (local && typeof holder.writer === "number" && pidAlive(holder.writer))
+    return false;
+  if (local && typeof holder.pid === "number" && !pidAlive(holder.pid))
+    return true;
+  if (typeof holder.expires === "number")
+    return Date.now() > holder.expires;
+  return ageOf(lock) > leaseMs;
+}
+function takeOverIfAbandoned(lock, steal) {
+  let fd;
+  try {
+    fd = openSync(steal, "wx");
+  } catch (error) {
+    if (error.code !== "EEXIST")
+      return;
+    if (abandoned(steal)) {
+      try {
+        unlinkSync(steal);
+      } catch {}
+    }
+    return;
+  }
+  try {
+    writeSync(fd, JSON.stringify(holderNow(`steal-${process.pid}`, `steal-${(nextToken++).toString(36)}`, undefined)));
+    if (abandoned(lock))
+      unlinkSync(lock);
+  } catch {} finally {
+    closeSync(fd);
+    try {
+      unlinkSync(steal);
+    } catch {}
+  }
+}
+function holderNow(owner, token, writer) {
+  const taken = Date.now();
+  return { host: HOST, pid: process.pid, owner, token, taken, expires: taken + leaseMs, ...writer === undefined ? {} : { writer } };
+}
+function stillOurs(lock, token) {
+  try {
+    const holder = JSON.parse(readFileSync2(lock, "utf8"));
+    return holder.token === token && holder.pid === process.pid && holder.host === HOST;
+  } catch {
+    return false;
+  }
+}
+async function pause(ticket, ms, signal) {
+  const { promise, resolve } = Promise.withResolvers();
+  const done = () => resolve();
+  ticket.wake = done;
+  const timer = setTimeout(done, ms);
+  signal?.addEventListener("abort", done, { once: true });
+  try {
+    await promise;
+  } finally {
+    ticket.wake = undefined;
+    clearTimeout(timer);
+    signal?.removeEventListener("abort", done);
+  }
+}
+function wakeHead(lock) {
+  registry().queues.get(lock)?.[0]?.wake?.();
+}
+async function hold(store, owner, waitMs = WAIT_MS, signal) {
+  const lock = join(store, LOCK_NAME);
+  const { owned, queues } = registry();
+  const deadline = Date.now() + waitMs;
+  const queue = queues.get(lock) ?? [];
+  if (queue.length === 0)
+    queues.set(lock, queue);
+  const ticket = { wake: undefined };
+  queue.push(ticket);
+  try {
+    while (true) {
+      const held = owned.get(lock);
+      if (held !== undefined) {
+        const nested = held.holders.get(owner);
+        if (nested !== undefined) {
+          held.holders.set(owner, nested + 1);
+          return { kind: "held" };
+        }
+      } else if (queue[0] === ticket) {
+        try {
+          const fd = openSync(lock, "wx");
+          const token = `${process.pid}-${Date.now()}-${(nextToken++).toString(36)}`;
+          writeSync(fd, JSON.stringify(holderNow(owner, token, undefined)));
+          const renew = setInterval(() => {
+            try {
+              renewLease(lock, owner, token);
+            } catch {}
+          }, renewMs);
+          renew.unref?.();
+          owned.set(lock, { fd, holders: new Map([[owner, 1]]), renew, token, writer: undefined });
+          return { kind: "held" };
+        } catch (error) {
+          const code = error.code;
+          if (code !== "EEXIST") {
+            return {
+              kind: "failed",
+              reason: `Beads embedded write lock could not be taken at ${lock} (${code ?? "unknown error"}). The write was refused rather than risk a second writer on the embedded Dolt journal.`
+            };
+          }
+          takeOverIfAbandoned(lock, join(store, STEAL_NAME));
+        }
+      }
+      if (signal?.aborted === true) {
+        return {
+          kind: "failed",
+          reason: `Waiting for the Beads embedded write lock at ${lock} was cancelled before this writer got its turn. Nothing was written.`
+        };
+      }
+      if (Date.now() >= deadline) {
+        return {
+          kind: "failed",
+          reason: `Beads embedded write lock at ${lock} stayed held for ${Math.round(waitMs / 1000)}s. Another writer is still working, or a hold was left behind by a process on another host; the write was refused rather than run concurrently. Read the lock file, then remove it once its holder is really gone.`
+        };
+      }
+      await pause(ticket, Math.min(POLL_MS, deadline - Date.now()), signal);
+    }
+  } finally {
+    const index = queue.indexOf(ticket);
+    if (index >= 0)
+      queue.splice(index, 1);
+    if (queue.length === 0)
+      queues.delete(lock);
+    else if (index === 0)
+      queue[0]?.wake?.();
+  }
+}
+function withOwnership(storeLock, token, change) {
+  const steal = join(dirname2(storeLock), STEAL_NAME);
+  let fd;
+  try {
+    fd = openSync(steal, "wx");
+  } catch (error) {
+    if (error.code === "EEXIST")
+      return "busy";
+    throw error;
+  }
+  try {
+    if (!stillOurs(storeLock, token))
+      return "lost";
+    change();
+    return "done";
+  } finally {
+    closeSync(fd);
+    try {
+      unlinkSync(steal);
+    } catch {}
+  }
+}
+function release(store, owner) {
+  const lock = join(store, LOCK_NAME);
+  const owned = registry().owned;
+  const held = owned.get(lock);
+  if (held === undefined)
+    return;
+  const shares = held.holders.get(owner);
+  if (shares === undefined)
+    return;
+  if (shares > 1) {
+    held.holders.set(owner, shares - 1);
+    return;
+  }
+  held.holders.delete(owner);
+  if (held.holders.size > 0)
+    return;
+  owned.delete(lock);
+  clearInterval(held.renew);
+  try {
+    closeSync(held.fd);
+  } catch {}
+  try {
+    withOwnership(lock, held.token, () => unlinkSync(lock));
+  } catch {}
+  wakeHead(lock);
+}
+async function releasePreflight(store, owner, deadline) {
+  const lock = join(store, LOCK_NAME);
+  const token = registry().owned.get(lock)?.token;
+  if (token === undefined) {
+    return { kind: "failed", reason: `Beads embedded write lock at ${lock} lost its preflight ownership record. The write was refused before the serialising runner started.` };
+  }
+  release(store, owner);
+  const ticket = { wake: undefined };
+  while (stillOurs(lock, token)) {
+    try {
+      const result = withOwnership(lock, token, () => unlinkSync(lock));
+      if (result !== "busy")
+        break;
+    } catch (error) {
+      const code = error.code;
+      return { kind: "failed", reason: `Beads embedded write lock at ${lock} could not release its preflight token (${code ?? "unknown error"}). The write was refused before the serialising runner started.` };
+    }
+    if (Date.now() >= deadline) {
+      return { kind: "failed", reason: `Beads embedded write lock at ${lock} could not release its preflight token because ${join(store, STEAL_NAME)} stayed held. The write was refused before the serialising runner started.` };
+    }
+    await pause(ticket, Math.min(POLL_MS, deadline - Date.now()), undefined);
+  }
+  if (existsSync(lock)) {
+    return { kind: "failed", reason: `Beads embedded write lock at ${lock} changed ownership before preflight release completed. The write was refused before the serialising runner started.` };
+  }
+  return { kind: "held" };
+}
+function renewLease(lock, owner, token) {
+  const owned = registry().owned;
+  const held = owned.get(lock);
+  if (held === undefined || held.token !== token)
+    return;
+  const result = withOwnership(lock, token, () => {
+    const fd = openSync(lock, "w");
+    try {
+      writeSync(fd, JSON.stringify(holderNow(owner, token, held.writer)));
+    } finally {
+      closeSync(fd);
+    }
+  });
+  if (result !== "lost")
+    return;
+  clearInterval(held.renew);
+  owned.delete(lock);
+  try {
+    closeSync(held.fd);
+  } catch {}
+}
 var RUNNER_STEM = "bd-embedded-write-runner";
 var RUNNER_STORE_FLAG = "--beads-store";
 var RUNNER_WAIT_FLAG = "--beads-wait-ms";
@@ -1274,7 +1564,7 @@ function directShell(command) {
     return;
   return { assignments: match[1] ?? "", call: match[2] ?? "" };
 }
-async function decideEmbeddedWrite(parsed, event, ctx) {
+async function decideEmbeddedWrite(parsed, event, ctx, deadline = Date.now() + 25000) {
   try {
     if (event.toolName !== "bash")
       return;
@@ -1315,6 +1605,14 @@ async function decideEmbeddedWrite(parsed, event, ctx) {
         reason: `${store} is an embedded store, where two concurrent writers corrupt the Dolt journal, and the Beads write-lock runner that serialises writers could not be located: no \`bun\` binary was found on PATH, in BUN_INSTALL, or as this process's own interpreter, or the runner script is missing from the installed plugin. Install \`bun\` or reinstall the @srobroek/beads plugin; the write was refused rather than run unserialised.`
       };
     }
+    const preflightOwner = `tool-call-preflight:${event.toolCallId}`;
+    const preflightDeadline = Math.min(deadline, Date.now() + preflightWaitMs());
+    const preflight = await hold(store, preflightOwner, Math.max(0, preflightDeadline - Date.now()));
+    if (preflight.kind === "failed")
+      return { kind: "block", reason: preflight.reason };
+    const released = await releasePreflight(store, preflightOwner, preflightDeadline);
+    if (released.kind === "failed")
+      return { kind: "block", reason: released.reason };
     const rewritten = `${direct.assignments}${quote(runner.interpreter)} ${quote(runner.script)} ${RUNNER_STORE_FLAG} ${quote(store)} ${RUNNER_WAIT_FLAG} ${RUNNER_WAIT_MS} -- ${direct.call}`;
     const next = { ...event.input };
     if (typeof input.command === "string")
@@ -1802,6 +2100,7 @@ function rewriteBashInput(input, ctx) {
 }
 
 // extensions/bash-gates.ts
+var TOOL_CALL_BUDGET_MS = 25000;
 function inputOf(event, ctx) {
   const input = event.input;
   return {
@@ -1812,7 +2111,7 @@ function inputOf(event, ctx) {
 function suffix(gate, reason, resolution = "inspect the command and retry") {
   return { block: true, reason: blockReason({ gate, cause: reason, resolution }) };
 }
-async function decide(parsed, event, ctx, pi) {
+async function decide(parsed, event, ctx, pi, deadline) {
   let input = event.input;
   const { cwd } = inputOf(event, ctx);
   if (parsed.unknown)
@@ -1826,7 +2125,7 @@ async function decide(parsed, event, ctx, pi) {
       pi.sendMessage({ customType: "beads-bd-actor-advisory", content: actor.text, display: true, attribution: "user" }, { triggerTurn: false });
   }
   if (settingsEnabled("beads", "bd-close-gate", cwd)) {
-    const close = await decideBdCloseParsed(parsed, cwd);
+    const close = await decideBdCloseParsed(parsed, cwd, deadline);
     if (close)
       return suffix("bd-close-gate", close.reason);
   }
@@ -1838,7 +2137,7 @@ async function decide(parsed, event, ctx, pi) {
   if (settingsEnabled("beads", "bd-lease-gate", cwd))
     await decideLeaseClaim(parsed, event, ctx);
   if (settingsEnabled("beads", "bd-embedded-write-lock", cwd)) {
-    const embedded = await decideEmbeddedWrite(parsed, event, ctx);
+    const embedded = await decideEmbeddedWrite(parsed, event, ctx, deadline);
     if (embedded?.kind === "block")
       return suffix("bd-embedded-write-lock", embedded.reason);
     if (embedded?.kind === "rewrite")
@@ -1862,7 +2161,7 @@ function bashGates(pi) {
       const { command } = inputOf(event, ctx);
       if (!command)
         return;
-      return await decide(parse(command), event, ctx, pi);
+      return await decide(parse(command), event, ctx, pi, Date.now() + TOOL_CALL_BUDGET_MS);
     } catch (error) {
       return suffix("bash-gates", `command could not be parsed (${error instanceof Error ? error.message : String(error)})`, "split the command or run the mutation as a plain single command");
     }
