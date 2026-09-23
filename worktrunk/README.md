@@ -2,6 +2,9 @@
 
 Worktree discipline for agents working against a single embedded Beads store.
 
+The package ships one registered extension, `isolation-precheck`, and one directory-discovered
+skill. It still registers only that one extension in `package.json`.
+
 The package does exactly one thing in code: it refuses OMP native isolation. Everything else it
 used to enforce is steering, because steering is what the evidence supports.
 
@@ -41,6 +44,28 @@ that reads as broken code.
 Keep `task.isolation.enabled: false`, verified with `omp config get task.isolation.enabled --json`.
 The extension's refusal only fires once an isolated child has been attempted; this rule makes the
 setting correct beforehand.
+
+## Skills
+
+### `worktrunk-preflight`
+
+Like the rules above, the skill is discovered by directory convention. It runs deterministic checks
+before an agent run, focused test, or merge. Invoke it with:
+
+```sh
+python3 skills/worktrunk-preflight/preflight.py [--json] [--only ID] [--apply]
+```
+
+It is READ-ONLY unless `--apply` is passed. `--apply` runs only `wt config approvals add --yes`
+when the hook-approvals check fails, then rechecks it.
+
+It catches three measured defects:
+
+- An `approval_required` hook state: an unapproved project hook is skipped rather than failed, so
+  a `pre-merge` test hook that never runs is indistinguishable from one that passed.
+- A project-config key that `wt` silently discards, measured as `▲ Project config has key merge which belongs in user config (will be ignored)`. 
+- A `[merge]` table in project config, which cannot preserve merge evidence because `wt` ignores
+  it. The reliable control is `wt merge --no-squash --no-ff` per invocation.
 
 ## What is deliberately not here
 

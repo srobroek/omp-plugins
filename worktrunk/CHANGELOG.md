@@ -12,6 +12,8 @@
 
 * **worktrunk:** state worktree discipline as steering, requiring the run's recorded base commit and `wt step copy-ignored`
 * **worktrunk:** restore `worktrunk-isolation-disabled` as the standing setting instruction
+* **worktrunk:** ship the `worktrunk-preflight` skill by directory convention
+* **worktrunk:** detect pending hook approvals, discarded project-config keys, and an ignored project `[merge]` table
 
 ### Bug Fixes
 
