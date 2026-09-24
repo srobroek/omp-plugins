@@ -37,8 +37,8 @@ import {
 	flagEnabled,
 	globalValue,
 	invocationActor,
-	isMutatingBdCommand,
 	invocationFromArgv,
+	isMutatingBdCommand,
 } from "./bd-actor-gate.ts";
 import { embeddedWriteTargets, withEmbeddedWriteLock, writesStore } from "./bd-embedded-write-lock.ts";
 import { claimedIds, claimedTextIds, claimResultOutput } from "./bd-lease-gate.ts";

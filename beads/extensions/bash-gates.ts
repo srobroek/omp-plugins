@@ -1,5 +1,5 @@
-import type { ExtensionAPI, ExtensionContext, ToolCallEvent } from "@oh-my-pi/pi-coding-agent";
 import { resolve } from "node:path";
+import type { ExtensionAPI, ExtensionContext, ToolCallEvent } from "@oh-my-pi/pi-coding-agent";
 import { agentActor, bdInvocations, decideActorParsed, environmentForInput } from "./bd-actor-gate.ts";
 import { decideBdCloseParsed } from "./bd-close-gate.ts";
 import { decideEmbeddedWrite } from "./bd-embedded-write-lock.ts";
