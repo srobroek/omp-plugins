@@ -122,7 +122,6 @@
 * **session:** add resume_session tool extension with fixture tests ([9555e9e](https://github.com/srobroek/omp-plugins/commit/9555e9ed724cdb44714e72cdde7d1237c4d2d58c))
 * **session:** revive session plugin with resume-session skill ([af9251e](https://github.com/srobroek/omp-plugins/commit/af9251e4f4a7b36163d228373b76c21035813eba))
 * **speckit:** recover spec-modes rule lost in the docs rollup ([84c01b8](https://github.com/srobroek/omp-plugins/commit/84c01b85067a877cd2ab4d20c0bfeca88934aa0d))
-* work the migration backlog — speckit and project-setup plugins, TTSR adoptions, discovery tools ([90cae47](https://github.com/srobroek/omp-plugins/commit/90cae47f11df265138b099dcf1825daa14a22da0))
 
 
 ### Documentation
