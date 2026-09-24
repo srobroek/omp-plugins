@@ -1,11 +1,19 @@
 ---
 name: eli5
-description: Explain a topic at five depth levels from metaphor to frontier. Use when asked "ELI5", "explain X", "what is X", or "how does X work".
+description: Explain topics from metaphor to frontier. Use for explicit “ELI5” requests or explanations that ask for child-friendly, plain-language, or beginner-oriented wording; not generic explanations.
 ---
 
 # ELI5
 
-Explain the topic from the user request.
+TRIGGER
++ "ELI5", "explain this like I'm five", "explain this to a child", or an equivalent explicit request for the ELI5 format
++ an explanation request that explicitly asks for simple, plain-language, child-friendly, beginner-friendly, or no-prior-knowledge wording
+- generic "explain X", "what is X", or "how does X work" without a simplicity, audience, or ELI5 cue → answer directly without loading this skill
+- a technical deep dive, reference explanation, implementation guide, or current-events research request → use the relevant domain workflow
+
+## Scope
+
+Apply this skill only when a trigger above is present. Explain the requested topic at the requested depth; do not force five levels when the user asks for a single concise explanation.
 
 ## Staging
 

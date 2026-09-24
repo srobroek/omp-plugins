@@ -1,13 +1,22 @@
 ---
 name: speckit-workflow
-description: Load for SpecKit work or repositories containing `.specify/`; route active specs through beads molecules without authoring tasks.md.
+description: Load for SpecKit assets under `specs/` or `.specify/`; route active specs through beads molecules without authoring tasks.md.
+globs: ["specs/**", ".specify/**"]
 ---
+## Activation
+
+This rule routes for both `specs/**` and `.specify/**`. A matching path does not activate every section.
+
+- For a read-only asset inspection, apply only `DEFAULT` and `SPEC IDENTITY`.
+- For a lifecycle command, apply only the sections named by `COMMAND ROUTING`.
+- Do not execute setup, molecule, task, gate, review, decision, or sub-process instructions unless the active command names that section.
+
 
 The upstream /speckit.* skills are unmodified; they still talk about tasks.md.
 This layer redirects them: state lives in beads, never tasks.md. The poured
 molecule is the phase DAG and the only statement of step order.
 
-EXECUTION
+EXECUTION (lifecycle commands only)
 MUST Invoke SpecKit commands through their runtime-native skill interface.
 NOT Invoke deprecated `/speckit.implement`.
 MUST Work the task beads directly under the unconditional `implement` step.
@@ -15,24 +24,24 @@ MUST Begin implementation child work only after the implement step's
   prerequisites are satisfied, including every unwaived analysis approval gate.
 NOT Proceed with open questions, unresolved gaps, or unapproved intent changes.
 
-SETUP
+SETUP (`speckit_setup` only)
 MUST Copy every `formulas/*.formula.toml` from this plugin into `.beads/formulas/`
   (the `speckit-setup` skill / `speckit_setup` tool does this). Keep `mol-`
   prefixed filenames — `bd mol bond` resolves only prefixed stems.
 DEFAULT Without a beads workspace, preserve upstream SpecKit artifact behavior.
 
-SPEC IDENTITY
+SPEC IDENTITY (spec-producing commands)
 MUST Set `--spec-id <NNN-slug>` on every bead a spec produces, including
   `bd update` after `bd mol pour`.
 
-MOLECULE PER FEATURE
+MOLECULE PER FEATURE (spec-producing commands)
 MUST Pour one molecule per spec dir. Profiles: `speckit-basic`,
   `speckit-lean`, `speckit-feature`. All take `autonomous` and
   `agent_assign`. `bd mol pour <profile> --var feature=<NNN-slug>`, then
   `bd update <root-id> --spec-id <NNN-slug> --metadata '{"spec_dir":"specs/<NNN-slug>"}'`.
 DEFAULT Track position with `bd mol current <root-id>`.
 
-SPEC START
+SPEC START (`/speckit.specify` only)
 MUST At `/speckit.specify`, query parked work (`bd list --status deferred --json`)
   and surface hits before writing the spec.
 MUST Pour a molecule before writing the spec. Profiles live in this plugin's
@@ -40,7 +49,7 @@ MUST Pour a molecule before writing the spec. Profiles live in this plugin's
   is missing. Validate `autonomous` and `agent_assign` as exactly `yes` or `no`
   before pouring.
 
-TASK STATE
+TASK STATE (task-producing commands)
 MUST When /speckit.tasks instructs writing specs/*/tasks.md, create beads
   instead: `bd create "T00N <title>" --parent <implement-step-id> --spec-id
   <NNN-slug> -t task`. Bulk `bd create -f <tmp>.md` OUTSIDE specs/.
@@ -48,7 +57,7 @@ MUST When a later phase instructs reading tasks.md, query beads:
   `bd query 'spec_id="<NNN-slug>"' --json`.
 MUST Keep the implement parent open until every implementation child is closed.
 
-GATES
+GATES (molecule lifecycle commands)
 MUST Resolve a human gate with `bd gate resolve <gate-id>` then `bd close <step-id>`.
 MUST Use `--var autonomous=yes` only after explicit user authorization to waive
   this run's human approval gates; record the waiver on the molecule root.
@@ -59,7 +68,7 @@ MUST For each waived gate, record on its preceding step the review findings and
 NOT `bd close <gate-id>` to resolve a gate; the `bd-close-gate` extension checks
   literal ids against the database and blocks gate closure.
 
-COMMAND ROUTING (was the dispatcher table)
+COMMAND ROUTING (lifecycle commands)
 - constitution / roadmap.write: project-scoped; do not pour a molecule.
 - tinyspec: no lifecycle; do not pour. If it grows, stop and pour a feature molecule.
 - bugfix.report: active spec -> `bd mol bond mol-speckit-bugfix`; no spec -> create
@@ -73,7 +82,7 @@ COMMAND ROUTING (was the dispatcher table)
 - retro.run: read beads (`bd list --spec --status all --json`), close reasons,
   wisps, and decision beads -- not only spec.md/plan.md.
 
-PR REVIEW LOOP
+PR REVIEW LOOP (PR lifecycle commands)
 MUST The agent that creates a PR owns automated review through landing or human
   escalation. Park pending CodeRabbit, Codex and repository-configured review
   waits without polling; unrelated spec work continues.
@@ -86,11 +95,11 @@ MUST After three unsuccessful fixes of the same issue, hold that PR at human
   review with the issue identities, attempts, heads, fixes and unresolved URLs,
   then notify the main agent loop. Never charge new issues against the old count.
 
-DECISIONS
+DECISIONS (phase transitions)
 MUST Register a hard-to-reverse choice when it lands (`adr` skill / decision bead).
 Phases that earn a record: plan, critique/security, analyze, implement, iterate.
 
-SUB-PROCESS MOLECULES
+SUB-PROCESS MOLECULES (sub-process commands)
 MUST Bond, do not pour loose: `bd mol bond mol-speckit-<name> <target-id> --var feature=<NNN-slug>`.
 Bond to the STEP that found the work so the first child is ready immediately.
 
