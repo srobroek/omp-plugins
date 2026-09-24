@@ -1043,13 +1043,20 @@ export const RUNNER_WAIT_FLAG = "--beads-wait-ms";
  *
  * The interpreter cannot be assumed from `process.execPath`. OMP ships as a compiled
  * single-file executable, so that path is the `omp` binary, which cannot run a
- * script; on a source install it IS Bun, which can. Both are handled, and PATH and
- * `BUN_INSTALL` cover the compiled case.
+ * script; on a source install it IS Bun, which can. Both are handled, and PATH,
+ * `BUN_INSTALL`, and mise's resolved tool path cover the compiled case.
  *
  * The script sits beside this module whichever way the plugin was loaded: next to the
  * bundle in `dist/` when the package ships built, and next to the source in
  * `extensions/` when OMP imports the TypeScript directly.
  */
+export type BunDiscovery = {
+	execPath?: string;
+	which?: (name: string) => string | undefined | null;
+	environment?: NodeJS.ProcessEnv;
+	miseWhich?: (mise: string) => string | undefined;
+};
+
 export function embeddedWriteRunner(): { interpreter: string; script: string } | undefined {
 	const here = import.meta.dir;
 	const script = [
@@ -1064,14 +1071,38 @@ export function embeddedWriteRunner(): { interpreter: string; script: string } |
 }
 
 function bunBinary(): string | undefined {
-	const own = basename(process.execPath);
-	if (own === "bun" || own === "bun.exe") return process.execPath;
-	const onPath = typeof Bun === "undefined" ? undefined : Bun.which("bun");
+	return resolveBunBinary({
+		execPath: process.execPath,
+		which: name => (typeof Bun === "undefined" ? undefined : Bun.which(name)),
+		environment: process.env,
+		miseWhich: mise => {
+			try {
+				const result = Bun.spawnSync({ cmd: [mise, "which", "bun"], stdout: "pipe", stderr: "pipe" });
+				if (result.exitCode !== 0) return undefined;
+				return new TextDecoder().decode(result.stdout).trim();
+			} catch {
+				return undefined;
+			}
+		},
+	});
+}
+
+/** Resolve Bun without trusting the compiled OMP executable as an interpreter. */
+export function resolveBunBinary(options: BunDiscovery = {}): string | undefined {
+	const execPath = options.execPath ?? process.execPath;
+	const own = basename(execPath);
+	if (own === "bun" || own === "bun.exe") return execPath;
+	const onPath = options.which?.("bun");
 	if (onPath !== null && onPath !== undefined) return onPath;
-	const install = process.env.BUN_INSTALL;
-	if (install === undefined || install === "") return undefined;
-	const guess = join(install, "bin", "bun");
-	return existsSync(guess) ? guess : undefined;
+	const install = options.environment?.BUN_INSTALL;
+	if (install !== undefined && install !== "") {
+		const guess = join(install, "bin", "bun");
+		if (existsSync(guess)) return guess;
+	}
+	const mise = options.which?.("mise");
+	if (mise === null || mise === undefined || options.miseWhich === undefined) return undefined;
+	const resolved = options.miseWhich(mise);
+	return resolved !== undefined && basename(resolved).startsWith("bun") && existsSync(resolved) ? resolved : undefined;
 }
 
 /**
@@ -1131,6 +1162,7 @@ export async function decideEmbeddedWrite(
 	event: ToolCallEvent,
 	ctx: ExtensionContext,
 	deadline = Date.now() + 25_000,
+	runnerLookup: () => { interpreter: string; script: string } | undefined = embeddedWriteRunner,
 ): Promise<EmbeddedWriteDecision | undefined> {
 	try {
 		if (event.toolName !== "bash") return;
@@ -1163,11 +1195,11 @@ export async function decideEmbeddedWrite(
 				reason: `This command reaches the embedded store${unique.length > 1 ? "s" : ""} ${unique.join(", ")} in a form the Beads write lock cannot run under its serialising runner. Issue the \`bd\` command as its own tool call, as a single direct invocation.`,
 			};
 		}
-		const runner = embeddedWriteRunner();
+		const runner = runnerLookup();
 		if (runner === undefined) {
 			return {
 				kind: "block",
-				reason: `${store} is an embedded store, where two concurrent writers corrupt the Dolt journal, and the Beads write-lock runner that serialises writers could not be located: no \`bun\` binary was found on PATH, in BUN_INSTALL, or as this process's own interpreter, or the runner script is missing from the installed plugin. Install \`bun\` or reinstall the @srobroek/beads plugin; the write was refused rather than run unserialised.`,
+				reason: `${store} is an embedded store, where two concurrent writers corrupt the Dolt journal, and the Beads write-lock runner that serialises writers could not be located: no \`bun\` binary was found on PATH, in BUN_INSTALL, through mise, or as this process's own interpreter, or the runner script is missing from the installed plugin. Install \`bun\` or reinstall the @srobroek/beads plugin; the write was refused rather than run unserialised.`,
 			};
 		}
 		const preflightOwner = `tool-call-preflight:${event.toolCallId}`;
