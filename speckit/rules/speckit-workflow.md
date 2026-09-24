@@ -1,6 +1,7 @@
 ---
 name: speckit-workflow
-description: Load for SpecKit work or repositories containing `.specify/`; route active specs through beads molecules without authoring tasks.md.
+description: Load for SpecKit assets under `specs/` or `.specify/`; route active specs through beads molecules without authoring tasks.md.
+globs: ["specs/**", ".specify/**"]
 ---
 
 The upstream /speckit.* skills are unmodified; they still talk about tasks.md.
