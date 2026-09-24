@@ -211,28 +211,52 @@ def check_dependabot() -> None:
         fail(f"{label}: every update entry must be a mapping")
         return
 
+    bun_entries = [entry for entry in entries if entry.get("package-ecosystem") == ECOSYSTEM]
+    action_entries = [entry for entry in entries if entry.get("package-ecosystem") == "github-actions"]
+    unknown = [
+        str(entry.get("package-ecosystem"))
+        for entry in entries
+        if entry.get("package-ecosystem") not in {ECOSYSTEM, "github-actions"}
+    ]
+    if unknown:
+        fail(f"{label}: unsupported package ecosystems {sorted(set(unknown))!r}")
+
     expected = expected_directories()
-    covered = [str(entry.get("directory")) for entry in entries]
+    covered = [str(entry.get("directory")) for entry in bun_entries]
     duplicates = sorted({d for d in covered if covered.count(d) > 1})
     if duplicates:
-        fail(f"{label}: duplicate entries for {duplicates!r}")
+        fail(f"{label}: duplicate bun entries for {duplicates!r}")
     missing = sorted(set(expected) - set(covered))
     if missing:
         fail(
-            f"{label}: no update entry for {missing!r}; those directories carry a bun.lock, "
+            f"{label}: no bun update entry for {missing!r}; those directories carry a bun.lock, "
             "so Dependabot never sees their dependencies"
         )
     extra = sorted(set(covered) - set(expected))
     if extra:
-        fail(f"{label}: entries for {extra!r} have no bun.lock to resolve")
+        fail(f"{label}: bun entries for {extra!r} have no bun.lock to resolve")
 
-    for entry in entries:
-        directory = str(entry.get("directory"))
-        if entry.get("package-ecosystem") != ECOSYSTEM:
+    if len(action_entries) != 1:
+        fail(
+            f"{label}: expected exactly one github-actions entry for /, "
+            f"found {len(action_entries)}"
+        )
+    else:
+        action_entry = action_entries[0]
+        if str(action_entry.get("directory")) != "/":
             fail(
-                f"{label}: {directory} package-ecosystem must be {ECOSYSTEM!r} "
-                f"(the lockfile is bun.lock), got {entry.get('package-ecosystem')!r}"
+                f"{label}: github-actions directory must be '/', "
+                f"got {action_entry.get('directory')!r}"
             )
+        schedule = action_entry.get("schedule")
+        interval = schedule.get("interval") if isinstance(schedule, dict) else None
+        if interval != "daily":
+            fail(f"{label}: github-actions schedule.interval must be 'daily', got {interval!r}")
+        if action_entry.get("groups") or action_entry.get("ignore"):
+            fail(f"{label}: github-actions entry must not define groups or ignore rules")
+
+    for entry in bun_entries:
+        directory = str(entry.get("directory"))
         schedule = entry.get("schedule")
         interval = schedule.get("interval") if isinstance(schedule, dict) else None
         if interval != "daily":
