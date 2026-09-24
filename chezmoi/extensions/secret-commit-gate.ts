@@ -548,18 +548,6 @@ export function nestsShell(command: string): boolean {
 	return handsOffToShell(bare.join(""));
 }
 
-/**
- * Whether the command contains a git commit invocation that a nested shell could
- * execute. Keep this separate from `gitCommits`: that parser intentionally walks
- * only the current shell, while this check must also see commit words inside a
- * substitution, shell `-c` payload, or eval string. Git options are deliberately
- * accepted between the executable and `commit`, matching the flat parser's
- * command-word analysis (including `-c` configuration and aliases).
- */
-function couldInvokeGitCommit(command: string): boolean {
-	return /\b(?:git|dgit)(?:\s+-[^\s;&|()]+(?:\s+[^\s;&|()]+)?)*\s+commit\b/.test(command);
-}
-
 /** Shells whose `-c` argument is a script this walk cannot follow. */
 const NESTING_SHELLS: Record<string, true> = { sh: true, bash: true, zsh: true, ksh: true, dash: true, ash: true, busybox: true };
 
@@ -604,7 +592,9 @@ export function decideCommit(command: string, cwd: string): { block: true; reaso
 		}
 		return;
 	}
-	if (nestsShell(command) && couldInvokeGitCommit(command)) {
+	// Only a nested payload that runs `git`/`dgit` [options] `commit` can land a
+	// commit this walk cannot follow; read-only git inside a substitution passes.
+	if (nestsShell(command) && /\b(?:git|dgit)(?:\s+-[^\s;&|()]+(?:\s+[^\s;&|()]+)?)*\s+commit\b/.test(command)) {
 		return {
 			block: true,
 			reason: "This command nests a shell -- a subshell, a brace group, a substitution, or eval -- and the guard cannot follow which directory the commit lands in, so it cannot check whether that commit stages a plaintext secret. Run the commit as a plain command in the directory it belongs to.",
