@@ -16,6 +16,28 @@ const PACKAGE_COMMANDS = new Map<string, Set<string>>([
 	["go", new Set(["get"])],
 	["composer", new Set(["require"])],
 ]);
+// These options consume the following token when written without `=`. Unknown
+// options are treated as flags so an option cannot hide a real package verb.
+const OPTION_VALUES: Record<string, Set<string>> = {
+	pnpm: new Set(["--filter", "--dir", "--workspace", "--config-dir"]),
+	npm: new Set(["--prefix", "--userconfig", "--registry", "--cache"]),
+	bun: new Set(["--cwd", "--config"]),
+	yarn: new Set(["--cwd", "--use-yarnrc"]),
+	uv: new Set(["--directory", "--project", "--python"]),
+	pip: new Set(["--python", "--log", "--proxy", "--timeout"]),
+	pip3: new Set(["--python", "--log", "--proxy", "--timeout"]),
+};
+
+function findVerb(tokens: readonly ShellToken[], start: number, manager: string): number {
+	const valueOptions = OPTION_VALUES[manager] ?? new Set<string>();
+	for (let i = start; i < tokens.length; i++) {
+		const token = tokens[i];
+		if (!token || token.startsQuoted) return -1;
+		if (!token.value.startsWith("-")) return i;
+		if (!token.value.includes("=") && valueOptions.has(token.value)) i++;
+    }
+    return -1;
+}
 
 const ENV_ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*=/;
 const PACKAGE = /^(?!-)[A-Za-z@./_~][^;|&<>()`$]*$/;
@@ -56,19 +78,19 @@ export function shouldInvestigate(command: string): boolean {
 			position = false;
 			continue;
 		}
-		const verb = tokens[commandIndex + 1];
+		const verbIndex = findVerb(tokens, commandIndex + 1, word.value);
+		const verb = verbIndex < 0 ? undefined : tokens[verbIndex];
 		const verbs = PACKAGE_COMMANDS.get(word.value);
 		if (!verb || verb.startsQuoted || !verbs?.has(verb.value)) {
 			position = false;
 			continue;
 		}
-		const packageStart = commandIndex + 2;
+		const packageStart = verbIndex + 1;
 		if (hasPackage(tokens, packageStart)) return true;
 		position = false;
 	}
 	return false;
 }
-
 export default function packageInvestigate(pi: ExtensionAPI): void {
 	pi.on("tool_call", (event: ToolCallEvent) => {
 		try {
