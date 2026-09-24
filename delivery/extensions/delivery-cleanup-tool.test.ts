@@ -1,4 +1,7 @@
-import { afterAll, describe, expect, test } from "bun:test";
+import { afterAll, describe, expect, setDefaultTimeout, test } from "bun:test";
+// Fixture setup creates several real Git repositories and measured about 20s under full-suite load;
+// keep three times that headroom instead of letting Bun's 5s default kill a child process mid-fixture.
+setDefaultTimeout(60_000);
 import { execFileSync } from "node:child_process";
 import {
 	appendFileSync,
