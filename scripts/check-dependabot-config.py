@@ -151,6 +151,9 @@ def expected_directories() -> dict[str, bool]:
             **(data.get("devDependencies") or {}),
         }
         directory = "/" if lock.parent == REPO else f"/{lock.parent.name}"
+        plugin_manifest = lock.parent / ".omp-plugin/plugin.json"
+        if plugin_manifest.is_file() and json.loads(plugin_manifest.read_text(encoding="utf-8")).get("publish") is False:
+            continue
         found[directory] = any(name.startswith(SCOPE) for name in requirements)
     return found
 
