@@ -32,24 +32,41 @@ steering requires. Its verified plan shape:
 
 - Top level is `nodes`, plus an optional `edges`. A top-level `issues` key is
   silently dropped with a warning.
-- A node's plan-local identifier is `key`, never `id`; a node without `key` is
-  rejected. Accepted node fields are `key`, `type`, `priority`, `title`,
-  `description`, `acceptance_criteria`, `parent_key`, `labels`, `metadata`.
+- A node's plan-local identifier is `key`, never `id`; a node without `key`
+  is rejected. Accepted node fields are `key`, `type`, `priority`, `title`,
+  `description`, `acceptance_criteria`, `parent_key`, `parent_id`, `labels`,
+  `metadata`.
 - The field is `acceptance_criteria`. Plain `acceptance` is silently dropped.
-- Dependencies belong in the top-level `edges` array, each entry
-  `{"from_key": "a", "to_key": "b", "type": "blocks"}`. Use `from_id` and
-  `to_id` to reference a bead that already exists.
+- To attach a newly-created node to an existing parent bead, use the node-level
+  `parent_id` field with that bead's id. `parent_key` only names another node
+  in the same plan; it fails when it names an existing bead. A dry run with an
+  existing parent reported `23 parent-child link(s)` when `parent_id` was used,
+  while putting that id in a top-level `from_id`/`to_id` edge reported
+  `23 edge(s) (0 parent-child link(s))`.
+- Dependencies between plan nodes belong in the top-level `edges` array, each
+  entry `{"from_key": "a", "to_key": "b", "type": "blocks"}`. Use `from_id`
+  and `to_id` to reference an existing bead when creating a dependency that is
+  not a parent attachment.
 - Unknown fields anywhere are silently dropped with a warning, so a typo costs
   the field rather than raising.
 
-MUST treat a per-node `deps` array as a trap. It reports success and creates
-ZERO edges, so the plan looks correct and the DAG has no dependencies at all.
+MUST review a graph plan before the implementation wave starts. The reviewer
+MUST record a verdict against each guard rail: every task names bounded files or
+symbols and independently verifiable acceptance criteria; design decisions are
+separate decision or research beads; review beads depend on every task they
+review; dependencies encode true ordering only; each implementer has a
+justified `metadata.tier`; and the plan has an explicit integration/delivery
+path. A failed guard rail produces a revision bead or blocks the implementation
+wave; it is not silently accepted.
 
-MUST dry-run first and check the reported edge count, for example
+MUST dry-run first and check the reported node and edge counts, for example
 `would create 3 issue(s) and 1 edge(s) (2 parent-child link(s))`. That count is
 the only signal that catches the dropped-dependency trap. A dry run validates
 structure only: a live create can still reject parent-child blocking paths after
 resolving stored dependencies.
+
+MUST treat a per-node `deps` array as a trap. It reports success and creates
+ZERO edges, so the plan looks correct and the DAG has no dependencies at all.
 
 # BULK MUTATION
 Use `bd batch` for mutations of existing beads. First filter candidates with
@@ -144,5 +161,18 @@ share it. `BEADS_DIR` does not redirect `bd init` away from canonical. No Dolt
 server may be started. Two concurrent writers corrupt the Dolt journal, so a
 contended `bd` call is retried rather than worked around.
 # DELIVERY
-MUST run `bd dolt pull` before claiming when the read decides assignment, so the claim uses fresh ledger state. After delivery, MUST run `bd dolt push`.
-Routine commits and pushes need no permission. NEVER merge a pull request into the default branch autonomously; that is the only forbidden autonomous action.
+MUST run `bd dolt pull` before claiming when the read decides assignment, so the
+claim uses fresh ledger state. After delivery, MUST run `bd dolt push`.
+
+`bd dolt pull` and `bd dolt push` are bounded persistence operations, not locks.
+Retry each failed sync up to three attempts with a brief wait, then report the
+verbatim failure. Never fall back to a manual `dolt` invocation, start a server,
+or continue as though the remote were current. If the final attempt may have
+applied remotely but its result is unknown, report the sync as UNKNOWN and do
+not claim that the ledger is synchronized. Re-run `bd dolt pull` before trusting
+a read that decides assignment after any retry sequence.
+
+Before any implementation wave, the lead records the DAG review verdict and
+guard-rail evidence on the governing bead. The review must name the plan,
+nodes, edges, tier justifications, and any revision or blocking decision; a
+missing review is not a pass.

@@ -30,6 +30,29 @@ bd update <issue-id> --status done
 bd dolt push
 ```
 
+## Agent planning and sync contract
+
+Before an implementation wave starts, the lead MUST record a DAG review against
+these guard rails: every task names bounded files or symbols and independently
+verifiable acceptance criteria; design decisions are separate decision or
+research beads; review beads depend on every task they review; dependencies
+encode true ordering only; implementer `metadata.tier` values are justified;
+and the plan has an explicit integration and delivery path. A failed guard rail
+requires a revision bead or blocks the wave. The review records the plan,
+nodes, edges, tier justifications, and any revision or blocking decision.
+
+For `bd create --graph`, `parent_key` names a node in the same plan. To attach a
+new node to an existing parent bead, use node-level `parent_id`; a dry run must
+show the expected parent-child link count. Use top-level `edges` for dependencies
+and inspect the node and edge counts before creating the plan.
+
+Run `bd dolt pull` before a read that decides assignment and `bd dolt push` after
+delivery. A failed pull or push is retried at most three times. If the last
+attempt may have applied remotely but its result is unknown, report UNKNOWN and
+do not claim synchronization; never fall back to a manual `dolt` command or
+continue as if the remote were current. Pull again before trusting an assignment
+read after a retry sequence.
+
 ### Working with Issues
 
 Issues in Beads are:
