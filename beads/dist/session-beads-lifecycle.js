@@ -2128,7 +2128,7 @@ function formatSessionCloseAdvisory(beads, env = process.env, releasedAt = new D
     const actor = bead.assignee !== undefined && effectiveActors.has(bead.assignee) ? bead.assignee : undefined;
     const release = bead.assignee === undefined || actor === undefined || bead.releaseStore === null ? undefined : releaseClaimCommand(bead.id, bead.assignee, { ...env, BD_ACTOR: actor }, releasedAt, casSupported, bead.releaseStore);
     if (release === undefined) {
-      lines.push("  Release unavailable: the effective actor is missing or ambiguous; verify the current assignee and actor before retrying.");
+      lines.push(casSupported ? "  Release unavailable: the effective actor is missing or ambiguous; verify the current assignee and actor before retrying." : "  Release unavailable: bd >= 1.3 is required for atomic --if-assignee; the claim remains assigned.");
     } else {
       lines.push(`  Release with: ${release}`);
       if (!casSupported)
@@ -2151,7 +2151,7 @@ function trackedClaimAdvisory(state) {
     assignee: claim.actor,
     releaseStore: claim.store ?? null
   }));
-  return formatSessionCloseAdvisory(claims, {}, new Date().toISOString(), true, state.actors);
+  return formatSessionCloseAdvisory(claims, {}, new Date().toISOString(), state.casSupported !== false, state.actors);
 }
 function boundedFailure(reason) {
   const oneLine = reason.replace(/\s+/g, " ").trim();
@@ -2224,12 +2224,21 @@ async function releaseClaimsAtAgentEnd(state, cwd, report) {
       const record = bead;
       if (record.assignee !== actor || !["epic", "task"].includes(String(record.issue_type)) || !["open", "in_progress", "blocked", "deferred"].includes(String(record.status)))
         continue;
+      if (state.casSupported === false) {
+        report(`terminal claim ${claim.id} remains assigned: bd >= 1.3 is required for atomic --if-assignee; no automatic release was attempted`);
+        continue;
+      }
       const release = releaseClaimArgs(claim.id, actor, env, new Date().toISOString(), true);
       if (release === undefined)
         continue;
       const released = await runBdResult(cwd, release, deadline, env);
       if (!("output" in released)) {
-        report(`terminal claim release for ${claim.id} was not verified: ${released.failure}`);
+        if (/--if-assignee/i.test(released.failure) && /(?:unknown|unrecognized|unsupported|invalid|unexpected).*(?:flag|option)|(?:flag|option).*(?:unknown|unrecognized|unsupported|invalid|unexpected)/i.test(released.failure)) {
+          state.casSupported = false;
+          report(`terminal claim ${claim.id} remains assigned: bd >= 1.3 is required for atomic --if-assignee; no automatic release was attempted`);
+        } else {
+          report(`terminal claim release for ${claim.id} was not verified: ${released.failure}`);
+        }
         continue;
       }
       const restore = restoreReleasedStatusArgs(claim.id, String(record.status));
@@ -2496,6 +2505,11 @@ function sessionBeadsLifecycle(pi) {
       const pin = autoPinBeadsDir(cwd, key, (id) => sessions.has(id));
       state.repo = identityFor(state, cwd);
       state.pin = sessionPinAfter(pin, cwd);
+      if (state.repo === undefined) {
+        if (existsSync2(join2(cwd, ".beads")))
+          advise("Beads session-start unverified: repository identity unknown; gate verification was skipped.");
+        return;
+      }
       if (pin.conflict !== undefined) {
         advise(`This process is pinned to another repository's beads database (\`BEADS_DIR=${pin.conflict}\`) by a live session. ` + "Bash calls in this checkout use its own `.beads`; calls in other repositories remain unpinned unless they provide `BEADS_DIR`.");
       }
