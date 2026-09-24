@@ -128,7 +128,7 @@ class PreflightRegressionTests(unittest.TestCase):
 
             payload = {
                 "state": "approved",
-                "commands": [{"phase": "pre-merge", "name": "verify", "command": "./verify.sh", "approved": True}],
+                "commands": [{"phase": "pre-merge", "name": "verify", "template": "./verify.sh", "approved": True}],
                 "stale": [],
             }
             self.assertEqual(preflight.check_hook_approvals(ApprovalContext(payload)).status, "fail")
@@ -148,7 +148,7 @@ class PreflightRegressionTests(unittest.TestCase):
                     if args == ("wt", "config", "approvals", "list", "--format=json"):
                         return preflight.CommandResult(
                             0,
-                            json.dumps({"state": "approved", "commands": [{"phase": "pre-start", "name": "verify", "command": "python3 ./verify.py", "approved": True}]}),
+                            json.dumps({"state": "approved", "commands": [{"phase": "pre-start", "name": "verify", "template": "python3 ./verify.py", "approved": True}]}),
                         )
                     return super().run(*args, **kwargs)
 
@@ -164,7 +164,7 @@ class PreflightRegressionTests(unittest.TestCase):
                     if args == ("wt", "config", "approvals", "list", "--format=json"):
                         return preflight.CommandResult(
                             0,
-                            json.dumps({"state": "approved", "commands": [{"phase": "pre-start", "name": "verify", "command": "./missing.sh", "approved": True}]}),
+                            json.dumps({"state": "approved", "commands": [{"phase": "pre-start", "name": "verify", "template": "./missing.sh", "approved": True}]}),
                         )
                     return super().run(*args, **kwargs)
 
@@ -181,7 +181,7 @@ class PreflightRegressionTests(unittest.TestCase):
                     if args == ("wt", "config", "approvals", "list", "--format=json"):
                         return preflight.CommandResult(
                             0,
-                            json.dumps({"state": "approved", "commands": [{"phase": "pre-start", "name": "verify", "command": "missing-tool verify", "approved": True}]}),
+                            json.dumps({"state": "approved", "commands": [{"phase": "pre-start", "name": "verify", "template": "missing-tool verify", "approved": True}]}),
                         )
                     return super().run(*args, **kwargs)
 
