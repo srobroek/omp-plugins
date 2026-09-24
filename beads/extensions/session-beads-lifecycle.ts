@@ -29,6 +29,7 @@ import type {
 
 import {
 	actorValues,
+	agentActor,
 	type BdInvocation,
 	bdInvocations,
 	environmentForInput,
@@ -713,6 +714,19 @@ export function releaseClaimArgs(
 	return ["unclaim", id, "--reason", reason, "--if-assignee", holder];
 }
 
+/**
+ * Restore a parked status after `bd unclaim` resets the assignee and status to
+ * open. The second mutation is guarded by `--if-status open`, so a new worker
+ * that claims the bead between the two commands cannot be overwritten. A
+ * terminal in-progress claim gets the explicit open transition; open claims
+ * need no follow-up. The release reason remains the native unclaim audit.
+ */
+function restoreReleasedStatusArgs(id: string, status: string): string[] | undefined {
+	if (status === "in_progress") return ["update", id, "--status", "open", "--if-status", "open"];
+	if (status === "blocked" || status === "deferred") return ["update", id, "--status", status, "--if-status", "open"];
+	return undefined;
+}
+
 function shellQuote(value: string): string {
 	return `'${value.replaceAll("'", "'\\''")}'`;
 }
@@ -956,8 +970,19 @@ async function releaseClaimsAtAgentEnd(
 			const release = releaseClaimArgs(claim.id, actor, env, new Date().toISOString(), true);
 			if (release === undefined) continue;
 			const released = await runBdResult(cwd, release, deadline, env);
-			if ("output" in released) state.claims.delete(key);
-			else report(`terminal claim release for ${claim.id} was not verified: ${released.failure}`);
+			if (!("output" in released)) {
+				report(`terminal claim release for ${claim.id} was not verified: ${released.failure}`);
+				continue;
+			}
+			const restore = restoreReleasedStatusArgs(claim.id, String(record.status));
+			if (restore !== undefined) {
+				const restored = await runBdResult(cwd, restore, deadline, env);
+				if (!("output" in restored)) {
+					report(`terminal claim status restore for ${claim.id} was not verified: ${restored.failure}`);
+					continue;
+				}
+			}
+			state.claims.delete(key);
 		} catch (error) {
 			// One malformed or slow bead must not prevent independent claims from
 			// getting their own ownership check and release attempt.
@@ -1389,16 +1414,18 @@ export default function sessionBeadsLifecycle(pi: ExtensionAPI): void {
 		return { continue: true as const, additionalContext };
 	});
 
-	pi.on("agent_end", (event: AgentEndEvent, ctx: ExtensionContext) => {
+	pi.on("agent_end", async (event: AgentEndEvent, ctx: ExtensionContext) => {
 		if (!terminalAgentEnd(event)) return;
 		const state = sessions.get(sessionKey(ctx));
 		if (state === undefined || state.claims.size === 0) return;
 		const pending = releaseClaimsAtAgentEnd(state, ctx?.cwd ?? process.cwd(), (message) => {
 			pi.logger.error("beads terminal claim release advisory", { message, outcome: event.outcome, status: event.status });
 		});
-		// Do not make agent_end wait on a cold embedded store. Reads are bounded by
-		// the two-minute command ceiling, unreferenced, and their late result is
-		// consumed by the tracked promise when tests or the next lifecycle boundary join it.
+		// Spawned task executors await agent_end handlers; return their finalizer so
+		// the task cannot settle while an actor-owned claim is still being checked.
+		if (agentActor(ctx) !== undefined) return await pending;
+		// Main-agent session_stop steering runs first. Its terminal cleanup remains
+		// detached from the boundary so a cold embedded read cannot hold the harness.
 		track(pending).catch((error: unknown) => {
 			pi.logger.error("beads terminal claim release failed", { error: error instanceof Error ? error.message : String(error) });
 		});
