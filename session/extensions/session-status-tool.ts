@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
-import { readFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
+import { readFile } from "node:fs/promises";
 import { basename, join, resolve } from "node:path";
 import { promisify } from "node:util";
 import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
@@ -10,9 +10,9 @@ import {
 	candidates,
 	listWorktrees,
 	repoRoot,
+	type SessionMeta,
 	scanTranscriptMeta,
 	sessionsRoot,
-	type SessionMeta,
 	type Worktree,
 } from "./store";
 
