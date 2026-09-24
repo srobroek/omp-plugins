@@ -8,7 +8,7 @@ description: Bootstrap SpecKit end-to-end -- scaffold, extensions, workflows, ga
 Idempotent one-time bootstrap. Prefer the native `speckit_setup` tool over
 re-implementing the steps by hand.
 
-Requires `specify-cli` >= 0.12.0 (`uv tool install specify-cli`) and `bd`.
+Requires `specify-cli` (`uv tool install specify-cli`) and `bd`.
 
 ## When to use
 
