@@ -8,6 +8,7 @@ import shlex
 import fnmatch
 import json
 import os
+import shutil
 from pathlib import Path
 import re
 import subprocess
@@ -189,7 +190,16 @@ def parse_json_object(text: str) -> dict[str, Any] | None:
     return None
 
 
-def declared_hook_path(command: dict[str, Any], cwd: Path) -> Path | None:
+def _is_path_token(token: str) -> bool:
+    return token.startswith(("/", "./", "../", "~/")) or ("/" in token and not token.startswith("-"))
+
+
+def _resolve_path_token(token: str, cwd: Path) -> Path:
+    path = Path(token).expanduser()
+    return (path if path.is_absolute() else cwd / path).resolve()
+
+
+def _command_tokens(command: dict[str, Any]) -> list[str] | None:
     raw = command.get("command")
     if not isinstance(raw, str) or not raw.strip():
         return None
@@ -197,11 +207,41 @@ def declared_hook_path(command: dict[str, Any], cwd: Path) -> Path | None:
         tokens = shlex.split(raw)
     except ValueError:
         return None
+    return tokens or None
+
+
+def resolve_hook_executable(command: dict[str, Any], cwd: Path) -> tuple[str, Path | None] | None:
+    tokens = _command_tokens(command)
+    if tokens is None:
+        return None
+    index = 0
+    while index < len(tokens) and re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", tokens[index]):
+        index += 1
+    if index >= len(tokens):
+        return None
+    token = tokens[index]
+    if _is_path_token(token):
+        return token, _resolve_path_token(token, cwd)
+    resolved = shutil.which(token)
+    return token, Path(resolved).resolve() if resolved else None
+
+
+def declared_hook_paths(command: dict[str, Any], cwd: Path) -> list[Path]:
+    tokens = _command_tokens(command)
+    if tokens is None:
+        return []
+    paths: list[Path] = []
     for token in tokens:
-        if token.startswith(("/", "./", "../")) or "/" in token:
-            path = Path(token)
-            return (path if path.is_absolute() else cwd / path).resolve()
-    return None
+        if _is_path_token(token):
+            path = _resolve_path_token(token, cwd)
+            if path not in paths:
+                paths.append(path)
+    return paths
+
+
+def declared_hook_path(command: dict[str, Any], cwd: Path) -> Path | None:
+    resolved = resolve_hook_executable(command, cwd)
+    return None if resolved is None else resolved[1]
 
 
 def check_hook_approvals(ctx: Context, fresh: bool = False) -> Result:
@@ -229,8 +269,18 @@ def check_hook_approvals(ctx: Context, fresh: bool = False) -> Result:
         label = f"{phase}/{name}"
         if command.get("approved") is False:
             unapproved.append(label)
-        path = declared_hook_path(command, ctx.cwd)
-        if path is not None:
+        resolved = resolve_hook_executable(command, ctx.cwd)
+        if resolved is None:
+            missing.append(f"{label} (missing or invalid command)")
+            continue
+        executable, executable_path = resolved
+        candidates: list[Path] = []
+        if executable_path is None:
+            missing.append(f"{label} (command {executable!r} not found on PATH)")
+        else:
+            candidates.append(executable_path)
+        candidates.extend(path for path in declared_hook_paths(command, ctx.cwd) if path not in candidates)
+        for path in candidates:
             if not path.is_file():
                 missing.append(f"{label} ({path})")
             elif not os.access(path, os.X_OK):
@@ -443,15 +493,25 @@ def check_node_modules_integrity(ctx: Context) -> Result:
 
     package_json = root / "package.json"
     declared: list[str] = []
-    try:
-        package = json.loads(package_json.read_text(encoding="utf-8"))
-    except (OSError, UnicodeError, json.JSONDecodeError):
-        package = None
-    if isinstance(package, dict):
-        for section in ("dependencies", "devDependencies"):
-            values = package.get(section)
-            if isinstance(values, dict):
-                declared.extend(name for name in values if isinstance(name, str))
+    if package_json.exists():
+        try:
+            package = json.loads(package_json.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, json.JSONDecodeError) as error:
+            fix = "repair package.json, run bun install --frozen-lockfile, then rerun the Worktrunk preflight"
+            return Result("warn", f"package.json is unreadable or invalid: {error}", fix)
+        if not isinstance(package, dict):
+            fix = "repair package.json to contain a JSON object, run bun install --frozen-lockfile, then rerun the Worktrunk preflight"
+            return Result("warn", "package.json is invalid: the top-level value must be an object", fix)
+    else:
+        package = {}
+    for section in ("dependencies", "devDependencies"):
+        values = package.get(section)
+        if values is None:
+            continue
+        if not isinstance(values, dict):
+            fix = f"repair package.json {section} to be an object, run bun install --frozen-lockfile, then rerun the Worktrunk preflight"
+            return Result("warn", f"package.json is invalid: {section} must be an object", fix)
+        declared.extend(name for name in values if isinstance(name, str))
     missing = sorted({name for name in declared if not (node_modules / name).exists()})
     if missing:
         shown = ", ".join(missing[:8])
