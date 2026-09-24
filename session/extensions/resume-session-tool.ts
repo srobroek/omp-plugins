@@ -153,7 +153,7 @@ export async function renderList(
   const found: Candidate[] = await candidates(root, accept);
   const rows: Row[] = [];
   const errors: string[] = [];
-  if (worktreeProbeFailed) errors.push(`worktree inventory unavailable for ${project}; showing current checkout sessions only`);
+	if (worktreeProbeFailed) errors.push(`could not enumerate worktrees; membership unknown for ${project}; showing current checkout sessions only`);
 	for (const candidate of found) {
 		signal?.throwIfAborted();
 		try {
