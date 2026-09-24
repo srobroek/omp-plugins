@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import pkg from "../package.json" with { type: "json" };
 
 import hygieneOrientation, {
 	CONTRACT,
@@ -362,7 +363,7 @@ describe("delivery hygiene orientation", () => {
 		if (!key) throw new Error("missing repo key");
 		const receipt = buildReceipt({
 			now: 1_800_000_000_000,
-			emitter: { plugin: "@srobroek/delivery", version: "0.12.0", tool: "delivery_land" },
+			emitter: { plugin: "@srobroek/delivery", version: pkg.version, tool: "delivery_land" },
 			repo: { key, canonicalRoot: realpathSync(cwd), remote: "origin", forge: "github", nameWithOwner: "owner/repo" },
 			pr: {
 				number: 7,
