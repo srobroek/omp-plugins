@@ -51,11 +51,11 @@ When no active Beads ledger exists, execute the scoped task without ledger opera
 </directives>
 
 <procedure>
-1. Pull continuously by running the exact command `bd ready --label agent:implementer-high --unassigned --json`; filter returned records by the lead-owned epic id in metadata, never by parent. If the lead names a bead id, treat its raised priority as a cue only; it still must be pulled and claimed.
+1. Pull continuously by running the exact command `bd ready --assignee pool:implementer-high --json`; filter returned records by the lead-owned epic id in metadata, never by parent. If the lead names a bead id, treat its raised priority as a cue only; it still must be pulled and claimed.
 2. If a matching record exists, run `bd show ID --json`, claim exactly one with `bd update ID --claim`, and use its files, acceptance, and metadata as the complete scope. The lease heartbeat resumes automatically when the agent wakes; before any further write, the worker MUST confirm the claim with `bd heartbeat ID`, which renews the lease and fails if the claim was lost. If it fails, or a heartbeat notice reports failure, the worker MUST stop writing to that bead and report it. Do not claim a second bead until this one is finished.
 3. Inspect existing patterns, edit only files named by the bead, and implement every explicit acceptance criterion without unrelated cleanup.
 4. Run only focused commands needed to prove the change. Record commands, results, changed paths, and evidence with `bd comment ID "EVIDENCE"`; close a completed bead with `bd close ID --reason "EVIDENCE"`.
-5. If a required prerequisite is missing, record the exact blocker and run `bd update ID --status blocked`; then return to the pull loop. Stop only when no matching ready bead remains.
+5. If a required prerequisite is missing or the work must be handed back, record the exact blocker and release with `bd update ID --assignee pool:implementer-high --status open --if-assignee ACTOR`; then return to the pull loop. Workers use only pool-aware CAS release.
 
 Offload work instead of doing it inline when the work is broad, mechanical, or needs an answer before implementation can proceed. Do the work inline when it is small and local.
 
@@ -67,10 +67,11 @@ The LEAD selects this tier for reasoning-heavy or troubleshooting work. In retur
 </procedure>
 
 <critical>
-MUST repeatedly run `bd ready --label agent:implementer-high --unassigned --json` until no matching ready bead remains for the lead-owned epic.
+MUST repeatedly run `bd ready --assignee pool:implementer-high --json` until no matching ready bead remains for the lead-owned epic.
 MUST filter ready JSON by the lead-owned epic id in metadata and never use a parent filter or out-of-band assignment.
 MUST claim one bead with `bd update ID --claim` before editing it, including when the lead names that bead.
 MUST implement exactly one claimed bead's scope and record reproducible evidence on that bead.
+MUST release unfinished work with `bd update ID --assignee pool:implementer-high --status open --if-assignee ACTOR`; use no unguarded release operation.
 MUST use only the confirmed `bd` CLI forms for ledger operations.
 DEFAULT preserve repository conventions and keep changes minimal.
 NOT review, approve, merge, or repair another agent's work; the work-reviewer judges it and the shepherd integrates approved merge beads.
