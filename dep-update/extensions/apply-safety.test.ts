@@ -67,3 +67,25 @@ test("apply rejects options, honors cancellation, bounds children/output, and pi
 		rmSync(root, { recursive: true, force: true });
 	}
 }, 10000);
+
+
+test("apply reports missing package managers as failures", async () => {
+	const root = mkdtempSync(join(tmpdir(), "dep-apply-missing-pm-"));
+	const oldPath = process.env.PATH;
+	const oldPm = process.env.DEP_UPDATE_PKG_MANAGER;
+	try {
+		process.env.PATH = root;
+		process.env.DEP_UPDATE_PKG_MANAGER = "pnpm";
+		const nodeResult = await applyBump("npm", "example", "1.0.0", root);
+		expect(nodeResult.exit).toBe(1);
+		expect(nodeResult.text).toContain("pnpm not found");
+		delete process.env.DEP_UPDATE_PKG_MANAGER;
+		const pythonResult = await applyBump("pypi", "example", "1.0.0", root);
+		expect(pythonResult.exit).toBe(1);
+		expect(pythonResult.text).toContain("uv not found");
+	} finally {
+		if (oldPath === undefined) delete process.env.PATH; else process.env.PATH = oldPath;
+		if (oldPm === undefined) delete process.env.DEP_UPDATE_PKG_MANAGER; else process.env.DEP_UPDATE_PKG_MANAGER = oldPm;
+		rmSync(root, { recursive: true, force: true });
+	}
+});
