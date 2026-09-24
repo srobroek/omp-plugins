@@ -1,9 +1,9 @@
-import pkg from "../package.json" with { type: "json" };
 import { lstatSync, realpathSync, type Stats } from "node:fs";
 import { dirname, isAbsolute, resolve, sep } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import type { TSchema } from "@oh-my-pi/pi-ai";
 import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
+import pkg from "../package.json" with { type: "json" };
 import {
 	type CliResult,
 	type CliRunner,

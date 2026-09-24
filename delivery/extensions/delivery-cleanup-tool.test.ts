@@ -1,5 +1,4 @@
 import { afterAll, describe, expect, test } from "bun:test";
-import pkg from "../package.json" with { type: "json" };
 import { execFileSync } from "node:child_process";
 import {
 	appendFileSync,
@@ -17,6 +16,7 @@ import {
 import { devNull, tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
+import pkg from "../package.json" with { type: "json" };
 import deliveryCleanupTool, {
 	branchDeleteArgs,
 	type CleanupResult,

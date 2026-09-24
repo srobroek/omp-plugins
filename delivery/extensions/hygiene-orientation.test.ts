@@ -1,8 +1,8 @@
 import { describe, expect, test } from "bun:test";
-import pkg from "../package.json" with { type: "json" };
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import pkg from "../package.json" with { type: "json" };
 
 import hygieneOrientation, {
 	CONTRACT,

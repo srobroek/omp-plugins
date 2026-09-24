@@ -1,5 +1,4 @@
 import { afterAll, describe, expect, test } from "bun:test";
-import pkg from "../package.json" with { type: "json" };
 import {
 	chmodSync,
 	lstatSync,
@@ -15,6 +14,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import pkg from "../package.json" with { type: "json" };
 
 import {
 	buildReceipt,
