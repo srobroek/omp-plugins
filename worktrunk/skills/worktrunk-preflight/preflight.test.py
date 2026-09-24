@@ -62,6 +62,15 @@ class PreflightRegressionTests(unittest.TestCase):
             self.assertEqual(result.status, "pass")
             self.assertIn("node_modules", result.detail)
 
+    def test_skeleton_bun_types_warns_with_repair(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "node_modules" / "@types" / "bun").mkdir(parents=True)
+            result = preflight.check_node_modules_integrity(FakeContext(root))
+            self.assertEqual(result.status, "warn")
+            self.assertIn("TS2688", result.detail)
+            self.assertIn("bun install --frozen-lockfile", result.fix)
+
     def test_invalid_git_metadata_is_a_failure(self) -> None:
         class BrokenContext(FakeContext):
             def run(self, *args: str, **kwargs: object) -> preflight.CommandResult:
