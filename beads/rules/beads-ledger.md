@@ -34,13 +34,33 @@ steering requires. Its verified plan shape:
   silently dropped with a warning.
 - A node's plan-local identifier is `key`, never `id`; a node without `key` is
   rejected. Accepted node fields are `key`, `type`, `priority`, `title`,
-  `description`, `acceptance_criteria`, `parent_key`, `labels`, `metadata`.
+  `description`, `acceptance_criteria`, `parent_key`, `parent_id`, `labels`,
+  `metadata`.
+- `parent_id` attaches the node to an existing parent bead id. `parent_key`
+  attaches the node to another node in the same graph plan; it is not a stored
+  bead id. A `parent_key` naming an id outside the plan is rejected.
 - The field is `acceptance_criteria`. Plain `acceptance` is silently dropped.
 - Dependencies belong in the top-level `edges` array, each entry
   `{"from_key": "a", "to_key": "b", "type": "blocks"}`. Use `from_id` and
   `to_id` to reference a bead that already exists.
 - Unknown fields anywhere are silently dropped with a warning, so a typo costs
   the field rather than raising.
+
+Verified fixture showing an existing parent (`parent_id`), a plan-local parent
+(`parent_key`), and a dependency edge together:
+
+```json
+{
+  "nodes": [
+    {"key": "child", "parent_id": "omp-plugins-m8tf", "type": "task", "title": "Child"},
+    {"key": "part", "parent_key": "child", "type": "task", "title": "Part"}
+  ],
+  "edges": [{"from_key": "part", "to_key": "child", "type": "blocks"}]
+}
+```
+
+The fixture keeps the dependency in the top-level `edges` array; a per-node
+`deps` array is not equivalent.
 
 MUST treat a per-node `deps` array as a trap. It reports success and creates
 ZERO edges, so the plan looks correct and the DAG has no dependencies at all.
