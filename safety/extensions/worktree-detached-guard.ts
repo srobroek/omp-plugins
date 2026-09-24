@@ -298,25 +298,34 @@ function cwdOf(event: ToolCallEvent, fallback: string): string {
 }
 
 /** The refusal a bash command earns, or null when nothing in it can orphan a commit. */
-export function reviewCommand(command: string, cwd: string, probe: GitProbe): string | null {
-	if (command.length > MAX_COMMAND_LENGTH) return null;
-	if (!command.includes("remove") && !command.includes(" rm")) return null;
-	if (!command.includes("worktree") && !/(^|[^\w/-])(wt|worktrunk)([^\w-]|$)/.test(command)) return null;
-	for (const removal of removals(command)) {
-		const refusal = reviewRemoval(removal, cwd, probe);
-		if (refusal) return refusal;
+export type RemovalParser = (command: string) => Removal[];
+
+export function reviewCommand(command: string, cwd: string, probe: GitProbe, parse: RemovalParser = removals): string | null {
+	const mayContainRemoval = (command.includes("remove") || command.includes(" rm")) &&
+		(command.includes("worktree") || /(^|[^\w/-])(wt|worktrunk)([^\w-]|$)/.test(command));
+	if (!mayContainRemoval) return null;
+	if (command.length > MAX_COMMAND_LENGTH) {
+		return "Worktree removal refused: command exceeds the 64 KiB safety limit (oversize), so its removal cannot be checked.";
+	}
+	try {
+		for (const removal of parse(command)) {
+			const refusal = reviewRemoval(removal, cwd, probe);
+			if (refusal) return refusal;
+		}
+	} catch {
+		return "Worktree removal refused: parse failure while checking a removal command; its impact could not be proved.";
 	}
 	return null;
 }
 
-export default function worktreeDetachedGuard(pi: ExtensionAPI, probe: GitProbe = defaultProbe()): void {
+export default function worktreeDetachedGuard(pi: ExtensionAPI, probe: GitProbe = defaultProbe(), parse: RemovalParser = removals): void {
 	pi.on("tool_call", (event) => {
 		let refusal: string | null = null;
 		try {
 			if (event.toolName !== "bash") return;
 			const command = commandOf(event);
 			if (!command) return;
-			refusal = reviewCommand(command, cwdOf(event, process.cwd()), probe);
+			refusal = reviewCommand(command, cwdOf(event, process.cwd()), probe, parse);
 		} catch {
 			// An internal failure must not take bash down; unrelated calls stay allowed.
 			return;
