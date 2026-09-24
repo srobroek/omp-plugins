@@ -19,7 +19,7 @@ TRIGGER
 4. Record the verdict in the governing run or epic bead metadata as `execution_preflight`, and record the same run SHA as `base_sha`.
 5. Dispatch only when `ok` is `true`. A `fail` check blocks dispatch; `warn` and `skip` checks do not.
 
-If a sibling beads or worktrunk preflight is `skip` because its package or check is absent, the companion is unavailable: stop and report; do not dispatch workers.
+The session-side `read rule://beads-ledger` check determines whether the Beads companion is loaded; an on-disk sibling preflight cannot establish this. If that rule does not resolve, report `BLOCKED: beads companion not loaded`, dispatch nothing, and run no `bd` write. If the worktrunk preflight is `skip` because its package or check is absent, the companion is unavailable: stop and report; do not dispatch workers.
 
 ## Rules
 

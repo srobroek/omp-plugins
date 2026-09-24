@@ -25,13 +25,12 @@ If `bd show` or a CAS reports another holder or a closed bead, the worker MUST s
  
 ## Wait discipline
 
-Subagent results and peer messages auto-deliver. The main agent, root lead, parent, sub-lead, and every epic orchestrator MUST NOT poll to discover that dispatched work finished.
-Ending the turn is NOT a way to wait. These runs are headless: the process ends with the turn, and every dispatched agent is abandoned mid-flight. A lead ends its turn only when NO dispatched work is outstanding and its own work is complete.
-While any dispatched agent is still running, the lead MUST remain in the turn. Call `wait` only when completely blocked with no useful work left; `wait` has no target filters and results or messages arrive automatically.
-Useful work includes reviewing a returned result, updating the ledger, integrating a delivered branch, dispatching the next independent bead, and answering a peer. Prefer any of those over waiting.
+Subagent results and peer messages auto-deliver. A subagent lead (the orchestrator or any sub-lead) MUST spawn its workers, then YIELD; OMP parks the lead, and yielding is not completion. Each worker result or message wakes the parked lead into a new turn. While work remains open, the lead MUST handle what arrived and YIELD again.
+A subagent lead MUST NOT stay active in its current turn or call `wait` for dispatched work. NEVER poll to discover completion. Useful work includes reviewing a returned result, updating the ledger, integrating a delivered branch, dispatching the next independent bead, and answering a peer.
+Root only: the depth-0 session is the only agent with `wait`. The root MUST call `wait` only when completely blocked with no useful work left; results and messages arrive automatically. A headless root MUST NOT end its turn while dispatched work is outstanding.
 Historical rationale only: in a graded arm, 55 of 89 lead waits returned nothing usable, including 29 waits on agents that had already finished.
-A turn ended with dispatched work outstanding is a process violation, like other violations in this rule; record it with the governing bead's durable evidence.
-Two consecutive waits with no intervening action are a polling loop; perform useful work before waiting again.
+
+Every worker brief MUST pass the lead's runtime id as `<leadId>`. Workers MUST report only with `write agent://<leadId>` and NEVER with `write agent://all`. A worker MAY confirm the id against the `Parent` shown by `read history://<own-id>`. OMP does not enforce this routing; the brief and worker MUST enforce it.
  
 
 ## Ledger contract
@@ -79,17 +78,17 @@ MUST provision exactly one linked worktree per worker. The lead records one run 
 Workers MUST take the worktree path from that command's JSON output and run `wt step copy-ignored` in the provisioned worktree before editing. Omitting `wt step copy-ignored` can make focused tests fail with missing-module errors that falsely look like broken code. Use the documented branch naming convention `orc/EPIC_ID/AGENT_KIND/BEAD_ID`; this convention is not enforcement.
 When a bead is released, its `worktree` metadata MUST remain. The next claimant adopts that tree only after checking `git status` and HEAD against the bead's `branch` metadata. A successor bead created because the approach was wrong after the fix-round cap MUST get a fresh worktree off the run base; the old tree remains until its own bead closes.
 
-Worker-to-epic integration MUST use `wt merge --no-squash --no-ff`, with both flags explicit on every such command. `wt` ignores a `[merge]` key in committed project `.config/wt.toml`; a configured `[commit.generation]` makes default `wt merge` squash everything into one generated commit. Omitting the flags at this level destroys the per-commit history and the conflict record. Epic-branch-to-default integration MAY use plain or squashing `wt merge` so main receives one clean commit per epic.
-Before merger handoff, the lead MUST run worker-to-epic `git merge-tree --write-tree EPIC_HEAD WORKER_HEAD`, then epic-to-default `wt list --format json` and inspect that branch's `merge_conflicts`. A non-zero exit, `true`, or unknown result is a hold; the merger still refuses and the lead resolves it.
+Worker-to-epic integration MUST use `wt merge TARGET --no-squash --no-ff`, with both flags explicit on every such command. The shepherd runs it from the source worktree; the Worktrunk gate refuses a merge run elsewhere. `wt` ignores a `[merge]` key in committed project `.config/wt.toml`; a configured `[commit.generation]` makes default `wt merge` squash everything into one generated commit. Omitting the flags at this level destroys the per-commit history and the conflict record. Epic-branch-to-default integration MAY use plain or squashing `wt merge` so main receives one clean commit per epic.
+Before creating a merge bead after work-reviewer approval, the lead MUST run worker-to-epic `git merge-tree --write-tree EPIC_HEAD WORKER_HEAD`, then inspect `wt list --format json` and that branch's `merge_conflicts` for epic-to-default readiness. A non-zero exit, `true`, or unknown result is a hold; the lead records the hold and the shepherd refuses the merge bead until the conflict is resolved by the lead.
 
 ## Review repair and conflicts
 MUST create and route AT MOST ONE DAG review bead with the four DAG-plan acceptance criteria before dispatching; the single review round MUST dispatch `work-reviewer` and the bundled `security-reviewer` in parallel for the same review, record both verdicts and every accepted or changed finding on the governing bead, and dispatch implementers into a contested region only after both verdicts are recorded. A second DAG review is a process violation.
 
-If integration conflicts, the merger MUST report the conflict to the lead through `write agent://AGENT_ID` and stop without resolving it. ONLY the lead resolves an integration conflict; the merger never resolves conflicts, reviews its own work, or substitutes for independent review. The lead reruns verification after resolution.
+If integration conflicts, the shepherd MUST report the conflict to the lead through `write agent://AGENT_ID`, record the refusal on the merge bead, unclaim it with the guarded command, and stop without resolving it. ONLY the lead resolves an integration conflict; the shepherd never reviews its own work, implements product changes, or substitutes for independent review. The lead reruns verification after resolution.
 
 ## Durable coordination
 
 MUST Use a wisp only when live step state need not synchronize to another clone, human, or agent.
-Message wisps are limited to transient questions, replies, notifications, and acknowledgements. Durable decisions, acceptance evidence, review findings, and closure reasons belong in bead comments or another authoritative decision carrier; coordinate live handoffs with `write agent://AGENT_ID` or `write agent://all` and record the durable result with `bd comment`.
+Message wisps are limited to transient questions, replies, notifications, and acknowledgements. Durable decisions, acceptance evidence, review findings, and closure reasons belong in bead comments or another authoritative decision carrier; coordinate live handoffs with `write agent://AGENT_ID` and record the durable result with `bd comment`. Every worker uses the lead-id rule in Wait discipline and MUST NOT broadcast with `write agent://all`.
 
 NOT let the lead implement product code; the implementer owns product changes. The lead owns orchestration, evidence verification, and integration-conflict resolution.

@@ -1,11 +1,12 @@
 import type { ExtensionAPI, ExtensionContext, ToolCallEvent } from "@oh-my-pi/pi-coding-agent";
-import { decideActorParsed, environmentForInput } from "./bd-actor-gate.ts";
+import { agentActor, bdInvocations, decideActorParsed, environmentForInput } from "./bd-actor-gate.ts";
 import { decideEmbeddedWrite } from "./bd-embedded-write-lock.ts";
 import { rewriteBashInput } from "./session-beads-lifecycle.ts";
 import { blockReason, commandFromInput, type ParsedCommand, parse, settingsEnabled } from "./shell-command.ts";
 
-type BashInput = { command?: unknown; cmd?: unknown; cwd?: unknown };
+type BashInput = { command?: unknown; cmd?: unknown; cwd?: unknown; env?: unknown };
 type GateDecision = { block: true; reason: string } | undefined;
+
 
 /** Stay below the host's 30 second tool_call deadline, including every gate. */
 const TOOL_CALL_BUDGET_MS = 25_000;
@@ -25,14 +26,42 @@ function suffix(gate: string, reason: string, resolution = "inspect the command 
 /**
  * Every store-safety gate sees the same validated parse; rewrites happen only after all decisions allow.
  *
- * The write-lock wrapper and the session's `BEADS_DIR` pin compose into one revised input,
- * so the later rewrite never drops the earlier one.
+ * The write-lock wrapper, session's `BEADS_DIR` pin, and subagent actor prefix
+ * compose into one revised command, so a later rewrite never drops an earlier one.
  */
+function actorForCommand(command: string, ctx: ExtensionContext): string | undefined {
+	const actor = agentActor(ctx);
+	if (actor === undefined) return undefined;
+	const invocations = bdInvocations(command);
+	if (invocations.length === 0) return undefined;
+	if (invocations.some(invocation =>
+		invocation.globals.some(token => token === "--actor" || token.startsWith("--actor=")) ||
+		invocation.prefix.some(token => token.startsWith("BEADS_ACTOR=")) ||
+		invocation.exported.BEADS_ACTOR !== undefined,
+	)) return undefined;
+	return actor;
+}
+
+function inputForAgentActor(input: Record<string, unknown>, command: string, ctx: ExtensionContext): Record<string, unknown> {
+	const actor = actorForCommand(command, ctx);
+	if (actor === undefined) return input;
+	const key = typeof input.command === "string" ? "command" : "cmd";
+	if (typeof input[key] !== "string") return input;
+	const escaped = actor.replaceAll("'", "'\\''");
+	return { ...input, [key]: `export BEADS_ACTOR='${escaped}'; ${input[key]}` };
+}
+
+function environmentForActorDecision(input: Record<string, unknown>, command: string, ctx: ExtensionContext): NodeJS.ProcessEnv {
+	const env = environmentForInput(input as ToolCallEvent["input"]);
+	const actor = actorForCommand(command, ctx);
+	return actor === undefined ? env : { ...env, BEADS_ACTOR: actor };
+}
+
 async function decide(parsed: ParsedCommand, event: ToolCallEvent, ctx: ExtensionContext, pi: ExtensionAPI, deadline: number): Promise<GateDecision | { input: Record<string, unknown> } | undefined> {
 	let input = event.input as Record<string, unknown>;
 	const { cwd } = inputOf(event, ctx);
 	if (parsed.unknown) return suffix("bash-gates", "command could not be parsed", "split the command or run the mutation as a plain single command");
-	const env = environmentForInput(event.input);
+	const env = environmentForActorDecision(input, parsed.command, ctx);
 	if (settingsEnabled("beads", "bd-actor-gate", cwd)) {
 		const actor = decideActorParsed(parsed, env);
 		if (actor.kind === "block") return suffix("bd-actor-gate", actor.reason);
@@ -44,6 +73,8 @@ async function decide(parsed: ParsedCommand, event: ToolCallEvent, ctx: Extensio
 		if (embedded?.kind === "block") return suffix("bd-embedded-write-lock", embedded.reason);
 		if (embedded?.kind === "rewrite") input = embedded.input;
 	}
+	// Apply the actor prefix after every runner rewrite so the executed command keeps it.
+	input = inputForAgentActor(input, parsed.command, ctx);
 	const rewritten = rewriteBashInput(input, ctx) ?? input;
 	if (JSON.stringify(rewritten) !== JSON.stringify(event.input)) return { input: rewritten };
 	return undefined;

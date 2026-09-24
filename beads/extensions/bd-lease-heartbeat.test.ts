@@ -8,11 +8,20 @@ import bdLeaseHeartbeat, {
 } from "./bd-lease-heartbeat.ts";
 
 const BEAD = "hb-1";
-type TestContext = { cwd: string; sessionManager: { getSessionId: () => string } };
+type TestContext = {
+	cwd: string;
+	sessionManager: {
+		getSessionId: () => string;
+		getHeader?: () => unknown;
+		getSessionFile?: () => string;
+		getSessionDir?: () => string;
+	};
+};
 type TestInput = { command?: string; cwd?: string; env?: Record<string, string> };
 type TestPart = { type: string; text?: string };
 type TestEvent = { toolName?: string; toolCallId: string; input: TestInput; content?: TestPart[]; isError?: boolean; details?: unknown };
 type Handler = (event: TestEvent, ctx?: TestContext) => unknown;
+
 
 class FakeClock implements HeartbeatClock {
     private next = 0;
@@ -48,7 +57,21 @@ class FakeClock implements HeartbeatClock {
 }
 
 function context(id: string, cwd = "/session/repo"): TestContext {
-    return { cwd, sessionManager: { getSessionId: () => id } };
+	return { cwd, sessionManager: { getSessionId: () => id } };
+}
+
+function subagentContext(id: string, actor = "AlphaImplementer"): TestContext {
+	const sessionDir = "/sessions/-repo";
+	const run = "2026-09-22T16-36-13-128Z_01a0d3cb-01cc-752f-99ca-d5214749221d";
+	return {
+		cwd: "/session/repo",
+		sessionManager: {
+			getSessionId: () => id,
+			getHeader: () => ({ parentSession: `${sessionDir}/main.jsonl` }),
+			getSessionFile: () => `${sessionDir}/${run}/${actor}.jsonl`,
+			getSessionDir: () => sessionDir,
+		},
+	};
 }
 
 function wire(): { handlers: Record<string, Handler[]>; notices: string[] } {
@@ -83,13 +106,12 @@ function claimResult(toolCallId: string, text = `{"id":"${BEAD}"}`, command = `b
     };
 }
 
-async function startClaim(id = "main", bead = BEAD, env?: Record<string, string>): Promise<{ handlers: Record<string, Handler[]>; notices: string[]; ctx: TestContext }> {
-    const wired = wire();
-    const ctx = context(id);
-    const call = claimCall(`claim-${id}-${bead}`, `bd update ${bead} --claim`, env);
-    await wired.handlers.tool_call?.[0]?.(call, ctx);
-    await wired.handlers.tool_result?.[0]?.(claimResult(call.toolCallId, `{"id":"${bead}"}`), ctx);
-    return { ...wired, ctx };
+async function startClaim(id = "main", bead = BEAD, env?: Record<string, string>, ctx = context(id)): Promise<{ handlers: Record<string, Handler[]>; notices: string[]; ctx: TestContext }> {
+	const wired = wire();
+	const call = claimCall(`claim-${id}-${bead}`, `bd update ${bead} --claim`, env);
+	await wired.handlers.tool_call?.[0]?.(call, ctx);
+	await wired.handlers.tool_result?.[0]?.(claimResult(call.toolCallId, `{"id":"${bead}"}`), ctx);
+	return { ...wired, ctx };
 }
 
 afterEach(() => {
@@ -158,6 +180,38 @@ describe("claim detection", () => {
         expect(clock.callbacks.size).toBe(0);
     });
 });
+
+    test("renews a subagent claim under that agent's actor", async () => {
+        const clock = new FakeClock();
+        const calls: Array<{ argv: string[]; env: NodeJS.ProcessEnv }> = [];
+        setHeartbeatClockForTests(clock);
+        setHeartbeatRunForTests((argv, _cwd, env) => {
+            calls.push({ argv, env });
+            return { exitCode: 0, stdout: "", stderr: "" };
+        });
+        await startClaim("subagent", BEAD, undefined, subagentContext("subagent"));
+        await clock.tick();
+        expect(calls[0]?.argv).toEqual(["bd", "heartbeat", BEAD, "--json"]);
+        expect(calls[0]?.env.BEADS_ACTOR).toBe("omp/01a0d3cb-01cc-752f-99ca-d5214749221d/AlphaImplementer");
+    });
+
+    test("renews an explicit --actor claim with the same flag", async () => {
+        const clock = new FakeClock();
+        const calls: Array<{ argv: string[]; env: NodeJS.ProcessEnv }> = [];
+        setHeartbeatClockForTests(clock);
+        setHeartbeatRunForTests((argv, _cwd, env) => {
+            calls.push({ argv, env });
+            return { exitCode: 0, stdout: "", stderr: "" };
+        });
+        const wired = wire();
+        const ctx = subagentContext("explicit");
+        const call = claimCall("explicit", `bd --actor ExplicitActor update ${BEAD} --claim`);
+        await wired.handlers.tool_call?.[0]?.(call, ctx);
+        await wired.handlers.tool_result?.[0]?.(claimResult(call.toolCallId, `{"id":"${BEAD}"}`), ctx);
+        await clock.tick();
+        expect(calls[0]?.argv).toEqual(["bd", "--actor", "ExplicitActor", "heartbeat", BEAD, "--json"]);
+        expect(calls[0]?.env.BEADS_ACTOR).toBe("ExplicitActor");
+    });
 
 describe("heartbeat cadence and ownership", () => {
     test("runs every interval with the claim cwd and environment", async () => {

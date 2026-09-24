@@ -4,8 +4,13 @@ import type {
 	ToolCallEvent,
 	ToolResultEvent,
 } from "@oh-my-pi/pi-coding-agent";
-
-import { environmentForInput } from "./bd-actor-gate.ts";
+import {
+	agentActor,
+	bdInvocations,
+	environmentForInput,
+	globalValue,
+	invocationActor,
+} from "./bd-actor-gate.ts";
 import { claimedIds } from "./bd-lease-gate.ts";
 import {
 	type CommandPosition,
@@ -13,6 +18,7 @@ import {
 	type ParsedCommand,
 	parse,
 } from "./shell-command.ts";
+
 
 /** Beads keeps a claim lease for five minutes; renew at one fifth of that TTL. */
 export const HEARTBEAT_INTERVAL_MS = 60_000;
@@ -53,15 +59,18 @@ interface PendingClaim {
 	cwd: string;
 	env: NodeJS.ProcessEnv;
 	ctx: ExtensionContext;
+	actorFlag?: string;
 	/** Bead ids named by the claim command; bd exits non-zero when any claim fails. */
 	ids: string[];
 }
+
 
 interface ActiveHeartbeat {
 	id: string;
 	session: string;
 	cwd: string;
 	env: NodeJS.ProcessEnv;
+	actorFlag?: string;
 	ctx: ExtensionContext;
 	pi: ExtensionAPI;
 	clock: HeartbeatClock;
@@ -71,6 +80,7 @@ interface ActiveHeartbeat {
 	paused: boolean;
 	noticed: boolean;
 }
+
 
 const pendingClaims = new Map<string, PendingClaim>();
 const activeBySession = new Map<string, Map<string, ActiveHeartbeat>>();
@@ -136,12 +146,30 @@ function claimInvocationIds(parsed: ParsedCommand): string[] {
 				if (!token.quoted && token.value === "update") update = true;
 				continue;
 			}
-			if (!token.quoted && token.value === "--claim") claim = true;
+			if (!token.quoted && (token.value === "--claim" || token.value.startsWith("--claim="))) claim = true;
 			if (!token.value.startsWith("-") && BEAD_ID.test(token.value)) named.push(token.value);
 		}
 		if (update && claim) for (const id of named) ids.add(id);
 	}
 	return [...ids];
+}
+
+function claimRuntime(command: string, event: ToolCallEvent, ctx: ExtensionContext): { env: NodeJS.ProcessEnv; actorFlag?: string } {
+	const env = environmentForInput(event.input);
+	const invocation = bdInvocations(command).find(({ verb, args }) =>
+		verb === "update" && args.some(token => token === "--claim" || token.startsWith("--claim=")),
+	);
+	if (invocation === undefined) return { env };
+	const actorFlag = globalValue(invocation.globals, ["--actor"]);
+	const explicitActor = actorFlag !== undefined && actorFlag.trim() !== "" && !/[$`]/.test(actorFlag) ? actorFlag.trim() : undefined;
+	const commandSetActor = invocation.prefix.some(token => token.startsWith("BEADS_ACTOR=")) || invocation.exported.BEADS_ACTOR !== undefined;
+	const actor = explicitActor !== undefined || commandSetActor
+		? invocationActor(invocation, env)
+		: (agentActor(ctx) ?? invocationActor(invocation, env));
+	return {
+		env: actor === null || actor === undefined ? env : { ...env, BEADS_ACTOR: actor },
+		actorFlag: explicitActor,
+	};
 }
 
 function resultOutput(event: ToolResultEvent): string {
@@ -171,20 +199,23 @@ export function decideLeaseHeartbeatClaim(parsed: ParsedCommand, event: ToolCall
 		if (ids.length === 0) return;
 		const input = event.input as { cwd?: unknown };
 		const inputCwd = typeof input.cwd === "string" && input.cwd ? input.cwd : (ctx.cwd ?? process.cwd());
+		const runtime = claimRuntime(parsed.command, event, ctx);
 		pendingClaims.set(pendingKey(session, event.toolCallId), {
 			toolCallId: event.toolCallId,
 			session,
 			cwd: leadingCdCwd(parsed.command, inputCwd),
-			env: environmentForInput(event.input),
+			env: runtime.env,
+			actorFlag: runtime.actorFlag,
 			ctx,
 			ids,
 		});
 	} catch {
 		// Tool-call handlers are advisory; a parser failure must never block bash.
-}
+	}
 }
 
 const GLOBAL_VALUE_FLAGS: Record<string, true> = {
+	"--actor": true,
 	"--database": true,
 	"--db": true,
 	"--directory": true,
@@ -291,7 +322,10 @@ async function heartbeat(active: ActiveHeartbeat): Promise<void> {
 	try {
 		const deadline = Date.now() + HEARTBEAT_TIMEOUT_MS;
 		const run = injectedRun ?? defaultRun;
-		const command = Promise.resolve().then(() => run(["bd", "heartbeat", active.id, "--json"], active.cwd, active.env, deadline));
+		const heartbeatArgv = active.actorFlag === undefined
+			? ["bd", "heartbeat", active.id, "--json"]
+			: ["bd", "--actor", active.actorFlag, "heartbeat", active.id, "--json"];
+		const command = Promise.resolve().then(() => run(heartbeatArgv, active.cwd, active.env, deadline));
 		let result: BdResult;
 		if (active.clock.setTimeout === undefined) {
 			result = await command;
@@ -347,6 +381,7 @@ function startHeartbeat(pi: ExtensionAPI, claim: PendingClaim, id: string): void
 	active.session = claim.session;
 	active.cwd = claim.cwd;
 	active.env = claim.env;
+	active.actorFlag = claim.actorFlag;
 	active.ctx = claim.ctx;
 	active.pi = pi;
 	active.clock = clock;

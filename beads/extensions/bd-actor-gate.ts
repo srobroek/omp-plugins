@@ -1,8 +1,10 @@
 import type {
 	ExtensionAPI,
+	ExtensionContext,
 	ToolCallEvent,
 	ToolResultEvent,
 } from "@oh-my-pi/pi-coding-agent";
+import { basename, relative, resolve, sep } from "node:path";
 import { tokenize } from "./bd-close-gate.ts";
 
 /**
@@ -289,32 +291,78 @@ export function environmentForInput(
 	return env;
 }
 
+const RUN_UUID_SUFFIX = /_([0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12})$/i;
+const UUID_ONLY = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
+
+/**
+ * Return the run-scoped actor id for a subagent session, never the main session.
+ *
+ * OMP's SessionHeader has an optional `parentSession` field. When a header is
+ * unavailable (legacy or not yet materialized), subagent sessions are any
+ * `<session-dir>/<run>/.../<agent>.jsonl` path at depth two or deeper. Some
+ * subagent managers report `<session-dir>/<run>` as `getSessionDir()` instead;
+ * that direct child is also a subagent when its basename is not a UUID. The
+ * main session is the direct `<session-dir>/<run>.jsonl` file.
+ */
+export function agentActor(ctx: ExtensionContext): string | undefined {
+	let header: { parentSession?: string } | null | undefined;
+	try {
+		const getHeader = ctx.sessionManager?.getHeader;
+		if (typeof getHeader === "function") header = getHeader();
+	} catch {
+		header = undefined;
+	}
+	const headerKnown = header !== null && header !== undefined;
+	if (headerKnown && (typeof header?.parentSession !== "string" || header.parentSession.length === 0)) return undefined;
+	try {
+		const sessionFile = ctx.sessionManager?.getSessionFile?.();
+		const sessionDir = ctx.sessionManager?.getSessionDir?.();
+		if (typeof sessionFile !== "string" || typeof sessionDir !== "string") return undefined;
+		const file = basename(sessionFile);
+		if (!file.endsWith(".jsonl")) return undefined;
+		const id = file.slice(0, -".jsonl".length);
+		if (id === "") return undefined;
+		const root = resolve(sessionDir);
+		const rel = relative(root, resolve(sessionFile));
+		const parts = rel.split(sep);
+		let run = parts[0];
+		if (parts.length === 1) {
+			const managerRun = basename(root);
+			if (!RUN_UUID_SUFFIX.test(managerRun) || (!headerKnown && UUID_ONLY.test(id))) return undefined;
+			run = managerRun;
+		}
+		if (typeof run !== "string" || run === "" || run === "." || run === ".." || run.startsWith(`..${sep}`)) return undefined;
+		const runScope = run.match(RUN_UUID_SUFFIX)?.[1] ?? run;
+		return `omp/${runScope}/${id}`;
+	} catch {
+		return undefined;
+	}
+}
+
+
 /**
  * The ONE actor this invocation will really write under.
  *
- * Both variables are read, but they are not equals: measured against bd 1.2.2,
- * `BD_ACTOR` beats `BEADS_ACTOR` whenever both resolve, and `BEADS_ACTOR` governs
- * only when `BD_ACTOR` is absent. bd's own `--help` documents the default as
- * `$BEADS_ACTOR`, which is why the order is worth stating here rather than
- * inferring from the name.
- *
- * The practical consequence, and the reason this returns one value instead of a
- * list: this harness sets BOTH variables on every call, so an inline
- * `BEADS_ACTOR=x bd update <id> --claim` is a silent no-op -- the claim lands under
- * the ambient `BD_ACTOR`. Collecting both values reported two actors for one write,
- * and the second had written nothing.
+ * Measured against bd 1.3.0: an explicit `--actor` flag wins, followed by
+ * BEADS_ACTOR (command-local assignment, exported assignment, then ambient
+ * environment), and finally BD_ACTOR with the same source precedence.
  */
 export function invocationActor(invocation: BdInvocation, env: NodeJS.ProcessEnv): string | null {
+	const literal = (value: string | undefined): string | null => {
+		if (!value?.trim() || /[$`]/.test(value)) return null;
+		return value.trim();
+	};
+	const actorFlag = globalValue(invocation.globals, ["--actor"]);
+	const explicit = literal(actorFlag);
+	if (explicit !== null) return explicit;
 	const resolve = (variable: ActorVar): string | null => {
 		const assignment = invocation.prefix.findLast(token => token.startsWith(`${variable}=`));
 		const value = assignment !== undefined
 			? assignment.slice(variable.length + 1)
 			: (invocation.exported[variable] ?? env[variable]);
-		// A value carrying `$` or a backtick is unresolved text, not an identity.
-		if (!value?.trim() || /[$`]/.test(value)) return null;
-		return value.trim();
+		return literal(value);
 	};
-	return resolve("BD_ACTOR") ?? resolve("BEADS_ACTOR");
+	return resolve("BEADS_ACTOR") ?? resolve("BD_ACTOR");
 }
 
 /**

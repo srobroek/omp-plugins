@@ -664,14 +664,21 @@ function environmentForInput(input, base = process.env) {
   return env;
 }
 function invocationActor(invocation, env) {
-  const resolve = (variable) => {
-    const assignment = invocation.prefix.findLast((token) => token.startsWith(`${variable}=`));
-    const value = assignment !== undefined ? assignment.slice(variable.length + 1) : invocation.exported[variable] ?? env[variable];
+  const literal = (value) => {
     if (!value?.trim() || /[$`]/.test(value))
       return null;
     return value.trim();
   };
-  return resolve("BD_ACTOR") ?? resolve("BEADS_ACTOR");
+  const actorFlag = globalValue(invocation.globals, ["--actor"]);
+  const explicit = literal(actorFlag);
+  if (explicit !== null)
+    return explicit;
+  const resolve = (variable) => {
+    const assignment = invocation.prefix.findLast((token) => token.startsWith(`${variable}=`));
+    const value = assignment !== undefined ? assignment.slice(variable.length + 1) : invocation.exported[variable] ?? env[variable];
+    return literal(value);
+  };
+  return resolve("BEADS_ACTOR") ?? resolve("BD_ACTOR");
 }
 function actorValues(command, env = process.env) {
   const actors = bdInvocations(command).filter(isMutatingInvocation).map((invocation) => invocationActor(invocation, env)).filter((actor) => actor !== null);

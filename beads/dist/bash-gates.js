@@ -1,4 +1,7 @@
 // @bun
+// extensions/bd-actor-gate.ts
+import { basename, relative, resolve as resolve2, sep } from "path";
+
 // extensions/shell-tokenizer.ts
 var SEPARATORS = new Set([";", "&", "|", "(", ")", `
 `]);
@@ -666,15 +669,65 @@ function environmentForInput(input, base = process.env) {
   }
   return env;
 }
+var RUN_UUID_SUFFIX = /_([0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12})$/i;
+var UUID_ONLY = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
+function agentActor(ctx) {
+  let header;
+  try {
+    const getHeader = ctx.sessionManager?.getHeader;
+    if (typeof getHeader === "function")
+      header = getHeader();
+  } catch {
+    header = undefined;
+  }
+  const headerKnown = header !== null && header !== undefined;
+  if (headerKnown && (typeof header?.parentSession !== "string" || header.parentSession.length === 0))
+    return;
+  try {
+    const sessionFile = ctx.sessionManager?.getSessionFile?.();
+    const sessionDir = ctx.sessionManager?.getSessionDir?.();
+    if (typeof sessionFile !== "string" || typeof sessionDir !== "string")
+      return;
+    const file = basename(sessionFile);
+    if (!file.endsWith(".jsonl"))
+      return;
+    const id = file.slice(0, -".jsonl".length);
+    if (id === "")
+      return;
+    const root = resolve2(sessionDir);
+    const rel = relative(root, resolve2(sessionFile));
+    const parts = rel.split(sep);
+    let run = parts[0];
+    if (parts.length === 1) {
+      const managerRun = basename(root);
+      if (!RUN_UUID_SUFFIX.test(managerRun) || !headerKnown && UUID_ONLY.test(id))
+        return;
+      run = managerRun;
+    }
+    if (typeof run !== "string" || run === "" || run === "." || run === ".." || run.startsWith(`..${sep}`))
+      return;
+    const runScope = run.match(RUN_UUID_SUFFIX)?.[1] ?? run;
+    return `omp/${runScope}/${id}`;
+  } catch {
+    return;
+  }
+}
 function invocationActor(invocation, env) {
-  const resolve = (variable) => {
-    const assignment = invocation.prefix.findLast((token) => token.startsWith(`${variable}=`));
-    const value = assignment !== undefined ? assignment.slice(variable.length + 1) : invocation.exported[variable] ?? env[variable];
+  const literal = (value) => {
     if (!value?.trim() || /[$`]/.test(value))
       return null;
     return value.trim();
   };
-  return resolve("BD_ACTOR") ?? resolve("BEADS_ACTOR");
+  const actorFlag = globalValue(invocation.globals, ["--actor"]);
+  const explicit = literal(actorFlag);
+  if (explicit !== null)
+    return explicit;
+  const resolve = (variable) => {
+    const assignment = invocation.prefix.findLast((token) => token.startsWith(`${variable}=`));
+    const value = assignment !== undefined ? assignment.slice(variable.length + 1) : invocation.exported[variable] ?? env[variable];
+    return literal(value);
+  };
+  return resolve("BEADS_ACTOR") ?? resolve("BD_ACTOR");
 }
 function invocationFromArgv(args) {
   const scanned = scanGlobals(args, 0);
@@ -754,12 +807,12 @@ function decideActorGate(command, env = process.env) {
 // extensions/bd-embedded-write-lock.ts
 import { closeSync, existsSync, openSync, readFileSync as readFileSync2, realpathSync as realpathSync2, statSync as statSync2, unlinkSync, writeSync } from "fs";
 import { hostname } from "os";
-import { basename, dirname as dirname2, isAbsolute as isAbsolute2, join, resolve as resolve3 } from "path";
+import { basename as basename2, dirname as dirname2, isAbsolute as isAbsolute2, join, resolve as resolve4 } from "path";
 
 // extensions/beads-store.ts
 import { spawnSync } from "child_process";
 import { lstatSync, realpathSync, statSync } from "fs";
-import { dirname, isAbsolute, resolve as resolve2 } from "path";
+import { dirname, isAbsolute, resolve as resolve3 } from "path";
 function repoIdentity(cwd) {
   const result = spawnSync("git", ["-C", cwd, "rev-parse", "--git-common-dir"], {
     encoding: "utf8",
@@ -776,7 +829,7 @@ function repoIdentity(cwd) {
   }
   const out = String(result.stdout ?? "").trim();
   try {
-    return realpathSync(isAbsolute(out) ? out : resolve2(cwd, out));
+    return realpathSync(isAbsolute(out) ? out : resolve3(cwd, out));
   } catch {
     return;
   }
@@ -790,7 +843,7 @@ function repositoryState(cwd) {
   }
   for (;; ) {
     try {
-      lstatSync(resolve2(current, ".git"));
+      lstatSync(resolve3(current, ".git"));
       return "present";
     } catch (error) {
       if (!(error instanceof Error) || !("code" in error) || error.code !== "ENOENT")
@@ -803,19 +856,19 @@ function repositoryState(cwd) {
   }
 }
 function sessionPinFor(cwd) {
-  const local = resolve2(cwd, ".beads");
+  const local = resolve3(cwd, ".beads");
   const common = repoIdentity(cwd);
   if (common === undefined)
     return;
   if (common !== cwd && common.endsWith("/.git")) {
-    const primaryRoot = resolve2(common, "..");
+    const primaryRoot = resolve3(common, "..");
     try {
       if (realpathSync(cwd) === primaryRoot && isDir(local))
         return local;
     } catch {
       return;
     }
-    const primary = resolve2(primaryRoot, ".beads");
+    const primary = resolve3(primaryRoot, ".beads");
     if (isDir(primary))
       return primary;
   }
@@ -977,7 +1030,7 @@ function storeFor(globals, cwd, env) {
   return canonicalStore(sessionPinFor(cwd));
 }
 function absolute(path, cwd) {
-  return isAbsolute2(path) ? path : resolve3(cwd, path);
+  return isAbsolute2(path) ? path : resolve4(cwd, path);
 }
 function isDirectory(path) {
   try {
@@ -990,7 +1043,7 @@ function canonical(path) {
   try {
     return realpathSync2(path);
   } catch {
-    return resolve3(path);
+    return resolve4(path);
   }
 }
 function canonicalStore(store) {
@@ -1333,10 +1386,10 @@ function embeddedWriteRunner() {
   if (script === undefined)
     return;
   const interpreter = bunBinary();
-  return interpreter === undefined ? undefined : { interpreter, script: resolve3(script) };
+  return interpreter === undefined ? undefined : { interpreter, script: resolve4(script) };
 }
 function bunBinary() {
-  const own = basename(process.execPath);
+  const own = basename2(process.execPath);
   if (own === "bun" || own === "bun.exe")
     return process.execPath;
   const onPath = typeof Bun === "undefined" ? undefined : Bun.which("bun");
@@ -1430,7 +1483,7 @@ async function decideEmbeddedWrite(parsed, event, ctx, deadline = Date.now() + 2
 }
 
 // extensions/session-beads-lifecycle.ts
-import { isAbsolute as isAbsolute3, join as join2, resolve as resolve4 } from "path";
+import { isAbsolute as isAbsolute3, join as join2, resolve as resolve5 } from "path";
 var EMBEDDED_PIN_ENV = { BEADS_DOLT_SHARED_SERVER: "" };
 function pinBashInput(input, pin) {
   if (pin === undefined || input === null || typeof input !== "object")
@@ -1448,7 +1501,7 @@ function bashCallCwd(input, fallback) {
   if (input === null || typeof input !== "object")
     return fallback;
   const cwd = input.cwd;
-  return typeof cwd === "string" && cwd !== "" ? resolve4(fallback, cwd) : fallback;
+  return typeof cwd === "string" && cwd !== "" ? resolve5(fallback, cwd) : fallback;
 }
 var sessionPinGetter;
 function pinnedBeadsDir(cwd, ctx) {
@@ -1473,12 +1526,38 @@ function inputOf(event, ctx) {
 function suffix(gate, reason, resolution = "inspect the command and retry") {
   return { block: true, reason: blockReason({ gate, cause: reason, resolution }) };
 }
+function actorForCommand(command, ctx) {
+  const actor = agentActor(ctx);
+  if (actor === undefined)
+    return;
+  const invocations = bdInvocations(command);
+  if (invocations.length === 0)
+    return;
+  if (invocations.some((invocation) => invocation.globals.some((token) => token === "--actor" || token.startsWith("--actor=")) || invocation.prefix.some((token) => token.startsWith("BEADS_ACTOR=")) || invocation.exported.BEADS_ACTOR !== undefined))
+    return;
+  return actor;
+}
+function inputForAgentActor(input, command, ctx) {
+  const actor = actorForCommand(command, ctx);
+  if (actor === undefined)
+    return input;
+  const key = typeof input.command === "string" ? "command" : "cmd";
+  if (typeof input[key] !== "string")
+    return input;
+  const escaped = actor.replaceAll("'", "'\\''");
+  return { ...input, [key]: `export BEADS_ACTOR='${escaped}'; ${input[key]}` };
+}
+function environmentForActorDecision(input, command, ctx) {
+  const env = environmentForInput(input);
+  const actor = actorForCommand(command, ctx);
+  return actor === undefined ? env : { ...env, BEADS_ACTOR: actor };
+}
 async function decide(parsed, event, ctx, pi, deadline) {
   let input = event.input;
   const { cwd } = inputOf(event, ctx);
   if (parsed.unknown)
     return suffix("bash-gates", "command could not be parsed", "split the command or run the mutation as a plain single command");
-  const env = environmentForInput(event.input);
+  const env = environmentForActorDecision(input, parsed.command, ctx);
   if (settingsEnabled("beads", "bd-actor-gate", cwd)) {
     const actor = decideActorParsed(parsed, env);
     if (actor.kind === "block")
@@ -1493,6 +1572,7 @@ async function decide(parsed, event, ctx, pi, deadline) {
     if (embedded?.kind === "rewrite")
       input = embedded.input;
   }
+  input = inputForAgentActor(input, parsed.command, ctx);
   const rewritten = rewriteBashInput(input, ctx) ?? input;
   if (JSON.stringify(rewritten) !== JSON.stringify(event.input))
     return { input: rewritten };

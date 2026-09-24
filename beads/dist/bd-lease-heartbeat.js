@@ -1,4 +1,7 @@
 // @bun
+// extensions/bd-actor-gate.ts
+import { basename, relative, resolve as resolve2, sep } from "path";
+
 // extensions/shell-tokenizer.ts
 var SEPARATORS = new Set([";", "&", "|", "(", ")", `
 `]);
@@ -349,8 +352,14 @@ function parse(command) {
   return staticParse(command);
 }
 var settingsCache = new Map;
+// extensions/bd-close-gate.ts
+function tokenize2(command) {
+  return tokenizeShell(command).map(({ value }) => value);
+}
+
 // extensions/bd-actor-gate.ts
 var ACTOR_NOTICE_ARBITER = Symbol.for("com.srobroek.beads.actor-notice-arbiter.v1");
+var ACTOR_VARS = ["BEADS_ACTOR", "BD_ACTOR"];
 var VALUE_FLAGS = new Set([
   "--actor",
   "--database",
@@ -360,6 +369,116 @@ var VALUE_FLAGS = new Set([
   "--dolt-auto-commit",
   "--mem-profile"
 ]);
+var TRANSPARENT_WRAPPERS = { command: true, env: true, sudo: true };
+var WRAPPER_VALUE_FLAGS = {
+  "-C": true,
+  "--chdir": true,
+  "--chroot": true,
+  "--command-timeout": true,
+  "-g": true,
+  "--group": true,
+  "-h": true,
+  "--host": true,
+  "-p": true,
+  "--prompt": true,
+  "-R": true,
+  "-T": true,
+  "-u": true,
+  "--unset": true,
+  "--user": true
+};
+function commandSegments(command) {
+  const segments = [];
+  let segment = [];
+  for (const token of tokenize2(command)) {
+    if ([";", "&", "|", "(", ")", "$(", `
+`].includes(token)) {
+      if (segment.length)
+        segments.push(segment);
+      segment = [];
+    } else
+      segment.push(token);
+  }
+  if (segment.length)
+    segments.push(segment);
+  return segments;
+}
+function bdInvocations(command) {
+  const out = [];
+  let exported = {};
+  for (const tokens of commandSegments(command)) {
+    if (tokens[0] === "export") {
+      for (const variable of ACTOR_VARS) {
+        const assignment = tokens.findLast((token) => token.startsWith(`${variable}=`));
+        if (assignment !== undefined) {
+          exported = { ...exported, [variable]: assignment.slice(variable.length + 1) };
+        }
+      }
+      continue;
+    }
+    let i = 0;
+    const prefix = [];
+    while (true) {
+      while (/^[A-Za-z_]\w*=/.test(tokens[i] ?? "")) {
+        prefix.push(tokens[i]);
+        i++;
+      }
+      const wrapper = (tokens[i] ?? "").split("/").pop() ?? "";
+      if (TRANSPARENT_WRAPPERS[wrapper] !== true)
+        break;
+      i++;
+      if (wrapper === "command")
+        continue;
+      while (tokens[i]?.startsWith("-")) {
+        const flag = tokens[i];
+        i++;
+        if (WRAPPER_VALUE_FLAGS[flag] === true)
+          i++;
+      }
+    }
+    const word = tokens[i];
+    if (word === undefined || (word.split("/").pop() ?? word) !== "bd")
+      continue;
+    i++;
+    const scanned = scanGlobals(tokens, i);
+    const verb = tokens[scanned.next];
+    if (verb !== undefined) {
+      out.push({ verb: verb.toLowerCase(), args: tokens.slice(scanned.next + 1), globals: scanned.globals, prefix, exported: { ...exported } });
+    }
+  }
+  return out;
+}
+function scanGlobals(tokens, from) {
+  const globals = [];
+  let i = from;
+  while (true) {
+    const flag = tokens[i];
+    if (flag === undefined || !flag.startsWith("-"))
+      break;
+    globals.push(flag);
+    i++;
+    if (flag.includes("="))
+      continue;
+    if (!VALUE_FLAGS.has(flag))
+      continue;
+    const value = tokens[i];
+    if (value !== undefined)
+      globals.push(value);
+    i++;
+  }
+  return { globals, next: i };
+}
+function globalValue(globals, names) {
+  for (const [index, token] of globals.entries()) {
+    for (const name of names) {
+      if (token === name)
+        return globals[index + 1];
+      if (token.startsWith(`${name}=`))
+        return token.slice(name.length + 1);
+    }
+  }
+  return;
+}
 var pendingAdvisory = new Map;
 function environmentForInput(input, base = process.env) {
   const env = { ...base };
@@ -371,6 +490,66 @@ function environmentForInput(input, base = process.env) {
     }
   }
   return env;
+}
+var RUN_UUID_SUFFIX = /_([0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12})$/i;
+var UUID_ONLY = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
+function agentActor(ctx) {
+  let header;
+  try {
+    const getHeader = ctx.sessionManager?.getHeader;
+    if (typeof getHeader === "function")
+      header = getHeader();
+  } catch {
+    header = undefined;
+  }
+  const headerKnown = header !== null && header !== undefined;
+  if (headerKnown && (typeof header?.parentSession !== "string" || header.parentSession.length === 0))
+    return;
+  try {
+    const sessionFile = ctx.sessionManager?.getSessionFile?.();
+    const sessionDir = ctx.sessionManager?.getSessionDir?.();
+    if (typeof sessionFile !== "string" || typeof sessionDir !== "string")
+      return;
+    const file = basename(sessionFile);
+    if (!file.endsWith(".jsonl"))
+      return;
+    const id = file.slice(0, -".jsonl".length);
+    if (id === "")
+      return;
+    const root = resolve2(sessionDir);
+    const rel = relative(root, resolve2(sessionFile));
+    const parts = rel.split(sep);
+    let run = parts[0];
+    if (parts.length === 1) {
+      const managerRun = basename(root);
+      if (!RUN_UUID_SUFFIX.test(managerRun) || !headerKnown && UUID_ONLY.test(id))
+        return;
+      run = managerRun;
+    }
+    if (typeof run !== "string" || run === "" || run === "." || run === ".." || run.startsWith(`..${sep}`))
+      return;
+    const runScope = run.match(RUN_UUID_SUFFIX)?.[1] ?? run;
+    return `omp/${runScope}/${id}`;
+  } catch {
+    return;
+  }
+}
+function invocationActor(invocation, env) {
+  const literal = (value) => {
+    if (!value?.trim() || /[$`]/.test(value))
+      return null;
+    return value.trim();
+  };
+  const actorFlag = globalValue(invocation.globals, ["--actor"]);
+  const explicit = literal(actorFlag);
+  if (explicit !== null)
+    return explicit;
+  const resolve = (variable) => {
+    const assignment = invocation.prefix.findLast((token) => token.startsWith(`${variable}=`));
+    const value = assignment !== undefined ? assignment.slice(variable.length + 1) : invocation.exported[variable] ?? env[variable];
+    return literal(value);
+  };
+  return resolve("BEADS_ACTOR") ?? resolve("BD_ACTOR");
 }
 
 // extensions/bd-lease-gate.ts
@@ -473,7 +652,7 @@ function claimInvocationIds(parsed) {
           update = true;
         continue;
       }
-      if (!token.quoted && token.value === "--claim")
+      if (!token.quoted && (token.value === "--claim" || token.value.startsWith("--claim=")))
         claim = true;
       if (!token.value.startsWith("-") && BEAD_ID.test(token.value))
         named.push(token.value);
@@ -483,6 +662,20 @@ function claimInvocationIds(parsed) {
         ids.add(id);
   }
   return [...ids];
+}
+function claimRuntime(command, event, ctx) {
+  const env = environmentForInput(event.input);
+  const invocation = bdInvocations(command).find(({ verb, args }) => verb === "update" && args.some((token) => token === "--claim" || token.startsWith("--claim=")));
+  if (invocation === undefined)
+    return { env };
+  const actorFlag = globalValue(invocation.globals, ["--actor"]);
+  const explicitActor = actorFlag !== undefined && actorFlag.trim() !== "" && !/[$`]/.test(actorFlag) ? actorFlag.trim() : undefined;
+  const commandSetActor = invocation.prefix.some((token) => token.startsWith("BEADS_ACTOR=")) || invocation.exported.BEADS_ACTOR !== undefined;
+  const actor = explicitActor !== undefined || commandSetActor ? invocationActor(invocation, env) : agentActor(ctx) ?? invocationActor(invocation, env);
+  return {
+    env: actor === null || actor === undefined ? env : { ...env, BEADS_ACTOR: actor },
+    actorFlag: explicitActor
+  };
 }
 function resultOutput(event) {
   const content = (event.content ?? []).map((part) => ("text" in part) && typeof part.text === "string" ? part.text : "").join(`
@@ -514,17 +707,20 @@ function decideLeaseHeartbeatClaim(parsed, event, ctx) {
       return;
     const input = event.input;
     const inputCwd = typeof input.cwd === "string" && input.cwd ? input.cwd : ctx.cwd ?? process.cwd();
+    const runtime = claimRuntime(parsed.command, event, ctx);
     pendingClaims.set(pendingKey(session, event.toolCallId), {
       toolCallId: event.toolCallId,
       session,
       cwd: leadingCdCwd(parsed.command, inputCwd),
-      env: environmentForInput(event.input),
+      env: runtime.env,
+      actorFlag: runtime.actorFlag,
       ctx,
       ids
     });
   } catch {}
 }
 var GLOBAL_VALUE_FLAGS = {
+  "--actor": true,
   "--database": true,
   "--db": true,
   "--directory": true,
@@ -637,7 +833,8 @@ async function heartbeat(active) {
   try {
     const deadline = Date.now() + HEARTBEAT_TIMEOUT_MS;
     const run = injectedRun ?? defaultRun;
-    const command = Promise.resolve().then(() => run(["bd", "heartbeat", active.id, "--json"], active.cwd, active.env, deadline));
+    const heartbeatArgv = active.actorFlag === undefined ? ["bd", "heartbeat", active.id, "--json"] : ["bd", "--actor", active.actorFlag, "heartbeat", active.id, "--json"];
+    const command = Promise.resolve().then(() => run(heartbeatArgv, active.cwd, active.env, deadline));
     let result;
     if (active.clock.setTimeout === undefined) {
       result = await command;
@@ -698,6 +895,7 @@ function startHeartbeat(pi, claim, id) {
   active.session = claim.session;
   active.cwd = claim.cwd;
   active.env = claim.env;
+  active.actorFlag = claim.actorFlag;
   active.ctx = claim.ctx;
   active.pi = pi;
   active.clock = clock;
