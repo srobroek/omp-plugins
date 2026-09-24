@@ -1040,7 +1040,7 @@ bashGates(fakePi as never);
 			expect(calls).toEqual([
 				["show", "bd-slow", "--json"],
 				["unclaim", "bd-slow", "--reason", expect.any(String), "--if-assignee", "actor/slow"],
-				["update", "bd-slow", "--status", "blocked", "--if-status", "open"],
+				["update", "bd-slow", "--status", "blocked", "--if-status", "open", "--if-assignee", ""],
 			]);
 		} finally {
 			setBdStreamForTests(null);
@@ -1850,10 +1850,10 @@ printf '%s\\n' '{"data":[{"id":"bd-bad"}],"schema_version":1}'
 			await settleBackgroundWorkForTests();
 			expect(calls.filter(args => args[0] === "unclaim").length).toBe(3);
 			expect(calls.filter(args => args[0] === "show").length).toBe(4);
-			expect(calls.filter(args => args[0] === "update").map(args => args.slice(0, 5))).toEqual([
-				["update", "bd-completed", "--status", "open", "--if-status"],
-				["update", "bd-aborted", "--status", "blocked", "--if-status"],
-				["update", "bd-error", "--status", "deferred", "--if-status"],
+			expect(calls.filter(args => args[0] === "update").map(args => args.slice(0, 8))).toEqual([
+				["update", "bd-completed", "--status", "open", "--if-status", "open", "--if-assignee", ""],
+				["update", "bd-aborted", "--status", "blocked", "--if-status", "open", "--if-assignee", ""],
+				["update", "bd-error", "--status", "deferred", "--if-status", "open", "--if-assignee", ""],
 			]);
 		} finally {
 			setBdStreamForTests(null);

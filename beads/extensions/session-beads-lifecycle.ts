@@ -148,7 +148,7 @@ interface SessionState {
 	/** Git common-dir identity for the checkout that started this session. */
 	repo?: string;
 	/** Repository identity by resolved Bash cwd; avoids a Git subprocess on repeat calls. */
-	repos: Map<string, string>;
+	repos: Map<string, string | undefined>;
 	staleAdvised: boolean;
 	stopFired: boolean;
 	touched: Set<string>;
@@ -230,7 +230,7 @@ export function autoPinBeadsDir(
 	liveSessions: (id: string) => boolean,
 	env: NodeJS.ProcessEnv = process.env,
 	state: AutoPinState = autoPinState,
-	identity: (cwd: string) => string = repoIdentity,
+	identity: (cwd: string) => string | undefined = repoIdentity,
 ): AutoPinResult {
 	const current = env.BEADS_DIR;
 	const ours = current !== undefined && current === state.pinned;
@@ -722,8 +722,8 @@ export function releaseClaimArgs(
  * need no follow-up. The release reason remains the native unclaim audit.
  */
 function restoreReleasedStatusArgs(id: string, status: string): string[] | undefined {
-	if (status === "in_progress") return ["update", id, "--status", "open", "--if-status", "open"];
-	if (status === "blocked" || status === "deferred") return ["update", id, "--status", status, "--if-status", "open"];
+	if (status === "in_progress") return ["update", id, "--status", "open", "--if-status", "open", "--if-assignee", ""];
+	if (status === "blocked" || status === "deferred") return ["update", id, "--status", status, "--if-status", "open", "--if-assignee", ""];
 	return undefined;
 }
 
@@ -1250,7 +1250,7 @@ export default function sessionBeadsLifecycle(pi: ExtensionAPI): void {
 		return state;
 	}
 
-	function identityFor(state: SessionState, cwd: string): string {
+	function identityFor(state: SessionState, cwd: string): string | undefined {
 		const key = resolve(cwd);
 		const cached = state.repos.get(key);
 		if (cached !== undefined) return cached;
