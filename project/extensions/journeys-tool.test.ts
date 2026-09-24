@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 
 import { installFormulas, journeysScriptPath, runJourneys } from "./journeys-tool.ts";
 
@@ -116,6 +117,23 @@ describe("journey formula installation", () => {
 			expect(installFormulas(root).ok).toBe(false);
 		} finally {
 			rmSync(root, { recursive: true, force: true });
+		}
+	});
+
+	test("resolves file URLs without creating a literal file directory", () => {
+		const source = tempRoot("journeys-formulas-url-source-");
+		const repo = tempRoot("journeys-formulas-url-repo-");
+		try {
+			for (const name of ["journey-step-agentic-verification", "journey-step-human-verification"]) {
+				writeFileSync(join(source, `${name}.formula.toml`), `formula = '${name}'\n`);
+			}
+			mkdirSync(join(repo, ".beads"));
+			const result = installFormulas(pathToFileURL(repo).href, false, pathToFileURL(source).href);
+			expect(result).toMatchObject({ ok: true, copied: 2 });
+			expect(result.text).not.toContain("file:");
+		} finally {
+			rmSync(source, { recursive: true, force: true });
+			rmSync(repo, { recursive: true, force: true });
 		}
 	});
 
