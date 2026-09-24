@@ -114,7 +114,7 @@ interface SessionState {
 	/** Git common-dir identity for the checkout that started this session. */
 	repo?: string;
 	/** Repository identity by resolved Bash cwd; avoids a Git subprocess on repeat calls. */
-	repos: Map<string, string>;
+	repos: Map<string, string | undefined>;
 	staleAdvised: boolean;
 	stopFired: boolean;
 	touched: Set<string>;
@@ -194,7 +194,7 @@ export function autoPinBeadsDir(
 	liveSessions: (id: string) => boolean,
 	env: NodeJS.ProcessEnv = process.env,
 	state: AutoPinState = autoPinState,
-	identity: (cwd: string) => string = repoIdentity,
+	identity: (cwd: string) => string | undefined = repoIdentity,
 ): AutoPinResult {
 	const current = env.BEADS_DIR;
 	const ours = current !== undefined && current === state.pinned;
@@ -901,10 +901,9 @@ export default function sessionBeadsLifecycle(pi: ExtensionAPI): void {
 		return state;
 	}
 
-	function identityFor(state: SessionState, cwd: string): string {
+	function identityFor(state: SessionState, cwd: string): string | undefined {
 		const key = resolve(cwd);
-		const cached = state.repos.get(key);
-		if (cached !== undefined) return cached;
+		if (state.repos.has(key)) return state.repos.get(key);
 		const identity = repoIdentity(key);
 		state.repos.set(key, identity);
 		return identity;
@@ -924,6 +923,18 @@ export default function sessionBeadsLifecycle(pi: ExtensionAPI): void {
 			const pin = autoPinBeadsDir(cwd, key, (id) => sessions.has(id));
 			state.repo = identityFor(state, cwd);
 			state.pin = sessionPinAfter(pin, cwd);
+			if (state.repo === undefined) {
+				pi.sendMessage(
+					{
+						customType: "com.srobroek.beads.session-lifecycle",
+						content: "Beads session start is unverified: repository identity is unknown; no bd command was run.",
+						display: true,
+						attribution: "user",
+					},
+					{ triggerTurn: false },
+				);
+				return;
+			}
 			if (pin.conflict !== undefined) {
 				pi.sendMessage(
 					{

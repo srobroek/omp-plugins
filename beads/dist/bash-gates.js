@@ -805,6 +805,7 @@ function decideActorGate(command, env = process.env) {
 }
 
 // extensions/bd-embedded-write-lock.ts
+import { spawnSync as spawnSync2 } from "child_process";
 import { closeSync, existsSync, openSync, readFileSync as readFileSync2, realpathSync as realpathSync2, statSync as statSync2, unlinkSync, writeSync } from "fs";
 import { hostname } from "os";
 import { basename as basename2, dirname as dirname2, isAbsolute as isAbsolute2, join, resolve as resolve4 } from "path";
@@ -910,6 +911,21 @@ function pidAlive(pid) {
     return false;
   }
 }
+function processStartIdentity(pid) {
+  try {
+    const result = spawnSync2("ps", ["-o", "lstart=", "-p", String(pid)], {
+      encoding: "utf8",
+      timeout: 100,
+      stdio: ["ignore", "pipe", "ignore"]
+    });
+    if (result.error || result.status !== 0)
+      return;
+    const identity = String(result.stdout ?? "").trim();
+    return identity === "" ? undefined : identity;
+  } catch {
+    return;
+  }
+}
 var REGISTRY_KEY = Symbol.for("com.srobroek.beads.embedded-write-lock.v1");
 function registry() {
   const holder = globalThis;
@@ -925,7 +941,7 @@ function registry() {
         closeSync(held.fd);
       } catch {}
       try {
-        unlinkSync(lock);
+        withOwnership(lock, held.token, () => unlinkSync(lock));
       } catch {}
     }
     created.owned.clear();
@@ -1148,8 +1164,12 @@ function abandoned(lock) {
     return ageOf(lock) > leaseMs;
   }
   const local = holder.host === HOST;
-  if (local && typeof holder.writer === "number" && pidAlive(holder.writer))
-    return false;
+  if (local && typeof holder.writer === "number") {
+    const currentStart = processStartIdentity(holder.writer);
+    const sameWriter = typeof holder.writerStart !== "string" || currentStart === undefined || currentStart === holder.writerStart;
+    if (pidAlive(holder.writer) && sameWriter)
+      return false;
+  }
   if (local && typeof holder.pid === "number" && !pidAlive(holder.pid))
     return true;
   if (typeof holder.expires === "number")
@@ -1181,9 +1201,17 @@ function takeOverIfAbandoned(lock, steal) {
     } catch {}
   }
 }
-function holderNow(owner, token, writer) {
+function holderNow(owner, token, writer, writerStart = writer === undefined ? undefined : processStartIdentity(writer)) {
   const taken = Date.now();
-  return { host: HOST, pid: process.pid, owner, token, taken, expires: taken + leaseMs, ...writer === undefined ? {} : { writer } };
+  return {
+    host: HOST,
+    pid: process.pid,
+    owner,
+    token,
+    taken,
+    expires: taken + leaseMs,
+    ...writer === undefined ? {} : { writer, ...writerStart === undefined ? {} : { writerStart } }
+  };
 }
 function stillOurs(lock, token) {
   try {
@@ -1239,7 +1267,7 @@ async function hold(store, owner, waitMs = WAIT_MS, signal) {
             } catch {}
           }, renewMs);
           renew.unref?.();
-          owned.set(lock, { fd, holders: new Map([[owner, 1]]), renew, token, writer: undefined });
+          owned.set(lock, { fd, holders: new Map([[owner, 1]]), renew, token, writer: undefined, writerStart: undefined });
           return { kind: "held" };
         } catch (error) {
           const code = error.code;
@@ -1359,7 +1387,7 @@ function renewLease(lock, owner, token) {
   const result = withOwnership(lock, token, () => {
     const fd = openSync(lock, "w");
     try {
-      writeSync(fd, JSON.stringify(holderNow(owner, token, held.writer)));
+      writeSync(fd, JSON.stringify(holderNow(owner, token, held.writer, held.writerStart)));
     } finally {
       closeSync(fd);
     }

@@ -28,13 +28,15 @@ retrying it, so whatever it actually is gets seen.
 `bd dolt pull` and `bd dolt push` are persistence, never a mutex. Never use a sync
 to serialise writers; contention is handled above.
 
-MUST retry a failed `bd dolt pull` or `bd dolt push` up to three attempts with a
-brief wait, then report the verbatim failure. A sync that fails three times is
-reported, not worked around: NEVER fall back to a manual `dolt` invocation, NEVER
-start a server, and NEVER continue as though the remote were current.
-
-MUST re-run `bd dolt pull` before trusting a read that decides work assignment
-after any retry sequence, because a partially applied sync leaves reads stale.
+MUST bound each `bd dolt pull` or `bd dolt push` attempt to 180 seconds (or a
+shorter caller deadline), then retry the same command up to three attempts with
+a brief wait. A killed or timed-out attempt is reported verbatim as the failed
+attempt; do not assume the remote state until a subsequent retry completes.
+A sync that fails three times is reported, not worked around: NEVER fall back to
+a manual `dolt` invocation, NEVER start a server, and NEVER continue as though
+the remote were current.
+After the retry sequence, MUST re-run `bd dolt pull` before trusting a read that
+decides work assignment, because a partially applied sync leaves reads stale.
 
 The conditions above match observed contention text only. No `bd dolt` failure
 text is matched here, because none has been observed in this project; the sync
