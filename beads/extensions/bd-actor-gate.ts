@@ -1,10 +1,10 @@
+import { basename, relative, resolve, sep } from "node:path";
 import type {
 	ExtensionAPI,
 	ExtensionContext,
 	ToolCallEvent,
 	ToolResultEvent,
 } from "@oh-my-pi/pi-coding-agent";
-import { basename, relative, resolve, sep } from "node:path";
 import { tokenize } from "./bd-close-gate.ts";
 
 /**

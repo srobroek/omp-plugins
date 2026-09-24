@@ -1,10 +1,10 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-
+import bashGates from "./bash-gates.ts";
 import bdActorGate, {
 	ACTOR_NOTICE_ARBITER,
-	agentActor,
 	actorPresent,
 	actorValues,
+	agentActor,
 	bdInvocations,
 	decideActorGate,
 	environmentForInput,
@@ -14,7 +14,6 @@ import bdActorGate, {
 	isClaimCommand,
 	isMutatingBdCommand,
 } from "./bd-actor-gate.ts";
-import bashGates from "./bash-gates.ts";
 
 const emptyEnv = {} as NodeJS.ProcessEnv;
 const actorEnv = { BEADS_ACTOR: "omp/GateBuilder/backlog" } as NodeJS.ProcessEnv;
