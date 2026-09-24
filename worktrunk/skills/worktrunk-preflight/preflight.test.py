@@ -62,6 +62,36 @@ class PreflightRegressionTests(unittest.TestCase):
             self.assertEqual(result.status, "pass")
             self.assertIn("node_modules", result.detail)
 
+    def test_declared_dependency_missing_from_partial_copy_warns_with_repair(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "package.json").write_text(
+                json.dumps({"dependencies": {"present": "1.0.0", "missing": "1.0.0"}}),
+                encoding="utf-8",
+            )
+            (root / "node_modules" / "present").mkdir(parents=True)
+            result = preflight.check_node_modules_integrity(FakeContext(root))
+            self.assertEqual(result.status, "warn")
+            self.assertIn("missing", result.detail)
+            self.assertIn("bun install --frozen-lockfile", result.fix)
+
+    def test_platform_optional_dependency_can_be_absent(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "package.json").write_text(
+                json.dumps(
+                    {
+                        "dependencies": {"present": "1.0.0"},
+                        "optionalDependencies": {"platform-only": "1.0.0"},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (root / "node_modules" / "present").mkdir(parents=True)
+            result = preflight.check_node_modules_integrity(FakeContext(root))
+            self.assertEqual(result.status, "pass")
+            self.assertIn("declared node_modules packages", result.detail)
+
     def test_skeleton_bun_types_warns_with_repair(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -107,6 +137,24 @@ class PreflightRegressionTests(unittest.TestCase):
             self.assertEqual(result.status, "pass")
             self.assertIn("present, executable, and approved", result.detail)
 
+    def test_interpreter_hook_only_requires_script_readability(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            script = root / "verify.py"
+            script.write_text("print('ok')\n", encoding="utf-8")
+
+            class ApprovalContext(FakeContext):
+                def run(self, *args: str, **kwargs: object) -> preflight.CommandResult:
+                    if args == ("wt", "config", "approvals", "list", "--format=json"):
+                        return preflight.CommandResult(
+                            0,
+                            json.dumps({"state": "approved", "commands": [{"phase": "pre-start", "name": "verify", "command": "python3 ./verify.py", "approved": True}]}),
+                        )
+                    return super().run(*args, **kwargs)
+
+            result = preflight.check_hook_approvals(ApprovalContext(root))
+            self.assertEqual(result.status, "pass")
+
     def test_hook_approvals_reports_missing_declared_executable(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -123,6 +171,33 @@ class PreflightRegressionTests(unittest.TestCase):
             result = preflight.check_hook_approvals(ApprovalContext(root))
             self.assertEqual(result.status, "fail")
             self.assertIn("missing hook executables", result.detail)
+
+    def test_hook_approvals_reports_missing_pathless_executable(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+
+            class ApprovalContext(FakeContext):
+                def run(self, *args: str, **kwargs: object) -> preflight.CommandResult:
+                    if args == ("wt", "config", "approvals", "list", "--format=json"):
+                        return preflight.CommandResult(
+                            0,
+                            json.dumps({"state": "approved", "commands": [{"phase": "pre-start", "name": "verify", "command": "missing-tool verify", "approved": True}]}),
+                        )
+                    return super().run(*args, **kwargs)
+
+            result = preflight.check_hook_approvals(ApprovalContext(root))
+            self.assertEqual(result.status, "fail")
+            self.assertIn("missing-tool", result.detail)
+
+    def test_invalid_package_manifest_warns_with_repair(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "package.json").write_text("{not-json", encoding="utf-8")
+            (root / "node_modules").mkdir()
+            result = preflight.check_node_modules_integrity(FakeContext(root))
+            self.assertEqual(result.status, "warn")
+            self.assertIn("package.json is unreadable or invalid", result.detail)
+            self.assertIn("bun install --frozen-lockfile", result.fix)
 
     def test_only_warn_exits_nonzero(self) -> None:
         original_checks = preflight.CHECKS
