@@ -1,10 +1,35 @@
 import { describe, expect, test } from "bun:test";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { hostname } from "node:os";
 import { join } from "node:path";
-import { hold, parseLinuxStatStartIdentity, processStartIdentity, release } from "./bd-embedded-write-lock.ts";
+import { embeddedWriteTargets, hold, parseLinuxStatStartIdentity, processStartIdentity, release } from "./bd-embedded-write-lock.ts";
 
 const host = hostname().split(".")[0] ?? "localhost";
+
+test("refuses control and timing wrappers instead of bypassing the embedded lock", () => {
+	const root = mkdtempSync(join(Bun.env.TMPDIR ?? "/tmp", "beads-lock-wrapper-"));
+	const store = join(root, ".beads");
+	const env = { BEADS_DIR: store };
+	try {
+		mkdirSync(store, { recursive: true });
+		writeFileSync(join(store, "metadata.json"), "{}");
+		for (const command of [
+			"! bd update bead-1 --claim",
+			"time bd update bead-1 --claim",
+			"if bd update bead-1 --claim; then :; fi",
+			"while bd update bead-1 --claim; do :; done",
+			"until bd update bead-1 --claim; do :; done",
+		]) {
+			const result = embeddedWriteTargets(command, root, env);
+			expect(result.kind).toBe("refused");
+		}
+	const direct = embeddedWriteTargets("bd update bead-1 --claim", root, env);
+	expect(direct).toEqual({ kind: "stores", stores: [realpathSync(store)] });
+		expect(embeddedWriteTargets("bd show bead-1", root, env)).toEqual({ kind: "stores", stores: [] });
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
 
 test("parses Linux stat start ticks after a close-paren-space comm", () => {
 	const filler = Array.from({ length: 18 }, () => "0").join(" ");

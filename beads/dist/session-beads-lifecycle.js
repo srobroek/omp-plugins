@@ -197,7 +197,15 @@ var WRAPPERS = {
   nohup: true,
   nice: true,
   sudo: true,
-  xargs: true
+  xargs: true,
+  time: true,
+  "!": true,
+  if: true,
+  elif: true,
+  else: true,
+  while: true,
+  until: true,
+  do: true
 };
 function commandSegments(command) {
   const out = [];
@@ -541,7 +549,16 @@ var VALUE_FLAGS2 = new Set([
   "--dolt-auto-commit",
   "--mem-profile"
 ]);
-var TRANSPARENT_WRAPPERS = { command: true, env: true, sudo: true };
+var CONTROL_PREFIXES = {
+  "!": true,
+  if: true,
+  elif: true,
+  else: true,
+  while: true,
+  until: true,
+  do: true
+};
+var TRANSPARENT_WRAPPERS = { command: true, env: true, sudo: true, time: true };
 var WRAPPER_VALUE_FLAGS = {
   "-C": true,
   "--chdir": true,
@@ -590,19 +607,54 @@ function bdInvocations(command) {
     }
     let i = 0;
     const prefix = [];
+    const unset = {};
     while (true) {
       while (/^[A-Za-z_]\w*=/.test(tokens[i] ?? "")) {
         prefix.push(tokens[i]);
         i++;
       }
-      const wrapper = (tokens[i] ?? "").split("/").pop() ?? "";
-      if (TRANSPARENT_WRAPPERS[wrapper] !== true)
+      const word = (tokens[i] ?? "").split("/").pop() ?? "";
+      if (CONTROL_PREFIXES[word] === true) {
+        i++;
+        continue;
+      }
+      if (TRANSPARENT_WRAPPERS[word] !== true)
         break;
       i++;
-      if (wrapper === "command")
+      if (word === "command")
         continue;
-      while (tokens[i]?.startsWith("-")) {
+      while (true) {
+        while (/^[A-Za-z_]\w*=/.test(tokens[i] ?? "")) {
+          const assignment = tokens[i];
+          prefix.push(assignment);
+          const variable = assignment.slice(0, assignment.indexOf("="));
+          if (variable === "BEADS_ACTOR" || variable === "BD_ACTOR")
+            delete unset[variable];
+          i++;
+        }
         const flag = tokens[i];
+        if (flag === undefined || !flag.startsWith("-"))
+          break;
+        if (word === "env") {
+          if (flag === "--") {
+            i++;
+            break;
+          }
+          if (flag === "-i" || flag === "--ignore-environment") {
+            unset.BEADS_ACTOR = true;
+            unset.BD_ACTOR = true;
+            i++;
+            continue;
+          }
+          const unsetName = flag === "-u" || flag === "--unset" ? tokens[i + 1] : flag.startsWith("--unset=") ? flag.slice("--unset=".length) : flag.startsWith("-u") && flag.length > 2 ? flag.slice(2) : undefined;
+          if (unsetName === "BEADS_ACTOR" || unsetName === "BD_ACTOR")
+            unset[unsetName] = true;
+          if (flag === "-u" || flag === "--unset")
+            i += 2;
+          else
+            i++;
+          continue;
+        }
         i++;
         if (WRAPPER_VALUE_FLAGS[flag] === true)
           i++;
@@ -615,7 +667,7 @@ function bdInvocations(command) {
     const scanned = scanGlobals(tokens, i);
     const verb = tokens[scanned.next];
     if (verb !== undefined) {
-      out.push({ verb: verb.toLowerCase(), args: tokens.slice(scanned.next + 1), globals: scanned.globals, prefix, exported: { ...exported } });
+      out.push({ verb: verb.toLowerCase(), args: tokens.slice(scanned.next + 1), globals: scanned.globals, prefix, exported: { ...exported }, unset });
     }
   }
   return out;
@@ -783,6 +835,8 @@ function invocationActor(invocation, env) {
   if (explicit !== null)
     return explicit;
   const resolve = (variable) => {
+    if (invocation.unset[variable] === true)
+      return null;
     const assignment = invocation.prefix.findLast((token) => token.startsWith(`${variable}=`));
     const value = assignment !== undefined ? assignment.slice(variable.length + 1) : invocation.exported[variable] ?? env[variable];
     return literal(value);
@@ -798,7 +852,7 @@ function invocationFromArgv(args) {
   const verb = args[scanned.next];
   if (verb === undefined)
     return;
-  return { verb: verb.toLowerCase(), args: args.slice(scanned.next + 1), globals: scanned.globals, prefix: [], exported: {} };
+  return { verb: verb.toLowerCase(), args: args.slice(scanned.next + 1), globals: scanned.globals, prefix: [], exported: {}, unset: {} };
 }
 function isMutatingInvocation({ verb, args }) {
   if (args.includes("--help") || args.includes("-h"))
