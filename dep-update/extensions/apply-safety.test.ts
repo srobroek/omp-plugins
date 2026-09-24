@@ -10,7 +10,12 @@ test("malformed Python collections do not hide valid declarations or crash detec
 		writeFileSync(join(root, "pyproject.toml"), '[project]\ndependencies = 42\n[project.optional-dependencies]\nbad = false\ngood = ["requests==2.0.0"]\n[dependency-groups]\nbad = 1\ngood = ["pytest==8.0.0"]\n');
 		writeFileSync(join(root, "package.json"), '{"dependencies":{"constructor":"1.0.0","__proto__":"2.0.0"},"devDependencies":["invalid"]}');
 		const result = await detectProject(root);
-		expect(result.rows).toEqual([["npm", "constructor", "1.0.0"], ["npm", "__proto__", "2.0.0"], ["pypi", "requests", "==2.0.0"], ["pypi", "pytest", "==8.0.0"]]);
+        expect(result.rows).toEqual([
+            { ecosystem: "npm", name: "constructor", declared: "1.0.0", resolved: null },
+            { ecosystem: "npm", name: "__proto__", declared: "2.0.0", resolved: null },
+            { ecosystem: "pypi", name: "requests", declared: "==2.0.0", resolved: null },
+            { ecosystem: "pypi", name: "pytest", declared: "==8.0.0", resolved: null },
+        ]);
 		expect(await checkNodeVersion(root, "constructor", "1.0.0")).toBe(true);
 		expect(await checkNodeVersion(root, "toString", "1.0.0")).toBe(false);
 		expect(result.stderr).toContain("Unscanned:");
