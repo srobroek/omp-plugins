@@ -5,7 +5,8 @@
   "private": true,
   "omp": {
     "extensions": [
-      "./extensions/presence.ts"
+      "./extensions/presence.ts",
+      "./extensions/external-repo-isolation.ts"
     ]
   }
 }
