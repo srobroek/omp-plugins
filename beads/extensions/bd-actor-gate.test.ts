@@ -436,6 +436,19 @@ describe("decideActorGate", () => {
 			if (d.kind === "block") expect(d.reason).toContain("Owner");
 		}
 	});
+	test("refuses actorless claim and create through every supported wrapper", () => {
+		const wrappers = ["!", "time", "if", "while", "until"];
+		for (const wrapper of wrappers) {
+			const claim = wrapper === "!" ? `${wrapper} bd update x --claim` : `${wrapper} bd update x --claim; then :; fi`;
+			const create = wrapper === "!" ? `${wrapper} bd create --title x` : `${wrapper} bd create --title x; then :; fi`;
+			const claimDecision = decideActorGate(claim, emptyEnv);
+			const createDecision = decideActorGate(create, emptyEnv);
+			expect(claimDecision.kind).toBe("block");
+			expect(createDecision.kind).toBe("block");
+			if (claimDecision.kind === "block") expect(claimDecision.reason).toContain("without BEADS_ACTOR");
+			if (createDecision.kind === "block") expect(createDecision.reason).toContain("without BEADS_ACTOR");
+		}
+	});
 	test("allows `bd new` when an actor is present", () => {
 		expect(decideActorGate("bd new --title 'new bead'", actorEnv).kind).toBe(
 			"allow",
