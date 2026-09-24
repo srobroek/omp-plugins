@@ -9,10 +9,10 @@
  * command line through
  * `bd show --json` and blocks when any of them is a gate.
  *
- * Advisory-class, so it fails open. An unreachable database, a missing `bd`, a
- * command whose ids are shell variables, and `bd close` with no id at all all
- * allow the call: a guard that blocks when it cannot see is worse than the TTSR
- * rule it backs up.
+ * Advisory-class, but database lookup failures fail closed at the Bash dispatcher.
+ * An unreachable database, a missing `bd`, or malformed lookup output refuses the
+ * close without gate proof. A command whose ids are shell variables, or `bd close`
+ * with no id at all, has no lookup to perform and remains allowed.
  */
 import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
 import { tokenizeShell } from "./shell-tokenizer.ts";
@@ -63,9 +63,8 @@ export { type CloseInvocation, closeInvocations as findCloseInvocations } from "
 /**
  * Canonical ids among `ids` whose `issue_type` is `gate`.
  *
- * `bd show` takes every id in one call and silently drops the ones it cannot
- * resolve, so an unknown id costs nothing. It exits non-zero only when no id
- * resolved at all, which reads as "nothing to say" rather than "block".
+ * An unavailable or incomplete lookup is a refusal: allowing a close without
+ * proving its type would make the gate safety check a silent no-op.
  *
  * `cwd` is the directory the bash tool would have run in, because bd
  * auto-discovers `.beads/*.db` from there. An explicit `-C`/`--db` on the
@@ -82,7 +81,7 @@ export function gateIdsAmong(
 	const run = injectedRun ?? defaultRun;
 	const result = run(["bd", ...dbArgs, "show", ...ids, "--json"], cwd, deadline);
 	if (Date.now() >= deadline) throw timeoutError();
-	if (result.exitCode !== 0) return [];
+	if (result.exitCode !== 0) throw new Error(`bd show lookup failed with exit code ${result.exitCode}; gate types remain unverified`);
 	let parsed: unknown;
 	try {
 		parsed = JSON.parse(result.stdout);
@@ -155,7 +154,7 @@ async function gateIdsAmongAsync(ids: string[], dbArgs: string[], cwd: string, d
 		: async (argv: string[], dir: string, limit: number) => injectedRun?.(argv, dir, limit) ?? asyncShowRun(argv, dir, limit);
 	const result = await run(["bd", ...dbArgs, "show", ...ids, "--json"], cwd, deadline);
 	if (Date.now() >= deadline) throw timeoutError();
-	if (result.exitCode !== 0) return [];
+	if (result.exitCode !== 0) throw new Error(`bd show lookup failed with exit code ${result.exitCode}; gate types remain unverified`);
 	let parsed: unknown;
 	try {
 		parsed = JSON.parse(result.stdout);

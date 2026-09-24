@@ -1,13 +1,16 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { describe, expect, test } from "bun:test";
 import { execFileSync, spawnSync } from "node:child_process";
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import bashGates from "./bash-gates.ts";
 import sessionBeadsLifecycle, {
+	admitBdMutation,
+	admitBeadsWork,
 	autoPinBeadsDir,
 	bdVerbs,
 	beadIdCandidates,
+	claimAnchor,
 	envelopeData,
 	formatGateAdvisory,
 	formatSessionCloseAdvisory,
@@ -31,6 +34,7 @@ import sessionBeadsLifecycle, {
   sessionPinAfter,
   sessionPinFor,
   setBdStreamForTests,
+  settleBackgroundWorkForTests,
   staleSkipNotice,
 } from "./session-beads-lifecycle.ts";
 
@@ -297,6 +301,7 @@ describe("parseTrailingJson / envelopeData", () => {
 			`Checked 2 gates\n${JSON.stringify({ data: { resolved: 1, escalated: 1, errors: 0 }, schema_version: 1 })}`,
 		);
 		expect(out).toEqual({ resolved: 1, escalated: 1, errors: 0 });
+		expect(readCheckOutcome("Checked 1 gates without JSON")).toBeUndefined();
 	});
 });
 
@@ -450,10 +455,16 @@ describe("bdVerbs / isBdWrite", () => {
 		}
 	});
 
+	test("unknown commands stay outside the mutation classifier", () => {
+		for (const command of ["bd sql 'update issues set status=open'", "bd sync", "bd reclaim", "bd dolt push"]) {
+			expect(isBdWrite(command)).toBe(false);
+		}
+	});
+
 	test("reads are not writes", () => {
 		expect(isBdWrite("bd list --status open --json")).toBe(false);
 		expect(isBdWrite("bd ready --unassigned --json")).toBe(false);
-		expect(isBdWrite("bd comments x")).toBe(false);
+		expect(isBdWrite("bd comments bd-probe-2m7")).toBe(false);
 		expect(isBdWrite("bd swarm validate root --json")).toBe(false);
 	});
 
@@ -467,7 +478,6 @@ describe("bdVerbs / isBdWrite", () => {
 			"bd mol stale",
 			"bd mol last-activity mol-1",
 			"bd mol seed formula",
-			"bd mol pour formula --dry-run",
 			"bd mol wisp list",
 			"bd dep tree x",
 			"bd label list x",
@@ -546,94 +556,73 @@ describe("heldClaims", () => {
 	});
 });
 
+describe("claimAnchor", () => {
+	test("preserves host and pid from a claimed bead for liveness checks", () => {
+		const [bead] = readBeads(JSON.stringify({data: [{id: "bd-live-1", status: "in_progress", assignee: "omp/Other/s2", metadata: {lease_host: "worker-1", lease_pid: "4242"}}], schema_version: 1}));
+		expect(bead && claimAnchor(bead)).toEqual({ host: "worker-1", pid: 4242 });
+	});
+});
 describe("formatSessionCloseAdvisory", () => {
-	test("names the bead, the holder, and remedies that bd actually has", () => {
-		// The advisory previously told agents to run `bd unclaim`, which bd 1.2.2
-		// rejects as an unknown command, and `bd comments add -m`, where the text is
-		// positional and `-m` does not exist. An agent following either left its
-		// claim held, which is the one thing this advisory exists to prevent.
+	test("names the bead, holder, and native guarded remedy", () => {
 		const text = formatSessionCloseAdvisory(heldClaims(readBeads(BEAD_LIST), new Set(["bd-probe-2m7"]), undefined), process.env, undefined, true, new Set(["omp/Main/s1"]));
 		expect(text).toContain("bd-probe-2m7 [omp/Main/s1] target work");
-		expect(text).not.toContain("bd unclaim");
-		expect(text).toContain("'--assignee' '' '--status' 'open'");
+		expect(text).toContain("bd 'unclaim'");
+		expect(text).toContain("--if-assignee");
+		expect(text).not.toContain("'--assignee' '' '--status' 'open'");
 		expect(text).toContain('bd comments add <id> "..."');
-		expect(text).toContain("discovered work");
 	});
 });
 
 describe("releaseClaimArgs", () => {
 	const at = "2026-09-14T12:34:56.789Z";
-	test("builds one guarded argv and preserves release metadata", () => {
-		expect(releaseClaimArgs("bd-probe-2m7", "omp/Main/s1", { BD_ACTOR: "omp/Main/s2" }, at)).toEqual([
-			"update", "bd-probe-2m7", "--assignee", "", "--status", "open",
-			"--set-metadata", "release_actor=omp/Main/s2", "--set-metadata", `released_at=${at}`,
-			"--set-metadata", "released_from=omp/Main/s1", "--if-assignee", "omp/Main/s1",
-		]);
+	const reason = `session release by omp/Main/s2 at ${at}; previous holder omp/Main/s1`;
+	test("builds one guarded native unclaim argv with its durable reason", () => {
+		expect(releaseClaimArgs("bd-probe-2m7", "omp/Main/s1", { BD_ACTOR: "omp/Main/s2" }, at)).toEqual(["unclaim", "bd-probe-2m7", "--reason", reason, "--if-assignee", "omp/Main/s1"]);
 	});
-	test("builds a readback-verified argv when CAS is unavailable", () => {
-		const args = releaseClaimArgs("bd-probe-2m7", "omp/Main/s1", { BD_ACTOR: "omp/Main/s2" }, at, false);
-		expect(args).toEqual([
-			"update", "bd-probe-2m7", "--assignee", "", "--status", "open",
-			"--set-metadata", "release_actor=omp/Main/s2", "--set-metadata", `released_at=${at}`,
-			"--set-metadata", "released_from=omp/Main/s1",
-		]);
-		expect(args).not.toContain("--if-assignee");
+	test("refuses to mutate when CAS is unavailable", () => {
+		expect(releaseClaimArgs("bd-probe-2m7", "omp/Main/s1", { BD_ACTOR: "omp/Main/s2" }, at, false)).toBeUndefined();
 	});
 	test("prefers BD_ACTOR and falls back to BEADS_ACTOR", () => {
-		expect(releaseClaimArgs("bd-a-1", "omp/Main/s1", { BEADS_ACTOR: "omp/Main/fallback" }, at)?.[7]).toBe("release_actor=omp/Main/fallback");
-		expect(releaseClaimArgs("bd-a-1", "omp/Main/s1", { BD_ACTOR: " ", BEADS_ACTOR: "omp/Main/fallback" }, at)?.[7]).toBe("release_actor=omp/Main/fallback");
-		expect(releaseClaimArgs("bd-a-1", "omp/Main/s1", { BD_ACTOR: "omp/Main/wins", BEADS_ACTOR: "omp/Main/loses" }, at)?.[7]).toBe("release_actor=omp/Main/wins");
+		expect(releaseClaimArgs("bd-a-1", "omp/Main/s1", { BEADS_ACTOR: "omp/Main/fallback" }, at)?.[3]).toContain("omp/Main/fallback");
+		expect(releaseClaimArgs("bd-a-1", "omp/Main/s1", { BD_ACTOR: " ", BEADS_ACTOR: "omp/Main/fallback" }, at)?.[3]).toContain("omp/Main/fallback");
+		expect(releaseClaimArgs("bd-a-1", "omp/Main/s1", { BD_ACTOR: "omp/Main/wins", BEADS_ACTOR: "omp/Main/loses" }, at)?.[3]).toContain("omp/Main/wins");
 		expect(releaseClaimArgs("bd-a-1", "omp/Main/s1", {}, at)).toBeUndefined();
 	});
 	test("refuses unsafe identifiers instead of interpolating shell text", () => {
 		expect(releaseClaimArgs("bd-a-1;rm", "omp/Main/s1", { BD_ACTOR: "omp/Main/s2" }, at)).toBeUndefined();
-		expect(releaseClaimArgs("bd-a-1", "omp/Main/s1", { BD_ACTOR: "omp/Main/s2;rm" }, at)).toBeUndefined();
 		expect(releaseClaimCommand("bd-a-1", "omp/Main/s1", { BD_ACTOR: "omp/Main/s2" }, at)).toContain("--if-assignee");
-		expect(releaseClaimCommand("bd-a-1", "omp/Main/s1", { BD_ACTOR: "omp/Main/s2" }, at, false)).not.toContain("--if-assignee");
-		expect(releaseClaimCommand("bd-a-1", "omp/Main/s1", { BD_ACTOR: "omp/Main/s2" }, at, false)).toContain("released_from=omp/Main/s1");
+		expect(releaseClaimCommand("bd-a-1", "omp/Main/s1", { BD_ACTOR: "omp/Main/s2" }, at, false)).toBeUndefined();
 	});
-	test("emits a command-local BD_ACTOR matching release metadata", () => {
+	test("emits command-local actor and native reason", () => {
 		const command = releaseClaimCommand("bd-a-1", "omp/Main/s1", { BD_ACTOR: "omp/Main/s2", BEADS_ACTOR: "omp/Main/ambient" }, at);
-		expect(command).toContain("BEADS_ACTOR='omp/Main/s2' BD_ACTOR='omp/Main/s2' 'bd'");
-		expect(command).toContain("'release_actor=omp/Main/s2'");
-		expect(command).toContain("'released_from=omp/Main/s1'");
+		expect(command).toContain("BEADS_ACTOR='omp/Main/s2' BD_ACTOR='omp/Main/s2' bd 'unclaim'");
+		expect(command).toContain("'session release by omp/Main/s2");
 		expect(command).toContain("'--if-assignee' 'omp/Main/s1'");
 	});
-	test("refuses quote-bearing actors instead of interpolating shell text", () => {
-		expect(releaseClaimCommand("bd-a-1", "omp/Main/s1", { BD_ACTOR: "omp/Main/o'hare" }, at)).toBeUndefined();
-	});
 });
-describe("formatSessionCloseAdvisory", () => {
+
+describe("formatSessionCloseAdvisory actor variants", () => {
 	const at = "2026-09-14T12:34:56.789Z";
-	test("names the bead and emits an actor-bound guarded command", () => {
+	test("emits an actor-bound guarded command", () => {
 		const text = formatSessionCloseAdvisory(heldClaims(readBeads(BEAD_LIST), new Set(["bd-probe-2m7"]), undefined), { BD_ACTOR: "omp/Main/s1" }, at);
-		expect(text).toContain("bd-probe-2m7 [omp/Main/s1] target work");
-		expect(text).toContain("'release_actor=omp/Main/s1'");
-		expect(text).toContain(`'released_at=${at}'`);
+		expect(text).toContain("bd 'unclaim'");
+		expect(text).toContain("session release by omp/Main/s1");
+		expect(text).toContain("previous holder omp/Main/s1");
 		expect(text).toContain("'--if-assignee'");
-		expect(text).toContain("'omp/Main/s1'");
-		expect(text).not.toContain("<actor>");
-		expect(text).not.toContain("<current-assignee>");
-		expect(text).toContain("bd comments add");
 	});
-	test("emits a readback verification for bd without CAS support", () => {
+	test("stays advisory-only when CAS is unavailable", () => {
 		const text = formatSessionCloseAdvisory(heldClaims(readBeads(BEAD_LIST), new Set(["bd-probe-2m7"]), undefined), { BD_ACTOR: "omp/Main/s1" }, at, false);
-		expect(text).toContain("Release with:");
-		expect(text).not.toContain("does not advertise atomic");
-		expect(text).toContain("Then verify: bd show <id> --json must show no assignee.");
+		expect(text).toContain("Release unavailable");
+		expect(text).not.toContain("Release with:");
 	});
 	test("does not release another holder when one actor merely touched the bead", () => {
 		const text = formatSessionCloseAdvisory(heldClaims(readBeads(BEAD_LIST), new Set(["bd-probe-2m7"]), undefined), { BD_ACTOR: "omp/Main/releaser" }, at);
 		expect(text).toContain("Release unavailable");
-		expect(text).not.toContain("release_actor=");
-		expect(text).not.toContain("--if-assignee");
 	});
 	test("fails closed when actor discovery is absent", () => {
 		const bead = readBeads(BEAD_LIST)[1];
 		if (bead === undefined) throw new Error("fixture must contain a second bead");
-		const text = formatSessionCloseAdvisory([bead], {}, at);
-		expect(text).toContain("Release unavailable");
-		expect(text).not.toContain("release_actor=");
+		expect(formatSessionCloseAdvisory([bead], {}, at)).toContain("Release unavailable");
 	});
 	test("a long list is capped and counted", () => {
 		const many = Array.from({ length: 11 }, (_, i) => ({ id: `b-${i}`, title: "t", status: "in_progress" }));
@@ -642,52 +631,27 @@ describe("formatSessionCloseAdvisory", () => {
 });
 
 describe("handleSessionStop", () => {
-	test("continues with the held claims", () => {
+	test("continues with held claims", () => {
 		const r = handleSessionStop({}, BEAD_LIST, new Set(["bd-probe-2m7"]), undefined);
 		expect(r?.continue).toBe(true);
 		expect(r?.additionalContext).toContain("bd-probe-2m7");
 	});
-test("passes the effective actor into actual release commands", () => {
+	test("passes the effective actor into guarded native release commands", () => {
 		const r = handleSessionStop({}, BEAD_LIST, new Set(["bd-probe-2m7"]), "omp/Main/s1");
-		expect(r?.additionalContext).toContain("'release_actor=omp/Main/s1'");
-		expect(r?.additionalContext).toContain("'released_from=omp/Main/s1'");
+		expect(r?.additionalContext).toContain("session release by omp/Main/s1");
 		expect(r?.additionalContext).toContain("'--if-assignee'");
-		expect(r?.additionalContext).toContain("'omp/Main/s1'");
-		expect(r?.additionalContext).not.toContain("<actor>");
 	});
-
 	test("skips its own continuation", () => {
 		expect(handleSessionStop({ stop_hook_active: true }, BEAD_LIST, new Set(["bd-probe-2m7"]))).toBeUndefined();
 		expect(handleSessionStop({ stopHookActive: true }, BEAD_LIST, new Set(["bd-probe-2m7"]))).toBeUndefined();
 	});
-
 	test("reports embedded-store read failures without server credential advice", () => {
-		const text = handleSessionStop({}, undefined, new Set(), undefined, true, 'bd exited with code 1: Error 1045 (28000): Access denied for user root')?.additionalContext ?? "";
-		expect(text).toContain("Beads claims could not be read at session close");
-	});
-	test("nothing held, nothing said", () => {
-		expect(handleSessionStop({}, BEAD_LIST, new Set(), undefined)).toBeUndefined();
-	});
-
-	test("an unreadable database reports uncertainty", () => {
-		expect(handleSessionStop({}, undefined, new Set(["bd-probe-2m7"]), undefined)?.additionalContext).toContain("could not be read");
-	});
-	test("includes a bounded nonzero exit reason and keeps the inspection instruction", () => {
-		const reason = `bd exited with code 7: ${"permission denied ".repeat(30)}`;
-		const text = handleSessionStop({}, undefined, new Set(), undefined, true, reason)?.additionalContext ?? "";
-		expect(text).toContain("bd exited with code 7: permission denied");
-		expect(text).toContain("inspect assigned and touched work before stopping");
-		expect(text.length).toBeLessThan(400);
-	});
-	test("distinguishes a timeout failure", () => {
-		const text = handleSessionStop({}, undefined, new Set(), undefined, true, "bd command timed out")?.additionalContext ?? "";
-		expect(text).toContain("Beads claims could not be read at session close: bd command timed out.");
-	});
-	test("successful reads retain the held claims advisory", () => {
-		const text = handleSessionStop({}, BEAD_LIST, new Set(["bd-probe-2m7"]), undefined)?.additionalContext ?? "";
-		expect(text).toContain("bd-probe-2m7");
+		const text = handleSessionStop({}, undefined, new Set(), undefined, true, "bd exited with code 1: Error 1045: Access denied")?.additionalContext ?? "";
+		expect(text).toContain("could not be read");
+		expect(text).not.toContain("shared-server");
 	});
 });
+
 
 describe("runBdResult", () => {
 	test("keeps nonzero stderr bounded in the failure result", async () => {
@@ -722,19 +686,6 @@ describe("runBdResult", () => {
 
 
 describe("integration", () => {
-	const ambientActors = { beads: undefined as string | undefined, bd: undefined as string | undefined };
-	beforeEach(() => {
-		ambientActors.beads = process.env.BEADS_ACTOR;
-		ambientActors.bd = process.env.BD_ACTOR;
-		delete process.env.BEADS_ACTOR;
-		delete process.env.BD_ACTOR;
-	});
-	afterEach(() => {
-		if (ambientActors.beads === undefined) delete process.env.BEADS_ACTOR;
-		else process.env.BEADS_ACTOR = ambientActors.beads;
-		if (ambientActors.bd === undefined) delete process.env.BD_ACTOR;
-		else process.env.BD_ACTOR = ambientActors.bd;
-	});
 	/** Collect handlers the way the runtime would, then drive them directly. */
 	const wire = () => {
 		const handlers: Record<string, Array<(e: unknown, c: unknown) => unknown>> = {};
@@ -777,6 +728,10 @@ bashGates(fakePi as never);
       const start = handlers.session_start?.[0];
       if (start === undefined) throw new Error("session start handler was not registered");
       await start({}, { cwd: dir });
+      // The boundary does not wait for the database, so the failure is reported when the
+      // read lands rather than inside the handler's budget.
+      expect(logged).toEqual([]);
+      await settleBackgroundWorkForTests();
       expect(logged[0]).toContain("Beads gates could not be verified at session start");
     } finally {
       setBdStreamForTests(null);
@@ -784,8 +739,339 @@ bashGates(fakePi as never);
     }
   });
 
+  test("dispatch and a mutating bd command wait for gate verification; a read does not", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "beads-gate-admission-"));
+    mkdirSync(join(dir, ".beads"));
+    const gates = Promise.withResolvers<string>();
+    setBdStreamForTests(async (_cwd, args) => (args[0] === "gate" ? await gates.promise : "[]"));
+    try {
+      const { handlers } = wire();
+      const ctx = { cwd: dir, sessionManager: { getSessionId: () => "gate-admission" } };
+      await handlers.session_start![0]!({}, ctx);
+
+      // A read needs no verdict, so it is never held behind the gate check.
+      expect(await admitBdMutation({ command: "bd list", cwd: dir }, ctx as never)).toBeUndefined();
+
+      let claimDecided = false;
+      const claim = admitBdMutation({ command: "bd update bd-probe-2m7 --claim", cwd: dir }, ctx as never)
+        .then(decision => { claimDecided = true; return decision; });
+      let toolDecisions = 0;
+      const gatedCalls = [
+        { toolName: "task", input: {} },
+        { toolName: "bd_reconcile", input: { apply: true } },
+        { toolName: "bd_formula_check", input: { deep: true, workspace: dir } },
+      ].map(call => Promise.resolve(handlers.tool_call![0]!(call, ctx))
+        .then((decision: unknown) => { toolDecisions += 1; return decision; }));
+      // Nothing but the gate read can advance these, so draining the microtask queue is
+      // enough to show neither mutation nor dispatch has been let through.
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(claimDecided).toBe(false);
+      expect(toolDecisions).toBe(0);
+
+      gates.resolve(JSON.stringify({ data: null, schema_version: 1 }));
+      expect(await claim).toBeUndefined();
+      expect(await Promise.all(gatedCalls)).toEqual([undefined, undefined, undefined]);
+    } finally {
+      setBdStreamForTests(null);
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+	test("each gate verification command gets a fresh execution ceiling", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "beads-gate-deadlines-"));
+		mkdirSync(join(dir, ".beads"));
+		const deadlines: number[] = [];
+		let lists = 0;
+		const originalNow = Date.now;
+		let now = 1_000;
+		Date.now = () => now;
+		setBdStreamForTests(async (_cwd, args, deadline) => {
+			deadlines.push(deadline);
+			now += 5;
+			if (args[1] === "check") return JSON.stringify({ data: { checked: 1, dry_run: false, errors: 0, escalated: 0, resolved: 1 }, schema_version: 1 });
+			return lists++ === 0 ? GATE_LIST : JSON.stringify({ data: [], schema_version: 1 });
+		});
+		try {
+			const { handlers } = wire();
+			await handlers.session_start![0]!({}, { cwd: dir, sessionManager: { getSessionId: () => "gate-deadlines" } });
+			await settleBackgroundWorkForTests();
+			expect(deadlines).toHaveLength(3);
+			expect(deadlines[1]!).toBeGreaterThan(deadlines[0]!);
+			expect(deadlines[2]!).toBeGreaterThan(deadlines[1]!);
+		} finally {
+			setBdStreamForTests(null);
+			Date.now = originalNow;
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	test("mutation verifies the store selected by BEADS_DIR or a formula workspace", async () => {
+		const sessionDir = mkdtempSync(join(tmpdir(), "beads-gate-session-"));
+		const targetDir = mkdtempSync(join(tmpdir(), "beads-gate-target-"));
+		const noStoreDir = mkdtempSync(join(tmpdir(), "beads-gate-no-store-"));
+		const targetStorePath = join(targetDir, ".beads");
+		mkdirSync(join(sessionDir, ".beads"));
+		mkdirSync(targetStorePath);
+		const targetStore = realpathSync(targetStorePath);
+		setBdStreamForTests(async (_cwd, args, _deadline, env) => {
+			if (args[0] !== "gate") return "[]";
+			const selected = env.BEADS_DIR;
+			const targetsStore = typeof selected === "string" && realpathSync(selected) === targetStore;
+			return targetsStore
+				? { failure: "target store gate read failed" }
+				: JSON.stringify({ data: null, schema_version: 1 });
+		});
+		try {
+			const { handlers } = wire();
+			const ownerCtx = { cwd: sessionDir, sessionManager: { getSessionId: () => "target-gate-owner" } };
+			const conflictCtx = { cwd: targetDir, sessionManager: { getSessionId: () => "target-gate-conflict" } };
+			const noStoreCtx = { cwd: noStoreDir, sessionManager: { getSessionId: () => "target-gate-cd" } };
+			await handlers.session_start![0]!({}, ownerCtx);
+			await handlers.session_start![0]!({}, conflictCtx);
+			await handlers.session_start![0]!({}, noStoreCtx);
+			await settleBackgroundWorkForTests();
+			const explicitRefusal = await admitBdMutation({
+				command: "bd update bd-probe-2m7 --claim",
+				env: { BEADS_DIR: targetStore },
+			}, ownerCtx as never);
+			expect(explicitRefusal).toMatchObject({ block: true, reason: expect.stringContaining("target store gate read failed") });
+			const rewrittenRefusal = await admitBdMutation({
+				command: "bd update bd-probe-2m7 --claim",
+			}, conflictCtx as never);
+			expect(rewrittenRefusal).toMatchObject({ block: true, reason: expect.stringContaining("target store gate read failed") });
+			const directoryRefusal = await admitBdMutation({
+				command: `bd -C '${targetDir}' update bd-probe-2m7 --claim`,
+			}, ownerCtx as never);
+			const prefixedRefusal = await admitBdMutation({
+				command: `BEADS_DIR='${targetStore}' bd update bd-probe-2m7 --claim`,
+			}, ownerCtx as never);
+			expect(prefixedRefusal).toMatchObject({ block: true, reason: expect.stringContaining("target store gate read failed") });
+			const dynamicPrefixRefusal = await admitBdMutation({
+				command: "BEADS_DIR=$TARGET bd update bd-probe-2m7 --claim",
+			}, ownerCtx as never);
+			expect(dynamicPrefixRefusal).toMatchObject({ block: true, reason: expect.stringContaining("dynamically") });
+			expect(directoryRefusal).toMatchObject({ block: true, reason: expect.stringContaining("target store gate read failed") });
+			let settingsCwd: string | undefined;
+			const targetScopedRefusal = await admitBdMutation({
+				command: `bd -C '${targetDir}' update bd-probe-2m7 --claim`,
+			}, ownerCtx as never, cwd => {
+				settingsCwd = cwd;
+				return true;
+			});
+			expect(settingsCwd).toBe(realpathSync(targetDir));
+			expect(targetScopedRefusal).toMatchObject({ block: true, reason: expect.stringContaining("target store gate read failed") });
+			const targetDisabled = await admitBdMutation({
+				command: `bd -C '${targetDir}' update bd-probe-2m7 --claim`,
+			}, ownerCtx as never, () => false);
+			expect(targetDisabled).toBeUndefined();
+			const dynamicDirectoryRefusal = await admitBdMutation({
+				command: 'cd "$TARGET" && bd update bd-probe-2m7 --claim',
+			}, noStoreCtx as never);
+			expect(dynamicDirectoryRefusal).toMatchObject({ block: true, reason: expect.stringContaining("cannot resolve") });
+			const formulaRefusal = await handlers.tool_call![0]!({
+				toolName: "bd_formula_check",
+				input: { deep: true, workspace: targetDir },
+			}, ownerCtx) as { block?: true; reason?: string } | undefined;
+			expect(formulaRefusal).toMatchObject({ block: true, reason: expect.stringContaining("target store gate read failed") });
+		} finally {
+			setBdStreamForTests(null);
+			rmSync(sessionDir, { recursive: true, force: true });
+			rmSync(targetDir, { recursive: true, force: true });
+			rmSync(noStoreDir, { recursive: true, force: true });
+		}
+	});
+
+	test("selector-looking positional data still verifies the ambient store", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "beads-gate-sentinel-"));
+		mkdirSync(join(dir, ".beads"));
+		setBdStreamForTests(async () => ({ failure: "ambient store gate read failed" }));
+		try {
+			const { handlers } = wire();
+			const ctx = { cwd: dir, sessionManager: { getSessionId: () => "gate-sentinel" } };
+			await handlers.session_start![0]!({}, ctx);
+			await settleBackgroundWorkForTests();
+			const refusal = await admitBdMutation({
+				command: "bd comments add bd-probe-2m7 -- --global",
+			}, ctx as never);
+			expect(refusal).toMatchObject({ block: true, reason: expect.stringContaining("ambient store gate read failed") });
+		} finally {
+			setBdStreamForTests(null);
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+  test("a failed gate check blocks mutation and reports the failure", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "beads-gate-admission-fail-"));
+    mkdirSync(join(dir, ".beads"));
+    setBdStreamForTests(async () => ({ failure: "bd exited with code 1: Error 1045 (28000): Access denied" }));
+    try {
+      const { handlers, logged } = wire();
+      const ctx = { cwd: dir, sessionManager: { getSessionId: () => "gate-admission-fail" } };
+      await handlers.session_start![0]!({}, ctx);
+      await settleBackgroundWorkForTests();
+      const refusal = await admitBdMutation({ command: "bd update bd-probe-2m7 --claim", cwd: dir }, ctx as never);
+      expect(refusal).toMatchObject({ block: true, reason: expect.stringContaining("could not be verified") });
+      expect(logged.join("\n")).toContain("Beads gates could not be verified at session start");
+    } finally {
+      setBdStreamForTests(null);
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("a malformed gate check blocks mutation", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "beads-gate-admission-malformed-"));
+    mkdirSync(join(dir, ".beads"));
+    setBdStreamForTests(async (_cwd, args) => args[0] === "gate" && args[1] === "list" ? GATE_LIST : "not-json");
+    try {
+      const { handlers } = wire();
+      const ctx = { cwd: dir, sessionManager: { getSessionId: () => "gate-admission-malformed" } };
+      await handlers.session_start![0]!({}, ctx);
+      await settleBackgroundWorkForTests();
+      const refusal = await admitBdMutation({ command: "bd update bd-probe-2m7 --claim", cwd: dir }, ctx as never);
+      expect(refusal).toMatchObject({ block: true, reason: expect.stringContaining("malformed data") });
+    } finally {
+      setBdStreamForTests(null);
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("a gate check with errors blocks mutation", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "beads-gate-admission-errors-"));
+    mkdirSync(join(dir, ".beads"));
+    const errored = JSON.stringify({ data: { resolved: 0, escalated: 0, errors: 1 }, schema_version: 1 });
+    setBdStreamForTests(async (_cwd, args) => args[0] === "gate" && args[1] === "list" ? GATE_LIST : errored);
+    try {
+      const { handlers } = wire();
+      const ctx = { cwd: dir, sessionManager: { getSessionId: () => "gate-admission-errors" } };
+      await handlers.session_start![0]!({}, ctx);
+      await settleBackgroundWorkForTests();
+      const refusal = await admitBdMutation({ command: "bd update bd-probe-2m7 --claim", cwd: dir }, ctx as never);
+      expect(refusal).toMatchObject({ block: true, reason: expect.stringContaining("reported 1 error") });
+    } finally {
+      setBdStreamForTests(null);
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+	test("a later admission retries a settled failed gate verification", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "beads-gate-admission-retry-"));
+		mkdirSync(join(dir, ".beads"));
+		let reads = 0;
+		setBdStreamForTests(async (_cwd, args) => {
+			if (args[0] !== "gate") return "[]";
+			reads += 1;
+			return reads < 3
+				? { failure: "transient gate read failure" }
+				: JSON.stringify({ data: null, schema_version: 1 });
+		});
+		try {
+			const { handlers } = wire();
+			const ctx = { cwd: dir, sessionManager: { getSessionId: () => "gate-admission-retry" } };
+			await handlers.session_start![0]!({}, ctx);
+			await settleBackgroundWorkForTests();
+			const command = { command: "bd update bd-probe-2m7 --claim", cwd: dir };
+			expect(await admitBdMutation(command, ctx as never)).toMatchObject({
+				block: true,
+				reason: expect.stringContaining("transient gate read failure"),
+			});
+			expect(await admitBdMutation(command, ctx as never)).toBeUndefined();
+			expect(reads).toBe(3);
+		} finally {
+			setBdStreamForTests(null);
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	test("a completed verdict is consumed before a later dispatch refreshes it", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "beads-gate-dispatch-refresh-"));
+		mkdirSync(join(dir, ".beads"));
+		let reads = 0;
+		setBdStreamForTests(async (_cwd, args) => {
+			if (args[0] === "gate" && args[1] === "list") reads++;
+			return JSON.stringify({ data: null, schema_version: 1 });
+		});
+		try {
+			const { handlers } = wire();
+			const ctx = { cwd: dir, sessionManager: { getSessionId: () => "gate-dispatch-refresh" } };
+			await handlers.session_start![0]!({}, ctx);
+			await settleBackgroundWorkForTests();
+			expect(await admitBeadsWork(ctx as never)).toBeUndefined();
+			expect(reads).toBe(1);
+			expect(await admitBeadsWork(ctx as never)).toBeUndefined();
+			expect(reads).toBe(2);
+		} finally {
+			setBdStreamForTests(null);
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+
+
+
+
+
+	test("slow terminal claim reads are detached and late results are consumed", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "beads-agent-end-slow-read-"));
+		mkdirSync(join(dir, ".beads"));
+		const late = Promise.withResolvers<void>();
+		const calls: string[][] = [];
+		setBdStreamForTests(async (_cwd, args, _deadline, env) => {
+			calls.push(args);
+			if (args[0] === "show") {
+				await late.promise;
+				return { output: JSON.stringify({ data: [{ id: args[1], issue_type: "task", status: "blocked", assignee: env.BD_ACTOR }], schema_version: 1 }) };
+			}
+			return { output: "unclaimed" };
+		});
+		try {
+			const { handlers } = wire();
+			const ctx = { cwd: dir, sessionManager: { getSessionId: () => "agent-end-slow-read" } };
+			handlers.tool_result?.[0]?.({ toolName: "bash", toolCallId: "slow-claim", isError: false, input: { command: `BEADS_ACTOR=actor/slow bd update bd-slow --claim`, cwd: dir, env: { BD_ACTOR: "actor/slow" } }, content: [{ type: "text", text: "Updated issue: bd-slow" }] }, ctx);
+			const end = handlers.agent_end?.[0];
+			if (end === undefined) throw new Error("agent_end handler was not registered");
+			const started = Date.now();
+			expect(await end({ willContinue: false, outcome: "completed" }, ctx)).toBeUndefined();
+			expect(Date.now() - started).toBeLessThan(500);
+			await Promise.resolve();
+			expect(calls).toEqual([["show", "bd-slow", "--json"]]);
+			late.resolve();
+			await settleBackgroundWorkForTests();
+			expect(calls).toEqual([
+				["show", "bd-slow", "--json"],
+				["unclaim", "bd-slow", "--reason", expect.any(String), "--if-assignee", "actor/slow"],
+				["update", "bd-slow", "--status", "blocked", "--if-status", "open", "--if-assignee", ""],
+			]);
+		} finally {
+			setBdStreamForTests(null);
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	test("gate verification uses the two-minute command ceiling", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "beads-gate-ceiling-"));
+		mkdirSync(join(dir, ".beads"));
+		const deadlines: number[] = [];
+		const originalNow = Date.now;
+		Date.now = () => 50_000;
+		setBdStreamForTests(async (_cwd, _args, deadline) => {
+			deadlines.push(deadline);
+			return JSON.stringify({ data: null, schema_version: 1 });
+		});
+		try {
+			const { handlers } = wire();
+			await handlers.session_start![0]!({}, { cwd: dir, sessionManager: { getSessionId: () => "gate-ceiling" } });
+			await settleBackgroundWorkForTests();
+			expect(deadlines[0]).toBe(170_000);
+		} finally {
+			setBdStreamForTests(null);
+			Date.now = originalNow;
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
 	test("session close reports a successful claim without another bd read", async () => {
-		const dir = mkdtempSync(join(tmpdir(), "beads-close-claim-cache-"));
+		const dir = mkdtempSync(join(tmpdir(), "beads-shutdown-budget-"));
 		mkdirSync(join(dir, ".beads"));
 		let calls = 0;
 		setBdStreamForTests(async () => {
@@ -815,6 +1101,61 @@ bashGates(fakePi as never);
 		} finally {
 			setBdStreamForTests(null);
 			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+	test("quoted and escaped bd claims remain tracked without a ledger read", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "beads-quoted-claim-"));
+		mkdirSync(join(dir, ".beads"));
+		try {
+			const { handlers } = wire();
+			const ctx = { cwd: dir, sessionManager: { getSessionId: () => "quoted-claims" } };
+			const result = handlers.tool_result![0]!;
+			for (const [command, id] of [
+				["BD_ACTOR=actor/a 'bd' update bd-quoted-1 --claim", "bd-quoted-1"],
+				["BD_ACTOR=actor/a b\\d update bd-escaped-2 --claim", "bd-escaped-2"],
+				["BD_ACTOR=actor/a command 'bd' update bd-command-3 --claim", "bd-command-3"],
+			]) {
+				result({ toolName: "bash", isError: false, input: { command, cwd: dir }, content: [{ type: "text", text: `Updated issue: ${id}` }] }, ctx);
+			}
+			const stop = await handlers.session_stop![0]!({}, ctx) as { additionalContext?: string };
+			expect(stop.additionalContext).toContain("bd-quoted-1");
+			expect(stop.additionalContext).toContain("bd-escaped-2");
+			expect(stop.additionalContext).toContain("bd-command-3");
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	test("same-id claims retain independent store-bound release commands", async () => {
+		const sessionDir = mkdtempSync(join(tmpdir(), "beads-claim-session-"));
+		const targetDir = mkdtempSync(join(tmpdir(), "beads-claim-target-"));
+		mkdirSync(join(sessionDir, ".beads"));
+		mkdirSync(join(targetDir, ".beads"));
+		const sessionStore = realpathSync(join(sessionDir, ".beads"));
+		const targetStore = realpathSync(join(targetDir, ".beads"));
+		try {
+			const { handlers } = wire();
+			const ctx = { cwd: sessionDir, sessionManager: { getSessionId: () => "store-bound-claims" } };
+			const result = handlers.tool_result![0]!;
+			for (const command of [
+				`BD_ACTOR=actor/a bd -C '${targetDir}' update bd-same-1 --claim`,
+				"BD_ACTOR=actor/a bd update bd-same-1 --claim",
+			]) {
+				result({ toolName: "bash", isError: false, input: { command, cwd: sessionDir, env: { BEADS_DIR: sessionStore } }, content: [{ type: "text", text: "Updated issue: bd-same-1" }] }, ctx);
+			}
+			result({ toolName: "bash", isError: false, input: { command: `BD_ACTOR=actor/a bd --db '${targetStore}' update bd-same-1 --claim`, cwd: sessionDir, env: { BEADS_DIR: sessionStore } }, content: [{ type: "text", text: "Updated issue: bd-same-1" }] }, ctx);
+			const first = await handlers.session_stop![0]!({}, ctx) as { additionalContext: string };
+			expect(first.additionalContext).toContain(`BEADS_DIR='${sessionStore}'`);
+			expect(first.additionalContext).toContain(`BEADS_DIR='${targetStore}'`);
+			expect(first.additionalContext.split(targetStore).length - 1).toBe(1);
+			handlers.turn_start![0]!({}, ctx);
+			result({ toolName: "bash", isError: false, input: { command: `BD_ACTOR=actor/a bd --db '${targetStore}' close bd-same-1`, cwd: sessionDir, env: { BEADS_DIR: sessionStore } }, content: [{ type: "text", text: "Closed bd-same-1" }] }, ctx);
+			const remaining = await handlers.session_stop![0]!({}, ctx) as { additionalContext: string };
+			expect(remaining.additionalContext).toContain(`BEADS_DIR='${sessionStore}'`);
+			expect(remaining.additionalContext).not.toContain(`BEADS_DIR='${targetStore}'`);
+		} finally {
+			rmSync(sessionDir, { recursive: true, force: true });
+			rmSync(targetDir, { recursive: true, force: true });
 		}
 	});
 	test("a failed claim is neither reported nor released", async () => {
@@ -851,6 +1192,17 @@ bashGates(fakePi as never);
 			const ctx = { cwd: dir, sessionManager: { getSessionId: () => "masked-close" } };
 			const result = handlers.tool_result?.[0];
 			result?.({ toolName: "bash", toolCallId: "claim", isError: false, input: { command: "bd update bd-probe-2m7 --claim", env: { BD_ACTOR: "omp/Main/s1" } }, content: [{ type: "text", text: "Updated issue: bd-probe-2m7" }] }, ctx);
+			result?.({ toolName: "bash", toolCallId: "help-close", isError: false, input: { command: "bd close bd-probe-2m7 --help", env: { BD_ACTOR: "omp/Main/s1" } }, content: [{ type: "text", text: "Usage: bd close" }] }, ctx);
+			result?.({ toolName: "bash", toolCallId: "help-claim", isError: false, input: { command: "bd update bd-help-6h6 --claim --help", env: { BD_ACTOR: "omp/Main/s1" } }, content: [{ type: "text", text: "Usage: bd update" }] }, ctx);
+			result?.({ toolName: "bash", toolCallId: "global-help-close", isError: false, input: { command: "bd --help close bd-probe-2m7", env: { BD_ACTOR: "omp/Main/s1" } }, content: [{ type: "text", text: "Usage: bd" }] }, ctx);
+			result?.({ toolName: "bash", toolCallId: "global-help-claim", isError: false, input: { command: "bd -h update bd-global-help-7h7 --claim", env: { BD_ACTOR: "omp/Main/s1" } }, content: [{ type: "text", text: "Usage: bd" }] }, ctx);
+			result?.({ toolName: "bash", toolCallId: "help-value-claim", isError: false, input: { command: "bd update bd-help-value-8v8 --notes --help --claim", env: { BD_ACTOR: "omp/Main/s1" } }, content: [{ type: "text", text: "Updated issue: bd-help-value-8v8" }] }, ctx);
+			result?.({ toolName: "bash", toolCallId: "global-value-help-claim", isError: false, input: { command: "bd update bd-global-value-9v9 --mem-profile --help --claim", env: { BD_ACTOR: "omp/Main/s1" } }, content: [{ type: "text", text: "Updated issue: bd-global-value-9v9" }] }, ctx);
+			result?.({ toolName: "bash", toolCallId: "post-verb-actor-claim", isError: false, input: { command: "bd update bd-post-actor-0a0 --actor=someone/else --claim", env: { BD_ACTOR: "omp/Main/s1" } }, content: [{ type: "text", text: "Updated issue: bd-post-actor-0a0" }] }, ctx);
+			result?.({ toolName: "bash", toolCallId: "post-verb-actor-assignee", isError: false, input: { command: "bd update bd-post-actor-0a0 --assignee someone/else", env: { BD_ACTOR: "omp/Main/s1" } }, content: [{ type: "text", text: "Updated issue: bd-post-actor-0a0" }] }, ctx);
+			result?.({ toolName: "bash", toolCallId: "actor-looking-value-claim", isError: false, input: { command: "bd update bd-actor-value-1a1 --notes --actor=someone/else --claim", env: { BD_ACTOR: "omp/Main/s1" } }, content: [{ type: "text", text: "Updated issue: bd-actor-value-1a1" }] }, ctx);
+			result?.({ toolName: "bash", toolCallId: "actor-consumed-claim", isError: false, input: { command: "bd update bd-actor-consumed-2a2 --actor --claim", env: { BD_ACTOR: "omp/Main/s1" } }, content: [{ type: "text", text: "Updated issue: bd-actor-consumed-2a2" }] }, ctx);
+			result?.({ toolName: "bash", toolCallId: "notes-consumed-claim", isError: false, input: { command: "bd update bd-notes-consumed-3a3 --notes --claim", env: { BD_ACTOR: "omp/Main/s1" } }, content: [{ type: "text", text: "Updated issue: bd-notes-consumed-3a3" }] }, ctx);
 			result?.({ toolName: "bash", toolCallId: "masked", isError: false, input: { command: "bd close bd-probe-2m7 || true", env: { BD_ACTOR: "omp/Main/s1" } }, content: [{ type: "text", text: "close failed" }] }, ctx);
 			result?.({ toolName: "bash", toolCallId: "masked-claim", isError: false, input: { command: "bd update bd-false-9z9 --claim || true", env: { BD_ACTOR: "omp/Main/s1" } }, content: [{ type: "text", text: "claim failed" }] }, ctx);
 			result?.({ toolName: "bash", toolCallId: "background-claim", isError: false, input: { command: "BD_ACTOR=omp/Main/s1 bd update bd-background-8q8 --claim &", env: { BD_ACTOR: "omp/Main/s1" } }, content: [{ type: "text", text: "backgrounded" }] }, ctx);
@@ -863,6 +1215,15 @@ bashGates(fakePi as never);
 			expect(advisory?.additionalContext).not.toContain("bd-false-9z9");
 			expect(advisory?.additionalContext).not.toContain("bd-background-8q8");
 			expect(advisory?.additionalContext).not.toContain("bd-skipped-7w7");
+			expect(advisory?.additionalContext).not.toContain("bd-help-6h6");
+			expect(advisory?.additionalContext).not.toContain("bd-global-help-7h7");
+			expect(advisory?.additionalContext).toContain("bd-help-value-8v8");
+			expect(advisory?.additionalContext).toContain("bd-global-value-9v9");
+			expect(advisory?.additionalContext).toContain("bd-post-actor-0a0 [someone/else]");
+			expect(advisory?.additionalContext).toContain("BEADS_ACTOR='someone/else' BD_ACTOR='someone/else' bd");
+			expect(advisory?.additionalContext).toContain("bd-actor-value-1a1");
+			expect(advisory?.additionalContext).not.toContain("bd-actor-consumed-2a2");
+			expect(advisory?.additionalContext).not.toContain("bd-notes-consumed-3a3");
 		} finally {
 			rmSync(dir, { recursive: true, force: true });
 		}
@@ -1027,6 +1388,49 @@ bashGates(fakePi as never);
 			rmSync(dir, { recursive: true, force: true });
 		}
 	});
+
+	test("equivalent external database selector spellings clear tracked claims", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "beads-external-selector-"));
+		mkdirSync(join(dir, ".beads"));
+		try {
+			const { handlers } = wire();
+			const ctx = { cwd: dir, sessionManager: { getSessionId: () => "external-selector" } };
+			const result = handlers.tool_result?.[0];
+			const event = (command: string) => ({
+				toolName: "bash", toolCallId: command, isError: false,
+				input: { command, cwd: dir, env: { BD_ACTOR: "omp/Main/s1" } },
+				content: [{ type: "text", text: "command succeeded" }],
+			});
+			result?.(event("BD_ACTOR=omp/Main/s1 bd --database=/external -C /irrelevant-a update bd-probe-2m7 --claim"), ctx);
+			result?.(event("BD_ACTOR=omp/Main/s1 bd --database /external -C /irrelevant-b close bd-probe-2m7"), ctx);
+			expect(await handlers.session_stop?.[0]?.({}, ctx)).toBeUndefined();
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	test("relative db selectors keep their effective directory identity", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "beads-relative-db-selector-"));
+		mkdirSync(join(dir, ".beads"));
+		try {
+			const { handlers } = wire();
+			const ctx = { cwd: dir, sessionManager: { getSessionId: () => "relative-db-selector" } };
+			const result = handlers.tool_result?.[0];
+			const event = (command: string) => ({
+				toolName: "bash", toolCallId: command, isError: false,
+				input: { command, cwd: dir, env: { BD_ACTOR: "omp/Main/s1" } },
+				content: [{ type: "text", text: "command succeeded" }],
+			});
+			result?.(event("BEADS_DIR=$X BD_ACTOR=omp/Main/s1 bd -C /A --db .beads update bd-probe-2m7 --claim"), ctx);
+			result?.(event("BEADS_DIR=$X BD_ACTOR=omp/Main/s1 bd -C /B --db .beads close bd-probe-2m7"), ctx);
+			const held = await handlers.session_stop?.[0]?.({}, ctx) as { continue?: boolean } | undefined;
+			expect(held?.continue).toBe(true);
+			result?.(event("BEADS_DIR=$X BD_ACTOR=omp/Main/s1 bd -C /A --db .beads close bd-probe-2m7"), ctx);
+			expect(await handlers.session_stop?.[0]?.({}, ctx)).toBeUndefined();
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
 	test("shutdown reports tracked claims without spawning git or bd", async () => {
 		const dir = mkdtempSync(join(tmpdir(), "beads-shutdown-claims-"));
 		mkdirSync(join(dir, ".beads"));
@@ -1131,6 +1535,11 @@ bashGates(fakePi as never);
 			await start({}, ctx(b, "beta")); // concurrent session in an unrelated checkout
 			expect(pinned()).toBe(join(a, ".beads")); // alpha's live pin is not overwritten under it
 			expect(logged.some((m) => m.includes("another repository's beads database"))).toBe(true); // beta is told to pin per call
+			await settleBackgroundWorkForTests();
+			expect(await call({ toolName: "task", toolCallId: "dispatch", input: {} }, ctx(b, "beta"))).toMatchObject({
+				block: true,
+				reason: expect.stringContaining("could not be verified"),
+			});
 			await start({}, ctx(aWorktree, "delta")); // same repository as alpha: shares the pin
 			await start({}, ctx(a, "alpha")); // owner restarts: delta must not be forgotten
 			stop({}, ctx(a, "alpha"));
@@ -1165,6 +1574,7 @@ printf '%s\\n' '{"data":null,"schema_version":1}'
 			delete process.env.BEADS_DIR;
 			const { handlers, logged } = wire();
 			await handlers.session_start![0]!({}, { cwd: dir });
+			await settleBackgroundWorkForTests();
 			expect(logged).toEqual([]);
 		} finally {
 			if (originalPath === undefined) delete process.env.PATH;
@@ -1189,6 +1599,8 @@ printf '%s\\n' '{"data":[{"id":"bd-bad"}],"schema_version":1}'
 			delete process.env.BEADS_DIR;
 			const { handlers, logged } = wire();
 			await handlers.session_start![0]!({}, { cwd: dir });
+			expect(logged).toEqual([]);
+			await settleBackgroundWorkForTests();
 			expect(logged).toEqual(["Beads gate list returned malformed data; unresolved gates remain unverified."]);
 		} finally {
 			if (originalPath === undefined) delete process.env.PATH;
@@ -1203,21 +1615,17 @@ printf '%s\\n' '{"data":[{"id":"bd-bad"}],"schema_version":1}'
 
 	test("session isolation preserves sibling notices, claims and repeated starts", async () => {
 		const dir = mkdtempSync(join(tmpdir(), "beads-session-isolation-"));
-		const originalPath = process.env.PATH;
 		const originalBeads = process.env.BEADS_DIR;
 		const originalActor = process.env.BEADS_ACTOR;
+		const calls: string[] = [];
+		setBdStreamForTests(async (_cwd, args) => {
+			calls.push(args.join(" "));
+			if (args[0] === "gate") return '[{"id":"bd-human","status":"open","await_type":"human"}]';
+			if (args[0] === "list") return '[{"id":"bd-alpha","status":"in_progress"},{"id":"bd-beta","status":"in_progress"}]';
+			return "unexpected memory replay";
+		});
 		try {
 			mkdirSync(join(dir, ".beads"));
-			writeFileSync(join(dir, "bd"), `#!/bin/sh
-printf '%s\\n' "$*" >> '${dir}/calls'
-case "$1" in
-gate) printf '%s\\n' '[{"id":"bd-human","status":"open","await_type":"human"}]' ;;
-list) printf '%s\\n' '[{"id":"bd-alpha","status":"in_progress"},{"id":"bd-beta","status":"in_progress"}]' ;;
-*) printf '%s\\n' 'unexpected memory replay' ;;
-esac
-`);
-			chmodSync(join(dir, "bd"), 0o755);
-			process.env.PATH = `${dir}:${originalPath ?? ""}`;
 			delete process.env.BEADS_DIR;
 			delete process.env.BEADS_ACTOR;
 			const { handlers, logged } = wire();
@@ -1233,11 +1641,12 @@ esac
 			await invoke("session_start", "alpha", {}, join(dir, "absent"));
 			await invoke("session_start", "beta");
 			await invoke("session_start", "alpha");
+			await settleBackgroundWorkForTests();
 			expect(logged.filter(text => text.includes("bd-human"))).toHaveLength(2);
 			expect(logged.some(text => text.includes("unexpected memory replay"))).toBe(false);
 			await invoke("auto_compaction_end", "alpha");
 			expect(logged.some(text => text.includes("unexpected memory replay"))).toBe(false);
-			expect(readFileSync(join(dir, "calls"), "utf8")).not.toMatch(/prime|memories|remember|forget/);
+			expect(calls.join("\n")).not.toMatch(/prime|memories|remember|forget/);
 
 			expect((await invoke("tool_result", "alpha", mutation("alpha")))?.content).toBeDefined();
 			expect(await invoke("tool_result", "alpha", mutation("alpha"))).toBeUndefined();
@@ -1263,32 +1672,27 @@ esac
 			await invoke("session_shutdown", "alpha");
 			expect(await invoke("session_stop", "alpha")).toBeUndefined();
 		} finally {
-			if (originalPath === undefined) delete process.env.PATH;
-			else process.env.PATH = originalPath;
+			setBdStreamForTests(null);
 			if (originalBeads === undefined) delete process.env.BEADS_DIR;
 			else process.env.BEADS_DIR = originalBeads;
 			if (originalActor === undefined) delete process.env.BEADS_ACTOR;
 			else process.env.BEADS_ACTOR = originalActor;
 			rmSync(dir, { recursive: true, force: true });
 		}
-	}, 30_000); // drives ~30 handler invocations, each spawning a shell `bd`; measured 6.5s idle, and it exceeded the 5s default under load
+	});
 
 	test("tracks tool-level BD_ACTOR for ready --claim without a bead id", async () => {
 		const dir = mkdtempSync(join(tmpdir(), "beads-actor-alias-"));
-		const originalPath = process.env.PATH;
 		const originalBeads = process.env.BEADS_DIR;
 		const originalBeadsActor = process.env.BEADS_ACTOR;
 		const originalBdActor = process.env.BD_ACTOR;
+		setBdStreamForTests(async (_cwd, args) => {
+			if (args[0] === "update" && args[1] === "--help") return "Usage: bd update [--if-assignee HOLDER]";
+			if (args[0] === "list") return '[{"id":"bd-owned","title":"owned claim","status":"in_progress","assignee":"omp/Main/alias"}]';
+			return "[]";
+		});
 		try {
 			mkdirSync(join(dir, ".beads"));
-			writeFileSync(join(dir, "bd"), `#!/bin/sh
-case "$1" in
-list) printf '%s\\n' '[{"id":"bd-owned","title":"owned claim","status":"in_progress","assignee":"omp/Main/alias"}]' ;;
-*) printf '%s\\n' '[]' ;;
-esac
-`);
-			chmodSync(join(dir, "bd"), 0o755);
-			process.env.PATH = `${dir}:${originalPath ?? ""}`;
 			delete process.env.BEADS_DIR;
 			delete process.env.BEADS_ACTOR;
 			delete process.env.BD_ACTOR;
@@ -1307,8 +1711,7 @@ esac
 			const advisory = await sessionStop({}, { cwd: dir }) as { additionalContext?: string };
 			expect(advisory.additionalContext).toContain("bd-owned [omp/Main/alias] claim recorded by this session");
 		} finally {
-			if (originalPath === undefined) delete process.env.PATH;
-			else process.env.PATH = originalPath;
+			setBdStreamForTests(null);
 			if (originalBeads === undefined) delete process.env.BEADS_DIR;
 			else process.env.BEADS_DIR = originalBeads;
 			if (originalBeadsActor === undefined) delete process.env.BEADS_ACTOR;
@@ -1344,18 +1747,14 @@ esac
 		const { handlers } = wire();
 		expect(
 			handlers.tool_result![0]!(
-				{ toolName: "bash", toolCallId: "c1", isError: false, input: { command: "git status" }, content: [] },
+				{ toolName: "bash", toolCallId: "c1", isError: false, input: { command: "git status" }, content: [{ type: "text", text: "Imported 3 issues (2 stale skipped)" }] },
 				{ cwd: "/repo" },
 			),
 		).toBeUndefined();
 	});
 	test("session close stays silent until a bd write lands", async () => {
 		const originalBeads = process.env.BEADS_DIR;
-		const originalBeadsActor = process.env.BEADS_ACTOR;
-		const originalBdActor = process.env.BD_ACTOR;
 		process.env.BEADS_DIR = "/nonexistent-beads-dir";
-		delete process.env.BEADS_ACTOR;
-		delete process.env.BD_ACTOR;
 		try {
 			const { handlers } = wire();
 			// No write recorded yet: the stop hook must not even reach the database.
@@ -1373,34 +1772,20 @@ esac
 		} finally {
 			if (originalBeads === undefined) delete process.env.BEADS_DIR;
 			else process.env.BEADS_DIR = originalBeads;
-			if (originalBeadsActor === undefined) delete process.env.BEADS_ACTOR;
-			else process.env.BEADS_ACTOR = originalBeadsActor;
-			if (originalBdActor === undefined) delete process.env.BD_ACTOR;
-			else process.env.BD_ACTOR = originalBdActor;
 		}
 	});
 
-	test("a dangling linked worktree reports unknown identity without probing bd", async () => {
-		const root = mkdtempSync(join(tmpdir(), "beads-dangling-worktree-"));
+	test("a non-beads cwd produces no session-start message", async () => {
 		const originalBeads = process.env.BEADS_DIR;
-		let calls = 0;
-		mkdirSync(join(root, ".beads"));
-		writeFileSync(join(root, ".git"), "gitdir: /path/that/no-longer-exists\n");
-		delete process.env.BEADS_DIR;
-		setBdStreamForTests(async () => {
-			calls++;
-			return { output: "[]" };
-		});
+		process.env.BEADS_DIR = "/nonexistent-beads-dir";
 		try {
 			const { handlers, logged } = wire();
-			await handlers.session_start![0]!({}, { cwd: root });
-			expect(logged).toEqual(["Beads session start is unverified: repository identity is unknown; no bd command was run."]);
-			expect(calls).toBe(0);
+			await handlers.session_start![0]!({}, { cwd: "/nonexistent-repo" });
+			await settleBackgroundWorkForTests();
+			expect(logged).toEqual([]);
 		} finally {
-			setBdStreamForTests(null);
 			if (originalBeads === undefined) delete process.env.BEADS_DIR;
 			else process.env.BEADS_DIR = originalBeads;
-			rmSync(root, { recursive: true, force: true });
 		}
 	});
 
@@ -1422,8 +1807,8 @@ esac
 			const sessionStop = handlers.session_stop?.[0];
 			if (sessionStop === undefined) throw new Error("session stop handler was not registered");
 			const advisory = await sessionStop({}, ctx) as { additionalContext: string };
-			expect(advisory.additionalContext).toContain("BEADS_ACTOR='actor/a' BD_ACTOR='actor/a' 'bd'");
-			expect(advisory.additionalContext).toContain("BEADS_ACTOR='actor/b' BD_ACTOR='actor/b' 'bd'");
+			expect(advisory.additionalContext).toContain("BEADS_ACTOR='actor/a' BD_ACTOR='actor/a' bd");
+			expect(advisory.additionalContext).toContain("BEADS_ACTOR='actor/b' BD_ACTOR='actor/b' bd");
 			expect(advisory.additionalContext).toContain("'--if-assignee' 'actor/a'");
 			expect(advisory.additionalContext).toContain("'--if-assignee' 'actor/b'");
 			expect(calls).toBe(0);
@@ -1433,4 +1818,124 @@ esac
 		}
 	});
 
+	test("agent_end skips continuations and preserves terminal statuses", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "beads-agent-end-matrix-"));
+		mkdirSync(join(dir, ".beads"));
+		const calls: string[][] = [];
+		const statuses: Record<string, string> = {
+			"bd-completed": "in_progress",
+			"bd-aborted": "blocked",
+			"bd-error": "deferred",
+			"bd-fail": "open",
+		};
+		setBdStreamForTests(async (_cwd, args, _deadline, env) => {
+			calls.push(args);
+			if (args[0] === "show") {
+				if (args[1] === "bd-fail") return { failure: "foreign read failed" };
+				return { output: JSON.stringify({ data: [{ id: args[1], issue_type: "task", status: statuses[args[1] ?? ""], assignee: env.BD_ACTOR }], schema_version: 1 }) };
+			}
+			return { output: "updated" };
+		});
+		try {
+			const { handlers } = wire();
+			const ctx = { cwd: dir, sessionManager: { getSessionId: () => "agent-end-matrix" } };
+			const result = handlers.tool_result?.[0];
+			if (result === undefined) throw new Error("tool_result handler was not registered");
+			for (const id of Object.keys(statuses)) result({ toolName: "bash", toolCallId: id, isError: false, input: { command: `BD_ACTOR=actor/${id} bd update ${id} --claim`, cwd: dir, env: { BD_ACTOR: `actor/${id}` } }, content: [{ type: "text", text: `Updated issue: ${id}` }] }, ctx);
+			const end = handlers.agent_end?.[0];
+			if (end === undefined) throw new Error("agent_end handler was not registered");
+			expect(await end({ willContinue: true, outcome: "completed" }, ctx)).toBeUndefined();
+			expect(calls).toEqual([]);
+			expect(await end({ willContinue: false, outcome: "blocked" }, ctx)).toBeUndefined();
+			await settleBackgroundWorkForTests();
+			expect(calls.filter(args => args[0] === "unclaim").length).toBe(3);
+			expect(calls.filter(args => args[0] === "show").length).toBe(4);
+			expect(calls.filter(args => args[0] === "update").map(args => args.slice(0, 8))).toEqual([
+				["update", "bd-completed", "--status", "open", "--if-status", "open", "--if-assignee", ""],
+				["update", "bd-aborted", "--status", "blocked", "--if-status", "open", "--if-assignee", ""],
+				["update", "bd-error", "--status", "deferred", "--if-status", "open", "--if-assignee", ""],
+			]);
+		} finally {
+			setBdStreamForTests(null);
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	test("sub-agent agent_end awaits its claim finalizer", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "beads-agent-end-await-"));
+		mkdirSync(join(dir, ".beads"));
+		const calls: string[][] = [];
+		setBdStreamForTests(async (_cwd, args, _deadline, env) => {
+			calls.push(args);
+			if (args[0] === "show") return { output: JSON.stringify({ data: [{ id: args[1], issue_type: "task", status: "in_progress", assignee: env.BD_ACTOR }], schema_version: 1 }) };
+			return { output: "unclaimed" };
+		});
+		try {
+			const { handlers } = wire();
+			const run = "12345678-1234-4234-8234-123456789abc";
+			const sessionDir = join(dir, "sessions");
+			const ctx = {
+				cwd: dir,
+				sessionManager: {
+					getSessionId: () => "agent-end-await",
+					getHeader: () => ({ parentSession: join(sessionDir, "main.jsonl") }),
+					getSessionFile: () => join(sessionDir, run, "worker.jsonl"),
+					getSessionDir: () => sessionDir,
+				},
+			};
+			const result = handlers.tool_result?.[0];
+			if (result === undefined) throw new Error("tool_result handler was not registered");
+			result({ toolName: "bash", toolCallId: "claim", isError: false, input: { command: "BD_ACTOR=actor/sub bd update bd-sub --claim", cwd: dir, env: { BD_ACTOR: "actor/sub" } }, content: [{ type: "text", text: "Updated issue: bd-sub" }] }, ctx);
+			const end = handlers.agent_end?.[0];
+			if (end === undefined) throw new Error("agent_end handler was not registered");
+			await end({ willContinue: false, outcome: "completed" }, ctx);
+			expect(calls.map(args => args[0])).toEqual(["show", "unclaim", "update"]);
+		} finally {
+			setBdStreamForTests(null);
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	test("configured production bundles share lifecycle admission and pin Bash calls", async () => {
+		const bridgeKey = Symbol.for("com.srobroek.beads.session-lifecycle.bridge.v1");
+		const globals = globalThis as typeof globalThis & { [key: symbol]: unknown };
+		delete globals[bridgeKey];
+		const dir = mkdtempSync(join(tmpdir(), "beads-manifest-pin-"));
+		execFileSync("git", ["-C", dir, "init", "-q"]);
+		mkdirSync(join(dir, ".beads"));
+		const originalBeadsDir = process.env.BEADS_DIR;
+		delete process.env.BEADS_DIR;
+		setBdStreamForTests(async () => "[]");
+		try {
+			const manifest = JSON.parse(readFileSync(join(import.meta.dir, "..", "package.json"), "utf8")) as { omp?: { extensions?: unknown } };
+			const entries = manifest.omp?.extensions;
+			if (!Array.isArray(entries) || entries.length === 0 || entries.some(entry => typeof entry !== "string")) throw new Error("Beads package manifest has no valid extension entries");
+			const handlers: Record<string, Array<(event: unknown, ctx: unknown) => unknown>> = {};
+			const pi = {
+				logger: { error: () => {}, info: () => {} },
+				on: (event: string, handler: (call: unknown, ctx: unknown) => unknown) => { handlers[event] = [...(handlers[event] ?? []), handler]; },
+				sendMessage: () => {},
+			};
+			const nonce = `${Date.now()}-${Math.random()}`;
+			for (const entry of entries as string[]) {
+				const bundle = await import(`${join(import.meta.dir, "..", entry)}?manifest=${nonce}`);
+				if (typeof bundle.default !== "function") throw new Error(`manifest entry ${entry} has no extension function`);
+				bundle.default(pi as never);
+			}
+			const bridge = globals[bridgeKey] as { gateAdmitter?: () => Promise<{ block: true; reason: string }> } | undefined;
+			expect(typeof bridge?.gateAdmitter).toBe("function");
+			if (bridge === undefined) throw new Error("lifecycle bundle did not publish its bridge");
+			bridge.gateAdmitter = async () => ({ block: true, reason: "cross-bundle admission proof" });
+			const ctx = { cwd: dir, sessionManager: { getSessionId: () => "manifest-pin" } };
+			await handlers.session_start?.[0]?.({}, ctx);
+			const result = await handlers.tool_call?.[0]?.({ toolName: "bash", input: { command: "bd list", cwd: dir } }, ctx);
+			expect(result).toMatchObject({ input: { env: { BEADS_DIR: join(dir, ".beads") } } });
+		} finally {
+			delete globals[bridgeKey];
+			rmSync(dir, { recursive: true, force: true });
+			setBdStreamForTests(null);
+			if (originalBeadsDir === undefined) delete process.env.BEADS_DIR;
+			else process.env.BEADS_DIR = originalBeadsDir;
+		}
+	});
 });

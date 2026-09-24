@@ -1,8 +1,11 @@
 import type { ExtensionAPI, ExtensionContext, ToolCallEvent } from "@oh-my-pi/pi-coding-agent";
+import { resolve } from "node:path";
 import { agentActor, bdInvocations, decideActorParsed, environmentForInput } from "./bd-actor-gate.ts";
+import { decideBdCloseParsed } from "./bd-close-gate.ts";
 import { decideEmbeddedWrite } from "./bd-embedded-write-lock.ts";
-import { rewriteBashInput } from "./session-beads-lifecycle.ts";
+import { admitBdMutation, admitBeadsWork, lifecycleBdEnvironment, rewriteBashInput } from "./session-beads-lifecycle.ts";
 import { blockReason, commandFromInput, type ParsedCommand, parse, settingsEnabled } from "./shell-command.ts";
+
 
 type BashInput = { command?: unknown; cmd?: unknown; cwd?: unknown; env?: unknown };
 type GateDecision = { block: true; reason: string } | undefined;
@@ -62,6 +65,15 @@ async function decide(parsed: ParsedCommand, event: ToolCallEvent, ctx: Extensio
 	const { cwd } = inputOf(event, ctx);
 	if (parsed.unknown) return suffix("bash-gates", "command could not be parsed", "split the command or run the mutation as a plain single command");
 	const env = environmentForActorDecision(input, parsed.command, ctx);
+	if (settingsEnabled("beads", "bd-close-gate", cwd)) {
+		try {
+			const close = await decideBdCloseParsed(parsed, cwd, deadline);
+			if (close !== undefined) return suffix("bd-close-gate", close.reason, "resolve the gate with `bd gate check` or `bd gate resolve <gate-id>`, then retry");
+		} catch (error) {
+			const reason = error instanceof Error ? error.message : String(error);
+			return suffix("bd-close-gate", reason, "retry after the Beads lookup is available; the close was refused without gate proof");
+		}
+	}
 	if (settingsEnabled("beads", "bd-actor-gate", cwd)) {
 		const actor = decideActorParsed(parsed, env);
 		if (actor.kind === "block") return suffix("bd-actor-gate", actor.reason);
@@ -84,9 +96,23 @@ async function decide(parsed: ParsedCommand, event: ToolCallEvent, ctx: Extensio
 export default function bashGates(pi: ExtensionAPI): void {
 	pi.on("tool_call", async (event: ToolCallEvent, ctx: ExtensionContext) => {
 		try {
+			const input = event.input as Record<string, unknown>;
+			const gatedTool = event.toolName === "task" ||
+				(event.toolName === "bd_reconcile" && input.apply === true) ||
+				(event.toolName === "bd_formula_check" && input.deep === true);
+			if (gatedTool) {
+				const workspace = typeof input.workspace === "string" ? input.workspace : undefined;
+				if (event.toolName === "bd_formula_check" && workspace === undefined) return suffix("beads-gate-admission", "deep formula checks require an explicit workspace so admission and execution cannot select different stores", "set workspace to the target checkout and retry");
+				const cwd = workspace === undefined ? (ctx?.cwd ?? process.cwd()) : resolve(ctx?.cwd ?? process.cwd(), workspace);
+				const admission = await admitBeadsWork(ctx, cwd, lifecycleBdEnvironment(cwd));
+				if (admission) return suffix("beads-gate-admission", admission.reason, "retry the operation; verification continues and the next attempt waits on the same read");
+				return undefined;
+			}
 			if (event.toolName !== "bash") return;
 			const { command } = inputOf(event, ctx);
 			if (!command) return;
+			const admission = await admitBdMutation(event.input, ctx, targetCwd => settingsEnabled("beads", "beads-gate-admission", targetCwd));
+			if (admission) return suffix("beads-gate-admission", admission.reason, "retry the command; verification continues and the next attempt waits on the same read");
 			return await decide(parse(command), event, ctx, pi, Date.now() + TOOL_CALL_BUDGET_MS);
 		} catch (error) {
 			return suffix("bash-gates", `command could not be parsed (${error instanceof Error ? error.message : String(error)})`, "split the command or run the mutation as a plain single command");
