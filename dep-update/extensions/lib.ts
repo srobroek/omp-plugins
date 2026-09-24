@@ -192,12 +192,12 @@ export async function researchProject(
     const tallies = { OK: 0, CURRENT: 0, UNRESOLVABLE: 0, DISCONFIRMED: 0 };
     const records: BumpRecord[] = [];
     let complete = true;
-    for (const [ecosystem, name, installed] of detected.rows) {
+    for (const { ecosystem, name, declared, resolved } of detected.rows) {
         try {
             signal?.throwIfAborted();
             ensureDeadline(deadline);
             if (!ecosystem || !name) continue;
-            const record = await queryRegistry(ecosystem, name, installed, fixtureDir, signal, deadline);
+            const record = await queryRegistry(ecosystem, name, resolved ?? declared, fixtureDir, signal, deadline);
             records.push(record);
             const status = record.status;
             if (status in tallies) tallies[status as keyof typeof tallies] += 1;

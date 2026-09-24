@@ -128,7 +128,9 @@ export function runPythonQuality(mode: QualityMode, cwd: string): QualityReport 
         return { ok: false, complete: false, cwd, mode, steps };
     }
     // Probe only once the project exists. With neither a pyproject.toml nor a tests/ directory
-    // every probe is wasted work.
+    // every probe is wasted work, and three binaries at three argument sets and 1,000 ms each
+    // reach 9,000 ms, which outlasts a CI test's own 5,000 ms limit on a runner with no
+    // Python tooling installed.
     const probeDeadline = Math.min(deadline, Date.now() + PROBE_BUDGET_MS);
     const ruff = installed("ruff", cwd, probeDeadline);
     const pyright = installed("pyright", cwd, probeDeadline);

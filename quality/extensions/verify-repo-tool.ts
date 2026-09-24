@@ -9,6 +9,7 @@ export const TIMEOUT_MS = 25_000;
 type VerifyParams = {
 	path?: string;
 };
+
 export type VerifyResult = {
 	ok: boolean;
 	complete: boolean;
@@ -319,6 +320,7 @@ export default function verifyRepoTool(pi: ExtensionAPI): void {
 				const message = err instanceof Error ? err.message : String(err);
 				return {
 					content: [{ type: "text", text: `verify_repo failed: ${message}` }],
+					details: { ok: false, error: message, path: cwd },
 				};
 			}
 		},

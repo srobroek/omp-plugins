@@ -887,10 +887,6 @@ var MISSING = "?";
 var REQ_SPLIT = /[\[<>=!~;\s]/;
 var REQ_NAME = /^[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?$/;
 var GEM = /^\s*gem\s+(['"])([^'"]+)\1(?:\s*,\s*(['"])([^'"]*)\3)?/;
-var COVERAGE = {
-  resolvedSources: ["package-lock.json"],
-  gaps: ["other lockfiles", "workspace children"]
-};
 function isFile(path) {
   try {
     return statSync(path).isFile();
@@ -968,49 +964,21 @@ function parseRequirement(raw) {
 class Detector {
   root;
   map = new Map;
-  resolved = new Map;
   notes = [];
   constructor(root) {
     this.root = root;
   }
   get rows() {
     const out = [];
-    for (const [key, ver] of this.map) {
+    for (const [key, versions] of this.map) {
       const tab = key.indexOf("\x00");
-      out.push([key.slice(0, tab), key.slice(tab + 1), ver]);
+      out.push({ ecosystem: key.slice(0, tab), name: key.slice(tab + 1), ...versions });
     }
     return out;
   }
-  get resolvedRows() {
-    return this.rows.map(([ecosystem, name, declared]) => ({ ecosystem, name, declared, resolved: this.resolved.get(`${ecosystem}\x00${name}`) ?? MISSING }));
-  }
-  resolve(ecosystem, name, version) {
-    if (name && version)
-      this.resolved.set(`${ecosystem}\x00${name}`, version);
-  }
-  emitResolvedFromNode(value) {
-    if (!value || typeof value !== "object" || Array.isArray(value))
-      return;
-    for (const [name, entry] of Object.entries(value)) {
-      if (!entry || typeof entry !== "object" || Array.isArray(entry))
-        continue;
-      const version = entry.version;
-      const packageName = name.includes("node_modules/") ? name.slice(name.lastIndexOf("node_modules/") + "node_modules/".length) : name;
-      if (typeof version === "string")
-        this.resolve("npm", packageName, version);
-      this.emitResolvedFromNode(entry.dependencies);
-    }
-  }
-  emitResolvedFromLock(lock) {
-    if (!lock || typeof lock !== "object" || Array.isArray(lock))
-      return;
-    const root = lock;
-    this.emitResolvedFromNode(root.packages);
-    this.emitResolvedFromNode(root.dependencies);
-  }
-  emit(ecosystem, name, version) {
+  emit(ecosystem, name, declared, resolved = null) {
     if (name)
-      this.map.set(`${ecosystem}\x00${name}`, version || MISSING);
+      this.map.set(`${ecosystem}\x00${name}`, { declared: declared || MISSING, resolved });
   }
   note(msg) {
     this.notes.push(msg);
@@ -1049,16 +1017,28 @@ class Detector {
     const data = await this.readJson("package.json");
     if (!data)
       return;
+    const lock = await this.readJson("package-lock.json");
+    const locked = new Map;
+    const packages = lock?.packages;
+    if (packages && typeof packages === "object" && !Array.isArray(packages)) {
+      for (const [path, entry] of Object.entries(packages)) {
+        if (!path.startsWith("node_modules/") || !entry || typeof entry !== "object")
+          continue;
+        const version = entry.version;
+        if (typeof version === "string")
+          locked.set(path.slice("node_modules/".length), version);
+      }
+    } else if (lock) {
+      this.note("detect: package-lock.json has no packages map; declared Node versions remain unresolved");
+    }
     for (const field of ["dependencies", "devDependencies", "peerDependencies", "optionalDependencies"]) {
       const block = data[field];
       if (!block || typeof block !== "object" || Array.isArray(block))
         continue;
-      for (const [name, spec] of Object.entries(block))
-        this.emit("npm", name, scalar(spec));
+      for (const [name, spec] of Object.entries(block)) {
+        this.emit("npm", name, scalar(spec), locked.get(name) ?? null);
+      }
     }
-    const lock = await this.readJson("package-lock.json");
-    if (lock)
-      this.emitResolvedFromLock(lock);
   }
   async scanPython() {
     for (const lock of ["uv.lock", "poetry.lock"]) {
@@ -1235,13 +1215,16 @@ class Detector {
   }
 }
 async function detectProject(target) {
-  if (!isDir(target)) {
-    return { ok: false, exit: 2, rows: [], resolvedRows: [], coverage: COVERAGE, stderr: `detect: '${target}' is not a directory` };
-  }
+  if (!isDir(target))
+    return { ok: false, exit: 2, rows: [], stderr: `detect: '${target}' is not a directory`, coverage: { gaps: [] } };
   const detector = new Detector(target);
   await detector.scanAll();
+  const gaps = ["Cargo.lock", "go.sum", "Pipfile.lock", "Ruby/PHP lockfiles", "workspace children"];
+  const hasPackageLock = isFile(join(target, "package-lock.json"));
+  if (!hasPackageLock)
+    gaps.unshift("Node lockfiles");
   const notes = [...detector.notes];
-  notes.push("Coverage: root declarations plus package-lock.json resolved versions. Unscanned: other lockfiles and workspace children.");
+  notes.push(`Coverage: root declarations only, except uv.lock/poetry.lock${hasPackageLock ? " and package-lock.json" : ""}. Unscanned: ${gaps.join(", ")}.`);
   notes.push("");
   notes.push(`detect: ${detector.rows.length} dependency declaration(s) found in ${target}`);
   if (detector.rows.length === 0) {
@@ -1249,8 +1232,8 @@ async function detectProject(target) {
     notes.push("requirements.txt, pyproject.toml, Cargo.toml, go.mod, Gemfile,");
     notes.push("composer.json).");
   }
-  return { ok: true, exit: 0, rows: detector.rows, resolvedRows: detector.resolvedRows, coverage: COVERAGE, stderr: notes.join(`
-`) };
+  return { ok: true, exit: 0, rows: detector.rows, stderr: notes.join(`
+`), coverage: { gaps } };
 }
 // extensions/lib.ts
 var USER_AGENT = "dep-update-skill (+https://github.com/srobroek/agentic-packages)";
@@ -1425,13 +1408,13 @@ async function researchProject(target, fixtureDir, signal, timeoutMs = SCAN_TIME
   const tallies = { OK: 0, CURRENT: 0, UNRESOLVABLE: 0, DISCONFIRMED: 0 };
   const records = [];
   let complete = true;
-  for (const [ecosystem, name, installed] of detected.rows) {
+  for (const { ecosystem, name, declared, resolved } of detected.rows) {
     try {
       signal?.throwIfAborted();
       ensureDeadline(deadline);
       if (!ecosystem || !name)
         continue;
-      const record = await queryRegistry(ecosystem, name, installed, fixtureDir, signal, deadline);
+      const record = await queryRegistry(ecosystem, name, resolved ?? declared, fixtureDir, signal, deadline);
       records.push(record);
       const status = record.status;
       if (status in tallies)

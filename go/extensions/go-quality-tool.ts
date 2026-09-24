@@ -103,7 +103,9 @@ export function runGoQuality(mode: QualityMode, cwd: string): QualityReport {
         }
         return { ok: false, complete: false, cwd, mode, steps };
     }
-    // Probe only once the project exists. With no go.mod every probe is wasted.
+    // Probe only once the project exists. With no go.mod every probe is wasted work, and
+    // three binaries at three argument sets and 1,000 ms each can reach 9,000 ms, which
+    // outlasts a CI test's own 5,000 ms limit on a runner where no Go toolchain is present.
     const probeDeadline = Math.min(deadline, Date.now() + PROBE_BUDGET_MS);
     const gofmtOk = have("gofmt", probeDeadline);
     const goOk = have("go", probeDeadline);

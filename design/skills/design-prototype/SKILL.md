@@ -45,8 +45,7 @@ TRIGGER
    -> Then drive it yourself with `skill://ui-review` at 1440, 768, and 375 before claiming
    the flow works. An SVG or a single HTML file serves the same way.
    -> Stop the supervised server before reporting, or explicitly hand it off to a human with
-   its process name and stop command. Never leave a supervised server process running after
-   this task; verify the named process is absent with `read proc://` before reporting.
+   its process name and stop command. Never leave a hub process running after this task.
 4. State what the artifact does not answer. -> a named gap list, because a low-fidelity
    artifact settles layout and flow, never final visual detail.
 

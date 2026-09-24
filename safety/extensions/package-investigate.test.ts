@@ -26,6 +26,17 @@ describe("package investigation", () => {
 		test(`fires: ${command}`, () => expect(shouldInvestigate(command)).toBe(true));
 	}
 
+		for (const command of [
+			"npm --silent install typescript",
+			"pnpm --filter app add lodash",
+			"yarn --cwd packages/app add lodash",
+			"bun --cwd app add lodash",
+			"pip --python ./venv/bin/python install requests",
+			"uv --directory ./project add httpx",
+		]) {
+			test(`fires with manager options: ${command}`, () => expect(shouldInvestigate(command)).toBe(true));
+		}
+
 	for (const command of [
 		"bd create \"note ; npm install foo happened\"",
 		"git commit -m \"fix; bun add left-pad was wrong\"",

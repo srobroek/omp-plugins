@@ -556,8 +556,8 @@ export default function unpushedWorkAdvisory(pi: ExtensionAPI): void {
 	pi.on("session_stop", (event: SessionStopEvent, ctx: { cwd?: string }) => {
 		try {
 			const cwd = resolve(ctx?.cwd || process.cwd());
-			if (!hasGitDir(cwd)) return;
 			const deadline = Date.now() + TIMEOUT_MS;
+			if (!hasGitDir(cwd) || gitRead(cwd, ["rev-parse", "--git-common-dir"], deadline) === null) return;
 			const state = stateFor(cwd, deadline);
 			return handleSessionStop(event, cwd, gitStatusPorcelain(cwd, deadline), state.agentPaths,
 				agentDiffStat, sessionCommitsUnpushed, state.sessionHead, state, deadline);

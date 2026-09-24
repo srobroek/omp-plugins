@@ -22,25 +22,20 @@ export default function versionGapTool(pi: ExtensionAPI): void {
 		async execute(_id, params: VersionGapParams, _signal, _onUpdate, ctx) {
 			const dir = params.path ?? ctx.cwd;
 			try {
-				const { exit, rows, resolvedRows, coverage, stderr } = await detectProject(dir);
+                const { exit, rows, stderr, coverage } = await detectProject(dir);
 				if (exit !== 0) {
 					return {
 						content: [{ type: "text" as const, text: `version_gap_scan failed (exit ${exit}):\n${stderr}` }],
 						details: { exit, stderr },
 					};
 				}
-				const deps = rows.map(([ecosystem, name, version]) => ({
-					ecosystem,
-					name,
-					declared: version,
-					resolved: resolvedRows.find((row) => row.ecosystem === ecosystem && row.name === name)?.resolved ?? "?",
-				}));
-				const stdout = deps.map((row) => `${row.ecosystem}\t${row.name}\t${row.declared}`).join("\n");
-				const text = [stdout, stderr.trim()].filter(Boolean).join("\n");
-				return {
-					content: [{ type: "text" as const, text }],
-					details: { deps, count: deps.length, resolved: resolvedRows, coverage },
-				};
+                const deps = rows.map(({ ecosystem, name, declared, resolved }) => ({ ecosystem, name, declared, resolved }));
+                const stdout = rows.map(({ ecosystem, name, declared, resolved }) => [ecosystem, name, declared, resolved ?? "?"].join("\t")).join("\n");
+                const text = [stdout, stderr.trim()].filter(Boolean).join("\n");
+                return {
+                    content: [{ type: "text" as const, text }],
+                    details: { deps, coverage, count: deps.length },
+                };
 			} catch (error) {
 				const message = error instanceof Error ? error.message : String(error);
 				return {

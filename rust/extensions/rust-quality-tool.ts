@@ -114,7 +114,9 @@ export function runRustQuality(mode: QualityMode, cwd: string): QualityReport {
         }
         return { ok: false, complete: false, cwd, mode, steps };
     }
-    // Probe only once the manifest exists: with no Cargo.toml the probe is wasted.
+    // Probe only once the manifest exists: with no Cargo.toml the probe is wasted work, and
+    // three argument sets at 1,000 ms each outlast a CI test's own limit where no Rust
+    // toolchain is installed.
     const probeDeadline = Math.min(deadline, Date.now() + PROBE_BUDGET_MS);
     const cargoOk = have("cargo", probeDeadline);
     if (!cargoOk) {

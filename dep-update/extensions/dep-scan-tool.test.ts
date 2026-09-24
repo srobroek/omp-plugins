@@ -80,16 +80,17 @@ describe("unit: detect", () => {
 			}),
 		);
 		const { rows } = await detectProject(dir);
-		expect(new Set(rows.map((r) => r.join("\t")))).toEqual(
-			new Set(["npm\treact\t^18.2.0", "npm\ttypescript\t~5.4.0"]),
-		);
+        expect(rows).toEqual([
+            { ecosystem: "npm", name: "react", declared: "^18.2.0", resolved: null },
+            { ecosystem: "npm", name: "typescript", declared: "~5.4.0", resolved: null },
+        ]);
 	});
 
 	test("requirements.txt", async () => {
 		const dir = tmp();
 		writeFileSync(join(dir, "requirements.txt"), "requests==2.31.0\n");
 		const { rows } = await detectProject(dir);
-		expect(rows).toEqual([["pypi", "requests", "==2.31.0"]]);
+        expect(rows).toEqual([{ ecosystem: "pypi", name: "requests", declared: "==2.31.0", resolved: null }]);
 	});
 });
 

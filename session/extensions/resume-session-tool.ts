@@ -141,19 +141,21 @@ export async function renderList(
 	options: ListOptions,
 	signal?: AbortSignal,
 ): Promise<{ text: string; count: number; ids: string[] }> {
-  const project = repoRoot(options.path ?? cwd);
-  const root = sessionsRoot(options.profile);
-  const family = options.worktrees === false ? [] : listWorktrees(project);
-  // A failed worktree probe must not erase every session. Keep discovery
-  // scoped to the requested checkout and report the degraded inventory below.
-  const worktreeProbeFailed = family === undefined;
-  const knownWorktrees = family ?? [];
-  const accept = worktreeProbeFailed ? new Set(pathKeys(project)) : acceptedPaths(knownWorktrees, project);
-  const byPath = new Map(knownWorktrees.flatMap((w) => pathKeys(w.path).map((key) => [key, w] as const)));
-  const found: Candidate[] = await candidates(root, accept);
-  const rows: Row[] = [];
-  const errors: string[] = [];
-	if (worktreeProbeFailed) errors.push(`could not enumerate worktrees; membership unknown for ${project}; showing current checkout sessions only`);
+	const project = repoRoot(options.path ?? cwd);
+	const root = sessionsRoot(options.profile);
+	const family = options.worktrees === false ? [] : listWorktrees(project);
+	if (family === undefined) {
+		return {
+			text: `resume_session: could not enumerate Git worktrees for ${project}; repository history may be incomplete. No sessions were read. Retry with worktrees:false to inspect the current checkout, or pass the canonical repository path explicitly.`,
+			count: 0,
+			ids: [],
+		};
+	}
+	const accept = acceptedPaths(family, project);
+	const byPath = new Map(family.flatMap((w) => pathKeys(w.path).map((key) => [key, w] as const)));
+	const found: Candidate[] = await candidates(root, accept);
+	const rows: Row[] = [];
+	const errors: string[] = [];
 	for (const candidate of found) {
 		signal?.throwIfAborted();
 		try {
@@ -175,11 +177,11 @@ export async function renderList(
 	const limit = options.limit && options.limit > 0 ? options.limit : DEFAULT_LIST_LIMIT;
 	const shown = rows.slice(0, limit);
 	const now = Date.now();
-  const out = [
-    "# Prior sessions (newest first)",
-    `project: ${project}`,
-    `store: ${root}`,
-    `worktrees scanned: ${knownWorktrees.length > 0 ? knownWorktrees.map((w) => worktreeLabel(w)).join(", ") : "current checkout only"}`,
+	const out = [
+		"# Prior sessions (newest first)",
+		`project: ${project}`,
+		`store: ${root}`,
+		`worktrees scanned: ${family.length > 0 ? family.map((w) => worktreeLabel(w)).join(", ") : "current checkout only"}`,
 		"",
 	];
 	if (shown.length === 0) {
@@ -196,7 +198,7 @@ export async function renderList(
 		if (rows.length > shown.length)
 			out.push(`(${rows.length - shown.length} older session(s) not shown; raise \`limit\`)`);
 		if (options.git !== false) {
-      const activity = renderGitActivity(knownWorktrees, project);
+			const activity = renderGitActivity(family, project);
 			if (activity.length > 0) out.push("", ...activity);
 		}
 		out.push(

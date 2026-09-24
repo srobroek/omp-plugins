@@ -6,4 +6,4 @@ scope: "tool:bash"
 interruptMode: never
 ---
 
-`speckit-implement` is deprecated in beads repos. Route through the agent-assign chain (`/speckit.agent-assign.assign` → validate → execute) and work molecule steps via `bd mol current` / `bd ready` / `bd update --claim` / `bd close`.
+`speckit-implement` is deprecated. Use the runtime-native SpecKit skill interface and work task beads directly under the unconditional `implement` step; inspect `bd mol current` / `bd ready`, then claim and close beads with `bd update --claim` / `bd close`.

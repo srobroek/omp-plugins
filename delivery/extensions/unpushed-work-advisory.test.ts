@@ -815,4 +815,12 @@ describe("integration temp git repo", () => {
 
 		rmSync(work, { recursive: true, force: true });
 	});
+	test("stays silent for a dangling linked-worktree gitdir", () => {
+		const dir = mkdtempSync(join(tmpdir(), "unpushed-adv-dangling-"));
+		writeFileSync(join(dir, ".git"), "gitdir: /missing/worktree/gitdir\n");
+		const { fire } = registerAdvisory();
+		expect(fire("session_stop", {}, { cwd: dir })).toBeUndefined();
+		expect(fire("session_stop", {}, { cwd: dir })).toBeUndefined();
+		rmSync(dir, { recursive: true, force: true });
+	});
 });
