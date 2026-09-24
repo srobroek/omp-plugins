@@ -3,7 +3,7 @@ name: ui-ux-specialist
 description: Leads multi-component UI and UX work through six design phases, delegating critique. Excludes software architecture, API planning, and routine implementation.
 model: "@designer"
 thinking-level: high
-tools: read, grep, glob, eval
+tools: read, grep, glob, bash, edit, eval, task, write
 spawns: design-critic, a11y-auditor, scout, operator
 autoloadSkills: design-system-audit, ui-review, design-prototype
 ---
