@@ -21,6 +21,14 @@ MUST WH-4: keep scratch files, logs, and repro scripts outside every worktree. A
 
 MUST WH-5: act on the first hygiene reminder. A session receives at most three, and proved progress resets the count. The third reminder escalates whether the residual was measured or only suspected: it instructs the main agent or run lead to invoke the report-only `worktree-reaper` to inspect and report the residual, and it names the lifecycle that removes state. When the residual could not be measured, report it rather than act on it. The reaper mutates nothing, so its inventory authorizes no removal; removal happens only through `delivery_cleanup` under WH-6, after a landing is proved.
 
+## Inventory backup directories
+
+MUST WH-7: treat every `<worktree>.bak.<timestamp>` directory under the worktree root as an independent hygiene row. A backup directory is not a Git worktree, even when it contains a Git checkout or resembles a listed worktree. The report records its exact path and owner, branch, dirty count, unpushed count, and landing-receipt evidence; each value is `UNKNOWN` unless a bounded probe proves it.
+
+MUST WH-8: never remove a backup directory by name, age, emptiness, path absence from `git worktree list`, or a successful `wt step prune --dry-run`. Authorized removal requires per-directory proof of no live process cwd, no unmerged unique commits, and no dirty tracked changes, plus exact landing evidence or explicit authorization recorded on the governing bead. A failed, timed-out, or ambiguous probe stops the action and leaves the directory reported as `UNKNOWN`.
+
+MUST WH-9: the report-only `worktree-reaper` never authorizes backup removal. Do not use `rm`, `git worktree remove`, or `wt step prune --min-age 0` for this workflow. `delivery_cleanup` accepts only a receipt-identified landed worktree and branch; it does not accept an arbitrary backup path. Keep an unresolved backup directory until its owner and exact cleanup authority are established.
+
 ## Remove landed state
 
 MUST WH-6: remove landed state only through `delivery_cleanup`, after running `bd_reconcile` when the receipt has `beads.ledgerActive: true`; no-ledger or retired receipts (`false`) go directly from landing to `delivery_cleanup`. That tool removes one worktree. Then it deletes the local ref. Then it verifies absence. For an active ledger, `delivery_cleanup` refuses while the ledger stays unreconciled and names `bd_reconcile` in the refusal. Provenance obligations for a destructive ref mutation stay in `rule://worktrunk-destructive-branch-provenance`.

@@ -25,14 +25,15 @@ The main agent or run lead invokes this agent. Do not dispatch it to clean up.
    - live-agent ownership;
    - dirty and unpushed state;
    - landing-receipt evidence.
-2. Use `read` for supplied repository files. Use `read` on `pr://<number>` when PR inspection is needed. Do not call a forge mutation tool. Treat a PR resource as evidence, not authorization.
-3. Report exact counts and observed values. Never infer:
+2. Use `glob` to inventory every sibling path matching `<worktree>.bak.<timestamp>` under the supplied worktree root. Report each backup directory as a separate row, even when it is empty or absent from `git worktree list`. A backup directory is not a Git worktree: set its owner, branch, dirty count, unpushed count, and receipt evidence to `UNKNOWN` unless exact evidence links that directory to a live owner, branch tip, and landing receipt. Never infer those values from its name, contents, size, or a successful listing.
+3. Use `read` for supplied repository files. Use `read` on `pr://<number>` when PR inspection is needed. Do not call a forge mutation tool. Treat a PR resource as evidence, not authorization.
+4. Report exact counts and observed values. Never infer:
    - a clean tree;
    - an absent receipt or owner;
    - a branch state;
    - worktree absence;
    - any value from an unreadable or timed-out probe.
-4. Return one `ROW` for each worktree and a recommendation for the invoker. The report recommends. The invoker executes any authorized delivery action.
+5. Return one `ROW` for each Git worktree and each backup directory, then a recommendation for the invoker. The report recommends. The invoker executes any authorized delivery action.
 
 ## Rules
 
@@ -47,6 +48,7 @@ MUST Recommend `remove-after-review` only when every condition holds:
    - dirty count is `0`;
    - unpushed count is `0`;
    - exact landing-receipt evidence is present.
+For a `.bak.<timestamp>` directory, never recommend removal: its ownership, branch, dirty state, publication state, and landing state remain `UNKNOWN` unless a separate exact proof and explicit authorization exist, and `delivery_cleanup` does not accept an arbitrary backup path.
 This is a recommendation, not permission.
 MUST Read `rule://delivery-worktree-hygiene` and `rule://delivery-git-workflow` for ownership and landing-proof semantics. Cite them instead of reproducing mutation procedures.
 DEFAULT Recommend `keep` when observed state lacks exact removal proof. Explain the missing proof in the row.
@@ -56,7 +58,7 @@ NOT Do cleanup, authorize cleanup, or claim that a recommendation proves a landi
 
 Begin your reply with `VERDICT:` as the first characters.
 VERDICT: PASS|UNKNOWN|FAIL: one line stating whether the inventory is complete. `UNKNOWN` is successful stand-down when any probe is incomplete.
-ROW: `path=<path> | branch=<branch> | dirty count=<N> | unpushed count=<N> | receipt evidence=<present/absent/UNKNOWN: reason> | recommendation=<keep/hand-off/remove-after-review/none> | reason=<observed proof or blocker>`
-Use one `ROW` per worktree. For a live owner, use `recommendation=hand-off` and address it to the invoker. For a foreign or unknown owner, use `recommendation=none` and include `UNKNOWN: <reason>`.
+ROW: `kind=worktree|backup | path=<path> | owner=<this-scan/UNKNOWN> | branch=<branch/UNKNOWN> | dirty count=<N/UNKNOWN> | unpushed count=<N/UNKNOWN> | receipt evidence=<present/absent/UNKNOWN: reason> | recommendation=<keep/hand-off/remove-after-review/none> | reason=<observed proof or blocker>`
+Use one `ROW` per Git worktree and one per backup directory. For a live owner, use `recommendation=hand-off` and address it to the invoker. For a foreign or unknown owner, use `recommendation=none` and include `UNKNOWN: <reason>`.
 MUST Never reprint command output, file contents, or the caller's claim.
 CAP 300w clean · uncapped when exact paths, counts, receipt evidence, or UNKNOWN reasons need it.
