@@ -80,6 +80,50 @@ class PreflightRegressionTests(unittest.TestCase):
         self.assertEqual(result.status, "fail")
         self.assertIn("not a git repository", result.detail)
 
+    def test_hook_approvals_checks_declared_executable_paths(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            hook = root / "verify.sh"
+            hook.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+
+            class ApprovalContext(FakeContext):
+                def __init__(self, payload: dict[str, object]) -> None:
+                    super().__init__(root)
+                    self.payload = payload
+
+                def run(self, *args: str, **kwargs: object) -> preflight.CommandResult:
+                    if args == ("wt", "config", "approvals", "list", "--format=json"):
+                        return preflight.CommandResult(0, json.dumps(self.payload))
+                    return super().run(*args, **kwargs)
+
+            payload = {
+                "state": "approved",
+                "commands": [{"phase": "pre-merge", "name": "verify", "command": "./verify.sh", "approved": True}],
+                "stale": [],
+            }
+            self.assertEqual(preflight.check_hook_approvals(ApprovalContext(payload)).status, "fail")
+            hook.chmod(0o755)
+            result = preflight.check_hook_approvals(ApprovalContext(payload))
+            self.assertEqual(result.status, "pass")
+            self.assertIn("present, executable, and approved", result.detail)
+
+    def test_hook_approvals_reports_missing_declared_executable(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+
+            class ApprovalContext(FakeContext):
+                def run(self, *args: str, **kwargs: object) -> preflight.CommandResult:
+                    if args == ("wt", "config", "approvals", "list", "--format=json"):
+                        return preflight.CommandResult(
+                            0,
+                            json.dumps({"state": "approved", "commands": [{"phase": "pre-start", "name": "verify", "command": "./missing.sh", "approved": True}]}),
+                        )
+                    return super().run(*args, **kwargs)
+
+            result = preflight.check_hook_approvals(ApprovalContext(root))
+            self.assertEqual(result.status, "fail")
+            self.assertIn("missing hook executables", result.detail)
+
     def test_only_warn_exits_nonzero(self) -> None:
         original_checks = preflight.CHECKS
         preflight.CHECKS = [("selected", lambda _ctx: preflight.Result("warn", "needs attention"))]

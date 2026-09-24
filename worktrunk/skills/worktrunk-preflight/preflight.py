@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import shlex
 import fnmatch
 import json
 import os
@@ -188,6 +189,21 @@ def parse_json_object(text: str) -> dict[str, Any] | None:
     return None
 
 
+def declared_hook_path(command: dict[str, Any], cwd: Path) -> Path | None:
+    raw = command.get("command")
+    if not isinstance(raw, str) or not raw.strip():
+        return None
+    try:
+        tokens = shlex.split(raw)
+    except ValueError:
+        return None
+    for token in tokens:
+        if token.startswith(("/", "./", "../")) or "/" in token:
+            path = Path(token)
+            return (path if path.is_absolute() else cwd / path).resolve()
+    return None
+
+
 def check_hook_approvals(ctx: Context, fresh: bool = False) -> Result:
     result = ctx.run("wt", "config", "approvals", "list", "--format=json", use_cache=not fresh)
     if result.returncode != 0:
@@ -203,22 +219,40 @@ def check_hook_approvals(ctx: Context, fresh: bool = False) -> Result:
     if not isinstance(commands, list):
         commands = []
     unapproved: list[str] = []
+    missing: list[str] = []
+    non_executable: list[str] = []
     for command in commands:
-        if isinstance(command, dict) and command.get("approved") is False:
-            phase = str(command.get("phase", "?"))
-            name = str(command.get("name", "?"))
-            unapproved.append(f"{phase}/{name}")
+        if not isinstance(command, dict):
+            continue
+        phase = str(command.get("phase", "?"))
+        name = str(command.get("name", "?"))
+        label = f"{phase}/{name}"
+        if command.get("approved") is False:
+            unapproved.append(label)
+        path = declared_hook_path(command, ctx.cwd)
+        if path is not None:
+            if not path.is_file():
+                missing.append(f"{label} ({path})")
+            elif not os.access(path, os.X_OK):
+                non_executable.append(f"{label} ({path})")
 
     stale = data.get("stale")
     stale_items = stale if isinstance(stale, list) else []
     stale_detail = f"; stale entries: {one_line(json.dumps(stale_items, sort_keys=True))}" if stale_items else ""
+    hook_detail = ""
+    if missing:
+        hook_detail += f"; missing hook executables: {', '.join(missing)}"
+    if non_executable:
+        hook_detail += f"; non-executable hook files: {', '.join(non_executable)}"
+    if hook_detail:
+        return Result("fail", f"declared hook verification failed{hook_detail}")
     if state == "approval_required":
         names = ", ".join(unapproved) if unapproved else "unlisted commands"
         return Result("fail", f"approval_required; unapproved project hooks: {names}{stale_detail}", APPROVALS_FIX)
     if state in {"no_commands", "approved"}:
         if stale_items:
             return Result("warn", f"state={state}; no unapproved hooks{stale_detail}")
-        return Result("pass", f"state={state}")
+        return Result("pass", f"state={state}; declared hooks present, executable, and approved")
     return Result("skip", f"unrecognized approvals state {state!r}{stale_detail}")
 
 
