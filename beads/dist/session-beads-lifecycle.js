@@ -1,7 +1,10 @@
 // @bun
 // extensions/session-beads-lifecycle.ts
-import { existsSync as existsSync2, readFileSync as readFileSync2, rmSync, statSync as statSync3 } from "fs";
-import { isAbsolute as isAbsolute3, join as join2, resolve as resolve4 } from "path";
+import { existsSync as existsSync2, readFileSync as readFileSync2, realpathSync as realpathSync3, rmSync, statSync as statSync3 } from "fs";
+import { dirname as dirname3, isAbsolute as isAbsolute3, join as join2, resolve as resolve4 } from "path";
+
+// extensions/bd-actor-gate.ts
+import { basename, relative, resolve, sep } from "path";
 
 // extensions/shell-tokenizer.ts
 var SEPARATORS = new Set([";", "&", "|", "(", ")", `
@@ -185,7 +188,6 @@ function hereDocumentBody(command, from, document) {
 }
 
 // extensions/shell-command.ts
-import { resolve } from "path";
 var OPERATORS = { ";": true, "&&": true, "||": true, "&": true, "|": true, "\n": true, "(": true, ")": true, "{": true, "}": true };
 var WRAPPERS = {
   mise: true,
@@ -195,19 +197,91 @@ var WRAPPERS = {
   nohup: true,
   nice: true,
   sudo: true,
-  xargs: true
+  xargs: true,
+  time: true,
+  "!": true,
+  if: true,
+  elif: true,
+  else: true,
+  while: true,
+  until: true,
+  do: true
 };
+function commandSegments(command) {
+  const out = [];
+  let start = 0;
+  let quote = null;
+  let escaped = false;
+  for (let i = 0;i < command.length; i++) {
+    const ch = command[i];
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (quote === "'") {
+      if (ch === "'")
+        quote = null;
+      continue;
+    }
+    if (quote === '"') {
+      if (ch === "\\")
+        escaped = true;
+      else if (ch === '"')
+        quote = null;
+      continue;
+    }
+    if (ch === "\\") {
+      escaped = true;
+      continue;
+    }
+    if (ch === "'" || ch === '"') {
+      quote = ch;
+      continue;
+    }
+    const two = command.slice(i, i + 2);
+    if (two === "&&" || two === "||") {
+      out.push(command.slice(start, i), two);
+      i++;
+      start = i + 1;
+      continue;
+    }
+    if (ch === ";" || ch === "&" || ch === "|" || ch === `
+` || ch === "(" || ch === ")" || ch === "{" || ch === "}") {
+      out.push(command.slice(start, i), ch);
+      start = i + 1;
+    }
+  }
+  out.push(command.slice(start));
+  return out;
+}
 function tokenize(segment) {
   return tokenizeShell(segment, { preserveBackslashes: true }).map(({ value, startsQuoted }) => ({ value, quoted: startsQuoted }));
 }
-function leadingCdCwd(command, cwd) {
-  const match = /^\s*cd\s+([^\s;&|]+)\s*&&/.exec(command);
-  if (!match)
-    return cwd;
-  const dir = match[1];
-  if (!dir || /^[-~$]/.test(dir) || /[\\`"'*?\x5b\x5d{}]/.test(dir))
-    return cwd;
-  return dir.startsWith("/") ? dir : resolve(cwd, dir);
+function invocation(segment, argv) {
+  const tokens = tokenize(segment);
+  const head = argv[0];
+  if (!head)
+    return null;
+  let start = 0;
+  for (;start < tokens.length; start++) {
+    const token = tokens[start];
+    if (!token || token.quoted)
+      return null;
+    const basename = token.value.split("/").pop() ?? token.value;
+    if (basename === head)
+      break;
+    if (!/^[A-Za-z_][A-Za-z0-9_]*=/.test(token.value) && !token.value.startsWith("-") && WRAPPERS[basename] !== true)
+      return null;
+  }
+  for (const [offset, word] of argv.entries()) {
+    const token = tokens[start + offset];
+    if (!token || token.quoted)
+      return null;
+    const value = offset === 0 ? token.value.split("/").pop() ?? token.value : token.value;
+    if (value !== word)
+      return null;
+  }
+  return tokens.slice(start);
 }
 function splitCommands(source) {
   const positions = [];
@@ -475,7 +549,16 @@ var VALUE_FLAGS2 = new Set([
   "--dolt-auto-commit",
   "--mem-profile"
 ]);
-var TRANSPARENT_WRAPPERS = { command: true, env: true, sudo: true };
+var CONTROL_PREFIXES = {
+  "!": true,
+  if: true,
+  elif: true,
+  else: true,
+  while: true,
+  until: true,
+  do: true
+};
+var TRANSPARENT_WRAPPERS = { command: true, env: true, sudo: true, time: true };
 var WRAPPER_VALUE_FLAGS = {
   "-C": true,
   "--chdir": true,
@@ -493,7 +576,7 @@ var WRAPPER_VALUE_FLAGS = {
   "--unset": true,
   "--user": true
 };
-function commandSegments(command) {
+function commandSegments2(command) {
   const segments = [];
   let segment = [];
   for (const token of tokenize2(command)) {
@@ -512,7 +595,7 @@ function commandSegments(command) {
 function bdInvocations(command) {
   const out = [];
   let exported = {};
-  for (const tokens of commandSegments(command)) {
+  for (const tokens of commandSegments2(command)) {
     if (tokens[0] === "export") {
       for (const variable of ACTOR_VARS) {
         const assignment = tokens.findLast((token) => token.startsWith(`${variable}=`));
@@ -524,19 +607,54 @@ function bdInvocations(command) {
     }
     let i = 0;
     const prefix = [];
+    const unset = {};
     while (true) {
       while (/^[A-Za-z_]\w*=/.test(tokens[i] ?? "")) {
         prefix.push(tokens[i]);
         i++;
       }
-      const wrapper = (tokens[i] ?? "").split("/").pop() ?? "";
-      if (TRANSPARENT_WRAPPERS[wrapper] !== true)
+      const word = (tokens[i] ?? "").split("/").pop() ?? "";
+      if (CONTROL_PREFIXES[word] === true) {
+        i++;
+        continue;
+      }
+      if (TRANSPARENT_WRAPPERS[word] !== true)
         break;
       i++;
-      if (wrapper === "command")
+      if (word === "command")
         continue;
-      while (tokens[i]?.startsWith("-")) {
+      while (true) {
+        while (/^[A-Za-z_]\w*=/.test(tokens[i] ?? "")) {
+          const assignment = tokens[i];
+          prefix.push(assignment);
+          const variable = assignment.slice(0, assignment.indexOf("="));
+          if (variable === "BEADS_ACTOR" || variable === "BD_ACTOR")
+            delete unset[variable];
+          i++;
+        }
         const flag = tokens[i];
+        if (flag === undefined || !flag.startsWith("-"))
+          break;
+        if (word === "env") {
+          if (flag === "--") {
+            i++;
+            break;
+          }
+          if (flag === "-i" || flag === "--ignore-environment") {
+            unset.BEADS_ACTOR = true;
+            unset.BD_ACTOR = true;
+            i++;
+            continue;
+          }
+          const unsetName = flag === "-u" || flag === "--unset" ? tokens[i + 1] : flag.startsWith("--unset=") ? flag.slice("--unset=".length) : flag.startsWith("-u") && flag.length > 2 ? flag.slice(2) : undefined;
+          if (unsetName === "BEADS_ACTOR" || unsetName === "BD_ACTOR")
+            unset[unsetName] = true;
+          if (flag === "-u" || flag === "--unset")
+            i += 2;
+          else
+            i++;
+          continue;
+        }
         i++;
         if (WRAPPER_VALUE_FLAGS[flag] === true)
           i++;
@@ -549,7 +667,7 @@ function bdInvocations(command) {
     const scanned = scanGlobals(tokens, i);
     const verb = tokens[scanned.next];
     if (verb !== undefined) {
-      out.push({ verb: verb.toLowerCase(), args: tokens.slice(scanned.next + 1), globals: scanned.globals, prefix, exported: { ...exported } });
+      out.push({ verb: verb.toLowerCase(), args: tokens.slice(scanned.next + 1), globals: scanned.globals, prefix, exported: { ...exported }, unset });
     }
   }
   return out;
@@ -663,15 +781,67 @@ function environmentForInput(input, base = process.env) {
   }
   return env;
 }
+var RUN_UUID_SUFFIX = /_([0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12})$/i;
+var UUID_ONLY = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
+function agentActor(ctx) {
+  let header;
+  try {
+    const getHeader = ctx.sessionManager?.getHeader;
+    if (typeof getHeader === "function")
+      header = getHeader();
+  } catch {
+    header = undefined;
+  }
+  const headerKnown = header !== null && header !== undefined;
+  if (headerKnown && (typeof header?.parentSession !== "string" || header.parentSession.length === 0))
+    return;
+  try {
+    const sessionFile = ctx.sessionManager?.getSessionFile?.();
+    const sessionDir = ctx.sessionManager?.getSessionDir?.();
+    if (typeof sessionFile !== "string" || typeof sessionDir !== "string")
+      return;
+    const file = basename(sessionFile);
+    if (!file.endsWith(".jsonl"))
+      return;
+    const id = file.slice(0, -".jsonl".length);
+    if (id === "")
+      return;
+    const root = resolve(sessionDir);
+    const rel = relative(root, resolve(sessionFile));
+    const parts = rel.split(sep);
+    let run = parts[0];
+    if (parts.length === 1) {
+      const managerRun = basename(root);
+      if (!RUN_UUID_SUFFIX.test(managerRun) || !headerKnown && UUID_ONLY.test(id))
+        return;
+      run = managerRun;
+    }
+    if (typeof run !== "string" || run === "" || run === "." || run === ".." || run.startsWith(`..${sep}`))
+      return;
+    const runScope = run.match(RUN_UUID_SUFFIX)?.[1] ?? run;
+    return `omp/${runScope}/${id}`;
+  } catch {
+    return;
+  }
+}
 function invocationActor(invocation, env) {
-  const resolve = (variable) => {
-    const assignment = invocation.prefix.findLast((token) => token.startsWith(`${variable}=`));
-    const value = assignment !== undefined ? assignment.slice(variable.length + 1) : invocation.exported[variable] ?? env[variable];
+  const literal = (value) => {
     if (!value?.trim() || /[$`]/.test(value))
       return null;
     return value.trim();
   };
-  return resolve("BD_ACTOR") ?? resolve("BEADS_ACTOR");
+  const actorFlag = globalValue(invocation.globals, ["--actor"]);
+  const explicit = literal(actorFlag);
+  if (explicit !== null)
+    return explicit;
+  const resolve = (variable) => {
+    if (invocation.unset[variable] === true)
+      return null;
+    const assignment = invocation.prefix.findLast((token) => token.startsWith(`${variable}=`));
+    const value = assignment !== undefined ? assignment.slice(variable.length + 1) : invocation.exported[variable] ?? env[variable];
+    return literal(value);
+  };
+  return resolve("BEADS_ACTOR") ?? resolve("BD_ACTOR");
 }
 function actorValues(command, env = process.env) {
   const actors = bdInvocations(command).filter(isMutatingInvocation).map((invocation) => invocationActor(invocation, env)).filter((actor) => actor !== null);
@@ -682,7 +852,7 @@ function invocationFromArgv(args) {
   const verb = args[scanned.next];
   if (verb === undefined)
     return;
-  return { verb: verb.toLowerCase(), args: args.slice(scanned.next + 1), globals: scanned.globals, prefix: [], exported: {} };
+  return { verb: verb.toLowerCase(), args: args.slice(scanned.next + 1), globals: scanned.globals, prefix: [], exported: {}, unset: {} };
 }
 function isMutatingInvocation({ verb, args }) {
   if (args.includes("--help") || args.includes("-h"))
@@ -714,9 +884,10 @@ function isMutatingBdCommand(command) {
 }
 
 // extensions/bd-embedded-write-lock.ts
+import { spawnSync as spawnSync2 } from "child_process";
 import { closeSync, existsSync, openSync, readFileSync, realpathSync as realpathSync2, statSync as statSync2, unlinkSync, writeSync } from "fs";
 import { hostname } from "os";
-import { basename, dirname as dirname2, isAbsolute as isAbsolute2, join, resolve as resolve3 } from "path";
+import { basename as basename2, dirname as dirname2, isAbsolute as isAbsolute2, join, resolve as resolve3 } from "path";
 
 // extensions/beads-store.ts
 import { spawnSync } from "child_process";
@@ -813,6 +984,35 @@ function pidAlive(pid) {
     return false;
   }
 }
+function parseLinuxStatStartIdentity(stat) {
+  const close = stat.lastIndexOf(")");
+  if (close < 0)
+    return;
+  const fields = stat.slice(close + 2).trim().split(/\s+/u);
+  const start = fields[19];
+  return start !== undefined && start !== "" ? start : undefined;
+}
+function processStartIdentity(pid) {
+  try {
+    if (process.platform === "linux") {
+      const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
+      const identity = parseLinuxStatStartIdentity(stat);
+      if (identity !== undefined)
+        return identity;
+    }
+    const result = spawnSync2("ps", ["-o", "lstart=", "-p", String(pid)], {
+      encoding: "utf8",
+      timeout: 100,
+      stdio: ["ignore", "pipe", "ignore"]
+    });
+    if (result.error || result.status !== 0)
+      return;
+    const identity = String(result.stdout ?? "").trim();
+    return identity === "" ? undefined : identity;
+  } catch {
+    return;
+  }
+}
 var REGISTRY_KEY = Symbol.for("com.srobroek.beads.embedded-write-lock.v1");
 function registry() {
   const holder = globalThis;
@@ -828,7 +1028,7 @@ function registry() {
         closeSync(held.fd);
       } catch {}
       try {
-        unlinkSync(lock);
+        withOwnership(lock, held.token, () => unlinkSync(lock));
       } catch {}
     }
     created.owned.clear();
@@ -967,6 +1167,73 @@ function embeddedStoreFor(cwd, env = process.env) {
   const store = storeFor([], cwd, env);
   return store !== undefined && embedded(store) ? store : undefined;
 }
+var OPERATOR = /[;&|<>(){}\\\n]/;
+var SUBSTITUTION = /\$\(|`/;
+var DEFERRED_VALUE = /[$`~*?[\]]/;
+var STORE_FLAGS = ["-C", "--directory", "--db", "--database"];
+function embeddedWriteTargets(command, cwd, env) {
+  const hasBd = commandSegments(command).some((segment) => invocation(segment, ["bd"]) !== null);
+  if (!hasBd)
+    return { kind: "stores", stores: [] };
+  const direct = directInvocation(command);
+  if (direct !== undefined) {
+    if (direct === "no-write" || !writesStore(direct))
+      return { kind: "stores", stores: [] };
+    const store = storeFor(direct.globals, cwd, env);
+    return { kind: "stores", stores: store !== undefined && embedded(store) ? [store] : [] };
+  }
+  const ambient = storeFor([], cwd, env);
+  const at = ambient !== undefined && embedded(ambient) ? ambient : namedStore(command, cwd, env);
+  if (at === undefined)
+    return { kind: "stores", stores: [] };
+  return {
+    kind: "refused",
+    reason: [
+      `This command mentions \`bd\` in a form the Beads write lock cannot resolve, and ${at} is an embedded store, where two concurrent writers corrupt the Dolt journal.`,
+      "The lock accepts exactly one shape: a bash call whose whole command is a single direct `bd` invocation, optionally preceded by literal `VAR=value` assignments, with no separators, pipes, redirections, grouping, command substitutions, escapes or newlines, and with a literal value for `-C` / `--directory` / `--db` / `--database`.",
+      "Issue the `bd` command as its own tool call in that form, and run the surrounding work as a separate call. `bd export -o issues.jsonl` rather than a redirection, and one call each rather than `&&`, are accepted."
+    ].join(" ")
+  };
+}
+function namedStore(command, cwd, env) {
+  const words = tokenize(command).flatMap((token) => token.quoted ? tokenize(token.value).map((inner) => inner.value) : [token.value]);
+  for (const [index, word] of words.entries()) {
+    for (const flag of STORE_FLAGS) {
+      const value = word === flag ? words[index + 1] : word.startsWith(`${flag}=`) ? word.slice(flag.length + 1) : undefined;
+      if (value === undefined || DEFERRED_VALUE.test(value))
+        continue;
+      const store = storeFor([flag, value], cwd, env);
+      if (store !== undefined && embedded(store))
+        return store;
+    }
+  }
+  return;
+}
+function directInvocation(command) {
+  const tokens = tokenize(command);
+  if (tokens.some((token) => SUBSTITUTION.test(token.value)))
+    return;
+  if (tokens.some((token) => !token.quoted && OPERATOR.test(token.value)))
+    return;
+  let i = 0;
+  while (tokens[i] !== undefined && tokens[i]?.quoted === false && /^[A-Za-z_]\w*=/.test(tokens[i]?.value ?? ""))
+    i++;
+  const head = tokens[i];
+  if (head === undefined || head.quoted)
+    return;
+  const base = head.value.split("/").pop() ?? head.value;
+  if (base !== "bd")
+    return;
+  const invocation = invocationFromArgv(tokens.slice(i + 1).map((token) => token.value));
+  if (invocation === undefined)
+    return "no-write";
+  for (const flag of STORE_FLAGS) {
+    const value = globalValue(invocation.globals, [flag]);
+    if (value !== undefined && DEFERRED_VALUE.test(value))
+      return;
+  }
+  return invocation;
+}
 function ageOf(path) {
   try {
     return Date.now() - statSync2(path).mtimeMs;
@@ -988,8 +1255,12 @@ function abandoned(lock) {
     return ageOf(lock) > leaseMs;
   }
   const local = holder.host === HOST;
-  if (local && typeof holder.writer === "number" && pidAlive(holder.writer))
-    return false;
+  if (local && typeof holder.writer === "number") {
+    const currentStart = processStartIdentity(holder.writer);
+    const sameWriter = typeof holder.writerStart !== "string" || currentStart === undefined || currentStart === holder.writerStart;
+    if (pidAlive(holder.writer) && sameWriter)
+      return false;
+  }
   if (local && typeof holder.pid === "number" && !pidAlive(holder.pid))
     return true;
   if (typeof holder.expires === "number")
@@ -1021,9 +1292,17 @@ function takeOverIfAbandoned(lock, steal) {
     } catch {}
   }
 }
-function holderNow(owner, token, writer) {
+function holderNow(owner, token, writer, writerStart = writer === undefined ? undefined : processStartIdentity(writer)) {
   const taken = Date.now();
-  return { host: HOST, pid: process.pid, owner, token, taken, expires: taken + leaseMs, ...writer === undefined ? {} : { writer } };
+  return {
+    host: HOST,
+    pid: process.pid,
+    owner,
+    token,
+    taken,
+    expires: taken + leaseMs,
+    ...writer === undefined ? {} : { writer, ...writerStart === undefined ? {} : { writerStart } }
+  };
 }
 function stillOurs(lock, token) {
   try {
@@ -1079,7 +1358,7 @@ async function hold(store, owner, waitMs = WAIT_MS, signal) {
             } catch {}
           }, renewMs);
           renew.unref?.();
-          owned.set(lock, { fd, holders: new Map([[owner, 1]]), renew, token, writer: undefined });
+          owned.set(lock, { fd, holders: new Map([[owner, 1]]), renew, token, writer: undefined, writerStart: undefined });
           return { kind: "held" };
         } catch (error) {
           const code = error.code;
@@ -1172,7 +1451,7 @@ function renewLease(lock, owner, token) {
   const result = withOwnership(lock, token, () => {
     const fd = openSync(lock, "w");
     try {
-      writeSync(fd, JSON.stringify(holderNow(owner, token, held.writer)));
+      writeSync(fd, JSON.stringify(holderNow(owner, token, held.writer, held.writerStart)));
     } finally {
       closeSync(fd);
     }
@@ -1230,27 +1509,32 @@ function claimResultOutput(event) {
   return [content, stdout].filter(Boolean).join(`
 `);
 }
-var pendingClaims = new Map;
 
 // extensions/session-beads-lifecycle.ts
 var EMBEDDED_PIN_ENV = { BEADS_DOLT_SHARED_SERVER: "" };
+function boundedBdEnvironment(base) {
+  return {
+    ...base,
+    ...EMBEDDED_PIN_ENV,
+    BD_NO_PAGER: "1",
+    BD_NON_INTERACTIVE: "1",
+    BD_DOLT_AUTO_START: "false",
+    NO_COLOR: "1"
+  };
+}
 function lifecycleBdEnvironment(cwd, base = process.env) {
   const env = { ...base };
   delete env.BEADS_DIR;
   const resolved = sessionPinFor(cwd);
   if (resolved !== undefined)
     env.BEADS_DIR = resolved;
-  env.BD_NO_PAGER = "1";
-  env.BD_NON_INTERACTIVE = "1";
-  env.BD_DOLT_AUTO_START = "false";
-  env.NO_COLOR = "1";
-  Object.assign(env, EMBEDDED_PIN_ENV);
-  return env;
+  return boundedBdEnvironment(env);
 }
 function bdStoreDir(cwd, env) {
-  const dir = env.BEADS_DIR ?? join2(cwd, ".beads");
+  const selected = env.BEADS_DIR;
+  const dir = selected ? isAbsolute3(selected) ? selected : resolve4(cwd, selected) : join2(cwd, ".beads");
   try {
-    return statSync3(dir).isDirectory() ? dir : undefined;
+    return statSync3(dir).isDirectory() ? resolve4(dir) : undefined;
   } catch {
     return;
   }
@@ -1259,7 +1543,9 @@ function bdReadFailure(scope, reason) {
   const bounded = boundedFailure(reason);
   return scope === "start" ? `Beads gates could not be verified at session start: ${bounded}.` : `Beads claims could not be read at session close: ${bounded}. A mutating command was attempted; inspect assigned and touched work before stopping.`;
 }
-var TIMEOUT_MS = 8000;
+var TIMEOUT_MS = 120000;
+var BD_COMMAND_CEILING_MS = 120000;
+var GATE_ADMISSION_MS = 20000;
 var MAX_LISTED = 8;
 var AUTO_GATE_TYPES = {
   timer: true,
@@ -1425,9 +1711,12 @@ function gatesCanResolve(gates) {
 }
 function readCheckOutcome(stdout) {
   const data = envelopeData(parseTrailingJson(stdout));
-  const record = data !== null && typeof data === "object" ? data : {};
-  const count = (key) => typeof record[key] === "number" ? record[key] : 0;
-  return { resolved: count("resolved"), escalated: count("escalated"), errors: count("errors") };
+  if (data === null || typeof data !== "object")
+    return;
+  const record = data;
+  if (typeof record.resolved !== "number" || typeof record.escalated !== "number" || typeof record.errors !== "number")
+    return;
+  return { resolved: record.resolved, escalated: record.escalated, errors: record.errors };
 }
 function formatGateAdvisory(gates, outcome) {
   if (gates.length === 0)
@@ -1482,8 +1771,17 @@ function staleSkipNotice(output) {
 function bdVerbs(command) {
   return bdInvocations(command).map((invocation) => invocation.verb);
 }
+var HELP_VALUE_PREFIXES = { "--acceptance": true, "--add-label": true, "--append-notes": true, "--body-file": true, "--description": true, "--design": true, "--design-file": true, "--mem-profile": true, "--notes": true, "--set-metadata": true, "--title": true };
 function isBdWrite(command) {
-  return isMutatingBdCommand(command);
+  if (isMutatingBdCommand(command))
+    return true;
+  return bdInvocations(command).some(({ verb, args }) => {
+    if (verb !== "update" && verb !== "ready" && verb !== "claim")
+      return false;
+    const help = args.indexOf("--help");
+    const claim = args.indexOf("--claim");
+    return help > 0 && claim > help && args.slice(0, help).some((token) => HELP_VALUE_PREFIXES[token] === true);
+  });
 }
 function beadIdCandidates(command) {
   const ids = [];
@@ -1535,111 +1833,247 @@ function commandSucceeded(event) {
   }
   return !/\bCommand exited with code -?[1-9]\d*\b/u.test(resultText(event));
 }
-function recordClaimTransitions(state, command, env, event) {
-  const invocations = bdInvocations(command);
-  const parsedCommand = parse(command);
+function canonicalStore2(path) {
+  try {
+    return realpathSync3(path);
+  } catch {
+    return resolve4(path);
+  }
+}
+function bdStoreForInvocation(invocation, cwd, env) {
+  if (flagEnabled(invocation.globals, ["--global", "--database"]))
+    return;
+  const directory = globalValue(invocation.globals, ["-C", "--directory"]);
+  const db = globalValue(invocation.globals, ["--db"]);
+  const base = directory === undefined ? cwd : resolve4(cwd, directory);
+  if (db !== undefined) {
+    const target = resolve4(base, db);
+    if (!existsSync2(target))
+      return;
+    return canonicalStore2(statSync3(target).isDirectory() ? target : dirname3(target));
+  }
+  if (directory !== undefined)
+    return canonicalStore2(sessionPinFor(base) ?? join2(base, ".beads"));
+  const local = invocation.prefix.findLast((token) => token.startsWith("BEADS_DIR="))?.slice("BEADS_DIR=".length);
+  const pinned = local ?? env.BEADS_DIR;
+  return canonicalStore2(pinned === undefined || pinned === "" ? sessionPinFor(cwd) ?? join2(cwd, ".beads") : isAbsolute3(pinned) ? pinned : resolve4(cwd, pinned));
+}
+function bdInvocationUsesExternalStore(invocation) {
+  return flagEnabled(invocation.globals, ["--global", "--database"]);
+}
+function claimTarget(invocation, cwd, env) {
+  const localStore = invocation.prefix.findLast((token) => token.startsWith("BEADS_DIR="))?.slice("BEADS_DIR=".length);
+  const global = flagEnabled(invocation.globals, ["--global"]);
+  const database = globalValue(invocation.globals, ["--database"]);
+  const db = globalValue(invocation.globals, ["--db"]);
+  const directory = globalValue(invocation.globals, ["-C", "--directory"]);
+  const base = directory === undefined ? cwd : resolve4(cwd, directory);
+  const selector = global ? ["global"] : database !== undefined ? ["database", database] : db !== undefined ? ["db", resolve4(base, db)] : directory !== undefined ? ["directory", base] : undefined;
+  const store = bdStoreForInvocation(invocation, cwd, env);
+  if (selector !== undefined)
+    return { key: `external:${JSON.stringify(selector)}`, store };
+  if (store !== undefined)
+    return { key: store, store };
+  return { key: `external:${JSON.stringify(["beadsDir", localStore === undefined ? undefined : resolve4(cwd, localStore)])}`, store: undefined };
+}
+function trackedClaimKey(target, id) {
+  return `${target.key}\x00${id}`;
+}
+function setTrackedClaim(state, target, id, actor) {
+  if (target.store !== undefined) {
+    for (const [key, claim] of state.claims) {
+      if (claim.id === id && claim.store === target.store)
+        state.claims.delete(key);
+    }
+  }
+  state.claims.set(trackedClaimKey(target, id), { id, actor, store: target.store });
+}
+function deleteTrackedClaim(state, target, id) {
+  state.claims.delete(trackedClaimKey(target, id));
+  if (target.store === undefined)
+    return;
+  for (const [key, claim] of state.claims) {
+    if (claim.id === id && claim.store === target.store)
+      state.claims.delete(key);
+  }
+}
+var TRANSITION_VALUE_FLAGS = {
+  "--actor": true,
+  "--database": true,
+  "--db": true,
+  "-C": true,
+  "--directory": true,
+  "--dolt-auto-commit": true,
+  "--mem-profile": true,
+  "--acceptance": true,
+  "--add-label": true,
+  "--append-notes": true,
+  "--assignee": true,
+  "-a": true,
+  "--await-id": true,
+  "--body-file": true,
+  "--defer": true,
+  "--description": true,
+  "-d": true,
+  "--design": true,
+  "--design-file": true,
+  "--due": true,
+  "--estimate": true,
+  "-e": true,
+  "--external-ref": true,
+  "--if-assignee": true,
+  "--if-status": true,
+  "--metadata": true,
+  "--notes": true,
+  "--parent": true,
+  "--priority": true,
+  "-p": true,
+  "--remove-label": true,
+  "--session": true,
+  "--set-labels": true,
+  "--set-metadata": true,
+  "--spec-id": true,
+  "--status": true,
+  "-s": true,
+  "--title": true,
+  "--type": true,
+  "-t": true,
+  "--unset-metadata": true,
+  "--reason": true,
+  "-r": true,
+  "--message": true
+};
+function commandTransitionFlags(args) {
+  let actorOverride;
+  let claim = false;
+  for (let index = 0;index < args.length; index++) {
+    const token = args[index];
+    const name = token.split("=", 1)[0] ?? token;
+    if (TRANSITION_VALUE_FLAGS[name] === true) {
+      if (name === "--actor")
+        actorOverride = token.includes("=") ? token.slice(token.indexOf("=") + 1) : args[index + 1];
+      if (!token.includes("="))
+        index++;
+      continue;
+    }
+    if (flagEnabled([token], ["--help", "-h"]))
+      return { actorOverride, claim, help: true };
+    if (flagEnabled([token], ["--claim"]))
+      claim = true;
+  }
+  return { actorOverride, claim, help: false };
+}
+function recordClaimTransitions(state, command, cwd, env, event, invocations) {
+  const transitionInvocations = invocations.flatMap((invocation) => {
+    const flags = commandTransitionFlags(invocation.args);
+    return flagEnabled(invocation.globals, ["--help", "-h"]) || flags.help ? [] : [{ flags, invocation }];
+  });
   const commandTokens = tokenizeShell(command);
   const terminalToken = commandTokens.findLast((token) => token.value !== `
 `)?.value;
-  const executables = parsedCommand.commands.map((position) => position.executable?.split("/").pop());
-  const directCommand = executables.length === 1 && executables[0] === "bd" || executables.length === 2 && executables[0] === "cd" && executables[1] === "bd" && leadingCdCwd(command, "") !== "";
-  const mutationSucceededDirectly = !parsedCommand.unknown && parsedCommand.nested.length === 0 && directCommand && invocations.length === 1 && terminalToken !== "&";
+  const safeCdAndBd = /^\s*cd\s+[^;&|<>]+&&\s*(?:[A-Za-z_][A-Za-z0-9_]*=(?:'[^']*'|"[^"]*"|\S+)\s+)*['"]?bd['"]?\b/u.test(command);
+  const lexicalMutation = transitionInvocations.length === 1 && terminalToken !== "&" && !/\$\(|[;|<>]/u.test(command) && (!command.includes("&&") || safeCdAndBd);
+  const mutationSucceededDirectly = lexicalMutation;
   const output = claimResultOutput(event);
   const allOutputIds = new Set(claimedIds(output));
   const labeledOutputIds = new Set(claimedTextIds(output));
-  const claimInvocations = invocations.flatMap((invocation) => {
-    const enabled = invocation.verb === "claim" || (invocation.verb === "update" || invocation.verb === "ready") && flagEnabled(invocation.args, ["--claim"]);
-    const actor = enabled ? invocationActor(invocation, env) : null;
-    return actor === null ? [] : [{ actor, directIds: mutationTargetIds(invocation.args) }];
+  const claimInvocations = transitionInvocations.flatMap(({ flags, invocation }) => {
+    const enabled = invocation.verb === "claim" || (invocation.verb === "update" || invocation.verb === "ready") && flags.claim;
+    const actor = enabled ? flags.actorOverride ?? invocationActor(invocation, env) : null;
+    return actor === null ? [] : [{ actor, directIds: mutationTargetIds(invocation.args), invocation, target: claimTarget(invocation, cwd, env) }];
   });
-  const actorsById = new Map;
-  for (const { actor, directIds } of claimInvocations) {
+  const actorsByClaim = new Map;
+  for (const { actor, directIds, target } of claimInvocations) {
     for (const id of directIds) {
-      const actors = actorsById.get(id) ?? new Set;
+      const key = trackedClaimKey(target, id);
+      const actors = actorsByClaim.get(key) ?? new Set;
       actors.add(actor);
-      actorsById.set(id, actors);
+      actorsByClaim.set(key, actors);
     }
   }
-  for (const { actor, directIds } of claimInvocations) {
+  for (const { actor, directIds, target } of claimInvocations) {
     if (mutationSucceededDirectly) {
+      state.actors.add(actor);
       for (const id of directIds.length > 0 ? directIds : allOutputIds)
-        state.claims.set(id, actor);
+        setTrackedClaim(state, target, id, actor);
       continue;
     }
     for (const id of directIds) {
       if (!labeledOutputIds.has(id))
         continue;
-      const actors = actorsById.get(id);
-      state.claims.set(id, actors?.size === 1 ? actor : undefined);
+      const actors = actorsByClaim.get(trackedClaimKey(target, id));
+      state.actors.add(actor);
+      setTrackedClaim(state, target, id, actors?.size === 1 ? actor : undefined);
     }
   }
   if (!mutationSucceededDirectly)
     return;
+  const entry = transitionInvocations[0];
+  if (entry === undefined)
+    return;
+  const { invocation } = entry;
+  const target = claimTarget(invocation, cwd, env);
   for (const close of closeInvocations(command)) {
     for (const id of close.ids)
-      state.claims.delete(id);
+      deleteTrackedClaim(state, target, id);
   }
-  const [invocation] = invocations;
-  if (invocation?.verb === "assign") {
+  if (invocation.verb === "assign") {
     const [idToken, assignee] = invocation.args;
     const [id] = idToken === undefined ? [] : beadIdCandidates(idToken);
     if (id !== undefined && assignee !== undefined) {
       if (state.actors.has(assignee))
-        state.claims.set(id, assignee);
+        setTrackedClaim(state, target, id, assignee);
       else
-        state.claims.delete(id);
+        deleteTrackedClaim(state, target, id);
     }
     return;
   }
-  if (invocation?.verb !== "update")
+  if (invocation.verb !== "update")
     return;
   const status = optionValue(invocation.args, ["--status", "-s"]);
   const assignee = optionValue(invocation.args, ["--assignee", "-a"]);
   for (const id of mutationTargetIds(invocation.args)) {
     if (status === "closed" || assignee === "")
-      state.claims.delete(id);
+      deleteTrackedClaim(state, target, id);
     else if (assignee !== undefined) {
       if (state.actors.has(assignee))
-        state.claims.set(id, assignee);
+        setTrackedClaim(state, target, id, assignee);
       else
-        state.claims.delete(id);
+        deleteTrackedClaim(state, target, id);
     }
   }
 }
 var SAFE_RELEASE_IDENTIFIER = /^[A-Za-z0-9][A-Za-z0-9._/-]*$/;
 function releaseClaimArgs(id, holder, env = process.env, releasedAt = new Date().toISOString(), casSupported = true) {
   const actor = env.BD_ACTOR?.trim() || env.BEADS_ACTOR?.trim() || "";
+  if (!casSupported)
+    return;
   if (!SAFE_RELEASE_IDENTIFIER.test(id) || !SAFE_RELEASE_IDENTIFIER.test(holder) || !SAFE_RELEASE_IDENTIFIER.test(actor))
     return;
   if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(releasedAt))
     return;
-  const args = [
-    "update",
-    id,
-    "--assignee",
-    "",
-    "--status",
-    "open",
-    "--set-metadata",
-    `release_actor=${actor}`,
-    "--set-metadata",
-    `released_at=${releasedAt}`,
-    "--set-metadata",
-    `released_from=${holder}`
-  ];
-  if (casSupported)
-    args.push("--if-assignee", holder);
-  return args;
+  const reason = `session release by ${actor} at ${releasedAt}; previous holder ${holder}`;
+  return ["unclaim", id, "--reason", reason, "--if-assignee", holder];
+}
+function restoreReleasedStatusArgs(id, status) {
+  if (status === "in_progress")
+    return ["update", id, "--status", "open", "--if-status", "open", "--if-assignee", ""];
+  if (status === "blocked" || status === "deferred")
+    return ["update", id, "--status", status, "--if-status", "open", "--if-assignee", ""];
+  return;
 }
 function shellQuote(value) {
   return `'${value.replaceAll("'", "'\\''")}'`;
 }
-function releaseClaimCommand(id, holder, env = process.env, releasedAt = new Date().toISOString(), casSupported = true) {
+function releaseClaimCommand(id, holder, env = process.env, releasedAt = new Date().toISOString(), casSupported = true, targetStore) {
   const args = releaseClaimArgs(id, holder, env, releasedAt, casSupported);
   if (args === undefined)
     return;
   const actor = env.BD_ACTOR?.trim() || env.BEADS_ACTOR?.trim() || "";
-  return [`BEADS_ACTOR=${shellQuote(actor)}`, `BD_ACTOR=${shellQuote(actor)}`, "bd", ...args].map((value, index) => index < 2 ? value : shellQuote(value)).join(" ");
+  const assignments = [`BEADS_ACTOR=${shellQuote(actor)}`, `BD_ACTOR=${shellQuote(actor)}`];
+  if (targetStore !== undefined)
+    assignments.unshift(`BEADS_DIR=${shellQuote(targetStore)}`);
+  return [...assignments, "bd", ...args.map(shellQuote)].join(" ");
 }
 function readBeads(stdout) {
   const data = envelopeData(parseTrailingJson(stdout));
@@ -1692,9 +2126,9 @@ function formatSessionCloseAdvisory(beads, env = process.env, releasedAt = new D
     if (anchor !== undefined)
       lines.push(`  Lease anchor: host=${anchor.host} pid=${anchor.pid}; check that process on that host before takeover.`);
     const actor = bead.assignee !== undefined && effectiveActors.has(bead.assignee) ? bead.assignee : undefined;
-    const release = bead.assignee === undefined || actor === undefined ? undefined : releaseClaimCommand(bead.id, bead.assignee, { ...env, BD_ACTOR: actor }, releasedAt, casSupported);
+    const release = bead.assignee === undefined || actor === undefined || bead.releaseStore === null ? undefined : releaseClaimCommand(bead.id, bead.assignee, { ...env, BD_ACTOR: actor }, releasedAt, casSupported, bead.releaseStore);
     if (release === undefined) {
-      lines.push("  Release unavailable: the effective actor is missing or ambiguous; verify the current assignee and actor before retrying.");
+      lines.push(casSupported ? "  Release unavailable: the effective actor is missing or ambiguous; verify the current assignee and actor before retrying." : "  Release unavailable: bd >= 1.3 is required for atomic --if-assignee; the claim remains assigned.");
     } else {
       lines.push(`  Release with: ${release}`);
       if (!casSupported)
@@ -1710,13 +2144,14 @@ function formatSessionCloseAdvisory(beads, env = process.env, releasedAt = new D
 function trackedClaimAdvisory(state) {
   if (state.claims.size === 0)
     return;
-  const claims = [...state.claims].map(([id, assignee]) => ({
-    id,
+  const claims = [...state.claims.values()].map((claim) => ({
+    id: claim.id,
     title: "claim recorded by this session",
     status: "in_progress",
-    assignee
+    assignee: claim.actor,
+    releaseStore: claim.store ?? null
   }));
-  return formatSessionCloseAdvisory(claims, {}, new Date().toISOString(), true, state.actors);
+  return formatSessionCloseAdvisory(claims, {}, new Date().toISOString(), state.casSupported !== false, state.actors);
 }
 function boundedFailure(reason) {
   const oneLine = reason.replace(/\s+/g, " ").trim();
@@ -1735,6 +2170,90 @@ function handleSessionStop(event, listOutput, seen, actor = process.env.BEADS_AC
     return;
   const actors = typeof actor === "string" ? new Set(actor.trim() ? [actor.trim()] : []) : actor;
   return { continue: true, additionalContext: formatSessionCloseAdvisory(held, {}, new Date().toISOString(), casSupported, actors) };
+}
+var backgroundReads = new Set;
+function track(pending) {
+  backgroundReads.add(pending);
+  const forget = () => {
+    backgroundReads.delete(pending);
+  };
+  pending.then(forget, forget);
+  return pending;
+}
+async function settleBackgroundWorkForTests() {
+  while (backgroundReads.size > 0)
+    await Promise.allSettled([...backgroundReads]);
+}
+async function settleWithin(pending, budgetMs) {
+  if (budgetMs <= 0)
+    return;
+  const { promise, resolve } = Promise.withResolvers();
+  const timer = setTimeout(resolve, budgetMs);
+  timer.unref();
+  try {
+    return await Promise.race([pending, promise]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+function terminalAgentEnd(event) {
+  return event === null || typeof event !== "object" || event.willContinue !== true;
+}
+async function releaseClaimsAtAgentEnd(state, cwd, report) {
+  const deadline = Date.now() + BD_COMMAND_CEILING_MS;
+  for (const [key, claim] of [...state.claims]) {
+    const actor = claim.actor;
+    if (actor === undefined || claim.store === undefined)
+      continue;
+    try {
+      const env = lifecycleBdEnvironment(cwd, { BD_ACTOR: actor, BEADS_ACTOR: actor });
+      env.BEADS_DIR = claim.store;
+      const shown = await runBdResult(cwd, ["show", claim.id, "--json"], deadline, env);
+      if (!("output" in shown)) {
+        report(`terminal claim read for ${claim.id} was not verified: ${shown.failure}`);
+        continue;
+      }
+      const rows = envelopeData(parseTrailingJson(shown.output));
+      if (!Array.isArray(rows)) {
+        report(`terminal claim read for ${claim.id} returned malformed data; release was refused`);
+        continue;
+      }
+      const bead = rows.find((row) => row !== null && typeof row === "object" && ("id" in row) && row.id === claim.id);
+      if (bead === undefined || bead === null || typeof bead !== "object")
+        continue;
+      const record = bead;
+      if (record.assignee !== actor || !["epic", "task"].includes(String(record.issue_type)) || !["open", "in_progress", "blocked", "deferred"].includes(String(record.status)))
+        continue;
+      if (state.casSupported === false) {
+        report(`terminal claim ${claim.id} remains assigned: bd >= 1.3 is required for atomic --if-assignee; no automatic release was attempted`);
+        continue;
+      }
+      const release = releaseClaimArgs(claim.id, actor, env, new Date().toISOString(), true);
+      if (release === undefined)
+        continue;
+      const released = await runBdResult(cwd, release, deadline, env);
+      if (!("output" in released)) {
+        if (/--if-assignee/i.test(released.failure) && /(?:unknown|unrecognized|unsupported|invalid|unexpected).*(?:flag|option)|(?:flag|option).*(?:unknown|unrecognized|unsupported|invalid|unexpected)/i.test(released.failure)) {
+          state.casSupported = false;
+          report(`terminal claim ${claim.id} remains assigned: bd >= 1.3 is required for atomic --if-assignee; no automatic release was attempted`);
+        } else {
+          report(`terminal claim release for ${claim.id} was not verified: ${released.failure}`);
+        }
+        continue;
+      }
+      const restore = restoreReleasedStatusArgs(claim.id, String(record.status));
+      if (restore !== undefined) {
+        const restored = await runBdResult(cwd, restore, deadline, env);
+        if (!("output" in restored)) {
+          report(`terminal claim status restore for ${claim.id} was not verified: ${restored.failure}`);
+          continue;
+        }
+      }
+      state.claims.delete(key);
+    } catch (error) {
+      report(`terminal claim release for ${claim.id} failed: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
 }
 var internalRuns = 0;
 var injectedStream = null;
@@ -1775,9 +2294,11 @@ async function spawnBd(cwd, args, deadline, env) {
       stdout: "pipe",
       stderr: "pipe",
       env: { ...env, BD_NO_PAGER: "1", BD_NON_INTERACTIVE: "1", BD_JSON_ENVELOPE: "1" },
-      timeout: Math.min(TIMEOUT_MS, remaining),
+      timeout: Math.min(BD_COMMAND_CEILING_MS, remaining),
       killSignal: "SIGKILL"
     });
+    if (!writesStore(invocationFromArgv(args)))
+      proc.unref();
     const [out, stderr] = await Promise.all([
       new Response(proc.stdout).text(),
       new Response(proc.stderr).text()
@@ -1810,32 +2331,38 @@ function consumeLastPush(dir) {
   } catch {}
   return notice;
 }
-async function gateAdvisory(cwd, deadline, env) {
-  const listed = await runBdResult(cwd, ["gate", "list", "--json"], deadline, env);
+async function gateAdvisory(cwd, env) {
+  const runGate = (args) => runBdResult(cwd, args, Date.now() + BD_COMMAND_CEILING_MS, env);
+  const listed = await runGate(["gate", "list", "--json"]);
   if (!("output" in listed))
-    return bdReadFailure("start", listed.failure);
+    return { notice: bdReadFailure("start", listed.failure), verified: false };
   let gates = readGateList(listed.output);
   if (gates === undefined)
-    return "Beads gate list returned malformed data; unresolved gates remain unverified.";
+    return { notice: "Beads gate list returned malformed data; unresolved gates remain unverified.", verified: false };
   if (gates.length === 0)
-    return;
+    return { verified: true };
   let outcome;
   if (gatesCanResolve(gates)) {
-    const checked = await runBdResult(cwd, ["gate", "check", "--json"], deadline, env);
+    const checked = await runGate(["gate", "check", "--json"]);
     if (!("output" in checked))
-      return bdReadFailure("start", checked.failure);
+      return { notice: bdReadFailure("start", checked.failure), verified: false };
     outcome = readCheckOutcome(checked.output);
+    if (outcome === undefined)
+      return { notice: "Beads gate check returned malformed data; unresolved gates remain unverified.", verified: false };
+    if (outcome.errors > 0) {
+      return { notice: `Beads gate check reported ${outcome.errors} error(s); unresolved gates remain unverified.`, verified: false };
+    }
     if (outcome.resolved > 0) {
-      const relisted = await runBdResult(cwd, ["gate", "list", "--json"], deadline, env);
+      const relisted = await runGate(["gate", "list", "--json"]);
       if (!("output" in relisted))
-        return bdReadFailure("start", relisted.failure);
+        return { notice: bdReadFailure("start", relisted.failure), verified: false };
       const relistedGates = readGateList(relisted.output);
       if (relistedGates === undefined)
-        return "Beads gate list returned malformed data; unresolved gates remain unverified.";
+        return { notice: "Beads gate list returned malformed data; unresolved gates remain unverified.", verified: false };
       gates = relistedGates;
     }
   }
-  return formatGateAdvisory(gates, outcome);
+  return { notice: formatGateAdvisory(gates, outcome), verified: true };
 }
 function resultText(event) {
   let text = "";
@@ -1846,9 +2373,18 @@ function resultText(event) {
   }
   return text;
 }
-var sessionPinGetter;
+var LIFECYCLE_BRIDGE = Symbol.for("com.srobroek.beads.session-lifecycle.bridge.v1");
+function lifecycleBridge() {
+  const globals = globalThis;
+  const existing = globals[LIFECYCLE_BRIDGE];
+  if (existing !== undefined)
+    return existing;
+  const created = {};
+  globals[LIFECYCLE_BRIDGE] = created;
+  return created;
+}
 function pinnedBeadsDir(cwd, ctx) {
-  const pin = ctx === undefined ? undefined : sessionPinGetter?.(cwd, ctx);
+  const pin = ctx === undefined ? undefined : lifecycleBridge().sessionPinGetter?.(cwd, ctx);
   return pin ?? (ctx === undefined ? sessionPinFor(cwd) : undefined);
 }
 function rewriteBashInput(input, ctx) {
@@ -1856,13 +2392,46 @@ function rewriteBashInput(input, ctx) {
   const pin = pinnedBeadsDir(cwd, ctx);
   return pinBashInput(input, pin === "" ? undefined : pin);
 }
+async function admitBeadsWork(ctx, cwd = ctx?.cwd ?? process.cwd(), env = lifecycleBdEnvironment(cwd), refresh = true) {
+  const gateAdmitter = lifecycleBridge().gateAdmitter;
+  if (gateAdmitter === undefined)
+    return;
+  return await gateAdmitter(resolve4(cwd), boundedBdEnvironment(env), ctx, refresh);
+}
+async function admitBdMutation(input, ctx, targetEnabled) {
+  const command = commandFromInput(input ?? {});
+  if (!command)
+    return;
+  if (/\bcd\s+(?:"[^"]*\$[^"]*"|'[^']*\$[^']*'|\$[A-Za-z_])/u.test(command)) {
+    return { block: true, reason: "cannot resolve the dynamic working directory before this mutation" };
+  }
+  const writes = bdInvocations(command).filter((invocation) => writesStore(invocation));
+  if (writes.some((invocation) => invocation.prefix.some((token) => token.startsWith("BEADS_DIR=") && /[$`]/u.test(token)))) {
+    return { block: true, reason: "Beads directory is selected dynamically and cannot be verified before this mutation" };
+  }
+  if (writes.length === 0)
+    return;
+  const effectiveInput = rewriteBashInput(input, ctx) ?? input;
+  const cwd = bashCallCwd(effectiveInput, ctx?.cwd ?? process.cwd());
+  const env = environmentForInput(effectiveInput);
+  const writeTargets = embeddedWriteTargets(command, cwd, env);
+  if (writeTargets.kind === "refused")
+    return { block: true, reason: writeTargets.reason };
+  const direct = writes.length === 1 ? writes[0] : undefined;
+  if (direct !== undefined && bdInvocationUsesExternalStore(direct))
+    return;
+  const store = direct === undefined ? undefined : bdStoreForInvocation(direct, cwd, env);
+  if (targetEnabled?.(store === undefined ? cwd : dirname3(store)) === false)
+    return;
+  return await admitBeadsWork(ctx, cwd, store === undefined ? env : { ...env, BEADS_DIR: store }, false);
+}
 function sessionBeadsLifecycle(pi) {
   const sessions = new Map;
   function stateFor(ctx) {
     const key = sessionKey(ctx);
     let state = sessions.get(key);
     if (!state) {
-      state = { actors: new Set, bdWrote: false, claims: new Map, repos: new Map, staleAdvised: false, stopFired: false, touched: new Set };
+      state = { actors: new Set, bdWrote: false, claims: new Map, gates: new Map, repos: new Map, staleAdvised: false, stopFired: false, touched: new Set };
       sessions.set(key, state);
     }
     return state;
@@ -1876,11 +2445,56 @@ function sessionBeadsLifecycle(pi) {
     state.repos.set(key, identity);
     return identity;
   }
-  sessionPinGetter = (cwd, ctx) => {
+  const advise = (content) => {
+    pi.sendMessage({ customType: "com.srobroek.beads.session-lifecycle", content, display: true, attribution: "user" }, { triggerTurn: false });
+  };
+  lifecycleBridge().sessionPinGetter = (cwd, ctx) => {
+    const localStore = join2(resolve4(cwd), ".beads");
+    const local = (() => {
+      try {
+        return statSync3(localStore).isDirectory() ? realpathSync3(localStore) : undefined;
+      } catch {
+        return;
+      }
+    })();
     const state = sessions.get(sessionKey(ctx));
-    if (state?.repo !== undefined && identityFor(state, cwd) !== state.repo)
+    if (state !== undefined) {
+      if (state.repo !== undefined && identityFor(state, cwd) !== state.repo)
+        return;
+      const inherited = process.env.BEADS_DIR;
+      const nonRepository = state.repo === resolve4(cwd);
+      if (nonRepository && local !== undefined && state.pin === inherited && local !== inherited)
+        return local;
+      return state.pin ?? sessionPinFor(cwd) ?? local;
+    }
+    return process.env.BEADS_DIR ?? sessionPinFor(cwd) ?? local;
+  };
+  const verificationFor = (key, state, cwd, env, refresh = false) => {
+    const dir = bdStoreDir(cwd, env);
+    if (dir === undefined)
       return;
-    return state?.pin ?? process.env.BEADS_DIR ?? sessionPinFor(cwd);
+    const existing = state.gates.get(dir);
+    if (existing !== undefined && (existing.verdict === undefined || !refresh && existing.verdict.verified === true || existing.verdict.verified === true && existing.admitted !== true))
+      return existing;
+    if (existing !== undefined)
+      state.gates.delete(dir);
+    const verification = (async () => {
+      try {
+        return await gateAdvisory(cwd, env);
+      } catch (error) {
+        const reason = error instanceof Error ? error.message : String(error);
+        pi.logger.error("beads gate check failed", { error: reason, store: dir });
+        return { notice: bdReadFailure("start", reason), verified: false };
+      }
+    })();
+    const gate = { pending: verification };
+    state.gates.set(dir, gate);
+    track(verification.then((verdict) => {
+      gate.verdict = verdict;
+      if (verdict.notice !== undefined && sessions.get(key) === state)
+        advise(verdict.notice);
+    }));
+    return gate;
   };
   pi.on("session_start", async (_event, ctx) => {
     const key = sessionKey(ctx);
@@ -1891,37 +2505,45 @@ function sessionBeadsLifecycle(pi) {
       const pin = autoPinBeadsDir(cwd, key, (id) => sessions.has(id));
       state.repo = identityFor(state, cwd);
       state.pin = sessionPinAfter(pin, cwd);
-      if (pin.conflict !== undefined) {
-        pi.sendMessage({
-          customType: "com.srobroek.beads.session-lifecycle",
-          content: `This process is pinned to another repository's beads database (\`BEADS_DIR=${pin.conflict}\`) by a live session. ` + "Bash calls in this checkout use its own `.beads`; calls in other repositories remain unpinned unless they provide `BEADS_DIR`.",
-          display: true,
-          attribution: "user"
-        }, { triggerTurn: false });
+      if (state.repo === undefined) {
+        if (existsSync2(join2(cwd, ".beads")))
+          advise("Beads session-start unverified: repository identity unknown; gate verification was skipped.");
         return;
+      }
+      if (pin.conflict !== undefined) {
+        advise(`This process is pinned to another repository's beads database (\`BEADS_DIR=${pin.conflict}\`) by a live session. ` + "Bash calls in this checkout use its own `.beads`; calls in other repositories remain unpinned unless they provide `BEADS_DIR`.");
       }
       const bdEnv = lifecycleBdEnvironment(cwd);
       const dir = bdStoreDir(cwd, bdEnv);
       if (dir === undefined)
         return;
-      const deadline = Date.now() + TIMEOUT_MS;
-      const notices = [consumeLastPush(dir), await gateAdvisory(cwd, deadline, bdEnv)].filter((notice) => notice !== undefined);
-      if (sessions.get(key) !== state || notices.length === 0)
-        return;
-      pi.sendMessage({
-        customType: "com.srobroek.beads.session-lifecycle",
-        content: notices.join(`
-
-`),
-        display: true,
-        attribution: "user"
-      }, { triggerTurn: false });
+      const pushed = consumeLastPush(dir);
+      if (pushed !== undefined)
+        advise(pushed);
+      verificationFor(key, state, cwd, bdEnv);
     } catch (error) {
       pi.logger.error("beads session-start check failed", {
         error: error instanceof Error ? error.message : String(error)
       });
     }
   });
+  lifecycleBridge().gateAdmitter = async (cwd, env, ctx, refresh) => {
+    const key = sessionKey(ctx);
+    const state = sessions.get(key);
+    if (state === undefined)
+      return;
+    const gate = verificationFor(key, state, cwd, env, refresh);
+    if (gate === undefined)
+      return;
+    if (gate.verdict === undefined)
+      await settleWithin(gate.pending, GATE_ADMISSION_MS);
+    if (gate.verdict?.verified === true) {
+      gate.admitted = true;
+      return;
+    }
+    const reason = gate.verdict?.notice === undefined ? `automatic beads gates are still being verified for ${cwd} after ${GATE_ADMISSION_MS} ms, so an automatic gate may still be unresolved and this operation would pick or change work ahead of it. The read is slow, not failed` : `automatic beads gates could not be verified for ${cwd}, so this operation could pick or change work while a gate remains unresolved. ${gate.verdict.notice}`;
+    return { block: true, reason };
+  };
   pi.on("session_shutdown", (_event, ctx) => {
     const key = sessionKey(ctx);
     const state = sessions.get(key);
@@ -1944,18 +2566,23 @@ function sessionBeadsLifecycle(pi) {
         return;
       const input = event.input ?? {};
       const command = commandFromInput(input);
-      if (!command || !/\bbd\s+/.test(command))
+      if (!command)
+        return;
+      const invocations = bdInvocations(command);
+      if (invocations.length === 0)
         return;
       const state = stateFor(ctx);
       if (isBdWrite(command)) {
         state.bdWrote = true;
-        const env = environmentForInput(input);
+        const effectiveInput = rewriteBashInput(input, ctx) ?? input;
+        const cwd = bashCallCwd(effectiveInput, ctx?.cwd ?? process.cwd());
+        const env = environmentForInput(effectiveInput);
         for (const actor of actorValues(command, env))
           state.actors.add(actor);
         for (const id of beadIdCandidates(command))
           state.touched.add(id);
         if (commandSucceeded(event))
-          recordClaimTransitions(state, command, env, event);
+          recordClaimTransitions(state, command, cwd, env, event, invocations);
       }
       if (state.staleAdvised)
         return;
@@ -1980,9 +2607,26 @@ function sessionBeadsLifecycle(pi) {
     state.stopFired = true;
     return { continue: true, additionalContext };
   });
+  pi.on("agent_end", async (event, ctx) => {
+    if (!terminalAgentEnd(event))
+      return;
+    const state = sessions.get(sessionKey(ctx));
+    if (state === undefined || state.claims.size === 0)
+      return;
+    const pending = releaseClaimsAtAgentEnd(state, ctx?.cwd ?? process.cwd(), (message) => {
+      pi.logger.error("beads terminal claim release advisory", { message, outcome: event.outcome, status: event.status });
+    });
+    if (agentActor(ctx) !== undefined)
+      return await pending;
+    track(pending).catch((error) => {
+      pi.logger.error("beads terminal claim release failed", { error: error instanceof Error ? error.message : String(error) });
+    });
+  });
 }
 export {
   AUTO_GATE_TYPES,
+  admitBdMutation,
+  admitBeadsWork,
   autoPinBeadsDir,
   bdVerbs,
   beadIdCandidates,
@@ -2016,5 +2660,6 @@ export {
   sessionPinAfter,
   sessionPinFor,
   setBdStreamForTests,
+  settleBackgroundWorkForTests,
   staleSkipNotice
 };

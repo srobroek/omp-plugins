@@ -4,8 +4,11 @@
 from __future__ import annotations
 
 import argparse
+import shlex
+import fnmatch
 import json
 import os
+import shutil
 from pathlib import Path
 import re
 import subprocess
@@ -160,7 +163,7 @@ def check_cwd_is_worktree(ctx: Context) -> Result:
             )
             if part
         )
-        return Result("skip", details or "git directory topology could not be determined")
+        return Result("fail", details or "git directory topology could not be determined")
 
     git_path = resolve_git_path(git_raw, ctx.cwd)
     common_path = resolve_git_path(common_raw, ctx.cwd)
@@ -187,6 +190,65 @@ def parse_json_object(text: str) -> dict[str, Any] | None:
     return None
 
 
+def _is_path_token(token: str) -> bool:
+    return token.startswith(("/", "./", "../", "~/")) or ("/" in token and not token.startswith("-"))
+
+
+def _resolve_path_token(token: str, cwd: Path) -> Path:
+    path = Path(token).expanduser()
+    return (path if path.is_absolute() else cwd / path).resolve()
+
+
+def _command_tokens(command: dict[str, Any]) -> list[str] | None:
+    raw = command.get("command")
+    if not isinstance(raw, str) or not raw.strip():
+        return None
+    try:
+        tokens = shlex.split(raw)
+    except ValueError:
+        return None
+    return tokens or None
+
+
+def resolve_hook_executable(command: dict[str, Any], cwd: Path) -> tuple[str, Path | None] | None:
+    tokens = _command_tokens(command)
+    if tokens is None:
+        return None
+    index = 0
+    while index < len(tokens) and re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", tokens[index]):
+        index += 1
+    if index >= len(tokens):
+        return None
+    token = tokens[index]
+    if _is_path_token(token):
+        return token, _resolve_path_token(token, cwd)
+    resolved = shutil.which(token)
+    return token, Path(resolved).resolve() if resolved else None
+
+
+def declared_hook_paths(command: dict[str, Any], cwd: Path) -> list[Path]:
+    tokens = _command_tokens(command)
+    if tokens is None:
+        return []
+    index = 0
+    while index < len(tokens) and re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", tokens[index]):
+        index += 1
+    if index >= len(tokens):
+        return []
+    paths: list[Path] = []
+    for token in tokens[index + 1 :]:
+        if _is_path_token(token):
+            path = _resolve_path_token(token, cwd)
+            if path not in paths:
+                paths.append(path)
+    return paths
+
+
+def declared_hook_path(command: dict[str, Any], cwd: Path) -> Path | None:
+    resolved = resolve_hook_executable(command, cwd)
+    return None if resolved is None else resolved[1]
+
+
 def check_hook_approvals(ctx: Context, fresh: bool = False) -> Result:
     result = ctx.run("wt", "config", "approvals", "list", "--format=json", use_cache=not fresh)
     if result.returncode != 0:
@@ -202,22 +264,53 @@ def check_hook_approvals(ctx: Context, fresh: bool = False) -> Result:
     if not isinstance(commands, list):
         commands = []
     unapproved: list[str] = []
+    missing: list[str] = []
+    non_executable: list[str] = []
+    unreadable: list[str] = []
     for command in commands:
-        if isinstance(command, dict) and command.get("approved") is False:
-            phase = str(command.get("phase", "?"))
-            name = str(command.get("name", "?"))
-            unapproved.append(f"{phase}/{name}")
+        if not isinstance(command, dict):
+            continue
+        phase = str(command.get("phase", "?"))
+        name = str(command.get("name", "?"))
+        label = f"{phase}/{name}"
+        if command.get("approved") is False:
+            unapproved.append(label)
+        resolved = resolve_hook_executable(command, ctx.cwd)
+        if resolved is None:
+            missing.append(f"{label} (missing or invalid command)")
+            continue
+        executable, executable_path = resolved
+        if executable_path is None:
+            missing.append(f"{label} (command {executable!r} not found on PATH)")
+        elif not executable_path.is_file():
+            missing.append(f"{label} ({executable_path})")
+        elif not os.access(executable_path, os.X_OK):
+            non_executable.append(f"{label} ({executable_path})")
+        for path in declared_hook_paths(command, ctx.cwd):
+            if not path.is_file():
+                missing.append(f"{label} ({path})")
+            elif not os.access(path, os.R_OK):
+                unreadable.append(f"{label} ({path})")
 
     stale = data.get("stale")
     stale_items = stale if isinstance(stale, list) else []
     stale_detail = f"; stale entries: {one_line(json.dumps(stale_items, sort_keys=True))}" if stale_items else ""
+    hook_detail = ""
+    if missing:
+        hook_detail += f"; missing hook executables: {', '.join(missing)}"
+    if non_executable:
+        hook_detail += f"; non-executable hook files: {', '.join(non_executable)}"
+    if unreadable:
+        hook_detail += f"; unreadable hook scripts: {', '.join(unreadable)}"
+    if hook_detail:
+        return Result("fail", f"declared hook verification failed{hook_detail}")
     if state == "approval_required":
         names = ", ".join(unapproved) if unapproved else "unlisted commands"
         return Result("fail", f"approval_required; unapproved project hooks: {names}{stale_detail}", APPROVALS_FIX)
     if state in {"no_commands", "approved"}:
         if stale_items:
             return Result("warn", f"state={state}; no unapproved hooks{stale_detail}")
-        return Result("pass", f"state={state}")
+        return Result("pass", f"state={state}; declared hooks present, executable, and approved")
     return Result("skip", f"unrecognized approvals state {state!r}{stale_detail}")
 
 
@@ -271,10 +364,56 @@ def parse_section(path: Path, wanted: str) -> dict[str, str]:
             continue
         if section != wanted:
             continue
-        key_match = re.match(r"^([A-Za-z0-9_-]+)\s*=\s*(.*?)\s*$", stripped)
+        key_match = re.match(r"^([A-Za-z0-9_.-]+)\s*=\s*(.*?)\s*$", stripped)
         if key_match:
             values[key_match.group(1)] = key_match.group(2)
     return values
+
+
+def repository_project_id(ctx: Context) -> str | None:
+    result = ctx.run("git", "config", "--get", "remote.origin.url")
+    remote = first_nonempty_line(result.stdout)
+    if result.returncode != 0 or not remote:
+        return None
+    if remote.startswith("git@") and ":" in remote:
+        host, path = remote[4:].split(":", 1)
+        remote = f"{host}/{path}"
+    else:
+        remote = re.sub(r"^[A-Za-z][A-Za-z0-9+.-]*://", "", remote)
+        remote = re.sub(r"^[^@/]+@", "", remote)
+    remote = remote.split("?", 1)[0].split("#", 1)[0].rstrip("/")
+    if remote.endswith(".git"):
+        remote = remote[:-4]
+    return remote or None
+
+
+def project_merge_values(path: Path, project_id: str | None) -> dict[str, str]:
+    if project_id is None:
+        return {}
+    values = parse_section(path, f'projects."{project_id}"')
+    return {
+        key.removeprefix("merge."): value
+        for key, value in values.items()
+        if key.removeprefix("merge.") in {"squash", "ff"}
+    }
+
+
+def include_covers_dependency(pattern: str, dependency: str) -> bool:
+    normalized = pattern.strip()
+    if not normalized or normalized.startswith("#") or normalized.startswith("!"):
+        return False
+    normalized = normalized.removeprefix("./").lstrip("/").rstrip("/")
+    if normalized.startswith("**/"):
+        normalized = normalized[3:]
+    candidates = (dependency, f"{dependency}/", f"{dependency}/placeholder")
+    return any(fnmatch.fnmatchcase(candidate, normalized) for candidate in candidates)
+
+
+def include_patterns(path: Path) -> list[str] | None:
+    try:
+        return path.read_text(encoding="utf-8").splitlines()
+    except (OSError, UnicodeError):
+        return None
 
 
 def format_values(values: dict[str, str]) -> str:
@@ -293,9 +432,18 @@ def check_merge_evidence(ctx: Context) -> Result:
     # wt's warning remains authoritative when a config was changed between reads.
     if not project_values and "merge" in ctx.ignored_config_keys:
         project_values = {"merge": "declared by Worktrunk warning"}
-    user_values = parse_section(Path.home() / ".config" / "worktrunk" / "config.toml", "merge")
+    user_path = Path.home() / ".config" / "worktrunk" / "config.toml"
+    user_values = parse_section(user_path, "merge")
+    project_id = repository_project_id(ctx)
+    scoped_values = project_merge_values(user_path, project_id)
+    user_values = {**user_values, **scoped_values}
     user_detail = f"user config: {format_values(user_values)}"
-    invocation_detail = "Reliable control: explicit wt merge --no-squash --no-ff per invocation."
+    if scoped_values:
+        user_detail += f" (project {project_id})"
+    invocation_detail = (
+        "Reliable control: explicit wt merge --no-squash --no-ff on every worker-to-epic merge; "
+        "an epic-to-default merge may be plain or squashing."
+    )
 
     if project_values:
         return Result(
@@ -330,8 +478,67 @@ def check_provisioning_include(ctx: Context) -> Result:
             "wt step copy-ignored",
         )
     if ignored:
+        patterns = include_patterns(include)
+        if patterns is None:
+            return Result("warn", f".worktreeinclude exists but cannot be read; ignored dependency directories: {', '.join(ignored)}", "repair .worktreeinclude, then run wt step copy-ignored")
+        missing = [dependency for dependency in ignored if not any(include_covers_dependency(pattern, dependency) for pattern in patterns)]
+        if missing:
+            return Result(
+                "warn",
+                f"ignored dependency directories not matched by {include}: {', '.join(missing)}; a fresh worktree may have incomplete dependencies",
+                "add matching <directory>/ patterns to .worktreeinclude, then run wt step copy-ignored",
+            )
         return Result("pass", f"ignored dependency directories {', '.join(ignored)} are covered by {include}")
     return Result("pass", "node_modules, target, and .venv are not ignored dependency directories")
+
+def check_node_modules_integrity(ctx: Context) -> Result:
+    root = ctx.require_git_root()
+    if root is None:
+        return Result("skip", "git repository root is unavailable; node_modules integrity cannot be inspected")
+    node_modules = root / "node_modules"
+    if not node_modules.is_dir():
+        return Result("skip", "node_modules is absent; run the provisioning include check first")
+
+    package_json = root / "package.json"
+    declared: list[str] = []
+    if package_json.exists():
+        try:
+            package = json.loads(package_json.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, json.JSONDecodeError) as error:
+            fix = "repair package.json, run bun install --frozen-lockfile, then rerun the Worktrunk preflight"
+            return Result("warn", f"package.json is unreadable or invalid: {error}", fix)
+        if not isinstance(package, dict):
+            fix = "repair package.json to contain a JSON object, run bun install --frozen-lockfile, then rerun the Worktrunk preflight"
+            return Result("warn", "package.json is invalid: the top-level value must be an object", fix)
+    else:
+        package = {}
+    for section in ("dependencies", "devDependencies"):
+        values = package.get(section)
+        if values is None:
+            continue
+        if not isinstance(values, dict):
+            fix = f"repair package.json {section} to be an object, run bun install --frozen-lockfile, then rerun the Worktrunk preflight"
+            return Result("warn", f"package.json is invalid: {section} must be an object", fix)
+        declared.extend(name for name in values if isinstance(name, str))
+    missing = sorted({name for name in declared if not (node_modules / name).exists()})
+    if missing:
+        shown = ", ".join(missing[:8])
+        if len(missing) > 8:
+            shown += f", and {len(missing) - 8} more"
+        return Result(
+            "warn",
+            f"node_modules is partial; missing declared packages: {shown}",
+            "bun install --frozen-lockfile, then rerun the Worktrunk preflight",
+        )
+
+    bun_types = node_modules / "@types" / "bun"
+    if bun_types.exists() and not (bun_types / "index.d.ts").is_file():
+        return Result(
+            "warn",
+            "node_modules/@types/bun exists but index.d.ts is missing; this skeleton can make tsc report TS2688 while bun test passes",
+            "bun install --frozen-lockfile, then rerun the Worktrunk preflight",
+        )
+    return Result("pass", "declared node_modules packages and type packages are present")
 
 
 def check_plugin_installed(ctx: Context) -> Result:
@@ -377,6 +584,7 @@ CHECKS: list[tuple[str, Callable[[Context], Result]]] = [
     ("default-branch-resolves", check_default_branch),
     ("merge-evidence-policy", check_merge_evidence),
     ("provisioning-include", check_provisioning_include),
+    ("node-modules-integrity", check_node_modules_integrity),
     ("omp-plugin-installed", check_plugin_installed),
     ("commit-generation", check_commit_generation),
 ]
@@ -424,7 +632,10 @@ def main(argv: list[str] | None = None) -> int:
             refreshed.detail = f"approval command failed: {command_error(apply_result, APPROVALS_FIX)}; {refreshed.detail}"
         results[approval_index] = refreshed.as_dict("hook-approvals")
 
-    report = {"ok": not any(item["status"] == "fail" for item in results), "summary": summary(results), "checks": results}
+    strict = bool(args.only)
+    report = {"ok": not any(
+        item["status"] == "fail" or (strict and item["status"] != "pass") for item in results
+    ), "summary": summary(results), "checks": results}
     if args.as_json:
         print(json.dumps(report, separators=(",", ":")))
     else:

@@ -5,7 +5,8 @@
   "private": true,
   "omp": {
     "extensions": [
-      "./extensions/isolation-precheck.ts"
+		"./extensions/isolation-precheck.ts",
+		"./extensions/merge-policy-gate.ts"
     ]
   }
 }

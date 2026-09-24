@@ -13,8 +13,16 @@ const WRAPPERS: Record<string, true> = {
 	exec: true,
 	nohup: true,
 	nice: true,
-    sudo: true,
+	sudo: true,
 	xargs: true,
+	time: true,
+	"!": true,
+	if: true,
+	elif: true,
+	else: true,
+	while: true,
+	until: true,
+	do: true,
 };
 
 /** Split shell source at operators outside quoted words. */

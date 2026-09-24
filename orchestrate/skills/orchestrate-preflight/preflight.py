@@ -24,7 +24,15 @@ API_FIELDS = (
     "squash_merge_commit_title",
     "squash_merge_commit_message",
 )
-ROLE_RE = re.compile(r"\|\s*`agent:([^`]+)`\s*\|")
+CLAIM_POOLS = (
+    "pool:implementer",
+    "pool:implementer-high",
+    "pool:work-reviewer",
+    "pool:researcher",
+    "pool:shepherd",
+    "pool:operator",
+)
+CLAIM_POOLS_FIX = "bd config set claim.pools \"" + ",".join(CLAIM_POOLS) + "\""
 ISOLATION_FIX = r"sed -i '' '/^  isolation:/,/^  showResolvedModelBadge:/ s/^\([[:space:]]*enabled:[[:space:]]*\)true/\1false/' ~/.omp/agent/config.yml"
 
 
@@ -298,68 +306,188 @@ def upstream_policy_check() -> dict[str, Any]:
     return check("upstream-merge-policy", "pass", detail)
 
 
-def role_kinds() -> list[str]:
-    package_root = Path(__file__).resolve().parents[2]
-    roles_file = package_root / "rules" / "orchestrate-roles.md"
+def claim_pools_check() -> dict[str, Any]:
+    """Verify every role pool is configured in the active Beads ledger."""
+    if shutil.which("bd") is None:
+        return check("claim-pools", "skip", "bd is unavailable; cannot verify claim.pools")
+
+    argv = ["bd", "config", "get", "claim.pools"]
+    result = run_command(argv)
+    if result.returncode != 0:
+        return check(
+            "claim-pools",
+            "fail",
+            f"ledger check {shlex.join(argv)} failed: {command_error(result)}",
+            CLAIM_POOLS_FIX,
+        )
+
+    configured = {item.strip() for item in result.stdout.strip().split(",") if item.strip()}
+    missing = [pool for pool in CLAIM_POOLS if pool not in configured]
+    if missing:
+        return check(
+            "claim-pools",
+            "fail",
+            "claim.pools is missing required aliases: " + ", ".join(missing),
+            CLAIM_POOLS_FIX,
+        )
+    return check("claim-pools", "pass", "claim.pools contains all required aliases")
+
+THINKING_LEVELS = {"off", "minimal", "low", "medium", "high", "xhigh", "max", "auto"}
+
+
+def strip_thinking(selector: str) -> str:
+    """Drop a trailing :LEVEL thinking suffix; other colons (e.g. a model version ':0') stay."""
+    head, separator, tail = selector.rpartition(":")
+    return head if separator and tail in THINKING_LEVELS else selector
+
+
+def frontmatter_agents() -> tuple[list[tuple[str, str]], str | None]:
+    agents_dir = Path(__file__).resolve().parents[2] / "agents"
+    agents: list[tuple[str, str]] = []
     try:
-        text = roles_file.read_text(encoding="utf-8")
-    except OSError:
-        return []
-    return list(dict.fromkeys(ROLE_RE.findall(text)))
+        paths = sorted(agents_dir.glob("*.md"))
+    except OSError as error:
+        return [], f"could not read orchestrate agents: {error}"
+    for path in paths:
+        try:
+            text = path.read_text(encoding="utf-8")
+        except OSError as error:
+            return [], f"could not read {path}: {error}"
+        if not text.startswith("---\n"):
+            return [], f"{path} has no frontmatter"
+        end = text.find("\n---", 4)
+        if end < 0:
+            return [], f"{path} has unterminated frontmatter"
+        fields: dict[str, str] = {}
+        for line in text[4:end].splitlines():
+            key, separator, value = line.partition(":")
+            if not separator:
+                continue
+            value = value.strip()
+            if key.strip() in {"name", "model"}:
+                fields[key.strip()] = value.strip('"\'')
+        if not fields.get("name") or not fields.get("model"):
+            return [], f"{path} frontmatter must define name and model"
+        agents.append((fields["name"], fields["model"]))
+    return agents, None
 
 
-def ready_count(payload: Any) -> int | None:
-    if isinstance(payload, list):
-        return len(payload)
-    if isinstance(payload, dict):
-        for key in ("items", "issues", "results", "ready"):
-            value = payload.get(key)
-            if isinstance(value, list):
-                return len(value)
-        if not payload:
-            return 0
+def config_value(argv: list[str]) -> tuple[Any | None, str | None]:
+    result = run_command(argv)
+    if result.returncode != 0:
+        return None, f"{shlex.join(argv)} failed: {command_error(result)}"
+    try:
+        payload = decode_json(result.stdout)
+    except ValueError as error:
+        return None, f"{shlex.join(argv)} returned invalid JSON: {error}"
+    if not isinstance(payload, dict) or "value" not in payload:
+        return None, f"{shlex.join(argv)} returned invalid JSON: missing value field"
+    return payload["value"], None
+
+
+def observed_type(value: Any) -> str:
+    if value is None:
+        return "null"
+    if isinstance(value, bool):
+        return "boolean"
+    if isinstance(value, str):
+        return "string"
+    if isinstance(value, list):
+        return "array"
+    if isinstance(value, dict):
+        return "object"
+    return type(value).__name__
+
+
+def mapping_type_error(key: str, value: Any) -> str | None:
+    expected = "mapping of string->string"
+    if not isinstance(value, dict):
+        return f"{key} has observed type {observed_type(value)}; expected {expected}"
+    invalid = [item for item, mapped in value.items() if not isinstance(item, str) or not isinstance(mapped, str)]
+    if invalid:
+        return f"{key} has observed type object with non-string key/value; expected {expected}"
     return None
 
 
-def worker_roles_check() -> dict[str, Any]:
-    if shutil.which("bd") is None:
-        return check("worker-role-labels", "skip", "bd is unavailable; cannot confirm ledger reachability")
-    kinds = role_kinds()
-    if not kinds:
-        return check(
-            "worker-role-labels",
-            "fail",
-            "could not read agent:<kind> routing labels from rules/orchestrate-roles.md",
-        )
+def model_list_error(payload: Any) -> str | None:
+    expected = "object with models: array of objects containing string selector"
+    if not isinstance(payload, dict):
+        return f"model list has observed type {observed_type(payload)}; expected {expected}"
+    model_items = payload.get("models")
+    if not isinstance(model_items, list):
+        return f"model list models has observed type {observed_type(model_items)}; expected array of objects containing string selector"
+    for index, item in enumerate(model_items):
+        if not isinstance(item, dict):
+            return f"model list models[{index}] has observed type {observed_type(item)}; expected object containing string selector"
+        selector = item.get("selector")
+        if not isinstance(selector, str) or not selector:
+            return f"model list models[{index}].selector has observed type {observed_type(selector)}; expected non-empty string"
+    return None
 
-    counts: list[str] = []
-    for kind in kinds:
-        label = f"agent:{kind}"
-        argv = ["bd", "ready", "--label", label, "--json"]
-        result = run_command(argv)
-        if result.returncode != 0:
-            return check(
-                "worker-role-labels",
-                "fail",
-                f"ledger check {shlex.join(argv)} failed: {command_error(result)}",
-            )
-        try:
-            payload = decode_json(result.stdout)
-        except ValueError as error:
-            return check(
-                "worker-role-labels",
-                "fail",
-                f"ledger check {shlex.join(argv)} returned invalid JSON: {error}",
-            )
-        count = ready_count(payload)
-        if count is None:
-            return check(
-                "worker-role-labels",
-                "fail",
-                f"ledger check {shlex.join(argv)} returned an unknown JSON shape",
-            )
-        counts.append(f"{label}={count}")
-    return check("worker-role-labels", "pass", "ledger reachable; ready work by routing label: " + ", ".join(counts))
+
+def model_roles_check() -> dict[str, Any]:
+    if shutil.which("omp") is None:
+        return check("model-roles", "skip", "omp is unavailable; cannot verify model roles")
+    agents, error = frontmatter_agents()
+    if error:
+        return check("model-roles", "fail", error)
+    overrides, error = config_value(["omp", "config", "get", "task.agentModelOverrides", "--json"])
+    if error:
+        return check("model-roles", "fail", error)
+    type_error = mapping_type_error("task.agentModelOverrides", overrides)
+    if type_error:
+        return check("model-roles", "fail", type_error)
+    roles, error = config_value(["omp", "config", "get", "modelRoles", "--json"])
+    if error:
+        return check("model-roles", "fail", error)
+    type_error = mapping_type_error("modelRoles", roles)
+    if type_error:
+        return check("model-roles", "fail", type_error)
+    stale = sorted(key for key in overrides if key.startswith("orc-"))
+    if stale:
+        return check("model-roles", "fail", "stale override keys must be removed: " + ", ".join(stale))
+    models_result = run_command(["omp", "models", "--json"], timeout=20.0)
+    if models_result.returncode != 0:
+        return check("model-roles", "fail", f"omp models --json failed: {command_error(models_result)}")
+    try:
+        models_payload = decode_json(models_result.stdout)
+    except ValueError as json_error:
+        return check("model-roles", "fail", f"omp models --json returned invalid JSON: {json_error}")
+    list_error = model_list_error(models_payload)
+    if list_error:
+        return check("model-roles", "fail", list_error)
+    model_items = models_payload["models"]
+    selectors = {item["selector"] for item in model_items}
+    missing: list[str] = []
+    invalid: list[str] = []
+    for name, frontmatter_model in agents:
+        effective = overrides.get(name) if isinstance(overrides.get(name), str) else frontmatter_model
+        if name not in overrides:
+            missing.append(f"{name} (set task.agentModelOverrides.{name})")
+        if not isinstance(effective, str) or not effective:
+            invalid.append(f"{name}: empty effective selector (set task.agentModelOverrides.{name})")
+            continue
+        selector = strip_thinking(effective)
+        if selector.startswith("@"):
+            alias = selector[1:]
+            if alias not in roles:
+                invalid.append(f"{name}: alias @{alias} missing from modelRoles (set modelRoles.{alias})")
+                continue
+            selector = roles[alias]
+            if not isinstance(selector, str) or not selector:
+                invalid.append(f"{name}: alias @{alias} has no concrete selector (set modelRoles.{alias})")
+                continue
+            selector = strip_thinking(selector)
+        if selector not in selectors:
+            invalid.append(f"{name}: selector {selector!r} unavailable (set task.agentModelOverrides.{name} or modelRoles alias)")
+    details: list[str] = []
+    if missing:
+        details.append("missing overrides: " + ", ".join(missing))
+    if invalid:
+        details.append("invalid models: " + "; ".join(invalid))
+    if details:
+        return check("model-roles", "fail", ". ".join(details))
+    return check("model-roles", "pass", f"verified {len(agents)} shipped agent model overrides and selectors")
 
 
 def candidate_paths(explicit: str | None, packages_root: str | None, package_names: Iterable[str], skill: str) -> list[Path]:
@@ -507,7 +635,8 @@ def main(argv: list[str] | None = None) -> int:
         ("isolation-disabled", isolation_check),
         ("base-commit-recorded", lambda: base_check(args.base)),
         ("upstream-merge-policy", upstream_policy_check),
-        ("worker-role-labels", worker_roles_check),
+        ("claim-pools", claim_pools_check),
+        ("model-roles", model_roles_check),
     )
     checks.extend(function() for check_id, function in own_checks if selected(check_id, only))
     checks = [item for item in checks if selected(item["id"], only)]

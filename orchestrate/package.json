@@ -5,7 +5,7 @@
   "private": true,
   "omp": {
     "extensions": [
-      "./extensions/wait-discipline.ts"
+      "./extensions/pool-wait.ts"
     ]
   }
 }

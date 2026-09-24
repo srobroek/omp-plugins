@@ -11,7 +11,10 @@ below where they disagree.
 MUST set acceptance criteria at creation for every bead that will be reviewed, using `bd create ... --acceptance "CRITERIA"` or the graph-plan `acceptance_criteria` field. Judge completeness against those criteria; a reviewed bead without criteria cannot be judged complete.
 
 # METADATA
-MUST put useful facts in bead `metadata`, not comments or the description, including git anchors (`repo`, `branch`, `base_sha`, `worktree`, `pr`, `merge_sha`) and lease anchors (`lease_host`, `lease_pid`). Keep rationale in the description.
+MUST put useful facts in bead `metadata`, not comments or the description, including git anchors (`repo`, `branch`, `base_sha`, `worktree`, `pr`, `merge_sha`). Keep rationale in the description.
+
+# MULTILINE TEXT
+MUST pass multiline bead text through a file: `bd create|update ... --body-file notes.md` (or `--stdin`) for a description, `bd comments add ID --file notes.md` for a comment. A `\n` inside a quoted argument is stored as a literal backslash-n, not a paragraph break. The embedded-write gate accepts the `--body-file` form.
 
 # WISPS
 NEVER use wisps for durable agent-to-agent decisions, acceptance evidence, or closure. Use a durable bead carrier instead.
@@ -49,6 +52,22 @@ steering requires. Its verified plan shape:
   not a parent attachment.
 - Unknown fields anywhere are silently dropped with a warning, so a typo costs
   the field rather than raising.
+
+Verified fixture showing an existing parent (`parent_id`), a plan-local parent
+(`parent_key`), and a dependency edge together:
+
+```json
+{
+  "nodes": [
+    {"key": "child", "parent_id": "omp-plugins-m8tf", "type": "task", "title": "Child"},
+    {"key": "part", "parent_key": "child", "type": "task", "title": "Part"}
+  ],
+  "edges": [{"from_key": "part", "to_key": "child", "type": "blocks"}]
+}
+```
+
+The fixture keeps the dependency in the top-level `edges` array; a per-node
+`deps` array is not equivalent.
 
 MUST review a graph plan before the implementation wave starts. The reviewer
 MUST record a verdict against each guard rail: every task names bounded files or

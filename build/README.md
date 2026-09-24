@@ -1,12 +1,11 @@
 # build
 
-Implementation and mechanical-execution agents.
+Implementation and external-repository agents.
 
 ## Agents
 
 | Name | Role | When |
 |------|------|------|
-| `operator` | `@tiny` | One mechanical command with explicit targets |
 | `external-repo-worker` | `@task` | Clone/edit/verify work in a repo outside the caller project |
 
 Use the built-in `task` agent for implementation in the current repository.
@@ -20,4 +19,3 @@ Keep sibling assignments disjoint.
 | Name | When |
 |------|------|
 | `delegation-choreography` | Delegate non-trivial work and keep related prose edits scoped |
-

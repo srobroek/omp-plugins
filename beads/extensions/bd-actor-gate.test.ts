@@ -1,13 +1,16 @@
-import { afterEach, describe, expect, test } from "bun:test";
-
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import bashGates from "./bash-gates.ts";
 import bdActorGate, {
 	ACTOR_NOTICE_ARBITER,
 	actorPresent,
 	actorValues,
+	agentActor,
+	bdInvocations,
 	decideActorGate,
 	environmentForInput,
 	extractCommand,
 	firstBdVerb,
+	invocationActor,
 	isClaimCommand,
 	isMutatingBdCommand,
 } from "./bd-actor-gate.ts";
@@ -49,38 +52,27 @@ describe("actorValues / environmentForInput", () => {
 		).toEqual(["omp/Main/a", "omp/Main/b"]);
 	});
 
-	test("BD_ACTOR wins over BEADS_ACTOR, so one write reports one actor", () => {
-		// Measured against bd 1.2.2 by claiming a real bead four ways. bd's own --help
-		// documents the default as $BEADS_ACTOR, and that is not what governs:
-		//   ambient both, inline BEADS_ACTOR=x     -> recorded the AMBIENT actor
-		//   ambient both, inline BD_ACTOR=x        -> recorded x
-		//   BD_ACTOR removed, inline BEADS_ACTOR=x -> recorded x
-		const ambient = { BD_ACTOR: "omp/Main/ambient", BEADS_ACTOR: "omp/Main/ambient" };
+test("explicit --actor wins, then BEADS_ACTOR, then BD_ACTOR", () => {
+	const ambient = { BD_ACTOR: "omp/Main/legacy", BEADS_ACTOR: "omp/Main/canonical" } as NodeJS.ProcessEnv;
+	expect(actorValues("bd --actor omp/Flag/explicit close x", ambient)).toEqual(["omp/Flag/explicit"]);
+	expect(actorValues("BEADS_ACTOR=omp/Inline/canonical bd close x", { BD_ACTOR: "omp/Main/legacy" })).toEqual([
+		"omp/Inline/canonical",
+	]);
+	// bd 1.3 gives BEADS_ACTOR precedence even over a command-local BD_ACTOR.
+	expect(actorValues("BD_ACTOR=omp/Inline/legacy bd close x", { BEADS_ACTOR: "omp/Main/canonical" })).toEqual([
+		"omp/Main/canonical",
+	]);
+	expect(actorValues("bd close x", ambient)).toEqual(["omp/Main/canonical"]);
+	expect(actorValues("bd close x", { BD_ACTOR: "omp/Main/legacy" })).toEqual(["omp/Main/legacy"]);
+});
 
-		// The trap: an inline BEADS_ACTOR override is a no-op while BD_ACTOR is set.
-		// Reporting both values credited two actors for a single write, and the
-		// BEADS_ACTOR one had written nothing.
-		expect(actorValues("BEADS_ACTOR=omp/Main/ignored bd update x --claim", ambient)).toEqual([
-			"omp/Main/ambient",
-		]);
-
-		// An inline BD_ACTOR does take effect.
-		expect(actorValues("BD_ACTOR=omp/Main/wins bd update x --claim", ambient)).toEqual([
-			"omp/Main/wins",
-		]);
-
-		// With BD_ACTOR absent, BEADS_ACTOR governs.
-		expect(
-			actorValues("BEADS_ACTOR=omp/Main/only bd update x --claim", {
-				BEADS_ACTOR: "omp/Main/env",
-			}),
-		).toEqual(["omp/Main/only"]);
-
-		// Both inline on one invocation: BD_ACTOR still wins.
-		expect(
-			actorValues("BEADS_ACTOR=omp/Main/no BD_ACTOR=omp/Main/yes bd update x --claim", emptyEnv),
-		).toEqual(["omp/Main/yes"]);
-	});
+test("the invocation helper applies the same 1.3 precedence", () => {
+	const invocation = bdInvocations("bd --actor omp/Flag/explicit close x")[0];
+	expect(invocation).toBeDefined();
+	if (invocation === undefined) return;
+	expect(invocationActor(invocation, { BEADS_ACTOR: "omp/Env/canonical", BD_ACTOR: "omp/Env/legacy" })).toBe("omp/Flag/explicit");
+	expect(invocationActor(bdInvocations("BEADS_ACTOR=omp/Inline/canonical bd close x")[0]!, { BD_ACTOR: "omp/Env/legacy" })).toBe("omp/Inline/canonical");
+});
 
 	test("distinct invocations still report distinct actors", () => {
 		// The plural name stays earned: one command line can carry several writes
@@ -93,6 +85,126 @@ describe("actorValues / environmentForInput", () => {
 		).toEqual(["omp/Main/a", "omp/Main/b"]);
 	});
 });
+
+describe("agentActor", () => {
+	const sessionDir = "/sessions/-repo";
+	const runOne = "2026-09-22T16-36-13-128Z_01a0d3cb-01cc-752f-99ca-d5214749221d";
+	const runTwo = "2026-09-22T16-36-13-128Z_01a0d3cb-01cc-752f-99ca-d5214749222d";
+	const childFile = `${sessionDir}/${runOne}/AlphaImplementer.jsonl`;
+	const nestedFile = `${sessionDir}/${runTwo}/EpicE3Scheduler/EpicE3Scheduler.LeaseTests.jsonl`;
+
+	function context(file: string, header: unknown, withHeader = true, managerDir = sessionDir): never {
+		const manager: Record<string, unknown> = {
+			getSessionFile: () => file,
+			getSessionDir: () => managerDir,
+		};
+		if (withHeader) manager.getHeader = () => header;
+		return { sessionManager: manager } as never;
+	}
+
+	test("handles a subagent manager whose session dir is the run directory", () => {
+		const managerDir = `${sessionDir}/${runOne}`;
+		const file = `${managerDir}/ActorProbe.jsonl`;
+		expect(agentActor(context(file, null, true, managerDir))).toBe("omp/01a0d3cb-01cc-752f-99ca-d5214749221d/ActorProbe");
+	});
+
+	test("uses a parentSession header and scopes a depth-one agent by run", () => {
+		expect(agentActor(context(childFile, { parentSession: `${sessionDir}/${runOne}.jsonl` }))).toBe("omp/01a0d3cb-01cc-752f-99ca-d5214749221d/AlphaImplementer");
+	});
+
+	test("scopes a nested agent by the first run and full dotted basename", () => {
+		expect(agentActor(context(nestedFile, { parentSession: `${sessionDir}/${runTwo}/EpicE3Scheduler.jsonl` }))).toBe("omp/01a0d3cb-01cc-752f-99ca-d5214749222d/EpicE3Scheduler.LeaseTests");
+	});
+
+	test("leaves the main session unchanged", () => {
+		expect(agentActor(context(`${sessionDir}/${runOne}.jsonl`, {}))).toBeUndefined();
+	});
+
+	test("falls back to the nested run path when no header is available", () => {
+		expect(agentActor(context(nestedFile, null))).toBe("omp/01a0d3cb-01cc-752f-99ca-d5214749222d/EpicE3Scheduler.LeaseTests");
+		expect(agentActor(context(childFile, undefined, false))).toBe("omp/01a0d3cb-01cc-752f-99ca-d5214749221d/AlphaImplementer");
+	});
+
+	test("keeps same agent names distinct across runs", () => {
+		const otherRun = `${sessionDir}/2026-09-22T16-36-13-128Z_01a0d3cb-01cc-752f-99ca-d5214749222d/AlphaImplementer.jsonl`;
+		expect(agentActor(context(childFile, null))).not.toBe(agentActor(context(otherRun, null)));
+	});
+});
+
+describe("subagent Bash actor rewrite", () => {
+	const actorPrefix = "export BEADS_ACTOR='omp/01a0d3cb-01cc-752f-99ca-d5214749221d/AlphaImplementer'; ";
+	const envKeys = ["BEADS_DIR", "BEADS_ACTOR", "BD_ACTOR"] as const;
+	const savedEnv: Partial<Record<(typeof envKeys)[number], string>> = {};
+	beforeEach(() => {
+		for (const key of envKeys) {
+			savedEnv[key] = process.env[key];
+			delete process.env[key];
+		}
+	});
+	afterEach(() => {
+		for (const key of envKeys) {
+			const value = savedEnv[key];
+			if (value === undefined) delete process.env[key];
+			else process.env[key] = value;
+		}
+	});
+	function handler() {
+		const handlers: Array<(event: unknown, ctx: unknown) => unknown> = [];
+		bashGates({ on: (_event: string, callback: (event: unknown, ctx: unknown) => unknown) => handlers.push(callback) } as never);
+		return handlers[0];
+	}
+	function replacementInput(result: unknown): Record<string, unknown> | undefined {
+		if (result === null || typeof result !== "object") return undefined;
+		const input = (result as { input?: unknown }).input;
+		return input !== null && typeof input === "object" && !Array.isArray(input) ? input as Record<string, unknown> : undefined;
+	}
+	function replacementCommand(result: unknown): string | undefined {
+		const input = replacementInput(result);
+		const command = input?.command ?? input?.cmd;
+		return typeof command === "string" ? command : undefined;
+	}
+	const subagent = contextForBash("/sessions/-repo/2026-09-22T16-36-13-128Z_01a0d3cb-01cc-752f-99ca-d5214749221d/AlphaImplementer.jsonl", { parentSession: "/sessions/-repo/main.jsonl" });
+
+	test("prefixes BEADS_ACTOR while preserving supplied env", async () => {
+		const result = await handler()?.({ toolName: "bash", input: { command: "bd update A --claim", env: { FOO: "bar" } } }, subagent);
+		const input = replacementInput(result);
+		expect(replacementCommand(result)).toContain(actorPrefix);
+		expect(input?.env).toEqual({ FOO: "bar" });
+	});
+
+	test("prefixes even when ambient actor variables are set", async () => {
+		process.env.BEADS_DIR = "/tmp/actor-test-no-store";
+		process.env.BEADS_ACTOR = "ambient/x";
+		process.env.BD_ACTOR = "ambient/y";
+		const result = await handler()?.({ toolName: "bash", input: { command: "bd update A --claim" } }, subagent);
+		expect(replacementCommand(result)).toContain(actorPrefix);
+	});
+
+	test("does not rewrite main, non-bd, explicit flag, or command-local actor", async () => {
+		const main = contextForBash("/sessions/-repo/2026-09-22T16-36-13-128Z_01a0d3cb-01cc-752f-99ca-d5214749221d.jsonl", {});
+		const mainResult = await handler()?.({ toolName: "bash", input: { command: "bd update A --claim", env: { BEADS_ACTOR: "MainActor" } } }, main);
+		expect(replacementCommand(mainResult) ?? "").not.toContain(actorPrefix);
+		for (const [ctx, command] of [
+			[subagent, "echo bd update A --claim"],
+			[subagent, "bd --actor Explicit update A --claim"],
+			[subagent, "BEADS_ACTOR=Explicit bd update A --claim"],
+		] as const) {
+			const result = await handler()?.({ toolName: "bash", input: { command } }, ctx);
+			expect(replacementCommand(result) ?? "").not.toContain(actorPrefix);
+		}
+	});
+});
+
+function contextForBash(file: string, header: unknown): never {
+	return {
+		cwd: "/repo",
+		sessionManager: {
+			getHeader: () => header,
+			getSessionFile: () => file,
+			getSessionDir: () => "/sessions/-repo",
+		},
+	} as never;
+}
 
 describe("firstBdVerb / isMutatingBdCommand", () => {
 	test("mutating verbs from hunt", () => {
@@ -223,6 +335,40 @@ describe("firstBdVerb / isMutatingBdCommand", () => {
 		expect(firstBdVerb("env FOO=1 bd close x")).toBe("close");
 		expect(firstBdVerb("sudo -u build bd close x")).toBe("close");
 		expect(isMutatingBdCommand("echo command bd close x")).toBe(false);
+	});
+
+	test("recognizes shell control prefixes around bd", () => {
+		for (const command of [
+			"! bd update bead-1 --claim",
+			"time bd update bead-1 --claim",
+			"if bd update bead-1 --claim; then :; fi",
+			"while bd update bead-1 --claim; do :; done",
+			"until bd update bead-1 --claim; do :; done",
+		]) {
+			expect(firstBdVerb(command)).toBe("update");
+			expect(isClaimCommand(command)).toBe(true);
+		}
+	});
+
+	test("env child unsets override ambient actor variables", () => {
+		for (const command of [
+			"env -u BEADS_ACTOR -u BD_ACTOR bd update bead-1 --claim",
+			"env --unset=BEADS_ACTOR --unset=BD_ACTOR bd create --title title",
+			"env -i bd update bead-1 --claim",
+		]) {
+			const decision = decideActorGate(command, actorEnv);
+			expect(decision.kind).toBe("block");
+			if (decision.kind === "block") expect(decision.reason).toContain("without BEADS_ACTOR or BD_ACTOR");
+		}
+	});
+
+	test("env assignments after removal restore actor attribution", () => {
+		for (const command of [
+			"env -i BD_ACTOR=actor/x bd update bead-1 --claim",
+			"env -u BEADS_ACTOR BEADS_ACTOR=actor/x bd create --title title",
+		]) {
+			expect(decideActorGate(command, actorEnv)).toEqual({ kind: "allow" });
+		}
 	});
 
 	test("comments without add is read-only", () => {
