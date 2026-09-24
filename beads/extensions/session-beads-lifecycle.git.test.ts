@@ -1359,16 +1359,27 @@ esac
 		}
 	});
 
-	test("a non-beads cwd produces no session-start message", async () => {
+	test("a dangling linked worktree reports unknown identity without probing bd", async () => {
+		const root = mkdtempSync(join(tmpdir(), "beads-dangling-worktree-"));
 		const originalBeads = process.env.BEADS_DIR;
-		process.env.BEADS_DIR = "/nonexistent-beads-dir";
+		let calls = 0;
+		mkdirSync(join(root, ".beads"));
+		writeFileSync(join(root, ".git"), "gitdir: /path/that/no-longer-exists\n");
+		delete process.env.BEADS_DIR;
+		setBdStreamForTests(async () => {
+			calls++;
+			return { output: "[]" };
+		});
 		try {
 			const { handlers, logged } = wire();
-			await handlers.session_start![0]!({}, { cwd: "/nonexistent-repo" });
-			expect(logged).toEqual([]);
+			await handlers.session_start![0]!({}, { cwd: root });
+			expect(logged).toEqual(["Beads session start is unverified: repository identity is unknown; no bd command was run."]);
+			expect(calls).toBe(0);
 		} finally {
+			setBdStreamForTests(null);
 			if (originalBeads === undefined) delete process.env.BEADS_DIR;
 			else process.env.BEADS_DIR = originalBeads;
+			rmSync(root, { recursive: true, force: true });
 		}
 	});
 

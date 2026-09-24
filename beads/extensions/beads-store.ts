@@ -12,27 +12,27 @@ import { spawnSync } from "node:child_process";
 import { lstatSync, realpathSync, statSync } from "node:fs";
 import { dirname, isAbsolute, resolve } from "node:path";
 
-/** The git common directory for `cwd`, or explicit unknown when Git cannot answer. */
-export function repoIdentity(cwd: string): string {
+/** The git common directory for `cwd`, or unknown when Git cannot answer. */
+export function repoIdentity(cwd: string): string | undefined {
 	const result = spawnSync("git", ["-C", cwd, "rev-parse", "--git-common-dir"], {
 		encoding: "utf8",
 		timeout: 2000,
 		stdio: ["ignore", "pipe", "pipe"],
 	});
-	if (result.error || result.signal !== null) return undefined as unknown as string;
+	if (result.error || result.signal !== null) return undefined;
 	if (result.status !== 0) {
 		const stderr = String(result.stderr ?? "");
 		// A successful no-repository diagnosis remains a definite non-repository
 		// answer. Any repository metadata, missing binary, timeout, or other error
 		// is unknown and must not fall back to `cwd`.
 		if (/not a git repository/i.test(stderr) && repositoryState(cwd) === "absent") return cwd;
-		return undefined as unknown as string;
+		return undefined;
 	}
 	const out = String(result.stdout ?? "").trim();
 	try {
 		return realpathSync(isAbsolute(out) ? out : resolve(cwd, out));
 	} catch {
-		return undefined as unknown as string;
+		return undefined;
 	}
 }
 

@@ -36,6 +36,7 @@
  * instantiated twice and the copies must share one coordinator.
  */
 
+import { spawnSync } from "node:child_process";
 import { closeSync, existsSync, openSync, readFileSync, realpathSync, statSync, unlinkSync, writeSync } from "node:fs";
 import { hostname } from "node:os";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
@@ -130,6 +131,27 @@ function pidAlive(pid: number): boolean {
 	try { process.kill(pid, 0); return true; } catch { return false; }
 }
 
+/**
+ * Return the operating system's start identity for a process. A PID can be
+ * reused after a writer exits, so liveness alone is not enough to protect an
+ * expired lock. `ps` is available on the supported Unix hosts; an unavailable
+ * identity is deliberately treated as unknown by callers.
+ */
+function processStartIdentity(pid: number): string | undefined {
+	try {
+		const result = spawnSync("ps", ["-o", "lstart=", "-p", String(pid)], {
+			encoding: "utf8",
+			timeout: 100,
+			stdio: ["ignore", "pipe", "ignore"],
+		});
+		if (result.error || result.status !== 0) return undefined;
+		const identity = String(result.stdout ?? "").trim();
+		return identity === "" ? undefined : identity;
+	} catch {
+		return undefined;
+	}
+}
+
 /** What a hold records, for the next waiter to judge. */
 interface Holder {
 	host: string;
@@ -146,6 +168,8 @@ interface Holder {
 	 * writer keeps the turn with the process that is actually using it.
 	 */
 	writer?: number;
+	/** OS start identity paired with {@link writer}; protects against PID reuse. */
+	writerStart?: string;
 	/**
 	 * Identifies THIS acquisition, not just the process.
 	 *
@@ -159,6 +183,7 @@ interface Holder {
 	expires: number;
 }
 
+
 /** One lock this process owns: the open descriptor, its sharers, its heartbeat. */
 interface OwnedLock {
 	fd: number;
@@ -168,6 +193,8 @@ interface OwnedLock {
 	token: string;
 	/** The `bd` process this hold is for, once {@link attachWriter} has named it. */
 	writer: number | undefined;
+	/** OS start identity paired with {@link writer}; protects against PID reuse. */
+	writerStart: string | undefined;
 }
 
 /**
@@ -225,9 +252,9 @@ function registry(): Registry {
 				// The fd is gone; the file is what other processes see.
 			}
 			try {
-				unlinkSync(lock);
+				withOwnership(lock, held.token, () => unlinkSync(lock));
 			} catch {
-				// Already taken over.
+				// Already taken over or otherwise unavailable; lease recovery remains.
 			}
 		}
 		created.owned.clear();
@@ -581,16 +608,12 @@ function ageOf(path: string): number {
  * Whether an existing hold may be taken over.
  *
  * Three grounds, in the order a waiter can trust them.
- *
- * A live `bd` on THIS host settles it outright: the store is in use, whatever the
- * lease says. That case is not hypothetical -- a runner killed outright leaves its
- * `bd` orphaned and still writing with nothing left to renew the lease, and taking
- * the store then is exactly the concurrent write this lock exists to prevent.
- *
- * Otherwise a dead holder pid on this host is the fast answer for a process that
- * went away, and an expired lease is the general one: nobody renewed it, so nobody
- * is waiting on the write it guarded. An unreadable or unparseable file, and a hold
- * from a version that recorded no lease, are judged by the lease length alone.
+ * A live writer whose recorded start identity still matches settles it outright;
+ * a reused PID does not. Otherwise a dead holder pid on this host is the fast
+ * answer for a process that went away, and an expired lease is the general one:
+ * nobody renewed it, so nobody is waiting on the write it guarded. An unreadable
+ * or unparseable file, and a hold from a version that recorded no lease, are
+ * judged by the lease length alone.
  */
 function abandoned(lock: string): boolean {
 	let raw: string;
@@ -607,7 +630,11 @@ function abandoned(lock: string): boolean {
 		return ageOf(lock) > leaseMs;
 	}
 	const local = holder.host === HOST;
-	if (local && typeof holder.writer === "number" && pidAlive(holder.writer)) return false;
+	if (local && typeof holder.writer === "number") {
+		const currentStart = processStartIdentity(holder.writer);
+		const sameWriter = typeof holder.writerStart !== "string" || currentStart === undefined || currentStart === holder.writerStart;
+		if (pidAlive(holder.writer) && sameWriter) return false;
+	}
 	if (local && typeof holder.pid === "number" && !pidAlive(holder.pid)) return true;
 	if (typeof holder.expires === "number") return Date.now() > holder.expires;
 	// A hold from a version that recorded no lease still has to be recoverable.
@@ -655,9 +682,17 @@ function takeOverIfAbandoned(lock: string, steal: string): void {
 	}
 }
 
-function holderNow(owner: string, token: string, writer: number | undefined): Holder {
+function holderNow(owner: string, token: string, writer: number | undefined, writerStart = writer === undefined ? undefined : processStartIdentity(writer)): Holder {
 	const taken = Date.now();
-	return { host: HOST, pid: process.pid, owner, token, taken, expires: taken + leaseMs, ...(writer === undefined ? {} : { writer }) };
+	return {
+		host: HOST,
+		pid: process.pid,
+		owner,
+		token,
+		taken,
+		expires: taken + leaseMs,
+		...(writer === undefined ? {} : { writer, ...(writerStart === undefined ? {} : { writerStart }) }),
+	};
 }
 
 /** Whether the file at `lock` still records the hold this process took. */
@@ -758,7 +793,7 @@ export async function hold(
 					}, renewMs);
 					// The heartbeat must not be a reason the process stays alive.
 					renew.unref?.();
-					owned.set(lock, { fd, holders: new Map([[owner, 1]]), renew, token, writer: undefined });
+					owned.set(lock, { fd, holders: new Map([[owner, 1]]), renew, token, writer: undefined, writerStart: undefined });
 					return { kind: "held" };
 				} catch (error) {
 					const code = (error as NodeJS.ErrnoException).code;
@@ -907,7 +942,7 @@ function renewLease(lock: string, owner: string, token: string): void {
 	const result = withOwnership(lock, token, () => {
 		const fd = openSync(lock, "w");
 		try {
-			writeSync(fd, JSON.stringify(holderNow(owner, token, held.writer)));
+			writeSync(fd, JSON.stringify(holderNow(owner, token, held.writer, held.writerStart)));
 		} finally {
 			closeSync(fd);
 		}
@@ -928,16 +963,18 @@ export function attachWriter(store: string, owner: string, pid: number): boolean
 	const lock = join(store, LOCK_NAME);
 	const held = registry().owned.get(lock);
 	if (held === undefined || !held.holders.has(owner)) return false;
+	const writerStart = processStartIdentity(pid);
 	const result = withOwnership(lock, held.token, () => {
 		const fd = openSync(lock, "w");
 		try {
-			writeSync(fd, JSON.stringify(holderNow(owner, held.token, pid)));
+			writeSync(fd, JSON.stringify(holderNow(owner, held.token, pid, writerStart)));
 		} finally {
 			closeSync(fd);
 		}
 	});
 	if (result !== "done") return false;
 	held.writer = pid;
+	held.writerStart = writerStart;
 	return true;
 }
 
