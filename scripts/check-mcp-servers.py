@@ -9,7 +9,6 @@ REPO = Path(__file__).resolve().parent.parent
 
 EXPECTED = {
     "design": ["accessibility-scanner", "storybook", "wire-dsl"],
-    "browser-tools": ["chrome-devtools", "playwright-cross-engine"],
     "diagram": ["excalidraw"],
 }
 

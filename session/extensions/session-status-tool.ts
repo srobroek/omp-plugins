@@ -340,6 +340,18 @@ async function probeJson(
 	return { value };
 }
 
+export function dirtyFromStatus(result: CommandResult): "yes" | "no" | "unknown" {
+	if (result.exitCode !== 0) return "unknown";
+	return result.stdout.trim() ? "yes" : "no";
+}
+
+async function probeWorktreeDirty(run: CommandRunner, path: string, signal: AbortSignal): Promise<{ value: "yes" | "no" | "unknown"; warning?: string }> {
+	const result = await run("git", ["status", "--porcelain", "--untracked-files=normal"], { cwd: path, timeoutMs: PROBE_TIMEOUT_MS, signal });
+	const value = dirtyFromStatus(result);
+	if (value === "unknown") return { value, warning: `git status unavailable for ${path} (${oneLine(result.stderr) || `exit ${result.exitCode}`})` };
+	return { value };
+}
+
 async function probeText(
 	run: CommandRunner,
 	file: string,
@@ -491,7 +503,7 @@ export async function collectStatus(
 			path: row.path,
 			branch: row.detached ? "(detached)" : row.branch,
 			head: row.head,
-			dirty: "unknown",
+			dirty: "unknown" as const,
 		}));
 		const branches = new Set([...transcripts.map(row => row.branch), ...worktrees.map(row => row.branch)].filter(Boolean));
 		const [beadsProbe, wtProbe, remoteProbe, releaseRows] = await Promise.all([
@@ -504,6 +516,9 @@ export async function collectStatus(
 		const beads = filterByScope(parseBeads(beadsProbe.value), branches, accepted);
 		const inventory = parseWorktrees(wtProbe.value);
 		const inventoryRows = inventory.length > 0 ? inventory : worktrees;
+		const dirtyProbes = await Promise.all(inventoryRows.map(row => probeWorktreeDirty(run, row.path, budget.signal)));
+		for (const probe of dirtyProbes) if (probe.warning) warnings.push(probe.warning);
+		const statusWorktrees = inventoryRows.map((row, index) => ({ ...row, dirty: dirtyProbes[index]?.value ?? "unknown" }));
 		const remote = remoteProbe.value;
 		if (remoteProbe.warning) warnings.push(remoteProbe.warning);
 		let changes: ChangeRow[] = [];
@@ -521,7 +536,7 @@ export async function collectStatus(
 				live: scoped ? live.filter(row => !row.cwd || inScope(row.cwd, accepted)) : live,
 				transcripts: scoped ? transcripts.filter(row => inScope(row.cwd, accepted)) : transcripts,
 				beads,
-				worktrees: scoped ? inventoryRows.filter(row => inScope(row.path, accepted)) : inventoryRows,
+				worktrees: scoped ? statusWorktrees.filter(row => inScope(row.path, accepted)) : statusWorktrees,
 				changes: filterByScope(changes, branches, accepted),
 				releases: releaseRows,
 				warnings,
