@@ -1,15 +1,17 @@
-import { afterAll, describe, expect, setDefaultTimeout, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, setDefaultTimeout, test } from "bun:test";
 // Fixture setup creates several real Git repositories and measured about 20s under full-suite load;
 // keep three times that headroom instead of letting Bun's 5s default kill a child process mid-fixture.
 setDefaultTimeout(60_000);
 import { execFileSync } from "node:child_process";
 import {
 	appendFileSync,
+	cpSync,
 	copyFileSync,
 	existsSync,
 	mkdirSync,
 	mkdtempSync,
 	readFileSync,
+	readdirSync,
 	realpathSync,
 	renameSync,
 	rmSync,
@@ -104,6 +106,55 @@ function scratch(name: string): string {
 	return root;
 }
 
+type NormalTemplate = { root: string };
+let normalTemplateCache: NormalTemplate | undefined;
+
+function normalTemplate(): NormalTemplate {
+	if (normalTemplateCache !== undefined) return normalTemplateCache;
+	const root = scratch("template");
+	const bare = join(root, "remote.git");
+	const main = join(root, "main");
+	const linked = join(root, "linked worktree");
+	mkdirSync(bare);
+	git(bare, ["init", "--bare", "-q"]);
+	mkdirSync(main);
+	git(main, ["init", "-q", "-b", "main"]);
+	git(main, ["config", "user.email", "delivery@example.test"]);
+	git(main, ["config", "user.name", "Delivery Test"]);
+	writeFileSync(join(main, "base.txt"), "base\n");
+	git(main, ["add", "base.txt"]);
+	git(main, ["commit", "-q", "-m", "base"]);
+	git(main, ["remote", "add", "origin", bare]);
+	git(main, ["push", "-q", "-u", "origin", "main"]);
+	mkdirSync(join(main, ".beads"));
+	git(main, ["worktree", "add", "-q", "-b", "template", linked]);
+	writeFileSync(join(linked, "feature.txt"), "feature\n");
+	git(linked, ["add", "feature.txt"]);
+	git(linked, ["commit", "-q", "-m", "feature"]);
+	git(linked, ["push", "-q", "-u", "origin", "template"]);
+	git(main, ["merge", "-q", "--no-ff", "template", "-m", "merge feature"]);
+	git(main, ["push", "-q", "origin", "main"]);
+	git(bare, ["update-ref", "-d", "refs/heads/template"]);
+	normalTemplateCache = { root };
+	return normalTemplateCache;
+}
+
+function rewriteCopiedWorktree(templateRoot: string, root: string): void {
+	const worktrees = join(root, "main", ".git", "worktrees");
+	for (const name of readdirSync(worktrees)) {
+		const gitdir = join(worktrees, name, "gitdir");
+		if (existsSync(gitdir)) writeFileSync(gitdir, readFileSync(gitdir, "utf8").replaceAll(templateRoot, root));
+	}
+	const linkedGit = join(root, "linked worktree", ".git");
+	writeFileSync(linkedGit, readFileSync(linkedGit, "utf8").replaceAll(templateRoot, root));
+	const config = join(root, "main", ".git", "config");
+	writeFileSync(config, readFileSync(config, "utf8").replaceAll(templateRoot, root));
+}
+
+beforeAll(() => {
+	normalTemplate();
+});
+
 function git(cwd: string, args: string[]): string {
 	return execFileSync("git", args, {
 		cwd,
@@ -138,66 +189,86 @@ function fixture(
 ): Fixture {
 	const root = scratch(name);
 	const bare = join(root, "remote.git");
-	mkdirSync(bare);
-	git(bare, ["init", "--bare", "-q"]);
-
 	let main: string;
-	if (layout === "submodule") {
-		const source = join(root, "source");
-		const superproject = join(root, "superproject");
-		main = join(superproject, "sub");
-		mkdirSync(source);
-		git(source, ["init", "-q", "-b", "main"]);
-		git(source, ["config", "user.email", "delivery@example.test"]);
-		git(source, ["config", "user.name", "Delivery Test"]);
-		writeFileSync(join(source, "source.txt"), "source\n");
-		git(source, ["add", "source.txt"]);
-		git(source, ["commit", "-q", "-m", "source"]);
-		mkdirSync(superproject);
-		git(superproject, ["init", "-q", "-b", "main"]);
-		git(superproject, ["config", "user.email", "delivery@example.test"]);
-		git(superproject, ["config", "user.name", "Delivery Test"]);
-		writeFileSync(join(superproject, "super.txt"), "super\n");
-		git(superproject, ["add", "super.txt"]);
-		git(superproject, ["commit", "-q", "-m", "super"]);
-		git(superproject, ["-c", "protocol.file.allow=always", "submodule", "add", "-q", source, "sub"]);
-		mkdirSync(join(superproject, ".beads"));
-		writeFileSync(join(superproject, ".beads", "RETIRED"), "retired\n");
-	} else {
-		main = join(root, "main");
-		mkdirSync(main);
-		if (layout === "separate-git-dir" || layout === "separate-dot-git-dir") {
-			const common = layout === "separate-dot-git-dir" ? join(root, "store", ".git") : join(root, "store.git");
-			mkdirSync(dirname(common), { recursive: true });
-			git(main, ["init", "-q", "-b", "main", `--separate-git-dir=${common}`]);
-			mkdirSync(join(dirname(common), ".beads"));
-			writeFileSync(join(dirname(common), ".beads", "RETIRED"), "retired\n");
-		} else {
-			git(main, ["init", "-q", "-b", "main"]);
-		}
-	}
 
-	git(main, ["config", "user.email", "delivery@example.test"]);
-	git(main, ["config", "user.name", "Delivery Test"]);
-	writeFileSync(join(main, "base.txt"), "base\n");
-	git(main, ["add", "base.txt"]);
-	git(main, ["commit", "-q", "-m", "base"]);
-	if (layout === "submodule") git(main, ["remote", "set-url", "origin", bare]);
-	else git(main, ["remote", "add", "origin", bare]);
-	git(main, ["push", "-q", "-u", "origin", "main"]);
-	mkdirSync(join(main, ".beads"));
+	if (layout === "normal") {
+		cpSync(normalTemplate().root, root, { recursive: true });
+		main = join(root, "main");
+	} else {
+		mkdirSync(bare);
+		git(bare, ["init", "--bare", "-q"]);
+		if (layout === "submodule") {
+			const source = join(root, "source");
+			const superproject = join(root, "superproject");
+			main = join(superproject, "sub");
+			mkdirSync(source);
+			git(source, ["init", "-q", "-b", "main"]);
+			git(source, ["config", "user.email", "delivery@example.test"]);
+			git(source, ["config", "user.name", "Delivery Test"]);
+			writeFileSync(join(source, "source.txt"), "source\n");
+			git(source, ["add", "source.txt"]);
+			git(source, ["commit", "-q", "-m", "source"]);
+			mkdirSync(superproject);
+			git(superproject, ["init", "-q", "-b", "main"]);
+			git(superproject, ["config", "user.email", "delivery@example.test"]);
+			git(superproject, ["config", "user.name", "Delivery Test"]);
+			writeFileSync(join(superproject, "super.txt"), "super\n");
+			git(superproject, ["add", "super.txt"]);
+			git(superproject, ["commit", "-q", "-m", "super"]);
+			git(superproject, ["-c", "protocol.file.allow=always", "submodule", "add", "-q", source, "sub"]);
+			mkdirSync(join(superproject, ".beads"));
+			writeFileSync(join(superproject, ".beads", "RETIRED"), "retired\n");
+		} else {
+			main = join(root, "main");
+			mkdirSync(main);
+			const common = layout === "separate-dot-git-dir" ? join(root, "store", ".git") : join(root, "store.git");
+			if (layout === "separate-git-dir" || layout === "separate-dot-git-dir") {
+				mkdirSync(dirname(common), { recursive: true });
+				git(main, ["init", "-q", "-b", "main", `--separate-git-dir=${common}`]);
+				mkdirSync(join(dirname(common), ".beads"));
+				writeFileSync(join(dirname(common), ".beads", "RETIRED"), "retired\n");
+			} else {
+				git(main, ["init", "-q", "-b", "main"]);
+			}
+		}
+		git(main, ["config", "user.email", "delivery@example.test"]);
+		git(main, ["config", "user.name", "Delivery Test"]);
+		writeFileSync(join(main, "base.txt"), "base\n");
+		git(main, ["add", "base.txt"]);
+		git(main, ["commit", "-q", "-m", "base"]);
+		if (layout === "submodule") git(main, ["remote", "set-url", "origin", bare]);
+		else git(main, ["remote", "add", "origin", bare]);
+		git(main, ["push", "-q", "-u", "origin", "main"]);
+		mkdirSync(join(main, ".beads"));
+	}
 	if (ledger === "retired") writeFileSync(join(main, ".beads", "RETIRED"), "retired\n");
+
 	const linked = join(root, "linked worktree");
-	git(main, ["worktree", "add", "-q", "-b", branch, linked]);
-	writeFileSync(join(linked, "feature.txt"), "feature\n");
-	git(linked, ["add", "feature.txt"]);
-	git(linked, ["commit", "-q", "-m", "feature"]);
-	git(linked, ["push", "-q", "-u", "origin", branch]);
-	const head = git(linked, ["rev-parse", "HEAD"]);
-	git(main, ["merge", "-q", "--no-ff", branch, "-m", "merge feature"]);
-	const merge = git(main, ["rev-parse", "HEAD"]);
-	git(main, ["push", "-q", "origin", "main"]);
-	git(bare, ["update-ref", "-d", `refs/heads/${branch}`]);
+	let head: string;
+	let merge: string;
+	if (layout === "normal") {
+		rewriteCopiedWorktree(normalTemplate().root, root);
+		git(linked, ["branch", "-m", branch]);
+		git(linked, ["config", `branch.${branch}.remote`, "origin"]);
+		git(linked, ["config", `branch.${branch}.merge`, `refs/heads/${branch}`]);
+		if (branch !== "template") {
+			git(main, ["update-ref", `refs/remotes/origin/${branch}`, "refs/remotes/origin/template"]);
+			git(main, ["update-ref", "-d", "refs/remotes/origin/template"]);
+		}
+		head = git(linked, ["rev-parse", "HEAD"]);
+		merge = git(main, ["rev-parse", "HEAD"]);
+	} else {
+		git(main, ["worktree", "add", "-q", "-b", branch, linked]);
+		writeFileSync(join(linked, "feature.txt"), "feature\n");
+		git(linked, ["add", "feature.txt"]);
+		git(linked, ["commit", "-q", "-m", "feature"]);
+		git(linked, ["push", "-q", "-u", "origin", branch]);
+		head = git(linked, ["rev-parse", "HEAD"]);
+		git(main, ["merge", "-q", "--no-ff", branch, "-m", "merge feature"]);
+		merge = git(main, ["rev-parse", "HEAD"]);
+		git(main, ["push", "-q", "origin", "main"]);
+		git(bare, ["update-ref", "-d", `refs/heads/${branch}`]);
+	}
 
 	const env = { ...process.env, PI_CODING_AGENT_DIR: join(root, "agent") };
 	const key = repoKey(main);
