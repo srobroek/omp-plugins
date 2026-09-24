@@ -30,13 +30,7 @@ project or to `~/.omp/agent/mcp.json` for your user:
 }
 ```
 
-Put one override below in the user file for the active profile. Use `~/.omp/agent/mcp.json` for the default profile or `~/.omp/profiles/<name>/agent/mcp.json` for a named profile.
-
-The next two active-profile snippets are alternatives to the native entry above and to each other. Use only the snippet for the carrier that supplies the disabled server. Do not combine them.
-
-### OMP package mirror (`diagram/.mcp.json`)
-
-Use the bare key declared by the package mirror:
+Put this override in the active profile's user file. Use `~/.omp/agent/mcp.json` for the default profile or `~/.omp/profiles/<name>/agent/mcp.json` for a named profile:
 
 ```json
 {
@@ -44,23 +38,21 @@ Use the bare key declared by the package mirror:
 }
 ```
 
-### Marketplace entry (`diagram:excalidraw`)
-
-Use `diagram:excalidraw`, the marketplace runtime key named above. The loader documentation says `enabledServers` can force-enable a same-named disabled entry. The same contract accepts `:` in runtime names:
-
-```json
-{
-  "enabledServers": ["diagram:excalidraw"]
-}
-```
+`excalidraw` is the server key declared by both the package manifest and its
+`.mcp.json`; do not use `diagram:excalidraw` as an enable key.
 
 Use a client that supports MCP Apps. OMP exposes the connected server's tools
 for the full session, not only during design work.
 
 OMP reads MCP configuration and connects enabled servers at session startup.
-After you add the native entry, start a new session. If the hosted server was
-unavailable at startup, run `/mcp reconnect excalidraw`. An agent cannot run that slash
-command.
+If `excalidraw` is missing from the session, first confirm the package is
+installed and the override is in the active profile. Start a new session after
+changing configuration. If the hosted server was unavailable at startup, run
+`/mcp reconnect excalidraw` to retry the connection. An agent cannot run that
+slash command.
+
+If reconnect still fails, check the hosted endpoint and network access, then
+retry in a new session.
 
 ## Data handling
 
