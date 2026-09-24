@@ -9,9 +9,10 @@ description: When authoring Rust GitHub Actions CI, rust-cache keys, required-ch
 
 - Cache with `Swatinem/rust-cache@v2`: per-OS `shared-key`, `cache-on-failure`.
 - Set `CARGO_INCREMENTAL: 0`.
-- Use toolchain ≥1.90; set `linker = "rust-lld.exe"` for Windows in
-  `.cargo/config.toml`. Per-target placement is enforced by
-  `rule://rust-rustflags-linker`.
+- Use the toolchain declared by `rust-toolchain.toml` or the package `rust-version`; set
+  `>=1.90` only when a dependency or project capability requires Rust 1.90. Set
+  `linker = "rust-lld.exe"` for Windows in `.cargo/config.toml`. Per-target placement
+  is enforced by `rule://rust-rustflags-linker`.
 - Add `mold` (Linux) or `sccache` only when measurements show compile/link still
   dominates. With `sccache`, use an S3/GCS backend -- the GitHub Actions cache
   backend fights `rust-cache` for the 10 GB limit (verify with `sccache --show-stats`).
