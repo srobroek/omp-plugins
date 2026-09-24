@@ -99,7 +99,11 @@ class Context:
         return self.git_root
 
     def full_config(self) -> CommandResult:
-        return self.run("wt", "config", "show", "--full", timeout=90)
+        # Plain `wt config show` already reports plugin status and `[commit.generation]`.
+        # `--full` adds a live commit-generation probe that calls the configured LLM
+        # (~30 s and a paid request), which pushed the whole preflight past the
+        # orchestrate sibling timeout.
+        return self.run("wt", "config", "show", timeout=60)
 
 
 def first_nonempty_line(text: str) -> str:
@@ -200,7 +204,8 @@ def _resolve_path_token(token: str, cwd: Path) -> Path:
 
 
 def _command_tokens(command: dict[str, Any]) -> list[str] | None:
-    raw = command.get("command")
+    # `wt config approvals list --format=json` names the hook command `template`.
+    raw = command.get("template")
     if not isinstance(raw, str) or not raw.strip():
         return None
     try:
@@ -550,7 +555,7 @@ def check_plugin_installed(ctx: Context) -> Result:
         return Result("pass", "Oh-My-Pi plugin is installed")
     if unavailable(result):
         return Result("skip", "wt is unavailable; Oh-My-Pi plugin status cannot be inspected")
-    return Result("skip", "wt config show --full did not identify Oh-My-Pi plugin status")
+    return Result("skip", "wt config show did not identify Oh-My-Pi plugin status")
 
 
 def check_commit_generation(ctx: Context) -> Result:
@@ -572,7 +577,7 @@ def check_commit_generation(ctx: Context) -> Result:
         return Result("pass", "commit generation is not configured")
     if unavailable(result):
         return Result("skip", "wt is unavailable; commit generation cannot be inspected")
-    return Result("skip", "wt config show --full did not identify commit generation status")
+    return Result("skip", "wt config show did not identify commit generation status")
 
 
 CHECKS: list[tuple[str, Callable[[Context], Result]]] = [
