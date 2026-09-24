@@ -950,7 +950,6 @@ function readBounded(path: string): BoundedRead {
  * refuses before the rename.
  */
 function publish(temporary: string, target: string, payload: string): void {
-    let targetExists = true;
     try {
         const stat = lstatSync(target);
         const safeMetadata = !stat.isSymbolicLink() && stat.isFile() && (stat.mode & 0o777) === 0o600;
@@ -967,10 +966,25 @@ function publish(temporary: string, target: string, payload: string): void {
         );
     } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-        targetExists = false;
     }
-    if (targetExists) throw new Error(`${target}: observed an existing receipt, expected no target before atomic rename`);
-    renameSync(temporary, target);
+    // Reserve the absent target exclusively before rename. A concurrent writer
+    // then receives EEXIST rather than having its receipt replaced by rename.
+    let reserved = false;
+    try {
+        const reservation = openSync(target, "wx", 0o600);
+        closeSync(reservation);
+        reserved = true;
+        renameSync(temporary, target);
+    } catch (error) {
+        if (reserved) {
+            try {
+                unlinkSync(target);
+            } catch {
+                // Preserve the publication error if cleanup races another writer.
+            }
+        }
+        throw error;
+    }
 }
 
 /**
