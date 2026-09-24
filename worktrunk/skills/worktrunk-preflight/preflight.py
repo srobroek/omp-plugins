@@ -440,10 +440,37 @@ def check_node_modules_integrity(ctx: Context) -> Result:
     node_modules = root / "node_modules"
     if not node_modules.is_dir():
         return Result("skip", "node_modules is absent; run the provisioning include check first")
+
+    package_json = root / "package.json"
+    declared: list[str] = []
+    try:
+        package = json.loads(package_json.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        package = None
+    if isinstance(package, dict):
+        for section in ("dependencies", "devDependencies", "optionalDependencies"):
+            values = package.get(section)
+            if isinstance(values, dict):
+                declared.extend(name for name in values if isinstance(name, str))
+    missing = sorted({name for name in declared if not (node_modules / name).exists()})
+    if missing:
+        shown = ", ".join(missing[:8])
+        if len(missing) > 8:
+            shown += f", and {len(missing) - 8} more"
+        return Result(
+            "warn",
+            f"node_modules is partial; missing declared packages: {shown}",
+            "bun install --frozen-lockfile, then rerun the Worktrunk preflight",
+        )
+
     bun_types = node_modules / "@types" / "bun"
     if bun_types.exists() and not (bun_types / "index.d.ts").is_file():
-        return Result("warn", "node_modules/@types/bun exists but index.d.ts is missing; this skeleton can make tsc report TS2688 while bun test passes", "bun install --frozen-lockfile, then rerun the Worktrunk preflight")
-    return Result("pass", "node_modules type packages are not skeleton directories")
+        return Result(
+            "warn",
+            "node_modules/@types/bun exists but index.d.ts is missing; this skeleton can make tsc report TS2688 while bun test passes",
+            "bun install --frozen-lockfile, then rerun the Worktrunk preflight",
+        )
+    return Result("pass", "declared node_modules packages and type packages are present")
 
 
 def check_plugin_installed(ctx: Context) -> Result:

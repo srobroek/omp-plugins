@@ -62,6 +62,19 @@ class PreflightRegressionTests(unittest.TestCase):
             self.assertEqual(result.status, "pass")
             self.assertIn("node_modules", result.detail)
 
+    def test_declared_dependency_missing_from_partial_copy_warns_with_repair(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "package.json").write_text(
+                json.dumps({"dependencies": {"present": "1.0.0", "missing": "1.0.0"}}),
+                encoding="utf-8",
+            )
+            (root / "node_modules" / "present").mkdir(parents=True)
+            result = preflight.check_node_modules_integrity(FakeContext(root))
+            self.assertEqual(result.status, "warn")
+            self.assertIn("missing", result.detail)
+            self.assertIn("bun install --frozen-lockfile", result.fix)
+
     def test_skeleton_bun_types_warns_with_repair(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

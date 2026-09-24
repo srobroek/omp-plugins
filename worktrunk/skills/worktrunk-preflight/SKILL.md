@@ -20,11 +20,11 @@ Use `--only ID[,ID...]` to select checks. The script is read-only unless `--appl
 - `wt-available`: FAIL means `wt --version` cannot run; install or expose Worktrunk on `PATH`.
 - `inside-git-repo`: FAIL means the cwd is not inside Git; run from the repository.
 - `cwd-is-worktree-not-canonical`: WARN means the cwd is canonical; run `wt switch -y --create --no-cd --base <base-commit> --format json <branch>` and work in the returned linked worktree.
-- `hook-approvals`: FAIL means an unapproved project hook would be skipped silently; run `wt config approvals add --yes`. Stale approvals are WARN.
+- `hook-approvals`: FAIL means a declared project hook is missing, non-executable, unapproved, or would be skipped silently; run `wt config approvals add --yes` only when authorized. Stale approvals are WARN.
 - `config-keys-honoured`: FAIL means project config contains an ignored key; move it to `~/.config/worktrunk/config.toml`, optionally under `[projects."<id>"]`.
 - `default-branch-resolves`: FAIL means Worktrunk cannot resolve a default branch; configure a valid default branch.
 - `merge-evidence-policy`: FAIL means project `[merge]` keys are ignored; move policy to user config and pass `wt merge --no-squash --no-ff` explicitly on every worker-to-epic merge; an epic-to-default merge may be plain or squashing.
-- `provisioning-include`: WARN means ignored dependency directories lack `.worktreeinclude`; run `wt step copy-ignored`.
+- `provisioning-include`: WARN means ignored dependency directories lack `.worktreeinclude` coverage; run `wt step copy-ignored`. `node-modules-integrity` also warns when a copied `node_modules` is partial or contains a type-package skeleton; run `bun install --frozen-lockfile` and rerun the preflight.
 - `omp-plugin-installed`: WARN means the OMP plugin is absent; run `wt config plugins omp install`.
 - `commit-generation`: WARN means generated commits make `wt merge` squash history; pass `wt merge --no-squash` when preserving per-commit history.
 
