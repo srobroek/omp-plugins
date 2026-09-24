@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { execFileSync, spawnSync } from "node:child_process";
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -37,6 +37,27 @@ import sessionBeadsLifecycle, {
   settleBackgroundWorkForTests,
   staleSkipNotice,
 } from "./session-beads-lifecycle.ts";
+
+const inheritedLifecycleEnv = {
+	BEADS_DIR: process.env.BEADS_DIR,
+	BEADS_ACTOR: process.env.BEADS_ACTOR,
+	BD_ACTOR: process.env.BD_ACTOR,
+};
+const restoreLifecycleEnv = (key: keyof typeof inheritedLifecycleEnv): void => {
+	const value = inheritedLifecycleEnv[key];
+	if (value === undefined) delete process.env[key];
+	else process.env[key] = value;
+};
+beforeAll(() => {
+	delete process.env.BEADS_DIR;
+	delete process.env.BEADS_ACTOR;
+	delete process.env.BD_ACTOR;
+});
+afterAll(() => {
+	restoreLifecycleEnv("BEADS_DIR");
+	restoreLifecycleEnv("BEADS_ACTOR");
+	restoreLifecycleEnv("BD_ACTOR");
+});
 
 
 /** `bd gate list --json` under BD_JSON_ENVELOPE=1, verbatim shape from bd 1.1.2. */
