@@ -1,4 +1,7 @@
 // @bun
+// extensions/bash-gates.ts
+import { resolve as resolve6 } from "path";
+
 // extensions/bd-actor-gate.ts
 import { basename, relative, resolve as resolve2, sep } from "path";
 
@@ -1712,8 +1715,27 @@ async function decideEmbeddedWrite(parsed, event, ctx, deadline = Date.now() + 2
 }
 
 // extensions/session-beads-lifecycle.ts
-import { isAbsolute as isAbsolute3, join as join2, resolve as resolve5 } from "path";
+import { existsSync as existsSync2, readFileSync as readFileSync3, realpathSync as realpathSync3, rmSync, statSync as statSync3 } from "fs";
+import { dirname as dirname3, isAbsolute as isAbsolute3, join as join2, resolve as resolve5 } from "path";
 var EMBEDDED_PIN_ENV = { BEADS_DOLT_SHARED_SERVER: "" };
+function boundedBdEnvironment(base) {
+  return {
+    ...base,
+    ...EMBEDDED_PIN_ENV,
+    BD_NO_PAGER: "1",
+    BD_NON_INTERACTIVE: "1",
+    BD_DOLT_AUTO_START: "false",
+    NO_COLOR: "1"
+  };
+}
+function lifecycleBdEnvironment(cwd, base = process.env) {
+  const env = { ...base };
+  delete env.BEADS_DIR;
+  const resolved = sessionPinFor(cwd);
+  if (resolved !== undefined)
+    env.BEADS_DIR = resolved;
+  return boundedBdEnvironment(env);
+}
 function pinBashInput(input, pin) {
   if (pin === undefined || input === null || typeof input !== "object")
     return;
@@ -1732,19 +1754,86 @@ function bashCallCwd(input, fallback) {
   const cwd = input.cwd;
   return typeof cwd === "string" && cwd !== "" ? resolve5(fallback, cwd) : fallback;
 }
-var SESSION_PIN_GETTER_KEY = Symbol.for("com.srobroek.beads.session-pin-getter.v1");
-function sharedSessionPinGetter() {
-  const getter = Reflect.get(globalThis, SESSION_PIN_GETTER_KEY);
-  return typeof getter === "function" ? getter : undefined;
+function canonicalStore2(path) {
+  try {
+    return realpathSync3(path);
+  } catch {
+    return resolve5(path);
+  }
+}
+function bdStoreForInvocation(invocation, cwd, env) {
+  if (flagEnabled(invocation.globals, ["--global", "--database"]))
+    return;
+  const directory = globalValue(invocation.globals, ["-C", "--directory"]);
+  const db = globalValue(invocation.globals, ["--db"]);
+  const base = directory === undefined ? cwd : resolve5(cwd, directory);
+  if (db !== undefined) {
+    const target = resolve5(base, db);
+    if (!existsSync2(target))
+      return;
+    return canonicalStore2(statSync3(target).isDirectory() ? target : dirname3(target));
+  }
+  if (directory !== undefined)
+    return canonicalStore2(sessionPinFor(base) ?? join2(base, ".beads"));
+  const local = invocation.prefix.findLast((token) => token.startsWith("BEADS_DIR="))?.slice("BEADS_DIR=".length);
+  const pinned = local ?? env.BEADS_DIR;
+  return canonicalStore2(pinned === undefined || pinned === "" ? sessionPinFor(cwd) ?? join2(cwd, ".beads") : isAbsolute3(pinned) ? pinned : resolve5(cwd, pinned));
+}
+function bdInvocationUsesExternalStore(invocation) {
+  return flagEnabled(invocation.globals, ["--global", "--database"]);
+}
+var backgroundReads = new Set;
+var LIFECYCLE_BRIDGE = Symbol.for("com.srobroek.beads.session-lifecycle.bridge.v1");
+function lifecycleBridge() {
+  const globals = globalThis;
+  const existing = globals[LIFECYCLE_BRIDGE];
+  if (existing !== undefined)
+    return existing;
+  const created = {};
+  globals[LIFECYCLE_BRIDGE] = created;
+  return created;
 }
 function pinnedBeadsDir(cwd, ctx) {
-  const pin = ctx === undefined ? undefined : sharedSessionPinGetter()?.(cwd, ctx);
+  const pin = ctx === undefined ? undefined : lifecycleBridge().sessionPinGetter?.(cwd, ctx);
   return pin ?? (ctx === undefined ? sessionPinFor(cwd) : undefined);
 }
 function rewriteBashInput(input, ctx) {
   const cwd = bashCallCwd(input, ctx?.cwd ?? process.cwd());
   const pin = pinnedBeadsDir(cwd, ctx);
   return pinBashInput(input, pin === "" ? undefined : pin);
+}
+async function admitBeadsWork(ctx, cwd = ctx?.cwd ?? process.cwd(), env = lifecycleBdEnvironment(cwd), refresh = true) {
+  const gateAdmitter = lifecycleBridge().gateAdmitter;
+  if (gateAdmitter === undefined)
+    return;
+  return await gateAdmitter(resolve5(cwd), boundedBdEnvironment(env), ctx, refresh);
+}
+async function admitBdMutation(input, ctx, targetEnabled) {
+  const command = commandFromInput(input ?? {});
+  if (!command)
+    return;
+  if (/\bcd\s+(?:"[^"]*\$[^"]*"|'[^']*\$[^']*'|\$[A-Za-z_])/u.test(command)) {
+    return { block: true, reason: "cannot resolve the dynamic working directory before this mutation" };
+  }
+  const writes = bdInvocations(command).filter((invocation) => writesStore(invocation));
+  if (writes.some((invocation) => invocation.prefix.some((token) => token.startsWith("BEADS_DIR=") && /[$`]/u.test(token)))) {
+    return { block: true, reason: "Beads directory is selected dynamically and cannot be verified before this mutation" };
+  }
+  if (writes.length === 0)
+    return;
+  const effectiveInput = rewriteBashInput(input, ctx) ?? input;
+  const cwd = bashCallCwd(effectiveInput, ctx?.cwd ?? process.cwd());
+  const env = environmentForInput(effectiveInput);
+  const writeTargets = embeddedWriteTargets(command, cwd, env);
+  if (writeTargets.kind === "refused")
+    return { block: true, reason: writeTargets.reason };
+  const direct = writes.length === 1 ? writes[0] : undefined;
+  if (direct !== undefined && bdInvocationUsesExternalStore(direct))
+    return;
+  const store = direct === undefined ? undefined : bdStoreForInvocation(direct, cwd, env);
+  if (targetEnabled?.(store === undefined ? cwd : dirname3(store)) === false)
+    return;
+  return await admitBeadsWork(ctx, cwd, store === undefined ? env : { ...env, BEADS_DIR: store }, false);
 }
 
 // extensions/bash-gates.ts
@@ -1824,11 +1913,26 @@ async function decide(parsed, event, ctx, pi, deadline) {
 function bashGates(pi) {
   pi.on("tool_call", async (event, ctx) => {
     try {
+      const input = event.input;
+      const gatedTool = event.toolName === "task" || event.toolName === "bd_reconcile" && input.apply === true || event.toolName === "bd_formula_check" && input.deep === true;
+      if (gatedTool) {
+        const workspace = typeof input.workspace === "string" ? input.workspace : undefined;
+        if (event.toolName === "bd_formula_check" && workspace === undefined)
+          return suffix("beads-gate-admission", "deep formula checks require an explicit workspace so admission and execution cannot select different stores", "set workspace to the target checkout and retry");
+        const cwd = workspace === undefined ? ctx?.cwd ?? process.cwd() : resolve6(ctx?.cwd ?? process.cwd(), workspace);
+        const admission = await admitBeadsWork(ctx, cwd, lifecycleBdEnvironment(cwd));
+        if (admission)
+          return suffix("beads-gate-admission", admission.reason, "retry the operation; verification continues and the next attempt waits on the same read");
+        return;
+      }
       if (event.toolName !== "bash")
         return;
       const { command } = inputOf(event, ctx);
       if (!command)
         return;
+      const admission = await admitBdMutation(event.input, ctx, (targetCwd) => settingsEnabled("beads", "beads-gate-admission", targetCwd));
+      if (admission)
+        return suffix("beads-gate-admission", admission.reason, "retry the command; verification continues and the next attempt waits on the same read");
       return await decide(parse(command), event, ctx, pi, Date.now() + TOOL_CALL_BUDGET_MS);
     } catch (error) {
       return suffix("bash-gates", `command could not be parsed (${error instanceof Error ? error.message : String(error)})`, "split the command or run the mutation as a plain single command");
