@@ -1221,6 +1221,25 @@ describe("publishing is exclusive and idempotent", () => {
 		// The refused write left no temporary file behind either.
 		expect(readdirSync(directory)).toEqual(["1700000000000-b1b2b3b4b5b6.json"]);
 	});
+    test("a concurrent publisher winning after temp creation is never replaced", () => {
+        const directory = receiptsIn("publish-concurrent-target");
+        const target = join(directory, "1700000000000-b1b2b3b4b5b6.json");
+        let call = 0;
+        const error = threwFrom(() =>
+            writeReceipt(landed(), directory, {
+                tempName: () => {
+                    call += 1;
+                    writeFileSync(target, "another publisher's proof", { mode: 0o600 });
+                    return ".mine.tmp";
+                },
+            }),
+        );
+        expect(call).toBe(1);
+        expect(error.message).toContain(target);
+        expect(error.message).toContain("different content");
+        expect(readFileSync(target, "utf8")).toBe("another publisher's proof");
+        expect(readdirSync(directory)).toEqual(["1700000000000-b1b2b3b4b5b6.json"]);
+    });
 
 	test("an unreadable obstruction at the target refuses rather than replacing it", () => {
 		const directory = receiptsIn("publish-obstructed");
