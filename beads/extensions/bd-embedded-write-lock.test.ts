@@ -95,4 +95,36 @@ writeFileSync(process.argv[2], "ready");
 		}
 	});
 
+test("five consecutive acquisitions stay within the bounded wait", async () => {
+    const store = mkdtempSync(join(Bun.env.TMPDIR ?? "/tmp", "beads-lock-bounded-"));
+    try {
+        for (let round = 0; round < 5; round++) {
+            const started = Date.now();
+            const result = await hold(store, `round-${round}`, 500);
+            expect(result).toEqual({ kind: "held" });
+            expect(Date.now() - started).toBeLessThan(500);
+            release(store, `round-${round}`);
+        }
+    } finally {
+        rmSync(store, { recursive: true, force: true });
+    }
+});
+
+test("an aborted waiter leaves the queue for the next writer", async () => {
+    const store = mkdtempSync(join(Bun.env.TMPDIR ?? "/tmp", "beads-lock-abort-"));
+    try {
+        expect(await hold(store, "holder", 100)).toEqual({ kind: "held" });
+        const controller = new AbortController();
+        const waiting = hold(store, "cancelled", 1000, controller.signal);
+        controller.abort();
+        const cancelled = await waiting;
+        expect(cancelled.kind).toBe("failed");
+        if (cancelled.kind === "failed") expect(cancelled.reason).toContain("cancelled");
+        release(store, "holder");
+        expect(await hold(store, "successor", 100)).toEqual({ kind: "held" });
+        release(store, "successor");
+    } finally {
+        rmSync(store, { recursive: true, force: true });
+    }
+});
 });
