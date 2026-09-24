@@ -6,6 +6,8 @@ import { decideEmbeddedWrite, embeddedWriteRunner, embeddedWriteTargets, hold, p
 import { parse } from "./shell-command.ts";
 
 const host = hostname().split(".")[0] ?? "localhost";
+/** The scratch-store proof drives the real bd CLI; CI images without bd skip it. */
+const BD_ON_PATH = Bun.which("bd") !== null;
 
 test("resolves mise-only Bun and completes a real runner write", () => {
 	const root = mkdtempSync(join(Bun.env.TMPDIR ?? "/tmp", "beads-lock-mise-"));
@@ -29,7 +31,7 @@ test("resolves mise-only Bun and completes a real runner write", () => {
 	}
 });
 
-test("decideEmbeddedWrite rewrites a mise-only runner against a scratch store", async () => {
+test.skipIf(!BD_ON_PATH)("decideEmbeddedWrite rewrites a mise-only runner against a scratch store", async () => {
 	const root = mkdtempSync(join(Bun.env.TMPDIR ?? "/tmp", "beads-lock-mise-proof-"));
 	const store = join(root, ".beads");
 	const env = { ...process.env, BEADS_DIR: store, BEADS_ACTOR: "omp/test/qycs" };
