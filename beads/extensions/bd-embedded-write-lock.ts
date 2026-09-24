@@ -1162,6 +1162,7 @@ export async function decideEmbeddedWrite(
 	event: ToolCallEvent,
 	ctx: ExtensionContext,
 	deadline = Date.now() + 25_000,
+	runnerLookup: () => { interpreter: string; script: string } | undefined = embeddedWriteRunner,
 ): Promise<EmbeddedWriteDecision | undefined> {
 	try {
 		if (event.toolName !== "bash") return;
@@ -1194,7 +1195,7 @@ export async function decideEmbeddedWrite(
 				reason: `This command reaches the embedded store${unique.length > 1 ? "s" : ""} ${unique.join(", ")} in a form the Beads write lock cannot run under its serialising runner. Issue the \`bd\` command as its own tool call, as a single direct invocation.`,
 			};
 		}
-		const runner = embeddedWriteRunner();
+		const runner = runnerLookup();
 		if (runner === undefined) {
 			return {
 				kind: "block",

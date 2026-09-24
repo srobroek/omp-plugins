@@ -2,7 +2,8 @@ import { describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { hostname } from "node:os";
 import { join } from "node:path";
-import { embeddedWriteRunner, embeddedWriteTargets, hold, parseLinuxStatStartIdentity, processStartIdentity, release, resolveBunBinary } from "./bd-embedded-write-lock.ts";
+import { decideEmbeddedWrite, embeddedWriteRunner, embeddedWriteTargets, hold, parseLinuxStatStartIdentity, processStartIdentity, release, resolveBunBinary } from "./bd-embedded-write-lock.ts";
+import { parse } from "./shell-command.ts";
 
 const host = hostname().split(".")[0] ?? "localhost";
 
@@ -19,7 +20,7 @@ test("resolves mise-only Bun and completes a real runner write", () => {
 		expect(interpreter).toBe(process.execPath);
 		const runner = embeddedWriteRunner();
 		expect(runner).not.toBeUndefined();
-		if (runner === undefined) return;
+		if (runner === undefined || interpreter === undefined) return;
 		const result = Bun.spawnSync([interpreter, runner.script, "--beads-store", root, "--", "/bin/sh", "-c", `printf written > ${JSON.stringify(marker)}`], { stdout: "pipe", stderr: "pipe" });
 		expect(result.exitCode).toBe(0);
 		expect(readFileSync(marker, "utf8")).toBe("written");
@@ -27,6 +28,32 @@ test("resolves mise-only Bun and completes a real runner write", () => {
 		rmSync(root, { recursive: true, force: true });
 	}
 });
+
+test("decideEmbeddedWrite rewrites a mise-only runner against a scratch store", async () => {
+	const root = mkdtempSync(join(Bun.env.TMPDIR ?? "/tmp", "beads-lock-mise-proof-"));
+	const store = join(root, ".beads");
+	const env = { ...process.env, BEADS_DIR: store, BEADS_ACTOR: "omp/test/qycs" };
+	try {
+		const init = Bun.spawnSync(["bd", "init", "--init-if-missing", "--skip-hooks"], { cwd: root, env, stdout: "pipe", stderr: "pipe" });
+		expect(init.exitCode).toBe(0);
+		const command = "bd create --type task --title mise-runner-proof --json";
+		const event = { toolName: "bash", toolCallId: "mise-proof", input: { command, cwd: root, env: { BEADS_DIR: store, BEADS_ACTOR: "omp/test/qycs" } } } as unknown as Parameters<typeof decideEmbeddedWrite>[1];
+		const parsed = parse(command) as unknown as Parameters<typeof decideEmbeddedWrite>[0];
+		const decision = await decideEmbeddedWrite(parsed, event, { cwd: root } as unknown as Parameters<typeof decideEmbeddedWrite>[2], Date.now() + 5000, () => ({ interpreter: process.execPath, script: join(import.meta.dir, "bd-embedded-write-runner.ts") }));
+		expect(decision?.kind).toBe("rewrite");
+		if (decision?.kind !== "rewrite") return;
+		const run = Bun.spawnSync(["/bin/sh", "-c", decision.input.command as string], { cwd: root, env, stdout: "pipe", stderr: "pipe" });
+		expect(run.exitCode).toBe(0);
+		const created = JSON.parse(new TextDecoder().decode(run.stdout)) as { id?: unknown };
+		expect(typeof created.id).toBe("string");
+		if (typeof created.id !== "string") return;
+		const shown = Bun.spawnSync(["bd", "show", created.id, "--json"], { cwd: root, env, stdout: "pipe", stderr: "pipe" });
+		expect(shown.exitCode).toBe(0);
+		expect(new TextDecoder().decode(shown.stdout)).toContain("mise-runner-proof");
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+}, { timeout: 30_000 });
 
 
 test("refuses control and timing wrappers instead of bypassing the embedded lock", () => {
