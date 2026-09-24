@@ -54,10 +54,10 @@ jobs:
           # (dependabot-dist rebuilds automatically on Dependabot branches).
           bun-version: "1.4.2"
 
-      - name: Rebuild extension bundles and notices
+      - name: Rebuild extension bundles
         run: |
           set -euo pipefail
-          # Every plugin Dependabot covers, not just browser-tools: dep-update and
+          # Every dependency-bearing plugin Dependabot covers: dep-update and
           # whats-new bundle smol-toml, so build-extensions.py needs their
           # node_modules too. --frozen-lockfile matches ci.yml, so the lockfile
           # Dependabot wrote is the one that gets bundled.
@@ -66,7 +66,6 @@ jobs:
               (cd "$(dirname "$pkg")" && bun install --frozen-lockfile --silent)
             fi
           done < <(git ls-files '*/package.json')
-          bun browser-tools/scripts/generate-third-party-notices.ts
           python3 scripts/build-extensions.py
 
       - name: Stage the generated output
@@ -80,7 +79,7 @@ jobs:
           # is the second: it re-checks every path against the same allowlist the
           # publish job applies, so a rebuild that touched anything else fails here
           # instead of arriving as an unexplained artifact entry.
-          git add -- '*/dist/*.js' browser-tools/THIRD_PARTY_NOTICES.txt
+          git add -- '*/dist/*.js'
           git diff --cached --name-only -- '*/dist/*.js' browser-tools/THIRD_PARTY_NOTICES.txt \
             > "$RUNNER_TEMP/changed.txt"
           python3 scripts/dependabot-dist-guard.py stage \
