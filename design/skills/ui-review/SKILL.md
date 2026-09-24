@@ -9,17 +9,18 @@ Phase VERIFY. Drive the real surface and measure what a picture can only suggest
 
 TRIGGER
 + "review this UI", "check how this looks", "does this look right"
-+ Any landed change to a rendered surface, before reporting it done
 - "is this accessible", a WCAG conformance question -> `accessibility-audit`
 - iOS, Android, macOS, or Windows convention questions -> `platform-conformance`
 - Token and primitive discovery before building -> `design-system-audit`
 
 ## Workflow
 
-1. Verify at COMPONENT level before page level. When the project has a Storybook, LOAD
-   `skill://ui-review/references/storybook.md` and drive individual stories first. -> each
-   component passes in isolation before any page assembled from it is judged, because a
-   component-level failure is smaller to locate than the same failure on a page.
+1. Report Storybook MCP status before routing. When connected and the project has a Storybook,
+   LOAD `skill://ui-review/references/storybook.md` and drive individual stories first. When
+   unavailable, use the native source/ArgTypes/browser route and mark Storybook-dependent
+   coverage UNTESTED; do not ask the user to reconnect mid-run. -> each component passes in
+   isolation before any page assembled from it is judged, because a component-level failure is
+   smaller to locate than the same failure on a page.
 2. Get the surface running and reachable: `bash` with a `name` and `ready` for the dev server, then
    `browser` action `open` on the route. Start it ONCE and reuse it for the whole walk and
    for any later fix, because the process outlives the turn. -> the route responds, the tab
