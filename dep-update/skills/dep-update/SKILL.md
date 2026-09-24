@@ -8,7 +8,7 @@ description: Classify dependencies by semver safety and produce a cited upgrade 
 TRIGGER
 + "upgrade dependencies", "update my dependencies", "bump versions", "apply safe bumps"
 + "what's outdated", "check for stale packages", "check for outdated packages", "update lockfile", "dep update", "renovate"
-- choosing a project's initial dependencies → `project-setup` (this skill only
+- choosing a project's initial dependencies → the `toolchain-stack-defaults` rule (this skill only
   moves versions a repo already declares, and its output is time-varying by
   design: the same repo yields a different plan next month)
 
