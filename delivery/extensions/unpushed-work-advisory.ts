@@ -52,11 +52,15 @@ export type AdvisoryState = {
 	reminderCount: number;
 	agentPaths: Set<string>;
 	sessionHead: string | null;
+	/** False when the session cwd has a marker but Git cannot resolve a repository. */
+	repositoryResolved: boolean;
 };
 
 export function createAdvisoryState(): AdvisoryState {
-	return { lastFired: false, reminderCount: 0, agentPaths: new Set(), sessionHead: null };
+	return { lastFired: false, reminderCount: 0, agentPaths: new Set(), sessionHead: null, repositoryResolved: true };
 }
+
+
 
 function timeoutFor(deadline: number | undefined): number {
 	return Math.max(1, deadline === undefined ? TIMEOUT_MS : Math.min(TIMEOUT_MS, deadline - Date.now()));
@@ -454,6 +458,7 @@ export function handleSessionStop(
 	deadline = Date.now() + TIMEOUT_MS,
 	ledger: () => boolean = () => canonicalLedgerActive(cwd, deadline),
 ): StopResult | undefined {
+	if (!state.repositoryResolved) return;
 	if (event.stop_hook_active === true || event.stopHookActive === true) return;
 	if (state.lastFired) return;
 	if (statusText === null) {
@@ -497,7 +502,9 @@ export default function unpushedWorkAdvisory(pi: ExtensionAPI): void {
 		let state = states.get(cwd);
 		if (!state) {
 			state = createAdvisoryState();
-			state.sessionHead = hasGitDir(cwd) ? revParseHead(cwd, deadline) : null;
+			const marker = hasGitDir(cwd);
+			state.sessionHead = marker ? revParseHead(cwd, deadline) : null;
+			state.repositoryResolved = !marker || state.sessionHead !== null;
 			states.set(cwd, state);
 		}
 		return state;

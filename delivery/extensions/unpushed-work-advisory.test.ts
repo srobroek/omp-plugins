@@ -533,6 +533,18 @@ describe("integration temp git repo", () => {
 		}
 	}, 20_000);
 
+	test.skipIf(!gitOk)("stays silent when a .git marker is not a resolvable repository", () => {
+		const dangling = mkdtempSync(join(tmpdir(), "unpushed-adv-dangling-"));
+		try {
+			writeFileSync(join(dangling, ".git"), "gitdir: /path/that/does/not/exist\n");
+			const { fire } = registerAdvisory();
+			fire("session_start", {}, { cwd: dangling });
+			expect(fire("session_stop", {}, { cwd: dangling })).toBeUndefined();
+		} finally {
+			rmSync(dangling, { recursive: true, force: true });
+		}
+	});
+
 	test.skipIf(!gitOk)("advises only about files the agent wrote", () => {
 		const run = (args: string[]) =>
 			Bun.spawnSync(["git", ...GIT_ISOLATED, ...args], {
