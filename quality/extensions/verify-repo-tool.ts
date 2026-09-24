@@ -8,7 +8,6 @@ export const TIMEOUT_MS = 25_000;
 
 type VerifyParams = {
 	path?: string;
-	scope?: string;
 };
 
 export type VerifyResult = {
@@ -299,10 +298,6 @@ export default function verifyRepoTool(pi: ExtensionAPI): void {
 				.string()
 				.optional()
 				.describe("Repository cwd; defaults to the current working directory"),
-			scope: z
-				.string()
-				.optional()
-				.describe("Unused by the runner; reserved for caller notes"),
 		}) as unknown as TSchema,
 		execute: async (_toolCallId, params: VerifyParams, _signal, _onUpdate, ctx) => {
 			const cwd = resolve(ctx?.cwd ?? process.cwd(), params.path ?? ".");
@@ -315,7 +310,6 @@ export default function verifyRepoTool(pi: ExtensionAPI): void {
 						complete: result.complete,
 						exitCode: result.exitCode,
 						path: cwd,
-						scope: params.scope,
 						ran: result.ran,
 						skipped: result.skipped,
 						failed: result.failed,
@@ -326,7 +320,7 @@ export default function verifyRepoTool(pi: ExtensionAPI): void {
 				const message = err instanceof Error ? err.message : String(err);
 				return {
 					content: [{ type: "text", text: `verify_repo failed: ${message}` }],
-					details: { ok: false, error: message, path: cwd, scope: params.scope },
+					details: { ok: false, error: message, path: cwd },
 				};
 			}
 		},
