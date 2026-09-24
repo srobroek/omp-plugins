@@ -32,7 +32,5 @@ Registered by this plugin's extension modules:
 
 - `agentic_lint`
 
-Repository CI runs `bun scripts/check-agentic-metadata.ts` over every shipped
-rule, agent, and skill. It reports coverage and rejects malformed YAML, invalid
-required metadata, and invalid rule triggers using the authoring validator.
-Prose-style findings remain part of `agentic_lint`, not this metadata gate.
+Repository CI runs `bun scripts/check-agentic-metadata.ts` over Markdown files in each top-level plugin's `rules/` and `agents/` directory, plus each skill directory's `SKILL.md`. It reports counts for those asset kinds and fails on malformed frontmatter or the validator's E13/E14 metadata errors. For agents, this gate also requires nonempty `model`, `thinking-level`, and comma-separated `tools` metadata.
+The metadata gate does not run the full `agentic_lint` checks: prose-style findings and other lint codes remain outside this CI step.
