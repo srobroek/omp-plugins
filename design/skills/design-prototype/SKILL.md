@@ -44,7 +44,8 @@ TRIGGER
    human runs from that directory. Never report a URL you did not fetch.
    -> Then drive it yourself with `skill://ui-review` at 1440, 768, and 375 before claiming
    the flow works. An SVG or a single HTML file serves the same way.
-   -> Leave the server running when you report. Stopping it strands the artifact.
+   -> Stop the supervised server before reporting, or explicitly hand it off to a human with
+   its process name and stop command. Never leave a hub process running after this task.
 4. State what the artifact does not answer. -> a named gap list, because a low-fidelity
    artifact settles layout and flow, never final visual detail.
 

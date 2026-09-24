@@ -4,14 +4,14 @@
       "command": "npx",
       "args": [
         "-y",
-        "accessibility-scanner-mcp"
+        "accessibility-scanner-mcp@0.2.3"
       ]
     },
     "wire-dsl": {
       "command": "npx",
       "args": [
         "-y",
-        "@wire-dsl/mcp-server"
+        "@wire-dsl/mcp-server@0.1.3"
       ]
     },
     "storybook": {
