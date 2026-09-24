@@ -1,5 +1,6 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import type { TSchema } from "@oh-my-pi/pi-ai";
 import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
 
@@ -196,6 +197,12 @@ function runJsExec(
     }
 }
 
+export function resolveVerifyPath(raw: string, base = process.cwd()): string {
+    if (!raw.includes("://") && !raw.startsWith("file:")) return resolve(base, raw);
+    if (!raw.startsWith("file:")) throw new Error(`unsupported repository URL: ${raw}`);
+    return fileURLToPath(raw);
+}
+
 export function runVerify(cwd: string): VerifyResult {
     cwd = resolve(cwd);
     const deadline = Date.now() + TIMEOUT_MS;
@@ -300,7 +307,7 @@ export default function verifyRepoTool(pi: ExtensionAPI): void {
 				.describe("Repository cwd; defaults to the current working directory"),
 		}) as unknown as TSchema,
 		execute: async (_toolCallId, params: VerifyParams, _signal, _onUpdate, ctx) => {
-			const cwd = resolve(ctx?.cwd ?? process.cwd(), params.path ?? ".");
+			const cwd = resolveVerifyPath(params.path ?? ".", ctx?.cwd ?? process.cwd());
 			try {
 				const result = runVerify(cwd);
 				return {

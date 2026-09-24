@@ -2,7 +2,8 @@ import { afterAll, describe, expect, test } from "bun:test";
 import { chmodSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
-import { runVerify } from "./verify-repo-tool.ts";
+import { pathToFileURL } from "node:url";
+import { resolveVerifyPath, runVerify } from "./verify-repo-tool.ts";
 
 const temps: string[] = [];
 
@@ -131,4 +132,13 @@ test.each(["absolute", "relative", "session-relative"])("project Python tools wi
 	expect(failed.ok).toBe(false);
 	expect(failed.failed).toBe(1);
 }, 120_000); // child probes tools at 5s per argument set; a cascade over absent tools costs 15s per binary
-
+test("resolves file URLs to their filesystem path", () => {
+	const root = mkdtempSync(join(tmpdir(), "verify-file-url-"));
+	temps.push(root);
+	try {
+		expect(resolveVerifyPath(pathToFileURL(root).href, "/")).toBe(root);
+		expect(() => resolveVerifyPath("https://example.test/repo", "/")).toThrow("unsupported repository URL");
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});

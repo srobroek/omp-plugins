@@ -2,6 +2,7 @@ import { execFile } from "node:child_process";
 import { copyFileSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync } from "node:fs";
 import { basename, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { promisify } from "node:util";
+import { fileURLToPath } from "node:url";
 import type { TSchema } from "@oh-my-pi/pi-ai";
 import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
 
@@ -80,15 +81,29 @@ export async function runJourneys(
 	}
 }
 
+/** Resolve a local path or file URL without treating URL syntax as a relative path. */
+function localPath(raw: string): string | null {
+	if (!raw.includes("://") && !raw.startsWith("file:")) return raw;
+	if (!raw.startsWith("file:")) return null;
+	try {
+		return fileURLToPath(raw);
+	} catch {
+		return null;
+	}
+}
+
 /** Resolve the physical directory a command or formula install will operate in. */
 function managedRoot(dir: string, base = process.cwd()): string | null {
-    const absolute = resolve(isAbsolute(dir) ? dir : join(base, dir));
-    if (dir.split(sep === "\\" ? /[\\/]/ : "/").includes("..")) return null;
+	const local = localPath(dir);
+	if (local === null) return null;
+    const absolute = resolve(isAbsolute(local) ? local : join(base, local));
+    if (local.split(sep === "\\" ? /[\\/]/ : "/").includes("..")) return null;
     try {
         return realpathSync(absolute);
     } catch {
         return null;
     }
+
 }
 
 function safePath(path: string, base: string): void {
