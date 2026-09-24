@@ -137,6 +137,24 @@ class PreflightRegressionTests(unittest.TestCase):
             self.assertEqual(result.status, "pass")
             self.assertIn("present, executable, and approved", result.detail)
 
+    def test_interpreter_hook_only_requires_script_readability(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            script = root / "verify.py"
+            script.write_text("print('ok')\n", encoding="utf-8")
+
+            class ApprovalContext(FakeContext):
+                def run(self, *args: str, **kwargs: object) -> preflight.CommandResult:
+                    if args == ("wt", "config", "approvals", "list", "--format=json"):
+                        return preflight.CommandResult(
+                            0,
+                            json.dumps({"state": "approved", "commands": [{"phase": "pre-start", "name": "verify", "command": "python3 ./verify.py", "approved": True}]}),
+                        )
+                    return super().run(*args, **kwargs)
+
+            result = preflight.check_hook_approvals(ApprovalContext(root))
+            self.assertEqual(result.status, "pass")
+
     def test_hook_approvals_reports_missing_declared_executable(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
