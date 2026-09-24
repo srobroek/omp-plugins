@@ -8,7 +8,9 @@
       "./extensions/unpushed-work-advisory.ts",
       "./extensions/delivery-land-tool.ts",
       "./extensions/delivery-cleanup-tool.ts",
-      "./extensions/hygiene-orientation.ts"
+      "./extensions/hygiene-orientation.ts",
+      "./extensions/canonical-checkout-gate.ts",
+      "./extensions/primary-checkout-gate.ts"
     ]
   }
 }

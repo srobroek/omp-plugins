@@ -14,11 +14,16 @@ LEGEND: Rules carry stable IDs (GW-n).
 - The body states what changed, why, and the test plan. Use one close keyword per issue line.
 - MUST GW-8: When the target repository is external, upstream, or not controlled by the user, omit internal linkage fields and sections from every externally visible PR or issue title, body, comment, review, and template field. Never mention Beads, bead IDs, internal IDs, agents, gates, orchestration, workflow rationale, or placeholders for omitted context. Controlled repositories retain the Beads linkage below.
 - MUST GW-7: under squash merge the PR title becomes the commit subject, so it carries a conventional type and, in a monorepo, the package scope (`fix(beads): catalog refresh fails when offline`). Release automation reads subjects, not body bullets. Write the title for end users, never spec IDs, task references, or phase names.
-- Working on `main` or `master` - checkout, commit, or push - is allowed where the session intends it. This plugin ships no gate for it.
+- Working on `main` or `master` is refused for checkout, commit, push, merge, and
+  local ref or worktree mutations. A commit exception requires command-local
+  `DELIVERY_ALLOW_MAIN_COMMIT=1` plus the exact trusted remote-default directive;
+  `DELIVERY_ALLOW_PRIMARY_CHECKOUT=1` authorizes edit/write and index operations
+  only. The gates fail closed when repository identity, remote default, or steering
+  cannot be proved.
 
 ## Protected-branch push advisory
 
-`rule://delivery-main-branch-push-advisory` warns when a `git push` spells out `main` or `master` as its destination. It never blocks the command, and it reads the command text only: it cannot tell whether that destination is protected on the server, and a bare `git push` carries no destination to read. When it fires, confirm the target is the one you meant.
+`rule://delivery-main-branch-push-advisory` documents the command-text advisory for explicit pushes to `main` or `master`; the restored delivery gates independently refuse protected checkout mutations and commits unless the exact documented exception factors are proven.
 
 ## Automated review loop
 
