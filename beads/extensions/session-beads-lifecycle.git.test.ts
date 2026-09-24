@@ -746,6 +746,29 @@ bashGates(fakePi as never);
       setBdStreamForTests(null);
     }
   });
+	test.serial("dangling server-mode worktree skips session-start bd probes", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "beads-dangling-server-start-"));
+		writeFileSync(join(dir, ".git"), "gitdir: /missing");
+		mkdirSync(join(dir, ".beads"));
+		writeFileSync(join(dir, ".beads", "config.yaml"), "dolt_mode: server\nshared_server: true\n");
+		let calls = 0;
+		setBdStreamForTests(async () => {
+			calls++;
+			return "unexpected";
+		});
+		try {
+			const { handlers, logged } = wire();
+			const start = handlers.session_start?.[0];
+			if (start === undefined) throw new Error("session start handler was not registered");
+			await start({}, { cwd: dir, sessionManager: { getSessionId: () => "dangling-server-start" } });
+			await settleBackgroundWorkForTests();
+			expect(calls).toBe(0);
+			expect(logged).toEqual(["Beads session-start unverified: repository identity unknown; gate verification was skipped."]);
+		} finally {
+			setBdStreamForTests(null);
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
   test.serial("session start reports an injected embedded-store failure", async () => {
     const dir = mkdtempSync(join(tmpdir(), "beads-fake-start-"));
     mkdirSync(join(dir, ".beads"));
@@ -1882,6 +1905,38 @@ printf '%s\\n' '{"data":[{"id":"bd-bad"}],"schema_version":1}'
 				["update", "bd-aborted", "--status", "blocked", "--if-status", "open", "--if-assignee", ""],
 				["update", "bd-error", "--status", "deferred", "--if-status", "open", "--if-assignee", ""],
 			]);
+		} finally {
+			setBdStreamForTests(null);
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+	test.serial("agent_end leaves a recoverable anchor when old bd rejects CAS", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "beads-agent-end-old-cli-"));
+		mkdirSync(join(dir, ".beads"));
+		const calls: string[][] = [];
+		setBdStreamForTests(async (_cwd, args, _deadline, env) => {
+			calls.push(args);
+			if (args[0] === "show") {
+				return { output: JSON.stringify({ data: [{ id: args[1], issue_type: "task", status: "in_progress", assignee: env.BD_ACTOR, metadata: { lease_host: "worker-old-cli", lease_pid: "321" } }], schema_version: 1 }) };
+			}
+			if (args[0] === "unclaim") return { failure: "unknown flag: --if-assignee" };
+			return { output: "updated" };
+		});
+		try {
+			const { handlers } = wire();
+			const ctx = { cwd: dir, sessionManager: { getSessionId: () => "agent-end-old-cli" } };
+			handlers.tool_result?.[0]?.({ toolName: "bash", toolCallId: "old-cli-claim", isError: false, input: { command: "BD_ACTOR=actor/old bd update bd-old-cli --claim", cwd: dir, env: { BD_ACTOR: "actor/old" } }, content: [{ type: "text", text: "Updated issue: bd-old-cli" }] }, ctx);
+			const end = handlers.agent_end?.[0];
+			if (end === undefined) throw new Error("agent_end handler was not registered");
+			await end({ willContinue: false, outcome: "cancelled" }, ctx);
+			await settleBackgroundWorkForTests();
+			expect(calls.map(args => args[0])).toEqual(["show", "unclaim"]);
+			const stop = handlers.session_stop?.[0];
+			if (stop === undefined) throw new Error("session stop handler was not registered");
+			const advisory = await stop({}, ctx) as { additionalContext?: string };
+			expect(advisory.additionalContext).toContain("does not advertise atomic --if-assignee");
+			expect(advisory.additionalContext).toContain("Lease anchor: host=worker-old-cli pid=321");
+			expect(advisory.additionalContext).toContain("bd-old-cli");
 		} finally {
 			setBdStreamForTests(null);
 			rmSync(dir, { recursive: true, force: true });
