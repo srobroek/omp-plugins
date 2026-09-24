@@ -1731,7 +1731,7 @@ function directShell(command) {
     return;
   return { assignments: match[1] ?? "", call: match[2] ?? "" };
 }
-async function decideEmbeddedWrite(parsed, event, ctx, deadline = Date.now() + 25000) {
+async function decideEmbeddedWrite(parsed, event, ctx, deadline = Date.now() + 25000, runnerLookup = embeddedWriteRunner) {
   try {
     if (event.toolName !== "bash")
       return;
@@ -1765,7 +1765,7 @@ async function decideEmbeddedWrite(parsed, event, ctx, deadline = Date.now() + 2
         reason: `This command reaches the embedded store${unique.length > 1 ? "s" : ""} ${unique.join(", ")} in a form the Beads write lock cannot run under its serialising runner. Issue the \`bd\` command as its own tool call, as a single direct invocation.`
       };
     }
-    const runner = embeddedWriteRunner();
+    const runner = runnerLookup();
     if (runner === undefined) {
       return {
         kind: "block",
