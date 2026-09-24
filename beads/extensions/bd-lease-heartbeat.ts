@@ -68,6 +68,7 @@ interface ActiveHeartbeat {
 	timer: unknown;
 	running: boolean;
 	stopped: boolean;
+	paused: boolean;
 	noticed: boolean;
 }
 
@@ -351,6 +352,7 @@ function startHeartbeat(pi: ExtensionAPI, claim: PendingClaim, id: string): void
 	active.clock = clock;
 	active.running = false;
 	active.stopped = false;
+	active.paused = false;
 	active.noticed = false;
 	try {
 		active.timer = clock.setInterval(() => heartbeat(active), HEARTBEAT_INTERVAL_MS);
@@ -358,6 +360,36 @@ function startHeartbeat(pi: ExtensionAPI, claim: PendingClaim, id: string): void
 		state.set(id, active);
 	} catch {
 		active.stopped = true;
+	}
+}
+function pauseSession(session: string): void {
+	const state = activeBySession.get(session);
+	if (state === undefined) return;
+	for (const active of state.values()) {
+		if (active.stopped || active.paused) continue;
+		active.paused = true;
+		try {
+			active.clock.clearTimer(active.timer);
+		} catch {
+			// A host may already have cleared managed timers during lifecycle transitions.
+		}
+	}
+}
+
+function resumeSession(session: string): void {
+	const state = activeBySession.get(session);
+	if (state === undefined) return;
+	for (const active of [...state.values()]) {
+		if (active.stopped || !active.paused) continue;
+		active.paused = false;
+		try {
+			active.timer = active.clock.setInterval(() => heartbeat(active), HEARTBEAT_INTERVAL_MS);
+			unrefTimer(active.timer);
+		} catch {
+			stopHeartbeat(active);
+			continue;
+		}
+		void heartbeat(active);
 	}
 }
 
@@ -421,7 +453,10 @@ export default function bdLeaseHeartbeat(pi: ExtensionAPI): void {
 		await onStopResult(event, ctx);
 	});
 	pi.on("agent_end", (_event, ctx: ExtensionContext) => {
-		try { stopSession(sessionKey(ctx)); } catch { /* lifecycle is best effort */ }
+		try { pauseSession(sessionKey(ctx)); } catch { /* lifecycle is best effort */ }
+	});
+	pi.on("agent_start", (_event, ctx: ExtensionContext) => {
+		try { resumeSession(sessionKey(ctx)); } catch { /* lifecycle is best effort */ }
 	});
 	pi.on("session_shutdown", (_event, _ctx: ExtensionContext) => {
 		try {

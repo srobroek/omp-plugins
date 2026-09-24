@@ -8,7 +8,6 @@ import sessionBeadsLifecycle, {
 	autoPinBeadsDir,
 	bdVerbs,
 	beadIdCandidates,
-	claimAnchor,
 	envelopeData,
 	formatGateAdvisory,
 	formatSessionCloseAdvisory,
@@ -547,12 +546,6 @@ describe("heldClaims", () => {
 	});
 });
 
-describe("claimAnchor", () => {
-	test("preserves host and pid from a claimed bead for liveness checks", () => {
-		const [bead] = readBeads(JSON.stringify({data: [{id: "bd-live-1", status: "in_progress", assignee: "omp/Other/s2", metadata: {lease_host: "worker-1", lease_pid: "4242"}}], schema_version: 1}));
-		expect(bead && claimAnchor(bead)).toEqual({ host: "worker-1", pid: 4242 });
-	});
-});
 describe("formatSessionCloseAdvisory", () => {
 	test("names the bead, the holder, and remedies that bd actually has", () => {
 		// The advisory previously told agents to run `bd unclaim`, which bd 1.2.2

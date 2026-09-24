@@ -1230,7 +1230,6 @@ function claimResultOutput(event) {
   return [content, stdout].filter(Boolean).join(`
 `);
 }
-var pendingClaims = new Map;
 
 // extensions/session-beads-lifecycle.ts
 var EMBEDDED_PIN_ENV = { BEADS_DOLT_SHARED_SERVER: "" };
@@ -1665,11 +1664,6 @@ function readBeads(stdout) {
   }
   return beads;
 }
-function claimAnchor(bead) {
-  const host = bead.metadata?.lease_host?.trim();
-  const pid = Number(bead.metadata?.lease_pid);
-  return host && Number.isInteger(pid) && pid > 0 ? { host, pid } : undefined;
-}
 function heldClaims(beads, seen, actor) {
   const actors = typeof actor === "string" ? new Set(actor.trim() ? [actor.trim()] : []) : actor;
   return beads.filter((bead) => {
@@ -1688,9 +1682,6 @@ function formatSessionCloseAdvisory(beads, env = process.env, releasedAt = new D
   for (const bead of beads.slice(0, MAX_LISTED)) {
     const who = bead.assignee ? ` [${bead.assignee}]` : "";
     lines.push(`- ${bead.id}${who} ${bead.title}`);
-    const anchor = claimAnchor(bead);
-    if (anchor !== undefined)
-      lines.push(`  Lease anchor: host=${anchor.host} pid=${anchor.pid}; check that process on that host before takeover.`);
     const actor = bead.assignee !== undefined && effectiveActors.has(bead.assignee) ? bead.assignee : undefined;
     const release = bead.assignee === undefined || actor === undefined ? undefined : releaseClaimCommand(bead.id, bead.assignee, { ...env, BD_ACTOR: actor }, releasedAt, casSupported);
     if (release === undefined) {
@@ -1987,7 +1978,6 @@ export {
   bdVerbs,
   beadIdCandidates,
   beadsDir,
-  claimAnchor,
   sessionBeadsLifecycle as default,
   endAutoPinSession,
   envelopeData,

@@ -291,7 +291,46 @@ describe("stop conditions and failure notices", () => {
         expect(calls).toBe(1);
     });
 
-    test("stops on agent_end and session_shutdown", async () => {
+    test("pauses on agent_end without firing while idle, then resumes on agent_start", async () => {
+        const clock = new FakeClock();
+        const calls: string[] = [];
+        setHeartbeatClockForTests(clock);
+        setHeartbeatRunForTests(argv => {
+            calls.push(argv[2] ?? "");
+            return { exitCode: 0, stdout: "" };
+        });
+        const agent = await startClaim("pause-resume");
+        await agent.handlers.agent_end?.[0]?.({ toolCallId: "agent-end", input: {} }, agent.ctx);
+        await clock.tick();
+        expect(calls).toEqual([]);
+        await agent.handlers.agent_start?.[0]?.({ toolCallId: "agent-start", input: {} }, agent.ctx);
+        await Promise.resolve();
+        await Promise.resolve();
+        expect(calls).toEqual([BEAD]);
+        await clock.tick();
+        expect(calls).toEqual([BEAD, BEAD]);
+    });
+
+    test("discards a paused record when its resumed heartbeat fails", async () => {
+        const clock = new FakeClock();
+        let calls = 0;
+        setHeartbeatClockForTests(clock);
+        setHeartbeatRunForTests(() => {
+            calls++;
+            return { exitCode: 1, stdout: "", stderr: "not holder" };
+        });
+        const agent = await startClaim("pause-failure");
+        await agent.handlers.agent_end?.[0]?.({ toolCallId: "agent-end", input: {} }, agent.ctx);
+        await agent.handlers.agent_start?.[0]?.({ toolCallId: "agent-start", input: {} }, agent.ctx);
+        await Promise.resolve();
+        await Promise.resolve();
+        await clock.tick();
+        expect(calls).toBe(1);
+        expect(agent.notices).toHaveLength(1);
+        expect(clock.callbacks.size).toBe(0);
+    });
+
+    test("session_shutdown permanently discards a paused record", async () => {
         const clock = new FakeClock();
         let calls = 0;
         setHeartbeatClockForTests(clock);
@@ -299,10 +338,41 @@ describe("stop conditions and failure notices", () => {
             calls++;
             return { exitCode: 0, stdout: "" };
         });
-        const agent = await startClaim("agent-end");
+        const agent = await startClaim("pause-shutdown");
         await agent.handlers.agent_end?.[0]?.({ toolCallId: "agent-end", input: {} }, agent.ctx);
+        await agent.handlers.session_shutdown?.[0]?.({ toolCallId: "shutdown", input: {} }, agent.ctx);
+        await agent.handlers.agent_start?.[0]?.({ toolCallId: "agent-start", input: {} }, agent.ctx);
+        await Promise.resolve();
         await clock.tick();
         expect(calls).toBe(0);
+        expect(clock.callbacks.size).toBe(0);
+    });
+
+    test("a foreign agent_start does not resume another session's paused record", async () => {
+        const clock = new FakeClock();
+        let calls = 0;
+        setHeartbeatClockForTests(clock);
+        setHeartbeatRunForTests(() => {
+            calls++;
+            return { exitCode: 0, stdout: "" };
+        });
+        const agent = await startClaim("paused-owner");
+        await agent.handlers.agent_end?.[0]?.({ toolCallId: "agent-end", input: {} }, agent.ctx);
+        await agent.handlers.agent_start?.[0]?.({ toolCallId: "agent-start", input: {} }, context("foreign"));
+        await Promise.resolve();
+        await clock.tick();
+        expect(calls).toBe(0);
+        expect(clock.callbacks.size).toBe(0);
+    });
+
+    test("stops on session_shutdown", async () => {
+        const clock = new FakeClock();
+        let calls = 0;
+        setHeartbeatClockForTests(clock);
+        setHeartbeatRunForTests(() => {
+            calls++;
+            return { exitCode: 0, stdout: "" };
+        });
         const shutdown = await startClaim("shutdown");
         await startClaim("shutdown-other");
         await shutdown.handlers.session_shutdown?.[0]?.({ toolCallId: "shutdown", input: {} }, shutdown.ctx);

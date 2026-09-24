@@ -47,7 +47,7 @@ When no active Beads ledger exists, execute the scoped task without ledger opera
 
 <procedure>
 1. Pull continuously by running the exact command `bd ready --label agent:implementer-high --unassigned --json`; filter returned records by the lead-owned epic id in metadata, never by parent. If the lead names a bead id, treat its raised priority as a cue only; it still must be pulled and claimed.
-2. If a matching record exists, run `bd show ID --json`, claim exactly one with `bd update ID --claim`, and use its files, acceptance, and metadata as the complete scope. Do not claim a second bead until this one is finished.
+2. If a matching record exists, run `bd show ID --json`, claim exactly one with `bd update ID --claim`, and use its files, acceptance, and metadata as the complete scope. The lease heartbeat resumes automatically when the agent wakes; before any further write, the worker MUST confirm the claim with `bd heartbeat ID`, which renews the lease and fails if the claim was lost. If it fails, or a heartbeat notice reports failure, the worker MUST stop writing to that bead and report it. Do not claim a second bead until this one is finished.
 3. Inspect existing patterns, edit only files named by the bead, and implement every explicit acceptance criterion without unrelated cleanup.
 4. Run only focused commands needed to prove the change. Record commands, results, changed paths, and evidence with `bd comment ID "EVIDENCE"`; close a completed bead with `bd close ID --reason "EVIDENCE"`.
 5. If a required prerequisite is missing, record the exact blocker and run `bd update ID --status blocked`; then return to the pull loop. Stop only when no matching ready bead remains.

@@ -373,12 +373,6 @@ function environmentForInput(input, base = process.env) {
   return env;
 }
 
-// extensions/bd-embedded-write-lock.ts
-import { hostname } from "os";
-var PREFLIGHT_WAIT_KEY = Symbol.for("com.srobroek.beads.embedded-write-lock.preflight-wait-ms.v1");
-var HOST = hostname().split(".")[0] ?? "localhost";
-var REGISTRY_KEY = Symbol.for("com.srobroek.beads.embedded-write-lock.v1");
-
 // extensions/bd-lease-gate.ts
 var BD_ID = /^[A-Za-z][A-Za-z0-9]*(?:-[A-Za-z0-9]+)+(?:\.\d+)*$/;
 function claimedIds(output) {
@@ -401,7 +395,6 @@ function claimedTextIds(output) {
   }
   return [...ids];
 }
-var pendingClaims = new Map;
 
 // extensions/bd-lease-heartbeat.ts
 var HEARTBEAT_INTERVAL_MS = 60000;
@@ -416,7 +409,7 @@ function setHeartbeatRunForTests(run) {
 function setHeartbeatClockForTests(clock) {
   injectedClock = clock;
 }
-var pendingClaims2 = new Map;
+var pendingClaims = new Map;
 var activeBySession = new Map;
 var toolSessions = new Map;
 var contextKeys = new WeakMap;
@@ -506,7 +499,7 @@ function exitCode(event) {
   return event.isError ? 1 : 0;
 }
 function claimPending(ctx, toolCallId) {
-  return pendingClaims2.get(pendingKey(sessionKey(ctx), toolCallId));
+  return pendingClaims.get(pendingKey(sessionKey(ctx), toolCallId));
 }
 function decideLeaseHeartbeatClaim(parsed, event, ctx) {
   try {
@@ -521,7 +514,7 @@ function decideLeaseHeartbeatClaim(parsed, event, ctx) {
       return;
     const input = event.input;
     const inputCwd = typeof input.cwd === "string" && input.cwd ? input.cwd : ctx.cwd ?? process.cwd();
-    pendingClaims2.set(pendingKey(session, event.toolCallId), {
+    pendingClaims.set(pendingKey(session, event.toolCallId), {
       toolCallId: event.toolCallId,
       session,
       cwd: leadingCdCwd(parsed.command, inputCwd),
@@ -710,6 +703,7 @@ function startHeartbeat(pi, claim, id) {
   active.clock = clock;
   active.running = false;
   active.stopped = false;
+  active.paused = false;
   active.noticed = false;
   try {
     active.timer = clock.setInterval(() => heartbeat(active), HEARTBEAT_INTERVAL_MS);
@@ -717,6 +711,37 @@ function startHeartbeat(pi, claim, id) {
     state.set(id, active);
   } catch {
     active.stopped = true;
+  }
+}
+function pauseSession(session) {
+  const state = activeBySession.get(session);
+  if (state === undefined)
+    return;
+  for (const active of state.values()) {
+    if (active.stopped || active.paused)
+      continue;
+    active.paused = true;
+    try {
+      active.clock.clearTimer(active.timer);
+    } catch {}
+  }
+}
+function resumeSession(session) {
+  const state = activeBySession.get(session);
+  if (state === undefined)
+    return;
+  for (const active of [...state.values()]) {
+    if (active.stopped || !active.paused)
+      continue;
+    active.paused = false;
+    try {
+      active.timer = active.clock.setInterval(() => heartbeat(active), HEARTBEAT_INTERVAL_MS);
+      unrefTimer(active.timer);
+    } catch {
+      stopHeartbeat(active);
+      continue;
+    }
+    heartbeat(active);
   }
 }
 function stopSession(session) {
@@ -735,7 +760,7 @@ async function onToolResult(pi, event, ctx) {
     const claim = claimPending(ctx, event.toolCallId);
     if (claim === undefined)
       return;
-    pendingClaims2.delete(pendingKey(claim.session, claim.toolCallId));
+    pendingClaims.delete(pendingKey(claim.session, claim.toolCallId));
     if (event.isError || exitCode(event) !== 0)
       return;
     const ids = new Set([...claim.ids, ...claimedIds(resultOutput(event))]);
@@ -783,13 +808,18 @@ function bdLeaseHeartbeat(pi) {
   });
   pi.on("agent_end", (_event, ctx) => {
     try {
-      stopSession(sessionKey(ctx));
+      pauseSession(sessionKey(ctx));
+    } catch {}
+  });
+  pi.on("agent_start", (_event, ctx) => {
+    try {
+      resumeSession(sessionKey(ctx));
     } catch {}
   });
   pi.on("session_shutdown", (_event, _ctx) => {
     try {
       stopAllSessions();
-      pendingClaims2.clear();
+      pendingClaims.clear();
     } catch {}
   });
 }

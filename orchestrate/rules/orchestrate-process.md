@@ -17,10 +17,10 @@ The main agent, lead, parent, and sub-lead MUST each explicitly instruct every w
 
 1. Pull with the exact invocation `bd ready --label agent:KIND --unassigned --json`.
 2. `bd ready` has no parent filter. Accept only records whose metadata `epic_id` exactly equals the epic id owned by that lead; ignore records for every other epic.
-3. Claim a selected record atomically with `bd update ID --claim`. A lead raises priority and names a specific bead id as a direct cue; naming a bead is not direct assignment and the worker still claims it with this command.
+3. Claim a selected record atomically with `bd update ID --claim`. A lead raises priority and names a specific bead id as a direct cue; naming a bead is not direct assignment and the worker still claims it with this command. The lease heartbeat resumes automatically when the agent wakes; before any further write, the worker MUST confirm the claim with `bd heartbeat ID`, which renews the lease and fails if the claim was lost. If it fails, or a heartbeat notice reports failure, it MUST stop writing to that bead and report it.
 4. Execute the bead, record durable evidence, then close it with `bd close ID --reason "EVIDENCE"`, or release it with `bd unclaim ID --if-assignee HOLDER --reason "..."` and read back its state; `--force` requires explicit user authorization.
 5. Return to step 1 after every close or release. Stop only after the pull returns no ready record for the worker's `agent:KIND` label and matching `metadata.epic_id`.
-An expired lease NEVER proves a dead holder. A holder is dead only when its `lease_pid` is not running on `lease_host` as checked on that host, or its agent id is absent or finished in `read proc://`; only then reclaim with `bd unclaim ID --if-assignee HOLDER --reason "holder dead: EVIDENCE"` and read back `open` and unassigned.
+Automatic heartbeat keeps a claim alive while its agent runs; a lease expires once the holder ends its run or dies. An expired lease NEVER proves death. The lead MUST NOT release a worker's bead unless that worker is absent or finished in `read proc://` AND its lease has expired; when both hold, it MUST use `bd unclaim ID --if-assignee HOLDER --reason "holder ended: EVIDENCE"`, then read back `open` and unassigned.
 If `bd show` or a CAS reports another holder or a closed bead, the worker MUST stop writing to that bead and report it; it MUST NEVER retry under the new holder.
  
 ## Wait discipline
@@ -46,7 +46,8 @@ Metadata families and timing:
 |---|---|
 | `execution_*` | REQUIRED before spawn: run, parent, epic, and routing context needed to resume orchestration. |
 | `repo`, `branch`, `base_sha`, `worktree`, `pr`, `merge_sha` | Git and delivery anchors; worker or integrator populates each as it becomes known. |
-| `lease_host`, `lease_pid` | Claim and lease anchors; worker populates them; do not invent a second lock. |
+
+After `delivery_land` on an active ledger, the lead MUST call `bd_reconcile` with the returned receipt path BEFORE any ledger write about the delivered beads. It NEVER writes `merge_sha` or `pr` anchors or closes a delivered bead itself; `bd_reconcile` performs those writes. `delivery_cleanup` follows reconciliation.
 
 Tier selection is a lead decision made at dispatch and recorded on the bead so an auditor can see which tier was chosen and why. Use the documented `execution_*` metadata family, specifically the exact key `execution_role`, with a value such as `implementer-high: root-cause diagnosis` or `implementer: local mechanical change`; do not invent another metadata key.
 Conflict avoidance is a decomposition duty. The lead MUST decompose work into units that minimise overlap in files and functions. A conflict between concurrently dispatched workers is, by default, evidence that decomposition put two agents in the same place—not evidence of healthy integration. Some regions are shared by construction: identify any region that more than one unit of work would have to touch, typically shared contracts, schemas, generated artefacts, registries, or configuration that several features must extend. Name each shared region in the parent or epic bead, give it ONE owner bead that applies every dependent unit's required change, and make dependent units `blocks`-depend on it. This does NOT relax the existing conflict discipline: when a conflict occurs, the lead MUST resolve it by touching only its own content and report the resolution; the change prevents avoidable conflicts.
@@ -55,9 +56,10 @@ Conflict avoidance is a decomposition duty. The lead MUST decompose work into un
 2. Create ONE bead per shared region with ONE owner, which applies every epic's required change to that region.
 3. Make dependent epics `blocks`-depend on that bead, so they wait rather than collide.
 4. Before any dispatch, create and route AT MOST ONE DAG review bead to the existing `agent:work-reviewer` role; its `--acceptance` criteria MUST cover exactly: dependency correctness, including missing `blocks` edges and cycles; conflict risk, identifying beads that touch the same files or functions by repository inspection rather than titles; wasted or overstated parallelisation against the critical path; and decomposition and overlap, including correctly sized, non-overlapping beads and one owner bead for every shared region with dependents `blocks`-depending on it.
-5. The review is time-boxed to a single round. The lead reads the verdict, records on the governing bead what it accepted or changed, and then DISPATCHES; it does not commission another opinion. A second DAG review is a process violation; record it with the governing bead's durable evidence.
-6. Dispatching implementers is the lead's primary duty and is never optional. If the review has not returned, or its verdict is unclear, the lead dispatches work known to be independent anyway and records that it did so. A clean verdict is not a precondition for independent work; it is a precondition only for starting work on a region the review flagged as contested.
-7. Only genuinely independent work is dispatched concurrently. An arm that produces reviews and no implementation has failed, regardless of how good the plan is. A DAG dispatched without a recorded `execution_dag_review` is a process violation.
+5. The single DAG review round MUST dispatch `work-reviewer` and the bundled `security-reviewer` in parallel for the same review. Both results together are that one round, not a second opinion. The lead records both verdicts on the governing bead before dispatching implementers into a contested region.
+6. The review is time-boxed to a single round. The lead reads both verdicts, records on the governing bead what it accepted or changed, and then DISPATCHES; it does not commission another opinion. A second DAG review is a process violation; record it with the governing bead's durable evidence.
+7. Dispatching implementers is the lead's primary duty and is never optional. If the review has not returned, or its verdict is unclear, the lead dispatches work known to be independent anyway and records that it did so. A clean verdict is not a precondition for independent work; it is a precondition only for starting work on a region the review flagged as contested.
+8. Only genuinely independent work is dispatched concurrently. An arm that produces reviews and no implementation has failed, regardless of how good the plan is. A DAG dispatched without a recorded `execution_dag_review` is a process violation.
 
 
 Only `execution_*` metadata is required before spawn. Keep every family on the governing bead as its values become known.
@@ -81,7 +83,7 @@ Worker-to-epic integration MUST use `wt merge --no-squash --no-ff`, with both fl
 Before merger handoff, the lead MUST run worker-to-epic `git merge-tree --write-tree EPIC_HEAD WORKER_HEAD`, then epic-to-default `wt list --format json` and inspect that branch's `merge_conflicts`. A non-zero exit, `true`, or unknown result is a hold; the merger still refuses and the lead resolves it.
 
 ## Review repair and conflicts
-
+MUST create and route AT MOST ONE DAG review bead with the four DAG-plan acceptance criteria before dispatching; the single review round MUST dispatch `work-reviewer` and the bundled `security-reviewer` in parallel for the same review, record both verdicts and every accepted or changed finding on the governing bead, and dispatch implementers into a contested region only after both verdicts are recorded. A second DAG review is a process violation.
 
 If integration conflicts, the merger MUST report the conflict to the lead through `write agent://AGENT_ID` and stop without resolving it. ONLY the lead resolves an integration conflict; the merger never resolves conflicts, reviews its own work, or substitutes for independent review. The lead reruns verification after resolution.
 

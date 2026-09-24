@@ -11,7 +11,7 @@ below where they disagree.
 MUST set acceptance criteria at creation for every bead that will be reviewed, using `bd create ... --acceptance "CRITERIA"` or the graph-plan `acceptance_criteria` field. Judge completeness against those criteria; a reviewed bead without criteria cannot be judged complete.
 
 # METADATA
-MUST put useful facts in bead `metadata`, not comments or the description, including git anchors (`repo`, `branch`, `base_sha`, `worktree`, `pr`, `merge_sha`) and lease anchors (`lease_host`, `lease_pid`). Keep rationale in the description.
+MUST put useful facts in bead `metadata`, not comments or the description, including git anchors (`repo`, `branch`, `base_sha`, `worktree`, `pr`, `merge_sha`). Keep rationale in the description.
 
 # WISPS
 NEVER use wisps for durable agent-to-agent decisions, acceptance evidence, or closure. Use a durable bead carrier instead.

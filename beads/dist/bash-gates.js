@@ -1431,11 +1431,6 @@ async function decideEmbeddedWrite(parsed, event, ctx, deadline = Date.now() + 2
 
 // extensions/session-beads-lifecycle.ts
 import { isAbsolute as isAbsolute3, join as join2, resolve as resolve4 } from "path";
-
-// extensions/bd-lease-gate.ts
-var pendingClaims = new Map;
-
-// extensions/session-beads-lifecycle.ts
 var EMBEDDED_PIN_ENV = { BEADS_DOLT_SHARED_SERVER: "" };
 function pinBashInput(input, pin) {
   if (pin === undefined || input === null || typeof input !== "object")

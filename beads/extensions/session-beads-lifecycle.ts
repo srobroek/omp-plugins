@@ -630,12 +630,6 @@ export function readBeads(stdout: string): Bead[] {
 	return beads;
 }
 
-/** A lease anchor makes a foreign claim checkable without guessing from age. */
-export function claimAnchor(bead: Bead): { host: string; pid: number } | undefined {
-	const host = bead.metadata?.lease_host?.trim();
-	const pid = Number(bead.metadata?.lease_pid);
-	return host && Number.isInteger(pid) && pid > 0 ? { host, pid } : undefined;
-}
 
 /**
  * Claims this session is answerable for.
@@ -671,8 +665,6 @@ export function formatSessionCloseAdvisory(
 	for (const bead of beads.slice(0, MAX_LISTED)) {
 		const who = bead.assignee ? ` [${bead.assignee}]` : "";
 		lines.push(`- ${bead.id}${who} ${bead.title}`);
-		const anchor = claimAnchor(bead);
-		if (anchor !== undefined) lines.push(`  Lease anchor: host=${anchor.host} pid=${anchor.pid}; check that process on that host before takeover.`);
 		const actor = bead.assignee !== undefined && effectiveActors.has(bead.assignee)
 			? bead.assignee
 			: undefined;

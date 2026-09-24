@@ -2,7 +2,6 @@ import type { ExtensionAPI, ExtensionContext, ToolCallEvent } from "@oh-my-pi/pi
 
 type BashInput = { command?: unknown; cmd?: unknown; cwd?: unknown };
 type Decision = { block: true; reason: string } | undefined;
-export type GitRunner = (args: string[], cwd: string) => string | null;
 
 const MERGE_RETRY = "wt merge <target> --no-squash --no-ff";
 export const MERGE_POLICY_REFUSAL = `worker-to-epic merges must preserve history; retry with ${MERGE_RETRY}`;
@@ -60,6 +59,7 @@ function targetAndFlags(
 		subIndex += GLOBAL_VALUE_OPTIONS[option] === true ? 2 : 1;
 	}
 	if (argv[subIndex] !== "merge") return null;
+	if (argv.includes("--help") || argv.includes("-h")) return null;
 	let target: string | null = null;
 	let noSquash = false;
 	let noFf = false;
@@ -83,25 +83,39 @@ function commandCwd(command: string, cwd: string): string {
 	return dir?.startsWith("/") ? dir : `${cwd}/${dir}`;
 }
 
+export type GitRunner = (args: string[], cwd: string) => string | null;
+export type WtRunner = (args: string[], cwd: string) => string | null;
+
 const defaultGitRunner: GitRunner = (args, cwd) => {
 	const result = Bun.spawnSync(["git", ...args], { cwd, stdout: "pipe", stderr: "ignore" });
 	return result.exitCode === 0 ? new TextDecoder().decode(result.stdout).trim() : null;
 };
 
-export function decideMergePolicy(command: string, cwd: string, gitRunner: GitRunner = defaultGitRunner): Decision {
+const defaultWtRunner: WtRunner = (args, cwd) => {
+	const result = Bun.spawnSync(["wt", ...args], { cwd, stdout: "pipe", stderr: "ignore" });
+	return result.exitCode === 0 ? new TextDecoder().decode(result.stdout).trim() : null;
+};
+
+export function decideMergePolicy(
+	command: string,
+	cwd: string,
+	gitRunner: GitRunner = defaultGitRunner,
+	wtRunner: WtRunner = defaultWtRunner,
+): Decision {
 	for (const segment of shellSegments(command)) {
 		const invocation = targetAndFlags(segment);
-		if (!invocation) continue;
+		if (!invocation || invocation.target === null) continue;
 		const shellCwd = commandCwd(command, cwd);
 		const repoCwd = invocation.workdir
 			? invocation.workdir.startsWith("/")
 				? invocation.workdir
 				: `${shellCwd}/${invocation.workdir}`
 			: shellCwd;
-		const symbolic = gitRunner(["symbolic-ref", "--short", "refs/remotes/origin/HEAD"], repoCwd);
+		const configured = wtRunner(["config", "state", "default-branch"], repoCwd);
+		const symbolic = configured || gitRunner(["symbolic-ref", "--short", "refs/remotes/origin/HEAD"], repoCwd);
 		const defaultBranch = symbolic?.replace(/^origin\//, "");
 		if (!defaultBranch) return { block: true, reason: `cannot determine the repository default branch; ${MERGE_RETRY}` };
-		if (invocation.target === null || invocation.target === defaultBranch) continue;
+		if (invocation.target === defaultBranch) continue;
 		if (!invocation.noSquash || !invocation.noFf) return { block: true, reason: MERGE_POLICY_REFUSAL.replace("<target>", invocation.target) };
 	}
 	return undefined;
@@ -117,3 +131,4 @@ export default function mergePolicyGate(pi: ExtensionAPI): void {
 		return decideMergePolicy(command, cwd);
 	});
 }
+

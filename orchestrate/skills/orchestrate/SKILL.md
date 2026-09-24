@@ -14,7 +14,7 @@ TRIGGER
 
 1. Read the goal, acceptance criteria, repository state, and verification command.
 2. Create the parent and dependency DAG in beads before dispatch; make dependencies and research evidence durable on beads.
-3. Give every dispatchable bead its `agent:KIND` routing label, `execution_*` metadata, acceptance and routing context before dispatch; populate git and lease anchors as they become known.
+3. Give every dispatchable bead its `agent:KIND` routing label, `execution_*` metadata, acceptance and routing context before dispatch; populate git anchors as they become known.
 4. Explicitly instruct every main-agent, lead, parent, and sub-lead worker to pull its role queue; follow `rule://orchestrate-process` for the exact pull, claim, worktree, evidence, review, repair, and conflict protocol.
 5. Choose one-tier or two-tier topology from achievable coordination load: non-contending concurrent workers, internal DAG depth, and the lead's evidence bottleneck. Never choose two-tier from epic count alone.
 6. For two-tier work, retain `task.maxRecursionDepth=3`; the default 2 cannot contain root, orchestrator, worker, and helper.
