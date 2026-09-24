@@ -46,10 +46,11 @@ export type PoolWaitResult = {
 
 
 async function runBdReady(pool: string, cwd: string, timeoutMs: number): Promise<BdReadyResult> {
-	let process: Bun.Subprocess;
+	let process: Bun.Subprocess<"ignore", "pipe", "pipe">;
 	try {
 		process = Bun.spawn(["bd", "ready", "--assignee", pool, "--json"], {
 			cwd,
+			stdin: "ignore",
 			stdout: "pipe",
 			stderr: "pipe",
 		});
@@ -62,6 +63,9 @@ async function runBdReady(pool: string, cwd: string, timeoutMs: number): Promise
 		};
 	}
 
+	// Drain both pipes while waiting: a full pipe buffer would otherwise block bd before it exits.
+	const stdoutText = new Response(process.stdout).text();
+	const stderrText = new Response(process.stderr).text();
 	const outcome = await Promise.race([
 		process.exited.then((exitCode: number) => ({ timedOut: false as const, exitCode })),
 		Bun.sleep(timeoutMs).then(() => ({ timedOut: true as const, exitCode: null })),
@@ -75,8 +79,7 @@ async function runBdReady(pool: string, cwd: string, timeoutMs: number): Promise
 			error: `bd ready timed out after ${timeoutMs}ms`,
 		};
 	}
-	const stdout = await new Response(process.stdout).text();
-	const stderr = await new Response(process.stderr).text();
+	const [stdout, stderr] = await Promise.all([stdoutText, stderrText]);
 	return { exitCode: outcome.exitCode, stdout, stderr };
 }
 function textResult(text: string, details: PoolWaitDetails): PoolWaitResult {

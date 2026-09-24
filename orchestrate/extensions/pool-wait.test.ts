@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { waitForPool, type BdReadyResult } from "./pool-wait";
+import { type BdReadyResult, waitForPool } from "./pool-wait";
 
 function result(stdout: string, exitCode = 0): BdReadyResult {
 	return { exitCode, stdout, stderr: exitCode === 0 ? "" : "bd unavailable" };
