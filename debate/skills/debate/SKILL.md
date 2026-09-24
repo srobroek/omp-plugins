@@ -48,11 +48,12 @@ Synthesize into structured sections:
 ### Phase 4: Devil's advocate
 
 For a simple request, present the strongest counterargument directly.
-For consequential or contested decisions, obtain an independent critique when
-an appropriate agent is available, briefed with the finished Phase 3 analysis:
-challenge the strongest pro, identify unstated assumptions, and name the
-strongest argument against the proposal. Otherwise run a separate critique pass
-and label it self-review, not independent evidence.
+For consequential or contested decisions, first check whether an appropriate
+independent critique agent is available. If one is available, brief it with the
+finished Phase 3 analysis: challenge the strongest pro, identify unstated
+assumptions, and name the strongest argument against the proposal. If no
+appropriate agent is available, run a separate critique pass and label it
+**self-review**, not independent evidence.
 
 ### Phase 5: Synthesis
 
