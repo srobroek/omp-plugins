@@ -46,6 +46,7 @@ export const FORMULAS = [
 ] as const;
 
 export const EXTENSIONS = [
+	"agent-context",
 	"bugfix",
 	"cleanup",
 	"critique",
