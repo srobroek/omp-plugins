@@ -530,7 +530,6 @@ interface TrackedClaim {
 	id: string;
 	actor: string | undefined;
 	store: string | undefined;
-	anchor?: { host: string; pid: number };
 }
 
 interface ClaimTarget {
@@ -843,7 +842,7 @@ export function formatSessionCloseAdvisory(
 		if (release === undefined) {
 			lines.push(casSupported
 				? "  Release unavailable: the effective actor is missing or ambiguous; verify the current assignee and actor before retrying."
-				: "  Release unavailable: this bd does not advertise atomic --if-assignee; upgrade bd before retrying.");
+				: "  Release unavailable: bd >= 1.3 is required for atomic --if-assignee; the claim remains assigned.");
 		} else {
 			lines.push(`  Release with: ${release}`);
 			if (!casSupported) lines.push("  Then verify: bd show <id> --json must show no assignee.");
@@ -864,7 +863,6 @@ function trackedClaimAdvisory(state: SessionState): string | undefined {
 		status: "in_progress",
 		assignee: claim.actor,
 		releaseStore: claim.store ?? null,
-		metadata: claim.anchor === undefined ? undefined : { lease_host: claim.anchor.host, lease_pid: String(claim.anchor.pid) },
 	}));
 	return formatSessionCloseAdvisory(claims, {}, new Date().toISOString(), state.casSupported !== false, state.actors);
 }
@@ -973,13 +971,8 @@ async function releaseClaimsAtAgentEnd(
 			const record = bead as Record<string, unknown>;
 			if (record.assignee !== actor || !["epic", "task"].includes(String(record.issue_type)) ||
 				!["open", "in_progress", "blocked", "deferred"].includes(String(record.status))) continue;
-			const rawMetadata = record.metadata;
-			if (rawMetadata !== null && typeof rawMetadata === "object") {
-				const metadata = Object.fromEntries(Object.entries(rawMetadata as Record<string, unknown>).filter((entry): entry is [string, string] => typeof entry[1] === "string"));
-				claim.anchor = claimAnchor({ id: claim.id, title: "", status: String(record.status), metadata });
-			}
 			if (state.casSupported === false) {
-				report(`terminal claim ${claim.id} remains assigned: bd lacks atomic --if-assignee; recovery anchor is bead=${claim.id} assignee=${actor} store=${claim.store}`);
+				report(`terminal claim ${claim.id} remains assigned: bd >= 1.3 is required for atomic --if-assignee; no automatic release was attempted`);
 				continue;
 			}
 			const release = releaseClaimArgs(claim.id, actor, env, new Date().toISOString(), true);
@@ -988,7 +981,7 @@ async function releaseClaimsAtAgentEnd(
 			if (!("output" in released)) {
 				if (/--if-assignee/i.test(released.failure) && /(?:unknown|unrecognized|unsupported|invalid|unexpected).*(?:flag|option)|(?:flag|option).*(?:unknown|unrecognized|unsupported|invalid|unexpected)/i.test(released.failure)) {
 					state.casSupported = false;
-					report(`terminal claim ${claim.id} remains assigned: bd rejected atomic --if-assignee; recovery anchor is bead=${claim.id} assignee=${actor} store=${claim.store}`);
+					report(`terminal claim ${claim.id} remains assigned: bd >= 1.3 is required for atomic --if-assignee; no automatic release was attempted`);
 				} else {
 					report(`terminal claim release for ${claim.id} was not verified: ${released.failure}`);
 				}
