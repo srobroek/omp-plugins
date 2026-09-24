@@ -165,12 +165,17 @@ describe("pinBashInput", () => {
 		rmSync(plain, { recursive: true, force: true });
 	});
 
-	test("a Git identity failure is unknown, never the local beads directory", () => {
-		const plain = mkdtempSync(join(tmpdir(), "beads-unreadable-"));
+	test("a dangling linked-worktree server-mode store stays unpinned when Git identity is unknown", () => {
+		const plain = mkdtempSync(join(tmpdir(), "beads-unreadable-server-"));
 		writeFileSync(join(plain, ".git"), "gitdir: /missing");
 		mkdirSync(join(plain, ".beads"));
+		writeFileSync(join(plain, ".beads", "config.yaml"), "dolt_mode: server\nshared_server: true\n");
+		const env: NodeJS.ProcessEnv = {};
+		const state: { pinned?: string; owner?: string; ownerRepo?: string } = {};
 		expect(repoIdentity(plain)).toBeUndefined();
 		expect(sessionPinFor(plain)).toBeUndefined();
+		expect(autoPinBeadsDir(plain, "dangling", () => false, env, state, repoIdentity)).toEqual({});
+		expect(env.BEADS_DIR).toBeUndefined();
 		rmSync(plain, { recursive: true, force: true });
 	});
 
@@ -674,18 +679,11 @@ describe("runBdResult", () => {
 			expect(result).toEqual({ failure: "bd command timed out" });
 		} finally { rmSync(root, { recursive: true, force: true }); }
 	});
-  test("accepts a classified failure from the bd seam", async () => {
-    setBdStreamForTests(async () => ({ failure: "bd exited with code 1: Error 1045 (28000): Access denied" }));
-    try {
-      expect(await runBdResult("/repo", ["list"])).toEqual({ failure: "bd exited with code 1: Error 1045 (28000): Access denied" });
-    } finally {
-      setBdStreamForTests(null);
-    }
-  });
 });
 
 
-describe("integration", () => {
+// The lifecycle seam and auto-pin state are process-global; serial cases keep `--concurrent` load from crossing test fixtures.
+describe.serial("integration", () => {
 	/** Collect handlers the way the runtime would, then drive them directly. */
 	const wire = () => {
 		const handlers: Record<string, Array<(e: unknown, c: unknown) => unknown>> = {};
@@ -719,7 +717,15 @@ bashGates(fakePi as never);
 		if (!(env && typeof env === "object" && "BEADS_DIR" in env)) throw new Error("the rewritten env carries no BEADS_DIR");
 		return env.BEADS_DIR;
 	};
-  test("session start reports an injected embedded-store failure", async () => {
+  test.serial("accepts a classified failure from the bd seam", async () => {
+    setBdStreamForTests(async () => ({ failure: "bd exited with code 1: Error 1045 (28000): Access denied" }));
+    try {
+      expect(await runBdResult("/repo", ["list"])).toEqual({ failure: "bd exited with code 1: Error 1045 (28000): Access denied" });
+    } finally {
+      setBdStreamForTests(null);
+    }
+  });
+  test.serial("session start reports an injected embedded-store failure", async () => {
     const dir = mkdtempSync(join(tmpdir(), "beads-fake-start-"));
     mkdirSync(join(dir, ".beads"));
     setBdStreamForTests(async () => ({ failure: "bd exited with code 1: Error 1045 (28000): Access denied" }));
@@ -739,7 +745,7 @@ bashGates(fakePi as never);
     }
   });
 
-  test("dispatch and a mutating bd command wait for gate verification; a read does not", async () => {
+  test.serial("dispatch and a mutating bd command wait for gate verification; a read does not", async () => {
     const dir = mkdtempSync(join(tmpdir(), "beads-gate-admission-"));
     mkdirSync(join(dir, ".beads"));
     const gates = Promise.withResolvers<string>();
@@ -778,7 +784,7 @@ bashGates(fakePi as never);
     }
   });
 
-	test("each gate verification command gets a fresh execution ceiling", async () => {
+	test.serial("each gate verification command gets a fresh execution ceiling", async () => {
 		const dir = mkdtempSync(join(tmpdir(), "beads-gate-deadlines-"));
 		mkdirSync(join(dir, ".beads"));
 		const deadlines: number[] = [];
@@ -806,7 +812,7 @@ bashGates(fakePi as never);
 		}
 	});
 
-	test("mutation verifies the store selected by BEADS_DIR or a formula workspace", async () => {
+	test.serial("mutation verifies the store selected by BEADS_DIR or a formula workspace", async () => {
 		const sessionDir = mkdtempSync(join(tmpdir(), "beads-gate-session-"));
 		const targetDir = mkdtempSync(join(tmpdir(), "beads-gate-target-"));
 		const noStoreDir = mkdtempSync(join(tmpdir(), "beads-gate-no-store-"));
@@ -882,7 +888,7 @@ bashGates(fakePi as never);
 		}
 	});
 
-	test("selector-looking positional data still verifies the ambient store", async () => {
+	test.serial("selector-looking positional data still verifies the ambient store", async () => {
 		const dir = mkdtempSync(join(tmpdir(), "beads-gate-sentinel-"));
 		mkdirSync(join(dir, ".beads"));
 		setBdStreamForTests(async () => ({ failure: "ambient store gate read failed" }));
@@ -901,7 +907,7 @@ bashGates(fakePi as never);
 		}
 	});
 
-  test("a failed gate check blocks mutation and reports the failure", async () => {
+  test.serial("a failed gate check blocks mutation and reports the failure", async () => {
     const dir = mkdtempSync(join(tmpdir(), "beads-gate-admission-fail-"));
     mkdirSync(join(dir, ".beads"));
     setBdStreamForTests(async () => ({ failure: "bd exited with code 1: Error 1045 (28000): Access denied" }));
@@ -919,7 +925,7 @@ bashGates(fakePi as never);
     }
   });
 
-  test("a malformed gate check blocks mutation", async () => {
+  test.serial("a malformed gate check blocks mutation", async () => {
     const dir = mkdtempSync(join(tmpdir(), "beads-gate-admission-malformed-"));
     mkdirSync(join(dir, ".beads"));
     setBdStreamForTests(async (_cwd, args) => args[0] === "gate" && args[1] === "list" ? GATE_LIST : "not-json");
@@ -936,7 +942,7 @@ bashGates(fakePi as never);
     }
   });
 
-  test("a gate check with errors blocks mutation", async () => {
+  test.serial("a gate check with errors blocks mutation", async () => {
     const dir = mkdtempSync(join(tmpdir(), "beads-gate-admission-errors-"));
     mkdirSync(join(dir, ".beads"));
     const errored = JSON.stringify({ data: { resolved: 0, escalated: 0, errors: 1 }, schema_version: 1 });
@@ -954,7 +960,7 @@ bashGates(fakePi as never);
     }
   });
 
-	test("a later admission retries a settled failed gate verification", async () => {
+	test.serial("a later admission retries a settled failed gate verification", async () => {
 		const dir = mkdtempSync(join(tmpdir(), "beads-gate-admission-retry-"));
 		mkdirSync(join(dir, ".beads"));
 		let reads = 0;
@@ -983,7 +989,7 @@ bashGates(fakePi as never);
 		}
 	});
 
-	test("a completed verdict is consumed before a later dispatch refreshes it", async () => {
+	test.serial("a completed verdict is consumed before a later dispatch refreshes it", async () => {
 		const dir = mkdtempSync(join(tmpdir(), "beads-gate-dispatch-refresh-"));
 		mkdirSync(join(dir, ".beads"));
 		let reads = 0;
@@ -1011,7 +1017,7 @@ bashGates(fakePi as never);
 
 
 
-	test("slow terminal claim reads are detached and late results are consumed", async () => {
+	test.serial("slow terminal claim reads are detached and late results are consumed", async () => {
 		const dir = mkdtempSync(join(tmpdir(), "beads-agent-end-slow-read-"));
 		mkdirSync(join(dir, ".beads"));
 		const late = Promise.withResolvers<void>();
@@ -1048,7 +1054,7 @@ bashGates(fakePi as never);
 		}
 	});
 
-	test("gate verification uses the two-minute command ceiling", async () => {
+	test.serial("gate verification uses the two-minute command ceiling", async () => {
 		const dir = mkdtempSync(join(tmpdir(), "beads-gate-ceiling-"));
 		mkdirSync(join(dir, ".beads"));
 		const deadlines: number[] = [];
@@ -1070,7 +1076,7 @@ bashGates(fakePi as never);
 		}
 	});
 
-	test("session close reports a successful claim without another bd read", async () => {
+	test.serial("session close reports a successful claim without another bd read", async () => {
 		const dir = mkdtempSync(join(tmpdir(), "beads-shutdown-budget-"));
 		mkdirSync(join(dir, ".beads"));
 		let calls = 0;
@@ -1103,7 +1109,7 @@ bashGates(fakePi as never);
 			rmSync(dir, { recursive: true, force: true });
 		}
 	});
-	test("quoted and escaped bd claims remain tracked without a ledger read", async () => {
+	test.serial("quoted and escaped bd claims remain tracked without a ledger read", async () => {
 		const dir = mkdtempSync(join(tmpdir(), "beads-quoted-claim-"));
 		mkdirSync(join(dir, ".beads"));
 		try {
@@ -1126,7 +1132,7 @@ bashGates(fakePi as never);
 		}
 	});
 
-	test("same-id claims retain independent store-bound release commands", async () => {
+	test.serial("same-id claims retain independent store-bound release commands", async () => {
 		const sessionDir = mkdtempSync(join(tmpdir(), "beads-claim-session-"));
 		const targetDir = mkdtempSync(join(tmpdir(), "beads-claim-target-"));
 		mkdirSync(join(sessionDir, ".beads"));
@@ -1158,7 +1164,7 @@ bashGates(fakePi as never);
 			rmSync(targetDir, { recursive: true, force: true });
 		}
 	});
-	test("a failed claim is neither reported nor released", async () => {
+	test.serial("a failed claim is neither reported nor released", async () => {
 		const dir = mkdtempSync(join(tmpdir(), "beads-failed-claim-"));
 		mkdirSync(join(dir, ".beads"));
 		let calls = 0;
@@ -1184,7 +1190,7 @@ bashGates(fakePi as never);
 			rmSync(dir, { recursive: true, force: true });
 		}
 	});
-	test("a masked bd failure cannot clear a tracked claim", async () => {
+	test.serial("a masked bd failure cannot clear a tracked claim", async () => {
 		const dir = mkdtempSync(join(tmpdir(), "beads-masked-close-"));
 		mkdirSync(join(dir, ".beads"));
 		try {
@@ -1228,7 +1234,7 @@ bashGates(fakePi as never);
 			rmSync(dir, { recursive: true, force: true });
 		}
 	});
-	test("tracks boolean claim flags and structured claim stdout", async () => {
+	test.serial("tracks boolean claim flags and structured claim stdout", async () => {
 		const dir = mkdtempSync(join(tmpdir(), "beads-claim-spellings-"));
 		mkdirSync(join(dir, ".beads"));
 		try {
@@ -1249,7 +1255,7 @@ bashGates(fakePi as never);
 			rmSync(dir, { recursive: true, force: true });
 		}
 	});
-	test("tracks direct assignment to a session actor", async () => {
+	test.serial("tracks direct assignment to a session actor", async () => {
 		const dir = mkdtempSync(join(tmpdir(), "beads-direct-assign-"));
 		mkdirSync(join(dir, ".beads"));
 		try {
@@ -1268,7 +1274,7 @@ bashGates(fakePi as never);
 			rmSync(dir, { recursive: true, force: true });
 		}
 	});
-	test("compound claims retain each invocation's actor", async () => {
+	test.serial("compound claims retain each invocation's actor", async () => {
 		const dir = mkdtempSync(join(tmpdir(), "beads-compound-actors-"));
 		mkdirSync(join(dir, ".beads"));
 		try {
@@ -1286,7 +1292,7 @@ bashGates(fakePi as never);
 			rmSync(dir, { recursive: true, force: true });
 		}
 	});
-	test("ambiguous compound claims retain the id without guessing an actor", async () => {
+	test.serial("ambiguous compound claims retain the id without guessing an actor", async () => {
 		const dir = mkdtempSync(join(tmpdir(), "beads-ambiguous-actor-"));
 		mkdirSync(join(dir, ".beads"));
 		try {
@@ -1305,7 +1311,7 @@ bashGates(fakePi as never);
 			rmSync(dir, { recursive: true, force: true });
 		}
 	});
-	test("multi-ID updates honor short status and assignee flags", async () => {
+	test.serial("multi-ID updates honor short status and assignee flags", async () => {
 		const dir = mkdtempSync(join(tmpdir(), "beads-multi-update-"));
 		mkdirSync(join(dir, ".beads"));
 		try {
@@ -1322,7 +1328,7 @@ bashGates(fakePi as never);
 			rmSync(dir, { recursive: true, force: true });
 		}
 	});
-	test("unknown update options cannot consume tracked claim IDs", async () => {
+	test.serial("unknown update options cannot consume tracked claim IDs", async () => {
 		const dir = mkdtempSync(join(tmpdir(), "beads-ambiguous-update-"));
 		mkdirSync(join(dir, ".beads"));
 		try {
@@ -1340,7 +1346,7 @@ bashGates(fakePi as never);
 			rmSync(dir, { recursive: true, force: true });
 		}
 	});
-	test("compound JSON from a no-ID claim is not attributed as claim evidence", async () => {
+	test.serial("compound JSON from a no-ID claim is not attributed as claim evidence", async () => {
 		const dir = mkdtempSync(join(tmpdir(), "beads-ambiguous-output-"));
 		mkdirSync(join(dir, ".beads"));
 		try {
@@ -1356,7 +1362,7 @@ bashGates(fakePi as never);
 			rmSync(dir, { recursive: true, force: true });
 		}
 	});
-	test("session close forgets claims that the session closed", async () => {
+	test.serial("session close forgets claims that the session closed", async () => {
 		const dir = mkdtempSync(join(tmpdir(), "beads-close-cleared-claim-"));
 		mkdirSync(join(dir, ".beads"));
 		let calls = 0;
@@ -1389,7 +1395,7 @@ bashGates(fakePi as never);
 		}
 	});
 
-	test("equivalent external database selector spellings clear tracked claims", async () => {
+	test.serial("equivalent external database selector spellings clear tracked claims", async () => {
 		const dir = mkdtempSync(join(tmpdir(), "beads-external-selector-"));
 		mkdirSync(join(dir, ".beads"));
 		try {
@@ -1409,7 +1415,7 @@ bashGates(fakePi as never);
 		}
 	});
 
-	test("relative db selectors keep their effective directory identity", async () => {
+	test.serial("relative db selectors keep their effective directory identity", async () => {
 		const dir = mkdtempSync(join(tmpdir(), "beads-relative-db-selector-"));
 		mkdirSync(join(dir, ".beads"));
 		try {
@@ -1431,7 +1437,7 @@ bashGates(fakePi as never);
 			rmSync(dir, { recursive: true, force: true });
 		}
 	});
-	test("shutdown reports tracked claims without spawning git or bd", async () => {
+	test.serial("shutdown reports tracked claims without spawning git or bd", async () => {
 		const dir = mkdtempSync(join(tmpdir(), "beads-shutdown-claims-"));
 		mkdirSync(join(dir, ".beads"));
 		let calls = 0;
@@ -1458,7 +1464,7 @@ bashGates(fakePi as never);
 			rmSync(dir, { recursive: true, force: true });
 		}
 	});
-	test("the tool_call hook pins bash for the session's checkout and nothing else", async () => {
+	test.serial("the tool_call hook pins bash for the session's checkout and nothing else", async () => {
 		// This test asserts the branch where NO pin is inherited, so it has to establish
 		// that precondition. The plugin exports `BEADS_DIR` into every session it runs
 		// in, and an inherited value deliberately wins (asserted in the middle block);
@@ -1501,7 +1507,7 @@ bashGates(fakePi as never);
 		}
 	});
 
-	test("a live session keeps its auto-pin; a concurrent session in another checkout does not overwrite it", async () => {
+	test.serial("a live session keeps its auto-pin; a concurrent session in another checkout does not overwrite it", async () => {
 		const a = mkdtempSync(join(tmpdir(), "beads-pin-a-"));
 		const b = mkdtempSync(join(tmpdir(), "beads-pin-b-"));
 		const c = mkdtempSync(join(tmpdir(), "beads-pin-c-"));
@@ -1560,7 +1566,7 @@ bashGates(fakePi as never);
 		}
 	}, 90_000); // git init/commit/worktree add plus several session_start hooks; measured 37.9s on an idle M4 Pro, so 20s could not hold
 
-	test("session start accepts bd's null empty-list response", async () => {
+	test.serial("session start accepts bd's null empty-list response", async () => {
 		const dir = mkdtempSync(join(tmpdir(), "beads-empty-gates-"));
 		const originalPath = process.env.PATH;
 		const originalBeads = process.env.BEADS_DIR;
@@ -1585,7 +1591,7 @@ printf '%s\\n' '{"data":null,"schema_version":1}'
 		}
 	});
 
-	test("session start warns when the gate list is malformed", async () => {
+	test.serial("session start warns when the gate list is malformed", async () => {
 		const dir = mkdtempSync(join(tmpdir(), "beads-malformed-gates-"));
 		const originalPath = process.env.PATH;
 		const originalBeads = process.env.BEADS_DIR;
@@ -1613,7 +1619,7 @@ printf '%s\\n' '{"data":[{"id":"bd-bad"}],"schema_version":1}'
 
 
 
-	test("session isolation preserves sibling notices, claims and repeated starts", async () => {
+	test.serial("session isolation preserves sibling notices, claims and repeated starts", async () => {
 		const dir = mkdtempSync(join(tmpdir(), "beads-session-isolation-"));
 		const originalBeads = process.env.BEADS_DIR;
 		const originalActor = process.env.BEADS_ACTOR;
@@ -1681,7 +1687,7 @@ printf '%s\\n' '{"data":[{"id":"bd-bad"}],"schema_version":1}'
 		}
 	});
 
-	test("tracks tool-level BD_ACTOR for ready --claim without a bead id", async () => {
+	test.serial("tracks tool-level BD_ACTOR for ready --claim without a bead id", async () => {
 		const dir = mkdtempSync(join(tmpdir(), "beads-actor-alias-"));
 		const originalBeads = process.env.BEADS_DIR;
 		const originalBeadsActor = process.env.BEADS_ACTOR;
@@ -1722,7 +1728,7 @@ printf '%s\\n' '{"data":[{"id":"bd-bad"}],"schema_version":1}'
 		}
 	});
 
-	test("a stale-skip import result is advised in band, once", () => {
+	test.serial("a stale-skip import result is advised in band, once", () => {
 		const { handlers } = wire();
 		const result = (text: string, id: string) =>
 			handlers.tool_result![0]!(
@@ -1743,7 +1749,7 @@ printf '%s\\n' '{"data":[{"id":"bd-bad"}],"schema_version":1}'
 		expect(result(stale, "c2")).toBeUndefined();
 	});
 
-	test("a non-bd command is ignored", () => {
+	test.serial("a non-bd command is ignored", () => {
 		const { handlers } = wire();
 		expect(
 			handlers.tool_result![0]!(
@@ -1752,7 +1758,7 @@ printf '%s\\n' '{"data":[{"id":"bd-bad"}],"schema_version":1}'
 			),
 		).toBeUndefined();
 	});
-	test("session close stays silent until a bd write lands", async () => {
+	test.serial("session close stays silent until a bd write lands", async () => {
 		const originalBeads = process.env.BEADS_DIR;
 		process.env.BEADS_DIR = "/nonexistent-beads-dir";
 		try {
@@ -1775,7 +1781,7 @@ printf '%s\\n' '{"data":[{"id":"bd-bad"}],"schema_version":1}'
 		}
 	});
 
-	test("a non-beads cwd produces no session-start message", async () => {
+	test.serial("a non-beads cwd produces no session-start message", async () => {
 		const originalBeads = process.env.BEADS_DIR;
 		process.env.BEADS_DIR = "/nonexistent-beads-dir";
 		try {
@@ -1790,7 +1796,7 @@ printf '%s\\n' '{"data":[{"id":"bd-bad"}],"schema_version":1}'
 	});
 
 
-	test("registered stop emits per-bead CAS commands without a capability probe", async () => {
+	test.serial("registered stop emits per-bead CAS commands without a capability probe", async () => {
 		const dir = mkdtempSync(join(tmpdir(), "beads-release-cas-"));
 		mkdirSync(join(dir, ".beads"));
 		let calls = 0;
@@ -1818,7 +1824,7 @@ printf '%s\\n' '{"data":[{"id":"bd-bad"}],"schema_version":1}'
 		}
 	});
 
-	test("agent_end skips continuations and preserves terminal statuses", async () => {
+	test.serial("agent_end skips continuations and releases aborted/cancelled terminal claims", async () => {
 		const dir = mkdtempSync(join(tmpdir(), "beads-agent-end-matrix-"));
 		mkdirSync(join(dir, ".beads"));
 		const calls: string[][] = [];
@@ -1846,7 +1852,7 @@ printf '%s\\n' '{"data":[{"id":"bd-bad"}],"schema_version":1}'
 			if (end === undefined) throw new Error("agent_end handler was not registered");
 			expect(await end({ willContinue: true, outcome: "completed" }, ctx)).toBeUndefined();
 			expect(calls).toEqual([]);
-			expect(await end({ willContinue: false, outcome: "blocked" }, ctx)).toBeUndefined();
+			expect(await end({ willContinue: false, outcome: "aborted", status: "cancelled" }, ctx)).toBeUndefined();
 			await settleBackgroundWorkForTests();
 			expect(calls.filter(args => args[0] === "unclaim").length).toBe(3);
 			expect(calls.filter(args => args[0] === "show").length).toBe(4);
@@ -1861,7 +1867,7 @@ printf '%s\\n' '{"data":[{"id":"bd-bad"}],"schema_version":1}'
 		}
 	});
 
-	test("sub-agent agent_end awaits its claim finalizer", async () => {
+	test.serial("sub-agent agent_end awaits its claim finalizer", async () => {
 		const dir = mkdtempSync(join(tmpdir(), "beads-agent-end-await-"));
 		mkdirSync(join(dir, ".beads"));
 		const calls: string[][] = [];
@@ -1896,7 +1902,7 @@ printf '%s\\n' '{"data":[{"id":"bd-bad"}],"schema_version":1}'
 		}
 	});
 
-	test("configured production bundles share lifecycle admission and pin Bash calls", async () => {
+	test.serial("configured production bundles share lifecycle admission and pin Bash calls", async () => {
 		const bridgeKey = Symbol.for("com.srobroek.beads.session-lifecycle.bridge.v1");
 		const globals = globalThis as typeof globalThis & { [key: symbol]: unknown };
 		delete globals[bridgeKey];
