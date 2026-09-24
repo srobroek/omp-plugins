@@ -17,6 +17,11 @@ The package ships six role agents and one mechanical helper:
 | `operator` | Runs one exact, bounded mechanical command with explicit targets; stops on ambiguity and never acts destructively. |
 
 Claim-pool beads route to `operator` as documented by the roles rule. Pools are configured with `pool:implementer`, `pool:implementer-high`, `pool:work-reviewer`, `pool:researcher`, `pool:shepherd`, and `pool:operator`.
+## Pool coordination
+
+Pull-based roles keep their process alive when a filtered ready queue is empty by calling the registered `pool_wait` tool with the exact pool and lead-owned epic id. It polls `bd ready --assignee POOL --json` in-process, filters exact `metadata.epic_id`, and returns a ready record, a bounded timeout, or a structured Beads error without consuming a model turn. Role yields are run-level summaries with `verdict: DRAINED|BLOCKED` and compact `beads[]` entries; durable per-bead evidence stays on the ledger.
+
+The shepherd closes only its merge bead and messages the lead with the work bead and merge sha. The lead closes work and source beads after verifying durable evidence; workers never force-close them.
 
 ## Rules
 

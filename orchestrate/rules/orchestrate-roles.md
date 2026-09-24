@@ -16,7 +16,7 @@ The claim-pool alias is the queue for each pull-based role. Pools are configured
 | `pool:shepherd` | `shepherd` | MUST pull one epic's `pool:shepherd` merge-bead queue, verify exact-head evidence, and serialize integration; NEVER review, implement, or resolve conflicts. The work-reviewer reviews, implementer repairs, and the lead resolves conflicts. |
 | `pool:operator` | `operator` | MUST run exact, bounded mechanical commands with explicit targets and stop on ambiguity; NEVER choose product design, implement feature behavior, or act destructively. The implementer chooses and implements behavior. |
 
-Every pull-based role runs `bd ready --assignee pool:ROLE --json`, keeps only records whose `metadata.epic_id` exactly matches its lead-owned epic, claims one with `bd update ID --claim`, and releases an unfinished claim with `bd update ID --assignee pool:ROLE --status open --if-assignee ACTOR`. Workers use only pool-aware CAS release; an expired lease is reclaimed and then explicitly re-pooled by the lead.
+Every pull-based role runs `bd ready --assignee pool:ROLE --json`, keeps only records whose `metadata.epic_id` exactly matches its lead-owned epic, claims one with `bd update ID --claim`, and calls `pool_wait` with its exact pool and epic id when the filtered queue is empty. `pool_wait` blocks in-process until a ready record appears, its timeout, or an error; only timeout or error permits a run-level yield. Workers use only pool-aware CAS release; an expired lease is reclaimed and then explicitly re-pooled by the lead.
 
 ## Delegation Matrix
 
