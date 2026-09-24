@@ -2,9 +2,32 @@ import { describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { hostname } from "node:os";
 import { join } from "node:path";
-import { embeddedWriteTargets, hold, parseLinuxStatStartIdentity, processStartIdentity, release } from "./bd-embedded-write-lock.ts";
+import { embeddedWriteRunner, embeddedWriteTargets, hold, parseLinuxStatStartIdentity, processStartIdentity, release, resolveBunBinary } from "./bd-embedded-write-lock.ts";
 
 const host = hostname().split(".")[0] ?? "localhost";
+
+test("resolves mise-only Bun and completes a real runner write", () => {
+	const root = mkdtempSync(join(Bun.env.TMPDIR ?? "/tmp", "beads-lock-mise-"));
+	const marker = join(root, "written");
+	try {
+		const interpreter = resolveBunBinary({
+			execPath: "/opt/omp/omp",
+			which: name => name === "mise" ? "/opt/mise/bin/mise" : undefined,
+			environment: {},
+			miseWhich: () => process.execPath,
+		});
+		expect(interpreter).toBe(process.execPath);
+		const runner = embeddedWriteRunner();
+		expect(runner).not.toBeUndefined();
+		if (runner === undefined) return;
+		const result = Bun.spawnSync([interpreter, runner.script, "--beads-store", root, "--", "/bin/sh", "-c", `printf written > ${JSON.stringify(marker)}`], { stdout: "pipe", stderr: "pipe" });
+		expect(result.exitCode).toBe(0);
+		expect(readFileSync(marker, "utf8")).toBe("written");
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
 
 test("refuses control and timing wrappers instead of bypassing the embedded lock", () => {
 	const root = mkdtempSync(join(Bun.env.TMPDIR ?? "/tmp", "beads-lock-wrapper-"));

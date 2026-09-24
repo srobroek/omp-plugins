@@ -1675,17 +1675,41 @@ function embeddedWriteRunner() {
   return interpreter === undefined ? undefined : { interpreter, script: resolve4(script) };
 }
 function bunBinary() {
-  const own = basename2(process.execPath);
+  return resolveBunBinary({
+    execPath: process.execPath,
+    which: (name) => typeof Bun === "undefined" ? undefined : Bun.which(name),
+    environment: process.env,
+    miseWhich: (mise) => {
+      try {
+        const result = Bun.spawnSync({ cmd: [mise, "which", "bun"], stdout: "pipe", stderr: "pipe" });
+        if (result.exitCode !== 0)
+          return;
+        return new TextDecoder().decode(result.stdout).trim();
+      } catch {
+        return;
+      }
+    }
+  });
+}
+function resolveBunBinary(options = {}) {
+  const execPath = options.execPath ?? process.execPath;
+  const own = basename2(execPath);
   if (own === "bun" || own === "bun.exe")
-    return process.execPath;
-  const onPath = typeof Bun === "undefined" ? undefined : Bun.which("bun");
+    return execPath;
+  const onPath = options.which?.("bun");
   if (onPath !== null && onPath !== undefined)
     return onPath;
-  const install = process.env.BUN_INSTALL;
-  if (install === undefined || install === "")
+  const install = options.environment?.BUN_INSTALL;
+  if (install !== undefined && install !== "") {
+    const guess = join(install, "bin", "bun");
+    if (existsSync(guess))
+      return guess;
+  }
+  const mise = options.which?.("mise");
+  if (mise === null || mise === undefined || options.miseWhich === undefined)
     return;
-  const guess = join(install, "bin", "bun");
-  return existsSync(guess) ? guess : undefined;
+  const resolved = options.miseWhich(mise);
+  return resolved !== undefined && basename2(resolved).startsWith("bun") && existsSync(resolved) ? resolved : undefined;
 }
 function quote(word) {
   return `'${word.replaceAll("'", "'\\''")}'`;
@@ -1745,7 +1769,7 @@ async function decideEmbeddedWrite(parsed, event, ctx, deadline = Date.now() + 2
     if (runner === undefined) {
       return {
         kind: "block",
-        reason: `${store} is an embedded store, where two concurrent writers corrupt the Dolt journal, and the Beads write-lock runner that serialises writers could not be located: no \`bun\` binary was found on PATH, in BUN_INSTALL, or as this process's own interpreter, or the runner script is missing from the installed plugin. Install \`bun\` or reinstall the @srobroek/beads plugin; the write was refused rather than run unserialised.`
+        reason: `${store} is an embedded store, where two concurrent writers corrupt the Dolt journal, and the Beads write-lock runner that serialises writers could not be located: no \`bun\` binary was found on PATH, in BUN_INSTALL, through mise, or as this process's own interpreter, or the runner script is missing from the installed plugin. Install \`bun\` or reinstall the @srobroek/beads plugin; the write was refused rather than run unserialised.`
       };
     }
     const preflightOwner = `tool-call-preflight:${event.toolCallId}`;
