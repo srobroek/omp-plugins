@@ -1663,10 +1663,10 @@ async function applyBump(ecosystem, name, version, root, options = {}) {
   const lines = [`dep-update/apply: ${ecosystem} ${name} -> ${version}`];
   if (ecosystem === "pypi" || ecosystem === "python") {
     if (!which("uv")) {
-      lines.push("SKIP: uv not found. To apply manually:");
+      lines.push("ERROR: uv not found; cannot apply dependency bump");
       lines.push(`  uv add "${name}==${version}"`);
       lines.push(`  (or: pip install "${name}==${version}" and update your requirements file)`);
-      return { exit: 0, text: lines.join(`
+      return { exit: 1, text: lines.join(`
 `) };
     }
     const ran = await runPm(["uv", "add", `${name}==${version}`], root, options);
@@ -1701,9 +1701,9 @@ async function applyBump(ecosystem, name, version, root, options = {}) {
       return { exit: 1, text: lines.join(`
 `) };
     if (!which(pm)) {
-      lines.push(`SKIP: ${pm} not found. To apply manually:`);
+      lines.push(`ERROR: ${pm} not found; cannot apply dependency bump`);
       lines.push(`  ${command.join(" ")}`);
-      return { exit: 0, text: lines.join(`
+      return { exit: 1, text: lines.join(`
 `) };
     }
     const ran = await runPm(command, root, options);
