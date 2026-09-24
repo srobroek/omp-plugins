@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { reconcileStatus, renderStatus, type StatusSources } from "./session-status-tool";
+import { dirtyFromStatus, reconcileStatus, renderStatus, type StatusSources } from "./session-status-tool";
 
 const fixtureSources: StatusSources = {
 	live: [
@@ -38,6 +38,14 @@ const fixtureSources: StatusSources = {
 	releases: [{ name: "session", version: "1.2.2", source: "package.json" }],
 	warnings: [],
 };
+
+describe("worktree dirty probe", () => {
+	test("reports clean and modified worktrees from porcelain output", () => {
+		expect(dirtyFromStatus({ stdout: "", stderr: "", exitCode: 0 })).toBe("no");
+		expect(dirtyFromStatus({ stdout: " M session-status-tool.ts\n", stderr: "", exitCode: 0 })).toBe("yes");
+		expect(dirtyFromStatus({ stdout: "", stderr: "fatal: not a repository", exitCode: 128 })).toBe("unknown");
+	});
+});
 
 describe("session status reconciliation", () => {
 	test("joins live, transcript, bead, change, and worktree rows by stable identity", () => {
