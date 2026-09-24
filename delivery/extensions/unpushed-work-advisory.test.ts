@@ -12,6 +12,7 @@ import unpushedWorkAdvisory, {
 	extractWrittenPaths,
 	formatAdvisory,
 	handleSessionStop,
+	revParseCommonDir,
 	hasGitDir,
 	parseNumstat,
 	parsePorcelain,
@@ -545,6 +546,34 @@ describe("integration temp git repo", () => {
 		}
 	});
 
+
+	test.skipIf(!gitOk)("keeps advisories enabled for an unborn repository", () => {
+		const unborn = mkdtempSync(join(tmpdir(), "unpushed-adv-unborn-"));
+		try {
+			const init = Bun.spawnSync(["git", ...GIT_ISOLATED, "init", "-b", "topic"], { cwd: unborn, stdout: "pipe", stderr: "pipe" });
+			expect(init.exitCode).toBe(0);
+			writeFileSync(join(unborn, "dirty-a.txt"), "uncommitted\n");
+			writeFileSync(join(unborn, "dirty-b.txt"), "uncommitted\n");
+			writeFileSync(join(unborn, "dirty-c.txt"), "uncommitted\n");
+			const state = createAdvisoryState();
+			state.repositoryResolved = revParseCommonDir(unborn) !== null;
+			const files = ["dirty-a.txt", "dirty-b.txt", "dirty-c.txt"];
+			const result = handleSessionStop(
+				{},
+				unborn,
+				porcelain("## No commits yet on topic", ...files.map(file => `?? ${file}`)),
+				authored(unborn, ...files),
+				() => files.map(path => ({ path, added: 30, deleted: 0 })),
+				() => 0,
+				null,
+				state,
+			);
+			expect(state.repositoryResolved).toBe(true);
+			expect(result?.additionalContext).toContain("dirty-a.txt");
+		} finally {
+			rmSync(unborn, { recursive: true, force: true });
+		}
+	});
 	test.skipIf(!gitOk)("advises only about files the agent wrote", () => {
 		const run = (args: string[]) =>
 			Bun.spawnSync(["git", ...GIT_ISOLATED, ...args], {

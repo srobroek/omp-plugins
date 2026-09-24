@@ -102,6 +102,14 @@ export function revParseHead(cwd: string, deadline?: number): string | null {
 	return sha === "" ? null : sha;
 }
 
+/** Resolve repository membership without requiring an existing HEAD commit. */
+export function revParseCommonDir(cwd: string, deadline?: number): string | null {
+	const printed = gitRead(cwd, ["rev-parse", "--git-common-dir"], deadline);
+	if (printed === null) return null;
+	const common = printed.trim();
+	return common === "" ? null : common;
+}
+
 /** Count commits since the baseline, capped by ahead; null means Git was unreadable. */
 export function sessionCommitsUnpushed(cwd: string, base: string | null, ahead: number, deadline?: number): number | null {
 	if (base === null || ahead <= 0) return 0;
@@ -504,7 +512,7 @@ export default function unpushedWorkAdvisory(pi: ExtensionAPI): void {
 			state = createAdvisoryState();
 			const marker = hasGitDir(cwd);
 			state.sessionHead = marker ? revParseHead(cwd, deadline) : null;
-			state.repositoryResolved = !marker || state.sessionHead !== null;
+			state.repositoryResolved = !marker || revParseCommonDir(cwd, deadline) !== null;
 			states.set(cwd, state);
 		}
 		return state;
