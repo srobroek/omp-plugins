@@ -5,7 +5,7 @@ import {
 	type Dir,
 	fchmodSync,
 	fstatSync,
-	linkSync,
+    renameSync,
 	lstatSync,
 	mkdirSync,
 	opendirSync,
@@ -944,42 +944,33 @@ function readBounded(path: string): BoundedRead {
 }
 
 /**
- * Link the finished temporary file into place, or decide what an existing receipt at
- * that id means.
- *
- * `link`, not `rename`: link fails when the target exists, so publishing can never
- * clobber a receipt another writer already published. Rename would replace it
- * silently, which for a proof artefact is the worst available behaviour.
- *
- * Byte-identical content is idempotent success — the same receipt written twice is
- * the same fact twice. Differing content refuses: two different proofs cannot share
- * one id, and picking a winner here would discard evidence.
+ * Atomically rename the finished temporary file into place, or decide what an
+ * existing receipt at that id means. Existing receipts are never replaced: a
+ * byte-identical regular 0600 file is idempotent success, while any conflict
+ * refuses before the rename.
  */
 function publish(temporary: string, target: string, payload: string): void {
-	try {
-		linkSync(temporary, target);
-		return;
-	} catch (error) {
-		if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-	}
-	let safeMetadata = false;
-	try {
-		const stat = lstatSync(target);
-		safeMetadata = !stat.isSymbolicLink() && stat.isFile() && (stat.mode & 0o777) === 0o600;
-	} catch {
-		// The target changed or became unreadable after EEXIST; it is not idempotent.
-	}
-	const existing = safeMetadata ? readBounded(target) : null;
-	if (existing?.ok && existing.text === payload) return;
-	const detail =
-		existing === null
-			? "unsafe metadata"
-			: existing.ok
-				? "different content"
-				: `unreadable content (${existing.reason})`;
-	throw new Error(
-		`${target}: observed an existing receipt with ${detail}, expected none or a non-symlink regular 0600 file with byte-identical content`,
-	);
+    let targetExists = true;
+    try {
+        const stat = lstatSync(target);
+        const safeMetadata = !stat.isSymbolicLink() && stat.isFile() && (stat.mode & 0o777) === 0o600;
+        if (safeMetadata) {
+            const existing = readBounded(target);
+            if (existing.ok && existing.text === payload) return;
+            const detail = existing.ok ? "different content" : `unreadable content (${existing.reason})`;
+            throw new Error(
+                `${target}: observed an existing receipt with ${detail}, expected none or a non-symlink regular 0600 file with byte-identical content`,
+            );
+        }
+        throw new Error(
+            `${target}: observed an existing receipt with unsafe metadata, expected none or a non-symlink regular 0600 file with byte-identical content`,
+        );
+    } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+        targetExists = false;
+    }
+    if (targetExists) throw new Error(`${target}: observed an existing receipt, expected no target before atomic rename`);
+    renameSync(temporary, target);
 }
 
 /**
@@ -990,8 +981,8 @@ function publish(temporary: string, target: string, payload: string): void {
  * `receiptId` and `supersedes`, both of which become paths.
  *
  * Writes go to an exclusively created temporary file in the same directory, then
- * link into place. A name collision is never resolved by deleting the file we
- * collided with — that file belongs to another writer.
+ * atomically renames into place. A name collision is never resolved by deleting
+ * the file we collided with — that file belongs to another writer.
  *
  * The default directory is under the agent directory, so a receipt is never written
  * inside a worktree or checkout.
