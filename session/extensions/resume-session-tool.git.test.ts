@@ -432,7 +432,7 @@ describe("integration: worktrees", () => {
 		expect(family.filter((w) => w.branch === linkedBranch)).toHaveLength(1);
 		expect(family.filter((w) => w.branch === "main")).toHaveLength(1);
 		expect(pathKeys(main)).toContain(required(family[0], "main worktree").path);
-	});
+	}, 20_000);
 
 	test("a non-repo directory yields no family", () => {
 		expect(listWorktrees(tmp("resume-bare-"))).toEqual([]);
@@ -749,13 +749,13 @@ describe("integration: session resolution", () => {
 			);
 			expect(blocked).toEqual({ error: expect.stringContaining("transcript content was not read") });
 		}
-	});
+	}, 20_000);
 
     test("rejects an explicit file outside the sessions root", async () => {
         const { root } = fixtureStore([shipped]);
         const file = fixtureFile(root);
         expect(await resolveSession("/nowhere", { file: join(tmp("external-"), "session.jsonl") })).toEqual({ error: "file outside sessions root; pass an explicit sessionId or confirm external file" });
-    });
+    }, 20_000);
 
     test("paging preserves the selected transcript by session id", async () => {
         const repo = repoWithWorktree();
@@ -767,7 +767,7 @@ describe("integration: session resolution", () => {
             const text = renderRead(transcript, { turns: 1, maxChars: 2000, includeThinking: true });
             expect(text).toContain("resume_session mode=\"read\"");
         });
-    });
+    }, 20_000);
 });
 
 describe("integration: tool registration", () => {

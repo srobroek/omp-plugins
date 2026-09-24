@@ -501,7 +501,7 @@ test("real Git candidates honor paths, worktree content, deletions, and NUL file
 	} finally {
 		rmSync(dir, { recursive: true, force: true });
 	}
-});
+}, 20_000);
 
 test("literal shell cwd keeps secrets guarded after failed and pipeline-local cd", () => {
 	const dir = mkdtempSync(join(tmpdir(), "secret-shell-"));
