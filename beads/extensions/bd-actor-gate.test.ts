@@ -337,6 +337,31 @@ describe("firstBdVerb / isMutatingBdCommand", () => {
 		expect(isMutatingBdCommand("echo command bd close x")).toBe(false);
 	});
 
+	test("recognizes shell control prefixes around bd", () => {
+		for (const command of [
+			"! bd update bead-1 --claim",
+			"time bd update bead-1 --claim",
+			"if bd update bead-1 --claim; then :; fi",
+			"while bd update bead-1 --claim; do :; done",
+			"until bd update bead-1 --claim; do :; done",
+		]) {
+			expect(firstBdVerb(command)).toBe("update");
+			expect(isClaimCommand(command)).toBe(true);
+		}
+	});
+
+	test("env child unsets override ambient actor variables", () => {
+		for (const command of [
+			"env -u BEADS_ACTOR -u BD_ACTOR bd update bead-1 --claim",
+			"env --unset=BEADS_ACTOR --unset=BD_ACTOR bd create --title title",
+			"env -i bd update bead-1 --claim",
+		]) {
+			const decision = decideActorGate(command, actorEnv);
+			expect(decision.kind).toBe("block");
+			if (decision.kind === "block") expect(decision.reason).toContain("without BEADS_ACTOR or BD_ACTOR");
+		}
+	});
+
 	test("comments without add is read-only", () => {
 		expect(firstBdVerb("bd comments chezmoi-7eg")).toBe("comments");
 		expect(isMutatingBdCommand("bd comments chezmoi-7eg")).toBe(false);

@@ -56,11 +56,22 @@ const VALUE_FLAGS = new Set([
 ]);
 
 /**
- * Launchers that run the real command after their own arguments, so `bd` behind one
- * is still `bd` at command position. This serves actor attribution; the write lock
- * deliberately models no wrappers at all and refuses anything but a direct call.
+ * Prefixes that keep the following command in command position. They are
+ * intentionally limited to shell control words whose condition/body starts
+ * with the command immediately after the word; other shell syntax remains
+ * fail-closed because it is not a simple invocation.
  */
-const TRANSPARENT_WRAPPERS: Record<string, true> = { command: true, env: true, sudo: true };
+const CONTROL_PREFIXES: Record<string, true> = {
+	"!": true,
+	if: true,
+	elif: true,
+	else: true,
+	while: true,
+	until: true,
+	do: true,
+};
+
+const TRANSPARENT_WRAPPERS: Record<string, true> = { command: true, env: true, sudo: true, time: true };
 
 const WRAPPER_VALUE_FLAGS: Record<string, true> = {
 	"-C": true,
@@ -103,6 +114,8 @@ export interface BdInvocation {
 	prefix: string[];
 	/** Actor values an earlier `export` in the same command line set. */
 	exported: Partial<Record<ActorVar, string>>;
+	/** Actor variables removed by an `env -u`/`env -i` wrapper. */
+	unset: Partial<Record<ActorVar, true>>;
 }
 
 /**
@@ -127,31 +140,61 @@ export function bdInvocations(command: string): BdInvocation[] {
 		}
 		let i = 0;
 		const prefix: string[] = [];
+		const unset: Partial<Record<ActorVar, true>> = {};
 		while (true) {
 			while (/^[A-Za-z_]\w*=/.test(tokens[i] ?? "")) {
 				prefix.push(tokens[i] as string);
 				i++;
 			}
-			const wrapper = (tokens[i] ?? "").split("/").pop() ?? "";
-			if (TRANSPARENT_WRAPPERS[wrapper] !== true) break;
+			const word = (tokens[i] ?? "").split("/").pop() ?? "";
+			if (CONTROL_PREFIXES[word] === true) {
+				i++;
+				continue;
+			}
+			if (TRANSPARENT_WRAPPERS[word] !== true) break;
 			i++;
-			if (wrapper === "command") continue;
-			while (tokens[i]?.startsWith("-")) {
-				const flag = tokens[i] as string;
+			if (word === "command") continue;
+			while (true) {
+				while (/^[A-Za-z_]\w*=/.test(tokens[i] ?? "")) {
+					prefix.push(tokens[i] as string);
+					i++;
+				}
+				const flag = tokens[i];
+				if (flag === undefined || !flag.startsWith("-")) break;
+				if (word === "env") {
+					if (flag === "--") {
+						i++;
+						break;
+					}
+					if (flag === "-i" || flag === "--ignore-environment") {
+						unset.BEADS_ACTOR = true;
+						unset.BD_ACTOR = true;
+						i++;
+						continue;
+					}
+					const unsetName = flag === "-u" || flag === "--unset"
+						? tokens[i + 1]
+						: flag.startsWith("--unset=")
+							? flag.slice("--unset=".length)
+							: flag.startsWith("-u") && flag.length > 2
+								? flag.slice(2)
+								: undefined;
+					if (unsetName === "BEADS_ACTOR" || unsetName === "BD_ACTOR") unset[unsetName] = true;
+					if (flag === "-u" || flag === "--unset") i += 2;
+					else i++;
+					continue;
+				}
 				i++;
 				if (WRAPPER_VALUE_FLAGS[flag] === true) i++;
 			}
 		}
-		// Match by basename: `/usr/local/bin/bd close x` and `bd close x` are one
-		// command, and treating the path form as something else splits every
-		// classification this parser feeds.
 		const word = tokens[i];
 		if (word === undefined || (word.split("/").pop() ?? word) !== "bd") continue;
 		i++;
 		const scanned = scanGlobals(tokens, i);
 		const verb = tokens[scanned.next];
 		if (verb !== undefined) {
-			out.push({ verb: verb.toLowerCase(), args: tokens.slice(scanned.next + 1), globals: scanned.globals, prefix, exported: { ...exported } });
+			out.push({ verb: verb.toLowerCase(), args: tokens.slice(scanned.next + 1), globals: scanned.globals, prefix, exported: { ...exported }, unset });
 		}
 	}
 	return out;
@@ -356,6 +399,7 @@ export function invocationActor(invocation: BdInvocation, env: NodeJS.ProcessEnv
 	const explicit = literal(actorFlag);
 	if (explicit !== null) return explicit;
 	const resolve = (variable: ActorVar): string | null => {
+		if (invocation.unset[variable] === true) return null;
 		const assignment = invocation.prefix.findLast(token => token.startsWith(`${variable}=`));
 		const value = assignment !== undefined
 			? assignment.slice(variable.length + 1)
@@ -394,7 +438,7 @@ export function invocationFromArgv(args: string[]): BdInvocation | undefined {
 	const scanned = scanGlobals(args, 0);
 	const verb = args[scanned.next];
 	if (verb === undefined) return undefined;
-	return { verb: verb.toLowerCase(), args: args.slice(scanned.next + 1), globals: scanned.globals, prefix: [], exported: {} };
+	return { verb: verb.toLowerCase(), args: args.slice(scanned.next + 1), globals: scanned.globals, prefix: [], exported: {}, unset: {} };
 }
 
 /** First literal `bd` invocation, after global flags. */
