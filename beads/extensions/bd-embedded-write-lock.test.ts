@@ -2,15 +2,19 @@ import { describe, expect, test } from "bun:test";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { hostname } from "node:os";
 import { join } from "node:path";
-import { hold, release } from "./bd-embedded-write-lock.ts";
+import { hold, parseLinuxStatStartIdentity, processStartIdentity, release } from "./bd-embedded-write-lock.ts";
 
 const host = hostname().split(".")[0] ?? "localhost";
 
+test("parses Linux stat start ticks after a close-paren-space comm", () => {
+	const filler = Array.from({ length: 18 }, () => "0").join(" ");
+	const stat = `321 (worker) ) name) S ${filler} 4242`;
+	expect(parseLinuxStatStartIdentity(stat)).toBe("4242");
+});
+
 function writerStartIdentity(pid: number): string {
-	const result = Bun.spawnSync(["ps", "-o", "lstart=", "-p", String(pid)], { stdout: "pipe", stderr: "ignore" });
-	if (result.exitCode !== 0) throw new Error("ps could not report the test process start identity");
-	const identity = result.stdout.toString().trim();
-	if (identity === "") throw new Error("ps returned no test process start identity");
+	const identity = processStartIdentity(pid);
+	if (identity === undefined) throw new Error("process start identity unavailable");
 	return identity;
 }
 
