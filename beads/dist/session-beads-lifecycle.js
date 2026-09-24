@@ -1,7 +1,10 @@
 // @bun
 // extensions/session-beads-lifecycle.ts
 import { existsSync as existsSync2, readFileSync as readFileSync2, realpathSync as realpathSync3, rmSync, statSync as statSync3 } from "fs";
-import { dirname as dirname3, isAbsolute as isAbsolute3, join as join2, resolve as resolve3 } from "path";
+import { dirname as dirname3, isAbsolute as isAbsolute3, join as join2, resolve as resolve4 } from "path";
+
+// extensions/bd-actor-gate.ts
+import { basename, relative, resolve, sep } from "path";
 
 // extensions/shell-tokenizer.ts
 var SEPARATORS = new Set([";", "&", "|", "(", ")", `
@@ -726,6 +729,49 @@ function environmentForInput(input, base = process.env) {
   }
   return env;
 }
+var RUN_UUID_SUFFIX = /_([0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12})$/i;
+var UUID_ONLY = /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i;
+function agentActor(ctx) {
+  let header;
+  try {
+    const getHeader = ctx.sessionManager?.getHeader;
+    if (typeof getHeader === "function")
+      header = getHeader();
+  } catch {
+    header = undefined;
+  }
+  const headerKnown = header !== null && header !== undefined;
+  if (headerKnown && (typeof header?.parentSession !== "string" || header.parentSession.length === 0))
+    return;
+  try {
+    const sessionFile = ctx.sessionManager?.getSessionFile?.();
+    const sessionDir = ctx.sessionManager?.getSessionDir?.();
+    if (typeof sessionFile !== "string" || typeof sessionDir !== "string")
+      return;
+    const file = basename(sessionFile);
+    if (!file.endsWith(".jsonl"))
+      return;
+    const id = file.slice(0, -".jsonl".length);
+    if (id === "")
+      return;
+    const root = resolve(sessionDir);
+    const rel = relative(root, resolve(sessionFile));
+    const parts = rel.split(sep);
+    let run = parts[0];
+    if (parts.length === 1) {
+      const managerRun = basename(root);
+      if (!RUN_UUID_SUFFIX.test(managerRun) || !headerKnown && UUID_ONLY.test(id))
+        return;
+      run = managerRun;
+    }
+    if (typeof run !== "string" || run === "" || run === "." || run === ".." || run.startsWith(`..${sep}`))
+      return;
+    const runScope = run.match(RUN_UUID_SUFFIX)?.[1] ?? run;
+    return `omp/${runScope}/${id}`;
+  } catch {
+    return;
+  }
+}
 function invocationActor(invocation, env) {
   const literal = (value) => {
     if (!value?.trim() || /[$`]/.test(value))
@@ -787,12 +833,12 @@ function isMutatingBdCommand(command) {
 import { spawnSync as spawnSync2 } from "child_process";
 import { closeSync, existsSync, openSync, readFileSync, realpathSync as realpathSync2, statSync as statSync2, unlinkSync, writeSync } from "fs";
 import { hostname } from "os";
-import { basename, dirname as dirname2, isAbsolute as isAbsolute2, join, resolve as resolve2 } from "path";
+import { basename as basename2, dirname as dirname2, isAbsolute as isAbsolute2, join, resolve as resolve3 } from "path";
 
 // extensions/beads-store.ts
 import { spawnSync } from "child_process";
 import { lstatSync, realpathSync, statSync } from "fs";
-import { dirname, isAbsolute, resolve } from "path";
+import { dirname, isAbsolute, resolve as resolve2 } from "path";
 function repoIdentity(cwd) {
   const result = spawnSync("git", ["-C", cwd, "rev-parse", "--git-common-dir"], {
     encoding: "utf8",
@@ -809,7 +855,7 @@ function repoIdentity(cwd) {
   }
   const out = String(result.stdout ?? "").trim();
   try {
-    return realpathSync(isAbsolute(out) ? out : resolve(cwd, out));
+    return realpathSync(isAbsolute(out) ? out : resolve2(cwd, out));
   } catch {
     return;
   }
@@ -823,7 +869,7 @@ function repositoryState(cwd) {
   }
   for (;; ) {
     try {
-      lstatSync(resolve(current, ".git"));
+      lstatSync(resolve2(current, ".git"));
       return "present";
     } catch (error) {
       if (!(error instanceof Error) || !("code" in error) || error.code !== "ENOENT")
@@ -836,19 +882,19 @@ function repositoryState(cwd) {
   }
 }
 function sessionPinFor(cwd) {
-  const local = resolve(cwd, ".beads");
+  const local = resolve2(cwd, ".beads");
   const common = repoIdentity(cwd);
   if (common === undefined)
     return;
   if (common !== cwd && common.endsWith("/.git")) {
-    const primaryRoot = resolve(common, "..");
+    const primaryRoot = resolve2(common, "..");
     try {
       if (realpathSync(cwd) === primaryRoot && isDir(local))
         return local;
     } catch {
       return;
     }
-    const primary = resolve(primaryRoot, ".beads");
+    const primary = resolve2(primaryRoot, ".beads");
     if (isDir(primary))
       return primary;
   }
@@ -1033,7 +1079,7 @@ function storeFor(globals, cwd, env) {
   return canonicalStore(sessionPinFor(cwd));
 }
 function absolute(path, cwd) {
-  return isAbsolute2(path) ? path : resolve2(cwd, path);
+  return isAbsolute2(path) ? path : resolve3(cwd, path);
 }
 function isDirectory(path) {
   try {
@@ -1046,7 +1092,7 @@ function canonical(path) {
   try {
     return realpathSync2(path);
   } catch {
-    return resolve2(path);
+    return resolve3(path);
   }
 }
 function canonicalStore(store) {
@@ -1432,9 +1478,9 @@ function lifecycleBdEnvironment(cwd, base = process.env) {
 }
 function bdStoreDir(cwd, env) {
   const selected = env.BEADS_DIR;
-  const dir = selected ? isAbsolute3(selected) ? selected : resolve3(cwd, selected) : join2(cwd, ".beads");
+  const dir = selected ? isAbsolute3(selected) ? selected : resolve4(cwd, selected) : join2(cwd, ".beads");
   try {
-    return statSync3(dir).isDirectory() ? resolve3(dir) : undefined;
+    return statSync3(dir).isDirectory() ? resolve4(dir) : undefined;
   } catch {
     return;
   }
@@ -1477,7 +1523,7 @@ function bashCallCwd(input, fallback) {
   if (input === null || typeof input !== "object")
     return fallback;
   const cwd = input.cwd;
-  return typeof cwd === "string" && cwd !== "" ? resolve3(fallback, cwd) : fallback;
+  return typeof cwd === "string" && cwd !== "" ? resolve4(fallback, cwd) : fallback;
 }
 function sessionKey(ctx) {
   return ctx?.sessionManager?.getSessionId?.() ?? "default";
@@ -1532,7 +1578,7 @@ function releaseAutoPin(env = process.env, state = autoPinState) {
 var autoPinState = {};
 function beadsDir(cwd) {
   const pin = process.env.BEADS_DIR;
-  const dir = pin ? isAbsolute3(pin) ? pin : resolve3(cwd, pin) : join2(cwd, ".beads");
+  const dir = pin ? isAbsolute3(pin) ? pin : resolve4(cwd, pin) : join2(cwd, ".beads");
   try {
     return statSync3(dir).isDirectory() ? dir : undefined;
   } catch {
@@ -1737,7 +1783,7 @@ function canonicalStore2(path) {
   try {
     return realpathSync3(path);
   } catch {
-    return resolve3(path);
+    return resolve4(path);
   }
 }
 function bdStoreForInvocation(invocation, cwd, env) {
@@ -1745,9 +1791,9 @@ function bdStoreForInvocation(invocation, cwd, env) {
     return;
   const directory = globalValue(invocation.globals, ["-C", "--directory"]);
   const db = globalValue(invocation.globals, ["--db"]);
-  const base = directory === undefined ? cwd : resolve3(cwd, directory);
+  const base = directory === undefined ? cwd : resolve4(cwd, directory);
   if (db !== undefined) {
-    const target = resolve3(base, db);
+    const target = resolve4(base, db);
     if (!existsSync2(target))
       return;
     return canonicalStore2(statSync3(target).isDirectory() ? target : dirname3(target));
@@ -1756,7 +1802,7 @@ function bdStoreForInvocation(invocation, cwd, env) {
     return canonicalStore2(sessionPinFor(base) ?? join2(base, ".beads"));
   const local = invocation.prefix.findLast((token) => token.startsWith("BEADS_DIR="))?.slice("BEADS_DIR=".length);
   const pinned = local ?? env.BEADS_DIR;
-  return canonicalStore2(pinned === undefined || pinned === "" ? sessionPinFor(cwd) ?? join2(cwd, ".beads") : isAbsolute3(pinned) ? pinned : resolve3(cwd, pinned));
+  return canonicalStore2(pinned === undefined || pinned === "" ? sessionPinFor(cwd) ?? join2(cwd, ".beads") : isAbsolute3(pinned) ? pinned : resolve4(cwd, pinned));
 }
 function bdInvocationUsesExternalStore(invocation) {
   return flagEnabled(invocation.globals, ["--global", "--database"]);
@@ -1767,14 +1813,14 @@ function claimTarget(invocation, cwd, env) {
   const database = globalValue(invocation.globals, ["--database"]);
   const db = globalValue(invocation.globals, ["--db"]);
   const directory = globalValue(invocation.globals, ["-C", "--directory"]);
-  const base = directory === undefined ? cwd : resolve3(cwd, directory);
-  const selector = global ? ["global"] : database !== undefined ? ["database", database] : db !== undefined ? ["db", resolve3(base, db)] : directory !== undefined ? ["directory", base] : undefined;
+  const base = directory === undefined ? cwd : resolve4(cwd, directory);
+  const selector = global ? ["global"] : database !== undefined ? ["database", database] : db !== undefined ? ["db", resolve4(base, db)] : directory !== undefined ? ["directory", base] : undefined;
   const store = bdStoreForInvocation(invocation, cwd, env);
   if (selector !== undefined)
     return { key: `external:${JSON.stringify(selector)}`, store };
   if (store !== undefined)
     return { key: store, store };
-  return { key: `external:${JSON.stringify(["beadsDir", localStore === undefined ? undefined : resolve3(cwd, localStore)])}`, store: undefined };
+  return { key: `external:${JSON.stringify(["beadsDir", localStore === undefined ? undefined : resolve4(cwd, localStore)])}`, store: undefined };
 }
 function trackedClaimKey(target, id) {
   return `${target.key}\x00${id}`;
@@ -1955,6 +2001,13 @@ function releaseClaimArgs(id, holder, env = process.env, releasedAt = new Date()
   const reason = `session release by ${actor} at ${releasedAt}; previous holder ${holder}`;
   return ["unclaim", id, "--reason", reason, "--if-assignee", holder];
 }
+function restoreReleasedStatusArgs(id, status) {
+  if (status === "in_progress")
+    return ["update", id, "--status", "open", "--if-status", "open"];
+  if (status === "blocked" || status === "deferred")
+    return ["update", id, "--status", status, "--if-status", "open"];
+  return;
+}
 function shellQuote(value) {
   return `'${value.replaceAll("'", "'\\''")}'`;
 }
@@ -2121,10 +2174,19 @@ async function releaseClaimsAtAgentEnd(state, cwd, report) {
       if (release === undefined)
         continue;
       const released = await runBdResult(cwd, release, deadline, env);
-      if ("output" in released)
-        state.claims.delete(key);
-      else
+      if (!("output" in released)) {
         report(`terminal claim release for ${claim.id} was not verified: ${released.failure}`);
+        continue;
+      }
+      const restore = restoreReleasedStatusArgs(claim.id, String(record.status));
+      if (restore !== undefined) {
+        const restored = await runBdResult(cwd, restore, deadline, env);
+        if (!("output" in restored)) {
+          report(`terminal claim status restore for ${claim.id} was not verified: ${restored.failure}`);
+          continue;
+        }
+      }
+      state.claims.delete(key);
     } catch (error) {
       report(`terminal claim release for ${claim.id} failed: ${error instanceof Error ? error.message : String(error)}`);
     }
@@ -2271,7 +2333,7 @@ async function admitBeadsWork(ctx, cwd = ctx?.cwd ?? process.cwd(), env = lifecy
   const gateAdmitter = lifecycleBridge().gateAdmitter;
   if (gateAdmitter === undefined)
     return;
-  return await gateAdmitter(resolve3(cwd), boundedBdEnvironment(env), ctx, refresh);
+  return await gateAdmitter(resolve4(cwd), boundedBdEnvironment(env), ctx, refresh);
 }
 async function admitBdMutation(input, ctx, targetEnabled) {
   const command = commandFromInput(input ?? {});
@@ -2312,7 +2374,7 @@ function sessionBeadsLifecycle(pi) {
     return state;
   }
   function identityFor(state, cwd) {
-    const key = resolve3(cwd);
+    const key = resolve4(cwd);
     const cached = state.repos.get(key);
     if (cached !== undefined)
       return cached;
@@ -2324,7 +2386,7 @@ function sessionBeadsLifecycle(pi) {
     pi.sendMessage({ customType: "com.srobroek.beads.session-lifecycle", content, display: true, attribution: "user" }, { triggerTurn: false });
   };
   lifecycleBridge().sessionPinGetter = (cwd, ctx) => {
-    const localStore = join2(resolve3(cwd), ".beads");
+    const localStore = join2(resolve4(cwd), ".beads");
     const local = (() => {
       try {
         return statSync3(localStore).isDirectory() ? realpathSync3(localStore) : undefined;
@@ -2337,7 +2399,7 @@ function sessionBeadsLifecycle(pi) {
       if (state.repo !== undefined && identityFor(state, cwd) !== state.repo)
         return;
       const inherited = process.env.BEADS_DIR;
-      const nonRepository = state.repo === resolve3(cwd);
+      const nonRepository = state.repo === resolve4(cwd);
       if (nonRepository && local !== undefined && state.pin === inherited && local !== inherited)
         return local;
       return state.pin ?? sessionPinFor(cwd) ?? local;
@@ -2477,7 +2539,7 @@ function sessionBeadsLifecycle(pi) {
     state.stopFired = true;
     return { continue: true, additionalContext };
   });
-  pi.on("agent_end", (event, ctx) => {
+  pi.on("agent_end", async (event, ctx) => {
     if (!terminalAgentEnd(event))
       return;
     const state = sessions.get(sessionKey(ctx));
@@ -2486,6 +2548,8 @@ function sessionBeadsLifecycle(pi) {
     const pending = releaseClaimsAtAgentEnd(state, ctx?.cwd ?? process.cwd(), (message) => {
       pi.logger.error("beads terminal claim release advisory", { message, outcome: event.outcome, status: event.status });
     });
+    if (agentActor(ctx) !== undefined)
+      return await pending;
     track(pending).catch((error) => {
       pi.logger.error("beads terminal claim release failed", { error: error instanceof Error ? error.message : String(error) });
     });

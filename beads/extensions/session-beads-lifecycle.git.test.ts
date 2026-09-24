@@ -1037,7 +1037,11 @@ bashGates(fakePi as never);
 			expect(calls).toEqual([["show", "bd-slow", "--json"]]);
 			late.resolve();
 			await settleBackgroundWorkForTests();
-			expect(calls).toEqual([["show", "bd-slow", "--json"], ["unclaim", "bd-slow", "--reason", expect.any(String), "--if-assignee", "actor/slow"]]);
+			expect(calls).toEqual([
+				["show", "bd-slow", "--json"],
+				["unclaim", "bd-slow", "--reason", expect.any(String), "--if-assignee", "actor/slow"],
+				["update", "bd-slow", "--status", "blocked", "--if-status", "open"],
+			]);
 		} finally {
 			setBdStreamForTests(null);
 			rmSync(dir, { recursive: true, force: true });
@@ -1814,24 +1818,30 @@ printf '%s\\n' '{"data":[{"id":"bd-bad"}],"schema_version":1}'
 		}
 	});
 
-	test("agent_end skips continuations and releases terminal outcomes independently", async () => {
+	test("agent_end skips continuations and preserves terminal statuses", async () => {
 		const dir = mkdtempSync(join(tmpdir(), "beads-agent-end-matrix-"));
 		mkdirSync(join(dir, ".beads"));
 		const calls: string[][] = [];
+		const statuses: Record<string, string> = {
+			"bd-completed": "in_progress",
+			"bd-aborted": "blocked",
+			"bd-error": "deferred",
+			"bd-fail": "open",
+		};
 		setBdStreamForTests(async (_cwd, args, _deadline, env) => {
 			calls.push(args);
 			if (args[0] === "show") {
 				if (args[1] === "bd-fail") return { failure: "foreign read failed" };
-				return { output: JSON.stringify({ data: [{ id: args[1], issue_type: "task", status: "blocked", assignee: env.BD_ACTOR }], schema_version: 1 }) };
+				return { output: JSON.stringify({ data: [{ id: args[1], issue_type: "task", status: statuses[args[1] ?? ""], assignee: env.BD_ACTOR }], schema_version: 1 }) };
 			}
-			return { output: "unclaimed" };
+			return { output: "updated" };
 		});
 		try {
 			const { handlers } = wire();
 			const ctx = { cwd: dir, sessionManager: { getSessionId: () => "agent-end-matrix" } };
 			const result = handlers.tool_result?.[0];
 			if (result === undefined) throw new Error("tool_result handler was not registered");
-			for (const id of ["bd-completed", "bd-aborted", "bd-error", "bd-fail"]) result({ toolName: "bash", toolCallId: id, isError: false, input: { command: `BD_ACTOR=actor/${id} bd update ${id} --claim`, cwd: dir, env: { BD_ACTOR: `actor/${id}` } }, content: [{ type: "text", text: `Updated issue: ${id}` }] }, ctx);
+			for (const id of Object.keys(statuses)) result({ toolName: "bash", toolCallId: id, isError: false, input: { command: `BD_ACTOR=actor/${id} bd update ${id} --claim`, cwd: dir, env: { BD_ACTOR: `actor/${id}` } }, content: [{ type: "text", text: `Updated issue: ${id}` }] }, ctx);
 			const end = handlers.agent_end?.[0];
 			if (end === undefined) throw new Error("agent_end handler was not registered");
 			expect(await end({ willContinue: true, outcome: "completed" }, ctx)).toBeUndefined();
@@ -1840,16 +1850,62 @@ printf '%s\\n' '{"data":[{"id":"bd-bad"}],"schema_version":1}'
 			await settleBackgroundWorkForTests();
 			expect(calls.filter(args => args[0] === "unclaim").length).toBe(3);
 			expect(calls.filter(args => args[0] === "show").length).toBe(4);
+			expect(calls.filter(args => args[0] === "update").map(args => args.slice(0, 5))).toEqual([
+				["update", "bd-completed", "--status", "open", "--if-status"],
+				["update", "bd-aborted", "--status", "blocked", "--if-status"],
+				["update", "bd-error", "--status", "deferred", "--if-status"],
+			]);
 		} finally {
 			setBdStreamForTests(null);
 			rmSync(dir, { recursive: true, force: true });
 		}
 	});
 
-	test("configured production bundles share lifecycle admission", async () => {
+	test("sub-agent agent_end awaits its claim finalizer", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "beads-agent-end-await-"));
+		mkdirSync(join(dir, ".beads"));
+		const calls: string[][] = [];
+		setBdStreamForTests(async (_cwd, args, _deadline, env) => {
+			calls.push(args);
+			if (args[0] === "show") return { output: JSON.stringify({ data: [{ id: args[1], issue_type: "task", status: "in_progress", assignee: env.BD_ACTOR }], schema_version: 1 }) };
+			return { output: "unclaimed" };
+		});
+		try {
+			const { handlers } = wire();
+			const run = "12345678-1234-4234-8234-123456789abc";
+			const sessionDir = join(dir, "sessions");
+			const ctx = {
+				cwd: dir,
+				sessionManager: {
+					getSessionId: () => "agent-end-await",
+					getHeader: () => ({ parentSession: join(sessionDir, "main.jsonl") }),
+					getSessionFile: () => join(sessionDir, run, "worker.jsonl"),
+					getSessionDir: () => sessionDir,
+				},
+			};
+			const result = handlers.tool_result?.[0];
+			if (result === undefined) throw new Error("tool_result handler was not registered");
+			result({ toolName: "bash", toolCallId: "claim", isError: false, input: { command: "BD_ACTOR=actor/sub bd update bd-sub --claim", cwd: dir, env: { BD_ACTOR: "actor/sub" } }, content: [{ type: "text", text: "Updated issue: bd-sub" }] }, ctx);
+			const end = handlers.agent_end?.[0];
+			if (end === undefined) throw new Error("agent_end handler was not registered");
+			await end({ willContinue: false, outcome: "completed" }, ctx);
+			expect(calls.map(args => args[0])).toEqual(["show", "unclaim", "update"]);
+		} finally {
+			setBdStreamForTests(null);
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	test("configured production bundles share lifecycle admission and pin Bash calls", async () => {
 		const bridgeKey = Symbol.for("com.srobroek.beads.session-lifecycle.bridge.v1");
 		const globals = globalThis as typeof globalThis & { [key: symbol]: unknown };
 		delete globals[bridgeKey];
+		const dir = mkdtempSync(join(tmpdir(), "beads-manifest-pin-"));
+		execFileSync("git", ["-C", dir, "init", "-q"]);
+		mkdirSync(join(dir, ".beads"));
+		const originalBeadsDir = process.env.BEADS_DIR;
+		delete process.env.BEADS_DIR;
+		setBdStreamForTests(async () => "[]");
 		try {
 			const manifest = JSON.parse(readFileSync(join(import.meta.dir, "..", "package.json"), "utf8")) as { omp?: { extensions?: unknown } };
 			const entries = manifest.omp?.extensions;
@@ -1870,10 +1926,16 @@ printf '%s\\n' '{"data":[{"id":"bd-bad"}],"schema_version":1}'
 			expect(typeof bridge?.gateAdmitter).toBe("function");
 			if (bridge === undefined) throw new Error("lifecycle bundle did not publish its bridge");
 			bridge.gateAdmitter = async () => ({ block: true, reason: "cross-bundle admission proof" });
-			const result = await handlers.tool_call?.[0]?.({ toolName: "task", input: {} }, { cwd: "/tmp" });
-			expect(result).toMatchObject({ block: true, reason: expect.stringContaining("cross-bundle admission proof") });
+			const ctx = { cwd: dir, sessionManager: { getSessionId: () => "manifest-pin" } };
+			await handlers.session_start?.[0]?.({}, ctx);
+			const result = await handlers.tool_call?.[0]?.({ toolName: "bash", input: { command: "bd list", cwd: dir } }, ctx);
+			expect(result).toMatchObject({ input: { env: { BEADS_DIR: join(dir, ".beads") } } });
 		} finally {
 			delete globals[bridgeKey];
+			rmSync(dir, { recursive: true, force: true });
+			setBdStreamForTests(null);
+			if (originalBeadsDir === undefined) delete process.env.BEADS_DIR;
+			else process.env.BEADS_DIR = originalBeadsDir;
 		}
 	});
 });
