@@ -1910,14 +1910,14 @@ printf '%s\\n' '{"data":[{"id":"bd-bad"}],"schema_version":1}'
 			rmSync(dir, { recursive: true, force: true });
 		}
 	});
-	test.serial("agent_end leaves a recoverable anchor when old bd rejects CAS", async () => {
+	test.serial("agent_end refuses old CLI CAS and leaves claim assigned", async () => {
 		const dir = mkdtempSync(join(tmpdir(), "beads-agent-end-old-cli-"));
 		mkdirSync(join(dir, ".beads"));
 		const calls: string[][] = [];
 		setBdStreamForTests(async (_cwd, args, _deadline, env) => {
 			calls.push(args);
 			if (args[0] === "show") {
-				return { output: JSON.stringify({ data: [{ id: args[1], issue_type: "task", status: "in_progress", assignee: env.BD_ACTOR, metadata: { lease_host: "worker-old-cli", lease_pid: "321" } }], schema_version: 1 }) };
+				return { output: JSON.stringify({ data: [{ id: args[1], issue_type: "task", status: "in_progress", assignee: env.BD_ACTOR }], schema_version: 1 }) };
 			}
 			if (args[0] === "unclaim") return { failure: "unknown flag: --if-assignee" };
 			return { output: "updated" };
@@ -1934,8 +1934,8 @@ printf '%s\\n' '{"data":[{"id":"bd-bad"}],"schema_version":1}'
 			const stop = handlers.session_stop?.[0];
 			if (stop === undefined) throw new Error("session stop handler was not registered");
 			const advisory = await stop({}, ctx) as { additionalContext?: string };
-			expect(advisory.additionalContext).toContain("does not advertise atomic --if-assignee");
-			expect(advisory.additionalContext).toContain("Lease anchor: host=worker-old-cli pid=321");
+			expect(advisory.additionalContext).toContain("bd >= 1.3 is required");
+			expect(advisory.additionalContext).not.toContain("Lease anchor");
 			expect(advisory.additionalContext).toContain("bd-old-cli");
 		} finally {
 			setBdStreamForTests(null);
