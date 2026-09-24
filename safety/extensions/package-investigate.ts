@@ -56,13 +56,17 @@ export function shouldInvestigate(command: string): boolean {
 			position = false;
 			continue;
 		}
-		const verb = tokens[commandIndex + 1];
-		const verbs = PACKAGE_COMMANDS.get(word.value);
-		if (!verb || verb.startsQuoted || !verbs?.has(verb.value)) {
-			position = false;
-			continue;
+		let verbIndex = commandIndex + 1;
+		while (tokens[verbIndex] && !tokens[verbIndex]?.startsQuoted && tokens[verbIndex]?.value.startsWith("-")) {
+			verbIndex++;
 		}
-		const packageStart = commandIndex + 2;
+		const verb = tokens[verbIndex];
+		const verbs = PACKAGE_COMMANDS.get(word.value);
+        if (!verb || verb.startsQuoted || !verbs?.has(verb.value)) {
+            position = false;
+            continue;
+        }
+		const packageStart = verbIndex + 1;
 		if (hasPackage(tokens, packageStart)) return true;
 		position = false;
 	}
