@@ -849,30 +849,19 @@ export function orientationText(): string {
 }
 
 export default function hygieneOrientation(pi: ExtensionAPI): void {
-	const z = pi.zod;
-	const parameters = z.object({}) as unknown as TSchema;
-	pi.registerTool({
-		name: "delivery_orient",
-		label: "Delivery Orientation",
-		description: `Read-only hygiene contract ${AUDIENCE}. It states the six hygiene points as text, runs no command, and does not enforce runtime role identity.`,
-		parameters,
-		approval: "read",
-		execute: async () => {
-			const details = { tool: "delivery_orient" as const, audience: "main agent or run lead", enforced: false, points: CONTRACT, mutation: "none" as const };
-			return { content: [{ type: "text" as const, text: orientationText() }], details };
-		},
-	});
-	pi.registerTool({
-		name: "delivery_hygiene_report",
-		label: "Delivery Hygiene Report",
-		description:
-			"Read-only inventory of the current owned repository: one row per worktree with its branch, main-worktree flag, dirty count and ahead/behind counts, plus the receipt ids present for this repository. It never mutates state and recommends the report-only reaper only for ambiguity.",
-		parameters,
-		approval: "read",
-		execute: async (_id: string, _params: unknown, _signal: unknown, _onUpdate: unknown, ctx: { cwd: string }) => {
-			const report = scanHygiene(ctx.cwd);
-			const text = `delivery_hygiene_report: ${report.status}\n${JSON.stringify(report, null, 2)}`;
-			return { content: [{ type: "text" as const, text }], details: report };
-		},
-	});
+    const z = pi.zod;
+    const parameters = z.object({}) as unknown as TSchema;
+    pi.registerTool({
+        name: "delivery_hygiene_report",
+        label: "Delivery Hygiene Report",
+        description:
+            "Read-only inventory of the current owned repository: one row per worktree with its branch, main-worktree flag, dirty count and ahead/behind counts, plus the receipt ids present for this repository. It never mutates state and recommends the report-only reaper only for ambiguity.",
+        parameters,
+        approval: "read",
+        execute: async (_id: string, _params: unknown, _signal: unknown, _onUpdate: unknown, ctx: { cwd: string }) => {
+            const report = scanHygiene(ctx.cwd);
+            const text = `delivery_hygiene_report: ${report.status}\n${JSON.stringify(report, null, 2)}`;
+            return { content: [{ type: "text" as const, text }], details: report };
+        },
+    });
 }
