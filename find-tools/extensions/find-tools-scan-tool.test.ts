@@ -250,4 +250,26 @@ describe("bounded discovery subprocesses", () => {
 			clearTimeout(timer);
 		}
 	});
+	test("rejects unknown surfaces with valid names", async () => {
+		await expect(scanSurfaces({ query: "x", surfaces: ["unknown"] })).rejects.toThrow(
+			"Unknown surface: unknown. Valid surfaces: local, discover, mcp_registry, skills_cli, npm, github, smithery",
+		);
+	});
+
+	test("returns partial cancellation coverage instead of throwing", async () => {
+		const ac = new AbortController();
+		const fetchFn = Object.assign(async (_url: string | URL, init?: RequestInit) => {
+			await new Promise<void>((resolve) => init?.signal?.addEventListener("abort", () => resolve(), { once: true }));
+			throw new DOMException("aborted", "AbortError");
+		}, { preconnect: () => {} }) as typeof fetch;
+		const promise = scanSurfaces({ query: "x", surfaces: ["local", "npm"] }, {
+			fetchFn, readFile: () => null, which: () => false, env: {}, signal: ac.signal,
+		});
+		await Promise.resolve();
+		ac.abort();
+		const result = await promise;
+		expect(result.cancellation?.timedOut).toContain("npm");
+		expect(result.cancellation?.completed).toContain("local");
+	});
+
 });
