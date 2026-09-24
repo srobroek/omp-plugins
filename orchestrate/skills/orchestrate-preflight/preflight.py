@@ -24,7 +24,15 @@ API_FIELDS = (
     "squash_merge_commit_title",
     "squash_merge_commit_message",
 )
-ROLE_RE = re.compile(r"\|\s*`agent:([^`]+)`\s*\|")
+CLAIM_POOLS = (
+    "pool:implementer",
+    "pool:implementer-high",
+    "pool:work-reviewer",
+    "pool:researcher",
+    "pool:shepherd",
+    "pool:operator",
+)
+CLAIM_POOLS_FIX = "bd config set claim.pools \"" + ",".join(CLAIM_POOLS) + "\""
 ISOLATION_FIX = r"sed -i '' '/^  isolation:/,/^  showResolvedModelBadge:/ s/^\([[:space:]]*enabled:[[:space:]]*\)true/\1false/' ~/.omp/agent/config.yml"
 
 
@@ -298,69 +306,31 @@ def upstream_policy_check() -> dict[str, Any]:
     return check("upstream-merge-policy", "pass", detail)
 
 
-def role_kinds() -> list[str]:
-    package_root = Path(__file__).resolve().parents[2]
-    roles_file = package_root / "rules" / "orchestrate-roles.md"
-    try:
-        text = roles_file.read_text(encoding="utf-8")
-    except OSError:
-        return []
-    return list(dict.fromkeys(ROLE_RE.findall(text)))
-
-
-def ready_count(payload: Any) -> int | None:
-    if isinstance(payload, list):
-        return len(payload)
-    if isinstance(payload, dict):
-        for key in ("items", "issues", "results", "ready"):
-            value = payload.get(key)
-            if isinstance(value, list):
-                return len(value)
-        if not payload:
-            return 0
-    return None
-
-
-def worker_roles_check() -> dict[str, Any]:
+def claim_pools_check() -> dict[str, Any]:
+    """Verify every role pool is configured in the active Beads ledger."""
     if shutil.which("bd") is None:
-        return check("worker-role-labels", "skip", "bd is unavailable; cannot confirm ledger reachability")
-    kinds = role_kinds()
-    if not kinds:
+        return check("claim-pools", "skip", "bd is unavailable; cannot verify claim.pools")
+
+    argv = ["bd", "config", "get", "claim.pools"]
+    result = run_command(argv)
+    if result.returncode != 0:
         return check(
-            "worker-role-labels",
+            "claim-pools",
             "fail",
-            "could not read agent:<kind> routing labels from rules/orchestrate-roles.md",
+            f"ledger check {shlex.join(argv)} failed: {command_error(result)}",
+            CLAIM_POOLS_FIX,
         )
 
-    counts: list[str] = []
-    for kind in kinds:
-        label = f"agent:{kind}"
-        argv = ["bd", "ready", "--label", label, "--json"]
-        result = run_command(argv)
-        if result.returncode != 0:
-            return check(
-                "worker-role-labels",
-                "fail",
-                f"ledger check {shlex.join(argv)} failed: {command_error(result)}",
-            )
-        try:
-            payload = decode_json(result.stdout)
-        except ValueError as error:
-            return check(
-                "worker-role-labels",
-                "fail",
-                f"ledger check {shlex.join(argv)} returned invalid JSON: {error}",
-            )
-        count = ready_count(payload)
-        if count is None:
-            return check(
-                "worker-role-labels",
-                "fail",
-                f"ledger check {shlex.join(argv)} returned an unknown JSON shape",
-            )
-        counts.append(f"{label}={count}")
-    return check("worker-role-labels", "pass", "ledger reachable; ready work by routing label: " + ", ".join(counts))
-
+    configured = {item.strip() for item in result.stdout.strip().split(",") if item.strip()}
+    missing = [pool for pool in CLAIM_POOLS if pool not in configured]
+    if missing:
+        return check(
+            "claim-pools",
+            "fail",
+            "claim.pools is missing required aliases: " + ", ".join(missing),
+            CLAIM_POOLS_FIX,
+        )
+    return check("claim-pools", "pass", "claim.pools contains all required aliases")
 
 THINKING_LEVELS = {"off", "minimal", "low", "medium", "high", "xhigh", "max", "auto"}
 
@@ -665,7 +635,7 @@ def main(argv: list[str] | None = None) -> int:
         ("isolation-disabled", isolation_check),
         ("base-commit-recorded", lambda: base_check(args.base)),
         ("upstream-merge-policy", upstream_policy_check),
-        ("worker-role-labels", worker_roles_check),
+        ("claim-pools", claim_pools_check),
         ("model-roles", model_roles_check),
     )
     checks.extend(function() for check_id, function in own_checks if selected(check_id, only))

@@ -47,20 +47,20 @@ When no active Beads ledger exists, investigate the scoped question without ledg
 </directives>
 
 <procedure>
-1. If no active Beads ledger exists, investigate the scoped question without ledger operations and return the same output schema. Otherwise pull continuously by running the exact command `bd ready --label agent:researcher --unassigned --json`; filter returned records by the lead-owned epic id in metadata, never by parent. If no matching record remains, stop and yield.
+1. If no active Beads ledger exists, investigate the scoped question without ledger operations and return the same output schema. Otherwise pull continuously by running the exact command `bd ready --assignee pool:researcher --json`; filter returned records by the lead-owned epic id in metadata, never by parent. If no matching record remains, stop and yield.
 2. For one matching record, run `bd show ID --json` and claim it with `bd update ID --claim`; treat its question and requested evidence as authoritative.
 3. Inspect the narrowest relevant repository paths and, only when needed, authoritative URLs. Separate observations from inferences, cite every material claim with a path and line range or URL, and record the answer with `bd comment ID "FINDING"` on the bead.
 4. Classify the relationship in the bead evidence: research required before implementation is `blocks`; a mid-work follow-up is `discovered-from`; a non-blocking association is `related` or `tracks`. The orchestrator owns DAG mutations.
-5. Close an answered bead with `bd close ID --reason "EVIDENCE"`. If a required source or prerequisite is missing, record the exact uncertainty and run `bd update ID --status blocked`, then return to the pull loop. Answers belong on the bead, not in chat.
+5. Close an answered bead with `bd close ID --reason "EVIDENCE"`. If a required source or prerequisite is missing, record the exact uncertainty and release with `bd update ID --assignee pool:researcher --status open --if-assignee ACTOR`, then return to the pull loop. Workers use only pool-aware CAS release.
 </procedure>
 
 <critical>
-MUST repeatedly run `bd ready --label agent:researcher --unassigned --json` until no matching ready bead remains for the lead-owned epic.
+MUST repeatedly run `bd ready --assignee pool:researcher --json` until no matching ready bead remains for the lead-owned epic.
 MUST filter ready JSON by the lead-owned epic id in metadata and never use a parent filter or out-of-band assignment.
 MUST claim one bead with `bd update ID --claim` before researching it, including when the lead names that bead.
 MUST answer exactly one scoped question and record observations, inferences, citations, and uncertainty on the bead.
 MUST use `blocks` for research required before implementation, `discovered-from` for mid-work follow-up, and `related` or `tracks` for non-blocking association.
-MUST use only the confirmed `bd` CLI forms in this file for ledger operations.
+MUST release unfinished research with `bd update ID --assignee pool:researcher --status open --if-assignee ACTOR`; use no unguarded release operation.
 DEFAULT prefer repository evidence over external sources and primary sources over summaries.
 NOT edit product code, alter the bead DAG, review implementation, or use chat as the durable answer.
 MUST NOT spawn any agent that can edit.
