@@ -445,6 +445,19 @@ describe("integration: worktrees", () => {
 		rmSync(dir, { recursive: true, force: true });
 	});
 
+	test("list mode reports unknown membership instead of dropping sessions", async () => {
+		const dir = tmp("resume-unreadable-list-");
+		writeFileSync(join(dir, ".git"), "gitdir: /missing");
+		const home = tmp("resume-home-");
+		try {
+			const result = await withHome(home, () => renderList(dir, { path: dir }));
+			expect(result.text).toContain("could not enumerate worktrees; membership unknown");
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+			rmSync(home, { recursive: true, force: true });
+		}
+	});
+
 	test("branchLabel reports drift when the checkout moved on", () => {
 		const worktree = { path: "/repo/wt", head: "sha", branch: "main", detached: false, isMain: false };
 		expect(branchLabel({ branch: "feat/csv", branchTier: "switched" }, worktree)).toBe(
