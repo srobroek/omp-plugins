@@ -1043,8 +1043,8 @@ export const RUNNER_WAIT_FLAG = "--beads-wait-ms";
  *
  * The interpreter cannot be assumed from `process.execPath`. OMP ships as a compiled
  * single-file executable, so that path is the `omp` binary, which cannot run a
- * script; on a source install it IS Bun, which can. Both are handled, and PATH and
- * `BUN_INSTALL` cover the compiled case.
+ * script; on a source install it IS Bun, which can. Both are handled, and PATH,
+ * `BUN_INSTALL`, and mise's resolved tool path cover the compiled case.
  *
  * The script sits beside this module whichever way the plugin was loaded: next to the
  * bundle in `dist/` when the package ships built, and next to the source in
@@ -1069,9 +1069,26 @@ function bunBinary(): string | undefined {
 	const onPath = typeof Bun === "undefined" ? undefined : Bun.which("bun");
 	if (onPath !== null && onPath !== undefined) return onPath;
 	const install = process.env.BUN_INSTALL;
-	if (install === undefined || install === "") return undefined;
-	const guess = join(install, "bin", "bun");
-	return existsSync(guess) ? guess : undefined;
+	if (install !== undefined && install !== "") {
+		const guess = join(install, "bin", "bun");
+		if (existsSync(guess)) return guess;
+	}
+	return miseBunBinary();
+}
+
+/** Resolve Bun through mise when its shims are not visible on the current PATH. */
+function miseBunBinary(): string | undefined {
+	if (typeof Bun === "undefined") return undefined;
+	const mise = Bun.which("mise");
+	if (mise === null || mise === undefined) return undefined;
+	try {
+		const result = Bun.spawnSync({ cmd: [mise, "which", "bun"], stdout: "pipe", stderr: "pipe" });
+		if (result.exitCode !== 0) return undefined;
+		const resolved = new TextDecoder().decode(result.stdout).trim();
+		return resolved !== "" && basename(resolved).startsWith("bun") && existsSync(resolved) ? resolved : undefined;
+	} catch {
+		return undefined;
+	}
 }
 
 /**
