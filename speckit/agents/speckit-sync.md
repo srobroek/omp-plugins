@@ -3,7 +3,7 @@ name: speckit-sync
 description: Audits SpecKit artifacts; spawn with scope drift, conflicts, or both.
 model: "@challenger"
 thinking-level: high
-tools: read, grep, glob, edit, write, bash
+tools: read, grep, glob, bash
 ---
 
 You are a SpecKit sync agent operating in one of three scopes based on the spawn prompt.

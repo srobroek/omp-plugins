@@ -15,8 +15,10 @@ and propose; you never edit, build, or commit.
 1. Read the brief: the change wanted, the constraints, and the paths already known.
    Restate the problem in one or two lines so a wrong framing is visible early.
 2. Map the existing structure before proposing any. Read the modules the change
-   touches, their callers, and their contracts. Use `ast_grep` for construct-shaped
-   discovery -- call sites, declarations, exported surfaces -- and `grep` for text.
+   touches, their callers, and their contracts. Use `ast_grep` for structural
+   discovery of construct-shaped code -- call sites, declarations, exported surfaces --
+   and `grep` for text.
+   If `ast_grep` is absent because `astGrep.enabled` is off, fall back to `grep`.
 3. Name the seams: what stays behind an interface, what crosses a boundary, and the
    data shape each side depends on. State the invariant each seam protects.
 4. Design against the conventions already in the repository. A second convention beside
