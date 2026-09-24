@@ -4,30 +4,4 @@
 [[marketplaces]]
 name = "srobroek-omp"
 source = "."
-plugins = [
-  "architecture",
-  "authoring",
-  "beads",
-  "build",
-  "chezmoi",
-  "debate",
-  "delivery",
-  "dep-update",
-  "design",
-  "diagram",
-  "eli5",
-  "find-tools",
-  "go",
-  "orchestrate",
-  "project",
-  "python",
-  "quality",
-  "rust",
-  "safety",
-  "session",
-  "speckit",
-  "toolchain",
-  "typescript",
-  "whats-new",
-  "worktrunk",
-]
+plugins = ["architecture", "authoring", "beads", "build", "chezmoi", "debate", "delivery", "dep-update", "design", "diagram", "eli5", "find-tools", "go", "orchestrate", "project", "project-setup", "python", "quality", "rust", "safety", "session", "speckit", "toolchain", "typescript", "whats-new", "worktrunk"]
