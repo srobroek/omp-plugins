@@ -11,7 +11,7 @@ name: release-please
 #
 # Artifact freshness: release-please bumps each plugin's
 # .omp-plugin/plugin.json version but OMP reads plugins[].version from the two
-# top-level catalogs, and the dep-bearing plugins ship committed dist/ bundles.
+# top-level catalogs, and dependency-bearing plugins ship committed dist/ bundles.
 # The sync step regenerates catalogs and bundles on the release branch so the
 # drift gates in ci.yml pass on the release PR itself.
 
@@ -72,10 +72,8 @@ jobs:
         if: ${{ steps.release.outputs.prs_created == 'true' }}
         run: |
           python3 scripts/build-catalog.py
-          (cd browser-tools && bun install --frozen-lockfile --silent)
-          bun browser-tools/scripts/generate-third-party-notices.ts
           python3 scripts/build-extensions.py
-          git add -- '*/package.json' '*/.omp-plugin/plugin.json' '*/bun.lock' '*/dist/*.js' browser-tools/THIRD_PARTY_NOTICES.txt .omp-plugin/marketplace.json .claude-plugin/marketplace.json
+          git add -- '*/package.json' '*/.omp-plugin/plugin.json' '*/bun.lock' '*/dist/*.js' .omp-plugin/marketplace.json .claude-plugin/marketplace.json
           if ! git diff --cached --quiet; then
             git config user.name "release-app[bot]"
             git config user.email "release-app[bot]@users.noreply.github.com"
