@@ -362,6 +362,18 @@ describe("actorPresent", () => {
 	});
 });
 
+describe("actor wrapper parsing regressions", () => {
+	test("finds bd after bang, time, and if positions", () => {
+		for (const command of ["! bd update x --claim", "time bd update x --claim", "if bd update x --claim; then :; fi"]) {
+			expect(bdInvocations(command)).toHaveLength(1);
+			expect(actorPresent(command, actorEnv)).toBe(true);
+		}
+	});
+	test("honors env unsets instead of ambient actor", () => {
+		expect(actorPresent("env -u BEADS_ACTOR -u BD_ACTOR bd update x --claim", actorEnv)).toBe(false);
+	});
+});
+
 describe("isClaimCommand", () => {
 	test("update --claim", () => {
 		expect(isClaimCommand("bd update chezmoi-2ji --claim")).toBe(true);

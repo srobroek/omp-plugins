@@ -60,7 +60,7 @@ const VALUE_FLAGS = new Set([
  * is still `bd` at command position. This serves actor attribution; the write lock
  * deliberately models no wrappers at all and refuses anything but a direct call.
  */
-const TRANSPARENT_WRAPPERS: Record<string, true> = { command: true, env: true, sudo: true };
+const TRANSPARENT_WRAPPERS: Record<string, true> = { command: true, env: true, sudo: true, time: true, if: true, while: true, until: true };
 
 const WRAPPER_VALUE_FLAGS: Record<string, true> = {
 	"-C": true,
@@ -128,6 +128,8 @@ export function bdInvocations(command: string): BdInvocation[] {
 		let i = 0;
 		const prefix: string[] = [];
 		while (true) {
+			while (tokens[i] === "!") i++;
+			while (["if", "while", "until", "time"].includes(tokens[i] ?? "")) i++;
 			while (/^[A-Za-z_]\w*=/.test(tokens[i] ?? "")) {
 				prefix.push(tokens[i] as string);
 				i++;
@@ -135,11 +137,15 @@ export function bdInvocations(command: string): BdInvocation[] {
 			const wrapper = (tokens[i] ?? "").split("/").pop() ?? "";
 			if (TRANSPARENT_WRAPPERS[wrapper] !== true) break;
 			i++;
-			if (wrapper === "command") continue;
+			if (wrapper === "command" || wrapper === "time" || wrapper === "if" || wrapper === "while" || wrapper === "until") continue;
 			while (tokens[i]?.startsWith("-")) {
 				const flag = tokens[i] as string;
 				i++;
-				if (WRAPPER_VALUE_FLAGS[flag] === true) i++;
+				if (flag === "-u" || flag === "--unset") {
+					const variable = tokens[i];
+					if (variable === "BEADS_ACTOR" || variable === "BD_ACTOR") prefix.push(`${variable}=`);
+					i++;
+				} else if (WRAPPER_VALUE_FLAGS[flag] === true) i++;
 			}
 		}
 		// Match by basename: `/usr/local/bin/bd close x` and `bd close x` are one

@@ -475,7 +475,7 @@ var VALUE_FLAGS2 = new Set([
   "--dolt-auto-commit",
   "--mem-profile"
 ]);
-var TRANSPARENT_WRAPPERS = { command: true, env: true, sudo: true };
+var TRANSPARENT_WRAPPERS = { command: true, env: true, sudo: true, time: true, if: true, while: true, until: true };
 var WRAPPER_VALUE_FLAGS = {
   "-C": true,
   "--chdir": true,
@@ -525,6 +525,10 @@ function bdInvocations(command) {
     let i = 0;
     const prefix = [];
     while (true) {
+      while (tokens[i] === "!")
+        i++;
+      while (["if", "while", "until", "time"].includes(tokens[i] ?? ""))
+        i++;
       while (/^[A-Za-z_]\w*=/.test(tokens[i] ?? "")) {
         prefix.push(tokens[i]);
         i++;
@@ -533,12 +537,17 @@ function bdInvocations(command) {
       if (TRANSPARENT_WRAPPERS[wrapper] !== true)
         break;
       i++;
-      if (wrapper === "command")
+      if (wrapper === "command" || wrapper === "time" || wrapper === "if" || wrapper === "while" || wrapper === "until")
         continue;
       while (tokens[i]?.startsWith("-")) {
         const flag = tokens[i];
         i++;
-        if (WRAPPER_VALUE_FLAGS[flag] === true)
+        if (flag === "-u" || flag === "--unset") {
+          const variable = tokens[i];
+          if (variable === "BEADS_ACTOR" || variable === "BD_ACTOR")
+            prefix.push(`${variable}=`);
+          i++;
+        } else if (WRAPPER_VALUE_FLAGS[flag] === true)
           i++;
       }
     }
