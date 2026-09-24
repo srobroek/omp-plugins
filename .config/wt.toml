@@ -5,4 +5,4 @@
 # Installed OMP plugins are a machine-local cache that a worktree must not
 # inherit: a stale copy shadows the versions under test. Generated analysis
 # output is regenerable and large.
-exclude = [".omp/plugins/", "graphify-out/", "repomix.xml"]
+exclude = [".omp/plugins/", "graphify-out/", "repomix.xml", ".beads/"]
