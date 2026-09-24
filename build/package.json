@@ -1,7 +1,7 @@
 {
   "name": "@srobroek/build",
   "version": "0.6.2",
-  "description": "External-repository worker agent.",
+  "description": "External-repository worker agent with a mandatory isolated-checkout gate.",
   "private": true,
   "omp": {
     "extensions": [
