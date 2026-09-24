@@ -47,6 +47,8 @@ export type Gap = {
 	reason: string;
 };
 
+export type ScanCancellation = { completed: SurfaceName[]; timedOut: SurfaceName[] };
+
 export function classify(result: SurfaceResult): SurfaceStatus {
 	if (result.skipped) return "skipped";
 	if (!result.ok) return "failed";
@@ -294,33 +296,35 @@ export function npmSearchText(keyword: string, query: string): { text: string; d
 
 async function scanNpm(fetchFn: typeof fetch, query: string): Promise<SurfaceResult> {
 	const keywords = ["mcp-server", "claude-plugin", "claude-skill", "agent-skill", "omp-plugin", "oh-my-pi"];
+	const searches = await Promise.all(keywords.map(async (kw) => {
+		const search = npmSearchText(kw, query);
+		if (!search) return { keyword: kw, search, response: null };
+		const url = `https://registry.npmjs.org/-/v1/search?text=${encodeURIComponent(search.text)}&size=5`;
+		return { keyword: kw, search, response: await timedFetch(fetchFn, url) };
+	}));
 	const hits: SurfaceHit[] = [];
 	const failures: string[] = [];
 	let answered = 0;
 	let dropped = 0;
-	for (const kw of keywords) {
-		const search = npmSearchText(kw, query);
+	for (const { keyword, search, response } of searches) {
 		if (!search) {
-			failures.push(`${kw}: keyword alone exceeds npm's ${NPM_TEXT_MAX}-character search text limit`);
+			failures.push(`${keyword}: keyword alone exceeds npm's ${NPM_TEXT_MAX}-character search text limit`);
 			continue;
 		}
 		dropped = Math.max(dropped, search.dropped);
-		const url = `https://registry.npmjs.org/-/v1/search?text=${encodeURIComponent(search.text)}&size=5`;
-		const res = await timedFetch(fetchFn, url);
-		if (!res.ok) {
-			failures.push(`${kw}: HTTP ${res.status}`);
+		if (!response?.ok) {
+			failures.push(`${keyword}: HTTP ${response?.status ?? 0}`);
 			continue;
 		}
 		let json: NpmSearchResponse;
 		try {
-			// npm search response; the objects array is checked before it is read.
-			json = JSON.parse(res.text) as NpmSearchResponse;
+			json = JSON.parse(response.text) as NpmSearchResponse;
 		} catch {
-			failures.push(`${kw}: invalid search response`);
+			failures.push(`${keyword}: invalid search response`);
 			continue;
 		}
 		if (!Array.isArray(json?.objects)) {
-			failures.push(`${kw}: invalid search response`);
+			failures.push(`${keyword}: invalid search response`);
 			continue;
 		}
 		answered++;
@@ -345,7 +349,6 @@ async function scanNpm(fetchFn: typeof fetch, query: string): Promise<SurfaceRes
 		...(notes.length > 0 ? { reason: notes.join("; ") } : {}),
 	};
 }
-
 async function scanGithub(
 	deps: Required<Pick<ScanDeps, "run" | "which" | "env">>,
 	query: string,
@@ -408,6 +411,7 @@ export async function scanSurfaces(params: ScanParams, deps: ScanDeps = {}): Pro
 	results: ClassifiedSurface[];
 	gaps: Gap[];
 	coverage: { answered: number; empty: number; partial: number; unavailable: number; failed: number };
+	cancellation?: ScanCancellation;
 }> {
 	const sourceFetch = deps.fetchFn ?? fetch;
 	const fetchFn: typeof fetch = deps.signal
@@ -423,24 +427,41 @@ export async function scanSurfaces(params: ScanParams, deps: ScanDeps = {}): Pro
 	const readFile = deps.readFile ?? defaultRead;
 	const env = deps.env ?? process.env;
 	const which = deps.which ?? defaultWhich;
-	const selected = params.surfaces?.length
-		? new Set(params.surfaces.map((s) => s.trim()).filter(Boolean))
-		: null;
+	const requested = params.surfaces?.map((s) => s.trim()).filter(Boolean) ?? [];
+	const invalid = requested.filter((name) => !(SURFACES as readonly string[]).includes(name));
+	if (invalid.length > 0) {
+		throw new Error(`Unknown surface${invalid.length === 1 ? "" : "s"}: ${invalid.join(", ")}. Valid surfaces: ${SURFACES.join(", ")}`);
+	}
+	const selected = requested.length > 0 ? new Set(requested) : null;
 
 	const results: SurfaceResult[] = [];
+	const completed = new Set<SurfaceName>();
+	const started = new Set<SurfaceName>();
+	const timedOut = new Set<SurfaceName>();
 	const jobs: Array<Promise<void>> = [];
+
+	const markTimedOut = () => {
+		for (const surface of started) if (!completed.has(surface)) timedOut.add(surface);
+	};
+	if (deps.signal) {
+		deps.signal.addEventListener("abort", markTimedOut, { once: true });
+		if (deps.signal.aborted) markTimedOut();
+	}
 
 	const push = (name: SurfaceName, job: () => Promise<SurfaceResult>) => {
 		if (!wanted(selected, name)) {
 			results.push({ surface: name, ok: true, skipped: true, reason: "not requested", hits: [] });
 			return;
 		}
+		started.add(name);
 		jobs.push(
 			job()
 				.then((r) => {
+					completed.add(name);
 					results.push(r);
 				})
 				.catch((err: unknown) => {
+					completed.add(name);
 					const message = err instanceof Error ? err.message : String(err);
 					results.push({ surface: name, ok: false, reason: message, hits: [] });
 				}),
@@ -474,7 +495,13 @@ export async function scanSurfaces(params: ScanParams, deps: ScanDeps = {}): Pro
 			gaps.push({ surface: r.surface, kind: "failed", reason: r.reason ?? "failed" });
 		}
 	}
-	return { results: classified, gaps, coverage };
+	const cancellation = deps.signal?.aborted
+		? {
+			completed: SURFACES.filter((surface) => completed.has(surface)),
+			timedOut: SURFACES.filter((surface) => timedOut.has(surface)),
+		}
+		: undefined;
+	return { results: classified, gaps, coverage, ...(cancellation ? { cancellation } : {}) };
 }
 
 export default function findToolsScanTool(pi: ExtensionAPI): void {
@@ -491,7 +518,7 @@ export default function findToolsScanTool(pi: ExtensionAPI): void {
 		approval: "read",
 		execute: async (_id, params: ScanParams, signal, _onUpdate, ctx) => {
 			try {
-				const { results, gaps, coverage } = await scanSurfaces(params, {
+				const { results, gaps, coverage, cancellation } = await scanSurfaces(params, {
 					signal, setTimeout: ctx.setTimeout.bind(ctx), clearTimer: ctx.clearTimer.bind(ctx),
 				});
 				const lines: string[] = [];
@@ -504,13 +531,16 @@ export default function findToolsScanTool(pi: ExtensionAPI): void {
 				lines.push(
 					`coverage: ${coverage.answered} answered, ${coverage.empty} empty, ${coverage.partial} partial, ${coverage.unavailable} unavailable, ${coverage.failed} failed`,
 				);
+				if (cancellation) {
+					lines.push(`partial cancellation: completed [${cancellation.completed.join(", ") || "none"}], timed out [${cancellation.timedOut.join(", ") || "none"}]`);
+				}
 				if (gaps.length) {
 					lines.push("gaps:");
 					for (const g of gaps) lines.push(`  - ${g.surface} (${g.kind}): ${g.reason}`);
 				}
 				return {
 					content: [{ type: "text" as const, text: lines.join("\n") }],
-					details: { ok: true, results, gaps, coverage },
+					details: { ok: true, results, gaps, coverage, ...(cancellation ? { cancellation } : {}) },
 				};
 			} catch (error) {
 				const message = error instanceof Error ? error.message : String(error);
