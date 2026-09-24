@@ -16,7 +16,7 @@ The package ships six role agents and one mechanical helper:
 | `shepherd` | Pulls one epic's merge-bead queue, verifies exact heads, and serializes integration. |
 | `operator` | Runs one exact, bounded mechanical command with explicit targets; stops on ambiguity and never acts destructively. |
 
-Mechanical `agent:operator` beads route to `operator` as documented by the roles rule.
+Claim-pool beads route to `operator` as documented by the roles rule. Pools are configured with `pool:implementer`, `pool:implementer-high`, `pool:work-reviewer`, `pool:researcher`, `pool:shepherd`, and `pool:operator`.
 
 ## Rules
 
@@ -26,13 +26,13 @@ Defines pull-based ownership, preflight, durable Beads evidence, worktree isolat
 
 ### `orchestrate-roles`
 
-Maps `agent:KIND` routing labels to the role agents and `operator` and records which roles may delegate to which read-only or mechanical helpers.
+Maps claim-pool aliases to the role agents and records which roles may delegate to which read-only or mechanical helpers.
 
 ## Skills
 
 ### `orchestrate`
 
-Runs an orchestrated delivery DAG, choosing a one-tier or two-tier topology, dispatching pull-based workers, requiring independent review, and verifying the repository-wide result before closure.
+Runs an orchestrated delivery DAG, choosing a one-tier or two-tier topology, dispatching claim-pool workers, requiring independent review, and verifying the repository-wide result before closure.
 
 ### `orchestrate-preflight`
 
