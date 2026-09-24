@@ -48,8 +48,7 @@ MUST Recommend `remove-after-review` only when every condition holds:
    - dirty count is `0`;
    - unpushed count is `0`;
    - exact landing-receipt evidence is present.
-For a `.bak.<timestamp>` directory, never recommend removal: its ownership, branch, dirty state, publication state, and landing state remain `UNKNOWN` unless a separate exact proof and explicit authorization exist, and `delivery_cleanup` does not accept an arbitrary backup path.
-This is a recommendation, not permission.
+For a `.bak.<timestamp>` directory, the reaper remains report-only. It may recommend `remove-after-review` only when the invoker supplies exact per-directory proof of no live process cwd, no unmerged unique commits, no dirty tracked changes, and exact landing evidence or explicit authorization recorded on the governing bead. The row must name the exact path and proof; the invoker then hands that row to the lead for a separate, human-approved filesystem removal, never an inferred sweep. Without that proof, keep `recommendation=none` and leave every field `UNKNOWN`.
 MUST Read `rule://delivery-worktree-hygiene` and `rule://delivery-git-workflow` for ownership and landing-proof semantics. Cite them instead of reproducing mutation procedures.
 DEFAULT Recommend `keep` when observed state lacks exact removal proof. Explain the missing proof in the row.
 NOT Do cleanup, authorize cleanup, or claim that a recommendation proves a landing or ledger reconciliation.
