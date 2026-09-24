@@ -44,13 +44,15 @@ session. Say so in the report and use the HTTP routes above. You MAY tell the us
 
 ## Start the dev server, and keep it
 
-DEFAULT the dev server. Start it once through `hub`, then reuse it for every later check in
-the run:
+DEFAULT the dev server. Start it once as a named `bash` service, then reuse it for every
+later check in the run:
 
-```
-hub op=start name=storybook
-  npx --yes storybook dev -p 6006 --ci --no-open --quiet --disable-telemetry
-  ready = { "port": 6006, "timeout": 240 }
+```json
+{
+  "command": "npx --yes storybook dev -p 6006 --ci --no-open --quiet --disable-telemetry",
+  "name": "storybook",
+  "ready": { "port": 6006, "timeout": 240 }
+}
 ```
 
 Gate readiness on the PORT, never on a log pattern. Storybook 10.5.10 prints
@@ -60,7 +62,7 @@ Gate readiness on the PORT, never on a log pattern. Storybook 10.5.10 prints
 Allow 240 seconds: a cold Vite dependency scan takes minutes.
 
 Three reasons this beats rebuilding. It recompiles on change, so a fix costs no rebuild. The
-process is project-scoped and outlives the turn, so `hub op=start` once serves every
+process is project-scoped and outlives the turn, so one named `bash` start serves every
 subsequent probe. And the user can open `http://localhost:6006` and watch the same surface
 being driven, which a static directory cannot offer.
 
