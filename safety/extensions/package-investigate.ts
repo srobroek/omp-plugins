@@ -16,6 +16,15 @@ const PACKAGE_COMMANDS = new Map<string, Set<string>>([
 	["go", new Set(["get"])],
 	["composer", new Set(["require"])],
 ]);
+/** Options that take a separate value before the package verb. */
+const OPTIONS_WITH_VALUE: Record<string, ReadonlySet<string>> = {
+	npm: new Set(["--prefix", "--userconfig", "--registry", "--cache", "--workspace", "-w"]),
+	pnpm: new Set(["--dir", "--filter"]),
+	bun: new Set(["--cwd", "--registry"]),
+	yarn: new Set(["--cwd"]),
+	uv: new Set(["--directory"]),
+	cargo: new Set(["--manifest-path", "--target-dir", "--color", "-j"]),
+};
 
 const ENV_ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*=/;
 const PACKAGE = /^(?!-)[A-Za-z@./_~][^;|&<>()`$]*$/;
@@ -56,13 +65,20 @@ export function shouldInvestigate(command: string): boolean {
 			position = false;
 			continue;
 		}
-		const verb = tokens[commandIndex + 1];
-		const verbs = PACKAGE_COMMANDS.get(word.value);
-		if (!verb || verb.startsQuoted || !verbs?.has(verb.value)) {
-			position = false;
-			continue;
+		let verbIndex = commandIndex + 1;
+		const valueOptions = OPTIONS_WITH_VALUE[word.value] ?? new Set<string>();
+		while (tokens[verbIndex] && !tokens[verbIndex]?.startsQuoted && tokens[verbIndex]?.value.startsWith("-")) {
+			const option = tokens[verbIndex]?.value ?? "";
+			verbIndex++;
+			if (!option.includes("=") && valueOptions.has(option) && tokens[verbIndex]) verbIndex++;
 		}
-		const packageStart = commandIndex + 2;
+		const verb = tokens[verbIndex];
+		const verbs = PACKAGE_COMMANDS.get(word.value);
+        if (!verb || verb.startsQuoted || !verbs?.has(verb.value)) {
+            position = false;
+            continue;
+        }
+		const packageStart = verbIndex + 1;
 		if (hasPackage(tokens, packageStart)) return true;
 		position = false;
 	}
