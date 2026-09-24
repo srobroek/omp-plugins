@@ -399,6 +399,19 @@ def check_provisioning_include(ctx: Context) -> Result:
         return Result("pass", f"ignored dependency directories {', '.join(ignored)} are covered by {include}")
     return Result("pass", "node_modules, target, and .venv are not ignored dependency directories")
 
+def check_node_modules_integrity(ctx: Context) -> Result:
+    root = ctx.require_git_root()
+    if root is None:
+        return Result("skip", "git repository root is unavailable; node_modules integrity cannot be inspected")
+    node_modules = root / "node_modules"
+    if not node_modules.is_dir():
+        return Result("skip", "node_modules is absent; run the provisioning include check first")
+    bun_types = node_modules / "@types" / "bun"
+    if bun_types.exists() and not (bun_types / "index.d.ts").is_file():
+        return Result("warn", "node_modules/@types/bun exists but index.d.ts is missing; this skeleton can make tsc report TS2688 while bun test passes", "bun install --frozen-lockfile, then rerun the Worktrunk preflight")
+    return Result("pass", "node_modules type packages are not skeleton directories")
+
+
 def check_plugin_installed(ctx: Context) -> Result:
     result = ctx.full_config()
     output = result.output
@@ -442,6 +455,7 @@ CHECKS: list[tuple[str, Callable[[Context], Result]]] = [
     ("default-branch-resolves", check_default_branch),
     ("merge-evidence-policy", check_merge_evidence),
     ("provisioning-include", check_provisioning_include),
+    ("node-modules-integrity", check_node_modules_integrity),
     ("omp-plugin-installed", check_plugin_installed),
     ("commit-generation", check_commit_generation),
 ]
