@@ -20,7 +20,7 @@ TRIGGER
    `skill://ui-review/references/storybook.md` and drive individual stories first. -> each
    component passes in isolation before any page assembled from it is judged, because a
    component-level failure is smaller to locate than the same failure on a page.
-2. Get the surface running and reachable: `hub` op `start` for the dev server, then
+2. Get the surface running and reachable: `bash` with a `name` and `ready` for the dev server, then
    `browser` action `open` on the route. Start it ONCE and reuse it for the whole walk and
    for any later fix, because the process outlives the turn. -> the route responds, the tab
    is live, and the URL appears in the report header so the user can watch the same surface.
@@ -60,7 +60,8 @@ MUST Take any external command's exact form from `skill://ui-review/references/t
 DEFAULT Run a dev server and keep it, rather than rebuilding. It recompiles on change, it
   outlives the turn, and the user can open it. Build a static bundle only when a server has
   no purpose: a CI job, no free port, or a single read with no follow-up.
-NOT Restart a server that `hub` op `ps` shows already running for this project.
+NOT Restart a server that `read proc://` shows already running for this project. Re-issuing
+  `bash` with the same `name` restarts it.
 DEFAULT Order evidence ARIA snapshot, then computed style, then pixels.
 NOT Screenshot diffing as primary evidence: it is flaky and names no cause.
 NOT Reporting a state as checked when no interaction drove it.
