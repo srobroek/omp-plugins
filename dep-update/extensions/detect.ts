@@ -9,6 +9,11 @@ const GEM = /^\s*gem\s+(['"])([^'"]+)\1(?:\s*,\s*(['"])([^'"]*)\3)?/;
 
 export type DepRow = [string, string, string];
 export type ResolvedDep = { ecosystem: string; name: string; declared: string; resolved: string };
+export type Coverage = { resolvedSources: string[]; gaps: string[] };
+export const COVERAGE: Coverage = {
+	resolvedSources: ["package-lock.json"],
+	gaps: ["other lockfiles", "workspace children"],
+};
 
 export function isFile(path: string): boolean {
 	try {
@@ -116,7 +121,8 @@ export class Detector {
 		for (const [name, entry] of Object.entries(value as Record<string, unknown>)) {
 			if (!entry || typeof entry !== "object" || Array.isArray(entry)) continue;
 			const version = (entry as Record<string, unknown>).version;
-			if (typeof version === "string") this.resolve("npm", name, version);
+			const packageName = name.includes("node_modules/") ? name.slice(name.lastIndexOf("node_modules/") + "node_modules/".length) : name;
+			if (typeof version === "string") this.resolve("npm", packageName, version);
 			this.emitResolvedFromNode((entry as Record<string, unknown>).dependencies);
 		}
 	}
@@ -354,10 +360,11 @@ export async function detectProject(target: string): Promise<{
 	exit: number;
 	rows: DepRow[];
 	resolvedRows: ResolvedDep[];
+	coverage: Coverage;
 	stderr: string;
 }> {
 	if (!isDir(target)) {
-		return { ok: false, exit: 2, rows: [], resolvedRows: [], stderr: `detect: '${target}' is not a directory` };
+		return { ok: false, exit: 2, rows: [], resolvedRows: [], coverage: COVERAGE, stderr: `detect: '${target}' is not a directory` };
 	}
 	const detector = new Detector(target);
 	await detector.scanAll();
@@ -370,5 +377,5 @@ export async function detectProject(target: string): Promise<{
 		notes.push("requirements.txt, pyproject.toml, Cargo.toml, go.mod, Gemfile,");
 		notes.push("composer.json).");
 	}
-	return { ok: true, exit: 0, rows: detector.rows, resolvedRows: detector.resolvedRows, stderr: notes.join("\n") };
+	return { ok: true, exit: 0, rows: detector.rows, resolvedRows: detector.resolvedRows, coverage: COVERAGE, stderr: notes.join("\n") };
 }

@@ -1,7 +1,8 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+
 
 const zod = {
 	string: () => {
@@ -29,6 +30,25 @@ describe("unit: detect", () => {
 		writeFileSync(join(dir, "package.json"), JSON.stringify({ dependencies: { leftpad: "1.3.0" } }));
 		const { rows } = await detectProject(dir);
 		expect(rows).toEqual([["npm", "leftpad", "1.3.0"]]);
+	});
+	test("package-lock resolves declared dependencies and exposes coverage gaps", async () => {
+		const dir = tmp();
+		try {
+			writeFileSync(join(dir, "package.json"), JSON.stringify({ dependencies: { leftpad: "^1.3.0", missing: "^2.0.0" } }));
+			writeFileSync(join(dir, "package-lock.json"), JSON.stringify({ lockfileVersion: 3, packages: { "": {}, "node_modules/leftpad": { version: "1.3.1" } } }));
+			const result = await detectProject(dir);
+			expect(result.resolvedRows).toEqual([
+				{ ecosystem: "npm", name: "leftpad", declared: "^1.3.0", resolved: "1.3.1" },
+				{ ecosystem: "npm", name: "missing", declared: "^2.0.0", resolved: "?" },
+			]);
+			expect(result.coverage).toEqual({ resolvedSources: ["package-lock.json"], gaps: ["other lockfiles", "workspace children"] });
+		} finally { rmSync(dir, { recursive: true, force: true }); }
+	});
+
+	test("dep-update and whats-new detectors remain byte-identical", () => {
+		const whatsNew = readFileSync(join(import.meta.dir, "detect.ts"), "utf8");
+		const depUpdate = readFileSync(join(import.meta.dir, "../../dep-update/extensions/detect.ts"), "utf8");
+		expect(whatsNew).toBe(depUpdate);
 	});
 	test("malformed Python arrays fall back without losing valid declarations", async () => {
 		const dir = tmp();
