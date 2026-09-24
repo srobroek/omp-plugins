@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import fnmatch
 import json
 import os
 from pathlib import Path
@@ -160,7 +161,7 @@ def check_cwd_is_worktree(ctx: Context) -> Result:
             )
             if part
         )
-        return Result("skip", details or "git directory topology could not be determined")
+        return Result("fail", details or "git directory topology could not be determined")
 
     git_path = resolve_git_path(git_raw, ctx.cwd)
     common_path = resolve_git_path(common_raw, ctx.cwd)
@@ -271,10 +272,56 @@ def parse_section(path: Path, wanted: str) -> dict[str, str]:
             continue
         if section != wanted:
             continue
-        key_match = re.match(r"^([A-Za-z0-9_-]+)\s*=\s*(.*?)\s*$", stripped)
+        key_match = re.match(r"^([A-Za-z0-9_.-]+)\s*=\s*(.*?)\s*$", stripped)
         if key_match:
             values[key_match.group(1)] = key_match.group(2)
     return values
+
+
+def repository_project_id(ctx: Context) -> str | None:
+    result = ctx.run("git", "config", "--get", "remote.origin.url")
+    remote = first_nonempty_line(result.stdout)
+    if result.returncode != 0 or not remote:
+        return None
+    if remote.startswith("git@") and ":" in remote:
+        host, path = remote[4:].split(":", 1)
+        remote = f"{host}/{path}"
+    else:
+        remote = re.sub(r"^[A-Za-z][A-Za-z0-9+.-]*://", "", remote)
+        remote = re.sub(r"^[^@/]+@", "", remote)
+    remote = remote.split("?", 1)[0].split("#", 1)[0].rstrip("/")
+    if remote.endswith(".git"):
+        remote = remote[:-4]
+    return remote or None
+
+
+def project_merge_values(path: Path, project_id: str | None) -> dict[str, str]:
+    if project_id is None:
+        return {}
+    values = parse_section(path, f'projects."{project_id}"')
+    return {
+        key.removeprefix("merge."): value
+        for key, value in values.items()
+        if key.removeprefix("merge.") in {"squash", "ff"}
+    }
+
+
+def include_covers_dependency(pattern: str, dependency: str) -> bool:
+    normalized = pattern.strip()
+    if not normalized or normalized.startswith("#") or normalized.startswith("!"):
+        return False
+    normalized = normalized.removeprefix("./").lstrip("/").rstrip("/")
+    if normalized.startswith("**/"):
+        normalized = normalized[3:]
+    candidates = (dependency, f"{dependency}/", f"{dependency}/placeholder")
+    return any(fnmatch.fnmatchcase(candidate, normalized) for candidate in candidates)
+
+
+def include_patterns(path: Path) -> list[str] | None:
+    try:
+        return path.read_text(encoding="utf-8").splitlines()
+    except (OSError, UnicodeError):
+        return None
 
 
 def format_values(values: dict[str, str]) -> str:
@@ -293,8 +340,14 @@ def check_merge_evidence(ctx: Context) -> Result:
     # wt's warning remains authoritative when a config was changed between reads.
     if not project_values and "merge" in ctx.ignored_config_keys:
         project_values = {"merge": "declared by Worktrunk warning"}
-    user_values = parse_section(Path.home() / ".config" / "worktrunk" / "config.toml", "merge")
+    user_path = Path.home() / ".config" / "worktrunk" / "config.toml"
+    user_values = parse_section(user_path, "merge")
+    project_id = repository_project_id(ctx)
+    scoped_values = project_merge_values(user_path, project_id)
+    user_values = {**user_values, **scoped_values}
     user_detail = f"user config: {format_values(user_values)}"
+    if scoped_values:
+        user_detail += f" (project {project_id})"
     invocation_detail = (
         "Reliable control: explicit wt merge --no-squash --no-ff on every worker-to-epic merge; "
         "an epic-to-default merge may be plain or squashing."
@@ -333,9 +386,18 @@ def check_provisioning_include(ctx: Context) -> Result:
             "wt step copy-ignored",
         )
     if ignored:
+        patterns = include_patterns(include)
+        if patterns is None:
+            return Result("warn", f".worktreeinclude exists but cannot be read; ignored dependency directories: {', '.join(ignored)}", "repair .worktreeinclude, then run wt step copy-ignored")
+        missing = [dependency for dependency in ignored if not any(include_covers_dependency(pattern, dependency) for pattern in patterns)]
+        if missing:
+            return Result(
+                "warn",
+                f"ignored dependency directories not matched by {include}: {', '.join(missing)}; a fresh worktree may have incomplete dependencies",
+                "add matching <directory>/ patterns to .worktreeinclude, then run wt step copy-ignored",
+            )
         return Result("pass", f"ignored dependency directories {', '.join(ignored)} are covered by {include}")
     return Result("pass", "node_modules, target, and .venv are not ignored dependency directories")
-
 
 def check_plugin_installed(ctx: Context) -> Result:
     result = ctx.full_config()
@@ -427,7 +489,10 @@ def main(argv: list[str] | None = None) -> int:
             refreshed.detail = f"approval command failed: {command_error(apply_result, APPROVALS_FIX)}; {refreshed.detail}"
         results[approval_index] = refreshed.as_dict("hook-approvals")
 
-    report = {"ok": not any(item["status"] == "fail" for item in results), "summary": summary(results), "checks": results}
+    strict = bool(args.only)
+    report = {"ok": not any(
+        item["status"] == "fail" or (strict and item["status"] != "pass") for item in results
+    ), "summary": summary(results), "checks": results}
     if args.as_json:
         print(json.dumps(report, separators=(",", ":")))
     else:
