@@ -1,4 +1,5 @@
 import { afterAll, describe, expect, test } from "bun:test";
+import pkg from "../package.json" with { type: "json" };
 import { execFileSync } from "node:child_process";
 import {
 	appendFileSync,
@@ -200,7 +201,7 @@ function fixture(
 	if (key === null) throw new Error("fixture repo has no key");
 	const receipt = buildReceipt({
 		now: NOW,
-		emitter: { plugin: "@srobroek/delivery", version: "0.12.0", tool: "delivery_land" },
+		emitter: { plugin: "@srobroek/delivery", version: pkg.version, tool: "delivery_land" },
 		repo: {
 			key,
 			canonicalRoot: realpathSync(main),

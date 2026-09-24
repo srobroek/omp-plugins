@@ -1,3 +1,4 @@
+import pkg from "../package.json" with { type: "json" };
 import { lstatSync, realpathSync, type Stats } from "node:fs";
 import { dirname, isAbsolute, resolve, sep } from "node:path";
 import { isDeepStrictEqual } from "node:util";
@@ -34,7 +35,7 @@ import {
 const LOCAL_TIMEOUT_MS = 2_000;
 const MAX_CLI_JSON_BYTES = 1024 * 1024;
 const MAX_DIRTY_PATHS = 8;
-const DELIVERY_VERSION = "0.12.0";
+const DELIVERY_VERSION = pkg.version;
 const LOCAL_REF_PREFIX = "refs/heads/";
 
 /** The GitHub fields this observation needs, in one `--json` projection. */
