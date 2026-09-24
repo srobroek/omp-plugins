@@ -453,7 +453,11 @@ function bdInvocations(command) {
         continue;
       while (true) {
         while (/^[A-Za-z_]\w*=/.test(tokens[i] ?? "")) {
-          prefix.push(tokens[i]);
+          const assignment = tokens[i];
+          prefix.push(assignment);
+          const variable = assignment.slice(0, assignment.indexOf("="));
+          if (variable === "BEADS_ACTOR" || variable === "BD_ACTOR")
+            delete unset[variable];
           i++;
         }
         const flag = tokens[i];

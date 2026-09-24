@@ -362,6 +362,15 @@ describe("firstBdVerb / isMutatingBdCommand", () => {
 		}
 	});
 
+	test("env assignments after removal restore actor attribution", () => {
+		for (const command of [
+			"env -i BD_ACTOR=actor/x bd update bead-1 --claim",
+			"env -u BEADS_ACTOR BEADS_ACTOR=actor/x bd create --title title",
+		]) {
+			expect(decideActorGate(command, actorEnv)).toEqual({ kind: "allow" });
+		}
+	});
+
 	test("comments without add is read-only", () => {
 		expect(firstBdVerb("bd comments chezmoi-7eg")).toBe("comments");
 		expect(isMutatingBdCommand("bd comments chezmoi-7eg")).toBe(false);

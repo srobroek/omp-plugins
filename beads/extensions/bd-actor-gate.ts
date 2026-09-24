@@ -156,7 +156,10 @@ export function bdInvocations(command: string): BdInvocation[] {
 			if (word === "command") continue;
 			while (true) {
 				while (/^[A-Za-z_]\w*=/.test(tokens[i] ?? "")) {
-					prefix.push(tokens[i] as string);
+					const assignment = tokens[i] as string;
+					prefix.push(assignment);
+					const variable = assignment.slice(0, assignment.indexOf("="));
+					if (variable === "BEADS_ACTOR" || variable === "BD_ACTOR") delete unset[variable];
 					i++;
 				}
 				const flag = tokens[i];
