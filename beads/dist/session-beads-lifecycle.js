@@ -1308,6 +1308,7 @@ function bdReadFailure(scope, reason) {
   return scope === "start" ? `Beads gates could not be verified at session start: ${bounded}.` : `Beads claims could not be read at session close: ${bounded}. A mutating command was attempted; inspect assigned and touched work before stopping.`;
 }
 var TIMEOUT_MS = 8000;
+var TERMINAL_RELEASE_TIMEOUT_MS = 1200;
 var MAX_LISTED = 8;
 var AUTO_GATE_TYPES = {
   timer: true,
@@ -1661,20 +1662,8 @@ function releaseClaimArgs(id, holder, env = process.env, releasedAt = new Date()
     return;
   if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(releasedAt))
     return;
-  const args = [
-    "update",
-    id,
-    "--assignee",
-    "",
-    "--status",
-    "open",
-    "--set-metadata",
-    `release_actor=${actor}`,
-    "--set-metadata",
-    `released_at=${releasedAt}`,
-    "--set-metadata",
-    `released_from=${holder}`
-  ];
+  const reason = `session release by ${actor} at ${releasedAt}; previous holder ${holder}`;
+  const args = ["unclaim", id, "--reason", reason];
   if (casSupported)
     args.push("--if-assignee", holder);
   return args;
@@ -1886,9 +1875,16 @@ function resultText(event) {
   }
   return text;
 }
-var sessionPinGetter;
+var SESSION_PIN_GETTER_KEY = Symbol.for("com.srobroek.beads.session-pin-getter.v1");
+function sharedSessionPinGetter() {
+  const getter = Reflect.get(globalThis, SESSION_PIN_GETTER_KEY);
+  return typeof getter === "function" ? getter : undefined;
+}
+function setSharedSessionPinGetter(getter) {
+  Reflect.set(globalThis, SESSION_PIN_GETTER_KEY, getter);
+}
 function pinnedBeadsDir(cwd, ctx) {
-  const pin = ctx === undefined ? undefined : sessionPinGetter?.(cwd, ctx);
+  const pin = ctx === undefined ? undefined : sharedSessionPinGetter()?.(cwd, ctx);
   return pin ?? (ctx === undefined ? sessionPinFor(cwd) : undefined);
 }
 function rewriteBashInput(input, ctx) {
@@ -1915,12 +1911,12 @@ function sessionBeadsLifecycle(pi) {
     state.repos.set(key, identity);
     return identity;
   }
-  sessionPinGetter = (cwd, ctx) => {
+  setSharedSessionPinGetter((cwd, ctx) => {
     const state = sessions.get(sessionKey(ctx));
     if (state?.repo !== undefined && identityFor(state, cwd) !== state.repo)
       return;
     return state?.pin ?? process.env.BEADS_DIR ?? sessionPinFor(cwd);
-  };
+  });
   pi.on("session_start", async (_event, ctx) => {
     const key = sessionKey(ctx);
     sessions.delete(key);
@@ -2027,6 +2023,40 @@ function sessionBeadsLifecycle(pi) {
       return;
     state.stopFired = true;
     return { continue: true, additionalContext };
+  });
+  pi.on("agent_end", async (_event, ctx) => {
+    try {
+      const state = sessions.get(sessionKey(ctx));
+      if (state === undefined || state.claims.size === 0)
+        return;
+      const cwd = ctx?.cwd ?? process.cwd();
+      const deadline = Date.now() + TERMINAL_RELEASE_TIMEOUT_MS;
+      const pending = [...state.claims].filter(([, holder]) => holder !== undefined);
+      for (const [id, actor] of pending) {
+        if (actor === undefined)
+          continue;
+        const env = lifecycleBdEnvironment(cwd, { BD_ACTOR: actor, BEADS_ACTOR: actor });
+        const result = await runBdResult(cwd, ["show", id, "--json"], deadline, env);
+        if (!("output" in result))
+          continue;
+        const rows = envelopeData(parseTrailingJson(result.output));
+        if (!Array.isArray(rows))
+          continue;
+        const bead = rows.find((row) => row !== null && typeof row === "object" && ("id" in row) && row.id === id);
+        if (bead === undefined || bead === null || typeof bead !== "object" || !("assignee" in bead) || !("issue_type" in bead) || !("status" in bead))
+          continue;
+        if (bead.assignee !== actor || !["epic", "task"].includes(String(bead.issue_type)) || !["open", "in_progress", "blocked", "deferred"].includes(String(bead.status)))
+          continue;
+        const release = releaseClaimArgs(id, actor, { BD_ACTOR: actor }, new Date().toISOString(), true);
+        if (release === undefined)
+          continue;
+        const released = await runBdResult(cwd, release, deadline, env);
+        if ("output" in released)
+          state.claims.delete(id);
+      }
+    } catch (error) {
+      pi.logger.error("beads terminal claim release failed", { error: error instanceof Error ? error.message : String(error) });
+    }
   });
 }
 export {

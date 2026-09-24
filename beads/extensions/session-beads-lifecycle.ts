@@ -86,6 +86,7 @@ function bdReadFailure(scope: "start" | "close", reason: string): string {
 
 /** No session boundary may hang on the database or on `gh`. */
 const TIMEOUT_MS = 8000;
+const TERMINAL_RELEASE_TIMEOUT_MS = 1200;
 
 
 
@@ -544,12 +545,9 @@ function recordClaimTransitions(state: SessionState, command: string, env: NodeJ
 const SAFE_RELEASE_IDENTIFIER = /^[A-Za-z0-9][A-Za-z0-9._/-]*$/;
 
 /**
- * Build the command used to release a claim. When bd supports assignee CAS,
- * retain the guard; older bd versions still get a readback-verified release.
- *
- * Both actor environment names are bound command-locally to the same validated
- * identity. bd releases currently consume `BEADS_ACTOR`; the legacy alias is
- * retained for older installations and for the actor gate's attribution.
+ * Build the native command used to release a claim. `bd unclaim --reason`
+ * records the handoff as the durable comment, so no separate comment command
+ * is needed. When available, `--if-assignee` keeps the release compare-and-set.
  */
 export function releaseClaimArgs(
 	id: string,
@@ -561,14 +559,8 @@ export function releaseClaimArgs(
 	const actor = env.BD_ACTOR?.trim() || env.BEADS_ACTOR?.trim() || "";
 	if (!SAFE_RELEASE_IDENTIFIER.test(id) || !SAFE_RELEASE_IDENTIFIER.test(holder) || !SAFE_RELEASE_IDENTIFIER.test(actor)) return undefined;
 	if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(releasedAt)) return undefined;
-	const args = [
-		"update", id,
-		"--assignee", "",
-		"--status", "open",
-		"--set-metadata", `release_actor=${actor}`,
-		"--set-metadata", `released_at=${releasedAt}`,
-		"--set-metadata", `released_from=${holder}`,
-	];
+	const reason = `session release by ${actor} at ${releasedAt}; previous holder ${holder}`;
+	const args = ["unclaim", id, "--reason", reason];
 	if (casSupported) args.push("--if-assignee", holder);
 	return args;
 }
@@ -875,10 +867,20 @@ function resultText(event: ToolResultEvent): string {
 /** Resolve the lifecycle's canonical embedded-store pin for a Bash call. */
 type SessionPinGetter = (cwd: string, ctx: ExtensionContext) => string | undefined;
 
-let sessionPinGetter: SessionPinGetter | undefined;
+/** Each bundled entrypoint has its own module copy; share the session getter by symbol. */
+const SESSION_PIN_GETTER_KEY = Symbol.for("com.srobroek.beads.session-pin-getter.v1");
+
+function sharedSessionPinGetter(): SessionPinGetter | undefined {
+	const getter = Reflect.get(globalThis, SESSION_PIN_GETTER_KEY);
+	return typeof getter === "function" ? getter as SessionPinGetter : undefined;
+}
+
+function setSharedSessionPinGetter(getter: SessionPinGetter): void {
+	Reflect.set(globalThis, SESSION_PIN_GETTER_KEY, getter);
+}
 
 export function pinnedBeadsDir(cwd: string, ctx?: ExtensionContext): string | undefined {
-	const pin = ctx === undefined ? undefined : sessionPinGetter?.(cwd, ctx);
+	const pin = ctx === undefined ? undefined : sharedSessionPinGetter()?.(cwd, ctx);
 	return pin ?? (ctx === undefined ? sessionPinFor(cwd) : undefined);
 }
 
@@ -908,11 +910,11 @@ export default function sessionBeadsLifecycle(pi: ExtensionAPI): void {
 		state.repos.set(key, identity);
 		return identity;
 	}
-	sessionPinGetter = (cwd, ctx) => {
+	setSharedSessionPinGetter((cwd, ctx) => {
 		const state = sessions.get(sessionKey(ctx));
 		if (state?.repo !== undefined && identityFor(state, cwd) !== state.repo) return undefined;
 		return state?.pin ?? process.env.BEADS_DIR ?? sessionPinFor(cwd);
-	};
+	});
 
 	pi.on("session_start", async (_event, ctx: ExtensionContext) => {
 		const key = sessionKey(ctx);
@@ -1024,5 +1026,32 @@ export default function sessionBeadsLifecycle(pi: ExtensionAPI): void {
 		if (additionalContext === undefined) return;
 		state.stopFired = true;
 		return { continue: true as const, additionalContext };
+	});
+
+	pi.on("agent_end", async (_event, ctx: ExtensionContext) => {
+		try {
+			const state = sessions.get(sessionKey(ctx));
+			if (state === undefined || state.claims.size === 0) return;
+			const cwd = ctx?.cwd ?? process.cwd();
+			const deadline = Date.now() + TERMINAL_RELEASE_TIMEOUT_MS;
+			const pending = [...state.claims].filter(([, holder]) => holder !== undefined);
+			for (const [id, actor] of pending) {
+				if (actor === undefined) continue;
+				const env = lifecycleBdEnvironment(cwd, { BD_ACTOR: actor, BEADS_ACTOR: actor });
+				const result = await runBdResult(cwd, ["show", id, "--json"], deadline, env);
+				if (!("output" in result)) continue;
+				const rows = envelopeData(parseTrailingJson(result.output));
+				if (!Array.isArray(rows)) continue;
+				const bead = rows.find(row => row !== null && typeof row === "object" && "id" in row && row.id === id);
+				if (bead === undefined || bead === null || typeof bead !== "object" || !("assignee" in bead) || !("issue_type" in bead) || !("status" in bead)) continue;
+				if (bead.assignee !== actor || !["epic", "task"].includes(String(bead.issue_type)) || !["open", "in_progress", "blocked", "deferred"].includes(String(bead.status))) continue;
+				const release = releaseClaimArgs(id, actor, { BD_ACTOR: actor }, new Date().toISOString(), true);
+				if (release === undefined) continue;
+				const released = await runBdResult(cwd, release, deadline, env);
+				if ("output" in released) state.claims.delete(id);
+			}
+		} catch (error) {
+			pi.logger.error("beads terminal claim release failed", { error: error instanceof Error ? error.message : String(error) });
+		}
 	});
 }
