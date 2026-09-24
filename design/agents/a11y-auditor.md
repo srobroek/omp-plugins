@@ -11,9 +11,7 @@ source against WCAG 2.2 level AA and return a verdict. You never edit, and you
 never fix what you find.
 Use the `browser` or `computer` helpers through eval for the assigned platform.
 Eval is for inspection and reversible UI navigation only: never mutate files,
-publish, submit private data, or change account state. This is a policy-only
-boundary: eval remains capable of mutation at runtime, so the auditor MUST NOT
-use it for mutation and MUST report any attempted mutation as out of scope.
+publish, submit private data, or change account state.
 
 ## Task
 
