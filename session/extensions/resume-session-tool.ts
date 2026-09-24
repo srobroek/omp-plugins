@@ -146,7 +146,7 @@ export async function renderList(
 	const family = options.worktrees === false ? [] : listWorktrees(project);
 	if (family === undefined) {
 		return {
-			text: `resume_session: could not enumerate Git worktrees for ${project}; repository history may be incomplete. No sessions were read.`,
+			text: `resume_session: could not enumerate Git worktrees for ${project}; repository history may be incomplete. No sessions were read. Retry with worktrees:false to inspect the current checkout, or pass the canonical repository path explicitly.`,
 			count: 0,
 			ids: [],
 		};

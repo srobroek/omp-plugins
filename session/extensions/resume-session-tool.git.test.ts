@@ -550,6 +550,16 @@ describe("integration: list mode", () => {
 		expect(text).toContain("No prior sessions recorded");
 		expect(text).toContain("do not guess a session");
 	}, 20_000);
+	test("a dangling gitdir names recovery options instead of hiding sessions", async () => {
+		const dir = tmp("resume-dangling-gitdir-");
+		writeFileSync(join(dir, ".git"), "gitdir: /missing/worktree/metadata");
+		const { home } = fixtureStore([{ ...shipped, cwd: dir }]);
+		const result = await withHome(home, () => renderList(dir, { path: dir }));
+		expect(result.count).toBe(0);
+		expect(result.text).toContain("could not enumerate Git worktrees");
+		expect(result.text).toContain("worktrees:false");
+		expect(result.text).toContain("canonical repository path");
+	}, 20_000);
 
 	test("colliding ids are printed long enough to stay usable", async () => {
 		const repo = repoWithWorktree();
