@@ -911,8 +911,22 @@ function pidAlive(pid) {
     return false;
   }
 }
+function parseLinuxStatStartIdentity(stat) {
+  const close = stat.lastIndexOf(")");
+  if (close < 0)
+    return;
+  const fields = stat.slice(close + 2).trim().split(/\s+/u);
+  const start = fields[19];
+  return start !== undefined && start !== "" ? start : undefined;
+}
 function processStartIdentity(pid) {
   try {
+    if (process.platform === "linux") {
+      const stat = readFileSync2(`/proc/${pid}/stat`, "utf8");
+      const identity = parseLinuxStatStartIdentity(stat);
+      if (identity !== undefined)
+        return identity;
+    }
     const result = spawnSync2("ps", ["-o", "lstart=", "-p", String(pid)], {
       encoding: "utf8",
       timeout: 100,

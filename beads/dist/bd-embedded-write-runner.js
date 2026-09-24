@@ -49,17 +49,21 @@ function pidAlive(pid) {
     return false;
   }
 }
+function parseLinuxStatStartIdentity(stat) {
+  const close = stat.lastIndexOf(")");
+  if (close < 0)
+    return;
+  const fields = stat.slice(close + 2).trim().split(/\s+/u);
+  const start = fields[19];
+  return start !== undefined && start !== "" ? start : undefined;
+}
 function processStartIdentity(pid) {
   try {
     if (process.platform === "linux") {
       const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
-      const close = stat.lastIndexOf(")");
-      if (close >= 0) {
-        const fields = stat.slice(close + 2).trim().split(/\s+/);
-        const start = fields[19];
-        if (start !== undefined && start !== "")
-          return start;
-      }
+      const identity = parseLinuxStatStartIdentity(stat);
+      if (identity !== undefined)
+        return identity;
     }
     const result = spawnSync("ps", ["-o", "lstart=", "-p", String(pid)], {
       encoding: "utf8",

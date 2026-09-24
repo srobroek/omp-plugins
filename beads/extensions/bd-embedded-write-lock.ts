@@ -137,30 +137,34 @@ function pidAlive(pid: number): boolean {
  * expired lock. `ps` is available on the supported Unix hosts; an unavailable
  * identity is deliberately treated as unknown by callers.
  */
-function processStartIdentity(pid: number): string | undefined {
-    try {
-        if (process.platform === "linux") {
-            // Linux exposes a monotonic process start tick in field 22 of stat.
-            // Read after the final ')' because comm may itself contain ')'.
-            const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
-            const close = stat.lastIndexOf(")");
-            if (close >= 0) {
-                const fields = stat.slice(close + 2).trim().split(/\s+/);
-                const start = fields[19];
-                if (start !== undefined && start !== "") return start;
-            }
-        }
-        const result = spawnSync("ps", ["-o", "lstart=", "-p", String(pid)], {
-            encoding: "utf8",
-            timeout: 100,
-            stdio: ["ignore", "pipe", "ignore"],
-        });
-        if (result.error || result.status !== 0) return undefined;
-        const identity = String(result.stdout ?? "").trim();
-        return identity === "" ? undefined : identity;
-    } catch {
-        return undefined;
-    }
+export function parseLinuxStatStartIdentity(stat: string): string | undefined {
+	const close = stat.lastIndexOf(")");
+	if (close < 0) return undefined;
+	const fields = stat.slice(close + 2).trim().split(/\s+/u);
+	const start = fields[19];
+	return start !== undefined && start !== "" ? start : undefined;
+}
+
+export function processStartIdentity(pid: number): string | undefined {
+	try {
+		if (process.platform === "linux") {
+			// Linux exposes a monotonic process start tick in field 22 of stat.
+			// Read after the final ')' because comm may itself contain ')'.
+			const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
+			const identity = parseLinuxStatStartIdentity(stat);
+			if (identity !== undefined) return identity;
+		}
+		const result = spawnSync("ps", ["-o", "lstart=", "-p", String(pid)], {
+			encoding: "utf8",
+			timeout: 100,
+			stdio: ["ignore", "pipe", "ignore"],
+		});
+		if (result.error || result.status !== 0) return undefined;
+		const identity = String(result.stdout ?? "").trim();
+		return identity === "" ? undefined : identity;
+	} catch {
+		return undefined;
+	}
 }
 
 /** What a hold records, for the next waiter to judge. */
