@@ -1050,6 +1050,13 @@ export const RUNNER_WAIT_FLAG = "--beads-wait-ms";
  * bundle in `dist/` when the package ships built, and next to the source in
  * `extensions/` when OMP imports the TypeScript directly.
  */
+export type BunDiscovery = {
+	execPath?: string;
+	which?: (name: string) => string | undefined | null;
+	environment?: NodeJS.ProcessEnv;
+	miseWhich?: (mise: string) => string | undefined;
+};
+
 export function embeddedWriteRunner(): { interpreter: string; script: string } | undefined {
 	const here = import.meta.dir;
 	const script = [
@@ -1064,31 +1071,38 @@ export function embeddedWriteRunner(): { interpreter: string; script: string } |
 }
 
 function bunBinary(): string | undefined {
-	const own = basename(process.execPath);
-	if (own === "bun" || own === "bun.exe") return process.execPath;
-	const onPath = typeof Bun === "undefined" ? undefined : Bun.which("bun");
+	return resolveBunBinary({
+		execPath: process.execPath,
+		which: name => (typeof Bun === "undefined" ? undefined : Bun.which(name)),
+		environment: process.env,
+		miseWhich: mise => {
+			try {
+				const result = Bun.spawnSync({ cmd: [mise, "which", "bun"], stdout: "pipe", stderr: "pipe" });
+				if (result.exitCode !== 0) return undefined;
+				return new TextDecoder().decode(result.stdout).trim();
+			} catch {
+				return undefined;
+			}
+		},
+	});
+}
+
+/** Resolve Bun without trusting the compiled OMP executable as an interpreter. */
+export function resolveBunBinary(options: BunDiscovery = {}): string | undefined {
+	const execPath = options.execPath ?? process.execPath;
+	const own = basename(execPath);
+	if (own === "bun" || own === "bun.exe") return execPath;
+	const onPath = options.which?.("bun");
 	if (onPath !== null && onPath !== undefined) return onPath;
-	const install = process.env.BUN_INSTALL;
+	const install = options.environment?.BUN_INSTALL;
 	if (install !== undefined && install !== "") {
 		const guess = join(install, "bin", "bun");
 		if (existsSync(guess)) return guess;
 	}
-	return miseBunBinary();
-}
-
-/** Resolve Bun through mise when its shims are not visible on the current PATH. */
-function miseBunBinary(): string | undefined {
-	if (typeof Bun === "undefined") return undefined;
-	const mise = Bun.which("mise");
-	if (mise === null || mise === undefined) return undefined;
-	try {
-		const result = Bun.spawnSync({ cmd: [mise, "which", "bun"], stdout: "pipe", stderr: "pipe" });
-		if (result.exitCode !== 0) return undefined;
-		const resolved = new TextDecoder().decode(result.stdout).trim();
-		return resolved !== "" && basename(resolved).startsWith("bun") && existsSync(resolved) ? resolved : undefined;
-	} catch {
-		return undefined;
-	}
+	const mise = options.which?.("mise");
+	if (mise === null || mise === undefined || options.miseWhich === undefined) return undefined;
+	const resolved = options.miseWhich(mise);
+	return resolved !== undefined && basename(resolved).startsWith("bun") && existsSync(resolved) ? resolved : undefined;
 }
 
 /**
