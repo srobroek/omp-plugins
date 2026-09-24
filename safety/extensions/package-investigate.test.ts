@@ -14,6 +14,7 @@ describe("package investigation", () => {
 		"pip install requests",
 		"npm search typescript",
         "npm --silent install left-pad",
+        "npm --prefix /tmp install left-pad",
         "pnpm --global add typescript",
         "cargo --quiet add serde",
 		"pip index versions requests",
