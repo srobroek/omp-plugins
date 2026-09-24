@@ -2003,9 +2003,9 @@ function releaseClaimArgs(id, holder, env = process.env, releasedAt = new Date()
 }
 function restoreReleasedStatusArgs(id, status) {
   if (status === "in_progress")
-    return ["update", id, "--status", "open", "--if-status", "open"];
+    return ["update", id, "--status", "open", "--if-status", "open", "--if-assignee", ""];
   if (status === "blocked" || status === "deferred")
-    return ["update", id, "--status", status, "--if-status", "open"];
+    return ["update", id, "--status", status, "--if-status", "open", "--if-assignee", ""];
   return;
 }
 function shellQuote(value) {
