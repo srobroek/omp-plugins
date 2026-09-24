@@ -173,7 +173,7 @@ jobs:
         run: if [ -f scripts/bench-bash-gates.ts ]; then bun run bench:gates; else echo "bench:gates fixture not present yet"; fi
 
       # `uvx` is not preinstalled on GitHub runners.
-      - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
 
       # The Dependabot policy is a cross-file contract: the group name that
       # dependabot-automerge.yml merges on, the semver-qualified ignore spellings
