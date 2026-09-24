@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { execFileSync, spawnSync } from "node:child_process";
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -722,6 +722,19 @@ describe("runBdResult", () => {
 
 
 describe("integration", () => {
+	const ambientActors = { beads: undefined as string | undefined, bd: undefined as string | undefined };
+	beforeEach(() => {
+		ambientActors.beads = process.env.BEADS_ACTOR;
+		ambientActors.bd = process.env.BD_ACTOR;
+		delete process.env.BEADS_ACTOR;
+		delete process.env.BD_ACTOR;
+	});
+	afterEach(() => {
+		if (ambientActors.beads === undefined) delete process.env.BEADS_ACTOR;
+		else process.env.BEADS_ACTOR = ambientActors.beads;
+		if (ambientActors.bd === undefined) delete process.env.BD_ACTOR;
+		else process.env.BD_ACTOR = ambientActors.bd;
+	});
 	/** Collect handlers the way the runtime would, then drive them directly. */
 	const wire = () => {
 		const handlers: Record<string, Array<(e: unknown, c: unknown) => unknown>> = {};
@@ -1338,7 +1351,11 @@ esac
 	});
 	test("session close stays silent until a bd write lands", async () => {
 		const originalBeads = process.env.BEADS_DIR;
+		const originalBeadsActor = process.env.BEADS_ACTOR;
+		const originalBdActor = process.env.BD_ACTOR;
 		process.env.BEADS_DIR = "/nonexistent-beads-dir";
+		delete process.env.BEADS_ACTOR;
+		delete process.env.BD_ACTOR;
 		try {
 			const { handlers } = wire();
 			// No write recorded yet: the stop hook must not even reach the database.
@@ -1356,6 +1373,10 @@ esac
 		} finally {
 			if (originalBeads === undefined) delete process.env.BEADS_DIR;
 			else process.env.BEADS_DIR = originalBeads;
+			if (originalBeadsActor === undefined) delete process.env.BEADS_ACTOR;
+			else process.env.BEADS_ACTOR = originalBeadsActor;
+			if (originalBdActor === undefined) delete process.env.BD_ACTOR;
+			else process.env.BD_ACTOR = originalBdActor;
 		}
 	});
 
