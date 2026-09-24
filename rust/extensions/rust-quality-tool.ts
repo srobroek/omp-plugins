@@ -24,19 +24,12 @@ export type QualityReport = {
 };
 
 /**
- * Per-probe bound. Each probe is one spawn, and every one of these binaries is a
- * mise shim that pays its own resolution on each spawn, so the cost is not a
- * local lookup. Measured warm, first successful argument set: pyright 2689 ms,
- * tsc 2388 ms, biome 2089 ms, rustfmt 1651 ms, cargo 1110 ms, ruff 953 ms, go
- * 736 ms. At 1000 ms five of those seven installed tools were killed and
- * reported not runnable, which inverts what this probe is for: it exists so a
- * resolvable-but-broken shim cannot count as present, not so a working tool can
- * be called absent. 5000 ms clears the slowest measured probe by 1.9x.
- *
- * Affordable only because the manifest is checked first. A repository with no
- * project for this language probes nothing, so an empty runner pays zero rather
- * than three binaries times three argument sets.
+ * Probe budget shared by all tool availability checks. A slow or broken shim
+ * must not consume the quality command budget before checks begin.
  */
+const PROBE_BUDGET_MS = 10_000;
+
+/** Per-probe bound for a mise shim's resolution and version check. */
 const PROBE_TIMEOUT_MS = 5_000;
 
 /**
@@ -121,10 +114,9 @@ export function runRustQuality(mode: QualityMode, cwd: string): QualityReport {
         }
         return { ok: false, complete: false, cwd, mode, steps };
     }
-    // Probe only once the manifest exists: with no Cargo.toml the probe is wasted work, and
-    // three argument sets at 1,000 ms each outlast a CI test's own limit where no Rust
-    // toolchain is installed.
-    const cargoOk = have("cargo", deadline);
+    // Probe only once the manifest exists: with no Cargo.toml the probe is wasted.
+    const probeDeadline = Math.min(deadline, Date.now() + PROBE_BUDGET_MS);
+    const cargoOk = have("cargo", probeDeadline);
     if (!cargoOk) {
         if (mode === "fix") steps.push({ name: "cargo fmt", status: "skip", detail: "cargo not on PATH" });
         else {
