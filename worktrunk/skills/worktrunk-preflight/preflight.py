@@ -448,7 +448,7 @@ def check_node_modules_integrity(ctx: Context) -> Result:
     except (OSError, UnicodeError, json.JSONDecodeError):
         package = None
     if isinstance(package, dict):
-        for section in ("dependencies", "devDependencies", "optionalDependencies"):
+        for section in ("dependencies", "devDependencies"):
             values = package.get(section)
             if isinstance(values, dict):
                 declared.extend(name for name in values if isinstance(name, str))

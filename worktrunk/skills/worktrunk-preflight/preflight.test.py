@@ -75,6 +75,23 @@ class PreflightRegressionTests(unittest.TestCase):
             self.assertIn("missing", result.detail)
             self.assertIn("bun install --frozen-lockfile", result.fix)
 
+    def test_platform_optional_dependency_can_be_absent(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "package.json").write_text(
+                json.dumps(
+                    {
+                        "dependencies": {"present": "1.0.0"},
+                        "optionalDependencies": {"platform-only": "1.0.0"},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (root / "node_modules" / "present").mkdir(parents=True)
+            result = preflight.check_node_modules_integrity(FakeContext(root))
+            self.assertEqual(result.status, "pass")
+            self.assertIn("declared node_modules packages", result.detail)
+
     def test_skeleton_bun_types_warns_with_repair(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
