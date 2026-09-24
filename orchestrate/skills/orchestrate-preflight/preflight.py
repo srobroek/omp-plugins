@@ -362,6 +362,164 @@ def worker_roles_check() -> dict[str, Any]:
     return check("worker-role-labels", "pass", "ledger reachable; ready work by routing label: " + ", ".join(counts))
 
 
+THINKING_LEVELS = {"off", "minimal", "low", "medium", "high", "xhigh", "max", "auto"}
+
+
+def strip_thinking(selector: str) -> str:
+    """Drop a trailing :LEVEL thinking suffix; other colons (e.g. a model version ':0') stay."""
+    head, separator, tail = selector.rpartition(":")
+    return head if separator and tail in THINKING_LEVELS else selector
+
+
+def frontmatter_agents() -> tuple[list[tuple[str, str]], str | None]:
+    agents_dir = Path(__file__).resolve().parents[2] / "agents"
+    agents: list[tuple[str, str]] = []
+    try:
+        paths = sorted(agents_dir.glob("*.md"))
+    except OSError as error:
+        return [], f"could not read orchestrate agents: {error}"
+    for path in paths:
+        try:
+            text = path.read_text(encoding="utf-8")
+        except OSError as error:
+            return [], f"could not read {path}: {error}"
+        if not text.startswith("---\n"):
+            return [], f"{path} has no frontmatter"
+        end = text.find("\n---", 4)
+        if end < 0:
+            return [], f"{path} has unterminated frontmatter"
+        fields: dict[str, str] = {}
+        for line in text[4:end].splitlines():
+            key, separator, value = line.partition(":")
+            if not separator:
+                continue
+            value = value.strip()
+            if key.strip() in {"name", "model"}:
+                fields[key.strip()] = value.strip('"\'')
+        if not fields.get("name") or not fields.get("model"):
+            return [], f"{path} frontmatter must define name and model"
+        agents.append((fields["name"], fields["model"]))
+    return agents, None
+
+
+def config_value(argv: list[str]) -> tuple[Any | None, str | None]:
+    result = run_command(argv)
+    if result.returncode != 0:
+        return None, f"{shlex.join(argv)} failed: {command_error(result)}"
+    try:
+        payload = decode_json(result.stdout)
+    except ValueError as error:
+        return None, f"{shlex.join(argv)} returned invalid JSON: {error}"
+    if not isinstance(payload, dict) or "value" not in payload:
+        return None, f"{shlex.join(argv)} returned invalid JSON: missing value field"
+    return payload["value"], None
+
+
+def observed_type(value: Any) -> str:
+    if value is None:
+        return "null"
+    if isinstance(value, bool):
+        return "boolean"
+    if isinstance(value, str):
+        return "string"
+    if isinstance(value, list):
+        return "array"
+    if isinstance(value, dict):
+        return "object"
+    return type(value).__name__
+
+
+def mapping_type_error(key: str, value: Any) -> str | None:
+    expected = "mapping of string->string"
+    if not isinstance(value, dict):
+        return f"{key} has observed type {observed_type(value)}; expected {expected}"
+    invalid = [item for item, mapped in value.items() if not isinstance(item, str) or not isinstance(mapped, str)]
+    if invalid:
+        return f"{key} has observed type object with non-string key/value; expected {expected}"
+    return None
+
+
+def model_list_error(payload: Any) -> str | None:
+    expected = "object with models: array of objects containing string selector"
+    if not isinstance(payload, dict):
+        return f"model list has observed type {observed_type(payload)}; expected {expected}"
+    model_items = payload.get("models")
+    if not isinstance(model_items, list):
+        return f"model list models has observed type {observed_type(model_items)}; expected array of objects containing string selector"
+    for index, item in enumerate(model_items):
+        if not isinstance(item, dict):
+            return f"model list models[{index}] has observed type {observed_type(item)}; expected object containing string selector"
+        selector = item.get("selector")
+        if not isinstance(selector, str) or not selector:
+            return f"model list models[{index}].selector has observed type {observed_type(selector)}; expected non-empty string"
+    return None
+
+
+def model_roles_check() -> dict[str, Any]:
+    if shutil.which("omp") is None:
+        return check("model-roles", "skip", "omp is unavailable; cannot verify model roles")
+    agents, error = frontmatter_agents()
+    if error:
+        return check("model-roles", "fail", error)
+    overrides, error = config_value(["omp", "config", "get", "task.agentModelOverrides", "--json"])
+    if error:
+        return check("model-roles", "fail", error)
+    type_error = mapping_type_error("task.agentModelOverrides", overrides)
+    if type_error:
+        return check("model-roles", "fail", type_error)
+    roles, error = config_value(["omp", "config", "get", "modelRoles", "--json"])
+    if error:
+        return check("model-roles", "fail", error)
+    type_error = mapping_type_error("modelRoles", roles)
+    if type_error:
+        return check("model-roles", "fail", type_error)
+    stale = sorted(key for key in overrides if key.startswith("orc-"))
+    if stale:
+        return check("model-roles", "fail", "stale override keys must be removed: " + ", ".join(stale))
+    models_result = run_command(["omp", "models", "--json"], timeout=20.0)
+    if models_result.returncode != 0:
+        return check("model-roles", "fail", f"omp models --json failed: {command_error(models_result)}")
+    try:
+        models_payload = decode_json(models_result.stdout)
+    except ValueError as json_error:
+        return check("model-roles", "fail", f"omp models --json returned invalid JSON: {json_error}")
+    list_error = model_list_error(models_payload)
+    if list_error:
+        return check("model-roles", "fail", list_error)
+    model_items = models_payload["models"]
+    selectors = {item["selector"] for item in model_items}
+    missing: list[str] = []
+    invalid: list[str] = []
+    for name, frontmatter_model in agents:
+        effective = overrides.get(name) if isinstance(overrides.get(name), str) else frontmatter_model
+        if name not in overrides:
+            missing.append(f"{name} (set task.agentModelOverrides.{name})")
+        if not isinstance(effective, str) or not effective:
+            invalid.append(f"{name}: empty effective selector (set task.agentModelOverrides.{name})")
+            continue
+        selector = strip_thinking(effective)
+        if selector.startswith("@"):
+            alias = selector[1:]
+            if alias not in roles:
+                invalid.append(f"{name}: alias @{alias} missing from modelRoles (set modelRoles.{alias})")
+                continue
+            selector = roles[alias]
+            if not isinstance(selector, str) or not selector:
+                invalid.append(f"{name}: alias @{alias} has no concrete selector (set modelRoles.{alias})")
+                continue
+            selector = strip_thinking(selector)
+        if selector not in selectors:
+            invalid.append(f"{name}: selector {selector!r} unavailable (set task.agentModelOverrides.{name} or modelRoles alias)")
+    details: list[str] = []
+    if missing:
+        details.append("missing overrides: " + ", ".join(missing))
+    if invalid:
+        details.append("invalid models: " + "; ".join(invalid))
+    if details:
+        return check("model-roles", "fail", ". ".join(details))
+    return check("model-roles", "pass", f"verified {len(agents)} shipped agent model overrides and selectors")
+
+
 def candidate_paths(explicit: str | None, packages_root: str | None, package_names: Iterable[str], skill: str) -> list[Path]:
     candidates: list[Path] = []
     if explicit:
@@ -508,6 +666,7 @@ def main(argv: list[str] | None = None) -> int:
         ("base-commit-recorded", lambda: base_check(args.base)),
         ("upstream-merge-policy", upstream_policy_check),
         ("worker-role-labels", worker_roles_check),
+        ("model-roles", model_roles_check),
     )
     checks.extend(function() for check_id, function in own_checks if selected(check_id, only))
     checks = [item for item in checks if selected(item["id"], only)]

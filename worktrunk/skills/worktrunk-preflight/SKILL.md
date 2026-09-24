@@ -23,7 +23,7 @@ Use `--only ID[,ID...]` to select checks. The script is read-only unless `--appl
 - `hook-approvals` — FAIL means an unapproved project hook would be skipped silently; run `wt config approvals add --yes`. Stale approvals are WARN.
 - `config-keys-honoured` — FAIL means project config contains an ignored key; move it to `~/.config/worktrunk/config.toml`, optionally under `[projects."<id>"]`.
 - `default-branch-resolves` — FAIL means Worktrunk cannot resolve a default branch; configure a valid default branch.
-- `merge-evidence-policy` — FAIL means project `[merge]` keys are ignored; move policy to user config and invoke `wt merge --no-squash --no-ff`.
+- `merge-evidence-policy` — FAIL means project `[merge]` keys are ignored; move policy to user config and pass `wt merge --no-squash --no-ff` explicitly on every worker-to-epic merge; an epic-to-default merge may be plain or squashing.
 - `provisioning-include` — WARN means ignored dependency directories lack `.worktreeinclude`; run `wt step copy-ignored`.
 - `omp-plugin-installed` — WARN means the OMP plugin is absent; run `wt config plugins omp install`.
 - `commit-generation` — WARN means generated commits make `wt merge` squash history; pass `wt merge --no-squash` when preserving per-commit history.

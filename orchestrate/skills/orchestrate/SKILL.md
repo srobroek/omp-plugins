@@ -34,5 +34,5 @@ TRIGGER
 
 MUST use the pull-based protocol in `rule://orchestrate-process`, not direct assignment or prompt-only state.
 MUST make independent review precede every merge.
-MUST keep durable decisions, acceptance evidence, review findings, and closure reasons on beads or authoritative decision carriers; use `hub` for live coordination.
+MUST keep durable decisions, acceptance evidence, review findings, and closure reasons on beads or authoritative decision carriers; use `write agent://AGENT_ID` or `write agent://all` for live coordination.
 NOT close a parent from worker claims alone; the lead runs the repository-wide command.

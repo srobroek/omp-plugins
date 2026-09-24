@@ -6,6 +6,7 @@
   "omp": {
     "extensions": [
       "./dist/bash-gates.js",
+      "./dist/bd-lease-heartbeat.js",
       "./extensions/session-beads-lifecycle.ts"
     ],
     "programs": [

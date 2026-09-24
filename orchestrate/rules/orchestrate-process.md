@@ -10,7 +10,7 @@ description: Governs pull-based orchestration, durable bead evidence, worktree i
 MUST dispatch all ready work for a role together.
 MUST treat a phase boundary as continuation, not a stopping point.
 MUST verify worker claims instead of trusting worker reports.
-Before dispatching any worker, the lead MUST run the orchestrate preflight once for the run. Record its verdict in the governing run or epic bead metadata as `execution_preflight`, and record the immutable run base commit as `base_sha`. A preflight `FAIL` blocks dispatch; `warn` and `skip` do not.
+Before dispatching any worker, the lead MUST run the orchestrate preflight once for the run. Record its verdict in the governing run or epic bead metadata as `execution_preflight`, and record the immutable run base commit as `base_sha`. A preflight `FAIL` blocks dispatch, and so does a `skip` reporting that the beads or worktrunk companion is absent; other `warn` and `skip` results do not. At run start, the lead MUST claim one governing epic with `bd update EPIC --claim`, write its run and `base_sha` metadata, and read it back with `bd show EPIC --json`; it MUST stop if another live run holds that epic.
 
 
 The main agent, lead, parent, and sub-lead MUST each explicitly instruct every worker to pull its role-routed ready queue. Use this instruction before work begins: `Pull your role-routed ready queue, claim each matching bead, execute it, record evidence, and continue pulling until no ready bead carries your role.` After receiving that instruction, workers MUST continuously run this loop until no ready bead carries their role:
@@ -18,20 +18,21 @@ The main agent, lead, parent, and sub-lead MUST each explicitly instruct every w
 1. Pull with the exact invocation `bd ready --label agent:KIND --unassigned --json`.
 2. `bd ready` has no parent filter. Accept only records whose metadata `epic_id` exactly equals the epic id owned by that lead; ignore records for every other epic.
 3. Claim a selected record atomically with `bd update ID --claim`. A lead raises priority and names a specific bead id as a direct cue; naming a bead is not direct assignment and the worker still claims it with this command.
-4. Execute the bead, record durable evidence, then close it with `bd close ID --reason "EVIDENCE"`, or release it with `bd unclaim ID` when it cannot be completed.
+4. Execute the bead, record durable evidence, then close it with `bd close ID --reason "EVIDENCE"`, or release it with `bd unclaim ID --if-assignee HOLDER --reason "..."` and read back its state; `--force` requires explicit user authorization.
 5. Return to step 1 after every close or release. Stop only after the pull returns no ready record for the worker's `agent:KIND` label and matching `metadata.epic_id`.
+An expired lease NEVER proves a dead holder. A holder is dead only when its `lease_pid` is not running on `lease_host` as checked on that host, or its agent id is absent or finished in `read proc://`; only then reclaim with `bd unclaim ID --if-assignee HOLDER --reason "holder dead: EVIDENCE"` and read back `open` and unassigned.
+If `bd show` or a CAS reports another holder or a closed bead, the worker MUST stop writing to that bead and report it; it MUST NEVER retry under the new holder.
  
 ## Wait discipline
 
-Subagent results auto-deliver. The main agent, root lead, parent, sub-lead, and every epic orchestrator MUST NOT poll to discover that a dispatched agent finished.
+Subagent results and peer messages auto-deliver. The main agent, root lead, parent, sub-lead, and every epic orchestrator MUST NOT poll to discover that dispatched work finished.
 Ending the turn is NOT a way to wait. These runs are headless: the process ends with the turn, and every dispatched agent is abandoned mid-flight. A lead ends its turn only when NO dispatched work is outstanding and its own work is complete.
-While any dispatched agent is still running, the lead MUST remain in the turn. When it has nothing else useful to do, wait on the specific outstanding jobs with `ids`, or on a specific peer with `from`.
-A bare `hub wait` naming neither `ids` nor `from` remains PROHIBITED: it wakes on unrelated traffic and must be re-issued, and each re-issue costs a full turn that re-reads the lead's whole context.
+While any dispatched agent is still running, the lead MUST remain in the turn. Call `wait` only when completely blocked with no useful work left; `wait` has no target filters and results or messages arrive automatically.
 Useful work includes reviewing a returned result, updating the ledger, integrating a delivered branch, dispatching the next independent bead, and answering a peer. Prefer any of those over waiting.
-Peer-to-peer `hub send` to a named agent remains the correct way to coordinate.
-In a graded arm, 55 of 89 lead waits returned nothing usable, and 29 of those waited on agents that had already finished.
+Historical rationale only: in a graded arm, 55 of 89 lead waits returned nothing usable, including 29 waits on agents that had already finished.
 A turn ended with dispatched work outstanding is a process violation, like other violations in this rule; record it with the governing bead's durable evidence.
-Two consecutive targeted waits with no intervening action are the signature of a polling loop; perform useful work before waiting again.
+Two consecutive waits with no intervening action are a polling loop; perform useful work before waiting again.
+ 
 
 ## Ledger contract
 
@@ -65,7 +66,7 @@ Every reviewable bead MUST have `--acceptance` criteria. Review and closure are 
 
 Create beads only with confirmed forms such as `bd create "title" -t task -p 2 --parent ID --deps "discovered-from:ID" --metadata '{"epic_id":"EPIC_ID","execution_parent":"PARENT_ID"}' --description "SCOPE" --acceptance "CRITERIA"`. Every dispatchable bead MUST carry the routing label `agent:KIND` before dispatch; label assignment is a project convention, not an undocumented CLI invocation.
 
-Independent review MUST precede every merge. A review failure MUST cause the work-reviewer to create each actionable fix bead itself, with a `discovered-from` dependency to the reviewed bead, raised priority, the responsible `agent:KIND` routing label by project convention, and return it to that role's pull queue. Preserve every finding and source bead. Create each fix bead with the confirmed form `bd create "fix: SUMMARY" -t task -p 1 --parent EPIC_ID --deps "discovered-from:REVIEW_BEAD_ID" --metadata '{"epic_id":"EPIC_ID","execution_parent":"PARENT_ID","execution_role":"KIND"}' --description "ALL_FINDINGS_AND_SOURCE_IDS" --acceptance "REPAIR_CRITERIA"`. Repeat implementation, review, and repair until every criterion passes.
+Independent review MUST precede every merge. A review failure MUST cause the work-reviewer to create exactly one fix bead for that round itself, carrying every actionable finding, with a `discovered-from` dependency to the reviewed bead, raised priority, the responsible `agent:KIND` routing label by project convention, and return it to that role's pull queue. Preserve every finding and source bead. Create it with the confirmed form `bd create "fix: SUMMARY" -t task -p 1 --parent EPIC_ID --deps "discovered-from:REVIEW_BEAD_ID" --metadata '{"epic_id":"EPIC_ID","execution_parent":"PARENT_ID","execution_role":"KIND"}' --description "ALL_FINDINGS_AND_SOURCE_IDS" --acceptance "REPAIR_CRITERIA"`. After two failed fix rounds on one bead, set it `blocked` with every finding and escalate to the lead; this cap applies to implementation review and PR bot-review rounds.
 
 ## Worktrees and integration
 
@@ -74,17 +75,19 @@ MUST provision exactly one linked worktree per worker. The lead records one run 
 `wt switch -y --create --no-cd --base BASE_COMMIT --format json BRANCH`
 
 Workers MUST take the worktree path from that command's JSON output and run `wt step copy-ignored` in the provisioned worktree before editing. Omitting `wt step copy-ignored` can make focused tests fail with missing-module errors that falsely look like broken code. Use the documented branch naming convention `orc/EPIC_ID/AGENT_KIND/BEAD_ID`; this convention is not enforcement.
+When a bead is released, its `worktree` metadata MUST remain. The next claimant adopts that tree only after checking `git status` and HEAD against the bead's `branch` metadata. A successor bead created because the approach was wrong after the fix-round cap MUST get a fresh worktree off the run base; the old tree remains until its own bead closes.
 
 Worker-to-epic integration MUST use `wt merge --no-squash --no-ff`, with both flags explicit on every such command. `wt` ignores a `[merge]` key in committed project `.config/wt.toml`; a configured `[commit.generation]` makes default `wt merge` squash everything into one generated commit. Omitting the flags at this level destroys the per-commit history and the conflict record. Epic-branch-to-default integration MAY use plain or squashing `wt merge` so main receives one clean commit per epic.
+Before merger handoff, the lead MUST run worker-to-epic `git merge-tree --write-tree EPIC_HEAD WORKER_HEAD`, then epic-to-default `wt list --format json` and inspect that branch's `merge_conflicts`. A non-zero exit, `true`, or unknown result is a hold; the merger still refuses and the lead resolves it.
 
 ## Review repair and conflicts
 
 
-If integration conflicts, the merger MUST report the conflict to the lead through `hub` and stop without resolving it. ONLY the lead resolves an integration conflict; the merger never resolves conflicts, reviews its own work, or substitutes for independent review. The lead reruns verification after resolution.
+If integration conflicts, the merger MUST report the conflict to the lead through `write agent://AGENT_ID` and stop without resolving it. ONLY the lead resolves an integration conflict; the merger never resolves conflicts, reviews its own work, or substitutes for independent review. The lead reruns verification after resolution.
 
 ## Durable coordination
 
 MUST Use a wisp only when live step state need not synchronize to another clone, human, or agent.
-Message wisps are limited to transient questions, replies, notifications, and acknowledgements. Durable decisions, acceptance evidence, review findings, and closure reasons belong in bead comments or another authoritative decision carrier; coordinate live handoffs with `hub` and record the durable result with `bd comment`.
+Message wisps are limited to transient questions, replies, notifications, and acknowledgements. Durable decisions, acceptance evidence, review findings, and closure reasons belong in bead comments or another authoritative decision carrier; coordinate live handoffs with `write agent://AGENT_ID` or `write agent://all` and record the durable result with `bd comment`.
 
 NOT let the lead implement product code; the implementer owns product changes. The lead owns orchestration, evidence verification, and integration-conflict resolution.

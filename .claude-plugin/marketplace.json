@@ -31,7 +31,7 @@
     },
     {
       "name": "build",
-      "description": "Execution agents: operator and external-repo worker.",
+      "description": "External-repository worker agent.",
       "source": "./build",
       "version": "0.6.2",
       "category": "development"

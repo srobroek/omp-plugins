@@ -295,7 +295,10 @@ def check_merge_evidence(ctx: Context) -> Result:
         project_values = {"merge": "declared by Worktrunk warning"}
     user_values = parse_section(Path.home() / ".config" / "worktrunk" / "config.toml", "merge")
     user_detail = f"user config: {format_values(user_values)}"
-    invocation_detail = "Reliable control: explicit wt merge --no-squash --no-ff per invocation."
+    invocation_detail = (
+        "Reliable control: explicit wt merge --no-squash --no-ff on every worker-to-epic merge; "
+        "an epic-to-default merge may be plain or squashing."
+    )
 
     if project_values:
         return Result(

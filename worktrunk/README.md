@@ -2,10 +2,16 @@
 
 Worktree discipline for agents working against a single embedded Beads store.
 
-The package ships one registered extension, two directory-discovered rules, and one
+The package ships two registered extensions, two directory-discovered rules, and one
 directory-discovered skill.
 
-## Registered extension
+## Registered extensions
+
+### `merge-policy-gate`
+
+Blocks worker-to-epic `wt merge` calls unless they include both `--no-squash` and `--no-ff`;
+merges to the repository default branch are unchanged.
+
 
 ### `isolation-precheck`
 
@@ -55,4 +61,5 @@ It catches three measured defects:
   a `pre-merge` test hook that never runs is indistinguishable from one that passed.
 - A project-config key that `wt` silently discards, measured as `▲ Project config has key merge which belongs in user config (will be ignored)`.
 - A `[merge]` table in project config, which cannot preserve merge evidence because `wt` ignores
-  it. The reliable control is `wt merge --no-squash --no-ff` per invocation.
+  it. The reliable control is explicit `wt merge --no-squash --no-ff` on every merge that must keep
+  merge evidence, which is worker-to-epic; an epic-to-default merge may be plain or squashing.
