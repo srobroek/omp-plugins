@@ -876,7 +876,7 @@ export function pathKeys(path: string): string[] {
 }
 
 /** Match native session metadata against accepted worktree paths, not encoded directory names. */
-export async function candidates(root: string, accept?: Set<string>): Promise<Candidate[]> {
+export async function candidates(root: string, accept?: Set<string>, signal?: AbortSignal, maxResults = Number.POSITIVE_INFINITY): Promise<Candidate[]> {
 	if (!existsSync(root)) return [];
 	const out: Candidate[] = [];
 	const storage = new FileSessionStorage();
@@ -887,12 +887,15 @@ export async function candidates(root: string, accept?: Set<string>): Promise<Ca
 		return [];
 	}
 	for (const directory of directories) {
+		if (signal?.aborted) throw signal.reason instanceof Error ? signal.reason : new DOMException("The operation was aborted", "AbortError");
 		if (!directory.isDirectory()) continue;
 		const sessions = await listSessionsReadOnly(join(root, directory.name), storage);
 		for (const session of sessions) {
+			if (signal?.aborted) throw signal.reason instanceof Error ? signal.reason : new DOMException("The operation was aborted", "AbortError");
 			if (accept && !pathKeys(session.cwd).some((key) => accept.has(key))) continue;
 			const head = await readHead(session.path);
 			if (head) out.push({ file: session.path, head });
+			if (out.length >= maxResults) return out;
 		}
 	}
 	return out;
