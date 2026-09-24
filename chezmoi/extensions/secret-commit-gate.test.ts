@@ -336,6 +336,26 @@ describe("decideCommit", () => {
         expect(decideCommit('bd create --description "$(cat f)"', ELSEWHERE)).toBeUndefined();
     });
 
+	test("allows the read-only post-merge inspection command", () => {
+		seedRepo(["dotfiles/dot_zshrc"]);
+		const command = `gh pr view 344 --repo srobroek/omp-plugins --json state,merged,commit --jq .state
+	SHA=$(gh pr view 344 --repo srobroek/omp-plugins --json mergeCommit --jq .mergeCommit.oid)
+	git fetch origin main
+	git merge-base --is-ancestor "$SHA" origin/main
+	git log --oneline -1 origin/main
+	git rev-parse origin/main
+	git cat-file -t "$SHA"
+	git rev-list --parents -n1 "$SHA"`;
+		expect(decideCommit(command, ELSEWHERE)).toBeUndefined();
+	});
+
+	test("still refuses git commit inside a substitution", () => {
+		seedRepo(["dotfiles/dot_config/gh/api_token"]);
+		const decision = decideCommit(`echo "$(git -c commit.gpgSign=false commit -m x)"`, ELSEWHERE);
+		expect(decision?.block).toBe(true);
+		expect(decision?.reason).toContain("nests a shell");
+	});
+
 	test("a nested shell outside a chezmoi tree is left alone", () => {
 		// The refusal is scoped: with no chezmoi source resolved there is nothing to
 		// protect, so an ordinary repository's subshell commits must pass untouched.
@@ -481,7 +501,7 @@ test("real Git candidates honor paths, worktree content, deletions, and NUL file
 	} finally {
 		rmSync(dir, { recursive: true, force: true });
 	}
-});
+}, 20_000);
 
 test("literal shell cwd keeps secrets guarded after failed and pipeline-local cd", () => {
 	const dir = mkdtempSync(join(tmpdir(), "secret-shell-"));

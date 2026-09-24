@@ -592,7 +592,9 @@ export function decideCommit(command: string, cwd: string): { block: true; reaso
 		}
 		return;
 	}
-	if (nestsShell(command)) {
+	// Only a nested payload that runs `git`/`dgit` [options] `commit` can land a
+	// commit this walk cannot follow; read-only git inside a substitution passes.
+	if (nestsShell(command) && /\b(?:git|dgit)(?:\s+-[^\s;&|()]+(?:\s+[^\s;&|()]+)?)*\s+commit\b/.test(command)) {
 		return {
 			block: true,
 			reason: "This command nests a shell -- a subshell, a brace group, a substitution, or eval -- and the guard cannot follow which directory the commit lands in, so it cannot check whether that commit stages a plaintext secret. Run the commit as a plain command in the directory it belongs to.",

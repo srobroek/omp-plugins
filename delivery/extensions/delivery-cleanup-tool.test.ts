@@ -16,6 +16,7 @@ import {
 import { devNull, tmpdir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
+import pkg from "../package.json" with { type: "json" };
 import deliveryCleanupTool, {
 	branchDeleteArgs,
 	type CleanupResult,
@@ -200,7 +201,7 @@ function fixture(
 	if (key === null) throw new Error("fixture repo has no key");
 	const receipt = buildReceipt({
 		now: NOW,
-		emitter: { plugin: "@srobroek/delivery", version: "0.12.0", tool: "delivery_land" },
+		emitter: { plugin: "@srobroek/delivery", version: pkg.version, tool: "delivery_land" },
 		repo: {
 			key,
 			canonicalRoot: realpathSync(main),

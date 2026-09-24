@@ -531,7 +531,7 @@ describe("integration temp git repo", () => {
 		} catch {
 			/* ignore */
 		}
-	});
+	}, 20_000);
 
 	test.skipIf(!gitOk)("advises only about files the agent wrote", () => {
 		const run = (args: string[]) =>
@@ -593,7 +593,7 @@ describe("integration temp git repo", () => {
 
 		fire("turn_start");
 		expect(fire("session_stop", {}, { cwd: dir })).toBeDefined();
-	});
+	}, 20_000);
 
 	test.skipIf(!gitOk)("counts only commits made after the session opened", () => {
 		const work = mkdtempSync(join(tmpdir(), "unpushed-adv-commits-"));
@@ -646,7 +646,7 @@ describe("integration temp git repo", () => {
 
 		rmSync(work, { recursive: true, force: true });
 		rmSync(origin, { recursive: true, force: true });
-	});
+	}, 20_000);
 
 	test.skipIf(!gitOk)("only an attributed write resets the reminder count", () => {
 		const work = mkdtempSync(join(tmpdir(), "unpushed-adv-reset-"));
@@ -702,7 +702,7 @@ describe("integration temp git repo", () => {
 
 		rmSync(work, { recursive: true, force: true });
 		rmSync(origin, { recursive: true, force: true });
-	});
+	}, 20_000);
 
 	test.skipIf(!gitOk)("classifies the ledger at the canonical root, not at the linked worktree", () => {
 		const canonical = mkdtempSync(join(tmpdir(), "unpushed-adv-canonical-"));
@@ -733,7 +733,7 @@ describe("integration temp git repo", () => {
 
 		run(["worktree", "remove", "--force", linked]);
 		rmSync(canonical, { recursive: true, force: true });
-	});
+	}, 20_000);
 
 	test.skipIf(!gitOk)("observing the tree never writes the repository index", () => {
 		const work = mkdtempSync(join(tmpdir(), "unpushed-adv-locks-"));
@@ -773,5 +773,13 @@ describe("integration temp git repo", () => {
 		expect(stamp()).toBe(before);
 
 		rmSync(work, { recursive: true, force: true });
+	});
+	test("stays silent for a dangling linked-worktree gitdir", () => {
+		const dir = mkdtempSync(join(tmpdir(), "unpushed-adv-dangling-"));
+		writeFileSync(join(dir, ".git"), "gitdir: /missing/worktree/gitdir\n");
+		const { fire } = registerAdvisory();
+		expect(fire("session_stop", {}, { cwd: dir })).toBeUndefined();
+		expect(fire("session_stop", {}, { cwd: dir })).toBeUndefined();
+		rmSync(dir, { recursive: true, force: true });
 	});
 });

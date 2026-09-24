@@ -2,11 +2,10 @@ import { describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import pkg from "../package.json" with { type: "json" };
 
 import hygieneOrientation, {
-	CONTRACT,
 	type HygieneReport,
-	orientationText,
 	type ProbeResult,
 	type ProbeRunner,
 	parsePorcelainPaths,
@@ -97,33 +96,13 @@ describe("delivery hygiene orientation", () => {
 		expect(extensions.filter(entry => entry === "./extensions/hygiene-orientation.ts").length).toBe(1);
 	});
 
-    test("the contract text remains available without registering a static orientation tool", () => {
-        const text = orientationText();
-        expect(text.split("\\n")[0]).toContain("delivery_orient:");
-        expect(text).not.toContain("delivery_hygiene_report");
-        expect(CONTRACT.length).toBe(6);
-        for (const entry of CONTRACT) expect(text).toContain(entry.point);
-        expect(text).toContain("no extension can read agent identity");
-        expect(text).toContain("main agent or the run lead");
-        expect(text).toContain("neither removes, prunes, deletes, nor pushes");
-    });
 
-	test("delivery_orient states the lifecycle order conditionally and never unconditionally", () => {
-		const lifecycle = CONTRACT[5];
-		expect(lifecycle?.statement).toContain("bd_reconcile");
-		expect(lifecycle?.statement).toContain("when the ledger classification recomputed at the canonical root is active");
-		expect(lifecycle?.statement).toContain("A retired or ledger-free repository goes delivery_land then delivery_cleanup directly");
-		// Every mention of bd_reconcile in the whole text is inside that one conditional sentence.
-		const sentences = orientationText().split(/(?<=\.)\s/);
-		for (const sentence of sentences.filter(text => text.includes("bd_reconcile"))) expect(sentence).toContain("recomputed at the canonical root is active");
+	test("the hygiene report is read-approved and reads the context cwd", () => {
+		const registered = register();
+		expect(Object.keys(registered)).toEqual(["delivery_hygiene_report"]);
+		expect(registered.delivery_hygiene_report?.approval).toBe("read");
+		expect(registered.delivery_hygiene_report?.description).toContain("main-worktree flag");
 	});
-
-    test("the hygiene report is the only registered tool and is read-approved", () => {
-        const registered = register();
-        expect(Object.keys(registered)).toEqual(["delivery_hygiene_report"]);
-        expect(registered.delivery_hygiene_report?.approval).toBe("read");
-        expect(registered.delivery_hygiene_report?.description).toContain("main-worktree flag");
-    });
 
 	test("delivery_hygiene_report names itself in its first line and reports the scanned cwd only", async () => {
 		const cwd = repo();
@@ -356,7 +335,7 @@ describe("delivery hygiene orientation", () => {
 		if (!key) throw new Error("missing repo key");
 		const receipt = buildReceipt({
 			now: 1_800_000_000_000,
-			emitter: { plugin: "@srobroek/delivery", version: "0.12.0", tool: "delivery_land" },
+			emitter: { plugin: "@srobroek/delivery", version: pkg.version, tool: "delivery_land" },
 			repo: { key, canonicalRoot: realpathSync(cwd), remote: "origin", forge: "github", nameWithOwner: "owner/repo" },
 			pr: {
 				number: 7,

@@ -34,6 +34,7 @@ that are outside the caller project's current repo root.
 ## Working Directory
 
 - If the parent supplied an explicit checkout path, use exactly that.
+- Before cloning, editing, or running any other mutating command, capture the caller root with `CALLER_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)"` and stop if that command fails.
 - Otherwise create a **unique per-invocation** checkout directory:
   `mkdir -p /tmp/agentic/external-repos && mktemp -d /tmp/agentic/external-repos/<repo-name>-XXXXXX`.
   Never default to the bare shared path: other agents may be working in the
@@ -42,7 +43,8 @@ that are outside the caller project's current repo root.
   remove the need to isolate *within* that repo.
 - Reuse an existing checkout only when the parent explicitly pointed you at
   one; never silently adopt another invocation's directory.
-- Never clone or create a nested git repo inside the caller project's directory tree.
+- Never clone or create a nested git repo inside the caller project's directory tree. Resolve the target root with `TARGET_ROOT="$(git -C "$CHECKOUT" rev-parse --show-toplevel 2>/dev/null)"`, then stop unless it is non-empty, differs from `CALLER_ROOT`, and is not beneath `CALLER_ROOT/`.
+- After every `cd` into the target, verify `pwd -P` and `git rev-parse --show-toplevel` both identify `TARGET_ROOT`; if either check fails, stop before mutation.
 
 ## Workflow
 

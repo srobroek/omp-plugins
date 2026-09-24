@@ -68,3 +68,9 @@ updates:
     directory: /whats-new
     schedule:
       interval: daily
+  # Renovate no longer maintains action pins, so Dependabot watches the pinned
+  # GitHub Actions references as well.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: daily

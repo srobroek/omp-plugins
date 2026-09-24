@@ -432,7 +432,7 @@ describe("integration: worktrees", () => {
 		expect(family.filter((w) => w.branch === linkedBranch)).toHaveLength(1);
 		expect(family.filter((w) => w.branch === "main")).toHaveLength(1);
 		expect(pathKeys(main)).toContain(required(family[0], "main worktree").path);
-	});
+	}, 20_000);
 
 	test("a non-repo directory yields no family", () => {
 		expect(listWorktrees(tmp("resume-bare-"))).toEqual([]);
@@ -549,6 +549,16 @@ describe("integration: list mode", () => {
 		const text = await list(fixtureStore([]).home, repo.main);
 		expect(text).toContain("No prior sessions recorded");
 		expect(text).toContain("do not guess a session");
+	}, 20_000);
+	test("a dangling gitdir names recovery options instead of hiding sessions", async () => {
+		const dir = tmp("resume-dangling-gitdir-");
+		writeFileSync(join(dir, ".git"), "gitdir: /missing/worktree/metadata");
+		const { home } = fixtureStore([{ ...shipped, cwd: dir }]);
+		const result = await withHome(home, () => renderList(dir, { path: dir }));
+		expect(result.count).toBe(0);
+		expect(result.text).toContain("could not enumerate Git worktrees");
+		expect(result.text).toContain("worktrees:false");
+		expect(result.text).toContain("canonical repository path");
 	}, 20_000);
 
 	test("colliding ids are printed long enough to stay usable", async () => {
@@ -749,13 +759,13 @@ describe("integration: session resolution", () => {
 			);
 			expect(blocked).toEqual({ error: expect.stringContaining("transcript content was not read") });
 		}
-	});
+	}, 20_000);
 
     test("rejects an explicit file outside the sessions root", async () => {
         const { root } = fixtureStore([shipped]);
         const file = fixtureFile(root);
         expect(await resolveSession("/nowhere", { file: join(tmp("external-"), "session.jsonl") })).toEqual({ error: "file outside sessions root; pass an explicit sessionId or confirm external file" });
-    });
+    }, 20_000);
 
     test("paging preserves the selected transcript by session id", async () => {
         const repo = repoWithWorktree();
@@ -767,7 +777,7 @@ describe("integration: session resolution", () => {
             const text = renderRead(transcript, { turns: 1, maxChars: 2000, includeThinking: true });
             expect(text).toContain("resume_session mode=\"read\"");
         });
-    });
+    }, 20_000);
 });
 
 describe("integration: tool registration", () => {

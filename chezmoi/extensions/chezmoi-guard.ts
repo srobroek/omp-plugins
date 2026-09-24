@@ -312,9 +312,14 @@ export function chezmoiStatusReport(cwd = process.cwd()): { ok: boolean; text: s
 			});
 			const text = [new TextDecoder().decode(proc.stdout), new TextDecoder().decode(proc.stderr)]
 				.filter(Boolean).join("\n");
-			return { ok: proc.exitCode === 0, text: proc.exitCode === 0 ? text : `chezmoi ${args[0]} failed (exit ${proc.exitCode})\n${text}` };
-		} catch {
-			return { ok: false, text: `chezmoi ${args[0]} unavailable or failed` };
+			if (proc.exitCode === 0) return { ok: true, text };
+			if (proc.exitCode !== null) return { ok: false, text: `chezmoi ${args[0]} failed (exit ${proc.exitCode})\n${text}` };
+			const signal = proc.signalCode;
+			const cause = signal === "SIGTERM" ? `timed out after ${SUBPROCESS_TIMEOUT_MS}ms (signal ${signal})` : signal ? `terminated by signal ${signal}` : "terminated without an exit status (likely timed out)";
+			return { ok: false, text: `chezmoi ${args[0]} failed (${cause})\n${text}` };
+		} catch (error) {
+			const cause = error instanceof Error ? error.message : String(error);
+			return { ok: false, text: `chezmoi ${args[0]} failed to spawn: ${cause}` };
 		}
 	};
 	const status = capture(["status"]);

@@ -9,19 +9,12 @@ import type { GitRunner } from "./landing-receipt";
 import { listReceipts, receiptDirectory, repoKey } from "./landing-receipt";
 
 /**
- * Read-only orientation over one repository's hygiene.
+ * Read-only hygiene inventory for one repository.
  *
- * Two registrations share this module and nothing else: `delivery_orient` states
- * the hygiene contract as text and runs no probe at all, and
- * `delivery_hygiene_report` inventories the repository. Each names itself in its
- * own first output line, because a consumer that reads one line must not be told
- * it called the other tool.
- *
- * Every question the inventory answers is answered from a Git primitive whose
- * exit code distinguishes "no" from "could not tell". Nothing here mutates, and
- * no absence of evidence is reported as evidence of cleanliness: the only three
- * verdicts are `actionable` (something is provably outstanding), `ambiguous`
- * (something could not be proved either way) and `clean`.
+ * This module registers `delivery_hygiene_report`; the six-point hygiene contract
+ * lives in the delivery-worktree-hygiene rule. The report answers each question
+ * from Git primitives whose exit codes distinguish "no" from "could not tell".
+ * Nothing here mutates, and no absence of evidence is reported as cleanliness.
  */
 
 /** A value this scan could not prove. It is never promoted to a measurement. */
@@ -795,73 +788,21 @@ export function scanHygiene(cwd: string, runner: ProbeRunner = spawnProbe): Hygi
 	};
 }
 
-/** One point of the hygiene contract: its own heading and its own statement. */
-export type ContractPoint = { point: string; statement: string };
-
-/**
- * The hygiene contract, in six points.
- *
- * Point 6 states the lifecycle order in the conditional form decision
- * omp-plugins-9ej3.45 point 3 fixes: `bd_reconcile` is named only for a
- * repository whose ledger classification, recomputed at the canonical root, is
- * active. The unconditional form is stated by no surface, because it sends a
- * retired or ledger-free repository to a tool that has nothing to reconcile.
- */
-export const CONTRACT: readonly ContractPoint[] = [
-	{
-		point: "Hierarchy cleanup ownership",
-		statement:
-			"The agent that merged a branch owns cleaning up the hierarchy it created. When no merging agent is live, the main agent owns it. This is a convention: no extension can read agent identity, so nothing verifies who is acting.",
-	},
-	{
-		point: "One working worktree at a time",
-		statement: "Each agent works in one linked worktree, and never edits the canonical checkout. A second concurrent tree splits the work and hides half of it.",
-	},
-	{
-		point: "Small atomic commits, pushed as they happen",
-		statement: "Commit in small atomic steps and push each one as it is made. A branch is never left unpushed at a session boundary.",
-	},
-	{
-		point: "Scratch files outside the worktree",
-		statement: "Every scratch file, log, and build artefact lives outside the worktree, so no cleanup has to distinguish work from debris.",
-	},
-	{
-		point: "Three session-stop reminders",
-		statement:
-			"A session stop emits at most three hygiene reminders. The third escalates by dispatching the report-only worktree-reaper to inspect and report the residual; the reaper removes nothing, and no further reminder follows it.",
-	},
-	{
-		point: "Conditional lifecycle order",
-		statement:
-			"delivery_land, then bd_reconcile, then delivery_cleanup when the ledger classification recomputed at the canonical root is active. A retired or ledger-free repository goes delivery_land then delivery_cleanup directly.",
-	},
-];
-
-/** The audience line, stated as a convention and not as a control. */
-const AUDIENCE = "for the main agent or the run lead. That audience is a convention this tool cannot verify: no extension can read agent identity, so nothing here enforces it";
-
-/** Neither tool has any authority to change anything, and says so in its own words. */
-const REPORT_ONLY = "Both delivery tools in this module only report: neither removes, prunes, deletes, nor pushes anything.";
-
-export function orientationText(): string {
-	const points = CONTRACT.map((entry, index) => `${index + 1}. ${entry.point}: ${entry.statement}`);
-	return [`delivery_orient: the hygiene contract ${AUDIENCE}.`, ...points, REPORT_ONLY].join("\n");
-}
-
 export default function hygieneOrientation(pi: ExtensionAPI): void {
-    const z = pi.zod;
-    const parameters = z.object({}) as unknown as TSchema;
-    pi.registerTool({
-        name: "delivery_hygiene_report",
-        label: "Delivery Hygiene Report",
-        description:
-            "Read-only inventory of the current owned repository: one row per worktree with its branch, main-worktree flag, dirty count and ahead/behind counts, plus the receipt ids present for this repository. It never mutates state and recommends the report-only reaper only for ambiguity.",
-        parameters,
-        approval: "read",
-        execute: async (_id: string, _params: unknown, _signal: unknown, _onUpdate: unknown, ctx: { cwd: string }) => {
-            const report = scanHygiene(ctx.cwd);
-            const text = `delivery_hygiene_report: ${report.status}\n${JSON.stringify(report, null, 2)}`;
-            return { content: [{ type: "text" as const, text }], details: report };
-        },
-    });
+	const z = pi.zod;
+	const parameters = z.object({}) as unknown as TSchema;
+
+	pi.registerTool({
+		name: "delivery_hygiene_report",
+		label: "Delivery Hygiene Report",
+		description:
+			"Read-only inventory of the current owned repository: one row per worktree with its branch, main-worktree flag, dirty count and ahead/behind counts, plus the receipt ids present for this repository. It never mutates state and recommends the report-only reaper only for ambiguity.",
+		parameters,
+		approval: "read",
+		execute: async (_id: string, _params: unknown, _signal: unknown, _onUpdate: unknown, ctx: { cwd: string }) => {
+			const report = scanHygiene(ctx.cwd);
+			const text = `delivery_hygiene_report: ${report.status}\n${JSON.stringify(report, null, 2)}`;
+			return { content: [{ type: "text" as const, text }], details: report };
+		},
+	});
 }

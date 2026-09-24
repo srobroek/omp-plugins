@@ -6,6 +6,7 @@
   "omp": {
     "extensions": [
       "./extensions/resume-session-tool.ts",
+      "./extensions/session-status-tool.ts",
       "./extensions/task-batch-supervisor.ts"
     ]
   }

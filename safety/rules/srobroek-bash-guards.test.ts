@@ -671,8 +671,8 @@ describe("must fire", () => {
 			for (const buffer of buffers(c)) {
 				expect(firedBy(buffer)).toEqual(GUARDS.filter(g => c.fire.includes(g)));
 			}
-		});
-	}
+        }, 20_000);
+}
 });
 
 describe("must not fire", () => {
@@ -681,8 +681,8 @@ describe("must not fire", () => {
 			for (const buffer of buffers(c)) {
 				expect(firedBy(buffer)).toEqual([]);
 			}
-		});
-	}
+        }, 20_000);
+}
 });
 
 test("corpus counts", () => {

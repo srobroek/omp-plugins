@@ -91,6 +91,32 @@ describe("refusals", () => {
 			"containment could not be determined",
 		);
 	});
+	test("blocks an oversized command that contains a removal", () => {
+		const command = `${"x".repeat(64_001)}; wt remove ./loose`;
+		expect(reviewCommand(command, "/repo", probe([DETACHED], []))).toContain("oversize");
+	});
+
+	test("allows an oversized command with no removal", () => {
+		const command = `echo ${"x".repeat(64_001)}`;
+		expect(reviewCommand(command, "/repo", probe([DETACHED], []))).toBeNull();
+	});
+
+	test("blocks when parsing a detected removal throws", () => {
+		const parse = () => {
+			throw new Error("injected parser failure");
+		};
+		expect(reviewCommand("wt remove ./loose", "/repo", probe([DETACHED], []), parse)).toContain("parse failure");
+	});
+
+	test("blocks when a removal probe throws", () => {
+		const throwingProbe: GitProbe = {
+			...probe([DETACHED], []),
+			list: () => {
+				throw new Error("injected probe failure");
+			},
+		};
+		expect(reviewCommand("wt remove ./loose", "/repo", throwingProbe)).toContain("parse failure");
+	});
 
 	test("resolves the target relative to a -C directory", () => {
 		const seen: string[] = [];

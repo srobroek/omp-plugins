@@ -1126,10 +1126,8 @@ function isNewer(a: Candidate, b: Candidate): boolean {
 	return a.name > b.name;
 }
 
-/** Insert `candidate` into `kept`, held newest-first and capped, dropping the oldest. */
+/** Insert `candidate` into `kept`, held newest-first. */
 function keepNewest(kept: Candidate[], candidate: Candidate): void {
-	const oldest = kept[kept.length - 1];
-	if (kept.length >= MAX_LISTED_RECEIPTS && oldest !== undefined && !isNewer(candidate, oldest)) return;
 	let low = 0;
 	let high = kept.length;
 	while (low < high) {
@@ -1139,18 +1137,16 @@ function keepNewest(kept: Candidate[], candidate: Candidate): void {
 		else high = mid;
 	}
 	kept.splice(low, 0, candidate);
-	if (kept.length > MAX_LISTED_RECEIPTS) kept.pop();
 }
 
 /**
  * The newest {@link MAX_LISTED_RECEIPTS} valid, filename-bound receipts, newest
- * first.
+ * first. A directory with more valid receipts than the cap is refused rather
+ * than silently reconciling a newest-only subset.
  *
- * Streamed with `opendirSync` and held in a bounded window, so a tree holding a
- * million receipts costs 200 retained objects — not a million-entry array that is
- * then sorted and sliced. Each receipt-shaped candidate is validated before it can
- * consume a window slot, including proving that its filename stem equals its
- * payload `receiptId`.
+ * Streamed with `opendirSync` and held in a bounded window. Each receipt-shaped
+ * candidate is validated before it can consume a window slot, including proving
+ * that its filename stem equals its payload `receiptId`.
  */
 function newestReceipts(directory: string): LandingReceipt[] {
 	let dir: Dir;
@@ -1165,6 +1161,11 @@ function newestReceipts(directory: string): LandingReceipt[] {
 			if (!entry.isFile() || !RECEIPT_FILE.test(entry.name)) continue;
 			const result = readReceipt(join(directory, entry.name));
 			if (!result.ok) continue;
+			if (kept.length >= MAX_LISTED_RECEIPTS) {
+				throw new Error(
+					`receipt directory scan exceeds cap of ${MAX_LISTED_RECEIPTS} valid receipts: ${directory}`,
+				);
+			}
 			keepNewest(kept, {
 				epoch: epochOf(entry.name),
 				name: entry.name,

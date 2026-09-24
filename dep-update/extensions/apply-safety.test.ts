@@ -10,7 +10,12 @@ test("malformed Python collections do not hide valid declarations or crash detec
 		writeFileSync(join(root, "pyproject.toml"), '[project]\ndependencies = 42\n[project.optional-dependencies]\nbad = false\ngood = ["requests==2.0.0"]\n[dependency-groups]\nbad = 1\ngood = ["pytest==8.0.0"]\n');
 		writeFileSync(join(root, "package.json"), '{"dependencies":{"constructor":"1.0.0","__proto__":"2.0.0"},"devDependencies":["invalid"]}');
 		const result = await detectProject(root);
-		expect(result.rows).toEqual([["npm", "constructor", "1.0.0"], ["npm", "__proto__", "2.0.0"], ["pypi", "requests", "==2.0.0"], ["pypi", "pytest", "==8.0.0"]]);
+        expect(result.rows).toEqual([
+            { ecosystem: "npm", name: "constructor", declared: "1.0.0", resolved: null },
+            { ecosystem: "npm", name: "__proto__", declared: "2.0.0", resolved: null },
+            { ecosystem: "pypi", name: "requests", declared: "==2.0.0", resolved: null },
+            { ecosystem: "pypi", name: "pytest", declared: "==8.0.0", resolved: null },
+        ]);
 		expect(await checkNodeVersion(root, "constructor", "1.0.0")).toBe(true);
 		expect(await checkNodeVersion(root, "toString", "1.0.0")).toBe(false);
 		expect(result.stderr).toContain("Unscanned:");
@@ -67,3 +72,25 @@ test("apply rejects options, honors cancellation, bounds children/output, and pi
 		rmSync(root, { recursive: true, force: true });
 	}
 }, 10000);
+
+
+test("apply reports missing package managers as failures", async () => {
+	const root = mkdtempSync(join(tmpdir(), "dep-apply-missing-pm-"));
+	const oldPath = process.env.PATH;
+	const oldPm = process.env.DEP_UPDATE_PKG_MANAGER;
+	try {
+		process.env.PATH = root;
+		process.env.DEP_UPDATE_PKG_MANAGER = "pnpm";
+		const nodeResult = await applyBump("npm", "example", "1.0.0", root);
+		expect(nodeResult.exit).toBe(1);
+		expect(nodeResult.text).toContain("pnpm not found");
+		delete process.env.DEP_UPDATE_PKG_MANAGER;
+		const pythonResult = await applyBump("pypi", "example", "1.0.0", root);
+		expect(pythonResult.exit).toBe(1);
+		expect(pythonResult.text).toContain("uv not found");
+	} finally {
+		if (oldPath === undefined) delete process.env.PATH; else process.env.PATH = oldPath;
+		if (oldPm === undefined) delete process.env.DEP_UPDATE_PKG_MANAGER; else process.env.DEP_UPDATE_PKG_MANAGER = oldPm;
+		rmSync(root, { recursive: true, force: true });
+	}
+});

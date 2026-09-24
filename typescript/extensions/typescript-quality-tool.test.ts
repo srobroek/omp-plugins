@@ -13,7 +13,7 @@ test("missing project cannot report successful verification or repair", () => {
    expect(report.complete).toBe(false);
   }
  } finally { rmSync(dir, { recursive: true, force: true }); }
-}, 120_000); // child probes tools at 5s per argument set; a cascade over absent tools costs 15s per binary
+}, 120_000); // shared probe budget caps availability cascades at 10s
 
 test("missing requested tools and command failures cannot pass", () => {
  const dir = mkdtempSync(join(tmpdir(), "typescript-quality-"));
@@ -56,4 +56,4 @@ test("missing requested tools and command failures cannot pass", () => {
   expect(invoke().ok).toBe(true);
   expect(existsSync(downloads)).toBe(false);
  } finally { rmSync(dir, { recursive: true, force: true }); }
-}, 120_000); // child probes tools at 5s per argument set; a cascade over absent tools costs 15s per binary
+}, 120_000); // shared probe budget caps availability cascades at 10s

@@ -14,6 +14,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import pkg from "../package.json" with { type: "json" };
 
 import {
 	buildReceipt,
@@ -77,7 +78,7 @@ function landed(
 	return buildReceipt({
 		now,
 		notes: over.notes,
-		emitter: { plugin: "@srobroek/delivery", version: "0.12.0", tool: "delivery_land" },
+		emitter: { plugin: "@srobroek/delivery", version: pkg.version, tool: "delivery_land" },
 		repo: {
 			key: KEY,
 			canonicalRoot: "/Users/sjors/personal/dev/omp-plugins",
@@ -1423,21 +1424,17 @@ describe("listReceipts", () => {
 	 * The cap has to bound what is held, not just what is returned: reading every name
 	 * into an array and slicing it is the same unbounded read the cap exists to stop.
 	 */
-	test("holds at most the newest 200 receipts, dropping the oldest", () => {
+	test("refuses to reconcile when the valid receipt scan exceeds the cap", () => {
 		const directory = receiptsIn("list-cap");
 		mkdirSync(directory, { recursive: true });
-		const total = MAX_LISTED_RECEIPTS + 1;
-		for (let index = 0; index < total; index += 1) {
+		for (let index = 0; index <= MAX_LISTED_RECEIPTS; index += 1) {
 			const receipt = landed({ now: NOW + index });
 			writeFileSync(join(directory, `${receipt.receiptId}.json`), JSON.stringify(receipt));
 		}
 
-		const listed = listReceipts(directory);
-
-		expect(listed).toHaveLength(MAX_LISTED_RECEIPTS);
-		expect(listed[0]?.receiptId).toBe(`${NOW + total - 1}-b1b2b3b4b5b6`);
-		expect(listed.at(-1)?.receiptId).toBe(`${NOW + 1}-b1b2b3b4b5b6`);
-		expect(listed.some(receipt => receipt.receiptId === `${NOW}-b1b2b3b4b5b6`)).toBe(false);
+		expect(() => listReceipts(directory)).toThrow(
+			`receipt directory scan exceeds cap of ${MAX_LISTED_RECEIPTS} valid receipts: ${directory}`,
+		);
 	});
 
 	/** The window must keep the newest even when the oldest are seen first, and vice versa. */

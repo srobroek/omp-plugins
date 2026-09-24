@@ -7,7 +7,7 @@ const REQ_SPLIT = /[\[<>=!~;\s]/;
 export const REQ_NAME = /^[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?$/;
 const GEM = /^\s*gem\s+(['"])([^'"]+)\1(?:\s*,\s*(['"])([^'"]*)\3)?/;
 
-export type DepRow = [string, string, string];
+export type DepRow = { ecosystem: string; name: string; declared: string; resolved: string | null };
 
 export function isFile(path: string): boolean {
 	try {
@@ -85,25 +85,25 @@ export function parseRequirement(raw: string): [string, string] {
 
 export class Detector {
 	readonly root: string;
-	private readonly map = new Map<string, string>();
+    private readonly map = new Map<string, { declared: string; resolved: string | null }>();
 	notes: string[] = [];
 
 	constructor(root: string) {
 		this.root = root;
 	}
 
-	get rows(): DepRow[] {
-		const out: DepRow[] = [];
-		for (const [key, ver] of this.map) {
-			const tab = key.indexOf("\0");
-			out.push([key.slice(0, tab), key.slice(tab + 1), ver]);
-		}
-		return out;
-	}
+    get rows(): DepRow[] {
+        const out: DepRow[] = [];
+        for (const [key, versions] of this.map) {
+            const tab = key.indexOf("\0");
+            out.push({ ecosystem: key.slice(0, tab), name: key.slice(tab + 1), ...versions });
+        }
+        return out;
+    }
 
-	emit(ecosystem: string, name: string, version: string): void {
-		if (name) this.map.set(`${ecosystem}\0${name}`, version || MISSING);
-	}
+    emit(ecosystem: string, name: string, declared: string, resolved: string | null = null): void {
+        if (name) this.map.set(`${ecosystem}\0${name}`, { declared: declared || MISSING, resolved });
+    }
 
 	private note(msg: string): void {
 		this.notes.push(msg);
@@ -141,17 +141,29 @@ export class Detector {
 		return body.split(/\r?\n/);
 	}
 
-	async scanNode(): Promise<void> {
-		const data = await this.readJson("package.json");
-		if (!data) return;
-		for (const field of ["dependencies", "devDependencies", "peerDependencies", "optionalDependencies"]) {
-			const block = data[field];
-			if (!block || typeof block !== "object" || Array.isArray(block)) continue;
-			for (const [name, spec] of Object.entries(block as Record<string, unknown>)) {
-				this.emit("npm", name, scalar(spec));
-			}
-		}
-	}
+    async scanNode(): Promise<void> {
+        const data = await this.readJson("package.json");
+        if (!data) return;
+        const lock = await this.readJson("package-lock.json");
+        const locked = new Map<string, string>();
+        const packages = lock?.packages;
+        if (packages && typeof packages === "object" && !Array.isArray(packages)) {
+            for (const [path, entry] of Object.entries(packages as Record<string, unknown>)) {
+                if (!path.startsWith("node_modules/") || !entry || typeof entry !== "object") continue;
+                const version = (entry as Record<string, unknown>).version;
+                if (typeof version === "string") locked.set(path.slice("node_modules/".length), version);
+            }
+        } else if (lock) {
+            this.note("detect: package-lock.json has no packages map; declared Node versions remain unresolved");
+        }
+        for (const field of ["dependencies", "devDependencies", "peerDependencies", "optionalDependencies"]) {
+            const block = data[field];
+            if (!block || typeof block !== "object" || Array.isArray(block)) continue;
+            for (const [name, spec] of Object.entries(block as Record<string, unknown>)) {
+                this.emit("npm", name, scalar(spec), locked.get(name) ?? null);
+            }
+        }
+    }
 
 	async scanPython(): Promise<void> {
 		for (const lock of ["uv.lock", "poetry.lock"]) {
@@ -310,37 +322,41 @@ export class Detector {
 				this.emit("packagist", name, scalar(spec));
 			}
 		}
-	}
+        }
 
-	async scanAll(): Promise<void> {
-		await this.scanNode();
-		await this.scanPython();
-		await this.scanRust();
-		await this.scanGo();
-		await this.scanRuby();
-		await this.scanPhp();
-	}
+    async scanAll(): Promise<void> {
+        await this.scanNode();
+        await this.scanPython();
+        await this.scanRust();
+        await this.scanGo();
+        await this.scanRuby();
+        await this.scanPhp();
+    }
 }
 
+export type ScanCoverage = { gaps: string[] };
+
 export async function detectProject(target: string): Promise<{
-	ok: boolean;
-	exit: number;
-	rows: DepRow[];
-	stderr: string;
+    ok: boolean;
+    exit: number;
+    rows: DepRow[];
+    stderr: string;
+    coverage: ScanCoverage;
 }> {
-	if (!isDir(target)) {
-		return { ok: false, exit: 2, rows: [], stderr: `detect: '${target}' is not a directory` };
-	}
-	const detector = new Detector(target);
-	await detector.scanAll();
-	const notes = [...detector.notes];
-	notes.push("Coverage: root declarations only, except uv.lock/poetry.lock. Unscanned: Node lockfiles, Cargo.lock, go.sum, Pipfile.lock, Ruby/PHP lockfiles, workspace children.");
-	notes.push("");
-	notes.push(`detect: ${detector.rows.length} dependency declaration(s) found in ${target}`);
-	if (detector.rows.length === 0) {
-		notes.push("No supported manifest found (package.json, uv.lock, poetry.lock,");
-		notes.push("requirements.txt, pyproject.toml, Cargo.toml, go.mod, Gemfile,");
-		notes.push("composer.json).");
-	}
-	return { ok: true, exit: 0, rows: detector.rows, stderr: notes.join("\n") };
+    if (!isDir(target)) return { ok: false, exit: 2, rows: [], stderr: `detect: '${target}' is not a directory`, coverage: { gaps: [] } };
+    const detector = new Detector(target);
+    await detector.scanAll();
+    const gaps = ["Cargo.lock", "go.sum", "Pipfile.lock", "Ruby/PHP lockfiles", "workspace children"];
+    const hasPackageLock = isFile(join(target, "package-lock.json"));
+    if (!hasPackageLock) gaps.unshift("Node lockfiles");
+    const notes = [...detector.notes];
+    notes.push(`Coverage: root declarations only, except uv.lock/poetry.lock${hasPackageLock ? " and package-lock.json" : ""}. Unscanned: ${gaps.join(", ")}.`);
+    notes.push("");
+    notes.push(`detect: ${detector.rows.length} dependency declaration(s) found in ${target}`);
+    if (detector.rows.length === 0) {
+        notes.push("No supported manifest found (package.json, uv.lock, poetry.lock,");
+        notes.push("requirements.txt, pyproject.toml, Cargo.toml, go.mod, Gemfile,");
+        notes.push("composer.json).");
+    }
+    return { ok: true, exit: 0, rows: detector.rows, stderr: notes.join("\n"), coverage: { gaps } };
 }
