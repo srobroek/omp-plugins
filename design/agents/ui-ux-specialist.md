@@ -61,6 +61,10 @@ selected.
 
 ## Rules
 
+`eval` is retained for rendered-surface inspection and reversible UI navigation; do not use it
+to mutate files, publish, submit private data, or change account state. Use the explicitly
+declared `edit` and `write` tools for the implementation work this lead owns.
+
 Resolve facts yourself or via `scout`. Ask rather than assume when no stack marker is detectable; recommendations are not consent.
 MUST Verify a component property before using it. Read `manifests/components.json` when it
   serves, indexing `components` by id and selecting the engine-specific payload based on

@@ -9,19 +9,21 @@ Phase CRITIQUE. Measure against WCAG 2.2 level AA and report values, not opinion
 
 TRIGGER
 + "is this accessible", "check accessibility", "WCAG", "screen reader"
-+ any landed change to a rendered surface, before reporting it done
 - general visual or UX quality -> `ui-review`
 - vendor platform conventions -> `platform-conformance`
 - error and empty-state wording -> `ui-microcopy`
 
 ## Workflow
 
-1. Route by job, in this order. -> the chosen route is named in the report header.
+1. Report MCP status before routing: say whether `accessibility-scanner` is connected and identify the server-reported axe-core engine and ruleset versions. Never infer those versions from this skill or its package declaration. -> the status and chosen route are named in the report header.
    - PRIMARY measurement, any web surface: the `accessibility-scanner` MCP server, which
-     this package already declares. It runs the axe-core WCAG 2.2 engine IN-PROCESS, so
-     there is no ChromeDriver anywhere in the path and therefore no version-skew failure
-     mode. It scrolls before scanning so lazy content is covered, resolves contrast over
-     gradients, and returns a selector, a criterion, and a fix link.
+     this package declares at a pinned version. It scrolls before scanning so lazy content
+     is covered, resolves contrast over gradients, and returns a selector, a criterion, and
+     a fix link. If the server does not report its engine or ruleset, record them as unknown
+     and do not claim WCAG 2.2 coverage.
+   - SOURCE-ONLY fallback, when MCP is unavailable: inspect the source and report every
+     criterion as UNTESTED unless independently exercised on a reachable surface. This route
+     is untested measurement evidence; it cannot produce a PASS or replace the rendered audit.
    - web surface, for the criteria coverage and the audit's substance: upstream skill
      `accessibility`.
    - native surface: the matching `ehmo` platform skill via `skill://platform-conformance`,
