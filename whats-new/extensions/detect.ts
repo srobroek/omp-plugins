@@ -8,6 +8,12 @@ export const REQ_NAME = /^[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?$/;
 const GEM = /^\s*gem\s+(['"])([^'"]+)\1(?:\s*,\s*(['"])([^'"]*)\3)?/;
 
 export type DepRow = [string, string, string];
+export type ResolvedDep = { ecosystem: string; name: string; declared: string; resolved: string };
+export type Coverage = { resolvedSources: string[]; gaps: string[] };
+export const COVERAGE: Coverage = {
+	resolvedSources: ["package-lock.json"],
+	gaps: ["other lockfiles", "workspace children"],
+};
 
 export function isFile(path: string): boolean {
 	try {
@@ -86,6 +92,7 @@ export function parseRequirement(raw: string): [string, string] {
 export class Detector {
 	readonly root: string;
 	private readonly map = new Map<string, string>();
+	private readonly resolved = new Map<string, string>();
 	notes: string[] = [];
 
 	constructor(root: string) {
@@ -99,6 +106,32 @@ export class Detector {
 			out.push([key.slice(0, tab), key.slice(tab + 1), ver]);
 		}
 		return out;
+	}
+
+	get resolvedRows(): ResolvedDep[] {
+		return this.rows.map(([ecosystem, name, declared]) => ({ ecosystem, name, declared, resolved: this.resolved.get(`${ecosystem}\0${name}`) ?? MISSING }));
+	}
+
+	private resolve(ecosystem: string, name: string, version: string): void {
+		if (name && version) this.resolved.set(`${ecosystem}\0${name}`, version);
+	}
+
+	private emitResolvedFromNode(value: unknown): void {
+		if (!value || typeof value !== "object" || Array.isArray(value)) return;
+		for (const [name, entry] of Object.entries(value as Record<string, unknown>)) {
+			if (!entry || typeof entry !== "object" || Array.isArray(entry)) continue;
+			const version = (entry as Record<string, unknown>).version;
+			const packageName = name.includes("node_modules/") ? name.slice(name.lastIndexOf("node_modules/") + "node_modules/".length) : name;
+			if (typeof version === "string") this.resolve("npm", packageName, version);
+			this.emitResolvedFromNode((entry as Record<string, unknown>).dependencies);
+		}
+	}
+
+	private emitResolvedFromLock(lock: unknown): void {
+		if (!lock || typeof lock !== "object" || Array.isArray(lock)) return;
+		const root = lock as Record<string, unknown>;
+		this.emitResolvedFromNode(root.packages);
+		this.emitResolvedFromNode(root.dependencies);
 	}
 
 	emit(ecosystem: string, name: string, version: string): void {
@@ -147,10 +180,10 @@ export class Detector {
 		for (const field of ["dependencies", "devDependencies", "peerDependencies", "optionalDependencies"]) {
 			const block = data[field];
 			if (!block || typeof block !== "object" || Array.isArray(block)) continue;
-			for (const [name, spec] of Object.entries(block as Record<string, unknown>)) {
-				this.emit("npm", name, scalar(spec));
-			}
+			for (const [name, spec] of Object.entries(block as Record<string, unknown>)) this.emit("npm", name, scalar(spec));
 		}
+		const lock = await this.readJson("package-lock.json");
+		if (lock) this.emitResolvedFromLock(lock);
 	}
 
 	async scanPython(): Promise<void> {
@@ -326,15 +359,17 @@ export async function detectProject(target: string): Promise<{
 	ok: boolean;
 	exit: number;
 	rows: DepRow[];
+	resolvedRows: ResolvedDep[];
+	coverage: Coverage;
 	stderr: string;
 }> {
 	if (!isDir(target)) {
-		return { ok: false, exit: 2, rows: [], stderr: `detect: '${target}' is not a directory` };
+		return { ok: false, exit: 2, rows: [], resolvedRows: [], coverage: COVERAGE, stderr: `detect: '${target}' is not a directory` };
 	}
 	const detector = new Detector(target);
 	await detector.scanAll();
 	const notes = [...detector.notes];
-	notes.push("Coverage: root declarations only, except uv.lock/poetry.lock. Unscanned: Node lockfiles, Cargo.lock, go.sum, Pipfile.lock, Ruby/PHP lockfiles, workspace children.");
+	notes.push("Coverage: root declarations plus package-lock.json resolved versions. Unscanned: other lockfiles and workspace children.");
 	notes.push("");
 	notes.push(`detect: ${detector.rows.length} dependency declaration(s) found in ${target}`);
 	if (detector.rows.length === 0) {
@@ -342,5 +377,5 @@ export async function detectProject(target: string): Promise<{
 		notes.push("requirements.txt, pyproject.toml, Cargo.toml, go.mod, Gemfile,");
 		notes.push("composer.json).");
 	}
-	return { ok: true, exit: 0, rows: detector.rows, stderr: notes.join("\n") };
+	return { ok: true, exit: 0, rows: detector.rows, resolvedRows: detector.resolvedRows, coverage: COVERAGE, stderr: notes.join("\n") };
 }
