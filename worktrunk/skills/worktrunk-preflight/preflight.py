@@ -230,8 +230,13 @@ def declared_hook_paths(command: dict[str, Any], cwd: Path) -> list[Path]:
     tokens = _command_tokens(command)
     if tokens is None:
         return []
+    index = 0
+    while index < len(tokens) and re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", tokens[index]):
+        index += 1
+    if index >= len(tokens):
+        return []
     paths: list[Path] = []
-    for token in tokens:
+    for token in tokens[index + 1 :]:
         if _is_path_token(token):
             path = _resolve_path_token(token, cwd)
             if path not in paths:
@@ -261,6 +266,7 @@ def check_hook_approvals(ctx: Context, fresh: bool = False) -> Result:
     unapproved: list[str] = []
     missing: list[str] = []
     non_executable: list[str] = []
+    unreadable: list[str] = []
     for command in commands:
         if not isinstance(command, dict):
             continue
@@ -274,17 +280,17 @@ def check_hook_approvals(ctx: Context, fresh: bool = False) -> Result:
             missing.append(f"{label} (missing or invalid command)")
             continue
         executable, executable_path = resolved
-        candidates: list[Path] = []
         if executable_path is None:
             missing.append(f"{label} (command {executable!r} not found on PATH)")
-        else:
-            candidates.append(executable_path)
-        candidates.extend(path for path in declared_hook_paths(command, ctx.cwd) if path not in candidates)
-        for path in candidates:
+        elif not executable_path.is_file():
+            missing.append(f"{label} ({executable_path})")
+        elif not os.access(executable_path, os.X_OK):
+            non_executable.append(f"{label} ({executable_path})")
+        for path in declared_hook_paths(command, ctx.cwd):
             if not path.is_file():
                 missing.append(f"{label} ({path})")
-            elif not os.access(path, os.X_OK):
-                non_executable.append(f"{label} ({path})")
+            elif not os.access(path, os.R_OK):
+                unreadable.append(f"{label} ({path})")
 
     stale = data.get("stale")
     stale_items = stale if isinstance(stale, list) else []
@@ -294,6 +300,8 @@ def check_hook_approvals(ctx: Context, fresh: bool = False) -> Result:
         hook_detail += f"; missing hook executables: {', '.join(missing)}"
     if non_executable:
         hook_detail += f"; non-executable hook files: {', '.join(non_executable)}"
+    if unreadable:
+        hook_detail += f"; unreadable hook scripts: {', '.join(unreadable)}"
     if hook_detail:
         return Result("fail", f"declared hook verification failed{hook_detail}")
     if state == "approval_required":
