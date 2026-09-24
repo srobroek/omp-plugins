@@ -159,14 +159,14 @@ function sweep(sessionId: string): void {
 					if (child.retryState !== undefined) continue;
 					if (now - child.lastActivityAt > STALL_MS && !child.stallNotified) {
 						child.stallNotified = true;
-state.sendMessage({ customType: CUSTOM_TYPE_STALL, display: true, details: { toolCallId: batch.toolCallId, child }, content: `Child ${child.id} (${child.agent}) in batch ${batch.toolCallId} has shown no tool activity for ${Math.floor((now - child.lastActivityAt) / 60_000)} min. Check it with hub jobs / history://${child.id}; if it is stuck, hub cancel its job and re-dispatch or release its work.` }, { deliverAs: "followUp", triggerTurn: true });
+state.sendMessage({ customType: CUSTOM_TYPE_STALL, display: true, details: { toolCallId: batch.toolCallId, child }, content: `Child ${child.id} (${child.agent}) in batch ${batch.toolCallId} has shown no tool activity for ${Math.floor((now - child.lastActivityAt) / 60_000)} min. Check it with read proc:// and history://${child.id}; if it is stuck, cancel its job with write proc://<job id>/kill and re-dispatch or release its work.` }, { deliverAs: "followUp", triggerTurn: true });
 					}
 				} else if (child.terminalAt !== undefined && now - child.terminalAt > STALE_JOB_MS && !child.staleJobNotified) {
 					const snapshot = state.ctx.getAsyncJobSnapshot() as AsyncSnapshot | null;
 					const running = snapshot?.running.find((job) => job.agentId === child.id);
 					if (running) {
 						child.staleJobNotified = true;
-state.sendMessage({ customType: CUSTOM_TYPE_STALE_JOB, display: true, details: { toolCallId: batch.toolCallId, child, jobId: running.id }, content: `Job ${running.id} for agent ${child.id} is still registered as running although the agent ended ${child.status} at ${new Date(child.terminalAt).toISOString()}. Do not hub wait on it; read agent://${child.id} for its output and continue.` }, { deliverAs: "followUp", triggerTurn: true });
+state.sendMessage({ customType: CUSTOM_TYPE_STALE_JOB, display: true, details: { toolCallId: batch.toolCallId, child, jobId: running.id }, content: `Job ${running.id} for agent ${child.id} is still registered as running although the agent ended ${child.status} at ${new Date(child.terminalAt).toISOString()}. Do not wait on it; read agent://${child.id} for its output and continue.` }, { deliverAs: "followUp", triggerTurn: true });
 					}
 				}
 			}
