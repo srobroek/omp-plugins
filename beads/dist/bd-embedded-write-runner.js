@@ -51,6 +51,16 @@ function pidAlive(pid) {
 }
 function processStartIdentity(pid) {
   try {
+    if (process.platform === "linux") {
+      const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
+      const close = stat.lastIndexOf(")");
+      if (close >= 0) {
+        const fields = stat.slice(close + 2).trim().split(/\s+/);
+        const start = fields[19];
+        if (start !== undefined && start !== "")
+          return start;
+      }
+    }
     const result = spawnSync("ps", ["-o", "lstart=", "-p", String(pid)], {
       encoding: "utf8",
       timeout: 100,
