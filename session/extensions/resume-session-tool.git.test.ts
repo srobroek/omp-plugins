@@ -451,7 +451,7 @@ describe("integration: worktrees", () => {
 		const home = tmp("resume-home-");
 		try {
 			const result = await withHome(home, () => renderList(dir, { path: dir }));
-			expect(result.text).toContain("could not enumerate worktrees; membership unknown");
+			expect(result.text).toContain("could not enumerate Git worktrees");
 		} finally {
 			rmSync(dir, { recursive: true, force: true });
 			rmSync(home, { recursive: true, force: true });
