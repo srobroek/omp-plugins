@@ -38,6 +38,26 @@ the remote were current.
 After the retry sequence, MUST re-run `bd dolt pull` before trusting a read that
 decides work assignment, because a partially applied sync leaves reads stale.
 
+## Remote-sync diagnosis and probe
+
+The observed multi-minute stalls are in the Dolt remote/conjoin path, not the
+embedded writer lock: the lock deliberately excludes `bd dolt push` from its
+serialized operation set, so waiting for that lock cannot make a push complete.
+The local-file-remote probe below reproduced the important failure boundary and
+established the recovery invariant without depending on a hosted service:
+
+- A scratch embedded ledger was configured with `file:///private/tmp/omp-g3dl-remote-w2`.
+- With a pending issue, a `bd dolt push` child was terminated with `SIGTERM`; the
+  exact observed result was `exit=-15`, with empty stdout and stderr.
+- Retrying the same `bd dolt push` completed with `Push complete.`
+- A fresh Dolt clone of that remote, followed by `dolt pull origin main`, showed
+  both `probe-bgl | consistency probe` and `probe-r74 | retry consistency probe`.
+
+Therefore a killed or timed-out push leaves the remote state unknown until the
+same command succeeds on retry; after success, a fresh clone is the consistency
+check. This is a probe result, not a claim that every hosted-remote stall has
+the same transport-level cause.
+
 The conditions above match observed contention text only. No `bd dolt` failure
 text is matched here, because none has been observed in this project; the sync
 policy is therefore prose the agent applies after reading the command's own
