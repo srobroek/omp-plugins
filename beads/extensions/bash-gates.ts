@@ -1,8 +1,10 @@
 import type { ExtensionAPI, ExtensionContext, ToolCallEvent } from "@oh-my-pi/pi-coding-agent";
 import { agentActor, bdInvocations, decideActorParsed, environmentForInput } from "./bd-actor-gate.ts";
+import { decideBdCloseParsed } from "./bd-close-gate.ts";
 import { decideEmbeddedWrite } from "./bd-embedded-write-lock.ts";
 import { rewriteBashInput } from "./session-beads-lifecycle.ts";
 import { blockReason, commandFromInput, type ParsedCommand, parse, settingsEnabled } from "./shell-command.ts";
+
 
 type BashInput = { command?: unknown; cmd?: unknown; cwd?: unknown; env?: unknown };
 type GateDecision = { block: true; reason: string } | undefined;
@@ -62,6 +64,15 @@ async function decide(parsed: ParsedCommand, event: ToolCallEvent, ctx: Extensio
 	const { cwd } = inputOf(event, ctx);
 	if (parsed.unknown) return suffix("bash-gates", "command could not be parsed", "split the command or run the mutation as a plain single command");
 	const env = environmentForActorDecision(input, parsed.command, ctx);
+	if (settingsEnabled("beads", "bd-close-gate", cwd)) {
+		try {
+			const close = await decideBdCloseParsed(parsed, cwd, deadline);
+			if (close !== undefined) return suffix("bd-close-gate", close.reason, "resolve the gate with `bd gate check` or `bd gate resolve <gate-id>`, then retry");
+		} catch (error) {
+			const reason = error instanceof Error ? error.message : String(error);
+			return suffix("bd-close-gate", reason, "retry after the Beads lookup is available; the close was refused without gate proof");
+		}
+	}
 	if (settingsEnabled("beads", "bd-actor-gate", cwd)) {
 		const actor = decideActorParsed(parsed, env);
 		if (actor.kind === "block") return suffix("bd-actor-gate", actor.reason);

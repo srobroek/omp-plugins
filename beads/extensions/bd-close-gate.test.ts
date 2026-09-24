@@ -228,9 +228,9 @@ describe("gateIdsAmong", () => {
 		expect(calls).toEqual([]);
 	});
 
-	test("non-zero exit fails open", () => {
+	test("non-zero exit fails closed", () => {
 		setBdShowRunForTests(() => ({ exitCode: 1, stdout: "" }));
-		expect(gateIdsAmong(["bdp-1a"])).toEqual([]);
+		expect(() => gateIdsAmong(["bdp-1a"])).toThrow("bd show lookup failed");
 	});
 
 	test("unparseable stdout reports uncertainty", () => {
@@ -329,9 +329,9 @@ describe("decideBdClose", () => {
 		expect(calls).toEqual([]);
 	});
 
-	test("fails open when the database cannot answer", () => {
+	test("fails closed when the database cannot answer", () => {
 		setBdShowRunForTests(() => ({ exitCode: 1, stdout: "" }));
-		expect(decideBdClose("bd close bdp-2b")).toBeUndefined();
+		expect(() => decideBdClose("bd close bdp-2b")).toThrow("bd show lookup failed");
 	});
 	test("reports the existing uncertainty refusal when the shared deadline has lapsed", async () => {
 		setBdShowRunForTests(() => ({ exitCode: 0, stdout: JSON.stringify([row("bdp-1a", "task")]) }));

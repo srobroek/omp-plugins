@@ -4,6 +4,7 @@ import { chmodSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, 
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import bashGates from "./bash-gates.ts";
+import { setBdShowRunForTests } from "./bd-close-gate.ts";
 import sessionBeadsLifecycle, {
 	autoPinBeadsDir,
 	bdVerbs,
@@ -27,11 +28,12 @@ import sessionBeadsLifecycle, {
 	releaseClaimArgs,
 	releaseClaimCommand,
 	repoIdentity,
-  runBdResult,
-  sessionPinAfter,
-  sessionPinFor,
-  setBdStreamForTests,
-  staleSkipNotice,
+	pinnedBeadsDir as lifecyclePinnedBeadsDir,
+	runBdResult,
+	sessionPinAfter,
+	sessionPinFor,
+	setBdStreamForTests,
+	staleSkipNotice,
 } from "./session-beads-lifecycle.ts";
 
 
@@ -547,15 +549,12 @@ describe("heldClaims", () => {
 });
 
 describe("formatSessionCloseAdvisory", () => {
-	test("names the bead, the holder, and remedies that bd actually has", () => {
-		// The advisory previously told agents to run `bd unclaim`, which bd 1.2.2
-		// rejects as an unknown command, and `bd comments add -m`, where the text is
-		// positional and `-m` does not exist. An agent following either left its
-		// claim held, which is the one thing this advisory exists to prevent.
+	test("names the bead, holder, and native unclaim remedy", () => {
 		const text = formatSessionCloseAdvisory(heldClaims(readBeads(BEAD_LIST), new Set(["bd-probe-2m7"]), undefined), process.env, undefined, true, new Set(["omp/Main/s1"]));
 		expect(text).toContain("bd-probe-2m7 [omp/Main/s1] target work");
-		expect(text).not.toContain("bd unclaim");
-		expect(text).toContain("'--assignee' '' '--status' 'open'");
+		expect(text).toContain("'bd' 'unclaim'");
+		expect(text).toContain("--if-assignee");
+		expect(text).not.toContain("'--assignee' '' '--status' 'open'");
 		expect(text).toContain('bd comments add <id> "..."');
 		expect(text).toContain("discovered work");
 	});
@@ -563,26 +562,19 @@ describe("formatSessionCloseAdvisory", () => {
 
 describe("releaseClaimArgs", () => {
 	const at = "2026-09-14T12:34:56.789Z";
-	test("builds one guarded argv and preserves release metadata", () => {
-		expect(releaseClaimArgs("bd-probe-2m7", "omp/Main/s1", { BD_ACTOR: "omp/Main/s2" }, at)).toEqual([
-			"update", "bd-probe-2m7", "--assignee", "", "--status", "open",
-			"--set-metadata", "release_actor=omp/Main/s2", "--set-metadata", `released_at=${at}`,
-			"--set-metadata", "released_from=omp/Main/s1", "--if-assignee", "omp/Main/s1",
-		]);
+	const reason = `session release by omp/Main/s2 at ${at}; previous holder omp/Main/s1`;
+	test("builds one guarded native unclaim argv with its durable reason", () => {
+		expect(releaseClaimArgs("bd-probe-2m7", "omp/Main/s1", { BD_ACTOR: "omp/Main/s2" }, at)).toEqual(["unclaim", "bd-probe-2m7", "--reason", reason, "--if-assignee", "omp/Main/s1"]);
 	});
-	test("builds a readback-verified argv when CAS is unavailable", () => {
+	test("builds an unguarded argv when CAS is unavailable", () => {
 		const args = releaseClaimArgs("bd-probe-2m7", "omp/Main/s1", { BD_ACTOR: "omp/Main/s2" }, at, false);
-		expect(args).toEqual([
-			"update", "bd-probe-2m7", "--assignee", "", "--status", "open",
-			"--set-metadata", "release_actor=omp/Main/s2", "--set-metadata", `released_at=${at}`,
-			"--set-metadata", "released_from=omp/Main/s1",
-		]);
+		expect(args).toEqual(["unclaim", "bd-probe-2m7", "--reason", reason]);
 		expect(args).not.toContain("--if-assignee");
 	});
 	test("prefers BD_ACTOR and falls back to BEADS_ACTOR", () => {
-		expect(releaseClaimArgs("bd-a-1", "omp/Main/s1", { BEADS_ACTOR: "omp/Main/fallback" }, at)?.[7]).toBe("release_actor=omp/Main/fallback");
-		expect(releaseClaimArgs("bd-a-1", "omp/Main/s1", { BD_ACTOR: " ", BEADS_ACTOR: "omp/Main/fallback" }, at)?.[7]).toBe("release_actor=omp/Main/fallback");
-		expect(releaseClaimArgs("bd-a-1", "omp/Main/s1", { BD_ACTOR: "omp/Main/wins", BEADS_ACTOR: "omp/Main/loses" }, at)?.[7]).toBe("release_actor=omp/Main/wins");
+		expect(releaseClaimArgs("bd-a-1", "omp/Main/s1", { BEADS_ACTOR: "omp/Main/fallback" }, at)?.[3]).toContain("omp/Main/fallback");
+		expect(releaseClaimArgs("bd-a-1", "omp/Main/s1", { BD_ACTOR: " ", BEADS_ACTOR: "omp/Main/fallback" }, at)?.[3]).toContain("omp/Main/fallback");
+		expect(releaseClaimArgs("bd-a-1", "omp/Main/s1", { BD_ACTOR: "omp/Main/wins", BEADS_ACTOR: "omp/Main/loses" }, at)?.[3]).toContain("omp/Main/wins");
 		expect(releaseClaimArgs("bd-a-1", "omp/Main/s1", {}, at)).toBeUndefined();
 	});
 	test("refuses unsafe identifiers instead of interpolating shell text", () => {
@@ -590,31 +582,29 @@ describe("releaseClaimArgs", () => {
 		expect(releaseClaimArgs("bd-a-1", "omp/Main/s1", { BD_ACTOR: "omp/Main/s2;rm" }, at)).toBeUndefined();
 		expect(releaseClaimCommand("bd-a-1", "omp/Main/s1", { BD_ACTOR: "omp/Main/s2" }, at)).toContain("--if-assignee");
 		expect(releaseClaimCommand("bd-a-1", "omp/Main/s1", { BD_ACTOR: "omp/Main/s2" }, at, false)).not.toContain("--if-assignee");
-		expect(releaseClaimCommand("bd-a-1", "omp/Main/s1", { BD_ACTOR: "omp/Main/s2" }, at, false)).toContain("released_from=omp/Main/s1");
+		expect(releaseClaimCommand("bd-a-1", "omp/Main/s1", { BD_ACTOR: "omp/Main/s2" }, at, false)).toContain("previous holder omp/Main/s1");
 	});
-	test("emits a command-local BD_ACTOR matching release metadata", () => {
+	test("emits command-local actor and native reason", () => {
 		const command = releaseClaimCommand("bd-a-1", "omp/Main/s1", { BD_ACTOR: "omp/Main/s2", BEADS_ACTOR: "omp/Main/ambient" }, at);
 		expect(command).toContain("BEADS_ACTOR='omp/Main/s2' BD_ACTOR='omp/Main/s2' 'bd'");
-		expect(command).toContain("'release_actor=omp/Main/s2'");
-		expect(command).toContain("'released_from=omp/Main/s1'");
+		expect(command).toContain("'session release by omp/Main/s2");
 		expect(command).toContain("'--if-assignee' 'omp/Main/s1'");
 	});
 	test("refuses quote-bearing actors instead of interpolating shell text", () => {
 		expect(releaseClaimCommand("bd-a-1", "omp/Main/s1", { BD_ACTOR: "omp/Main/o'hare" }, at)).toBeUndefined();
 	});
 });
-describe("formatSessionCloseAdvisory", () => {
+
+describe("formatSessionCloseAdvisory actor variants", () => {
 	const at = "2026-09-14T12:34:56.789Z";
-	test("names the bead and emits an actor-bound guarded command", () => {
+	test("emits an actor-bound guarded command", () => {
 		const text = formatSessionCloseAdvisory(heldClaims(readBeads(BEAD_LIST), new Set(["bd-probe-2m7"]), undefined), { BD_ACTOR: "omp/Main/s1" }, at);
 		expect(text).toContain("bd-probe-2m7 [omp/Main/s1] target work");
-		expect(text).toContain("'release_actor=omp/Main/s1'");
-		expect(text).toContain(`'released_at=${at}'`);
+		expect(text).toContain("'bd' 'unclaim'");
+		expect(text).toContain("session release by omp/Main/s1");
+		expect(text).toContain("previous holder omp/Main/s1");
 		expect(text).toContain("'--if-assignee'");
-		expect(text).toContain("'omp/Main/s1'");
-		expect(text).not.toContain("<actor>");
-		expect(text).not.toContain("<current-assignee>");
-		expect(text).toContain("bd comments add");
+		expect(text).not.toContain("release_actor=");
 	});
 	test("emits a readback verification for bd without CAS support", () => {
 		const text = formatSessionCloseAdvisory(heldClaims(readBeads(BEAD_LIST), new Set(["bd-probe-2m7"]), undefined), { BD_ACTOR: "omp/Main/s1" }, at, false);
@@ -648,13 +638,13 @@ describe("handleSessionStop", () => {
 		expect(r?.additionalContext).toContain("bd-probe-2m7");
 	});
 test("passes the effective actor into actual release commands", () => {
-		const r = handleSessionStop({}, BEAD_LIST, new Set(["bd-probe-2m7"]), "omp/Main/s1");
-		expect(r?.additionalContext).toContain("'release_actor=omp/Main/s1'");
-		expect(r?.additionalContext).toContain("'released_from=omp/Main/s1'");
-		expect(r?.additionalContext).toContain("'--if-assignee'");
-		expect(r?.additionalContext).toContain("'omp/Main/s1'");
-		expect(r?.additionalContext).not.toContain("<actor>");
-	});
+	const r = handleSessionStop({}, BEAD_LIST, new Set(["bd-probe-2m7"]), "omp/Main/s1");
+	expect(r?.additionalContext).toContain("'bd' 'unclaim'");
+	expect(r?.additionalContext).toContain("session release by omp/Main/s1");
+	expect(r?.additionalContext).toContain("'--if-assignee'");
+	expect(r?.additionalContext).toContain("'omp/Main/s1'");
+	expect(r?.additionalContext).not.toContain("<actor>");
+});
 
 	test("skips its own continuation", () => {
 		expect(handleSessionStop({ stop_hook_active: true }, BEAD_LIST, new Set(["bd-probe-2m7"]))).toBeUndefined();
@@ -768,6 +758,23 @@ bashGates(fakePi as never);
 		if (!(env && typeof env === "object" && "BEADS_DIR" in env)) throw new Error("the rewritten env carries no BEADS_DIR");
 		return env.BEADS_DIR;
 	};
+	test("loaded Bash dispatcher refuses a gate close before actor handling", async () => {
+		const handlers: Array<(event: unknown, ctx: unknown) => unknown> = [];
+		setBdShowRunForTests(() => ({ exitCode: 0, stdout: JSON.stringify([{ id: "bd-gate-1", issue_type: "gate" }]) }));
+		try {
+			bashGates({
+				on: (_event: string, handler: (event: unknown, ctx: unknown) => unknown) => handlers.push(handler),
+				sendMessage: () => {},
+			} as never);
+			const handler = handlers[0];
+			if (handler === undefined) throw new Error("Bash dispatcher was not registered");
+			const result = await handler({ toolName: "bash", input: { command: "bd close bd-gate-1" } }, { cwd: "/repo" });
+			expect(result).toEqual(expect.objectContaining({ block: true, reason: expect.stringContaining("bd-close-gate") }));
+			expect(result).toEqual(expect.objectContaining({ reason: expect.stringContaining("gate") }));
+		} finally {
+			setBdShowRunForTests(null);
+		}
+	});
   test("session start reports an injected embedded-store failure", async () => {
     const dir = mkdtempSync(join(tmpdir(), "beads-fake-start-"));
     mkdirSync(join(dir, ".beads"));
@@ -1049,6 +1056,59 @@ bashGates(fakePi as never);
 			expect(calls).toBe(0);
 			expect(logged.join("\n")).toContain("bd-probe-2m7");
 			expect(logged.join("\n")).toContain("--if-assignee");
+		} finally {
+			setBdStreamForTests(null);
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+	test("shares the lifecycle pin through the process-wide getter", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "beads-shared-pin-"));
+		const originalPath = process.env.PATH;
+		const originalBeads = process.env.BEADS_DIR;
+		mkdirSync(join(dir, ".beads"));
+		execFileSync("git", ["-C", dir, "init", "-q"]);
+		delete process.env.BEADS_DIR;
+		process.env.PATH = originalPath ?? "";
+		try {
+			const { handlers } = wire();
+			const ctx = { cwd: dir, sessionManager: { getSessionId: () => "shared-pin" } };
+			await handlers.session_start?.[0]?.({}, ctx);
+			expect(lifecyclePinnedBeadsDir(dir, ctx as never)).toBe(join(dir, ".beads"));
+		} finally {
+			if (originalPath === undefined) delete process.env.PATH;
+			else process.env.PATH = originalPath;
+			if (originalBeads === undefined) delete process.env.BEADS_DIR;
+			else process.env.BEADS_DIR = originalBeads;
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+	test("agent_end releases an actor-owned unfinished epic with CAS", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "beads-agent-end-release-"));
+		mkdirSync(join(dir, ".beads"));
+		const calls: Array<{ args: string[]; env: NodeJS.ProcessEnv }> = [];
+		setBdStreamForTests(async (_cwd, args, _deadline, env) => {
+			calls.push({ args, env });
+			if (args[0] === "show") {
+				return { output: JSON.stringify({ data: [{ id: "bd-epic-1", issue_type: "epic", status: "in_progress", assignee: "actor/a" }], schema_version: 1 }) };
+			}
+			return { output: "unclaimed" };
+		});
+		try {
+			const { handlers } = wire();
+			const ctx = { cwd: dir, sessionManager: { getSessionId: () => "agent-end-release" } };
+			handlers.tool_result?.[0]?.({
+				toolName: "bash",
+				toolCallId: "claim",
+				isError: false,
+				input: { command: "BD_ACTOR=actor/a bd update bd-epic-1 --claim", env: { BD_ACTOR: "actor/a" } },
+				content: [{ type: "text", text: "Updated issue: bd-epic-1" }],
+			}, ctx);
+			await handlers.agent_end?.[0]?.({}, ctx);
+			expect(calls.map(call => call.args[0])).toEqual(["show", "unclaim"]);
+			expect(calls[1]?.args).toContain("--if-assignee");
+			expect(calls[1]?.env.BD_ACTOR).toBe("actor/a");
+			await handlers.agent_end?.[0]?.({}, ctx);
+			expect(calls).toHaveLength(2);
 		} finally {
 			setBdStreamForTests(null);
 			rmSync(dir, { recursive: true, force: true });

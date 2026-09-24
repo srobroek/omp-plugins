@@ -426,6 +426,101 @@ function commandFromInput(input) {
     return value.cmd;
   return "";
 }
+function parsedInvocations(parsed, executable = "bd") {
+  if (parsed.unknown)
+    return [];
+  const found = [];
+  for (const position of parsed.commands) {
+    const executableName = position.executable?.split("/").pop();
+    if (executableName !== executable)
+      continue;
+    const index = position.argv.findIndex((word, i) => !position.words[i]?.quoted && (word.split("/").pop() ?? word) === executable);
+    if (index < 0)
+      continue;
+    const args = position.argv.slice(index + 1);
+    const globals = [];
+    let verb;
+    for (let i = 0;i < args.length; i++) {
+      const word = args[i];
+      if (word === undefined)
+        continue;
+      if (word.startsWith("-") && verb === undefined) {
+        globals.push(word);
+        const next = args[i + 1];
+        if (!["--global", "--claim", "--force", "--json"].includes(word) && !word.includes("=") && next !== undefined && !next.startsWith("-")) {
+          globals.push(next);
+          i++;
+        }
+        continue;
+      }
+      if (verb === undefined && !word.startsWith("\x00"))
+        verb = word;
+    }
+    found.push({ position, command: position.raw, args, verb, globals });
+  }
+  for (const child of parsed.nested)
+    found.push(...parsedInvocations(child, executable));
+  return found;
+}
+var BEAD_ID = /^[A-Za-z][A-Za-z0-9]*(?:-[A-Za-z0-9]+)+(?:\.\d+)*$/;
+var CLOSE_VERBS = { close: true, done: true };
+var DB_VALUE_FLAGS = { "--db": true, "-C": true, "--directory": true };
+var VALUE_FLAGS = { "--reason": true, "-r": true, "--message": true, "--session": true, "--assignee": true, "--status": true, "--type": true };
+function closeInvocations(command) {
+  const parsed = parse(command);
+  if (parsed.unknown)
+    return [];
+  const out = [];
+  for (const invocation of parsedInvocations(parsed)) {
+    if (!invocation.verb || CLOSE_VERBS[invocation.verb.toLowerCase()] !== true)
+      continue;
+    const ids = [];
+    const dbArgs = [];
+    const args = invocation.args;
+    let verbSeen = false;
+    for (let i = 0;i < args.length; i++) {
+      const token = args[i];
+      if (token === undefined)
+        continue;
+      if (!verbSeen) {
+        if (token.toLowerCase() === invocation.verb.toLowerCase())
+          verbSeen = true;
+        else if (token.startsWith("-")) {
+          const flag = token.split("=", 1)[0] ?? "";
+          if (DB_VALUE_FLAGS[flag] === true) {
+            dbArgs.push(token);
+            const next = args[i + 1];
+            if (!token.includes("=") && next !== undefined) {
+              dbArgs.push(next);
+              i++;
+            }
+          } else if (token === "--global")
+            dbArgs.push(token);
+        }
+        continue;
+      }
+      if (token.startsWith("-")) {
+        const flag = token.split("=", 1)[0] ?? "";
+        if (DB_VALUE_FLAGS[flag] === true) {
+          dbArgs.push(token);
+          const next = args[i + 1];
+          if (!token.includes("=") && next !== undefined) {
+            dbArgs.push(next);
+            i++;
+          }
+        } else if (token === "--global")
+          dbArgs.push(token);
+        else if (VALUE_FLAGS[flag] === true && !token.includes("=") && args[i + 1] !== undefined)
+          i++;
+        continue;
+      }
+      if (BEAD_ID.test(token))
+        ids.push(token);
+    }
+    out.push({ ids, dbArgs });
+  }
+  return out;
+}
 var settingsCache = new Map;
 function settingValue(root, plugin, gate) {
   const plugins = root.plugins;
@@ -465,14 +560,106 @@ function blockReason(input) {
   return `${input.cause}; ${input.resolution}. Disable locally: set plugins.${plugin}.gates.${input.gate}.enabled=false`;
 }
 // extensions/bd-close-gate.ts
+var TIMEOUT_MS = 25000;
+var injectedRun = null;
+function timeoutError() {
+  return new Error("bd show lookup timed out; gate types remain unverified");
+}
 function tokenize2(command) {
   return tokenizeShell(command).map(({ value }) => value);
+}
+function denyReason(gateIds) {
+  return `blocked by beads (a gate bead is resolved, never closed): ${gateIds.join(", ")} ` + "is a gate. `bd close` on it flips status to closed and does unblock the waiting " + "bead, so nothing fails loudly -- but no gate resolution happens. A `human` gate " + "loses the decision it stood for, and a `timer`/`gh:run`/`gh:pr`/`bead` gate is " + "asserted satisfied without anything evaluating it. Run `bd gate check` to have the " + "conditions evaluated, or `bd gate resolve <gate-id>` for the manual human answer; " + "then `bd close <step-id> --reason ...` on the step the gate blocked. `--force` does " + "not lift this guard: it forces the same unrecorded close.";
+}
+async function asyncShowRun(argv, cwd, deadline = Date.now() + TIMEOUT_MS) {
+  const remaining = deadline - Date.now();
+  if (remaining <= 0)
+    throw timeoutError();
+  const proc = Bun.spawn(argv, {
+    cwd,
+    stdout: "pipe",
+    stderr: "pipe",
+    env: { ...process.env, BD_JSON_ENVELOPE: "1", BD_NO_PAGER: "1", BD_NON_INTERACTIVE: "1" }
+  });
+  let timer;
+  try {
+    const timeout = new Promise((_, reject) => {
+      timer = setTimeout(() => {
+        proc.kill("SIGKILL");
+        reject(timeoutError());
+      }, remaining);
+    });
+    const result = await Promise.race([
+      Promise.all([proc.exited, new Response(proc.stdout).text()]),
+      timeout
+    ]);
+    if (Date.now() >= deadline)
+      throw timeoutError();
+    return { exitCode: result[0], stdout: result[1] };
+  } finally {
+    if (timer !== undefined)
+      clearTimeout(timer);
+  }
+}
+async function gateIdsAmongAsync(ids, dbArgs, cwd, deadline) {
+  if (ids.length === 0)
+    return [];
+  if (Date.now() >= deadline)
+    throw timeoutError();
+  const run = injectedRun === null ? asyncShowRun : async (argv, dir, limit) => injectedRun?.(argv, dir, limit) ?? asyncShowRun(argv, dir, limit);
+  const result = await run(["bd", ...dbArgs, "show", ...ids, "--json"], cwd, deadline);
+  if (Date.now() >= deadline)
+    throw timeoutError();
+  if (result.exitCode !== 0)
+    throw new Error(`bd show lookup failed with exit code ${result.exitCode}; gate types remain unverified`);
+  let parsed;
+  try {
+    parsed = JSON.parse(result.stdout);
+  } catch {
+    throw new Error("bd show returned unreadable JSON; gate types remain unverified");
+  }
+  if (parsed !== null && typeof parsed === "object" && !Array.isArray(parsed) && "schema_version" in parsed && "data" in parsed)
+    parsed = parsed.data;
+  if (!Array.isArray(parsed))
+    throw new Error("bd show returned no issue array; gate types remain unverified");
+  const gates = [];
+  for (const row of parsed) {
+    if (!row || typeof row !== "object")
+      throw new Error("bd show returned malformed issues; gate types remain unverified");
+    const issue = row;
+    if (typeof issue.id !== "string" || typeof issue.issue_type !== "string")
+      throw new Error("bd show omitted issue identity or type; gate types remain unverified");
+    if (issue.issue_type === "gate")
+      gates.push(issue.id);
+  }
+  return gates;
+}
+async function decideBdCloseParsed(parsed, cwd = process.cwd(), deadline) {
+  const sharedDeadline = deadline ?? Date.now() + TIMEOUT_MS;
+  for (const position of parsed.commands) {
+    const invocations = closeInvocations(position.raw);
+    if (invocations.length === 0)
+      continue;
+    const gates = new Set;
+    for (const invocation of invocations) {
+      for (const id of await gateIdsAmongAsync(invocation.ids, invocation.dbArgs, cwd, sharedDeadline))
+        gates.add(id);
+    }
+    if (gates.size > 0)
+      return { block: true, reason: denyReason([...gates]) };
+  }
+  for (const child of parsed.nested) {
+    const decision = await decideBdCloseParsed(child, cwd, sharedDeadline);
+    if (decision)
+      return decision;
+  }
+  return;
 }
 
 // extensions/bd-actor-gate.ts
 var ACTOR_NOTICE_ARBITER = Symbol.for("com.srobroek.beads.actor-notice-arbiter.v1");
 var ACTOR_VARS = ["BEADS_ACTOR", "BD_ACTOR"];
-var VALUE_FLAGS = new Set([
+var VALUE_FLAGS2 = new Set([
   "--actor",
   "--database",
   "--db",
@@ -571,7 +758,7 @@ function scanGlobals(tokens, from) {
     i++;
     if (flag.includes("="))
       continue;
-    if (!VALUE_FLAGS.has(flag))
+    if (!VALUE_FLAGS2.has(flag))
       continue;
     const value = tokens[i];
     if (value !== undefined)
@@ -1014,7 +1201,7 @@ var WRITE_FLAGS = {
   preflight: ["--fix"],
   ready: ["--claim"]
 };
-var BEAD_ID = /^[A-Za-z][A-Za-z0-9]*(?:-[A-Za-z0-9]+)+(?:\.\d+)*$/;
+var BEAD_ID2 = /^[A-Za-z][A-Za-z0-9]*(?:-[A-Za-z0-9]+)+(?:\.\d+)*$/;
 function writesStore(invocation) {
   if (invocation === undefined)
     return true;
@@ -1026,7 +1213,7 @@ function writesStore(invocation) {
   if (verb === "comment")
     return args.length !== 1 || args[0] !== "list";
   if (verb === "comments")
-    return args.length !== 1 || !BEAD_ID.test(args[0] ?? "");
+    return args.length !== 1 || !BEAD_ID2.test(args[0] ?? "");
   const rule = READS[verb];
   if (rule === undefined)
     return true;
@@ -1545,9 +1732,13 @@ function bashCallCwd(input, fallback) {
   const cwd = input.cwd;
   return typeof cwd === "string" && cwd !== "" ? resolve5(fallback, cwd) : fallback;
 }
-var sessionPinGetter;
+var SESSION_PIN_GETTER_KEY = Symbol.for("com.srobroek.beads.session-pin-getter.v1");
+function sharedSessionPinGetter() {
+  const getter = Reflect.get(globalThis, SESSION_PIN_GETTER_KEY);
+  return typeof getter === "function" ? getter : undefined;
+}
 function pinnedBeadsDir(cwd, ctx) {
-  const pin = ctx === undefined ? undefined : sessionPinGetter?.(cwd, ctx);
+  const pin = ctx === undefined ? undefined : sharedSessionPinGetter()?.(cwd, ctx);
   return pin ?? (ctx === undefined ? sessionPinFor(cwd) : undefined);
 }
 function rewriteBashInput(input, ctx) {
@@ -1600,6 +1791,16 @@ async function decide(parsed, event, ctx, pi, deadline) {
   if (parsed.unknown)
     return suffix("bash-gates", "command could not be parsed", "split the command or run the mutation as a plain single command");
   const env = environmentForActorDecision(input, parsed.command, ctx);
+  if (settingsEnabled("beads", "bd-close-gate", cwd)) {
+    try {
+      const close = await decideBdCloseParsed(parsed, cwd, deadline);
+      if (close !== undefined)
+        return suffix("bd-close-gate", close.reason, "resolve the gate with `bd gate check` or `bd gate resolve <gate-id>`, then retry");
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      return suffix("bd-close-gate", reason, "retry after the Beads lookup is available; the close was refused without gate proof");
+    }
+  }
   if (settingsEnabled("beads", "bd-actor-gate", cwd)) {
     const actor = decideActorParsed(parsed, env);
     if (actor.kind === "block")
