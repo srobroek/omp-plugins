@@ -41,7 +41,8 @@ function matchingCommandSubstitutionEnd(command: string, start: number): number 
 		}
 		if (ch === "'" || ch === '"') { quote = ch; continue; }
 		if (ch === "\\") { escaped = true; continue; }
-		if (command.startsWith("$(", i)) { depth++; i++; continue; }
+		const opensSubstitution = command.startsWith("$(", i) || ((command[i] === "<" || command[i] === ">") && command[i + 1] === "(");
+		if (opensSubstitution) { depth++; i++; continue; }
 		if (ch === ")") {
 			depth--;
 			if (depth === 0) return i;
@@ -59,7 +60,8 @@ function nestedShellCommands(command: string): string[] {
 			while (++i < command.length && command[i] !== "'") { /* skip literal single-quoted data */ }
 			continue;
 		}
-		if (command.startsWith("$(", i)) {
+		const opensSubstitution = command.startsWith("$(", i) || ((ch === "<" || ch === ">") && command[i + 1] === "(");
+		if (opensSubstitution) {
 			const end = matchingCommandSubstitutionEnd(command, i);
 			if (end >= 0) { nested.push(command.slice(i + 2, end)); i = end; }
 			continue;
@@ -72,6 +74,14 @@ function nestedShellCommands(command: string): string[] {
 			if (nestedChar === "\\") { escaped = true; continue; }
 			if (nestedChar === "`") { nested.push(command.slice(i + 1, end)); i = end; break; }
 		}
+	}
+	for (const segment of splitShellSegments(command)) {
+		const argv = words(segment);
+		const executable = argv[0]?.split("/").pop();
+		if ((executable === "bash" || executable === "sh" || executable === "zsh" || executable === "dash" || executable === "ksh") && argv[1] === "-c" && argv[2]) {
+			nested.push(argv[2]);
+		}
+		if (executable === "eval" && argv.length > 1) nested.push(argv.slice(1).join(" "));
 	}
 	return nested;
 }

@@ -133,12 +133,23 @@ describe("merge policy", () => {
 			'echo "$(wt merge develop)"',
 			"echo $(wt merge develop)",
 			"echo `wt merge develop`",
+			'bash -c "wt merge develop"',
+			"sh -c 'wt merge develop'",
+			'zsh -c "wt merge develop"',
+			'dash -c "wt merge develop"',
+			'ksh -c "wt merge develop"',
+			'eval "wt merge develop"',
+			"echo <(wt merge develop)",
+			"echo >(wt merge develop)",
 		]) {
 			expect(decideMergePolicy(command, "/repo", runner, wt(null))?.reason).toContain("wt merge develop --no-squash --no-ff");
 		}
 		expect(decideMergePolicy("echo \\$(wt merge develop)", "/repo", runner, wt(null))).toBeUndefined();
 		expect(decideMergePolicy('echo "$(wt merge develop --no-squash --no-ff)"', "/repo", runner, wt(null))).toBeUndefined();
 		expect(decideMergePolicy("echo '$(wt merge develop)'", "/repo", runner, wt(null))).toBeUndefined();
+		expect(decideMergePolicy('bash -c "wt merge develop --no-squash --no-ff"', "/repo", runner, wt(null))).toBeUndefined();
+		expect(decideMergePolicy('eval "wt merge develop --no-squash --no-ff"', "/repo", runner, wt(null))).toBeUndefined();
+		expect(decideMergePolicy("echo <(wt merge develop --no-squash --no-ff)", "/repo", runner, wt(null))).toBeUndefined();
 	});
 
 	test("sees merges behind global options and resolves the default branch in -C", () => {
