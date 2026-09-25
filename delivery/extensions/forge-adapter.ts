@@ -43,6 +43,8 @@ export type Forge = "github" | "gitlab" | "unknown";
 export type ForgeTarget =
 	| Readonly<{ forge: "github"; canonicalHost: "github.com" }>
 	| Readonly<{ forge: "gitlab"; canonicalHost: "gitlab.com" }>;
+export const MERGE_METHODS = ["squash", "merge", "rebase"] as const;
+export type MergeMethod = (typeof MERGE_METHODS)[number];
 
 /**
  * What one bounded CLI invocation observed.
@@ -662,6 +664,8 @@ export type MergeOptions = {
 	 * request would fail the merge, and the branch is then cleaned separately.
 	 */
 	deleteBranch?: boolean;
+	/** The requested landing strategy; squash preserves the historical default. */
+	mergeMethod?: MergeMethod;
 };
 
 /**
@@ -697,14 +701,42 @@ export function mergeArgs(forge: Forge, pr: number | string, options: MergeOptio
 		throw new Error(`mergeArgs refuses pr ${JSON.stringify(pr)}, expected a positive integer`);
 	}
 	const deleteBranch = shouldDeleteSourceBranch(options);
+	const methodDescriptor = Object.getOwnPropertyDescriptor(options, "mergeMethod");
+	const requestedMethod = methodDescriptor !== undefined && "value" in methodDescriptor ? methodDescriptor.value : undefined;
+	const method = requestedMethod === undefined ? "squash" : requestedMethod;
+	if (!MERGE_METHODS.includes(method as MergeMethod)) {
+		throw new Error(`mergeArgs refuses mergeMethod ${JSON.stringify(method)}, expected one of "squash", "merge", "rebase"`);
+	}
+	const strategy = method === "squash" ? "--squash" : method === "merge" ? "--merge" : "--rebase";
 	if (supported === "github") {
-		const argv = ["gh", "pr", "merge", number, "--squash"];
+		const argv = ["gh", "pr", "merge", number, strategy];
 		if (deleteBranch) argv.push("--delete-branch");
 		return argv;
 	}
-	const argv = ["glab", "mr", "merge", number, "--squash"];
+	const argv = ["glab", "mr", "merge", number];
+	if (method !== "merge") argv.push(strategy);
 	if (deleteBranch) argv.push("--remove-source-branch");
 	return argv;
+}
+
+/**
+ * Read the GitHub repository policy relevant to an explicit merge-commit landing.
+ * GitLab has no equivalent field in the API contract used by this adapter, so its
+ * policy is unknown rather than guessed. A failed or malformed read is also unknown;
+ * callers only refuse when the forge explicitly reports `false`.
+ */
+export function allowMergeCommit(forge: Forge, repo: string, run: CliRunner = runCli): boolean | "unknown" {
+	const supported = supportedForge(forge);
+	if (supported !== "github") return "unknown";
+	const path = normalizeRepoPath(supported, repo);
+	if (path === null) return "unknown";
+	const argv = ["gh", "api", `repos/${path}`, "--jq", ".allow_merge_commit"];
+	const result = run(argv, { timeoutMs: FORGE_TIMEOUT_MS });
+	if (!result.ok || result.exitCode !== 0 || result.error !== undefined) return "unknown";
+	const value = result.stdout.trim();
+	if (value === "true") return true;
+	if (value === "false") return false;
+	return "unknown";
 }
 
 /**

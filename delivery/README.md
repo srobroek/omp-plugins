@@ -14,7 +14,7 @@ The plugin registers three tools.
 | `delivery_land` | `exec` | Prove a pull request landing and write one receipt. |
 | `delivery_cleanup` | `exec` | Remove and verify one landed worktree and branch; reconcile first only when `beads.ledgerActive` is true, otherwise clean directly. |
 
-`delivery_land` accepts `pr` and, when needed, `repo`, `remote`, `expectHeadSha`, `setupAutoDelete`, and `worktree`. The caller supplies `worktree` when recording the landing association. The tool reads the pull or merge request and refuses invalid caller inputs. It merges at most once. If it issues a merge, it rereads the same request and base on that merge-issued path. An already-`MERGED` request uses its initial read as proof. The tool observes the remote branch and writes one validated receipt. It never writes the Beads ledger.
+`delivery_land` accepts `pr`, optional `merge_method` (`squash` by default, or `merge` or `rebase`), and, when needed, `repo`, `remote`, `expectHeadSha`, `setupAutoDelete`, and `worktree`. The caller supplies `worktree` when recording the landing association. The tool reads the pull or merge request and refuses invalid caller inputs. An explicit `merge` request also requires the forge repository policy to allow merge commits; a policy read of `false` refuses before mutation. It merges at most once. If it issues a merge, it rereads the same request and base on that merge-issued path. An already-`MERGED` request uses its initial read as proof. The tool observes the remote branch and writes one validated receipt. It never writes the Beads ledger.
 
 `delivery_cleanup` removes and verifies one landed worktree and branch. When `beads.ledgerActive` is true, it runs after reconciliation; no-ledger or retired receipts skip reconciliation. It accepts `receipt`, `pr`, `branch`, `worktree`, and `remote`. `worktree` is a caller-supplied identity field. Supplied identity fields must equal the selected receipt. The tool performs read-only `bd show` calls. It refuses a dirty target, an unpushed commit, an uncovered tip, or an unsafe identity. It does not infer or enforce a role owner. Repository policy assigns ownership. It removes the worktree identified by the receipt without force, deletes the local branch with `git branch -d`, verifies worktree registration, path absence, local-ref absence, and remote-branch state, and writes one continuation receipt.
 
@@ -26,6 +26,12 @@ Run these steps in order after a reviewed branch lands:
 3. **Clean.** Call `delivery_cleanup` with the receipt or matching identity fields.
 
 Cleanup requires exact landing proof. The request must be merged at its recorded base. Its `headRefOid` must cover the branch tip. The merge must reach the final destination. A dirty tree, an unpushed commit, an uncovered tip, a failed identity check, or unknown local absence stops cleanup. The caller supplies the worktree and follows repository ownership policy. Remote absence `unknown` remains unverified. The receipt records that result and never presents it as absence. Never force removal, stash changes to make a tree clean, or remove a worktree or branch by hand.
+
+### Merge method and proof shape
+
+`merge_method` defaults to `squash` for compatibility. `merge` requests a real merge commit, and `rebase` requests a linear/rebased landing. Callers MUST choose the method from the project's documented landing policy; an explicit `merge` is refused when the forge reports `allow_merge_commit: false`, and an ambiguous policy MUST be resolved by the caller rather than guessed by the tool.
+
+The receipt's `proof.evidence` records `mergeMethod`, the observed `mergePolicy` when available, and `mergeShape`. A squash proof has one parent; a merge proof has two parents with the reviewed head as the second parent; a rebase proof has one parent and a successful `git merge-base --is-ancestor <head> <merge>` reachability check. For an already-`MERGED` request, no merge method was issued in this call, so the proof accepts one parent or two parents with the reviewed head second and records the observed shape. The tool refuses a shape that does not match the selected method when it issues the merge.
 
 ## Landing receipts
 

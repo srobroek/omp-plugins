@@ -11,6 +11,7 @@ type Call = { argv: string[]; cwd: string | undefined; timeoutMs: number; env: R
 
 const MERGE_OID = "feedfacecafebabe0123456789abcdef01234567";
 const HEAD_OID = "0123456789abcdef0123456789abcdef01234567";
+const BASE_OID = "1111111111111111111111111111111111111111";
 const REMOTE_URL = "https://github.com/srobroek/omp-plugins.git";
 const BRANCH = "omp/agent/omp-plugins-9ej3.5";
 const NOW = 1_764_000_000_000;
@@ -65,8 +66,11 @@ type Answers = {
 	prView?: CliResult[];
 	merge?: CliResult;
 	autoDelete?: CliResult;
+	policy?: CliResult;
 	enable?: CliResult;
 	lsRemote?: CliResult;
+	parents?: string;
+	reachable?: CliResult;
 	remoteUrl?: string;
 };
 
@@ -86,9 +90,12 @@ function runner(answers: Answers, canonical: string): { run: CliRunner; calls: C
 		if (command.startsWith("git rev-parse --path-format=absolute --git-common-dir --show-toplevel")) {
 			return completed(`${join(canonical, ".git")}\n${canonical}\n`);
 		}
+		if (argv[0] === "git" && argv[1] === "show" && argv[2] === "-s") return completed(`${answers.parents ?? BASE_OID}\n`);
+		if (argv[0] === "git" && argv[1] === "merge-base") return answers.reachable ?? completed("");
 		if (command.startsWith("git remote get-url")) return completed(`${answers.remoteUrl ?? REMOTE_URL}\n`);
 		if (argv[1] === "pr" && argv[2] === "view") return views.shift() ?? completed(mergedGithubPr());
 		if (argv[1] === "mr" && argv[2] === "view") return views.shift() ?? completed(gitlabMr());
+		if (argv[1] === "api" && argv.includes(".allow_merge_commit")) return answers.policy ?? completed("true\n");
 		if (argv[1] === "api" && argv.includes("-X")) return answers.enable ?? completed("{}\n");
 		if (argv[1] === "api") return answers.autoDelete ?? completed("false\n");
 		if (argv[1] === "pr" && argv[2] === "merge") return answers.merge ?? completed("");
@@ -163,6 +170,54 @@ describe("delivery_land", () => {
 		expect(reread.ok).toBe(true);
 		if (!reread.ok) throw new Error(reread.reason);
 		expect(reread.receipt).toEqual(receipt);
+	});
+	test("records the default squash method and one-parent proof", () => {
+		const { outcome } = land({ prView: [completed(mergedGithubPr())] });
+		expect(outcome.ok).toBe(true);
+		if (!outcome.ok) throw new Error(outcome.reason);
+		expect(outcome.receipt.proof.evidence).toMatchObject({ mergeMethod: "squash", mergeShape: { parents: [BASE_OID], headReachable: null } });
+	});
+
+	test("maps merge method and proves the reviewed head is the second parent", () => {
+		const { outcome, calls } = land(
+			{ prView: [completed(githubPr()), completed(mergedGithubPr())], parents: `${BASE_OID} ${HEAD_OID}`, policy: completed("true\n") },
+			{ merge_method: "merge" },
+		);
+		expect(outcome.ok).toBe(true);
+		if (!outcome.ok) throw new Error(outcome.reason);
+		expect(calls.find(call => merged(call.argv))?.argv).toContain("--merge");
+		expect(outcome.receipt.proof.evidence).toMatchObject({ mergeMethod: "merge", mergePolicy: true, mergeShape: { parents: [BASE_OID, HEAD_OID] } });
+	});
+
+	test("maps rebase method and proves a linear reachable tip", () => {
+		const { outcome, calls } = land(
+			{ prView: [completed(githubPr()), completed(mergedGithubPr())], reachable: completed("") },
+			{ merge_method: "rebase" },
+		);
+		expect(outcome.ok).toBe(true);
+		if (!outcome.ok) throw new Error(outcome.reason);
+		expect(calls.find(call => merged(call.argv))?.argv).toContain("--rebase");
+		expect(outcome.receipt.proof.evidence).toMatchObject({ mergeMethod: "rebase", mergeShape: { parents: [BASE_OID], headReachable: true } });
+	});
+
+	test("refuses merge method when repository policy disallows merge commits", () => {
+		const { outcome, calls, files } = land(
+			{ prView: [completed(githubPr())], policy: completed("false\n") },
+			{ merge_method: "merge" },
+		);
+		expect(outcome.ok).toBe(false);
+		if (outcome.ok) throw new Error("expected a refusal");
+		expect(outcome.reason).toContain("allow_merge_commit observed false");
+		expect(calls.filter(call => merged(call.argv))).toHaveLength(0);
+		expect(files()).toHaveLength(0);
+	});
+
+	test.each(["fast-forward", "MERGE", "", null, 1])("strictly refuses invalid merge_method %p", merge_method => {
+		const { outcome, calls } = land({}, { merge_method: merge_method as string });
+		expect(outcome.ok).toBe(false);
+		if (outcome.ok) throw new Error("expected a refusal");
+		expect(outcome.reason).toContain('expected one of "squash", "merge", "rebase"');
+		expect(calls).toHaveLength(0);
 	});
 
 	test("a regular-file RETIRED marker makes the landing receipt ledger-inactive", () => {
