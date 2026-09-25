@@ -191,10 +191,10 @@ def parse_json_object(text: str) -> dict[str, Any] | None:
         if char != "{":
             continue
         try:
-            value, _ = decoder.raw_decode(text[index:])
+            value, end = decoder.raw_decode(text[index:])
         except json.JSONDecodeError:
             continue
-        if isinstance(value, dict):
+        if isinstance(value, dict) and not text[index + end :].strip():
             return value
     return None
 
@@ -258,7 +258,6 @@ def declared_hook_path(command: dict[str, Any], cwd: Path) -> Path | None:
     resolved = resolve_hook_executable(command, cwd)
     return None if resolved is None else resolved[1]
 
-
 def check_hook_approvals(ctx: Context, fresh: bool = False) -> Result:
     result = ctx.run("wt", "config", "approvals", "list", "--format=json", use_cache=not fresh)
     if result.returncode != 0:
@@ -272,14 +271,14 @@ def check_hook_approvals(ctx: Context, fresh: bool = False) -> Result:
     state = data.get("state")
     commands = data.get("commands")
     if not isinstance(commands, list):
-        commands = []
+        return Result("skip", "Worktrunk approvals JSON omitted a valid commands list")
+    if any(not isinstance(command, dict) for command in commands):
+        return Result("skip", "Worktrunk approvals JSON contained a malformed command row")
     unapproved: list[str] = []
     missing: list[str] = []
     non_executable: list[str] = []
     unreadable: list[str] = []
     for command in commands:
-        if not isinstance(command, dict):
-            continue
         phase = str(command.get("phase", "?"))
         name = str(command.get("name", "?"))
         label = f"{phase}/{name}"

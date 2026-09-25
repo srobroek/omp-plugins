@@ -510,17 +510,21 @@ const CREATE_REASON =
 const ADVISORY_TEXT =
 	"BEADS_ACTOR and BD_ACTOR are unset on this mutating `bd` command. Without an actor, created_by records the invoking human's git identity; Owner is always the git identity and never identifies the agent. Set either variable to <harness>/<agent-name>/<session-id> so writes and claims are attributable, then retry.";
 
-import type { ParsedCommand } from "./shell-command.ts";
 
 /** Decide across command-position segments and recursively executable children. */
-export function decideActorParsed(parsed: ParsedCommand, env: NodeJS.ProcessEnv = process.env): ActorGateDecision {
+export function decideActorParsed(parsed: unknown, env: NodeJS.ProcessEnv = process.env): ActorGateDecision {
+	if (parsed === null || typeof parsed !== "object") return { kind: "block", reason: "command could not be parsed" };
+	const candidate = parsed as { segments?: unknown; nested?: unknown };
+	if (!Array.isArray(candidate.segments) || !candidate.segments.every(segment => Array.isArray(segment) && segment.every(token => typeof token === "string")) || !Array.isArray(candidate.nested)) {
+		return { kind: "block", reason: "command could not be parsed" };
+	}
 	let advisory = false;
-	for (const segment of parsed.segments) {
+	for (const segment of candidate.segments) {
 		const decision = decideActorGate(segment.join(" "), env);
 		if (decision.kind === "block") return decision;
 		if (decision.kind === "advisory") advisory = true;
 	}
-	for (const child of parsed.nested) {
+	for (const child of candidate.nested) {
 		const decision = decideActorParsed(child, env);
 		if (decision.kind === "block") return decision;
 		if (decision.kind === "advisory") advisory = true;

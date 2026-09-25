@@ -21,7 +21,7 @@ function splitShellSegments(command: string): string[] {
 		if (ch === "\\") { escaped = true; continue; }
 		const two = command.slice(i, i + 2);
 		if (two === "&&" || two === "||") { segments.push(command.slice(start, i)); i++; start = i + 1; continue; }
-		if (ch === ";" || ch === "|" || ch === "\n") { segments.push(command.slice(start, i)); start = i + 1; }
+		if (ch === ";" || ch === "|" || ch === "\n" || ch === "(" || ch === ")") { segments.push(command.slice(start, i)); start = i + 1; }
 	}
 	segments.push(command.slice(start));
 	return segments;

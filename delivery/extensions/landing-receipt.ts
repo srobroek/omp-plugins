@@ -706,9 +706,9 @@ function checkField(
 		case "nullableText":
 			return value === null || nonEmptyString ? null : refuse(field, value, expectationText(expectation));
 		case "integer":
-			return typeof value === "number" && Number.isInteger(value)
+			return typeof value === "number" && Number.isSafeInteger(value) && value > 0
 				? null
-				: refuse(field, value, expectationText(expectation));
+				: refuse(field, value, "a positive safe integer");
 		case "boolean":
 			return typeof value === "boolean" ? null : refuse(field, value, expectationText(expectation));
 		case "object":

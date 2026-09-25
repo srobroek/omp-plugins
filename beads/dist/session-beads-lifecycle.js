@@ -13,6 +13,8 @@ function token(value, startsQuoted = false, sawQuote = false) {
   return { value, startsQuoted, sawQuote };
 }
 function tokenizeShell(command, options = {}) {
+  if (typeof command !== "string")
+    return [];
   const out = [];
   let current = "";
   let started = false;
@@ -110,6 +112,8 @@ function tokenizeShell(command, options = {}) {
   return out;
 }
 function shellQuoteBalanced(command) {
+  if (typeof command !== "string")
+    return true;
   let quote = null;
   for (let i = 0;i < command.length; i++) {
     const ch = command[i];
@@ -463,6 +467,9 @@ function staticParse(command) {
   };
 }
 function parse(command) {
+  if (typeof command !== "string") {
+    return { kind: "parse-failure", reason: "command is not a string", command: "", segments: [], commands: [], unknown: true, nested: [] };
+  }
   return staticParse(command);
 }
 function commandFromInput(input) {

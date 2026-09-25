@@ -134,13 +134,13 @@ def parse_json(text: str) -> Any:
 
 def rows_from(value: Any) -> list[dict[str, Any]] | None:
     if isinstance(value, list):
-        return [row for row in value if isinstance(row, dict)]
+        return value if all(isinstance(row, dict) for row in value) else None
     if not isinstance(value, dict):
         return None
     for key in ("items", "issues", "ready", "results", "data"):
         candidate = value.get(key)
         if isinstance(candidate, list):
-            return [row for row in candidate if isinstance(row, dict)]
+            return candidate if all(isinstance(row, dict) for row in candidate) else None
     if "id" in value:
         return [value]
     if not value:
