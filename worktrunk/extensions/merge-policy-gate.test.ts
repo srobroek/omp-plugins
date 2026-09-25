@@ -31,13 +31,25 @@ describe("merge policy", () => {
 	});
 
 	test("refuses a worker merge launched from the target worktree", () => {
-		const result = decideMergePolicy("wt merge develop --no-squash --no-ff", "/repo", git("main", "main"), wt(null));
+		const result = decideMergePolicy("wt merge develop --no-squash --no-ff", "/repo", git("main", "develop"), wt(null));
 		expect(result?.block).toBe(true);
 		expect(result?.reason).toContain("run from the source worktree");
 	});
 
-	test("allows a flagged worker merge from a non-target source worktree", () => {
+	test("refuses when the current branch cannot be read (detached HEAD)", () => {
+		expect(decideMergePolicy("wt merge develop --no-squash --no-ff", "/repo", git("main", ""), wt(null))?.block).toBe(true);
+	});
+
+	test("allows a flagged merge from a worker branch and a main-to-epic refresh", () => {
 		expect(decideMergePolicy("wt merge develop --no-squash --no-ff", "/repo", git("main", "worker"), wt(null))).toBeUndefined();
+		expect(decideMergePolicy("wt merge develop --no-squash --no-ff", "/repo", git("main", "main"), wt(null))).toBeUndefined();
+	});
+
+	test("reads the current branch in the -C directory", () => {
+		const seen: Array<[string, string]> = [];
+		const runner = (args: string[], cwd: string) => { seen.push([args[0] ?? "", cwd]); return args[0] === "branch" ? "worker" : "origin/main"; };
+		expect(decideMergePolicy("wt -C sub merge develop --no-squash --no-ff", "/repo", runner, wt(null))).toBeUndefined();
+		expect(seen).toContainEqual(["branch", "/repo/sub"]);
 	});
 
 	test("allows default-target and omitted-target merges", () => {

@@ -119,7 +119,7 @@ export function decideMergePolicy(
 		if (invocation.target === defaultBranch) continue;
 		if (!invocation.noSquash || !invocation.noFf) return { block: true, reason: MERGE_POLICY_REFUSAL.replace("<target>", invocation.target) };
 		const currentBranch = gitRunner(["branch", "--show-current"], repoCwd);
-		if (!currentBranch || currentBranch === invocation.target || currentBranch === defaultBranch) {
+		if (!currentBranch || currentBranch === invocation.target) {
 			return { block: true, reason: `worker-to-epic merges must run from the source worktree; retry with ${SOURCE_WORKTREE_RETRY.replace("<target>", invocation.target)}` };
 		}
 	}
