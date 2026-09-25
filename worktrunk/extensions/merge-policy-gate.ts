@@ -79,49 +79,43 @@ function parseTargetAndFlags(argv: string[]): MergeInvocation | null {
 
 const EVAL_MERGE_REFUSAL = "run the merge through the bash tool from the source worktree; retry with `wt merge <target> --no-squash --no-ff` for worker-to-epic merges, or `wt merge` for the default branch";
 
-function evalMergeInvocations(code: string): { invocations: MergeInvocation[]; unparseable: boolean } {
-	const invocations: MergeInvocation[] = [];
-	const listPattern = /\[((?:\s*(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|`(?:\\.|[^`\\])*`)\s*,?)+)\]/g;
-	for (const match of code.matchAll(listPattern)) {
-		const body = match[1] ?? "";
-		const pieces = body.split(",").map(piece => piece.trim()).filter(Boolean);
-		const argv: string[] = [];
-		let valid = pieces.length > 0;
-		for (const piece of pieces) {
-			const quote = piece[0];
-			if ((quote !== "'" && quote !== '"' && quote !== "`") || piece.at(-1) !== quote) {
-				valid = false;
-				break;
-			}
-			argv.push(piece.slice(1, -1).replace(/\\(.)/g, "$1"));
-		}
-		if (valid) {
-			const invocation = parseTargetAndFlags(argv);
-			if (invocation) invocations.push(invocation);
+function evalMergeInvocations(code: string): { invocations: Array<{ invocation: MergeInvocation; start: number; end: number }>; unparseable: boolean } {
+	const invocations: Array<{ invocation: MergeInvocation; start: number; end: number }> = [];
+	const literalPattern = /("(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|`(?:\\.|[^`\\])*`)/g;
+	const sequencePattern = /(\[|\()((?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|`(?:\\.|[^`\\])*`)(?:\s*,\s*(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|`(?:\\.|[^`\\])*`))*\s*,?\s*)(\]|\))/g;
+	for (const match of code.matchAll(sequencePattern)) {
+		const body = match[2] ?? "";
+		const argv = [...body.matchAll(literalPattern)].map(literal => (literal[1] ?? "").slice(1, -1).replace(/\\(.)/g, "$1"));
+		const invocation = parseTargetAndFlags(argv);
+		if (invocation) {
+			const start = match.index ?? 0;
+			invocations.push({ invocation, start, end: start + match[0].length });
 		}
 	}
-	const stringPattern = /(['"`])((?:\\.|(?!\1)[\s\S])*?)\1/g;
-	for (const match of code.matchAll(stringPattern)) {
+	const literals: Array<{ value: string; start: number; end: number }> = [];
+	for (const match of code.matchAll(/(['"`])((?:\\.|(?!\1)[\s\S])*?)\1/g)) {
+		const start = match.index ?? 0;
+		const value = (match[2] ?? "").replace(/\\(.)/g, "$1");
+		literals.push({ value, start, end: start + match[0].length });
 		const invocation = parseTargetAndFlags(words(match[2] ?? ""));
-		if (invocation) invocations.push(invocation);
+		if (invocation) invocations.push({ invocation, start, end: start + match[0].length });
 	}
-	const executable = /(?:subprocess|os\.system|shlex|Bun\.\$|(?:spawn|exec|run|call|Popen)\s*\()/i.test(code);
-	const directVariable = /\[\s*(['"`])wt\1\s*,\s*([A-Za-z_$][\w$]*)/.exec(code)?.[2];
-	const mergeAssignment = /\b([A-Za-z_$][\w$]*)\s*=\s*(['"`])merge\2/.exec(code)?.[1];
-	const variablePair = directVariable !== undefined && directVariable === mergeAssignment;
-	const wtVariable = /\b([A-Za-z_$][\w$]*)\s*=\s*(['"`])wt\2/.exec(code)?.[1];
-	const variableList = wtVariable !== undefined && mergeAssignment !== undefined && new RegExp(`\\[[^\\]]*\\b${wtVariable}\\b[^\\]]*\\b${mergeAssignment}\\b`).test(code);
-	const splitDynamic = /(?:(['"`])w\1\s*\+\s*(['"`])t\2\s*(?:\+\s*)?(?:merge|(['"`])merge\3)|(['"`])w\4\s*\+\s*(['"`])t\s+merge\5)/.test(code);
-	const splitArgvDynamic = /(['"`])w\1\s*\+\s*(['"`])t\2\s*,\s*(['"`])merge\3/.test(code);
-	const dynamic = executable && (variablePair || variableList || splitDynamic || splitArgvDynamic);
-	return { invocations, unparseable: dynamic };
+	const suspicious = literals.filter(({ value }) => value === "merge" || value === "wt" || value.endsWith("/wt"));
+	const hasWt = suspicious.some(({ value }) => value === "wt" || value.endsWith("/wt"));
+	const hasMerge = suspicious.some(({ value }) => value === "merge");
+	const uncoveredLiteral = ({ start, end }: { start: number; end: number }) => !invocations.some(({ invocation, start: invocationStart, end: invocationEnd }) =>
+		invocation.noSquash && invocation.noFf && start >= invocationStart && end <= invocationEnd);
+	return {
+		invocations,
+		unparseable: hasWt && hasMerge && suspicious.some(uncoveredLiteral),
+	};
 }
 
 export function decideEvalMergePolicy(code: string): Decision {
 	const detected = evalMergeInvocations(code);
 	if (detected.unparseable) return { block: true, reason: EVAL_MERGE_REFUSAL };
 	for (const invocation of detected.invocations) {
-		if (!invocation.noSquash || !invocation.noFf) return { block: true, reason: EVAL_MERGE_REFUSAL };
+		if (!invocation.invocation.noSquash || !invocation.invocation.noFf) return { block: true, reason: EVAL_MERGE_REFUSAL };
 	}
 	return undefined;
 }

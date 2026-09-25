@@ -31,6 +31,31 @@ describe("merge policy", () => {
 		expect(decideEvalMergePolicy("subprocess.run(['w' + 't', 'merge', 'orc/epic'])")?.block).toBe(true);
 	});
 
+	test("parses tuple argv and blocks exact dynamic command literals", () => {
+		expect(decideEvalMergePolicy("subprocess.run(('wt', 'merge', 'e'))")?.block).toBe(true);
+		expect(decideEvalMergePolicy("subprocess.run(('wt', 'merge', 'e', '--no-squash', '--no-ff'))")).toBeUndefined();
+		expect(decideEvalMergePolicy("cmd='wt'; subprocess.run([cmd,'merge','e'])")?.block).toBe(true);
+	});
+
+	test("covers shell strings and absolute Worktrunk paths", () => {
+		for (const code of [
+			'os.system("cd x && wt merge e")',
+			"shlex.split('wt merge e')",
+			"['wt', '-C', '/x', 'merge', 'e']",
+			"['/opt/homebrew/bin/wt', 'merge', 'e']",
+			"subprocess.run([\"wt\", \"merge\", \"e\", \"--no-ff\"])",
+		]) {
+			expect(decideEvalMergePolicy(code)?.block).toBe(true);
+		}
+	});
+
+	test("keeps non-Worktrunk merge words and comments unblocked", () => {
+		expect(decideEvalMergePolicy("['git', 'merge-tree', 'origin/main']")).toBeUndefined();
+		expect(decideEvalMergePolicy("pd.merge(a, b); d.merge(x); print('merge')")).toBeUndefined();
+		expect(decideEvalMergePolicy("['wt', 'list', '--format', 'json']")).toBeUndefined();
+		expect(decideEvalMergePolicy("# we will later wt merge from bash")).toBeUndefined();
+	});
+
 	test("does not treat unrelated merge words as Worktrunk merges", () => {
 		expect(decideEvalMergePolicy("git merge-tree origin/main HEAD")).toBeUndefined();
 		expect(decideEvalMergePolicy("pd.merge(left, right)")).toBeUndefined();
