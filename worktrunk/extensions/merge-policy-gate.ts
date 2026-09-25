@@ -172,8 +172,10 @@ function evalMergeInvocations(code: string): { invocations: Array<{ invocation: 
 		const start = match.index ?? 0;
 		const value = (match[2] ?? "").replace(/\\(.)/g, "$1");
 		literals.push({ value, start, end: start + match[0].length });
-		const invocation = parseTargetAndFlags(words(match[2] ?? ""));
-		if (invocation) invocations.push({ invocation, start, end: start + match[0].length });
+		for (const segment of shellSegments(match[2] ?? "")) {
+			const invocation = parseTargetAndFlags(words(segment));
+			if (invocation) invocations.push({ invocation, start, end: start + match[0].length });
+		}
 	}
 	const suspicious = literals.filter(({ value }) => value === "merge" || value === "wt" || value.endsWith("/wt"));
 	const hasWt = suspicious.some(({ value }) => value === "wt" || value.endsWith("/wt"));
