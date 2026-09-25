@@ -53,6 +53,7 @@ import type { TSchema } from "@oh-my-pi/pi-ai";
 import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
 import pkg from "../package.json" with { type: "json" };
 import {
+	allowMergeCommit,
 	autoDeleteSetting,
 	type CliRunner,
 	enableAutoDelete,
@@ -60,7 +61,9 @@ import {
 	forgeEnvironment,
 	forgeTarget,
 	gitObservationEnvironment,
+	MERGE_METHODS,
 	mergeArgs,
+	type MergeMethod,
 	normalizeRepoPath,
 	REMOTE_NAME,
 	redactRemote,
@@ -142,6 +145,8 @@ export type LandParams = {
 	 * input; it is not a way to override the convention's answer.
 	 */
 	beadId?: string;
+	/** The forge landing strategy; defaults to squash for compatibility. */
+	merge_method?: MergeMethod | string;
 };
 
 /**
@@ -184,6 +189,12 @@ function show(value: unknown): string {
 	if (typeof value === "string") return JSON.stringify(value);
 	if (typeof value === "object") return Array.isArray(value) ? `an array of ${value.length}` : "an object";
 	return String(value);
+}
+
+function landingMethod(value: unknown): { method: MergeMethod } | { reason: string } {
+	const method = value === undefined ? "squash" : value;
+	if (typeof method === "string" && MERGE_METHODS.includes(method as MergeMethod)) return { method: method as MergeMethod };
+	return { reason: `merge_method: observed ${show(value)}, expected one of "squash", "merge", "rebase"` };
 }
 
 /**
@@ -331,21 +342,47 @@ function subjectDrift(observed: PrObservation, requested: number, previous: PrOb
 	return null;
 }
 
+type MergeShapeProof = { oid: string; parents: string[]; headReachable: boolean | null } | { reason: string };
+
 /**
- * Is this observation proof of a merge?
- *
- * Both halves are named in one refusal because both are needed and a caller that
- * learns only about the state re-runs the tool to discover the oid was missing
- * too. GitLab spells the state `"merged"`, so the comparison is
- * case-insensitive; `pr.state` is recorded exactly as the forge spelled it.
+ * Prove that the observed commit has the shape requested by the landing method.
+ * Merge and squash are distinguished by parent count; a merge commit must retain
+ * the exact reviewed head as its second parent. Rebase is linear and additionally
+ * requires the reviewed head to be reachable from the resulting tip.
  */
-function mergeProof(pr: PrObservation): { oid: string } | { reason: string } {
-	if (pr.state.trim().toUpperCase() === "MERGED" && pr.mergeCommitOid !== null) {
-		return { oid: pr.mergeCommitOid };
+function mergeProof(
+	pr: PrObservation,
+	method: MergeMethod,
+	run: CliRunner,
+	cwd: string,
+	env: Readonly<Record<string, string>>,
+): MergeShapeProof {
+	if (pr.state.trim().toUpperCase() !== "MERGED" || pr.mergeCommitOid === null) {
+		return { reason: `observed pr.state ${show(pr.state)} and pr.mergeCommitOid ${show(pr.mergeCommitOid)}, expected state "MERGED" and a non-empty merge commit oid` };
 	}
-	return {
-		reason: `observed pr.state ${show(pr.state)} and pr.mergeCommitOid ${show(pr.mergeCommitOid)}, expected state "MERGED" and a non-empty merge commit oid`,
-	};
+	const oid = pr.mergeCommitOid.trim().toLowerCase();
+	const output = gitOutput(run, cwd, ["show", "-s", "--format=%P", oid], env);
+	if (output === null) return { reason: `git show -s --format=%P ${oid}: observed no completed read, expected the merge commit's parents` };
+	const text = output.trim();
+	const parents = text === "" ? [] : text.split(/\s+/);
+	if (parents.some(parent => !FULL_OID.test(parent))) {
+		return { reason: `git show -s --format=%P ${oid}: observed malformed parent ids ${show(text)}, expected full hexadecimal object ids` };
+	}
+	if (method === "merge") {
+		if (parents.length !== 2) return { reason: `merge_method "merge": observed ${parents.length} parents, expected exactly 2 with the reviewed head as the second parent` };
+		if (parents[1]?.toLowerCase() !== pr.headRefOid.trim().toLowerCase()) {
+			return { reason: `merge_method "merge": observed second parent ${show(parents[1])}, expected reviewed head ${show(pr.headRefOid)}` };
+		}
+		return { oid, parents, headReachable: null };
+	}
+	if (parents.length !== 1) return { reason: `merge_method "${method}": observed ${parents.length} parents, expected exactly 1 for a linear landing` };
+	if (method === "squash") return { oid, parents, headReachable: null };
+	const reachable = run(["git", "merge-base", "--is-ancestor", pr.headRefOid.trim().toLowerCase(), oid], { cwd, timeoutMs: GIT_TIMEOUT_MS, env });
+	if (!reachable.ok || reachable.error !== undefined || reachable.exitCode !== 0) {
+		const observed = reachable.error ?? (reachable.exitCode === null ? "no exit status" : `exit ${reachable.exitCode}`);
+		return { reason: `merge_method "rebase": git merge-base --is-ancestor observed ${observed}, expected reviewed head ${show(pr.headRefOid)} to be reachable from ${show(oid)}` };
+	}
+	return { oid, parents, headReachable: true };
 }
 
 /** Exact stdout of one successful local Git read, or null when Git did not complete it. */
@@ -412,6 +449,14 @@ function beadIdentity(beadId: string | undefined, branch: string): { ids: string
 	return { ids: [explicit] };
 }
 
+function nativeCloseoutSteps(receipt: LandingReceipt, receiptPath: string, mergeSha: string): readonly string[] {
+	const commands = receipt.beads.ids.flatMap(id => [
+		`bd update ${id} --set-metadata pr=${receipt.pr.number} --set-metadata merge_sha=${mergeSha}`,
+		`bd close ${id} --reason "PR #${receipt.pr.number} merged as ${mergeSha}; receipt ${receiptPath}"`,
+	]);
+	return [...commands, "delivery_cleanup"];
+}
+
 /**
  * Why a landing with no bead identity may not be recorded, or null when it may.
  *
@@ -421,15 +466,6 @@ function beadIdentity(beadId: string | undefined, branch: string): { ids: string
  * gate that verified nothing, so the landing refuses here instead — before the merge
  * when the branch is already known, and again before the receipt is built.
  */
-function nativeCloseoutSteps(receipt: LandingReceipt, receiptPath: string, mergeSha: string): readonly string[] {
-	const commands = receipt.beads.ids.flatMap(id => [
-		`bd update ${id} --set-metadata pr=${receipt.pr.number} --set-metadata merge_sha=${mergeSha}`,
-		`bd close ${id} --reason "PR #${receipt.pr.number} merged as ${mergeSha}; receipt ${receiptPath}"`,
-	]);
-	return [...commands, "delivery_cleanup"];
-}
-
-/** The active-ledger landing must name at least one receipt bead to close. */
 function missingBeadIdentity(ids: readonly string[], branch: string, ledger: CanonicalLedger): string | null {
 	if (!ledger.active || ids.length > 0) return null;
 	return `beads.ids: observed no bead identity for branch ${show(branch)}, expected an "omp/agent/<bead-id>" branch or an explicit beadId; the ledger at canonical root ${show(ledger.root)} is active, so this landing has no bead for the native close-out commands`;
@@ -469,6 +505,9 @@ export function landPullRequest(params: LandParams, deps: LandDeps = {}): LandOu
 	const now = deps.now?.() ?? Date.now();
 	const observedAt = new Date(now).toISOString();
 	const refuse = (reason: string): LandOutcome => ({ ok: false, reason, text: `delivery_land refused: ${reason}` });
+	const selected = landingMethod(params.merge_method);
+	if ("reason" in selected) return refuse(selected.reason);
+	const mergeMethod = selected.method;
 
 	const number = typeof params.pr === "number" ? String(params.pr) : typeof params.pr === "string" ? params.pr.trim() : "";
 	if (!POSITIVE_INTEGER.test(number)) return refuse(`pr: observed ${show(params.pr)}, expected a positive integer`);
@@ -609,6 +648,13 @@ export function landPullRequest(params: LandParams, deps: LandDeps = {}): LandOu
 	let mergeArgv: string[] | null = null;
 	let proved = first.pr;
 	let rereadArgv: string[] | null = null;
+	let mergePolicy: boolean | "unknown" | null = null;
+	if (!alreadyMerged && mergeMethod === "merge") {
+		mergePolicy = allowMergeCommit(forge, nameWithOwner, boundForgeRun);
+		if (mergePolicy === false) {
+			return refuse(`merge_method "merge": repository policy allow_merge_commit observed false, expected true; no merge was issued and no receipt was written`);
+		}
+	}
 	if (alreadyMerged) {
 		notes.push(`The pull request was already MERGED when it was read, so no merge argv was issued: ${first.argv.join(" ")} is the proof.`);
 	} else {
@@ -627,7 +673,7 @@ export function landPullRequest(params: LandParams, deps: LandDeps = {}): LandOu
 			// `gh pr merge --match-head-commit` and `glab mr merge --sha` each fail the merge
 			// unless the source head is still this commit. Neither is a default.
 			const binding = forge === "github" ? ["--match-head-commit", head] : ["--sha", head];
-			mergeArgv = [...mergeArgs(forge, number), "--repo", cliRepo, ...binding];
+			mergeArgv = [...mergeArgs(forge, number, { mergeMethod }), "--repo", cliRepo, ...binding];
 		} catch (error) {
 			return refuse(error instanceof Error ? error.message : String(error));
 		}
@@ -650,7 +696,7 @@ export function landPullRequest(params: LandParams, deps: LandDeps = {}): LandOu
 		proved = second.pr;
 	}
 
-	const proof = mergeProof(proved);
+	const proof = mergeProof(proved, mergeMethod, run, cwd, gitEnv);
 	if ("reason" in proof) {
 		const source = alreadyMerged ? "the pull request read" : `the re-read after ${(mergeArgv ?? []).join(" ")}`;
 		return refuse(`${source}: ${proof.reason}; no receipt was written`);
@@ -670,6 +716,8 @@ export function landPullRequest(params: LandParams, deps: LandDeps = {}): LandOu
 	const observingArgv = rereadArgv ?? first.argv;
 	const evidence: Record<string, unknown> = {
 		remote,
+		mergeMethod,
+		mergePolicy,
 		// The URL lives here and not in `repo.remote`, which records the configured
 		// remote NAME: the name is what a later `git ls-remote` is given, and the URL is
 		// the redacted spelling of what was contacted.
@@ -677,13 +725,12 @@ export function landPullRequest(params: LandParams, deps: LandDeps = {}): LandOu
 		// Both the repository and the head the merge was bound to are recorded, because a
 		// reader of this receipt cannot otherwise tell a bound merge from an ambient one.
 		boundRepo: nameWithOwner,
-		// The directory the ledger verdict was classified at, so a reader can tell that
-		// `beads.ledgerActive` is the repository's answer and not the caller's cwd.
 		ledger: { root: repository.ledger.root, active: repository.ledger.active },
 		prView: { argv: first.argv.join(" "), number: first.pr.number, state: first.pr.state, headRefOid: first.pr.headRefOid, baseRefName: first.pr.baseRefName },
 		expectHeadSha: params.expectHeadSha?.trim() ?? null,
 		autoDelete: { observed: observedAutoDelete, requested: params.setupAutoDelete === true },
-		merge: mergeArgv === null ? null : { argv: mergeArgv.join(" "), boundHead: first.pr.headRefOid.trim().toLowerCase() },
+		merge: mergeArgv === null ? null : { argv: mergeArgv.join(" "), method: mergeMethod, boundHead: first.pr.headRefOid.trim().toLowerCase() },
+		mergeShape: { parents: proof.parents, headReachable: proof.headReachable },
 		reread:
 			rereadArgv === null
 				? null
@@ -772,15 +819,14 @@ export default function deliveryLandTool(pi: ExtensionAPI): void {
 		label: "Land a pull request and emit a receipt",
 		description:
 			"Prove a pull request landed and emit one landing receipt. Reads the pull request, refuses on an expectHeadSha mismatch, " +
-			"merges at most once (an already MERGED request is proved, not re-merged) with the repository and the observed head bound " +
-			"explicitly rather than taken from the working directory or GH_REPO, re-reads it and refuses unless the same request is " +
-			"MERGED at that same head on the same base, observes the remote branch with git ls-remote from this working directory, then " +
-			"writes exactly one receipt under the agent directory and returns it as details.receipt. " +
-			"beads.ledgerActive is classified at the repository's canonical root, never at the working directory, so a nested retired .beads cannot make an active ledger look absent. " +
-			"On an active ledger the landing refuses unless it can name the bead it closes, from the omp/agent/<bead-id> branch convention or from beadId. " +
-			"Writes no Beads ledger: when receipt beads.ledgerActive is true, for each receipt bead in child-before-parent order run `bd update ID --set-metadata pr=N --set-metadata merge_sha=SHA`, then `bd close ID --reason \"PR #N merged as SHA; receipt PATH\"`, then delivery_cleanup; when it is false for a no-ledger or retired repository, go directly to delivery_cleanup. The caller supplies worktree when recording the cleanup association.",
+			"merges at most once (an already MERGED request is proved, not re-merged) using merge_method (squash by default, or merge/rebase), " +
+			"checks the method-specific commit shape, and refuses an explicit merge when the forge policy disallows merge commits. " +
+			"The merge is bound to the observed repository and head, reread at the same head and base, and then the remote branch is observed " +
+			"with git ls-remote before exactly one validated receipt is written under the agent directory. Writes no Beads ledger: when receipt " +
+			"beads.ledgerActive is true, close receipt beads in child-before-parent order, then delivery_cleanup; inactive repositories go directly to cleanup.",
 		parameters: z.object({
 			pr: z.union([z.number(), z.string()]).describe("Pull request or merge request number"),
+			merge_method: z.enum(MERGE_METHODS).optional().describe('Landing strategy: "squash" (default), "merge", or "rebase"'),
 			repo: z.string().optional().describe('Repository as "<owner>/<name>"; defaults to the path of the remote URL'),
 			remote: z.string().optional().describe('Git remote to resolve the forge and observe the branch on; defaults to "origin"'),
 			expectHeadSha: z.string().optional().describe("Refuse unless the pull request head is exactly this sha; nothing is merged on a mismatch"),

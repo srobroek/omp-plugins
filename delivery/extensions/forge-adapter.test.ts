@@ -720,6 +720,20 @@ describe("mergeArgs", () => {
 	test("gitlab merges and requests deletion", () => {
 		expect(mergeArgs("gitlab", 7)).toEqual(["glab", "mr", "merge", "7", "--squash", "--remove-source-branch"]);
 	});
+	test.each([
+		["github", "merge", ["gh", "pr", "merge", "7", "--merge", "--delete-branch"]],
+		["github", "rebase", ["gh", "pr", "merge", "7", "--rebase", "--delete-branch"]],
+		["gitlab", "merge", ["glab", "mr", "merge", "7", "--remove-source-branch"]],
+		["gitlab", "rebase", ["glab", "mr", "merge", "7", "--rebase", "--remove-source-branch"]],
+	] as const)("maps %s %s to the forge flag shape", (forge, mergeMethod, expected) => {
+		expect(mergeArgs(forge, 7, { mergeMethod })).toEqual([...expected]);
+	});
+
+	test.each(["fast-forward", "", "MERGE", null, 1])("rejects invalid merge methods %p", mergeMethod => {
+		expect(() => mergeArgs("github", 7, { mergeMethod } as unknown as MergeOptionsForTest)).toThrow(
+			/expected one of "squash", "merge", "rebase"/,
+		);
+	});
 
 	test("deleteBranch false drops only the deletion request", () => {
 		expect(mergeArgs("github", 123, { deleteBranch: false })).toEqual(["gh", "pr", "merge", "123", "--squash"]);
@@ -1066,7 +1080,9 @@ describe("every issued command", () => {
 	test("the runtime surface is exactly the contract the delivery tools import", () => {
 		expect(Object.keys(adapter).sort()).toEqual([
 			"FORGE_TIMEOUT_MS",
+			"MERGE_METHODS",
 			"REMOTE_NAME",
+			"allowMergeCommit",
 			"autoDeleteSetting",
 			"detectForge",
 			"enableAutoDelete",
