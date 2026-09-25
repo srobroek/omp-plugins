@@ -19,9 +19,9 @@ The package ships six role agents and one mechanical helper:
 Claim-pool beads route to `operator` as documented by the roles rule. Pools are configured with `pool:implementer`, `pool:implementer-high`, `pool:work-reviewer`, `pool:researcher`, `pool:shepherd`, and `pool:operator`.
 ## Pool coordination
 
-Pull-based roles keep their process alive when a filtered ready queue is empty by calling the registered `pool_wait` tool with the exact pool and lead-owned epic id. It polls `bd ready --assignee POOL --json` in-process, filters exact `metadata.epic_id`, and returns a ready record, a bounded timeout, or a structured Beads error without consuming a model turn. Role yields are run-level summaries with `verdict: DRAINED|BLOCKED` and compact `beads[]` entries; durable per-bead evidence stays on the ledger.
+Pull-based roles keep their process alive when a filtered ready queue is empty by calling the registered `pool_wait` tool with the exact pool and lead-owned epic id. It polls `bd ready --assignee POOL --json` in-process, filters exact `metadata.epic_id`, and returns a ready record, a bounded timeout, or a structured Beads error without consuming a model turn. Pull-based worker, review, researcher, and operator roles yield run-level summaries with verdict: DRAINED|BLOCKED; the epic orchestrator yields DELIVERED|BLOCKED, and the landing shepherd yields COMPLETE|BLOCKED, using their role-specific schemas.
 
-The epic orchestrator integrates approved worker heads into its own epic and closes each work bead with its merge SHA. The shepherd is spawned once per epic only after integration and verification when an epic-to-default PR exists or is required; tier1 single-epic runs use it to land the epic, while two-tier runs use only the root lead's shepherd for the default landing. No PR means no shepherd.
+The epic orchestrator integrates approved worker heads into its own epic and closes each work bead with its merge SHA. The shepherd is spawned once per epic only after integration and verification when an epic-to-default PR exists or is required; tier1 single-epic runs use it to land the epic, while two-tier runs use only the root lead's shepherd for the default landing. No PR means no shepherd unless landing is explicitly required; in that case the shepherd opens the PR.
 
 ## Rules
 
