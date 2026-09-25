@@ -3,7 +3,7 @@ import { describe, expect, test } from "bun:test";
 import mergePolicyGate, { decideMergePolicy } from "./merge-policy-gate.ts";
 
 type Handler = (event: unknown, ctx?: unknown) => unknown;
-const git = (branch: string | null) => (_args: string[], _cwd: string) => branch ? `origin/${branch}` : null;
+const git = (defaultBranch: string | null, currentBranch = "worker") => (args: string[], _cwd: string) => args[0] === "branch" ? currentBranch : defaultBranch ? `origin/${defaultBranch}` : null;
 const wt = (branch: string | null) => (_args: string[], _cwd: string) => branch;
 
 function harness(): { registered: string[]; call: Handler } {
@@ -28,6 +28,28 @@ describe("merge policy", () => {
 
 	test("allows a non-default target with both flags", () => {
 		expect(decideMergePolicy("wt merge develop --no-squash --no-ff", "/repo", git("main"), wt(null))).toBeUndefined();
+	});
+
+	test("refuses a worker merge launched from the target worktree", () => {
+		const result = decideMergePolicy("wt merge develop --no-squash --no-ff", "/repo", git("main", "develop"), wt(null));
+		expect(result?.block).toBe(true);
+		expect(result?.reason).toContain("run from the source worktree");
+	});
+
+	test("refuses when the current branch cannot be read (detached HEAD)", () => {
+		expect(decideMergePolicy("wt merge develop --no-squash --no-ff", "/repo", git("main", ""), wt(null))?.block).toBe(true);
+	});
+
+	test("allows a flagged merge from a worker branch and a main-to-epic refresh", () => {
+		expect(decideMergePolicy("wt merge develop --no-squash --no-ff", "/repo", git("main", "worker"), wt(null))).toBeUndefined();
+		expect(decideMergePolicy("wt merge develop --no-squash --no-ff", "/repo", git("main", "main"), wt(null))).toBeUndefined();
+	});
+
+	test("reads the current branch in the -C directory", () => {
+		const seen: Array<[string, string]> = [];
+		const runner = (args: string[], cwd: string) => { seen.push([args[0] ?? "", cwd]); return args[0] === "branch" ? "worker" : "origin/main"; };
+		expect(decideMergePolicy("wt -C sub merge develop --no-squash --no-ff", "/repo", runner, wt(null))).toBeUndefined();
+		expect(seen).toContainEqual(["branch", "/repo/sub"]);
 	});
 
 	test("allows default-target and omitted-target merges", () => {

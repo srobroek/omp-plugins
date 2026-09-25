@@ -9,8 +9,10 @@ directory-discovered skill.
 
 ### `merge-policy-gate`
 
-Blocks worker-to-epic `wt merge` calls unless they include both `--no-squash` and `--no-ff`;
-merges to the repository default branch are unchanged.
+Blocks worker-to-epic `wt merge` calls unless they include both `--no-squash` and `--no-ff`,
+and unless they run from the source worktree: `wt merge <target>` merges the current branch,
+so a call whose current branch is the target (or unreadable, such as a detached HEAD) is
+refused. Merges to the repository default branch are unchanged.
 
 
 ### `isolation-precheck`
