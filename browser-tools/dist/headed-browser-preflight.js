@@ -40248,6 +40248,7 @@ import { isAbsolute as isAbsolute2, normalize as normalize2 } from "path";
 var exports_dirs = {};
 __export(exports_dirs, {
   APP_NAME: () => APP_NAME,
+  APP_URL: () => APP_URL,
   CONFIG_DIR_NAME: () => CONFIG_DIR_NAME,
   MAIN_CONFIG_FILENAMES: () => MAIN_CONFIG_FILENAMES,
   MIN_BUN_VERSION: () => MIN_BUN_VERSION,
@@ -40296,7 +40297,6 @@ __export(exports_dirs, {
   getGithubCacheDbPath: () => getGithubCacheDbPath,
   getGlobalDaemonRuntimeDir: () => getGlobalDaemonRuntimeDir,
   getGlobalDaemonRuntimeRoot: () => getGlobalDaemonRuntimeRoot,
-  getGpuCachePath: () => getGpuCachePath,
   getHistoryDbPath: () => getHistoryDbPath,
   getInstallId: () => getInstallId,
   getLastChangelogVersionPath: () => getLastChangelogVersionPath,
@@ -40341,6 +40341,7 @@ __export(exports_dirs, {
   getWorktreeDir: () => getWorktreeDir,
   getWorktreesDir: () => getWorktreesDir,
   hashPath: () => hashPath,
+  localDay: () => localDay,
   normalizePathForComparison: () => normalizePathForComparison,
   normalizeProfileName: () => normalizeProfileName,
   pathIsWithin: () => pathIsWithin,
@@ -40358,7 +40359,7 @@ import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
 // node_modules/@oh-my-pi/pi-utils/package.json
-var version = "18.2.4";
+var version = "18.3.1";
 var engines = {
   bun: ">=1.3.14"
 };
@@ -40376,6 +40377,7 @@ function isEnotdir(err) {
 
 // node_modules/@oh-my-pi/pi-utils/src/dirs.ts
 var APP_NAME = "omp";
+var APP_URL = "https://omp.sh/";
 var CONFIG_DIR_NAME = ".omp";
 var MAIN_CONFIG_FILENAMES = ["config.yml", "config.yaml"];
 var VERSION = version;
@@ -40696,8 +40698,11 @@ function getReportsDir() {
 function getLogsDir() {
   return dirs.rootSubdir("logs", "state");
 }
+function localDay(date) {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+}
 function getLogPath(date = new Date, pid = process.pid) {
-  return path.join(getLogsDir(), `${APP_NAME}.${date.toISOString().slice(0, 10)}.${pid}.log`);
+  return path.join(getLogsDir(), `${APP_NAME}.${localDay(date)}.${pid}.log`);
 }
 function getPluginsDir(home) {
   if (home !== undefined && home !== RESOLVER_HOME) {
@@ -40768,9 +40773,6 @@ function hashPath(absPath) {
 }
 function getWorktreeDir(segment) {
   return path.join(getWorktreesDir(), segment);
-}
-function getGpuCachePath() {
-  return dirs.rootSubdir("gpu_cache.json", "cache");
 }
 function getGithubCacheDbPath() {
   const override = process.env.OMP_GITHUB_CACHE_DB;
