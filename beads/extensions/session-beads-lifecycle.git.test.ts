@@ -1583,6 +1583,42 @@ describe.serial("integration", () => {
 			else process.env.BEADS_DIR = ambient;
 		}
 	});
+	test.serial("embedded runner rewrites keep unnamed Bash options out of the full tool_call chain", async () => {
+		const ambient = process.env.BEADS_DIR;
+		delete process.env.BEADS_DIR;
+		const root = mkdtempSync(join(tmpdir(), "beads-runner-tool-call-"));
+		const store = join(root, ".beads");
+		mkdirSync(store);
+		writeFileSync(join(store, "metadata.json"), "{}");
+		execFileSync("git", ["-C", root, "init", "-q"]);
+		setBdStreamForTests(async () => "[]");
+		try {
+			const { handlers } = wire();
+			const call = handlers.tool_call?.[0];
+			if (call === undefined) throw new Error("tool_call handler was not registered");
+			const ctx = { cwd: root, sessionManager: { getSessionId: () => "embedded-runner-tool-call" } };
+			const result = await call({
+				toolName: "bash",
+				toolCallId: "embedded-runner-tool-call",
+				input: { command: "BEADS_ACTOR='omp/Main/embedded-runner-tool-call' bd update bead-runner --claim", cwd: root, ready: true, pty: true },
+			}, ctx);
+			if (!(result && typeof result === "object" && "input" in result)) throw new Error("embedded write was not rewritten");
+			const finalInput = result.input;
+			if (finalInput === null || typeof finalInput !== "object" || Array.isArray(finalInput)) throw new Error("embedded rewrite returned malformed input");
+			if (!("command" in finalInput) || typeof finalInput.command !== "string") throw new Error("embedded rewrite returned no command");
+			expect("name" in finalInput ? finalInput.name : undefined).toBeUndefined();
+			expect("env" in finalInput ? finalInput.env : undefined).toBeUndefined();
+			expect("ready" in finalInput ? finalInput.ready : undefined).toBeUndefined();
+			expect("pty" in finalInput ? finalInput.pty : undefined).toBeUndefined();
+			expect(finalInput.command).toEqual(expect.stringContaining("bd-embedded-write-runner"));
+			expect(finalInput.command).toEqual(expect.stringContaining("BEADS_DOLT_SHARED_SERVER= BEADS_DIR="));
+		} finally {
+			setBdStreamForTests(null);
+			rmSync(root, { recursive: true, force: true });
+			if (ambient === undefined) delete process.env.BEADS_DIR;
+			else process.env.BEADS_DIR = ambient;
+		}
+	});
 
 	test.serial("a live session keeps its auto-pin; a concurrent session in another checkout does not overwrite it", async () => {
 		const a = mkdtempSync(join(tmpdir(), "beads-pin-a-"));

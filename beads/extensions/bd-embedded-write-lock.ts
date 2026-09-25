@@ -1208,8 +1208,17 @@ export async function decideEmbeddedWrite(
 		if (preflight.kind === "failed") return { kind: "block", reason: preflight.reason };
 		const released = await releasePreflight(store, preflightOwner, preflightDeadline);
 		if (released.kind === "failed") return { kind: "block", reason: released.reason };
-		const rewritten = `${direct.assignments}${quote(runner.interpreter)} ${quote(runner.script)} ${RUNNER_STORE_FLAG} ${quote(store)} ${RUNNER_WAIT_FLAG} ${RUNNER_WAIT_MS} -- ${direct.call}`;
+		const runnerPrefix = `BEADS_DOLT_SHARED_SERVER= BEADS_DIR=${quote(store)} `;
+		const rewritten = `${direct.assignments}${runnerPrefix}${quote(runner.interpreter)} ${quote(runner.script)} ${RUNNER_STORE_FLAG} ${quote(store)} ${RUNNER_WAIT_FLAG} ${RUNNER_WAIT_MS} -- ${direct.call}`;
 		const next: Record<string, unknown> = { ...(event.input as Record<string, unknown>) };
+		// The runner inherits its store from command-local assignments. An unnamed Bash
+		// call cannot carry host env/pty/ready options, so do not pass those fields along
+		// after replacing the command with the runner process.
+		if (typeof next.name !== "string" || next.name === "") {
+			delete next.env;
+			delete next.ready;
+			delete next.pty;
+		}
 		// `cmd` is the alias some hosts send; whichever one carried the command carries
 		// the rewrite, so the runner is what actually runs.
 		if (typeof input.command === "string") next.command = rewritten;
