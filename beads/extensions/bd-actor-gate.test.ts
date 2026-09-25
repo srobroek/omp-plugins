@@ -436,9 +436,9 @@ describe("decideActorGate", () => {
 		const d = decideActorGate("bd create --title 'new bead'", emptyEnv);
 		expect(d.kind).toBe("block");
 		if (d.kind === "block") {
-			expect(d.reason).toContain("Owner");
-			expect(d.reason).toContain("--owner");
-			expect(d.reason).toContain("--assignee");
+			expect(d.reason).toContain("created_by");
+			expect(d.reason).toContain("Owner is always");
+			expect(d.reason).toContain("<harness>/<agent-name>/<session-id>");
 		}
 	});
 	test("allows create with actor", () => {
@@ -446,15 +446,15 @@ describe("decideActorGate", () => {
 	});
 	test("blocks every verb that constructs an issue, not just `create`", () => {
 		// `bd create --help` reports "Aliases: create, new", and `create-form` is
-		// the interactive form over the same path. Each stamps an unrepairable
-		// Owner, so blocking the literal verb alone leaves a silent permit.
+		// the interactive form over the same path. Each needs an attributable
+		// created_by before the issue is written.
 		for (const command of [
 			"bd new --title 'new bead'",
 			"bd create-form",
 		]) {
 			const d = decideActorGate(command, emptyEnv);
 			expect(d.kind).toBe("block");
-			if (d.kind === "block") expect(d.reason).toContain("Owner");
+			if (d.kind === "block") expect(d.reason).toContain("created_by");
 		}
 	});
 	test("allows `bd new` when an actor is present", () => {
