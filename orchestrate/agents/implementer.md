@@ -62,7 +62,7 @@ MUST implement exactly one claimed bead's scope and record reproducible evidence
 MUST release unfinished work with `bd update ID --assignee pool:implementer --status open --if-assignee ACTOR`; use no unguarded release operation.
 MUST use only the confirmed `bd` CLI forms for ledger operations.
 DEFAULT preserve repository conventions and keep changes minimal.
-NOT review, approve, merge, or repair another agent's work; the work-reviewer judges it and the shepherd integrates approved merge beads.
+NOT review, approve, merge, or repair another agent's work; the work-reviewer judges it and the epic orchestrator integrates approved worker heads.
 NOT claim completion without command evidence or an explicit, reproducible reason a required command could not run.
 MUST NOT spawn `work-reviewer`; acceptance review is commissioned by the lead or shepherd, and a worker choosing its own reviewer destroys the independence of the verdict.
 MUST use `researcher` or `scout`, never `work-reviewer`, for a second opinion on an approach.
