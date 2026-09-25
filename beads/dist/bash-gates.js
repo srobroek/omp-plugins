@@ -1925,6 +1925,134 @@ function lifecycleBdEnvironment(cwd, base = process.env) {
     env.BEADS_DIR = resolved;
   return boundedBdEnvironment(env);
 }
+function commandHasBd(command) {
+  const parsed = parse(command);
+  const invocations = parsedInvocations(parsed);
+  if (invocations.length > 0)
+    return { parsed, invocations, hasBd: true };
+  if (bdInvocations(command).length > 0)
+    return { parsed, invocations, hasBd: true };
+  const likelyBd = parsed.unknown && /(?:^|[\s;&|])(?:[A-Za-z_][A-Za-z0-9_]*=)*bd(?:\s|$)/.test(command);
+  return { parsed, invocations, hasBd: likelyBd };
+}
+function hasExplicitPinText(command) {
+  const tokens = tokenizeShell(command, { preserveBackslashes: true });
+  for (let index = 0;index < tokens.length; index++) {
+    const token = tokens[index];
+    if (!token || token.startsQuoted || token.value !== "env")
+      continue;
+    for (let option = index + 1;option < tokens.length; option++) {
+      const value = tokens[option];
+      if (!value || [";", "&&", "||", "&", "|", `
+`, "(", ")", "{", "}"].includes(value.value))
+        break;
+      if (pinVariable(assignmentName(value.value)))
+        return true;
+      if (value.value === "-u" || value.value === "--unset") {
+        if (pinVariable(tokens[option + 1]?.value))
+          return true;
+        option++;
+      } else if (value.value.startsWith("-u") && pinVariable(value.value.slice(2))) {
+        return true;
+      } else if (value.value.startsWith("--unset=") && pinVariable(value.value.slice("--unset=".length))) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+function pinVariable(name) {
+  return name === "BEADS_DIR" || name === "BEADS_DOLT_SHARED_SERVER";
+}
+function assignmentName(value) {
+  return /^([A-Za-z_][A-Za-z0-9_]*)=/.exec(value)?.[1];
+}
+function hasExplicitPin(position) {
+  const words = position.words;
+  const executable = position.executable?.split("/").pop();
+  const executableIndex = words.findIndex((word) => !word.quoted && (word.value.split("/").pop() ?? word.value) === executable);
+  if (executableIndex < 0)
+    return false;
+  for (const word of words.slice(0, executableIndex)) {
+    if (pinVariable(assignmentName(word.value)))
+      return true;
+  }
+  for (let index = 0;index < executableIndex; index++) {
+    const word = words[index];
+    if (!word || word.quoted || word.value !== "env")
+      continue;
+    for (let option = index + 1;option < executableIndex; option++) {
+      const value = words[option];
+      if (!value || value.quoted)
+        continue;
+      if (value.value === "-u" || value.value === "--unset") {
+        if (pinVariable(words[option + 1]?.value))
+          return true;
+        option++;
+      } else if (value.value.startsWith("-u") && pinVariable(value.value.slice(2))) {
+        return true;
+      } else if (value.value.startsWith("--unset=") && pinVariable(value.value.slice("--unset=".length))) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+function safeDirectBd(position) {
+  if ((position.executable?.split("/").pop() ?? position.executable) !== "bd")
+    return false;
+  const executableIndex = position.words.findIndex((word) => !word.quoted && (word.value.split("/").pop() ?? word.value) === "bd");
+  if (executableIndex < 0)
+    return false;
+  return position.words.slice(0, executableIndex).every((word) => assignmentName(word.value) !== undefined);
+}
+function unsafePinSyntax(command) {
+  return /[(){}]|`|\$\(|<<-?/.test(command);
+}
+function exportPin(command, pin) {
+  return `export BEADS_DOLT_SHARED_SERVER= BEADS_DIR=${shellQuote(pin)};
+${command}`;
+}
+function rewriteUnnamedPin(command, pin) {
+  const { parsed, invocations, hasBd } = commandHasBd(command);
+  if (!hasBd)
+    return;
+  if (invocations.some((invocation) => hasExplicitPin(invocation.position)) || hasExplicitPinText(command))
+    return;
+  if (invocations.length === 0 || parsed.unknown || parsed.nested.length > 0 || unsafePinSyntax(command))
+    return exportPin(command, pin);
+  const insertions = [];
+  let cursor = 0;
+  let found = 0;
+  for (const segment of commandSegments(command)) {
+    const start = command.indexOf(segment, cursor);
+    if (start < 0)
+      return exportPin(command, pin);
+    cursor = start + segment.length;
+    const segmentParsed = parse(segment);
+    if (segmentParsed.unknown || segmentParsed.nested.length > 0 || segmentParsed.commands.length === 0)
+      continue;
+    const position = segmentParsed.commands[0];
+    if (!position || (position.executable?.split("/").pop() ?? position.executable) !== "bd")
+      continue;
+    found++;
+    if (!safeDirectBd(position))
+      return exportPin(command, pin);
+    const offset = segment.search(/\S/);
+    if (offset < 0)
+      return exportPin(command, pin);
+    insertions.push(start + offset);
+  }
+  if (found !== invocations.length)
+    return exportPin(command, pin);
+  if (insertions.length === 0)
+    return;
+  const prefix = `BEADS_DOLT_SHARED_SERVER= BEADS_DIR=${shellQuote(pin)} `;
+  let rewritten = command;
+  for (const offset of insertions.sort((a, b) => b - a))
+    rewritten = `${rewritten.slice(0, offset)}${prefix}${rewritten.slice(offset)}`;
+  return rewritten;
+}
 function pinBashInput(input, pin) {
   if (pin === undefined || input === null || typeof input !== "object")
     return;
@@ -1935,7 +2063,22 @@ function pinBashInput(input, pin) {
   const current = env?.BEADS_DIR;
   if (typeof current === "string" && current !== "")
     return;
-  return { ...record, env: { ...env ?? {}, ...EMBEDDED_PIN_ENV, BEADS_DIR: pin } };
+  const commandKey = typeof record.command === "string" ? "command" : typeof record.cmd === "string" ? "cmd" : undefined;
+  if (commandKey === undefined)
+    return;
+  const command = record[commandKey];
+  const { hasBd } = commandHasBd(command);
+  if (!hasBd)
+    return;
+  if (typeof record.name === "string" && record.name !== "") {
+    return { ...record, env: { ...env ?? {}, ...EMBEDDED_PIN_ENV, BEADS_DIR: pin } };
+  }
+  const rewritten = rewriteUnnamedPin(command, pin);
+  if (rewritten === undefined)
+    return;
+  const next = { ...record, [commandKey]: rewritten };
+  delete next.env;
+  return next;
 }
 function bashCallCwd(input, fallback) {
   if (input === null || typeof input !== "object")
@@ -1971,6 +2114,9 @@ function bdStoreForInvocation(invocation, cwd, env) {
 function bdInvocationUsesExternalStore(invocation) {
   return flagEnabled(invocation.globals, ["--global", "--database"]);
 }
+function shellQuote(value) {
+  return `'${value.replaceAll("'", "'\\''")}'`;
+}
 var backgroundReads = new Set;
 var LIFECYCLE_BRIDGE = Symbol.for("com.srobroek.beads.session-lifecycle.bridge.v1");
 function lifecycleBridge() {
@@ -1990,6 +2136,16 @@ function rewriteBashInput(input, ctx) {
   const cwd = bashCallCwd(input, ctx?.cwd ?? process.cwd());
   const pin = pinnedBeadsDir(cwd, ctx);
   return pinBashInput(input, pin === "" ? undefined : pin);
+}
+function environmentForBashInput(input, source = input) {
+  const env = environmentForInput(source);
+  const command = commandFromInput(input ?? {});
+  for (const invocation of bdInvocations(command)) {
+    const assignment = invocation.prefix.findLast((token) => token.startsWith("BEADS_DIR="));
+    if (assignment !== undefined)
+      env.BEADS_DIR = assignment.slice("BEADS_DIR=".length);
+  }
+  return env;
 }
 async function admitBeadsWork(ctx, cwd = ctx?.cwd ?? process.cwd(), env = lifecycleBdEnvironment(cwd), refresh = true) {
   const gateAdmitter = lifecycleBridge().gateAdmitter;
@@ -2012,7 +2168,7 @@ async function admitBdMutation(input, ctx, targetEnabled) {
     return;
   const effectiveInput = rewriteBashInput(input, ctx) ?? input;
   const cwd = bashCallCwd(effectiveInput, ctx?.cwd ?? process.cwd());
-  const env = environmentForInput(effectiveInput);
+  const env = environmentForBashInput(effectiveInput, input);
   const writeTargets = embeddedWriteTargets(command, cwd, env);
   if (writeTargets.kind === "refused")
     return { block: true, reason: writeTargets.reason };
