@@ -71,6 +71,15 @@ test("refuses control and timing wrappers instead of bypassing the embedded lock
 			"if bd update bead-1 --claim; then :; fi",
 			"while bd update bead-1 --claim; do :; done",
 			"until bd update bead-1 --claim; do :; done",
+			"env -u BEADS_DIR bd update bead-1 --claim",
+			"env -u BEADS_DOLT_SHARED_SERVER bd update bead-1 --claim",
+			"env --unset BEADS_DIR bd update bead-1 --claim",
+			"env --unset BEADS_DOLT_SHARED_SERVER bd update bead-1 --claim",
+			"env -uBEADS_DIR bd update bead-1 --claim",
+			"env -uBEADS_DOLT_SHARED_SERVER bd update bead-1 --claim",
+			"env --unset=BEADS_DIR bd update bead-1 --claim",
+			"env --unset=BEADS_DOLT_SHARED_SERVER bd update bead-1 --claim",
+			"env -i bd update bead-1 --claim",
 		]) {
 			const result = embeddedWriteTargets(command, root, env);
 			expect(result.kind).toBe("refused");
