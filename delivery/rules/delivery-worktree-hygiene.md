@@ -47,4 +47,4 @@ WH-6 has preconditions and stopping conditions:
 - Never force a removal, and never stash to make a tree look clean.
 - `ExtensionContext` carries no role identity. Nothing tells a session whether it is the main agent, a run lead, or a worker, so role-restricted ownership remains a convention no tool verifies. `delivery_hygiene_report` inventories the repository on demand, one row per worktree, and names no holder it cannot observe. It is read-only.
 - Clean only the bead you own. Another actor's worktrees and uncommitted state are not yours to inventory, to report, or to remove (`rule://coexistence-worktree`).
-- Switch worktrees only when the work requires it. Each one carries its own provisioning and build output from `wt step copy-ignored`. Re-pointing a worktree at another branch discards both.
+- Switch worktrees only when the work requires it. Each one carries its own provisioning and build output from the post-start hook. Re-pointing a worktree at another branch discards both.

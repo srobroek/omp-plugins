@@ -28,6 +28,7 @@ class FakeContext:
         root: Path,
         remote: str | None = None,
         ignored: tuple[str, ...] = ("node_modules",),
+        hook_config: str = "",
     ) -> None:
         self.cwd = root
         self.git_root = root
@@ -35,6 +36,7 @@ class FakeContext:
         self.ignored_config_keys: list[str] = []
         self.remote = remote
         self.ignored = set(ignored)
+        self.hook_config = hook_config
 
     def require_git_root(self) -> Path:
         return self.git_root
@@ -44,6 +46,8 @@ class FakeContext:
             return preflight.CommandResult(0 if args[3] in self.ignored else 1)
         if args == ("git", "config", "--get", "remote.origin.url"):
             return preflight.CommandResult(0, f"{self.remote or ''}\n")
+        if args == ("wt", "config", "show"):
+            return preflight.CommandResult(0, self.hook_config)
         raise AssertionError(f"unexpected command: {args}")
 
 
@@ -211,6 +215,92 @@ class PreflightRegressionTests(unittest.TestCase):
         report = json.loads(output.getvalue())
         self.assertEqual(exit_code, 1)
         self.assertFalse(report["ok"])
+
+    def test_provisioning_hook_passes_for_user_post_start_copy(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            home = root / "home"
+            config = home / ".config" / "worktrunk" / "config.toml"
+            config.parent.mkdir(parents=True)
+            config.write_text("[post-start]\ncopy = \"wt step copy-ignored --require-include\"\n", encoding="utf-8")
+            context = FakeContext(root)
+            with patch.object(Path, "home", return_value=home):
+                result = preflight.check_provisioning_hook(context)
+            self.assertEqual(result.status, "pass")
+            self.assertIn("post-start", result.detail)
+
+    def test_provisioning_hook_fails_when_copy_hook_is_absent(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            home = root / "home"
+            context = FakeContext(root)
+            with patch.object(Path, "home", return_value=home):
+                result = preflight.check_provisioning_hook(context)
+            self.assertEqual(result.status, "fail")
+            self.assertIn("[post-start]", result.detail)
+            self.assertIn("copy-ignored", result.detail)
+
+    def test_provisioning_hook_requires_uv_sync_for_uv_project(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "pyproject.toml").write_text("[project]\nname = \"example\"\n", encoding="utf-8")
+            (root / "uv.lock").write_text("version = 1\n", encoding="utf-8")
+            home = root / "home"
+            context = FakeContext(root, ignored=())
+            with patch.object(Path, "home", return_value=home):
+                result = preflight.check_provisioning_hook(context)
+            self.assertEqual(result.status, "fail")
+            self.assertIn('deps = "uv sync"', result.detail)
+
+    def test_provisioning_hook_accepts_pre_start_with_blocking_note(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            home = root / "home"
+            config = home / ".config" / "worktrunk" / "config.toml"
+            config.parent.mkdir(parents=True)
+            config.write_text("[[pre-start]]\ncopy = \"wt step copy-ignored\"\n", encoding="utf-8")
+            context = FakeContext(root)
+            with patch.object(Path, "home", return_value=home):
+                result = preflight.check_provisioning_hook(context)
+            self.assertEqual(result.status, "pass")
+            self.assertIn("pre-start", result.detail)
+            self.assertIn("block worktree creation", result.detail)
+
+    def test_provisioning_hook_fix_appends_missing_entries_and_preserves_content(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            home = root / "home"
+            config = root / ".config" / "wt.toml"
+            original = '# keep this comment\n[step.copy-ignored]\nexclude = ["target/"]\n'
+            config.parent.mkdir(parents=True)
+            config.write_text(original, encoding="utf-8")
+            context = FakeContext(root)
+            output = io.StringIO()
+            with patch.object(preflight, "Context", return_value=context), patch.object(Path, "home", return_value=home), contextlib.redirect_stdout(output):
+                exit_code = preflight.main(["--only", "provisioning-hook", "--apply", "--json"])
+            report = json.loads(output.getvalue())
+            result = report["checks"][0]
+            self.assertEqual(exit_code, 0)
+            self.assertEqual(result["status"], "pass")
+            self.assertEqual(
+                config.read_text(encoding="utf-8"),
+                original + '\n[post-start]\ncopy-ignored = "wt step copy-ignored --require-include"\n',
+            )
+            self.assertIn("wt config approvals add", result["detail"])
+
+    def test_provisioning_hook_is_read_only_without_fix(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            home = root / "home"
+            config = root / ".config" / "wt.toml"
+            config.parent.mkdir(parents=True)
+            config.write_text("# untouched\n", encoding="utf-8")
+            context = FakeContext(root)
+            before = config.read_bytes()
+            with patch.object(Path, "home", return_value=home):
+                result = preflight.check_provisioning_hook(context)
+            self.assertEqual(result.status, "fail")
+            self.assertEqual(config.read_bytes(), before)
 
     def test_matching_project_merge_settings_pass(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

@@ -7,6 +7,7 @@ import argparse
 import shlex
 import fnmatch
 import json
+import tomllib
 import os
 import shutil
 from pathlib import Path
@@ -20,6 +21,10 @@ from typing import Any, Callable
 APPROVALS_FIX = "wt config approvals add --yes"
 MERGE_FIX = "wt merge --no-squash --no-ff"
 WORKTREE_FIX = "wt switch -y --create --no-cd --base <base-commit> --format json <branch>"
+
+PROVISIONING_COPY_COMMAND = "wt step copy-ignored --require-include"
+PROVISIONING_UV_COMMAND = "uv sync"
+PROVISIONING_FIX = "rerun with --apply; project hooks require `wt config approvals add` before the next worktree"
 
 
 @dataclass
@@ -463,17 +468,225 @@ def check_merge_evidence(ctx: Context) -> Result:
     return Result("warn", f"{user_detail}; merge evidence is not guaranteed. {invocation_detail}", MERGE_FIX)
 
 
-def check_provisioning_include(ctx: Context) -> Result:
-    root = ctx.require_git_root()
-    if root is None:
-        return Result("skip", "git repository root is unavailable; ignored dependencies cannot be inspected")
+def ignored_provisioning_dirs(ctx: Context, root: Path) -> tuple[list[str], str | None]:
     ignored: list[str] = []
     for dependency in ("node_modules", "target", ".venv"):
         result = ctx.run("git", "check-ignore", "-q", dependency, cwd=root)
         if result.returncode == 0:
             ignored.append(dependency)
         elif result.returncode not in (1,):
-            return Result("skip", command_error(result, f"git check-ignore -q {dependency}"))
+            return [], command_error(result, f"git check-ignore -q {dependency}")
+    return ignored, None
+
+
+def _hook_commands_from_toml(data: dict[str, Any], phase: str) -> list[str]:
+    value = data.get(phase)
+    values: list[dict[str, Any]] = []
+    if isinstance(value, dict):
+        values.append(value)
+    elif isinstance(value, list):
+        values.extend(item for item in value if isinstance(item, dict))
+    elif isinstance(value, str):
+        return [value]
+    commands: list[str] = []
+    for table in values:
+        commands.extend(command for command in table.values() if isinstance(command, str))
+    return commands
+
+
+def _hook_commands_from_toml_file(path: Path) -> dict[str, list[str]]:
+    try:
+        data = tomllib.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, tomllib.TOMLDecodeError):
+        return {"pre-start": [], "post-start": []}
+    return {phase: _hook_commands_from_toml(data, phase) for phase in ("pre-start", "post-start")}
+
+
+def _hook_commands_from_config_output(text: str) -> dict[str, list[str]]:
+    # `wt config show` renders the documented `[post-start]` table and
+    # `[[post-start]]` pipeline forms; parse only those effective hook sections.
+    commands = {"pre-start": [], "post-start": []}
+    phase: str | None = None
+    for raw_line in text.splitlines():
+        line = raw_line.strip()
+        section = re.fullmatch(r"\[\[?(pre-start|post-start)\]\]?", line)
+        if section:
+            phase = section.group(1)
+            continue
+        if line.startswith("["):
+            phase = None
+            continue
+        if phase is None or not line or line.startswith("#"):
+            continue
+        key_value = re.match(r"^[A-Za-z0-9_-]+\s*=\s*(.+)$", line)
+        if not key_value:
+            continue
+        try:
+            value = tomllib.loads(f"value = {key_value.group(1)}").get("value")
+        except tomllib.TOMLDecodeError:
+            continue
+        if isinstance(value, str):
+            commands[phase].append(value)
+    return commands
+
+
+def effective_hook_commands(ctx: Context, root: Path) -> dict[str, list[str]]:
+    commands = {"pre-start": [], "post-start": []}
+    paths = (Path.home() / ".config" / "worktrunk" / "config.toml", root / ".config" / "wt.toml")
+    for path in paths:
+        for phase, values in _hook_commands_from_toml_file(path).items():
+            commands[phase].extend(values)
+    if not commands["post-start"]:
+        result = ctx.run("wt", "config", "show")
+        if result.returncode == 0:
+            rendered = _hook_commands_from_config_output(result.output)
+            for phase, values in rendered.items():
+                commands[phase].extend(values)
+    return commands
+
+
+def hook_runs(command: str, executable: str, words: tuple[str, ...]) -> bool:
+    try:
+        tokens = shlex.split(command)
+    except ValueError:
+        return False
+    for index, token in enumerate(tokens):
+        if token != executable:
+            continue
+        for offset in range(index + 1, len(tokens) - len(words) + 1):
+            if tuple(tokens[offset : offset + len(words)]) == words:
+                return True
+    return False
+
+
+def uv_sync_needed(root: Path) -> bool:
+    pyproject = root / "pyproject.toml"
+    if not pyproject.is_file():
+        return False
+    if (root / "uv.lock").is_file():
+        return True
+    try:
+        data = tomllib.loads(pyproject.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, tomllib.TOMLDecodeError):
+        return False
+    tool = data.get("tool")
+    return isinstance(tool, dict) and isinstance(tool.get("uv"), dict)
+
+
+def provisioning_hook_state(ctx: Context, root: Path) -> tuple[bool, bool, list[str], list[str], list[str], str | None]:
+    ignored, error = ignored_provisioning_dirs(ctx, root)
+    if error:
+        return False, False, [], [], [], error
+    needs_copy = bool(ignored) or (root / ".worktreeinclude").exists()
+    needs_uv = uv_sync_needed(root)
+    required: list[tuple[str, str, tuple[str, ...]]] = []
+    if needs_copy:
+        required.append(("copy-ignored", "wt", ("step", "copy-ignored")))
+    if needs_uv:
+        required.append(("uv sync", "uv", ("sync",)))
+    hooks = effective_hook_commands(ctx, root)
+    missing: list[str] = []
+    pre_start: list[str] = []
+    post_start: list[str] = []
+    for name, executable, words in required:
+        post = any(hook_runs(command, executable, words) for command in hooks["post-start"])
+        pre = any(hook_runs(command, executable, words) for command in hooks["pre-start"])
+        if post:
+            post_start.append(name)
+        elif pre:
+            pre_start.append(name)
+        else:
+            missing.append(name)
+    return needs_copy, needs_uv, missing, pre_start, post_start, None
+
+
+def provisioning_hook_block(needs_copy: bool, needs_uv: bool) -> str:
+    lines = ["[post-start]"]
+    if needs_copy:
+        lines.append(f'copy-ignored = "{PROVISIONING_COPY_COMMAND}"')
+    if needs_uv:
+        lines.append(f'deps = "{PROVISIONING_UV_COMMAND}"')
+    return "\n".join(lines) + "\n"
+
+
+def append_provisioning_hook_block(path: Path, block: str) -> None:
+    try:
+        existing = path.read_text(encoding="utf-8") if path.exists() else ""
+    except (OSError, UnicodeError) as error:
+        raise OSError(f"cannot read {path}: {error}") from error
+    table = re.search(r"(?m)^[ \t]*\[post-start\][ \t]*$", existing)
+    array = re.search(r"(?m)^[ \t]*\[\[post-start\]\][ \t]*$", existing)
+    lines = [line for line in block.splitlines() if line and not line.startswith("[post-start]")]
+    if table and not array:
+        next_section = re.search(r"(?m)^[ \t]*\[\[?[^\]]+\]\]?[ \t]*$", existing[table.end() :])
+        insertion = "".join(f"{line}\n" for line in lines)
+        position = table.end() + (next_section.start() if next_section else len(existing[table.end() :]))
+        if position and existing[position - 1] != "\n":
+            insertion = "\n" + insertion
+        updated = existing[:position] + insertion + existing[position:]
+    else:
+        append_block = block.replace("[post-start]", "[[post-start]]", 1) if array else block
+        separator = "" if not existing else ("" if existing.endswith("\n") else "\n")
+        updated = existing + separator + ("" if not existing or existing.endswith("\n\n") else "\n") + append_block
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(updated, encoding="utf-8")
+
+
+def check_provisioning_hook(ctx: Context) -> Result:
+    root = ctx.require_git_root()
+    if root is None:
+        return Result("skip", "git repository root is unavailable; provisioning hooks cannot be inspected")
+    needs_copy, needs_uv, missing, pre_start, post_start, error = provisioning_hook_state(ctx, root)
+    if error:
+        return Result("skip", error)
+    if not needs_copy and not needs_uv:
+        return Result("pass", "no ignored dependency/build directories, .worktreeinclude, or uv project needs provisioning")
+    if missing:
+        block = provisioning_hook_block(needs_copy and "copy-ignored" in missing, needs_uv and "uv sync" in missing)
+        names = ", ".join(missing)
+        return Result(
+            "fail",
+            f"missing post-start provisioning hook(s): {names}; add this TOML to .config/wt.toml:\n{block.rstrip()}",
+            PROVISIONING_FIX,
+        )
+    details: list[str] = []
+    if post_start:
+        details.append(f"post-start hooks run in the background for {', '.join(post_start)}")
+    if pre_start:
+        details.append(f"pre-start hooks cover {', '.join(pre_start)} and block worktree creation")
+    return Result("pass", "; ".join(details))
+
+
+def fix_provisioning_hook(ctx: Context) -> Result:
+    root = ctx.require_git_root()
+    if root is None:
+        return Result("skip", "git repository root is unavailable; provisioning hooks cannot be fixed")
+    needs_copy, needs_uv, missing, _pre_start, _post_start, error = provisioning_hook_state(ctx, root)
+    if error:
+        return Result("skip", error)
+    if not missing:
+        return check_provisioning_hook(ctx)
+    path = root / ".config" / "wt.toml"
+    try:
+        append_provisioning_hook_block(
+            path,
+            provisioning_hook_block(needs_copy and "copy-ignored" in missing, needs_uv and "uv sync" in missing),
+        )
+    except OSError as exc:
+        return Result("fail", str(exc), PROVISIONING_FIX)
+    return Result(
+        "pass",
+        f"added missing provisioning hooks to {path}; project hooks need `wt config approvals add` before the next worktree",
+    )
+
+
+def check_provisioning_include(ctx: Context) -> Result:
+    root = ctx.require_git_root()
+    if root is None:
+        return Result("skip", "git repository root is unavailable; ignored dependencies cannot be inspected")
+    ignored, error = ignored_provisioning_dirs(ctx, root)
+    if error:
+        return Result("skip", error)
     include = root / ".worktreeinclude"
     if ignored and not include.exists():
         names = ", ".join(ignored)
@@ -589,6 +802,7 @@ CHECKS: list[tuple[str, Callable[[Context], Result]]] = [
     ("default-branch-resolves", check_default_branch),
     ("merge-evidence-policy", check_merge_evidence),
     ("provisioning-include", check_provisioning_include),
+    ("provisioning-hook", check_provisioning_hook),
     ("node-modules-integrity", check_node_modules_integrity),
     ("omp-plugin-installed", check_plugin_installed),
     ("commit-generation", check_commit_generation),
@@ -636,6 +850,10 @@ def main(argv: list[str] | None = None) -> int:
         if apply_result.returncode not in (0,):
             refreshed.detail = f"approval command failed: {command_error(apply_result, APPROVALS_FIX)}; {refreshed.detail}"
         results[approval_index] = refreshed.as_dict("hook-approvals")
+
+    provisioning_index = next((index for index, item in enumerate(results) if item["id"] == "provisioning-hook"), None)
+    if args.apply and provisioning_index is not None and results[provisioning_index]["status"] == "fail":
+        results[provisioning_index] = fix_provisioning_hook(ctx).as_dict("provisioning-hook")
 
     strict = bool(args.only)
     report = {"ok": not any(

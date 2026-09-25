@@ -13,7 +13,7 @@ Run this skill from the repository cwd before starting work, running focused tes
 python3 skills/worktrunk-preflight/preflight.py --json
 ```
 
-Use `--only ID[,ID...]` to select checks. The script is read-only unless `--apply` is passed. `--apply` runs only `wt config approvals add --yes` when `hook-approvals` fails, then rechecks it.
+The script is read-only unless `--apply` is passed. `--apply` approves pending hooks when `hook-approvals` fails, then appends missing provisioning hooks to `.config/wt.toml` and rechecks both paths.
 
 ## Checks and remedies
 
@@ -24,7 +24,8 @@ Use `--only ID[,ID...]` to select checks. The script is read-only unless `--appl
 - `config-keys-honoured`: FAIL means project config contains an ignored key; move it to `~/.config/worktrunk/config.toml`, optionally under `[projects."<id>"]`.
 - `default-branch-resolves`: FAIL means Worktrunk cannot resolve a default branch; configure a valid default branch.
 - `merge-evidence-policy`: FAIL means project `[merge]` keys are ignored; move policy to user config and pass `wt merge --no-squash --no-ff` explicitly on every worker-to-epic merge; an epic-to-default merge may be plain or squashing.
-- `provisioning-include`: WARN means ignored dependency directories lack `.worktreeinclude` coverage; run `wt step copy-ignored`. `node-modules-integrity` also warns when a copied `node_modules` is partial or contains a type-package skeleton; run `bun install --frozen-lockfile` and rerun the preflight.
+- `provisioning-include`: WARN means ignored dependency directories lack `.worktreeinclude` coverage; `provisioning-hook` verifies that Worktrunk provisions them after worktree creation.
+- `provisioning-hook`: PASS means an effective `post-start` hook runs `wt step copy-ignored` when ignored dependency/build directories or `.worktreeinclude` require copying, and runs `uv sync` for a Python project with `uv.lock` or `[tool.uv]`. A matching `pre-start` hook passes with a note because it blocks creation. FAIL means a required hook is absent; `--apply` appends the exact missing entries to `.config/wt.toml` without rewriting existing content.
 - `omp-plugin-installed`: WARN means the OMP plugin is absent; run `wt config plugins omp install`.
 - `commit-generation`: WARN means generated commits make `wt merge` squash history; pass `wt merge --no-squash` when preserving per-commit history.
 

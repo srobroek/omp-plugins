@@ -34,8 +34,7 @@ Discovered by directory convention; the manifest lists no rules.
 
 Work in a git linked worktree, never in the canonical checkout. Gives the exact non-interactive
 `wt switch` invocation, requires the run's recorded base commit rather than the default branch tip,
-and requires `wt step copy-ignored` so a focused test run does not fail with a missing-module error
-that reads as broken code.
+and gets provisioning from the post-start hook, which preflight verifies and `--apply` adds.
 
 ### `worktrunk-isolation-disabled`
 
