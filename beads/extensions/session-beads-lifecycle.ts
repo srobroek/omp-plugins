@@ -52,7 +52,7 @@ import {
 	type ParsedInvocation,
 	parsedInvocations,
 } from "./shell-command.ts";
-import { tokenizeShell } from "./shell-tokenizer.ts";
+import { tokenizeShell, type ShellToken } from "./shell-tokenizer.ts";
 
 /**
  * Variables the plugin wins on, in every environment it shapes for bd.
@@ -194,16 +194,68 @@ export function sessionPinAfter(result: AutoPinResult, cwd: string, env: NodeJS.
  */
 type CommandBdInfo = { parsed: ParsedCommand; invocations: ParsedInvocation[]; hasBd: boolean };
 
+function likelyBdCommand(command: string): boolean {
+	const tokens = tokenizeShell(command, { preserveBackslashes: true });
+	const separators = { ";": true, "&": true, "|": true, "\n": true, "(": true, ")": true, "{": true, "}": true };
+	const segmentHasBd = (words: ShellToken[]): boolean => {
+		let index = 0;
+		while (index < words.length) {
+			const token = words[index];
+			if (!token || token.startsQuoted) return false;
+			const word = token.value.split("/").pop() ?? token.value;
+			if (assignmentName(token.value) !== undefined || word === "!") {
+				index++;
+				continue;
+			}
+			if (["if", "then", "elif", "else", "while", "until", "do", "for", "in", "case", "function"].includes(word)) {
+				index++;
+				continue;
+			}
+			if (word === "bd") return true;
+			if (!["command", "env", "exec", "mise", "nice", "nohup", "sudo", "time", "timeout", "xargs"].includes(word)) return false;
+			index++;
+			if (word === "env") {
+				while (index < words.length) {
+					const option = words[index];
+					if (!option || option.startsQuoted) return false;
+					if (assignmentName(option.value) !== undefined) {
+						index++;
+						continue;
+					}
+					if (!option.value.startsWith("-")) break;
+					const takesValue = option.value === "-u" || option.value === "--unset";
+					index += takesValue ? 2 : 1;
+				}
+			} else if (word === "timeout" || word === "nice") {
+				while (index < words.length && words[index]?.value.startsWith("-")) index++;
+				if (index < words.length) index++;
+			} else if (word === "sudo") {
+				while (index < words.length && words[index]?.value.startsWith("-")) {
+					const option = words[index]?.value;
+					index += option === "-u" || option === "-g" || option === "--user" || option === "--group" ? 2 : 1;
+				}
+			} else if (word === "xargs") {
+				while (index < words.length && words[index]?.value.startsWith("-")) index++;
+			}
+		}
+		return false;
+	};
+	let segment: ShellToken[] = [];
+	for (const token of tokens) {
+		if (separators[token.value as keyof typeof separators] === true) {
+			if (segmentHasBd(segment)) return true;
+			segment = [];
+		} else segment.push(token);
+	}
+	return segmentHasBd(segment);
+}
+
 function commandHasBd(command: string): CommandBdInfo {
 	const parsed = parse(command);
 	const invocations = parsedInvocations(parsed);
 	if (invocations.length > 0) return { parsed, invocations, hasBd: true };
 	if (bdInvocations(command).length > 0) return { parsed, invocations, hasBd: true };
-	// A parse failure cannot prove that a command is unrelated to bd. Keep the
-	// fallback fail-safe for a likely bd token, while leaving ordinary commands
-	// untouched when parsing succeeded.
-	const likelyBd = parsed.unknown && /(?:^|[\s;&|])(?:[A-Za-z_][A-Za-z0-9_]*=)*bd(?:\s|$)/.test(command);
-	return { parsed, invocations, hasBd: likelyBd };
+	return { parsed, invocations, hasBd: likelyBdCommand(command) };
 }
 
 function hasExplicitPinText(command: string): boolean {
@@ -333,9 +385,8 @@ export function pinBashInput(input: unknown, pin: string | undefined): Record<st
 	const rewritten = rewriteUnnamedPin(command, pin);
 	if (rewritten === undefined) return undefined;
 	const next: Record<string, unknown> = { ...record, [commandKey]: rewritten };
-	// OMP 18.3 rejects env on an unnamed Bash call. A caller-supplied env is
-	// therefore not returned on this path; named services retain the old merge.
-	delete next.env;
+	// Keep caller fields untouched; foreground Bash rejects caller env without a
+	// name, which lets the caller see and correct its own invalid tool input.
 	return next;
 }
 

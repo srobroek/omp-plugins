@@ -1925,6 +1925,71 @@ function lifecycleBdEnvironment(cwd, base = process.env) {
     env.BEADS_DIR = resolved;
   return boundedBdEnvironment(env);
 }
+function likelyBdCommand(command) {
+  const tokens = tokenizeShell(command, { preserveBackslashes: true });
+  const separators = { ";": true, "&": true, "|": true, "\n": true, "(": true, ")": true, "{": true, "}": true };
+  const segmentHasBd = (words) => {
+    let index = 0;
+    while (index < words.length) {
+      const token = words[index];
+      if (!token || token.startsQuoted)
+        return false;
+      const word = token.value.split("/").pop() ?? token.value;
+      if (assignmentName(token.value) !== undefined || word === "!") {
+        index++;
+        continue;
+      }
+      if (["if", "then", "elif", "else", "while", "until", "do", "for", "in", "case", "function"].includes(word)) {
+        index++;
+        continue;
+      }
+      if (word === "bd")
+        return true;
+      if (!["command", "env", "exec", "mise", "nice", "nohup", "sudo", "time", "timeout", "xargs"].includes(word))
+        return false;
+      index++;
+      if (word === "env") {
+        while (index < words.length) {
+          const option = words[index];
+          if (!option || option.startsQuoted)
+            return false;
+          if (assignmentName(option.value) !== undefined) {
+            index++;
+            continue;
+          }
+          if (!option.value.startsWith("-"))
+            break;
+          const takesValue = option.value === "-u" || option.value === "--unset";
+          index += takesValue ? 2 : 1;
+        }
+      } else if (word === "timeout" || word === "nice") {
+        while (index < words.length && words[index]?.value.startsWith("-"))
+          index++;
+        if (index < words.length)
+          index++;
+      } else if (word === "sudo") {
+        while (index < words.length && words[index]?.value.startsWith("-")) {
+          const option = words[index]?.value;
+          index += option === "-u" || option === "-g" || option === "--user" || option === "--group" ? 2 : 1;
+        }
+      } else if (word === "xargs") {
+        while (index < words.length && words[index]?.value.startsWith("-"))
+          index++;
+      }
+    }
+    return false;
+  };
+  let segment = [];
+  for (const token of tokens) {
+    if (separators[token.value] === true) {
+      if (segmentHasBd(segment))
+        return true;
+      segment = [];
+    } else
+      segment.push(token);
+  }
+  return segmentHasBd(segment);
+}
 function commandHasBd(command) {
   const parsed = parse(command);
   const invocations = parsedInvocations(parsed);
@@ -1932,8 +1997,7 @@ function commandHasBd(command) {
     return { parsed, invocations, hasBd: true };
   if (bdInvocations(command).length > 0)
     return { parsed, invocations, hasBd: true };
-  const likelyBd = parsed.unknown && /(?:^|[\s;&|])(?:[A-Za-z_][A-Za-z0-9_]*=)*bd(?:\s|$)/.test(command);
-  return { parsed, invocations, hasBd: likelyBd };
+  return { parsed, invocations, hasBd: likelyBdCommand(command) };
 }
 function hasExplicitPinText(command) {
   const tokens = tokenizeShell(command, { preserveBackslashes: true });
@@ -2077,7 +2141,6 @@ function pinBashInput(input, pin) {
   if (rewritten === undefined)
     return;
   const next = { ...record, [commandKey]: rewritten };
-  delete next.env;
   return next;
 }
 function bashCallCwd(input, fallback) {

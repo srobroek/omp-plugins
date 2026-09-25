@@ -209,6 +209,14 @@ test("pins plain bd calls in command text and leaves non-bd calls alone", () => 
 	expect(pinBashInput({ command: "echo done" }, pin)).toBeUndefined();
 });
 
+test("uses export fallback when shell parsing cannot place bd", () => {
+	const pin = "/repo/.beads";
+	const expected = `export BEADS_DOLT_SHARED_SERVER= BEADS_DIR='${pin}';\n`;
+	expect(pinBashInput({ command: "if true; then bd list; fi" }, pin)).toEqual({ command: `${expected}if true; then bd list; fi` });
+	expect(pinBashInput({ command: "timeout 10 bd list" }, pin)).toEqual({ command: `${expected}timeout 10 bd list` });
+	expect(pinBashInput({ command: "echo bd list" }, pin)).toBeUndefined();
+});
+
 test("uses an export fallback for command substitutions", () => {
 	const pin = "/repo/.beads";
 	expect(pinBashInput({ command: "printf '%s' \"$(bd list)\"" }, pin)).toEqual({
@@ -228,7 +236,7 @@ test("keeps env merging for named services only", () => {
 		name: "bd-read",
 		env: { A: "1", BEADS_DOLT_SHARED_SERVER: "", BEADS_DIR: "/repo/.beads" },
 	});
-	expect(pinBashInput({ command: "bd list", env: { A: "1" } }, "/repo/.beads")).toEqual({ command: "BEADS_DOLT_SHARED_SERVER= BEADS_DIR='/repo/.beads' bd list" });
+	expect(pinBashInput({ command: "bd list", env: { A: "1" } }, "/repo/.beads")).toEqual({ command: `BEADS_DOLT_SHARED_SERVER= BEADS_DIR='/repo/.beads' bd list`, env: { A: "1" } });
 	expect(pinBashInput({ command: "bd list", env: "nope" }, "/repo/.beads")).toBeUndefined();
 });
 
