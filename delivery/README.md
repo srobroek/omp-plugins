@@ -31,7 +31,7 @@ Cleanup requires exact landing proof. The request must be merged at its recorded
 
 `merge_method` defaults to `squash` for compatibility. `merge` requests a real merge commit, and `rebase` requests a linear/rebased landing. Callers MUST choose the method from the project's documented landing policy; an explicit `merge` is refused when the forge reports `allow_merge_commit: false`, and an ambiguous policy MUST be resolved by the caller rather than guessed by the tool.
 
-The receipt's `proof.evidence` records `mergeMethod`, the observed `mergePolicy` when available, and `mergeShape`. A squash proof has one parent equal to the reviewed head and no reachability probe; a merge proof has two parents with the reviewed head as the second parent; a rebase proof has one parent and a successful `git merge-base --is-ancestor <head> <merge>` reachability check. The tool refuses a shape that does not match the selected method.
+The receipt's `proof.evidence` records `mergeMethod`, the observed `mergePolicy` when available, and `mergeShape`. A squash proof has one parent; a merge proof has two parents with the reviewed head as the second parent; a rebase proof has one parent and a successful `git merge-base --is-ancestor <head> <merge>` reachability check. For an already-`MERGED` request, no merge method was issued in this call, so the proof accepts one parent or two parents with the reviewed head second and records the observed shape. The tool refuses a shape that does not match the selected method when it issues the merge.
 
 ## Landing receipts
 

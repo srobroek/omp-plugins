@@ -352,7 +352,7 @@ type MergeShapeProof = { oid: string; parents: string[]; headReachable: boolean 
  */
 function mergeProof(
 	pr: PrObservation,
-	method: MergeMethod,
+	method: MergeMethod | null,
 	run: CliRunner,
 	cwd: string,
 	env: Readonly<Record<string, string>>,
@@ -367,6 +367,11 @@ function mergeProof(
 	const parents = text === "" ? [] : text.split(/\s+/);
 	if (parents.some(parent => !FULL_OID.test(parent))) {
 		return { reason: `git show -s --format=%P ${oid}: observed malformed parent ids ${show(text)}, expected full hexadecimal object ids` };
+	}
+	if (method === null) {
+		if (parents.length === 1) return { oid, parents, headReachable: null };
+		if (parents.length === 2 && parents[1]?.toLowerCase() === pr.headRefOid.trim().toLowerCase()) return { oid, parents, headReachable: null };
+		return { reason: `pre-merged request: observed ${parents.length} parents, expected one parent or two with the reviewed head as the second parent` };
 	}
 	if (method === "merge") {
 		if (parents.length !== 2) return { reason: `merge_method "merge": observed ${parents.length} parents, expected exactly 2 with the reviewed head as the second parent` };
@@ -696,7 +701,7 @@ export function landPullRequest(params: LandParams, deps: LandDeps = {}): LandOu
 		proved = second.pr;
 	}
 
-	const proof = mergeProof(proved, mergeMethod, run, cwd, gitEnv);
+	const proof = mergeProof(proved, alreadyMerged ? null : mergeMethod, run, cwd, gitEnv);
 	if ("reason" in proof) {
 		const source = alreadyMerged ? "the pull request read" : `the re-read after ${(mergeArgv ?? []).join(" ")}`;
 		return refuse(`${source}: ${proof.reason}; no receipt was written`);
