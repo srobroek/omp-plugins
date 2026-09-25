@@ -1871,6 +1871,8 @@ function wrapperInvocations(parsed) {
     }
     found.push({ args: [verb ?? "", ...args], verb });
   }
+  for (const child of parsed.nested)
+    found.push(...wrapperInvocations(child));
   return found;
 }
 function decideBdUnclaimParsed(parsed) {

@@ -63,6 +63,8 @@ function wrapperInvocations(parsed: ParsedCommand | ParseFailure): Array<{ args:
 		}
 		found.push({ args: [verb ?? "", ...args], verb });
 	}
+	// `$(...)`, backticks and `bash -c '...'` bodies parse into `nested`; wrappers inside them count too.
+	for (const child of parsed.nested) found.push(...wrapperInvocations(child));
 	return found;
 }
 

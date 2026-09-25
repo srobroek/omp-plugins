@@ -60,6 +60,15 @@ describe("bd unclaim gate", () => {
 		]) expect(decideBdUnclaim(command)?.block).toBe(true);
 	});
 
+	test("finds wrapped bd unclaim inside command substitution and bash -c", () => {
+		for (const command of [
+			"echo $(env -u X bd unclaim bead-1)",
+			"bash -c 'env -u X bd unclaim bead-1'",
+			"sh -c 'command -- bd unclaim bead-1'",
+		]) expect(decideBdUnclaim(command)?.block).toBe(true);
+		expect(decideBdUnclaim("bash -c 'env -u X bd unclaim bead-1 --if-assignee actor/x'")).toBeUndefined();
+	});
+
 	test("does not treat a positional help argument after -- as help", () => {
 		expect(decideBdUnclaim("bd unclaim bead-1 -- --help")?.block).toBe(true);
 	});
