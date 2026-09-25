@@ -1,6 +1,7 @@
 import type { ExtensionAPI, ExtensionContext, ToolCallEvent } from "@oh-my-pi/pi-coding-agent";
 
 type BashInput = { command?: unknown; cmd?: unknown; cwd?: unknown };
+type EvalInput = { language?: unknown; code?: unknown };
 type Decision = { block: true; reason: string } | undefined;
 
 const MERGE_RETRY = "wt merge <target> --no-squash --no-ff";
@@ -45,10 +46,9 @@ function words(segment: string): string[] {
 
 const GLOBAL_VALUE_OPTIONS: Record<string, true> = { "-C": true, "--config": true, "--config-set": true };
 
-function targetAndFlags(
-	segment: string,
-): { target: string | null; noSquash: boolean; noFf: boolean; workdir: string | null } | null {
-	const argv = words(segment);
+type MergeInvocation = { target: string | null; noSquash: boolean; noFf: boolean; workdir: string | null };
+
+function parseTargetAndFlags(argv: string[]): MergeInvocation | null {
 	const wtIndex = argv.findIndex(word => word.split("/").pop() === "wt");
 	if (wtIndex < 0) return null;
 	// Global options may precede the subcommand: `wt -C DIR merge TARGET`.
@@ -75,6 +75,55 @@ function targetAndFlags(
 		if (target === null) target = arg;
 	}
 	return { target, noSquash, noFf, workdir };
+}
+
+const EVAL_MERGE_REFUSAL = "run the merge through the bash tool from the source worktree; retry with `wt merge <target> --no-squash --no-ff` for worker-to-epic merges, or `wt merge` for the default branch";
+
+function evalMergeInvocations(code: string): { invocations: MergeInvocation[]; unparseable: boolean } {
+	const invocations: MergeInvocation[] = [];
+	const listPattern = /\[((?:\s*(?:"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|`(?:\\.|[^`\\])*`)\s*,?)+)\]/g;
+	for (const match of code.matchAll(listPattern)) {
+		const body = match[1] ?? "";
+		const pieces = body.split(",").map(piece => piece.trim()).filter(Boolean);
+		const argv: string[] = [];
+		let valid = pieces.length > 0;
+		for (const piece of pieces) {
+			const quote = piece[0];
+			if ((quote !== "'" && quote !== '"' && quote !== "`") || piece.at(-1) !== quote) {
+				valid = false;
+				break;
+			}
+			argv.push(piece.slice(1, -1).replace(/\\(.)/g, "$1"));
+		}
+		if (valid) {
+			const invocation = parseTargetAndFlags(argv);
+			if (invocation) invocations.push(invocation);
+		}
+	}
+	const stringPattern = /(['"`])((?:\\.|(?!\1)[\s\S])*?)\1/g;
+	for (const match of code.matchAll(stringPattern)) {
+		const invocation = parseTargetAndFlags(words(match[2] ?? ""));
+		if (invocation) invocations.push(invocation);
+	}
+	const executable = /(?:subprocess|os\.system|shlex|Bun\.\$|(?:spawn|exec|run|call|Popen)\s*\()/i.test(code);
+	const directVariable = /\[\s*(['"`])wt\1\s*,\s*([A-Za-z_$][\w$]*)/.exec(code)?.[2];
+	const mergeAssignment = /\b([A-Za-z_$][\w$]*)\s*=\s*(['"`])merge\2/.exec(code)?.[1];
+	const variablePair = directVariable !== undefined && directVariable === mergeAssignment;
+	const wtVariable = /\b([A-Za-z_$][\w$]*)\s*=\s*(['"`])wt\2/.exec(code)?.[1];
+	const variableList = wtVariable !== undefined && mergeAssignment !== undefined && new RegExp(`\\[[^\\]]*\\b${wtVariable}\\b[^\\]]*\\b${mergeAssignment}\\b`).test(code);
+	const splitDynamic = /(?:(['"`])w\1\s*\+\s*(['"`])t\2\s*(?:\+\s*)?(?:merge|(['"`])merge\3)|(['"`])w\4\s*\+\s*(['"`])t\s+merge\5)/.test(code);
+	const splitArgvDynamic = /(['"`])w\1\s*\+\s*(['"`])t\2\s*,\s*(['"`])merge\3/.test(code);
+	const dynamic = executable && (variablePair || variableList || splitDynamic || splitArgvDynamic);
+	return { invocations, unparseable: dynamic };
+}
+
+export function decideEvalMergePolicy(code: string): Decision {
+	const detected = evalMergeInvocations(code);
+	if (detected.unparseable) return { block: true, reason: EVAL_MERGE_REFUSAL };
+	for (const invocation of detected.invocations) {
+		if (!invocation.noSquash || !invocation.noFf) return { block: true, reason: EVAL_MERGE_REFUSAL };
+	}
+	return undefined;
 }
 
 function commandCwd(command: string, cwd: string): string {
@@ -104,7 +153,7 @@ export function decideMergePolicy(
 	wtRunner: WtRunner = defaultWtRunner,
 ): Decision {
 	for (const segment of shellSegments(command)) {
-		const invocation = targetAndFlags(segment);
+		const invocation = parseTargetAndFlags(words(segment));
 		if (!invocation || invocation.target === null) continue;
 		const shellCwd = commandCwd(command, cwd);
 		const repoCwd = invocation.workdir
@@ -128,6 +177,10 @@ export function decideMergePolicy(
 
 export default function mergePolicyGate(pi: ExtensionAPI): void {
 	pi.on("tool_call", (event: ToolCallEvent, ctx: ExtensionContext) => {
+		if (event.toolName === "eval") {
+			const input = event.input as EvalInput;
+			return typeof input.code === "string" ? decideEvalMergePolicy(input.code) : undefined;
+		}
 		if (event.toolName !== "bash") return undefined;
 		const input = event.input as BashInput;
 		const command = typeof input.command === "string" ? input.command : typeof input.cmd === "string" ? input.cmd : "";

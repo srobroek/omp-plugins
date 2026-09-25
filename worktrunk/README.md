@@ -12,7 +12,13 @@ directory-discovered skill.
 Blocks worker-to-epic `wt merge` calls unless they include both `--no-squash` and `--no-ff`,
 and unless they run from the source worktree: `wt merge <target>` merges the current branch,
 so a call whose current branch is the target (or unreadable, such as a detached HEAD) is
-refused. Merges to the repository default branch are unchanged.
+refused. Merges to the repository default branch are unchanged when run through `bash`.
+
+The same policy covers `eval` code. A statically detectable merge with both history flags is
+allowed; an unflagged or dynamically constructed merge is blocked because the eval gate cannot
+resolve its target or working directory. Retry through `bash` from the source worktree with
+`wt merge <target> --no-squash --no-ff` for worker-to-epic merges, or plain `wt merge` for the
+default branch.
 
 
 ### `isolation-precheck`
