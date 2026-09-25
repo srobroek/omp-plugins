@@ -43,8 +43,16 @@ import {
 import { embeddedWriteTargets, withEmbeddedWriteLock, writesStore } from "./bd-embedded-write-lock.ts";
 import { claimedIds, claimedTextIds, claimResultOutput } from "./bd-lease-gate.ts";
 import { repoIdentity, sessionPinFor } from "./beads-store.ts";
-import { closeInvocations } from "./shell-command.ts";
-import { tokenizeShell } from "./shell-tokenizer.ts";
+import {
+	type CommandPosition,
+	closeInvocations,
+	commandSegments,
+	type ParsedCommand,
+	type ParsedInvocation,
+	parse,
+	parsedInvocations,
+} from "./shell-command.ts";
+import { type ShellToken, tokenizeShell } from "./shell-tokenizer.ts";
 
 /**
  * Variables the plugin wins on, in every environment it shapes for bd.
@@ -56,9 +64,8 @@ import { tokenizeShell } from "./shell-tokenizer.ts";
  * per-call opt-in, which is why this differs from `BEADS_DIR`: that one selects
  * which store to use, so a caller's value is honoured.
  *
- * Cleared to the empty string, not deleted: `pinBashInput` writes an overlay
- * onto a bash call, where a deleted key still inherits the shell's value. bd
- * reads the empty string as unset.
+ * Cleared to the empty string in environments shaped for named services. For
+ * foreground calls, the same values are emitted as command-local assignments.
  */
 const EMBEDDED_PIN_ENV: Readonly<Record<string, string>> = { BEADS_DOLT_SHARED_SERVER: "" };
 
@@ -178,15 +185,188 @@ export function sessionPinAfter(result: AutoPinResult, cwd: string, env: NodeJS.
 }
 
 /**
- * Add the session pin to a bash call that carries no `BEADS_DIR` of its own.
+ * Add the session pin to the `bd` invocations in a bash call.
  *
- * The persistent shell of an interactive session is spawned before `session_start`
- * runs, so a value placed on `process.env` never reaches it; the call's own `env`
- * does. A caller-supplied `BEADS_DIR` is left alone. The same call carries
- * `EMBEDDED_PIN_ENV`, so a shell that exported shared-server mode still reaches
- * the pinned embedded store; a call that pins its own `BEADS_DIR` shapes its own
- * environment and is left untouched, escape included.
+ * OMP's Bash tool only accepts `env` for supervised services (calls with a
+ * `name`). Foreground calls therefore carry the pin in shell text instead.
+ * The parser identifies command-position invocations; source offsets come from
+ * the original command segments so all caller text remains byte-for-byte.
  */
+type CommandBdInfo = { parsed: ParsedCommand; invocations: ParsedInvocation[]; hasBd: boolean };
+
+function likelyBdCommand(command: string): boolean {
+	const tokens = tokenizeShell(command, { preserveBackslashes: true });
+	const separators = { ";": true, "&": true, "|": true, "\n": true, "(": true, ")": true, "{": true, "}": true };
+	const segmentHasBd = (words: ShellToken[]): boolean => {
+		let index = 0;
+		while (index < words.length) {
+			const token = words[index];
+			if (!token || token.startsQuoted) return false;
+			const word = token.value.split("/").pop() ?? token.value;
+			if (assignmentName(token.value) !== undefined || word === "!") {
+				index++;
+				continue;
+			}
+			if (["if", "then", "elif", "else", "while", "until", "do", "for", "in", "case", "function"].includes(word)) {
+				index++;
+				continue;
+			}
+			if (word === "bd") return true;
+			if (!["command", "env", "exec", "mise", "nice", "nohup", "sudo", "time", "timeout", "xargs"].includes(word)) return false;
+			index++;
+			if (word === "env") {
+				while (index < words.length) {
+					const option = words[index];
+					if (!option || option.startsQuoted) return false;
+					if (assignmentName(option.value) !== undefined) {
+						index++;
+						continue;
+					}
+					if (!option.value.startsWith("-")) break;
+					const takesValue = option.value === "-u" || option.value === "--unset";
+					index += takesValue ? 2 : 1;
+				}
+			} else if (word === "timeout" || word === "nice") {
+				while (index < words.length && words[index]?.value.startsWith("-")) index++;
+				if (index < words.length) index++;
+			} else if (word === "sudo") {
+				while (index < words.length && words[index]?.value.startsWith("-")) {
+					const option = words[index]?.value;
+					index += option === "-u" || option === "-g" || option === "--user" || option === "--group" ? 2 : 1;
+				}
+			} else if (word === "xargs") {
+				while (index < words.length && words[index]?.value.startsWith("-")) index++;
+			}
+		}
+		return false;
+	};
+	let segment: ShellToken[] = [];
+	for (const token of tokens) {
+		if (separators[token.value as keyof typeof separators] === true) {
+			if (segmentHasBd(segment)) return true;
+			segment = [];
+		} else segment.push(token);
+	}
+	return segmentHasBd(segment);
+}
+
+function commandHasBd(command: string): CommandBdInfo {
+	const parsed = parse(command);
+	const invocations = parsedInvocations(parsed);
+	if (invocations.length > 0) return { parsed, invocations, hasBd: true };
+	if (bdInvocations(command).length > 0) return { parsed, invocations, hasBd: true };
+	return { parsed, invocations, hasBd: likelyBdCommand(command) };
+}
+
+function hasExplicitPinText(command: string): boolean {
+	const tokens = tokenizeShell(command, { preserveBackslashes: true });
+	for (let index = 0; index < tokens.length; index++) {
+		const token = tokens[index];
+		if (!token || token.startsQuoted || token.value !== "env") continue;
+		for (let option = index + 1; option < tokens.length; option++) {
+			const value = tokens[option];
+			if (!value || [";", "&&", "||", "&", "|", "\n", "(", ")", "{", "}"].includes(value.value)) break;
+			if (pinVariable(assignmentName(value.value))) return true;
+			if (value.value === "-u" || value.value === "--unset") {
+				if (pinVariable(tokens[option + 1]?.value)) return true;
+				option++;
+			} else if (value.value.startsWith("-u") && pinVariable(value.value.slice(2))) {
+				return true;
+			} else if (value.value.startsWith("--unset=") && pinVariable(value.value.slice("--unset=".length))) {
+				return true;
+			}
+		}
+	}
+	return false;
+}
+
+function pinVariable(name: string | undefined): boolean {
+	return name === "BEADS_DIR" || name === "BEADS_DOLT_SHARED_SERVER";
+}
+
+function assignmentName(value: string): string | undefined {
+	return /^([A-Za-z_][A-Za-z0-9_]*)=/.exec(value)?.[1];
+}
+
+/** An invocation explicitly chooses its own Beads routing and must not be overridden. */
+function hasExplicitPin(position: CommandPosition): boolean {
+	const words = position.words;
+	const executable = position.executable?.split("/").pop();
+	const executableIndex = words.findIndex(word => !word.quoted && (word.value.split("/").pop() ?? word.value) === executable);
+	if (executableIndex < 0) return false;
+	for (const word of words.slice(0, executableIndex)) {
+		if (pinVariable(assignmentName(word.value))) return true;
+	}
+	for (let index = 0; index < executableIndex; index++) {
+		const word = words[index];
+		if (!word || word.quoted || word.value !== "env") continue;
+		for (let option = index + 1; option < executableIndex; option++) {
+			const value = words[option];
+			if (!value || value.quoted) continue;
+			if (value.value === "-u" || value.value === "--unset") {
+				if (pinVariable(words[option + 1]?.value)) return true;
+				option++;
+			} else if (value.value.startsWith("-u") && pinVariable(value.value.slice(2))) {
+				return true;
+			} else if (value.value.startsWith("--unset=") && pinVariable(value.value.slice("--unset=".length))) {
+				return true;
+			}
+		}
+	}
+	return false;
+}
+
+function safeDirectBd(position: CommandPosition): boolean {
+	if ((position.executable?.split("/").pop() ?? position.executable) !== "bd") return false;
+	const executableIndex = position.words.findIndex(word => !word.quoted && (word.value.split("/").pop() ?? word.value) === "bd");
+	if (executableIndex < 0) return false;
+	return position.words.slice(0, executableIndex).every(word => assignmentName(word.value) !== undefined);
+}
+
+function unsafePinSyntax(command: string): boolean {
+	// Functions, substitutions, subshells, process substitutions, and heredocs
+	// need shell evaluation beyond a command-position prefix. Exporting on the
+	// first line is safe for all of these forms.
+	return /[(){}]|`|\$\(|<<-?/.test(command);
+}
+
+function exportPin(command: string, pin: string): string {
+	// Bash tool shells are persistent, so this export persists; the pin is
+	// recomputed for every bd call and therefore remains current.
+	return `export BEADS_DOLT_SHARED_SERVER= BEADS_DIR=${shellQuote(pin)};\n${command}`;
+}
+
+function rewriteUnnamedPin(command: string, pin: string): string | undefined {
+	const { parsed, invocations, hasBd } = commandHasBd(command);
+	if (!hasBd) return undefined;
+	if (invocations.some(invocation => hasExplicitPin(invocation.position)) || hasExplicitPinText(command)) return undefined;
+	if (invocations.length === 0 || parsed.unknown || parsed.nested.length > 0 || unsafePinSyntax(command)) return exportPin(command, pin);
+
+	const insertions: number[] = [];
+	let cursor = 0;
+	let found = 0;
+	for (const segment of commandSegments(command)) {
+		const start = command.indexOf(segment, cursor);
+		if (start < 0) return exportPin(command, pin);
+		cursor = start + segment.length;
+		const segmentParsed = parse(segment);
+		if (segmentParsed.unknown || segmentParsed.nested.length > 0 || segmentParsed.commands.length === 0) continue;
+		const position = segmentParsed.commands[0];
+		if (!position || (position.executable?.split("/").pop() ?? position.executable) !== "bd") continue;
+		found++;
+		if (!safeDirectBd(position)) return exportPin(command, pin);
+		const offset = segment.search(/\S/);
+		if (offset < 0) return exportPin(command, pin);
+		insertions.push(start + offset);
+	}
+	if (found !== invocations.length) return exportPin(command, pin);
+	if (insertions.length === 0) return undefined;
+	const prefix = `BEADS_DOLT_SHARED_SERVER= BEADS_DIR=${shellQuote(pin)} `;
+	let rewritten = command;
+	for (const offset of insertions.sort((a, b) => b - a)) rewritten = `${rewritten.slice(0, offset)}${prefix}${rewritten.slice(offset)}`;
+	return rewritten;
+}
+
 export function pinBashInput(input: unknown, pin: string | undefined): Record<string, unknown> | undefined {
 	if (pin === undefined || input === null || typeof input !== "object") return undefined;
 	const record = input as Record<string, unknown>;
@@ -194,7 +374,20 @@ export function pinBashInput(input: unknown, pin: string | undefined): Record<st
 	if (env !== undefined && (env === null || typeof env !== "object" || Array.isArray(env))) return undefined;
 	const current = (env as Record<string, unknown> | undefined)?.BEADS_DIR;
 	if (typeof current === "string" && current !== "") return undefined;
-	return { ...record, env: { ...((env as Record<string, unknown> | undefined) ?? {}), ...EMBEDDED_PIN_ENV, BEADS_DIR: pin } };
+	const commandKey = typeof record.command === "string" ? "command" : typeof record.cmd === "string" ? "cmd" : undefined;
+	if (commandKey === undefined) return undefined;
+	const command = record[commandKey] as string;
+	const { hasBd } = commandHasBd(command);
+	if (!hasBd) return undefined;
+	if (typeof record.name === "string" && record.name !== "") {
+		return { ...record, env: { ...((env as Record<string, unknown> | undefined) ?? {}), ...EMBEDDED_PIN_ENV, BEADS_DIR: pin } };
+	}
+	const rewritten = rewriteUnnamedPin(command, pin);
+	if (rewritten === undefined) return undefined;
+	const next: Record<string, unknown> = { ...record, [commandKey]: rewritten };
+	// Keep caller fields untouched; foreground Bash rejects caller env without a
+	// name, which lets the caller see and correct its own invalid tool input.
+	return next;
 }
 
 function bashCallCwd(input: unknown, fallback: string): string {
@@ -1204,6 +1397,16 @@ export function rewriteBashInput(input: unknown, ctx: ExtensionContext): Record<
 	const pin = pinnedBeadsDir(cwd, ctx);
 	return pinBashInput(input, pin === "" ? undefined : pin);
 }
+/** Resolve command-local Beads assignments for internal gate checks without returning tool env. */
+function environmentForBashInput(input: unknown, source: unknown = input): NodeJS.ProcessEnv {
+	const env = environmentForInput(source as ToolCallEvent["input"]);
+	const command = extractCommand(input ?? {});
+	for (const invocation of bdInvocations(command)) {
+		const assignment = invocation.prefix.findLast(token => token.startsWith("BEADS_DIR="));
+		if (assignment !== undefined) env.BEADS_DIR = assignment.slice("BEADS_DIR=".length);
+	}
+	return env;
+}
 
 /**
  * Whether a mutating bd command may run yet.
@@ -1241,7 +1444,7 @@ export async function admitBdMutation(input: unknown, ctx: ExtensionContext, tar
 	// the mutation will actually receive after the lifecycle applies its per-session pin.
 	const effectiveInput = rewriteBashInput(input, ctx) ?? input;
 	const cwd = bashCallCwd(effectiveInput, ctx?.cwd ?? process.cwd());
-	const env = environmentForInput(effectiveInput as ToolCallEvent["input"]);
+	const env = environmentForBashInput(effectiveInput, input);
 	const writeTargets = embeddedWriteTargets(command, cwd, env);
 	if (writeTargets.kind === "refused") return { block: true, reason: writeTargets.reason };
 	const direct = writes.length === 1 ? writes[0] : undefined;
@@ -1406,7 +1609,7 @@ export default function sessionBeadsLifecycle(pi: ExtensionAPI): void {
 				state.bdWrote = true;
 				const effectiveInput = rewriteBashInput(input, ctx) ?? input;
 				const cwd = bashCallCwd(effectiveInput, ctx?.cwd ?? process.cwd());
-				const env = environmentForInput(effectiveInput as ToolCallEvent["input"]);
+				const env = environmentForBashInput(effectiveInput, input);
 				for (const actor of actorValues(command, env)) state.actors.add(actor);
 				for (const id of beadIdCandidates(command)) state.touched.add(id);
 				if (commandSucceeded(event)) recordClaimTransitions(state, command, cwd, env, event, invocations);

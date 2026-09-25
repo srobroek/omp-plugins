@@ -200,24 +200,52 @@ describe("pinBashInput", () => {
 		rmSync(plain, { recursive: true, force: true });
 	});
 
-	test("adds the session pin to a bash call, keeps a caller pin, ignores malformed env", () => {
-		expect(pinBashInput({ command: "bd list" }, "/repo/.beads")).toEqual({ command: "bd list", env: { BEADS_DOLT_SHARED_SERVER: "", BEADS_DIR: "/repo/.beads" } });
-		expect(pinBashInput({ command: "bd list", env: { A: "1" } }, "/repo/.beads")).toEqual({ command: "bd list", env: { A: "1", BEADS_DOLT_SHARED_SERVER: "", BEADS_DIR: "/repo/.beads" } });
-		expect(pinBashInput({ command: "bd list", env: { BEADS_DIR: "/mine/.beads" } }, "/repo/.beads")).toBeUndefined();
-		expect(pinBashInput({ command: "bd list" }, undefined)).toBeUndefined();
-		expect(pinBashInput({ command: "bd list", env: "nope" }, "/repo/.beads")).toBeUndefined();
-	});
+test("pins plain bd calls in command text and leaves non-bd calls alone", () => {
+	const pin = "/repo/.beads";
+	const prefix = `BEADS_DOLT_SHARED_SERVER= BEADS_DIR='${pin}' `;
+	expect(pinBashInput({ command: "bd list" }, pin)).toEqual({ command: `${prefix}bd list` });
+	expect(pinBashInput({ command: "cd x && bd show a | jq ." }, pin)).toEqual({ command: `cd x && ${prefix}bd show a | jq .` });
+	expect(pinBashInput({ command: "bd list && bd show a" }, pin)).toEqual({ command: `${prefix}bd list && ${prefix}bd show a` });
+	expect(pinBashInput({ command: "echo done" }, pin)).toBeUndefined();
+});
 
-	test("clears a shared-server export the call carries against the committed embedded pin", () => {
-		expect(pinBashInput({ command: "bd show x", env: { BEADS_DOLT_SHARED_SERVER: "true" } }, "/repo/.beads"))
-			.toEqual({ command: "bd show x", env: { BEADS_DOLT_SHARED_SERVER: "", BEADS_DIR: "/repo/.beads" } });
-	});
+test("uses export fallback when shell parsing cannot place bd", () => {
+	const pin = "/repo/.beads";
+	const expected = `export BEADS_DOLT_SHARED_SERVER= BEADS_DIR='${pin}';\n`;
+	expect(pinBashInput({ command: "if true; then bd list; fi" }, pin)).toEqual({ command: `${expected}if true; then bd list; fi` });
+	expect(pinBashInput({ command: "timeout 10 bd list" }, pin)).toEqual({ command: `${expected}timeout 10 bd list` });
+	expect(pinBashInput({ command: "echo bd list" }, pin)).toBeUndefined();
+});
 
-	test("a caller that pins its own store is left alone, shared-server value included", () => {
-		expect(pinBashInput({ command: "bd show x", env: { BEADS_DOLT_SHARED_SERVER: "true", BEADS_DIR: "/mine/.beads" } }, "/repo/.beads")).toBeUndefined();
+test("uses an export fallback for command substitutions", () => {
+	const pin = "/repo/.beads";
+	expect(pinBashInput({ command: "printf '%s' \"$(bd list)\"" }, pin)).toEqual({
+		command: `export BEADS_DOLT_SHARED_SERVER= BEADS_DIR='${pin}';\nprintf '%s' "$(bd list)"`,
 	});
 });
 
+test("leaves explicit command-local and env-unset routing alone", () => {
+	expect(pinBashInput({ command: "BEADS_DIR='/mine/.beads' bd list" }, "/repo/.beads")).toBeUndefined();
+	expect(pinBashInput({ command: "env -u BEADS_DIR bd list" }, "/repo/.beads")).toBeUndefined();
+	expect(pinBashInput({ command: "bd list", env: { BEADS_DIR: "/mine/.beads" } }, "/repo/.beads")).toBeUndefined();
+});
+
+test("keeps env merging for named services only", () => {
+	expect(pinBashInput({ command: "bd list", name: "bd-read", env: { A: "1" } }, "/repo/.beads")).toEqual({
+		command: "bd list",
+		name: "bd-read",
+		env: { A: "1", BEADS_DOLT_SHARED_SERVER: "", BEADS_DIR: "/repo/.beads" },
+	});
+	expect(pinBashInput({ command: "bd list", env: { A: "1" } }, "/repo/.beads")).toEqual({ command: `BEADS_DOLT_SHARED_SERVER= BEADS_DIR='/repo/.beads' bd list`, env: { A: "1" } });
+	expect(pinBashInput({ command: "bd list", env: "nope" }, "/repo/.beads")).toBeUndefined();
+});
+
+test("shell-quotes pin paths containing spaces and quotes", () => {
+	const pin = "/repo/with spaces/it's beads";
+	expect(pinBashInput({ command: "bd list" }, pin)).toEqual({ command: "BEADS_DOLT_SHARED_SERVER= BEADS_DIR='/repo/with spaces/it'\\''s beads' bd list" });
+});
+
+});
 describe("lifecycleBdEnvironment", () => {
 	test("sets embedded-store safety flags without inheriting a foreign store or shared-server mode", () => {
 		const cwd = mkdtempSync(join(tmpdir(), "beads-lifecycle-env-"));
@@ -721,22 +749,21 @@ describe.serial("integration", () => {
 			},
 		};
 		sessionBeadsLifecycle(fakePi as never);
-bashGates(fakePi as never);
+		bashGates(fakePi as never);
 		return { handlers, logged };
 	};
-	/**
-	 * The `BEADS_DIR` a `tool_call` rewrite pins, narrowed rather than asserted.
-	 *
-	 * Each step throws on a shape the hook should never return, so a changed return
-	 * type fails the test loudly instead of being read through an unchecked cast.
-	 */
+	/** Extract the `BEADS_DIR` command-local assignment returned for foreground bd calls. */
 	const pinnedBeadsDir = (result: unknown): unknown => {
 		if (!(result && typeof result === "object" && "input" in result)) throw new Error("the hook did not rewrite the call");
 		const { input } = result;
-		if (!(input && typeof input === "object" && "env" in input)) throw new Error("the rewritten call carries no env");
-		const { env } = input;
-		if (!(env && typeof env === "object" && "BEADS_DIR" in env)) throw new Error("the rewritten env carries no BEADS_DIR");
-		return env.BEADS_DIR;
+		if (!input || typeof input !== "object") throw new Error("the hook returned malformed input");
+		const env = (input as Record<string, unknown>).env;
+		if (env && typeof env === "object" && "BEADS_DIR" in env) return (env as Record<string, unknown>).BEADS_DIR;
+		const command = (input as Record<string, unknown>).command;
+		if (typeof command !== "string") throw new Error("the rewritten call carries no command");
+		const match = /BEADS_DIR='([^']*)'/.exec(command);
+		if (!match) throw new Error("the rewritten command carries no BEADS_DIR");
+		return match[1];
 	};
   test.serial("accepts a classified failure from the bd seam", async () => {
     setBdStreamForTests(async () => ({ failure: "bd exited with code 1: Error 1045 (28000): Access denied" }));
@@ -1521,9 +1548,7 @@ bashGates(fakePi as never);
 			const { handlers } = wire();
 			const call = handlers.tool_call![0]!;
 			const ctx = { cwd: root, sessionManager: { getSessionId: () => "pin-session" } };
-			expect(await call({ toolName: "bash", toolCallId: "1", input: { command: "printenv BEADS_DIR" } }, ctx)).toEqual({
-				input: { command: "printenv BEADS_DIR", env: { BEADS_DIR: join(root, ".beads"), BEADS_DOLT_SHARED_SERVER: "" } },
-			});
+			expect(await call({ toolName: "bash", toolCallId: "1", input: { command: "printenv BEADS_DIR" } }, ctx)).toBeUndefined();
 			expect(await call({ toolName: "read", toolCallId: "2", input: { path: "x" } }, ctx)).toBeUndefined();
 			const human = mkdtempSync(join(tmpdir(), "beads-callpin-human-"));
 			mkdirSync(join(human, ".beads"));
@@ -2010,7 +2035,7 @@ printf '%s\\n' '{"data":[{"id":"bd-bad"}],"schema_version":1}'
 			const ctx = { cwd: dir, sessionManager: { getSessionId: () => "manifest-pin" } };
 			await handlers.session_start?.[0]?.({}, ctx);
 			const result = await handlers.tool_call?.[0]?.({ toolName: "bash", input: { command: "bd list", cwd: dir } }, ctx);
-			expect(result).toMatchObject({ input: { env: { BEADS_DIR: join(dir, ".beads") } } });
+			expect(result).toMatchObject({ input: { command: `BEADS_DOLT_SHARED_SERVER= BEADS_DIR='${join(dir, ".beads")}' bd list` } });
 		} finally {
 			delete globals[bridgeKey];
 			rmSync(dir, { recursive: true, force: true });
