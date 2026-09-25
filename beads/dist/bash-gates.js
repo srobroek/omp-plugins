@@ -1792,6 +1792,117 @@ async function decideEmbeddedWrite(parsed, event, ctx, deadline = Date.now() + 2
   }
 }
 
+// extensions/bd-unclaim-gate.ts
+var UNCLAIM = "unclaim";
+var HELP_FLAGS = { "--help": true, "-h": true };
+var IF_ASSIGNEE = "--if-assignee";
+var GLOBAL_VALUE_FLAGS = { "--actor": true, "--database": true, "--db": true, "-C": true, "--directory": true };
+function hasNonEmptyAssignee(args) {
+  for (let index = 0;index < args.length; index++) {
+    const token = args[index];
+    if (token === undefined)
+      continue;
+    if (token === IF_ASSIGNEE) {
+      const value = args[index + 1];
+      if (value !== undefined && value.length > 0 && !value.startsWith("-"))
+        return true;
+      index++;
+      continue;
+    }
+    if (token.startsWith(`${IF_ASSIGNEE}=`) && token.slice(IF_ASSIGNEE.length + 1).length > 0)
+      return true;
+  }
+  return false;
+}
+function wrapperInvocations(parsed) {
+  if (parsed.unknown)
+    return [];
+  const found = [];
+  for (const position of parsed.commands) {
+    const locate = (start) => {
+      const token = position.argv[start];
+      if (token === undefined)
+        return;
+      const basename = token.split("/").pop() ?? token;
+      if (basename === "bd" && position.words[start]?.quoted !== true)
+        return position.argv.slice(start + 1);
+      if (basename === "env") {
+        let index = start + 1;
+        while (index < position.argv.length) {
+          const option = position.argv[index];
+          if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(option)) {
+            index++;
+            continue;
+          }
+          if (option === "--")
+            return locate(index + 1);
+          if (!option.startsWith("-"))
+            break;
+          index++;
+          if (["-u", "--unset", "-C", "--chdir", "--argv0"].includes(option))
+            index++;
+        }
+        return locate(index);
+      }
+      if (basename === "command") {
+        let index = start + 1;
+        while (position.argv[index]?.startsWith("-") === true)
+          index++;
+        return locate(index);
+      }
+      return;
+    };
+    const args = locate(0);
+    if (args === undefined)
+      continue;
+    let verb;
+    for (let cursor = 0;cursor < args.length; cursor++) {
+      const token = args[cursor];
+      if (token === undefined || token === "--") {
+        verb = args[cursor + 1];
+        break;
+      }
+      if (!token.startsWith("-")) {
+        verb = token;
+        break;
+      }
+      if (!token.includes("=") && GLOBAL_VALUE_FLAGS[token] === true)
+        cursor++;
+    }
+    found.push({ args: [verb ?? "", ...args], verb });
+  }
+  for (const child of parsed.nested)
+    found.push(...wrapperInvocations(child));
+  return found;
+}
+function decideBdUnclaimParsed(parsed) {
+  if (parsed.unknown)
+    return;
+  const invocations = [...parsedInvocations(parsed), ...wrapperInvocations(parsed)];
+  for (const invocation of invocations) {
+    if (invocation.verb?.toLowerCase() !== UNCLAIM)
+      continue;
+    let help = false;
+    for (const argument of invocation.args) {
+      if (argument === "--")
+        break;
+      if (HELP_FLAGS[argument] === true) {
+        help = true;
+        break;
+      }
+    }
+    if (help)
+      continue;
+    if (!hasNonEmptyAssignee(invocation.args)) {
+      return {
+        block: true,
+        reason: "bd unclaim requires a non-empty --if-assignee compare-and-swap guard"
+      };
+    }
+  }
+  return;
+}
+
 // extensions/session-beads-lifecycle.ts
 import { existsSync as existsSync2, readFileSync as readFileSync3, realpathSync as realpathSync3, rmSync, statSync as statSync3 } from "fs";
 import { dirname as dirname3, isAbsolute as isAbsolute3, join as join2, resolve as resolve5 } from "path";
@@ -1967,6 +2078,11 @@ async function decide(parsed, event, ctx, pi, deadline) {
       const reason = error instanceof Error ? error.message : String(error);
       return suffix("bd-close-gate", reason, "retry after the Beads lookup is available; the close was refused without gate proof");
     }
+  }
+  if (settingsEnabled("beads", "bd-unclaim-gate", cwd)) {
+    const unclaim = decideBdUnclaimParsed(parsed);
+    if (unclaim !== undefined)
+      return suffix("bd-unclaim-gate", unclaim.reason, "retry with `bd unclaim <id> --if-assignee <your actor>`");
   }
   if (settingsEnabled("beads", "bd-actor-gate", cwd)) {
     const actor = decideActorParsed(parsed, env);
