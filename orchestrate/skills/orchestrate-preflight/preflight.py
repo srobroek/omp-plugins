@@ -61,28 +61,35 @@ def run_command(argv: list[str], timeout: float = 30.0) -> CommandResult:
 
 
 def command_error(result: CommandResult) -> str:
-    message = result.stderr.strip() or result.stdout.strip()
-    if not message:
-        message = f"exit status {result.returncode}"
-    return message.splitlines()[-1][:300]
+    for stream in (result.stderr, result.stdout):
+        if isinstance(stream, str) and stream.strip():
+            return stream.strip().splitlines()[-1][:300]
+    for stream in (result.stderr, result.stdout):
+        if stream is not None and not isinstance(stream, str):
+            return f"non-text {type(stream).__name__} output"
+    return f"exit status {result.returncode}"
 
 
-def decode_json(text: str) -> Any:
+def decode_json(text: Any) -> Any:
+    if not isinstance(text, str):
+        raise ValueError("output was not text")
     text = text.strip()
     if not text:
         raise ValueError("empty output")
     try:
         return json.loads(text)
     except json.JSONDecodeError:
-        # A CLI may print an informational line before its JSON result. Accept
-        # only a complete JSON value from a later line, never a partial object.
-        for line in reversed(text.splitlines()):
-            candidate = line.strip()
-            if candidate.startswith(("{", "[")):
-                try:
-                    return json.loads(candidate)
-                except json.JSONDecodeError:
-                    continue
+        decoder = json.JSONDecoder()
+        for index, char in enumerate(text):
+            if char not in "{[":
+                continue
+            try:
+                value, end = decoder.raw_decode(text[index:])
+            except json.JSONDecodeError:
+                continue
+            if text[index + end :].strip():
+                raise ValueError("trailing output after JSON")
+            return value
         raise ValueError("output was not JSON")
 
 
@@ -95,22 +102,13 @@ def check(check_id: str, status: str, detail: str, fix: str | None = None) -> di
 def bool_value(value: Any) -> bool | None:
     if isinstance(value, bool):
         return value
-    if isinstance(value, dict):
-        for key in ("task.isolation.enabled", "enabled", "value"):
-            if key in value:
-                found = bool_value(value[key])
-                if found is not None:
-                    return found
-        for nested in value.values():
-            found = bool_value(nested)
-            if found is not None:
-                return found
-    if isinstance(value, list):
-        for nested in value:
-            found = bool_value(nested)
-            if found is not None:
-                return found
-    return None
+    if not isinstance(value, dict):
+        return None
+    target = value.get("task.isolation.enabled")
+    if isinstance(target, bool):
+        return target
+    envelope = value.get("value")
+    return envelope if isinstance(envelope, bool) else None
 
 
 def isolation_check() -> dict[str, Any]:
@@ -162,7 +160,7 @@ def default_branch() -> tuple[str | None, str]:
     result = run_command(["wt", "config", "state", "default-branch"])
     if result.returncode != 0:
         return None, f"wt config state default-branch failed: {command_error(result)}"
-    for line in reversed(result.stdout.splitlines()):
+    for line in reversed(result.stdout.splitlines() if isinstance(result.stdout, str) else []):
         candidate = line.strip()
         if candidate and re.fullmatch(r"[A-Za-z0-9._/-]+", candidate):
             return candidate, ""
@@ -171,14 +169,17 @@ def default_branch() -> tuple[str | None, str]:
 
 def base_check(base: str | None) -> dict[str, Any]:
     if base and base.strip():
-        return check("base-commit-recorded", "pass", f"run base commit recorded: {base.strip()}")
+        normalized = base.strip()
+        if not re.fullmatch(r"(?:[0-9a-fA-F]{40}|[0-9a-fA-F]{64})", normalized):
+            return check("base-commit-recorded", "fail", "--base must be one exact base SHA")
+        return check("base-commit-recorded", "pass", f"run base commit recorded: {normalized}")
 
     branch, error = default_branch()
     tip: str | None = None
     if branch and shutil.which("git") is not None:
         result = run_command(["git", "rev-parse", branch])
         if result.returncode == 0:
-            for line in reversed(result.stdout.splitlines()):
+            for line in reversed(result.stdout.splitlines() if isinstance(result.stdout, str) else []):
                 candidate = line.strip()
                 if re.fullmatch(r"[0-9a-fA-F]{7,64}", candidate):
                     tip = candidate
@@ -207,20 +208,21 @@ def github_repo() -> tuple[str | None, str]:
     result = run_command(["git", "remote", "-v"])
     if result.returncode != 0:
         return None, f"git remote -v failed: {command_error(result)}"
-    for line in result.stdout.splitlines():
+    for line in (result.stdout.splitlines() if isinstance(result.stdout, str) else []):
         fields = line.split()
         if len(fields) < 2:
             continue
         remote = fields[1]
-        if "github.com" not in remote.lower():
-            continue
-        if remote.startswith("git@"):  # git@github.com:owner/repo.git
-            path = remote.split(":", 1)[1]
-        else:
-            match = re.search(r"github\.com[/:](.+)$", remote, re.IGNORECASE)
-            if not match:
+        if remote.startswith("git@"):
+            match = re.fullmatch(r"git@([^:]+):(.+)", remote)
+            if not match or match.group(1).lower() != "github.com":
                 continue
-            path = match.group(1)
+            path = match.group(2)
+        else:
+            match = re.fullmatch(r"(?:https?|ssh|git)://([^/]+)/(.+)", remote, re.IGNORECASE)
+            if not match or match.group(1).lower() != "github.com":
+                continue
+            path = match.group(2)
         path = path.split("?", 1)[0].split("#", 1)[0].rstrip("/")
         if path.endswith(".git"):
             path = path[:-4]
@@ -242,7 +244,9 @@ def upstream_policy_check() -> dict[str, Any]:
         )
 
     help_result = run_command(["gh", "api", "--help"])
-    help_text = f"{help_result.stdout}\n{help_result.stderr}"
+    help_text = ""
+    if isinstance(help_result.stdout, str) and isinstance(help_result.stderr, str):
+        help_text = f"{help_result.stdout}\n{help_result.stderr}"
     if help_result.returncode != 0 or "--jq" not in help_text:
         return check(
             "upstream-merge-policy",
@@ -266,14 +270,35 @@ def upstream_policy_check() -> dict[str, Any]:
     except ValueError as error:
         return check(
             "upstream-merge-policy",
-            "skip",
+            "fail",
             f"gh api repos/{repo} returned no usable policy ({error}); attempted {shlex.join(argv)}",
         )
     if not isinstance(payload, dict):
         return check(
             "upstream-merge-policy",
-            "skip",
+            "fail",
             f"gh api repos/{repo} returned a non-object policy; attempted {shlex.join(argv)}",
+        )
+    missing = [field for field in API_FIELDS if field not in payload]
+    invalid = [
+        field
+        for field in API_FIELDS
+        if field in payload
+        and (
+            (field.startswith("squash_merge_") and not isinstance(payload[field], str))
+            or (not field.startswith("squash_merge_") and type(payload[field]) is not bool)
+        )
+    ]
+    if missing or invalid:
+        problems = []
+        if missing:
+            problems.append("missing " + ", ".join(missing))
+        if invalid:
+            problems.append("invalid " + ", ".join(invalid))
+        return check(
+            "upstream-merge-policy",
+            "fail",
+            f"gh api repos/{repo} returned an incomplete policy ({'; '.join(problems)}); attempted {shlex.join(argv)}",
         )
 
     policy = {field: payload.get(field) for field in API_FIELDS}
@@ -321,6 +346,8 @@ def claim_pools_check() -> dict[str, Any]:
             CLAIM_POOLS_FIX,
         )
 
+    if not isinstance(result.stdout, str):
+        return check("claim-pools", "fail", "bd config get claim.pools returned non-text output", CLAIM_POOLS_FIX)
     configured = {item.strip() for item in result.stdout.strip().split(",") if item.strip()}
     missing = [pool for pool in CLAIM_POOLS if pool not in configured]
     if missing:
@@ -572,7 +599,7 @@ def sibling_checks(
                 raw.get("fix") if isinstance(raw.get("fix"), str) else None,
             )
         )
-    return merged or [check(f"{prefix}.preflight", "skip", f"sibling {sibling} returned no checks")]
+    return merged or [check(f"{prefix}.preflight", "fail", f"sibling {sibling} returned no checks")]
 
 
 def selected(check_id: str, only: set[str]) -> bool:

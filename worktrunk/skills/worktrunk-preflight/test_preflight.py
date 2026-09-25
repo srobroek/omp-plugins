@@ -215,6 +215,39 @@ class PreflightRegressionTests(unittest.TestCase):
         report = json.loads(output.getvalue())
         self.assertEqual(exit_code, 1)
         self.assertFalse(report["ok"])
+    def test_non_text_command_output_fails_closed(self) -> None:
+        class MalformedContext(FakeContext):
+            def run(self, *args: str, **kwargs: object) -> preflight.CommandResult:
+                if args == ("wt", "--version"):
+                    return preflight.CommandResult(0, {"version": "1.0"}, ["not", "text"])  # type: ignore[arg-type]
+                return super().run(*args, **kwargs)
+
+        result = preflight.check_wt_available(MalformedContext(Path.cwd()))
+        self.assertEqual(result.status, "fail")
+        self.assertIn("non-text", result.detail)
+
+    def test_malformed_approval_output_fails_default_report(self) -> None:
+        class MalformedContext(FakeContext):
+            def run(self, *args: str, **kwargs: object) -> preflight.CommandResult:
+                if args == ("wt", "config", "approvals", "list", "--format=json"):
+                    return preflight.CommandResult(0, {"commands": []}, "")  # type: ignore[arg-type]
+                return super().run(*args, **kwargs)
+
+        context = MalformedContext(Path.cwd())
+        result = preflight.check_hook_approvals(context)
+        self.assertEqual(result.status, "fail")
+
+        original_checks = preflight.CHECKS
+        preflight.CHECKS = [("hook-approvals", preflight.check_hook_approvals)]
+        output = io.StringIO()
+        try:
+            with patch.object(preflight, "Context", return_value=context), contextlib.redirect_stdout(output):
+                exit_code = preflight.main(["--json"])
+        finally:
+            preflight.CHECKS = original_checks
+        report = json.loads(output.getvalue())
+        self.assertEqual(exit_code, 1)
+        self.assertFalse(report["ok"])
 
     def test_provisioning_hook_passes_for_user_post_start_copy(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
