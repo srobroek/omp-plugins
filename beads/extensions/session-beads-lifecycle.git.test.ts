@@ -209,6 +209,15 @@ test("pins plain bd calls in command text and leaves non-bd calls alone", () => 
 	expect(pinBashInput({ command: "echo done" }, pin)).toBeUndefined();
 });
 
+test("does not pin unnamed or malformed tool input", () => {
+	expect(pinBashInput({}, "/repo/.beads")).toBeUndefined();
+	expect(pinBashInput([], "/repo/.beads")).toBeUndefined();
+	expect(pinBashInput({ ready: true }, "/repo/.beads")).toBeUndefined();
+	expect(pinBashInput({ pty: true }, "/repo/.beads")).toBeUndefined();
+	expect(pinBashInput({ command: "   " }, "/repo/.beads")).toBeUndefined();
+	expect(pinBashInput({ command: "bd list" }, null as never)).toBeUndefined();
+});
+
 test("uses export fallback when shell parsing cannot place bd", () => {
 	const pin = "/repo/.beads";
 	const expected = `export BEADS_DOLT_SHARED_SERVER= BEADS_DIR='${pin}';\n`;
