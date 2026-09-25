@@ -28,7 +28,7 @@ Plan review and acceptance review use the same `work-reviewer` role with differe
 | `implementer` | `scout`, `operator`, `researcher` | Delegates investigation, known mechanical work, or scoped research; NEVER `work-reviewer`. |
 | `implementer-high` | `scout`, `operator`, `researcher` | Delegates investigation, known mechanical work, or scoped research; NEVER `work-reviewer`. |
 | `work-reviewer` | `scout`, `researcher`, `security-reviewer` | Delegates review investigation or a cited expected-behaviour question; NEVER edit-capable agents. |
-| `shepherd` | `scout` | Looks up landing facts while coordinating final epic-to-default delivery; NEVER integrates worker branches, implements changes, or performs acceptance review. |
+| `shepherd` | `scout` | Looks up landing facts while coordinating final epic-to-default delivery; NEVER integrates worker branches, implements changes, or reviews acceptance. |
 | `researcher` | `scout` | Fans out read-only search; NEVER edit-capable agents. |
 | `scout`, `operator`, `security-reviewer` | none | Do not spawn children. |
 
@@ -40,4 +40,4 @@ Measured mechanic: declaring `spawns` is what grants the capability; `task` need
 | Situation | Choice |
 |---|---|
 | A bead is assigned to a role pool | Pull it with the matching `pool:ROLE` alias. |
-| A role boundary would be crossed | Keep ownership with the named replacement role; the lead resolves integration conflicts. |
+| A role boundary would be crossed | Keep ownership with the named replacement role; an integration conflict goes back to the implementer as one fix bead. |
