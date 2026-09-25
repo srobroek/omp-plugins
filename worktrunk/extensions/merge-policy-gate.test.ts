@@ -127,6 +127,19 @@ describe("merge policy", () => {
 		expect(decideMergePolicy("echo ready && /opt/wt merge develop", "/repo", runner, wt(null))?.reason).toContain("wt merge develop --no-squash --no-ff");
 		expect(decideMergePolicy("git merge develop", "/repo", runner, wt(null))).toBeUndefined();
 	});
+	test("inspects executable command substitutions and backticks", () => {
+		const runner = git("main");
+		for (const command of [
+			'echo "$(wt merge develop)"',
+			"echo $(wt merge develop)",
+			"echo `wt merge develop`",
+		]) {
+			expect(decideMergePolicy(command, "/repo", runner, wt(null))?.reason).toContain("wt merge develop --no-squash --no-ff");
+		}
+		expect(decideMergePolicy("echo \\$(wt merge develop)", "/repo", runner, wt(null))).toBeUndefined();
+		expect(decideMergePolicy('echo "$(wt merge develop --no-squash --no-ff)"', "/repo", runner, wt(null))).toBeUndefined();
+		expect(decideMergePolicy("echo '$(wt merge develop)'", "/repo", runner, wt(null))).toBeUndefined();
+	});
 
 	test("sees merges behind global options and resolves the default branch in -C", () => {
 		const seen: string[] = [];

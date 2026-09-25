@@ -8,7 +8,7 @@ const MERGE_RETRY = "wt merge <target> --no-squash --no-ff";
 const SOURCE_WORKTREE_RETRY = `${MERGE_RETRY} from the source worktree`;
 export const MERGE_POLICY_REFUSAL = `worker-to-epic merges must preserve history; retry with ${MERGE_RETRY}`;
 
-function shellSegments(command: string): string[] {
+function splitShellSegments(command: string): string[] {
 	const segments: string[] = [];
 	let start = 0;
 	let quote: "'" | '"' | null = null;
@@ -24,6 +24,71 @@ function shellSegments(command: string): string[] {
 		if (ch === ";" || ch === "|" || ch === "\n") { segments.push(command.slice(start, i)); start = i + 1; }
 	}
 	segments.push(command.slice(start));
+	return segments;
+}
+
+function matchingCommandSubstitutionEnd(command: string, start: number): number {
+	let depth = 1;
+	let quote: "'" | '"' | null = null;
+	let escaped = false;
+	for (let i = start + 2; i < command.length; i++) {
+		const ch = command[i];
+		if (escaped) { escaped = false; continue; }
+		if (quote) {
+			if (ch === quote) quote = null;
+			else if (quote === '"' && ch === "\\") escaped = true;
+			continue;
+		}
+		if (ch === "'" || ch === '"') { quote = ch; continue; }
+		if (ch === "\\") { escaped = true; continue; }
+		if (command.startsWith("$(", i)) { depth++; i++; continue; }
+		if (ch === ")") {
+			depth--;
+			if (depth === 0) return i;
+		}
+	}
+	return -1;
+}
+
+function nestedShellCommands(command: string): string[] {
+	const nested: string[] = [];
+	for (let i = 0; i < command.length; i++) {
+		const ch = command[i];
+		if (ch === "\\") { i++; continue; }
+		if (ch === "'") {
+			while (++i < command.length && command[i] !== "'") { /* skip literal single-quoted data */ }
+			continue;
+		}
+		if (command.startsWith("$(", i)) {
+			const end = matchingCommandSubstitutionEnd(command, i);
+			if (end >= 0) { nested.push(command.slice(i + 2, end)); i = end; }
+			continue;
+		}
+		if (ch !== "`") continue;
+		let escaped = false;
+		for (let end = i + 1; end < command.length; end++) {
+			const nestedChar = command[end];
+			if (escaped) { escaped = false; continue; }
+			if (nestedChar === "\\") { escaped = true; continue; }
+			if (nestedChar === "`") { nested.push(command.slice(i + 1, end)); i = end; break; }
+		}
+	}
+	return nested;
+}
+
+function shellSegments(command: string): string[] {
+	const segments: string[] = [];
+	const pending = [command];
+	while (pending.length > 0) {
+		const source = pending.pop();
+		if (!source) continue;
+		segments.push(...splitShellSegments(source));
+		const nested = nestedShellCommands(source);
+		for (let i = nested.length; i > 0; i--) {
+			const nestedCommand = nested[i - 1];
+			if (nestedCommand !== undefined) pending.push(nestedCommand);
+		}
+	}
 	return segments;
 }
 
