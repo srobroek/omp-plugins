@@ -265,7 +265,10 @@ function staticParse(command: string): ParsedCommand | ParseFailure {
 }
 
 /** Synchronous structural parse used by tests and callers that already have syntax proof. */
-export function parse(command: string): ParsedCommand | ParseFailure {
+export function parse(command: unknown): ParsedCommand | ParseFailure {
+	if (typeof command !== "string") {
+		return { kind: "parse-failure", reason: "command is not a string", command: "", segments: [], commands: [], unknown: true, nested: [] };
+	}
 	return staticParse(command);
 }
 

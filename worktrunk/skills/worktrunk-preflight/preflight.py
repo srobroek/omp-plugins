@@ -51,7 +51,14 @@ class CommandResult:
 
     @property
     def output(self) -> str:
-        return "\n".join(part for part in (self.stdout, self.stderr) if part)
+        streams: list[str] = []
+        for stream in (self.stdout, self.stderr):
+            if isinstance(stream, str):
+                if stream:
+                    streams.append(stream)
+            elif stream is not None:
+                streams.append(f"<non-text {type(stream).__name__} output>")
+        return "\n".join(streams)
 
 
 class Context:
@@ -111,14 +118,18 @@ class Context:
         return self.run("wt", "config", "show", timeout=60)
 
 
-def first_nonempty_line(text: str) -> str:
+def first_nonempty_line(text: Any) -> str:
+    if not isinstance(text, str):
+        return ""
     for line in text.splitlines():
         if line.strip():
             return line.strip()
     return ""
 
 
-def one_line(text: str) -> str:
+def one_line(text: Any) -> str:
+    if not isinstance(text, str):
+        return f"<non-text {type(text).__name__} output>" if text is not None else ""
     return " ".join(text.split())
 
 
@@ -138,7 +149,12 @@ def unavailable(result: CommandResult) -> bool:
 def check_wt_available(ctx: Context) -> Result:
     result = ctx.run("wt", "--version")
     if result.returncode == 0:
-        return Result("pass", f"{one_line(result.stdout or result.stderr)}")
+        if not isinstance(result.stdout, str) or not isinstance(result.stderr, str):
+            return Result("fail", "wt --version returned non-text output")
+        rendered = one_line(result.stdout or result.stderr)
+        if not rendered:
+            return Result("fail", "wt --version returned no output")
+        return Result("pass", rendered)
     if unavailable(result):
         return Result("fail", "wt is absent from PATH")
     return Result("fail", command_error(result, "wt --version"))
@@ -185,16 +201,18 @@ def check_cwd_is_worktree(ctx: Context) -> Result:
     return Result("pass", f"cwd is a linked worktree (git-dir {git_path}; common-dir {common_path})")
 
 
-def parse_json_object(text: str) -> dict[str, Any] | None:
+def parse_json_object(text: Any) -> dict[str, Any] | None:
+    if not isinstance(text, str):
+        return None
     decoder = json.JSONDecoder()
     for index, char in enumerate(text):
         if char != "{":
             continue
         try:
-            value, _ = decoder.raw_decode(text[index:])
+            value, end = decoder.raw_decode(text[index:])
         except json.JSONDecodeError:
             continue
-        if isinstance(value, dict):
+        if isinstance(value, dict) and not text[index + end :].strip():
             return value
     return None
 
@@ -258,28 +276,29 @@ def declared_hook_path(command: dict[str, Any], cwd: Path) -> Path | None:
     resolved = resolve_hook_executable(command, cwd)
     return None if resolved is None else resolved[1]
 
-
 def check_hook_approvals(ctx: Context, fresh: bool = False) -> Result:
     result = ctx.run("wt", "config", "approvals", "list", "--format=json", use_cache=not fresh)
     if result.returncode != 0:
         if unavailable(result):
             return Result("skip", "wt is unavailable; hook approvals cannot be inspected")
-        return Result("skip", command_error(result, "wt config approvals list --format=json"))
+        return Result("fail", command_error(result, "wt config approvals list --format=json"))
+    if not isinstance(result.stdout, str) or not isinstance(result.stderr, str):
+        return Result("fail", "Worktrunk approvals command returned non-text output")
     data = parse_json_object(result.output)
     if data is None:
-        return Result("skip", "Worktrunk returned no parseable approvals JSON")
+        return Result("fail", "Worktrunk returned no parseable approvals JSON")
 
     state = data.get("state")
     commands = data.get("commands")
     if not isinstance(commands, list):
-        commands = []
+        return Result("fail", "Worktrunk approvals JSON omitted a valid commands list")
+    if any(not isinstance(command, dict) for command in commands):
+        return Result("fail", "Worktrunk approvals JSON contained a malformed command row")
     unapproved: list[str] = []
     missing: list[str] = []
     non_executable: list[str] = []
     unreadable: list[str] = []
     for command in commands:
-        if not isinstance(command, dict):
-            continue
         phase = str(command.get("phase", "?"))
         name = str(command.get("name", "?"))
         label = f"{phase}/{name}"
@@ -321,7 +340,7 @@ def check_hook_approvals(ctx: Context, fresh: bool = False) -> Result:
         if stale_items:
             return Result("warn", f"state={state}; no unapproved hooks{stale_detail}")
         return Result("pass", f"state={state}; declared hooks present, executable, and approved")
-    return Result("skip", f"unrecognized approvals state {state!r}{stale_detail}")
+    return Result("fail", f"unrecognized approvals state {state!r}{stale_detail}")
 
 
 def ignored_config_keys(text: str) -> list[str]:

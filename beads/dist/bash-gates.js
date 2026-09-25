@@ -12,6 +12,8 @@ function token(value, startsQuoted = false, sawQuote = false) {
   return { value, startsQuoted, sawQuote };
 }
 function tokenizeShell(command, options = {}) {
+  if (typeof command !== "string")
+    return [];
   const out = [];
   let current = "";
   let started = false;
@@ -109,6 +111,8 @@ function tokenizeShell(command, options = {}) {
   return out;
 }
 function shellQuoteBalanced(command) {
+  if (typeof command !== "string")
+    return true;
   let quote = null;
   for (let i = 0;i < command.length; i++) {
     const ch = command[i];
@@ -464,6 +468,9 @@ function staticParse(command) {
   };
 }
 function parse(command) {
+  if (typeof command !== "string") {
+    return { kind: "parse-failure", reason: "command is not a string", command: "", segments: [], commands: [], unknown: true, nested: [] };
+  }
   return staticParse(command);
 }
 function commandFromInput(input) {
@@ -1053,15 +1060,21 @@ var CREATING_VERBS = {
 var CREATE_REASON = "bd create / `bd new` / `bd create-form` without BEADS_ACTOR or BD_ACTOR records the invoking human's git identity in created_by. Owner is always the git identity and never identifies the agent. Set either variable to <harness>/<agent-name>/<session-id> so created_by is attributable, then retry.";
 var ADVISORY_TEXT = "BEADS_ACTOR and BD_ACTOR are unset on this mutating `bd` command. Without an actor, created_by records the invoking human's git identity; Owner is always the git identity and never identifies the agent. Set either variable to <harness>/<agent-name>/<session-id> so writes and claims are attributable, then retry.";
 function decideActorParsed(parsed, env = process.env) {
+  if (parsed === null || typeof parsed !== "object")
+    return { kind: "block", reason: "command could not be parsed" };
+  const candidate = parsed;
+  if (!Array.isArray(candidate.segments) || !candidate.segments.every((segment) => Array.isArray(segment) && segment.every((token) => typeof token === "string")) || !Array.isArray(candidate.nested)) {
+    return { kind: "block", reason: "command could not be parsed" };
+  }
   let advisory = false;
-  for (const segment of parsed.segments) {
+  for (const segment of candidate.segments) {
     const decision = decideActorGate(segment.join(" "), env);
     if (decision.kind === "block")
       return decision;
     if (decision.kind === "advisory")
       advisory = true;
   }
-  for (const child of parsed.nested) {
+  for (const child of candidate.nested) {
     const decision = decideActorParsed(child, env);
     if (decision.kind === "block")
       return decision;

@@ -104,8 +104,10 @@ def run_bd(args: list[str], timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS) ->
 def detail_error(result: CommandResult) -> str:
     if result.timed_out:
         return timeout_detail(result)
-    text = (result.stderr or result.stdout).strip().replace("\n", " ")
-    return text or f"command exited {result.returncode}"
+    for stream in (result.stderr, result.stdout):
+        if isinstance(stream, str) and stream.strip():
+            return stream.strip().replace("\n", " ")
+    return f"command exited {result.returncode}"
 
 
 
@@ -113,7 +115,9 @@ def result(status: str, detail: str, fix: str | None = None) -> dict[str, Any]:
     return {"status": status, "detail": detail, "fix": fix}
 
 
-def version_from(text: str) -> tuple[int, int, int, str | None] | None:
+def version_from(text: Any) -> tuple[int, int, int, str | None] | None:
+    if not isinstance(text, str):
+        return None
     match = re.search(
         r"(?<![0-9A-Za-z])v?(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?(?:\+[0-9A-Za-z.-]+)?(?![0-9A-Za-z.-])",
         text,
@@ -128,19 +132,21 @@ def version_from(text: str) -> tuple[int, int, int, str | None] | None:
     )
 
 
-def parse_json(text: str) -> Any:
+def parse_json(text: Any) -> Any:
+    if not isinstance(text, str):
+        raise TypeError("command output was not text")
     return json.loads(text.strip())
 
 
 def rows_from(value: Any) -> list[dict[str, Any]] | None:
     if isinstance(value, list):
-        return [row for row in value if isinstance(row, dict)]
+        return value if all(isinstance(row, dict) for row in value) else None
     if not isinstance(value, dict):
         return None
     for key in ("items", "issues", "ready", "results", "data"):
         candidate = value.get(key)
         if isinstance(candidate, list):
-            return [row for row in candidate if isinstance(row, dict)]
+            return candidate if all(isinstance(row, dict) for row in candidate) else None
     if "id" in value:
         return [value]
     if not value:
@@ -248,7 +254,11 @@ def check_bd_available(state: dict[str, Any]) -> dict[str, Any]:
     state["bd_available"] = True
     version = version_from(command.stdout)
     state["version"] = version
-    rendered = command.stdout.strip().splitlines()[0] if command.stdout.strip() else "unknown version"
+    if version is None:
+        state["bd_available"] = False
+        return result("fail", "bd --version did not contain a parseable semantic version")
+    state["bd_available"] = True
+    rendered = command.stdout.strip().splitlines()[0]
     return result("pass", f"bd resolves to {path}; {rendered}")
 
 
@@ -417,12 +427,22 @@ def check_remote_sync(state: dict[str, Any]) -> dict[str, Any]:
         return timeout_result(command)
     if command.returncode != 0:
         return result("skip", f"bd dolt remote list failed; remote configuration cannot be determined read-only: {detail_error(command)}")
+    if not isinstance(command.stdout, str):
+        return result("skip", "bd dolt remote list returned non-text output; remote configuration cannot be determined")
     text = command.stdout.strip()
     if not text:
         return result("skip", "bd dolt remote list returned no output; remote configuration cannot be determined")
     if "no remotes configured" in text.lower():
         return result("pass", "no Dolt remote configured")
-    return result("pass", "Dolt remote configured: yes")
+    lines = [line for line in text.splitlines() if line.strip()]
+    if len(lines) == 1:
+        fields = lines[0].split()
+        remote_name, remote_url = fields[:2] if len(fields) >= 2 else ("", "")
+        valid_name = bool(re.fullmatch(r"[A-Za-z0-9._-]+", remote_name))
+        valid_url = remote_url.startswith(("http://", "https://", "ssh://", "git://", "git@", "file://"))
+        if valid_name and valid_url:
+            return result("pass", "Dolt remote configured: yes")
+    return result("skip", "bd dolt remote list returned an unrecognized remote list")
 
 
 CHECKS = {

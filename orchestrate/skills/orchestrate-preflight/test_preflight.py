@@ -51,5 +51,72 @@ class ClaimPoolsCheck(unittest.TestCase):
         self.assertEqual(result["fix"], preflight.CLAIM_POOLS_FIX)
 
 
+    def test_isolation_requires_exact_boolean_field(self) -> None:
+        result = preflight.CommandResult(
+            ["omp", "config", "get", "task.isolation.enabled", "--json"],
+            0,
+            '{"unrelated_setting":false}',
+            "",
+        )
+        with patch.object(preflight.shutil, "which", return_value="/usr/bin/omp"), patch.object(
+            preflight, "run_command", return_value=result
+        ):
+            check = preflight.isolation_check()
+        self.assertEqual(check["status"], "fail")
+
+    def test_non_text_and_trailing_json_are_rejected(self) -> None:
+        with self.assertRaises(ValueError):
+            preflight.decode_json({"value": False})  # type: ignore[arg-type]
+        with self.assertRaises(ValueError):
+            preflight.decode_json('{"value":false}\nTRAILING')
+
+    def test_base_requires_an_immutable_full_sha(self) -> None:
+        result = preflight.base_check("main")
+        self.assertEqual(result["status"], "fail")
+        self.assertIn("exact base SHA", result["detail"])
+
+    def test_github_repo_rejects_github_string_in_other_host(self) -> None:
+        result = preflight.CommandResult(
+            ["git", "remote", "-v"],
+            0,
+            "origin https://evil.example/github.com/owner/repo.git (fetch)\n",
+            "",
+        )
+        with patch.object(preflight.shutil, "which", return_value="/usr/bin/git"), patch.object(
+            preflight, "run_command", return_value=result
+        ):
+            repo, detail = preflight.github_repo()
+        self.assertIsNone(repo)
+        self.assertIn("no GitHub remote", detail)
+
+    def test_policy_requires_complete_object_and_rejects_trailing_garbage(self) -> None:
+        help_result = preflight.CommandResult(["gh", "api", "--help"], 0, "--jq", "")
+        incomplete = preflight.CommandResult(
+            ["gh", "api", "repos/owner/repo"], 0, '{"allow_merge_commit":true}', ""
+        )
+        trailing = preflight.CommandResult(
+            ["gh", "api", "repos/owner/repo"], 0, '{"allow_merge_commit":true}\nTRAILING', ""
+        )
+        with patch.object(preflight, "github_repo", return_value=("owner/repo", "")), patch.object(
+            preflight.shutil, "which", return_value="/usr/bin/gh"
+        ), patch.object(preflight, "run_command", side_effect=[help_result, incomplete]):
+            check = preflight.upstream_policy_check()
+        self.assertEqual(check["status"], "fail")
+
+        with patch.object(preflight, "github_repo", return_value=("owner/repo", "")), patch.object(
+            preflight.shutil, "which", return_value="/usr/bin/gh"
+        ), patch.object(preflight, "run_command", side_effect=[help_result, trailing]):
+            check = preflight.upstream_policy_check()
+        self.assertEqual(check["status"], "fail")
+
+    def test_empty_sibling_checks_fail_closed(self) -> None:
+        sibling = Path("sibling-preflight.py")
+        result = preflight.CommandResult(["python", str(sibling), "--json"], 0, '{"checks":[]}', "")
+        with patch.object(preflight, "find_sibling", return_value=(sibling, [sibling])), patch.object(
+            preflight, "run_command", return_value=result
+        ):
+            checks = preflight.sibling_checks("beads", str(sibling), None, (), "preflight", False)
+        self.assertEqual(checks[0]["status"], "fail")
+
 if __name__ == "__main__":
     unittest.main()
