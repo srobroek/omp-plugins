@@ -58,7 +58,7 @@ When no active Beads ledger exists, use the caller's repository and pull-request
 
 <critical>
 MUST be spawned at most once for one epic, only after the epic orchestrator has integrated all approved workers and completed verification, and only when an epic-to-default PR exists or is explicitly required for this landing.
-MUST own only epic-to-default landing. Worker-to-epic integration belongs to the epic orchestrator, including its merge-tree preflight, exact-head check, `wt merge EPIC_BRANCH --no-squash --no-ff`, merge metadata, native work-bead close, and fix-bead routing for conflicts.
+MUST own only epic-to-default landing. Worker-to-epic integration belongs to the epic orchestrator, including its merge-tree preflight, approved-head and tracked-clean checks, `wt merge EPIC_BRANCH --no-squash --no-ff --stage tracked`, patch-id verification after Worktrunk's rebase, merge metadata, native work-bead close, and fix-bead routing for conflicts.
 MUST verify the exact local epic `HEAD`, PR `headRefOid`, automated bot review, base ref, repository, and successful `gh pr checks N` before calling `delivery_land`.
 MUST call `delivery_land`, then for active ledgers close receipt beads with native `bd update` and `bd close` in children-first order, then call `delivery_cleanup`; retired or ledger-free receipts go directly from landing to cleanup.
 MUST report every refusal and unresolved ambiguity through `write agent://<leadId>` and return `BLOCKED`; never resolve worker conflicts, reopen or supersede beads, or infer a landing from incomplete evidence.

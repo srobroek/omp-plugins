@@ -23,10 +23,10 @@ The script is read-only unless `--apply` is passed. `--apply` approves pending h
 - `hook-approvals`: FAIL means a declared project hook is missing, non-executable, unapproved, or would be skipped silently; run `wt config approvals add --yes` only when authorized. Stale approvals are WARN.
 - `config-keys-honoured`: FAIL means project config contains an ignored key; move it to `~/.config/worktrunk/config.toml`, optionally under `[projects."<id>"]`.
 - `default-branch-resolves`: FAIL means Worktrunk cannot resolve a default branch; configure a valid default branch.
-- `merge-evidence-policy`: FAIL means project `[merge]` keys are ignored; move policy to user config and pass `wt merge --no-squash --no-ff` explicitly on every worker-to-epic merge; an epic-to-default merge may be plain or squashing.
+- `merge-evidence-policy`: FAIL means project `[merge]` keys are ignored; move policy to user config and pass `wt merge --no-squash --no-ff --stage tracked` explicitly on every worker-to-epic merge; an epic-to-default merge may be plain or squashing.
 - `provisioning-include`: WARN means ignored dependency directories lack `.worktreeinclude` coverage; `provisioning-hook` verifies that Worktrunk provisions them after worktree creation.
 - `provisioning-hook`: PASS means an effective `post-start` hook runs `wt step copy-ignored` when ignored dependency/build directories or `.worktreeinclude` require copying, and runs `uv sync` for a Python project with `uv.lock` or `[tool.uv]`. A matching `pre-start` hook passes with a note because it blocks creation. FAIL means a required hook is absent; `--apply` appends the exact missing entries to `.config/wt.toml` without rewriting existing content.
 - `omp-plugin-installed`: WARN means the OMP plugin is absent; run `wt config plugins omp install`.
-- `commit-generation`: WARN means generated commits make `wt merge` squash history; pass `wt merge --no-squash` when preserving per-commit history.
+- `commit-generation`: WARN means generated commits make `wt merge` squash history; for worker-to-epic merges, pass `wt merge --no-squash --no-ff --stage tracked` when preserving per-commit history.
 
 Exit status is zero when no check fails. JSON output contains `ok`, a status summary, and each check's `id`, `status`, `detail`, and `fix`.
