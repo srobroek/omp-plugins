@@ -117,7 +117,7 @@ describe("merge policy", () => {
 		expect(registered).toEqual(["tool_call"]);
 		expect(call({ toolName: "write", input: { command: "wt merge develop" } }, { cwd: "/repo" })).toBeUndefined();
 		expect(call({ toolName: "bash", input: { command: "git merge develop" } }, { cwd: "/repo" })).toBeUndefined();
-		expect(call({ toolName: "bash", input: { command: "wt merge develop" } }, { cwd: "/repo" })).toEqual({
+		expect(decideMergePolicy("wt merge develop", "/repo", git("main"), wt(null))).toEqual({
 			block: true,
 			reason: "worker-to-epic merges must preserve history; retry with wt merge develop --no-squash --no-ff",
 		});
