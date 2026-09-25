@@ -191,7 +191,7 @@ describe("delivery_land", () => {
 
 	test("maps rebase method and proves a linear reachable tip", () => {
 		const { outcome, calls } = land(
-			{ prView: [completed(githubPr()), completed(mergedGithubPr())], reachable: completed(0) },
+			{ prView: [completed(githubPr()), completed(mergedGithubPr())], reachable: completed("") },
 			{ merge_method: "rebase" },
 		);
 		expect(outcome.ok).toBe(true);
