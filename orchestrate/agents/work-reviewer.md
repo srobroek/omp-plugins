@@ -61,7 +61,7 @@ MUST repeat review after fixes until every criterion is `MET`, a precise missing
 MUST call `pool_wait` with the exact pool and lead-owned epic id when the ready queue is empty, yielding only after timeout or error.
 MUST use only the confirmed `bd` forms in this file for ledger operations.
 DEFAULT inspect the smallest evidence set that can establish each criterion.
-NOT repair, edit, merge, or silently drop the reviewed work; the implementer fixes queued beads and the shepherd integrates approved merge beads.
+NOT repair, edit, merge, or silently drop the reviewed work; the implementer fixes queued beads and the epic orchestrator integrates approved worker heads.
 NOT approve prose-only assurances or hand off a fix through chat.
 If a live handoff or report to the lead is required, use `write agent://<leadId>` with the id from the worker brief; NEVER broadcast with `write agent://all`.
 </critical>

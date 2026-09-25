@@ -9,11 +9,11 @@ The claim-pool alias is the queue for each pull-based role. Pools are configured
 
 | Pool alias | Agent | Boundary |
 |---|---|---|
-| `pool:implementer` | `implementer` | MUST implement assigned product changes; NEVER review or merge them. The work-reviewer reviews and the shepherd integrates approved merge beads. |
-| `pool:implementer-high` | `implementer-high` | MUST implement assigned product changes; NEVER review or merge them. The work-reviewer reviews and the shepherd integrates approved merge beads. |
+| `pool:implementer` | `implementer` | MUST implement assigned product changes; NEVER review or merge them. The work-reviewer reviews; the epic orchestrator integrates approved worker heads and closes work beads. |
+| `pool:implementer-high` | `implementer-high` | MUST implement assigned product changes; NEVER review or merge them. The work-reviewer reviews; the epic orchestrator integrates approved worker heads and closes work beads. |
 | `pool:work-reviewer` | `work-reviewer` | MUST review the assigned bead against its acceptance criteria, whether they specify delivered work or a proposed plan; NEVER implement product changes. The work-reviewer reviews and the implementer implements fixes. |
 | `pool:researcher` | `researcher` | MUST investigate questions and record evidence; NEVER implement product changes. The implementer acts on accepted findings. |
-| `pool:shepherd` | `shepherd` | MUST pull one epic's `pool:shepherd` merge-bead queue, verify exact-head evidence, and serialize integration; NEVER review, implement, or resolve conflicts. The work-reviewer reviews, implementer repairs, and the lead resolves conflicts. |
+| `pool:shepherd` | `shepherd` | MUST land only one integrated epic branch into the default branch: open or refresh its PR, verify exact-head bot review and `gh pr checks`, call delivery tools, and perform native close-out; NEVER integrate worker branches. Spawn once per epic after integration and verification, and not when no epic-to-default PR exists. |
 | `pool:operator` | `operator` | MUST run exact, bounded mechanical commands with explicit targets and stop on ambiguity; NEVER choose product design, implement feature behavior, or act destructively. The implementer chooses and implements behavior. |
 
 Every pull-based role runs `bd ready --assignee pool:ROLE --json`, keeps only records whose `metadata.epic_id` exactly matches its lead-owned epic, claims one with `bd update ID --claim`, and calls `pool_wait` with its exact pool and epic id when the filtered queue is empty. `pool_wait` blocks in-process until a ready record appears, its timeout, or an error; only timeout or error permits a run-level yield. Workers use only pool-aware CAS release; an expired lease is reclaimed and then explicitly re-pooled by the lead.
@@ -24,11 +24,11 @@ Plan review and acceptance review use the same `work-reviewer` role with differe
 
 | Spawner | May spawn | Boundary |
 |---|---|---|
-| `orchestrator` (lead) | `implementer`, `implementer-high`, `work-reviewer`, `security-reviewer`, `researcher`, `shepherd`, `scout`, `operator` | Dispatches work and plan or acceptance review, then creates merge beads after approval and ensures one shepherd per epic. |
+| `orchestrator` (lead) | `implementer`, `implementer-high`, `work-reviewer`, `security-reviewer`, `researcher`, `shepherd`, `scout`, `operator` | Integrates approved workers into its own epic, then spawns one landing shepherd only after integration and verification when an epic-to-default PR exists or is required. |
 | `implementer` | `scout`, `operator`, `researcher` | Delegates investigation, known mechanical work, or scoped research; NEVER `work-reviewer`. |
 | `implementer-high` | `scout`, `operator`, `researcher` | Delegates investigation, known mechanical work, or scoped research; NEVER `work-reviewer`. |
 | `work-reviewer` | `scout`, `researcher`, `security-reviewer` | Delegates review investigation or a cited expected-behaviour question; NEVER edit-capable agents. |
-| `shepherd` | `scout` | Looks up facts while coordinating and serialising; NEVER implementation or acceptance review. |
+| `shepherd` | `scout` | Looks up landing facts while coordinating final epic-to-default delivery; NEVER integrates worker branches, implements changes, or performs acceptance review. |
 | `researcher` | `scout` | Fans out read-only search; NEVER edit-capable agents. |
 | `scout`, `operator`, `security-reviewer` | none | Do not spawn children. |
 
