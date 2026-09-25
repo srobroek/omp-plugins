@@ -1,10 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import { embeddedWriteTargets } from "./bd-embedded-write-lock.ts";
-import { decideActorParsed } from "./bd-actor-gate.ts";
 import bashGates from "./bash-gates.ts";
-import { parse, classify, parsedInvocations } from "./shell-command.ts";
-import { shellQuoteBalanced, tokenizeShell } from "./shell-tokenizer.ts";
+import { decideActorParsed } from "./bd-actor-gate.ts";
+import { embeddedWriteTargets } from "./bd-embedded-write-lock.ts";
 import { pinBashInput, rewriteBashInput } from "./session-beads-lifecycle.ts";
+import { classify, parse, parsedInvocations } from "./shell-command.ts";
+import { shellQuoteBalanced, tokenizeShell } from "./shell-tokenizer.ts";
 
 type Jsonish = null | boolean | number | string | Jsonish[] | { [key: string]: Jsonish };
 type ToolHandler = (event: unknown, context: unknown) => unknown;
@@ -80,13 +80,12 @@ describe("second-wave beads robustness properties", () => {
 		}
 		expect(performance.now() - started).toBeLessThan(1000);
 	});
-
 	test("embedded target classification stays bounded for random shell strings", () => {
 		const random = generator(0x44aa);
 		const started = performance.now();
 		for (let iteration = 0; iteration < 2000; iteration += 1) {
 			const targets = embeddedWriteTargets(shellSource(random), "/tmp", {});
-			expect(targets.kind === "stores" || targets.kind === "unknown").toBe(true);
+			expect(targets.kind === "stores" || targets.kind === "refused").toBe(true);
 		}
 		expect(performance.now() - started).toBeLessThan(1000);
 	});

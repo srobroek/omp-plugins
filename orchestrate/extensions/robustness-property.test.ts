@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { waitForPool, type PoolWaitParams } from "./pool-wait.ts";
+import { type PoolWaitParams, waitForPool } from "./pool-wait.ts";
 
 function generator(seed = 0x2468ace): () => number {
 	let state = seed >>> 0;

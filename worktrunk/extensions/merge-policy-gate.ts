@@ -13,9 +13,24 @@ function splitShellSegments(command: string): string[] {
 	let start = 0;
 	let quote: "'" | '"' | null = null;
 	let escaped = false;
+	let escapedDollarParen = false;
+	let literalParenDepth = 0;
 	for (let i = 0; i < command.length; i++) {
 		const ch = command[i];
-		if (escaped) { escaped = false; continue; }
+		if (escaped) {
+			escaped = false;
+			if (quote === null && ch === "$" && command[i + 1] === "(") escapedDollarParen = true;
+			continue;
+		}
+		if (escapedDollarParen) {
+			escapedDollarParen = false;
+			if (ch === "(") { literalParenDepth = 1; continue; }
+		}
+		if (literalParenDepth > 0) {
+			if (ch === "(") literalParenDepth++;
+			else if (ch === ")") literalParenDepth--;
+			continue;
+		}
 		if (quote) { if (ch === quote) quote = null; else if (quote === '"' && ch === "\\") escaped = true; continue; }
 		if (ch === "'" || ch === '"') { quote = ch; continue; }
 		if (ch === "\\") { escaped = true; continue; }
