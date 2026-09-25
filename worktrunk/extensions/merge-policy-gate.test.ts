@@ -3,7 +3,7 @@ import { describe, expect, test } from "bun:test";
 import mergePolicyGate, { decideMergePolicy } from "./merge-policy-gate.ts";
 
 type Handler = (event: unknown, ctx?: unknown) => unknown;
-const git = (branch: string | null) => (_args: string[], _cwd: string) => branch ? `origin/${branch}` : null;
+const git = (defaultBranch: string | null, currentBranch = "worker") => (args: string[], _cwd: string) => args[0] === "branch" ? currentBranch : defaultBranch ? `origin/${defaultBranch}` : null;
 const wt = (branch: string | null) => (_args: string[], _cwd: string) => branch;
 
 function harness(): { registered: string[]; call: Handler } {
@@ -28,6 +28,16 @@ describe("merge policy", () => {
 
 	test("allows a non-default target with both flags", () => {
 		expect(decideMergePolicy("wt merge develop --no-squash --no-ff", "/repo", git("main"), wt(null))).toBeUndefined();
+	});
+
+	test("refuses a worker merge launched from the target worktree", () => {
+		const result = decideMergePolicy("wt merge develop --no-squash --no-ff", "/repo", git("main", "main"), wt(null));
+		expect(result?.block).toBe(true);
+		expect(result?.reason).toContain("run from the source worktree");
+	});
+
+	test("allows a flagged worker merge from a non-target source worktree", () => {
+		expect(decideMergePolicy("wt merge develop --no-squash --no-ff", "/repo", git("main", "worker"), wt(null))).toBeUndefined();
 	});
 
 	test("allows default-target and omitted-target merges", () => {
