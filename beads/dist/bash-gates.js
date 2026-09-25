@@ -2108,7 +2108,7 @@ function bashGates(pi) {
   pi.on("tool_call", async (event, ctx) => {
     try {
       const input = event.input;
-      const gatedTool = event.toolName === "task" || event.toolName === "bd_reconcile" && input.apply === true || event.toolName === "bd_formula_check" && input.deep === true;
+      const gatedTool = event.toolName === "task" || event.toolName === "bd_formula_check" && input.deep === true;
       if (gatedTool) {
         const workspace = typeof input.workspace === "string" ? input.workspace : undefined;
         if (event.toolName === "bd_formula_check" && workspace === undefined)

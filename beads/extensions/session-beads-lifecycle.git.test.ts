@@ -808,7 +808,6 @@ bashGates(fakePi as never);
       let toolDecisions = 0;
       const gatedCalls = [
         { toolName: "task", input: {} },
-        { toolName: "bd_reconcile", input: { apply: true } },
         { toolName: "bd_formula_check", input: { deep: true, workspace: dir } },
       ].map(call => Promise.resolve(handlers.tool_call![0]!(call, ctx))
         .then((decision: unknown) => { toolDecisions += 1; return decision; }));
@@ -821,7 +820,7 @@ bashGates(fakePi as never);
 
       gates.resolve(JSON.stringify({ data: null, schema_version: 1 }));
       expect(await claim).toBeUndefined();
-      expect(await Promise.all(gatedCalls)).toEqual([undefined, undefined, undefined]);
+      expect(await Promise.all(gatedCalls)).toEqual([undefined, undefined]);
     } finally {
       setBdStreamForTests(null);
       rmSync(dir, { recursive: true, force: true });

@@ -85,7 +85,7 @@ type TargetIdentity = { records: WorktreeRecord[]; target: WorktreeRecord; main:
  */
 type PullRequestObservation = ReceiptPr & { method: string };
 type ReceiptResolution =
-	| { tag: "resolved"; receipt: LandingReceipt }
+	| { tag: "resolved"; receipt: LandingReceipt; path: string }
 	| { tag: "refused"; failure: CleanupFailure };
 
 type Absence = "absent" | "present" | "unknown";
@@ -444,12 +444,14 @@ function resolveReceipt(params: DeliveryCleanupParams, cwd: string, env: NodeJS.
 	}
 	const directory = resolve(receiptDirectory(env, key));
 	let receipt: LandingReceipt | null = null;
+	let receiptPath: string | null = null;
 	if (params.receipt !== undefined) {
 		const path = canonicalReceiptPath(params.receipt, cwd, directory);
 		if (typeof path !== "string") return { tag: "refused", failure: path };
 		const read = readReceipt(path);
 		if (!read.ok) return { tag: "refused", failure: { ok: false, reason: read.reason } };
 		receipt = read.receipt;
+		receiptPath = path;
 	} else {
 		const state = receiptDirectoryState(directory);
 		if (state === "unsafe") {
@@ -459,7 +461,9 @@ function resolveReceipt(params: DeliveryCleanupParams, cwd: string, env: NodeJS.
 			};
 		}
 		const matches = state === "safe" ? listReceipts(directory, { pr: params.pr, branch: params.branch }) : [];
-		receipt = matches[0] ?? null;
+		const selected = matches[0];
+		receipt = selected ?? null;
+		if (selected !== undefined) receiptPath = resolve(directory, `${selected.receiptId}.json`);
 	}
 	if (receipt === null) {
 		const selector = params.pr !== undefined
@@ -469,6 +473,7 @@ function resolveReceipt(params: DeliveryCleanupParams, cwd: string, env: NodeJS.
 				: `repo.key ${key}`;
 		return { tag: "refused", failure: refuse("receipt", null, `the newest validated receipt for ${selector}`) };
 	}
+	if (receiptPath === null) return { tag: "refused", failure: refuse("receipt.path", null, "the canonical path for the selected validated receipt") };
 	if (receipt.repo.key !== key) {
 		return { tag: "refused", failure: refuse("repo.key", receipt.repo.key, `current repository key ${key}`) };
 	}
@@ -485,7 +490,7 @@ function resolveReceipt(params: DeliveryCleanupParams, cwd: string, env: NodeJS.
 			),
 		};
 	}
-	return { tag: "resolved", receipt };
+	return { tag: "resolved", receipt, path: receiptPath };
 }
 
 function verifyArguments(params: DeliveryCleanupParams, receipt: LandingReceipt): CleanupFailure | null {
@@ -569,7 +574,7 @@ function unwrapEnvelope(value: unknown): unknown {
 }
 
 /**
- * The reconciliation gate: classify the ledger at the canonical root, require the
+ * The native close-out gate: classify the ledger at the canonical root, require the
  * receipt to agree, and then require every bead it names to be closed against this
  * merge.
  *
@@ -578,9 +583,9 @@ function unwrapEnvelope(value: unknown): unknown {
  * `beads.ledgerActive: false` read straight off it used to return success here — so
  * landing from a directory shadowed by a nested retired `.beads` and cleaning from
  * the repository whose canonical ledger is active removed the worktree and deleted
- * the branch with no `bd_reconcile` while the authoritative bead stayed open. The
- * classification is therefore recomputed on every call, at the canonical root
- * {@link canonicalLedger} derives, and a disagreement refuses naming both values.
+ * the branch while the authoritative bead stayed open. The classification is
+ * therefore recomputed on every call, at the canonical root {@link canonicalLedger}
+ * derives, and a disagreement refuses naming both values.
  *
  * A repository that cannot be classified refuses too: an unclassifiable ledger is
  * not an absent one, and the only irreversible step in this tool is on the other
@@ -589,7 +594,7 @@ function unwrapEnvelope(value: unknown): unknown {
  * An active ledger with no bead ids is not handled here. `validateReceipt` refuses
  * that pair at the trust boundary, so a receipt read by this tool never carries it.
  */
-function verifyLedger(receipt: LandingReceipt, cwd: string, run: CliRunner): CleanupFailure | null {
+function verifyLedger(receipt: LandingReceipt, cwd: string, receiptPath: string, run: CliRunner): CleanupFailure | null {
 	const classification = canonicalLedger(cwd);
 	if (classification === null) {
 		return refuse(
@@ -598,13 +603,18 @@ function verifyLedger(receipt: LandingReceipt, cwd: string, run: CliRunner): Cle
 			"a repository whose canonical root can be resolved, so the receipt's ledger claim can be recomputed rather than trusted",
 		);
 	}
+	const nativeSteps = receipt.beads.ids.flatMap(id => {
+		const update = `bd update ${id} --set-metadata pr=${receipt.pr.number} --set-metadata merge_sha=${receipt.pr.mergeCommitOid ?? "missing"}`;
+		const close = `bd close ${id} --reason "PR #${receipt.pr.number} merged as ${receipt.pr.mergeCommitOid ?? "missing"}; receipt ${receiptPath}"`;
+		return [update, close];
+	});
 	if (classification.active !== receipt.beads.ledgerActive) {
 		return {
 			ok: false,
 			reason: `beads.ledgerActive: observed ${receipt.beads.ledgerActive} stored in the receipt, expected ${classification.active}, recomputed at canonical root ${show(classification.root)}; ${
 				classification.active
-					? "this repository's ledger is active, so run bd_reconcile to write it from the receipt and then delivery_cleanup"
-					: "the receipt was written against a ledger this repository does not have, so bd_reconcile cannot record it and nothing was removed"
+					? `this repository's ledger is active, so for each receipt bead in child-before-parent order run ${nativeSteps.join("; ")}, then delivery_cleanup`
+					: "the receipt was written against a ledger this repository does not have, so nothing was removed because the canonical ledger classification disagreed with the receipt"
 			}`,
 		};
 	}
@@ -639,16 +649,18 @@ function verifyLedger(receipt: LandingReceipt, cwd: string, run: CliRunner): Cle
 	}
 	for (const id of receipt.beads.ids) {
 		const issue = rows.get(id);
-		if (issue === undefined) return refuse(`beads.${id}`, null, "a bead returned by bd show; run bd_reconcile");
+		const update = `bd update ${id} --set-metadata pr=${receipt.pr.number} --set-metadata merge_sha=${receipt.pr.mergeCommitOid ?? "missing"}`;
+		const close = `bd close ${id} --reason "PR #${receipt.pr.number} merged as ${receipt.pr.mergeCommitOid ?? "missing"}; receipt ${receiptPath}"`;
+		if (issue === undefined) return refuse(`beads.${id}`, null, `a bead returned by bd show before ${update} then ${close}`);
 		const status = text(issue, "status");
-		if (status !== "closed") return refuse(`beads.${id}.status`, status, '"closed" after bd_reconcile');
+		if (status !== "closed") return refuse(`beads.${id}.status`, status, `"closed" after ${update} then ${close}`);
 		const metadata = record(own(issue, "metadata"));
 		const mergeSha = metadata === null ? undefined : own(metadata, "merge_sha");
 		if (typeof mergeSha !== "string" || mergeSha !== receipt.pr.mergeCommitOid) {
 			return refuse(
 				`beads.${id}.metadata.merge_sha`,
 				mergeSha,
-				`receipt pr.mergeCommitOid ${show(receipt.pr.mergeCommitOid)} after bd_reconcile`,
+				`receipt pr.mergeCommitOid ${show(receipt.pr.mergeCommitOid)} after ${update} then ${close}`,
 			);
 		}
 	}
@@ -874,14 +886,14 @@ export function cleanupDelivery(
 	if (isFailure(observed)) return observed;
 	const observedFailure = verifyObservation(receipt, observed.pr);
 	if (observedFailure !== null) return observedFailure;
-
 	const path = receipt.worktree.path as string;
 	const dirty = verifyCleanTarget(path, run);
 	if (dirty !== null) return dirty;
 	const pushed = verifyPushed(path, run);
 	if (pushed !== null) return pushed;
-	const ledger = verifyLedger(receipt, cwd, run);
+	const ledger = verifyLedger(receipt, cwd, resolution.path, run);
 	if (ledger !== null) return ledger;
+
 	const localRef = verifyLocalRef(receipt, cwd, run);
 	if (localRef !== null) return localRef;
 	const boundary = revalidateBoundary(receipt, cwd, run);
@@ -985,8 +997,8 @@ export default function deliveryCleanupTool(pi: ExtensionAPI): void {
 		name: "delivery_cleanup",
 		label: "Clean landed worktree and branch",
 		description:
-			"Cleanup after the landing receipt. The lifecycle is conditional: delivery_land, then bd_reconcile, then delivery_cleanup when the ledger classification recomputed at the repository's canonical root is active; a retired or ledger-free repository goes delivery_land, then delivery_cleanup directly. " +
-			"This tool recomputes that classification at the canonical root on every call and refuses when it differs from beads.ledgerActive in the receipt, naming the stored value, the recomputed value and bd_reconcile: the stored boolean alone never opens the success path. " +
+			"Cleanup after the landing receipt. The lifecycle is conditional: delivery_land, then for each receipt bead in child-before-parent order run `bd update ID --set-metadata pr=N --set-metadata merge_sha=SHA`, then `bd close ID --reason \"PR #N merged as SHA; receipt PATH\"`, then delivery_cleanup when the ledger classification recomputed at the repository's canonical root is active; a retired or ledger-free repository goes delivery_land, then delivery_cleanup directly. " +
+			"This tool recomputes that classification at the canonical root on every call and refuses when it differs from beads.ledgerActive in the receipt, naming the stored value and the recomputed value; the stored boolean alone never opens the success path. " +
 			"It then resolves exact landing proof from the repository the receipt's own remote resolves to — never from whichever repository a forge CLI infers from the current directory — refuses to remove the worktree it was invoked from, removes one clean pushed worktree identified by the receipt without force, deletes its local branch with -d, records local and remote observations, and writes one continuation receipt. " +
 			"The tool performs only read-only bd show calls; repository policy assigns actor ownership.",
 		parameters: z.object({

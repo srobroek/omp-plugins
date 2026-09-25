@@ -446,7 +446,7 @@ describe("handleSessionStop", () => {
 		for (const earlier of [first, second]) {
 			expect(earlier).not.toContain("worktree-reaper");
 			expect(earlier).not.toContain("delivery_cleanup");
-			expect(earlier).not.toContain("bd_reconcile");
+			expect(earlier).not.toContain("bd update");
 			expect(earlier).not.toContain("Escalation");
 		}
 		// An actionable third reminder escalates exactly like an ambiguous one: the
@@ -459,7 +459,7 @@ describe("handleSessionStop", () => {
 		expect(third).toContain("grants no removal, merge, or publish authority");
 	});
 
-	test("an active ledger puts bd_reconcile ahead of delivery_cleanup", () => {
+	test("an active ledger lists native bead update and close before delivery_cleanup", () => {
 		const state = createAdvisoryState();
 		const next = () => {
 			state.lastFired = false;
@@ -468,8 +468,11 @@ describe("handleSessionStop", () => {
 		next();
 		next();
 		const third = next()?.additionalContext ?? "";
-		expect(third.indexOf("bd_reconcile")).toBeGreaterThan(-1);
-		expect(third.indexOf("bd_reconcile")).toBeLessThan(third.indexOf("delivery_cleanup"));
+		const update = "bd update ID --set-metadata pr=N --set-metadata merge_sha=SHA";
+		const close = 'bd close ID --reason "PR #N merged as SHA; receipt PATH"';
+		expect(third.indexOf(update)).toBeGreaterThan(-1);
+		expect(third.indexOf(update)).toBeLessThan(third.indexOf(close));
+		expect(third.indexOf(close)).toBeLessThan(third.indexOf("delivery_cleanup"));
 	});
 
 	test("no active ledger names delivery_cleanup alone", () => {
@@ -482,7 +485,7 @@ describe("handleSessionStop", () => {
 		next();
 		const third = next()?.additionalContext ?? "";
 		expect(third).toContain("delivery_cleanup");
-		expect(third).not.toContain("bd_reconcile");
+		expect(third).not.toContain("bd update");
 		expect(third).toContain("report-only worktree-reaper");
 	});
 

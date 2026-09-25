@@ -409,15 +409,14 @@ type StopResult = { continue: true; additionalContext: string };
  *
  * Two surfaces are named because they are the only sanctioned ones, and both are
  * named with their limits: the worktree-reaper agent reports and removes nothing,
- * and removal happens through delivery_cleanup after a landing is proved. The
- * ledger tool is named only when a ledger is actually active, in the order
- * decision omp-plugins-9ej3.45 fixes — bd_reconcile, then delivery_cleanup — so
- * this text never states the unconditional form.
+ * and removal happens through delivery_cleanup after a landing is proved. The native
+ * close-out commands are named only when a ledger is actually active, in the order
+ * children before parents, so this text never states the unconditional form.
  */
 function escalation(ledgerIsActive: boolean): string {
 	const lifecycle = ledgerIsActive
-		? "When the ledger is active the order is fixed: run bd_reconcile to write the ledger from the landing receipt, then delivery_cleanup to remove the worktree and its local branch."
-		: "The canonical root carries no active ledger, so nothing is reconciled first: removal runs through delivery_cleanup alone.";
+		? 'When the ledger is active the order is fixed: for each receipt bead in child-before-parent order run `bd update ID --set-metadata pr=N --set-metadata merge_sha=SHA`, then `bd close ID --reason "PR #N merged as SHA; receipt PATH"`, then delivery_cleanup to remove the worktree and its local branch.'
+		: "The canonical root carries no active ledger, so no ledger update or close runs first: removal runs through delivery_cleanup alone.";
 	return (
 		" Escalation: dispatch the report-only worktree-reaper to inspect and report the residual; the main agent or the run lead invokes it, and it removes nothing. " +
 		`${lifecycle} ` +

@@ -30,7 +30,7 @@ MUST WH-9: the report-only `worktree-reaper` never authorizes backup removal. Wh
 
 ## Remove landed state
 
-MUST WH-6: remove landed state only through `delivery_cleanup`, after running `bd_reconcile` when the receipt has `beads.ledgerActive: true`; no-ledger or retired receipts (`false`) go directly from landing to `delivery_cleanup`. That tool removes one worktree. Then it deletes the local ref. Then it verifies absence. For an active ledger, `delivery_cleanup` refuses while the ledger stays unreconciled and names `bd_reconcile` in the refusal. Provenance obligations for a destructive ref mutation stay in `rule://worktrunk-destructive-branch-provenance`.
+MUST WH-6: after `delivery_land` proves a branch landed, remove landed state only through `delivery_cleanup`, after closing each receipt bead in children-first order for an active ledger with `bd update ID --set-metadata pr=N --set-metadata merge_sha=SHA`, then `bd close ID --reason "PR #N merged as SHA; receipt PATH"`; no-ledger or retired receipts (`false`) go directly from landing to `delivery_cleanup`. Delivery tools never write the Beads ledger. `delivery_cleanup` performs read-only `bd show` verification that every receipt bead is closed and `metadata.merge_sha` equals the receipt's `pr.mergeCommitOid`; it refuses while an active ledger remains unreconciled. That tool removes one worktree. Then it deletes the local ref. Then it verifies absence. Provenance obligations for a destructive ref mutation stay in `rule://worktrunk-destructive-branch-provenance`.
 
 WH-6 has preconditions and stopping conditions:
 
