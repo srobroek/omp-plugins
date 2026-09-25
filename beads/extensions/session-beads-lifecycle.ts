@@ -45,14 +45,14 @@ import { claimedIds, claimedTextIds, claimResultOutput } from "./bd-lease-gate.t
 import { repoIdentity, sessionPinFor } from "./beads-store.ts";
 import {
 	type CommandPosition,
-	commandSegments,
 	closeInvocations,
+	commandSegments,
 	type ParsedCommand,
-	parse,
 	type ParsedInvocation,
+	parse,
 	parsedInvocations,
 } from "./shell-command.ts";
-import { tokenizeShell, type ShellToken } from "./shell-tokenizer.ts";
+import { type ShellToken, tokenizeShell } from "./shell-tokenizer.ts";
 
 /**
  * Variables the plugin wins on, in every environment it shapes for bd.
