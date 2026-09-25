@@ -11,7 +11,7 @@ Read the created path from that JSON. Address every file by absolute path under 
 
 `--base` takes a commit and defaults to the default branch's current tip. Concurrent workers MUST pass the run's recorded base commit, so every branch is cut from the same point instead of from whatever has landed since.
 
-Then provision it: `wt step copy-ignored`. Without it a focused test run fails with a missing-module error that reads as broken code rather than as an unprovisioned checkout.
+Provisioning runs in the post-start hook in the background (reflinked copy; `uv sync` for Python). If an immediate test, typecheck, or dev server fails with missing-module or missing-type errors, inspect `wt config state logs --format=json`, wait for the hook to finish, and retry before diagnosing source code.
 
 No bead is required to create a worktree. Where the project has a ledger, claim the bead for the work itself; its order relative to worktree setup does not matter. Branch names are not policed.
 
