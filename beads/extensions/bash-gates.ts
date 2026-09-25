@@ -3,6 +3,7 @@ import type { ExtensionAPI, ExtensionContext, ToolCallEvent } from "@oh-my-pi/pi
 import { agentActor, bdInvocations, decideActorParsed, environmentForInput } from "./bd-actor-gate.ts";
 import { decideBdCloseParsed } from "./bd-close-gate.ts";
 import { decideEmbeddedWrite } from "./bd-embedded-write-lock.ts";
+import { decideBdUnclaimParsed } from "./bd-unclaim-gate.ts";
 import { admitBdMutation, admitBeadsWork, lifecycleBdEnvironment, rewriteBashInput } from "./session-beads-lifecycle.ts";
 import { blockReason, commandFromInput, type ParsedCommand, parse, settingsEnabled } from "./shell-command.ts";
 
@@ -73,6 +74,10 @@ async function decide(parsed: ParsedCommand, event: ToolCallEvent, ctx: Extensio
 			const reason = error instanceof Error ? error.message : String(error);
 			return suffix("bd-close-gate", reason, "retry after the Beads lookup is available; the close was refused without gate proof");
 		}
+	}
+	if (settingsEnabled("beads", "bd-unclaim-gate", cwd)) {
+		const unclaim = decideBdUnclaimParsed(parsed);
+		if (unclaim !== undefined) return suffix("bd-unclaim-gate", unclaim.reason, "retry with `bd unclaim <id> --if-assignee <your actor>`");
 	}
 	if (settingsEnabled("beads", "bd-actor-gate", cwd)) {
 		const actor = decideActorParsed(parsed, env);

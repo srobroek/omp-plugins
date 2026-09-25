@@ -17,10 +17,11 @@ Steering surfaces:
 
 ## Store-safety extensions
 
-The package registers `bash-gates` as the dispatcher entrypoint and `session-beads-lifecycle` as the session lifecycle extension. `bash-gates` dispatches exactly two controls:
+The package registers `bash-gates` as the dispatcher entrypoint and `session-beads-lifecycle` as the session lifecycle extension. `bash-gates` dispatches exactly three controls:
 
 - `bd-embedded-write-lock` serializes writes to the embedded store and runs mutations through `bd-embedded-write-runner`.
 - `bd-actor-gate` requires an actor identity for writes that must be attributable.
+- `bd-unclaim-gate` requires every `bd unclaim` mutation to use the guarded `--if-assignee` compare-and-swap flag.
 
 The write runner is registered as the package program and must remain available. The session lifecycle extension pins `BEADS_DIR` to the repository's canonical `.beads` store so linked worktrees use one embedded ledger.
 
