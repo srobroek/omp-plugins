@@ -47,7 +47,6 @@ function token(value: string, startsQuoted = false, sawQuote = false): ShellToke
 /** Tokenize command-shaped source without invoking a shell. */
 export function tokenizeShell(command: unknown, options: TokenizeOptions = {}): ShellToken[] {
 	if (typeof command !== "string") return [];
-
 	const out: ShellToken[] = [];
 	let current = "";
 	let started = false;
@@ -145,7 +144,6 @@ export function tokenizeShell(command: unknown, options: TokenizeOptions = {}): 
 /** Whether the source ends outside a single- or double-quoted word. */
 export function shellQuoteBalanced(command: unknown): boolean {
 	if (typeof command !== "string") return true;
-
 	let quote: '"' | "'" | null = null;
 	for (let i = 0; i < command.length; i++) {
 		const ch = command[i] as string;
