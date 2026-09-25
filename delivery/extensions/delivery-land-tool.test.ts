@@ -105,6 +105,13 @@ function land(answers: Answers, params: Partial<LandParams> = {}, env: NodeJS.Pr
 	const outcome = landPullRequest({ pr: 470, ...params }, { run, cwd: canonical, now: () => NOW, receiptsDirectory: receipts, env });
 	return { outcome, calls, receipts, canonical, files: () => readdirSync(receipts) };
 }
+function nativeNext(beadId: string, pr: number, mergeSha: string, receiptPath: string): string[] {
+	return [
+		`bd update ${beadId} --set-metadata pr=${pr} --set-metadata merge_sha=${mergeSha}`,
+		`bd close ${beadId} --reason "PR #${pr} merged as ${mergeSha}; receipt ${receiptPath}"`,
+		"delivery_cleanup",
+	];
+}
 
 const merged = (argv: string[]): boolean => argv[2] === "merge";
 
@@ -147,8 +154,9 @@ describe("delivery_land", () => {
 		expect(receipt.worktree.path).toBe("/tmp/worktrees/omp-agent-omp-plugins-9ej3.5");
 		expect(receipt.outcome).toBe("landed");
 		expect(receipt.supersedes).toBeNull();
-		expect(outcome.next).toEqual(["bd_reconcile", "delivery_cleanup"]);
-		expect(outcome.text.indexOf("bd_reconcile")).toBeLessThan(outcome.text.indexOf("delivery_cleanup"));
+		expect(outcome.next).toEqual(nativeNext("omp-plugins-9ej3.5", 470, MERGE_OID, outcome.receiptPath));
+		expect(outcome.text).toContain("children before parents");
+		expect(outcome.text.indexOf(`bd update omp-plugins-9ej3.5 --set-metadata pr=470 --set-metadata merge_sha=${MERGE_OID}`)).toBeLessThan(outcome.text.indexOf("delivery_cleanup"));
 
 		// The file on disk is the object returned, and a reader accepts it.
 		const reread = readReceipt(outcome.receiptPath);
@@ -171,7 +179,7 @@ describe("delivery_land", () => {
 		if (!outcome.ok) throw new Error(outcome.reason);
 		expect(outcome.receipt.beads).toEqual({ ids: ["omp-plugins-9ej3.5"], ledgerActive: false });
 		expect(outcome.next).toEqual(["delivery_cleanup"]);
-		expect(outcome.text).not.toContain("bd_reconcile");
+		expect(outcome.text).not.toContain("bd update");
 	});
 
 
@@ -194,7 +202,7 @@ describe("delivery_land", () => {
 		expect(outcome.receipt.beads.ledgerActive).toBe(false);
 		expect(outcome.receipt.proof.evidence).toMatchObject({ ledger: { root: realpathSync(canonical), active: false } });
 		expect(outcome.next).toEqual(["delivery_cleanup"]);
-		expect(outcome.text).not.toContain("bd_reconcile");
+		expect(outcome.text).not.toContain("bd update");
 	});
 
 	test("a nested retired ledger does not deactivate an active canonical root", () => {
@@ -210,8 +218,8 @@ describe("delivery_land", () => {
 		if (!outcome.ok) throw new Error(outcome.reason);
 		expect(outcome.receipt.beads.ledgerActive).toBe(true);
 		expect(outcome.receipt.proof.evidence).toMatchObject({ ledger: { root: realpathSync(canonical), active: true } });
-		expect(outcome.next).toEqual(["bd_reconcile", "delivery_cleanup"]);
-		expect(outcome.text).toContain("bd_reconcile");
+		expect(outcome.next).toEqual(nativeNext("omp-plugins-9ej3.5", 470, MERGE_OID, outcome.receiptPath));
+		expect(outcome.text).toContain(`bd close omp-plugins-9ej3.5 --reason "PR #470 merged as ${MERGE_OID}; receipt ${outcome.receiptPath}"`);
 	});
 
 	test("a symlinked RETIRED marker does not deactivate the ledger", () => {
@@ -227,7 +235,7 @@ describe("delivery_land", () => {
 		expect(outcome.ok).toBe(true);
 		if (!outcome.ok) throw new Error(outcome.reason);
 		expect(outcome.receipt.beads.ledgerActive).toBe(true);
-		expect(outcome.next).toEqual(["bd_reconcile", "delivery_cleanup"]);
+		expect(outcome.next).toEqual(nativeNext("omp-plugins-9ej3.5", 470, MERGE_OID, outcome.receiptPath));
 	});
 
 	test("a dangling .beads path keeps the ledger active", () => {
@@ -252,13 +260,17 @@ describe("delivery_land", () => {
 		expect(outcome.receipt.beads.ledgerActive).toBe(true);
 	});
 
-	test("the result text routes the caller to bd_reconcile and then delivery_cleanup", () => {
+	test("the result text lists native child-before-parent closeout commands before delivery_cleanup", () => {
 		const { outcome } = land({ prView: [completed(mergedGithubPr())] });
 		expect(outcome.ok).toBe(true);
-		const reconcile = outcome.text.indexOf("bd_reconcile");
-		const cleanup = outcome.text.indexOf("delivery_cleanup");
-		expect(reconcile).toBeGreaterThan(-1);
-		expect(cleanup).toBeGreaterThan(reconcile);
+		if (!outcome.ok) throw new Error(outcome.reason);
+		const update = `bd update omp-plugins-9ej3.5 --set-metadata pr=470 --set-metadata merge_sha=${MERGE_OID}`;
+		const close = `bd close omp-plugins-9ej3.5 --reason "PR #470 merged as ${MERGE_OID}; receipt ${outcome.receiptPath}"`;
+		expect(outcome.next).toEqual(nativeNext("omp-plugins-9ej3.5", 470, MERGE_OID, outcome.receiptPath));
+		expect(outcome.text).toContain("children before parents");
+		expect(outcome.text.indexOf(update)).toBeGreaterThan(-1);
+		expect(outcome.text.indexOf(update)).toBeLessThan(outcome.text.indexOf(close));
+		expect(outcome.text.indexOf(close)).toBeLessThan(outcome.text.indexOf("delivery_cleanup"));
 	});
 
 	test("an already MERGED pull request is proved, not merged again", () => {
@@ -1059,7 +1071,7 @@ describe("delivery_land", () => {
 		expect(outcome.ok).toBe(true);
 		if (!outcome.ok) throw new Error(outcome.reason);
 		expect(outcome.receipt.beads).toEqual({ ids: ["omp-plugins-9ej3.38"], ledgerActive: true });
-		expect(outcome.next).toEqual(["bd_reconcile", "delivery_cleanup"]);
+		expect(outcome.next).toEqual(nativeNext("omp-plugins-9ej3.38", 470, MERGE_OID, outcome.receiptPath));
 	});
 
 	test("a ledger-free repository needs no bead identity at all", () => {

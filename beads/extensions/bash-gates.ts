@@ -96,14 +96,12 @@ async function decide(parsed: ParsedCommand, event: ToolCallEvent, ctx: Extensio
 	if (JSON.stringify(rewritten) !== JSON.stringify(event.input)) return { input: rewritten };
 	return undefined;
 }
-
 /** The beads plugin's sole Bash tool-call registration. Parsing happens exactly once. */
 export default function bashGates(pi: ExtensionAPI): void {
 	pi.on("tool_call", async (event: ToolCallEvent, ctx: ExtensionContext) => {
 		try {
 			const input = event.input as Record<string, unknown>;
 			const gatedTool = event.toolName === "task" ||
-				(event.toolName === "bd_reconcile" && input.apply === true) ||
 				(event.toolName === "bd_formula_check" && input.deep === true);
 			if (gatedTool) {
 				const workspace = typeof input.workspace === "string" ? input.workspace : undefined;

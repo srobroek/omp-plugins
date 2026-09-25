@@ -990,7 +990,7 @@ describe("delivery_cleanup irreversible boundary", () => {
 
 		git(f.linked, ["update-ref", `refs/remotes/origin/${f.branch}`, f.head]);
 		const ledger = invoke(f, { receipt: f.receiptPath }, { beadStatus: "open" });
-		expect(refusal(ledger.result)).toContain('beads.delivery-17.status: observed "open", expected "closed" after bd_reconcile');
+		expect(refusal(ledger.result)).toContain(`bd update delivery-17 --set-metadata pr=${f.receipt.pr.number} --set-metadata merge_sha=${f.receipt.pr.mergeCommitOid}`);
 		expect(mutationCalls(ledger.calls)).toEqual([]);
 	}, 60_000);
 
@@ -1007,9 +1007,26 @@ describe("delivery_cleanup irreversible boundary", () => {
 
 	test("reconciliation requires every bead merge_sha to equal the receipt exactly", () => {
 		const f = fixture("ledger-sha");
-		const { result, calls } = invoke(f, { receipt: f.receiptPath }, { beadMergeSha: "b".repeat(40) });
-		expect(refusal(result)).toContain("beads.delivery-17.metadata.merge_sha");
-		expect(refusal(result)).toContain(f.merge);
+		const observed = "b".repeat(40);
+		const { result, calls } = invoke(f, { receipt: f.receiptPath }, { beadMergeSha: observed });
+		const reason = refusal(result);
+		expect(reason).toContain("beads.delivery-17.metadata.merge_sha");
+		expect(reason).toContain(observed);
+		expect(reason).toContain(f.merge);
+		expect(reason).toContain(`bd update delivery-17 --set-metadata pr=${f.receipt.pr.number} --set-metadata merge_sha=${f.merge}`);
+		expect(commandCalls(calls, "bd")).toEqual([["bd", "show", "delivery-17", "--json"]]);
+		expect(mutationCalls(calls)).toEqual([]);
+	});
+
+	test("reconciliation refuses a closed bead without merge_sha and names native update", () => {
+		const f = fixture("ledger-missing-merge-sha");
+		const { result, calls } = invoke(f, { receipt: f.receiptPath }, {
+			beadRows: [{ id: "delivery-17", status: "closed", metadata: {} }],
+		});
+		const reason = refusal(result);
+		expect(reason).toContain("beads.delivery-17.metadata.merge_sha");
+		expect(reason).toContain(`bd update delivery-17 --set-metadata pr=${f.receipt.pr.number} --set-metadata merge_sha=${f.merge}`);
+		expect(reason).toContain(`bd close delivery-17 --reason "PR #${f.receipt.pr.number} merged as ${f.merge}; receipt ${f.receiptPath}"`);
 		expect(commandCalls(calls, "bd")).toEqual([["bd", "show", "delivery-17", "--json"]]);
 		expect(mutationCalls(calls)).toEqual([]);
 	});
@@ -1302,7 +1319,7 @@ describe("the ledger is classified at the canonical root, never at a caller's di
 	 * `ledgerActive: false` from the shadowed directory and cleanup returned success
 	 * from the ledger gate without issuing a single `bd` call, deleting the worktree and
 	 * the branch while the bead stayed open.
-	 */
+	*/
 	test("a landing from a shadowed directory records the canonical verdict, and cleanup then requires reconciliation", () => {
 		const f = fixture("bypass", "omp/agent/delivery-17");
 		const shadowed = join(f.main, "nested");
@@ -1319,7 +1336,11 @@ describe("the ledger is classified at the canonical root, never at a caller's di
 		expect(landed.receipt.beads).toEqual({ ids: ["delivery-17"], ledgerActive: true });
 		expect(landed.receipt.proof.evidence).toMatchObject({ ledger: { root: realpathSync(f.main), active: true } });
 		expect(landed.receipt.repo.remote).toBe("origin");
-		expect(landed.next).toEqual(["bd_reconcile", "delivery_cleanup"]);
+		expect(landed.next).toEqual([
+			`bd update delivery-17 --set-metadata pr=${landed.receipt.pr.number} --set-metadata merge_sha=${landed.receipt.pr.mergeCommitOid}`,
+			`bd close delivery-17 --reason "PR #${landed.receipt.pr.number} merged as ${landed.receipt.pr.mergeCommitOid}; receipt ${landed.receiptPath}"`,
+			"delivery_cleanup",
+		]);
 
 		const cleaning = runner(f);
 		const cleaned = cleanupDelivery({ receipt: landed.receiptPath }, f.main, {
@@ -1353,7 +1374,7 @@ describe("the ledger is classified at the canonical root, never at a caller's di
 			now: () => NOW + 10,
 			env: f.env,
 		});
-		expect(refusal(refused)).toContain('beads.delivery-17.status: observed "open", expected "closed" after bd_reconcile');
+		expect(refusal(refused)).toContain(`bd update delivery-17 --set-metadata pr=${landed.receipt.pr.number} --set-metadata merge_sha=${landed.receipt.pr.mergeCommitOid}`);
 		expect(mutationCalls(cleaning.calls)).toEqual([]);
 		expect(existsSync(f.linked)).toBe(true);
 		expect(gitExit(f.main, ["show-ref", "--verify", "--quiet", `refs/heads/${f.branch}`])).toBe(0);
@@ -1371,7 +1392,11 @@ describe("the ledger is classified at the canonical root, never at a caller's di
 			if (!landed.ok) throw new Error(landed.reason);
 			expect(landed.receipt.repo.canonicalRoot).toBe(realpathSync(f.main));
 			expect(landed.receipt.beads).toEqual({ ids: ["delivery-17"], ledgerActive: true });
-			expect(landed.next).toEqual(["bd_reconcile", "delivery_cleanup"]);
+			expect(landed.next).toEqual([
+				`bd update delivery-17 --set-metadata pr=${landed.receipt.pr.number} --set-metadata merge_sha=${landed.receipt.pr.mergeCommitOid}`,
+				`bd close delivery-17 --reason "PR #${landed.receipt.pr.number} merged as ${landed.receipt.pr.mergeCommitOid}; receipt ${landed.receiptPath}"`,
+				"delivery_cleanup",
+			]);
 
 			const cleaning = runner(f, { beadStatus: "open" });
 			const refused = cleanupDelivery({ receipt: landed.receiptPath }, f.main, {
@@ -1379,7 +1404,7 @@ describe("the ledger is classified at the canonical root, never at a caller's di
 				now: () => NOW + 10,
 				env: f.env,
 			});
-			expect(refusal(refused)).toContain('beads.delivery-17.status: observed "open", expected "closed" after bd_reconcile');
+			expect(refusal(refused)).toContain(`bd update delivery-17 --set-metadata pr=${landed.receipt.pr.number} --set-metadata merge_sha=${landed.receipt.pr.mergeCommitOid}`);
 			expect(commandCalls(cleaning.calls, "bd")).toEqual([["bd", "show", "delivery-17", "--json"]]);
 			expect(mutationCalls(cleaning.calls)).toEqual([]);
 			expect(existsSync(f.linked)).toBe(true);
@@ -1407,7 +1432,7 @@ describe("the ledger is classified at the canonical root, never at a caller's di
 		const reason = refusal(result);
 		expect(reason).toContain("beads.ledgerActive: observed false stored in the receipt, expected true");
 		expect(reason).toContain(`recomputed at canonical root "${realpathSync(f.main)}"`);
-		expect(reason).toContain("bd_reconcile");
+		expect(reason).toContain(`bd update delivery-17 --set-metadata pr=${f.receipt.pr.number} --set-metadata merge_sha=${f.receipt.pr.mergeCommitOid}`);
 		expect(mutationCalls(calls)).toEqual([]);
 		expect(commandCalls(calls, "bd")).toEqual([]);
 		expect(existsSync(f.linked)).toBe(true);

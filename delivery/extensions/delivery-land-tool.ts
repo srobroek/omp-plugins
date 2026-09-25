@@ -38,8 +38,8 @@
  * The ledger is not this package's to write, and not this call's directory to
  * classify. Per decision omp-plugins-9ej3.1 delivery proves and beads records, so
  * this tool runs no `bd` verb at all — the receipt is the hand-off, and the result
- * text names `bd_reconcile` as the next step and `delivery_cleanup` as the step
- * after it. Amendment omp-plugins-9ej3.45 fixes where the verdict comes from:
+ * text names the native bead update and close commands before `delivery_cleanup`.
+ * Amendment omp-plugins-9ej3.45 fixes where the verdict comes from:
  * `beads.ledgerActive` is classified at the repository's canonical root, so a
  * nested retired `.beads` under the directory this tool was called in cannot record
  * a landing as ledger-free and send cleanup past a reconciliation that never
@@ -413,17 +413,26 @@ function beadIdentity(beadId: string | undefined, branch: string): { ids: string
 }
 
 /**
- * Why a landing with no bead to reconcile may not be recorded, or null when it may.
+ * Why a landing with no bead identity may not be recorded, or null when it may.
  *
  * A receipt whose ledger is active and whose id list is empty claims that work was
- * landed into a repository that tracks it, and names nothing for `bd_reconcile` to
- * close. `delivery_cleanup` would then ask `bd` about an empty list and pass a gate
- * that verified nothing, so the landing refuses here instead — before the merge when
- * the branch is already known, and again before the receipt is built.
+ * landed into a repository that tracks it, and names nothing for the native close-out
+ * commands. `delivery_cleanup` would then ask `bd` about an empty list and pass a
+ * gate that verified nothing, so the landing refuses here instead — before the merge
+ * when the branch is already known, and again before the receipt is built.
  */
+function nativeCloseoutSteps(receipt: LandingReceipt, receiptPath: string, mergeSha: string): readonly string[] {
+	const commands = receipt.beads.ids.flatMap(id => [
+		`bd update ${id} --set-metadata pr=${receipt.pr.number} --set-metadata merge_sha=${mergeSha}`,
+		`bd close ${id} --reason "PR #${receipt.pr.number} merged as ${mergeSha}; receipt ${receiptPath}"`,
+	]);
+	return [...commands, "delivery_cleanup"];
+}
+
+/** The active-ledger landing must name at least one receipt bead to close. */
 function missingBeadIdentity(ids: readonly string[], branch: string, ledger: CanonicalLedger): string | null {
 	if (!ledger.active || ids.length > 0) return null;
-	return `beads.ids: observed no bead identity for branch ${show(branch)}, expected an "omp/agent/<bead-id>" branch or an explicit beadId; the ledger at canonical root ${show(ledger.root)} is active, so this landing has a bead to reconcile`;
+	return `beads.ids: observed no bead identity for branch ${show(branch)}, expected an "omp/agent/<bead-id>" branch or an explicit beadId; the ledger at canonical root ${show(ledger.root)} is active, so this landing has no bead for the native close-out commands`;
 }
 
 /**
@@ -684,7 +693,7 @@ export function landPullRequest(params: LandParams, deps: LandDeps = {}): LandOu
 
 	// Re-derived from the branch the re-read proved, which need not be the branch the
 	// first read named, and checked again: no receipt claims an active ledger with
-	// nothing for bd_reconcile to close.
+	// nothing for the native close-out commands to process.
 	const proven = beadIdentity(params.beadId, proved.headRefName);
 	if ("reason" in proven) return refuse(`${proven.reason}; no receipt was written`);
 	const unproven = missingBeadIdentity(proven.ids, proved.headRefName, repository.ledger);
@@ -741,13 +750,15 @@ export function landPullRequest(params: LandParams, deps: LandDeps = {}): LandOu
 		return refuse(`the receipt could not be written: ${error instanceof Error ? error.message : String(error)}`);
 	}
 
-	const next = validation.receipt.beads.ledgerActive ? ["bd_reconcile", "delivery_cleanup"] as const : ["delivery_cleanup"] as const;
+	const next = validation.receipt.beads.ledgerActive
+		? nativeCloseoutSteps(validation.receipt, receiptPath, proof.oid)
+		: ["delivery_cleanup"] as const;
 	const text = [
 		`delivery_land proved ${nameWithOwner}#${proved.number} merged as ${proof.oid.slice(0, 12)} on ${forge}.`,
 		`branch ${proved.headRefName}: remote ${verdict}, deletedRemote ${verdict === "absent"}, autoDeleteSetting ${observedAutoDelete}.`,
 		`receipt: ${receiptPath}`,
 		validation.receipt.beads.ledgerActive
-			? "next: run bd_reconcile to write the ledger from this receipt — delivery never writes it — then delivery_cleanup to remove the worktree and the local branch."
+			? `next (children before parents):\n${next.slice(0, -1).map(step => `  ${step}`).join("\n")}\n  delivery_cleanup to remove the worktree and the local branch.`
 			: "next: run delivery_cleanup to remove the worktree and the local branch.",
 	].join("\n");
 	return { ok: true, receipt: validation.receipt, receiptPath, text, next };
@@ -767,7 +778,7 @@ export default function deliveryLandTool(pi: ExtensionAPI): void {
 			"writes exactly one receipt under the agent directory and returns it as details.receipt. " +
 			"beads.ledgerActive is classified at the repository's canonical root, never at the working directory, so a nested retired .beads cannot make an active ledger look absent. " +
 			"On an active ledger the landing refuses unless it can name the bead it closes, from the omp/agent/<bead-id> branch convention or from beadId. " +
-			"Writes no Beads ledger: when receipt beads.ledgerActive is true, run bd_reconcile before delivery_cleanup; when it is false for a no-ledger or retired repository, go directly to delivery_cleanup. The caller supplies worktree when recording the cleanup association.",
+			"Writes no Beads ledger: when receipt beads.ledgerActive is true, for each receipt bead in child-before-parent order run `bd update ID --set-metadata pr=N --set-metadata merge_sha=SHA`, then `bd close ID --reason \"PR #N merged as SHA; receipt PATH\"`, then delivery_cleanup; when it is false for a no-ledger or retired repository, go directly to delivery_cleanup. The caller supplies worktree when recording the cleanup association.",
 		parameters: z.object({
 			pr: z.union([z.number(), z.string()]).describe("Pull request or merge request number"),
 			repo: z.string().optional().describe('Repository as "<owner>/<name>"; defaults to the path of the remote URL'),
