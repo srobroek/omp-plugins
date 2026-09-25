@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { type BdReadyResult, waitForPool } from "./pool-wait";
+import { type BdReadyResult, refuseUnguardedUnclaim, waitForPool } from "./pool-wait";
 
 function result(stdout: string, exitCode = 0): BdReadyResult {
 	return { exitCode, stdout, stderr: exitCode === 0 ? "" : "bd unavailable" };
@@ -67,5 +67,9 @@ describe("pool_wait", () => {
 
 		expect(waited.details.status).toBe("error");
 		expect(waited.details.error).toContain("at most 1800");
+	});
+	test("refuses unguarded bd unclaim commands", () => {
+		expect(refuseUnguardedUnclaim("bd unclaim bead-1")).toEqual({ block: true, reason: expect.stringContaining("--if-assignee") });
+		expect(refuseUnguardedUnclaim("bd update bead-1 --assignee pool:shepherd --if-assignee actor")).toBeUndefined();
 	});
 });

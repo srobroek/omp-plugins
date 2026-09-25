@@ -1,5 +1,11 @@
 import type { TSchema } from "@oh-my-pi/pi-ai";
-import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
+import type { ExtensionAPI, ToolCallEvent } from "@oh-my-pi/pi-coding-agent";
+
+export const UNGUARDED_UNCLAIM_REFUSAL = "Never use bd unclaim; retry with bd update <id> --assignee pool:<role> --status open --if-assignee <actor>";
+
+export function refuseUnguardedUnclaim(command: string): { block: true; reason: string } | undefined {
+	return /\bbd\s+unclaim\b/.test(command) ? { block: true, reason: UNGUARDED_UNCLAIM_REFUSAL } : undefined;
+}
 
 export const DEFAULT_TIMEOUT_S = 600;
 export const MAX_TIMEOUT_S = 1800;
@@ -201,6 +207,12 @@ export async function waitForPool(
 
 export default function poolWaitTool(pi: ExtensionAPI): void {
 	const z = pi.zod;
+	pi.on("tool_call", (event: ToolCallEvent) => {
+		if (event.toolName !== "bash") return undefined;
+		const input = event.input as { command?: unknown; cmd?: unknown };
+		const command = typeof input.command === "string" ? input.command : typeof input.cmd === "string" ? input.cmd : "";
+		return refuseUnguardedUnclaim(command);
+	});
 	pi.registerTool({
 		name: "pool_wait",
 		label: "Pool Wait",
