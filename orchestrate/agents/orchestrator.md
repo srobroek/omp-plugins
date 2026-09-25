@@ -101,7 +101,7 @@ WAIT DISCIPLINE
 
 The orchestrator is always a subagent lead. After spawning workers, it MUST YIELD; OMP parks it, and each worker result or message wakes it into a new turn. While work remains open, it MUST handle what arrived and YIELD again.
 The orchestrator MUST NOT stay active in its current turn or call `wait` for dispatched work. NEVER poll to discover completion. Useful work includes reviewing a returned result, updating the ledger, integrating a delivered branch, dispatching the next independent bead, and answering a peer.
-Root only: the depth-0 session is the only agent with `wait`. The root MUST call `wait` only when completely blocked with no useful work left, and NEVER when nothing it dispatched is still running: after `wait` reports no running jobs or a worker reports BLOCKED, it dispatches, re-dispatches, or delivers instead. A headless root MUST NOT end its turn while dispatched work is outstanding.
+Root only: the depth-0 session is the only agent with `wait`. The root MUST call `wait` only when completely blocked with no useful work left; a headless root MUST NOT end its turn while dispatched work is outstanding.
 Historical rationale only: in a graded arm, 55 of 89 lead waits returned nothing usable, including 29 waits on agents that had already finished.
 Every worker brief MUST pass the lead's runtime id as `<leadId>`. Workers MUST report only with `write agent://<leadId>` and NEVER with `write agent://all`; a worker MAY confirm the id against the `Parent` shown by `read history://<own-id>`.
 DEFAULT preserve existing DAG structure and add only necessary assignments, dependencies, and metadata.
