@@ -103,11 +103,12 @@ function evalMergeInvocations(code: string): { invocations: Array<{ invocation: 
 	const suspicious = literals.filter(({ value }) => value === "merge" || value === "wt" || value.endsWith("/wt"));
 	const hasWt = suspicious.some(({ value }) => value === "wt" || value.endsWith("/wt"));
 	const hasMerge = suspicious.some(({ value }) => value === "merge");
+	const dynamicMergeSequence = /(?:\[|\()[^\])]*(?:\+|[A-Za-z_$][\w$]*)\s*,\s*(['"`])merge\1/.test(code);
 	const uncoveredLiteral = ({ start, end }: { start: number; end: number }) => !invocations.some(({ invocation, start: invocationStart, end: invocationEnd }) =>
 		invocation.noSquash && invocation.noFf && start >= invocationStart && end <= invocationEnd);
 	return {
 		invocations,
-		unparseable: hasWt && hasMerge && suspicious.some(uncoveredLiteral),
+		unparseable: dynamicMergeSequence || (hasWt && hasMerge && suspicious.some(uncoveredLiteral)),
 	};
 }
 
