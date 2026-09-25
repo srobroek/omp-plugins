@@ -1,3 +1,0 @@
-# Playwright is isolated from product packages but still uses the accepted Bun runtime.
-[tools]
-bun = "@@BUN_VERSION@@"

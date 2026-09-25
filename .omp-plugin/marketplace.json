@@ -114,13 +114,6 @@
       "category": "productivity"
     },
     {
-      "name": "project-setup",
-      "description": "Interview-led repository setup: classify, agree a plan, then apply a static asset library.",
-      "source": "./project-setup",
-      "version": "0.3.0",
-      "category": "development"
-    },
-    {
       "name": "python",
       "description": "Python rules: uv-managed projects, typing, pytest layout, and a Python review skill.",
       "source": "./python",

@@ -45,7 +45,7 @@ OMP locates each capability by path; catalog entries cannot redirect that lookup
 
 ## Installing
 
-Either carrier works for every plugin in this repository. Measured on a 27-plugin estate:
+Either carrier works for every plugin in this repository. Measured on a 25-plugin estate:
 
 | Carrier | Skills | Agents | Rules |
 | --- | --- | --- | --- |
@@ -112,9 +112,9 @@ Three generators own the files below, so do not hand-edit them. CI fails when a 
 
 Each plugin owns its version in `<plugin>/.omp-plugin/plugin.json`. The release tool bumps only the
 files its config names. OMP, meanwhile, compares `plugins[].version` in the single top-level
-catalog, so a release assembles that catalog from the 26 manifests.
+catalog, so a release assembles that catalog from the 25 manifests.
 
-The catalog carries 37 entries: the 26 plugins here, plus 11 third-party plugins from
+The catalog carries 37 entries: the 25 plugins here, plus 12 third-party plugins from
 `scripts/third-party-plugins.json`. Install resolution is package-local.
 `scripts/check-catalog-validation.py` rejects malformed third-party input instead of publishing
 an incomplete catalog.

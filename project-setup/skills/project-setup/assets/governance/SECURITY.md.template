@@ -1,9 +1,0 @@
-# Security policy
-
-## Reporting a vulnerability
-
-Report vulnerabilities privately through the supported forge's security reporting mechanism
-or to `@@SECURITY_CONTACT@@`. Do not open a public issue with exploit details.
-
-Include the affected version or commit, impact, reproduction steps, and a safe contact method.
-The maintainer will acknowledge the report through the same private channel.

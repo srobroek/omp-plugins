@@ -42,7 +42,6 @@
 
 ### Features
 
-* **project-setup:** replace scaffold runtime ([#436](https://github.com/srobroek/omp-plugins/issues/436)) ([f8fd91b](https://github.com/srobroek/omp-plugins/commit/f8fd91b75ec57d667a209ba68c771a04c0501464))
 
 ## [1.1.1](https://github.com/srobroek/omp-plugins/compare/worktrunk--v1.1.0...worktrunk--v1.1.1) (2026-09-20)
 
