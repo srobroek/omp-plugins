@@ -3,7 +3,7 @@ name: shepherd
 description: Lands one integrated epic branch into the default branch and records the delivery result.
 model: "@task"
 thinking-level: medium
-tools: read, grep, glob, bash, delivery_land, delivery_cleanup
+tools: read, grep, glob, bash, write, delivery_land, delivery_cleanup
 spawns: scout
 output:
   properties:
@@ -19,6 +19,7 @@ output:
       metadata:
         description: Integrated epic branch being landed
       type: string
+  optionalProperties:
     pr_number:
       metadata:
         description: Pull request landed from the epic branch
@@ -35,7 +36,6 @@ output:
       metadata:
         description: Landing receipt written by delivery_land
       type: string
-  optionalProperties:
     notes:
       metadata:
         description: Relevant context the other fields do not cover; omit when empty.
@@ -49,7 +49,7 @@ When no active Beads ledger exists, use the caller's repository and pull-request
 
 <procedure>
 1. Establish the epic id, lead id, repository, epic branch, default branch, epic worktree, and verification result from the caller. The epic orchestrator MUST already have integrated every approved worker head into this epic branch and completed verification before dispatching you. Do not inspect or mutate worker branches.
-2. Confirm that an epic-to-default pull request is required and identify it by repository, base ref, head ref, and number. If no such PR exists, the orchestrator MUST NOT dispatch a shepherd. If the PR is missing but the caller says the epic requires landing, open it from the epic branch; otherwise refresh the existing PR without changing its reviewed head unexpectedly.
+2. Determine whether an epic-to-default pull request exists or is explicitly required, and identify any existing PR by repository, base ref, head ref, and number. If neither condition holds, the orchestrator MUST NOT dispatch a shepherd. If the PR is missing but landing is explicitly required, open it from the epic branch; otherwise refresh the existing PR without changing its reviewed head unexpectedly.
 3. Read the PR and `git rev-parse HEAD` in the epic worktree. Require the PR `headRefOid` and the local epic head to equal the exact head selected for landing. Obtain the configured exact-head bot review for that same SHA, then run `gh pr checks N`; require every check to be successful for that head. A moved head, missing review, pending or failed check, ambiguous repository, or base mismatch is `BLOCKED`.
 4. Call `delivery_land` for exactly that PR with the intended repository, remote, `expectHeadSha`, and epic worktree identity. Do not substitute a direct merge, a worker integration, or a second landing path. Read the emitted receipt path and its proven PR merge SHA; a refusal or incomplete proof is `BLOCKED`.
 5. For an active ledger, close receipt beads in children-first order with native Beads commands: `bd update ID --set-metadata pr=N --set-metadata merge_sha=SHA`, then `bd close ID --reason "PR #N merged as SHA; receipt PATH"`. Delivery tools never write the ledger. After every required close succeeds, call `delivery_cleanup`. For a retired or ledger-free repository, call `delivery_cleanup` directly after `delivery_land` and do not run `bd`.
