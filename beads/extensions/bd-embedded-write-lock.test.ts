@@ -44,7 +44,12 @@ test.skipIf(!BD_ON_PATH)("decideEmbeddedWrite rewrites a mise-only runner agains
 		const decision = await decideEmbeddedWrite(parsed, event, { cwd: root } as unknown as Parameters<typeof decideEmbeddedWrite>[2], Date.now() + 5000, () => ({ interpreter: process.execPath, script: join(import.meta.dir, "bd-embedded-write-runner.ts") }));
 		expect(decision?.kind).toBe("rewrite");
 		if (decision?.kind !== "rewrite") return;
-		const run = Bun.spawnSync(["/bin/sh", "-c", decision.input.command as string], { cwd: root, env, stdout: "pipe", stderr: "pipe" });
+		expect(decision.input.env).toBeUndefined();
+		expect(decision.input.ready).toBeUndefined();
+		expect(decision.input.pty).toBeUndefined();
+		if (typeof decision.input.command !== "string") throw new Error("embedded rewrite returned no command");
+		expect(decision.input.command).toContain("BEADS_DOLT_SHARED_SERVER= BEADS_DIR=");
+		const run = Bun.spawnSync(["/bin/sh", "-c", decision.input.command], { cwd: root, env, stdout: "pipe", stderr: "pipe" });
 		expect(run.exitCode).toBe(0);
 		const created = JSON.parse(new TextDecoder().decode(run.stdout)) as { id?: unknown };
 		expect(typeof created.id).toBe("string");
@@ -71,6 +76,15 @@ test("refuses control and timing wrappers instead of bypassing the embedded lock
 			"if bd update bead-1 --claim; then :; fi",
 			"while bd update bead-1 --claim; do :; done",
 			"until bd update bead-1 --claim; do :; done",
+			"env -u BEADS_DIR bd update bead-1 --claim",
+			"env -u BEADS_DOLT_SHARED_SERVER bd update bead-1 --claim",
+			"env --unset BEADS_DIR bd update bead-1 --claim",
+			"env --unset BEADS_DOLT_SHARED_SERVER bd update bead-1 --claim",
+			"env -uBEADS_DIR bd update bead-1 --claim",
+			"env -uBEADS_DOLT_SHARED_SERVER bd update bead-1 --claim",
+			"env --unset=BEADS_DIR bd update bead-1 --claim",
+			"env --unset=BEADS_DOLT_SHARED_SERVER bd update bead-1 --claim",
+			"env -i bd update bead-1 --claim",
 		]) {
 			const result = embeddedWriteTargets(command, root, env);
 			expect(result.kind).toBe("refused");

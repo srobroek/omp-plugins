@@ -81,12 +81,34 @@ export function invocation(segment: string, argv: string[]): Token[] | null {
 	const head = argv[0];
 	if (!head) return null;
 	let start = 0;
-	for (; start < tokens.length; start++) {
+	while (start < tokens.length) {
 		const token = tokens[start];
 		if (!token || token.quoted) return null;
 		const basename = token.value.split("/").pop() ?? token.value;
 		if (basename === head) break;
+		if (basename === "env") {
+			start++;
+			while (start < tokens.length) {
+				const option = tokens[start];
+				if (!option || option.quoted) return null;
+				const value = option.value;
+				if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(value)) { start++; continue; }
+				if (value === "--") { start++; break; }
+				if (value === "-i" || value === "--ignore-environment") { start++; continue; }
+				if (value === "-u" || value === "--unset") {
+					start++;
+					if (start >= tokens.length || tokens[start]?.quoted) return null;
+					start++;
+					continue;
+				}
+				if (value.startsWith("--unset=") || (value.startsWith("-u") && value.length > 2)) { start++; continue; }
+				if (value.startsWith("-")) { start++; continue; }
+				break;
+			}
+			continue;
+		}
 		if (!/^[A-Za-z_][A-Za-z0-9_]*=/.test(token.value) && !token.value.startsWith("-") && WRAPPERS[basename] !== true) return null;
+		start++;
 	}
 	for (const [offset, word] of argv.entries()) {
 		const token = tokens[start + offset];

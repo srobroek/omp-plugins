@@ -263,15 +263,54 @@ function invocation(segment, argv) {
   if (!head)
     return null;
   let start = 0;
-  for (;start < tokens.length; start++) {
+  while (start < tokens.length) {
     const token = tokens[start];
     if (!token || token.quoted)
       return null;
     const basename = token.value.split("/").pop() ?? token.value;
     if (basename === head)
       break;
+    if (basename === "env") {
+      start++;
+      while (start < tokens.length) {
+        const option = tokens[start];
+        if (!option || option.quoted)
+          return null;
+        const value = option.value;
+        if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(value)) {
+          start++;
+          continue;
+        }
+        if (value === "--") {
+          start++;
+          break;
+        }
+        if (value === "-i" || value === "--ignore-environment") {
+          start++;
+          continue;
+        }
+        if (value === "-u" || value === "--unset") {
+          start++;
+          if (start >= tokens.length || tokens[start]?.quoted)
+            return null;
+          start++;
+          continue;
+        }
+        if (value.startsWith("--unset=") || value.startsWith("-u") && value.length > 2) {
+          start++;
+          continue;
+        }
+        if (value.startsWith("-")) {
+          start++;
+          continue;
+        }
+        break;
+      }
+      continue;
+    }
     if (!/^[A-Za-z_][A-Za-z0-9_]*=/.test(token.value) && !token.value.startsWith("-") && WRAPPERS[basename] !== true)
       return null;
+    start++;
   }
   for (const [offset, word] of argv.entries()) {
     const token = tokens[start + offset];
@@ -1754,17 +1793,17 @@ function rewriteUnnamedPin(command, pin) {
   return rewritten;
 }
 function pinBashInput(input, pin) {
-  if (pin === undefined || input === null || typeof input !== "object")
+  if (typeof pin !== "string" || input === null || typeof input !== "object")
     return;
   const record = input;
+  const commandKey = typeof record.command === "string" ? "command" : typeof record.cmd === "string" ? "cmd" : undefined;
+  if (commandKey === undefined || record[commandKey].trim() === "")
+    return;
   const env = record.env;
   if (env !== undefined && (env === null || typeof env !== "object" || Array.isArray(env)))
     return;
   const current = env?.BEADS_DIR;
   if (typeof current === "string" && current !== "")
-    return;
-  const commandKey = typeof record.command === "string" ? "command" : typeof record.cmd === "string" ? "cmd" : undefined;
-  if (commandKey === undefined)
     return;
   const command = record[commandKey];
   const { hasBd } = commandHasBd(command);

@@ -368,14 +368,14 @@ function rewriteUnnamedPin(command: string, pin: string): string | undefined {
 }
 
 export function pinBashInput(input: unknown, pin: string | undefined): Record<string, unknown> | undefined {
-	if (pin === undefined || input === null || typeof input !== "object") return undefined;
+	if (typeof pin !== "string" || input === null || typeof input !== "object") return undefined;
 	const record = input as Record<string, unknown>;
+	const commandKey = typeof record.command === "string" ? "command" : typeof record.cmd === "string" ? "cmd" : undefined;
+	if (commandKey === undefined || (record[commandKey] as string).trim() === "") return undefined;
 	const env = record.env;
 	if (env !== undefined && (env === null || typeof env !== "object" || Array.isArray(env))) return undefined;
 	const current = (env as Record<string, unknown> | undefined)?.BEADS_DIR;
 	if (typeof current === "string" && current !== "") return undefined;
-	const commandKey = typeof record.command === "string" ? "command" : typeof record.cmd === "string" ? "cmd" : undefined;
-	if (commandKey === undefined) return undefined;
 	const command = record[commandKey] as string;
 	const { hasBd } = commandHasBd(command);
 	if (!hasBd) return undefined;
