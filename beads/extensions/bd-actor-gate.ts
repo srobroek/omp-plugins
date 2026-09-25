@@ -493,10 +493,10 @@ const CLAIM_REASON =
 	"bd claim / `bd update <id> --claim` without BEADS_ACTOR or BD_ACTOR creates undistinguishable dead claims. Set either variable to <harness>/<agent-name>/<session-id> and retry.";
 
 /**
- * Verbs that construct a new issue, and so stamp an `Owner` that cannot be
- * repaired afterwards. `new` is `create`'s own alias (`bd create --help`
- * reports "Aliases: create, new"), and `create-form` is the interactive form
- * over the same path, so all three must refuse rather than warn.
+ * Verbs that construct a new issue. Without an actor, `created_by` records the
+ * invoking human's git identity; Owner is always the git identity and never
+ * identifies the agent. All three verbs must refuse rather than warn so the
+ * new issue is attributable before it is created.
  */
 const CREATING_VERBS: Record<string, true> = {
 	create: true,
@@ -505,10 +505,10 @@ const CREATING_VERBS: Record<string, true> = {
 };
 
 const CREATE_REASON =
-	"bd create / `bd new` / `bd create-form` without BEADS_ACTOR or BD_ACTOR silently sets Owner to the invoking human's git identity. There is no --owner flag, and --assignee sets a different field, so the mis-attribution is permanent. Set either variable to <harness>/<agent-name>/<session-id> and retry.";
+	"bd create / `bd new` / `bd create-form` without BEADS_ACTOR or BD_ACTOR records the invoking human's git identity in created_by. Owner is always the git identity and never identifies the agent. Set either variable to <harness>/<agent-name>/<session-id> so created_by is attributable, then retry.";
 
 const ADVISORY_TEXT =
-	"BEADS_ACTOR and BD_ACTOR are unset on this mutating `bd` command. Subagents must set either variable so writes and claims are attributable. Export one before mutating work.";
+	"BEADS_ACTOR and BD_ACTOR are unset on this mutating `bd` command. Without an actor, created_by records the invoking human's git identity; Owner is always the git identity and never identifies the agent. Set either variable to <harness>/<agent-name>/<session-id> so writes and claims are attributable, then retry.";
 
 import type { ParsedCommand } from "./shell-command.ts";
 

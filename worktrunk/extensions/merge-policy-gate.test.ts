@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import mergePolicyGate, { decideMergePolicy } from "./merge-policy-gate.ts";
+import mergePolicyGate, { decideEvalMergePolicy, decideMergePolicy } from "./merge-policy-gate.ts";
 
 type Handler = (event: unknown, ctx?: unknown) => unknown;
 const git = (defaultBranch: string | null, currentBranch = "worker") => (args: string[], _cwd: string) => args[0] === "branch" ? currentBranch : defaultBranch ? `origin/${defaultBranch}` : null;
@@ -16,6 +16,51 @@ function harness(): { registered: string[]; call: Handler } {
 }
 
 describe("merge policy", () => {
+	test("blocks unflagged eval merges in Python argv and shell strings", () => {
+		expect(decideEvalMergePolicy("subprocess.run(['wt', 'merge', 'orc/epic'])")?.block).toBe(true);
+		expect(decideEvalMergePolicy('os.system("wt merge orc/epic --no-squash")')?.block).toBe(true);
+	});
+	test("allows flagged eval merges in Python argv and Bun templates", () => {
+		expect(decideEvalMergePolicy("subprocess.run([\"wt\", \"merge\", \"orc/epic\", \"--no-squash\", \"--no-ff\"])")).toBeUndefined();
+		expect(decideEvalMergePolicy("await Bun.$`wt merge orc/epic --no-squash --no-ff`")).toBeUndefined();
+	});
+
+	test("blocks dynamic eval merge construction fail-closed", () => {
+		const code = 'tool = "wt"; action = "merge"; subprocess.run([tool, action, "orc/epic"])';
+		expect(decideEvalMergePolicy(code)?.block).toBe(true);
+		expect(decideEvalMergePolicy("subprocess.run(['w' + 't', 'merge', 'orc/epic'])")?.block).toBe(true);
+	});
+
+	test("parses tuple argv and blocks exact dynamic command literals", () => {
+		expect(decideEvalMergePolicy("subprocess.run(('wt', 'merge', 'e'))")?.block).toBe(true);
+		expect(decideEvalMergePolicy("subprocess.run(('wt', 'merge', 'e', '--no-squash', '--no-ff'))")).toBeUndefined();
+		expect(decideEvalMergePolicy("cmd='wt'; subprocess.run([cmd,'merge','e'])")?.block).toBe(true);
+	});
+
+	test("covers shell strings and absolute Worktrunk paths", () => {
+		for (const code of [
+			'os.system("cd x && wt merge e")',
+			"shlex.split('wt merge e')",
+			"['wt', '-C', '/x', 'merge', 'e']",
+			"['/opt/homebrew/bin/wt', 'merge', 'e']",
+			"subprocess.run([\"wt\", \"merge\", \"e\", \"--no-ff\"])",
+		]) {
+			expect(decideEvalMergePolicy(code)?.block).toBe(true);
+		}
+	});
+
+	test("keeps non-Worktrunk merge words and comments unblocked", () => {
+		expect(decideEvalMergePolicy("['git', 'merge-tree', 'origin/main']")).toBeUndefined();
+		expect(decideEvalMergePolicy("pd.merge(a, b); d.merge(x); print('merge')")).toBeUndefined();
+		expect(decideEvalMergePolicy("['wt', 'list', '--format', 'json']")).toBeUndefined();
+		expect(decideEvalMergePolicy("# we will later wt merge from bash")).toBeUndefined();
+	});
+
+	test("does not treat unrelated merge words as Worktrunk merges", () => {
+		expect(decideEvalMergePolicy("git merge-tree origin/main HEAD")).toBeUndefined();
+		expect(decideEvalMergePolicy("pd.merge(left, right)")).toBeUndefined();
+		expect(decideEvalMergePolicy("subprocess.run(['wt', 'list'])")).toBeUndefined();
+	});
 	test("blocks a non-default target without both history flags", () => {
 		const result = decideMergePolicy("wt merge develop", "/repo", git("main"), wt(null));
 		expect(result).toEqual({ block: true, reason: "worker-to-epic merges must preserve history; retry with wt merge develop --no-squash --no-ff" });
@@ -92,10 +137,19 @@ describe("merge policy", () => {
 		expect(decideMergePolicy("wt --config /c.toml merge develop --no-squash --no-ff", "/repo", runner, wtRunner)).toBeUndefined();
 	});
 
-	test("registers one tool_call gate with the blocking shape", () => {
+	test("registers one tool_call gate with eval support and unchanged bash behavior", () => {
 		const { registered, call } = harness();
 		expect(registered).toEqual(["tool_call"]);
 		expect(call({ toolName: "write", input: { command: "wt merge develop" } }, { cwd: "/repo" })).toBeUndefined();
 		expect(call({ toolName: "bash", input: { command: "git merge develop" } }, { cwd: "/repo" })).toBeUndefined();
+		expect(decideMergePolicy("wt merge develop", "/repo", git("main"), wt(null))).toEqual({
+			block: true,
+			reason: "worker-to-epic merges must preserve history; retry with wt merge develop --no-squash --no-ff",
+		});
+		expect(call({ toolName: "eval", input: { language: "py", code: "subprocess.run(['wt', 'merge', 'develop'])" } })).toEqual({
+			block: true,
+			reason: expect.stringContaining("run the merge through the bash tool from the source worktree"),
+		});
+		expect(call({ toolName: "eval", input: { language: "js", code: "await Bun.$`wt merge develop --no-squash --no-ff`" } })).toBeUndefined();
 	});
 });
