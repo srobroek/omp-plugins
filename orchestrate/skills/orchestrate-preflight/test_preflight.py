@@ -3,7 +3,9 @@
 
 from __future__ import annotations
 import importlib.util
+import json
 import os
+import shutil
 import tempfile
 import unittest
 from pathlib import Path
@@ -18,6 +20,123 @@ SPEC.loader.exec_module(preflight)
 
 
 class ClaimPoolsCheck(unittest.TestCase):
+    def make_installed_tree(self, directory: str, registry_contents: str | None = "registry") -> dict[str, Path]:
+        root = Path(directory)
+        plugins_root = root / "plugins"
+        cache_root = plugins_root / "cache" / "plugins"
+        package_roots = {
+            package: cache_root / f"srobroek-omp___{package}___3.0.0"
+            for package in ("orchestrate", "beads", "worktrunk")
+        }
+        orchestrate_script = package_roots["orchestrate"] / "skills" / "orchestrate-preflight" / "preflight.py"
+        orchestrate_script.parent.mkdir(parents=True)
+        shutil.copy2(MODULE_PATH, orchestrate_script)
+        sibling_scripts: dict[str, Path] = {}
+        for package, skill in (("beads", "beads-preflight"), ("worktrunk", "worktrunk-preflight")):
+            script = package_roots[package] / "skills" / skill / "preflight.py"
+            script.parent.mkdir(parents=True)
+            payload = {
+                "checks": [{"id": f"{package}-installed", "status": "pass", "detail": "ok", "fix": None}]
+            }
+            script.write_text(
+                "#!/usr/bin/env python3\nimport json\n"
+                f"print(json.dumps({payload!r}))\n",
+                encoding="utf-8",
+            )
+            sibling_scripts[package] = script
+        if registry_contents is not None:
+            if registry_contents == "registry":
+                registry_contents = json.dumps(
+                    {
+                        "version": 2,
+                        "plugins": {
+                            f"{package}@srobroek-omp": [
+                                {
+                                    "scope": "user",
+                                    "installPath": str(package_roots[package]),
+                                    "version": "3.0.0",
+                                }
+                            ]
+                            for package in ("beads", "worktrunk")
+                        },
+                    }
+                )
+            (plugins_root / "installed_plugins.json").write_text(registry_contents, encoding="utf-8")
+        return {
+            "orchestrate": orchestrate_script,
+            "beads": sibling_scripts["beads"],
+            "worktrunk": sibling_scripts["worktrunk"],
+            "plugins": plugins_root,
+            "cache_plugins": cache_root,
+        }
+
+    def test_installed_registry_runs_both_sibling_preflights(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            paths = self.make_installed_tree(directory)
+            with patch.object(preflight, "__file__", str(paths["orchestrate"])):
+                beads_found, beads_tried = preflight.find_sibling(None, None, ("beads",), "beads-preflight")
+                worktrunk_found, worktrunk_tried = preflight.find_sibling(
+                    None, None, ("worktrunk",), "worktrunk-preflight"
+                )
+                beads = preflight.sibling_checks("beads", None, None, ("beads",), "beads-preflight", False)
+                worktrunk = preflight.sibling_checks(
+                    "worktrunk", None, None, ("worktrunk",), "worktrunk-preflight", False
+                )
+        self.assertEqual(beads_found.resolve(), paths["beads"].resolve())
+        self.assertIn(paths["beads"].resolve(), {path.resolve() for path in beads_tried})
+        self.assertEqual(worktrunk_found.resolve(), paths["worktrunk"].resolve())
+        self.assertIn(paths["worktrunk"].resolve(), {path.resolve() for path in worktrunk_tried})
+        self.assertEqual(beads[0]["id"], "beads.beads-installed")
+        self.assertEqual(beads[0]["status"], "pass")
+        self.assertEqual(worktrunk[0]["id"], "worktrunk.worktrunk-installed")
+        self.assertEqual(worktrunk[0]["status"], "pass")
+    def test_unresolved_node_modules_symlink_finds_sibling(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            paths = self.make_installed_tree(directory)
+            scope_root = paths["plugins"] / "node_modules" / "@srobroek"
+            scope_root.mkdir(parents=True)
+            links: dict[str, Path] = {}
+            for package in ("orchestrate", "beads", "worktrunk"):
+                link = scope_root / package
+                link.symlink_to(paths[package].parents[2], target_is_directory=True)
+                links[package] = link
+            orchestrate_link_script = links["orchestrate"] / "skills" / "orchestrate-preflight" / "preflight.py"
+            expected_beads = links["beads"] / "skills" / "beads-preflight" / "preflight.py"
+            with patch.object(preflight, "__file__", str(orchestrate_link_script)):
+                found, _ = preflight.find_sibling(None, None, ("beads",), "beads-preflight")
+                checks = preflight.sibling_checks("beads", None, None, ("beads",), "beads-preflight", False)
+        self.assertEqual(found, expected_beads)
+        self.assertEqual(checks[0]["status"], "pass")
+
+
+    def test_missing_registry_uses_a_single_installed_glob_match(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            paths = self.make_installed_tree(directory, registry_contents=None)
+            with patch.object(preflight, "__file__", str(paths["orchestrate"])):
+                found, tried = preflight.find_sibling(None, None, ("beads",), "beads-preflight")
+        self.assertEqual(found.resolve(), paths["beads"].resolve())
+        self.assertIn(paths["beads"].resolve(), {path.resolve() for path in tried})
+
+    def test_missing_registry_with_multiple_glob_matches_fails_with_install_fix(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            paths = self.make_installed_tree(directory, registry_contents=None)
+            alternate = paths["cache_plugins"] / "srobroek-omp___beads___4.0.0" / "skills" / "beads-preflight" / "preflight.py"
+            alternate.parent.mkdir(parents=True)
+            shutil.copy2(paths["beads"], alternate)
+            with patch.object(preflight, "__file__", str(paths["orchestrate"])):
+                checks = preflight.sibling_checks("beads", None, None, ("beads",), "beads-preflight", False)
+        self.assertEqual(checks[0]["status"], "fail")
+        self.assertEqual(checks[0]["fix"], "omp plugin install beads@srobroek-omp")
+        self.assertIn("3.0.0", checks[0]["detail"])
+        self.assertIn("4.0.0", checks[0]["detail"])
+
+    def test_malformed_registry_falls_back_to_glob(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            paths = self.make_installed_tree(directory, registry_contents="not json")
+            with patch.object(preflight, "__file__", str(paths["orchestrate"])):
+                found, _ = preflight.find_sibling(None, None, ("beads",), "beads-preflight")
+        self.assertEqual(found.resolve(), paths["beads"].resolve())
+
     def test_invalid_utf8_command_output_is_replaced(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             script = Path(directory) / "emit-invalid-utf8.py"
