@@ -184,10 +184,11 @@ id = "review"
 title = "review {{feature}}"
 type = "task"
 needs = ["verify", "verify-signoff"]
-description = "Run /speckit.review.run (full review cycle); route findings through fix-findings. Multi-dimension or cross-model review: create one review-wisp shell per dimension plus a blocks edge from the downstream step to each, before spawning any reviewer."
+description = "Dispatch the work-reviewer to judge acceptance evidence against spec.md and queue actionable findings through fix-findings. For multi-dimension or cross-model reviews, create one review-wisp shell per dimension plus a blocks edge from the downstream step to each before spawning reviewers."
 
 [steps.metadata]
-skill_hints = "speckit.review.run"
+execution_agent_type = "work-reviewer"
+execution_mode = "subagent"
 
 [[steps]]
 id = "qa"
@@ -204,10 +205,10 @@ id = "code-review"
 title = "code review {{feature}}"
 type = "task"
 needs = ["qa"]
-description = "Run /speckit.review.code as a subagent. Parallel with security-review-post."
+description = "Dispatch the built-in read-only reviewer to inspect the implementation in parallel with security-review-post."
 
 [steps.metadata]
-skill_hints = "speckit.review.code"
+execution_agent_type = "reviewer"
 execution_mode = "subagent"
 
 [[steps]]
