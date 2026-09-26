@@ -116,6 +116,27 @@ describe("runSetup skipSpecify", () => {
 		expect(out.text).toContain("specify not on PATH");
 	});
 
+	test("omits unsupported review and roadmap extensions", () => {
+		const additions: string[] = [];
+		setSpawnForTests((argv) => {
+			if (argv[0] === "which") return { exitCode: 0, stdout: `/bin/${argv[1]}`, stderr: "" };
+			if (argv[0] === "specify" && argv[1] === "--version") {
+				return { exitCode: 0, stdout: "specify 0.16.4", stderr: "" };
+			}
+			if (argv[0] === "specify" && argv[1] === "extension" && argv[2] === "add") {
+				additions.push(argv[3]);
+			}
+			return { exitCode: 0, stdout: "", stderr: "" };
+		});
+		const out = runSetup({ workspace: dir });
+		expect(out.ok).toBe(true);
+		expect(additions).toContain("security-review");
+		expect(additions).toContain("tinyspec");
+		expect(additions).toContain("status-report");
+		expect(additions).not.toContain("review");
+		expect(additions).not.toContain("roadmap");
+	});
+
 	test("marks required-operation failures as tool errors", async () => {
 		let execute: ((id: string, params: { workspace: string; skipSpecify: boolean }) => Promise<ToolResult>) | undefined;
 		speckitSetupTool({
