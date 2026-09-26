@@ -52,6 +52,15 @@ class FakeContext:
 
 
 class PreflightRegressionTests(unittest.TestCase):
+    def test_invalid_utf8_command_output_is_reported_without_traceback(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            script = Path(directory) / "emit-invalid-utf8.py"
+            script.write_text("#!/usr/bin/env python3\nimport os; os.write(1, b'\\xff\\xfe')", encoding="utf-8")
+            script.chmod(0o700)
+            result = preflight.Context().run(str(script))
+        self.assertEqual(result.returncode, 0)
+        self.assertIn("\ufffd", result.stdout)
+
     def test_empty_or_unrelated_include_warns_and_matching_include_passes(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

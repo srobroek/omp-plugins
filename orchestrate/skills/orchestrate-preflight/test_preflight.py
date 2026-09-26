@@ -18,6 +18,15 @@ SPEC.loader.exec_module(preflight)
 
 
 class ClaimPoolsCheck(unittest.TestCase):
+    def test_invalid_utf8_command_output_is_replaced(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            script = Path(directory) / "emit-invalid-utf8.py"
+            script.write_text("#!/usr/bin/env python3\nimport os; os.write(1, b'\\xff\\xfe')", encoding="utf-8")
+            script.chmod(0o700)
+            result = preflight.run_command([str(script)])
+        self.assertEqual(result.returncode, 0)
+        self.assertIn("\ufffd", result.stdout)
+
     def run_check(self, stdout: str, returncode: int = 0, stderr: str = "") -> dict[str, object]:
         result = preflight.CommandResult(
             ["bd", "config", "get", "claim.pools"], returncode, stdout, stderr

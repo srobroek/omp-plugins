@@ -4,6 +4,8 @@
 from __future__ import annotations
 
 import importlib.util
+import os
+import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -17,6 +19,16 @@ SPEC.loader.exec_module(preflight)
 
 
 class BeadsPreflightRegressionTests(unittest.TestCase):
+    def test_invalid_utf8_command_output_is_replaced(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            stub = Path(directory) / "bd"
+            stub.write_text("#!/usr/bin/env python3\nimport os; os.write(1, b'\\xff\\xfe')", encoding="utf-8")
+            stub.chmod(0o700)
+            with patch.dict(os.environ, {"PATH": f"{directory}{os.pathsep}{os.environ.get('PATH', '')}"}):
+                result = preflight.run_bd(["--version"], timeout_seconds=1)
+        self.assertEqual(result.returncode, 0)
+        self.assertIn("\ufffd", result.stdout)
+
     def test_non_text_ready_output_fails_without_traceback(self) -> None:
         command = preflight.CommandResult(0, {"ready": True}, "", command=("bd", "ready", "--json"))  # type: ignore[arg-type]
         with patch.object(preflight, "run_bd", return_value=command):
