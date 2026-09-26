@@ -1114,32 +1114,6 @@ function decideActorGate(command, env = process.env) {
   return advisory ? { kind: "advisory", text: ADVISORY_TEXT } : { kind: "allow" };
 }
 
-// extensions/bd-update-close-gate.ts
-var UPDATE = "update";
-var CLOSING_STATUSES = { closed: true, done: true };
-var STATUS_FLAGS = ["--status", "-s"];
-var UPDATE_CLOSE_REASON = 'Use `bd close ID --reason "<factual reason>"` instead.';
-function statusValue(args) {
-  for (let index = 0;index < args.length; index++) {
-    const token = args[index];
-    if (token === undefined)
-      continue;
-    const flag = STATUS_FLAGS.find((candidate) => token === candidate || token.startsWith(`${candidate}=`));
-    if (flag === undefined)
-      continue;
-    if (token.startsWith(`${flag}=`))
-      return token.slice(flag.length + 1).toLowerCase();
-    return args[index + 1]?.toLowerCase();
-  }
-  return;
-}
-function hasClosingBdUpdate(parsed) {
-  return parsedInvocations(parsed).some((invocation) => invocation.verb?.toLowerCase() === UPDATE && CLOSING_STATUSES[statusValue(invocation.args) ?? ""] === true);
-}
-function decideBdUpdateCloseParsed(parsed) {
-  return hasClosingBdUpdate(parsed) ? { block: true, reason: UPDATE_CLOSE_REASON } : undefined;
-}
-
 // extensions/bd-embedded-write-lock.ts
 import { spawnSync as spawnSync2 } from "child_process";
 import { closeSync, existsSync, openSync, readFileSync as readFileSync2, realpathSync as realpathSync2, statSync as statSync2, unlinkSync, writeSync } from "fs";
@@ -2039,6 +2013,32 @@ function decideBdUnclaimParsed(parsed) {
     }
   }
   return;
+}
+
+// extensions/bd-update-close-gate.ts
+var UPDATE = "update";
+var CLOSING_STATUSES = { closed: true, done: true };
+var STATUS_FLAGS = ["--status", "-s"];
+var UPDATE_CLOSE_REASON = 'Use `bd close ID --reason "<factual reason>"` instead.';
+function statusValue(args) {
+  for (let index = 0;index < args.length; index++) {
+    const token = args[index];
+    if (token === undefined)
+      continue;
+    const flag = STATUS_FLAGS.find((candidate) => token === candidate || token.startsWith(`${candidate}=`));
+    if (flag === undefined)
+      continue;
+    if (token.startsWith(`${flag}=`))
+      return token.slice(flag.length + 1).toLowerCase();
+    return args[index + 1]?.toLowerCase();
+  }
+  return;
+}
+function hasClosingBdUpdate(parsed) {
+  return parsedInvocations(parsed).some((invocation) => invocation.verb?.toLowerCase() === UPDATE && CLOSING_STATUSES[statusValue(invocation.args) ?? ""] === true);
+}
+function decideBdUpdateCloseParsed(parsed) {
+  return hasClosingBdUpdate(parsed) ? { block: true, reason: UPDATE_CLOSE_REASON } : undefined;
 }
 
 // extensions/session-beads-lifecycle.ts

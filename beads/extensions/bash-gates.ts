@@ -2,9 +2,9 @@ import { resolve } from "node:path";
 import type { ExtensionAPI, ExtensionContext, ToolCallEvent } from "@oh-my-pi/pi-coding-agent";
 import { agentActor, bdInvocations, decideActorParsed, environmentForInput } from "./bd-actor-gate.ts";
 import { decideBdCloseParsed } from "./bd-close-gate.ts";
-import { decideBdUpdateCloseParsed } from "./bd-update-close-gate.ts";
 import { decideEmbeddedWrite } from "./bd-embedded-write-lock.ts";
 import { decideBdUnclaimParsed } from "./bd-unclaim-gate.ts";
+import { decideBdUpdateCloseParsed } from "./bd-update-close-gate.ts";
 import { admitBdMutation, admitBeadsWork, lifecycleBdEnvironment, rewriteBashInput } from "./session-beads-lifecycle.ts";
 import { blockReason, commandFromInput, type ParsedCommand, parse, settingsEnabled } from "./shell-command.ts";
 

@@ -1,5 +1,5 @@
 import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
-import { parsedInvocations, parse, type ParsedCommand } from "./shell-command.ts";
+import { type ParsedCommand, parse, parsedInvocations } from "./shell-command.ts";
 
 const UPDATE = "update";
 const CLOSING_STATUSES: Record<string, true> = { closed: true, done: true };
