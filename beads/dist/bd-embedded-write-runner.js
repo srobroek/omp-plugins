@@ -1,22 +1,22 @@
 // @bun
-// beads/extensions/bd-embedded-write-runner.ts
+// extensions/bd-embedded-write-runner.ts
 import { randomUUID } from "crypto";
 import { unlinkSync as unlinkSync2, writeFileSync } from "fs";
 import { join as join2 } from "path";
 
-// beads/extensions/bd-embedded-write-lock.ts
+// extensions/bd-embedded-write-lock.ts
 import { spawnSync } from "child_process";
 import { closeSync, existsSync, openSync, readFileSync, realpathSync, statSync, unlinkSync, writeSync } from "fs";
 import { hostname } from "os";
 import { basename, dirname, isAbsolute, join, resolve } from "path";
 
-// beads/extensions/shell-tokenizer.ts
+// extensions/shell-tokenizer.ts
 var SEPARATORS = new Set([";", "&", "|", "(", ")", `
 `]);
 
-// beads/extensions/shell-command.ts
+// extensions/shell-command.ts
 var settingsCache = new Map;
-// beads/extensions/bd-actor-gate.ts
+// extensions/bd-actor-gate.ts
 var ACTOR_NOTICE_ARBITER = Symbol.for("com.srobroek.beads.actor-notice-arbiter.v1");
 var VALUE_FLAGS = new Set([
   "--actor",
@@ -29,7 +29,7 @@ var VALUE_FLAGS = new Set([
 ]);
 var pendingAdvisory = new Map;
 
-// beads/extensions/bd-embedded-write-lock.ts
+// extensions/bd-embedded-write-lock.ts
 var LOCK_NAME = "omp-embedded-write.lock";
 var STEAL_NAME = "omp-embedded-write-steal.lock";
 var LEASE_MS = 120000;
@@ -378,7 +378,7 @@ async function attachWriter(store, owner, pid, waitMs = RUNNER_WAIT_MS) {
 var RUNNER_STORE_FLAG = "--beads-store";
 var RUNNER_WAIT_FLAG = "--beads-wait-ms";
 
-// beads/extensions/bd-embedded-write-runner.ts
+// extensions/bd-embedded-write-runner.ts
 var NOT_RUN = 120;
 var COMMAND_TIMEOUT_KEY = Symbol.for("com.srobroek.beads.embedded-write-runner.command-timeout-ms.v1");
 function setCommandTimeoutForTests(timeoutMs) {
