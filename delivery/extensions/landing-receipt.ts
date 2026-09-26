@@ -1090,6 +1090,10 @@ export function writeReceipt(receipt: LandingReceipt, directory?: string, option
 
 /** Read and validate one canonically named, non-symlink receipt file. */
 export function readReceipt(path: string): ReceiptValidation {
+	const canonicalPath = resolve(path);
+	if (path !== canonicalPath) {
+		return refuse("path", path, `the canonical receipt path ${canonicalPath}`);
+	}
 	const name = basename(path);
 	if (!RECEIPT_FILE.test(name)) {
 		return refuse("path", path, "a canonical receiptId.json basename");
