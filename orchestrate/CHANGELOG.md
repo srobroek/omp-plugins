@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.1](https://github.com/srobroek/omp-plugins/compare/orchestrate--v1.0.0...orchestrate--v1.0.1) (2026-09-26)
+
+
+### Bug Fixes
+
+* **orchestrate,worktrunk:** run installed sibling preflights automatically ([#591](https://github.com/srobroek/omp-plugins/issues/591)) ([5ea674f](https://github.com/srobroek/omp-plugins/commit/5ea674f0b4e487f593f2e0ddf2766a71a74158fc))
+
 ## [1.0.0](https://github.com/srobroek/omp-plugins/compare/orchestrate--v0.1.0...orchestrate--v1.0.0) (2026-09-26)
 
 

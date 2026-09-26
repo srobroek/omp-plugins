@@ -1,5 +1,18 @@
 # Changelog
 
+## [3.1.0](https://github.com/srobroek/omp-plugins/compare/beads--v3.0.0...beads--v3.1.0) (2026-09-26)
+
+
+### Features
+
+* **beads:** add setup and ledger-remote rule ([#589](https://github.com/srobroek/omp-plugins/issues/589)) ([9d069c0](https://github.com/srobroek/omp-plugins/commit/9d069c083ec2ec2ed21396101b8a74dd4dc685d3))
+
+
+### Bug Fixes
+
+* **beads:** give preflight setup remedies and accept git+ remotes ([#590](https://github.com/srobroek/omp-plugins/issues/590)) ([ea98663](https://github.com/srobroek/omp-plugins/commit/ea9866329c27ba8cbcef094e41aaeb706871eefd))
+* **beads:** make preflight init fix executable and correct README close example ([#593](https://github.com/srobroek/omp-plugins/issues/593)) ([67a3976](https://github.com/srobroek/omp-plugins/commit/67a39769e3a8f3d3d8808a1b841dfa1347249ee2))
+
 ## [3.0.0](https://github.com/srobroek/omp-plugins/compare/beads--v2.2.2...beads--v3.0.0) (2026-09-26)
 
 
