@@ -14,16 +14,17 @@ TRIGGER
 
 1. Record one immutable run base SHA, then run:
    `python3 skills/orchestrate-preflight/preflight.py --json --packages-root PACKAGES_ROOT --beads-preflight BEADS/skills/beads-preflight/preflight.py --worktrunk-preflight WORKTRUNK/skills/worktrunk-preflight/preflight.py --base BASE_SHA`
-2. Read the JSON `checks` array. Sibling checks are prefixed `beads.` and `worktrunk.`; each check has `id`, `status`, `detail`, and `fix`.
-3. `claim-pools` runs `bd config get claim.pools` in the repository's configured Beads environment and verifies all six exact aliases: `pool:implementer`, `pool:implementer-high`, `pool:work-reviewer`, `pool:researcher`, `pool:shepherd`, and `pool:operator`. A missing or failed configuration check is `fail`; its fix is `bd config set claim.pools "pool:implementer,pool:implementer-high,pool:work-reviewer,pool:researcher,pool:shepherd,pool:operator"`.
-4. Record the verdict in the governing run or epic bead metadata as `execution_preflight`, and record the same run SHA as `base_sha`.
-5. Dispatch only when `ok` is `true`. A `fail` check blocks dispatch; `warn` and `skip` checks do not.
-
-The session-side `read rule://beads-ledger` check is the authoritative companion gate; an on-disk sibling preflight cannot establish that a plugin loaded. Run that read before the script. If it does not resolve, the preflight verdict is `FAIL: beads companion not loaded`, dispatch nothing, and run no `bd` write. If the worktrunk preflight is `skip` because its package or check is absent, the companion is unavailable: stop and report; do not dispatch workers.
+2. Resolve `PACKAGES_ROOT` and sibling paths from the package root, not from a child worker's current directory. The orchestrator runs this lead-level preflight once per run before dispatch; child workers MUST NOT rerun it from linked worktrees and inherit `execution_preflight` and `base_sha` instead.
+3. Read the JSON `checks` array. Sibling checks are prefixed `beads.` and `worktrunk.`; each check has `id`, `status`, `detail`, and `fix`.
+4. `claim-pools` runs `bd config get claim.pools` in the repository's configured Beads environment and verifies all six exact aliases: `pool:implementer`, `pool:implementer-high`, `pool:work-reviewer`, `pool:researcher`, `pool:shepherd`, and `pool:operator`. A missing or failed configuration check is `fail`; its fix is `bd config set claim.pools "pool:implementer,pool:implementer-high,pool:work-reviewer,pool:researcher,pool:shepherd,pool:operator"`.
+5. For every `fail` check with a non-empty `fix`, the lead MUST apply that fix when applicable, then rerun the complete preflight with the same immutable `base_sha`; dispatch remains blocked until the rerun has no blocking `fail`. NEVER waive, downgrade, or proceed on the original failed result. If a fix is missing, unsafe, unsupported, or not applicable in the current package/root, stop and report `BLOCKED` with the check, detail, and reason; an unapplicable fix is never a waiver.
+6. Record the final verdict in the governing run or epic bead metadata as `execution_preflight`, and record the same run SHA as `base_sha`.
+7. Dispatch only when `ok` is `true`. A `fail` check blocks dispatch; `warn` and `skip` checks do not.
 
 ## Rules
 
 MUST run this once before the first worker dispatch, even when one sibling package is absent.
 MUST pass the same recorded `base_sha` to every worker's `wt switch --base` command.
+MUST apply every applicable reported fix and rerun the complete preflight before dispatch; NEVER waive a failed check. If the fix cannot be applied, stop and report the exact blocker.
 DEFAULT treat every sibling `fail` as a run-level failure; the script computes `ok` from all merged checks.
-NOT use `--apply` unless hook approval changes are explicitly authorized; it forwards `--apply` only to the worktrunk sibling.
+NOT pass `--apply` without explicit authorization for hook changes; this does not waive other applicable fixes, which still require apply and rerun.
