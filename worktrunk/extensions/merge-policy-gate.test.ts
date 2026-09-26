@@ -42,6 +42,22 @@ describe("merge policy", () => {
 		expect(decideEvalMergePolicy(code)?.block).toBe(true);
 		expect(decideEvalMergePolicy("subprocess.run(['w' + 't', 'merge', 'orc/epic'])")?.block).toBe(true);
 	});
+	test("blocks opaque dynamic bodies with literal merge and land commands", () => {
+		for (const command of [
+			'cmd="wt merge develop"; eval "$cmd"',
+			'cmd="wt merge develop"; bash -c "$cmd"',
+			'cmd="wt merge develop"; echo "$( $cmd )"',
+			'cmd="wt merge develop"; echo <($cmd)',
+			'cmd="wt merge develop"; eval "echo $cmd"',
+			'cmd="git merge develop"; eval "$cmd"',
+			'cmd="gh pr merge 123"; eval "$cmd"',
+		]) {
+			expect(decideMergePolicy(command, "/repo", git("main"), wt(null))?.block).toBe(true);
+		}
+	});
+	test("allows opaque dynamic bodies for ordinary literal commands", () => {
+		expect(decideMergePolicy('cmd="echo ready"; eval "$cmd"', "/repo", git("main"), wt(null))).toBeUndefined();
+	});
 
 	test("parses tuple argv and blocks exact dynamic command literals", () => {
 		expect(decideEvalMergePolicy("subprocess.run(('wt', 'merge', 'e'))")?.block).toBe(true);

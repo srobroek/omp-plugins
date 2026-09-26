@@ -101,6 +101,58 @@ function nestedShellCommands(command: string): string[] {
 	return nested;
 }
 
+const DYNAMIC_WRAPPER_NAMES: Record<string, true> = { bash: true, sh: true, zsh: true, dash: true, ksh: true };
+
+function shellVariableNames(text: string): string[] {
+	return [...text.matchAll(/\$(?:\{([A-Za-z_][\w]*)\}|([A-Za-z_][\w]*))/g)].map(match => match[1] ?? match[2] ?? "");
+}
+
+function shellCommandWords(segment: string): { argv: string[]; executable: string | undefined } {
+	const all = words(segment);
+	let commandIndex = 0;
+	while (/^[A-Za-z_][\w]*=/.test(all[commandIndex] ?? "")) commandIndex++;
+	const argv = all.slice(commandIndex);
+	return { argv, executable: argv[0]?.split("/").pop() };
+}
+
+function namesMergeLandCommand(commandText: string): boolean {
+	const argv = words(commandText);
+	const executable = argv[0]?.split("/").pop();
+	return (executable === "wt" && argv[1] === "merge") ||
+		(executable === "git" && argv[1] === "merge") ||
+		(executable === "gh" && argv[1] === "pr" && argv[2] === "merge");
+}
+
+function hasOpaqueDynamicMergeBody(command: string): boolean {
+	const mergeVariables = new Set<string>();
+	for (const segment of splitShellSegments(command)) {
+		const all = words(segment);
+		let assignmentIndex = 0;
+		while (/^[A-Za-z_][\w]*=/.test(all[assignmentIndex] ?? "")) {
+			const assignment = all[assignmentIndex] ?? "";
+			const separator = assignment.indexOf("=");
+			if (separator > 0 && namesMergeLandCommand(assignment.slice(separator + 1))) mergeVariables.add(assignment.slice(0, separator));
+			assignmentIndex++;
+		}
+	}
+	if (mergeVariables.size === 0) return false;
+
+	const dynamicVariables = new Set<string>();
+	for (const nested of nestedShellCommands(command)) {
+		for (const name of shellVariableNames(nested)) dynamicVariables.add(name);
+	}
+	for (const segment of splitShellSegments(command)) {
+		const { argv, executable } = shellCommandWords(segment);
+		if (executable === "eval") {
+			for (const name of shellVariableNames(argv.slice(1).join(" "))) dynamicVariables.add(name);
+		}
+		if (DYNAMIC_WRAPPER_NAMES[executable ?? ""] === true && argv[1] === "-c") {
+			for (const name of shellVariableNames(argv[2] ?? "")) dynamicVariables.add(name);
+		}
+	}
+	return [...mergeVariables].some(name => dynamicVariables.has(name));
+}
+
 function shellSegments(command: string): string[] {
 	const segments: string[] = [];
 	const pending = [command];
@@ -233,12 +285,15 @@ const defaultWtRunner: WtRunner = (args, cwd) => {
 	return result.exitCode === 0 ? new TextDecoder().decode(result.stdout).trim() : null;
 };
 
+const OPAQUE_DYNAMIC_MERGE_REFUSAL = "opaque dynamic shell body names a merge or land command; retry with a literal command";
+
 export function decideMergePolicy(
 	command: string,
 	cwd: string,
 	gitRunner: GitRunner = defaultGitRunner,
 	wtRunner: WtRunner = defaultWtRunner,
 ): Decision {
+	if (hasOpaqueDynamicMergeBody(command)) return { block: true, reason: OPAQUE_DYNAMIC_MERGE_REFUSAL };
 	for (const segment of shellSegments(command)) {
 		const invocation = parseTargetAndFlags(words(segment));
 		if (!invocation || invocation.target === null) continue;
