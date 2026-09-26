@@ -1,22 +1,22 @@
 // @bun
-// extensions/bd-embedded-write-runner.ts
+// beads/extensions/bd-embedded-write-runner.ts
 import { randomUUID } from "crypto";
 import { unlinkSync as unlinkSync2, writeFileSync } from "fs";
 import { join as join2 } from "path";
 
-// extensions/bd-embedded-write-lock.ts
+// beads/extensions/bd-embedded-write-lock.ts
 import { spawnSync } from "child_process";
 import { closeSync, existsSync, openSync, readFileSync, realpathSync, statSync, unlinkSync, writeSync } from "fs";
 import { hostname } from "os";
 import { basename, dirname, isAbsolute, join, resolve } from "path";
 
-// extensions/shell-tokenizer.ts
+// beads/extensions/shell-tokenizer.ts
 var SEPARATORS = new Set([";", "&", "|", "(", ")", `
 `]);
 
-// extensions/shell-command.ts
+// beads/extensions/shell-command.ts
 var settingsCache = new Map;
-// extensions/bd-actor-gate.ts
+// beads/extensions/bd-actor-gate.ts
 var ACTOR_NOTICE_ARBITER = Symbol.for("com.srobroek.beads.actor-notice-arbiter.v1");
 var VALUE_FLAGS = new Set([
   "--actor",
@@ -29,7 +29,7 @@ var VALUE_FLAGS = new Set([
 ]);
 var pendingAdvisory = new Map;
 
-// extensions/bd-embedded-write-lock.ts
+// beads/extensions/bd-embedded-write-lock.ts
 var LOCK_NAME = "omp-embedded-write.lock";
 var STEAL_NAME = "omp-embedded-write-steal.lock";
 var LEASE_MS = 120000;
@@ -348,30 +348,36 @@ function renewLease(lock, owner, token) {
     closeSync(held.fd);
   } catch {}
 }
-function attachWriter(store, owner, pid) {
+async function attachWriter(store, owner, pid) {
   const lock = join(store, LOCK_NAME);
   const held = registry().owned.get(lock);
   if (held === undefined || !held.holders.has(owner))
     return false;
   const writerStart = processStartIdentity(pid);
-  const result = withOwnership(lock, held.token, () => {
-    const fd = openSync(lock, "w");
-    try {
-      writeSync(fd, JSON.stringify(holderNow(owner, held.token, pid, writerStart)));
-    } finally {
-      closeSync(fd);
+  const deadline = Date.now() + POLL_MS;
+  while (true) {
+    const result = withOwnership(lock, held.token, () => {
+      const fd = openSync(lock, "w");
+      try {
+        writeSync(fd, JSON.stringify(holderNow(owner, held.token, pid, writerStart)));
+      } finally {
+        closeSync(fd);
+      }
+    });
+    if (result === "done") {
+      held.writer = pid;
+      held.writerStart = writerStart;
+      return true;
     }
-  });
-  if (result !== "done")
-    return false;
-  held.writer = pid;
-  held.writerStart = writerStart;
-  return true;
+    if (result === "lost" || Date.now() >= deadline)
+      return false;
+    await new Promise((resolve) => setTimeout(resolve, Math.min(POLL_MS, deadline - Date.now())));
+  }
 }
 var RUNNER_STORE_FLAG = "--beads-store";
 var RUNNER_WAIT_FLAG = "--beads-wait-ms";
 
-// extensions/bd-embedded-write-runner.ts
+// beads/extensions/bd-embedded-write-runner.ts
 var NOT_RUN = 120;
 var COMMAND_TIMEOUT_KEY = Symbol.for("com.srobroek.beads.embedded-write-runner.command-timeout-ms.v1");
 function setCommandTimeoutForTests(timeoutMs) {
@@ -465,7 +471,7 @@ async function run(request) {
       const startGate = join2(request.store, `.omp-embedded-write-start-${process.pid}-${randomUUID()}`);
       const launch = 'while [ ! -e "$1" ]; do kill -0 "$2" 2>/dev/null || exit 120; sleep 0.02; done; shift 2; exec "$@"';
       child = Bun.spawn(["/bin/sh", "-c", launch, "bd-write-gate", startGate, String(process.pid), ...request.argv], { stdin: "inherit", stdout: "inherit", stderr: "inherit" });
-      if (!attachWriter(request.store, owner, child.pid)) {
+      if (!await attachWriter(request.store, owner, child.pid)) {
         child.kill("SIGTERM");
         await child.exited;
         return NOT_RUN;

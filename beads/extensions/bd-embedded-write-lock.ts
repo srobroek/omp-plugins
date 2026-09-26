@@ -988,26 +988,33 @@ function renewLease(lock: string, owner: string, token: string): void {
 /**
  * Publish the gated child before allowing it to exec `bd`.
  *
- * `false` means this process lost ownership or could not update atomically. The
- * runner must kill the still-gated child and refuse the mutation in that case.
+ * A short-lived steal lock can transiently occupy the ownership side lock while
+ * another writer is releasing or renewing its lease. Retrying that contention is
+ * safe while this process still owns the main lock; a lost token remains a refusal.
  */
-export function attachWriter(store: string, owner: string, pid: number): boolean {
+export async function attachWriter(store: string, owner: string, pid: number): Promise<boolean> {
 	const lock = join(store, LOCK_NAME);
 	const held = registry().owned.get(lock);
 	if (held === undefined || !held.holders.has(owner)) return false;
 	const writerStart = processStartIdentity(pid);
-	const result = withOwnership(lock, held.token, () => {
-		const fd = openSync(lock, "w");
-		try {
-			writeSync(fd, JSON.stringify(holderNow(owner, held.token, pid, writerStart)));
-		} finally {
-			closeSync(fd);
+	const deadline = Date.now() + POLL_MS;
+	while (true) {
+		const result = withOwnership(lock, held.token, () => {
+			const fd = openSync(lock, "w");
+			try {
+				writeSync(fd, JSON.stringify(holderNow(owner, held.token, pid, writerStart)));
+			} finally {
+				closeSync(fd);
+			}
+		});
+		if (result === "done") {
+			held.writer = pid;
+			held.writerStart = writerStart;
+			return true;
 		}
-	});
-	if (result !== "done") return false;
-	held.writer = pid;
-	held.writerStart = writerStart;
-	return true;
+		if (result === "lost" || Date.now() >= deadline) return false;
+		await new Promise<void>(resolve => setTimeout(resolve, Math.min(POLL_MS, deadline - Date.now())));
+	}
 }
 
 /**
