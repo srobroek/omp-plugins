@@ -14,6 +14,7 @@ Steering surfaces:
 - `beads-contention-retry` retries embedded-store contention and failed remote syncs without agent-built wrappers.
 - `beads-no-editor` interrupts `bd edit` before it can hang a non-interactive session.
 - `beads-preflight` runs read-only, bounded readiness checks before ledger work.
+- `beads-setup` explains Beads initialization, ledger remotes, first push proof, and setup verification.
 
 ## Store-safety extensions
 
