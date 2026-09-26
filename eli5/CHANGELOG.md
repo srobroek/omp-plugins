@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.3](https://github.com/srobroek/omp-plugins/compare/eli5--v0.3.2...eli5--v0.3.3) (2026-09-26)
+
+
+### Bug Fixes
+
+* **eli5:** scope explanation trigger ([#540](https://github.com/srobroek/omp-plugins/issues/540)) ([788efcb](https://github.com/srobroek/omp-plugins/commit/788efcb0257166cdb748544052efcbdc822bc3d4))
+
 ## [0.3.2](https://github.com/srobroek/omp-plugins/compare/eli5--v0.3.1...eli5--v0.3.2) (2026-09-19)
 
 

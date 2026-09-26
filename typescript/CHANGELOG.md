@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.8](https://github.com/srobroek/omp-plugins/compare/typescript--v0.3.7...typescript--v0.3.8) (2026-09-26)
+
+
+### Bug Fixes
+
+* **typescript:** bound tool-probe time and scope the type-safety rule ([#548](https://github.com/srobroek/omp-plugins/issues/548)) ([d0f0a21](https://github.com/srobroek/omp-plugins/commit/d0f0a21335dea7ac118e3737ceab226f9977900f))
+
 ## [0.3.7](https://github.com/srobroek/omp-plugins/compare/typescript--v0.3.6...typescript--v0.3.7) (2026-09-22)
 
 

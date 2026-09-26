@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.4.2](https://github.com/srobroek/omp-plugins/compare/design--v0.4.1...design--v0.4.2) (2026-09-26)
+
+
+### Bug Fixes
+
+* align agent tool lists with OMP 18.3 tools ([fcddd95](https://github.com/srobroek/omp-plugins/commit/fcddd957ea632dd81ae9fd24823050eea216e06a))
+* backlog sweep 2026-09-24 (batch docs, graph contract, advisory repository resolution, review fixes) ([7210d2d](https://github.com/srobroek/omp-plugins/commit/7210d2db058a266619432b34477dc52d41e6fb2e))
+* **design:** grant the UI lead the tools its workflow uses ([4ab3072](https://github.com/srobroek/omp-plugins/commit/4ab307204c4038d4d28bf85f801435d1ed896446))
+* **design:** harden review routing and MCP pins ([#549](https://github.com/srobroek/omp-plugins/issues/549)) ([c517865](https://github.com/srobroek/omp-plugins/commit/c5178656a51066bc77341c12f7a1f0800857b733))
+* **design:** start dev servers as named bash services instead of the removed hub tool ([#521](https://github.com/srobroek/omp-plugins/issues/521)) ([1c4da19](https://github.com/srobroek/omp-plugins/commit/1c4da196b53f20ea342750074c75440133ebdace))
+
 ## [0.4.1](https://github.com/srobroek/omp-plugins/compare/design--v0.4.0...design--v0.4.1) (2026-09-19)
 
 

@@ -1,5 +1,21 @@
 # Changelog
 
+## [1.3.0](https://github.com/srobroek/omp-plugins/compare/session--v1.2.2...session--v1.3.0) (2026-09-26)
+
+
+### Features
+
+* **session:** add a read-only session_status report ([#556](https://github.com/srobroek/omp-plugins/issues/556)) ([a897f3c](https://github.com/srobroek/omp-plugins/commit/a897f3c5d574c7babe9e1e926bff60983639817b))
+
+
+### Bug Fixes
+
+* backlog sweep 2026-09-24 (batch docs, graph contract, advisory repository resolution, review fixes) ([7210d2d](https://github.com/srobroek/omp-plugins/commit/7210d2db058a266619432b34477dc52d41e6fb2e))
+* **session:** guide list recovery on broken worktrees ([#555](https://github.com/srobroek/omp-plugins/issues/555)) ([91abc4b](https://github.com/srobroek/omp-plugins/commit/91abc4b63122e91d4814fe368a9702bd5a665bba))
+* **session:** point task-batch notices at proc:// and wait instead of the removed hub tool ([#520](https://github.com/srobroek/omp-plugins/issues/520)) ([e38ebda](https://github.com/srobroek/omp-plugins/commit/e38ebdaf4575cbff83b57ef3bf03891650b97239))
+* **session:** report worktree dirty status ([#559](https://github.com/srobroek/omp-plugins/issues/559)) ([d07d997](https://github.com/srobroek/omp-plugins/commit/d07d997579d49f292a6b34cb76d3320120e993e2))
+* **tests:** budget load-sensitive integration cases ([#530](https://github.com/srobroek/omp-plugins/issues/530)) ([e417222](https://github.com/srobroek/omp-plugins/commit/e417222e9219fb96045bfe911221a59c4df9049c))
+
 ## [1.2.2](https://github.com/srobroek/omp-plugins/compare/session--v1.2.1...session--v1.2.2) (2026-09-21)
 
 

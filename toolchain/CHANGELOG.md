@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.3.9](https://github.com/srobroek/omp-plugins/compare/toolchain--v0.3.8...toolchain--v0.3.9) (2026-09-26)
+
+
+### Bug Fixes
+
+* align agent tool lists with OMP 18.3 tools ([fcddd95](https://github.com/srobroek/omp-plugins/commit/fcddd957ea632dd81ae9fd24823050eea216e06a))
+* **toolchain:** deduplicate global steering rules ([#544](https://github.com/srobroek/omp-plugins/issues/544)) ([89e1801](https://github.com/srobroek/omp-plugins/commit/89e180142fb6e632b44bb1aacfab98d7cac3789a))
+* **toolchain:** drop unused web_search from the maintenance reader ([3f41367](https://github.com/srobroek/omp-plugins/commit/3f413676784041ba48fb3140b039f2757b012a40))
+
 ## [0.3.8](https://github.com/srobroek/omp-plugins/compare/toolchain--v0.3.7...toolchain--v0.3.8) (2026-09-19)
 
 

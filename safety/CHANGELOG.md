@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.8.1](https://github.com/srobroek/omp-plugins/compare/safety--v0.8.0...safety--v0.8.1) (2026-09-26)
+
+
+### Bug Fixes
+
+* backlog sweep 2026-09-24 (batch docs, graph contract, advisory repository resolution, review fixes) ([7210d2d](https://github.com/srobroek/omp-plugins/commit/7210d2db058a266619432b34477dc52d41e6fb2e))
+* **beads,worktrunk,delivery,orchestrate:** second-wave robustness hardening ([#579](https://github.com/srobroek/omp-plugins/issues/579)) ([ce8a716](https://github.com/srobroek/omp-plugins/commit/ce8a7164f2b0ac98efc7f8291d2aa3fc8643ed4a))
+* **safety:** fail closed on uncertain worktree removals ([#523](https://github.com/srobroek/omp-plugins/issues/523)) ([ef32c67](https://github.com/srobroek/omp-plugins/commit/ef32c675f5b96edbd5ce5b4b33e497f2f31b5e7c))
+* **safety:** parse package manager options before verbs ([#543](https://github.com/srobroek/omp-plugins/issues/543)) ([93daec8](https://github.com/srobroek/omp-plugins/commit/93daec84d82e53363c4ad653fb0b941540a2edfd))
+* **tests:** budget load-sensitive integration cases ([#530](https://github.com/srobroek/omp-plugins/issues/530)) ([e417222](https://github.com/srobroek/omp-plugins/commit/e417222e9219fb96045bfe911221a59c4df9049c))
+
 ## [0.8.0](https://github.com/srobroek/omp-plugins/compare/safety--v0.7.0...safety--v0.8.0) (2026-09-22)
 
 

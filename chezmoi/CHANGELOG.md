@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.4.12](https://github.com/srobroek/omp-plugins/compare/chezmoi--v0.4.11...chezmoi--v0.4.12) (2026-09-26)
+
+
+### Bug Fixes
+
+* **chezmoi:** let read-only git inside a substitution past the secret-commit gate ([#525](https://github.com/srobroek/omp-plugins/issues/525)) ([140005a](https://github.com/srobroek/omp-plugins/commit/140005a2116ace1eb26c08b37bc54fe456f51741))
+* **chezmoi:** report status subprocess cause ([#554](https://github.com/srobroek/omp-plugins/issues/554)) ([b591d5a](https://github.com/srobroek/omp-plugins/commit/b591d5aa585d5caa9ddc43f675fc5d8ce41aec2b))
+* **tests:** budget load-sensitive integration cases ([#530](https://github.com/srobroek/omp-plugins/issues/530)) ([e417222](https://github.com/srobroek/omp-plugins/commit/e417222e9219fb96045bfe911221a59c4df9049c))
+
 ## [0.4.11](https://github.com/srobroek/omp-plugins/compare/chezmoi--v0.4.10...chezmoi--v0.4.11) (2026-09-21)
 
 

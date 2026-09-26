@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.3.5](https://github.com/srobroek/omp-plugins/compare/whats-new--v0.3.4...whats-new--v0.3.5) (2026-09-26)
+
+
+### Bug Fixes
+
+* report declared and resolved versions and sync the dependency detector ([d664033](https://github.com/srobroek/omp-plugins/commit/d664033b5e7827902a568ac418b7cc8bdc8384c0))
+* **whats-new:** report declared and resolved versions ([c8d5252](https://github.com/srobroek/omp-plugins/commit/c8d52526d8f350f08d01fd6d2e2d0373cefd9d0d))
+
 ## [0.3.4](https://github.com/srobroek/omp-plugins/compare/whats-new--v0.3.3...whats-new--v0.3.4) (2026-09-19)
 
 

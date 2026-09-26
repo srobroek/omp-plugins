@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.3.4](https://github.com/srobroek/omp-plugins/compare/quality--v1.3.3...quality--v1.3.4) (2026-09-26)
+
+
+### Bug Fixes
+
+* **quality:** remove unused verify scope ([#539](https://github.com/srobroek/omp-plugins/issues/539)) ([17bb0e8](https://github.com/srobroek/omp-plugins/commit/17bb0e80d92ad709e8522e776cdc4b99cd178e92))
+* **verification:** resolve file URL output paths omp-plugins-fj7b ([94b5d98](https://github.com/srobroek/omp-plugins/commit/94b5d9896e9744b37915750fdb4f2a386046800f))
+
 ## [1.3.3](https://github.com/srobroek/omp-plugins/compare/quality--v1.3.2...quality--v1.3.3) (2026-09-22)
 
 

@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.8](https://github.com/srobroek/omp-plugins/compare/rust--v0.6.7...rust--v0.6.8) (2026-09-26)
+
+
+### Bug Fixes
+
+* **rust:** bound quality probes and document toolchain floor ([#547](https://github.com/srobroek/omp-plugins/issues/547)) ([12a07cb](https://github.com/srobroek/omp-plugins/commit/12a07cbdc4dfc1639784b1a33bfb8854254cb1c5))
+
 ## [0.6.7](https://github.com/srobroek/omp-plugins/compare/rust--v0.6.6...rust--v0.6.7) (2026-09-22)
 
 
