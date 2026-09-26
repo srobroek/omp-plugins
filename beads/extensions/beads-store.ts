@@ -14,6 +14,7 @@ import { dirname, isAbsolute, resolve } from "node:path";
 
 /** The git common directory for `cwd`, or unknown when Git cannot answer. */
 export function repoIdentity(cwd: string): string | undefined {
+	if (cwd.includes("\0")) return undefined;
 	const result = spawnSync("git", ["-C", cwd, "rev-parse", "--git-common-dir"], {
 		encoding: "utf8",
 		timeout: 2000,

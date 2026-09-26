@@ -346,6 +346,10 @@ export function normalizeRepoPath(forge: Forge, repo: string): string | null {
  * answer to give, and no legitimate remote to either forge contains one.
  */
 function hostOf(remoteUrl: string): string | null {
+	for (let index = 0; index < remoteUrl.length; index++) {
+		const code = remoteUrl.charCodeAt(index);
+		if (code <= 0x1f || code === 0x7f) return null;
+	}
 	const url = remoteUrl.trim();
 	if (url === "" || url.includes("\\")) return null;
 	if (ALLOWED_SCHEME.test(url)) {
