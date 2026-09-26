@@ -47,6 +47,7 @@ import {
 	type CommandPosition,
 	closeInvocations,
 	commandSegments,
+	leadingCdCwd,
 	type ParsedCommand,
 	type ParsedInvocation,
 	parse,
@@ -1440,18 +1441,21 @@ export async function admitBdMutation(input: unknown, ctx: ExtensionContext, tar
 		return { block: true, reason: "Beads directory is selected dynamically and cannot be verified before this mutation" };
 	}
 	if (writes.length === 0) return undefined;
-	// Classify the caller's command before any runner rewrite, but verify the environment
-	// the mutation will actually receive after the lifecycle applies its per-session pin.
+	// A literal `cd DIR &&` is equivalent to the tool cwd for store resolution. Dynamic
+	// prefixes were rejected above; all other compound forms remain fail-closed.
 	const effectiveInput = rewriteBashInput(input, ctx) ?? input;
 	const cwd = bashCallCwd(effectiveInput, ctx?.cwd ?? process.cwd());
+	const literalCd = /^\s*cd\s+([^\s;&|]+)\s*&&\s*([\s\S]+?)\s*$/.exec(command);
+	const targetCommand = literalCd === null ? command : literalCd[2] ?? "";
+	const targetCwd = literalCd === null ? cwd : leadingCdCwd(command, cwd);
 	const env = environmentForBashInput(effectiveInput, input);
-	const writeTargets = embeddedWriteTargets(command, cwd, env);
+	const writeTargets = embeddedWriteTargets(targetCommand, targetCwd, env);
 	if (writeTargets.kind === "refused") return { block: true, reason: writeTargets.reason };
 	const direct = writes.length === 1 ? writes[0] : undefined;
 	if (direct !== undefined && bdInvocationUsesExternalStore(direct)) return undefined;
-	const store = direct === undefined ? undefined : bdStoreForInvocation(direct, cwd, env);
-	if (targetEnabled?.(store === undefined ? cwd : dirname(store)) === false) return undefined;
-	return await admitBeadsWork(ctx, cwd, store === undefined ? env : { ...env, BEADS_DIR: store }, false);
+	const store = direct === undefined ? undefined : bdStoreForInvocation(direct, targetCwd, env);
+	if (targetEnabled?.(store === undefined ? targetCwd : dirname(store)) === false) return undefined;
+	return await admitBeadsWork(ctx, targetCwd, store === undefined ? env : { ...env, BEADS_DIR: store }, false);
 }
 
 export default function sessionBeadsLifecycle(pi: ExtensionAPI): void {

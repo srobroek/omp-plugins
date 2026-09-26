@@ -11,6 +11,7 @@ import {
 	globalValue,
 	invocationActor,
 } from "./bd-actor-gate.ts";
+import { withEmbeddedWriteLock } from "./bd-embedded-write-lock.ts";
 import { claimedIds } from "./bd-lease-gate.ts";
 import {
 	type CommandPosition,
@@ -507,17 +508,22 @@ async function defaultRun(
 	env: NodeJS.ProcessEnv,
 	deadline = Date.now() + HEARTBEAT_TIMEOUT_MS,
 ): Promise<BdResult> {
-	const remaining = deadline - Date.now();
-	if (remaining <= 0) return { exitCode: 124, stdout: "", stderr: "bd heartbeat timed out" };
-	const proc = Bun.spawn(argv, {
-		cwd,
-		stdout: "pipe",
-		stderr: "pipe",
-		timeout: remaining,
-		killSignal: "SIGKILL",
-		env: { ...env, BD_NO_PAGER: "1", BD_NON_INTERACTIVE: "1" },
-	});
-	const [stdout, stderr] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text()]);
-	if (Date.now() >= deadline) return { exitCode: 124, stdout: "", stderr: "bd heartbeat timed out" };
-	return { exitCode: (await proc.exited) ?? 1, stdout, stderr };
+	const execute = async (): Promise<BdResult> => {
+		const remaining = deadline - Date.now();
+		if (remaining <= 0) return { exitCode: 124, stdout: "", stderr: "bd heartbeat timed out" };
+		const proc = Bun.spawn(argv, {
+			cwd,
+			stdout: "pipe",
+			stderr: "pipe",
+			timeout: remaining,
+			killSignal: "SIGKILL",
+			env: { ...env, BD_NO_PAGER: "1", BD_NON_INTERACTIVE: "1", BEADS_DOLT_SHARED_SERVER: "" },
+		});
+		const [stdout, stderr] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text()]);
+		if (Date.now() >= deadline) return { exitCode: 124, stdout: "", stderr: "bd heartbeat timed out" };
+		return { exitCode: (await proc.exited) ?? 1, stdout, stderr };
+	};
+	const result = await withEmbeddedWriteLock(cwd, `heartbeat-${process.pid}`, execute, env, deadline);
+	if (result.kind === "failed") return { exitCode: 124, stdout: "", stderr: result.reason };
+	return result.value;
 }
