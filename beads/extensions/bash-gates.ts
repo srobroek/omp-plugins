@@ -4,6 +4,7 @@ import { agentActor, bdInvocations, decideActorParsed, environmentForInput } fro
 import { decideBdCloseParsed } from "./bd-close-gate.ts";
 import { decideEmbeddedWrite } from "./bd-embedded-write-lock.ts";
 import { decideBdUnclaimParsed } from "./bd-unclaim-gate.ts";
+import { decideBdUpdateCloseParsed } from "./bd-update-close-gate.ts";
 import { admitBdMutation, admitBeadsWork, lifecycleBdEnvironment, rewriteBashInput } from "./session-beads-lifecycle.ts";
 import { blockReason, commandFromInput, type ParsedCommand, parse, settingsEnabled } from "./shell-command.ts";
 
@@ -66,6 +67,10 @@ async function decide(parsed: ParsedCommand, event: ToolCallEvent, ctx: Extensio
 	const { cwd } = inputOf(event, ctx);
 	if (parsed.unknown) return suffix("bash-gates", "command could not be parsed", "split the command or run the mutation as a plain single command");
 	const env = environmentForActorDecision(input, parsed.command, ctx);
+	if (settingsEnabled("beads", "bd-update-close-gate", cwd)) {
+		const updateClose = decideBdUpdateCloseParsed(parsed);
+		if (updateClose !== undefined) return suffix("bd-update-close-gate", updateClose.reason);
+	}
 	if (settingsEnabled("beads", "bd-close-gate", cwd)) {
 		try {
 			const close = await decideBdCloseParsed(parsed, cwd, deadline);

@@ -498,9 +498,14 @@ function parsedInvocations(parsed, executable = "bd") {
   const found = [];
   for (const position of parsed.commands) {
     const executableName = position.executable?.split("/").pop();
-    if (executableName !== executable)
-      continue;
-    const index = position.argv.findIndex((word, i) => !position.words[i]?.quoted && (word.split("/").pop() ?? word) === executable);
+    let index = executableName === executable ? position.argv.findIndex((word, i) => !position.words[i]?.quoted && (word.split("/").pop() ?? word) === executable) : -1;
+    if (index < 0 && executable === "bd" && executableName !== "bd") {
+      const runner = position.argv.findIndex((word) => /(?:^|\/)bd-embedded-write-runner\.(?:js|ts)$/.test(word));
+      const delimiter = runner < 0 ? -1 : position.argv.indexOf("--", runner + 1);
+      const child = delimiter < 0 ? -1 : delimiter + 1;
+      if (child >= 0 && (position.argv[child]?.split("/").pop() ?? position.argv[child]) === "bd" && position.words[child]?.quoted !== true)
+        index = child;
+    }
     if (index < 0)
       continue;
     const args = position.argv.slice(index + 1);
@@ -2010,6 +2015,32 @@ function decideBdUnclaimParsed(parsed) {
   return;
 }
 
+// extensions/bd-update-close-gate.ts
+var UPDATE = "update";
+var CLOSING_STATUSES = { closed: true, done: true };
+var STATUS_FLAGS = ["--status", "-s"];
+var UPDATE_CLOSE_REASON = 'Use `bd close ID --reason "<factual reason>"` instead.';
+function statusValue(args) {
+  for (let index = 0;index < args.length; index++) {
+    const token = args[index];
+    if (token === undefined)
+      continue;
+    const flag = STATUS_FLAGS.find((candidate) => token === candidate || token.startsWith(`${candidate}=`));
+    if (flag === undefined)
+      continue;
+    if (token.startsWith(`${flag}=`))
+      return token.slice(flag.length + 1).toLowerCase();
+    return args[index + 1]?.toLowerCase();
+  }
+  return;
+}
+function hasClosingBdUpdate(parsed) {
+  return parsedInvocations(parsed).some((invocation) => invocation.verb?.toLowerCase() === UPDATE && CLOSING_STATUSES[statusValue(invocation.args) ?? ""] === true);
+}
+function decideBdUpdateCloseParsed(parsed) {
+  return hasClosingBdUpdate(parsed) ? { block: true, reason: UPDATE_CLOSE_REASON } : undefined;
+}
+
 // extensions/session-beads-lifecycle.ts
 import { existsSync as existsSync2, readFileSync as readFileSync3, realpathSync as realpathSync3, rmSync, statSync as statSync3 } from "fs";
 import { dirname as dirname3, isAbsolute as isAbsolute3, join as join2, resolve as resolve5 } from "path";
@@ -2398,6 +2429,11 @@ async function decide(parsed, event, ctx, pi, deadline) {
   if (parsed.unknown)
     return suffix("bash-gates", "command could not be parsed", "split the command or run the mutation as a plain single command");
   const env = environmentForActorDecision(input, parsed.command, ctx);
+  if (settingsEnabled("beads", "bd-update-close-gate", cwd)) {
+    const updateClose = decideBdUpdateCloseParsed(parsed);
+    if (updateClose !== undefined)
+      return suffix("bd-update-close-gate", updateClose.reason);
+  }
   if (settingsEnabled("beads", "bd-close-gate", cwd)) {
     try {
       const close = await decideBdCloseParsed(parsed, cwd, deadline);
