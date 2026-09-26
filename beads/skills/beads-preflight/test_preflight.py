@@ -29,6 +29,65 @@ class BeadsPreflightRegressionTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0)
         self.assertIn("\ufffd", result.stdout)
 
+    def test_missing_database_uses_bootstrap_when_origin_has_dolt_data(self) -> None:
+        info = preflight.CommandResult(1, "", "no beads database found", command=("bd", "info", "--json"))
+        origin = preflight.CommandResult(
+            0,
+            "abc123\trefs/dolt/data\n",
+            "",
+            command=("git", "ls-remote", "origin", "refs/dolt/data"),
+        )
+        with patch.object(preflight, "run_bd", return_value=info), patch.object(preflight, "run_git", return_value=origin):
+            result = preflight.check_store_reachable({"timeout_seconds": 1})
+        self.assertEqual(result["fix"], "bd bootstrap --yes")
+        self.assertIn("rule://beads-setup", result["detail"])
+
+    def test_missing_database_uses_init_when_origin_has_no_dolt_data(self) -> None:
+        info = preflight.CommandResult(1, "", "no beads database found", command=("bd", "info", "--json"))
+        origin = preflight.CommandResult(2, "", "fatal: No such remote 'origin'", command=("git", "ls-remote", "origin", "refs/dolt/data"))
+        with patch.object(preflight, "run_bd", return_value=info), patch.object(preflight, "run_git", return_value=origin):
+            result = preflight.check_store_reachable({"timeout_seconds": 1})
+        self.assertEqual(result["fix"], "bd init --init-if-missing --skip-hooks --skip-agents --prefix PREFIX")
+        self.assertIn("confirm the git origin first", result["detail"])
+        self.assertIn("rule://beads-setup", result["detail"])
+
+    def test_missing_database_ready_failure_points_to_store_remedy(self) -> None:
+        command = preflight.CommandResult(1, "", "no beads database found", command=("bd", "ready", "--json"))
+        with patch.object(preflight, "run_bd", return_value=command):
+            result = preflight.check_ready_work({"timeout_seconds": 1})
+        self.assertNotEqual(result["fix"], "bd ready --json")
+        self.assertIn("store-reachable", result["fix"])
+
+    def test_no_remote_warns_with_add_remedy(self) -> None:
+        command = preflight.CommandResult(0, "No remotes configured.\n", "")
+        with patch.object(preflight, "run_bd", return_value=command):
+            result = preflight.check_remote_sync({"timeout_seconds": 1})
+        self.assertEqual(result["status"], "warn")
+        self.assertEqual(result["fix"], "bd dolt remote add origin git+ssh://git@github.com/OWNER/REPO.git")
+        self.assertIn("bd dolt push exits 0 without pushing", result["detail"])
+
+    def test_git_ssh_remote_passes(self) -> None:
+        command = preflight.CommandResult(0, "origin git+ssh://git@github.com/srobroek/omp-plugins.git\n", "")
+        with patch.object(preflight, "run_bd", return_value=command):
+            result = preflight.check_remote_sync({"timeout_seconds": 1})
+        self.assertEqual(result["status"], "pass")
+
+    def test_multiple_valid_remotes_pass(self) -> None:
+        command = preflight.CommandResult(
+            0,
+            "origin git+ssh://git@github.com/srobroek/omp-plugins.git\nbackup git+https://example.test/ledger.git\n",
+            "",
+        )
+        with patch.object(preflight, "run_bd", return_value=command):
+            result = preflight.check_remote_sync({"timeout_seconds": 1})
+        self.assertEqual(result["status"], "pass")
+
+    def test_garbage_remote_line_skips(self) -> None:
+        command = preflight.CommandResult(0, "this is garbage\n", "")
+        with patch.object(preflight, "run_bd", return_value=command):
+            result = preflight.check_remote_sync({"timeout_seconds": 1})
+        self.assertEqual(result["status"], "skip")
+
     def test_non_text_ready_output_fails_without_traceback(self) -> None:
         command = preflight.CommandResult(0, {"ready": True}, "", command=("bd", "ready", "--json"))  # type: ignore[arg-type]
         with patch.object(preflight, "run_bd", return_value=command):

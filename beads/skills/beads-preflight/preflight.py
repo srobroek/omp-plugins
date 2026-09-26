@@ -29,6 +29,9 @@ CHECK_IDS = (
 
 DEFAULT_TIMEOUT_SECONDS = 5.0
 STALE_LEASE_LIMIT = 50
+SETUP_RULE = "rule://beads-setup"
+BOOTSTRAP_FIX = "bd bootstrap --yes"
+INIT_FIX = "bd init --init-if-missing --skip-hooks --skip-agents --prefix PREFIX"
 
 
 class CommandResult:
@@ -72,17 +75,14 @@ def timeout_result(command: CommandResult, *, store_reachable: bool = False, not
     return result(status, detail, "rerun with --timeout SECONDS or inspect the .beads store")
 
 
-def run_bd(args: list[str], timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS) -> CommandResult:
-    env = os.environ.copy()
-    env.setdefault("BD_NO_PAGER", "1")
-    env.setdefault("BD_NON_INTERACTIVE", "1")
-    env.setdefault("PAGER", "cat")
-    env.setdefault("GIT_PAGER", "cat")
-    command = ("bd", *args)
+def run_command(
+    command: tuple[str, ...], timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS, *, env: dict[str, str] | None = None
+) -> CommandResult:
+    command_env = os.environ.copy() if env is None else env
     try:
         result = subprocess.run(
             list(command),
-            env=env,
+            env=command_env,
             capture_output=True,
             text=True,
             errors="replace",
@@ -90,7 +90,7 @@ def run_bd(args: list[str], timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS) ->
             check=False,
         )
     except FileNotFoundError:
-        return CommandResult(127, "", "bd was not found on PATH", command=command, timeout_seconds=timeout_seconds)
+        return CommandResult(127, "", f"{command[0]} was not found on PATH", command=command, timeout_seconds=timeout_seconds)
     except subprocess.TimeoutExpired:
         return CommandResult(124, "", "", command=command, timeout_seconds=timeout_seconds, timed_out=True)
     return CommandResult(
@@ -101,6 +101,18 @@ def run_bd(args: list[str], timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS) ->
         timeout_seconds=timeout_seconds,
     )
 
+
+def run_bd(args: list[str], timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS) -> CommandResult:
+    env = os.environ.copy()
+    env.setdefault("BD_NO_PAGER", "1")
+    env.setdefault("BD_NON_INTERACTIVE", "1")
+    env.setdefault("PAGER", "cat")
+    env.setdefault("GIT_PAGER", "cat")
+    return run_command(("bd", *args), timeout_seconds, env=env)
+
+
+def run_git(args: list[str], timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS) -> CommandResult:
+    return run_command(("git", *args), timeout_seconds)
 
 def detail_error(result: CommandResult) -> str:
     if result.timed_out:
@@ -306,11 +318,37 @@ def load_info(state: dict[str, Any]) -> tuple[Any | None, CommandResult]:
     return value, command
 
 
+def missing_database(command: CommandResult) -> bool:
+    return "no beads database found" in detail_error(command).lower()
+
+
+def origin_has_dolt_data(state: dict[str, Any]) -> bool:
+    command = state.get("origin_command")
+    if not isinstance(command, CommandResult):
+        command = run_git(["ls-remote", "origin", "refs/dolt/data"], timeout_for(state))
+        state["origin_command"] = command
+    if command.returncode != 0 or not isinstance(command.stdout, str):
+        return False
+    return any(
+        len(fields) >= 2 and fields[1] == "refs/dolt/data"
+        for fields in (line.split() for line in command.stdout.splitlines())
+    )
+
+
+def missing_database_result(state: dict[str, Any], command: CommandResult) -> dict[str, Any]:
+    detail = f"bd info --json failed: {detail_error(command)}; {SETUP_RULE}"
+    if origin_has_dolt_data(state):
+        return result("fail", f"{detail}; git origin has refs/dolt/data", BOOTSTRAP_FIX)
+    return result("fail", f"{detail}; confirm the git origin first, then initialize the local store", INIT_FIX)
+
+
 def check_store_reachable(state: dict[str, Any]) -> dict[str, Any]:
     value, command = load_info(state)
     if command.timed_out:
         return timeout_result(command, store_reachable=True)
     if command.returncode != 0:
+        if missing_database(command):
+            return missing_database_result(state, command)
         return result("fail", f"bd info --json failed: {detail_error(command)}", None)
     if not isinstance(value, dict):
         return result("fail", "bd info --json returned JSON that is not an object", None)
@@ -358,7 +396,8 @@ def check_ready_work(state: dict[str, Any]) -> dict[str, Any]:
     if command.timed_out:
         return timeout_result(command)
     if command.returncode != 0:
-        return result("fail", f"bd ready --json failed: {detail_error(command)}", "bd ready --json")
+        fix = f"see store-reachable remedy ({SETUP_RULE})" if missing_database(command) else "bd ready --json"
+        return result("fail", f"bd ready --json failed: {detail_error(command)}", fix)
     try:
         value = parse_json(command.stdout)
     except (TypeError, json.JSONDecodeError):
@@ -433,17 +472,24 @@ def check_remote_sync(state: dict[str, Any]) -> dict[str, Any]:
     text = command.stdout.strip()
     if not text:
         return result("skip", "bd dolt remote list returned no output; remote configuration cannot be determined")
-    if "no remotes configured" in text.lower():
-        return result("pass", "no Dolt remote configured")
+    if text.lower().rstrip(".") == "no remotes configured":
+        return result(
+            "warn",
+            "no Dolt remote configured; bd dolt push exits 0 without pushing when no remote exists",
+            "bd dolt remote add origin git+ssh://git@github.com/OWNER/REPO.git",
+        )
     lines = [line for line in text.splitlines() if line.strip()]
-    if len(lines) == 1:
-        fields = lines[0].split()
-        remote_name, remote_url = fields[:2] if len(fields) >= 2 else ("", "")
+    valid_prefixes = ("http://", "https://", "ssh://", "git://", "git@", "file://", "git+ssh://", "git+https://", "git+http://", "git+file://")
+    for line in lines:
+        fields = line.split()
+        if len(fields) != 2:
+            return result("skip", "bd dolt remote list returned an unrecognized remote list")
+        remote_name, remote_url = fields
         valid_name = bool(re.fullmatch(r"[A-Za-z0-9._-]+", remote_name))
-        valid_url = remote_url.startswith(("http://", "https://", "ssh://", "git://", "git@", "file://"))
-        if valid_name and valid_url:
-            return result("pass", "Dolt remote configured: yes")
-    return result("skip", "bd dolt remote list returned an unrecognized remote list")
+        valid_url = remote_url.startswith(valid_prefixes)
+        if not valid_name or not valid_url:
+            return result("skip", "bd dolt remote list returned an unrecognized remote list")
+    return result("pass", "Dolt remote configured: yes")
 
 
 CHECKS = {
