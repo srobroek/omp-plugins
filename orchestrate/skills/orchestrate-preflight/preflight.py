@@ -518,8 +518,68 @@ def model_roles_check() -> dict[str, Any]:
     return check("model-roles", "pass", f"verified {len(agents)} shipped agent model overrides and selectors")
 
 
-def candidate_paths(explicit: str | None, packages_root: str | None, package_names: Iterable[str], skill: str) -> list[Path]:
+def _package_marketplace(package_root: Path) -> str | None:
+    match = re.fullmatch(r"(?P<marketplace>.+)___orchestrate___(?P<version>[^/]+)", package_root.name)
+    return match.group("marketplace") if match is not None else None
+
+
+def _installed_layout_candidates(
+    package_root: Path, package_names: tuple[str, ...], skill: str
+) -> tuple[list[Path], list[Path]]:
+    marketplace = _package_marketplace(package_root)
+    if marketplace is None or len(package_root.parents) < 3:
+        return [], []
+
+    installed_root = package_root.parents[2]
+    registry_path = installed_root / "installed_plugins.json"
+    registry: Any
+    try:
+        registry = json.loads(registry_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        registry = None
+
+    registry_valid = isinstance(registry, dict) and isinstance(registry.get("plugins"), dict)
+    if registry_valid:
+        plugins = registry["plugins"]
+        installed: list[Path] = []
+        for package in package_names:
+            key = f"{package}@{marketplace}"
+            if key not in plugins:
+                continue
+            entries = plugins[key]
+            if not isinstance(entries, list) or any(not isinstance(entry, dict) for entry in entries):
+                registry_valid = False
+                break
+            for entry in entries:
+                install_path = entry.get("installPath")
+                if not isinstance(install_path, str) or not install_path:
+                    registry_valid = False
+                    break
+                installed.append(Path(install_path) / "skills" / skill / "preflight.py")
+            if not registry_valid:
+                break
+        if registry_valid:
+            return installed, installed
+
+    root = package_root.parent
+    eligible: list[Path] = []
+    tried: list[Path] = []
+    for package in package_names:
+        matches = sorted(
+            path for path in root.glob(f"{marketplace}___{package}___*") if path.is_dir()
+        )
+        paths = [path / "skills" / skill / "preflight.py" for path in matches]
+        tried.extend(paths)
+        if len(paths) == 1:
+            eligible.extend(paths)
+    return eligible, tried
+
+
+def _build_candidate_paths(
+    explicit: str | None, packages_root: str | None, package_names: Iterable[str], skill: str
+) -> tuple[list[Path], list[Path]]:
     candidates: list[Path] = []
+    package_names = tuple(package_names)
     package_root = Path(__file__).resolve().parents[2]
     repository_root = package_root.parent
     relative_roots = (Path.cwd(), package_root, repository_root)
@@ -548,6 +608,12 @@ def candidate_paths(explicit: str | None, packages_root: str | None, package_nam
     for root in roots:
         for package in package_names:
             candidates.append(root / package / "skills" / skill / "preflight.py")
+    symlink_root = Path(__file__).absolute().parents[2].parent
+    for package in package_names:
+        candidates.append(symlink_root / package / "skills" / skill / "preflight.py")
+
+    installed_candidates, installed_tried = _installed_layout_candidates(package_root, package_names, skill)
+    candidates.extend(installed_candidates)
     unique: list[Path] = []
     seen: set[str] = set()
     for path in candidates:
@@ -555,15 +621,26 @@ def candidate_paths(explicit: str | None, packages_root: str | None, package_nam
         if key not in seen:
             seen.add(key)
             unique.append(path)
-    return unique
+    tried: list[Path] = []
+    seen.clear()
+    for path in unique + installed_tried:
+        key = str(path)
+        if key not in seen:
+            seen.add(key)
+            tried.append(path)
+    return unique, tried
+
+
+def candidate_paths(explicit: str | None, packages_root: str | None, package_names: Iterable[str], skill: str) -> list[Path]:
+    return _build_candidate_paths(explicit, packages_root, package_names, skill)[0]
 
 
 def find_sibling(explicit: str | None, packages_root: str | None, package_names: Iterable[str], skill: str) -> tuple[Path | None, list[Path]]:
-    candidates = candidate_paths(explicit, packages_root, package_names, skill)
+    candidates, tried = _build_candidate_paths(explicit, packages_root, package_names, skill)
     for path in candidates:
         if path.is_file():
-            return path, candidates
-    return None, candidates
+            return path, tried
+    return None, tried
 
 
 def sibling_checks(
@@ -577,7 +654,15 @@ def sibling_checks(
     sibling, tried = find_sibling(explicit, packages_root, package_names, skill)
     if sibling is None:
         attempted = ", ".join(str(path) for path in tried) or "<no path supplied>"
-        return [check(f"{prefix}.preflight", "skip", f"sibling preflight not found; tried: {attempted}")]
+        marketplace = _package_marketplace(Path(__file__).resolve().parents[2]) or "srobroek-omp"
+        return [
+            check(
+                f"{prefix}.preflight",
+                "fail",
+                f"sibling preflight not found; tried: {attempted}",
+                f"omp plugin install {prefix}@{marketplace}",
+            )
+        ]
 
     argv = [sys.executable, str(sibling), "--json"]
     if apply_worktrunk:

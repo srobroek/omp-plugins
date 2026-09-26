@@ -41,7 +41,7 @@ Runs an orchestrated delivery DAG, choosing a one-tier or two-tier topology, dis
 
 ### `orchestrate-preflight`
 
-Runs deterministic Beads, Worktrunk, and orchestration checks before worker dispatch. Invoke it with the recorded base commit and sibling preflight paths; it returns structured checks and blocks dispatch on a failed check.
+Runs deterministic Beads, Worktrunk, and orchestration checks before worker dispatch, automatically running the Beads and Worktrunk preflights. It returns structured checks and blocks dispatch on a failed check.
 
 ## Coordination
 

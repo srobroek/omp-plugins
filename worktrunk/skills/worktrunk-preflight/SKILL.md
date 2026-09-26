@@ -10,7 +10,7 @@ Run this skill from the repository cwd before starting work, running focused tes
 ## Invocation
 
 ```sh
-python3 skills/worktrunk-preflight/preflight.py --json
+python3 skill://worktrunk-preflight/preflight.py --json
 ```
 
 The script is read-only unless `--apply` is passed. `--apply` approves pending hooks when `hook-approvals` fails, then appends missing provisioning hooks to `.config/wt.toml` and rechecks both paths.
