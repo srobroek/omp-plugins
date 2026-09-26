@@ -47,7 +47,7 @@ class BeadsPreflightRegressionTests(unittest.TestCase):
         origin = preflight.CommandResult(2, "", "fatal: No such remote 'origin'", command=("git", "ls-remote", "origin", "refs/dolt/data"))
         with patch.object(preflight, "run_bd", return_value=info), patch.object(preflight, "run_git", return_value=origin):
             result = preflight.check_store_reachable({"timeout_seconds": 1})
-        self.assertEqual(result["fix"], "bd init --init-if-missing --skip-hooks --skip-agents --prefix PREFIX")
+        self.assertEqual(result["fix"], "bd init --init-if-missing --skip-hooks --skip-agents")
         self.assertIn("confirm the git origin first", result["detail"])
         self.assertIn("rule://beads-setup", result["detail"])
 
