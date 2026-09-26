@@ -321,6 +321,12 @@ describe("normalizeRepoPath", () => {
 			}
 		}
 	});
+	test("rejects control characters before classifying remote hosts", () => {
+		for (const remote of ["https://github.com/acme/project\nother", "https://github.com/acme/project\r", "https://github.com/acme/project\t", "https://github.com/acme/project\0", "https://github.com/acme/project\u007f"]) {
+			expect(forgeTarget(remote)).toBeNull();
+		}
+	});
+
 });
 
 describe("REMOTE_NAME", () => {

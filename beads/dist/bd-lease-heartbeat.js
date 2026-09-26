@@ -639,6 +639,8 @@ import { spawnSync } from "child_process";
 import { lstatSync, realpathSync, statSync } from "fs";
 import { dirname, isAbsolute, resolve as resolve3 } from "path";
 function repoIdentity(cwd) {
+  if (cwd.includes("\x00"))
+    return;
   const result = spawnSync("git", ["-C", cwd, "rev-parse", "--git-common-dir"], {
     encoding: "utf8",
     timeout: 2000,

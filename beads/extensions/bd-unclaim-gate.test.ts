@@ -83,6 +83,12 @@ describe("bd unclaim gate", () => {
 		}
 	});
 
+	test("refuses malformed parsed command values without throwing", () => {
+		for (const value of [null, undefined, {}, { unknown: true }, { unknown: false, commands: [], nested: [] }]) {
+			expect(() => decideBdUnclaimParsed(value as never)).not.toThrow();
+		}
+	});
+
 	test("Bash refusal uses the standard block reason and retry", async () => {
 		const result = await registeredBashHandler()({ toolName: "bash", input: { command: "bd unclaim bead-1" } }, context);
 		expect(result).toEqual({ block: true, reason: blockReason({ gate: "bd-unclaim-gate", cause, resolution }) });
