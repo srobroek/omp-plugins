@@ -2,8 +2,9 @@
 """Focused claim-pools preflight checks."""
 
 from __future__ import annotations
-
 import importlib.util
+import os
+import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -118,5 +119,24 @@ class ClaimPoolsCheck(unittest.TestCase):
             checks = preflight.sibling_checks("beads", str(sibling), None, (), "preflight", False)
         self.assertEqual(checks[0]["status"], "fail")
 
+    def test_relative_sibling_path_uses_package_root_from_child_cwd(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "repo"
+            script = root / "orchestrate/skills/orchestrate-preflight/preflight.py"
+            sibling = root / "beads/skills/beads-preflight/preflight.py"
+            sibling.parent.mkdir(parents=True)
+            sibling.touch()
+            child_cwd = Path(directory) / "child-worktree"
+            child_cwd.mkdir()
+            previous = Path.cwd()
+            os.chdir(child_cwd)
+            try:
+                with patch.object(preflight, "__file__", str(script)):
+                    found, _ = preflight.find_sibling(
+                        "beads/skills/beads-preflight/preflight.py", None, (), "beads-preflight"
+                    )
+            finally:
+                os.chdir(previous)
+        self.assertEqual(found.resolve(), sibling.resolve())
 if __name__ == "__main__":
     unittest.main()

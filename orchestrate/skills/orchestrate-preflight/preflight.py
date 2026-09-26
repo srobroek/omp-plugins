@@ -519,13 +519,28 @@ def model_roles_check() -> dict[str, Any]:
 
 def candidate_paths(explicit: str | None, packages_root: str | None, package_names: Iterable[str], skill: str) -> list[Path]:
     candidates: list[Path] = []
+    package_root = Path(__file__).resolve().parents[2]
+    repository_root = package_root.parent
+    relative_roots = (Path.cwd(), package_root, repository_root)
+
+    def add_path(path: Path) -> None:
+        if path.is_absolute():
+            candidates.append(path)
+        else:
+            candidates.extend(root / path for root in relative_roots)
+
     if explicit:
-        candidates.append(Path(explicit).expanduser())
+        add_path(Path(explicit).expanduser())
+
     roots: list[Path] = []
     if packages_root:
-        roots.append(Path(packages_root).expanduser())
+        package_path = Path(packages_root).expanduser()
+        if package_path.is_absolute():
+            roots.append(package_path)
+        else:
+            roots.extend(root / package_path for root in relative_roots)
     else:
-        roots.append(Path(__file__).resolve().parents[3])
+        roots.append(repository_root)
     for root in roots:
         if (root / "packages").is_dir():
             roots.append(root / "packages")
