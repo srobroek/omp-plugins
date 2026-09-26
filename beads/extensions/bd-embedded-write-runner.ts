@@ -52,8 +52,24 @@ function commandTimeoutMs(): number {
 	return typeof configured === "number" && Number.isFinite(configured) && configured > 0 ? configured : COMMAND_TIMEOUT_MS;
 }
 
-/** A child write cannot hold an embedded store indefinitely. */
+/** Only one-bead mutations have a safe fixed deadline; maintenance and transfer writes may be long-running. */
+const BOUNDED_VERBS: Record<string, true> = { claim: true, close: true, comment: true, comments: true, create: true, dep: true, heartbeat: true, label: true, reopen: true, unclaim: true, update: true };
+const GLOBAL_VALUE_FLAGS: Record<string, true> = { "-C": true, "--directory": true, "--db": true, "--database": true, "--actor": true };
+
+function isBoundedWrite(argv: string[]): boolean {
+	if ((argv[0]?.split("/").pop() ?? argv[0]) !== "bd") return false;
+	for (let i = 1; i < argv.length; i++) {
+		const arg = argv[i];
+		if (arg === undefined || arg === "--") return false;
+		if (!arg.startsWith("-")) return BOUNDED_VERBS[arg] === true;
+		if (GLOBAL_VALUE_FLAGS[arg] === true) i++;
+	}
+	return false;
+}
+
+/** A short one-bead write cannot hold an embedded store indefinitely. */
 const COMMAND_TIMEOUT_MS = 120_000;
+const TERMINATION_GRACE_MS = 5_000;
 
 interface Request {
 	store: string;
@@ -154,12 +170,17 @@ async function run(request: Request): Promise<number> {
 			}
 			writeFileSync(startGate, "");
 			let timedOut = false;
-			const timeout = setTimeout(() => {
+			let grace: ReturnType<typeof setTimeout> | undefined;
+			const timeout = isBoundedWrite(request.argv) ? setTimeout(() => {
 				timedOut = true;
-				try { child?.kill("SIGKILL"); } catch { /* The child already exited. */ }
-			}, commandTimeoutMs());
+				try { child?.kill("SIGTERM"); } catch { /* The child already exited. */ }
+				grace = setTimeout(() => {
+					try { child?.kill("SIGKILL"); } catch { /* The child already exited. */ }
+				}, TERMINATION_GRACE_MS);
+			}, commandTimeoutMs()) : undefined;
 			const code = await child.exited;
 			clearTimeout(timeout);
+			clearTimeout(grace);
 			try { unlinkSync(startGate); } catch { /* The gate may already be absent. */ }
 			if (timedOut) {
 				process.stderr.write(`embedded write child exceeded ${commandTimeoutMs() / 1000}s and was terminated\n`);

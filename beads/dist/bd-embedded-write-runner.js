@@ -384,7 +384,24 @@ function commandTimeoutMs() {
   const configured = Reflect.get(globalThis, COMMAND_TIMEOUT_KEY);
   return typeof configured === "number" && Number.isFinite(configured) && configured > 0 ? configured : COMMAND_TIMEOUT_MS;
 }
+var BOUNDED_VERBS = { claim: true, close: true, comment: true, comments: true, create: true, dep: true, heartbeat: true, label: true, reopen: true, unclaim: true, update: true };
+var GLOBAL_VALUE_FLAGS = { "-C": true, "--directory": true, "--db": true, "--database": true, "--actor": true };
+function isBoundedWrite(argv) {
+  if ((argv[0]?.split("/").pop() ?? argv[0]) !== "bd")
+    return false;
+  for (let i = 1;i < argv.length; i++) {
+    const arg = argv[i];
+    if (arg === undefined || arg === "--")
+      return false;
+    if (!arg.startsWith("-"))
+      return BOUNDED_VERBS[arg] === true;
+    if (GLOBAL_VALUE_FLAGS[arg] === true)
+      i++;
+  }
+  return false;
+}
 var COMMAND_TIMEOUT_MS = 120000;
+var TERMINATION_GRACE_MS = 5000;
 function parseRunnerArgs(args) {
   let store;
   let waitMs;
@@ -455,14 +472,21 @@ async function run(request) {
       }
       writeFileSync(startGate, "");
       let timedOut = false;
-      const timeout = setTimeout(() => {
+      let grace;
+      const timeout = isBoundedWrite(request.argv) ? setTimeout(() => {
         timedOut = true;
         try {
-          child?.kill("SIGKILL");
+          child?.kill("SIGTERM");
         } catch {}
-      }, commandTimeoutMs());
+        grace = setTimeout(() => {
+          try {
+            child?.kill("SIGKILL");
+          } catch {}
+        }, TERMINATION_GRACE_MS);
+      }, commandTimeoutMs()) : undefined;
       const code = await child.exited;
       clearTimeout(timeout);
+      clearTimeout(grace);
       try {
         unlinkSync2(startGate);
       } catch {}
