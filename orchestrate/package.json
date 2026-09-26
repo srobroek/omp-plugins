@@ -1,6 +1,6 @@
 {
   "name": "@srobroek/orchestrate",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Ledger-backed delivery orchestration through role workers and verified integration.",
   "private": true,
   "omp": {
