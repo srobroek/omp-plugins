@@ -2,6 +2,7 @@ import { resolve } from "node:path";
 import type { ExtensionAPI, ExtensionContext, ToolCallEvent } from "@oh-my-pi/pi-coding-agent";
 import { agentActor, bdInvocations, decideActorParsed, environmentForInput } from "./bd-actor-gate.ts";
 import { decideBdCloseParsed } from "./bd-close-gate.ts";
+import { decideBdUpdateCloseParsed } from "./bd-update-close-gate.ts";
 import { decideEmbeddedWrite } from "./bd-embedded-write-lock.ts";
 import { decideBdUnclaimParsed } from "./bd-unclaim-gate.ts";
 import { admitBdMutation, admitBeadsWork, lifecycleBdEnvironment, rewriteBashInput } from "./session-beads-lifecycle.ts";
@@ -66,6 +67,10 @@ async function decide(parsed: ParsedCommand, event: ToolCallEvent, ctx: Extensio
 	const { cwd } = inputOf(event, ctx);
 	if (parsed.unknown) return suffix("bash-gates", "command could not be parsed", "split the command or run the mutation as a plain single command");
 	const env = environmentForActorDecision(input, parsed.command, ctx);
+	if (settingsEnabled("beads", "bd-update-close-gate", cwd)) {
+		const updateClose = decideBdUpdateCloseParsed(parsed);
+		if (updateClose !== undefined) return suffix("bd-update-close-gate", updateClose.reason);
+	}
 	if (settingsEnabled("beads", "bd-close-gate", cwd)) {
 		try {
 			const close = await decideBdCloseParsed(parsed, cwd, deadline);

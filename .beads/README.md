@@ -22,9 +22,10 @@ bd list
 # View issue details
 bd show <issue-id>
 
-# Update issue status
+# Update issue fields and claim ownership
 bd update <issue-id> --claim
-bd update <issue-id> --status done
+# Close an issue with a factual reason
+bd close <issue-id> --reason "<factual reason>"
 
 # Sync with Dolt remote
 bd dolt push

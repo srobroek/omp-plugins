@@ -17,8 +17,10 @@ Steering surfaces:
 
 ## Store-safety extensions
 
-The package registers `bash-gates` as the dispatcher entrypoint and `session-beads-lifecycle` as the session lifecycle extension. `bash-gates` dispatches exactly three controls:
+The package registers `bash-gates` as the dispatcher entrypoint and `session-beads-lifecycle` as the session lifecycle extension. `bash-gates` dispatches these controls:
 
+- `bd-update-close-gate` refuses `bd update` transitions to `closed` or `done`; use `bd close ID --reason "<factual reason>"`.
+- `bd-close-gate` refuses direct and embedded-runner closes of gate beads until their gate is resolved.
 - `bd-embedded-write-lock` serializes writes to the embedded store and runs mutations through `bd-embedded-write-runner`.
 - `bd-actor-gate` requires an actor identity for writes that must be attributable.
 - `bd-unclaim-gate` requires every `bd unclaim` mutation to use the guarded `--if-assignee` compare-and-swap flag.

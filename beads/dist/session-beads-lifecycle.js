@@ -498,9 +498,14 @@ function parsedInvocations(parsed, executable = "bd") {
   const found = [];
   for (const position of parsed.commands) {
     const executableName = position.executable?.split("/").pop();
-    if (executableName !== executable)
-      continue;
-    const index = position.argv.findIndex((word, i) => !position.words[i]?.quoted && (word.split("/").pop() ?? word) === executable);
+    let index = executableName === executable ? position.argv.findIndex((word, i) => !position.words[i]?.quoted && (word.split("/").pop() ?? word) === executable) : -1;
+    if (index < 0 && executable === "bd" && executableName !== "bd") {
+      const runner = position.argv.findIndex((word) => /(?:^|\/)bd-embedded-write-runner\.(?:js|ts)$/.test(word));
+      const delimiter = runner < 0 ? -1 : position.argv.indexOf("--", runner + 1);
+      const child = delimiter < 0 ? -1 : delimiter + 1;
+      if (child >= 0 && (position.argv[child]?.split("/").pop() ?? position.argv[child]) === "bd" && position.words[child]?.quoted !== true)
+        index = child;
+    }
     if (index < 0)
       continue;
     const args = position.argv.slice(index + 1);
