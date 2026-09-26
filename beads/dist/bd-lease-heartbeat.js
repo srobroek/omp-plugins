@@ -1,8 +1,8 @@
 // @bun
-// beads/extensions/bd-actor-gate.ts
+// extensions/bd-actor-gate.ts
 import { basename, relative, resolve as resolve2, sep } from "path";
 
-// beads/extensions/shell-tokenizer.ts
+// extensions/shell-tokenizer.ts
 var SEPARATORS = new Set([";", "&", "|", "(", ")", `
 `]);
 function token(value, startsQuoted = false, sawQuote = false) {
@@ -187,7 +187,7 @@ function hereDocumentBody(command, from, document) {
   return { bodyEnd: command.length, terminatorEnd: command.length };
 }
 
-// beads/extensions/shell-command.ts
+// extensions/shell-command.ts
 import { resolve } from "path";
 var OPERATORS = { ";": true, "&&": true, "||": true, "&": true, "|": true, "\n": true, "(": true, ")": true, "{": true, "}": true };
 var WRAPPERS = {
@@ -367,12 +367,12 @@ function parse(command) {
   return staticParse(command);
 }
 var settingsCache = new Map;
-// beads/extensions/bd-close-gate.ts
+// extensions/bd-close-gate.ts
 function tokenize2(command) {
   return tokenizeShell(command).map(({ value }) => value);
 }
 
-// beads/extensions/bd-actor-gate.ts
+// extensions/bd-actor-gate.ts
 var ACTOR_NOTICE_ARBITER = Symbol.for("com.srobroek.beads.actor-notice-arbiter.v1");
 var ACTOR_VARS = ["BEADS_ACTOR", "BD_ACTOR"];
 var VALUE_FLAGS = new Set([
@@ -628,13 +628,13 @@ function invocationActor(invocation, env) {
   return resolve("BEADS_ACTOR") ?? resolve("BD_ACTOR");
 }
 
-// beads/extensions/bd-embedded-write-lock.ts
+// extensions/bd-embedded-write-lock.ts
 import { spawnSync as spawnSync2 } from "child_process";
 import { closeSync, existsSync, openSync, readFileSync, realpathSync as realpathSync2, statSync as statSync2, unlinkSync, writeSync } from "fs";
 import { hostname } from "os";
 import { basename as basename2, dirname as dirname2, isAbsolute as isAbsolute2, join, resolve as resolve4 } from "path";
 
-// beads/extensions/beads-store.ts
+// extensions/beads-store.ts
 import { spawnSync } from "child_process";
 import { lstatSync, realpathSync, statSync } from "fs";
 import { dirname, isAbsolute, resolve as resolve3 } from "path";
@@ -709,7 +709,7 @@ function isDir(path) {
   }
 }
 
-// beads/extensions/bd-embedded-write-lock.ts
+// extensions/bd-embedded-write-lock.ts
 var LOCK_NAME = "omp-embedded-write.lock";
 var STEAL_NAME = "omp-embedded-write-steal.lock";
 var LEASE_MS = 120000;
@@ -1099,7 +1099,7 @@ async function withEmbeddedWriteLock(cwd, owner, write, env = process.env, deadl
   }
 }
 
-// beads/extensions/bd-lease-gate.ts
+// extensions/bd-lease-gate.ts
 var BD_ID = /^[A-Za-z][A-Za-z0-9]*(?:-[A-Za-z0-9]+)+(?:\.\d+)*$/;
 function claimedIds(output) {
   const ids = new Set;
@@ -1122,7 +1122,7 @@ function claimedTextIds(output) {
   return [...ids];
 }
 
-// beads/extensions/bd-lease-heartbeat.ts
+// extensions/bd-lease-heartbeat.ts
 var HEARTBEAT_INTERVAL_MS = 60000;
 var HEARTBEAT_TIMEOUT_MS = 1e4;
 var PREFILTER = /\bbd\b[\s\S]{0,400}?--claim\b/;

@@ -1,11 +1,11 @@
 // @bun
-// beads/extensions/bash-gates.ts
+// extensions/bash-gates.ts
 import { resolve as resolve6 } from "path";
 
-// beads/extensions/bd-actor-gate.ts
+// extensions/bd-actor-gate.ts
 import { basename, relative, resolve as resolve2, sep } from "path";
 
-// beads/extensions/shell-tokenizer.ts
+// extensions/shell-tokenizer.ts
 var SEPARATORS = new Set([";", "&", "|", "(", ")", `
 `]);
 function token(value, startsQuoted = false, sawQuote = false) {
@@ -190,7 +190,7 @@ function hereDocumentBody(command, from, document) {
   return { bodyEnd: command.length, terminatorEnd: command.length };
 }
 
-// beads/extensions/shell-command.ts
+// extensions/shell-command.ts
 import { readFileSync } from "fs";
 import { resolve } from "path";
 var OPERATORS = { ";": true, "&&": true, "||": true, "&": true, "|": true, "\n": true, "(": true, ")": true, "{": true, "}": true };
@@ -625,7 +625,7 @@ function blockReason(input) {
   const plugin = input.plugin ?? "beads";
   return `${input.cause}; ${input.resolution}. Disable locally: set plugins.${plugin}.gates.${input.gate}.enabled=false`;
 }
-// beads/extensions/bd-close-gate.ts
+// extensions/bd-close-gate.ts
 var TIMEOUT_MS = 25000;
 var injectedRun = null;
 function timeoutError() {
@@ -722,7 +722,7 @@ async function decideBdCloseParsed(parsed, cwd = process.cwd(), deadline) {
   return;
 }
 
-// beads/extensions/bd-actor-gate.ts
+// extensions/bd-actor-gate.ts
 var ACTOR_NOTICE_ARBITER = Symbol.for("com.srobroek.beads.actor-notice-arbiter.v1");
 var ACTOR_VARS = ["BEADS_ACTOR", "BD_ACTOR"];
 var VALUE_FLAGS2 = new Set([
@@ -1109,13 +1109,13 @@ function decideActorGate(command, env = process.env) {
   return advisory ? { kind: "advisory", text: ADVISORY_TEXT } : { kind: "allow" };
 }
 
-// beads/extensions/bd-embedded-write-lock.ts
+// extensions/bd-embedded-write-lock.ts
 import { spawnSync as spawnSync2 } from "child_process";
 import { closeSync, existsSync, openSync, readFileSync as readFileSync2, realpathSync as realpathSync2, statSync as statSync2, unlinkSync, writeSync } from "fs";
 import { hostname } from "os";
 import { basename as basename2, dirname as dirname2, isAbsolute as isAbsolute2, join, resolve as resolve4 } from "path";
 
-// beads/extensions/beads-store.ts
+// extensions/beads-store.ts
 import { spawnSync } from "child_process";
 import { lstatSync, realpathSync, statSync } from "fs";
 import { dirname, isAbsolute, resolve as resolve3 } from "path";
@@ -1190,7 +1190,7 @@ function isDir(path) {
   }
 }
 
-// beads/extensions/bd-embedded-write-lock.ts
+// extensions/bd-embedded-write-lock.ts
 var LOCK_NAME = "omp-embedded-write.lock";
 var STEAL_NAME = "omp-embedded-write-steal.lock";
 var LEASE_MS = 120000;
@@ -1891,7 +1891,7 @@ async function decideEmbeddedWrite(parsed, event, ctx, deadline = Date.now() + 2
   }
 }
 
-// beads/extensions/bd-unclaim-gate.ts
+// extensions/bd-unclaim-gate.ts
 var UNCLAIM = "unclaim";
 var HELP_FLAGS = { "--help": true, "-h": true };
 var IF_ASSIGNEE = "--if-assignee";
@@ -2002,7 +2002,7 @@ function decideBdUnclaimParsed(parsed) {
   return;
 }
 
-// beads/extensions/session-beads-lifecycle.ts
+// extensions/session-beads-lifecycle.ts
 import { existsSync as existsSync2, readFileSync as readFileSync3, realpathSync as realpathSync3, rmSync, statSync as statSync3 } from "fs";
 import { dirname as dirname3, isAbsolute as isAbsolute3, join as join2, resolve as resolve5 } from "path";
 var EMBEDDED_PIN_ENV = { BEADS_DOLT_SHARED_SERVER: "" };
@@ -2346,7 +2346,7 @@ async function admitBdMutation(input, ctx, targetEnabled) {
   return await admitBeadsWork(ctx, targetCwd, store === undefined ? env : { ...env, BEADS_DIR: store }, false);
 }
 
-// beads/extensions/bash-gates.ts
+// extensions/bash-gates.ts
 var TOOL_CALL_BUDGET_MS = 25000;
 function inputOf(event, ctx) {
   const input = event.input;
