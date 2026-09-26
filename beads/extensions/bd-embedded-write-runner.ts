@@ -163,7 +163,7 @@ async function run(request: Request): Promise<number> {
 			// runner dies before publication, the shell observes its dead parent and exits;
 			// after publication, exec keeps the recorded pid for bd itself.
 			child = Bun.spawn(["/bin/sh", "-c", launch, "bd-write-gate", startGate, String(process.pid), ...request.argv], { stdin: "inherit", stdout: "inherit", stderr: "inherit" });
-			if (!(await attachWriter(request.store, owner, child.pid))) {
+			if (!(await attachWriter(request.store, owner, child.pid, request.waitMs))) {
 				child.kill("SIGTERM");
 				await child.exited;
 				return NOT_RUN;

@@ -992,12 +992,12 @@ function renewLease(lock: string, owner: string, token: string): void {
  * another writer is releasing or renewing its lease. Retrying that contention is
  * safe while this process still owns the main lock; a lost token remains a refusal.
  */
-export async function attachWriter(store: string, owner: string, pid: number): Promise<boolean> {
+export async function attachWriter(store: string, owner: string, pid: number, waitMs = RUNNER_WAIT_MS): Promise<boolean> {
 	const lock = join(store, LOCK_NAME);
 	const held = registry().owned.get(lock);
 	if (held === undefined || !held.holders.has(owner)) return false;
 	const writerStart = processStartIdentity(pid);
-	const deadline = Date.now() + POLL_MS;
+	const deadline = Date.now() + Math.max(0, waitMs);
 	while (true) {
 		const result = withOwnership(lock, held.token, () => {
 			const fd = openSync(lock, "w");
