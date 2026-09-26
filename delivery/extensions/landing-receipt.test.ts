@@ -13,7 +13,7 @@ import {
 	writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import pkg from "../package.json" with { type: "json" };
 
 import {
@@ -1118,6 +1118,20 @@ describe("writeReceipt and readReceipt", () => {
 
 		expect(refusalOf(readReceipt(path))).toContain(path);
 		expect(lstatSync(path).isSymbolicLink()).toBe(true);
+	});
+
+	test("refuses a receipt path with noncanonical lexical segments, naming its canonical path", () => {
+		const root = scratch("read-noncanonical-path");
+		const directory = join(root, "receipts");
+		mkdirSync(directory);
+		const receipt = landed();
+		const canonical = join(root, `${receipt.receiptId}.json`);
+		writeFileSync(canonical, JSON.stringify(receipt));
+		const supplied = `${directory}/../${receipt.receiptId}.json`;
+
+		const reason = refusalOf(readReceipt(supplied));
+		expect(reason).toContain(supplied);
+		expect(reason).toContain(resolve(supplied));
 	});
 
 	test("requires a direct read path basename to equal the payload receiptId", () => {
