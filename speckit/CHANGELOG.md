@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.7.6](https://github.com/srobroek/omp-plugins/compare/speckit--v0.7.5...speckit--v0.7.6) (2026-09-26)
+
+
+### Bug Fixes
+
+* align agent tool lists with OMP 18.3 tools ([fcddd95](https://github.com/srobroek/omp-plugins/commit/fcddd957ea632dd81ae9fd24823050eea216e06a))
+* backlog sweep 2026-09-24 (batch docs, graph contract, advisory repository resolution, review fixes) ([7210d2d](https://github.com/srobroek/omp-plugins/commit/7210d2db058a266619432b34477dc52d41e6fb2e))
+* **beads,worktrunk,delivery,orchestrate:** second-wave robustness hardening ([#579](https://github.com/srobroek/omp-plugins/issues/579)) ([ce8a716](https://github.com/srobroek/omp-plugins/commit/ce8a7164f2b0ac98efc7f8291d2aa3fc8643ed4a))
+* **speckit:** align workflow guidance and scope rules ([#538](https://github.com/srobroek/omp-plugins/issues/538)) ([78ef594](https://github.com/srobroek/omp-plugins/commit/78ef5946dec4f73624bcbf4a9fe3939892a34225))
+* **speckit:** install agent-context extension ([#528](https://github.com/srobroek/omp-plugins/issues/528)) ([8dd6306](https://github.com/srobroek/omp-plugins/commit/8dd63067a27077a00504dca54284b1bfb82f0839))
+* **speckit:** keep the sync agent read-only ([871c6c4](https://github.com/srobroek/omp-plugins/commit/871c6c42bfaa184225268a39f8c8625955d1e31d))
+
 ## [0.7.5](https://github.com/srobroek/omp-plugins/compare/speckit--v0.7.4...speckit--v0.7.5) (2026-09-21)
 
 

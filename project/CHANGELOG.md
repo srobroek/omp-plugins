@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.3.2](https://github.com/srobroek/omp-plugins/compare/project--v1.3.1...project--v1.3.2) (2026-09-26)
+
+
+### Bug Fixes
+
+* align agent tool lists with OMP 18.3 tools ([fcddd95](https://github.com/srobroek/omp-plugins/commit/fcddd957ea632dd81ae9fd24823050eea216e06a))
+* **project:** align journey agent tools with their workflows ([7a7dc81](https://github.com/srobroek/omp-plugins/commit/7a7dc81f769cab4091bb2e9f7fc3423fbb606c0e))
+* **verification:** resolve file URL output paths omp-plugins-fj7b ([94b5d98](https://github.com/srobroek/omp-plugins/commit/94b5d9896e9744b37915750fdb4f2a386046800f))
+
 ## [1.3.1](https://github.com/srobroek/omp-plugins/compare/project--v1.3.0...project--v1.3.1) (2026-09-21)
 
 

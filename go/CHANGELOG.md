@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.8](https://github.com/srobroek/omp-plugins/compare/go--v0.3.7...go--v0.3.8) (2026-09-26)
+
+
+### Bug Fixes
+
+* **go:** bound quality tool probe budget ([#545](https://github.com/srobroek/omp-plugins/issues/545)) ([e01829a](https://github.com/srobroek/omp-plugins/commit/e01829a824ab221a17ce7d4bba264581091e4623))
+
 ## [0.3.7](https://github.com/srobroek/omp-plugins/compare/go--v0.3.6...go--v0.3.7) (2026-09-22)
 
 

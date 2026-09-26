@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.8](https://github.com/srobroek/omp-plugins/compare/python--v0.3.7...python--v0.3.8) (2026-09-26)
+
+
+### Bug Fixes
+
+* **python:** bound quality tool probe budget ([#546](https://github.com/srobroek/omp-plugins/issues/546)) ([78a5d06](https://github.com/srobroek/omp-plugins/commit/78a5d06683eb53f80a31d57c9beab690915cc773))
+
 ## [0.3.7](https://github.com/srobroek/omp-plugins/compare/python--v0.3.6...python--v0.3.7) (2026-09-22)
 
 

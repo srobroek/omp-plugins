@@ -1,5 +1,32 @@
 # Changelog
 
+## [0.14.0](https://github.com/srobroek/omp-plugins/compare/delivery--v0.13.0...delivery--v0.14.0) (2026-09-26)
+
+
+### Features
+
+* **delivery:** enforce worktree-safe landing and cleanup ([#512](https://github.com/srobroek/omp-plugins/issues/512)) ([3b6fb8a](https://github.com/srobroek/omp-plugins/commit/3b6fb8a054566526360d829cf8d9608cf1238fbf))
+* **delivery:** support explicit merge methods in delivery_land ([#580](https://github.com/srobroek/omp-plugins/issues/580)) ([d0bafd3](https://github.com/srobroek/omp-plugins/commit/d0bafd385be3a59a8de9276d74034d6300e48242))
+* **orchestrate,beads:** fold merger into shepherd, per-agent bd actors, lead yield ([3e81511](https://github.com/srobroek/omp-plugins/commit/3e81511c08cf12dcb26a88525da554be3ab274a6))
+* **worktrunk:** provision new worktrees in the post-start hook ([#569](https://github.com/srobroek/omp-plugins/issues/569)) ([6890cdf](https://github.com/srobroek/omp-plugins/commit/6890cdf6aca357cfe37ad87d3102ade83abc8507))
+
+
+### Bug Fixes
+
+* backlog sweep 2026-09-24 (batch docs, graph contract, advisory repository resolution, review fixes) ([7210d2d](https://github.com/srobroek/omp-plugins/commit/7210d2db058a266619432b34477dc52d41e6fb2e))
+* **beads,delivery:** harden malformed TypeScript inputs ([#587](https://github.com/srobroek/omp-plugins/issues/587)) ([8f0363c](https://github.com/srobroek/omp-plugins/commit/8f0363c408626cd5d283dfa36ff53f889933bf66))
+* **beads,worktrunk,delivery,orchestrate:** second-wave robustness hardening ([#579](https://github.com/srobroek/omp-plugins/issues/579)) ([ce8a716](https://github.com/srobroek/omp-plugins/commit/ce8a7164f2b0ac98efc7f8291d2aa3fc8643ed4a))
+* **delivery:** align receipt and hygiene contracts ([#552](https://github.com/srobroek/omp-plugins/issues/552)) ([0312b46](https://github.com/srobroek/omp-plugins/commit/0312b46175aef3e3e0d57eefba31e0c293945f91))
+* **delivery:** close landed beads with native bd instead of bd_reconcile ([#568](https://github.com/srobroek/omp-plugins/issues/568)) ([5f5e4e5](https://github.com/srobroek/omp-plugins/commit/5f5e4e5153d4821f1086f917febc81cca32cf6d1))
+* **delivery:** inventory stale backup worktrees (omp-plugins-y2tu) ([4ffa48e](https://github.com/srobroek/omp-plugins/commit/4ffa48ef84f3ebaac1f963586069341b871fa1f9))
+* **delivery:** refuse receipt scans past the cap and derive the emitter version from package.json ([#524](https://github.com/srobroek/omp-plugins/issues/524)) ([3b7b3bf](https://github.com/srobroek/omp-plugins/commit/3b7b3bfaa2c46bd5483ee5ae76a7ae360e77c699))
+* **delivery:** reject noncanonical receipt paths ([10c9059](https://github.com/srobroek/omp-plugins/commit/10c9059000cc7e2c214c3dcaa852877596d6621a))
+* **omp-plugins-ur7f:** remove static orientation and atomically publish receipts ([b681392](https://github.com/srobroek/omp-plugins/commit/b681392a0de0b83fd16e5156aefa891ded52d47b))
+* **omp-plugins-ur7f:** reserve receipt targets before rename ([6a8c42f](https://github.com/srobroek/omp-plugins/commit/6a8c42f74a26afb877eec4462a3fa5b972fa0014))
+* **omp-plugins-ur7f:** restore no-replace receipt links ([25f4d05](https://github.com/srobroek/omp-plugins/commit/25f4d059da345ad65f766240511fc06ce47c5f91))
+* **omp-plugins-y2tu:** define authorized backup cleanup handoff ([8eee0ba](https://github.com/srobroek/omp-plugins/commit/8eee0ba550c433f05ab66a3c1c6f8f34eb3a5ad0))
+* **tests:** budget load-sensitive integration cases ([#530](https://github.com/srobroek/omp-plugins/issues/530)) ([e417222](https://github.com/srobroek/omp-plugins/commit/e417222e9219fb96045bfe911221a59c4df9049c))
+
 ## [0.13.0](https://github.com/srobroek/omp-plugins/compare/delivery--v0.12.0...delivery--v0.13.0) (2026-09-22)
 
 

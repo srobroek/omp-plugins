@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.4.2](https://github.com/srobroek/omp-plugins/compare/architecture--v0.4.1...architecture--v0.4.2) (2026-09-26)
+
+
+### Bug Fixes
+
+* align agent tool lists with OMP 18.3 tools ([fcddd95](https://github.com/srobroek/omp-plugins/commit/fcddd957ea632dd81ae9fd24823050eea216e06a))
+* **architecture:** keep ast_grep for the architect with a grep fallback ([be7412e](https://github.com/srobroek/omp-plugins/commit/be7412e596cd33f35cfe357bbf5e6e36414904e6))
+
 ## [0.4.1](https://github.com/srobroek/omp-plugins/compare/architecture--v0.4.0...architecture--v0.4.1) (2026-09-19)
 
 

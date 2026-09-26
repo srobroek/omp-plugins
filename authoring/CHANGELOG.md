@@ -1,5 +1,13 @@
 # Changelog
 
+## [2.1.1](https://github.com/srobroek/omp-plugins/compare/authoring--v2.1.0...authoring--v2.1.1) (2026-09-26)
+
+
+### Bug Fixes
+
+* **authoring:** correct CI validation claims ([#541](https://github.com/srobroek/omp-plugins/issues/541)) ([5eaec12](https://github.com/srobroek/omp-plugins/commit/5eaec128fb0d5a7074e939c759e343adb017769b))
+* **authoring:** document isolated live plugin tests ([#542](https://github.com/srobroek/omp-plugins/issues/542)) ([fe36a90](https://github.com/srobroek/omp-plugins/commit/fe36a907cc80c5debca3ef354b1a9e3d0cfa9b84))
+
 ## [2.1.0](https://github.com/srobroek/omp-plugins/compare/authoring--v2.0.5...authoring--v2.1.0) (2026-09-21)
 
 

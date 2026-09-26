@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.3](https://github.com/srobroek/omp-plugins/compare/debate--v0.3.2...debate--v0.3.3) (2026-09-26)
+
+
+### Bug Fixes
+
+* **debate:** clarify critique availability ([#550](https://github.com/srobroek/omp-plugins/issues/550)) ([5ae9055](https://github.com/srobroek/omp-plugins/commit/5ae905508b9bbdd6a35b96f605085ab3d961f993))
+
 ## [0.3.2](https://github.com/srobroek/omp-plugins/compare/debate--v0.3.1...debate--v0.3.2) (2026-09-19)
 
 

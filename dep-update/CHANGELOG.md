@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.7.2](https://github.com/srobroek/omp-plugins/compare/dep-update--v0.7.1...dep-update--v0.7.2) (2026-09-26)
+
+
+### Bug Fixes
+
+* **dep-update:** fail dep_apply when the package manager is missing ([#527](https://github.com/srobroek/omp-plugins/issues/527)) ([bc246e2](https://github.com/srobroek/omp-plugins/commit/bc246e23124f4e309370a1acf94845f1abf436da))
+* **dep-update:** sync dependency detector ([027dd3e](https://github.com/srobroek/omp-plugins/commit/027dd3e6f974450e1455a699a2eefc3ab7404db8))
+* **omp-plugins-uzf2:** remove retired project setup references ([a077c2b](https://github.com/srobroek/omp-plugins/commit/a077c2b071b98b7c23dbedc3d655a3876c0887d0))
+* report declared and resolved versions and sync the dependency detector ([d664033](https://github.com/srobroek/omp-plugins/commit/d664033b5e7827902a568ac418b7cc8bdc8384c0))
+
 ## [0.7.1](https://github.com/srobroek/omp-plugins/compare/dep-update--v0.7.0...dep-update--v0.7.1) (2026-09-21)
 
 

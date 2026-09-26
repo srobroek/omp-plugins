@@ -1,5 +1,21 @@
 # Changelog
 
+## [1.0.0](https://github.com/srobroek/omp-plugins/compare/build--v0.6.2...build--v1.0.0) (2026-09-26)
+
+
+### ⚠ BREAKING CHANGES
+
+* orchestrate agents no longer list or call `hub`; the wait-discipline extension is removed; build no longer ships operator; agent output schemas replace `status`/`loop_result` with `verdict`.
+
+### Features
+
+* cut orchestrate over to OMP 18.3 and finish its capability contracts ([fd5831e](https://github.com/srobroek/omp-plugins/commit/fd5831e2ff96ea18950c6809cb98cf93f8888ce1))
+
+
+### Bug Fixes
+
+* **build:** constrain external worker checkout ([#551](https://github.com/srobroek/omp-plugins/issues/551)) ([192984a](https://github.com/srobroek/omp-plugins/commit/192984a9cc79430140c477161f020e3811b07c01))
+
 ## [0.6.2](https://github.com/srobroek/omp-plugins/compare/build--v0.6.1...build--v0.6.2) (2026-09-19)
 
 

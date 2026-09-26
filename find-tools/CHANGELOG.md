@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.1.1](https://github.com/srobroek/omp-plugins/compare/find-tools--v1.1.0...find-tools--v1.1.1) (2026-09-26)
+
+
+### Bug Fixes
+
+* **find-tools:** make discovery scan cancellation robust ([#526](https://github.com/srobroek/omp-plugins/issues/526)) ([bb148b6](https://github.com/srobroek/omp-plugins/commit/bb148b6c941bc6b743fb52f5ad3e9e48e7fb2a7c))
+
 ## [1.1.0](https://github.com/srobroek/omp-plugins/compare/find-tools--v1.0.5...find-tools--v1.1.0) (2026-09-22)
 
 

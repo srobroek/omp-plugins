@@ -1,5 +1,68 @@
 # Changelog
 
+## [3.0.0](https://github.com/srobroek/omp-plugins/compare/beads--v2.2.2...beads--v3.0.0) (2026-09-26)
+
+
+### ⚠ BREAKING CHANGES
+
+* orchestrate agents no longer list or call `hub`; the wait-discipline extension is removed; build no longer ships operator; agent output schemas replace `status`/`loop_result` with `verdict`.
+* ship the latest orchestrate and beads steering ([#519](https://github.com/srobroek/omp-plugins/issues/519))
+* **beads:** keep only the preferences bd prime does not state ([#518](https://github.com/srobroek/omp-plugins/issues/518))
+* cut worktrunk and beads to store-safety controls and add orchestrate ([#517](https://github.com/srobroek/omp-plugins/issues/517))
+
+### Features
+
+* cut orchestrate over to OMP 18.3 and finish its capability contracts ([fd5831e](https://github.com/srobroek/omp-plugins/commit/fd5831e2ff96ea18950c6809cb98cf93f8888ce1))
+* cut worktrunk and beads to store-safety controls and add orchestrate ([#517](https://github.com/srobroek/omp-plugins/issues/517)) ([b5d5771](https://github.com/srobroek/omp-plugins/commit/b5d5771ccd255574bd168c7c147dcd2cfe40d1ab))
+* **delivery:** enforce worktree-safe landing and cleanup ([#512](https://github.com/srobroek/omp-plugins/issues/512)) ([3b6fb8a](https://github.com/srobroek/omp-plugins/commit/3b6fb8a054566526360d829cf8d9608cf1238fbf))
+* **orchestrate,beads:** fold merger into shepherd, per-agent bd actors, lead yield ([3e81511](https://github.com/srobroek/omp-plugins/commit/3e81511c08cf12dcb26a88525da554be3ab274a6))
+* ship the latest orchestrate and beads steering ([#519](https://github.com/srobroek/omp-plugins/issues/519)) ([add9ed9](https://github.com/srobroek/omp-plugins/commit/add9ed978ae58c98b14606d118c8aa69eb02d1ac))
+
+
+### Bug Fixes
+
+* backlog sweep 2026-09-24 (batch docs, graph contract, advisory repository resolution, review fixes) ([7210d2d](https://github.com/srobroek/omp-plugins/commit/7210d2db058a266619432b34477dc52d41e6fb2e))
+* **beads,delivery:** harden malformed TypeScript inputs ([#587](https://github.com/srobroek/omp-plugins/issues/587)) ([8f0363c](https://github.com/srobroek/omp-plugins/commit/8f0363c408626cd5d283dfa36ff53f889933bf66))
+* **beads,orchestrate,worktrunk:** prove native leases and fix adherence findings ([6e8fee7](https://github.com/srobroek/omp-plugins/commit/6e8fee7f1a533c429cdfa252360cf37a0b15c482))
+* **beads,worktrunk,delivery,orchestrate:** second-wave robustness hardening ([#579](https://github.com/srobroek/omp-plugins/issues/579)) ([ce8a716](https://github.com/srobroek/omp-plugins/commit/ce8a7164f2b0ac98efc7f8291d2aa3fc8643ed4a))
+* **beads,worktrunk,orchestrate:** tolerate invalid UTF-8 in preflight subprocesses ([ffe2d7a](https://github.com/srobroek/omp-plugins/commit/ffe2d7a9c5818ce2e48e87c69919103b6475067c))
+* **beads:** align Linux lock identity fixtures ([4ddcee7](https://github.com/srobroek/omp-plugins/commit/4ddcee7927becfa86240c4b9f507ca6b192d2084))
+* **beads:** block close via bd update status ([#588](https://github.com/srobroek/omp-plugins/issues/588)) ([b41f445](https://github.com/srobroek/omp-plugins/commit/b41f445cc060adc298039509c2a405790474620e))
+* **beads:** bound embedded write gate waits ([#516](https://github.com/srobroek/omp-plugins/issues/516)) ([bbcc2de](https://github.com/srobroek/omp-plugins/commit/bbcc2de7582a6420f4ec76bdff46dde5967dd991))
+* **beads:** bound embedded write operations ([83d1cfb](https://github.com/srobroek/omp-plugins/commit/83d1cfb1dcf7642dea3c0e2ac1c63988a5cbd642))
+* **beads:** close lifecycle review gaps ([d8f2f80](https://github.com/srobroek/omp-plugins/commit/d8f2f805d103b4ea19df64ab9c20c02160439f01))
+* **beads:** enforce wrapped bd actor and lock gates (omp-plugins-lwde) ([e8019a1](https://github.com/srobroek/omp-plugins/commit/e8019a1994c72ef36e6a0ce62fffb1418df5a623))
+* **beads:** fail safe on RETIRED symlinks for elxu ([cc6e3c2](https://github.com/srobroek/omp-plugins/commit/cc6e3c23f71cdb591acea7fc0b4e41aa44acd587))
+* **beads:** finish lifecycle review for omp-plugins-4nw1 ([efddbb5](https://github.com/srobroek/omp-plugins/commit/efddbb55c5bfe7695ef40ddf710687777374653b))
+* **beads:** guard lifecycle status restoration ([54ddcea](https://github.com/srobroek/omp-plugins/commit/54ddcea3f5c35961fd99ffd74c0aa54a92a34d4c))
+* **beads:** harden embedded lock and identity probes (omp-plugins-ct8y) ([cac2a10](https://github.com/srobroek/omp-plugins/commit/cac2a106aef4f3e72916278c14c636ef23e44cd6))
+* **beads:** honor env actor assignments after unsets (omp-plugins-lwde) ([37f34da](https://github.com/srobroek/omp-plugins/commit/37f34da43e5d5e53c391bfeece11304ea90e4792))
+* **beads:** pin bd without the bash env parameter ([#574](https://github.com/srobroek/omp-plugins/issues/574)) ([c115ccb](https://github.com/srobroek/omp-plugins/commit/c115ccb0e41ba2589992ce198bafffc2e8885f33))
+* **beads:** read Linux process start identity ([697c3c2](https://github.com/srobroek/omp-plugins/commit/697c3c2a971db6330b61b15eda9400c5425a1bcc))
+* **beads:** recover claims on old CLI and broken worktrees ([ffb6c74](https://github.com/srobroek/omp-plugins/commit/ffb6c748cbfe28e84e361715d61281800a3e37b7))
+* **beads:** refuse unguarded bd unclaim ([#564](https://github.com/srobroek/omp-plugins/issues/564)) ([7ba8458](https://github.com/srobroek/omp-plugins/commit/7ba84583576ec5f9ef62f82185f4c602b2fba504))
+* **beads:** require modern CLI for claim release ([b4ef052](https://github.com/srobroek/omp-plugins/commit/b4ef05244385aea183342abb3f9fcfc5dbed582d))
+* **beads:** restore bounded claim lifecycle guards ([b292b55](https://github.com/srobroek/omp-plugins/commit/b292b55dd42c25e89f95c23da768f26d68f35d89))
+* **beads:** retry transient writer publication contention ([da7b868](https://github.com/srobroek/omp-plugins/commit/da7b86884706c3bdcd08101cf2d95ffc903e0b48))
+* **delivery:** close landed beads with native bd instead of bd_reconcile ([#568](https://github.com/srobroek/omp-plugins/issues/568)) ([5f5e4e5](https://github.com/srobroek/omp-plugins/commit/5f5e4e5153d4821f1086f917febc81cca32cf6d1))
+* **omp-plugins-qycs:** cover mise Bun runner discovery ([6b3738f](https://github.com/srobroek/omp-plugins/commit/6b3738f39f665b6ccfc569e564405a5e76383bb1))
+* **omp-plugins-qycs:** mention mise in runner refusal ([7b108c5](https://github.com/srobroek/omp-plugins/commit/7b108c5a18773d4189c3b5bf572374ef8c480cb0))
+* **omp-plugins-qycs:** resolve mise-managed Bun runner ([5c4247b](https://github.com/srobroek/omp-plugins/commit/5c4247b65c81ab2b8fb2644052fa04d7a14cc028))
+* **worktrunk,beads:** close gate bypasses found by fuzzing ([#575](https://github.com/srobroek/omp-plugins/issues/575)) ([5184896](https://github.com/srobroek/omp-plugins/commit/51848964d2b968d9006dc620be55f9210e8a60ae))
+* **worktrunk,beads:** gate wt merge from eval; correct actor owner text ([#571](https://github.com/srobroek/omp-plugins/issues/571)) ([65926e8](https://github.com/srobroek/omp-plugins/commit/65926e82be9b40c4ff3ebd74580c7db22e8a6fb6))
+
+
+### Refactors
+
+* **beads:** keep only the preferences bd prime does not state ([#518](https://github.com/srobroek/omp-plugins/issues/518)) ([f4a45d5](https://github.com/srobroek/omp-plugins/commit/f4a45d54f5bb9d638ff703c96ab342e98c34a21c))
+
+
+### Documentation
+
+* **beads:** record bounded sync consistency probe (omp-plugins-u5ug) ([b6a4223](https://github.com/srobroek/omp-plugins/commit/b6a4223852c0c08eca3dfdf5358bf4dd95aa2001))
+* **beads:** route multiline bead text through --body-file (chezmoi-maintenance.3) ([7583455](https://github.com/srobroek/omp-plugins/commit/758345562861b27572e7d17778e81e0e883b631d))
+* **omp-plugins-9pa7:** document graph parent fields ([4e18446](https://github.com/srobroek/omp-plugins/commit/4e18446f1c27f62ce53995dee10643d56c6b2ac6))
+
 ## [2.2.2](https://github.com/srobroek/omp-plugins/compare/beads--v2.2.1...beads--v2.2.2) (2026-09-22)
 
 

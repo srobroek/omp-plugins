@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.6](https://github.com/srobroek/omp-plugins/compare/diagram--v0.2.5...diagram--v0.2.6) (2026-09-26)
+
+
+### Bug Fixes
+
+* **diagram:** clarify Excalidraw enable and reconnect guidance ([#537](https://github.com/srobroek/omp-plugins/issues/537)) ([d31a71e](https://github.com/srobroek/omp-plugins/commit/d31a71ea7f511de90d462966a1d9df2e41384b0b))
+
 ## [0.2.5](https://github.com/srobroek/omp-plugins/compare/diagram--v0.2.4...diagram--v0.2.5) (2026-09-19)
 
 

@@ -1,5 +1,48 @@
 # Changelog
 
+## [2.0.0](https://github.com/srobroek/omp-plugins/compare/worktrunk--v1.3.2...worktrunk--v2.0.0) (2026-09-26)
+
+
+### ⚠ BREAKING CHANGES
+
+* orchestrate agents no longer list or call `hub`; the wait-discipline extension is removed; build no longer ships operator; agent output schemas replace `status`/`loop_result` with `verdict`.
+* ship the latest orchestrate and beads steering ([#519](https://github.com/srobroek/omp-plugins/issues/519))
+* cut worktrunk and beads to store-safety controls and add orchestrate ([#517](https://github.com/srobroek/omp-plugins/issues/517))
+
+### Features
+
+* cut orchestrate over to OMP 18.3 and finish its capability contracts ([fd5831e](https://github.com/srobroek/omp-plugins/commit/fd5831e2ff96ea18950c6809cb98cf93f8888ce1))
+* cut worktrunk and beads to store-safety controls and add orchestrate ([#517](https://github.com/srobroek/omp-plugins/issues/517)) ([b5d5771](https://github.com/srobroek/omp-plugins/commit/b5d5771ccd255574bd168c7c147dcd2cfe40d1ab))
+* **delivery:** enforce worktree-safe landing and cleanup ([#512](https://github.com/srobroek/omp-plugins/issues/512)) ([3b6fb8a](https://github.com/srobroek/omp-plugins/commit/3b6fb8a054566526360d829cf8d9608cf1238fbf))
+* ship the latest orchestrate and beads steering ([#519](https://github.com/srobroek/omp-plugins/issues/519)) ([add9ed9](https://github.com/srobroek/omp-plugins/commit/add9ed978ae58c98b14606d118c8aa69eb02d1ac))
+* **worktrunk:** provision new worktrees in the post-start hook ([#569](https://github.com/srobroek/omp-plugins/issues/569)) ([6890cdf](https://github.com/srobroek/omp-plugins/commit/6890cdf6aca357cfe37ad87d3102ade83abc8507))
+
+
+### Bug Fixes
+
+* **beads,orchestrate,worktrunk:** prove native leases and fix adherence findings ([6e8fee7](https://github.com/srobroek/omp-plugins/commit/6e8fee7f1a533c429cdfa252360cf37a0b15c482))
+* **beads,worktrunk,delivery,orchestrate:** second-wave robustness hardening ([#579](https://github.com/srobroek/omp-plugins/issues/579)) ([ce8a716](https://github.com/srobroek/omp-plugins/commit/ce8a7164f2b0ac98efc7f8291d2aa3fc8643ed4a))
+* **beads,worktrunk,orchestrate:** tolerate invalid UTF-8 in preflight subprocesses ([ffe2d7a](https://github.com/srobroek/omp-plugins/commit/ffe2d7a9c5818ce2e48e87c69919103b6475067c))
+* **omp-plugins-bdqg:** ignore platform optional dependencies ([0eaec46](https://github.com/srobroek/omp-plugins/commit/0eaec46cd96e682fe183ca4b4ce853ec3bc7ee27))
+* **omp-plugins-bdqg:** separate hook script checks ([f0b6377](https://github.com/srobroek/omp-plugins/commit/f0b6377272b3ad84dea513b6ff326c3943dc6ddc))
+* **omp-plugins-bdqg:** validate hooks and manifests ([bb342ad](https://github.com/srobroek/omp-plugins/commit/bb342adb4e8f4148977c1ed0425586be1ee554fd))
+* **orchestrate:** align scoped prose checks ([b4c0ae3](https://github.com/srobroek/omp-plugins/commit/b4c0ae315d7be2f97155456f600e57e35bb8c233))
+* **preflight:** detect incomplete worktree dependencies ([4d96231](https://github.com/srobroek/omp-plugins/commit/4d96231a02e0402aeb73bcbb11c1d7b167005c16))
+* **steering:** document rebasing tracked merges and worktree paths ([#578](https://github.com/srobroek/omp-plugins/issues/578)) ([0580cd5](https://github.com/srobroek/omp-plugins/commit/0580cd50c46224a85abd92bd289e67504bce0b0b))
+* **worktrunk,beads:** close gate bypasses found by fuzzing ([#575](https://github.com/srobroek/omp-plugins/issues/575)) ([5184896](https://github.com/srobroek/omp-plugins/commit/51848964d2b968d9006dc620be55f9210e8a60ae))
+* **worktrunk,beads:** gate wt merge from eval; correct actor owner text ([#571](https://github.com/srobroek/omp-plugins/issues/571)) ([65926e8](https://github.com/srobroek/omp-plugins/commit/65926e82be9b40c4ff3ebd74580c7db22e8a6fb6))
+* **worktrunk:** block opaque dynamic merge wrappers ([c5eead9](https://github.com/srobroek/omp-plugins/commit/c5eead965e7cf69a9d5e8c88867be140e4e6941d))
+* **worktrunk:** detect skeleton dependency types ([0143131](https://github.com/srobroek/omp-plugins/commit/0143131acf63f5ad6c328673e6c85a4a0b156ad3))
+* **worktrunk:** harden preflight checks ([48be8cc](https://github.com/srobroek/omp-plugins/commit/48be8ccb192c4e6e6b1715eb565dafa5ed904a22))
+* **worktrunk:** read hook commands from approvals template and skip the paid config probe ([#561](https://github.com/srobroek/omp-plugins/issues/561)) ([b304d8c](https://github.com/srobroek/omp-plugins/commit/b304d8cd404c437053ccb3e45b9ed76e174adfbf))
+* **worktrunk:** reject merges from target worktrees ([#562](https://github.com/srobroek/omp-plugins/issues/562)) ([6cc5bd9](https://github.com/srobroek/omp-plugins/commit/6cc5bd9bf1cd8cd0715fc8b6cc3fbbba81f3107b))
+* **worktrunk:** verify declared hook executables (omp-plugins-n07u) ([c0aeb65](https://github.com/srobroek/omp-plugins/commit/c0aeb65cf4439a573d70a1738fb6121a1b4fe99b))
+
+
+### Documentation
+
+* **worktrunk:** correct 1.0.0 release boundary omp-plugins-cnk5 ([d61af0c](https://github.com/srobroek/omp-plugins/commit/d61af0ce46d7b10ae3e82dcdf2facb2146d6fb65))
+
 ## [1.3.2](https://github.com/srobroek/omp-plugins/compare/worktrunk--v1.3.1...worktrunk--v1.3.2) (2026-09-22)
 
 

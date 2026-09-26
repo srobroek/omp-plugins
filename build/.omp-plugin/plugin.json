@@ -1,6 +1,6 @@
 {
   "name": "build",
   "description": "External-repository worker agent.",
-  "version": "0.6.2",
+  "version": "1.0.0",
   "category": "development"
 }
