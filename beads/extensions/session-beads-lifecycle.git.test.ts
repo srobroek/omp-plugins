@@ -170,6 +170,10 @@ describe("autoPinBeadsDir", () => {
 		execFileSync("git", ["-C", root, "worktree", "remove", "--force", wt]);
 		rmSync(root, { recursive: true, force: true });
 	}, 60_000); // measured at about 20s under full-suite load; retain 3x headroom for Git setup and cleanup
+	test("rejects a cwd containing a NUL without invoking Git", () => {
+		expect(repoIdentity("/tmp/\0invalid")).toBeUndefined();
+	});
+
 });
 
 describe("pinBashInput", () => {
@@ -1188,6 +1192,13 @@ describe.serial("integration", () => {
 			rmSync(dir, { recursive: true, force: true });
 		}
 	});
+	test.serial("ignores malformed session stop events", () => {
+		const { handlers } = wire();
+		const stop = handlers.session_stop?.[0];
+		if (stop === undefined) throw new Error("session stop handler was not registered");
+		for (const event of [null, undefined, [], "not-an-event", 0]) expect(() => stop(event, {})).not.toThrow();
+	});
+
 	test.serial("quoted and escaped bd claims remain tracked without a ledger read", async () => {
 		const dir = mkdtempSync(join(tmpdir(), "beads-quoted-claim-"));
 		mkdirSync(join(dir, ".beads"));

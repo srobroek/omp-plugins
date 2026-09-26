@@ -70,7 +70,13 @@ function wrapperInvocations(parsed: ParsedCommand | ParseFailure): Array<{ args:
 
 /** Evaluate parsed bd invocations recursively, before any command rewrite occurs. */
 export function decideBdUnclaimParsed(parsed: ParsedCommand | ParseFailure): BdUnclaimDecision | undefined {
+	if (parsed === null || typeof parsed !== "object" || !("unknown" in parsed) || typeof parsed.unknown !== "boolean") {
+		return { block: true, reason: "unable to verify bd unclaim command syntax" };
+	}
 	if (parsed.unknown) return;
+	if (!Array.isArray(parsed.commands) || !Array.isArray(parsed.nested)) {
+		return { block: true, reason: "unable to verify bd unclaim command syntax" };
+	}
 	const invocations = [...parsedInvocations(parsed), ...wrapperInvocations(parsed)];
 	for (const invocation of invocations) {
 		if (invocation.verb?.toLowerCase() !== UNCLAIM) continue;

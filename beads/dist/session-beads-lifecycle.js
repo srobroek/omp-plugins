@@ -950,6 +950,8 @@ import { spawnSync } from "child_process";
 import { lstatSync, realpathSync, statSync } from "fs";
 import { dirname, isAbsolute, resolve as resolve3 } from "path";
 function repoIdentity(cwd) {
+  if (cwd.includes("\x00"))
+    return;
   const result = spawnSync("git", ["-C", cwd, "rev-parse", "--git-common-dir"], {
     encoding: "utf8",
     timeout: 2000,
@@ -2891,6 +2893,8 @@ function sessionBeadsLifecycle(pi) {
     }
   });
   pi.on("session_stop", (event, ctx) => {
+    if (event === null || typeof event !== "object")
+      return;
     const state = sessions.get(sessionKey(ctx));
     if (state === undefined || state.stopFired || event.stop_hook_active === true || event.stopHookActive === true)
       return;

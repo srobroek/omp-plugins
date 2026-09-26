@@ -1630,6 +1630,7 @@ export default function sessionBeadsLifecycle(pi: ExtensionAPI): void {
 	});
 
 	pi.on("session_stop", (event: SessionStopEvent, ctx: ExtensionContext) => {
+		if (event === null || typeof event !== "object") return;
 		const state = sessions.get(sessionKey(ctx));
 		if (state === undefined || state.stopFired || event.stop_hook_active === true || event.stopHookActive === true) return;
 		const additionalContext = trackedClaimAdvisory(state);

@@ -1120,6 +1120,8 @@ import { spawnSync } from "child_process";
 import { lstatSync, realpathSync, statSync } from "fs";
 import { dirname, isAbsolute, resolve as resolve3 } from "path";
 function repoIdentity(cwd) {
+  if (cwd.includes("\x00"))
+    return;
   const result = spawnSync("git", ["-C", cwd, "rev-parse", "--git-common-dir"], {
     encoding: "utf8",
     timeout: 2000,
@@ -1975,8 +1977,14 @@ function wrapperInvocations(parsed) {
   return found;
 }
 function decideBdUnclaimParsed(parsed) {
+  if (parsed === null || typeof parsed !== "object" || !("unknown" in parsed) || typeof parsed.unknown !== "boolean") {
+    return { block: true, reason: "unable to verify bd unclaim command syntax" };
+  }
   if (parsed.unknown)
     return;
+  if (!Array.isArray(parsed.commands) || !Array.isArray(parsed.nested)) {
+    return { block: true, reason: "unable to verify bd unclaim command syntax" };
+  }
   const invocations = [...parsedInvocations(parsed), ...wrapperInvocations(parsed)];
   for (const invocation of invocations) {
     if (invocation.verb?.toLowerCase() !== UNCLAIM)
