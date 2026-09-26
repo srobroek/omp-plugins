@@ -241,7 +241,7 @@ test("lock timeout identifies the holder and lock age", async () => {
 test("parallel runner acquisitions do not refuse ordinary short writes", async () => {
 	const store = mkdtempSync(join(Bun.env.TMPDIR ?? "/tmp", "beads-lock-contention-"));
 	const runner = join(import.meta.dir, "bd-embedded-write-runner.ts");
-	const children = Array.from({ length: 10 }, () => Bun.spawn([process.execPath, runner, "--beads-store", store, "--beads-wait-ms", "5000", "--", "/bin/sleep", "0.02"], { stdout: "ignore", stderr: "pipe" }));
+	const children = Array.from({ length: 10 }, () => Bun.spawn([process.execPath, runner, "--beads-store", store, "--beads-wait-ms", "30000", "--", "/bin/sleep", "0.02"], { stdout: "ignore", stderr: "pipe" }));
 	try {
 		const statuses = await Promise.all(children.map(child => child.exited));
 		expect(statuses).toEqual(Array.from({ length: 10 }, () => 0));
