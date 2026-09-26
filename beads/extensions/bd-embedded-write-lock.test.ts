@@ -3,12 +3,12 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync,
 import { hostname } from "node:os";
 import { join } from "node:path";
 import { decideEmbeddedWrite, embeddedWriteRunner, embeddedWriteTargets, hold, parseLinuxStatStartIdentity, processStartIdentity, release, resolveBunBinary } from "./bd-embedded-write-lock.ts";
+import { main as runEmbeddedWriter, setCommandTimeoutForTests } from "./bd-embedded-write-runner.ts";
 import { parse } from "./shell-command.ts";
 
 const host = hostname().split(".")[0] ?? "localhost";
 /** The scratch-store proof drives the real bd CLI; CI images without bd skip it. */
 const BD_ON_PATH = Bun.which("bd") !== null;
-
 test("resolves mise-only Bun and completes a real runner write", () => {
 	const root = mkdtempSync(join(Bun.env.TMPDIR ?? "/tmp", "beads-lock-mise-"));
 	const marker = join(root, "written");
@@ -222,4 +222,103 @@ test("an aborted waiter leaves the queue for the next writer", async () => {
         rmSync(store, { recursive: true, force: true });
     }
 });
+});
+test("lock timeout identifies the holder and lock age", async () => {
+	const store = mkdtempSync(join(Bun.env.TMPDIR ?? "/tmp", "beads-lock-diagnostic-"));
+	try {
+		writeFileSync(join(store, "omp-embedded-write.lock"), JSON.stringify({ host, pid: process.pid, owner: "runner-live", token: "held", taken: Date.now() - 1000, expires: Date.now() + 10000 }));
+		const result = await hold(store, "waiter", 30);
+		expect(result.kind).toBe("failed");
+		if (result.kind === "failed") {
+			expect(result.reason).toContain("holder runner-live");
+			expect(result.reason).toMatch(/age \d+s/);
+		}
+	} finally {
+		rmSync(store, { recursive: true, force: true });
+	}
+});
+
+test("parallel runner acquisitions do not refuse ordinary short writes", async () => {
+	const store = mkdtempSync(join(Bun.env.TMPDIR ?? "/tmp", "beads-lock-contention-"));
+	const runner = join(import.meta.dir, "bd-embedded-write-runner.ts");
+	const children = Array.from({ length: 10 }, () => Bun.spawn([process.execPath, runner, "--beads-store", store, "--beads-wait-ms", "30000", "--", "/bin/sleep", "0.02"], { stdout: "ignore", stderr: "pipe" }));
+	try {
+		const statuses = await Promise.all(children.map(child => child.exited));
+		expect(statuses).toEqual(Array.from({ length: 10 }, () => 0));
+	} finally {
+		for (const child of children) if (child.exitCode === null) child.kill();
+		rmSync(store, { recursive: true, force: true });
+	}
+});
+
+test("runner refuses a queued writer at its lock deadline", async () => {
+	const store = mkdtempSync(join(Bun.env.TMPDIR ?? "/tmp", "beads-lock-wait-"));
+	const runner = join(import.meta.dir, "bd-embedded-write-runner.ts");
+	const fakeBd = join(store, "bd");
+	writeFileSync(fakeBd, "#!/bin/sh\nsleep 0.2\n", { mode: 0o755 });
+	const first = Bun.spawn([process.execPath, runner, "--beads-store", store, "--beads-wait-ms", "1000", "--", fakeBd, "update", "bead-1"], { stdout: "ignore", stderr: "ignore" });
+	try {
+		const lock = join(store, "omp-embedded-write.lock");
+		const deadline = Date.now() + 2000;
+		while (!existsSync(lock)) {
+			// Separate runner processes and the OS lock use the platform clock; fake timers cannot drive this integration boundary.
+			await Bun.sleep(5);
+			if (Date.now() >= deadline) throw new Error("first runner did not acquire the lock");
+		}
+		const second = Bun.spawn([process.execPath, runner, "--beads-store", store, "--beads-wait-ms", "25", "--", fakeBd, "update", "bead-2"], { stdout: "ignore", stderr: "ignore" });
+		expect(await second.exited).toBe(120);
+		expect(await first.exited).toBe(0);
+	} finally {
+		if (first.exitCode === null) {
+			first.kill("SIGTERM");
+			await first.exited;
+		}
+		rmSync(store, { recursive: true, force: true });
+	}
+});
+
+test("accepts a literal cd prefix while refusing dynamic cwd", async () => {
+	const root = mkdtempSync(join(Bun.env.TMPDIR ?? "/tmp", "beads-lock-cwd-"));
+	const store = join(root, ".beads");
+	const event = (command: string) => ({ toolName: "bash", toolCallId: command, input: { command, cwd: root, env: { BEADS_DIR: store } } }) as unknown as Parameters<typeof decideEmbeddedWrite>[1];
+	try {
+		mkdirSync(store, { recursive: true });
+		writeFileSync(join(store, "metadata.json"), "{}");
+		const literal = "cd . && bd update bead-1 --claim";
+		const decision = await decideEmbeddedWrite(parse(literal) as unknown as Parameters<typeof decideEmbeddedWrite>[0], event(literal), { cwd: root } as unknown as Parameters<typeof decideEmbeddedWrite>[2], Date.now() + 2000, () => ({ interpreter: process.execPath, script: join(import.meta.dir, "bd-embedded-write-runner.ts") }));
+		expect(decision?.kind).toBe("rewrite");
+		const dynamic = "cd $WORKTREE && bd update bead-1 --claim";
+		const refused = await decideEmbeddedWrite(parse(dynamic) as unknown as Parameters<typeof decideEmbeddedWrite>[0], event(dynamic), { cwd: root } as unknown as Parameters<typeof decideEmbeddedWrite>[2], Date.now() + 2000, () => ({ interpreter: process.execPath, script: join(import.meta.dir, "bd-embedded-write-runner.ts") }));
+		expect(refused).toEqual({ kind: "block", reason: "This command changes directory dynamically; issue the `bd` command with the tool's cwd field instead." });
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+test("terminates a hung short embedded child and releases its lock", async () => {
+	const store = mkdtempSync(join(Bun.env.TMPDIR ?? "/tmp", "beads-lock-timeout-"));
+	const fakeBd = join(store, "bd");
+	writeFileSync(fakeBd, "#!/bin/sh\nsleep 1\n", { mode: 0o755 });
+	setCommandTimeoutForTests(25);
+	try {
+		const result = await runEmbeddedWriter(["--beads-store", store, "--", fakeBd, "update", "bead-1"]);
+		expect(result).toBe(124);
+		expect(existsSync(join(store, "omp-embedded-write.lock"))).toBe(false);
+	} finally {
+		setCommandTimeoutForTests();
+		rmSync(store, { recursive: true, force: true });
+	}
+});
+
+test("leaves long embedded maintenance writes to their own lifecycle", async () => {
+	const store = mkdtempSync(join(Bun.env.TMPDIR ?? "/tmp", "beads-lock-long-"));
+	const fakeBd = join(store, "bd");
+	writeFileSync(fakeBd, "#!/bin/sh\nsleep 0.1\n", { mode: 0o755 });
+	setCommandTimeoutForTests(25);
+	try {
+		const result = await runEmbeddedWriter(["--beads-store", store, "--", fakeBd, "gc"]);
+		expect(result).toBe(0);
+	} finally {
+		setCommandTimeoutForTests();
+		rmSync(store, { recursive: true, force: true });
+	}
 });

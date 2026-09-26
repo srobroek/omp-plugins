@@ -327,6 +327,15 @@ function invocation(segment, argv) {
   }
   return tokens.slice(start);
 }
+function leadingCdCwd(command, cwd) {
+  const match = /^\s*cd\s+([^\s;&|]+)\s*&&/.exec(command);
+  if (!match)
+    return cwd;
+  const dir = match[1];
+  if (!dir || /^[-~$]/.test(dir) || /[\\`"'*?\x5b\x5d{}]/.test(dir))
+    return cwd;
+  return dir.startsWith("/") ? dir : resolve(cwd, dir);
+}
 function splitCommands(source) {
   const positions = [];
   let current = [];
@@ -1186,9 +1195,9 @@ var LOCK_NAME = "omp-embedded-write.lock";
 var STEAL_NAME = "omp-embedded-write-steal.lock";
 var LEASE_MS = 120000;
 var RENEW_MS = 20000;
-var WAIT_MS = 20000;
+var WAIT_MS = 120000;
 var PREFLIGHT_WAIT_MS = 500;
-var RUNNER_WAIT_MS = 20000;
+var RUNNER_WAIT_MS = 120000;
 var POLL_MS = 20;
 var PREFLIGHT_WAIT_KEY = Symbol.for("com.srobroek.beads.embedded-write-lock.preflight-wait-ms.v1");
 function preflightWaitMs() {
@@ -1460,6 +1469,21 @@ function ageOf(path) {
     return 0;
   }
 }
+function lockHolder(lock) {
+  let ageMs = ageOf(lock);
+  try {
+    const parsed = JSON.parse(readFileSync2(lock, "utf8"));
+    if (typeof parsed.taken === "number")
+      ageMs = Math.max(0, Date.now() - parsed.taken);
+    const owner = typeof parsed.owner === "string" && parsed.owner.length > 0 ? parsed.owner : "unknown owner";
+    const pid = typeof parsed.pid === "number" ? `pid ${parsed.pid}` : "pid unknown";
+    const writer = typeof parsed.writer === "number" ? `, writer pid ${parsed.writer}` : "";
+    const host = typeof parsed.host === "string" && parsed.host.length > 0 ? ` on ${parsed.host}` : "";
+    return `holder ${owner} (${pid}${writer}${host}), age ${Math.round(ageMs / 1000)}s`;
+  } catch {
+    return `holder record unreadable, age ${Math.round(Math.max(0, ageMs) / 1000)}s`;
+  }
+}
 function abandoned(lock) {
   let raw;
   try {
@@ -1487,6 +1511,8 @@ function abandoned(lock) {
   return ageOf(lock) > leaseMs;
 }
 function takeOverIfAbandoned(lock, steal) {
+  if (!abandoned(lock))
+    return;
   let fd;
   try {
     fd = openSync(steal, "wx");
@@ -1597,9 +1623,10 @@ async function hold(store, owner, waitMs = WAIT_MS, signal) {
         };
       }
       if (Date.now() >= deadline) {
+        const holder = lockHolder(lock);
         return {
           kind: "failed",
-          reason: `Beads embedded write lock at ${lock} stayed held for ${Math.round(waitMs / 1000)}s. Another writer is still working, or a hold was left behind by a process on another host; the write was refused rather than run concurrently. Read the lock file, then remove it once its holder is really gone.`
+          reason: `Beads embedded write lock at ${lock} stayed held for ${Math.round(waitMs / 1000)}s; ${holder}. The write was refused rather than run concurrently. Read the lock file, then remove it once its holder is really gone.`
         };
       }
       await pause(ticket, Math.min(POLL_MS, deadline - Date.now()), signal);
@@ -1766,6 +1793,15 @@ function resolveBunBinary(options = {}) {
 function quote(word) {
   return `'${word.replaceAll("'", "'\\''")}'`;
 }
+function normalizeDirectCommand(command, cwd) {
+  const match = /^\s*cd\s+([^\s;&|]+)\s*&&\s*([\s\S]+?)\s*$/.exec(command);
+  if (match === null)
+    return { command, cwd };
+  const dir = match[1] ?? "";
+  if (!dir || /^[-~$]/.test(dir) || /[\\`"'*?\x5b\x5d{}]/.test(dir))
+    return;
+  return { command: match[2] ?? "", cwd: leadingCdCwd(command, cwd) };
+}
 function directShell(command) {
   const tokens = tokenize(command);
   if (tokens.some((token) => SUBSTITUTION.test(token.value)))
@@ -1791,6 +1827,10 @@ async function decideEmbeddedWrite(parsed, event, ctx, deadline = Date.now() + 2
     const whole = typeof input.command === "string" ? input.command : typeof input.cmd === "string" ? input.cmd : "";
     const cwd = typeof input.cwd === "string" && input.cwd ? input.cwd : ctx?.cwd ?? process.cwd();
     const env = environmentForInput(event.input);
+    const normalized = normalizeDirectCommand(whole, cwd);
+    if (normalized === undefined)
+      return { kind: "block", reason: "This command changes directory dynamically; issue the `bd` command with the tool's cwd field instead." };
+    const commandCwd = normalized.cwd;
     const sources = [...parsed.commands.map((position) => position.raw)];
     const visit = (child) => {
       sources.push(...child.commands.map((position) => position.raw));
@@ -1801,7 +1841,7 @@ async function decideEmbeddedWrite(parsed, event, ctx, deadline = Date.now() + 2
       visit(nested);
     const targets = [];
     for (const source of sources) {
-      const result = embeddedWriteTargets(source, cwd, env);
+      const result = embeddedWriteTargets(source, commandCwd, env);
       if (result.kind === "refused")
         return { kind: "block", reason: result.reason };
       targets.push(...result.stores);
@@ -1810,7 +1850,7 @@ async function decideEmbeddedWrite(parsed, event, ctx, deadline = Date.now() + 2
     if (unique.length === 0)
       return;
     const store = unique[0];
-    const direct = directShell(whole);
+    const direct = directShell(normalized.command);
     if (store === undefined || unique.length > 1 || direct === undefined) {
       return {
         kind: "block",
@@ -1840,6 +1880,7 @@ async function decideEmbeddedWrite(parsed, event, ctx, deadline = Date.now() + 2
       delete next.ready;
       delete next.pty;
     }
+    next.cwd = commandCwd;
     if (typeof input.command === "string")
       next.command = rewritten;
     else
@@ -2289,17 +2330,20 @@ async function admitBdMutation(input, ctx, targetEnabled) {
     return;
   const effectiveInput = rewriteBashInput(input, ctx) ?? input;
   const cwd = bashCallCwd(effectiveInput, ctx?.cwd ?? process.cwd());
+  const literalCd = /^\s*cd\s+([^\s;&|]+)\s*&&\s*([\s\S]+?)\s*$/.exec(command);
+  const targetCommand = literalCd === null ? command : literalCd[2] ?? "";
+  const targetCwd = literalCd === null ? cwd : leadingCdCwd(command, cwd);
   const env = environmentForBashInput(effectiveInput, input);
-  const writeTargets = embeddedWriteTargets(command, cwd, env);
+  const writeTargets = embeddedWriteTargets(targetCommand, targetCwd, env);
   if (writeTargets.kind === "refused")
     return { block: true, reason: writeTargets.reason };
   const direct = writes.length === 1 ? writes[0] : undefined;
   if (direct !== undefined && bdInvocationUsesExternalStore(direct))
     return;
-  const store = direct === undefined ? undefined : bdStoreForInvocation(direct, cwd, env);
-  if (targetEnabled?.(store === undefined ? cwd : dirname3(store)) === false)
+  const store = direct === undefined ? undefined : bdStoreForInvocation(direct, targetCwd, env);
+  if (targetEnabled?.(store === undefined ? targetCwd : dirname3(store)) === false)
     return;
-  return await admitBeadsWork(ctx, cwd, store === undefined ? env : { ...env, BEADS_DIR: store }, false);
+  return await admitBeadsWork(ctx, targetCwd, store === undefined ? env : { ...env, BEADS_DIR: store }, false);
 }
 
 // extensions/bash-gates.ts

@@ -50,7 +50,7 @@ import {
 	invocationFromArgv,
 } from "./bd-actor-gate.ts";
 import { sessionPinFor } from "./beads-store.ts";
-import { commandSegments, invocation, type ParsedCommand, tokenize } from "./shell-command.ts";
+import { commandSegments, invocation, leadingCdCwd, type ParsedCommand, tokenize } from "./shell-command.ts";
 
 /** The hold itself. */
 const LOCK_NAME = "omp-embedded-write.lock";
@@ -82,7 +82,7 @@ const RENEW_MS = 20_000;
  * A Bash mutation gets a short preflight at tool_call and a separately bounded
  * runner wait. Internal callers keep their own deadline or this default.
  */
-const WAIT_MS = 20_000;
+const WAIT_MS = 120_000;
 
 /** Maximum tool_call time spent proving that a Bash mutation's store is available. */
 const PREFLIGHT_WAIT_MS = 500;
@@ -90,11 +90,11 @@ const PREFLIGHT_WAIT_MS = 500;
 /**
  * How long the runner may wait if contention begins after the preflight.
  *
- * This stays below the host's 30 second Bash/extension budget so the runner's
- * lock-path diagnostic reaches the caller instead of being replaced by a bare
- * host timeout.
+ * This remains finite, but gives ordinary parallel orchestration enough room for
+ * ten short Beads writes to pass through one embedded store without surfacing the
+ * lock refusal to the model. A genuinely long hold still gets a diagnostic.
  */
-const RUNNER_WAIT_MS = 20_000;
+const RUNNER_WAIT_MS = 120_000;
 
 const POLL_MS = 20;
 
@@ -619,6 +619,21 @@ function ageOf(path: string): number {
 	}
 }
 
+function lockHolder(lock: string): string {
+	let ageMs = ageOf(lock);
+	try {
+		const parsed = JSON.parse(readFileSync(lock, "utf8")) as Partial<Holder>;
+		if (typeof parsed.taken === "number") ageMs = Math.max(0, Date.now() - parsed.taken);
+		const owner = typeof parsed.owner === "string" && parsed.owner.length > 0 ? parsed.owner : "unknown owner";
+		const pid = typeof parsed.pid === "number" ? `pid ${parsed.pid}` : "pid unknown";
+		const writer = typeof parsed.writer === "number" ? `, writer pid ${parsed.writer}` : "";
+		const host = typeof parsed.host === "string" && parsed.host.length > 0 ? ` on ${parsed.host}` : "";
+		return `holder ${owner} (${pid}${writer}${host}), age ${Math.round(ageMs / 1000)}s`;
+	} catch {
+		return `holder record unreadable, age ${Math.round(Math.max(0, ageMs) / 1000)}s`;
+	}
+}
+
 /**
  * Whether an existing hold may be taken over.
  *
@@ -668,6 +683,7 @@ function abandoned(lock: string): boolean {
  * clearing its turn on age alone reopened the race this lock exists to close.
  */
 function takeOverIfAbandoned(lock: string, steal: string): void {
+	if (!abandoned(lock)) return;
 	let fd: number;
 	try {
 		fd = openSync(steal, "wx");
@@ -831,9 +847,10 @@ export async function hold(
 				};
 			}
 			if (Date.now() >= deadline) {
+				const holder = lockHolder(lock);
 				return {
 					kind: "failed",
-					reason: `Beads embedded write lock at ${lock} stayed held for ${Math.round(waitMs / 1000)}s. Another writer is still working, or a hold was left behind by a process on another host; the write was refused rather than run concurrently. Read the lock file, then remove it once its holder is really gone.`,
+					reason: `Beads embedded write lock at ${lock} stayed held for ${Math.round(waitMs / 1000)}s; ${holder}. The write was refused rather than run concurrently. Read the lock file, then remove it once its holder is really gone.`,
 				};
 			}
 			await pause(ticket, Math.min(POLL_MS, deadline - Date.now()), signal);
@@ -1117,6 +1134,17 @@ function quote(word: string): string {
 	return `'${word.replaceAll("'", "'\\''")}'`;
 }
 
+type NormalizedDirectCommand = { command: string; cwd: string };
+
+/** Accept only a literal `cd DIR &&` prefix; shell expansion remains refused. */
+function normalizeDirectCommand(command: string, cwd: string): NormalizedDirectCommand | undefined {
+	const match = /^\s*cd\s+([^\s;&|]+)\s*&&\s*([\s\S]+?)\s*$/.exec(command);
+	if (match === null) return { command, cwd };
+	const dir = match[1] ?? "";
+	if (!dir || /^[-~$]/.test(dir) || /[\\`"'*?\x5b\x5d{}]/.test(dir)) return undefined;
+	return { command: match[2] ?? "", cwd: leadingCdCwd(command, cwd) };
+}
+
 /**
  * Split a validated direct call into its assignment prefix and original command text.
  *
@@ -1170,6 +1198,9 @@ export async function decideEmbeddedWrite(
 		const whole = typeof input.command === "string" ? input.command : typeof input.cmd === "string" ? input.cmd : "";
 		const cwd = typeof input.cwd === "string" && input.cwd ? input.cwd : (ctx?.cwd ?? process.cwd());
 		const env = environmentForInput(event.input);
+		const normalized = normalizeDirectCommand(whole, cwd);
+		if (normalized === undefined) return { kind: "block", reason: "This command changes directory dynamically; issue the `bd` command with the tool's cwd field instead." };
+		const commandCwd = normalized.cwd;
 		const sources = [...parsed.commands.map(position => position.raw)];
 		const visit = (child: ParsedCommand): void => {
 			sources.push(...child.commands.map(position => position.raw));
@@ -1178,14 +1209,14 @@ export async function decideEmbeddedWrite(
 		for (const nested of parsed.nested) visit(nested);
 		const targets: string[] = [];
 		for (const source of sources) {
-			const result = embeddedWriteTargets(source, cwd, env);
+			const result = embeddedWriteTargets(source, commandCwd, env);
 			if (result.kind === "refused") return { kind: "block", reason: result.reason };
 			targets.push(...result.stores);
 		}
 		const unique = [...new Set(targets)];
 		if (unique.length === 0) return;
 		const store = unique[0];
-		const direct = directShell(whole);
+		const direct = directShell(normalized.command);
 		// The classifier only returns a store for a whole-command direct invocation, so
 		// disagreement here means the two no longer read the same shape. Refuse rather
 		// than run the mutation with no hold at all.
@@ -1219,6 +1250,7 @@ export async function decideEmbeddedWrite(
 			delete next.ready;
 			delete next.pty;
 		}
+		next.cwd = commandCwd;
 		// `cmd` is the alias some hosts send; whichever one carried the command carries
 		// the rewrite, so the runner is what actually runs.
 		if (typeof input.command === "string") next.command = rewritten;

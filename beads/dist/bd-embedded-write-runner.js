@@ -34,7 +34,7 @@ var LOCK_NAME = "omp-embedded-write.lock";
 var STEAL_NAME = "omp-embedded-write-steal.lock";
 var LEASE_MS = 120000;
 var RENEW_MS = 20000;
-var WAIT_MS = 20000;
+var WAIT_MS = 120000;
 var POLL_MS = 20;
 var PREFLIGHT_WAIT_KEY = Symbol.for("com.srobroek.beads.embedded-write-lock.preflight-wait-ms.v1");
 var leaseMs = LEASE_MS;
@@ -107,6 +107,21 @@ function ageOf(path) {
     return 0;
   }
 }
+function lockHolder(lock) {
+  let ageMs = ageOf(lock);
+  try {
+    const parsed = JSON.parse(readFileSync(lock, "utf8"));
+    if (typeof parsed.taken === "number")
+      ageMs = Math.max(0, Date.now() - parsed.taken);
+    const owner = typeof parsed.owner === "string" && parsed.owner.length > 0 ? parsed.owner : "unknown owner";
+    const pid = typeof parsed.pid === "number" ? `pid ${parsed.pid}` : "pid unknown";
+    const writer = typeof parsed.writer === "number" ? `, writer pid ${parsed.writer}` : "";
+    const host = typeof parsed.host === "string" && parsed.host.length > 0 ? ` on ${parsed.host}` : "";
+    return `holder ${owner} (${pid}${writer}${host}), age ${Math.round(ageMs / 1000)}s`;
+  } catch {
+    return `holder record unreadable, age ${Math.round(Math.max(0, ageMs) / 1000)}s`;
+  }
+}
 function abandoned(lock) {
   let raw;
   try {
@@ -134,6 +149,8 @@ function abandoned(lock) {
   return ageOf(lock) > leaseMs;
 }
 function takeOverIfAbandoned(lock, steal) {
+  if (!abandoned(lock))
+    return;
   let fd;
   try {
     fd = openSync(steal, "wx");
@@ -244,9 +261,10 @@ async function hold(store, owner, waitMs = WAIT_MS, signal) {
         };
       }
       if (Date.now() >= deadline) {
+        const holder = lockHolder(lock);
         return {
           kind: "failed",
-          reason: `Beads embedded write lock at ${lock} stayed held for ${Math.round(waitMs / 1000)}s. Another writer is still working, or a hold was left behind by a process on another host; the write was refused rather than run concurrently. Read the lock file, then remove it once its holder is really gone.`
+          reason: `Beads embedded write lock at ${lock} stayed held for ${Math.round(waitMs / 1000)}s; ${holder}. The write was refused rather than run concurrently. Read the lock file, then remove it once its holder is really gone.`
         };
       }
       await pause(ticket, Math.min(POLL_MS, deadline - Date.now()), signal);
@@ -355,6 +373,35 @@ var RUNNER_WAIT_FLAG = "--beads-wait-ms";
 
 // extensions/bd-embedded-write-runner.ts
 var NOT_RUN = 120;
+var COMMAND_TIMEOUT_KEY = Symbol.for("com.srobroek.beads.embedded-write-runner.command-timeout-ms.v1");
+function setCommandTimeoutForTests(timeoutMs) {
+  if (timeoutMs === undefined)
+    Reflect.deleteProperty(globalThis, COMMAND_TIMEOUT_KEY);
+  else
+    Reflect.set(globalThis, COMMAND_TIMEOUT_KEY, timeoutMs);
+}
+function commandTimeoutMs() {
+  const configured = Reflect.get(globalThis, COMMAND_TIMEOUT_KEY);
+  return typeof configured === "number" && Number.isFinite(configured) && configured > 0 ? configured : COMMAND_TIMEOUT_MS;
+}
+var BOUNDED_VERBS = { claim: true, close: true, comment: true, comments: true, create: true, dep: true, heartbeat: true, label: true, reopen: true, unclaim: true, update: true };
+var GLOBAL_VALUE_FLAGS = { "-C": true, "--directory": true, "--db": true, "--database": true, "--actor": true };
+function isBoundedWrite(argv) {
+  if ((argv[0]?.split("/").pop() ?? argv[0]) !== "bd")
+    return false;
+  for (let i = 1;i < argv.length; i++) {
+    const arg = argv[i];
+    if (arg === undefined || arg === "--")
+      return false;
+    if (!arg.startsWith("-"))
+      return BOUNDED_VERBS[arg] === true;
+    if (GLOBAL_VALUE_FLAGS[arg] === true)
+      i++;
+  }
+  return false;
+}
+var COMMAND_TIMEOUT_MS = 120000;
+var TERMINATION_GRACE_MS = 5000;
 function parseRunnerArgs(args) {
   let store;
   let waitMs;
@@ -424,10 +471,30 @@ async function run(request) {
         return NOT_RUN;
       }
       writeFileSync(startGate, "");
+      let timedOut = false;
+      let grace;
+      const timeout = isBoundedWrite(request.argv) ? setTimeout(() => {
+        timedOut = true;
+        try {
+          child?.kill("SIGTERM");
+        } catch {}
+        grace = setTimeout(() => {
+          try {
+            child?.kill("SIGKILL");
+          } catch {}
+        }, TERMINATION_GRACE_MS);
+      }, commandTimeoutMs()) : undefined;
       const code = await child.exited;
+      clearTimeout(timeout);
+      clearTimeout(grace);
       try {
         unlinkSync2(startGate);
       } catch {}
+      if (timedOut) {
+        process.stderr.write(`embedded write child exceeded ${commandTimeoutMs() / 1000}s and was terminated
+`);
+        return 124;
+      }
       return child.signalCode === null ? code : 128 + (SIGNAL_NUMBER[child.signalCode] ?? 0);
     } finally {
       release(request.store, owner);
@@ -457,5 +524,6 @@ if (import.meta.main)
   process.exitCode = await main(process.argv.slice(2));
 export {
   main,
-  parseRunnerArgs
+  parseRunnerArgs,
+  setCommandTimeoutForTests
 };
