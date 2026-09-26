@@ -85,6 +85,7 @@ def run_bd(args: list[str], timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS) ->
             env=env,
             capture_output=True,
             text=True,
+            errors="replace",
             timeout=timeout_seconds,
             check=False,
         )

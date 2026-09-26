@@ -50,6 +50,7 @@ def run_command(argv: list[str], timeout: float = 30.0) -> CommandResult:
             argv,
             capture_output=True,
             text=True,
+            errors="replace",
             check=False,
             timeout=timeout,
         )

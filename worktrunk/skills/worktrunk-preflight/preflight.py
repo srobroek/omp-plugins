@@ -84,6 +84,7 @@ class Context:
                 list(args),
                 cwd=str(cwd or self.cwd),
                 text=True,
+                errors="replace",
                 capture_output=True,
                 check=False,
                 timeout=timeout,
