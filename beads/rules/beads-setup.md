@@ -10,12 +10,16 @@ warns that `.beads` has permissions 0750, run `chmod 700 .beads`.
 # NEW LEDGER
 MUST require git `origin` first: run `git remote -v`. If it is absent, add or
 confirm the code remote with the user's repository URL before initialization.
-Run `BD_NON_INTERACTIVE=1 bd init --init-if-missing --skip-hooks --skip-agents --prefix PREFIX`.
+Run `BD_NON_INTERACTIVE=1 bd init --init-if-missing --skip-hooks --skip-agents`.
+The issue prefix defaults to the directory name; add `--prefix PREFIX` only when
+the user names another prefix.
 It auto-commits `.beads/{.gitignore,README.md,config.yaml,metadata.json}` and
 `.gitignore` on the CURRENT branch. Run it on the branch carrying the setup
 change. `--skip-agents` prevents writing or committing `AGENTS.md`, `CLAUDE.md`,
 `.agents/.codex/.cursor` files. Ignore the `Git upstream not configured / git
 remote add upstream` hint: it is a fork-workflow hint, not ledger sync.
+The generated `.beads/README.md` shows `bd update ID --status done`; replace that
+example with `bd close ID --reason "REASON"` in the setup change.
 # REMOTE
 MUST verify `bd dolt remote list` shows `origin git+ssh://git@github.com/OWNER/REPO.git`
 (or git+https / git+file). Only when it prints `No remotes configured.` run

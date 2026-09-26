@@ -33,7 +33,7 @@ It performs no ledger mutation.
 | --- | --- | --- |
 | `bd-available` | `bd` is not on PATH. The version command failed. | Install stable `bd`. Expose it with `export PATH='DIRECTORY_CONTAINING_BD:$PATH'`. |
 | `bd-version-supported` | The client is older than stable `1.3.0`. The client is an RC or prerelease. | Put stable `bd` version `1.3.0` or later first on PATH. |
-| `store-reachable` | `bd info --json` failed. The result was not an object. `config.issue_prefix` was missing. | For `no beads database found`, run `bd bootstrap --yes` when `git ls-remote origin refs/dolt/data` finds Dolt data; otherwise confirm the git origin first and run `bd init --init-if-missing --skip-hooks --skip-agents --prefix PREFIX`. See `rule://beads-setup`. |
+| `store-reachable` | `bd info --json` failed. The result was not an object. `config.issue_prefix` was missing. | For `no beads database found`, run `bd bootstrap --yes` when `git ls-remote origin refs/dolt/data` finds Dolt data; otherwise confirm the git origin first and run `bd init --init-if-missing --skip-hooks --skip-agents`. See `rule://beads-setup`. |
 | `store-is-embedded` | The embedded `.beads` store was not confirmed. | Configure the checkout to use its embedded `.beads` store. A server configuration is a `warn`, not a required shared server. |
 | `actor-identity` | Neither actor environment variable is non-blank. | Run `export BEADS_ACTOR='your-name'`. |
 | `ready-work-readable` | `bd ready --json` failed. Its JSON was unparseable or unknown-shaped. | For `no beads database found`, follow the `store-reachable` remedy (`rule://beads-setup`); otherwise repair the Beads store. |

@@ -31,7 +31,7 @@ DEFAULT_TIMEOUT_SECONDS = 5.0
 STALE_LEASE_LIMIT = 50
 SETUP_RULE = "rule://beads-setup"
 BOOTSTRAP_FIX = "bd bootstrap --yes"
-INIT_FIX = "bd init --init-if-missing --skip-hooks --skip-agents --prefix PREFIX"
+INIT_FIX = "bd init --init-if-missing --skip-hooks --skip-agents"
 
 
 class CommandResult:
