@@ -35,6 +35,7 @@ var STEAL_NAME = "omp-embedded-write-steal.lock";
 var LEASE_MS = 120000;
 var RENEW_MS = 20000;
 var WAIT_MS = 120000;
+var RUNNER_WAIT_MS = 120000;
 var POLL_MS = 20;
 var PREFLIGHT_WAIT_KEY = Symbol.for("com.srobroek.beads.embedded-write-lock.preflight-wait-ms.v1");
 var leaseMs = LEASE_MS;
@@ -348,25 +349,31 @@ function renewLease(lock, owner, token) {
     closeSync(held.fd);
   } catch {}
 }
-function attachWriter(store, owner, pid) {
+async function attachWriter(store, owner, pid, waitMs = RUNNER_WAIT_MS) {
   const lock = join(store, LOCK_NAME);
   const held = registry().owned.get(lock);
   if (held === undefined || !held.holders.has(owner))
     return false;
   const writerStart = processStartIdentity(pid);
-  const result = withOwnership(lock, held.token, () => {
-    const fd = openSync(lock, "w");
-    try {
-      writeSync(fd, JSON.stringify(holderNow(owner, held.token, pid, writerStart)));
-    } finally {
-      closeSync(fd);
+  const deadline = Date.now() + Math.max(0, waitMs);
+  while (true) {
+    const result = withOwnership(lock, held.token, () => {
+      const fd = openSync(lock, "w");
+      try {
+        writeSync(fd, JSON.stringify(holderNow(owner, held.token, pid, writerStart)));
+      } finally {
+        closeSync(fd);
+      }
+    });
+    if (result === "done") {
+      held.writer = pid;
+      held.writerStart = writerStart;
+      return true;
     }
-  });
-  if (result !== "done")
-    return false;
-  held.writer = pid;
-  held.writerStart = writerStart;
-  return true;
+    if (result === "lost" || Date.now() >= deadline)
+      return false;
+    await new Promise((resolve) => setTimeout(resolve, Math.min(POLL_MS, deadline - Date.now())));
+  }
 }
 var RUNNER_STORE_FLAG = "--beads-store";
 var RUNNER_WAIT_FLAG = "--beads-wait-ms";
@@ -465,7 +472,7 @@ async function run(request) {
       const startGate = join2(request.store, `.omp-embedded-write-start-${process.pid}-${randomUUID()}`);
       const launch = 'while [ ! -e "$1" ]; do kill -0 "$2" 2>/dev/null || exit 120; sleep 0.02; done; shift 2; exec "$@"';
       child = Bun.spawn(["/bin/sh", "-c", launch, "bd-write-gate", startGate, String(process.pid), ...request.argv], { stdin: "inherit", stdout: "inherit", stderr: "inherit" });
-      if (!attachWriter(request.store, owner, child.pid)) {
+      if (!await attachWriter(request.store, owner, child.pid, request.waitMs)) {
         child.kill("SIGTERM");
         await child.exited;
         return NOT_RUN;

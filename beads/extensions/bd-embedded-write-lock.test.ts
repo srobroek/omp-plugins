@@ -110,7 +110,7 @@ function writerStartIdentity(pid: number): string {
 }
 
 describe("embedded write lock", () => {
-	test("recovers an expired lock when the writer PID has been reused", async () => {
+	test.skipIf(process.platform !== "linux")("recovers an expired lock when the writer PID has been reused", async () => {
 		const store = mkdtempSync(join(Bun.env.TMPDIR ?? "/tmp", "beads-lock-pid-reuse-"));
 		try {
 			writeFileSync(join(store, "omp-embedded-write.lock"), JSON.stringify({
