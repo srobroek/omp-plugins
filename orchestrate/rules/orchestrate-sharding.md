@@ -21,7 +21,7 @@ follow Pools and beads, not this table.
 | Each unit needs the result of an earlier unit, or one ordered pass | ONE agent |
 | Units write the same file, region, or shared state | ONE agent, or split the DAG first |
 | Merging shard results would repeat the investigation, as with one causal chain | ONE agent |
-| Independent units that fill more than one shard under Size: 2 or more heavy units, or more than 10 light units. Units are questions, records, files, regions, or acceptance criteria | SHARD |
+| Independent units whose target shard count under Size is greater than 1. Units are questions, records, files, regions, or acceptance criteria | SHARD |
 | Anything else | ONE agent or INLINE |
 
 A unit is independent when a shard can finish it with no output from another
