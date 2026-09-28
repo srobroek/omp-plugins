@@ -46,8 +46,10 @@ independent. The review checks these guard rails:
 - The plan has an explicit integration and delivery path.
 
 A failed guard rail requires a revision bead or blocks the work it covers.
-Before work enters a region that the review flagged, the lead records the plan,
-nodes, edges, tier justifications, and any revision or blocking decision.
+Before work enters a region that the review flagged, and before the plan
+closes, the lead records the review verdict with the plan, nodes, edges, tier
+justifications, and any revision or blocking decision. A missing review is not
+a pass.
 
 For `bd create --graph`, `parent_key` names a node in the same plan. To attach a
 new node to an existing parent bead, use node-level `parent_id`; a dry run must
