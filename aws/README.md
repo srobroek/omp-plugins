@@ -1,15 +1,15 @@
 # aws
 
-Use this plugin to give OMP the AWS MCP Server, the AWS Pricing MCP server, and the `aws-toolkit` skill.
+Use this plugin to give OMP the AWS MCP Server, the AWS Pricing MCP server, and AWS working rules.
 
 ## Install
 
 ```bash
 omp plugin marketplace add srobroek/omp-plugins
-omp plugin install aws@srobroek-omp
+omp plugin install aws@srobroek-omp --scope project
 ```
 
-Start a new session after installing. `omp plugin list` then reports `aws@srobroek-omp`.
+Install it per project: its `aws-guidance` rule enters the system prompt of every session where the plugin is installed. Start a new session after installing. `omp plugin list` then reports `aws@srobroek-omp`.
 
 ## Prerequisites
 
@@ -35,9 +35,14 @@ OMP names the marketplace entries `aws:aws-mcp` and `aws:aws-pricing`. To change
 }
 ```
 
-## Skill
+## Rules
 
-`aws-toolkit` tells the agent to search `aws-mcp` for a guided AWS skill before acting. It then has the agent verify details against AWS documentation and price with `aws-pricing`. It adapts the rules file from [Agent Toolkit for AWS](https://github.com/aws/agent-toolkit-for-aws/blob/main/rules/aws-agent-rules.md) (Apache-2.0).
+| Rule | Type | Behavior |
+|---|---|---|
+| `aws-guidance` | Always applied | Directs the agent to search `aws-mcp` for a guided AWS skill before an AWS task, verify details against AWS documentation, and price with `aws-pricing`. Project instructions take precedence. |
+| `aws-skill-first` | TTSR, `tool:bash`, `interruptMode: never` | When a bash call runs the AWS CLI (`aws SERVICE COMMAND`), `cdk deploy`/`synth`/`diff`/`bootstrap`/`destroy`, or `sam build`/`deploy`/`sync`/`validate`, it adds a reminder to that call's result to load a guided skill. The command still runs. Repetition follows `ttsr.repeatMode`; the default `once` fires one time per session. |
+
+Both rules adapt the rules file from [Agent Toolkit for AWS](https://github.com/aws/agent-toolkit-for-aws/blob/main/rules/aws-agent-rules.md) (Apache-2.0).
 
 ## Data handling
 

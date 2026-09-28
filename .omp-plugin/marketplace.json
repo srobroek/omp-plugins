@@ -24,7 +24,7 @@
     },
     {
       "name": "aws",
-      "description": "AWS MCP Server (read-only) and AWS Pricing MCP server, plus a skill that routes AWS work through guided AWS skills.",
+      "description": "AWS MCP Server (read-only), AWS Pricing MCP server, and AWS working rules that route tasks through guided AWS skills.",
       "source": "./aws",
       "version": "0.1.0",
       "category": "development"
