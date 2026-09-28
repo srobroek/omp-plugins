@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.1.1](https://github.com/srobroek/omp-plugins/compare/beads--v3.1.0...beads--v3.1.1) (2026-09-28)
+
+
+### Bug Fixes
+
+* **beads:** let the plan review run alongside independent implementers ([#594](https://github.com/srobroek/omp-plugins/issues/594)) ([45b7f0b](https://github.com/srobroek/omp-plugins/commit/45b7f0ba6af7f42b73801e5395e1a3d722b0b23b))
+
 ## [3.1.0](https://github.com/srobroek/omp-plugins/compare/beads--v3.0.0...beads--v3.1.0) (2026-09-26)
 
 
