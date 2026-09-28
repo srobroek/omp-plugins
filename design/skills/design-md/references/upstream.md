@@ -2,7 +2,7 @@
 
 | Upstream skill | What it does | Repo | Install |
 |---|---|---|---|
-| `create-design-md` | Extracts a DESIGN.md from an existing repository or public URL | `ibelick/ui-skills` | `omp plugin install ui-skills@srobroek-omp` |
+| `create-design-md` | Extracts a DESIGN.md from an existing repository or public URL | `ibelick/ui-skills` | `ui-skills@srobroek-omp`, via `rule://design-upstream-preflight` |
 
 ## It extracts, it does not author
 

@@ -2,8 +2,8 @@
 
 | Upstream skills | Repo | Install |
 |---|---|---|
-| the eight `*-design-guidelines` | `ehmo/platform-design-skills` | `omp plugin install platform-design-skills@srobroek-omp` |
-| `modern-web-guidance` | `GoogleChrome/modern-web-guidance` | `omp plugin install modern-web-guidance@srobroek-omp` |
+| the eight `*-design-guidelines` | `ehmo/platform-design-skills` | `platform-design-skills@srobroek-omp`, via `rule://design-upstream-preflight` |
+| `modern-web-guidance` | `GoogleChrome/modern-web-guidance` | `modern-web-guidance@googlechrome`, via `rule://design-upstream-preflight` |
 
 ## The eight platform skills, and a naming trap worth knowing
 

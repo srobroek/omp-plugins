@@ -45,15 +45,14 @@ TRIGGER
      code alone distinguishes nothing.
      Quote every substituted URL: a query string carries `&` and `?`, which an unquoted
      argument hands to the shell. The bin is `axe`, not the package name, so pass `--package`.
-2. Check the routed skill name is in your available skills BEFORE loading it. Reading a
-   `skill://` path that does not exist throws `Unknown skill`. -> present: LOAD and follow.
-   Absent: do NOT improvise. A thin substitute audit is worse than none, because its verdict
-   reads exactly like the real one. Report the gap, name the install command from
-   `skill://accessibility-audit/references/upstream.md`, and ASK the user to run it. An
-   install applies from the NEXT session, since OMP discovers plugins at startup, so never
-   install and retry within this one. The `accessibility-scanner` MCP server above needs no
-   install and, when connected, is the primary measurement route, so measurement continues
-   while an install is pending. The upstream's criteria coverage does not: do not improvise it.
+2. Apply `rule://design-upstream-preflight` for the routed skill BEFORE loading it: the
+   `accessibility` row, plus the platform row on a native surface. -> installed, and loaded
+   via `skill://` or, when installed this session, from its install path. Install refused
+   or failed: do NOT improvise. A thin substitute audit is worse than none, because its
+   verdict reads exactly like the real one. Report the gap. The `accessibility-scanner` MCP
+   server above needs no install and, when connected, is the primary measurement route, so
+   measurement continues without the upstream. The upstream's criteria coverage does not:
+   do not improvise it.
    Bound that continuation: both no-install routes are WEB-ONLY and cover only a runnable
    URL. Neither substitutes for source review, for a manual keyboard walkthrough, or for
    native-platform guidance. On a NATIVE surface with the `ehmo` skill absent, nothing

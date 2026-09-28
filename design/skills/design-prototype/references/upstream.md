@@ -1,18 +1,16 @@
 # Upstream routes for design-prototype
 
-Every upstream is an entry in the `srobroek-omp` catalog, so a missing skill is one command
-away, and that command is the USER's to run. OMP discovers plugins at session startup, so an
-install applies from the NEXT session and never rescues the current one. Marketplace install
-runs no package manager, so nothing here arrives as a dependency of `@srobroek/design`; each
-is an explicit install.
+Each upstream installs from its author's marketplace through
+`rule://design-upstream-preflight`, when the chosen row needs it. Nothing here arrives
+as a dependency of `@srobroek/design`.
 
 | Upstream skill | Repo | Install |
 |---|---|---|
-| `html-wireframe` | `plannotator/effective-html` | `omp plugin install effective-html@srobroek-omp` |
+| `html-wireframe` | `plannotator/effective-html` | `plannotator-effective-html@effective-html`, via `rule://design-upstream-preflight` |
 | `html-prototype` | `plannotator/effective-html` | same entry |
-| `frontend-slides` | `zarazhangrui/frontend-slides` | `omp plugin install frontend-slides@srobroek-omp` |
-| `web-asset-generator` | `alonw0/web-asset-generator` | `omp plugin install web-asset-generator@srobroek-omp` |
-| `superdesign` | `superdesigndev/superdesign-skill` | `omp plugin install superdesign@srobroek-omp` |
+| `frontend-slides` | `zarazhangrui/frontend-slides` | `frontend-slides@frontend-slides`, via `rule://design-upstream-preflight` |
+| `web-asset-generator` | `alonw0/web-asset-generator` | `web-asset-generator@web-asset-generator-marketplace`, via `rule://design-upstream-preflight` |
+| `superdesign` | `superdesigndev/superdesign-skill` | `superdesign@superdesign`, via `rule://design-upstream-preflight` |
 
 All five are MIT with a LICENSE file. Skill granularity is the whole plugin, so
 `effective-html` also installs `html`, `design-artifact`, `html-diagram`, and `html-plan`.

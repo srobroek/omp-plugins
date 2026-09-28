@@ -6,8 +6,8 @@ platform guidance that a scanner does not.
 
 | Upstream skill | Repo | Install |
 |---|---|---|
-| `accessibility` | `addyosmani/web-quality-skills` | `omp plugin install web-quality-skills@srobroek-omp` |
-| the eight `*-design-guidelines` | `ehmo/platform-design-skills` | `omp plugin install platform-design-skills@srobroek-omp` |
+| `accessibility` | `addyosmani/web-quality-skills` | `web-quality-skills@addy-web-quality-skills`, via `rule://design-upstream-preflight` |
+| the eight `*-design-guidelines` | `ehmo/platform-design-skills` | `platform-design-skills@srobroek-omp`, via `rule://design-upstream-preflight` |
 
 `web-quality-skills` is MIT with a LICENSE file (Copyright 2026 Addy Osmani). Because
 skill granularity is the whole plugin, it also installs `best-practices`,

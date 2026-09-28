@@ -82,16 +82,16 @@ react-native dependency. Record which marker was found. When nothing is
 detectable, ask at the INTENT gate rather than assuming. Platform is
 {{platform}}.
 
-Run skill://design-system-audit and record its Gaps section on this bead: every
-absent upstream skill with the install command that supplies it, and every MCP
-server that did not connect. A wrapper whose upstream is missing STOPS when it is
-reached, so an unrecorded gap strands this molecule at the step that needs it.
+Apply rule://design-upstream-preflight here, at GROUND, for every row an ENABLED
+step of this molecule reaches, and record on this bead each install, its path,
+every prerequisite still missing, and every MCP server that did not connect. A
+row that failed to install STOPS the step that needs it, so an unrecorded gap
+strands this molecule there.
 
-document-system is conditional on {{want_design_md}}. Its upstream
-create-design-md is required only when the user requests that artifact.
-If requested but unavailable, report `omp plugin install ui-skills@srobroek-omp`
-and wait for availability or explicit approval to omit it. Do not silently
-change the request. Record the system contract on beads regardless.
+document-system is conditional on {{want_design_md}}. Its create-design-md row
+applies only when the user requests that artifact. If it fails to install, wait
+for explicit approval to omit it. Do not silently change the request. Record the
+system contract on beads regardless.
 """
 
 [steps.metadata]

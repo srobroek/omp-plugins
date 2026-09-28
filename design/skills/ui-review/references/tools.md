@@ -185,7 +185,7 @@ None of these is fetched. All are already installed where this package is used.
 | `bd` | beads, installed | `bd mol pour "<tier>" --var surface="<route>" --var scope="<paths>"` | pours one of the three scoped tiers as a fresh molecule | a poured tier carries NO `mol-` prefix |
 | `bd` | same | `bd mol bond "mol-<name>" "<target-id>" --var surface="<route>" --var node="<node-id>"` | bonds a sub-process molecule onto the step that found the work | `bd mol bond` resolves only prefixed stems, so the `mol-` prefix is load-bearing here |
 | `omp` | OMP itself | `omp plugin marketplace add "<owner>/<repo>"` | registers a third-party catalog | `owner/repo` shorthand is a valid source; no clone path is needed |
-| `omp` | same | `omp plugin install "<name>@srobroek-omp"` | installs one advertised catalog entry | an install applies from the NEXT session, because OMP discovers plugins at startup. Never install and retry inside one session |
+| `omp` | same | `omp plugin install "<name>@<marketplace>"` | installs one plugin from a registered marketplace | `rule://design-upstream-preflight` names each address. `skill://` resolves a plugin installed mid-session only from the next session, so read its SKILL.md from `omp plugin list --json` `installPath` until then |
 | `curl` | preinstalled | `curl -sS -o /dev/null -w '%{http_code}' "<url>"` | proves a route serves: a story index, a manifest, a prototype URL | for reachability and status only. It returns transferred bytes, never a rendered surface, so a claim about what a page LOOKS like still needs `browser` |
 
 ## Never trust an exit code alone
@@ -220,7 +220,6 @@ placeholder that never expands on its own, so each reaches the shell unexpanded 
 lookup fails. Resolve the real installed directory FIRST, then substitute it.
 
 ```
-${CLAUDE_PLUGIN_ROOT}/.claude/skills/ui-ux-pro-max/scripts/search.py
 <installed-ss-tokens>/scripts/generate-palette.mjs
 <installed-ss-score>/scripts/styleseed-check.mjs
 ```
