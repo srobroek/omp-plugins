@@ -20,6 +20,7 @@ ASK Before any install, with the full candidate table and a multi-select of rows
 ASK Before registering a marketplace outside `skill://setup-tools/references/approved-sources.md`.
 ASK Before running `npx skills` or `smithery`: each executes downloaded package code.
 ASK Before any user-wide install. Project scope is the default.
+ASK What the project will be, when it is greenfield: no stack marker in step 2.
 
 ## Workflow
 
@@ -29,6 +30,11 @@ ASK Before any user-wide install. Project scope is the default.
 2. Profile the project from its files. -> LOAD
    `skill://setup-tools/references/project-signals.md`; every capability is named with the
    marker file that proved it. No marker, no capability.
+   GREENFIELD, no stack marker found: ASK the intent as one multi-select from the intent
+   table in that reference (frontend, full stack, backend service, API, AWS or cloud
+   infrastructure, AI/ML, CLI, desktop, library, docs). Then ASK the language when the
+   chosen intents leave it open. -> every capability is named with the intent that
+   proposed it, in place of a marker.
 3. Search tier 1, this repository's own catalog. -> `omp plugin marketplace update srobroek-omp`,
    then `omp plugin discover srobroek-omp`; match each capability to an entry.
 4. Search tier 2, the approved third-party marketplaces. -> register any missing one with

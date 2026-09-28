@@ -31,9 +31,13 @@ its `marketplace.json`, and `omp plugin install` needs that name.
 | `googlechrome` | `GoogleChrome/modern-web-guidance` | current web platform practice |
 | `frontend-slides` | `zarazhangrui/frontend-slides` | 16:9 decks |
 | `web-asset-generator-marketplace` | `alonw0/web-asset-generator` | favicons, app icons, social images |
-| `interface-design` | `Dammyjay93/interface-design` | interface design craft |
+| `interface-design` | `Dammyjay93/interface-design` | product-UI craft for dashboards, admin panels, and SaaS tools; not marketing pages |
 
-The design rows are also installed on demand by `rule://design-upstream-preflight`.
+The design rows other than `interface-design` are also installed on demand by
+`rule://design-upstream-preflight`. `interface-design` is optional: no design skill routes to
+it, and it overlaps `impeccable`. Vetted 2026-09-28: MIT, last push 2026-06-20, not archived.
+A project-scope install loads its one skill, `interface-design`, from the manifest's
+`./.claude/skills` path.
 
 ## Tier 3: open search, after the ASK gate
 
