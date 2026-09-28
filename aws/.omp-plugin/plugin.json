@@ -1,0 +1,30 @@
+{
+  "name": "aws",
+  "description": "AWS MCP Server (read-only) and AWS Pricing MCP server, plus a skill that routes AWS work through guided AWS skills.",
+  "version": "0.1.0",
+  "category": "development",
+  "mcpServers": {
+    "aws-mcp": {
+      "command": "uvx",
+      "args": [
+        "mcp-proxy-for-aws-cli@latest",
+        "https://aws-mcp.us-east-1.api.aws/mcp",
+        "--read-only",
+        "--skip-auth"
+      ],
+      "timeout": 100000
+    },
+    "aws-pricing": {
+      "command": "uvx",
+      "args": [
+        "--with",
+        "botocore[crt]",
+        "awslabs.aws-pricing-mcp-server@latest"
+      ],
+      "env": {
+        "AWS_REGION": "us-east-1",
+        "FASTMCP_LOG_LEVEL": "ERROR"
+      }
+    }
+  }
+}

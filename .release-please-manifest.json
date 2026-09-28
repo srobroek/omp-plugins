@@ -1,6 +1,7 @@
 {
   "architecture": "0.4.2",
   "authoring": "2.1.1",
+  "aws": "0.1.0",
   "beads": "3.1.1",
   "build": "1.0.0",
   "chezmoi": "0.4.12",
