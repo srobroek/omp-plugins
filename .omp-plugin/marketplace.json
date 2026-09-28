@@ -23,6 +23,13 @@
       "category": "productivity"
     },
     {
+      "name": "aws",
+      "description": "AWS MCP Server (read-only), AWS Pricing MCP server, and AWS working rules that route tasks through guided AWS skills.",
+      "source": "./aws",
+      "version": "0.1.0",
+      "category": "development"
+    },
+    {
       "name": "beads",
       "description": "Beads issue tracking: dependency DAGs, formulas, and decisions recorded as beads.",
       "source": "./beads",

@@ -75,6 +75,23 @@
         }
       ]
     },
+    "aws": {
+      "release-type": "simple",
+      "component": "aws",
+      "changelog-path": "CHANGELOG.md",
+      "extra-files": [
+        {
+          "type": "json",
+          "path": ".omp-plugin/plugin.json",
+          "jsonpath": "$.version"
+        },
+        {
+          "type": "json",
+          "path": "package.json",
+          "jsonpath": "$.version"
+        }
+      ]
+    },
     "beads": {
       "release-type": "simple",
       "component": "beads",
