@@ -69,14 +69,20 @@ Verified fixture showing an existing parent (`parent_id`), a plan-local parent
 The fixture keeps the dependency in the top-level `edges` array; a per-node
 `deps` array is not equivalent.
 
-MUST review a graph plan before the implementation wave starts. The reviewer
-MUST record a verdict against each guard rail: every task names bounded files or
-symbols and independently verifiable acceptance criteria; design decisions are
-separate decision or research beads; review beads depend on every task they
-review; dependencies encode true ordering only; each implementer has a
-justified `metadata.tier`; and the plan has an explicit integration/delivery
-path. A failed guard rail produces a revision bead or blocks the implementation
-wave; it is not silently accepted.
+MUST dispatch the graph plan review in the same batch as the first
+implementation dispatch, or earlier. That batch may include work known to be
+independent. The reviewer MUST record a verdict against each guard rail:
+
+- Every task names bounded files or symbols and independently verifiable
+  acceptance criteria.
+- Design decisions are separate decision or research beads.
+- Review beads depend on every task they review.
+- Dependencies encode true ordering only.
+- Each implementer has a justified `metadata.tier`.
+- The plan has an explicit integration and delivery path.
+
+A failed guard rail produces a revision bead or blocks the work it covers. Never
+accept it silently.
 
 MUST dry-run first and check the reported node and edge counts, for example
 `would create 3 issue(s) and 1 edge(s) (2 parent-child link(s))`. That count is
@@ -191,7 +197,7 @@ applied remotely but its result is unknown, report the sync as UNKNOWN and do
 not claim that the ledger is synchronized. Re-run `bd dolt pull` before trusting
 a read that decides assignment after any retry sequence.
 
-Before any implementation wave, the lead records the DAG review verdict and
-guard-rail evidence on the governing bead. The review must name the plan,
-nodes, edges, tier justifications, and any revision or blocking decision; a
-missing review is not a pass.
+Before work enters a region that the review flagged, and before the plan closes,
+record the DAG review verdict and guard-rail evidence on the governing bead.
+Name the plan, nodes, edges, tier justifications, and any revision or blocking
+decision. A missing review is not a pass.

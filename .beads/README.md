@@ -33,13 +33,20 @@ bd dolt push
 
 ## Agent planning and sync contract
 
-Before an implementation wave starts, the lead MUST record a DAG review against
-these guard rails: every task names bounded files or symbols and independently
-verifiable acceptance criteria; design decisions are separate decision or
-research beads; review beads depend on every task they review; dependencies
-encode true ordering only; implementer `metadata.tier` values are justified;
-and the plan has an explicit integration and delivery path. A failed guard rail
-requires a revision bead or blocks the wave. The review records the plan,
+The lead MUST dispatch a DAG review in the same batch as the first
+implementation dispatch, or earlier. That batch may include work known to be
+independent. The review checks these guard rails:
+
+- Every task names bounded files or symbols and independently verifiable
+  acceptance criteria.
+- Design decisions are separate decision or research beads.
+- Review beads depend on every task they review.
+- Dependencies encode true ordering only.
+- Each implementer `metadata.tier` value has a justification.
+- The plan has an explicit integration and delivery path.
+
+A failed guard rail requires a revision bead or blocks the work it covers.
+Before work enters a region that the review flagged, the lead records the plan,
 nodes, edges, tier justifications, and any revision or blocking decision.
 
 For `bd create --graph`, `parent_key` names a node in the same plan. To attach a
