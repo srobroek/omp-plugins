@@ -33,6 +33,10 @@ Defines pull-based ownership, preflight, durable Beads evidence, worktree isolat
 
 Maps claim-pool aliases to the role agents and records which roles may delegate to which read-only or mechanical helpers.
 
+### `orchestrate-sharding`
+
+Splits a review, research question, audit, inventory, or role pool into 2 to 8 subagent shards when its independent units fill more than one shard: 2 or more heavy units, or more than 10 light ones. Each shard gets an exact, disjoint set of units, and the spawner merges the results into one answer. It applies to any spawning agent, including work that is not yet in a bead. The DAG review stays one round; its shards are part of that round.
+
 ## Skills
 
 ### `orchestrate`
