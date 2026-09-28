@@ -11,33 +11,40 @@ before any bead exists as well as to bead work.
 
 ## Decide
 
+Evaluate the rows in order and apply the first row that matches. Pool workers
+follow Pools and beads, not this table.
+
 | Situation | Choice |
 |---|---|
-| The work has independent units that fill more than one shard under Size: 2 or more heavy units, or more than 10 light units. Units are questions, records, files, regions, acceptance criteria, or ready beads for one pool | SHARD |
+| One implementation bead | NEVER shard; decompose it into beads instead |
+| A few reads or one bounded lookup, such as one `grep` or one script, answers the whole task | INLINE, no subagent |
 | Each unit needs the result of an earlier unit, or one ordered pass | ONE agent |
 | Units write the same file, region, or shared state | ONE agent, or split the DAG first |
-| A few reads or one lookup answers the whole task | INLINE, no subagent |
 | Merging shard results would repeat the investigation, as with one causal chain | ONE agent |
-| One implementation bead | NEVER shard; decompose it into beads instead |
+| Independent units that fill more than one shard under Size: 2 or more heavy units, or more than 10 light units. Units are questions, records, files, regions, or acceptance criteria | SHARD |
+| Anything else | ONE agent or INLINE |
 
 A unit is independent when a shard can finish it with no output from another
 shard.
 
 ## Size
 
-- MUST give each shard comparable work: 1 heavy unit, or up to 10 light units.
-  A heavy unit needs its own multi-file investigation. A light unit is one
+- A heavy unit needs its own multi-file investigation. A light unit is one
   record, one lookup, or one short question.
+- MUST compute the target shard count as the number of heavy units plus the
+  light units divided by 10, rounded up.
 - MUST dispatch between 2 and 8 shards in one batch, and never more shards than
-  units.
-- MUST group light units into ranges. For example, 100 records become 8 shards
-  of 12 or 13 records, not 100 agents and not 1.
+  units. When the target count exceeds 8, dispatch exactly 8 shards and balance
+  the units across them.
+- MUST give every shard comparable work, and group light units into contiguous
+  ranges.
 
 | Units | Shards |
 |---|---|
 | 3 heavy questions | 3 |
 | 12 light records | 2 |
-| 100 light records | 8 |
+| 100 light records | 8, of 12 or 13 records each; not 100 agents and not 1 |
+| 9 heavy questions | 8; one shard takes 2 questions |
 | DAG review of 4 criteria over 20 beads | 4, one per criterion, or up to 8 bead groups |
 
 ## Brief
@@ -66,8 +73,10 @@ shard.
 
 ## Pools and beads
 
-- MUST dispatch one pull worker per ready independent bead for a role, within
-  the 2-to-8 bound. Dispatch one worker when only one bead is ready.
+- MUST size a role's pull workers from its ready independent beads, as an
+  exception to Decide and Size: 1 worker for 1 ready bead, and the lesser of
+  the ready count and 8 for 2 or more. Workers drain the remaining beads
+  through the pull loop.
 - MUST have the worker that claims a review or research bead covering
   independent units shard its investigation under this rule, then record one
   verdict or answer on that bead.

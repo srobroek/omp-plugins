@@ -35,7 +35,7 @@ Maps claim-pool aliases to the role agents and records which roles may delegate 
 
 ### `orchestrate-sharding`
 
-Splits a review, research question, audit, inventory, or role pool into 2 to 8 subagent shards when its independent units fill more than one shard: 2 or more heavy units, or more than 10 light ones. Each shard gets an exact, disjoint set of units, and the spawner merges the results into one answer. It applies to any spawning agent, including work that is not yet in a bead. The DAG review stays one round; its shards are part of that round.
+Splits a review, research question, audit, or inventory into 2 to 8 subagent shards when no single bounded lookup answers it and its independent units fill more than one shard: 2 or more heavy units, or more than 10 light ones. Role pools get 1 worker for 1 ready bead, otherwise the lesser of the ready count and 8. Each shard gets an exact, disjoint set of units, and the spawner merges the results into one answer. It applies to any spawning agent, including work that is not yet in a bead. The DAG review stays one round; its shards are part of that round.
 
 ## Skills
 
