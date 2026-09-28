@@ -63,17 +63,12 @@ react-native dependency. Record which marker was found. When nothing is
 detectable, ask at the INTENT gate rather than assuming: a hardcoded default
 silently misroutes every later recommendation. Platform is {{platform}}.
 
-Run skill://design-system-audit and record its Gaps section on this bead: every
-absent upstream skill with the install command that supplies it, and every MCP
-server that did not connect. A wrapper whose upstream is missing STOPS when it is
-reached, so an unrecorded gap strands this molecule at the step that needs it.
-
-Promote an install to the INTENT gate only when a step that is actually ENABLED
-needs it. write-design-md is conditional on {{want_design_md}}, so its upstream
-create-design-md from `omp plugin install ui-skills@srobroek-omp` matters only if
-the user wants a DESIGN.md. Record every gap; ask for the installs this run will
-reach. An install applies from the NEXT session, so a gap named here costs a
-command and the same gap found mid-run costs a session.
+Apply rule://design-upstream-preflight here, at GROUND, for every row an ENABLED
+step of this molecule reaches, and record on this bead each install, its path,
+every prerequisite still missing, and every MCP server that did not connect. A
+row that failed to install STOPS the step that needs it, so an unrecorded gap
+strands this molecule there. write-design-md is conditional on {{want_design_md}},
+so its create-design-md row applies only if the user wants a DESIGN.md.
 """
 
 [steps.metadata]

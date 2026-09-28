@@ -26,12 +26,10 @@ TRIGGER
    from, STOP and say so, then ask the user for the repository, the URL, screenshots, or
    source files. Do NOT author the file by another means: one assembled from copy, metadata,
    or markup structure reads exactly like an extracted one and is not.
-3. Check that name is in your available skills BEFORE loading it. Reading a `skill://`
-   path that does not exist throws `Unknown skill`. -> present: LOAD and follow. Absent: do
-   NOT install it yourself, and do NOT write the artifact yourself. STOP: report the gap,
-   name the install command from `skill://design-md/references/upstream.md`, and ASK the
-   user to run it. An install applies from the NEXT session, because OMP discovers plugins
-   at startup, so never install and retry within this one.
+3. Apply `rule://design-upstream-preflight` for `create-design-md` BEFORE loading it.
+   -> installed, and loaded via `skill://` or, when installed this session, from its
+   install path. Install refused or failed: do NOT write the artifact yourself. STOP and
+   report the gap.
 4. Ground every value in the audit, not in invention: run `skill://design-system-audit`
    first and hand the routed skill its `file:line` evidence. -> every `{group.token}`
    reference resolves against a real carrier.
@@ -52,7 +50,7 @@ MUST Expect more than one error-level failure. An invalid dimension is also erro
   measured: `clamp(2.5rem, 7vw, 4.5rem)` exits 1 as "not a valid dimension", carrying no
   rule id. So a clean `broken-ref` count does not mean the file passes.
 MUST Put anything undecided under `Known Gaps` with the question left open.
-MUST STOP when there is nothing to extract from, or when `create-design-md` is absent.
+MUST STOP when there is nothing to extract from, or when `create-design-md` is unavailable after the preflight.
   It supports Repository mode and URL mode only, and forbids creating the file "from copy,
   metadata, or HTML structure alone". Ask for the repository, the URL, screenshots, or
   source files and wait. A DESIGN.md written from anything else is indistinguishable from

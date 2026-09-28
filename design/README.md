@@ -26,7 +26,7 @@ Both installation methods take effect in the next session. OMP discovers plugins
 
 ## Usage
 
-In that next session, OMP loads eleven skills and lists five rules. For interface
+In that next session, OMP loads eleven skills and lists six rules. For interface
 work, spawn `ui-ux-specialist`. Confirm the package registered:
 
 ```bash
@@ -43,7 +43,7 @@ The copy skill is implemented locally as `ui-microcopy`, which includes the merg
 
 | Skill | Implementation or route | Use when |
 |---|---|---|
-| `design-system-audit` | routes to `ss-lint` and `ss-review` to audit, `ss-tokens` to generate, plus `ui-ux-pro-max` and `ss-score` | Report the tokens, scales, and primitives that exist |
+| `design-system-audit` | routes to `ss-lint` and `ss-review` to audit, `ss-tokens` to generate, plus `ss-score` | Report the tokens, scales, and primitives that exist |
 | `design-overview` | local | Report which design skills, agents, and upstreams this session actually has |
 | `design-md` | routes to `create-design-md`, which needs a repository or URL to extract from | Author and lint repo-root DESIGN.md |
 | `ui-review` | local, drives OMP `browser` | Drive a real surface and measure it |
@@ -85,8 +85,8 @@ runs record unanswered questions and remain blocked on those branches.
 `grill-system` and `fix-round` are always present and evaluate runtime evidence.
 When no decision or further fix is necessary, they record N/A.
 
-`want_design_md` is a pour-time option. Enable it only for requested documentation
-with available upstream tooling. A missing requested upstream requires approval to omit it.
+`want_design_md` is a pour-time option. Enable it only for requested documentation.
+A requested upstream that fails to install requires approval to omit it.
 
 BUILD follows [Component Driven](https://www.componentdriven.org/) methodology,
 working from components up to pages:
@@ -109,6 +109,7 @@ Verify components first. Then verify pages. Do not use page-first development.
 | `design-evidence` | Naming the evidence behind a UI claim |
 | `design-no-slop` | Avoiding generated-UI tells |
 | `design-component-truth` | Verifying a component prop against documentation |
+| `design-upstream-preflight` | Installing and probing the upstream a route needs, before it runs |
 
 ## Token pipeline
 
@@ -269,7 +270,6 @@ Use the first-choice asset for each topic:
 | Microcopy | `ui-microcopy` |
 | Wireframing | `html-wireframe`, `wireloom` |
 | Clickable prototyping | `html-prototype` |
-| Product-wide visual direction | `ui-ux-pro-max` |
 | Current web practice | `modern-web-guidance` |
 | Microcopy | `ui-microcopy` |
 | Browser-driven verification | `ui-review`, on OMP `browser` |
@@ -306,52 +306,50 @@ A second asset joins a first choice only when its output stands alone.
 | `frontend-slides` | Fixed 16:9 decks with PDF export |
 | `web-asset-generator` | Favicon sets, app icons, social images |
 
-## Packages in this marketplace
+## Upstream tools
 
-Install one with `omp plugin install "<name>@srobroek-omp"`.
+The design skills route to skills that their upstream authors publish. Installing this
+package installs none of them. When a design skill, agent, or formula starts, it applies
+`rule://design-upstream-preflight`. That preflight installs only the rows its route
+reaches, from the author's own marketplace, and probes each prerequisite:
 
-| Entry | Source | Brings |
+```bash
+omp plugin marketplace add bitjaru/styleseed
+omp plugin install styleseed@styleseed
+```
+
+| Install address | Upstream repo | Brings |
 |---|---|---|
-| `impeccable` | `git-subdir`, path `plugin` | `impeccable` |
-| `styleseed` | `github` | `ss-lint`, `ss-review`, `ss-tokens`, `ss-motion`, `ss-score`, and 18 more |
-| `ui-skills` | `github` | `create-design-md`, and 6 more |
-| `platform-design-skills` | `github` | the eight `*-design-guidelines` |
-| `web-quality-skills` | `github` | `accessibility`, and 5 more |
-| `ui-ux-pro-max` | `github` | `ui-ux-pro-max`, and 6 more |
-| `modern-web-guidance` | `github` | `modern-web-guidance`, `chrome-extensions` |
-| `effective-html` | `github` | `html-wireframe`, `html-prototype`, and 4 more |
-| `frontend-slides` | `git-subdir`, path `plugins/frontend-slides` | `frontend-slides` |
-| `web-asset-generator` | `github` | `web-asset-generator` |
-| `superdesign` | `github` | `superdesign` |
+| `impeccable@impeccable` | `pbakaus/impeccable` | `impeccable` |
+| `styleseed@styleseed` | `bitjaru/styleseed` | `ss-lint`, `ss-review`, `ss-tokens`, `ss-motion`, `ss-score`, and 18 more |
+| `web-quality-skills@addy-web-quality-skills` | `addyosmani/web-quality-skills` | `accessibility`, and 5 more |
+| `plannotator-effective-html@effective-html` | `plannotator/effective-html` | `html-wireframe`, `html-prototype`, and 4 more |
+| `modern-web-guidance@googlechrome` | `GoogleChrome/modern-web-guidance` | `modern-web-guidance`, `chrome-extensions` |
+| `frontend-slides@frontend-slides` | `zarazhangrui/frontend-slides` | `frontend-slides` |
+| `web-asset-generator@web-asset-generator-marketplace` | `alonw0/web-asset-generator` | `web-asset-generator` |
+| `superdesign@superdesign` | `superdesigndev/superdesign-skill` | `superdesign`, installed only after the user confirms the account |
+| `ui-skills@srobroek-omp` | `ibelick/ui-skills` | `create-design-md`, and 6 more |
+| `platform-design-skills@srobroek-omp` | `ehmo/platform-design-skills` | the eight `*-design-guidelines` |
 
-Two entries need `git-subdir`, because a subdirectory holds the plugin root:
+Two rows install through this catalog. Neither upstream ships a marketplace or plugin
+manifest: `ibelick/ui-skills` carries an Astro site's `package.json`, and
+`ehmo/platform-design-skills` carries only `skills/`. A direct git install of the latter
+fails with `package.json not found`. Every other upstream installs from its author, so a
+new upstream release needs no catalog change here.
 
-- `impeccable` keeps its plugin under `plugin/`. Inside that root its one skill sits at
-  `./skills/impeccable/`, which the plugin's own manifest declares as `"skills": "./skills/"`.
-  No `.agent` or `.agents` directory exists in the installed plugin.
-- `frontend-slides` keeps its plugin under `plugins/frontend-slides/`. Discovery does not
-  resolve the bare `SKILL.md` at its repository root.
+OMP discovers skills at session start. A plugin the preflight installs mid-session is not
+reachable through `skill://` until the next session, so the preflight reads its SKILL.md
+from the `installPath` that `omp plugin list --json` reports.
 
-A catalog entry advertises a plugin. It declares no dependency: marketplace install
-registers one plugin and runs no package manager. Installing this package pulls in none of
-the entries above.
-
-Skill granularity is the whole plugin. Discovery resolves
-`<plugin-root>/skills/<name>/SKILL.md`, and neither a lone skill directory nor a bare
-`skills/` container satisfies that path. `git-subdir` narrows an entry to a subdirectory
-holding a plugin root, never to one skill, so an entry arrives whole.
-
-Measured: installing all eleven entries puts 133 `SKILL.md` files on disk under 104
-distinct names, to reach the ten these wrappers route to. The 29-file gap is duplication.
-`styleseed` ships all 23 `ss-*` skills twice, under `skills/` and again under
-`engine/.claude/skills/`, and `ui-ux-pro-max` ships its set twice as well. Name collisions
-resolve first-wins without a diagnostic. `ss-learn` installs but is unavailable because another skill wins the name collision.
+Skill granularity is the whole plugin, so an install arrives whole. `styleseed` ships all
+23 `ss-*` skills twice, under `skills/` and again under `engine/.claude/skills/`. Name
+collisions resolve first-wins without a diagnostic.
 
 | Prerequisite | Entry |
 |---|---|
-| Python 3 | `ui-ux-pro-max` |
-| Python 3, pip, Pillow | `web-asset-generator` |
-| Network for `npx` | `modern-web-guidance` |
+| Node and `npx` | `impeccable detect`, `styleseed` scripts, `modern-web-guidance` |
+| Pillow, through `uv run --with pillow` when absent | `web-asset-generator` |
+| `python-pptx`, for PPT conversion only | `frontend-slides` |
 | Account, and credits for media | `superdesign` |
 
 ## Vendored skills

@@ -54,20 +54,18 @@ PRESENT, PARTIAL, or ABSENT. Never invent a token a search could find. Platform
 is {{platform}}. ABSENT or PARTIAL means this tier is the wrong one: bond
 mol-design-tokens, or pour design-system, rather than establishing a scale here.
 
-Run skill://design-system-audit and record its Gaps section on this bead: every
-absent upstream skill with the install command that supplies it. A wrapper whose
-upstream is missing STOPS when it is reached, so an unrecorded gap strands this
-molecule later rather than here.
+Apply rule://design-upstream-preflight here, at GROUND, for every row an enabled
+step of this molecule reaches, and record on this bead each install, its path, and
+every prerequisite still missing. A row that failed to install STOPS the step that
+needs it, so an unrecorded gap strands this molecule later rather than here.
 
 This tier has no INTENT gate: specify-touch follows GROUND directly and the only
 human gate is touch-approval at the end. So there is nowhere later to raise a
-missing plugin, and this step handles it. update-design-md is conditional on
-{{want_design_md}}; when that is set and its upstream is absent, report the
-install command and leave THIS bead open rather than starting specify-touch.
-Everything downstream needs this step, so the molecule waits instead of walking
-six steps to fail at update-design-md. A plugin reaches an agent in the NEXT
-session, so the wait is unavoidable and belongs here, where nothing is built yet.
-Record every other gap for the reader without blocking on it.
+failed install, and this step handles it. update-design-md is conditional on
+{{want_design_md}}; when that is set and its create-design-md row failed, leave
+THIS bead open rather than starting specify-touch. Everything downstream needs
+this step, so the molecule waits instead of walking six steps to fail at
+update-design-md. Record every other gap for the reader without blocking on it.
 """
 
 [steps.metadata]

@@ -16,15 +16,13 @@ TRIGGER
 - recording the durable visual system -> `design-md`
 
 ## Workflow
-
 1. Pick the route from the fidelity table below, then resolve it by KIND, because the rows
    are not all skills.
-   - An UPSTREAM SKILL row: check the name is in your available skills before loading it,
-     since reading a `skill://` path that does not exist throws `Unknown skill`. Present:
-     LOAD and follow. Absent: STOP. Report the gap, name the install command from
-     `skill://design-prototype/references/upstream.md`, and ASK the user to run it; an
-     install applies only from the NEXT session. Do NOT take a different row instead: each
-     row answers a different question, and a substituted fidelity reads like the real one.
+   - An UPSTREAM SKILL row: apply `rule://design-upstream-preflight` for that row BEFORE
+     loading it. -> installed, and loaded via `skill://` or, when installed this session,
+     from its install path. Install refused or failed: STOP and report the gap. Do NOT
+     take a different row instead: each row answers a different question, and a
+     substituted fidelity reads like the real one.
    - An MCP SERVER row: check the tool is in your available tools. MCP connects only at
      session startup, so a declared server is not a connected one. Absent: STOP and say so,
      naming `/mcp reconnect <name>` as the user's move. Do NOT drop to another row.

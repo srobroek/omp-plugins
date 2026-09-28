@@ -35,14 +35,11 @@ TRIGGER
    `npx --yes modern-web-guidance@latest retrieve "<id,id>"` takes them comma-separated.
    Neither is a bare command. It needs network.
    -> baseline support and current APIs cited from the tool, not from memory.
-3. Check the routed platform skill is in your available skills BEFORE loading it. Reading a
-   `skill://` path that does not exist throws `Unknown skill`. -> present: LOAD and follow.
-   Absent: do NOT improvise. Platform guidance restated from memory is the failure this
-   skill exists to prevent. Instead report the gap, name the install command from
-   `skill://platform-conformance/references/upstream.md`, and ASK the user to run it. An
-   install applies from the NEXT session, because OMP discovers plugins at startup, so never
-   install and retry within this one. The eight platform skills are prose and have no npm
-   package, so no CLI substitutes for them.
+3. Apply `rule://design-upstream-preflight` for the routed platform skill BEFORE loading
+   it. -> installed, and loaded via `skill://` or, when installed this session, from its
+   install path. Install refused or failed: do NOT improvise. Platform guidance restated
+   from memory is the failure this skill exists to prevent. Report the gap. The eight
+   platform skills are prose and have no npm package, so no CLI substitutes for them.
 4. Detect the ecosystem from repository markers rather than asking: `package.json`
    dependencies, `pubspec.yaml`, `*.xcodeproj` or `Package.swift`, `composer.json`, or
    `app.json` plus a `react-native` dependency. -> the ecosystem is stated with the marker

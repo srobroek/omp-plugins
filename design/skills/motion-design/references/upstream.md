@@ -7,7 +7,7 @@ React `motion.X`.
 | Order | Route | Kind | Install |
 |---|---|---|---|
 | 1 | MotionLint `audit` | CLI, no install | none, see below |
-| 2 | `ss-motion` | Upstream skill | `omp plugin install styleseed@srobroek-omp` |
+| 2 | `ss-motion` | Upstream skill | `styleseed@styleseed`, via `rule://design-upstream-preflight` |
 
 `ss-motion` is titled "Motion Seed Applier", and its own **When NOT to use** says:
 

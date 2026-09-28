@@ -1,19 +1,18 @@
 # Upstream routes for design-system-audit
 
-Every upstream is an entry in the `srobroek-omp` catalog, so a missing skill is one
-command away. Marketplace install runs no package manager, so nothing here arrives as
-a dependency of `@srobroek/design`; each is an explicit install.
+Each upstream installs from its author's marketplace through
+`rule://design-upstream-preflight`, when the chosen route needs it. Nothing here
+arrives as a dependency of `@srobroek/design`.
 
 The table routes by TASK, because StyleSeed splits generating a system from auditing one
 and says so itself. This skill audits, so `ss-lint` and `ss-review` are its first routes.
 
 | Upstream skill | Task it owns | Repo | Install |
 |---|---|---|---|
-| `ss-lint` | Fast automated detection of design-system violations in existing code | `bitjaru/styleseed` | `omp plugin install styleseed@srobroek-omp` |
+| `ss-lint` | Fast automated detection of design-system violations in existing code | `bitjaru/styleseed` | `styleseed@styleseed`, via `rule://design-upstream-preflight` |
 | `ss-review` | Reviewing UI code for design-system compliance | `bitjaru/styleseed` | same entry |
 | `ss-tokens` | Generating an accessible semantic palette from a key color; viewing, adding, and modifying tokens | `bitjaru/styleseed` | same entry |
 | `ss-score` | Validating the StyleSeed artifact contract, with file and line evidence | `bitjaru/styleseed` | same entry |
-| `ui-ux-pro-max` | Product-wide visual direction | `nextlevelbuilder/ui-ux-pro-max-skill` | `omp plugin install ui-ux-pro-max@srobroek-omp` |
 
 All four `ss-*` routes ship in the one `styleseed` entry, so adding `ss-lint` and
 `ss-review` changes no install command. The cost is paid once.
@@ -34,10 +33,8 @@ new or extended system, which is the gate in the skill body.
 
 ## The `${CLAUDE_PLUGIN_ROOT}` trap
 
-`ui-ux-pro-max` documents its catalog lookup as:
 
 ```
-${CLAUDE_PLUGIN_ROOT}/.claude/skills/ui-ux-pro-max/scripts/search.py
 ```
 
 That variable is substituted only into MCP `command`, `cwd`, `args`, and `env`. It is
