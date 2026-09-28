@@ -28,3 +28,25 @@ It omits:
 | Name | When |
 |------|------|
 | `find-tools` | Find a capability or decide adopt / reject / build |
+| `setup-tools` | Install a project's plugins, skills, and MCP servers, project-scoped, from tiered approved sources |
+
+## Setup sources
+
+`setup-tools` searches three tiers in order:
+
+1. the `srobroek-omp` catalog
+2. a fixed list of approved third-party marketplaces
+3. open search, when the user asks or when no earlier tier covers a capability
+
+Open search starts with the read-only `find_tools_scan`. The skills CLI (`skills@1.7.0`)
+and the Smithery CLI (`smithery@1.2.0`) run only after explicit approval, because both
+execute downloaded package code. Installs default to project scope:
+
+| Kind | Lands in |
+|---|---|
+| Marketplace plugin, `--scope project` | `.omp/plugins/installed_plugins.json` |
+| Skill, `skills add -a universal` | `.agents/skills/` |
+| MCP server | `.omp/mcp.json` |
+
+`omp plugin marketplace add` registers a catalog user-wide, and an npm plugin package
+installs user-wide; the skill asks before either.

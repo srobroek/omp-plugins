@@ -8,6 +8,8 @@ description: Discover and vet reusable skills, agents, MCP servers, and OMP plug
 OMP-first discovery workflow for reusable agentic capabilities. Prefer local
 inventory and already-registered marketplaces before public search. Do not
 install discovered tools globally by default.
+Installing what discovery chose, or setting up a project's tooling, is
+`skill://setup-tools`.
 
 ## References
 
