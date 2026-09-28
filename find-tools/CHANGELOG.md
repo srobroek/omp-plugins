@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.2.0](https://github.com/srobroek/omp-plugins/compare/find-tools--v1.1.1...find-tools--v1.2.0) (2026-09-28)
+
+
+### Features
+
+* **find-tools:** add setup-tools for project-local plugin, skill, and MCP setup ([#604](https://github.com/srobroek/omp-plugins/issues/604)) ([6de8548](https://github.com/srobroek/omp-plugins/commit/6de8548b01dbdcbb6a4c57770841e97c0bc91897))
+
 ## [1.1.1](https://github.com/srobroek/omp-plugins/compare/find-tools--v1.1.0...find-tools--v1.1.1) (2026-09-26)
 
 

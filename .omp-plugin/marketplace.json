@@ -68,7 +68,7 @@
       "name": "design",
       "description": "UI and UX design: system audit, DESIGN.md, browser verification, accessibility, tokens, and Component Driven build.",
       "source": "./design",
-      "version": "0.4.2",
+      "version": "0.5.0",
       "category": "development"
     },
     {
@@ -89,7 +89,7 @@
       "name": "find-tools",
       "description": "Discover and vet skills, agents, MCP servers, and plugins across real registries, and set them up project-locally.",
       "source": "./find-tools",
-      "version": "1.1.1",
+      "version": "1.2.0",
       "category": "productivity"
     },
     {

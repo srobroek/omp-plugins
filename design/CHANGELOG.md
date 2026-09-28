@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.0](https://github.com/srobroek/omp-plugins/compare/design--v0.4.2...design--v0.5.0) (2026-09-28)
+
+
+### Features
+
+* **design:** install upstream design tools through a context-load preflight ([#601](https://github.com/srobroek/omp-plugins/issues/601)) ([eab7e29](https://github.com/srobroek/omp-plugins/commit/eab7e29c6bd14e1a2faaa34b167a3da098e52ba9))
+
 ## [0.4.2](https://github.com/srobroek/omp-plugins/compare/design--v0.4.1...design--v0.4.2) (2026-09-26)
 
 
