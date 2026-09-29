@@ -38,4 +38,4 @@ MUST use the pull-based protocol in `rule://orchestrate-process`, not direct ass
 MUST make independent review precede every merge.
 MUST keep durable decisions, acceptance evidence, review findings, and closure reasons on beads or authoritative decision carriers; use `write agent://AGENT_ID` for live coordination, with workers restricted to their passed lead id and never broadcasting, as required by `rule://orchestrate-process`.
 NOT close a parent from worker claims alone; the lead runs the repository-wide command.
-MUST shard only a review of a proposed plan or bead DAG with MORE THAN 64 beads under `rule://orchestrate-sharding`; keep audits, research, inventories, record lists, smaller DAG reviews, and implementation unsharded.
+MUST shard only a DAG review over 64 beads, under `rule://orchestrate-sharding`. Run all other work unsharded.
