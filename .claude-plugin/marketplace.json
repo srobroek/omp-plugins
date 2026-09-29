@@ -12,7 +12,7 @@
       "name": "architecture",
       "description": "Architecture rules: module boundaries, compose-don't-fork, project structure, component promotion, and structural-search routing.",
       "source": "./architecture",
-      "version": "0.4.2",
+      "version": "0.4.3",
       "category": "development"
     },
     {
@@ -40,7 +40,7 @@
       "name": "build",
       "description": "External-repository worker agent.",
       "source": "./build",
-      "version": "1.0.0",
+      "version": "1.0.1",
       "category": "development"
     },
     {
@@ -75,7 +75,7 @@
       "name": "design",
       "description": "UI and UX design: system audit, DESIGN.md, browser verification, accessibility, tokens, and Component Driven build.",
       "source": "./design",
-      "version": "0.5.0",
+      "version": "0.5.1",
       "category": "development"
     },
     {
@@ -110,14 +110,14 @@
       "name": "orchestrate",
       "description": "Ledger-backed delivery orchestration through role workers and verified integration.",
       "source": "./orchestrate",
-      "version": "1.1.0",
+      "version": "1.1.1",
       "category": "development"
     },
     {
       "name": "project",
       "description": "Project lifecycle: license selection and user journeys.",
       "source": "./project",
-      "version": "1.3.2",
+      "version": "1.3.3",
       "category": "productivity"
     },
     {
@@ -131,7 +131,7 @@
       "name": "quality",
       "description": "Quality gates for final verification, lint and docs adjudication, and browser-verification discipline.",
       "source": "./quality",
-      "version": "1.3.4",
+      "version": "1.3.5",
       "category": "development"
     },
     {
@@ -159,14 +159,14 @@
       "name": "speckit",
       "description": "SpecKit workflow: spec-driven setup, bugfix flow, tasks.md protection, and PR title discipline.",
       "source": "./speckit",
-      "version": "0.7.6",
+      "version": "0.7.7",
       "category": "development"
     },
     {
       "name": "toolchain",
       "description": "Toolchain defaults, backend services, infrastructure, operations, tools-versus-scripts layout, and pragmatic output rules.",
       "source": "./toolchain",
-      "version": "0.3.9",
+      "version": "0.3.10",
       "category": "development"
     },
     {
