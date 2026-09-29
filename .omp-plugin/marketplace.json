@@ -26,14 +26,14 @@
       "name": "aws",
       "description": "AWS MCP Server (read-only), AWS Pricing MCP server, and AWS working rules that route tasks through guided AWS skills.",
       "source": "./aws",
-      "version": "0.1.0",
+      "version": "0.2.0",
       "category": "development"
     },
     {
       "name": "beads",
       "description": "Beads issue tracking: dependency DAGs, formulas, and decisions recorded as beads.",
       "source": "./beads",
-      "version": "3.1.1",
+      "version": "3.2.0",
       "category": "productivity"
     },
     {
@@ -110,7 +110,7 @@
       "name": "orchestrate",
       "description": "Ledger-backed delivery orchestration through role workers and verified integration.",
       "source": "./orchestrate",
-      "version": "1.0.1",
+      "version": "1.1.0",
       "category": "development"
     },
     {
@@ -145,7 +145,7 @@
       "name": "safety",
       "description": "Defence-in-depth advisories for destructive commands, attribution, and remote execution.",
       "source": "./safety",
-      "version": "0.8.1",
+      "version": "0.8.2",
       "category": "security"
     },
     {
