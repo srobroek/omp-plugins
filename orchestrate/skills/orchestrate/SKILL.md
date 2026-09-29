@@ -14,7 +14,7 @@ TRIGGER
 
 1. Before preflight, read `rule://beads-ledger`; if it does not resolve, report `BLOCKED: beads companion not loaded`, dispatch nothing, and run no `bd` write.
 2. Read the goal, acceptance criteria, repository state, and verification command.
-3. Create the parent and dependency DAG in beads before dispatch; make dependencies and research evidence durable on beads.
+3. Create the parent and dependency DAG in beads before dispatch. Add `blocks` edges only for true dependencies: the consumer needs an artifact, contract, schema, or decision the producer creates, or both beads write the same file or region and cannot be sequenced otherwise. Titles, epic order, "nice to have first," review ordering, and shared topics are not blockers; use `related` or `tracks`. When in doubt, do not block; parallelise as much as possible. Make dependencies and research evidence durable on beads.
 4. Give every dispatchable bead its role's claim-pool assignment (`pool:implementer`, `pool:implementer-high`, `pool:work-reviewer`, `pool:researcher`, `pool:shepherd`, or `pool:operator`), `execution_*` metadata, acceptance and routing context before dispatch; populate git anchors as they become known.
 5. Explicitly instruct every main-agent, lead, parent, and sub-lead worker to pull its role queue; follow `rule://orchestrate-process` for the exact pull, claim, worktree, evidence, review, repair, and conflict protocol.
 6. Choose one-tier or two-tier topology from achievable coordination load: non-contending concurrent workers, internal DAG depth, and the lead's evidence bottleneck. Never choose two-tier from epic count alone.
