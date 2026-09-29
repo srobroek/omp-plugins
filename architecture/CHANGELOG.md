@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.3](https://github.com/srobroek/omp-plugins/compare/architecture--v0.4.2...architecture--v0.4.3) (2026-09-29)
+
+
+### Bug Fixes
+
+* **architecture,build,design,orchestrate,project,quality,speckit,toolchain:** grant agents the tools their procedures require ([#610](https://github.com/srobroek/omp-plugins/issues/610)) ([5896fff](https://github.com/srobroek/omp-plugins/commit/5896fffc161bb34633e8279c70ac506d3e996ac9))
+
 ## [0.4.2](https://github.com/srobroek/omp-plugins/compare/architecture--v0.4.1...architecture--v0.4.2) (2026-09-26)
 
 
