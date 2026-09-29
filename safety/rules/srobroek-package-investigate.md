@@ -24,8 +24,17 @@ Bare `pnpm install`, `npm install`, or `bun install` restores what the lockfile
 already pins: no package is chosen, so there is nothing to vet. Those forms do
 not fire, with or without flags (`--frozen-lockfile`, `--production=false`). An
 install that names a package still does, flags first or not (`npm i -D
-typescript`), as do every `add`/`require`/`get` form. Package-manager search and
-view commands also fire because they select a package to investigate. The
+typescript`), as do every `add`/`require`/`get` form. Package detection stops at
+the first `|`, `&&`, or `;`, and redirections such as `2>&1` or `>log` are not
+packages. Read-only lookups (`npm view`, `npm search`, `pip index`, `cargo
+search`) never fire: they are the investigation this rule asks for.
+
+This is steering, never a block: the command always runs. The first command
+naming a package gets this instruction prepended to its tool result, once per
+package per session; a later command gets it again only for packages not yet
+named. Vet before running the command; if the notice arrives first, vet then
+and revert a package that fails.
+
 Package-manager operations are recognized by the registered `package-investigate`
 extension, which tokenizes shell command positions and ignores quoted data and
 quoted heredoc bodies. The frontmatter condition is intentionally inert because
