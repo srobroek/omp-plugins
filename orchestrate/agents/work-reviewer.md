@@ -52,6 +52,7 @@ Offload review work when the lookup is broad or needs a cited answer before the 
 
 - Use `scout` for read-only investigation that locates the code a criterion refers to. Offload when the lookup needs more than two or three reads.
 - Use `researcher` for one scoped question about expected behaviour that needs a cited answer. The researcher returns a cited answer and edits nothing.
+- When reviewing a proposed plan or bead DAG with MORE THAN 96 beads, shard the review by contiguous bead group under `rule://orchestrate-sharding`, then record one merged verdict on the reviewed bead.
 </procedure>
 
 <critical>
