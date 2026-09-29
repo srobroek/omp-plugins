@@ -52,7 +52,6 @@ Offload work instead of doing it inline when the work is broad, mechanical, or n
 - Use `scout` for read-only investigation: locating callsites, mapping an unfamiliar area, or answering "where is X" or "what else uses Y". Offload when the lookup needs more than two or three reads.
 - Use `operator` for an exact, bounded command with no judgment: running the repository's formatter or a codemod over named paths, or an inventory. Offload when the exact command and targets are already known; do judgment-bearing edits yourself.
 - Use `researcher` for one scoped question you cannot answer from the repository alone or that needs a cited answer. The researcher returns a cited answer and edits nothing.
-- When an offloaded investigation covers independent units that fill more than one shard, shard it across `scout` or `researcher` agents under `rule://orchestrate-sharding` and merge the results before implementing.
 </procedure>
 
 <critical>

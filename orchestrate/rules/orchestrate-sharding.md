@@ -1,13 +1,15 @@
 ---
 name: orchestrate-sharding
-description: When a review, research question, audit, inventory, or role pool splits into independent parts, shard it across a bounded set of subagents.
+alwaysApply: true
 ---
 
 # Sharding
 
-This rule applies to every agent that spawns subagents: the root session, a
-lead, an orchestrator, a reviewer, a researcher, and an implementer. It applies
-before any bead exists as well as to bead work.
+SHARD only a review of a proposed plan or bead DAG whose DAG has MORE THAN 64
+beads. This includes the orchestrate DAG review bead. Every other task runs as
+ONE agent or INLINE, including audits, research, inventories, record lists,
+smaller DAG reviews, and implementation. Role-pool worker sizing follows Pools
+and beads.
 
 ## Decide
 
@@ -19,57 +21,52 @@ follow Pools and beads, not this table.
 | One implementation bead | NEVER shard; decompose it into beads instead |
 | A few reads or one bounded lookup, such as one `grep` or one script, answers the whole task | INLINE, no subagent |
 | Each unit needs the result of an earlier unit, or one ordered pass | ONE agent |
-| Units write the same file, region, or shared state | ONE agent, or split the DAG first |
-| Merging shard results would repeat the investigation, as with one causal chain | ONE agent |
-| Independent units whose target shard count under Size is greater than 1. Units are questions, records, files, regions, or acceptance criteria | SHARD |
-| Anything else | ONE agent or INLINE |
-
-A unit is independent when a shard can finish it with no output from another
-shard.
+| Units write the same file, region, or shared state | ONE agent |
+| Review of a proposed plan or bead DAG with MORE THAN 64 beads | SHARD by contiguous bead groups in plan order |
+| Anything else, including audits, research, inventories, record lists, smaller DAG reviews, and implementation | ONE agent or INLINE |
 
 ## Size
 
-- A heavy unit needs its own multi-file investigation. A light unit is one
-  record, one lookup, or one short question.
-- MUST compute the target shard count as the number of heavy units plus the
-  light units divided by 10, rounded up.
-- MUST dispatch between 2 and 8 shards in one batch, and never more shards than
-  units. When the target count exceeds 8, dispatch exactly 8 shards and balance
-  the units across them.
-- MUST give every shard comparable work, and group light units into contiguous
-  ranges.
+- MUST compute the shard count for a qualifying DAG review as its bead count
+  divided by 16 and rounded up, clamped to 2..8.
+- MUST partition the complete plan node list into contiguous bead groups in plan
+  order, with comparable group sizes. When the count is clamped to 8, balance
+  the beads across those 8 groups.
+- NEVER dispatch a shard with fewer than 8 beads.
 
-| Units | Shards |
+| DAG review size | Shards |
 |---|---|
-| 3 heavy questions | 3 |
-| 12 light records | 2 |
-| 100 light records | 8, of 12 or 13 records each; not 100 agents and not 1 |
-| 9 heavy questions | 8; one shard takes 2 questions |
-| DAG review of 4 criteria over 20 beads | 4, one per criterion, or up to 8 bead groups |
+| 32 beads | ONE agent |
+| 65 beads | 5 contiguous groups |
+| 105 beads | 7 contiguous groups |
+| 200 beads | 8 contiguous groups |
 
 ## Brief
 
-- MUST split along one atomic boundary: a question, a criterion, a region, a
-  file group, a record range, or a bead.
-- MUST list each shard's exact units in its brief. No unit belongs to two
-  shards, and the shards together cover every unit.
+- MUST partition from the plan's node list and `depends_on` edges without
+  reading or investigating any bead first. Inspecting beads to decide the split
+  repeats the work the shards exist to do.
+- MUST split by contiguous bead group, never by criterion. Each shard checks
+  every criterion for every bead in its group and names each edge leaving its
+  group.
+- MUST list the exact bead ids assigned to each shard. No bead belongs to two
+  shards, and the shards together cover every bead.
 - MUST give every shard the same output contract so that results merge
   mechanically, and state shared context once in the batch context.
-- MUST dispatch every shard of one task in a single `task` batch.
-- MUST spawn only roles in the spawner's delegation matrix in
-  `rule://orchestrate-roles`. A reviewer shards through `scout` or `researcher`,
-  and a researcher shards through `scout`.
-- MUST keep shards read-only unless the spawner may edit and each shard owns
-  disjoint files.
+- MUST dispatch every shard of one review in a single `task` batch.
+- MUST keep shards read-only and use `scout`; a security criterion MAY use
+  `security-reviewer`.
 
 ## Merge
 
-- MUST merge every shard result into one answer, verdict, or finding set:
-  remove duplicates, reconcile conflicts with cited evidence, and name any unit
-  still unresolved.
+- MUST merge every shard result into one verdict and finding set: remove
+  duplicates, reconcile conflicts with cited evidence, and name any bead still
+  unresolved.
+- MUST merge without re-investigating. Re-check only a contradiction, an
+  uncited finding, or an edge that crosses shard boundaries. NEVER repeat a
+  shard's investigation to confirm it.
 - MUST dispatch again only the shard that failed or returned no result.
-- MUST record the merged result where the unsharded result belongs: the bead,
-  the review verdict, or the reply.
+- MUST record the merged result on the review bead.
 
 ## Pools and beads
 
@@ -77,8 +74,8 @@ shard.
   exception to Decide and Size: 1 worker for 1 ready bead, and the lesser of
   the ready count and 8 for 2 or more. Workers drain the remaining beads
   through the pull loop.
-- MUST have the worker that claims a review or research bead covering
-  independent units shard its investigation under this rule, then record one
-  verdict or answer on that bead.
-- The DAG review stays one bead and one round. Its shards are parts of that
-  round, not second opinions.
+- MUST have the worker that claims the DAG review bead shard its review under
+  this rule when the DAG has MORE THAN 64 beads, then record one verdict on
+  that bead.
+- The DAG review stays one bead and one round, and its shards belong to that
+  round.

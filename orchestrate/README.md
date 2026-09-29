@@ -35,7 +35,7 @@ Maps claim-pool aliases to the role agents and records which roles may delegate 
 
 ### `orchestrate-sharding`
 
-Splits a review, research question, audit, or inventory into 2 to 8 subagent shards when no single bounded lookup answers it and its target shard count exceeds 1: one per heavy unit plus one per 10 light units. Role pools get 1 worker for 1 ready bead, otherwise the lesser of the ready count and 8. Each shard gets an exact, disjoint set of units, and the spawner merges the results into one answer. It applies to any spawning agent, including work that is not yet in a bead. The DAG review stays one round; its shards are part of that round.
+Always-applied rule: shard DAG reviews over 64 beads only, into 2 to 8 contiguous groups in plan order. Use `ceil(beads / 16)`, clamped to 2..8, checking every criterion per group and naming edges that leave the group; never use a group smaller than 8 beads. Keep audits, research, inventories, record lists, smaller DAG reviews, and implementation unsharded. Partition from the plan node list and `depends_on` edges without reading beads first; use one `task` batch of read-only `scout` shards (a security criterion MAY use `security-reviewer`), with one shared output contract. Merge without re-investigating; re-check only contradictions, uncited findings, and cross-group edges; redispatch only a failed shard and record the verdict on the review bead. Role pools get 1 worker for 1 ready bead, otherwise the lesser of the ready count and 8. The DAG review stays one bead and one round.
 
 ## Skills
 
