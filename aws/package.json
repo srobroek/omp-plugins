@@ -1,6 +1,6 @@
 {
   "name": "@srobroek/aws",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "AWS MCP Server (read-only), AWS Pricing MCP server, and AWS working rules that route tasks through guided AWS skills.",
   "private": true,
   "omp": {}

@@ -6,6 +6,13 @@
 
 - Require Beads `blocks` dependencies to encode true prerequisites so independent work remains parallelizable.
 
+## [3.2.0](https://github.com/srobroek/omp-plugins/compare/beads--v3.1.1...beads--v3.2.0) (2026-09-29)
+
+
+### Features
+
+* **orchestrate,beads:** block only on true dependencies and sweep false blockers ([#608](https://github.com/srobroek/omp-plugins/issues/608)) ([86e4ecc](https://github.com/srobroek/omp-plugins/commit/86e4ecc51379fbbd9a38d0badba5a9a5c11fa82a))
+
 ## [3.1.1](https://github.com/srobroek/omp-plugins/compare/beads--v3.1.0...beads--v3.1.1) (2026-09-28)
 
 

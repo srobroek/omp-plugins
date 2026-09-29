@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.8.2](https://github.com/srobroek/omp-plugins/compare/safety--v0.8.1...safety--v0.8.2) (2026-09-29)
+
+
+### Bug Fixes
+
+* **safety:** make package-investigate steering and fix its matcher ([#609](https://github.com/srobroek/omp-plugins/issues/609)) ([aee8fe3](https://github.com/srobroek/omp-plugins/commit/aee8fe3106726fe6e659fd977baa66c50ea82c53))
+
 ## [0.8.1](https://github.com/srobroek/omp-plugins/compare/safety--v0.8.0...safety--v0.8.1) (2026-09-26)
 
 
