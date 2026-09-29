@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import { createPackageGate, packagesToInvestigate, shouldInvestigate } from "./package-investigate.ts";
+import packageInvestigate, { createPackageAdvisor, packagesToInvestigate, shouldInvestigate } from "./package-investigate.ts";
 
 describe("package investigation", () => {
 	for (const command of [
@@ -55,31 +55,38 @@ describe("package investigation", () => {
 	});
 });
 
-describe("package gate retry", () => {
-	test("blocks the first attempt, then allows an identical retry", () => {
-		const gate = createPackageGate();
-		expect(gate.check("bun add -d sharp@0.35.5")).toContain("investigate the package");
-		expect(gate.check("bun add -d sharp@0.35.5")).toBeUndefined();
+describe("package advisory", () => {
+	test("fires once per package per session", () => {
+		const advisor = createPackageAdvisor();
+		expect(advisor.notice("bun add -d sharp@0.35.5")).toContain("investigate the package");
+		expect(advisor.notice("bun add -d sharp@0.35.5")).toBeUndefined();
 	});
 
-	test("a command adding a new package blocks again, naming only the new one", () => {
-		const gate = createPackageGate();
-		expect(gate.check("bun add a")).toBeDefined();
-		const reason = gate.check("bun add a && bun add b");
-		expect(reason).toContain("Packages: b.");
-		expect(gate.check("bun add a && bun add b")).toBeUndefined();
+	test("a command adding a new package fires again, naming only the new one", () => {
+		const advisor = createPackageAdvisor();
+		advisor.notice("bun add a");
+		expect(advisor.notice("bun add a && bun add b")).toContain("Packages: b.");
 	});
 
-	test("read-only lookups never block and never acknowledge", () => {
-		const gate = createPackageGate();
-		expect(gate.check("npm view sharp --json")).toBeUndefined();
-		expect(gate.check("bun add sharp")).toBeDefined();
+	test("read-only lookups neither fire nor use up the notice", () => {
+		const advisor = createPackageAdvisor();
+		expect(advisor.notice("npm view sharp --json")).toBeUndefined();
+		expect(advisor.notice("bun add sharp")).toBeDefined();
 	});
 
-	test("reset forgets acknowledged packages", () => {
-		const gate = createPackageGate();
-		gate.check("bun add sharp");
-		gate.reset();
-		expect(gate.check("bun add sharp")).toBeDefined();
+	test("extension never blocks and prepends the notice to that call's result once", () => {
+		const handlers: Record<string, (event: unknown) => unknown> = {};
+		packageInvestigate({ on: (name: string, fn: (event: unknown) => unknown) => (handlers[name] = fn) } as never);
+		const run = (id: string, command: string) => {
+			expect(handlers.tool_call?.({ toolName: "bash", toolCallId: id, input: { command } })).toBeUndefined();
+			return handlers.tool_result?.({ toolName: "bash", toolCallId: id, content: [{ type: "text", text: "ok" }] }) as
+				| { content: { text: string }[] }
+				| undefined;
+		};
+		expect(run("1", "bun add sharp")?.content[0]?.text).toMatch(/^<system-reminder>\n.*investigate the package.*\n\nok$/s);
+		expect(run("2", "bun add sharp")).toBeUndefined();
+		expect(run("3", "bun install 2>&1 | tail -2 && git diff --stat")).toBeUndefined();
+		handlers.session_start?.({});
+		expect(run("4", "bun add sharp")).toBeDefined();
 	});
 });

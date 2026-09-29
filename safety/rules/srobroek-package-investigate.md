@@ -29,10 +29,11 @@ the first `|`, `&&`, or `;`, and redirections such as `2>&1` or `>log` are not
 packages. Read-only lookups (`npm view`, `npm search`, `pip index`, `cargo
 search`) never fire: they are the investigation this rule asks for.
 
-The first command naming a package blocks with this instruction. After vetting,
-re-run the same command: each blocked package is remembered in memory for the
-rest of the session and allowed thereafter, while any package not yet blocked
-blocks again. A new session starts with an empty set.
+This is steering, never a block: the command always runs. The first command
+naming a package gets this instruction prepended to its tool result, once per
+package per session; a later command gets it again only for packages not yet
+named. Vet before running the command; if the notice arrives first, vet then
+and revert a package that fails.
 
 Package-manager operations are recognized by the registered `package-investigate`
 extension, which tokenizes shell command positions and ignores quoted data and

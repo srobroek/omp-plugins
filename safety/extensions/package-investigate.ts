@@ -1,4 +1,4 @@
-import type { ExtensionAPI, ToolCallEvent } from "@oh-my-pi/pi-coding-agent";
+import type { ExtensionAPI, ToolCallEvent, ToolResultEvent } from "@oh-my-pi/pi-coding-agent";
 
 import { type ShellToken, tokenizeShell } from "./shell-tokenizer.ts";
 
@@ -26,8 +26,8 @@ const PACKAGE = /^(?!-)[A-Za-z@./_~][^;|&<>()`$]*$/;
 const REDIRECTION = /^\d*(?:[<>]+|&>>?|>&|<&)$/;
 const SEPARATORS: Record<string, true> = { ";": true, "&": true, "|": true, "(": true, ")": true, "$(": true, "\n": true };
 
-export const INVESTIGATE_REASON =
-	"Before adding or changing a dependency, investigate the package (registry, maintainer, release, and downloads) and confirm it is not a typo-squat or abandoned. Once vetted, re-run the same command: this session allows each package after its first block.";
+export const INVESTIGATE_NOTICE =
+	"Before adding or changing a dependency, investigate the package (registry, maintainer, release, and downloads) and confirm it is not a typo-squat or abandoned. If it fails that check, revert the change.";
 
 export function extractCommand(input: ToolCallEvent["input"]): string {
 	if ("command" in input && typeof input.command === "string") return input.command;
@@ -80,44 +80,64 @@ export function shouldInvestigate(command: string): boolean {
 	return packagesToInvestigate(command).length > 0;
 }
 
-export type PackageGate = {
-	/** Returns the block reason, or undefined when the command may run. */
-	check(command: string): string | undefined;
+export type PackageAdvisor = {
+	/** Returns the notice for packages not yet named this session, or undefined. */
+	notice(command: string): string | undefined;
 	reset(): void;
 };
 
 /**
- * Confirm-style gate. The first command naming a package blocks with the
- * investigation instruction, and the blocked packages are remembered in memory
- * for the rest of the session, so re-running after vetting proceeds. A command
- * naming any package not yet blocked in this session blocks again.
+ * Fire-once steering: the first command naming a package gets the
+ * investigation notice; a later command gets it only for packages not yet
+ * named in this session.
  */
-export function createPackageGate(): PackageGate {
-	const acknowledged = new Set<string>();
+export function createPackageAdvisor(): PackageAdvisor {
+	const noticed = new Set<string>();
 	return {
-		check(command) {
-			const fresh = [...new Set(packagesToInvestigate(command))].filter((name) => !acknowledged.has(name));
+		notice(command) {
+			const fresh = [...new Set(packagesToInvestigate(command))].filter((name) => !noticed.has(name));
 			if (fresh.length === 0) return undefined;
-			for (const name of fresh) acknowledged.add(name);
-			return `${INVESTIGATE_REASON} Packages: ${fresh.join(", ")}.`;
+			for (const name of fresh) noticed.add(name);
+			return `${INVESTIGATE_NOTICE} Packages: ${fresh.join(", ")}.`;
 		},
 		reset() {
-			acknowledged.clear();
+			noticed.clear();
 		},
 	};
 }
 
+/**
+ * Advisory, never a gate: the command always runs. The notice is decided at
+ * tool_call (never returning `block`) and prepended to that call's
+ * tool_result, the same surface quality-edit-advisory uses. A TTSR rule
+ * cannot carry it, because the separator, redirection, and quoting logic
+ * needs the shell tokenizer, which rule regexes cannot call.
+ */
 export default function packageInvestigate(pi: ExtensionAPI): void {
-	const gate = createPackageGate();
+	const advisor = createPackageAdvisor();
+	const pending = new Map<string, string>();
 	pi.on("session_start", () => {
-		gate.reset();
+		advisor.reset();
+		pending.clear();
 	});
 	pi.on("tool_call", (event: ToolCallEvent) => {
 		try {
 			if (event.toolName !== "bash") return;
-			const reason = gate.check(extractCommand(event.input));
-			if (reason === undefined) return;
-			return { block: true as const, reason };
+			const text = advisor.notice(extractCommand(event.input));
+			if (text !== undefined) pending.set(event.toolCallId, text);
+		} catch {
+			return;
+		}
+	});
+	pi.on("tool_result", (event: ToolResultEvent) => {
+		try {
+			const text = pending.get(event.toolCallId);
+			if (text === undefined) return;
+			pending.delete(event.toolCallId);
+			const banner = `<system-reminder>\n${text}\n</system-reminder>\n\n`;
+			const [first, ...rest] = event.content;
+			if (first?.type === "text") return { content: [{ ...first, text: banner + first.text }, ...rest] };
+			return { content: [{ type: "text" as const, text: banner }, ...event.content] };
 		} catch {
 			return;
 		}
