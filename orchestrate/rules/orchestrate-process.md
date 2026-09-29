@@ -62,11 +62,29 @@ Conflict avoidance is a decomposition duty. The lead MUST decompose work into un
    - dependency correctness, including missing and unnecessary or over-constraining `blocks` edges and cycles;
    - conflict risk, identified by repository inspection of beads that touch the same files or functions rather than by titles;
    - wasted or overstated parallelisation against the critical path;
-   - decomposition and overlap, including correctly sized, non-overlapping beads and one owner bead for every shared region with only its true dependents `blocks`-depending on it.
+   - decomposition and overlap, including correctly sized, non-overlapping beads, independent multi-unit beads that should have been split, splits that separate same-region or ordered units, and one owner bead for every shared region with only its true dependents `blocks`-depending on it.
 5. The single DAG review round MUST dispatch `work-reviewer` and the bundled `security-reviewer` in parallel for the same review. Both results together are that one round, not a second opinion. The lead records both verdicts on the governing bead before dispatching implementers into a contested region.
 6. The review is time-boxed to a single round. The lead reads both verdicts, records on the governing bead what it accepted or changed, and then DISPATCHES; it does not commission another opinion. A second DAG review is a process violation; record it with the governing bead's durable evidence.
 7. Dispatching implementers is the lead's primary duty and is never optional. If the review has not returned, or its verdict is unclear, the lead dispatches work known to be independent anyway and records that it did so. A clean verdict is not a precondition for independent work; it is a precondition only for starting work on a region the review flagged as contested.
 8. Only independent work is dispatched concurrently. An arm that produces reviews and no implementation has failed, regardless of how good the plan is. A DAG dispatched without a recorded `execution_dag_review` is a process violation.
+
+### Implementation bead granularity
+
+When creating or receiving implementation beads, the lead MUST run this check before assigning them to pools, and MUST repeat it whenever the false-blocker sweep runs.
+
+Split an implementation bead into child beads ONLY when ALL hold:
+- It covers at least two independent units (files, regions, endpoints, services, or acceptance criteria) that a worker can finish without another unit's output.
+- The units do not write the same file, region, or shared state.
+- The units need no fixed order and are not one causal chain in which each step depends on the previous.
+- Each resulting bead carries meaningful work: at least one whole acceptance criterion or file group, never a single trivial edit.
+
+Keep the bead whole when ANY hold:
+- Units write the same file, region, or shared state; use one bead, or one owner bead that `blocks` only its true dependents.
+- Each step needs the prior step's result.
+- The work is one root-cause investigation.
+- Splitting would create beads too small to justify a worker's fixed start-up cost.
+
+When splitting, each child MUST have its own `--acceptance` for its share of the parent criteria, and together the children MUST cover all parent criteria. Give each child its pool assignment and `execution_*` metadata, and create `blocks` edges ONLY under the true-blocker test in Ledger contract. Make the parent a tracking bead linked to its children by parent-child hierarchy, with no implementation assignment; do not add `blocks` edges merely for tracking. Close it only after all children close. Record one line on the parent naming the units and reason for each split; record keep-whole decisions only when the bead covers multiple units.
 
 
 Only `execution_*` metadata is required before spawn. Keep every family on the governing bead as its values become known.
