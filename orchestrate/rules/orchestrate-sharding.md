@@ -5,7 +5,7 @@ alwaysApply: true
 
 # Sharding
 
-SHARD only a review of a proposed plan or bead DAG whose DAG has MORE THAN 64
+SHARD only a review of a proposed plan or bead DAG whose DAG has MORE THAN 96
 beads. This includes the orchestrate DAG review bead. Every other task runs as
 ONE agent or INLINE, including audits, research, inventories, record lists,
 smaller DAG reviews, and implementation. Role-pool worker sizing follows Pools
@@ -22,7 +22,7 @@ follow Pools and beads, not this table.
 | A few reads or one bounded lookup, such as one `grep` or one script, answers the whole task | INLINE, no subagent |
 | Each unit needs the result of an earlier unit, or one ordered pass | ONE agent |
 | Units write the same file, region, or shared state | ONE agent |
-| Review of a proposed plan or bead DAG with MORE THAN 64 beads | SHARD by contiguous bead groups in plan order |
+| Review of a proposed plan or bead DAG with MORE THAN 96 beads | SHARD by contiguous bead groups in plan order |
 | Anything else, including audits, research, inventories, record lists, smaller DAG reviews, and implementation | ONE agent or INLINE |
 
 ## Size
@@ -36,8 +36,8 @@ follow Pools and beads, not this table.
 
 | DAG review size | Shards |
 |---|---|
-| 32 beads | ONE agent |
-| 65 beads | 5 contiguous groups |
+| 96 beads | ONE agent |
+| 97 beads | 7 contiguous groups |
 | 105 beads | 7 contiguous groups |
 | 200 beads | 8 contiguous groups |
 
@@ -75,7 +75,7 @@ follow Pools and beads, not this table.
   the ready count and 8 for 2 or more. Workers drain the remaining beads
   through the pull loop.
 - MUST have the worker that claims the DAG review bead shard its review under
-  this rule when the DAG has MORE THAN 64 beads, then record one verdict on
+  this rule when the DAG has MORE THAN 96 beads, then record one verdict on
   that bead.
 - The DAG review stays one bead and one round, and its shards belong to that
   round.
