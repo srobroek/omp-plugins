@@ -11,9 +11,6 @@ const MUST_FIRE = [
 	"cargo add serde",
 	"go get example.com/x",
 	"pip install requests",
-	"npm search typescript",
-	"pip index versions requests",
-	"cargo search serde",
 ];
 
 const MUST_NOT_FIRE = [
@@ -25,6 +22,9 @@ const MUST_NOT_FIRE = [
 	"pnpm install --frozen-lockfile",
 	"npm install",
 	"cat <<'EOF'\nbun add foo\nEOF",
+	"npm search typescript",
+	"pip index versions requests",
+	"cargo search serde",
 ];
 
 describe("srobroek-package-investigate", () => {
