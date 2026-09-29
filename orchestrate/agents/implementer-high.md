@@ -3,7 +3,7 @@ name: implementer-high
 description: Handles reasoning-heavy or troubleshooting assignments when the LEAD selects this tier; records root-cause diagnosis and reproducible evidence.
 model: "@slow"
 thinking-level: high
-tools: read, grep, glob, bash, edit, write, pool_wait
+tools: read, grep, glob, find, lsp, ast_grep, ast_edit, bash, edit, write, eval, pool_wait
 spawns: scout, operator, researcher
 output:
   properties:

@@ -3,7 +3,7 @@ name: researcher
 description: Answers one scoped question with cited observations, explicit inferences, and no product-code edits.
 model: "@task"
 thinking-level: medium
-tools: read, grep, glob, web_search, bash, write, pool_wait
+tools: read, grep, glob, find, lsp, ast_grep, github, web_search, bash, write, pool_wait
 spawns: scout
 read-summarize: false
 output:
