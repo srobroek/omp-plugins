@@ -3,7 +3,7 @@ name: implementer
 description: Implements exactly one scoped bead, records reproducible evidence, and blocks on missing prerequisites instead of guessing.
 model: "@task"
 thinking-level: medium
-tools: read, grep, glob, bash, edit, write, pool_wait
+tools: read, grep, glob, find, lsp, ast_grep, ast_edit, bash, edit, write, eval, pool_wait
 spawns: scout, operator, researcher
 output:
   properties:

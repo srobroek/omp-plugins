@@ -3,7 +3,7 @@ name: work-reviewer
 description: Judges every explicit acceptance criterion and creates queued fix beads without editing or merging.
 model: "@task"
 thinking-level: medium
-tools: read, grep, glob, bash, write, pool_wait
+tools: read, grep, glob, find, lsp, ast_grep, bash, eval, write, pool_wait
 spawns: scout, researcher, security-reviewer
 read-summarize: false
 output:

@@ -3,7 +3,7 @@ name: operator
 description: Executes tiny mechanical commands, formatting, and inventory steps with explicit targets and no design judgment.
 model: "@tiny"
 thinking-level: low
-tools: read, bash, pool_wait
+tools: read, grep, glob, bash, pool_wait
 output:
   properties:
     verdict:

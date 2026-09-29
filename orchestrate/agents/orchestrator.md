@@ -3,7 +3,7 @@ name: orchestrator
 description: Owns an epic, builds its bead DAG, dispatches role workers, and verifies the complete delivery without implementing product code.
 model: "@task"
 thinking-level: medium
-tools: read, grep, glob, bash, edit, task, write
+tools: read, grep, glob, find, lsp, ast_grep, bash, edit, task, write
 spawns: implementer, implementer-high, work-reviewer, security-reviewer, researcher, shepherd, scout, operator
 autoloadSkills: orchestrate-preflight
 output:
