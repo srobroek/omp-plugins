@@ -6,6 +6,14 @@
 
 - Use only true `blocks` dependencies and sweep false blockers after DAG review and bead closure, and before idling with no ready work; check implementation-bead granularity before pool assignment and during each sweep.
 
+## [1.1.0](https://github.com/srobroek/omp-plugins/compare/orchestrate--v1.0.1...orchestrate--v1.1.0) (2026-09-29)
+
+
+### Features
+
+* **orchestrate,beads:** block only on true dependencies and sweep false blockers ([#608](https://github.com/srobroek/omp-plugins/issues/608)) ([86e4ecc](https://github.com/srobroek/omp-plugins/commit/86e4ecc51379fbbd9a38d0badba5a9a5c11fa82a))
+* **orchestrate:** shard DAG reviews over 96 beads by bead group ([#596](https://github.com/srobroek/omp-plugins/issues/596)) ([11ee720](https://github.com/srobroek/omp-plugins/commit/11ee720014c67ef476d9ec182047e2f3cfdf6e0d))
+
 ## [1.0.1](https://github.com/srobroek/omp-plugins/compare/orchestrate--v1.0.0...orchestrate--v1.0.1) (2026-09-26)
 
 

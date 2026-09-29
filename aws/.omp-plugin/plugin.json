@@ -1,7 +1,7 @@
 {
   "name": "aws",
   "description": "AWS MCP Server (read-only), AWS Pricing MCP server, and AWS working rules that route tasks through guided AWS skills.",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "category": "development",
   "mcpServers": {
     "aws-mcp": {
