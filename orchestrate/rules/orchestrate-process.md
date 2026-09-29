@@ -73,7 +73,7 @@ Conflict avoidance is a decomposition duty. The lead MUST decompose work into un
 When creating or receiving implementation beads, the lead MUST run this check before assigning them to pools, and MUST repeat it whenever the false-blocker sweep runs.
 
 Split an implementation bead into child beads ONLY when ALL hold:
-- It covers at least two independent units (files, regions, endpoints, services, or acceptance criteria) that a worker can finish without another unit's output.
+- It covers at least two independent units (files, regions, endpoints, services, or acceptance criteria) that a worker can finish without another unit's output. Establish independence by inspecting the units' source, imports, contracts, and tests, never from bead titles or descriptions alone.
 - The units do not write the same file, region, or shared state.
 - The units need no fixed order and are not one causal chain in which each step depends on the previous.
 - Each resulting bead carries meaningful work: at least one whole acceptance criterion or file group, never a single trivial edit.
