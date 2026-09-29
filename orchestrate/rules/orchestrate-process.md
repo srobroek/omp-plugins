@@ -30,6 +30,8 @@ If `bd show` or a CAS reports another holder or a closed bead, the worker MUST s
 Subagent results and peer messages auto-deliver. A subagent lead (the orchestrator or any sub-lead) MUST spawn its workers, then YIELD; OMP parks the lead, and yielding is not completion. Each worker result or message wakes the parked lead into a new turn. While work remains open, the lead MUST handle what arrived and YIELD again.
 A subagent lead MUST NOT stay active in its current turn or call `wait` for dispatched work. NEVER poll to discover completion. Useful work includes reviewing a returned result, updating the ledger, integrating a delivered branch, dispatching the next independent bead, and answering a peer.
 Root only: the depth-0 session is the only agent with `wait`. The root MUST call `wait` only when completely blocked with no useful work left; results and messages arrive automatically. A headless root MUST NOT end its turn while dispatched work is outstanding.
+Before the lead waits or idles because no matching ready work remains while open beads remain, it MUST sweep every blocked open bead in its owned epic. For each blocking edge, inspect the repository and the producer's acceptance evidence. Remove or downgrade an edge only when the consumer no longer needs unfinished producer output, including when a design-time assumption is disproved, the needed contract is already produced, or the edge encodes only an ordering preference. Preserve every true dependency on unfinished output.
+After the DAG review and after every bead close, the lead MUST run the same sweep. For each removed or downgraded edge, record a `bd comment CONSUMER_ID "EVIDENCE"` citing the repository path and lines or the producer's acceptance evidence. Use the documented `bd dep remove CONSUMER_ID PRODUCER_ID`; to downgrade, follow it with `bd dep add CONSUMER_ID PRODUCER_ID --type related` (or another evidence-based non-blocking type). Then re-read `bd ready --json`, preserve all existing assignments and claims, and dispatch newly ready work through its role pool. NEVER remove an edge whose consumer still needs unfinished producer output or release another actor's claim.
 Historical rationale only: in a graded arm, 55 of 89 lead waits returned nothing usable, including 29 waits on agents that had already finished.
 
 Every worker brief MUST pass the lead's runtime id as `<leadId>`. Workers MUST report only with `write agent://<leadId>` and NEVER with `write agent://all`. A worker MAY confirm the id against the `Parent` shown by `read history://<own-id>`. OMP does not enforce this routing; the brief and worker MUST enforce it.
@@ -51,20 +53,38 @@ Metadata families and timing:
 After the shepherd's delivery_land on an active ledger, the shepherd MUST close each receipt bead in children-first order with bd update ID --set-metadata pr=N --set-metadata merge_sha=SHA, then bd close ID --reason "PR #N merged as SHA; receipt PATH", and run delivery_cleanup. On a retired or ledger-free receipt, the shepherd MUST run delivery_cleanup directly after delivery_land; the lead MUST only verify the shepherd's result and MUST NOT duplicate these ledger writes. Delivery tools never write the Beads ledger.
 
 Tier selection is a lead decision made at dispatch and recorded on the bead so an auditor can see which tier was chosen and why. Use the documented `execution_*` metadata family, specifically the exact key `execution_role`, with a value such as `implementer-high: root-cause diagnosis` or `implementer: local mechanical change`; do not invent another metadata key.
-Conflict avoidance is a decomposition duty. The lead MUST decompose work into units that minimise overlap in files and functions. A conflict between concurrently dispatched workers is, by default, evidence that decomposition put two agents in the same place; it is not evidence of healthy integration. Some regions are shared by construction: identify any region that more than one unit of work would have to touch, typically shared contracts, schemas, generated artefacts, registries, or configuration that several features must extend. Name each shared region in the parent or epic bead, give it ONE owner bead that applies every dependent unit's required change, and make dependent units `blocks`-depend on it. This does NOT relax the existing conflict discipline.
+Conflict avoidance is a decomposition duty. The lead MUST decompose work into units that minimise overlap in files and functions. A conflict between concurrently dispatched workers is, by default, evidence that decomposition put two agents in the same place; it is not evidence of healthy integration. Some regions are shared by construction: identify any region that more than one unit of work would have to touch, typically shared contracts, schemas, generated artefacts, registries, or configuration that several features must extend. Name each shared region in the parent or epic bead and give it ONE owner bead that applies every dependent unit's required change. Make only work that needs the owner's output `blocks`-depend on it, following the true-blocker test; this does NOT relax the existing conflict discipline.
 
 1. Identify shared regions AT decomposition time and name them in the parent or epic bead.
 2. Create ONE bead per shared region with ONE owner, which applies every epic's required change to that region.
-3. Make dependent epics `blocks`-depend on that bead, so they wait rather than collide.
+3. Make only work that needs the owner's output `blocks`-depend on it.
 4. Before any dispatch, create and route AT MOST ONE DAG review bead to the existing `pool:work-reviewer` role. Its `--acceptance` criteria MUST cover exactly these areas:
-   - dependency correctness, including missing `blocks` edges and cycles;
+   - dependency correctness, including missing and unnecessary or over-constraining `blocks` edges and cycles;
    - conflict risk, identified by repository inspection of beads that touch the same files or functions rather than by titles;
    - wasted or overstated parallelisation against the critical path;
-   - decomposition and overlap, including correctly sized, non-overlapping beads and one owner bead for every shared region with dependents `blocks`-depending on it.
+   - decomposition and overlap, including correctly sized, non-overlapping beads, independent multi-unit beads that should have been split, splits that separate same-region or ordered units, and one owner bead for every shared region with only its true dependents `blocks`-depending on it.
 5. The single DAG review round MUST dispatch `work-reviewer` and the bundled `security-reviewer` in parallel for the same review. Both results together are that one round, not a second opinion. The lead records both verdicts on the governing bead before dispatching implementers into a contested region.
 6. The review is time-boxed to a single round. The lead reads both verdicts, records on the governing bead what it accepted or changed, and then DISPATCHES; it does not commission another opinion. A second DAG review is a process violation; record it with the governing bead's durable evidence.
 7. Dispatching implementers is the lead's primary duty and is never optional. If the review has not returned, or its verdict is unclear, the lead dispatches work known to be independent anyway and records that it did so. A clean verdict is not a precondition for independent work; it is a precondition only for starting work on a region the review flagged as contested.
 8. Only independent work is dispatched concurrently. An arm that produces reviews and no implementation has failed, regardless of how good the plan is. A DAG dispatched without a recorded `execution_dag_review` is a process violation.
+
+### Implementation bead granularity
+
+When creating or receiving implementation beads, the lead MUST run this check before assigning them to pools, and MUST repeat it whenever the false-blocker sweep runs.
+
+Split an implementation bead into child beads ONLY when ALL hold:
+- It covers at least two independent units (files, regions, endpoints, services, or acceptance criteria) that a worker can finish without another unit's output. Establish independence by inspecting the units' source, imports, contracts, and tests, never from bead titles or descriptions alone.
+- The units do not write the same file, region, or shared state.
+- The units need no fixed order and are not one causal chain in which each step depends on the previous.
+- Each resulting bead carries meaningful work: at least one whole acceptance criterion or file group, never a single trivial edit.
+
+Keep the bead whole when ANY hold:
+- Units write the same file, region, or shared state; use one bead, or one owner bead that `blocks` only its true dependents.
+- Each step needs the prior step's result.
+- The work is one root-cause investigation.
+- Splitting would create beads too small to justify a worker's fixed start-up cost.
+
+When splitting, each child MUST have its own `--acceptance` for its share of the parent criteria, and together the children MUST cover all parent criteria. Give each child its pool assignment and `execution_*` metadata, and create `blocks` edges ONLY under the true-blocker test in Ledger contract. Make the parent a tracking bead linked to its children by parent-child hierarchy, with no implementation assignment; do not add `blocks` edges merely for tracking. Close it only after all children close. Record one line on the parent naming the units and reason for each split; record keep-whole decisions only when the bead covers multiple units.
 
 
 Only `execution_*` metadata is required before spawn. Keep every family on the governing bead as its values become known.

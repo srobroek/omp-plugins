@@ -29,6 +29,17 @@ parallel writers against an embedded store corrupt the Dolt journal. One
 measured session issued 37 separate `bd create` calls and 27 separate
 `bd dep add` and `bd dep remove` calls among 122 `bd` invocations.
 
+# DEPENDENCY SEMANTICS
+Create a `blocks` dependency ONLY when the consumer needs an artifact, contract,
+schema, or decision the producer creates, or both beads write the same file or
+region and cannot be sequenced otherwise. Titles, epic order, "nice to have
+first," review ordering, and a shared topic are NOT blockers; use `related` or
+`tracks` instead. When in doubt, do NOT block; parallelise as much as possible.
+Prefer one owner bead for a shared region, with `blocks` edges only to its true
+dependents, over serial chains. To classify research, use `blocks` only when its
+finding is an input the consumer needs before proceeding; use `discovered-from`
+for a mid-work follow-up and `related` or `tracks` for a non-blocking association.
+
 # GRAPH PLAN SCHEMA
 `bd create --graph` is the only batched path that carries the fields this
 steering requires. Its verified plan shape:
@@ -47,9 +58,8 @@ steering requires. Its verified plan shape:
   while putting that id in a top-level `from_id`/`to_id` edge reported
   `23 edge(s) (0 parent-child link(s))`.
 - Dependencies between plan nodes belong in the top-level `edges` array, each
-  entry `{"from_key": "a", "to_key": "b", "type": "blocks"}`. Use `from_id`
-  and `to_id` to reference an existing bead when creating a dependency that is
-  not a parent attachment.
+  entry `{"from_key": "a", "to_key": "b", "type": "blocks"}`. Use `from_key`
+  and `to_key` for plan nodes and `from_id` and `to_id` for existing beads.
 - Unknown fields anywhere are silently dropped with a warning, so a typo costs
   the field rather than raising.
 
@@ -77,7 +87,9 @@ independent. The reviewer MUST record a verdict against each guard rail:
   acceptance criteria.
 - Design decisions are separate decision or research beads.
 - Review beads depend on every task they review.
-- Dependencies encode true ordering only.
+- Dependencies encode true ordering only: flag both missing `blocks` edges and
+  unnecessary or over-constraining `blocks` edges that impose ordering without a
+  real dependency, as well as cycles.
 - Each implementer has a justified `metadata.tier`.
 - The plan has an explicit integration and delivery path.
 
