@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.7](https://github.com/srobroek/omp-plugins/compare/speckit--v0.7.6...speckit--v0.7.7) (2026-09-29)
+
+
+### Bug Fixes
+
+* **architecture,build,design,orchestrate,project,quality,speckit,toolchain:** grant agents the tools their procedures require ([#610](https://github.com/srobroek/omp-plugins/issues/610)) ([5896fff](https://github.com/srobroek/omp-plugins/commit/5896fffc161bb34633e8279c70ac506d3e996ac9))
+
 ## [0.7.6](https://github.com/srobroek/omp-plugins/compare/speckit--v0.7.5...speckit--v0.7.6) (2026-09-26)
 
 

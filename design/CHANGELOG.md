@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.1](https://github.com/srobroek/omp-plugins/compare/design--v0.5.0...design--v0.5.1) (2026-09-29)
+
+
+### Bug Fixes
+
+* **architecture,build,design,orchestrate,project,quality,speckit,toolchain:** grant agents the tools their procedures require ([#610](https://github.com/srobroek/omp-plugins/issues/610)) ([5896fff](https://github.com/srobroek/omp-plugins/commit/5896fffc161bb34633e8279c70ac506d3e996ac9))
+
 ## [0.5.0](https://github.com/srobroek/omp-plugins/compare/design--v0.4.2...design--v0.5.0) (2026-09-28)
 
 
