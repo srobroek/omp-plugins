@@ -92,7 +92,7 @@ The adapter supports verified GitHub and GitLab remotes only. It uses `gh` for G
 | `integrator` | When `beads.ledgerActive` is true, verifies completed reconciliation before cleaning the merged worktree and branch; inactive retired/no-ledger receipts skip directly to cleanup. |
 | `worktree-reaper` | Report-only escalation invoked by the main agent or run lead after the third hygiene reminder. It inventories residual state and never authorizes removal. |
 
-The agent that creates a non-orchestrated PR owns its automated review loop through landing or explicit human escalation. An orchestrated run's `orc-shepherd` owns review rounds. Workers do not request or act on those rounds. The agent that merges a branch owns cleanup under repository policy. If no merging agent is live, the main agent owns cleanup. The main agent or run lead must orient before a role-restricted step. `delivery_cleanup` does not enforce actor identity or require the caller to run from a linked worktree; it validates the caller-supplied receipt target. Repository policy assigns ownership.
+The agent that creates a PR owns its automated review loop through landing or explicit human escalation. Workers dispatched by a lead do not request or act on review rounds for the lead's PR. The agent that merges a branch owns cleanup under repository policy. If no merging agent is live, the main agent owns cleanup. The main agent or run lead must orient before a role-restricted step. `delivery_cleanup` does not enforce actor identity or require the caller to run from a linked worktree; it validates the caller-supplied receipt target. Repository policy assigns ownership.
 
 ## Rules
 
@@ -100,6 +100,7 @@ The agent that creates a non-orchestrated PR owns its automated review loop thro
 | --- | --- |
 | `delivery-git-workflow` | Create or review pull requests, run automated-review loops, prove landing, reconcile and clean a landed worktree, or link delivery to Beads. |
 | `delivery-task-scope` | Every task: modify only artifacts directly required by the current request or claimed work item. |
+| `delivery-fan-out` | A task splits into independent parts, needs helper agents, or runs parallel edits: split test, one-batch `task` dispatch capped at 8, helper choice, worktree isolation, single post-integration verification, and DAG-review sharding above 96 beads. |
 | `delivery-main-branch-push-advisory` | A bash call names `main` or `master` as a `git push` destination. The advisory never blocks the command. |
 | `delivery-worktree-hygiene` | Hold a worktree, act on a hygiene reminder, or clean up a landed worktree and branch. |
 | `delivery-direct-merge-advisory` | A top-level bash call invokes a local `git merge`. Use `delivery_land` for the reviewed landing path and `delivery_cleanup` afterward. |
