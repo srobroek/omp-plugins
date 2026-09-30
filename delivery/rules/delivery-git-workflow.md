@@ -22,22 +22,20 @@ LEGEND: Rules carry stable IDs (GW-n).
 
 ## Automated review loop
 
-For PRs not linked to an orchestrate run bead: MUST GW-4: the agent that creates a PR owns its automated-review loop until landing or explicit human escalation. It may delegate observation to a landing shepherd, but never to a polling watcher holding a live session.
+MUST GW-4: the agent that creates a PR owns its automated-review loop until landing or explicit human escalation. It may delegate observation to a landing agent such as `integrator`, but never to a polling watcher holding a live session. Workers dispatched by a lead MUST NOT request or act on review rounds for the lead's PR.
 
 1. Keep the draft until local review, CI, and configured automated reviewers have completed against the exact head. Cover CodeRabbit, Codex, Copilot review, Greptile, and repository-configured reviewers when present.
 2. Park pending waits and continue unrelated work. Later read the review state; no agent polls while holding the session open.
 3. Collect the complete actionable set for the head, assign one fix owner, then push the new head and rerun every configured reviewer.
 4. Identify findings by GitHub review-thread node id. Without a thread, use the review URL plus a stable bot/path/location/finding fingerprint. Count attempts per material issue; a new issue starts at one.
 5. Reply when evidence is needed, call `resolveReviewThread`, and read back `isResolved=true`. A reply or outdated diff does not resolve a conversation.
-6. For PRs not linked to an orchestrate run bead: After three unsuccessful fixes of one material issue, hold only that PR for human review and record issue identities, attempts, heads, fixes, and unresolved URLs. New issues have their own three attempts.
-
-PRs linked to an orchestrate run bead are owned by the run's shepherd (`orc-shepherd`); workers MUST NOT request or act on review rounds for them.
+6. After three unsuccessful fixes of one material issue, hold only that PR for human review and record issue identities, attempts, heads, fixes, and unresolved URLs. New issues have their own three attempts.
 
 ## Beads linkage
 
 - Agent-created PRs in a live `.beads/` workspace link to an existing governing bead in the PR body as `Bead: <id>`, `Closes-Bead: <id>`, or `Bead-Id: <id>`, and stamp `pr` metadata on every implementing bead. `No-Bead:` is not accepted; only a regular-file `.beads/RETIRED` sentinel owned by this gate makes the nearest ledger inactive. Before acting on a bead carrying `pr`, read that PR. Before reviewing or landing an already-created incoming human or bot PR, absence of these trailers alone is not a finding or blocker.
 
-- For PRs entering the delivery PR-shepherd merge queue, create before PR creation one open, unassigned task bead labeled `pr:merge` and `agent:integrator`, with `branch`, `repo`, and `origin_actor` metadata. This delivery queue is separate from orchestrate worker-to-epic merge beads, which use `agent:shepherd` and are created by the lead after work-reviewer approval. For every closing work bead, add its dependency on the applicable merge bead before approval freezes the graph. Immediately after creation, stamp PR/base/head anchors on the merge bead. Keep implementation beads at `state:reported` or `state:approved` while unmerged; the delivery integrator verifies landing before closing a `Closes-Bead` target. Draft PRs and automated release PRs are not ordinary merge-queue entries.
+- For PRs entering the delivery merge queue, create before PR creation one open, unassigned task bead labeled `pr:merge` and `agent:integrator`, with `branch`, `repo`, and `origin_actor` metadata. For every closing work bead, add its dependency on the applicable merge bead before approval freezes the graph. Immediately after creation, stamp PR/base/head anchors on the merge bead. Keep implementation beads at `state:reported` or `state:approved` while unmerged; the delivery integrator verifies landing before closing a `Closes-Bead` target. Draft PRs and automated release PRs are not ordinary merge-queue entries.
 
 ## Verifying work landed
 
@@ -47,6 +45,6 @@ MUST GW-6: after `delivery_land` proves a branch landed, when its receipt has `b
 
 ### Landing method selection
 
-MUST GW-10: choose `delivery_land.merge_method` from the target project's documented landing policy before landing. Use `merge` when the policy requires a real merge commit or says never to squash; use `rebase` when it requires a linear/rebased landing; use `squash` only when the policy permits squash and requires neither other shape. An ambiguous or contradictory policy is a hold, not permission to guess. The caller MUST pass the selected method explicitly when the policy is not the default squash policy, and MUST retain the selected method as epic/bead metadata when orchestrate owns the landing.
+MUST GW-10: choose `delivery_land.merge_method` from the target project's documented landing policy before landing. Use `merge` when the policy requires a real merge commit or says never to squash; use `rebase` when it requires a linear/rebased landing; use `squash` only when the policy permits squash and requires neither other shape. An ambiguous or contradictory policy is a hold, not permission to guess. The caller MUST pass the selected method explicitly when the policy is not the default squash policy.
 
 `delivery_land` defaults to `squash`, refuses an explicit `merge` when the forge reports `allow_merge_commit: false`, and refuses a post-merge commit shape that does not match the selected method. For an already-`MERGED` request, no merge method was issued in that call; one parent or two parents with the reviewed head second are accepted and the observed shape is recorded. Its receipt proof records `proof.evidence.mergeMethod`, `mergePolicy`, and `mergeShape`: squash has one parent; merge has two parents with the reviewed head second; rebase has one parent plus successful `git merge-base --is-ancestor` reachability from the reviewed head. Cleanup and close-out MUST use the receipt's proven method and SHA, never assumptions about the provider's merge UI.
