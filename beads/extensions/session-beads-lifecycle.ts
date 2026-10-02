@@ -5,13 +5,13 @@
  * conversation reminds the agent of them:
  *
  * - `bd gate check` at a dispatch/recovery boundary, so automatic gates resolve
- *   before work is picked (beads-lifecycle).
+ *   before work is picked.
  * - the verdict a detached Dolt push left in `.beads/last-push.log`. A detached
  *   process cannot report to the session that spawned it, so an unreported
- *   failure looks published while sitting on one machine (beads-core).
+ *   failure looks published while sitting on one machine (beads-ledger DELIVERY).
  * - the stale-skip warning from `bd import`: the committed export is behind this
- *   database, so the next export would overwrite a peer's rows (beads-core).
- * - claims still held at session close (beads-core SESSION CLOSE).
+ *   database, so the next export would overwrite a peer's rows.
+ * - claims still held at session close.
  *
  * Gate verification is the only database read initiated at a boundary. It starts
  * asynchronously and the first dispatch or mutation waits for its verdict; session close

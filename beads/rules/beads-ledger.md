@@ -159,9 +159,9 @@ bd list --status open -q |
   awk '/stale/ {print "close", $2, "stale filtered"}' |
   bd batch
 
-# Return reclaimed in-progress items to the implementer pool.
+# Return reclaimed in-progress items to ready with the assignee cleared.
 bd list --status in_progress -q |
-  awk '/reclaim/ {print "update", $2, "assignee=pool:implementer", "status=open"}' |
+  awk '/reclaim/ {print "update", $2, "assignee=\"\"", "status=open"}' |
   bd batch
 
 # Normalize priority for every open item at P2 or lower using JSON selection.
