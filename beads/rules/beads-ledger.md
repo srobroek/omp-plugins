@@ -92,6 +92,8 @@ required:
 - Dependencies encode true ordering only, under DEPENDENCY SEMANTICS, with no
   missing, over-constraining, or cyclic `blocks` edges.
 - Every work bead carries an `execution_agent_type` chosen under AGENT ROUTING.
+- Design decisions are separate decision or research beads that block the work they decide.
+- Review beads depend on every task they review.
 - The plan has an explicit integration and delivery path.
 
 MUST dry-run first and check the reported node and edge counts, for example

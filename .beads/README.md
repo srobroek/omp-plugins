@@ -40,6 +40,8 @@ review is required:
   acceptance criteria.
 - Dependencies encode true ordering only.
 - Every work bead carries an `execution_agent_type` in its metadata.
+- Design decisions are separate decision or research beads that block the work they decide.
+- Review beads depend on every task they review.
 - The plan has an explicit integration and delivery path.
 
 For `bd create --graph`, `parent_key` names a node in the same plan. To attach a
