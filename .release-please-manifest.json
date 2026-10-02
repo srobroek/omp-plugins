@@ -2,7 +2,7 @@
   "architecture": "0.4.3",
   "authoring": "2.1.1",
   "aws": "0.2.0",
-  "beads": "4.0.0",
+  "beads": "4.0.1",
   "build": "1.0.1",
   "chezmoi": "0.4.12",
   "debate": "0.3.3",
