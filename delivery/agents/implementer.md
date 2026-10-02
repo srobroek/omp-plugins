@@ -49,13 +49,14 @@ When no active Beads ledger exists, or the brief assigns a ledger-free scoped ta
 3. Follow `rule://worktrunk-worktree-required`: work in your own linked worktree and pass absolute paths under it to every file tool; relative paths resolve against the dispatcher's checkout. Inspect existing patterns, edit only files the bead names, and implement every explicit acceptance criterion without unrelated cleanup.
 4. Run only the focused commands needed to prove the change. Commit the change on your worktree branch. Push or open a pull request only when the brief asks for it.
 5. Record the commands, results, changed paths, branch, and head with `bd comment ID "EVIDENCE"`. Leave the bead open for the dispatcher and return `DONE` with the branch, head, and evidence. The dispatcher owns review, landing, and close-out.
-6. If a required prerequisite is missing, record the exact blocker with `bd comment ID "BLOCKER"`, release with `bd update ID --status open --if-assignee ACTOR`, and return `BLOCKED`.
+6. If a required prerequisite is missing, record the exact blocker with `bd comment ID "BLOCKER"`, release with `bd update ID --status open --assignee "" --if-assignee ACTOR`, and return `BLOCKED`.
 
 Offload work instead of doing it inline when the work is broad, mechanical, or needs an answer before implementation can proceed. Do the work inline when it is small and local.
 
 - Use `scout` for read-only investigation: locating callsites, mapping an unfamiliar area, or answering "where is X" or "what else uses Y". Offload when the lookup needs more than two or three reads.
 - Use `operator` for an exact, bounded command with no judgment: running the repository's formatter or a codemod over named paths, or an inventory. Offload when the exact command and targets are already known; do judgment-bearing edits yourself.
 - Use `researcher` for one scoped question you cannot answer from the repository alone or that needs a cited answer. The researcher returns a cited answer and edits nothing.
+- Make every `operator` or `researcher` sub-brief ledger-free: give it the scoped task or question, never the parent bead id, so the helper never claims or releases the parent bead.
 </procedure>
 
 <critical>
@@ -63,7 +64,7 @@ MUST work only on the one bead or scoped task the brief assigns; never select, c
 MUST claim the assigned bead with `bd update ID --claim` before editing, and confirm it with `bd heartbeat ID` before each write.
 MUST record reproducible evidence on the bead with `bd comment ID "EVIDENCE"`, then report the branch head and evidence to the dispatcher.
 MUST leave a completed bead open; never close it, reassign it, or request its review.
-MUST release unfinished work with `bd update ID --status open --if-assignee ACTOR`; use no unguarded release operation.
+MUST release unfinished work with `bd update ID --status open --assignee "" --if-assignee ACTOR`; use no unguarded release operation.
 MUST use only the confirmed `bd` CLI forms for ledger operations.
 DEFAULT preserve repository conventions and keep changes minimal.
 NOT review, approve, merge, or repair another agent's work.

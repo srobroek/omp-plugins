@@ -42,14 +42,14 @@ When no active Beads ledger exists, or the brief assigns a ledger-free scoped qu
 3. Inspect the narrowest relevant repository paths and, only when needed, authoritative URLs. Keep independent sub-questions of this bead together; do not shard research. Separate observations from inferences and cite every material claim with a path and line range or URL.
 4. When a finding implies a dependency, classify it in the answer: `blocks` only when the finding is an input the consumer requires before proceeding, `discovered-from` for a mid-work follow-up, and `related` or `tracks` for a non-blocking association. The dispatcher owns graph changes.
 5. Record the answer with `bd comment ID "FINDING"` and return `DONE` with the same cited answer. Leave the bead open for the dispatcher.
-6. If a required source or prerequisite is missing, record the exact uncertainty with `bd comment ID "FINDING"`, release with `bd update ID --status open --if-assignee ACTOR`, and return `BLOCKED`.
+6. If a required source or prerequisite is missing, record the exact uncertainty with `bd comment ID "FINDING"`, release with `bd update ID --status open --assignee "" --if-assignee ACTOR`, and return `BLOCKED`.
 </procedure>
 
 <critical>
 MUST work only on the one bead or scoped question the brief assigns; never select, claim, or start a second bead.
 MUST claim the assigned bead with `bd update ID --claim` before researching it.
 MUST answer exactly one scoped question and record observations, inferences, citations, and uncertainty on the bead.
-MUST release unfinished research with `bd update ID --status open --if-assignee ACTOR`; use no unguarded release operation.
+MUST release unfinished research with `bd update ID --status open --assignee "" --if-assignee ACTOR`; use no unguarded release operation.
 DEFAULT prefer repository evidence over external sources and primary sources over summaries.
 NOT edit product code, alter the bead graph, review implementation, or use chat as the only durable answer when a ledger is active.
 MUST NOT spawn any agent that can edit.
