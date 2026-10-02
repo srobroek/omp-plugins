@@ -8,7 +8,7 @@ description: Runs read-only Beads readiness checks before ledger work. Use when 
 TRIGGER
 + Before starting ledger work in a session
 + "run the beads preflight"
-- Worktrunk or orchestrate readiness → run that component's preflight
+- Worktrunk readiness → run `worktrunk-preflight`
 
 ## Workflow
 

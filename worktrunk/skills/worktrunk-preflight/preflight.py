@@ -114,8 +114,8 @@ class Context:
     def full_config(self) -> CommandResult:
         # Plain `wt config show` already reports plugin status and `[commit.generation]`.
         # `--full` adds a live commit-generation probe that calls the configured LLM
-        # (~30 s and a paid request), which pushed the whole preflight past the
-        # orchestrate sibling timeout.
+        # (~30 s and a paid request), which pushed the whole preflight past a
+        # caller's subprocess timeout.
         return self.run("wt", "config", "show", timeout=60)
 
 

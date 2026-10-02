@@ -599,7 +599,6 @@ function tokenize2(command) {
 }
 
 // extensions/bd-actor-gate.ts
-var ACTOR_NOTICE_ARBITER = Symbol.for("com.srobroek.beads.actor-notice-arbiter.v1");
 var ACTOR_VARS = ["BEADS_ACTOR", "BD_ACTOR"];
 var VALUE_FLAGS2 = new Set([
   "--actor",

@@ -1,6 +1,6 @@
 ---
 name: docs-guard
-description: Checks scoped documentation and documentation lint findings before orchestrate review.
+description: Checks scoped documentation and documentation lint findings before PR review.
 model: "@smol"
 thinking-level: high
 tools: read, grep, glob, web_search

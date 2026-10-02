@@ -1,6 +1,6 @@
 ---
 name: lint-guard
-description: Validates scoped lint findings before orchestrate review.
+description: Validates scoped lint findings before PR review.
 model: "@smol"
 thinking-level: high
 tools: read, grep, glob, web_search

@@ -7,36 +7,6 @@ import type {
 } from "@oh-my-pi/pi-coding-agent";
 import { tokenize } from "./bd-close-gate.ts";
 
-/**
- * Process-wide seam shared with omp-orchestrate. Orchestrate records tool calls whose
- * richer run-scoped actor notice it delivered; this adapter drains the id at tool_result
- * and suppresses only its generic duplicate. The versioned symbol is the whole cross-plugin
- * interface, so the packages remain independently loadable.
- */
-export const ACTOR_NOTICE_ARBITER = Symbol.for(
-	"com.srobroek.beads.actor-notice-arbiter.v1",
-);
-
-interface ActorNoticeArbiter {
-	handledToolCalls: Set<string>;
-}
-
-/** Install the arbiter during extension load, before either plugin can receive a tool call. */
-function installActorNoticeArbiter(): ActorNoticeArbiter {
-	const existing: unknown = Reflect.get(globalThis, ACTOR_NOTICE_ARBITER);
-	if (
-		existing !== null &&
-		typeof existing === "object" &&
-		"handledToolCalls" in existing
-	) {
-		const handledToolCalls = existing.handledToolCalls;
-		if (handledToolCalls instanceof Set) return { handledToolCalls };
-	}
-	const created: ActorNoticeArbiter = { handledToolCalls: new Set<string>() };
-	Reflect.set(globalThis, ACTOR_NOTICE_ARBITER, created);
-	return created;
-}
-
 const ACTOR_VARS = ["BEADS_ACTOR", "BD_ACTOR"] as const;
 type ActorVar = (typeof ACTOR_VARS)[number];
 
@@ -563,14 +533,11 @@ function prepend(
 }
 
 export default function bdActorGate(pi: ExtensionAPI): void {
-	const arbiter = installActorNoticeArbiter();
-
 	pi.on("tool_result", (event: ToolResultEvent) => {
 		try {
-			const claimedByOrchestrate = arbiter.handledToolCalls.delete(event.toolCallId);
 			const text = pendingAdvisory.get(event.toolCallId);
 			pendingAdvisory.delete(event.toolCallId);
-			if (claimedByOrchestrate || !text) return;
+			if (!text) return;
 			return prepend(event, text);
 		} catch {
 			return;

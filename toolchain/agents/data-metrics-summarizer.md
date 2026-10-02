@@ -1,6 +1,6 @@
 ---
 name: data-metrics-summarizer
-description: Compacts scoped logs and metrics before orchestrate analysis.
+description: Compacts scoped logs and metrics before the dispatching agent analyzes them.
 model: "@tiny"
 thinking-level: high
 tools: read, grep, glob, bash, web_search
