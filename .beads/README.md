@@ -33,23 +33,14 @@ bd dolt push
 
 ## Agent planning and sync contract
 
-The lead MUST dispatch a DAG review in the same batch as the first
-implementation dispatch, or earlier. That batch may include work known to be
-independent. The review checks these guard rails:
+Before creating a graph plan, the lead checks it directly; no separate DAG
+review is required:
 
 - Every task names bounded files or symbols and independently verifiable
   acceptance criteria.
-- Design decisions are separate decision or research beads.
-- Review beads depend on every task they review.
 - Dependencies encode true ordering only.
-- Each implementer `metadata.tier` value has a justification.
+- Every work bead carries an `execution_agent_type` in its metadata.
 - The plan has an explicit integration and delivery path.
-
-A failed guard rail requires a revision bead or blocks the work it covers.
-Before work enters a region that the review flagged, and before the plan
-closes, the lead records the review verdict with the plan, nodes, edges, tier
-justifications, and any revision or blocking decision. A missing review is not
-a pass.
 
 For `bd create --graph`, `parent_key` names a node in the same plan. To attach a
 new node to an existing parent bead, use node-level `parent_id`; a dry run must
