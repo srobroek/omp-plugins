@@ -1,5 +1,24 @@
 # Changelog
 
+## [1.0.0](https://github.com/srobroek/omp-plugins/compare/delivery--v0.14.0...delivery--v1.0.0) (2026-10-02)
+
+
+### ⚠ BREAKING CHANGES
+
+* **beads,delivery:** plans no longer require a dispatched DAG review before implementation.
+* **delivery,beads:** the orchestrate plugin, its orchestrator and work-reviewer agents, and the pool-based worker procedure are removed; use delivery's agents with direct assignment and pr-reviewer for PR review.
+
+### Features
+
+* **beads,delivery:** drop the mandatory DAG review; implementers propose splits ([#619](https://github.com/srobroek/omp-plugins/issues/619)) ([124755d](https://github.com/srobroek/omp-plugins/commit/124755d7d373dc6c1f4bc64e13e12b8ff7748ad2))
+* **delivery,beads:** move role agents into delivery and retire orchestrate ([#616](https://github.com/srobroek/omp-plugins/issues/616)) ([75deb86](https://github.com/srobroek/omp-plugins/commit/75deb86f1db415254a9636a5efe2f6cd4c9bc77d))
+* **delivery:** fan out independent work to parallel subagents ([#613](https://github.com/srobroek/omp-plugins/issues/613)) ([95b0f82](https://github.com/srobroek/omp-plugins/commit/95b0f8202cf55b04b4e55b4c13ae7bd4986ffe0c))
+
+
+### Bug Fixes
+
+* **delivery:** shepherd lands only on a PR approval artifact; one shepherd per target ([#618](https://github.com/srobroek/omp-plugins/issues/618)) ([1d10056](https://github.com/srobroek/omp-plugins/commit/1d100568ac8642af5f8a4d83cf48f5719f6fbbcc))
+
 ## [0.14.0](https://github.com/srobroek/omp-plugins/compare/delivery--v0.13.0...delivery--v0.14.0) (2026-09-26)
 
 
