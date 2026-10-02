@@ -84,24 +84,15 @@ Verified fixture showing an existing parent (`parent_id`), a plan-local parent
 The fixture keeps the dependency in the top-level `edges` array; a per-node
 `deps` array is not equivalent.
 
-MUST dispatch the graph plan review in the same batch as the first
-implementation dispatch, or earlier. That batch may include work known to be
-independent. The reviewer MUST record a verdict against each guard rail:
+Before creating a graph plan, check it yourself; no separate plan review is
+required:
 
 - Every task names bounded files or symbols and independently verifiable
   acceptance criteria.
-- Design decisions are separate decision or research beads.
-- Review beads depend on every task they review.
-- Dependencies encode true ordering only: flag both missing `blocks` edges and
-  unnecessary or over-constraining `blocks` edges that impose ordering without a
-  real dependency, as well as cycles.
-- Every work bead carries an `execution_agent_type` that matches the
-  `implementer-high` criteria under AGENT ROUTING, plus
-  `execution_reasoning_effort` only where it deviates.
+- Dependencies encode true ordering only, under DEPENDENCY SEMANTICS, with no
+  missing, over-constraining, or cyclic `blocks` edges.
+- Every work bead carries an `execution_agent_type` chosen under AGENT ROUTING.
 - The plan has an explicit integration and delivery path.
-
-A failed guard rail produces a revision bead or blocks the work it covers. Never
-accept it silently.
 
 MUST dry-run first and check the reported node and edge counts, for example
 `would create 3 issue(s) and 1 edge(s) (2 parent-child link(s))`. That count is
@@ -215,8 +206,3 @@ or continue as though the remote were current. If the final attempt may have
 applied remotely but its result is unknown, report the sync as UNKNOWN and do
 not claim that the ledger is synchronized. Re-run `bd dolt pull` before trusting
 a read that decides assignment after any retry sequence.
-
-Before work enters a region that the review flagged, and before the plan closes,
-record the DAG review verdict and guard-rail evidence on the governing bead.
-Name the plan, nodes, edges, `execution_agent_type` choices, and any revision or blocking
-decision. A missing review is not a pass.

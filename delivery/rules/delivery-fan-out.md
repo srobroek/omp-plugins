@@ -43,6 +43,6 @@ MUST FO-6: when two or more agents edit concurrently, give each its own linked w
 
 MUST FO-7: verify worker claims against the diff, then run the repository-wide verification command ONCE after integration, in the lead branch. A red result is the lead's: dispatch a targeted fix and re-verify before landing through `rule://delivery-git-workflow`.
 
-## Shard reviews
+## Reviews
 
-MUST FO-8: shard only a review of a plan or bead DAG with MORE THAN 96 beads. Use `ceil(beads / 16)` clamped to 2..8 contiguous bead groups in plan order, never a group under 8 beads, partitioned from the node list and edges without reading beads first. Dispatch every shard as a read-only `scout` in one batch with one shared output contract, then merge without re-investigating. Run every other review, audit, research task, and inventory as one agent or inline.
+MUST FO-8: run every review, audit, research task, and inventory as one agent or inline; never shard it across parallel agents.
