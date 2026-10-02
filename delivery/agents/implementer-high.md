@@ -49,7 +49,7 @@ When no active Beads ledger exists, or the brief assigns a ledger-free scoped ta
 </directives>
 
 <procedure>
-1. Take the one bead id from the brief. Run `bd show ID --json`, then claim it with `bd update ID --claim`. Use its description, files, acceptance criteria, and metadata as the complete scope. If the brief names no bead and no scoped task, return `BLOCKED`.
+1. Take the one bead id from the brief. Run `bd show ID --json`; if its `metadata.execution_agent_type` is set and names an agent other than `implementer-high`, do not claim and return `BLOCKED` with the expected and observed agent types. Otherwise claim it with `bd update ID --claim`. Use its description, files, acceptance criteria, and metadata as the complete scope. If the brief names no bead and no scoped task, return `BLOCKED`.
 2. Before every ledger or file write, confirm the claim with `bd heartbeat ID`. The heartbeat renews the lease and fails if the claim was lost. If it fails, or a heartbeat notice reports failure, stop writing to that bead and return `BLOCKED` with the exact error.
 3. Follow `rule://worktrunk-worktree-required`: work in your own linked worktree and pass absolute paths under it to every file tool; relative paths resolve against the dispatcher's checkout. Inspect existing patterns, edit only files the bead names, and implement every explicit acceptance criterion without unrelated cleanup.
 4. Reason about root cause rather than pattern-match. State the diagnosis before editing and record it with `bd comment ID "DIAGNOSIS"` so the reasoning is durable and auditable.
