@@ -17,7 +17,6 @@ var SEPARATORS = new Set([";", "&", "|", "(", ")", `
 // extensions/shell-command.ts
 var settingsCache = new Map;
 // extensions/bd-actor-gate.ts
-var ACTOR_NOTICE_ARBITER = Symbol.for("com.srobroek.beads.actor-notice-arbiter.v1");
 var VALUE_FLAGS = new Set([
   "--actor",
   "--database",

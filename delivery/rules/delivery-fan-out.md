@@ -24,7 +24,7 @@ MUST FO-3: size by independent ready units. With 1 unit, do it yourself. With 2 
 
 MUST FO-4: every brief is self-contained; subagents share no conversation. State the goal, the exact target files, the interface or contract it must honor, observable acceptance, and "edit only: skip builds, tests, linters, and formatters".
 
-MUST FO-5: dispatch implementation on the default `task` tier. NEVER pin a higher-tier model for well-specified work.
+MUST FO-5: read each bead's `execution_agent_type` metadata before spawning, and dispatch the bead to the agent it names: default `implementer`; `implementer-high` only when the bead says so under the criteria in `rule://beads-ledger` (root-cause/debugging work, concurrency or data-integrity logic, cross-module contract changes, algorithmic or numeric precision rules, or acceptance that needs design judgment beyond the bead text). Pass `execution_reasoning_effort` when set. NEVER pin a higher tier for a bead without that metadata.
 
 ## Helpers
 

@@ -1,7 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import bashGates from "./bash-gates.ts";
 import bdActorGate, {
-	ACTOR_NOTICE_ARBITER,
 	actorPresent,
 	actorValues,
 	agentActor,
@@ -17,10 +16,6 @@ import bdActorGate, {
 
 const emptyEnv = {} as NodeJS.ProcessEnv;
 const actorEnv = { BEADS_ACTOR: "omp/GateBuilder/backlog" } as NodeJS.ProcessEnv;
-
-afterEach(() => {
-	Reflect.deleteProperty(globalThis, ACTOR_NOTICE_ARBITER);
-});
 
 describe("extractCommand", () => {
 	test("reads command then cmd", () => {

@@ -13,6 +13,11 @@ MUST set acceptance criteria at creation for every bead that will be reviewed, u
 # METADATA
 MUST put useful facts in bead `metadata`, not comments or the description, including git anchors (`repo`, `branch`, `base_sha`, `worktree`, `pr`, `merge_sha`). Keep rationale in the description.
 
+# AGENT ROUTING
+MUST set `execution_agent_type` in `metadata` at creation on every work bead, with one of `implementer`, `implementer-high`, `researcher`, or `operator`. Add `execution_reasoning_effort` (`low`, `medium`, `high`, or `xhigh`) ONLY when the bead deviates from that agent's default effort. These are bd's documented advisory execution keys; the dispatching parent reads them before spawning. Example: `bd create "title" -t task -p 2 --metadata '{"execution_agent_type":"implementer"}' --acceptance "CRITERIA"`; in a graph plan, put the same keys in the node's `metadata`.
+
+Choose `implementer-high` for root-cause/debugging work, concurrency or data-integrity logic, cross-module contract changes, algorithmic or numeric precision rules, or a bead whose acceptance needs design judgment beyond the bead text; otherwise `implementer`. Planners commonly under-assign the high tier (a planning experiment caught only 29-36% of complex beads), so apply these criteria to each bead individually rather than defaulting the whole plan.
+
 # MULTILINE TEXT
 MUST pass multiline bead text through a file: `bd create|update ... --body-file notes.md` (or `--stdin`) for a description, `bd comments add ID --file notes.md` for a comment. A `\n` inside a quoted argument is stored as a literal backslash-n, not a paragraph break. The embedded-write gate accepts the `--body-file` form.
 
@@ -90,7 +95,9 @@ independent. The reviewer MUST record a verdict against each guard rail:
 - Dependencies encode true ordering only: flag both missing `blocks` edges and
   unnecessary or over-constraining `blocks` edges that impose ordering without a
   real dependency, as well as cycles.
-- Each implementer has a justified `metadata.tier`.
+- Every work bead carries an `execution_agent_type` that matches the
+  `implementer-high` criteria under AGENT ROUTING, plus
+  `execution_reasoning_effort` only where it deviates.
 - The plan has an explicit integration and delivery path.
 
 A failed guard rail produces a revision bead or blocks the work it covers. Never
@@ -211,5 +218,5 @@ a read that decides assignment after any retry sequence.
 
 Before work enters a region that the review flagged, and before the plan closes,
 record the DAG review verdict and guard-rail evidence on the governing bead.
-Name the plan, nodes, edges, tier justifications, and any revision or blocking
+Name the plan, nodes, edges, `execution_agent_type` choices, and any revision or blocking
 decision. A missing review is not a pass.

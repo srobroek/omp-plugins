@@ -5,7 +5,7 @@ description: Run deterministic Worktrunk checks before an agent run, merge, or f
 
 # Worktrunk Preflight
 
-Run this skill from the repository cwd before starting work, running focused tests, or merging a branch. It works without Orchestrate and without Beads.
+Run this skill from the repository cwd before starting work, running focused tests, or merging a branch. It works without Beads.
 
 ## Invocation
 

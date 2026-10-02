@@ -91,6 +91,11 @@ The adapter supports verified GitHub and GitLab remotes only. It uses `gh` for G
 | `pr-reviewer` | Read-only pull-request reviewer. It returns a `VERDICT:` line and does not edit the checkout. |
 | `integrator` | When `beads.ledgerActive` is true, verifies completed reconciliation before cleaning the merged worktree and branch; inactive retired/no-ledger receipts skip directly to cleanup. |
 | `worktree-reaper` | Report-only escalation invoked by the main agent or run lead after the third hygiene reminder. It inventories residual state and never authorizes removal. |
+| `implementer` | Default implementation tier. Implements one assigned bead in its own linked worktree, records evidence, and reports its branch head; it does not review, merge, or close. |
+| `implementer-high` | Reasoning-heavy implementation tier for root-cause, concurrency or data-integrity, cross-module contract, numeric-precision, or design-judgment work; records its diagnosis with the evidence. |
+| `researcher` | Read-only researcher. Answers one assigned question with cited observations and inferences and edits no product code. |
+| `operator` | Mechanical worker. Runs one exact bounded command over explicit targets and records the observed result. |
+| `shepherd` | Lands one reviewed PR after an exact-head `APPROVE` verdict and green checks via `delivery_land`, closes receipt beads, runs `delivery_cleanup`, and hands refusals back to the author. |
 
 The agent that creates a PR owns its automated review loop through landing or explicit human escalation. Workers dispatched by a lead do not request or act on review rounds for the lead's PR. The agent that merges a branch owns cleanup under repository policy. If no merging agent is live, the main agent owns cleanup. The main agent or run lead must orient before a role-restricted step. `delivery_cleanup` does not enforce actor identity or require the caller to run from a linked worktree; it validates the caller-supplied receipt target. Repository policy assigns ownership.
 
