@@ -6,6 +6,24 @@
 
 - Require Beads `blocks` dependencies to encode true prerequisites so independent work remains parallelizable.
 
+## [4.0.0](https://github.com/srobroek/omp-plugins/compare/beads--v3.2.0...beads--v4.0.0) (2026-10-02)
+
+
+### ⚠ BREAKING CHANGES
+
+* **beads,delivery:** plans no longer require a dispatched DAG review before implementation.
+* **delivery,beads:** the orchestrate plugin, its orchestrator and work-reviewer agents, and the pool-based worker procedure are removed; use delivery's agents with direct assignment and pr-reviewer for PR review.
+
+### Features
+
+* **beads,delivery:** drop the mandatory DAG review; implementers propose splits ([#619](https://github.com/srobroek/omp-plugins/issues/619)) ([124755d](https://github.com/srobroek/omp-plugins/commit/124755d7d373dc6c1f4bc64e13e12b8ff7748ad2))
+* **delivery,beads:** move role agents into delivery and retire orchestrate ([#616](https://github.com/srobroek/omp-plugins/issues/616)) ([75deb86](https://github.com/srobroek/omp-plugins/commit/75deb86f1db415254a9636a5efe2f6cd4c9bc77d))
+
+
+### Bug Fixes
+
+* **beads:** clear assignee in reclaim batch example; drop dead rule citations ([#617](https://github.com/srobroek/omp-plugins/issues/617)) ([5b5bdfa](https://github.com/srobroek/omp-plugins/commit/5b5bdfaaed74876582d5e20457389c543b459f74))
+
 ## [3.2.0](https://github.com/srobroek/omp-plugins/compare/beads--v3.1.1...beads--v3.2.0) (2026-09-29)
 
 

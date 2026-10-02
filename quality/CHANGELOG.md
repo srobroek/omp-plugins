@@ -1,5 +1,16 @@
 # Changelog
 
+## [2.0.0](https://github.com/srobroek/omp-plugins/compare/quality--v1.3.5...quality--v2.0.0) (2026-10-02)
+
+
+### ⚠ BREAKING CHANGES
+
+* **delivery,beads:** the orchestrate plugin, its orchestrator and work-reviewer agents, and the pool-based worker procedure are removed; use delivery's agents with direct assignment and pr-reviewer for PR review.
+
+### Features
+
+* **delivery,beads:** move role agents into delivery and retire orchestrate ([#616](https://github.com/srobroek/omp-plugins/issues/616)) ([75deb86](https://github.com/srobroek/omp-plugins/commit/75deb86f1db415254a9636a5efe2f6cd4c9bc77d))
+
 ## [1.3.5](https://github.com/srobroek/omp-plugins/compare/quality--v1.3.4...quality--v1.3.5) (2026-09-29)
 
 
