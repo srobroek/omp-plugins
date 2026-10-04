@@ -1,0 +1,11 @@
+{
+  "name": "@srobroek/journeys",
+  "version": "0.1.0",
+  "description": "User journeys: author, validate, and maintain journey documents.",
+  "private": true,
+  "omp": {
+    "extensions": [
+      "./extensions/journeys-tool.ts"
+    ]
+  }
+}

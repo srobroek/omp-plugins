@@ -107,8 +107,15 @@
       "category": "language"
     },
     {
+      "name": "journeys",
+      "description": "User journeys: author, validate, and maintain journey documents.",
+      "source": "./journeys",
+      "version": "0.1.0",
+      "category": "productivity"
+    },
+    {
       "name": "project",
-      "description": "Project lifecycle: license selection and user journeys.",
+      "description": "Project lifecycle: license selection.",
       "source": "./project",
       "version": "1.3.3",
       "category": "productivity"
