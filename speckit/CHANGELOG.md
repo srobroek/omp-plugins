@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.8.0](https://github.com/srobroek/omp-plugins/compare/speckit--v0.7.7...speckit--v0.8.0) (2026-10-04)
+
+
+### Features
+
+* ask before enabling routine SpecKit approvals ([#623](https://github.com/srobroek/omp-plugins/issues/623)) ([6c9569a](https://github.com/srobroek/omp-plugins/commit/6c9569a3cc871f161131877f15ef9a7c431b0b87))
+
 ## [0.7.7](https://github.com/srobroek/omp-plugins/compare/speckit--v0.7.6...speckit--v0.7.7) (2026-09-29)
 
 
