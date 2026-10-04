@@ -103,12 +103,12 @@ export async function startSpec(options: StartOptions, command: Command): Promis
 			throw new Error("Legacy run has no complete routine approval graph; cannot claim approvals are enabled");
 		}
 	}
-	if (migration && options.migrate !== true) {
+	if (root && migration && options.migrate !== true) {
 		const question = `Explicitly migrate existing run ${root.id} to omit routine approvals, resolving only its routine formula approval gates while preserving history? Yes or no.`;
 		return { status: "MIGRATION_REQUIRED", root: root.id, question, text: question };
 	}
 	if ((saved === undefined || migration) && !options.decision?.trim()) throw new Error("Record the explicit user decision before creating or migrating a workflow");
-	if (migration) await migrateRoutine(root, options, command);
+	if (root && migration) await migrateRoutine(root, options, command);
 	const mode = selected === "yes" ? "no" : "yes";
 	if (!root) {
 		const poured = object(payload(await command(["mol", "pour", profile, "--var", `feature=${options.spec}`, "--var", `autonomous=${mode}`])));
