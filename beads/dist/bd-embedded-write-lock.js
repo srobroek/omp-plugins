@@ -1,11 +1,11 @@
 // @bun
-// beads/extensions/bd-embedded-write-lock.ts
+// extensions/bd-embedded-write-lock.ts
 import { spawnSync as spawnSync2 } from "child_process";
 import { closeSync, existsSync, openSync, readFileSync, realpathSync as realpathSync2, statSync as statSync2, unlinkSync, writeSync } from "fs";
 import { hostname } from "os";
 import { basename, dirname as dirname2, isAbsolute as isAbsolute2, join, resolve as resolve3 } from "path";
 
-// beads/extensions/shell-tokenizer.ts
+// extensions/shell-tokenizer.ts
 var SEPARATORS = new Set([";", "&", "|", "(", ")", `
 `]);
 function token(value, startsQuoted = false, sawQuote = false) {
@@ -172,7 +172,7 @@ function hereDocumentBody(command, from, document) {
   return { bodyEnd: command.length, terminatorEnd: command.length };
 }
 
-// beads/extensions/shell-command.ts
+// extensions/shell-command.ts
 import { resolve } from "path";
 var WRAPPERS = {
   mise: true,
@@ -317,7 +317,7 @@ function leadingCdCwd(command, cwd) {
   return dir.startsWith("/") ? dir : resolve(cwd, dir);
 }
 var settingsCache = new Map;
-// beads/extensions/bd-actor-gate.ts
+// extensions/bd-actor-gate.ts
 var VALUE_FLAGS = new Set([
   "--actor",
   "--database",
@@ -393,7 +393,7 @@ function invocationFromArgv(args) {
   return { verb: verb.toLowerCase(), args: args.slice(scanned.next + 1), globals: scanned.globals, prefix: [], exported: {}, unset: {} };
 }
 
-// beads/extensions/beads-store.ts
+// extensions/beads-store.ts
 import { spawnSync } from "child_process";
 import { lstatSync, realpathSync, statSync } from "fs";
 import { dirname, isAbsolute, resolve as resolve2 } from "path";
@@ -470,7 +470,7 @@ function isDir(path) {
   }
 }
 
-// beads/extensions/bd-embedded-write-lock.ts
+// extensions/bd-embedded-write-lock.ts
 var LOCK_NAME = "omp-embedded-write.lock";
 var STEAL_NAME = "omp-embedded-write-steal.lock";
 var LEASE_MS = 120000;
