@@ -2,7 +2,7 @@
 #
 # Install: copy this file into <repo>/.beads/formulas/ (or ~/.beads/formulas/).
 # Pour one molecule per feature:
-#   bd mol pour speckit-basic --var feature=<NNN-slug>
+#   bd mol pour speckit-basic --var feature=<NNN-slug> --var autonomous=<yes|no>
 #
 # Every /speckit.* command here ships with spec-kit itself: specify,
 # clarify, plan, tasks, analyze. Verification requires no community extension.
@@ -20,15 +20,13 @@ type = "workflow"
 required = true
 pattern = "^[0-9]{3}-[a-z0-9-]+$"
 
-# Default "no" preserves human approval gates. Validate exactly "yes" or "no".
-# Set "yes" only with explicit user authorization to waive this run's human gates;
-# record the waiver on the molecule root. Unattended mode or human unavailability
-# is not consent: without a waiver preserve the blocked gate.
-# Record review findings and what a reviewer would have been asked on each
-# preceding step. Verification remains mandatory in either mode.
+# Ask whether routine human approvals are required before pouring.
+# Pass "no" for approvals enabled, or "yes" for approvals declined.
+# Persist the explicit choice on the root; reuse it on resume.
+# Reviews, verification, tests, and safety/provider confirmations remain required.
 [vars.autonomous]
-required = false
-default = "no"
+required = true
+pattern = "^(yes|no)$"
 
 
 [[steps]]

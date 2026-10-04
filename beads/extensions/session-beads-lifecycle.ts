@@ -588,7 +588,7 @@ export function readCheckOutcome(stdout: string): CheckOutcome | undefined {
 
 export function formatGateAdvisory(gates: Gate[], outcome: CheckOutcome | undefined): string | undefined {
 	if (gates.length === 0) return undefined;
-	const lines = [`${gates.length} open beads gate(s) block work in this repository:`];
+	const lines = [`${gates.length} open beads gate(s); only their actual dependency consumers must wait:`];
 	for (const gate of gates.slice(0, MAX_LISTED)) {
 		const blocks = gate.blocks ? ` blocks ${gate.blocks}` : "";
 		const reason = gate.reason ? ` -- ${gate.reason}` : "";
@@ -602,6 +602,9 @@ export function formatGateAdvisory(gates: Gate[], outcome: CheckOutcome | undefi
 	}
 	lines.push(
 		"A human gate resolves only through a recorded human decision (`bd gate resolve <id>`); never force-close a gated issue around one.",
+	);
+	lines.push(
+		"Future-stage or unrelated gates do not block independent work, pre-spec work, or governance work. Check the selected work's dependency edges before waiting; retain all required safety/provider confirmations.",
 	);
 	return lines.join("\n");
 }

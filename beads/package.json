@@ -3,6 +3,9 @@
   "version": "4.0.0",
   "description": "Beads issue tracking: dependency DAGs, formulas, and decisions recorded as beads.",
   "private": true,
+  "exports": {
+    "./embedded-write": "./dist/bd-embedded-write-lock.js"
+  },
   "omp": {
     "extensions": [
       "./dist/bash-gates.js",
@@ -10,7 +13,8 @@
       "./dist/session-beads-lifecycle.js"
     ],
     "programs": [
-      "./extensions/bd-embedded-write-runner.ts"
+      "./extensions/bd-embedded-write-runner.ts",
+      "./extensions/bd-embedded-write-lock.ts"
     ]
   }
 }
