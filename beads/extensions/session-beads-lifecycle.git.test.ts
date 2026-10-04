@@ -1072,6 +1072,29 @@ describe.serial("integration", () => {
 		}
 	});
 
+	test.serial("unresolved human gates do not block independent dispatch or claims", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "beads-independent-gate-work-"));
+		mkdirSync(join(dir, ".beads"));
+		const humanGate = JSON.stringify([{ id: "approval", await_type: "human", description: "Ad-hoc gate blocking dependent-task", status: "open" }]);
+		const commands: string[][] = [];
+		setBdStreamForTests(async (_cwd, args) => {
+			commands.push(args);
+			return humanGate;
+		});
+		try {
+			const { handlers } = wire();
+			const ctx = { cwd: dir, sessionManager: { getSessionId: () => "independent-human-gate" } };
+			await handlers.session_start![0]!({}, ctx);
+			await settleBackgroundWorkForTests();
+			expect(await admitBeadsWork(ctx as never)).toBeUndefined();
+			expect(await admitBdMutation({ command: "bd update independent-task --claim", cwd: dir }, ctx as never)).toBeUndefined();
+			expect(commands.every(args => args[0] === "gate" && args[1] === "list")).toBe(true);
+		} finally {
+			setBdStreamForTests(null);
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
 	test.serial("a completed verdict is consumed before a later dispatch refreshes it", async () => {
 		const dir = mkdtempSync(join(tmpdir(), "beads-gate-dispatch-refresh-"));
 		mkdirSync(join(dir, ".beads"));

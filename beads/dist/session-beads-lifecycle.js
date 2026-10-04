@@ -1,12 +1,12 @@
 // @bun
-// extensions/session-beads-lifecycle.ts
+// beads/extensions/session-beads-lifecycle.ts
 import { existsSync as existsSync2, readFileSync as readFileSync2, realpathSync as realpathSync3, rmSync, statSync as statSync3 } from "fs";
 import { dirname as dirname3, isAbsolute as isAbsolute3, join as join2, resolve as resolve5 } from "path";
 
-// extensions/bd-actor-gate.ts
+// beads/extensions/bd-actor-gate.ts
 import { basename, relative, resolve as resolve2, sep } from "path";
 
-// extensions/shell-tokenizer.ts
+// beads/extensions/shell-tokenizer.ts
 var SEPARATORS = new Set([";", "&", "|", "(", ")", `
 `]);
 function token(value, startsQuoted = false, sawQuote = false) {
@@ -191,7 +191,7 @@ function hereDocumentBody(command, from, document) {
   return { bodyEnd: command.length, terminatorEnd: command.length };
 }
 
-// extensions/shell-command.ts
+// beads/extensions/shell-command.ts
 import { resolve } from "path";
 var OPERATORS = { ";": true, "&&": true, "||": true, "&": true, "|": true, "\n": true, "(": true, ")": true, "{": true, "}": true };
 var WRAPPERS = {
@@ -593,12 +593,12 @@ function closeInvocations(command) {
   return out;
 }
 var settingsCache = new Map;
-// extensions/bd-close-gate.ts
+// beads/extensions/bd-close-gate.ts
 function tokenize2(command) {
   return tokenizeShell(command).map(({ value }) => value);
 }
 
-// extensions/bd-actor-gate.ts
+// beads/extensions/bd-actor-gate.ts
 var ACTOR_VARS = ["BEADS_ACTOR", "BD_ACTOR"];
 var VALUE_FLAGS2 = new Set([
   "--actor",
@@ -943,13 +943,13 @@ function isMutatingBdCommand(command) {
   return bdInvocations(command).some(isMutatingInvocation);
 }
 
-// extensions/bd-embedded-write-lock.ts
+// beads/extensions/bd-embedded-write-lock.ts
 import { spawnSync as spawnSync2 } from "child_process";
 import { closeSync, existsSync, openSync, readFileSync, realpathSync as realpathSync2, statSync as statSync2, unlinkSync, writeSync } from "fs";
 import { hostname } from "os";
 import { basename as basename2, dirname as dirname2, isAbsolute as isAbsolute2, join, resolve as resolve4 } from "path";
 
-// extensions/beads-store.ts
+// beads/extensions/beads-store.ts
 import { spawnSync } from "child_process";
 import { lstatSync, realpathSync, statSync } from "fs";
 import { dirname, isAbsolute, resolve as resolve3 } from "path";
@@ -1026,7 +1026,7 @@ function isDir(path) {
   }
 }
 
-// extensions/bd-embedded-write-lock.ts
+// beads/extensions/bd-embedded-write-lock.ts
 var LOCK_NAME = "omp-embedded-write.lock";
 var STEAL_NAME = "omp-embedded-write-steal.lock";
 var LEASE_MS = 120000;
@@ -1559,7 +1559,7 @@ async function withEmbeddedWriteLock(cwd, owner, write, env = process.env, deadl
   }
 }
 
-// extensions/bd-lease-gate.ts
+// beads/extensions/bd-lease-gate.ts
 var BD_ID = /^[A-Za-z][A-Za-z0-9]*(?:-[A-Za-z0-9]+)+(?:\.\d+)*$/;
 function claimedIds(output) {
   const ids = new Set;
@@ -1590,7 +1590,7 @@ function claimResultOutput(event) {
 `);
 }
 
-// extensions/session-beads-lifecycle.ts
+// beads/extensions/session-beads-lifecycle.ts
 var EMBEDDED_PIN_ENV = { BEADS_DOLT_SHARED_SERVER: "" };
 function boundedBdEnvironment(base) {
   return {
@@ -2007,7 +2007,7 @@ function readCheckOutcome(stdout) {
 function formatGateAdvisory(gates, outcome) {
   if (gates.length === 0)
     return;
-  const lines = [`${gates.length} open beads gate(s) block work in this repository:`];
+  const lines = [`${gates.length} open beads gate(s); only their actual dependency consumers must wait:`];
   for (const gate of gates.slice(0, MAX_LISTED)) {
     const blocks = gate.blocks ? ` blocks ${gate.blocks}` : "";
     const reason = gate.reason ? ` -- ${gate.reason}` : "";
@@ -2019,6 +2019,7 @@ function formatGateAdvisory(gates, outcome) {
     lines.push(`\`bd gate check\` ran at session start: ${outcome.resolved} resolved, ${outcome.escalated} escalated, ${outcome.errors} errors.`);
   }
   lines.push("A human gate resolves only through a recorded human decision (`bd gate resolve <id>`); never force-close a gated issue around one.");
+  lines.push("Future-stage or unrelated gates do not block independent work, pre-spec work, or governance work. Check the selected work's dependency edges before waiting; retain all required safety/provider confirmations.");
   return lines.join(`
 `);
 }
