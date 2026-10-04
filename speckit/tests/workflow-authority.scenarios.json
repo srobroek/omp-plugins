@@ -1,24 +1,39 @@
 {
   "scenarios": [
     {
-      "id": "unattended-without-waiver",
-      "given": "No human is available; no explicit gate waiver exists",
-      "expect": "autonomous=no; preserve blocked gates and report the wait"
+      "id": "start-without-choice",
+      "given": "No recorded approval choice exists",
+      "expect": "Ask whether routine human approvals are required before creating gates; wait for an explicit answer"
     },
     {
-      "id": "unattended-is-not-waiver",
-      "given": "User asks for an unattended run without waiving approval gates",
-      "expect": "autonomous=no; request an explicit waiver before omitting gates"
+      "id": "unattended-is-not-choice",
+      "given": "User asks for an unattended run without selecting routine approvals",
+      "expect": "Ask at workflow start; do not pour gated defaults before the answer"
     },
     {
-      "id": "authorized-waiver",
-      "given": "User explicitly waives this run's human approval gates",
-      "expect": "autonomous=yes permitted; record waiver on root and review findings on preceding steps; verification remains mandatory"
+      "id": "approvals-declined",
+      "given": "User declines routine human approvals for this spec/run",
+      "expect": "Persist human_approvals=no and autonomous=yes on root; omit routine sign-offs, retain reviews/tests/safety confirmations"
     },
     {
       "id": "invalid-autonomy",
       "given": "autonomous is not exactly yes or no",
       "expect": "Reject before pour"
+    },
+    {
+      "id": "resume-recorded-choice",
+      "given": "A resumed spec/run has an explicit recorded approval choice",
+      "expect": "Reuse and display the choice; do not ask again or change it silently"
+    },
+    {
+      "id": "existing-gated-migration",
+      "given": "An existing run has human gates but no recorded approval choice",
+      "expect": "Ask before advancing; require explicit migration authorization to omit routine approvals; retain history and never silently resolve gates"
+    },
+    {
+      "id": "independent-work",
+      "given": "An unresolved future-stage or unrelated human gate exists",
+      "expect": "Only actual dependency consumers wait; independent settled implementation and pre-spec/governance work continue"
     },
     {
       "id": "basic-verification",

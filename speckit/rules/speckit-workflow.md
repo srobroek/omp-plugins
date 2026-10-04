@@ -27,7 +27,7 @@ NOT Proceed with open questions, unresolved gaps, or unapproved intent changes.
 SETUP (`speckit_setup` only)
 MUST Copy every `formulas/*.formula.toml` from this plugin into `.beads/formulas/`
   (the `speckit-setup` skill / `speckit_setup` tool does this). Keep `mol-`
-  prefixed filenames — `bd mol bond` resolves only prefixed stems.
+  prefixed filenames; `bd mol bond` resolves only prefixed stems.
 DEFAULT Without a beads workspace, preserve upstream SpecKit artifact behavior.
 
 SPEC IDENTITY (spec-producing commands)
@@ -37,17 +37,40 @@ MUST Set `--spec-id <NNN-slug>` on every bead a spec produces, including
 MOLECULE PER FEATURE (spec-producing commands)
 MUST Pour one molecule per spec dir. Profiles: `speckit-basic`,
   `speckit-lean`, `speckit-feature`. All take `autonomous` and
-  `agent_assign`. `bd mol pour <profile> --var feature=<NNN-slug>`, then
-  `bd update <root-id> --spec-id <NNN-slug> --metadata '{"spec_dir":"specs/<NNN-slug>"}'`.
+  `agent_assign`. Pass an explicit `--var autonomous=<yes|no>` when pouring,
+  then `bd update <root-id> --spec-id <NNN-slug>
+  --set-metadata spec_dir=specs/<NNN-slug>`.
 DEFAULT Track position with `bd mol current <root-id>`.
 
-SPEC START (`/speckit.specify` only)
+MUST Use `speckit_start` for runtime-native workflows or the plugin's
+  `tools/spec-start.ts` CLI for workflow start and resume.
+MUST On `CHOICE_REQUIRED` or `MIGRATION_REQUIRED`, ask the returned question
+  and supply only the explicit user answer and decision when invoking it again.
+SPEC START (new or resumed spec lifecycle, CLI and runtime-native skills)
+MUST Before pouring, bonding, or advancing, find the spec's existing molecule root;
+  read its metadata if one exists.
+MUST Reuse a recorded `human_approvals` choice of exactly `yes` or `no`.
+MUST If no choice is recorded, ask: "Require routine human approval checkpoints
+  for this spec/run? Yes or no." Wait for an explicit answer before creating gates.
+MUST Map `human_approvals=yes` to `autonomous=no`, and `human_approvals=no`
+  to `autonomous=yes`. Neither unattended mode nor human unavailability is an answer.
+MUST Persist the choice with `bd update <root-id> --set-metadata human_approvals=<yes|no>
+  --set-metadata autonomous=<no|yes> --append-notes "<explicit user decision>"`,
+  retaining `spec_dir`; read back with `bd show <root-id> --json` before advancing.
+MUST Stop on invalid or contradictory recorded values; obtain an explicit correction
+  without changing the existing gate graph silently.
+MUST Report the spec/run, both selections, the enabled routine checkpoints,
+  and that reviews, tests, and consequential safety/provider confirmations remain required.
+MUST On an existing gated run, obtain explicit migration authorization before
+  changing its recorded choice. Record the decision and preserve gate history.
+NOT Silently resolve or force-close existing human gates during migration.
 MUST At `/speckit.specify`, query parked work (`bd list --status deferred --json`)
   and surface hits before writing the spec.
-MUST Pour a molecule before writing the spec. Profiles live in this plugin's
-  `formulas/`; `bd cook <name>`. Use `--var agent_assign=no` if that extension
-  is missing. Validate `autonomous` and `agent_assign` as exactly `yes` or `no`
-  before pouring.
+MUST Pour before writing the spec, after obtaining the explicit choice;
+  persist the choice on the new root before advancing to specification work.
+  Profiles live in this plugin's `formulas/`; `bd cook <name>`.
+  Use `--var agent_assign=no` if that extension is missing.
+MUST Validate `autonomous` and `agent_assign` as exactly `yes` or `no` before pouring.
 
 TASK STATE (task-producing commands)
 MUST When /speckit.tasks instructs writing specs/*/tasks.md, create beads
@@ -59,12 +82,16 @@ MUST Keep the implement parent open until every implementation child is closed.
 
 GATES (molecule lifecycle commands)
 MUST Resolve a human gate with `bd gate resolve <gate-id>` then `bd close <step-id>`.
-MUST Use `--var autonomous=yes` only after explicit user authorization to waive
-  this run's human approval gates; record the waiver on the molecule root.
-DEFAULT Use `autonomous=no`; unattended mode or an unavailable human is not a
-  waiver. Without authorization, preserve the blocked gate and report the wait.
-MUST For each waived gate, record on its preceding step the review findings and
-  what a reviewer would have been asked. Run all verification regardless of waiver.
+MUST Omit routine clarify, analyze, and verification sign-off gates only when
+  the recorded choice is `human_approvals=no`; retain them when it is `yes`.
+MUST Record review findings and the questions a reviewer would have been asked
+  on each preceding step when routine sign-off is omitted.
+MUST Run clarification, analysis, independent spec/security/code reviews,
+  verification, and tests regardless of the routine approval choice.
+NOT Waive consequential safety/provider confirmations or unresolved requirements.
+MUST Wait only on gates that are actual dependencies of the selected work.
+NOT Treat future-stage or unrelated gates as a repository-wide blockade;
+  independent settled implementation, pre-spec, and governance work may continue.
 NOT `bd close <gate-id>` to resolve a gate; the `bd-close-gate` extension checks
   literal ids against the database and blocks gate closure.
 

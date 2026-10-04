@@ -7,6 +7,7 @@
     "extensions": [
       "./extensions/tasks-guard.ts",
       "./extensions/speckit-setup-tool.ts",
+      "./extensions/speckit-start-tool.ts",
       "./extensions/taskstoissues-gate.ts"
     ]
   }

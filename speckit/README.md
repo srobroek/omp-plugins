@@ -31,6 +31,38 @@ Setup installs the bundled formulas into the repo's `.beads/formulas/`.
 - Depth: `speckit-basic`, `speckit-lean`, `speckit-feature`
 - Bonds: `mol-speckit-iterate`, `mol-speckit-fix-findings`, `mol-speckit-bugfix`, `mol-speckit-refine`
 
+### Routine human approvals
+
+Use `speckit_start` in OMP or run this plugin's `tools/spec-start.ts` with Bun.
+Pass `--spec NNN-slug` and `--workspace` with the canonical repository root containing `.beads`.
+The starter asks before creating approvals and persists the answer on the workflow root.
+Setup must install the selected formula first; the low-level formula requires explicit `autonomous` and has no default.
+
+The CLI and tool share the same approval policy and Beads write runner.
+When package resolution cannot find Beads, pass its installed package root with
+`--beads-plugin` (CLI) or `beadsPlugin` (tool).
+The selected Beads package must export `./embedded-write`; no raw write fallback runs.
+
+For an explicit noninteractive answer, provide `--approvals yes|no` and `--decision`.
+An existing gated run additionally requires separate `--migrate` consent before declining routine approvals.
+The tool uses `approvals`, `decision`, and `migrate` for those same selections.
+Use `--root` or `root` to select one run when the spec has multiple recorded runs.
+
+| Human approvals | Formula selection | Routine sign-offs |
+|---|---|---|
+| Required | `autonomous=no` | Retained |
+| Declined | `autonomous=yes` | Omitted |
+
+Record `human_approvals`, `autonomous`, and the explicit decision on the workflow root.
+Resumed runs reuse that choice and display it; runs without a choice ask before advancing.
+Existing gated runs require explicit migration consent and retain their approval history.
+Never silently resolve an existing human approval.
+
+Clarification, analysis, independent reviews, verification, and tests remain required.
+The choice does not waive consequential safety/provider confirmations or unresolved requirements.
+Only actual dependency consumers wait for an approval; unrelated work can continue.
+
+
 ## Guards
 
 | Guard | Surface | Behavior |
