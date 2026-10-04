@@ -1,5 +1,16 @@
 # Changelog
 
+## [2.0.0](https://github.com/srobroek/omp-plugins/compare/find-tools--v1.2.0...find-tools--v2.0.0) (2026-10-04)
+
+
+### ⚠ BREAKING CHANGES
+
+* **journeys:** the journey skills, agents and journeys tool are no longer part of @srobroek/project; install @srobroek/journeys to keep them.
+
+### Features
+
+* **journeys:** move the journey subsystem out of project into a new journeys plugin ([#624](https://github.com/srobroek/omp-plugins/issues/624)) ([a6a7394](https://github.com/srobroek/omp-plugins/commit/a6a7394b081c562eb241bf832667709ed32d85fb))
+
 ## [1.2.0](https://github.com/srobroek/omp-plugins/compare/find-tools--v1.1.1...find-tools--v1.2.0) (2026-09-28)
 
 
