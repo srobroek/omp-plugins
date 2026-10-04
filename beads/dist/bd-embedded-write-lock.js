@@ -1,7 +1,7 @@
 // @bun
 // extensions/bd-embedded-write-lock.ts
 import { spawnSync as spawnSync2 } from "child_process";
-import { closeSync, existsSync, openSync, readFileSync, realpathSync as realpathSync2, statSync as statSync2, unlinkSync, writeSync } from "fs";
+import { closeSync, existsSync, openSync, readdirSync, readFileSync, realpathSync as realpathSync2, statSync as statSync2, unlinkSync, writeSync } from "fs";
 import { hostname } from "os";
 import { basename, dirname as dirname2, isAbsolute as isAbsolute2, join, resolve as resolve3 } from "path";
 
@@ -1078,18 +1078,50 @@ async function withEmbeddedWriteLock(cwd, owner, write, env = process.env, deadl
 var RUNNER_STEM = "bd-embedded-write-runner";
 var RUNNER_STORE_FLAG = "--beads-store";
 var RUNNER_WAIT_FLAG = "--beads-wait-ms";
-function embeddedWriteRunner() {
-  const here = import.meta.dir;
-  const script = [
+var INSTALLED_PLUGIN_DIR = /^(.+___beads___).+$/;
+var SEMVER = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
+function embeddedWriteRunnerScript(here) {
+  const local = [
     join(here, `${RUNNER_STEM}.js`),
     join(here, `${RUNNER_STEM}.ts`),
     join(here, "..", "dist", `${RUNNER_STEM}.js`),
     join(here, "..", "extensions", `${RUNNER_STEM}.ts`)
   ].find((candidate) => existsSync(candidate));
-  if (script === undefined)
-    return;
-  const interpreter = bunBinary();
-  return interpreter === undefined ? undefined : { interpreter, script: resolve3(script) };
+  if (local !== undefined)
+    return { script: resolve3(local) };
+  const root = resolve3(here, "..");
+  const missing = `${join(here, RUNNER_STEM)}.js`;
+  const prefix = INSTALLED_PLUGIN_DIR.exec(basename(root))?.[1];
+  let searched = "";
+  if (prefix !== undefined) {
+    const cache = dirname2(root);
+    searched = ` or in any ${prefix}<version> directory under ${cache}`;
+    let entries;
+    try {
+      entries = readdirSync(cache);
+    } catch {
+      entries = [];
+    }
+    const newestFirst = entries.filter((entry) => entry.startsWith(prefix) && SEMVER.test(entry.slice(prefix.length))).sort((left, right) => Bun.semver.order(right.slice(prefix.length), left.slice(prefix.length)));
+    for (const entry of newestFirst) {
+      const script = [join(cache, entry, "dist", `${RUNNER_STEM}.js`), join(cache, entry, "extensions", `${RUNNER_STEM}.ts`)].find((candidate) => existsSync(candidate));
+      if (script !== undefined)
+        return { script: resolve3(script) };
+    }
+  }
+  return {
+    unavailable: `the runner script ${missing} is missing, and no runner was found beside it${searched}. If the @srobroek/beads plugin was just upgraded, restart the session so it loads the new version; otherwise reinstall the plugin.`
+  };
+}
+function embeddedWriteRunner(here = import.meta.dir, interpreterLookup = bunBinary) {
+  const located = embeddedWriteRunnerScript(here);
+  if ("unavailable" in located)
+    return located;
+  const interpreter = interpreterLookup();
+  if (interpreter === undefined) {
+    return { unavailable: "no `bun` binary was found on PATH, in BUN_INSTALL, through mise, or as this process's own interpreter. Install `bun`." };
+  }
+  return { interpreter, script: located.script };
 }
 function bunBinary() {
   return resolveBunBinary({
@@ -1196,10 +1228,10 @@ async function decideEmbeddedWrite(parsed, event, ctx, deadline = Date.now() + 2
       };
     }
     const runner = runnerLookup();
-    if (runner === undefined) {
+    if ("unavailable" in runner) {
       return {
         kind: "block",
-        reason: `${store} is an embedded store, where two concurrent writers corrupt the Dolt journal, and the Beads write-lock runner that serialises writers could not be located: no \`bun\` binary was found on PATH, in BUN_INSTALL, through mise, or as this process's own interpreter, or the runner script is missing from the installed plugin. Install \`bun\` or reinstall the @srobroek/beads plugin; the write was refused rather than run unserialised.`
+        reason: `${store} is an embedded store, where two concurrent writers corrupt the Dolt journal, and the Beads write-lock runner that serialises writers could not be located: ${runner.unavailable} The write was refused rather than run unserialised.`
       };
     }
     const preflightOwner = `tool-call-preflight:${event.toolCallId}`;

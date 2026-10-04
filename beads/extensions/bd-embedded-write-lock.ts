@@ -37,7 +37,7 @@
  */
 
 import { spawnSync } from "node:child_process";
-import { closeSync, existsSync, openSync, readFileSync, realpathSync, statSync, unlinkSync, writeSync } from "node:fs";
+import { closeSync, existsSync, openSync, readdirSync, readFileSync, realpathSync, statSync, unlinkSync, writeSync } from "node:fs";
 import { hostname } from "node:os";
 import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import type { ExtensionContext, ToolCallEvent } from "@oh-my-pi/pi-coding-agent";
@@ -1062,18 +1062,6 @@ export const RUNNER_STORE_FLAG = "--beads-store";
 /** The runner's wait flag, in milliseconds. */
 export const RUNNER_WAIT_FLAG = "--beads-wait-ms";
 
-/**
- * The Bun binary and the runner script, or `undefined` when either is unreachable.
- *
- * The interpreter cannot be assumed from `process.execPath`. OMP ships as a compiled
- * single-file executable, so that path is the `omp` binary, which cannot run a
- * script; on a source install it IS Bun, which can. Both are handled, and PATH,
- * `BUN_INSTALL`, and mise's resolved tool path cover the compiled case.
- *
- * The script sits beside this module whichever way the plugin was loaded: next to the
- * bundle in `dist/` when the package ships built, and next to the source in
- * `extensions/` when OMP imports the TypeScript directly.
- */
 export type BunDiscovery = {
 	execPath?: string;
 	which?: (name: string) => string | undefined | null;
@@ -1081,17 +1069,79 @@ export type BunDiscovery = {
 	miseWhich?: (mise: string) => string | undefined;
 };
 
-export function embeddedWriteRunner(): { interpreter: string; script: string } | undefined {
-	const here = import.meta.dir;
-	const script = [
+/** The Bun binary and runner script a rewritten write runs under. */
+export type EmbeddedWriteRunner = { interpreter: string; script: string };
+
+/** A runner, or the clause explaining why none can be used. */
+export type EmbeddedWriteRunnerLookup = EmbeddedWriteRunner | { unavailable: string };
+
+/** An installed plugin directory in OMP's cache, `<marketplace>___beads___<version>`, capturing everything before the version. */
+const INSTALLED_PLUGIN_DIR = /^(.+___beads___).+$/;
+
+/** A version `Bun.semver.order` accepts; it throws on anything else. */
+const SEMVER = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$/;
+
+/**
+ * The runner script, resolved on every call, or the clause naming what is missing.
+ *
+ * The script normally sits beside this module: next to the bundle in `dist/` when the
+ * package ships built, and next to the source in `extensions/` when OMP imports the
+ * TypeScript directly. A session keeps the module it loaded, though, and
+ * `omp plugin upgrade` deletes the old version's cache directory, so after an upgrade
+ * the path derived from `import.meta.dir` no longer exists. The installed plugin is
+ * then found among the module's siblings by the cache's naming scheme, preferring the
+ * highest version.
+ */
+function embeddedWriteRunnerScript(here: string): { script: string } | { unavailable: string } {
+	const local = [
 		join(here, `${RUNNER_STEM}.js`),
 		join(here, `${RUNNER_STEM}.ts`),
 		join(here, "..", "dist", `${RUNNER_STEM}.js`),
 		join(here, "..", "extensions", `${RUNNER_STEM}.ts`),
 	].find(candidate => existsSync(candidate));
-	if (script === undefined) return undefined;
-	const interpreter = bunBinary();
-	return interpreter === undefined ? undefined : { interpreter, script: resolve(script) };
+	if (local !== undefined) return { script: resolve(local) };
+	const root = resolve(here, "..");
+	const missing = `${join(here, RUNNER_STEM)}.js`;
+	const prefix = INSTALLED_PLUGIN_DIR.exec(basename(root))?.[1];
+	let searched = "";
+	if (prefix !== undefined) {
+		const cache = dirname(root);
+		searched = ` or in any ${prefix}<version> directory under ${cache}`;
+		let entries: string[];
+		try {
+			entries = readdirSync(cache);
+		} catch {
+			entries = [];
+		}
+		const newestFirst = entries
+			.filter(entry => entry.startsWith(prefix) && SEMVER.test(entry.slice(prefix.length)))
+			.sort((left, right) => Bun.semver.order(right.slice(prefix.length), left.slice(prefix.length)));
+		for (const entry of newestFirst) {
+			const script = [join(cache, entry, "dist", `${RUNNER_STEM}.js`), join(cache, entry, "extensions", `${RUNNER_STEM}.ts`)].find(candidate => existsSync(candidate));
+			if (script !== undefined) return { script: resolve(script) };
+		}
+	}
+	return {
+		unavailable: `the runner script ${missing} is missing, and no runner was found beside it${searched}. If the @srobroek/beads plugin was just upgraded, restart the session so it loads the new version; otherwise reinstall the plugin.`,
+	};
+}
+
+/**
+ * The Bun binary and the runner script, or the clause naming whichever is unreachable.
+ *
+ * The interpreter cannot be assumed from `process.execPath`. OMP ships as a compiled
+ * single-file executable, so that path is the `omp` binary, which cannot run a
+ * script; on a source install it IS Bun, which can. Both are handled, and PATH,
+ * `BUN_INSTALL`, and mise's resolved tool path cover the compiled case.
+ */
+export function embeddedWriteRunner(here: string = import.meta.dir, interpreterLookup: () => string | undefined = bunBinary): EmbeddedWriteRunnerLookup {
+	const located = embeddedWriteRunnerScript(here);
+	if ("unavailable" in located) return located;
+	const interpreter = interpreterLookup();
+	if (interpreter === undefined) {
+		return { unavailable: "no `bun` binary was found on PATH, in BUN_INSTALL, through mise, or as this process's own interpreter. Install `bun`." };
+	}
+	return { interpreter, script: located.script };
 }
 
 function bunBinary(): string | undefined {
@@ -1197,7 +1247,7 @@ export async function decideEmbeddedWrite(
 	event: ToolCallEvent,
 	ctx: ExtensionContext,
 	deadline = Date.now() + 25_000,
-	runnerLookup: () => { interpreter: string; script: string } | undefined = embeddedWriteRunner,
+	runnerLookup: () => EmbeddedWriteRunnerLookup = embeddedWriteRunner,
 ): Promise<EmbeddedWriteDecision | undefined> {
 	try {
 		if (event.toolName !== "bash") return;
@@ -1234,10 +1284,10 @@ export async function decideEmbeddedWrite(
 			};
 		}
 		const runner = runnerLookup();
-		if (runner === undefined) {
+		if ("unavailable" in runner) {
 			return {
 				kind: "block",
-				reason: `${store} is an embedded store, where two concurrent writers corrupt the Dolt journal, and the Beads write-lock runner that serialises writers could not be located: no \`bun\` binary was found on PATH, in BUN_INSTALL, through mise, or as this process's own interpreter, or the runner script is missing from the installed plugin. Install \`bun\` or reinstall the @srobroek/beads plugin; the write was refused rather than run unserialised.`,
+				reason: `${store} is an embedded store, where two concurrent writers corrupt the Dolt journal, and the Beads write-lock runner that serialises writers could not be located: ${runner.unavailable} The write was refused rather than run unserialised.`,
 			};
 		}
 		const preflightOwner = `tool-call-preflight:${event.toolCallId}`;

@@ -20,9 +20,9 @@ test("resolves mise-only Bun and completes a real runner write", () => {
 			miseWhich: () => process.execPath,
 		});
 		expect(interpreter).toBe(process.execPath);
-		const runner = embeddedWriteRunner();
-		expect(runner).not.toBeUndefined();
-		if (runner === undefined || interpreter === undefined) return;
+		const runner = embeddedWriteRunner(import.meta.dir, () => interpreter);
+		if ("unavailable" in runner) throw new Error(runner.unavailable);
+		if (interpreter === undefined) return;
 		const result = Bun.spawnSync([interpreter, runner.script, "--beads-store", root, "--", "/bin/sh", "-c", `printf written > ${JSON.stringify(marker)}`], { stdout: "pipe", stderr: "pipe" });
 		expect(result.exitCode).toBe(0);
 		expect(readFileSync(marker, "utf8")).toBe("written");
@@ -290,6 +290,66 @@ test("accepts a literal cd prefix while refusing dynamic cwd", async () => {
 		const dynamic = "cd $WORKTREE && bd update bead-1 --claim";
 		const refused = await decideEmbeddedWrite(parse(dynamic) as unknown as Parameters<typeof decideEmbeddedWrite>[0], event(dynamic), { cwd: root } as unknown as Parameters<typeof decideEmbeddedWrite>[2], Date.now() + 2000, () => ({ interpreter: process.execPath, script: join(import.meta.dir, "bd-embedded-write-runner.ts") }));
 		expect(refused).toEqual({ kind: "block", reason: "This command changes directory dynamically; issue the `bd` command with the tool's cwd field instead." });
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+test("after an upgrade deletes the loaded version, the write runs through the newest installed runner", async () => {
+	const root = mkdtempSync(join(Bun.env.TMPDIR ?? "/tmp", "beads-lock-upgrade-"));
+	const cache = join(root, "cache", "plugins");
+	const loadedDist = join(cache, "srobroek-omp___beads___3.2.0", "dist");
+	const store = join(root, ".beads");
+	const bin = join(root, "bin");
+	const ranBy = join(root, "ran-by");
+	const bdArgs = join(root, "bd-args");
+	const realRunner = join(import.meta.dir, "bd-embedded-write-runner.ts");
+	const install = (dir: string) => {
+		mkdirSync(join(cache, dir, "dist"), { recursive: true });
+		writeFileSync(
+			join(cache, dir, "dist", "bd-embedded-write-runner.js"),
+			`import { writeFileSync } from "node:fs";\nimport { main } from ${JSON.stringify(realRunner)};\nwriteFileSync(${JSON.stringify(ranBy)}, ${JSON.stringify(dir)});\nprocess.exitCode = await main(process.argv.slice(2));\n`,
+		);
+	};
+	const command = "bd update bead-1 --claim";
+	const event = { toolName: "bash", toolCallId: "upgrade", input: { command, cwd: root, env: { BEADS_DIR: store } } } as unknown as Parameters<typeof decideEmbeddedWrite>[1];
+	try {
+		install("srobroek-omp___beads___3.10.0");
+		install("srobroek-omp___beads___4.0.0-rc.1");
+		install("srobroek-omp___beads___4.0.0");
+		install("other-market___beads___9.0.0");
+		mkdirSync(join(cache, "srobroek-omp___beads___not-a-version", "dist"), { recursive: true });
+		mkdirSync(store, { recursive: true });
+		writeFileSync(join(store, "metadata.json"), "{}");
+		mkdirSync(bin);
+		writeFileSync(join(bin, "bd"), `#!/bin/sh\nprintf '%s' "$*" > ${JSON.stringify(bdArgs)}\n`, { mode: 0o755 });
+		const decision = await decideEmbeddedWrite(parse(command) as unknown as Parameters<typeof decideEmbeddedWrite>[0], event, { cwd: root } as unknown as Parameters<typeof decideEmbeddedWrite>[2], Date.now() + 5000, () => embeddedWriteRunner(loadedDist, () => process.execPath));
+		if (decision?.kind !== "rewrite") throw new Error(`expected a rewrite, got ${JSON.stringify(decision)}`);
+		if (typeof decision.input.command !== "string") throw new Error("embedded rewrite returned no command");
+		expect(decision.input.command).toContain(join(cache, "srobroek-omp___beads___4.0.0", "dist", "bd-embedded-write-runner.js"));
+		const run = Bun.spawnSync(["/bin/sh", "-c", decision.input.command], { cwd: root, env: { ...process.env, PATH: `${bin}:${process.env.PATH ?? ""}` }, stdout: "pipe", stderr: "pipe" });
+		expect(run.exitCode).toBe(0);
+		expect(readFileSync(ranBy, "utf8")).toBe("srobroek-omp___beads___4.0.0");
+		expect(readFileSync(bdArgs, "utf8")).toBe("update bead-1 --claim");
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+}, { timeout: 15_000 });
+
+test("refuses the write, naming the missing runner, when no installed version provides one", async () => {
+	const root = mkdtempSync(join(Bun.env.TMPDIR ?? "/tmp", "beads-lock-no-runner-"));
+	const cache = join(root, "cache", "plugins");
+	const loadedDist = join(cache, "srobroek-omp___beads___3.2.0", "dist");
+	const store = join(root, ".beads");
+	const command = "bd update bead-1 --claim";
+	const event = { toolName: "bash", toolCallId: "no-runner", input: { command, cwd: root, env: { BEADS_DIR: store } } } as unknown as Parameters<typeof decideEmbeddedWrite>[1];
+	try {
+		mkdirSync(join(cache, "srobroek-omp___beads___4.0.0", "dist"), { recursive: true });
+		mkdirSync(store, { recursive: true });
+		writeFileSync(join(store, "metadata.json"), "{}");
+		const decision = await decideEmbeddedWrite(parse(command) as unknown as Parameters<typeof decideEmbeddedWrite>[0], event, { cwd: root } as unknown as Parameters<typeof decideEmbeddedWrite>[2], Date.now() + 5000, () => embeddedWriteRunner(loadedDist, () => process.execPath));
+		if (decision?.kind !== "block") throw new Error(`expected a refusal, got ${JSON.stringify(decision)}`);
+		expect(decision.reason).toContain(join(loadedDist, "bd-embedded-write-runner.js"));
+		expect(decision.reason).toContain("restart the session");
 	} finally {
 		rmSync(root, { recursive: true, force: true });
 	}
