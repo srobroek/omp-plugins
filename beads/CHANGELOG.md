@@ -6,6 +6,13 @@
 
 - Require Beads `blocks` dependencies to encode true prerequisites so independent work remains parallelizable.
 
+## [4.1.1](https://github.com/srobroek/omp-plugins/compare/beads--v4.1.0...beads--v4.1.1) (2026-10-04)
+
+
+### Bug Fixes
+
+* **beads:** find the installed write-lock runner after an in-session plugin upgrade ([#625](https://github.com/srobroek/omp-plugins/issues/625)) ([f0544da](https://github.com/srobroek/omp-plugins/commit/f0544da6a1aad8df1644db8b243d667e8a2043a1))
+
 ## [4.1.0](https://github.com/srobroek/omp-plugins/compare/beads--v4.0.0...beads--v4.1.0) (2026-10-04)
 
 
