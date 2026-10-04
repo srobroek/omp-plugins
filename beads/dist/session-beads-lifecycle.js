@@ -945,7 +945,7 @@ function isMutatingBdCommand(command) {
 
 // extensions/bd-embedded-write-lock.ts
 import { spawnSync as spawnSync2 } from "child_process";
-import { closeSync, existsSync, openSync, readFileSync, realpathSync as realpathSync2, statSync as statSync2, unlinkSync, writeSync } from "fs";
+import { closeSync, existsSync, openSync, readdirSync, readFileSync, realpathSync as realpathSync2, statSync as statSync2, unlinkSync, writeSync } from "fs";
 import { hostname } from "os";
 import { basename as basename2, dirname as dirname2, isAbsolute as isAbsolute2, join, resolve as resolve4 } from "path";
 

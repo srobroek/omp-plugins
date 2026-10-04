@@ -6,7 +6,7 @@ import { join as join2 } from "path";
 
 // extensions/bd-embedded-write-lock.ts
 import { spawnSync } from "child_process";
-import { closeSync, existsSync, openSync, readFileSync, realpathSync, statSync, unlinkSync, writeSync } from "fs";
+import { closeSync, existsSync, openSync, readdirSync, readFileSync, realpathSync, statSync, unlinkSync, writeSync } from "fs";
 import { hostname } from "os";
 import { basename, dirname, isAbsolute, join, resolve } from "path";
 
