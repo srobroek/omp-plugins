@@ -33,7 +33,7 @@
       "name": "beads",
       "description": "Beads issue tracking: dependency DAGs, formulas, and decisions recorded as beads.",
       "source": "./beads",
-      "version": "4.1.0",
+      "version": "4.1.1",
       "category": "productivity"
     },
     {
@@ -96,7 +96,7 @@
       "name": "find-tools",
       "description": "Discover and vet skills, agents, MCP servers, and plugins across real registries, and set them up project-locally.",
       "source": "./find-tools",
-      "version": "1.2.0",
+      "version": "2.0.0",
       "category": "productivity"
     },
     {
@@ -110,14 +110,14 @@
       "name": "journeys",
       "description": "User journeys: author, validate, and maintain journey documents.",
       "source": "./journeys",
-      "version": "0.1.0",
+      "version": "1.0.0",
       "category": "productivity"
     },
     {
       "name": "project",
       "description": "Project lifecycle: license selection.",
       "source": "./project",
-      "version": "1.3.3",
+      "version": "2.0.0",
       "category": "productivity"
     },
     {
