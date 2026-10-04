@@ -17,7 +17,7 @@ package that covers it. A capability with no marker is not proposed.
 | `.chezmoiroot`, `.chezmoi.toml.tmpl` | chezmoi source | `chezmoi` |
 | `.config/wt.toml`, `.worktreeinclude` | Worktrunk worktrees | `worktrunk` |
 | `renovate.json`, `.github/dependabot.yml` | dependency updates | `dep-update` |
-| `user-journeys/` | user journeys | `project` |
+| `user-journeys/` | user journeys | `journeys` |
 
 Every project gets `quality` and `safety` proposed: neither depends on a stack.
 
