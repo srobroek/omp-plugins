@@ -1,16 +1,17 @@
 ---
 name: delivery-fan-out
-description: When a task splits into independent parts, needs helper agents, or runs parallel edits that must be integrated and verified.
+alwaysApply: true
 ---
 
 # Fan-out delivery
 
 LEGEND: Rules carry stable IDs (FO-n).
 
-Rationale: across 16 benchmark runs, a plain lead that fanned out `task` subagents,
-integrated, and verified once matched a role-pool orchestrator on every grade at
-10-30x lower cost and 4-10x less time; a pinned higher implementation tier added
-cost without quality.
+Rationale: in chat requests with several independent changes, a lead given these rules
+fanned out every change, while a lead without them fanned out none. Loaded lazily as a
+domain rule, the rules were never opened in a full user environment (fan-out 0 of 21
+changes); loaded always-on they restored full fan-out at equal quality. A pinned higher
+implementation tier added cost without quality.
 
 ## Split
 
