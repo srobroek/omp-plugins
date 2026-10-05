@@ -105,7 +105,7 @@ The agent that creates a PR owns its automated review loop until approval or exp
 | --- | --- |
 | `delivery-git-workflow` | Create or review pull requests, run automated-review loops, prove landing, reconcile and clean a landed worktree, or link delivery to Beads. |
 | `delivery-task-scope` | Every task: modify only artifacts directly required by the current request or claimed work item. |
-| `delivery-fan-out` | A task splits into independent parts, needs helper agents, or runs parallel edits: split test, one-batch `task` dispatch capped at 8, helper choice, worktree isolation, single post-integration verification, and unsharded reviews. |
+| `delivery-fan-out` | Every task (always on): split test, one-batch `task` dispatch capped at 8, helper choice, worktree isolation, single post-integration verification, and unsharded reviews. Always on because, loaded lazily, it was never opened in a full user environment. |
 | `delivery-main-branch-push-advisory` | A bash call names `main` or `master` as a `git push` destination. The advisory never blocks the command. |
 | `delivery-worktree-hygiene` | Hold a worktree, act on a hygiene reminder, or clean up a landed worktree and branch. |
 | `delivery-direct-merge-advisory` | A top-level bash call invokes a local `git merge`. Use `delivery_land` for the reviewed landing path and `delivery_cleanup` afterward. |
