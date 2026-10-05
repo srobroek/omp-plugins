@@ -162,7 +162,7 @@ function git(cwd: string, args: string[]): string {
 		cwd,
 		encoding: "utf8",
 		stdio: ["ignore", "pipe", "pipe"],
-		env: { ...process.env, GIT_CONFIG_NOSYSTEM: "1" },
+		env: { ...process.env, GIT_CONFIG_GLOBAL: devNull, GIT_CONFIG_NOSYSTEM: "1" },
 	}).trim();
 }
 
@@ -171,7 +171,7 @@ function gitExit(cwd: string, args: string[]): number | null {
 		cwd,
 		stdout: "pipe",
 		stderr: "pipe",
-		env: { ...process.env, GIT_CONFIG_NOSYSTEM: "1" },
+		env: { ...process.env, GIT_CONFIG_GLOBAL: devNull, GIT_CONFIG_NOSYSTEM: "1" },
 	});
 	return result.exitCode;
 }
