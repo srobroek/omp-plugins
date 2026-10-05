@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.1.0](https://github.com/srobroek/omp-plugins/compare/delivery--v1.0.0...delivery--v1.1.0) (2026-10-05)
+
+
+### Features
+
+* **delivery:** load delivery-fan-out always-on ([#627](https://github.com/srobroek/omp-plugins/issues/627)) ([bfb8417](https://github.com/srobroek/omp-plugins/commit/bfb84170970f0dd0ded9151f60c71d413850f660))
+
 ## [1.0.0](https://github.com/srobroek/omp-plugins/compare/delivery--v0.14.0...delivery--v1.0.0) (2026-10-02)
 
 
