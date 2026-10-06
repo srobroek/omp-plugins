@@ -123,7 +123,7 @@ class CheckerContracts(unittest.TestCase):
 
     def test_mcp_rejects_malformed_configs_in_any_plugin(self) -> None:
         self.copy_script("check-mcp-servers.py")
-        for name in ("aws", "design", "browser-tools", "diagram"):
+        for name in ("aws", "design", "browser-tools"):
             target = self.root / name / ".omp-plugin"
             target.mkdir(parents=True)
             shutil.copy2(REPO / name / ".omp-plugin" / "plugin.json", target / "plugin.json")

@@ -10,7 +10,6 @@ REPO = Path(__file__).resolve().parent.parent
 EXPECTED = {
     "aws": ["aws-mcp", "aws-pricing"],
     "design": ["accessibility-scanner", "storybook", "wire-dsl"],
-    "diagram": ["excalidraw"],
 }
 
 
