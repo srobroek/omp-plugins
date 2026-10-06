@@ -1,10 +1,11 @@
 import { describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, symlinkSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, symlinkSync, watch, writeFileSync } from "node:fs";
+import { devNull, tmpdir } from "node:os";
+import { dirname, join } from "node:path";
+import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
 import pkg from "../package.json" with { type: "json" };
-import { beadIdsFromBranch, type LandParams, landPullRequest } from "./delivery-land-tool.ts";
-import type { CliResult, CliRunner } from "./forge-adapter.ts";
+import deliveryLandTool, { beadIdsFromBranch, type LandParams, landPullRequest } from "./delivery-land-tool.ts";
+import { type AsyncCliRunner, type CliResult, type CliRunner, runCliAsync } from "./forge-adapter.ts";
 import { RECEIPT_SCHEMA, readReceipt, repoKey, writeReceipt } from "./landing-receipt.ts";
 
 type Call = { argv: string[]; cwd: string | undefined; timeoutMs: number; env: Readonly<Record<string, string>> | undefined };
@@ -15,6 +16,10 @@ const BASE_OID = "1111111111111111111111111111111111111111";
 const REMOTE_URL = "https://github.com/srobroek/omp-plugins.git";
 const BRANCH = "omp/agent/omp-plugins-9ej3.5";
 const NOW = 1_764_000_000_000;
+const TITLE = "fix(delivery): land the reviewed head";
+
+/** The reviewed head a merging call must name; only an already-MERGED proof may omit it. */
+const REVIEWED = { expectHeadSha: HEAD_OID } as const;
 
 const completed = (stdout: string, exitCode = 0, stderr = ""): CliResult => ({ ok: true, exitCode, stdout, stderr });
 
@@ -23,6 +28,7 @@ const githubPr = (overrides: Record<string, unknown> = {}): string =>
 	JSON.stringify({
 		number: 470,
 		url: "https://github.com/srobroek/omp-plugins/pull/470",
+		title: TITLE,
 		state: "OPEN",
 		baseRefName: "omp/integration/omp-plugins-9ej3",
 		headRefName: BRANCH,
@@ -40,6 +46,7 @@ const gitlabMr = (overrides: Record<string, unknown> = {}): string =>
 	JSON.stringify({
 		iid: 12,
 		web_url: "https://gitlab.com/group/project/-/merge_requests/12",
+		title: TITLE,
 		state: "merged",
 		target_branch: "main",
 		source_branch: BRANCH,
@@ -70,8 +77,9 @@ type Answers = {
 	enable?: CliResult;
 	lsRemote?: CliResult;
 	parents?: string;
-	reachable?: CliResult;
 	remoteUrl?: string;
+	/** What `git rev-parse --verify HEAD^{commit}` answers inside a supplied worktree. */
+	worktreeHead?: CliResult;
 };
 
 /**
@@ -91,7 +99,7 @@ function runner(answers: Answers, canonical: string): { run: CliRunner; calls: C
 			return completed(`${join(canonical, ".git")}\n${canonical}\n`);
 		}
 		if (argv[0] === "git" && argv[1] === "show" && argv[2] === "-s") return completed(`${answers.parents ?? BASE_OID}\n`);
-		if (argv[0] === "git" && argv[1] === "merge-base") return answers.reachable ?? completed("");
+		if (command === "git rev-parse --verify HEAD^{commit}") return answers.worktreeHead ?? completed(`${HEAD_OID}\n`);
 		if (command.startsWith("git remote get-url")) return completed(`${answers.remoteUrl ?? REMOTE_URL}\n`);
 		if (argv[1] === "pr" && argv[2] === "view") return views.shift() ?? completed(mergedGithubPr());
 		if (argv[1] === "mr" && argv[2] === "view") return views.shift() ?? completed(gitlabMr());
@@ -105,11 +113,11 @@ function runner(answers: Answers, canonical: string): { run: CliRunner; calls: C
 	};
 	return { run, calls };
 }
-function land(answers: Answers, params: Partial<LandParams> = {}, env: NodeJS.ProcessEnv = {}) {
+async function land(answers: Answers, params: Partial<LandParams> = {}, env: NodeJS.ProcessEnv = {}) {
 	const { canonical, receipts } = repository();
 	mkdirSync(join(canonical, ".beads"));
 	const { run, calls } = runner(answers, canonical);
-	const outcome = landPullRequest({ pr: 470, ...params }, { run, cwd: canonical, now: () => NOW, receiptsDirectory: receipts, env });
+	const outcome = await landPullRequest({ pr: 470, ...params }, { run, cwd: canonical, now: () => NOW, receiptsDirectory: receipts, env });
 	return { outcome, calls, receipts, canonical, files: () => readdirSync(receipts) };
 }
 function nativeNext(beadId: string, pr: number, mergeSha: string, receiptPath: string): string[] {
@@ -120,14 +128,101 @@ function nativeNext(beadId: string, pr: number, mergeSha: string, receiptPath: s
 	];
 }
 
+/** Whether a call reads or writes the deletion-on-merge repository setting. */
+const settingsCall = (argv: string[]): boolean =>
+	argv.some(part => part.includes("delete_branch_on_merge") || part.includes("remove_source_branch_after_merge"));
+
+/** Run Git in a fixture repository with no user or system configuration and no hooks. */
+function git(cwd: string, args: string[]): string {
+	const result = Bun.spawnSync(
+		["git", "-c", "user.name=Delivery Test", "-c", "user.email=delivery@example.test", "-c", "commit.gpgsign=false", "-c", "core.hooksPath=/dev/null", ...args],
+		{ cwd, stdout: "pipe", stderr: "pipe", env: { ...process.env, GIT_CONFIG_GLOBAL: devNull, GIT_CONFIG_NOSYSTEM: "1" } },
+	);
+	if (result.exitCode !== 0) throw new Error(`git ${args.join(" ")}: ${result.stderr.toString()}`);
+	return result.stdout.toString().trim();
+}
+
+function commitFile(repo: string, file: string, content: string, message: string): void {
+	writeFileSync(join(repo, file), content);
+	git(repo, ["add", file]);
+	git(repo, ["commit", "-q", "-m", message]);
+}
+
+/** Resolve once `file` exists, on the directory's change events rather than a polling clock. */
+function appeared(file: string): Promise<void> {
+	const { promise, resolve } = Promise.withResolvers<void>();
+	const settle = (): void => {
+		if (!existsSync(file)) return;
+		watcher.close();
+		resolve();
+	};
+	const watcher = watch(dirname(file), settle);
+	settle();
+	return promise;
+}
+
+/**
+ * A real repository holding a reviewed two-commit branch and its rebase-and-merge
+ * landing. The base moved after review, so the landed commits are rewritten copies
+ * with new SHAs and a different committer, as GitHub's rebase-and-merge always makes
+ * them. `alter` changes the last landed patch, which no equivalence may accept.
+ */
+function rebasedRepository(alter = false): { canonical: string; receipts: string; head: string; landed: string } {
+	const canonical = realpathSync(mkdtempSync(join(tmpdir(), "delivery-land-rebase-")));
+	git(canonical, ["init", "-q", "-b", "main"]);
+	commitFile(canonical, "base.txt", "base\n", "base");
+	git(canonical, ["checkout", "-q", "-b", BRANCH]);
+	commitFile(canonical, "one.txt", "one\n", "one");
+	commitFile(canonical, "base.txt", "base\ntwo\n", "two");
+	const head = git(canonical, ["rev-parse", "HEAD"]);
+	git(canonical, ["checkout", "-q", "main"]);
+	commitFile(canonical, "other.txt", "other\n", "other");
+	git(canonical, ["checkout", "-q", "-b", "landed", head]);
+	git(canonical, ["-c", "user.name=Forge Rebase", "rebase", "-q", "main"]);
+	if (alter) {
+		writeFileSync(join(canonical, "base.txt"), "base\ntwo, altered\n");
+		git(canonical, ["commit", "-q", "-a", "--amend", "--no-edit"]);
+	}
+	const landed = git(canonical, ["rev-parse", "HEAD"]);
+	git(canonical, ["checkout", "-q", "main"]);
+	return { canonical, receipts: mkdtempSync(join(tmpdir(), "delivery-land-receipts-")), head, landed };
+}
+
+/**
+ * Land a rebase against {@link rebasedRepository}: the forge reads are scripted and
+ * every other Git read is answered by the real repository through the real runner —
+ * the patch-id proof feeds Git on stdin — so it runs against real rewritten commits.
+ */
+async function landRebase(repo: { canonical: string; receipts: string; head: string; landed: string }) {
+	const fixture = runner(
+		{
+			prView: [
+				completed(githubPr({ headRefOid: repo.head })),
+				completed(mergedGithubPr({ headRefOid: repo.head, mergeCommit: { oid: repo.landed } })),
+			],
+		},
+		repo.canonical,
+	);
+	const run: AsyncCliRunner = (argv, options) => {
+		if (argv[0] !== "git" || argv[1] === "remote" || argv.includes("ls-remote")) return fixture.run(argv, options);
+		fixture.calls.push({ argv: [...argv], cwd: options.cwd, timeoutMs: options.timeoutMs, env: options.env });
+		return runCliAsync(argv, options);
+	};
+	const outcome = await landPullRequest(
+		{ pr: 470, merge_method: "rebase", expectHeadSha: repo.head },
+		{ run, cwd: repo.canonical, now: () => NOW, receiptsDirectory: repo.receipts, env: { PATH: process.env.PATH ?? "/usr/bin:/bin" } },
+	);
+	return { outcome, calls: fixture.calls, files: () => readdirSync(repo.receipts) };
+}
+
 const merged = (argv: string[]): boolean => argv[2] === "merge";
 
 describe("delivery_land", () => {
-	test("a clean land emits one receipt whose fields are the forge reads", () => {
-		const { outcome, receipts, files } = land({
+	test("a clean land emits one receipt whose fields are the forge reads", async () => {
+		const { outcome, receipts, files, calls } = await land({
 			prView: [completed(githubPr()), completed(mergedGithubPr())],
 			lsRemote: { ok: true, exitCode: 2, stdout: "", stderr: "" },
-		}, { worktree: "/tmp/worktrees/omp-agent-omp-plugins-9ej3.5" });
+		}, { ...REVIEWED, worktree: "/tmp/worktrees/omp-agent-omp-plugins-9ej3.5" });
 
 		expect(outcome.ok).toBe(true);
 		if (!outcome.ok) throw new Error(outcome.reason);
@@ -159,6 +254,11 @@ describe("delivery_land", () => {
 		});
 		expect(receipt.beads.ids).toEqual(["omp-plugins-9ej3.5"]);
 		expect(receipt.worktree.path).toBe("/tmp/worktrees/omp-agent-omp-plugins-9ej3.5");
+		// The worktree is recorded only after its own HEAD was read and matched the PR head.
+		expect(calls.filter(call => call.argv.join(" ") === "git rev-parse --verify HEAD^{commit}").map(call => call.cwd)).toEqual([
+			"/tmp/worktrees/omp-agent-omp-plugins-9ej3.5",
+		]);
+		expect(receipt.proof.evidence).toMatchObject({ worktree: { path: "/tmp/worktrees/omp-agent-omp-plugins-9ej3.5", head: HEAD_OID } });
 		expect(receipt.outcome).toBe("landed");
 		expect(receipt.supersedes).toBeNull();
 		expect(outcome.next).toEqual(nativeNext("omp-plugins-9ej3.5", 470, MERGE_OID, outcome.receiptPath));
@@ -171,39 +271,73 @@ describe("delivery_land", () => {
 		if (!reread.ok) throw new Error(reread.reason);
 		expect(reread.receipt).toEqual(receipt);
 	});
-	test("records the default squash method and one-parent proof", () => {
-		const { outcome } = land({ prView: [completed(mergedGithubPr())] });
+	test("records the default squash method and one-parent proof", async () => {
+		const { outcome } = await land({ prView: [completed(mergedGithubPr())] });
 		expect(outcome.ok).toBe(true);
 		if (!outcome.ok) throw new Error(outcome.reason);
-		expect(outcome.receipt.proof.evidence).toMatchObject({ mergeMethod: "squash", mergeShape: { parents: [BASE_OID], headReachable: null } });
+		expect(outcome.receipt.proof.evidence).toMatchObject({ mergeMethod: "squash", mergeShape: { parents: [BASE_OID], rebase: null } });
 	});
 
-	test("maps merge method and proves the reviewed head is the second parent", () => {
-		const { outcome, calls } = land(
+	test("maps merge method and proves the reviewed head is the second parent", async () => {
+		const { outcome, calls } = await land(
 			{ prView: [completed(githubPr()), completed(mergedGithubPr())], parents: `${BASE_OID} ${HEAD_OID}`, policy: completed("true\n") },
-			{ merge_method: "merge" },
+			{ ...REVIEWED, merge_method: "merge" },
 		);
 		expect(outcome.ok).toBe(true);
 		if (!outcome.ok) throw new Error(outcome.reason);
-		expect(calls.find(call => merged(call.argv))?.argv).toContain("--merge");
+		const merge = calls.find(call => merged(call.argv))?.argv;
+		expect(merge).toContain("--merge");
+		// The PR title is a squash subject only; a merge commit keeps the forge's message.
+		expect(merge).not.toContain("--subject");
 		expect(outcome.receipt.proof.evidence).toMatchObject({ mergeMethod: "merge", mergePolicy: true, mergeShape: { parents: [BASE_OID, HEAD_OID] } });
 	});
 
-	test("maps rebase method and proves a linear reachable tip", () => {
-		const { outcome, calls } = land(
-			{ prView: [completed(githubPr()), completed(mergedGithubPr())], reachable: completed("") },
-			{ merge_method: "rebase" },
-		);
+	test("a rebase-and-merge landing with rewritten SHAs is proved by ordered patch-id equivalence", async () => {
+		const repo = rebasedRepository();
+		// Rewritten SHAs: the reviewed head is not reachable from what landed, which is the
+		// precondition the old reviewed-head ancestry proof could never meet.
+		expect(repo.landed).not.toBe(repo.head);
+		const ancestry = Bun.spawnSync(["git", "merge-base", "--is-ancestor", repo.head, repo.landed], { cwd: repo.canonical });
+		expect(ancestry.exitCode).toBe(1);
+
+		const { outcome, calls, files } = await landRebase(repo);
+
 		expect(outcome.ok).toBe(true);
 		if (!outcome.ok) throw new Error(outcome.reason);
 		expect(calls.find(call => merged(call.argv))?.argv).toContain("--rebase");
-		expect(outcome.receipt.proof.evidence).toMatchObject({ mergeMethod: "rebase", mergeShape: { parents: [BASE_OID], headReachable: true } });
+		expect(calls.filter(call => call.argv[1] === "patch-id").map(call => call.argv)).toEqual([
+			["git", "patch-id", "--stable"],
+			["git", "patch-id", "--stable"],
+		]);
+		const base = git(repo.canonical, ["merge-base", repo.head, repo.landed]);
+		const landedBase = git(repo.canonical, ["rev-parse", `${repo.landed}~2`]);
+		expect(outcome.receipt.proof.evidence).toMatchObject({
+			mergeMethod: "rebase",
+			mergeShape: {
+				parents: [git(repo.canonical, ["rev-parse", `${repo.landed}^`])],
+				rebase: { method: "patch-id", commits: 2, reviewed: `${base}..${repo.head}`, landed: `${landedBase}..${repo.landed}` },
+			},
+		});
+		expect(outcome.receipt.pr.mergeCommitOid).toBe(repo.landed);
+		expect(files()).toHaveLength(1);
 	});
 
-	test("refuses merge method when repository policy disallows merge commits", () => {
-		const { outcome, calls, files } = land(
+	test("a rebase landing whose patches differ from the reviewed commits refuses and writes nothing", async () => {
+		const repo = rebasedRepository(true);
+		const { outcome, files } = await landRebase(repo);
+
+		expect(outcome.ok).toBe(false);
+		if (outcome.ok) throw new Error("expected a refusal");
+		expect(outcome.reason).toContain("patch-id");
+		expect(outcome.reason).toContain(repo.landed);
+		expect(outcome.reason).toContain("no receipt was written");
+		expect(files()).toHaveLength(0);
+	});
+
+	test("refuses merge method when repository policy disallows merge commits", async () => {
+		const { outcome, calls, files } = await land(
 			{ prView: [completed(githubPr())], policy: completed("false\n") },
-			{ merge_method: "merge" },
+			{ ...REVIEWED, merge_method: "merge" },
 		);
 		expect(outcome.ok).toBe(false);
 		if (outcome.ok) throw new Error("expected a refusal");
@@ -212,20 +346,20 @@ describe("delivery_land", () => {
 		expect(files()).toHaveLength(0);
 	});
 
-	test.each(["fast-forward", "MERGE", "", null, 1])("strictly refuses invalid merge_method %p", merge_method => {
-		const { outcome, calls } = land({}, { merge_method: merge_method as string });
+	test.each(["fast-forward", "MERGE", "", null, 1])("strictly refuses invalid merge_method %p", async merge_method => {
+		const { outcome, calls } = await land({}, { merge_method: merge_method as string });
 		expect(outcome.ok).toBe(false);
 		if (outcome.ok) throw new Error("expected a refusal");
 		expect(outcome.reason).toContain('expected one of "squash", "merge", "rebase"');
 		expect(calls).toHaveLength(0);
 	});
 
-	test("a regular-file RETIRED marker makes the landing receipt ledger-inactive", () => {
+	test("a regular-file RETIRED marker makes the landing receipt ledger-inactive", async () => {
 		const { canonical, receipts } = repository();
 		mkdirSync(join(canonical, ".beads"));
 		writeFileSync(join(canonical, ".beads", "RETIRED"), "retired\n");
 		const { run } = runner({ prView: [completed(mergedGithubPr())] }, canonical);
-		const outcome = landPullRequest(
+		const outcome = await landPullRequest(
 			{ pr: 470, worktree: "/tmp/worktrees/omp-agent-omp-plugins-9ej3.5" },
 			{ run, cwd: canonical, now: () => NOW, receiptsDirectory: receipts, env: {} },
 		);
@@ -243,14 +377,14 @@ describe("delivery_land", () => {
 	 * canonical root's verdict is the repository's verdict. A nested `.beads` under the
 	 * directory the tool was called in does not get a vote, in either direction.
 	 */
-	test("a nested active ledger does not override a retired canonical root", () => {
+	test("a nested active ledger does not override a retired canonical root", async () => {
 		const { canonical, receipts } = repository();
 		mkdirSync(join(canonical, ".beads"));
 		writeFileSync(join(canonical, ".beads", "RETIRED"), "retired\n");
 		const nested = join(canonical, "nested");
 		mkdirSync(join(nested, ".beads"), { recursive: true });
 		const { run } = runner({ prView: [completed(mergedGithubPr())] }, canonical);
-		const outcome = landPullRequest({ pr: 470 }, { run, cwd: nested, now: () => NOW, receiptsDirectory: receipts, env: {} });
+		const outcome = await landPullRequest({ pr: 470 }, { run, cwd: nested, now: () => NOW, receiptsDirectory: receipts, env: {} });
 
 		expect(outcome.ok).toBe(true);
 		if (!outcome.ok) throw new Error(outcome.reason);
@@ -260,14 +394,14 @@ describe("delivery_land", () => {
 		expect(outcome.text).not.toContain("bd update");
 	});
 
-	test("a nested retired ledger does not deactivate an active canonical root", () => {
+	test("a nested retired ledger does not deactivate an active canonical root", async () => {
 		const { canonical, receipts } = repository();
 		mkdirSync(join(canonical, ".beads"));
 		const nested = join(canonical, "nested");
 		mkdirSync(join(nested, ".beads"), { recursive: true });
 		writeFileSync(join(nested, ".beads", "RETIRED"), "retired\n");
 		const { run } = runner({ prView: [completed(mergedGithubPr())] }, canonical);
-		const outcome = landPullRequest({ pr: 470 }, { run, cwd: nested, now: () => NOW, receiptsDirectory: receipts, env: {} });
+		const outcome = await landPullRequest({ pr: 470 }, { run, cwd: nested, now: () => NOW, receiptsDirectory: receipts, env: {} });
 
 		expect(outcome.ok).toBe(true);
 		if (!outcome.ok) throw new Error(outcome.reason);
@@ -277,7 +411,7 @@ describe("delivery_land", () => {
 		expect(outcome.text).toContain(`bd close omp-plugins-9ej3.5 --reason "PR #470 merged as ${MERGE_OID}; receipt ${outcome.receiptPath}"`);
 	});
 
-	test("a symlinked RETIRED marker does not deactivate the ledger", () => {
+	test("a symlinked RETIRED marker does not deactivate the ledger", async () => {
 		const { canonical, receipts } = repository();
 		const beads = join(canonical, ".beads");
 		mkdirSync(beads);
@@ -285,7 +419,7 @@ describe("delivery_land", () => {
 		writeFileSync(target, "retired\n");
 		symlinkSync(target, join(beads, "RETIRED"));
 		const { run } = runner({ prView: [completed(mergedGithubPr())] }, canonical);
-		const outcome = landPullRequest({ pr: 470 }, { run, cwd: canonical, now: () => NOW, receiptsDirectory: receipts, env: {} });
+		const outcome = await landPullRequest({ pr: 470 }, { run, cwd: canonical, now: () => NOW, receiptsDirectory: receipts, env: {} });
 
 		expect(outcome.ok).toBe(true);
 		if (!outcome.ok) throw new Error(outcome.reason);
@@ -293,30 +427,30 @@ describe("delivery_land", () => {
 		expect(outcome.next).toEqual(nativeNext("omp-plugins-9ej3.5", 470, MERGE_OID, outcome.receiptPath));
 	});
 
-	test("a dangling .beads path keeps the ledger active", () => {
+	test("a dangling .beads path keeps the ledger active", async () => {
 		const { canonical, receipts } = repository();
 		symlinkSync(join(canonical, "missing-beads"), join(canonical, ".beads"));
 		const { run } = runner({ prView: [completed(mergedGithubPr())] }, canonical);
-		const outcome = landPullRequest({ pr: 470 }, { run, cwd: canonical, now: () => NOW, receiptsDirectory: receipts, env: {} });
+		const outcome = await landPullRequest({ pr: 470 }, { run, cwd: canonical, now: () => NOW, receiptsDirectory: receipts, env: {} });
 
 		expect(outcome.ok).toBe(true);
 		if (!outcome.ok) throw new Error(outcome.reason);
 		expect(outcome.receipt.beads.ledgerActive).toBe(true);
 	});
 
-	test("a non-directory .beads path keeps the ledger active", () => {
+	test("a non-directory .beads path keeps the ledger active", async () => {
 		const { canonical, receipts } = repository();
 		writeFileSync(join(canonical, ".beads"), "not a directory\n");
 		const { run } = runner({ prView: [completed(mergedGithubPr())] }, canonical);
-		const outcome = landPullRequest({ pr: 470 }, { run, cwd: canonical, now: () => NOW, receiptsDirectory: receipts, env: {} });
+		const outcome = await landPullRequest({ pr: 470 }, { run, cwd: canonical, now: () => NOW, receiptsDirectory: receipts, env: {} });
 
 		expect(outcome.ok).toBe(true);
 		if (!outcome.ok) throw new Error(outcome.reason);
 		expect(outcome.receipt.beads.ledgerActive).toBe(true);
 	});
 
-	test("the result text lists native child-before-parent closeout commands before delivery_cleanup", () => {
-		const { outcome } = land({ prView: [completed(mergedGithubPr())] });
+	test("the result text lists native child-before-parent closeout commands before delivery_cleanup", async () => {
+		const { outcome } = await land({ prView: [completed(mergedGithubPr())] });
 		expect(outcome.ok).toBe(true);
 		if (!outcome.ok) throw new Error(outcome.reason);
 		const update = `bd update omp-plugins-9ej3.5 --set-metadata pr=470 --set-metadata merge_sha=${MERGE_OID}`;
@@ -328,8 +462,8 @@ describe("delivery_land", () => {
 		expect(outcome.text.indexOf(close)).toBeLessThan(outcome.text.indexOf("delivery_cleanup"));
 	});
 
-	test("an already MERGED pull request is proved, not merged again", () => {
-		const { outcome, calls, files } = land({ prView: [completed(mergedGithubPr())] });
+	test("an already MERGED pull request is proved, not merged again", async () => {
+		const { outcome, calls, files } = await land({ prView: [completed(mergedGithubPr())] });
 
 		expect(outcome.ok).toBe(true);
 		if (!outcome.ok) throw new Error(outcome.reason);
@@ -341,10 +475,10 @@ describe("delivery_land", () => {
 		expect(files()).toHaveLength(1);
 	});
 
-	test("a GitLab merge request is read in its own dialect", () => {
+	test("a GitLab merge request is read in its own dialect", async () => {
 		const { canonical, receipts } = repository();
 		const { run } = runner({ remoteUrl: "git@gitlab.com:group/project.git", prView: [completed(gitlabMr())] }, canonical);
-		const outcome = landPullRequest({ pr: "12" }, { run, cwd: canonical, now: () => NOW, receiptsDirectory: receipts, env: {} });
+		const outcome = await landPullRequest({ pr: "12" }, { run, cwd: canonical, now: () => NOW, receiptsDirectory: receipts, env: {} });
 
 		expect(outcome.ok).toBe(true);
 		if (!outcome.ok) throw new Error(outcome.reason);
@@ -354,8 +488,8 @@ describe("delivery_land", () => {
 		expect(outcome.receipt.pr.mergeCommitOid).toBe(MERGE_OID);
 	});
 
-	test("an expectHeadSha mismatch refuses, names both shas, and merges nothing", () => {
-		const { outcome, calls, files } = land({ prView: [completed(githubPr())] }, { expectHeadSha: "ffffffffffffffffffffffffffffffffffffffff" });
+	test("an expectHeadSha mismatch refuses, names both shas, and merges nothing", async () => {
+		const { outcome, calls, files } = await land({ prView: [completed(githubPr())] }, { expectHeadSha: "ffffffffffffffffffffffffffffffffffffffff" });
 
 		expect(outcome.ok).toBe(false);
 		if (outcome.ok) throw new Error("expected a refusal");
@@ -365,10 +499,10 @@ describe("delivery_land", () => {
 		expect(files()).toHaveLength(0);
 	});
 
-	test("a re-read that is not MERGED refuses, names the observed state and oid, and writes nothing", () => {
-		const { outcome, calls, files } = land({
+	test("a re-read that is not MERGED refuses, names the observed state and oid, and writes nothing", async () => {
+		const { outcome, calls, files } = await land({
 			prView: [completed(githubPr()), completed(githubPr({ state: "OPEN" }))],
-		});
+		}, REVIEWED);
 
 		expect(outcome.ok).toBe(false);
 		if (outcome.ok) throw new Error("expected a refusal");
@@ -378,8 +512,8 @@ describe("delivery_land", () => {
 		expect(files()).toHaveLength(0);
 	});
 
-	test("a MERGED re-read with no merge commit oid is not proof", () => {
-		const { outcome, files } = land({ prView: [completed(githubPr()), completed(githubPr({ state: "MERGED" }))] });
+	test("a MERGED re-read with no merge commit oid is not proof", async () => {
+		const { outcome, files } = await land({ prView: [completed(githubPr()), completed(githubPr({ state: "MERGED" }))] }, REVIEWED);
 
 		expect(outcome.ok).toBe(false);
 		if (outcome.ok) throw new Error("expected a refusal");
@@ -387,11 +521,11 @@ describe("delivery_land", () => {
 		expect(files()).toHaveLength(0);
 	});
 
-	test("a failed merge refuses with the observed exit status and writes nothing", () => {
-		const { outcome, files } = land({
+	test("a failed merge refuses with the observed exit status and writes nothing", async () => {
+		const { outcome, files } = await land({
 			prView: [completed(githubPr())],
 			merge: completed("", 1, "Pull request is not mergeable"),
-		});
+		}, REVIEWED);
 
 		expect(outcome.ok).toBe(false);
 		if (outcome.ok) throw new Error("expected a refusal");
@@ -400,8 +534,8 @@ describe("delivery_land", () => {
 		expect(files()).toHaveLength(0);
 	});
 
-	test("an unknown remote-absence verdict leaves deletedRemote false and the timestamp null", () => {
-		const { outcome } = land({
+	test("an unknown remote-absence verdict leaves deletedRemote false and the timestamp null", async () => {
+		const { outcome } = await land({
 			prView: [completed(mergedGithubPr())],
 			lsRemote: { ok: false, exitCode: null, stdout: "", stderr: "", error: "git was terminated by SIGTERM (timeout 10000ms)" },
 		});
@@ -413,8 +547,8 @@ describe("delivery_land", () => {
 		expect(outcome.receipt.notes).toContain("unknown");
 	});
 
-	test("a remote branch still present is not recorded as deleted", () => {
-		const { outcome } = land({
+	test("a remote branch still present is not recorded as deleted", async () => {
+		const { outcome } = await land({
 			prView: [completed(mergedGithubPr())],
 			lsRemote: completed(`${HEAD_OID}\trefs/heads/${BRANCH}\n`),
 		});
@@ -426,9 +560,9 @@ describe("delivery_land", () => {
 		expect(outcome.receipt.proof.evidence).toMatchObject({ remoteBranch: { verdict: "present" } });
 	});
 
-	test("setupAutoDelete absent or false issues no repository-setting write", () => {
+	test("setupAutoDelete absent or false issues no repository-setting write", async () => {
 		for (const setupAutoDelete of [undefined, false] as const) {
-			const { outcome, calls } = land({ prView: [completed(mergedGithubPr())] }, { setupAutoDelete });
+			const { outcome, calls } = await land({ prView: [completed(mergedGithubPr())] }, { setupAutoDelete });
 			expect(outcome.ok).toBe(true);
 			expect(calls.filter(call => call.argv.includes("-X") || call.argv.includes("PATCH") || call.argv.includes("PUT"))).toHaveLength(0);
 			if (!outcome.ok) throw new Error(outcome.reason);
@@ -436,8 +570,8 @@ describe("delivery_land", () => {
 		}
 	});
 
-	test("setupAutoDelete true writes the setting once and records the outcome in the notes", () => {
-		const { outcome, calls } = land({ prView: [completed(mergedGithubPr())], autoDelete: completed("false\n") }, { setupAutoDelete: true });
+	test("setupAutoDelete true writes the setting once and records the outcome in the notes", async () => {
+		const { outcome, calls } = await land({ prView: [completed(mergedGithubPr())], autoDelete: completed("false\n") }, { setupAutoDelete: true });
 
 		expect(outcome.ok).toBe(true);
 		if (!outcome.ok) throw new Error(outcome.reason);
@@ -449,8 +583,8 @@ describe("delivery_land", () => {
 		expect(outcome.receipt.branch.autoDeleteSetting).toBe("off");
 	});
 
-	test("a refused setting write is recorded and does not fail the landing", () => {
-		const { outcome } = land(
+	test("a refused setting write is recorded and does not fail the landing", async () => {
+		const { outcome } = await land(
 			{ prView: [completed(mergedGithubPr())], enable: completed("", 1, "HTTP 403") },
 			{ setupAutoDelete: true },
 		);
@@ -461,16 +595,16 @@ describe("delivery_land", () => {
 		expect(outcome.receipt.branch.autoDeleteSetting).toBe("off");
 	});
 
-	test("an unreadable auto-delete setting stays unknown", () => {
-		const { outcome } = land({ prView: [completed(mergedGithubPr())], autoDelete: completed("", 1, "HTTP 404") });
+	test("an unreadable auto-delete setting stays unknown", async () => {
+		const { outcome } = await land({ prView: [completed(mergedGithubPr())], autoDelete: completed("", 1, "HTTP 404") });
 
 		expect(outcome.ok).toBe(true);
 		if (!outcome.ok) throw new Error(outcome.reason);
 		expect(outcome.receipt.branch.autoDeleteSetting).toBe("unknown");
 	});
 
-	test("a receipt the validator refuses names the validator's field and writes no file", () => {
-		const { outcome, files } = land({ prView: [completed(mergedGithubPr({ url: "" }))] });
+	test("a receipt the validator refuses names the validator's field and writes no file", async () => {
+		const { outcome, files } = await land({ prView: [completed(mergedGithubPr({ url: "" }))] });
 
 		expect(outcome.ok).toBe(false);
 		if (outcome.ok) throw new Error("expected a refusal");
@@ -479,22 +613,23 @@ describe("delivery_land", () => {
 		expect(files()).toHaveLength(0);
 	});
 
-	test("no path issues a bd argv", () => {
+	test("no path issues a bd argv", async () => {
 		const cases: Array<[Answers, Partial<LandParams>]> = [
-			[{ prView: [completed(githubPr()), completed(mergedGithubPr())] }, {}],
+			[{ prView: [completed(githubPr()), completed(mergedGithubPr())] }, REVIEWED],
 			[{ prView: [completed(mergedGithubPr())] }, { setupAutoDelete: true }],
 			[{ prView: [completed(githubPr())] }, { expectHeadSha: "deadbeef" }],
-			[{ prView: [completed(githubPr()), completed(githubPr())] }, {}],
+			[{ prView: [completed(githubPr())] }, {}],
+			[{ prView: [completed(githubPr()), completed(githubPr())] }, REVIEWED],
 		];
 		for (const [answers, params] of cases) {
-			const { calls } = land(answers, params);
+			const { calls } = await land(answers, params);
 			expect(calls.filter(call => call.argv[0] === "bd")).toHaveLength(0);
 		}
 	});
 
-	test("a pull request number that is not a positive integer never reaches a command", () => {
+	test("a pull request number that is not a positive integer never reaches a command", async () => {
 		for (const pr of ["--repo", "0", "-1", "", "12x"]) {
-			const { outcome, calls } = land({}, { pr });
+			const { outcome, calls } = await land({}, { pr });
 			expect(outcome.ok).toBe(false);
 			if (outcome.ok) throw new Error("expected a refusal");
 			expect(outcome.reason).toContain("expected a positive integer");
@@ -502,8 +637,8 @@ describe("delivery_land", () => {
 		}
 	});
 
-	test("a remote whose URL names no adapter refuses without reading the pull request", () => {
-		const { outcome, calls } = land({ remoteUrl: "https://bitbucket.org/team/repo.git", prView: [completed(mergedGithubPr())] });
+	test("a remote whose URL names no adapter refuses without reading the pull request", async () => {
+		const { outcome, calls } = await land({ remoteUrl: "https://bitbucket.org/team/repo.git", prView: [completed(mergedGithubPr())] });
 
 		expect(outcome.ok).toBe(false);
 		if (outcome.ok) throw new Error("expected a refusal");
@@ -511,8 +646,8 @@ describe("delivery_land", () => {
 		expect(calls.filter(call => call.argv[0] === "gh")).toHaveLength(0);
 	});
 
-	test("a pull-request payload missing a required field refuses by field name", () => {
-		const { outcome, files } = land({ prView: [completed(JSON.stringify({ number: 470, state: "MERGED" }))] });
+	test("a pull-request payload missing a required field refuses by field name", async () => {
+		const { outcome, files } = await land({ prView: [completed(JSON.stringify({ number: 470, state: "MERGED" }))] });
 
 		expect(outcome.ok).toBe(false);
 		if (outcome.ok) throw new Error("expected a refusal");
@@ -520,7 +655,7 @@ describe("delivery_land", () => {
 		expect(files()).toHaveLength(0);
 	});
 
-	test("a polluted Object.prototype cannot supply a merge state the forge never sent", () => {
+	test("a polluted Object.prototype cannot supply a merge state the forge never sent", async () => {
 		// The defect this pins: a plain `payload.state` read consults the prototype
 		// chain, so one polluting dependency anywhere in the session would let an open
 		// pull request read as MERGED and emit a receipt claiming it landed.
@@ -529,7 +664,7 @@ describe("delivery_land", () => {
 		}
 		try {
 			expect("state" in {}).toBe(true);
-			const { outcome, calls, files } = land({
+			const { outcome, calls, files } = await land({
 				prView: [completed(JSON.stringify({ number: 470, url: "https://x/1", baseRefName: "main", headRefName: BRANCH, headRefOid: HEAD_OID }))],
 			});
 			expect(outcome.ok).toBe(false);
@@ -544,8 +679,8 @@ describe("delivery_land", () => {
 		expect("state" in {}).toBe(false);
 	});
 
-	test("the merge argv binds the repository and the first observed head", () => {
-		const { outcome, calls } = land({ prView: [completed(githubPr()), completed(mergedGithubPr())] });
+	test("the merge argv binds the repository, the first observed head, and the title as squash subject", async () => {
+		const { outcome, calls } = await land({ prView: [completed(githubPr()), completed(mergedGithubPr())] }, REVIEWED);
 
 		expect(outcome.ok).toBe(true);
 		const merges = calls.filter(call => merged(call.argv));
@@ -556,6 +691,8 @@ describe("delivery_land", () => {
 			"merge",
 			"470",
 			"--squash",
+			"--subject",
+			TITLE,
 			"--delete-branch",
 			"--repo",
 			"github.com/srobroek/omp-plugins",
@@ -563,8 +700,8 @@ describe("delivery_land", () => {
 			HEAD_OID,
 		]);
 		expect(calls.filter(call => call.argv[1] === "pr" && call.argv[2] === "view").map(call => call.argv)).toEqual([
-			["gh", "pr", "view", "470", "--repo", "github.com/srobroek/omp-plugins", "--json", "number,url,state,baseRefName,headRefName,headRefOid,mergeCommit,mergedAt"],
-			["gh", "pr", "view", "470", "--repo", "github.com/srobroek/omp-plugins", "--json", "number,url,state,baseRefName,headRefName,headRefOid,mergeCommit,mergedAt"],
+			["gh", "pr", "view", "470", "--repo", "github.com/srobroek/omp-plugins", "--json", "number,url,state,baseRefName,headRefName,headRefOid,mergeCommit,mergedAt,title"],
+			["gh", "pr", "view", "470", "--repo", "github.com/srobroek/omp-plugins", "--json", "number,url,state,baseRefName,headRefName,headRefOid,mergeCommit,mergedAt,title"],
 		]);
 		if (!outcome.ok) throw new Error(outcome.reason);
 		// The receipt records the unqualified identity: the host belongs to the command
@@ -572,10 +709,10 @@ describe("delivery_land", () => {
 		expect(outcome.receipt.proof.evidence).toMatchObject({ boundRepo: "srobroek/omp-plugins", merge: { boundHead: HEAD_OID } });
 	});
 
-	test("a canonical GitHub repo prefix and a pinned GH_HOST defeat a configured host alias", () => {
-		const { outcome, calls } = land(
+	test("a canonical GitHub repo prefix and a pinned GH_HOST defeat a configured host alias", async () => {
+		const { outcome, calls } = await land(
 			{ prView: [completed(githubPr()), completed(mergedGithubPr())] },
-			{ setupAutoDelete: true },
+			{ ...REVIEWED, setupAutoDelete: true },
 			{ GH_HOST: "evil.example", GH_REPO: "attacker/elsewhere", GH_TOKEN: "keep-gh", PATH: "/usr/bin" },
 		);
 
@@ -598,7 +735,7 @@ describe("delivery_land", () => {
 		}
 	});
 
-	test("an alternate SSH transport host still addresses the canonical API host", () => {
+	test("an alternate SSH transport host still addresses the canonical API host", async () => {
 		const { canonical, receipts } = repository();
 		const { run, calls } = runner(
 			{
@@ -607,7 +744,7 @@ describe("delivery_land", () => {
 			},
 			canonical,
 		);
-		const outcome = landPullRequest({ pr: 470 }, { run, cwd: canonical, now: () => NOW, receiptsDirectory: receipts, env: {} });
+		const outcome = await landPullRequest({ pr: 470, ...REVIEWED }, { run, cwd: canonical, now: () => NOW, receiptsDirectory: receipts, env: {} });
 
 		expect(outcome.ok).toBe(true);
 		for (const call of calls.filter(call => call.argv[0] === "gh" && call.argv.includes("--repo"))) {
@@ -616,13 +753,13 @@ describe("delivery_land", () => {
 		}
 	});
 
-	test("a GitLab merge binds the repository and the head in glab's spelling", () => {
+	test("a GitLab merge binds the repository and the head in glab's spelling", async () => {
 		const { canonical, receipts } = repository();
 		const { run, calls } = runner(
 			{ remoteUrl: "ssh://git@altssh.gitlab.com:443/group/sub/project.git", prView: [completed(gitlabMr({ state: "opened", merge_commit_sha: null })), completed(gitlabMr())] },
 			canonical,
 		);
-		const outcome = landPullRequest({ pr: 12 }, { run, cwd: canonical, now: () => NOW, receiptsDirectory: receipts, env: {} });
+		const outcome = await landPullRequest({ pr: 12, ...REVIEWED }, { run, cwd: canonical, now: () => NOW, receiptsDirectory: receipts, env: {} });
 
 		expect(outcome.ok).toBe(true);
 		expect(calls.filter(call => merged(call.argv))[0]?.argv).toEqual([
@@ -631,6 +768,8 @@ describe("delivery_land", () => {
 			"merge",
 			"12",
 			"--squash",
+			"--squash-message",
+			TITLE,
 			"--remove-source-branch",
 			"--repo",
 			"gitlab.com/group/sub/project",
@@ -643,7 +782,7 @@ describe("delivery_land", () => {
 		]);
 	});
 
-	test("a canonical GitLab repo prefix defeats a configured dotless host alias", () => {
+	test("a canonical GitLab repo prefix defeats a configured dotless host alias", async () => {
 		const { canonical, receipts } = repository();
 		const fixture = runner(
 			{
@@ -661,8 +800,8 @@ describe("delivery_land", () => {
 			}
 			return fixture.run(argv, options);
 		};
-		const outcome = landPullRequest(
-			{ pr: 12 },
+		const outcome = await landPullRequest(
+			{ pr: 12, ...REVIEWED },
 			{ run, cwd: canonical, now: () => NOW, receiptsDirectory: receipts, env: {} },
 		);
 
@@ -680,7 +819,7 @@ describe("delivery_land", () => {
 		]);
 	});
 
-	test("a structurally malformed identity refuses before an unreadable remote", () => {
+	test("a structurally malformed identity refuses before an unreadable remote", async () => {
 		for (const repo of ["https://github.com/owner/repo", "owner", "owner//repo", "owner/../repo"]) {
 			const { canonical } = repository();
 			const calls: Call[] = [];
@@ -688,7 +827,7 @@ describe("delivery_land", () => {
 				calls.push({ argv: [...argv], cwd: options.cwd, timeoutMs: options.timeoutMs, env: options.env });
 				return { ok: false, exitCode: null, stdout: "", stderr: "", error: "the remote is unreadable" };
 			};
-			const outcome = landPullRequest({ pr: 470, repo }, { run, cwd: canonical, now: () => NOW, env: {} });
+			const outcome = await landPullRequest({ pr: 470, repo }, { run, cwd: canonical, now: () => NOW, env: {} });
 
 			expect(outcome.ok).toBe(false);
 			if (outcome.ok) throw new Error("expected a refusal");
@@ -697,8 +836,8 @@ describe("delivery_land", () => {
 		}
 	});
 
-	test("a host-qualified GitHub remote path cannot become --repo when params.repo is absent", () => {
-		const { outcome, calls } = land({ remoteUrl: "https://github.com/github.com/owner/repo.git" });
+	test("a host-qualified GitHub remote path cannot become --repo when params.repo is absent", async () => {
+		const { outcome, calls } = await land({ remoteUrl: "https://github.com/github.com/owner/repo.git" });
 
 		expect(outcome.ok).toBe(false);
 		if (outcome.ok) throw new Error("expected a refusal");
@@ -717,7 +856,7 @@ describe("delivery_land", () => {
 	 * userinfo and a token query must leave neither the token nor its URL in the reason
 	 * or in any receipt — and there is no receipt, because nothing was written.
 	 */
-	test("git remote get-url output that is not exactly one record merges nothing", () => {
+	test("git remote get-url output that is not exactly one record merges nothing", async () => {
 		for (const remoteUrl of [
 			"https://git\thub.com/srobroek/omp-plugins.git",
 			"https://github.com/srobroek/omp-plugins.git\n@evil.example/x",
@@ -729,7 +868,7 @@ describe("delivery_land", () => {
 			"https://github.com/srobroek/omp-plugins.git?token=ghp_secrettoken\nhttps://evil.example/x",
 			" ssh://git:ghp_secrettoken@github.com/srobroek/omp-plugins.git",
 		]) {
-			const { outcome, calls, files } = land({ remoteUrl, prView: [completed(githubPr())] });
+			const { outcome, calls, files } = await land({ remoteUrl, prView: [completed(githubPr())] });
 
 			expect(outcome.ok).toBe(false);
 			if (outcome.ok) throw new Error("expected a refusal");
@@ -745,7 +884,7 @@ describe("delivery_land", () => {
 		}
 	});
 
-	test("ambient Git selectors cannot redirect repository identity or landing proof", () => {
+	test("ambient Git selectors cannot redirect repository identity or landing proof", async () => {
 		const { canonical, receipts } = repository();
 		const attacker = repository();
 		const ambient = {
@@ -766,7 +905,7 @@ describe("delivery_land", () => {
 			if (argv.includes("get-url")) return completed("https://github.com/attacker/elsewhere.git\n");
 			return completed(`${HEAD_OID}\trefs/heads/${BRANCH}\n`);
 		};
-		const outcome = landPullRequest(
+		const outcome = await landPullRequest(
 			{ pr: 470 },
 			{ run, cwd: canonical, now: () => NOW, receiptsDirectory: receipts, env: ambient },
 		);
@@ -778,11 +917,11 @@ describe("delivery_land", () => {
 		expect(outcome.receipt.branch.deletedRemote).toBe(true);
 	});
 
-	test("a head that moved between the merge and the re-read refuses and writes nothing", () => {
+	test("a head that moved between the merge and the re-read refuses and writes nothing", async () => {
 		const moved = "9999999999999999999999999999999999999999";
-		const { outcome, files } = land({
+		const { outcome, files } = await land({
 			prView: [completed(githubPr()), completed(mergedGithubPr({ headRefOid: moved }))],
-		});
+		}, REVIEWED);
 
 		expect(outcome.ok).toBe(false);
 		if (outcome.ok) throw new Error("expected a refusal");
@@ -792,10 +931,10 @@ describe("delivery_land", () => {
 		expect(files()).toHaveLength(0);
 	});
 
-	test("a pull request re-targeted between the reads refuses and writes nothing", () => {
-		const { outcome, files } = land({
+	test("a pull request re-targeted between the reads refuses and writes nothing", async () => {
+		const { outcome, files } = await land({
 			prView: [completed(githubPr()), completed(mergedGithubPr({ baseRefName: "main" }))],
-		});
+		}, REVIEWED);
 
 		expect(outcome.ok).toBe(false);
 		if (outcome.ok) throw new Error("expected a refusal");
@@ -804,8 +943,8 @@ describe("delivery_land", () => {
 		expect(files()).toHaveLength(0);
 	});
 
-	test("a payload for another pull request refuses before merging", () => {
-		const { outcome, calls, files } = land({ prView: [completed(githubPr({ number: 999 }))] });
+	test("a payload for another pull request refuses before merging", async () => {
+		const { outcome, calls, files } = await land({ prView: [completed(githubPr({ number: 999 }))] });
 
 		expect(outcome.ok).toBe(false);
 		if (outcome.ok) throw new Error("expected a refusal");
@@ -814,8 +953,8 @@ describe("delivery_land", () => {
 		expect(files()).toHaveLength(0);
 	});
 
-	test("a re-read for another pull request refuses and writes nothing", () => {
-		const { outcome, files } = land({ prView: [completed(githubPr()), completed(mergedGithubPr({ number: 999 }))] });
+	test("a re-read for another pull request refuses and writes nothing", async () => {
+		const { outcome, files } = await land({ prView: [completed(githubPr()), completed(mergedGithubPr({ number: 999 }))] }, REVIEWED);
 
 		expect(outcome.ok).toBe(false);
 		if (outcome.ok) throw new Error("expected a refusal");
@@ -823,8 +962,8 @@ describe("delivery_land", () => {
 		expect(files()).toHaveLength(0);
 	});
 
-	test("a head that is not a whole object id cannot bind a merge, so none is issued", () => {
-		const { outcome, calls, files } = land({ prView: [completed(githubPr({ headRefOid: "0123456" }))] });
+	test("a head that is not a whole object id cannot bind a merge, so none is issued", async () => {
+		const { outcome, calls, files } = await land({ prView: [completed(githubPr({ headRefOid: "0123456" }))] }, { expectHeadSha: "0123456" });
 
 		expect(outcome.ok).toBe(false);
 		if (outcome.ok) throw new Error("expected a refusal");
@@ -834,7 +973,7 @@ describe("delivery_land", () => {
 		expect(files()).toHaveLength(0);
 	});
 
-	test("ambient repository and host variables reach no forge command, on either forge", () => {
+	test("ambient repository and host variables reach no forge command, on either forge", async () => {
 		// Every spelling either CLI reads. `gh`: GH_REPO, GH_HOST. `glab`: GITLAB_HOST,
 		// the older GL_HOST, GITLAB_URI, and GITLAB_API_HOST, which redirects API traffic
 		// by itself. A GitLab variable is stripped from a GitHub command too: whoever
@@ -849,7 +988,7 @@ describe("delivery_land", () => {
 		};
 		const ambient = { ...redirectors, GH_TOKEN: "keep-gh", GITLAB_TOKEN: "keep-gitlab", GL_TOKEN: "keep-gl", PATH: "/usr/bin" };
 
-		const github = land({ prView: [completed(githubPr()), completed(mergedGithubPr())] }, { setupAutoDelete: true }, ambient);
+		const github = await land({ prView: [completed(githubPr()), completed(mergedGithubPr())] }, { ...REVIEWED, setupAutoDelete: true }, ambient);
 		expect(github.outcome.ok).toBe(true);
 
 		const { canonical, receipts } = repository();
@@ -860,8 +999,8 @@ describe("delivery_land", () => {
 			},
 			canonical,
 		);
-		const gitlab = landPullRequest(
-			{ pr: 12, setupAutoDelete: true },
+		const gitlab = await landPullRequest(
+			{ pr: 12, ...REVIEWED, setupAutoDelete: true },
 			{ run, cwd: canonical, now: () => NOW, receiptsDirectory: receipts, env: ambient },
 		);
 		expect(gitlab.ok).toBe(true);
@@ -908,14 +1047,14 @@ describe("delivery_land", () => {
 		expect(lsRemote?.env?.GIT_TERMINAL_PROMPT).toBe("0");
 	});
 
-	test("an unreadable repository refuses before any forge call", () => {
+	test("an unreadable repository refuses before any forge call", async () => {
 		const { canonical } = repository();
 		const calls: Call[] = [];
 		const run: CliRunner = (argv, options) => {
 			calls.push({ argv: [...argv], cwd: options.cwd, timeoutMs: options.timeoutMs, env: options.env });
 			return { ok: false, exitCode: null, stdout: "", stderr: "", error: "spawn git ENOENT" };
 		};
-		const outcome = landPullRequest({ pr: 470 }, { run, cwd: canonical, now: () => NOW, env: {} });
+		const outcome = await landPullRequest({ pr: 470 }, { run, cwd: canonical, now: () => NOW, env: {} });
 
 		expect(outcome.ok).toBe(false);
 		if (outcome.ok) throw new Error("expected a refusal");
@@ -923,11 +1062,11 @@ describe("delivery_land", () => {
 		expect(calls).toHaveLength(1);
 	});
 
-	test("the receipt directory defaults under the agent directory, never into the checkout", () => {
+	test("the receipt directory defaults under the agent directory, never into the checkout", async () => {
 		const { canonical } = repository();
 		const agentDir = mkdtempSync(join(tmpdir(), "delivery-land-agent-"));
 		const { run } = runner({ prView: [completed(mergedGithubPr())] }, canonical);
-		const outcome = landPullRequest({ pr: 470 }, { run, cwd: canonical, now: () => NOW, env: { PI_CODING_AGENT_DIR: agentDir } });
+		const outcome = await landPullRequest({ pr: 470 }, { run, cwd: canonical, now: () => NOW, env: { PI_CODING_AGENT_DIR: agentDir } });
 
 		expect(outcome.ok).toBe(true);
 		if (!outcome.ok) throw new Error(outcome.reason);
@@ -936,8 +1075,8 @@ describe("delivery_land", () => {
 		expect(JSON.parse(readFileSync(outcome.receiptPath, "utf8")).receiptId).toBe(outcome.receipt.receiptId);
 	});
 
-	test("a repo override that the merge argv could not honour refuses before reading", () => {
-		const { outcome, calls } = land({ prView: [completed(mergedGithubPr())] }, { repo: "someone-else/fork" });
+	test("a repo override that the merge argv could not honour refuses before reading", async () => {
+		const { outcome, calls } = await land({ prView: [completed(mergedGithubPr())] }, { repo: "someone-else/fork" });
 
 		expect(outcome.ok).toBe(false);
 		if (outcome.ok) throw new Error("expected a refusal");
@@ -946,13 +1085,13 @@ describe("delivery_land", () => {
 		expect(calls.filter(call => call.argv[0] === "gh")).toHaveLength(0);
 	});
 
-	test("a repo override that agrees with the remote is accepted", () => {
-		const { outcome } = land({ prView: [completed(mergedGithubPr())] }, { repo: "srobroek/omp-plugins" });
+	test("a repo override that agrees with the remote is accepted", async () => {
+		const { outcome } = await land({ prView: [completed(mergedGithubPr())] }, { repo: "srobroek/omp-plugins" });
 		expect(outcome.ok).toBe(true);
 	});
 
-	test("a credential in the remote URL is not copied into the receipt", () => {
-		const { outcome } = land({ remoteUrl: "https://sjors:ghp_secrettoken@github.com/srobroek/omp-plugins.git", prView: [completed(mergedGithubPr())] });
+	test("a credential in the remote URL is not copied into the receipt", async () => {
+		const { outcome } = await land({ remoteUrl: "https://sjors:ghp_secrettoken@github.com/srobroek/omp-plugins.git", prView: [completed(mergedGithubPr())] });
 
 		expect(outcome.ok).toBe(true);
 		if (!outcome.ok) throw new Error(outcome.reason);
@@ -962,8 +1101,8 @@ describe("delivery_land", () => {
 		expect(JSON.stringify(outcome.receipt)).not.toContain("ghp_secrettoken");
 	});
 
-	test("a configured upstream remote name is recorded and reused, never hardcoded to origin", () => {
-		const { outcome, calls } = land(
+	test("a configured upstream remote name is recorded and reused, never hardcoded to origin", async () => {
+		const { outcome, calls } = await land(
 			{ prView: [completed(mergedGithubPr())] },
 			{ remote: "upstream" },
 		);
@@ -984,12 +1123,12 @@ describe("delivery_land", () => {
 	 * assertion is the whole object and the whole top-level key set: a field added,
 	 * renamed or dropped here is a contract change and must fail a test, not a consumer.
 	 */
-	test("a real land emits exactly the amended v1 receipt object", () => {
+	test("a real land emits exactly the amended v1 receipt object", async () => {
 		const { canonical, receipts } = repository();
 		mkdirSync(join(canonical, ".beads"));
 		const { run } = runner({ prView: [completed(githubPr()), completed(mergedGithubPr())] }, canonical);
-		const outcome = landPullRequest(
-			{ pr: 470, worktree: "/tmp/worktrees/omp-agent-omp-plugins-9ej3.5" },
+		const outcome = await landPullRequest(
+			{ pr: 470, ...REVIEWED, worktree: "/tmp/worktrees/omp-agent-omp-plugins-9ej3.5" },
 			{ run, cwd: canonical, now: () => NOW, receiptsDirectory: receipts, env: {} },
 		);
 
@@ -1067,11 +1206,11 @@ describe("delivery_land", () => {
 	 * whitespace-only agent directory is no directory at all. Producer and consumer must
 	 * trim it identically or they look for receipts in two different trees.
 	 */
-	test("a whitespace-only PI_CODING_AGENT_DIR puts the receipt under $HOME/.omp", () => {
+	test("a whitespace-only PI_CODING_AGENT_DIR puts the receipt under $HOME/.omp", async () => {
 		const { canonical } = repository();
 		const home = mkdtempSync(join(tmpdir(), "delivery-land-home-"));
 		const { run } = runner({ prView: [completed(mergedGithubPr())] }, canonical);
-		const outcome = landPullRequest(
+		const outcome = await landPullRequest(
 			{ pr: 470 },
 			{ run, cwd: canonical, now: () => NOW, env: { PI_CODING_AGENT_DIR: "   ", HOME: home } },
 		);
@@ -1081,13 +1220,13 @@ describe("delivery_land", () => {
 		expect(outcome.receiptPath).toBe(join(home, ".omp", "receipts", outcome.receipt.repo.key, `${outcome.receipt.receiptId}.json`));
 	});
 
-	test("the remote-absence probe is asked in the directory this call was made from", () => {
+	test("the remote-absence probe is asked in the directory this call was made from", async () => {
 		const { canonical, receipts } = repository();
 		mkdirSync(join(canonical, ".beads"));
 		const nested = join(canonical, "nested");
 		mkdirSync(nested);
 		const { run, calls } = runner({ prView: [completed(mergedGithubPr())] }, canonical);
-		const outcome = landPullRequest({ pr: 470 }, { run, cwd: nested, now: () => NOW, receiptsDirectory: receipts, env: {} });
+		const outcome = await landPullRequest({ pr: 470 }, { run, cwd: nested, now: () => NOW, receiptsDirectory: receipts, env: {} });
 
 		expect(outcome.ok).toBe(true);
 		expect(calls.filter(call => call.argv.includes("ls-remote")).map(call => call.cwd)).toEqual([nested]);
@@ -1098,11 +1237,11 @@ describe("delivery_land", () => {
 	 * the other side: cleanup would ask `bd` about an empty list and pass. A non-agent
 	 * branch on a repository that tracks its work must name its bead or refuse.
 	 */
-	test("an active ledger with no derivable bead identity refuses before merging and writes nothing", () => {
+	test("an active ledger with no derivable bead identity refuses before merging and writes nothing", async () => {
 		const { canonical, receipts } = repository();
 		mkdirSync(join(canonical, ".beads"));
 		const { run, calls } = runner({ prView: [completed(githubPr({ headRefName: "feature/no-bead" }))] }, canonical);
-		const outcome = landPullRequest({ pr: 470 }, { run, cwd: canonical, now: () => NOW, receiptsDirectory: receipts, env: {} });
+		const outcome = await landPullRequest({ pr: 470, ...REVIEWED }, { run, cwd: canonical, now: () => NOW, receiptsDirectory: receipts, env: {} });
 
 		expect(outcome.ok).toBe(false);
 		if (outcome.ok) throw new Error("expected a refusal");
@@ -1114,11 +1253,11 @@ describe("delivery_land", () => {
 		expect(readdirSync(receipts)).toEqual([]);
 	});
 
-	test("beadId names the bead a non-agent branch cannot", () => {
+	test("beadId names the bead a non-agent branch cannot", async () => {
 		const { canonical, receipts } = repository();
 		mkdirSync(join(canonical, ".beads"));
 		const { run } = runner({ prView: [completed(mergedGithubPr({ headRefName: "feature/no-bead" }))] }, canonical);
-		const outcome = landPullRequest(
+		const outcome = await landPullRequest(
 			{ pr: 470, beadId: "omp-plugins-9ej3.38" },
 			{ run, cwd: canonical, now: () => NOW, receiptsDirectory: receipts, env: {} },
 		);
@@ -1129,10 +1268,10 @@ describe("delivery_land", () => {
 		expect(outcome.next).toEqual(nativeNext("omp-plugins-9ej3.38", 470, MERGE_OID, outcome.receiptPath));
 	});
 
-	test("a ledger-free repository needs no bead identity at all", () => {
+	test("a ledger-free repository needs no bead identity at all", async () => {
 		const { canonical, receipts } = repository();
 		const { run } = runner({ prView: [completed(mergedGithubPr({ headRefName: "feature/no-bead" }))] }, canonical);
-		const outcome = landPullRequest({ pr: 470 }, { run, cwd: canonical, now: () => NOW, receiptsDirectory: receipts, env: {} });
+		const outcome = await landPullRequest({ pr: 470 }, { run, cwd: canonical, now: () => NOW, receiptsDirectory: receipts, env: {} });
 
 		expect(outcome.ok).toBe(true);
 		if (!outcome.ok) throw new Error(outcome.reason);
@@ -1140,9 +1279,9 @@ describe("delivery_land", () => {
 		expect(outcome.next).toEqual(["delivery_cleanup"]);
 	});
 
-	test("a beadId that is not a bead id, or that contradicts the branch, refuses and merges nothing", () => {
+	test("a beadId that is not a bead id, or that contradicts the branch, refuses and merges nothing", async () => {
 		for (const beadId of ["-malicious", "bead id", "../escape", "a;b"]) {
-			const { outcome, calls, files } = land({ prView: [completed(githubPr())] }, { beadId });
+			const { outcome, calls, files } = await land({ prView: [completed(githubPr())] }, { ...REVIEWED, beadId });
 			expect(outcome.ok).toBe(false);
 			if (outcome.ok) throw new Error("expected a refusal");
 			expect(outcome.reason).toContain("beadId: observed");
@@ -1150,11 +1289,168 @@ describe("delivery_land", () => {
 			expect(files()).toHaveLength(0);
 		}
 
-		const contradicted = land({ prView: [completed(githubPr())] }, { beadId: "omp-plugins-9ej3.99" });
+		const contradicted = await land({ prView: [completed(githubPr())] }, { ...REVIEWED, beadId: "omp-plugins-9ej3.99" });
 		expect(contradicted.outcome.ok).toBe(false);
 		if (contradicted.outcome.ok) throw new Error("expected a refusal");
 		expect(contradicted.outcome.reason).toContain('expected "omp-plugins-9ej3.5" from branch');
 		expect(contradicted.files()).toHaveLength(0);
+	});
+
+	/**
+	 * The per-user store `~/.beads` sits above every repository under $HOME. It is not
+	 * this repository's ledger, so it must neither mark the landing ledger-backed nor
+	 * demand a bead for a branch that names none.
+	 */
+	test("a ledger-free repository below an ancestor .beads lands without a beadId", async () => {
+		const outer = realpathSync(mkdtempSync(join(tmpdir(), "delivery-land-home-")));
+		mkdirSync(join(outer, ".beads"));
+		const canonical = join(outer, "repo");
+		mkdirSync(join(canonical, ".git"), { recursive: true });
+		const receipts = mkdtempSync(join(tmpdir(), "delivery-land-receipts-"));
+		const { run, calls } = runner(
+			{ prView: [completed(githubPr({ headRefName: "feature/no-bead" })), completed(mergedGithubPr({ headRefName: "feature/no-bead" }))] },
+			canonical,
+		);
+		const outcome = await landPullRequest({ pr: 470, ...REVIEWED }, { run, cwd: canonical, now: () => NOW, receiptsDirectory: receipts, env: {} });
+
+		expect(outcome.ok).toBe(true);
+		if (!outcome.ok) throw new Error(outcome.reason);
+		expect(calls.filter(call => merged(call.argv))).toHaveLength(1);
+		expect(outcome.receipt.beads).toEqual({ ids: [], ledgerActive: false });
+		expect(outcome.receipt.proof.evidence).toMatchObject({ ledger: { root: canonical, active: false } });
+		expect(outcome.next).toEqual(["delivery_cleanup"]);
+	});
+
+	/**
+	 * The recorded worktree is what `delivery_cleanup` later removes, so it must be the
+	 * checkout holding the landed head. A path at another head — the release-please
+	 * landing that recorded an unrelated feature worktree — would hand cleanup a target
+	 * nobody landed. The check also covers an already-MERGED proof, which records the
+	 * worktree just the same.
+	 */
+	test("a worktree that does not hold the pull request head refuses before any forge mutation", async () => {
+		const elsewhere = "9".repeat(40);
+		const cases: Array<[string, Answers, Partial<LandParams>]> = [
+			["another head", { prView: [completed(githubPr())], worktreeHead: completed(`${elsewhere}\n`) }, REVIEWED],
+			["not a checkout", { prView: [completed(githubPr())], worktreeHead: completed("", 128, "fatal: not a git repository") }, REVIEWED],
+			["already merged, another head", { prView: [completed(mergedGithubPr())], worktreeHead: completed(`${elsewhere}\n`) }, {}],
+		];
+		for (const [label, answers, params] of cases) {
+			const { outcome, calls, files } = await land(answers, { ...params, worktree: "/tmp/worktrees/elsewhere", setupAutoDelete: true });
+			if (outcome.ok) throw new Error(`${label}: expected a refusal`);
+			expect(outcome.reason).toContain("worktree");
+			expect(outcome.reason).toContain("/tmp/worktrees/elsewhere");
+			expect(outcome.reason).toContain(HEAD_OID);
+			if (label.includes("another head")) expect(outcome.reason).toContain(elsewhere);
+			expect(calls.filter(call => call.argv.join(" ") === "git rev-parse --verify HEAD^{commit}").map(call => call.cwd)).toEqual(["/tmp/worktrees/elsewhere"]);
+			expect(calls.filter(call => merged(call.argv))).toHaveLength(0);
+			expect(calls.filter(call => settingsCall(call.argv))).toHaveLength(0);
+			expect(files()).toHaveLength(0);
+		}
+	});
+
+	test("a new merge requires expectHeadSha, while an already-MERGED proof does not", async () => {
+		for (const expectHeadSha of [undefined, "", "   "]) {
+			const { outcome, calls, files } = await land({ prView: [completed(githubPr())] }, { expectHeadSha });
+			if (outcome.ok) throw new Error("expected a refusal");
+			expect(outcome.reason).toContain("expectHeadSha");
+			expect(outcome.reason).toContain(HEAD_OID);
+			expect(outcome.reason).toContain("no merge was issued");
+			expect(calls.filter(call => merged(call.argv))).toHaveLength(0);
+			expect(files()).toHaveLength(0);
+		}
+
+		const proved = await land({ prView: [completed(mergedGithubPr())] });
+		expect(proved.outcome.ok).toBe(true);
+		expect(proved.calls.filter(call => merged(call.argv))).toHaveLength(0);
+		expect(proved.files()).toHaveLength(1);
+	});
+
+	/**
+	 * Every refusal the call can reach, each with `setupAutoDelete: true`. The setting
+	 * changes every future contributor's merges, so a landing that does not complete
+	 * must leave it untouched — not merely unwritten, but not even read.
+	 */
+	test("a refused landing reads and writes no deletion-on-merge setting", async () => {
+		const cases: Array<[string, Answers, Partial<LandParams>]> = [
+			["merge-commit policy", { prView: [completed(githubPr())], policy: completed("false\n") }, { ...REVIEWED, merge_method: "merge" }],
+			["no expectHeadSha", { prView: [completed(githubPr())] }, {}],
+			["expectHeadSha mismatch", { prView: [completed(githubPr())] }, { expectHeadSha: "f".repeat(40) }],
+			["worktree at another head", { prView: [completed(githubPr())], worktreeHead: completed(`${"9".repeat(40)}\n`) }, { ...REVIEWED, worktree: "/tmp/worktrees/elsewhere" }],
+			["abbreviated head", { prView: [completed(githubPr({ headRefOid: "0123456" }))] }, { expectHeadSha: "0123456" }],
+			["no title to squash with", { prView: [completed(githubPr({ title: "" }))] }, REVIEWED],
+			["no bead identity", { prView: [completed(githubPr({ headRefName: "feature/no-bead" }))] }, REVIEWED],
+			["forge refused the merge", { prView: [completed(githubPr())], merge: completed("", 1, "Pull request is not mergeable") }, REVIEWED],
+			["re-read not merged", { prView: [completed(githubPr()), completed(githubPr())] }, REVIEWED],
+			["landed shape mismatch", { prView: [completed(githubPr()), completed(mergedGithubPr())], parents: `${BASE_OID} ${HEAD_OID}` }, REVIEWED],
+		];
+		for (const [label, answers, params] of cases) {
+			const { outcome, calls, files } = await land(answers, { ...params, setupAutoDelete: true });
+			if (outcome.ok) throw new Error(`${label}: expected a refusal`);
+			expect({ label, settings: calls.filter(call => settingsCall(call.argv)).map(call => call.argv) }).toEqual({ label, settings: [] });
+			expect(files()).toHaveLength(0);
+		}
+	});
+
+	test("a squash merge with no pull request title refuses before merging", async () => {
+		for (const title of ["", "   ", null]) {
+			const { outcome, calls, files } = await land({ prView: [completed(githubPr({ title }))] }, REVIEWED);
+			if (outcome.ok) throw new Error("expected a refusal");
+			expect(outcome.reason).toContain("pr.title");
+			expect(outcome.reason).toContain("no merge was issued");
+			expect(calls.filter(call => merged(call.argv))).toHaveLength(0);
+			expect(files()).toHaveLength(0);
+		}
+	});
+
+	test("a title spelled like an option stays the --subject operand", async () => {
+		const { outcome, calls } = await land({ prView: [completed(githubPr({ title: "--admin" })), completed(mergedGithubPr())] }, REVIEWED);
+
+		expect(outcome.ok).toBe(true);
+		const merge = calls.find(call => merged(call.argv))?.argv ?? [];
+		expect(merge[merge.indexOf("--subject") + 1]).toBe("--admin");
+		expect(merge.filter(part => part === "--admin")).toHaveLength(1);
+	});
+
+	/**
+	 * The hung `gh` is a real process: a script on PATH that records its pid and sleeps.
+	 * The interrupt must kill it and return, instead of holding the session for the
+	 * forge timeout, and nothing may be merged or written after it.
+	 */
+	test("an interrupt kills a hung forge call and lands nothing", async () => {
+		const canonical = realpathSync(mkdtempSync(join(tmpdir(), "delivery-land-abort-")));
+		git(canonical, ["init", "-q", "-b", "main"]);
+		git(canonical, ["remote", "add", "origin", REMOTE_URL]);
+		const bin = mkdtempSync(join(tmpdir(), "delivery-land-bin-"));
+		const pidFile = join(bin, "gh.pid");
+		// Written aside and renamed, so the pid file exists only once it is whole.
+		writeFileSync(join(bin, "gh"), `#!/bin/sh\necho $$ > '${pidFile}.tmp' && mv '${pidFile}.tmp' '${pidFile}'\nexec sleep 30\n`);
+		chmodSync(join(bin, "gh"), 0o755);
+		const receipts = mkdtempSync(join(tmpdir(), "delivery-land-receipts-"));
+		const controller = new AbortController();
+		const started = Date.now();
+		const pending = landPullRequest(
+			{ pr: 470, ...REVIEWED },
+			{
+				cwd: canonical,
+				now: () => NOW,
+				receiptsDirectory: receipts,
+				env: { PATH: `${bin}:${process.env.PATH ?? "/usr/bin:/bin"}` },
+				signal: controller.signal,
+			},
+		);
+		await appeared(pidFile);
+		const pid = Number(readFileSync(pidFile, "utf8").trim());
+		expect(() => process.kill(pid, 0)).not.toThrow();
+		controller.abort();
+		const outcome = await pending;
+
+		expect(Date.now() - started).toBeLessThan(4_000);
+		if (outcome.ok) throw new Error("expected a refusal");
+		expect(outcome.reason).toContain("gh pr view 470");
+		expect(outcome.reason).toContain("abort");
+		expect(() => process.kill(pid, 0)).toThrow();
+		expect(readdirSync(receipts)).toEqual([]);
 	});
 });
 
@@ -1164,5 +1460,46 @@ describe("branch reading", () => {
 		for (const branch of ["main", "omp/integration/omp-plugins-9ej3", "omp/agent/", "feature/omp/agent/x"]) {
 			expect(beadIdsFromBranch(branch)).toEqual([]);
 		}
+	});
+});
+
+describe("delivery_land registration", () => {
+	/**
+	 * The host's interrupt reaches the tool as `execute`'s signal; a signal the tool
+	 * dropped would leave every forge call above it uninterruptible. An already-aborted
+	 * signal must therefore stop the call before it starts a single command.
+	 */
+	test("execute forwards the tool call's abort signal into the landing", async () => {
+		type Registered = {
+			name: string;
+			execute: (...args: unknown[]) => Promise<{ details: { ok: boolean; reason?: string } }>;
+		};
+		let tool: Registered | undefined;
+		const chain: Record<string, unknown> = {};
+		for (const method of ["optional", "describe"]) chain[method] = () => chain;
+		const pi = {
+			zod: {
+				object: (shape: unknown) => shape,
+				union: () => chain,
+				number: () => chain,
+				string: () => chain,
+				boolean: () => chain,
+				enum: () => chain,
+			},
+			registerTool: (value: Registered) => {
+				tool = value;
+			},
+		} as unknown as ExtensionAPI;
+		deliveryLandTool(pi);
+		if (tool === undefined) throw new Error("delivery_land was not registered");
+		expect(tool.name).toBe("delivery_land");
+
+		const controller = new AbortController();
+		controller.abort();
+		const cwd = mkdtempSync(join(tmpdir(), "delivery-land-execute-"));
+		const result = await tool.execute("call-1", { pr: 470 }, controller.signal, undefined, { cwd });
+
+		expect(result.details.ok).toBe(false);
+		expect(result.details.reason).toContain("abort");
 	});
 });
