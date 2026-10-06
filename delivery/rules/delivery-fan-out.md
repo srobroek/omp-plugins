@@ -21,11 +21,11 @@ MUST FO-2: give each shared region (contract, schema, registry, generated artifa
 
 ## Dispatch
 
-MUST FO-3: size by independent ready units. With 1 unit, do it yourself. With 2 or more, dispatch the lesser of the unit count and 8 in ONE `task` batch; queue the rest for the next batch. NEVER serialize independent units.
+MUST FO-3: size by independent ready units. With 2 or more, dispatch the lesser of the unit count and 8 in ONE `task` batch; queue the rest for the next batch. NEVER serialize independent units.
 
 MUST FO-4: every brief is self-contained; subagents share no conversation. State the goal, the exact target files, the interface or contract it must honor, observable acceptance, and "run only the focused commands needed to prove your own change; skip repository-wide builds, test suites, linters, and formatters, which the lead runs after integration (FO-7)".
 
-MUST FO-5: read each bead's `execution_agent_type` metadata before spawning, and dispatch the bead to the agent it names: default `implementer`; `implementer-high` only when the bead says so under the criteria in `rule://beads-ledger` (root-cause/debugging work, concurrency or data-integrity logic, cross-module contract changes, algorithmic or numeric precision rules, or acceptance that needs design judgment beyond the bead text). Pass `execution_reasoning_effort` when set. NEVER pin a higher tier for a bead without that metadata.
+MUST FO-5: read each bead's `execution_agent_type` metadata before spawning, and dispatch the bead to the agent it names: default `implementer`; `implementer-high` only when the bead says so under the criteria in `rule://beads-ledger` (root-cause/debugging work, concurrency or data-integrity logic, cross-module contract changes, algorithmic or numeric precision rules, or acceptance that needs design judgment beyond the bead text). A spawn with no bead, or a bead with no `execution_agent_type`, goes to `implementer` unless the brief states one of those implementer-high criteria. Pass `execution_reasoning_effort` when set. NEVER pin a higher tier for a bead without that metadata.
 
 ## Helpers
 
@@ -43,7 +43,3 @@ Start a helper only where it pays:
 MUST FO-6: when two or more agents edit concurrently, give each its own linked worktree cut from one recorded base commit (`rule://worktrunk-worktree-required`). Integrate each finished branch into the lead branch by merge. A conflict means the split overlapped: resolve it once in the lead branch against both units' acceptance criteria.
 
 MUST FO-7: verify worker claims against the diff, then run the repository-wide verification command ONCE after integration, in the lead branch. A red result is the lead's: dispatch a targeted fix and re-verify before landing through `rule://delivery-git-workflow`.
-
-## Reviews
-
-MUST FO-8: run every review, audit, research task, and inventory as one agent or inline; never shard it across parallel agents.

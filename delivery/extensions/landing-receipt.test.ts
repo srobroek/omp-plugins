@@ -870,6 +870,39 @@ describe("canonicalLedger", () => {
 		expect(canonicalLedger(nested)).toEqual({ root: realpathSync(repository), active: false });
 	});
 
+	test("a .beads above the checkout root does not vote: the repository is ledger-free until it has its own", () => {
+		const parent = scratch("ledger-ancestor");
+		const repository = join(parent, "repository");
+		mkdirSync(join(parent, ".beads"));
+		mkdirSync(repository);
+		git(repository, "init", "-b", "main");
+
+		expect(canonicalLedger(repository)).toEqual({ root: realpathSync(repository), active: false });
+
+		mkdirSync(join(repository, ".beads"));
+		expect(canonicalLedger(repository)).toEqual({ root: realpathSync(repository), active: true });
+	});
+
+	test("a linked worktree resolves to its checkout's ledger, not to a .beads above either tree", () => {
+		const parent = scratch("ledger-linked-ancestor");
+		const repository = join(parent, "repository");
+		const linkedParent = scratch("ledger-linked-ancestor-worktrees");
+		const linked = join(linkedParent, "linked");
+		mkdirSync(join(parent, ".beads"));
+		mkdirSync(join(linkedParent, ".beads"));
+		mkdirSync(repository);
+		git(repository, "init", "-b", "main");
+		writeFileSync(join(repository, "file.txt"), "one\n");
+		git(repository, "add", "file.txt");
+		git(repository, "commit", "-m", "one");
+		git(repository, "worktree", "add", linked, "-b", "side");
+
+		expect(canonicalLedger(linked)).toEqual({ root: realpathSync(repository), active: false });
+
+		mkdirSync(join(repository, ".beads"));
+		expect(canonicalLedger(linked)).toEqual({ root: realpathSync(repository), active: true });
+	});
+
 	test("a linked worktree classifies from the same root as its canonical checkout", () => {
 		const repository = scratch("ledger-linked");
 		const linked = join(ROOT, "ledger-linked-worktree");
@@ -1089,6 +1122,23 @@ describe("writeReceipt and readReceipt", () => {
 		expect(() => writeReceipt(poisoned, directory)).toThrow();
 
 		expect(readdirSync(directory)).toEqual([]);
+	});
+
+	test("writer and reader agree on the byte cap: at the cap round-trips, one byte over is refused and creates nothing", () => {
+		const base = Buffer.byteLength(`${JSON.stringify(landed({ notes: "" }), null, 2)}\n`, "utf8");
+		const atCap = landed({ notes: "x".repeat(MAX_RECEIPT_BYTES - base) });
+		const atDirectory = receiptsIn("write-at-cap");
+		const written = writeReceipt(atCap, atDirectory);
+		expect(statSync(written).size).toBe(MAX_RECEIPT_BYTES);
+		expect(readReceipt(written)).toEqual({ ok: true, receipt: atCap });
+
+		const overDirectory = receiptsIn("write-over-cap");
+		const over = landed({ notes: "x".repeat(MAX_RECEIPT_BYTES - base + 1) });
+		const error = threwFrom(() => writeReceipt(over, overDirectory));
+		expect(error.message).toContain("oversized receipt");
+		expect(error.message).toContain(String(MAX_RECEIPT_BYTES + 1));
+		expect(error.message).toContain(String(MAX_RECEIPT_BYTES));
+		expect(readdirSync(overDirectory)).toEqual([]);
 	});
 
 	test("refuses an unreadable or unparseable path, naming it", () => {
