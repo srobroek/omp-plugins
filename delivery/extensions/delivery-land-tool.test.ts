@@ -161,31 +161,46 @@ function appeared(file: string): Promise<void> {
 	return promise;
 }
 
+/** Eight numbered lines: room for a base edit near, but not touching, a reviewed hunk. */
+const NUMBERED = ["1", "2", "3", "4", "5", "6", "7", "8"];
+const numbered = (line: number, text: string): string => `${NUMBERED.map((value, index) => (index === line - 1 ? text : value)).join("\n")}\n`;
+
 /**
  * A real repository holding a reviewed two-commit branch and its rebase-and-merge
  * landing. The base moved after review, so the landed commits are rewritten copies
  * with new SHAs and a different committer, as GitHub's rebase-and-merge always makes
- * them. `alter` changes the last landed patch, which no equivalence may accept.
+ * them. `altered` changes the last landed patch, which no equivalence may accept.
+ * `context-moved` has the base edit line 4 of a file whose line 6 the reviewed branch
+ * edits: the rebase replays cleanly, but the landed hunk's context lines differ.
  */
-function rebasedRepository(alter = false): { canonical: string; receipts: string; head: string; landed: string } {
+function rebasedRepository(variant: "clean" | "altered" | "context-moved" = "clean"): { canonical: string; receipts: string; head: string; landed: string } {
+	const moved = variant === "context-moved";
 	const canonical = realpathSync(mkdtempSync(join(tmpdir(), "delivery-land-rebase-")));
 	git(canonical, ["init", "-q", "-b", "main"]);
-	commitFile(canonical, "base.txt", "base\n", "base");
+	commitFile(canonical, "base.txt", moved ? numbered(0, "") : "base\n", "base");
 	git(canonical, ["checkout", "-q", "-b", BRANCH]);
 	commitFile(canonical, "one.txt", "one\n", "one");
-	commitFile(canonical, "base.txt", "base\ntwo\n", "two");
+	commitFile(canonical, "base.txt", moved ? numbered(6, "6, reviewed") : "base\ntwo\n", "two");
 	const head = git(canonical, ["rev-parse", "HEAD"]);
 	git(canonical, ["checkout", "-q", "main"]);
-	commitFile(canonical, "other.txt", "other\n", "other");
+	if (moved) commitFile(canonical, "base.txt", numbered(4, "4, moved on the base"), "base moved");
+	else commitFile(canonical, "other.txt", "other\n", "other");
 	git(canonical, ["checkout", "-q", "-b", "landed", head]);
 	git(canonical, ["-c", "user.name=Forge Rebase", "rebase", "-q", "main"]);
-	if (alter) {
+	if (variant === "altered") {
 		writeFileSync(join(canonical, "base.txt"), "base\ntwo, altered\n");
 		git(canonical, ["commit", "-q", "-a", "--amend", "--no-edit"]);
 	}
 	const landed = git(canonical, ["rev-parse", "HEAD"]);
 	git(canonical, ["checkout", "-q", "main"]);
 	return { canonical, receipts: mkdtempSync(join(tmpdir(), "delivery-land-receipts-")), head, landed };
+}
+
+/** A commit's `git patch-id --stable` over Git's default three-line-context diff. */
+function contextPatchId(repo: string, commit: string): string {
+	const diff = Bun.spawnSync(["git", "diff-tree", "-p", "--no-color", commit], { cwd: repo, stdout: "pipe", stderr: "pipe" });
+	const id = Bun.spawnSync(["git", "patch-id", "--stable"], { cwd: repo, stdin: diff.stdout, stdout: "pipe", stderr: "pipe" });
+	return id.stdout.toString().split(" ")[0] ?? "";
 }
 
 /**
@@ -322,8 +337,23 @@ describe("delivery_land", () => {
 		expect(files()).toHaveLength(1);
 	});
 
+	test("a clean rebase whose landed hunk's context moved on the base is still proved", async () => {
+		const repo = rebasedRepository("context-moved");
+		// The base edit sits inside the reviewed hunk's default three context lines, so a
+		// context-bearing patch id changes even though the reviewed change replayed as is.
+		expect(contextPatchId(repo.canonical, repo.landed)).not.toBe(contextPatchId(repo.canonical, repo.head));
+		expect(git(repo.canonical, ["show", `${repo.landed}:base.txt`])).toBe(numbered(4, "4, moved on the base").replace("6\n", "6, reviewed\n").trim());
+
+		const { outcome, files } = await landRebase(repo);
+
+		expect(outcome.ok).toBe(true);
+		if (!outcome.ok) throw new Error(outcome.reason);
+		expect(outcome.receipt.proof.evidence).toMatchObject({ mergeMethod: "rebase", mergeShape: { rebase: { method: "patch-id", commits: 2 } } });
+		expect(files()).toHaveLength(1);
+	});
+
 	test("a rebase landing whose patches differ from the reviewed commits refuses and writes nothing", async () => {
-		const repo = rebasedRepository(true);
+		const repo = rebasedRepository("altered");
 		const { outcome, files } = await landRebase(repo);
 
 		expect(outcome.ok).toBe(false);

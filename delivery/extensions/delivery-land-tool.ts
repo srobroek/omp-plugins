@@ -391,14 +391,16 @@ function oidLines(output: string | null): string[] | null {
  * Each commit's `git patch-id --stable`, in the order given; null for a commit whose
  * diff is empty, which `patch-id` prints nothing for.
  *
- * The diffs come from `git diff-tree --stdin -p`, the plumbing form, with external
+ * The diffs come from `git diff-tree --stdin -p -U0`, the plumbing form, with external
  * diff drivers and textconv filters off: the same command produces both sides of a
  * comparison, so what is compared is the patch itself and not a repository's
- * display configuration, and no configured program runs.
+ * display configuration, and no configured program runs. Zero context lines, because
+ * `patch-id` hashes context: a base edit near a reviewed hunk changes the landed
+ * commit's context, not its patch, and a clean rebase must still compare equal.
  */
 async function patchIds(commits: readonly string[], git: GitRead): Promise<Array<string | null> | { reason: string }> {
-	const diff = await git(["diff-tree", "--stdin", "-p", "--no-color", "--no-ext-diff", "--no-textconv"], `${commits.join("\n")}\n`);
-	if (diff === null) return { reason: "git diff-tree --stdin -p: observed no completed read, expected each commit's patch" };
+	const diff = await git(["diff-tree", "--stdin", "-p", "-U0", "--no-color", "--no-ext-diff", "--no-textconv"], `${commits.join("\n")}\n`);
+	if (diff === null) return { reason: "git diff-tree --stdin -p -U0: observed no completed read, expected each commit's patch" };
 	const printed = await git(["patch-id", "--stable"], diff);
 	if (printed === null) return { reason: "git patch-id --stable: observed no completed read, expected one patch id per commit with a diff" };
 	const wanted = new Set(commits);

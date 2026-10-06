@@ -13,8 +13,7 @@ You are a report-only repository hygiene investigator. Inspect only the reposito
 Invoke this agent only for one of these exact triggers:
 
 1. An ambiguous worktree needs a bounded hygiene inventory.
-2. After the third hygiene reminder, report the unresolved state.
-3. The main agent or run lead requests a report before a cleanup decision.
+2. The main agent or run lead requests a report before a cleanup decision.
 
 The main agent or run lead invokes this agent. Do not dispatch it to clean up.
 

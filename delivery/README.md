@@ -24,13 +24,15 @@ Run these steps in order after a reviewed branch lands:
 2. **Reconcile when active.** `beads.ledgerActive` records the ledger classification taken at the repository's canonical root rather than at the invocation directory, because a linked worktree sits outside the checkout. When it is `true`, after `delivery_land` succeeds, close each receipt bead in children-first order with `bd update ID --set-metadata pr=N --set-metadata merge_sha=SHA`, then `bd close ID --reason "PR #N merged as SHA; receipt PATH"`. When it is `false` for a no-ledger or retired repository, skip this step. Delivery tools never write the Beads ledger. `delivery_cleanup` performs read-only `bd show` verification that every receipt bead is closed and `metadata.merge_sha` equals the receipt's `pr.mergeCommitOid`.
 3. **Clean.** Call `delivery_cleanup` with the receipt or matching identity fields.
 
+A receipt minted before `beads.ledgerActive` was classified at the canonical root may record `true` for a repository with no `.beads` of its own, because the old classification walked into ancestor directories such as `~/.beads`. `delivery_cleanup` refuses that receipt: its stored verdict disagrees with the recomputed one. Receipts are not migrated. To recover, call `delivery_land` again for the already-merged request with the same `worktree`; it proves the merge without merging and writes a fresh receipt with the recomputed verdict. Then call `delivery_cleanup` with that new receipt.
+
 Cleanup requires exact landing proof. The request must be merged at its recorded base. Its `headRefOid` must cover the branch tip. The merge must reach the final destination. A dirty tree, an unpushed commit, an uncovered tip, a failed identity check, or unknown local absence stops cleanup. The caller supplies the worktree and follows repository ownership policy. Remote absence `unknown` remains unverified. The receipt records that result and never presents it as absence. Never force removal, stash changes to make a tree clean, or remove a worktree or branch by hand.
 
 ### Merge method and proof shape
 
 `merge_method` defaults to `squash` for compatibility. `merge` requests a real merge commit, and `rebase` requests a linear/rebased landing. Callers MUST choose the method from the project's documented landing policy; an explicit `merge` is refused when the forge reports `allow_merge_commit: false`, and an ambiguous policy MUST be resolved by the caller rather than guessed by the tool.
 
-The receipt's `proof.evidence` records `mergeMethod`, the observed `mergePolicy` when available, and `mergeShape`. A squash proof has one parent; a merge proof has two parents with the reviewed head as the second parent; a rebase proof has one parent and ordered patch-id equivalence: the `git patch-id --stable` sequence of the reviewed commits (base..reviewed head) equals, in order, that of the landed commits ending at the merge commit, because rebase-and-merge rewrites commit SHAs. For an already-`MERGED` request, no merge method was issued in this call, so the proof accepts one parent or two parents with the reviewed head second and records the observed shape. The tool refuses a shape that does not match the selected method when it issues the merge.
+The receipt's `proof.evidence` records `mergeMethod`, the observed `mergePolicy` when available, and `mergeShape`. A squash proof has one parent; a merge proof has two parents with the reviewed head as the second parent; a rebase proof has one parent and ordered patch-id equivalence: the `git patch-id --stable` sequence of the reviewed commits (base..reviewed head) equals, in order, that of the landed commits ending at the merge commit, because rebase-and-merge rewrites commit SHAs. Patch ids are computed from zero-context diffs (`git diff-tree -p -U0`), so a clean rebase whose hunk context changed on the base still compares equal. For an already-`MERGED` request, no merge method was issued in this call, so the proof accepts one parent or two parents with the reviewed head second and records the observed shape. The tool refuses a shape that does not match the selected method when it issues the merge.
 
 ## Landing receipts
 
@@ -102,7 +104,7 @@ The agent that creates a PR owns its automated review loop until approval or exp
 | --- | --- |
 | `delivery-git-workflow` | Create or review pull requests, run automated-review loops, prove landing, reconcile and clean a landed worktree, or link delivery to Beads. |
 | `delivery-fan-out` | Every task (always on): split test, one-batch `task` dispatch capped at 8, helper choice, worktree isolation, and single post-integration verification. Always on because, loaded lazily, it was never opened in a full user environment. |
-| `delivery-worktree-hygiene` | Hold a worktree, act on a hygiene reminder, or clean up a landed worktree and branch. |
+| `delivery-worktree-hygiene` | Hold a worktree, act on a `delivery_hygiene_report` finding, or clean up a landed worktree and branch. |
 
 ## License
 

@@ -614,7 +614,7 @@ function verifyLedger(receipt: LandingReceipt, cwd: string, receiptPath: string,
 			reason: `beads.ledgerActive: observed ${receipt.beads.ledgerActive} stored in the receipt, expected ${classification.active}, recomputed at canonical root ${show(classification.root)}; ${
 				classification.active
 					? `this repository's ledger is active, so for each receipt bead in child-before-parent order run ${nativeSteps.join("; ")}, then delivery_cleanup`
-					: "the receipt was written against a ledger this repository does not have, so nothing was removed because the canonical ledger classification disagreed with the receipt"
+					: `the receipt was written against a ledger this repository does not have, so nothing was removed because the canonical ledger classification disagreed with the receipt; to recover, run delivery_land for PR #${receipt.pr.number} again${receipt.worktree.path === null ? "" : ` with worktree ${show(receipt.worktree.path)}`}, which proves the already-merged request without merging and writes a fresh receipt, then run delivery_cleanup with that new receipt`
 			}`,
 		};
 	}
