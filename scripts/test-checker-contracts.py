@@ -70,7 +70,7 @@ class CheckerContracts(unittest.TestCase):
         # missing copy as a failure by design: a real tree that lost one has drifted.
         # Populate the tokenizer set too, so this case exercises drift rather than
         # tripping over an absent set it is not testing.
-        for plugin in ("beads", "speckit", "worktrunk"):
+        for plugin in ("beads", "chezmoi", "speckit", "worktrunk"):
             tokenizer = self.root / plugin / "extensions" / "shell-tokenizer.ts"
             tokenizer.parent.mkdir(parents=True, exist_ok=True)
             tokenizer.write_text("export const tokenize = 1;\n", encoding="utf-8")
