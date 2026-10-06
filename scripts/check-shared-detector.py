@@ -30,6 +30,7 @@ ROOT = Path(__file__).resolve().parent.parent
 DUPLICATED: tuple[tuple[str, ...], ...] = (
     (
         "beads/extensions/shell-tokenizer.ts",
+        "chezmoi/extensions/shell-tokenizer.ts",
         "speckit/extensions/shell-tokenizer.ts",
     ),
     (
