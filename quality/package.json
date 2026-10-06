@@ -2,5 +2,6 @@
   "name": "@srobroek/quality",
   "version": "2.0.0",
   "description": "Adversarial-challenger agent and WATCHDOG advisor-file authoring skill.",
-  "private": true
+  "private": true,
+  "omp": {}
 }
