@@ -11,7 +11,9 @@
  * Every command is an argv array with a bounded timeout. Nothing reaches a
  * shell, so a branch name can never become a command. The one argv-level attack
  * that survives an array — a value starting with `-` that the CLI reads as an
- * option — is rejected before the command is built.
+ * option — is rejected before the command is built. Commands on the landing path
+ * run through {@link runCliAsync}, which an abort signal can end as well as the
+ * deadline.
  *
  * A setting changes only when a caller asks. {@link autoDeleteSetting} reads;
  * {@link enableAutoDelete} writes; nothing in this module calls
@@ -63,10 +65,19 @@ export type CliResult = {
 	error?: string;
 };
 
-export type CliRunner = (
+export type CliOptions = { cwd?: string; timeoutMs: number; env?: Readonly<Record<string, string>> };
+
+export type CliRunner = (argv: string[], options: CliOptions) => CliResult;
+
+/**
+ * A runner every caller awaits. `signal` ends the command early; `input` is written
+ * to its stdin. A synchronous {@link CliRunner} satisfies this type too, which is
+ * what lets a recording test runner answer either shape.
+ */
+export type AsyncCliRunner = (
 	argv: string[],
-	options: { cwd?: string; timeoutMs: number; env?: Readonly<Record<string, string>> },
-) => CliResult;
+	options: CliOptions & { signal?: AbortSignal; input?: string },
+) => CliResult | Promise<CliResult>;
 
 /**
  * Wall-clock ceiling for every command this module issues.
@@ -405,6 +416,135 @@ export const runCli: CliRunner = (argv, options) => {
 	}
 };
 
+/** A stream read to its end, or cut short by {@link CapturedStream.cancel}, keeping what arrived. */
+type CapturedStream = { text: Promise<string>; cancel: () => void };
+
+function capture(stream: ReadableStream<Uint8Array>): CapturedStream {
+	const reader = stream.getReader();
+	const decoder = new TextDecoder();
+	const text = (async () => {
+		let collected = "";
+		try {
+			for (;;) {
+				const chunk = await reader.read();
+				if (chunk.done) break;
+				collected += decoder.decode(chunk.value, { stream: true });
+			}
+		} catch {
+			// A cancelled or failed read ends the capture; the bytes already read stay.
+		}
+		return collected + decoder.decode();
+	})();
+	const cancel = (): void => {
+		try {
+			void reader.cancel().catch(() => undefined);
+		} catch {
+			// Already released or closed: there is nothing left to cut short.
+		}
+	};
+	return { text, cancel };
+}
+
+/**
+ * Write `input` to a child's stdin and close it. A child that exits without reading
+ * all of it closes the pipe first; its exit status is then the observation, so the
+ * write error is not.
+ */
+async function feed(stdin: Bun.FileSink, input: string): Promise<void> {
+	try {
+		await stdin.write(input);
+		await stdin.end();
+	} catch {
+		// See above: the exit status reports what the child did.
+	}
+}
+
+/**
+ * The abortable runner: one bounded child process, argv array, no shell.
+ *
+ * The landing path runs through this rather than {@link runCli} because a
+ * synchronous spawn blocks the event loop for the whole command: an interrupt is
+ * never delivered, so a hung `gh` holds the session until its timeout. Here the
+ * deadline and the caller's `signal` both end the command, and an already-aborted
+ * signal starts nothing.
+ *
+ * Ending a command ends its whole process group. The child is started in a group
+ * of its own and the group is sent SIGKILL, because killing only the direct child
+ * leaves its children running — a shell's `sleep`, a CLI's credential helper — and
+ * an orphan that inherited stdout holds the pipe open, so a read waiting for EOF
+ * would outlive the deadline it exists to enforce. The readers are cancelled with
+ * the group for the same reason. A command that was ended reports `ok: false`, with
+ * whatever output arrived before it.
+ *
+ * Stdin is not connected unless `input` is given, so nothing can wait on a prompt.
+ * Every failure collapses into the {@link CliResult} contract, as in {@link runCli}.
+ */
+export const runCliAsync: AsyncCliRunner = async (argv, options) => {
+	if (argv.length === 0) {
+		return { ok: false, exitCode: null, stdout: "", stderr: "", error: "no command to run" };
+	}
+	const timeout = Math.max(1, Math.trunc(options.timeoutMs));
+	const { signal, input } = options;
+	if (options.signal?.aborted === true) {
+		return { ok: false, exitCode: null, stdout: "", stderr: "", error: `${argv[0]} was not started: the call was aborted` };
+	}
+	let proc: Bun.Subprocess<"pipe" | "ignore", "pipe", "pipe">;
+	try {
+		proc = Bun.spawn(argv, {
+			cwd: options.cwd,
+			env: options.env,
+			stdin: input === undefined ? "ignore" : "pipe",
+			stdout: "pipe",
+			stderr: "pipe",
+			detached: true,
+		});
+	} catch (cause) {
+		const error = cause instanceof Error ? cause.message : String(cause);
+		return { ok: false, exitCode: null, stdout: "", stderr: "", error };
+	}
+	const child = proc;
+	const stdout = capture(child.stdout);
+	const stderr = capture(child.stderr);
+	let ended: string | null = null;
+	// `end` runs from a raw timer and an abort listener — this library has no host
+	// context to schedule through — so every step is contained: a throw there would
+	// surface as an uncaught exception in the session, long after this call returned.
+	const end = (cause: string): void => {
+		if (ended !== null) return;
+		ended = cause;
+		try {
+			process.kill(-child.pid, "SIGKILL");
+		} catch {
+			// No group left to signal; the direct child is the last thing to stop.
+			try {
+				child.kill("SIGKILL");
+			} catch {
+				// Already reaped.
+			}
+		}
+		stdout.cancel();
+		stderr.cancel();
+	};
+	const timer = setTimeout(() => end(`the ${timeout}ms timeout`), timeout);
+	const onAbort = (): void => end("an abort");
+	signal?.addEventListener("abort", onAbort, { once: true });
+	// An abort between the check above and this listener would otherwise go unheard.
+	// (Read as `signal`, not `options.signal`: the earlier read would narrow this one.)
+	if (signal?.aborted === true) end("an abort");
+	try {
+		if (input !== undefined && child.stdin !== undefined) await feed(child.stdin, input);
+		const [exitCode, out, err] = await Promise.all([child.exited, stdout.text, stderr.text]);
+		if (ended !== null) return { ok: false, exitCode: null, stdout: out, stderr: err, error: `${argv[0]} was killed by ${ended}` };
+		if (child.signalCode !== null) {
+			return { ok: false, exitCode: null, stdout: out, stderr: err, error: `${argv[0]} was terminated by ${child.signalCode}` };
+		}
+		return { ok: true, exitCode, stdout: out, stderr: err };
+	} finally {
+		clearTimeout(timer);
+		signal?.removeEventListener("abort", onAbort);
+	}
+};
+
 /**
  * Resolve an allowlisted remote to the forge and canonical host its CLI/API
  * must target. Alternate SSH transport hosts never escape into forge commands.
@@ -597,7 +737,7 @@ function removeSourceBranchAfterMerge(payload: unknown): boolean | null {
  * `run` receives no `cwd`: both reads name the repository in the request path.
  * A caller that needs one binds it by wrapping the runner.
  */
-export function autoDeleteSetting(forge: Forge, repo: string, run: CliRunner = runCli): "on" | "off" | "unknown" {
+export async function autoDeleteSetting(forge: Forge, repo: string, run: AsyncCliRunner = runCliAsync): Promise<"on" | "off" | "unknown"> {
 	const supported = supportedForge(forge);
 	if (supported === null) return "unknown";
 	const path = normalizeRepoPath(supported, repo);
@@ -605,7 +745,7 @@ export function autoDeleteSetting(forge: Forge, repo: string, run: CliRunner = r
 	const argv = supported === "github"
 		? ["gh", "api", `repos/${path}`, "--jq", ".delete_branch_on_merge"]
 		: ["glab", "api", `projects/${encodeURIComponent(path)}`, "--hostname", GITLAB_TARGET.canonicalHost];
-	const result = run(argv, { timeoutMs: FORGE_TIMEOUT_MS });
+	const result = await run(argv, { timeoutMs: FORGE_TIMEOUT_MS });
 	if (!result.ok || result.exitCode !== 0 || result.error !== undefined) return "unknown";
 	const text = result.stdout.trim();
 	if (text === "") return "unknown";
@@ -638,7 +778,7 @@ export function autoDeleteSetting(forge: Forge, repo: string, run: CliRunner = r
  * the setting is on. A caller that needs proof re-reads with
  * {@link autoDeleteSetting}.
  */
-export function enableAutoDelete(forge: Forge, repo: string, run: CliRunner = runCli): { ok: boolean; reason?: string } {
+export async function enableAutoDelete(forge: Forge, repo: string, run: AsyncCliRunner = runCliAsync): Promise<{ ok: boolean; reason?: string }> {
 	const supported = supportedForge(forge);
 	if (supported === null) {
 		return {
@@ -654,7 +794,7 @@ export function enableAutoDelete(forge: Forge, repo: string, run: CliRunner = ru
 	const argv = supported === "github"
 		? ["gh", "api", "-X", "PATCH", `repos/${path}`, "-F", "delete_branch_on_merge=true"]
 		: ["glab", "api", "-X", "PUT", `projects/${encodeURIComponent(path)}`, "--hostname", GITLAB_TARGET.canonicalHost, "-F", "remove_source_branch_after_merge=true"];
-	const result = run(argv, { timeoutMs: FORGE_TIMEOUT_MS });
+	const result = await run(argv, { timeoutMs: FORGE_TIMEOUT_MS });
 	if (!result.ok || result.exitCode !== 0 || result.error !== undefined) {
 		return { ok: false, reason: describeFailure(argv, result) };
 	}
@@ -670,6 +810,16 @@ export type MergeOptions = {
 	deleteBranch?: boolean;
 	/** The requested landing strategy; squash preserves the historical default. */
 	mergeMethod?: MergeMethod;
+	/**
+	 * The squash commit's subject: the pull request title. Without one GitHub takes
+	 * the subject from a repository setting, which for a one-commit pull request is
+	 * that commit's message rather than the reviewed title. Only a squash takes it —
+	 * `gh pr merge --subject`, `glab mr merge --squash-message` — and it must be one
+	 * non-empty line. It stays the operand of its flag even when it starts with `-`:
+	 * both CLIs' flag parser takes the next element as a value flag's argument
+	 * unconditionally.
+	 */
+	squashSubject?: string;
 };
 
 /**
@@ -711,14 +861,26 @@ export function mergeArgs(forge: Forge, pr: number | string, options: MergeOptio
 	if (!MERGE_METHODS.includes(method as MergeMethod)) {
 		throw new Error(`mergeArgs refuses mergeMethod ${JSON.stringify(method)}, expected one of "squash", "merge", "rebase"`);
 	}
+	const subjectDescriptor = Object.getOwnPropertyDescriptor(options, "squashSubject");
+	const subject: unknown = subjectDescriptor !== undefined && "value" in subjectDescriptor ? subjectDescriptor.value : undefined;
+	if (subject !== undefined) {
+		if (method !== "squash") {
+			throw new Error(`mergeArgs refuses squashSubject with mergeMethod ${JSON.stringify(method)}: only a squash takes a subject`);
+		}
+		if (typeof subject !== "string" || subject.trim() === "" || hasControlCharacter(subject)) {
+			throw new Error(`mergeArgs refuses squashSubject ${JSON.stringify(subject)}, expected one non-empty line`);
+		}
+	}
 	const strategy = method === "squash" ? "--squash" : method === "merge" ? "--merge" : "--rebase";
 	if (supported === "github") {
 		const argv = ["gh", "pr", "merge", number, strategy];
+		if (typeof subject === "string") argv.push("--subject", subject);
 		if (deleteBranch) argv.push("--delete-branch");
 		return argv;
 	}
 	const argv = ["glab", "mr", "merge", number];
 	if (method !== "merge") argv.push(strategy);
+	if (typeof subject === "string") argv.push("--squash-message", subject);
 	if (deleteBranch) argv.push("--remove-source-branch");
 	return argv;
 }
@@ -729,13 +891,13 @@ export function mergeArgs(forge: Forge, pr: number | string, options: MergeOptio
  * policy is unknown rather than guessed. A failed or malformed read is also unknown;
  * callers only refuse when the forge explicitly reports `false`.
  */
-export function allowMergeCommit(forge: Forge, repo: string, run: CliRunner = runCli): boolean | "unknown" {
+export async function allowMergeCommit(forge: Forge, repo: string, run: AsyncCliRunner = runCliAsync): Promise<boolean | "unknown"> {
 	const supported = supportedForge(forge);
 	if (supported !== "github") return "unknown";
 	const path = normalizeRepoPath(supported, repo);
 	if (path === null) return "unknown";
 	const argv = ["gh", "api", `repos/${path}`, "--jq", ".allow_merge_commit"];
-	const result = run(argv, { timeoutMs: FORGE_TIMEOUT_MS });
+	const result = await run(argv, { timeoutMs: FORGE_TIMEOUT_MS });
 	if (!result.ok || result.exitCode !== 0 || result.error !== undefined) return "unknown";
 	const value = result.stdout.trim();
 	if (value === "true") return true;
@@ -881,6 +1043,79 @@ function urlProbeEnvironment(
 }
 
 /**
+ * One prepared absence probe: the command, where and how it runs, the ref its result
+ * is read against, and the cleanup of anything preparing it created. `dispose` runs
+ * whatever the outcome, including a runner that throws.
+ */
+type AbsenceProbe = { argv: string[]; options: CliOptions; ref: string; dispose: () => void };
+
+/** Prepare the probe {@link remoteBranchAbsent} describes, or null when its answer is already `"unknown"`. */
+function absenceProbe(remoteOrUrl: string, branch: string, cwd: string, environment: NodeJS.ProcessEnv): AbsenceProbe | null {
+	if (!isSafeArgument(remoteOrUrl) || !isValidBranchName(branch)) return null;
+	const ref = `refs/heads/${branch}`;
+	// URL mode is entered only for a spelling {@link forgeTarget} has already verified
+	// — an allowlisted host reached over an allowlisted transport — never by guessing
+	// that a string looks URL-ish, so no unverified scheme can select it.
+	//
+	// A URL names its repository outright, and the one thing that could still change
+	// which repository is contacted is `url.<base>.insteadOf`, which rewrites URLs and
+	// not just remote names. `extensions.worktreeConfig` can scope such a rewrite to
+	// whichever worktree happens to answer the question, which is how a probe asked
+	// after a worktree is gone ends up at a different repository and reports a branch
+	// absent that still exists.
+	//
+	// So the probe runs from a directory that is not a checkout, with no global and no
+	// system file, and the directory is removed whatever the outcome — and the URL
+	// itself never reaches the command line. It is configured for this one child
+	// through {@link urlProbeEnvironment}, and argv names {@link PROBE_REMOTE}: `ps`
+	// shows argv to every user on the host, so a `user:token@` or `?token=` URL on a
+	// command line is a credential published to the machine.
+	if (forgeTarget(remoteOrUrl) !== null) {
+		let neutral: string;
+		try {
+			// Resolved to its physical path: `os.tmpdir()` answers from ambient TMPDIR and
+			// that path is commonly a symlink, while the ceiling below must name the path
+			// Git resolves.
+			neutral = realpathSync(mkdtempSync(join(tmpdir(), "forge-ls-remote-")));
+		} catch {
+			// A probe with nowhere neutral to run cannot prove absence.
+			return null;
+		}
+		const dispose = (): void => {
+			try {
+				rmSync(neutral, { recursive: true, force: true });
+			} catch {
+				// The probe repository holds four entries and no object; a verdict is not
+				// worth throwing over a directory the OS will reclaim.
+			}
+		};
+		// Without a repository of its own, Git goes looking for one, and the ambient
+		// TMPDIR decides what it finds.
+		const gitDir = isolatedProbeRepository(neutral);
+		if (gitDir === null) {
+			dispose();
+			return null;
+		}
+		return {
+			argv: lsRemoteArgv(PROBE_REMOTE, ref),
+			options: { cwd: neutral, timeoutMs: FORGE_TIMEOUT_MS, env: urlProbeEnvironment(environment, remoteOrUrl, neutral, gitDir) },
+			ref,
+			dispose,
+		};
+	}
+	// Name mode, unchanged: a remote name resolves only inside the repository that
+	// configures it, so the directory stays required and stays the caller's. A name is
+	// not a secret, so it stays an operand.
+	if (cwd.trim() === "") return null;
+	return {
+		argv: lsRemoteArgv(remoteOrUrl, ref),
+		options: { cwd, timeoutMs: FORGE_TIMEOUT_MS, env: gitObservationEnvironment(environment) },
+		ref,
+		dispose: () => undefined,
+	};
+}
+
+/**
  * Whether `branch` is gone from `remoteOrUrl`, observed against the exact ref, from
  * inside `cwd`.
  *
@@ -922,64 +1157,32 @@ export function remoteBranchAbsent(
 	run: CliRunner = runCli,
 	environment: NodeJS.ProcessEnv = process.env,
 ): "absent" | "present" | "unknown" {
-	if (!isSafeArgument(remoteOrUrl) || !isValidBranchName(branch)) return "unknown";
-	const ref = `refs/heads/${branch}`;
-	// URL mode is entered only for a spelling {@link forgeTarget} has already verified
-	// — an allowlisted host reached over an allowlisted transport — never by guessing
-	// that a string looks URL-ish, so no unverified scheme can select it.
-	//
-	// A URL names its repository outright, and the one thing that could still change
-	// which repository is contacted is `url.<base>.insteadOf`, which rewrites URLs and
-	// not just remote names. `extensions.worktreeConfig` can scope such a rewrite to
-	// whichever worktree happens to answer the question, which is how a probe asked
-	// after a worktree is gone ends up at a different repository and reports a branch
-	// absent that still exists.
-	//
-	// So the probe runs from a directory that is not a checkout, with no global and no
-	// system file, and the directory is removed whatever the outcome — and the URL
-	// itself never reaches the command line. It is configured for this one child
-	// through {@link urlProbeEnvironment}, and argv names {@link PROBE_REMOTE}: `ps`
-	// shows argv to every user on the host, so a `user:token@` or `?token=` URL on a
-	// command line is a credential published to the machine.
-	if (forgeTarget(remoteOrUrl) !== null) {
-		let neutral: string;
-		try {
-			// Resolved to its physical path: `os.tmpdir()` answers from ambient TMPDIR and
-			// that path is commonly a symlink, while the ceiling below must name the path
-			// Git resolves.
-			neutral = realpathSync(mkdtempSync(join(tmpdir(), "forge-ls-remote-")));
-		} catch {
-			// A probe with nowhere neutral to run cannot prove absence.
-			return "unknown";
-		}
-		try {
-			// Without a repository of its own, Git goes looking for one, and the ambient
-			// TMPDIR decides what it finds.
-			const gitDir = isolatedProbeRepository(neutral);
-			if (gitDir === null) return "unknown";
-			const result = run(lsRemoteArgv(PROBE_REMOTE, ref), {
-				cwd: neutral,
-				timeoutMs: FORGE_TIMEOUT_MS,
-				env: urlProbeEnvironment(environment, remoteOrUrl, neutral, gitDir),
-			});
-			return absenceVerdict(result, ref);
-		} finally {
-			try {
-				rmSync(neutral, { recursive: true, force: true });
-			} catch {
-				// The probe repository holds four entries and no object; a verdict is not
-				// worth throwing over a directory the OS will reclaim.
-			}
-		}
+	const probe = absenceProbe(remoteOrUrl, branch, cwd, environment);
+	if (probe === null) return "unknown";
+	try {
+		return absenceVerdict(run(probe.argv, probe.options), probe.ref);
+	} finally {
+		probe.dispose();
 	}
-	// Name mode, unchanged: a remote name resolves only inside the repository that
-	// configures it, so the directory stays required and stays the caller's. A name is
-	// not a secret, so it stays an operand.
-	if (cwd.trim() === "") return "unknown";
-	const result = run(lsRemoteArgv(remoteOrUrl, ref), {
-		cwd,
-		timeoutMs: FORGE_TIMEOUT_MS,
-		env: gitObservationEnvironment(environment),
-	});
-	return absenceVerdict(result, ref);
+}
+
+/**
+ * {@link remoteBranchAbsent} through an {@link AsyncCliRunner}: the same probe, the
+ * same verdict, for a caller whose commands an abort must be able to end. The
+ * landing path binds its signal into `run`.
+ */
+export async function remoteBranchAbsentAsync(
+	remoteOrUrl: string,
+	branch: string,
+	cwd: string,
+	run: AsyncCliRunner = runCliAsync,
+	environment: NodeJS.ProcessEnv = process.env,
+): Promise<"absent" | "present" | "unknown"> {
+	const probe = absenceProbe(remoteOrUrl, branch, cwd, environment);
+	if (probe === null) return "unknown";
+	try {
+		return absenceVerdict(await run(probe.argv, probe.options), probe.ref);
+	} finally {
+		probe.dispose();
+	}
 }
