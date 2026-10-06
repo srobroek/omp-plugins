@@ -16,7 +16,14 @@ MUST put useful facts in bead `metadata`, not comments or the description, inclu
 # AGENT ROUTING
 MUST set `execution_agent_type` in `metadata` at creation on every work bead, with one of `implementer`, `implementer-high`, `researcher`, or `operator`. Add `execution_reasoning_effort` (`low`, `medium`, `high`, or `xhigh`) ONLY when the bead deviates from that agent's default effort. These are bd's documented advisory execution keys; the dispatching parent reads them before spawning. Example: `bd create "title" -t task -p 2 --metadata '{"execution_agent_type":"implementer"}' --acceptance "CRITERIA"`; in a graph plan, put the same keys in the node's `metadata`.
 
-Choose `implementer-high` for root-cause/debugging work, concurrency or data-integrity logic, cross-module contract changes, algorithmic or numeric precision rules, or a bead whose acceptance needs design judgment beyond the bead text; otherwise `implementer`. Planners commonly under-assign the high tier (a planning experiment caught only 29-36% of complex beads), so apply these criteria to each bead individually rather than defaulting the whole plan.
+Choose each bead's type from the work that bead itself does, never from the plan's overall importance, risk, or size:
+
+- `implementer-high`: root-cause debugging where the cause is not yet known, concurrency or data-integrity logic, a change to a contract other modules consume, algorithmic or numeric precision rules, or acceptance that needs a design decision the bead text does not make.
+- `implementer`, the default: every other bead that edits files. This includes multi-file, prose, rule, prompt, config, and test edits whose change the bead already specifies, and fixes whose cause is already known.
+- `researcher`: answers a question, inventories, or analyses existing data or results, with no product-code edits.
+- `operator`: runs one exact, known command or a bounded mechanical step with no design judgment.
+
+Apply the list to each bead individually. Planners err in both directions: one planning experiment caught only 29-36% of complex beads, while a later ledger audit found most tagged implementation beads set to `implementer-high`. Check each `implementer-high` bead against the criteria above, and each other bead for any of them.
 
 # MULTILINE TEXT
 MUST pass multiline bead text through a file: `bd create|update ... --body-file notes.md` (or `--stdin`) for a description, `bd comments add ID --file notes.md` for a comment. A `\n` inside a quoted argument is stored as a literal backslash-n, not a paragraph break. The embedded-write gate accepts the `--body-file` form.
