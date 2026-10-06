@@ -14,7 +14,7 @@ The output of a template tool must be unencumbered. No exceptions -- even if
 the user "wants copyleft", explain the output contamination problem first.
 
 If the user insists on protecting the template ENGINE: suggest a split license
-(engine under MPL-2.0, template content under MIT-0 or CC0) and note this
+(engine under MPL-2.0, template content under MIT-0 or 0BSD) and note this
 requires clear directory-level LICENSE separation.
 
 ### Config / prompts / thin-copyright content
@@ -84,9 +84,11 @@ closed fork vs. whether they value simplicity.
 ### Dual commercial licensing desired
 
 → Whatever copyleft license fits above, PLUS:
-- CLA from day one (required to sell commercial licenses of the combined work)
-- CONTRIBUTING.md stating the CLA requirement
-- CLA bot (contributor-assistant/github-action)
+- Relicensing rights to every contribution from day one (required to sell
+  commercial licenses of the combined work): usually a CLA, or copyright
+  assignment; without either, each contributor's later consent or a rewrite
+- CONTRIBUTING.md stating the chosen requirement
+- For a CLA: a CLA bot (contributor-assistant/github-action)
 
 Note: the stronger the copyleft, the more "pain" → the more commercial value.
 AGPL + commercial license is the proven model (Grafana, MongoDB pre-SSPL, Minio).
