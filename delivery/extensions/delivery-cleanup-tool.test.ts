@@ -1573,7 +1573,6 @@ describe("delivery_cleanup registration", () => {
 			omp: { extensions: string[] };
 		};
 		const decidedOrder = [
-			"./extensions/unpushed-work-advisory.ts",
 			"./extensions/delivery-land-tool.ts",
 			"./extensions/delivery-cleanup-tool.ts",
 			"./extensions/hygiene-orientation.ts",
