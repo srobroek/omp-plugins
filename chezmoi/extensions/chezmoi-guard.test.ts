@@ -1,40 +1,30 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, setSystemTime, test } from "bun:test";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import chezmoiGuard, {
-	chezmoiStatusReport,
 	considerPath,
 	editedFiles,
 	lexicalAbs,
 	loadManaged,
 	resetChezmoiGuardForTests,
-	sedInplacePaths,
 	seedChezmoiCacheForTests,
 	setChezmoiSpawnForTests,
-	setLastReminderAtForTests,
 	shouldInspect,
 	under,
 } from "./chezmoi-guard.ts";
 
 afterEach(() => {
 	resetChezmoiGuardForTests();
+	setSystemTime();
 });
 
-type Handler = (event: Record<string, unknown>) => unknown;
+type Handler = (event: Record<string, unknown>, ctx?: { cwd: string }) => unknown;
 
-function fakePi(): { handlers: Record<string, Handler[]>; pi: { zod: unknown; registerTool: () => void; on: (ev: string, h: Handler) => void } } {
+function fakePi(): { handlers: Record<string, Handler[]>; pi: { on: (ev: string, h: Handler) => void } } {
 	const handlers: Record<string, Handler[]> = {};
-	const chain: Record<string, unknown> = {};
-	const self = () => chain;
-	chain.string = self;
-	chain.optional = self;
-	chain.describe = self;
-	chain.object = self;
 	return {
 		handlers,
 		pi: {
-			zod: chain,
-			registerTool: () => {},
 			on: (ev, h) => {
 				const registered = handlers[ev] ?? [];
 				registered.push(h);
@@ -48,12 +38,13 @@ const HOME = homedir();
 const OUTSIDE = join(HOME, ".config", "omp-plugins-chezmoi-guard-test");
 const CWD = join(HOME, "projects", "app");
 const SOURCE = join(HOME, ".local", "share", "chezmoi");
+const ZSHRC = join(HOME, ".zshrc");
+const ZSHRC_SOURCE = join(SOURCE, "dot_zshrc");
 
 describe("shouldInspect / under / lexicalAbs", () => {
 	test("inspects home paths outside cwd", () => {
 		expect(shouldInspect(OUTSIDE, CWD)).toBe(true);
 	});
-
 
 	test("skips paths outside home", () => {
 		expect(shouldInspect("/tmp/elsewhere", CWD)).toBe(false);
@@ -66,22 +57,27 @@ describe("shouldInspect / under / lexicalAbs", () => {
 	});
 
 	test("lexicalAbs expands ~ and resolves relatives", () => {
-		expect(lexicalAbs("~/.zshrc", CWD)).toBe(join(HOME, ".zshrc"));
+		expect(lexicalAbs("~/.zshrc", CWD)).toBe(ZSHRC);
 		expect(lexicalAbs("foo/../bar", "/abs/cwd")).toBe("/abs/cwd/bar");
 	});
 });
 
-describe("editedFiles / sedInplacePaths", () => {
-	test("reads file_path then path then paths", () => {
+describe("editedFiles", () => {
+	test("reads file_path, path and paths", () => {
 		expect(editedFiles({ file_path: "a.ts" })).toEqual(["a.ts"]);
 		expect(editedFiles({ path: "b.ts" })).toEqual(["b.ts"]);
 		expect(editedFiles({ paths: ["c.ts", ""] })).toEqual(["c.ts"]);
 		expect(editedFiles({})).toEqual([]);
 	});
 
-	test("extracts sed -i path tokens", () => {
-		expect(sedInplacePaths("sed -i s/a/b/ ~/.zshrc")).toEqual(["~/.zshrc"]);
-		expect(sedInplacePaths("echo hi")).toEqual([]);
+	test("reads every hashline section header and MV destination", () => {
+		const input = "[a.ts#AB12]\nPUT 1.=1:\n+x\n['b c.ts'#CD34]\nMV d.ts\n+MV body.ts";
+		expect(editedFiles({ input })).toEqual(["a.ts", "b c.ts", "d.ts"]);
+	});
+
+	test("reads apply_patch file and move headers", () => {
+		const input = "*** Begin Patch\n*** Update File: a.ts\n*** Move to: b.ts\n@@\n-x\n+y\n*** Add File: c.ts\n+z\n*** End Patch";
+		expect(editedFiles({ input })).toEqual(["a.ts", "b.ts", "c.ts"]);
 	});
 });
 
@@ -110,116 +106,126 @@ describe("managed-set lookup", () => {
 	});
 
 	test("allows path inside source dir", () => {
-		const srcFile = join(SOURCE, "dot_zshrc");
-		seedChezmoiCacheForTests(new Set([join(HOME, ".zshrc")]), SOURCE);
-		expect(considerPath(srcFile, CWD)).toBeUndefined();
+		seedChezmoiCacheForTests(new Set([ZSHRC]), SOURCE);
+		expect(considerPath(ZSHRC_SOURCE, CWD)).toBeUndefined();
 	});
 });
 
 describe("chezmoi-guard integration", () => {
-	test("blocks edit of managed target", () => {
+	/** A fake `chezmoi` whose managed list the test can grow. */
+	function guard(managed: string[] = [ZSHRC]) {
 		const { handlers, pi } = fakePi();
-		seedChezmoiCacheForTests(new Set([OUTSIDE]), SOURCE);
 		setChezmoiSpawnForTests((args) => {
-			if (args[0] === "source-path" && args[1] === OUTSIDE) return `${SOURCE}/dot_config/file\n`;
-			return SOURCE;
+			if (args[0] === "managed") return managed.join("\n");
+			if (args[0] === "source-path" && args[1] === ZSHRC) return `${ZSHRC_SOURCE}\n`;
+			if (args[0] === "source-path" && args.length === 1) return `${SOURCE}\n`;
+			return null;
 		});
 		chezmoiGuard(pi as never);
-		const out = handlers.tool_call?.[0]?.({
-			toolName: "write",
-			toolCallId: "t1",
-			input: { path: OUTSIDE, cwd: CWD },
-		});
-		expect(out).toEqual(
-			expect.objectContaining({
-				block: true,
-				reason: expect.stringContaining(`${SOURCE}/dot_config/file`),
-			}),
-		);
+		const call = (toolName: string, input: Record<string, unknown>, cwd = CWD) =>
+			handlers.tool_call?.[0]?.({ toolName, toolCallId: "t", input }, { cwd });
+		return { call, managed };
+	}
+	const refusal = expect.objectContaining({ block: true, reason: expect.stringContaining(ZSHRC_SOURCE) });
+
+	test("refuses write to a managed target, naming the source path", () => {
+		expect(guard().call("write", { path: ZSHRC })).toEqual(refusal);
 	});
 
 	test("allows unmanaged write", () => {
-		const { handlers, pi } = fakePi();
-		seedChezmoiCacheForTests(new Set(), SOURCE);
-		chezmoiGuard(pi as never);
-		const out = handlers.tool_call?.[0]?.({
-			toolName: "edit",
-			toolCallId: "t2",
-			input: { path: OUTSIDE, cwd: CWD },
-		});
-		expect(out).toBeUndefined();
+		expect(guard().call("edit", { path: OUTSIDE })).toBeUndefined();
 	});
 
 	test("allows when spawn reports missing binary", () => {
 		const { handlers, pi } = fakePi();
 		setChezmoiSpawnForTests(() => null);
 		chezmoiGuard(pi as never);
-		const out = handlers.tool_call?.[0]?.({
-			toolName: "write",
-			toolCallId: "t3",
-			input: { path: OUTSIDE, cwd: CWD },
-		});
+		const out = handlers.tool_call?.[0]?.({ toolName: "write", toolCallId: "t", input: { path: ZSHRC } }, { cwd: CWD });
 		expect(out).toBeUndefined();
 	});
 
-	test("source-dir edit allows and tool_result reminder throttles", () => {
-		const { handlers, pi } = fakePi();
-		const srcFile = join(SOURCE, "dot_zshrc");
-		seedChezmoiCacheForTests(new Set([join(HOME, ".zshrc")]), SOURCE);
-		chezmoiGuard(pi as never);
-		const call = handlers.tool_call?.[0]?.({
-			toolName: "write",
-			toolCallId: "src1",
-			input: { path: srcFile, cwd: CWD },
-		});
-		expect(call).toBeUndefined();
-
-		const resultEvent = {
-			toolName: "write",
-			toolCallId: "src1",
-			content: [{ type: "text", text: "ok" }],
-		};
-		const first = handlers.tool_result?.[0]?.(resultEvent) as { content: Array<{ text: string }> } | undefined;
-		expect(first?.content[0]?.text).toContain("Chezmoi source edited");
-
-		handlers.tool_call?.[0]?.({
-			toolName: "write",
-			toolCallId: "src2",
-			input: { path: srcFile, cwd: CWD },
-		});
-		const second = handlers.tool_result?.[0]?.({
-			toolName: "write",
-			toolCallId: "src2",
-			content: [{ type: "text", text: "ok" }],
-		});
-		expect(second).toBeUndefined();
-
-		setLastReminderAtForTests(0);
-		handlers.tool_call?.[0]?.({
-			toolName: "write",
-			toolCallId: "src3",
-			input: { path: srcFile, cwd: CWD },
-		});
-		const third = handlers.tool_result?.[0]?.({
-			toolName: "write",
-			toolCallId: "src3",
-			content: [{ type: "text", text: "ok" }],
-		}) as { content: Array<{ text: string }> } | undefined;
-		expect(third?.content[0]?.text).toContain("Chezmoi source edited");
-	});
-});
-
-describe("chezmoi_status", () => {
-	test("combines status and diff", () => {
-		setChezmoiSpawnForTests((args) => {
-			if (args[0] === "status") return " M .zshrc";
-			if (args[0] === "diff") return "1 file changed";
-			return "";
-		});
-		const r = chezmoiStatusReport();
-		expect(r.ok).toBe(true);
-		expect(r.text).toContain("M .zshrc");
-		expect(r.text).toContain("1 file changed");
+	test("refuses a hashline edit to a managed target", () => {
+		expect(guard().call("edit", { input: "[~/.zshrc#AB12]\nPUT 1.=1:\n+export X=1" })).toEqual(refusal);
 	});
 
+	test("refuses a multi-file hashline edit when one section is a managed target", () => {
+		const input = `[${OUTSIDE}#AB12]\nPUT 1.=1:\n+x\n[${ZSHRC}#CD34]\nPUT 2.=2:\n+y`;
+		expect(guard().call("edit", { input })).toEqual(refusal);
+	});
+
+	test("refuses a hashline move onto a managed target", () => {
+		expect(guard().call("edit", { input: `[${OUTSIDE}#AB12]\nMV ${ZSHRC}` })).toEqual(refusal);
+	});
+
+	test("allows a hashline edit to the chezmoi source path", () => {
+		expect(guard().call("edit", { input: `[${ZSHRC_SOURCE}#AB12]\nPUT 1.=1:\n+export X=1` })).toBeUndefined();
+	});
+
+	test("a header quoted in a body row is not a target", () => {
+		expect(guard().call("edit", { input: `[${OUTSIDE}#AB12]\nPUT 1.=1:\n+[${ZSHRC}#CD34]` })).toBeUndefined();
+	});
+
+	test("refuses an apply_patch edit to a managed target", () => {
+		const input = "*** Begin Patch\n*** Update File: ~/.zshrc\n@@\n-a\n+b\n*** End Patch";
+		expect(guard().call("edit", { input })).toEqual(refusal);
+		expect(guard().call("apply_patch", { input })).toEqual(refusal);
+	});
+
+	test.each([
+		"printf x > ~/.zshrc",
+		"printf x >>~/.zshrc",
+		"echo x 2>/dev/null >$HOME/.zshrc",
+		"echo x | tee -a ~/.zshrc",
+		"cp /tmp/x ~/.zshrc",
+		"cp /tmp/.zshrc ~",
+		"cp -t ~ /tmp/.zshrc",
+		"mv /tmp/x ~/.zshrc",
+		"perl -pi -e 's/a/b/' ~/.zshrc",
+		"perl -i.bak -pe 's/a/b/' ~/.zshrc",
+		"sudo sed -i s/a/b/ ~/.zshrc",
+		"sudo -u root tee ~/.zshrc",
+		"gsed -i s/a/b/ ~/.zshrc",
+		"sed -i '' s/a/b/ ~/.zshrc",
+		"cd ~ && sed -i s/a/b/ .zshrc",
+		"cd /tmp; cd ~; printf x > .zshrc",
+	])("refuses bash write to a managed target: %s", (command) => {
+		expect(guard().call("bash", { command })).toEqual(refusal);
+	});
+
+	test("resolves a relative target against cwd", () => {
+		expect(guard().call("bash", { command: "sed -i s/a/b/ .zshrc", cwd: HOME })).toEqual(refusal);
+	});
+
+	test.each([
+		"cd /tmp; sed -i s/a/b/ .zshrc",
+		"cd /tmp && printf x > .zshrc",
+		"(cd /tmp; printf x > .zshrc)",
+		"cd \"$DIR\"; printf x > .zshrc",
+		"cat ~/.zshrc",
+		"cp ~/.zshrc /tmp/backup",
+		"echo '> ~/.zshrc'",
+		"grep x ~/.zshrc 2>&1",
+		"sed s/a/b/ ~/.zshrc",
+		"cat <<'EOF' > /tmp/notes\ncp a ~/.zshrc\nEOF",
+	])("allows bash command that does not write a managed target: %s", (command) => {
+		expect(guard().call("bash", { command, cwd: HOME })).toBeUndefined();
+	});
+
+	test("re-reads the managed list after the TTL", () => {
+		setSystemTime(new Date("2026-10-06T12:00:00Z"));
+		const { call, managed } = guard([]);
+		expect(call("write", { path: ZSHRC })).toBeUndefined();
+		managed.push(ZSHRC);
+		setSystemTime(new Date("2026-10-06T12:00:06Z"));
+		expect(call("write", { path: ZSHRC })).toEqual(refusal);
+	});
+
+	test("a chezmoi command invalidates the managed list at once", () => {
+		setSystemTime(new Date("2026-10-06T12:00:00Z"));
+		const { call, managed } = guard([]);
+		expect(call("write", { path: ZSHRC })).toBeUndefined();
+		managed.push(ZSHRC);
+		expect(call("bash", { command: "chezmoi add ~/.zshrc" })).toBeUndefined();
+		expect(call("write", { path: ZSHRC })).toEqual(refusal);
+	});
 });
