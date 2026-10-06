@@ -1,12 +1,13 @@
 # quality
 
-Adversarial challenge and WATCHDOG advisor-file authoring.
+Adversarial challenge, WATCHDOG advisor-file authoring, and advisor note resampling.
 
 ## Skills
 
 | Name | When |
 |------|------|
 | `watchdog-files` | Create, audit, or retune a project's `WATCHDOG.yml` / `WATCHDOG.md` advisor files |
+| `advisor-resample` | Weekly, or after an advisor prompt or config change: census of delivered advisor notes and a hand-labeled precision sample with KEEP / RETIRE-CANDIDATE verdicts |
 
 ## Agents
 
