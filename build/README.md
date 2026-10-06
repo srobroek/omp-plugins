@@ -13,9 +13,3 @@ Each assignment names its owned files.
 Each assignment names its verification commands.
 Each assignment states whether the main agent authorizes commits.
 Keep sibling assignments disjoint.
-
-## Skills
-
-| Name | When |
-|------|------|
-| `delegation-choreography` | Delegate non-trivial work and keep related prose edits scoped |
