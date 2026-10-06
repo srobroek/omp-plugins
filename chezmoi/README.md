@@ -13,9 +13,16 @@ The plugin resolves locations only through `chezmoi source-path` and `chezmoi ma
 
 ### `chezmoi-guard`
 
-Blocks `edit`/`write` and simple `sed -i` commands on chezmoi target files under `$HOME`. The guard also covers calls whose cwd is `$HOME` and existing symlink aliases.
+Refuses a write to a chezmoi-managed target under `$HOME`, because the next `chezmoi apply` overwrites it from source. The refusal names the source path to edit instead (`chezmoi source-path <target>`).
 
-The guard identifies managed files through `chezmoi managed --path-style=absolute` and caches the list in memory. When a call targets the chezmoi source directory, it refreshes the list.
+The guard reads write targets from:
+
+- `edit`/`write`/`apply_patch`: `path`, `file_path`, `paths`, hashline `[PATH#TAG]` section headers (every section of a multi-file edit) and `MV DEST`, and apply_patch `*** Add|Update|Delete|Edit File:` and `*** Move to:` headers.
+- `bash`: `>`, `>>` and `>|` redirects, `tee`, `cp`/`mv` destinations (including `-t DIR` and an existing destination directory), `sed -i`/`gsed -i` and `perl -i`. Leading `sudo`, `doas`, `env`, `command`, `exec`, `nohup`, `time` and `VAR=value` prefixes are skipped. Relative paths resolve against the call's cwd and a literal `cd DIR` earlier in the same command; a `cd` inside `( … )` ends with the group.
+
+It also covers existing symlink aliases of a managed target.
+
+The guard identifies managed files through `chezmoi managed --path-style=absolute`. It re-reads the list after 5 seconds, after an edit inside the chezmoi source directory, and after any `bash` command that runs `chezmoi` (for example `chezmoi add`).
 
 The guard allows the call in these cases:
 
@@ -24,28 +31,6 @@ The guard allows the call in these cases:
 - Timeout.
 - Spawn error.
 
-After a successful edit in the source directory, the guard prepends a `chezmoi apply` reminder. Reminders appear at most once per 10 minutes.
-
-### `secret-commit-gate`
-
-Blocks a `bash` `git commit` whose candidate files include a plaintext credential in the chezmoi source tree. `SECRET_NAMES` in the module defines the filename patterns.
-
-The gate exempts `.tmpl` files and `encrypted_` files. Values in `.tmpl` files render from the vault at apply time. It also exempts repository tooling outside the source directory.
-
-The gate recognizes `git`, `dgit`, and absolute git paths through literal `env`/`command`/`exec` prefixes. It follows `-C <dir>` and `cd`.
-
-- Ordinary commits inspect staged changes.
-- `-a` inspects tracked working-tree changes against HEAD.
-- Literal path-limited commits inspect only those paths.
-
-NUL-delimited Git output preserves filenames. Candidate inspection excludes deletions.
-
-A missing binary, missing chezmoi source, or git failure allows the commit. Interactive commits, pathspec files, and dynamic or nonliteral pathspecs are outside candidate inspection. These guards recognize common literal commands, not arbitrary shell programs; they are not a shell sandbox.
+The guard reads literal words only; it is not a shell sandbox. It does not see writes behind variables other than `$HOME`, command substitution, `sh -c`/`eval` strings, scripts, or other tools (`install`, `rsync`, `dd`, editors).
 
 The plugin does not implement the legacy chezmoi-sync hook's ignore-list behavior.
-
-## Tools
-
-The plugin's extension modules register `chezmoi_status`.
-
-`chezmoi_status` runs `chezmoi status` and `chezmoi diff` using the session cwd. If either command fails, the tool reports failure.
