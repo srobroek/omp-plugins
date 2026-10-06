@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import supervisor, { CUSTOM_TYPE_STALE_JOB, CUSTOM_TYPE_STALL, CUSTOM_TYPE_WAKE, STALE_JOB_MS, STALL_MS } from "./task-batch-supervisor";
+import supervisor, { CUSTOM_TYPE_STALE_JOB, CUSTOM_TYPE_STALL, CUSTOM_TYPE_WAKE, MAX_REARMS, STALE_JOB_MS, STALL_MS } from "./task-batch-supervisor";
 
 type Handler = (...args: unknown[]) => unknown;
 type Fixture = ReturnType<typeof makeFixture>;
@@ -36,6 +36,11 @@ function startAsync(f: Fixture, toolCallId = "batch-1") {
 function finish(f: Fixture, id: string, status: string, index: number) {
 	f.bus["task:subagent:lifecycle"]!({ id, agent: `agent-${id}`, index, status, parentToolCallId: "batch-1" });
 }
+/** Run every scheduled wake check, including re-armed ones queued while running. */
+function drainTimeouts(f: Fixture) {
+	for (let i = 0; i < f.timeouts.length; i += 1) f.timeouts[i]!();
+}
+const wakes = (f: Fixture) => f.sent.filter((x) => x.message.customType === CUSTOM_TYPE_WAKE);
 
 describe("task batch supervisor", () => {
 	test("wakes once after a two-item async batch settles", () => {
@@ -70,7 +75,19 @@ describe("task batch supervisor", () => {
 	test("notifies when a terminal child job remains registered", () => {
 		const f = makeFixture(); startAsync(f); finish(f, "a", "completed", 0); finish(f, "b", "completed", 1); f.setSnapshot({ running: [{ id: "job-1", agentId: "a" }], delivery: { pendingJobIds: [] } }); const original = Date.now; Date.now = () => original() + STALE_JOB_MS + 1; f.intervals[0]!(); Date.now = original; expect(f.sent.filter((x) => x.message.customType === CUSTOM_TYPE_STALE_JOB)).toHaveLength(1);
 	});
-	test("agent_end wakes a settled batch immediately", () => {
-		const f = makeFixture(); startAsync(f); finish(f, "a", "completed", 0); finish(f, "b", "completed", 1); f.handlers.agent_end!({ willContinue: false }, f.ctx); expect(f.sent.filter((x) => x.message.customType === CUSTOM_TYPE_WAKE)).toHaveLength(1);
+	test("agent_end does not wake a settled batch", () => {
+		const f = makeFixture(); startAsync(f); finish(f, "a", "completed", 0); finish(f, "b", "completed", 1); f.handlers.agent_end?.({ willContinue: false }, f.ctx); expect(wakes(f)).toHaveLength(0);
+	});
+	test("a parent that stays busy never receives a late wake", () => {
+		const f = makeFixture(); startAsync(f); finish(f, "a", "completed", 0); finish(f, "b", "completed", 1); f.setIdle(false); drainTimeouts(f);
+		expect(f.timeouts).toHaveLength(1 + MAX_REARMS); expect(wakes(f)).toHaveLength(0);
+	});
+	test("pending native delivery suppresses the wake", () => {
+		const f = makeFixture(); startAsync(f); finish(f, "a", "completed", 0); finish(f, "b", "completed", 1); f.setSnapshot({ running: [], delivery: { pendingJobIds: ["job-1"] } }); drainTimeouts(f); expect(wakes(f)).toHaveLength(0);
+	});
+	test("stall alert still fires after the parent's turn ends", () => {
+		const f = makeFixture(); startAsync(f); finish(f, "a", "started", 0); finish(f, "b", "completed", 1); f.handlers.agent_end?.({ willContinue: false }, f.ctx);
+		const original = Date.now; Date.now = () => original() + STALL_MS + 1; f.intervals[0]!(); Date.now = original;
+		expect(f.sent.filter((x) => x.message.customType === CUSTOM_TYPE_STALL)).toHaveLength(1); expect(wakes(f)).toHaveLength(0);
 	});
 });
