@@ -2,6 +2,7 @@ import { afterEach, describe, expect, setSystemTime, test } from "bun:test";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import chezmoiGuard, {
+	bashWriteTargets,
 	considerPath,
 	editedFiles,
 	lexicalAbs,
@@ -59,6 +60,29 @@ describe("shouldInspect / under / lexicalAbs", () => {
 	test("lexicalAbs expands ~ and resolves relatives", () => {
 		expect(lexicalAbs("~/.zshrc", CWD)).toBe(ZSHRC);
 		expect(lexicalAbs("foo/../bar", "/abs/cwd")).toBe("/abs/cwd/bar");
+	});
+});
+
+describe("bashWriteTargets", () => {
+	test("an unquoted here-document body is data, not commands", () => {
+		expect(bashWriteTargets("cat > /tmp/notes <<EOF\ncp a ~/.zshrc\nEOF", HOME)).toEqual(["/tmp/notes"]);
+		expect(bashWriteTargets("gh pr create --body-file - <<EOF\nRun: echo x >> ~/.zshrc\nEOF", HOME)).toEqual([]);
+	});
+
+	test("a substitution in an unquoted here-document body still runs", () => {
+		expect(bashWriteTargets("cat <<EOF\n$(cp a ~/.zshrc)\nEOF", HOME)).toEqual([ZSHRC]);
+		expect(bashWriteTargets("cat <<EOF\nnote `printf x > ~/.zshrc`\nEOF", HOME)).toEqual([ZSHRC]);
+		expect(bashWriteTargets("cat <<EOF\n\\$(cp a ~/.zshrc) and \\`cp a ~/.zshrc\\`\nEOF", HOME)).toEqual([]);
+		expect(bashWriteTargets("cat <<EOF\n$(cd /tmp; printf x > .zshrc)\nEOF\nprintf x > .zshrc", HOME)).toEqual([
+			"/tmp/.zshrc",
+			ZSHRC,
+		]);
+	});
+
+	test("a quoted target attached to a redirect operator is a redirect", () => {
+		expect(bashWriteTargets('echo x >"$HOME/.zshrc"', "/tmp")).toEqual([ZSHRC]);
+		expect(bashWriteTargets(`printf x >>"${ZSHRC}"`, "/tmp")).toEqual([ZSHRC]);
+		expect(bashWriteTargets('echo ">" ~/.zshrc', "/tmp")).toEqual([]);
 	});
 });
 
@@ -188,6 +212,9 @@ describe("chezmoi-guard integration", () => {
 		"sed -i '' s/a/b/ ~/.zshrc",
 		"cd ~ && sed -i s/a/b/ .zshrc",
 		"cd /tmp; cd ~; printf x > .zshrc",
+		'echo x >"$HOME/.zshrc"',
+		`printf x >>"${ZSHRC}"`,
+		"cat <<EOF\n$(cp a ~/.zshrc)\nEOF",
 	])("refuses bash write to a managed target: %s", (command) => {
 		expect(guard().call("bash", { command })).toEqual(refusal);
 	});
@@ -207,6 +234,9 @@ describe("chezmoi-guard integration", () => {
 		"grep x ~/.zshrc 2>&1",
 		"sed s/a/b/ ~/.zshrc",
 		"cat <<'EOF' > /tmp/notes\ncp a ~/.zshrc\nEOF",
+		"cat > /tmp/notes <<EOF\ncp a ~/.zshrc\nEOF",
+		"gh pr create --body-file - <<EOF\nRun: echo x >> ~/.zshrc\nEOF",
+		'echo ">" ~/.zshrc',
 	])("allows bash command that does not write a managed target: %s", (command) => {
 		expect(guard().call("bash", { command, cwd: HOME })).toBeUndefined();
 	});
