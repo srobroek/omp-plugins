@@ -129,7 +129,7 @@
     },
     {
       "name": "quality",
-      "description": "Quality gates for final verification, lint and docs adjudication, and browser-verification discipline.",
+      "description": "Adversarial-challenger agent and WATCHDOG advisor-file authoring skill.",
       "source": "./quality",
       "version": "2.0.0",
       "category": "development"
