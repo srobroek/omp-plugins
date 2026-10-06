@@ -1454,6 +1454,9 @@ describe("the ledger is classified at the canonical root, never at a caller's di
 		const reason = refusal(result);
 		expect(reason).toContain("beads.ledgerActive: observed true stored in the receipt, expected false");
 		expect(reason).toContain(`recomputed at canonical root "${realpathSync(f.main)}"`);
+		// Receipts minted before the canonical-root fix carry this claim; the refusal names the way out.
+		expect(reason).toContain(`run delivery_land for PR #${claimed.pr.number} again with worktree "${claimed.worktree.path}"`);
+		expect(reason).toContain("then run delivery_cleanup with that new receipt");
 		expect(mutationCalls(calls)).toEqual([]);
 		expect(existsSync(f.linked)).toBe(true);
 	});

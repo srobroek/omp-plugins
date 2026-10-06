@@ -18,7 +18,8 @@ import { type ShellToken, tokenizeShell } from "./shell-tokenizer.ts";
  * - `bash`: `>`/`>>`/`>|` redirects, `tee`, `cp`/`mv` destinations, `sed -i`/`gsed -i`
  *   and `perl -i`, behind `sudo`/`doas`/`env`/`command`/`exec`/`nohup`/`time` and
  *   assignment prefixes. Relative paths resolve against a literal `cd DIR` earlier
- *   in the same command; after a non-literal `cd` they are skipped.
+ *   in the same command; after a non-literal `cd` they are skipped. Here-document
+ *   bodies are data; only substitutions in an unquoted body count as commands.
  */
 
 const EDIT_TOOLS: Record<string, true> = { edit: true, write: true, apply_patch: true };
@@ -300,7 +301,7 @@ function simpleCommandTargets(words: ShellToken[]): RawTarget[] {
 	for (let i = 0; i < words.length; i++) {
 		const word = words[i] as ShellToken;
 		const value = word.value;
-		if (word.sawQuote) {
+		if (word.startsQuoted) {
 			args.push(value);
 			continue;
 		}
@@ -385,7 +386,7 @@ export function bashWriteTargets(command: string, cwd: string): string[] {
 			}
 		}
 	};
-	for (const token of tokenizeShell(command)) {
+	for (const token of tokenizeShell(command, { hereDocumentSubstitutionsOnly: true })) {
 		if (token.sawQuote || !Object.hasOwn(SEPARATORS, token.value)) {
 			words.push(token);
 			continue;

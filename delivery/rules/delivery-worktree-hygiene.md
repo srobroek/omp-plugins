@@ -1,6 +1,6 @@
 ---
 name: delivery-worktree-hygiene
-description: When holding a worktree, acting on a hygiene reminder, or cleaning up a worktree and branch after work lands.
+description: When holding a worktree, acting on a `delivery_hygiene_report` finding, or cleaning up a worktree and branch after work lands.
 ---
 
 # Worktree hygiene
@@ -19,7 +19,7 @@ MUST WH-3: commit and push only owned, finished, authorized work, one bounded co
 
 MUST WH-4: keep scratch files, logs, and repro scripts outside every worktree. A file written inside one dirties the tree or lands in a commit.
 
-MUST WH-5: act on the first hygiene reminder. The report-only `worktree-reaper` mutates nothing, so its report authorizes nothing.
+MUST WH-5: act on the first `delivery_hygiene_report` finding for a worktree you own: a nonzero dirty count, an unpushed commit, or a landing receipt for a branch whose worktree remains. The report runs only on demand and nothing repeats a finding, so a later call is not a second chance. The report-only `worktree-reaper` mutates nothing, so its report authorizes nothing.
 
 ## Inventory backup directories
 
