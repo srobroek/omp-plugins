@@ -1,6 +1,8 @@
 # Approved sources
 
-Search in tier order and stop at the first tier that covers a capability.
+Search in tier order and stop at the first tier that covers a capability. One exception: when
+a tier 1 entry mirrors a package whose own marketplace is in tier 2, install from that
+marketplace. `sniff` installs as `sniff@sniff`, not `sniff@srobroek-omp`.
 
 ## Tier 1: this repository
 
@@ -8,8 +10,9 @@ Search in tier order and stop at the first tier that covers a capability.
 |---|---|---|
 | `srobroek-omp` | `srobroek/omp-plugins` | language rules, delivery, beads, design, quality, safety, toolchain, and the other packages `omp plugin discover srobroek-omp` lists |
 
-`srobroek-omp` also carries `ui-skills` and `platform-design-skills`. Neither upstream ships a
-marketplace, so this catalog is how they install.
+`srobroek-omp` also mirrors three external packages. `ui-skills` and `platform-design-skills`
+ship no marketplace upstream, so this catalog is how they install. `sniff` ships its own
+marketplace in tier 2, which is the one to install from.
 
 ## Tier 2: approved third-party marketplaces
 

@@ -1,6 +1,6 @@
 # Discovery Surfaces
 
-Call `find_tools_scan` with the capability query. It reports the seven surfaces below; isolated failures never fail the tool. Empty surface 2 never means "nothing exists". The read-approved scan never acquires packages.
+Call `find_tools_scan` with the capability query. It reports the seven surfaces below; isolated failures never fail the tool.
 
 ## Surfaces
 
@@ -16,9 +16,3 @@ Call `find_tools_scan` with the capability query. It reports the seven surfaces 
 
 - Glama, PulseMCP, MCP.Directory, SkillsGate — HTML aggregators that overlap the Official MCP Registry and Smithery.
 - Awesome-list READMEs — prose, scrape-only, high recall and low precision.
-
-## Install-mutating commands
-
-`smithery mcp add`, `npx skills add`, curl-pipe installers, and similar write-to-disk commands are **trial-only after explicit approval**. They are never part of discovery.
-
-`npx skills find` also acquires and executes package code. Vet the package and obtain separate explicit execution approval outside `find_tools_scan`; never run it automatically to fill the `skills_cli` gap.

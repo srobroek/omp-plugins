@@ -40,7 +40,8 @@ It omits:
 
 Open search starts with the read-only `find_tools_scan`. The skills CLI (`skills@1.7.0`)
 and the Smithery CLI (`smithery@1.2.0`) run only after explicit approval, because both
-execute downloaded package code. Installs default to project scope:
+execute downloaded package code. Installs default to project scope in the canonical project
+root (the main worktree), so they outlive linked worktrees:
 
 | Kind | Lands in |
 |---|---|

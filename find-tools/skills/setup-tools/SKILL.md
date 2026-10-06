@@ -16,18 +16,21 @@ TRIGGER
 - a design skill's own upstreams -> `rule://design-upstream-preflight`
 
 GATES
-ASK Before any install, with the full candidate table and a multi-select of rows.
+ASK Before any install, with the candidate table, the canonical project root as target, and a multi-select of rows.
 ASK Before registering a marketplace outside `skill://setup-tools/references/approved-sources.md`.
 ASK Before running `npx skills` or `smithery`: each executes downloaded package code.
 ASK Before any user-wide install. Project scope is the default.
-ASK What the project will be, when it is greenfield: no stack marker in step 2.
+ASK What the project will be, when it is greenfield: no stack marker in step 3.
 
 ## Workflow
 
-1. Take inventory. -> `omp plugin list --json` (each `.marketplace[]` row carries `scope`),
+1. Resolve the canonical project root: the first `worktree` in `git worktree list --porcelain`.
+   Run every command below from it. Project scope writes the cwd's `.omp/` and `.agents/`,
+   which a linked worktree loses at cleanup.
+2. Take inventory. -> `omp plugin list --json` (each `.marketplace[]` row carries `scope`),
    `omp plugin marketplace list`, and the project's `.omp/mcp.json`, `.omp/skills/`, and
    `.agents/skills/`. Everything already present is marked `installed`, never re-proposed.
-2. Profile the project from its files. -> LOAD
+3. Profile the project from its files. -> LOAD
    `skill://setup-tools/references/project-signals.md`; every capability is named with the
    marker file that proved it. No marker, no capability.
    GREENFIELD, no stack marker found: ASK the intent as one multi-select from the intent
@@ -35,25 +38,25 @@ ASK What the project will be, when it is greenfield: no stack marker in step 2.
    infrastructure, AI/ML, CLI, desktop, library, docs). Then ASK the language when the
    chosen intents leave it open. -> every capability is named with the intent that
    proposed it, in place of a marker.
-3. Search tier 1, this repository's own catalog. -> `omp plugin marketplace update srobroek-omp`,
+4. Search tier 1, this repository's own catalog. -> `omp plugin marketplace update srobroek-omp`,
    then `omp plugin discover srobroek-omp`; match each capability to an entry.
-4. Search tier 2, the approved third-party marketplaces. -> register any missing one with
+5. Search tier 2, the approved third-party marketplaces. -> register any missing one with
    `omp plugin marketplace add OWNER/REPO`, then `omp plugin discover NAME`. Registration is
    user-wide: it adds a catalog, never a plugin.
-5. Search tier 3 only when the user asks to widen, or when a capability has no tier 1 or 2
+6. Search tier 3 only when the user asks to widen, or when a capability has no tier 1 or 2
    match. -> call `find_tools_scan` first; it is read-only. Then, after the ASK gate, the
    CLIs in the tier 3 table of `approved-sources.md`. Vet every hit with
    `skill://find-tools/references/adoption-policy.md` before it enters the table.
-6. Present one table of every relevant package. -> the OUTPUT table below, then ASK.
-7. Install each approved row by kind, project-local. -> the Install table below.
-8. Verify each install. -> `omp plugin list --json` shows the plugin with `"scope":"project"`;
+7. Present one table of every relevant package. -> the OUTPUT table below, then ASK.
+8. Install each approved row by kind. -> the Install table below.
+9. Verify each install. -> `omp plugin list --json` shows the plugin with `"scope":"project"`;
    a skill's `SKILL.md` exists under `.agents/skills/NAME/`; an MCP entry parses in
    `.omp/mcp.json`. A new skill loads after `/reload-plugins` or in the next session. A new
    extension, hook, or tool needs a restart.
 
 ## Install
 
-| Kind | Command | Lands in |
+| Kind | Command, run from the canonical project root | Lands in |
 |---|---|---|
 | Marketplace plugin | `omp plugin install NAME@MARKETPLACE --scope project` | `.omp/plugins/installed_plugins.json` |
 | Skill from a git repo | `npx --yes skills@1.7.0 add OWNER/REPO --skill NAME -a universal -y` | `.agents/skills/NAME/`, which the OMP `agents` provider loads, plus `skills-lock.json` |
@@ -62,19 +65,19 @@ ASK What the project will be, when it is greenfield: no stack marker in step 2.
 
 ## Rules
 
-MUST Install at project scope unless the user asks for user-wide.
+MUST Install at project scope in the canonical project root unless the user asks for user-wide.
 MUST Take every tier 1 and 2 row from its catalog: install address, version, and description
   come from `omp plugin discover`, not from memory.
 MUST Record each tier 3 candidate's source URL, license, and last activity before listing it,
   and finish that check before its install command runs.
-DEFAULT Prefer a tier 1 entry over a tier 2 or 3 one covering the same capability.
+DEFAULT Prefer a tier 1 entry over a tier 2 or 3 one, except a tier 1 mirror of a tier 2 marketplace (`sniff@sniff`).
 NOT Pass `-g` to `skills add`. It installs user-wide.
 NOT Use `smithery mcp add` to configure a project. It creates a hosted connection on the
   user's Smithery account, not a project file.
 NOT Commit the files an install writes unless the user asks.
 
 OUTPUT
-L1 PROJECT: markers found -> capabilities.
+L1 PROJECT: canonical project root; markers found -> capabilities.
    Table: | package | kind | tier | install command | scope | status | proved by |
    `status` is `installed`, `available`, or `vetted` (tier 3).
    After install: each row's verification result, then the reload or restart the user needs.

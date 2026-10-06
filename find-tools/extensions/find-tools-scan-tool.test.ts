@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 
-import { defaultRun, npmSearchText, SURFACES, scanSurfaces } from "./find-tools-scan-tool.ts";
+import { defaultRun, npmSearchText, renderScan, SURFACES, scanSurfaces } from "./find-tools-scan-tool.ts";
 
 
 describe("scanSurfaces isolation", () => {
@@ -197,8 +197,82 @@ describe("read discovery execution boundary", () => {
 			},
 		);
 		expect(commands).toEqual([["omp", "plugin", "discover"]]);
-		expect(result.results.find((surface) => surface.surface === "discover")?.hits[0]?.detail).toBe("browser-tools");
+		expect(result.results.find((surface) => surface.surface === "discover")?.hits[0]?.name).toBe("browser-tools");
 	});
+
+describe("inventory rendering for the step 3 coverage check", () => {
+	const plugins = Array.from({ length: 30 }, (_, n) => `plugin-${n}@market (1.0.${n}) (user)`);
+	const listOutput = `Marketplace Plugins:\n\n${plugins.map((p) => `  ${p}`).join("\n")}\n`;
+	const marketOutput = "Configured Marketplaces:\n\n  alpha  owner/alpha\n  beta  https://github.com/owner/beta\n";
+	const longDescription = `Browser automation for authenticated workflows ${"with a long catalog description ".repeat(5)}end-of-description`;
+	const discoverOutput = `Available Plugins:\n\n${Array.from({ length: 12 }, (_, n) => `  entry-${n}@2.0.${n}\n    ${n === 11 ? longDescription : `Description ${n}.`}`).join("\n")}\n`;
+	const run = async (argv: string[]) => {
+		const command = argv.join(" ");
+		if (command === "omp plugin list") return { ok: true, stdout: listOutput, stderr: "" };
+		if (command === "omp plugin marketplace list") return { ok: true, stdout: marketOutput, stderr: "" };
+		if (command === "omp plugin discover") return { ok: true, stdout: discoverOutput, stderr: "" };
+		throw new Error(`unexpected command ${command}`);
+	};
+
+	test("local reports one hit per installed plugin and registered marketplace", async () => {
+		const { results } = await scanSurfaces({ query: "x", surfaces: ["local"] }, { run, which: () => true, readFile: () => null });
+		const names = results.find((r) => r.surface === "local")?.hits.map((h) => h.name) ?? [];
+		for (let n = 0; n < 30; n++) expect(names).toContain(`plugin-${n}@market`);
+		expect(names).toContain("alpha");
+		expect(names).toContain("beta");
+	});
+
+	test("discover reports one hit per catalog entry with its full description", async () => {
+		const { results } = await scanSurfaces({ query: "x", surfaces: ["discover"] }, { run, which: () => true });
+		const hits = results.find((r) => r.surface === "discover")?.hits ?? [];
+		expect(hits).toHaveLength(12);
+		expect(hits[11]).toEqual({ name: "entry-11@2.0.11", detail: longDescription });
+	});
+
+	test("the rendered text lists every inventory entry without cutting descriptions", async () => {
+		const scan = await scanSurfaces({ query: "x", surfaces: ["local", "discover"] }, { run, which: () => true, readFile: () => null });
+		const text = renderScan(scan);
+		for (const plugin of plugins) expect(text).toContain(plugin.split(" ")[0] as string);
+		expect(text).toContain("owner/beta");
+		expect(text).toContain("entry-0@2.0.0");
+		expect(text).toContain("end-of-description");
+	});
+
+	test("a missing omp binary leaves local skipped with a gap, not ok", async () => {
+		const { results, gaps } = await scanSurfaces({ query: "x", surfaces: ["local"] }, {
+			which: () => false, readFile: () => null,
+			run: async () => { throw new Error("unexpected spawn"); },
+		});
+		const local = results.find((r) => r.surface === "local");
+		expect(local?.status).toBe("skipped");
+		expect(local?.reason).toContain("omp binary not found");
+		expect(local?.hits.some((h) => h.name === "omp")).toBe(false);
+		expect(gaps.some((g) => g.surface === "local" && g.kind === "unavailable")).toBe(true);
+	});
+
+	test("an existing but unreadable mcp.json is a reported gap", async () => {
+		const { results, gaps } = await scanSurfaces({ query: "x", surfaces: ["local"] }, {
+			run, which: () => true,
+			readFile: () => { throw Object.assign(new Error("EACCES: permission denied"), { code: "EACCES" }); },
+		});
+		const local = results.find((r) => r.surface === "local");
+		expect(local?.status).toBe("partial");
+		expect(local?.hits.find((h) => h.name === "~/.omp/agent/mcp.json")?.detail).toBe("unreadable");
+		expect(gaps.some((g) => g.surface === "local" && g.kind === "partial" && g.reason.includes("mcp.json"))).toBe(true);
+	});
+
+	test("Smithery hits keep the server description", async () => {
+		const { results } = await scanSurfaces({ query: "browser", surfaces: ["smithery"] }, {
+			env: { SMITHERY_API_KEY: "key" },
+			fetchFn: Object.assign(async () => new Response(JSON.stringify({
+				servers: [{ qualifiedName: "@acme/browser", displayName: "Browser", description: "Drives a headless browser." }],
+			})), { preconnect: () => {} }) as typeof fetch,
+		});
+		expect(results.find((r) => r.surface === "smithery")?.hits).toEqual([
+			{ name: "@acme/browser", detail: "Drives a headless browser." },
+		]);
+	});
+});
 
 // Real subprocess deadlines and inherited OS pipes cannot be exercised with fake timers.
 describe("bounded discovery subprocesses", () => {
