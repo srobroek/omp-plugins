@@ -6,7 +6,7 @@ import type { TSchema } from "@oh-my-pi/pi-ai";
 import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
 
 import type { GitRunner } from "./landing-receipt";
-import { listReceipts, receiptDirectory, repoKey } from "./landing-receipt";
+import { canonicalLedger, listReceipts, REPOSITORY_OBSERVATION_ARGS, receiptDirectory, repoKey } from "./landing-receipt";
 
 /**
  * Read-only hygiene inventory for one repository.
@@ -151,6 +151,7 @@ const REF_RANGE = /^refs\/heads\/\S+\.\.\.refs\/\S+$/;
  */
 const ALLOWLIST: readonly Allowed[] = [
 	{ argv: [...GIT, "rev-parse", "--git-common-dir"] },
+	{ argv: [...GIT, ...REPOSITORY_OBSERVATION_ARGS] },
 	{ argv: [...GIT, "worktree", "list", "--porcelain"] },
 	{ argv: [...GIT, "status", "--porcelain=v1", "-z", "-b"] },
 	{ argv: [...GIT, "for-each-ref", "--format=%(refname)%09%(upstream)%09%(upstream:short)", "refs/heads/"] },
@@ -263,17 +264,17 @@ function git(scan: Scan, args: readonly string[], cwd: string): ProbeResult {
 }
 
 /**
- * {@link repoKey}'s git seam, routed through this scan.
+ * The receipt module's git seam, routed through this scan.
  *
- * The receipt module owns the key algorithm, and this module owns the execution
- * bounds; routing its one command through here keeps every child of the scan
- * inside one allowlist and one budget. Its runner omits the `git` word and wants
- * trimmed stdout or null.
+ * The receipt module owns the key and ledger algorithms, and this module owns the
+ * execution bounds; routing their commands through here keeps every child of the
+ * scan inside one allowlist and one budget. Its runner omits the `git` word and,
+ * like the receipt module's own runner, wants Git's raw stdout or null.
  */
-function keyRunner(scan: Scan): GitRunner {
+function receiptGit(scan: Scan): GitRunner {
 	return (argv, cwd) => {
 		const result = git(scan, argv, cwd);
-		return available(result) ? result.stdout.trim() : null;
+		return available(result) ? result.stdout : null;
 	};
 }
 
@@ -556,7 +557,7 @@ function untrustedState(description: string, directory: string | null, paths?: s
  * the directory can be trusted, and which entries are hostile.
  */
 function receiptState(scan: Scan): ReceiptState {
-	const key = repoKey(scan.root, keyRunner(scan));
+	const key = repoKey(scan.root, receiptGit(scan));
 	if (!key) return untrustedState("Receipt state is unavailable because the canonical Git repository key could not be proved.", null);
 	let receipts: string;
 	let dir: string;
@@ -606,9 +607,27 @@ function receiptState(scan: Scan): ReceiptState {
 	};
 }
 
+/**
+ * Forge and Beads reachability.
+ *
+ * The ledger is classified at the canonical checkout root first, through the
+ * receipt module: a ledger-free or retired repository has no Beads state to read,
+ * so `bd list` is not run and its absence is not reported as ambiguity. Only an
+ * unclassifiable layout or an active ledger that cannot be read is ambiguous.
+ */
 function externalState(scan: Scan): void {
 	if (!available(git(scan, ["remote", "get-url", "origin"], scan.root)))
 		scan.findings.push({ kind: "forge", status: "ambiguous", description: "Forge publication evidence is unavailable; landed cleanup cannot be inferred." });
+	const ledger = canonicalLedger(scan.root, receiptGit(scan));
+	if (ledger === null) {
+		scan.findings.push({
+			kind: "beads",
+			status: "ambiguous",
+			description: "The Beads ledger could not be classified at the canonical checkout root; reconciliation and cleanup eligibility cannot be inferred.",
+		});
+		return;
+	}
+	if (!ledger.active) return;
 	if (!available(probe(scan, ["bd", "list", "--limit", "1", "--json"], scan.root)))
 		scan.findings.push({
 			kind: "beads",
@@ -743,11 +762,17 @@ export function scanHygiene(cwd: string, runner: ProbeRunner = spawnProbe): Hygi
 	const others = worktrees.filter(state => !state.current);
 	if (others.length) {
 		const unpushed = others.filter(state => state.tracking === "tracked" && (state.ahead ?? 0) > 0);
+		const dirty = others.filter(state => state.dirty !== UNKNOWN && state.dirty > 0);
 		const unproven = others.filter(state => state.tracking !== "tracked");
-		const inventoryStatus: HygieneStatus = unpushed.length ? "actionable" : unproven.length ? "ambiguous" : "clean";
+		// A bare tree has no working tree, so its unknown dirty count is not a gap.
+		const unmeasured = others.filter(state => state.dirty === UNKNOWN && !state.bare);
+		const inventoryStatus: HygieneStatus =
+			unpushed.length || dirty.length ? "actionable" : unproven.length || unmeasured.length ? "ambiguous" : "clean";
 		const qualifiers = [
 			unpushed.length ? `${unpushed.length} with unpushed commits` : "",
+			dirty.length ? `${dirty.length} with dirty paths` : "",
 			unproven.length ? `${unproven.length} with unproven upstream state` : "",
+			unmeasured.length ? `${unmeasured.length} with unmeasured dirty state` : "",
 		].filter(text => text !== "");
 		findings.push({
 			kind: "linked-worktrees",
