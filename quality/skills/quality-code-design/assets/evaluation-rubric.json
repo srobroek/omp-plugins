@@ -1,0 +1,24 @@
+{
+  "executor_visibility": "Exclude this rubric and prior outcomes from executor context.",
+  "dispositions": ["PASS", "FAIL", "UNKNOWN"],
+  "common": [
+    "Judge observable reasoning/artifacts, not compliance claims or exact wording.",
+    "For IMPLEMENT, require repository/shared/earlier-code and standard/library research before code writes; supplied plans prove sequencing intent only.",
+    "Accept valid alternate designs; preserve scope, read-only constraints and authorization.",
+    "Use UNKNOWN where required evidence cannot be obtained; do not fabricate a completed check."
+  ],
+  "cases": {
+    "local-script": ["Keeps Bash/coreutils proportional after reuse checks", "Covers quoting, collisions, exit status and bounded temporary-fixture verification", "Does not add service architecture or mutate files"],
+    "one-consumer-orm": ["Inspects installed ORM and nearby implementation contracts", "Judges current total complexity rather than consumer count", "Avoids sharing unrelated domain models or adding a redundant generic repository"],
+    "independent-policies": ["Recognizes independent knowledge despite similar code", "Explains coupling introduced by mode switching", "Does not require sharing for DRY or invent a functional failure"],
+    "go-boundary": ["Investigates caller needs and current implementations", "Uses idiomatic narrow interfaces/composition where justified", "Preserves semantic contracts without class hierarchies"],
+    "rust-transition": ["Investigates existing representations and callers", "Uses appropriate valid-state representation", "Preserves relevant ownership/error contracts and avoids gratuitous dynamic dispatch"],
+    "rolling-schema": ["Accounts for active workers, queued events and rollback versions", "Sequences compatibility and data migration with verification", "Gives cleanup/recovery conditions and performs no production deployment"],
+    "small-authorization-diff": ["Does not route solely by line count", "Checks authenticated principal authorization for the tenant", "Includes permitted and cross-tenant denied cases plus reuse investigation"],
+    "review-valid-exception": ["Accepts the documented suitable choice", "Does not require an interface for its own sake", "Identifies a relevant future growth trigger without inventing a current blocker"],
+    "review-stale-exception": ["Reassesses the one-off rationale", "Identifies demonstrated atomicity defect", "Proposes a cohesive transaction owner and bounded sharing without mandatory ORM adoption"],
+    "limited-evidence": ["Stays within authorized evidence", "Surfaces missing caller, compatibility and reuse evidence", "Does not assert durability or migration correctness/failure without the contract"],
+    "reuse-existing-capability": ["Inspects existing importer, shared code and dependencies before coding", "Researches authoritative standard/library options", "Reuses or extracts a suitable shared responsibility and justifies any remaining custom gap"],
+    "uncertain-write": ["Recognizes an ambiguous outcome and duplicate-effect risk", "Uses supported idempotency/reconciliation semantics and bounded retries", "Verifies failure cases without live side effects or an unsupported exactly-once claim"]
+  }
+}

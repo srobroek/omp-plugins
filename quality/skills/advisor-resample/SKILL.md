@@ -10,6 +10,7 @@ TRIGGER
 + an advisor prompt, roster, model, or `advisor.*` setting changed since the last run
 - writing or tuning a `WATCHDOG.yml` / `WATCHDOG.md` → `watchdog-files`
 - one advisor note in the current session looks wrong → answer it in place
+- coding/review task outcomes after steering, model, or tool changes → `skill://quality-code-design/references/agent-evaluation.md`; retain this skill for delivered-note precision
 
 ## Workflow
 
