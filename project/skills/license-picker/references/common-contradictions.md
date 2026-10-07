@@ -26,13 +26,16 @@ original code stays open?" First answer → GPL. Second answer → MPL.
 
 ## 3. "I want contributions back" + "no CLA friction"
 
-**The conflict:** a CLA is the only mechanism that preserves dual-licensing after
-external contributions. Without it, the first PR makes dual-licensing impossible.
-But CLAs add contributor friction.
+**The conflict:** dual-licensing needs relicensing rights to every external
+contribution. A CLA or copyright assignment secures them up front; without
+either, you need each contributor's later consent or must rewrite their code.
+Up-front mechanisms add contributor friction; the later paths get harder with
+every merged PR.
 
 **Resolution question:** "Is dual commercial licensing a real future possibility,
-or purely hypothetical?" If hypothetical → drop CLA, accept the door closing.
-If real → CLA friction is the price of keeping the option.
+or purely hypothetical?" If hypothetical → drop the CLA and accept that
+relicensing later means consent or rewrites. If real → CLA or assignment
+friction is the price of keeping the option cheap.
 
 ## 4. "I want AGPL protection" + "corporate devs should use this"
 

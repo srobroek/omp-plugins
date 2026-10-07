@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { applyBump, checkNodeVersion, detectProject } from "./lib";
@@ -11,10 +11,10 @@ test("malformed Python collections do not hide valid declarations or crash detec
 		writeFileSync(join(root, "package.json"), '{"dependencies":{"constructor":"1.0.0","__proto__":"2.0.0"},"devDependencies":["invalid"]}');
 		const result = await detectProject(root);
         expect(result.rows).toEqual([
-            { ecosystem: "npm", name: "constructor", declared: "1.0.0", resolved: null },
-            { ecosystem: "npm", name: "__proto__", declared: "2.0.0", resolved: null },
-            { ecosystem: "pypi", name: "requests", declared: "==2.0.0", resolved: null },
-            { ecosystem: "pypi", name: "pytest", declared: "==8.0.0", resolved: null },
+            { ecosystem: "npm", name: "constructor", declared: "1.0.0", resolved: null, direct: true },
+            { ecosystem: "npm", name: "__proto__", declared: "2.0.0", resolved: null, direct: true },
+            { ecosystem: "pypi", name: "requests", declared: "==2.0.0", resolved: null, direct: true },
+            { ecosystem: "pypi", name: "pytest", declared: "==8.0.0", resolved: null, direct: true },
         ]);
 		expect(await checkNodeVersion(root, "constructor", "1.0.0")).toBe(true);
 		expect(await checkNodeVersion(root, "toString", "1.0.0")).toBe(false);
@@ -85,6 +85,7 @@ test("apply reports missing package managers as failures", async () => {
 		expect(nodeResult.exit).toBe(1);
 		expect(nodeResult.text).toContain("pnpm not found");
 		delete process.env.DEP_UPDATE_PKG_MANAGER;
+		writeFileSync(join(root, "pyproject.toml"), '[project]\nname = "app"\ndependencies = []\n');
 		const pythonResult = await applyBump("pypi", "example", "1.0.0", root);
 		expect(pythonResult.exit).toBe(1);
 		expect(pythonResult.text).toContain("uv not found");
@@ -94,3 +95,58 @@ test("apply reports missing package managers as failures", async () => {
 		rmSync(root, { recursive: true, force: true });
 	}
 });
+
+test("Python bumps route by project: poetry, uv with or without a lock, requirements-only is manual", async () => {
+	const root = mkdtempSync(join(tmpdir(), "dep-apply-python-"));
+	const bin = mkdtempSync(join(tmpdir(), "dep-apply-bin-"));
+	const oldPath = process.env.PATH;
+	const marker = join(bin, "argv.json");
+	// Each stub records its argv and writes the pin the real manager would write.
+	const stub = (pm: string, pin: string) => {
+		writeFileSync(join(bin, pm), `#!${process.execPath}\nimport {writeFileSync} from 'node:fs';\nwriteFileSync(${JSON.stringify(marker)}, JSON.stringify([${JSON.stringify(pm)}, ...process.argv.slice(2)]));\nwriteFileSync('pyproject.toml', ${JSON.stringify(pin)});\n`);
+		chmodSync(join(bin, pm), 0o755);
+	};
+	const reset = (files: Record<string, string>) => {
+		rmSync(root, { recursive: true, force: true });
+		mkdirSync(root);
+		rmSync(marker, { force: true });
+		for (const [name, body] of Object.entries(files)) writeFileSync(join(root, name), body);
+	};
+	try {
+		process.env.PATH = bin;
+		stub("poetry", '[tool.poetry.dependencies]\npython = "^3.11"\nrequests = "2.32.3"\n');
+		stub("uv", '[project]\nname = "app"\ndependencies = ["requests==2.32.3"]\n');
+
+		reset({ "pyproject.toml": '[tool.poetry.dependencies]\nrequests = "2.31.0"\n', "poetry.lock": "" });
+		const poetry = await applyBump("pypi", "requests", "2.32.3", root);
+		expect(JSON.parse(readFileSync(marker, "utf8"))).toEqual(["poetry", "add", "requests==2.32.3"]);
+		expect(poetry).toMatchObject({ exit: 0 });
+		expect(poetry.text).toContain("OK: requests confirmed at 2.32.3");
+
+		reset({ "pyproject.toml": '[project]\nname = "app"\ndependencies = ["requests==2.31.0"]\n' });
+		expect((await applyBump("pypi", "requests", "2.32.3", root)).exit).toBe(0);
+		expect(JSON.parse(readFileSync(marker, "utf8"))).toEqual(["uv", "add", "--frozen", "requests==2.32.3"]);
+
+		reset({ "pyproject.toml": '[project]\nname = "app"\ndependencies = ["requests==2.31.0"]\n', "uv.lock": "version = 1\n" });
+		expect((await applyBump("pypi", "requests", "2.32.3", root)).exit).toBe(0);
+		expect(JSON.parse(readFileSync(marker, "utf8"))).toEqual(["uv", "add", "requests==2.32.3"]);
+
+		// Poetry 2 writes PEP 621 pins as `name (==version)`.
+		stub("poetry", '[project]\nname = "app"\ndependencies = ["requests (==2.32.3)"]\n');
+		reset({ "pyproject.toml": '[project]\nname = "app"\ndependencies = ["requests (>=2.31)"]\n', "poetry.lock": "" });
+		expect((await applyBump("pypi", "requests", "2.32.3", root)).exit).toBe(0);
+		expect(JSON.parse(readFileSync(marker, "utf8"))[0]).toBe("poetry");
+
+		reset({ "requirements.txt": "requests==2.31.0\n" });
+		const manual = await applyBump("pypi", "requests", "2.32.3", root);
+		expect(manual.exit).toBe(0);
+		expect(manual.text).toContain("MANUAL");
+		expect(manual.text).not.toContain("pip install");
+		expect(existsSync(marker)).toBe(false);
+		expect(readFileSync(join(root, "requirements.txt"), "utf8")).toBe("requests==2.31.0\n");
+	} finally {
+		if (oldPath === undefined) delete process.env.PATH; else process.env.PATH = oldPath;
+		rmSync(root, { recursive: true, force: true });
+		rmSync(bin, { recursive: true, force: true });
+	}
+}, 10000);

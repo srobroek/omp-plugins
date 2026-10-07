@@ -6,5 +6,5 @@ Explain directly at the requested depth, from a concise ELI5 to five levels span
 
 | Name | When |
 |------|------|
-| `eli5` | "ELI5", "explain X", "what is X", "how does X work" |
+| `eli5` | "ELI5", "explain like I'm five", or an explicit request for child-friendly, plain-language, or beginner wording; not generic "explain X", "what is X", or "how does X work" |
 

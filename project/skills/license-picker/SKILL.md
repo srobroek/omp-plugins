@@ -5,18 +5,13 @@ description: Selects an OSI-approved license from project constraints and explai
 
 # License Picker
 
-Interactive "choose your own adventure" license selection workflow. Walks the
-user through structured questions, recommends an OSI-approved license grounded
-in their actual constraints, and provides implementation steps.
+Interactive license selection: structured questions, an OSI-approved recommendation grounded in the user's constraints, and implementation steps.
 
 ## Triggers
 
-- User asks "what license should I use"
-- User says "pick a license", "license this", "choose a license"
-- User is setting up a new open-source repo and hasn't selected a license
-- User mentions relicensing or license migration
-- A quick factual question about license mechanics, per-file headers, or CLA
-  setup (skip the interview; LOAD skill://license-picker/references/framework.md and answer directly)
+- "What license should I use", "pick/choose a license", "license this"
+- New open-source repo without a license, or relicensing/license migration
+- A quick factual question about license mechanics, per-file headers, or CLA setup (skip the interview; LOAD skill://license-picker/references/framework.md and answer directly)
 
 ## Workflow
 
@@ -47,7 +42,8 @@ Ask (these determine copyleft strength):
    someone could use instead of accepting your license terms?
 
 6. **Commercial goals** -- do you want to keep dual commercial licensing as an
-   option? (This determines whether a CLA is needed.)
+   option? (This determines whether you need relicensing rights to every
+   contribution, for example through a CLA.)
 
 ### Phase 3: Recommend
 
@@ -68,12 +64,12 @@ it). LOAD skill://license-picker/references/common-contradictions.md for named c
 Before finalizing:
 
 1. Verify the SPDX identifier exists at https://spdx.org/licenses/
-2. If the project is Rust: confirm the license works with static linking (reject
-   LGPL, flag it)
-3. If the project is embedded: confirm no dynamic-linker requirements
-4. If templates/scaffolding: warn about output contamination if copyleft selected
-5. Check ecosystem norms -- LOAD skill://license-picker/references/ecosystem-norms.md and validate the
-   recommendation against the relevant language section
+2. If the project is Rust, Go, or embedded and LGPL is a candidate: flag that
+   static linking obliges you to ship the application's object code or source
+   so users can relink, plus any required installation information
+   (LGPL-3.0 §4(d)(0), §4(e)); prefer MPL-2.0
+3. If templates/scaffolding: warn about output contamination if copyleft selected
+4. Check ecosystem norms -- LOAD skill://license-picker/references/ecosystem-norms.md and validate the recommendation against the relevant language section
 
 ### Phase 5: Implement
 
@@ -82,8 +78,8 @@ Offer to execute (with user confirmation):
 1. Fetch canonical license text (from SPDX or official source)
 2. Write LICENSE file
 3. Update manifest (Cargo.toml / pyproject.toml / package.json) license field
-4. Add per-file headers if required by the license (MPL: yes; GPL/AGPL: recommended; Apache/MIT: no)
-5. If copyleft + commercial option: add CLA.md, CONTRIBUTING.md, CLA bot workflow
+4. Add per-file headers if required by the license (MPL: notice in each file, or in a LICENSE file in the relevant directory when per-file placement is impractical; GPL/AGPL: recommended; Apache/MIT: no)
+5. If copyleft + commercial option: set up the chosen relicensing-rights path (CLA.md + CLA bot workflow, or copyright assignment) and state it in CONTRIBUTING.md
 6. Update README with license badge and one-liner explanation
 
 ## Rules
@@ -96,7 +92,7 @@ Offer to execute (with user confirmation):
 - Always surface contradictions between stated goals rather than silently picking
   a compromise.
 - Validate against real constraints (static linking, dynamic linkers, ecosystem
-  conventions) -- don't recommend LGPL for Rust.
+  conventions) -- prefer MPL over LGPL for Rust, Go, and embedded.
 - If the user already has a license and asks about changing: check for external
   contributors first (git log for non-bot/non-owner authors). If present, warn
   about consent requirements.

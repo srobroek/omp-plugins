@@ -55,7 +55,6 @@ TRIGGER
 | vector wireframe as SVG, PNG, or PDF | the `wire-dsl` MCP server, which ships declared in this package |
 | raster visual concept | `xd://generate_image`; reference images go in `input` |
 | fixed 16:9 deck or PDF | upstream `frontend-slides` |
-| flow or architecture sketch | the `excalidraw` MCP server, from the `diagram` package |
 | favicon, app icon, or social image files | upstream `web-asset-generator` |
 | hosted concept exploration | upstream `superdesign`, after the user confirms the account |
 | rendered surface against a reference mockup | `tab.screenshot()` then `inspect_image` with an explicit comparison question |

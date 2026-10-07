@@ -4,7 +4,7 @@ import { applyBump, type BumpRecord, researchProject } from "./lib";
 
 export { classify, detectProject, normalizeVersion, parseRequirement, queryRegistry } from "./lib";
 
-type DepScanParams = { path?: string; offline_fixture_dir?: string };
+type DepScanParams = { path?: string };
 type DepApplyParams = { ecosystem: string; name: string; version: string; path?: string };
 
 export default function depScanTool(pi: ExtensionAPI): void {
@@ -20,13 +20,13 @@ export default function depScanTool(pi: ExtensionAPI): void {
             "returns a partial report when a large manifest exceeds it. Rust and go deps are advisory-only.",
 		parameters: z.object({
 			path: z.string().optional().describe("Project root to scan; defaults to the session cwd"),
-			offline_fixture_dir: z.string().optional().describe("DEP_UPDATE_FIXTURE_DIR: read registry responses from fixture files instead of the network"),
 		}) as unknown as TSchema, // pi.zod and the host TypeBox schema types differ.
 		approval: "read",
 		async execute(_id, params: DepScanParams, signal, _onUpdate, ctx) {
 			const dir = params.path ?? ctx.cwd;
 			try {
-                const { exit, records, stderr, complete } = await researchProject(dir, params.offline_fixture_dir, signal);
+                // DEP_UPDATE_FIXTURE_DIR (tests only) swaps registry fetches for fixture files.
+                const { exit, records, stderr, complete } = await researchProject(dir, undefined, signal);
 				if (exit !== 0) {
 					return {
 						content: [{ type: "text" as const, text: `dep_scan failed (exit ${exit}):\n${stderr}` }],
@@ -83,7 +83,14 @@ export default function depScanTool(pi: ExtensionAPI): void {
 			version: z.string().describe("Target version to pin"),
 			path: z.string().optional().describe("Project root; defaults to session cwd"),
 		}) as unknown as TSchema, // pi.zod and the host TypeBox schema types differ.
-		approval: { tier: "exec", policy: "prompt" },
+		// One approval per bump: the in-tool confirm below, which names the exact bump and
+		// refuses headless runs. A host `prompt` policy cannot carry it: through
+		// `write xd://dep_apply` the outer gate resolves only this tier, the wrapper then
+		// skips a non-override prompt for the xd-approved call, and yolo drops `override`,
+		// so under yolo the bump would run unprompted. `allow` keeps the host from adding a
+		// second prompt on direct calls; a user `tools.approval.dep_apply: deny` still blocks.
+		// (In write/always-ask modes the outer xd write gate still prompts for the exec tier.)
+		approval: { tier: "exec", policy: "allow" },
 		async execute(_id, params: DepApplyParams, signal, _onUpdate, ctx) {
 			try {
 				if (signal?.aborted) throw new Error("Cancelled before approval; no process started");

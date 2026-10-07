@@ -6,7 +6,7 @@ import depScanTool from "./dep-scan-tool";
 import { fetchJson, queryRegistry, researchProject } from "./lib";
 
 function scanTool() {
-	let execute!: (id: string, params: { path: string; offline_fixture_dir: string }, signal: AbortSignal, update: undefined, ctx: { cwd: string }) => Promise<unknown>;
+	let execute!: (id: string, params: { path: string }, signal: AbortSignal, update: undefined, ctx: { cwd: string }) => Promise<unknown>;
 	const string = () => {
 		const schema = { optional: () => schema, describe: () => schema };
 		return schema;
@@ -32,7 +32,7 @@ describe("scan cancellation", () => {
 			await expect(researchProject("/nonexistent-cancelled-project", "", controller.signal)).rejects.toBe(reason);
 			await expect(queryRegistry("npm", "first", "1.0.0", "", controller.signal)).rejects.toBe(reason);
 			await expect(fetchJson("npm", "first", "https://registry.npmjs.org/first", "", controller.signal)).rejects.toBe(reason);
-			await expect(scanTool()("id", { path: "/nonexistent-cancelled-project", offline_fixture_dir: "" }, controller.signal, undefined, { cwd: "/" })).rejects.toBe(reason);
+			await expect(scanTool()("id", { path: "/nonexistent-cancelled-project" }, controller.signal, undefined, { cwd: "/" })).rejects.toBe(reason);
 			expect(fetchMock).not.toHaveBeenCalled();
 		} finally {
 			fetchMock.mockRestore();
@@ -59,7 +59,7 @@ describe("scan cancellation", () => {
 				return { ok: true, json: pending } as unknown as Response;
 			}, { preconnect: () => {} }) as typeof fetch);
 			try {
-				const result = scanTool()("id", { path: dir, offline_fixture_dir: "" }, controller.signal, undefined, { cwd: dir });
+				const result = scanTool()("id", { path: dir }, controller.signal, undefined, { cwd: dir });
 				const outcome = result.then(() => ({ resolved: true }), (error: unknown) => ({ error }));
 				await active;
 				controller.abort(reason);

@@ -19,8 +19,11 @@ plain-`curl` variant and say so in the report's Coverage section.
 
 Call native `version_gap_scan` with `{"path":"<project-root>"}` (omit `path` for
 session cwd). It is offline/read-only and returns text rows
-`ecosystem<TAB>name<TAB>version` plus `details.deps` objects with `ecosystem`,
-`name`, and `version`, and `details.count`. Pick the target's row. A tool error
+`ecosystem<TAB>name<TAB>declared<TAB>resolved<TAB>direct|transitive` plus
+`details.deps` objects with `ecosystem`, `name`, `declared`, `resolved` (null when
+no lockfile pins it; `?` in text), and `direct`, and `details.count`. Pick the
+target's row: `resolved` is the installed version; `declared` alone is a range,
+not an installed version. A tool error
 or nonzero detector exit is a coverage gap, not an empty dependency inventory.
 
 For an exact pinned version, the lockfile beats the manifest range:
@@ -28,7 +31,7 @@ For an exact pinned version, the lockfile beats the manifest range:
 ```sh
 # npm: exact installed version of <pkg>
 jq -r '.packages | to_entries[] | select(.key|endswith("node_modules/<pkg>")) | .value.version' package-lock.json | head -1
-jq -r '.. | objects | select(.name=="<pkg>") | .version' pnpm-lock.yaml 2>/dev/null   # pnpm v6 lock is YAML; prefer `pnpm why`
+pnpm list <pkg> --depth 0 --json | jq -r '.[0] | (.dependencies // {}) + (.devDependencies // {}) | .["<pkg>"].version'   # pnpm-lock.yaml is YAML, not JSON
 # python (uv/poetry export or pip freeze)
 grep -i '^<pkg>==' requirements.txt ; pip show <pkg> 2>/dev/null | sed -n 's/^Version: //p'
 # cargo
@@ -49,7 +52,7 @@ A descriptive `-A` user-agent is **required** by some registries (crates.io
 rejects requests without one).
 
 ```sh
-UA='whats-new-skill (+https://github.com/srobroek/agentic-packages)'
+UA='whats-new-skill (+https://github.com/srobroek/omp-plugins)'
 
 # npm
 curl -fsSL -A "$UA" "https://registry.npmjs.org/<name>" \
@@ -244,10 +247,10 @@ feed/API or to web-fetch, don't try to scrape the empty shell.
 The "What's New" feed carries every service; filter by keyword in the title.
 
 ```sh
-UA='whats-new-skill (+https://github.com/srobroek/agentic-packages)'
+UA='whats-new-skill (+https://github.com/srobroek/omp-plugins)'
 # All recent announcements (RSS). Filter to a service, e.g. Bedrock:
 curl -fsSL -A "$UA" "https://aws.amazon.com/about-aws/whats-new/recent/feed/" \
-  | tr '>' '>\n' \
+  | sed 's/></>\n</g' \
   | grep -iE '<title>|<pubDate>' | grep -iE 'bedrock|<pubDate>'
 # Structured (needs xmllint or a quick python parse) — title + date + link:
 curl -fsSL -A "$UA" "https://aws.amazon.com/about-aws/whats-new/recent/feed/" \
@@ -263,8 +266,8 @@ service's docs). For the SDKs, treat them as versioned software (step B/C): e.g.
 
 ### Anthropic / Claude
 
-Prefer the repo's **`claude-api`** skill for model IDs, pricing, and migration --
-it's the curated source. For the live model list:
+Model IDs, pricing, and migration notes come from Anthropic's docs; for the live
+model list:
 
 ```sh
 # Models the API currently serves (needs a key). 401 without one confirms shape.
@@ -275,7 +278,7 @@ curl -fsSL https://api.anthropic.com/v1/models \
 
 The docs release-notes page (`docs.anthropic.com/en/release-notes/api`) is
 JS-rendered -- fetch it with a browser/web-fetch capability, not `curl`, or rely
-on the models API + `claude-api` skill.
+on the models API.
 
 ### OpenAI
 

@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { TSchema } from "@oh-my-pi/pi-ai";
@@ -59,6 +59,7 @@ export function classify(result: SurfaceResult): SurfaceStatus {
 export type ScanDeps = {
 	fetchFn?: typeof fetch;
 	run?: (argv: string[], timeoutMs: number) => Promise<{ ok: boolean; stdout: string; stderr: string }>;
+	/** Returns null when the file is absent; throws when it exists but cannot be read. */
 	readFile?: (path: string) => string | null;
 	env?: Record<string, string | undefined>;
 	which?: (bin: string) => boolean;
@@ -144,8 +145,10 @@ function defaultWhich(bin: string): boolean {
 function defaultRead(path: string): string | null {
 	try {
 		return readFileSync(path, "utf8");
-	} catch {
-		return null;
+	} catch (error) {
+		const code = error instanceof Error && "code" in error ? error.code : undefined;
+		if (code === "ENOENT" || code === "ENOTDIR") return null;
+		throw error;
 	}
 }
 
@@ -172,23 +175,55 @@ function wanted(selected: Set<string> | null, name: SurfaceName): boolean {
 	return !selected || selected.has(name);
 }
 
+/**
+ * Splits `omp plugin` listing output into one hit per entry. Entries sit at the shallowest
+ * indent under column-zero `Header:` lines; a deeper line continues the entry above it.
+ */
+function inventoryHits(stdout: string): SurfaceHit[] {
+	const rows = stdout
+		.split(/\r?\n/)
+		.filter((line) => line.trim() && !/^\S.*:$/.test(line))
+		.map((line) => ({ text: line.trim(), depth: line.length - line.trimStart().length }));
+	const entryDepth = Math.min(...rows.map((row) => row.depth));
+	const hits: SurfaceHit[] = [];
+	for (const { text, depth } of rows) {
+		const current = hits.at(-1);
+		if (current && depth > entryDepth) {
+			current.detail = current.detail ? `${current.detail} ${text}` : text;
+			continue;
+		}
+		const [name = text, ...rest] = text.split(/\s+/);
+		hits.push(rest.length ? { name, detail: rest.join(" ") } : { name });
+	}
+	return hits;
+}
+
+const MCP_INVENTORY = "~/.omp/agent/mcp.json";
+
 async function scanLocal(deps: Required<Pick<ScanDeps, "run" | "readFile" | "which">>): Promise<SurfaceResult> {
 	const hits: SurfaceHit[] = [];
-	if (deps.which("omp")) {
-		const listed = await deps.run(["omp", "plugin", "list"], NETWORK_MS);
-		if (listed.ok && listed.stdout.trim()) {
-			hits.push({ name: "omp plugin list", detail: listed.stdout.trim().slice(0, 4000) });
+	const failures: string[] = [];
+	const omp = deps.which("omp");
+	if (omp) {
+		for (const argv of [["omp", "plugin", "list"], ["omp", "plugin", "marketplace", "list"]]) {
+			const listed = await deps.run(argv, NETWORK_MS);
+			if (listed.ok) hits.push(...inventoryHits(listed.stdout));
 		}
-		const markets = await deps.run(["omp", "plugin", "marketplace", "list"], NETWORK_MS);
-		if (markets.ok && markets.stdout.trim()) {
-			hits.push({ name: "omp plugin marketplace list", detail: markets.stdout.trim().slice(0, 4000) });
-		}
-	} else {
-		hits.push({ name: "omp", detail: "omp binary not found" });
 	}
-	const mcpPath = join(homedir(), ".omp", "agent", "mcp.json");
-	const mcp = deps.readFile(mcpPath);
-	if (mcp !== null) {
+	let mcp: string | null = null;
+	let readable = true;
+	try {
+		mcp = deps.readFile(join(homedir(), ".omp", "agent", "mcp.json"));
+	} catch {
+		// The error names the path and nothing else useful; the gap carries the fact.
+		readable = false;
+	}
+	if (!readable) {
+		hits.push({ name: MCP_INVENTORY, detail: "unreadable" });
+		failures.push(`${MCP_INVENTORY} unreadable`);
+	} else if (mcp === null) {
+		hits.push({ name: MCP_INVENTORY, detail: "absent" });
+	} else {
 		let detail = "invalid MCP inventory; configuration omitted";
 		try {
 			const parsed: unknown = JSON.parse(mcp);
@@ -209,11 +244,13 @@ async function scanLocal(deps: Required<Pick<ScanDeps, "run" | "readFile" | "whi
 		} catch {
 			// Parser diagnostics can contain configuration fragments.
 		}
-		hits.push({ name: "~/.omp/agent/mcp.json", detail });
-	} else if (existsSync(mcpPath) === false) {
-		hits.push({ name: "~/.omp/agent/mcp.json", detail: "absent" });
+		hits.push({ name: MCP_INVENTORY, detail });
 	}
-	return { surface: "local", ok: true, hits };
+	if (!omp) {
+		const reason = ["omp binary not found; plugin and marketplace inventory unavailable", ...failures].join("; ");
+		return { surface: "local", ok: true, skipped: true, reason, hits };
+	}
+	return { surface: "local", ok: true, ...(failures.length ? { failures } : {}), hits };
 }
 
 async function scanDiscover(deps: Required<Pick<ScanDeps, "run" | "which">>): Promise<SurfaceResult> {
@@ -227,13 +264,7 @@ async function scanDiscover(deps: Required<Pick<ScanDeps, "run" | "which">>): Pr
 	if (!r.ok) {
 		return { surface: "discover", ok: false, reason: r.stderr.slice(0, 500) || "discover failed", hits: [] };
 	}
-	return {
-		surface: "discover",
-		ok: true,
-		hits: r.stdout.trim()
-			? [{ name: "omp plugin discover", detail: r.stdout.trim().slice(0, 4000) }]
-			: [],
-	};
+	return { surface: "discover", ok: true, hits: inventoryHits(r.stdout) };
 }
 
 async function scanMcpRegistry(
@@ -394,12 +425,15 @@ async function scanSmithery(
 		return { surface: "smithery", ok: false, reason: `HTTP ${res.status}: ${res.text.slice(0, 200)}`, hits: [] };
 	}
 	try {
-		const json = JSON.parse(res.text) as { servers?: Array<{ qualifiedName?: string; displayName?: string }> };
+		const json = JSON.parse(res.text) as {
+			servers?: Array<{ qualifiedName?: string; displayName?: string; description?: string }>;
+		};
 		return {
 			surface: "smithery",
 			ok: true,
 			hits: (json.servers ?? []).slice(0, 20).map((s) => ({
 				name: s.qualifiedName ?? s.displayName ?? "server",
+				...(s.description ? { detail: s.description } : {}),
 			})),
 		};
 	} catch {
@@ -407,12 +441,14 @@ async function scanSmithery(
 	}
 }
 
-export async function scanSurfaces(params: ScanParams, deps: ScanDeps = {}): Promise<{
+export type ScanReport = {
 	results: ClassifiedSurface[];
 	gaps: Gap[];
 	coverage: { answered: number; empty: number; partial: number; unavailable: number; failed: number };
 	cancellation?: ScanCancellation;
-}> {
+};
+
+export async function scanSurfaces(params: ScanParams, deps: ScanDeps = {}): Promise<ScanReport> {
 	const sourceFetch = deps.fetchFn ?? fetch;
 	const fetchFn: typeof fetch = deps.signal
 		? ((input, init) => sourceFetch(input, {
@@ -504,6 +540,35 @@ export async function scanSurfaces(params: ScanParams, deps: ScanDeps = {}): Pro
 	return { results: classified, gaps, coverage, ...(cancellation ? { cancellation } : {}) };
 }
 
+/** Inventory surfaces render every entry: the skill's step 3 decides "already covered" from them. */
+const INVENTORY_SURFACES: Partial<Record<SurfaceName, true>> = { local: true, discover: true };
+const SEARCH_HITS_SHOWN = 8;
+const DETAIL_CHARS = 300;
+
+export function renderScan({ results, gaps, coverage, cancellation }: ScanReport): string {
+	const lines: string[] = [];
+	for (const r of results) {
+		lines.push(`[${r.status}] ${r.surface}${r.reason ? ` — ${r.reason}` : ""} (${r.hits.length} hits)`);
+		const shown = INVENTORY_SURFACES[r.surface] ? r.hits : r.hits.slice(0, SEARCH_HITS_SHOWN);
+		for (const h of shown) {
+			const detail = h.detail && h.detail.length > DETAIL_CHARS ? `${h.detail.slice(0, DETAIL_CHARS)}…` : h.detail;
+			lines.push(`  - ${h.name}${detail ? `: ${detail}` : ""}`);
+		}
+		if (shown.length < r.hits.length) lines.push(`  - … ${r.hits.length - shown.length} more in details.results`);
+	}
+	lines.push(
+		`coverage: ${coverage.answered} answered, ${coverage.empty} empty, ${coverage.partial} partial, ${coverage.unavailable} unavailable, ${coverage.failed} failed`,
+	);
+	if (cancellation) {
+		lines.push(`partial cancellation: completed [${cancellation.completed.join(", ") || "none"}], timed out [${cancellation.timedOut.join(", ") || "none"}]`);
+	}
+	if (gaps.length) {
+		lines.push("gaps:");
+		for (const g of gaps) lines.push(`  - ${g.surface} (${g.kind}): ${g.reason}`);
+	}
+	return lines.join("\n");
+}
+
 export default function findToolsScanTool(pi: ExtensionAPI): void {
 	const z = pi.zod;
 	pi.registerTool({
@@ -518,28 +583,12 @@ export default function findToolsScanTool(pi: ExtensionAPI): void {
 		approval: "read",
 		execute: async (_id, params: ScanParams, signal, _onUpdate, ctx) => {
 			try {
-				const { results, gaps, coverage, cancellation } = await scanSurfaces(params, {
+				const report = await scanSurfaces(params, {
 					signal, setTimeout: ctx.setTimeout.bind(ctx), clearTimer: ctx.clearTimer.bind(ctx),
 				});
-				const lines: string[] = [];
-				for (const r of results) {
-					lines.push(`[${r.status}] ${r.surface}${r.reason ? ` — ${r.reason}` : ""} (${r.hits.length} hits)`);
-					for (const h of r.hits.slice(0, 8)) {
-						lines.push(`  - ${h.name}${h.detail ? `: ${h.detail.slice(0, 120)}` : ""}`);
-					}
-				}
-				lines.push(
-					`coverage: ${coverage.answered} answered, ${coverage.empty} empty, ${coverage.partial} partial, ${coverage.unavailable} unavailable, ${coverage.failed} failed`,
-				);
-				if (cancellation) {
-					lines.push(`partial cancellation: completed [${cancellation.completed.join(", ") || "none"}], timed out [${cancellation.timedOut.join(", ") || "none"}]`);
-				}
-				if (gaps.length) {
-					lines.push("gaps:");
-					for (const g of gaps) lines.push(`  - ${g.surface} (${g.kind}): ${g.reason}`);
-				}
+				const { results, gaps, coverage, cancellation } = report;
 				return {
-					content: [{ type: "text" as const, text: lines.join("\n") }],
+					content: [{ type: "text" as const, text: renderScan(report) }],
 					details: { ok: true, results, gaps, coverage, ...(cancellation ? { cancellation } : {}) },
 				};
 			} catch (error) {

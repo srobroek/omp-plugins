@@ -10,9 +10,9 @@ import { parse as parseToml } from "smol-toml";
 // unchanged for its consumers.
 export * from "./detect";
 
-import { detectProject, isDir, isFile, REQ_NAME, readText } from "./detect";
+import { canonical, detectProject, isDir, isFile, REQ_NAME, readText } from "./detect";
 
-export const USER_AGENT = "dep-update-skill (+https://github.com/srobroek/agentic-packages)";
+export const USER_AGENT = "dep-update-skill (+https://github.com/srobroek/omp-plugins)";
 export const FETCH_TIMEOUT_MS = 10_000;
 /** A tool_call has a 30,000 ms budget; leave 5,000 ms for scan reporting. */
 export const SCAN_TIMEOUT_MS = 25_000;
@@ -31,7 +31,9 @@ function ensureDeadline(deadline?: number): void {
 }
 
 const NODE_VERSION = /^=?v?(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-((?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*))*))?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/;
-const PYTHON_VERSION = /^(?:={1,2})?v?(\d+)(?:\.(\d+))?(?:\.(\d+))?(?:[-_.]?(a|b|rc|alpha|beta|pre|preview)[-_.]?\d*)?(?:[-_.]?post[-_.]?\d*)?(?:[-_.]?(dev)[-_.]?\d*)?(?:\+[a-z0-9]+(?:[-_.][a-z0-9]+)*)?$/i;
+const PYTHON_VERSION = /^(?:={1,2})?v?(\d+)(?:\.(\d+))?(?:\.(\d+))?(?:[-_.]?(a|b|rc|alpha|beta|pre|preview)[-_.]?(\d*))?(?:[-_.]?(post)[-_.]?(\d*))?(?:[-_.]?(dev)[-_.]?(\d*))?(?:\+[a-z0-9]+(?:[-_.][a-z0-9]+)*)?$/i;
+/** PEP 440 pre-release phases in order; `pre`/`preview` spell `rc`. */
+const PYTHON_PRE_RANK: Record<string, number> = { a: 0, alpha: 0, b: 1, beta: 1, rc: 2, pre: 2, preview: 2 };
 
 export interface BumpRecord {
 	ecosystem: string;
@@ -54,17 +56,70 @@ export function normalizeVersion(raw: unknown, ecosystem = "npm"): [number, numb
 export function isPrerelease(raw: unknown, ecosystem = "npm"): boolean {
 	if (typeof raw !== "string" || !normalizeVersion(raw, ecosystem)) return false;
 	const match = (ecosystem === "pypi" ? PYTHON_VERSION : NODE_VERSION).exec(raw)!;
-	return Boolean(match[4] || (ecosystem === "pypi" && match[5]));
+	return Boolean(match[4] || (ecosystem === "pypi" && match[8]));
+}
+
+/**
+ * Order two versions that share a release triple by their suffixes. Python follows
+ * PEP 440 (`.devN` < `aN` < `bN` < `rcN` < final < `.postN`, a `.dev` of any phase
+ * sorting just below it); Node follows SemVer 2 precedence (a prerelease sorts below
+ * the release; identifiers compare numerically, then lexically, then by count).
+ */
+function compareSuffix(a: RegExpExecArray, b: RegExpExecArray, ecosystem: string): number {
+	if (ecosystem === "pypi") {
+		const key = (m: RegExpExecArray): number[] => {
+			const pre = m[4] ? [PYTHON_PRE_RANK[m[4].toLowerCase()] ?? 2, Number(m[5] || 0)] : [m[8] && !m[6] ? -1 : 3, 0];
+			return [...pre, m[6] ? Number(m[7] || 0) : -1, m[8] ? Number(m[9] || 0) : Number.POSITIVE_INFINITY];
+		};
+		const ka = key(a);
+		const kb = key(b);
+		for (let i = 0; i < ka.length; i++) {
+			const x = ka[i] as number;
+			const y = kb[i] as number;
+			if (x !== y) return x < y ? -1 : 1;
+		}
+		return 0;
+	}
+	const pa = a[4]?.split(".") ?? [];
+	const pb = b[4]?.split(".") ?? [];
+	if (pa.length === 0 && pb.length === 0) return 0;
+	if (pa.length === 0) return 1;
+	if (pb.length === 0) return -1;
+	for (let i = 0; i < Math.min(pa.length, pb.length); i++) {
+		const x = pa[i] as string;
+		const y = pb[i] as string;
+		if (x === y) continue;
+		const nx = /^\d+$/.test(x);
+		const ny = /^\d+$/.test(y);
+		if (nx && ny) return Math.sign(Number(x) - Number(y));
+		if (nx !== ny) return nx ? -1 : 1;
+		return x < y ? -1 : 1;
+	}
+	return Math.sign(pa.length - pb.length);
+}
+
+/** Full precedence of two exact versions, or null when either is not an exact version. */
+export function compareVersions(a: string, b: string, ecosystem = "npm"): number | null {
+	const na = normalizeVersion(a, ecosystem);
+	const nb = normalizeVersion(b, ecosystem);
+	if (na === null || nb === null) return null;
+	const triple = Math.sign(na[0] - nb[0] || na[1] - nb[1] || na[2] - nb[2]);
+	if (triple !== 0) return triple;
+	const pattern = ecosystem === "pypi" ? PYTHON_VERSION : NODE_VERSION;
+	return compareSuffix(pattern.exec(a) as RegExpExecArray, pattern.exec(b) as RegExpExecArray, ecosystem);
 }
 
 export function classify(installed: string, latest: string, ecosystem = "npm"): string {
 	const cur = normalizeVersion(installed, ecosystem);
 	const lat = normalizeVersion(latest, ecosystem);
 	if (cur === null || lat === null) return "UNRESOLVABLE";
-	if (cur[0] === lat[0] && cur[1] === lat[1] && cur[2] === lat[2]) return "CURRENT";
 	if (lat[0] > cur[0]) return "MAJOR-ADVISORY";
 	if (lat[0] === cur[0] && lat[1] > cur[1]) return "MINOR-CHECK";
 	if (lat[0] === cur[0] && lat[1] === cur[1] && lat[2] > cur[2]) return "PATCH-SAFE";
+	// Same release triple: 1.0.0-rc.1 -> 1.0.0 and 1.0.0 -> 1.0.0.post1 are real upgrades.
+	if (lat[0] === cur[0] && lat[1] === cur[1] && lat[2] === cur[2] && (compareVersions(latest, installed, ecosystem) ?? 0) > 0) {
+		return "PATCH-SAFE";
+	}
 	return "CURRENT";
 }
 
@@ -72,11 +127,7 @@ export function pickStable(latest: string, installed: string, versions: string[]
 	if (!isPrerelease(latest, ecosystem) || isPrerelease(installed, ecosystem)) return latest;
 	const stable = versions.filter((v) => !isPrerelease(v, ecosystem) && normalizeVersion(v, ecosystem));
 	if (!stable.length) return latest;
-	stable.sort((a, b) => {
-		const na = normalizeVersion(a, ecosystem)!;
-		const nb = normalizeVersion(b, ecosystem)!;
-		return nb[0] - na[0] || nb[1] - na[1] || nb[2] - na[2];
-	});
+	stable.sort((a, b) => compareVersions(b, a, ecosystem) ?? 0);
     return stable[0] ?? latest;
 }
 export async function fetchJson(
@@ -192,7 +243,11 @@ export async function researchProject(
     const tallies = { OK: 0, CURRENT: 0, UNRESOLVABLE: 0, DISCONFIRMED: 0 };
     const records: BumpRecord[] = [];
     let complete = true;
-    for (const { ecosystem, name, declared, resolved } of detected.rows) {
+    // Transitive lock entries are not the project's to bump: applying one would add it
+    // as a new direct dependency. Only declared rows are researched.
+    const direct = detected.rows.filter((row) => row.direct);
+    const transitive = detected.rows.length - direct.length;
+    for (const { ecosystem, name, declared, resolved } of direct) {
         try {
             signal?.throwIfAborted();
             ensureDeadline(deadline);
@@ -211,6 +266,7 @@ export async function researchProject(
     notes.push(`  classified:    ${tallies.OK}`);
     notes.push(`  already-current: ${tallies.CURRENT}`);
     notes.push(`  unresolvable:  ${tallies.UNRESOLVABLE + tallies.DISCONFIRMED}`);
+    if (transitive > 0) notes.push(`  transitive (not queried): ${transitive}`);
     if (!complete) notes.push("PARTIAL: aggregate scan deadline reached; remaining dependencies were not queried.");
     if (records.length > 0 && tallies.OK === 0 && tallies.CURRENT === 0 && tallies.UNRESOLVABLE + tallies.DISCONFIRMED === records.length) {
         notes.push("");
@@ -220,10 +276,6 @@ export async function researchProject(
     return { exit: 0, records, stderr: notes.join("\n"), complete };
 }
 
-
-export function canonical(name: string): string {
-	return name.replace(/[-_.]+/g, "-").toLowerCase();
-}
 
 export function which(bin: string): string | null {
 	const path = process.env.PATH ?? "";
@@ -258,7 +310,8 @@ export function detectNodePm(root: string): string {
 }
 
 function splitPin(requirement: string): [string, string] {
-	const body = (requirement.split(";", 1)[0] ?? "").trim();
+	// Poetry 2 writes PEP 621 pins as `name (==1.2.3)`.
+	const body = (requirement.split(";", 1)[0] ?? "").replace(/[()]/g, "").trim();
 	if (!body.includes("==")) return ["", ""];
 	const idx = body.indexOf("==");
 	const name = body.slice(0, idx).replace(/\[[^\]]*\]/g, "").trim();
@@ -282,6 +335,25 @@ function pyprojectRequirements(data: Record<string, unknown>): string[] {
 	if (groups && typeof groups === "object") {
 		for (const reqs of Object.values(groups as Record<string, unknown>)) {
 			for (const r of Array.isArray(reqs) ? reqs : []) if (typeof r === "string") out.push(r);
+		}
+	}
+	// Poetry tables pin as `name = "1.2.3"` (or `"==1.2.3"`, or `{ version = ... }`).
+	const tool = data.tool;
+	const poetry = tool && typeof tool === "object" ? (tool as Record<string, unknown>).poetry : undefined;
+	if (poetry && typeof poetry === "object") {
+		const p = poetry as Record<string, unknown>;
+		const blocks: unknown[] = [p.dependencies, p["dev-dependencies"]];
+		if (p.group && typeof p.group === "object") {
+			for (const group of Object.values(p.group as Record<string, unknown>)) {
+				if (group && typeof group === "object") blocks.push((group as Record<string, unknown>).dependencies);
+			}
+		}
+		for (const block of blocks) {
+			if (!block || typeof block !== "object" || Array.isArray(block)) continue;
+			for (const [name, spec] of Object.entries(block as Record<string, unknown>)) {
+				const raw = spec && typeof spec === "object" ? (spec as Record<string, unknown>).version : spec;
+				if (typeof raw === "string") out.push(`${name}==${raw.replace(/^==/, "")}`);
+			}
 		}
 	}
 	return out;
@@ -443,16 +515,31 @@ export async function applyBump(
 	const lines = [`dep-update/apply: ${ecosystem} ${name} -> ${version}`];
 
 	if (ecosystem === "pypi" || ecosystem === "python") {
-		if (!which("uv")) {
-			lines.push("ERROR: uv not found; cannot apply dependency bump");
-			lines.push(`  uv add "${name}==${version}"`);
-			lines.push(`  (or: pip install "${name}==${version}" and update your requirements file)`);
+		const pyprojectPath = join(root, "pyproject.toml");
+		if (!isFile(pyprojectPath)) {
+			// requirements.txt (or no manifest at all): no manager owns the file, and
+			// installing into whatever environment is active would not record the pin.
+			lines.push("MANUAL: no pyproject.toml; dep_apply does not edit requirements files.");
+			lines.push(`To update manually: set ${name}==${version} in the requirements file, then reinstall it in the project's environment.`);
+			return { exit: 0, text: lines.join("\n") };
+		}
+		const pyproject = await readTomlFile(pyprojectPath);
+		const tool = pyproject?.tool;
+		const poetry = isFile(join(root, "poetry.lock")) || Boolean(tool && typeof tool === "object" && "poetry" in tool);
+		// Without uv.lock, `--frozen` edits pyproject.toml without creating a lockfile the project never had.
+		const command = poetry
+			? ["poetry", "add", `${name}==${version}`]
+			: ["uv", "add", ...(isFile(join(root, "uv.lock")) ? [] : ["--frozen"]), `${name}==${version}`];
+		const pm = command[0] as string;
+		if (!which(pm)) {
+			lines.push(`ERROR: ${pm} not found; cannot apply dependency bump`);
+			lines.push(`  ${command.join(" ")}`);
 			return { exit: 1, text: lines.join("\n") };
 		}
-		const ran = await runPm(["uv", "add", `${name}==${version}`], root, options);
+		const ran = await runPm(command, root, options);
 		lines.push(ran.log);
 		if (ran.code !== 0) {
-			lines.push(`WARN: uv exited with status ${ran.code}; partial changes may remain; bump was not confirmed`);
+			lines.push(`WARN: ${pm} exited with status ${ran.code}; partial changes may remain; bump was not confirmed`);
 			return { exit: 1, text: lines.join("\n") };
 		}
 		const landed = await checkPythonVersion(root, name, version);
