@@ -25,6 +25,8 @@ MUST FO-3: size by independent ready units. With 2 or more, dispatch the lesser 
 
 MUST FO-4: every brief is self-contained; subagents share no conversation. State the goal, the exact target files, the interface or contract it must honor, observable acceptance, and "run only the focused commands needed to prove your own change; skip repository-wide builds, test suites, linters, and formatters, which the lead runs after integration (FO-7)".
 
+MUST For code design, investigation, implementation, or review, pass `rule://quality-code-design` and `skill://quality-code-design` to every worker, including `implementer-high`, `implementer`, built-in `task`, `scout`, and reviewer agents. Supply core and task-relevant reference text when the child cannot resolve those URIs; report missing policy instead of claiming coverage. Select language guidance from the actual code-work scope. Preserve read-only roles and fixed assignments; scouts report evidenced design observations, not edits or unsolicited approvals.
+
 MUST FO-5: read each bead's `execution_agent_type` metadata before spawning, and dispatch the bead to the agent it names: default `implementer`; `implementer-high` only when the bead says so under the criteria in `rule://beads-ledger` (root-cause/debugging work, concurrency or data-integrity logic, cross-module contract changes, algorithmic or numeric precision rules, or acceptance that needs design judgment beyond the bead text). A spawn with no bead, or a bead with no `execution_agent_type`, goes to `implementer` unless the brief states one of those implementer-high criteria. Pass `execution_reasoning_effort` when set. NEVER pin a higher tier for a bead without that metadata.
 
 ## Helpers
