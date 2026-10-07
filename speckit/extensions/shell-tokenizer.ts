@@ -10,7 +10,9 @@
  * newline, a quoted delimiter makes the body inert data; an unquoted delimiter
  * feeds the body back through this same lexer. That mirrors the shell rule
  * that only an unquoted here-document expands substitutions, without ever
- * expanding or executing one here.
+ * expanding or executing one here. Consumers that read every word as a command
+ * opt into `hereDocumentSubstitutionsOnly`, which lexes only the `$( … )` and
+ * backtick substitutions of an unquoted body, each wrapped in `$(` … `)`.
  */
 
 export type ShellToken = {
@@ -24,6 +26,8 @@ export type ShellToken = {
 export type TokenizeOptions = {
 	/** Keep escapes visible for consumers that reject shell indirection. */
 	preserveBackslashes?: boolean;
+	/** Lex only the substitutions of an unquoted here-document body; its other text is data. */
+	hereDocumentSubstitutionsOnly?: boolean;
 };
 
 type HereDocument = {
@@ -118,7 +122,9 @@ export function tokenizeShell(command: unknown, options: TokenizeOptions = {}): 
 				if (document === undefined) break;
 				const body = hereDocumentBody(command, bodyStart, document);
 				if (!document.quoted) {
-					out.push(...tokenizeShell(command.slice(bodyStart, body.bodyEnd), options));
+					const source = command.slice(bodyStart, body.bodyEnd);
+					if (options.hereDocumentSubstitutionsOnly) out.push(...substitutions(source, options));
+					else out.push(...tokenizeShell(source, options));
 				}
 				i = body.terminatorEnd;
 				bodyStart = i + 1;
@@ -210,4 +216,52 @@ function hereDocumentBody(command: string, from: number, document: HereDocument)
 		cursor = next + 1;
 	}
 	return { bodyEnd: command.length, terminatorEnd: command.length };
+}
+
+/** Tokens of each `$( … )` and backtick substitution in an unquoted here-document body. */
+function substitutions(body: string, options: TokenizeOptions): ShellToken[] {
+	const out: ShellToken[] = [];
+	for (let i = 0; i < body.length; i++) {
+		const ch = body[i] as string;
+		if (ch === "\\") {
+			i++;
+			continue;
+		}
+		let inner: string;
+		if (ch === "$" && body[i + 1] === "(") {
+			const end = substitutionEnd(body, i + 2);
+			inner = body.slice(i + 2, end);
+			i = end;
+			// `$(( … ))` is arithmetic, not a command.
+			if (inner.startsWith("(")) continue;
+		} else if (ch === "`") {
+			let end = i + 1;
+			while (end < body.length && body[end] !== "`") end += body[end] === "\\" ? 2 : 1;
+			inner = body.slice(i + 1, end);
+			i = end;
+		} else {
+			continue;
+		}
+		out.push(token("$("), ...tokenizeShell(inner, options), token(")"));
+	}
+	return out;
+}
+
+/** Index of the `)` closing a substitution whose content starts at `from`, or the body length. */
+function substitutionEnd(body: string, from: number): number {
+	let depth = 1;
+	let quote: '"' | "'" | null = null;
+	for (let i = from; i < body.length; i++) {
+		const ch = body[i] as string;
+		if (quote !== null) {
+			if (ch === quote) quote = null;
+			else if (ch === "\\" && quote === '"') i++;
+			continue;
+		}
+		if (ch === "\\") i++;
+		else if (ch === '"' || ch === "'") quote = ch;
+		else if (ch === "(") depth++;
+		else if (ch === ")" && --depth === 0) return i;
+	}
+	return body.length;
 }

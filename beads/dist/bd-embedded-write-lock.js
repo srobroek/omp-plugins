@@ -88,7 +88,11 @@ function tokenizeShell(command, options = {}) {
           break;
         const body = hereDocumentBody(command, bodyStart, document);
         if (!document.quoted) {
-          out.push(...tokenizeShell(command.slice(bodyStart, body.bodyEnd), options));
+          const source = command.slice(bodyStart, body.bodyEnd);
+          if (options.hereDocumentSubstitutionsOnly)
+            out.push(...substitutions(source, options));
+          else
+            out.push(...tokenizeShell(source, options));
         }
         i = body.terminatorEnd;
         bodyStart = i + 1;
@@ -170,6 +174,57 @@ function hereDocumentBody(command, from, document) {
     cursor = next + 1;
   }
   return { bodyEnd: command.length, terminatorEnd: command.length };
+}
+function substitutions(body, options) {
+  const out = [];
+  for (let i = 0;i < body.length; i++) {
+    const ch = body[i];
+    if (ch === "\\") {
+      i++;
+      continue;
+    }
+    let inner;
+    if (ch === "$" && body[i + 1] === "(") {
+      const end = substitutionEnd(body, i + 2);
+      inner = body.slice(i + 2, end);
+      i = end;
+      if (inner.startsWith("("))
+        continue;
+    } else if (ch === "`") {
+      let end = i + 1;
+      while (end < body.length && body[end] !== "`")
+        end += body[end] === "\\" ? 2 : 1;
+      inner = body.slice(i + 1, end);
+      i = end;
+    } else {
+      continue;
+    }
+    out.push(token("$("), ...tokenizeShell(inner, options), token(")"));
+  }
+  return out;
+}
+function substitutionEnd(body, from) {
+  let depth = 1;
+  let quote = null;
+  for (let i = from;i < body.length; i++) {
+    const ch = body[i];
+    if (quote !== null) {
+      if (ch === quote)
+        quote = null;
+      else if (ch === "\\" && quote === '"')
+        i++;
+      continue;
+    }
+    if (ch === "\\")
+      i++;
+    else if (ch === '"' || ch === "'")
+      quote = ch;
+    else if (ch === "(")
+      depth++;
+    else if (ch === ")" && --depth === 0)
+      return i;
+  }
+  return body.length;
 }
 
 // extensions/shell-command.ts

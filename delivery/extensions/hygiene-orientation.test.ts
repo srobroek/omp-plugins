@@ -78,6 +78,10 @@ function recordingScan(cwd: string, over?: (argv: readonly string[]) => ProbeRes
 	return { argv, report: scanHygiene(cwd, runner) };
 }
 
+/** A runner override that fails every `bd` probe, so no ambient ledger can answer it. */
+const failingBd = (argv: readonly string[]): ProbeResult | null =>
+	argv[0] === "bd" ? { exitCode: 1, signalCode: null, stdout: "", stderr: "no beads project found", timedOut: false } : null;
+
 /** Every sentence the report puts in front of a consumer: findings and row hand-offs. */
 function prose(report: HygieneReport): string[] {
 	return [...report.findings.map(finding => finding.description), ...report.worktrees.map(state => state.handOff ?? "")];
@@ -86,13 +90,9 @@ function prose(report: HygieneReport): string[] {
 process.env.PI_CODING_AGENT_DIR = temp();
 
 describe("delivery hygiene orientation", () => {
-	test("the manifest keeps the advisory extension and registers orientation after it", () => {
+	test("the manifest registers the orientation extension exactly once", () => {
 		const manifest = JSON.parse(readFileSync(join(import.meta.dir, "..", "package.json"), "utf8")) as { omp: { extensions: string[] } };
 		const extensions = manifest.omp.extensions;
-		const advisory = extensions.indexOf("./extensions/unpushed-work-advisory.ts");
-		const orientation = extensions.indexOf("./extensions/hygiene-orientation.ts");
-		expect(advisory).toBeGreaterThanOrEqual(0);
-		expect(orientation).toBeGreaterThan(advisory);
 		expect(extensions.filter(entry => entry === "./extensions/hygiene-orientation.ts").length).toBe(1);
 	});
 
@@ -114,7 +114,9 @@ describe("delivery hygiene orientation", () => {
 	});
 
 	test("every argv the runner receives is in the read-only allowlist", () => {
-		const { argv } = recordingScan(repo());
+		const cwd = repo();
+		mkdirSync(join(cwd, ".beads"));
+		const { argv } = recordingScan(cwd);
 		expect(argv.length).toBeGreaterThan(0);
 		for (const command of argv) expect({ command, allowed: permitted(command) }).toEqual({ command, allowed: true });
 		const labels = argv.map(command => command.filter(word => word !== "--no-optional-locks").join(" "));
@@ -171,6 +173,45 @@ describe("delivery hygiene orientation", () => {
 		const behind = result.findings.find(f => f.kind === "upstream");
 		expect(behind?.status).toBe("actionable");
 		expect(behind?.description).toContain("2 commit(s) behind");
+	});
+
+	test("a ledger-free repository runs no bd and is not ambiguous, even under an ancestor .beads", () => {
+		const parent = temp();
+		mkdirSync(join(parent, ".beads"));
+		const clone = join(parent, "clone");
+		git(parent, "clone", "-q", repo(), clone);
+		const { argv, report } = recordingScan(clone, failingBd);
+		expect(argv.filter(command => command[0] === "bd")).toEqual([]);
+		expect(report.findings.filter(f => f.kind === "beads")).toEqual([]);
+		expect(report.status).toBe("clean");
+	});
+
+	test("an active ledger at the checkout root is read, and an unreadable one is ambiguous", () => {
+		const clone = join(temp(), "clone");
+		git(temp(), "clone", "-q", repo(), clone);
+		mkdirSync(join(clone, ".beads"));
+		const { argv, report } = recordingScan(clone, failingBd);
+		expect(argv).toContainEqual(["bd", "list", "--limit", "1", "--json"]);
+		expect(report.findings.find(f => f.kind === "beads")?.status).toBe("ambiguous");
+		expect(report.status).toBe("ambiguous");
+	});
+
+	test("a dirty sibling worktree makes the inventory actionable, never clean", () => {
+		const clone = join(temp(), "clone");
+		git(temp(), "clone", "-q", repo(), clone);
+		const upstream = git(clone, "rev-parse", "--abbrev-ref", "@{u}").stdout.toString().trim();
+		const linked = join(temp(), "linked");
+		git(clone, "worktree", "add", "-q", "--track", "-b", "other", linked, upstream);
+		writeFileSync(join(linked, "tracked.txt"), "changed here\n");
+		const { report } = recordingScan(clone, failingBd);
+		const sibling = report.worktrees.find(w => !w.current);
+		expect(sibling?.tracking).toBe("tracked");
+		expect(sibling?.ahead).toBe(0);
+		expect(sibling?.dirty).toBe(1);
+		const inventory = report.findings.find(f => f.kind === "linked-worktrees");
+		expect(inventory?.status).toBe("actionable");
+		expect(inventory?.description).toContain("1 with dirty paths");
+		expect(report.status).toBe("actionable");
 	});
 
 	test("the inventory identifies the main worktree and counts each row's dirty paths", () => {

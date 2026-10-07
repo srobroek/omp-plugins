@@ -59,8 +59,9 @@ export const RECEIPT_VERSION = 1;
 const GIT_TIMEOUT_MS = 2000;
 
 /**
- * Cap on a single receipt read. A receipt is a few kilobytes; anything larger is
- * not one, and reading it unbounded would stall the boundary it is written at.
+ * Cap on a single receipt, shared by writer and reader. A receipt is a few
+ * kilobytes; anything larger is not one, and reading it unbounded would stall the
+ * boundary it is written at. The writer refuses what the reader would refuse.
  */
 const MAX_RECEIPT_BYTES = 256 * 1024;
 
@@ -361,35 +362,34 @@ export function repoKey(cwd: string, run: GitRunner = spawnGit): string | null {
 }
 
 /**
- * Whether the nearest `.beads` ledger is active for a repository path.
+ * Whether the `.beads` ledger at a repository's checkout root is active.
  *
- * A regular-file `.beads/RETIRED` marker opts out of the nearest ledger. This
+ * Only `<dir>/.beads` votes. The check never walks into ancestors: a directory
+ * above the checkout is not part of the repository, and walking there made every
+ * repository under `$HOME` look ledger-backed through the per-user `~/.beads`
+ * store. No `.beads` entry at `dir` is ledger-free.
+ *
+ * A regular-file `.beads/RETIRED` marker opts out of that ledger. This
  * intentionally mirrors the PR-link gate: a malformed marker (or any read error)
  * keeps the ledger active rather than silently weakening closure and cleanup gates.
  *
- * The directory this walk starts from decides the answer, so no caller passes it an
- * invocation directory: {@link canonicalLedger} is the one seam that chooses it.
+ * The directory decides the answer, so no caller passes it an invocation
+ * directory: {@link canonicalLedger} is the one seam that chooses it, and it
+ * passes the checkout root (the common directory's parent for a linked worktree).
  */
 export function ledgerActive(dir: string): boolean {
-	let current = resolve(dir);
-	for (;;) {
-		const beads = join(current, ".beads");
-		let beadsStat: Stats;
-		try {
-			beadsStat = lstatSync(beads);
-		} catch (error) {
-			if ((error as NodeJS.ErrnoException).code !== "ENOENT") return true;
-			const parent = dirname(current);
-			if (parent === current) return false;
-			current = parent;
-			continue;
-		}
-		if (!beadsStat.isDirectory()) return true;
-		try {
-			return !lstatSync(join(beads, "RETIRED")).isFile();
-		} catch {
-			return true;
-		}
+	const beads = join(resolve(dir), ".beads");
+	let beadsStat: Stats;
+	try {
+		beadsStat = lstatSync(beads);
+	} catch (error) {
+		return (error as NodeJS.ErrnoException).code !== "ENOENT";
+	}
+	if (!beadsStat.isDirectory()) return true;
+	try {
+		return !lstatSync(join(beads, "RETIRED")).isFile();
+	} catch {
+		return true;
 	}
 }
 
@@ -983,7 +983,9 @@ function publish(temporary: string, target: string, payload: string): void {
  *
  * The receipt is validated first: this is the store, and persisting something the
  * reader would refuse only moves the failure somewhere less useful. That also covers
- * `receiptId` and `supersedes`, both of which become paths.
+ * `receiptId` and `supersedes`, both of which become paths, and the serialised size:
+ * a payload over {@link MAX_RECEIPT_BYTES} is refused here because `readReceipt`
+ * would refuse it.
  *
  * Writes go to an exclusively created temporary file in the same directory, then
  * link into place. A name collision is never resolved by deleting the file we
@@ -1015,9 +1017,15 @@ export function writeReceipt(receipt: LandingReceipt, directory?: string, option
 	}
 	const targetName = `${receipt.receiptId}.json`;
 	const target = join(into, targetName);
-	// Serialised before anything is created, so an unserialisable receipt cannot
-	// leave a partial file behind.
+	// Serialised before anything is created, so an unserialisable or oversized
+	// receipt cannot leave a partial file behind.
 	const payload = `${JSON.stringify(receipt, null, 2)}\n`;
+	const payloadBytes = Buffer.byteLength(payload, "utf8");
+	if (payloadBytes > MAX_RECEIPT_BYTES) {
+		throw new Error(
+			`refusing to persist an oversized receipt: observed ${payloadBytes} serialised bytes, expected at most ${MAX_RECEIPT_BYTES} (the reader's limit)`,
+		);
+	}
 	const nextName =
 		options?.tempName ?? (() => `.${receipt.receiptId}.${process.pid}.${randomBytes(6).toString("hex")}.tmp`);
 

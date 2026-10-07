@@ -2,7 +2,6 @@
 infrastructure-tfstate-guard
 ops-no-global-cargo-target
 find-tools-no-install
-delivery-main-branch-push-advisory
 authoring-repomix-include
 srobroek-package-investigate
 srobroek-sudo-destructive-advisory

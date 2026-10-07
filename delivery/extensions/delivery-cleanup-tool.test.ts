@@ -1320,14 +1320,14 @@ describe("the ledger is classified at the canonical root, never at a caller's di
 	 * from the ledger gate without issuing a single `bd` call, deleting the worktree and
 	 * the branch while the bead stayed open.
 	*/
-	test("a landing from a shadowed directory records the canonical verdict, and cleanup then requires reconciliation", () => {
+	test("a landing from a shadowed directory records the canonical verdict, and cleanup then requires reconciliation", async () => {
 		const f = fixture("bypass", "omp/agent/delivery-17");
 		const shadowed = join(f.main, "nested");
 		mkdirSync(join(shadowed, ".beads"), { recursive: true });
 		writeFileSync(join(shadowed, ".beads", "RETIRED"), "retired\n");
 
 		const landing = landRunner(f);
-		const landed = landPullRequest(
+		const landed = await landPullRequest(
 			{ pr: f.receipt.pr.number, worktree: f.linked },
 			{ run: landing.run, cwd: shadowed, now: () => NOW + 5, env: f.env },
 		);
@@ -1355,13 +1355,13 @@ describe("the ledger is classified at the canonical root, never at a caller's di
 		expect(gitExit(f.main, ["show-ref", "--verify", "--quiet", `refs/heads/${f.branch}`])).toBe(1);
 	});
 
-	test("an unreconciled bead still refuses that same landing, so the gate is the ledger's and not the receipt's", () => {
+	test("an unreconciled bead still refuses that same landing, so the gate is the ledger's and not the receipt's", async () => {
 		const f = fixture("bypass-open-bead", "omp/agent/delivery-17");
 		const shadowed = join(f.main, "nested");
 		mkdirSync(join(shadowed, ".beads"), { recursive: true });
 		writeFileSync(join(shadowed, ".beads", "RETIRED"), "retired\n");
 
-		const landed = landPullRequest(
+		const landed = await landPullRequest(
 			{ pr: f.receipt.pr.number, worktree: f.linked },
 			{ run: landRunner(f).run, cwd: shadowed, now: () => NOW + 5, env: f.env },
 		);
@@ -1381,9 +1381,9 @@ describe("the ledger is classified at the canonical root, never at a caller's di
 	});
 
 	for (const layout of ["separate-git-dir", "separate-dot-git-dir", "submodule"] as const) {
-		test(`${layout}: an active checkout ledger requires reconciliation and preserves an open bead's worktree and branch`, () => {
+		test(`${layout}: an active checkout ledger requires reconciliation and preserves an open bead's worktree and branch`, async () => {
 			const f = fixture(`live-${layout}`, "omp/agent/delivery-17", "active", layout);
-			const landed = landPullRequest(
+			const landed = await landPullRequest(
 				{ pr: f.receipt.pr.number, worktree: f.linked },
 				{ run: landRunner(f).run, cwd: f.main, now: () => NOW + 5, env: f.env },
 			);
@@ -1454,6 +1454,9 @@ describe("the ledger is classified at the canonical root, never at a caller's di
 		const reason = refusal(result);
 		expect(reason).toContain("beads.ledgerActive: observed true stored in the receipt, expected false");
 		expect(reason).toContain(`recomputed at canonical root "${realpathSync(f.main)}"`);
+		// Receipts minted before the canonical-root fix carry this claim; the refusal names the way out.
+		expect(reason).toContain(`run delivery_land for PR #${claimed.pr.number} again with worktree "${claimed.worktree.path}"`);
+		expect(reason).toContain("then run delivery_cleanup with that new receipt");
 		expect(mutationCalls(calls)).toEqual([]);
 		expect(existsSync(f.linked)).toBe(true);
 	});
@@ -1573,7 +1576,6 @@ describe("delivery_cleanup registration", () => {
 			omp: { extensions: string[] };
 		};
 		const decidedOrder = [
-			"./extensions/unpushed-work-advisory.ts",
 			"./extensions/delivery-land-tool.ts",
 			"./extensions/delivery-cleanup-tool.ts",
 			"./extensions/hygiene-orientation.ts",

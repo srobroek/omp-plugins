@@ -1,10 +1,11 @@
 import { afterAll, describe, expect, test } from "bun:test";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, watch, writeFileSync } from "node:fs";
 import { devNull, tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 import * as adapter from "./forge-adapter.ts";
 import {
+	type AsyncCliRunner,
 	autoDeleteSetting,
 	type CliResult,
 	type CliRunner,
@@ -19,8 +20,10 @@ import {
 	REMOTE_NAME,
 	redactRemote,
 	remoteBranchAbsent,
+	remoteBranchAbsentAsync,
 	repoPathFromRemote,
 	runCli,
+	runCliAsync,
 	singleRemoteRecord,
 } from "./forge-adapter.ts";
 
@@ -446,9 +449,9 @@ describe("singleRemoteRecord", () => {
 });
 
 describe("autoDeleteSetting", () => {
-	test("github reads delete_branch_on_merge with the documented argv", () => {
+	test("github reads delete_branch_on_merge with the documented argv", async () => {
 		const { run, calls } = spy(completed(0, "true\n"));
-		expect(autoDeleteSetting("github", "srobroek/omp-plugins", run)).toBe("on");
+		expect(await autoDeleteSetting("github", "srobroek/omp-plugins", run)).toBe("on");
 		expect(calls).toHaveLength(1);
 		expect(calls[0]?.argv).toEqual([
 			"gh",
@@ -460,9 +463,9 @@ describe("autoDeleteSetting", () => {
 		expect(calls[0]?.timeoutMs).toBe(FORGE_TIMEOUT_MS);
 	});
 
-	test("gitlab fetches the project object, with no --jq, and reads the field itself", () => {
+	test("gitlab fetches the project object, with no --jq, and reads the field itself", async () => {
 		const { run, calls } = spy(completed(0, gitlabProject(true)));
-		expect(autoDeleteSetting("gitlab", "group/sub/project", run)).toBe("on");
+		expect(await autoDeleteSetting("gitlab", "group/sub/project", run)).toBe("on");
 		expect(calls).toHaveLength(1);
 		expect(calls[0]?.argv).toEqual(["glab", "api", "projects/group%2Fsub%2Fproject", "--hostname", "gitlab.com"]);
 		expect(calls[0]?.argv).not.toContain("--jq");
@@ -470,35 +473,35 @@ describe("autoDeleteSetting", () => {
 		expect(calls[0]?.timeoutMs).toBe(FORGE_TIMEOUT_MS);
 	});
 
-	test("false is off, for both forges", () => {
-		expect(autoDeleteSetting("github", "o/r", spy(completed(0, "false\n")).run)).toBe("off");
-		expect(autoDeleteSetting("gitlab", "g/p", spy(completed(0, gitlabProject(false))).run)).toBe("off");
+	test("false is off, for both forges", async () => {
+		expect(await autoDeleteSetting("github", "o/r", spy(completed(0, "false\n")).run)).toBe("off");
+		expect(await autoDeleteSetting("gitlab", "g/p", spy(completed(0, gitlabProject(false))).run)).toBe("off");
 	});
 
-	test("github: a field the response omits reads as null, which is neither on nor off", () => {
-		expect(autoDeleteSetting("github", "o/r", spy(completed(0, "null\n")).run)).toBe("unknown");
+	test("github: a field the response omits reads as null, which is neither on nor off", async () => {
+		expect(await autoDeleteSetting("github", "o/r", spy(completed(0, "null\n")).run)).toBe("unknown");
 	});
 
-	test("gitlab: a project object without the field is unknown, not off", () => {
+	test("gitlab: a project object without the field is unknown, not off", async () => {
 		const withoutField = JSON.stringify({ id: 4711, path_with_namespace: "group/project" });
-		expect(autoDeleteSetting("gitlab", "g/p", spy(completed(0, withoutField)).run)).toBe("unknown");
+		expect(await autoDeleteSetting("gitlab", "g/p", spy(completed(0, withoutField)).run)).toBe("unknown");
 	});
 
-	test("gitlab: a field present but not a boolean is unknown", () => {
+	test("gitlab: a field present but not a boolean is unknown", async () => {
 		for (const value of ["true", "false", 1, 0, null, {}, [], "yes"]) {
-			expect(autoDeleteSetting("gitlab", "g/p", spy(completed(0, gitlabProject(value))).run)).toBe("unknown");
+			expect(await autoDeleteSetting("gitlab", "g/p", spy(completed(0, gitlabProject(value))).run)).toBe("unknown");
 		}
 	});
 
-	test("gitlab: a JSON key that only looks like a prototype write cannot answer", () => {
+	test("gitlab: a JSON key that only looks like a prototype write cannot answer", async () => {
 		// JSON.parse defines `__proto__` as an own property rather than mutating the
 		// prototype, so neither of these puts the field where a read would find it.
 		for (const stdout of ['{"constructor":true}', '{"__proto__":{"remove_source_branch_after_merge":true}}']) {
-			expect(autoDeleteSetting("gitlab", "g/p", spy(completed(0, stdout)).run)).toBe("unknown");
+			expect(await autoDeleteSetting("gitlab", "g/p", spy(completed(0, stdout)).run)).toBe("unknown");
 		}
 	});
 
-	test("gitlab: a polluted Object.prototype cannot answer for the field", () => {
+	test("gitlab: a polluted Object.prototype cannot answer for the field", async () => {
 		// The defect this pins: `in` and a plain property read both consult the
 		// prototype chain, so one polluting dependency anywhere in the session would
 		// make every project report its deletion setting as configured.
@@ -510,14 +513,14 @@ describe("autoDeleteSetting", () => {
 		});
 		try {
 			expect(GITLAB_FIELD in {}).toBe(true);
-			expect(autoDeleteSetting("gitlab", "g/p", spy(completed(0, '{"id":4711}')).run)).toBe("unknown");
+			expect(await autoDeleteSetting("gitlab", "g/p", spy(completed(0, '{"id":4711}')).run)).toBe("unknown");
 		} finally {
 			Reflect.deleteProperty(Object.prototype, GITLAB_FIELD);
 		}
 		expect(GITLAB_FIELD in {}).toBe(false);
 	});
 
-	test("gitlab: an inherited getter is refused rather than invoked", () => {
+	test("gitlab: an inherited getter is refused rather than invoked", async () => {
 		let invoked = 0;
 		Object.defineProperty(Object.prototype, GITLAB_FIELD, {
 			get: () => {
@@ -528,7 +531,7 @@ describe("autoDeleteSetting", () => {
 			enumerable: false,
 		});
 		try {
-			expect(autoDeleteSetting("gitlab", "g/p", spy(completed(0, '{"id":4711}')).run)).toBe("unknown");
+			expect(await autoDeleteSetting("gitlab", "g/p", spy(completed(0, '{"id":4711}')).run)).toBe("unknown");
 			expect(invoked).toBe(0);
 		} finally {
 			Reflect.deleteProperty(Object.prototype, GITLAB_FIELD);
@@ -536,61 +539,61 @@ describe("autoDeleteSetting", () => {
 		expect(GITLAB_FIELD in {}).toBe(false);
 	});
 
-	test("gitlab: an array response is refused before any property is read", () => {
+	test("gitlab: an array response is refused before any property is read", async () => {
 		for (const stdout of ["[]", '[{"remove_source_branch_after_merge":true}]', '["remove_source_branch_after_merge"]']) {
-			expect(autoDeleteSetting("gitlab", "g/p", spy(completed(0, stdout)).run)).toBe("unknown");
+			expect(await autoDeleteSetting("gitlab", "g/p", spy(completed(0, stdout)).run)).toBe("unknown");
 		}
 	});
 
-	test("gitlab: a response that is not an object is unknown", () => {
+	test("gitlab: a response that is not an object is unknown", async () => {
 		for (const stdout of ["", "   ", "true", "false", "null", "[]", '"project"', "42", "<html>", "{"]) {
-			expect(autoDeleteSetting("gitlab", "g/p", spy(completed(0, stdout)).run)).toBe("unknown");
+			expect(await autoDeleteSetting("gitlab", "g/p", spy(completed(0, stdout)).run)).toBe("unknown");
 		}
 	});
 
-	test("github: output that is not a boolean is unknown", () => {
+	test("github: output that is not a boolean is unknown", async () => {
 		for (const stdout of ["", "   ", "yes", "1", "True", "gh: command not found", "{", '{"a":1}', "[true]", '"true"']) {
-			expect(autoDeleteSetting("github", "o/r", spy(completed(0, stdout)).run)).toBe("unknown");
+			expect(await autoDeleteSetting("github", "o/r", spy(completed(0, stdout)).run)).toBe("unknown");
 		}
 	});
 
-	test("a non-zero exit is unknown even when stdout looks like an answer", () => {
-		expect(autoDeleteSetting("github", "o/r", spy(completed(1, "true\n")).run)).toBe("unknown");
-		expect(autoDeleteSetting("gitlab", "g/p", spy(completed(1, gitlabProject(true))).run)).toBe("unknown");
+	test("a non-zero exit is unknown even when stdout looks like an answer", async () => {
+		expect(await autoDeleteSetting("github", "o/r", spy(completed(1, "true\n")).run)).toBe("unknown");
+		expect(await autoDeleteSetting("gitlab", "g/p", spy(completed(1, gitlabProject(true))).run)).toBe("unknown");
 	});
 
-	test("insufficient permissions is unknown, never off", () => {
-		expect(autoDeleteSetting("github", "o/r", spy(forbidden).run)).toBe("unknown");
-		expect(autoDeleteSetting("gitlab", "g/p", spy(forbidden).run)).toBe("unknown");
+	test("insufficient permissions is unknown, never off", async () => {
+		expect(await autoDeleteSetting("github", "o/r", spy(forbidden).run)).toBe("unknown");
+		expect(await autoDeleteSetting("gitlab", "g/p", spy(forbidden).run)).toBe("unknown");
 	});
 
-	test("a timeout and a missing cli are unknown", () => {
-		expect(autoDeleteSetting("github", "o/r", spy(timedOut).run)).toBe("unknown");
-		expect(autoDeleteSetting("github", "o/r", spy(missingCli).run)).toBe("unknown");
-		expect(autoDeleteSetting("gitlab", "g/p", spy(timedOut).run)).toBe("unknown");
-		expect(autoDeleteSetting("gitlab", "g/p", spy(missingCli).run)).toBe("unknown");
+	test("a timeout and a missing cli are unknown", async () => {
+		expect(await autoDeleteSetting("github", "o/r", spy(timedOut).run)).toBe("unknown");
+		expect(await autoDeleteSetting("github", "o/r", spy(missingCli).run)).toBe("unknown");
+		expect(await autoDeleteSetting("gitlab", "g/p", spy(timedOut).run)).toBe("unknown");
+		expect(await autoDeleteSetting("gitlab", "g/p", spy(missingCli).run)).toBe("unknown");
 	});
 
-	test("a forge with no adapter never runs a cli and never falls through to one", () => {
+	test("a forge with no adapter never runs a cli and never falls through to one", async () => {
 		for (const forge of UNSUPPORTED_FORGES) {
 			const { run, calls } = spy(completed(0, gitlabProject(true)));
-			expect(autoDeleteSetting(forge, "group/project", run)).toBe("unknown");
+			expect(await autoDeleteSetting(forge, "group/project", run)).toBe("unknown");
 			expect(calls).toHaveLength(0);
 		}
 	});
 
-	test("an unusable repository path never runs a cli", () => {
+	test("an unusable repository path never runs a cli", async () => {
 		for (const repo of ["", "   ", "owner", "owner/", "/repo", "owner//repo", "owner/../other/repo", "owner/./repo", "-owner/repo", "owner/repo?x=1", "owner/re po", "owner/repo/extra"]) {
 			const { run, calls } = spy(completed(0, "true\n"));
-			expect(autoDeleteSetting("github", repo, run)).toBe("unknown");
+			expect(await autoDeleteSetting("github", repo, run)).toBe("unknown");
 			expect(calls).toHaveLength(0);
 		}
 	});
 
-	test("the read path issues no mutating argv", () => {
+	test("the read path issues no mutating argv", async () => {
 		for (const forge of ["github", "gitlab"] as const) {
 			const { run, calls } = spy(completed(0, "false\n"));
-			autoDeleteSetting(forge, "group/project", run);
+			await autoDeleteSetting(forge, "group/project", run);
 			expect(calls).toHaveLength(1);
 			for (const call of calls) {
 				expect(call.argv).not.toContain("-X");
@@ -604,9 +607,9 @@ describe("autoDeleteSetting", () => {
 });
 
 describe("enableAutoDelete", () => {
-	test("github issues the documented PATCH argv with a typed field", () => {
+	test("github issues the documented PATCH argv with a typed field", async () => {
 		const { run, calls } = spy(completed(0, "{}"));
-		expect(enableAutoDelete("github", "srobroek/omp-plugins", run)).toEqual({ ok: true });
+		expect(await enableAutoDelete("github", "srobroek/omp-plugins", run)).toEqual({ ok: true });
 		expect(calls).toHaveLength(1);
 		expect(calls[0]?.argv).toEqual([
 			"gh",
@@ -620,9 +623,9 @@ describe("enableAutoDelete", () => {
 		expect(calls[0]?.timeoutMs).toBe(FORGE_TIMEOUT_MS);
 	});
 
-	test("gitlab issues the documented PUT argv with a typed field", () => {
+	test("gitlab issues the documented PUT argv with a typed field", async () => {
 		const { run, calls } = spy(completed(0, "{}"));
-		expect(enableAutoDelete("gitlab", "group/sub/project", run)).toEqual({ ok: true });
+		expect(await enableAutoDelete("gitlab", "group/sub/project", run)).toEqual({ ok: true });
 		expect(calls[0]?.argv).toEqual([
 			"glab",
 			"api",
@@ -637,10 +640,10 @@ describe("enableAutoDelete", () => {
 		expect(calls[0]?.timeoutMs).toBe(FORGE_TIMEOUT_MS);
 	});
 
-	test("the endpoints take booleans, so neither write uses a raw string field", () => {
+	test("the endpoints take booleans, so neither write uses a raw string field", async () => {
 		for (const forge of ["github", "gitlab"] as const) {
 			const { run, calls } = spy(completed(0, "{}"));
-			enableAutoDelete(forge, "group/project", run);
+			await enableAutoDelete(forge, "group/project", run);
 			// `-f`/`--raw-field` would send the string "true" to a boolean field.
 			expect(calls[0]?.argv).not.toContain("-f");
 			expect(calls[0]?.argv).not.toContain("--raw-field");
@@ -651,23 +654,23 @@ describe("enableAutoDelete", () => {
 		}
 	});
 
-	test("a rejected request names the observed and expected exit status", () => {
-		const result = enableAutoDelete("github", "o/r", spy(forbidden).run);
+	test("a rejected request names the observed and expected exit status", async () => {
+		const result = await enableAutoDelete("github", "o/r", spy(forbidden).run);
 		expect(result.ok).toBe(false);
 		expect(result.reason).toContain("observed exit 1");
 		expect(result.reason).toContain("expected exit 0");
 		expect(result.reason).toContain("Resource not accessible by integration");
 	});
 
-	test("a timeout and a missing cli refuse with the cause", () => {
-		expect(enableAutoDelete("github", "o/r", spy(timedOut).run).reason).toContain("terminated by SIGTERM");
-		expect(enableAutoDelete("github", "o/r", spy(missingCli).run).reason).toContain("ENOENT");
+	test("a timeout and a missing cli refuse with the cause", async () => {
+		expect((await enableAutoDelete("github", "o/r", spy(timedOut).run)).reason).toContain("terminated by SIGTERM");
+		expect((await enableAutoDelete("github", "o/r", spy(missingCli).run)).reason).toContain("ENOENT");
 	});
 
-	test("a forge with no adapter refuses by name and never runs a cli", () => {
+	test("a forge with no adapter refuses by name and never runs a cli", async () => {
 		for (const forge of UNSUPPORTED_FORGES) {
 			const { run, calls } = spy(completed(0, "{}"));
-			const result = enableAutoDelete(forge, "group/project", run);
+			const result = await enableAutoDelete(forge, "group/project", run);
 			expect(result.ok).toBe(false);
 			expect(result.reason).toContain(`forge is ${JSON.stringify(forge)}`);
 			expect(result.reason).toContain('expected "github" or "gitlab"');
@@ -675,22 +678,22 @@ describe("enableAutoDelete", () => {
 		}
 	});
 
-	test("an unusable repository path refuses without running a cli", () => {
+	test("an unusable repository path refuses without running a cli", async () => {
 		const { run, calls } = spy(completed(0, "{}"));
-		const result = enableAutoDelete("github", "owner/../other/repo", run);
+		const result = await enableAutoDelete("github", "owner/../other/repo", run);
 		expect(result.ok).toBe(false);
 		expect(result.reason).toContain("owner/../other/repo");
 		expect(result.reason).toContain("<owner>/<name>");
 		expect(calls).toHaveLength(0);
 	});
 
-	test("an accepted request is not proof that the setting is on", () => {
-		expect(enableAutoDelete("github", "o/r", spy(completed(0, "{}")).run)).toEqual({ ok: true });
-		expect(autoDeleteSetting("github", "o/r", spy(completed(0, "false\n")).run)).toBe("off");
-		expect(autoDeleteSetting("github", "o/r", spy(timedOut).run)).toBe("unknown");
+	test("an accepted request is not proof that the setting is on", async () => {
+		expect(await enableAutoDelete("github", "o/r", spy(completed(0, "{}")).run)).toEqual({ ok: true });
+		expect(await autoDeleteSetting("github", "o/r", spy(completed(0, "false\n")).run)).toBe("off");
+		expect(await autoDeleteSetting("github", "o/r", spy(timedOut).run)).toBe("unknown");
 	});
 
-	test("no other exported function issues a mutating argv", () => {
+	test("no other exported function issues a mutating argv", async () => {
 		const calls: Call[] = [];
 		const run: CliRunner = (argv, options) => {
 			calls.push({ argv: [...argv], cwd: options.cwd, timeoutMs: options.timeoutMs, env: options.env });
@@ -698,7 +701,7 @@ describe("enableAutoDelete", () => {
 		};
 		const forges: Forge[] = ["github", "gitlab", ...UNSUPPORTED_FORGES];
 		for (const forge of forges) {
-			autoDeleteSetting(forge, "group/project", run);
+			await autoDeleteSetting(forge, "group/project", run);
 			remoteBranchAbsent("origin", "omp/agent/omp-plugins-9ej3.4", REPO_CWD, run);
 			detectForge("https://github.com/group/project.git");
 			try {
@@ -798,6 +801,27 @@ describe("mergeArgs", () => {
 		expect(() => mergeArgs("github", 0)).toThrow(/expected a positive integer/);
 		expect(() => mergeArgs("github", -3)).toThrow(/expected a positive integer/);
 		expect(() => mergeArgs("github", 1.5)).toThrow(/expected a positive integer/);
+	});
+
+	test("a squash takes the pull request title as its subject, in each CLI's spelling", () => {
+		const title = "fix(delivery): land the reviewed head";
+		expect(mergeArgs("github", 7, { squashSubject: title })).toEqual(["gh", "pr", "merge", "7", "--squash", "--subject", title, "--delete-branch"]);
+		expect(mergeArgs("gitlab", 7, { squashSubject: title })).toEqual(["glab", "mr", "merge", "7", "--squash", "--squash-message", title, "--remove-source-branch"]);
+		// A subject spelled like an option stays the flag's operand: both CLIs take the
+		// next element as a value flag's argument unconditionally.
+		const optionLike = mergeArgs("github", 7, { squashSubject: "--admin" });
+		expect(optionLike[optionLike.indexOf("--subject") + 1]).toBe("--admin");
+	});
+
+	test("a squash subject is refused for any other method and when it is not one non-empty line", () => {
+		for (const mergeMethod of ["merge", "rebase"] as const) {
+			expect(() => mergeArgs("github", 7, { mergeMethod, squashSubject: "title" })).toThrow("only a squash takes a subject");
+		}
+		for (const squashSubject of ["", "   ", "two\nlines", "tab\tinside", 42 as unknown as string]) {
+			expect(() => mergeArgs("github", 7, { squashSubject })).toThrow("expected one non-empty line");
+		}
+		const inherited = Object.create({ squashSubject: "inherited" }) as MergeOptionsForTest;
+		expect(mergeArgs("github", 7, inherited)).not.toContain("--subject");
 	});
 });
 
@@ -1051,18 +1075,41 @@ describe("remoteBranchAbsent", () => {
 			expect(remoteBranchAbsent("origin", branch, REPO_CWD, spy(completed(2)).run)).toBe("absent");
 		}
 	});
+
+	test("the async probe issues the same command and reads it to the same verdict", async () => {
+		const url = "https://srobroek:ghp_secrettoken@github.com/srobroek/omp-plugins.git";
+		for (const remote of ["origin", url]) {
+			for (const result of [completed(2), completed(0, headRecord("feature")), timedOut]) {
+				const sync = spy(result);
+				const asyncCalls: Call[] = [];
+				const asyncRun: AsyncCliRunner = async (argv, options) => {
+					asyncCalls.push({ argv: [...argv], cwd: options.cwd, timeoutMs: options.timeoutMs, env: options.env });
+					return result;
+				};
+				const verdict = await remoteBranchAbsentAsync(remote, "feature", REPO_CWD, asyncRun);
+				expect(verdict).toBe(remoteBranchAbsent(remote, "feature", REPO_CWD, sync.run));
+				expect(asyncCalls.map(call => call.argv)).toEqual(sync.calls.map(call => call.argv));
+				expect(asyncCalls[0]?.timeoutMs).toBe(FORGE_TIMEOUT_MS);
+				// URL mode runs from its own probe directory, which does not survive the call.
+				const asked = asyncCalls[0]?.cwd ?? "";
+				if (remote === url) expect(existsSync(asked)).toBe(false);
+				else expect(asked).toBe(REPO_CWD);
+			}
+		}
+		expect(await remoteBranchAbsentAsync("--upload-pack=/tmp/evil", "feature", REPO_CWD, spy(completed(2)).run)).toBe("unknown");
+	});
 });
 
 describe("every issued command", () => {
-	test("is an argv array of strings with a bounded timeout and no shell syntax", () => {
+	test("is an argv array of strings with a bounded timeout and no shell syntax", async () => {
 		const calls: Call[] = [];
 		const run: CliRunner = (argv, options) => {
 			calls.push({ argv: [...argv], cwd: options.cwd, timeoutMs: options.timeoutMs, env: options.env });
 			return completed(0, "true\n");
 		};
 		for (const forge of ["github", "gitlab"] as const) {
-			autoDeleteSetting(forge, "group/project", run);
-			enableAutoDelete(forge, "group/project", run);
+			await autoDeleteSetting(forge, "group/project", run);
+			await enableAutoDelete(forge, "group/project", run);
 		}
 		remoteBranchAbsent("origin", "omp/agent/omp-plugins-9ej3.4", REPO_CWD, run);
 		const built = [...calls.map(call => call.argv), mergeArgs("github", 123), mergeArgs("gitlab", 7)];
@@ -1099,8 +1146,10 @@ describe("every issued command", () => {
 			"normalizeRepoPath",
 			"redactRemote",
 			"remoteBranchAbsent",
+			"remoteBranchAbsentAsync",
 			"repoPathFromRemote",
 			"runCli",
+			"runCliAsync",
 			"singleRemoteRecord",
 		]);
 	});
@@ -1317,5 +1366,156 @@ describe("runCli against real processes", () => {
 			if (previous === undefined) delete process.env.GIT_EXEC_PATH;
 			else process.env.GIT_EXEC_PATH = previous;
 		}
+	}, 60_000);
+});
+
+/** Resolve once `file` exists, on the directory's change events rather than a polling clock. */
+function appeared(file: string): Promise<void> {
+	const { promise, resolve } = Promise.withResolvers<void>();
+	const settle = (): void => {
+		if (!existsSync(file)) return;
+		watcher.close();
+		resolve();
+	};
+	const watcher = watch(dirname(file), settle);
+	settle();
+	return promise;
+}
+
+/**
+ * Whether `pid` names a live process. Signal 0 checks without delivering anything.
+ * A killed orphan stays a zombie until its new parent reaps it, and signal 0 still
+ * succeeds on a zombie, so on Linux the `/proc` state `Z` counts as exited.
+ */
+function alive(pid: number): boolean {
+	try {
+		process.kill(pid, 0);
+	} catch {
+		return false;
+	}
+	try {
+		const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
+		return stat.slice(stat.lastIndexOf(")") + 2, stat.lastIndexOf(")") + 3) !== "Z";
+	} catch {
+		return true;
+	}
+}
+
+/**
+ * Resolve whether `pid` exited within `ms`: a group SIGKILL lands asynchronously. The
+ * grandchild is not our child, so there is no exit event to await; a short real poll
+ * is the only observation, and it returns as soon as the process is gone.
+ */
+async function exitsWithin(pid: number, ms = 2_000): Promise<boolean> {
+	const deadline = Date.now() + ms;
+	while (alive(pid)) {
+		if (Date.now() > deadline) return false;
+		await Bun.sleep(10);
+	}
+	return true;
+}
+
+/**
+ * The abortable runner against real processes. The deadline cases deliberately run
+ * on the platform clock: what they prove is that a real timer kills a real process
+ * group and releases the pipes it held, which no fake clock can stand in for. Each
+ * deadline is short, and each waits on the runner's own promise, not a sleep.
+ */
+describe("runCliAsync against real processes", () => {
+	const dir = mkdtempSync(join(tmpdir(), "forge-adapter-async-"));
+	afterAll(() => rmSync(dir, { recursive: true, force: true }));
+
+	/** A script that prints a line, records its own pid and its background child's, then waits on the child. */
+	const family = (name: string) => {
+		const script = join(dir, name);
+		const self = join(dir, `${name}.pid`);
+		const child = join(dir, `${name}.child`);
+		// Each pid file is written aside and renamed, so it exists only once it is whole.
+		writeFileSync(
+			script,
+			`#!/bin/sh\necho started\nsleep 30 &\necho $! > '${child}.tmp' && mv '${child}.tmp' '${child}'\necho $$ > '${self}.tmp' && mv '${self}.tmp' '${self}'\nwait\n`,
+		);
+		chmodSync(script, 0o700);
+		return { script, self, child };
+	};
+	const pid = (file: string): number => Number(readFileSync(file, "utf8").trim());
+
+	test("a completed command reports ok with its real exit status and output", async () => {
+		const zero = await runCliAsync(["git", "--version"], { timeoutMs: FORGE_TIMEOUT_MS });
+		expect(zero.ok).toBe(true);
+		expect(zero.exitCode).toBe(0);
+		expect(zero.stdout).toContain("git version");
+		expect(zero.error).toBeUndefined();
+		const failed = await runCliAsync(["git", "rev-parse", "--verify", "no-such-ref"], { cwd: dir, timeoutMs: FORGE_TIMEOUT_MS });
+		expect(failed.ok).toBe(true);
+		expect(failed.exitCode).not.toBe(0);
+	}, 60_000);
+
+	test("input is written to stdin and stdin is closed", async () => {
+		const echoed = await runCliAsync(["cat"], { timeoutMs: FORGE_TIMEOUT_MS, input: "one\ntwo\n" });
+		expect(echoed).toEqual({ ok: true, exitCode: 0, stdout: "one\ntwo\n", stderr: "" });
+	}, 60_000);
+
+	test("an abort kills the command and every process in its group", async () => {
+		const { script, self, child } = family("aborted");
+		const controller = new AbortController();
+		const pending = runCliAsync([script], { timeoutMs: FORGE_TIMEOUT_MS, signal: controller.signal });
+		await appeared(child);
+		await appeared(self);
+		expect(alive(pid(self))).toBe(true);
+		expect(alive(pid(child))).toBe(true);
+		const started = Date.now();
+		controller.abort();
+		const result = await pending;
+
+		expect(Date.now() - started).toBeLessThan(FORGE_TIMEOUT_MS);
+		expect(result.ok).toBe(false);
+		expect(result.exitCode).toBeNull();
+		expect(result.error).toContain("abort");
+		// What the command wrote before it was killed is kept.
+		expect(result.stdout).toBe("started\n");
+		expect(await exitsWithin(pid(self))).toBe(true);
+		expect(await exitsWithin(pid(child))).toBe(true);
+	}, 60_000);
+
+	test("the deadline ends a command whose child still holds stdout open", async () => {
+		const script = join(dir, "holds-stdout");
+		const self = join(dir, "holds-stdout.pid");
+		// `sleep` is not exec'd: it inherits stdout, so the pipe outlives the shell, and
+		// only a group kill releases it.
+		writeFileSync(script, `#!/bin/sh\necho started\necho $$ > '${self}.tmp' && mv '${self}.tmp' '${self}'\nsleep 30\n`);
+		chmodSync(script, 0o700);
+		const started = Date.now();
+		// Long enough that the script is running, holding the pipe, when the deadline fires.
+		const pending = runCliAsync([script], { timeoutMs: 1_500 });
+		await appeared(self);
+		const result = await pending;
+
+		expect(Date.now() - started).toBeLessThan(FORGE_TIMEOUT_MS);
+		expect(result.ok).toBe(false);
+		expect(result.error).toContain("1500ms timeout");
+		expect(result.stdout).toBe("started\n");
+		expect(alive(pid(self))).toBe(false);
+	}, 60_000);
+
+	test("an already-aborted signal starts nothing", async () => {
+		const marker = join(dir, "never-started");
+		const script = join(dir, "marks");
+		writeFileSync(script, `#!/bin/sh\n: > '${marker}'\n`);
+		chmodSync(script, 0o700);
+		const controller = new AbortController();
+		controller.abort();
+		const result = await runCliAsync([script], { timeoutMs: FORGE_TIMEOUT_MS, signal: controller.signal });
+
+		expect(result).toEqual({ ok: false, exitCode: null, stdout: "", stderr: "", error: `${script} was not started: the call was aborted` });
+		expect(existsSync(marker)).toBe(false);
+	}, 60_000);
+
+	test("a missing binary and an empty argv are not observations", async () => {
+		const gone = await runCliAsync(["omp-forge-adapter-no-such-binary"], { timeoutMs: FORGE_TIMEOUT_MS });
+		expect(gone.ok).toBe(false);
+		expect(gone.exitCode).toBeNull();
+		expect(gone.error ?? "").not.toBe("");
+		expect(await runCliAsync([], { timeoutMs: FORGE_TIMEOUT_MS })).toEqual({ ok: false, exitCode: null, stdout: "", stderr: "", error: "no command to run" });
 	}, 60_000);
 });
