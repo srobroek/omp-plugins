@@ -1,0 +1,62 @@
+[
+  {
+    "id": "local-script",
+    "mode": "IMPLEMENT",
+    "prompt": "Plan a one-off Bash command to rename local report files with spaces in their names. Existing project tools are Bash and coreutils, and no service is deployed. Explain what you would inspect before writing and how you would verify the result. Do not execute filesystem mutations."
+  },
+  {
+    "id": "one-consumer-orm",
+    "mode": "IMPLEMENT",
+    "prompt": "Plan persistence for a small application with one consumer. It needs relationships, atomic transactions and migrations. The repo already installs a maintained ORM used in a nearby service. Explain your investigation and implementation choice; do not assume the nearby service's domain model is shared."
+  },
+  {
+    "id": "independent-policies",
+    "mode": "REVIEW",
+    "prompt": "Review this proposal using only supplied facts: password validation and invoice-number validation each currently check for eight characters. They are owned by different policies. The PR combines them into validate(value, mode) solely to remove duplication. Return a calibrated finding or approval."
+  },
+  {
+    "id": "go-boundary",
+    "mode": "IMPLEMENT",
+    "prompt": "Plan a Go change that adds a second store implementation behind a package already used by two callers. Explain what contracts and existing code you would investigate before coding and how you would choose the interface. No class framework is in use."
+  },
+  {
+    "id": "rust-transition",
+    "mode": "IMPLEMENT",
+    "prompt": "Plan a Rust change from a pair of public booleans to representing connection lifecycle states. Existing callers depend on error and ownership behavior. Explain the investigation, representation choice and verification; do not edit code."
+  },
+  {
+    "id": "rolling-schema",
+    "mode": "IMPLEMENT",
+    "prompt": "Plan renaming an orders database column during a rolling deployment. Old workers remain active, events can wait in a queue for 24 hours, and yesterday's binary is a supported rollback target. All source callers can be changed in one PR. No production deployment is authorized."
+  },
+  {
+    "id": "small-authorization-diff",
+    "mode": "IMPLEMENT",
+    "prompt": "Choose the workflow and evidence for a one-line fix: the orders endpoint is authenticated but trusts a tenant ID supplied by the client. Explain what you would do before writing code and what proves the behavior is fixed."
+  },
+  {
+    "id": "review-valid-exception",
+    "mode": "REVIEW",
+    "prompt": "Review only these supplied facts: a disposable import tool uses one parameterized SQL query inside one transaction. Its note says direct driver use was chosen after comparing the installed ORM; the driver is simpler for this single operation. There are no additional consumers. It has an integration check for the import. Must it gain a repository interface?"
+  },
+  {
+    "id": "review-stale-exception",
+    "mode": "REVIEW",
+    "prompt": "Review only these facts: the same documented one-off importer now serves a long-running API with three call sites copying its schema-specific writes. Each call site commits independently although the accepted operation must be atomic. The PR retains the original one-off exception without reassessment."
+  },
+  {
+    "id": "limited-evidence",
+    "mode": "REVIEW",
+    "prompt": "Your authorized evidence is a diff that adds save(order) to an adapter and a PR claim that all consumers are migrated. No caller code, persistence contract, rollout context, or reuse-research evidence is supplied. You cannot browse files or URLs. Assess what can and cannot be concluded without claiming a demonstrated caller defect."
+  },
+  {
+    "id": "reuse-existing-capability",
+    "mode": "IMPLEMENT",
+    "prompt": "A new CLI needs CSV parsing and account-ID normalization. The repository has an existing import command, shared utility modules and a lockfile; their contents have not yet been inspected. Explain the sequence you would follow before writing any code, including external options, and what would justify custom implementation."
+  },
+  {
+    "id": "uncertain-write",
+    "mode": "IMPLEMENT",
+    "prompt": "A network request creates a resource, then times out before the caller receives its response. The proposed fix retries immediately with a fresh operation ID. Explain the design and verification work needed before implementation. No live external calls are authorized."
+  }
+]

@@ -14,11 +14,18 @@ encapsulation/boundaries over YAGNI, then uses KISS and DRY to avoid unnecessary
 A library or ORM with one consumer is justified when it simplifies the current solution.
 Small scripts remain small; major refactors require a notice, not a new approval gate.
 
+Before implementation, agents research shared and related code, relevant earlier work,
+standard capabilities, and mature libraries/packages. They reuse a suitable capability
+instead of recreating it, and record the candidates, sources, decision, and concrete
+gaps that justify any custom code. Research stays proportional but precedes code writes;
+workers can reuse verified task-local findings from their lead or a researcher.
+
 Progressive disclosure:
 
 1. `rule://quality-code-design` is always applied: the shared priorities, scope, and delegation contract.
 2. `skill://quality-code-design` selects IMPLEMENT, INVESTIGATE, or REVIEW and routes by task.
-3. Only relevant principle examples and language notes are read. Go, Rust, and other-paradigm
+3. The reuse guide is read before implementation; other principle examples, lifecycle
+   guides, and language notes load only for the affected decision. Go, Rust, and other-paradigm
    guidance is conditional on code being designed, inspected, edited, or reviewed, not on
    unrelated files elsewhere in the repository. This is explicit on-demand routing, not a
    claim that OMP rulebook `globs` automatically inject content.
@@ -32,12 +39,27 @@ steering and review, not deterministic proof that generated code meets the princ
 Review findings distinguish blockers, suggestions, accepted exceptions, and uncertainties.
 The reference library covers each SOLID principle, OOP equivalents, YAGNI/KISS/DRY,
 dependencies/ORMs, and researched supporting practices, with good/bad examples and exceptions.
+Lifecycle references cover risk-based planning, behavioral verification, trust boundaries,
+artifact assurance, mixed-version/data compatibility, recovery, retries, and release evidence.
+Formal SLOs, canaries, attestations, and additional test techniques remain conditional on
+the system's needs. Required project checks and release controls remain in force.
 Primary-source links and inclusion decisions are in
 [supporting principles](skills/quality-code-design/references/supporting-principles.md).
 
 Verify installation with `omp plugin doctor` and read both
 `rule://quality-code-design` and `skill://quality-code-design`. The repository's loader
 smoke checks discovery and addressability; it does not measure behavioral compliance.
+
+## Evaluating steering changes
+
+Use the [evaluation guide](skills/quality-code-design/references/agent-evaluation.md)
+with the bundled [task cases](skills/quality-code-design/assets/evaluation-cases.json)
+and separate [grading rubric](skills/quality-code-design/assets/evaluation-rubric.json).
+Keep the rubric and prior answers out of executor context. Compare baseline/candidate
+outcomes on isolated fixtures; grade actual code and actions where available, and label
+plan-only exercises accordingly. Track regressions, review misses/false positives,
+unnecessary complexity, reuse research, and time/cost when recorded. These development
+cases are not a held-out benchmark or an automatic CI evaluation service.
 
 ## Skills
 

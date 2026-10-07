@@ -1,5 +1,33 @@
 # Dependencies, ORMs, and one consumer
 
+## Research before implementation
+
+**Do:** complete these checks before writing or changing production code, tests, CI, or scripts. Keep a small task's search short, but perform it before implementation.
+
+1. Search the codebase by behavior and domain meaning, not only by the desired function name. Read shared packages/utilities, relevant callers/tests, installed dependencies, manifests, and conventions.
+2. Inspect related implementations and relevant earlier work available in the repository/history or linked task context. Determine whether existing local code can supply the need directly or become a cohesive shared capability. Do not search unrelated private repositories or assume unavailable prior work exists.
+3. Research standard-library, framework, and mature ecosystem options using authoritative documentation and package/release information. Verify the candidate API/version and fit: required behavior, maintenance/support, compatibility, relevant security/licensing/deployment constraints, and operational cost. Popularity alone is not maturity or suitability.
+4. Choose suitable existing shared code, direct reuse, a bounded extraction, an established library, or custom code supported by a concrete gap. Compare actual semantics and total complexity; do not invent a minimum consumer count or an arbitrary package-search quota.
+5. Record a concise reuse decision in the existing task/plan evidence: paths/symbols inspected, sources/versions consulted, choice, rejected alternatives and material reasons. Reuse current task-local research when it addresses the same requirement; revisit it when behavior, constraints, or versions change.
+
+**Do not:** start a custom implementation and research alternatives afterward, recreate a suitable available capability, or declare "nothing reusable" without examining candidates.
+
+Bad: write a new pagination helper without reading the existing `shared/pagination` module or the framework's documented iterator.
+Good: inspect both contracts and use the suitable existing capability; add only the domain behavior still missing.
+
+Bad: copy a previous importer into a new command even though parsing and validation represent the same contract.
+Good: extract that proven responsibility into the appropriate shared module and preserve existing consumers with focused checks.
+
+Bad: turn unrelated password and invoice-number validators into one configurable utility because their current shapes match.
+Good: keep independent policies separate; share only knowledge that must evolve together.
+
+Bad: hand-write an archive parser while a maintained standard or ecosystem implementation meets the format and deployment requirements.
+Good: verify the documented API and supported version, reuse it, and test the application's integration and failure behavior.
+
+**Exception:** custom code is justified when researched options fail a required contract, deployment/license constraint, measured performance need, or present simplicity test. State the actual gap and the smallest custom scope; unfamiliarity or preference is insufficient. A standard command can be the appropriate reusable solution for a one-off script.
+
+If a source/tool is unavailable, do not claim the check passed. Use available authoritative material or request research through the lead/researcher before implementing the unresolved capability. Read-only reviewers stay within their evidence contract: missing supplied research is an uncertainty to surface, not permission to fetch arbitrary URLs or claim duplication is proven.
+
 ## Choose by present simplification
 
 **Do:** compare the complete current solution: application code, correctness work, setup, migrations, operations, debugging, upgrades, and lock-in.
