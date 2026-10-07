@@ -11,8 +11,9 @@ const zod = {
 	object: (shape: unknown) => shape,
 };
 
+import { resolveApproval, resolveToolTier } from "@oh-my-pi/pi-coding-agent/tools/approval";
 import depScanTool, { classify, detectProject, normalizeVersion, parseRequirement, queryRegistry } from "./dep-scan-tool";
-import { isPrerelease, pickStable } from "./lib";
+import { compareVersions, isPrerelease, pickStable, researchProject } from "./lib";
 
 function tmp(): string {
 	return mkdtempSync(join(tmpdir(), "dep-scan-"));
@@ -34,6 +35,24 @@ describe("unit: versions", () => {
 		expect(classify("1.2.3", "2.0.0")).toBe("MAJOR-ADVISORY");
 		expect(classify("1.2.3", "1.2.3")).toBe("CURRENT");
 		expect(classify("not-a-version", "1.2.3")).toBe("UNRESOLVABLE");
+	});
+
+	test("same-triple pre- and post-releases are upgrades, not CURRENT", () => {
+		expect(classify("1.0.0-rc.1", "1.0.0")).toBe("PATCH-SAFE");
+		expect(classify("1.0.0-alpha.2", "1.0.0-alpha.10")).toBe("PATCH-SAFE");
+		expect(classify("1.0.0-alpha", "1.0.0-alpha.1")).toBe("PATCH-SAFE");
+		expect(classify("1.0.0-beta", "1.0.0-alpha.1")).toBe("CURRENT");
+		expect(classify("1.0.0", "1.0.0-rc.1")).toBe("CURRENT");
+		expect(classify("1.0.0", "1.0.0.post1", "pypi")).toBe("PATCH-SAFE");
+		expect(classify("1.0rc1", "1.0", "pypi")).toBe("PATCH-SAFE");
+		expect(classify("1.0a1", "1.0b1", "pypi")).toBe("PATCH-SAFE");
+		expect(classify("1.0.dev1", "1.0a1", "pypi")).toBe("PATCH-SAFE");
+		expect(classify("1.0a1.dev1", "1.0a1", "pypi")).toBe("PATCH-SAFE");
+		expect(classify("1.0.post1", "1.0", "pypi")).toBe("CURRENT");
+		expect(classify("1.0.post1.dev1", "1.0.post1", "pypi")).toBe("PATCH-SAFE");
+		expect(compareVersions("1.0", "1.0.post1.dev1", "pypi")).toBe(-1);
+		expect(compareVersions("1.0+local", "1.0", "pypi")).toBe(0);
+		expect(pickStable("2.0rc1", "1.0", ["1.1", "1.1.post1", "2.0rc1"], "pypi")).toBe("1.1.post1");
 	});
 
 	test.each([
@@ -81,8 +100,8 @@ describe("unit: detect", () => {
 		);
 		const { rows } = await detectProject(dir);
         expect(rows).toEqual([
-            { ecosystem: "npm", name: "react", declared: "^18.2.0", resolved: null },
-            { ecosystem: "npm", name: "typescript", declared: "~5.4.0", resolved: null },
+            { ecosystem: "npm", name: "react", declared: "^18.2.0", resolved: null, direct: true },
+            { ecosystem: "npm", name: "typescript", declared: "~5.4.0", resolved: null, direct: true },
         ]);
 	});
 
@@ -90,7 +109,84 @@ describe("unit: detect", () => {
 		const dir = tmp();
 		writeFileSync(join(dir, "requirements.txt"), "requests==2.31.0\n");
 		const { rows } = await detectProject(dir);
-        expect(rows).toEqual([{ ecosystem: "pypi", name: "requests", declared: "==2.31.0", resolved: null }]);
+        expect(rows).toEqual([{ ecosystem: "pypi", name: "requests", declared: "==2.31.0", resolved: null, direct: true }]);
+	});
+
+	test("Python: pyproject declares, uv.lock resolves, transitive and local entries are told apart", async () => {
+		const dir = tmp();
+		try {
+			writeFileSync(join(dir, "pyproject.toml"), [
+				"[project]", 'name = "app"', 'dependencies = ["httpx>=0.27", "Typing_Extensions>=4", "mylib", "vendored @ file:///tmp/vendored"]',
+				"[dependency-groups]", 'dev = ["pytest==8.0.0"]',
+			].join("\n"));
+			writeFileSync(join(dir, "requirements.txt"), "flask==3.0.0\n");
+			writeFileSync(join(dir, "uv.lock"), [
+				"version = 1",
+				'[[package]]\nname = "app"\nversion = "0.1.0"\nsource = { editable = "." }',
+				'[[package]]\nname = "httpx"\nversion = "0.27.2"\nsource = { registry = "https://pypi.org/simple" }',
+				'[[package]]\nname = "typing-extensions"\nversion = "4.12.2"\nsource = { registry = "https://pypi.org/simple" }',
+				'[[package]]\nname = "anyio"\nversion = "4.4.0"\nsource = { registry = "https://pypi.org/simple" }',
+				'[[package]]\nname = "mylib"\nversion = "0.0.1"\nsource = { directory = "../mylib" }',
+				'[[package]]\nname = "pytest"\nversion = "8.0.0"\nsource = { registry = "https://pypi.org/simple" }',
+			].join("\n"));
+			const { rows } = await detectProject(dir);
+			expect(rows).toEqual([
+				{ ecosystem: "pypi", name: "httpx", declared: ">=0.27", resolved: "0.27.2", direct: true },
+				{ ecosystem: "pypi", name: "Typing_Extensions", declared: ">=4", resolved: "4.12.2", direct: true },
+				{ ecosystem: "pypi", name: "pytest", declared: "==8.0.0", resolved: "8.0.0", direct: true },
+				{ ecosystem: "pypi", name: "anyio", declared: "?", resolved: "4.4.0", direct: false },
+			]);
+		} finally { rmSync(dir, { recursive: true, force: true }); }
+	});
+
+	test("Python: poetry tables declare, poetry.lock resolves, path and directory sources are skipped", async () => {
+		const dir = tmp();
+		try {
+			writeFileSync(join(dir, "pyproject.toml"), [
+				"[tool.poetry.dependencies]", 'python = "^3.11"', 'requests = "^2.31"', 'mylib = { path = "../mylib", develop = true }',
+				"[tool.poetry.group.dev.dependencies]", 'pytest = { version = "8.0.0" }',
+			].join("\n"));
+			writeFileSync(join(dir, "poetry.lock"), [
+				'[[package]]\nname = "requests"\nversion = "2.32.3"',
+				'[[package]]\nname = "urllib3"\nversion = "2.2.2"',
+				'[[package]]\nname = "pytest"\nversion = "8.0.0"',
+				'[[package]]\nname = "mylib"\nversion = "0.1.0"\ndevelop = true\n[package.source]\ntype = "directory"\nurl = "../mylib"',
+			].join("\n"));
+			const { rows } = await detectProject(dir);
+			expect(rows).toEqual([
+				{ ecosystem: "pypi", name: "requests", declared: "^2.31", resolved: "2.32.3", direct: true },
+				{ ecosystem: "pypi", name: "pytest", declared: "8.0.0", resolved: "8.0.0", direct: true },
+				{ ecosystem: "pypi", name: "urllib3", declared: "?", resolved: "2.2.2", direct: false },
+			]);
+		} finally { rmSync(dir, { recursive: true, force: true }); }
+	});
+
+	test("Python: requirements.txt declares only when pyproject declares nothing", async () => {
+		const dir = tmp();
+		try {
+			writeFileSync(join(dir, "pyproject.toml"), '[build-system]\nrequires = ["setuptools"]\n');
+			writeFileSync(join(dir, "requirements.txt"), "flask==3.0.0\n");
+			const { rows } = await detectProject(dir);
+			expect(rows).toEqual([{ ecosystem: "pypi", name: "flask", declared: "==3.0.0", resolved: null, direct: true }]);
+		} finally { rmSync(dir, { recursive: true, force: true }); }
+	});
+
+	test("research queries declared rows only, never transitive lock entries", async () => {
+		const dir = tmp();
+		const fixtures = tmp();
+		try {
+			writeFileSync(join(dir, "pyproject.toml"), '[project]\nname = "app"\ndependencies = ["httpx==0.27.0"]\n');
+			writeFileSync(join(dir, "uv.lock"), '[[package]]\nname = "httpx"\nversion = "0.27.0"\n[[package]]\nname = "anyio"\nversion = "4.0.0"\n');
+			for (const name of ["httpx", "anyio"]) {
+				writeFileSync(join(fixtures, `pypi_${name}.json`), JSON.stringify({ info: { version: "9.0.0" }, releases: { "9.0.0": [{ yanked: false }] } }));
+			}
+			const result = await researchProject(dir, fixtures);
+			expect(result.records.map((r) => r.name)).toEqual(["httpx"]);
+			expect(result.stderr).toContain("transitive (not queried): 1");
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+			rmSync(fixtures, { recursive: true, force: true });
+		}
 	});
 });
 
@@ -105,6 +201,16 @@ describe("unit: fixture registry", () => {
 		expect(record.status).toBe("OK");
 		expect(record.class).toBe("PATCH-SAFE");
 		expect(record.latest).toBe("2.32.3");
+	});
+
+	test("a same-triple post-release from the registry is recommended, not dropped as CURRENT", async () => {
+		const fixtures = tmp();
+		try {
+			writeFileSync(join(fixtures, "pypi_example.json"), JSON.stringify({ info: { version: "1.0.0.post1" }, releases: { "1.0.0.post1": [{ yanked: false }] } }));
+			const record = await queryRegistry("pypi", "example", "1.0.0", fixtures);
+			expect(record.status).toBe("OK");
+			expect(record.class).toBe("PATCH-SAFE");
+		} finally { rmSync(fixtures, { recursive: true, force: true }); }
 	});
 
 	test.each([
@@ -203,14 +309,20 @@ describe("integration: dep_scan", () => {
 			JSON.stringify({ "dist-tags": { latest: "1.3.0" }, versions: { "1.3.0": {} } }),
 		);
 
-		const result = await execute("id", { path: project, offline_fixture_dir: fixtures }, undefined, undefined, {
-			cwd: project,
-		});
-		const record = result.details.records[0];
-		if (!record) throw new Error("dep_scan returned no dependency records");
-		expect(record.name).toBe("left-pad");
-		expect(record.class).toBe("CURRENT");
-		expect(result.content[0]?.text).toContain("upgradable");
+		// The fixture seam is test-only: an env var, never a model-visible parameter.
+		expect(Object.keys(captured.parameters as Record<string, unknown>)).toEqual(["path"]);
+		const previous = process.env.DEP_UPDATE_FIXTURE_DIR;
+		process.env.DEP_UPDATE_FIXTURE_DIR = fixtures;
+		try {
+			const result = await execute("id", { path: project }, undefined, undefined, { cwd: project });
+			const record = result.details.records[0];
+			if (!record) throw new Error("dep_scan returned no dependency records");
+			expect(record.name).toBe("left-pad");
+			expect(record.class).toBe("CURRENT");
+			expect(result.content[0]?.text).toContain("upgradable");
+		} finally {
+			if (previous === undefined) delete process.env.DEP_UPDATE_FIXTURE_DIR; else process.env.DEP_UPDATE_FIXTURE_DIR = previous;
+		}
 	});
 });
 
@@ -268,6 +380,50 @@ describe("integration: dep_apply", () => {
 		expect(denied.details.error).toContain("Dependency bump denied");
 		expect(prompt).toContain("@scope/pkg -> 1.2.3");
 		expect(prompt).toContain("/synthetic-project");
+	});
+
+	test("one approval per bump on the direct and the xd:// path; user deny still blocks", async () => {
+		const captured: Record<string, unknown> = {};
+		depScanTool({
+			zod, registerTool: (d: Record<string, unknown>) => {
+				if (d.name === "dep_apply") Object.assign(captured, d);
+			}
+		} as never);
+		const tool = { name: "dep_apply", approval: captured.approval as never };
+		const args = { ecosystem: "cargo", name: "serde", version: "1.0.200" };
+		const owner = { bash: "allow", write: "allow", read: "allow" };
+		const hostPrompts = (mode: "yolo" | "write" | "always-ask", policies: Record<string, unknown>, xd: boolean): number => {
+			const inner = resolveApproval(tool, args, mode, policies);
+			if (!xd) return inner.policy === "prompt" ? 1 : 0;
+			// write xd://dep_apply: the write gate resolves the device's tier under its policyKey,
+			// then the wrapped tool prompts only for an override or a user policy (xdevApproved).
+			const outer = resolveApproval({ name: "write", approval: { tier: resolveToolTier(tool, args), policyKey: "dep_apply" } }, args, mode, policies);
+			const innerPrompt = inner.policy === "prompt" && (inner.override || Object.hasOwn(policies, "dep_apply"));
+			return (outer.policy === "prompt" ? 1 : 0) + (innerPrompt ? 1 : 0);
+		};
+		for (const policies of [{}, owner]) {
+			expect(hostPrompts("yolo", policies, false)).toBe(0);
+			expect(hostPrompts("yolo", policies, true)).toBe(0);
+			expect(hostPrompts("write", policies, false)).toBe(0);
+			expect(hostPrompts("always-ask", policies, false)).toBe(0);
+		}
+		expect(resolveApproval(tool, args, "yolo", { ...owner, dep_apply: "deny" }).policy).toBe("deny");
+
+		const execute = captured.execute as (
+			id: string, params: Record<string, unknown>, signal: undefined, update: undefined,
+			ctx: { cwd: string; hasUI: boolean; ui: { confirm: (title: string, message: string) => Promise<boolean> }; setTimeout: typeof setTimeout; clearTimer: typeof clearTimeout },
+		) => Promise<{ details: { exit?: number } }>;
+		const project = tmp();
+		try {
+			const prompts: string[] = [];
+			const result = await execute("one", { ...args, path: project }, undefined, undefined, {
+				cwd: project, hasUI: true, ui: { confirm: async (_title, message) => { prompts.push(message); return true; } },
+				setTimeout, clearTimer: clearTimeout,
+			});
+			expect(result.details.exit).toBe(0);
+			expect(prompts).toHaveLength(1);
+			expect(prompts[0]).toContain("serde -> 1.0.200");
+		} finally { rmSync(project, { recursive: true, force: true }); }
 	});
 
 });

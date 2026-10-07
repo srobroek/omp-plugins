@@ -44,7 +44,7 @@ Honor whatever the user supplies; only discover the rest.
    `version_gap_scan` tool to list declared dependencies. If it returns
    more than one equally plausible candidate, list them and ask.
    Decide: versioned software or service/stream.
-   The scanner reads root declarations and Python's `uv.lock`/`poetry.lock`; it does not resolve Node or Rust lockfiles.
+   The scanner reads root declarations; `package-lock.json`, `uv.lock`, and `poetry.lock` supply resolved versions. Rust, Go, Ruby, PHP, and non-npm Node lockfiles are not resolved.
    Report unscanned lockfiles and workspace children. Resolve installed versions separately from declaration ranges.
 
 2. **Resolve sources programmatically.**
@@ -74,7 +74,7 @@ Honor whatever the user supplies; only discover the rest.
 
 ## Steering
 
-- **Report, don't upgrade** -- enforced by the `report-only-gate` extension.
+- **Report, don't upgrade.** The `report-only-gate` extension backs this up once the skill loads (a `/skill:whats-new` input or a skill read): it blocks dependency-manifest and lockfile edits, installer and upgrade commands at command position, and `dep_apply`. It does not see writes made through `eval`, so the rule still binds you.
 - **Programmatic over manual.** Catch yourself reading a rendered registry page → stop and use the matching recipe.
 - **Cover the whole span.** Every intermediate version (software) or the full window (service) -- not just the endpoints.
 - **Classification is heuristic.** A `feat:`/`fix:`/`!` prefix is a signal, not ground truth; read the diff for load-bearing changes.
@@ -85,6 +85,6 @@ Honor whatever the user supplies; only discover the rest.
 
 | Script | Purpose |
 |--------|---------|
-| `version_gap_scan` tool | No-network enumeration of declared dependencies + pinned versions across ecosystems. |
+| `version_gap_scan` tool | No-network enumeration of root dependencies: declared spec, resolved lockfile version, direct or transitive. |
 
 For everything network-facing use the commands in `skill://whats-new/references/recipes.md`.
