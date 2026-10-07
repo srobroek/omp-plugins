@@ -6,6 +6,19 @@
 
 - Require Beads `blocks` dependencies to encode true prerequisites so independent work remains parallelizable.
 
+## [4.1.2](https://github.com/srobroek/omp-plugins/compare/beads--v4.1.1...beads--v4.1.2) (2026-10-07)
+
+
+### Bug Fixes
+
+* **beads:** route beads by the work each bead does, with implementer as the default ([3a85e31](https://github.com/srobroek/omp-plugins/commit/3a85e315b68c99b5c25267741a7f504139cff2f0))
+* **chezmoi:** guard hashline, apply_patch and shell writes to managed targets; drop chezmoi_status and secret-commit-gate ([3a85e31](https://github.com/srobroek/omp-plugins/commit/3a85e315b68c99b5c25267741a7f504139cff2f0))
+* **delivery:** bind landings to the reviewed head, abort hung forge calls, and prove rebases by patch-id ([3a85e31](https://github.com/srobroek/omp-plugins/commit/3a85e315b68c99b5c25267741a7f504139cff2f0))
+* **delivery:** dedupe implementer prompts, fold integrator into shepherd, align agent release and read scopes ([3a85e31](https://github.com/srobroek/omp-plugins/commit/3a85e315b68c99b5c25267741a7f504139cff2f0))
+* **delivery:** drop task-scope, push/merge advisories and unpushed-work advisory; align rules with shepherd and patch-id landing proof ([3a85e31](https://github.com/srobroek/omp-plugins/commit/3a85e315b68c99b5c25267741a7f504139cff2f0))
+* **delivery:** stop ledger detection at the checkout root and bound receipt writes ([3a85e31](https://github.com/srobroek/omp-plugins/commit/3a85e315b68c99b5c25267741a7f504139cff2f0))
+* **quality:** drop verify_repo tool, verify skill, docs-guard and lint-guard ([3a85e31](https://github.com/srobroek/omp-plugins/commit/3a85e315b68c99b5c25267741a7f504139cff2f0))
+
 ## [4.1.1](https://github.com/srobroek/omp-plugins/compare/beads--v4.1.0...beads--v4.1.1) (2026-10-04)
 
 

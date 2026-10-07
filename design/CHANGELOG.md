@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.6.0](https://github.com/srobroek/omp-plugins/compare/design--v0.5.1...design--v0.6.0) (2026-10-07)
+
+
+### Features
+
+* **quality:** add advisor-resample skill for weekly advisor note census and labeled precision ([9fd9ce4](https://github.com/srobroek/omp-plugins/commit/9fd9ce48ebe835cd241face013e0b36a65d6f623))
+
+
+### Bug Fixes
+
+* **build:** drop presence extension and delegation-choreography skill; scope doc fixer to edited hunks ([9fd9ce4](https://github.com/srobroek/omp-plugins/commit/9fd9ce48ebe835cd241face013e0b36a65d6f623))
+* **debate:** route deeper interviews to the grilling skill ([9fd9ce4](https://github.com/srobroek/omp-plugins/commit/9fd9ce48ebe835cd241face013e0b36a65d6f623))
+* **dep-update:** python declared/resolved detection, pre-release classify, single dep_apply approval ([9fd9ce4](https://github.com/srobroek/omp-plugins/commit/9fd9ce48ebe835cd241face013e0b36a65d6f623))
+* **eli5:** align README triggers with SKILL.md exclusions ([9fd9ce4](https://github.com/srobroek/omp-plugins/commit/9fd9ce48ebe835cd241face013e0b36a65d6f623))
+* **find-tools:** full scan inventory, quote-aware install advisory, canonical-root setup installs ([9fd9ce4](https://github.com/srobroek/omp-plugins/commit/9fd9ce48ebe835cd241face013e0b36a65d6f623))
+* **project:** fix asset-promotion discovery escapes and license-picker accuracy ([9fd9ce4](https://github.com/srobroek/omp-plugins/commit/9fd9ce48ebe835cd241face013e0b36a65d6f623))
+* **session:** repair resume_session, drop stale supervisor end-of-turn wake, lock-free async store git; remove session_status ([9fd9ce4](https://github.com/srobroek/omp-plugins/commit/9fd9ce48ebe835cd241face013e0b36a65d6f623))
+* **whats-new:** python declared/resolved detection, quote-aware report-only gate armed on skill load ([9fd9ce4](https://github.com/srobroek/omp-plugins/commit/9fd9ce48ebe835cd241face013e0b36a65d6f623))
+
 ## [0.5.1](https://github.com/srobroek/omp-plugins/compare/design--v0.5.0...design--v0.5.1) (2026-09-29)
 
 

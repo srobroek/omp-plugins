@@ -1,6 +1,6 @@
 {
   "name": "@srobroek/delivery",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "Delivery workflow guidance with pull-request review, landing, cleanup, and hygiene tools.",
   "private": true,
   "omp": {

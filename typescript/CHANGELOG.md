@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.3.9](https://github.com/srobroek/omp-plugins/compare/typescript--v0.3.8...typescript--v0.3.9) (2026-10-07)
+
+
+### Bug Fixes
+
+* **beads:** route beads by the work each bead does, with implementer as the default ([3a85e31](https://github.com/srobroek/omp-plugins/commit/3a85e315b68c99b5c25267741a7f504139cff2f0))
+* **chezmoi:** guard hashline, apply_patch and shell writes to managed targets; drop chezmoi_status and secret-commit-gate ([3a85e31](https://github.com/srobroek/omp-plugins/commit/3a85e315b68c99b5c25267741a7f504139cff2f0))
+* **delivery:** bind landings to the reviewed head, abort hung forge calls, and prove rebases by patch-id ([3a85e31](https://github.com/srobroek/omp-plugins/commit/3a85e315b68c99b5c25267741a7f504139cff2f0))
+* **delivery:** dedupe implementer prompts, fold integrator into shepherd, align agent release and read scopes ([3a85e31](https://github.com/srobroek/omp-plugins/commit/3a85e315b68c99b5c25267741a7f504139cff2f0))
+* **delivery:** drop task-scope, push/merge advisories and unpushed-work advisory; align rules with shepherd and patch-id landing proof ([3a85e31](https://github.com/srobroek/omp-plugins/commit/3a85e315b68c99b5c25267741a7f504139cff2f0))
+* **delivery:** stop ledger detection at the checkout root and bound receipt writes ([3a85e31](https://github.com/srobroek/omp-plugins/commit/3a85e315b68c99b5c25267741a7f504139cff2f0))
+* **quality:** drop verify_repo tool, verify skill, docs-guard and lint-guard ([3a85e31](https://github.com/srobroek/omp-plugins/commit/3a85e315b68c99b5c25267741a7f504139cff2f0))
+
 ## [0.3.8](https://github.com/srobroek/omp-plugins/compare/typescript--v0.3.7...typescript--v0.3.8) (2026-09-26)
 
 
