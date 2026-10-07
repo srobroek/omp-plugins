@@ -1382,14 +1382,37 @@ function appeared(file: string): Promise<void> {
 	return promise;
 }
 
-/** Whether `pid` names a live process. Signal 0 checks without delivering anything. */
+/**
+ * Whether `pid` names a live process. Signal 0 checks without delivering anything.
+ * A killed orphan stays a zombie until its new parent reaps it, and signal 0 still
+ * succeeds on a zombie, so on Linux the `/proc` state `Z` counts as exited.
+ */
 function alive(pid: number): boolean {
 	try {
 		process.kill(pid, 0);
-		return true;
 	} catch {
 		return false;
 	}
+	try {
+		const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
+		return stat.slice(stat.lastIndexOf(")") + 2, stat.lastIndexOf(")") + 3) !== "Z";
+	} catch {
+		return true;
+	}
+}
+
+/**
+ * Resolve whether `pid` exited within `ms`: a group SIGKILL lands asynchronously. The
+ * grandchild is not our child, so there is no exit event to await; a short real poll
+ * is the only observation, and it returns as soon as the process is gone.
+ */
+async function exitsWithin(pid: number, ms = 2_000): Promise<boolean> {
+	const deadline = Date.now() + ms;
+	while (alive(pid)) {
+		if (Date.now() > deadline) return false;
+		await Bun.sleep(10);
+	}
+	return true;
 }
 
 /**
@@ -1451,8 +1474,8 @@ describe("runCliAsync against real processes", () => {
 		expect(result.error).toContain("abort");
 		// What the command wrote before it was killed is kept.
 		expect(result.stdout).toBe("started\n");
-		expect(alive(pid(self))).toBe(false);
-		expect(alive(pid(child))).toBe(false);
+		expect(await exitsWithin(pid(self))).toBe(true);
+		expect(await exitsWithin(pid(child))).toBe(true);
 	}, 60_000);
 
 	test("the deadline ends a command whose child still holds stdout open", async () => {
