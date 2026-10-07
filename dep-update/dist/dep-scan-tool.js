@@ -887,6 +887,9 @@ var MISSING = "?";
 var REQ_SPLIT = /[\[<>=!~;\s]/;
 var REQ_NAME = /^[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?$/;
 var GEM = /^\s*gem\s+(['"])([^'"]+)\1(?:\s*,\s*(['"])([^'"]*)\3)?/;
+function canonical(name) {
+  return name.replace(/[-_.]+/g, "-").toLowerCase();
+}
 function isFile(path) {
   try {
     return statSync(path).isFile();
@@ -936,6 +939,17 @@ function specVersion(spec) {
   }
   return scalar(spec);
 }
+function isLocalLockEntry(rec) {
+  if (rec.develop === true)
+    return true;
+  const source = rec.source;
+  if (!source || typeof source !== "object" || Array.isArray(source))
+    return false;
+  const s = source;
+  if (s.editable !== undefined || s.virtual !== undefined || s.directory !== undefined || s.path !== undefined)
+    return true;
+  return s.type === "directory" || s.type === "file";
+}
 function parseRequirement(raw) {
   const first = raw.split("#", 1)[0];
   if (first === undefined)
@@ -976,9 +990,9 @@ class Detector {
     }
     return out;
   }
-  emit(ecosystem, name, declared, resolved = null) {
+  emit(ecosystem, name, declared, resolved = null, direct = true) {
     if (name)
-      this.map.set(`${ecosystem}\x00${name}`, { declared: declared || MISSING, resolved });
+      this.map.set(`${ecosystem}\x00${name}`, { declared: declared || MISSING, resolved, direct });
   }
   note(msg) {
     this.notes.push(msg);
@@ -1041,80 +1055,92 @@ class Detector {
     }
   }
   async scanPython() {
+    const declared = new Map;
+    const declare = (name, spec) => {
+      if (!name || /^@\s*file:/i.test(spec))
+        return;
+      const key = canonical(name);
+      if (!declared.has(key))
+        declared.set(key, [name, spec]);
+    };
+    const pyproject = await this.readToml("pyproject.toml");
+    if (pyproject) {
+      this.scanPep621(pyproject.project, declare);
+      this.scanDependencyGroups(pyproject["dependency-groups"], declare);
+      const tool = pyproject.tool;
+      if (tool && typeof tool === "object") {
+        this.scanPoetry(tool.poetry, declare);
+      }
+    }
+    if (declared.size === 0) {
+      for (const raw of await this.readLines("requirements.txt") ?? []) {
+        const [name, version] = parseRequirement(raw);
+        declare(name, version);
+      }
+    }
+    const locked = new Map;
+    const local = new Set;
     for (const lock of ["uv.lock", "poetry.lock"]) {
       const data = await this.readToml(lock);
       if (!data)
         continue;
       const pkgs = data.package;
       if (!Array.isArray(pkgs)) {
-        this.note(`detect: ${lock} has no package array; trying declarations`);
+        this.note(`detect: ${lock} has no package array; Python versions remain unresolved`);
         continue;
       }
-      if (Array.isArray(pkgs)) {
-        for (const entry of pkgs) {
-          if (!entry || typeof entry !== "object")
-            continue;
-          const rec = entry;
-          if (typeof rec.name === "string" && typeof rec.version === "string") {
-            this.emit("pypi", rec.name, rec.version);
-          }
-        }
+      for (const entry of pkgs) {
+        if (!entry || typeof entry !== "object")
+          continue;
+        const rec = entry;
+        if (typeof rec.name !== "string" || typeof rec.version !== "string")
+          continue;
+        const key = canonical(rec.name);
+        if (isLocalLockEntry(rec))
+          local.add(key);
+        else if (!locked.has(key))
+          locked.set(key, [rec.name, rec.version]);
       }
-      return;
+      break;
     }
-    const lines = await this.readLines("requirements.txt");
-    if (lines) {
-      for (const raw of lines) {
-        const [name, version] = parseRequirement(raw);
-        this.emit("pypi", name, version);
-      }
-      return;
+    for (const [key, [name, spec]] of declared) {
+      if (!local.has(key))
+        this.emit("pypi", name, spec, locked.get(key)?.[1] ?? null);
     }
-    const data = await this.readToml("pyproject.toml");
-    if (!data)
-      return;
-    this.scanPep621(data.project);
-    this.scanDependencyGroups(data["dependency-groups"]);
-    const tool = data.tool;
-    if (tool && typeof tool === "object") {
-      this.scanPoetry(tool.poetry);
+    for (const [key, [name, version]] of locked) {
+      if (!declared.has(key))
+        this.emit("pypi", name, MISSING, version, false);
     }
   }
-  scanPep621(project) {
+  scanPep621(project, declare) {
     if (!project || typeof project !== "object")
       return;
     const p = project;
     for (const req of Array.isArray(p.dependencies) ? p.dependencies : []) {
-      if (typeof req === "string") {
-        const [name, version] = parseRequirement(req);
-        this.emit("pypi", name, version);
-      }
+      if (typeof req === "string")
+        declare(...parseRequirement(req));
     }
     const extras = p["optional-dependencies"];
     if (extras && typeof extras === "object") {
       for (const reqs of Object.values(extras)) {
         for (const req of Array.isArray(reqs) ? reqs : []) {
-          if (typeof req === "string") {
-            const [name, version] = parseRequirement(req);
-            this.emit("pypi", name, version);
-          }
+          if (typeof req === "string")
+            declare(...parseRequirement(req));
         }
       }
     }
   }
-  scanDependencyGroups(groups) {
+  scanDependencyGroups(groups, declare) {
     if (!groups || typeof groups !== "object")
       return;
     for (const reqs of Object.values(groups)) {
       for (const req of Array.isArray(reqs) ? reqs : []) {
-        if (typeof req === "string") {
-          const [name, version] = parseRequirement(req);
-          this.emit("pypi", name, version);
-        }
+        if (typeof req === "string")
+          declare(...parseRequirement(req));
       }
     }
   }
-  scanPoetry(poetry) {
+  scanPoetry(poetry, declare) {
     if (!poetry || typeof poetry !== "object")
       return;
     const p = poetry;
@@ -1133,7 +1159,9 @@ class Detector {
       for (const [name, spec] of Object.entries(block)) {
         if (name === "python")
           continue;
-        this.emit("pypi", name, specVersion(spec));
+        if (spec && typeof spec === "object" && !Array.isArray(spec) && "path" in spec)
+          continue;
+        declare(name, specVersion(spec));
       }
     }
   }
@@ -1224,7 +1252,7 @@ async function detectProject(target) {
   if (!hasPackageLock)
     gaps.unshift("Node lockfiles");
   const notes = [...detector.notes];
-  notes.push(`Coverage: root declarations only, except uv.lock/poetry.lock${hasPackageLock ? " and package-lock.json" : ""}. Unscanned: ${gaps.join(", ")}.`);
+  notes.push(`Coverage: root declarations; resolved versions from uv.lock/poetry.lock${hasPackageLock ? " and package-lock.json" : ""}; undeclared Python lock entries listed as transitive (direct=false). Unscanned: ${gaps.join(", ")}.`);
   notes.push("");
   notes.push(`detect: ${detector.rows.length} dependency declaration(s) found in ${target}`);
   if (detector.rows.length === 0) {
@@ -1236,7 +1264,7 @@ async function detectProject(target) {
 `), coverage: { gaps } };
 }
 // extensions/lib.ts
-var USER_AGENT = "dep-update-skill (+https://github.com/srobroek/agentic-packages)";
+var USER_AGENT = "dep-update-skill (+https://github.com/srobroek/omp-plugins)";
 var FETCH_TIMEOUT_MS = 1e4;
 var SCAN_TIMEOUT_MS = 25000;
 
@@ -1258,7 +1286,8 @@ function ensureDeadline(deadline) {
     throw new ScanDeadlineError;
 }
 var NODE_VERSION = /^=?v?(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-((?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*))*))?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/;
-var PYTHON_VERSION = /^(?:={1,2})?v?(\d+)(?:\.(\d+))?(?:\.(\d+))?(?:[-_.]?(a|b|rc|alpha|beta|pre|preview)[-_.]?\d*)?(?:[-_.]?post[-_.]?\d*)?(?:[-_.]?(dev)[-_.]?\d*)?(?:\+[a-z0-9]+(?:[-_.][a-z0-9]+)*)?$/i;
+var PYTHON_VERSION = /^(?:={1,2})?v?(\d+)(?:\.(\d+))?(?:\.(\d+))?(?:[-_.]?(a|b|rc|alpha|beta|pre|preview)[-_.]?(\d*))?(?:[-_.]?(post)[-_.]?(\d*))?(?:[-_.]?(dev)[-_.]?(\d*))?(?:\+[a-z0-9]+(?:[-_.][a-z0-9]+)*)?$/i;
+var PYTHON_PRE_RANK = { a: 0, alpha: 0, b: 1, beta: 1, rc: 2, pre: 2, preview: 2 };
 function normalizeVersion(raw, ecosystem = "npm") {
   if (typeof raw !== "string")
     return null;
@@ -1272,21 +1301,72 @@ function isPrerelease(raw, ecosystem = "npm") {
   if (typeof raw !== "string" || !normalizeVersion(raw, ecosystem))
     return false;
   const match = (ecosystem === "pypi" ? PYTHON_VERSION : NODE_VERSION).exec(raw);
-  return Boolean(match[4] || ecosystem === "pypi" && match[5]);
+  return Boolean(match[4] || ecosystem === "pypi" && match[8]);
+}
+function compareSuffix(a, b, ecosystem) {
+  if (ecosystem === "pypi") {
+    const key = (m) => {
+      const pre = m[4] ? [PYTHON_PRE_RANK[m[4].toLowerCase()] ?? 2, Number(m[5] || 0)] : [m[8] && !m[6] ? -1 : 3, 0];
+      return [...pre, m[6] ? Number(m[7] || 0) : -1, m[8] ? Number(m[9] || 0) : Number.POSITIVE_INFINITY];
+    };
+    const ka = key(a);
+    const kb = key(b);
+    for (let i = 0;i < ka.length; i++) {
+      const x = ka[i];
+      const y = kb[i];
+      if (x !== y)
+        return x < y ? -1 : 1;
+    }
+    return 0;
+  }
+  const pa = a[4]?.split(".") ?? [];
+  const pb = b[4]?.split(".") ?? [];
+  if (pa.length === 0 && pb.length === 0)
+    return 0;
+  if (pa.length === 0)
+    return 1;
+  if (pb.length === 0)
+    return -1;
+  for (let i = 0;i < Math.min(pa.length, pb.length); i++) {
+    const x = pa[i];
+    const y = pb[i];
+    if (x === y)
+      continue;
+    const nx = /^\d+$/.test(x);
+    const ny = /^\d+$/.test(y);
+    if (nx && ny)
+      return Math.sign(Number(x) - Number(y));
+    if (nx !== ny)
+      return nx ? -1 : 1;
+    return x < y ? -1 : 1;
+  }
+  return Math.sign(pa.length - pb.length);
+}
+function compareVersions(a, b, ecosystem = "npm") {
+  const na = normalizeVersion(a, ecosystem);
+  const nb = normalizeVersion(b, ecosystem);
+  if (na === null || nb === null)
+    return null;
+  const triple = Math.sign(na[0] - nb[0] || na[1] - nb[1] || na[2] - nb[2]);
+  if (triple !== 0)
+    return triple;
+  const pattern = ecosystem === "pypi" ? PYTHON_VERSION : NODE_VERSION;
+  return compareSuffix(pattern.exec(a), pattern.exec(b), ecosystem);
 }
 function classify(installed, latest, ecosystem = "npm") {
   const cur = normalizeVersion(installed, ecosystem);
   const lat = normalizeVersion(latest, ecosystem);
   if (cur === null || lat === null)
     return "UNRESOLVABLE";
-  if (cur[0] === lat[0] && cur[1] === lat[1] && cur[2] === lat[2])
-    return "CURRENT";
   if (lat[0] > cur[0])
     return "MAJOR-ADVISORY";
   if (lat[0] === cur[0] && lat[1] > cur[1])
     return "MINOR-CHECK";
   if (lat[0] === cur[0] && lat[1] === cur[1] && lat[2] > cur[2])
     return "PATCH-SAFE";
+  if (lat[0] === cur[0] && lat[1] === cur[1] && lat[2] === cur[2] && (compareVersions(latest, installed, ecosystem) ?? 0) > 0) {
+    return "PATCH-SAFE";
+  }
   return "CURRENT";
 }
 function pickStable(latest, installed, versions, ecosystem = "npm") {
@@ -1295,11 +1375,7 @@ function pickStable(latest, installed, versions, ecosystem = "npm") {
   const stable = versions.filter((v) => !isPrerelease(v, ecosystem) && normalizeVersion(v, ecosystem));
   if (!stable.length)
     return latest;
-  stable.sort((a, b) => {
-    const na = normalizeVersion(a, ecosystem);
-    const nb = normalizeVersion(b, ecosystem);
-    return nb[0] - na[0] || nb[1] - na[1] || nb[2] - na[2];
-  });
+  stable.sort((a, b) => compareVersions(b, a, ecosystem) ?? 0);
   return stable[0] ?? latest;
 }
 async function fetchJson(ecosystem, name, url, fixtureDir, signal, deadline) {
@@ -1408,7 +1484,9 @@ async function researchProject(target, fixtureDir, signal, timeoutMs = SCAN_TIME
   const tallies = { OK: 0, CURRENT: 0, UNRESOLVABLE: 0, DISCONFIRMED: 0 };
   const records = [];
   let complete = true;
-  for (const { ecosystem, name, declared, resolved } of detected.rows) {
+  const direct = detected.rows.filter((row) => row.direct);
+  const transitive = detected.rows.length - direct.length;
+  for (const { ecosystem, name, declared, resolved } of direct) {
     try {
       signal?.throwIfAborted();
       ensureDeadline(deadline);
@@ -1432,6 +1510,8 @@ async function researchProject(target, fixtureDir, signal, timeoutMs = SCAN_TIME
   notes.push(`  classified:    ${tallies.OK}`);
   notes.push(`  already-current: ${tallies.CURRENT}`);
   notes.push(`  unresolvable:  ${tallies.UNRESOLVABLE + tallies.DISCONFIRMED}`);
+  if (transitive > 0)
+    notes.push(`  transitive (not queried): ${transitive}`);
   if (!complete)
     notes.push("PARTIAL: aggregate scan deadline reached; remaining dependencies were not queried.");
   if (records.length > 0 && tallies.OK === 0 && tallies.CURRENT === 0 && tallies.UNRESOLVABLE + tallies.DISCONFIRMED === records.length) {
@@ -1441,9 +1521,6 @@ async function researchProject(target, fixtureDir, signal, timeoutMs = SCAN_TIME
   }
   return { exit: 0, records, stderr: notes.join(`
 `), complete };
-}
-function canonical(name) {
-  return name.replace(/[-_.]+/g, "-").toLowerCase();
 }
 function which(bin) {
   const path = process.env.PATH ?? "";
@@ -1479,7 +1556,7 @@ function detectNodePm(root) {
   return "npm";
 }
 function splitPin(requirement) {
-  const body = (requirement.split(";", 1)[0] ?? "").trim();
+  const body = (requirement.split(";", 1)[0] ?? "").replace(/[()]/g, "").trim();
   if (!body.includes("=="))
     return ["", ""];
   const idx = body.indexOf("==");
@@ -1509,6 +1586,27 @@ function pyprojectRequirements(data) {
       for (const r of Array.isArray(reqs) ? reqs : [])
         if (typeof r === "string")
           out.push(r);
+    }
+  }
+  const tool = data.tool;
+  const poetry = tool && typeof tool === "object" ? tool.poetry : undefined;
+  if (poetry && typeof poetry === "object") {
+    const p = poetry;
+    const blocks = [p.dependencies, p["dev-dependencies"]];
+    if (p.group && typeof p.group === "object") {
+      for (const group of Object.values(p.group)) {
+        if (group && typeof group === "object")
+          blocks.push(group.dependencies);
+      }
+    }
+    for (const block of blocks) {
+      if (!block || typeof block !== "object" || Array.isArray(block))
+        continue;
+      for (const [name, spec] of Object.entries(block)) {
+        const raw = spec && typeof spec === "object" ? spec.version : spec;
+        if (typeof raw === "string")
+          out.push(`${name}==${raw.replace(/^==/, "")}`);
+      }
     }
   }
   return out;
@@ -1679,17 +1777,28 @@ async function applyBump(ecosystem, name, version, root, options = {}) {
   }
   const lines = [`dep-update/apply: ${ecosystem} ${name} -> ${version}`];
   if (ecosystem === "pypi" || ecosystem === "python") {
-    if (!which("uv")) {
-      lines.push("ERROR: uv not found; cannot apply dependency bump");
-      lines.push(`  uv add "${name}==${version}"`);
-      lines.push(`  (or: pip install "${name}==${version}" and update your requirements file)`);
+    const pyprojectPath = join2(root, "pyproject.toml");
+    if (!isFile(pyprojectPath)) {
+      lines.push("MANUAL: no pyproject.toml; dep_apply does not edit requirements files.");
+      lines.push(`To update manually: set ${name}==${version} in the requirements file, then reinstall it in the project's environment.`);
+      return { exit: 0, text: lines.join(`
+`) };
+    }
+    const pyproject = await readTomlFile(pyprojectPath);
+    const tool = pyproject?.tool;
+    const poetry = isFile(join2(root, "poetry.lock")) || Boolean(tool && typeof tool === "object" && "poetry" in tool);
+    const command = poetry ? ["poetry", "add", `${name}==${version}`] : ["uv", "add", ...isFile(join2(root, "uv.lock")) ? [] : ["--frozen"], `${name}==${version}`];
+    const pm = command[0];
+    if (!which(pm)) {
+      lines.push(`ERROR: ${pm} not found; cannot apply dependency bump`);
+      lines.push(`  ${command.join(" ")}`);
       return { exit: 1, text: lines.join(`
 `) };
     }
-    const ran = await runPm(["uv", "add", `${name}==${version}`], root, options);
+    const ran = await runPm(command, root, options);
     lines.push(ran.log);
     if (ran.code !== 0) {
-      lines.push(`WARN: uv exited with status ${ran.code}; partial changes may remain; bump was not confirmed`);
+      lines.push(`WARN: ${pm} exited with status ${ran.code}; partial changes may remain; bump was not confirmed`);
       return { exit: 1, text: lines.join(`
 `) };
     }
@@ -1766,14 +1875,13 @@ function depScanTool(pi) {
     label: "Dependency Scan",
     description: "Enumerate a project's declared dependencies, query PyPI/npm for the latest versions, and " + "classify exact-version bumps as PATCH-SAFE, MINOR-CHECK, or MAJOR-ADVISORY. " + "Read-only; each scan has a 25 s aggregate deadline inside the 30 s tool_call budget and " + "returns a partial report when a large manifest exceeds it. Rust and go deps are advisory-only.",
     parameters: z.object({
-      path: z.string().optional().describe("Project root to scan; defaults to the session cwd"),
-      offline_fixture_dir: z.string().optional().describe("DEP_UPDATE_FIXTURE_DIR: read registry responses from fixture files instead of the network")
+      path: z.string().optional().describe("Project root to scan; defaults to the session cwd")
     }),
     approval: "read",
     async execute(_id, params, signal, _onUpdate, ctx) {
       const dir = params.path ?? ctx.cwd;
       try {
-        const { exit, records, stderr, complete } = await researchProject(dir, params.offline_fixture_dir, signal);
+        const { exit, records, stderr, complete } = await researchProject(dir, undefined, signal);
         if (exit !== 0) {
           return {
             content: [{ type: "text", text: `dep_scan failed (exit ${exit}):
@@ -1829,7 +1937,7 @@ ${stderr}` }],
       version: z.string().describe("Target version to pin"),
       path: z.string().optional().describe("Project root; defaults to session cwd")
     }),
-    approval: { tier: "exec", policy: "prompt" },
+    approval: { tier: "exec", policy: "allow" },
     async execute(_id, params, signal, _onUpdate, ctx) {
       try {
         if (signal?.aborted)
