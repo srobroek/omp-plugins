@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import runpy
 import shutil
 import subprocess
 import sys
@@ -60,26 +61,24 @@ class CheckerContracts(unittest.TestCase):
         the contract, so it has to be rejected on file type rather than on content.
         """
         self.copy_script("check-shared-detector.py")
-        first = self.root / "dep-update" / "extensions" / "detect.ts"
-        second = self.root / "whats-new" / "extensions" / "detect.ts"
-        for path in (first, second):
-            path.parent.mkdir(parents=True)
-            path.write_text("export const shared = 1;\n", encoding="utf-8")
-
         # Every registered set must exist in the fixture, because the checker treats a
         # missing copy as a failure by design: a real tree that lost one has drifted.
-        # Populate the tokenizer set too, so this case exercises drift rather than
-        # tripping over an absent set it is not testing.
-        for plugin in ("beads", "chezmoi", "speckit", "worktrunk"):
-            tokenizer = self.root / plugin / "extensions" / "shell-tokenizer.ts"
-            tokenizer.parent.mkdir(parents=True, exist_ok=True)
-            tokenizer.write_text("export const tokenize = 1;\n", encoding="utf-8")
+        # Read the sets from the checker itself, so registering a new copy cannot
+        # silently break this fixture.
+        registered = runpy.run_path(str(REPO / "scripts" / "check-shared-detector.py"))["DUPLICATED"]
+        for index, group in enumerate(registered):
+            for name in group:
+                path = self.root / name
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(f"export const shared = {index};\n", encoding="utf-8")
+        first = self.root / "dep-update" / "extensions" / "detect.ts"
+        second = self.root / "whats-new" / "extensions" / "detect.ts"
 
         identical = self.run_script("check-shared-detector.py")
         self.assertEqual(identical.returncode, 0, identical.stdout)
         self.assertIn("PASS", identical.stdout)
 
-        second.write_text("export const shared = 2;\n", encoding="utf-8")
+        second.write_text("export const drifted = true;\n", encoding="utf-8")
         drifted = self.run_script("check-shared-detector.py")
         self.assertNotEqual(drifted.returncode, 0)
         self.assertIn("drifted", drifted.stdout)

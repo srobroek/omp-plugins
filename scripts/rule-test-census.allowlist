@@ -1,7 +1,6 @@
 # Temporary gaps in the existing rule corpus; this list may only shrink.
 infrastructure-tfstate-guard
 ops-no-global-cargo-target
-find-tools-no-install
 authoring-repomix-include
 srobroek-package-investigate
 srobroek-sudo-destructive-advisory
