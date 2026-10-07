@@ -14,7 +14,7 @@ TRIGGER
 
 ## Workflow
 
-1. Run the `dep_scan` tool (params: `path`, optional `offline_fixture_dir`) -- it
+1. Run the `dep_scan` tool (param: optional `path`) -- it
    enumerates deps and classifies every bump. For rust and go, use the endpoints in
    `skill://dep-update/references/recipes.md`.
 2. Run the CVE scanners below.
