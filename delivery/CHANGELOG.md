@@ -1,5 +1,23 @@
 # Changelog
 
+## [1.2.0](https://github.com/srobroek/omp-plugins/compare/delivery--v1.1.0...delivery--v1.2.0) (2026-10-07)
+
+
+### Features
+
+* **quality:** guide code reuse, design, and delivery across agents ([#635](https://github.com/srobroek/omp-plugins/issues/635)) ([25889f8](https://github.com/srobroek/omp-plugins/commit/25889f892eac33e875b26da5a7d7cb25b73de4f7))
+
+
+### Bug Fixes
+
+* **beads:** route beads by the work each bead does, with implementer as the default ([3a85e31](https://github.com/srobroek/omp-plugins/commit/3a85e315b68c99b5c25267741a7f504139cff2f0))
+* **chezmoi:** guard hashline, apply_patch and shell writes to managed targets; drop chezmoi_status and secret-commit-gate ([3a85e31](https://github.com/srobroek/omp-plugins/commit/3a85e315b68c99b5c25267741a7f504139cff2f0))
+* **delivery:** bind landings to the reviewed head, abort hung forge calls, and prove rebases by patch-id ([3a85e31](https://github.com/srobroek/omp-plugins/commit/3a85e315b68c99b5c25267741a7f504139cff2f0))
+* **delivery:** dedupe implementer prompts, fold integrator into shepherd, align agent release and read scopes ([3a85e31](https://github.com/srobroek/omp-plugins/commit/3a85e315b68c99b5c25267741a7f504139cff2f0))
+* **delivery:** drop task-scope, push/merge advisories and unpushed-work advisory; align rules with shepherd and patch-id landing proof ([3a85e31](https://github.com/srobroek/omp-plugins/commit/3a85e315b68c99b5c25267741a7f504139cff2f0))
+* **delivery:** stop ledger detection at the checkout root and bound receipt writes ([3a85e31](https://github.com/srobroek/omp-plugins/commit/3a85e315b68c99b5c25267741a7f504139cff2f0))
+* **quality:** drop verify_repo tool, verify skill, docs-guard and lint-guard ([3a85e31](https://github.com/srobroek/omp-plugins/commit/3a85e315b68c99b5c25267741a7f504139cff2f0))
+
 ## [1.1.0](https://github.com/srobroek/omp-plugins/compare/delivery--v1.0.0...delivery--v1.1.0) (2026-10-05)
 
 

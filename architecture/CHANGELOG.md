@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.5.0](https://github.com/srobroek/omp-plugins/compare/architecture--v0.4.3...architecture--v0.5.0) (2026-10-07)
+
+
+### Features
+
+* **quality:** guide code reuse, design, and delivery across agents ([#635](https://github.com/srobroek/omp-plugins/issues/635)) ([25889f8](https://github.com/srobroek/omp-plugins/commit/25889f892eac33e875b26da5a7d7cb25b73de4f7))
+
 ## [0.4.3](https://github.com/srobroek/omp-plugins/compare/architecture--v0.4.2...architecture--v0.4.3) (2026-09-29)
 
 

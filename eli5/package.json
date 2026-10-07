@@ -1,6 +1,6 @@
 {
   "name": "@srobroek/eli5",
-  "version": "0.3.3",
+  "version": "0.4.0",
   "description": "Explain a topic at five depth levels, from metaphor to frontier.",
   "private": true,
   "omp": {}

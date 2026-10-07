@@ -1,5 +1,32 @@
 # Changelog
 
+## [2.1.0](https://github.com/srobroek/omp-plugins/compare/quality--v2.0.0...quality--v2.1.0) (2026-10-07)
+
+
+### Features
+
+* **quality:** add advisor-resample skill for weekly advisor note census and labeled precision ([9fd9ce4](https://github.com/srobroek/omp-plugins/commit/9fd9ce48ebe835cd241face013e0b36a65d6f623))
+* **quality:** guide code reuse, design, and delivery across agents ([#635](https://github.com/srobroek/omp-plugins/issues/635)) ([25889f8](https://github.com/srobroek/omp-plugins/commit/25889f892eac33e875b26da5a7d7cb25b73de4f7))
+
+
+### Bug Fixes
+
+* **beads:** route beads by the work each bead does, with implementer as the default ([3a85e31](https://github.com/srobroek/omp-plugins/commit/3a85e315b68c99b5c25267741a7f504139cff2f0))
+* **build:** drop presence extension and delegation-choreography skill; scope doc fixer to edited hunks ([9fd9ce4](https://github.com/srobroek/omp-plugins/commit/9fd9ce48ebe835cd241face013e0b36a65d6f623))
+* **chezmoi:** guard hashline, apply_patch and shell writes to managed targets; drop chezmoi_status and secret-commit-gate ([3a85e31](https://github.com/srobroek/omp-plugins/commit/3a85e315b68c99b5c25267741a7f504139cff2f0))
+* **debate:** route deeper interviews to the grilling skill ([9fd9ce4](https://github.com/srobroek/omp-plugins/commit/9fd9ce48ebe835cd241face013e0b36a65d6f623))
+* **delivery:** bind landings to the reviewed head, abort hung forge calls, and prove rebases by patch-id ([3a85e31](https://github.com/srobroek/omp-plugins/commit/3a85e315b68c99b5c25267741a7f504139cff2f0))
+* **delivery:** dedupe implementer prompts, fold integrator into shepherd, align agent release and read scopes ([3a85e31](https://github.com/srobroek/omp-plugins/commit/3a85e315b68c99b5c25267741a7f504139cff2f0))
+* **delivery:** drop task-scope, push/merge advisories and unpushed-work advisory; align rules with shepherd and patch-id landing proof ([3a85e31](https://github.com/srobroek/omp-plugins/commit/3a85e315b68c99b5c25267741a7f504139cff2f0))
+* **delivery:** stop ledger detection at the checkout root and bound receipt writes ([3a85e31](https://github.com/srobroek/omp-plugins/commit/3a85e315b68c99b5c25267741a7f504139cff2f0))
+* **dep-update:** python declared/resolved detection, pre-release classify, single dep_apply approval ([9fd9ce4](https://github.com/srobroek/omp-plugins/commit/9fd9ce48ebe835cd241face013e0b36a65d6f623))
+* **eli5:** align README triggers with SKILL.md exclusions ([9fd9ce4](https://github.com/srobroek/omp-plugins/commit/9fd9ce48ebe835cd241face013e0b36a65d6f623))
+* **find-tools:** full scan inventory, quote-aware install advisory, canonical-root setup installs ([9fd9ce4](https://github.com/srobroek/omp-plugins/commit/9fd9ce48ebe835cd241face013e0b36a65d6f623))
+* **project:** fix asset-promotion discovery escapes and license-picker accuracy ([9fd9ce4](https://github.com/srobroek/omp-plugins/commit/9fd9ce48ebe835cd241face013e0b36a65d6f623))
+* **quality:** drop verify_repo tool, verify skill, docs-guard and lint-guard ([3a85e31](https://github.com/srobroek/omp-plugins/commit/3a85e315b68c99b5c25267741a7f504139cff2f0))
+* **session:** repair resume_session, drop stale supervisor end-of-turn wake, lock-free async store git; remove session_status ([9fd9ce4](https://github.com/srobroek/omp-plugins/commit/9fd9ce48ebe835cd241face013e0b36a65d6f623))
+* **whats-new:** python declared/resolved detection, quote-aware report-only gate armed on skill load ([9fd9ce4](https://github.com/srobroek/omp-plugins/commit/9fd9ce48ebe835cd241face013e0b36a65d6f623))
+
 ## [2.0.0](https://github.com/srobroek/omp-plugins/compare/quality--v1.3.5...quality--v2.0.0) (2026-10-02)
 
 
