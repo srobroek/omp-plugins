@@ -37,7 +37,7 @@ Updated 2026-07.
 ## C / Embedded
 
 - **Dominant**: MIT, BSD, Apache-2.0 for libraries; GPL for applications
-- **Critical constraint**: no dynamic linker on most MCUs (ESP32, STM32, nRF). LGPL relink requirement is physically impossible to fulfill.
+- **Critical constraint**: no dynamic linker on most MCUs (ESP32, STM32, nRF). LGPL compliance then means shipping the application's object code or source so users can relink statically (LGPL-3.0 §4(d)(0)), plus installation information for consumer devices (§4(e)) -- possible, but rarely acceptable to commercial firmware.
 - **MPL**: works fine (file boundary is hardware-agnostic)
 - **Corporate embedded**: many shops have strict no-copyleft policies for firmware. GPL/AGPL = hard no for commercial embedded. MPL = usually accepted after legal review.
 

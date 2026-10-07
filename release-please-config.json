@@ -211,23 +211,6 @@
         }
       ]
     },
-    "diagram": {
-      "release-type": "simple",
-      "component": "diagram",
-      "changelog-path": "CHANGELOG.md",
-      "extra-files": [
-        {
-          "type": "json",
-          "path": ".omp-plugin/plugin.json",
-          "jsonpath": "$.version"
-        },
-        {
-          "type": "json",
-          "path": "package.json",
-          "jsonpath": "$.version"
-        }
-      ]
-    },
     "eli5": {
       "release-type": "simple",
       "component": "eli5",

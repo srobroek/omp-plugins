@@ -1,6 +1,6 @@
-# dep-update: what the scripts do not implement
+# dep-update: what the tools do not implement
 
-`research.py` queries PyPI and npm only. Everything below covers the gaps:
+`dep_scan` queries PyPI and npm only. Everything below covers the gaps:
 the rust/go endpoints, the apply commands per package manager, and the changelog
 fetch order.
 
@@ -8,7 +8,7 @@ All version data comes from machine-readable JSON endpoints -- never scrape
 rendered HTML for a version number. Reserve web-fetch for changelog prose
 (migration guides, breaking-change posts) that has no structured endpoint.
 
-## Registry endpoints not in research.py
+## Registry endpoints not in dep_scan
 
 Go modules (advisory only -- no apply):
 
@@ -29,9 +29,11 @@ curl -fsSL -A 'dep-update-skill (+https://github.com/srobroek/omp-plugins)' \
 
 | Lockfile / manifest | Ecosystem | Apply command | Notes |
 |---------------------|-----------|---------------|-------|
-| `uv.lock` / `pyproject.toml` / `requirements.txt` / `poetry.lock` | python | `uv add "name==ver"` | Failures can leave partial changes |
-| (python, no uv) | python | `pip install "name==ver"` | Manual: also edit requirements.txt / pyproject.toml |
-| `pnpm-lock.yaml` | node | `pnpm update "name@ver"` | Manager selection only; scan reads package.json |
+| `poetry.lock` or `[tool.poetry]` in `pyproject.toml` | python | `poetry add "name==ver"` | Failures can leave partial changes |
+| `pyproject.toml` + `uv.lock` | python | `uv add "name==ver"` | Failures can leave partial changes |
+| `pyproject.toml`, no `uv.lock` | python | `uv add --frozen "name==ver"` | Edits pyproject only; creates no lockfile |
+| `requirements.txt` only | python | none (manual) | `dep_apply` prints the pin to set; it never runs `pip install` |
+| `pnpm-lock.yaml` | node | `pnpm update "name@ver"` | |
 | `bun.lock` / `bun.lockb` | node | `bun add "name@ver"` | |
 | `yarn.lock` | node | `yarn add "name@ver"` | |
 | `package-lock.json` / `npm-shrinkwrap.json` | node | `npm install "name@ver"` | |
@@ -42,7 +44,7 @@ Node package manager precedence: `DEP_UPDATE_PKG_MANAGER` first, else lockfile
 order `pnpm-lock.yaml` → `bun.lock`/`bun.lockb` → `yarn.lock` →
 `package-lock.json`.
 
-Node lockfiles in this table select the package manager, not resolved scan versions. `Pipfile.lock` is not scanned.
+Only `package-lock.json` supplies resolved Node versions to the scan; the other Node lockfiles select the package manager. `Pipfile.lock` is not scanned.
 
 Offer a pre-release candidate (`rc`, `alpha`, `beta`, `a`, `b`, `dev`) only when
 the installed version is pre-release. Otherwise offer the latest stable version.

@@ -38,7 +38,7 @@ A directory beside each transcript holds spilled tool output. It follows the sam
 
 Discovery examines transcript files inside each project directory. It does not descend into artifact directories. It does not automatically scan legacy and XDG stores together. It does not migrate sessions between stores.
 
-Use the optional `profile` argument to select a profile for read-only discovery. It wins over `OMP_PROFILE` and `PI_PROFILE`. It does not activate a profile or mutate global directory state. Native helpers normalize profile names. An explicit `file` may read an older or exported transcript outside the active store.
+Use the optional `profile` argument to select a profile for read-only discovery. It wins over `OMP_PROFILE` and `PI_PROFILE`. It does not activate a profile or mutate global directory state. Native helpers normalize profile names. An explicit `file` must resolve inside the selected store; transcripts outside it are refused.
 
 ## Identity and titles
 

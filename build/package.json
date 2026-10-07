@@ -3,9 +3,5 @@
   "version": "1.0.1",
   "description": "External-repository worker agent.",
   "private": true,
-  "omp": {
-    "extensions": [
-      "./extensions/presence.ts"
-    ]
-  }
+  "omp": {}
 }

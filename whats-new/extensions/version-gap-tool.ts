@@ -13,8 +13,10 @@ export default function versionGapTool(pi: ExtensionAPI): void {
 		name: "version_gap_scan",
 		label: "Version Gap Scan",
 		description:
-			"Enumerate a project's declared dependencies and versions across ecosystems (npm, python, " +
-			"cargo, go, ruby, and more), offline and read-only. Input for what's-new research.",
+			"Enumerate a project's root dependencies, offline and read-only: npm (package.json + package-lock.json), " +
+			"Python (pyproject.toml or requirements.txt + uv.lock/poetry.lock), Cargo.toml, go.mod, Gemfile, composer.json. " +
+			"One tab-separated row per dependency: ecosystem, name, declared spec, resolved lockfile version ('?' when " +
+			"unlocked), direct|transitive. Use resolved as the installed version when present. Input for what's-new research.",
 		parameters: z.object({
 			path: z.string().optional().describe("Project root to scan; defaults to the session cwd"),
 		}) as unknown as TSchema, // pi.zod and the host TypeBox schema types differ.
@@ -29,8 +31,8 @@ export default function versionGapTool(pi: ExtensionAPI): void {
 						details: { exit, stderr },
 					};
 				}
-                const deps = rows.map(({ ecosystem, name, declared, resolved }) => ({ ecosystem, name, declared, resolved }));
-                const stdout = rows.map(({ ecosystem, name, declared, resolved }) => [ecosystem, name, declared, resolved ?? "?"].join("\t")).join("\n");
+                const deps = rows.map(({ ecosystem, name, declared, resolved, direct }) => ({ ecosystem, name, declared, resolved, direct }));
+                const stdout = rows.map(({ ecosystem, name, declared, resolved, direct }) => [ecosystem, name, declared, resolved ?? "?", direct ? "direct" : "transitive"].join("\t")).join("\n");
                 const text = [stdout, stderr.trim()].filter(Boolean).join("\n");
                 return {
                     content: [{ type: "text" as const, text }],

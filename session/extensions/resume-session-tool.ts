@@ -31,6 +31,16 @@ const DEFAULT_LIST_LIMIT = 12;
 
 const TODO_GLYPH: Record<string, string> = { completed: "[x]", in_progress: "[~]", pending: "[ ]", blocked: "[!]" };
 
+/**
+ * Recorded transcripts carry harness markup (`<system-reminder>`, tool-call
+ * tags) that would read as live instructions if forwarded verbatim. Escaping
+ * every tag opener keeps the text legible while no recorded tag survives.
+ * Idempotent: escaped output contains no tag opener.
+ */
+export function neutralizeMarkup(text: string): string {
+	return text.replace(/<(?=[A-Za-z/!?])/g, "&lt;");
+}
+
 export function relativeTime(ms: number | null, now = Date.now()): string {
 	if (ms === null) return "unknown";
 	const seconds = Math.max(0, Math.round((now - ms) / 1000));
@@ -108,9 +118,13 @@ export function renderRow(row: Row, index: number, now: number, idLength = 8): s
 	return lines;
 }
 
-export function renderGitActivity(worktrees: Worktree[], project: string): string[] {
+export async function renderGitActivity(worktrees: Worktree[], project: string): Promise<string[]> {
 	if (worktrees.length < 2) return [];
-	const commits = commitInfo(worktrees, project);
+	const [commits, dirtiness] = await Promise.all([
+		commitInfo(worktrees, project),
+		Promise.all(worktrees.map((worktree) => isDirty(worktree.path))),
+	]);
+	const dirtyPaths = new Set(worktrees.filter((_, index) => dirtiness[index]).map((worktree) => worktree.path));
 	const ranked = [...worktrees].sort(
 		(a, b) => (commits.get(b.head)?.epochMs ?? 0) - (commits.get(a.head)?.epochMs ?? 0),
 	);
@@ -118,7 +132,7 @@ export function renderGitActivity(worktrees: Worktree[], project: string): strin
 	const now = Date.now();
 	for (const worktree of ranked) {
 		const commit = commits.get(worktree.head);
-		const dirty = isDirty(worktree.path) ? "  ✎ dirty" : "";
+		const dirty = dirtyPaths.has(worktree.path) ? "  ✎ dirty" : "";
 		const branch = worktree.detached ? "(detached)" : worktree.branch || "(unknown)";
 		lines.push(
 			`  ${worktreeLabel(worktree).padEnd(24)} ${branch.padEnd(34)} ${relativeTime(commit?.epochMs ?? null, now)}${dirty}`,
@@ -141,9 +155,9 @@ export async function renderList(
 	options: ListOptions,
 	signal?: AbortSignal,
 ): Promise<{ text: string; count: number; ids: string[] }> {
-	const project = repoRoot(options.path ?? cwd);
+	const project = await repoRoot(options.path ?? cwd);
 	const root = sessionsRoot(options.profile);
-	const family = options.worktrees === false ? [] : listWorktrees(project);
+	const family = options.worktrees === false ? [] : await listWorktrees(project);
 	if (family === undefined) {
 		return {
 			text: `resume_session: could not enumerate Git worktrees for ${project}; repository history may be incomplete. No sessions were read. Retry with worktrees:false to inspect the current checkout, or pass the canonical repository path explicitly.`,
@@ -198,7 +212,7 @@ export async function renderList(
 		if (rows.length > shown.length)
 			out.push(`(${rows.length - shown.length} older session(s) not shown; raise \`limit\`)`);
 		if (options.git !== false) {
-			const activity = renderGitActivity(family, project);
+			const activity = await renderGitActivity(family, project);
 			if (activity.length > 0) out.push("", ...activity);
 		}
 		out.push(
@@ -209,14 +223,14 @@ export async function renderList(
 		);
 	}
 	if (errors.length > 0) out.push("", "## Unreadable sessions", ...errors.map((error) => `- ${error}`));
-	const text = out.join("\n");
+	const text = neutralizeMarkup(out.join("\n"));
 	return { text: withCost(text), count: rows.length, ids: shown.map((row) => row.meta.id) };
 }
 
 function withCost(text: string): string {
 	if (text.length > 1_000_000)
 		throw new Error(
-			"Resume output exceeds 1000000 characters. Reduce `turns` or `limit`; if metadata alone exceeds the limit, use a smaller exported transcript via `file`. No metadata was silently omitted.",
+			"Resume output exceeds 1000000 characters. Reduce `turns` or `limit`. No metadata was silently omitted.",
 		);
 	return `${text}\n\nThis window: ~${estimateTokens(text).toLocaleString()} uncached tokens (${text.length.toLocaleString()} chars, estimated).`;
 }
@@ -268,19 +282,25 @@ export interface ReadOptions {
 
 /** Resolve a session id (full or prefix) globally, then gate transcript access to the requested repo family. */
 export async function resolveSession(cwd: string, options: ReadOptions): Promise<{ file: string } | { error: string }> {
-    if (options.file) {
-        try {
-            const root = await realpath(sessionsRoot(options.profile));
-            const file = await realpath(options.file);
-            const relativeFile = relative(root, file);
-            if (relativeFile === "" || relativeFile === ".." || relativeFile.startsWith(`..${sep}`) || isAbsolute(relativeFile)) {
-                return { error: "file outside sessions root; pass an explicit sessionId or confirm external file" };
-            }
-            return { file };
-        } catch {
-            return { error: "file outside sessions root; pass an explicit sessionId or confirm external file" };
-        }
-    }
+	if (options.file) {
+		const store = sessionsRoot(options.profile);
+		try {
+			const root = await realpath(store);
+			const file = await realpath(options.file);
+			const relativeFile = relative(root, file);
+			if (relativeFile === "" || relativeFile === ".." || relativeFile.startsWith(`..${sep}`) || isAbsolute(relativeFile)) {
+				return {
+					error:
+						`resume_session: ${file} is outside the sessions store ${root}; transcript content was not read. ` +
+						"Pass a session id, or select the store that holds the file with `profile`.",
+				};
+			}
+			return { file };
+		} catch (error) {
+			const reason = error instanceof Error ? error.message : String(error);
+			return { error: `resume_session: cannot resolve ${options.file} inside the sessions store ${store} (${reason}); transcript content was not read.` };
+		}
+	}
     const wanted = (options.session ?? "").trim();
 	if (!wanted) return { error: 'resume_session: mode "read" needs `session` (an id or id prefix) or `file`.' };
 	const root = sessionsRoot(options.profile);
@@ -297,10 +317,10 @@ export async function resolveSession(cwd: string, options: ReadOptions): Promise
 	const match = matches[0];
 	if (!match) return { error: `resume_session: no session under ${root} matches "${wanted}".` };
 	const requested = options.path ?? cwd;
-	const project = repoRoot(requested);
+	const project = await repoRoot(requested);
 	const recordedCwd = match.head.cwd;
 	const target = isAbsolute(recordedCwd) ? recordedCwd : "(missing or invalid recorded cwd)";
-	const family = isAbsolute(requested) && isAbsolute(project) ? listWorktrees(project) : [];
+	const family = isAbsolute(requested) && isAbsolute(project) ? await listWorktrees(project) : [];
 	if (family === undefined) {
 		return { error: `resume_session: could not enumerate Git worktrees for ${project}; target membership is unknown. Transcript content was not read.` };
 	}
@@ -334,7 +354,7 @@ export function renderRead(transcript: Transcript, options: ReadOptions): string
 	for (let i = end - 1; i >= start; i -= 1) {
 		const turn = turns[i - transcript.windowStart];
 		if (!turn) throw new Error("Requested turns were not loaded. Read the transcript with matching paging options.");
-		const block = renderTurn(turn, i + 1);
+		const block = neutralizeMarkup(renderTurn(turn, i + 1));
 		const marker = transcript.compactionAfter.includes(i + 1)
 			? "--- compaction: earlier turns were summarized away in the original run ---\n"
 			: "";
@@ -395,7 +415,7 @@ export function renderRead(transcript: Transcript, options: ReadOptions): string
 		"STOP. Summarize the goal, the last action, the todo state, branch/cwd, and what is incomplete;",
 		"surface anything ambiguous, then wait for the user to confirm before resuming any work.",
 	);
-	return boundedWithCost(out.join("\n"), maxChars);
+	return boundedWithCost(neutralizeMarkup(out.join("\n")), maxChars);
 }
 
 export default function resumeSessionTool(pi: ExtensionAPI): void {
@@ -403,7 +423,7 @@ export default function resumeSessionTool(pi: ExtensionAPI): void {
 	const parameters = z.object({
 		mode: z.enum(["list", "read"]),
 		session: z.string().optional().describe("read: session id or prefix from a list row. Resolves globally within the selected profile store. Rejects ambiguous prefixes. Gates transcript access to the requested repository/worktree family."),
-		file: z.string().optional().describe("read: explicit transcript path, bypassing id lookup"),
+		file: z.string().optional().describe("read: explicit transcript path inside the selected profile store, bypassing id lookup"),
 		path: z.string().optional().describe("list: repository directory used to scope discovery; read: requested repository/worktree family for the target confirmation gate"),
 		turns: z.number().int().optional().describe("read: turns per window (default 8)"),
 		offset: z.number().int().optional().describe("read: skip this many newest turns to page older"),

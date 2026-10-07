@@ -2,8 +2,10 @@ import { describe, expect, test } from "bun:test";
 
 import reportOnlyGate, {
 	armsGate,
+	commandMutates,
 	createState,
 	DENY_REASON,
+	decideInput,
 	decideToolCall,
 	disarmsGate,
 	isDependencyFile,
@@ -55,6 +57,18 @@ describe("armsGate / disarmsGate", () => {
 		expect(disarmsGate("skill://dep-update/references/recipes.md")).toBe(true);
 		expect(disarmsGate("dep-update/skills/dep-update/SKILL.md")).toBe(true);
 		expect(disarmsGate("skill://whats-new")).toBe(false);
+	});
+
+	test("a /skill: input load arms and hands over without any read", () => {
+		const state = createState();
+		decideInput(state, "/skill:whats-newer react");
+		expect(state.armed).toBe(false);
+		decideInput(state, "  /skill:whats-new react 18 -> 19");
+		expect(state.armed).toBe(true);
+		decideInput(state, "please run /skill:dep-update");
+		expect(state.armed).toBe(true);
+		decideInput(state, "/skill:dep-update");
+		expect(state.armed).toBe(false);
 	});
 });
 
@@ -156,6 +170,85 @@ describe("decideToolCall while armed", () => {
 		}
 	});
 
+	test("blocks the installer forms the pattern matcher missed", () => {
+		for (const command of [
+			"npm i lodash",
+			"npm i react@latest",
+			"npm ci",
+			"npm --prefix /repo install",
+			"/usr/local/bin/npm install",
+			"pnpm i",
+			"pnpm -C web add zod",
+			"pnpm dlx npm-check-updates -u",
+			"bun i",
+			"yarn",
+			"yarn --frozen-lockfile",
+			"uv sync",
+			"uv lock --upgrade",
+			"uv lock -U",
+			"uv lock -P httpx",
+			"uv lock --upgrade-package=httpx",
+			"uv --directory api add httpx",
+			"bundle update",
+			"bundle install",
+			"bundle add rails",
+			"gem install rails",
+			"composer require vendor/pkg",
+			"composer update",
+			"ncu -u",
+			"npx npm-check-updates -u",
+			"python -m pip install requests",
+			"python3.12 -m pip install -U requests",
+			"poetry install",
+			"sudo npm i -g typescript",
+			"env CI=1 npm ci",
+			"FOO=1 pnpm add zod",
+			"time poetry update",
+			"bash -c \"npm install x\"",
+			"sh -lc 'uv sync'",
+			"echo $(npm i x)",
+			"echo \"$(npm i x)\"",
+			"echo `pnpm add x`",
+			"git status; uv add httpx",
+			"cd a || pip install x",
+			"cat <<EOF\n$(npm i x)\nEOF",
+		]) {
+			expect({ command, blocked: commandMutates(command) }).toEqual({ command, blocked: true });
+		}
+	});
+
+	test("quoted data, help, lookups, and read-only subcommands stay allowed", () => {
+		for (const command of [
+			"echo 'see: npm install docs'",
+			"echo \"cd repo && npm install\"",
+			"printf '%s\\n' npm install",
+			"git commit -m \"npm install lodash\"",
+			"grep -rn \"pip install\" .",
+			"cat <<'EOF'\nnpm install\nEOF",
+			"cat <<EOF\nnpm install\nEOF",
+			"uv add --help",
+			"npm install -h",
+			"uv lock",
+			"uv tree",
+			"uv pip list",
+			"yarn build",
+			"yarn --version",
+			"command -v yarn",
+			"bundle exec rake",
+			"composer show",
+			"ncu",
+			"python -m pytest",
+			"pnpm why zod",
+		]) {
+			expect({ command, blocked: commandMutates(command) }).toEqual({ command, blocked: false });
+		}
+	});
+
+	test("ast_edit on a manifest is a write", () => {
+		expect(decideToolCall(armed(), "ast_edit", { paths: ["src/", "package.json"] })).toEqual({ block: true, reason: DENY_REASON });
+		expect(decideToolCall(armed(), "ast_edit", { paths: ["src/"] })).toBeUndefined();
+	});
+
 	test("allows the report itself, research commands, and unrelated builds", () => {
 		expect(decideToolCall(armed(), "write", { path: "WHATS-NEW.md" })).toBeUndefined();
 		expect(decideToolCall(armed(), "edit", { path: "src/index.ts" })).toBeUndefined();
@@ -208,6 +301,15 @@ describe("register", () => {
 		expect(call?.({ toolName: "bash", toolCallId: "4", input: { command: "uv add httpx" } })).toEqual(
 			{ block: true, reason: DENY_REASON },
 		);
+	});
+
+	test("arms from /skill: input, then blocks", () => {
+		const { handlers, pi } = fakePi();
+		reportOnlyGate(pi);
+		const call = handlers.tool_call?.[0];
+		expect(call?.({ toolName: "bash", toolCallId: "1", input: { command: "npm i" } })).toBeUndefined();
+		expect(handlers.input?.[0]?.({ type: "input", text: "/skill:whats-new zod 3 -> 4", source: "interactive" })).toBeUndefined();
+		expect(call?.({ toolName: "bash", toolCallId: "2", input: { command: "npm i" } })).toEqual({ block: true, reason: DENY_REASON });
 	});
 
 	test("state is per session: session_start disarms, and a second instance starts unarmed", () => {

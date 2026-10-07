@@ -884,6 +884,9 @@ var MISSING = "?";
 var REQ_SPLIT = /[\[<>=!~;\s]/;
 var REQ_NAME = /^[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?$/;
 var GEM = /^\s*gem\s+(['"])([^'"]+)\1(?:\s*,\s*(['"])([^'"]*)\3)?/;
+function canonical(name) {
+  return name.replace(/[-_.]+/g, "-").toLowerCase();
+}
 function isFile(path) {
   try {
     return statSync(path).isFile();
@@ -933,6 +936,17 @@ function specVersion(spec) {
   }
   return scalar(spec);
 }
+function isLocalLockEntry(rec) {
+  if (rec.develop === true)
+    return true;
+  const source = rec.source;
+  if (!source || typeof source !== "object" || Array.isArray(source))
+    return false;
+  const s = source;
+  if (s.editable !== undefined || s.virtual !== undefined || s.directory !== undefined || s.path !== undefined)
+    return true;
+  return s.type === "directory" || s.type === "file";
+}
 function parseRequirement(raw) {
   const first = raw.split("#", 1)[0];
   if (first === undefined)
@@ -973,9 +987,9 @@ class Detector {
     }
     return out;
   }
-  emit(ecosystem, name, declared, resolved = null) {
+  emit(ecosystem, name, declared, resolved = null, direct = true) {
     if (name)
-      this.map.set(`${ecosystem}\x00${name}`, { declared: declared || MISSING, resolved });
+      this.map.set(`${ecosystem}\x00${name}`, { declared: declared || MISSING, resolved, direct });
   }
   note(msg) {
     this.notes.push(msg);
@@ -1038,80 +1052,92 @@ class Detector {
     }
   }
   async scanPython() {
+    const declared = new Map;
+    const declare = (name, spec) => {
+      if (!name || /^@\s*file:/i.test(spec))
+        return;
+      const key = canonical(name);
+      if (!declared.has(key))
+        declared.set(key, [name, spec]);
+    };
+    const pyproject = await this.readToml("pyproject.toml");
+    if (pyproject) {
+      this.scanPep621(pyproject.project, declare);
+      this.scanDependencyGroups(pyproject["dependency-groups"], declare);
+      const tool = pyproject.tool;
+      if (tool && typeof tool === "object") {
+        this.scanPoetry(tool.poetry, declare);
+      }
+    }
+    if (declared.size === 0) {
+      for (const raw of await this.readLines("requirements.txt") ?? []) {
+        const [name, version] = parseRequirement(raw);
+        declare(name, version);
+      }
+    }
+    const locked = new Map;
+    const local = new Set;
     for (const lock of ["uv.lock", "poetry.lock"]) {
       const data = await this.readToml(lock);
       if (!data)
         continue;
       const pkgs = data.package;
       if (!Array.isArray(pkgs)) {
-        this.note(`detect: ${lock} has no package array; trying declarations`);
+        this.note(`detect: ${lock} has no package array; Python versions remain unresolved`);
         continue;
       }
-      if (Array.isArray(pkgs)) {
-        for (const entry of pkgs) {
-          if (!entry || typeof entry !== "object")
-            continue;
-          const rec = entry;
-          if (typeof rec.name === "string" && typeof rec.version === "string") {
-            this.emit("pypi", rec.name, rec.version);
-          }
-        }
+      for (const entry of pkgs) {
+        if (!entry || typeof entry !== "object")
+          continue;
+        const rec = entry;
+        if (typeof rec.name !== "string" || typeof rec.version !== "string")
+          continue;
+        const key = canonical(rec.name);
+        if (isLocalLockEntry(rec))
+          local.add(key);
+        else if (!locked.has(key))
+          locked.set(key, [rec.name, rec.version]);
       }
-      return;
+      break;
     }
-    const lines = await this.readLines("requirements.txt");
-    if (lines) {
-      for (const raw of lines) {
-        const [name, version] = parseRequirement(raw);
-        this.emit("pypi", name, version);
-      }
-      return;
+    for (const [key, [name, spec]] of declared) {
+      if (!local.has(key))
+        this.emit("pypi", name, spec, locked.get(key)?.[1] ?? null);
     }
-    const data = await this.readToml("pyproject.toml");
-    if (!data)
-      return;
-    this.scanPep621(data.project);
-    this.scanDependencyGroups(data["dependency-groups"]);
-    const tool = data.tool;
-    if (tool && typeof tool === "object") {
-      this.scanPoetry(tool.poetry);
+    for (const [key, [name, version]] of locked) {
+      if (!declared.has(key))
+        this.emit("pypi", name, MISSING, version, false);
     }
   }
-  scanPep621(project) {
+  scanPep621(project, declare) {
     if (!project || typeof project !== "object")
       return;
     const p = project;
     for (const req of Array.isArray(p.dependencies) ? p.dependencies : []) {
-      if (typeof req === "string") {
-        const [name, version] = parseRequirement(req);
-        this.emit("pypi", name, version);
-      }
+      if (typeof req === "string")
+        declare(...parseRequirement(req));
     }
     const extras = p["optional-dependencies"];
     if (extras && typeof extras === "object") {
       for (const reqs of Object.values(extras)) {
         for (const req of Array.isArray(reqs) ? reqs : []) {
-          if (typeof req === "string") {
-            const [name, version] = parseRequirement(req);
-            this.emit("pypi", name, version);
-          }
+          if (typeof req === "string")
+            declare(...parseRequirement(req));
         }
       }
     }
   }
-  scanDependencyGroups(groups) {
+  scanDependencyGroups(groups, declare) {
     if (!groups || typeof groups !== "object")
       return;
     for (const reqs of Object.values(groups)) {
       for (const req of Array.isArray(reqs) ? reqs : []) {
-        if (typeof req === "string") {
-          const [name, version] = parseRequirement(req);
-          this.emit("pypi", name, version);
-        }
+        if (typeof req === "string")
+          declare(...parseRequirement(req));
       }
     }
   }
-  scanPoetry(poetry) {
+  scanPoetry(poetry, declare) {
     if (!poetry || typeof poetry !== "object")
       return;
     const p = poetry;
@@ -1130,7 +1156,9 @@ class Detector {
       for (const [name, spec] of Object.entries(block)) {
         if (name === "python")
           continue;
-        this.emit("pypi", name, specVersion(spec));
+        if (spec && typeof spec === "object" && !Array.isArray(spec) && "path" in spec)
+          continue;
+        declare(name, specVersion(spec));
       }
     }
   }
@@ -1221,7 +1249,7 @@ async function detectProject(target) {
   if (!hasPackageLock)
     gaps.unshift("Node lockfiles");
   const notes = [...detector.notes];
-  notes.push(`Coverage: root declarations only, except uv.lock/poetry.lock${hasPackageLock ? " and package-lock.json" : ""}. Unscanned: ${gaps.join(", ")}.`);
+  notes.push(`Coverage: root declarations; resolved versions from uv.lock/poetry.lock${hasPackageLock ? " and package-lock.json" : ""}; undeclared Python lock entries listed as transitive (direct=false). Unscanned: ${gaps.join(", ")}.`);
   notes.push("");
   notes.push(`detect: ${detector.rows.length} dependency declaration(s) found in ${target}`);
   if (detector.rows.length === 0) {
@@ -1239,7 +1267,7 @@ function versionGapTool(pi) {
   pi.registerTool({
     name: "version_gap_scan",
     label: "Version Gap Scan",
-    description: "Enumerate a project's declared dependencies and versions across ecosystems (npm, python, " + "cargo, go, ruby, and more), offline and read-only. Input for what's-new research.",
+    description: "Enumerate a project's root dependencies, offline and read-only: npm (package.json + package-lock.json), " + "Python (pyproject.toml or requirements.txt + uv.lock/poetry.lock), Cargo.toml, go.mod, Gemfile, composer.json. " + "One tab-separated row per dependency: ecosystem, name, declared spec, resolved lockfile version ('?' when " + "unlocked), direct|transitive. Use resolved as the installed version when present. Input for what's-new research.",
     parameters: z.object({
       path: z.string().optional().describe("Project root to scan; defaults to the session cwd")
     }),
@@ -1255,8 +1283,8 @@ ${stderr}` }],
             details: { exit, stderr }
           };
         }
-        const deps = rows.map(({ ecosystem, name, declared, resolved }) => ({ ecosystem, name, declared, resolved }));
-        const stdout = rows.map(({ ecosystem, name, declared, resolved }) => [ecosystem, name, declared, resolved ?? "?"].join("\t")).join(`
+        const deps = rows.map(({ ecosystem, name, declared, resolved, direct }) => ({ ecosystem, name, declared, resolved, direct }));
+        const stdout = rows.map(({ ecosystem, name, declared, resolved, direct }) => [ecosystem, name, declared, resolved ?? "?", direct ? "direct" : "transitive"].join("\t")).join(`
 `);
         const text = [stdout, stderr.trim()].filter(Boolean).join(`
 `);

@@ -99,33 +99,34 @@ function settle(batch: Batch): void {
 		// Advisory extension: if scheduling fails, do not block the session.
 	}
 }
+/**
+ * Backup wake for a settled batch, sent only while it is still provably needed.
+ * OMP delivers async results itself, so a wake is redundant once any turn has
+ * started since settlement, while native delivery is still pending, or while
+ * the parent is busy. A busy parent is re-checked a few times and then left
+ * alone: a follow-up queued behind active work lands after that work is done
+ * and costs a turn for results already handled.
+ */
 function check(batch: Batch): void {
+	const state = sessions.get(batch.sessionId);
 	try {
-		if (batch.woken || batch.settledAt === undefined) return;
-		const state = sessions.get(batch.sessionId);
-		if (!state) return;
-		if (state.lastTurnStartAt > batch.settledAt) {
-			batch.woken = true;
-			state.batches.delete(batch.toolCallId);
+		if (batch.woken || batch.settledAt === undefined || !state) return;
+		const snapshot = state.ctx.getAsyncJobSnapshot() as AsyncSnapshot | null;
+		const handled = state.lastTurnStartAt > batch.settledAt || snapshot?.delivery.pendingJobIds.includes(batch.jobId ?? "") === true;
+		if (!handled && !state.ctx.isIdle() && batch.rearms < MAX_REARMS) {
+			batch.rearms += 1;
+			batch.wakeTimer = state.ctx.setTimeout(() => check(batch), WAKE_GRACE_MS);
 			return;
 		}
-		const snapshot = state.ctx.getAsyncJobSnapshot() as AsyncSnapshot | null;
-		if (!state.ctx.isIdle() || snapshot?.delivery.pendingJobIds.includes(batch.jobId ?? "")) {
-			if (batch.rearms < MAX_REARMS) {
-				batch.rearms += 1;
-				batch.wakeTimer = state.ctx.setTimeout(() => check(batch), WAKE_GRACE_MS);
-				return;
-			}
-		}
-		wake(batch);
-	} catch {
-		// Advisory: uncertainty should result in a nudge rather than silence.
-		try {
+		if (!handled && state.ctx.isIdle()) {
 			wake(batch);
-		} catch {
-			// Never allow an advisory hook to take down the session.
+			return;
 		}
+	} catch {
+		// Advisory: when delivery state is unknown, stay silent rather than risk a duplicate follow-up.
 	}
+	batch.woken = true;
+	state?.batches.delete(batch.toolCallId);
 }
 function wake(batch: Batch): void {
 	if (batch.woken) return;
@@ -215,15 +216,6 @@ export default function taskBatchSupervisor(pi: ExtensionAPI): void {
 	pi.on("turn_start", (_event, ctx: ExtensionContext) => {
 		try {
 			stateFor(ctx, pi).lastTurnStartAt = Date.now();
-		} catch {
-			// Advisory handler.
-		}
-	});
-	pi.on("agent_end", (event, ctx: ExtensionContext) => {
-		try {
-			if ((event as { willContinue?: boolean }).willContinue) return;
-			const state = stateFor(ctx, pi);
-			for (const batch of state.batches.values()) if (batch.settledAt !== undefined && !batch.woken && batch.settledAt > state.lastTurnStartAt) wake(batch);
 		} catch {
 			// Advisory handler.
 		}

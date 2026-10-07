@@ -1,7 +1,8 @@
 /** Selective handoffs from persisted top-level sessions, using native read-only APIs. */
-import { execFileSync } from "node:child_process";
+import { execFile } from "node:child_process";
 import { type Dir, type Dirent, existsSync, lstatSync, opendirSync, readdirSync, realpathSync, statSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
+import { promisify } from "node:util";
 import {
 	type FileEntry,
 	FileSessionStorage,
@@ -89,14 +90,22 @@ export interface Worktree {
 	isMain: boolean;
 }
 
-function git(args: string[]): string | null {
+const execFileAsync = promisify(execFile);
+
+/**
+ * Every git call here is a read. Run it off the event loop, and with
+ * GIT_OPTIONAL_LOCKS=0 so `git status` never refreshes the index under
+ * index.lock while another agent is writing in that worktree.
+ */
+async function git(args: string[]): Promise<string | null> {
 	try {
-		return execFileSync("git", args, {
+		const { stdout } = await execFileAsync("git", args, {
 			encoding: "utf8",
 			timeout: 10_000,
-			stdio: ["ignore", "pipe", "ignore"],
 			maxBuffer: 16 * 1024 * 1024,
+			env: { ...process.env, GIT_OPTIONAL_LOCKS: "0" },
 		});
+		return stdout;
 	} catch {
 		return null;
 	}
@@ -132,8 +141,8 @@ function repositoryState(project: string): RepositoryState {
  * every member. An empty list is a proven non-repository result; undefined means
  * Git failed while repository metadata was present or could not be inspected.
  */
-export function listWorktrees(project: string): Worktree[] | undefined {
-	const out = git(["-C", project, "worktree", "list", "--porcelain"]);
+export async function listWorktrees(project: string): Promise<Worktree[] | undefined> {
+	const out = await git(["-C", project, "worktree", "list", "--porcelain"]);
 	if (out === null) {
 		const state = repositoryState(project);
 		if (state === "absent") return [];
@@ -189,11 +198,11 @@ export interface CommitInfo {
 /** HEAD sha -> (commit time, subject) for every worktree, in one git call. The
  * recency of the last commit is the second signal, alongside transcript
  * activity, for which worktree was last worked in. */
-export function commitInfo(worktrees: Worktree[], project: string): Map<string, CommitInfo> {
+export async function commitInfo(worktrees: Worktree[], project: string): Promise<Map<string, CommitInfo>> {
 	const out = new Map<string, CommitInfo>();
 	const heads = [...new Set(worktrees.map((w) => w.head).filter(Boolean))].sort();
 	if (heads.length === 0) return out;
-	const raw = git(["-C", project, "show", "-s", "--format=%H%x00%ct%x00%s", ...heads]);
+	const raw = await git(["-C", project, "show", "-s", "--format=%H%x00%ct%x00%s", ...heads]);
 	if (raw === null) return out;
 	for (const line of raw.split("\n")) {
 		const parts = line.split("\0");
@@ -208,13 +217,13 @@ export function commitInfo(worktrees: Worktree[], project: string): Map<string, 
 }
 
 /** Uncommitted changes are a strong "still active here" hint. */
-export function isDirty(path: string): boolean {
-	const out = git(["-C", path, "status", "--porcelain"]);
+export async function isDirty(path: string): Promise<boolean> {
+	const out = await git(["-C", path, "status", "--porcelain"]);
 	return out !== null && out.trim() !== "";
 }
 
-export function repoRoot(cwd: string): string {
-	const out = git(["-C", cwd, "rev-parse", "--show-toplevel"]);
+export async function repoRoot(cwd: string): Promise<string> {
+	const out = await git(["-C", cwd, "rev-parse", "--show-toplevel"]);
 	return out === null ? cwd : out.trim() || cwd;
 }
 
@@ -876,7 +885,7 @@ export function pathKeys(path: string): string[] {
 }
 
 /** Match native session metadata against accepted worktree paths, not encoded directory names. */
-export async function candidates(root: string, accept?: Set<string>, signal?: AbortSignal, maxResults = Number.POSITIVE_INFINITY): Promise<Candidate[]> {
+export async function candidates(root: string, accept?: Set<string>): Promise<Candidate[]> {
 	if (!existsSync(root)) return [];
 	const out: Candidate[] = [];
 	const storage = new FileSessionStorage();
@@ -887,15 +896,12 @@ export async function candidates(root: string, accept?: Set<string>, signal?: Ab
 		return [];
 	}
 	for (const directory of directories) {
-		if (signal?.aborted) throw signal.reason instanceof Error ? signal.reason : new DOMException("The operation was aborted", "AbortError");
 		if (!directory.isDirectory()) continue;
 		const sessions = await listSessionsReadOnly(join(root, directory.name), storage);
 		for (const session of sessions) {
-			if (signal?.aborted) throw signal.reason instanceof Error ? signal.reason : new DOMException("The operation was aborted", "AbortError");
 			if (accept && !pathKeys(session.cwd).some((key) => accept.has(key))) continue;
 			const head = await readHead(session.path);
 			if (head) out.push({ file: session.path, head });
-			if (out.length >= maxResults) return out;
 		}
 	}
 	return out;

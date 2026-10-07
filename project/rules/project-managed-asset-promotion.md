@@ -15,7 +15,7 @@ more than one distinct session, or cited in a landed change. Use that observable
 threshold, not a judgement about popularity.
 
 MUST keep promotion deliberate: an agent proposes, the maintainer lands it. The
-result is a released artifact in someone else'"'"'s install. NEVER run promotion from
+result is a released artifact in someone else's install. NEVER run promotion from
 a cron job, hook, or background task.
 
 ## Find what is unpromoted
@@ -24,7 +24,7 @@ List the managed store and compare it against this repository:
 
 ```sh
 ls ~/.omp/agent/managed-skills
-git ls-files '"'"'*/skills/*/SKILL.md'"'"' '"'"'*/rules/*.md'"'"'
+git ls-files '*/skills/*/SKILL.md' '*/rules/*.md'
 ```
 
 A name present in the first and absent from the second is a candidate. Check

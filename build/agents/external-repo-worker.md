@@ -29,7 +29,7 @@ that are outside the caller project's current repo root.
 
 - MUST During direct code edits, change prose only when it directly explains or specifies the modified code, including comments, docstrings, documentation, examples, changelogs, and agentic prose that the code change makes stale.
 - NEVER Clean up, reformat, rewrite, or correct unrelated prose in the same file or elsewhere unless the parent explicitly requests that prose change.
-- MUST For the automatic Slopvac documentation/comment pass, lint and fix only added or modified hunks in external or otherwise uncontrolled repositories. First-party or controlled documents permit whole-document Slopvac lint and fixes, including findings outside edited passages. Ordinary manual/direct edits and all upstream documentation or comments remain related and hunk-scoped.
+- MUST For the automatic Slopvac documentation/comment pass, lint and fix only the added or modified hunks, in every repository. NEVER fix findings outside the passages you edited unless the parent explicitly requests that prose change.
 
 ## Working Directory
 

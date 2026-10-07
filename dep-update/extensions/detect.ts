@@ -7,7 +7,18 @@ const REQ_SPLIT = /[\[<>=!~;\s]/;
 export const REQ_NAME = /^[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?$/;
 const GEM = /^\s*gem\s+(['"])([^'"]+)\1(?:\s*,\s*(['"])([^'"]*)\3)?/;
 
-export type DepRow = { ecosystem: string; name: string; declared: string; resolved: string | null };
+/**
+ * One dependency. `declared` is the manifest's spec (`?` when the row only exists in a
+ * lockfile); `resolved` is the lockfile's installed version, or null when no lockfile
+ * pins it. `direct` is false for lockfile entries the project does not declare itself
+ * (transitive dependencies), which an upgrade tool must not add as runtime dependencies.
+ */
+export type DepRow = { ecosystem: string; name: string; declared: string; resolved: string | null; direct: boolean };
+
+/** PEP 503 normalized name: Python package names compare case- and separator-insensitively. */
+export function canonical(name: string): string {
+	return name.replace(/[-_.]+/g, "-").toLowerCase();
+}
 
 export function isFile(path: string): boolean {
 	try {
@@ -61,6 +72,22 @@ function specVersion(spec: unknown): string {
 	return scalar(spec);
 }
 
+/**
+ * A lockfile entry built from the local tree: the project itself, a workspace member,
+ * or a path dependency. uv records `source = { editable | virtual | directory | path }`;
+ * poetry records `[package.source] type = "directory" | "file"` or `develop = true`.
+ */
+function isLocalLockEntry(rec: Record<string, unknown>): boolean {
+	if (rec.develop === true) return true;
+	const source = rec.source;
+	if (!source || typeof source !== "object" || Array.isArray(source)) return false;
+	const s = source as Record<string, unknown>;
+	if (s.editable !== undefined || s.virtual !== undefined || s.directory !== undefined || s.path !== undefined) return true;
+	return s.type === "directory" || s.type === "file";
+}
+
+type Declare = (name: string, spec: string) => void;
+
 export function parseRequirement(raw: string): [string, string] {
 	const first = raw.split("#", 1)[0];
 	if (first === undefined) return ["", ""];
@@ -85,7 +112,7 @@ export function parseRequirement(raw: string): [string, string] {
 
 export class Detector {
 	readonly root: string;
-    private readonly map = new Map<string, { declared: string; resolved: string | null }>();
+    private readonly map = new Map<string, { declared: string; resolved: string | null; direct: boolean }>();
 	notes: string[] = [];
 
 	constructor(root: string) {
@@ -101,8 +128,8 @@ export class Detector {
         return out;
     }
 
-    emit(ecosystem: string, name: string, declared: string, resolved: string | null = null): void {
-        if (name) this.map.set(`${ecosystem}\0${name}`, { declared: declared || MISSING, resolved });
+    emit(ecosystem: string, name: string, declared: string, resolved: string | null = null, direct = true): void {
+        if (name) this.map.set(`${ecosystem}\0${name}`, { declared: declared || MISSING, resolved, direct });
     }
 
 	private note(msg: string): void {
@@ -165,81 +192,92 @@ export class Detector {
         }
     }
 
+	/**
+	 * Declarations come from pyproject.toml (PEP 621 dependencies and extras, PEP 735
+	 * dependency groups, Poetry tables), else requirements.txt. uv.lock or poetry.lock
+	 * only fills `resolved`, matched by normalized name. Lock entries the project does
+	 * not declare are emitted as transitive (`direct: false`, declared `?`). Local
+	 * sources -- the project itself, workspace members, path dependencies -- are not
+	 * registry packages and are skipped.
+	 */
 	async scanPython(): Promise<void> {
+		const declared = new Map<string, [string, string]>();
+		const declare: Declare = (name, spec) => {
+			if (!name || /^@\s*file:/i.test(spec)) return;
+			const key = canonical(name);
+			if (!declared.has(key)) declared.set(key, [name, spec]);
+		};
+		const pyproject = await this.readToml("pyproject.toml");
+		if (pyproject) {
+			this.scanPep621(pyproject.project, declare);
+			this.scanDependencyGroups(pyproject["dependency-groups"], declare);
+			const tool = pyproject.tool;
+			if (tool && typeof tool === "object") {
+				this.scanPoetry((tool as Record<string, unknown>).poetry, declare);
+			}
+		}
+		if (declared.size === 0) {
+			for (const raw of (await this.readLines("requirements.txt")) ?? []) {
+				const [name, version] = parseRequirement(raw);
+				declare(name, version);
+			}
+		}
+
+		const locked = new Map<string, [string, string]>();
+		const local = new Set<string>();
 		for (const lock of ["uv.lock", "poetry.lock"]) {
 			const data = await this.readToml(lock);
 			if (!data) continue;
 			const pkgs = data.package;
 			if (!Array.isArray(pkgs)) {
-				this.note(`detect: ${lock} has no package array; trying declarations`);
+				this.note(`detect: ${lock} has no package array; Python versions remain unresolved`);
 				continue;
 			}
-			if (Array.isArray(pkgs)) {
-				for (const entry of pkgs) {
-					if (!entry || typeof entry !== "object") continue;
-					const rec = entry as Record<string, unknown>;
-					if (typeof rec.name === "string" && typeof rec.version === "string") {
-						this.emit("pypi", rec.name, rec.version);
-					}
-				}
+			for (const entry of pkgs) {
+				if (!entry || typeof entry !== "object") continue;
+				const rec = entry as Record<string, unknown>;
+				if (typeof rec.name !== "string" || typeof rec.version !== "string") continue;
+				const key = canonical(rec.name);
+				if (isLocalLockEntry(rec)) local.add(key);
+				else if (!locked.has(key)) locked.set(key, [rec.name, rec.version]);
 			}
-			return;
+			break;
 		}
 
-		const lines = await this.readLines("requirements.txt");
-		if (lines) {
-			for (const raw of lines) {
-				const [name, version] = parseRequirement(raw);
-				this.emit("pypi", name, version);
-			}
-			return;
+		for (const [key, [name, spec]] of declared) {
+			if (!local.has(key)) this.emit("pypi", name, spec, locked.get(key)?.[1] ?? null);
 		}
-
-		const data = await this.readToml("pyproject.toml");
-		if (!data) return;
-		this.scanPep621(data.project);
-		this.scanDependencyGroups(data["dependency-groups"]);
-		const tool = data.tool;
-		if (tool && typeof tool === "object") {
-			this.scanPoetry((tool as Record<string, unknown>).poetry);
+		for (const [key, [name, version]] of locked) {
+			if (!declared.has(key)) this.emit("pypi", name, MISSING, version, false);
 		}
 	}
 
-	private scanPep621(project: unknown): void {
+	private scanPep621(project: unknown, declare: Declare): void {
 		if (!project || typeof project !== "object") return;
 		const p = project as Record<string, unknown>;
 		for (const req of Array.isArray(p.dependencies) ? p.dependencies : []) {
-			if (typeof req === "string") {
-				const [name, version] = parseRequirement(req);
-				this.emit("pypi", name, version);
-			}
+			if (typeof req === "string") declare(...parseRequirement(req));
 		}
 		const extras = p["optional-dependencies"];
 		if (extras && typeof extras === "object") {
 			for (const reqs of Object.values(extras as Record<string, unknown>)) {
 				for (const req of Array.isArray(reqs) ? reqs : []) {
-					if (typeof req === "string") {
-						const [name, version] = parseRequirement(req);
-						this.emit("pypi", name, version);
-					}
+					if (typeof req === "string") declare(...parseRequirement(req));
 				}
 			}
 		}
 	}
 
-	private scanDependencyGroups(groups: unknown): void {
+	private scanDependencyGroups(groups: unknown, declare: Declare): void {
 		if (!groups || typeof groups !== "object") return;
 		for (const reqs of Object.values(groups as Record<string, unknown>)) {
 			for (const req of Array.isArray(reqs) ? reqs : []) {
-				if (typeof req === "string") {
-					const [name, version] = parseRequirement(req);
-					this.emit("pypi", name, version);
-				}
+				if (typeof req === "string") declare(...parseRequirement(req));
 			}
 		}
 	}
 
-	private scanPoetry(poetry: unknown): void {
+	private scanPoetry(poetry: unknown, declare: Declare): void {
 		if (!poetry || typeof poetry !== "object") return;
 		const p = poetry as Record<string, unknown>;
 		const blocks: unknown[] = [p.dependencies, p["dev-dependencies"]];
@@ -255,7 +293,9 @@ export class Detector {
 			if (!block || typeof block !== "object" || Array.isArray(block)) continue;
 			for (const [name, spec] of Object.entries(block as Record<string, unknown>)) {
 				if (name === "python") continue;
-				this.emit("pypi", name, specVersion(spec));
+				// `{ path = "../lib" }` is a local source, not a registry package.
+				if (spec && typeof spec === "object" && !Array.isArray(spec) && "path" in spec) continue;
+				declare(name, specVersion(spec));
 			}
 		}
 	}
@@ -350,7 +390,7 @@ export async function detectProject(target: string): Promise<{
     const hasPackageLock = isFile(join(target, "package-lock.json"));
     if (!hasPackageLock) gaps.unshift("Node lockfiles");
     const notes = [...detector.notes];
-    notes.push(`Coverage: root declarations only, except uv.lock/poetry.lock${hasPackageLock ? " and package-lock.json" : ""}. Unscanned: ${gaps.join(", ")}.`);
+    notes.push(`Coverage: root declarations; resolved versions from uv.lock/poetry.lock${hasPackageLock ? " and package-lock.json" : ""}; undeclared Python lock entries listed as transitive (direct=false). Unscanned: ${gaps.join(", ")}.`);
     notes.push("");
     notes.push(`detect: ${detector.rows.length} dependency declaration(s) found in ${target}`);
     if (detector.rows.length === 0) {

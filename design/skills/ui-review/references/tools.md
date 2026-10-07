@@ -31,12 +31,11 @@ These routes are selected by phase and called as tools, not spawned as processes
 | `accessibility-scanner` MCP | primary WCAG 2.2 accessibility measurement |
 | Storybook MCP docs tools | component prop truth when Storybook is running |
 | `wire-dsl` MCP | vector wireframes as SVG, PNG, or PDF |
-| `excalidraw` MCP | diagrams and architecture canvases |
 | `xd://generate_image` | skill-routed image artifacts |
 
 `impeccable detect` is corroborating signal only: findings carry `line: 0` and require browser or computer confirmation. Screenshots never replace ARIA or computed-style evidence, and `browser` is for web surfaces while `computer` is for native desktop surfaces.
 
-Commands only. The `accessibility-scanner`, `storybook`, `wire-dsl`, and `excalidraw` MCP
+Commands only. The `accessibility-scanner`, `storybook`, and `wire-dsl` MCP
 servers are routed by `rule://design-tool-ladder` and called as tools, not spawned as
 processes, so they carry no invocation to record here.
 

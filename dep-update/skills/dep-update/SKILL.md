@@ -14,7 +14,7 @@ TRIGGER
 
 ## Workflow
 
-1. Run the `dep_scan` tool (params: `path`, optional `offline_fixture_dir`) -- it
+1. Run the `dep_scan` tool (param: optional `path`) -- it
    enumerates deps and classifies every bump. For rust and go, use the endpoints in
    `skill://dep-update/references/recipes.md`.
 2. Run the CVE scanners below.
@@ -47,28 +47,23 @@ changelog cite for MINOR:
 
 ```
 name: old → new (PATCH|MINOR)  [cite]
-Apply? [Y/n]
 ```
 
-On `Y`: run the `dep_apply` tool (`ecosystem`, `name`, `version`, optional `path`).
-On `n`: record as skipped and move on.
+Then run the `dep_apply` tool (`ecosystem`, `name`, `version`, optional `path`). It
+shows the user one confirmation naming that exact bump; that confirmation is the
+approval -- do not ask a separate chat `[Y/n]` first. Denied: record as skipped and
+move on.
 
-MUST confirm every bump on its own `[Y/n]` -- no global yes-to-all, no batching.
-MUST wait for the user's host approval and exact-bump confirmation for each `dep_apply` call. Denial or a headless session stops application.
+MUST issue one `dep_apply` call per bump -- no batching, no yes-to-all.
+MUST stop application when the confirmation is denied or the session is headless (`dep_apply` refuses without a UI).
 NOT approving a host prompt on the user's behalf.
 MUST treat a dep-update skill read as workflow handoff, never as approval for a bump.
 MUST inspect manifests and lockfiles after cancellation, deadline, output-limit, or package-manager failure; partial changes can remain.
-MUST keep majors, rust, and go out of the loop: named, cited, stopped (FR-014).
+MUST keep majors, rust, and go out of the loop: named, cited, stopped.
 NOT writing a lockfile or manifest by hand -- apply every bump with `dep_apply`.
 NOT importing a Python SDK -- native TypeScript tools only.
 MUST report coverage as observed: ecosystems detected, lockfiles read, scanners
 that ran, scanners that were absent. An unrun scanner never reads as clean.
-
-### ruff pre-commit bundling (FR-021)
-
-When ruff is bumped in a Python project and `.pre-commit-config.yaml` has a
-parseable `rev:` under `astral-sh/ruff-pre-commit`, bundle that `rev` update
-into the same ruff confirm. Unparseable YAML → print the manual change instead.
 
 ## CVE scanners
 
@@ -76,18 +71,18 @@ into the same ruff confirm. Unparseable YAML → print the manual change instead
 |-----------|---------|------------------|
 | python | `pip-audit` | `uvx pip-audit` |
 | node | `pnpm audit` / `npm audit` / `yarn npm audit` | Use the project package manager's audit command; do not install a persistent scanner. |
-| rust | `cargo-audit` | `cargo binstall cargo-audit` (fallback: `cargo install --locked cargo-audit`) |
+| rust | `cargo-audit` | None: `cargo install`/`cargo binstall` are persistent installs. Use it only when `command -v cargo-audit` finds it; otherwise report the gap. |
 | go | `govulncheck` | `go run golang.org/x/vuln/cmd/govulncheck@latest` |
-| any | `osv-scanner` (supplemental) | `bunx osv-scanner` |
+| any | `osv-scanner` (supplemental) | `go run github.com/google/osv-scanner/v2/cmd/osv-scanner@latest` (not published to npm) |
 
-Guard each with `command -v`; missing → report "scanner not available: `<name>`" plus the runner. The plugin's `dep-update-no-scanner-install` rule is advisory (`interruptMode: never`) and asks for these ephemeral forms because a read-only audit should not mutate the toolchain.
+Guard each with `command -v`; missing → report "scanner not available: `<name>`" plus the runner. The plugin's `dep-update-no-scanner-install` rule is advisory (`interruptMode: never`): it reminds after a persistent scanner install was sent, it does not stop one.
 
 ## Tools
 
 | Tool | Purpose |
 |------|---------|
-| `dep_scan` | Enumerate deps, query PyPI/npm, classify bumps. Optional `offline_fixture_dir` / `DEP_UPDATE_FIXTURE_DIR`. |
-| `dep_apply` | Apply one bump via the package manager, then verify the manifest. |
+| `dep_scan` | Enumerate deps, query PyPI/npm, classify bumps. Transitive lockfile entries are listed, not queried. |
+| `dep_apply` | Apply one bump via the package manager after one exact-bump confirmation, then verify the manifest. |
 
 `skill://dep-update/references/recipes.md` holds what the tools do not: the go-proxy and
 crates.io endpoints, the advisory-only apply commands, and the changelog fetch
@@ -95,10 +90,10 @@ order.
 
 ## Out of scope
 
-The detector reads root `package.json`, `Cargo.toml`, `go.mod`, `Gemfile`, and `composer.json`.
-Python uses the first available `uv.lock`, `poetry.lock`, `requirements.txt`, or `pyproject.toml`, in that order.
-Node lockfiles select the apply command but are not scanned for resolved versions.
-`Cargo.lock`, `go.sum`, `Pipfile.lock`, Ruby/PHP lockfiles, and workspace child manifests are not scanned.
+The detector reads root `package.json` (+ `package-lock.json` for resolved versions), `Cargo.toml`, `go.mod`, `Gemfile`, and `composer.json`.
+Python declarations come from `pyproject.toml` (PEP 621, dependency groups, Poetry tables), else `requirements.txt`; `uv.lock`/`poetry.lock` only supply resolved versions, and undeclared lock entries are transitive (never bumped). Local path/editable sources are skipped.
+Python apply: `poetry add` when `poetry.lock` or `[tool.poetry]` exists; else `uv add` (`--frozen` when there is no `uv.lock`); a requirements-only project gets a manual instruction, never an install.
+`Cargo.lock`, `go.sum`, `Pipfile.lock`, Ruby/PHP lockfiles, other Node lockfiles, and workspace child manifests are not scanned.
 Report these coverage gaps; do not describe declaration ranges as installed versions. It does not cover:
 
 - Docker image tag lookup (`FROM` lines, Hub/GHCR tags)

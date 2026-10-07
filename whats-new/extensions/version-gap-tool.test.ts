@@ -30,8 +30,8 @@ describe("unit: detect", () => {
         writeFileSync(join(dir, "package-lock.json"), JSON.stringify({ lockfileVersion: 3, packages: { "": {}, "node_modules/leftpad": { version: "1.3.1" } } }));
         const { rows, coverage } = await detectProject(dir);
         expect(rows).toEqual([
-            { ecosystem: "npm", name: "leftpad", declared: "^1.3.0", resolved: "1.3.1" },
-            { ecosystem: "npm", name: "missing", declared: "^2.0.0", resolved: null },
+            { ecosystem: "npm", name: "leftpad", declared: "^1.3.0", resolved: "1.3.1", direct: true },
+            { ecosystem: "npm", name: "missing", declared: "^2.0.0", resolved: null, direct: true },
         ]);
         expect(coverage.gaps).toContain("Cargo.lock");
     });
@@ -43,10 +43,22 @@ describe("unit: detect", () => {
 			const result = await detectProject(dir);
 
             expect(result.rows).toEqual([
-                { ecosystem: "pypi", name: "requests", declared: "==2.0.0", resolved: null },
-                { ecosystem: "pypi", name: "pytest", declared: "==8.0.0", resolved: null },
+                { ecosystem: "pypi", name: "requests", declared: "==2.0.0", resolved: null, direct: true },
+                { ecosystem: "pypi", name: "pytest", declared: "==8.0.0", resolved: null, direct: true },
             ]);
 			expect(result.stderr).toContain("Unscanned:");
+		} finally { rmSync(dir, { recursive: true, force: true }); }
+	});
+	test("Python rows keep the declared spec and take resolved from the lock", async () => {
+		const dir = tmp();
+		try {
+			writeFileSync(join(dir, "pyproject.toml"), '[project]\nname = "app"\ndependencies = ["httpx>=0.27"]\n');
+			writeFileSync(join(dir, "uv.lock"), '[[package]]\nname = "app"\nversion = "0.1.0"\nsource = { virtual = "." }\n[[package]]\nname = "httpx"\nversion = "0.27.2"\n[[package]]\nname = "anyio"\nversion = "4.4.0"\n');
+			const { rows } = await detectProject(dir);
+			expect(rows).toEqual([
+				{ ecosystem: "pypi", name: "httpx", declared: ">=0.27", resolved: "0.27.2", direct: true },
+				{ ecosystem: "pypi", name: "anyio", declared: "?", resolved: "4.4.0", direct: false },
+			]);
 		} finally { rmSync(dir, { recursive: true, force: true }); }
 	});
 });
@@ -79,6 +91,6 @@ describe("integration: version_gap_scan", () => {
 		expect(result.details.count).toBe(1);
 		const first = result.content[0];
 		if (!first) throw new Error("missing tool output");
-        expect(first.text).toContain("npm\tleftpad\t1.3.0\t?");
+        expect(first.text).toContain("npm\tleftpad\t1.3.0\t?\tdirect");
 	});
 });

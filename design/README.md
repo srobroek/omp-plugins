@@ -446,5 +446,4 @@ Three tiers govern each upstream it advertises:
 | Declaration in `package.json` only | advertise it as a pointer, never vendor it |
 | No declaration anywhere | exclude it, because the author reserves all rights |
 
-The `excalidraw` server in the `diagram` package sits in the middle tier. This package
-vendors no GPL, AGPL, LGPL, or CC-BY-NC content.
+This package vendors no GPL, AGPL, LGPL, or CC-BY-NC content.
