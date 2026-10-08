@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import speckitSetupTool, {
+	EXTENSIONS,
 	ensureGitignore,
 	FORMULAS,
 	GITIGNORE_ENTRY,
@@ -34,6 +35,22 @@ function fakeZod(): Record<string, unknown> {
 
 const SAFE_TMPDIR = realpathSync(tmpdir());
 
+
+test("requires only installable community extensions", () => {
+	expect(EXTENSIONS).toEqual([
+		"agent-context",
+		"bugfix",
+		"cleanup",
+		"critique",
+		"fix-findings",
+		"iterate",
+		"qa",
+		"refine",
+		"retro",
+		"security-review",
+		"tinyspec",
+	]);
+});
 
 describe("specifyVersionOk", () => {
 	test("accepts 0.12+", () => {
