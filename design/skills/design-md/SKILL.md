@@ -1,6 +1,6 @@
 ---
 name: design-md
-description: Routes DESIGN.md extraction to upstream create-design-md and lints the result. Triggers on write a DESIGN.md or document the design system.
+description: Routes DESIGN.md extraction to the vendored create-design-md and lints the result. Triggers on write a DESIGN.md or document the design system.
 ---
 
 # DESIGN.md
@@ -25,12 +25,8 @@ TRIGGER
    defines exactly two modes, Repository mode and URL mode, and its own restriction reads:
    "If rendered inspection is unavailable, ask for screenshots or source files. Do not
    create a DESIGN.md from copy, metadata, or HTML structure alone."
-2. Apply `rule://design-upstream-preflight` for the `create-design-md` row, which installs
-   `ui-skills@srobroek-omp`. -> installed. Already in your available skills: LOAD
-   `create-design-md` by name. Installed during this session: `skill://` cannot reach it
-   until the next session, so read its SKILL.md from the install path the preflight
-   reports. Install refused or failed: do NOT write the artifact yourself. STOP and report
-   the gap.
+2. Read `skill://design-md/references/create-design-md.md`, vendored from
+   `ibelick/ui-skills`. -> its two modes and section order are loaded.
 3. Ground every value in the audit, not in invention: run `skill://design-system-audit`
    and hand the routed skill its `file:line` evidence. -> every `{group.token}` reference
    resolves against a real carrier.
@@ -58,9 +54,9 @@ MUST Expect more than one error-level failure. An invalid dimension is also erro
   measured: `clamp(2.5rem, 7vw, 4.5rem)` exits 1 as "not a valid dimension", carrying no
   rule id. So a clean `broken-ref` count does not mean the file passes.
 MUST Put anything undecided under `Known Gaps` with the question left open.
-MUST STOP when there is nothing to extract from, or when `create-design-md` is unavailable
-  after the preflight. Ask for the repository, the URL, screenshots, or source files and
-  wait. A DESIGN.md written from anything else is indistinguishable from an extracted one,
+MUST STOP when there is nothing to extract from. Ask for the repository, the URL,
+  screenshots, or source files and wait.
+  A DESIGN.md written from anything else is indistinguishable from an extracted one,
   which is what makes improvising it worse than returning nothing.
 DEFAULT Cite the audit's `file:line` beside any value the reader cannot trace to a carrier.
 NOT Leave `TODO` or `TO_FILL` in the file. An unfilled placeholder is worse than an

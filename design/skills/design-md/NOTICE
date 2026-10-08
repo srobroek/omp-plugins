@@ -1,0 +1,31 @@
+design-md
+=========
+
+references/create-design-md.md is vendored, unmodified, from:
+
+  Project:     UI Skills
+  Repository:  https://github.com/ibelick/ui-skills
+  Source path: skills/create-design-md/SKILL.md
+  Commit:      587ea305b948ad34f0c2d5c2ea4211d428f66ed8
+  Blob:        1aa15726985929fe8d95624767cdc9a524418925 (16,208 bytes)
+  Copied:      2026-10-08
+  Licence:     MIT License, Copyright (c) 2026 Julien Thibeaut
+
+The full licence text is in the LICENSE file beside this one, copied from
+https://raw.githubusercontent.com/ibelick/ui-skills/587ea305b948ad34f0c2d5c2ea4211d428f66ed8/LICENSE
+
+The MIT licence requires that the copyright notice and permission notice appear in all
+copies or substantial portions of the software. The LICENSE file satisfies that.
+
+Modifications: none. The file is byte-identical to the blob above, so
+`git hash-object references/create-design-md.md` reproduces it. It names no harness tool
+and no skill path, so nothing needed rewriting for OMP. Its `npx @google/design.md`
+commands run without `--yes` under OMP's non-interactive bash: npm 11.19.0 installed and
+ran `spec` from an empty cache with stdin closed. Two OMP adjustments live in
+`SKILL.md` instead of the copy: it is read as `skill://design-md/references/create-design-md.md`,
+and its bare `lint DESIGN.md` path is replaced there with the repository-root path.
+
+Why vendored rather than installed: upstream ships no marketplace or plugin manifest, so
+it installed only through the `ui-skills` entry in this catalog. That entry tracks
+unpinned `main` and brings six more skills that nothing here routes to. One pinned file
+removes the install step from `design-md`.

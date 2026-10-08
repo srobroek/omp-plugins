@@ -2,7 +2,7 @@
 
 | Upstream skill | What it does | Repo | Install |
 |---|---|---|---|
-| `create-design-md` | Extracts a DESIGN.md from an existing repository or public URL | `ibelick/ui-skills` | `ui-skills@srobroek-omp`, via `rule://design-upstream-preflight` |
+| `create-design-md` | Extracts a DESIGN.md from an existing repository or public URL | `ibelick/ui-skills` | none: vendored at `587ea305` as `skill://design-md/references/create-design-md.md` |
 
 ## It extracts, it does not author
 
