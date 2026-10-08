@@ -292,7 +292,6 @@ Use the first-choice asset for each topic:
 | Microcopy | `ui-microcopy` |
 | Wireframing | `html-wireframe`, `wireloom` |
 | Clickable prototyping | `html-prototype` |
-| Current web practice | `modern-web-guidance` |
 | Browser-driven verification | `ui-review`, on OMP `browser` |
 
 The detector claims 59 executable rules. A fixture probe with about ten seeded defects recorded:
@@ -405,7 +404,6 @@ invocations, the `--package` rule, and required output flags.
 | `@google/design.md` | Apache-2.0 |
 | `@design-token-kit/cli` | Apache-2.0 |
 | `@terrazzo/cli` | MIT |
-| `modern-web-guidance` | Apache-2.0 |
 | `browser-driver-manager` | Apache-2.0 |
 | `playwright` | Apache-2.0 |
 | `@superdesign/cli` | MIT |

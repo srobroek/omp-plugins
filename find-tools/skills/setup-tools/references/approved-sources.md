@@ -31,14 +31,13 @@ its `marketplace.json`, and `omp plugin install` needs that name.
 | `styleseed` | `bitjaru/styleseed` | design-system tokens, lint, review |
 | `addy-web-quality-skills` | `addyosmani/web-quality-skills` | web accessibility, performance, SEO |
 | `effective-html` | `plannotator/effective-html` | HTML wireframes and prototypes |
-| `googlechrome` | `GoogleChrome/modern-web-guidance` | current web platform practice |
 | `frontend-slides` | `zarazhangrui/frontend-slides` | 16:9 decks |
 | `web-asset-generator-marketplace` | `alonw0/web-asset-generator` | favicons, app icons, social images |
 | `interface-design` | `Dammyjay93/interface-design` | product-UI craft for dashboards, admin panels, and SaaS tools; not marketing pages |
 
-The design rows other than `interface-design` and `googlechrome` are also installed on demand
-by `rule://design-upstream-preflight`. Both are optional: no design skill routes to either.
-`interface-design` overlaps `impeccable`, and `googlechrome`'s CLI needs no install.
+The design rows other than `interface-design` are also installed on demand
+by `rule://design-upstream-preflight`. It is optional: no design skill routes to it.
+`interface-design` overlaps `impeccable`.
 Vetted 2026-09-28: `interface-design` is MIT, last push 2026-06-20, not archived.
 A project-scope install loads its one skill, `interface-design`, from the manifest's
 `./.claude/skills` path.

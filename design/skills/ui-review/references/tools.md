@@ -149,11 +149,10 @@ and no `--package` is needed.
 | `storybook` | same | `npx --yes storybook doctor` | configuration health report | before blaming a route for a config fault |
 | `storybook` | same | `npx --yes storybook ai setup` | derives project-specific story instructions from the actual codebase | never unprompted, and never restated as static prose: the value is that it reads this repo |
 
-## Prototype, artifact, and guidance
+## Prototype and artifact
 
 | bin | npm package | invocation | what it is for | when to use it rather than the alternative |
 |---|---|---|---|---|
-| `modern-web-guidance` | `modern-web-guidance` 0.0.193, npm latest on 2026-10-08 | `npx --yes modern-web-guidance@latest search "<topic>"`, then `npx --yes modern-web-guidance@latest retrieve "<id,id>"` | current web-platform practice and baseline support, cited from the tool | the CLI needs no plugin install, and the `modern-web-guidance` plugin runs this same CLI. `search` returns ids and `retrieve` takes them comma-separated; neither is a bare command. It needs network |
 | none | `wireloom`, unversioned: it follows whatever the project installs | `npm install wireloom` | installs the renderer, which exports `parse` and `render` | a project dependency rather than an `npx` run, because the package ships a library and NO bin. Installing renders nothing: a script must call `render` and write the SVG. See the render step below |
 | `python3` | none | `python3 -m http.server "<port>" --bind 127.0.0.1` | serves a prototype so it can be driven rather than read | always for an interactive artifact. `--bind 127.0.0.1` keeps it off the network |
 | `superdesign` | `@superdesign/cli` 0.13.0 | `npx --yes @superdesign/cli@latest create-project` | hosted concept exploration; the command prints the canvas URL | last resort, and only after the user confirms the account. With no subcommand it prints help and produces nothing. Run `login` first; `iterate-design-draft` continues an existing draft. Image and video generation consumes credits |
