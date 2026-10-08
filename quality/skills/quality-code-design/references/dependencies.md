@@ -1,14 +1,14 @@
 # Dependencies, ORMs, and one consumer
 
-## Research before implementation
+## Research before adding a capability
 
-**Do:** complete these checks before writing or changing production code, tests, CI, or scripts. Keep a small task's search short, but perform it before implementation.
+**Do:** run these checks when a change adds a capability or dependency the repository does not already have. Keep a small task's search short, but perform it before implementation.
 
 1. Search the codebase by behavior and domain meaning, not only by the desired function name. Read shared packages/utilities, relevant callers/tests, installed dependencies, manifests, and conventions.
 2. Inspect related implementations and relevant earlier work available in the repository/history or linked task context. Determine whether existing local code can supply the need directly or become a cohesive shared capability. Do not search unrelated private repositories or assume unavailable prior work exists.
-3. Research standard-library, framework, and mature ecosystem options using authoritative documentation and package/release information. Verify the candidate API/version and fit: required behavior, maintenance/support, compatibility, relevant security/licensing/deployment constraints, and operational cost. Popularity alone is not maturity or suitability.
-4. Choose suitable existing shared code, direct reuse, a bounded extraction, an established library, or custom code supported by a concrete gap. Compare actual semantics and total complexity; do not invent a minimum consumer count or an arbitrary package-search quota.
-5. Record a concise reuse decision in the existing task/plan evidence: paths/symbols inspected, sources/versions consulted, choice, rejected alternatives and material reasons. Reuse current task-local research when it addresses the same requirement; revisit it when behavior, constraints, or versions change.
+3. When nothing local fits, check standard-library, framework, and mature ecosystem options. Follow the project's existing choices first, then `rule://toolchain-languages` for per-language library picks when it is installed. Verify the candidate API/version and fit against authoritative documentation: required behavior, maintenance/support, compatibility, relevant security/licensing/deployment constraints, and operational cost. Popularity alone is not maturity or suitability.
+4. Choose suitable existing shared code, direct reuse, a bounded extraction, an established library, or custom code supported by a concrete gap. Compare actual semantics and total complexity; do not invent a minimum consumer count or an arbitrary package-search quota. A new dependency the request did not name needs the user's approval before it is added.
+5. Record a concise reuse decision in the existing task evidence: paths/symbols inspected, sources/versions consulted, choice, and material reasons. Reuse current task-local research when it addresses the same requirement.
 
 **Do not:** start a custom implementation and research alternatives afterward, recreate a suitable available capability, or declare "nothing reusable" without examining candidates.
 
@@ -26,7 +26,7 @@ Good: verify the documented API and supported version, reuse it, and test the ap
 
 **Exception:** custom code is justified when researched options fail a required contract, deployment/license constraint, measured performance need, or present simplicity test. State the actual gap and the smallest custom scope; unfamiliarity or preference is insufficient. A standard command can be the appropriate reusable solution for a one-off script.
 
-If a source/tool is unavailable, do not claim the check passed. Use available authoritative material or request research through the lead/researcher before implementing the unresolved capability. Read-only reviewers stay within their evidence contract: missing supplied research is an uncertainty to surface, not permission to fetch arbitrary URLs or claim duplication is proven.
+If a source/tool is unavailable, do not claim the check passed. Use available authoritative material or request research through the lead/researcher before implementing the unresolved capability. Read-only reviewers stay within their evidence contract: they assess reuse research only when the caller supplies it, and never fetch arbitrary URLs to fill the gap.
 
 ## Choose by present simplification
 

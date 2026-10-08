@@ -15,3 +15,7 @@ Cross-cutting design principles, capability-first layout, ownership, and durable
 | Name | Role | Model |
 | --- | --- | --- |
 | `architect` | Read-only software, system, module, and API design; complex implementation plans | `@plan` |
+
+## Works with quality
+
+`architect` loads `skill://quality-code-design/references/release.md` for cutover transitions. Install `quality` too; without it the agent reports the missing guidance.

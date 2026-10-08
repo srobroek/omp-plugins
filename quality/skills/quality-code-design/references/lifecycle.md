@@ -1,6 +1,6 @@
 # Planning and feedback
 
-Read for uncertain scope, work sequencing, consequential decisions, or recurring delivery problems. Keep the main design priorities; these practices add no mandatory project methodology.
+Read for uncertain scope, work sequencing, consequential decisions, domain terminology, or recurring delivery problems. Keep the main design priorities; these practices add no mandatory project methodology.
 
 ## Scale by consequences
 
@@ -26,17 +26,25 @@ Good: keep the fix and its directly enabling simplification together; sequence t
 Bad: require direct pushes to main or a deployment quota to claim continuous integration.
 Good: use short-lived branches and fast feedback while retaining required reviews and checks.
 
-**Exception:** a cohesive atomic change can be large. Explain why splitting would reduce correctness or reviewability; notify before major refactors without introducing a new approval gate.
+**Exception:** a cohesive atomic change can be large. Explain why splitting would reduce correctness or reviewability. A major refactor still needs the user's approval ([simplicity.md](simplicity.md)).
 
 ## Durable decisions
 
-**Do:** record consequential choices using context, decision, consequences, and a concrete revisit trigger. Reuse the existing decision-record convention; retain superseded rationale.
+**Do:** record a decision only when all three hold: it is hard to reverse, it would surprise a future reader without context, and it came from a real trade-off between genuine alternatives. Typical cases: architectural shape, integration patterns between contexts, technology choices with lock-in, boundary and ownership decisions, deliberate deviations from the obvious path, constraints invisible in the code, and non-obvious rejected alternatives. Record context, decision, and why in a paragraph; add status, considered options, or consequences only when they carry information.
 **Do not:** document every helper function, or treat an old exception as permanent permission.
 
 Bad: "Temporary direct SQL" remains the only rationale after a disposable importer becomes a service.
 Good: revisit transaction ownership, schema coupling, and verification when the importer gains long-lived consumers; update or supersede its decision record.
 
-**Exception:** a local comment or task note suffices when the tradeoff is small and understandable. An ADR is a format for significant decisions, not a prerequisite for coding.
+Where: reuse the project's existing decision-record convention. With none, use `docs/decisions.md` or `docs/decisions/NNNN-slug.md`, never a new `docs/adr/`. Numbered records have one numbering owner: in a multi-agent run the lead assigns the number and workers propose the record. Retain superseded rationale.
+
+**Exception:** a local comment or task note suffices when the tradeoff is small and understandable. A decision record is a format for significant decisions, not a prerequisite for coding.
+
+## Domain terms
+
+- Challenge a term that conflicts with the project's existing glossary or code names, and propose one canonical term for a vague or overloaded one ("account": Customer or User?).
+- Stress-test stated domain relationships with concrete edge-case scenarios, and check stated behavior against the code; surface a contradiction instead of picking a side.
+- Record resolved terms in the project's existing glossary. Create a new glossary file such as `CONTEXT.md` only when the task authorizes it.
 
 ## Feedback and outcome measures
 

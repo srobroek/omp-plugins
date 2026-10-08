@@ -20,7 +20,7 @@ Bad: one CSV export gets an `ExportPluginRegistry`, dynamic discovery, and YAML-
 Good: one `exportCsv(rows, writer)` operation uses the CSV library and an explicit output dependency.
 
 Bad in the opposite direction: database calls, connection creation, and raw row fields are copied into every business function because "there is only one database."
-Good: contain persistence in a module; expose operations in the consumer's vocabulary. Introduce a narrow interface, callback, or trait now if it protects a real boundary, even with one implementation.
+Good: contain persistence in a module; expose operations in the consumer's vocabulary. Whether that module also needs an interface, callback, or trait follows the seam rule in [deep-modules.md](deep-modules.md).
 
 Why: the good design supports today's need without making future extraction require a whole-program rewrite. "Easy to change later" is a test of coupling and ownership, not permission to implement tomorrow's feature.
 
@@ -96,8 +96,8 @@ Why: quoting and explicit empty-input behavior solve the actual problem without 
 
 ## KISS: refactoring and growth
 
-**Do:** fix violations in affected code and look for simplifications that reduce branching, duplication of knowledge, coupling, or obsolete paths. Revisit design whenever behavior is added or changed.
-**Do not:** preserve a tangled design just because the patch can be smaller, or rewrite an unrelated subsystem for stylistic consistency.
+**Do:** fix the violations the change introduces and simplify the code the change already has to touch. Revisit design whenever behavior is added or changed.
+**Do not:** preserve a tangled design inside the touched code just because the patch can be smaller, or rewrite unrelated code for stylistic consistency.
 
 Bad: add a fourth mode flag to a helper that now performs both file import and remote synchronization.
 Good: separate the two operations around their independently changing behavior, sharing only the common parsing rule.
@@ -105,11 +105,9 @@ Good: separate the two operations around their independently changing behavior, 
 Bad: rename every class and adopt a new architecture while fixing one null check.
 Good: fix the null check and simplify the surrounding redundant branch; report unrelated design debt separately.
 
-Why: refactoring should make the current change easier to reason about and leave a smaller maintenance burden.
+Why: refactoring stays inside the requested change; pre-existing debt elsewhere is reported, not fixed.
 
-**Major-refactor notice:** a cross-module ownership change, public-contract migration, data migration, new substantial dependency, or rewrite of a maintained component needs a notice before execution. State affected paths/surfaces, benefit, compatibility risks, and verification. No new approval gate is created; existing permissions and assignment boundaries still apply. Workers notify their lead; the lead tells the user. If a fixed assignment excludes the refactor, report the opportunity rather than editing outside it.
-
-**Exception:** an independently useful large refactor can belong in a separate change. Highlight it and explain the ordering; do not silently expand the current task.
+**Major refactor:** a cross-module ownership change, public-contract or data migration, new dependency, or rewrite of a maintained component is outside the requested change unless the user approves it. Report the affected surfaces, benefit, and risk; a worker reports it to its lead instead of doing it. An approved large refactor ships as its own change.
 
 ## DRY: knowledge versus resemblance
 

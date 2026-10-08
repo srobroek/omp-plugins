@@ -3,7 +3,7 @@
   "dispositions": ["PASS", "FAIL", "UNKNOWN"],
   "common": [
     "Judge observable reasoning/artifacts, not compliance claims or exact wording.",
-    "For IMPLEMENT, require repository/shared/earlier-code and standard/library research before code writes; supplied plans prove sequencing intent only.",
+    "For IMPLEMENT, require a repository check for an existing capability before code writes, plus standard/library research when the change adds a capability the repository lacks; supplied plans prove sequencing intent only.",
     "Accept valid alternate designs; preserve scope, read-only constraints and authorization.",
     "Use UNKNOWN where required evidence cannot be obtained; do not fabricate a completed check."
   ],

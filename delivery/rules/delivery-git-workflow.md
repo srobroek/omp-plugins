@@ -12,13 +12,6 @@ LEGEND: Rules carry stable IDs (GW-n).
 - A PR (`gh pr create`) is the default for reviewed or outward-facing work.
 - Agent-authored PRs start as drafts (`gh pr create --draft`). Promote with `gh pr ready` only after implementation, local validation, required review, and CI are complete with no known blocker.
 - The body states what changed, why, and the test plan. Use one close keyword per issue line.
-- Keep changes coherent and independently verifiable. Include directly enabling
-  refactors; sequence larger work into compatible increments rather than broken
-  intermediate states. Use short-lived branches within the project's review policy.
-- Report the strongest evidenced state: implemented, locally verified, CI verified,
-  merged, deployed, or observed in use. Name the relevant commit/artifact, environment,
-  and checks when applicable. A merged PR proves neither deployment nor healthy runtime
-  behavior; a PR request authorizes no production release.
 - For persistent-state, compatibility, or release changes, load
   `skill://quality-code-design/references/release.md` and surface missing guidance.
   Preserve the project's release controls and the user's authorization scope.

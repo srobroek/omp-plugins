@@ -1,0 +1,25 @@
+to-questionnaire
+================
+
+This skill is vendored, in modified form, from:
+
+  Project:     mattpocock-skills 1.2.3
+  Repository:  https://github.com/mattpocock/skills
+  Source path: skills/productivity/to-questionnaire/SKILL.md
+  Copied:      2026-10-08
+  Licence:     MIT License, Copyright (c) 2026 Matt Pocock
+
+The full licence text is in the LICENSE file beside this one, copied from the
+installed mattpocock-skills 1.2.3 package.
+
+The MIT licence requires that the copyright notice and permission notice appear in all
+copies or substantial portions of the software. The LICENSE file satisfies that, and the
+vendored SKILL.md records its provenance and its modifications in a comment block below
+its frontmatter.
+
+Modifications:
+  1. The questionnaire goes to a user-named path or ~/tmp, never the current directory.
+  2. Template placeholders use {braces} inside a fenced block.
+  3. The frontmatter description follows this repository's authoring contract.
+
+Why vendored: it pairs with `grilling` for knowledge the user does not hold.

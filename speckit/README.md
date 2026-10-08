@@ -92,3 +92,7 @@ concurrency guarantees or roll back earlier successful CLI steps.
 ## License
 
 Apache-2.0
+
+## Works with quality
+
+`speckit-bugfix` loads `skill://quality-code-design` and its references. Install `quality` too; without it the skill reports the missing guidance.

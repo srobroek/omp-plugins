@@ -48,15 +48,9 @@ Good: use a flag for a concrete exposure/recovery need, test supported states, a
 
 **Exception:** a small local tool can use clear errors and a representative smoke check. Formal SLOs and error budgets fit ongoing services with agreed reliability needs; do not impose uptime targets or permanent telemetry on one-off tools.
 
-## Evidence and handoff
+## Release-state evidence
 
-**Do:** distinguish implemented, locally verified, CI verified, merged, deployed, and observed. Include the relevant revision/artifact/environment and unresolved risk in the existing handoff format.
-**Do not:** claim deployment from a merge or production health from preproduction tests. Respect read-only roles; reviewers request evidence through their allowed surface and never perform a release.
-
-Bad: "Done in production" when only CI passed.
-Good: "PR updated at revision X; focused checks and CI passed. No deployment was requested or performed."
-
-**Exception:** omit inapplicable stages instead of generating a ceremonial release checklist for every change.
+Name the furthest release state the evidence reaches (merged, deployed, or observed in use) with its revision or artifact and environment; omit stages that do not apply. A merge proves neither deployment nor runtime health, and preproduction tests prove no production behavior. Reviewers never perform a release.
 
 ## Sources
 
