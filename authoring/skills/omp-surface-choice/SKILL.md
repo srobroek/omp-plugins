@@ -38,7 +38,7 @@ See `omp://rulebook-matching-pipeline.md`.
 ## tool_call gate
 
 - CAN read files and spawn subprocesses.
-- THROWING BLOCKS THE TOOL (fail-closed). Wrap everything; allow on uncertainty.
+- THROWING BLOCKS THE TOOL (fail-closed). Wrap everything; an advisory gate allows on uncertainty, an invariant gate blocks.
 - Cheap in-memory prefilter (path prefix, tool name) **before** any subprocess.
 - Cache expensive results. Session-verified: `chezmoi managed` is 222 ms once, then O(1) set lookups.
 
@@ -62,4 +62,4 @@ Judgment workflows. Interviews. Multi-step reasoning. Schema cannot carry it.
 
 ## Hard bash boundary
 
-`bash.patterns` deny in config is the only hard pre-execution bash boundary that holds in **every** approval mode. TTSR and gates layer above it.
+`bash.patterns` deny in config is a hard pre-execution bash boundary that holds in **every** approval mode. TTSR and gates layer above it.

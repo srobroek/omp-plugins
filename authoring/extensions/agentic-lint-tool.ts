@@ -6,18 +6,16 @@ import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
 
 type LintParams = { paths: string[] };
 
-/** The two shapes `agentic_lint` reports: an early refusal, or a completed run. */
-type LintDetails =
-	| { ok: boolean; error: string; paths: string[] }
-	| {
-			ok: boolean;
-			exitCode: number;
-			errors: number;
-			warns: number;
-			files: string[];
-			findings: Finding[];
-			stdout: string;
-	  };
+/** A completed run. A run that cannot lint its paths throws, so OMP marks it isError. */
+type LintDetails = {
+	ok: boolean;
+	exitCode: number;
+	errors: number;
+	warns: number;
+	files: string[];
+	findings: Finding[];
+	stdout: string;
+};
 
 export type Finding = {
 	path: string;
@@ -305,14 +303,14 @@ export function lint(path: string): Triple[] {
 		}
 	});
 
-	if (!String(path).includes("subagent-routing") && kind !== "agent") {
+	if (kind !== "agent") {
 		lines.forEach((ln, idx) => {
 			if (ln.trim().startsWith("#") || ln.trim().startsWith("LEGEND")) return;
 			const m = MODEL_NAMES.exec(ln);
 			if (m) {
 				err(
 					"E3",
-					`line ${idx + bodyLineOffset + 1}: model name '${m[0]}' in prose — route via steering-subagent-routing`,
+					`line ${idx + bodyLineOffset + 1}: model name '${m[0]}' in prose — name a configured model role (\`@task\`) instead`,
 				);
 			}
 		});
@@ -451,11 +449,11 @@ const MAX_FILES = 2000;
 export function collectFiles(entry: string): string[] {
 	let st: Stats;
 	try {
-		st = lstatSync(entry);
+		// Follow a symlinked root: the caller named it. Links below it stay skipped.
+		st = statSync(entry);
 	} catch {
 		return [entry];
 	}
-	if (st.isSymbolicLink()) throw new Error(`symbolic link is outside lint traversal: ${entry}`);
 	if (st.isFile()) return [entry];
 	if (!st.isDirectory()) return [entry];
 	const out: string[] = [];
@@ -551,40 +549,27 @@ export default function agenticLintTool(pi: ExtensionAPI): void {
 			_toolCallId,
 			params: LintParams,
 		): Promise<AgentToolResult<LintDetails>> => {
-			try {
-				const files = params.paths.flatMap(collectFiles);
-				if (files.length === 0) {
-					return {
-						content: [{ type: "text", text: "agentic_lint: no markdown files in paths" }],
-						details: { ok: false, error: "no files", paths: params.paths },
-					};
-				}
-				const result = main(files);
-				const findings = parseFindings(result.stdout);
-				const errors = findings.filter((f) => f.severity === "ERROR").length;
-				const warns = findings.filter((f) => f.severity === "WARN").length;
-				const summary =
-					result.stdout.trim() ||
-					`agentic_lint exit ${result.exitCode} (errors=${errors} warns=${warns})`;
-				return {
-					content: [{ type: "text", text: summary }],
-					details: {
-						ok: result.exitCode === 0,
-						exitCode: result.exitCode,
-						errors,
-						warns,
-						files,
-						findings,
-						stdout: result.stdout,
-					},
-				};
-			} catch (err) {
-				const message = err instanceof Error ? err.message : String(err);
-				return {
-					content: [{ type: "text", text: `agentic_lint failed: ${message}` }],
-					details: { ok: false, error: message, paths: params.paths },
-				};
-			}
+			const files = params.paths.flatMap(collectFiles);
+			if (files.length === 0) throw new Error("agentic_lint: no markdown files in paths");
+			const result = main(files);
+			const findings = parseFindings(result.stdout);
+			const errors = findings.filter((f) => f.severity === "ERROR").length;
+			const warns = findings.filter((f) => f.severity === "WARN").length;
+			const summary =
+				result.stdout.trim() ||
+				`agentic_lint exit ${result.exitCode} (errors=${errors} warns=${warns})`;
+			return {
+				content: [{ type: "text", text: summary }],
+				details: {
+					ok: result.exitCode === 0,
+					exitCode: result.exitCode,
+					errors,
+					warns,
+					files,
+					findings,
+					stdout: result.stdout,
+				},
+			};
 		},
 	});
 }

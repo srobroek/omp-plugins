@@ -15,7 +15,7 @@ TRIGGER
 
 MUST A throwing `tool_call` handler **blocks the tool** (`omp://skills/authoring-extensions.md`, `omp://extensions.md`).
 MUST A handler on every bash call that throws is a **total bash outage**. Session incident: `.has()` on a plain object → TypeError on the first bash command.
-MUST Wrap all fallible logic. Default allow on uncertainty.
+MUST Wrap all fallible logic. Advisory handlers default to allow on uncertainty; integrity gates (the bd close gate, the embedded write lock) fail closed.
 NOT Treat `tool_result` as fail-closed — it is not. Prefer it for advisory injection.
 
 ## Timers
@@ -24,7 +24,7 @@ MUST Schedule through `ctx` — enforced by `rule://authoring-extension-ctx-time
 
 ## Subprocess
 
-MUST Argv arrays — enforced by `rule://authoring-extension-argv-exec`.
+MUST Argv arrays — never a shell command string.
 MUST Explicit timeout.
 MUST Cache expensive results.
 MUST Prefilter first — never spawn on unrelated calls.
@@ -36,7 +36,7 @@ NOT A plain object — `obj["constructor"]` is truthy (prototype-chain hazard). 
 
 ## Load vs act
 
-MUST Register only during module load.
+DEFAULT Register in the factory; a tool registered later (e.g. in `session_start`) still mounts (`omp://extensions.md`).
 NOT Call runtime actions (`pi.sendMessage`) during load — throws `ExtensionRuntimeNotInitializedError` (`omp://extensions.md`).
 
 ## Ship check

@@ -70,7 +70,6 @@ def plugin_dirs() -> list[Path]:
 # owning plugin still take that plugin's prefix.
 ADOPTED_PREFIXES = {
 	"toolchain": ("coexistence-", "shell-", "terraform-", "infrastructure-", "backend-", "ops-"),
-	"authoring": ("research-",),
 }
 
 def check_rule(path: Path, plugin: str, fail: list[str]) -> str | None:

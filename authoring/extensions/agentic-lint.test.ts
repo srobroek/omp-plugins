@@ -116,7 +116,7 @@ describe("bounded frontmatter and directory traversal", () => {
 		]);
 	});
 
-	test("directory links neither loop nor lint outside files", async () => {
+	test("directory links below the root neither loop nor lint outside files", async () => {
 		const root = tmpDir();
 		const outside = tmpDir();
 		write(root, "rules/example.md", "---\ndescription: A valid discoverable rule\n---\nBody");
@@ -127,8 +127,26 @@ describe("bounded frontmatter and directory traversal", () => {
 		const result = await tool.execute("id", { paths: [root] });
 		expect(result.details.ok).toBe(true);
 		expect(result.content[0]?.text).not.toContain(outside);
-		const linked = await tool.execute("id", { paths: [join(root, "outside")] });
-		expect(linked.details.ok).toBe(false);
+	});
+
+	test("a symlinked root is followed", async () => {
+		const root = tmpDir();
+		const target = tmpDir();
+		write(target, "skills/x/SKILL.md", "---\nmalformed: [\n---\nBody");
+		symlinkSync(target, join(root, "linked"), "dir");
+		expect(collectFiles(join(root, "linked"))).toEqual([join(root, "linked", "skills/x/SKILL.md")]);
+		const linked = await registerTool().execute("id", { paths: [join(root, "linked")] });
+		expect(linked.details.findings?.some((finding) => finding.code === "E13")).toBe(true);
+	});
+
+	test("a run that cannot lint its paths throws, so the result is isError", async () => {
+		const empty = tmpDir();
+		const tool = registerTool();
+		await expect(tool.execute("id", { paths: [empty] })).rejects.toThrow("no markdown files");
+		let deep = empty;
+		for (let i = 0; i < 18; i++) deep = join(deep, `level-${i}`);
+		write(deep, "SKILL.md", "---\nname: deep\ndescription: A valid skill.\n---\nBody");
+		await expect(tool.execute("id", { paths: [empty] })).rejects.toThrow("depth cap 8");
 	});
 
 	test("rejects directories deeper than the traversal cap", async () => {
@@ -315,6 +333,13 @@ MUST prefer haiku for cheap tasks.
 			.filter((f) => f[0] === "ERROR")
 			.map((f) => f[1]);
 		expect(errorCodes).toContain("E3");
+	});
+
+	test("e3 routes a model name to a configured role, whatever the file is called", () => {
+		const p = write(tmpDir(), "rules/subagent-routing.md", "---\ndescription: Routing rule for the test\n---\nSend reviews to opus.\n");
+		const e3 = lint(p).find((f) => f[1] === "E3");
+		expect(e3?.[0]).toBe("ERROR");
+		expect(e3?.[2]).toContain("name a configured model role");
 	});
 
 	test("no override e1 is error", () => {

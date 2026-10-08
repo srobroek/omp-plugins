@@ -98,7 +98,7 @@ After cloning or creating a worktree, run:
 ./scripts/install-agnix-hooks.py
 ```
 
-The installer preserves the previous hooks path and all existing hooks. The tracked `pre-commit` wrapper runs agnix against the staged index before each commit. Git does not install tracked hooks automatically when you clone.
+The installer preserves the previous hooks path and all existing hooks. The tracked `pre-commit` wrapper runs agnix against the staged index before each commit, and `scripts/check-agentic-metadata.ts` when Markdown is staged. Git does not install tracked hooks automatically when you clone.
 
 ## Generated files
 
