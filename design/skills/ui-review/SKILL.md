@@ -21,7 +21,7 @@ TRIGGER
    isolation before any page assembled from it is judged, because a component-level failure is
    smaller to locate than the same failure on a page.
 2. Get the surface running and reachable: `bash` with a `name` and `ready` for the dev server, then
-   `browser` action `open` on the route. Start it ONCE and reuse it for the whole walk and
+   `browser.open({ name, url })` from Eval on the route. Start it ONCE and reuse it for the whole walk and
    for any later fix, because the process outlives the turn. -> the route responds, the tab
    is live, and the URL appears in the report header so the user can watch the same surface.
 3. `tab.ariaSnapshot()` for structure, roles, and accessible names. This is the
@@ -31,11 +31,15 @@ TRIGGER
    -> each claimed color, size, spacing, radius, and font value is a number read
    from `getComputedStyle`, never inferred from an image.
 5. Keyboard traversal: walk forward with `tab.press("Tab")`, reading `document.activeElement` after each move via `tab.evaluate`. Repeat until focus returns to the starting element; use `Escape` on every dismissible surface. -> focus order matches visual order, every stop paints a visible ring measured after its transition settled, nothing traps focus, and dismissal restores focus.
-6. Widths 1440, 768, 375 via `page.setViewport`; LOAD
+6. Widths 1440, 768, 375 via `tab.emulate({ viewport: { width, height } })`; LOAD
    `skill://ui-review/references/viewport-checks.md`. -> per width: no overflow,
-   no clipping, no overlap, and every target at least 24x24 CSS px.
-7. Console and network across the whole walk. -> zero console errors and zero
-   failed requests, or each one reported with its message and URL.
+   no clipping, no overlap, and every target at least 24x24 CSS px or inside the
+   SC 2.5.8 spacing exception.
+7. Console and network across the whole walk: `tab.clearConsole()` and `tab.clearRequests()`
+   before the first navigation, then `tab.console()`, `tab.errors()`, and `tab.requests()`;
+   the counting rules are in the console section of `skill://ui-review/references/probes.md`.
+   -> zero console errors, zero page errors, and zero failed requests, or each one reported
+   with its message and URL.
 8. `tab.screenshot({ selector, fullPage })` last, only when appearance itself is
    the question. -> the saved path sits beside the assertion it illustrates.
 
