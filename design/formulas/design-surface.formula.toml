@@ -175,9 +175,9 @@ Every colour comes from a token and every spacing value from the scale. Verify
 each component property against manifests/components.json or the component
 source before using it, including plausible-sounding ones such as shadow or
 size; a story name does not reflect a property name. Rename with lsp, never
-text substitution. Use skill://ui-microcopy for copy, skill://motion-design for
-motion, skill://platform-conformance for {{platform}} conventions. Bond
-mol-design-component onto this step for any primitive that needs its own bead.
+text substitution. Use skill://ui-microcopy for copy and skill://motion-design for
+motion. Bond mol-design-component onto this step for any primitive that needs its
+own bead.
 """
 
 [[steps]]

@@ -73,11 +73,10 @@ type = "task"
 needs = ["regrill"]
 labels = ["design", "design:subprocess", "sub:iterate"]
 description = """
-Apply only the change REGRILL established. Use skill://ui-microcopy for copy,
-skill://motion-design for motion, skill://platform-conformance for platform
-conventions, and cite the token for every value. Touch nothing the previous round
-already got right: an unrequested improvement smuggled into an iteration is a
-change no one approved.
+Apply only the change REGRILL established. Use skill://ui-microcopy for copy and
+skill://motion-design for motion, and cite the token for every value. Touch nothing
+the previous round already got right: an unrequested improvement smuggled into an
+iteration is a change no one approved.
 
 Record on this bead what changed since round {{round}} minus one, file by file,
 and which assertions from node {{node}} that change invalidates. That list is the

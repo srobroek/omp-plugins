@@ -1,13 +1,12 @@
 # Upstream routes for accessibility-audit
 
 The primary measurement route is not a skill at all: it is the `accessibility-scanner` MCP
-server this package declares. The upstream skills below carry the criteria coverage and the
-platform guidance that a scanner does not.
+server this package declares. The upstream skill below carries the criteria coverage that a
+scanner does not.
 
 | Upstream skill | Repo | Install |
 |---|---|---|
 | `accessibility` | `addyosmani/web-quality-skills` | `web-quality-skills@addy-web-quality-skills`, via `rule://design-upstream-preflight` |
-| the eight `*-design-guidelines` | `ehmo/platform-design-skills` | `platform-design-skills@srobroek-omp`, via `rule://design-upstream-preflight` |
 
 `web-quality-skills` is MIT with a LICENSE file (Copyright 2026 Addy Osmani). Because
 skill granularity is the whole plugin, it also installs `best-practices`,

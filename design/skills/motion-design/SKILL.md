@@ -10,7 +10,6 @@ Phase BUILD. Take motion from the system's scale and give every animation an opt
 TRIGGER
 + adding or changing an animation, transition, transform, or keyframe
 - verifying motion already implemented -> `ui-review`
-- platform motion conventions -> `platform-conformance`
 - discovering whether a motion scale exists -> `design-system-audit`
 
 ## Workflow

@@ -97,9 +97,8 @@ Implement the touch inside {{scope}}. Enumerate default, hover, focus-visible,
 active, disabled, loading, empty, error, selected. Implement and verify every
 applicable state; record N/A with a component-specific reason for the others.
 Every colour comes from a token and every spacing value from the scale. Rename tokens and
-components with lsp, never text substitution. Use skill://ui-microcopy for copy,
-skill://motion-design for motion, skill://platform-conformance for {{platform}}
-conventions.
+components with lsp, never text substitution. Use skill://ui-microcopy for copy and
+skill://motion-design for motion.
 """
 
 [[steps]]

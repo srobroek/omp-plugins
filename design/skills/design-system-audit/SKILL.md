@@ -13,7 +13,6 @@ TRIGGER
 + a literal color, radius, or spacing value is about to be written into a component
 - recording the system as a durable artifact -> `design-md`
 - judging an implemented surface against the system -> `ui-review`
-- vendor guideline conformance -> `platform-conformance`
 
 GATES
 ASK Creating a token set after an ABSENT verdict. The user approves a new system; the audit never starts one.

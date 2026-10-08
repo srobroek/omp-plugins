@@ -15,16 +15,13 @@ each comes from its upstream author.
 | `ss-lint`, `ss-review`, `ss-tokens`, `ss-score`, `ss-motion` | `bitjaru/styleseed` | `styleseed` | `styleseed@styleseed` | `node --version` | `design-system-audit`, `motion-design` tier 2 |
 | `accessibility` | `addyosmani/web-quality-skills` | `addy-web-quality-skills` | `web-quality-skills@addy-web-quality-skills` | none | `accessibility-audit` |
 | `html-wireframe`, `html-prototype` | `plannotator/effective-html` | `effective-html` | `plannotator-effective-html@effective-html` | `python3 --version` to serve | `design-prototype` |
-| `modern-web-guidance` | `GoogleChrome/modern-web-guidance` | `googlechrome` | `modern-web-guidance@googlechrome` | `npx --version`, network | `platform-conformance` web practice |
 | `frontend-slides` | `zarazhangrui/frontend-slides` | `frontend-slides` | `frontend-slides@frontend-slides` | `python-pptx`, only for PPT conversion | `design-prototype` deck row |
 | `web-asset-generator` | `alonw0/web-asset-generator` | `web-asset-generator-marketplace` | `web-asset-generator@web-asset-generator-marketplace` | `Pillow` | `design-prototype` asset row |
 | `superdesign` | `superdesigndev/superdesign-skill` | `superdesign` | `superdesign@superdesign` | authenticated account with credits | `design-prototype` hosted row, after the user confirms |
 | `create-design-md` | `ibelick/ui-skills` | `srobroek-omp` | `ui-skills@srobroek-omp` | none | `design-md` |
-| the eight `*-design-guidelines` | `ehmo/platform-design-skills` | `srobroek-omp` | `platform-design-skills@srobroek-omp` | none | `platform-conformance`; `accessibility-audit` on a native surface |
 
-The last two rows install through the `srobroek-omp` catalog because neither upstream ships
-a marketplace or plugin manifest. A direct git install of `ehmo/platform-design-skills`
-fails with `package.json not found`.
+The `create-design-md` row installs through the `srobroek-omp` catalog because its upstream
+ships no marketplace or plugin manifest.
 
 ## Procedure
 

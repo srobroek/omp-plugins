@@ -26,7 +26,7 @@ Both installation methods take effect in the next session. OMP discovers plugins
 
 ## Usage
 
-In that next session, OMP loads eleven skills and lists six rules. For interface
+In that next session, OMP loads eight skills and lists six rules. For interface
 work, spawn `ui-ux-specialist`. Confirm the package registered:
 
 ```bash
@@ -48,7 +48,6 @@ The copy skill is implemented locally as `ui-microcopy`, which includes the merg
 | `design-md` | routes to `create-design-md`, which needs a repository or URL to extract from | Author and lint repo-root DESIGN.md |
 | `ui-review` | local, drives OMP `browser` | Drive a real surface and measure it |
 | `accessibility-audit` | the `accessibility-scanner` server measures; `accessibility` covers criteria; the `@axe-core/cli` gate is the fallback | Check WCAG 2.2 AA with measured values |
-| `platform-conformance` | routes to eight `*-design-guidelines` and `modern-web-guidance` | Check vendor conventions per platform |
 | `motion-design` | the `motionlint` CLI measures; `ss-motion` authors React `motion.X` only | Set durations, easings, reduced-motion branches |
 | `ui-microcopy` | local, with merged UX-copy guidance | Write and review interface copy, errors, empty states, and CTAs |
 | `design-prototype` | routes by fidelity to five upstreams and two servers | Produce a wireframe, prototype, mockup, or deck |
@@ -265,7 +264,6 @@ Use the first-choice asset for each topic:
 | Design system and tokens | `ss-tokens` |
 | DESIGN.md artifact | `create-design-md` |
 | Accessibility, web | `accessibility` |
-| Platform conformance | the eight `ehmo` `*-design-guidelines` |
 | Motion | `ss-motion` |
 | Microcopy | `ui-microcopy` |
 | Wireframing | `html-wireframe`, `wireloom` |
@@ -324,18 +322,14 @@ omp plugin install styleseed@styleseed
 | `styleseed@styleseed` | `bitjaru/styleseed` | `ss-lint`, `ss-review`, `ss-tokens`, `ss-motion`, `ss-score`, and 18 more |
 | `web-quality-skills@addy-web-quality-skills` | `addyosmani/web-quality-skills` | `accessibility`, and 5 more |
 | `plannotator-effective-html@effective-html` | `plannotator/effective-html` | `html-wireframe`, `html-prototype`, and 4 more |
-| `modern-web-guidance@googlechrome` | `GoogleChrome/modern-web-guidance` | `modern-web-guidance`, `chrome-extensions` |
 | `frontend-slides@frontend-slides` | `zarazhangrui/frontend-slides` | `frontend-slides` |
 | `web-asset-generator@web-asset-generator-marketplace` | `alonw0/web-asset-generator` | `web-asset-generator` |
 | `superdesign@superdesign` | `superdesigndev/superdesign-skill` | `superdesign`, installed only after the user confirms the account |
 | `ui-skills@srobroek-omp` | `ibelick/ui-skills` | `create-design-md`, and 6 more |
-| `platform-design-skills@srobroek-omp` | `ehmo/platform-design-skills` | the eight `*-design-guidelines` |
 
-Two rows install through this catalog. Neither upstream ships a marketplace or plugin
-manifest: `ibelick/ui-skills` carries an Astro site's `package.json`, and
-`ehmo/platform-design-skills` carries only `skills/`. A direct git install of the latter
-fails with `package.json not found`. Every other upstream installs from its author, so a
-new upstream release needs no catalog change here.
+One row installs through this catalog, because its upstream ships no marketplace or plugin
+manifest: `ibelick/ui-skills` carries an Astro site's `package.json`. Every other upstream
+installs from its author, so a new upstream release needs no catalog change here.
 
 OMP discovers skills at session start. A plugin the preflight installs mid-session is not
 reachable through `skill://` until the next session, so the preflight reads its SKILL.md
@@ -347,7 +341,7 @@ collisions resolve first-wins without a diagnostic.
 
 | Prerequisite | Entry |
 |---|---|
-| Node and `npx` | `impeccable detect`, `styleseed` scripts, `modern-web-guidance` |
+| Node and `npx` | `impeccable detect`, `styleseed` scripts |
 | Pillow, through `uv run --with pillow` when absent | `web-asset-generator` |
 | `python-pptx`, for PPT conversion only | `frontend-slides` |
 | Account, and credits for media | `superdesign` |

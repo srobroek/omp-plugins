@@ -114,8 +114,8 @@ Each plugin owns its version in `<plugin>/.omp-plugin/plugin.json`. The release 
 files its config names. OMP, meanwhile, compares `plugins[].version` in the single top-level
 catalog, so a release assembles that catalog from the 26 manifests.
 
-The catalog carries 29 entries: the 26 plugins here, plus 3 third-party plugins from
-`scripts/third-party-plugins.json`: `sniff`, plus `ui-skills` and `platform-design-skills`, whose upstreams ship no marketplace.
+The catalog carries 27 entries: the 25 published plugins here (`browser-tools` sets `publish: false`), plus 2 third-party plugins from
+`scripts/third-party-plugins.json`: `sniff`, plus `ui-skills`, whose upstream ships no marketplace.
 Install resolution is package-local.
 `scripts/check-catalog-validation.py` rejects malformed third-party input instead of publishing
 an incomplete catalog.

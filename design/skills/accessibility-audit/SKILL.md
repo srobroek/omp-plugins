@@ -10,7 +10,6 @@ Phase CRITIQUE. Measure against WCAG 2.2 level AA and report values, not opinion
 TRIGGER
 + "is this accessible", "check accessibility", "WCAG", "screen reader"
 - general visual or UX quality -> `ui-review`
-- vendor platform conventions -> `platform-conformance`
 - error and empty-state wording -> `ui-microcopy`
 
 ## Workflow
@@ -26,8 +25,8 @@ TRIGGER
      is untested measurement evidence; it cannot produce a PASS or replace the rendered audit.
    - web surface, for the criteria coverage and the audit's substance: upstream skill
      `accessibility`.
-   - native surface: the matching `ehmo` platform skill via `skill://platform-conformance`,
-     which carries each platform's own accessibility guidance.
+   - native surface: no upstream skill is routed. Measure through `computer` and the OS
+     accessibility tree with `skill://ui-review`, and report platform guidance as untested.
    - FALLBACK, and only for a multi-URL CI gate:
      `npx --yes --package=@axe-core/cli axe "<url>" --stdout --exit`. It accepts more than one
      quoted URL, JSON node targets, `--include` and `--exclude`, and exits non-zero,
@@ -46,17 +45,16 @@ TRIGGER
      Quote every substituted URL: a query string carries `&` and `?`, which an unquoted
      argument hands to the shell. The bin is `axe`, not the package name, so pass `--package`.
 2. Apply `rule://design-upstream-preflight` for the routed skill BEFORE loading it: the
-   `accessibility` row, plus the platform row on a native surface. -> installed, and loaded
-   via `skill://` or, when installed this session, from its install path. Install refused
-   or failed: do NOT improvise. A thin substitute audit is worse than none, because its
+   `accessibility` row on a web surface. -> installed, and loaded via `skill://` or, when
+   installed this session, from its install path. Install refused or failed: do NOT
+   improvise. A thin substitute audit is worse than none, because its
    verdict reads exactly like the real one. Report the gap. The `accessibility-scanner` MCP
    server above needs no install and, when connected, is the primary measurement route, so
    measurement continues without the upstream. The upstream's criteria coverage does not:
    do not improvise it.
    Bound that continuation: both no-install routes are WEB-ONLY and cover only a runnable
    URL. Neither substitutes for source review, for a manual keyboard walkthrough, or for
-   native-platform guidance. On a NATIVE surface with the `ehmo` skill absent, nothing
-   substitutes: STOP, report, and ask.
+   native-platform guidance.
 3. Measure on the live surface with `skill://ui-review`: `tab.ariaSnapshot()` for roles and
    accessible names, `tab.evaluate` for computed colors and target boxes, `tab.press` for
    focus order and traps. -> every finding carries a measured value and a required value.

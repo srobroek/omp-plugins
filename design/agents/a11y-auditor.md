@@ -18,10 +18,10 @@ restrict their arguments:
 - `write` ONLY to an `xd://` device path. Its one use here is the accessibility scanner:
   write `{"url": "..."}` to `xd://mcp__design_accessibility_scanner_scan_accessibility`.
   Never write to a file path.
-- `bash` ONLY for the `rule://design-upstream-preflight` procedure on the rows this audit
-  reaches: the `accessibility` row, and on a native surface the `*-design-guidelines` row.
-  That is `omp plugin list --json`, `omp plugin marketplace list`, `omp plugin marketplace
-  add`, and `omp plugin install` with the rule's listed addresses. Run no other command.
+- `bash` ONLY for the `rule://design-upstream-preflight` procedure on the row this audit
+  reaches, the `accessibility` row: `omp plugin list --json`, `omp plugin marketplace
+  list`, `omp plugin marketplace add`, and `omp plugin install` with the rule's listed
+  address. Run no other command.
 
 ## Task
 

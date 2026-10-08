@@ -10,7 +10,6 @@ Phase VERIFY. Drive the real surface and measure what a picture can only suggest
 TRIGGER
 + "review this UI", "check how this looks", "does this look right"
 - "is this accessible", a WCAG conformance question -> `accessibility-audit`
-- iOS, Android, macOS, or Windows convention questions -> `platform-conformance`
 - Token and primitive discovery before building -> `design-system-audit`
 
 ## Workflow
