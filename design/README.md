@@ -59,6 +59,7 @@ The copy skill is implemented locally as `ui-microcopy`, which includes the merg
 | `ui-ux-specialist` | Design lead. Grills, builds bottom-up, delegates critique | `@designer` |
 | `design-critic` | Read-only visual and UX critique | `@designer` |
 | `a11y-auditor` | Read-only WCAG 2.2 AA audit | `@designer` |
+| `ui-implementer` | Builds one UI unit on existing tokens and components, verified at three widths. Escalates wider work to `ui-ux-specialist` | `@designer` |
 
 The lead spawns `design-critic` and `a11y-auditor` in one parallel batch. It also spawns
 bundled `scout` for recon and `operator` for mechanical steps.
