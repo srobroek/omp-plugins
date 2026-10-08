@@ -11,18 +11,6 @@
         "url": "https://github.com/srobroek/sniff.git",
         "ref": "main"
       }
-    },
-    {
-      "name": "ui-skills",
-      "description": "Authoring a DESIGN.md artifact, plus baseline UI and metadata fixing skills.",
-      "version": "0.1.0",
-      "category": "development",
-      "license": "MIT",
-      "source": {
-        "source": "github",
-        "repo": "ibelick/ui-skills",
-        "ref": "main"
-      }
     }
   ]
 }

@@ -11,11 +11,11 @@ or public website". It has no greenfield mode, which is why step 1 of the skill 
 there is no source to inspect. The `@google/design.md` CLI below validates a file that
 already exists and is not a way around that.
 
-## What the entry brings
+## What the upstream ships
 
-MIT with a LICENSE file (Copyright 2026 Julien Thibeaut). Skill granularity is the whole
-plugin, so the entry also installs `baseline-ui`, `fixing-accessibility`,
-`fixing-metadata`, `fixing-motion-performance`, `improve-ui`, and `ui-skills-root`. None
+MIT with a LICENSE file (Copyright 2026 Julien Thibeaut). The upstream repository also
+ships `baseline-ui`, `fixing-accessibility`, `fixing-metadata`,
+`fixing-motion-performance`, `improve-ui`, and a root skill. None
 of those is routed to here: `fixing-accessibility` is displaced by
 `skill://accessibility-audit`, `fixing-motion-performance` by `skill://motion-design`,
 and `baseline-ui` and `improve-ui` by `impeccable`.

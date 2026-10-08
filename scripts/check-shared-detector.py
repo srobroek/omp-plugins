@@ -50,6 +50,10 @@ DUPLICATED: tuple[tuple[str, ...], ...] = (
         "chezmoi/extensions/tool-targets.ts",
         "whats-new/extensions/tool-targets.ts",
     ),
+    (
+        "authoring/extensions/written-paths.ts",
+        "design/extensions/written-paths.ts",
+    ),
 )
 
 

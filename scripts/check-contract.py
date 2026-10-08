@@ -23,8 +23,9 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
 
-# Bundled agents. Shipping one of these names shadows the bundled definition.
-BUNDLED_AGENTS = {"scout", "designer", "reviewer", "security-reviewer", "librarian", "task", "sonic"}
+# Bundled agents (`EMBEDDED_AGENT_DEFS` in OMP's `src/task/agents.ts`). Shipping one of
+# these names shadows the bundled definition.
+BUNDLED_AGENTS = {"scout", "reviewer", "security-reviewer", "task", "sonic"}
 
 # The configured roles. An agent model must name one of these, never a raw selector.
 ROLES = {
