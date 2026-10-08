@@ -7,7 +7,7 @@ description: Use when stress-testing an architectural decision, technology choic
 
 Analyze and debate the topic from the user request.
 
-Answer an already-specified request directly. Ask only for missing context that changes the decision; use `grilling` when installed and a deeper interview is warranted.
+Answer an already-specified request directly. Ask only for missing context that changes the decision; use `skill://grilling` when a deeper interview is warranted.
 
 ## Process
 

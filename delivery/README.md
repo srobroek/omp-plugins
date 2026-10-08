@@ -109,3 +109,7 @@ The agent that creates a PR owns its automated review loop until approval or exp
 ## License
 
 See the repository license.
+
+## Works with quality
+
+`pr-reviewer` and `delivery-git-workflow` load `skill://quality-code-design` references. Install `quality` too; without it they report the missing guidance.

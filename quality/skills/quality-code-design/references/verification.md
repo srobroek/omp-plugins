@@ -1,16 +1,16 @@
 # Verification proportional to risk
 
-Read when selecting tests, reproducing a defect, or making verification or performance claims. Follow required project gates and the worker/lead division of verification responsibility.
+Read when selecting tests or making verification or performance claims. Follow required project gates and the worker/lead division of verification responsibility. Hard bugs: [debugging.md](debugging.md). Test-first loop: [test-first.md](test-first.md).
 
 ## Acceptance and independent expectations
 
-**Do:** derive checks from the requested behavior, contracts, and credible failures. For a behavioral bug, reproduce the failure before the fix when feasible, then show that the same check passes. Cover relevant boundaries, errors, and preserved behavior.
+**Do:** derive checks from the requested behavior, contracts, and credible failures. Cover relevant boundaries, errors, and preserved behavior.
 **Do not:** copy the implementation into the expected result, weaken an assertion to match generated behavior, or call an unavailable check a pass.
 
 Bad: a rounding bug is "fixed" by changing the test's expected total to the new output.
 Good: establish the rounding contract independently, add the disputed input, and compare the old and new behavior against that contract.
 
-**Exception:** reproduction can require inaccessible production data, hardware, or timing. Use the best available trace or focused experiment, state its limit, and identify the missing evidence. Do not fabricate a reproduction or block a harmless edit on unrelated infrastructure.
+**Exception:** a check can require inaccessible production data, hardware, or timing. Use the best available trace or focused experiment, state its limit, and identify the missing evidence. Do not fabricate a result or block a harmless edit on unrelated infrastructure.
 
 ## Fidelity and maintenance cost
 
@@ -48,14 +48,6 @@ Good: measure the affected path, identify the bottleneck, and compare behavior a
 
 **Exception:** a security or correctness fix can proceed without a benchmark when it makes no performance claim. State an unavailable runtime check as an evidence gap.
 
-## Completion evidence
-
-**Do:** report checks actually run, their result, relevant commit/artifact/environment, and remaining limits. Rerun checks affected by subsequent edits and preserve required integration gates.
-**Do not:** present a worker's focused tests as whole-repository validation, or a passing CI run on an older head as proof for the new head.
-
-Bad: "All verified" after editing code following the test run.
-Good: rerun affected checks and report that evidence; distinguish implemented, locally verified, CI verified, deployed, and observed states.
-
-**Exception:** documentation or mechanical changes need only relevant validation plus required gates; do not create tests that merely restate the edit.
+Completion claims: report only checks run against the current head; release-state wording (merged, deployed, observed) is in [release.md](release.md).
 
 Sources: [Google SMURF testing tradeoffs](https://testing.googleblog.com/2024/10/smurf-beyond-test-pyramid.html), [test fidelity and doubles](https://testing.googleblog.com/2024/02/increase-test-fidelity-by-avoiding-mocks.html), and [Software Engineering at Google on unit tests](https://abseil.io/resources/swe-book/html/ch12.html). These support contextual test selection, not universal test quotas.

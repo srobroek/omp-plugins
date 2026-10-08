@@ -1,0 +1,53 @@
+quality
+=======
+
+Parts of this plugin derive, in modified form, from:
+
+  Project:     mattpocock-skills 1.2.3
+  Repository:  https://github.com/mattpocock/skills
+  Copied:      2026-10-08
+  Licence:     MIT License, Copyright (c) 2026 Matt Pocock
+
+The full licence text is in LICENSE-mattpocock-skills beside this file, copied from the
+installed mattpocock-skills 1.2.3 package. The MIT licence requires that the copyright
+notice and permission notice appear in all copies or substantial portions of the
+software; that file satisfies it for the content listed below.
+
+Vendored skill (carries its own LICENSE and NOTICE):
+
+  skills/prototype-logic/   <- skills/engineering/prototype/SKILL.md, LOGIC.md
+
+Folded into skills/quality-code-design/references/, rewritten and merged with this
+plugin's own guidance:
+
+  references/debugging.md     <- skills/engineering/diagnosing-bugs/SKILL.md
+                                 (feedback-loop catalogue, loop tightening,
+                                 minimisation, ranked hypotheses, instrumentation,
+                                 regression seam, redaction and cleanup). Dropped: the
+                                 hard no-hypothesis-without-a-loop gate, the CONTEXT.md
+                                 read, the interactive-user assumption, and
+                                 scripts/hitl-loop.template.sh.
+  references/test-first.md    <- skills/engineering/tdd/SKILL.md, mocking.md
+                                 (vertical slices, red before green, per-endpoint
+                                 injected clients). Dropped: the user-confirmed-seam
+                                 gate, the Skill-tool call, and "refactoring is not
+                                 part of the loop".
+  references/deep-modules.md  <- skills/engineering/codebase-design/SKILL.md,
+                                 DEEPENING.md, DESIGN-IT-TWICE.md (vocabulary, depth,
+                                 seams, dependency categories, replace-don't-layer
+                                 tests, optional design-it-twice). Changed: one seam
+                                 rule replaces the two-adapter rule; edge cases are
+                                 ported to interface tests before old tests are
+                                 deleted. Dropped: the term bans.
+  references/review.md        <- skills/engineering/code-review/SKILL.md (fixed-point
+                                 pinning, spec-source discovery, Standards and Spec
+                                 axes, smell baseline). Changed: work in progress is
+                                 included, Beads is a spec source, both axes run in one
+                                 reviewer, and smells route to sniff's refactoring
+                                 catalog. Dropped: the issue-tracker and setup
+                                 references.
+  references/lifecycle.md     <- skills/engineering/domain-modeling/SKILL.md,
+                                 ADR-FORMAT.md (decision-record offer criteria and
+                                 qualifying cases, term-challenge discipline). Changed:
+                                 docs/decisions instead of docs/adr, one numbering
+                                 owner, no CONTEXT.md without authorization.

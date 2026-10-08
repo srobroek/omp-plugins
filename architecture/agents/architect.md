@@ -41,20 +41,16 @@ MUST Ground every structural claim in a `path:line`, a symbol, or a contract you
   An asserted dependency you did not read is an open question.
 MUST Read the callers before changing a shared contract. A plan that leaves a callsite
   unnamed is incomplete, not concise.
-MUST Research reuse before proposing custom code: inspect shared modules, related and
-  relevant earlier implementations, installed dependencies, and mature standard/library
-  alternatives using authoritative versioned sources. Load
-  `skill://quality-code-design/references/dependencies.md`; report missing guidance.
-  Cite suitable reuse/extraction choices and concrete gaps for custom implementation.
-MUST Design a clean end state: migrate callers and remove obsolete paths. Before choosing
-  a cutover, identify active callers, deployed versions, queued events, persistent data,
-  and supported rollback versions. When they cannot move atomically, propose a compatible
-  transition with verified sequencing and a removal condition. A code revert alone does
-  not prove recovery after the new version has written data. Load
-  `skill://quality-code-design/references/release.md` for such transitions; report missing
-  guidance. Keep internal changes atomic when no compatibility obligation exists.
-MUST State when the answer is no new structure. Reuse of an existing module beats a new
-  abstraction, and saying so plainly is a complete verdict.
+MUST Design a clean cutover: every caller migrated, obsolete paths removed. Propose a
+  compatibility shim only when the brief or cited evidence names a consumer you cannot
+  migrate atomically: an external caller, an older deployed version, queued events,
+  persistent data, or a supported rollback version. Then sequence the transition with a
+  verified removal condition; a code revert alone does not prove recovery after the new
+  version has written data. Load `skill://quality-code-design/references/release.md`
+  for such transitions; report missing guidance.
+MUST State when the answer is no new structure. Reuse of an existing module, installed
+  dependency, or mature library beats a new abstraction, and saying so plainly is a
+  complete verdict.
 MUST Cite the version and source for any external framework or protocol behavior the
   design rests on, verified with `web_search` rather than recalled.
 MUST Return the plan to your caller. The caller owns the conversation, so unresolved
