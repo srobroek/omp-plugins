@@ -141,8 +141,8 @@ See `skills/design-system-audit/references/token-pipeline.md`.
 The Storybook MCP server is opt-in on both harnesses, because it points at
 `http://localhost:6006/mcp` and most projects run no Storybook.
 
-On OMP, the package manifest declares it disabled, under the runtime key
-`design:storybook`. Enable it in the user file for the active profile:
+On an OMP marketplace install, the package manifest declares it disabled, under the
+runtime key `design:storybook`. Enable it in the user file for the active profile:
 `~/.omp/agent/mcp.json` for the default profile, or
 `~/.omp/profiles/<name>/agent/mcp.json` for a named profile. The loader documentation says
 `enabledServers` can force-enable a same-named disabled entry, and accepts `:` in runtime
@@ -155,7 +155,9 @@ names:
 ```
 
 Or add a separate native server named `storybook`, to `.omp/mcp.json` for one project or
-to `~/.omp/agent/mcp.json` for your user. Use one of the two, never both:
+to `~/.omp/agent/mcp.json` for your user. Use one of the two, never both. A linked
+checkout (`omp plugin link`) reads the package's `.mcp.json` rather than the manifest, and
+that file declares no Storybook server, so a linked install takes this route:
 
 ```json
 {
