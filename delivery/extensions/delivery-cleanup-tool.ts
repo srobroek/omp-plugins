@@ -22,6 +22,7 @@ import {
 import {
 	buildReceipt,
 	canonicalLedger,
+	closeoutCommands,
 	type LandingReceipt,
 	listReceipts,
 	type ReceiptPr,
@@ -603,9 +604,9 @@ function verifyLedger(receipt: LandingReceipt, cwd: string, receiptPath: string,
 			"a repository whose canonical root can be resolved, so the receipt's ledger claim can be recomputed rather than trusted",
 		);
 	}
+	const landedSha = receipt.pr.mergeCommitOid ?? "missing";
 	const nativeSteps = receipt.beads.ids.flatMap(id => {
-		const update = `bd update ${id} --set-metadata pr=${receipt.pr.number} --set-metadata merge_sha=${receipt.pr.mergeCommitOid ?? "missing"}`;
-		const close = `bd close ${id} --reason "PR #${receipt.pr.number} merged as ${receipt.pr.mergeCommitOid ?? "missing"}; receipt ${receiptPath}"`;
+		const { update, close } = closeoutCommands(id, receipt.pr.number, landedSha, receiptPath);
 		return [update, close];
 	});
 	if (classification.active !== receipt.beads.ledgerActive) {
@@ -649,8 +650,7 @@ function verifyLedger(receipt: LandingReceipt, cwd: string, receiptPath: string,
 	}
 	for (const id of receipt.beads.ids) {
 		const issue = rows.get(id);
-		const update = `bd update ${id} --set-metadata pr=${receipt.pr.number} --set-metadata merge_sha=${receipt.pr.mergeCommitOid ?? "missing"}`;
-		const close = `bd close ${id} --reason "PR #${receipt.pr.number} merged as ${receipt.pr.mergeCommitOid ?? "missing"}; receipt ${receiptPath}"`;
+		const { update, close } = closeoutCommands(id, receipt.pr.number, landedSha, receiptPath);
 		if (issue === undefined) return refuse(`beads.${id}`, null, `a bead returned by bd show before ${update} then ${close}`);
 		const status = text(issue, "status");
 		if (status !== "closed") return refuse(`beads.${id}.status`, status, `"closed" after ${update} then ${close}`);

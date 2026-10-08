@@ -1,10 +1,10 @@
-import { describe, expect, test } from "bun:test";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, symlinkSync, watch, writeFileSync } from "node:fs";
+import { afterEach, describe, expect, test } from "bun:test";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, watch, writeFileSync } from "node:fs";
 import { devNull, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
 import pkg from "../package.json" with { type: "json" };
-import deliveryLandTool, { beadIdsFromBranch, type LandParams, landPullRequest } from "./delivery-land-tool.ts";
+import deliveryLandTool, { beadIdsFromBranch, type LandParams, landPullRequest, resolveLandingTarget } from "./delivery-land-tool.ts";
 import { type AsyncCliRunner, type CliResult, type CliRunner, runCliAsync } from "./forge-adapter.ts";
 import { RECEIPT_SCHEMA, readReceipt, repoKey, writeReceipt } from "./landing-receipt.ts";
 
@@ -56,6 +56,22 @@ const gitlabMr = (overrides: Record<string, unknown> = {}): string =>
 		...overrides,
 	});
 
+/** Every fixture directory this file creates, so a test can prove none outlives its test. */
+const created: string[] = [];
+/** The ones the running test created, removed once it ends. */
+const pending: string[] = [];
+
+function temporaryDirectory(prefix: string): string {
+	const path = mkdtempSync(join(tmpdir(), prefix));
+	created.push(path);
+	pending.push(path);
+	return path;
+}
+
+afterEach(() => {
+	for (const path of pending.splice(0)) rmSync(path, { recursive: true, force: true });
+});
+
 /**
  * A repository whose git reads answer from a real temporary directory.
  *
@@ -64,9 +80,9 @@ const gitlabMr = (overrides: Record<string, unknown> = {}): string =>
  * `canonicalRoot` is the parent this landing was keyed from.
  */
 function repository(): { canonical: string; receipts: string } {
-	const canonical = mkdtempSync(join(tmpdir(), "delivery-land-repo-"));
+	const canonical = temporaryDirectory("delivery-land-repo-");
 	mkdirSync(join(canonical, ".git"));
-	return { canonical, receipts: mkdtempSync(join(tmpdir(), "delivery-land-receipts-")) };
+	return { canonical, receipts: temporaryDirectory("delivery-land-receipts-") };
 }
 
 type Answers = {
@@ -175,7 +191,7 @@ const numbered = (line: number, text: string): string => `${NUMBERED.map((value,
  */
 function rebasedRepository(variant: "clean" | "altered" | "context-moved" = "clean"): { canonical: string; receipts: string; head: string; landed: string } {
 	const moved = variant === "context-moved";
-	const canonical = realpathSync(mkdtempSync(join(tmpdir(), "delivery-land-rebase-")));
+	const canonical = realpathSync(temporaryDirectory("delivery-land-rebase-"));
 	git(canonical, ["init", "-q", "-b", "main"]);
 	commitFile(canonical, "base.txt", moved ? numbered(0, "") : "base\n", "base");
 	git(canonical, ["checkout", "-q", "-b", BRANCH]);
@@ -193,7 +209,7 @@ function rebasedRepository(variant: "clean" | "altered" | "context-moved" = "cle
 	}
 	const landed = git(canonical, ["rev-parse", "HEAD"]);
 	git(canonical, ["checkout", "-q", "main"]);
-	return { canonical, receipts: mkdtempSync(join(tmpdir(), "delivery-land-receipts-")), head, landed };
+	return { canonical, receipts: temporaryDirectory("delivery-land-receipts-"), head, landed };
 }
 
 /** A commit's `git patch-id --stable` over Git's default three-line-context diff. */
@@ -562,6 +578,21 @@ describe("delivery_land", () => {
 		expect(outcome.reason).toContain("observed exit 1");
 		expect(outcome.reason).toContain("Pull request is not mergeable");
 		expect(files()).toHaveLength(0);
+	});
+
+	test("a failed pull-request read and a failed merge describe the failure in one spelling", async () => {
+		const view = ["gh", "pr", "view", "470", "--repo", "github.com/srobroek/omp-plugins", "--json", "number,url,state,baseRefName,headRefName,headRefOid,mergeCommit,mergedAt,title"].join(" ");
+		const merge = `gh pr merge 470 --squash --subject ${TITLE} --delete-branch --repo github.com/srobroek/omp-plugins --match-head-commit ${HEAD_OID}`;
+		const cases: Array<[Answers, string]> = [
+			[{ prView: [completed("", 4, "  HTTP 401: Bad credentials \n")] }, `${view}: observed exit 4, expected exit 0; stderr: HTTP 401: Bad credentials`],
+			[{ prView: [{ ok: false, exitCode: null, stdout: "", stderr: "", error: "gh produced no exit status within 30000ms" }] }, `${view}: observed gh produced no exit status within 30000ms, expected exit 0`],
+			[{ prView: [completed(githubPr())], merge: completed("", 1, "Pull request is not mergeable") }, `${merge}: observed exit 1, expected exit 0; stderr: Pull request is not mergeable; no receipt was written`],
+			[{ prView: [completed(githubPr())], merge: { ok: true, exitCode: null, stdout: "", stderr: "" } }, `${merge}: observed no exit status, expected exit 0; no receipt was written`],
+		];
+		for (const [answers, reason] of cases) {
+			const { outcome } = await land(answers, REVIEWED);
+			expect(outcome.ok ? null : outcome.reason).toBe(reason);
+		}
 	});
 
 	test("an unknown remote-absence verdict leaves deletedRemote false and the timestamp null", async () => {
@@ -1094,7 +1125,7 @@ describe("delivery_land", () => {
 
 	test("the receipt directory defaults under the agent directory, never into the checkout", async () => {
 		const { canonical } = repository();
-		const agentDir = mkdtempSync(join(tmpdir(), "delivery-land-agent-"));
+		const agentDir = temporaryDirectory("delivery-land-agent-");
 		const { run } = runner({ prView: [completed(mergedGithubPr())] }, canonical);
 		const outcome = await landPullRequest({ pr: 470 }, { run, cwd: canonical, now: () => NOW, env: { PI_CODING_AGENT_DIR: agentDir } });
 
@@ -1227,7 +1258,7 @@ describe("delivery_land", () => {
 
 		// A forward key a later version added must survive the transport untouched.
 		const forward = { ...receipt, mergeQueueEntry: { id: "q-1" } };
-		const written = writeReceipt(forward, mkdtempSync(join(tmpdir(), "delivery-land-forward-")));
+		const written = writeReceipt(forward, temporaryDirectory("delivery-land-forward-"));
 		expect(readReceipt(written)).toEqual({ ok: true, receipt: forward });
 	});
 
@@ -1238,7 +1269,7 @@ describe("delivery_land", () => {
 	 */
 	test("a whitespace-only PI_CODING_AGENT_DIR puts the receipt under $HOME/.omp", async () => {
 		const { canonical } = repository();
-		const home = mkdtempSync(join(tmpdir(), "delivery-land-home-"));
+		const home = temporaryDirectory("delivery-land-home-");
 		const { run } = runner({ prView: [completed(mergedGithubPr())] }, canonical);
 		const outcome = await landPullRequest(
 			{ pr: 470 },
@@ -1332,11 +1363,11 @@ describe("delivery_land", () => {
 	 * demand a bead for a branch that names none.
 	 */
 	test("a ledger-free repository below an ancestor .beads lands without a beadId", async () => {
-		const outer = realpathSync(mkdtempSync(join(tmpdir(), "delivery-land-home-")));
+		const outer = realpathSync(temporaryDirectory("delivery-land-home-"));
 		mkdirSync(join(outer, ".beads"));
 		const canonical = join(outer, "repo");
 		mkdirSync(join(canonical, ".git"), { recursive: true });
-		const receipts = mkdtempSync(join(tmpdir(), "delivery-land-receipts-"));
+		const receipts = temporaryDirectory("delivery-land-receipts-");
 		const { run, calls } = runner(
 			{ prView: [completed(githubPr({ headRefName: "feature/no-bead" })), completed(mergedGithubPr({ headRefName: "feature/no-bead" }))] },
 			canonical,
@@ -1448,15 +1479,15 @@ describe("delivery_land", () => {
 	 * forge timeout, and nothing may be merged or written after it.
 	 */
 	test("an interrupt kills a hung forge call and lands nothing", async () => {
-		const canonical = realpathSync(mkdtempSync(join(tmpdir(), "delivery-land-abort-")));
+		const canonical = realpathSync(temporaryDirectory("delivery-land-abort-"));
 		git(canonical, ["init", "-q", "-b", "main"]);
 		git(canonical, ["remote", "add", "origin", REMOTE_URL]);
-		const bin = mkdtempSync(join(tmpdir(), "delivery-land-bin-"));
+		const bin = temporaryDirectory("delivery-land-bin-");
 		const pidFile = join(bin, "gh.pid");
 		// Written aside and renamed, so the pid file exists only once it is whole.
 		writeFileSync(join(bin, "gh"), `#!/bin/sh\necho $$ > '${pidFile}.tmp' && mv '${pidFile}.tmp' '${pidFile}'\nexec sleep 30\n`);
 		chmodSync(join(bin, "gh"), 0o755);
-		const receipts = mkdtempSync(join(tmpdir(), "delivery-land-receipts-"));
+		const receipts = temporaryDirectory("delivery-land-receipts-");
 		const controller = new AbortController();
 		const started = Date.now();
 		const pending = landPullRequest(
@@ -1493,6 +1524,48 @@ describe("branch reading", () => {
 	});
 });
 
+describe("landing target resolution", () => {
+	/** A Git read answering the repository observation and one remote URL, recording each argv. */
+	function gitAnswering(remoteUrl: string): { git: (argv: readonly string[]) => Promise<string | null>; reads: string[][]; cwd: string } {
+		const { canonical } = repository();
+		const reads: string[][] = [];
+		const git = async (argv: readonly string[]): Promise<string | null> => {
+			reads.push([...argv]);
+			if (argv[0] === "rev-parse") return `${join(canonical, ".git")}\n${canonical}\n`;
+			if (argv.join(" ") === "remote get-url origin") return `${remoteUrl}\n`;
+			return null;
+		};
+		return { git, reads, cwd: canonical };
+	}
+
+	test("refuses an explicit identity before reading any repository state", async () => {
+		const { git, reads, cwd } = gitAnswering(REMOTE_URL);
+		const resolved = await resolveLandingTarget({ repo: "https://github.com/x/y" }, git, cwd, {});
+		expect(resolved).toEqual({
+			reason: 'repo: observed "https://github.com/x/y", expected an unqualified "<owner>/<name>" or bounded GitLab "<group>/.../<project>" path',
+		});
+		expect(reads).toEqual([]);
+	});
+
+	test("refuses a repo override that disagrees with the remote, naming both", async () => {
+		const { git, cwd } = gitAnswering(REMOTE_URL);
+		const resolved = await resolveLandingTarget({ repo: "someone/else" }, git, cwd, {});
+		expect("reason" in resolved && resolved.reason).toBe(
+			'repo: observed "someone/else", expected "srobroek/omp-plugins" from remote origin; the branch absence is verified against origin, so both must name one repository',
+		);
+	});
+
+	test("binds every forge command to the canonical host the remote names", async () => {
+		const { git, reads, cwd } = gitAnswering("ssh://git@altssh.gitlab.com:443/group/sub/project.git");
+		const resolved = await resolveLandingTarget({}, git, cwd, { PATH: "/bin" });
+		if ("reason" in resolved) throw new Error(resolved.reason);
+		expect(resolved).toMatchObject({ remote: "origin", forge: "gitlab", nameWithOwner: "group/sub/project", cliRepo: "gitlab.com/group/sub/project" });
+		expect({ ...resolved.forgeCommandEnv }).toEqual({ PATH: "/bin", GITLAB_HOST: "gitlab.com", GITLAB_API_HOST: "gitlab.com" });
+		expect(resolved.repository.canonicalRoot).toBe(realpathSync(cwd));
+		expect(reads.map((argv) => argv[0])).toEqual(["rev-parse", "remote"]);
+	});
+});
+
 describe("delivery_land registration", () => {
 	/**
 	 * The host's interrupt reaches the tool as `execute`'s signal; a signal the tool
@@ -1526,10 +1599,18 @@ describe("delivery_land registration", () => {
 
 		const controller = new AbortController();
 		controller.abort();
-		const cwd = mkdtempSync(join(tmpdir(), "delivery-land-execute-"));
+		const cwd = temporaryDirectory("delivery-land-execute-");
 		const result = await tool.execute("call-1", { pr: 470 }, controller.signal, undefined, { cwd });
 
 		expect(result.details.ok).toBe(false);
 		expect(result.details.reason).toContain("abort");
+	});
+});
+
+// Last in the file: bun runs a file's tests in order, so every fixture above exists by now.
+describe("fixture hygiene", () => {
+	test("no fixture directory outlives the test that created it", () => {
+		expect(created.length).toBeGreaterThan(0);
+		expect(created.filter((path) => existsSync(path))).toEqual([]);
 	});
 });
