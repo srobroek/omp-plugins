@@ -95,6 +95,37 @@ class CheckerContracts(unittest.TestCase):
         self.assertNotEqual(absent.returncode, 0)
         self.assertIn("incomplete", absent.stdout)
 
+    def test_duplicate_check_rejects_an_unregistered_copy(self) -> None:
+        """A copy nobody registered is invisible to a byte comparison of the registered ones.
+
+        A fifth tokenizer copy that kept the old bytes passed the check for exactly that
+        reason, so a same-named file in another plugin's extensions/ must be registered.
+        """
+        self.copy_script("check-shared-detector.py")
+        registered = runpy.run_path(str(REPO / "scripts" / "check-shared-detector.py"))["DUPLICATED"]
+        for index, group in enumerate(registered):
+            for name in group:
+                path = self.root / name
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(f"export const shared = {index};\n", encoding="utf-8")
+        canonical = self.root / registered[0][0]
+        stray = self.root / "stray" / "extensions" / canonical.name
+        stray.parent.mkdir(parents=True)
+        stray.write_text("export const stale = true;\n", encoding="utf-8")
+        # A same-named file outside a plugin's extensions/ directory is not a copy.
+        unrelated = self.root / "stray" / "notes" / canonical.name
+        unrelated.parent.mkdir(parents=True)
+        unrelated.write_text("unrelated\n", encoding="utf-8")
+
+        result = self.run_script("check-shared-detector.py")
+        self.assertNotEqual(result.returncode, 0, result.stdout)
+        self.assertIn(f"stray/extensions/{canonical.name}: unregistered copy", result.stdout)
+        self.assertNotIn("stray/notes", result.stdout)
+
+        stray.unlink()
+        clean = self.run_script("check-shared-detector.py")
+        self.assertEqual(clean.returncode, 0, clean.stdout)
+
     def test_all_extension_packages_reject_uninstallable_entries(self) -> None:
         self.copy_script("build-extensions.py")
         plugin = self.root / "example"
