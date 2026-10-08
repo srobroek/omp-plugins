@@ -126,6 +126,12 @@ extra turn at the end of every session that touched a UI file. Without it,
 `impeccable context` asks the agent for one `impeccable detect` run once the changed UI is
 finished.
 
+impeccable's `impeccable-asset-producer` agent runs
+`${CLAUDE_PLUGIN_ROOT}/skills/impeccable/scripts/impeccable`. OMP substitutes that
+variable only in MCP server config, so in the agent's shell the path loses its root. When
+that agent starts, the extension adds a hidden note to its context with the launcher's
+absolute path.
+
 ## Token pipeline
 
 The project's existing token source and builder stay canonical. For a new pipeline the

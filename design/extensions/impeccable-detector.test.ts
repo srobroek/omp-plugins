@@ -10,6 +10,7 @@ import {
 	hookPayload,
 	hostPluginRoots,
 	isDetectorTarget,
+	launcherNote,
 	type PluginRoot,
 } from "./impeccable-detector.ts";
 
@@ -257,5 +258,32 @@ describe("tool_result", () => {
 			}
 		}
 		expect(alive).toBe(false);
+	});
+});
+
+describe("before_agent_start", () => {
+	const asset = { kind: "sub", name: "impeccable-asset-producer" };
+
+	test("hands impeccable-asset-producer the absolute launcher path once", async () => {
+		const plugin = fakePlugin("exit 0");
+		const cwd = tmpRoot();
+		const handlers = bind([{ plugin: "impeccable", path: plugin.root }]);
+		const result = (await handlers.before_agent_start?.({}, context(cwd, { agent: asset }))) as {
+			message: { customType: string; content: string; display: boolean };
+		};
+		expect(result.message).toEqual({ customType: "impeccable-launcher", content: launcherNote(plugin.launcher), display: false });
+		expect(result.message.content).toContain(`"${plugin.launcher}"`);
+
+		const delivered = { getSessionId: () => "s", getBranch: () => [{ type: "custom_message", customType: "impeccable-launcher" }] };
+		expect(await handlers.before_agent_start?.({}, context(cwd, { agent: asset, sessionManager: delivered }))).toBeUndefined();
+	});
+
+	test("leaves other agents and uninstalled sessions alone", async () => {
+		const plugin = fakePlugin("exit 0");
+		const cwd = tmpRoot();
+		const handlers = bind([{ plugin: "impeccable", path: plugin.root }]);
+		expect(await handlers.before_agent_start?.({}, context(cwd))).toBeUndefined();
+		expect(await handlers.before_agent_start?.({}, context(cwd, { agent: { kind: "sub", name: "task" } }))).toBeUndefined();
+		expect(await bind([]).before_agent_start?.({}, context(cwd, { agent: asset }))).toBeUndefined();
 	});
 });

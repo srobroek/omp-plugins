@@ -24,6 +24,10 @@ import { writtenPaths } from "./written-paths.ts";
  * impeccable already covers a harness without that hook, because `impeccable context`
  * then tells the agent to run `impeccable detect` once the changed UI is finished.
  *
+ * It also hands `impeccable-asset-producer` the launcher's absolute path when that
+ * agent starts: its instructions spell the launcher with `${CLAUDE_PLUGIN_ROOT}`,
+ * which OMP never sets in an agent's shell.
+ *
  * Advisory, so every failure leaves the result untouched: no impeccable install, a
  * launcher that exits non-zero or outruns the hook's 5 s budget, output that is not
  * the hook's JSON. `tool_result`, never `tool_call`: a throwing `tool_call` handler
@@ -57,6 +61,11 @@ const UI_EXTENSIONS: ReadonlySet<string> = new Set([
 const HOOK_TIMEOUT_MS = 5_000;
 
 const LAUNCHER_PATH = ["skills", "impeccable", "scripts", "impeccable"];
+
+/** The impeccable agents whose instructions run `${CLAUDE_PLUGIN_ROOT}/…/scripts/impeccable`. */
+const LAUNCHER_AGENTS: ReadonlySet<string> = new Set(["impeccable-asset-producer"]);
+
+const LAUNCHER_MESSAGE_TYPE = "impeccable-launcher";
 
 export type PluginRoot = { plugin: string; path: string };
 
@@ -215,6 +224,32 @@ function sessionIdOf(ctx: ExtensionContext): string {
 	return "omp";
 }
 
+function launcherDelivered(ctx: ExtensionContext): boolean {
+	try {
+		return ctx.sessionManager
+			.getBranch()
+			.some((entry) => entry.type === "custom_message" && entry.customType === LAUNCHER_MESSAGE_TYPE);
+	} catch {
+		return false;
+	}
+}
+
+// Concatenated so the literal placeholder does not read as a template-string slip.
+const PLUGIN_ROOT_VAR = "$" + "{CLAUDE_PLUGIN_ROOT}";
+
+/**
+ * impeccable's agents are written for Claude Code, which exports `CLAUDE_PLUGIN_ROOT`
+ * to their shell. OMP substitutes that variable only in MCP server config, so in a
+ * subagent's bash it expands to the empty string and the launcher path breaks.
+ */
+export function launcherNote(launcher: string): string {
+	return [
+		`Your instructions run \`${PLUGIN_ROOT_VAR}/skills/impeccable/scripts/impeccable\`.`,
+		"OMP does not set `CLAUDE_PLUGIN_ROOT` in your shell, so that path expands to `/skills/…` and fails.",
+		`Run the launcher by its absolute path instead: "${launcher}".`,
+	].join(" ");
+}
+
 export function bindImpeccableDetector(pi: ExtensionAPI, deps: DetectorDeps): void {
 	// Child sessions rebind the factory, so this state belongs to one session.
 	const launchers = new Map<string, Promise<string | null>>();
@@ -262,6 +297,19 @@ export function bindImpeccableDetector(pi: ExtensionAPI, deps: DetectorDeps): vo
 			return { content: [prefix, ...(event.content ?? [])] };
 		} catch {
 			// A design reminder is worth less than the result it rides on.
+			return;
+		}
+	});
+
+	pi.on("before_agent_start", async (_event, ctx: ExtensionContext) => {
+		try {
+			if (!LAUNCHER_AGENTS.has(ctx.agent?.name ?? "") || launcherDelivered(ctx)) return;
+			const launcher = await launcherFor(ctx.cwd || process.cwd());
+			if (launcher === null) return;
+			return {
+				message: { customType: LAUNCHER_MESSAGE_TYPE, content: launcherNote(launcher), display: false },
+			};
+		} catch {
 			return;
 		}
 	});
