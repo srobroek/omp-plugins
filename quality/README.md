@@ -29,10 +29,10 @@ Progressive disclosure:
    or reviewed, not on unrelated files elsewhere in the repository. This is explicit
    on-demand routing, not a claim that OMP rulebook `globs` automatically inject content.
 
-Always-applied rules reach every child session, so leads need not repeat the policy in
-briefs. Scouts remain read-only. No bundled agent name is shadowed. This is
-instruction-based steering and review, not deterministic proof that generated code meets
-the principles.
+Always-applied rules reach every child session that loads `quality`; what a lead's brief
+must carry is set by `delivery`'s fan-out rule. Scouts remain read-only. No bundled agent
+name is shadowed. This is instruction-based steering and review, not deterministic proof
+that generated code meets the principles.
 
 Review findings distinguish blockers, suggestions, accepted exceptions, and uncertainties.
 Local reviews pin a fixed point, include staged and unstaged work, and report Standards
