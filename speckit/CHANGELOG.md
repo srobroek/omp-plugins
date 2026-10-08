@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.10.2](https://github.com/srobroek/omp-plugins/compare/speckit--v0.10.1...speckit--v0.10.2) (2026-10-08)
+
+
+### Bug Fixes
+
+* **speckit:** apply the review recheck findings and spec-start defects ([#648](https://github.com/srobroek/omp-plugins/issues/648)) ([3b3f915](https://github.com/srobroek/omp-plugins/commit/3b3f9150f365569c3998086451c37d7a1de280e5))
+* **speckit:** fix the defects the post-landing sniff proved ([#650](https://github.com/srobroek/omp-plugins/issues/650)) ([4320dbb](https://github.com/srobroek/omp-plugins/commit/4320dbba3eb0764af40a4e7a2f609c85b49be6fb))
+
 ## [0.10.1](https://github.com/srobroek/omp-plugins/compare/speckit--v0.10.0...speckit--v0.10.1) (2026-10-08)
 
 

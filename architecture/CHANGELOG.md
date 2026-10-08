@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.1](https://github.com/srobroek/omp-plugins/compare/architecture--v0.6.0...architecture--v0.6.1) (2026-10-08)
+
+
+### Bug Fixes
+
+* **toolchain,architecture:** correct the toolchain advisories, guard rules, and stale steering ([#645](https://github.com/srobroek/omp-plugins/issues/645)) ([b4f194d](https://github.com/srobroek/omp-plugins/commit/b4f194d0ea17d5b458d2762edb58b3dd1d3207af))
+
 ## [0.6.0](https://github.com/srobroek/omp-plugins/compare/architecture--v0.5.0...architecture--v0.6.0) (2026-10-08)
 
 

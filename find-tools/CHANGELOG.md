@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.2.0](https://github.com/srobroek/omp-plugins/compare/find-tools--v2.1.1...find-tools--v2.2.0) (2026-10-08)
+
+
+### Features
+
+* **design:** run impeccable's edit detector in OMP, add ui-implementer, drop two upstreams ([#646](https://github.com/srobroek/omp-plugins/issues/646)) ([bfa1659](https://github.com/srobroek/omp-plugins/commit/bfa16597df127e94c721dc75d8133099e45207ea))
+
 ## [2.1.1](https://github.com/srobroek/omp-plugins/compare/find-tools--v2.1.0...find-tools--v2.1.1) (2026-10-08)
 
 
