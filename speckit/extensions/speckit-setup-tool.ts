@@ -7,32 +7,35 @@ import {
 	readFileSync,
 	writeFileSync,
 } from "node:fs";
-import { dirname, isAbsolute, join, parse, sep } from "node:path";
+import { dirname, isAbsolute, join, parse, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { TSchema } from "@oh-my-pi/pi-ai";
 import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
 
-/** A tool_call has a 30,000 ms budget; leave 5,000 ms for dispatch and reporting. */
-export const TIMEOUT_MS = 25_000;
-export function run(
-    argv: string[],
-    cwd?: string,
-    deadline = Date.now() + TIMEOUT_MS,
-): { exitCode: number; stdout: string; stderr: string } {
+/**
+ * Each setup phase gets its own budget, so one slow networked phase neither starves
+ * the phases after it nor hangs setup. A rerun skips the phases already complete.
+ */
+export const PHASE_TIMEOUT_MS = 60_000;
+
+export type RunResult = { exitCode: number; stdout: string; stderr: string };
+
+export async function run(argv: string[], cwd: string | undefined, deadline: number): Promise<RunResult> {
     const remaining = deadline - Date.now();
-    if (remaining <= 0) return { exitCode: 124, stdout: "", stderr: "setup event budget exhausted; earlier changes may have landed" };
-    if (testSpawn) return testSpawn(argv, { cwd, timeout: Math.min(TIMEOUT_MS, remaining) });
+    if (remaining <= 0) return { exitCode: 124, stdout: "", stderr: "phase budget exhausted; earlier phases may have landed" };
+    if (testSpawn) return testSpawn(argv, { cwd, timeout: remaining });
     try {
-        const proc = Bun.spawnSync(argv, { cwd, stdout: "pipe", stderr: "pipe", timeout: Math.min(TIMEOUT_MS, remaining) });
-        if (proc.exitedDueToTimeout === true) return { exitCode: 124, stdout: proc.stdout.toString(), stderr: `${proc.stderr.toString()}\nsetup event budget exhausted; earlier changes may have landed` };
-        return { exitCode: proc.exitCode ?? 1, stdout: proc.stdout.toString(), stderr: proc.stderr.toString() };
+        const proc = Bun.spawn(argv, { cwd, stdin: "ignore", stdout: "pipe", stderr: "pipe", timeout: remaining });
+        const [stdout, stderr, exitCode] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited]);
+        if (proc.signalCode !== null && Date.now() >= deadline) return { exitCode: 124, stdout, stderr: `${stderr}\nphase budget exhausted; earlier phases may have landed` };
+        return { exitCode, stdout, stderr };
     } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
         return { exitCode: 1, stdout: "", stderr: message };
     }
 }
-export function which(bin: string, deadline = Date.now() + TIMEOUT_MS): boolean {
-    return run(["which", bin], undefined, deadline).exitCode === 0;
+export async function which(bin: string, deadline: number): Promise<boolean> {
+    return (await run(["which", bin], undefined, deadline)).exitCode === 0;
 }
 
 export const FORMULAS = [
@@ -66,8 +69,8 @@ export const GITIGNORE_ENTRY = "specs/**/spec-status.md";
 
 export type SpawnFn = (
 	argv: string[],
-	opts?: { cwd?: string; timeout?: number },
-) => { exitCode: number; stdout: string; stderr: string };
+	opts: { cwd?: string; timeout: number },
+) => RunResult | Promise<RunResult>;
 
 let testSpawn: SpawnFn | null = null;
 let testPluginRoot: string | null = null;
@@ -147,64 +150,145 @@ export function installFormulas(repo: string, srcDir: string): string[] {
 	return copies.map(({ name }) => `copied ${name}`);
 }
 
+/** Extension ids `specify` records as installed in `.specify/extensions/.registry`. */
+export function installedExtensions(repo: string): Set<string> {
+	const registry = join(repo, ".specify", "extensions", ".registry");
+	safePath(registry);
+	if (!existsSync(registry)) return new Set();
+	try {
+		const data: unknown = JSON.parse(readFileSync(registry, "utf8"));
+		const extensions = data !== null && typeof data === "object" && "extensions" in data ? data.extensions : undefined;
+		if (extensions === null || typeof extensions !== "object" || Array.isArray(extensions)) return new Set();
+		return new Set(Object.keys(extensions));
+	} catch {
+		// specify reads a corrupt registry as empty too, so every add is attempted.
+		return new Set();
+	}
+}
+
+/**
+ * The community catalog's state in `.specify/extension-catalogs.yml`: registered as an
+ * install source, absent, or present with other settings that only the user may change.
+ */
+export function communityCatalogState(repo: string): "trusted" | "absent" | "conflict" {
+	const config = join(repo, ".specify", "extension-catalogs.yml");
+	safePath(config);
+	if (!existsSync(config)) return "absent";
+	const parsed: unknown = Bun.YAML.parse(readFileSync(config, "utf8"));
+	const catalogs = parsed !== null && typeof parsed === "object" && "catalogs" in parsed && Array.isArray(parsed.catalogs) ? parsed.catalogs : [];
+	let conflict = false;
+	for (const entry of catalogs as unknown[]) {
+		if (entry === null || typeof entry !== "object") continue;
+		const { name, url, install_allowed: installAllowed } = entry as Record<string, unknown>;
+		if (url === CATALOG_URL && installAllowed === true) return "trusted";
+		if (name === "community" || url === CATALOG_URL) conflict = true;
+	}
+	return conflict ? "conflict" : "absent";
+}
+
 export type SetupParams = {
 	integration?: string;
 	script?: string;
 	force?: boolean;
 	workspace?: string;
+	installAllowed?: boolean;
 	skipSpecify?: boolean;
 	skipBeads?: boolean;
 };
 
-export function runSetup(params: SetupParams): { ok: boolean; text: string } {
-    const repo = params.workspace ?? process.cwd();
-    const deadline = Date.now() + TIMEOUT_MS;
-    const log: string[] = [];
+export type PhaseResult = { phase: string; status: "done" | "skipped" | "failed"; detail: string };
+export type SetupResult = { ok: boolean; text: string; phases: PhaseResult[] };
+
+function output(result: RunResult): string {
+    return result.stderr.trim() || result.stdout.trim() || `exit ${result.exitCode}`;
+}
+
+/**
+ * Bootstrap `params.workspace`, resolved against the caller's `cwd`. Every phase
+ * detects work already done and skips it, so a rerun resumes after a failure.
+ */
+export async function runSetup(params: SetupParams, cwd: string): Promise<SetupResult> {
+    const repo = resolve(cwd, params.workspace ?? ".");
+    const phases: PhaseResult[] = [];
+    const record = (phase: string, status: PhaseResult["status"], detail: string) => phases.push({ phase, status, detail });
+    const finish = (): SetupResult => ({
+        ok: phases.every((row) => row.status !== "failed"),
+        text: phases.map((row) => `${row.phase}: ${row.status} -- ${row.detail}`).join("\n"),
+        phases,
+    });
+    const budget = () => Date.now() + PHASE_TIMEOUT_MS;
     const integration = params.integration ?? "codex";
     const script = params.script ?? "sh";
-    const fail = (text: string) => ({ ok: false, text: [...log, `ERROR: ${text}`].join("\n") });
+    let current = "preflight";
+    const fail = (detail: string): SetupResult => {
+        record(current, "failed", detail);
+        return finish();
+    };
     try {
         safePath(repo);
         safePath(join(repo, ".specify"));
         safePath(join(repo, ".beads"));
         safePath(join(repo, ".gitignore"));
-        if (!params.skipSpecify) {
-            if (!which("specify", deadline)) return fail("specify not on PATH or setup event budget exhausted");
-            const ver = run(["specify", "--version"], repo, deadline);
+        if (params.skipSpecify) record("specify", "skipped", "skipSpecify: specify CLI steps omitted");
+        else {
+            current = "specify";
+            const deadline = budget();
+            if (!(await which("specify", deadline))) return fail("specify not on PATH");
+            const ver = await run(["specify", "--version"], repo, deadline);
             if (ver.exitCode !== 0 || !specifyVersionOk(`${ver.stdout}\n${ver.stderr}`)) return fail(`specify-cli >= 0.12.0 required. Got: ${ver.stdout || ver.stderr}`);
-            const specifyDir = join(repo, ".specify");
-            if (!existsSync(specifyDir) || params.force) {
-                const init = run(["specify", "init", "--here", "--force", "--integration", integration, "--script", script], repo, deadline);
-                log.push(`specify init exit=${init.exitCode}`);
-                if (init.stdout) log.push(init.stdout.trim());
-                if (init.exitCode !== 0) return fail(`specify init: ${init.stderr.trim()}`);
-            } else log.push(".specify already present (pass force=true to re-scaffold)");
-            const catalog = run(["specify", "extension", "catalog", "add", "--name", "community", "--install-allowed", CATALOG_URL], repo, deadline);
-            if (catalog.exitCode !== 0) return fail(`catalog add: ${catalog.stderr.trim()}`);
-            log.push("catalog community ok");
-            for (const ext of EXTENSIONS) {
-                const add = run(["specify", "extension", "add", ext], repo, deadline);
-                if (add.exitCode !== 0) return fail(`extension ${ext}: ${add.stderr.trim()}`);
-                log.push(`extension ${ext} ok`);
+            record(current, "done", ver.stdout.trim());
+            current = "specify init";
+            if (existsSync(join(repo, ".specify")) && !params.force) record(current, "skipped", ".specify already present (pass force=true to re-scaffold)");
+            else {
+                const init = await run(["specify", "init", "--here", "--force", "--integration", integration, "--script", script], repo, budget());
+                if (init.exitCode !== 0) return fail(output(init));
+                record(current, "done", "scaffolded .specify/");
             }
-            const status = run(["specify", "extension", "add", "status-report", "--from", STATUS_REPORT_FROM], repo, deadline);
-            if (status.exitCode !== 0) return fail(`status-report: ${status.stderr.trim()}`);
-            log.push("extension status-report ok");
-        } else log.push("skipSpecify: specify CLI steps omitted");
-        if (params.skipBeads) log.push("SKIP: beads explicitly omitted; molecule workflows are unavailable");
-        else if (which("bd", deadline)) {
-            const where = run(["bd", "where"], repo, deadline);
-            if (where.exitCode !== 0) {
-                const init = run(["bd", "init", "--skip-hooks"], repo, deadline);
-                log.push(`bd init exit=${init.exitCode}`);
-                if (init.exitCode !== 0) return fail(`bd init: ${init.stderr.trim()}`);
-            } else log.push("beads workspace already present");
-            if (Date.now() >= deadline) return fail("setup event budget exhausted; earlier changes may have landed");
-            log.push(...installFormulas(repo, join(pluginRoot(), "formulas")));
-        } else return fail("bd not on PATH; install beads or explicitly set skipBeads=true for SpecKit-only setup");
-        if (Date.now() >= deadline) return fail("setup event budget exhausted; earlier changes may have landed");
-        log.push(ensureGitignore(repo));
-        return { ok: true, text: log.join("\n") };
+            current = "catalog community";
+            if (!params.installAllowed) record(current, "skipped", "not registered: the public community catalog becomes an install source only with installAllowed=true, after vetting");
+            else {
+                const state = communityCatalogState(repo);
+                if (state === "trusted") record(current, "skipped", "already registered as an install source");
+                else if (state === "conflict") return fail("a community catalog entry with other settings exists in .specify/extension-catalogs.yml; resolve it explicitly, then retry");
+                else {
+                    const catalog = await run(["specify", "extension", "catalog", "add", "--name", "community", "--install-allowed", CATALOG_URL], repo, budget());
+                    if (catalog.exitCode !== 0) return fail(output(catalog));
+                    record(current, "done", "registered as an install source (installAllowed=true)");
+                }
+            }
+            const installed = installedExtensions(repo);
+            const hint = params.installAllowed ? "" : " (an extension found only in the community catalog needs installAllowed=true)";
+            for (const [ext, from] of [...EXTENSIONS.map((id) => [id, undefined] as const), ["status-report", STATUS_REPORT_FROM] as const]) {
+                current = `extension ${ext}`;
+                if (installed.has(ext)) {
+                    record(current, "skipped", "already installed");
+                    continue;
+                }
+                const add = await run(["specify", "extension", "add", ext, ...(from ? ["--from", from] : [])], repo, budget());
+                if (add.exitCode !== 0) return fail(`${output(add)}${from ? "" : hint}`);
+                record(current, "done", "installed");
+            }
+        }
+        current = "beads";
+        if (params.skipBeads) record(current, "skipped", "beads explicitly omitted; molecule workflows are unavailable");
+        else {
+            const deadline = budget();
+            if (!(await which("bd", deadline))) return fail("bd not on PATH; install beads or explicitly set skipBeads=true for SpecKit-only setup");
+            const where = await run(["bd", "where"], repo, deadline);
+            if (where.exitCode === 0) record(current, "skipped", "beads workspace already present");
+            else {
+                const init = await run(["bd", "init", "--skip-hooks"], repo, deadline);
+                if (init.exitCode !== 0) return fail(`bd init: ${output(init)}`);
+                record(current, "done", "bd init --skip-hooks");
+            }
+            current = "formulas";
+            const copied = installFormulas(repo, join(pluginRoot(), "formulas"));
+            record(current, copied.length ? "done" : "skipped", copied.length ? copied.join(", ") : "every formula already present");
+        }
+        current = "gitignore";
+        const gitignore = ensureGitignore(repo);
+        record(current, gitignore.startsWith("appended") ? "done" : "skipped", gitignore);
+        return finish();
     } catch (err) {
         return fail(err instanceof Error ? err.message : String(err));
     }
@@ -216,24 +300,28 @@ export default function speckitSetupTool(pi: ExtensionAPI): void {
 		name: "speckit_setup",
 		label: "Bootstrap SpecKit",
 		description:
-			"Idempotent SpecKit bootstrap: specify init, community catalog, required extensions, copy bd formulas, gitignore spec-status.md.",
+			"Resumable SpecKit bootstrap in the caller's workspace: specify init, opt-in community catalog, required extensions, copy bd formulas, gitignore spec-status.md. Each phase has its own timeout and skips work already done.",
 		parameters: z.object({
 			integration: z.string().optional().describe("specify integration (codex|claude). Default codex"),
 			script: z.string().optional().describe("specify script flavor (sh|ps). Default sh"),
 			force: z.boolean().optional().describe("Re-run specify init even if .specify exists"),
-			workspace: z.string().optional().describe("Repo cwd; defaults to process cwd"),
+			workspace: z.string().optional().describe("Repo root, resolved against the caller's working directory; defaults to it"),
+			installAllowed: z
+				.boolean()
+				.optional()
+				.describe("Register the public community catalog as a trusted install source (--install-allowed). Opt in only after vetting the required extensions"),
 			skipBeads: z.boolean().optional().describe("Explicitly omit beads and formulas; molecule workflows unavailable"),
 			skipSpecify: z
 				.boolean()
 				.optional()
 				.describe("Skip specify CLI (formulas + gitignore only)"),
 		}) as unknown as TSchema,
-		execute: async (_id, params: SetupParams) => {
+		execute: async (_id, params: SetupParams, _signal, _onUpdate, ctx) => {
 			try {
-				const result = runSetup(params);
+				const result = await runSetup(params, ctx.cwd);
 				return {
 					content: [{ type: "text", text: result.text }],
-					details: { ok: result.ok },
+					details: { ok: result.ok, phases: result.phases },
 					isError: !result.ok,
 				};
 			} catch (err) {

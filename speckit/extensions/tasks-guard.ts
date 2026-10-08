@@ -1,4 +1,5 @@
 import type { ExtensionAPI, ToolCallEvent } from "@oh-my-pi/pi-coding-agent";
+import { EDIT_TOOLS, targetPaths } from "./tool-targets.ts";
 
 const TIMEOUT_MS = 10_000;
 
@@ -62,23 +63,6 @@ export function beadsActive(cwd: string): boolean {
 	}
 }
 
-function targetPaths(input: ToolCallEvent["input"]): string[] {
-	const out: string[] = [];
-	// `in` narrows one literal key at a time, so the two spellings stay unrolled.
-	if ("path" in input && typeof input.path === "string" && input.path.length > 0) {
-		out.push(input.path);
-	}
-	if ("file_path" in input && typeof input.file_path === "string" && input.file_path.length > 0) {
-		out.push(input.file_path);
-	}
-	if ("paths" in input && Array.isArray(input.paths)) {
-		for (const path of input.paths) {
-			if (typeof path === "string" && path.length > 0) out.push(path);
-		}
-	}
-	return out;
-}
-
 export function commandFromInput(input: ToolCallEvent["input"]): string {
 	if (!("command" in input)) return "";
 	return typeof input.command === "string" ? input.command : "";
@@ -89,7 +73,7 @@ export function decideToolCall(
 	input: ToolCallEvent["input"],
 	cwd: string,
 ): { block: true; reason: string } | undefined {
-	if (toolName === "edit" || toolName === "write") {
+	if (EDIT_TOOLS.has(toolName)) {
 		if (!targetPaths(input).some(isTasksMd)) return;
 		if (!beadsActive(cwd)) return;
 		return { block: true, reason: DENY_REASON };

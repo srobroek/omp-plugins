@@ -1,6 +1,6 @@
 ---
 name: speckit-implement-deprecated
-description: In SpecKit text, route deprecated `/speckit.implement` through the agent-assign workflow.
+description: In SpecKit text, route deprecated `/speckit.implement` to the runtime-native SpecKit interface and direct bead work.
 condition: ["(?i)(?:^|\\s)/speckit[.-]implement(?![\\w-])"]
 scope: "text"
 interruptMode: never

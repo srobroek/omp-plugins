@@ -150,7 +150,7 @@
     },
     {
       "name": "speckit",
-      "description": "SpecKit workflow: spec-driven setup, bugfix flow, tasks.md protection, and PR title discipline.",
+      "description": "SpecKit workflow: spec-driven setup, bugfix flow, and tasks.md protection.",
       "source": "./speckit",
       "version": "0.10.1",
       "category": "development"

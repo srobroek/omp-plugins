@@ -35,7 +35,6 @@ DUPLICATED: tuple[tuple[str, ...], ...] = (
         "beads/extensions/shell-tokenizer.ts",
         "chezmoi/extensions/shell-tokenizer.ts",
         "safety/extensions/shell-tokenizer.ts",
-        "speckit/extensions/shell-tokenizer.ts",
         "whats-new/extensions/shell-tokenizer.ts",
         "toolchain/extensions/shell-tokenizer.ts",
     ),
@@ -50,6 +49,7 @@ DUPLICATED: tuple[tuple[str, ...], ...] = (
     ),
     (
         "chezmoi/extensions/tool-targets.ts",
+        "speckit/extensions/tool-targets.ts",
         "whats-new/extensions/tool-targets.ts",
     ),
     (

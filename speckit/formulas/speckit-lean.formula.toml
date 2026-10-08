@@ -8,8 +8,6 @@
 # security-review-post, cleanup, sync-drift, sync-conflicts, and retro.
 #
 # Each active step retains a dependency after conditional steps are filtered.
-# The assignment chain shares one condition; later joins also name an
-# unconditional predecessor so disabling assignment cannot make them ready early.
 formula = "speckit-lean"
 description = "SpecKit lean profile for {{feature}}: the quality spine with human approval gates, without the parallel review passes or housekeeping"
 type = "workflow"
@@ -123,7 +121,7 @@ title = "verify tasks {{feature}}"
 type = "task"
 needs = ["implement"]
 labels = ["agent:speckit-verify"]
-description = "Spawn the speckit-verify agent (mode: tasks) for phantom-completion detection; writes verify-tasks-report.md."
+description = "Spawn the speckit-verify agent (mode: tasks) for phantom-completion detection; it returns findings through the result channel, and the parent writes them to verify-tasks-report.md."
 
 [steps.metadata]
 execution_agent_type = "speckit-verify"
@@ -136,7 +134,7 @@ title = "verify {{feature}}"
 type = "task"
 needs = ["verify-tasks"]
 labels = ["agent:speckit-verify"]
-description = "Spawn the speckit-verify agent (mode: requirements) to validate code against spec.md; writes verify-report.md."
+description = "Spawn the speckit-verify agent (mode: requirements) to validate code against spec.md; it returns findings through the result channel, and the parent writes them to verify-report.md."
 
 [steps.metadata]
 execution_agent_type = "speckit-verify"

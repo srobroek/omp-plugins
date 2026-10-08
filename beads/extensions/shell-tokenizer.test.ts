@@ -1,5 +1,4 @@
 import { describe, expect, test } from "bun:test";
-import { tokenize as tokenizeSpeckit } from "../../speckit/extensions/taskstoissues-gate.ts";
 import { tokenize as tokenizeBeads } from "./bd-close-gate.ts";
 import { tokenize as tokenizeShellCommand } from "./shell-command.ts";
 
@@ -7,7 +6,6 @@ type Tokenizer = (command: string) => unknown[] | null;
 
 const tokenizers: Record<string, Tokenizer> = {
 	beads: command => tokenizeBeads(command),
-	speckit: command => tokenizeSpeckit(command),
 	shellCommand: command => tokenizeShellCommand(command),
 };
 

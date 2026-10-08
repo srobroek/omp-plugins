@@ -6,7 +6,7 @@
 # exist.
 #
 # Bond it onto the step whose review produced the findings:
-#   bd mol bond mol-speckit-fix-findings <feature-root-id> --var feature=<NNN-slug>
+#   bd mol bond mol-speckit-fix-findings <review-step-id> --var feature=<NNN-slug>
 #
 # The `mol-` prefix in the filename is load-bearing: `bd mol bond` resolves a
 # formula name only when it is prefixed, and formulas resolve by filename stem.
@@ -41,4 +41,4 @@ title = "fix findings verdict {{feature}}"
 type = "task"
 needs = ["fix-findings-run"]
 labels = ["speckit:subprocess", "sub:fix-findings"]
-description = "Read the finding set the run step left. Empty: close with the count. Non-empty because the 5-iteration cap was hit: bond a second mol-speckit-fix-findings onto the same root rather than reopening the run step, so each pass keeps its own iteration count. A finding that survives two passes is a spec problem, not a fix problem -- route it to mol-speckit-iterate."
+description = "Read the finding set the run step left. Empty: close with the count. Non-empty because the 5-iteration cap was hit: bond a second mol-speckit-fix-findings onto the same step rather than reopening the run step, so each pass keeps its own iteration count. Diagnose a finding that survives two passes before routing it: a spec cause goes to mol-speckit-iterate, an implementation defect to mol-speckit-bugfix. Pass count alone does not decide."

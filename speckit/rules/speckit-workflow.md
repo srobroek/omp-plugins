@@ -47,8 +47,8 @@ MUST Set `--spec-id <NNN-slug>` on every bead a spec produces, including
 
 MOLECULE PER FEATURE (spec-producing commands)
 MUST Pour one molecule per spec dir. Profiles: `speckit-basic`,
-  `speckit-lean`, `speckit-feature`. All take `autonomous` and
-  `agent_assign`. Pass an explicit `--var autonomous=<yes|no>` when pouring,
+  `speckit-lean`, `speckit-feature`. All take `autonomous`.
+  Pass an explicit `--var autonomous=<yes|no>` when pouring,
   then `bd update <root-id> --spec-id <NNN-slug>
   --set-metadata spec_dir=specs/<NNN-slug>`.
 DEFAULT Track position with `bd mol current <root-id>`.
@@ -80,8 +80,7 @@ MUST At `/speckit.specify`, query parked work (`bd list --status deferred --json
 MUST Pour before writing the spec, after obtaining the explicit choice;
   persist the choice on the new root before advancing to specification work.
   Profiles live in this plugin's `formulas/`; `bd cook <name>`.
-  Use `--var agent_assign=no` if that extension is missing.
-MUST Validate `autonomous` and `agent_assign` as exactly `yes` or `no` before pouring.
+MUST Validate `autonomous` as exactly `yes` or `no` before pouring.
 
 TASK STATE (task-producing commands)
 MUST When /speckit.tasks instructs writing specs/*/tasks.md, create beads
@@ -121,17 +120,8 @@ COMMAND ROUTING (lifecycle commands)
   wisps, and decision beads -- not only spec.md/plan.md.
 
 PR REVIEW LOOP (PR lifecycle commands)
-MUST The agent that creates a PR owns automated review through landing or human
-  escalation. Park pending CodeRabbit, Codex and repository-configured review
-  waits without polling; unrelated spec work continues.
-MUST Collect every actionable finding at the exact head into one fix round, push
-  the update, rerun all configured reviewers, resolve addressed GitHub threads
-  through `resolveReviewThread`, and read back `isResolved=true`.
-MUST Count attempts per material issue using the review-thread node id, or a
-  stable finding fingerprint when no thread exists. New findings start at one.
-MUST After three unsuccessful fixes of the same issue, hold that PR at human
-  review with the issue identities, attempts, heads, fixes and unresolved URLs,
-  then notify the main agent loop. Never charge new issues against the old count.
+MUST Follow the delivery plugin's `delivery-git-workflow` rule for automated PR
+  review through landing or human escalation; unrelated spec work continues.
 
 DECISIONS (phase transitions)
 MUST Register a hard-to-reverse choice when it lands (`adr` skill / decision bead).
@@ -139,6 +129,7 @@ Phases that earn a record: plan, critique/security, analyze, implement, iterate.
 
 SUB-PROCESS MOLECULES (sub-process commands)
 MUST Bond, do not pour loose: `bd mol bond mol-speckit-<name> <target-id> --var feature=<NNN-slug>`.
-Bond to the STEP that found the work so the first child is ready immediately.
+Bond to the target the formula header names: the step that found the work for
+bugfix and fix-findings, the feature root for iterate and refine.
 
 build-formula lives in the beads plugin. Do not duplicate it here.
