@@ -139,8 +139,8 @@ function configuredMarker(swap: ToolSwap, cwd: string): string | undefined {
 const SEPARATORS: ReadonlySet<string> = new Set([";", "&", "|", "\n", "(", ")", "$("]);
 /** Reserved words that open or continue a compound command; the command word follows them. */
 const RESERVED: ReadonlySet<string> = new Set(["if", "then", "elif", "else", "while", "until", "do", "!", "{"]);
-/** Command substitutions, read wherever they appear: a single-quoted one is over-matched. */
-const SUBSTITUTION = /`([^`]*)`|\$\(([^()]*)\)/g;
+/** A command substitution starting at `lastIndex`; its body holds no nested parentheses. */
+const SUBSTITUTION = /`([^`]*)`|\$\(([^()]*)\)/y;
 
 /** A simple command's words once wrappers are dropped, and the directory it runs in. */
 type Invocation = { argv: readonly string[]; cwd: string };
@@ -155,6 +155,40 @@ function invocation(segment: readonly ShellToken[], cwd: string): Invocation | u
 	if (argv.length === 0) return undefined;
 	// `env -C DIR` and `sudo -D DIR` run the command in DIR, so its markers are read there.
 	return { argv, cwd: directories.reduce((dir, next) => resolve(dir, expandHome(next)), cwd) };
+}
+
+/**
+ * Bodies of the command substitutions the shell runs: unquoted or inside double
+ * quotes, never inside single quotes, where `$(` and backticks are literal text.
+ */
+function substitutions(command: string): string[] {
+	const out: string[] = [];
+	let quote: "'" | '"' | null = null;
+	for (let i = 0; i < command.length; i++) {
+		const ch = command[i];
+		if (quote === "'") {
+			if (ch === "'") quote = null;
+			continue;
+		}
+		if (ch === "\\") {
+			i++;
+			continue;
+		}
+		if (ch === "'" && quote === null) {
+			quote = "'";
+			continue;
+		}
+		if (ch === '"') {
+			quote = quote === '"' ? null : '"';
+			continue;
+		}
+		SUBSTITUTION.lastIndex = i;
+		const match = SUBSTITUTION.exec(command);
+		if (!match) continue;
+		out.push(match[1] ?? match[2] ?? "");
+		i = SUBSTITUTION.lastIndex - 1;
+	}
+	return out;
 }
 
 /**
@@ -175,7 +209,7 @@ function invocations(command: string, cwd: string): Invocation[] {
 		else flush();
 	}
 	flush();
-	for (const match of command.matchAll(SUBSTITUTION)) out.push(...invocations(match[1] ?? match[2] ?? "", cwd));
+	for (const body of substitutions(command)) out.push(...invocations(body, cwd));
 	return out;
 }
 

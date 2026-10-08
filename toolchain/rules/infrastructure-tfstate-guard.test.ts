@@ -53,6 +53,9 @@ const FIRE = [
 	"echo '{}' >> envs/prod/terraform.tfstate",
 	"terraform state pull > terraform.tfstate",
 	"cp backup.tfstate \"terraform.tfstate\"",
+	"jq '.version = 4' state.json > terraform.tfstate",
+	"cat \"my backup\" > terraform.tfstate",
+	"cd infra && terraform state pull > terraform.tfstate",
 ];
 
 const HOLD = [
@@ -71,6 +74,8 @@ const HOLD = [
 	"rm -rf build && cat terraform.tfstate",
 	"cp terraform.tfstate backup.tfstate",
 	"cp terraform.tfstate /tmp/state-backup.tfstate",
+	"echo \"restore with: cat backup > terraform.tfstate\"",
+	"echo 'cat backup > terraform.tfstate'",
 ];
 
 describe("infrastructure-tfstate-guard", () => {
@@ -81,7 +86,7 @@ describe("infrastructure-tfstate-guard", () => {
 		});
 	}
 	for (const text of HOLD) {
-		test(`holds: ${JSON.stringify(text)}`, () => {
+		test(`does not fire: ${JSON.stringify(text)}`, () => {
 			for (const buffer of encodings(text)) expect({ buffer, fired: res.some(re => re.test(buffer)) }).toEqual({ buffer, fired: false });
 		});
 	}
