@@ -64,8 +64,8 @@ pointer and never vendors it.
 
 ## Why these and not the others
 
-`ss-a11y` from `bitjaru/styleseed` and `fixing-accessibility` from `ibelick/ui-skills`
-are both displaced by `accessibility`, which is the deeper treatment of the same topic.
+`ss-a11y` from `bitjaru/styleseed` is displaced by `accessibility`, which is the deeper
+treatment of the same topic.
 
 `pa11y` is single-URL and displaced by the axe CLI. `pa11y-ci` is LGPL-3.0-only and
 excluded on licence. `ramzesenok/iOS-Accessibility-Audit-Skill` declares no licence

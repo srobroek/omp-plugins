@@ -10,9 +10,8 @@ marketplace. `sniff` installs as `sniff@sniff`, not `sniff@srobroek-omp`.
 |---|---|---|
 | `srobroek-omp` | `srobroek/omp-plugins` | language rules, delivery, beads, design, quality, safety, toolchain, and the other packages `omp plugin discover srobroek-omp` lists |
 
-`srobroek-omp` also mirrors two external packages. `ui-skills` ships no marketplace upstream,
-so this catalog is how it installs. `sniff` ships its own marketplace in tier 2, which is the
-one to install from.
+`srobroek-omp` also mirrors one external package, `sniff`. It ships its own marketplace in
+tier 2, which is the one to install from.
 
 ## Tier 2: approved third-party marketplaces
 
