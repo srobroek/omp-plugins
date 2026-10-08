@@ -13,6 +13,10 @@ domain rule, the rules were never opened in a full user environment (fan-out 0 o
 changes); loaded always-on they restored full fan-out at equal quality. A pinned higher
 implementation tier added cost without quality.
 
+## Role
+
+MUST FO-9: the lead is the user's bridge: it plans, splits, dispatches, integrates, verifies, and reports, and owns the decisions put to the user. Units include independent setup, provisioning, and research work (creating an account or repository, bootstrapping CI or config, separate research questions), not only code changes, under the same FO-1 test. The lead does unit work itself only for a single unit (FO-3) or a shared prerequisite. A step that needs the user's credentials, approval, or a console is no unit: the lead surfaces it to the user.
+
 ## Split
 
 MUST FO-1: split work into units ONLY when ALL hold: the units are independent (establish it from source, imports, contracts, and tests, never from titles), write no shared file, region, or state, need no fixed order, and each carries meaningful work (a whole acceptance criterion or file group, never one trivial edit). Otherwise keep the work whole: one causal chain, one root-cause investigation, or a shared write stays with one agent.
@@ -40,6 +44,7 @@ Start a helper only where it pays:
 | Broad read-only lookup across unknown files | `scout` |
 | Risky diff: security, data loss, concurrency, public contract | `reviewer` or `security-reviewer`, before landing |
 | External question that needs cited sources | one `task` research brief returning cited findings |
+| UI unit: a component, page, or styling change, with the design plugin installed | `ui-implementer` |
 | A few reads, one `grep`, or one script answers it | none: do it inline |
 
 ## Isolate and integrate

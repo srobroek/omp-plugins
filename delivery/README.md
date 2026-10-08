@@ -103,7 +103,7 @@ The agent that creates a PR owns its automated review loop until approval or exp
 | Name | When |
 | --- | --- |
 | `delivery-git-workflow` | Create or review pull requests, run automated-review loops, prove landing, reconcile and clean a landed worktree, or link delivery to Beads. |
-| `delivery-fan-out` | Every task (always on): split test, one-batch `task` dispatch capped at 8, helper choice, worktree isolation, and single post-integration verification. Always on because, loaded lazily, it was never opened in a full user environment. |
+| `delivery-fan-out` | Every task (always on): the lead's bridge role (setup and research work fans out too), split test, one-batch `task` dispatch capped at 8, helper choice, worktree isolation, and single post-integration verification. Always on because, loaded lazily, it was never opened in a full user environment. |
 | `delivery-worktree-hygiene` | Hold a worktree, act on a `delivery_hygiene_report` finding, or clean up a landed worktree and branch. |
 
 ## License
