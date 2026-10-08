@@ -5,6 +5,7 @@ import { join } from "node:path";
 
 import preferToolsAdvisory, {
 	decideSwaps,
+	formatAdvisory,
 } from "./prefer-tools-advisory.ts";
 
 /** A scratch tree seeded with `files` (name -> contents) and a `.git` stop marker. */
@@ -57,7 +58,15 @@ describe("pip/poetry -> uv", () => {
 		expect(decideSwaps("pip3 install -r requirements.txt", uv)).toHaveLength(1);
 		expect(decideSwaps("python -m pip install httpx", uv)).toHaveLength(1);
 		expect(decideSwaps("poetry add httpx", uv)).toHaveLength(1);
-		expect(decideSwaps("poetry run pytest", uv)).toHaveLength(1);
+	});
+
+	test("silent on poetry subcommands that change nothing", () => {
+		for (const command of ["poetry check", "poetry show", "poetry run pytest", "poetry --version", "poetry env info"]) {
+			expect({ command, hits: decideSwaps(command, uv) }).toEqual({ command, hits: [] });
+		}
+		for (const command of ["poetry lock", "poetry remove httpx", "poetry install", "poetry update"]) {
+			expect({ command, hits: decideSwaps(command, uv).length }).toEqual({ command, hits: 1 });
+		}
 	});
 
 	test("uv's own pip escape hatch is not the legacy tool", () => {
@@ -82,6 +91,28 @@ describe("nvm/pyenv -> mise", () => {
 		expect(decideSwaps("nvm use 22", mise).map((h) => h.modern)).toEqual(["mise"]);
 		expect(decideSwaps("pyenv install 3.13", tree({ ".mise.toml": "" }))).toHaveLength(1);
 		expect(decideSwaps("nvm use 22", bare)).toEqual([]);
+	});
+
+	test("silent on read-only version queries", () => {
+		const mise = tree({ "mise.toml": "" });
+		for (const command of [
+			"pyenv which python",
+			"pyenv versions",
+			"pyenv local",
+			"pyenv global",
+			"nvm ls",
+			"nvm current",
+			"nvm alias default",
+		]) {
+			expect({ command, hits: decideSwaps(command, mise) }).toEqual({ command, hits: [] });
+		}
+	});
+
+	test("fires when a version is installed or selected", () => {
+		const mise = tree({ "mise.toml": "" });
+		for (const command of ["pyenv local 3.13", "pyenv global 3.12", "pyenv uninstall 3.11", "nvm install", "nvm alias default 22"]) {
+			expect({ command, hits: decideSwaps(command, mise).length }).toEqual({ command, hits: 1 });
+		}
 	});
 });
 
@@ -115,6 +146,48 @@ describe("make -> just", () => {
 		const just = tree({ justfile: "build:\n" });
 		expect(decideSwaps("cmake --build .", just)).toEqual([]);
 		expect(decideSwaps("makeself --help", just)).toEqual([]);
+	});
+});
+
+describe("shell grammar", () => {
+	const bun = tree({ "bun.lock": "" });
+
+	test("the command word follows reserved words and chain operators", () => {
+		for (const command of [
+			"if true; then npm install foo; fi",
+			"if npm install; then echo ok; fi",
+			"for p in a b; do npm i $p; done",
+			"while false; do npm install; done",
+			"! npm install",
+			"{ npm install; }",
+			"true && npm install",
+			"false || npm install",
+		]) {
+			expect({ command, hits: decideSwaps(command, bun).length }).toEqual({ command, hits: 1 });
+		}
+	});
+
+	test("a reserved word in argument position is data", () => {
+		expect(decideSwaps("echo then npm install", bun)).toEqual([]);
+	});
+
+	test("env -C / --chdir moves where the marker is read", () => {
+		expect(decideSwaps(`env -C ${bare} npm install foo`, bun)).toEqual([]);
+		expect(decideSwaps(`env -C ${bun} npm install foo`, bare)).toHaveLength(1);
+		expect(decideSwaps(`env --chdir=${bun} npm i`, bare)).toHaveLength(1);
+	});
+});
+
+describe("advisory text", () => {
+	test("each swap names its own cost", () => {
+		const npm = formatAdvisory(decideSwaps("npm install", tree({ "bun.lock": "" })));
+		expect(npm).toContain("lockfile");
+		const pyenv = formatAdvisory(decideSwaps("pyenv install 3.13", tree({ "mise.toml": "" })));
+		expect(pyenv).toContain("mise");
+		expect(pyenv).not.toContain("lockfile");
+		const make = formatAdvisory(decideSwaps("make build", tree({ justfile: "build:\n" })));
+		expect(make).toContain("justfile");
+		expect(make).not.toContain("lockfile");
 	});
 });
 describe("integration", () => {
@@ -153,17 +226,31 @@ describe("integration", () => {
 		).toBeDefined();
 	});
 
-	test("a failed run still made the tool choice", () => {
+	test("advice travels as trusted additionalContext and leaves the tool output untouched", () => {
+		const handlers = wire();
+		const bun = tree({ "bun.lock": "" });
+		handlers.tool_call![0]!({ toolName: "bash", toolCallId: "c1", input: { command: "npm install", cwd: bun } });
+		const result = handlers.tool_result![0]!({
+			toolName: "bash",
+			toolCallId: "c1",
+			content: [{ type: "text", text: "added 1 package" }],
+		}) as Record<string, unknown>;
+		expect(Object.keys(result)).toEqual(["additionalContext"]);
+		expect(result.additionalContext).toContain("bun install");
+		expect(result.additionalContext).not.toContain("<system-reminder>");
+	});
+
+	test("a failed run gets no advice", () => {
 		const handlers = wire();
 		const bun = tree({ "bun.lock": "" });
 		handlers.tool_call![0]!({ toolName: "bash", toolCallId: "f1", input: { command: "npm install", cwd: bun } });
-		const patched = handlers.tool_result![0]!({
+		const result = handlers.tool_result![0]!({
 			toolName: "bash",
 			toolCallId: "f1",
 			isError: true,
 			content: [{ type: "text", text: "ENOENT" }],
 		});
-		expect(JSON.stringify(patched)).toContain("bun");
+		expect(result).toBeUndefined();
 	});
 
 	test("ignores non-bash tools and malformed events", () => {

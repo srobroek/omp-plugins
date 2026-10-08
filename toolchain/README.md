@@ -1,6 +1,6 @@
 # toolchain
 
-Stack defaults, backend services, infrastructure, operations, `scripts/` vs `tools/`, produce-rules, and where agentic assets live.
+Stack defaults, backend services, infrastructure, operations, produce-rules, and where agentic assets live.
 
 Does not tell the agent to prefer `rg`/`fd`/`eza`/`bat` in bash: OMP routes those to native tools.
 
@@ -13,16 +13,11 @@ Does not tell the agent to prefer `rg`/`fd`/`eza`/`bat` in bash: OMP routes thos
 | `toolchain-infrastructure` | Infra tool choice. |
 | `toolchain-languages` | Per-language library picks. |
 | `toolchain-quality-observability` | Logs, traces, scanners. |
-| `toolchain-tools-scripts` | `scripts/` and `tools/`. |
 | `toolchain-asset-ownership` | OMP vs chezmoi vs marketplace. |
 | `coexistence-worktree` | Concurrent agents/humans, interference. |
 | `shell-language` | Shell portability, quoting, command safety. |
 
 Merged topic rules include `backend-background-jobs`, `terraform-language`, `infrastructure-tfstate-guard`, `ops-toolchain-cache-policy`, and `ops-no-global-cargo-target`.
-
-## Agents
-
-The operational data agents `maintenance-metrics-reader` and `data-metrics-summarizer` live here alongside the toolchain rules.
 
 ## Extensions
 

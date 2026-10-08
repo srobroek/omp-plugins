@@ -7,7 +7,9 @@ import type {
     ToolResultEvent,
 } from "@oh-my-pi/pi-coding-agent";
 
-import { ancestors, firstPresent, readText } from "./lib";
+import { commandWords } from "./command-words.ts";
+import { ancestors, expandHome, firstPresent, readText, type ToolResultContext } from "./lib";
+import { type ShellToken, tokenizeShell } from "./shell-tokenizer.ts";
 
 /**
  * Advises the modern tool when a bash command reaches for the legacy one AND the
@@ -22,19 +24,33 @@ type Marker = { file: string; contains?: string };
 type ToolSwap = {
 	id: string;
 	legacyName: string;
-	/** Returns whether a command-position token sequence invokes the legacy tool. */
+	/** Returns whether a command-position token sequence invokes the legacy tool to change state. */
 	matches: (words: readonly string[]) => boolean;
 	markers: readonly Marker[];
 	/** Files proving the legacy tool is still load-bearing here. */
 	blockedBy?: readonly string[];
 	modern: string;
 	hint: string;
+	/** What running the legacy tool costs in a tree the modern one owns. */
+	cost: string;
 };
 
 const UV_MARKERS: readonly Marker[] = [
 	{ file: "uv.lock" },
 	{ file: "pyproject.toml", contains: "[tool.uv]" },
 ];
+
+/** poetry subcommands that change the dependencies, the lockfile, or the environment. */
+const POETRY_MUTATING: ReadonlySet<string> = new Set(["add", "remove", "install", "update", "lock", "sync"]);
+
+/**
+ * Version-manager subcommands that install or select a version, each with the
+ * operands it needs to do so: bare, `pyenv local` and `nvm alias default` only report.
+ */
+const VERSION_MUTATING: ReadonlyMap<string, ReadonlyMap<string, number>> = new Map([
+	["nvm", new Map([["install", 0], ["uninstall", 1], ["use", 0], ["alias", 2], ["unalias", 1]])],
+	["pyenv", new Map([["install", 0], ["uninstall", 1], ["local", 1], ["global", 1], ["shell", 1]])],
+]);
 
 const SWAPS: readonly ToolSwap[] = [
 	{
@@ -46,6 +62,7 @@ const SWAPS: readonly ToolSwap[] = [
 		markers: [{ file: "bun.lock" }, { file: "bun.lockb" }, { file: "bunfig.toml" }],
 		modern: "bun",
 		hint: "bun install / bun add <package>",
+		cost: "npm and yarn write their own lockfile beside bun.lock and resolve versions differently.",
 	},
 	{
 		id: "pip-to-uv",
@@ -59,23 +76,28 @@ const SWAPS: readonly ToolSwap[] = [
 		markers: UV_MARKERS,
 		modern: "uv",
 		hint: "uv add <package> / uv sync",
+		cost: "pip installs without recording the package in pyproject.toml or uv.lock, so the next `uv sync` removes it.",
 	},
 	{
 		id: "poetry-to-uv",
 		legacyName: "poetry",
-		matches: (words) => words[0] === "poetry" && /^[a-z]/.test(words[1] ?? ""),
+		matches: (words) => words[0] === "poetry" && POETRY_MUTATING.has(words[1] ?? ""),
 		markers: UV_MARKERS,
 		modern: "uv",
 		hint: "uv add / uv sync / uv run",
+		cost: "poetry resolves from its own poetry.lock, which uv neither reads nor updates.",
 	},
 	{
 		id: "version-manager-to-mise",
 		legacyName: "nvm/pyenv",
-		matches: (words) =>
-			(words[0] === "nvm" || words[0] === "pyenv") && /^[a-z]/.test(words[1] ?? ""),
+		matches: (words) => {
+			const operands = VERSION_MUTATING.get(words[0] ?? "")?.get(words[1] ?? "");
+			return operands !== undefined && words.length - 2 >= operands;
+		},
 		markers: [{ file: "mise.toml" }, { file: ".mise.toml" }],
 		modern: "mise",
 		hint: "mise use <tool>@<version> / mise install",
+		cost: "nvm and pyenv select the version outside mise's config, so this shell and mise-run tasks can run different versions.",
 	},
 	{
 		id: "make-to-just",
@@ -85,6 +107,7 @@ const SWAPS: readonly ToolSwap[] = [
 		blockedBy: ["Makefile", "makefile", "GNUmakefile"],
 		modern: "just",
 		hint: "just <recipe> (just --list)",
+		cost: "The tasks live in the justfile, which make does not read.",
 	},
 ];
 
@@ -94,6 +117,7 @@ export type SwapHit = {
 	legacyName: string;
 	modern: string;
 	hint: string;
+	cost: string;
 	marker: string;
 };
 
@@ -111,125 +135,61 @@ function configuredMarker(swap: ToolSwap, cwd: string): string | undefined {
 	return undefined;
 }
 
-type ShellToken = { text: string; separator: boolean };
+/** Separator tokens from `tokenizeShell`; `&&`/`||` arrive as two tokens each. */
+const SEPARATORS: ReadonlySet<string> = new Set([";", "&", "|", "\n", "(", ")", "$("]);
+/** Reserved words that open or continue a compound command; the command word follows them. */
+const RESERVED: ReadonlySet<string> = new Set(["if", "then", "elif", "else", "while", "until", "do", "!", "{"]);
+/** Command substitutions, read wherever they appear: a single-quoted one is over-matched. */
+const SUBSTITUTION = /`([^`]*)`|\$\(([^()]*)\)/g;
 
-/** Tokenizes shell-like command text into words while preserving separators needed by advisory matching. */
-function tokenize(command: string): ShellToken[] {
-	const tokens: ShellToken[] = [];
-	let word = "";
-	let quote: "'" | '"' | null = null;
+/** A simple command's words once wrappers are dropped, and the directory it runs in. */
+type Invocation = { argv: readonly string[]; cwd: string };
+
+function invocation(segment: readonly ShellToken[], cwd: string): Invocation | undefined {
+	let start = 0;
+	for (const token of segment) {
+		if (token.sawQuote || !RESERVED.has(token.value)) break;
+		start++;
+	}
+	const { argv, directories } = commandWords(segment.slice(start).map((token) => token.value));
+	if (argv.length === 0) return undefined;
+	// `env -C DIR` and `sudo -D DIR` run the command in DIR, so its markers are read there.
+	return { argv, cwd: directories.reduce((dir, next) => resolve(dir, expandHome(next)), cwd) };
+}
+
+/**
+ * Every simple command in `command`. Words are read quote-aware at command
+ * position only, so `echo "npm install"` is data; here-document bodies count only
+ * for their substitutions.
+ */
+function invocations(command: string, cwd: string): Invocation[] {
+	const out: Invocation[] = [];
+	let segment: ShellToken[] = [];
 	const flush = () => {
-		if (word) tokens.push({ text: word, separator: false });
-		word = "";
+		const found = invocation(segment, cwd);
+		if (found) out.push(found);
+		segment = [];
 	};
-	const separator = (text: string) => {
-		flush();
-		tokens.push({ text, separator: true });
-	};
-	for (let i = 0; i < command.length; i++) {
-		const ch = command[i]!;
-		if (quote === "'") {
-			if (ch === "'") quote = null;
-			else word += ch;
-			continue;
-		}
-		if (quote === '"') {
-			if (ch === '"') quote = null;
-			else if (ch === "\\" && i + 1 < command.length) word += command[++i]!;
-			else if (ch === "$" && command[i + 1] === "(") separator("$(");
-			else if (ch === "`") separator("`");
-			else word += ch;
-			continue;
-		}
-		if (ch === "'" || ch === '"') {
-			quote = ch;
-			continue;
-		}
-		if (ch === "\\" && i + 1 < command.length) {
-			word += command[++i]!;
-			continue;
-		}
-		if (/\s/.test(ch)) {
-			if (ch === "\n" || ch === "\r") separator("\n");
-			else flush();
-			continue;
-		}
-		if (ch === ";") {
-			separator(";");
-			continue;
-		}
-		if (ch === "|") {
-			separator(command[i + 1] === "|" ? "||" : "|");
-			if (command[i + 1] === "|") i++;
-			continue;
-		}
-		if (ch === "&" && command[i + 1] === "&") {
-			separator("&&");
-			i++;
-			continue;
-		}
-		if (ch === "$" && command[i + 1] === "(") {
-			separator("$(");
-			i++;
-			continue;
-		}
-		if (ch === "`" || ch === ")") {
-			separator(ch);
-			continue;
-		}
-		word += ch;
+	for (const token of tokenizeShell(command, { hereDocumentSubstitutionsOnly: true })) {
+		if (token.sawQuote || !SEPARATORS.has(token.value)) segment.push(token);
+		else flush();
 	}
 	flush();
-	return tokens;
-}
-
-const ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*=/;
-const WRAPPERS: Record<string, true> = { env: true, sudo: true, nice: true, time: true };
-const VALUE_OPTIONS: Record<string, true> = {
-	"-u": true,
-	"-C": true,
-	"-n": true,
-	"--user": true,
-	"--group": true,
-	"--chdir": true,
-	"--adjustment": true,
-};
-
-function commandWords(segment: readonly string[]): readonly string[] {
-	let i = 0;
-	while (i < segment.length) {
-		const word = segment[i]!;
-		if (ASSIGNMENT.test(word)) {
-			i++;
-			continue;
-		}
-		if (!WRAPPERS[word]) break;
-		i++;
-		while (i < segment.length && segment[i]!.startsWith("-")) {
-			const option = segment[i++]!;
-			if (VALUE_OPTIONS[option]) i++;
-		}
-	}
-	return segment.slice(i);
-}
-
-function commandSegments(command: string): readonly (readonly string[])[] {
-	const segments: string[][] = [[]];
-	for (const token of tokenize(command)) {
-		if (token.separator) segments.push([]);
-		else segments[segments.length - 1]!.push(token.text);
-	}
-	return segments.map(commandWords);
+	for (const match of command.matchAll(SUBSTITUTION)) out.push(...invocations(match[1] ?? match[2] ?? "", cwd));
+	return out;
 }
 
 export function decideSwaps(command: string, cwd: string): SwapHit[] {
-	const segments = commandSegments(command);
+	const runs = invocations(command, cwd);
 	const out: SwapHit[] = [];
 	for (const swap of SWAPS) {
-		if (!segments.some((words) => swap.matches(words))) continue;
-		const marker = configuredMarker(swap, cwd);
-		if (!marker) continue;
-		out.push({ id: swap.id, legacyName: swap.legacyName, modern: swap.modern, hint: swap.hint, marker });
+		for (const run of runs) {
+			if (!swap.matches(run.argv)) continue;
+			const marker = configuredMarker(swap, run.cwd);
+			if (!marker) continue;
+			out.push({ id: swap.id, legacyName: swap.legacyName, modern: swap.modern, hint: swap.hint, cost: swap.cost, marker });
+			break;
+		}
 	}
 	return out;
 }
@@ -237,28 +197,12 @@ export function decideSwaps(command: string, cwd: string): SwapHit[] {
 export function formatAdvisory(hits: SwapHit[]): string {
 	const lines = hits.map(
 		(entry) =>
-			`- ${entry.marker} is present, so this tree runs on ${entry.modern}: use \`${entry.hint}\` instead of ${entry.legacyName}.`,
+			`- ${entry.marker} is present, so this tree runs on ${entry.modern}: use \`${entry.hint}\` instead of ${entry.legacyName}. ${entry.cost}`,
 	);
 	return [
 		"TOOLCHAIN ADVISORY: this command used a legacy tool the repo has already replaced.",
 		...lines,
-		"Mixing the two managers writes a second lockfile and resolves versions differently.",
 	].join("\n");
-}
-
-function prepend(
-	event: ToolResultEvent,
-	text: string,
-): { content: ToolResultEvent["content"] } {
-	const banner = `<system-reminder>\n${text}\n</system-reminder>\n\n`;
-	if (event.content[0]?.type === "text") {
-		return {
-			content: event.content.map((chunk, i) =>
-				i === 0 && chunk.type === "text" ? { ...chunk, text: banner + chunk.text } : chunk,
-			),
-		};
-	}
-	return { content: [{ type: "text", text: banner }, ...event.content] };
 }
 
 export default function preferToolsAdvisory(pi: ExtensionAPI): void {
@@ -280,13 +224,13 @@ export default function preferToolsAdvisory(pi: ExtensionAPI): void {
 		}
 	});
 
-	pi.on("tool_result", (event: ToolResultEvent) => {
+	pi.on("tool_result", (event: ToolResultEvent): ToolResultContext | undefined => {
 		try {
 			const hits = pending.get(event.toolCallId);
 			pending.delete(event.toolCallId);
-			// A failed run still made the tool choice, so the advisory stands either way.
-			if (!hits) return;
-			return prepend(event, formatAdvisory(hits));
+			// A failed run wrote no lockfile and selected no version, so it gets no advice.
+			if (!hits || event.isError === true) return;
+			return { additionalContext: formatAdvisory(hits) };
 		} catch {
 			return;
 		}

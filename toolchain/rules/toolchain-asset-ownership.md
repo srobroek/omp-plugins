@@ -9,4 +9,4 @@ Keep these ownership boundaries when changing agentic assets; machine-specific g
 
 - chezmoi owns machine-wide OMP config, rules, and extensions under `~/.omp/agent/`; use `skill://chezmoi-editor` for their source.
 - The `srobroek-omp` marketplace owns installable plugins (skills, agents, and rules).
-- OMP discovers capabilities from disk; no compile step is required.
+- OMP discovers capabilities from disk; no compile step is required. Installed plugins load from versioned cache copies, so a plugin change takes effect only after a release and an install.

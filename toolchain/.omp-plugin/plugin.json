@@ -1,6 +1,6 @@
 {
   "name": "toolchain",
-  "description": "Toolchain defaults, backend services, infrastructure, operations, tools-versus-scripts layout, and pragmatic output rules.",
+  "description": "Toolchain defaults, backend services, infrastructure, and operations.",
   "version": "1.0.0",
   "category": "development"
 }

@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { mkdtempSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
 import depManifestAdvisory, {
@@ -244,6 +244,13 @@ describe("adviseForWrite", () => {
 		const hits = adviseForWrite(manifest, changed, dir, reader({ [manifest]: PACKAGE_JSON }));
 		expect(hits[0]?.cli).toBe("pnpm add");
 	});
+
+	test("a leading ~ names the home directory, not a cwd subdirectory", () => {
+		const home = join(homedir(), "dep-advisory-fixture", "package.json");
+		const changed = PACKAGE_JSON.replace('"^3.23.8"', '"^3.24.0"');
+		const hits = adviseForWrite("~/dep-advisory-fixture/package.json", changed, CWD, reader({ [home]: PACKAGE_JSON }));
+		expect(hits.map((h) => h.abs)).toEqual([home]);
+	});
 });
 
 describe("adviseForHashline", () => {
@@ -289,6 +296,16 @@ describe("adviseForHashline", () => {
 
 	test("silent when the manifest is not on disk", () => {
 		expect(adviseForHashline('[package.json#A1B2]\nPUT 8.=8:\n+x', CWD, reader({}))).toEqual([]);
+	});
+
+	test("a ~ section header copied from read output resolves under the home directory", () => {
+		const home = join(homedir(), "dep-advisory-fixture", "package.json");
+		const hits = adviseForHashline(
+			'[~/dep-advisory-fixture/package.json#A1B2]\nPUT 8.=8:\n+    "zod": "^4"',
+			CWD,
+			reader({ [home]: PACKAGE_JSON }),
+		);
+		expect(hits.map((h) => h.abs)).toEqual([home]);
 	});
 });
 
@@ -376,6 +393,30 @@ describe("integration", () => {
 		expect(
 			done({ toolName: "edit", toolCallId: "a3", content: [{ type: "text", text: "edited" }] }),
 		).toBeDefined();
+	});
+
+	test("advice travels as trusted additionalContext and leaves the tool output untouched", () => {
+		const handlers = wire();
+		const dir = mkdtempSync(join(tmpdir(), "dep-advisory-context-"));
+		const live = join(dir, "package.json");
+		writeFileSync(live, PACKAGE_JSON);
+		handlers.tool_call![0]!({
+			toolName: "edit",
+			toolCallId: "c1",
+			input: { input: `[${live}#A1B2]\nPUT 8.=8:\n+    "zod": "^4"` },
+		});
+		const result = handlers.tool_result![0]!({
+			toolName: "edit",
+			toolCallId: "c1",
+			content: [{ type: "text", text: "edited" }],
+		}) as Record<string, unknown>;
+		expect(Object.keys(result)).toEqual(["additionalContext"]);
+		expect(result.additionalContext).toContain("bun add");
+		expect(result.additionalContext).not.toContain("<system-reminder>");
+		// The pending entry is consumed: a repeated result for the same call adds nothing.
+		expect(
+			handlers.tool_result![0]!({ toolName: "edit", toolCallId: "c1", content: [{ type: "text", text: "edited" }] }),
+		).toBeUndefined();
 	});
 
 	test("a prose edit to the same manifest leaves the result untouched", () => {
