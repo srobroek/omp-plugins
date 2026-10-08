@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.4.0](https://github.com/srobroek/omp-plugins/compare/delivery--v1.3.0...delivery--v1.4.0) (2026-10-08)
+
+
+### Features
+
+* **delivery:** make the lead the user's bridge and route UI units to ui-implementer ([#653](https://github.com/srobroek/omp-plugins/issues/653)) ([436edf3](https://github.com/srobroek/omp-plugins/commit/436edf3a29a981bb2beeb8270eef8a6276ee5333))
+
 ## [1.3.0](https://github.com/srobroek/omp-plugins/compare/delivery--v1.2.0...delivery--v1.3.0) (2026-10-08)
 
 
