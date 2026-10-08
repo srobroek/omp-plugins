@@ -3,7 +3,8 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
-import agenticAutoLint, { assetKind, formatReports, pendingReports, writtenPaths } from "./agentic-auto-lint.ts";
+import agenticAutoLint, { assetKind, formatReports, pendingReports } from "./agentic-auto-lint.ts";
+import { writtenPaths } from "./written-paths.ts";
 
 const CWD = "/repo";
 

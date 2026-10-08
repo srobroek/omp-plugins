@@ -108,6 +108,24 @@ Verify components first. Then verify pages. Do not use page-first development.
 | `design-component-truth` | Verifying a component prop against documentation |
 | `design-upstream-preflight` | Installing and probing the upstream a route needs, before it runs |
 
+## Extensions
+
+`impeccable-detector` runs impeccable's per-edit design detector in OMP. impeccable ships
+that check as a Claude Code `PostToolUse` command hook, which OMP does not run. After a
+`write`, `edit`, or `ast_edit` lands on a file the hook scans, the extension runs
+`impeccable hook` through the installed plugin's launcher and prepends the findings to
+the result. A clean file, and a finding already reported this session, stay silent.
+
+It finds the install through OMP's plugin registry and does nothing when impeccable is
+not installed. A run that fails, or takes longer than the hook's 5 seconds, leaves the
+result unchanged.
+
+impeccable's two other hooks are not reproduced. `SessionStart` only exports a session id
+into a Claude Code env file, which OMP does not have. The `Stop` deep pass would force an
+extra turn at the end of every session that touched a UI file. Without it,
+`impeccable context` asks the agent for one `impeccable detect` run once the changed UI is
+finished.
+
 ## Token pipeline
 
 The project's existing token source and builder stay canonical. For a new pipeline the
