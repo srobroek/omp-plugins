@@ -10,7 +10,7 @@ TRIGGER
 + an advisor prompt, roster, model, or `advisor.*` setting changed since the last run
 - writing or tuning a `WATCHDOG.yml` / `WATCHDOG.md` → `watchdog-files`
 - one advisor note in the current session looks wrong → answer it in place
-- coding/review task outcomes after steering, model, or tool changes → `skill://tune-model-prompt`; retain this skill for delivered-note precision
+- coding/review task outcomes after steering, model, or tool changes → `skill://tune-model-prompt` when installed (an owner-local skill this repository does not ship); retain this skill for delivered-note precision
 
 ## Workflow
 
