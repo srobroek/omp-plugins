@@ -20,10 +20,6 @@ Does not tell the agent to prefer `rg`/`fd`/`eza`/`bat` in bash: OMP routes thos
 
 Merged topic rules include `backend-background-jobs`, `terraform-language`, `infrastructure-tfstate-guard`, `ops-toolchain-cache-policy`, and `ops-no-global-cargo-target`.
 
-## Agents
-
-The operational data agents `maintenance-metrics-reader` and `data-metrics-summarizer` live here alongside the toolchain rules.
-
 ## Extensions
 
 - `dep-manifest-advisory`: advises the package-manager CLI when an edit lands in a dependency table of `package.json`, `Cargo.toml`, `pyproject.toml`, or `go.mod`
