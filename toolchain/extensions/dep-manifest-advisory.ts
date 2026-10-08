@@ -1,7 +1,7 @@
 import { basename, dirname, isAbsolute, relative, resolve } from "node:path";
 
 import type { ExtensionAPI, ToolCallEvent, ToolResultEvent } from "@oh-my-pi/pi-coding-agent";
-import { ancestors, firstPresent, readText } from "./lib";
+import { ancestors, expandHome, firstPresent, readText, type ToolResultContext } from "./lib";
 
 /**
  * Advises the package-manager CLI when a call hand-edits a dependency table.
@@ -238,7 +238,8 @@ function manifestTarget(path: string, cwd: string): { abs: string; kind: Manifes
 	if (!path || NON_FILE_SCHEME.test(path)) return undefined;
 	const kind = manifestKind(path);
 	if (!kind) return undefined;
-	return { abs: isAbsolute(path) ? path : resolve(cwd, path), kind };
+	const local = expandHome(path);
+	return { abs: isAbsolute(local) ? local : resolve(cwd, local), kind };
 }
 
 /** A whole-file write changes deps when its dependency regions differ from the current ones. */
@@ -406,21 +407,6 @@ export function formatAdvisory(hits: Hit[], cwd: string): string {
 	].join("\n");
 }
 
-function prepend(
-	event: ToolResultEvent,
-	text: string,
-): { content: ToolResultEvent["content"] } {
-	const banner = `<system-reminder>\n${text}\n</system-reminder>\n\n`;
-	if (event.content[0]?.type === "text") {
-		return {
-			content: event.content.map((chunk, i) =>
-				i === 0 && chunk.type === "text" ? { ...chunk, text: banner + chunk.text } : chunk,
-			),
-		};
-	}
-	return { content: [{ type: "text", text: banner }, ...event.content] };
-}
-
 export default function depManifestAdvisory(pi: ExtensionAPI): void {
 	const pending = new Map<string, { hits: Hit[]; cwd: string }>();
 	pi.on("tool_call", (event: ToolCallEvent, ctx) => {
@@ -437,12 +423,12 @@ export default function depManifestAdvisory(pi: ExtensionAPI): void {
 		}
 	});
 
-	pi.on("tool_result", (event: ToolResultEvent) => {
+	pi.on("tool_result", (event: ToolResultEvent): ToolResultContext | undefined => {
 		try {
 			const entry = pending.get(event.toolCallId);
 			pending.delete(event.toolCallId);
 			if (!entry || event.isError === true) return;
-			return prepend(event, formatAdvisory(entry.hits, entry.cwd));
+			return { additionalContext: formatAdvisory(entry.hits, entry.cwd) };
 		} catch {
 			return;
 		}

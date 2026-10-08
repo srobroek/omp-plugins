@@ -1,5 +1,8 @@
 import { existsSync, readFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
+
+import type { ToolResultEventResult } from "@oh-my-pi/pi-coding-agent";
 
 /**
  * `from` and its parents, stopping at the git root (inclusive) or after `limit`
@@ -37,3 +40,15 @@ export function readText(path: string): string | null {
 		return null;
 	}
 }
+
+/** `path` with a leading `~` read as the home directory, the way the shell and OMP's file tools read it. */
+export function expandHome(path: string): string {
+	return path === "~" || path.startsWith("~/") ? homedir() + path.slice(1) : path;
+}
+
+/**
+ * A `tool_result` reply carrying passive context. OMP delivers `additionalContext`
+ * outside the tool output as trusted guidance, so an advisory never edits the
+ * output the model reads as untrusted data. The pinned SDK types predate the field.
+ */
+export type ToolResultContext = ToolResultEventResult & { additionalContext: string };
