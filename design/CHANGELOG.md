@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.8.1](https://github.com/srobroek/omp-plugins/compare/design--v0.8.0...design--v0.8.1) (2026-10-08)
+
+
+### Bug Fixes
+
+* **design,authoring:** browser-mode steering and true bundled-agent lists; track OMP 18.x automatically ([#651](https://github.com/srobroek/omp-plugins/issues/651)) ([e70892f](https://github.com/srobroek/omp-plugins/commit/e70892fcc5b8f69a469d910af024a22cdf5d0576))
+
 ## [0.8.0](https://github.com/srobroek/omp-plugins/compare/design--v0.7.0...design--v0.8.0) (2026-10-08)
 
 
