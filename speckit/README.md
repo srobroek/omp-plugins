@@ -80,7 +80,7 @@ Every phase reports `done`, `skipped` (already present), or `failed`; a failed p
 | Option | Effect |
 |---|---|
 | `workspace` | Repository root, resolved against the caller's working directory; defaults to it. |
-| `installAllowed=true` | Registers the public community catalog as an install source. Opt in only after vetting the required extensions; without it the catalog is not registered. |
+| `installAllowed=true` | Registers the public community catalog as an install source. Opt in only after vetting the required extensions; without it the catalog is not registered. When `SPECKIT_CATALOG_URL` is set, specify reads only that catalog, so this phase is skipped. |
 | `force=true` | Re-scaffolds `.specify/` only. |
 | `skipSpecify=true` | Installs formulas and gitignore entries only. |
 | `skipBeads=true` | Explicitly omits beads and formulas, leaving molecule workflows unavailable. |

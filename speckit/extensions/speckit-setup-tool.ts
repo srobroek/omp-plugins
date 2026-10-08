@@ -59,10 +59,10 @@ export const EXTENSIONS = [
 	"refine",
 	"retro",
 	"security-review",
+	"status-report",
 	"tinyspec",
 ] as const;
 
-export const STATUS_REPORT_FROM = "latest-release:Open-Agent-Tools/spec-kit-status";
 export const CATALOG_URL =
 	"https://raw.githubusercontent.com/github/spec-kit/main/extensions/catalog.community.json";
 export const GITIGNORE_ENTRY = "specs/**/spec-status.md";
@@ -245,7 +245,10 @@ export async function runSetup(params: SetupParams, cwd: string): Promise<SetupR
                 record(current, "done", "scaffolded .specify/");
             }
             current = "catalog community";
-            if (!params.installAllowed) record(current, "skipped", "not registered: the public community catalog becomes an install source only with installAllowed=true, after vetting");
+            // specify reads SPECKIT_CATALOG_URL first, as one install-allowed catalog that replaces every other.
+            const envCatalog = process.env.SPECKIT_CATALOG_URL;
+            if (envCatalog) record(current, "skipped", `SPECKIT_CATALOG_URL=${envCatalog} replaces every catalog for specify; no project catalog is registered or read`);
+            else if (!params.installAllowed) record(current, "skipped", "not registered: the public community catalog becomes an install source only with installAllowed=true, after vetting");
             else {
                 const state = communityCatalogState(repo);
                 if (state === "trusted") record(current, "skipped", "already registered as an install source");
@@ -257,15 +260,15 @@ export async function runSetup(params: SetupParams, cwd: string): Promise<SetupR
                 }
             }
             const installed = installedExtensions(repo);
-            const hint = params.installAllowed ? "" : " (an extension found only in the community catalog needs installAllowed=true)";
-            for (const [ext, from] of [...EXTENSIONS.map((id) => [id, undefined] as const), ["status-report", STATUS_REPORT_FROM] as const]) {
+            const hint = params.installAllowed || envCatalog ? "" : " (an extension found only in the community catalog needs installAllowed=true)";
+            for (const ext of EXTENSIONS) {
                 current = `extension ${ext}`;
                 if (installed.has(ext)) {
                     record(current, "skipped", "already installed");
                     continue;
                 }
-                const add = await run(["specify", "extension", "add", ext, ...(from ? ["--from", from] : [])], repo, budget());
-                if (add.exitCode !== 0) return fail(`${output(add)}${from ? "" : hint}`);
+                const add = await run(["specify", "extension", "add", ext], repo, budget());
+                if (add.exitCode !== 0) return fail(`${output(add)}${hint}`);
                 record(current, "done", "installed");
             }
         }

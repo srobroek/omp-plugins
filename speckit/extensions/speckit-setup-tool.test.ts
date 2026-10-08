@@ -63,6 +63,7 @@ test("requires only installable community extensions", () => {
 		"refine",
 		"retro",
 		"security-review",
+		"status-report",
 		"tinyspec",
 	]);
 });
@@ -175,6 +176,7 @@ describe("runSetup specify phases", () => {
 	let plugin: string;
 	let calls: { argv: string[]; timeout: number }[];
 	let onCall: (argv: string[]) => void;
+	const envCatalog = process.env.SPECKIT_CATALOG_URL;
 
 	const specifyCalls = () => calls.map((call) => call.argv).filter((argv) => argv[0] === "specify").map((argv) => argv.slice(1).join(" "));
 
@@ -184,6 +186,8 @@ describe("runSetup specify phases", () => {
 		mkdirSync(join(plugin, "formulas"));
 		for (const name of FORMULAS) writeFileSync(join(plugin, "formulas", `${name}.formula.toml`), "# test\n");
 		mkdirSync(join(dir, ".specify", "extensions"), { recursive: true });
+		// The host may set this override; each test opts in to it explicitly.
+		delete process.env.SPECKIT_CATALOG_URL;
 		setPluginRootForTests(plugin);
 		calls = [];
 		onCall = () => {};
@@ -195,6 +199,8 @@ describe("runSetup specify phases", () => {
 	});
 	afterEach(() => {
 		setSystemTime();
+		if (envCatalog === undefined) delete process.env.SPECKIT_CATALOG_URL;
+		else process.env.SPECKIT_CATALOG_URL = envCatalog;
 		setSpawnForTests(null);
 		setPluginRootForTests(null);
 		rmSync(dir, { recursive: true, force: true });
@@ -227,12 +233,32 @@ describe("runSetup specify phases", () => {
 		expect(specifyCalls().some((call) => call.startsWith("extension"))).toBe(false);
 	});
 
+	test("defers to a SPECKIT_CATALOG_URL override instead of registering a catalog", async () => {
+		process.env.SPECKIT_CATALOG_URL = CATALOG_URL;
+		setSpawnForTests((argv, opts) => {
+			calls.push({ argv, timeout: opts.timeout });
+			if (argv[2] === "add" && argv[3] === "qa") return { exitCode: 1, stdout: "", stderr: "Error: Extension 'qa' not found in catalog" };
+			return { exitCode: 0, stdout: argv[1] === "--version" ? "specify 1.0.6" : "", stderr: "" };
+		});
+		const out = await runSetup({ workspace: dir, installAllowed: true }, "/unused");
+		expect(specifyCalls().some((call) => call.startsWith("extension catalog"))).toBe(false);
+		expect(out.phases.find((row) => row.phase === "catalog community")).toMatchObject({ status: "skipped", detail: expect.stringContaining("SPECKIT_CATALOG_URL") });
+		expect(out.phases.at(-1)).toMatchObject({ phase: "extension qa", status: "failed", detail: "Error: Extension 'qa' not found in catalog" });
+	});
+
+	test("installs status-report by its catalog id like every other extension", async () => {
+		const out = await runSetup({ workspace: dir }, "/unused");
+		expect(out.ok).toBe(true);
+		expect(specifyCalls()).toContain("extension add status-report");
+		expect(calls.some(({ argv }) => argv.includes("--from"))).toBe(false);
+	});
+
 	test("skips extensions specify already records as installed", async () => {
 		writeFileSync(join(dir, ".specify", "extensions", ".registry"), JSON.stringify({ schema_version: "1.0", extensions: { "agent-context": {}, bugfix: {}, "status-report": {} } }));
 		const out = await runSetup({ workspace: dir }, "/unused");
 		expect(out.ok).toBe(true);
 		const adds = specifyCalls().filter((call) => call.startsWith("extension add"));
-		expect(adds.map((call) => call.split(" ")[2])).toEqual(EXTENSIONS.filter((ext) => ext !== "agent-context" && ext !== "bugfix"));
+		expect(adds.map((call) => call.split(" ")[2])).toEqual(EXTENSIONS.filter((ext) => !["agent-context", "bugfix", "status-report"].includes(ext)));
 		expect(out.phases.filter((row) => row.status === "skipped").map((row) => row.phase)).toContain("extension status-report");
 	});
 
