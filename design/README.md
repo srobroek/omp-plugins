@@ -65,6 +65,9 @@ bundled `scout` for recon and `operator` for mechanical steps.
 
 The lead never writes its own critique.
 
+Use `ui-ux-specialist` when the work spans components, needs a system audit, or needs
+independent critique.
+
 ## Method
 
 Six phases run in order: GROUND, SPECIFY, BUILD, VERIFY, CRITIQUE, RECONCILE.
@@ -269,14 +272,6 @@ bd mol bond mol-design-iterate "$root" --var surface=/settings --var node="$root
 
 `bd` rejects a mutating command when `BEADS_ACTOR` is unset, and `bd mol bond` takes the
 formula name and the target id as two positional arguments.
-
-## Relationship to the bundled designer agent
-
-OMP bundles a `designer` agent for a small self-contained UI edit.
-This package ships no agent named `designer`: discovery is first-wins and merges no frontmatter.
-
-Use `ui-ux-specialist` when the work spans components, needs a system audit, or needs
-independent critique.
 
 ## First-choice assets
 

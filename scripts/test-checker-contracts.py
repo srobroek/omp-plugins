@@ -267,5 +267,33 @@ class CheckerContracts(unittest.TestCase):
         self.assertEqual(result.returncode, 1, result.stdout)
         self.assertIn("collision: tools 'shared_tool' declared 2 times", result.stdout)
 
+    def test_contract_rejects_only_bundled_agent_names(self) -> None:
+        """OMP bundles scout, reviewer, security-reviewer, task, and sonic, and nothing else.
+
+        `designer` and `librarian` were once listed here, which would have refused a
+        plugin agent of either name although neither shadows anything.
+        """
+        self.copy_script("check-contract.py")
+        plugin = self.root / "demo"
+        (plugin / ".omp-plugin").mkdir(parents=True)
+        (plugin / ".omp-plugin" / "plugin.json").write_text("{}", encoding="utf-8")
+        (plugin / "README.md").write_text("# demo\n", encoding="utf-8")
+        agents = plugin / "agents"
+        agents.mkdir()
+        for name, shadows in (
+            ("scout", True), ("reviewer", True), ("security-reviewer", True), ("task", True), ("sonic", True),
+            ("designer", False), ("librarian", False),
+        ):
+            with self.subTest(agent=name):
+                agent = agents / f"{name}.md"
+                agent.write_text(f"---\nname: {name}\ndescription: Demo agent.\n---\nBody\n", encoding="utf-8")
+                result = self.run_script("check-contract.py")
+                agent.unlink()
+                if shadows:
+                    self.assertNotEqual(result.returncode, 0, result.stdout)
+                    self.assertIn(f"name {name!r} shadows a bundled agent", result.stdout)
+                else:
+                    self.assertEqual(result.returncode, 0, result.stdout)
+
 if __name__ == "__main__":
     unittest.main()
