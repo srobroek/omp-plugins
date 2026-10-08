@@ -12,14 +12,14 @@
       "name": "architecture",
       "description": "Architecture rules: module boundaries, compose-don't-fork, project structure, component promotion, and structural-search routing.",
       "source": "./architecture",
-      "version": "0.5.0",
+      "version": "0.6.0",
       "category": "development"
     },
     {
       "name": "authoring",
       "description": "Author and audit agentic assets: skills, rules, agents, and steering.",
       "source": "./authoring",
-      "version": "2.1.1",
+      "version": "2.2.0",
       "category": "productivity"
     },
     {
@@ -47,35 +47,35 @@
       "name": "chezmoi",
       "description": "Edit chezmoi-managed dotfiles at their authoritative source.",
       "source": "./chezmoi",
-      "version": "0.4.13",
+      "version": "0.4.14",
       "category": "productivity"
     },
     {
       "name": "debate",
       "description": "Stress-test a decision from both sides before committing.",
       "source": "./debate",
-      "version": "0.4.0",
+      "version": "0.5.0",
       "category": "productivity"
     },
     {
       "name": "delivery",
       "description": "Delivery workflow guidance with pull-request review, landing, cleanup, and hygiene tools.",
       "source": "./delivery",
-      "version": "1.2.0",
+      "version": "1.3.0",
       "category": "devops"
     },
     {
       "name": "dep-update",
       "description": "Classify dependency updates by semver safety and produce a cited upgrade plan.",
       "source": "./dep-update",
-      "version": "0.8.0",
+      "version": "0.8.1",
       "category": "development"
     },
     {
       "name": "design",
       "description": "UI and UX design: system audit, DESIGN.md, browser verification, accessibility, tokens, and Component Driven build.",
       "source": "./design",
-      "version": "0.6.0",
+      "version": "0.7.0",
       "category": "development"
     },
     {
@@ -89,7 +89,7 @@
       "name": "find-tools",
       "description": "Discover and vet skills, agents, MCP servers, and plugins across real registries, and set them up project-locally.",
       "source": "./find-tools",
-      "version": "2.1.0",
+      "version": "2.1.1",
       "category": "productivity"
     },
     {
@@ -124,7 +124,7 @@
       "name": "quality",
       "description": "Portable code design, reuse research and lifecycle review guidance, adversarial challenge, WATCHDOG authoring, and advisor resampling.",
       "source": "./quality",
-      "version": "2.1.0",
+      "version": "2.2.0",
       "category": "development"
     },
     {
@@ -138,7 +138,7 @@
       "name": "safety",
       "description": "Defence-in-depth advisories for destructive commands, attribution, and remote execution.",
       "source": "./safety",
-      "version": "0.8.2",
+      "version": "0.8.3",
       "category": "security"
     },
     {
@@ -152,7 +152,7 @@
       "name": "speckit",
       "description": "SpecKit workflow: spec-driven setup, bugfix flow, tasks.md protection, and PR title discipline.",
       "source": "./speckit",
-      "version": "0.9.0",
+      "version": "0.10.0",
       "category": "development"
     },
     {
@@ -173,7 +173,7 @@
       "name": "whats-new",
       "description": "Research breaking changes, deprecations, and new features between two versions.",
       "source": "./whats-new",
-      "version": "0.4.0",
+      "version": "0.4.1",
       "category": "productivity"
     },
     {

@@ -1,5 +1,13 @@
 # Changelog
 
+## [2.2.0](https://github.com/srobroek/omp-plugins/compare/authoring--v2.1.1...authoring--v2.2.0) (2026-10-08)
+
+
+### Features
+
+* **authoring:** auto-lint agentic edits and apply the plugin review decisions ([94b99dc](https://github.com/srobroek/omp-plugins/commit/94b99dc8fcfb258e85a3e79b3adf9a82e1e54b7b))
+* **authoring:** auto-lint agentic edits and apply the plugin review decisions ([#642](https://github.com/srobroek/omp-plugins/issues/642)) ([94b99dc](https://github.com/srobroek/omp-plugins/commit/94b99dc8fcfb258e85a3e79b3adf9a82e1e54b7b))
+
 ## [2.1.1](https://github.com/srobroek/omp-plugins/compare/authoring--v2.1.0...authoring--v2.1.1) (2026-09-26)
 
 

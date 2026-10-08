@@ -1,5 +1,17 @@
 # Changelog
 
+## [2.2.0](https://github.com/srobroek/omp-plugins/compare/quality--v2.1.0...quality--v2.2.0) (2026-10-08)
+
+
+### Features
+
+* **quality:** fold mattpocock skills into quality, debate and design, and tighten [#635](https://github.com/srobroek/omp-plugins/issues/635) steering ([#636](https://github.com/srobroek/omp-plugins/issues/636)) ([19d3d09](https://github.com/srobroek/omp-plugins/commit/19d3d0962beb9bfb956ad14f8cf18822ddc26008))
+
+
+### Bug Fixes
+
+* **quality:** mark tune-model-prompt routes owner-local and defer brief contents to fan-out ([#638](https://github.com/srobroek/omp-plugins/issues/638)) ([699c361](https://github.com/srobroek/omp-plugins/commit/699c361b177307460e98b030785cf61949836dc6))
+
 ## [2.1.0](https://github.com/srobroek/omp-plugins/compare/quality--v2.0.0...quality--v2.1.0) (2026-10-07)
 
 
