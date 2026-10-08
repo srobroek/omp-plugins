@@ -35,8 +35,9 @@ not, so add it before expecting any manifest route at all.
 
 Plugin MCP servers connect at session startup and an agent cannot reconnect them:
 `/mcp reconnect <name>` and `/mcp reload` are interactive slash commands, so only the user
-can run one. The declared `storybook` server points at `http://localhost:6006/mcp`, which
-connects only if Storybook was already running when the session began.
+can run one. The package declares its `storybook` server disabled, so it is absent unless
+the user enabled it, and even then it connects to `http://localhost:6006/mcp` only if
+Storybook was already running when the session began.
 
 When this skill starts Storybook itself, the MCP tools are unavailable for the rest of the
 session. Say so in the report and use the HTTP routes above. You MAY tell the user that
@@ -44,16 +45,11 @@ session. Say so in the report and use the HTTP routes above. You MAY tell the us
 
 ## Start the dev server, and keep it
 
-DEFAULT the dev server. Start it once as a named `bash` service, then reuse it for every
-later check in the run:
-
-```json
-{
-  "command": "npx --yes storybook dev -p 6006 --ci --no-open --quiet --disable-telemetry",
-  "name": "storybook",
-  "ready": { "port": 6006, "timeout": 240 }
-}
-```
+DEFAULT the dev server, started once and reused for every later check in the run: a `bash`
+service with `name: "storybook"`, `ready: { "port": 6006, "timeout": 240 }`, and the
+`storybook dev` command from the Storybook lifecycle table in
+`skill://ui-review/references/tools.md`. That table also covers the static build,
+`doctor`, and the `*.log` a crash leaves in the caller's cwd.
 
 Gate readiness on the PORT, never on a log pattern. Storybook 10.5.10 prints
 `storybook v10.5.10` and then a manifest line, and never the word "started", so a
@@ -61,46 +57,16 @@ Gate readiness on the PORT, never on a log pattern. Storybook 10.5.10 prints
 `log` and `port` are supplied, BOTH must pass, so one stale pattern hides a working server.
 Allow 240 seconds: a cold Vite dependency scan takes minutes.
 
-Three reasons this beats rebuilding. It recompiles on change, so a fix costs no rebuild. The
-process is project-scoped and outlives the turn, so one named `bash` start serves every
-subsequent probe. And the user can open `http://localhost:6006` and watch the same surface
-being driven, which a static directory cannot offer.
-
 MUST report the URL in your output so the user can follow along.
-
-Telemetry is on by default, which is why `--disable-telemetry` is not optional.
 
 Enumerate stories from `http://localhost:6006/index.json`, which carries `id`, `title`,
 and `tags` per entry.
 
-## Static build, only when a server has no purpose
-
-Build instead of serving only when running a server is pointless or impossible: a CI job, a
-sandbox with no free port, or a single artifact read with no follow-up. Otherwise the server
-wins, because every fix after a static build costs a full rebuild.
-
-`npx --yes storybook build -o "<dir>"` emits, under that directory, the routes that framework serves.
-Measured on React: `index.json`, `manifests/components.json`, `manifests/docs.json`, and
-`manifests/components.html`. A build cannot add a route the dev server withholds for that
-framework, so a Vue project still yields no components manifest.
-
-Adding `--test` speeds the build and DROPS the docs artifacts: `index.json` and
-`manifests/components.json` remain, while `manifests/docs.json` and
-`manifests/components.html` are absent. Use `--test` for running stories as tests, and a
-plain build for reading documentation.
-
-## What lands on disk
-
-`storybook dev` serves from memory and writes nothing durable, but it is not side-effect
-free. It populates two disposable caches, `node_modules/.cache/storybook/` and
-`node_modules/.vite/`. And a crash or a debug run writes a `*.log` into the CALLER's working
-directory rather than a temp dir: measured, one run left `debug-storybook.log` in an
-unrelated repository, which had to be removed by hand. Run it from the project, and check
-for a stray log before reporting done.
-
-`storybook build` defaults to `storybook-static/` when `-o` is omitted, so pass `-o` whenever
-the location matters. The `.gitignore` that `storybook init` generates lists exactly
-`storybook-static` and `*.log`, which corroborates both outputs.
+A static build answers only what the dev server serves for that framework, so a Vue
+project still yields no components manifest. Measured on React, `--test` keeps
+`index.json` and `manifests/components.json` but drops `manifests/docs.json` and
+`manifests/components.html`: use it for running stories as tests, and a plain build for
+reading documentation.
 
 ## What persists
 
@@ -111,8 +77,9 @@ committed files. The `stories` glob in `.storybook/main.ts`, for example
 `["../src/**/*.mdx", "../src/**/*.stories.@(js|jsx|mjs|ts|tsx)"]`, IS the registry: any
 matching file is discovered on every start. Nothing is ever re-added.
 
-**The local view is disposable.** It is memory plus the caches above, and one command
-regenerates it.
+**The local view is disposable.** `storybook dev` serves from memory and fills two caches,
+`node_modules/.cache/storybook/` and `node_modules/.vite/`. One command regenerates all of
+it.
 
 ## The manifests are the primary agent surface
 
@@ -174,33 +141,14 @@ the ARIA, computed-style, and viewport probes from `skill://ui-review/references
 to it. This is Component Driven verification: a component-level failure is smaller to
 locate than the same failure found on an assembled page.
 
-MUST Scope every probe to `#storybook-root`. The story root is not the document root: the
-frame also holds Storybook's hidden fallback chrome, marked `sb-preparing-story`,
-`sb-preparing-docs`, `sb-nopreview`, and `sb-errordisplay`. Measured on one story at 1440,
-`button,input,select,a[href]` returned 28 unscoped against 21 scoped, and
-`querySelectorAll('table')` returned 2 on a page with one table.
+MUST Scope every probe to `#storybook-root`. The frame also holds Storybook's hidden
+fallback chrome, and the root helper plus the measured cost of skipping it are in the
+"Resolve the root once" section of `skill://ui-review/references/probes.md`.
 
-That breaks measurement and interaction differently. Unscoped, the target-size probe
-reported 7 controls under 24x24, every one of them 0x0 and from the chrome; scoped, it
-reported none. Unscoped, `querySelector('table tbody tr button')` resolved the chrome's
-placeholder prop table first, so a click timed out after 8000ms against a 0x0 element while
-reporting a plausible `matches 15 element(s)`.
-
-Execute every story:
-
-```
-npx --yes --package=@storybook/test-runner test-storybook \
-  --url http://localhost:6006 --json --outputFile sb.json --failOnConsole
-```
-
-Pass `--package`. The bin `test-storybook` belongs to `@storybook/test-runner`, and a
-separate unrelated `test-storybook` package exists on npm, so the bare form fetches the
-wrong code rather than failing safely.
-
-It picks up accessibility checks when `@storybook/addon-a11y` is installed. On Vite-powered
-frameworks it is superseded by the Vitest addon, so prefer `vitest` there.
-
-`npx --yes storybook doctor` reports configuration health.
+To execute every story, take the `test-storybook` row of
+`skill://ui-review/references/tools.md`: it carries the required `--package` and the
+preference for `vitest` on Vite-powered frameworks. The runner picks up accessibility
+checks when `@storybook/addon-a11y` is installed.
 
 ## Composition, for Component Driven stages two and three
 
@@ -235,18 +183,9 @@ the component source and its type declaration is the fallback authority.
 
 ## Setting Storybook up where none exists
 
-Never install it unprompted. When the user wants it, run `npx --yes storybook ai setup`. It
-analyses the actual codebase and emits project-specific instructions: read providers,
-global CSS, portals, and data-fetching patterns; configure decorators, global styles, and
-framework providers in `preview.tsx`; ensure portal roots exist in the preview DOM;
-intercept network requests via MSW plus storage, timers, and navigation at preview level
-rather than per story; write stories for up to ten components from simple to complex,
-tagged `ai-generated` for review; add play functions for the most important flows; expand
-coverage across touched components; run Vitest against every new story plus the type
-checker; and install useful addons including MCP.
-
-Do not restate those steps as a static procedure. Their value is that the tool derives them
-from the real codebase, which prose cannot.
+Never install it unprompted. When the user wants it, run `npx --yes storybook ai setup`,
+which derives project-specific setup and story instructions from the actual codebase. Follow
+its output rather than a remembered procedure: the value is that it reads this repo.
 
 ## Authoring rules that make stories useful to an agent
 
