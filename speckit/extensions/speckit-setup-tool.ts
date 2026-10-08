@@ -55,8 +55,6 @@ export const EXTENSIONS = [
 	"qa",
 	"refine",
 	"retro",
-	"review",
-	"roadmap",
 	"security-review",
 	"tinyspec",
 ] as const;

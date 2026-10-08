@@ -107,7 +107,7 @@ NOT `bd close <gate-id>` to resolve a gate; the `bd-close-gate` extension checks
   literal ids against the database and blocks gate closure.
 
 COMMAND ROUTING (lifecycle commands)
-- constitution / roadmap.write: project-scoped; do not pour a molecule.
+- constitution: project-scoped; do not pour a molecule.
 - tinyspec: no lifecycle; do not pour. If it grows, stop and pour a feature molecule.
 - bugfix.report: active spec -> `bd mol bond mol-speckit-bugfix`; no spec -> create
   the spec dir first. The patch step's tasks.md write is denied -- create beads.
