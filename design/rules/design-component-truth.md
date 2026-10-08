@@ -13,17 +13,17 @@ MUST Verify a prop against documentation before using it, including one whose na
 MUST Read `http://localhost:6006/manifests/components.json` when it serves, then index `components` by id and select the engine-specific payload based on `meta.docgen`. The key is not the engine string: engine `react-docgen` puts its payload under `reactDocgen`, whose `props` carry `required`, a `tsType`, and a `description`.
 MUST Use the Storybook MCP `list-all-documentation` then `get-documentation` instead when that server is connected.
 MUST Fetch `get-storybook-story-instructions`, or read the project's existing stories, before writing or updating a story.
-MUST Check the work with `npx --yes --package=@storybook/test-runner test-storybook`, or `run-story-tests` when the MCP is connected. Pass `--package`: an unrelated `test-storybook` package exists on npm.
+DEFAULT Check the work with the project's existing story test route: the Vitest addon where the project runs it, `run-story-tests` when the MCP is connected, otherwise `npx --yes --package=@storybook/test-runner test-storybook`. Pass `--package`: an unrelated `test-storybook` package exists on npm.
 NOT Infer a prop from a naming convention or from another library's API. Two component libraries agreeing on a name is a coincidence, not a contract.
 NOT Trust a story name to reflect a prop name. Verify through the manifest, the ArgTypes block, or an example snippet.
-ASK the user when a needed prop is undocumented. Inventing one ships dead markup.
+NOT Pass a prop no documentation names. Return the question to whoever holds the conversation: a subagent returns it to its caller and never asks the user. Inventing one ships dead markup.
 
 | situation | where prop truth comes from |
 |---|---|
 | `manifests/components.json` serves | `components[<id>].reactDocgen.props` |
 | that route 404s, or no Storybook exists | the component source and its type declaration |
 | a Storybook exists but is not React | the rendered Autodocs `ArgTypes` block, or the source |
-| the prop is absent wherever you looked | ASK; do not pass it |
+| the prop is absent wherever you looked | do not pass it; return the question to the conversation owner |
 
 The prop-table manifest is React-only in practice, measured on Storybook 10.5.10 with
 `@storybook/addon-mcp` installed in both a React and a Vue project: React serves it, Vue
