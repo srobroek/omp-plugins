@@ -18,10 +18,6 @@ each comes from its upstream author.
 | `frontend-slides` | `zarazhangrui/frontend-slides` | `frontend-slides` | `frontend-slides@frontend-slides` | `python-pptx`, only for PPT conversion | `design-prototype` deck row |
 | `web-asset-generator` | `alonw0/web-asset-generator` | `web-asset-generator-marketplace` | `web-asset-generator@web-asset-generator-marketplace` | `Pillow` | `design-prototype` asset row |
 | `superdesign` | `superdesigndev/superdesign-skill` | `superdesign` | `superdesign@superdesign` | authenticated account with credits | `design-prototype` hosted row, after the user confirms |
-| `create-design-md` | `ibelick/ui-skills` | `srobroek-omp` | `ui-skills@srobroek-omp` | none | `design-md` |
-
-The `create-design-md` row installs through the `srobroek-omp` catalog because its upstream
-ships no marketplace or plugin manifest.
 
 ## Procedure
 

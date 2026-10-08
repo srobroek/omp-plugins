@@ -88,9 +88,7 @@ every prerequisite still missing, and every MCP server that did not connect. A
 row that failed to install STOPS the step that needs it, so an unrecorded gap
 strands this molecule there.
 
-document-system is conditional on {{want_design_md}}. Its create-design-md row
-applies only when the user requests that artifact. If it fails to install, wait
-for explicit approval to omit it. Do not silently change the request. Record the
+document-system is conditional on {{want_design_md}}. Record the
 system contract on beads regardless.
 """
 

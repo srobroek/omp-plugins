@@ -44,7 +44,7 @@ The copy skill is implemented locally as `ui-microcopy`, which includes the merg
 | Skill | Implementation or route | Use when |
 |---|---|---|
 | `design-system-audit` | local token-carrier inventory with `file:line` evidence; `styleseed` (`ss-lint`, `ss-review`, `ss-tokens`, `ss-score`) only when the user opts in | Report the tokens, scales, and primitives that exist |
-| `design-md` | routes extraction to `create-design-md`, which needs a repository or URL to extract from | Lint and gate the extracted repo-root DESIGN.md |
+| `design-md` | follows `create-design-md`, vendored, MIT, which needs a repository or URL to extract from | Lint and gate the extracted repo-root DESIGN.md |
 | `ui-review` | local, drives OMP `browser` | Drive a real surface and measure it |
 | `accessibility-audit` | the `accessibility-scanner` server measures; `accessibility` covers criteria; the `@axe-core/cli` gate is the fallback | Check WCAG 2.2 AA with measured values |
 | `motion-design` | the `motionlint` CLI measures; `ss-motion` authors React `motion.X` only | Set durations, easings, reduced-motion branches |
@@ -323,12 +323,8 @@ omp plugin install impeccable@impeccable
 | `frontend-slides@frontend-slides` | `zarazhangrui/frontend-slides` | `frontend-slides` |
 | `web-asset-generator@web-asset-generator-marketplace` | `alonw0/web-asset-generator` | `web-asset-generator` |
 | `superdesign@superdesign` | `superdesigndev/superdesign-skill` | `superdesign`, installed only after the user confirms the account |
-| `ui-skills@srobroek-omp` | `ibelick/ui-skills` | `create-design-md`, and 6 more |
 
-One row installs through this catalog, because its upstream ships no marketplace or plugin
-manifest: the `package.json` in `ibelick/ui-skills` builds the project's Astro site and
-publishes its `ui-skills` npm CLI, and declares no plugin. Every other upstream installs
-from its author, so a new upstream release needs no catalog change here.
+Every upstream installs from its author, so a new upstream release needs no catalog change here.
 
 OMP discovers skills at session start. A plugin the preflight installs mid-session is not
 reachable through `skill://` until the next session, so the preflight reads its SKILL.md

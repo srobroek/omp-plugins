@@ -61,11 +61,8 @@ needs it, so an unrecorded gap strands this molecule later rather than here.
 
 This tier has no INTENT gate: specify-touch follows GROUND directly and the only
 human gate is touch-approval at the end. So there is nowhere later to raise a
-failed install, and this step handles it. update-design-md is conditional on
-{{want_design_md}}; when that is set and its create-design-md row failed, leave
-THIS bead open rather than starting specify-touch. Everything downstream needs
-this step, so the molecule waits instead of walking six steps to fail at
-update-design-md. Record every other gap for the reader without blocking on it.
+failed install, and this step handles it. Record every gap for the reader
+without blocking on it.
 """
 
 [steps.metadata]
