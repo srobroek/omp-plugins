@@ -49,6 +49,9 @@ focus-visible, active, disabled, loading, empty, error, selected.
 ## Rules
 
 MUST Use `browser` for web surfaces and `computer` for native desktop surfaces.
+DEFAULT Browser work defaults to headless managed Chromium: `browser.open({ name, url })`, no `app` or `headed`; inside a Tern pane, where a tab is WebKit, add `app: { tern: false }`.
+  Pass `app: { relay: true }` only when a page needs the user's signed-in session or the user's own Chrome extensions (password manager, wallet, and similar), never for a public page: relay adopts the user's real Chrome tab.
+  When the user wants to watch, or watching helps (debugging a flow, a visual check with the user), offer `headed: true` and say so explicitly.
 MUST Report every finding with its viewport width and its measured value.
 MUST Re-verify only the changed assertion after a fix, not the whole walk.
 NOT A fresh full walk per story. Sweep breadth FIRST: every story and state in one batched

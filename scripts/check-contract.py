@@ -23,9 +23,12 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
 
-# Bundled agents (`EMBEDDED_AGENT_DEFS` in OMP's `src/task/agents.ts`). Shipping one of
-# these names shadows the bundled definition.
-BUNDLED_AGENTS = {"scout", "reviewer", "security-reviewer", "task", "sonic"}
+# Bundled agents are `EMBEDDED_AGENT_DEFS` in the pinned host's `src/task/agents.ts`, read
+# from the `@oh-my-pi/pi-coding-agent` that `bun install` puts in node_modules. Shipping one
+# of these names shadows the bundled definition. The literal set is OMP 18.8.4's and is used,
+# with a warning, only when the host source is missing or no longer parses.
+HOST_AGENTS = REPO / "node_modules/@oh-my-pi/pi-coding-agent/src/task/agents.ts"
+FALLBACK_BUNDLED_AGENTS = frozenset({"scout", "reviewer", "security-reviewer", "task", "sonic"})
 
 # The configured roles. An agent model must name one of these, never a raw selector.
 ROLES = {
@@ -37,6 +40,69 @@ ROLES = {
 # is gitignored, so treating it as a plugin fails the gate on a clean tree. `ci` holds the
 # full-estate census fixtures (#419), not a plugin.
 NOT_A_PLUGIN = {"scripts", "examples", "node_modules", "ci"}
+
+
+def top_level_objects(body: str) -> list[str]:
+    """Split an array literal's body into its top-level `{...}` objects."""
+    objects: list[str] = []
+    depth = start = 0
+    for index, char in enumerate(body):
+        if char == "{":
+            if depth == 0:
+                start = index
+            depth += 1
+        elif char == "}":
+            depth -= 1
+            if depth < 0:
+                raise ValueError("unbalanced braces")
+            if depth == 0:
+                objects.append(body[start : index + 1])
+    if depth:
+        raise ValueError("unbalanced braces")
+    return objects
+
+
+def host_bundled_agents() -> frozenset[str]:
+    """Every name in the host's `EMBEDDED_AGENT_DEFS`; raises when it cannot be read.
+
+    An entry names itself in an inline `frontmatter`, or else in the frontmatter of the
+    markdown its `template` identifier is imported from.
+    """
+    text = HOST_AGENTS.read_text(encoding="utf-8")
+    block = re.search(r"\bEMBEDDED_AGENT_DEFS\b[^=]*=\s*\[(.*?)^\];", text, re.S | re.M)
+    if block is None:
+        raise ValueError("no `EMBEDDED_AGENT_DEFS = [...]` array")
+    imports = dict(re.findall(r'^import\s+(\w+)\s+from\s+"([^"]+\.md)"', text, re.M))
+    names: set[str] = set()
+    entries = top_level_objects(block.group(1))
+    for entry in entries:
+        inline = re.search(r'\bfrontmatter:\s*\{[^}]*?\bname:\s*"([^"]+)"', entry, re.S)
+        if inline:
+            names.add(inline.group(1))
+            continue
+        template = re.search(r"\btemplate:\s*(\w+)", entry)
+        source = imports.get(template.group(1)) if template else None
+        parsed = split_frontmatter(HOST_AGENTS.parent / source) if source else None
+        name = parsed[0].get("name", "").strip().strip("'\"") if parsed else ""
+        if not name:
+            raise ValueError(f"no agent name in entry {' '.join(entry.split())[:80]!r}")
+        names.add(name)
+    if not entries:
+        raise ValueError("`EMBEDDED_AGENT_DEFS` has no entries")
+    return frozenset(names)
+
+
+def bundled_agents() -> frozenset[str]:
+    try:
+        return host_bundled_agents()
+    except (OSError, ValueError) as error:
+        print(
+            f"WARN cannot read bundled agents from {HOST_AGENTS.relative_to(REPO)} ({error}); "
+            f"falling back to {sorted(FALLBACK_BUNDLED_AGENTS)}. Run `bun install` to check "
+            "against the pinned host.",
+            file=sys.stderr,
+        )
+        return FALLBACK_BUNDLED_AGENTS
 
 
 def split_frontmatter(path: Path) -> tuple[dict[str, str], str] | None:
@@ -109,7 +175,7 @@ def check_rule(path: Path, plugin: str, fail: list[str]) -> str | None:
     return stem
 
 
-def check_agent(path: Path, fail: list[str]) -> str | None:
+def check_agent(path: Path, bundled: frozenset[str], fail: list[str]) -> str | None:
     parsed = split_frontmatter(path)
     if parsed is None:
         fail.append(f"{path}: no frontmatter, so the agent fails to parse and is skipped")
@@ -123,7 +189,7 @@ def check_agent(path: Path, fail: list[str]) -> str | None:
         fail.append(f"{path}: missing required `description`")
     if name and name != path.stem:
         fail.append(f"{path}: frontmatter name {name!r} != filename stem {path.stem!r}")
-    if name in BUNDLED_AGENTS:
+    if name in bundled:
         fail.append(f"{path}: name {name!r} shadows a bundled agent")
     if "permissionMode" in fields:
         fail.append(f"{path}: `permissionMode` has no OMP equivalent; express it as a `tools` allowlist")
@@ -157,6 +223,7 @@ def main() -> int:
     fail: list[str] = []
     counts = {"plugins": 0, "rules": 0, "agents": 0, "skills": 0}
     seen: dict[tuple[str, str], list[str]] = {}
+    bundled = bundled_agents()
 
     for plugin in plugin_dirs():
         counts["plugins"] += 1
@@ -175,7 +242,7 @@ def main() -> int:
 
         for path in sorted(plugin.glob("agents/*.md")):
             counts["agents"] += 1
-            got = check_agent(path, fail)
+            got = check_agent(path, bundled, fail)
             if got:
                 seen.setdefault(("agent", got), []).append(str(path.relative_to(REPO)))
 

@@ -1,16 +1,27 @@
 name: dependabot-automerge
 
-# Only the `omp-patch` group merges itself. CI is the decision-maker: `--auto`
-# waits for the required checks, so a patch bump that breaks the loader smoke,
-# the bundle-drift gate or the tests stays open.
+# Only the `omp` group (@oh-my-pi/* minor and patch, see .github/dependabot.yml)
+# merges itself, and only after the ci workflow has passed on the exact head this
+# run was triggered for, loader smoke included. This job waits for that run
+# itself rather than handing the decision to `gh pr merge --auto`: main has no
+# required status checks, so `--auto` merged at once (#615 landed eleven seconds
+# after it opened, two minutes before its CI finished). A head that moves while
+# CI runs, a Dependabot rebase or a dependabot-dist bundle push, starts a fresh
+# run that cancels this one, and `--match-head-commit` refuses to merge any head
+# but the one CI certified.
 
 on:
   pull_request_target:
     types: [opened, synchronize, reopened]
 
 permissions:
+  actions: read
   contents: write
   pull-requests: write
+
+concurrency:
+  group: dependabot-automerge-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
 
 jobs:
   automerge:
@@ -18,7 +29,8 @@ jobs:
       github.event.pull_request.user.login == 'dependabot[bot]' &&
       github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    # The ci job's own 15-minute budget, plus queueing on both sides.
+    timeout-minutes: 45
     steps:
       - name: Read Dependabot metadata
         id: metadata
@@ -27,14 +39,44 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
       # `dependency-group` is the authority, not the dependency names: the group
-      # is defined in .github/dependabot.yml as @oh-my-pi/* patch updates only,
-      # so membership already proves both the package scope and the update type.
-      # A PR outside the group falls through and waits for a human.
-      - name: Enable automerge for the OMP patch group
+      # is defined in .github/dependabot.yml as @oh-my-pi/* minor and patch
+      # updates only, so membership already proves both the package scope and the
+      # update type. A PR outside the group falls through and waits for a human.
+      - name: Merge the OMP group once CI passes on this head
         if: >-
           steps.metadata.outputs.package-ecosystem == 'bun' &&
-          steps.metadata.outputs.dependency-group == 'omp-patch'
+          steps.metadata.outputs.dependency-group == 'omp'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
           PR_URL: ${{ github.event.pull_request.html_url }}
-        run: gh pr merge "$PR_URL" --auto --squash
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+
+          # The ci run for this head is created a few seconds after the event.
+          run_id=""
+          for _ in $(seq 1 60); do
+            run_id="$(gh run list --workflow ci.yml --event pull_request --commit "$HEAD_SHA" \
+              --limit 1 --json databaseId --jq '.[0].databaseId // empty')"
+            if [ -n "$run_id" ]; then break; fi
+            sleep 10
+          done
+          if [ -z "$run_id" ]; then
+            echo "No ci run for $HEAD_SHA after 10 minutes; leaving the PR for a human." >&2
+            exit 1
+          fi
+
+          # A failed or cancelled run fails this step, so nothing merges.
+          gh run watch "$run_id" --exit-status --interval 30
+          conclusion="$(gh run view "$run_id" --json conclusion --jq .conclusion)"
+          # The job passing is not enough on its own: a smoke step that was skipped
+          # or made non-blocking still leaves the job green.
+          smoke="$(gh api --paginate "repos/{owner}/{repo}/actions/runs/$run_id/jobs" \
+            --jq '.jobs[].steps[]? | select(.name == "Loader smoke against pinned OMP") | .conclusion')"
+          if [ "$conclusion" != success ] || [ "$smoke" != success ]; then
+            echo "ci run $run_id concluded '$conclusion' with loader smoke '$smoke'; not merging." >&2
+            exit 1
+          fi
+
+          gh pr merge "$PR_URL" --squash --match-head-commit "$HEAD_SHA"

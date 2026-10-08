@@ -45,14 +45,14 @@ var init_environment = __esm(() => {
 });
 
 // node_modules/puppeteer-core/lib/puppeteer/node-env-setup.js
-import fs2 from "fs";
-import path2 from "path";
+import fs3 from "fs";
+import path3 from "path";
 import { debuglog } from "util";
 var init_node_env_setup = __esm(() => {
   init_environment();
   environment.value = {
-    fs: fs2,
-    path: path2,
+    fs: fs3,
+    path: path3,
     debuglog,
     ScreenRecorder: environment.value.ScreenRecorder
   };
@@ -37153,8 +37153,8 @@ var init_httpUtil = () => {};
 
 // node_modules/@puppeteer/browsers/lib/browser-data/chrome.js
 import { execSync } from "child_process";
-import os2 from "os";
-import path3 from "path";
+import os3 from "os";
+import path4 from "path";
 function folder(platform) {
   switch (platform) {
     case BrowserPlatform.LINUX_ARM:
@@ -37180,13 +37180,13 @@ function relativeExecutablePath(platform, _buildId) {
   switch (platform) {
     case BrowserPlatform.MAC:
     case BrowserPlatform.MAC_ARM:
-      return path3.join("chrome-" + folder(platform), "Google Chrome for Testing.app", "Contents", "MacOS", "Google Chrome for Testing");
+      return path4.join("chrome-" + folder(platform), "Google Chrome for Testing.app", "Contents", "MacOS", "Google Chrome for Testing");
     case BrowserPlatform.LINUX_ARM:
     case BrowserPlatform.LINUX:
-      return path3.join("chrome-linux64", "chrome");
+      return path4.join("chrome-linux64", "chrome");
     case BrowserPlatform.WIN32:
     case BrowserPlatform.WIN64:
-      return path3.join("chrome-" + folder(platform), "chrome.exe");
+      return path4.join("chrome-" + folder(platform), "chrome.exe");
   }
 }
 async function getLastKnownGoodReleaseForChannel(channel) {
@@ -37237,7 +37237,7 @@ function getChromeWindowsLocation(channel, locationsPrefixes) {
       break;
   }
   return [...locationsPrefixes.values()].map((l) => {
-    return path3.win32.join(l, suffix);
+    return path4.win32.join(l, suffix);
   });
 }
 function getWslVariable(variable) {
@@ -37341,48 +37341,48 @@ function resolveDefaultUserDataDir(platform, channel) {
     case BrowserPlatform.WIN32:
       switch (channel) {
         case ChromeReleaseChannel.STABLE:
-          return path3.join(getLocalAppDataWin(), "Google", "Chrome", "User Data");
+          return path4.join(getLocalAppDataWin(), "Google", "Chrome", "User Data");
         case ChromeReleaseChannel.BETA:
-          return path3.join(getLocalAppDataWin(), "Google", "Chrome Beta", "User Data");
+          return path4.join(getLocalAppDataWin(), "Google", "Chrome Beta", "User Data");
         case ChromeReleaseChannel.CANARY:
-          return path3.join(getLocalAppDataWin(), "Google", "Chrome SxS", "User Data");
+          return path4.join(getLocalAppDataWin(), "Google", "Chrome SxS", "User Data");
         case ChromeReleaseChannel.DEV:
-          return path3.join(getLocalAppDataWin(), "Google", "Chrome Dev", "User Data");
+          return path4.join(getLocalAppDataWin(), "Google", "Chrome Dev", "User Data");
       }
     case BrowserPlatform.MAC_ARM:
     case BrowserPlatform.MAC:
       switch (channel) {
         case ChromeReleaseChannel.STABLE:
-          return path3.join(getBaseUserDataDirPathMac(), "Chrome");
+          return path4.join(getBaseUserDataDirPathMac(), "Chrome");
         case ChromeReleaseChannel.BETA:
-          return path3.join(getBaseUserDataDirPathMac(), "Chrome Beta");
+          return path4.join(getBaseUserDataDirPathMac(), "Chrome Beta");
         case ChromeReleaseChannel.DEV:
-          return path3.join(getBaseUserDataDirPathMac(), "Chrome Dev");
+          return path4.join(getBaseUserDataDirPathMac(), "Chrome Dev");
         case ChromeReleaseChannel.CANARY:
-          return path3.join(getBaseUserDataDirPathMac(), "Chrome Canary");
+          return path4.join(getBaseUserDataDirPathMac(), "Chrome Canary");
       }
     case BrowserPlatform.LINUX_ARM:
     case BrowserPlatform.LINUX:
       switch (channel) {
         case ChromeReleaseChannel.STABLE:
-          return path3.join(getConfigHomeLinux(), "google-chrome");
+          return path4.join(getConfigHomeLinux(), "google-chrome");
         case ChromeReleaseChannel.BETA:
-          return path3.join(getConfigHomeLinux(), "google-chrome-beta");
+          return path4.join(getConfigHomeLinux(), "google-chrome-beta");
         case ChromeReleaseChannel.CANARY:
-          return path3.join(getConfigHomeLinux(), "google-chrome-canary");
+          return path4.join(getConfigHomeLinux(), "google-chrome-canary");
         case ChromeReleaseChannel.DEV:
-          return path3.join(getConfigHomeLinux(), "google-chrome-unstable");
+          return path4.join(getConfigHomeLinux(), "google-chrome-unstable");
       }
   }
 }
 function getLocalAppDataWin() {
-  return process.env["LOCALAPPDATA"] || path3.join(os2.homedir(), "AppData", "Local");
+  return process.env["LOCALAPPDATA"] || path4.join(os3.homedir(), "AppData", "Local");
 }
 function getConfigHomeLinux() {
-  return process.env["CHROME_CONFIG_HOME"] || process.env["XDG_CONFIG_HOME"] || path3.join(os2.homedir(), ".config");
+  return process.env["CHROME_CONFIG_HOME"] || process.env["XDG_CONFIG_HOME"] || path4.join(os3.homedir(), ".config");
 }
 function getBaseUserDataDirPathMac() {
-  return path3.join(os2.homedir(), "Library", "Application Support", "Google");
+  return path4.join(os3.homedir(), "Library", "Application Support", "Google");
 }
 function compareVersions(a, b) {
   const cleanA = a.trim();
@@ -37421,7 +37421,7 @@ var init_chrome = __esm(() => {
 });
 
 // node_modules/@puppeteer/browsers/lib/browser-data/chrome-headless-shell.js
-import path4 from "path";
+import path5 from "path";
 function folder2(platform) {
   switch (platform) {
     case BrowserPlatform.LINUX_ARM:
@@ -37451,13 +37451,13 @@ function relativeExecutablePath2(platform, _buildId) {
   switch (platform) {
     case BrowserPlatform.MAC:
     case BrowserPlatform.MAC_ARM:
-      return path4.join("chrome-headless-shell-" + folder2(platform), "chrome-headless-shell");
+      return path5.join("chrome-headless-shell-" + folder2(platform), "chrome-headless-shell");
     case BrowserPlatform.LINUX_ARM:
     case BrowserPlatform.LINUX:
-      return path4.join("chrome-headless-shell-linux64", "chrome-headless-shell");
+      return path5.join("chrome-headless-shell-linux64", "chrome-headless-shell");
     case BrowserPlatform.WIN32:
     case BrowserPlatform.WIN64:
-      return path4.join("chrome-headless-shell-" + folder2(platform), "chrome-headless-shell.exe");
+      return path5.join("chrome-headless-shell-" + folder2(platform), "chrome-headless-shell.exe");
   }
 }
 var init_chrome_headless_shell = __esm(() => {
@@ -37466,7 +37466,7 @@ var init_chrome_headless_shell = __esm(() => {
 });
 
 // node_modules/@puppeteer/browsers/lib/browser-data/chromedriver.js
-import path5 from "path";
+import path6 from "path";
 function folder3(platform) {
   switch (platform) {
     case BrowserPlatform.LINUX_ARM:
@@ -37492,13 +37492,13 @@ function relativeExecutablePath3(platform, _buildId) {
   switch (platform) {
     case BrowserPlatform.MAC:
     case BrowserPlatform.MAC_ARM:
-      return path5.join("chromedriver-" + folder3(platform), "chromedriver");
+      return path6.join("chromedriver-" + folder3(platform), "chromedriver");
     case BrowserPlatform.LINUX_ARM:
     case BrowserPlatform.LINUX:
-      return path5.join("chromedriver-linux64", "chromedriver");
+      return path6.join("chromedriver-linux64", "chromedriver");
     case BrowserPlatform.WIN32:
     case BrowserPlatform.WIN64:
-      return path5.join("chromedriver-" + folder3(platform), "chromedriver.exe");
+      return path6.join("chromedriver-" + folder3(platform), "chromedriver.exe");
   }
 }
 var init_chromedriver = __esm(() => {
@@ -37507,7 +37507,7 @@ var init_chromedriver = __esm(() => {
 });
 
 // node_modules/@puppeteer/browsers/lib/browser-data/chromium.js
-import path6 from "path";
+import path7 from "path";
 function archive(platform, buildId) {
   switch (platform) {
     case BrowserPlatform.LINUX_ARM:
@@ -37546,13 +37546,13 @@ function relativeExecutablePath4(platform, _buildId) {
   switch (platform) {
     case BrowserPlatform.MAC:
     case BrowserPlatform.MAC_ARM:
-      return path6.join("chrome-mac", "Chromium.app", "Contents", "MacOS", "Chromium");
+      return path7.join("chrome-mac", "Chromium.app", "Contents", "MacOS", "Chromium");
     case BrowserPlatform.LINUX_ARM:
     case BrowserPlatform.LINUX:
-      return path6.join("chrome-linux", "chrome");
+      return path7.join("chrome-linux", "chrome");
     case BrowserPlatform.WIN32:
     case BrowserPlatform.WIN64:
-      return path6.join("chrome-win", "chrome.exe");
+      return path7.join("chrome-win", "chrome.exe");
   }
 }
 async function resolveBuildId2(platform) {
@@ -37567,8 +37567,8 @@ var init_chromium = __esm(() => {
 });
 
 // node_modules/@puppeteer/browsers/lib/browser-data/firefox.js
-import fs3 from "fs";
-import path7 from "path";
+import fs4 from "fs";
+import path8 from "path";
 function getFormat(buildId) {
   const majorVersion = Number(buildId.split(".").shift());
   return majorVersion >= 135 ? "xz" : "bz2";
@@ -37664,13 +37664,13 @@ function relativeExecutablePath5(platform, buildId) {
       switch (platform) {
         case BrowserPlatform.MAC_ARM:
         case BrowserPlatform.MAC:
-          return path7.join("Firefox Nightly.app", "Contents", "MacOS", "firefox");
+          return path8.join("Firefox Nightly.app", "Contents", "MacOS", "firefox");
         case BrowserPlatform.LINUX_ARM:
         case BrowserPlatform.LINUX:
-          return path7.join("firefox", "firefox");
+          return path8.join("firefox", "firefox");
         case BrowserPlatform.WIN32:
         case BrowserPlatform.WIN64:
-          return path7.join("firefox", "firefox.exe");
+          return path8.join("firefox", "firefox.exe");
       }
     case FirefoxChannel.BETA:
     case FirefoxChannel.DEVEDITION:
@@ -37679,13 +37679,13 @@ function relativeExecutablePath5(platform, buildId) {
       switch (platform) {
         case BrowserPlatform.MAC_ARM:
         case BrowserPlatform.MAC:
-          return path7.join("Firefox.app", "Contents", "MacOS", "firefox");
+          return path8.join("Firefox.app", "Contents", "MacOS", "firefox");
         case BrowserPlatform.LINUX_ARM:
         case BrowserPlatform.LINUX:
-          return path7.join("firefox", "firefox");
+          return path8.join("firefox", "firefox");
         case BrowserPlatform.WIN32:
         case BrowserPlatform.WIN64:
-          return path7.join("core", "firefox.exe");
+          return path8.join("core", "firefox.exe");
       }
   }
 }
@@ -37705,8 +37705,8 @@ async function resolveBuildId3(channel = FirefoxChannel.NIGHTLY) {
   return channel + "_" + version;
 }
 async function createProfile(options) {
-  if (!fs3.existsSync(options.path)) {
-    await fs3.promises.mkdir(options.path, {
+  if (!fs4.existsSync(options.path)) {
+    await fs4.promises.mkdir(options.path, {
       recursive: true
     });
   }
@@ -37800,20 +37800,20 @@ function defaultProfilePreferences(extraPrefs) {
   return Object.assign(defaultPrefs, extraPrefs);
 }
 async function backupFile(input) {
-  if (!fs3.existsSync(input)) {
+  if (!fs4.existsSync(input)) {
     return;
   }
-  await fs3.promises.copyFile(input, input + ".puppeteer");
+  await fs4.promises.copyFile(input, input + ".puppeteer");
 }
 async function syncPreferences(options) {
-  const prefsPath = path7.join(options.path, "prefs.js");
-  const userPath = path7.join(options.path, "user.js");
+  const prefsPath = path8.join(options.path, "prefs.js");
+  const userPath = path8.join(options.path, "user.js");
   const lines = Object.entries(options.preferences).map(([key, value]) => {
     return `user_pref(${JSON.stringify(key)}, ${JSON.stringify(value)});`;
   });
   const result = await Promise.allSettled([
     backupFile(userPath).then(async () => {
-      await fs3.promises.writeFile(userPath, lines.join(`
+      await fs4.promises.writeFile(userPath, lines.join(`
 `));
     }),
     backupFile(prefsPath)
@@ -38039,17 +38039,17 @@ var debug2 = (prefix) => {
 var init_debug = () => {};
 
 // node_modules/@puppeteer/browsers/lib/detectPlatform.js
-import os3 from "os";
+import os4 from "os";
 function detectBrowserPlatform() {
-  const platform = os3.platform();
-  const arch = os3.arch();
+  const platform = os4.platform();
+  const arch = os4.arch();
   switch (platform) {
     case "darwin":
       return arch === "arm64" ? BrowserPlatform.MAC_ARM : BrowserPlatform.MAC;
     case "linux":
       return arch === "arm64" ? BrowserPlatform.LINUX_ARM : BrowserPlatform.LINUX;
     case "win32":
-      return arch === "x64" || arch === "arm64" && isWindows11(os3.release()) ? BrowserPlatform.WIN64 : BrowserPlatform.WIN32;
+      return arch === "x64" || arch === "arm64" && isWindows11(os4.release()) ? BrowserPlatform.WIN64 : BrowserPlatform.WIN32;
     default:
       return;
   }
@@ -38069,9 +38069,9 @@ var init_detectPlatform = __esm(() => {
 });
 
 // node_modules/@puppeteer/browsers/lib/Cache.js
-import fs4 from "fs";
-import os4 from "os";
-import path8 from "path";
+import fs5 from "fs";
+import os5 from "os";
+import path9 from "path";
 
 class InstalledBrowser {
   browser;
@@ -38110,17 +38110,17 @@ class Cache {
     return this.#rootDir;
   }
   browserRoot(browser) {
-    return path8.join(this.#rootDir, browser);
+    return path9.join(this.#rootDir, browser);
   }
   metadataFile(browser) {
-    return path8.join(this.browserRoot(browser), ".metadata");
+    return path9.join(this.browserRoot(browser), ".metadata");
   }
   readMetadata(browser) {
     const metatadaPath = this.metadataFile(browser);
-    if (!fs4.existsSync(metatadaPath)) {
+    if (!fs5.existsSync(metatadaPath)) {
       return { aliases: {} };
     }
-    const data = JSON.parse(fs4.readFileSync(metatadaPath, "utf8"));
+    const data = JSON.parse(fs5.readFileSync(metatadaPath, "utf8"));
     if (typeof data !== "object") {
       throw new Error(".metadata is not an object");
     }
@@ -38128,8 +38128,8 @@ class Cache {
   }
   writeMetadata(browser, metadata) {
     const metatadaPath = this.metadataFile(browser);
-    fs4.mkdirSync(path8.dirname(metatadaPath), { recursive: true });
-    fs4.writeFileSync(metatadaPath, JSON.stringify(metadata, null, 2));
+    fs5.mkdirSync(path9.dirname(metatadaPath), { recursive: true });
+    fs5.writeFileSync(metatadaPath, JSON.stringify(metadata, null, 2));
   }
   readExecutablePath(browser, platform, buildId) {
     const metadata = this.readMetadata(browser);
@@ -38153,10 +38153,10 @@ class Cache {
     return metadata.aliases[alias];
   }
   installationDir(browser, platform, buildId) {
-    return path8.join(this.browserRoot(browser), `${platform}-${buildId}`);
+    return path9.join(this.browserRoot(browser), `${platform}-${buildId}`);
   }
   clear() {
-    fs4.rmSync(this.#rootDir, {
+    fs5.rmSync(this.#rootDir, {
       force: true,
       recursive: true,
       maxRetries: 10,
@@ -38175,7 +38175,7 @@ class Cache {
       delete metadata.executablePaths[key];
       this.writeMetadata(browser, metadata);
     }
-    fs4.rmSync(this.installationDir(browser, platform, buildId), {
+    fs5.rmSync(this.installationDir(browser, platform, buildId), {
       force: true,
       recursive: true,
       maxRetries: 10,
@@ -38183,17 +38183,17 @@ class Cache {
     });
   }
   getInstalledBrowsers() {
-    if (!fs4.existsSync(this.#rootDir)) {
+    if (!fs5.existsSync(this.#rootDir)) {
       return [];
     }
-    const types = fs4.readdirSync(this.#rootDir);
+    const types = fs5.readdirSync(this.#rootDir);
     const browsers = types.filter((t) => {
       return Object.values(Browser6).includes(t);
     });
     return browsers.flatMap((browser) => {
-      const files = fs4.readdirSync(this.browserRoot(browser));
+      const files = fs5.readdirSync(this.browserRoot(browser));
       return files.map((file) => {
-        const result = parseFolderPath(path8.join(this.browserRoot(browser), file));
+        const result = parseFolderPath(path9.join(this.browserRoot(browser), file));
         if (!result) {
           return null;
         }
@@ -38206,7 +38206,7 @@ class Cache {
   computeExecutablePath(options) {
     options.platform ??= detectBrowserPlatform();
     if (!options.platform) {
-      throw new Error(`Cannot download a binary for the provided platform: ${os4.platform()} (${os4.arch()})`);
+      throw new Error(`Cannot download a binary for the provided platform: ${os5.platform()} (${os5.arch()})`);
     }
     try {
       options.buildId = this.resolveAlias(options.browser, options.buildId) ?? options.buildId;
@@ -38216,13 +38216,13 @@ class Cache {
     const installationDir = this.installationDir(options.browser, options.platform, options.buildId);
     const storedExecutablePath = this.readExecutablePath(options.browser, options.platform, options.buildId);
     if (storedExecutablePath) {
-      return path8.join(installationDir, storedExecutablePath);
+      return path9.join(installationDir, storedExecutablePath);
     }
-    return path8.join(installationDir, executablePathByBrowser[options.browser](options.platform, options.buildId));
+    return path9.join(installationDir, executablePathByBrowser[options.browser](options.platform, options.buildId));
   }
 }
 function parseFolderPath(folderPath) {
-  const name = path8.basename(folderPath);
+  const name = path9.basename(folderPath);
   const splits = name.split("-");
   if (splits.length !== 2) {
     return;
@@ -38242,10 +38242,10 @@ var init_Cache = __esm(() => {
 });
 
 // node_modules/@puppeteer/browsers/lib/launch.js
-import childProcess from "child_process";
+import childProcess2 from "child_process";
 import { EventEmitter as EventEmitter3 } from "events";
 import { accessSync as accessSync3 } from "fs";
-import os5 from "os";
+import os6 from "os";
 import readline from "readline";
 function computeExecutablePath(options) {
   if (options.cacheDir === null) {
@@ -38260,7 +38260,7 @@ function computeExecutablePath(options) {
 function computeSystemExecutablePath(options) {
   options.platform ??= detectBrowserPlatform();
   if (!options.platform) {
-    throw new Error(`Cannot download a binary for the provided platform: ${os5.platform()} (${os5.arch()})`);
+    throw new Error(`Cannot download a binary for the provided platform: ${os6.platform()} (${os6.arch()})`);
   }
   const paths = resolveSystemExecutablePaths2(options.browser, options.platform, options.channel);
   for (const path of paths) {
@@ -38341,7 +38341,7 @@ class Process {
       }, {}),
       stdio
     });
-    this.#browserProcess = childProcess.spawn(this.#executablePath, this.#args, {
+    this.#browserProcess = childProcess2.spawn(this.#executablePath, this.#args, {
       detached: opts.detached,
       env,
       stdio
@@ -38436,7 +38436,7 @@ class Process {
         debugLaunch?.(`Browser process ${this.#browserProcess.pid} exists`);
         if (process.platform === "win32") {
           try {
-            childProcess.execSync(`taskkill /pid ${this.#browserProcess.pid} /T /F`);
+            childProcess2.execSync(`taskkill /pid ${this.#browserProcess.pid} /T /F`);
           } catch (error) {
             debugLaunch?.(`Killing ${this.#browserProcess.pid} using taskkill failed`, error);
             this.#browserProcess.kill();
@@ -38598,7 +38598,7 @@ var init_DefaultProvider = __esm(() => {
 });
 
 // node_modules/@puppeteer/browsers/lib/fileUtil.js
-import { spawnSync, spawn, execFile } from "child_process";
+import { spawnSync as spawnSync2, spawn, execFile } from "child_process";
 import { promisify } from "util";
 var execFileAsync, debugFileUtil;
 var init_fileUtil = __esm(() => {
@@ -38607,11 +38607,11 @@ var init_fileUtil = __esm(() => {
   debugFileUtil = debug2("puppeteer:browsers:fileUtil");
 });
 // node_modules/@puppeteer/browsers/lib/install.js
-import os6 from "os";
+import os7 from "os";
 async function uninstall(options) {
   options.platform ??= detectBrowserPlatform();
   if (!options.platform) {
-    throw new Error(`Cannot detect the browser platform for: ${os6.platform()} (${os6.arch()})`);
+    throw new Error(`Cannot detect the browser platform for: ${os7.platform()} (${os7.arch()})`);
   }
   new Cache(options.cacheDir).uninstall(options.browser, options.platform, options.buildId);
 }
@@ -38970,9 +38970,9 @@ var init_PipeTransport = __esm(() => {
 });
 
 // node_modules/puppeteer-core/lib/puppeteer/node/BrowserLauncher.js
-import { existsSync as existsSync2 } from "fs";
+import { existsSync as existsSync3 } from "fs";
 import { tmpdir as tmpdir2 } from "os";
-import { join as join3 } from "path";
+import { join as join4 } from "path";
 function getBrowserTypeDisplayName(browserType) {
   switch (browserType) {
     case Browser6.FIREFOX:
@@ -39011,7 +39011,7 @@ class BrowserLauncher {
       ...options,
       protocol
     });
-    if (!existsSync2(launchArgs.executablePath)) {
+    if (!existsSync3(launchArgs.executablePath)) {
       throw new Error(`Browser was not found at the configured executablePath (${launchArgs.executablePath})`);
     }
     const usePipe = launchArgs.args.includes("--remote-debugging-pipe");
@@ -39087,7 +39087,7 @@ class BrowserLauncher {
       browserCloseCallback();
       const logs = browserProcess.getRecentLogs().join(`
 `);
-      if (logs.includes("Failed to create a ProcessSingleton for your profile directory") || process.platform === "win32" && existsSync2(join3(launchArgs.userDataDir, "lockfile"))) {
+      if (logs.includes("Failed to create a ProcessSingleton for your profile directory") || process.platform === "win32" && existsSync3(join4(launchArgs.userDataDir, "lockfile"))) {
         throw new Error(`The browser is already running for ${launchArgs.userDataDir}. Use a different \`userDataDir\` or stop the running browser first.`);
       }
       if (logs.includes("Missing X server") && options.headless === false) {
@@ -39179,13 +39179,13 @@ class BrowserLauncher {
   }
   async getProfilePath() {
     const config = await this.puppeteer.configuration();
-    return join3(config.temporaryDirectory ?? tmpdir2(), `puppeteer_dev_${this.browser}_profile-`);
+    return join4(config.temporaryDirectory ?? tmpdir2(), `puppeteer_dev_${this.browser}_profile-`);
   }
   async resolveExecutablePath(headless, validatePath = true) {
     const config = await this.puppeteer.configuration();
     let executablePath = config.executablePath;
     if (executablePath) {
-      if (validatePath && !existsSync2(executablePath)) {
+      if (validatePath && !existsSync3(executablePath)) {
         throw new Error(`Tried to find the browser at the configured path (${executablePath}), but no executable was found.`);
       }
       return executablePath;
@@ -39210,7 +39210,7 @@ class BrowserLauncher {
       browser: browserType,
       buildId: browserVersion
     });
-    if (validatePath && !existsSync2(executablePath)) {
+    if (validatePath && !existsSync3(executablePath)) {
       const configVersion = config?.[this.browser]?.version;
       if (configVersion) {
         throw new Error(`Tried to find the browser at the configured path (${executablePath}) for version ${configVersion}, but no executable was found.`);
@@ -39236,9 +39236,9 @@ var init_BrowserLauncher = __esm(() => {
 });
 
 // node_modules/puppeteer-core/lib/puppeteer/node/util/fs.js
-import fs5 from "fs";
+import fs6 from "fs";
 async function rm(path) {
-  await fs5.promises.rm(path, rmOptions);
+  await fs6.promises.rm(path, rmOptions);
 }
 var rmOptions;
 var init_fs = __esm(() => {
@@ -39251,8 +39251,8 @@ var init_fs = __esm(() => {
 
 // node_modules/puppeteer-core/lib/puppeteer/node/ChromeLauncher.js
 import { mkdtemp } from "fs/promises";
-import os7 from "os";
-import path9 from "path";
+import os8 from "os";
+import path10 from "path";
 function getFeatures(flag, options = []) {
   const prefix = flag.endsWith("=") ? flag : `${flag}=`;
   return options.filter((s) => {
@@ -39291,7 +39291,7 @@ var init_ChromeLauncher = __esm(() => {
     async launch(options = {}) {
       const config = await this.puppeteer.configuration();
       if (config.logLevel === "warn" && process.platform === "darwin" && process.arch === "x64") {
-        const cpus = os7.cpus();
+        const cpus = os8.cpus();
         if (cpus[0]?.model.includes("Apple")) {
           console.warn([
             "\x1B[1m\x1B[43m\x1B[30m",
@@ -39434,7 +39434,7 @@ var init_ChromeLauncher = __esm(() => {
         chromeArguments.push("--no-sandbox");
       }
       if (userDataDir) {
-        chromeArguments.push(`--user-data-dir=${path9.posix.isAbsolute(userDataDir) || path9.win32.isAbsolute(userDataDir) ? userDataDir : path9.resolve(userDataDir)}`);
+        chromeArguments.push(`--user-data-dir=${path10.posix.isAbsolute(userDataDir) || path10.win32.isAbsolute(userDataDir) ? userDataDir : path10.resolve(userDataDir)}`);
       }
       if (devtools) {
         chromeArguments.push("--auto-open-devtools-for-tabs");
@@ -39467,10 +39467,10 @@ var init_ChromeLauncher = __esm(() => {
 });
 
 // node_modules/puppeteer-core/lib/puppeteer/node/FirefoxLauncher.js
-import fs6 from "fs";
+import fs7 from "fs";
 import { rename, unlink, mkdtemp as mkdtemp2 } from "fs/promises";
-import os8 from "os";
-import path10 from "path";
+import os9 from "os";
+import path11 from "path";
 var FirefoxLauncher;
 var init_FirefoxLauncher = __esm(() => {
   init_main();
@@ -39555,9 +39555,9 @@ var init_FirefoxLauncher = __esm(() => {
           const backupSuffix = ".puppeteer";
           const backupFiles = ["prefs.js", "user.js"];
           const results = await Promise.allSettled(backupFiles.map(async (file) => {
-            const prefsBackupPath = path10.join(userDataDir, file + backupSuffix);
-            if (fs6.existsSync(prefsBackupPath)) {
-              const prefsPath = path10.join(userDataDir, file);
+            const prefsBackupPath = path11.join(userDataDir, file + backupSuffix);
+            if (fs7.existsSync(prefsBackupPath)) {
+              const prefsPath = path11.join(userDataDir, file);
               await unlink(prefsPath);
               await rename(prefsBackupPath, prefsPath);
             }
@@ -39578,7 +39578,7 @@ var init_FirefoxLauncher = __esm(() => {
     defaultArgs(options = {}) {
       const { devtools = false, headless = !devtools, args = [], userDataDir = null } = options;
       const firefoxArguments = [];
-      switch (os8.platform()) {
+      switch (os9.platform()) {
         case "darwin":
           firefoxArguments.push("--foreground");
           break;
@@ -39739,10 +39739,10 @@ var init_PuppeteerNode = __esm(() => {
 });
 
 // node_modules/puppeteer-core/lib/puppeteer/node/ScreenRecorder.js
-import { spawn as spawn2, spawnSync as spawnSync2 } from "child_process";
-import fs7 from "fs";
-import os9 from "os";
-import { dirname as dirname3 } from "path";
+import { spawn as spawn2, spawnSync as spawnSync3 } from "child_process";
+import fs8 from "fs";
+import os10 from "os";
+import { dirname as dirname4 } from "path";
 import { PassThrough } from "stream";
 function countFrames(startTimestamp, previousTimestamp, timestamp, fps) {
   const end = Math.round((timestamp - startTimestamp) * fps);
@@ -39848,7 +39848,7 @@ var init_ScreenRecorder = __esm(() => {
         colors ??= 256;
         overwrite ??= true;
         this.#fps = fps;
-        const { error } = spawnSync2(ffmpegPath);
+        const { error } = spawnSync3(ffmpegPath);
         if (error) {
           throw error;
         }
@@ -39871,7 +39871,7 @@ var init_ScreenRecorder = __esm(() => {
           filters.push(formatArgs.splice(vf, 2).at(-1) ?? "");
         }
         if (path) {
-          fs7.mkdirSync(dirname3(path), { recursive: overwrite });
+          fs8.mkdirSync(dirname4(path), { recursive: overwrite });
         }
         this.#process = spawn2(ffmpegPath, [
           ["-loglevel", "error"],
@@ -39932,7 +39932,7 @@ var init_ScreenRecorder = __esm(() => {
             "-deadline",
             "realtime",
             "-cpu-used",
-            `${Math.min(os9.cpus().length / 2, 8)}`
+            `${Math.min(os10.cpus().length / 2, 8)}`
           ]
         ];
         switch (format) {
@@ -40237,12 +40237,12 @@ var init_puppeteer_core = __esm(() => {
 
 // extensions/headed-browser-preflight.ts
 import { mkdir as mkdir4, readFile as readFile2, rename as rename2, writeFile as writeFile2 } from "fs/promises";
-import { homedir as homedir4 } from "os";
-import { dirname as dirname5, join as join5 } from "path";
+import { homedir as homedir5 } from "os";
+import { dirname as dirname6, join as join6 } from "path";
 
 // extensions/lib/config.ts
 import { readFile } from "fs/promises";
-import { isAbsolute as isAbsolute2, normalize as normalize2 } from "path";
+import { isAbsolute as isAbsolute3, normalize as normalize3 } from "path";
 
 // node_modules/@oh-my-pi/pi-utils/src/dirs.ts
 var exports_dirs = {};
@@ -40280,7 +40280,7 @@ __export(exports_dirs, {
   getBrowserRelayDir: () => getBrowserRelayDir,
   getCommandsDir: () => getCommandsDir,
   getCommitCacheDbPath: () => getCommitCacheDbPath,
-  getComposerCacheDir: () => getComposerCacheDir,
+  getComposerCacheDbPath: () => getComposerCacheDbPath,
   getConfigAgentDirName: () => getConfigAgentDirName,
   getConfigDirName: () => getConfigDirName,
   getConfigRootDir: () => getConfigRootDir,
@@ -40299,6 +40299,7 @@ __export(exports_dirs, {
   getGlobalDaemonRuntimeRoot: () => getGlobalDaemonRuntimeRoot,
   getHistoryDbPath: () => getHistoryDbPath,
   getInstallId: () => getInstallId,
+  getJudgmentCacheDbPath: () => getJudgmentCacheDbPath,
   getLastChangelogVersionPath: () => getLastChangelogVersionPath,
   getLegacyPiExtensionCacheDbPath: () => getLegacyPiExtensionCacheDbPath,
   getLogPath: () => getLogPath,
@@ -40307,11 +40308,12 @@ __export(exports_dirs, {
   getMarketplacesRegistryPath: () => getMarketplacesRegistryPath,
   getMemoriesDir: () => getMemoriesDir,
   getModelDbPath: () => getModelDbPath,
-  getNativesDir: () => getNativesDir,
+  getNativesDir: () => getNativesDir2,
   getPluginsDir: () => getPluginsDir,
   getPluginsLockfile: () => getPluginsLockfile,
   getPluginsNodeModules: () => getPluginsNodeModules,
   getPluginsPackageJson: () => getPluginsPackageJson,
+  getPredictStateDir: () => getPredictStateDir,
   getProfileRootDir: () => getProfileRootDir,
   getProjectAgentDir: () => getProjectAgentDir,
   getProjectDir: () => getProjectDir,
@@ -40331,7 +40333,9 @@ __export(exports_dirs, {
   getSecretPlaceholderKeyPath: () => getSecretPlaceholderKeyPath,
   getSecurityDir: () => getSecurityDir,
   getSecurityProjectDir: () => getSecurityProjectDir,
+  getSessionOwnersDir: () => getSessionOwnersDir,
   getSessionsDir: () => getSessionsDir,
+  getSkillDescriptionsDbPath: () => getSkillDescriptionsDbPath,
   getSshControlDir: () => getSshControlDir,
   getStatsDbPath: () => getStatsDbPath,
   getTerminalSessionsDir: () => getTerminalSessionsDir,
@@ -40355,11 +40359,814 @@ __export(exports_dirs, {
   setProjectDir: () => setProjectDir,
   setWorktreesDir: () => setWorktreesDir
 });
+import * as fs2 from "fs";
+import * as os2 from "os";
+import * as path2 from "path";
+
+// node_modules/@oh-my-pi/pi-natives/native/loader-state.js
+import * as childProcess from "child_process";
 import * as fs from "fs";
+import { createRequire } from "module";
 import * as os from "os";
 import * as path from "path";
+import * as zlib from "zlib";
+// node_modules/@oh-my-pi/pi-natives/package.json
+var package_default = {
+  name: "@oh-my-pi/pi-natives",
+  version: "18.8.4",
+  description: "Native Rust bindings for PDF conversion, audio, WebRTC, grep, clipboard, image processing, syntax highlighting, PTY, and shell operations via N-API",
+  type: "module",
+  homepage: "https://omp.sh",
+  author: {
+    name: "Stencil Labs, Inc.",
+    url: "https://stencil.so"
+  },
+  license: "MIT",
+  repository: {
+    type: "git",
+    url: "git+https://github.com/can1357/oh-my-pi.git",
+    directory: "packages/natives"
+  },
+  bugs: {
+    url: "https://github.com/can1357/oh-my-pi/issues"
+  },
+  keywords: [
+    "napi",
+    "rust",
+    "native",
+    "grep",
+    "text-processing",
+    "clipboard",
+    "image",
+    "pty",
+    "shell",
+    "syntax-highlighting"
+  ],
+  main: "./native/index.js",
+  types: "./native/index.d.ts",
+  scripts: {
+    build: "bun ../../scripts/bazel-natives.ts host --dest native",
+    "build:bindings": "bun scripts/build-bindings.ts",
+    check: "oxlint . && oxfmt --check --no-error-on-unmatched-pattern 'src/**/*.{ts,tsx}' '{test,bench,examples,scripts}/**/*.ts' '*.ts' && bun run check:types",
+    "check:types": "tsgo -p tsconfig.json --noEmit",
+    lint: "oxlint .",
+    test: "bun test --parallel",
+    fix: "oxlint --fix --fix-suggestions . && bun run fmt",
+    fmt: "oxfmt --no-error-on-unmatched-pattern 'src/**/*.{ts,tsx}' '{test,bench,examples,scripts}/**/*.ts' '*.ts'",
+    "gen:npm": "bun scripts/gen-npm-packages.ts",
+    bench: "bun bench/grep.ts",
+    "bench:text": "bun bench/text.ts"
+  },
+  devDependencies: {
+    "@napi-rs/cli": "3.7.2",
+    "@types/bun": "^1.3.14",
+    "cli-truncate": "6.1.1",
+    diff: "9.0.0",
+    "gpt-tokenizer": "4.0.0",
+    mitata: "1.0.34",
+    "slice-ansi": "9.0.0",
+    "string-width": "8.2.2",
+    "wrap-ansi": "10.0.0"
+  },
+  engines: {
+    bun: ">=1.3.14"
+  },
+  napi: {
+    binaryName: "pi_natives",
+    triples: {}
+  },
+  files: [
+    "native/index.js",
+    "native/index.d.ts",
+    "native/clipboard.js",
+    "native/clipboard.d.ts",
+    "native/desktop.js",
+    "native/desktop.d.ts",
+    "native/desktop-adapter.js",
+    "native/desktop-adapter.d.ts",
+    "native/version-sentinel.js",
+    "native/version-sentinel.d.ts",
+    "native/loader-state.js",
+    "native/loader-state.d.ts",
+    "native/path.js",
+    "native/path.d.ts",
+    "native/vcs.js",
+    "native/vcs.d.ts",
+    "native/embedded-addon.js",
+    "README.md",
+    "LICENSE",
+    "THIRD-PARTY-NOTICES.txt"
+  ],
+  exports: {
+    ".": {
+      types: "./native/index.d.ts",
+      import: "./native/index.js",
+      default: "./native/index.js"
+    },
+    "./path": {
+      types: "./native/path.d.ts",
+      import: "./native/path.js",
+      default: "./native/path.js"
+    },
+    "./desktop": {
+      types: "./native/desktop.d.ts",
+      import: "./native/desktop.js",
+      default: "./native/desktop.js"
+    },
+    "./clipboard": {
+      types: "./native/clipboard.d.ts",
+      import: "./native/clipboard.js",
+      default: "./native/clipboard.js"
+    },
+    "./vcs": {
+      types: "./native/vcs.d.ts",
+      import: "./native/vcs.js",
+      default: "./native/vcs.js"
+    }
+  },
+  optionalDependencies: {
+    "@oh-my-pi/pi-natives-linux-x64": "18.8.4",
+    "@oh-my-pi/pi-natives-linux-arm64": "18.8.4",
+    "@oh-my-pi/pi-natives-darwin-x64": "18.8.4",
+    "@oh-my-pi/pi-natives-darwin-arm64": "18.8.4",
+    "@oh-my-pi/pi-natives-win32-x64": "18.8.4",
+    "@oh-my-pi/pi-natives-win32-arm64": "18.8.4"
+  }
+};
+
+// node_modules/@oh-my-pi/pi-natives/native/embedded-addon.js
+var embeddedAddon = null;
+
+// node_modules/@oh-my-pi/pi-natives/native/version-sentinel.js
+var VERSION_STAMP_MAGIC = "PI_NATIVES_VERSION_STAMP:";
+var LEGACY_SENTINEL_RE = /^__piNativesV([A-Za-z0-9_]+)$/;
+function containsVersionStamp(bytes, version) {
+  if (version.length === 0)
+    return false;
+  const needle = Buffer.from(`${VERSION_STAMP_MAGIC}${version}\x00`, "utf8");
+  return Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength).indexOf(needle) !== -1;
+}
+function bindingsReleaseVersion(bindings) {
+  const report = bindings.__piNativesBuildVersion;
+  if (typeof report === "function") {
+    try {
+      const version = report();
+      return typeof version === "string" && version.length > 0 ? version : null;
+    } catch {
+      return null;
+    }
+  }
+  for (const key of Object.keys(bindings)) {
+    const match = LEGACY_SENTINEL_RE.exec(key);
+    if (match)
+      return match[1].replace(/_/g, ".");
+  }
+  return null;
+}
+function bindingsHaveReleaseIdentity(bindings) {
+  return typeof bindings.__piNativesBuildVersion === "function" || Object.keys(bindings).some((key) => LEGACY_SENTINEL_RE.test(key));
+}
+
+// node_modules/@oh-my-pi/pi-natives/native/loader-state.js
+var SUPPORTED_PLATFORMS = [
+  "linux-x64",
+  "linux-arm64",
+  "darwin-x64",
+  "darwin-arm64",
+  "win32-x64",
+  "win32-arm64"
+];
+function startupMarker(text) {
+  if (!process.env.PI_DEBUG_STARTUP)
+    return;
+  try {
+    fs.writeSync(2, `[startup] ${text}
+`);
+  } catch {}
+}
+function getNativesDir() {
+  const override = process.env.PI_NATIVES_DIR?.trim();
+  if (override) {
+    let dir = override;
+    if (dir === "~")
+      dir = os.homedir();
+    else if (dir.startsWith("~/") || dir.startsWith("~\\"))
+      dir = os.homedir() + dir.slice(1);
+    if (path.isAbsolute(dir))
+      return path.normalize(dir);
+  }
+  const xdgDataHome = process.env.XDG_DATA_HOME;
+  if (xdgDataHome && fs.existsSync(path.join(xdgDataHome, "omp"))) {
+    return path.join(xdgDataHome, "omp", "natives");
+  }
+  return path.join(os.homedir(), ".omp", "natives");
+}
+function resolveLeafPackageDir(platformTag) {
+  try {
+    const require_ = createRequire(import.meta.url);
+    return path.dirname(require_.resolve(`@oh-my-pi/pi-natives-${platformTag}/package.json`));
+  } catch {
+    return null;
+  }
+}
+function detectCompiledBinary({ embeddedAddon: embeddedAddon2, env, importMetaUrl }) {
+  if (embeddedAddon2)
+    return true;
+  if (env && env.PI_COMPILED)
+    return true;
+  if (typeof importMetaUrl === "string") {
+    if (importMetaUrl.includes("$bunfs"))
+      return true;
+    if (importMetaUrl.includes("~BUN"))
+      return true;
+    if (importMetaUrl.includes("%7EBUN"))
+      return true;
+  }
+  return false;
+}
+function getAddonFilenames({ tag, arch, variant }) {
+  const defaultFilename = `pi_natives.${tag}.node`;
+  if (arch !== "x64" || !variant)
+    return [defaultFilename];
+  const baselineFilename = `pi_natives.${tag}-baseline.node`;
+  const modernFilename = `pi_natives.${tag}-modern.node`;
+  if (variant === "modern") {
+    return [modernFilename, baselineFilename, defaultFilename];
+  }
+  return [baselineFilename, defaultFilename];
+}
+function shouldStageNodeModulesAddon({ platform, isCompiledBinary, nativeDir }) {
+  if (platform !== "win32")
+    return false;
+  if (isCompiledBinary)
+    return false;
+  const normalizedNativeDir = nativeDir.toLowerCase();
+  return normalizedNativeDir.includes("\\node_modules\\") || normalizedNativeDir.includes("/node_modules/");
+}
+function resolveLoaderCandidates({
+  addonFilenames,
+  isCompiledBinary,
+  stageFromNodeModules = false,
+  nativeDir,
+  leafPackageDir = null,
+  execDir,
+  versionedDir,
+  userDataDir
+}) {
+  const baseReleaseCandidates = addonFilenames.flatMap((filename) => [
+    path.join(nativeDir, filename),
+    path.join(execDir, filename)
+  ]);
+  const leafCandidates = leafPackageDir ? addonFilenames.map((filename) => path.join(leafPackageDir, filename)) : [];
+  const compiledCandidates = addonFilenames.flatMap((filename) => [
+    path.join(versionedDir, filename),
+    path.join(userDataDir, filename)
+  ]);
+  const stagedCandidates = stageFromNodeModules ? addonFilenames.map((filename) => path.join(versionedDir, filename)) : [];
+  let releaseCandidates;
+  if (isCompiledBinary) {
+    releaseCandidates = [...compiledCandidates, ...baseReleaseCandidates];
+  } else if (stageFromNodeModules) {
+    releaseCandidates = [...stagedCandidates, ...leafCandidates, ...baseReleaseCandidates];
+  } else {
+    releaseCandidates = [...leafCandidates, ...baseReleaseCandidates];
+  }
+  return [...new Set(releaseCandidates)];
+}
+function parseReleaseVersion(version) {
+  const match = /^(\d+)\.(\d+)\.(\d+)$/.exec(version);
+  return match ? [Number(match[1]), Number(match[2]), Number(match[3])] : null;
+}
+function isOlderReleaseVersion(candidate, current) {
+  const candidateParts = parseReleaseVersion(candidate);
+  const currentParts = parseReleaseVersion(current);
+  if (!candidateParts || !currentParts)
+    return false;
+  for (let index = 0;index < candidateParts.length; index++) {
+    if (candidateParts[index] !== currentParts[index]) {
+      return candidateParts[index] < currentParts[index];
+    }
+  }
+  return false;
+}
+var NATIVE_CACHE_CLEANUP_GRACE_MS = 10 * 60000;
+function prepareNativeVersionDir(versionedDir) {
+  fs.mkdirSync(versionedDir, { recursive: true });
+  const now = new Date;
+  fs.utimesSync(versionedDir, now, now);
+}
+function cleanupStaleNativeVersions({ nativesDir, currentVersion }) {
+  const removed = [];
+  let entries;
+  try {
+    entries = fs.readdirSync(nativesDir, { withFileTypes: true });
+  } catch {
+    return removed;
+  }
+  for (const entry of entries) {
+    if (!entry.isDirectory() || !isOlderReleaseVersion(entry.name, currentVersion))
+      continue;
+    const targetPath = path.join(nativesDir, entry.name);
+    try {
+      const stat = fs.statSync(targetPath);
+      if (Date.now() - stat.mtimeMs < NATIVE_CACHE_CLEANUP_GRACE_MS)
+        continue;
+      fs.rmSync(targetPath, { recursive: true, force: true });
+      removed.push(targetPath);
+    } catch {}
+  }
+  return removed;
+}
+var VARIANT_CACHE_ENV_KEY = "__PI_NATIVE_VARIANT_CACHE";
+function runCommand(command, args) {
+  if (typeof Bun !== "undefined" && typeof Bun.spawnSync === "function") {
+    try {
+      const result = Bun.spawnSync([command, ...args], { stdout: "pipe", stderr: "pipe" });
+      if (result.exitCode === 0) {
+        return result.stdout.toString("utf-8").trim();
+      }
+    } catch {}
+  }
+  try {
+    const result = childProcess.spawnSync(command, args, { encoding: "utf-8" });
+    if (result.error)
+      return null;
+    if (result.status !== 0)
+      return null;
+    return (result.stdout || "").trim();
+  } catch {
+    return null;
+  }
+}
+function getVariantOverride() {
+  const value = process.env.PI_NATIVE_VARIANT;
+  if (!value)
+    return null;
+  if (value === "modern" || value === "baseline")
+    return value;
+  return null;
+}
+function detectAvx2Support() {
+  if (process.arch !== "x64") {
+    return false;
+  }
+  if (process.platform === "linux") {
+    try {
+      const cpuInfo = fs.readFileSync("/proc/cpuinfo", "utf8");
+      return /\bavx2\b/i.test(cpuInfo);
+    } catch {
+      return false;
+    }
+  }
+  if (process.platform === "darwin") {
+    for (const sysctlBin of ["/usr/sbin/sysctl", "sysctl"]) {
+      const leaf7 = runCommand(sysctlBin, ["-n", "machdep.cpu.leaf7_features"]);
+      if (leaf7 && /\bAVX2\b/i.test(leaf7))
+        return true;
+      const features = runCommand(sysctlBin, ["-n", "machdep.cpu.features"]);
+      if (features && /\bAVX2\b/i.test(features))
+        return true;
+    }
+    return false;
+  }
+  if (process.platform === "win32") {
+    if (typeof Bun !== "undefined") {
+      try {
+        const { dlopen, FFIType } = createRequire(import.meta.url)("bun:ffi");
+        const kernel32 = dlopen("kernel32.dll", {
+          IsProcessorFeaturePresent: { args: [FFIType.u32], returns: FFIType.i32 }
+        });
+        try {
+          return kernel32.symbols.IsProcessorFeaturePresent(40) !== 0;
+        } finally {
+          kernel32.close();
+        }
+      } catch {}
+    }
+    for (const shell of ["pwsh.exe", "powershell.exe"]) {
+      const output = runCommand(shell, [
+        "-NoProfile",
+        "-NonInteractive",
+        "-Command",
+        "[System.Runtime.Intrinsics.X86.Avx2]::IsSupported"
+      ]);
+      if (output && output.toLowerCase() === "true")
+        return true;
+      if (output && output.toLowerCase() === "false")
+        return false;
+    }
+    return false;
+  }
+  return false;
+}
+function selectCpuVariant({ arch, override, env, detectAvx2 }) {
+  if (arch !== "x64")
+    return { variant: null, source: "non-x64" };
+  if (override === "modern" || override === "baseline") {
+    return { variant: override, source: "override" };
+  }
+  const cached = env[VARIANT_CACHE_ENV_KEY];
+  if (cached === "modern" || cached === "baseline") {
+    return { variant: cached, source: "cache" };
+  }
+  const variant = detectAvx2() ? "modern" : "baseline";
+  return {
+    variant,
+    source: "detect",
+    cacheEnvKey: VARIANT_CACHE_ENV_KEY,
+    cacheEnvValue: variant
+  };
+}
+function resolveCpuVariant(override) {
+  const result = selectCpuVariant({
+    arch: process.arch,
+    override,
+    env: process.env,
+    detectAvx2: detectAvx2Support
+  });
+  if (result.cacheEnvKey) {
+    process.env[result.cacheEnvKey] = result.cacheEnvValue;
+  }
+  return result.variant;
+}
+function selectEmbeddedAddonFile(selectedVariant) {
+  if (!embeddedAddon)
+    return null;
+  const defaultFile = embeddedAddon.files.find((file) => file.variant === "default") || null;
+  if (process.arch !== "x64")
+    return defaultFile || embeddedAddon.files[0] || null;
+  if (selectedVariant === "modern") {
+    return embeddedAddon.files.find((file) => file.variant === "modern") || embeddedAddon.files.find((file) => file.variant === "baseline") || null;
+  }
+  return embeddedAddon.files.find((file) => file.variant === "baseline") || null;
+}
+function readTarString(buffer, offset, length) {
+  const end = Math.min(offset + length, buffer.length);
+  let stringEnd = offset;
+  while (stringEnd < end && buffer[stringEnd] !== 0)
+    stringEnd++;
+  return buffer.toString("utf8", offset, stringEnd);
+}
+function readTarOctal(buffer, offset, length) {
+  const value = readTarString(buffer, offset, length).trim();
+  if (!value)
+    return 0;
+  const parsed = Number.parseInt(value, 8);
+  if (!Number.isFinite(parsed)) {
+    throw new Error(`Invalid tar octal value: ${value}`);
+  }
+  return parsed;
+}
+function isZeroTarBlock(buffer, offset) {
+  for (let index = 0;index < 512; index++) {
+    if (buffer[offset + index] !== 0)
+      return false;
+  }
+  return true;
+}
+function getTarEntryName(header) {
+  const name = readTarString(header, 0, 100);
+  const prefix = readTarString(header, 345, 155);
+  return prefix ? `${prefix}/${name}` : name;
+}
+function isSafeEmbeddedAddonFilename(filename) {
+  return filename.length > 0 && path.basename(filename) === filename && !filename.includes("/") && !filename.includes("\\");
+}
+function isEmbeddedAddonFileCurrent(targetPath, file) {
+  try {
+    const stat = fs.statSync(targetPath);
+    if (!stat.isFile())
+      return false;
+    return typeof file.size !== "number" || stat.size === file.size;
+  } catch (err) {
+    if (err && err.code === "ENOENT")
+      return false;
+    throw err;
+  }
+}
+function writeEmbeddedAddonFile(targetPath, content) {
+  const tempPath = `${targetPath}.tmp.${process.pid}.${Date.now()}`;
+  try {
+    fs.writeFileSync(tempPath, content, { mode: 493 });
+    fs.renameSync(tempPath, targetPath);
+  } catch (err) {
+    try {
+      fs.unlinkSync(tempPath);
+    } catch {}
+    throw err;
+  }
+}
+function extractEmbeddedAddonArchive({ archivePath, files, targetDir }) {
+  const pending = new Map;
+  for (const file of files) {
+    if (!isSafeEmbeddedAddonFilename(file.filename)) {
+      throw new Error(`Unsafe embedded addon filename: ${file.filename}`);
+    }
+    const targetPath = path.join(targetDir, file.filename);
+    if (!isEmbeddedAddonFileCurrent(targetPath, file)) {
+      pending.set(file.filename, file);
+    }
+  }
+  if (pending.size === 0)
+    return [];
+  const archive = zlib.gunzipSync(fs.readFileSync(archivePath));
+  const writtenPaths = [];
+  let offset = 0;
+  while (offset + 512 <= archive.length) {
+    if (isZeroTarBlock(archive, offset))
+      break;
+    const header = archive.subarray(offset, offset + 512);
+    const filename = getTarEntryName(header);
+    const size = readTarOctal(header, 124, 12);
+    const typeflag = header[156] === 0 ? "0" : String.fromCharCode(header[156]);
+    offset += 512;
+    if (offset + size > archive.length) {
+      throw new Error(`Truncated embedded addon archive entry: ${filename}`);
+    }
+    if (!isSafeEmbeddedAddonFilename(filename)) {
+      throw new Error(`Unsafe embedded addon archive entry: ${filename}`);
+    }
+    if (typeflag !== "0") {
+      throw new Error(`Unsupported embedded addon archive entry type ${typeflag}: ${filename}`);
+    }
+    const file = pending.get(filename);
+    if (file) {
+      if (typeof file.size === "number" && file.size !== size) {
+        throw new Error(`Embedded addon size mismatch for ${filename}: expected ${file.size}, got ${size}`);
+      }
+      const targetPath = path.join(targetDir, filename);
+      writeEmbeddedAddonFile(targetPath, archive.subarray(offset, offset + size));
+      pending.delete(filename);
+      writtenPaths.push(targetPath);
+    }
+    offset += Math.ceil(size / 512) * 512;
+  }
+  if (pending.size > 0) {
+    throw new Error(`Embedded addon archive missing: ${[...pending.keys()].join(", ")}`);
+  }
+  return writtenPaths;
+}
+function maybeExtractEmbeddedAddon(ctx, errors) {
+  if (!ctx.isCompiledBinary || !embeddedAddon)
+    return null;
+  if (embeddedAddon.platformTag !== ctx.platformTag || embeddedAddon.version !== ctx.packageVersion)
+    return null;
+  const selectedEmbeddedFile = selectEmbeddedAddonFile(ctx.selectedVariant);
+  if (!selectedEmbeddedFile)
+    return null;
+  const targetPath = path.join(ctx.versionedDir, selectedEmbeddedFile.filename);
+  startupMarker("native:extractEmbeddedAddon:start");
+  try {
+    prepareNativeVersionDir(ctx.versionedDir);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    errors.push(`embedded addon dir: ${message}`);
+    return null;
+  }
+  if (embeddedAddon.archive) {
+    try {
+      extractEmbeddedAddonArchive({
+        archivePath: embeddedAddon.archive.filePath,
+        files: embeddedAddon.files,
+        targetDir: ctx.versionedDir
+      });
+      if (isEmbeddedAddonFileCurrent(targetPath, selectedEmbeddedFile)) {
+        return targetPath;
+      }
+      errors.push(`embedded addon archive (${embeddedAddon.archive.filename}): missing ${selectedEmbeddedFile.filename}`);
+      return null;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      errors.push(`embedded addon archive (${embeddedAddon.archive.filename}): ${message}`);
+      return null;
+    }
+  }
+  if (isEmbeddedAddonFileCurrent(targetPath, selectedEmbeddedFile)) {
+    return targetPath;
+  }
+  if (!selectedEmbeddedFile.filePath) {
+    errors.push(`embedded addon metadata missing file path for ${selectedEmbeddedFile.filename}`);
+    return null;
+  }
+  try {
+    const buffer = fs.readFileSync(selectedEmbeddedFile.filePath);
+    fs.writeFileSync(targetPath, buffer);
+    return targetPath;
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    errors.push(`embedded addon write (${selectedEmbeddedFile.filename}): ${message}`);
+    return null;
+  }
+}
+function maybeStageNodeModulesAddon(ctx, errors) {
+  if (!ctx.stageFromNodeModules)
+    return null;
+  let stagedPath = null;
+  for (const filename of ctx.addonFilenames) {
+    const sourcePath = path.join(ctx.leafPackageDir ?? ctx.nativeDir, filename);
+    const targetPath = path.join(ctx.versionedDir, filename);
+    if (fs.existsSync(targetPath)) {
+      stagedPath = stagedPath || targetPath;
+      continue;
+    }
+    if (!fs.existsSync(sourcePath))
+      continue;
+    try {
+      prepareNativeVersionDir(ctx.versionedDir);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      errors.push(`staged addon dir: ${message}`);
+      continue;
+    }
+    try {
+      fs.copyFileSync(sourcePath, targetPath);
+      stagedPath = stagedPath || targetPath;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      errors.push(`staged addon copy (${filename}): ${message}`);
+    }
+  }
+  return stagedPath;
+}
+function isCompatiblePreSentinelNativeAddon(bindings, diskHasExpectedStamp) {
+  if (diskHasExpectedStamp)
+    return false;
+  if (bindingsHaveReleaseIdentity(bindings))
+    return false;
+  return typeof bindings.countTokens === "function" && typeof bindings.executeShell === "function" && typeof bindings.visibleWidth === "function" && typeof bindings.DesktopSession === "function" && typeof bindings.DesktopSession.prototype?.capture === "function" && typeof bindings.DesktopSession.prototype?.execute === "function" && typeof bindings.DesktopSession.prototype?.close === "function";
+}
+function validateLoadedBindings(ctx, bindings, candidate) {
+  if (ctx.isWorkspaceLoad)
+    return;
+  const residentVersion = bindingsReleaseVersion(bindings);
+  if (residentVersion === ctx.packageVersion)
+    return;
+  let diskHasExpectedStamp = false;
+  try {
+    diskHasExpectedStamp = containsVersionStamp(fs.readFileSync(candidate), ctx.packageVersion);
+  } catch {}
+  if (isCompatiblePreSentinelNativeAddon(bindings, diskHasExpectedStamp))
+    return;
+  if (residentVersion && diskHasExpectedStamp) {
+    throw new Error(`Loaded ${candidate}, which reports @oh-my-pi/pi-natives@${residentVersion}, but this loader is ` + `@${ctx.packageVersion}. omp was upgraded to ${ctx.packageVersion} while this session was running; ` + `the ${residentVersion} addon is still resident in this process. Disk is already consistent \u2014 ` + `restart omp to pick up ${ctx.packageVersion} (reinstalling changes nothing).`);
+  }
+  throw new Error(`Loaded ${candidate} but it reports ${residentVersion ? `@oh-my-pi/pi-natives@${residentVersion}` : "no release version"}, ` + `not the @${ctx.packageVersion} this loader expects. The .node file on disk is from a different ` + "release than this loader \u2014 reinstall to re-sync.");
+}
+var loadedAddon = null;
+function describeLoadedAddon(bindings, candidate, ctx) {
+  const version = bindingsReleaseVersion(bindings);
+  return {
+    path: candidate,
+    version,
+    packageVersion: ctx.packageVersion,
+    stale: version !== ctx.packageVersion
+  };
+}
+function missingNativeExportMessage(symbolName, addon = loadedAddon) {
+  const rebuild = "rebuild it with `bun run build:native`";
+  if (!addon)
+    return `@oh-my-pi/pi-natives does not export \`${symbolName}\`; ${rebuild}.`;
+  if (!addon.stale) {
+    return `@oh-my-pi/pi-natives export \`${symbolName}\` is missing from ${addon.path}; ${rebuild}.`;
+  }
+  const loaded = addon.version ? `the @oh-my-pi/pi-natives@${addon.version} addon` : "an addon without a release stamp";
+  return `@oh-my-pi/pi-natives export \`${symbolName}\` is missing: ${addon.path} is ${loaded}, not ` + `@${addon.packageVersion} \u2014 ${rebuild}.`;
+}
+function installNativeTokioRuntime(bindings) {
+  const install = bindings.__ompInstallTokioRuntime;
+  if (typeof install !== "function")
+    return;
+  try {
+    install();
+    startupMarker("native:tokioRuntime:installed");
+  } catch (err) {
+    startupMarker(`native:tokioRuntime:failed:${err instanceof Error ? err.message : String(err)}`);
+  }
+}
+function buildHelpMessage(ctx) {
+  if (ctx.isCompiledBinary) {
+    const expectedPaths = ctx.addonFilenames.map((filename) => `  ${path.join(ctx.versionedDir, filename)}`).join(`
+`);
+    const downloadHints = ctx.addonFilenames.map((filename) => {
+      const downloadUrl = `https://github.com/can1357/oh-my-pi/releases/latest/download/${filename}`;
+      const targetPath = path.join(ctx.versionedDir, filename);
+      return `  curl -fsSL "${downloadUrl}" -o "${targetPath}"`;
+    }).join(`
+`);
+    return `The compiled binary should extract one of:
+${expectedPaths}
+
+` + `If missing, delete ${ctx.versionedDir} and re-run, or download manually:
+${downloadHints}`;
+  }
+  return `If installed via npm/bun, try reinstalling: bun install @oh-my-pi/pi-natives
+` + `If developing locally, build with: bun --cwd=packages/natives run build
+` + "Explicit targets: bun scripts/bazel-natives.ts <target> --dest packages/natives/native";
+}
+function initLoaderContext(overrides = {}) {
+  const platform = overrides.platform ?? process.platform;
+  const platformTag = `${platform}-${process.arch}`;
+  const packageVersion = package_default.version;
+  const nativeDir = overrides.nativeDir ?? path.join(import.meta.dir, "..", "native");
+  const execDir = path.dirname(process.execPath);
+  const nativesDir = getNativesDir();
+  const versionedDir = path.join(nativesDir, packageVersion);
+  const userDataDir = platform === "win32" ? path.join(process.env.LOCALAPPDATA || path.join(os.homedir(), "AppData", "Local"), "omp") : path.join(os.homedir(), ".local", "bin");
+  const isCompiledBinary = overrides.isCompiledBinary ?? detectCompiledBinary({
+    embeddedAddon,
+    env: process.env,
+    importMetaUrl: import.meta.url
+  });
+  const normalizedNativeDir = platform === "win32" ? nativeDir.toLowerCase() : nativeDir;
+  const isWorkspaceLoad = !isCompiledBinary && !normalizedNativeDir.includes("\\node_modules\\") && !normalizedNativeDir.includes("/node_modules/");
+  const leafPackageDir = isCompiledBinary || isWorkspaceLoad ? null : overrides.leafPackageDir === undefined ? resolveLeafPackageDir(platformTag) : overrides.leafPackageDir;
+  const stageFromNodeModules = shouldStageNodeModulesAddon({
+    platform,
+    isCompiledBinary,
+    nativeDir: normalizedNativeDir
+  });
+  const selectedVariant = resolveCpuVariant(getVariantOverride());
+  const addonFilenames = getAddonFilenames({ tag: platformTag, arch: process.arch, variant: selectedVariant });
+  const addonLabel = selectedVariant ? `${platformTag} (${selectedVariant})` : platformTag;
+  const candidates = resolveLoaderCandidates({
+    addonFilenames,
+    isCompiledBinary,
+    stageFromNodeModules,
+    nativeDir,
+    leafPackageDir,
+    execDir,
+    versionedDir,
+    userDataDir
+  });
+  return {
+    platformTag,
+    packageVersion,
+    nativeDir,
+    leafPackageDir,
+    versionedDir,
+    isCompiledBinary,
+    stageFromNodeModules,
+    selectedVariant,
+    addonFilenames,
+    addonLabel,
+    candidates,
+    isWorkspaceLoad,
+    nativesDir
+  };
+}
+function loadNative() {
+  startupMarker("native:loadNative:start");
+  const ctx = initLoaderContext();
+  const require_ = createRequire(import.meta.url);
+  const errors = [];
+  const embeddedCandidate = maybeExtractEmbeddedAddon(ctx, errors);
+  const stagedCandidate = embeddedCandidate ? null : maybeStageNodeModulesAddon(ctx, errors);
+  const prepended = [embeddedCandidate, stagedCandidate].filter((c) => typeof c === "string");
+  const runtimeCandidates = prepended.length > 0 ? [...prepended, ...ctx.candidates] : ctx.candidates;
+  for (const candidate of runtimeCandidates) {
+    try {
+      startupMarker(`native:require:${path.basename(candidate)}`);
+      const bindings = require_(candidate);
+      validateLoadedBindings(ctx, bindings, candidate);
+      installNativeTokioRuntime(bindings);
+      loadedAddon = describeLoadedAddon(bindings, candidate, ctx);
+      cleanupStaleNativeVersions({ nativesDir: ctx.nativesDir, currentVersion: ctx.packageVersion });
+      startupMarker("native:loadNative:done");
+      return bindings;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      errors.push(`${candidate}: ${message}`);
+    }
+  }
+  if (!SUPPORTED_PLATFORMS.includes(ctx.platformTag)) {
+    throw new Error(`Unsupported platform: ${ctx.platformTag}
+` + `Supported platforms: ${SUPPORTED_PLATFORMS.join(", ")}
+` + "If you need support for this platform, please open an issue.");
+  }
+  const details = errors.map((error) => `- ${error}`).join(`
+`);
+  throw new Error(`Failed to load pi_natives native addon for ${ctx.addonLabel}.
+
+Tried:
+${details}
+
+${buildHelpMessage(ctx)}`);
+}
+
+// node_modules/@oh-my-pi/pi-natives/native/path.js
+var bindings;
+function nativePathFn(symbolName) {
+  bindings ??= loadNative();
+  const fn = bindings[symbolName];
+  if (typeof fn !== "function")
+    throw new Error(missingNativeExportMessage(symbolName));
+  return fn;
+}
+function expandWindowsLongPath(path) {
+  return process.platform === "win32" ? nativePathFn("expandWindowsLongPath")(path) : path;
+}
 // node_modules/@oh-my-pi/pi-utils/package.json
-var version = "18.3.1";
+var version = "18.8.4";
 var engines = {
   bun: ">=1.3.14"
 };
@@ -40409,11 +41216,11 @@ function readProfileFromEnvSafe() {
   }
 }
 function getBaseConfigRoot() {
-  return path.join(os.homedir(), getConfigDirName());
+  return path2.join(os2.homedir(), getConfigDirName());
 }
 function getProfileConfigRoot(profile) {
   const root = getBaseConfigRoot();
-  return profile ? path.join(root, "profiles", profile) : root;
+  return profile ? path2.join(root, "profiles", profile) : root;
 }
 function readPiProfileFromEnvSafe() {
   try {
@@ -40423,7 +41230,7 @@ function readPiProfileFromEnvSafe() {
   }
 }
 function getProfileAgentDir(profile) {
-  return path.join(getProfileConfigRoot(profile), "agent");
+  return path2.join(getProfileConfigRoot(profile), "agent");
 }
 function isProfileDerivedAgentDir(profile, agentDirEnv) {
   return profile !== undefined && agentDirEnv === getProfileAgentDir(profile);
@@ -40433,16 +41240,19 @@ function standardizeMacOSPath(p) {
     return p;
   const stripped = p.slice("/private".length);
   try {
-    if (fs.realpathSync(p) === fs.realpathSync(stripped)) {
+    if (fs2.realpathSync(p) === fs2.realpathSync(stripped)) {
       return stripped;
     }
   } catch {}
   return p;
 }
+function standardizeProjectPath(p) {
+  return process.platform === "win32" ? expandWindowsLongPath(p) : standardizeMacOSPath(p);
+}
 function resolveEquivalentPath(inputPath) {
-  const resolvedPath = path.resolve(inputPath);
+  const resolvedPath = path2.resolve(inputPath);
   try {
-    return fs.realpathSync(resolvedPath);
+    return fs2.realpathSync(resolvedPath);
   } catch {
     return resolvedPath;
   }
@@ -40452,8 +41262,8 @@ function normalizePathForComparison(inputPath) {
   return process.platform === "win32" ? resolvedPath.toLowerCase() : resolvedPath;
 }
 function relativePathWithinNormalizedRoot(normalizedRoot, normalizedCandidate) {
-  const relative2 = path.relative(normalizedRoot, normalizedCandidate);
-  if (relative2 !== "" && (relative2.startsWith("..") || path.isAbsolute(relative2)))
+  const relative2 = path2.relative(normalizedRoot, normalizedCandidate);
+  if (relative2 !== "" && (relative2.startsWith("..") || path2.isAbsolute(relative2)))
     return null;
   return relative2;
 }
@@ -40470,28 +41280,30 @@ function relativePathWithinRoot(root, candidate) {
 var projectDir;
 function getProjectDir() {
   if (projectDir === undefined) {
+    let cwd;
     try {
-      projectDir = standardizeMacOSPath(process.cwd());
+      cwd = process.cwd();
     } catch {
-      const candidates = [process.env.PWD, os.homedir(), os.tmpdir()];
+      const candidates = [process.env.PWD, os2.homedir(), os2.tmpdir()];
       for (const candidate of candidates) {
-        if (!candidate || !path.isAbsolute(candidate))
+        if (!candidate || !path2.isAbsolute(candidate))
           continue;
         try {
           process.chdir(candidate);
-          projectDir = standardizeMacOSPath(candidate);
+          cwd = candidate;
           break;
         } catch {}
       }
-      if (projectDir === undefined) {
+      if (cwd === undefined) {
         throw new Error("Unable to determine an accessible working directory");
       }
     }
+    projectDir = standardizeProjectPath(cwd);
   }
   return projectDir;
 }
 function setProjectDir(dir) {
-  const resolved = standardizeMacOSPath(path.resolve(dir));
+  const resolved = standardizeProjectPath(path2.resolve(dir));
   process.chdir(resolved);
   projectDir = resolved;
 }
@@ -40500,21 +41312,21 @@ function __resetProjectDirCacheForTests() {
 }
 async function directoryIsMissing(dir) {
   try {
-    return !(await fs.promises.stat(dir)).isDirectory();
+    return !(await fs2.promises.stat(dir)).isDirectory();
   } catch (error) {
     return isEnoent(error) || isEnotdir(error);
   }
 }
 async function directoryExists(dir) {
   try {
-    return (await fs.promises.stat(dir)).isDirectory();
+    return (await fs2.promises.stat(dir)).isDirectory();
   } catch {
     return false;
   }
 }
 async function directoryIsEnterable(dir) {
   try {
-    const [stats] = await Promise.all([fs.promises.stat(dir), fs.promises.access(dir, fs.constants.X_OK)]);
+    const [stats] = await Promise.all([fs2.promises.stat(dir), fs2.promises.access(dir, fs2.constants.X_OK)]);
     return stats.isDirectory();
   } catch {
     return false;
@@ -40522,8 +41334,8 @@ async function directoryIsEnterable(dir) {
 }
 function directoryIsEnterableSync(dir) {
   try {
-    fs.accessSync(dir, fs.constants.X_OK);
-    return fs.statSync(dir).isDirectory();
+    fs2.accessSync(dir, fs2.constants.X_OK);
+    return fs2.statSync(dir).isDirectory();
   } catch {
     return false;
   }
@@ -40534,14 +41346,14 @@ function getSafeProjectCwd() {
     if (directoryIsEnterableSync(dir))
       return dir;
   } catch {}
-  return os.homedir();
+  return os2.homedir();
 }
 function getConfigDirName() {
   return process.env.PI_CONFIG_DIR || CONFIG_DIR_NAME;
 }
 function getConfigAgentDirName() {
   const profile = getActiveProfile();
-  return profile ? path.join(getConfigDirName(), "profiles", profile, "agent") : `${getConfigDirName()}/agent`;
+  return profile ? path2.join(getConfigDirName(), "profiles", profile, "agent") : `${getConfigDirName()}/agent`;
 }
 
 class DirResolver {
@@ -40549,35 +41361,34 @@ class DirResolver {
   agentDir;
   #rootDirs;
   #agentDirs;
+  #baseRootDirs;
   #rootCache = new Map;
   #agentCache = new Map;
   constructor(options = {}) {
     const profile = normalizeProfileName(options.profile);
     this.configRoot = getProfileConfigRoot(profile);
-    const defaultAgent = path.join(this.configRoot, "agent");
+    const defaultAgent = path2.join(this.configRoot, "agent");
     const agentDirOverride = profile ? undefined : options.agentDirOverride;
-    this.agentDir = agentDirOverride ? path.resolve(agentDirOverride) : defaultAgent;
+    this.agentDir = agentDirOverride ? path2.resolve(agentDirOverride) : defaultAgent;
     const isDefault = this.agentDir === defaultAgent;
     let xdgData;
     let xdgState;
     let xdgCache;
-    if ((process.platform === "linux" || process.platform === "darwin") && isDefault) {
+    const xdgPlatform = process.platform === "linux" || process.platform === "darwin";
+    if (xdgPlatform && isDefault) {
       const resolveIf = (envVar) => {
         const value = process.env[envVar];
         if (!value)
           return;
         try {
-          const appRoot = path.join(value, APP_NAME);
+          const appRoot = path2.join(value, APP_NAME);
           if (profile) {
-            const profilePath = path.join(appRoot, "profiles", profile);
-            if (fs.existsSync(profilePath)) {
+            const profilePath = path2.join(appRoot, "profiles", profile);
+            if (fs2.existsSync(profilePath))
               return profilePath;
-            }
             return;
           }
-          if (fs.existsSync(appRoot)) {
-            return appRoot;
-          }
+          return fs2.existsSync(appRoot) ? appRoot : undefined;
         } catch {}
         return;
       };
@@ -40585,6 +41396,18 @@ class DirResolver {
       xdgState = resolveIf("XDG_STATE_HOME");
       xdgCache = resolveIf("XDG_CACHE_HOME");
     }
+    const resolveBase = (envVar) => {
+      if (!xdgPlatform)
+        return;
+      const value = process.env[envVar];
+      if (!value)
+        return;
+      try {
+        const appRoot = path2.join(value, APP_NAME);
+        return fs2.existsSync(appRoot) ? appRoot : undefined;
+      } catch {}
+      return;
+    };
     this.#rootDirs = {
       data: xdgData ?? this.configRoot,
       state: xdgState ?? this.configRoot,
@@ -40595,13 +41418,22 @@ class DirResolver {
       state: xdgState ?? this.agentDir,
       cache: xdgCache ?? this.agentDir
     };
+    const baseRoot = getBaseConfigRoot();
+    this.#baseRootDirs = {
+      data: resolveBase("XDG_DATA_HOME") ?? baseRoot,
+      state: resolveBase("XDG_STATE_HOME") ?? baseRoot,
+      cache: resolveBase("XDG_CACHE_HOME") ?? baseRoot
+    };
+  }
+  baseRootSubdir(subdir, xdg) {
+    return path2.join(xdg ? this.#baseRootDirs[xdg] : getBaseConfigRoot(), subdir);
   }
   rootSubdir(subdir, xdg) {
     const cached = this.#rootCache.get(subdir);
     if (cached)
       return cached;
     const base = xdg ? this.#rootDirs[xdg] : this.configRoot;
-    const result = path.join(base, subdir);
+    const result = path2.join(base, subdir);
     this.#rootCache.set(subdir, result);
     return result;
   }
@@ -40611,11 +41443,11 @@ class DirResolver {
       if (cached)
         return cached;
       const base = xdg ? this.#agentDirs[xdg] : this.agentDir;
-      const result = path.join(base, subdir);
+      const result = path2.join(base, subdir);
       this.#agentCache.set(subdir, result);
       return result;
     }
-    return path.join(userAgentDir, subdir);
+    return path2.join(userAgentDir, subdir);
   }
 }
 function resolvePreProfileAgentDir(profile, agentDirEnv, profileAgentDirSource = profile) {
@@ -40630,7 +41462,7 @@ var dirs = new DirResolver({
   profile: activeProfile
 });
 var preProfileAgentDirEnv = resolvePreProfileAgentDir(activeProfile, process.env.PI_CODING_AGENT_DIR, activeProfile ?? readPiProfileFromEnvSafe());
-var RESOLVER_HOME = os.homedir();
+var RESOLVER_HOME = os2.homedir();
 function refreshDirsFromEnv() {
   dirs = new DirResolver({
     agentDirOverride: resolveActiveAgentDirOverride(),
@@ -40690,7 +41522,7 @@ function getAgentDir() {
   return dirs.agentDir;
 }
 function getProjectAgentDir(cwd = getProjectDir()) {
-  return path.join(cwd, CONFIG_DIR_NAME);
+  return path2.join(cwd, CONFIG_DIR_NAME);
 }
 function getReportsDir() {
   return dirs.rootSubdir("reports", "state");
@@ -40702,44 +41534,44 @@ function localDay(date) {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
 }
 function getLogPath(date = new Date, pid = process.pid) {
-  return path.join(getLogsDir(), `${APP_NAME}.${localDay(date)}.${pid}.log`);
+  return path2.join(getLogsDir(), `${APP_NAME}.${localDay(date)}.${pid}.log`);
 }
 function getPluginsDir(home) {
   if (home !== undefined && home !== RESOLVER_HOME) {
-    return path.join(home, getConfigDirName(), "plugins");
+    return path2.join(home, getConfigDirName(), "plugins");
   }
   return dirs.rootSubdir("plugins", "data");
 }
 function getPluginsNodeModules(home) {
-  return path.join(getPluginsDir(home), "node_modules");
+  return path2.join(getPluginsDir(home), "node_modules");
 }
 function getPluginsPackageJson(home) {
-  return path.join(getPluginsDir(home), "package.json");
+  return path2.join(getPluginsDir(home), "package.json");
 }
 function getPluginsLockfile(home) {
-  return path.join(getPluginsDir(home), "omp-plugins.lock.json");
+  return path2.join(getPluginsDir(home), "omp-plugins.lock.json");
 }
 function getRemoteDir() {
   return dirs.rootSubdir("remote", "data");
 }
-function resolveWorktreeBase(value) {
+function resolveAbsoluteDir(value) {
   const trimmed = value?.trim();
   if (!trimmed)
     return;
   let p = trimmed;
   if (p === "~")
-    p = os.homedir();
+    p = os2.homedir();
   else if (p.startsWith("~/") || p.startsWith("~\\"))
-    p = os.homedir() + p.slice(1);
-  return path.isAbsolute(p) ? path.normalize(p) : undefined;
+    p = os2.homedir() + p.slice(1);
+  return path2.isAbsolute(p) ? path2.normalize(p) : undefined;
 }
 var worktreesDirOverride;
 function setWorktreesDir(dir) {
-  worktreesDirOverride = resolveWorktreeBase(dir);
+  worktreesDirOverride = resolveAbsoluteDir(dir);
   return worktreesDirOverride;
 }
 function getWorktreesDir() {
-  return resolveWorktreeBase(process.env.OMP_WORKTREE_DIR) ?? worktreesDirOverride ?? dirs.rootSubdir("wt", "data");
+  return resolveAbsoluteDir(process.env.OMP_WORKTREE_DIR) ?? worktreesDirOverride ?? dirs.rootSubdir("wt", "data");
 }
 function getSshControlDir() {
   return dirs.rootSubdir("ssh-control", "state");
@@ -40769,43 +41601,49 @@ function getAutoQaDbPath() {
   return dirs.rootSubdir("autoqa.db", "data");
 }
 function hashPath(absPath) {
-  return Bun.hash(path.resolve(absPath)).toString(16).padStart(16, "0").slice(-7);
+  return Bun.hash(path2.resolve(absPath)).toString(16).padStart(16, "0").slice(-7);
 }
 function getWorktreeDir(segment) {
-  return path.join(getWorktreesDir(), segment);
+  return path2.join(getWorktreesDir(), segment);
 }
 function getGithubCacheDbPath() {
   const override = process.env.OMP_GITHUB_CACHE_DB;
   if (override)
     return override;
-  return dirs.rootSubdir(path.join("cache", "github-cache.db"), "cache");
+  return dirs.rootSubdir(path2.join("cache", "github-cache.db"), "cache");
 }
 function getCommitCacheDbPath() {
   const override = process.env.OMP_COMMIT_CACHE_DB;
   if (override)
     return override;
-  return dirs.rootSubdir(path.join("cache", "commit-inference.db"), "cache");
+  return dirs.rootSubdir(path2.join("cache", "commit-inference.db"), "cache");
+}
+function getJudgmentCacheDbPath() {
+  const override = process.env.OMP_JUDGMENT_CACHE_DB;
+  if (override)
+    return override;
+  return dirs.rootSubdir(path2.join("cache", "judgment-cache.db"), "cache");
 }
 function getLegacyPiExtensionCacheDbPath() {
-  return dirs.rootSubdir(path.join("cache", "legacy-pi-extension-cache.db"), "cache");
+  return dirs.rootSubdir(path2.join("cache", "legacy-pi-extension-cache.db"), "cache");
 }
 function getAuthBrokerSnapshotCachePath() {
   const override = process.env.OMP_AUTH_BROKER_SNAPSHOT_CACHE;
   if (override)
     return override;
-  return dirs.rootSubdir(path.join("cache", "auth-broker-snapshot.enc"), "cache");
+  return dirs.rootSubdir(path2.join("cache", "auth-broker-snapshot.enc"), "cache");
 }
 function getAvatarCacheDir() {
-  return dirs.rootSubdir(path.join("cache", "avatars"), "cache");
+  return dirs.rootSubdir(path2.join("cache", "avatars"), "cache");
 }
 function getFastembedCacheDir() {
-  return dirs.rootSubdir(path.join("cache", "fastembed"), "cache");
+  return dirs.rootSubdir(path2.join("cache", "fastembed"), "cache");
 }
 function getFastembedRuntimeDir() {
-  return dirs.rootSubdir(path.join("cache", "fastembed-runtime"), "cache");
+  return dirs.rootSubdir(path2.join("cache", "fastembed-runtime"), "cache");
 }
-function getNativesDir() {
-  return dirs.rootSubdir("natives", "cache");
+function getNativesDir2() {
+  return resolveAbsoluteDir(process.env.PI_NATIVES_DIR) ?? dirs.rootSubdir("natives", "cache");
 }
 function getStatsDbPath() {
   return dirs.rootSubdir("stats.db", "data");
@@ -40814,19 +41652,19 @@ function getAutoresearchDir() {
   return dirs.rootSubdir("autoresearch", "state");
 }
 function getAutoresearchProjectDir(encodedProject) {
-  return path.join(getAutoresearchDir(), encodedProject);
+  return path2.join(getAutoresearchDir(), encodedProject);
 }
 function getAutoresearchDbPath(encodedProject) {
-  return path.join(getAutoresearchDir(), `${encodedProject}.db`);
+  return path2.join(getAutoresearchDir(), `${encodedProject}.db`);
 }
 function getAutoresearchRunDir(encodedProject, runId) {
-  return path.join(getAutoresearchProjectDir(encodedProject), "runs", String(runId).padStart(4, "0"));
+  return path2.join(getAutoresearchProjectDir(encodedProject), "runs", String(runId).padStart(4, "0"));
 }
 function getSecurityDir() {
   return dirs.rootSubdir("security", "state");
 }
 function getSecurityProjectDir(projectKey) {
-  return path.join(getSecurityDir(), projectKey);
+  return path2.join(getSecurityDir(), projectKey);
 }
 function getAgentDbPath(agentDir) {
   return dirs.agentSubdir(agentDir, "agent.db", "data");
@@ -40841,13 +41679,22 @@ function getModelDbPath(agentDir) {
   return dirs.agentSubdir(agentDir, "models.db", "data");
 }
 function getTinyModelsCacheDir(agentDir) {
-  return dirs.agentSubdir(agentDir, path.join("cache", "tiny-models"), "cache");
+  return dirs.agentSubdir(agentDir, path2.join("cache", "tiny-models"), "cache");
 }
 function getDocumentConversionCacheDir(agentDir) {
-  return dirs.agentSubdir(agentDir, path.join("cache", "document-conversions"), "cache");
+  return dirs.agentSubdir(agentDir, path2.join("cache", "document-conversions"), "cache");
 }
-function getComposerCacheDir(agentDir) {
-  return dirs.agentSubdir(agentDir, path.join("cache", "composer"), "cache");
+function getComposerCacheDbPath(agentDir) {
+  return dirs.agentSubdir(agentDir, path2.join("cache", "composer.db"), "cache");
+}
+function getSkillDescriptionsDbPath(agentDir) {
+  return dirs.agentSubdir(agentDir, "skill-descriptions.db", "data");
+}
+function getPredictStateDir(agentDir, method) {
+  const subdir = path2.join("predict", method);
+  const stateDir = dirs.agentSubdir(agentDir, subdir, "data");
+  adoptLegacyDir(path2.join(agentDir ?? dirs.agentDir, subdir), stateDir);
+  return stateDir;
 }
 function getSessionsDir(agentDir) {
   return dirs.agentSubdir(agentDir, "sessions", "data");
@@ -40889,64 +41736,82 @@ function adoptLegacyFile(legacyPath, targetPath) {
   if (targetPath === legacyPath)
     return;
   try {
-    if (fs.existsSync(targetPath) || !fs.existsSync(legacyPath))
+    if (fs2.existsSync(targetPath) || !fs2.existsSync(legacyPath))
       return;
-    fs.mkdirSync(path.dirname(targetPath), { recursive: true });
-    fs.copyFileSync(legacyPath, targetPath, fs.constants.COPYFILE_EXCL);
+    fs2.mkdirSync(path2.dirname(targetPath), { recursive: true });
+    fs2.copyFileSync(legacyPath, targetPath, fs2.constants.COPYFILE_EXCL);
   } catch {}
+}
+function adoptLegacyDir(legacyPath, targetPath) {
+  if (targetPath === legacyPath)
+    return;
+  const staging = `${targetPath}.adopt-${process.pid}`;
+  try {
+    if (fs2.existsSync(targetPath) || !fs2.statSync(legacyPath, { throwIfNoEntry: false })?.isDirectory())
+      return;
+    fs2.mkdirSync(path2.dirname(targetPath), { recursive: true });
+    fs2.rmSync(staging, { recursive: true, force: true });
+    fs2.cpSync(legacyPath, staging, { recursive: true });
+    fs2.renameSync(staging, targetPath);
+  } catch {
+    fs2.rmSync(staging, { recursive: true, force: true });
+  }
 }
 function getSecretPlaceholderKeyPath() {
   const keyPath = dirs.agentSubdir(undefined, "secret-placeholder.key", "state");
-  adoptLegacyFile(path.join(dirs.agentDir, "secret-placeholder.key"), keyPath);
+  adoptLegacyFile(path2.join(dirs.agentDir, "secret-placeholder.key"), keyPath);
   return keyPath;
 }
 function getTinyWorkerRuntimeDir() {
-  return dirs.rootSubdir(path.join("run", "tiny"), "state");
+  return dirs.rootSubdir(path2.join("run", "tiny"), "state");
 }
 function getDaemonRuntimeRoot() {
-  return dirs.rootSubdir(path.join("run", "daemons"), "state");
+  return dirs.rootSubdir(path2.join("run", "daemons"), "state");
 }
 function getDaemonRuntimeDir(projectDir) {
-  const key = Bun.hash.wyhash(path.resolve(projectDir)).toString(16).padStart(16, "0");
-  return path.join(getDaemonRuntimeRoot(), key);
+  const key = Bun.hash.wyhash(path2.resolve(projectDir)).toString(16).padStart(16, "0");
+  return path2.join(getDaemonRuntimeRoot(), key);
 }
 function getGlobalDaemonRuntimeRoot() {
-  return path.join(getBaseConfigRoot(), "run", "daemons", "global");
+  return dirs.baseRootSubdir(path2.join("run", "daemons", "global"), "state");
 }
 function getGlobalDaemonRuntimeDir(service) {
   if (!/^[a-z0-9][a-z0-9._-]*$/i.test(service)) {
     throw new Error(`Invalid global daemon service name: ${JSON.stringify(service)}`);
   }
-  return path.join(getGlobalDaemonRuntimeRoot(), service);
+  return path2.join(getGlobalDaemonRuntimeRoot(), service);
+}
+function getSessionOwnersDir() {
+  return dirs.baseRootSubdir(path2.join("run", "session-owners"), "state");
 }
 function getProviderInFlightRoot() {
-  return dirs.rootSubdir(path.join("run", "provider-inflight"), "state");
+  return dirs.rootSubdir(path2.join("run", "provider-inflight"), "state");
 }
 function getMarketplacesRegistryPath() {
   const registryPath = dirs.rootSubdir("marketplaces.json", "data");
-  adoptLegacyFile(path.join(dirs.configRoot, "marketplaces.json"), registryPath);
+  adoptLegacyFile(path2.join(dirs.configRoot, "marketplaces.json"), registryPath);
   return registryPath;
 }
 function getProjectModulesDir(cwd = getProjectDir()) {
-  return path.join(getProjectAgentDir(cwd), "modules");
+  return path2.join(getProjectAgentDir(cwd), "modules");
 }
 function getProjectPromptsDir(cwd = getProjectDir()) {
-  return path.join(getProjectAgentDir(cwd), "prompts");
+  return path2.join(getProjectAgentDir(cwd), "prompts");
 }
 function getProjectPluginOverridesPath(cwd = getProjectDir()) {
-  return path.join(getProjectAgentDir(cwd), "plugin-overrides.json");
+  return path2.join(getProjectAgentDir(cwd), "plugin-overrides.json");
 }
 function getMCPConfigPath(scope, cwd = getProjectDir()) {
   if (scope === "user") {
-    return path.join(getAgentDir(), "mcp.json");
+    return path2.join(getAgentDir(), "mcp.json");
   }
-  return path.join(getProjectAgentDir(cwd), "mcp.json");
+  return path2.join(getProjectAgentDir(cwd), "mcp.json");
 }
 function getSSHConfigPath(scope, cwd = getProjectDir()) {
   if (scope === "user") {
-    return path.join(getAgentDir(), "ssh.json");
+    return path2.join(getAgentDir(), "ssh.json");
   }
-  return path.join(getProjectAgentDir(cwd), "ssh.json");
+  return path2.join(getProjectAgentDir(cwd), "ssh.json");
 }
 var cachedInstallId = null;
 var INSTALL_ID_FILE = "install-id";
@@ -40958,10 +41823,10 @@ var UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 function getInstallId() {
   if (cachedInstallId)
     return cachedInstallId;
-  const filePath = path.join(getBaseConfigRoot(), INSTALL_ID_FILE);
+  const filePath = path2.join(getBaseConfigRoot(), INSTALL_ID_FILE);
   let observedInvalid = false;
   try {
-    const existing = fs.readFileSync(filePath, "utf8").trim();
+    const existing = fs2.readFileSync(filePath, "utf8").trim();
     if (UUID_RE.test(existing)) {
       cachedInstallId = existing;
       return existing;
@@ -40970,23 +41835,23 @@ function getInstallId() {
   } catch {}
   const next = crypto.randomUUID();
   try {
-    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    fs2.mkdirSync(path2.dirname(filePath), { recursive: true });
     if (observedInvalid) {
       try {
-        fs.unlinkSync(filePath);
+        fs2.unlinkSync(filePath);
       } catch {}
     }
-    const fd = fs.openSync(filePath, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_EXCL, 384);
+    const fd = fs2.openSync(filePath, fs2.constants.O_WRONLY | fs2.constants.O_CREAT | fs2.constants.O_EXCL, 384);
     try {
-      fs.writeSync(fd, `${next}
+      fs2.writeSync(fd, `${next}
 `);
     } finally {
-      fs.closeSync(fd);
+      fs2.closeSync(fd);
     }
   } catch (err) {
     if (err.code === "EEXIST") {
       try {
-        const existing = fs.readFileSync(filePath, "utf8").trim();
+        const existing = fs2.readFileSync(filePath, "utf8").trim();
         if (UUID_RE.test(existing)) {
           cachedInstallId = existing;
           return existing;
@@ -41161,7 +42026,7 @@ function coerce(key, candidate, schema, fallback, warnings) {
   let value;
   if (schema.type === "string") {
     value = typeof candidate === "string" ? candidate : undefined;
-    if (key === "driverModulePath" && typeof value === "string" && value !== "" && (!isAbsolute2(value) || normalize2(value) !== value))
+    if (key === "driverModulePath" && typeof value === "string" && value !== "" && (!isAbsolute3(value) || normalize3(value) !== value))
       value = undefined;
   }
   if (schema.type === "boolean") {
@@ -41202,12 +42067,12 @@ import { Database } from "bun:sqlite";
 import { constants as constants3 } from "fs";
 import { access, mkdir as mkdir3, statfs } from "fs/promises";
 import { tmpdir as tmpdir3 } from "os";
-import { dirname as dirname4 } from "path";
+import { dirname as dirname5 } from "path";
 
 // extensions/lib/discovery.ts
-import { accessSync as accessSync2, constants as constants2, readFileSync as readFileSync2 } from "fs";
-import { homedir as homedir2 } from "os";
-import { dirname as dirname2, isAbsolute as isAbsolute3, join as join2, resolve as resolve2 } from "path";
+import { accessSync as accessSync2, constants as constants2, readFileSync as readFileSync3 } from "fs";
+import { homedir as homedir3 } from "os";
+import { dirname as dirname3, isAbsolute as isAbsolute4, join as join3, resolve as resolve2 } from "path";
 var CHANNEL_ENGINE = {
   zen: "firefox",
   firefox: "firefox",
@@ -41254,7 +42119,7 @@ var WINDOWS_CANDIDATES = {
 };
 function candidatesForChannel(channel, options = {}) {
   const platform = options.platform ?? process.platform;
-  const home = options.home ?? homedir2();
+  const home = options.home ?? homedir3();
   const env = options.env ?? process.env;
   if (platform === "darwin")
     return DARWIN_CANDIDATES[channel].map((path) => expandPath(path, home, env));
@@ -41266,11 +42131,11 @@ function candidatesForChannel(channel, options = {}) {
     const candidates = [];
     for (const name of names ?? []) {
       for (const pathDir of pathEntries)
-        candidates.push(join2(pathDir, name));
+        candidates.push(join3(pathDir, name));
       candidates.push(`/usr/bin/${name}`, `/usr/local/bin/${name}`, `/opt/${name}/${name}`);
     }
     for (const id of FLATPAK_IDS[channel] ?? []) {
-      candidates.push(`/var/lib/flatpak/exports/bin/${id}`, join2(home, ".local/share/flatpak/exports/bin", id));
+      candidates.push(`/var/lib/flatpak/exports/bin/${id}`, join3(home, ".local/share/flatpak/exports/bin", id));
     }
     return [...new Set(candidates)];
   }
@@ -41288,7 +42153,7 @@ function resolveBrowser(engine, channel, executablePath = "", options = {}) {
   assertChannelEngine(engine, channel);
   const exists = options.exists ?? pathExists;
   if (channel === "custom") {
-    if (!executablePath || !isAbsolute3(executablePath)) {
+    if (!executablePath || !isAbsolute4(executablePath)) {
       throw new Error("headed-browser: executablePath must be an absolute path when browserChannel is custom");
     }
     if (!exists(executablePath))
@@ -41355,18 +42220,18 @@ function selectFirefoxProfile(root, profilesText, installsText = "", sourceProfi
 }
 function profileRoots(_engine, channel, options = {}) {
   const platform = options.platform ?? process.platform;
-  const home = options.home ?? homedir2();
+  const home = options.home ?? homedir3();
   const env = options.env ?? process.env;
   const name = channel === "zen" ? "zen" : channel === "librewolf" ? "LibreWolf" : channel === "waterfox" ? "Waterfox" : "Firefox";
   if (platform === "darwin")
-    return [join2(home, "Library/Application Support", name)];
+    return [join3(home, "Library/Application Support", name)];
   if (platform === "win32")
-    return [join2(env.APPDATA ?? join2(home, "AppData/Roaming"), name === "Firefox" ? "Mozilla/Firefox" : name.toLowerCase())];
+    return [join3(env.APPDATA ?? join3(home, "AppData/Roaming"), name === "Firefox" ? "Mozilla/Firefox" : name.toLowerCase())];
   const linux = {
-    zen: [join2(home, ".zen"), join2(home, ".var/app/app.zen_browser.zen/.zen")],
-    Firefox: [join2(home, ".mozilla/firefox"), join2(home, ".var/app/org.mozilla.firefox/.mozilla/firefox")],
-    LibreWolf: [join2(home, ".librewolf")],
-    Waterfox: [join2(home, ".waterfox")]
+    zen: [join3(home, ".zen"), join3(home, ".var/app/app.zen_browser.zen/.zen")],
+    Firefox: [join3(home, ".mozilla/firefox"), join3(home, ".var/app/org.mozilla.firefox/.mozilla/firefox")],
+    LibreWolf: [join3(home, ".librewolf")],
+    Waterfox: [join3(home, ".waterfox")]
   };
   return linux[name] ?? [];
 }
@@ -41378,10 +42243,10 @@ function resolveSourceProfile(engine, channel, sourceProfileName = "", profileRo
     return { warnings: [`headed-browser: no ${channel} profile found; launched with an empty profile`], cleanFallback: true };
   try {
     if (engine === "firefox") {
-      const profilesText = readFileSync2(join2(root, "profiles.ini"), "utf8");
+      const profilesText = readFileSync3(join3(root, "profiles.ini"), "utf8");
       let installsText = "";
       try {
-        installsText = readFileSync2(join2(root, "installs.ini"), "utf8");
+        installsText = readFileSync3(join3(root, "installs.ini"), "utf8");
       } catch {}
       const profile = selectFirefoxProfile(root, profilesText, installsText, sourceProfileName);
       if (!exists(profile.resolvedPath))
@@ -41389,7 +42254,7 @@ function resolveSourceProfile(engine, channel, sourceProfileName = "", profileRo
       return { profileRoot: root, profilePath: profile.resolvedPath, profileName: profile.name, warnings: [], cleanFallback: false };
     }
     const profileName = sourceProfileName || "Default";
-    const profilePath = join2(root, profileName);
+    const profilePath = join3(root, profileName);
     if (!exists(profilePath))
       throw new Error(`profile path does not exist: ${profilePath}`);
     return { profileRoot: root, profilePath, profileName, warnings: [], cleanFallback: false };
@@ -41416,11 +42281,11 @@ function parseIni(text) {
   return sections;
 }
 function readFirefoxMetadata(executablePath, filename, key) {
-  const macResources = resolve2(dirname2(executablePath), "../Resources", filename);
-  const paths = [join2(dirname2(executablePath), filename), macResources];
+  const macResources = resolve2(dirname3(executablePath), "../Resources", filename);
+  const paths = [join3(dirname3(executablePath), filename), macResources];
   for (const path of paths) {
     try {
-      const section = Object.values(parseIni(readFileSync2(path, "utf8"))).find((values) => values[key]);
+      const section = Object.values(parseIni(readFileSync3(path, "utf8"))).find((values) => values[key]);
       if (section?.[key])
         return section[key];
     } catch {}
@@ -41428,7 +42293,7 @@ function readFirefoxMetadata(executablePath, filename, key) {
   return;
 }
 function expandPath(path, home, env) {
-  let expanded = path.startsWith("~/") ? join2(home, path.slice(2)) : path;
+  let expanded = path.startsWith("~/") ? join3(home, path.slice(2)) : path;
   expanded = expanded.replace(/%([^%]+)%/g, (_match, key) => env[key] ?? `%${key}%`);
   return expanded;
 }
@@ -41466,8 +42331,8 @@ async function loadPuppeteer(config) {
 
 // extensions/lib/policy.ts
 import { appendFile, chmod, mkdir } from "fs/promises";
-import { homedir as homedir3 } from "os";
-import { join as join4 } from "path";
+import { homedir as homedir4 } from "os";
+import { join as join5 } from "path";
 function deriveDomainPolicy(config) {
   const allowed = splitDomains(config.allowedDomains);
   const denied = splitDomains(config.deniedDomains);
@@ -41478,10 +42343,10 @@ function deriveDomainPolicy(config) {
 }
 function createAuditWriter(ctx, config) {
   const ompSessionId = ctx.sessionManager.getSessionId?.() ?? String(process.pid);
-  const agentDir = process.env.PI_CODING_AGENT_DIR ?? join4(homedir3(), ".omp", "agent");
-  const directory = config.auditDir || join4(agentDir, "headed-browser-audit");
+  const agentDir = process.env.PI_CODING_AGENT_DIR ?? join5(homedir4(), ".omp", "agent");
+  const directory = config.auditDir || join5(agentDir, "headed-browser-audit");
   const date = new Date().toISOString().slice(0, 10);
-  const path = join4(directory, `${date}-${ompSessionId}.jsonl`);
+  const path = join5(directory, `${date}-${ompSessionId}.jsonl`);
   return {
     path,
     async write(session, op, decision, url, reason) {
@@ -41593,8 +42458,8 @@ async function runPreflight(cwd, ctx, overrides = {}) {
   }
   const audit = createAuditWriter(ctx, config);
   try {
-    await mkdir3(dirname4(audit.path), { recursive: true, mode: 448 });
-    await access(dirname4(audit.path), constants3.W_OK);
+    await mkdir3(dirname5(audit.path), { recursive: true, mode: 448 });
+    await access(dirname5(audit.path), constants3.W_OK);
     checks.push({ name: "audit", status: "ok", observed: audit.path });
   } catch (error) {
     checks.push({ name: "audit", status: "warn", observed: error instanceof Error ? error.message : String(error), remedy: "Set auditDir to a writable directory." });
@@ -41683,8 +42548,8 @@ function preflightConfigKey(config) {
   return JSON.stringify({ platform: process.platform, defaultEngine: config.engine, browserChannel: config.browserChannel, executablePath: config.executablePath, sourceProfileName: config.sourceProfileName, profileRoot: config.profileRootOverride });
 }
 function preflightCachePath() {
-  const agentDir = process.env.PI_CODING_AGENT_DIR ?? join5(homedir4(), ".omp", "agent");
-  return join5(agentDir, "headed-browser-preflight.json");
+  const agentDir = process.env.PI_CODING_AGENT_DIR ?? join6(homedir5(), ".omp", "agent");
+  return join6(agentDir, "headed-browser-preflight.json");
 }
 async function readCache(path) {
   try {
@@ -41703,7 +42568,7 @@ async function readCache(path) {
   }
 }
 async function writeCache(path, cache) {
-  await mkdir4(dirname5(path), { recursive: true, mode: 448 });
+  await mkdir4(dirname6(path), { recursive: true, mode: 448 });
   const temporary = `${path}.${process.pid}.tmp`;
   await writeFile2(temporary, `${JSON.stringify(cache, null, 2)}
 `, { mode: 384 });

@@ -45,7 +45,7 @@ COPIED = (
     ".github/workflows/dependabot-automerge.yml",
     ".github/workflows/dependabot-dist-build.yml",
     ".github/workflows/dependabot-dist.yml",
-    ".github/workflows/omp-minor-issue.yml",
+    ".github/workflows/omp-major-issue.yml",
     ".github/workflows/release-please.yml",
     "browser-tools/package.json",
     "dep-update/package.json",
@@ -55,7 +55,7 @@ LOCKED = (".", "browser-tools", "dep-update", "whats-new")
 
 DIST = ".github/workflows/dependabot-dist.yml"
 BUILD = ".github/workflows/dependabot-dist-build.yml"
-MINOR = ".github/workflows/omp-minor-issue.yml"
+MAJOR = ".github/workflows/omp-major-issue.yml"
 AUTOMERGE = ".github/workflows/dependabot-automerge.yml"
 
 SHA_A = "a" * 40

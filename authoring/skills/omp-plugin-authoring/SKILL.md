@@ -28,7 +28,7 @@ MUST Filename stem is the identity for `native` / `omp-plugins` providers.
 MUST Frontmatter `name` equals that stem.
 MUST Capability dedup is **bare-name first-wins** across every source.
 MUST Prefix plugin rule filenames (`authoring-foo`, not `foo`).
-NOT Re-ship a bundled agent name: `scout`, `reviewer`, `security-reviewer`, `task`, `sonic`.
+NOT Re-ship a bundled agent name. The host's `EMBEDDED_AGENT_DEFS` in `src/task/agents.ts` is the list; in OMP 18.8.4 it is `scout`, `reviewer`, `security-reviewer`, `task`, `sonic`.
 
 ## Frontmatter and indexes
 

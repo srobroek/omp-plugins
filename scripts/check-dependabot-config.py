@@ -4,12 +4,16 @@
 Every fact this checks is invisible to YAML validation and to Dependabot itself:
 
 - `ignore[].update-types` only accepts the semver-qualified spellings
-  (`version-update:semver-minor`). The bare `minor`/`major` that `groups` accepts
-  is silently not a match here, so an unqualified value quietly re-enables the
-  OMP minor PRs this policy exists to suppress.
+  (`version-update:semver-major`). The bare `major` that `groups` accepts is
+  silently not a match here, so an unqualified value quietly re-enables the OMP
+  major PRs this policy exists to suppress.
 - The group name is a cross-file contract: dependabot-automerge.yml merges on
   `dependency-group == '<name>'`, so renaming the group in one file turns
   automerge into a no-op with nothing failing.
+- The automerge must wait for CI itself. main has no required status checks, so
+  `gh pr merge --auto` merges at once, before CI has run; the workflow has to
+  watch the ci run for the head, require the loader smoke step to have passed in
+  it, and merge only that head (`--match-head-commit`).
 - Dependabot reads only the manifest in the directory it is pointed at, so a
   dependency-bearing plugin with no entry is simply never updated. The expected
   set of directories is derived from the committed lockfiles rather than written
@@ -22,7 +26,7 @@ Every fact this checks is invisible to YAML validation and to Dependabot itself:
   request head and a privileged publication that runs default-branch logic only.
   Nothing fails if that split collapses back into one `pull_request_target` job
   holding a write token while it executes pull-request code.
-- omp-minor-issue.yml reads the issue list and then creates an issue. Without
+- omp-major-issue.yml reads the issue list and then creates an issue. Without
   serialized concurrency two runs both read "absent" and file the same issue.
 - An unpinned action tag is a mutable reference: the tag can be moved onto new
   code after review.
@@ -47,13 +51,18 @@ DEPENDABOT = REPO / ".github/dependabot.yml"
 AUTOMERGE = REPO / ".github/workflows/dependabot-automerge.yml"
 DIST_BUILD = REPO / ".github/workflows/dependabot-dist-build.yml"
 DIST_PUBLISH = REPO / ".github/workflows/dependabot-dist.yml"
-MINOR_ISSUE = REPO / ".github/workflows/omp-minor-issue.yml"
+MAJOR_ISSUE = REPO / ".github/workflows/omp-major-issue.yml"
 CI = REPO / ".github/workflows/ci.yml"
 SMOKE = REPO / "scripts/check-plugin-loading.ts"
 MANIFEST = REPO / "package.json"
 WORKFLOWS = REPO / ".github/workflows"
 
-GROUP = "omp-patch"
+GROUP = "omp"
+# Automerged: an OMP minor that breaks the plugins fails CI, which blocks the merge.
+GROUP_UPDATE_TYPES = {"minor", "patch"}
+# The ci.yml step that loads every plugin into the pinned host; the automerge
+# requires it to have passed, not just the job around it.
+SMOKE_STEP = "Loader smoke against pinned OMP"
 ECOSYSTEM = "bun"
 PATTERN = "@oh-my-pi/*"
 SCOPE = "@oh-my-pi/"
@@ -65,7 +74,7 @@ OMP_PACKAGES = {
     HOST_PACKAGE,
     "@oh-my-pi/pi-utils",
 }
-IGNORED_UPDATE_TYPES = {"version-update:semver-minor", "version-update:semver-major"}
+IGNORED_UPDATE_TYPES = {"version-update:semver-major"}
 BUILD_WORKFLOW_NAME = "dependabot-dist-build"
 ARTIFACT = "dependabot-dist"
 GUARD = "scripts/dependabot-dist-guard.py"
@@ -172,10 +181,10 @@ def check_omp_group(entry: dict, directory: str, label: str) -> None:
                 f"{label}: {directory} group {GROUP!r} patterns must be [{PATTERN!r}], "
                 f"got {group.get('patterns')!r}"
             )
-        if list(group.get("update-types") or []) != ["patch"]:
+        if set(group.get("update-types") or []) != GROUP_UPDATE_TYPES:
             fail(
-                f"{label}: {directory} group {GROUP!r} must carry patch updates only, "
-                f"got {group.get('update-types')!r}; anything wider would automerge unattended"
+                f"{label}: {directory} group {GROUP!r} must carry {sorted(GROUP_UPDATE_TYPES)!r} "
+                f"updates only, got {group.get('update-types')!r}; a major would automerge unattended"
             )
 
     ignores = [i for i in (entry.get("ignore") or []) if isinstance(i, dict)]
@@ -285,7 +294,7 @@ def check_dependabot() -> None:
 def check_automerge() -> None:
     """The merge step itself must be gated, not merely mentioned in a comment."""
     if not AUTOMERGE.exists():
-        fail(f"{AUTOMERGE.relative_to(REPO)}: missing, so the grouped patch PRs never merge")
+        fail(f"{AUTOMERGE.relative_to(REPO)}: missing, so the grouped OMP PRs never merge")
         return
     workflow = load(AUTOMERGE)
     if not isinstance(workflow, dict):
@@ -306,11 +315,26 @@ def check_automerge() -> None:
         return
     step = steps[0]
 
-    if "--auto" not in str(step["run"]):
+    # The commands, not the comments that explain them.
+    run = "\n".join(line for line in str(step["run"]).splitlines() if not line.lstrip().startswith("#"))
+    if "--auto" in run:
         fail(
-            f"{label}: the merge step must pass --auto so the required checks, "
-            "not this workflow, decide whether a bump lands"
+            f"{label}: the merge step must not pass --auto; with no required checks on main "
+            "it merges at once, before CI has run"
         )
+    if "--match-head-commit" not in run:
+        fail(
+            f"{label}: the merge step must pass --match-head-commit so only the head CI "
+            "certified can merge"
+        )
+    for fragment, reason in (
+        ("gh run watch", "the merge step must wait for the ci run itself"),
+        ("--exit-status", "a failed ci run must fail the step, not fall through to the merge"),
+        ("--workflow ci.yml", "the run it waits for must be the ci workflow"),
+        (f'"{SMOKE_STEP}"', "a skipped or non-blocking loader smoke still leaves the ci job green"),
+    ):
+        if fragment not in run:
+            fail(f"{label}: the merge step lost `{fragment}`: {reason}")
     condition = str(step.get("if") or "")
     for gate in (f"dependency-group == '{GROUP}'", f"package-ecosystem == '{ECOSYSTEM}'"):
         if gate not in condition:
@@ -318,6 +342,16 @@ def check_automerge() -> None:
                 f"{label}: the merge step's `if` must gate on steps.metadata.outputs.{gate} "
                 "to match .github/dependabot.yml"
             )
+
+    ci = load(CI)
+    smoke = [s for s in steps_of(ci) if s.get("name") == SMOKE_STEP] if isinstance(ci, dict) else []
+    if len(smoke) != 1:
+        fail(f"{CI.relative_to(REPO)}: expected exactly one step named {SMOKE_STEP!r}, found {len(smoke)}")
+    elif "if" in smoke[0] or smoke[0].get("continue-on-error"):
+        fail(
+            f"{CI.relative_to(REPO)}: {SMOKE_STEP!r} must run unconditionally and block the job; "
+            "dependabot-automerge.yml merges on its conclusion"
+        )
 
 
 def check_dist_build() -> None:
@@ -437,12 +471,12 @@ def check_dist_publish() -> None:
         )
 
 
-def check_minor_issue() -> None:
-    label = MINOR_ISSUE.relative_to(REPO)
-    if not MINOR_ISSUE.exists():
-        fail(f"{label}: missing; nothing notices that this checkout fell behind an OMP minor")
+def check_major_issue() -> None:
+    label = MAJOR_ISSUE.relative_to(REPO)
+    if not MAJOR_ISSUE.exists():
+        fail(f"{label}: missing; nothing notices that this checkout fell behind an OMP major")
         return
-    workflow = load(MINOR_ISSUE)
+    workflow = load(MAJOR_ISSUE)
     if not isinstance(workflow, dict):
         return
 
@@ -488,7 +522,7 @@ def check_manifest_authority() -> None:
         version = dev[name]
         if not EXACT_VERSION.match(str(version)):
             fail(
-                f"package.json: {name} must be an exact version so Dependabot's patch group "
+                f"package.json: {name} must be an exact version so Dependabot's {GROUP!r} group "
                 f"is the only thing that moves it, got {version!r}"
             )
     pinned = {name: str(dev[name]) for name in sorted(OMP_PACKAGES & dev.keys())}
@@ -542,7 +576,7 @@ check_dependabot()
 check_automerge()
 check_dist_build()
 check_dist_publish()
-check_minor_issue()
+check_major_issue()
 check_manifest_authority()
 check_action_pins()
 check_renovate_removed()

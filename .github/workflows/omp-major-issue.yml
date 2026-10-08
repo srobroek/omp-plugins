@@ -1,9 +1,9 @@
-name: omp-minor-issue
+name: omp-major-issue
 
-# .github/dependabot.yml ignores @oh-my-pi/* minor and major updates on purpose,
-# so nothing would otherwise notice that this checkout has fallen behind a new
-# OMP minor. This opens one compatibility issue per minor and hands the decision
-# to a human.
+# .github/dependabot.yml ignores @oh-my-pi/* major updates on purpose (minor and
+# patch bumps arrive as the automerged `omp` group), so nothing would otherwise
+# notice that this checkout has fallen behind a new OMP major. This opens one
+# compatibility issue per major and hands the decision to a human.
 
 on:
   schedule:
@@ -19,7 +19,7 @@ permissions:
 # same compatibility issue twice, and cancelling a run between the read and the
 # create loses the week's notice entirely.
 concurrency:
-  group: omp-minor-issue
+  group: omp-major-issue
   cancel-in-progress: false
 
 jobs:
@@ -31,7 +31,7 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Open a compatibility issue for a newer OMP minor
+      - name: Open a compatibility issue for a newer OMP major
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
@@ -48,17 +48,14 @@ jobs:
               *) echo "Not a resolvable version: '$value'" >&2; exit 1 ;;
             esac
           done
-          IFS=. read -r current_major current_minor _ <<<"$current"
-          IFS=. read -r latest_major latest_minor _ <<<"$latest"
+          current_major="${current%%.*}"
+          latest_major="${latest%%.*}"
 
-          if [ "$latest_major" -lt "$current_major" ]; then
-            exit 0
-          fi
-          if [ "$latest_major" -eq "$current_major" ] && [ "$latest_minor" -le "$current_minor" ]; then
+          if [ "$latest_major" -le "$current_major" ]; then
             exit 0
           fi
 
-          title="Review OMP ${latest_major}.${latest_minor} compatibility"
+          title="Review OMP ${latest_major} compatibility"
 
           # Fail closed on the dedupe. `gh issue list --limit N` silently stops at
           # N, so a repository with more history than that page would file this
@@ -79,8 +76,8 @@ jobs:
             printf '%s\n' \
               "The latest \`@oh-my-pi/pi-coding-agent\` release is $latest; this repository pins $current." \
               "" \
-              "Dependabot ignores @oh-my-pi/* minor and major updates (see .github/dependabot.yml)" \
-              "because a new OMP minor can change the extension SDK the plugins in this" \
+              "Dependabot ignores @oh-my-pi/* major updates (see .github/dependabot.yml)" \
+              "because a new OMP major can change the extension SDK the plugins in this" \
               "repository compile against. Review compatibility, then move all five @oh-my-pi" \
               "pins in package.json together: the root manifest is the single authority for the" \
               "loader smoke and the CI host, so they follow the pins automatically."

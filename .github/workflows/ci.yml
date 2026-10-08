@@ -26,7 +26,6 @@ jobs:
             echo "No pre-commit config; .githooks/pre-commit is the repository hook chain"
           fi
 
-
       - name: Install cargo-binstall
         if: ${{ github.event_name == 'pull_request' && !startsWith(github.base_ref, 'omp/') }}
         uses: cargo-bins/cargo-binstall@b874e25ea559687bec77e281e9b271aa1367b624 # v1.23.0
@@ -59,12 +58,6 @@ jobs:
       - name: Capability name collisions
         run: python3 scripts/check-duplicate-names.py
 
-      # The silent failures: a rule with no description lands in no bucket, a
-      # frontmatter name that disagrees with its filename is not the identity OMP
-      # uses, and a re-shipped bundled agent name shadows the bundled definition.
-      - name: Capability discovery contract
-        run: python3 scripts/check-contract.py
-
       # The catalog is a release artifact, not a hand-maintained file: OMP reads
       # `plugins[].version` from it, while release-please bumps only the per-plugin
       # manifests it is pointed at. This catches a catalog that drifted from them.
@@ -94,6 +87,14 @@ jobs:
           bun install --frozen-lockfile --silent
           bun run typecheck
           bun run lint
+
+      # The silent failures: a rule with no description lands in no bucket, a
+      # frontmatter name that disagrees with its filename is not the identity OMP
+      # uses, and a re-shipped bundled agent name shadows the bundled definition.
+      # Runs after `bun install`, because the bundled agent names are read from the
+      # pinned host in node_modules rather than from a copied list.
+      - name: Capability discovery contract
+        run: python3 scripts/check-contract.py
       # Plugins that declare real `dependencies` need node_modules present before
       # their sources can resolve imports; the committed dist/ bundles cover the
       # consumer machines, but this runner builds from source.
@@ -161,7 +162,6 @@ jobs:
           OMP_PROFILE: ci/plugins-full.toml
         run: bun scripts/check-plugin-loading.ts --profile "$OMP_PROFILE"
 
-
       # A rule's `condition` is a regex with no compiler and no type check: the only
       # thing that catches a false positive is a corpus. These tests read the
       # condition straight out of the rule's frontmatter, so a regex edit that
@@ -180,8 +180,9 @@ jobs:
       - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
 
       # The Dependabot policy is a cross-file contract: the group name that
-      # dependabot-automerge.yml merges on, the semver-qualified ignore spellings
-      # that actually suppress OMP minors, one entry per lockfile, the manifest
+      # dependabot-automerge.yml merges on, its wait for this workflow and the
+      # loader smoke step above, the semver-qualified ignore spelling that
+      # actually suppresses OMP majors, one entry per lockfile, the manifest
       # being the only place an OMP version is written, and the split that keeps the
       # dist rebuild's write token away from pull-request code. Nothing else fails
       # when those drift.

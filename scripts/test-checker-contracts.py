@@ -267,12 +267,7 @@ class CheckerContracts(unittest.TestCase):
         self.assertEqual(result.returncode, 1, result.stdout)
         self.assertIn("collision: tools 'shared_tool' declared 2 times", result.stdout)
 
-    def test_contract_rejects_only_bundled_agent_names(self) -> None:
-        """OMP bundles scout, reviewer, security-reviewer, task, and sonic, and nothing else.
-
-        `designer` and `librarian` were once listed here, which would have refused a
-        plugin agent of either name although neither shadows anything.
-        """
+    def contract_demo_agents(self) -> Path:
         self.copy_script("check-contract.py")
         plugin = self.root / "demo"
         (plugin / ".omp-plugin").mkdir(parents=True)
@@ -280,20 +275,60 @@ class CheckerContracts(unittest.TestCase):
         (plugin / "README.md").write_text("# demo\n", encoding="utf-8")
         agents = plugin / "agents"
         agents.mkdir()
-        for name, shadows in (
-            ("scout", True), ("reviewer", True), ("security-reviewer", True), ("task", True), ("sonic", True),
-            ("designer", False), ("librarian", False),
-        ):
+        return agents
+
+    def assert_shadowing(self, agents: Path, cases: tuple[tuple[str, bool], ...]) -> list[str]:
+        stderr = []
+        for name, shadows in cases:
             with self.subTest(agent=name):
                 agent = agents / f"{name}.md"
                 agent.write_text(f"---\nname: {name}\ndescription: Demo agent.\n---\nBody\n", encoding="utf-8")
                 result = self.run_script("check-contract.py")
                 agent.unlink()
+                stderr.append(result.stderr)
                 if shadows:
                     self.assertNotEqual(result.returncode, 0, result.stdout)
                     self.assertIn(f"name {name!r} shadows a bundled agent", result.stdout)
                 else:
                     self.assertEqual(result.returncode, 0, result.stdout)
+        return stderr
+
+    def test_contract_rejects_only_bundled_agent_names(self) -> None:
+        """Without an installed host the literal set applies: OMP 18.8.4 bundles scout,
+        reviewer, security-reviewer, task, and sonic, and nothing else, and says so.
+
+        `designer` and `librarian` were once listed here, which would have refused a
+        plugin agent of either name although neither shadows anything.
+        """
+        stderr = self.assert_shadowing(self.contract_demo_agents(), (
+            ("scout", True), ("reviewer", True), ("security-reviewer", True), ("task", True), ("sonic", True),
+            ("designer", False), ("librarian", False),
+        ))
+        for text in stderr:
+            self.assertIn("WARN cannot read bundled agents", text)
+
+    def test_contract_derives_bundled_agents_from_pinned_host(self) -> None:
+        """The installed host is the authority: a name it adds shadows, a name it drops does not."""
+        agents = self.contract_demo_agents()
+        task = self.root / "node_modules/@oh-my-pi/pi-coding-agent/src/task"
+        prompts = task.parent / "prompts/agents"
+        task.mkdir(parents=True)
+        prompts.mkdir(parents=True)
+        (prompts / "scout.md").write_text("---\nname: scout\ndescription: x\n---\nBody\n", encoding="utf-8")
+        (prompts / "task.md").write_text("Worker agent.\n", encoding="utf-8")
+        (task / "agents.ts").write_text(
+            'import scoutMd from "../prompts/agents/scout.md" with { type: "text" };\n'
+            'import taskMd from "../prompts/agents/task.md" with { type: "text" };\n'
+            "const EMBEDDED_AGENT_DEFS: EmbeddedAgentDef[] = [\n"
+            '\t{ fileName: "scout.md", template: scoutMd },\n'
+            '\t{\n\t\tfileName: "planner.md",\n\t\tfrontmatter: {\n\t\t\tname: "planner",\n'
+            '\t\t\tdescription: "Plans",\n\t\t},\n\t\ttemplate: taskMd,\n\t},\n'
+            "];\n",
+            encoding="utf-8",
+        )
+        stderr = self.assert_shadowing(agents, (("scout", True), ("planner", True), ("sonic", False)))
+        for text in stderr:
+            self.assertNotIn("WARN", text)
 
 if __name__ == "__main__":
     unittest.main()
