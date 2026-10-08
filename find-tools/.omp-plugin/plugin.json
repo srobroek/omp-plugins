@@ -1,6 +1,6 @@
 {
   "name": "find-tools",
   "description": "Discover and vet skills, agents, MCP servers, and plugins across real registries, and set them up project-locally.",
-  "version": "2.1.1",
+  "version": "2.2.0",
   "category": "productivity"
 }

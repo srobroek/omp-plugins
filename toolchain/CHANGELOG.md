@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.0.1](https://github.com/srobroek/omp-plugins/compare/toolchain--v1.0.0...toolchain--v1.0.1) (2026-10-08)
+
+
+### Bug Fixes
+
+* **toolchain,architecture:** correct the toolchain advisories, guard rules, and stale steering ([#645](https://github.com/srobroek/omp-plugins/issues/645)) ([b4f194d](https://github.com/srobroek/omp-plugins/commit/b4f194d0ea17d5b458d2762edb58b3dd1d3207af))
+* **toolchain:** stop the tfstate guard and prefer-tools advisory reading quoted text ([#649](https://github.com/srobroek/omp-plugins/issues/649)) ([f4c7d67](https://github.com/srobroek/omp-plugins/commit/f4c7d6758b909e5a61e42e15001c2f0b400411ef))
+
 ## [1.0.0](https://github.com/srobroek/omp-plugins/compare/toolchain--v0.3.10...toolchain--v1.0.0) (2026-10-02)
 
 
