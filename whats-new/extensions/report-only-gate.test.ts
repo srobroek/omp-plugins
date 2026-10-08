@@ -249,6 +249,53 @@ describe("decideToolCall while armed", () => {
 		expect(decideToolCall(armed(), "ast_edit", { paths: ["src/"] })).toBeUndefined();
 	});
 
+	test("every edit target a payload names is read: apply_patch headers, hashline moves, patch renames", () => {
+		const applyPatch = "*** Begin Patch\n*** Update File: web/package.json\n@@\n-a\n+b\n*** End Patch";
+		expect(decideToolCall(armed(), "edit", { input: applyPatch })).toEqual({ block: true, reason: DENY_REASON });
+		expect(decideToolCall(armed(), "edit", { _input: applyPatch })).toEqual({ block: true, reason: DENY_REASON });
+		const moved = "*** Begin Patch\n*** Update File: notes.json\n*** Move to: package.json\n*** End Patch";
+		expect(decideToolCall(armed(), "edit", { input: moved })).toEqual({ block: true, reason: DENY_REASON });
+		// The host derives `path`/`paths` from section headers only, never from `MV`.
+		const hashline = "[README.md#AB12]\nMV Cargo.toml";
+		expect(decideToolCall(armed(), "edit", { input: hashline, path: "README.md", paths: ["README.md"] })).toEqual({
+			block: true,
+			reason: DENY_REASON,
+		});
+		const rename = { path: "src/app.json", edits: [{ op: "update", rename: "uv.lock", diff: "@@\n-a\n+b\n" }] };
+		expect(decideToolCall(armed(), "edit", rename)).toEqual({ block: true, reason: DENY_REASON });
+		expect(decideToolCall(armed(), "edit", { input: "[README.md#AB12]\nPUT 1.=1:\n+MV package.json" })).toBeUndefined();
+	});
+
+	test("blocks installers behind every wrapper the shared parser knows", () => {
+		for (const command of [
+			"doas npm i x",
+			"/usr/bin/doas -u root pnpm add x",
+			"timeout 60 npm install",
+			"timeout -k 5 -s KILL 60 uv sync",
+			"stdbuf -oL npm ci",
+			"stdbuf -o L bun add x",
+			"stdbuf --output=L pnpm add x",
+			"exec -a npm-install npm i x",
+			"env -S 'npm i x'",
+			"env -iS'pnpm add x'",
+			"env -C /repo npm ci",
+			"sudo -D /repo yarn add x",
+			"nice -n 5 timeout 5 stdbuf -oL poetry add x",
+			"npx -p npm-check-updates ncu -u",
+		]) {
+			expect({ command, blocked: commandMutates(command) }).toEqual({ command, blocked: true });
+		}
+		for (const command of ["timeout 5 npm view react", "env -S 'npm view x'", "stdbuf -oL npm run build", "command -pv npm"]) {
+			expect({ command, blocked: commandMutates(command) }).toEqual({ command, blocked: false });
+		}
+	});
+
+	test("an inherited object member is not a package manager or a subcommand", () => {
+		for (const command of ["constructor name npm i x", "npm toString npm i x", "bun hasOwnProperty npm i x"]) {
+			expect({ command, blocked: commandMutates(command) }).toEqual({ command, blocked: false });
+		}
+	});
+
 	test("allows the report itself, research commands, and unrelated builds", () => {
 		expect(decideToolCall(armed(), "write", { path: "WHATS-NEW.md" })).toBeUndefined();
 		expect(decideToolCall(armed(), "edit", { path: "src/index.ts" })).toBeUndefined();

@@ -11,8 +11,10 @@ Research changes between your version and the latest release: additions, depreca
 ## Extensions
 
 - `report-only-gate`: arms when a `read` loads `skill://whats-new` or the skill
-  body. It blocks `edit`/`write` of dependency manifests and lockfiles.
-  It also blocks installer/upgrade commands and `dep_apply`.
+  body. It blocks `edit`/`write`/`ast_edit` of dependency manifests and lockfiles,
+  including hashline `MV` destinations, patch-mode renames and apply_patch headers.
+  It also blocks installer/upgrade commands, behind wrappers such as `sudo`, `doas`,
+  `env`, `nice`, `timeout` and `stdbuf`, and `dep_apply`.
   Reading `skill://dep-update` releases the research gate, not the host's per-bump approval.
 
 ## Tools

@@ -1,10 +1,9 @@
 import { afterEach, describe, expect, setSystemTime, test } from "bun:test";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import chezmoiGuard, {
 	bashWriteTargets,
 	considerPath,
-	editedFiles,
 	lexicalAbs,
 	loadManaged,
 	resetChezmoiGuardForTests,
@@ -83,25 +82,6 @@ describe("bashWriteTargets", () => {
 		expect(bashWriteTargets('echo x >"$HOME/.zshrc"', "/tmp")).toEqual([ZSHRC]);
 		expect(bashWriteTargets(`printf x >>"${ZSHRC}"`, "/tmp")).toEqual([ZSHRC]);
 		expect(bashWriteTargets('echo ">" ~/.zshrc', "/tmp")).toEqual([]);
-	});
-});
-
-describe("editedFiles", () => {
-	test("reads file_path, path and paths", () => {
-		expect(editedFiles({ file_path: "a.ts" })).toEqual(["a.ts"]);
-		expect(editedFiles({ path: "b.ts" })).toEqual(["b.ts"]);
-		expect(editedFiles({ paths: ["c.ts", ""] })).toEqual(["c.ts"]);
-		expect(editedFiles({})).toEqual([]);
-	});
-
-	test("reads every hashline section header and MV destination", () => {
-		const input = "[a.ts#AB12]\nPUT 1.=1:\n+x\n['b c.ts'#CD34]\nMV d.ts\n+MV body.ts";
-		expect(editedFiles({ input })).toEqual(["a.ts", "b c.ts", "d.ts"]);
-	});
-
-	test("reads apply_patch file and move headers", () => {
-		const input = "*** Begin Patch\n*** Update File: a.ts\n*** Move to: b.ts\n@@\n-x\n+y\n*** Add File: c.ts\n+z\n*** End Patch";
-		expect(editedFiles({ input })).toEqual(["a.ts", "b.ts", "c.ts"]);
 	});
 });
 
@@ -192,7 +172,12 @@ describe("chezmoi-guard integration", () => {
 	test("refuses an apply_patch edit to a managed target", () => {
 		const input = "*** Begin Patch\n*** Update File: ~/.zshrc\n@@\n-a\n+b\n*** End Patch";
 		expect(guard().call("edit", { input })).toEqual(refusal);
-		expect(guard().call("apply_patch", { input })).toEqual(refusal);
+	});
+
+	test("refuses an ast_edit whose paths name a managed target", () => {
+		const ops = [{ pat: "export X=1", out: "export X=2" }];
+		expect(guard().call("ast_edit", { ops, paths: [`${OUTSIDE}/`, "~/.zshrc"] })).toEqual(refusal);
+		expect(guard().call("ast_edit", { ops, paths: [OUTSIDE] })).toBeUndefined();
 	});
 
 	test.each([
@@ -215,12 +200,47 @@ describe("chezmoi-guard integration", () => {
 		'echo x >"$HOME/.zshrc"',
 		`printf x >>"${ZSHRC}"`,
 		"cat <<EOF\n$(cp a ~/.zshrc)\nEOF",
+		"/usr/bin/sudo tee ~/.zshrc",
+		"doas -u root tee ~/.zshrc",
+		"nice -n 5 tee ~/.zshrc",
+		"nice -5 cp /tmp/x ~/.zshrc",
+		"timeout 5 tee ~/.zshrc",
+		"timeout -s KILL 5 cp /tmp/x ~/.zshrc",
+		"timeout --preserve-status 5s sed -i s/a/b/ ~/.zshrc",
+		"stdbuf -oL tee ~/.zshrc",
+		"stdbuf -o L tee ~/.zshrc",
+		"exec -a name tee ~/.zshrc",
+		"env -S 'tee -a ~/.zshrc'",
+		"env -i -S'cp /tmp/x ~/.zshrc'",
+		"sudo nice -n 5 timeout 5 tee ~/.zshrc",
 	])("refuses bash write to a managed target: %s", (command) => {
 		expect(guard().call("bash", { command })).toEqual(refusal);
 	});
 
 	test("resolves a relative target against cwd", () => {
 		expect(guard().call("bash", { command: "sed -i s/a/b/ .zshrc", cwd: HOME })).toEqual(refusal);
+	});
+
+	test.each([
+		"env -C ~ tee .zshrc",
+		"env --chdir=$HOME cp x .zshrc",
+		"sudo -D ~ sed -i s/a/b/ .zshrc",
+		"sudo --chdir ~ perl -pi -e 's/a/b/' .zshrc",
+		`env -C ${dirname(HOME)} env -C ${basename(HOME)} tee .zshrc`,
+		"env -C /tmp printf x > .zshrc",
+	])("resolves a wrapped command's paths in the wrapper's directory, redirects in the shell's: %s", (command) => {
+		expect(guard().call("bash", { command, cwd: command.includes("> .zshrc") ? HOME : "/tmp" })).toEqual(refusal);
+	});
+
+	test.each([
+		"env -C /tmp tee .zshrc",
+		"env -C ~ printf x > .zshrc",
+		'env -C "$DIR" tee .zshrc',
+		"timeout 5 cat ~/.zshrc",
+		"command -v tee",
+		"stdbuf -oL grep x ~/.zshrc",
+	])("allows a wrapped command that does not write a managed target: %s", (command) => {
+		expect(guard().call("bash", { command, cwd: command.startsWith("env -C ~") ? "/tmp" : HOME })).toBeUndefined();
 	});
 
 	test.each([

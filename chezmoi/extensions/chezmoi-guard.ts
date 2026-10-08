@@ -4,7 +4,9 @@ import { basename, isAbsolute, join, relative, resolve } from "node:path";
 
 import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
 
+import { commandWords } from "./command-words.ts";
 import { type ShellToken, tokenizeShell } from "./shell-tokenizer.ts";
+import { EDIT_TOOLS, targetPaths } from "./tool-targets.ts";
 
 /**
  * Refuses writes to a chezmoi-managed live target: the next `chezmoi apply`
@@ -12,31 +14,26 @@ import { type ShellToken, tokenizeShell } from "./shell-tokenizer.ts";
  * source path to edit instead.
  *
  * Coverage is literal and static, never a shell sandbox:
- * - `edit`/`write`/`apply_patch`: top-level `path`/`file_path`/`paths`, hashline
- *   `[PATH#TAG]` section headers and `MV DEST`, and apply_patch
- *   `*** Add|Update|Delete|Edit File:` / `*** Move to:` headers.
+ * - `edit`/`write`/`ast_edit`: every target `tool-targets.ts` reads — top-level
+ *   `path`/`file_path`/`paths`, patch-mode renames, hashline `[PATH#TAG]` section
+ *   headers and `MV DEST`, and apply_patch `*** Add|Update|Delete|Edit File:` /
+ *   `*** Move to:` headers.
  * - `bash`: `>`/`>>`/`>|` redirects, `tee`, `cp`/`mv` destinations, `sed -i`/`gsed -i`
- *   and `perl -i`, behind `sudo`/`doas`/`env`/`command`/`exec`/`nohup`/`time` and
- *   assignment prefixes. Relative paths resolve against a literal `cd DIR` earlier
- *   in the same command; after a non-literal `cd` they are skipped. Here-document
+ *   and `perl -i`, behind the wrappers and assignment prefixes `command-words.ts`
+ *   drops. Relative paths resolve against a literal `cd DIR` earlier in the same
+ *   command, and a wrapped command's own paths against its `env -C DIR` /
+ *   `sudo -D DIR`; after a non-literal directory they are skipped. Here-document
  *   bodies are data; only substitutions in an unquoted body count as commands.
  */
 
-const EDIT_TOOLS: Record<string, true> = { edit: true, write: true, apply_patch: true };
 const SUBPROCESS_TIMEOUT_MS = 2000;
 /** `chezmoi add`/`forget` from another terminal change the managed set without any call this guard sees. */
 export const MANAGED_TTL_MS = 5000;
 
 /** Internal URIs (`xd://ast_edit`, `local://…`) are not filesystem paths. */
 const NON_FILE_SCHEME = /^[a-z][a-z0-9+.-]*:\/\//i;
-const HASHLINE_HEADER = /^\s*\[([^#\r\n]+)#[0-9a-fA-F]{4}\]\s*$/;
-const HASHLINE_MOVE = /^\s*MV\s+(.+?)\s*$/;
-const PATCH_HEADER = /^\*\*\* (?:(?:Add|Update|Delete|Edit) File|Move to):\s*(.+?)\s*$/;
 /** Separator tokens from `tokenizeShell`; `&&`/`||` arrive as two tokens each. */
 const SEPARATORS: Record<string, true> = { ";": true, "&": true, "|": true, "\n": true, "(": true, ")": true, "$(": true };
-/** Words that run the next word as the command. */
-const PASSTHROUGH: Record<string, true> = { command: true, exec: true, nohup: true, time: true, "--": true };
-const ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*=/;
 /** `chezmoi` as a command word: its subcommands (`add`, `forget`, …) change the managed set. */
 const CHEZMOI_RUN = /(?:^|[\s;&|(/])chezmoi(?:\s|$)/;
 
@@ -111,95 +108,8 @@ export function under(child: string, parent: string): boolean {
 	return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
 }
 
-function unquote(path: string): string {
-	const first = path[0];
-	if (path.length > 1 && (first === '"' || first === "'") && path.endsWith(first)) return path.slice(1, -1);
-	return path;
-}
-
-/**
- * Target paths in an edit payload: hashline `[PATH#TAG]` headers and their
- * `MV DEST` ops, plus apply_patch file and move headers. Hashline body rows
- * (`+…`) are content, so a quoted header inside one is not a target.
- */
-export function patchPaths(payload: string): string[] {
-	const out: string[] = [];
-	let inHashline = false;
-	for (const raw of payload.split("\n")) {
-		const line = raw.replace(/\r$/, "");
-		const header = HASHLINE_HEADER.exec(line);
-		if (header) {
-			inHashline = true;
-			out.push(unquote((header[1] ?? "").trim()));
-			continue;
-		}
-		const patch = PATCH_HEADER.exec(line);
-		if (patch) {
-			inHashline = false;
-			out.push(unquote(patch[1] ?? ""));
-			continue;
-		}
-		if (!inHashline || line.startsWith("+")) continue;
-		const move = HASHLINE_MOVE.exec(line);
-		if (move) out.push(unquote(move[1] ?? ""));
-	}
-	return out.filter((path) => path.length > 0);
-}
-
-/** Every path an `edit`/`write`/`apply_patch` call would write. */
-export function editedFiles(input: Record<string, unknown>): string[] {
-	const out: string[] = [];
-	for (const key of ["path", "file_path", "_path"]) {
-		const value = input[key];
-		if (typeof value === "string" && value) out.push(value);
-	}
-	if (Array.isArray(input.paths)) {
-		for (const value of input.paths) if (typeof value === "string" && value) out.push(value);
-	}
-	// `patch` mode: per-entry renames move the file to a new target.
-	if (Array.isArray(input.edits)) {
-		for (const entry of input.edits) {
-			const rename = (entry as { rename?: unknown } | null)?.rename;
-			if (typeof rename === "string" && rename) out.push(rename);
-		}
-	}
-	for (const key of ["input", "_input"]) {
-		const value = input[key];
-		if (typeof value === "string" && value) out.push(...patchPaths(value));
-	}
-	return [...new Set(out)];
-}
-
 /** A write destination; `sources` set means "into this directory when it is one". */
 type RawTarget = { path: string; sources?: string[]; intoDir?: boolean };
-
-/** Drop wrappers that run the next word as the command (`sudo`, `env`, assignments, …). */
-function commandWords(args: string[]): string[] {
-	let i = 0;
-	while (i < args.length) {
-		const word = args[i] as string;
-		if (ASSIGNMENT.test(word) || Object.hasOwn(PASSTHROUGH, word)) {
-			i++;
-		} else if (word === "env") {
-			i++;
-			while (i < args.length && ((args[i] as string).startsWith("-") || ASSIGNMENT.test((args[i] as string)))) {
-				if (args[i] === "-u" || args[i] === "--unset" || args[i] === "-C" || args[i] === "--chdir") i++;
-				i++;
-			}
-		} else if (word === "sudo" || word === "doas") {
-			i++;
-			while (i < args.length && (args[i] as string).startsWith("-")) {
-				const opt = args[i] as string;
-				i++;
-				if (opt === "--") break;
-				if (/^-[ugCDhprtTU]$/.test(opt)) i++;
-			}
-		} else {
-			break;
-		}
-	}
-	return args.slice(i);
-}
 
 function teePaths(args: string[]): string[] {
 	const at = args.indexOf("--");
@@ -294,9 +204,21 @@ function perlPaths(args: string[]): string[] {
 	return inplace ? files : [];
 }
 
+/** One simple command's write destinations, split by the directory each resolves in. */
+type CommandTargets = {
+	/** The command word and its arguments, wrappers dropped. */
+	argv: string[];
+	/** Directories the wrappers run the command in, outermost first, as written. */
+	directories: string[];
+	/** Redirect targets: the shell opens them in its own directory, before any wrapper runs. */
+	redirects: RawTarget[];
+	/** Destinations the command itself writes, relative to the wrappers' directories. */
+	writes: RawTarget[];
+};
+
 /** Redirect targets plus the write destinations of one simple command. */
-function simpleCommandTargets(words: ShellToken[]): RawTarget[] {
-	const out: RawTarget[] = [];
+function simpleCommandTargets(words: ShellToken[]): CommandTargets {
+	const redirects: RawTarget[] = [];
 	const args: string[] = [];
 	for (let i = 0; i < words.length; i++) {
 		const word = words[i] as ShellToken;
@@ -320,16 +242,17 @@ function simpleCommandTargets(words: ShellToken[]): RawTarget[] {
 		let target = value.slice(at + 1);
 		if (target.startsWith(">") || target.startsWith("|")) target = target.slice(1);
 		if (!target) target = words[++i]?.value ?? "";
-		if (target) out.push({ path: target });
+		if (target) redirects.push({ path: target });
 	}
-	const argv = commandWords(args);
+	const { argv, directories } = commandWords(args);
 	const name = basename(argv[0] ?? "");
 	const rest = argv.slice(1);
-	if (name === "tee") out.push(...teePaths(rest).map((path) => ({ path })));
-	else if (name === "cp" || name === "mv") out.push(...copyTargets(rest));
-	else if (name === "sed" || name === "gsed") out.push(...sedPaths(rest).map((path) => ({ path })));
-	else if (name === "perl") out.push(...perlPaths(rest).map((path) => ({ path })));
-	return out;
+	const writes: RawTarget[] = [];
+	if (name === "tee") writes.push(...teePaths(rest).map((path) => ({ path })));
+	else if (name === "cp" || name === "mv") writes.push(...copyTargets(rest));
+	else if (name === "sed" || name === "gsed") writes.push(...sedPaths(rest).map((path) => ({ path })));
+	else if (name === "perl") writes.push(...perlPaths(rest).map((path) => ({ path })));
+	return { argv, directories, redirects, writes };
 }
 
 /** `$HOME`/`~` expand; any other expansion is unknowable statically. */
@@ -366,17 +289,9 @@ export function bashWriteTargets(command: string, cwd: string): string[] {
 	let dir: string | null = cwd;
 	const saved: (string | null)[] = [];
 	let words: ShellToken[] = [];
-	const finish = (): void => {
-		const segment = words;
-		words = [];
-		if (segment.length === 0) return;
-		const argv = commandWords(segment.map((word) => word.value));
-		if (argv[0] === "cd") {
-			dir = cdTarget(argv.slice(1), dir);
-			return;
-		}
-		for (const target of simpleCommandTargets(segment)) {
-			const abs = literalPath(target.path, dir);
+	const resolveInto = (targets: RawTarget[], from: string | null): void => {
+		for (const target of targets) {
+			const abs = literalPath(target.path, from);
 			if (abs === undefined) continue;
 			const intoDir = target.intoDir || (target.sources && (target.path.endsWith("/") || isDirectory(abs)));
 			if (intoDir && target.sources) {
@@ -385,6 +300,20 @@ export function bashWriteTargets(command: string, cwd: string): string[] {
 				out.push(abs);
 			}
 		}
+	};
+	const finish = (): void => {
+		const segment = words;
+		words = [];
+		if (segment.length === 0) return;
+		const { argv, directories, redirects, writes } = simpleCommandTargets(segment);
+		resolveInto(redirects, dir);
+		if (argv[0] === "cd") {
+			dir = cdTarget(argv.slice(1), dir);
+			return;
+		}
+		let commandDir = dir;
+		for (const directory of directories) commandDir = literalPath(directory, commandDir) ?? null;
+		resolveInto(writes, commandDir);
 	};
 	for (const token of tokenizeShell(command, { hereDocumentSubstitutionsOnly: true })) {
 		if (token.sawQuote || !Object.hasOwn(SEPARATORS, token.value)) {
@@ -477,8 +406,8 @@ export default function chezmoiGuard(pi: ExtensionAPI): void {
 			const cwd = typeof input.cwd === "string" && input.cwd ? lexicalAbs(input.cwd, sessionCwd) : sessionCwd;
 			let paths: string[];
 
-			if (Object.hasOwn(EDIT_TOOLS, event.toolName)) {
-				paths = editedFiles(input)
+			if (EDIT_TOOLS.has(event.toolName)) {
+				paths = targetPaths(input)
 					.filter((path) => !NON_FILE_SCHEME.test(path))
 					.map((path) => lexicalAbs(path, cwd));
 			} else if (event.toolName === "bash") {

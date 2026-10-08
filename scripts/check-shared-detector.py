@@ -38,6 +38,14 @@ DUPLICATED: tuple[tuple[str, ...], ...] = (
         "dep-update/extensions/detect.ts",
         "whats-new/extensions/detect.ts",
     ),
+    (
+        "chezmoi/extensions/command-words.ts",
+        "whats-new/extensions/command-words.ts",
+    ),
+    (
+        "chezmoi/extensions/tool-targets.ts",
+        "whats-new/extensions/tool-targets.ts",
+    ),
 )
 
 
