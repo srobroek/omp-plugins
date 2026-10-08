@@ -458,6 +458,18 @@ export function receiptId(now: number, mergeCommitOid: string | null): string {
 	return `${now}-${oid.slice(0, 12)}`;
 }
 
+/**
+ * The native Beads close-out for one receipt bead: stamp the landing on the bead,
+ * then close it citing the receipt. `delivery_land` hands these commands out and
+ * `delivery_cleanup` names them in its refusals, so both spell them here.
+ */
+export function closeoutCommands(beadId: string, pr: number, mergeSha: string, receiptPath: string): { update: string; close: string } {
+	return {
+		update: `bd update ${beadId} --set-metadata pr=${pr} --set-metadata merge_sha=${mergeSha}`,
+		close: `bd close ${beadId} --reason "PR #${pr} merged as ${mergeSha}; receipt ${receiptPath}"`,
+	};
+}
+
 /** Top-level keys v1 defines. Everything else on an object is carried, not dropped. */
 const V1_KEYS: Record<string, true> = {
 	schema: true,

@@ -17,8 +17,8 @@ Refuses a write to a chezmoi-managed target under `$HOME`, because the next `che
 
 The guard reads write targets from:
 
-- `edit`/`write`/`apply_patch`: `path`, `file_path`, `paths`, hashline `[PATH#TAG]` section headers (every section of a multi-file edit) and `MV DEST`, and apply_patch `*** Add|Update|Delete|Edit File:` and `*** Move to:` headers.
-- `bash`: `>`, `>>` and `>|` redirects, `tee`, `cp`/`mv` destinations (including `-t DIR` and an existing destination directory), `sed -i`/`gsed -i` and `perl -i`. Leading `sudo`, `doas`, `env`, `command`, `exec`, `nohup`, `time` and `VAR=value` prefixes are skipped. Relative paths resolve against the call's cwd and a literal `cd DIR` earlier in the same command; a `cd` inside `( … )` ends with the group.
+- `edit`/`write`/`ast_edit` (an apply_patch-mode edit arrives as `edit`): `path`, `file_path`, `paths`, patch-mode `edits[].rename`, hashline `[PATH#TAG]` section headers (every section of a multi-file edit) and `MV DEST`, and apply_patch `*** Add|Update|Delete|Edit File:` and `*** Move to:` headers.
+- `bash`: `>`, `>>` and `>|` redirects, `tee`, `cp`/`mv` destinations (including `-t DIR` and an existing destination directory), `sed -i`/`gsed -i` and `perl -i`. Leading `sudo`, `doas`, `env` (including `env -S`), `nice`, `timeout`, `stdbuf`, `command`, `exec`, `nohup`, `time` and `VAR=value` prefixes are skipped with their options. Relative paths resolve against the call's cwd and a literal `cd DIR` earlier in the same command; a `cd` inside `( … )` ends with the group. A wrapped command's own paths resolve against its `env -C DIR` or `sudo -D DIR`, while its redirects stay in the shell's directory.
 
 It also covers existing symlink aliases of a managed target.
 

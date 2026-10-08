@@ -17,6 +17,9 @@ plugin boundary -- which is the shape this contract exists to reject.
 
 Add a set by appending to DUPLICATED, whose members are repository-relative paths
 that must all be identical.
+
+A copy nobody registered is invisible to that comparison, so a file in any plugin's
+`extensions/` directory that shares a registered copy's name must be registered too.
 """
 
 from __future__ import annotations
@@ -31,12 +34,21 @@ DUPLICATED: tuple[tuple[str, ...], ...] = (
     (
         "beads/extensions/shell-tokenizer.ts",
         "chezmoi/extensions/shell-tokenizer.ts",
+        "safety/extensions/shell-tokenizer.ts",
         "speckit/extensions/shell-tokenizer.ts",
         "whats-new/extensions/shell-tokenizer.ts",
     ),
     (
         "dep-update/extensions/detect.ts",
         "whats-new/extensions/detect.ts",
+    ),
+    (
+        "chezmoi/extensions/command-words.ts",
+        "whats-new/extensions/command-words.ts",
+    ),
+    (
+        "chezmoi/extensions/tool-targets.ts",
+        "whats-new/extensions/tool-targets.ts",
     ),
 )
 
@@ -45,6 +57,18 @@ def main() -> int:
     failures: list[str] = []
 
     for group in DUPLICATED:
+        # A same-named file another plugin bundles is a copy the comparison below would
+        # never read: one that kept stale bytes passes silently.
+        for basename in sorted({Path(name).name for name in group}):
+            for path in sorted(ROOT.glob(f"*/extensions/{basename}")):
+                name = path.relative_to(ROOT).as_posix()
+                if name not in group:
+                    failures.append(
+                        f"{name}: unregistered copy of {group[0]}\n"
+                        f"    register it in DUPLICATED with the other copies, or rename it"
+                        f" if it is not a copy"
+                    )
+
         missing = [name for name in group if not (ROOT / name).is_file()]
         if missing:
             failures.append(

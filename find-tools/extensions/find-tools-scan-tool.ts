@@ -208,6 +208,7 @@ async function scanLocal(deps: Required<Pick<ScanDeps, "run" | "readFile" | "whi
 		for (const argv of [["omp", "plugin", "list"], ["omp", "plugin", "marketplace", "list"]]) {
 			const listed = await deps.run(argv, NETWORK_MS);
 			if (listed.ok) hits.push(...inventoryHits(listed.stdout));
+			else failures.push(`${argv.join(" ")} failed: ${listed.stderr.trim().slice(0, 200) || "no output"}`);
 		}
 	}
 	let mcp: string | null = null;
@@ -437,7 +438,13 @@ async function scanSmithery(
 			})),
 		};
 	} catch {
-		return { surface: "smithery", ok: true, hits: [{ name: "raw", detail: res.text.slice(0, 1000) }] };
+		// The raw text may still name a server, but nothing here parsed it: a partial answer.
+		return {
+			surface: "smithery",
+			ok: true,
+			failures: ["unparseable Smithery response; raw text kept"],
+			hits: [{ name: "raw", detail: res.text.slice(0, 1000) }],
+		};
 	}
 }
 

@@ -221,8 +221,186 @@ function substitutionEnd(body, from) {
   return body.length;
 }
 
+// extensions/command-words.ts
+var NONE = new Set;
+var WRAPPERS = new Map([
+  ["sudo", {
+    valued: new Set([
+      "-C",
+      "-D",
+      "-g",
+      "-h",
+      "-p",
+      "-R",
+      "-r",
+      "-T",
+      "-t",
+      "-U",
+      "-u",
+      "--chdir",
+      "--chroot",
+      "--close-from",
+      "--command-timeout",
+      "--group",
+      "--host",
+      "--other-user",
+      "--prompt",
+      "--role",
+      "--type",
+      "--user"
+    ]),
+    chdir: new Set(["-D", "--chdir"])
+  }],
+  ["doas", { valued: new Set(["-C", "-u"]) }],
+  ["env", {
+    valued: new Set(["-C", "-L", "-P", "-S", "-U", "-u", "--chdir", "--split-string", "--unset"]),
+    chdir: new Set(["-C", "--chdir"]),
+    split: new Set(["-S", "--split-string"]),
+    assignments: true
+  }],
+  ["nice", { valued: new Set(["-n", "--adjustment"]) }],
+  ["timeout", { valued: new Set(["-k", "-s", "--kill-after", "--signal"]), operands: 1 }],
+  ["stdbuf", { valued: new Set(["-e", "-i", "-o", "--error", "--input", "--output"]) }],
+  ["exec", { valued: new Set(["-a"]) }],
+  ["command", { valued: NONE, lookup: new Set(["-V", "-v"]) }],
+  ["time", { valued: new Set(["-f", "-o", "--format", "--output"]) }],
+  ["nohup", { valued: NONE }]
+]);
+var ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*=/;
+function readOption(words, at, wrapper) {
+  const word = words[at];
+  if (word.startsWith("--")) {
+    const eq = word.indexOf("=");
+    const name = eq === -1 ? word : word.slice(0, eq);
+    if (!wrapper.valued.has(name))
+      return null;
+    return eq === -1 ? { name, value: words[at + 1], span: 2 } : { name, value: word.slice(eq + 1), span: 1 };
+  }
+  for (let j = 1;j < word.length; j++) {
+    const name = `-${word[j]}`;
+    if (wrapper.lookup?.has(name))
+      return "lookup";
+    if (!wrapper.valued.has(name))
+      continue;
+    const attached = word.slice(j + 1);
+    return attached ? { name, value: attached, span: 1 } : { name, value: words[at + 1], span: 2 };
+  }
+  return null;
+}
+function commandWords(input) {
+  const words = [...input];
+  const directories = [];
+  let i = 0;
+  while (i < words.length) {
+    const word = words[i];
+    if (ASSIGNMENT.test(word) || word === "--") {
+      i++;
+      continue;
+    }
+    const wrapper = WRAPPERS.get(word.slice(word.lastIndexOf("/") + 1));
+    if (wrapper === undefined)
+      break;
+    i++;
+    while (i < words.length) {
+      const option = words[i];
+      if (option === "--") {
+        i++;
+        break;
+      }
+      if (wrapper.assignments && ASSIGNMENT.test(option)) {
+        i++;
+        continue;
+      }
+      if (!option.startsWith("-"))
+        break;
+      const read = readOption(words, i, wrapper);
+      if (read === "lookup")
+        return { argv: [], directories };
+      if (read === null) {
+        i++;
+        continue;
+      }
+      if (read.value === undefined)
+        return { argv: [], directories };
+      if (wrapper.split?.has(read.name)) {
+        words.splice(i, read.span, ...tokenizeShell(read.value).map((token) => token.value));
+        continue;
+      }
+      if (wrapper.chdir?.has(read.name))
+        directories.push(read.value);
+      i += read.span;
+    }
+    i += Math.min(wrapper.operands ?? 0, words.length - i);
+  }
+  return { argv: words.slice(i), directories };
+}
+
+// extensions/tool-targets.ts
+var EDIT_TOOLS = new Set(["edit", "write", "ast_edit"]);
+var HASHLINE_HEADER = /^\s*\[(?<path>[^#\r\n]+)#[0-9a-fA-F]{4}\]\s*$/;
+var HASHLINE_MOVE = /^\s*MV\s+(?<path>.+?)\s*$/;
+var PATCH_HEADER = /^\*\*\* (?:(?:Add|Update|Delete|Edit) File|Move to):\s*(?<path>.+?)\s*$/;
+function unquote(path) {
+  const first = path[0];
+  if (path.length > 1 && (first === '"' || first === "'") && path.endsWith(first))
+    return path.slice(1, -1);
+  return path;
+}
+function patchPaths(payload) {
+  const out = [];
+  let inHashline = false;
+  for (const raw of payload.split(`
+`)) {
+    const line = raw.replace(/\r$/, "");
+    const header = HASHLINE_HEADER.exec(line)?.groups?.path;
+    if (header !== undefined) {
+      inHashline = true;
+      out.push(unquote(header.trim()));
+      continue;
+    }
+    const patch = PATCH_HEADER.exec(line)?.groups?.path;
+    if (patch !== undefined) {
+      inHashline = false;
+      out.push(unquote(patch));
+      continue;
+    }
+    if (!inHashline || line.startsWith("+"))
+      continue;
+    const move = HASHLINE_MOVE.exec(line)?.groups?.path;
+    if (move !== undefined)
+      out.push(unquote(move));
+  }
+  return out.filter((path) => path.length > 0);
+}
+function targetPaths(input) {
+  const fields = input;
+  const out = [];
+  for (const key of ["path", "file_path", "_path"]) {
+    const value = fields[key];
+    if (typeof value === "string" && value)
+      out.push(value);
+  }
+  if (Array.isArray(fields.paths)) {
+    for (const value of fields.paths)
+      if (typeof value === "string" && value)
+        out.push(value);
+  }
+  if (Array.isArray(fields.edits)) {
+    for (const entry of fields.edits) {
+      const rename = entry?.rename;
+      if (typeof rename === "string" && rename)
+        out.push(rename);
+    }
+  }
+  for (const key of ["input", "_input"]) {
+    const value = fields[key];
+    if (typeof value === "string" && value)
+      out.push(...patchPaths(value));
+  }
+  return [...new Set(out)];
+}
+
 // extensions/report-only-gate.ts
-var EDIT_TOOLS = { edit: true, write: true, ast_edit: true };
 var MANIFESTS = {
   "package.json": true,
   "cargo.toml": true,
@@ -239,21 +417,9 @@ var MANIFESTS = {
 };
 var LOCKFILE = /\.lock$|^bun\.lock/;
 var SEPARATORS2 = { ";": true, "&": true, "|": true, "\n": true, "(": true, ")": true, "$(": true };
-var PASSTHROUGH = {
-  sudo: true,
-  env: true,
-  time: true,
-  nohup: true,
-  nice: true,
-  command: true,
-  exec: true,
-  "--": true,
-  npx: true,
-  bunx: true
-};
-var PASSTHROUGH_VALUE_FLAGS = { "-u": true, "-g": true, "-n": true, "-C": true };
 var SHELLS = { bash: true, sh: true, zsh: true, dash: true, ksh: true };
-var ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*=/;
+var PACKAGE_RUNNERS = new Set(["npx", "bunx"]);
+var PACKAGE_RUNNER_VALUE_FLAGS = new Set(["-p", "--package"]);
 var PM_VALUE_FLAGS = {
   "--prefix": true,
   "-C": true,
@@ -271,53 +437,53 @@ var PM_VALUE_FLAGS = {
   "--config-file": true,
   "--cache-dir": true
 };
-var NPM_INSTALL = {
-  i: true,
-  in: true,
-  ins: true,
-  inst: true,
-  insta: true,
-  instal: true,
-  install: true,
-  isnt: true,
-  isnta: true,
-  isntal: true,
-  isntall: true,
-  add: true,
-  ci: true,
-  "clean-install": true,
-  ic: true,
-  "install-clean": true,
-  it: true,
-  "install-test": true,
-  cit: true,
-  "install-ci-test": true,
-  update: true,
-  up: true,
-  upgrade: true,
-  udpate: true
-};
-var MUTATING = {
-  npm: NPM_INSTALL,
-  pnpm: { i: true, install: true, add: true, update: true, up: true, upgrade: true, it: true, "install-test": true },
-  bun: { i: true, install: true, add: true, update: true, up: true, upgrade: true },
-  yarn: { install: true, add: true, up: true, upgrade: true, "upgrade-interactive": true, update: true },
-  pip: { install: true },
-  uv: { add: true, sync: true },
-  poetry: { add: true, update: true, install: true },
-  cargo: { add: true, install: true, update: true },
-  go: { get: true },
-  bundle: { install: true, update: true, add: true },
-  bundler: { install: true, update: true, add: true },
-  gem: { install: true, update: true },
-  composer: { require: true, update: true, upgrade: true, install: true }
-};
-var RUNNERS = {
-  npm: { exec: true, x: true },
-  pnpm: { dlx: true, exec: true },
-  yarn: { dlx: true, exec: true },
-  bun: { x: true }
-};
+var NPM_INSTALL = new Set([
+  "i",
+  "in",
+  "ins",
+  "inst",
+  "insta",
+  "instal",
+  "install",
+  "isnt",
+  "isnta",
+  "isntal",
+  "isntall",
+  "add",
+  "ci",
+  "clean-install",
+  "ic",
+  "install-clean",
+  "it",
+  "install-test",
+  "cit",
+  "install-ci-test",
+  "update",
+  "up",
+  "upgrade",
+  "udpate"
+]);
+var MUTATING = new Map([
+  ["npm", NPM_INSTALL],
+  ["pnpm", new Set(["i", "install", "add", "update", "up", "upgrade", "it", "install-test"])],
+  ["bun", new Set(["i", "install", "add", "update", "up", "upgrade"])],
+  ["yarn", new Set(["install", "add", "up", "upgrade", "upgrade-interactive", "update"])],
+  ["pip", new Set(["install"])],
+  ["uv", new Set(["add", "sync"])],
+  ["poetry", new Set(["add", "update", "install"])],
+  ["cargo", new Set(["add", "install", "update"])],
+  ["go", new Set(["get"])],
+  ["bundle", new Set(["install", "update", "add"])],
+  ["bundler", new Set(["install", "update", "add"])],
+  ["gem", new Set(["install", "update"])],
+  ["composer", new Set(["require", "update", "upgrade", "install"])]
+]);
+var RUNNERS = new Map([
+  ["npm", new Set(["exec", "x"])],
+  ["pnpm", new Set(["dlx", "exec"])],
+  ["yarn", new Set(["dlx", "exec"])],
+  ["bun", new Set(["x"])]
+]);
 var MAX_DEPTH = 8;
 function subcommand(args) {
   for (let i = 0;i < args.length; i++) {
@@ -329,32 +495,21 @@ function subcommand(args) {
   }
   return [undefined, args.length];
 }
+function packageRunnerCommand(args) {
+  let i = 0;
+  while (args[i]?.startsWith("-"))
+    i += PACKAGE_RUNNER_VALUE_FLAGS.has(args[i]) ? 2 : 1;
+  return args.slice(i);
+}
 function simpleCommandMutates(words, depth) {
   if (depth > MAX_DEPTH)
     return true;
-  let i = 0;
-  while (i < words.length) {
-    const word = words[i];
-    if (ASSIGNMENT.test(word)) {
-      i++;
-      continue;
-    }
-    if (!Object.hasOwn(PASSTHROUGH, word.slice(word.lastIndexOf("/") + 1)))
-      break;
-    if (word === "command" && (words[i + 1] === "-v" || words[i + 1] === "-V"))
-      return false;
-    i++;
-    while (words[i]?.startsWith("-") && words[i] !== "--") {
-      if (Object.hasOwn(PASSTHROUGH_VALUE_FLAGS, words[i]))
-        i++;
-      i++;
-    }
-  }
-  const first = words[i];
+  const [first, ...rest] = commandWords(words).argv;
   if (first === undefined)
     return false;
   const name = first.slice(first.lastIndexOf("/") + 1).toLowerCase();
-  const rest = words.slice(i + 1);
+  if (PACKAGE_RUNNERS.has(name))
+    return simpleCommandMutates(packageRunnerCommand(rest), depth + 1);
   if (Object.hasOwn(SHELLS, name)) {
     const flag = rest.findIndex((arg) => /^-[A-Za-z]*c[A-Za-z]*$/.test(arg));
     const script = flag === -1 ? undefined : rest[flag + 1];
@@ -369,14 +524,14 @@ function simpleCommandMutates(words, depth) {
     return module !== -1 && rest[module + 1] === "pip" && subcommand(rest.slice(module + 2))[0] === "install";
   }
   const pm = /^pip\d*(?:\.\d+)*$/.test(name) ? "pip" : name;
-  const table = MUTATING[pm];
-  if (!table)
+  const table = MUTATING.get(pm);
+  if (table === undefined)
     return false;
   const [sub, at] = subcommand(rest);
   const after = rest.slice(at + 1);
   if (sub === undefined)
     return pm === "yarn" && !rest.some((arg) => arg === "--version" || arg === "-v");
-  if (RUNNERS[pm]?.[sub])
+  if (RUNNERS.get(pm)?.has(sub))
     return simpleCommandMutates(after, depth + 1);
   if (pm === "uv" && sub === "pip") {
     const [inner] = subcommand(after);
@@ -385,7 +540,7 @@ function simpleCommandMutates(words, depth) {
   if (pm === "uv" && sub === "lock") {
     return after.some((arg) => arg === "-U" || arg === "--upgrade" || arg === "-P" || arg.startsWith("--upgrade-package"));
   }
-  return Object.hasOwn(table, sub);
+  return table.has(sub);
 }
 function commandMutates(command, depth = 0) {
   if (depth > MAX_DEPTH)
@@ -413,21 +568,6 @@ var HANDOVER_READ = /^skill:\/\/dep-update(?:\/|$)|dep-update\/SKILL\.md/i;
 var DENY_REASON = "blocked by whats-new (research-only): this session loaded the whats-new skill, which reports what changed " + "between two versions and changes nothing itself. Do not edit dependency manifests or lockfiles and do not " + "run installers or upgrade commands while researching -- the finding belongs in the report. If the user " + "actually wants the upgrade applied, that is dep-update's job: read `skill://dep-update` and run its " + "dep_scan/dep_apply confirm loop (reading it releases this gate, not the per-bump approval).";
 function createState() {
   return { armed: false };
-}
-function targetPaths(input) {
-  const out = [];
-  if ("path" in input && typeof input.path === "string" && input.path.length > 0) {
-    out.push(input.path);
-  }
-  if ("file_path" in input && typeof input.file_path === "string" && input.file_path.length > 0) {
-    out.push(input.file_path);
-  }
-  if ("paths" in input && Array.isArray(input.paths)) {
-    for (const p of input.paths)
-      if (typeof p === "string" && p.length > 0)
-        out.push(p);
-  }
-  return out;
 }
 function armsGate(raw) {
   return SKILL_READ.test(raw.replaceAll("\\", "/").trim());
@@ -461,7 +601,7 @@ function decideToolCall(state, toolName, input) {
     return;
   if (toolName === "dep_apply")
     return { block: true, reason: DENY_REASON };
-  if (Object.hasOwn(EDIT_TOOLS, toolName)) {
+  if (EDIT_TOOLS.has(toolName)) {
     if (targetPaths(input).some(isDependencyFile))
       return { block: true, reason: DENY_REASON };
     return;
@@ -499,6 +639,5 @@ export {
   decideToolCall,
   reportOnlyGate as default,
   disarmsGate,
-  isDependencyFile,
-  targetPaths
+  isDependencyFile
 };

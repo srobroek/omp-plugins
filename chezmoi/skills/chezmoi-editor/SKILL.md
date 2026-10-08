@@ -7,7 +7,7 @@ description: Edits chezmoi-managed dotfiles at their authoritative source. Use w
 
 Use this skill when a task changes files managed by chezmoi. Resolve the managed
 source first; do not edit the rendered live target as the durable fix.
-The `chezmoi-guard` extension refuses `edit`/`write`/`apply_patch` writes to a
+The `chezmoi-guard` extension refuses `edit`/`write`/`ast_edit` writes to a
 managed target and common literal bash writes (`>`/`>>` redirects, `tee`,
 `cp`/`mv`, `sed -i`, `perl -i`), and names the source path to edit. It reads
 literal words only: writes through `sh -c`, `eval`, scripts, variables other than

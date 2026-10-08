@@ -19,6 +19,7 @@ import pkg from "../package.json" with { type: "json" };
 import {
 	buildReceipt,
 	canonicalLedger,
+	closeoutCommands,
 	type GitRunner,
 	type LandingReceipt,
 	listReceipts,
@@ -1518,5 +1519,14 @@ describe("listReceipts", () => {
 
 	test("an absent directory lists nothing rather than throwing", () => {
 		expect(listReceipts(join(ROOT, "list-absent", "receipts"))).toEqual([]);
+	});
+});
+
+describe("closeoutCommands", () => {
+	test("spells the native close-out both delivery tools hand out", () => {
+		expect(closeoutCommands("delivery-17", 470, MERGE_OID, "/receipts/r.json")).toEqual({
+			update: `bd update delivery-17 --set-metadata pr=470 --set-metadata merge_sha=${MERGE_OID}`,
+			close: `bd close delivery-17 --reason "PR #470 merged as ${MERGE_OID}; receipt /receipts/r.json"`,
+		});
 	});
 });

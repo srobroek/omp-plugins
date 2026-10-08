@@ -150,3 +150,46 @@ test("Python bumps route by project: poetry, uv with or without a lock, requirem
 		rmSync(bin, { recursive: true, force: true });
 	}
 }, 10000);
+
+test("npm and Python bumps end the same three ways: a failed run, an unconfirmed pin, a confirmed pin", async () => {
+	const root = mkdtempSync(join(tmpdir(), "dep-apply-tail-"));
+	const bin = mkdtempSync(join(tmpdir(), "dep-apply-tail-bin-"));
+	const oldPath = process.env.PATH;
+	const oldPm = process.env.DEP_UPDATE_PKG_MANAGER;
+	/** A package manager that exits with `code`, after writing `pin` into its working directory when given. */
+	const stub = (pm: string, code: number, pin?: [string, string]) => {
+		const write = pin ? `writeFileSync(${JSON.stringify(pin[0])}, ${JSON.stringify(pin[1])});\n` : "";
+		writeFileSync(join(bin, pm), `#!${process.execPath}\nimport {writeFileSync} from 'node:fs';\n${write}process.exit(${code});\n`);
+		chmodSync(join(bin, pm), 0o755);
+	};
+	const node: [string, string] = ["package.json", '{"dependencies":{"left-pad":"1.3.0"}}'];
+	const python: [string, string] = ["pyproject.toml", '[project]\nname = "app"\ndependencies = ["requests==2.32.3"]\n'];
+	const cases: Array<[string, string, string, string, number, [string, string] | undefined, number, string]> = [
+		["npm", "npm", "left-pad", "1.3.0", 3, undefined, 1, "WARN: npm exited with status 3; partial changes may remain; bump was not confirmed"],
+		["npm", "npm", "left-pad", "1.3.0", 0, undefined, 1, "WARN: left-pad: post-apply manifest check failed - version may not have landed"],
+		["npm", "npm", "left-pad", "1.3.0", 0, node, 0, "OK: left-pad confirmed at 1.3.0"],
+		["pypi", "uv", "requests", "2.32.3", 3, undefined, 1, "WARN: uv exited with status 3; partial changes may remain; bump was not confirmed"],
+		["pypi", "uv", "requests", "2.32.3", 0, undefined, 1, "WARN: requests: post-apply manifest check failed - version may not have landed"],
+		["pypi", "uv", "requests", "2.32.3", 0, python, 0, "OK: requests confirmed at 2.32.3"],
+	];
+	try {
+		process.env.PATH = bin;
+		process.env.DEP_UPDATE_PKG_MANAGER = "npm";
+		for (const [ecosystem, pm, name, version, code, pin, exit, last] of cases) {
+			rmSync(root, { recursive: true, force: true });
+			mkdirSync(root);
+			writeFileSync(join(root, "package.json"), '{"dependencies":{"left-pad":"1.2.0"}}');
+			writeFileSync(join(root, "pyproject.toml"), '[project]\nname = "app"\ndependencies = ["requests==2.31.0"]\n');
+			stub(pm, code, pin);
+			const result = await applyBump(ecosystem, name, version, root);
+			expect({ ecosystem, code, pin: pin !== undefined, exit: result.exit, last: result.text.split("\n").at(-1) }).toEqual({
+				ecosystem, code, pin: pin !== undefined, exit, last,
+			});
+		}
+	} finally {
+		if (oldPath === undefined) delete process.env.PATH; else process.env.PATH = oldPath;
+		if (oldPm === undefined) delete process.env.DEP_UPDATE_PKG_MANAGER; else process.env.DEP_UPDATE_PKG_MANAGER = oldPm;
+		rmSync(root, { recursive: true, force: true });
+		rmSync(bin, { recursive: true, force: true });
+	}
+}, 20000);

@@ -30,8 +30,8 @@ function ensureDeadline(deadline?: number): void {
     if (deadline !== undefined && Date.now() >= deadline) throw new ScanDeadlineError();
 }
 
-const NODE_VERSION = /^=?v?(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-((?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*))*))?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/;
-const PYTHON_VERSION = /^(?:={1,2})?v?(\d+)(?:\.(\d+))?(?:\.(\d+))?(?:[-_.]?(a|b|rc|alpha|beta|pre|preview)[-_.]?(\d*))?(?:[-_.]?(post)[-_.]?(\d*))?(?:[-_.]?(dev)[-_.]?(\d*))?(?:\+[a-z0-9]+(?:[-_.][a-z0-9]+)*)?$/i;
+const NODE_VERSION = /^=?v?(?<major>0|[1-9]\d*)\.(?<minor>0|[1-9]\d*)\.(?<patch>0|[1-9]\d*)(?:-(?<pre>(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*))*))?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/;
+const PYTHON_VERSION = /^(?:={1,2})?v?(?<major>\d+)(?:\.(?<minor>\d+))?(?:\.(?<patch>\d+))?(?:[-_.]?(?<phase>a|b|rc|alpha|beta|pre|preview)[-_.]?(?<phaseNumber>\d*))?(?:[-_.]?(?<post>post)[-_.]?(?<postNumber>\d*))?(?:[-_.]?(?<dev>dev)[-_.]?(?<devNumber>\d*))?(?:\+[a-z0-9]+(?:[-_.][a-z0-9]+)*)?$/i;
 /** PEP 440 pre-release phases in order; `pre`/`preview` spell `rc`. */
 const PYTHON_PRE_RANK: Record<string, number> = { a: 0, alpha: 0, b: 1, beta: 1, rc: 2, pre: 2, preview: 2 };
 
@@ -45,18 +45,37 @@ export interface BumpRecord {
 	reason?: string;
 }
 
-export function normalizeVersion(raw: unknown, ecosystem = "npm"): [number, number, number] | null {
+/** An exact version's suffix by name: Node's prerelease, or Python's PEP 440 phase, post and dev parts. */
+export type VersionParts = {
+	pre?: string;
+	phase?: string;
+	phaseNumber?: string;
+	post?: string;
+	postNumber?: string;
+	dev?: string;
+	devNumber?: string;
+};
+
+export type ParsedVersion = { release: [number, number, number]; parts: VersionParts };
+
+/** The release triple and suffix of an exact version, or null when `raw` is not one. */
+export function parseVersion(raw: unknown, ecosystem = "npm"): ParsedVersion | null {
 	if (typeof raw !== "string") return null;
-	const match = (ecosystem === "pypi" ? PYTHON_VERSION : NODE_VERSION).exec(raw);
-	if (!match || match[0] !== raw) return null;
-	const version: [number, number, number] = [Number(match[1]), Number(match[2] || 0), Number(match[3] || 0)];
-	return version.every(Number.isSafeInteger) ? version : null;
+	const groups = (ecosystem === "pypi" ? PYTHON_VERSION : NODE_VERSION).exec(raw)?.groups;
+	if (groups === undefined) return null;
+	const { major, minor, patch, ...parts } = groups;
+	const release: [number, number, number] = [Number(major), Number(minor || 0), Number(patch || 0)];
+	return release.every(Number.isSafeInteger) ? { release, parts } : null;
+}
+
+export function normalizeVersion(raw: unknown, ecosystem = "npm"): [number, number, number] | null {
+	return parseVersion(raw, ecosystem)?.release ?? null;
 }
 
 export function isPrerelease(raw: unknown, ecosystem = "npm"): boolean {
-	if (typeof raw !== "string" || !normalizeVersion(raw, ecosystem)) return false;
-	const match = (ecosystem === "pypi" ? PYTHON_VERSION : NODE_VERSION).exec(raw)!;
-	return Boolean(match[4] || (ecosystem === "pypi" && match[8]));
+	const parts = parseVersion(raw, ecosystem)?.parts;
+	if (parts === undefined) return false;
+	return Boolean(ecosystem === "pypi" ? parts.phase || parts.dev : parts.pre);
 }
 
 /**
@@ -65,11 +84,11 @@ export function isPrerelease(raw: unknown, ecosystem = "npm"): boolean {
  * sorting just below it); Node follows SemVer 2 precedence (a prerelease sorts below
  * the release; identifiers compare numerically, then lexically, then by count).
  */
-function compareSuffix(a: RegExpExecArray, b: RegExpExecArray, ecosystem: string): number {
+function compareSuffix(a: VersionParts, b: VersionParts, ecosystem: string): number {
 	if (ecosystem === "pypi") {
-		const key = (m: RegExpExecArray): number[] => {
-			const pre = m[4] ? [PYTHON_PRE_RANK[m[4].toLowerCase()] ?? 2, Number(m[5] || 0)] : [m[8] && !m[6] ? -1 : 3, 0];
-			return [...pre, m[6] ? Number(m[7] || 0) : -1, m[8] ? Number(m[9] || 0) : Number.POSITIVE_INFINITY];
+		const key = (v: VersionParts): number[] => {
+			const pre = v.phase ? [PYTHON_PRE_RANK[v.phase.toLowerCase()] ?? 2, Number(v.phaseNumber || 0)] : [v.dev && !v.post ? -1 : 3, 0];
+			return [...pre, v.post ? Number(v.postNumber || 0) : -1, v.dev ? Number(v.devNumber || 0) : Number.POSITIVE_INFINITY];
 		};
 		const ka = key(a);
 		const kb = key(b);
@@ -80,8 +99,8 @@ function compareSuffix(a: RegExpExecArray, b: RegExpExecArray, ecosystem: string
 		}
 		return 0;
 	}
-	const pa = a[4]?.split(".") ?? [];
-	const pb = b[4]?.split(".") ?? [];
+	const pa = a.pre?.split(".") ?? [];
+	const pb = b.pre?.split(".") ?? [];
 	if (pa.length === 0 && pb.length === 0) return 0;
 	if (pa.length === 0) return 1;
 	if (pb.length === 0) return -1;
@@ -100,13 +119,13 @@ function compareSuffix(a: RegExpExecArray, b: RegExpExecArray, ecosystem: string
 
 /** Full precedence of two exact versions, or null when either is not an exact version. */
 export function compareVersions(a: string, b: string, ecosystem = "npm"): number | null {
-	const na = normalizeVersion(a, ecosystem);
-	const nb = normalizeVersion(b, ecosystem);
-	if (na === null || nb === null) return null;
+	const pa = parseVersion(a, ecosystem);
+	const pb = parseVersion(b, ecosystem);
+	if (pa === null || pb === null) return null;
+	const [na, nb] = [pa.release, pb.release];
 	const triple = Math.sign(na[0] - nb[0] || na[1] - nb[1] || na[2] - nb[2]);
 	if (triple !== 0) return triple;
-	const pattern = ecosystem === "pypi" ? PYTHON_VERSION : NODE_VERSION;
-	return compareSuffix(pattern.exec(a) as RegExpExecArray, pattern.exec(b) as RegExpExecArray, ecosystem);
+	return compareSuffix(pa.parts, pb.parts, ecosystem);
 }
 
 export function classify(installed: string, latest: string, ecosystem = "npm"): string {
@@ -500,6 +519,37 @@ function validOperands(ecosystem: string, name: string, version: string): boolea
 	return false;
 }
 
+/**
+ * Run one package-manager bump in `root`, then confirm the pin reached the manifest.
+ * Every ecosystem that applies a bump ends here, so the three outcomes a caller reads
+ * (a failed run, an unconfirmed pin, a confirmed pin) are worded once.
+ */
+async function runAndConfirm(
+	lines: string[],
+	command: string[],
+	bump: { root: string; name: string; version: string; options: ApplyOptions },
+	confirm: () => Promise<boolean>,
+): Promise<{ exit: number; text: string }> {
+	const pm = command[0] as string;
+	if (!which(pm)) {
+		lines.push(`ERROR: ${pm} not found; cannot apply dependency bump`);
+		lines.push(`  ${command.join(" ")}`);
+		return { exit: 1, text: lines.join("\n") };
+	}
+	const ran = await runPm(command, bump.root, bump.options);
+	lines.push(ran.log);
+	if (ran.code !== 0) {
+		lines.push(`WARN: ${pm} exited with status ${ran.code}; partial changes may remain; bump was not confirmed`);
+		return { exit: 1, text: lines.join("\n") };
+	}
+	if (await confirm()) {
+		lines.push(`OK: ${bump.name} confirmed at ${bump.version}`);
+		return { exit: 0, text: lines.join("\n") };
+	}
+	lines.push(`WARN: ${bump.name}: post-apply manifest check failed - version may not have landed`);
+	return { exit: 1, text: lines.join("\n") };
+}
+
 export async function applyBump(
 	ecosystem: string,
 	name: string,
@@ -513,6 +563,7 @@ export async function applyBump(
 		return { exit: 2, text: `ERROR: '${root}' is not a directory` };
 	}
 	const lines = [`dep-update/apply: ${ecosystem} ${name} -> ${version}`];
+	const bump = { root, name, version, options };
 
 	if (ecosystem === "pypi" || ecosystem === "python") {
 		const pyprojectPath = join(root, "pyproject.toml");
@@ -530,25 +581,7 @@ export async function applyBump(
 		const command = poetry
 			? ["poetry", "add", `${name}==${version}`]
 			: ["uv", "add", ...(isFile(join(root, "uv.lock")) ? [] : ["--frozen"]), `${name}==${version}`];
-		const pm = command[0] as string;
-		if (!which(pm)) {
-			lines.push(`ERROR: ${pm} not found; cannot apply dependency bump`);
-			lines.push(`  ${command.join(" ")}`);
-			return { exit: 1, text: lines.join("\n") };
-		}
-		const ran = await runPm(command, root, options);
-		lines.push(ran.log);
-		if (ran.code !== 0) {
-			lines.push(`WARN: ${pm} exited with status ${ran.code}; partial changes may remain; bump was not confirmed`);
-			return { exit: 1, text: lines.join("\n") };
-		}
-		const landed = await checkPythonVersion(root, name, version);
-		if (landed) {
-			lines.push(`OK: ${name} confirmed at ${version}`);
-			return { exit: 0, text: lines.join("\n") };
-		}
-		lines.push(`WARN: ${name}: post-apply manifest check failed - version may not have landed`);
-		return { exit: 1, text: lines.join("\n") };
+		return runAndConfirm(lines, command, bump, () => checkPythonVersion(root, name, version));
 	}
 
 	if (["npm", "node", "pnpm", "yarn", "bun"].includes(ecosystem)) {
@@ -562,24 +595,7 @@ export async function applyBump(
 		if (!Object.hasOwn(cmds, pm)) pm = "npm";
 		const command = cmds[pm];
 		if (!command) return { exit: 1, text: lines.join("\n") };
-		if (!which(pm)) {
-			lines.push(`ERROR: ${pm} not found; cannot apply dependency bump`);
-			lines.push(`  ${command.join(" ")}`);
-			return { exit: 1, text: lines.join("\n") };
-		}
-		const ran = await runPm(command, root, options);
-		lines.push(ran.log);
-		if (ran.code !== 0) {
-			lines.push(`WARN: ${pm} exited with status ${ran.code}; partial changes may remain; bump was not confirmed`);
-			return { exit: 1, text: lines.join("\n") };
-		}
-		const landed = await checkNodeVersion(root, name, version);
-		if (landed) {
-			lines.push(`OK: ${name} confirmed at ${version}`);
-			return { exit: 0, text: lines.join("\n") };
-		}
-		lines.push(`WARN: ${name}: post-apply manifest check failed - version may not have landed`);
-		return { exit: 1, text: lines.join("\n") };
+		return runAndConfirm(lines, command, bump, () => checkNodeVersion(root, name, version));
 	}
 
 	if (ecosystem === "cargo" || ecosystem === "rust") {

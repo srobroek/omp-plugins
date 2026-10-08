@@ -1,7 +1,7 @@
 import type { ExtensionAPI, InputEvent, ToolCallEvent } from "@oh-my-pi/pi-coding-agent";
-import { tokenizeShell } from "./shell-tokenizer";
-
-const EDIT_TOOLS: Record<string, true> = { edit: true, write: true, ast_edit: true };
+import { commandWords } from "./command-words.ts";
+import { tokenizeShell } from "./shell-tokenizer.ts";
+import { EDIT_TOOLS, targetPaths } from "./tool-targets.ts";
 
 /** Dependency manifests. Lowercased basenames; macOS filesystems fold case. */
 const MANIFESTS: Record<string, true> = {
@@ -16,45 +16,47 @@ const LOCKFILE = /\.lock$|^bun\.lock/;
 
 /** Separator tokens from `tokenizeShell`; `&&`/`||` arrive as two tokens each. */
 const SEPARATORS: Record<string, true> = { ";": true, "&": true, "|": true, "\n": true, "(": true, ")": true, "$(": true };
-/** Words that run the following words as the command. */
-const PASSTHROUGH: Record<string, true> = {
-	sudo: true, env: true, time: true, nohup: true, nice: true, command: true, exec: true, "--": true, npx: true, bunx: true,
-};
-/** Wrapper flags that consume the next word (`sudo -u user`, `nice -n 5`). */
-const PASSTHROUGH_VALUE_FLAGS: Record<string, true> = { "-u": true, "-g": true, "-n": true, "-C": true };
 const SHELLS: Record<string, true> = { bash: true, sh: true, zsh: true, dash: true, ksh: true };
-const ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*=/;
+/** Package runners that run the package binary named after their own options (`npx ncu -u`). */
+const PACKAGE_RUNNERS: ReadonlySet<string> = new Set(["npx", "bunx"]);
+/** Package-runner options that take the next word (`npx -p npm-check-updates ncu -u`). */
+const PACKAGE_RUNNER_VALUE_FLAGS: ReadonlySet<string> = new Set(["-p", "--package"]);
 /** Package-manager options that take a value before the subcommand (`npm --prefix /repo install`). */
 const PM_VALUE_FLAGS: Record<string, true> = {
 	"--prefix": true, "-C": true, "--dir": true, "--cwd": true, "--filter": true, "-F": true, "-w": true,
 	"--workspace": true, "--registry": true, "--cache": true, "--userconfig": true, "--directory": true,
 	"--project": true, "--config-file": true, "--cache-dir": true,
 };
-const NPM_INSTALL: Record<string, true> = {
-	i: true, in: true, ins: true, inst: true, insta: true, instal: true, install: true, isnt: true, isnta: true,
-	isntal: true, isntall: true, add: true, ci: true, "clean-install": true, ic: true, "install-clean": true,
-	it: true, "install-test": true, cit: true, "install-ci-test": true, update: true, up: true, upgrade: true, udpate: true,
-};
+// Maps and Sets, not object literals: a word such as `constructor` or `toString` must
+// not resolve to an inherited member and read as a package manager or a subcommand.
+const NPM_INSTALL: ReadonlySet<string> = new Set([
+	"i", "in", "ins", "inst", "insta", "instal", "install", "isnt", "isnta",
+	"isntal", "isntall", "add", "ci", "clean-install", "ic", "install-clean",
+	"it", "install-test", "cit", "install-ci-test", "update", "up", "upgrade", "udpate",
+]);
 /** Subcommands that install, add, or move a version, per package manager. */
-const MUTATING: Record<string, Record<string, true>> = {
-	npm: NPM_INSTALL,
-	pnpm: { i: true, install: true, add: true, update: true, up: true, upgrade: true, it: true, "install-test": true },
-	bun: { i: true, install: true, add: true, update: true, up: true, upgrade: true },
-	yarn: { install: true, add: true, up: true, upgrade: true, "upgrade-interactive": true, update: true },
-	pip: { install: true },
-	uv: { add: true, sync: true },
-	poetry: { add: true, update: true, install: true },
-	cargo: { add: true, install: true, update: true },
-	go: { get: true },
-	bundle: { install: true, update: true, add: true },
-	bundler: { install: true, update: true, add: true },
-	gem: { install: true, update: true },
-	composer: { require: true, update: true, upgrade: true, install: true },
-};
+const MUTATING: ReadonlyMap<string, ReadonlySet<string>> = new Map([
+	["npm", NPM_INSTALL],
+	["pnpm", new Set(["i", "install", "add", "update", "up", "upgrade", "it", "install-test"])],
+	["bun", new Set(["i", "install", "add", "update", "up", "upgrade"])],
+	["yarn", new Set(["install", "add", "up", "upgrade", "upgrade-interactive", "update"])],
+	["pip", new Set(["install"])],
+	["uv", new Set(["add", "sync"])],
+	["poetry", new Set(["add", "update", "install"])],
+	["cargo", new Set(["add", "install", "update"])],
+	["go", new Set(["get"])],
+	["bundle", new Set(["install", "update", "add"])],
+	["bundler", new Set(["install", "update", "add"])],
+	["gem", new Set(["install", "update"])],
+	["composer", new Set(["require", "update", "upgrade", "install"])],
+]);
 /** Subcommands that run another command (`pnpm dlx ncu -u`). */
-const RUNNERS: Record<string, Record<string, true>> = {
-	npm: { exec: true, x: true }, pnpm: { dlx: true, exec: true }, yarn: { dlx: true, exec: true }, bun: { x: true },
-};
+const RUNNERS: ReadonlyMap<string, ReadonlySet<string>> = new Map([
+	["npm", new Set(["exec", "x"])],
+	["pnpm", new Set(["dlx", "exec"])],
+	["yarn", new Set(["dlx", "exec"])],
+	["bun", new Set(["x"])],
+]);
 /** Nested `bash -c` / substitution depth past which the gate stops reading and blocks. */
 const MAX_DEPTH = 8;
 
@@ -67,29 +69,20 @@ function subcommand(args: string[]): [string | undefined, number] {
 	return [undefined, args.length];
 }
 
+/** The command a package runner runs: the words after its own options. */
+function packageRunnerCommand(args: string[]): string[] {
+	let i = 0;
+	while (args[i]?.startsWith("-")) i += PACKAGE_RUNNER_VALUE_FLAGS.has(args[i] as string) ? 2 : 1;
+	return args.slice(i);
+}
+
 /** Whether one simple command (its words, separators removed) installs or moves a dependency. */
 function simpleCommandMutates(words: string[], depth: number): boolean {
 	if (depth > MAX_DEPTH) return true;
-	let i = 0;
-	while (i < words.length) {
-		const word = words[i] as string;
-		if (ASSIGNMENT.test(word)) {
-			i++;
-			continue;
-		}
-		if (!Object.hasOwn(PASSTHROUGH, word.slice(word.lastIndexOf("/") + 1))) break;
-		// `command -v yarn` looks a name up; it does not run it.
-		if (word === "command" && (words[i + 1] === "-v" || words[i + 1] === "-V")) return false;
-		i++;
-		while (words[i]?.startsWith("-") && words[i] !== "--") {
-			if (Object.hasOwn(PASSTHROUGH_VALUE_FLAGS, words[i] as string)) i++;
-			i++;
-		}
-	}
-	const first = words[i];
+	const [first, ...rest] = commandWords(words).argv;
 	if (first === undefined) return false;
 	const name = first.slice(first.lastIndexOf("/") + 1).toLowerCase();
-	const rest = words.slice(i + 1);
+	if (PACKAGE_RUNNERS.has(name)) return simpleCommandMutates(packageRunnerCommand(rest), depth + 1);
 	if (Object.hasOwn(SHELLS, name)) {
 		const flag = rest.findIndex((arg) => /^-[A-Za-z]*c[A-Za-z]*$/.test(arg));
 		const script = flag === -1 ? undefined : rest[flag + 1];
@@ -103,13 +96,13 @@ function simpleCommandMutates(words: string[], depth: number): boolean {
 		return module !== -1 && rest[module + 1] === "pip" && subcommand(rest.slice(module + 2))[0] === "install";
 	}
 	const pm = /^pip\d*(?:\.\d+)*$/.test(name) ? "pip" : name;
-	const table = MUTATING[pm];
-	if (!table) return false;
+	const table = MUTATING.get(pm);
+	if (table === undefined) return false;
 	const [sub, at] = subcommand(rest);
 	const after = rest.slice(at + 1);
 	// Bare `yarn` installs.
 	if (sub === undefined) return pm === "yarn" && !rest.some((arg) => arg === "--version" || arg === "-v");
-	if (RUNNERS[pm]?.[sub]) return simpleCommandMutates(after, depth + 1);
+	if (RUNNERS.get(pm)?.has(sub)) return simpleCommandMutates(after, depth + 1);
 	if (pm === "uv" && sub === "pip") {
 		const [inner] = subcommand(after);
 		return inner === "install" || inner === "sync";
@@ -117,7 +110,7 @@ function simpleCommandMutates(words: string[], depth: number): boolean {
 	if (pm === "uv" && sub === "lock") {
 		return after.some((arg) => arg === "-U" || arg === "--upgrade" || arg === "-P" || arg.startsWith("--upgrade-package"));
 	}
-	return Object.hasOwn(table, sub);
+	return table.has(sub);
 }
 
 /**
@@ -164,26 +157,6 @@ export function createState(): GateState {
 	return { armed: false };
 }
 
-/**
- * Every path this call would write. Hashline `edit` carries no `path` when a
- * patch spans several files, so the derived `paths` array is the only complete
- * target list and both shapes must be read.
- */
-export function targetPaths(input: ToolCallEvent["input"]): string[] {
-	const out: string[] = [];
-	// `in` narrows one literal key at a time, so the two spellings stay unrolled.
-	if ("path" in input && typeof input.path === "string" && input.path.length > 0) {
-		out.push(input.path);
-	}
-	if ("file_path" in input && typeof input.file_path === "string" && input.file_path.length > 0) {
-		out.push(input.file_path);
-	}
-	if ("paths" in input && Array.isArray(input.paths)) {
-		for (const p of input.paths) if (typeof p === "string" && p.length > 0) out.push(p);
-	}
-	return out;
-}
-
 /** Reading the skill body -- or any of its references -- starts a research pass. */
 export function armsGate(raw: string): boolean {
 	return SKILL_READ.test(raw.replaceAll("\\", "/").trim());
@@ -224,7 +197,7 @@ export function decideToolCall(
 	}
 	if (!state.armed) return;
 	if (toolName === "dep_apply") return { block: true, reason: DENY_REASON };
-	if (Object.hasOwn(EDIT_TOOLS, toolName)) {
+	if (EDIT_TOOLS.has(toolName)) {
 		if (targetPaths(input).some(isDependencyFile)) return { block: true, reason: DENY_REASON };
 		return;
 	}
