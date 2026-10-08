@@ -37,6 +37,7 @@ DUPLICATED: tuple[tuple[str, ...], ...] = (
         "safety/extensions/shell-tokenizer.ts",
         "speckit/extensions/shell-tokenizer.ts",
         "whats-new/extensions/shell-tokenizer.ts",
+        "toolchain/extensions/shell-tokenizer.ts",
     ),
     (
         "dep-update/extensions/detect.ts",
@@ -44,6 +45,7 @@ DUPLICATED: tuple[tuple[str, ...], ...] = (
     ),
     (
         "chezmoi/extensions/command-words.ts",
+        "toolchain/extensions/command-words.ts",
         "whats-new/extensions/command-words.ts",
     ),
     (
