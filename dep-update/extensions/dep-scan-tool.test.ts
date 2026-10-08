@@ -13,7 +13,7 @@ const zod = {
 
 import { resolveApproval, resolveToolTier } from "@oh-my-pi/pi-coding-agent/tools/approval";
 import depScanTool, { classify, detectProject, normalizeVersion, parseRequirement, queryRegistry } from "./dep-scan-tool";
-import { compareVersions, isPrerelease, pickStable, researchProject } from "./lib";
+import { compareVersions, isPrerelease, parseVersion, pickStable, researchProject } from "./lib";
 
 function tmp(): string {
 	return mkdtempSync(join(tmpdir(), "dep-scan-"));
@@ -27,6 +27,17 @@ describe("unit: versions", () => {
 		expect(normalizeVersion("1.2", "pypi")).toEqual([1, 2, 0]);
 		expect(normalizeVersion("==1.2", "pypi")).toEqual([1, 2, 0]);
 		expect(normalizeVersion("not-a-version")).toBeNull();
+	});
+
+	test("parseVersion names every part of an exact version", () => {
+		expect(parseVersion("v1.2.3-rc.1+build.5")).toEqual({ release: [1, 2, 3], parts: { pre: "rc.1" } });
+		expect(parseVersion("1.0rc2.post3.dev4", "pypi")).toEqual({
+			release: [1, 0, 0],
+			parts: { phase: "rc", phaseNumber: "2", post: "post", postNumber: "3", dev: "dev", devNumber: "4" },
+		});
+		expect(parseVersion("2.1", "pypi")).toEqual({ release: [2, 1, 0], parts: {} });
+		expect(parseVersion("1.x")).toBeNull();
+		expect(parseVersion(42)).toBeNull();
 	});
 
 	test("classify", () => {
