@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.7.0](https://github.com/srobroek/omp-plugins/compare/design--v0.6.0...design--v0.7.0) (2026-10-08)
+
+
+### Features
+
+* **quality:** fold mattpocock skills into quality, debate and design, and tighten [#635](https://github.com/srobroek/omp-plugins/issues/635) steering ([#636](https://github.com/srobroek/omp-plugins/issues/636)) ([19d3d09](https://github.com/srobroek/omp-plugins/commit/19d3d0962beb9bfb956ad14f8cf18822ddc26008))
+
+
+### Bug Fixes
+
+* **design:** apply the plugin review dispositions ([#640](https://github.com/srobroek/omp-plugins/issues/640)) ([4311e5b](https://github.com/srobroek/omp-plugins/commit/4311e5bf166bdf7a0452d30f33bd53880b2e14f9))
+* **design:** vendor create-design-md into design-md ([#641](https://github.com/srobroek/omp-plugins/issues/641)) ([6a39795](https://github.com/srobroek/omp-plugins/commit/6a39795e706780f47fcafc36ad2e14167f8796e3))
+
 ## [0.6.0](https://github.com/srobroek/omp-plugins/compare/design--v0.5.1...design--v0.6.0) (2026-10-07)
 
 

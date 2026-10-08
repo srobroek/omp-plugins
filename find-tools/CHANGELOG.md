@@ -1,5 +1,14 @@
 # Changelog
 
+## [2.1.1](https://github.com/srobroek/omp-plugins/compare/find-tools--v2.1.0...find-tools--v2.1.1) (2026-10-08)
+
+
+### Bug Fixes
+
+* **chezmoi,whats-new,safety,find-tools,delivery,dep-update:** close the [#632](https://github.com/srobroek/omp-plugins/issues/632)/[#633](https://github.com/srobroek/omp-plugins/issues/633) sniff findings ([#639](https://github.com/srobroek/omp-plugins/issues/639)) ([64d5025](https://github.com/srobroek/omp-plugins/commit/64d5025f7173809bf6c53a65dc63318e3d588ff2))
+* **chezmoi,whats-new,safety,find-tools,delivery,dep-update:** close the [#632](https://github.com/srobroek/omp-plugins/issues/632)/[#633](https://github.com/srobroek/omp-plugins/issues/633) sniff findings ([#639](https://github.com/srobroek/omp-plugins/issues/639)) ([5737c6c](https://github.com/srobroek/omp-plugins/commit/5737c6c7d900fd77dd8cd3a5c43204191ef085e2))
+* **design:** apply the plugin review dispositions ([#640](https://github.com/srobroek/omp-plugins/issues/640)) ([4311e5b](https://github.com/srobroek/omp-plugins/commit/4311e5bf166bdf7a0452d30f33bd53880b2e14f9))
+
 ## [2.1.0](https://github.com/srobroek/omp-plugins/compare/find-tools--v2.0.0...find-tools--v2.1.0) (2026-10-07)
 
 

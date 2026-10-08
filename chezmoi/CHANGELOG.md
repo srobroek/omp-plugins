@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.4.14](https://github.com/srobroek/omp-plugins/compare/chezmoi--v0.4.13...chezmoi--v0.4.14) (2026-10-08)
+
+
+### Bug Fixes
+
+* **chezmoi,whats-new,safety,find-tools,delivery,dep-update:** close the [#632](https://github.com/srobroek/omp-plugins/issues/632)/[#633](https://github.com/srobroek/omp-plugins/issues/633) sniff findings ([#639](https://github.com/srobroek/omp-plugins/issues/639)) ([64d5025](https://github.com/srobroek/omp-plugins/commit/64d5025f7173809bf6c53a65dc63318e3d588ff2))
+* **chezmoi,whats-new,safety,find-tools,delivery,dep-update:** close the [#632](https://github.com/srobroek/omp-plugins/issues/632)/[#633](https://github.com/srobroek/omp-plugins/issues/633) sniff findings ([#639](https://github.com/srobroek/omp-plugins/issues/639)) ([5737c6c](https://github.com/srobroek/omp-plugins/commit/5737c6c7d900fd77dd8cd3a5c43204191ef085e2))
+
 ## [0.4.13](https://github.com/srobroek/omp-plugins/compare/chezmoi--v0.4.12...chezmoi--v0.4.13) (2026-10-07)
 
 

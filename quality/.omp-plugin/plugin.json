@@ -1,6 +1,6 @@
 {
   "name": "quality",
   "description": "Portable code design, reuse research and lifecycle review guidance, adversarial challenge, WATCHDOG authoring, and advisor resampling.",
-  "version": "2.1.0",
+  "version": "2.2.0",
   "category": "development"
 }

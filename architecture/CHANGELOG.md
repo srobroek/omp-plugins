@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.0](https://github.com/srobroek/omp-plugins/compare/architecture--v0.5.0...architecture--v0.6.0) (2026-10-08)
+
+
+### Features
+
+* **quality:** fold mattpocock skills into quality, debate and design, and tighten [#635](https://github.com/srobroek/omp-plugins/issues/635) steering ([#636](https://github.com/srobroek/omp-plugins/issues/636)) ([19d3d09](https://github.com/srobroek/omp-plugins/commit/19d3d0962beb9bfb956ad14f8cf18822ddc26008))
+
 ## [0.5.0](https://github.com/srobroek/omp-plugins/compare/architecture--v0.4.3...architecture--v0.5.0) (2026-10-07)
 
 

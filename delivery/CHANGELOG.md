@@ -1,5 +1,18 @@
 # Changelog
 
+## [1.3.0](https://github.com/srobroek/omp-plugins/compare/delivery--v1.2.0...delivery--v1.3.0) (2026-10-08)
+
+
+### Features
+
+* **quality:** fold mattpocock skills into quality, debate and design, and tighten [#635](https://github.com/srobroek/omp-plugins/issues/635) steering ([#636](https://github.com/srobroek/omp-plugins/issues/636)) ([19d3d09](https://github.com/srobroek/omp-plugins/commit/19d3d0962beb9bfb956ad14f8cf18822ddc26008))
+
+
+### Bug Fixes
+
+* **chezmoi,whats-new,safety,find-tools,delivery,dep-update:** close the [#632](https://github.com/srobroek/omp-plugins/issues/632)/[#633](https://github.com/srobroek/omp-plugins/issues/633) sniff findings ([#639](https://github.com/srobroek/omp-plugins/issues/639)) ([64d5025](https://github.com/srobroek/omp-plugins/commit/64d5025f7173809bf6c53a65dc63318e3d588ff2))
+* **chezmoi,whats-new,safety,find-tools,delivery,dep-update:** close the [#632](https://github.com/srobroek/omp-plugins/issues/632)/[#633](https://github.com/srobroek/omp-plugins/issues/633) sniff findings ([#639](https://github.com/srobroek/omp-plugins/issues/639)) ([5737c6c](https://github.com/srobroek/omp-plugins/commit/5737c6c7d900fd77dd8cd3a5c43204191ef085e2))
+
 ## [1.2.0](https://github.com/srobroek/omp-plugins/compare/delivery--v1.1.0...delivery--v1.2.0) (2026-10-07)
 
 
