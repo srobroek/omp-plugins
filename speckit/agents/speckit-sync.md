@@ -18,7 +18,7 @@ Read "scope: ..." in the spawn prompt. Default: drift.
 
 ## Output
 
-Return the structured sync result through the result channel. Include scope, verdict, non-empty findings, and evidence; never reprint source documents, code, diffs, or the caller's brief.
+Return the structured sync result through the result channel. Include scope, verdict, findings (an empty list for a clean verdict), and evidence; never reprint source documents, code, diffs, or the caller's brief.
 CAP: none.
 
 Analyze active specs by default.

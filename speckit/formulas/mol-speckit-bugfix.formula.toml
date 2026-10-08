@@ -3,11 +3,12 @@
 #
 # Requires the `bugfix` spec-kit community extension (/speckit.bugfix.report,
 # /speckit.bugfix.patch, /speckit.bugfix.verify). Without it all three steps name a
-# skill that does not exist. The `speckit-bugfix` skill in this package routes to
-# the same commands and is the entry point for a fix too small to pour.
+# skill that does not exist. The `speckit-bugfix` skill in this package is the
+# entry point for a fix too small to pour; it bonds this formula when a fix needs
+# a tracked trail.
 #
-# Bond it onto the feature molecule the defect belongs to:
-#   bd mol bond mol-speckit-bugfix <feature-root-id> --var feature=<NNN-slug>
+# Bond it onto the implement step of the feature molecule the defect belongs to:
+#   bd mol bond mol-speckit-bugfix <implement-step-id> --var feature=<NNN-slug>
 #
 # The `mol-` prefix in the filename is load-bearing: `bd mol bond` resolves a
 # formula name only when it is prefixed, and formulas resolve by filename stem.

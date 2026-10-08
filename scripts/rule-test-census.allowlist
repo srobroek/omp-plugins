@@ -5,10 +5,7 @@ srobroek-package-investigate
 srobroek-sudo-destructive-advisory
 srobroek-attribution-guard
 srobroek-worktree-tmp-guard
-speckit-implement-deprecated-bash
 speckit-implement-deprecated
-speckit-no-taskstoissues
-speckit-tasks-md-bash
 rust-rustflags-linker
 rust-cargo-install-advisory
 dep-update-no-scanner-install

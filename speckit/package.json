@@ -1,14 +1,13 @@
 {
   "name": "@srobroek/speckit",
   "version": "0.10.1",
-  "description": "SpecKit workflow: spec-driven setup, bugfix flow, tasks.md protection, and PR title discipline.",
+  "description": "SpecKit workflow: spec-driven setup, bugfix flow, and tasks.md protection.",
   "private": true,
   "omp": {
     "extensions": [
       "./extensions/tasks-guard.ts",
       "./extensions/speckit-setup-tool.ts",
-      "./extensions/speckit-start-tool.ts",
-      "./extensions/taskstoissues-gate.ts"
+      "./extensions/speckit-start-tool.ts"
     ]
   }
 }

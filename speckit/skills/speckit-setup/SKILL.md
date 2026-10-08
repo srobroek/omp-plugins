@@ -18,11 +18,15 @@ Requires `specify-cli` (`uv tool install specify-cli`) and `bd`.
 
 ## What it does
 
-Call `speckit_setup` (or walk the same steps if the tool is unavailable):
+Call `speckit_setup` from the caller's worktree; `workspace` defaults to the
+caller's working directory. If the tool is unavailable, walk the same steps in
+that worktree and skip each one already done:
 
-1. `specify init --here --force --integration <codex|claude> --script sh`
-2. Register the community catalog (`catalog.community.json`).
-3. Install + enable the required extensions: `agent-context`, `bugfix`, `cleanup`,
+1. `specify init --here --force --integration <codex|claude> --script sh`, unless `.specify/` exists.
+2. Only on explicit opt-in (`installAllowed=true`, after vetting), register the
+   community catalog (`catalog.community.json`) as an install source. Never pass
+   `--install-allowed` without it.
+3. Install + enable the required extensions not yet installed: `agent-context`, `bugfix`, `cleanup`,
    `critique`, `fix-findings`, `iterate`, `qa`, `refine`, `retro`,
    `security-review`, `tinyspec`, plus `status-report` from
    `latest-release:Open-Agent-Tools/spec-kit-status`. Stop and report failure if

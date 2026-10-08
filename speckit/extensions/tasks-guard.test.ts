@@ -71,6 +71,24 @@ describe("decideToolCall", () => {
 		expect(decideToolCall("edit", input, "/tmp")).toBeUndefined();
 	});
 
+	test("blocks hashline headers, MV destinations, rename destinations and ast_edit paths", () => {
+		setBeadsActiveForTests(true);
+		const header = { input: "[/repo/specs/001-x/tasks.md#AB12]\nPUT 1.=1:\n+- [ ] T001\n" };
+		const move = { input: "[src/notes.md#AB12]\nMV specs/001-x/tasks.md\n" };
+		const rename = { path: "src/notes.md", edits: [{ rename: "specs/001-x/tasks.md" }] };
+		const ast = { ops: [{ pat: "a", out: "b" }], paths: ["specs/001-x/tasks.md"] };
+		expect(decideToolCall("edit", header, "/tmp")?.block).toBe(true);
+		expect(decideToolCall("edit", move, "/tmp")?.block).toBe(true);
+		expect(decideToolCall("edit", rename, "/tmp")?.block).toBe(true);
+		expect(decideToolCall("ast_edit", ast, "/tmp")?.block).toBe(true);
+	});
+
+	test("allows a hashline body row that quotes a tasks.md header", () => {
+		setBeadsActiveForTests(true);
+		const quoted = { input: "[src/notes.md#AB12]\nPUT >1:\n+[specs/001-x/tasks.md#AB12]\n+MV specs/001-x/tasks.md\n" };
+		expect(decideToolCall("edit", quoted, "/tmp")).toBeUndefined();
+	});
+
 	test("blocks bash write, allows bash read", () => {
 		setBeadsActiveForTests(true);
 		expect(decideToolCall("bash", { command: "echo x > specs/001/tasks.md" }, "/tmp")?.block).toBe(

@@ -1,8 +1,8 @@
 ---
-name: speckit-tasks-md-bash
+name: speckit-tasks-md-write
 description: Advises that specs/*/tasks.md is not authored in beads repos.
 condition: ["."]
-scope: "tool:edit(specs/*/tasks.md), tool:write(specs/*/tasks.md)"
+scope: "tool:edit(**/specs/*/tasks.md), tool:write(**/specs/*/tasks.md)"
 interruptMode: never
 ---
 
