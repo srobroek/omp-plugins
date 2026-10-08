@@ -261,6 +261,32 @@ describe("inventory rendering for the step 3 coverage check", () => {
 		expect(gaps.some((g) => g.surface === "local" && g.kind === "partial" && g.reason.includes("mcp.json"))).toBe(true);
 	});
 
+	test("a failed plugin or marketplace listing leaves local partial, naming the command", async () => {
+		for (const failing of ["omp plugin list", "omp plugin marketplace list"]) {
+			const { results, gaps } = await scanSurfaces({ query: "x", surfaces: ["local"] }, {
+				which: () => true, readFile: () => null,
+				run: async (argv) => argv.join(" ") === failing
+					? { ok: false, stdout: "", stderr: "marketplace cache locked\n" }
+					: run(argv),
+			});
+			const local = results.find((r) => r.surface === "local");
+			expect({ failing, status: local?.status }).toEqual({ failing, status: "partial" });
+			expect(local?.failures).toEqual([`${failing} failed: marketplace cache locked`]);
+			expect(gaps).toContainEqual({ surface: "local", kind: "partial", reason: `${failing} failed: marketplace cache locked` });
+		}
+	});
+
+	test("an unparseable Smithery response is partial with the raw text, not ok", async () => {
+		const { results, gaps } = await scanSurfaces({ query: "browser", surfaces: ["smithery"] }, {
+			env: { SMITHERY_API_KEY: "key" },
+			fetchFn: Object.assign(async () => new Response("<html>maintenance</html>"), { preconnect: () => {} }) as typeof fetch,
+		});
+		const smithery = results.find((r) => r.surface === "smithery");
+		expect(smithery?.status).toBe("partial");
+		expect(smithery?.hits).toEqual([{ name: "raw", detail: "<html>maintenance</html>" }]);
+		expect(gaps).toContainEqual({ surface: "smithery", kind: "partial", reason: "unparseable Smithery response; raw text kept" });
+	});
+
 	test("Smithery hits keep the server description", async () => {
 		const { results } = await scanSurfaces({ query: "browser", surfaces: ["smithery"] }, {
 			env: { SMITHERY_API_KEY: "key" },
