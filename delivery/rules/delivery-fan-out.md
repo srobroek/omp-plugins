@@ -44,6 +44,7 @@ Start a helper only where it pays:
 | Broad read-only lookup across unknown files | `scout` |
 | Risky diff: security, data loss, concurrency, public contract | `reviewer` or `security-reviewer`, before landing |
 | External question that needs cited sources | one `task` research brief returning cited findings |
+| UI unit: a component, page, or styling change, with the design plugin installed | `ui-implementer` |
 | A few reads, one `grep`, or one script answers it | none: do it inline |
 
 ## Isolate and integrate
