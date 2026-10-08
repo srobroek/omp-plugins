@@ -12,7 +12,7 @@ TRIGGER
 + Work test-first: TDD or red-green-refactor.
 + Review a branch, PR, or work-in-progress change since a fixed point.
 - Prose-only work or mechanical execution of an unchanged command needs no design analysis.
-- Tuning code-agent instructions, model routing, or tools against task cases → `skill://tune-model-prompt`.
+- Tuning code-agent instructions, model routing, or tools against task cases → `skill://tune-model-prompt` when installed (an owner-local skill this repository does not ship).
 - Checking whether a state model or logic holds up before building it → `skill://prototype-logic`.
 
 ## Workflow
