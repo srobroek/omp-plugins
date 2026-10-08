@@ -20,3 +20,6 @@ Prefer these top-level directories when the project shape needs them:
 
 Keep non-shared deployment configuration with the owning deployable rather than
 in root `infrastructure/`.
+
+Keep generated outputs and caches out of source unless the project explicitly
+tracks them.
