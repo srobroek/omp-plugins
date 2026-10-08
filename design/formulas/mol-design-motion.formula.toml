@@ -12,17 +12,20 @@
 # PRECONDITION: the skill:// names here ship in the @srobroek/design package. The
 # scoring step needs npx --yes and a Chromium install on first run.
 #
-# THE THRESHOLD IS FIXED AT 200ms AND EVERY TRANSFORM ANIMATION. A
-# prefers-reduced-motion branch is required for every transition over 200ms and for
-# every transform animation regardless of duration, because a short transform still
-# moves content across the viewport and that is what triggers vestibular symptoms.
-# Duration alone is the wrong test, which is why both conditions are named.
+# THE THRESHOLD IS FIXED AT 200ms, EVERY TRANSFORM, AND EVERY REPEAT. A
+# prefers-reduced-motion branch is required for every transition over 200ms, for
+# every transform animation regardless of duration, and for every repeating
+# animation regardless of duration or property, because a short transform still
+# moves content across the viewport and a short loop never stops. That is this
+# package's motion policy; the matching WCAG criterion, 2.3.3 Animation from
+# Interactions, is AAA. Duration alone is the wrong test, which is why all three
+# conditions are named.
 #
 # Bond joins root-to-root as a sibling subtree and cannot rewire an inherited
 # step's `needs`, so the bonding side owns the join edge and this file declares no
 # `needs` pointing outside itself, which is also what lets it cook standalone.
 formula = "mol-design-motion"
-description = "Motion and reduced-motion pass on {{surface}} for node {{node}}: inventory every transition and animation, branch every one over 200ms and every transform, verify both media states, score deterministically"
+description = "Motion and reduced-motion pass on {{surface}} for node {{node}}: inventory every transition and animation, branch every one over 200ms, every transform, and every repeat, verify both media states, score deterministically"
 type = "workflow"
 
 [vars.surface]
@@ -46,10 +49,14 @@ screenshot cannot report a duration, and read the source for library-driven moti
 that computed styles do not expose.
 
 Record per entry: the selector, the animated property, the measured duration in ms,
-the easing, whether it repeats, and whether the animated property is a transform.
-Then mark each entry REQUIRES BRANCH or EXEMPT against the two conditions:
-duration over 200ms, or the property is a transform at any duration. Both
-conditions are independent, so a 120ms transform is REQUIRES BRANCH.
+the easing, the iteration count, and whether the animated property is a transform.
+Then mark each entry REQUIRES BRANCH or EXEMPT against three conditions: duration
+over 200ms; the property is a transform, at any duration; or the animation repeats,
+meaning an iteration count above 1 or infinite, at any duration and on any
+property. The conditions are independent, so a 120ms transform and a 100ms
+infinite opacity pulse are both REQUIRES BRANCH. An auto-starting loop that runs
+over five seconds beside other content is also a 2.2.2 Pause, Stop, Hide (Level A)
+question: record it for skill://accessibility-audit.
 
 Also record whether the duration is a raw ms literal or a motion token, because a
 literal here is a token-system finding as well as a motion one.
@@ -73,9 +80,10 @@ the motion was communicating.
 
 Never delete motion outright to satisfy the branch, and never reduce the default
 path instead of branching it: both change the report without giving the
-non-reduced user the designed experience. Never leave a repeating animation
-unbranched. Every duration comes from a motion token, not a ms literal; a literal
-INVENTORY found is migrated here or reported as a token gap.
+non-reduced user the designed experience. A repeating animation is REQUIRES BRANCH
+by INVENTORY, so none stays unbranched. Every duration comes from a motion token,
+not a ms literal; a literal INVENTORY found is migrated here or reported as a token
+gap.
 
 Record per entry: the file changed, the reduced behaviour, and the token the
 duration now reads from.
@@ -92,16 +100,17 @@ needs = ["branch-reduced-motion"]
 labels = ["design", "design:subprocess", "sub:motion"]
 description = """
 Run skill://ui-review against {{surface}} twice: once with prefers-reduced-motion
-no-preference and once with reduce. Emulating the media feature is the whole test,
-so assert which state each measurement was taken in; a single-state run cannot
-detect a missing branch.
+no-preference and once with reduce, set with tab.emulate({ reducedMotion }). A
+Tern tab throws on reducedMotion, so open this tab with app: { tern: false }.
+Emulating the media feature is the whole test, so assert which state each
+measurement was taken in; a single-state run cannot detect a missing branch.
 
 Evidence order is fixed: ARIA snapshot first, computed styles second, screenshot
 last. Per branched entry assert the reduced state removes the movement, and assert
 the state change the motion communicated still happens. Per EXEMPT entry re-measure
-the duration and confirm it is still at or under 200ms and still not a transform:
-an exemption is a measurement, not a label. Confirm no branch changed the
-non-reduced path.
+it and confirm it is still at or under 200ms, still not a transform, and still not
+repeating: an exemption is a measurement, not a label. Confirm no branch changed
+the non-reduced path.
 """
 
 [steps.metadata]

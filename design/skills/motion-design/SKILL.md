@@ -15,29 +15,32 @@ TRIGGER
 ## Workflow
 
 1. Route by what the motion actually is. -> the chosen route is named in the report header.
-   - PRIMARY, any rendered surface: use the project's established motion measurement route.
-   - AUTHORING: use the project's established motion authoring route when one exists.
+   - MEASUREMENT, any rendered surface reachable by URL: MotionLint, which needs no install.
+     Run `npx --yes playwright install chromium` once, then
+     `npx --yes motionlint audit "<url>" --json audit.json --ci` with `cwd` set to a scratch
+     directory, because it writes `.motionlint/` into the caller's cwd. The exact form and
+     its caveats are in `skill://ui-review/references/tools.md`. With no URL, record it as
+     not run rather than reporting a score it did not produce.
+   - AUTHORING React `motion.X` JSX: upstream `ss-motion` from `styleseed@styleseed`, via
+     `rule://design-upstream-preflight`. Its own "When NOT to use" excludes CSS-only
+     transitions and GSAP, so every other motion is authored here, from the rules below.
 2. Read the project's existing durations and easings first via
    `skill://design-system-audit`. -> every value used is a token that already exists, or
    the gate below fires.
 3. Verify the result on the running surface with `skill://ui-review`, including the
-   reduced-motion branch. -> `prefers-reduced-motion` observed to change behaviour, not
-   assumed to.
-3. Read the project's existing durations and easings first via
-   `skill://design-system-audit`. -> every value used is a token that already exists, or
-   the gate below fires.
-4. Verify the result on the running surface with `skill://ui-review`, including the
-   reduced-motion branch. -> `prefers-reduced-motion` observed to change behaviour, not
-   assumed to.
+   reduced-motion branch: `tab.emulate({ reducedMotion: "reduce" })` on a tab opened with
+   `app: { tern: false }`, because a Tern tab throws on that option.
+   -> `prefers-reduced-motion` observed to change behaviour, not assumed to.
 
 GATES
 ASK Introducing a new duration or easing step. A new scale is a system decision.
 
 ## Rules
 
-MUST Give every transition over 200ms and every transform animation a
-  `prefers-reduced-motion` branch. Motion without an opt-out is an accessibility defect,
-  not a taste question.
+MUST Give every transition over 200ms, every transform animation, and every repeating
+  animation a `prefers-reduced-motion` branch. That is this package's motion policy. The
+  matching WCAG criterion, 2.3.3 Animation from Interactions, is AAA, so a missing branch
+  is a policy finding, not an AA failure, unless the project's policy makes it blocking.
 MUST Take every duration and easing from the discovered scale.
 MUST Verify reduced motion by driving it, because a media-query branch that was never
   exercised is untested.
@@ -45,7 +48,7 @@ MUST Read MotionLint's `audit.json` findings before calling the reduced-motion M
   satisfied. Its `--ci` exit code is not that gate: exit 0 alongside a
   `No prefers-reduced-motion path` warning in the same report is the measured behaviour.
 DEFAULT Animate transform and opacity. They composite; layout and paint properties do not.
-NOT Bounce or elastic easing. It reads as machine-generated.
+DEFAULT Avoid bounce or elastic easing, unless the project's motion tokens define one.
 NOT Animate a property that triggers layout when a transform expresses the same change.
 
 OUTPUT

@@ -54,9 +54,10 @@ against {{surface}} and confirm each finding still reproduces at the current hea
 A finding that does not reproduce is marked UNREPRODUCED with what was tried and
 carried to the verdict step, never dropped and never quietly downgraded.
 
-Classify what remains as MAJOR or MINOR. Any AA failure is MAJOR. Order the MAJORs
-by how many elements each affects, because a token-level contrast failure and a
-single mislabelled button are not the same size of fix.
+Classify what remains as MAJOR or MINOR, in the vocabulary a11y-auditor uses: any
+A or AA failure is MAJOR, and an AAA, policy, or best-practice finding is MINOR.
+Order the MAJORs by how many elements each affects, because a token-level contrast
+failure and a single mislabelled button are not the same size of fix.
 """
 
 [steps.metadata]
@@ -94,7 +95,8 @@ each measurement needs. Never re-walk the whole audit: node {{node}} already
 carries the evidence for every criterion this pass did not touch.
 
 Evidence order is fixed: ARIA snapshot first, computed styles second, screenshot
-last. Widths 1440, 768, 375 where the criterion is width-sensitive. Record the new
+last. Widths 1440, 768, 375 where the criterion is width-sensitive, plus 320 CSS px
+for 1.4.10 Reflow, which is specified at that width. Record the new
 measured value against the required value per criterion; a remediation asserted
 without a re-measurement is not verified. Check the neighbours a fix can break:
 raising a contrast ratio can lower another pair in the same theme, and adding a

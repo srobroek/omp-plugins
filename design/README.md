@@ -26,7 +26,7 @@ Both installation methods take effect in the next session. OMP discovers plugins
 
 ## Usage
 
-In that next session, OMP loads eight skills and lists six rules. For interface
+In that next session, OMP loads eight skills and lists five rules. For interface
 work, spawn `ui-ux-specialist`. Confirm the package registered:
 
 ```bash
@@ -44,8 +44,7 @@ The copy skill is implemented locally as `ui-microcopy`, which includes the merg
 | Skill | Implementation or route | Use when |
 |---|---|---|
 | `design-system-audit` | routes to `ss-lint` and `ss-review` to audit, `ss-tokens` to generate, plus `ss-score` | Report the tokens, scales, and primitives that exist |
-| `design-overview` | local | Report which design skills, agents, and upstreams this session actually has |
-| `design-md` | routes to `create-design-md`, which needs a repository or URL to extract from | Author and lint repo-root DESIGN.md |
+| `design-md` | routes extraction to `create-design-md`, which needs a repository or URL to extract from | Lint and gate the extracted repo-root DESIGN.md |
 | `ui-review` | local, drives OMP `browser` | Drive a real surface and measure it |
 | `accessibility-audit` | the `accessibility-scanner` server measures; `accessibility` covers criteria; the `@axe-core/cli` gate is the fallback | Check WCAG 2.2 AA with measured values |
 | `motion-design` | the `motionlint` CLI measures; `ss-motion` authors React `motion.X` only | Set durations, easings, reduced-motion branches |
@@ -103,7 +102,6 @@ Verify components first. Then verify pages. Do not use page-first development.
 
 | Rule | Use when |
 |---|---|
-| `design-tool-ladder` | Choosing a tool per phase, and the evidence it produces |
 | `design-token-discipline` | Taking colors and spacing from tokens; a new scale needs approval |
 | `design-evidence` | Naming the evidence behind a UI claim |
 | `design-no-slop` | Avoiding generated-UI tells |
@@ -227,7 +225,6 @@ bondable formulas take it.
 | `design-surface` | 15 | 3 | Building a new surface with full staging |
 | `design-system` | 22 | 3 | Establishing or rebuilding a design system |
 | `mol-design-iterate` | 6 | 2 | Running another round after an intent change |
-| `mol-design-fix-findings` | 4 | 0 | Working the critique and accessibility findings |
 | `mol-design-component` | 4 | 0 | Building one primitive to full state coverage |
 | `mol-design-tokens` | 5 | 1 | Establishing or migrating a token system |
 | `mol-design-a11y` | 4 | 0 | Remediating after a MAJOR accessibility verdict |
@@ -285,12 +282,11 @@ The detector claims 59 executable rules. A fixture probe with about ten seeded d
 Treat each finding as a coarse signal. Corroborate it by driving the surface.
 It is never located evidence or a substitute for driving the surface.
 
-No skill routes to these two `impeccable` commands:
+No skill routes to this `impeccable` command:
 
-- `clarify` omits four outputs that `ui-microcopy` provides:
+- `clarify` omits three outputs that `ui-microcopy` provides:
   - an onboarding surface
   - tone-tagged alternatives
-  - a requester checklist
   - a tone map
 
 A second asset joins a first choice only when its output stands alone.

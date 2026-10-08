@@ -16,11 +16,13 @@ tooling rather than design routes, and no wrapper here routes to them.
 ## Routes that need no skill
 
 The `accessibility-scanner` MCP server ships declared in this package's
-`.omp-plugin/plugin.json`, so it needs no install, and it is the PRIMARY measurement route.
-It runs axe-core in-process, so no ChromeDriver and no separate browser binary sit in the
-path, which removes the only failure mode that stopped the CLI below. It connects at
-session startup only: a server unreachable when the session began stays unreachable until
-the user runs `/mcp reconnect accessibility-scanner`. An agent cannot reconnect it.
+`.omp-plugin/plugin.json`, so it needs no plugin install, and it is the PRIMARY measurement
+route. It runs axe-core in a real browser: its own tool description reads "Requires Google
+Chrome installed locally (or set the CHROME_PATH environment variable)". What it removes is
+the ChromeDriver version pairing that stopped the CLI below, not the browser. With no Chrome
+and no `CHROME_PATH`, a scan tests nothing. It connects at session startup only: a server
+unreachable when the session began stays unreachable until the user runs
+`/mcp reconnect accessibility-scanner`. An agent cannot reconnect it.
 
 The axe CLI is the documented FALLBACK, for a multi-URL CI gate only. It needs no install
 either: `npx --yes` resolves it on demand and caches it. Pass `--package`, because the bin is named
