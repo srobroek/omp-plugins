@@ -30,6 +30,17 @@ MUST Copy every `formulas/*.formula.toml` from this plugin into `.beads/formulas
   prefixed filenames; `bd mol bond` resolves only prefixed stems.
 DEFAULT Without a beads workspace, preserve upstream SpecKit artifact behavior.
 
+SPEC MODE (setup and spec-producing commands)
+DEFAULT Follow the project's existing documentation convention. Use an acceptance note
+  for understood local work; use a lightweight spec or the full Specify/SpecKit
+  workflow when uncertainty, affected contracts, or recovery difficulty require it.
+NOT Create `specs/` or `.specify/` solely for a small script or mechanical change.
+MUST Keep SpecKit specs in `specs/` and preserve required project records.
+MUST Choose one spec mode per project: no SpecKit, lightweight specs, or the full
+  Specify/SpecKit workflow. Document a mode change; do not introduce a competing workflow.
+MUST Keep `.specify/` workflow assets separate from durable project docs in `docs/`.
+Doc-writing style rules (READMEs, docs, PR text) live in slopvac.
+
 SPEC IDENTITY (spec-producing commands)
 MUST Set `--spec-id <NNN-slug>` on every bead a spec produces, including
   `bd update` after `bd mol pour`.

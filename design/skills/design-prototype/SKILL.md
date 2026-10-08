@@ -13,6 +13,7 @@ TRIGGER
 + "what should this look like" asked before any implementation exists
 - implementing a real surface against the system -> `ui-ux-specialist`
 - verifying a surface that already renders -> `ui-review`
+- whether a state model or logic holds up -> `prototype-logic` (quality plugin)
 - recording the durable visual system -> `design-md`
 
 ## Workflow
@@ -33,7 +34,7 @@ TRIGGER
    path is reported.
 3. SERVE it whenever it is interactive, rather than handing over a file path. A clickable
    prototype judged by reading its source is not judged at all.
-   -> `bash` with `name: "prototype"`, command `python3 -m http.server "<port>" --bind 127.0.0.1`,
+   -> `bash` with a unique `name` such as `"prototype-<slug>-<port>"`, command `python3 -m http.server "<port>" --bind 127.0.0.1`,
    `cwd` set to the artifact's directory, and `ready: { "port": <port> }`.
    -> SELF-CHECK before reporting, because this is the step that silently does not happen:
    fetch your own URL and report the status, `curl -sS -o /dev/null -w '%{http_code}'
@@ -57,14 +58,16 @@ TRIGGER
 | fixed 16:9 deck or PDF | upstream `frontend-slides` |
 | favicon, app icon, or social image files | upstream `web-asset-generator` |
 | hosted concept exploration | upstream `superdesign`, after the user confirms the account |
-| rendered surface against a reference mockup | `tab.screenshot()` then `inspect_image` with an explicit comparison question |
+| rendered surface against a reference mockup | `tab.screenshot()` then `inspect_image` with an explicit comparison question; `tab.diffScreenshot(baselinePath, {threshold})` for a measured pixel diff |
+| structurally different variants of an existing page, inside the real app | in-app `?variant=` switcher behind a dev-only flag: `skill://design-prototype/references/in-app-variants.md` |
+
+Producer install identities: `skill://design-prototype/references/upstream.md`
 
 ## Rules
 
 MUST Prefer the local account-free route before any hosted service.
 MUST State which route produced an artifact. A reader cannot judge fidelity without it.
-MUST Report an `inspect_image` comparison as a vision judgement. OMP has no
-  pixel-diff primitive, so the result carries no measured claim.
+MUST Report an `inspect_image` comparison as a vision judgement; a measured claim needs `tab.diffScreenshot` against a baseline, with its threshold.
 MUST Report the measured HTTP status beside any URL you hand over. A URL with no status
   behind it is exactly the failure the self-check exists to catch.
 DEFAULT One artifact per question. A second fidelity level is a second request.

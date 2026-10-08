@@ -30,7 +30,7 @@ type Profile struct { users UserFinder }
 func NewProfile(users UserFinder) *Profile { return &Profile{users: users} }
 ```
 
-Why: implicit satisfaction lets an adapter meet the consumer's contract without coupling the provider to it. One implementation can justify the boundary; interface count is not a quality metric.
+Why: implicit satisfaction lets an adapter meet the consumer's contract without coupling the provider to it. Whether the boundary needs an interface at all follows the seam rule in [deep-modules.md](deep-modules.md); interface count is not a quality metric.
 
 **Exception:** a pure function or local concrete helper needs no interface. A shared protocol can own an interface when it has coherent cross-consumer semantics; do not duplicate identical contracts as a ritual.
 

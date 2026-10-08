@@ -18,11 +18,11 @@ The patch step must not write `specs/*/tasks.md` — create child beads.
 
 ## Phases
 
-1. **Triage**: Parse input (issue, stack trace, or description). Gather context in parallel. Classify P0-P3. Ensure GitHub issue for P0/P1.
-2. **Diagnose**: Reproduce (failing test, code trace, error search). Check `git log` on affected files. Form 1-3 ranked hypotheses. Present hypotheses ranked by likelihood; in non-interactive runs proceed with the top-ranked.
+1. **Triage**: Parse input (issue, stack trace, or description). Gather context in parallel. Classify P0-P3. Ensure a bead exists for P0/P1.
+2. **Diagnose**: Reproduce (failing test, code trace, error search). Check `git log` on affected files. Form 1-3 ranked hypotheses. Present hypotheses ranked by likelihood; in non-interactive runs proceed with the top-ranked. For a hard, flaky, or performance bug, load `skill://quality-code-design/references/debugging.md`.
 3. **Scope**: Route by the table below. Assess uncertainty, consequences, affected contracts, and recovery difficulty first; file and line counts estimate effort, not safety. Load `skill://quality-code-design` and its relevant lifecycle references; surface missing guidance.
-4. **Fix**: QUICK FIX = bounded edit plus the focused check. STRUCTURED FIX = concise diagnosis and failure/recovery plan, then implement. FULL SPEC = iterate on the active spec or a new micro-spec (completed specs are never reopened). Complete reuse research before code writes; do not add a test or document solely to satisfy a label.
-5. **Verify**: Check the accepted behavior and the reproduced failure; exercise credible failure cases. Run focused regression checks and every project-required suite/build/lint gate. Do not weaken expected behavior to get green tests. Report unavailable checks and evidence limits. On failure: back to Diagnose. Loop 3: expand the investigation or return a blocker; do not claim completion.
+4. **Fix**: QUICK FIX = bounded edit plus the focused check. STRUCTURED FIX = concise diagnosis and failure/recovery plan, then implement. FULL SPEC = iterate on the active spec or a new micro-spec (completed specs are never reopened). Do not add a test or document solely to satisfy a label.
+5. **Verify**: Check the accepted behavior and the reproduced failure; exercise credible failure cases with focused regression checks. Project-required suite/build/lint gates run in the integration owner's verification: the lead's, when a dispatched worker runs this skill. Do not weaken expected behavior to get green tests. Report unavailable checks and evidence limits. On failure: back to Diagnose. Loop 3: expand the investigation or return a blocker; do not claim completion.
 
 ## Scope routing
 
@@ -40,6 +40,6 @@ Good: use QUICK FIX when behavior and recovery are understood; preserve required
 ## Rules
 
 - NEVER skip Triage or Verify, even for obvious fixes.
-- P0/P1 MUST have a GitHub issue for traceability.
-- Side-issues: P0/P1 pause current fix, P2/P3 defer with issue.
+- P0/P1 MUST have a bead for traceability.
+- Side issues: record each as a bead and keep it out of the current fix; raise a P0/P1 side issue to the user or lead at once.
 - Store root-cause patterns to memory when the bug involved a non-local interaction, a surprising API constraint, or a recurring error class. Skip single-typo/off-by-one fixes.
