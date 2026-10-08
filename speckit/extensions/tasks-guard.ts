@@ -15,7 +15,9 @@ const WRITE_UTILS = [
 	/\btruncate\b[^|;&]*specs\/[^|;&]*\/tasks\.md/,
 	/\bdd\b[^|;&]*\bof=[^|;&]*specs\/[^|;&]*\/tasks\.md/,
 	/\binstall\b[^|;&]*specs\/[^|;&]*\/tasks\.md/,
-	/\bcp\b[^|;&]*specs\/[^|;&]*\/tasks\.md/,
+	// cp writes only its destination: the last operand, or the directory after -t.
+	/\bcp\b[^|;&]*[\s'"](?:[^\s|;&'"]*\/)?specs\/[^/\s|;&'"]+\/tasks\.md['"]?\s*(?:$|[|;&)]|\d*>)/m,
+	/\bcp\b[^|;&]*\s(?:-t\s*|--target-directory[=\s]+)['"]?(?:[^\s|;&'"]*\/)?specs\/[^/\s|;&'"]+\/?['"]?\s[^|;&]*\btasks\.md\b/,
 	/\bmv\b[^|;&]*specs\/[^|;&]*\/tasks\.md/,
 	/\bpython3?\b[^|;&]*-c[^|;&]*specs\/[^|;&]*\/tasks\.md/,
 	/\bperl\b[^|;&]*-[a-z]*e[^|;&]*specs\/[^|;&]*\/tasks\.md/,
@@ -51,7 +53,7 @@ export function commandMentionsTasksMd(command: string): boolean {
 export function beadsActive(cwd: string): boolean {
 	if (testBeadsActive !== null) return testBeadsActive;
 	try {
-		if (testSpawnBd) return testSpawnBd(["where"]) === 0;
+		if (testSpawnBd) return testSpawnBd(["-C", cwd, "where"]) === 0;
 		const proc = Bun.spawnSync(["bd", "-C", cwd, "where"], {
 			stdout: "pipe",
 			stderr: "pipe",
@@ -88,12 +90,13 @@ export function decideToolCall(
 }
 
 export default function tasksGuard(pi: ExtensionAPI): void {
-	pi.on("tool_call", (event: ToolCallEvent) => {
+	pi.on("tool_call", (event: ToolCallEvent, ctx) => {
 		try {
+			// Edit tools carry no cwd; the calling session's cwd names its own worktree.
 			const cwd =
 				"cwd" in event.input && typeof event.input.cwd === "string" && event.input.cwd
 					? event.input.cwd
-					: process.cwd();
+					: ctx.cwd;
 			return decideToolCall(event.toolName, event.input, cwd);
 		} catch {
 			return;

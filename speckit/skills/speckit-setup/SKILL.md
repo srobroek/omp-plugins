@@ -28,8 +28,7 @@ that worktree and skip each one already done:
    `--install-allowed` without it.
 3. Install + enable the required extensions not yet installed: `agent-context`, `bugfix`, `cleanup`,
    `critique`, `fix-findings`, `iterate`, `qa`, `refine`, `retro`,
-   `security-review`, `tinyspec`, plus `status-report` from
-   `latest-release:Open-Agent-Tools/spec-kit-status`. Stop and report failure if
+   `security-review`, `status-report`, `tinyspec`. Stop and report failure if
    any required CLI step fails.
 4. `bd init --skip-hooks` if no workspace; copy every formula from
    `skill://speckit-setup` sibling plugin `formulas/` into `.beads/formulas/`.
