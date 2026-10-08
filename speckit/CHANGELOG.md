@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.10.1](https://github.com/srobroek/omp-plugins/compare/speckit--v0.10.0...speckit--v0.10.1) (2026-10-08)
+
+
+### Bug Fixes
+
+* **speckit:** drop review and roadmap from required extensions ([cf677a2](https://github.com/srobroek/omp-plugins/commit/cf677a2f3c85904fdc8928e52c838e02113bfe3f))
+
 ## [0.10.0](https://github.com/srobroek/omp-plugins/compare/speckit--v0.9.0...speckit--v0.10.0) (2026-10-08)
 
 
