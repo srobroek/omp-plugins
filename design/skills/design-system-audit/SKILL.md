@@ -16,39 +16,36 @@ TRIGGER
 
 GATES
 ASK Creating a token set after an ABSENT verdict. The user approves a new system; the audit never starts one.
+ASK Taking the StyleSeed route in step 4 when the user has not asked for it. Its install adds 23 `ss-*` skills to every later session.
 
 ## Workflow
 
-1. Route by TASK, not by topic. -> the chosen route is named in the report header.
-   - AUDITING an existing system, this skill's own job: `ss-lint` for fast automated
-     violation detection, then `ss-review` for design-system compliance review.
-   - GENERATING a palette, or adding and modifying tokens: `ss-tokens`. That is its whole
-     scope. It declines the audit in its own words, "For finding token violations in
-     existing code -> use /ss-lint", so routing an audit there asks a generator for a job
-     it says is not its.
-   - validating a StyleSeed artifact contract needing file-and-line evidence: `ss-score`,
-     which emits `deterministic.json` with detector ids and fix text.
-   Every `ss-*` route above ships in the one `styleseed` entry, so the cost is paid once.
-2. Apply `rule://design-upstream-preflight` for `styleseed` BEFORE loading the routed
-   skill. -> installed and prerequisites probed. A routed name already in your available
-   skills: LOAD it via `skill://`. Installed during this session: read its SKILL.md from
-   the install path, since `skill://` throws `Unknown skill` until the next session.
-   Install refused or failed: do NOT substitute your own inventory for the upstream's
-   engine. Report the gap. You MAY still report the grounded carrier inventory from step
-   3, labelled as carriers rather than as the upstream's verdict.
-3. Locate carriers for the upstream to read: LOAD
-   `skill://design-system-audit/references/token-carriers.md` for the per-ecosystem
-   `glob` and `grep` patterns. -> a path list; an empty list is the ABSENT verdict, not
-   permission to invent.
-4. For token build, schema, and contrast pipeline questions, LOAD
-   `skill://design-system-audit/references/token-pipeline.md`. -> the canonical source
-   and the one tool per job, so no second build authority is introduced.
+1. Locate carriers: LOAD `skill://design-system-audit/references/token-carriers.md` and run
+   its `glob` and `grep` patterns for every ecosystem the repository uses, token
+   directories first. -> a path list naming each carrier's ecosystem. An empty list after
+   every applicable row was searched is the ABSENT verdict; a row left unsearched makes
+   the verdict incomplete, never ABSENT.
+2. Inventory every carrier the list names. -> each token group with its values quoted at
+   `file:line`, its consumption confirmed by a hit outside the carrier, the spacing base
+   derived as the reference describes, and every conflict the reference lists. This
+   inventory is the audit and its verdict.
+3. For token build, schema, and contrast pipeline questions, LOAD
+   `skill://design-system-audit/references/token-pipeline.md`. -> the project's existing
+   source and builder named, so no second build authority is introduced.
+4. OPTIONAL, only when the user asks for StyleSeed or approves it at the gate: LOAD
+   `skill://design-system-audit/references/upstream.md`, apply
+   `rule://design-upstream-preflight` for `styleseed`, then route by task. -> StyleSeed's
+   findings reported beside the inventory and labelled as its own. A refused or failed
+   install changes nothing above, because the carrier inventory stays the verdict. A
+   routed name already in your available skills: LOAD it via `skill://`. Installed during
+   this session: read its SKILL.md from the install path, since `skill://` throws
+   `Unknown skill` until the next session.
 
 ## Rules
 
 MUST Quote `file:line` for every value reported. An unsourced value is a guess.
-MUST Return ABSENT and stop when step 3 finds no carrier.
-MUST Resolve a real installed path before running an upstream script. The documented
+MUST Return ABSENT and stop when step 1 finds no carrier.
+MUST Resolve a real installed path before running a StyleSeed script. The documented
   `<installed-ss-tokens>/scripts/generate-palette.mjs` and
   `<installed-ss-score>/scripts/styleseed-check.mjs` are literal prose placeholders that
   never expand. Resolve each under the install path the preflight reports.
@@ -58,7 +55,7 @@ NOT Propose a token name that `grep` over the carriers would have found.
 NOT Report a framework default as a project token unless the config extends it.
 
 OUTPUT
-L1 SYSTEM: PRESENT | PARTIAL | ABSENT -- route used, plus the primary carrier.
+L1 SYSTEM: PRESENT | PARTIAL | ABSENT -- primary carrier, plus `styleseed` when step 4 ran.
    Tokens -- group, path, values. Primitives -- name, path, variant mechanism.
    Conflicts -- only if non-empty: token, value A at path, value B at path.
 CAP 250w plus the tables

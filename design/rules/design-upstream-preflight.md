@@ -12,7 +12,7 @@ each comes from its upstream author.
 | Routed name | Upstream repo | Marketplace | Install address | Prerequisite probe | Needed when |
 |---|---|---|---|---|---|
 | `impeccable` skill; `impeccable detect` CLI | `pbakaus/impeccable` | `impeccable` | `impeccable@impeccable` | `npx --version` | design workflow; critique steps run the CLI |
-| `ss-lint`, `ss-review`, `ss-tokens`, `ss-score`, `ss-motion` | `bitjaru/styleseed` | `styleseed` | `styleseed@styleseed` | `node --version` | `design-system-audit`, `motion-design` tier 2 |
+| `ss-lint`, `ss-review`, `ss-tokens`, `ss-score`, `ss-motion` | `bitjaru/styleseed` | `styleseed` | `styleseed@styleseed` | `node --version` | `design-system-audit` StyleSeed route, only after the user opts in; `motion-design` React `motion.X` authoring |
 | `accessibility` | `addyosmani/web-quality-skills` | `addy-web-quality-skills` | `web-quality-skills@addy-web-quality-skills` | none | `accessibility-audit` |
 | `html-wireframe`, `html-prototype` | `plannotator/effective-html` | `effective-html` | `plannotator-effective-html@effective-html` | `python3 --version` to serve | `design-prototype` |
 | `frontend-slides` | `zarazhangrui/frontend-slides` | `frontend-slides` | `frontend-slides@frontend-slides` | `python-pptx`, only for PPT conversion | `design-prototype` deck row |
