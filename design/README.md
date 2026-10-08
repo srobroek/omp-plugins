@@ -62,7 +62,7 @@ The copy skill is implemented locally as `ui-microcopy`, which includes the merg
 | `ui-implementer` | Builds one UI unit on existing tokens and components, verified at three widths. Escalates wider work to `ui-ux-specialist` | `@designer` |
 
 The lead spawns `design-critic` and `a11y-auditor` in one parallel batch. It also spawns
-bundled `scout` for recon and `operator` for mechanical steps.
+OMP's bundled `scout` for recon and the delivery plugin's `operator` for mechanical steps.
 
 The lead never writes its own critique.
 

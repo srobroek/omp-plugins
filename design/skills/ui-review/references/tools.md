@@ -40,6 +40,16 @@ Commands only. The `accessibility-scanner`, `storybook`, and `wire-dsl` MCP
 servers are selected by the phase map above and called as tools, not spawned as
 processes, so they carry no invocation to record here.
 
+## Browser mode
+
+`browser.open({ name, url })` with no `app` and no `headed` is the default below.
+
+- Browser work defaults to headless managed Chromium.
+- Pass `app: { relay: true }` only when a page needs the user's signed-in session or the user's own Chrome extensions (password manager, wallet, and similar), never for a public page: relay adopts the user's real Chrome tab.
+- When the user wants to watch, or watching helps (debugging a flow, a visual check with the user), offer `headed: true` and say so explicitly.
+
+Inside a Tern pane an `open` without `app` lands in Tern's WebKit view, not Chromium, and its `requests()` misses subresources; add `app: { tern: false }` there.
+
 ## Never infer a package from a bin name
 
 `npx` resolves its first non-flag argument as a package spec unless `--package` names one.
