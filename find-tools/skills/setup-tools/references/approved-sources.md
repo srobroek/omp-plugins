@@ -10,9 +10,9 @@ marketplace. `sniff` installs as `sniff@sniff`, not `sniff@srobroek-omp`.
 |---|---|---|
 | `srobroek-omp` | `srobroek/omp-plugins` | language rules, delivery, beads, design, quality, safety, toolchain, and the other packages `omp plugin discover srobroek-omp` lists |
 
-`srobroek-omp` also mirrors three external packages. `ui-skills` and `platform-design-skills`
-ship no marketplace upstream, so this catalog is how they install. `sniff` ships its own
-marketplace in tier 2, which is the one to install from.
+`srobroek-omp` also mirrors two external packages. `ui-skills` ships no marketplace upstream,
+so this catalog is how it installs. `sniff` ships its own marketplace in tier 2, which is the
+one to install from.
 
 ## Tier 2: approved third-party marketplaces
 
@@ -36,9 +36,10 @@ its `marketplace.json`, and `omp plugin install` needs that name.
 | `web-asset-generator-marketplace` | `alonw0/web-asset-generator` | favicons, app icons, social images |
 | `interface-design` | `Dammyjay93/interface-design` | product-UI craft for dashboards, admin panels, and SaaS tools; not marketing pages |
 
-The design rows other than `interface-design` are also installed on demand by
-`rule://design-upstream-preflight`. `interface-design` is optional: no design skill routes to
-it, and it overlaps `impeccable`. Vetted 2026-09-28: MIT, last push 2026-06-20, not archived.
+The design rows other than `interface-design` and `googlechrome` are also installed on demand
+by `rule://design-upstream-preflight`. Both are optional: no design skill routes to either.
+`interface-design` overlaps `impeccable`, and `googlechrome`'s CLI needs no install.
+Vetted 2026-09-28: `interface-design` is MIT, last push 2026-06-20, not archived.
 A project-scope install loads its one skill, `interface-design`, from the manifest's
 `./.claude/skills` path.
 

@@ -19,18 +19,17 @@ The other three install one skill each, which is unusually clean.
 ## Routes that need no install
 
 - `skill://wireloom` is vendored into this package, so it is always available. Its renderer
-  is `npm install wireloom`, and its grammar is cited by URL rather than vendored.
+  is the unversioned `npm install wireloom`, and its grammar is read from the upstream
+  `main` URL rather than vendored, so both follow the current release.
 - `xd://generate_image` is built in. Raster only, so no SVG and no PDF. Reference images go
   in `input`; it writes a new temp file and never mutates the input.
 - `inspect_image` is built in, gated on the `modelRoles.vision` role. It yields a vision
-  judgement, never a measured pixel diff, because OMP ships no pixel-diff primitive.
+  judgement, never a measurement. The measured pixel diff is the browser's
+  `tab.diffScreenshot(baselinePath, {threshold})`.
 - The `wire-dsl` MCP server ships declared in this package's `.omp-plugin/plugin.json`. It
   is the ONLY working Wire DSL route: the upstream repository has no plugin manifest and
   its one skill-shaped file is a bare `.md`, so a catalog entry would install cleanly and
   contribute nothing. Verified empirically.
-
-MCP servers connect at session startup only. One unreachable when the session began stays
-unreachable until the user runs `/mcp reconnect <name>`; an agent cannot reconnect it.
 
 ## Prerequisites and accounts
 
@@ -42,5 +41,3 @@ unreachable until the user runs `/mcp reconnect <name>`; an agent cannot reconne
   account, with `login` when unauthenticated. Image and video generation consumes credits.
   Confirm the account with the user before routing to it. Its free-tier limits are not
   publicly documented, so make no claim about them.
-- `excalidraw` needs a client supporting MCP Apps. Its upstream declares MIT in
-  `package.json` and ships no LICENSE file, so it is advertised and never vendored.

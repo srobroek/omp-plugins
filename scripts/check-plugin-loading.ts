@@ -94,9 +94,14 @@ async function expected(root: string) {
     tools.push(...registrations.flatMap(m => m[1] ? [m[1]] : []));
   }
   const mcp = typeof manifest.mcpServers === "object" ? Object.keys(manifest.mcpServers) : [];
+  // A linked package loads MCP servers from its root `.mcp.json` (the omp-plugins provider)
+  // and never from the manifest, while a marketplace install honours the manifest first.
+  // The two lists may differ on purpose: design keeps opt-in servers out of `.mcp.json`.
+  const mcpFile = join(root, ".mcp.json");
+  const linkMcp = existsSync(mcpFile) ? Object.keys((await json(mcpFile)).mcpServers ?? {}) : [];
   return {
     name: basename(root), root, extensions: extensions.map((p: string) => resolve(root, p)), tools,
-    rules: rules.map(p => basename(p, ".md")), agents: agentNames, skills: skills.map(p => basename(dirname(p))), mcp
+    rules: rules.map(p => basename(p, ".md")), agents: agentNames, skills: skills.map(p => basename(dirname(p))), mcp, linkMcp
   };
 }
 
@@ -211,7 +216,7 @@ async function worker(configPath: string) {
   for (const p of expectations) {
     const counts: Record<string, number> = {};
     for (const [key, items] of [["skills", capabilities.skills], ["rules", capabilities.rules], ["agents", agents], ["mcp", capabilities.mcps]] as const) {
-      const wanted = key === "mcp" && config.carrier === "marketplace" ? p.mcp.map(name => `${p.name}:${name}`) : p[key];
+      const wanted = key !== "mcp" ? p[key] : config.carrier === "marketplace" ? p.mcp.map(name => `${p.name}:${name}`) : p.linkMcp;
       const matched = items.filter((item: Named) => wanted.includes(item.name));
       const found = matched.map((item: Named) => item.name);
       for (const item of matched) {

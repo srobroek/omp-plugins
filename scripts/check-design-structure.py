@@ -172,7 +172,44 @@ with TemporaryDirectory(prefix="omp-catalog-probe-") as temporary:
         except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError) as err:
             check(label, False, str(err))
 
-# 9. Report wrapper sizes rather than asserting a target, so the number is visible.
+# 9. The token-carrier patterns reach what design-system-audit is told to find. The JSON
+#    carrier globs must match the tiered layout token-pipeline.md prescribes, checked with
+#    Bun.Glob rather than fnmatch because agents run them through a glob matcher, not
+#    Python. The CSS declaration regex must accept camelCase and underscore names.
+carriers_md = (DESIGN / "skills" / "design-system-audit" / "references" / "token-carriers.md").read_text(encoding="utf-8")
+json_section = carriers_md.split("## Design token JSON", 1)[-1]
+json_row = next((ln for ln in json_section.splitlines() if ln.startswith("| Carriers |")), "")
+carrier_globs = re.findall(r"`([^`]+\.json)`", json_row)
+tiered = [
+    "tokens/foundation.json",
+    "tokens/semantic.json",
+    "tokens/component/button.json",
+    "packages/ui/tokens/themes/dark.json",
+]
+bun = shutil.which("bun")
+if not carrier_globs:
+    check("token-carrier globs match the tiered token layout", False, "no JSON carrier row in token-carriers.md")
+elif bun is None:
+    check("token-carrier globs match the tiered token layout", False, "bun is not on PATH")
+else:
+    result = subprocess.run(
+        [bun, "-e", "const { globs, paths } = JSON.parse(await Bun.stdin.text());"
+                    "console.log(JSON.stringify(paths.filter((p) => !globs.some((g) => new Bun.Glob(g).match(p)))));"],
+        input=json.dumps({"globs": carrier_globs, "paths": tiered}),
+        capture_output=True, text=True, timeout=30,
+    )
+    unmatched = json.loads(result.stdout) if result.returncode == 0 else [result.stderr.strip()]
+    check("token-carrier globs match the tiered token layout", not unmatched, f"unmatched={unmatched}")
+declaration = next(
+    (m.group(1) for ln in carriers_md.splitlines()
+     if ln.startswith("| Declarations |") and (m := re.search(r"`(\^[^`]*--[^`]*)`", ln))),
+    None,
+)
+names = ["--color-fg: #000;", "  --brandPrimary: red;", "--Brand_Primary:blue;"]
+missed = names if declaration is None else [n for n in names if not re.search(declaration, n)]
+check("CSS declaration regex accepts every custom-property name form", not missed, f"missed={missed}")
+
+# 10. Report wrapper sizes rather than asserting a target, so the number is visible.
 for skill_md in sorted(DESIGN.glob("skills/*/SKILL.md")):
     lines = len([ln for ln in skill_md.read_text(encoding="utf-8").splitlines() if ln.strip()])
     notes.append(f"{skill_md.parent.name}: {lines} non-empty lines")

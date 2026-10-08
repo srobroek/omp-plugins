@@ -2,13 +2,6 @@
 
 Design-source connectors are out of scope. Take context from code and the running surface instead: `skill://design-system-audit` for the system, and `skill://ui-review` to read character budgets and truncation in place.
 
-## What I Need From You
-
-- **Context**: What screen, flow, or feature?
-- **User state**: What is the user trying to do? How are they feeling?
-- **Tone**: Formal, friendly, playful, reassuring?
-- **Constraints**: Character limits, platform guidelines?
-
 ## Principles
 
 1. **Clear**: Say exactly what you mean. No jargon, no ambiguity.

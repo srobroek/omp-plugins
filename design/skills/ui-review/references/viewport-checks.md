@@ -3,18 +3,22 @@
 Three widths, in this order: 1440, 768, 375. Narrow last, because narrow is where
 layout breaks and you want the failure fresh in the report.
 
-| Viewport | Use `page.setViewport` | Represents |
+| Viewport | `tab.emulate` options | Represents |
 |---|---|---|
-| 1440x900 | `{ width: 1440, height: 900, deviceScaleFactor: 1 }` | Desktop, the width most layouts were designed at |
-| 768x1024 | `{ width: 768, height: 1024, deviceScaleFactor: 2 }` | The tablet or split-pane breakpoint, where multi-column collapses |
-| 375x667 | `{ width: 375, height: 667, deviceScaleFactor: 3 }` | Small phone, the narrowest supported width |
+| 1440x900 | `{ viewport: { width: 1440, height: 900 } }` | Desktop, the width most layouts were designed at |
+| 768x1024 | `{ viewport: { width: 768, height: 1024 } }` | The tablet or split-pane breakpoint, where multi-column collapses |
+| 375x667 | `{ viewport: { width: 375, height: 667 } }` | Small phone, the narrowest supported width |
 
-Omit `isMobile` and `hasTouch` by default; see the trap below. Add them only for a
-separate touch-behavior pass.
+Set width and height only. `deviceScaleFactor`, `isMobile`, and `hasTouch` inside
+`viewport` are accepted and then ignored: measured in managed Chromium, `devicePixelRatio`
+stayed 1.25 at a requested 2 and 3, and `isMobile: true` left `innerWidth` at 375 with
+`(hover: hover)` still true. Never report a pixel-ratio-dependent finding, such as a
+hairline's rendering or a raster asset's sharpness, from this pass. Touch behaviour is a
+separate pass with `tab.emulate({ device })`; see the trap below.
 
 ## Order of operations
 
-1. Set the viewport.
+1. Set the viewport with `tab.emulate({ viewport })`.
 2. Wait for layout to settle. The predicate form is NOT `tab.waitFor`: every `tab.waitFor*`
    helper takes a SELECTOR STRING, so handing one a function throws instead of waiting.
    - Element the breakpoint introduces: `await tab.waitForSelector('nav [aria-expanded]')`.
@@ -37,28 +41,28 @@ separate touch-behavior pass.
    width, which is what the findings must be compared against.
 4. Run the probes. Record the width beside every number.
 
-## The `isMobile` trap
+## The device trap
 
-`isMobile: true` is not "the same viewport, but touch". Measured on Chromium at
-`{ width: 375, isMobile: true, hasTouch: true }`:
+`tab.emulate({ device: 'iPhone 8' })` is not "the same width, but touch". It applies a
+Puppeteer device profile: mobile layout, touch, and a device pixel ratio of 2. Measured on
+managed Chromium with that device, then with `{ viewport: { width: 375, height: 667 } }`:
 
-| Page | `innerWidth` | `documentElement.clientWidth` | `(hover: hover)` |
+| Page and emulation | `innerWidth` | `documentElement.clientWidth` | `(hover: hover)` |
 |---|---|---|---|
-| No `<meta name="viewport">` | 981 | 980 | false |
-| `width=device-width, initial-scale=1` | 901 | 375 | false |
-| `isMobile` omitted | 375 | 375 | true |
+| No `<meta name="viewport">`, device | 981 | 980 | false |
+| `width=device-width, initial-scale=1`, device | 375 | 375 | false |
+| Either page, viewport only | 375 | 375 | true |
 
 Two ways that silently ruins a 375 pass:
 
-- A page without a viewport meta tag lays out at 980 CSS px. Every measurement in
-  the pass is then taken at the wrong width while the report claims 375.
-- `innerWidth` stays wrong even with the meta tag. Read
-  `document.documentElement.clientWidth` to confirm the width you are actually
+- A page without a viewport meta tag lays out at 980 CSS px under a device profile.
+  Every measurement in the pass is then taken at the wrong width while the report claims
+  375. Read `document.documentElement.clientWidth` to confirm the width you are actually
   reviewing, and assert it before recording any number.
-
-Because `(hover: hover)` and `(pointer: fine)` both go false, hover states cannot
-be checked in an `isMobile` pass. Set it only to exercise touch-specific behavior,
-and check hover in a separate pass with `isMobile` omitted.
+- `(hover: hover)` and `(pointer: fine)` both go false, so hover states cannot be checked
+  in a device pass. Use a device only to exercise touch-specific behaviour, and check
+  hover in the viewport-only pass. A later `tab.emulate({ viewport })` replaces the device
+  profile: measured, hover read true again and `devicePixelRatio` returned to 1.25.
 
 ## Every width
 
@@ -69,7 +73,9 @@ and check hover in a separate pass with `isMobile` omitted.
   is not an independent test, and inside a labelled scroller it is expected. Read the
   ladder below before filing one.
 - No two siblings in a flex or grid container have intersecting boxes.
-- Every interactive target is at least 24x24 CSS px, hit area included.
+- Every interactive target is at least 24x24 CSS px, hit area included, or passes the
+  SC 2.5.8 spacing exception (the `spacing` probe in
+  `skill://ui-review/references/probes.md`).
 - Text is not truncated unless truncation is intentional and the full value is
   reachable by `title`, a tooltip, or the accessible name.
 - Focus order still matches visual order. A responsive reorder via `order` or
@@ -157,7 +163,8 @@ once the inline override was cleared.
   `accessibility-audit` when conformance is in scope.
 - The longest realistic string in every button, label, and badge still fits.
   Empty and error states count.
-- Tap targets have at least 8 CSS px of separation, or an enlarged hit area.
+- Crowded rows (toolbars, pagination, chip groups) are where undersized targets cluster.
+  Run the `spacing` probe on them; a fixed gap such as 8 CSS px is not the SC 2.5.8 test.
 - Modals and sheets fit the viewport height, and their content scrolls rather
   than the page behind them.
 - Bottom-anchored controls sit above the browser chrome: check with

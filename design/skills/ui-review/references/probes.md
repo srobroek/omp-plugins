@@ -139,6 +139,12 @@ const toRGB = (css) => {
 an ancestor. Walk up, compositing any translucent layer onto the next.
 
 ```js
+const over = (top, under) => ({
+  r: top.r * top.a + under.r * (1 - top.a),
+  g: top.g * top.a + under.g * (1 - top.a),
+  b: top.b * top.a + under.b * (1 - top.a),
+  a: 1,
+});
 const backdrop = (el) => {
   const stack = [];
   for (let n = el; n; n = n.parentElement) {
@@ -148,12 +154,7 @@ const backdrop = (el) => {
     if (c.a > 0) { stack.push(c); if (c.a === 1) break; }
   }
   stack.push({ r: 255, g: 255, b: 255, a: 1 });   // canvas default
-  return stack.reduceRight((under, over) => ({
-    r: over.r * over.a + under.r * (1 - over.a),
-    g: over.g * over.a + under.g * (1 - over.a),
-    b: over.b * over.a + under.b * (1 - over.a),
-    a: 1,
-  }));
+  return stack.reduceRight((under, top) => over(top, under));
 };
 ```
 
@@ -171,7 +172,22 @@ const ratio = (fg, bg) => {
   const [a, b] = [lum(fg), lum(bg)].sort((x, y) => y - x);
   return Math.round(((a + 0.05) / (b + 0.05)) * 100) / 100;
 };
+const contrast = (el) => {
+  const bg = backdrop(el);
+  if (bg.undecidable) return bg;
+  return ratio(over(toRGB(getComputedStyle(el).color), bg), bg);
+};
 ```
+
+Composite the foreground before measuring it. `color` can carry its own alpha, and the
+luminance formula assumes opaque colours, so passing the raw value scores the text as if
+it were painted solid. Measured in Chromium: `rgba(0,0,0,0.1)` text on white read 21:1
+uncomposited and 1.26:1 composited.
+
+The arithmetic models only colour alpha. An ancestor with `opacity` below 1, a
+`mix-blend-mode` other than `normal`, or a `filter` changes the painted colours in ways it
+does not model: report those as NEEDS_HUMAN with a screenshot path, never as a measured
+ratio.
 
 Report both colors and the ratio. Thresholds: 4.5:1 for body text, 3:1 for large
 text and for the boundary of a UI component.
@@ -337,7 +353,8 @@ const target = (sel) => hits(sel).map((el) => {
 });
 ```
 
-Minimum is 24x24 CSS px. Report the larger of the box and the probed hit area.
+Minimum is 24x24 CSS px. Report the larger of the box and the probed hit area. A target
+under that size can still pass through the spacing exception below.
 
 `hits(sel)`, never `all(sel)`, and judge against `hitW`/`hitH`, never against `w`/`h`.
 Unscoped and unfiltered, this exact probe reported 7 controls under 24x24 on a story that
@@ -362,24 +379,73 @@ Three traps this arithmetic already handles, and one it does not:
 - The walk is integer-pixel, so a fractional box can read 1px high. A result of
   24 or 25 needs the `w`/`h` box values checked before you call it a pass.
 
-## Console and network
+### Undersized targets: the SC 2.5.8 spacing exception
 
-Register before navigating; handlers attached after load see nothing.
+SC 2.5.8 passes a target under 24x24 when a 24 CSS px diameter circle centred on its
+bounding box intersects no other target and no other undersized target's circle. The
+criterion sets no fixed gap. The passing gap depends on the targets' own size: an 8 px
+gap leaves two 16x16 targets' centres 24 px apart, which passes, but two 10x10 targets
+only 18 px apart, which fails.
 
 ```js
-const errors = [], failed = [];
-page.on('console', (m) => m.type() === 'error' && errors.push(m.text()));
-page.on('pageerror', (e) => errors.push(String(e)));
-page.on('requestfailed', (r) => failed.push(`${r.failure()?.errorText} ${r.url()}`));
-page.on('response', (r) => r.status() >= 400 && failed.push(`${r.status()} ${r.url()}`));
-await tab.goto(url);
+const spacing = (sel) => {
+  const els = hits(sel), size = target(sel);
+  const box = els.map((el) => el.getBoundingClientRect());
+  const mid = (b) => [b.left + b.width / 2, b.top + b.height / 2];
+  const toBox = ([x, y], b) =>
+    Math.hypot(Math.max(b.left - x, 0, x - b.right), Math.max(b.top - y, 0, y - b.bottom));
+  const small = size.map((s) => s.hitW < 24 || s.hitH < 24);
+  const fails = [];
+  els.forEach((el, i) => {
+    if (!small[i]) return;
+    const c = mid(box[i]);
+    els.forEach((other, j) => {
+      if (i === j) return;
+      // another undersized target: the two circles meet; a full-size one: the circle reaches its box
+      const d = small[j] ? Math.hypot(c[0] - mid(box[j])[0], c[1] - mid(box[j])[1]) : toBox(c, box[j]);
+      if (d < (small[j] ? 24 : 12)) fails.push({ el: el.id || el.tagName, other: other.id || other.tagName, d: Math.round(d) });
+    });
+  });
+  return fails;
+};
 ```
 
-Both request handlers are needed and they catch different things. An HTTP error
-arrives on `response` with a status; a DNS failure, a blocked request, a CORS
-rejection, or a missing `file://` asset never gets a status and arrives only on
-`requestfailed`. Registering just one silently misses half the failures.
+Measured in Chromium: two 16x16 buttons with a 4 px gap failed at 20 px between centres,
+and a 16x16 button 8 px from a 24x24 button passed at 16 px from its centre to the other
+box. Run `spacing` over every interactive selector at once, because the exception is
+about neighbours. The equivalent, inline, user-agent, and essential exceptions are judged
+by reading the surface, not by this probe.
 
-`console` also carries browser-generated errors, not only `console.error` calls:
-a failed subresource shows up as `Failed to load resource: net::ERR_*`. Deduplicate
-against `failed` before reporting a count.
+## Console and network
+
+These run in the Eval cell, not inside `tab.evaluate`. The tab records diagnostics from
+the moment it opens and keeps them across navigations, so clear them to scope a count to
+one surface. `tab.clearConsole()` empties both `console()` and `errors()`;
+`tab.clearRequests()` empties `requests()`.
+
+```js
+await tab.clearConsole();
+await tab.clearRequests();
+await tab.goto(url);
+const errors = [
+  ...(await tab.console()).entries.filter((e) => e.level === 'error').map((e) => e.text),
+  ...(await tab.errors()).entries.filter((e) => e.type === 'pageerror').map((e) => e.text),
+];
+const failed = (await tab.requests())
+  .filter((r) => r.ok === false || r.failureText)
+  .map((r) => `${r.status ?? r.failureText} ${r.url}`);
+```
+
+An HTTP error comes back with a `status` and `ok: false`. A DNS failure, a blocked
+request, a CORS rejection, or a refused connection gets no status: it carries
+`failureText` in `requests()` and ALSO appears in `errors()` as `type: 'requestfailed'`.
+Take request failures from `requests()` once and filter `errors()` to `pageerror`, or
+every refused request counts twice. Measured in Chromium: a 404 image and a 404 fetch
+read `ok: false` with status 404; a request to port 1 read `failureText:
+net::ERR_UNSAFE_PORT` in `requests()` and again as `requestfailed` in `errors()`; and
+`console()` held only the page's own `console.*` calls, with no `Failed to load resource`
+lines to deduplicate.
+
+On a Tern-hosted tab `requests()` sees only fetch/XHR and navigation responses, so a
+broken image or stylesheet never shows up there. Open the review tab with
+`app: { tern: false }` when the failed-request count must cover subresources.

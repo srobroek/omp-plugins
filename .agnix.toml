@@ -48,11 +48,6 @@ paths = [
 ]
 disabled_rules = ["XML-001"]
 
-# OMP infers remote transport from url; these servers do not use stdio.
-[[overrides]]
-paths = ["design/.mcp.json"]
-disabled_rules = ["MCP-009"]
-
 # Multiline inline-code npm package names are not Claude @file imports.
 [[overrides]]
 paths = [

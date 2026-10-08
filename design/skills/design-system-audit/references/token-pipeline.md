@@ -1,10 +1,16 @@
 # Token engineering pipeline
 
-## What is canonical, decided
+## What is canonical
 
-Layered DTCG JSON under `tokens/**/*.json` is the canonical machine source. DESIGN.md is
-the authored intent and rationale artifact, and a linted projection of that source. It is
-NOT the compiler input.
+The project's existing token source and builder stay canonical. A Style Dictionary JSON
+set, a Tailwind config, CSS custom properties, or a native carrier from
+`skill://design-system-audit/references/token-carriers.md` is extended in place, never
+replaced unasked. Everything below is the default for a NEW pipeline the user has
+approved, or for a migration the user asked for.
+
+In that new pipeline, layered DTCG JSON under `tokens/**/*.json` is the machine source.
+DESIGN.md, in every project, is the authored intent and rationale artifact, and a linted
+projection of the source. It is NOT the compiler input.
 
 The reason is concrete. `npx --yes @google/design.md export "$(git rev-parse
 --show-toplevel)/DESIGN.md" --format dtcg` is lossy three ways:
@@ -49,15 +55,15 @@ for the opposite reason: a literal `<repo>` is shell redirection.
 | Colour and contrast maths | `colorjs.io` 0.7.1, no bin | MIT |
 | DESIGN.md lint, diff, export | `@google/design.md` 0.4.0, bins `design.md` and `designmd` | Apache-2.0 |
 
-Terrazzo is the build authority rather than Style Dictionary because it is DTCG-first,
-models resolver contexts so theme and density map natively onto selectors such as
-`[data-theme="dark"]`, emits a typed `.d.ts` whose `keyof Tokens` supplies the token-name
-union, and performs CSS Color 4 gamut mapping.
+For a new pipeline, Terrazzo is the build authority rather than Style Dictionary because it
+is DTCG-first, models resolver contexts so theme and density map natively onto selectors
+such as `[data-theme="dark"]`, emits a typed `.d.ts` whose `keyof Tokens` supplies the
+token-name union, and performs CSS Color 4 gamut mapping.
 
-Style Dictionary 5.5.2 (Apache-2.0) stays valid where a legacy Tokens Studio export or its
-broader platform formats already dominate; add `@tokens-studio/sd-transforms` 2.0.3 (MIT)
-and use `transformGroup: "tokens-studio"`. Never install both builders. Two engines means
-two artifact authorities, and then neither is authoritative.
+An existing Style Dictionary 5.5.2 (Apache-2.0) pipeline stays the build authority. Where
+it reads a Tokens Studio export, add `@tokens-studio/sd-transforms` 2.0.3 (MIT) and use
+`transformGroup: "tokens-studio"`. Never install both builders. Two engines means two
+artifact authorities, and then neither is authoritative.
 
 ## Source format
 

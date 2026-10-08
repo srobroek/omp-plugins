@@ -184,18 +184,6 @@
       "category": "development"
     },
     {
-      "name": "platform-design-skills",
-      "description": "Vendor design guidelines for iOS, iPadOS, macOS, watchOS, visionOS, tvOS, Android, and Web.",
-      "source": {
-        "source": "github",
-        "repo": "ehmo/platform-design-skills",
-        "ref": "main"
-      },
-      "version": "0.1.0",
-      "category": "development",
-      "license": "MIT"
-    },
-    {
       "name": "sniff",
       "description": "Portable code-smell auditing with analyzer preflight and adversarial review.",
       "source": {

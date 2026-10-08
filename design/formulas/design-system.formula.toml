@@ -182,6 +182,8 @@ semantic tiers reference foundation tokens rather than repeating their values.
 Author colours in the intended colour space and never pre-convert to sRGB, for
 example {"$type":"color","$value":{"colorSpace":"oklch","components":[0.62,0.16,250],"alpha":1}}.
 This layered source is canonical; DESIGN.md is a projection of it, authored later.
+Record on this bead the absolute path of the tokens/ directory you wrote, because
+every later token step runs against that path rather than the session cwd.
 """
 
 [[steps]]
@@ -192,8 +194,10 @@ needs = ["author-tokens"]
 labels = ["design", "phase:tokens"]
 description = """
 Run an independent schema gate over the authored source, separate from the build
-engine that consumes it:
-  find tokens -type f -name '*.json' -print0 | xargs -0 npx --yes --package=@design-token-kit/cli dtokens check --scope schema
+engine that consumes it. Set TOKENS_DIR to the tokens/ path author-tokens
+recorded, because a bare `find tokens` searches the session cwd and misses a
+source that lives inside {{scope}}:
+  find "${TOKENS_DIR:?}" -type f -name '*.json' -print0 | xargs -0 npx --yes --package=@design-token-kit/cli dtokens check --scope schema
 It exits 2 on findings. Fix the source, never the checker. A build that succeeds
 on malformed source has only hidden the problem one layer down, which is why this
 gate is its own bead and runs before any artifact is generated.
@@ -206,7 +210,8 @@ type = "task"
 needs = ["check-token-schema"]
 labels = ["design", "phase:tokens"]
 description = """
-Run: npx --yes --package=@terrazzo/cli tz build
+From the package directory that holds TOKENS_DIR and its terrazzo config, run:
+  npx --yes --package=@terrazzo/cli tz build
 Terrazzo is the single build authority. It emits CSS custom properties on :root,
 the per-theme and per-density selectors, and typed JS with a .d.ts whose
 keyof Tokens supplies the token-name union, so a bad token name fails typecheck.
@@ -370,6 +375,9 @@ Evidence order is fixed: ARIA snapshot first, computed styles second, screenshot
 last. Widths 1440, 768, 375. Walk the compositions, then the page itself. Every
 claim carries a named citation; an unwitnessed state is not verified. A reflow or
 target-size problem bonds mol-design-responsive onto this step.
+
+Then run npx --yes impeccable detect "{{surface}}" --json and record its JSON on
+this bead. CRITIQUE needs it, and design-critic has no shell to run it.
 """
 
 [steps.metadata]
@@ -384,13 +392,13 @@ labels = ["design", "phase:critique"]
 description = """
 Spawn design-critic (read-only) in the SAME parallel batch as
 audit-accessibility, never after it. Run skill://ui-review as critique on
-{{surface}} and on the primitive set. Add npx --yes impeccable detect "{{surface}}"
---json as a COARSE corroborating signal only: its findings carry "line": 0, so they
-are not located evidence and never substitute for driving the surface. Corroborate
-each entry by driving the surface and cite that location. Verdict PASS,
-PARTIAL, or FAIL with named evidence. Do not edit files, and do not question the
-user: the lead owns the conversation. A self-review by whoever built the system
-shares its blind spots.
+{{surface}} and on the primitive set. Brief it with the impeccable detect JSON that
+verify-surface recorded, as a COARSE corroborating signal only: its findings carry
+"line": 0, so they are not located evidence and never substitute for driving the
+surface. The critic corroborates each entry by driving the surface and cites that
+location. Verdict PASS, MINOR, or MAJOR with named evidence. Do not edit files, and
+do not question the user: the lead owns the conversation. A self-review by whoever
+built the system shares its blind spots.
 """
 
 [steps.metadata]
@@ -407,10 +415,10 @@ labels = ["design", "phase:critique"]
 description = """
 Spawn a11y-auditor (read-only) in the SAME parallel batch as critique-visual,
 never after it. Run skill://accessibility-audit on {{surface}} and on the
-primitive set. Verdict PASS, PARTIAL, or FAIL, and every finding carries its WCAG
-2.2 criterion number, the measured value, the required value, and the selector.
-Do not edit files, and do not question the user. A MAJOR verdict bonds
-mol-design-a11y onto this step.
+primitive set. Verdict PASS, MINOR, or MAJOR, where MAJOR means an A or AA
+criterion fails, and every finding carries its WCAG 2.2 criterion number, the
+measured value, the required value, and the selector. Do not edit files, and do
+not question the user. A MAJOR verdict bonds mol-design-a11y onto this step.
 """
 
 [steps.metadata]
@@ -425,7 +433,7 @@ type = "task"
 needs = ["critique-visual", "audit-accessibility"]
 labels = ["design", "phase:reconcile"]
 description = """
-Reconcile both verdicts yourself. Fix every FAIL and every agreed PARTIAL inside
+Reconcile both verdicts yourself. Fix every MAJOR finding and every agreed MINOR inside
 {{scope}}. A finding that traces to a token rather than a component is fixed in
 the token source and rebuilt, never patched in generated CSS. Re-verify only the
 changed assertion, never the whole walk, and leave a citation per re-run. Do not

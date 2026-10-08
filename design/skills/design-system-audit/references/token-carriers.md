@@ -1,14 +1,15 @@
 # Token Carriers by Ecosystem
 
-Search the config first, then the theme module, then raw declarations in stylesheets. A
-config no component imports is dead: confirm consumption before reporting a carrier.
+Search token directories first, then the config, then the theme module, then raw
+declarations in stylesheets. A config no component imports is dead: confirm consumption
+before reporting a carrier.
 
 ## CSS custom properties (any web stack)
 
 | What | Pattern |
 |---|---|
 | Carriers | `**/*.css`, `**/*.scss`, `**/*.less`, `**/globals.css`, `**/theme.css` |
-| Declarations | `^\s*--[a-z0-9-]+\s*:` |
+| Declarations | `^\s*--[A-Za-z0-9_-]+\s*:` |
 | Theme scopes | `:root`, `\[data-theme`, `\.dark`, `@media \(prefers-color-scheme` |
 | Consumption | `var\(--` |
 | Drift | `#[0-9a-fA-F]{3,8}` inside component files |
@@ -42,13 +43,20 @@ default, not a project token, until the config names it.
 Trap: the theme object is often partial and components fill the rest with literals inside
 template strings. Count the literals; a high count means PARTIAL, not PRESENT.
 
-## Design token JSON (DTCG, Style Dictionary)
+## Design token JSON (DTCG, Style Dictionary, Terrazzo)
 
 | What | Pattern |
 |---|---|
-| Carriers | `**/tokens*.json`, `**/*.tokens.json`, `style-dictionary.config.*`, `sd.config.*` |
+| Carriers | `**/tokens/**/*.json`, `**/tokens*.json`, `**/*.tokens.json`, `**/*.resolver.json` |
+| Builder configs | `style-dictionary.config.*`, `sd.config.*`, `terrazzo.config.*` |
 | Declarations | `"\$value"`, `"\$type"`, `"value"` with a sibling `"type"` |
-| Generated output | the config's `buildPath` / `platforms` block |
+| Generated output | the config's `buildPath` / `platforms` block, or Terrazzo's `outDir` |
+
+The first carrier glob is the one that matches a tiered layout such as
+`tokens/foundation.json` and `tokens/semantic.json`; the filename globs alone miss it,
+because neither filename contains `tokens`. A builder config names its sources itself:
+Style Dictionary's `source` array and Terrazzo's `tokens` array are carriers even when no
+glob above matches them.
 
 Trap: JSON is the source and the emitted CSS or TS is the output. Report the JSON as the
 carrier and name the generated artifact as derived; editing the output is overwritten.

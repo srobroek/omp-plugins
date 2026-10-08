@@ -1,8 +1,8 @@
 # External commands
 
-The canonical invocation for every external command this package names.
-`rule://design-tool-ladder` answers WHICH tool for WHICH job; this file answers exactly HOW
-to call it, and carries the caveats and side effects a bare command line does not show.
+The canonical invocation for every external command this package names, plus the phase map
+below that says which tool a design phase uses. This file answers WHICH tool for WHICH job and
+exactly HOW to call it, and carries the caveats and side effects a bare command line does not show.
 
 Any skill, formula, or agent that actually runs a command keeps that command inline, so its
 workflow stays self-contained without following a link. The same text therefore appears in
@@ -12,6 +12,7 @@ is the bug.
 ## Tool selection by design phase
 
 Use this phase map before choosing an invocation. Check components before assembled pages so failures stay local.
+Within VERIFY and CRITIQUE, collect evidence in a fixed order: one ARIA snapshot per pass first, computed styles second, screenshots last.
 
 | phase | OMP tool | evidence | prevents |
 |---|---|---|---|
@@ -36,7 +37,7 @@ These routes are selected by phase and called as tools, not spawned as processes
 `impeccable detect` is corroborating signal only: findings carry `line: 0` and require browser or computer confirmation. Screenshots never replace ARIA or computed-style evidence, and `browser` is for web surfaces while `computer` is for native desktop surfaces.
 
 Commands only. The `accessibility-scanner`, `storybook`, and `wire-dsl` MCP
-servers are routed by `rule://design-tool-ladder` and called as tools, not spawned as
+servers are selected by the phase map above and called as tools, not spawned as
 processes, so they carry no invocation to record here.
 
 ## Never infer a package from a bin name
@@ -100,9 +101,9 @@ harness `glob` tool, then pass each path as its own quoted argument.
 
 | bin | npm package | invocation | what it is for | when to use it rather than the alternative |
 |---|---|---|---|---|
-| `impeccable` | `impeccable` 3.6.0 | `npx --yes impeccable detect "<target>" --json` | coarse rendered-UI defect scan over 59 detector rules | corroborating signal only; never instead of driving the surface, because findings carry `"line": 0` |
+| `impeccable` | `impeccable` 4.5.0, the installed plugin version | `npx --yes impeccable detect "<target>" --json` | coarse rendered-UI defect scan over 59 detector rules | corroborating signal only; never instead of driving the surface, because findings carry `"line": 0` |
 | `test-storybook` | `@storybook/test-runner` 0.24.4 | `npx --yes --package=@storybook/test-runner test-storybook --url http://localhost:6006 --json --outputFile sb.json --failOnConsole` | executes every story as a test against a running dev server | prefer `vitest` on Vite-powered frameworks, where the Vitest addon supersedes this runner |
-| `axe` | `@axe-core/cli` 4.13.0 | `npx --yes --package=@axe-core/cli axe "<url>" --stdout --exit` | multi-URL accessibility gate that exits non-zero | only when a process exit is the requirement; the `accessibility-scanner` MCP is the primary route and puts no ChromeDriver in the path |
+| `axe` | `@axe-core/cli` 4.13.0 | `npx --yes --package=@axe-core/cli axe "<url>" --stdout --exit` | multi-URL accessibility gate that exits non-zero | only when a process exit is the requirement; the `accessibility-scanner` MCP is the primary route and puts no ChromeDriver in the path, though it still needs a local Google Chrome or `CHROME_PATH` |
 | `browser-driver-manager` | `browser-driver-manager` 2.0.1 | `npx --yes browser-driver-manager install chrome` | downloads a matched Chrome and ChromeDriver pair | it only downloads them. It puts neither on axe's path, so pass them yourself or the version skew it exists to prevent still happens. See the mapping below |
 | `motionlint` | `motionlint` 0.2.1 | `npx --yes motionlint audit "<url>" --json audit.json --ci` | primary motion measurement: duration scoring and a reduced-motion sweep | leads over reading CSS by hand, because it measures what shipped |
 | `playwright` | `playwright` 1.62.1 | `npx --yes playwright install chromium` | the one-time Chromium download MotionLint drives | first MotionLint run only |
@@ -134,7 +135,7 @@ accessibility failure.
 | `design.md` | same | `npx --yes @google/design.md diff "<before>" "<after>"` | review gate on a DESIGN.md edit; exits 1 when the after file carries more errors or warnings | use on every edit to an existing file, where `lint` alone cannot say whether the edit made it worse |
 | `design.md` | same | `npx --yes @google/design.md export "$(git rev-parse --show-toplevel)/DESIGN.md" --format dtcg` | one-time bootstrap of DTCG tokens for a repo that has none | the FILE argument is positional and required: without it the command prints usage and emits nothing. Never the compiler input, because the export is lossy, so layered `tokens/**/*.json` stays canonical. Writes to stdout, so a file needs redirection |
 | `dtokens` | `@design-token-kit/cli` 1.8.0 | `npx --yes --package=@design-token-kit/cli dtokens check --scope schema "<file>" ...` | independent DTCG schema gate; exits 2 on findings | runs BEFORE the build, because a build that succeeds on malformed source has only hidden the problem one layer down. It expands no glob, so enumerate the token files first and pass each as its own argument |
-| `tz` | `@terrazzo/cli` 2.7.1 | `npx --yes --package=@terrazzo/cli tz build` | the single build authority: CSS custom properties, theme and density selectors, typed JS with a `.d.ts` | never alongside a second builder. Two engines means two artifact authorities |
+| `tz` | `@terrazzo/cli` 2.7.1 | `npx --yes --package=@terrazzo/cli tz build` | the build authority for a new DTCG pipeline: CSS custom properties, theme and density selectors, typed JS with a `.d.ts` | only where no builder exists yet; a project that already builds with Style Dictionary or another tool keeps it. Never alongside a second builder: two engines means two artifact authorities |
 
 ## Storybook lifecycle
 
@@ -152,8 +153,8 @@ and no `--package` is needed.
 
 | bin | npm package | invocation | what it is for | when to use it rather than the alternative |
 |---|---|---|---|---|
-| `modern-web-guidance` | `modern-web-guidance` 0.0.185 | `npx --yes modern-web-guidance@latest search "<topic>"`, then `npx --yes modern-web-guidance@latest retrieve "<id,id>"` | current web-platform practice and baseline support, cited from the tool | prefer it over the `modern-web-guidance` plugin, because the CLI needs no install. `search` returns ids and `retrieve` takes them comma-separated; neither is a bare command. It needs network |
-| none | `wireloom` 0.7.0 | `npm install wireloom` | installs the renderer, which exports `parse` and `render` | a project dependency rather than an `npx` run, because the package ships a library and NO bin. Installing renders nothing: a script must call `render` and write the SVG. See the render step below |
+| `modern-web-guidance` | `modern-web-guidance` 0.0.193, npm latest on 2026-10-08 | `npx --yes modern-web-guidance@latest search "<topic>"`, then `npx --yes modern-web-guidance@latest retrieve "<id,id>"` | current web-platform practice and baseline support, cited from the tool | the CLI needs no plugin install, and the `modern-web-guidance` plugin runs this same CLI. `search` returns ids and `retrieve` takes them comma-separated; neither is a bare command. It needs network |
+| none | `wireloom`, unversioned: it follows whatever the project installs | `npm install wireloom` | installs the renderer, which exports `parse` and `render` | a project dependency rather than an `npx` run, because the package ships a library and NO bin. Installing renders nothing: a script must call `render` and write the SVG. See the render step below |
 | `python3` | none | `python3 -m http.server "<port>" --bind 127.0.0.1` | serves a prototype so it can be driven rather than read | always for an interactive artifact. `--bind 127.0.0.1` keeps it off the network |
 | `superdesign` | `@superdesign/cli` 0.13.0 | `npx --yes @superdesign/cli@latest create-project` | hosted concept exploration; the command prints the canvas URL | last resort, and only after the user confirms the account. With no subcommand it prints help and produces nothing. Run `login` first; `iterate-design-draft` continues an existing draft. Image and video generation consumes credits |
 
@@ -212,11 +213,11 @@ discarding it loses nothing.
 `storybook` writes a `*.log` into the caller's cwd on a crash or a debug run. Same
 treatment: a scratch cwd, or expect an untracked log beside the source.
 
-## Three upstream script paths that are not commands yet
+## Two upstream script paths that are not commands yet
 
-These three are documented by their upstreams as if they were runnable. Each carries a
-placeholder that never expands on its own, so each reaches the shell unexpanded and the
-lookup fails. Resolve the real installed directory FIRST, then substitute it.
+StyleSeed documents these two as if they were runnable. Each carries a placeholder that never
+expands on its own, so each reaches the shell unexpanded and the lookup fails. Resolve the
+real installed directory FIRST, then substitute it.
 
 ```
 <installed-ss-tokens>/scripts/generate-palette.mjs
@@ -226,13 +227,3 @@ lookup fails. Resolve the real installed directory FIRST, then substitute it.
 `${CLAUDE_PLUGIN_ROOT}` is substituted only into MCP `command`, `cwd`, `args`, and `env`,
 never into skill body text and never into the shell. The two StyleSeed forms are literal
 prose placeholders and were never variables at all.
-
-`search.py` also needs a POSITIONAL query, so the working form is a query string plus the
-flag:
-
-```
-python3 "<installed>/scripts/search.py" "<query>" --design-system
-```
-
-`--design-system` alone exits with `the following arguments are required: query`, which is a
-tool error and not an empty result. Never report it as "no findings".

@@ -175,9 +175,9 @@ Every colour comes from a token and every spacing value from the scale. Verify
 each component property against manifests/components.json or the component
 source before using it, including plausible-sounding ones such as shadow or
 size; a story name does not reflect a property name. Rename with lsp, never
-text substitution. Use skill://ui-microcopy for copy, skill://motion-design for
-motion, skill://platform-conformance for {{platform}} conventions. Bond
-mol-design-component onto this step for any primitive that needs its own bead.
+text substitution. Use skill://ui-microcopy for copy and skill://motion-design for
+motion. Bond mol-design-component onto this step for any primitive that needs its
+own bead.
 """
 
 [[steps]]
@@ -238,6 +238,9 @@ Verify at component level BEFORE page level, because a component-level failure
 is smaller and more precise to locate than a page-level one. Walk the stage-one
 components in isolation first, then the compositions, then {{surface}} itself.
 Every claim carries a named citation; an unwitnessed state is not verified.
+
+Then run npx --yes impeccable detect "{{surface}}" --json and record its JSON on
+this bead. CRITIQUE needs it, and design-critic has no shell to run it.
 """
 
 [steps.metadata]
@@ -252,13 +255,14 @@ labels = ["design", "phase:critique"]
 description = """
 Spawn design-critic (read-only) in the SAME parallel batch as
 audit-accessibility, never after it. Run skill://ui-review as critique on
-{{surface}}. Add npx --yes impeccable detect "{{surface}}" --json as a COARSE
-corroborating signal only: its findings carry "line": 0, so they are not located
-evidence and never substitute for driving the surface. Corroborate each entry by
-driving {{surface}} and cite that location. Verdict PASS, PARTIAL, or FAIL with named
-evidence. Do not edit files, and do not question the user: the lead owns the
-conversation. A self-review by whoever wrote the UI shares its blind spots,
-which is why this is a child rather than a self-check.
+{{surface}}. Brief it with the impeccable detect JSON that verify-surface
+recorded, as a COARSE corroborating signal only: its findings carry "line": 0, so
+they are not located evidence and never substitute for driving the surface. The
+critic corroborates each entry by driving {{surface}} and cites that location.
+Verdict PASS, MINOR, or MAJOR with named evidence. Do not edit files, and do not
+question the user: the lead owns the conversation. A self-review by whoever wrote
+the UI shares its blind spots, which is why this is a child rather than a
+self-check.
 """
 
 [steps.metadata]
@@ -275,9 +279,10 @@ labels = ["design", "phase:critique"]
 description = """
 Spawn a11y-auditor (read-only) in the SAME parallel batch as critique-visual,
 never after it. Run skill://accessibility-audit on {{surface}}. Verdict PASS,
-PARTIAL, or FAIL, and every finding carries its WCAG 2.2 criterion number, the
-measured value, the required value, and the selector. Do not edit files, and do
-not question the user. A MAJOR verdict bonds mol-design-a11y onto this step.
+MINOR, or MAJOR, where MAJOR means an A or AA criterion fails, and every finding
+carries its WCAG 2.2 criterion number, the measured value, the required value,
+and the selector. Do not edit files, and do not question the user. A MAJOR
+verdict bonds mol-design-a11y onto this step.
 """
 
 [steps.metadata]
@@ -292,10 +297,11 @@ type = "task"
 needs = ["critique-visual", "audit-accessibility"]
 labels = ["design", "phase:reconcile"]
 description = """
-Reconcile both verdicts yourself. Fix every FAIL and every agreed PARTIAL inside
-{{scope}}. Re-verify only the changed assertion, never the whole walk, and leave
-a citation per re-run. Do not accept a child verdict you cannot reproduce:
-report it as unreproduced rather than dropping it silently. Record findings on this step and resolve them before continuing.
+Reconcile both verdicts yourself. Fix every MAJOR finding and every agreed MINOR
+inside {{scope}}. Re-verify only the changed assertion, never the whole walk, and
+leave a citation per re-run. Do not accept a child verdict you cannot reproduce:
+report it as unreproduced rather than dropping it silently. Record findings on
+this step and resolve them before continuing.
 """
 
 [[steps]]

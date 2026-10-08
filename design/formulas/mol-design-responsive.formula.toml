@@ -70,14 +70,20 @@ meet it at 1440 and shrink below it at 375. Use skill://ui-review computed style
 for the measurement; a screenshot cannot give a CSS px box.
 
 Record per target: the selector or accessible name, the measured width and height
-in CSS px, and the required 24. Then apply the exceptions deliberately rather than
-by default, and claim each with its reason: spacing, where a 24 CSS px circle
-centred on the target overlaps no other target's circle; inline targets inside a
-sentence; a target whose size is set by the user agent and not modified; and an
-equivalent control elsewhere on the same page that does meet the minimum. Also
-record targets that pass 2.5.8 but sit under 44 by 44 CSS px, as a note rather
-than a failure: 2.5.5 Target Size (Enhanced) is AAA and is not what this pass
-gates on.
+of its effective hit area in CSS px, and the required 24. The hit area is the
+region that receives the pointer event, not the visible icon: padding, a
+pseudo-element, or an invisible extension of the control itself counts, and the
+WCAG Understanding document for 2.5.8 endorses enlarging the active area without
+enlarging the visible one. Measure it with the target probe in
+skill://ui-review/references/probes.md. Then apply the exceptions deliberately
+rather than by default, and claim each with its reason: spacing, where a 24 CSS px
+diameter circle centred on each undersized target's bounding box intersects no
+other target and no other undersized target's circle; inline targets inside a
+sentence; a target whose size is set by the user agent and not modified; an
+equivalent control elsewhere on the same page that does meet the minimum; and a
+presentation that is essential or legally required. Also record targets that pass
+2.5.8 but sit under 44 by 44 CSS px, as a note rather than a failure: 2.5.5 Target
+Size (Enhanced) is AAA and is not what this pass gates on.
 """
 
 [steps.metadata]
@@ -97,11 +103,11 @@ of a spacing token is fixed in the token source and rebuilt.
 
 Never fix reflow by hiding content at narrow widths, and never fix a target by
 removing it: both satisfy the measurement while removing the functionality the
-criterion exists to protect. Never fix a target-size failure with a transparent
-overlay that grows the hit area without growing the visible control unless the
-spacing exception genuinely applies, and record it as an exception when it does.
-Record per fix: the criterion number, the file changed, and the value the fix is
-expected to measure.
+criterion exists to protect. An enlarged hit area is a valid fix when the
+enlarged region belongs to the control and receives its pointer events. It
+fails when it overlaps another target, because then it steals that target's
+events. Record per fix: the criterion number, the file changed, and the value
+the fix is expected to measure.
 """
 
 [[steps]]

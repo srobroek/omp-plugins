@@ -53,14 +53,18 @@ whole current frontier as one batch, then wait.
 Establish, and record on this bead: which specific assertions the previous round
 got wrong, whether the miss is intent or execution, which of the three dials
 (variance, motion, density) moved and to what value, and what observable state
-counts as done this round. A change of intent is what earns an iteration; a
-change of execution belongs in the current molecule's findings step instead, so classify
-before revising. Read node {{node}} for the previous round's evidence rather than
-asking the user to restate it.
+counts as done this round. A change of intent is what earns an iteration. A
+change of execution earns none: it goes back to the reconcile-findings step of
+the molecule node {{node}} belongs to, so classify before revising. Read node
+{{node}} for the previous round's evidence rather than asking the user to restate
+it.
 
 Without explicit approval for changed intent, record the unanswered questions and
 leave this step unresolved, including unattended runs. Only bd gate resolve closes the gate.
 """
+
+[steps.metadata]
+execution_mode = "interactive"
 
 [steps.gate]
 type = "human"
@@ -73,11 +77,10 @@ type = "task"
 needs = ["regrill"]
 labels = ["design", "design:subprocess", "sub:iterate"]
 description = """
-Apply only the change REGRILL established. Use skill://ui-microcopy for copy,
-skill://motion-design for motion, skill://platform-conformance for platform
-conventions, and cite the token for every value. Touch nothing the previous round
-already got right: an unrequested improvement smuggled into an iteration is a
-change no one approved.
+Apply only the change REGRILL established. Use skill://ui-microcopy for copy and
+skill://motion-design for motion, and cite the token for every value. Touch nothing
+the previous round already got right: an unrequested improvement smuggled into an
+iteration is a change no one approved.
 
 Record on this bead what changed since round {{round}} minus one, file by file,
 and which assertions from node {{node}} that change invalidates. That list is the
@@ -99,6 +102,10 @@ proves nothing new.
 Evidence order is fixed: ARIA snapshot first, computed styles second, screenshot
 last. Widths 1440, 768, 375, and only for the assertions in scope. Verify at
 component level before page level. Cite each re-run.
+
+Then apply rule://design-upstream-preflight for the impeccable row, run
+npx --yes impeccable detect "{{surface}}" --json, and record its JSON on this bead.
+RECRITIQUE needs it, and design-critic has no shell to run it.
 """
 
 [steps.metadata]
@@ -113,14 +120,14 @@ labels = ["design", "design:subprocess", "sub:iterate"]
 description = """
 Spawn design-critic (read-only) in the SAME parallel batch as reaudit, never
 after it. Critique only what round {{round}} changed on {{surface}}, using
-skill://ui-review as critique. Apply rule://design-upstream-preflight for the impeccable
-row first, then add npx --yes impeccable detect "{{surface}}" --json as a
-COARSE corroborating signal only: its findings carry "line": 0, so they are not
-located evidence and never substitute for driving the surface. Corroborate each entry
-by driving {{surface}}. Brief it with the changed file paths, the route, the viewport
-widths, and the token paths: it shares no context with the lead.
+skill://ui-review as critique. Brief it with the impeccable detect JSON that
+reverify recorded, as a COARSE corroborating signal only: its findings carry
+"line": 0, so they are not located evidence and never substitute for driving the
+surface. The critic corroborates each entry by driving {{surface}}. Brief it with
+the changed file paths, the route, the viewport widths, and the token paths: it
+shares no context with the lead.
 
-Verdict PASS, PARTIAL, or FAIL with named evidence. Do not edit files, and do not
+Verdict PASS, MINOR, or MAJOR with named evidence. Do not edit files, and do not
 question the user.
 """
 
@@ -141,9 +148,9 @@ after it. Run skill://accessibility-audit over only what round {{round}} changed
 on {{surface}}. A revision can break a criterion the previous round passed, which
 is why this runs every round rather than once.
 
-Verdict PASS, PARTIAL, or FAIL, and every finding carries its WCAG 2.2 criterion
-number, the measured value, the required value, and the selector. Do not edit
-files, and do not question the user.
+Verdict PASS, MINOR, or MAJOR, where MAJOR means an A or AA criterion fails, and
+every finding carries its WCAG 2.2 criterion number, the measured value, the
+required value, and the selector. Do not edit files, and do not question the user.
 """
 
 [steps.metadata]

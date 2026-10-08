@@ -1,11 +1,12 @@
 # Upstream routes for design-system-audit
 
-Each upstream installs from its author's marketplace through
-`rule://design-upstream-preflight`, when the chosen route needs it. Nothing here
-arrives as a dependency of `@srobroek/design`.
+The carrier inventory in the skill is the audit. StyleSeed is an optional second opinion,
+taken only when the user asks for it or approves it, and it installs from its author's
+marketplace through `rule://design-upstream-preflight`. Nothing here arrives as a
+dependency of `@srobroek/design`.
 
 The table routes by TASK, because StyleSeed splits generating a system from auditing one
-and says so itself. This skill audits, so `ss-lint` and `ss-review` are its first routes.
+and says so itself.
 
 | Upstream skill | Task it owns | Repo | Install |
 |---|---|---|---|
@@ -14,8 +15,8 @@ and says so itself. This skill audits, so `ss-lint` and `ss-review` are its firs
 | `ss-tokens` | Generating an accessible semantic palette from a key color; viewing, adding, and modifying tokens | `bitjaru/styleseed` | same entry |
 | `ss-score` | Validating the StyleSeed artifact contract, with file and line evidence | `bitjaru/styleseed` | same entry |
 
-All four `ss-*` routes ship in the one `styleseed` entry, so adding `ss-lint` and
-`ss-review` changes no install command. The cost is paid once.
+All four ship in the one `styleseed` entry, which installs 23 `ss-*` skills in total. Every
+one of them adds its description to every later session, which is why the route is opt-in.
 
 ## Why the routes split by task
 
@@ -25,36 +26,20 @@ section says:
 
 > For finding token violations in existing code -> use /ss-lint
 
-Routing this skill's audit to `ss-tokens` therefore hands the job to a generator that
-declines it in writing. `ss-lint` is "Quick automated lint - detects common design system
-violations in seconds" and `ss-review` is "Review UI code for design system compliance".
-Those two are the audit. `ss-tokens` is what runs afterwards, once the user has approved a
-new or extended system, which is the gate in the skill body.
+Routing an audit to `ss-tokens` therefore hands the job to a generator that declines it in
+writing. `ss-lint` is "Quick automated lint - detects common design system violations in
+seconds" and `ss-review` is "Review UI code for design system compliance". Those two are
+StyleSeed's audit. `ss-tokens` is what runs afterwards, once the user has approved a new or
+extended system, which is the gate in the skill body.
 
-## The `${CLAUDE_PLUGIN_ROOT}` trap
+## Script paths
 
+StyleSeed documents `<installed-ss-tokens>/scripts/generate-palette.mjs` and
+`<installed-ss-score>/scripts/styleseed-check.mjs` as if they were runnable. Both are prose
+placeholders that never expand. Resolve the install path the preflight reports first;
+`skill://ui-review/references/tools.md` holds the working forms.
 
-```
-```
-
-That variable is substituted only into MCP `command`, `cwd`, `args`, and `env`. It is
-never substituted into skill body text and never into a shell command, so the literal
-string reaches the shell and the lookup fails with no such file.
-
-Resolve the installed plugin directory first, then run the script from that real path. It
-also needs a POSITIONAL query, so the working form is:
-
-```
-python3 "<installed>/scripts/search.py" "<query>" --design-system
-```
-
-The script is Python 3 with no external dependencies and needs no network, so confirm
-`python3` is present before relying on catalog lookups. The same trap binds the two
-StyleSeed script paths, `<installed-ss-tokens>/scripts/generate-palette.mjs` and
-`<installed-ss-score>/scripts/styleseed-check.mjs`, which were never variables at all;
-`skill://ui-review/references/tools.md` collects all three.
-
-## Why these three and not others
+## Why these four and not others
 
 `ss-a11y` and `ss-copy` are displaced: accessibility belongs to
 `skill://accessibility-audit` and copy to `skill://ui-microcopy`. `design-token` from

@@ -26,7 +26,7 @@ Both installation methods take effect in the next session. OMP discovers plugins
 
 ## Usage
 
-In that next session, OMP loads eleven skills and lists six rules. For interface
+In that next session, OMP loads eight skills and lists five rules. For interface
 work, spawn `ui-ux-specialist`. Confirm the package registered:
 
 ```bash
@@ -43,15 +43,13 @@ The copy skill is implemented locally as `ui-microcopy`, which includes the merg
 
 | Skill | Implementation or route | Use when |
 |---|---|---|
-| `design-system-audit` | routes to `ss-lint` and `ss-review` to audit, `ss-tokens` to generate, plus `ss-score` | Report the tokens, scales, and primitives that exist |
-| `design-overview` | local | Report which design skills, agents, and upstreams this session actually has |
-| `design-md` | routes to `create-design-md`, which needs a repository or URL to extract from | Author and lint repo-root DESIGN.md |
+| `design-system-audit` | local token-carrier inventory with `file:line` evidence; `styleseed` (`ss-lint`, `ss-review`, `ss-tokens`, `ss-score`) only when the user opts in | Report the tokens, scales, and primitives that exist |
+| `design-md` | routes extraction to `create-design-md`, which needs a repository or URL to extract from | Lint and gate the extracted repo-root DESIGN.md |
 | `ui-review` | local, drives OMP `browser` | Drive a real surface and measure it |
 | `accessibility-audit` | the `accessibility-scanner` server measures; `accessibility` covers criteria; the `@axe-core/cli` gate is the fallback | Check WCAG 2.2 AA with measured values |
-| `platform-conformance` | routes to eight `*-design-guidelines` and `modern-web-guidance` | Check vendor conventions per platform |
 | `motion-design` | the `motionlint` CLI measures; `ss-motion` authors React `motion.X` only | Set durations, easings, reduced-motion branches |
 | `ui-microcopy` | local, with merged UX-copy guidance | Write and review interface copy, errors, empty states, and CTAs |
-| `design-prototype` | routes by fidelity to five upstreams and two servers | Produce a wireframe, prototype, mockup, or deck |
+| `design-prototype` | routes by fidelity to five upstreams, the `wire-dsl` server, and built-in tools | Produce a wireframe, prototype, mockup, or deck |
 | `wireloom` | vendored, MIT | Render a wireframe as inline SVG inside Markdown |
 
 ## Agents
@@ -104,7 +102,6 @@ Verify components first. Then verify pages. Do not use page-first development.
 
 | Rule | Use when |
 |---|---|
-| `design-tool-ladder` | Choosing a tool per phase, and the evidence it produces |
 | `design-token-discipline` | Taking colors and spacing from tokens; a new scale needs approval |
 | `design-evidence` | Naming the evidence behind a UI claim |
 | `design-no-slop` | Avoiding generated-UI tells |
@@ -113,7 +110,8 @@ Verify components first. Then verify pages. Do not use page-first development.
 
 ## Token pipeline
 
-Layered DTCG under `tokens/**/*.json` is the canonical machine source. DESIGN.md holds
+The project's existing token source and builder stay canonical. For a new pipeline the
+user approves, layered DTCG under `tokens/**/*.json` is the machine source. DESIGN.md holds
 authored intent and a linted projection of that source.
 Write the DESIGN.md projection only when requested. Otherwise keep the system
 contract and verification evidence on the work beads.
@@ -134,14 +132,32 @@ provides the `design.md` and `designmd` bins. The last two commands need `--pack
 a bare `dtokens` resolves an unrelated package, and a bare `tz` resolves a package with no bin.
 `dtokens` expands no glob, so enumerate the token files and pass each as its own argument.
 
-Terrazzo is the single build authority. Do not add a second token builder.
+In a new pipeline, Terrazzo is the single build authority; an existing Style Dictionary
+pipeline keeps that role. Do not add a second token builder.
 See `skills/design-system-audit/references/token-pipeline.md`.
 
 ## Storybook
 
-OMP names the marketplace entry `design:storybook`. It stays disabled. The
-configuration below adds a separate native server named `storybook`. Add it to
-`.omp/mcp.json` for one project or to `~/.omp/agent/mcp.json` for your user:
+The Storybook MCP server is opt-in on both harnesses, because it points at
+`http://localhost:6006/mcp` and most projects run no Storybook.
+
+On an OMP marketplace install, the package manifest declares it disabled, under the
+runtime key `design:storybook`. Enable it in the user file for the active profile:
+`~/.omp/agent/mcp.json` for the default profile, or
+`~/.omp/profiles/<name>/agent/mcp.json` for a named profile. The loader documentation says
+`enabledServers` can force-enable a same-named disabled entry, and accepts `:` in runtime
+names:
+
+```json
+{
+  "enabledServers": ["design:storybook"]
+}
+```
+
+Or add a separate native server named `storybook`, to `.omp/mcp.json` for one project or
+to `~/.omp/agent/mcp.json` for your user. Use one of the two, never both. A linked
+checkout (`omp plugin link`) reads the package's `.mcp.json` rather than the manifest, and
+that file declares no Storybook server, so a linked install takes this route:
 
 ```json
 {
@@ -154,28 +170,12 @@ configuration below adds a separate native server named `storybook`. Add it to
 }
 ```
 
-Put one override below in the user file for the active profile. Use `~/.omp/agent/mcp.json` for the default profile or `~/.omp/profiles/<name>/agent/mcp.json` for a named profile.
+On Claude Code, the package's `.mcp.json` declares no Storybook server, because an entry
+there would make every session try `localhost:6006`. Add it for a project that runs
+Storybook:
 
-The next two active-profile snippets are alternatives to the native entry above and to each other. Use only the snippet for the carrier that supplies the disabled server. Do not combine them.
-
-### OMP package mirror (`design/.mcp.json`)
-
-Use the bare key declared by the package mirror:
-
-```json
-{
-  "enabledServers": ["storybook"]
-}
-```
-
-### Marketplace entry (`design:storybook`)
-
-Use `design:storybook`, the marketplace runtime key named above. The loader documentation says `enabledServers` can force-enable a same-named disabled entry. The same contract accepts `:` in runtime names:
-
-```json
-{
-  "enabledServers": ["design:storybook"]
-}
+```bash
+claude mcp add --transport http storybook http://localhost:6006/mcp
 ```
 
 Storybook documents ten frameworks:
@@ -228,7 +228,6 @@ bondable formulas take it.
 | `design-surface` | 15 | 3 | Building a new surface with full staging |
 | `design-system` | 22 | 3 | Establishing or rebuilding a design system |
 | `mol-design-iterate` | 6 | 2 | Running another round after an intent change |
-| `mol-design-fix-findings` | 4 | 0 | Working the critique and accessibility findings |
 | `mol-design-component` | 4 | 0 | Building one primitive to full state coverage |
 | `mol-design-tokens` | 5 | 1 | Establishing or migrating a token system |
 | `mol-design-a11y` | 4 | 0 | Remediating after a MAJOR accessibility verdict |
@@ -262,16 +261,14 @@ Use the first-choice asset for each topic:
 | Topic | First choice |
 |---|---|
 | Design workflow and anti-slop | `impeccable`; its detector is a coarse signal, not located evidence |
-| Design system and tokens | `ss-tokens` |
+| Design system and tokens | `design-system-audit`, the local carrier inventory; `ss-tokens` generates only after the user approves a new system |
 | DESIGN.md artifact | `create-design-md` |
 | Accessibility, web | `accessibility` |
-| Platform conformance | the eight `ehmo` `*-design-guidelines` |
-| Motion | `ss-motion` |
+| Motion | `motion-design`, measured by `motionlint`; `ss-motion` only for React `motion.X` |
 | Microcopy | `ui-microcopy` |
 | Wireframing | `html-wireframe`, `wireloom` |
 | Clickable prototyping | `html-prototype` |
 | Current web practice | `modern-web-guidance` |
-| Microcopy | `ui-microcopy` |
 | Browser-driven verification | `ui-review`, on OMP `browser` |
 
 The detector claims 59 executable rules. A fixture probe with about ten seeded defects recorded:
@@ -287,12 +284,11 @@ The detector claims 59 executable rules. A fixture probe with about ten seeded d
 Treat each finding as a coarse signal. Corroborate it by driving the surface.
 It is never located evidence or a substitute for driving the surface.
 
-No skill routes to these two `impeccable` commands:
+No skill routes to this `impeccable` command:
 
-- `clarify` omits four outputs that `ui-microcopy` provides:
+- `clarify` omits three outputs that `ui-microcopy` provides:
   - an onboarding surface
   - tone-tagged alternatives
-  - a requester checklist
   - a tone map
 
 A second asset joins a first choice only when its output stands alone.
@@ -314,8 +310,8 @@ package installs none of them. When a design skill, agent, or formula starts, it
 reaches, from the author's own marketplace, and probes each prerequisite:
 
 ```bash
-omp plugin marketplace add bitjaru/styleseed
-omp plugin install styleseed@styleseed
+omp plugin marketplace add pbakaus/impeccable
+omp plugin install impeccable@impeccable
 ```
 
 | Install address | Upstream repo | Brings |
@@ -324,30 +320,29 @@ omp plugin install styleseed@styleseed
 | `styleseed@styleseed` | `bitjaru/styleseed` | `ss-lint`, `ss-review`, `ss-tokens`, `ss-motion`, `ss-score`, and 18 more |
 | `web-quality-skills@addy-web-quality-skills` | `addyosmani/web-quality-skills` | `accessibility`, and 5 more |
 | `plannotator-effective-html@effective-html` | `plannotator/effective-html` | `html-wireframe`, `html-prototype`, and 4 more |
-| `modern-web-guidance@googlechrome` | `GoogleChrome/modern-web-guidance` | `modern-web-guidance`, `chrome-extensions` |
 | `frontend-slides@frontend-slides` | `zarazhangrui/frontend-slides` | `frontend-slides` |
 | `web-asset-generator@web-asset-generator-marketplace` | `alonw0/web-asset-generator` | `web-asset-generator` |
 | `superdesign@superdesign` | `superdesigndev/superdesign-skill` | `superdesign`, installed only after the user confirms the account |
 | `ui-skills@srobroek-omp` | `ibelick/ui-skills` | `create-design-md`, and 6 more |
-| `platform-design-skills@srobroek-omp` | `ehmo/platform-design-skills` | the eight `*-design-guidelines` |
 
-Two rows install through this catalog. Neither upstream ships a marketplace or plugin
-manifest: `ibelick/ui-skills` carries an Astro site's `package.json`, and
-`ehmo/platform-design-skills` carries only `skills/`. A direct git install of the latter
-fails with `package.json not found`. Every other upstream installs from its author, so a
-new upstream release needs no catalog change here.
+One row installs through this catalog, because its upstream ships no marketplace or plugin
+manifest: the `package.json` in `ibelick/ui-skills` builds the project's Astro site and
+publishes its `ui-skills` npm CLI, and declares no plugin. Every other upstream installs
+from its author, so a new upstream release needs no catalog change here.
 
 OMP discovers skills at session start. A plugin the preflight installs mid-session is not
 reachable through `skill://` until the next session, so the preflight reads its SKILL.md
 from the `installPath` that `omp plugin list --json` reports.
 
-Skill granularity is the whole plugin, so an install arrives whole. `styleseed` ships all
-23 `ss-*` skills twice, under `skills/` and again under `engine/.claude/skills/`. Name
-collisions resolve first-wins without a diagnostic.
+Skill granularity is the whole plugin, so an install arrives whole: `styleseed` adds all 23
+`ss-*` skill descriptions to every later session, and its tree carries a second copy under
+`engine/.claude/skills/`. When two discovered skills share a name, OMP keeps the
+higher-precedence copy under the bare name, drops a copy whose body and frontmatter are
+identical, and lists a differing copy under a namespaced alias with a collision warning.
 
 | Prerequisite | Entry |
 |---|---|
-| Node and `npx` | `impeccable detect`, `styleseed` scripts, `modern-web-guidance` |
+| Node and `npx` | `impeccable detect`, `styleseed` scripts |
 | Pillow, through `uv run --with pillow` when absent | `web-asset-generator` |
 | `python-pptx`, for PPT conversion only | `frontend-slides` |
 | Account, and credits for media | `superdesign` |
@@ -371,7 +366,7 @@ no catalog entry makes discoverable.
 |---|---|
 | `accessibility-scanner` | axe-core WCAG 2.2 engine, contrast over gradients, fix links |
 | `wire-dsl` | Wire DSL rendered to SVG, PNG, and PDF |
-| `storybook` | If Storybook ran at session start: seven tools over the CSF index |
+| `storybook` | Opt-in. Once enabled, and if Storybook ran at session start: seven tools over the CSF index |
 
 ## CLI packages these skills invoke
 
@@ -413,7 +408,6 @@ invocations, the `--package` rule, and required output flags.
 | `fixing-metadata` | Audits metadata that nothing else covers, but emits no located finding. `web-asset-generator` produces the assets |
 | `LE-VAI/designesy-org` | MIT. Its output gives a URL only, with no selector or source line |
 | `canvas-design` | `xd://generate_image` already covers its raster output |
-| `design-token`, `ux-writing` | `ss-tokens` and `ui-microcopy` cover these |
 | `lighthouse-mcp`, `motionlint mcp` | Each duplicates a CLI above |
 | `culori` | Duplicates `colorjs.io` |
 | `penpot/penpot-mcp`, Figma Dev Mode MCP | Neither tool is in use here |

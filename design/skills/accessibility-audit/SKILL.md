@@ -10,24 +10,26 @@ Phase CRITIQUE. Measure against WCAG 2.2 level AA and report values, not opinion
 TRIGGER
 + "is this accessible", "check accessibility", "WCAG", "screen reader"
 - general visual or UX quality -> `ui-review`
-- vendor platform conventions -> `platform-conformance`
 - error and empty-state wording -> `ui-microcopy`
 
 ## Workflow
 
 1. Report MCP status before routing: say whether `accessibility-scanner` is connected and identify the server-reported axe-core engine and ruleset versions. Never infer those versions from this skill or its package declaration. -> the status and chosen route are named in the report header.
    - PRIMARY measurement, any web surface: the `accessibility-scanner` MCP server, which
-     this package declares at a pinned version. It scrolls before scanning so lazy content
-     is covered, resolves contrast over gradients, and returns a selector, a criterion, and
-     a fix link. If the server does not report its engine or ruleset, record them as unknown
-     and do not claim WCAG 2.2 coverage.
+     this package declares at a pinned version. Call it by writing `{"url": "..."}` to
+     `xd://mcp__design_accessibility_scanner_scan_accessibility`. It scrolls before scanning
+     so lazy content is covered, resolves contrast over gradients, and returns a selector, a
+     criterion, and a fix link. It drives a locally installed Google Chrome, or the browser
+     `CHROME_PATH` names: with neither, the scan tests nothing, and that is an environment
+     blocker to report, never a pass. If the server does not report its engine or ruleset,
+     record them as unknown and do not claim WCAG 2.2 coverage.
    - SOURCE-ONLY fallback, when MCP is unavailable: inspect the source and report every
      criterion as UNTESTED unless independently exercised on a reachable surface. This route
      is untested measurement evidence; it cannot produce a PASS or replace the rendered audit.
    - web surface, for the criteria coverage and the audit's substance: upstream skill
      `accessibility`.
-   - native surface: the matching `ehmo` platform skill via `skill://platform-conformance`,
-     which carries each platform's own accessibility guidance.
+   - native surface: no upstream skill is routed. Measure through `computer` and the OS
+     accessibility tree with `skill://ui-review`, and report platform guidance as untested.
    - FALLBACK, and only for a multi-URL CI gate:
      `npx --yes --package=@axe-core/cli axe "<url>" --stdout --exit`. It accepts more than one
      quoted URL, JSON node targets, `--include` and `--exclude`, and exits non-zero,
@@ -46,20 +48,22 @@ TRIGGER
      Quote every substituted URL: a query string carries `&` and `?`, which an unquoted
      argument hands to the shell. The bin is `axe`, not the package name, so pass `--package`.
 2. Apply `rule://design-upstream-preflight` for the routed skill BEFORE loading it: the
-   `accessibility` row, plus the platform row on a native surface. -> installed, and loaded
-   via `skill://` or, when installed this session, from its install path. Install refused
-   or failed: do NOT improvise. A thin substitute audit is worse than none, because its
+   `accessibility` row on a web surface. -> installed, and loaded via `skill://` or, when
+   installed this session, from its install path. Install refused or failed: do NOT
+   improvise. A thin substitute audit is worse than none, because its
    verdict reads exactly like the real one. Report the gap. The `accessibility-scanner` MCP
-   server above needs no install and, when connected, is the primary measurement route, so
-   measurement continues without the upstream. The upstream's criteria coverage does not:
-   do not improvise it.
+   server above needs no plugin install, only Chrome, and when connected it is the primary
+   measurement route, so measurement continues without the upstream. The upstream's
+   criteria coverage does not: do not improvise it.
    Bound that continuation: both no-install routes are WEB-ONLY and cover only a runnable
    URL. Neither substitutes for source review, for a manual keyboard walkthrough, or for
-   native-platform guidance. On a NATIVE surface with the `ehmo` skill absent, nothing
-   substitutes: STOP, report, and ask.
+   native-platform guidance.
 3. Measure on the live surface with `skill://ui-review`: `tab.ariaSnapshot()` for roles and
    accessible names, `tab.evaluate` for computed colors and target boxes, `tab.press` for
    focus order and traps. -> every finding carries a measured value and a required value.
+
+Route provenance, licences, and the axe CLI caveats in full:
+`skill://accessibility-audit/references/upstream.md`.
 
 ## Rules
 
@@ -76,7 +80,8 @@ NOT Pass a surface on markup alone, or cite a criterion number you did not test.
 NOT Use the axe CLI for interactive investigation, or the MCP scanner as an exit gate.
 
 OUTPUT
-L1 VERDICT: PASS | MINOR | MAJOR -- route used, one sentence why.
-   Findings -- criterion number, location, measured value, required value, fix.
+L1 VERDICT: PASS | MINOR | MAJOR -- route used, one sentence why. MAJOR when any A or AA
+   criterion fails; MINOR when only AAA, policy, or best-practice findings remain.
+   Findings -- criterion number and level, location, measured value, required value, fix.
    Untested -- criteria not exercised, with the blocker.
 CAP 120w clean · 280w with findings

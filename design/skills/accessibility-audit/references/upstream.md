@@ -1,13 +1,12 @@
 # Upstream routes for accessibility-audit
 
 The primary measurement route is not a skill at all: it is the `accessibility-scanner` MCP
-server this package declares. The upstream skills below carry the criteria coverage and the
-platform guidance that a scanner does not.
+server this package declares. The upstream skill below carries the criteria coverage that a
+scanner does not.
 
 | Upstream skill | Repo | Install |
 |---|---|---|
 | `accessibility` | `addyosmani/web-quality-skills` | `web-quality-skills@addy-web-quality-skills`, via `rule://design-upstream-preflight` |
-| the eight `*-design-guidelines` | `ehmo/platform-design-skills` | `platform-design-skills@srobroek-omp`, via `rule://design-upstream-preflight` |
 
 `web-quality-skills` is MIT with a LICENSE file (Copyright 2026 Addy Osmani). Because
 skill granularity is the whole plugin, it also installs `best-practices`,
@@ -17,11 +16,13 @@ tooling rather than design routes, and no wrapper here routes to them.
 ## Routes that need no skill
 
 The `accessibility-scanner` MCP server ships declared in this package's
-`.omp-plugin/plugin.json`, so it needs no install, and it is the PRIMARY measurement route.
-It runs axe-core in-process, so no ChromeDriver and no separate browser binary sit in the
-path, which removes the only failure mode that stopped the CLI below. It connects at
-session startup only: a server unreachable when the session began stays unreachable until
-the user runs `/mcp reconnect accessibility-scanner`. An agent cannot reconnect it.
+`.omp-plugin/plugin.json`, so it needs no plugin install, and it is the PRIMARY measurement
+route. It runs axe-core in a real browser: its own tool description reads "Requires Google
+Chrome installed locally (or set the CHROME_PATH environment variable)". What it removes is
+the ChromeDriver version pairing that stopped the CLI below, not the browser. With no Chrome
+and no `CHROME_PATH`, a scan tests nothing. It connects at session startup only: a server
+unreachable when the session began stays unreachable until the user runs
+`/mcp reconnect accessibility-scanner`. An agent cannot reconnect it.
 
 The axe CLI is the documented FALLBACK, for a multi-URL CI gate only. It needs no install
 either: `npx --yes` resolves it on demand and caches it. Pass `--package`, because the bin is named

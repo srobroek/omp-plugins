@@ -9,18 +9,19 @@ MUST Style one primary action per view. A second button using the primary varian
 MUST Give each heading a distinct job. A heading that restates the paragraph below it is a miss.
 MUST Set a typeface explicitly. The default web stack chosen by omission is a miss.
 
-NOT Decorative glassmorphism, glow borders, or blur-on-card chrome.
-NOT Cyan-on-dark palettes with purple gradients.
-NOT Gradient text on headings or metrics.
-NOT Uniform card grids of icon-heading-text.
-NOT Nested cards.
-NOT Large rounded icons above every heading.
-NOT Hero metric layouts (big number, small label, three-up).
-NOT Uniform spacing with no rhythm (every gap the same token).
-NOT Centering every block on the page.
-NOT Modals as the default disclosure when an inline, popover, or page works.
-NOT Pure `#000` or `#fff` instead of tinted neutrals.
-NOT Bounce or elastic easing.
+DEFAULT Treat every tell below as a finding unless the project's approved tokens, its DESIGN.md, or the brief sanctions that choice. A token set that defines pure `#fff`, or an approved metric layout, is the system, not slop.
+DEFAULT Avoid decorative glassmorphism, glow borders, or blur-on-card chrome.
+DEFAULT Avoid cyan-on-dark palettes with purple gradients.
+DEFAULT Avoid gradient text on headings or metrics.
+DEFAULT Avoid uniform card grids of icon-heading-text.
+DEFAULT Avoid nested cards.
+DEFAULT Avoid large rounded icons above every heading.
+DEFAULT Avoid hero metric layouts (big number, small label, three-up).
+DEFAULT Avoid uniform spacing with no rhythm (every gap the same token).
+DEFAULT Avoid centering every block on the page.
+DEFAULT Avoid modals as the default disclosure when an inline, popover, or page works.
+DEFAULT Avoid pure `#000` or `#fff` instead of tinted neutrals.
+DEFAULT Avoid bounce or elastic easing.
 
 | situation | choice |
 |---|---|

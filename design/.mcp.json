@@ -13,10 +13,6 @@
         "-y",
         "@wire-dsl/mcp-server@0.1.3"
       ]
-    },
-    "storybook": {
-      "url": "http://localhost:6006/mcp",
-      "enabled": false
     }
   }
 }

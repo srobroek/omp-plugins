@@ -22,16 +22,19 @@ Before acting, apply `rule://design-upstream-preflight` for the routes this task
    `composer.json`, or `app.json` plus a `react-native` dependency. Keep the token file
    paths; every child you brief needs them.
 2. GATE INTENT. Put the intent questions to the user through your caller: you have no
-   `ask` tool. Yield `VERDICT: BLOCKED -- awaiting intent answers` with each question
-   numbered and your recommended answer beside it, the whole current frontier in ONE
-   batch, then resume when the caller messages you the answers. A
-   question that depends on another still-open question belongs to a later round. Establish:
-   product type; audience and usage context; style keywords; the detected stack, confirmed
-   rather than assumed; scope edges; the observable state that counts as done; and three
-   1-10 dials, `variance` (centred and minimal through bold and asymmetric), `motion`
-   (subtle micro-interactions through complex choreography), `density` (spacious through
-   dense dashboard). When the audit returned ABSENT or PARTIAL, also ask whether the user
-   approves establishing a scale, because that is a system decision you must not take alone.
+   `ask` tool. Ask only what the request, the brief, and GROUND leave open: a value the
+   request already specifies is recorded as given and never asked again. With every item
+   below answered that way, record them and continue without yielding. Otherwise yield
+   `VERDICT: BLOCKED -- awaiting intent answers` with each open question numbered and your
+   recommended answer beside it, the whole current frontier in ONE batch, then resume when
+   the caller messages you the answers. A question that depends on another still-open
+   question belongs to a later round. Establish: product type; audience and usage context;
+   style keywords; the detected stack, confirmed rather than assumed; scope edges; the
+   observable state that counts as done; and three 1-10 dials, `variance` (centred and
+   minimal through bold and asymmetric), `motion` (subtle micro-interactions through
+   complex choreography), `density` (spacious through dense dashboard). When the audit
+   returned ABSENT or PARTIAL, also ask whether the user approves establishing a scale,
+   because that is a system decision you must not take alone.
 3. SPECIFY. State intent, constraints, and applicable states on the work bead.
    Write `DESIGN.md` via `skill://design-md` only when requested and available;
    missing requested tooling requires approval to omit the artifact.

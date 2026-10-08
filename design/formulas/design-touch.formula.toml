@@ -97,9 +97,8 @@ Implement the touch inside {{scope}}. Enumerate default, hover, focus-visible,
 active, disabled, loading, empty, error, selected. Implement and verify every
 applicable state; record N/A with a component-specific reason for the others.
 Every colour comes from a token and every spacing value from the scale. Rename tokens and
-components with lsp, never text substitution. Use skill://ui-microcopy for copy,
-skill://motion-design for motion, skill://platform-conformance for {{platform}}
-conventions.
+components with lsp, never text substitution. Use skill://ui-microcopy for copy and
+skill://motion-design for motion.
 """
 
 [[steps]]
@@ -145,15 +144,17 @@ needs = ["verify-surface"]
 labels = ["design", "phase:critique"]
 description = """
 One read-only review pass over {{surface}}, because a single-component touch does
-not earn two parallel reviewers. Run skill://ui-review as critique, then
-skill://accessibility-audit for WCAG 2.2 AA. Emit two separate verdicts, each
-PASS, PARTIAL, or FAIL with named ARIA or computed-style evidence, so a visual
-PASS never launders an accessibility FAIL. Do not edit files here. A MAJOR
-accessibility finding bonds mol-design-a11y onto this step.
+not earn two parallel reviewers. Spawn a11y-auditor (read-only) with the combined
+review brief: skill://accessibility-audit for WCAG 2.2 AA, then skill://ui-review
+as critique against rule://design-no-slop. It returns two separate verdicts, each
+PASS, MINOR, or MAJOR with named ARIA or computed-style evidence, so a visual PASS
+never hides an accessibility MAJOR. Do not edit files here, and do not question
+the user. A MAJOR accessibility verdict bonds mol-design-a11y onto this step.
 """
 
 [steps.metadata]
-skill_hints = "ui-review, accessibility-audit"
+skill_hints = "accessibility-audit, ui-review"
+execution_agent_type = "a11y-auditor"
 execution_mode = "subagent"
 
 [[steps]]
@@ -163,7 +164,7 @@ type = "task"
 needs = ["review-combined"]
 labels = ["design", "phase:reconcile"]
 description = """
-Fix every FAIL and every agreed PARTIAL inside {{scope}}. Re-verify only the
+Fix every MAJOR finding and every agreed MINOR inside {{scope}}. Re-verify only the
 changed assertion, never the whole walk, and leave a citation per re-run. Do not
 accept a finding you cannot reproduce: report it as unreproduced rather than
 dropping it silently. Record findings on this step and resolve them before continuing.

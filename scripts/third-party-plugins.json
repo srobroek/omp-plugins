@@ -2,18 +2,6 @@
   "$comment": "Third-party plugins advertised in the srobroek-omp catalog. scripts/build-catalog.py appends these after the local packages. Every source object below was verified against the upstream repository tree: a `github` source means the repository ROOT is the plugin root, and `ref` is pinned to the default branch. A catalog entry is an advertisement, not a dependency.",
   "plugins": [
     {
-      "name": "platform-design-skills",
-      "description": "Vendor design guidelines for iOS, iPadOS, macOS, watchOS, visionOS, tvOS, Android, and Web.",
-      "version": "0.1.0",
-      "category": "development",
-      "license": "MIT",
-      "source": {
-        "source": "github",
-        "repo": "ehmo/platform-design-skills",
-        "ref": "main"
-      }
-    },
-    {
       "name": "sniff",
       "description": "Portable code-smell auditing with analyzer preflight and adversarial review.",
       "version": "0.1.0",
