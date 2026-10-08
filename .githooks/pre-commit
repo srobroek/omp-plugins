@@ -36,4 +36,9 @@ if [[ -n "$previous_hooks" ]]; then
 	fi
 fi
 
+# The CI metadata gate, run only when the commit stages Markdown.
+if ! git diff --cached --quiet --diff-filter=ACMR -- '*.md'; then
+	bun "$repo_root/scripts/check-agentic-metadata.ts"
+fi
+
 exec "$repo_root/scripts/check-agnix-staged.py" "$@"
