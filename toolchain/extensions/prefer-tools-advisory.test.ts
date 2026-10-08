@@ -171,6 +171,15 @@ describe("shell grammar", () => {
 		expect(decideSwaps("echo then npm install", bun)).toEqual([]);
 	});
 
+	test("a substitution runs unquoted or in double quotes, never in single quotes", () => {
+		for (const command of ["echo \"$(npm install)\"", "echo `npm i`", "echo \"it's $(npm install)\""]) {
+			expect({ command, hits: decideSwaps(command, bun).length }).toEqual({ command, hits: 1 });
+		}
+		for (const command of ["git commit -m 'docs: explain $(npm install) usage'", "echo 'run `npm i` first'"]) {
+			expect({ command, hits: decideSwaps(command, bun) }).toEqual({ command, hits: [] });
+		}
+	});
+
 	test("env -C / --chdir moves where the marker is read", () => {
 		expect(decideSwaps(`env -C ${bare} npm install foo`, bun)).toEqual([]);
 		expect(decideSwaps(`env -C ${bun} npm install foo`, bare)).toHaveLength(1);

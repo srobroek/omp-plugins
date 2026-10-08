@@ -6,6 +6,7 @@ import tasksGuard, {
 	DENY_REASON,
 	decideToolCall,
 	isTasksMd,
+	setBdWhereSpawnForTests,
 	setBeadsActiveForTests,
 	writesTasksMd,
 } from "./tasks-guard.ts";
@@ -32,6 +33,16 @@ describe("writesTasksMd", () => {
 		expect(writesTasksMd("tee specs/001/tasks.md")).toBe(true);
 		expect(writesTasksMd("cat specs/001/tasks.md")).toBe(false);
 		expect(writesTasksMd("rg foo specs/001/tasks.md")).toBe(false);
+	});
+
+	test("treats only cp's destination as a write", () => {
+		expect(writesTasksMd("cp specs/001-a/tasks.md /tmp/legacy.md")).toBe(false);
+		expect(writesTasksMd("cp /tmp/x specs/001-a/tasks.md")).toBe(true);
+		expect(writesTasksMd("cp /tmp/x /repo/specs/001-a/tasks.md && echo ok")).toBe(true);
+		expect(writesTasksMd('cp /tmp/x "specs/001-a/tasks.md"')).toBe(true);
+		expect(writesTasksMd("cp /tmp/x specs/001-a/tasks.md 2>/dev/null")).toBe(true);
+		expect(writesTasksMd("cp specs/001-a/tasks.md specs/002-b/tasks.md")).toBe(true);
+		expect(writesTasksMd("cp -t specs/001-a /tmp/tasks.md")).toBe(true);
 	});
 });
 
@@ -104,7 +115,7 @@ describe("decideToolCall", () => {
 });
 
 describe("register", () => {
-  type Handler = (event: Record<string, unknown>) => unknown;
+  type Handler = (event: Record<string, unknown>, ctx?: { cwd: string }) => unknown;
   type HandlerMap = Record<string, Handler[]>;
   function handlerAt(handlers: HandlerMap, event: string): Handler {
 	const handler = handlers[event]?.[0];
@@ -140,5 +151,30 @@ describe("register", () => {
 		};
 		tasksGuard(fakePi as never);
 		expect(handlerAt(handlers, "tool_call")({ toolName: "write", input: null })).toBeUndefined();
+	});
+
+	test("probes Beads in the session cwd when the input names none", () => {
+		setBeadsActiveForTests(null);
+		const probes: string[][] = [];
+		setBdWhereSpawnForTests((args) => {
+			probes.push(args);
+			return 0;
+		});
+		const handlers: HandlerMap = {};
+		const fakePi = {
+			zod, registerTool: () => {},
+			on: (ev: string, fn: Handler) => {
+				handlers[ev] = [...(handlers[ev] ?? []), fn];
+			},
+		};
+		try {
+			tasksGuard(fakePi as never);
+			const handler = handlerAt(handlers, "tool_call");
+			expect(handler({ toolName: "write", input: { path: "specs/002/tasks.md" } }, { cwd: "/session/worktree" })).toEqual({ block: true, reason: DENY_REASON });
+			handler({ toolName: "bash", input: { command: "echo x > specs/002/tasks.md", cwd: "/bash/cwd" } }, { cwd: "/session/worktree" });
+			expect(probes).toEqual([["-C", "/session/worktree", "where"], ["-C", "/bash/cwd", "where"]]);
+		} finally {
+			setBdWhereSpawnForTests(null);
+		}
 	});
 });

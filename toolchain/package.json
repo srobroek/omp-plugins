@@ -1,6 +1,6 @@
 {
   "name": "@srobroek/toolchain",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Toolchain defaults, backend services, infrastructure, and operations.",
   "private": true,
   "omp": {

@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.8.0](https://github.com/srobroek/omp-plugins/compare/design--v0.7.0...design--v0.8.0) (2026-10-08)
+
+
+### Features
+
+* **design:** run impeccable's edit detector in OMP, add ui-implementer, drop two upstreams ([#646](https://github.com/srobroek/omp-plugins/issues/646)) ([bfa1659](https://github.com/srobroek/omp-plugins/commit/bfa16597df127e94c721dc75d8133099e45207ea))
+
 ## [0.7.0](https://github.com/srobroek/omp-plugins/compare/design--v0.6.0...design--v0.7.0) (2026-10-08)
 
 
