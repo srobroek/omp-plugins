@@ -33,7 +33,7 @@
       "name": "beads",
       "description": "Beads issue tracking: dependency DAGs, formulas, and decisions recorded as beads.",
       "source": "./beads",
-      "version": "4.1.4",
+      "version": "4.1.5",
       "category": "productivity"
     },
     {
@@ -61,7 +61,7 @@
       "name": "delivery",
       "description": "Delivery workflow guidance with pull-request review, landing, cleanup, and hygiene tools.",
       "source": "./delivery",
-      "version": "1.4.1",
+      "version": "1.4.2",
       "category": "devops"
     },
     {
@@ -96,7 +96,7 @@
       "name": "go",
       "description": "Go rules: module layout, error wrapping, table-driven tests, and a Go review skill.",
       "source": "./go",
-      "version": "0.3.10",
+      "version": "0.3.11",
       "category": "language"
     },
     {
@@ -117,7 +117,7 @@
       "name": "python",
       "description": "Python format, lint, type-check, and test runner (ruff, pyright, pytest).",
       "source": "./python",
-      "version": "0.3.11",
+      "version": "0.3.12",
       "category": "language"
     },
     {
@@ -131,7 +131,7 @@
       "name": "rust",
       "description": "Rust rules: crate boundaries, domain modeling, error and persistence patterns, workspace and Tauri layout, and a Rust review skill.",
       "source": "./rust",
-      "version": "0.6.10",
+      "version": "0.6.11",
       "category": "language"
     },
     {
@@ -166,7 +166,7 @@
       "name": "typescript",
       "description": "TypeScript type-safety rule and a Biome or ESLint plus tsc quality tool.",
       "source": "./typescript",
-      "version": "0.3.11",
+      "version": "0.3.12",
       "category": "language"
     },
     {
