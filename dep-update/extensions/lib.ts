@@ -14,8 +14,13 @@ import { canonical, detectProject, isDir, isFile, REQ_NAME, readText } from "./d
 
 export const USER_AGENT = "dep-update-skill (+https://github.com/srobroek/omp-plugins)";
 export const FETCH_TIMEOUT_MS = 10_000;
-/** A tool_call has a 30,000 ms budget; leave 5,000 ms for scan reporting. */
-export const SCAN_TIMEOUT_MS = 25_000;
+/**
+ * Aggregate bound for one scan. A registered tool's execute runs under no harness
+ * deadline, so this only stops a degraded registry: fetches run one after another,
+ * and 30 of them hitting FETCH_TIMEOUT_MS fill it. The caller's abort signal stops
+ * a scan sooner. Either way the dependencies not yet queried are reported UNCHECKED.
+ */
+export const SCAN_TIMEOUT_MS = 300_000;
 
 class ScanDeadlineError extends Error {
     constructor() { super("dependency scan aggregate deadline exceeded"); }
@@ -235,6 +240,8 @@ export async function queryRegistry(
     } catch (exc) {
         if (exc instanceof ScanDeadlineError) throw exc;
         signal?.throwIfAborted();
+        // A fetch the aggregate deadline cut short says nothing about the registry.
+        ensureDeadline(deadline);
         if (exc instanceof RegistryError && exc.code !== undefined) {
             result.reason = exc.code === 401 || exc.code === 403 ? "auth-required" : `HTTP ${exc.code}`;
             return result;
@@ -251,48 +258,53 @@ export async function researchProject(
     signal?: AbortSignal,
     timeoutMs = SCAN_TIMEOUT_MS,
 ): Promise<{ exit: number; records: BumpRecord[]; stderr: string; complete: boolean }> {
-    signal?.throwIfAborted();
-    const deadline = Date.now() + Math.min(timeoutMs, SCAN_TIMEOUT_MS);
+    const deadline = Date.now() + timeoutMs;
+    /** Why the scan must stop before the next query, or undefined while it may continue. */
+    const stopReason = () => (signal?.aborted ? "cancelled" : Date.now() >= deadline ? "scan deadline reached" : undefined);
+    if (signal?.aborted) return { exit: 0, records: [], stderr: "dep-update/research: PARTIAL: cancelled before any dependency was read.", complete: false };
     if (!isDir(target)) return { exit: 2, records: [], stderr: `research: '${target}' is not a directory`, complete: true };
     const notes: string[] = ["dep-update/research: querying registries...", ""];
     const detected = await detectProject(target);
-    ensureDeadline(deadline);
-    signal?.throwIfAborted();
     notes.push(detected.stderr);
-    const tallies = { OK: 0, CURRENT: 0, UNRESOLVABLE: 0, DISCONFIRMED: 0 };
+    const tallies = { OK: 0, CURRENT: 0, UNRESOLVABLE: 0, DISCONFIRMED: 0, UNCHECKED: 0 };
     const records: BumpRecord[] = [];
-    let complete = true;
+    let stopped: string | undefined;
     // Transitive lock entries are not the project's to bump: applying one would add it
     // as a new direct dependency. Only declared rows are researched.
     const direct = detected.rows.filter((row) => row.direct);
     const transitive = detected.rows.length - direct.length;
     for (const { ecosystem, name, declared, resolved } of direct) {
-        try {
-            signal?.throwIfAborted();
-            ensureDeadline(deadline);
-            if (!ecosystem || !name) continue;
-            const record = await queryRegistry(ecosystem, name, resolved ?? declared, fixtureDir, signal, deadline);
-            records.push(record);
-            const status = record.status;
-            if (status in tallies) tallies[status as keyof typeof tallies] += 1;
-        } catch (exc) {
-            if (exc instanceof ScanDeadlineError) { complete = false; break; }
-            throw exc;
+        if (!ecosystem || !name) continue;
+        const installed = resolved ?? declared;
+        stopped ??= stopReason();
+        let record: BumpRecord | undefined;
+        if (!stopped) {
+            try {
+                record = await queryRegistry(ecosystem, name, installed, fixtureDir, signal, deadline);
+            } catch (exc) {
+                // Only a cancellation or the aggregate deadline escapes queryRegistry.
+                stopped = stopReason();
+                if (!stopped) throw exc;
+            }
         }
+        record ??= { ecosystem, name, installed, status: "UNCHECKED", reason: `not checked: ${stopped}` };
+        records.push(record);
+        if (record.status in tallies) tallies[record.status as keyof typeof tallies] += 1;
     }
+    const queried = records.length - tallies.UNCHECKED;
     notes.push("");
-    notes.push(`dep-update/research: ${records.length} dep(s) queried${complete ? "" : " before aggregate deadline"}`);
+    notes.push(`dep-update/research: ${queried} dep(s) queried`);
     notes.push(`  classified:    ${tallies.OK}`);
     notes.push(`  already-current: ${tallies.CURRENT}`);
     notes.push(`  unresolvable:  ${tallies.UNRESOLVABLE + tallies.DISCONFIRMED}`);
     if (transitive > 0) notes.push(`  transitive (not queried): ${transitive}`);
-    if (!complete) notes.push("PARTIAL: aggregate scan deadline reached; remaining dependencies were not queried.");
-    if (records.length > 0 && tallies.OK === 0 && tallies.CURRENT === 0 && tallies.UNRESOLVABLE + tallies.DISCONFIRMED === records.length) {
+    if (stopped) notes.push(`PARTIAL: ${stopped}; ${tallies.UNCHECKED} dependenc${tallies.UNCHECKED === 1 ? "y was" : "ies were"} not checked.`);
+    if (queried > 0 && tallies.OK === 0 && tallies.CURRENT === 0 && tallies.UNRESOLVABLE + tallies.DISCONFIRMED === queried) {
         notes.push("");
         notes.push("WARNING: no dependency versions could be classified.");
         notes.push("Resolve declared ranges and inspect each record's reason before planning upgrades.");
     }
-    return { exit: 0, records, stderr: notes.join("\n"), complete };
+    return { exit: 0, records, stderr: notes.join("\n"), complete: stopped === undefined };
 }
 
 
@@ -432,9 +444,15 @@ export async function checkNodeVersion(root: string, name: string, version: stri
 	}
 }
 
+/**
+ * Bound for one package-manager run. A registered tool's execute runs under no harness
+ * deadline; a real install that resolves a lockfile and builds native modules can take
+ * minutes, so this only stops a hung manager. The caller's abort signal stops it sooner.
+ */
+const APPLY_TIMEOUT_MS = 600_000;
+
 type ApplyOptions = {
     signal?: AbortSignal;
-    /** Package-manager work must fit below the 30,000 ms tool_call budget. */
     timeoutMs?: number;
     maxOutputBytes?: number;
     setTimeout?: (callback: () => void, ms: number) => Timer;
@@ -486,7 +504,7 @@ async function runPm(command: string[], root: string, options: ApplyOptions): Pr
         const abort = () => stop("Cancelled");
         const deadline = schedule(
             () => stop("Package manager deadline exceeded; partial dependency changes may remain and were reported"),
-            Math.max(1, Math.min(options.timeoutMs ?? 25_000, 25_000)),
+            Math.max(1, options.timeoutMs ?? APPLY_TIMEOUT_MS),
         );
 		const collect = (chunk: Buffer) => {
 			const remaining = limit - bytes;

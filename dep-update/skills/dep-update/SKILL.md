@@ -39,6 +39,7 @@ Manifest ranges alone do not establish installed versions; resolve the declared
 version before classifying it. Classes for `A.B.C` against latest `X.Y.Z`:
 `C<Z` PATCH-SAFE · `B<Y` MINOR-CHECK · `A<X` MAJOR-ADVISORY · equal omitted.
 Unresolved declarations are `UNRESOLVABLE`, not minor upgrades. Resolve exact versions before planning or applying a bump.
+A scan stopped by cancellation or its deadline returns `complete: false` and marks every unqueried dependency `UNCHECKED`: report those as unchecked, never as current.
 
 ## Apply loop
 

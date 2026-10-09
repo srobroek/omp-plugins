@@ -1266,7 +1266,7 @@ async function detectProject(target) {
 // extensions/lib.ts
 var USER_AGENT = "dep-update-skill (+https://github.com/srobroek/omp-plugins)";
 var FETCH_TIMEOUT_MS = 1e4;
-var SCAN_TIMEOUT_MS = 25000;
+var SCAN_TIMEOUT_MS = 300000;
 
 class ScanDeadlineError extends Error {
   constructor() {
@@ -1463,6 +1463,7 @@ async function queryRegistry(ecosystem, name, installed, fixtureDir, signal, dea
     if (exc instanceof ScanDeadlineError)
       throw exc;
     signal?.throwIfAborted();
+    ensureDeadline(deadline);
     if (exc instanceof RegistryError && exc.code !== undefined) {
       result.reason = exc.code === 401 || exc.code === 403 ? "auth-required" : `HTTP ${exc.code}`;
       return result;
@@ -1476,55 +1477,57 @@ async function queryRegistry(ecosystem, name, installed, fixtureDir, signal, dea
   }
 }
 async function researchProject(target, fixtureDir, signal, timeoutMs = SCAN_TIMEOUT_MS) {
-  signal?.throwIfAborted();
-  const deadline = Date.now() + Math.min(timeoutMs, SCAN_TIMEOUT_MS);
+  const deadline = Date.now() + timeoutMs;
+  const stopReason = () => signal?.aborted ? "cancelled" : Date.now() >= deadline ? "scan deadline reached" : undefined;
+  if (signal?.aborted)
+    return { exit: 0, records: [], stderr: "dep-update/research: PARTIAL: cancelled before any dependency was read.", complete: false };
   if (!isDir(target))
     return { exit: 2, records: [], stderr: `research: '${target}' is not a directory`, complete: true };
   const notes = ["dep-update/research: querying registries...", ""];
   const detected = await detectProject(target);
-  ensureDeadline(deadline);
-  signal?.throwIfAborted();
   notes.push(detected.stderr);
-  const tallies = { OK: 0, CURRENT: 0, UNRESOLVABLE: 0, DISCONFIRMED: 0 };
+  const tallies = { OK: 0, CURRENT: 0, UNRESOLVABLE: 0, DISCONFIRMED: 0, UNCHECKED: 0 };
   const records = [];
-  let complete = true;
+  let stopped;
   const direct = detected.rows.filter((row) => row.direct);
   const transitive = detected.rows.length - direct.length;
   for (const { ecosystem, name, declared, resolved } of direct) {
-    try {
-      signal?.throwIfAborted();
-      ensureDeadline(deadline);
-      if (!ecosystem || !name)
-        continue;
-      const record = await queryRegistry(ecosystem, name, resolved ?? declared, fixtureDir, signal, deadline);
-      records.push(record);
-      const status = record.status;
-      if (status in tallies)
-        tallies[status] += 1;
-    } catch (exc) {
-      if (exc instanceof ScanDeadlineError) {
-        complete = false;
-        break;
+    if (!ecosystem || !name)
+      continue;
+    const installed = resolved ?? declared;
+    stopped ??= stopReason();
+    let record;
+    if (!stopped) {
+      try {
+        record = await queryRegistry(ecosystem, name, installed, fixtureDir, signal, deadline);
+      } catch (exc) {
+        stopped = stopReason();
+        if (!stopped)
+          throw exc;
       }
-      throw exc;
     }
+    record ??= { ecosystem, name, installed, status: "UNCHECKED", reason: `not checked: ${stopped}` };
+    records.push(record);
+    if (record.status in tallies)
+      tallies[record.status] += 1;
   }
+  const queried = records.length - tallies.UNCHECKED;
   notes.push("");
-  notes.push(`dep-update/research: ${records.length} dep(s) queried${complete ? "" : " before aggregate deadline"}`);
+  notes.push(`dep-update/research: ${queried} dep(s) queried`);
   notes.push(`  classified:    ${tallies.OK}`);
   notes.push(`  already-current: ${tallies.CURRENT}`);
   notes.push(`  unresolvable:  ${tallies.UNRESOLVABLE + tallies.DISCONFIRMED}`);
   if (transitive > 0)
     notes.push(`  transitive (not queried): ${transitive}`);
-  if (!complete)
-    notes.push("PARTIAL: aggregate scan deadline reached; remaining dependencies were not queried.");
-  if (records.length > 0 && tallies.OK === 0 && tallies.CURRENT === 0 && tallies.UNRESOLVABLE + tallies.DISCONFIRMED === records.length) {
+  if (stopped)
+    notes.push(`PARTIAL: ${stopped}; ${tallies.UNCHECKED} dependenc${tallies.UNCHECKED === 1 ? "y was" : "ies were"} not checked.`);
+  if (queried > 0 && tallies.OK === 0 && tallies.CURRENT === 0 && tallies.UNRESOLVABLE + tallies.DISCONFIRMED === queried) {
     notes.push("");
     notes.push("WARNING: no dependency versions could be classified.");
     notes.push("Resolve declared ranges and inspect each record's reason before planning upgrades.");
   }
   return { exit: 0, records, stderr: notes.join(`
-`), complete };
+`), complete: stopped === undefined };
 }
 function which(bin) {
   const path = process.env.PATH ?? "";
@@ -1676,6 +1679,7 @@ async function checkNodeVersion(root, name, version) {
     return false;
   }
 }
+var APPLY_TIMEOUT_MS = 600000;
 async function runPm(command, root, options) {
   if (options.signal?.aborted)
     return { code: 1, log: "Cancelled before spawn; no changes made." };
@@ -1734,7 +1738,7 @@ async function runPm(command, root, options) {
       cleanup = schedule(() => finish(1), 1000);
     };
     const abort = () => stop("Cancelled");
-    const deadline = schedule(() => stop("Package manager deadline exceeded; partial dependency changes may remain and were reported"), Math.max(1, Math.min(options.timeoutMs ?? 25000, 25000)));
+    const deadline = schedule(() => stop("Package manager deadline exceeded; partial dependency changes may remain and were reported"), Math.max(1, options.timeoutMs ?? APPLY_TIMEOUT_MS));
     const collect = (chunk) => {
       const remaining = limit - bytes;
       if (remaining > 0) {
@@ -1859,7 +1863,7 @@ function depScanTool(pi) {
   pi.registerTool({
     name: "dep_scan",
     label: "Dependency Scan",
-    description: "Enumerate a project's declared dependencies, query PyPI/npm for the latest versions, and " + "classify exact-version bumps as PATCH-SAFE, MINOR-CHECK, or MAJOR-ADVISORY. " + "Read-only; each scan has a 25 s aggregate deadline inside the 30 s tool_call budget and " + "returns a partial report when a large manifest exceeds it. Rust and go deps are advisory-only.",
+    description: "Enumerate a project's declared dependencies, query PyPI/npm for the latest versions, and " + "classify exact-version bumps as PATCH-SAFE, MINOR-CHECK, or MAJOR-ADVISORY. " + "Read-only; a scan stopped by its aggregate deadline or by cancellation returns an incomplete " + "report (complete: false) that lists every dependency it did not query as UNCHECKED. Rust and go deps are advisory-only.",
     parameters: z.object({
       path: z.string().optional().describe("Project root to scan; defaults to the session cwd")
     }),
@@ -1890,21 +1894,21 @@ ${stderr}` }],
           }
         }
         for (const record of records) {
-          if (record.status === "UNRESOLVABLE" || record.status === "DISCONFIRMED") {
+          if (record.status === "UNRESOLVABLE" || record.status === "DISCONFIRMED" || record.status === "UNCHECKED") {
             lines.push(`${record.status.padEnd(15)} ${record.name}  ${record.installed} -> ${record.latest ?? "unknown"}  (${record.ecosystem}): ${record.reason ?? "not classified"}`);
           }
         }
-        const skipped = records.length - upgradable.length;
-        lines.push(`-- ${upgradable.length} upgradable, ${skipped} current/unresolvable --`);
+        const unchecked = records.filter((r) => r.status === "UNCHECKED").length;
+        const skipped = records.length - upgradable.length - unchecked;
+        lines.push(`-- ${upgradable.length} upgradable, ${skipped} current/unresolvable, ${unchecked} unchecked --`);
         if (stderr.trim())
           lines.push(stderr.trim());
         return {
           content: [{ type: "text", text: lines.join(`
 `) }],
-          details: { records, complete, summary: { upgradable: upgradable.length, skipped } }
+          details: { records, complete, summary: { upgradable: upgradable.length, skipped, unchecked } }
         };
       } catch (error) {
-        signal?.throwIfAborted();
         const message = error instanceof Error ? error.message : String(error);
         return {
           content: [{ type: "text", text: `dep_scan error: ${message}` }],
@@ -1916,7 +1920,7 @@ ${stderr}` }],
   pi.registerTool({
     name: "dep_apply",
     label: "Apply Dependency Bump",
-    description: "Apply one confirmed dependency bump via the ecosystem package manager. " + "The mutation is bounded to 25 s inside the 30 s tool_call budget; if interrupted, " + "the result reports that partial changes may remain so the caller can inspect manifests and lockfiles.",
+    description: "Apply one confirmed dependency bump via the ecosystem package manager. " + "The mutation is bounded to 10 minutes; if cancelled or interrupted, " + "the result reports that partial changes may remain so the caller can inspect manifests and lockfiles.",
     parameters: z.object({
       ecosystem: z.string().describe("pypi, npm, cargo, or go"),
       name: z.string().describe("Package name"),
@@ -1932,7 +1936,7 @@ ${stderr}` }],
           throw new Error("Interactive approval is required; no process started");
         const approved = await ctx.ui.confirm("Apply dependency bump", `${params.ecosystem}: ${params.name} -> ${params.version}
 Project: ${params.path ?? ctx.cwd}
-Package-manager failure or cancellation can leave partial changes.`, { signal, timeout: 20000 });
+Package-manager failure or cancellation can leave partial changes.`, { signal, timeout: 120000 });
         if (!approved)
           throw new Error("Dependency bump denied; no process started");
         const result = await applyBump(params.ecosystem, params.name, params.version, params.path ?? ctx.cwd, {
