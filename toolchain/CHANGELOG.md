@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.2](https://github.com/srobroek/omp-plugins/compare/toolchain--v1.0.1...toolchain--v1.0.2) (2026-10-09)
+
+
+### Bug Fixes
+
+* **python,typescript,go,rust,architecture,toolchain:** apply the language and architecture plugin reviews ([#655](https://github.com/srobroek/omp-plugins/issues/655)) ([ba24df5](https://github.com/srobroek/omp-plugins/commit/ba24df53f186d9272e2ee737d84af734e5b034ee))
+
 ## [1.0.1](https://github.com/srobroek/omp-plugins/compare/toolchain--v1.0.0...toolchain--v1.0.1) (2026-10-08)
 
 

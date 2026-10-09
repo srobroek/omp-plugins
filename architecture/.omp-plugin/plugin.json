@@ -1,6 +1,6 @@
 {
   "name": "architecture",
   "description": "Architecture rules: capability-first layout, ownership boundaries, and durable docs/ project knowledge, plus a read-only architect agent.",
-  "version": "0.6.1",
+  "version": "0.6.2",
   "category": "development"
 }

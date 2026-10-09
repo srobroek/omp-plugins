@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.9](https://github.com/srobroek/omp-plugins/compare/go--v0.3.8...go--v0.3.9) (2026-10-09)
+
+
+### Bug Fixes
+
+* **python,typescript,go,rust,architecture,toolchain:** apply the language and architecture plugin reviews ([#655](https://github.com/srobroek/omp-plugins/issues/655)) ([ba24df5](https://github.com/srobroek/omp-plugins/commit/ba24df53f186d9272e2ee737d84af734e5b034ee))
+
 ## [0.3.8](https://github.com/srobroek/omp-plugins/compare/go--v0.3.7...go--v0.3.8) (2026-09-26)
 
 
