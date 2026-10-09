@@ -1,6 +1,6 @@
 {
   "name": "python",
   "description": "Python format, lint, type-check, and test runner (ruff, pyright, pytest).",
-  "version": "0.3.11",
+  "version": "0.3.12",
   "category": "language"
 }

@@ -1,6 +1,6 @@
 {
   "name": "@srobroek/python",
-  "version": "0.3.11",
+  "version": "0.3.12",
   "description": "Python format, lint, type-check, and test runner (ruff, pyright, pytest).",
   "private": true,
   "omp": {

@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.12](https://github.com/srobroek/omp-plugins/compare/python--v0.3.11...python--v0.3.12) (2026-10-09)
+
+
+### Bug Fixes
+
+* **quality:** report a timed-out probe as a timeout, not as not on PATH ([#670](https://github.com/srobroek/omp-plugins/issues/670)) ([d1b7966](https://github.com/srobroek/omp-plugins/commit/d1b79669183b1956358e472463cbb6e4125c938a))
+
 ## [0.3.11](https://github.com/srobroek/omp-plugins/compare/python--v0.3.10...python--v0.3.11) (2026-10-09)
 
 
