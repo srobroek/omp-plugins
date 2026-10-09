@@ -81,3 +81,24 @@ function fakeZod(): { zod: unknown } {
 		expect(result.details.ok).toBe(false);
 		expect(result.details.error).toBe("missing_path");
 	});
+
+test("a relative path resolves against the session cwd", async () => {
+	const dir = mkdtempSync(join(tmpdir(), "go-quality-cwd-"));
+	try {
+		mkdirSync(join(dir, "sub"));
+		const captured: Record<string, unknown> = {};
+		goQualityTool({ ...fakeZod(), registerTool: (d: Record<string, unknown>) => Object.assign(captured, d), on: () => {} } as never);
+		const execute = captured.execute as (
+			id: string,
+			params: { mode: "check" | "fix"; path?: string },
+			signal: undefined,
+			onUpdate: undefined,
+			ctx: { cwd: string },
+		) => Promise<{ details: { cwd: string; error?: string } }>;
+		const result = await execute("t3", { mode: "check", path: "sub" }, undefined, undefined, { cwd: dir });
+		expect(result.details.error).toBeUndefined();
+		expect(result.details.cwd).toBe(join(dir, "sub"));
+	} finally {
+		rmSync(dir, { recursive: true, force: true });
+	}
+});

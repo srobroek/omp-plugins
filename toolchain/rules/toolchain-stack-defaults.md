@@ -22,6 +22,7 @@ Treat `just`, `mise`, and `moon` as independent setup choices:
 - `mise` for language and tool version management.
 - `moon` for task orchestration in larger monorepos.
 
-Language-specific conventions ship with the `go`, `python`, `rust`, and
-`typescript` plugins when installed: each has a quality skill, and the Rust and
-TypeScript plugins add steering rules.
+The `go`, `python`, `rust`, and `typescript` plugins, when installed, each add
+a quality skill that runs the project's own format, lint, and test tools; only
+the Rust and TypeScript plugins add steering rules. Language design guidance
+lives in `skill://quality-code-design`.

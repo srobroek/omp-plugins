@@ -10,7 +10,7 @@
   "plugins": [
     {
       "name": "architecture",
-      "description": "Architecture rules: module boundaries, compose-don't-fork, project structure, component promotion, and structural-search routing.",
+      "description": "Architecture rules: capability-first layout, ownership boundaries, and durable docs/ project knowledge, plus a read-only architect agent.",
       "source": "./architecture",
       "version": "0.6.1",
       "category": "development"
@@ -115,7 +115,7 @@
     },
     {
       "name": "python",
-      "description": "Python rules: uv-managed projects, typing, pytest layout, and a Python review skill.",
+      "description": "Python format, lint, type-check, and test runner (ruff, pyright, pytest).",
       "source": "./python",
       "version": "0.3.9",
       "category": "language"
@@ -164,7 +164,7 @@
     },
     {
       "name": "typescript",
-      "description": "TypeScript rules: contract boundaries, type safety and validation, component layout, build tooling, testing, and a TypeScript review skill.",
+      "description": "TypeScript type-safety rule and a Biome or ESLint plus tsc quality tool.",
       "source": "./typescript",
       "version": "0.3.9",
       "category": "language"

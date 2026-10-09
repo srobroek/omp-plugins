@@ -153,6 +153,10 @@ jobs:
           while IFS= read -r d; do
             (cd "$d/.." && bun test extensions/) || exit 1
           done < <(git ls-files '*/extensions/*.test.ts' | grep -v '\.git\.test\.ts$' | xargs -rn1 dirname | sort -u)
+          # Tests that moved out of the shipped component directories live in each package's tests/.
+          while IFS= read -r d; do
+            (cd "$d/.." && bun test tests/) || exit 1
+          done < <(git ls-files '*/tests/*.test.ts' | xargs -rn1 dirname | sort -u)
           bun run test:git
       - name: Loader smoke against pinned OMP
         timeout-minutes: 10

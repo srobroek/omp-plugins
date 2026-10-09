@@ -1,6 +1,6 @@
 # architecture
 
-Cross-cutting design principles, capability-first layout, ownership, and durable project knowledge.
+Capability-first layout, ownership boundaries, durable project knowledge under `docs/`, and a read-only `architect` agent.
 
 ## Rules
 
@@ -18,4 +18,4 @@ Cross-cutting design principles, capability-first layout, ownership, and durable
 
 ## Works with quality
 
-`architect` loads `skill://quality-code-design/references/release.md` for cutover transitions. Install `quality` too; without it the agent reports the missing guidance.
+`architect` loads `skill://quality-code-design/references/release.md` for cutover transitions, and `architecture-docs-files` points to `skill://quality-code-design/references/lifecycle.md` for decision records. Install `quality` too; without it the agent reports the missing guidance.

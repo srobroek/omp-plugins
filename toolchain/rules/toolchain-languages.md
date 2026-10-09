@@ -6,7 +6,9 @@ description: When picking per-language libraries or test/lint tools that the lan
 # Per-Language Library And Tool Defaults
 
 Picks that a project cannot infer from the language itself. Structural and
-failure-mode conventions live in the language plugins.
+failure-mode conventions live in the `rust` plugin's rules, the `typescript`
+plugin's type-safety rule, and the language references of
+`skill://quality-code-design`.
 
 ## Rust
 

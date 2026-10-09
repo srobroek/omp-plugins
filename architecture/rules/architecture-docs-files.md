@@ -10,11 +10,11 @@ Preferred files:
 
 - `docs/architecture.md` for system shape, boundaries, runtime topology, and important flows.
 - `docs/stack.md` for languages, package managers, frameworks, infrastructure, data stores, and quality tools.
-- `docs/decisions.md` or `docs/decisions/*.md` for durable architectural decisions.
+- For durable architectural decisions, follow `skill://quality-code-design/references/lifecycle.md` (Durable decisions), which says when to record one and where.
 - `docs/engineering.md` for repo conventions, local workflows, and development constraints.
 - `docs/operations.md` for deployment, hosting, secrets, monitoring, and runbooks.
 - `docs/product.md` for user, domain, and product behavior that is not already owned by a spec.
 
-When one of these files is missing and the project setup or brownfield workflow
-needs the information, create the smallest useful file instead of embedding the
-knowledge in agent context files.
+When one of these files is missing and the task needs the information, create
+the smallest useful file instead of embedding the knowledge in agent context
+files.
