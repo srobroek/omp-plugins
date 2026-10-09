@@ -1,6 +1,6 @@
 # python
 
-Python language steering and the `python-quality` check skill.
+Python format, lint, type-check, and test runner (ruff, pyright, pytest): the `python-quality` skill and its tool.
 
 ## Skills
 
