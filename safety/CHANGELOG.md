@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.8.4](https://github.com/srobroek/omp-plugins/compare/safety--v0.8.3...safety--v0.8.4) (2026-10-09)
+
+
+### Bug Fixes
+
+* **safety,worktrunk:** bound sync git probes in tool_call gates ([#664](https://github.com/srobroek/omp-plugins/issues/664)) ([a21faaf](https://github.com/srobroek/omp-plugins/commit/a21faaf7dcf645e9ef4bbf4d1bdc6dc5a2b87836))
+
 ## [0.8.3](https://github.com/srobroek/omp-plugins/compare/safety--v0.8.2...safety--v0.8.3) (2026-10-08)
 
 

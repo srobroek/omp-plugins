@@ -6,6 +6,13 @@
 
 - Require Beads `blocks` dependencies to encode true prerequisites so independent work remains parallelizable.
 
+## [4.1.4](https://github.com/srobroek/omp-plugins/compare/beads--v4.1.3...beads--v4.1.4) (2026-10-09)
+
+
+### Bug Fixes
+
+* **beads:** share one tool_call deadline across gates and bound executor claim release ([#668](https://github.com/srobroek/omp-plugins/issues/668)) ([8a682d3](https://github.com/srobroek/omp-plugins/commit/8a682d3f17de8da53cb0d5caa2d6dd028fbcbdab))
+
 ## [4.1.3](https://github.com/srobroek/omp-plugins/compare/beads--v4.1.2...beads--v4.1.3) (2026-10-08)
 
 
