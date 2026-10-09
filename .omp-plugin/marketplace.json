@@ -68,7 +68,7 @@
       "name": "dep-update",
       "description": "Classify dependency updates by semver safety and produce a cited upgrade plan.",
       "source": "./dep-update",
-      "version": "0.8.1",
+      "version": "0.8.2",
       "category": "development"
     },
     {
@@ -103,7 +103,7 @@
       "name": "journeys",
       "description": "User journeys: author, validate, and maintain journey documents.",
       "source": "./journeys",
-      "version": "1.0.0",
+      "version": "1.0.1",
       "category": "productivity"
     },
     {
