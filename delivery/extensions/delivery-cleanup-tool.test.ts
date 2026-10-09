@@ -31,7 +31,7 @@ import deliveryCleanupTool, {
 	type DeliveryCleanupParams,
 } from "./delivery-cleanup-tool.ts";
 import { landPullRequest } from "./delivery-land-tool.ts";
-import { type CliResult, type CliRunner, runCli } from "./forge-adapter.ts";
+import { type AsyncCliRunner, type CliResult, type CliRunner, runCli, runCliAsync } from "./forge-adapter.ts";
 import {
 	buildReceipt,
 	type LandingReceipt,
@@ -421,13 +421,13 @@ function runner(f: Fixture, options: RunnerOptions = {}): { run: CliRunner; call
 	return { run, calls, details };
 }
 
-function invoke(f: Fixture, params: DeliveryCleanupParams = { receipt: f.receiptPath }, options: RunnerOptions = {}): {
+async function invoke(f: Fixture, params: DeliveryCleanupParams = { receipt: f.receiptPath }, options: RunnerOptions = {}): Promise<{
 	result: CleanupResult;
 	calls: string[][];
 	details: RecordedCall[];
-} {
+}> {
 	const scripted = runner(f, options);
-	const result = cleanupDelivery(params, f.main, { run: scripted.run, now: () => NOW + 10, env: f.env });
+	const result = await cleanupDelivery(params, f.main, { run: scripted.run, now: () => NOW + 10, env: f.env });
 	return { result, calls: scripted.calls, details: scripted.details };
 }
 
@@ -448,10 +448,10 @@ function mutationCalls(calls: string[][]): string[][] {
 }
 
 describe("delivery_cleanup irreversible boundary", () => {
-	test("removes one listed worktree then its local branch and records four independent absence verdicts", () => {
+	test("removes one listed worktree then its local branch and records four independent absence verdicts", async () => {
 		const f = fixture("happy");
 		const listedPath = realpathSync(f.linked);
-		const { result, calls } = invoke(f, {
+		const { result, calls } = await invoke(f, {
 			receipt: f.receiptPath,
 			pr: 17,
 			branch: f.branch,
@@ -501,10 +501,10 @@ describe("delivery_cleanup irreversible boundary", () => {
 		expect(listReceipts(receiptDirectory(f.env, f.receipt.repo.key))).toHaveLength(2);
 	}, 60_000);
 
-	test("a retired ledger, agreed by the receipt and the canonical root, cleans up with no bd command", () => {
+	test("a retired ledger, agreed by the receipt and the canonical root, cleans up with no bd command", async () => {
 		const f = fixture("inactive-ledger", "feat/inactive-ledger", "retired");
 
-		const { result, calls } = invoke(f);
+		const { result, calls } = await invoke(f);
 
 		expect(result.ok).toBe(true);
 		expect(commandCalls(calls, "bd")).toEqual([]);
@@ -513,7 +513,7 @@ describe("delivery_cleanup irreversible boundary", () => {
 		expect(existsSync(f.linked)).toBe(false);
 	});
 
-	test("a ledger-free receipt for another repository is denied before local mutation", () => {
+	test("a ledger-free receipt for another repository is denied before local mutation", async () => {
 		const f = fixture("cross-repo-receipt", "feat/cross-repo-receipt", "retired");
 		const receipt = buildReceipt({
 			...f.receipt,
@@ -523,7 +523,7 @@ describe("delivery_cleanup irreversible boundary", () => {
 		});
 		const path = writeReceipt(receipt, receiptDirectory(f.env, receipt.repo.key));
 
-		const { result, calls } = invoke(f, { receipt: path });
+		const { result, calls } = await invoke(f, { receipt: path });
 
 		expect(refusal(result)).toContain('repo.nameWithOwner: observed "owner/repo", expected receipt value "attacker/elsewhere"');
 		expect(calls).toEqual([
@@ -535,7 +535,7 @@ describe("delivery_cleanup irreversible boundary", () => {
 		expect(existsSync(f.linked)).toBe(true);
 	}, 60_000);
 
-	test("a receipt remote that cannot name one verified repository fails closed", () => {
+	test("a receipt remote that cannot name one verified repository fails closed", async () => {
 		const f = fixture("remote-identity", "feat/remote-identity", "retired");
 		// A leading dash is an option to `git remote get-url`; whitespace padding is a
 		// receipt that does not say which remote. Neither is trimmed into something
@@ -563,7 +563,7 @@ describe("delivery_cleanup irreversible boundary", () => {
 				repo: { ...f.receipt.repo, remote },
 			});
 			const path = writeReceipt(receipt, receiptDirectory(f.env, receipt.repo.key));
-			const { result, calls } = invoke(f, { receipt: path });
+			const { result, calls } = await invoke(f, { receipt: path });
 			expect(refusal(result)).toContain(`repo.remote: observed ${JSON.stringify(remote)}, expected a git remote name`);
 			expect(calls).toEqual([["git", "worktree", "list", "--porcelain"]]);
 			rmSync(path);
@@ -576,7 +576,7 @@ describe("delivery_cleanup irreversible boundary", () => {
 			["repo.nameWithOwner", { origin: "https://github.com/" }],
 			["repo.nameWithOwner", { origin: "https://github.com/attacker/elsewhere.git" }],
 		] as const) {
-			const { result, calls } = invoke(f, { receipt: f.receiptPath }, { remotes });
+			const { result, calls } = await invoke(f, { receipt: f.receiptPath }, { remotes });
 			expect(refusal(result)).toContain(field);
 			expect(calls).toEqual([
 				["git", "worktree", "list", "--porcelain"],
@@ -598,7 +598,7 @@ describe("delivery_cleanup irreversible boundary", () => {
 	 * cases below carry userinfo and a token query, and the refusal text must hold
 	 * neither those tokens nor the URL that framed them.
 	 */
-	test("git remote get-url output that is not exactly one record refuses before the forge read", () => {
+	test("git remote get-url output that is not exactly one record refuses before the forge read", async () => {
 		const f = fixture("remote-record", "feat/remote-record", "retired");
 		for (const remoteStdout of [
 			"https://git\thub.com/owner/repo.git\n",
@@ -613,7 +613,7 @@ describe("delivery_cleanup irreversible boundary", () => {
 			"https://github.com/owner/repo.git?token=ghp_secrettoken\nhttps://evil.example/x\n",
 			" ssh://git:ghp_secrettoken@github.com/owner/repo.git\n",
 		]) {
-			const { result, calls } = invoke(f, { receipt: f.receiptPath }, { remoteStdout });
+			const { result, calls } = await invoke(f, { receipt: f.receiptPath }, { remoteStdout });
 			const reason = refusal(result);
 			expect(reason).toContain('repo.remote: observed "malformed Git remote output"');
 			expect(reason).toContain("exactly one URL record");
@@ -630,7 +630,7 @@ describe("delivery_cleanup irreversible boundary", () => {
 		expect(existsSync(f.linked)).toBe(true);
 	}, 60_000);
 
-	test("GitLab queries the receipt's project on the canonical host", () => {
+	test("GitLab queries the receipt's project on the canonical host", async () => {
 		const f = fixture("gitlab-local-repo", "feat/gitlab-local-repo", "retired");
 		const receipt = buildReceipt({
 			...f.receipt,
@@ -648,7 +648,7 @@ describe("delivery_cleanup irreversible boundary", () => {
 		f.receipt = receipt;
 		f.receiptPath = path;
 
-		const { result, calls, details } = invoke(f);
+		const { result, calls, details } = await invoke(f);
 
 		expect(result.ok).toBe(true);
 		expect(calls.slice(0, 3)).toEqual([
@@ -671,7 +671,7 @@ describe("delivery_cleanup irreversible boundary", () => {
 	 * along.
 	 */
 	for (const forge of ["github", "gitlab"] as const) {
-		test(`${forge}: the observation follows the receipt's remote while origin is a fork`, () => {
+		test(`${forge}: the observation follows the receipt's remote while origin is a fork`, async () => {
 			const f = fixture(`fork-origin-${forge}`, `feat/fork-origin-${forge}`, "retired");
 			git(f.main, ["remote", "add", "upstream", f.bare]);
 			const nameWithOwner = forge === "github" ? "owner/repo" : "group/project";
@@ -691,7 +691,7 @@ describe("delivery_cleanup irreversible boundary", () => {
 			f.receiptPath = writeReceipt(receipt, receiptDirectory(f.env, receipt.repo.key));
 			f.receipt = receipt;
 
-			const { result, calls, details } = invoke(f, { receipt: f.receiptPath }, {
+			const { result, calls, details } = await invoke(f, { receipt: f.receiptPath }, {
 				remotes: {
 					origin: `https://${host}/contributor/fork.git`,
 					upstream: `https://${host}/${nameWithOwner}.git`,
@@ -740,7 +740,7 @@ describe("delivery_cleanup irreversible boundary", () => {
 	 * `origin` is the fork there — and the landed worktree it names becomes impossible
 	 * to clean.
 	 */
-	test("the remote URL is resolved in the landed worktree, where a worktree-scoped rewrite applies", () => {
+	test("the remote URL is resolved in the landed worktree, where a worktree-scoped rewrite applies", async () => {
 		const f = fixture("worktree-config", "feat/worktree-config", "retired");
 		const fork = "https://github.com/contributor/fork.git";
 		const upstream = "https://github.com/owner/repo.git";
@@ -757,7 +757,7 @@ describe("delivery_cleanup irreversible boundary", () => {
 		// and `realpathSync` then throws on a path that no longer exists.
 		const landedPath = realpathSync(f.linked);
 
-		const { result, calls, details } = invoke(f, { receipt: f.receiptPath }, { realRemoteUrls: true });
+		const { result, calls, details } = await invoke(f, { receipt: f.receiptPath }, { realRemoteUrls: true });
 
 		expect(result.ok).toBe(true);
 		const identityRead = details.find(call => call.argv[1] === "remote" && call.argv[2] === "get-url");
@@ -799,7 +799,7 @@ describe("delivery_cleanup irreversible boundary", () => {
 		expect(existsSync(f.linked)).toBe(false);
 	}, 60_000);
 
-	test("cleanup strips every ambient forge and Git selector from the identity and pull-request reads", () => {
+	test("cleanup strips every ambient forge and Git selector from the identity and pull-request reads", async () => {
 		const f = fixture("ambient-redirectors", "feat/ambient-redirectors", "retired");
 		Object.assign(f.env, {
 			GH_REPO: "attacker/elsewhere",
@@ -816,7 +816,7 @@ describe("delivery_cleanup irreversible boundary", () => {
 			GL_TOKEN: "keep-gl",
 		});
 
-		const { result, details } = invoke(f);
+		const { result, details } = await invoke(f);
 
 		expect(result.ok).toBe(true);
 		const forgeCalls = details.filter(call => call.argv[0] === "gh");
@@ -839,13 +839,13 @@ describe("delivery_cleanup irreversible boundary", () => {
 		}
 	}, 60_000);
 
-	test("a valid receipt extension named ok cannot collide with cleanup's private resolution tag", () => {
+	test("a valid receipt extension named ok cannot collide with cleanup's private resolution tag", async () => {
 		const f = fixture("receipt-ok-extension");
 		rmSync(f.receiptPath);
 		f.receipt.ok = false;
 		const path = writeReceipt(f.receipt, receiptDirectory(f.env, f.receipt.repo.key));
 
-		const { result } = invoke(f, { receipt: path });
+		const { result } = await invoke(f, { receipt: path });
 		expect(result.ok).toBe(true);
 		if (!result.ok) return;
 		expect(result.receipt.ok).toBe(false);
@@ -853,19 +853,19 @@ describe("delivery_cleanup irreversible boundary", () => {
 		expect(existsSync(f.linked)).toBe(false);
 	});
 
-	test("a second call selects the cleaned continuation, refuses the absent worktree, and mutates nothing", () => {
+	test("a second call selects the cleaned continuation, refuses the absent worktree, and mutates nothing", async () => {
 		const f = fixture("second");
-		const first = invoke(f);
+		const first = await invoke(f);
 		expect(first.result.ok).toBe(true);
-		const second = invoke(f, {});
+		const second = await invoke(f, {});
 		expect(refusal(second.result)).toContain("worktree.path: observed");
 		expect(refusal(second.result)).toContain("absent after prior cleanup");
 		expect(mutationCalls(second.calls)).toEqual([]);
 	});
 
-	test("an unknown remote observation never becomes verified absence, while local cleanup stays truthful", () => {
+	test("an unknown remote observation never becomes verified absence, while local cleanup stays truthful", async () => {
 		const f = fixture("remote-unknown");
-		const { result } = invoke(f, { receipt: f.receiptPath }, { remote: "unknown" });
+		const { result } = await invoke(f, { receipt: f.receiptPath }, { remote: "unknown" });
 		expect(result.ok).toBe(true);
 		if (!result.ok) return;
 		expect(result.remoteBranchAbsence).toBe("unknown");
@@ -875,39 +875,39 @@ describe("delivery_cleanup irreversible boundary", () => {
 		expect(result.receipt.worktree.localRefDeleted).toBe(true);
 	});
 
-	test("an explicit receipt outside the canonical repository receipt directory is refused before observation", () => {
+	test("an explicit receipt outside the canonical repository receipt directory is refused before observation", async () => {
 		const f = fixture("outside-receipt");
 		const outside = join(scratch("explicit-tmp"), basename(f.receiptPath));
 		copyFileSync(f.receiptPath, outside);
-		const { result, calls } = invoke(f, { receipt: outside });
+		const { result, calls } = await invoke(f, { receipt: outside });
 		expect(refusal(result)).toContain(`receipt.path: observed "${outside}", expected a direct entry under`);
 		expect(calls).toEqual([]);
 		expect(existsSync(f.linked)).toBe(true);
 	});
 
-	test("explicit and implicit receipt selection refuse a symlinked receipt parent", () => {
+	test("explicit and implicit receipt selection refuse a symlinked receipt parent", async () => {
 		const f = fixture("receipt-parent-symlink");
 		const directory = receiptDirectory(f.env, f.receipt.repo.key);
 		const realDirectory = `${directory}-real`;
 		renameSync(directory, realDirectory);
 		symlinkSync(realDirectory, directory, "dir");
 
-		const explicit = invoke(f, { receipt: f.receiptPath });
+		const explicit = await invoke(f, { receipt: f.receiptPath });
 		expect(refusal(explicit.result)).toContain(`receipt.directory: observed "${directory} (unsafe)"`);
 		expect(explicit.calls).toEqual([]);
-		const implicit = invoke(f, { pr: f.receipt.pr.number });
+		const implicit = await invoke(f, { pr: f.receipt.pr.number });
 		expect(refusal(implicit.result)).toContain(`receipt.directory: observed "${directory} (unsafe)"`);
 		expect(implicit.calls).toEqual([]);
 	});
 
-	test("receipt, argument, and each merged-PR mismatch precede every local-state observation", () => {
+	test("receipt, argument, and each merged-PR mismatch precede every local-state observation", async () => {
 		const f = fixture("proof-order");
-		const missing = invoke(f, { pr: 999 });
+		const missing = await invoke(f, { pr: 999 });
 		expect(refusal(missing.result)).toContain("receipt: observed null, expected the newest validated receipt for pr 999");
 		expect(missing.calls).toEqual([]);
 
 		appendFileSync(join(f.linked, "feature.txt"), "dirty\n");
-		const argument = invoke(f, { receipt: f.receiptPath, branch: "wrong" });
+		const argument = await invoke(f, { receipt: f.receiptPath, branch: "wrong" });
 		expect(refusal(argument.result)).toContain(`branch: observed "wrong", expected receipt value "${f.branch}"`);
 		expect(argument.calls).toEqual([]);
 
@@ -921,7 +921,7 @@ describe("delivery_cleanup irreversible boundary", () => {
 			{ pr: { mergedAt: "2027-01-15T08:00:01.000Z" }, field: "pr.mergedAt" },
 		];
 		for (const mismatch of mismatches) {
-			const observed = invoke(f, { receipt: f.receiptPath }, { pr: mismatch.pr });
+			const observed = await invoke(f, { receipt: f.receiptPath }, { pr: mismatch.pr });
 			expect(refusal(observed.result)).toContain(`${mismatch.field}: observed`);
 			// The pull-request read is now preceded by the target's identity, because the
 			// remote is resolved inside the target. That is the only thing allowed to
@@ -938,7 +938,7 @@ describe("delivery_cleanup irreversible boundary", () => {
 		}
 	});
 
-	test("a schema-valid receipt without a merge commit refuses before any observation or mutation", () => {
+	test("a schema-valid receipt without a merge commit refuses before any observation or mutation", async () => {
 		const f = fixture("missing-merge-authorization", "feat/missing-merge-authorization", "retired");
 		const receipt = buildReceipt({
 			...f.receipt,
@@ -947,7 +947,7 @@ describe("delivery_cleanup irreversible boundary", () => {
 		});
 		const path = writeReceipt(receipt, receiptDirectory(f.env, receipt.repo.key));
 
-		const { result, calls } = invoke(f, { receipt: path }, { pr: { mergeCommitOid: null } });
+		const { result, calls } = await invoke(f, { receipt: path }, { pr: { mergeCommitOid: null } });
 
 		expect(refusal(result)).toContain("pr.mergeCommitOid");
 		expect(refusal(result)).toContain("a non-empty merge commit oid before cleanup");
@@ -958,10 +958,10 @@ describe("delivery_cleanup irreversible boundary", () => {
 		rmSync(f.root, { recursive: true, force: true });
 	});
 
-	test("a moved head, a dirty tree, an unpushed commit, and an open bead each refuse at their own gate", () => {
+	test("a moved head, a dirty tree, an unpushed commit, and an open bead each refuse at their own gate", async () => {
 		const f = fixture("refusal-order");
 		writeFileSync(join(f.linked, "dirty.txt"), "dirty\n");
-		const dirty = invoke(f, { receipt: f.receiptPath }, { beadStatus: "open" });
+		const dirty = await invoke(f, { receipt: f.receiptPath }, { beadStatus: "open" });
 		expect(refusal(dirty.result)).toContain("worktree.status");
 		expect(refusal(dirty.result)).toContain("dirty.txt");
 		expect(commandCalls(dirty.calls, "bd")).toEqual([]);
@@ -975,7 +975,7 @@ describe("delivery_cleanup irreversible boundary", () => {
 		writeFileSync(join(f.linked, "ahead.txt"), "ahead\n");
 		git(f.linked, ["add", "ahead.txt"]);
 		git(f.linked, ["commit", "-q", "-m", "ahead"]);
-		const moved = invoke(f, { receipt: f.receiptPath }, { beadStatus: "open" });
+		const moved = await invoke(f, { receipt: f.receiptPath }, { beadStatus: "open" });
 		expect(refusal(moved.result)).toContain("worktree.HEAD: observed");
 		expect(refusal(moved.result)).toContain(f.head);
 		expect(moved.calls.map(argv => argv.slice(0, 3))).toEqual([["git", "worktree", "list"]]);
@@ -984,31 +984,31 @@ describe("delivery_cleanup irreversible boundary", () => {
 		// tracking ref is rewound instead, which is what `@{upstream}..HEAD` counts.
 		git(f.linked, ["reset", "-q", "--hard", f.head]);
 		git(f.linked, ["update-ref", `refs/remotes/origin/${f.branch}`, `${f.head}^`]);
-		const unpushed = invoke(f, { receipt: f.receiptPath }, { beadStatus: "open" });
+		const unpushed = await invoke(f, { receipt: f.receiptPath }, { beadStatus: "open" });
 		expect(refusal(unpushed.result)).toContain("branch.unpushed: observed 1, expected 0 commits");
 		expect(commandCalls(unpushed.calls, "bd")).toEqual([]);
 
 		git(f.linked, ["update-ref", `refs/remotes/origin/${f.branch}`, f.head]);
-		const ledger = invoke(f, { receipt: f.receiptPath }, { beadStatus: "open" });
+		const ledger = await invoke(f, { receipt: f.receiptPath }, { beadStatus: "open" });
 		expect(refusal(ledger.result)).toContain(`bd update delivery-17 --set-metadata pr=${f.receipt.pr.number} --set-metadata merge_sha=${f.receipt.pr.mergeCommitOid}`);
 		expect(mutationCalls(ledger.calls)).toEqual([]);
 	}, 60_000);
 
-	test("a branch with no upstream refuses before the ledger read", () => {
+	test("a branch with no upstream refuses before the ledger read", async () => {
 		const f = fixture("no-upstream");
 		git(f.linked, ["config", "--unset", `branch.${f.branch}.remote`]);
 		git(f.linked, ["config", "--unset", `branch.${f.branch}.merge`]);
-		const { result, calls } = invoke(f);
+		const { result, calls } = await invoke(f);
 		expect(refusal(result)).toContain("branch.upstream: observed");
 		expect(refusal(result)).toContain("expected a configured upstream branch");
 		expect(commandCalls(calls, "bd")).toEqual([]);
 		expect(mutationCalls(calls)).toEqual([]);
 	}, 60_000);
 
-	test("reconciliation requires every bead merge_sha to equal the receipt exactly", () => {
+	test("reconciliation requires every bead merge_sha to equal the receipt exactly", async () => {
 		const f = fixture("ledger-sha");
 		const observed = "b".repeat(40);
-		const { result, calls } = invoke(f, { receipt: f.receiptPath }, { beadMergeSha: observed });
+		const { result, calls } = await invoke(f, { receipt: f.receiptPath }, { beadMergeSha: observed });
 		const reason = refusal(result);
 		expect(reason).toContain("beads.delivery-17.metadata.merge_sha");
 		expect(reason).toContain(observed);
@@ -1018,9 +1018,9 @@ describe("delivery_cleanup irreversible boundary", () => {
 		expect(mutationCalls(calls)).toEqual([]);
 	});
 
-	test("reconciliation refuses a closed bead without merge_sha and names native update", () => {
+	test("reconciliation refuses a closed bead without merge_sha and names native update", async () => {
 		const f = fixture("ledger-missing-merge-sha");
-		const { result, calls } = invoke(f, { receipt: f.receiptPath }, {
+		const { result, calls } = await invoke(f, { receipt: f.receiptPath }, {
 			beadRows: [{ id: "delivery-17", status: "closed", metadata: {} }],
 		});
 		const reason = refusal(result);
@@ -1034,7 +1034,7 @@ describe("delivery_cleanup irreversible boundary", () => {
 		["open then closed", ["open", "closed"]],
 		["closed then open", ["closed", "open"]],
 	] as const) {
-		test(`conflicting duplicate bead statuses refuse in ${order} order without mutation`, () => {
+		test(`conflicting duplicate bead statuses refuse in ${order} order without mutation`, async () => {
 			const f = fixture(`duplicate-status-${statuses.join("-")}`);
 			const beadRows = statuses.map(status => ({
 				id: "delivery-17",
@@ -1042,7 +1042,7 @@ describe("delivery_cleanup irreversible boundary", () => {
 				metadata: { merge_sha: f.merge },
 			}));
 
-			const { result, calls } = invoke(f, { receipt: f.receiptPath }, { beadRows });
+			const { result, calls } = await invoke(f, { receipt: f.receiptPath }, { beadRows });
 
 			const reason = refusal(result);
 			expect(reason).toContain("beads.delivery-17");
@@ -1059,7 +1059,7 @@ describe("delivery_cleanup irreversible boundary", () => {
 		["first then second", ["issue-one", "issue-two"]],
 		["second then first", ["issue-two", "issue-one"]],
 	] as const) {
-		test(`conflicting duplicate bead identities refuse in ${order} order without mutation`, () => {
+		test(`conflicting duplicate bead identities refuse in ${order} order without mutation`, async () => {
 			const f = fixture(`duplicate-identity-${identities.join("-")}`);
 			const beadRows = identities.map(identity => ({
 				id: "delivery-17",
@@ -1068,7 +1068,7 @@ describe("delivery_cleanup irreversible boundary", () => {
 				metadata: { merge_sha: f.merge },
 			}));
 
-			const { result, calls } = invoke(f, { receipt: f.receiptPath }, { beadRows });
+			const { result, calls } = await invoke(f, { receipt: f.receiptPath }, { beadRows });
 
 			const reason = refusal(result);
 			expect(reason).toContain("beads.delivery-17");
@@ -1081,12 +1081,12 @@ describe("delivery_cleanup irreversible boundary", () => {
 		});
 	}
 
-	test("identical duplicate bead rows coalesce without weakening cleanup authorization", () => {
+	test("identical duplicate bead rows coalesce without weakening cleanup authorization", async () => {
 		const f = fixture("duplicate-identical");
 		const issue = { id: "delivery-17", status: "closed", metadata: { merge_sha: f.merge } };
 		const linked = realpathSync(f.linked);
 
-		const { result, calls } = invoke(f, { receipt: f.receiptPath }, { beadRows: [issue, structuredClone(issue)] });
+		const { result, calls } = await invoke(f, { receipt: f.receiptPath }, { beadRows: [issue, structuredClone(issue)] });
 
 		expect(result.ok).toBe(true);
 		expect(mutationCalls(calls)).toEqual([
@@ -1097,7 +1097,7 @@ describe("delivery_cleanup irreversible boundary", () => {
 	});
 
 
-	test("refuses the repository's main worktree", () => {
+	test("refuses the repository's main worktree", async () => {
 		const mainTarget = fixture("main-target");
 		const mainReceipt = buildReceipt({
 			...mainTarget.receipt,
@@ -1111,7 +1111,7 @@ describe("delivery_cleanup irreversible boundary", () => {
 		const mainRun = runner(mainTarget, { pr: { headRefName: "main", headRefOid: mainTarget.merge } });
 		// Asked from the linked worktree: a call standing in its own target is refused
 		// earlier, by the invocation check, and would not reach the main-worktree rule.
-		const mainResult = cleanupDelivery({ receipt: mainPath }, mainTarget.linked, {
+		const mainResult = await cleanupDelivery({ receipt: mainPath }, mainTarget.linked, {
 			run: mainRun.run,
 			now: () => NOW + 20,
 			env: mainTarget.env,
@@ -1120,7 +1120,7 @@ describe("delivery_cleanup irreversible boundary", () => {
 		expect(mutationCalls(mainRun.calls)).toEqual([]);
 	});
 
-	test("refuses a worktree from a foreign repository", () => {
+	test("refuses a worktree from a foreign repository", async () => {
 		const current = fixture("current-repo");
 		const foreign = fixture("foreign-repo");
 		const foreignReceipt = buildReceipt({
@@ -1131,7 +1131,7 @@ describe("delivery_cleanup irreversible boundary", () => {
 		});
 		const foreignPath = writeReceipt(foreignReceipt, receiptDirectory(current.env, foreignReceipt.repo.key));
 		const foreignRun = runner(current);
-		const foreignResult = cleanupDelivery({ receipt: foreignPath }, current.main, {
+		const foreignResult = await cleanupDelivery({ receipt: foreignPath }, current.main, {
 			run: foreignRun.run,
 			now: () => NOW + 20,
 			env: current.env,
@@ -1140,7 +1140,7 @@ describe("delivery_cleanup irreversible boundary", () => {
 		expect(mutationCalls(foreignRun.calls)).toEqual([]);
 	});
 
-	test("refuses an unlisted path inside the same linked worktree", () => {
+	test("refuses an unlisted path inside the same linked worktree", async () => {
 		const unlisted = fixture("unlisted");
 		const nested = join(unlisted.linked, "nested");
 		mkdirSync(nested);
@@ -1152,7 +1152,7 @@ describe("delivery_cleanup irreversible boundary", () => {
 		});
 		const unlistedPath = writeReceipt(unlistedReceipt, receiptDirectory(unlisted.env, unlistedReceipt.repo.key));
 		const unlistedRun = runner(unlisted);
-		const unlistedResult = cleanupDelivery({ receipt: unlistedPath }, unlisted.main, {
+		const unlistedResult = await cleanupDelivery({ receipt: unlistedPath }, unlisted.main, {
 			run: unlistedRun.run,
 			now: () => NOW + 20,
 			env: unlisted.env,
@@ -1161,7 +1161,7 @@ describe("delivery_cleanup irreversible boundary", () => {
 		expect(mutationCalls(unlistedRun.calls)).toEqual([]);
 	});
 
-	test("a symlink alias cannot turn an untrusted receipt path into a listed target", () => {
+	test("a symlink alias cannot turn an untrusted receipt path into a listed target", async () => {
 		const f = fixture("symlink");
 		const alias = join(f.root, "linked-alias");
 		symlinkSync(f.linked, alias, "dir");
@@ -1173,16 +1173,16 @@ describe("delivery_cleanup irreversible boundary", () => {
 		});
 		const path = writeReceipt(receipt, receiptDirectory(f.env, receipt.repo.key));
 		const { run, calls } = runner(f);
-		const result = cleanupDelivery({ receipt: path }, f.main, { run, now: () => NOW + 10, env: f.env });
+		const result = await cleanupDelivery({ receipt: path }, f.main, { run, now: () => NOW + 10, env: f.env });
 		expect(refusal(result)).toContain(`${alias} (unsafe)`);
 		expect(mutationCalls(calls)).toEqual([]);
 		expect(existsSync(f.linked)).toBe(true);
 	});
 
-	test("a dirtying race at the irreversible boundary is observed before removal", () => {
+	test("a dirtying race at the irreversible boundary is observed before removal", async () => {
 		const f = fixture("dirty-race");
 		let statuses = 0;
-		const { result, calls } = invoke(f, { receipt: f.receiptPath }, {
+		const { result, calls } = await invoke(f, { receipt: f.receiptPath }, {
 			before: argv => {
 				if (argv[0] === "git" && argv[1] === "status") {
 					statuses += 1;
@@ -1195,11 +1195,11 @@ describe("delivery_cleanup irreversible boundary", () => {
 		expect(existsSync(f.linked)).toBe(true);
 	});
 
-	test("a ref that moves after worktree removal is not force-deleted and emits no receipt", () => {
+	test("a ref that moves after worktree removal is not force-deleted and emits no receipt", async () => {
 		const f = fixture("ref-race");
 		const beforeReceipts = readFileSync(f.receiptPath, "utf8");
 		const raced = git(f.main, ["commit-tree", `${f.merge}^{tree}`, "-p", f.merge, "-m", "raced ref"]);
-		const { result, calls } = invoke(f, { receipt: f.receiptPath }, {
+		const { result, calls } = await invoke(f, { receipt: f.receiptPath }, {
 			after: (argv, commandResult) => {
 				if (argv[0] === "git" && argv[1] === "worktree" && argv[2] === "remove" && commandResult.exitCode === 0) {
 					git(f.main, ["update-ref", `refs/heads/${f.branch}`, raced]);
@@ -1212,9 +1212,9 @@ describe("delivery_cleanup irreversible boundary", () => {
 		expect(readFileSync(f.receiptPath, "utf8")).toBe(beforeReceipts);
 	});
 
-	test("re-registration after removal is detected independently and stops branch deletion", () => {
+	test("re-registration after removal is detected independently and stops branch deletion", async () => {
 		const f = fixture("registration-race");
-		const { result, calls } = invoke(f, { receipt: f.receiptPath }, {
+		const { result, calls } = await invoke(f, { receipt: f.receiptPath }, {
 			after: (argv, commandResult) => {
 				if (argv[0] === "git" && argv[1] === "worktree" && argv[2] === "remove" && commandResult.exitCode === 0) {
 					git(f.main, ["worktree", "add", "-q", f.linked, f.branch]);
@@ -1226,25 +1226,25 @@ describe("delivery_cleanup irreversible boundary", () => {
 		expect(calls.some(argv => argv[0] === "git" && argv[1] === "branch")).toBe(false);
 	});
 
-	test("a stored registration path remains present proof after its filesystem target vanishes", () => {
+	test("a stored registration path remains present proof after its filesystem target vanishes", async () => {
 		const f = fixture("stored-registration");
-		const { result, calls } = invoke(f, { receipt: f.receiptPath }, { registeredTargetAfterRemove: true });
+		const { result, calls } = await invoke(f, { receipt: f.receiptPath }, { registeredTargetAfterRemove: true });
 		expect(refusal(result)).toContain('worktree.registrationAbsence: observed "present", expected "absent"');
 		expect(existsSync(f.linked)).toBe(false);
 		expect(calls.some(argv => argv[0] === "git" && argv[1] === "branch")).toBe(false);
 	});
 
-	test("a pathless porcelain record makes post-remove registration proof unknown", () => {
+	test("a pathless porcelain record makes post-remove registration proof unknown", async () => {
 		const f = fixture("pathless-record");
-		const { result, calls } = invoke(f, { receipt: f.receiptPath }, { pathlessAfterRemove: true });
+		const { result, calls } = await invoke(f, { receipt: f.receiptPath }, { pathlessAfterRemove: true });
 		expect(refusal(result)).toContain('worktree.registrationAbsence: observed "unknown", expected "absent"');
 		expect(calls.some(argv => argv[0] === "git" && argv[1] === "branch")).toBe(false);
 	});
 
 
-	test("filesystem-path recreation after removal is independent of registration absence", () => {
+	test("filesystem-path recreation after removal is independent of registration absence", async () => {
 		const f = fixture("path-race");
-		const { result, calls } = invoke(f, { receipt: f.receiptPath }, {
+		const { result, calls } = await invoke(f, { receipt: f.receiptPath }, {
 			after: (argv, commandResult) => {
 				if (argv[0] === "git" && argv[1] === "worktree" && argv[2] === "remove" && commandResult.exitCode === 0) {
 					mkdirSync(f.linked);
@@ -1255,9 +1255,9 @@ describe("delivery_cleanup irreversible boundary", () => {
 		expect(calls.some(argv => argv[0] === "git" && argv[1] === "branch")).toBe(false);
 	});
 
-	test("local-ref recreation after branch -d is independently reported and emits no receipt", () => {
+	test("local-ref recreation after branch -d is independently reported and emits no receipt", async () => {
 		const f = fixture("local-ref-race");
-		const { result } = invoke(f, { receipt: f.receiptPath }, {
+		const { result } = await invoke(f, { receipt: f.receiptPath }, {
 			after: (argv, commandResult) => {
 				if (argv[0] === "git" && argv[1] === "branch" && argv[2] === "-d" && commandResult.exitCode === 0) {
 					git(f.main, ["update-ref", `refs/heads/${f.branch}`, f.head]);
@@ -1268,12 +1268,12 @@ describe("delivery_cleanup irreversible boundary", () => {
 		expect(git(f.main, ["rev-parse", `refs/heads/${f.branch}`])).toBe(f.head);
 	});
 
-	test("hostile shell punctuation remains one argv element and cannot create a side effect", () => {
+	test("hostile shell punctuation remains one argv element and cannot create a side effect", async () => {
 		const marker = join(tmpdir(), "delivery-cleanup-must-not-exist");
 		rmSync(marker, { force: true });
 		const branch = `feat/cleanup;touch-${marker.replaceAll("/", "-")}`;
 		const f = fixture("argv", branch);
-		const { result, calls } = invoke(f);
+		const { result, calls } = await invoke(f);
 		expect(result.ok).toBe(true);
 		expect(calls).toContainEqual(["git", "branch", "-d", "--", branch]);
 		expect(existsSync(marker)).toBe(false);
@@ -1343,7 +1343,7 @@ describe("the ledger is classified at the canonical root, never at a caller's di
 		]);
 
 		const cleaning = runner(f);
-		const cleaned = cleanupDelivery({ receipt: landed.receiptPath }, f.main, {
+		const cleaned = await cleanupDelivery({ receipt: landed.receiptPath }, f.main, {
 			run: cleaning.run,
 			now: () => NOW + 10,
 			env: f.env,
@@ -1369,7 +1369,7 @@ describe("the ledger is classified at the canonical root, never at a caller's di
 		if (!landed.ok) throw new Error(landed.reason);
 
 		const cleaning = runner(f, { beadStatus: "open" });
-		const refused = cleanupDelivery({ receipt: landed.receiptPath }, f.main, {
+		const refused = await cleanupDelivery({ receipt: landed.receiptPath }, f.main, {
 			run: cleaning.run,
 			now: () => NOW + 10,
 			env: f.env,
@@ -1399,7 +1399,7 @@ describe("the ledger is classified at the canonical root, never at a caller's di
 			]);
 
 			const cleaning = runner(f, { beadStatus: "open" });
-			const refused = cleanupDelivery({ receipt: landed.receiptPath }, f.main, {
+			const refused = await cleanupDelivery({ receipt: landed.receiptPath }, f.main, {
 				run: cleaning.run,
 				now: () => NOW + 10,
 				env: f.env,
@@ -1417,7 +1417,7 @@ describe("the ledger is classified at the canonical root, never at a caller's di
 	 * attacker would forge: `ledgerActive: false` over a repository whose canonical
 	 * ledger is active. The stored boolean alone never opens the success path.
 	 */
-	test("a stale or tampered false claim is refused against the recomputed verdict, and nothing is removed", () => {
+	test("a stale or tampered false claim is refused against the recomputed verdict, and nothing is removed", async () => {
 		const f = fixture("stale-false-claim");
 		const stale = buildReceipt({
 			...f.receipt,
@@ -1427,7 +1427,7 @@ describe("the ledger is classified at the canonical root, never at a caller's di
 		const stalePath = writeReceipt(stale, receiptDirectory(f.env, stale.repo.key));
 
 		const { run, calls } = runner(f);
-		const result = cleanupDelivery({ receipt: stalePath }, f.main, { run, now: () => NOW + 10, env: f.env });
+		const result = await cleanupDelivery({ receipt: stalePath }, f.main, { run, now: () => NOW + 10, env: f.env });
 
 		const reason = refusal(result);
 		expect(reason).toContain("beads.ledgerActive: observed false stored in the receipt, expected true");
@@ -1439,7 +1439,7 @@ describe("the ledger is classified at the canonical root, never at a caller's di
 		expect(gitExit(f.main, ["show-ref", "--verify", "--quiet", `refs/heads/${f.branch}`])).toBe(0);
 	});
 
-	test("a true claim over a retired canonical root is refused just as loudly", () => {
+	test("a true claim over a retired canonical root is refused just as loudly", async () => {
 		const f = fixture("stale-true-claim", "feat/stale-true-claim", "retired");
 		const claimed = buildReceipt({
 			...f.receipt,
@@ -1449,7 +1449,7 @@ describe("the ledger is classified at the canonical root, never at a caller's di
 		const claimedPath = writeReceipt(claimed, receiptDirectory(f.env, claimed.repo.key));
 
 		const { run, calls } = runner(f);
-		const result = cleanupDelivery({ receipt: claimedPath }, f.main, { run, now: () => NOW + 10, env: f.env });
+		const result = await cleanupDelivery({ receipt: claimedPath }, f.main, { run, now: () => NOW + 10, env: f.env });
 
 		const reason = refusal(result);
 		expect(reason).toContain("beads.ledgerActive: observed true stored in the receipt, expected false");
@@ -1465,7 +1465,7 @@ describe("the ledger is classified at the canonical root, never at a caller's di
 	 * An active ledger with nothing to reconcile is refused by the receipt's own
 	 * validator, so a tampered file carrying that pair never reaches the ledger gate.
 	 */
-	test("a tampered receipt claiming an active ledger with no bead ids is refused when it is read", () => {
+	test("a tampered receipt claiming an active ledger with no bead ids is refused when it is read", async () => {
 		const f = fixture("tampered-empty-ids");
 		const directory = receiptDirectory(f.env, f.receipt.repo.key);
 		const tampered = { ...f.receipt, beads: { ids: [], ledgerActive: true } };
@@ -1473,7 +1473,7 @@ describe("the ledger is classified at the canonical root, never at a caller's di
 		writeFileSync(join(directory, `${f.receipt.receiptId}.json`), JSON.stringify(tampered));
 
 		const { run, calls } = runner(f);
-		const result = cleanupDelivery({ receipt: f.receiptPath }, f.main, { run, now: () => NOW + 10, env: f.env });
+		const result = await cleanupDelivery({ receipt: f.receiptPath }, f.main, { run, now: () => NOW + 10, env: f.env });
 
 		expect(refusal(result)).toContain("beads.ids: observed array of 0, expected at least one bead id when beads.ledgerActive is true");
 		expect(calls).toEqual([]);
@@ -1482,10 +1482,10 @@ describe("the ledger is classified at the canonical root, never at a caller's di
 });
 
 describe("delivery_cleanup never removes the worktree it was called from", () => {
-	test("a call from inside its own target refuses, naming the invocation and the resolved target", () => {
+	test("a call from inside its own target refuses, naming the invocation and the resolved target", async () => {
 		const f = fixture("invocation-target");
 		const { run, calls } = runner(f);
-		const result = cleanupDelivery({ receipt: f.receiptPath }, f.linked, { run, now: () => NOW + 10, env: f.env });
+		const result = await cleanupDelivery({ receipt: f.receiptPath }, f.linked, { run, now: () => NOW + 10, env: f.env });
 
 		const reason = refusal(result);
 		expect(reason).toContain(`worktree.invocationCwd: observed "${f.linked}"`);
@@ -1495,24 +1495,24 @@ describe("delivery_cleanup never removes the worktree it was called from", () =>
 		expect(gitExit(f.main, ["show-ref", "--verify", "--quiet", `refs/heads/${f.branch}`])).toBe(0);
 	});
 
-	test("a subdirectory of the target is inside the target", () => {
+	test("a subdirectory of the target is inside the target", async () => {
 		const f = fixture("invocation-nested");
 		const nested = join(f.linked, "deep", "deeper");
 		mkdirSync(nested, { recursive: true });
 		const { run, calls } = runner(f);
-		const result = cleanupDelivery({ receipt: f.receiptPath }, nested, { run, now: () => NOW + 10, env: f.env });
+		const result = await cleanupDelivery({ receipt: f.receiptPath }, nested, { run, now: () => NOW + 10, env: f.env });
 
 		expect(refusal(result)).toContain("expected a directory outside the worktree this call would remove");
 		expect(calls).toEqual([]);
 		expect(existsSync(f.linked)).toBe(true);
 	});
 
-	test("a symlinked alias of the target is still the target", () => {
+	test("a symlinked alias of the target is still the target", async () => {
 		const f = fixture("invocation-alias");
 		const alias = join(f.root, "alias");
 		symlinkSync(f.linked, alias, "dir");
 		const { run, calls } = runner(f);
-		const result = cleanupDelivery({ receipt: f.receiptPath }, alias, { run, now: () => NOW + 10, env: f.env });
+		const result = await cleanupDelivery({ receipt: f.receiptPath }, alias, { run, now: () => NOW + 10, env: f.env });
 
 		expect(refusal(result)).toContain("worktree.invocationCwd");
 		expect(calls).toEqual([]);
@@ -1527,7 +1527,7 @@ describe("delivery_cleanup never removes the worktree it was called from", () =>
 	 * send the question to another repository, whose answer would become a false
 	 * absence here.
 	 */
-	test("the remote-absence probe is asked outside every checkout, and its directory does not survive", () => {
+	test("the remote-absence probe is asked outside every checkout, and its directory does not survive", async () => {
 		const f = fixture("probe-cwd");
 		const scripted = runner(f);
 		// Classified inside the hook, while the directory still exists: afterwards it is
@@ -1539,7 +1539,7 @@ describe("delivery_cleanup never removes the worktree it was called from", () =>
 			}
 			return scripted.run(argv, options);
 		};
-		const result = cleanupDelivery({ receipt: f.receiptPath }, f.main, { run, now: () => NOW + 10, env: f.env });
+		const result = await cleanupDelivery({ receipt: f.receiptPath }, f.main, { run, now: () => NOW + 10, env: f.env });
 
 		expect(result.ok).toBe(true);
 		expect(probes).toHaveLength(1);
@@ -1549,6 +1549,119 @@ describe("delivery_cleanup never removes the worktree it was called from", () =>
 		expect(asked.startsWith(f.root)).toBe(false);
 		expect(probes[0]?.key).toBeNull();
 		expect(existsSync(asked)).toBe(false);
+	});
+});
+
+/**
+ * The tool is registered, so no harness deadline applies: each bound is sized by the
+ * work its command does. Cheap ref reads keep 2 s; a cold embedded store needs far
+ * longer than that to answer `bd show`, and a removal stopped mid-way leaves a
+ * half-deleted worktree.
+ */
+describe("delivery_cleanup command bounds and interrupts", () => {
+	/** A command that never answers on its own: only its bound or an interrupt ends it. */
+	const hang = (options: Parameters<AsyncCliRunner>[1]) => runCliAsync(["sleep", "30"], options);
+
+	test("each command is bounded by its work, and no mutation or bd read runs under the 2 s ref-read bound", async () => {
+		const f = fixture("bounds");
+		const { result, details } = await invoke(f);
+		expect(result.ok).toBe(true);
+		const bounds = (match: (argv: string[]) => boolean) => details.filter(call => match(call.argv)).map(call => call.timeoutMs);
+		expect(bounds(argv => argv[0] === "bd")).toEqual([120_000]);
+		expect(bounds(argv => argv[1] === "worktree" && argv[2] === "remove")).toEqual([600_000]);
+		expect(bounds(argv => argv[1] === "branch" && argv[2] === "-d")).toEqual([600_000]);
+		expect(bounds(argv => argv[1] === "status")).toEqual([60_000, 60_000]);
+		const refReads = bounds(argv =>
+			argv[0] === "git" && (["rev-parse", "rev-list", "show-ref", "remote"].includes(argv[1] ?? "") || argv[1] === "worktree" && argv[2] === "list"),
+		);
+		expect(refReads.length).toBeGreaterThan(0);
+		expect(refReads.every(bound => bound === 2_000)).toBe(true);
+	});
+
+	test("a bd show that hangs past its bound reports the ledger step not done, and nothing is removed", async () => {
+		const f = fixture("hung-bd");
+		const scripted = runner(f);
+		const run: AsyncCliRunner = (argv, options) => (argv[0] === "bd" ? hang(options) : scripted.run(argv, options));
+		const started = Date.now();
+		const result = await cleanupDelivery({ receipt: f.receiptPath }, f.main, {
+			run,
+			now: () => NOW + 10,
+			env: f.env,
+			bounds: { bdShowMs: 300 },
+		});
+		expect(Date.now() - started).toBeLessThan(10_000);
+		const reason = refusal(result);
+		expect(reason.startsWith("beads: observed")).toBe(true);
+		expect(reason).toContain("no exit status");
+		expect(reason).toContain("killed by the 300ms timeout");
+		expect(mutationCalls(scripted.calls)).toEqual([]);
+		expect(existsSync(f.linked)).toBe(true);
+	});
+
+	test("an interrupt ends a hung read at once, long before its bound, and nothing is removed", async () => {
+		const f = fixture("interrupted-read");
+		const scripted = runner(f);
+		const controller = new AbortController();
+		const run: AsyncCliRunner = (argv, options) => {
+			if (argv[0] !== "bd") return scripted.run(argv, options);
+			setTimeout(() => controller.abort(), 200);
+			return hang(options);
+		};
+		const started = Date.now();
+		const result = await cleanupDelivery({ receipt: f.receiptPath }, f.main, {
+			run,
+			now: () => NOW + 10,
+			env: f.env,
+			signal: controller.signal,
+		});
+		expect(Date.now() - started).toBeLessThan(10_000);
+		expect(refusal(result)).toContain("killed by an abort");
+		expect(mutationCalls(scripted.calls)).toEqual([]);
+		expect(existsSync(f.linked)).toBe(true);
+	});
+
+	test("an interrupt observed after the last read refuses before the removal starts", async () => {
+		const f = fixture("interrupted-boundary");
+		const scripted = runner(f);
+		const controller = new AbortController();
+		const run: AsyncCliRunner = (argv, options) => {
+			const result = scripted.run(argv, options);
+			if (argv[0] === "bd") controller.abort();
+			return result;
+		};
+		const result = await cleanupDelivery({ receipt: f.receiptPath }, f.main, {
+			run,
+			now: () => NOW + 10,
+			env: f.env,
+			signal: controller.signal,
+		});
+		expect(refusal(result)).toContain("nothing was removed");
+		expect(mutationCalls(scripted.calls)).toEqual([]);
+		expect(existsSync(f.linked)).toBe(true);
+	});
+
+	test("an interrupt that arrives once the removal has started neither reaches it nor stops the steps after it", async () => {
+		const f = fixture("interrupted-removal");
+		const scripted = runner(f);
+		const controller = new AbortController();
+		const signalled: { argv: string[]; signal: boolean }[] = [];
+		const run: AsyncCliRunner = (argv, options) => {
+			signalled.push({ argv: [...argv], signal: options.signal !== undefined });
+			if (argv[1] === "worktree" && argv[2] === "remove") controller.abort();
+			return scripted.run(argv, options);
+		};
+		const result = await cleanupDelivery({ receipt: f.receiptPath }, f.main, {
+			run,
+			now: () => NOW + 10,
+			env: f.env,
+			signal: controller.signal,
+		});
+		expect(result.ok).toBe(true);
+		expect(existsSync(f.linked)).toBe(false);
+		const removal = signalled.findIndex(call => call.argv[1] === "worktree" && call.argv[2] === "remove");
+		expect(removal).toBeGreaterThan(0);
+		expect(signalled.slice(0, removal).every(call => call.signal)).toBe(true);
+		expect(signalled.slice(removal).some(call => call.signal)).toBe(false);
 	});
 });
 

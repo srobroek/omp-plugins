@@ -21,7 +21,7 @@ TRIGGER
 4. Select checks with `--only ID[,ID...]`.
    Use `--apply` to print that no Beads check has a safe automatic fix.
 5. The `no-stale-lease-on-open-work` scan is skipped by default because it enumerates open beads. Pass `--include-slow`, or select that ID explicitly with `--only`, to run it.
-6. Every `bd` call has a five-second timeout by default. Override it with `--timeout SECONDS`; a timeout is reported as `warn`, except a `store-reachable` timeout is `fail`.
+6. Every `bd` call has a 60-second timeout by default, because a cold embedded store takes 30-50 seconds to open. Override it with `--timeout SECONDS`; a timeout is reported as `warn`, except a `store-reachable` timeout is `fail`.
 
 This skill is read-only.
 It performs no ledger mutation.

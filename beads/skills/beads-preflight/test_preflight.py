@@ -117,6 +117,20 @@ class BeadsPreflightRegressionTests(unittest.TestCase):
         self.assertEqual(result["status"], "fail")
         self.assertIn("parseable semantic version", result["detail"])
 
+    def test_default_bound_outlasts_a_cold_store_while_an_injected_bound_still_stops_it(self) -> None:
+        # A cold embedded store answers after 30-50 s; this stub answers after 8 s, 3 s
+        # past the old 5 s default, so a default that cannot wait out a slow open fails here.
+        with tempfile.TemporaryDirectory() as directory:
+            stub = Path(directory) / "bd"
+            stub.write_text("#!/usr/bin/env python3\nimport time; time.sleep(8); print('[]')\n", encoding="utf-8")
+            stub.chmod(0o700)
+            with patch.dict(os.environ, {"PATH": f"{directory}{os.pathsep}{os.environ.get('PATH', '')}"}):
+                cold = preflight.check_ready_work({})
+                bounded = preflight.check_ready_work({"timeout_seconds": 1})
+        self.assertEqual(cold["status"], "pass", cold["detail"])
+        self.assertEqual(bounded["status"], "warn")
+        self.assertIn("timed out after 1 seconds", bounded["detail"])
+
 
 if __name__ == "__main__":
     unittest.main()

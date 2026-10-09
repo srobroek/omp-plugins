@@ -27,7 +27,9 @@ CHECK_IDS = (
     "remote-sync-configured",
 )
 
-DEFAULT_TIMEOUT_SECONDS = 5.0
+# A cold embedded store takes 30-50 s to open, so a shorter bound fails a healthy
+# ledger. 60 s covers that with headroom; agents run this through bash (300 s default).
+DEFAULT_TIMEOUT_SECONDS = 60.0
 STALE_LEASE_LIMIT = 50
 SETUP_RULE = "rule://beads-setup"
 BOOTSTRAP_FIX = "bd bootstrap --yes"
@@ -523,7 +525,13 @@ def main() -> int:
     parser.add_argument("--json", action="store_true", dest="as_json")
     parser.add_argument("--only", help="comma-separated check ids")
     parser.add_argument("--include-slow", action="store_true", help="run the opt-in open-bead lease scan")
-    parser.add_argument("--timeout", type=float, default=DEFAULT_TIMEOUT_SECONDS, metavar="SECONDS", help="per-command timeout (default: 5)")
+    parser.add_argument(
+        "--timeout",
+        type=float,
+        default=DEFAULT_TIMEOUT_SECONDS,
+        metavar="SECONDS",
+        help=f"per-command timeout (default: {DEFAULT_TIMEOUT_SECONDS:g})",
+    )
     parser.add_argument("--apply", action="store_true", help="report that no safe automatic fix exists")
     args = parser.parse_args()
     if not math.isfinite(args.timeout) or args.timeout <= 0:
