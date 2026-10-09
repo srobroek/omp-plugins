@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.10](https://github.com/srobroek/omp-plugins/compare/go--v0.3.9...go--v0.3.10) (2026-10-09)
+
+
+### Bug Fixes
+
+* **typescript,go,rust,python:** report quality-command timeouts as skips and honour the abort signal ([#659](https://github.com/srobroek/omp-plugins/issues/659)) ([76427c2](https://github.com/srobroek/omp-plugins/commit/76427c234d708c3726598d780f6fc60b8e152370))
+
 ## [0.3.9](https://github.com/srobroek/omp-plugins/compare/go--v0.3.8...go--v0.3.9) (2026-10-09)
 
 

@@ -96,7 +96,7 @@
       "name": "go",
       "description": "Go rules: module layout, error wrapping, table-driven tests, and a Go review skill.",
       "source": "./go",
-      "version": "0.3.9",
+      "version": "0.3.10",
       "category": "language"
     },
     {
@@ -117,7 +117,7 @@
       "name": "python",
       "description": "Python format, lint, type-check, and test runner (ruff, pyright, pytest).",
       "source": "./python",
-      "version": "0.3.10",
+      "version": "0.3.11",
       "category": "language"
     },
     {
@@ -131,7 +131,7 @@
       "name": "rust",
       "description": "Rust rules: crate boundaries, domain modeling, error and persistence patterns, workspace and Tauri layout, and a Rust review skill.",
       "source": "./rust",
-      "version": "0.6.9",
+      "version": "0.6.10",
       "category": "language"
     },
     {
@@ -166,7 +166,7 @@
       "name": "typescript",
       "description": "TypeScript type-safety rule and a Biome or ESLint plus tsc quality tool.",
       "source": "./typescript",
-      "version": "0.3.10",
+      "version": "0.3.11",
       "category": "language"
     },
     {
