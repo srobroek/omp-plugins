@@ -1,6 +1,6 @@
 {
   "name": "typescript",
   "description": "TypeScript type-safety rule and a Biome or ESLint plus tsc quality tool.",
-  "version": "0.3.10",
+  "version": "0.3.11",
   "category": "language"
 }

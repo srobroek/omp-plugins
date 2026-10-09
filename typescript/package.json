@@ -1,6 +1,6 @@
 {
   "name": "@srobroek/typescript",
-  "version": "0.3.10",
+  "version": "0.3.11",
   "description": "TypeScript type-safety rule and a Biome or ESLint plus tsc quality tool.",
   "private": true,
   "omp": {
