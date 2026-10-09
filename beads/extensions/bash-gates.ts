@@ -13,8 +13,19 @@ type BashInput = { command?: unknown; cmd?: unknown; cwd?: unknown; env?: unknow
 type GateDecision = { block: true; reason: string } | undefined;
 
 
-/** Stay below the host's 30 second tool_call deadline, including every gate. */
+/**
+ * Stay below the host's 30 second tool_call deadline. One budget covers the whole call:
+ * gate admission and every gate below draw on the same deadline, so a late admission
+ * leaves the gates only what remains and each refusal keeps its own reason.
+ */
 const TOOL_CALL_BUDGET_MS = 25_000;
+
+let toolCallBudgetMs = TOOL_CALL_BUDGET_MS;
+
+/** Shorten the per-call budget. Pass `null` to restore the real one. */
+export function setToolCallBudgetForTests(ms: number | null): void {
+	toolCallBudgetMs = ms ?? TOOL_CALL_BUDGET_MS;
+}
 
 function inputOf(event: ToolCallEvent, ctx: ExtensionContext): { command: string; cwd: string } {
 	const input = event.input as BashInput;
@@ -104,6 +115,7 @@ async function decide(parsed: ParsedCommand, event: ToolCallEvent, ctx: Extensio
 /** The beads plugin's sole Bash tool-call registration. Parsing happens exactly once. */
 export default function bashGates(pi: ExtensionAPI): void {
 	pi.on("tool_call", async (event: ToolCallEvent, ctx: ExtensionContext) => {
+		const deadline = Date.now() + toolCallBudgetMs;
 		try {
 			const input = event.input as Record<string, unknown>;
 			const gatedTool = event.toolName === "task" ||
@@ -112,16 +124,16 @@ export default function bashGates(pi: ExtensionAPI): void {
 				const workspace = typeof input.workspace === "string" ? input.workspace : undefined;
 				if (event.toolName === "bd_formula_check" && workspace === undefined) return suffix("beads-gate-admission", "deep formula checks require an explicit workspace so admission and execution cannot select different stores", "set workspace to the target checkout and retry");
 				const cwd = workspace === undefined ? (ctx?.cwd ?? process.cwd()) : resolve(ctx?.cwd ?? process.cwd(), workspace);
-				const admission = await admitBeadsWork(ctx, cwd, lifecycleBdEnvironment(cwd));
+				const admission = await admitBeadsWork(ctx, cwd, lifecycleBdEnvironment(cwd), true, deadline);
 				if (admission) return suffix("beads-gate-admission", admission.reason, "retry the operation; verification continues and the next attempt waits on the same read");
 				return undefined;
 			}
 			if (event.toolName !== "bash") return;
 			const { command } = inputOf(event, ctx);
 			if (!command) return;
-			const admission = await admitBdMutation(event.input, ctx, targetCwd => settingsEnabled("beads", "beads-gate-admission", targetCwd));
+			const admission = await admitBdMutation(event.input, ctx, targetCwd => settingsEnabled("beads", "beads-gate-admission", targetCwd), deadline);
 			if (admission) return suffix("beads-gate-admission", admission.reason, "retry the command; verification continues and the next attempt waits on the same read");
-			return await decide(parse(command), event, ctx, pi, Date.now() + TOOL_CALL_BUDGET_MS);
+			return await decide(parse(command), event, ctx, pi, deadline);
 		} catch (error) {
 			return suffix("bash-gates", `command could not be parsed (${error instanceof Error ? error.message : String(error)})`, "split the command or run the mutation as a plain single command");
 		}

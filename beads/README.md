@@ -28,6 +28,8 @@ The package registers `bash-gates` as the dispatcher entrypoint and `session-bea
 
 The write runner is registered as the package program and must remain available. The session lifecycle extension pins `BEADS_DIR` to the repository's canonical `.beads` store so linked worktrees use one embedded ledger.
 
+`bash-gates` gives each tool call one 25-second budget that gate admission and every gate share, so a slow lookup is refused with that gate's own reason before OMP's 30-second handler limit. When a spawned task executor ends, the lifecycle releases its claims within the 30-second `agent_end` limit; a claim whose release cannot be verified in time is reported to the session that spawned the executor, with the guarded release command.
+
 ## Removed surface
 
 Only the direct `bd` workflow and the store-safety controls remain; the package no longer includes the removed workflow and advisory surface.
