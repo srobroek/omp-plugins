@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.10.3](https://github.com/srobroek/omp-plugins/compare/speckit--v0.10.2...speckit--v0.10.3) (2026-10-09)
+
+
+### Bug Fixes
+
+* **speckit:** bound each spec-start bd command, honour abort, report incomplete starts ([#666](https://github.com/srobroek/omp-plugins/issues/666)) ([3601123](https://github.com/srobroek/omp-plugins/commit/36011237078bccb3b201cc4b31364d85f2256d8a))
+
 ## [0.10.2](https://github.com/srobroek/omp-plugins/compare/speckit--v0.10.1...speckit--v0.10.2) (2026-10-08)
 
 

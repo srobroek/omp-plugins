@@ -1,5 +1,12 @@
 # Changelog
 
+## [3.0.1](https://github.com/srobroek/omp-plugins/compare/worktrunk--v3.0.0...worktrunk--v3.0.1) (2026-10-09)
+
+
+### Bug Fixes
+
+* **safety,worktrunk:** bound sync git probes in tool_call gates ([#664](https://github.com/srobroek/omp-plugins/issues/664)) ([a21faaf](https://github.com/srobroek/omp-plugins/commit/a21faaf7dcf645e9ef4bbf4d1bdc6dc5a2b87836))
+
 ## [3.0.0](https://github.com/srobroek/omp-plugins/compare/worktrunk--v2.0.1...worktrunk--v3.0.0) (2026-10-02)
 
 
