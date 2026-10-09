@@ -12,7 +12,7 @@
       "name": "architecture",
       "description": "Architecture rules: capability-first layout, ownership boundaries, and durable docs/ project knowledge, plus a read-only architect agent.",
       "source": "./architecture",
-      "version": "0.6.1",
+      "version": "0.6.2",
       "category": "development"
     },
     {
@@ -96,7 +96,7 @@
       "name": "go",
       "description": "Go rules: module layout, error wrapping, table-driven tests, and a Go review skill.",
       "source": "./go",
-      "version": "0.3.8",
+      "version": "0.3.9",
       "category": "language"
     },
     {
@@ -117,7 +117,7 @@
       "name": "python",
       "description": "Python format, lint, type-check, and test runner (ruff, pyright, pytest).",
       "source": "./python",
-      "version": "0.3.9",
+      "version": "0.3.10",
       "category": "language"
     },
     {
@@ -131,7 +131,7 @@
       "name": "rust",
       "description": "Rust rules: crate boundaries, domain modeling, error and persistence patterns, workspace and Tauri layout, and a Rust review skill.",
       "source": "./rust",
-      "version": "0.6.8",
+      "version": "0.6.9",
       "category": "language"
     },
     {
@@ -159,14 +159,14 @@
       "name": "toolchain",
       "description": "Toolchain defaults, backend services, infrastructure, and operations.",
       "source": "./toolchain",
-      "version": "1.0.1",
+      "version": "1.0.2",
       "category": "development"
     },
     {
       "name": "typescript",
       "description": "TypeScript type-safety rule and a Biome or ESLint plus tsc quality tool.",
       "source": "./typescript",
-      "version": "0.3.9",
+      "version": "0.3.10",
       "category": "language"
     },
     {

@@ -1,6 +1,6 @@
 {
   "name": "@srobroek/architecture",
-  "version": "0.6.1",
+  "version": "0.6.2",
   "description": "Architecture rules: capability-first layout, ownership boundaries, and durable docs/ project knowledge, plus a read-only architect agent.",
   "private": true,
   "omp": {}
