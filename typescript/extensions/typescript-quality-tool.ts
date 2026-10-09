@@ -4,7 +4,6 @@ import type { TSchema } from "@oh-my-pi/pi-ai";
 import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
 import {
     fmtTable,
-    have,
     type PlannedStep,
     PROBE_BUDGET_MS,
     type QualityMode,
@@ -13,6 +12,7 @@ import {
     report,
     runSteps,
     type StepResult,
+    unavailable,
 } from "./quality-runner.ts";
 
 type TypescriptQualityParams = { mode: QualityMode; path?: string };
@@ -22,8 +22,11 @@ function local(bin: string, cwd: string): string | null {
     return existsSync(path) ? path : null;
 }
 
-async function installed(bin: string, cwd: string, deadline: number, signal?: AbortSignal): Promise<string | null> {
-    return local(bin, cwd) ?? ((await have(bin, deadline, signal)) ? bin : null);
+async function installed(bin: string, cwd: string, deadline: number, signal?: AbortSignal): Promise<Pick<PlannedStep, "bin" | "missing">> {
+    const path = local(bin, cwd);
+    if (path) return { bin: path, missing: "" };
+    const missing = await unavailable(bin, deadline, signal);
+    return missing ? { bin: null, missing } : { bin, missing: "" };
 }
 
 const LINTERS = ["biome", "eslint"] as const;
@@ -33,13 +36,18 @@ const LINTERS = ["biome", "eslint"] as const;
  * Biome running `check --write` on an ESLint project rewrites files under rules
  * the project never chose.
  */
-async function linter(cwd: string, deadline: number, signal?: AbortSignal): Promise<{ name: (typeof LINTERS)[number]; bin: string } | null> {
+async function linter(cwd: string, deadline: number, signal?: AbortSignal): Promise<{ name: (typeof LINTERS)[number]; bin: string } | { missing: string }> {
     for (const name of LINTERS) {
         const bin = local(name, cwd);
         if (bin) return { name, bin };
     }
-    for (const name of LINTERS) if (await have(name, deadline, signal)) return { name, bin: name };
-    return null;
+    const reasons: string[] = [];
+    for (const name of LINTERS) {
+        const missing = await unavailable(name, deadline, signal);
+        if (!missing) return { name, bin: name };
+        reasons.push(missing);
+    }
+    return { missing: `no installed biome or eslint (${reasons.join("; ")})` };
 }
 
 export async function runTypescriptQuality(mode: QualityMode, cwd: string, options: QualityOptions = {}): Promise<QualityReport> {
@@ -50,23 +58,22 @@ export async function runTypescriptQuality(mode: QualityMode, cwd: string, optio
     const probeDeadline = Date.now() + PROBE_BUDGET_MS;
     const lint = await linter(cwd, probeDeadline, signal);
     const plan: PlannedStep[] = [
-        lint
+        "bin" in lint
             ? {
                   name: lint.name,
                   bin: lint.bin,
                   args: lint.name === "biome" ? ["check", ...(mode === "fix" ? ["--write"] : []), "."] : [".", ...(mode === "fix" ? ["--fix"] : [])],
                   missing: "",
               }
-            : { name: "biome/eslint", bin: null, args: [], missing: "no installed biome or eslint" },
+            : { name: "biome/eslint", bin: null, args: [], missing: lint.missing },
     ];
     if (mode === "check") {
         // Without a tsconfig.json, `tsc --noEmit` prints its help and exits 1: there is nothing to type-check.
         const hasConfig = existsSync(join(cwd, "tsconfig.json"));
         plan.push({
             name: "tsc --noEmit",
-            bin: hasConfig ? await installed("tsc", cwd, probeDeadline, signal) : null,
+            ...(hasConfig ? await installed("tsc", cwd, probeDeadline, signal) : { bin: null, missing: "no tsconfig.json" }),
             args: ["--noEmit"],
-            missing: hasConfig ? "no installed tsc" : "no tsconfig.json",
         });
     }
     return report(mode, cwd, await runSteps(plan, cwd, options));

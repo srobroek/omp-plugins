@@ -129,6 +129,27 @@ test("a shim that resolves but cannot run counts as absent, not as a failure", (
 	}
 }, 120_000); // shared probe budget caps availability cascades at 10s
 
+test("a probe that times out reports the timeout, not a binary absent from PATH", () => {
+	// A hung probe says nothing about whether the binary exists, so reading it as
+	// `not on PATH` sent the user hunting for an install that was already there.
+	const dir = mkdtempSync(join(tmpdir(), "python-quality-hang-"));
+	try {
+		const hang = join(dir, "ruff");
+		writeFileSync(hang, "#!/bin/sh\nexec /bin/sleep 30\n");
+		chmodSync(hang, 0o755);
+		// A child bun, because Bun resolves PATH at startup; the 1 s deadline is the injected probe bound.
+		const runner = join(import.meta.dir, "..", "extensions", "quality-runner.ts");
+		const source = `import { unavailable } from ${JSON.stringify(runner)}; console.log(JSON.stringify([await unavailable("ruff", Date.now() + 1_000), await unavailable("pyright", Date.now() + 1_000)]));`;
+		const proc = Bun.spawnSync([process.execPath, "-e", source], { env: { ...process.env, PATH: dir }, stdout: "pipe", stderr: "pipe", timeout: 15_000 });
+		expect(proc.stderr.toString()).toBe("");
+		const [ruff, pyright] = JSON.parse(proc.stdout.toString());
+		expect(ruff).toMatch(/^ruff probe timed out after [\d.]+ s$/);
+		expect(pyright).toBe("pyright not on PATH");
+	} finally {
+		rmSync(dir, { recursive: true, force: true });
+	}
+}, 20_000);
+
 test("pytest collecting no tests is a skip, not a failure", async () => {
 	// pytest exits 5 when it collects nothing, which every project without tests
 	// does. Reporting that as FAIL claims a finding the code does not have.
