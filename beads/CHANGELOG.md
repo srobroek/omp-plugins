@@ -6,6 +6,13 @@
 
 - Require Beads `blocks` dependencies to encode true prerequisites so independent work remains parallelizable.
 
+## [4.1.5](https://github.com/srobroek/omp-plugins/compare/beads--v4.1.4...beads--v4.1.5) (2026-10-09)
+
+
+### Bug Fixes
+
+* **delivery,beads:** size cleanup and preflight bounds for cold stores ([#672](https://github.com/srobroek/omp-plugins/issues/672)) ([28ad24b](https://github.com/srobroek/omp-plugins/commit/28ad24b84a660a1fad442c733743073c2e915cae))
+
 ## [4.1.4](https://github.com/srobroek/omp-plugins/compare/beads--v4.1.3...beads--v4.1.4) (2026-10-09)
 
 

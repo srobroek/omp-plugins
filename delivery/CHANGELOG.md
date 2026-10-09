@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.4.2](https://github.com/srobroek/omp-plugins/compare/delivery--v1.4.1...delivery--v1.4.2) (2026-10-09)
+
+
+### Bug Fixes
+
+* **delivery,beads:** size cleanup and preflight bounds for cold stores ([#672](https://github.com/srobroek/omp-plugins/issues/672)) ([28ad24b](https://github.com/srobroek/omp-plugins/commit/28ad24b84a660a1fad442c733743073c2e915cae))
+
+
+### Refactors
+
+* **delivery:** drop unused sync CLI runner ([#673](https://github.com/srobroek/omp-plugins/issues/673)) ([4f69ed2](https://github.com/srobroek/omp-plugins/commit/4f69ed23b6814152715be069dc480ee6f082628d))
+
 ## [1.4.1](https://github.com/srobroek/omp-plugins/compare/delivery--v1.4.0...delivery--v1.4.1) (2026-10-09)
 
 
