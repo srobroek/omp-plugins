@@ -58,6 +58,85 @@ describe("headed browser profile cloning", () => {
 		expect(warnings).toEqual([]);
 	});
 
+	describe("native copy bounds", () => {
+		const profileModule = JSON.stringify(join(import.meta.dir, "lib", "profile.ts"));
+		type CopyOutcome = { elapsed: number; ticks: number; message?: string; warnings: string[] };
+
+		/** A source profile plus a `bin` directory whose `cp` runs `body` in place of the real copy. */
+		async function nativeCopyFixture(body: string): Promise<{ bin: string; source: string; destination: string }> {
+			const root = await temporary();
+			const bin = join(root, "bin");
+			const source = join(root, "source");
+			const destination = join(root, "destination");
+			await mkdir(bin);
+			await mkdir(source);
+			await mkdir(destination);
+			await writeFile(join(source, "prefs.js"), "prefs");
+			await writeFile(join(bin, "cp"), `#!/bin/sh\n${body}\n`, { mode: 0o755 });
+			return { bin, source, destination };
+		}
+
+		/**
+		 * Runs one clonefile copy in a child bun and reports how it ended. Bun resolves spawned
+		 * commands from its startup PATH, so only a child sees the fixture `cp`. `ticks` counts
+		 * a 100 ms interval, which only advances while the copy leaves the event loop free.
+		 */
+		function copyInChild(fixture: { bin: string; source: string; destination: string }, args: { timeoutMs?: number; abortAfterMs?: number }): CopyOutcome {
+			const body = `
+				import { copyProfile } from ${profileModule};
+				const controller = new AbortController();
+				const abortAfterMs = ${args.abortAfterMs ?? "undefined"};
+				if (abortAfterMs !== undefined) setTimeout(() => controller.abort(), abortAfterMs);
+				let ticks = 0;
+				const ticker = setInterval(() => { ticks += 1; }, 100);
+				const warnings = [];
+				const started = Date.now();
+				let message;
+				try {
+					await copyProfile(${JSON.stringify(fixture.source)}, ${JSON.stringify(fixture.destination)}, "clonefile", false, warnings, controller.signal, ${args.timeoutMs ?? "undefined"});
+				} catch (error) {
+					message = error.message;
+				}
+				clearInterval(ticker);
+				console.log(JSON.stringify({ elapsed: Date.now() - started, ticks, message, warnings }));
+			`;
+			const child = Bun.spawnSync([process.execPath, "-e", body], {
+				env: { ...process.env, PATH: `${fixture.bin}:${process.env.PATH}` },
+				stdout: "pipe",
+				stderr: "pipe",
+				timeout: 15_000,
+			});
+			expect(child.exitCode, child.stderr.toString()).toBe(0);
+			return JSON.parse(child.stdout.toString()) as CopyOutcome;
+		}
+
+		test("a copy that outlasts its bound fails clearly instead of falling back to node", async () => {
+			const fixture = await nativeCopyFixture("exec sleep 8");
+			const outcome = copyInChild(fixture, { timeoutMs: 2_000 });
+			expect(outcome.message).toBe("headed-browser: profile copy (clonefile) exceeded 2 s; no session launched");
+			expect(outcome.warnings).toEqual([]);
+			expect(outcome.elapsed).toBeLessThan(6_000);
+			expect(existsSync(join(fixture.destination, "prefs.js"))).toBe(false);
+		}, 20_000);
+
+		test("the host signal cancels a running copy without blocking the event loop", async () => {
+			const fixture = await nativeCopyFixture("exec sleep 8");
+			const outcome = copyInChild(fixture, { abortAfterMs: 2_000 });
+			expect(outcome.message).toBe("headed-browser: profile copy (clonefile) cancelled; no session launched");
+			expect(outcome.elapsed).toBeLessThan(6_000);
+			expect(outcome.ticks).toBeGreaterThanOrEqual(10);
+			expect(existsSync(fixture.destination)).toBe(false);
+		}, 20_000);
+
+		test("a failed native copy still falls back to node", async () => {
+			const fixture = await nativeCopyFixture("echo 'clone unsupported' >&2; exit 3");
+			const outcome = copyInChild(fixture, {});
+			expect(outcome.message).toBeUndefined();
+			expect(outcome.warnings).toEqual(["headed-browser: clonefile profile copy failed; fell back to node (clone unsupported)"]);
+			expect(existsSync(join(fixture.destination, "prefs.js"))).toBe(true);
+		}, 20_000);
+	});
+
 	test("prunes exclusions after a wholesale copy", async () => {
 		const root = await temporary();
 		await mkdir(join(root, "cache2"), { recursive: true });

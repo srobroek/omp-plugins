@@ -42344,10 +42344,11 @@ async function launchRemote(request, config) {
   validateRemoteTarget(request.remoteHost, request.remoteBrowserPath);
   const sshArgs = parseSshOptions(request.sshOptions ?? "-o BatchMode=yes -o StrictHostKeyChecking=yes");
   validateSshOptions(sshArgs);
-  const stageTimeoutMs = Math.min(request.navigationTimeoutMs, 29000);
-  const remoteProfileDir = await sshCapture(sshArgs, request.remoteHost, ["mktemp", "-d", "/tmp/omp-headed-firefox-XXXXXXXX"], stageTimeoutMs);
+  const stageTimeoutMs = request.navigationTimeoutMs;
+  const { signal } = request;
+  const remoteProfileDir = await sshCapture(sshArgs, request.remoteHost, ["mktemp", "-d", "/tmp/omp-headed-firefox-XXXXXXXX"], stageTimeoutMs, signal);
   validateRemotePath(remoteProfileDir, "remote profile directory");
-  await sshCapture(sshArgs, request.remoteHost, ["mkdir", "-p", `${remoteProfileDir}/downloads`], stageTimeoutMs);
+  await sshCapture(sshArgs, request.remoteHost, ["mkdir", "-p", `${remoteProfileDir}/downloads`], stageTimeoutMs, signal);
   const browserProcess = Bun.spawn([
     "ssh",
     ...sshArgs,
@@ -42362,7 +42363,7 @@ async function launchRemote(request, config) {
   ], { stdout: "pipe", stderr: "pipe" });
   let endpoint;
   try {
-    endpoint = await readBidiEndpoint(browserProcess.stderr, stageTimeoutMs);
+    endpoint = await readBidiEndpoint(browserProcess.stderr, stageTimeoutMs, signal);
   } catch (error) {
     browserProcess.kill();
     await sshCapture(sshArgs, request.remoteHost, ["rm", "-rf", remoteProfileDir], stageTimeoutMs).catch(() => {
@@ -42380,6 +42381,7 @@ async function launchRemote(request, config) {
     });
     throw new Error(`headed-browser: SSH tunnel exited with ${tunnelProcess.exitCode}`);
   }
+  const connectStage = stageSignals(stageTimeoutMs, signal);
   try {
     const puppeteer = await loadPuppeteer(config);
     const browser = await Promise.race([
@@ -42388,19 +42390,32 @@ async function launchRemote(request, config) {
         protocol: "webDriverBiDi",
         downloadBehavior: config.allowDownloads ? { policy: "allow", downloadPath: `${remoteProfileDir}/downloads` } : { policy: "deny" }
       }),
-      Bun.sleep(stageTimeoutMs).then(() => {
-        throw new Error(`headed-browser: remote BiDi connect timed out after ${stageTimeoutMs} ms`);
-      })
+      whenStopped(connectStage.stop)
     ]);
     return { browser, browserProcess, tunnelProcess, remoteProfileDir, remoteHost: request.remoteHost, sshArgs, timeoutMs: request.navigationTimeoutMs };
   } catch {
+    const stopped = signal?.aborted ? "cancelled" : connectStage.timeout.aborted ? `timed out after ${stageTimeoutMs} ms` : undefined;
     tunnelProcess.kill();
     browserProcess.kill();
     await sshCapture(sshArgs, request.remoteHost, ["rm", "-rf", remoteProfileDir], stageTimeoutMs).catch(() => {
       return;
     });
+    if (stopped)
+      throw new Error(`headed-browser: remote BiDi connect ${stopped}`);
     throw new Error("headed-browser: remote BiDi connect unsupported by puppeteer-core; use a local session");
   }
+}
+function stageSignals(timeoutMs, signal) {
+  const timeout = AbortSignal.timeout(timeoutMs);
+  return { timeout, stop: signal ? AbortSignal.any([signal, timeout]) : timeout };
+}
+function whenStopped(stop) {
+  return new Promise((_resolve, reject) => {
+    if (stop.aborted)
+      reject(stop.reason);
+    else
+      stop.addEventListener("abort", () => reject(stop.reason), { once: true });
+  });
 }
 async function closeRemote(resources, capture = sshCapture) {
   await Promise.race([
@@ -42501,17 +42516,14 @@ function validateSshOptions(options) {
     throw new Error(`headed-browser: unsupported SSH option ${option}`);
   }
 }
-async function readBidiEndpoint(stream, timeoutMs) {
+async function readBidiEndpoint(stream, timeoutMs, signal) {
   const reader = stream.getReader();
   const decoder = new TextDecoder;
   let buffer = "";
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    const remaining = Math.max(1, deadline - Date.now());
-    const result = await Promise.race([
-      reader.read(),
-      Bun.sleep(remaining).then(() => ({ done: true, value: undefined }))
-    ]);
+  const ended = { done: true, value: undefined };
+  const stopped = whenStopped(stageSignals(timeoutMs, signal).stop).catch(() => ended);
+  for (;; ) {
+    const result = await Promise.race([reader.read(), stopped]);
     if (result.done)
       break;
     buffer += decoder.decode(result.value, { stream: true });
@@ -42521,22 +42533,17 @@ async function readBidiEndpoint(stream, timeoutMs) {
     if (buffer.length > 16384)
       buffer = buffer.slice(-8192);
   }
+  if (signal?.aborted)
+    throw new Error("headed-browser: remote Firefox launch cancelled");
   throw new Error(`headed-browser: remote Firefox did not publish a WebDriver BiDi endpoint: ${buffer.trim().slice(-500)}`);
 }
-async function sshCapture(sshArgs, host, command, timeoutMs = 15000) {
-  const process2 = Bun.spawn(["ssh", ...sshArgs, host, ...command], { stdout: "pipe", stderr: "pipe" });
-  const stdoutPromise = new Response(process2.stdout).text();
-  const stderrPromise = new Response(process2.stderr).text();
-  const timedOut = Symbol("ssh-timeout");
-  const exitCode = await Promise.race([
-    process2.exited,
-    Bun.sleep(timeoutMs).then(() => {
-      process2.kill();
-      return timedOut;
-    })
-  ]);
-  const [stdout, stderr] = await Promise.all([stdoutPromise, stderrPromise]);
-  if (exitCode === timedOut)
+async function sshCapture(sshArgs, host, command, timeoutMs = 15000, signal) {
+  const { timeout, stop } = stageSignals(timeoutMs, signal);
+  const process2 = Bun.spawn(["ssh", ...sshArgs, host, ...command], { stdout: "pipe", stderr: "pipe", signal: stop });
+  const [exitCode, stdout, stderr] = await Promise.all([process2.exited, new Response(process2.stdout).text(), new Response(process2.stderr).text()]);
+  if (signal?.aborted)
+    throw new Error(`headed-browser: ssh ${host} cancelled`);
+  if (timeout.aborted)
     throw new Error(`headed-browser: ssh ${host} timed out after ${timeoutMs} ms`);
   if (exitCode !== 0)
     throw new Error(`headed-browser: ssh ${host} failed: ${stderr.trim() || `exit ${exitCode}`}`);
@@ -43073,7 +43080,6 @@ import { dirname as dirname5, join as join7 } from "path";
 
 // extensions/lib/profile.ts
 import { Database } from "bun:sqlite";
-import { spawnSync as spawnSync4 } from "child_process";
 import { randomBytes } from "crypto";
 import { existsSync as existsSync4 } from "fs";
 import { chmod as chmod2, cp, mkdir as mkdir2, mkdtemp as mkdtemp3, realpath, rm as rm2, stat, writeFile } from "fs/promises";
@@ -43111,7 +43117,7 @@ async function materializeProfile(options) {
   await mkdir2(profileDir, { recursive: true, mode: 448 });
   if (options.sourceProfile && options.profileMode === "ephemeral-clone") {
     await assertProfileIsolation(options.sourceProfile, profileDir);
-    await copyProfile(options.sourceProfile, profileDir, config.copyStrategy, config.copyFirefoxLogins, warnings);
+    await copyProfile(options.sourceProfile, profileDir, config.copyStrategy, config.copyFirefoxLogins, warnings, options.signal);
   }
   let containerCookiesSkipped = 0;
   const cookieDomains = splitDomains(config.cookieDomains);
@@ -43167,32 +43173,46 @@ function resolvedCopyStrategy(strategy, platform = process.platform) {
     return "robocopy";
   return "node";
 }
-async function copyProfile(source, destination, strategy, copyFirefoxLogins, warnings) {
+var PROFILE_COPY_TIMEOUT_MS = 300000;
+async function copyProfile(source, destination, strategy, copyFirefoxLogins, warnings, signal, timeoutMs = PROFILE_COPY_TIMEOUT_MS) {
   const selected = resolvedCopyStrategy(strategy);
   if (selected === "node") {
     await nodeCopy(source, destination, copyFirefoxLogins);
     return;
   }
-  let result;
-  const profileCopyTimeoutMs = 25000;
+  let command;
   if (selected === "clonefile") {
-    result = spawnSync4("cp", ["-c", "-R", `${source}/.`, destination], { encoding: "utf8", timeout: profileCopyTimeoutMs });
+    command = ["cp", "-c", "-R", `${source}/.`, destination];
   } else if (selected === "reflink") {
-    result = spawnSync4("cp", ["-a", "--reflink=auto", `${source}/.`, destination], { encoding: "utf8", timeout: profileCopyTimeoutMs });
+    command = ["cp", "-a", "--reflink=auto", `${source}/.`, destination];
   } else {
     const excludedDirs = EXCLUDED_DIRS.map((entry) => join6(source, entry));
     const excludedFiles = [...EXCLUDED_FILES, ...!copyFirefoxLogins ? LOGIN_FILES : []];
-    result = spawnSync4("robocopy", [source, destination, "/E", "/XJ", "/R:1", "/W:1", "/NFL", "/NDL", "/NJH", "/NJS", "/NP", "/XD", ...excludedDirs, "/XF", ...excludedFiles], { encoding: "utf8", timeout: profileCopyTimeoutMs });
+    command = ["robocopy", source, destination, "/E", "/XJ", "/R:1", "/W:1", "/NFL", "/NDL", "/NJH", "/NJS", "/NP", "/XD", ...excludedDirs, "/XF", ...excludedFiles];
   }
-  const successfulRobocopy = selected === "robocopy" && result.status !== null && result.status >= 0 && result.status <= 7;
-  if (result.error || !successfulRobocopy && result.status !== 0) {
-    warnings.push(`headed-browser: ${selected} profile copy failed; fell back to node (${result.error?.message ?? result.stderr ?? `exit ${result.status}`})`);
-    await rm2(destination, { recursive: true, force: true });
-    await mkdir2(destination, { recursive: true, mode: 448 });
-    await nodeCopy(source, destination, copyFirefoxLogins);
-    return;
+  const timeout = AbortSignal.timeout(timeoutMs);
+  const stop = signal ? AbortSignal.any([signal, timeout]) : timeout;
+  let failure;
+  try {
+    const copy = Bun.spawn(command, { stdin: "ignore", stdout: "ignore", stderr: "pipe", signal: stop });
+    const [exitCode, stderr] = await Promise.all([copy.exited, new Response(copy.stderr).text()]);
+    const succeeded = !stop.aborted && (selected === "robocopy" ? exitCode >= 0 && exitCode <= 7 : exitCode === 0);
+    if (succeeded) {
+      await pruneProfile(destination, copyFirefoxLogins);
+      return;
+    }
+    failure = stderr.trim() || `exit ${exitCode}`;
+  } catch (error) {
+    failure = errorMessage(error);
   }
-  await pruneProfile(destination, copyFirefoxLogins);
+  await rm2(destination, { recursive: true, force: true });
+  if (signal?.aborted)
+    throw new Error(`headed-browser: profile copy (${selected}) cancelled; no session launched`);
+  if (timeout.aborted)
+    throw new Error(`headed-browser: profile copy (${selected}) exceeded ${timeoutMs / 1000} s; no session launched`);
+  warnings.push(`headed-browser: ${selected} profile copy failed; fell back to node (${failure})`);
+  await mkdir2(destination, { recursive: true, mode: 448 });
+  await nodeCopy(source, destination, copyFirefoxLogins);
 }
 async function nodeCopy(source, destination, copyFirefoxLogins) {
   await cp(source, destination, {
@@ -44598,7 +44618,7 @@ function headedBrowserTools(pi) {
       if (params.op === "launch") {
         if (!ctx)
           throw new Error("headed-browser: extension context unavailable");
-        const session = await launchSession(cwd, ctx, params);
+        const session = await launchSession(cwd, ctx, params, signal);
         const audit = createAuditWriter(ctx, session.config);
         audits.set(session.id, audit);
         for (const page of session.pages.values())
@@ -44789,7 +44809,7 @@ function headedBrowserTools(pi) {
       console.error(`headed-browser: ${report.leaked.length} session teardown(s) exceeded the shutdown budget; inspect headed_session status for leakedSessions`);
   });
 }
-async function launchSession(cwd, ctx, params) {
+async function launchSession(cwd, ctx, params, signal) {
   const config = await resolveConfig(cwd, params);
   deriveDomainPolicy(config);
   assertChannelEngine(config.engine, config.browserChannel);
@@ -44816,18 +44836,24 @@ async function launchSession(cwd, ctx, params) {
         sourceProfile = profile.profilePath;
     }
   }
-  const materialized = await materializeProfile({ engine: config.engine, channel: resolvedBrowser.channel, profileMode, sourceProfile, agentDir, config });
+  const materialized = await materializeProfile({ engine: config.engine, channel: resolvedBrowser.channel, profileMode, sourceProfile, agentDir, config, signal }).catch((error) => {
+    throw launchError(error, signal);
+  });
   try {
+    signal?.throwIfAborted();
     if (params.remoteHost) {
-      const remote = await launchRemote({ remoteHost: params.remoteHost, remoteBrowserPath: requireString(params.remoteBrowserPath, "remoteBrowserPath"), sshOptions: params.sshOptions, allowDownloads: config.allowDownloads, navigationTimeoutMs: config.navigationTimeoutMs }, config);
+      const remote = await launchRemote({ remoteHost: params.remoteHost, remoteBrowserPath: requireString(params.remoteBrowserPath, "remoteBrowserPath"), sshOptions: params.sshOptions, allowDownloads: config.allowDownloads, navigationTimeoutMs: config.navigationTimeoutMs, signal }, config);
       return createSession({ browser: remote.browser, resolvedBrowser, profileMode, profile: materialized, config, remote });
     }
     const browser = await launchLocal({ engine: config.engine, executablePath: resolvedBrowser.path, profileDir: materialized.profileDir, downloadsDir: materialized.downloadsDir, config });
     return createSession({ browser, resolvedBrowser, profileMode, profile: materialized, sourceProfile, config });
   } catch (error) {
     await removeMaterializedProfile(materialized, false);
-    throw error;
+    throw launchError(error, signal);
   }
+}
+function launchError(error, signal) {
+  return signal?.aborted ? new CancelledError(`headed-browser: launch cancelled; no session launched (${errorMessage(error)})`) : error;
 }
 function resultEnvelope(payload, details, compact = false) {
   return { content: [{ type: "text", text: JSON.stringify(payload, null, compact ? undefined : 2) }], details: { ...details } };
