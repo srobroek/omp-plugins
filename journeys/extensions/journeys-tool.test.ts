@@ -1,10 +1,14 @@
 import { describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { execFile } from "node:child_process";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
+import { promisify } from "node:util";
 
 import { installFormulas, journeysScriptPath, runJourneys } from "./journeys-tool.ts";
+
+const execFileAsync = promisify(execFile);
 
 const tempRoot = (prefix: string): string => mkdtempSync(join(tmpdir(), prefix));
 
@@ -16,6 +20,16 @@ function seedJourney(root: string, name = "J1-login"): string {
 		"---\nid: J1\ntitle: Login\nversion: 1\nstatus: draft\nlast_reviewed: 2026-01-01\nsurfaces: [web]\ninterfaces: [browser]\n---\n\n### S1 — Open app {#S1}\n",
 	);
 	return journey;
+}
+
+/** A directory whose `bin/python3` hangs, standing in for a journeys.py run that never finishes. */
+function hangingPython(prefix: string): { dir: string; bin: string } {
+	const dir = tempRoot(prefix);
+	const bin = join(dir, "bin");
+	mkdirSync(bin);
+	writeFileSync(join(bin, "python3"), "#!/bin/sh\nexec /bin/sleep 30\n");
+	chmodSync(join(bin, "python3"), 0o755);
+	return { dir, bin };
 }
 
 describe("journeys Python wrapper", () => {
@@ -73,7 +87,7 @@ describe("journeys Python wrapper", () => {
 		try {
 			seedJourney(root);
 			const result = await runJourneys(root, { command: "index", journeysDir: root });
-			expect(result.exitCode).toBe(0);
+			expect(result).toMatchObject({ exitCode: 0 });
 			expect(result.stdout).toContain("INDEX.md: 1 journeys");
 		expect(readFileSync(join(root, "INDEX.md"), "utf8")).toContain("[J1](J1-login/journey.md)");
 		} finally {
@@ -90,7 +104,7 @@ describe("journeys Python wrapper", () => {
 				writeFileSync(join(journey, "journey.md"), `---\ntitle: ${name}\nversion: 1\nstatus: draft\nlast_reviewed: 2026-01-01\n---\n`);
 			}
 			const lint = await runJourneys(root, { command: "lint", journeysDir: root });
-			expect(lint.exitCode).not.toBe(0);
+			expect(lint).toMatchObject({ exitCode: 1 });
 		expect(lint.stdout.match(/duplicate id/g)).toBeNull();
 		expect(lint.stdout.match(/frontmatter missing `id`/g)).toHaveLength(2);
 
@@ -100,7 +114,7 @@ describe("journeys Python wrapper", () => {
 			mkdirSync(runs);
 			writeFileSync(join(runs, "2026-01-01.md"), "---\njourney: J1\ndate: 2026-01-01\nresult: pass\nmode: full\n");
 			const index = await runJourneys(root, { command: "index", journeysDir: root });
-			expect(index.exitCode).toBe(0);
+			expect(index).toMatchObject({ exitCode: 0 });
 			expect(index.stdout).toContain("ERROR J1-alpha/runs/2026-01-01.md: unreadable frontmatter");
 			expect(readFileSync(join(root, "INDEX.md"), "utf8")).toContain("**unreadable**");
 			expect(readFileSync(join(root, "INDEX.md"), "utf8")).not.toContain("? ?");
@@ -108,6 +122,58 @@ describe("journeys Python wrapper", () => {
 			rmSync(root, { recursive: true, force: true });
 		}
 	});
+
+	test("a run that outlasts its bound is unrun, not a failed exit", async () => {
+		// A timed-out lint used to read as exit 1, the same verdict as lint errors.
+		// macOS spends about 400 ms on a freshly written script's first exec, so the
+		// bound sits well above that.
+		const { dir, bin } = hangingPython("journeys-wrapper-timeout-");
+		try {
+			const started = Date.now();
+			const result = await runJourneys(
+				dir,
+				{ command: "lint", journeysDir: dir },
+				undefined,
+				(_file, args, options) => execFileAsync(join(bin, "python3"), args, options),
+				3_000,
+			);
+			expect(Date.now() - started).toBeLessThan(10_000);
+			expect(result).toEqual({ stdout: "", stderr: "", unrun: "timed out after 3 s" });
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	}, 20_000);
+
+	test("the abort signal stops the tool's run and reports it incomplete", () => {
+		const { dir, bin } = hangingPython("journeys-tool-abort-");
+		try {
+			// The registered tool resolves python3 on PATH, so it runs in a child whose
+			// PATH holds only the hanging stub.
+			const body = `import journeysTool from ${JSON.stringify(join(import.meta.dir, "journeys-tool.ts"))};
+const chain = new Proxy(function () {}, { get: () => () => chain });
+const tools = {};
+journeysTool({ zod: chain, registerTool: (d) => { tools[d.name] = d; } });
+const controller = new AbortController();
+setTimeout(() => controller.abort(), 2_000);
+const started = Date.now();
+const result = await tools.journeys_index.execute("t1", { command: "lint", journeysDir: "." }, controller.signal, undefined, { cwd: ${JSON.stringify(dir)} });
+console.log(JSON.stringify({ elapsed: Date.now() - started, details: result.details, text: result.content[0].text }));`;
+			const proc = Bun.spawnSync([process.execPath, "-e", body], {
+				env: { ...process.env, PATH: bin },
+				stdout: "pipe",
+				stderr: "pipe",
+				timeout: 15_000,
+			});
+			expect(proc.exitCode).toBe(0);
+			const { elapsed, details, text } = JSON.parse(proc.stdout.toString());
+			expect(elapsed).toBeLessThan(10_000);
+			expect(details).toMatchObject({ ok: false, complete: false, command: "lint", unrun: "cancelled" });
+			expect(details.exitCode).toBeUndefined();
+			expect(text).toContain("journeys.py lint did not finish: cancelled");
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+	}, 20_000);
 });
 
 describe("journey formula installation", () => {
