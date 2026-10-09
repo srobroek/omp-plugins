@@ -56,6 +56,12 @@ DUPLICATED: tuple[tuple[str, ...], ...] = (
         "authoring/extensions/written-paths.ts",
         "design/extensions/written-paths.ts",
     ),
+    (
+        "python/extensions/quality-runner.ts",
+        "typescript/extensions/quality-runner.ts",
+        "go/extensions/quality-runner.ts",
+        "rust/extensions/quality-runner.ts",
+    ),
 )
 
 

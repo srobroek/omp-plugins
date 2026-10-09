@@ -3,6 +3,7 @@ import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:f
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import * as quality from "../extensions/python-quality-tool.ts";
+import { COMMAND_TIMEOUT_MS } from "../extensions/quality-runner.ts";
 
 const toolModule = join(import.meta.dir, "..", "extensions", "python-quality-tool.ts");
 
@@ -145,10 +146,11 @@ test("pytest collecting no tests is a skip, not a failure", async () => {
 test("a step that times out is a skip, and the steps after it still run", async () => {
 	// pyright alone took more than 120 s on one real project, so the default
 	// per-command bound has to outlast that.
-	expect(quality.COMMAND_TIMEOUT_MS).toBeGreaterThan(120_000);
+	expect(COMMAND_TIMEOUT_MS).toBeGreaterThan(120_000);
 	const dir = venvProject("python-quality-timeout-", { pyright: "#!/bin/sh\nexec sleep 30\n" });
 	try {
-		const report = await quality.runPythonQuality("check", dir, { timeoutMs: 500 });
+		// macOS spends about 400 ms on a freshly written script's first exec, so the bound sits well above that.
+		const report = await quality.runPythonQuality("check", dir, { timeoutMs: 3_000 });
 		expect(step(report, "pyright")?.status).toBe("skip");
 		expect(step(report, "pyright")?.detail).toContain("timed out");
 		expect(step(report, "pytest")?.status).toBe("pass");
@@ -164,7 +166,8 @@ test("the abort signal stops the running step and nothing after it runs", async 
 	try {
 		const controller = new AbortController();
 		// This timer can only fire while a step runs if the run does not block the event loop.
-		setTimeout(() => controller.abort(), 300);
+		// macOS spends about 400 ms on a freshly written script's first exec, so the margin sits well above that.
+		setTimeout(() => controller.abort(), 2_000);
 		const started = Date.now();
 		const result = await registeredExecute()("t1", { mode: "check" }, controller.signal, undefined, { cwd: dir });
 		expect(Date.now() - started).toBeLessThan(10_000);
