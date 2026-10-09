@@ -4,7 +4,6 @@ import type { TSchema } from "@oh-my-pi/pi-ai";
 import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
 import {
     fmtTable,
-    have,
     type PlannedStep,
     PROBE_BUDGET_MS,
     type QualityMode,
@@ -14,6 +13,7 @@ import {
     report,
     runSteps,
     type StepResult,
+    unavailable,
     verdict,
 } from "./quality-runner.ts";
 
@@ -44,8 +44,8 @@ export async function runGoQuality(mode: QualityMode, cwd: string, options: Qual
     const probeDeadline = Date.now() + PROBE_BUDGET_MS;
     const plan: PlannedStep[] = [];
     for (const { name, bin, args } of STEPS[mode]) {
-        const found = await have(bin, probeDeadline, options.signal);
-        plan.push({ name, bin: found ? bin : null, args, missing: `${bin} not on PATH` });
+        const missing = await unavailable(bin, probeDeadline, options.signal);
+        plan.push({ name, bin: missing ? null : bin, args, missing: missing ?? "" });
     }
     return report(mode, cwd, await runSteps(plan, cwd, options, goVerdict));
 }

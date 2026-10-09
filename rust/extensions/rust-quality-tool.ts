@@ -4,7 +4,6 @@ import type { TSchema } from "@oh-my-pi/pi-ai";
 import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
 import {
     fmtTable,
-    have,
     type PlannedStep,
     PROBE_BUDGET_MS,
     type QualityMode,
@@ -13,6 +12,7 @@ import {
     report,
     runSteps,
     type StepResult,
+    unavailable,
 } from "./quality-runner.ts";
 
 type RustQualityParams = { mode: QualityMode; path?: string };
@@ -33,8 +33,8 @@ export async function runRustQuality(mode: QualityMode, cwd: string, options: Qu
     // Probe only once the manifest exists: with no Cargo.toml the probe is wasted work, and
     // three argument sets at 1,000 ms each outlast a CI test's own limit where no Rust
     // toolchain is installed.
-    const cargo = (await have("cargo", Date.now() + PROBE_BUDGET_MS, options.signal)) ? "cargo" : null;
-    const plan = STEPS[mode].map(({ name, args }): PlannedStep => ({ name, bin: cargo, args, missing: "cargo not on PATH" }));
+    const missing = await unavailable("cargo", Date.now() + PROBE_BUDGET_MS, options.signal);
+    const plan = STEPS[mode].map(({ name, args }): PlannedStep => ({ name, bin: missing ? null : "cargo", args, missing: missing ?? "" }));
     return report(mode, cwd, await runSteps(plan, cwd, options));
 }
 

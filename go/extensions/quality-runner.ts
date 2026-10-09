@@ -51,7 +51,7 @@ const PROBE_TIMEOUT_MS = 5_000;
 const PROBE_ARGS: readonly (readonly string[])[] = [["--version"], ["version"], ["-h"]];
 
 /**
- * Whether `bin` can actually RUN, not merely resolve on PATH.
+ * Why `bin` cannot actually RUN, not merely whether it resolves on PATH.
  *
  * `which` succeeds for a mise shim whose tool is not installed. A resolve-only
  * check therefore reports the tool present, the step fails when it executes, and
@@ -63,15 +63,21 @@ const PROBE_ARGS: readonly (readonly string[])[] = [["--version"], ["version"], 
  *
  * A shim for an uninstalled tool fails every argument set, so the cascade cannot
  * be fooled into reporting one usable.
+ *
+ * Returns null when `bin` runs, else the skip detail: a probe that timed out or was
+ * cancelled says so, because the binary may well be on PATH.
  */
-export async function have(bin: string, deadline: number, signal?: AbortSignal): Promise<boolean> {
+export async function unavailable(bin: string, deadline: number, signal?: AbortSignal): Promise<string | null> {
+    let stopped: string | undefined;
     for (const args of PROBE_ARGS) {
         const remaining = deadline - Date.now();
-        if (remaining <= 0) return false;
+        if (remaining <= 0) return `${bin} probe ${stopped ?? "budget spent"}`;
         const r = await run([bin, ...args], undefined, signal, Math.min(PROBE_TIMEOUT_MS, remaining));
-        if ("exitCode" in r && r.exitCode === 0) return true;
+        if ("exitCode" in r && r.exitCode === 0) return null;
+        if ("unrun" in r && (r.unrun === "cancelled" || r.unrun.startsWith("timed out"))) stopped = r.unrun;
+        if (signal?.aborted) break;
     }
-    return false;
+    return stopped ? `${bin} probe ${stopped}` : `${bin} not on PATH`;
 }
 
 /** A command that reached an exit status, or why it reached none. */

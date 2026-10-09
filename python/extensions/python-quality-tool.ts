@@ -4,7 +4,6 @@ import type { TSchema } from "@oh-my-pi/pi-ai";
 import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
 import {
     fmtTable,
-    have,
     type PlannedStep,
     PROBE_BUDGET_MS,
     type QualityMode,
@@ -14,6 +13,7 @@ import {
     report,
     runSteps,
     type StepResult,
+    unavailable,
     verdict,
 } from "./quality-runner.ts";
 
@@ -22,12 +22,14 @@ const PYTEST_NO_TESTS = 5;
 
 type PythonQualityParams = { mode: QualityMode; path?: string };
 
-async function installed(bin: string, cwd: string, deadline: number, signal?: AbortSignal): Promise<string | null> {
+/** The binary to run, or no binary and why it cannot run. */
+async function installed(bin: string, cwd: string, deadline: number, signal?: AbortSignal): Promise<Pick<PlannedStep, "bin" | "missing">> {
     for (const dir of [join(cwd, ".venv", "bin"), join(cwd, "node_modules", ".bin")]) {
         const path = join(dir, bin);
-        if (existsSync(path)) return path;
+        if (existsSync(path)) return { bin: path, missing: "" };
     }
-    return (await have(bin, deadline, signal)) ? bin : null;
+    const missing = await unavailable(bin, deadline, signal);
+    return missing ? { bin: null, missing } : { bin, missing: "" };
 }
 
 function pythonVerdict(name: string, r: RunResult): StepResult {
@@ -51,14 +53,14 @@ export async function runPythonQuality(mode: QualityMode, cwd: string, options: 
     const plan: PlannedStep[] =
         mode === "fix"
             ? [
-                  { name: "ruff check --fix", bin: ruff, args: ["check", "--fix", "."], missing: "ruff not on PATH" },
-                  { name: "ruff format", bin: ruff, args: ["format", "."], missing: "ruff not on PATH" },
+                  { name: "ruff check --fix", ...ruff, args: ["check", "--fix", "."] },
+                  { name: "ruff format", ...ruff, args: ["format", "."] },
               ]
             : [
-                  { name: "ruff check", bin: ruff, args: ["check", "."], missing: "ruff not on PATH" },
-                  { name: "ruff format --check", bin: ruff, args: ["format", "--check", "."], missing: "ruff not on PATH" },
-                  { name: "pyright", bin: await installed("pyright", cwd, probeDeadline, signal), args: [], missing: "pyright not on PATH" },
-                  { name: "pytest", bin: await installed("pytest", cwd, probeDeadline, signal), args: [], missing: "pytest not on PATH" },
+                  { name: "ruff check", ...ruff, args: ["check", "."] },
+                  { name: "ruff format --check", ...ruff, args: ["format", "--check", "."] },
+                  { name: "pyright", ...(await installed("pyright", cwd, probeDeadline, signal)), args: [] },
+                  { name: "pytest", ...(await installed("pytest", cwd, probeDeadline, signal)), args: [] },
               ];
     return report(mode, cwd, await runSteps(plan, cwd, options, pythonVerdict));
 }
