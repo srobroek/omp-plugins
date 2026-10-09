@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { runRustQuality } from "./rust-quality-tool.ts";
+import rustQualityTool, { runRustQuality } from "./rust-quality-tool.ts";
 
 test("missing project cannot report successful verification or repair", () => {
  const dir = mkdtempSync(join(tmpdir(), "rust-quality-"));
@@ -43,3 +43,35 @@ test("missing requested tools and command failures cannot pass", () => {
   expect(failed.steps.some((step: { status: string }) => step.status === "fail")).toBe(true);
  } finally { rmSync(dir, { recursive: true, force: true }); }
 }, 120_000); // shared probe budget caps availability cascades at 10s
+
+function fakeZod(): { zod: unknown } {
+	const chain: Record<string, unknown> = {};
+	const self = () => chain;
+	chain.string = self;
+	chain.optional = self;
+	chain.describe = self;
+	chain.object = self;
+	chain.enum = self;
+	return { zod: chain };
+}
+
+test("a relative path resolves against the session cwd", async () => {
+	const dir = mkdtempSync(join(tmpdir(), "rust-quality-cwd-"));
+	try {
+		mkdirSync(join(dir, "sub"));
+		const captured: Record<string, unknown> = {};
+		rustQualityTool({ ...fakeZod(), registerTool: (d: Record<string, unknown>) => Object.assign(captured, d), on: () => {} } as never);
+		const execute = captured.execute as (
+			id: string,
+			params: { mode: "check" | "fix"; path?: string },
+			signal: undefined,
+			onUpdate: undefined,
+			ctx: { cwd: string },
+		) => Promise<{ details: { cwd: string; error?: string } }>;
+		const result = await execute("t1", { mode: "check", path: "sub" }, undefined, undefined, { cwd: dir });
+		expect(result.details.error).toBeUndefined();
+		expect(result.details.cwd).toBe(join(dir, "sub"));
+	} finally {
+		rmSync(dir, { recursive: true, force: true });
+	}
+});

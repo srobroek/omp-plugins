@@ -152,7 +152,7 @@ export default function rustQualityTool(pi: ExtensionAPI): void {
 		}) as unknown as TSchema,
 		execute: async (_id, params: RustQualityParams, _signal, _onUpdate, ctx) => {
 			try {
-				const cwd = resolve(params.path ?? ctx?.cwd ?? process.cwd());
+				const cwd = resolve(ctx?.cwd ?? process.cwd(), params.path ?? ".");
 				if (!existsSync(cwd)) {
 					return {
 						content: [{ type: "text" as const, text: `path does not exist: ${cwd}` }],
