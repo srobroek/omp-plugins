@@ -10,7 +10,8 @@ Keep `libs/` organized by architectural role: `domain`, `application`,
 filesystem, framework, or cloud SDK dependencies.
 
 Keep components local to an app. Move shared primitives and design-system code
-to `libs/ui` only after two app surfaces actually reuse them. Shared UI code
+to `libs/ui` when a shared library reduces present total complexity; consumer
+count alone decides nothing. Shared UI code
 should be more stable than app-local components: use typed props, documented
 variants, and reusable accessibility behavior.
 
