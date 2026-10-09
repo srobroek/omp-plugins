@@ -22,6 +22,8 @@ export interface RemoteLaunchRequest {
 	sshOptions?: string;
 	allowDownloads: boolean;
 	navigationTimeoutMs: number;
+	/** Host cancellation: stops the running stage and cleans up what earlier stages started. */
+	signal?: AbortSignal;
 }
 
 export interface RemoteResources {
@@ -80,11 +82,13 @@ export async function launchRemote(
 	validateRemoteTarget(request.remoteHost, request.remoteBrowserPath);
 	const sshArgs = parseSshOptions(request.sshOptions ?? "-o BatchMode=yes -o StrictHostKeyChecking=yes");
 	validateSshOptions(sshArgs);
-	// A configured navigation timeout may be 300s, but one launch stage must return before tool_call's 30s budget.
-	const stageTimeoutMs = Math.min(request.navigationTimeoutMs, 29_000);
-	const remoteProfileDir = await sshCapture(sshArgs, request.remoteHost, ["mktemp", "-d", "/tmp/omp-headed-firefox-XXXXXXXX"], stageTimeoutMs);
+	// Every stage gets the configured navigation timeout, which the config already bounds to
+	// 1-300 s; a registered tool has no harness deadline that would cut it shorter.
+	const stageTimeoutMs = request.navigationTimeoutMs;
+	const { signal } = request;
+	const remoteProfileDir = await sshCapture(sshArgs, request.remoteHost, ["mktemp", "-d", "/tmp/omp-headed-firefox-XXXXXXXX"], stageTimeoutMs, signal);
 	validateRemotePath(remoteProfileDir, "remote profile directory");
-	await sshCapture(sshArgs, request.remoteHost, ["mkdir", "-p", `${remoteProfileDir}/downloads`], stageTimeoutMs);
+	await sshCapture(sshArgs, request.remoteHost, ["mkdir", "-p", `${remoteProfileDir}/downloads`], stageTimeoutMs, signal);
 	const browserProcess = Bun.spawn(
 		[
 			"ssh",
@@ -102,7 +106,7 @@ export async function launchRemote(
 	);
 	let endpoint: string;
 	try {
-		endpoint = await readBidiEndpoint(browserProcess.stderr, stageTimeoutMs);
+		endpoint = await readBidiEndpoint(browserProcess.stderr, stageTimeoutMs, signal);
 	} catch (error) {
 		browserProcess.kill();
 		await sshCapture(sshArgs, request.remoteHost, ["rm", "-rf", remoteProfileDir], stageTimeoutMs).catch(() => undefined);
@@ -119,9 +123,10 @@ export async function launchRemote(
 		await sshCapture(sshArgs, request.remoteHost, ["rm", "-rf", remoteProfileDir], stageTimeoutMs).catch(() => undefined);
 		throw new Error(`headed-browser: SSH tunnel exited with ${tunnelProcess.exitCode}`);
 	}
+	const connectStage = stageSignals(stageTimeoutMs, signal);
 	try {
 		const puppeteer = await loadPuppeteer(config);
-		// Puppeteer connect has no reliable BiDi timeout, so cap this single stage as well.
+		// Puppeteer connect has no reliable BiDi timeout, so this stage carries its own.
 		const browser = await Promise.race([
 			puppeteer.connect({
 				browserWSEndpoint: `ws://127.0.0.1:${localPort}/session`,
@@ -130,15 +135,37 @@ export async function launchRemote(
 					? { policy: "allow", downloadPath: `${remoteProfileDir}/downloads` }
 					: { policy: "deny" },
 			}),
-			Bun.sleep(stageTimeoutMs).then(() => { throw new Error(`headed-browser: remote BiDi connect timed out after ${stageTimeoutMs} ms`); }),
+			whenStopped(connectStage.stop),
 		]);
 		return { browser, browserProcess, tunnelProcess, remoteProfileDir, remoteHost: request.remoteHost, sshArgs, timeoutMs: request.navigationTimeoutMs };
 	} catch {
+		// Read before cleanup, which can outlast the stage timer: a stopped stage is a timeout
+		// or a cancellation, never a capability gap.
+		const stopped = signal?.aborted ? "cancelled" : connectStage.timeout.aborted ? `timed out after ${stageTimeoutMs} ms` : undefined;
 		tunnelProcess.kill();
 		browserProcess.kill();
 		await sshCapture(sshArgs, request.remoteHost, ["rm", "-rf", remoteProfileDir], stageTimeoutMs).catch(() => undefined);
+		if (stopped) throw new Error(`headed-browser: remote BiDi connect ${stopped}`);
 		throw new Error("headed-browser: remote BiDi connect unsupported by puppeteer-core; use a local session");
 	}
+}
+
+/**
+ * One remote launch stage's stop signal: its timeout or the host's cancellation, whichever
+ * comes first. `AbortSignal.timeout` holds no reference on the event loop, so a long
+ * configured timeout never keeps the process alive after the stage has settled.
+ */
+function stageSignals(timeoutMs: number, signal: AbortSignal | undefined): { timeout: AbortSignal; stop: AbortSignal } {
+	const timeout = AbortSignal.timeout(timeoutMs);
+	return { timeout, stop: signal ? AbortSignal.any([signal, timeout]) : timeout };
+}
+
+/** Never resolves; rejects once `stop` aborts. */
+function whenStopped(stop: AbortSignal): Promise<never> {
+	return new Promise((_resolve, reject) => {
+		if (stop.aborted) reject(stop.reason);
+		else stop.addEventListener("abort", () => reject(stop.reason), { once: true });
+	});
 }
 
 export async function closeRemote(
@@ -219,39 +246,31 @@ export function validateSshOptions(options: string[]): void {
 	}
 }
 
-async function readBidiEndpoint(stream: ReadableStream<Uint8Array>, timeoutMs: number): Promise<string> {
+async function readBidiEndpoint(stream: ReadableStream<Uint8Array>, timeoutMs: number, signal?: AbortSignal): Promise<string> {
 	const reader = stream.getReader();
 	const decoder = new TextDecoder();
 	let buffer = "";
-	const deadline = Date.now() + timeoutMs;
-	while (Date.now() < deadline) {
-		const remaining = Math.max(1, deadline - Date.now());
-		const result = await Promise.race([
-			reader.read(),
-			Bun.sleep(remaining).then(() => ({ done: true, value: undefined } as ReadableStreamReadResult<Uint8Array>)),
-		]);
+	const ended = { done: true, value: undefined } as ReadableStreamReadResult<Uint8Array>;
+	const stopped = whenStopped(stageSignals(timeoutMs, signal).stop).catch(() => ended);
+	for (;;) {
+		const result = await Promise.race([reader.read(), stopped]);
 		if (result.done) break;
 		buffer += decoder.decode(result.value, { stream: true });
 		const match = buffer.match(/WebDriver BiDi listening on (ws:\/\/127\.0\.0\.1:\d+(?:\/\S*)?)/);
 		if (match?.[1]) return match[1];
 		if (buffer.length > 16_384) buffer = buffer.slice(-8192);
 	}
+	if (signal?.aborted) throw new Error("headed-browser: remote Firefox launch cancelled");
 	throw new Error(`headed-browser: remote Firefox did not publish a WebDriver BiDi endpoint: ${buffer.trim().slice(-500)}`);
 }
 
-async function sshCapture(sshArgs: string[], host: string, command: string[], timeoutMs = 15_000): Promise<string> {
-	const process = Bun.spawn(["ssh", ...sshArgs, host, ...command], { stdout: "pipe", stderr: "pipe" });
-	const stdoutPromise = new Response(process.stdout).text();
-	const stderrPromise = new Response(process.stderr).text();
-	const timedOut = Symbol("ssh-timeout");
-	const exitCode = await Promise.race([
-		process.exited,
-		// The return annotation keeps the `unique symbol` from widening to `symbol`,
-		// so the identity check below narrows `exitCode` to a number.
-		Bun.sleep(timeoutMs).then((): typeof timedOut => { process.kill(); return timedOut; }),
-	]);
-	const [stdout, stderr] = await Promise.all([stdoutPromise, stderrPromise]);
-	if (exitCode === timedOut) throw new Error(`headed-browser: ssh ${host} timed out after ${timeoutMs} ms`);
+async function sshCapture(sshArgs: string[], host: string, command: string[], timeoutMs = 15_000, signal?: AbortSignal): Promise<string> {
+	const { timeout, stop } = stageSignals(timeoutMs, signal);
+	// The stop signal kills ssh, so a timed-out or cancelled stage leaves no process behind.
+	const process = Bun.spawn(["ssh", ...sshArgs, host, ...command], { stdout: "pipe", stderr: "pipe", signal: stop });
+	const [exitCode, stdout, stderr] = await Promise.all([process.exited, new Response(process.stdout).text(), new Response(process.stderr).text()]);
+	if (signal?.aborted) throw new Error(`headed-browser: ssh ${host} cancelled`);
+	if (timeout.aborted) throw new Error(`headed-browser: ssh ${host} timed out after ${timeoutMs} ms`);
 	if (exitCode !== 0) throw new Error(`headed-browser: ssh ${host} failed: ${stderr.trim() || `exit ${exitCode}`}`);
 	return stdout.trim();
 }

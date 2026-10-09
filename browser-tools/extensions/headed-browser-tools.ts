@@ -88,7 +88,7 @@ export default function headedBrowserTools(pi: ExtensionAPI): void {
 			}
 			if (params.op === "launch") {
 				if (!ctx) throw new Error("headed-browser: extension context unavailable");
-				const session = await launchSession(cwd, ctx, params);
+				const session = await launchSession(cwd, ctx, params, signal);
 				const audit = createAuditWriter(ctx, session.config);
 				audits.set(session.id, audit);
 				for (const page of session.pages.values()) await applyPagePolicy(page, session, audit);
@@ -251,7 +251,7 @@ export default function headedBrowserTools(pi: ExtensionAPI): void {
 	});
 }
 
-async function launchSession(cwd: string, ctx: ExtensionContext, params: ToolParams): Promise<HeadedSession> {
+async function launchSession(cwd: string, ctx: ExtensionContext, params: ToolParams, signal: AbortSignal | undefined): Promise<HeadedSession> {
 	const config = await resolveConfig(cwd, params);
 	deriveDomainPolicy(config);
 	assertChannelEngine(config.engine, config.browserChannel);
@@ -274,19 +274,27 @@ async function launchSession(cwd: string, ctx: ExtensionContext, params: ToolPar
 			else sourceProfile = profile.profilePath;
 		}
 	}
-	const materialized = await materializeProfile({ engine: config.engine, channel: resolvedBrowser.channel, profileMode, sourceProfile, agentDir, config });
+	const materialized = await materializeProfile({ engine: config.engine, channel: resolvedBrowser.channel, profileMode, sourceProfile, agentDir, config, signal })
+		.catch((error: unknown) => { throw launchError(error, signal); });
 	try {
+		signal?.throwIfAborted();
 		if (params.remoteHost) {
-			const remote = await launchRemote({ remoteHost: params.remoteHost, remoteBrowserPath: requireString(params.remoteBrowserPath, "remoteBrowserPath"), sshOptions: params.sshOptions, allowDownloads: config.allowDownloads, navigationTimeoutMs: config.navigationTimeoutMs }, config);
+			const remote = await launchRemote({ remoteHost: params.remoteHost, remoteBrowserPath: requireString(params.remoteBrowserPath, "remoteBrowserPath"), sshOptions: params.sshOptions, allowDownloads: config.allowDownloads, navigationTimeoutMs: config.navigationTimeoutMs, signal }, config);
 			return createSession({ browser: remote.browser, resolvedBrowser, profileMode, profile: materialized, config, remote });
 		}
 		const browser = await launchLocal({ engine: config.engine, executablePath: resolvedBrowser.path, profileDir: materialized.profileDir, downloadsDir: materialized.downloadsDir, config });
 		return createSession({ browser, resolvedBrowser, profileMode, profile: materialized, sourceProfile, config });
 	} catch (error) {
 		await removeMaterializedProfile(materialized, false);
-		throw error;
+		throw launchError(error, signal);
 	}
 }
+
+/** A launch the host cancelled reports `cancelled`, whichever stage noticed the abort. */
+function launchError(error: unknown, signal: AbortSignal | undefined): unknown {
+	return signal?.aborted ? new CancelledError(`headed-browser: launch cancelled; no session launched (${errorMessage(error)})`) : error;
+}
+
 function resultEnvelope(payload: unknown, details: SessionSummary | Record<string, unknown>, compact = false): ToolResult {
 	// Spread into a fresh literal: an `interface` never gains the implicit index
 	// signature that `Record<string, unknown>` needs, but an object literal does.

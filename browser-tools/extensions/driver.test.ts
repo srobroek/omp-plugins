@@ -5,6 +5,7 @@ import { join } from "node:path";
 import type { EffectiveConfig } from "./lib/config.ts";
 import type { RemoteResources } from "./lib/driver.ts";
 import { closeRemote, launchLocal, loadPuppeteer, validateRemoteTarget, validateSshOptions } from "./lib/driver.ts";
+import { classifyError } from "./lib/operations.ts";
 
 const temps: string[] = [];
 
@@ -109,4 +110,104 @@ describe("headed browser driver", () => {
 		});
 	});
 
+	describe("remote launch bounds", () => {
+		const driverModule = JSON.stringify(join(import.meta.dir, "lib", "driver.ts"));
+		const toolModule = JSON.stringify(join(import.meta.dir, "headed-browser-tools.ts"));
+
+		/**
+		 * A directory holding an `ssh` that plays every remote stage locally: the profile
+		 * commands succeed at once, the browser publishes its BiDi endpoint and stays up, and
+		 * the tunnel stays up. Paired with a driver whose `connect` never settles, a launch
+		 * reaches the connect stage within a second and then hangs there.
+		 */
+		async function hangingConnectFixture(): Promise<{ bin: string; driver: string }> {
+			const directory = await mkdtemp(join(tmpdir(), "headed-remote-test-"));
+			temps.push(directory);
+			const ssh = [
+				"#!/bin/sh",
+				'for arg in "$@"; do',
+				'\tcase "$arg" in',
+				"\t\tmktemp) echo /tmp/omp-headed-firefox-fixture; exit 0 ;;",
+				"\t\tmkdir|rm) exit 0 ;;",
+				"\t\t--remote-debugging-port) echo 'WebDriver BiDi listening on ws://127.0.0.1:9' >&2; exec sleep 30 ;;",
+				"\t\t-N) exec sleep 30 ;;",
+				"\tesac",
+				"done",
+				"exit 1",
+			].join("\n");
+			await writeFile(join(directory, "ssh"), `${ssh}\n`, { mode: 0o755 });
+			const driver = join(directory, "driver.mjs");
+			await writeFile(driver, "export async function launch() { return { close() {} }; }\nexport function connect() { return new Promise(() => {}); }\n");
+			return { bin: directory, driver };
+		}
+
+		/**
+		 * Runs `body` as a module in a child bun and returns what it logs as JSON. Bun resolves
+		 * spawned commands from its startup PATH, so only a child sees the fixture `ssh`.
+		 */
+		function inChild<T>(bin: string, body: string, env: Record<string, string> = {}): T {
+			const child = Bun.spawnSync([process.execPath, "-e", body], {
+				env: { ...process.env, ...env, PATH: `${bin}:${process.env.PATH}` },
+				stdout: "pipe",
+				stderr: "pipe",
+				timeout: 15_000,
+			});
+			expect(child.exitCode, child.stderr.toString()).toBe(0);
+			return JSON.parse(child.stdout.toString()) as T;
+		}
+
+		const launch = (driver: string, navigationTimeoutMs: number, abortAfterMs?: number) => `
+			import { launchRemote } from ${driverModule};
+			const controller = new AbortController();
+			if (${abortAfterMs ?? -1} >= 0) setTimeout(() => controller.abort(), ${abortAfterMs ?? 0});
+			const started = Date.now();
+			let message;
+			try {
+				await launchRemote({ remoteHost: "fixture-host", remoteBrowserPath: "/usr/bin/firefox", allowDownloads: false, navigationTimeoutMs: ${navigationTimeoutMs}, signal: controller.signal }, { driverModulePath: ${JSON.stringify(driver)}, allowDownloads: false });
+			} catch (error) {
+				message = error.message;
+			}
+			console.log(JSON.stringify({ elapsed: Date.now() - started, message }));
+		`;
+
+		test("a connect that outlasts its stage reports a timeout, not a capability gap", async () => {
+			const { bin, driver } = await hangingConnectFixture();
+			const { elapsed, message } = inChild<{ elapsed: number; message: string }>(bin, launch(driver, 3_000));
+			expect(message).toBe("headed-browser: remote BiDi connect timed out after 3000 ms");
+			expect(classifyError("launch", new Error(message))).toBe("session timeout");
+			expect(elapsed).toBeLessThan(10_000);
+		}, 20_000);
+
+		test("the host signal stops a stage running under a configured timeout above 29 s", async () => {
+			const { bin, driver } = await hangingConnectFixture();
+			// The stage runs under the configured 60 s, so only the signal can end it this early.
+			const { elapsed, message } = inChild<{ elapsed: number; message: string }>(bin, launch(driver, 60_000, 2_000));
+			expect(message).toBe("headed-browser: remote BiDi connect cancelled");
+			expect(elapsed).toBeLessThan(8_000);
+		}, 20_000);
+
+		test("a cancelled launch reports cancelled through headed_session", async () => {
+			const { bin, driver } = await hangingConnectFixture();
+			const agentDir = await mkdtemp(join(tmpdir(), "headed-remote-agent-"));
+			temps.push(agentDir);
+			const body = `
+				import tool from ${toolModule};
+				const z = new Proxy(function () {}, { get: () => z, apply: () => z });
+				let execute;
+				tool({ zod: z, registerTool: (definition) => { if (definition.name === "headed_session") execute = definition.execute; }, on: () => {} });
+				const controller = new AbortController();
+				setTimeout(() => controller.abort(), 2_000);
+				const started = Date.now();
+				const result = await execute("id", { op: "launch", engine: "firefox", remoteHost: "fixture-host", remoteBrowserPath: "/usr/bin/firefox", navigationTimeoutMs: 60_000, ephemeralRoot: ${JSON.stringify(agentDir)} }, controller.signal, undefined, { cwd: ${JSON.stringify(agentDir)} });
+				console.log(JSON.stringify({ elapsed: Date.now() - started, details: result.details, text: result.content[0].text }));
+			`;
+			const { elapsed, details, text } = inChild<{ elapsed: number; details: { ok: boolean; error: string }; text: string }>(bin, body, {
+				HEADED_BROWSER_DRIVER_MODULE_PATH: driver,
+				PI_CODING_AGENT_DIR: agentDir,
+			});
+			expect(details).toMatchObject({ ok: false, error: "cancelled" });
+			expect(text).toContain("launch cancelled; no session launched");
+			expect(elapsed).toBeLessThan(8_000);
+		}, 20_000);
+	});
 });

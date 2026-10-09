@@ -1,6 +1,4 @@
 import { Database } from "bun:sqlite";
-import type { SpawnSyncReturns } from "node:child_process";
-import { spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { existsSync } from "node:fs";
 import { chmod, cp, mkdir, mkdtemp, realpath, rm, stat, writeFile } from "node:fs/promises";
@@ -8,7 +6,7 @@ import { tmpdir } from "node:os";
 import { basename, join, relative } from "node:path";
 import type { Page } from "puppeteer-core";
 import type { Channel, CopyStrategy, EffectiveConfig, Engine, ProfileMode } from "./config.ts";
-import { splitDomains } from "./config.ts";
+import { errorMessage, splitDomains } from "./config.ts";
 
 const EXCLUDED_DIRS = [
 	"cache2",
@@ -49,6 +47,8 @@ export interface MaterializeOptions {
 	sourceProfile?: string;
 	agentDir: string;
 	config: EffectiveConfig;
+	/** Host cancellation for the profile copy. */
+	signal?: AbortSignal;
 }
 
 export async function materializeProfile(options: MaterializeOptions): Promise<MaterializedProfile> {
@@ -69,7 +69,7 @@ export async function materializeProfile(options: MaterializeOptions): Promise<M
 
 	if (options.sourceProfile && options.profileMode === "ephemeral-clone") {
 		await assertProfileIsolation(options.sourceProfile, profileDir);
-		await copyProfile(options.sourceProfile, profileDir, config.copyStrategy, config.copyFirefoxLogins, warnings);
+		await copyProfile(options.sourceProfile, profileDir, config.copyStrategy, config.copyFirefoxLogins, warnings, options.signal);
 	}
 
 	let containerCookiesSkipped = 0;
@@ -122,43 +122,62 @@ export function resolvedCopyStrategy(strategy: CopyStrategy, platform: NodeJS.Pl
 	return "node";
 }
 
+/**
+ * Bound for one native profile copy, sized by the work: `headed_session` is a registered tool
+ * with no harness deadline, and a large profile copied without clonefile or reflink support
+ * can take minutes.
+ */
+export const PROFILE_COPY_TIMEOUT_MS = 300_000;
+
 export async function copyProfile(
 	source: string,
 	destination: string,
 	strategy: CopyStrategy,
 	copyFirefoxLogins: boolean,
 	warnings: string[],
+	signal?: AbortSignal,
+	timeoutMs = PROFILE_COPY_TIMEOUT_MS,
 ): Promise<void> {
 	const selected = resolvedCopyStrategy(strategy);
 	if (selected === "node") {
 		await nodeCopy(source, destination, copyFirefoxLogins);
 		return;
 	}
-	let result: SpawnSyncReturns<string>;
-    // Profile cloning is synchronous; cap it below the 30,000 ms tool_call budget and report failure rather than hide a late mutation.
-    const profileCopyTimeoutMs = 25_000;
-    if (selected === "clonefile") {
-        result = spawnSync("cp", ["-c", "-R", `${source}/.`, destination], { encoding: "utf8", timeout: profileCopyTimeoutMs });
-    } else if (selected === "reflink") {
-        result = spawnSync("cp", ["-a", "--reflink=auto", `${source}/.`, destination], { encoding: "utf8", timeout: profileCopyTimeoutMs });
-    } else {
-        const excludedDirs = EXCLUDED_DIRS.map((entry) => join(source, entry));
-        const excludedFiles = [...EXCLUDED_FILES, ...(!copyFirefoxLogins ? LOGIN_FILES : [])];
-        result = spawnSync(
-            "robocopy",
-            [source, destination, "/E", "/XJ", "/R:1", "/W:1", "/NFL", "/NDL", "/NJH", "/NJS", "/NP", "/XD", ...excludedDirs, "/XF", ...excludedFiles],
-            { encoding: "utf8", timeout: profileCopyTimeoutMs },
-        );
-    }
-	const successfulRobocopy = selected === "robocopy" && result.status !== null && result.status >= 0 && result.status <= 7;
-	if (result.error || (!successfulRobocopy && result.status !== 0)) {
-		warnings.push(`headed-browser: ${selected} profile copy failed; fell back to node (${result.error?.message ?? result.stderr ?? `exit ${result.status}`})`);
-		await rm(destination, { recursive: true, force: true });
-		await mkdir(destination, { recursive: true, mode: 0o700 });
-		await nodeCopy(source, destination, copyFirefoxLogins);
-		return;
+	let command: string[];
+	if (selected === "clonefile") {
+		command = ["cp", "-c", "-R", `${source}/.`, destination];
+	} else if (selected === "reflink") {
+		command = ["cp", "-a", "--reflink=auto", `${source}/.`, destination];
+	} else {
+		const excludedDirs = EXCLUDED_DIRS.map((entry) => join(source, entry));
+		const excludedFiles = [...EXCLUDED_FILES, ...(!copyFirefoxLogins ? LOGIN_FILES : [])];
+		command = ["robocopy", source, destination, "/E", "/XJ", "/R:1", "/W:1", "/NFL", "/NDL", "/NJH", "/NJS", "/NP", "/XD", ...excludedDirs, "/XF", ...excludedFiles];
 	}
-	await pruneProfile(destination, copyFirefoxLogins);
+	// Asynchronous, so a long copy never blocks the event loop; the stop signal kills it.
+	// `AbortSignal.timeout` holds no reference on the event loop once the copy has settled.
+	const timeout = AbortSignal.timeout(timeoutMs);
+	const stop = signal ? AbortSignal.any([signal, timeout]) : timeout;
+	let failure: string;
+	try {
+		const copy = Bun.spawn(command, { stdin: "ignore", stdout: "ignore", stderr: "pipe", signal: stop });
+		const [exitCode, stderr] = await Promise.all([copy.exited, new Response(copy.stderr).text()]);
+		// Checked first: a killed robocopy can exit inside its 0-7 success range.
+		const succeeded = !stop.aborted && (selected === "robocopy" ? exitCode >= 0 && exitCode <= 7 : exitCode === 0);
+		if (succeeded) {
+			await pruneProfile(destination, copyFirefoxLogins);
+			return;
+		}
+		failure = stderr.trim() || `exit ${exitCode}`;
+	} catch (error) {
+		failure = errorMessage(error);
+	}
+	await rm(destination, { recursive: true, force: true });
+	// A stopped copy reports why it stopped; only a failed one falls back to the slower node copy.
+	if (signal?.aborted) throw new Error(`headed-browser: profile copy (${selected}) cancelled; no session launched`);
+	if (timeout.aborted) throw new Error(`headed-browser: profile copy (${selected}) exceeded ${timeoutMs / 1000} s; no session launched`);
+	warnings.push(`headed-browser: ${selected} profile copy failed; fell back to node (${failure})`);
+	await mkdir(destination, { recursive: true, mode: 0o700 });
+	await nodeCopy(source, destination, copyFirefoxLogins);
 }
 
 async function nodeCopy(source: string, destination: string, copyFirefoxLogins: boolean): Promise<void> {
