@@ -7,8 +7,12 @@ import type { TSchema } from "@oh-my-pi/pi-ai";
 import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
 
 const execFileAsync = promisify(execFile);
-/** A tool_call has a 30,000 ms budget; leave 5,000 ms for dispatch and reporting. */
-export const TIMEOUT_MS = 25_000;
+/**
+ * Bound on one journeys.py run. A registered tool's execute runs under no harness
+ * deadline, and index/lint/prune only walk local markdown, so this bound only stops
+ * a hung helper (a FIFO, a stalled mount). The caller's abort signal cancels sooner.
+ */
+export const TIMEOUT_MS = 600_000;
 const MAX_BUFFER = 10 * 1024 * 1024;
 const JOURNEYS_SCRIPT = ["skills", "journey-init", "scripts", "journeys.py"] as const;
 
@@ -37,11 +41,10 @@ export type JourneysIndexParams = {
 	journey?: string;
 };
 
-export type JourneysExecution = {
-	stdout: string;
-	stderr: string;
-	exitCode: number;
-};
+/** A run that reached an exit status, or why it reached none. */
+export type JourneysExecution =
+	| { stdout: string; stderr: string; exitCode: number }
+	| { stdout: string; stderr: string; unrun: string };
 
 type JourneysRunner = Exec;
 
@@ -54,7 +57,7 @@ function journeysArgs(params: JourneysIndexParams): string[] {
 	return args;
 }
 
-const JOURNEYS_ERROR = {} as { code?: unknown; stdout?: unknown; stderr?: unknown; message?: unknown };
+const JOURNEYS_ERROR = {} as { code?: unknown; killed?: unknown; stdout?: unknown; stderr?: unknown; message?: unknown };
 
 /** Run the single-source Python helper with the session project as cwd. */
 export async function runJourneys(
@@ -62,12 +65,13 @@ export async function runJourneys(
 	params: JourneysIndexParams,
 	signal?: AbortSignal,
 	runner: JourneysRunner = exec,
+	timeoutMs = TIMEOUT_MS,
 ): Promise<JourneysExecution> {
     try {
         const result = await runner("python3", journeysArgs(params), {
             cwd,
             shell: false,
-            timeout: TIMEOUT_MS,
+            timeout: timeoutMs,
             maxBuffer: MAX_BUFFER,
             signal,
         });
@@ -76,6 +80,9 @@ export async function runJourneys(
 		const failure = typeof error === "object" && error !== null ? (error as typeof JOURNEYS_ERROR) : JOURNEYS_ERROR;
 		const stdout = typeof failure.stdout === "string" ? failure.stdout : "";
 		const stderr = typeof failure.stderr === "string" ? failure.stderr : typeof failure.message === "string" ? failure.message : "";
+		// A killed helper made no finding: report why it stopped instead of a failed exit.
+		if (signal?.aborted) return { stdout, stderr, unrun: "cancelled" };
+		if (failure.killed === true && failure.code === null) return { stdout, stderr, unrun: `timed out after ${timeoutMs / 1000} s` };
 		const code = typeof failure.code === "number" ? failure.code : 1;
 		return { stdout, stderr, exitCode: code };
 	}
@@ -227,7 +234,7 @@ export default function journeysTool(pi: ExtensionAPI): void {
 	pi.registerTool({
 		name: "journeys_index",
 		label: "Journey index/lint/prune",
-		description: "Index, structurally lint (not semantic readiness), or prune a user-journeys directory by running its bundled journeys.py helper.",
+		description: "Index, structurally lint (not semantic readiness), or prune a user-journeys directory by running its bundled journeys.py helper. A run that times out or is cancelled produces an incomplete, unsuccessful report.",
 		parameters: z.object({
 			command: z.enum(["index", "lint", "prune"]),
 			journeysDir: z.string().describe("Path to the journeys directory"),
@@ -247,10 +254,17 @@ export default function journeysTool(pi: ExtensionAPI): void {
         execute: async (_id, params: JourneysIndexParams, signal, _onUpdate, ctx) => {
             const resolvedParams = { ...params, journeysDir: resolve(ctx.cwd, params.journeysDir) };
             const result = await runJourneys(ctx.cwd, resolvedParams, signal);
-            const text = result.stdout && result.stderr ? `${result.stdout}\n${result.stderr}` : result.stdout || result.stderr;
+            const output = result.stdout && result.stderr ? `${result.stdout}\n${result.stderr}` : result.stdout || result.stderr;
+            if ("unrun" in result) {
+                const text = [`journeys.py ${params.command} did not finish: ${result.unrun}`, output].filter(Boolean).join("\n");
+                return {
+                    content: [{ type: "text" as const, text }],
+                    details: { ok: false, complete: false, command: params.command, stdout: result.stdout, stderr: result.stderr, unrun: result.unrun },
+                };
+            }
             return {
-                content: [{ type: "text" as const, text }],
-                details: { ok: result.exitCode === 0, command: params.command, stdout: result.stdout, stderr: result.stderr, exitCode: result.exitCode },
+                content: [{ type: "text" as const, text: output }],
+                details: { ok: result.exitCode === 0, complete: true, command: params.command, stdout: result.stdout, stderr: result.stderr, exitCode: result.exitCode },
             };
         },
 	});

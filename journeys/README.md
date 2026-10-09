@@ -30,6 +30,8 @@ The plugin's extension modules register:
   Prune requires a nonnegative safe integer `keep`; deletion requires `yes=true`.
   Select one journey directory with `journey` (CLI: `--journey`). Omitting
   the selector prunes every journey and requires directory-wide approval.
+  A run that times out or is cancelled reports `complete: false` and its
+  `unrun` reason instead of an exit code.
 
 Each validator records its journey's run and findings. The coordinator alone
 updates shared INDEX.md/TRACKER.md and commits journeys-dir changes per wave.
