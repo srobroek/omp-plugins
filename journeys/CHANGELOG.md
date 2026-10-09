@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.1](https://github.com/srobroek/omp-plugins/compare/journeys--v1.0.0...journeys--v1.0.1) (2026-10-09)
+
+
+### Bug Fixes
+
+* **journeys:** drop the false 30 s tool_call cap from journeys_index ([#661](https://github.com/srobroek/omp-plugins/issues/661)) ([50b1a98](https://github.com/srobroek/omp-plugins/commit/50b1a98b426187a66d68ef9745c345be3e1dac60))
+
 ## [1.0.0](https://github.com/srobroek/omp-plugins/compare/journeys--v0.1.0...journeys--v1.0.0) (2026-10-04)
 
 

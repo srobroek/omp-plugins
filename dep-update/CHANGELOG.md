@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.8.2](https://github.com/srobroek/omp-plugins/compare/dep-update--v0.8.1...dep-update--v0.8.2) (2026-10-09)
+
+
+### Bug Fixes
+
+* **dep-update:** size scan and apply bounds by the work, report stops as incomplete ([#662](https://github.com/srobroek/omp-plugins/issues/662)) ([686fae9](https://github.com/srobroek/omp-plugins/commit/686fae9363a360d5292f1f3e871ed4eae2786ada))
+
 ## [0.8.1](https://github.com/srobroek/omp-plugins/compare/dep-update--v0.8.0...dep-update--v0.8.1) (2026-10-08)
 
 
