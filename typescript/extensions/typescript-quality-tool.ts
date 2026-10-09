@@ -112,10 +112,29 @@ function record(steps: StepResult[], name: string, r: { exitCode: number | null;
     steps.push({ name, status: "fail", detail: (r.stderr || r.stdout).trim() || `exit ${r.exitCode}` });
 }
 
+function local(bin: string, cwd: string): string | null {
+    const path = join(cwd, "node_modules", ".bin", bin);
+    return existsSync(path) ? path : null;
+}
+
 function installed(bin: string, cwd: string, deadline: number): string | null {
-    const local = join(cwd, "node_modules", ".bin", bin);
-    if (existsSync(local)) return local;
-    return have(bin, deadline) ? bin : null;
+    return local(bin, cwd) ?? (have(bin, deadline) ? bin : null);
+}
+
+const LINTERS = ["biome", "eslint"] as const;
+
+/**
+ * The project's own linter, of either kind, wins over any linter on PATH: a PATH
+ * Biome running `check --write` on an ESLint project rewrites files under rules
+ * the project never chose.
+ */
+function linter(cwd: string, deadline: number): { name: (typeof LINTERS)[number]; bin: string } | null {
+    for (const name of LINTERS) {
+        const bin = local(name, cwd);
+        if (bin) return { name, bin };
+    }
+    for (const name of LINTERS) if (have(name, deadline)) return { name, bin: name };
+    return null;
 }
 
 export function runTypescriptQuality(mode: QualityMode, cwd: string): QualityReport {
@@ -128,17 +147,19 @@ export function runTypescriptQuality(mode: QualityMode, cwd: string): QualityRep
         return { ok: false, complete: false, cwd, mode, steps };
     }
     const probeDeadline = Math.min(deadline, Date.now() + PROBE_BUDGET_MS);
-    const biome = installed("biome", cwd, probeDeadline);
-    const eslint = installed("eslint", cwd, probeDeadline);
-    const tsc = installed("tsc", cwd, probeDeadline);
-    const lint = biome ?? eslint;
+    const lint = linter(cwd, probeDeadline);
     if (lint) {
-        const args = biome ? ["check", ...(mode === "fix" ? ["--write"] : []), "."] : [".", ...(mode === "fix" ? ["--fix"] : [])];
-        record(steps, biome ? "biome" : "eslint", run([lint, ...args], cwd, deadline));
+        const args = lint.name === "biome" ? ["check", ...(mode === "fix" ? ["--write"] : []), "."] : [".", ...(mode === "fix" ? ["--fix"] : [])];
+        record(steps, lint.name, run([lint.bin, ...args], cwd, deadline));
     } else steps.push({ name: "biome/eslint", status: "skip", detail: "no installed biome or eslint" });
     if (mode === "check") {
-        if (tsc) record(steps, "tsc --noEmit", run([tsc, "--noEmit"], cwd, deadline));
-        else steps.push({ name: "tsc --noEmit", status: "skip", detail: "no installed tsc" });
+        // Without a tsconfig.json, `tsc --noEmit` prints its help and exits 1: there is nothing to type-check.
+        if (!existsSync(join(cwd, "tsconfig.json"))) steps.push({ name: "tsc --noEmit", status: "skip", detail: "no tsconfig.json" });
+        else {
+            const tsc = installed("tsc", cwd, probeDeadline);
+            if (tsc) record(steps, "tsc --noEmit", run([tsc, "--noEmit"], cwd, deadline));
+            else steps.push({ name: "tsc --noEmit", status: "skip", detail: "no installed tsc" });
+        }
     }
     const complete = steps.length > 0 && steps.every((s) => s.status !== "skip") && Date.now() < deadline;
     const ok = complete && steps.every((s) => s.status === "pass");
@@ -153,12 +174,12 @@ export default function typescriptQualityTool(pi: ExtensionAPI): void {
 		description:
 			"Run installed biome/eslint and tsc (check) or biome/eslint fixes (fix), without downloads. Missing projects or tools produce incomplete, unsuccessful reports.",
 		parameters: z.object({
-			mode: z.enum(["check", "fix"]).describe("check: biome/eslint + tsc --noEmit; fix: biome check --write"),
-			path: z.string().optional().describe("Project cwd; defaults to session cwd"),
+			mode: z.enum(["check", "fix"]).describe("check: biome/eslint + tsc --noEmit; fix: biome check --write or eslint --fix"),
+			path: z.string().optional().describe("Project root holding package.json; relative paths resolve against the session cwd, the default"),
 		}) as unknown as TSchema,
 		execute: async (_id, params: TypescriptQualityParams, _signal, _onUpdate, ctx) => {
 			try {
-				const cwd = resolve(params.path ?? ctx?.cwd ?? process.cwd());
+				const cwd = resolve(ctx?.cwd ?? process.cwd(), params.path ?? ".");
 				if (!existsSync(cwd)) {
 					return {
 						content: [{ type: "text" as const, text: `path does not exist: ${cwd}` }],

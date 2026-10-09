@@ -1,6 +1,6 @@
 # typescript
 
-TypeScript and React architecture conventions, tooling defaults, and a quality skill.
+A TypeScript type-safety rule and a Biome or ESLint plus tsc quality tool with its skill.
 
 ## Skills
 

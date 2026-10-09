@@ -164,7 +164,7 @@
     },
     {
       "name": "typescript",
-      "description": "TypeScript rules: contract boundaries, type safety and validation, component layout, build tooling, testing, and a TypeScript review skill.",
+      "description": "TypeScript type-safety rule and a Biome or ESLint plus tsc quality tool.",
       "source": "./typescript",
       "version": "0.3.9",
       "category": "language"
