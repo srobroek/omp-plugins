@@ -8,7 +8,6 @@ import {
 	type AsyncCliRunner,
 	autoDeleteSetting,
 	type CliResult,
-	type CliRunner,
 	detectForge,
 	enableAutoDelete,
 	FORGE_TIMEOUT_MS,
@@ -19,10 +18,8 @@ import {
 	normalizeRepoPath,
 	REMOTE_NAME,
 	redactRemote,
-	remoteBranchAbsent,
 	remoteBranchAbsentAsync,
 	repoPathFromRemote,
-	runCli,
 	runCliAsync,
 	singleRemoteRecord,
 } from "./forge-adapter.ts";
@@ -39,7 +36,7 @@ type MergeOptionsForTest = NonNullable<Parameters<typeof mergeArgs>[2]>;
 /** A runner that records every invocation and answers with one fixed result. */
 const spy = (result: CliResult) => {
 	const calls: Call[] = [];
-	const run: CliRunner = (argv, options) => {
+	const run: AsyncCliRunner = (argv, options) => {
 		calls.push({ argv: [...argv], cwd: options.cwd, timeoutMs: options.timeoutMs, env: options.env });
 		return result;
 	};
@@ -695,14 +692,14 @@ describe("enableAutoDelete", () => {
 
 	test("no other exported function issues a mutating argv", async () => {
 		const calls: Call[] = [];
-		const run: CliRunner = (argv, options) => {
+		const run: AsyncCliRunner = (argv, options) => {
 			calls.push({ argv: [...argv], cwd: options.cwd, timeoutMs: options.timeoutMs, env: options.env });
 			return completed(0, "true\n");
 		};
 		const forges: Forge[] = ["github", "gitlab", ...UNSUPPORTED_FORGES];
 		for (const forge of forges) {
 			await autoDeleteSetting(forge, "group/project", run);
-			remoteBranchAbsent("origin", "omp/agent/omp-plugins-9ej3.4", REPO_CWD, run);
+			await remoteBranchAbsentAsync("origin", "omp/agent/omp-plugins-9ej3.4", REPO_CWD, run);
 			detectForge("https://github.com/group/project.git");
 			try {
 				mergeArgs(forge, 42);
@@ -825,10 +822,10 @@ describe("mergeArgs", () => {
 	});
 });
 
-describe("remoteBranchAbsent", () => {
-	test("a clean exit 2 is absent and pins the safe protocol policy", () => {
+describe("remoteBranchAbsentAsync", () => {
+	test("a clean exit 2 is absent and pins the safe protocol policy", async () => {
 		const { run, calls } = spy(completed(2));
-		expect(remoteBranchAbsent("origin", "omp/agent/omp-plugins-9ej3.4", REPO_CWD, run)).toBe("absent");
+		expect(await remoteBranchAbsentAsync("origin", "omp/agent/omp-plugins-9ej3.4", REPO_CWD, run)).toBe("absent");
 		expect(calls[0]?.argv).toEqual([
 			"git",
 			"-c",
@@ -865,16 +862,16 @@ describe("remoteBranchAbsent", () => {
 	 * is part of the question. Answering it somewhere else can only produce a false
 	 * verdict, and a false absence is what marks a live branch deleted.
 	 */
-	test("the probe is asked in the directory it was given, never an ambient one", () => {
+	test("the probe is asked in the directory it was given, never an ambient one", async () => {
 		const { run, calls } = spy(completed(2));
-		expect(remoteBranchAbsent("origin", "feature", "/repository/linked worktree", run)).toBe("absent");
+		expect(await remoteBranchAbsentAsync("origin", "feature", "/repository/linked worktree", run)).toBe("absent");
 		expect(calls.map(call => call.cwd)).toEqual(["/repository/linked worktree"]);
 	});
 
-	test("no directory is no observation: an empty cwd is unknown and issues nothing", () => {
+	test("no directory is no observation: an empty cwd is unknown and issues nothing", async () => {
 		for (const cwd of ["", "   "]) {
 			const { run, calls } = spy(completed(2));
-			expect(remoteBranchAbsent("origin", "feature", cwd, run)).toBe("unknown");
+			expect(await remoteBranchAbsentAsync("origin", "feature", cwd, run)).toBe("unknown");
 			expect(calls).toHaveLength(0);
 		}
 	});
@@ -890,10 +887,10 @@ describe("remoteBranchAbsent", () => {
 	 * The URL reaches Git through the child's environment rather than its command line,
 	 * because argv is readable by every user on the host through `ps`.
 	 */
-	test("a verified forge URL is probed from a neutral directory with no global or system config", () => {
+	test("a verified forge URL is probed from a neutral directory with no global or system config", async () => {
 		const url = "https://github.com/srobroek/omp-plugins.git";
 		const { run, calls } = spy(completed(2));
-		expect(remoteBranchAbsent(url, "feature", REPO_CWD, run)).toBe("absent");
+		expect(await remoteBranchAbsentAsync(url, "feature", REPO_CWD, run)).toBe("absent");
 		expect(calls).toHaveLength(1);
 		const probe = calls[0];
 		expect(probe?.cwd).not.toBe(REPO_CWD);
@@ -919,14 +916,14 @@ describe("remoteBranchAbsent", () => {
 	 * a token query, and `ps` publishes argv to the whole host; a verdict is a word, so
 	 * nothing the caller receives can carry the secret either.
 	 */
-	test("a credential-bearing URL appears in no argv element and in no returned value", () => {
+	test("a credential-bearing URL appears in no argv element and in no returned value", async () => {
 		for (const url of [
 			"https://srobroek:ghp_secrettoken@github.com/srobroek/omp-plugins.git",
 			"https://github.com/srobroek/omp-plugins.git?token=ghp_secrettoken",
 			"ssh://git:ghp_secrettoken@gitlab.com/group/project.git",
 		]) {
 			const { run, calls } = spy(completed(2));
-			const verdict = remoteBranchAbsent(url, "feature", REPO_CWD, run);
+			const verdict = await remoteBranchAbsentAsync(url, "feature", REPO_CWD, run);
 			expect(verdict).toBe("absent");
 			expect(verdict).not.toContain("ghp_secrettoken");
 			expect(calls).toHaveLength(1);
@@ -937,16 +934,16 @@ describe("remoteBranchAbsent", () => {
 		}
 	});
 
-	test("an alternate transport host is a URL, a remote name and a local path are not", () => {
+	test("an alternate transport host is a URL, a remote name and a local path are not", async () => {
 		const ssh = spy(completed(2));
-		expect(remoteBranchAbsent("ssh://git@altssh.gitlab.com:443/group/project.git", "feature", REPO_CWD, ssh.run)).toBe("absent");
+		expect(await remoteBranchAbsentAsync("ssh://git@altssh.gitlab.com:443/group/project.git", "feature", REPO_CWD, ssh.run)).toBe("absent");
 		expect(ssh.calls[0]?.cwd).not.toBe(REPO_CWD);
 		expect(ssh.calls[0]?.argv.at(-2)).toBe("omp-absence-probe");
 
 		// Name mode is what delivery_land uses: the caller's directory, the caller's
 		// operand, and no injected config.
 		const name = spy(completed(2));
-		expect(remoteBranchAbsent("origin", "feature", REPO_CWD, name.run)).toBe("absent");
+		expect(await remoteBranchAbsentAsync("origin", "feature", REPO_CWD, name.run)).toBe("absent");
 		expect(name.calls[0]?.cwd).toBe(REPO_CWD);
 		expect(name.calls[0]?.argv.at(-2)).toBe("origin");
 		expect(name.calls[0]?.env?.GIT_CONFIG_GLOBAL).toBeUndefined();
@@ -956,18 +953,18 @@ describe("remoteBranchAbsent", () => {
 		// verified, so neither may select the branch that skips the caller's directory.
 		for (const remote of ["/srv/git/repo.git", "git://github.com/o/r.git", "https://evil.example/o/r.git"]) {
 			const other = spy(completed(2));
-			expect(remoteBranchAbsent(remote, "feature", REPO_CWD, other.run)).toBe("absent");
+			expect(await remoteBranchAbsentAsync(remote, "feature", REPO_CWD, other.run)).toBe("absent");
 			expect(other.calls[0]?.cwd).toBe(REPO_CWD);
 			expect(other.calls[0]?.argv.at(-2)).toBe(remote);
 		}
 	});
 
-	test("the observation environment removes executable Git overrides", () => {
+	test("the observation environment removes executable Git overrides", async () => {
 		const previous = process.env.GIT_SSH_COMMAND;
 		process.env.GIT_SSH_COMMAND = "/tmp/checkout-controlled-ssh";
 		try {
 			const { run, calls } = spy(completed(2));
-			expect(remoteBranchAbsent("origin", "feature", REPO_CWD, run)).toBe("absent");
+			expect(await remoteBranchAbsentAsync("origin", "feature", REPO_CWD, run)).toBe("absent");
 			const env = calls[0]?.env;
 			expect(env?.GIT_ALLOW_PROTOCOL).toBe("file:https:ssh");
 			expect(env?.GIT_TERMINAL_PROMPT).toBe("0");
@@ -980,13 +977,13 @@ describe("remoteBranchAbsent", () => {
 		}
 	});
 
-	test("exit 0 is present only for one exact canonical head record", () => {
-		expect(remoteBranchAbsent("origin", "feature", REPO_CWD, spy(completed(0, headRecord("feature"))).run)).toBe("present");
-		expect(remoteBranchAbsent("origin", "feature", REPO_CWD, spy(completed(0, headRecord("feature", SHA256_OID))).run)).toBe("present");
-		expect(remoteBranchAbsent("origin", "feature", REPO_CWD, spy(completed(0, headRecord("feature").slice(0, -1))).run)).toBe("present");
+	test("exit 0 is present only for one exact canonical head record", async () => {
+		expect(await remoteBranchAbsentAsync("origin", "feature", REPO_CWD, spy(completed(0, headRecord("feature"))).run)).toBe("present");
+		expect(await remoteBranchAbsentAsync("origin", "feature", REPO_CWD, spy(completed(0, headRecord("feature", SHA256_OID))).run)).toBe("present");
+		expect(await remoteBranchAbsentAsync("origin", "feature", REPO_CWD, spy(completed(0, headRecord("feature").slice(0, -1))).run)).toBe("present");
 	});
 
-	test("empty, malformed, unrelated, or multiple stdout records are unknown", () => {
+	test("empty, malformed, unrelated, or multiple stdout records are unknown", async () => {
 		for (const stdout of [
 			"",
 			"\n",
@@ -999,111 +996,88 @@ describe("remoteBranchAbsent", () => {
 			`${SHA1_OID}\trefs/heads/feature\r\n`,
 			`${SHA1_OID}\trefs/heads/feature\textra\n`,
 		]) {
-			expect(remoteBranchAbsent("origin", "feature", REPO_CWD, spy(completed(0, stdout)).run)).toBe("unknown");
+			expect(await remoteBranchAbsentAsync("origin", "feature", REPO_CWD, spy(completed(0, stdout)).run)).toBe("unknown");
 		}
 	});
 
-	test("stdout and exit status must agree", () => {
-		expect(remoteBranchAbsent("origin", "feature", REPO_CWD, spy(completed(2, headRecord("feature"))).run)).toBe("unknown");
-		expect(remoteBranchAbsent("origin", "feature", REPO_CWD, spy(completed(2, "", "warning")).run)).toBe("unknown");
-		expect(remoteBranchAbsent("origin", "feature", REPO_CWD, spy(completed(1, headRecord("feature"))).run)).toBe("unknown");
-		expect(remoteBranchAbsent("origin", "feature", REPO_CWD, spy(completed(128, headRecord("feature"))).run)).toBe("unknown");
+	test("stdout and exit status must agree", async () => {
+		expect(await remoteBranchAbsentAsync("origin", "feature", REPO_CWD, spy(completed(2, headRecord("feature"))).run)).toBe("unknown");
+		expect(await remoteBranchAbsentAsync("origin", "feature", REPO_CWD, spy(completed(2, "", "warning")).run)).toBe("unknown");
+		expect(await remoteBranchAbsentAsync("origin", "feature", REPO_CWD, spy(completed(1, headRecord("feature"))).run)).toBe("unknown");
+		expect(await remoteBranchAbsentAsync("origin", "feature", REPO_CWD, spy(completed(128, headRecord("feature"))).run)).toBe("unknown");
 	});
 
-	test("an unreachable remote or refused credentials is unknown", () => {
-		expect(remoteBranchAbsent("origin", "feature", REPO_CWD, spy(completed(128, "", "fatal: could not read Username")).run)).toBe("unknown");
+	test("an unreachable remote or refused credentials is unknown", async () => {
+		expect(await remoteBranchAbsentAsync("origin", "feature", REPO_CWD, spy(completed(128, "", "fatal: could not read Username")).run)).toBe("unknown");
 	});
 
-	test("every other exit is unknown", () => {
+	test("every other exit is unknown", async () => {
 		for (const exitCode of [1, 3, 127, 129, 141, 255]) {
-			expect(remoteBranchAbsent("origin", "feature", REPO_CWD, spy(completed(exitCode)).run)).toBe("unknown");
+			expect(await remoteBranchAbsentAsync("origin", "feature", REPO_CWD, spy(completed(exitCode)).run)).toBe("unknown");
 		}
 	});
 
-	test("a timeout and a missing git are unknown", () => {
-		expect(remoteBranchAbsent("origin", "feature", REPO_CWD, spy(timedOut).run)).toBe("unknown");
-		expect(remoteBranchAbsent("origin", "feature", REPO_CWD, spy(missingCli).run)).toBe("unknown");
+	test("a timeout and a missing git are unknown", async () => {
+		expect(await remoteBranchAbsentAsync("origin", "feature", REPO_CWD, spy(timedOut).run)).toBe("unknown");
+		expect(await remoteBranchAbsentAsync("origin", "feature", REPO_CWD, spy(missingCli).run)).toBe("unknown");
 	});
 
-	test("a result carrying no exit status is unknown even when it claims success", () => {
-		expect(remoteBranchAbsent("origin", "feature", REPO_CWD, spy({ ok: true, exitCode: null, stdout: "", stderr: "" }).run)).toBe("unknown");
+	test("a result carrying no exit status is unknown even when it claims success", async () => {
+		expect(await remoteBranchAbsentAsync("origin", "feature", REPO_CWD, spy({ ok: true, exitCode: null, stdout: "", stderr: "" }).run)).toBe("unknown");
 		expect(
-			remoteBranchAbsent("origin", "feature", REPO_CWD, spy({ ok: true, exitCode: 2, stdout: "", stderr: "", error: "killed" }).run),
+			await remoteBranchAbsentAsync("origin", "feature", REPO_CWD, spy({ ok: true, exitCode: 2, stdout: "", stderr: "", error: "killed" }).run),
 		).toBe("unknown");
 	});
 
-	test("absence never comes from a merge result, only from the ls-remote observation", () => {
+	test("absence never comes from a merge result, only from the ls-remote observation", async () => {
 		const mergeSucceeded: CliResult = completed(0, "! Merged pull request #123\n✓ Deleted remote branch feature\n");
-		expect(remoteBranchAbsent("origin", "feature", REPO_CWD, spy(mergeSucceeded).run)).toBe("unknown");
+		expect(await remoteBranchAbsentAsync("origin", "feature", REPO_CWD, spy(mergeSucceeded).run)).toBe("unknown");
 		expect(mergeArgs("github", 123)).toContain("--delete-branch");
 	});
 
-	test("the ref is spelled in full, so it can only be answered by itself", () => {
+	test("the ref is spelled in full, so it can only be answered by itself", async () => {
 		const { run, calls } = spy(completed(2));
-		remoteBranchAbsent("origin", "feature", REPO_CWD, run);
+		await remoteBranchAbsentAsync("origin", "feature", REPO_CWD, run);
 		expect(calls[0]?.argv.at(-1)).toBe("refs/heads/feature");
 		expect(calls[0]?.argv).toContain("--heads");
 		expect(calls[0]?.argv.some(part => part.includes("*"))).toBe(false);
 	});
 
-	test("a branch name carrying shell syntax is refused before any command exists", () => {
+	test("a branch name carrying shell syntax is refused before any command exists", async () => {
 		for (const branch of ["x; rm -rf .", "x && rm -rf .", "x | tee /tmp/x", "$(id)", "`id`", "x\nrm -rf .", "x y"]) {
 			const { run, calls } = spy(completed(2));
-			expect(remoteBranchAbsent("origin", branch, REPO_CWD, run)).toBe("unknown");
+			expect(await remoteBranchAbsentAsync("origin", branch, REPO_CWD, run)).toBe("unknown");
 			expect(calls).toHaveLength(0);
 		}
 	});
 
-	test("a branch name git itself forbids is refused", () => {
+	test("a branch name git itself forbids is refused", async () => {
 		for (const branch of ["", "@", "-feature", "a..b", "a~1", "a^", "a:b", "a?", "a*", "a[b", "a\\b", "feature/", "/feature", ".hidden", "a/.b", "a.", "a.lock", "a/b.lock", "a@{0}"]) {
 			const { run, calls } = spy(completed(2));
-			expect(remoteBranchAbsent("origin", branch, REPO_CWD, run)).toBe("unknown");
+			expect(await remoteBranchAbsentAsync("origin", branch, REPO_CWD, run)).toBe("unknown");
 			expect(calls).toHaveLength(0);
 		}
 	});
 
-	test("a remote that would be read as an option is refused", () => {
+	test("a remote that would be read as an option is refused", async () => {
 		for (const remote of ["", "--upload-pack=/tmp/evil", "-o"]) {
 			const { run, calls } = spy(completed(2));
-			expect(remoteBranchAbsent(remote, "feature", REPO_CWD, run)).toBe("unknown");
+			expect(await remoteBranchAbsentAsync(remote, "feature", REPO_CWD, run)).toBe("unknown");
 			expect(calls).toHaveLength(0);
 		}
 	});
 
-	test("ordinary branch names are accepted", () => {
+	test("ordinary branch names are accepted", async () => {
 		for (const branch of ["main", "feature", "omp/agent/omp-plugins-9ej3.4", "release-1.2.3", "user.name/fix_it"]) {
-			expect(remoteBranchAbsent("origin", branch, REPO_CWD, spy(completed(2)).run)).toBe("absent");
+			expect(await remoteBranchAbsentAsync("origin", branch, REPO_CWD, spy(completed(2)).run)).toBe("absent");
 		}
-	});
-
-	test("the async probe issues the same command and reads it to the same verdict", async () => {
-		const url = "https://srobroek:ghp_secrettoken@github.com/srobroek/omp-plugins.git";
-		for (const remote of ["origin", url]) {
-			for (const result of [completed(2), completed(0, headRecord("feature")), timedOut]) {
-				const sync = spy(result);
-				const asyncCalls: Call[] = [];
-				const asyncRun: AsyncCliRunner = async (argv, options) => {
-					asyncCalls.push({ argv: [...argv], cwd: options.cwd, timeoutMs: options.timeoutMs, env: options.env });
-					return result;
-				};
-				const verdict = await remoteBranchAbsentAsync(remote, "feature", REPO_CWD, asyncRun);
-				expect(verdict).toBe(remoteBranchAbsent(remote, "feature", REPO_CWD, sync.run));
-				expect(asyncCalls.map(call => call.argv)).toEqual(sync.calls.map(call => call.argv));
-				expect(asyncCalls[0]?.timeoutMs).toBe(FORGE_TIMEOUT_MS);
-				// URL mode runs from its own probe directory, which does not survive the call.
-				const asked = asyncCalls[0]?.cwd ?? "";
-				if (remote === url) expect(existsSync(asked)).toBe(false);
-				else expect(asked).toBe(REPO_CWD);
-			}
-		}
-		expect(await remoteBranchAbsentAsync("--upload-pack=/tmp/evil", "feature", REPO_CWD, spy(completed(2)).run)).toBe("unknown");
 	});
 });
 
 describe("every issued command", () => {
 	test("is an argv array of strings with a bounded timeout and no shell syntax", async () => {
 		const calls: Call[] = [];
-		const run: CliRunner = (argv, options) => {
+		const run: AsyncCliRunner = (argv, options) => {
 			calls.push({ argv: [...argv], cwd: options.cwd, timeoutMs: options.timeoutMs, env: options.env });
 			return completed(0, "true\n");
 		};
@@ -1111,7 +1085,7 @@ describe("every issued command", () => {
 			await autoDeleteSetting(forge, "group/project", run);
 			await enableAutoDelete(forge, "group/project", run);
 		}
-		remoteBranchAbsent("origin", "omp/agent/omp-plugins-9ej3.4", REPO_CWD, run);
+		await remoteBranchAbsentAsync("origin", "omp/agent/omp-plugins-9ej3.4", REPO_CWD, run);
 		const built = [...calls.map(call => call.argv), mergeArgs("github", 123), mergeArgs("gitlab", 7)];
 
 		expect(calls).toHaveLength(5);
@@ -1145,10 +1119,8 @@ describe("every issued command", () => {
 			"mergeArgs",
 			"normalizeRepoPath",
 			"redactRemote",
-			"remoteBranchAbsent",
 			"remoteBranchAbsentAsync",
 			"repoPathFromRemote",
-			"runCli",
 			"runCliAsync",
 			"singleRemoteRecord",
 		]);
@@ -1165,7 +1137,7 @@ describe("every issued command", () => {
  * and a deadline that fires mid-spawn reports a killed child as `unknown`, which
  * looks exactly like the defect these tests exist to rule out.
  */
-describe("runCli against real processes", () => {
+describe("the absence probe against real processes", () => {
 	const dir = mkdtempSync(join(tmpdir(), "forge-adapter-"));
 	afterAll(() => rmSync(dir, { recursive: true, force: true }));
 
@@ -1185,28 +1157,6 @@ describe("runCli against real processes", () => {
 		return { script, marker };
 	};
 
-	test("a completed command reports ok with its real exit status", () => {
-		const zero = runCli(["git", "--version"], { timeoutMs: FORGE_TIMEOUT_MS });
-		expect(zero.ok).toBe(true);
-		expect(zero.exitCode).toBe(0);
-		expect(zero.stdout).toContain("git version");
-		expect(zero.error).toBeUndefined();
-	}, 60_000);
-
-	test("a missing binary is not an observation", () => {
-		const gone = runCli(["omp-forge-adapter-no-such-binary"], { timeoutMs: FORGE_TIMEOUT_MS });
-		expect(gone.ok).toBe(false);
-		expect(gone.exitCode).toBeNull();
-		expect(gone.error ?? "").not.toBe("");
-	}, 60_000);
-
-	test("an empty argv is refused rather than spawned", () => {
-		const nothing = runCli([], { timeoutMs: FORGE_TIMEOUT_MS });
-		expect(nothing.ok).toBe(false);
-		expect(nothing.exitCode).toBeNull();
-		expect(nothing.error).toBe("no command to run");
-	});
-
 	/**
 	 * `os.tmpdir()` answers from ambient `TMPDIR`, so whoever sets it chooses where the
 	 * probe directory is created — including inside a checkout whose local
@@ -1224,7 +1174,7 @@ describe("runCli against real processes", () => {
 	 * `"unknown"` with or without network. What it cannot be, unless the rewrite
 	 * applied, is `"present"`.
 	 */
-	test("a nested TMPDIR inside a rewriting checkout cannot redirect a URL probe", () => {
+	test("a nested TMPDIR inside a rewriting checkout cannot redirect a URL probe", async () => {
 		const decoyUrl = "https://github.com/omp-absence-probe/decoy.git";
 		const decoy = join(dir, "decoy.git");
 		const outer = join(dir, "outer-checkout");
@@ -1240,7 +1190,7 @@ describe("runCli against real processes", () => {
 
 		// The control that makes the assertion below mean something: asked directly, the
 		// decoy really does answer "present" for this branch.
-		expect(remoteBranchAbsent(decoy, "feature", outer, runCli)).toBe("present");
+		expect(await remoteBranchAbsentAsync(decoy, "feature", outer, runCliAsync)).toBe("present");
 
 		const previous = { TMPDIR: process.env.TMPDIR, TMP: process.env.TMP, TEMP: process.env.TEMP };
 		process.env.TMPDIR = nested;
@@ -1250,7 +1200,7 @@ describe("runCli against real processes", () => {
 			// The probe directory really was created under the hostile TMPDIR, and the
 			// isolation that matters is the repository Git was handed.
 			const { run, calls } = spy(completed(2));
-			expect(remoteBranchAbsent(decoyUrl, "feature", outer, run)).toBe("absent");
+			expect(await remoteBranchAbsentAsync(decoyUrl, "feature", outer, run)).toBe("absent");
 			const probeCwd = calls[0]?.cwd ?? "";
 			expect(probeCwd.startsWith(realpathSync(nested))).toBe(true);
 			expect(calls[0]?.env?.GIT_DIR).toBe(join(probeCwd, "probe.git"));
@@ -1258,12 +1208,12 @@ describe("runCli against real processes", () => {
 
 			// And with real git: the rewrite in `outer` does not reach the probe, so the
 			// decoy does not answer it. This is the assertion that failed under the ceiling.
-			expect(remoteBranchAbsent(decoyUrl, "feature", outer, runCli)).not.toBe("present");
+			expect(await remoteBranchAbsentAsync(decoyUrl, "feature", outer, runCliAsync)).not.toBe("present");
 
 			// Name mode is untouched by any of this: given the decoy path as an operand it
 			// still observes both verdicts from the caller's own directory, rewrite and all.
-			expect(remoteBranchAbsent(decoy, "feature", nested, runCli)).toBe("present");
-			expect(remoteBranchAbsent(decoy, "gone", nested, runCli)).toBe("absent");
+			expect(await remoteBranchAbsentAsync(decoy, "feature", nested, runCliAsync)).toBe("present");
+			expect(await remoteBranchAbsentAsync(decoy, "gone", nested, runCliAsync)).toBe("absent");
 		} finally {
 			for (const [key, value] of Object.entries(previous)) {
 				if (value === undefined) delete process.env[key];
@@ -1272,66 +1222,59 @@ describe("runCli against real processes", () => {
 		}
 	}, 120_000);
 
-	test("the timeout is real: a sleeping command is killed and reports no status", () => {
-		const slept = runCli(["sleep", "30"], { timeoutMs: 250 });
-		expect(slept.ok).toBe(false);
-		expect(slept.exitCode).toBeNull();
-		expect(slept.error ?? "").not.toBe("");
-	}, 60_000);
-
-	test("git answers exit 0 for the exact ref and exit 2 for anything else", () => {
+	test("git answers exit 0 for the exact ref and exit 2 for anything else", async () => {
 		expect(git("init", "-b", "main", ".").exitCode).toBe(0);
 		expect(git("commit", "--allow-empty", "-m", "seed").exitCode).toBe(0);
-		expect(remoteBranchAbsent(dir, "main", dir, runCli)).toBe("present");
-		expect(remoteBranchAbsent(dir, "gone", dir, runCli)).toBe("absent");
+		expect(await remoteBranchAbsentAsync(dir, "main", dir, runCliAsync)).toBe("present");
+		expect(await remoteBranchAbsentAsync(dir, "gone", dir, runCliAsync)).toBe("absent");
 		// A prefix of a real branch is absent: the ref is matched, not searched for.
-		expect(remoteBranchAbsent(dir, "mai", dir, runCli)).toBe("absent");
+		expect(await remoteBranchAbsentAsync(dir, "mai", dir, runCliAsync)).toBe("absent");
 	}, 120_000);
 
-	test("an unreachable remote is exit 128, an observation that still means unknown", () => {
+	test("an unreachable remote is exit 128, an observation that still means unknown", async () => {
 		const missing = join(dir, "not-a-repo");
-		const raw = runCli(["git", "ls-remote", "--exit-code", "--heads", missing, "refs/heads/main"], {
+		const raw = await runCliAsync(["git", "ls-remote", "--exit-code", "--heads", missing, "refs/heads/main"], {
 			timeoutMs: FORGE_TIMEOUT_MS,
 		});
 		expect(raw.ok).toBe(true);
 		expect(raw.exitCode).toBe(128);
-		expect(remoteBranchAbsent(missing, "main", dir, runCli)).toBe("unknown");
+		expect(await remoteBranchAbsentAsync(missing, "main", dir, runCliAsync)).toBe("unknown");
 	}, 60_000);
 
-	test("repo config cannot re-enable the executable ext transport", () => {
+	test("repo config cannot re-enable the executable ext transport", async () => {
 		const script = join(dir, "remote-helper");
 		const marker = join(dir, "remote-helper-ran");
 		writeFileSync(script, `#!/bin/sh\n: > ${JSON.stringify(marker)}\nexit 0\n`);
 		chmodSync(script, 0o700);
 		expect(git("config", "remote.executable.url", `ext::${script}`).exitCode).toBe(0);
 		expect(git("config", "protocol.ext.allow", "always").exitCode).toBe(0);
-		expect(remoteBranchAbsent("executable", "main", dir, runCli)).toBe("unknown");
+		expect(await remoteBranchAbsentAsync("executable", "main", dir, runCliAsync)).toBe("unknown");
 		expect(existsSync(marker)).toBe(false);
 	}, 60_000);
 
-	test("repo uploadpack and SSH command overrides cannot execute", () => {
+	test("repo uploadpack and SSH command overrides cannot execute", async () => {
 		const uploadPack = executableMarker("upload-pack-override");
 		expect(git("config", "remote.uploadpack.url", dir).exitCode).toBe(0);
 		expect(git("config", "remote.uploadpack.uploadpack", uploadPack.script).exitCode).toBe(0);
-		expect(remoteBranchAbsent("uploadpack", "main", dir, runCli)).toBe("present");
+		expect(await remoteBranchAbsentAsync("uploadpack", "main", dir, runCliAsync)).toBe("present");
 		expect(existsSync(uploadPack.marker)).toBe(false);
 
 		const sshCommand = executableMarker("ssh-command-override");
 		expect(git("config", "remote.sshconfig.url", "ssh://127.0.0.1:1/repo").exitCode).toBe(0);
 		expect(git("config", "core.sshCommand", sshCommand.script).exitCode).toBe(0);
-		expect(remoteBranchAbsent("sshconfig", "main", dir, runCli)).toBe("unknown");
+		expect(await remoteBranchAbsentAsync("sshconfig", "main", dir, runCliAsync)).toBe("unknown");
 		expect(existsSync(sshCommand.marker)).toBe(false);
 		expect(git("config", "--unset", "core.sshCommand").exitCode).toBe(0);
 	}, 60_000);
 
-	test("environment SSH and proxy command overrides cannot execute", () => {
+	test("environment SSH and proxy command overrides cannot execute", async () => {
 		expect(git("config", "remote.sshenv.url", "ssh://127.0.0.1:1/repo").exitCode).toBe(0);
 		for (const key of ["GIT_SSH_COMMAND", "GIT_SSH"] as const) {
 			const override = executableMarker(key.toLowerCase());
 			const previous = process.env[key];
 			process.env[key] = override.script;
 			try {
-				expect(remoteBranchAbsent("sshenv", "main", dir, runCli)).toBe("unknown");
+				expect(await remoteBranchAbsentAsync("sshenv", "main", dir, runCliAsync)).toBe("unknown");
 				expect(existsSync(override.marker)).toBe(false);
 			} finally {
 				if (previous === undefined) delete process.env[key];
@@ -1345,7 +1288,7 @@ describe("runCli against real processes", () => {
 		const previousProxy = process.env.GIT_PROXY_COMMAND;
 		process.env.GIT_PROXY_COMMAND = proxy.script;
 		try {
-			expect(remoteBranchAbsent("proxyenv", "main", dir, runCli)).toBe("unknown");
+			expect(await remoteBranchAbsentAsync("proxyenv", "main", dir, runCliAsync)).toBe("unknown");
 			expect(existsSync(proxy.marker)).toBe(false);
 		} finally {
 			if (previousProxy === undefined) delete process.env.GIT_PROXY_COMMAND;
@@ -1353,14 +1296,14 @@ describe("runCli against real processes", () => {
 		}
 	}, 60_000);
 
-	test("a configured custom remote helper cannot execute through GIT_EXEC_PATH", () => {
+	test("a configured custom remote helper cannot execute through GIT_EXEC_PATH", async () => {
 		const helper = executableMarker("git-remote-evil");
 		expect(git("config", "remote.custom.url", "evil::payload").exitCode).toBe(0);
 		expect(git("config", "protocol.evil.allow", "always").exitCode).toBe(0);
 		const previous = process.env.GIT_EXEC_PATH;
 		process.env.GIT_EXEC_PATH = dir;
 		try {
-			expect(remoteBranchAbsent("custom", "main", dir, runCli)).toBe("unknown");
+			expect(await remoteBranchAbsentAsync("custom", "main", dir, runCliAsync)).toBe("unknown");
 			expect(existsSync(helper.marker)).toBe(false);
 		} finally {
 			if (previous === undefined) delete process.env.GIT_EXEC_PATH;

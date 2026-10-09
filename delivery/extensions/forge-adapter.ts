@@ -11,9 +11,8 @@
  * Every command is an argv array with a bounded timeout. Nothing reaches a
  * shell, so a branch name can never become a command. The one argv-level attack
  * that survives an array — a value starting with `-` that the CLI reads as an
- * option — is rejected before the command is built. Commands on the landing and
- * cleanup paths run through {@link runCliAsync}, which an abort signal can end as well as the
- * deadline.
+ * option — is rejected before the command is built. Every command runs through
+ * {@link runCliAsync}, which an abort signal can end as well as the deadline.
  *
  * A setting changes only when a caller asks. {@link autoDeleteSetting} reads;
  * {@link enableAutoDelete} writes; nothing in this module calls
@@ -67,12 +66,10 @@ export type CliResult = {
 
 export type CliOptions = { cwd?: string; timeoutMs: number; env?: Readonly<Record<string, string>> };
 
-export type CliRunner = (argv: string[], options: CliOptions) => CliResult;
-
 /**
  * A runner every caller awaits. `signal` ends the command early; `input` is written
- * to its stdin. A synchronous {@link CliRunner} satisfies this type too, which is
- * what lets a recording test runner answer either shape.
+ * to its stdin. A runner that answers synchronously satisfies this type too, which
+ * is what lets a recording test runner answer without awaiting anything.
  */
 export type AsyncCliRunner = (
 	argv: string[],
@@ -379,43 +376,6 @@ function hostOf(remoteUrl: string): string | null {
 	return scpHost === undefined || scpHost === "" ? null : scpHost.toLowerCase();
 }
 
-/**
- * The real runner: one bounded child process, argv array, no shell.
- *
- * Every failure mode collapses into the {@link CliResult} contract rather than
- * throwing, so a missing CLI and a hung network are indistinguishable from the
- * caller's point of view — both are simply not an observation.
- */
-export const runCli: CliRunner = (argv, options) => {
-	if (argv.length === 0) {
-		return { ok: false, exitCode: null, stdout: "", stderr: "", error: "no command to run" };
-	}
-	const timeout = Math.max(1, Math.trunc(options.timeoutMs));
-	try {
-		const proc = Bun.spawnSync(argv, {
-			cwd: options.cwd,
-			stdout: "pipe",
-			stderr: "pipe",
-			timeout,
-			env: options.env,
-		});
-		const stdout = proc.stdout.toString();
-		const stderr = proc.stderr.toString();
-		const exitCode = typeof proc.exitCode === "number" ? proc.exitCode : null;
-		const signal = proc.signalCode ?? null;
-		if (signal !== null || exitCode === null) {
-			const error = signal === null
-				? `${argv[0]} produced no exit status within ${timeout}ms`
-				: `${argv[0]} was terminated by ${signal} (timeout ${timeout}ms)`;
-			return { ok: false, exitCode, stdout, stderr, error };
-		}
-		return { ok: true, exitCode, stdout, stderr };
-	} catch (cause) {
-		const error = cause instanceof Error ? cause.message : String(cause);
-		return { ok: false, exitCode: null, stdout: "", stderr: "", error };
-	}
-};
-
 /** A stream read to its end, or cut short by {@link CapturedStream.cancel}, keeping what arrived. */
 type CapturedStream = { text: Promise<string>; cancel: () => void };
 
@@ -462,9 +422,9 @@ async function feed(stdin: Bun.FileSink, input: string): Promise<void> {
 /**
  * The abortable runner: one bounded child process, argv array, no shell.
  *
- * The landing and cleanup paths run through this rather than {@link runCli} because a
- * synchronous spawn blocks the event loop for the whole command: an interrupt is
- * never delivered, so a hung `gh` holds the session until its timeout. Here the
+ * It spawns asynchronously because a synchronous spawn blocks the event loop for the
+ * whole command: an interrupt is never delivered, so a hung `gh` holds the session
+ * until its timeout. Here the
  * deadline and the caller's `signal` both end the command, and an already-aborted
  * signal starts nothing.
  *
@@ -477,7 +437,9 @@ async function feed(stdin: Bun.FileSink, input: string): Promise<void> {
  * whatever output arrived before it.
  *
  * Stdin is not connected unless `input` is given, so nothing can wait on a prompt.
- * Every failure collapses into the {@link CliResult} contract, as in {@link runCli}.
+ * Every failure collapses into the {@link CliResult} contract rather than throwing, so
+ * a missing CLI and a hung network are indistinguishable from the caller's point of
+ * view — both are simply not an observation.
  */
 export const runCliAsync: AsyncCliRunner = async (argv, options) => {
 	if (argv.length === 0) {
@@ -839,7 +801,7 @@ function shouldDeleteSourceBranch(options: MergeOptions): boolean {
  *
  * Building the command is all this does. The returned argv is a *request*: a
  * zero exit from it proves the merge, never that the branch is gone. Only
- * {@link remoteBranchAbsent} can answer that.
+ * {@link remoteBranchAbsentAsync} can answer that.
  *
  * An unsupported forge throws rather than returning a guess, because there is no
  * argv that is correct-but-unproven here: any fabricated CLI name would either
@@ -1049,7 +1011,7 @@ function urlProbeEnvironment(
  */
 type AbsenceProbe = { argv: string[]; options: CliOptions; ref: string; dispose: () => void };
 
-/** Prepare the probe {@link remoteBranchAbsent} describes, or null when its answer is already `"unknown"`. */
+/** Prepare the probe {@link remoteBranchAbsentAsync} describes, or null when its answer is already `"unknown"`. */
 function absenceProbe(remoteOrUrl: string, branch: string, cwd: string, environment: NodeJS.ProcessEnv): AbsenceProbe | null {
 	if (!isSafeArgument(remoteOrUrl) || !isValidBranchName(branch)) return null;
 	const ref = `refs/heads/${branch}`;
@@ -1149,27 +1111,8 @@ function absenceProbe(remoteOrUrl: string, branch: string, cwd: string, environm
  * This is the only function in the module that returns `"absent"`, and it only
  * ever does so from this observation. No merge result, deletion response, or
  * setting value reaches it.
- */
-export function remoteBranchAbsent(
-	remoteOrUrl: string,
-	branch: string,
-	cwd: string,
-	run: CliRunner = runCli,
-	environment: NodeJS.ProcessEnv = process.env,
-): "absent" | "present" | "unknown" {
-	const probe = absenceProbe(remoteOrUrl, branch, cwd, environment);
-	if (probe === null) return "unknown";
-	try {
-		return absenceVerdict(run(probe.argv, probe.options), probe.ref);
-	} finally {
-		probe.dispose();
-	}
-}
-
-/**
- * {@link remoteBranchAbsent} through an {@link AsyncCliRunner}: the same probe, the
- * same verdict, for a caller whose commands an abort must be able to end. The
- * landing path binds its signal into `run`.
+ *
+ * A caller binds its abort signal into `run`, so an interrupt ends a hung probe.
  */
 export async function remoteBranchAbsentAsync(
 	remoteOrUrl: string,
