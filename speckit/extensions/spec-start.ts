@@ -11,7 +11,7 @@ function object(value: unknown): Record<string, unknown> {
 	if (value === null || typeof value !== "object" || Array.isArray(value)) throw new Error("Expected a Beads JSON object");
 	return value as Record<string, unknown>;
 }
-function payload(value: unknown): unknown {
+export function payload(value: unknown): unknown {
 	if (value !== null && typeof value === "object" && !Array.isArray(value) && "data" in value) return object(value).data;
 	return value;
 }

@@ -36,6 +36,8 @@ Setup installs the bundled formulas into the repo's `.beads/formulas/`.
 Use `speckit_start` in OMP or run this plugin's `tools/spec-start.ts` with Bun.
 Pass `--spec NNN-slug` and `--workspace` with the canonical repository root containing `.beads`.
 The starter asks before creating approvals and persists the answer on the workflow root.
+Each Beads read or one-bead write gets its own 120 s bound, sized for a cold store; `mol pour` and `gate resolve` run until done or cancelled.
+A store-lock wait that runs out, a command past its bound, or cancellation reports `INCOMPLETE` with the step reached and whether a pour was issued; inspect the run before retrying.
 Setup must install the selected formula first; the low-level formula requires explicit `autonomous` and has no default.
 
 The CLI and tool share the same approval policy and hold the Beads embedded-write lock for the whole start, so concurrent starts for a spec cannot pour duplicate runs.
