@@ -272,18 +272,24 @@ function commandCwd(command: string, cwd: string): string {
 	return dir?.startsWith("/") ? dir : `${cwd}/${dir}`;
 }
 
-export type GitRunner = (args: string[], cwd: string) => string | null;
-export type WtRunner = (args: string[], cwd: string) => string | null;
+/** Output of the probe, or null when it fails; throws ProbeTimeout when it exceeds `timeoutMs`. */
+export type GitRunner = (args: string[], cwd: string, timeoutMs: number) => string | null;
+export type WtRunner = (args: string[], cwd: string, timeoutMs: number) => string | null;
 
-const defaultGitRunner: GitRunner = (args, cwd) => {
-	const result = Bun.spawnSync(["git", ...args], { cwd, stdout: "pipe", stderr: "ignore" });
-	return result.exitCode === 0 ? new TextDecoder().decode(result.stdout).trim() : null;
-};
+export class ProbeTimeout extends Error {}
 
-const defaultWtRunner: WtRunner = (args, cwd) => {
-	const result = Bun.spawnSync(["wt", ...args], { cwd, stdout: "pipe", stderr: "ignore" });
+/** tool_call handlers get 30 s and sync probes cannot be preempted, so every probe in one call shares this budget. */
+export const PROBE_BOUNDS = { timeoutMs: 8_000, budgetMs: 25_000 };
+
+function spawnProbe(binary: string, args: string[], cwd: string, timeoutMs: number): string | null {
+	const result = Bun.spawnSync([binary, ...args], { cwd, stdout: "pipe", stderr: "ignore", timeout: timeoutMs });
+	if (result.exitedDueToTimeout) throw new ProbeTimeout(`${binary} ${args.join(" ")}`);
 	return result.exitCode === 0 ? new TextDecoder().decode(result.stdout).trim() : null;
-};
+}
+
+const defaultGitRunner: GitRunner = (args, cwd, timeoutMs) => spawnProbe("git", args, cwd, timeoutMs);
+
+const defaultWtRunner: WtRunner = (args, cwd, timeoutMs) => spawnProbe("wt", args, cwd, timeoutMs);
 
 const OPAQUE_DYNAMIC_MERGE_REFUSAL = "opaque dynamic shell body names a merge or land command; retry with a literal command";
 
@@ -292,6 +298,27 @@ export function decideMergePolicy(
 	cwd: string,
 	gitRunner: GitRunner = defaultGitRunner,
 	wtRunner: WtRunner = defaultWtRunner,
+	bounds: { timeoutMs: number; budgetMs: number } = PROBE_BOUNDS,
+): Decision {
+	const deadline = Date.now() + bounds.budgetMs;
+	const probe = (runner: GitRunner, args: string[], cwd: string): string | null => {
+		const remaining = deadline - Date.now();
+		if (remaining <= 0) throw new ProbeTimeout(args.join(" "));
+		return runner(args, cwd, Math.min(bounds.timeoutMs, remaining));
+	};
+	try {
+		return decideSegments(command, cwd, (args, dir) => probe(gitRunner, args, dir), (args, dir) => probe(wtRunner, args, dir));
+	} catch (error) {
+		if (!(error instanceof ProbeTimeout)) throw error;
+		return { block: true, reason: `merge policy probe \`${error.message}\` timed out, so the merge cannot be checked; retry once git and wt answer promptly` };
+	}
+}
+
+function decideSegments(
+	command: string,
+	cwd: string,
+	git: (args: string[], cwd: string) => string | null,
+	wt: (args: string[], cwd: string) => string | null,
 ): Decision {
 	if (hasOpaqueDynamicMergeBody(command)) return { block: true, reason: OPAQUE_DYNAMIC_MERGE_REFUSAL };
 	for (const segment of shellSegments(command)) {
@@ -303,13 +330,16 @@ export function decideMergePolicy(
 				? invocation.workdir
 				: `${shellCwd}/${invocation.workdir}`
 			: shellCwd;
-		const configured = wtRunner(["config", "state", "default-branch"], repoCwd);
-		const symbolic = configured || gitRunner(["symbolic-ref", "--short", "refs/remotes/origin/HEAD"], repoCwd);
+		const configured = wt(["config", "state", "default-branch"], repoCwd);
+		const symbolic = configured || git(["symbolic-ref", "--short", "refs/remotes/origin/HEAD"], repoCwd);
 		const defaultBranch = symbolic?.replace(/^origin\//, "");
 		if (!defaultBranch) return { block: true, reason: `cannot determine the repository default branch; ${MERGE_RETRY}` };
 		if (invocation.target === defaultBranch) continue;
 		if (!invocation.noSquash || !invocation.noFf) return { block: true, reason: MERGE_POLICY_REFUSAL.replace("<target>", invocation.target) };
-		const currentBranch = gitRunner(["branch", "--show-current"], repoCwd);
+		const currentBranch = git(["branch", "--show-current"], repoCwd);
+		if (currentBranch === null) {
+			return { block: true, reason: `\`git branch --show-current\` failed in ${repoCwd}, so the source branch cannot be checked; ${SOURCE_WORKTREE_RETRY.replace("<target>", invocation.target)}` };
+		}
 		if (!currentBranch || currentBranch === invocation.target) {
 			return { block: true, reason: `worker-to-epic merges must run from the source worktree; retry with ${SOURCE_WORKTREE_RETRY.replace("<target>", invocation.target)}` };
 		}
