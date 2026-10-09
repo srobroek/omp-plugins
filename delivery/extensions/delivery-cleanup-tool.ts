@@ -5,8 +5,8 @@ import type { TSchema } from "@oh-my-pi/pi-ai";
 import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
 import pkg from "../package.json" with { type: "json" };
 import {
+	type AsyncCliRunner,
 	type CliResult,
-	type CliRunner,
 	FORGE_TIMEOUT_MS,
 	forgeEnvironment,
 	forgeTarget,
@@ -14,9 +14,9 @@ import {
 	normalizeRepoPath,
 	REMOTE_NAME,
 	redactRemote,
-	remoteBranchAbsent,
+	remoteBranchAbsentAsync,
 	repoPathFromRemote,
-	runCli,
+	runCliAsync,
 	singleRemoteRecord,
 } from "./forge-adapter.ts";
 import {
@@ -33,7 +33,29 @@ import {
 	writeReceipt,
 } from "./landing-receipt.ts";
 
+/** Ref and config reads — `rev-parse`, `rev-list`, `show-ref`, `worktree list`, `remote get-url` — are cheap. */
 const LOCAL_TIMEOUT_MS = 2_000;
+
+/**
+ * Bounds for the commands whose cost grows with the work, not with the ref count.
+ * This is a registered tool, so the harness sets no deadline of its own; each bound
+ * only stops a command that will never finish, and a command it stops reports its
+ * step as not done.
+ */
+export type CleanupBounds = {
+	/** `git status --porcelain` walks the whole target tree, which a large checkout makes slow. */
+	treeScanMs: number;
+	/** Read-only `bd show`: a cold embedded store takes 30-50 s to open; matches the beads runner's 120 s wait. */
+	bdShowMs: number;
+	/**
+	 * `git worktree remove` deletes the whole tree, dependency and build output
+	 * included, and `git branch -d` rewrites a ref under a lock. A kill mid-way leaves a
+	 * half-deleted worktree or a stale lock, so the bound is generous.
+	 */
+	mutationMs: number;
+};
+
+export const CLEANUP_BOUNDS: Readonly<CleanupBounds> = { treeScanMs: 60_000, bdShowMs: 120_000, mutationMs: 600_000 };
 const MAX_CLI_JSON_BYTES = 1024 * 1024;
 const MAX_DIRTY_PATHS = 8;
 const DELIVERY_VERSION = pkg.version;
@@ -61,9 +83,17 @@ export type CleanupFailure = { ok: false; reason: string };
 export type CleanupResult = CleanupSuccess | CleanupFailure;
 
 export type CleanupDeps = {
-	run?: CliRunner;
+	run?: AsyncCliRunner;
 	now?: () => number;
 	env?: NodeJS.ProcessEnv;
+	/** Overrides for {@link CLEANUP_BOUNDS}; tests inject short ones. */
+	bounds?: Partial<CleanupBounds>;
+	/**
+	 * The tool call's abort signal. It ends every read and stops the call before the
+	 * removal; it is never given to the removal or anything after it, because an
+	 * interrupted removal is the one outcome worse than either finishing or not starting.
+	 */
+	signal?: AbortSignal;
 };
 
 type WorktreeRecord = {
@@ -230,13 +260,13 @@ type RemoteIdentity = {
  * non-transferable: it is decided here, before one forge command is issued, so a
  * receipt carried into another checkout asks that checkout's forge nothing.
  */
-function resolveRemoteIdentity(
+async function resolveRemoteIdentity(
 	receipt: LandingReceipt,
-	run: CliRunner,
+	run: AsyncCliRunner,
 	cwd: string,
 	forgeEnv: Readonly<Record<string, string>>,
 	env: NodeJS.ProcessEnv,
-): RemoteIdentity | CleanupFailure {
+): Promise<RemoteIdentity | CleanupFailure> {
 	// Tested exactly as recorded, not trimmed first: `" origin"` is not the name of a
 	// remote, it is a receipt that does not say which remote, and normalising it here
 	// would let this call answer a question the receipt never asked.
@@ -244,7 +274,7 @@ function resolveRemoteIdentity(
 	if (!REMOTE_NAME.test(remote)) return refuse("repo.remote", remote, "a git remote name");
 	const argv = ["git", "remote", "get-url", remote];
 	const expected = `exactly one URL record for the configured remote ${remote} in ${cwd}`;
-	const result = run(argv, { cwd, timeoutMs: LOCAL_TIMEOUT_MS, env: gitObservationEnvironment(env) });
+	const result = await run(argv, { cwd, timeoutMs: LOCAL_TIMEOUT_MS, env: gitObservationEnvironment(env) });
 	if (!completed(result)) return commandFailure("repo.remote", argv, result, expected);
 	// Not trimmed: a trimmed value is what lets a malformed one through. `URL` deletes
 	// embedded tabs and newlines before parsing, so a rewritten or multi-URL remote can
@@ -294,14 +324,14 @@ function resolveRemoteIdentity(
 	return { forge: target.forge, nameWithOwner, cliRepo, remoteUrl: remoteText, env: commandEnv };
 }
 
-function githubObservation(
+async function githubObservation(
 	receipt: LandingReceipt,
 	identity: RemoteIdentity,
-	run: CliRunner,
-): PullRequestObservation | CleanupFailure {
+	run: AsyncCliRunner,
+): Promise<PullRequestObservation | CleanupFailure> {
 	const argv = ["gh", "pr", "view", String(receipt.pr.number), "--repo", identity.cliRepo, "--json", PR_FIELDS];
 	const method = argv.slice(0, 3).join(" ");
-	const result = run(argv, { timeoutMs: FORGE_TIMEOUT_MS, env: identity.env });
+	const result = await run(argv, { timeoutMs: FORGE_TIMEOUT_MS, env: identity.env });
 	if (!completed(result)) return commandFailure("pr", argv, result, "a successful bounded GitHub pull-request read");
 	const root = parseJsonObject("pr", result);
 	if (isFailure(root)) return root;
@@ -319,14 +349,14 @@ function githubObservation(
 	};
 }
 
-function gitlabObservation(
+async function gitlabObservation(
 	receipt: LandingReceipt,
 	identity: RemoteIdentity,
-	run: CliRunner,
-): PullRequestObservation | CleanupFailure {
+	run: AsyncCliRunner,
+): Promise<PullRequestObservation | CleanupFailure> {
 	const argv = ["glab", "mr", "view", String(receipt.pr.number), "--repo", identity.cliRepo, "--output", "json"];
 	const method = argv.slice(0, 3).join(" ");
-	const result = run(argv, { timeoutMs: FORGE_TIMEOUT_MS, env: identity.env });
+	const result = await run(argv, { timeoutMs: FORGE_TIMEOUT_MS, env: identity.env });
 	if (!completed(result)) return commandFailure("pr", argv, result, "a successful bounded GitLab merge-request read");
 	const root = parseJsonObject("pr", result);
 	if (isFailure(root)) return root;
@@ -347,17 +377,17 @@ function gitlabObservation(
 /** One resolved repository identity and the pull request read through it. */
 type Observation = { identity: RemoteIdentity; pr: PullRequestObservation };
 
-export function observePullRequest(
+export async function observePullRequest(
 	receipt: LandingReceipt,
-	run: CliRunner = runCli,
+	run: AsyncCliRunner = runCliAsync,
 	cwd: string = receipt.repo.canonicalRoot,
 	env: NodeJS.ProcessEnv = process.env,
-): Observation | CleanupFailure {
-	const identity = resolveRemoteIdentity(receipt, run, cwd, forgeEnvironment(env), env);
+): Promise<Observation | CleanupFailure> {
+	const identity = await resolveRemoteIdentity(receipt, run, cwd, forgeEnvironment(env), env);
 	if (isFailure(identity)) return identity;
 	const pr = identity.forge === "github"
-		? githubObservation(receipt, identity, run)
-		: gitlabObservation(receipt, identity, run);
+		? await githubObservation(receipt, identity, run)
+		: await gitlabObservation(receipt, identity, run);
 	return isFailure(pr) ? pr : { identity, pr };
 }
 
@@ -509,8 +539,8 @@ function verifyArguments(params: DeliveryCleanupParams, receipt: LandingReceipt)
 	return null;
 }
 
-function runGit(run: CliRunner, cwd: string, args: string[]): CliResult {
-	return run(["git", ...args], { cwd, timeoutMs: LOCAL_TIMEOUT_MS });
+async function runGit(run: AsyncCliRunner, cwd: string, args: string[], timeoutMs = LOCAL_TIMEOUT_MS): Promise<CliResult> {
+	return run(["git", ...args], { cwd, timeoutMs });
 }
 
 function worktreePathState(path: string): "directory" | "absent" | "unsafe" {
@@ -537,11 +567,11 @@ function dirtyPaths(output: string): string[] {
 		.slice(0, MAX_DIRTY_PATHS);
 }
 
-function verifyCleanTarget(path: string, run: CliRunner): CleanupFailure | null {
+async function verifyCleanTarget(path: string, run: AsyncCliRunner, timeoutMs: number): Promise<CleanupFailure | null> {
 	const state = worktreePathState(path);
 	if (state !== "directory") return refuse("worktree.path", `${path} (${state})`, "a present non-symlink directory");
 	const argv = ["status", "--porcelain"];
-	const result = runGit(run, path, argv);
+	const result = await runGit(run, path, argv, timeoutMs);
 	if (!completed(result)) return commandFailure("worktree.status", ["git", ...argv], result, "exit 0 with empty output");
 	if (result.stdout !== "") {
 		const all = result.stdout.split(/\r?\n/).filter(Boolean);
@@ -550,14 +580,14 @@ function verifyCleanTarget(path: string, run: CliRunner): CleanupFailure | null 
 	return null;
 }
 
-function verifyPushed(path: string, run: CliRunner): CleanupFailure | null {
+async function verifyPushed(path: string, run: AsyncCliRunner): Promise<CleanupFailure | null> {
 	const upstreamArgv = ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"];
-	const upstream = runGit(run, path, upstreamArgv);
+	const upstream = await runGit(run, path, upstreamArgv);
 	if (!completed(upstream) || upstream.stdout.trim() === "") {
 		return commandFailure("branch.upstream", ["git", ...upstreamArgv], upstream, "a configured upstream branch");
 	}
 	const countArgv = ["rev-list", "--count", "@{upstream}..HEAD"];
-	const countResult = runGit(run, path, countArgv);
+	const countResult = await runGit(run, path, countArgv);
 	if (!completed(countResult)) {
 		return commandFailure("branch.unpushed", ["git", ...countArgv], countResult, "exit 0 and count 0");
 	}
@@ -595,7 +625,13 @@ function unwrapEnvelope(value: unknown): unknown {
  * An active ledger with no bead ids is not handled here. `validateReceipt` refuses
  * that pair at the trust boundary, so a receipt read by this tool never carries it.
  */
-function verifyLedger(receipt: LandingReceipt, cwd: string, receiptPath: string, run: CliRunner): CleanupFailure | null {
+async function verifyLedger(
+	receipt: LandingReceipt,
+	cwd: string,
+	receiptPath: string,
+	run: AsyncCliRunner,
+	timeoutMs: number,
+): Promise<CleanupFailure | null> {
 	const classification = canonicalLedger(cwd);
 	if (classification === null) {
 		return refuse(
@@ -621,9 +657,9 @@ function verifyLedger(receipt: LandingReceipt, cwd: string, receiptPath: string,
 	}
 	if (!classification.active) return null;
 	const argv = ["bd", "show", ...receipt.beads.ids, "--json"];
-	const result = run(argv, {
+	const result = await run(argv, {
 		cwd,
-		timeoutMs: LOCAL_TIMEOUT_MS,
+		timeoutMs,
 		env: { ...process.env, BD_JSON_ENVELOPE: "1", BD_NO_PAGER: "1", BD_NON_INTERACTIVE: "1" },
 	});
 	if (!completed(result)) return commandFailure("beads", argv, result, "a successful read-only bd show");
@@ -691,9 +727,9 @@ export function parseWorktreeList(output: string): WorktreeRecord[] {
 	return records;
 }
 
-function readWorktrees(cwd: string, run: CliRunner): WorktreeRecord[] | CleanupFailure {
+async function readWorktrees(cwd: string, run: AsyncCliRunner): Promise<WorktreeRecord[] | CleanupFailure> {
 	const argv = ["worktree", "list", "--porcelain"];
-	const result = runGit(run, cwd, argv);
+	const result = await runGit(run, cwd, argv);
 	if (!completed(result)) return commandFailure("worktree.list", ["git", ...argv], result, "exit 0 porcelain records");
 	const records = parseWorktreeList(result.stdout);
 	if (records.length === 0) return refuse("worktree.list", [], "at least the repository's main worktree");
@@ -752,13 +788,13 @@ function storedRecordForTarget(records: WorktreeRecord[], target: string): Workt
 	return null;
 }
 
-function verifyTargetIdentity(
+async function verifyTargetIdentity(
 	receipt: LandingReceipt,
 	cwd: string,
-	run: CliRunner,
-): TargetIdentity | CleanupFailure {
+	run: AsyncCliRunner,
+): Promise<TargetIdentity | CleanupFailure> {
 	const path = receipt.worktree.path as string;
-	const listed = readWorktrees(cwd, run);
+	const listed = await readWorktrees(cwd, run);
 	if (!Array.isArray(listed)) return listed;
 	const main = listed[0];
 	if (main === undefined) return refuse("worktree.list", [], "a main worktree record");
@@ -778,27 +814,32 @@ function verifyTargetIdentity(
 	return { records: listed, target, main };
 }
 
-function verifyLocalRef(receipt: LandingReceipt, cwd: string, run: CliRunner): CleanupFailure | null {
+async function verifyLocalRef(receipt: LandingReceipt, cwd: string, run: AsyncCliRunner): Promise<CleanupFailure | null> {
 	const ref = `${LOCAL_REF_PREFIX}${receipt.branch.name}`;
 	const argv = ["rev-parse", "--verify", ref];
-	const result = runGit(run, cwd, argv);
+	const result = await runGit(run, cwd, argv);
 	if (!completed(result)) return commandFailure("branch.localRef", ["git", ...argv], result, `exit 0 and oid ${receipt.pr.headRefOid}`);
 	return compare("branch.localRef", result.stdout.trim(), receipt.pr.headRefOid);
 }
 
-function revalidateBoundary(receipt: LandingReceipt, cwd: string, run: CliRunner): TargetIdentity | CleanupFailure {
-	const identity = verifyTargetIdentity(receipt, cwd, run);
+async function revalidateBoundary(
+	receipt: LandingReceipt,
+	cwd: string,
+	run: AsyncCliRunner,
+	bounds: CleanupBounds,
+): Promise<TargetIdentity | CleanupFailure> {
+	const identity = await verifyTargetIdentity(receipt, cwd, run);
 	if (isFailure(identity)) return identity;
-	const ref = verifyLocalRef(receipt, cwd, run);
+	const ref = await verifyLocalRef(receipt, cwd, run);
 	if (ref !== null) return ref;
-	const clean = verifyCleanTarget(identity.target.path, run);
+	const clean = await verifyCleanTarget(identity.target.path, run, bounds.treeScanMs);
 	if (clean !== null) return clean;
-	const pushed = verifyPushed(identity.target.path, run);
+	const pushed = await verifyPushed(identity.target.path, run);
 	return pushed ?? identity;
 }
 
-function registrationAbsence(cwd: string, trustedPath: string, run: CliRunner): Absence {
-	const listed = readWorktrees(cwd, run);
+async function registrationAbsence(cwd: string, trustedPath: string, run: AsyncCliRunner): Promise<Absence> {
+	const listed = await readWorktrees(cwd, run);
 	if (!Array.isArray(listed)) return "unknown";
 	return storedRecordForTarget(listed, trustedPath) === null ? "absent" : "present";
 }
@@ -812,8 +853,8 @@ function pathAbsence(path: string): Absence {
 	}
 }
 
-function localRefAbsence(cwd: string, branch: string, run: CliRunner): Absence {
-	const result = runGit(run, cwd, ["show-ref", "--verify", "--quiet", `${LOCAL_REF_PREFIX}${branch}`]);
+async function localRefAbsence(cwd: string, branch: string, run: AsyncCliRunner): Promise<Absence> {
+	const result = await runGit(run, cwd, ["show-ref", "--verify", "--quiet", `${LOCAL_REF_PREFIX}${branch}`]);
 	if (result.error !== undefined || !result.ok) return "unknown";
 	if (result.exitCode === 0) return "present";
 	if (result.exitCode === 1 && result.stdout === "" && result.stderr === "") return "absent";
@@ -841,12 +882,17 @@ export function branchDeleteArgs(branch: string): string[] {
 	return ["branch", "-d", "--", branch];
 }
 
-export function cleanupDelivery(
+export async function cleanupDelivery(
 	params: DeliveryCleanupParams,
 	cwd: string,
 	deps: CleanupDeps = {},
-): CleanupResult {
-	const run = deps.run ?? runCli;
+): Promise<CleanupResult> {
+	const { signal } = deps;
+	const bounds: CleanupBounds = { ...CLEANUP_BOUNDS, ...deps.bounds };
+	// `commit` runs the removal and everything after it; `run` carries the signal, so an
+	// interrupt ends whichever read is running and keeps the next one from starting.
+	const commit = deps.run ?? runCliAsync;
+	const run: AsyncCliRunner = (argv, options) => commit(argv, { ...options, signal });
 	const now = deps.now ?? Date.now;
 	const env = deps.env ?? process.env;
 	const resolution = resolveReceipt(params, cwd, env);
@@ -880,47 +926,51 @@ export function cleanupDelivery(
 	// receipt's branch and head before it is used as a directory to run a command in,
 	// and `revalidateBoundary` proves the same identity again immediately before the
 	// irreversible step.
-	const identity = verifyTargetIdentity(receipt, cwd, run);
+	const identity = await verifyTargetIdentity(receipt, cwd, run);
 	if (isFailure(identity)) return identity;
-	const observed = observePullRequest(receipt, run, identity.target.path, env);
+	const observed = await observePullRequest(receipt, run, identity.target.path, env);
 	if (isFailure(observed)) return observed;
 	const observedFailure = verifyObservation(receipt, observed.pr);
 	if (observedFailure !== null) return observedFailure;
 	const path = receipt.worktree.path as string;
-	const dirty = verifyCleanTarget(path, run);
+	const dirty = await verifyCleanTarget(path, run, bounds.treeScanMs);
 	if (dirty !== null) return dirty;
-	const pushed = verifyPushed(path, run);
+	const pushed = await verifyPushed(path, run);
 	if (pushed !== null) return pushed;
-	const ledger = verifyLedger(receipt, cwd, resolution.path, run);
+	const ledger = await verifyLedger(receipt, cwd, resolution.path, run, bounds.bdShowMs);
 	if (ledger !== null) return ledger;
 
-	const localRef = verifyLocalRef(receipt, cwd, run);
+	const localRef = await verifyLocalRef(receipt, cwd, run);
 	if (localRef !== null) return localRef;
-	const boundary = revalidateBoundary(receipt, cwd, run);
+	const boundary = await revalidateBoundary(receipt, cwd, run, bounds);
 	if (isFailure(boundary)) return boundary;
 
 	const executionCwd = safeExecutionCwd(receipt, boundary.records, cwd);
 	if (executionCwd === null) return refuse("worktree.executionCwd", null, "a different listed worktree for the same repository");
 	const targetPath = boundary.target.path;
 	const removeArgv = ["worktree", "remove", targetPath];
-	const removed = runGit(run, executionCwd, removeArgv);
+	// The last point an interrupt is honoured. Past it the removal runs to completion or
+	// to its bound, and the steps after it record what happened instead of stopping
+	// with the worktree gone and no continuation receipt.
+	if (signal?.aborted === true) return refuse("signal", "an abort", "no interrupt before git worktree remove; nothing was removed");
+	const removed = await runGit(commit, executionCwd, removeArgv, bounds.mutationMs);
 	if (!completed(removed)) {
 		return commandFailure("worktree.removed", ["git", ...removeArgv], removed, "exit 0 without --force");
 	}
 
-	const registration = registrationAbsence(executionCwd, targetPath, run);
+	const registration = await registrationAbsence(executionCwd, targetPath, commit);
 	const pathGone = pathAbsence(targetPath);
 	if (registration !== "absent") return refuse("worktree.registrationAbsence", registration, '"absent" after removal');
 	if (pathGone !== "absent") return refuse("worktree.pathAbsence", pathGone, '"absent" after removal');
 
-	const refAfterWorktree = verifyLocalRef(receipt, executionCwd, run);
+	const refAfterWorktree = await verifyLocalRef(receipt, executionCwd, commit);
 	if (refAfterWorktree !== null) return refAfterWorktree;
 	const deleteArgv = branchDeleteArgs(receipt.branch.name);
-	const deleted = runGit(run, executionCwd, deleteArgv);
+	const deleted = await runGit(commit, executionCwd, deleteArgv, bounds.mutationMs);
 	if (!completed(deleted)) {
 		return commandFailure("worktree.localRefDeleted", ["git", ...deleteArgv], deleted, "exit 0 without -D");
 	}
-	const localAbsence = localRefAbsence(executionCwd, receipt.branch.name, run);
+	const localAbsence = await localRefAbsence(executionCwd, receipt.branch.name, commit);
 	if (localAbsence !== "absent") return refuse("worktree.localRefAbsence", localAbsence, '"absent" after branch -d');
 
 	// The probe is given the URL the target resolved, not `repo.remote`. A name is
@@ -933,7 +983,7 @@ export function cleanupDelivery(
 	// a surviving worktree: Git needs a repository for the protocol and helper pins the
 	// adapter puts on this read. The verdict comes back as a word, so the URL cannot
 	// reach the receipt or a refusal.
-	const remoteAbsence = remoteBranchAbsent(observed.identity.remoteUrl, receipt.branch.name, executionCwd, run);
+	const remoteAbsence = await remoteBranchAbsentAsync(observed.identity.remoteUrl, receipt.branch.name, executionCwd, commit);
 	const issuedAt = nextReceiptEpoch(receipt, now);
 	const verifiedAt = new Date(issuedAt).toISOString();
 	const continued = buildReceipt({
@@ -1009,8 +1059,8 @@ export default function deliveryCleanupTool(pi: ExtensionAPI): void {
 			remote: z.string().min(1).optional().describe("Remote name, which must equal the selected receipt"),
 		}) as unknown as TSchema,
 		approval: "exec",
-		execute: async (_id, params: DeliveryCleanupParams, _signal, _onUpdate, ctx) => {
-			const result = cleanupDelivery(params, ctx.cwd);
+		execute: async (_id, params: DeliveryCleanupParams, signal, _onUpdate, ctx) => {
+			const result = await cleanupDelivery(params, ctx.cwd, { signal });
 			return {
 				content: [{ type: "text" as const, text: result.ok ? `cleaned ${result.receipt.branch.name}` : result.reason }],
 				details: result,

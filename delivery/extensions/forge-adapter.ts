@@ -11,8 +11,8 @@
  * Every command is an argv array with a bounded timeout. Nothing reaches a
  * shell, so a branch name can never become a command. The one argv-level attack
  * that survives an array — a value starting with `-` that the CLI reads as an
- * option — is rejected before the command is built. Commands on the landing path
- * run through {@link runCliAsync}, which an abort signal can end as well as the
+ * option — is rejected before the command is built. Commands on the landing and
+ * cleanup paths run through {@link runCliAsync}, which an abort signal can end as well as the
  * deadline.
  *
  * A setting changes only when a caller asks. {@link autoDeleteSetting} reads;
@@ -462,7 +462,7 @@ async function feed(stdin: Bun.FileSink, input: string): Promise<void> {
 /**
  * The abortable runner: one bounded child process, argv array, no shell.
  *
- * The landing path runs through this rather than {@link runCli} because a
+ * The landing and cleanup paths run through this rather than {@link runCli} because a
  * synchronous spawn blocks the event loop for the whole command: an interrupt is
  * never delivered, so a hung `gh` holds the session until its timeout. Here the
  * deadline and the caller's `signal` both end the command, and an already-aborted
