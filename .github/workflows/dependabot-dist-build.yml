@@ -80,8 +80,7 @@ jobs:
           # publish job applies, so a rebuild that touched anything else fails here
           # instead of arriving as an unexplained artifact entry.
           git add -- '*/dist/*.js'
-          git diff --cached --name-only -- '*/dist/*.js' browser-tools/THIRD_PARTY_NOTICES.txt \
-            > "$RUNNER_TEMP/changed.txt"
+          git diff --cached --name-only -- '*/dist/*.js' > "$RUNNER_TEMP/changed.txt"
           python3 scripts/dependabot-dist-guard.py stage \
             --repo . \
             --changed "$RUNNER_TEMP/changed.txt" \

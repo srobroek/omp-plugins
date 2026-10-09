@@ -47,11 +47,10 @@ COPIED = (
     ".github/workflows/dependabot-dist.yml",
     ".github/workflows/omp-major-issue.yml",
     ".github/workflows/release-please.yml",
-    "browser-tools/package.json",
     "dep-update/package.json",
     "whats-new/package.json",
 )
-LOCKED = (".", "browser-tools", "dep-update", "whats-new")
+LOCKED = (".", "dep-update", "whats-new")
 
 DIST = ".github/workflows/dependabot-dist.yml"
 BUILD = ".github/workflows/dependabot-dist-build.yml"
@@ -60,7 +59,7 @@ AUTOMERGE = ".github/workflows/dependabot-automerge.yml"
 
 SHA_A = "a" * 40
 SHA_B = "b" * 40
-BRANCH = "dependabot/bun/browser-tools/oh-my-pi/pi-utils-18.2.1"
+BRANCH = "dependabot/bun/whats-new/smol-toml-1.4.2"
 
 
 def run(*args: str, cwd: Path) -> subprocess.CompletedProcess[str]:
@@ -80,7 +79,7 @@ class DistGuardFixtures(unittest.TestCase):
         self.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name)
         self.trusted = self.root / "trusted"
-        for plugin in ("browser-tools", "dep-update"):
+        for plugin in ("dep-update", "whats-new"):
             (self.trusted / plugin).mkdir(parents=True)
             (self.trusted / plugin / "package.json").write_text("{}\n", encoding="utf-8")
         (self.trusted / "scripts").mkdir()
@@ -243,60 +242,58 @@ class DistGuardFixtures(unittest.TestCase):
 
     def test_generated_output_is_accepted_and_listed(self) -> None:
         self.stage_artifact({
-            "browser-tools/dist/headed-browser-tools.js": "// bundle\n",
-            "browser-tools/THIRD_PARTY_NOTICES.txt": "notices\n",
+            "whats-new/dist/version-gap-tool.js": "// bundle\n",
             "dep-update/dist/dep-scan-tool.js": "// bundle\n",
         })
         result = self.verify_artifact()
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(
             (self.root / "manifest.txt").read_text(encoding="utf-8"),
-            "browser-tools/THIRD_PARTY_NOTICES.txt\n"
-            "browser-tools/dist/headed-browser-tools.js\n"
-            "dep-update/dist/dep-scan-tool.js\n",
+            "dep-update/dist/dep-scan-tool.js\n"
+            "whats-new/dist/version-gap-tool.js\n",
         )
 
     def test_a_path_outside_the_generated_output_is_rejected(self) -> None:
         self.stage_artifact({
-            "browser-tools/dist/headed-browser-tools.js": "// bundle\n",
+            "whats-new/dist/version-gap-tool.js": "// bundle\n",
             ".github/workflows/pwn.yml": "on: push\n",
         })
         self.assert_artifact_rejected(".github/workflows/pwn.yml: not a generated output path")
 
     def test_a_source_file_beside_the_bundle_is_rejected(self) -> None:
-        self.stage_artifact({"browser-tools/extensions/headed-browser-tools.ts": "export {}\n"})
+        self.stage_artifact({"whats-new/extensions/version-gap-tool.ts": "export {}\n"})
         self.assert_artifact_rejected("not a generated output path")
 
     def test_a_lockfile_is_not_publishable_output(self) -> None:
-        self.stage_artifact({"browser-tools/bun.lock": '{"lockfileVersion": 1}\n'})
-        self.assert_artifact_rejected("browser-tools/bun.lock: not a generated output path")
+        self.stage_artifact({"whats-new/bun.lock": '{"lockfileVersion": 1}\n'})
+        self.assert_artifact_rejected("whats-new/bun.lock: not a generated output path")
 
     def test_a_dist_directory_under_a_non_plugin_is_rejected(self) -> None:
         self.stage_artifact({"scripts/dist/pwn.js": "// bundle\n"})
         self.assert_artifact_rejected("scripts/ is not a plugin in the default branch")
 
     def test_a_symlinked_payload_file_is_rejected(self) -> None:
-        self.stage_artifact({"browser-tools/dist/headed-browser-tools.js": "// bundle\n"})
+        self.stage_artifact({"whats-new/dist/version-gap-tool.js": "// bundle\n"})
         link = self.artifact / "dep-update/dist/dep-scan-tool.js"
         link.parent.mkdir(parents=True, exist_ok=True)
         link.symlink_to("/etc/passwd")
         self.assert_artifact_rejected("dep-update/dist/dep-scan-tool.js: symlink")
 
     def test_a_symlinked_directory_is_rejected(self) -> None:
-        self.stage_artifact({"browser-tools/dist/headed-browser-tools.js": "// bundle\n"})
+        self.stage_artifact({"whats-new/dist/version-gap-tool.js": "// bundle\n"})
         (self.artifact / "dep-update").symlink_to(self.trusted, target_is_directory=True)
         self.assert_artifact_rejected("dep-update: symlinked directory")
 
     def test_a_hard_linked_payload_file_is_rejected(self) -> None:
-        self.stage_artifact({"browser-tools/dist/headed-browser-tools.js": "// bundle\n"})
+        self.stage_artifact({"whats-new/dist/version-gap-tool.js": "// bundle\n"})
         target = self.artifact / "dep-update/dist/dep-scan-tool.js"
         target.parent.mkdir(parents=True, exist_ok=True)
-        os.link(self.artifact / "browser-tools/dist/headed-browser-tools.js", target)
+        os.link(self.artifact / "whats-new/dist/version-gap-tool.js", target)
         self.assert_artifact_rejected("hard link with 2 names")
 
     def test_a_head_sha_the_build_did_not_claim_is_rejected(self) -> None:
         self.stage_artifact(
-            {"browser-tools/dist/headed-browser-tools.js": "// bundle\n"},
+            {"whats-new/dist/version-gap-tool.js": "// bundle\n"},
             metadata={"head_sha": SHA_B},
         )
         self.assert_artifact_rejected(f"head_sha is '{SHA_B}'")
@@ -304,15 +301,15 @@ class DistGuardFixtures(unittest.TestCase):
     def test_a_metadata_file_list_that_hides_a_payload_entry_is_rejected(self) -> None:
         self.stage_artifact(
             {
-                "browser-tools/dist/headed-browser-tools.js": "// bundle\n",
+                "whats-new/dist/version-gap-tool.js": "// bundle\n",
                 "dep-update/dist/dep-scan-tool.js": "// bundle\n",
             },
-            metadata={"files": ["browser-tools/dist/headed-browser-tools.js"]},
+            metadata={"files": ["whats-new/dist/version-gap-tool.js"]},
         )
         self.assert_artifact_rejected("files does not match the uploaded payload")
 
     def test_an_artifact_without_metadata_is_rejected(self) -> None:
-        self.stage_artifact({"browser-tools/dist/headed-browser-tools.js": "// bundle\n"})
+        self.stage_artifact({"whats-new/dist/version-gap-tool.js": "// bundle\n"})
         (self.artifact / "dependabot-dist.json").unlink()
         self.assert_artifact_rejected("missing dependabot-dist.json")
 
@@ -335,22 +332,22 @@ class DistGuardFixtures(unittest.TestCase):
 
     def prepare_target(self) -> None:
         self.target = self.root / "_dependabot-head"
-        (self.target / "browser-tools/dist").mkdir(parents=True)
-        (self.target / "browser-tools/dist/headed-browser-tools.js").write_text("// old\n", encoding="utf-8")
+        (self.target / "whats-new/dist").mkdir(parents=True)
+        (self.target / "whats-new/dist/version-gap-tool.js").write_text("// old\n", encoding="utf-8")
 
     def test_apply_copies_bytes_without_the_executable_bit(self) -> None:
         self.prepare_target()
-        self.stage_artifact({"browser-tools/dist/headed-browser-tools.js": "// new\n"})
-        (self.artifact / "browser-tools/dist/headed-browser-tools.js").chmod(0o755)
-        result = self.apply("browser-tools/dist/headed-browser-tools.js\n")
+        self.stage_artifact({"whats-new/dist/version-gap-tool.js": "// new\n"})
+        (self.artifact / "whats-new/dist/version-gap-tool.js").chmod(0o755)
+        result = self.apply("whats-new/dist/version-gap-tool.js\n")
         self.assertEqual(result.returncode, 0, result.stderr)
-        landed = self.target / "browser-tools/dist/headed-browser-tools.js"
+        landed = self.target / "whats-new/dist/version-gap-tool.js"
         self.assertEqual(landed.read_text(encoding="utf-8"), "// new\n")
         self.assertEqual(landed.stat().st_mode & 0o777, 0o644)
 
     def test_apply_rechecks_the_allowlist_instead_of_trusting_the_manifest(self) -> None:
         self.prepare_target()
-        self.stage_artifact({"browser-tools/dist/headed-browser-tools.js": "// new\n"})
+        self.stage_artifact({"whats-new/dist/version-gap-tool.js": "// new\n"})
         pwn = self.artifact / ".github/workflows/pwn.yml"
         pwn.parent.mkdir(parents=True)
         pwn.write_text("on: push\n", encoding="utf-8")
@@ -363,11 +360,11 @@ class DistGuardFixtures(unittest.TestCase):
         self.prepare_target()
         outside = self.root / "outside.js"
         outside.write_text("// untouched\n", encoding="utf-8")
-        destination = self.target / "browser-tools/dist/headed-browser-tools.js"
+        destination = self.target / "whats-new/dist/version-gap-tool.js"
         destination.unlink()
         destination.symlink_to(outside)
-        self.stage_artifact({"browser-tools/dist/headed-browser-tools.js": "// new\n"})
-        result = self.apply("browser-tools/dist/headed-browser-tools.js\n")
+        self.stage_artifact({"whats-new/dist/version-gap-tool.js": "// new\n"})
+        result = self.apply("whats-new/dist/version-gap-tool.js\n")
         self.assertEqual(result.returncode, 1, result.stdout)
         self.assertIn("destination is a symlink", result.stderr)
         self.assertEqual(outside.read_text(encoding="utf-8"), "// untouched\n")
@@ -376,10 +373,10 @@ class DistGuardFixtures(unittest.TestCase):
         self.prepare_target()
         outside = self.root / "outside"
         outside.mkdir()
-        shutil.rmtree(self.target / "browser-tools")
-        (self.target / "browser-tools").symlink_to(outside, target_is_directory=True)
-        self.stage_artifact({"browser-tools/dist/headed-browser-tools.js": "// new\n"})
-        result = self.apply("browser-tools/dist/headed-browser-tools.js\n")
+        shutil.rmtree(self.target / "whats-new")
+        (self.target / "whats-new").symlink_to(outside, target_is_directory=True)
+        self.stage_artifact({"whats-new/dist/version-gap-tool.js": "// new\n"})
+        result = self.apply("whats-new/dist/version-gap-tool.js\n")
         self.assertEqual(result.returncode, 1, result.stdout)
         self.assertIn("destination path contains a symlink", result.stderr)
         self.assertEqual(list(outside.iterdir()), [], "a rejected path changed the outside tree")
@@ -389,16 +386,12 @@ class DistGuardFixtures(unittest.TestCase):
     def test_stage_and_verify_agree_on_the_same_allowlist(self) -> None:
         """The build half and the publish half share `classify`, so prove they agree."""
         source = self.root / "head"
-        for plugin in ("browser-tools", "dep-update"):
+        for plugin in ("dep-update", "whats-new"):
             (source / plugin / "dist").mkdir(parents=True)
             (source / plugin / "package.json").write_text("{}\n", encoding="utf-8")
-        (source / "browser-tools/dist/headed-browser-tools.js").write_text("// new\n", encoding="utf-8")
-        (source / "browser-tools/THIRD_PARTY_NOTICES.txt").write_text("notices\n", encoding="utf-8")
+        (source / "whats-new/dist/version-gap-tool.js").write_text("// new\n", encoding="utf-8")
         changed = self.root / "changed.txt"
-        changed.write_text(
-            "browser-tools/dist/headed-browser-tools.js\nbrowser-tools/THIRD_PARTY_NOTICES.txt\n",
-            encoding="utf-8",
-        )
+        changed.write_text("whats-new/dist/version-gap-tool.js\n", encoding="utf-8")
         out = self.root / "staged"
         staged = run(
             str(GUARD), "stage",
@@ -417,10 +410,10 @@ class DistGuardFixtures(unittest.TestCase):
 
     def test_stage_refuses_to_publish_a_deletion(self) -> None:
         source = self.root / "head"
-        (source / "browser-tools/dist").mkdir(parents=True)
-        (source / "browser-tools/package.json").write_text("{}\n", encoding="utf-8")
+        (source / "whats-new/dist").mkdir(parents=True)
+        (source / "whats-new/package.json").write_text("{}\n", encoding="utf-8")
         changed = self.root / "changed.txt"
-        changed.write_text("browser-tools/dist/gone.js\n", encoding="utf-8")
+        changed.write_text("whats-new/dist/gone.js\n", encoding="utf-8")
         staged = run(
             str(GUARD), "stage",
             "--repo", str(source),

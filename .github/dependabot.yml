@@ -15,8 +15,8 @@ version: 2
 # One entry per directory that carries a bun.lock, because Dependabot only reads
 # the manifest in the directory it is pointed at: the root workspace plus the
 # published plugins that declare real dependencies and ship committed dist/
-# bundles. An unpublished plugin (`"publish": false`, such as browser-tools) is
-# not watched; its pins move by hand. scripts/check-dependabot-config.py fails
+# bundles. An unpublished plugin (`"publish": false`) is not watched; its pins
+# move by hand. scripts/check-dependabot-config.py fails
 # when a lockfile appears without an entry, so a new dependency-bearing plugin
 # cannot go unwatched.
 updates:
