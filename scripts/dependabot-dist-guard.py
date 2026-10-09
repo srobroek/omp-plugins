@@ -17,9 +17,9 @@ Four subcommands, in the order the publish job runs them:
   Dependabot actor, on this repository for both the run and the head, and on the
   head ref and head commit. It runs before any token is minted.
 - `verify-artifact` reduces the downloaded artifact to the generated output this
-  automation may publish: regular files under an existing plugin's `dist/`, plus
-  browser-tools' notices. Symlinks, hard links, traversal, device nodes and
-  anything outside the allowlist are rejected, never skipped.
+  automation may publish: regular files under an existing plugin's `dist/`.
+  Symlinks, hard links, traversal, device nodes and anything outside the
+  allowlist are rejected, never skipped.
 - `apply` writes the verified bytes into the head checkout. It copies bytes; it
   never imports, sources, installs, evaluates or executes anything from the
   artifact or from the checkout.
@@ -47,13 +47,12 @@ BRANCH_PREFIX = "dependabot/"
 REF_CHARS = re.compile(r"\A[A-Za-z0-9][A-Za-z0-9._/-]*\Z")
 SHA = re.compile(r"\A[0-9a-f]{40}\Z")
 
-# The exact generated output patterns. `build-extensions.py` writes
-# `<plugin>/dist/<source stem>.js` and nothing else; the notices file is the only
-# other generated artifact. Lockfiles are excluded on purpose: the build installs
-# with --frozen-lockfile, so a lockfile can never legitimately change here, and
-# publishing one would let a compromised build stage feed the next install.
+# The exact generated output pattern. `build-extensions.py` writes
+# `<plugin>/dist/<source stem>.js` and nothing else. Lockfiles are excluded on
+# purpose: the build installs with --frozen-lockfile, so a lockfile can never
+# legitimately change here, and publishing one would let a compromised build
+# stage feed the next install.
 BUNDLE = re.compile(r"\A(?P<plugin>[a-z0-9][a-z0-9-]*)/dist/[A-Za-z0-9._-]+\.js\Z")
-NOTICES = "browser-tools/THIRD_PARTY_NOTICES.txt"
 METADATA = "dependabot-dist.json"
 
 MAX_FILE_BYTES = 8 * 1024 * 1024
@@ -176,8 +175,6 @@ def verify_context(run: dict, pulls: object, repository: str, default_branch: st
 
 def classify(relative: str, trusted: Path) -> str | None:
     """The rejection reason for a path, or None when it is publishable output."""
-    if relative == NOTICES:
-        return None
     match = BUNDLE.match(relative)
     if not match:
         return f"{relative}: not a generated output path"

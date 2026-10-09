@@ -192,12 +192,12 @@ describe("read discovery execution boundary", () => {
 				which: () => true,
 				run: async (argv) => {
 					commands.push(argv);
-					return { ok: true, stdout: "browser-tools", stderr: "" };
+					return { ok: true, stdout: "design", stderr: "" };
 				},
 			},
 		);
 		expect(commands).toEqual([["omp", "plugin", "discover"]]);
-		expect(result.results.find((surface) => surface.surface === "discover")?.hits[0]?.name).toBe("browser-tools");
+		expect(result.results.find((surface) => surface.surface === "discover")?.hits[0]?.name).toBe("design");
 	});
 
 describe("inventory rendering for the step 3 coverage check", () => {
