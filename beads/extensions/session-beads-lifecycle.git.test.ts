@@ -3,7 +3,8 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import bashGates from "./bash-gates.ts";
+import bashGates, { setToolCallBudgetForTests } from "./bash-gates.ts";
+import { type BdShowRun, setBdShowRunForTests } from "./bd-close-gate.ts";
 import sessionBeadsLifecycle, {
 	admitBdMutation,
 	admitBeadsWork,
@@ -33,6 +34,7 @@ import sessionBeadsLifecycle, {
   runBdResult,
   sessionPinAfter,
   sessionPinFor,
+  setAgentEndReleaseBudgetForTests,
   setBdStreamForTests,
   settleBackgroundWorkForTests,
   staleSkipNotice,
@@ -2075,6 +2077,154 @@ printf '%s\\n' '{"data":[{"id":"bd-bad"}],"schema_version":1}'
 			if (end === undefined) throw new Error("agent_end handler was not registered");
 			await end({ willContinue: false, outcome: "completed" }, ctx);
 			expect(calls.map(args => args[0])).toEqual(["show", "unclaim", "update"]);
+		} finally {
+			setBdStreamForTests(null);
+			rmSync(dir, { recursive: true, force: true });
+		}
+	});
+
+	/** A `bd show` that never answers on its own: like the real lookup, it ends when its deadline kills it. */
+	const hungShow = ((_argv: string[], _cwd: string, deadline?: number) => new Promise(resolve => {
+		setTimeout(() => resolve({ exitCode: 137, stdout: "" }), Math.max(0, (deadline ?? Date.now()) - Date.now()));
+	})) as unknown as BdShowRun;
+
+	test.serial("one tool_call deadline covers admission and the gates, so a late admission leaves bd-close-gate only the rest", async () => {
+		const budgetMs = 4_000;
+		const admissionMs = 3_000;
+		const dir = mkdtempSync(join(tmpdir(), "beads-shared-deadline-"));
+		mkdirSync(join(dir, ".beads"));
+		setBdStreamForTests(async (_cwd, args) => {
+			if (args[0] !== "gate") return "[]";
+			await Bun.sleep(admissionMs);
+			return JSON.stringify({ data: null, schema_version: 1 });
+		});
+		setBdShowRunForTests(hungShow);
+		setToolCallBudgetForTests(budgetMs);
+		const ctx = { cwd: dir, sessionManager: { getSessionId: () => "shared-deadline" } };
+		const { handlers } = wire();
+		try {
+			await handlers.session_start?.[0]?.({}, ctx);
+			const started = Date.now();
+			const decision = await handlers.tool_call?.[0]?.({ toolName: "bash", toolCallId: "close", input: { command: "bd close bd-probe-2m7 --reason done", cwd: dir } }, ctx) as { block?: true; reason?: string } | undefined;
+			const elapsed = Date.now() - started;
+			expect(decision?.block).toBe(true);
+			expect(decision?.reason).toContain("bd show lookup timed out; gate types remain unverified");
+			expect(decision?.reason).toContain("gates.bd-close-gate.enabled");
+			// Admission spent most of the budget; the close lookup got only what was left.
+			expect(elapsed).toBeGreaterThanOrEqual(admissionMs);
+			expect(elapsed).toBeLessThan(budgetMs + 1_500);
+		} finally {
+			await handlers.session_shutdown?.[0]?.({}, ctx);
+			await settleBackgroundWorkForTests();
+			setToolCallBudgetForTests(null);
+			setBdShowRunForTests(null);
+			setBdStreamForTests(null);
+			rmSync(dir, { recursive: true, force: true });
+		}
+	}, 20_000);
+
+	test.serial("admission waits only for what remains of the tool_call budget and reports the real wait", async () => {
+		const budgetMs = 3_000;
+		const dir = mkdtempSync(join(tmpdir(), "beads-admission-deadline-"));
+		mkdirSync(join(dir, ".beads"));
+		const gates = Promise.withResolvers<string>();
+		setBdStreamForTests(async (_cwd, args) => (args[0] === "gate" ? await gates.promise : "[]"));
+		setToolCallBudgetForTests(budgetMs);
+		const ctx = { cwd: dir, sessionManager: { getSessionId: () => "admission-deadline" } };
+		const { handlers } = wire();
+		try {
+			await handlers.session_start?.[0]?.({}, ctx);
+			const started = Date.now();
+			const decision = await handlers.tool_call?.[0]?.({ toolName: "bash", toolCallId: "claim", input: { command: "bd update bd-probe-2m7 --claim", cwd: dir } }, ctx) as { block?: true; reason?: string } | undefined;
+			const elapsed = Date.now() - started;
+			expect(decision?.block).toBe(true);
+			expect(decision?.reason).toContain("automatic beads gates are still being verified");
+			expect(decision?.reason).toContain("gates.beads-gate-admission.enabled");
+			const waited = Number(/after (\d+) ms/.exec(decision?.reason ?? "")?.[1]);
+			expect(waited).toBeGreaterThanOrEqual(budgetMs - 500);
+			expect(waited).toBeLessThan(budgetMs + 1_500);
+			expect(elapsed).toBeLessThan(budgetMs + 1_500);
+		} finally {
+			gates.resolve(JSON.stringify({ data: null, schema_version: 1 }));
+			await handlers.session_shutdown?.[0]?.({}, ctx);
+			await settleBackgroundWorkForTests();
+			setToolCallBudgetForTests(null);
+			setBdStreamForTests(null);
+			rmSync(dir, { recursive: true, force: true });
+		}
+	}, 30_000);
+
+	/** A spawned executor's session, as OMP lays it out under the session that spawned it. */
+	const executorContext = (id: string, parentSession: string, sessionDir: string, cwd: string) => ({
+		cwd,
+		sessionManager: {
+			getSessionId: () => id,
+			getHeader: () => ({ parentSession }),
+			getSessionFile: () => join(sessionDir, "12345678-1234-4234-8234-123456789abc", `${id}.jsonl`),
+			getSessionDir: () => sessionDir,
+		},
+	});
+
+	test.serial("a sub-agent's terminal release ends at its deadline and hands unverified claims to the spawning session", async () => {
+		const releaseMs = 3_000;
+		const slowWriteMs = 8_000;
+		const dir = mkdtempSync(join(tmpdir(), "beads-agent-end-deadline-"));
+		mkdirSync(join(dir, ".beads"));
+		const calls: string[] = [];
+		setBdStreamForTests(async (_cwd, args, deadline, env) => {
+			calls.push(args[0] ?? "");
+			if (args[0] === "gate") return "[]";
+			if (args[0] === "show") return { output: JSON.stringify({ data: [{ id: args[1], issue_type: "task", status: "in_progress", assignee: env.BD_ACTOR }], schema_version: 1 }) };
+			// A slow write which, like a spawned bd, is killed when its deadline arrives.
+			await Bun.sleep(Math.max(0, Math.min(slowWriteMs, deadline - Date.now())));
+			return Date.now() >= deadline ? { failure: "bd command timed out" } : { output: "unclaimed" };
+		});
+		setAgentEndReleaseBudgetForTests(releaseMs);
+		const sessionDir = join(dir, "sessions");
+		const leadFile = join(sessionDir, "main.jsonl");
+		const leadCtx = { cwd: dir, sessionManager: { getSessionId: () => "release-lead", getSessionFile: () => leadFile, getSessionDir: () => sessionDir, getHeader: () => ({}) } };
+		const executorCtx = executorContext("release-worker", leadFile, sessionDir, dir);
+		const lead = wire();
+		const executor = wire();
+		try {
+			await lead.handlers.session_start?.[0]?.({}, leadCtx);
+			executor.handlers.tool_result?.[0]?.({ toolName: "bash", toolCallId: "claim", isError: false, input: { command: "BD_ACTOR=actor/slow bd update bd-slow --claim", cwd: dir, env: { BD_ACTOR: "actor/slow" } }, content: [{ type: "text", text: "Updated issue: bd-slow" }] }, executorCtx);
+			const end = executor.handlers.agent_end?.[0];
+			if (end === undefined) throw new Error("agent_end handler was not registered");
+			// OMP stops waiting for an agent_end handler at its limit; model that limit with margin.
+			const hostLimit = Bun.sleep(releaseMs + 2_000).then(() => "host stopped waiting");
+			const outcome = await Promise.race([Promise.resolve(end({ willContinue: false, outcome: "completed" }, executorCtx)).then(() => "returned"), hostLimit]);
+			expect(outcome).toBe("returned");
+			// Nothing of the release keeps running once the handler has returned.
+			const issued = calls.length;
+			await settleBackgroundWorkForTests();
+			await hostLimit;
+			expect(calls.length).toBe(issued);
+			const advisory = lead.logged.find(message => message.includes("bd-slow")) ?? "";
+			expect(advisory).toContain("finished executor omp/12345678-1234-4234-8234-123456789abc/release-worker");
+			expect(advisory).toContain("terminal claim release for bd-slow was not verified: bd command timed out");
+			expect(advisory).toContain("bd show 'bd-slow' --json");
+			expect(advisory).toContain("'--if-assignee' 'actor/slow'");
+			expect(executor.logged.join("\n")).not.toContain("bd-slow");
+		} finally {
+			await lead.handlers.session_shutdown?.[0]?.({}, leadCtx);
+			setAgentEndReleaseBudgetForTests(null);
+			setBdStreamForTests(null);
+			rmSync(dir, { recursive: true, force: true });
+		}
+	}, 30_000);
+
+	test.serial("an unverified sub-agent release stays in its own transcript when the spawning session is unknown", async () => {
+		const dir = mkdtempSync(join(tmpdir(), "beads-agent-end-orphan-"));
+		mkdirSync(join(dir, ".beads"));
+		setBdStreamForTests(async () => ({ failure: "store unavailable" }));
+		const sessionDir = join(dir, "sessions");
+		const executorCtx = executorContext("orphan-worker", join(sessionDir, "gone.jsonl"), sessionDir, dir);
+		try {
+			const executor = wire();
+			executor.handlers.tool_result?.[0]?.({ toolName: "bash", toolCallId: "claim", isError: false, input: { command: "BD_ACTOR=actor/orphan bd update bd-orphan --claim", cwd: dir, env: { BD_ACTOR: "actor/orphan" } }, content: [{ type: "text", text: "Updated issue: bd-orphan" }] }, executorCtx);
+			await executor.handlers.agent_end?.[0]?.({ willContinue: false, outcome: "completed" }, executorCtx);
+			expect(executor.logged.join("\n")).toContain("terminal claim read for bd-orphan was not verified: store unavailable");
 		} finally {
 			setBdStreamForTests(null);
 			rmSync(dir, { recursive: true, force: true });

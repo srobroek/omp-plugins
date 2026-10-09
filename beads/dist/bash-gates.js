@@ -2149,6 +2149,7 @@ function lifecycleBdEnvironment(cwd, base = process.env) {
     env.BEADS_DIR = resolved;
   return boundedBdEnvironment(env);
 }
+var GATE_ADMISSION_MS = 20000;
 function likelyBdCommand(command) {
   const tokens = tokenizeShell(command, { preserveBackslashes: true });
   const separators = { ";": true, "&": true, "|": true, "\n": true, "(": true, ")": true, "{": true, "}": true };
@@ -2434,13 +2435,13 @@ function environmentForBashInput(input, source = input) {
   }
   return env;
 }
-async function admitBeadsWork(ctx, cwd = ctx?.cwd ?? process.cwd(), env = lifecycleBdEnvironment(cwd), refresh = true) {
+async function admitBeadsWork(ctx, cwd = ctx?.cwd ?? process.cwd(), env = lifecycleBdEnvironment(cwd), refresh = true, deadline = Date.now() + GATE_ADMISSION_MS) {
   const gateAdmitter = lifecycleBridge().gateAdmitter;
   if (gateAdmitter === undefined)
     return;
-  return await gateAdmitter(resolve5(cwd), boundedBdEnvironment(env), ctx, refresh);
+  return await gateAdmitter(resolve5(cwd), boundedBdEnvironment(env), ctx, refresh, deadline);
 }
-async function admitBdMutation(input, ctx, targetEnabled) {
+async function admitBdMutation(input, ctx, targetEnabled, deadline = Date.now() + GATE_ADMISSION_MS) {
   const command = commandFromInput(input ?? {});
   if (!command)
     return;
@@ -2468,11 +2469,15 @@ async function admitBdMutation(input, ctx, targetEnabled) {
   const store = direct === undefined ? undefined : bdStoreForInvocation(direct, targetCwd, env);
   if (targetEnabled?.(store === undefined ? targetCwd : dirname3(store)) === false)
     return;
-  return await admitBeadsWork(ctx, targetCwd, store === undefined ? env : { ...env, BEADS_DIR: store }, false);
+  return await admitBeadsWork(ctx, targetCwd, store === undefined ? env : { ...env, BEADS_DIR: store }, false, deadline);
 }
 
 // extensions/bash-gates.ts
 var TOOL_CALL_BUDGET_MS = 25000;
+var toolCallBudgetMs = TOOL_CALL_BUDGET_MS;
+function setToolCallBudgetForTests(ms) {
+  toolCallBudgetMs = ms ?? TOOL_CALL_BUDGET_MS;
+}
 function inputOf(event, ctx) {
   const input = event.input;
   return {
@@ -2557,6 +2562,7 @@ async function decide(parsed, event, ctx, pi, deadline) {
 }
 function bashGates(pi) {
   pi.on("tool_call", async (event, ctx) => {
+    const deadline = Date.now() + toolCallBudgetMs;
     try {
       const input = event.input;
       const gatedTool = event.toolName === "task" || event.toolName === "bd_formula_check" && input.deep === true;
@@ -2565,7 +2571,7 @@ function bashGates(pi) {
         if (event.toolName === "bd_formula_check" && workspace === undefined)
           return suffix("beads-gate-admission", "deep formula checks require an explicit workspace so admission and execution cannot select different stores", "set workspace to the target checkout and retry");
         const cwd = workspace === undefined ? ctx?.cwd ?? process.cwd() : resolve6(ctx?.cwd ?? process.cwd(), workspace);
-        const admission = await admitBeadsWork(ctx, cwd, lifecycleBdEnvironment(cwd));
+        const admission = await admitBeadsWork(ctx, cwd, lifecycleBdEnvironment(cwd), true, deadline);
         if (admission)
           return suffix("beads-gate-admission", admission.reason, "retry the operation; verification continues and the next attempt waits on the same read");
         return;
@@ -2575,15 +2581,16 @@ function bashGates(pi) {
       const { command } = inputOf(event, ctx);
       if (!command)
         return;
-      const admission = await admitBdMutation(event.input, ctx, (targetCwd) => settingsEnabled("beads", "beads-gate-admission", targetCwd));
+      const admission = await admitBdMutation(event.input, ctx, (targetCwd) => settingsEnabled("beads", "beads-gate-admission", targetCwd), deadline);
       if (admission)
         return suffix("beads-gate-admission", admission.reason, "retry the command; verification continues and the next attempt waits on the same read");
-      return await decide(parse(command), event, ctx, pi, Date.now() + TOOL_CALL_BUDGET_MS);
+      return await decide(parse(command), event, ctx, pi, deadline);
     } catch (error) {
       return suffix("bash-gates", `command could not be parsed (${error instanceof Error ? error.message : String(error)})`, "split the command or run the mutation as a plain single command");
     }
   });
 }
 export {
-  bashGates as default
+  bashGates as default,
+  setToolCallBudgetForTests
 };

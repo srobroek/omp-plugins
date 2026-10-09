@@ -122,14 +122,31 @@ const TIMEOUT_MS = 120_000;
 const BD_COMMAND_CEILING_MS = 120_000;
 
 /**
- * How long a mutating bd command waits for this session's gate verification.
+ * The longest a mutating bd command waits for this session's gate verification.
  *
- * A `tool_call` has a 30,000 ms budget and the other beads gates plus dispatch need the
- * rest of it. A command that outlasts this is refused rather than admitted unverified,
- * and the refusal says the verification is still running, because it is: the next
- * attempt waits on the same read and converges.
+ * A `tool_call` has a 30,000 ms budget, and admission shares the caller's deadline with
+ * the other beads gates and dispatch, so the wait also ends when that deadline does. A
+ * command that outlasts the wait is refused rather than admitted unverified, and the
+ * refusal says the verification is still running, because it is: the next attempt waits
+ * on the same read and converges.
  */
 const GATE_ADMISSION_MS = 20_000;
+
+/**
+ * How long a spawned executor's terminal claim release may run.
+ *
+ * `agent_end` handlers get 30,000 ms. Past that OMP stops waiting and the task settles,
+ * and a release still running then could act on a bead its lead has already picked up,
+ * so every `bd` call of the release ends at this deadline instead.
+ */
+const AGENT_END_RELEASE_MS = 25_000;
+
+let agentEndReleaseMs = AGENT_END_RELEASE_MS;
+
+/** Shorten the executor release budget. Pass `null` to restore the real one. */
+export function setAgentEndReleaseBudgetForTests(ms: number | null): void {
+	agentEndReleaseMs = ms ?? AGENT_END_RELEASE_MS;
+}
 
 /** Longest advisory list before it stops being read. */
 const MAX_LISTED = 8;
@@ -399,6 +416,18 @@ function bashCallCwd(input: unknown, fallback: string): string {
 
 function sessionKey(ctx: { sessionManager?: { getSessionId?: () => string } } | undefined): string {
 	return ctx?.sessionManager?.getSessionId?.() ?? "default";
+}
+
+type SessionFiles = { sessionManager?: { getSessionFile?: () => string | undefined; getHeader?: () => { parentSession?: string } | null } } | undefined;
+
+/** The resolved file of this session, or of the session that spawned it; either may be unknown. */
+function sessionFileOf(ctx: SessionFiles, which: "own" | "parent"): string | undefined {
+	try {
+		const file = which === "own" ? ctx?.sessionManager?.getSessionFile?.() : ctx?.sessionManager?.getHeader?.()?.parentSession;
+		return typeof file === "string" && file !== "" ? resolve(file) : undefined;
+	} catch {
+		return undefined;
+	}
 }
 
 /**
@@ -1140,12 +1169,19 @@ function terminalAgentEnd(event: unknown): event is AgentEndEvent {
 	return event === null || typeof event !== "object" || (event as AgentEndEvent).willContinue !== true;
 }
 
+/**
+ * Release this session's terminal claims through the ownership-checked native commands.
+ *
+ * Every `bd` call shares `deadline`: one past it is refused, a lock wait ends at it, and
+ * a running `bd` is killed at it, so nothing of the release outlives the returned promise.
+ * Each claim left unverified, whether by the deadline or by a failure, is passed to `report`.
+ */
 async function releaseClaimsAtAgentEnd(
 	state: SessionState,
 	cwd: string,
-	report: (message: string) => void,
+	deadline: number,
+	report: (claim: TrackedClaim, message: string) => void,
 ): Promise<void> {
-	const deadline = Date.now() + BD_COMMAND_CEILING_MS;
 	for (const [key, claim] of [...state.claims]) {
 		const actor = claim.actor;
 		// A claim whose exact store or actor cannot be proven is advisory-only.
@@ -1155,12 +1191,12 @@ async function releaseClaimsAtAgentEnd(
 			env.BEADS_DIR = claim.store;
 			const shown = await runBdResult(cwd, ["show", claim.id, "--json"], deadline, env);
 			if (!("output" in shown)) {
-				report(`terminal claim read for ${claim.id} was not verified: ${shown.failure}`);
+				report(claim, `terminal claim read for ${claim.id} was not verified: ${shown.failure}`);
 				continue;
 			}
 			const rows = envelopeData(parseTrailingJson(shown.output));
 			if (!Array.isArray(rows)) {
-				report(`terminal claim read for ${claim.id} returned malformed data; release was refused`);
+				report(claim, `terminal claim read for ${claim.id} returned malformed data; release was refused`);
 				continue;
 			}
 			const bead = rows.find(row => row !== null && typeof row === "object" && "id" in row && row.id === claim.id);
@@ -1169,7 +1205,7 @@ async function releaseClaimsAtAgentEnd(
 			if (record.assignee !== actor || !["epic", "task"].includes(String(record.issue_type)) ||
 				!["open", "in_progress", "blocked", "deferred"].includes(String(record.status))) continue;
 			if (state.casSupported === false) {
-				report(`terminal claim ${claim.id} remains assigned: bd >= 1.3 is required for atomic --if-assignee; no automatic release was attempted`);
+				report(claim, `terminal claim ${claim.id} remains assigned: bd >= 1.3 is required for atomic --if-assignee; no automatic release was attempted`);
 				continue;
 			}
 			const release = releaseClaimArgs(claim.id, actor, env, new Date().toISOString(), true);
@@ -1178,9 +1214,9 @@ async function releaseClaimsAtAgentEnd(
 			if (!("output" in released)) {
 				if (/--if-assignee/i.test(released.failure) && /(?:unknown|unrecognized|unsupported|invalid|unexpected).*(?:flag|option)|(?:flag|option).*(?:unknown|unrecognized|unsupported|invalid|unexpected)/i.test(released.failure)) {
 					state.casSupported = false;
-					report(`terminal claim ${claim.id} remains assigned: bd >= 1.3 is required for atomic --if-assignee; no automatic release was attempted`);
+					report(claim, `terminal claim ${claim.id} remains assigned: bd >= 1.3 is required for atomic --if-assignee; no automatic release was attempted`);
 				} else {
-					report(`terminal claim release for ${claim.id} was not verified: ${released.failure}`);
+					report(claim, `terminal claim release for ${claim.id} was not verified: ${released.failure}`);
 				}
 				continue;
 			}
@@ -1188,7 +1224,7 @@ async function releaseClaimsAtAgentEnd(
 			if (restore !== undefined) {
 				const restored = await runBdResult(cwd, restore, deadline, env);
 				if (!("output" in restored)) {
-					report(`terminal claim status restore for ${claim.id} was not verified: ${restored.failure}`);
+					report(claim, `terminal claim status restore for ${claim.id} was not verified: ${restored.failure}`);
 					continue;
 				}
 			}
@@ -1196,9 +1232,31 @@ async function releaseClaimsAtAgentEnd(
 		} catch (error) {
 			// One malformed or slow bead must not prevent independent claims from
 			// getting their own ownership check and release attempt.
-			report(`terminal claim release for ${claim.id} failed: ${error instanceof Error ? error.message : String(error)}`);
+			report(claim, `terminal claim release for ${claim.id} failed: ${error instanceof Error ? error.message : String(error)}`);
 		}
 	}
+}
+
+/** A terminal claim whose release a spawned executor could not verify, and why. */
+interface UnverifiedRelease {
+	claim: TrackedClaim;
+	message: string;
+}
+
+/** What a finished executor leaves the session that spawned it about claims it may still hold. */
+function formatUnverifiedReleaseAdvisory(executor: string, unverified: UnverifiedRelease[], casSupported: boolean): string {
+	const lines = [`Beads claims of finished executor ${executor} were not verified as released before its agent_end deadline, so each may still be assigned to it. Its release has stopped; nothing still runs for these claims:`];
+	for (const { claim, message } of unverified.slice(0, MAX_LISTED)) {
+		lines.push(`- ${claim.id}${claim.actor === undefined ? "" : ` [${claim.actor}]`}: ${message}`);
+		const store = claim.store === undefined ? "" : `BEADS_DIR=${shellQuote(claim.store)} `;
+		lines.push(`  Check with: ${store}bd show ${shellQuote(claim.id)} --json`);
+		const release = claim.actor === undefined ? undefined
+			: releaseClaimCommand(claim.id, claim.actor, { BD_ACTOR: claim.actor }, new Date().toISOString(), casSupported, claim.store);
+		if (release !== undefined) lines.push(`  Release with: ${release}`);
+	}
+	if (unverified.length > MAX_LISTED) lines.push(`- ...and ${unverified.length - MAX_LISTED} more`);
+	lines.push("A release cut off by the deadline may already have applied, so check each bead before acting on it. Then close finished work, release only with the guarded command above, or hand the bead on with a comment.");
+	return lines.join("\n");
 }
 
 interface GateVerdict {
@@ -1371,11 +1429,14 @@ function resultText(event: ToolResultEvent): string {
 /** Resolve the lifecycle's canonical embedded-store pin for a Bash call. */
 type SessionPinGetter = (cwd: string, ctx: ExtensionContext) => string | undefined;
 
-type GateAdmitter = (cwd: string, env: NodeJS.ProcessEnv, ctx: ExtensionContext, refresh: boolean) => Promise<GateAdmission>;
+/** `deadline` is the calling tool_call's; a bundle loaded before it was passed omits it. */
+type GateAdmitter = (cwd: string, env: NodeJS.ProcessEnv, ctx: ExtensionContext, refresh: boolean, deadline?: number) => Promise<GateAdmission>;
 
 interface LifecycleBridge {
 	gateAdmitter?: GateAdmitter;
 	sessionPinGetter?: SessionPinGetter;
+	/** Advisory sinks by resolved session file, so a finished executor can reach the session that spawned it. */
+	sessionAdvisors?: Map<string, (content: string) => void>;
 }
 
 const LIFECYCLE_BRIDGE = Symbol.for("com.srobroek.beads.session-lifecycle.bridge.v1");
@@ -1427,13 +1488,19 @@ export async function admitBeadsWork(
 	cwd: string = ctx?.cwd ?? process.cwd(),
 	env: NodeJS.ProcessEnv = lifecycleBdEnvironment(cwd),
 	refresh = true,
+	deadline = Date.now() + GATE_ADMISSION_MS,
 ): Promise<GateAdmission> {
 	const gateAdmitter = lifecycleBridge().gateAdmitter;
 	if (gateAdmitter === undefined) return undefined;
-	return await gateAdmitter(resolve(cwd), boundedBdEnvironment(env), ctx, refresh);
+	return await gateAdmitter(resolve(cwd), boundedBdEnvironment(env), ctx, refresh, deadline);
 }
 
-export async function admitBdMutation(input: unknown, ctx: ExtensionContext, targetEnabled?: (cwd: string) => boolean): Promise<GateAdmission> {
+export async function admitBdMutation(
+	input: unknown,
+	ctx: ExtensionContext,
+	targetEnabled?: (cwd: string) => boolean,
+	deadline = Date.now() + GATE_ADMISSION_MS,
+): Promise<GateAdmission> {
 	const command = extractCommand(input ?? {});
 	if (!command) return undefined;
 	if (/\bcd\s+(?:"[^"]*\$[^"]*"|'[^']*\$[^']*'|\$[A-Za-z_])/u.test(command)) {
@@ -1458,7 +1525,7 @@ export async function admitBdMutation(input: unknown, ctx: ExtensionContext, tar
 	if (direct !== undefined && bdInvocationUsesExternalStore(direct)) return undefined;
 	const store = direct === undefined ? undefined : bdStoreForInvocation(direct, targetCwd, env);
 	if (targetEnabled?.(store === undefined ? targetCwd : dirname(store)) === false) return undefined;
-	return await admitBeadsWork(ctx, targetCwd, store === undefined ? env : { ...env, BEADS_DIR: store }, false);
+	return await admitBeadsWork(ctx, targetCwd, store === undefined ? env : { ...env, BEADS_DIR: store }, false, deadline);
 }
 
 export default function sessionBeadsLifecycle(pi: ExtensionAPI): void {
@@ -1537,6 +1604,13 @@ export default function sessionBeadsLifecycle(pi: ExtensionAPI): void {
 		const key = sessionKey(ctx);
 		sessions.delete(key);
 		const state = stateFor(ctx);
+		// An executor this session spawns hands it any claim release it could not finish.
+		const file = sessionFileOf(ctx, "own");
+		if (file !== undefined) {
+			const bridge = lifecycleBridge();
+			bridge.sessionAdvisors ??= new Map();
+			bridge.sessionAdvisors.set(file, advise);
+		}
 		try {
 			const cwd = ctx?.cwd ?? process.cwd();
 			const pin = autoPinBeadsDir(cwd, key, (id) => sessions.has(id));
@@ -1570,19 +1644,20 @@ export default function sessionBeadsLifecycle(pi: ExtensionAPI): void {
 		}
 	});
 
-	lifecycleBridge().gateAdmitter = async (cwd, env, ctx, refresh) => {
+	lifecycleBridge().gateAdmitter = async (cwd, env, ctx, refresh, deadline = Date.now() + GATE_ADMISSION_MS) => {
 		const key = sessionKey(ctx);
 		const state = sessions.get(key);
 		if (state === undefined) return undefined;
 		const gate = verificationFor(key, state, cwd, env, refresh);
 		if (gate === undefined) return undefined;
-		if (gate.verdict === undefined) await settleWithin(gate.pending, GATE_ADMISSION_MS);
+		const waitStarted = Date.now();
+		if (gate.verdict === undefined) await settleWithin(gate.pending, Math.min(GATE_ADMISSION_MS, deadline - waitStarted));
 		if (gate.verdict?.verified === true) {
 			gate.admitted = true;
 			return undefined;
 		}
 		const reason = gate.verdict?.notice === undefined
-			? `automatic beads gates are still being verified for ${cwd} after ${GATE_ADMISSION_MS} ms, so an automatic gate may still be unresolved and this operation would pick or change work ahead of it. The read is slow, not failed`
+			? `automatic beads gates are still being verified for ${cwd} after ${Date.now() - waitStarted} ms, so an automatic gate may still be unresolved and this operation would pick or change work ahead of it. The read is slow, not failed`
 			: `automatic beads gates could not be verified for ${cwd}, so this operation could pick or change work while a gate remains unresolved. ${gate.verdict.notice}`;
 		return { block: true, reason };
 	};
@@ -1592,6 +1667,9 @@ export default function sessionBeadsLifecycle(pi: ExtensionAPI): void {
 		const state = sessions.get(key);
 		sessions.delete(key);
 		endAutoPinSession(key, (id) => sessions.has(id));
+		const file = sessionFileOf(ctx, "own");
+		const advisors = lifecycleBridge().sessionAdvisors;
+		if (file !== undefined && advisors?.get(file) === advise) advisors.delete(file);
 		if (state === undefined) return;
 		const advisory = trackedClaimAdvisory(state);
 		if (advisory === undefined) return;
@@ -1646,15 +1724,36 @@ export default function sessionBeadsLifecycle(pi: ExtensionAPI): void {
 		if (!terminalAgentEnd(event)) return;
 		const state = sessions.get(sessionKey(ctx));
 		if (state === undefined || state.claims.size === 0) return;
-		const pending = releaseClaimsAtAgentEnd(state, ctx?.cwd ?? process.cwd(), (message) => {
+		const cwd = ctx?.cwd ?? process.cwd();
+		const log = (message: string): void => {
 			pi.logger.error("beads terminal claim release advisory", { message, outcome: event.outcome, status: event.status });
-		});
-		// Spawned task executors await agent_end handlers; return their finalizer so
-		// the task cannot settle while an actor-owned claim is still being checked.
-		if (agentActor(ctx) !== undefined) return await pending;
+		};
+		const executor = agentActor(ctx);
+		if (executor !== undefined) {
+			// Spawned task executors await agent_end handlers, so the task cannot settle while an
+			// actor-owned claim is still being checked. The release ends at its own deadline,
+			// inside the handler limit, and leaves nothing running; what it could not verify
+			// goes to the session that spawned the executor, which owns the work from here.
+			const unverified: UnverifiedRelease[] = [];
+			await releaseClaimsAtAgentEnd(state, cwd, Date.now() + agentEndReleaseMs, (claim, message) => {
+				log(message);
+				unverified.push({ claim, message });
+			});
+			if (unverified.length === 0) return;
+			const advisory = formatUnverifiedReleaseAdvisory(executor, unverified, state.casSupported !== false);
+			const parent = sessionFileOf(ctx, "parent");
+			const lead = parent === undefined ? undefined : lifecycleBridge().sessionAdvisors?.get(parent);
+			if (lead !== undefined) {
+				lead(advisory);
+				return;
+			}
+			pi.logger.error("beads terminal claim release could not reach the spawning session", { parent, claims: unverified.map(({ claim }) => claim.id) });
+			advise(advisory);
+			return;
+		}
 		// Main-agent session_stop steering runs first. Its terminal cleanup remains
 		// detached from the boundary so a cold embedded read cannot hold the harness.
-		track(pending).catch((error: unknown) => {
+		track(releaseClaimsAtAgentEnd(state, cwd, Date.now() + BD_COMMAND_CEILING_MS, (_claim, message) => log(message))).catch((error: unknown) => {
 			pi.logger.error("beads terminal claim release failed", { error: error instanceof Error ? error.message : String(error) });
 		});
 	});

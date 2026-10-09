@@ -1681,6 +1681,11 @@ function bdReadFailure(scope, reason) {
 var TIMEOUT_MS = 120000;
 var BD_COMMAND_CEILING_MS = 120000;
 var GATE_ADMISSION_MS = 20000;
+var AGENT_END_RELEASE_MS = 25000;
+var agentEndReleaseMs = AGENT_END_RELEASE_MS;
+function setAgentEndReleaseBudgetForTests(ms) {
+  agentEndReleaseMs = ms ?? AGENT_END_RELEASE_MS;
+}
 var MAX_LISTED = 8;
 var AUTO_GATE_TYPES = {
   timer: true,
@@ -1922,6 +1927,14 @@ function bashCallCwd(input, fallback) {
 }
 function sessionKey(ctx) {
   return ctx?.sessionManager?.getSessionId?.() ?? "default";
+}
+function sessionFileOf(ctx, which) {
+  try {
+    const file = which === "own" ? ctx?.sessionManager?.getSessionFile?.() : ctx?.sessionManager?.getHeader?.()?.parentSession;
+    return typeof file === "string" && file !== "" ? resolve5(file) : undefined;
+  } catch {
+    return;
+  }
 }
 function autoPinBeadsDir(cwd, sessionId, liveSessions, env = process.env, state = autoPinState, identity = repoIdentity) {
   const current = env.BEADS_DIR;
@@ -2541,8 +2554,7 @@ async function settleWithin(pending, budgetMs) {
 function terminalAgentEnd(event) {
   return event === null || typeof event !== "object" || event.willContinue !== true;
 }
-async function releaseClaimsAtAgentEnd(state, cwd, report) {
-  const deadline = Date.now() + BD_COMMAND_CEILING_MS;
+async function releaseClaimsAtAgentEnd(state, cwd, deadline, report) {
   for (const [key, claim] of [...state.claims]) {
     const actor = claim.actor;
     if (actor === undefined || claim.store === undefined)
@@ -2552,12 +2564,12 @@ async function releaseClaimsAtAgentEnd(state, cwd, report) {
       env.BEADS_DIR = claim.store;
       const shown = await runBdResult(cwd, ["show", claim.id, "--json"], deadline, env);
       if (!("output" in shown)) {
-        report(`terminal claim read for ${claim.id} was not verified: ${shown.failure}`);
+        report(claim, `terminal claim read for ${claim.id} was not verified: ${shown.failure}`);
         continue;
       }
       const rows = envelopeData(parseTrailingJson(shown.output));
       if (!Array.isArray(rows)) {
-        report(`terminal claim read for ${claim.id} returned malformed data; release was refused`);
+        report(claim, `terminal claim read for ${claim.id} returned malformed data; release was refused`);
         continue;
       }
       const bead = rows.find((row) => row !== null && typeof row === "object" && ("id" in row) && row.id === claim.id);
@@ -2567,7 +2579,7 @@ async function releaseClaimsAtAgentEnd(state, cwd, report) {
       if (record.assignee !== actor || !["epic", "task"].includes(String(record.issue_type)) || !["open", "in_progress", "blocked", "deferred"].includes(String(record.status)))
         continue;
       if (state.casSupported === false) {
-        report(`terminal claim ${claim.id} remains assigned: bd >= 1.3 is required for atomic --if-assignee; no automatic release was attempted`);
+        report(claim, `terminal claim ${claim.id} remains assigned: bd >= 1.3 is required for atomic --if-assignee; no automatic release was attempted`);
         continue;
       }
       const release = releaseClaimArgs(claim.id, actor, env, new Date().toISOString(), true);
@@ -2577,9 +2589,9 @@ async function releaseClaimsAtAgentEnd(state, cwd, report) {
       if (!("output" in released)) {
         if (/--if-assignee/i.test(released.failure) && /(?:unknown|unrecognized|unsupported|invalid|unexpected).*(?:flag|option)|(?:flag|option).*(?:unknown|unrecognized|unsupported|invalid|unexpected)/i.test(released.failure)) {
           state.casSupported = false;
-          report(`terminal claim ${claim.id} remains assigned: bd >= 1.3 is required for atomic --if-assignee; no automatic release was attempted`);
+          report(claim, `terminal claim ${claim.id} remains assigned: bd >= 1.3 is required for atomic --if-assignee; no automatic release was attempted`);
         } else {
-          report(`terminal claim release for ${claim.id} was not verified: ${released.failure}`);
+          report(claim, `terminal claim release for ${claim.id} was not verified: ${released.failure}`);
         }
         continue;
       }
@@ -2587,15 +2599,31 @@ async function releaseClaimsAtAgentEnd(state, cwd, report) {
       if (restore !== undefined) {
         const restored = await runBdResult(cwd, restore, deadline, env);
         if (!("output" in restored)) {
-          report(`terminal claim status restore for ${claim.id} was not verified: ${restored.failure}`);
+          report(claim, `terminal claim status restore for ${claim.id} was not verified: ${restored.failure}`);
           continue;
         }
       }
       state.claims.delete(key);
     } catch (error) {
-      report(`terminal claim release for ${claim.id} failed: ${error instanceof Error ? error.message : String(error)}`);
+      report(claim, `terminal claim release for ${claim.id} failed: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
+}
+function formatUnverifiedReleaseAdvisory(executor, unverified, casSupported) {
+  const lines = [`Beads claims of finished executor ${executor} were not verified as released before its agent_end deadline, so each may still be assigned to it. Its release has stopped; nothing still runs for these claims:`];
+  for (const { claim, message } of unverified.slice(0, MAX_LISTED)) {
+    lines.push(`- ${claim.id}${claim.actor === undefined ? "" : ` [${claim.actor}]`}: ${message}`);
+    const store = claim.store === undefined ? "" : `BEADS_DIR=${shellQuote(claim.store)} `;
+    lines.push(`  Check with: ${store}bd show ${shellQuote(claim.id)} --json`);
+    const release = claim.actor === undefined ? undefined : releaseClaimCommand(claim.id, claim.actor, { BD_ACTOR: claim.actor }, new Date().toISOString(), casSupported, claim.store);
+    if (release !== undefined)
+      lines.push(`  Release with: ${release}`);
+  }
+  if (unverified.length > MAX_LISTED)
+    lines.push(`- ...and ${unverified.length - MAX_LISTED} more`);
+  lines.push("A release cut off by the deadline may already have applied, so check each bead before acting on it. Then close finished work, release only with the guarded command above, or hand the bead on with a comment.");
+  return lines.join(`
+`);
 }
 var internalRuns = 0;
 var injectedStream = null;
@@ -2744,13 +2772,13 @@ function environmentForBashInput(input, source = input) {
   }
   return env;
 }
-async function admitBeadsWork(ctx, cwd = ctx?.cwd ?? process.cwd(), env = lifecycleBdEnvironment(cwd), refresh = true) {
+async function admitBeadsWork(ctx, cwd = ctx?.cwd ?? process.cwd(), env = lifecycleBdEnvironment(cwd), refresh = true, deadline = Date.now() + GATE_ADMISSION_MS) {
   const gateAdmitter = lifecycleBridge().gateAdmitter;
   if (gateAdmitter === undefined)
     return;
-  return await gateAdmitter(resolve5(cwd), boundedBdEnvironment(env), ctx, refresh);
+  return await gateAdmitter(resolve5(cwd), boundedBdEnvironment(env), ctx, refresh, deadline);
 }
-async function admitBdMutation(input, ctx, targetEnabled) {
+async function admitBdMutation(input, ctx, targetEnabled, deadline = Date.now() + GATE_ADMISSION_MS) {
   const command = commandFromInput(input ?? {});
   if (!command)
     return;
@@ -2778,7 +2806,7 @@ async function admitBdMutation(input, ctx, targetEnabled) {
   const store = direct === undefined ? undefined : bdStoreForInvocation(direct, targetCwd, env);
   if (targetEnabled?.(store === undefined ? targetCwd : dirname3(store)) === false)
     return;
-  return await admitBeadsWork(ctx, targetCwd, store === undefined ? env : { ...env, BEADS_DIR: store }, false);
+  return await admitBeadsWork(ctx, targetCwd, store === undefined ? env : { ...env, BEADS_DIR: store }, false, deadline);
 }
 function sessionBeadsLifecycle(pi) {
   const sessions = new Map;
@@ -2855,6 +2883,12 @@ function sessionBeadsLifecycle(pi) {
     const key = sessionKey(ctx);
     sessions.delete(key);
     const state = stateFor(ctx);
+    const file = sessionFileOf(ctx, "own");
+    if (file !== undefined) {
+      const bridge = lifecycleBridge();
+      bridge.sessionAdvisors ??= new Map;
+      bridge.sessionAdvisors.set(file, advise);
+    }
     try {
       const cwd = ctx?.cwd ?? process.cwd();
       const pin = autoPinBeadsDir(cwd, key, (id) => sessions.has(id));
@@ -2882,7 +2916,7 @@ function sessionBeadsLifecycle(pi) {
       });
     }
   });
-  lifecycleBridge().gateAdmitter = async (cwd, env, ctx, refresh) => {
+  lifecycleBridge().gateAdmitter = async (cwd, env, ctx, refresh, deadline = Date.now() + GATE_ADMISSION_MS) => {
     const key = sessionKey(ctx);
     const state = sessions.get(key);
     if (state === undefined)
@@ -2890,13 +2924,14 @@ function sessionBeadsLifecycle(pi) {
     const gate = verificationFor(key, state, cwd, env, refresh);
     if (gate === undefined)
       return;
+    const waitStarted = Date.now();
     if (gate.verdict === undefined)
-      await settleWithin(gate.pending, GATE_ADMISSION_MS);
+      await settleWithin(gate.pending, Math.min(GATE_ADMISSION_MS, deadline - waitStarted));
     if (gate.verdict?.verified === true) {
       gate.admitted = true;
       return;
     }
-    const reason = gate.verdict?.notice === undefined ? `automatic beads gates are still being verified for ${cwd} after ${GATE_ADMISSION_MS} ms, so an automatic gate may still be unresolved and this operation would pick or change work ahead of it. The read is slow, not failed` : `automatic beads gates could not be verified for ${cwd}, so this operation could pick or change work while a gate remains unresolved. ${gate.verdict.notice}`;
+    const reason = gate.verdict?.notice === undefined ? `automatic beads gates are still being verified for ${cwd} after ${Date.now() - waitStarted} ms, so an automatic gate may still be unresolved and this operation would pick or change work ahead of it. The read is slow, not failed` : `automatic beads gates could not be verified for ${cwd}, so this operation could pick or change work while a gate remains unresolved. ${gate.verdict.notice}`;
     return { block: true, reason };
   };
   pi.on("session_shutdown", (_event, ctx) => {
@@ -2904,6 +2939,10 @@ function sessionBeadsLifecycle(pi) {
     const state = sessions.get(key);
     sessions.delete(key);
     endAutoPinSession(key, (id) => sessions.has(id));
+    const file = sessionFileOf(ctx, "own");
+    const advisors = lifecycleBridge().sessionAdvisors;
+    if (file !== undefined && advisors?.get(file) === advise)
+      advisors.delete(file);
     if (state === undefined)
       return;
     const advisory = trackedClaimAdvisory(state);
@@ -2970,12 +3009,31 @@ function sessionBeadsLifecycle(pi) {
     const state = sessions.get(sessionKey(ctx));
     if (state === undefined || state.claims.size === 0)
       return;
-    const pending = releaseClaimsAtAgentEnd(state, ctx?.cwd ?? process.cwd(), (message) => {
+    const cwd = ctx?.cwd ?? process.cwd();
+    const log = (message) => {
       pi.logger.error("beads terminal claim release advisory", { message, outcome: event.outcome, status: event.status });
-    });
-    if (agentActor(ctx) !== undefined)
-      return await pending;
-    track(pending).catch((error) => {
+    };
+    const executor = agentActor(ctx);
+    if (executor !== undefined) {
+      const unverified = [];
+      await releaseClaimsAtAgentEnd(state, cwd, Date.now() + agentEndReleaseMs, (claim, message) => {
+        log(message);
+        unverified.push({ claim, message });
+      });
+      if (unverified.length === 0)
+        return;
+      const advisory = formatUnverifiedReleaseAdvisory(executor, unverified, state.casSupported !== false);
+      const parent = sessionFileOf(ctx, "parent");
+      const lead = parent === undefined ? undefined : lifecycleBridge().sessionAdvisors?.get(parent);
+      if (lead !== undefined) {
+        lead(advisory);
+        return;
+      }
+      pi.logger.error("beads terminal claim release could not reach the spawning session", { parent, claims: unverified.map(({ claim }) => claim.id) });
+      advise(advisory);
+      return;
+    }
+    track(releaseClaimsAtAgentEnd(state, cwd, Date.now() + BD_COMMAND_CEILING_MS, (_claim, message) => log(message))).catch((error) => {
       pi.logger.error("beads terminal claim release failed", { error: error instanceof Error ? error.message : String(error) });
     });
   });
@@ -3016,6 +3074,7 @@ export {
   runBdResult,
   sessionPinAfter,
   sessionPinFor,
+  setAgentEndReleaseBudgetForTests,
   setBdStreamForTests,
   settleBackgroundWorkForTests,
   staleSkipNotice
