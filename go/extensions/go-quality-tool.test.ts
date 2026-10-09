@@ -4,11 +4,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import goQualityTool, { runGoQuality } from "./go-quality-tool.ts";
 
-test("missing project cannot report successful verification or repair", () => {
+test("missing project cannot report successful verification or repair", async () => {
  const dir = mkdtempSync(join(tmpdir(), "go-quality-"));
  try {
   for (const mode of ["check", "fix"] as const) {
-   const report = runGoQuality(mode, dir);
+   const report = await runGoQuality(mode, dir);
    expect(report.ok).toBe(false);
    expect(report.complete).toBe(false);
   }
@@ -23,7 +23,7 @@ test("missing requested tools and command failures cannot pass", () => {
   const which = join(bin, "which");
   writeFileSync(which, '#!/bin/sh\n[ -x "' + bin + '/$1" ]\n'); chmodSync(which, 0o755);
   const invoke = () => {
-   const source = `import goQualityTool, { runGoQuality } from ${JSON.stringify(import.meta.dir + "/go-quality-tool.ts")}; console.log(JSON.stringify(runGoQuality("check", ${JSON.stringify(dir)})));`;
+   const source = `import goQualityTool, { runGoQuality } from ${JSON.stringify(import.meta.dir + "/go-quality-tool.ts")}; console.log(JSON.stringify(await runGoQuality("check", ${JSON.stringify(dir)})));`;
    const proc = Bun.spawnSync([process.execPath, "-e", source], { env: { ...process.env, PATH: bin }, stdout: "pipe", stderr: "pipe", timeout: 60_000 });
    expect(proc.exitCode).toBe(0);
    return JSON.parse(proc.stdout.toString());
@@ -102,3 +102,81 @@ test("a relative path resolves against the session cwd", async () => {
 		rmSync(dir, { recursive: true, force: true });
 	}
 });
+
+type Step = { name: string; status: string; detail: string };
+
+/**
+ * A go.mod project whose gofmt, golangci-lint and go are stubs on a PATH holding nothing
+ * else, so host tools cannot leak in. golangci-lint hangs on `run`; the rest pass.
+ */
+function hangingLintProject(prefix: string): { dir: string; bin: string } {
+	const dir = mkdtempSync(join(tmpdir(), prefix));
+	const bin = join(dir, "bin");
+	mkdirSync(bin);
+	writeFileSync(join(dir, "go.mod"), "module example.test\n");
+	const scripts: Record<string, string> = {
+		gofmt: "exit 0",
+		"golangci-lint": 'case "$1" in run) exec /bin/sleep 30 ;; esac\nexit 0',
+		go: "exit 0",
+	};
+	for (const [name, body] of Object.entries(scripts)) {
+		writeFileSync(join(bin, name), `#!/bin/sh\n${body}\n`);
+		chmodSync(join(bin, name), 0o755);
+	}
+	return { dir, bin };
+}
+
+/** Runs `body` as a module in a child bun whose PATH is `bin` and prints what it logs as JSON. */
+function inChild<T>(bin: string, body: string): T {
+	// A child that outlives its own bound has hit the 25 s budget this suite exists to reject.
+	const proc = Bun.spawnSync([process.execPath, "-e", body], { env: { ...process.env, PATH: bin }, stdout: "pipe", stderr: "pipe", timeout: 15_000 });
+	expect(proc.exitCode).toBe(0);
+	return JSON.parse(proc.stdout.toString());
+}
+
+const toolModule = JSON.stringify(join(import.meta.dir, "go-quality-tool.ts"));
+
+test("a step that times out is a skip, and the steps after it still run", () => {
+	// golangci-lint on a large module outlasts a 25 s budget, which used to report a FAIL
+	// the linter never made and fail every later step without running it.
+	const { dir, bin } = hangingLintProject("go-quality-timeout-");
+	try {
+		const report = inChild<{ complete: boolean; steps: Step[] }>(
+			bin,
+			`import { runGoQuality } from ${toolModule}; console.log(JSON.stringify(await runGoQuality("check", ${JSON.stringify(dir)}, { timeoutMs: 3_000 })));`,
+		);
+		expect(report.steps.find((s) => s.name === "golangci-lint")?.status).toBe("skip");
+		expect(report.steps.find((s) => s.name === "golangci-lint")?.detail).toContain("timed out");
+		expect(report.steps.find((s) => s.name === "go test")?.status).toBe("pass");
+		expect(report.steps.some((s) => s.status === "fail")).toBe(false);
+		expect(report.complete).toBe(false);
+	} finally {
+		rmSync(dir, { recursive: true, force: true });
+	}
+}, 20_000);
+
+test("the abort signal stops the running step and nothing after it runs", () => {
+	const { dir, bin } = hangingLintProject("go-quality-abort-");
+	try {
+		// This timer can only fire while a step runs if the run does not block the event loop.
+		// macOS spends about 400 ms on a freshly written script's first exec, so the margins sit well above that.
+		const body = `import tool from ${toolModule};
+const z = {}; for (const k of ["string", "optional", "describe", "object", "enum"]) z[k] = () => z;
+let execute; tool({ zod: z, registerTool: (d) => { execute = d.execute; }, on: () => {} });
+const controller = new AbortController(); setTimeout(() => controller.abort(), 2_000);
+const started = Date.now();
+const { details } = await execute("t4", { mode: "check" }, controller.signal, undefined, { cwd: ${JSON.stringify(dir)} });
+console.log(JSON.stringify({ elapsed: Date.now() - started, details }));`;
+		const { elapsed, details } = inChild<{ elapsed: number; details: { ok: boolean; complete: boolean; steps: Step[] } }>(bin, body);
+		expect(elapsed).toBeLessThan(10_000);
+		expect(details.steps).toEqual([
+			{ name: "gofmt -l", status: "pass", detail: "" },
+			{ name: "golangci-lint", status: "skip", detail: "cancelled" },
+			{ name: "go test", status: "skip", detail: "not run: cancelled" },
+		]);
+		expect(details.ok).toBe(false);
+		expect(details.complete).toBe(false);
+	} finally {
+		rmSync(dir, { recursive: true, force: true });
+	}
+}, 20_000);

@@ -2,11 +2,12 @@ import { expect, test } from "bun:test";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import typescriptQualityTool, { type QualityMode, type QualityReport, runTypescriptQuality } from "./typescript-quality-tool.ts";
+import type { QualityMode, QualityReport } from "./quality-runner.ts";
+import typescriptQualityTool, { runTypescriptQuality } from "./typescript-quality-tool.ts";
 
 /** Runs the report in a child whose PATH holds only `bin`, so host tools cannot leak in. */
 function reportWithPath(dir: string, bin: string, mode: QualityMode): QualityReport {
-	const source = `import { runTypescriptQuality } from ${JSON.stringify(join(import.meta.dir, "typescript-quality-tool.ts"))}; console.log(JSON.stringify(runTypescriptQuality(${JSON.stringify(mode)}, ${JSON.stringify(dir)})));`;
+	const source = `import { runTypescriptQuality } from ${JSON.stringify(join(import.meta.dir, "typescript-quality-tool.ts"))}; console.log(JSON.stringify(await runTypescriptQuality(${JSON.stringify(mode)}, ${JSON.stringify(dir)})));`;
 	const proc = Bun.spawnSync([process.execPath, "-e", source], { env: { ...process.env, PATH: bin }, stdout: "pipe", stderr: "pipe", timeout: 60_000 });
 	expect(proc.exitCode).toBe(0);
 	return JSON.parse(proc.stdout.toString());
@@ -17,11 +18,11 @@ function writeScript(path: string, body: string): void {
 	chmodSync(path, 0o755);
 }
 
-test("missing project cannot report successful verification or repair", () => {
+test("missing project cannot report successful verification or repair", async () => {
  const dir = mkdtempSync(join(tmpdir(), "typescript-quality-"));
  try {
   for (const mode of ["check", "fix"] as const) {
-   const report = runTypescriptQuality(mode, dir);
+   const report = await runTypescriptQuality(mode, dir);
    expect(report.ok).toBe(false);
    expect(report.complete).toBe(false);
   }
@@ -88,7 +89,7 @@ test("a project-local ESLint wins over a Biome that is only on PATH", () => {
 	}
 }, 120_000); // shared probe budget caps availability cascades at 10s
 
-test("tsc without a tsconfig.json is a skip, not a failure", () => {
+test("tsc without a tsconfig.json is a skip, not a failure", async () => {
 	// With no tsconfig.json, `tsc --noEmit` prints its help and exits 1: a JS
 	// project would report a type-check failure for code it has none of.
 	const dir = mkdtempSync(join(tmpdir(), "typescript-quality-notsconfig-"));
@@ -98,7 +99,7 @@ test("tsc without a tsconfig.json is a skip, not a failure", () => {
 		writeFileSync(join(dir, "package.json"), "{}");
 		writeScript(join(local, "biome"), "exit 0");
 		writeScript(join(local, "tsc"), "echo 'COMMON COMMANDS'\nexit 1");
-		const report = runTypescriptQuality("check", dir);
+		const report = await runTypescriptQuality("check", dir);
 		expect(report.steps.find((s) => s.name === "tsc --noEmit")).toEqual({ name: "tsc --noEmit", status: "skip", detail: "no tsconfig.json" });
 		expect(report.steps.some((s) => s.status === "fail")).toBe(false);
 	} finally {
@@ -116,6 +117,70 @@ function fakeZod(): { zod: unknown } {
 	chain.enum = self;
 	return { zod: chain };
 }
+
+type Execute = (
+	id: string,
+	params: { mode: QualityMode; path?: string },
+	signal: AbortSignal | undefined,
+	onUpdate: undefined,
+	ctx: { cwd: string },
+) => Promise<{ details: QualityReport & { error?: string } }>;
+
+function registeredExecute(): Execute {
+	const captured: Record<string, unknown> = {};
+	typescriptQualityTool({ ...fakeZod(), registerTool: (d: Record<string, unknown>) => Object.assign(captured, d), on: () => {} } as never);
+	return captured.execute as Execute;
+}
+
+/** A tsconfig project whose biome and tsc are node_modules/.bin stubs, so no PATH probe runs. */
+function localProject(prefix: string, scripts: { biome?: string; tsc?: string }): string {
+	const dir = mkdtempSync(join(tmpdir(), prefix));
+	const local = join(dir, "node_modules", ".bin");
+	mkdirSync(local, { recursive: true });
+	writeFileSync(join(dir, "package.json"), "{}");
+	writeFileSync(join(dir, "tsconfig.json"), "{}");
+	writeScript(join(local, "biome"), scripts.biome ?? "exit 0");
+	writeScript(join(local, "tsc"), scripts.tsc ?? "exit 0");
+	return dir;
+}
+
+test("a step that times out is a skip, and the steps after it still run", async () => {
+	// tsc on a large project outlasts a 25 s budget, which used to report a FAIL the
+	// type checker never made and fail every later step without running it.
+	const dir = localProject("typescript-quality-timeout-", { biome: "exec /bin/sleep 30" });
+	try {
+		// macOS spends about 400 ms on a freshly written script's first exec, so the bound sits well above that.
+		const report = await runTypescriptQuality("check", dir, { timeoutMs: 3_000 });
+		expect(report.steps.find((s) => s.name === "biome")?.status).toBe("skip");
+		expect(report.steps.find((s) => s.name === "biome")?.detail).toContain("timed out");
+		expect(report.steps.find((s) => s.name === "tsc --noEmit")?.status).toBe("pass");
+		expect(report.steps.some((s) => s.status === "fail")).toBe(false);
+		expect(report.complete).toBe(false);
+	} finally {
+		rmSync(dir, { recursive: true, force: true });
+	}
+}, 20_000);
+
+test("the abort signal stops the running step and nothing after it runs", async () => {
+	const dir = localProject("typescript-quality-abort-", { biome: "exec /bin/sleep 30" });
+	try {
+		const controller = new AbortController();
+		// This timer can only fire while a step runs if the run does not block the event loop.
+		// macOS spends about 400 ms on a freshly written script's first exec, so the margin sits well above that.
+		setTimeout(() => controller.abort(), 2_000);
+		const started = Date.now();
+		const { details } = await registeredExecute()("t2", { mode: "check" }, controller.signal, undefined, { cwd: dir });
+		expect(Date.now() - started).toBeLessThan(10_000);
+		expect(details.steps).toEqual([
+			{ name: "biome", status: "skip", detail: "cancelled" },
+			{ name: "tsc --noEmit", status: "skip", detail: "not run: cancelled" },
+		]);
+		expect(details.ok).toBe(false);
+		expect(details.complete).toBe(false);
+	} finally {
+		rmSync(dir, { recursive: true, force: true });
+	}
+}, 20_000);
 
 test("a relative path resolves against the session cwd", async () => {
 	const dir = mkdtempSync(join(tmpdir(), "typescript-quality-cwd-"));

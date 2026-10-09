@@ -2,141 +2,40 @@ import { existsSync } from "node:fs";
 import { resolve } from "node:path";
 import type { TSchema } from "@oh-my-pi/pi-ai";
 import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
+import {
+    fmtTable,
+    have,
+    type PlannedStep,
+    PROBE_BUDGET_MS,
+    type QualityMode,
+    type QualityOptions,
+    type QualityReport,
+    report,
+    runSteps,
+    type StepResult,
+} from "./quality-runner.ts";
 
-/** A tool_call has a 30,000 ms budget; leave 5,000 ms for dispatch and reporting. */
-export const TIMEOUT_MS = 25_000;
-
-export type QualityMode = "check" | "fix";
-
-export type StepResult = {
-	name: string;
-	status: "pass" | "fail" | "skip";
-	detail: string;
-};
 type RustQualityParams = { mode: QualityMode; path?: string };
 
-export type QualityReport = {
-	ok: boolean;
-	complete: boolean;
-	cwd: string;
-	mode: QualityMode;
-	steps: StepResult[];
+const STEPS: Record<QualityMode, { name: string; args: string[] }[]> = {
+    fix: [{ name: "cargo fmt", args: ["fmt"] }],
+    check: [
+        { name: "cargo fmt --check", args: ["fmt", "--check"] },
+        { name: "cargo clippy", args: ["clippy", "--all-targets", "--all-features", "--", "-D", "warnings"] },
+        { name: "cargo test", args: ["test"] },
+    ],
 };
 
-/**
- * Probe budget shared by all tool availability checks. A slow or broken shim
- * must not consume the quality command budget before checks begin.
- */
-const PROBE_BUDGET_MS = 10_000;
-
-/** Per-probe bound for a mise shim's resolution and version check. */
-const PROBE_TIMEOUT_MS = 5_000;
-
-/**
- * Argument sets tried in order until one exits 0, which is how
- * `sniff-install-tool` probes its own catalog.
- *
- * No single flag covers these binaries: `ruff`, `cargo`, `tsc` and `rustfmt`
- * answer `--version`; `go` answers `version` and rejects `--version`; `gofmt`
- * has no version verb at all and only answers help. A generic `--version` probe
- * therefore reports `go` and `gofmt` missing and silently skips Go checks, which
- * is worse than the bug it replaces.
- */
-const PROBE_ARGS: readonly (readonly string[])[] = [["--version"], ["version"], ["-h"]];
-
-/**
- * Whether `bin` can actually RUN, not merely resolve on PATH.
- *
- * `which` succeeds for a mise shim whose tool is not installed. A resolve-only
- * check therefore reports the tool present, the step fails when it executes, and
- * the report records an analyzer FAILURE where the truth is a missing tool --
- * the inverse of this tool's contract, which is that missing tools produce an
- * incomplete report rather than findings. Measured on one machine: mypy, pylint
- * and vulture each resolved and each failed, so the report implied code problems
- * that did not exist.
- *
- * A shim for an uninstalled tool fails every argument set, so the cascade cannot
- * be fooled into reporting one usable.
- */
-function have(bin: string, deadline = Date.now() + TIMEOUT_MS): boolean {
-    for (const args of PROBE_ARGS) {
-        const remaining = deadline - Date.now();
-        if (remaining <= 0) return false;
-        try {
-            const proc = Bun.spawnSync([bin, ...args], { stdin: new Uint8Array(), stdout: "pipe", stderr: "pipe", timeout: Math.min(PROBE_TIMEOUT_MS, remaining) });
-            if (proc.exitCode === 0 && proc.exitedDueToTimeout !== true && Date.now() < deadline) return true;
-        } catch {
-            return false;
-        }
-    }
-    return false;
-}
-function run(
-    argv: string[],
-    cwd: string,
-    deadline = Date.now() + TIMEOUT_MS,
-): { exitCode: number | null; stdout: string; stderr: string; error?: string } {
-    const remaining = deadline - Date.now();
-    if (remaining <= 0) return { exitCode: null, stdout: "", stderr: "", error: "quality event budget exhausted" };
-    try {
-        const proc = Bun.spawnSync(argv, { cwd, stdout: "pipe", stderr: "pipe", timeout: Math.min(TIMEOUT_MS, remaining) });
-        return { exitCode: proc.exitCode, stdout: proc.stdout.toString().slice(0, 16_384), stderr: proc.stderr.toString().slice(0, 16_384), ...(proc.exitedDueToTimeout === true ? { error: "quality command timed out" } : {}) };
-    } catch (err) {
-        return { exitCode: null, stdout: "", stderr: "", error: err instanceof Error ? err.message : String(err) };
-    }
-}
-
-function fmtTable(steps: StepResult[]): string {
-    return steps.map((s) => `${s.status.padEnd(4)}  ${s.name}${s.detail ? ` — ${s.detail}` : ""}`).join("\n");
-}
-
-function record(steps: StepResult[], name: string, r: { exitCode: number | null; stdout: string; stderr: string; error?: string }): void {
-    if (r.error) {
-        steps.push({ name, status: "fail", detail: r.error });
-        return;
-    }
-    if (r.exitCode === 0) {
-        steps.push({ name, status: "pass", detail: "" });
-        return;
-    }
-    steps.push({ name, status: "fail", detail: (r.stderr || r.stdout).trim() || `exit ${r.exitCode}` });
-}
-
-export function runRustQuality(mode: QualityMode, cwd: string): QualityReport {
-    const deadline = Date.now() + TIMEOUT_MS;
-    const steps: StepResult[] = [];
+export async function runRustQuality(mode: QualityMode, cwd: string, options: QualityOptions = {}): Promise<QualityReport> {
     if (!existsSync(resolve(cwd, "Cargo.toml"))) {
-        if (mode === "fix") steps.push({ name: "cargo fmt", status: "skip", detail: "no Cargo.toml" });
-        else {
-            steps.push({ name: "cargo fmt --check", status: "skip", detail: "no Cargo.toml" });
-            steps.push({ name: "cargo clippy", status: "skip", detail: "no Cargo.toml" });
-            steps.push({ name: "cargo test", status: "skip", detail: "no Cargo.toml" });
-        }
-        return { ok: false, complete: false, cwd, mode, steps };
+        return report(mode, cwd, STEPS[mode].map(({ name }): StepResult => ({ name, status: "skip", detail: "no Cargo.toml" })));
     }
     // Probe only once the manifest exists: with no Cargo.toml the probe is wasted work, and
     // three argument sets at 1,000 ms each outlast a CI test's own limit where no Rust
     // toolchain is installed.
-    const probeDeadline = Math.min(deadline, Date.now() + PROBE_BUDGET_MS);
-    const cargoOk = have("cargo", probeDeadline);
-    if (!cargoOk) {
-        if (mode === "fix") steps.push({ name: "cargo fmt", status: "skip", detail: "cargo not on PATH" });
-        else {
-            steps.push({ name: "cargo fmt --check", status: "skip", detail: "cargo not on PATH" });
-            steps.push({ name: "cargo clippy", status: "skip", detail: "cargo not on PATH" });
-            steps.push({ name: "cargo test", status: "skip", detail: "cargo not on PATH" });
-        }
-        return { ok: false, complete: false, cwd, mode, steps };
-    }
-    if (mode === "fix") record(steps, "cargo fmt", run(["cargo", "fmt"], cwd, deadline));
-    else {
-        record(steps, "cargo fmt --check", run(["cargo", "fmt", "--check"], cwd, deadline));
-        record(steps, "cargo clippy", run(["cargo", "clippy", "--all-targets", "--all-features", "--", "-D", "warnings"], cwd, deadline));
-        record(steps, "cargo test", run(["cargo", "test"], cwd, deadline));
-    }
-    const complete = steps.length > 0 && steps.every((s) => s.status !== "skip") && Date.now() < deadline;
-    const ok = complete && steps.every((s) => s.status === "pass");
-    return { ok, complete, cwd, mode, steps };
+    const cargo = (await have("cargo", Date.now() + PROBE_BUDGET_MS, options.signal)) ? "cargo" : null;
+    const plan = STEPS[mode].map(({ name, args }): PlannedStep => ({ name, bin: cargo, args, missing: "cargo not on PATH" }));
+    return report(mode, cwd, await runSteps(plan, cwd, options));
 }
 
 export default function rustQualityTool(pi: ExtensionAPI): void {
@@ -145,12 +44,12 @@ export default function rustQualityTool(pi: ExtensionAPI): void {
 		name: "rust_quality",
 		label: "Rust quality",
 		description:
-			"Run cargo fmt/clippy/test (check) or cargo fmt (fix). Missing projects or cargo produce incomplete, unsuccessful reports.",
+			"Run cargo fmt/clippy/test (check) or cargo fmt (fix). Missing projects or cargo, and commands that time out or are cancelled, produce incomplete, unsuccessful reports.",
 		parameters: z.object({
 			mode: z.enum(["check", "fix"]).describe("check: fmt --check, clippy -D warnings, test; fix: cargo fmt"),
 			path: z.string().optional().describe("Project cwd; defaults to session cwd"),
 		}) as unknown as TSchema,
-		execute: async (_id, params: RustQualityParams, _signal, _onUpdate, ctx) => {
+		execute: async (_id, params: RustQualityParams, signal, _onUpdate, ctx) => {
 			try {
 				const cwd = resolve(ctx?.cwd ?? process.cwd(), params.path ?? ".");
 				if (!existsSync(cwd)) {
@@ -159,7 +58,7 @@ export default function rustQualityTool(pi: ExtensionAPI): void {
 						details: { ok: false, error: "missing_path", cwd },
 					};
 				}
-				const report = runRustQuality(params.mode, cwd);
+				const report = await runRustQuality(params.mode, cwd, { signal });
 				return {
 					content: [{ type: "text" as const, text: fmtTable(report.steps) }],
 					details: report,
