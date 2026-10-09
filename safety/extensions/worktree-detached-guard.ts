@@ -19,7 +19,9 @@ import type { ExtensionAPI, ToolCallEvent } from "@oh-my-pi/pi-coding-agent";
  * refused, while every other bash call is left alone (`skill://omp-extension-safety`).
  */
 
+/** Per git call, and for every git call one bash command triggers: tool_call handlers get 30 s. */
 const TIMEOUT_MS = 5_000;
+const BUDGET_MS = 25_000;
 const MAX_COMMAND_LENGTH = 64_000;
 
 /** Wrappers that pass their tail through to another command. */
@@ -193,7 +195,11 @@ export type GitProbe = {
 	/** Refs that reach the commit, or null when containment cannot be determined. */
 	containingRefs: (cwd: string, sha: string) => string[] | null;
 	resolve: (cwd: string, target: string) => string;
+	/** Start the git budget for one command; calls past it throw ProbeTimeout. */
+	start?: () => void;
 };
+
+export class ProbeTimeout extends Error {}
 
 export function parseWorktreeList(porcelain: string): WorktreeRecord[] {
 	const records: WorktreeRecord[] = [];
@@ -247,30 +253,36 @@ export function reviewRemoval(removal: Removal, cwd: string, probe: GitProbe): s
 	return `Worktree removal refused: ${target} is detached at ${record.head} and no ref reaches that commit, so removing the checkout orphans it — git reports only "no branch to delete". Mint a rescue ref first: git branch recovered/${basename(record.path)} ${record.head}`;
 }
 
-export function defaultProbe(): GitProbe {
+export function defaultProbe(bounds: { timeoutMs?: number; budgetMs?: number } = {}): GitProbe {
+	const timeoutMs = bounds.timeoutMs ?? TIMEOUT_MS;
+	const budgetMs = bounds.budgetMs ?? BUDGET_MS;
+	let deadline = Date.now() + budgetMs;
+	// Output of a git call, or null when it fails; throws ProbeTimeout when the call or budget runs out.
+	const git = (args: string[], cwd: string): string | null => {
+		const remaining = deadline - Date.now();
+		if (remaining <= 0) throw new ProbeTimeout(`git ${args[0]} ${args[1]}`);
+		const limit = Math.min(timeoutMs, remaining);
+		let proc: ReturnType<typeof Bun.spawnSync>;
+		try {
+			proc = Bun.spawnSync(["git", ...args], { cwd, stdout: "pipe", stderr: "pipe", timeout: limit });
+		} catch {
+			return null;
+		}
+		if (proc.exitedDueToTimeout) throw new ProbeTimeout(`git ${args[0]} ${args[1]}`);
+		return proc.exitCode === 0 ? (proc.stdout?.toString() ?? "") : null;
+	};
 	return {
+		start: () => {
+			deadline = Date.now() + budgetMs;
+		},
 		list: (cwd) => {
-			try {
-				const proc = Bun.spawnSync(["git", "worktree", "list", "--porcelain"], {
-					cwd, stdout: "pipe", stderr: "pipe", timeout: TIMEOUT_MS,
-				});
-				if (proc.exitCode !== 0) return null;
-				return parseWorktreeList(proc.stdout.toString());
-			} catch {
-				return null;
-			}
+			const out = git(["worktree", "list", "--porcelain"], cwd);
+			return out === null ? null : parseWorktreeList(out);
 		},
 		containingRefs: (cwd, sha) => {
 			if (!/^[0-9a-f]{7,64}$/.test(sha)) return null;
-			try {
-				const proc = Bun.spawnSync(["git", "for-each-ref", "--contains", sha, "--count=1", "--format=%(refname)"], {
-					cwd, stdout: "pipe", stderr: "pipe", timeout: TIMEOUT_MS,
-				});
-				if (proc.exitCode !== 0) return null;
-				return proc.stdout.toString().split("\n").filter((line) => line.trim() !== "");
-			} catch {
-				return null;
-			}
+			const out = git(["for-each-ref", "--contains", sha, "--count=1", "--format=%(refname)"], cwd);
+			return out === null ? null : out.split("\n").filter((line) => line.trim() !== "");
 		},
 		resolve: (cwd, target) => {
 			const absolute = resolve(cwd, target);
@@ -307,12 +319,16 @@ export function reviewCommand(command: string, cwd: string, probe: GitProbe, par
 	if (command.length > MAX_COMMAND_LENGTH) {
 		return "Worktree removal refused: command exceeds the 64 KiB safety limit (oversize), so its removal cannot be checked.";
 	}
+	probe.start?.();
 	try {
 		for (const removal of parse(command)) {
 			const refusal = reviewRemoval(removal, cwd, probe);
 			if (refusal) return refusal;
 		}
-	} catch {
+	} catch (error) {
+		if (error instanceof ProbeTimeout) {
+			return `Worktree removal refused: \`${error.message}\` timed out, so this call cannot prove the checkout's tip stays reachable. Re-run it once git answers promptly.`;
+		}
 		return "Worktree removal refused: parse failure while checking a removal command; its impact could not be proved.";
 	}
 	return null;
