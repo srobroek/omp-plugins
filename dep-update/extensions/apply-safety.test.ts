@@ -73,6 +73,30 @@ test("apply rejects options, honors cancellation, bounds children/output, and pi
 	}
 }, 10000);
 
+test("the package-manager bound is sized for a real install, not a 25 s tool_call budget", async () => {
+	// A registered tool's execute has no harness deadline, so a caller-sized bound is
+	// honoured as given and the default leaves ten minutes for an install.
+	const root = mkdtempSync(join(tmpdir(), "dep-apply-bound-"));
+	const oldPath = process.env.PATH;
+	const oldPm = process.env.DEP_UPDATE_PKG_MANAGER;
+	const stub = join(root, "pnpm");
+	writeFileSync(stub, `#!${process.execPath}\nimport {writeFileSync} from 'node:fs';\nwriteFileSync('package.json', JSON.stringify({dependencies:{x:'1.0.0'}}));\n`);
+	chmodSync(stub, 0o755);
+	const scheduled: number[] = [];
+	const schedule = (callback: () => void, ms: number) => { scheduled.push(ms); return setTimeout(callback, ms); };
+	try {
+		process.env.PATH = root;
+		process.env.DEP_UPDATE_PKG_MANAGER = "pnpm";
+		expect((await applyBump("npm", "x", "1.0.0", root, { setTimeout: schedule })).exit).toBe(0);
+		expect((await applyBump("npm", "x", "1.0.0", root, { setTimeout: schedule, timeoutMs: 120_000 })).exit).toBe(0);
+		expect(scheduled).toEqual([600_000, 120_000]);
+	} finally {
+		if (oldPath === undefined) delete process.env.PATH; else process.env.PATH = oldPath;
+		if (oldPm === undefined) delete process.env.DEP_UPDATE_PKG_MANAGER; else process.env.DEP_UPDATE_PKG_MANAGER = oldPm;
+		rmSync(root, { recursive: true, force: true });
+	}
+}, 10000);
+
 
 test("apply reports missing package managers as failures", async () => {
 	const root = mkdtempSync(join(tmpdir(), "dep-apply-missing-pm-"));

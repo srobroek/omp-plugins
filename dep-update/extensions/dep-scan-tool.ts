@@ -16,8 +16,8 @@ export default function depScanTool(pi: ExtensionAPI): void {
         description:
             "Enumerate a project's declared dependencies, query PyPI/npm for the latest versions, and " +
             "classify exact-version bumps as PATCH-SAFE, MINOR-CHECK, or MAJOR-ADVISORY. " +
-            "Read-only; each scan has a 25 s aggregate deadline inside the 30 s tool_call budget and " +
-            "returns a partial report when a large manifest exceeds it. Rust and go deps are advisory-only.",
+            "Read-only; a scan stopped by its aggregate deadline or by cancellation returns an incomplete " +
+            "report (complete: false) that lists every dependency it did not query as UNCHECKED. Rust and go deps are advisory-only.",
 		parameters: z.object({
 			path: z.string().optional().describe("Project root to scan; defaults to the session cwd"),
 		}) as unknown as TSchema, // pi.zod and the host TypeBox schema types differ.
@@ -48,19 +48,20 @@ export default function depScanTool(pi: ExtensionAPI): void {
 					}
 				}
 				for (const record of records) {
-					if (record.status === "UNRESOLVABLE" || record.status === "DISCONFIRMED") {
+					if (record.status === "UNRESOLVABLE" || record.status === "DISCONFIRMED" || record.status === "UNCHECKED") {
 						lines.push(`${record.status.padEnd(15)} ${record.name}  ${record.installed} -> ${record.latest ?? "unknown"}  (${record.ecosystem}): ${record.reason ?? "not classified"}`);
 					}
 				}
-				const skipped = records.length - upgradable.length;
-				lines.push(`-- ${upgradable.length} upgradable, ${skipped} current/unresolvable --`);
+				const unchecked = records.filter((r: BumpRecord) => r.status === "UNCHECKED").length;
+				const skipped = records.length - upgradable.length - unchecked;
+				lines.push(`-- ${upgradable.length} upgradable, ${skipped} current/unresolvable, ${unchecked} unchecked --`);
 				if (stderr.trim()) lines.push(stderr.trim());
 				return {
 					content: [{ type: "text" as const, text: lines.join("\n") }],
-                    details: { records, complete, summary: { upgradable: upgradable.length, skipped } },
+                    details: { records, complete, summary: { upgradable: upgradable.length, skipped, unchecked } },
 				};
 			} catch (error) {
-				signal?.throwIfAborted();
+				// A cancellation is reported by researchProject as an incomplete scan; only real errors reach here.
 				const message = error instanceof Error ? error.message : String(error);
 				return {
 					content: [{ type: "text" as const, text: `dep_scan error: ${message}` }],
@@ -75,7 +76,7 @@ export default function depScanTool(pi: ExtensionAPI): void {
 		label: "Apply Dependency Bump",
         description:
             "Apply one confirmed dependency bump via the ecosystem package manager. " +
-            "The mutation is bounded to 25 s inside the 30 s tool_call budget; if interrupted, " +
+            "The mutation is bounded to 10 minutes; if cancelled or interrupted, " +
             "the result reports that partial changes may remain so the caller can inspect manifests and lockfiles.",
 		parameters: z.object({
 			ecosystem: z.string().describe("pypi, npm, cargo, or go"),
@@ -98,7 +99,7 @@ export default function depScanTool(pi: ExtensionAPI): void {
 				const approved = await ctx.ui.confirm(
 					"Apply dependency bump",
 					`${params.ecosystem}: ${params.name} -> ${params.version}\nProject: ${params.path ?? ctx.cwd}\nPackage-manager failure or cancellation can leave partial changes.`,
-                    { signal, timeout: 20_000 },
+                    { signal, timeout: 120_000 },
 				);
 				if (!approved) throw new Error("Dependency bump denied; no process started");
 				const result = await applyBump(params.ecosystem, params.name, params.version, params.path ?? ctx.cwd, {
