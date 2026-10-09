@@ -1,6 +1,6 @@
 {
   "name": "@srobroek/journeys",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "User journeys: author, validate, and maintain journey documents.",
   "private": true,
   "omp": {
