@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.4.1](https://github.com/srobroek/omp-plugins/compare/delivery--v1.4.0...delivery--v1.4.1) (2026-10-09)
+
+
+### Bug Fixes
+
+* **delivery:** let the Helpers UI row replace FO-5's implementer default ([#657](https://github.com/srobroek/omp-plugins/issues/657)) ([7b6b8fe](https://github.com/srobroek/omp-plugins/commit/7b6b8fe1057d5e07b9ecdc1711e09a8de75969f1))
+
 ## [1.4.0](https://github.com/srobroek/omp-plugins/compare/delivery--v1.3.0...delivery--v1.4.0) (2026-10-08)
 
 
