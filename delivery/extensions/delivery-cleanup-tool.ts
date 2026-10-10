@@ -5,8 +5,8 @@ import type { TSchema } from "@oh-my-pi/pi-ai";
 import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
 import pkg from "../package.json" with { type: "json" };
 import {
-	type AsyncCliRunner,
 	type CliResult,
+	type CliRunner,
 	FORGE_TIMEOUT_MS,
 	forgeEnvironment,
 	forgeTarget,
@@ -14,9 +14,9 @@ import {
 	normalizeRepoPath,
 	REMOTE_NAME,
 	redactRemote,
-	remoteBranchAbsentAsync,
+	remoteBranchAbsent,
 	repoPathFromRemote,
-	runCliAsync,
+	runCli,
 	singleRemoteRecord,
 } from "./forge-adapter.ts";
 import {
@@ -83,7 +83,7 @@ export type CleanupFailure = { ok: false; reason: string };
 export type CleanupResult = CleanupSuccess | CleanupFailure;
 
 export type CleanupDeps = {
-	run?: AsyncCliRunner;
+	run?: CliRunner;
 	now?: () => number;
 	env?: NodeJS.ProcessEnv;
 	/** Overrides for {@link CLEANUP_BOUNDS}; tests inject short ones. */
@@ -262,7 +262,7 @@ type RemoteIdentity = {
  */
 async function resolveRemoteIdentity(
 	receipt: LandingReceipt,
-	run: AsyncCliRunner,
+	run: CliRunner,
 	cwd: string,
 	forgeEnv: Readonly<Record<string, string>>,
 	env: NodeJS.ProcessEnv,
@@ -327,7 +327,7 @@ async function resolveRemoteIdentity(
 async function githubObservation(
 	receipt: LandingReceipt,
 	identity: RemoteIdentity,
-	run: AsyncCliRunner,
+	run: CliRunner,
 ): Promise<PullRequestObservation | CleanupFailure> {
 	const argv = ["gh", "pr", "view", String(receipt.pr.number), "--repo", identity.cliRepo, "--json", PR_FIELDS];
 	const method = argv.slice(0, 3).join(" ");
@@ -352,7 +352,7 @@ async function githubObservation(
 async function gitlabObservation(
 	receipt: LandingReceipt,
 	identity: RemoteIdentity,
-	run: AsyncCliRunner,
+	run: CliRunner,
 ): Promise<PullRequestObservation | CleanupFailure> {
 	const argv = ["glab", "mr", "view", String(receipt.pr.number), "--repo", identity.cliRepo, "--output", "json"];
 	const method = argv.slice(0, 3).join(" ");
@@ -379,7 +379,7 @@ type Observation = { identity: RemoteIdentity; pr: PullRequestObservation };
 
 export async function observePullRequest(
 	receipt: LandingReceipt,
-	run: AsyncCliRunner = runCliAsync,
+	run: CliRunner = runCli,
 	cwd: string = receipt.repo.canonicalRoot,
 	env: NodeJS.ProcessEnv = process.env,
 ): Promise<Observation | CleanupFailure> {
@@ -539,7 +539,7 @@ function verifyArguments(params: DeliveryCleanupParams, receipt: LandingReceipt)
 	return null;
 }
 
-async function runGit(run: AsyncCliRunner, cwd: string, args: string[], timeoutMs = LOCAL_TIMEOUT_MS): Promise<CliResult> {
+async function runGit(run: CliRunner, cwd: string, args: string[], timeoutMs = LOCAL_TIMEOUT_MS): Promise<CliResult> {
 	return run(["git", ...args], { cwd, timeoutMs });
 }
 
@@ -567,7 +567,7 @@ function dirtyPaths(output: string): string[] {
 		.slice(0, MAX_DIRTY_PATHS);
 }
 
-async function verifyCleanTarget(path: string, run: AsyncCliRunner, timeoutMs: number): Promise<CleanupFailure | null> {
+async function verifyCleanTarget(path: string, run: CliRunner, timeoutMs: number): Promise<CleanupFailure | null> {
 	const state = worktreePathState(path);
 	if (state !== "directory") return refuse("worktree.path", `${path} (${state})`, "a present non-symlink directory");
 	const argv = ["status", "--porcelain"];
@@ -580,7 +580,7 @@ async function verifyCleanTarget(path: string, run: AsyncCliRunner, timeoutMs: n
 	return null;
 }
 
-async function verifyPushed(path: string, run: AsyncCliRunner): Promise<CleanupFailure | null> {
+async function verifyPushed(path: string, run: CliRunner): Promise<CleanupFailure | null> {
 	const upstreamArgv = ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"];
 	const upstream = await runGit(run, path, upstreamArgv);
 	if (!completed(upstream) || upstream.stdout.trim() === "") {
@@ -629,7 +629,7 @@ async function verifyLedger(
 	receipt: LandingReceipt,
 	cwd: string,
 	receiptPath: string,
-	run: AsyncCliRunner,
+	run: CliRunner,
 	timeoutMs: number,
 ): Promise<CleanupFailure | null> {
 	const classification = canonicalLedger(cwd);
@@ -727,7 +727,7 @@ export function parseWorktreeList(output: string): WorktreeRecord[] {
 	return records;
 }
 
-async function readWorktrees(cwd: string, run: AsyncCliRunner): Promise<WorktreeRecord[] | CleanupFailure> {
+async function readWorktrees(cwd: string, run: CliRunner): Promise<WorktreeRecord[] | CleanupFailure> {
 	const argv = ["worktree", "list", "--porcelain"];
 	const result = await runGit(run, cwd, argv);
 	if (!completed(result)) return commandFailure("worktree.list", ["git", ...argv], result, "exit 0 porcelain records");
@@ -791,7 +791,7 @@ function storedRecordForTarget(records: WorktreeRecord[], target: string): Workt
 async function verifyTargetIdentity(
 	receipt: LandingReceipt,
 	cwd: string,
-	run: AsyncCliRunner,
+	run: CliRunner,
 ): Promise<TargetIdentity | CleanupFailure> {
 	const path = receipt.worktree.path as string;
 	const listed = await readWorktrees(cwd, run);
@@ -814,7 +814,7 @@ async function verifyTargetIdentity(
 	return { records: listed, target, main };
 }
 
-async function verifyLocalRef(receipt: LandingReceipt, cwd: string, run: AsyncCliRunner): Promise<CleanupFailure | null> {
+async function verifyLocalRef(receipt: LandingReceipt, cwd: string, run: CliRunner): Promise<CleanupFailure | null> {
 	const ref = `${LOCAL_REF_PREFIX}${receipt.branch.name}`;
 	const argv = ["rev-parse", "--verify", ref];
 	const result = await runGit(run, cwd, argv);
@@ -825,7 +825,7 @@ async function verifyLocalRef(receipt: LandingReceipt, cwd: string, run: AsyncCl
 async function revalidateBoundary(
 	receipt: LandingReceipt,
 	cwd: string,
-	run: AsyncCliRunner,
+	run: CliRunner,
 	bounds: CleanupBounds,
 ): Promise<TargetIdentity | CleanupFailure> {
 	const identity = await verifyTargetIdentity(receipt, cwd, run);
@@ -838,7 +838,7 @@ async function revalidateBoundary(
 	return pushed ?? identity;
 }
 
-async function registrationAbsence(cwd: string, trustedPath: string, run: AsyncCliRunner): Promise<Absence> {
+async function registrationAbsence(cwd: string, trustedPath: string, run: CliRunner): Promise<Absence> {
 	const listed = await readWorktrees(cwd, run);
 	if (!Array.isArray(listed)) return "unknown";
 	return storedRecordForTarget(listed, trustedPath) === null ? "absent" : "present";
@@ -853,7 +853,7 @@ function pathAbsence(path: string): Absence {
 	}
 }
 
-async function localRefAbsence(cwd: string, branch: string, run: AsyncCliRunner): Promise<Absence> {
+async function localRefAbsence(cwd: string, branch: string, run: CliRunner): Promise<Absence> {
 	const result = await runGit(run, cwd, ["show-ref", "--verify", "--quiet", `${LOCAL_REF_PREFIX}${branch}`]);
 	if (result.error !== undefined || !result.ok) return "unknown";
 	if (result.exitCode === 0) return "present";
@@ -891,8 +891,8 @@ export async function cleanupDelivery(
 	const bounds: CleanupBounds = { ...CLEANUP_BOUNDS, ...deps.bounds };
 	// `commit` runs the removal and everything after it; `run` carries the signal, so an
 	// interrupt ends whichever read is running and keeps the next one from starting.
-	const commit = deps.run ?? runCliAsync;
-	const run: AsyncCliRunner = (argv, options) => commit(argv, { ...options, signal });
+	const commit = deps.run ?? runCli;
+	const run: CliRunner = (argv, options) => commit(argv, { ...options, signal });
 	const now = deps.now ?? Date.now;
 	const env = deps.env ?? process.env;
 	const resolution = resolveReceipt(params, cwd, env);
@@ -983,7 +983,7 @@ export async function cleanupDelivery(
 	// a surviving worktree: Git needs a repository for the protocol and helper pins the
 	// adapter puts on this read. The verdict comes back as a word, so the URL cannot
 	// reach the receipt or a refusal.
-	const remoteAbsence = await remoteBranchAbsentAsync(observed.identity.remoteUrl, receipt.branch.name, executionCwd, commit);
+	const remoteAbsence = await remoteBranchAbsent(observed.identity.remoteUrl, receipt.branch.name, executionCwd, commit);
 	const issuedAt = nextReceiptEpoch(receipt, now);
 	const verifiedAt = new Date(issuedAt).toISOString();
 	const continued = buildReceipt({

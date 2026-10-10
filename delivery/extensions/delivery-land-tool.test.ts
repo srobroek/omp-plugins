@@ -5,7 +5,7 @@ import { dirname, join } from "node:path";
 import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
 import pkg from "../package.json" with { type: "json" };
 import deliveryLandTool, { beadIdsFromBranch, type LandParams, landPullRequest, resolveLandingTarget } from "./delivery-land-tool.ts";
-import { type AsyncCliRunner, type CliResult, runCliAsync } from "./forge-adapter.ts";
+import { type CliResult, type CliRunner, runCli } from "./forge-adapter.ts";
 import { RECEIPT_SCHEMA, readReceipt, repoKey, writeReceipt } from "./landing-receipt.ts";
 
 type Call = { argv: string[]; cwd: string | undefined; timeoutMs: number; env: Readonly<Record<string, string>> | undefined };
@@ -105,10 +105,10 @@ type Answers = {
  * "no bd argv was issued" observations rather than assertions about intent. An
  * unexpected command fails loudly instead of returning a plausible default.
  */
-function runner(answers: Answers, canonical: string): { run: AsyncCliRunner; calls: Call[] } {
+function runner(answers: Answers, canonical: string): { run: CliRunner; calls: Call[] } {
 	const views = [...(answers.prView ?? [])];
 	const calls: Call[] = [];
-	const run: AsyncCliRunner = (argv, options) => {
+	const run: CliRunner = (argv, options) => {
 		calls.push({ argv: [...argv], cwd: options.cwd, timeoutMs: options.timeoutMs, env: options.env });
 		const command = argv.join(" ");
 		if (command.startsWith("git rev-parse --path-format=absolute --git-common-dir --show-toplevel")) {
@@ -234,10 +234,10 @@ async function landRebase(repo: { canonical: string; receipts: string; head: str
 		},
 		repo.canonical,
 	);
-	const run: AsyncCliRunner = (argv, options) => {
+	const run: CliRunner = (argv, options) => {
 		if (argv[0] !== "git" || argv[1] === "remote" || argv.includes("ls-remote")) return fixture.run(argv, options);
 		fixture.calls.push({ argv: [...argv], cwd: options.cwd, timeoutMs: options.timeoutMs, env: options.env });
-		return runCliAsync(argv, options);
+		return runCli(argv, options);
 	};
 	const outcome = await landPullRequest(
 		{ pr: 470, merge_method: "rebase", expectHeadSha: repo.head },
@@ -852,7 +852,7 @@ describe("delivery_land", () => {
 			},
 			canonical,
 		);
-		const run: AsyncCliRunner = (argv, options) => {
+		const run: CliRunner = (argv, options) => {
 			const repoIndex = argv.indexOf("--repo");
 			if (argv[0] === "glab" && repoIndex >= 0 && argv[repoIndex + 1] === "corp/group/project") {
 				// Model glab treating the first path segment as a configured host alias.
@@ -884,7 +884,7 @@ describe("delivery_land", () => {
 		for (const repo of ["https://github.com/owner/repo", "owner", "owner//repo", "owner/../repo"]) {
 			const { canonical } = repository();
 			const calls: Call[] = [];
-			const run: AsyncCliRunner = (argv, options) => {
+			const run: CliRunner = (argv, options) => {
 				calls.push({ argv: [...argv], cwd: options.cwd, timeoutMs: options.timeoutMs, env: options.env });
 				return { ok: false, exitCode: null, stdout: "", stderr: "", error: "the remote is unreadable" };
 			};
@@ -957,7 +957,7 @@ describe("delivery_land", () => {
 			PATH: "/usr/bin",
 		};
 		const fixture = runner({ prView: [completed(mergedGithubPr())] }, canonical);
-		const run: AsyncCliRunner = (argv, options) => {
+		const run: CliRunner = (argv, options) => {
 			const effectiveEnv = options.env ?? ambient;
 			const redirected = argv[0] === "git" && Object.keys(effectiveEnv).some(key => key === "GIT_DIR" || key === "GIT_WORK_TREE" || key.startsWith("GIT_CONFIG_"));
 			if (!redirected) return fixture.run(argv, options);
@@ -1111,7 +1111,7 @@ describe("delivery_land", () => {
 	test("an unreadable repository refuses before any forge call", async () => {
 		const { canonical } = repository();
 		const calls: Call[] = [];
-		const run: AsyncCliRunner = (argv, options) => {
+		const run: CliRunner = (argv, options) => {
 			calls.push({ argv: [...argv], cwd: options.cwd, timeoutMs: options.timeoutMs, env: options.env });
 			return { ok: false, exitCode: null, stdout: "", stderr: "", error: "spawn git ENOENT" };
 		};

@@ -68,10 +68,10 @@ import type { TSchema } from "@oh-my-pi/pi-ai";
 import type { ExtensionAPI } from "@oh-my-pi/pi-coding-agent";
 import pkg from "../package.json" with { type: "json" };
 import {
-	type AsyncCliRunner,
 	allowMergeCommit,
 	autoDeleteSetting,
 	type CliResult,
+	type CliRunner,
 	enableAutoDelete,
 	FORGE_TIMEOUT_MS,
 	forgeEnvironment,
@@ -83,9 +83,9 @@ import {
 	normalizeRepoPath,
 	REMOTE_NAME,
 	redactRemote,
-	remoteBranchAbsentAsync,
+	remoteBranchAbsent,
 	repoPathFromRemote,
-	runCliAsync,
+	runCli,
 	singleRemoteRecord,
 } from "./forge-adapter.ts";
 import {
@@ -174,7 +174,7 @@ export type LandParams = {
  * merge argv" and "issued no `bd` argv" observable rather than argued.
  */
 export type LandDeps = {
-	run?: AsyncCliRunner;
+	run?: CliRunner;
 	cwd?: string;
 	env?: NodeJS.ProcessEnv;
 	/** The single millisecond the receipt id, `emittedAt`, and every proof timestamp share. */
@@ -316,7 +316,7 @@ function cliFailure(argv: readonly string[], result: CliResult): string | null {
 
 /** Read and normalise one pull request, or say why it could not be read. */
 async function readPr(
-	run: AsyncCliRunner,
+	run: CliRunner,
 	forge: "github" | "gitlab",
 	repo: string,
 	pr: string,
@@ -518,7 +518,7 @@ async function mergeProof(pr: PrObservation, method: MergeMethod | null, git: Gi
 
 /** Exact stdout of one successful local Git read, or null when Git did not complete it. */
 async function gitOutput(
-	run: AsyncCliRunner,
+	run: CliRunner,
 	cwd: string,
 	argv: readonly string[],
 	env: Readonly<Record<string, string>>,
@@ -567,7 +567,7 @@ async function observeRepository(
  * anything that is not exactly one object, so the answer is one whole id or nothing.
  */
 async function worktreeHead(
-	run: AsyncCliRunner,
+	run: CliRunner,
 	path: string,
 	env: Readonly<Record<string, string>>,
 ): Promise<{ head: string } | { reason: string }> {
@@ -774,19 +774,19 @@ export async function resolveLandingTarget(
  */
 export async function landPullRequest(params: LandParams, deps: LandDeps = {}): Promise<LandOutcome> {
 	const { signal } = deps;
-	const baseRun = deps.run ?? runCliAsync;
+	const baseRun = deps.run ?? runCli;
 	// Every child process carries the tool call's signal, so an interrupt ends whichever
 	// command is running and keeps the next one from starting.
-	const run: AsyncCliRunner = (argv, options) => baseRun(argv, { ...options, signal });
+	const run: CliRunner = (argv, options) => baseRun(argv, { ...options, signal });
 	const cwd = deps.cwd ?? process.cwd();
 	const env = deps.env ?? process.env;
 	const forgeEnv = forgeEnvironment(env);
 	const gitEnv = gitObservationEnvironment(env);
 	const git: GitRead = (argv, input) => gitOutput(run, cwd, argv, gitEnv, input);
 	// Every adapter call runs with the same neutralised environment, except where the
-	// adapter passes one of its own: `remoteBranchAbsentAsync` hardens Git's environment
+	// adapter passes one of its own: `remoteBranchAbsent` hardens Git's environment
 	// itself, and that choice belongs to the module that owns the observation.
-	const forgeRun: AsyncCliRunner = (argv, options) => run(argv, { ...options, env: options.env ?? forgeEnv });
+	const forgeRun: CliRunner = (argv, options) => run(argv, { ...options, env: options.env ?? forgeEnv });
 	const now = deps.now?.() ?? Date.now();
 	const observedAt = new Date(now).toISOString();
 	const refuse = (reason: string): LandOutcome => ({ ok: false, reason, text: `delivery_land refused: ${reason}` });
@@ -809,7 +809,7 @@ export async function landPullRequest(params: LandParams, deps: LandDeps = {}): 
 	const resolved = await resolveLandingTarget(params, git, cwd, forgeEnv);
 	if ("reason" in resolved) return refuse(resolved.reason);
 	const { remote, remoteUrl, forge, nameWithOwner, repository, cliRepo, forgeCommandEnv } = resolved;
-	const boundForgeRun: AsyncCliRunner = (argv, options) => run(argv, { ...options, env: options.env ?? forgeCommandEnv });
+	const boundForgeRun: CliRunner = (argv, options) => run(argv, { ...options, env: options.env ?? forgeCommandEnv });
 
 	const first = await readPr(run, forge, cliRepo, number, FORGE_TIMEOUT_MS, forgeCommandEnv);
 	if ("reason" in first) return refuse(first.reason);
@@ -930,7 +930,7 @@ export async function landPullRequest(params: LandParams, deps: LandDeps = {}): 
 
 	// The probe is asked from this call's own working directory: `remote` is a name,
 	// and a name only resolves in the repository that configures it.
-	const verdict = await remoteBranchAbsentAsync(remote, proved.headRefName, cwd, forgeRun, env);
+	const verdict = await remoteBranchAbsent(remote, proved.headRefName, cwd, forgeRun, env);
 	if (verdict !== "absent") {
 		notes.push(
 			`The remote branch ${proved.headRefName} on ${remote} is ${verdict}, not proved absent, so branch.deletedRemote stays false and remoteAbsenceVerifiedAt stays null.`,
