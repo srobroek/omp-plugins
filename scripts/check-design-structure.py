@@ -162,7 +162,6 @@ with TemporaryDirectory(prefix="omp-catalog-probe-") as temporary:
                 expected_local = {
                     json.loads(p.read_text(encoding="utf-8"))["name"]
                     for p in probe.glob("*/.omp-plugin/plugin.json")
-                    if json.loads(p.read_text(encoding="utf-8")).get("publish") is not False
                 }
                 ok = (
                     all(isinstance(p["source"], str) for p in plugins)

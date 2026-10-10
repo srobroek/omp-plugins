@@ -66,8 +66,8 @@ def manifests(repo: Path | None = None) -> list[dict[str, object]]:
             value = manifest.get(field)
             if not isinstance(value, str) or not value.strip():
                 raise SystemExit(f"{path}: {field} must be a non-empty string")
-        if "publish" in manifest and not isinstance(manifest["publish"], bool):
-            raise SystemExit(f"{path}: publish must be a boolean")
+        if "publish" in manifest:
+            raise SystemExit(f"{path}: publish is not a supported field; every plugin manifest is cataloged")
         if "category" in manifest and (
             not isinstance(manifest["category"], str) or not manifest["category"].strip()
         ):
@@ -164,8 +164,6 @@ def build() -> dict[str, object]:
     plugins = []
     local_names = set()
     for manifest in manifests():
-        if manifest.get("publish") is False:
-            continue
         entry = {
             "name": manifest["name"],
             "description": manifest["description"],
