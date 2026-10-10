@@ -31,7 +31,7 @@ import deliveryCleanupTool, {
 	type DeliveryCleanupParams,
 } from "./delivery-cleanup-tool.ts";
 import { landPullRequest } from "./delivery-land-tool.ts";
-import { type AsyncCliRunner, type CliResult, runCliAsync } from "./forge-adapter.ts";
+import { type CliResult, type CliRunner, runCli } from "./forge-adapter.ts";
 import {
 	buildReceipt,
 	type LandingReceipt,
@@ -365,10 +365,10 @@ function remoteUrl(f: Fixture, remote: string, options: RunnerOptions): string |
 	return `https://${host}/${nameWithOwner}.git`;
 }
 
-function runner(f: Fixture, options: RunnerOptions = {}): { run: AsyncCliRunner; calls: string[][]; details: RecordedCall[] } {
+function runner(f: Fixture, options: RunnerOptions = {}): { run: CliRunner; calls: string[][]; details: RecordedCall[] } {
 	const calls: string[][] = [];
 	const details: RecordedCall[] = [];
-	const run: AsyncCliRunner = async (argv, commandOptions) => {
+	const run: CliRunner = async (argv, commandOptions) => {
 		calls.push([...argv]);
 		details.push({ argv: [...argv], cwd: commandOptions.cwd, timeoutMs: commandOptions.timeoutMs, env: commandOptions.env });
 		options.before?.(argv, calls);
@@ -401,7 +401,7 @@ function runner(f: Fixture, options: RunnerOptions = {}): { run: AsyncCliRunner;
 			else if (remote === "present") result = success(`${f.head}\trefs/heads/${f.branch}\n`);
 			else result = { ok: false, exitCode: null, stdout: "", stderr: "", error: "timeout" };
 		} else {
-			result = await runCliAsync(argv, commandOptions);
+			result = await runCli(argv, commandOptions);
 		}
 		if (
 			options.pathlessAfterRemove && argv[0] === "git" && argv[1] === "worktree" && argv[2] === "list" &&
@@ -1292,15 +1292,15 @@ describe("delivery_cleanup irreversible boundary", () => {
  * local bare path, which `detectForge` correctly refuses as no forge; the URL is what
  * the landing classifies, and the remote NAME is what the receipt records.
  */
-function landRunner(f: Fixture): { run: AsyncCliRunner; calls: string[][] } {
+function landRunner(f: Fixture): { run: CliRunner; calls: string[][] } {
 	const calls: string[][] = [];
-	const run: AsyncCliRunner = (argv, options) => {
+	const run: CliRunner = (argv, options) => {
 		calls.push([...argv]);
 		if (argv[0] === "gh" && argv[1] === "pr" && argv[2] === "view") return success(githubPayload(f));
 		if (argv[0] === "gh" && argv[1] === "api") return success("false\n");
 		if (argv[0] === "git" && argv[1] === "remote" && argv[2] === "get-url") return success("https://github.com/owner/repo.git\n");
 		if (argv[0] === "git" && argv.includes("ls-remote")) return success("", 2);
-		return runCliAsync(argv, options);
+		return runCli(argv, options);
 	};
 	return { run, calls };
 }
@@ -1533,7 +1533,7 @@ describe("delivery_cleanup never removes the worktree it was called from", () =>
 		// Classified inside the hook, while the directory still exists: afterwards it is
 		// gone, and "no repository" would be true of any deleted path.
 		const probes: { cwd: string | undefined; key: string | null }[] = [];
-		const run: AsyncCliRunner = (argv, options) => {
+		const run: CliRunner = (argv, options) => {
 			if (argv.includes("ls-remote")) {
 				probes.push({ cwd: options.cwd, key: options.cwd === undefined ? null : repoKey(options.cwd) });
 			}
@@ -1560,7 +1560,7 @@ describe("delivery_cleanup never removes the worktree it was called from", () =>
  */
 describe("delivery_cleanup command bounds and interrupts", () => {
 	/** A command that never answers on its own: only its bound or an interrupt ends it. */
-	const hang = (options: Parameters<AsyncCliRunner>[1]) => runCliAsync(["sleep", "30"], options);
+	const hang = (options: Parameters<CliRunner>[1]) => runCli(["sleep", "30"], options);
 
 	test("each command is bounded by its work, and no mutation or bd read runs under the 2 s ref-read bound", async () => {
 		const f = fixture("bounds");
@@ -1581,7 +1581,7 @@ describe("delivery_cleanup command bounds and interrupts", () => {
 	test("a bd show that hangs past its bound reports the ledger step not done, and nothing is removed", async () => {
 		const f = fixture("hung-bd");
 		const scripted = runner(f);
-		const run: AsyncCliRunner = (argv, options) => (argv[0] === "bd" ? hang(options) : scripted.run(argv, options));
+		const run: CliRunner = (argv, options) => (argv[0] === "bd" ? hang(options) : scripted.run(argv, options));
 		const started = Date.now();
 		const result = await cleanupDelivery({ receipt: f.receiptPath }, f.main, {
 			run,
@@ -1602,7 +1602,7 @@ describe("delivery_cleanup command bounds and interrupts", () => {
 		const f = fixture("interrupted-read");
 		const scripted = runner(f);
 		const controller = new AbortController();
-		const run: AsyncCliRunner = (argv, options) => {
+		const run: CliRunner = (argv, options) => {
 			if (argv[0] !== "bd") return scripted.run(argv, options);
 			setTimeout(() => controller.abort(), 200);
 			return hang(options);
@@ -1627,7 +1627,7 @@ describe("delivery_cleanup command bounds and interrupts", () => {
 		// The second `rev-list --count` is the last read before the removal, so the
 		// abort lands where only the pre-removal check can observe it.
 		let counts = 0;
-		const run: AsyncCliRunner = async (argv, options) => {
+		const run: CliRunner = async (argv, options) => {
 			const result = await scripted.run(argv, options);
 			if (argv[1] === "rev-list" && ++counts === 2) controller.abort();
 			return result;
@@ -1648,7 +1648,7 @@ describe("delivery_cleanup command bounds and interrupts", () => {
 		const scripted = runner(f);
 		const controller = new AbortController();
 		const signalled: { argv: string[]; signal: boolean }[] = [];
-		const run: AsyncCliRunner = (argv, options) => {
+		const run: CliRunner = (argv, options) => {
 			signalled.push({ argv: [...argv], signal: options.signal !== undefined });
 			if (argv[1] === "worktree" && argv[2] === "remove") controller.abort();
 			return scripted.run(argv, options);

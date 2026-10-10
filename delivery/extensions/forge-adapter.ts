@@ -12,7 +12,7 @@
  * shell, so a branch name can never become a command. The one argv-level attack
  * that survives an array — a value starting with `-` that the CLI reads as an
  * option — is rejected before the command is built. Every command runs through
- * {@link runCliAsync}, which an abort signal can end as well as the deadline.
+ * {@link runCli}, which an abort signal can end as well as the deadline.
  *
  * A setting changes only when a caller asks. {@link autoDeleteSetting} reads;
  * {@link enableAutoDelete} writes; nothing in this module calls
@@ -71,7 +71,7 @@ export type CliOptions = { cwd?: string; timeoutMs: number; env?: Readonly<Recor
  * to its stdin. A runner that answers synchronously satisfies this type too, which
  * is what lets a recording test runner answer without awaiting anything.
  */
-export type AsyncCliRunner = (
+export type CliRunner = (
 	argv: string[],
 	options: CliOptions & { signal?: AbortSignal; input?: string },
 ) => CliResult | Promise<CliResult>;
@@ -441,7 +441,7 @@ async function feed(stdin: Bun.FileSink, input: string): Promise<void> {
  * a missing CLI and a hung network are indistinguishable from the caller's point of
  * view — both are simply not an observation.
  */
-export const runCliAsync: AsyncCliRunner = async (argv, options) => {
+export const runCli: CliRunner = async (argv, options) => {
 	if (argv.length === 0) {
 		return { ok: false, exitCode: null, stdout: "", stderr: "", error: "no command to run" };
 	}
@@ -699,7 +699,7 @@ function removeSourceBranchAfterMerge(payload: unknown): boolean | null {
  * `run` receives no `cwd`: both reads name the repository in the request path.
  * A caller that needs one binds it by wrapping the runner.
  */
-export async function autoDeleteSetting(forge: Forge, repo: string, run: AsyncCliRunner = runCliAsync): Promise<"on" | "off" | "unknown"> {
+export async function autoDeleteSetting(forge: Forge, repo: string, run: CliRunner = runCli): Promise<"on" | "off" | "unknown"> {
 	const supported = supportedForge(forge);
 	if (supported === null) return "unknown";
 	const path = normalizeRepoPath(supported, repo);
@@ -740,7 +740,7 @@ export async function autoDeleteSetting(forge: Forge, repo: string, run: AsyncCl
  * the setting is on. A caller that needs proof re-reads with
  * {@link autoDeleteSetting}.
  */
-export async function enableAutoDelete(forge: Forge, repo: string, run: AsyncCliRunner = runCliAsync): Promise<{ ok: boolean; reason?: string }> {
+export async function enableAutoDelete(forge: Forge, repo: string, run: CliRunner = runCli): Promise<{ ok: boolean; reason?: string }> {
 	const supported = supportedForge(forge);
 	if (supported === null) {
 		return {
@@ -801,7 +801,7 @@ function shouldDeleteSourceBranch(options: MergeOptions): boolean {
  *
  * Building the command is all this does. The returned argv is a *request*: a
  * zero exit from it proves the merge, never that the branch is gone. Only
- * {@link remoteBranchAbsentAsync} can answer that.
+ * {@link remoteBranchAbsent} can answer that.
  *
  * An unsupported forge throws rather than returning a guess, because there is no
  * argv that is correct-but-unproven here: any fabricated CLI name would either
@@ -853,7 +853,7 @@ export function mergeArgs(forge: Forge, pr: number | string, options: MergeOptio
  * policy is unknown rather than guessed. A failed or malformed read is also unknown;
  * callers only refuse when the forge explicitly reports `false`.
  */
-export async function allowMergeCommit(forge: Forge, repo: string, run: AsyncCliRunner = runCliAsync): Promise<boolean | "unknown"> {
+export async function allowMergeCommit(forge: Forge, repo: string, run: CliRunner = runCli): Promise<boolean | "unknown"> {
 	const supported = supportedForge(forge);
 	if (supported !== "github") return "unknown";
 	const path = normalizeRepoPath(supported, repo);
@@ -1011,7 +1011,7 @@ function urlProbeEnvironment(
  */
 type AbsenceProbe = { argv: string[]; options: CliOptions; ref: string; dispose: () => void };
 
-/** Prepare the probe {@link remoteBranchAbsentAsync} describes, or null when its answer is already `"unknown"`. */
+/** Prepare the probe {@link remoteBranchAbsent} describes, or null when its answer is already `"unknown"`. */
 function absenceProbe(remoteOrUrl: string, branch: string, cwd: string, environment: NodeJS.ProcessEnv): AbsenceProbe | null {
 	if (!isSafeArgument(remoteOrUrl) || !isValidBranchName(branch)) return null;
 	const ref = `refs/heads/${branch}`;
@@ -1114,11 +1114,11 @@ function absenceProbe(remoteOrUrl: string, branch: string, cwd: string, environm
  *
  * A caller binds its abort signal into `run`, so an interrupt ends a hung probe.
  */
-export async function remoteBranchAbsentAsync(
+export async function remoteBranchAbsent(
 	remoteOrUrl: string,
 	branch: string,
 	cwd: string,
-	run: AsyncCliRunner = runCliAsync,
+	run: CliRunner = runCli,
 	environment: NodeJS.ProcessEnv = process.env,
 ): Promise<"absent" | "present" | "unknown"> {
 	const probe = absenceProbe(remoteOrUrl, branch, cwd, environment);
