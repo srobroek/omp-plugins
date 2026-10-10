@@ -61,7 +61,7 @@
       "name": "delivery",
       "description": "Delivery workflow guidance with pull-request review, landing, cleanup, and hygiene tools.",
       "source": "./delivery",
-      "version": "1.4.2",
+      "version": "1.4.3",
       "category": "devops"
     },
     {
@@ -152,7 +152,7 @@
       "name": "speckit",
       "description": "SpecKit workflow: spec-driven setup, bugfix flow, and tasks.md protection.",
       "source": "./speckit",
-      "version": "0.10.3",
+      "version": "0.10.4",
       "category": "development"
     },
     {

@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.4.3](https://github.com/srobroek/omp-plugins/compare/delivery--v1.4.2...delivery--v1.4.3) (2026-10-10)
+
+
+### Refactors
+
+* **delivery:** drop Async suffix from forge adapter runner names ([#677](https://github.com/srobroek/omp-plugins/issues/677)) ([f64d629](https://github.com/srobroek/omp-plugins/commit/f64d629311498e6f51c3f6e1541b0f8481621191))
+
 ## [1.4.2](https://github.com/srobroek/omp-plugins/compare/delivery--v1.4.1...delivery--v1.4.2) (2026-10-09)
 
 
