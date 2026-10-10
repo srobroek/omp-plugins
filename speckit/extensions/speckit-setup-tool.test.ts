@@ -119,9 +119,8 @@ describe("runSetup skipSpecify", () => {
 		}
 		setPluginRootForTests(plugin);
 		setSpawnForTests((argv) => {
-			if (argv[0] === "which" && argv[1] === "bd") return { exitCode: 0, stdout: "/bin/bd", stderr: "" };
 			if (argv[0] === "bd" && argv[1] === "where") return { exitCode: 0, stdout: dir, stderr: "" };
-			if (argv[0] === "which") return { exitCode: 1, stdout: "", stderr: "" };
+			if (argv[0] === "specify") return { exitCode: 1, stdout: "", stderr: "" };
 			return { exitCode: 0, stdout: "", stderr: "" };
 		});
 	});
@@ -140,13 +139,28 @@ describe("runSetup skipSpecify", () => {
 	});
 
 	test("reports missing specify when not skipped", async () => {
-		setSpawnForTests((argv) => {
-			if (argv[0] === "which") return { exitCode: 1, stdout: "", stderr: "" };
-			return { exitCode: 1, stdout: "", stderr: "" };
-		});
+		setSpawnForTests(() => ({ exitCode: 1, stdout: "", stderr: "" }));
 		const out = await runSetup({ workspace: dir, skipSpecify: false }, "/unused");
 		expect(out.ok).toBe(false);
-		expect(out.text).toContain("specify not on PATH");
+		expect(out.text).toContain("specify not on PATH or does not run");
+	});
+
+	test("reports a PATH shim that resolves but cannot run as missing", async () => {
+		// A mise shim for an uninstalled tool: `which` finds it, every invocation fails.
+		// A child bun, because Bun resolves PATH at startup.
+		const bin = mkdtempSync(join(SAFE_TMPDIR, "skb-"));
+		try {
+			writeFileSync(join(bin, "specify"), "#!/bin/sh\necho 'mise ERROR specify is not installed' >&2\nexit 127\n", { mode: 0o755 });
+			const script = `import { runSetup } from ${JSON.stringify(join(import.meta.dir, "speckit-setup-tool.ts"))};\nconst out = await runSetup({ workspace: ${JSON.stringify(dir)}, skipSpecify: false, skipBeads: true }, "/unused");\nconsole.log(JSON.stringify(out));`;
+			const proc = Bun.spawn([process.execPath, "-e", script], { env: { ...process.env, PATH: `${bin}:/usr/bin:/bin` }, stdout: "pipe", stderr: "pipe" });
+			const [stdout, stderr] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited]);
+			const out = JSON.parse(stdout.trim().split("\n").at(-1) ?? "{}");
+			expect(stderr).toBe("");
+			expect(out.ok).toBe(false);
+			expect(out.text).toContain("specify not on PATH or does not run");
+		} finally {
+			rmSync(bin, { recursive: true, force: true });
+		}
 	});
 
 	test("marks required-operation failures as tool errors", async () => {
@@ -159,7 +173,7 @@ describe("runSetup skipSpecify", () => {
 	test("defaults the workspace to the caller's cwd and resolves a relative one against it", async () => {
 		const cwds: (string | undefined)[] = [];
 		setSpawnForTests((argv, opts) => {
-			if (argv[0] === "bd") cwds.push(opts.cwd);
+			if (argv[0] === "bd" && argv[1] === "where") cwds.push(opts.cwd);
 			return { exitCode: 0, stdout: "", stderr: "" };
 		});
 		expect((await registeredExecute()("test", { skipSpecify: true }, undefined, undefined, { cwd: dir })).details.ok).toBe(true);

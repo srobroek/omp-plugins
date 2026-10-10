@@ -34,8 +34,22 @@ export async function run(argv: string[], cwd: string | undefined, deadline: num
         return { exitCode: 1, stdout: "", stderr: message };
     }
 }
-export async function which(bin: string, deadline: number): Promise<boolean> {
-    return (await run(["which", bin], undefined, deadline)).exitCode === 0;
+/** `specify`/`bd` answer `--version`; `version` and `-h` cover CLIs that reject it. */
+const PROBE_ARGS: readonly (readonly string[])[] = [["--version"], ["version"], ["-h"]];
+
+/**
+ * Why `bin` cannot actually RUN, not merely whether it resolves on PATH: `which`
+ * succeeds for a mise shim whose tool is not installed, and such a shim fails
+ * every probe. Returns null when `bin` runs, else the failure detail; a probe cut
+ * off by the phase deadline says so, because the binary may well be on PATH.
+ */
+export async function unavailable(bin: string, deadline: number): Promise<string | null> {
+    for (const args of PROBE_ARGS) {
+        const r = await run([bin, ...args], undefined, deadline);
+        if (r.exitCode === 0) return null;
+        if (r.exitCode === 124 && Date.now() >= deadline) return `${bin} probe timed out`;
+    }
+    return `${bin} not on PATH or does not run`;
 }
 
 export const FORMULAS = [
@@ -233,7 +247,8 @@ export async function runSetup(params: SetupParams, cwd: string): Promise<SetupR
         else {
             current = "specify";
             const deadline = budget();
-            if (!(await which("specify", deadline))) return fail("specify not on PATH");
+            const specifyMissing = await unavailable("specify", deadline);
+            if (specifyMissing) return fail(specifyMissing);
             const ver = await run(["specify", "--version"], repo, deadline);
             if (ver.exitCode !== 0 || !specifyVersionOk(`${ver.stdout}\n${ver.stderr}`)) return fail(`specify-cli >= 0.12.0 required. Got: ${ver.stdout || ver.stderr}`);
             record(current, "done", ver.stdout.trim());
@@ -276,7 +291,8 @@ export async function runSetup(params: SetupParams, cwd: string): Promise<SetupR
         if (params.skipBeads) record(current, "skipped", "beads explicitly omitted; molecule workflows are unavailable");
         else {
             const deadline = budget();
-            if (!(await which("bd", deadline))) return fail("bd not on PATH; install beads or explicitly set skipBeads=true for SpecKit-only setup");
+            const bdMissing = await unavailable("bd", deadline);
+            if (bdMissing) return fail(`${bdMissing}; install beads or explicitly set skipBeads=true for SpecKit-only setup`);
             const where = await run(["bd", "where"], repo, deadline);
             if (where.exitCode === 0) record(current, "skipped", "beads workspace already present");
             else {
