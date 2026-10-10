@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.4.2](https://github.com/srobroek/omp-plugins/compare/whats-new--v0.4.1...whats-new--v0.4.2) (2026-10-10)
+
+
+### Bug Fixes
+
+* **deps:** bump smol-toml from 1.8.0 to 1.9.0 in /whats-new ([118d02a](https://github.com/srobroek/omp-plugins/commit/118d02aa663fe5f43f958be456fd6edfb8540e2b))
+
 ## [0.4.1](https://github.com/srobroek/omp-plugins/compare/whats-new--v0.4.0...whats-new--v0.4.1) (2026-10-08)
 
 
