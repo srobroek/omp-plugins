@@ -1,6 +1,6 @@
 {
   "name": "delivery",
   "description": "Delivery workflow guidance with pull-request review, landing, cleanup, and hygiene tools.",
-  "version": "1.4.2",
+  "version": "1.4.3",
   "category": "devops"
 }

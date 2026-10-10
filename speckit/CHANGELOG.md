@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.10.4](https://github.com/srobroek/omp-plugins/compare/speckit--v0.10.3...speckit--v0.10.4) (2026-10-10)
+
+
+### Bug Fixes
+
+* **speckit:** probe that specify and bd run, not just resolve on PATH ([#676](https://github.com/srobroek/omp-plugins/issues/676)) ([66d5537](https://github.com/srobroek/omp-plugins/commit/66d5537981669b9a87545dd3ebf8225140671d4c))
+
 ## [0.10.3](https://github.com/srobroek/omp-plugins/compare/speckit--v0.10.2...speckit--v0.10.3) (2026-10-09)
 
 
