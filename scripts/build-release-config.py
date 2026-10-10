@@ -40,12 +40,7 @@ BASE = {
 
 def plugin_versions() -> dict[str, str]:
     catalog = runpy.run_path(str(Path(__file__).with_name("build-catalog.py")))
-    # An unpublished plugin is absent from the catalogs; releasing it would still tag it.
-    return {
-        manifest["name"]: manifest["version"]
-        for manifest in catalog["manifests"](REPO)
-        if manifest.get("publish", True)
-    }
+    return {manifest["name"]: manifest["version"] for manifest in catalog["manifests"](REPO)}
 
 
 def build() -> tuple[str, str]:
