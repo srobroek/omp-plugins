@@ -68,7 +68,7 @@
       "name": "dep-update",
       "description": "Classify dependency updates by semver safety and produce a cited upgrade plan.",
       "source": "./dep-update",
-      "version": "0.8.2",
+      "version": "0.8.3",
       "category": "development"
     },
     {
@@ -173,7 +173,7 @@
       "name": "whats-new",
       "description": "Research breaking changes, deprecations, and new features between two versions.",
       "source": "./whats-new",
-      "version": "0.4.1",
+      "version": "0.4.2",
       "category": "productivity"
     },
     {

@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.8.3](https://github.com/srobroek/omp-plugins/compare/dep-update--v0.8.2...dep-update--v0.8.3) (2026-10-10)
+
+
+### Bug Fixes
+
+* **deps:** bump smol-toml from 1.8.0 to 1.9.0 in /dep-update ([cd578d5](https://github.com/srobroek/omp-plugins/commit/cd578d5ed9b2edba18edd1b9a536664136dec310))
+
 ## [0.8.2](https://github.com/srobroek/omp-plugins/compare/dep-update--v0.8.1...dep-update--v0.8.2) (2026-10-09)
 
 
