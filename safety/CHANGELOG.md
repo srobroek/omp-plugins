@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.9.1](https://github.com/srobroek/omp-plugins/compare/safety--v0.9.0...safety--v0.9.1) (2026-10-12)
+
+
+### Bug Fixes
+
+* **safety:** agree branch-delete headless reason verb with branch count ([#685](https://github.com/srobroek/omp-plugins/issues/685)) ([2079687](https://github.com/srobroek/omp-plugins/commit/20796876d0edfe9df53cd056bafcfe25c8ae34e7))
+
 ## [0.9.0](https://github.com/srobroek/omp-plugins/compare/safety--v0.8.4...safety--v0.9.0) (2026-10-12)
 
 
