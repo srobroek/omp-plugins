@@ -1,6 +1,7 @@
 import { realpathSync } from "node:fs";
 import { resolve } from "node:path";
 import type { ExtensionAPI, ToolCallEvent } from "@oh-my-pi/pi-coding-agent";
+import { ProbeTimeout, spawnBudget } from "./spawn-budget.ts";
 
 /**
  * Refuse a worktree removal that would leave a commit unreachable.
@@ -19,9 +20,6 @@ import type { ExtensionAPI, ToolCallEvent } from "@oh-my-pi/pi-coding-agent";
  * refused, while every other bash call is left alone (`skill://omp-extension-safety`).
  */
 
-/** Per git call, and for every git call one bash command triggers: tool_call handlers get 30 s. */
-const TIMEOUT_MS = 5_000;
-const BUDGET_MS = 25_000;
 const MAX_COMMAND_LENGTH = 64_000;
 
 /** Wrappers that pass their tail through to another command. */
@@ -199,8 +197,6 @@ export type GitProbe = {
 	start?: () => void;
 };
 
-export class ProbeTimeout extends Error {}
-
 export function parseWorktreeList(porcelain: string): WorktreeRecord[] {
 	const records: WorktreeRecord[] = [];
 	let current: WorktreeRecord | null = null;
@@ -254,27 +250,14 @@ export function reviewRemoval(removal: Removal, cwd: string, probe: GitProbe): s
 }
 
 export function defaultProbe(bounds: { timeoutMs?: number; budgetMs?: number } = {}): GitProbe {
-	const timeoutMs = bounds.timeoutMs ?? TIMEOUT_MS;
-	const budgetMs = bounds.budgetMs ?? BUDGET_MS;
-	let deadline = Date.now() + budgetMs;
+	const budget = spawnBudget(bounds);
 	// Output of a git call, or null when it fails; throws ProbeTimeout when the call or budget runs out.
 	const git = (args: string[], cwd: string): string | null => {
-		const remaining = deadline - Date.now();
-		if (remaining <= 0) throw new ProbeTimeout(`git ${args[0]} ${args[1]}`);
-		const limit = Math.min(timeoutMs, remaining);
-		let proc: ReturnType<typeof Bun.spawnSync>;
-		try {
-			proc = Bun.spawnSync(["git", ...args], { cwd, stdout: "pipe", stderr: "pipe", timeout: limit });
-		} catch {
-			return null;
-		}
-		if (proc.exitedDueToTimeout) throw new ProbeTimeout(`git ${args[0]} ${args[1]}`);
-		return proc.exitCode === 0 ? (proc.stdout?.toString() ?? "") : null;
+		const result = budget.run(["git", ...args], cwd);
+		return result?.exitCode === 0 ? result.stdout : null;
 	};
 	return {
-		start: () => {
-			deadline = Date.now() + budgetMs;
-		},
+		start: budget.start,
 		list: (cwd) => {
 			const out = git(["worktree", "list", "--porcelain"], cwd);
 			return out === null ? null : parseWorktreeList(out);
