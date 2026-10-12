@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.9.0](https://github.com/srobroek/omp-plugins/compare/safety--v0.8.4...safety--v0.9.0) (2026-10-12)
+
+
+### Features
+
+* **safety:** ask before force-deleting a branch whose work has not landed ([#683](https://github.com/srobroek/omp-plugins/issues/683)) ([06463ba](https://github.com/srobroek/omp-plugins/commit/06463baaaff9490ea88af2eb6c6c71c99b9d938b))
+
 ## [0.8.4](https://github.com/srobroek/omp-plugins/compare/safety--v0.8.3...safety--v0.8.4) (2026-10-09)
 
 
