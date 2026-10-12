@@ -450,7 +450,9 @@ function parseNumber(ctx, startPtr, startChr, sign, endChr) {
       state = 2;
     else if ((state === 1 || state === 3) && (c === 101 || c === 69))
       state = 4;
-    else if (state === 4 && (c === 43 || c === 45)) {} else if (!isDigit(c))
+    else if (state === 4 && (c === 43 || c === 45)) {
+      state = 6;
+    } else if (!isDigit(c))
       TomlError.x(`illegal character in numeric literal`, ctx);
     else if (state > 9)
       state -= 11;
