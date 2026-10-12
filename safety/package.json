@@ -12,6 +12,6 @@
       "./extensions/branch-delete-gate.ts"
     ]
   },
-  "version": "0.9.0",
+  "version": "0.9.1",
   "description": "Defence-in-depth advisories for destructive commands, attribution, and remote execution."
 }
