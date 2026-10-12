@@ -781,7 +781,8 @@ function cwdOf(input: Record<string, unknown>, sessionCwd: string): string {
 }
 
 export function headlessReason(verdict: Extract<Verdict, { action: "confirm" }>): string {
-	return `${PREFIX}: ${verdict.branches.join(", ")} ${verdict.branches.length === 1 ? "is" : "are"} not proven landed and need the owner's confirmation, but this session has no interactive UI.\n\n${verdict.message}`;
+	const one = verdict.branches.length === 1;
+	return `${PREFIX}: ${verdict.branches.join(", ")} ${one ? "is" : "are"} not proven landed and ${one ? "needs" : "need"} the owner's confirmation, but this session has no interactive UI.\n\n${verdict.message}`;
 }
 
 export default function branchDeleteGate(pi: ExtensionAPI, options: GateOptions = {}): void {
