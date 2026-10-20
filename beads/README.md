@@ -30,6 +30,8 @@ The write runner is registered as the package program and must remain available.
 
 `bash-gates` gives each tool call one 25-second budget that gate admission and every gate share, so a slow lookup is refused with that gate's own reason before OMP's 30-second handler limit. When a spawned task executor ends, the lifecycle releases its claims within the 30-second `agent_end` limit; a claim whose release cannot be verified in time is reported to the session that spawned the executor, with the guarded release command.
 
+The binary-hook guard checks Git's effective hook directory before `bd init` or `bd hooks install`. When it finds a non-text executable, it adds `--skip-hooks` to `bd init` or blocks hook installation so the existing hooks remain intact. At session start it advises manual repair if `.beads/hooks` contains a changed Beads hook alongside a binary `.backup`: `git config --local --unset core.hooksPath` restores the system/global hook directory; `bd hooks uninstall` is optional. The plugin never runs that repair automatically.
+
 ## Removed surface
 
 Only the direct `bd` workflow and the store-safety controls remain; the package no longer includes the removed workflow and advisory surface.
