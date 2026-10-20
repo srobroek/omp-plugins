@@ -24,7 +24,12 @@ jobs:
           sudo install -m 0755 /tmp/bd /usr/local/bin/bd
           bd version
       - name: Bootstrap ledger for read-only query
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
+          # bd init records an SSH sync remote, and the runner has no SSH key: read it over HTTPS with the job token.
+          git config --global url."https://x-access-token:${GH_TOKEN}@github.com/".insteadOf "ssh://git@github.com/"
+          git config --global --add url."https://x-access-token:${GH_TOKEN}@github.com/".insteadOf "git@github.com:"
           git ls-remote origin refs/dolt/data | grep -q .
           bd bootstrap --yes
       - name: Report stale in-progress bead branches

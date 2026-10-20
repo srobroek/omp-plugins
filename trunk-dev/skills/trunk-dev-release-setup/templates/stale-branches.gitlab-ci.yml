@@ -13,6 +13,10 @@ stale-bead-branches:
     - tar -xzf /tmp/bd.tar.gz -C /tmp
     - install -m 0755 /tmp/bd /usr/local/bin/bd
     - bd version
+    # bd init records an SSH sync remote, and the runner has no SSH key: read it over HTTPS with the job token.
+    # CI_SERVER_SHELL_SSH_HOST covers instances whose SSH host differs from the web host.
+    - git config --global url."https://gitlab-ci-token:${CI_JOB_TOKEN}@${CI_SERVER_HOST}/".insteadOf "ssh://git@${CI_SERVER_SHELL_SSH_HOST:-$CI_SERVER_HOST}/"
+    - git config --global --add url."https://gitlab-ci-token:${CI_JOB_TOKEN}@${CI_SERVER_HOST}/".insteadOf "git@${CI_SERVER_SHELL_SSH_HOST:-$CI_SERVER_HOST}:"
     - git ls-remote origin refs/dolt/data | grep -q .
     - bd bootstrap --yes
   script:
