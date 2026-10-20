@@ -6,7 +6,8 @@
   "omp": {
     "extensions": [
       "./extensions/trunk-dev-commit-gate.ts",
-      "./extensions/trunk-dev-mr-advisory.ts"
+		"./extensions/trunk-dev-mr-advisory.ts",
+		"./extensions/trunk-dev-beads.ts"
     ]
   }
 }

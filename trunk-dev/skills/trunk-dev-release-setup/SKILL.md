@@ -60,6 +60,17 @@ Configure the git plugin to use a message such as `chore(release): ${nextRelease
 2. Test the complete local release in a throwaway bare Git repository: create a minimal history and baseline tag, run semantic-release, and verify the release commit and synchronized manifests. Remove the GitLab/GitHub forge plugin for this local run so it does not make a network release. Do not use a production checkout or real release credentials as the throwaway target.
 3. Run the first protected-default-branch pipeline with the configured project access token. Confirm the job's authorization output includes **`Allowed to push`**, and inspect the resulting commit/tag/release and pipeline state. If this is absent, stop and fix token identity, scopes, protection, or job rules before retrying.
 
+
+## Daily stale-branch digest (optional)
+
+If the repository wants a daily stale-branch report beyond the session-start reminder, copy the matching template from `skills/trunk-dev-release-setup/templates/` into the target repository and create a daily pipeline schedule (GitLab) or use the GitHub Actions daily `on: schedule` plus `workflow_dispatch` entry already in the template:
+
+- `stale-branches.gitlab-ci.yml` for GitLab CI.
+- `stale-branches.github.yml` for GitHub Actions.
+
+Both templates pin the official Beads CLI release binary to `bd` 1.3.1 (minimum 1.3.0; see the [Beads v1.3.1 release](https://github.com/gastownhall/beads/releases/tag/v1.3.1) and [official installation guide](https://github.com/gastownhall/beads/blob/main/docs/getting-started/installation.md)). They verify that `origin` has `refs/dolt/data`, then run `bd bootstrap --yes` to clone the remote ledger into the ephemeral CI checkout. This bootstrap is read-only with respect to the shared remote: it fetches/initializes a local copy and does not push or mutate the ledger. The job then runs `bd --readonly list --status in_progress --has-metadata-key branch --json --limit 0`, filters native `started_at` timestamps older than `TRUNK_DEV_STALE_HOURS` (default 48) with `jq`, and prints one stale list. GitHub writes it to `$GITHUB_STEP_SUMMARY`; GitLab preserves it in the job log.
+
+The scheduled job deliberately exits non-zero if any branch is stale. That failed-job notification is the sink: GitLab emails the schedule owner and GitHub notifies the workflow's schedule owner on failure. The templates' sink/reporting step is clearly marked and replaceable if a repository chooses another destination. No webhook, notification integration, or protected notification token is required. `bd` plus read access to the ledger's Git remote are required in the runner.
 ## Alternatives
 
 On GitHub, release-please is an alternative for maintainers who prefer a reviewed release PR with version and changelog updates. Merging that PR creates the release. GitLab does not support release-please.

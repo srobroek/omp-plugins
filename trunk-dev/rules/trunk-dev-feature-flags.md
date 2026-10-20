@@ -26,6 +26,7 @@ A `feat` MR/PR names a real flag; `Flag: none` is not valid for it. Do not retyp
 ## Lifecycle and testing
 
 - Temporary flags default off. Name one owner for rollout and removal. State a concrete removal date. When the owner finishes rollout or abandons the feature, they open a cleanup MR/PR and remove the flag and dead path.
+- When a flagged `feat` PR/MR merges, trunk-dev creates a cleanup chore bead due on the recorded removal date. The named owner closes that chore with the flag-removal PR.
 - CI tests both disabled and enabled states. Test flagged behavior in both states. Include relevant interactions when flags combine.
 - To run unreleased flagged work locally, install the MR branch or pinned commit SHA. Enable the flag through an environment variable or local config, for example `FEATURE_FLAG_NAME=1`. Pre-merge previews also install the MR/PR branch or pinned SHA, or use a CI artifact built from that SHA. Do not use a moving `next`/`rc` branch: it can include unrelated changes and obscures the tested revision.
 - Start with an environment variable, command-line option, or config value. Adopt OpenFeature or a hosted service only when multiple providers or centralized targeting justify the added machinery.
