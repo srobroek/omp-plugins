@@ -93,6 +93,20 @@ function putBinaryHook(path: string): void {
 		} finally { rmSync(root, { recursive: true, force: true }); }
 	});
 
+	test("session advisory resolves an absolute hooksPath through symlinked temp paths", () => {
+		// On macOS TMPDIR lives under /var, a symlink to /private/var; git reports the real form.
+		const root = scratch();
+		try {
+			git(root, "init", "-q");
+			const hooks = join(root, ".beads", "hooks");
+			mkdirSync(hooks, { recursive: true });
+			putBinaryHook(join(hooks, "pre-commit.backup"));
+			writeFileSync(join(hooks, "pre-commit"), "bd-added-bytes");
+			git(root, "config", "--local", "core.hooksPath", hooks);
+			expect(binaryHooksRepairAdvisory(root)).toContain("git config --local --unset core.hooksPath");
+		} finally { rmSync(root, { recursive: true, force: true }); }
+	});
+
 	test("bash gate output adds skip hooks for a real Mach-O hook and leaves scripts unchanged", async () => {
 		const { root, hooks } = repoWithHooks();
 		const handlers: Record<string, (event: unknown, ctx: unknown) => unknown> = {};

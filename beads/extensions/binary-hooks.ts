@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { closeSync, existsSync, openSync, readdirSync, readFileSync, readSync, statSync } from "node:fs";
+import { closeSync, existsSync, openSync, readdirSync, readFileSync, readSync, realpathSync, statSync } from "node:fs";
 import { isAbsolute, join, resolve, sep } from "node:path";
 import { parse, parsedInvocations } from "./shell-command.ts";
 
@@ -204,9 +204,14 @@ function localHookDirectory(cwd: string, git: GitRunner): string | undefined {
 	return isAbsolute(configured.stdout) ? configured.stdout : resolve(root.stdout, configured.stdout);
 }
 
+/** Containment on resolved real paths: `/tmp` and `/var` are symlinks on macOS, and git reports the real form. */
+function realPath(path: string): string {
+	try { return realpathSync(path); } catch { return resolve(path); }
+}
+
 function isInside(path: string, directory: string): boolean {
-	const target = resolve(path);
-	const base = resolve(directory);
+	const target = realPath(path);
+	const base = realPath(directory);
 	return target === base || target.startsWith(`${base}${sep}`);
 }
 

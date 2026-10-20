@@ -2129,7 +2129,7 @@ function decideBdUpdateCloseParsed(parsed) {
 
 // extensions/binary-hooks.ts
 import { spawnSync as spawnSync3 } from "child_process";
-import { closeSync as closeSync2, existsSync as existsSync2, openSync as openSync2, readdirSync as readdirSync2, readFileSync as readFileSync3, readSync, statSync as statSync3 } from "fs";
+import { closeSync as closeSync2, existsSync as existsSync2, openSync as openSync2, readdirSync as readdirSync2, readFileSync as readFileSync3, readSync, realpathSync as realpathSync3, statSync as statSync3 } from "fs";
 import { isAbsolute as isAbsolute3, join as join2, resolve as resolve5, sep as sep2 } from "path";
 var BINARY_MAGICS = [
   [254, 237, 250, 206],
@@ -2340,7 +2340,7 @@ function protectBinaryHookCommands(input, command, cwd, git = runGit) {
 }
 
 // extensions/session-beads-lifecycle.ts
-import { existsSync as existsSync3, readFileSync as readFileSync4, realpathSync as realpathSync3, rmSync, statSync as statSync4 } from "fs";
+import { existsSync as existsSync3, readFileSync as readFileSync4, realpathSync as realpathSync4, rmSync, statSync as statSync4 } from "fs";
 import { dirname as dirname3, isAbsolute as isAbsolute4, join as join3, resolve as resolve6 } from "path";
 var EMBEDDED_PIN_ENV = { BEADS_DOLT_SHARED_SERVER: "" };
 function boundedBdEnvironment(base) {
@@ -2588,7 +2588,7 @@ function bashCallCwd(input, fallback) {
 }
 function canonicalStore2(path) {
   try {
-    return realpathSync3(path);
+    return realpathSync4(path);
   } catch {
     return resolve6(path);
   }

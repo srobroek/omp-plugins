@@ -1,6 +1,6 @@
 // @bun
 // extensions/session-beads-lifecycle.ts
-import { existsSync as existsSync3, readFileSync as readFileSync3, realpathSync as realpathSync3, rmSync, statSync as statSync4 } from "fs";
+import { existsSync as existsSync3, readFileSync as readFileSync3, realpathSync as realpathSync4, rmSync, statSync as statSync4 } from "fs";
 import { dirname as dirname3, isAbsolute as isAbsolute4, join as join3, resolve as resolve6 } from "path";
 
 // extensions/bd-actor-gate.ts
@@ -1647,7 +1647,7 @@ function claimResultOutput(event) {
 
 // extensions/binary-hooks.ts
 import { spawnSync as spawnSync3 } from "child_process";
-import { closeSync as closeSync2, existsSync as existsSync2, openSync as openSync2, readdirSync as readdirSync2, readFileSync as readFileSync2, readSync, statSync as statSync3 } from "fs";
+import { closeSync as closeSync2, existsSync as existsSync2, openSync as openSync2, readdirSync as readdirSync2, readFileSync as readFileSync2, readSync, realpathSync as realpathSync3, statSync as statSync3 } from "fs";
 import { isAbsolute as isAbsolute3, join as join2, resolve as resolve5, sep as sep2 } from "path";
 var BINARY_MAGICS = [
   [254, 237, 250, 206],
@@ -1692,9 +1692,16 @@ function localHookDirectory(cwd, git) {
     return;
   return isAbsolute3(configured.stdout) ? configured.stdout : resolve5(root.stdout, configured.stdout);
 }
+function realPath(path) {
+  try {
+    return realpathSync3(path);
+  } catch {
+    return resolve5(path);
+  }
+}
 function isInside(path, directory) {
-  const target = resolve5(path);
-  const base = resolve5(directory);
+  const target = realPath(path);
+  const base = realPath(directory);
   return target === base || target.startsWith(`${base}${sep2}`);
 }
 function binaryHooksRepairAdvisory(cwd, git = runGit) {
@@ -2272,7 +2279,7 @@ function commandSucceeded(event) {
 }
 function canonicalStore2(path) {
   try {
-    return realpathSync3(path);
+    return realpathSync4(path);
   } catch {
     return resolve6(path);
   }
@@ -2917,7 +2924,7 @@ function sessionBeadsLifecycle(pi) {
     const localStore = join3(resolve6(cwd), ".beads");
     const local = (() => {
       try {
-        return statSync4(localStore).isDirectory() ? realpathSync3(localStore) : undefined;
+        return statSync4(localStore).isDirectory() ? realpathSync4(localStore) : undefined;
       } catch {
         return;
       }
