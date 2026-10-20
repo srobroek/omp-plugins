@@ -33,7 +33,7 @@
       "name": "beads",
       "description": "Beads issue tracking: dependency DAGs, formulas, and decisions recorded as beads.",
       "source": "./beads",
-      "version": "4.1.5",
+      "version": "4.1.6",
       "category": "productivity"
     },
     {
@@ -166,7 +166,7 @@
       "name": "trunk-dev",
       "description": "Trunk-based delivery and release automation: small batches, merge-request CI, feature-flag decisions, Conventional Commit releases, and protected-branch enforcement.",
       "source": "./trunk-dev",
-      "version": "0.1.0",
+      "version": "0.2.0",
       "category": "devops"
     },
     {
