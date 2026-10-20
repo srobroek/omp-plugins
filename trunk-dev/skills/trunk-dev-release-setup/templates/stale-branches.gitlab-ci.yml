@@ -1,5 +1,7 @@
 # Replaceable sink: failing this scheduled job uses GitLab's failure notification to email the schedule owner.
 stale-bead-branches:
+  # The before_script uses apt-get; pin a Debian image instead of relying on the runner default.
+  image: debian:bookworm-slim
   variables:
     TRUNK_DEV_STALE_HOURS: "48"
     BD_VERSION: "1.3.1"

@@ -1,5 +1,7 @@
 import { describe, expect, test } from "bun:test";
-import { createCleanup, decideFlagCleanup, decideStaleReminder, mergedForgeData, staleThresholdHours } from "./trunk-dev-beads.ts";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import { createCleanup, decideFlagCleanup, decideMissingStaleJob, decideStaleReminder, forgeFromRemote, mergedForgeData, staleThresholdHours } from "./trunk-dev-beads.ts";
 
 const now = Date.parse("2026-10-20T12:00:00.000Z");
 const bead = (id: string, started: string, branch = "feat/example", assignee = "agent") => ({
@@ -135,5 +137,31 @@ describe("mergedForgeData", () => {
 		const mr = { title: flagTitle, description: flagBody, web_url: "https://gitlab.example/acme/repo/-/merge_requests/7", source_branch: "feat/x", state: "merged" };
 		expect(mergedForgeData(JSON.stringify(mr), "glab")).toMatchObject({ body: flagBody, branch: "feat/x" });
 		expect(mergedForgeData(JSON.stringify({ ...mr, state: "opened" }), "glab")).toBeUndefined();
+	});
+});
+
+describe("stale-branch CI job check", () => {
+	test("detects GitHub and GitLab remotes, including self-hosted GitLab and scp-style URLs", () => {
+		expect(forgeFromRemote("git@github.com:srobroek/omp-plugins.git")).toBe("github");
+		expect(forgeFromRemote("https://github.com/acme/repo")).toBe("github");
+		expect(forgeFromRemote("ssh://git@ssh.gitlab.aws.dev/sjors/repo.git")).toBe("gitlab");
+		expect(forgeFromRemote("https://oauth2:token@gitlab.com/acme/repo.git")).toBe("gitlab");
+		expect(forgeFromRemote("https://bitbucket.org/acme/repo.git")).toBeUndefined();
+		expect(forgeFromRemote("/local/path")).toBeUndefined();
+	});
+
+	test("reports a missing job per forge and stays silent once the job is defined", () => {
+		expect(decideMissingStaleJob("github", ["name: CI\njobs:\n  test:\n    runs-on: ubuntu-latest\n"])).toContain("scheduled GitHub workflow");
+		expect(decideMissingStaleJob("gitlab", [])).toContain("GitLab job plus pipeline schedule");
+		expect(decideMissingStaleJob("github", ["jobs:\n  stale-bead-branches:\n    runs-on: ubuntu-latest\n"])).toBeUndefined();
+		expect(decideMissingStaleJob("gitlab", ["stale-bead-branches:\n  image: debian\n"])).toBeUndefined();
+		expect(decideMissingStaleJob("gitlab", ["# mentions stale-bead-branches: in a comment only\n"])).toContain("no daily");
+		expect(decideMissingStaleJob(undefined, [])).toBeUndefined();
+	});
+
+	test("the shipped GitHub and GitLab templates satisfy the check", () => {
+		const template = (name: string) => readFileSync(join(import.meta.dir, "..", "skills", "trunk-dev-release-setup", "templates", name), "utf8");
+		expect(decideMissingStaleJob("github", [template("stale-branches.github.yml")])).toBeUndefined();
+		expect(decideMissingStaleJob("gitlab", [template("stale-branches.gitlab-ci.yml")])).toBeUndefined();
 	});
 });

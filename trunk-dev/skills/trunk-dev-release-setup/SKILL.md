@@ -1,6 +1,6 @@
 ---
 name: trunk-dev-release-setup
-description: Set up semantic-release on GitLab or GitHub with compatible Conventional Commit analysis, synchronized version manifests, protected-branch credentials, and a verified first release.
+description: Set up semantic-release on GitLab or GitHub with Conventional Commits, synchronized manifests, and protected credentials, plus the daily stale-branch job for Beads repositories.
 ---
 
 # Set up semantic-release
@@ -8,6 +8,7 @@ description: Set up semantic-release on GitLab or GitHub with compatible Convent
 TRIGGER
 + Configure automated releases from Conventional Commits on GitLab or GitHub.
 + Add or debug semantic-release, release-note generation, multi-manifest version synchronization, or its CI credentials.
++ Set up or review CI in a repository with a Beads ledger (`.beads/`), or act on the trunk-dev reminder that its daily stale-branch job is missing.
 - GitLab does not support release-please; use semantic-release for GitLab release automation.
 - On GitHub, release-please is an alternative that opens a release PR rather than releasing directly from each qualifying merge.
 
@@ -61,16 +62,26 @@ Configure the git plugin to use a message such as `chore(release): ${nextRelease
 3. Run the first protected-default-branch pipeline with the configured project access token. Confirm the job's authorization output includes **`Allowed to push`**, and inspect the resulting commit/tag/release and pipeline state. If this is absent, stop and fix token identity, scopes, protection, or job rules before retrying.
 
 
-## Daily stale-branch digest (optional)
+## 7. Add the daily stale-branch job (Beads repositories)
 
-If the repository wants a daily stale-branch report beyond the session-start reminder, copy the matching template from `skills/trunk-dev-release-setup/templates/` into the target repository and create a daily pipeline schedule (GitLab) or use the GitHub Actions daily `on: schedule` plus `workflow_dispatch` entry already in the template:
+Every repository with a Beads ledger gets this job, on GitHub and on GitLab. The trunk-dev session-start check reports a repository that lacks it. Copy the matching template from `skills/trunk-dev-release-setup/templates/` without renaming its `stale-bead-branches` job, because the session check looks for that job name.
 
-- `stale-branches.gitlab-ci.yml` for GitLab CI.
-- `stale-branches.github.yml` for GitHub Actions.
+**GitHub.**
 
-Both templates pin the official Beads CLI release binary to `bd` 1.3.1 (minimum 1.3.0; see the [Beads v1.3.1 release](https://github.com/gastownhall/beads/releases/tag/v1.3.1) and [official installation guide](https://github.com/gastownhall/beads/blob/main/docs/getting-started/installation.md)). They verify that `origin` has `refs/dolt/data`, then run `bd bootstrap --yes` to clone the remote ledger into the ephemeral CI checkout. This bootstrap is read-only with respect to the shared remote: it fetches/initializes a local copy and does not push or mutate the ledger. The job then runs `bd --readonly list --status in_progress --has-metadata-key branch --json --limit 0`, filters native `started_at` timestamps older than `TRUNK_DEV_STALE_HOURS` (default 48) with `jq`, and prints one stale list. GitHub writes it to `$GITHUB_STEP_SUMMARY`; GitLab preserves it in the job log.
+1. Copy `stale-branches.github.yml` to `.github/workflows/trunk-dev-stale-branches.yml` and merge it through an MR/PR.
+2. The template's `on: schedule` cron starts the daily run once the workflow is on the default branch. No separate schedule object exists.
+3. Verify with `gh workflow run trunk-dev-stale-branches.yml`, then `gh run watch`.
 
-The scheduled job deliberately exits non-zero if any branch is stale. That failed-job notification is the sink: GitLab emails the schedule owner and GitHub notifies the workflow's schedule owner on failure. The templates' sink/reporting step is clearly marked and replaceable if a repository chooses another destination. No webhook, notification integration, or protected notification token is required. `bd` plus read access to the ledger's Git remote are required in the runner.
+**GitLab.**
+
+1. Add the `stale-bead-branches` job from `stale-branches.gitlab-ci.yml` to `.gitlab-ci.yml`, directly or through `include: local:`, and merge it through an MR.
+2. Create the schedule: `glab schedule create --cron "17 9 * * *" --cronTimeZone UTC --ref <default-branch> --description "trunk-dev stale branches"`.
+3. Verify with `glab schedule list`, then `glab schedule run <id>`, and read the job log.
+
+Both templates pin the official Beads CLI release binary to `bd` 1.3.1 (minimum 1.3.0; see the [Beads v1.3.1 release](https://github.com/gastownhall/beads/releases/tag/v1.3.1) and [official installation guide](https://github.com/gastownhall/beads/blob/main/docs/getting-started/installation.md)). They check that `origin` has `refs/dolt/data`, then run `bd bootstrap --yes` to clone the ledger into the CI checkout. The bootstrap reads from the remote and pushes nothing. The job then lists in-progress beads that have a `branch` key, keeps those whose native `started_at` is older than `TRUNK_DEV_STALE_HOURS` (default 48), and prints them. GitHub writes the list to `$GITHUB_STEP_SUMMARY`; GitLab keeps it in the job log.
+
+The job exits non-zero when any branch is stale. That failure is the alert: GitLab emails the schedule owner, and GitHub notifies the user who owns the scheduled workflow. A stale branch therefore shows as a failed scheduled pipeline until it lands or its claim is released. To report without failing, replace the marked sink step. The runner needs `bd` and read access to the repository remote; no webhook or notification token is required.
+
 ## Alternatives
 
 On GitHub, release-please is an alternative for maintainers who prefer a reviewed release PR with version and changelog updates. Merging that PR creates the release. GitLab does not support release-please.

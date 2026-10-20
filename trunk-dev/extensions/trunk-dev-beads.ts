@@ -1,4 +1,4 @@
-import { existsSync, readdirSync, realpathSync, statSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 
 import type { ExtensionAPI, ToolResultEvent } from "@oh-my-pi/pi-coding-agent";
@@ -238,16 +238,64 @@ function reminderMessage(stdout: string, now: number, threshold: number): string
 	return decideStaleReminder(parseJson(stdout), now, threshold);
 }
 
+/** Job name the CI templates define; renaming it hides the job from this check. */
+export const STALE_JOB_NAME = "stale-bead-branches";
+export type Forge = "github" | "gitlab";
+
+export function forgeFromRemote(url: string): Forge | undefined {
+	const host = /^[a-z][a-z0-9+.-]*:\/\/(?:[^@/]*@)?([^/:]+)/i.exec(url)?.[1] ?? /^(?:[^@]+@)?([^:/]+):/.exec(url)?.[1];
+	if (host === undefined) return;
+	if (/(^|\.)github\./i.test(host)) return "github";
+	if (/(^|\.)gitlab\./i.test(host)) return "gitlab";
+	return;
+}
+
+/** A Beads repository on a known forge needs the daily stale-branch job in its CI config. */
+export function decideMissingStaleJob(forge: Forge | undefined, ciTexts: readonly string[]): string | undefined {
+	if (forge === undefined) return;
+	if (ciTexts.some((text) => new RegExp(`^\\s*${STALE_JOB_NAME}\\s*:`, "m").test(text))) return;
+	const where = forge === "github" ? "a scheduled GitHub workflow" : "a GitLab job plus pipeline schedule";
+	return `trunk-dev: this Beads repository has no daily \`${STALE_JOB_NAME}\` CI job. Add it as ${where} with step 7 of skill://trunk-dev-release-setup.`;
+}
+
+function ciTexts(root: string, forge: Forge): string[] {
+	const files: string[] = [];
+	const collect = (dir: string, depth: number) => {
+		let entries: string[] = [];
+		try { entries = readdirSync(dir); } catch { return; }
+		for (const entry of entries) {
+			const path = join(dir, entry);
+			if (/\.ya?ml$/i.test(entry)) files.push(path);
+			else if (depth > 0 && isDirectory(path)) collect(path, depth - 1);
+		}
+	};
+	if (forge === "github") collect(join(root, ".github", "workflows"), 0);
+	else {
+		files.push(join(root, ".gitlab-ci.yml"));
+		collect(join(root, ".gitlab"), 3);
+	}
+	return files.flatMap((path) => {
+		try { return [readFileSync(path, "utf8")]; } catch { return []; }
+	});
+}
+
 function sendReminder(pi: ExtensionAPI, cwd: string): void {
 	const env = readEnvironment(process.env, "");
+	const send = (customType: string, content: string) =>
+		pi.sendMessage({ customType, content, display: true, attribution: "user" }, { triggerTurn: false });
 	void (async () => {
 		const repo = await repository(cwd, env);
 		if (repo === undefined) return;
-		const output = await runCommand(["bd", "--readonly", "list", "--status", "in_progress", "--has-metadata-key", "branch", "--json", "--limit", "0"], repo.root, readEnvironment(env, repo.store), READ_TIMEOUT_MS);
+		const [output, remote] = await Promise.all([
+			runCommand(["bd", "--readonly", "list", "--status", "in_progress", "--has-metadata-key", "branch", "--json", "--limit", "0"], repo.root, readEnvironment(env, repo.store), READ_TIMEOUT_MS),
+			runCommand(["git", "remote", "get-url", "origin"], repo.root, env, GIT_TIMEOUT_MS),
+		]);
+		const forge = remote?.exitCode === 0 ? forgeFromRemote(remote.stdout.trim()) : undefined;
+		const missing = forge === undefined ? undefined : decideMissingStaleJob(forge, ciTexts(repo.root, forge));
+		if (missing) send("com.srobroek.trunk-dev.stale-job-missing", missing);
 		if (output?.exitCode !== 0) return;
 		const message = reminderMessage(output.stdout, Date.now(), staleThresholdHours(process.env.TRUNK_DEV_STALE_HOURS));
-		if (!message) return;
-		pi.sendMessage({ customType: "com.srobroek.trunk-dev.stale-branches", content: message, display: true, attribution: "user" }, { triggerTurn: false });
+		if (message) send("com.srobroek.trunk-dev.stale-branches", message);
 	})().catch(() => undefined);
 }
 
