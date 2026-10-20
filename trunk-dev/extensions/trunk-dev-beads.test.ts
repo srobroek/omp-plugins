@@ -97,6 +97,10 @@ describe("decideFlagCleanup", () => {
 		expect(decideFlagCleanup(flagTitle, flagBody, handMade("chore: remove staged_api_v2 feature flag"), links)).toBeDefined();
 		expect(decideFlagCleanup(flagTitle, flagBody, handMade("feat: rename staged_api flag docs"), links)).toBeDefined();
 	});
+
+	test("a rollout PR that enables an existing flag creates no cleanup bead", () => {
+		expect(decideFlagCleanup("feat(cli): enable priorities for everyone", "Flag: staged_api (enable; owner alice; remove by 2026-11-30)", [], links)).toBeUndefined();
+	});
 });
 describe("createCleanup runner fallback", () => {
 	const decision = decideFlagCleanup(flagTitle, flagBody, [], links);

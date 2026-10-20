@@ -17,11 +17,13 @@ Keep flags cheap and short-lived. [Fowler](https://martinfowler.com/articles/fea
 
 Add exactly one `Flag:` line to the MR/PR description (and therefore to the squash commit body when the forge copies it):
 
-<code>Flag: &lt;flag-name&gt; (default off; owner &lt;alias&gt;; remove by YYYY-MM-DD)</code>
+<code>Flag: &lt;flag-name&gt; (default off; owner &lt;alias&gt;; remove by YYYY-MM-DD)</code> for the PR that adds a feature behind a new flag
+
+<code>Flag: &lt;flag-name&gt; (enable; owner &lt;alias&gt;; remove by YYYY-MM-DD)</code> for the rollout PR that turns an existing flag on for users
 
 <code>Flag: none &mdash; &lt;one-line reason&gt;</code> (non-feature changes only, such as a breaking `fix!` or `refactor!`)
 
-A `feat` MR/PR names a real flag; `Flag: none` is not valid for it. Do not retype a feature as `fix` or `chore` to avoid the flag. Do not substitute other field names or omit the default, owner, or removal date for a temporary flag. A no-flag decision includes a concise reason.
+A `feat` MR/PR names a real flag; `Flag: none` is not valid for it. A rollout PR keeps the flag's original owner and removal date. Do not retype a feature as `fix` or `chore` to avoid the flag. Do not substitute other field names or omit the owner or removal date for a temporary flag. A no-flag decision includes a concise reason.
 
 ## Lifecycle and testing
 
