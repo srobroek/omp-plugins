@@ -74,6 +74,13 @@ describe("decideCommitGate push destinations", () => {
 		expect(push("git push --unknown-flag origin main")).toBeUndefined();
 	});
 
+	test("resolves bare HEAD and @ refspecs to the current branch", () => {
+		expect(push("git push origin HEAD", "main")).toMatchObject({ block: true });
+		expect(push("dgit push -u origin @", "master")).toMatchObject({ block: true });
+		expect(push("git push origin HEAD", "topic")).toBeUndefined();
+		expect(push("git push origin HEAD", "")).toBeUndefined();
+	});
+
 	test("allows other branches, tags, dry runs, deletions, and uncertain default branches", () => {
 		for (const command of ["git push origin topic", "git push origin v1:refs/tags/v1", "git push --tags origin", "git push --dry-run origin main", "git push -n origin main", "git push --delete origin main", "git push origin :main"]) {
 			expect(push(command)).toBeUndefined();

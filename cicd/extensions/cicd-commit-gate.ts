@@ -135,18 +135,23 @@ function decidePush(parsed: GitInvocation, git: GitRunner, override: boolean): D
 	const push = parsePush(parsed.args);
 	if (!push.certain || push.dryRun || push.deleting || push.tagOnly) return;
 	let targetsMain = false;
+	const isMain = (branch: string) => branch === "main" || branch === "master";
+	const currentBranch = () => git(["branch", "--show-current"], parsed.cwd)?.trim() || undefined;
 	if (push.allBranches) {
 		targetsMain = true;
 	} else if (push.refspecs.length === 0) {
-		const branch = git(["branch", "--show-current"], parsed.cwd)?.trim();
+		const branch = currentBranch();
 		if (!branch) return;
-		targetsMain = branch === "main" || branch === "master";
+		targetsMain = isMain(branch);
 	} else {
 		for (const refspec of push.refspecs) {
 			const dest = destination(refspec);
 			if (!dest) return;
 			if (dest.deleting || dest.tag) continue;
-			if (dest.branch === "main" || dest.branch === "master") targetsMain = true;
+			// A bare `HEAD` or `@` refspec pushes the current branch to its same-named remote branch.
+			const branch = dest.branch === "HEAD" || dest.branch === "@" ? currentBranch() : dest.branch;
+			if (!branch) return;
+			if (isMain(branch)) targetsMain = true;
 		}
 	}
 	if (!targetsMain) return;
