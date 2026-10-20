@@ -27,19 +27,26 @@ A `feat` MR/PR names a real flag; `Flag: none` is not valid for it. A rollout PR
 
 ## Choose the mechanism
 
-Use the simplest mechanism that can switch the feature where it runs. Follow the repository's existing flag mechanism when it has one.
+Follow the repository's existing flag mechanism when it has one. Otherwise:
 
-| Where the code runs | Mechanism | How it is switched |
+- **Applications and services:** evaluate flags through the [OpenFeature](https://openfeature.dev/docs/reference/concepts/evaluation-api) SDK for the language. The code calls one vendor-neutral API, and a [provider](https://openfeature.dev/specification/sections/providers/) connects it to the backend. Moving from a config file to AWS AppConfig or a hosted service then means swapping the provider, not editing every call site.
+- **CLIs, libraries, OMP plugins, and developer tools:** use one small accessor module over an environment variable or command-line option, such as `isEnabled("tally-priority")` reading `TALLY_PRIORITY=1`. A flag SDK is more machinery than a local switch needs, and a library should not impose one on its callers. Keep the accessor's shape (`isEnabled(name)` with an off default) so a later move to OpenFeature changes only that module.
+
+Pick the backend by where the code runs:
+
+| Where the code runs | Backend (OpenFeature provider) | How it is switched |
 | --- | --- | --- |
-| CLI, library, OMP plugin, developer tool | Environment variable or command-line option, such as `TALLY_PRIORITY=1` | The user sets it; no release needed |
-| Application with a config file | A key in its config, such as `features.priority: false` | Config change, no rebuild |
+| Application with a config file | A file- or environment-based provider, or a small one in the repository's flag module | Config change, no rebuild |
 | Service on AWS | An [AWS AppConfig feature flag profile](https://docs.aws.amazon.com/appconfig/latest/userguide/appconfig-creating-configuration-and-profile-feature-flags.html), read through the AppConfig Agent or Lambda extension | An AppConfig [deployment](https://docs.aws.amazon.com/appconfig/latest/userguide/deploying-feature-flags.html) with a deployment strategy, which supports gradual rollout and rollback |
-| Several teams, percentage targeting, or experiments | A hosted flag service behind the [OpenFeature](https://openfeature.dev/docs/reference/concepts/evaluation-api) SDK, so code stays vendor-neutral | The flag service's console or API |
+| Several teams, percentage targeting, or experiments | A hosted flag service's OpenFeature provider | The flag service's console or API |
 
-- Read every flag through one accessor module, for example `isEnabled("tally-priority")`. Do not scatter raw environment or config reads through the code.
-- Make "off" the default in code, so a missing or unreadable flag disables the feature.
-- Use the same name in code, config, and the `Flag:` line.
-- State in the MR/PR description how to turn the flag on, for example `TALLY_PRIORITY=1`.
+Check provider availability before choosing a backend. AppConfig had no AWS-maintained OpenFeature provider when this rule was written; third-party ones exist for [Go](https://github.com/Arthur1/openfeature-provider-go-aws-appconfig) and [Java](https://github.com/lavenderses/aws-appconfig-openfeature-provider-java). In other languages, write a thin provider in the repository's flag module that reads the AppConfig Agent, rather than calling AppConfig from feature code. Pin and review third-party providers like any dependency.
+
+- Read every flag through one place: the OpenFeature client or the accessor module. Do not scatter raw environment, config, or AppConfig reads through the code.
+- Make "off" the default in code, so a missing flag, an unreachable backend, or no provider at all disables the feature. Without a provider, OpenFeature's evaluation API returns the supplied default.
+- In tests, use the SDK's in-memory provider (for example the [JavaScript](https://github.com/open-feature/js-sdk/blob/main/packages/server/src/provider/in-memory-provider/in-memory-provider.ts), [Go](https://pkg.go.dev/github.com/open-feature/go-sdk/openfeature/memprovider), or [Java](https://github.com/open-feature/java-sdk/blob/main/src/main/java/dev/openfeature/sdk/providers/memory/InMemoryProvider.java) one) to run both flag states without a backend.
+- Use the same name in code, config, the backend, and the `Flag:` line.
+- State in the MR/PR description how to turn the flag on, for example `TALLY_PRIORITY=1` or the AppConfig profile and flag key.
 - A compile-time constant or bundler define is not a feature flag: switching it needs a rebuild. Use it only to keep dormant code out of a build, not for rollout or as a kill switch.
 - After launch, a remote flag (AppConfig or a hosted service) can stay as a long-lived kill switch. Record it as an operational control in the cleanup chore, and remove temporary release flags on their date.
 
