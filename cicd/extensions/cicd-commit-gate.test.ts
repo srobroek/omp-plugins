@@ -18,6 +18,11 @@ describe("decideCommitGate commit subjects", () => {
 		expect(gate("git commit -m 'feat!: break API'")).toBeUndefined();
 	});
 
+	test("rejects types outside the Conventional Commit set", () => {
+		expect(gate("git commit -m 'update: something'")).toMatchObject({ block: true });
+		expect(gate("git commit -m 'feat:missing space'")).toMatchObject({ block: true });
+	});
+
 	test("allows editor messages, amend without a new message, fixup, merge, and revert subjects", () => {
 		for (const command of ["git commit", "git commit --amend", "git commit -m 'fixup! feat: follow up'", "git commit -m 'Merge branch x'", "git commit -m 'Revert \\\"feat: x\\\"'"]) {
 			expect(gate(command)).toBeUndefined();
@@ -59,6 +64,14 @@ describe("decideCommitGate push destinations", () => {
 		}
 		expect(push("git push", "main")).toMatchObject({ block: true });
 		expect(push("git push", "master")).toMatchObject({ block: true });
+	});
+
+	test("treats -u and --opt=value forms as flags, and blocks --all/--mirror", () => {
+		for (const command of ["git push -u origin main", "git push --set-upstream origin main", "git push --force-with-lease=main:abc origin main", "git push --recurse-submodules=check origin HEAD:main", "git push --all origin", "git push --mirror origin"]) {
+			expect(push(command)).toMatchObject({ block: true });
+		}
+		expect(push("git push -u origin topic")).toBeUndefined();
+		expect(push("git push --unknown-flag origin main")).toBeUndefined();
 	});
 
 	test("allows other branches, tags, dry runs, deletions, and uncertain default branches", () => {
