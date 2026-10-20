@@ -20,14 +20,15 @@
  * starts while the agent is still waiting for approval, and it can end while bd is
  * still writing.
  *
- * So the hold moves into the writing process. The validated command is rewritten to
- * run `bd` under `bd-embedded-write-runner`, a process this package owns which
- * acquires the store's lock, spawns the real `bd`, awaits its exit, and releases in
- * `finally` and on its own death. The runner IS bd's parent, so the hold begins
- * immediately before the mutation and ends when it settles, whatever Bash does with
- * the foreground: an explicitly async or auto-backgrounded call keeps its lock
- * because the runner outlives the tool result, and a killed call releases because
- * the runner dies with it.
+ * So the hold moves into the writing process. Each validated `bd` write in a command
+ * is rewritten in place to run under `bd-embedded-write-runner`, a process this
+ * package owns which acquires the store's lock, spawns the real `bd`, awaits its exit,
+ * and releases in `finally` and on its own death. The runner IS bd's parent, so the
+ * hold begins immediately before the mutation and ends when it settles, whatever
+ * Bash does with the foreground: an explicitly async or auto-backgrounded call keeps
+ * its lock because the runner outlives the tool result, and a killed call releases
+ * because the runner dies with it. Reads, and everything around each write, run as
+ * written.
  *
  * Nothing about a Bash-originated write is recorded in this process, so there is no
  * session bookkeeping to leak. What stays process-global is the lock domain itself:
@@ -50,7 +51,7 @@ import {
 	invocationFromArgv,
 } from "./bd-actor-gate.ts";
 import { sessionPinFor } from "./beads-store.ts";
-import { commandSegments, invocation, leadingCdCwd, type ParsedCommand, tokenize } from "./shell-command.ts";
+import { type ParsedCommand, type ShellScan, type ShellWord, type SimpleCommand, scanShell, tokenize } from "./shell-command.ts";
 
 /** The hold itself. */
 const LOCK_NAME = "omp-embedded-write.lock";
@@ -278,8 +279,8 @@ function registry(): Registry {
 }
 
 /**
- * Verbs proven NOT to write, read from `bd --help` on 1.3.0. Everything absent
- * from this table is treated as a write.
+ * Verbs proven NOT to write, read from each verb's own `bd <verb> --help` on 1.3.1.
+ * Everything absent from this table is treated as a write.
  *
  * The direction is deliberate. A write list has to name every writing verb, and
  * the ones it forgets -- `flatten`, `purge`, `prune`, `compact`, `gc`, `sql`,
@@ -290,9 +291,12 @@ function registry(): Registry {
  * an entry here costs a needless wait instead.
  *
  * A record value means only those subactions are reads; the parent verb's other
- * subactions write. Comment grammar is handled separately and conservatively:
- * only exact `bd comment list` and exact `bd comments <bead-id>` calls are reads.
- * Every other comment form takes the write path.
+ * subactions write. Only subcommands the parent's help lists are here: `bd dep
+ * show -b X` is the parent `bd dep <id> --blocks` form, which adds a dependency,
+ * and `bd comment <id> [text...]` has no `list` subcommand at all, so `bd comment
+ * list` adds a comment to an issue named `list`. Comment grammar is handled
+ * separately: only `bd comments <bead-id>`, optionally with its `--json` and
+ * `--local-time` display flags, is a read. Every other comment form writes.
  */
 const READS: Record<string, true | Record<string, true>> = {
 	blocked: true,
@@ -325,6 +329,8 @@ const READS: Record<string, true | Record<string, true>> = {
 	search: true,
 	show: true,
 	stale: true,
+	// `bd stats --help` prints the `bd status` help: the same read under its alias.
+	stats: true,
 	state: true,
 	status: true,
 	statuses: true,
@@ -332,19 +338,18 @@ const READS: Record<string, true | Record<string, true>> = {
 	version: true,
 	where: true,
 	config: { get: true, list: true },
-	dep: { list: true, show: true, tree: true },
-	dolt: { diff: true, log: true, status: true },
-	epic: { list: true, show: true },
+	dep: { list: true, tree: true },
+	dolt: { status: true },
 	formula: { list: true, show: true },
 	gate: { list: true, show: true },
 	kv: { get: true, list: true },
-	mol: { list: true, show: true },
-	swarm: { list: true, show: true },
+	mol: { show: true },
+	swarm: { list: true },
 };
 
 /**
  * Flags that turn one of the reads above back into a write, read from each verb's
- * own `--help` on bd 1.3.0. `bd orphans --fix` closes issues and `bd preflight
+ * own `--help` on bd 1.3.1. `bd orphans --fix` closes issues and `bd preflight
  * --fix` writes too, so a verb being a read is a statement about its bare form.
  */
 const WRITE_FLAGS: Record<string, string[]> = {
@@ -353,8 +358,11 @@ const WRITE_FLAGS: Record<string, string[]> = {
 	ready: ["--claim"],
 };
 
-/** A bead id accepted by the exact plural comment-listing form. */
+/** A bead id accepted by the plural comment-listing form. */
 const BEAD_ID = /^[A-Za-z][A-Za-z0-9]*(?:-[A-Za-z0-9]+)+(?:\.\d+)*$/;
+
+/** The display-only flags `bd comments <bead-id>` accepts. */
+const COMMENT_LISTING_FLAGS: Record<string, true> = { "--json": true, "--local-time": true };
 
 /**
  * Whether this invocation can write the database.
@@ -370,8 +378,11 @@ export function writesStore(invocation: BdInvocation | undefined): boolean {
 	if (flagEnabled(globals, ["--help", "-h"]) || flagEnabled(args, ["--help", "-h"])) return false;
 	// `--readonly` makes bd itself block writes, so nothing can reach the journal.
 	if (flagEnabled(globals, ["--readonly"])) return false;
-	if (verb === "comment") return args.length !== 1 || args[0] !== "list";
-	if (verb === "comments") return args.length !== 1 || !BEAD_ID.test(args[0] ?? "");
+	if (verb === "comment") return true;
+	if (verb === "comments") {
+		const positional = args.filter(arg => COMMENT_LISTING_FLAGS[arg] !== true);
+		return positional.length !== 1 || !BEAD_ID.test(positional[0] ?? "");
+	}
 	const rule = READS[verb];
 	if (rule === undefined) return true;
 	const writeFlags = WRITE_FLAGS[verb];
@@ -467,31 +478,6 @@ export function embeddedStoreFor(cwd: string, env: NodeJS.ProcessEnv = process.e
 	return store !== undefined && embedded(store) ? store : undefined;
 }
 
-
-/**
- * Characters that make a command line something other than one simple invocation:
- * separators, pipes, redirections, grouping, escapes, newlines, and command
- * substitution. A bare `$` is absent on purpose -- an expanded ARGUMENT cannot change
- * which store a write reaches, and any store-selecting value is checked separately --
- * so `bd close $ID` stays a direct call.
- *
- * Tested against UNQUOTED tokens only. Applying it to the raw text refused ordinary
- * standalone writes whose OPERANDS contain punctuation, such as
- * `bd create t -d "foo(bar)"` or a note reading `A && B`, and a guard whose
- * remediation is itself refused cannot be cleared. Quoting decides operator
- * recognition, which is exactly what the shell does with it.
- */
-const OPERATOR = /[;&|<>(){}\\\n]/;
-
-/**
- * Command substitution, which RUNS something. It disqualifies a token whether or not
- * the token began quoted: `"$(...)"` and `` "`...`" `` both execute inside double
- * quotes, and this tokenizer records only that a token started quoted, never which
- * quote it was. Single quotes would be safe, so this over-refuses them; that is the
- * direction to be wrong in.
- */
-const SUBSTITUTION = /\$\(|`/;
-
 /** A store-selecting value the shell would resolve later, so this gate cannot. */
 const DEFERRED_VALUE = /[$`~*?[\]]/;
 
@@ -501,63 +487,453 @@ const DEFERRED_VALUE = /[$`~*?[\]]/;
  */
 const STORE_FLAGS = ["-C", "--directory", "--db", "--database"];
 
+/** `bd` as a whole word: not part of an id such as `bd-12` or a name such as `.bd` or `bd.log`. */
+const BD_WORD = /(?<![\w.-])bd(?![\w-]|\.\w)/;
+
+/** A `NAME=` or `NAME+=` assignment, matched on the word's source so the name is unquoted. */
+const ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*\+?=/;
+
+/** A `BEADS_DIR` assignment's value, matched on the word after quote removal. */
+const BEADS_DIR_ASSIGNMENT = /^BEADS_DIR(\+?)=/;
+
+/**
+ * Reserved words that open a command list without changing what the command after
+ * them runs. A `bd` call behind one is in command position, read or write.
+ */
+const LIST_PREFIXES = new Set(["then", "else", "do"]);
+
+/**
+ * Prefixes that put the command after them in a condition, negate it, or time it. A
+ * read there is still a read. A write there stays refused: the runner exits 120 when it
+ * could not serialise the write, and in a condition that status steers control flow
+ * as if `bd` had answered -- `!` even turns a refused write into success -- and `time`
+ * is not a keyword in POSIX `sh`, where it would run the runner's leading assignment as
+ * a program.
+ */
+const CONDITION_PREFIXES: Record<string, true> = { "!": true, if: true, elif: true, while: true, until: true, time: true };
+
+/** Commands that only print, test, search or look up their arguments, so a `bd` word there is a name. */
+const NAME_ONLY: Record<string, true> = {
+	":": true,
+	"[": true,
+	"[[": true,
+	cat: true,
+	echo: true,
+	egrep: true,
+	false: true,
+	fgrep: true,
+	grep: true,
+	hash: true,
+	head: true,
+	help: true,
+	ls: true,
+	man: true,
+	printf: true,
+	rg: true,
+	tail: true,
+	test: true,
+	true: true,
+	type: true,
+	wc: true,
+	whereis: true,
+	which: true,
+};
+
+/** Shell interpreters, which run a `-c` string or their stdin as source wherever they appear. */
+const SHELL_INTERPRETERS: Record<string, true> = { bash: true, dash: true, fish: true, ksh: true, mksh: true, sh: true, zsh: true };
+
+/** Commands that run a string or a file as shell source when they are the command word. */
+const SOURCE_RUNNERS: Record<string, true> = { ".": true, eval: true, parallel: true, screen: true, script: true, source: true, su: true, tmux: true, watch: true };
+
+/** Builtins that can assign a variable named by one of their arguments. */
+const ASSIGNING: Record<string, true> = { declare: true, getopts: true, local: true, mapfile: true, printf: true, read: true, readarray: true, readonly: true, typeset: true };
+
+/** Operators after which a `cd` earlier in the command may not have run. */
+const UNCERTAIN_AFTER: Record<string, true> = { "\n": true, "&": true, ";": true, ";;": true, "||": true };
+
+/** The runner script's file name, which identifies an already rewritten write. */
+const RUNNER_SCRIPT = /^bd-embedded-write-runner\.(?:js|ts)$/;
+
+/** The refusal for a write after a directory change whose target only the shell knows. */
+const DYNAMIC_CWD = "This command changes directory dynamically; issue the `bd` command with the tool's cwd field instead.";
+
+const SOURCE_FIX = "Write each `bd` command directly in this command line instead of inside a string, script or here-document.";
+
+/** The shapes the lock does accept, appended to every refusal it explains. */
+const ACCEPTED_SHAPES =
+	"Accepted: `bd` reads anywhere in pipes, `;` / `&&` / `||` lists, `( )` / `{ }` groups, loops and redirections; and each `bd` write written as its own simple command, `[VAR=literal ...] bd ...`, anywhere in such a command, which the lock runs under its serialising runner with a hold of its own.";
+
+/** One `bd` write the rewrite runs under the runner. */
+export type EmbeddedWrite = {
+	/** The canonical embedded store the write lands in. */
+	store: string;
+	/** Offset of the write's `bd` word in the command, where the runner form is inserted. */
+	offset: number;
+};
+
+export type WritePlan = { kind: "writes"; writes: EmbeddedWrite[] } | { kind: "refused"; reason: string };
+
 export type WriteTargets =
 	| { kind: "stores"; stores: string[] }
 	| { kind: "refused"; reason: string };
 
+/** The part of a command the lock cannot place, and the shape that works instead. */
+type Problem = { part: string; fix: string } | { exact: string };
+
+type CwdState = { kind: "known"; cwd: string; certain: boolean; changed: boolean } | { kind: "dynamic"; problem: Problem };
+type BeadsDirState = { kind: "known"; value: string | undefined } | { kind: "unknown"; cause: string };
+/** What the shell has done to the working directory and `BEADS_DIR` by this point. */
+type ShellState = { cwd: CwdState; beadsDir: BeadsDirState };
+
+type OtherShape = { kind: "other"; assignments: ShellWord[]; head: ShellWord | undefined; args: ShellWord[] };
+type CommandShape =
+	| { kind: "bd"; condition: string | undefined; assignments: ShellWord[]; head: ShellWord; args: ShellWord[] }
+	| { kind: "runner"; assignments: ShellWord[]; store: string; child: ShellWord[] }
+	| OtherShape;
+
 /**
- * What this bash call may write, or why it cannot be allowed to run.
+ * Every embedded-store write this bash call makes, or why it cannot be allowed to run.
  *
- * ONE shape is accepted: a whole command that is a single direct `bd` invocation,
- * optionally behind literal `VAR=value` assignments. Its store comes from the
- * runtime's own `cwd` and `env` plus that invocation's explicit `-C` / `--db` /
- * `--directory` / `--database`, which is sound because none of it is inferred from
- * the command text.
+ * The command is scanned once, positionally, and every simple command in it is judged
+ * on its own. A `bd` read passes wherever it is: in a pipe, a `;` / `&&` / `||` list,
+ * a group, a loop body or under redirections. A `bd` write in command position --
+ * optionally behind literal `VAR=value` assignments -- is returned with its offset, so
+ * the gate can run exactly that simple command under the runner and leave every other
+ * byte alone. Each write gets its own runner and therefore its own hold, so two writes
+ * in one command are serialised like two tool calls.
  *
- * Everything else that mentions `bd` is refused on an embedded store. That is the
- * whole point of the shape: three rounds of counter-examples -- `timeout 60 bd`,
- * `bash -c 'set -e; bd close x'`, `eval bd close x`, `echo x | xargs bd close`,
- * `find . -exec bd close {} +`, `cd other && bd close x` -- each showed that reading
- * shell semantics out of a string produces confident wrong answers in BOTH
- * directions. An unmodelled form now fails closed by construction, so there is no
- * next hole to find. Over-refusal is expected, immediately visible, and cleared by
- * issuing the `bd` command as its own tool call.
+ * A write's store is resolved with the runtime's `cwd` and `env`, then with what the
+ * command itself does before the write: a literal `export BEADS_DIR=...`,
+ * `BEADS_DIR=...` or `unset BEADS_DIR`, the write's own command-local assignments,
+ * and a literal `cd`. Subshells scope those effects. Anything the shell decides later
+ * -- an expanded value, a `source`, a dynamic `cd` -- leaves the store unknown, and the
+ * write is refused rather than locked on a guess.
  *
- * Only one store is ever locked for a bash call, because the accepted shape is a
- * single invocation; the array shape is kept for the internal writers that can hold
- * more than one.
+ * What the scan cannot place is refused too, whenever an embedded store is in reach:
+ * `bd` inside a command substitution, a here-document or a shell string, `bd` behind a
+ * launcher such as `xargs`, `env` or `timeout`, and an expanded command word in a
+ * command that mentions `bd`. Those are where reading shell semantics out of a string
+ * gives confident wrong answers, so they fail closed instead of being modelled.
  */
-export function embeddedWriteTargets(command: string, cwd: string, env: NodeJS.ProcessEnv): WriteTargets {
-	const hasBd = commandSegments(command).some(segment => invocation(segment, ["bd"]) !== null);
-	if (!hasBd) return { kind: "stores", stores: [] };
-	const direct = directInvocation(command);
-	if (direct !== undefined) {
-		if (direct === "no-write" || !writesStore(direct)) return { kind: "stores", stores: [] };
-		const store = storeFor(direct.globals, cwd, env);
-		return { kind: "stores", stores: store !== undefined && embedded(store) ? [store] : [] };
-	}
-	// An embedded store in reach is what gives this gate jurisdiction. The session's own
-	// here short-circuited, and an explicit `-C <embedded store>` in the command went
-	// unseen. `namedStore` already returns embedded stores only.
-	const ambient = storeFor([], cwd, env);
-	const at = ambient !== undefined && embedded(ambient) ? ambient : namedStore(command, cwd, env);
-	if (at === undefined) return { kind: "stores", stores: [] };
-	return {
-		kind: "refused",
-		reason: [
-			`This command mentions \`bd\` in a form the Beads write lock cannot resolve, and ${at} is an embedded store, where two concurrent writers corrupt the Dolt journal.`,
-			"The lock accepts exactly one shape: a bash call whose whole command is a single direct `bd` invocation, optionally preceded by literal `VAR=value` assignments, with no separators, pipes, redirections, grouping, command substitutions, escapes or newlines, and with a literal value for `-C` / `--directory` / `--db` / `--database`.",
-			"Issue the `bd` command as its own tool call in that form, and run the surrounding work as a separate call. `bd export -o issues.jsonl` rather than a redirection, and one call each rather than `&&`, are accepted.",
-		].join(" "),
+export function planEmbeddedWrites(command: string, cwd: string, env: NodeJS.ProcessEnv): WritePlan {
+	if (!BD_WORD.test(command)) return { kind: "writes", writes: [] };
+	const scan = scanShell(command);
+	const writes: EmbeddedWrite[] = [];
+	let problem: Problem | undefined;
+	let problemStore: string | undefined;
+	const refuse = (found: Problem, store?: string): void => {
+		problem ??= found;
+		problemStore ??= store;
 	};
+	if (!scan.complete) refuse({ part: "it leaves a quote, command substitution or here-document open, so its `bd` invocations cannot be located", fix: "Close it and retry." });
+	if (scan.substitutions.some(runsBd)) {
+		refuse({
+			part: "`bd` runs inside a command substitution (`$(...)`, backticks or `<(...)`), which the lock cannot rewrite",
+			fix: "Run that `bd` at the top level of the command instead: pipe its output on (`bd show X --json | jq ...`), or redirect it to a file and read the file.",
+		});
+	}
+	const scopes: ShellState[] = [{ cwd: { kind: "known", cwd, certain: true, changed: false }, beadsDir: { kind: "known", value: env.BEADS_DIR } }];
+	const { items } = scan;
+	for (const [index, item] of items.entries()) {
+		const state = scopes[scopes.length - 1] as ShellState;
+		if (item.kind === "operator") {
+			if (item.operator === "(") scopes.push(structuredClone(state));
+			else if (item.operator === ")" && scopes.length > 1) scopes.pop();
+			else if (UNCERTAIN_AFTER[item.operator] === true && state.cwd.kind === "known" && state.cwd.changed) state.cwd.certain = false;
+			continue;
+		}
+		const shape = shapeOf(item, command);
+		if (shape.kind !== "bd" && item.hereDocuments.some(document => BD_WORD.test(document.body))) {
+			const runner = pipelineSourceRunner(items, index, command);
+			if (runner !== undefined) refuse({ part: `a here-document fed to \`${runner}\` mentions \`bd\``, fix: SOURCE_FIX });
+		}
+		if (shape.kind === "other") {
+			const launch = launchOf(shape, item, command);
+			if (launch !== undefined) refuse(launch);
+			const before = operatorAt(items, index - 1);
+			const after = operatorAt(items, index + 1);
+			applyEffects(shape, state, command, {
+				leading: index === 0 && after === "&&",
+				// A pipeline element or a background job runs in a subshell of its own.
+				scoped: before === "|" || before === "|&" || after === "|" || after === "|&" || after === "&",
+			});
+			continue;
+		}
+		if (shape.kind === "runner") {
+			const argv = shape.child.slice(1);
+			const child = invocationFromArgv(argv.map(word => word.value));
+			if (child === undefined || !isWrite(child, argv)) continue;
+			const resolved = resolveWrite(child, shape.assignments, state, env, command);
+			if ("problem" in resolved) refuse(resolved.problem);
+			else if (resolved.store !== undefined && embedded(resolved.store) && resolved.store !== canonical(shape.store)) {
+				refuse({ part: `a runner command holds \`${shape.store}\` while its \`bd ${child.verb}\` writes \`${resolved.store}\``, fix: "Write the plain `bd` command and let the lock generate the runner form." }, resolved.store);
+			}
+			continue;
+		}
+		const invocation = invocationFromArgv(shape.args.map(word => word.value));
+		// `bd`, `bd --version` and `bd --help` carry no verb: recognised, and no write.
+		if (invocation === undefined || !isWrite(invocation, shape.args)) continue;
+		const resolved = resolveWrite(invocation, shape.assignments, state, env, command);
+		if ("problem" in resolved) {
+			refuse(resolved.problem);
+			continue;
+		}
+		const store = resolved.store;
+		if (store === undefined || !embedded(store)) continue;
+		if (shape.condition !== undefined) {
+			refuse({
+				part: `the write \`bd ${invocation.verb}\` follows \`${shape.condition}\`, and the lock does not run a write in a condition, behind \`!\` or under \`time\``,
+				fix: `Make the write its own simple command, for example \`bd ${invocation.verb} ... && next\` or \`check && bd ${invocation.verb} ...\`.`,
+			}, store);
+			continue;
+		}
+		writes.push({ store, offset: shape.head.start });
+	}
+	if (problem === undefined) return { kind: "writes", writes };
+	// An embedded store in reach is what gives this gate jurisdiction: the session's own,
+	// one the command writes, or one it names with `-C` / `--db` / `BEADS_DIR=`.
+	const at = writes[0]?.store ?? problemStore ?? embeddedStoreFor(cwd, env) ?? namedStore(command, cwd, env);
+	if (at === undefined) return { kind: "writes", writes };
+	return { kind: "refused", reason: refusal(problem, at) };
+}
+
+/** What this bash call may write, or why it cannot run: the stores of {@link planEmbeddedWrites}. */
+export function embeddedWriteTargets(command: string, cwd: string, env: NodeJS.ProcessEnv): WriteTargets {
+	const plan = planEmbeddedWrites(command, cwd, env);
+	return plan.kind === "refused" ? plan : { kind: "stores", stores: [...new Set(plan.writes.map(write => write.store))] };
+}
+
+function refusal(problem: Problem, store: string): string {
+	if ("exact" in problem) return problem.exact;
+	return `The Beads write lock cannot run this command: ${problem.part}. ${store} is an embedded store, where two concurrent writers corrupt the Dolt journal, so every \`bd\` write to it runs under the lock's serialising runner. ${problem.fix} ${ACCEPTED_SHAPES}`;
+}
+
+function commandName(word: ShellWord): string {
+	return word.value.split("/").pop() ?? word.value;
+}
+
+function operatorAt(items: ShellScan["items"], index: number): string | undefined {
+	const item = items[index];
+	return item?.kind === "operator" ? item.operator : undefined;
+}
+
+/** What one simple command is: a `bd` call, an already rewritten write, or anything else. */
+function shapeOf(command: SimpleCommand, source: string): CommandShape {
+	const { words } = command;
+	let i = 0;
+	let condition: string | undefined;
+	for (let word = words[0]; word !== undefined && !word.quoted && !word.expands; word = words[i]) {
+		if (CONDITION_PREFIXES[word.value] === true) condition ??= word.value;
+		else if (!LIST_PREFIXES.has(word.value)) break;
+		i += word.value === "time" && words[i + 1]?.value === "-p" ? 2 : 1;
+	}
+	const first = i;
+	while (words[i] !== undefined && ASSIGNMENT.test(source.slice(words[i]?.start, words[i]?.end))) i++;
+	const assignments = words.slice(first, i);
+	const head = words[i];
+	const args = words.slice(i + 1);
+	if (head !== undefined && !head.expands && commandName(head) === "bd") return { kind: "bd", condition, assignments, head, args };
+	const runner = head === undefined || head.expands || condition !== undefined ? undefined : runnerShape(args);
+	if (runner !== undefined) return { kind: "runner", assignments, ...runner };
+	return { kind: "other", assignments, head, args };
+}
+
+/** The store and `bd` argv of a command this gate already rewrote, else `undefined`. */
+function runnerShape(args: ShellWord[]): { store: string; child: ShellWord[] } | undefined {
+	const script = args[0];
+	if (script === undefined || script.expands || !RUNNER_SCRIPT.test(commandName(script))) return undefined;
+	let store: string | undefined;
+	let i = 1;
+	for (; i < args.length && args[i]?.value !== "--"; i += 2) {
+		const value = args[i + 1];
+		if (value === undefined || value.expands) return undefined;
+		if (args[i]?.value === RUNNER_STORE_FLAG) store = value.value;
+		else if (args[i]?.value !== RUNNER_WAIT_FLAG) return undefined;
+	}
+	const child = args.slice(i + 1);
+	const bd = child[0];
+	if (store === undefined || bd === undefined || bd.expands || commandName(bd) !== "bd") return undefined;
+	return { store, child };
+}
+
+/**
+ * Whether this invocation can write, counting a word the shell expands later as a
+ * possible flag: `bd orphans $FLAGS` may well be `bd orphans --fix`.
+ */
+function isWrite(invocation: BdInvocation, args: ShellWord[]): boolean {
+	return writesStore(invocation) || (WRITE_FLAGS[invocation.verb] !== undefined && args.some(word => word.expands));
+}
+
+/** Shell source a substitution runs: does it run `bd` anywhere the scan can see? */
+function runsBd(source: string): boolean {
+	if (!BD_WORD.test(source)) return false;
+	const scan = scanShell(source);
+	if (!scan.complete || scan.substitutions.some(runsBd)) return true;
+	return scan.items.some((item, index) => {
+		if (item.kind !== "command") return false;
+		const shape = shapeOf(item, source);
+		if (shape.kind !== "other" || launchOf(shape, item, source) !== undefined) return true;
+		return item.hereDocuments.some(document => BD_WORD.test(document.body)) && pipelineSourceRunner(scan.items, index, source) !== undefined;
+	});
+}
+
+/** The word that makes this command run shell source: an interpreter anywhere, or a source runner as its command word. */
+function sourceRunner(shape: OtherShape): ShellWord | undefined {
+	const { head, args } = shape;
+	if (head === undefined) return undefined;
+	if (!head.quoted && !head.expands && SOURCE_RUNNERS[commandName(head)] === true) return head;
+	return [head, ...args].find(word => !word.quoted && !word.expands && SHELL_INTERPRETERS[commandName(word)] === true);
+}
+
+/** The source runner any command in this command's pipeline is, if one is. */
+function pipelineSourceRunner(items: ShellScan["items"], index: number, source: string): string | undefined {
+	const pipe = (at: number): boolean => {
+		const operator = operatorAt(items, at);
+		return operator === "|" || operator === "|&";
+	};
+	let first = index;
+	while (pipe(first - 1) && items[first - 2]?.kind === "command") first -= 2;
+	let last = index;
+	while (pipe(last + 1) && items[last + 2]?.kind === "command") last += 2;
+	for (let at = first; at <= last; at += 2) {
+		const item = items[at];
+		if (item?.kind !== "command") continue;
+		const shape = shapeOf(item, source);
+		const runner = shape.kind === "other" ? sourceRunner(shape) : undefined;
+		if (runner !== undefined) return runner.value;
+	}
+	return undefined;
+}
+
+/** Why a non-`bd` command may still run `bd` where the lock cannot see it, if it may. */
+function launchOf(shape: OtherShape, command: SimpleCommand, source: string): Problem | undefined {
+	const { head, args } = shape;
+	if (head === undefined) return undefined;
+	if (head.expands) {
+		if (!BD_WORD.test(source)) return undefined;
+		return { part: `its command word \`${source.slice(head.start, head.end)}\` is expanded at run time, so whether it runs \`bd\` is unknown`, fix: "Spell `bd` literally as the command word." };
+	}
+	const runner = sourceRunner(shape);
+	if (runner !== undefined && [head, ...args, ...command.redirects].some(word => BD_WORD.test(word.value))) {
+		return { part: `\`bd\` is passed as shell source to \`${runner.value}\`, which runs it where the lock cannot see it`, fix: SOURCE_FIX };
+	}
+	const name = commandName(head);
+	if (NAME_ONLY[name] === true || (name === "command" && /^-[vV]$/.test(args[0]?.value ?? ""))) return undefined;
+	if (!args.some(word => !word.quoted && !word.expands && commandName(word) === "bd")) return undefined;
+	return {
+		part: `\`bd\` is launched through \`${head.value}\`, which hides the invocation from the lock`,
+		fix: "Call `bd` directly as its own simple command instead of through a launcher such as `env`, `xargs`, `timeout` or `find -exec`; to act on a list of ids, pass them to one `bd` call or loop with `while read -r id; do bd ... \"$id\"; done`.",
+	};
+}
+
+/**
+ * Apply what a non-`bd` command does to the working directory and `BEADS_DIR`.
+ *
+ * Only literal effects are followed. Every other way of changing either one makes it
+ * unknown, which refuses a later write that depends on it rather than locking a store
+ * the write may not reach.
+ */
+function applyEffects(shape: OtherShape, state: ShellState, source: string, context: { leading: boolean; scoped: boolean }): void {
+	const { head, args } = shape;
+	if (head === undefined) {
+		// A bare assignment updates an exported variable in place, so it is treated as
+		// exported: if it was not, the rewrite exports the value it resolved anyway.
+		for (const word of shape.assignments) assignBeadsDir(state, word, source, context.scoped);
+		return;
+	}
+	const name = head.expands ? "" : commandName(head);
+	if (name === "cd") {
+		const operands = args.filter(word => word.value !== "--" && !/^-[LPe@]+$/.test(word.value));
+		const target = operands[0];
+		if (state.cwd.kind === "dynamic") return;
+		if (target === undefined || target.value === "-" || target.expands || DEFERRED_VALUE.test(target.value) || context.scoped) {
+			state.cwd = { kind: "dynamic", problem: { exact: DYNAMIC_CWD } };
+			return;
+		}
+		state.cwd = { kind: "known", cwd: absolute(target.value, state.cwd.cwd), certain: context.leading && state.cwd.certain && !state.cwd.changed, changed: true };
+		return;
+	}
+	if (name === "pushd" || name === "popd" || name === "source" || name === "." || name === "eval") {
+		state.cwd = {
+			kind: "dynamic",
+			problem: { part: `\`${name}\` earlier in the command may change the working directory before a \`bd\` write`, fix: "Use a literal `cd DIR &&` prefix or the tool's cwd field, or run the write as its own tool call." },
+		};
+		if (name !== "pushd" && name !== "popd") state.beadsDir = { kind: "unknown", cause: name };
+		return;
+	}
+	if (name === "export") {
+		const unexports = args.some(word => /^-\w*[nf]/.test(word.value));
+		for (const word of args) {
+			if (word.value === "BEADS_DIR" && unexports) state.beadsDir = { kind: "unknown", cause: source.slice(head.start, word.end) };
+			else assignBeadsDir(state, word, source, context.scoped);
+		}
+		return;
+	}
+	if (name === "unset") {
+		if (args.some(word => word.value === "BEADS_DIR") && !args.some(word => word.value === "-f")) {
+			state.beadsDir = context.scoped ? { kind: "unknown", cause: "unset BEADS_DIR" } : { kind: "known", value: undefined };
+		}
+		return;
+	}
+	if (ASSIGNING[name] === true && args.some(word => word.value === "BEADS_DIR" || BEADS_DIR_ASSIGNMENT.test(word.value))) {
+		state.beadsDir = { kind: "unknown", cause: name };
+	}
+}
+
+function assignBeadsDir(state: ShellState, word: ShellWord, source: string, scoped: boolean): void {
+	const match = BEADS_DIR_ASSIGNMENT.exec(word.value);
+	if (match === null) return;
+	const value = word.value.slice(match[0].length);
+	const literal = !scoped && match[1] === "" && !word.expands && !DEFERRED_VALUE.test(value);
+	state.beadsDir = literal ? { kind: "known", value } : { kind: "unknown", cause: source.slice(word.start, word.end) };
+}
+
+/** The store a `bd` write in this shell state lands in, or what keeps it unknown. */
+function resolveWrite(invocation: BdInvocation, assignments: ShellWord[], state: ShellState, env: NodeJS.ProcessEnv, source: string): { store: string | undefined } | { problem: Problem } {
+	const write = `\`bd ${invocation.verb}\``;
+	for (const flag of STORE_FLAGS) {
+		const value = globalValue(invocation.globals, [flag]);
+		if (value !== undefined && DEFERRED_VALUE.test(value)) {
+			return { problem: { part: `${write} selects its store with \`${flag} ${value}\`, which the shell expands at run time`, fix: `Give \`${flag}\` a literal path.` } };
+		}
+	}
+	let beadsDir = state.beadsDir;
+	for (const word of assignments) {
+		const match = BEADS_DIR_ASSIGNMENT.exec(word.value);
+		if (match === null) continue;
+		const value = word.value.slice(match[0].length);
+		beadsDir = match[1] === "" && !word.expands && !DEFERRED_VALUE.test(value) ? { kind: "known", value } : { kind: "unknown", cause: source.slice(word.start, word.end) };
+	}
+	const directory = globalValue(invocation.globals, ["-C", "--directory"]);
+	const db = globalValue(invocation.globals, ["--db"]);
+	if (directory === undefined && db === undefined && beadsDir.kind === "unknown") {
+		return {
+			problem: {
+				part: `${write} runs with \`BEADS_DIR\` set by \`${beadsDir.cause}\`, which the shell resolves only at run time`,
+				fix: "Set `BEADS_DIR` to a literal path, as `export BEADS_DIR=/path` earlier in the command or as `BEADS_DIR=/path bd ...`, or leave it unset to use the session's store.",
+			},
+		};
+	}
+	if (state.cwd.kind === "dynamic") return { problem: state.cwd.problem };
+	const relative = db !== undefined ? !isAbsolute(db) && (directory === undefined || !isAbsolute(directory)) : directory !== undefined && !isAbsolute(directory);
+	if (relative && !state.cwd.certain) {
+		return {
+			problem: {
+				part: `${write} resolves a relative \`${db === undefined ? "-C" : "--db"}\` path after a \`cd\` the lock cannot confirm ran`,
+				fix: "Give it an absolute path, or start the command with `cd DIR &&` joined to the write by `&&` alone.",
+			},
+		};
+	}
+	return { store: storeFor(invocation.globals, state.cwd.cwd, { ...env, BEADS_DIR: beadsDir.kind === "known" ? beadsDir.value : undefined }) };
 }
 
 /**
  * A store the command names explicitly, whatever else it does.
  *
  * Literal collection, not analysis: every `-C` / `--directory` / `--db` / `--database`
- * value in the text is resolved, and the first embedded one is returned. Without this,
- * a compound command carrying `-C <embedded store>` escaped whenever the session's own
+ * value and every `BEADS_DIR=` assignment in the text is resolved, and the first
+ * embedded one is returned. Without this, a refused command naming an embedded store
+ * escaped whenever the session's own store was not embedded.
  */
 function namedStore(command: string, cwd: string, env: NodeJS.ProcessEnv): string | undefined {
 	// One extra level: a quoted argument is tokenized too, because
@@ -566,6 +942,11 @@ function namedStore(command: string, cwd: string, env: NodeJS.ProcessEnv): strin
 	// is never treated as a direct call.
 	const words = tokenize(command).flatMap(token => (token.quoted ? tokenize(token.value).map(inner => inner.value) : [token.value]));
 	for (const [index, word] of words.entries()) {
+		const assigned = BEADS_DIR_ASSIGNMENT.test(word) ? word.slice(word.indexOf("=") + 1) : undefined;
+		if (assigned !== undefined && !DEFERRED_VALUE.test(assigned)) {
+			const store = storeFor([], cwd, { ...env, BEADS_DIR: assigned });
+			if (store !== undefined && embedded(store)) return store;
+		}
 		for (const flag of STORE_FLAGS) {
 			const value = word === flag ? words[index + 1] : word.startsWith(`${flag}=`) ? word.slice(flag.length + 1) : undefined;
 			if (value === undefined || DEFERRED_VALUE.test(value)) continue;
@@ -574,35 +955,6 @@ function namedStore(command: string, cwd: string, env: NodeJS.ProcessEnv): strin
 		}
 	}
 	return undefined;
-}
-
-/**
- * The invocation when the WHOLE command is one direct `bd` call, else `undefined`.
- *
- * Trivially checkable on purpose. Every test here is a property of the text or of one
- * token; none of them asks what the shell would do.
- */
-function directInvocation(command: string): BdInvocation | "no-write" | undefined {
-	const tokens = tokenize(command);
-	// Substitution disqualifies a token whatever its quoting; operators only unquoted.
-	if (tokens.some(token => SUBSTITUTION.test(token.value))) return undefined;
-	if (tokens.some(token => !token.quoted && OPERATOR.test(token.value))) return undefined;
-	let i = 0;
-	// A real assignment token, not a regex over the raw command.
-	while (tokens[i] !== undefined && tokens[i]?.quoted === false && /^[A-Za-z_]\w*=/.test(tokens[i]?.value ?? "")) i++;
-	const head = tokens[i];
-	if (head === undefined || head.quoted) return undefined;
-	const base = head.value.split("/").pop() ?? head.value;
-	if (base !== "bd") return undefined;
-	const invocation = invocationFromArgv(tokens.slice(i + 1).map(token => token.value));
-	// `bd`, `bd --version` and `bd --help` carry no verb: recognised, and no write.
-	if (invocation === undefined) return "no-write";
-	// The store must be resolvable now; a value the shell expands later is not.
-	for (const flag of STORE_FLAGS) {
-		const value = globalValue(invocation.globals, [flag]);
-		if (value !== undefined && DEFERRED_VALUE.test(value)) return undefined;
-	}
-	return invocation;
 }
 
 /** Every embedded store this bash call will write; empty when nothing does. */
@@ -1191,36 +1543,25 @@ function quote(word: string): string {
 	return `'${word.replaceAll("'", "'\\''")}'`;
 }
 
-type NormalizedDirectCommand = { command: string; cwd: string };
-
-/** Accept only a literal `cd DIR &&` prefix; shell expansion remains refused. */
-function normalizeDirectCommand(command: string, cwd: string): NormalizedDirectCommand | undefined {
-	const match = /^\s*cd\s+([^\s;&|]+)\s*&&\s*([\s\S]+?)\s*$/.exec(command);
-	if (match === null) return { command, cwd };
-	const dir = match[1] ?? "";
-	if (!dir || /^[-~$]/.test(dir) || /[\\`"'*?\x5b\x5d{}]/.test(dir)) return undefined;
-	return { command: match[2] ?? "", cwd: leadingCdCwd(command, cwd) };
-}
-
 /**
- * Split a validated direct call into its assignment prefix and original command text.
+ * The command with every planned write run under the runner, every other byte kept.
  *
- * The outer shell must expand operands before the runner receives argv. Rebuilding every
- * token as a quoted word would turn `bd close $ID` into a request for the literal `$ID`.
- * Keeping the validated call text after `--` preserves expansion without asking the
- * runner to evaluate shell syntax. Assignment spelling is preserved for the same reason.
+ * The runner form is inserted immediately before each write's `bd` word, after the
+ * write's own `VAR=value` assignments, so the shell still expands the write's operands
+ * -- `bd close $ID` reaches the runner as the id, not as `$ID` -- and every pipe,
+ * redirection, separator and quote around it stays exactly as written. The runner's
+ * command-local `BEADS_DIR` comes after the caller's, so the write lands in the very
+ * store the runner holds.
  */
-function directShell(command: string): { assignments: string; call: string } | undefined {
-	const tokens = tokenize(command);
-	if (tokens.some(token => SUBSTITUTION.test(token.value))) return undefined;
-	if (tokens.some(token => !token.quoted && OPERATOR.test(token.value))) return undefined;
-	let assignments = 0;
-	while (tokens[assignments] !== undefined && tokens[assignments]?.quoted === false && /^[A-Za-z_]\w*=/.test(tokens[assignments]?.value ?? "")) assignments++;
-	const head = tokens[assignments];
-	if (head === undefined || head.quoted || (head.value.split("/").pop() ?? head.value) !== "bd") return undefined;
-	const match = /^\s*((?:[A-Za-z_]\w*=(?:'[^']*'|"[^"]*"|[^\s]+)\s+)*)((?:[^\s]+\/)?bd(?:\s[\s\S]*)?)\s*$/.exec(command);
-	if (match === null || tokenize(match[1] ?? "").length !== assignments) return undefined;
-	return { assignments: match[1] ?? "", call: match[2] ?? "" };
+function withRunner(command: string, writes: EmbeddedWrite[], runner: EmbeddedWriteRunner): string {
+	let out = "";
+	let cursor = 0;
+	for (const write of [...writes].sort((left, right) => left.offset - right.offset)) {
+		const store = quote(write.store);
+		out += `${command.slice(cursor, write.offset)}BEADS_DOLT_SHARED_SERVER= BEADS_DIR=${store} ${quote(runner.interpreter)} ${quote(runner.script)} ${RUNNER_STORE_FLAG} ${store} ${RUNNER_WAIT_FLAG} ${RUNNER_WAIT_MS} -- `;
+		cursor = write.offset;
+	}
+	return out + command.slice(cursor);
 }
 
 /** What the Bash gate does with a call: nothing, refuse it, or run it under the runner. */
@@ -1234,13 +1575,13 @@ export type EmbeddedWriteDecision =
  * Takes no hold of its own. A hold taken here would start before the approval prompt
  * and would have to be given up on a `tool_result` that native Bash reports as soon as
  * it backgrounds the command, so it would guard the wrong interval at both ends.
- * Instead the command is rewritten to run under the runner, which holds the store for
- * exactly as long as the `bd` process it is the parent of.
+ * Instead each `bd` write in the command is rewritten to run under its own runner,
+ * which holds the store for exactly as long as the `bd` process it is the parent of.
+ * Reads and everything else in the command run as written.
  *
- * Fails closed throughout. A refusal from the target classifier, a command that
- * resolved a store without being the single direct invocation the classifier accepts,
- * an unreachable runner, and any thrown error all block the call: an unserialised
- * write risks the database rather than the one command.
+ * Fails closed throughout. A refusal from {@link planEmbeddedWrites}, an unreachable
+ * runner, a store whose preflight fails, and any thrown error all block the call: an
+ * unserialised write risks the database rather than the one command.
  */
 export async function decideEmbeddedWrite(
 	parsed: ParsedCommand,
@@ -1252,62 +1593,39 @@ export async function decideEmbeddedWrite(
 	try {
 		if (event.toolName !== "bash") return;
 		const input = event.input as { command?: unknown; cmd?: unknown; cwd?: unknown };
-		const whole = typeof input.command === "string" ? input.command : typeof input.cmd === "string" ? input.cmd : "";
 		const cwd = typeof input.cwd === "string" && input.cwd ? input.cwd : (ctx?.cwd ?? process.cwd());
-		const env = environmentForInput(event.input);
-		const normalized = normalizeDirectCommand(whole, cwd);
-		if (normalized === undefined) return { kind: "block", reason: "This command changes directory dynamically; issue the `bd` command with the tool's cwd field instead." };
-		const commandCwd = normalized.cwd;
-		const sources = [...parsed.commands.map(position => position.raw)];
-		const visit = (child: ParsedCommand): void => {
-			sources.push(...child.commands.map(position => position.raw));
-			for (const nested of child.nested) visit(nested);
-		};
-		for (const nested of parsed.nested) visit(nested);
-		const targets: string[] = [];
-		for (const source of sources) {
-			const result = embeddedWriteTargets(source, commandCwd, env);
-			if (result.kind === "refused") return { kind: "block", reason: result.reason };
-			targets.push(...result.stores);
-		}
-		const unique = [...new Set(targets)];
-		if (unique.length === 0) return;
-		const store = unique[0];
-		const direct = directShell(normalized.command);
-		// The classifier only returns a store for a whole-command direct invocation, so
-		// disagreement here means the two no longer read the same shape. Refuse rather
-		// than run the mutation with no hold at all.
-		if (store === undefined || unique.length > 1 || direct === undefined) {
-			return {
-				kind: "block",
-				reason: `This command reaches the embedded store${unique.length > 1 ? "s" : ""} ${unique.join(", ")} in a form the Beads write lock cannot run under its serialising runner. Issue the \`bd\` command as its own tool call, as a single direct invocation.`,
-			};
-		}
+		const plan = planEmbeddedWrites(parsed.command, cwd, environmentForInput(event.input));
+		if (plan.kind === "refused") return { kind: "block", reason: plan.reason };
+		if (plan.writes.length === 0) return;
+		const stores = [...new Set(plan.writes.map(write => write.store))];
 		const runner = runnerLookup();
 		if ("unavailable" in runner) {
 			return {
 				kind: "block",
-				reason: `${store} is an embedded store, where two concurrent writers corrupt the Dolt journal, and the Beads write-lock runner that serialises writers could not be located: ${runner.unavailable} The write was refused rather than run unserialised.`,
+				reason: `${stores.join(", ")} ${stores.length > 1 ? "are embedded stores" : "is an embedded store"}, where two concurrent writers corrupt the Dolt journal, and the Beads write-lock runner that serialises writers could not be located: ${runner.unavailable} The write was refused rather than run unserialised.`,
 			};
 		}
+		// Prove each store is takeable before the call runs, so a stuck holder surfaces
+		// as a refusal now rather than as a runner waiting out its own deadline.
 		const preflightOwner = `tool-call-preflight:${event.toolCallId}`;
 		const preflightDeadline = Math.min(deadline, Date.now() + preflightWaitMs());
-		const preflight = await hold(store, preflightOwner, Math.max(0, preflightDeadline - Date.now()));
-		if (preflight.kind === "failed") return { kind: "block", reason: preflight.reason };
-		const released = await releasePreflight(store, preflightOwner, preflightDeadline);
-		if (released.kind === "failed") return { kind: "block", reason: released.reason };
-		const runnerPrefix = `BEADS_DOLT_SHARED_SERVER= BEADS_DIR=${quote(store)} `;
-		const rewritten = `${direct.assignments}${runnerPrefix}${quote(runner.interpreter)} ${quote(runner.script)} ${RUNNER_STORE_FLAG} ${quote(store)} ${RUNNER_WAIT_FLAG} ${RUNNER_WAIT_MS} -- ${direct.call}`;
+		for (const store of stores) {
+			const preflight = await hold(store, preflightOwner, Math.max(0, preflightDeadline - Date.now()));
+			if (preflight.kind === "failed") return { kind: "block", reason: preflight.reason };
+			const released = await releasePreflight(store, preflightOwner, preflightDeadline);
+			if (released.kind === "failed") return { kind: "block", reason: released.reason };
+		}
+		const rewritten = withRunner(parsed.command, plan.writes, runner);
 		const next: Record<string, unknown> = { ...(event.input as Record<string, unknown>) };
-		// The runner inherits its store from command-local assignments. An unnamed Bash
+		// Each runner inherits its store from command-local assignments. An unnamed Bash
 		// call cannot carry host env/pty/ready options, so do not pass those fields along
-		// after replacing the command with the runner process.
+		// after rewriting the command around the runner.
 		if (typeof next.name !== "string" || next.name === "") {
 			delete next.env;
 			delete next.ready;
 			delete next.pty;
 		}
-		next.cwd = commandCwd;
+		next.cwd = cwd;
 		// `cmd` is the alias some hosts send; whichever one carried the command carries
 		// the rewrite, so the runner is what actually runs.
 		if (typeof input.command === "string") next.command = rewritten;

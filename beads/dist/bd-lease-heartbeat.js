@@ -892,6 +892,7 @@ function embeddedStoreFor(cwd, env = process.env) {
   const store = storeFor([], cwd, env);
   return store !== undefined && embedded(store) ? store : undefined;
 }
+var LIST_PREFIXES = new Set(["then", "else", "do"]);
 function ageOf(path) {
   try {
     return Date.now() - statSync2(path).mtimeMs;

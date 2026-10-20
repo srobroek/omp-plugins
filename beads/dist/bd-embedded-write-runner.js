@@ -100,6 +100,7 @@ function registry() {
   });
   return created;
 }
+var LIST_PREFIXES = new Set(["then", "else", "do"]);
 function ageOf(path) {
   try {
     return Date.now() - statSync(path).mtimeMs;

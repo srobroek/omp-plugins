@@ -22,9 +22,11 @@ The package registers `bash-gates` as the dispatcher entrypoint and `session-bea
 
 - `bd-update-close-gate` refuses `bd update` transitions to `closed` or `done`; use `bd close ID --reason "<factual reason>"`.
 - `bd-close-gate` refuses direct and embedded-runner closes of gate beads until their gate is resolved.
-- `bd-embedded-write-lock` serializes writes to the embedded store and runs mutations through `bd-embedded-write-runner`.
+- `bd-embedded-write-lock` serializes writes to the embedded store and runs each `bd` write through its own `bd-embedded-write-runner`, including writes inside compound commands.
 - `bd-actor-gate` requires an actor identity for writes that must be attributable.
 - `bd-unclaim-gate` requires every `bd unclaim` mutation to use the guarded `--if-assignee` compare-and-swap flag.
+
+`bd` mixes with other shell commands. A `bd` read passes unchanged anywhere in a command: in pipes, `;` / `&&` / `||` lists, `( )` and `{ }` groups, loop bodies, and under redirections. A `bd` write that starts its own simple command, optionally behind literal `VAR=value` assignments, is rewritten in place to run under the runner, with the surrounding shell text, quoting, pipes, and redirections kept byte for byte; each write takes its own hold for its own lifetime, so two writes in one command are serialized. Its store follows the tool's `cwd` and environment plus literal `cd`, `export BEADS_DIR=...`, `BEADS_DIR=...`, and `unset BEADS_DIR` earlier in the command. On an embedded store the lock refuses, naming the part it could not place: `bd` inside `$(...)`, backticks, `<(...)`, `eval`, `sh -c` / `bash -c` strings or a here-document fed to a shell; `bd` behind a launcher such as `xargs`, `env`, `timeout`, or `find -exec`; an expanded command word in a command that mentions `bd`; a write in a condition, behind `!`, or under `time`; and a write whose store depends on a value the shell expands at run time, such as `BEADS_DIR=$X`, `-C $DIR`, a dynamic `cd`, or `source`.
 
 The write runner is registered as the package program and must remain available. The session lifecycle extension pins `BEADS_DIR` to the repository's canonical `.beads` store so linked worktrees use one embedded ledger.
 
