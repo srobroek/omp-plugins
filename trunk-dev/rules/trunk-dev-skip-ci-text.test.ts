@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import * as fs from "node:fs";
 import * as path from "node:path";
 
-const RULE = path.join(import.meta.dir, "cicd-skip-ci-text.md");
+const RULE = path.join(import.meta.dir, "trunk-dev-skip-ci-text.md");
 
 function conditions(): RegExp[] {
 	const text = fs.readFileSync(RULE, "utf8");
@@ -38,7 +38,7 @@ const NON_MATCHES = [
 	'git commit --file message.txt',
 ];
 
-describe("cicd-skip-ci-text", () => {
+describe("trunk-dev-skip-ci-text", () => {
 	const res = conditions();
 	for (const command of MATCHES) {
 		test(`matches: ${JSON.stringify(command)}`, () => {

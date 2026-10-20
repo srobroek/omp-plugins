@@ -141,27 +141,27 @@ export function decideMrAdvisory(command: string, cwd: string, options: Advisory
 			if (forge?.kind === "create") {
 				const title = optionValue(forge.args, new Set(["--title", "-t"]));
 				if (title.value !== undefined && !title.fromFile && !CONVENTIONAL_TITLE.test(title.value)) {
-					advisories.push("CICD: MR/PR titles should use Conventional Commits, e.g. `feat(scope): summary`.");
+					advisories.push("trunk-dev: MR/PR titles should use Conventional Commits, e.g. `feat(scope): summary`.");
 				}
 				const body = optionValue(forge.args, new Set(["--description", "--body", "-d", "-b"]));
 				if (title.value !== undefined && titleNeedsFlag(title.value)) {
 					const isFeature = titleParts(title.value)?.type === "feat";
 					if (body.fromFile || body.value === undefined || body.missing) {
 						advisories.push(isFeature
-							? "CICD: every `feat` MR/PR ships behind a feature flag; add a `Flag: <name> (default off; owner <alias>; remove by YYYY-MM-DD)` line, and review file/editor-provided text manually."
-							: "CICD: add a `Flag:` decision line to the MR/PR description (or `Flag: none — reason`); review file/editor-provided text manually.");
+							? "trunk-dev: every `feat` MR/PR ships behind a feature flag; add a `Flag: <name> (default off; owner <alias>; remove by YYYY-MM-DD)` line, and review file/editor-provided text manually."
+							: "trunk-dev: add a `Flag:` decision line to the MR/PR description (or `Flag: none — reason`); review file/editor-provided text manually.");
 					} else if (!FLAG_LINE.test(body.value)) {
 						advisories.push(isFeature
-							? "CICD: every `feat` MR/PR ships behind a feature flag; add a `Flag: <name> (default off; owner <alias>; remove by YYYY-MM-DD)` line."
-							: "CICD: this breaking MR/PR needs a `Flag:` decision line in its description (for example `Flag: none — reason`).");
+							? "trunk-dev: every `feat` MR/PR ships behind a feature flag; add a `Flag: <name> (default off; owner <alias>; remove by YYYY-MM-DD)` line."
+							: "trunk-dev: this breaking MR/PR needs a `Flag:` decision line in its description (for example `Flag: none — reason`).");
 					} else if (isFeature && NO_FLAG_LINE.test(body.value)) {
-						advisories.push("CICD: `Flag: none` is only for non-feature changes; gate this `feat` behind a default-off flag, or retype the change truthfully (`fix`, `refactor`, `chore`).");
+						advisories.push("trunk-dev: `Flag: none` is only for non-feature changes; gate this `feat` behind a default-off flag, or retype the change truthfully (`fix`, `refactor`, `chore`).");
 					}
 				}
 			}
 			if (forge?.kind === "merge" && !forge.args.some((arg) => arg === "--squash" || arg === "-s")) {
 				if (isReleaseRepository(forge.cwd, { git, exists: fileExists, readFile: read })) {
-					advisories.push("CICD: squash-merge this MR/PR so its Conventional Commit title is the release unit (`--squash`).");
+					advisories.push("trunk-dev: squash-merge this MR/PR so its Conventional Commit title is the release unit (`--squash`).");
 				}
 			}
 			const gitCommand = parseGitInvocation(invocation);
@@ -171,7 +171,7 @@ export function decideMrAdvisory(command: string, cwd: string, options: Advisory
 				const hasBranch = pushHasBranchRef(args);
 				if (hasBranch) {
 					const age = branchPushAge(gitCommand.cwd, git, now);
-					if (age) advisories.push(`CICD: ${age}`);
+					if (age) advisories.push(`trunk-dev: ${age}`);
 				}
 			}
 		}
@@ -185,7 +185,7 @@ function toolCwd(input: Record<string, unknown>, sessionCwd: string): string {
 	return typeof input.cwd === "string" && input.cwd ? resolve(sessionCwd, input.cwd) : sessionCwd;
 }
 
-export default function cicdMrAdvisory(pi: ExtensionAPI): void {
+export default function trunkDevMrAdvisory(pi: ExtensionAPI): void {
 	const pending = new Map<string, string[]>();
 	pi.on("tool_call", (event: ToolCallEvent, ctx) => {
 		try {

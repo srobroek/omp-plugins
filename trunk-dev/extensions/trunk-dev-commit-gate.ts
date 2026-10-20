@@ -79,7 +79,7 @@ function decideCommit(parsed: GitInvocation, read: ReadMessage, override: boolea
 	const subject = subjectOf(message.text);
 	if (!subject || /^(?:fixup|squash)!\s/.test(subject) || /^Merge\s/.test(subject) || /^Revert\s/.test(subject)) return;
 	if (conventional(subject)) return;
-	return { block: true, reason: "Use a Conventional Commit subject such as `feat(scope): summary`, or set CICD_ALLOW_NONCONVENTIONAL_COMMIT=1 to override." };
+	return { block: true, reason: "Use a Conventional Commit subject such as `feat(scope): summary`, or set TRUNK_DEV_ALLOW_NONCONVENTIONAL_COMMIT=1 to override." };
 }
 
 type ParsedPush = { dryRun: boolean; deleting: boolean; tagOnly: boolean; allBranches: boolean; refspecs: string[]; certain: boolean };
@@ -155,7 +155,7 @@ function decidePush(parsed: GitInvocation, git: GitRunner, override: boolean): D
 		}
 	}
 	if (!targetsMain) return;
-	return { block: true, reason: "Do not push directly to main/master; push to a branch and open an MR (or set CICD_ALLOW_MAIN_PUSH=1 to override)." };
+	return { block: true, reason: "Do not push directly to main/master; push to a branch and open an MR (or set TRUNK_DEV_ALLOW_MAIN_PUSH=1 to override)." };
 }
 
 export type CommitGateOptions = {
@@ -177,8 +177,8 @@ export function decideCommitGate(command: string, cwd: string, options: CommitGa
 			if (parsed.subcommand !== "commit" && parsed.subcommand !== "push") continue;
 			if (!isReleaseRepository(parsed.cwd, { git, exists: options.exists, readFile: read })) continue;
 			const decision = parsed.subcommand === "commit"
-				? decideCommit(parsed, read, isAssignmentOverride(invocation, "CICD_ALLOW_NONCONVENTIONAL_COMMIT", env))
-				: decidePush(parsed, git, isAssignmentOverride(invocation, "CICD_ALLOW_MAIN_PUSH", env));
+				? decideCommit(parsed, read, isAssignmentOverride(invocation, "TRUNK_DEV_ALLOW_NONCONVENTIONAL_COMMIT", env))
+				: decidePush(parsed, git, isAssignmentOverride(invocation, "TRUNK_DEV_ALLOW_MAIN_PUSH", env));
 			if (decision) return decision;
 		}
 		return undefined;
@@ -189,7 +189,7 @@ function toolCwd(input: Record<string, unknown>, sessionCwd: string): string {
 	return typeof input.cwd === "string" && input.cwd ? resolve(sessionCwd, input.cwd) : sessionCwd;
 }
 
-export default function cicdCommitGate(pi: ExtensionAPI): void {
+export default function trunkDevCommitGate(pi: ExtensionAPI): void {
 	pi.on("tool_call", (event: ToolCallEvent, ctx) => {
 		try {
 			if (event.toolName !== "bash") return;

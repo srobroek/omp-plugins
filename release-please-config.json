@@ -143,23 +143,6 @@
         }
       ]
     },
-    "cicd": {
-      "release-type": "simple",
-      "component": "cicd",
-      "changelog-path": "CHANGELOG.md",
-      "extra-files": [
-        {
-          "type": "json",
-          "path": ".omp-plugin/plugin.json",
-          "jsonpath": "$.version"
-        },
-        {
-          "type": "json",
-          "path": "package.json",
-          "jsonpath": "$.version"
-        }
-      ]
-    },
     "debate": {
       "release-type": "simple",
       "component": "debate",
@@ -418,6 +401,23 @@
     "toolchain": {
       "release-type": "simple",
       "component": "toolchain",
+      "changelog-path": "CHANGELOG.md",
+      "extra-files": [
+        {
+          "type": "json",
+          "path": ".omp-plugin/plugin.json",
+          "jsonpath": "$.version"
+        },
+        {
+          "type": "json",
+          "path": "package.json",
+          "jsonpath": "$.version"
+        }
+      ]
+    },
+    "trunk-dev": {
+      "release-type": "simple",
+      "component": "trunk-dev",
       "changelog-path": "CHANGELOG.md",
       "extra-files": [
         {

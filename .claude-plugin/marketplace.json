@@ -51,13 +51,6 @@
       "category": "productivity"
     },
     {
-      "name": "cicd",
-      "description": "Trunk-based delivery and release automation: small batches, merge-request CI, feature-flag decisions, Conventional Commit releases, and protected-branch enforcement.",
-      "source": "./cicd",
-      "version": "0.1.0",
-      "category": "devops"
-    },
-    {
       "name": "debate",
       "description": "Stress-test a decision from both sides before committing.",
       "source": "./debate",
@@ -168,6 +161,13 @@
       "source": "./toolchain",
       "version": "1.0.2",
       "category": "development"
+    },
+    {
+      "name": "trunk-dev",
+      "description": "Trunk-based delivery and release automation: small batches, merge-request CI, feature-flag decisions, Conventional Commit releases, and protected-branch enforcement.",
+      "source": "./trunk-dev",
+      "version": "0.1.0",
+      "category": "devops"
     },
     {
       "name": "typescript",

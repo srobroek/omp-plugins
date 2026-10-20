@@ -1,5 +1,5 @@
 ---
-name: cicd-release-setup
+name: trunk-dev-release-setup
 description: Set up semantic-release on GitLab or GitHub with compatible Conventional Commit analysis, synchronized version manifests, protected-branch credentials, and a verified first release.
 ---
 
@@ -52,7 +52,7 @@ On GitHub, use the repository's approved release credential (for example a GitHu
 
 ## 5. Keep the release commit from looping CI
 
-Configure the git plugin to use a message such as `chore(release): ${nextRelease.version} [skip ci]` for its generated release commit. GitLab and GitHub recognize skip-CI markers in commit messages; this prevents the release commit from starting another release pipeline. Do not put the marker in MR titles or ordinary commits: it suppresses their pipeline even when included as quoted prose. The `cicd-skip-ci-text` rule provides a post-command reminder for recognized commands.
+Configure the git plugin to use a message such as `chore(release): ${nextRelease.version} [skip ci]` for its generated release commit. GitLab and GitHub recognize skip-CI markers in commit messages; this prevents the release commit from starting another release pipeline. Do not put the marker in MR titles or ordinary commits: it suppresses their pipeline even when included as quoted prose. The `trunk-dev-skip-ci-text` rule provides a post-command reminder for recognized commands.
 
 ## 6. Verify in stages
 

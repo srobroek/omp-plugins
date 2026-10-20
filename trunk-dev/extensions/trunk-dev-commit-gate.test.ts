@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { decideCommitGate } from "./cicd-commit-gate.ts";
+import { decideCommitGate } from "./trunk-dev-commit-gate.ts";
 
 const cwd = "/repo";
 const releaseOptions = {
@@ -39,15 +39,15 @@ describe("decideCommitGate commit subjects", () => {
 
 	test("recognizes quoting, assignment and env prefixes, command chains, dgit, and -C", () => {
 		expect(gate("echo 'git commit -m bad' && git commit -m 'wrong'; git status")).toMatchObject({ block: true });
-		expect(gate("CICD_ALLOW_NONCONVENTIONAL_COMMIT=1 git commit -m bad")).toBeUndefined();
-		expect(gate("env CICD_ALLOW_NONCONVENTIONAL_COMMIT=1 dgit commit -m bad")).toBeUndefined();
+		expect(gate("TRUNK_DEV_ALLOW_NONCONVENTIONAL_COMMIT=1 git commit -m bad")).toBeUndefined();
+		expect(gate("env TRUNK_DEV_ALLOW_NONCONVENTIONAL_COMMIT=1 dgit commit -m bad")).toBeUndefined();
 		expect(gate("dgit commit -m bad")).toMatchObject({ block: true });
 		expect(gate("git -C /repo commit -m bad")).toMatchObject({ block: true });
 	});
 
 	test("non-release repositories remain silent and process overrides are honored", () => {
 		expect(gate("git commit -m bad", { git: releaseOptions.git, exists: () => false })).toBeUndefined();
-		expect(gate("git commit -m bad", { ...releaseOptions, processEnv: { CICD_ALLOW_NONCONVENTIONAL_COMMIT: "1" } })).toBeUndefined();
+		expect(gate("git commit -m bad", { ...releaseOptions, processEnv: { TRUNK_DEV_ALLOW_NONCONVENTIONAL_COMMIT: "1" } })).toBeUndefined();
 	});
 });
 
@@ -95,7 +95,7 @@ describe("decideCommitGate push destinations", () => {
 	});
 
 	test("honors assignment and process environment main-push overrides", () => {
-		expect(push("CICD_ALLOW_MAIN_PUSH=1 git push origin HEAD:main")).toBeUndefined();
-		expect(push("git push origin main", "topic", { CICD_ALLOW_MAIN_PUSH: "1" })).toBeUndefined();
+		expect(push("TRUNK_DEV_ALLOW_MAIN_PUSH=1 git push origin HEAD:main")).toBeUndefined();
+		expect(push("git push origin main", "topic", { TRUNK_DEV_ALLOW_MAIN_PUSH: "1" })).toBeUndefined();
 	});
 });

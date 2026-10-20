@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { decideMrAdvisory } from "./cicd-mr-advisory.ts";
+import { decideMrAdvisory } from "./trunk-dev-mr-advisory.ts";
 
 const cwd = "/repo";
 const releaseGit = (args: readonly string[]) => {

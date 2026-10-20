@@ -1,5 +1,5 @@
 ---
-name: cicd-trunk-workflow
+name: trunk-dev-workflow
 description: Apply trunk-based small-batch branch, merge-request, CI, squash-release, and preview-testing practices; configure forge enforcement for Conventional Commits and protected default branches.
 ---
 

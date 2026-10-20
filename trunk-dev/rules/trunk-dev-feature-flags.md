@@ -1,5 +1,5 @@
 ---
-name: cicd-feature-flags
+name: trunk-dev-feature-flags
 description: Gate every new feature behind a default-off feature flag, record its owner and cleanup date, test both states, and use truthful commit types for dormant, enabled, and removed code.
 ---
 
