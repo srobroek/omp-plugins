@@ -368,15 +368,24 @@ function mergeCommand(invocation: ReturnType<typeof commandInvocations>[number])
 	return;
 }
 
-function forgeData(stdout: string, forge: "gh" | "glab"): { title: string; body: string; url: string } | undefined {
+export type ForgeMerge = { title: string; body: string; url: string; branch?: string };
+
+/**
+ * Parse `gh pr view --json` / `glab mr view --output json`. Only a completed merge counts:
+ * `--auto` / `--auto-merge` merge commands succeed while the PR is still open.
+ */
+export function mergedForgeData(stdout: string, forge: "gh" | "glab"): ForgeMerge | undefined {
 	const value = parseJson(stdout);
 	if (value === null || typeof value !== "object" || Array.isArray(value)) return;
 	const record = value as Record<string, unknown>;
+	const state = typeof record.state === "string" ? record.state.toLowerCase() : "";
+	if (state !== "merged") return;
 	const title = typeof record.title === "string" ? record.title : undefined;
 	const bodyValue = forge === "gh" ? record.body : record.description ?? record.body;
 	const urlValue = forge === "gh" ? record.url : record.web_url ?? record.url ?? record.webUrl;
+	const branchValue = forge === "gh" ? record.headRefName : record.source_branch;
 	if (title === undefined || typeof bodyValue !== "string" || typeof urlValue !== "string") return;
-	return { title, body: bodyValue, url: urlValue };
+	return { title, body: bodyValue, url: urlValue, branch: typeof branchValue === "string" && branchValue ? branchValue : undefined };
 }
 
 async function mergedFlagFollowUp(event: ToolResultEvent, sessionCwd: string): Promise<string | undefined> {
@@ -391,23 +400,18 @@ async function mergedFlagFollowUp(event: ToolResultEvent, sessionCwd: string): P
 		const repo = await repository(invocation.cwd, env);
 		if (repo === undefined) return;
 		const readEnv = readEnvironment(env, repo.store);
-		const branchPromise = runCommand(["git", "branch", "--show-current"], invocation.cwd, env, GIT_TIMEOUT_MS);
 		const forgeArgs = merge.forge === "gh"
-			? ["gh", "pr", "view", merge.number, "--json", "title,body,url"]
+			? ["gh", "pr", "view", merge.number, "--json", "title,body,url,state,headRefName"]
 			: ["glab", "mr", "view", merge.number, "--output", "json"];
-		const [forgeResult, existingResult, branchResult] = await Promise.all([
+		const [forgeResult, existingResult] = await Promise.all([
 			runCommand(forgeArgs, invocation.cwd, readEnv, READ_TIMEOUT_MS),
 			runCommand(["bd", "--readonly", "list", "--all", "--json", "--limit", "0"], repo.root, readEnv, READ_TIMEOUT_MS),
-			branchPromise,
 		]);
 		if (forgeResult?.exitCode !== 0 || existingResult?.exitCode !== 0) return;
-		const forge = forgeData(forgeResult.stdout, merge.forge);
+		const forge = mergedForgeData(forgeResult.stdout, merge.forge);
 		const existing = parseJson(existingResult.stdout);
 		if (forge === undefined || !Array.isArray(existing)) return;
-		const decision = decideFlagCleanup(forge.title, forge.body, existing, {
-			branch: branchResult?.exitCode === 0 ? branchResult.stdout.trim() : undefined,
-			url: forge.url,
-		});
+		const decision = decideFlagCleanup(forge.title, forge.body, existing, { branch: forge.branch, url: forge.url });
 		if (decision === undefined) return;
 		return await createCleanup(decision, repo.store, invocation.cwd, env, productionRuntime);
 	}

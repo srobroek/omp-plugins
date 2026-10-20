@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { createCleanup, decideFlagCleanup, decideStaleReminder, staleThresholdHours } from "./trunk-dev-beads.ts";
+import { createCleanup, decideFlagCleanup, decideStaleReminder, mergedForgeData, staleThresholdHours } from "./trunk-dev-beads.ts";
 
 const now = Date.parse("2026-10-20T12:00:00.000Z");
 const bead = (id: string, started: string, branch = "feat/example", assignee = "agent") => ({
@@ -120,5 +120,20 @@ describe("createCleanup runner fallback", () => {
 			run: async () => ({ exitCode: 120, stdout: "" }),
 		});
 		expect(locked).toContain("bd create 'chore: remove feature flag staged_api'");
+	});
+});
+
+describe("mergedForgeData", () => {
+	const pr = { title: flagTitle, body: flagBody, url: links.url, headRefName: "omp/agent/omp-1234" };
+	test("only a completed merge yields data, so --auto merges that are still open create nothing", () => {
+		expect(mergedForgeData(JSON.stringify({ ...pr, state: "OPEN" }), "gh")).toBeUndefined();
+		expect(mergedForgeData(JSON.stringify(pr), "gh")).toBeUndefined();
+		expect(mergedForgeData(JSON.stringify({ ...pr, state: "MERGED" }), "gh")).toEqual({ title: flagTitle, body: flagBody, url: links.url, branch: "omp/agent/omp-1234" });
+	});
+
+	test("reads GitLab description, web_url and source_branch", () => {
+		const mr = { title: flagTitle, description: flagBody, web_url: "https://gitlab.example/acme/repo/-/merge_requests/7", source_branch: "feat/x", state: "merged" };
+		expect(mergedForgeData(JSON.stringify(mr), "glab")).toMatchObject({ body: flagBody, branch: "feat/x" });
+		expect(mergedForgeData(JSON.stringify({ ...mr, state: "opened" }), "glab")).toBeUndefined();
 	});
 });
