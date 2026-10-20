@@ -49,7 +49,23 @@ Add a required pipeline job that validates the MR/PR title (the future squash su
 
 For GitLab, create a **project access token** whose bot user has Maintainer role and the `api` and `write_repository` scopes. Store it as masked and protected `GITLAB_TOKEN` in CI variables. A `CI_JOB_TOKEN` cannot push the release commit or open merge requests; it is not a substitute. Limit the release job's rules to the default branch and ensure the protected token is present in that job's context. Scope permissions narrowly enough that the release bot can push the release commit and tags while ordinary developers cannot push directly.
 
-On GitHub, use the repository's approved release credential (for example a GitHub App token or appropriately scoped secret) and explicitly configure permissions needed to create tags/releases and push the release commit. Keep secrets protected from untrusted fork/MR pipelines.
+On GitHub, authenticate the release job with the shared release GitHub App, as the other repositories do. Do not create a personal or per-repository release token. Install the App on the repository, and set the repository or organization variable `RELEASE_APP_CLIENT_ID` and the secret `RELEASE_APP_PRIVATE_KEY`. Add the App as a bypass actor for the default branch's pull-request rule, so it alone can push the release commit and tags. In the release workflow, mint the token with `actions/create-github-app-token` (pin it to a commit SHA) and pass it to semantic-release as `GITHUB_TOKEN`:
+
+```yaml
+- id: app-token
+  uses: actions/create-github-app-token@<sha> # v3
+  with:
+    client-id: ${{ vars.RELEASE_APP_CLIENT_ID }}
+    private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+- uses: actions/checkout@v4
+  with:
+    token: ${{ steps.app-token.outputs.token }}
+- run: npx semantic-release
+  env:
+    GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
+```
+
+Commits the App pushes also start CI normally, unlike commits made with the default `GITHUB_TOKEN`. Keep the job on the default branch only, and keep the App secret away from fork pull-request pipelines.
 
 ## 5. Keep the release commit from looping CI
 
