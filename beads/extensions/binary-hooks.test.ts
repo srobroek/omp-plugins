@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
-import { chmodSync, copyFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import bashGates from "./bash-gates.ts";
 import { binaryHooksRepairAdvisory, hasBinaryHooks, protectBinaryHookCommands } from "./binary-hooks.ts";
@@ -103,6 +103,25 @@ function putBinaryHook(path: string): void {
 			putBinaryHook(join(hooks, "pre-commit.backup"));
 			writeFileSync(join(hooks, "pre-commit"), "bd-added-bytes");
 			git(root, "config", "--local", "core.hooksPath", hooks);
+			expect(binaryHooksRepairAdvisory(root)).toContain("git config --local --unset core.hooksPath");
+		} finally { rmSync(root, { recursive: true, force: true }); }
+	});
+
+	test("session advisory detects text injected inside a universal Mach-O hook", () => {
+		// The observed damage: bd wrote its section into the binary, so the file keeps its fat header
+		// and x86_64 slice but a later slice turns into data.
+		const root = scratch();
+		try {
+			git(root, "init", "-q");
+			const hooks = join(root, ".beads", "hooks");
+			mkdirSync(hooks, { recursive: true });
+			const backup = join(hooks, "pre-commit.backup");
+			putBinaryHook(backup);
+			const damaged = readFileSync(backup);
+			damaged.write("\n# --- BEGIN BEADS INTEGRATION ---\nbd hooks run pre-commit \"$@\"\n", Math.floor(damaged.length * 0.75), "latin1");
+			writeFileSync(join(hooks, "pre-commit"), damaged);
+			expect(damaged.subarray(0, 4).equals(readFileSync(backup).subarray(0, 4))).toBe(true);
+			git(root, "config", "--local", "core.hooksPath", ".beads/hooks");
 			expect(binaryHooksRepairAdvisory(root)).toContain("git config --local --unset core.hooksPath");
 		} finally { rmSync(root, { recursive: true, force: true }); }
 	});
