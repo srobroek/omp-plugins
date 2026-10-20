@@ -1,6 +1,6 @@
 // @bun
 // extensions/bash-gates.ts
-import { resolve as resolve6 } from "path";
+import { resolve as resolve7 } from "path";
 
 // extensions/bd-actor-gate.ts
 import { basename, relative, resolve as resolve2, sep } from "path";
@@ -317,71 +317,6 @@ function commandSegments(command) {
 function tokenize(segment) {
   return tokenizeShell(segment, { preserveBackslashes: true }).map(({ value, startsQuoted }) => ({ value, quoted: startsQuoted }));
 }
-function invocation(segment, argv) {
-  const tokens = tokenize(segment);
-  const head = argv[0];
-  if (!head)
-    return null;
-  let start = 0;
-  while (start < tokens.length) {
-    const token = tokens[start];
-    if (!token || token.quoted)
-      return null;
-    const basename = token.value.split("/").pop() ?? token.value;
-    if (basename === head)
-      break;
-    if (basename === "env") {
-      start++;
-      while (start < tokens.length) {
-        const option = tokens[start];
-        if (!option || option.quoted)
-          return null;
-        const value = option.value;
-        if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(value)) {
-          start++;
-          continue;
-        }
-        if (value === "--") {
-          start++;
-          break;
-        }
-        if (value === "-i" || value === "--ignore-environment") {
-          start++;
-          continue;
-        }
-        if (value === "-u" || value === "--unset") {
-          start++;
-          if (start >= tokens.length || tokens[start]?.quoted)
-            return null;
-          start++;
-          continue;
-        }
-        if (value.startsWith("--unset=") || value.startsWith("-u") && value.length > 2) {
-          start++;
-          continue;
-        }
-        if (value.startsWith("-")) {
-          start++;
-          continue;
-        }
-        break;
-      }
-      continue;
-    }
-    if (!/^[A-Za-z_][A-Za-z0-9_]*=/.test(token.value) && !token.value.startsWith("-") && WRAPPERS[basename] !== true)
-      return null;
-    start++;
-  }
-  for (const [offset, word] of argv.entries()) {
-    const token = tokens[start + offset];
-    if (!token || token.quoted)
-      return null;
-    const value = offset === 0 ? token.value.split("/").pop() ?? token.value : token.value;
-    if (value !== word)
-      return null;
-  }
-  return tokens.slice(start);
-}
 function leadingCdCwd(command, cwd) {
   const match = /^\s*cd\s+([^\s;&|]+)\s*&&/.exec(command);
   if (!match)
@@ -390,6 +325,300 @@ function leadingCdCwd(command, cwd) {
   if (!dir || /^[-~$]/.test(dir) || /[\\`"'*?\x5b\x5d{}]/.test(dir))
     return cwd;
   return dir.startsWith("/") ? dir : resolve(cwd, dir);
+}
+function scanShell(source) {
+  const items = [];
+  const substitutions = [];
+  let complete = true;
+  let command = { kind: "command", words: [], redirects: [], hereDocuments: [] };
+  let word;
+  let target;
+  const pending = [];
+  const append = (at, text, quoted = false, expands = false) => {
+    word ??= { start: at, value: "", quoted: false, expands: false };
+    word.value += text;
+    word.quoted ||= quoted;
+    word.expands ||= expands;
+  };
+  const endCommand = () => {
+    if (command.words.length > 0 || command.redirects.length > 0)
+      items.push(command);
+    command = { kind: "command", words: [], redirects: [], hereDocuments: [] };
+  };
+  const flush = (end) => {
+    if (word === undefined)
+      return;
+    const done = { start: word.start, end, value: word.value, quoted: word.quoted, expands: word.expands };
+    word = undefined;
+    if (target !== undefined) {
+      command.redirects.push(done);
+      if (target !== "redirect")
+        pending.push({ delimiter: done.value, stripTabs: target === "here-document-tabs", quoted: done.quoted, owner: command });
+      target = undefined;
+      return;
+    }
+    if (command.words.length === 0 && !done.quoted && (done.value === "{" || done.value === "}")) {
+      endCommand();
+      items.push({ kind: "operator", operator: done.value });
+      return;
+    }
+    command.words.push(done);
+  };
+  const operator = (at, value) => {
+    flush(at);
+    target = undefined;
+    endCommand();
+    items.push({ kind: "operator", operator: value });
+  };
+  const substitution = (expansion) => {
+    if (expansion.inner !== undefined)
+      substitutions.push(expansion.inner);
+    if (!expansion.closed)
+      complete = false;
+  };
+  const hereDocuments = (from) => {
+    let at = from;
+    while (pending.length > 0) {
+      const document = pending.shift();
+      if (document === undefined)
+        break;
+      const bodyStart = at;
+      let bodyEnd = -1;
+      while (at <= source.length) {
+        const newline = source.indexOf(`
+`, at);
+        const lineEnd = newline < 0 ? source.length : newline;
+        const line = source.slice(at, lineEnd);
+        if ((document.stripTabs ? line.replace(/^\t+/, "") : line) === document.delimiter) {
+          bodyEnd = at;
+          at = newline < 0 ? source.length : newline + 1;
+          break;
+        }
+        at = lineEnd + 1;
+      }
+      const body = source.slice(bodyStart, bodyEnd < 0 ? source.length : bodyEnd);
+      document.owner.hereDocuments.push({ body, quoted: document.quoted });
+      if (!document.quoted)
+        for (const found of bodySubstitutions(body))
+          substitution(found);
+      if (bodyEnd < 0) {
+        complete = false;
+        return source.length;
+      }
+    }
+    return at;
+  };
+  for (let i = 0;i < source.length; i++) {
+    const ch = source[i];
+    const next = source[i + 1];
+    if (ch === "\\") {
+      if (next === `
+`)
+        i++;
+      else if (next === undefined)
+        append(i, ch);
+      else
+        append(i++, next, true);
+      continue;
+    }
+    if (ch === "'") {
+      const close = source.indexOf("'", i + 1);
+      if (close < 0)
+        complete = false;
+      append(i, source.slice(i + 1, close < 0 ? source.length : close), true);
+      i = close < 0 ? source.length : close;
+      continue;
+    }
+    if (ch === "$" && next === "'") {
+      let j = i + 2;
+      while (j < source.length && source[j] !== "'")
+        j += source[j] === "\\" ? 2 : 1;
+      if (j >= source.length)
+        complete = false;
+      append(i, source.slice(i + 2, Math.min(j, source.length)), true);
+      i = j;
+      continue;
+    }
+    if (ch === '"' || ch === "$" && next === '"') {
+      const open = ch === '"' ? i : i + 1;
+      let j = open + 1;
+      let text = "";
+      let expands = false;
+      while (j < source.length && source[j] !== '"') {
+        const c = source[j];
+        const escaped = source[j + 1];
+        if (c === "\\" && escaped !== undefined) {
+          if (escaped !== `
+`)
+            text += '$`"\\'.includes(escaped) ? escaped : `\\${escaped}`;
+          j += 2;
+          continue;
+        }
+        if (c === "$" || c === "`") {
+          const expansion = expansionAt(source, j);
+          substitution(expansion);
+          text += source.slice(j, expansion.end);
+          expands ||= expansion.expands;
+          j = expansion.end;
+          continue;
+        }
+        text += c;
+        j++;
+      }
+      if (j >= source.length)
+        complete = false;
+      append(i, text, true, expands);
+      i = j;
+      continue;
+    }
+    if (ch === "$" || ch === "`") {
+      const expansion = expansionAt(source, i);
+      substitution(expansion);
+      append(i, source.slice(i, expansion.end), false, expansion.expands);
+      i = expansion.end - 1;
+      continue;
+    }
+    if ((ch === "<" || ch === ">") && next === "(") {
+      const close = closingIndex(source, i + 2, "(", ")");
+      const end = close < 0 ? source.length : close;
+      substitutions.push(source.slice(i + 2, end));
+      if (close < 0)
+        complete = false;
+      append(i, source.slice(i, close < 0 ? end : end + 1), false, true);
+      i = end;
+      continue;
+    }
+    if (ch === "#" && word === undefined) {
+      const newline = source.indexOf(`
+`, i);
+      i = (newline < 0 ? source.length : newline) - 1;
+      continue;
+    }
+    if (ch === " " || ch === "\t") {
+      flush(i);
+      continue;
+    }
+    if (ch === `
+`) {
+      operator(i, `
+`);
+      i = hereDocuments(i + 1) - 1;
+      continue;
+    }
+    if (ch === ";") {
+      const length = next === ";" ? source[i + 2] === "&" ? 3 : 2 : next === "&" ? 2 : 1;
+      operator(i, length === 1 ? ";" : ";;");
+      i += length - 1;
+      continue;
+    }
+    if (ch === "&" && next === ">") {
+      flush(i);
+      target = "redirect";
+      i += source[i + 2] === ">" ? 2 : 1;
+      continue;
+    }
+    if (ch === "&" || ch === "|") {
+      const value = next === ch ? `${ch}${ch}` : ch === "|" && next === "&" ? "|&" : ch;
+      operator(i, value);
+      i += value.length - 1;
+      continue;
+    }
+    if (ch === "(" || ch === ")") {
+      operator(i, ch);
+      continue;
+    }
+    if (ch === "<" || ch === ">") {
+      if (word !== undefined && !word.quoted && !word.expands && /^(?:\d+|\{[A-Za-z_]\w*\})$/.test(word.value))
+        word = undefined;
+      else
+        flush(i);
+      if (source.startsWith("<<<", i)) {
+        target = "redirect";
+        i += 2;
+      } else if (source.startsWith("<<-", i)) {
+        target = "here-document-tabs";
+        i += 2;
+      } else if (source.startsWith("<<", i)) {
+        target = "here-document";
+        i += 1;
+      } else {
+        target = "redirect";
+        if (next === ">" || next === "&" || next === "|" || ch === "<" && next === ">")
+          i += 1;
+      }
+      continue;
+    }
+    append(i, ch, false, "*?[{}".includes(ch) || ch === "~" && word === undefined);
+  }
+  flush(source.length);
+  endCommand();
+  if (pending.length > 0)
+    complete = false;
+  return { items, substitutions, complete };
+}
+function expansionAt(text, at) {
+  if (text[at] === "`") {
+    let j = at + 1;
+    while (j < text.length && text[j] !== "`")
+      j += text[j] === "\\" ? 2 : 1;
+    const closed = j < text.length;
+    return { end: closed ? j + 1 : text.length, inner: text.slice(at + 1, Math.min(j, text.length)), expands: true, closed };
+  }
+  const next = text[at + 1];
+  if (next === "(" || next === "{") {
+    const close = closingIndex(text, at + 2, next, next === "(" ? ")" : "}");
+    const closed = close >= 0;
+    return { end: closed ? close + 1 : text.length, inner: text.slice(at + 2, closed ? close : text.length), expands: true, closed };
+  }
+  if (next !== undefined && /[A-Za-z_]/.test(next)) {
+    let j = at + 2;
+    while (j < text.length && /\w/.test(text[j]))
+      j++;
+    return { end: j, expands: true, closed: true };
+  }
+  if (next !== undefined && /[0-9@*#?$!-]/.test(next))
+    return { end: at + 2, expands: true, closed: true };
+  return { end: at + 1, expands: false, closed: true };
+}
+function closingIndex(text, from, open, close) {
+  let depth = 1;
+  for (let j = from;j < text.length; j++) {
+    const c = text[j];
+    if (c === "\\") {
+      j++;
+      continue;
+    }
+    if (c === "'" || c === '"' || c === "`") {
+      let k = j + 1;
+      while (k < text.length && text[k] !== c)
+        k += c !== "'" && text[k] === "\\" ? 2 : 1;
+      if (k >= text.length)
+        return -1;
+      j = k;
+      continue;
+    }
+    if (c === open)
+      depth++;
+    else if (c === close && --depth === 0)
+      return j;
+  }
+  return -1;
+}
+function bodySubstitutions(body) {
+  const found = [];
+  for (let j = 0;j < body.length; j++) {
+    const c = body[j];
+    if (c === "\\") {
+      j++;
+      continue;
+    }
+    if (c !== "$" && c !== "`")
+      continue;
+    const expansion = expansionAt(body, j);
+    found.push(expansion);
+    j = expansion.end - 1;
+  }
+  return found;
 }
 function splitCommands(source) {
   const positions = [];
@@ -1359,6 +1588,7 @@ var READS = {
   search: true,
   show: true,
   stale: true,
+  stats: true,
   state: true,
   status: true,
   statuses: true,
@@ -1366,14 +1596,13 @@ var READS = {
   version: true,
   where: true,
   config: { get: true, list: true },
-  dep: { list: true, show: true, tree: true },
-  dolt: { diff: true, log: true, status: true },
-  epic: { list: true, show: true },
+  dep: { list: true, tree: true },
+  dolt: { status: true },
   formula: { list: true, show: true },
   gate: { list: true, show: true },
   kv: { get: true, list: true },
-  mol: { list: true, show: true },
-  swarm: { list: true, show: true }
+  mol: { show: true },
+  swarm: { list: true }
 };
 var WRITE_FLAGS = {
   orphans: ["--fix", "-f"],
@@ -1381,6 +1610,7 @@ var WRITE_FLAGS = {
   ready: ["--claim"]
 };
 var BEAD_ID2 = /^[A-Za-z][A-Za-z0-9]*(?:-[A-Za-z0-9]+)+(?:\.\d+)*$/;
+var COMMENT_LISTING_FLAGS = { "--json": true, "--local-time": true };
 function writesStore(invocation) {
   if (invocation === undefined)
     return true;
@@ -1390,9 +1620,11 @@ function writesStore(invocation) {
   if (flagEnabled(globals, ["--readonly"]))
     return false;
   if (verb === "comment")
-    return args.length !== 1 || args[0] !== "list";
-  if (verb === "comments")
-    return args.length !== 1 || !BEAD_ID2.test(args[0] ?? "");
+    return true;
+  if (verb === "comments") {
+    const positional = args.filter((arg) => COMMENT_LISTING_FLAGS[arg] !== true);
+    return positional.length !== 1 || !BEAD_ID2.test(positional[0] ?? "");
+  }
   const rule = READS[verb];
   if (rule === undefined)
     return true;
@@ -1456,37 +1688,377 @@ function embedded(store) {
   } catch {}
   return metadata !== "" || config !== "";
 }
-var OPERATOR = /[;&|<>(){}\\\n]/;
-var SUBSTITUTION = /\$\(|`/;
+function embeddedStoreFor(cwd, env = process.env) {
+  const store = storeFor([], cwd, env);
+  return store !== undefined && embedded(store) ? store : undefined;
+}
 var DEFERRED_VALUE = /[$`~*?[\]]/;
 var STORE_FLAGS = ["-C", "--directory", "--db", "--database"];
-function embeddedWriteTargets(command, cwd, env) {
-  const hasBd = commandSegments(command).some((segment) => invocation(segment, ["bd"]) !== null);
-  if (!hasBd)
-    return { kind: "stores", stores: [] };
-  const direct = directInvocation(command);
-  if (direct !== undefined) {
-    if (direct === "no-write" || !writesStore(direct))
-      return { kind: "stores", stores: [] };
-    const store = storeFor(direct.globals, cwd, env);
-    return { kind: "stores", stores: store !== undefined && embedded(store) ? [store] : [] };
-  }
-  const ambient = storeFor([], cwd, env);
-  const at = ambient !== undefined && embedded(ambient) ? ambient : namedStore(command, cwd, env);
-  if (at === undefined)
-    return { kind: "stores", stores: [] };
-  return {
-    kind: "refused",
-    reason: [
-      `This command mentions \`bd\` in a form the Beads write lock cannot resolve, and ${at} is an embedded store, where two concurrent writers corrupt the Dolt journal.`,
-      "The lock accepts exactly one shape: a bash call whose whole command is a single direct `bd` invocation, optionally preceded by literal `VAR=value` assignments, with no separators, pipes, redirections, grouping, command substitutions, escapes or newlines, and with a literal value for `-C` / `--directory` / `--db` / `--database`.",
-      "Issue the `bd` command as its own tool call in that form, and run the surrounding work as a separate call. `bd export -o issues.jsonl` rather than a redirection, and one call each rather than `&&`, are accepted."
-    ].join(" ")
+var BD_WORD = /(?<![\w.-])bd(?![\w-]|\.\w)/;
+var ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*\+?=/;
+var BEADS_DIR_ASSIGNMENT = /^BEADS_DIR(\+?)=/;
+var LIST_PREFIXES = new Set(["then", "else", "do"]);
+var CONDITION_PREFIXES = { "!": true, if: true, elif: true, while: true, until: true, time: true };
+var NAME_ONLY = {
+  ":": true,
+  "[": true,
+  "[[": true,
+  cat: true,
+  echo: true,
+  egrep: true,
+  false: true,
+  fgrep: true,
+  grep: true,
+  hash: true,
+  head: true,
+  help: true,
+  ls: true,
+  man: true,
+  printf: true,
+  rg: true,
+  tail: true,
+  test: true,
+  true: true,
+  type: true,
+  wc: true,
+  whereis: true,
+  which: true
+};
+var SHELL_INTERPRETERS = { bash: true, dash: true, fish: true, ksh: true, mksh: true, sh: true, zsh: true };
+var SOURCE_RUNNERS = { ".": true, eval: true, parallel: true, screen: true, script: true, source: true, su: true, tmux: true, watch: true };
+var ASSIGNING = { declare: true, getopts: true, local: true, mapfile: true, printf: true, read: true, readarray: true, readonly: true, typeset: true };
+var UNCERTAIN_AFTER = { "\n": true, "&": true, ";": true, ";;": true, "||": true };
+var RUNNER_SCRIPT = /^bd-embedded-write-runner\.(?:js|ts)$/;
+var DYNAMIC_CWD = "This command changes directory dynamically; issue the `bd` command with the tool's cwd field instead.";
+var SOURCE_FIX = "Write each `bd` command directly in this command line instead of inside a string, script or here-document.";
+var ACCEPTED_SHAPES = "Accepted: `bd` reads anywhere in pipes, `;` / `&&` / `||` lists, `( )` / `{ }` groups, loops and redirections; and each `bd` write written as its own simple command, `[VAR=literal ...] bd ...`, anywhere in such a command, which the lock runs under its serialising runner with a hold of its own.";
+function planEmbeddedWrites(command, cwd, env) {
+  if (!BD_WORD.test(command))
+    return { kind: "writes", writes: [] };
+  const scan = scanShell(command);
+  const writes = [];
+  let problem;
+  let problemStore;
+  const refuse = (found, store) => {
+    problem ??= found;
+    problemStore ??= store;
   };
+  if (!scan.complete)
+    refuse({ part: "it leaves a quote, command substitution or here-document open, so its `bd` invocations cannot be located", fix: "Close it and retry." });
+  if (scan.substitutions.some(runsBd)) {
+    refuse({
+      part: "`bd` runs inside a command substitution (`$(...)`, backticks or `<(...)`), which the lock cannot rewrite",
+      fix: "Run that `bd` at the top level of the command instead: pipe its output on (`bd show X --json | jq ...`), or redirect it to a file and read the file."
+    });
+  }
+  const scopes = [{ cwd: { kind: "known", cwd, certain: true, changed: false }, beadsDir: { kind: "known", value: env.BEADS_DIR } }];
+  const { items } = scan;
+  for (const [index, item] of items.entries()) {
+    const state = scopes[scopes.length - 1];
+    if (item.kind === "operator") {
+      if (item.operator === "(")
+        scopes.push(structuredClone(state));
+      else if (item.operator === ")" && scopes.length > 1)
+        scopes.pop();
+      else if (UNCERTAIN_AFTER[item.operator] === true && state.cwd.kind === "known" && state.cwd.changed)
+        state.cwd.certain = false;
+      continue;
+    }
+    const shape = shapeOf(item, command);
+    if (shape.kind !== "bd" && item.hereDocuments.some((document) => BD_WORD.test(document.body))) {
+      const runner = pipelineSourceRunner(items, index, command);
+      if (runner !== undefined)
+        refuse({ part: `a here-document fed to \`${runner}\` mentions \`bd\``, fix: SOURCE_FIX });
+    }
+    if (shape.kind === "other") {
+      const launch = launchOf(shape, item, command);
+      if (launch !== undefined)
+        refuse(launch);
+      const before = operatorAt(items, index - 1);
+      const after = operatorAt(items, index + 1);
+      applyEffects(shape, state, command, {
+        leading: index === 0 && after === "&&",
+        scoped: before === "|" || before === "|&" || after === "|" || after === "|&" || after === "&"
+      });
+      continue;
+    }
+    if (shape.kind === "runner") {
+      const argv = shape.child.slice(1);
+      const child = invocationFromArgv(argv.map((word) => word.value));
+      if (child === undefined || !isWrite(child, argv))
+        continue;
+      const resolved = resolveWrite(child, shape.assignments, state, env, command);
+      if ("problem" in resolved)
+        refuse(resolved.problem);
+      else if (resolved.store !== undefined && embedded(resolved.store) && resolved.store !== canonical(shape.store)) {
+        refuse({ part: `a runner command holds \`${shape.store}\` while its \`bd ${child.verb}\` writes \`${resolved.store}\``, fix: "Write the plain `bd` command and let the lock generate the runner form." }, resolved.store);
+      }
+      continue;
+    }
+    const invocation = invocationFromArgv(shape.args.map((word) => word.value));
+    if (invocation === undefined || !isWrite(invocation, shape.args))
+      continue;
+    const resolved = resolveWrite(invocation, shape.assignments, state, env, command);
+    if ("problem" in resolved) {
+      refuse(resolved.problem);
+      continue;
+    }
+    const store = resolved.store;
+    if (store === undefined || !embedded(store))
+      continue;
+    if (shape.condition !== undefined) {
+      refuse({
+        part: `the write \`bd ${invocation.verb}\` follows \`${shape.condition}\`, and the lock does not run a write in a condition, behind \`!\` or under \`time\``,
+        fix: `Make the write its own simple command, for example \`bd ${invocation.verb} ... && next\` or \`check && bd ${invocation.verb} ...\`.`
+      }, store);
+      continue;
+    }
+    writes.push({ store, offset: shape.head.start });
+  }
+  if (problem === undefined)
+    return { kind: "writes", writes };
+  const at = writes[0]?.store ?? problemStore ?? embeddedStoreFor(cwd, env) ?? namedStore(command, cwd, env);
+  if (at === undefined)
+    return { kind: "writes", writes };
+  return { kind: "refused", reason: refusal(problem, at) };
+}
+function embeddedWriteTargets(command, cwd, env) {
+  const plan = planEmbeddedWrites(command, cwd, env);
+  return plan.kind === "refused" ? plan : { kind: "stores", stores: [...new Set(plan.writes.map((write) => write.store))] };
+}
+function refusal(problem, store) {
+  if ("exact" in problem)
+    return problem.exact;
+  return `The Beads write lock cannot run this command: ${problem.part}. ${store} is an embedded store, where two concurrent writers corrupt the Dolt journal, so every \`bd\` write to it runs under the lock's serialising runner. ${problem.fix} ${ACCEPTED_SHAPES}`;
+}
+function commandName(word) {
+  return word.value.split("/").pop() ?? word.value;
+}
+function operatorAt(items, index) {
+  const item = items[index];
+  return item?.kind === "operator" ? item.operator : undefined;
+}
+function shapeOf(command, source) {
+  const { words } = command;
+  let i = 0;
+  let condition;
+  for (let word = words[0];word !== undefined && !word.quoted && !word.expands; word = words[i]) {
+    if (CONDITION_PREFIXES[word.value] === true)
+      condition ??= word.value;
+    else if (!LIST_PREFIXES.has(word.value))
+      break;
+    i += word.value === "time" && words[i + 1]?.value === "-p" ? 2 : 1;
+  }
+  const first = i;
+  while (words[i] !== undefined && ASSIGNMENT.test(source.slice(words[i]?.start, words[i]?.end)))
+    i++;
+  const assignments = words.slice(first, i);
+  const head = words[i];
+  const args = words.slice(i + 1);
+  if (head !== undefined && !head.expands && commandName(head) === "bd")
+    return { kind: "bd", condition, assignments, head, args };
+  const runner = head === undefined || head.expands || condition !== undefined ? undefined : runnerShape(args);
+  if (runner !== undefined)
+    return { kind: "runner", assignments, ...runner };
+  return { kind: "other", assignments, head, args };
+}
+function runnerShape(args) {
+  const script = args[0];
+  if (script === undefined || script.expands || !RUNNER_SCRIPT.test(commandName(script)))
+    return;
+  let store;
+  let i = 1;
+  for (;i < args.length && args[i]?.value !== "--"; i += 2) {
+    const value = args[i + 1];
+    if (value === undefined || value.expands)
+      return;
+    if (args[i]?.value === RUNNER_STORE_FLAG)
+      store = value.value;
+    else if (args[i]?.value !== RUNNER_WAIT_FLAG)
+      return;
+  }
+  const child = args.slice(i + 1);
+  const bd = child[0];
+  if (store === undefined || bd === undefined || bd.expands || commandName(bd) !== "bd")
+    return;
+  return { store, child };
+}
+function isWrite(invocation, args) {
+  return writesStore(invocation) || WRITE_FLAGS[invocation.verb] !== undefined && args.some((word) => word.expands);
+}
+function runsBd(source) {
+  if (!BD_WORD.test(source))
+    return false;
+  const scan = scanShell(source);
+  if (!scan.complete || scan.substitutions.some(runsBd))
+    return true;
+  return scan.items.some((item, index) => {
+    if (item.kind !== "command")
+      return false;
+    const shape = shapeOf(item, source);
+    if (shape.kind !== "other" || launchOf(shape, item, source) !== undefined)
+      return true;
+    return item.hereDocuments.some((document) => BD_WORD.test(document.body)) && pipelineSourceRunner(scan.items, index, source) !== undefined;
+  });
+}
+function sourceRunner(shape) {
+  const { head, args } = shape;
+  if (head === undefined)
+    return;
+  if (!head.quoted && !head.expands && SOURCE_RUNNERS[commandName(head)] === true)
+    return head;
+  return [head, ...args].find((word) => !word.quoted && !word.expands && SHELL_INTERPRETERS[commandName(word)] === true);
+}
+function pipelineSourceRunner(items, index, source) {
+  const pipe = (at) => {
+    const operator = operatorAt(items, at);
+    return operator === "|" || operator === "|&";
+  };
+  let first = index;
+  while (pipe(first - 1) && items[first - 2]?.kind === "command")
+    first -= 2;
+  let last = index;
+  while (pipe(last + 1) && items[last + 2]?.kind === "command")
+    last += 2;
+  for (let at = first;at <= last; at += 2) {
+    const item = items[at];
+    if (item?.kind !== "command")
+      continue;
+    const shape = shapeOf(item, source);
+    const runner = shape.kind === "other" ? sourceRunner(shape) : undefined;
+    if (runner !== undefined)
+      return runner.value;
+  }
+  return;
+}
+function launchOf(shape, command, source) {
+  const { head, args } = shape;
+  if (head === undefined)
+    return;
+  if (head.expands) {
+    if (!BD_WORD.test(source))
+      return;
+    return { part: `its command word \`${source.slice(head.start, head.end)}\` is expanded at run time, so whether it runs \`bd\` is unknown`, fix: "Spell `bd` literally as the command word." };
+  }
+  const runner = sourceRunner(shape);
+  if (runner !== undefined && [head, ...args, ...command.redirects].some((word) => BD_WORD.test(word.value))) {
+    return { part: `\`bd\` is passed as shell source to \`${runner.value}\`, which runs it where the lock cannot see it`, fix: SOURCE_FIX };
+  }
+  const name = commandName(head);
+  if (NAME_ONLY[name] === true || name === "command" && /^-[vV]$/.test(args[0]?.value ?? ""))
+    return;
+  if (!args.some((word) => !word.quoted && !word.expands && commandName(word) === "bd"))
+    return;
+  return {
+    part: `\`bd\` is launched through \`${head.value}\`, which hides the invocation from the lock`,
+    fix: 'Call `bd` directly as its own simple command instead of through a launcher such as `env`, `xargs`, `timeout` or `find -exec`; to act on a list of ids, pass them to one `bd` call or loop with `while read -r id; do bd ... "$id"; done`.'
+  };
+}
+function applyEffects(shape, state, source, context) {
+  const { head, args } = shape;
+  if (head === undefined) {
+    for (const word of shape.assignments)
+      assignBeadsDir(state, word, source, context.scoped);
+    return;
+  }
+  const name = head.expands ? "" : commandName(head);
+  if (name === "cd") {
+    const operands = args.filter((word) => word.value !== "--" && !/^-[LPe@]+$/.test(word.value));
+    const target = operands[0];
+    if (state.cwd.kind === "dynamic")
+      return;
+    if (target === undefined || target.value === "-" || target.expands || DEFERRED_VALUE.test(target.value) || context.scoped) {
+      state.cwd = { kind: "dynamic", problem: { exact: DYNAMIC_CWD } };
+      return;
+    }
+    state.cwd = { kind: "known", cwd: absolute(target.value, state.cwd.cwd), certain: context.leading && state.cwd.certain && !state.cwd.changed, changed: true };
+    return;
+  }
+  if (name === "pushd" || name === "popd" || name === "source" || name === "." || name === "eval") {
+    state.cwd = {
+      kind: "dynamic",
+      problem: { part: `\`${name}\` earlier in the command may change the working directory before a \`bd\` write`, fix: "Use a literal `cd DIR &&` prefix or the tool's cwd field, or run the write as its own tool call." }
+    };
+    if (name !== "pushd" && name !== "popd")
+      state.beadsDir = { kind: "unknown", cause: name };
+    return;
+  }
+  if (name === "export") {
+    const unexports = args.some((word) => /^-\w*[nf]/.test(word.value));
+    for (const word of args) {
+      if (word.value === "BEADS_DIR" && unexports)
+        state.beadsDir = { kind: "unknown", cause: source.slice(head.start, word.end) };
+      else
+        assignBeadsDir(state, word, source, context.scoped);
+    }
+    return;
+  }
+  if (name === "unset") {
+    if (args.some((word) => word.value === "BEADS_DIR") && !args.some((word) => word.value === "-f")) {
+      state.beadsDir = context.scoped ? { kind: "unknown", cause: "unset BEADS_DIR" } : { kind: "known", value: undefined };
+    }
+    return;
+  }
+  if (ASSIGNING[name] === true && args.some((word) => word.value === "BEADS_DIR" || BEADS_DIR_ASSIGNMENT.test(word.value))) {
+    state.beadsDir = { kind: "unknown", cause: name };
+  }
+}
+function assignBeadsDir(state, word, source, scoped) {
+  const match = BEADS_DIR_ASSIGNMENT.exec(word.value);
+  if (match === null)
+    return;
+  const value = word.value.slice(match[0].length);
+  const literal = !scoped && match[1] === "" && !word.expands && !DEFERRED_VALUE.test(value);
+  state.beadsDir = literal ? { kind: "known", value } : { kind: "unknown", cause: source.slice(word.start, word.end) };
+}
+function resolveWrite(invocation, assignments, state, env, source) {
+  const write = `\`bd ${invocation.verb}\``;
+  for (const flag of STORE_FLAGS) {
+    const value = globalValue(invocation.globals, [flag]);
+    if (value !== undefined && DEFERRED_VALUE.test(value)) {
+      return { problem: { part: `${write} selects its store with \`${flag} ${value}\`, which the shell expands at run time`, fix: `Give \`${flag}\` a literal path.` } };
+    }
+  }
+  let beadsDir = state.beadsDir;
+  for (const word of assignments) {
+    const match = BEADS_DIR_ASSIGNMENT.exec(word.value);
+    if (match === null)
+      continue;
+    const value = word.value.slice(match[0].length);
+    beadsDir = match[1] === "" && !word.expands && !DEFERRED_VALUE.test(value) ? { kind: "known", value } : { kind: "unknown", cause: source.slice(word.start, word.end) };
+  }
+  const directory = globalValue(invocation.globals, ["-C", "--directory"]);
+  const db = globalValue(invocation.globals, ["--db"]);
+  if (directory === undefined && db === undefined && beadsDir.kind === "unknown") {
+    return {
+      problem: {
+        part: `${write} runs with \`BEADS_DIR\` set by \`${beadsDir.cause}\`, which the shell resolves only at run time`,
+        fix: "Set `BEADS_DIR` to a literal path, as `export BEADS_DIR=/path` earlier in the command or as `BEADS_DIR=/path bd ...`, or leave it unset to use the session's store."
+      }
+    };
+  }
+  if (state.cwd.kind === "dynamic")
+    return { problem: state.cwd.problem };
+  const relative = db !== undefined ? !isAbsolute2(db) && (directory === undefined || !isAbsolute2(directory)) : directory !== undefined && !isAbsolute2(directory);
+  if (relative && !state.cwd.certain) {
+    return {
+      problem: {
+        part: `${write} resolves a relative \`${db === undefined ? "-C" : "--db"}\` path after a \`cd\` the lock cannot confirm ran`,
+        fix: "Give it an absolute path, or start the command with `cd DIR &&` joined to the write by `&&` alone."
+      }
+    };
+  }
+  return { store: storeFor(invocation.globals, state.cwd.cwd, { ...env, BEADS_DIR: beadsDir.kind === "known" ? beadsDir.value : undefined }) };
 }
 function namedStore(command, cwd, env) {
   const words = tokenize(command).flatMap((token) => token.quoted ? tokenize(token.value).map((inner) => inner.value) : [token.value]);
   for (const [index, word] of words.entries()) {
+    const assigned = BEADS_DIR_ASSIGNMENT.test(word) ? word.slice(word.indexOf("=") + 1) : undefined;
+    if (assigned !== undefined && !DEFERRED_VALUE.test(assigned)) {
+      const store = storeFor([], cwd, { ...env, BEADS_DIR: assigned });
+      if (store !== undefined && embedded(store))
+        return store;
+    }
     for (const flag of STORE_FLAGS) {
       const value = word === flag ? words[index + 1] : word.startsWith(`${flag}=`) ? word.slice(flag.length + 1) : undefined;
       if (value === undefined || DEFERRED_VALUE.test(value))
@@ -1497,31 +2069,6 @@ function namedStore(command, cwd, env) {
     }
   }
   return;
-}
-function directInvocation(command) {
-  const tokens = tokenize(command);
-  if (tokens.some((token) => SUBSTITUTION.test(token.value)))
-    return;
-  if (tokens.some((token) => !token.quoted && OPERATOR.test(token.value)))
-    return;
-  let i = 0;
-  while (tokens[i] !== undefined && tokens[i]?.quoted === false && /^[A-Za-z_]\w*=/.test(tokens[i]?.value ?? ""))
-    i++;
-  const head = tokens[i];
-  if (head === undefined || head.quoted)
-    return;
-  const base = head.value.split("/").pop() ?? head.value;
-  if (base !== "bd")
-    return;
-  const invocation = invocationFromArgv(tokens.slice(i + 1).map((token) => token.value));
-  if (invocation === undefined)
-    return "no-write";
-  for (const flag of STORE_FLAGS) {
-    const value = globalValue(invocation.globals, [flag]);
-    if (value !== undefined && DEFERRED_VALUE.test(value))
-      return;
-  }
-  return invocation;
 }
 function ageOf(path) {
   try {
@@ -1886,94 +2433,53 @@ function resolveBunBinary(options = {}) {
 function quote(word) {
   return `'${word.replaceAll("'", "'\\''")}'`;
 }
-function normalizeDirectCommand(command, cwd) {
-  const match = /^\s*cd\s+([^\s;&|]+)\s*&&\s*([\s\S]+?)\s*$/.exec(command);
-  if (match === null)
-    return { command, cwd };
-  const dir = match[1] ?? "";
-  if (!dir || /^[-~$]/.test(dir) || /[\\`"'*?\x5b\x5d{}]/.test(dir))
-    return;
-  return { command: match[2] ?? "", cwd: leadingCdCwd(command, cwd) };
-}
-function directShell(command) {
-  const tokens = tokenize(command);
-  if (tokens.some((token) => SUBSTITUTION.test(token.value)))
-    return;
-  if (tokens.some((token) => !token.quoted && OPERATOR.test(token.value)))
-    return;
-  let assignments = 0;
-  while (tokens[assignments] !== undefined && tokens[assignments]?.quoted === false && /^[A-Za-z_]\w*=/.test(tokens[assignments]?.value ?? ""))
-    assignments++;
-  const head = tokens[assignments];
-  if (head === undefined || head.quoted || (head.value.split("/").pop() ?? head.value) !== "bd")
-    return;
-  const match = /^\s*((?:[A-Za-z_]\w*=(?:'[^']*'|"[^"]*"|[^\s]+)\s+)*)((?:[^\s]+\/)?bd(?:\s[\s\S]*)?)\s*$/.exec(command);
-  if (match === null || tokenize(match[1] ?? "").length !== assignments)
-    return;
-  return { assignments: match[1] ?? "", call: match[2] ?? "" };
+function withRunner(command, writes, runner) {
+  let out = "";
+  let cursor = 0;
+  for (const write of [...writes].sort((left, right) => left.offset - right.offset)) {
+    const store = quote(write.store);
+    out += `${command.slice(cursor, write.offset)}BEADS_DOLT_SHARED_SERVER= BEADS_DIR=${store} ${quote(runner.interpreter)} ${quote(runner.script)} ${RUNNER_STORE_FLAG} ${store} ${RUNNER_WAIT_FLAG} ${RUNNER_WAIT_MS} -- `;
+    cursor = write.offset;
+  }
+  return out + command.slice(cursor);
 }
 async function decideEmbeddedWrite(parsed, event, ctx, deadline = Date.now() + 25000, runnerLookup = embeddedWriteRunner) {
   try {
     if (event.toolName !== "bash")
       return;
     const input = event.input;
-    const whole = typeof input.command === "string" ? input.command : typeof input.cmd === "string" ? input.cmd : "";
     const cwd = typeof input.cwd === "string" && input.cwd ? input.cwd : ctx?.cwd ?? process.cwd();
-    const env = environmentForInput(event.input);
-    const normalized = normalizeDirectCommand(whole, cwd);
-    if (normalized === undefined)
-      return { kind: "block", reason: "This command changes directory dynamically; issue the `bd` command with the tool's cwd field instead." };
-    const commandCwd = normalized.cwd;
-    const sources = [...parsed.commands.map((position) => position.raw)];
-    const visit = (child) => {
-      sources.push(...child.commands.map((position) => position.raw));
-      for (const nested of child.nested)
-        visit(nested);
-    };
-    for (const nested of parsed.nested)
-      visit(nested);
-    const targets = [];
-    for (const source of sources) {
-      const result = embeddedWriteTargets(source, commandCwd, env);
-      if (result.kind === "refused")
-        return { kind: "block", reason: result.reason };
-      targets.push(...result.stores);
-    }
-    const unique = [...new Set(targets)];
-    if (unique.length === 0)
+    const plan = planEmbeddedWrites(parsed.command, cwd, environmentForInput(event.input));
+    if (plan.kind === "refused")
+      return { kind: "block", reason: plan.reason };
+    if (plan.writes.length === 0)
       return;
-    const store = unique[0];
-    const direct = directShell(normalized.command);
-    if (store === undefined || unique.length > 1 || direct === undefined) {
-      return {
-        kind: "block",
-        reason: `This command reaches the embedded store${unique.length > 1 ? "s" : ""} ${unique.join(", ")} in a form the Beads write lock cannot run under its serialising runner. Issue the \`bd\` command as its own tool call, as a single direct invocation.`
-      };
-    }
+    const stores = [...new Set(plan.writes.map((write) => write.store))];
     const runner = runnerLookup();
     if ("unavailable" in runner) {
       return {
         kind: "block",
-        reason: `${store} is an embedded store, where two concurrent writers corrupt the Dolt journal, and the Beads write-lock runner that serialises writers could not be located: ${runner.unavailable} The write was refused rather than run unserialised.`
+        reason: `${stores.join(", ")} ${stores.length > 1 ? "are embedded stores" : "is an embedded store"}, where two concurrent writers corrupt the Dolt journal, and the Beads write-lock runner that serialises writers could not be located: ${runner.unavailable} The write was refused rather than run unserialised.`
       };
     }
     const preflightOwner = `tool-call-preflight:${event.toolCallId}`;
     const preflightDeadline = Math.min(deadline, Date.now() + preflightWaitMs());
-    const preflight = await hold(store, preflightOwner, Math.max(0, preflightDeadline - Date.now()));
-    if (preflight.kind === "failed")
-      return { kind: "block", reason: preflight.reason };
-    const released = await releasePreflight(store, preflightOwner, preflightDeadline);
-    if (released.kind === "failed")
-      return { kind: "block", reason: released.reason };
-    const runnerPrefix = `BEADS_DOLT_SHARED_SERVER= BEADS_DIR=${quote(store)} `;
-    const rewritten = `${direct.assignments}${runnerPrefix}${quote(runner.interpreter)} ${quote(runner.script)} ${RUNNER_STORE_FLAG} ${quote(store)} ${RUNNER_WAIT_FLAG} ${RUNNER_WAIT_MS} -- ${direct.call}`;
+    for (const store of stores) {
+      const preflight = await hold(store, preflightOwner, Math.max(0, preflightDeadline - Date.now()));
+      if (preflight.kind === "failed")
+        return { kind: "block", reason: preflight.reason };
+      const released = await releasePreflight(store, preflightOwner, preflightDeadline);
+      if (released.kind === "failed")
+        return { kind: "block", reason: released.reason };
+    }
+    const rewritten = withRunner(parsed.command, plan.writes, runner);
     const next = { ...event.input };
     if (typeof next.name !== "string" || next.name === "") {
       delete next.env;
       delete next.ready;
       delete next.pty;
     }
-    next.cwd = commandCwd;
+    next.cwd = cwd;
     if (typeof input.command === "string")
       next.command = rewritten;
     else
@@ -2127,9 +2633,221 @@ function decideBdUpdateCloseParsed(parsed) {
   return hasClosingBdUpdate(parsed) ? { block: true, reason: UPDATE_CLOSE_REASON } : undefined;
 }
 
+// extensions/binary-hooks.ts
+import { spawnSync as spawnSync3 } from "child_process";
+import { closeSync as closeSync2, existsSync as existsSync2, openSync as openSync2, readdirSync as readdirSync2, readFileSync as readFileSync3, readSync, realpathSync as realpathSync3, statSync as statSync3 } from "fs";
+import { isAbsolute as isAbsolute3, join as join2, resolve as resolve5, sep as sep2 } from "path";
+var BINARY_MAGICS = [
+  [254, 237, 250, 206],
+  [206, 250, 237, 254],
+  [254, 237, 250, 207],
+  [207, 250, 237, 254],
+  [202, 254, 186, 190],
+  [190, 186, 254, 202],
+  [202, 254, 186, 191],
+  [191, 186, 254, 202],
+  [127, 69, 76, 70]
+];
+var SAMPLE_BYTES = 4096;
+var GLOBAL_VALUE_FLAGS2 = new Set(["--actor", "--database", "--db", "-C", "--directory", "--dolt-auto-commit", "--mem-profile"]);
+var SEPARATORS2 = new Set([";", "&", "|", "&&", "||", "(", ")", "{", "}", `
+`]);
+function runGit(cwd, args) {
+  const result = spawnSync3("git", ["-C", cwd, ...args], { encoding: "utf8", timeout: 1000 });
+  if (result.error)
+    throw result.error;
+  return { status: result.status, stdout: result.stdout.trim() };
+}
+function hooksDirectory(cwd, git) {
+  const result = git(cwd, ["rev-parse", "--git-path", "hooks"]);
+  if (result.status === 0 && result.stdout !== "")
+    return isAbsolute3(result.stdout) ? result.stdout : resolve5(cwd, result.stdout);
+  const configured = git(cwd, ["config", "--path", "--get", "core.hooksPath"]);
+  if (configured.status === 0 && configured.stdout !== "") {
+    return isAbsolute3(configured.stdout) ? configured.stdout : resolve5(cwd, configured.stdout);
+  }
+  const conventional = join2(cwd, ".git", "hooks");
+  return existsSync2(conventional) ? conventional : undefined;
+}
+function fileHasMarker(path, magicsOnly = false) {
+  const fd = openSync2(path, "r");
+  try {
+    const bytes = Buffer.alloc(SAMPLE_BYTES);
+    const count = readSync(fd, bytes, 0, bytes.length, 0);
+    const sample = bytes.subarray(0, count);
+    if (!magicsOnly && sample.includes(0))
+      return true;
+    return BINARY_MAGICS.some((magic) => sample.length >= magic.length && magic.every((byte, index) => sample[index] === byte));
+  } finally {
+    closeSync2(fd);
+  }
+}
+function hasBinaryHooks(cwd, git = runGit) {
+  try {
+    const directory = hooksDirectory(cwd, git);
+    if (directory === undefined)
+      return false;
+    for (const entry of readdirSync2(directory)) {
+      const path = join2(directory, entry);
+      if (statSync3(path).isFile() && fileHasMarker(path))
+        return true;
+    }
+    return false;
+  } catch {
+    return false;
+  }
+}
+function commandChunks(command) {
+  const chunks = [];
+  let start = 0;
+  let quote = null;
+  for (let index = 0;index < command.length; index++) {
+    const character = command[index] ?? "";
+    if (quote !== null) {
+      if (character === quote)
+        quote = null;
+      else if (quote === '"' && character === "\\")
+        index++;
+      continue;
+    }
+    if (character === "'" || character === '"') {
+      quote = character;
+      continue;
+    }
+    if (character === "\\") {
+      index++;
+      continue;
+    }
+    if (SEPARATORS2.has(character)) {
+      chunks.push({ start, end: index });
+      if ((character === "&" || character === "|") && command[index + 1] === character)
+        index++;
+      start = index + 1;
+    }
+  }
+  chunks.push({ start, end: command.length });
+  return chunks;
+}
+function wordSpans(source) {
+  const words = [];
+  let index = 0;
+  while (index < source.length) {
+    while (index < source.length && /\s/.test(source[index] ?? ""))
+      index++;
+    if (index >= source.length)
+      break;
+    const start = index;
+    let value = "";
+    let quote = null;
+    while (index < source.length) {
+      const character = source[index] ?? "";
+      if (quote !== null) {
+        if (character === quote)
+          quote = null;
+        else if (quote === '"' && character === "\\" && index + 1 < source.length)
+          value += source[++index] ?? "";
+        else
+          value += character;
+        index++;
+        continue;
+      }
+      if (character === "'" || character === '"') {
+        quote = character;
+        index++;
+        continue;
+      }
+      if (character === "\\" && index + 1 < source.length) {
+        value += source[index + 1] ?? "";
+        index += 2;
+        continue;
+      }
+      if (/\s/.test(character) || SEPARATORS2.has(character))
+        break;
+      value += character;
+      index++;
+    }
+    if (index === start)
+      index++;
+    else
+      words.push({ value, start, end: index });
+  }
+  return words;
+}
+function initVerbIndex(words) {
+  let index = words.findIndex((word) => (word.value.split("/").pop() ?? word.value) === "bd");
+  if (index < 0)
+    return;
+  index++;
+  while (index < words.length) {
+    const flag = words[index]?.value ?? "";
+    if (!flag.startsWith("-"))
+      return flag === "init" ? index : undefined;
+    if (flag === "--")
+      return;
+    if (GLOBAL_VALUE_FLAGS2.has(flag) && !flag.includes("="))
+      index++;
+    index++;
+  }
+  return;
+}
+function rewriteInitCalls(command) {
+  const insertions = [];
+  for (const chunk of commandChunks(command)) {
+    const source = command.slice(chunk.start, chunk.end);
+    const parsed = parse(source);
+    if (parsed.unknown || parsed.commands.length !== 1)
+      continue;
+    const invocation = parsedInvocations(parsed).find((item) => item.verb === "init");
+    if (invocation === undefined || invocation.args.includes("--skip-hooks"))
+      continue;
+    const words = wordSpans(source);
+    const verbIndex = initVerbIndex(words);
+    if (verbIndex === undefined)
+      continue;
+    insertions.push(chunk.start + (words[verbIndex]?.end ?? 0));
+  }
+  if (insertions.length === 0)
+    return;
+  let rewritten = command;
+  for (const offset of insertions.sort((left, right) => right - left))
+    rewritten = `${rewritten.slice(0, offset)} --skip-hooks${rewritten.slice(offset)}`;
+  return rewritten;
+}
+function protectBinaryHookCommands(input, command, cwd, git = runGit) {
+  try {
+    const invocations = parsedInvocations(parse(command));
+    const inits = invocations.filter((invocation) => invocation.verb === "init");
+    const installs = invocations.filter((invocation) => invocation.verb === "hooks" && invocation.args[1] === "install");
+    const needsInitGuard = inits.some((invocation) => !invocation.args.includes("--skip-hooks"));
+    if (!needsInitGuard && installs.length === 0)
+      return;
+    if (!hasBinaryHooks(cwd, git))
+      return;
+    if (installs.length > 0) {
+      return {
+        kind: "block",
+        reason: "`bd hooks install` was blocked because an existing Git hook is a binary executable that this installer could corrupt; it was blocked to keep the existing (binary) hooks intact."
+      };
+    }
+    if (!needsInitGuard)
+      return;
+    const rewritten = rewriteInitCalls(command);
+    if (rewritten === undefined) {
+      return { kind: "block", reason: "`bd init` was blocked because binary Git hooks exist and the command could not be safely rewritten to add `--skip-hooks`; this keeps the existing (binary) hooks intact." };
+    }
+    const record = input !== null && typeof input === "object" ? input : undefined;
+    const key = typeof record?.command === "string" ? "command" : typeof record?.cmd === "string" ? "cmd" : undefined;
+    if (record === undefined || key === undefined)
+      return;
+    return { kind: "rewrite", input: { ...record, [key]: rewritten } };
+  } catch {
+    return;
+  }
+}
+
 // extensions/session-beads-lifecycle.ts
-import { existsSync as existsSync2, readFileSync as readFileSync3, realpathSync as realpathSync3, rmSync, statSync as statSync3 } from "fs";
-import { dirname as dirname3, isAbsolute as isAbsolute3, join as join2, resolve as resolve5 } from "path";
+import { existsSync as existsSync3, readFileSync as readFileSync4, realpathSync as realpathSync4, rmSync, statSync as statSync4 } from "fs";
+import { dirname as dirname3, isAbsolute as isAbsolute4, join as join3, resolve as resolve6 } from "path";
 var EMBEDDED_PIN_ENV = { BEADS_DOLT_SHARED_SERVER: "" };
 function boundedBdEnvironment(base) {
   return {
@@ -2372,13 +3090,13 @@ function bashCallCwd(input, fallback) {
   if (input === null || typeof input !== "object")
     return fallback;
   const cwd = input.cwd;
-  return typeof cwd === "string" && cwd !== "" ? resolve5(fallback, cwd) : fallback;
+  return typeof cwd === "string" && cwd !== "" ? resolve6(fallback, cwd) : fallback;
 }
 function canonicalStore2(path) {
   try {
-    return realpathSync3(path);
+    return realpathSync4(path);
   } catch {
-    return resolve5(path);
+    return resolve6(path);
   }
 }
 function bdStoreForInvocation(invocation, cwd, env) {
@@ -2386,18 +3104,18 @@ function bdStoreForInvocation(invocation, cwd, env) {
     return;
   const directory = globalValue(invocation.globals, ["-C", "--directory"]);
   const db = globalValue(invocation.globals, ["--db"]);
-  const base = directory === undefined ? cwd : resolve5(cwd, directory);
+  const base = directory === undefined ? cwd : resolve6(cwd, directory);
   if (db !== undefined) {
-    const target = resolve5(base, db);
-    if (!existsSync2(target))
+    const target = resolve6(base, db);
+    if (!existsSync3(target))
       return;
-    return canonicalStore2(statSync3(target).isDirectory() ? target : dirname3(target));
+    return canonicalStore2(statSync4(target).isDirectory() ? target : dirname3(target));
   }
   if (directory !== undefined)
-    return canonicalStore2(sessionPinFor(base) ?? join2(base, ".beads"));
+    return canonicalStore2(sessionPinFor(base) ?? join3(base, ".beads"));
   const local = invocation.prefix.findLast((token) => token.startsWith("BEADS_DIR="))?.slice("BEADS_DIR=".length);
   const pinned = local ?? env.BEADS_DIR;
-  return canonicalStore2(pinned === undefined || pinned === "" ? sessionPinFor(cwd) ?? join2(cwd, ".beads") : isAbsolute3(pinned) ? pinned : resolve5(cwd, pinned));
+  return canonicalStore2(pinned === undefined || pinned === "" ? sessionPinFor(cwd) ?? join3(cwd, ".beads") : isAbsolute4(pinned) ? pinned : resolve6(cwd, pinned));
 }
 function bdInvocationUsesExternalStore(invocation) {
   return flagEnabled(invocation.globals, ["--global", "--database"]);
@@ -2439,7 +3157,7 @@ async function admitBeadsWork(ctx, cwd = ctx?.cwd ?? process.cwd(), env = lifecy
   const gateAdmitter = lifecycleBridge().gateAdmitter;
   if (gateAdmitter === undefined)
     return;
-  return await gateAdmitter(resolve5(cwd), boundedBdEnvironment(env), ctx, refresh, deadline);
+  return await gateAdmitter(resolve6(cwd), boundedBdEnvironment(env), ctx, refresh, deadline);
 }
 async function admitBdMutation(input, ctx, targetEnabled, deadline = Date.now() + GATE_ADMISSION_MS) {
   const command = commandFromInput(input ?? {});
@@ -2514,20 +3232,21 @@ function environmentForActorDecision(input, command, ctx) {
   const actor = actorForCommand(command, ctx);
   return actor === undefined ? env : { ...env, BEADS_ACTOR: actor };
 }
-async function decide(parsed, event, ctx, pi, deadline) {
+async function decide(parsed, event, ctx, pi, deadline, hooksSkipped = false, originalEvent = event) {
   let input = event.input;
+  const activeParsed = parsed;
   const { cwd } = inputOf(event, ctx);
-  if (parsed.unknown)
+  if (activeParsed.unknown)
     return suffix("bash-gates", "command could not be parsed", "split the command or run the mutation as a plain single command");
-  const env = environmentForActorDecision(input, parsed.command, ctx);
+  const env = environmentForActorDecision(input, activeParsed.command, ctx);
   if (settingsEnabled("beads", "bd-update-close-gate", cwd)) {
-    const updateClose = decideBdUpdateCloseParsed(parsed);
+    const updateClose = decideBdUpdateCloseParsed(activeParsed);
     if (updateClose !== undefined)
       return suffix("bd-update-close-gate", updateClose.reason);
   }
   if (settingsEnabled("beads", "bd-close-gate", cwd)) {
     try {
-      const close = await decideBdCloseParsed(parsed, cwd, deadline);
+      const close = await decideBdCloseParsed(activeParsed, cwd, deadline);
       if (close !== undefined)
         return suffix("bd-close-gate", close.reason, "resolve the gate with `bd gate check` or `bd gate resolve <gate-id>`, then retry");
     } catch (error) {
@@ -2536,27 +3255,36 @@ async function decide(parsed, event, ctx, pi, deadline) {
     }
   }
   if (settingsEnabled("beads", "bd-unclaim-gate", cwd)) {
-    const unclaim = decideBdUnclaimParsed(parsed);
+    const unclaim = decideBdUnclaimParsed(activeParsed);
     if (unclaim !== undefined)
       return suffix("bd-unclaim-gate", unclaim.reason, "retry with `bd unclaim <id> --if-assignee <your actor>`");
   }
   if (settingsEnabled("beads", "bd-actor-gate", cwd)) {
-    const actor = decideActorParsed(parsed, env);
+    const actor = decideActorParsed(activeParsed, env);
     if (actor.kind === "block")
       return suffix("bd-actor-gate", actor.reason);
     if (actor.kind === "advisory" && typeof pi.sendMessage === "function")
       pi.sendMessage({ customType: "beads-bd-actor-advisory", content: actor.text, display: true, attribution: "user" }, { triggerTurn: false });
   }
   if (settingsEnabled("beads", "bd-embedded-write-lock", cwd)) {
-    const embedded = await decideEmbeddedWrite(parsed, event, ctx, deadline);
+    const writeEvent = input === event.input ? event : { ...event, input };
+    const embedded = await decideEmbeddedWrite(activeParsed, writeEvent, ctx, deadline);
     if (embedded?.kind === "block")
       return suffix("bd-embedded-write-lock", embedded.reason);
     if (embedded?.kind === "rewrite")
       input = embedded.input;
   }
-  input = inputForAgentActor(input, parsed.command, ctx);
+  input = inputForAgentActor(input, activeParsed.command, ctx);
   const rewritten = rewriteBashInput(input, ctx) ?? input;
-  if (JSON.stringify(rewritten) !== JSON.stringify(event.input))
+  if (hooksSkipped && JSON.stringify(rewritten) !== JSON.stringify(originalEvent.input)) {
+    const key = typeof rewritten.command === "string" ? "command" : "cmd";
+    if (typeof rewritten[key] === "string")
+      rewritten[key] = `# Beads hooks skipped to keep the existing (binary) Git hooks intact.
+${rewritten[key]}`;
+    if (typeof pi.sendMessage === "function")
+      pi.sendMessage({ customType: "beads-binary-hooks-advisory", content: "Hooks were skipped to keep the existing (binary) Git hooks intact.", display: true, attribution: "user" }, { triggerTurn: false });
+  }
+  if (JSON.stringify(rewritten) !== JSON.stringify(originalEvent.input))
     return { input: rewritten };
   return;
 }
@@ -2570,7 +3298,7 @@ function bashGates(pi) {
         const workspace = typeof input.workspace === "string" ? input.workspace : undefined;
         if (event.toolName === "bd_formula_check" && workspace === undefined)
           return suffix("beads-gate-admission", "deep formula checks require an explicit workspace so admission and execution cannot select different stores", "set workspace to the target checkout and retry");
-        const cwd = workspace === undefined ? ctx?.cwd ?? process.cwd() : resolve6(ctx?.cwd ?? process.cwd(), workspace);
+        const cwd = workspace === undefined ? ctx?.cwd ?? process.cwd() : resolve7(ctx?.cwd ?? process.cwd(), workspace);
         const admission = await admitBeadsWork(ctx, cwd, lifecycleBdEnvironment(cwd), true, deadline);
         if (admission)
           return suffix("beads-gate-admission", admission.reason, "retry the operation; verification continues and the next attempt waits on the same read");
@@ -2581,10 +3309,19 @@ function bashGates(pi) {
       const { command } = inputOf(event, ctx);
       if (!command)
         return;
-      const admission = await admitBdMutation(event.input, ctx, (targetCwd) => settingsEnabled("beads", "beads-gate-admission", targetCwd), deadline);
+      let hooksSkipped = false;
+      const hookGuard = protectBinaryHookCommands(event.input, command, inputOf(event, ctx).cwd);
+      if (hookGuard?.kind === "block")
+        return suffix("binary-git-hooks", hookGuard.reason);
+      let effectiveEvent = event;
+      if (hookGuard?.kind === "rewrite") {
+        effectiveEvent = { ...event, input: hookGuard.input };
+        hooksSkipped = true;
+      }
+      const admission = await admitBdMutation(effectiveEvent.input, ctx, (targetCwd) => settingsEnabled("beads", "beads-gate-admission", targetCwd), deadline);
       if (admission)
         return suffix("beads-gate-admission", admission.reason, "retry the command; verification continues and the next attempt waits on the same read");
-      return await decide(parse(command), event, ctx, pi, deadline);
+      return await decide(parse(commandFromInput(effectiveEvent.input)), effectiveEvent, ctx, pi, deadline, hooksSkipped, event);
     } catch (error) {
       return suffix("bash-gates", `command could not be parsed (${error instanceof Error ? error.message : String(error)})`, "split the command or run the mutation as a plain single command");
     }

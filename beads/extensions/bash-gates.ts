@@ -5,6 +5,7 @@ import { decideBdCloseParsed } from "./bd-close-gate.ts";
 import { decideEmbeddedWrite } from "./bd-embedded-write-lock.ts";
 import { decideBdUnclaimParsed } from "./bd-unclaim-gate.ts";
 import { decideBdUpdateCloseParsed } from "./bd-update-close-gate.ts";
+import { protectBinaryHookCommands } from "./binary-hooks.ts";
 import { admitBdMutation, admitBeadsWork, lifecycleBdEnvironment, rewriteBashInput } from "./session-beads-lifecycle.ts";
 import { blockReason, commandFromInput, type ParsedCommand, parse, settingsEnabled } from "./shell-command.ts";
 
@@ -73,18 +74,19 @@ function environmentForActorDecision(input: Record<string, unknown>, command: st
 	return actor === undefined ? env : { ...env, BEADS_ACTOR: actor };
 }
 
-async function decide(parsed: ParsedCommand, event: ToolCallEvent, ctx: ExtensionContext, pi: ExtensionAPI, deadline: number): Promise<GateDecision | { input: Record<string, unknown> } | undefined> {
+async function decide(parsed: ParsedCommand, event: ToolCallEvent, ctx: ExtensionContext, pi: ExtensionAPI, deadline: number, hooksSkipped = false, originalEvent: ToolCallEvent = event): Promise<GateDecision | { input: Record<string, unknown> } | undefined> {
 	let input = event.input as Record<string, unknown>;
+	const activeParsed = parsed;
 	const { cwd } = inputOf(event, ctx);
-	if (parsed.unknown) return suffix("bash-gates", "command could not be parsed", "split the command or run the mutation as a plain single command");
-	const env = environmentForActorDecision(input, parsed.command, ctx);
+	if (activeParsed.unknown) return suffix("bash-gates", "command could not be parsed", "split the command or run the mutation as a plain single command");
+	const env = environmentForActorDecision(input, activeParsed.command, ctx);
 	if (settingsEnabled("beads", "bd-update-close-gate", cwd)) {
-		const updateClose = decideBdUpdateCloseParsed(parsed);
+		const updateClose = decideBdUpdateCloseParsed(activeParsed);
 		if (updateClose !== undefined) return suffix("bd-update-close-gate", updateClose.reason);
 	}
 	if (settingsEnabled("beads", "bd-close-gate", cwd)) {
 		try {
-			const close = await decideBdCloseParsed(parsed, cwd, deadline);
+			const close = await decideBdCloseParsed(activeParsed, cwd, deadline);
 			if (close !== undefined) return suffix("bd-close-gate", close.reason, "resolve the gate with `bd gate check` or `bd gate resolve <gate-id>`, then retry");
 		} catch (error) {
 			const reason = error instanceof Error ? error.message : String(error);
@@ -92,24 +94,30 @@ async function decide(parsed: ParsedCommand, event: ToolCallEvent, ctx: Extensio
 		}
 	}
 	if (settingsEnabled("beads", "bd-unclaim-gate", cwd)) {
-		const unclaim = decideBdUnclaimParsed(parsed);
+		const unclaim = decideBdUnclaimParsed(activeParsed);
 		if (unclaim !== undefined) return suffix("bd-unclaim-gate", unclaim.reason, "retry with `bd unclaim <id> --if-assignee <your actor>`");
 	}
 	if (settingsEnabled("beads", "bd-actor-gate", cwd)) {
-		const actor = decideActorParsed(parsed, env);
+		const actor = decideActorParsed(activeParsed, env);
 		if (actor.kind === "block") return suffix("bd-actor-gate", actor.reason);
 		if (actor.kind === "advisory" && typeof pi.sendMessage === "function") pi.sendMessage({ customType: "beads-bd-actor-advisory", content: actor.text, display: true, attribution: "user" }, { triggerTurn: false });
 	}
 
 	if (settingsEnabled("beads", "bd-embedded-write-lock", cwd)) {
-		const embedded = await decideEmbeddedWrite(parsed, event, ctx, deadline);
+		const writeEvent = input === event.input ? event : { ...event, input } as ToolCallEvent;
+		const embedded = await decideEmbeddedWrite(activeParsed, writeEvent, ctx, deadline);
 		if (embedded?.kind === "block") return suffix("bd-embedded-write-lock", embedded.reason);
 		if (embedded?.kind === "rewrite") input = embedded.input;
 	}
 	// Apply the actor prefix after every runner rewrite so the executed command keeps it.
-	input = inputForAgentActor(input, parsed.command, ctx);
+	input = inputForAgentActor(input, activeParsed.command, ctx);
 	const rewritten = rewriteBashInput(input, ctx) ?? input;
-	if (JSON.stringify(rewritten) !== JSON.stringify(event.input)) return { input: rewritten };
+	if (hooksSkipped && JSON.stringify(rewritten) !== JSON.stringify(originalEvent.input)) {
+		const key = typeof rewritten.command === "string" ? "command" : "cmd";
+		if (typeof rewritten[key] === "string") rewritten[key] = `# Beads hooks skipped to keep the existing (binary) Git hooks intact.\n${rewritten[key]}`;
+		if (typeof pi.sendMessage === "function") pi.sendMessage({ customType: "beads-binary-hooks-advisory", content: "Hooks were skipped to keep the existing (binary) Git hooks intact.", display: true, attribution: "user" }, { triggerTurn: false });
+	}
+	if (JSON.stringify(rewritten) !== JSON.stringify(originalEvent.input)) return { input: rewritten };
 	return undefined;
 }
 /** The beads plugin's sole Bash tool-call registration. Parsing happens exactly once. */
@@ -131,9 +139,17 @@ export default function bashGates(pi: ExtensionAPI): void {
 			if (event.toolName !== "bash") return;
 			const { command } = inputOf(event, ctx);
 			if (!command) return;
-			const admission = await admitBdMutation(event.input, ctx, targetCwd => settingsEnabled("beads", "beads-gate-admission", targetCwd), deadline);
+			let hooksSkipped = false;
+			const hookGuard = protectBinaryHookCommands(event.input, command, inputOf(event, ctx).cwd);
+			if (hookGuard?.kind === "block") return suffix("binary-git-hooks", hookGuard.reason);
+			let effectiveEvent = event;
+			if (hookGuard?.kind === "rewrite") {
+				effectiveEvent = { ...event, input: hookGuard.input } as ToolCallEvent;
+				hooksSkipped = true;
+			}
+			const admission = await admitBdMutation(effectiveEvent.input, ctx, targetCwd => settingsEnabled("beads", "beads-gate-admission", targetCwd), deadline);
 			if (admission) return suffix("beads-gate-admission", admission.reason, "retry the command; verification continues and the next attempt waits on the same read");
-			return await decide(parse(command), event, ctx, pi, deadline);
+			return await decide(parse(commandFromInput(effectiveEvent.input)), effectiveEvent, ctx, pi, deadline, hooksSkipped, event);
 		} catch (error) {
 			return suffix("bash-gates", `command could not be parsed (${error instanceof Error ? error.message : String(error)})`, "split the command or run the mutation as a plain single command");
 		}

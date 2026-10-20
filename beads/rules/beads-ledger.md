@@ -204,6 +204,19 @@ The store is embedded and lives in the canonical checkout, and linked worktrees
 share it. `BEADS_DIR` does not redirect `bd init` away from canonical. No Dolt
 server may be started. Two concurrent writers corrupt the Dolt journal, so a
 contended `bd` call is retried rather than worked around.
+
+`bd` MAY share one bash call with other commands. Reads pass anywhere: pipes,
+`;` / `&&` / `||` lists, groups, loops, redirections. Each write MUST start its own
+simple command (`[VAR=literal ...] bd ...`); the write lock then runs it under its
+serialising runner with its own hold. The lock refuses these shapes and names the
+part; rewrite that part as the refusal says:
+
+- NEVER put `bd` inside `$(...)`, backticks, `eval`, `sh -c` strings, or a
+  here-document fed to a shell.
+- NEVER put `bd` behind `xargs`, `env`, `timeout`, or `find -exec`.
+- NEVER make a write the condition of `if` / `while` / `until`, negate it with
+  `!`, or `time` it.
+- NEVER give `BEADS_DIR`, `-C`, or `--db` a value the shell expands.
 # DELIVERY
 MUST run `bd dolt pull` before claiming when the read decides assignment, so the
 claim uses fresh ledger state. After delivery, MUST run `bd dolt push`.
