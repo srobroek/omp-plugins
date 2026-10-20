@@ -6,6 +6,13 @@
 
 - Require Beads `blocks` dependencies to encode true prerequisites so independent work remains parallelizable.
 
+## [4.1.6](https://github.com/srobroek/omp-plugins/compare/beads--v4.1.5...beads--v4.1.6) (2026-10-20)
+
+
+### Bug Fixes
+
+* **beads:** guard binary git hooks and allow bd in compound commands ([#702](https://github.com/srobroek/omp-plugins/issues/702)) ([16fd25a](https://github.com/srobroek/omp-plugins/commit/16fd25a0708800534dcdf7305911148f7de6d799))
+
 ## [4.1.5](https://github.com/srobroek/omp-plugins/compare/beads--v4.1.4...beads--v4.1.5) (2026-10-09)
 
 

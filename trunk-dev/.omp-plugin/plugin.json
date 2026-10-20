@@ -1,6 +1,6 @@
 {
   "name": "trunk-dev",
   "description": "Trunk-based delivery and release automation: small batches, merge-request CI, feature-flag decisions, Conventional Commit releases, and protected-branch enforcement.",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "category": "devops"
 }
