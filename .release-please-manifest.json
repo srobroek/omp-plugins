@@ -18,7 +18,7 @@
   "quality": "2.2.0",
   "rust": "0.6.11",
   "safety": "0.9.1",
-  "session": "1.4.0",
+  "session": "1.5.0",
   "speckit": "0.10.4",
   "toolchain": "1.0.2",
   "trunk-dev": "0.2.0",
