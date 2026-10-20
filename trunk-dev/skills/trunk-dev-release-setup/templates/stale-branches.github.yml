@@ -1,0 +1,46 @@
+# Replaceable sink: non-zero exit notifies the workflow's schedule owner through GitHub Actions.
+name: Stale Bead Branches
+
+on:
+  schedule:
+    - cron: "17 9 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  stale-bead-branches:
+    runs-on: ubuntu-latest
+    env:
+      TRUNK_DEV_STALE_HOURS: "48"
+      BD_VERSION: "1.3.1"
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install bd
+        run: |
+          curl -fsSL "https://github.com/gastownhall/beads/releases/download/v${BD_VERSION}/beads_${BD_VERSION}_linux_amd64.tar.gz" -o /tmp/bd.tar.gz
+          tar -xzf /tmp/bd.tar.gz -C /tmp
+          sudo install -m 0755 /tmp/bd /usr/local/bin/bd
+          bd version
+      - name: Bootstrap ledger for read-only query
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # bd init records an SSH sync remote, and the runner has no SSH key: read it over HTTPS with the job token.
+          git config --global url."https://x-access-token:${GH_TOKEN}@github.com/".insteadOf "ssh://git@github.com/"
+          git config --global --add url."https://x-access-token:${GH_TOKEN}@github.com/".insteadOf "git@github.com:"
+          git ls-remote origin refs/dolt/data | grep -q .
+          bd bootstrap --yes
+      - name: Report stale in-progress bead branches
+        run: |
+          stale=$(bd --readonly list --status in_progress --has-metadata-key branch --json --limit 0 | jq --argjson hours "${TRUNK_DEV_STALE_HOURS:-48}" '[.[] | select(.started_at != null and (.metadata.branch // "") != "" and ((now - (.started_at | fromdateiso8601)) > ($hours * 3600)))]')
+          count=$(printf '%s' "$stale" | jq 'length')
+          if [ "$count" -gt 0 ]; then
+            {
+              printf '## Stale in-progress branches older than %s hours (%s)\n\n' "${TRUNK_DEV_STALE_HOURS:-48}" "$count"
+              printf '%s\n' "$stale" | jq -r '.[] | "- \(.id): `\(.metadata.branch)` (\(((now - (.started_at | fromdateiso8601)) / 86400 * 10 | round) / 10) days; \(.assignee // "unassigned"))"'
+            } | tee -a "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+          echo "No in-progress bead branches older than ${TRUNK_DEV_STALE_HOURS:-48} hours."

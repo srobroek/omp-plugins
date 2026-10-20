@@ -21,6 +21,7 @@
   "session": "1.4.0",
   "speckit": "0.10.4",
   "toolchain": "1.0.2",
+  "trunk-dev": "0.1.0",
   "typescript": "0.3.12",
   "whats-new": "0.4.2",
   "worktrunk": "3.0.1"

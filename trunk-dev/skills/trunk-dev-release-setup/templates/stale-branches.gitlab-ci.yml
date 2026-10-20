@@ -1,0 +1,31 @@
+# Replaceable sink: failing this scheduled job uses GitLab's failure notification to email the schedule owner.
+stale-bead-branches:
+  # The before_script uses apt-get; pin a Debian image instead of relying on the runner default.
+  image: debian:bookworm-slim
+  variables:
+    TRUNK_DEV_STALE_HOURS: "48"
+    BD_VERSION: "1.3.1"
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "schedule"'
+  before_script:
+    - apt-get update && apt-get install -y --no-install-recommends ca-certificates curl git jq tar && rm -rf /var/lib/apt/lists/*
+    - curl -fsSL "https://github.com/gastownhall/beads/releases/download/v${BD_VERSION}/beads_${BD_VERSION}_linux_amd64.tar.gz" -o /tmp/bd.tar.gz
+    - tar -xzf /tmp/bd.tar.gz -C /tmp
+    - install -m 0755 /tmp/bd /usr/local/bin/bd
+    - bd version
+    # bd init records an SSH sync remote, and the runner has no SSH key: read it over HTTPS with the job token.
+    # CI_SERVER_SHELL_SSH_HOST covers instances whose SSH host differs from the web host.
+    - git config --global url."https://gitlab-ci-token:${CI_JOB_TOKEN}@${CI_SERVER_HOST}/".insteadOf "ssh://git@${CI_SERVER_SHELL_SSH_HOST:-$CI_SERVER_HOST}/"
+    - git config --global --add url."https://gitlab-ci-token:${CI_JOB_TOKEN}@${CI_SERVER_HOST}/".insteadOf "git@${CI_SERVER_SHELL_SSH_HOST:-$CI_SERVER_HOST}:"
+    - git ls-remote origin refs/dolt/data | grep -q .
+    - bd bootstrap --yes
+  script:
+    - |
+      stale=$(bd --readonly list --status in_progress --has-metadata-key branch --json --limit 0 | jq --argjson hours "${TRUNK_DEV_STALE_HOURS:-48}" '[.[] | select(.started_at != null and (.metadata.branch // "") != "" and ((now - (.started_at | fromdateiso8601)) > ($hours * 3600)))]')
+      count=$(printf '%s' "$stale" | jq 'length')
+      if [ "$count" -gt 0 ]; then
+        printf 'Stale in-progress branches older than %s hours (%s):\n' "${TRUNK_DEV_STALE_HOURS:-48}" "$count"
+        printf '%s\n' "$stale" | jq -r '.[] | "- \(.id): \(.metadata.branch) (\(((now - (.started_at | fromdateiso8601)) / 86400 * 10 | round) / 10) days; \(.assignee // "unassigned"))"'
+        exit 1
+      fi
+      echo "No in-progress bead branches older than ${TRUNK_DEV_STALE_HOURS:-48} hours."

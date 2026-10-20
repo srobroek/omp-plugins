@@ -56,6 +56,14 @@ paths = [
 ]
 disabled_rules = ["REF-001"]
 
+# CC-SK-006 flags the word "release" in the name. This skill only writes CI and
+# release configuration through a reviewed PR; the release itself runs in CI on
+# the protected default branch. Agents must be able to load it on their own:
+# trunk-dev-workflow and the trunk-dev session reminder send them to it.
+[[overrides]]
+paths = ["trunk-dev/skills/trunk-dev-release-setup/SKILL.md"]
+disabled_rules = ["CC-SK-006"]
+
 [files]
 # Keep staged skill references in the generic markdown/reference pass.
 include_as_generic = ["skills/*/references/**/*.md", "**/skills/*/references/**/*.md", "**/skills/*/templates/**/*.md"]

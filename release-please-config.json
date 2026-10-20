@@ -415,6 +415,23 @@
         }
       ]
     },
+    "trunk-dev": {
+      "release-type": "simple",
+      "component": "trunk-dev",
+      "changelog-path": "CHANGELOG.md",
+      "extra-files": [
+        {
+          "type": "json",
+          "path": ".omp-plugin/plugin.json",
+          "jsonpath": "$.version"
+        },
+        {
+          "type": "json",
+          "path": "package.json",
+          "jsonpath": "$.version"
+        }
+      ]
+    },
     "typescript": {
       "release-type": "simple",
       "component": "typescript",

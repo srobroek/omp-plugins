@@ -163,6 +163,13 @@
       "category": "development"
     },
     {
+      "name": "trunk-dev",
+      "description": "Trunk-based delivery and release automation: small batches, merge-request CI, feature-flag decisions, Conventional Commit releases, and protected-branch enforcement.",
+      "source": "./trunk-dev",
+      "version": "0.1.0",
+      "category": "devops"
+    },
+    {
       "name": "typescript",
       "description": "TypeScript type-safety rule and a Biome or ESLint plus tsc quality tool.",
       "source": "./typescript",

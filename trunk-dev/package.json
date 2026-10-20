@@ -1,0 +1,13 @@
+{
+  "name": "@srobroek/trunk-dev",
+  "version": "0.1.0",
+  "description": "Trunk-based delivery and release automation: small batches, merge-request CI, feature-flag decisions, Conventional Commit releases, and protected-branch enforcement.",
+  "private": true,
+  "omp": {
+    "extensions": [
+      "./extensions/trunk-dev-commit-gate.ts",
+		"./extensions/trunk-dev-mr-advisory.ts",
+		"./extensions/trunk-dev-beads.ts"
+    ]
+  }
+}
