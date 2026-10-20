@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.5.0](https://github.com/srobroek/omp-plugins/compare/session--v1.4.0...session--v1.5.0) (2026-10-20)
+
+
+### Features
+
+* **session:** keep task supervisors moving ([#704](https://github.com/srobroek/omp-plugins/issues/704)) ([2e1e8db](https://github.com/srobroek/omp-plugins/commit/2e1e8dbde7d3bd619835484097fd7c512e591a84))
+
 ## [1.4.0](https://github.com/srobroek/omp-plugins/compare/session--v1.3.0...session--v1.4.0) (2026-10-07)
 
 
