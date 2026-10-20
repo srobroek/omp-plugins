@@ -100,6 +100,24 @@ function isHttpUrl(value: string): boolean {
 	}
 }
 
+function escapeRegExp(value: string): string {
+	return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/**
+ * An open cleanup bead for `name`: either one this plugin created (`metadata.trunk_dev_flag`) or one an
+ * agent created by hand, recognised by a title such as `chore: remove <name> feature flag`.
+ */
+function isCleanupBeadFor(value: unknown, name: string): boolean {
+	if (value === null || typeof value !== "object") return false;
+	const bead = value as { status?: unknown; metadata?: unknown; title?: unknown };
+	if (typeof bead.status !== "string" || bead.status.toLowerCase() === "closed") return false;
+	if (bead.metadata && typeof bead.metadata === "object" && (bead.metadata as { trunk_dev_flag?: unknown }).trunk_dev_flag === name) return true;
+	if (typeof bead.title !== "string") return false;
+	const flag = escapeRegExp(name);
+	return new RegExp(`\\bremove\\b.*(?:\\bflag\\s+${flag}\\b|(?:^|[\\s\`'"])${flag}[\`'"]?\\s+(?:feature\\s+)?flag\\b)`, "i").test(bead.title);
+}
+
 /** Pure merge policy: return the exact gated command, never write the embedded store here. */
 export function decideFlagCleanup(
 	title: string,
@@ -117,12 +135,7 @@ export function decideFlagCleanup(
 	const due = flag?.[2];
 	const url = cleanText(links.url);
 	if (name === undefined || name.toLowerCase() === "none" || !FLAG_NAME.test(name) || due === undefined || !validDate(due) || !isHttpUrl(url)) return;
-	if (Array.isArray(existingBeads) && existingBeads.some((value) => {
-		if (value === null || typeof value !== "object") return false;
-		const bead = value as { status?: unknown; metadata?: unknown };
-		if (typeof bead.status !== "string" || bead.status.toLowerCase() === "closed" || !bead.metadata || typeof bead.metadata !== "object") return false;
-		return (bead.metadata as { trunk_dev_flag?: unknown }).trunk_dev_flag === name;
-	})) return;
+	if (Array.isArray(existingBeads) && existingBeads.some((value) => isCleanupBeadFor(value, name))) return;
 
 	const titleText = `chore: remove feature flag ${name}`;
 	const metadata = JSON.stringify({ trunk_dev_flag: name, pr: url });
@@ -141,8 +154,7 @@ function commandResult(result: ToolResultEvent): boolean {
 	if (result.isError === true) return false;
 	const details = result.details;
 	if (details !== null && typeof details === "object" && "exitCode" in details && typeof details.exitCode === "number" && details.exitCode !== 0) return false;
-	const output = (result.content ?? []).flatMap((item) => item !== null && typeof item === "object" && (item as { type?: string }).type === "text" ? [(item as { text?: string }).text ?? ""] : []).join("");
-	return !/\bCommand exited with code -?[1-9]\d*\b/.test(output);
+	return !/\bCommand exited with code -?[1-9]\d*\b/.test(resultText(result));
 }
 
 function toolCwd(input: Record<string, unknown>, sessionCwd: string): string {
@@ -436,23 +448,56 @@ export function mergedForgeData(stdout: string, forge: "gh" | "glab"): ForgeMerg
 	return { title, body: bodyValue, url: urlValue, branch: typeof branchValue === "string" && branchValue ? branchValue : undefined };
 }
 
-async function mergedFlagFollowUp(event: ToolResultEvent, sessionCwd: string): Promise<string | undefined> {
-	if (event.toolName !== "bash" || !commandResult(event)) return;
+type MergeRequest = { forge: "gh" | "glab"; number: string; cwd: string };
+
+function resultText(event: ToolResultEvent): string {
+	return (event.content ?? []).flatMap((item) => item !== null && typeof item === "object" && (item as { type?: string }).type === "text" ? [(item as { text?: string }).text ?? ""] : []).join("");
+}
+
+/**
+ * The delivery plugin lands PRs through its `delivery_land` tool device (a `write` to
+ * `xd://delivery_land`), not a bash `gh pr merge`; only a proved merge counts.
+ */
+export function deliveryLandMerge(toolName: string, input: unknown, isError: boolean | undefined, text: string): { number: string; worktree?: string } | undefined {
+	if (toolName !== "write" || isError === true || input === null || typeof input !== "object") return;
+	const { path, content } = input as { path?: unknown; content?: unknown };
+	if (path !== "xd://delivery_land" || typeof content !== "string" || !/\bdelivery_land proved\b[^\n]*\bmerged\b/.test(text)) return;
+	const args = parseJson(content);
+	if (args === null || typeof args !== "object") return;
+	const { pr, worktree } = args as { pr?: unknown; worktree?: unknown };
+	const number = typeof pr === "number" && Number.isSafeInteger(pr) && pr > 0 ? String(pr) : typeof pr === "string" && /^\d+$/.test(pr) ? pr : undefined;
+	if (number === undefined) return;
+	return { number, worktree: typeof worktree === "string" && worktree ? worktree : undefined };
+}
+
+async function mergeRequests(event: ToolResultEvent, sessionCwd: string, env: NodeJS.ProcessEnv): Promise<MergeRequest[]> {
+	const landed = deliveryLandMerge(event.toolName, event.input, event.isError, resultText(event));
+	if (landed !== undefined) {
+		const cwd = landed.worktree !== undefined && isDirectory(landed.worktree) ? landed.worktree : sessionCwd;
+		const remote = await runCommand(["git", "remote", "get-url", "origin"], cwd, env, GIT_TIMEOUT_MS);
+		const forge = remote?.exitCode === 0 ? forgeFromRemote(remote.stdout.trim()) : undefined;
+		return forge === undefined ? [] : [{ forge: forge === "github" ? "gh" : "glab", number: landed.number, cwd }];
+	}
+	if (event.toolName !== "bash" || !commandResult(event)) return [];
 	const input = (event.input ?? {}) as Record<string, unknown>;
-	const cwd = toolCwd(input, sessionCwd);
-	const env = toolEnvironment(input);
 	const command = typeof input.command === "string" ? input.command : "";
-	for (const invocation of commandInvocations(command, cwd)) {
+	return commandInvocations(command, toolCwd(input, sessionCwd)).flatMap((invocation) => {
 		const merge = mergeCommand(invocation);
-		if (merge === undefined) continue;
-		const repo = await repository(invocation.cwd, env);
+		return merge === undefined ? [] : [{ ...merge, cwd: invocation.cwd }];
+	});
+}
+
+async function mergedFlagFollowUp(event: ToolResultEvent, sessionCwd: string): Promise<string | undefined> {
+	const env = toolEnvironment((event.input ?? {}) as Record<string, unknown>);
+	for (const merge of await mergeRequests(event, sessionCwd, env)) {
+		const repo = await repository(merge.cwd, env);
 		if (repo === undefined) return;
 		const readEnv = readEnvironment(env, repo.store);
 		const forgeArgs = merge.forge === "gh"
 			? ["gh", "pr", "view", merge.number, "--json", "title,body,url,state,headRefName"]
 			: ["glab", "mr", "view", merge.number, "--output", "json"];
 		const [forgeResult, existingResult] = await Promise.all([
-			runCommand(forgeArgs, invocation.cwd, readEnv, READ_TIMEOUT_MS),
+			runCommand(forgeArgs, merge.cwd, readEnv, READ_TIMEOUT_MS),
 			runCommand(["bd", "--readonly", "list", "--all", "--json", "--limit", "0"], repo.root, readEnv, READ_TIMEOUT_MS),
 		]);
 		if (forgeResult?.exitCode !== 0 || existingResult?.exitCode !== 0) return;
@@ -461,7 +506,7 @@ async function mergedFlagFollowUp(event: ToolResultEvent, sessionCwd: string): P
 		if (forge === undefined || !Array.isArray(existing)) return;
 		const decision = decideFlagCleanup(forge.title, forge.body, existing, { branch: forge.branch, url: forge.url });
 		if (decision === undefined) return;
-		return await createCleanup(decision, repo.store, invocation.cwd, env, productionRuntime);
+		return await createCleanup(decision, repo.store, merge.cwd, env, productionRuntime);
 	}
 	return;
 }

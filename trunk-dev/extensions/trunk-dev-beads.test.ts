@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { createCleanup, decideFlagCleanup, decideMissingStaleJob, decideStaleReminder, forgeFromRemote, mergedForgeData, staleThresholdHours } from "./trunk-dev-beads.ts";
+import { createCleanup, decideFlagCleanup, decideMissingStaleJob, decideStaleReminder, deliveryLandMerge, forgeFromRemote, mergedForgeData, staleThresholdHours } from "./trunk-dev-beads.ts";
 
 const now = Date.parse("2026-10-20T12:00:00.000Z");
 const bead = (id: string, started: string, branch = "feat/example", assignee = "agent") => ({
@@ -87,6 +87,16 @@ describe("decideFlagCleanup", () => {
 		const decision = decideFlagCleanup(flagTitle, `${flagBody}\n\nBead: bd-4321`, [], { url: links.url });
 		expect(decision?.command).toContain("discovered-from:bd-4321");
 	});
+
+	test("an open hand-made cleanup bead for the same flag suppresses a duplicate", () => {
+		const handMade = (title: string, status = "open") => [{ id: "sbx-ugk", status, title, metadata: { due: "2026-11-30" } }];
+		expect(decideFlagCleanup(flagTitle, flagBody, handMade("chore: remove staged_api feature flag by 2026-11-30"), links)).toBeUndefined();
+		expect(decideFlagCleanup(flagTitle, flagBody, handMade("chore: remove `staged_api` flag"), links)).toBeUndefined();
+		expect(decideFlagCleanup(flagTitle, flagBody, handMade("chore: remove feature flag staged_api"), links)).toBeUndefined();
+		expect(decideFlagCleanup(flagTitle, flagBody, handMade("chore: remove staged_api feature flag", "closed"), links)).toBeDefined();
+		expect(decideFlagCleanup(flagTitle, flagBody, handMade("chore: remove staged_api_v2 feature flag"), links)).toBeDefined();
+		expect(decideFlagCleanup(flagTitle, flagBody, handMade("feat: rename staged_api flag docs"), links)).toBeDefined();
+	});
 });
 describe("createCleanup runner fallback", () => {
 	const decision = decideFlagCleanup(flagTitle, flagBody, [], links);
@@ -163,5 +173,22 @@ describe("stale-branch CI job check", () => {
 		const template = (name: string) => readFileSync(join(import.meta.dir, "..", "skills", "trunk-dev-release-setup", "templates", name), "utf8");
 		expect(decideMissingStaleJob("github", [template("stale-branches.github.yml")])).toBeUndefined();
 		expect(decideMissingStaleJob("gitlab", [template("stale-branches.gitlab-ci.yml")])).toBeUndefined();
+	});
+});
+
+describe("delivery_land merges", () => {
+	const input = { path: "xd://delivery_land", content: JSON.stringify({ pr: 6, merge_method: "squash", worktree: "/wt/feat" }) };
+	const proved = "delivery_land proved srobroek/trunk-dev-sandbox#6 merged as 78897a74672e on github.";
+	test("a proved landing yields the PR number and worktree", () => {
+		expect(deliveryLandMerge("write", input, false, proved)).toEqual({ number: "6", worktree: "/wt/feat" });
+		expect(deliveryLandMerge("write", { ...input, content: JSON.stringify({ pr: "12" }) }, false, proved)).toEqual({ number: "12", worktree: undefined });
+	});
+
+	test("refusals, errors, other devices, and bash calls yield nothing", () => {
+		expect(deliveryLandMerge("write", input, false, "delivery_land refused: the re-read after gh pr merge 6 observed no completed merge")).toBeUndefined();
+		expect(deliveryLandMerge("write", input, true, proved)).toBeUndefined();
+		expect(deliveryLandMerge("write", { ...input, path: "xd://delivery_cleanup" }, false, proved)).toBeUndefined();
+		expect(deliveryLandMerge("bash", { command: "gh pr merge 6" }, false, proved)).toBeUndefined();
+		expect(deliveryLandMerge("write", { ...input, content: "{not json" }, false, proved)).toBeUndefined();
 	});
 });
