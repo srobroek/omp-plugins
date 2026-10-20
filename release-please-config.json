@@ -143,6 +143,23 @@
         }
       ]
     },
+    "cicd": {
+      "release-type": "simple",
+      "component": "cicd",
+      "changelog-path": "CHANGELOG.md",
+      "extra-files": [
+        {
+          "type": "json",
+          "path": ".omp-plugin/plugin.json",
+          "jsonpath": "$.version"
+        },
+        {
+          "type": "json",
+          "path": "package.json",
+          "jsonpath": "$.version"
+        }
+      ]
+    },
     "debate": {
       "release-type": "simple",
       "component": "debate",

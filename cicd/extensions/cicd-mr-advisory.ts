@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import type { ExtensionAPI, ToolCallEvent, ToolResultEvent } from "@oh-my-pi/pi-coding-agent";
-import { commandInvocations, isReleaseRepository, parseGitInvocation, type Invocation } from "./lib.ts";
+import { commandInvocations, type Invocation, isReleaseRepository, parseGitInvocation } from "./lib.ts";
 
 const GIT_TIMEOUT_MS = 2_000;
 const CONVENTIONAL_TITLE = /^[a-z]+(?:\([^)\r\n]+\))?!?: .+$/;

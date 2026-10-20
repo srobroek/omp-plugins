@@ -5,6 +5,7 @@
   "beads": "4.1.5",
   "build": "1.1.0",
   "chezmoi": "0.4.14",
+  "cicd": "0.1.0",
   "debate": "0.5.0",
   "delivery": "1.4.3",
   "dep-update": "0.8.3",

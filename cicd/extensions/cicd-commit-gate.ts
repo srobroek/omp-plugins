@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import type { ExtensionAPI, ToolCallEvent } from "@oh-my-pi/pi-coding-agent";
-import { commandInvocations, isAssignmentOverride, isReleaseRepository, parseGitInvocation, type GitInvocation, type Invocation } from "./lib.ts";
+import { commandInvocations, type GitInvocation, type Invocation, isAssignmentOverride, isReleaseRepository, parseGitInvocation } from "./lib.ts";
 
 const GIT_TIMEOUT_MS = 2_000;
 const COMMIT_HEADER = /^(?:feat|fix|perf|revert|refactor|chore|docs|test|ci|build|style)(?:\([^)\r\n]+\))?!?: \S.*$/;
