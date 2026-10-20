@@ -53,9 +53,15 @@ describe("decideCommitGate commit subjects", () => {
 
 describe("decideCommitGate push destinations", () => {
 	const branchGit = (branch: string) => (args: readonly string[]) => args[0] === "branch" ? branch : null;
-	const push = (command: string, branch = "topic", processEnv?: Record<string, string>) => gate(command, {
+	const push = (command: string, branch = "topic", processEnv?: Record<string, string>, release = true) => gate(command, {
 		git: (args, dir) => args[0] === "branch" ? branchGit(branch)(args) : releaseOptions.git(args, dir),
+		exists: release ? releaseOptions.exists : () => false,
 		processEnv,
+	});
+
+	test("allows main pushes in repositories without release configuration", () => {
+		expect(push("git push origin main", "topic", undefined, false)).toBeUndefined();
+		expect(push("git push", "main", undefined, false)).toBeUndefined();
 	});
 
 	test("blocks explicit main/master destinations and implicit pushes from the main branch", () => {

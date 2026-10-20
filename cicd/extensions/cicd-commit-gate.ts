@@ -72,8 +72,8 @@ function subjectOf(text: string): string | undefined {
 	return undefined;
 }
 
-function decideCommit(parsed: GitInvocation, released: boolean, read: ReadMessage, override: boolean): Decision {
-	if (parsed.subcommand !== "commit" || !released || override) return;
+function decideCommit(parsed: GitInvocation, read: ReadMessage, override: boolean): Decision {
+	if (parsed.subcommand !== "commit" || override) return;
 	const message = commitText(parsed.args, parsed.cwd, read);
 	if (message.uncertain || message.text === undefined) return;
 	const subject = subjectOf(message.text);
@@ -165,7 +165,7 @@ export type CommitGateOptions = {
 	processEnv?: Readonly<Record<string, string | undefined>>;
 };
 
-/** Pure decision seam for Conventional Commit subjects and direct main/master pushes. */
+/** Pure decision seam for Conventional Commit subjects and direct main/master pushes, applied only in release repositories. */
 export function decideCommitGate(command: string, cwd: string, options: CommitGateOptions = {}): Decision {
 	try {
 		const git = options.git ?? runGit;
@@ -174,12 +174,11 @@ export function decideCommitGate(command: string, cwd: string, options: CommitGa
 		for (const invocation of commandInvocations(command, cwd)) {
 			const parsed = parseGitInvocation(invocation);
 			if (!parsed) continue;
-			if (parsed.subcommand === "commit") {
-				const released = isReleaseRepository(parsed.cwd, { git, exists: options.exists, readFile: read });
-				const decision = decideCommit(parsed, released, read, isAssignmentOverride(invocation, "CICD_ALLOW_NONCONVENTIONAL_COMMIT", env));
-				if (decision) return decision;
-			}
-			const decision = decidePush(parsed, git, isAssignmentOverride(invocation, "CICD_ALLOW_MAIN_PUSH", env));
+			if (parsed.subcommand !== "commit" && parsed.subcommand !== "push") continue;
+			if (!isReleaseRepository(parsed.cwd, { git, exists: options.exists, readFile: read })) continue;
+			const decision = parsed.subcommand === "commit"
+				? decideCommit(parsed, read, isAssignmentOverride(invocation, "CICD_ALLOW_NONCONVENTIONAL_COMMIT", env))
+				: decidePush(parsed, git, isAssignmentOverride(invocation, "CICD_ALLOW_MAIN_PUSH", env));
 			if (decision) return decision;
 		}
 		return undefined;
