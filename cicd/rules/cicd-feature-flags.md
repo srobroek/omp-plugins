@@ -1,11 +1,17 @@
 ---
 name: cicd-feature-flags
-description: Decide when a change needs a feature flag, record its owner and cleanup date, test both states, and use truthful commit types for dormant, enabled, and removed code.
+description: Gate every new feature behind a default-off feature flag, record its owner and cleanup date, test both states, and use truthful commit types for dormant, enabled, and removed code.
 ---
 
 # Feature flag decisions
 
-Decide per feature. Do not flag every change by default. A flag can safely merge incomplete work or control rollout and rollback. A complete small change needs none when it requires no staged exposure or rollback. [Fowler](https://martinfowler.com/articles/feature-toggles.html) explains toggle flexibility and its carrying cost. [DORA](https://dora.dev/capabilities/working-in-small-batches/) recommends small batches. [LaunchDarkly](https://launchdarkly.com/docs/guides/flags/technical-debt) warns that unnecessary flags create debt. [Feature flag guidance](https://docs.getunleash.io/concepts/feature-flags) classifies temporary release flags separately from longer-lived operational controls.
+Gate every new feature behind a default-off flag. This includes breaking `feat!` changes.
+
+- The flag lets unfinished work merge to the default branch without exposing it, so the branch stays releasable.
+- Turning the flag off rolls the feature back without a revert.
+- Fixes, refactors, chores, docs, and other non-feature changes need no flag.
+
+Keep flags cheap and short-lived. [Fowler](https://martinfowler.com/articles/feature-toggles.html) explains the carrying cost of toggles. [LaunchDarkly](https://launchdarkly.com/docs/guides/flags/technical-debt) warns that stale flags become debt. [DORA](https://dora.dev/capabilities/working-in-small-batches/) recommends small batches. [Feature flag guidance](https://docs.getunleash.io/concepts/feature-flags) separates temporary release flags from long-lived operational controls.
 
 ## Record the decision
 
@@ -13,9 +19,9 @@ Add exactly one `Flag:` line to the MR/PR description (and therefore to the squa
 
 <code>Flag: &lt;flag-name&gt; (default off; owner &lt;alias&gt;; remove by YYYY-MM-DD)</code>
 
-<code>Flag: none &mdash; &lt;one-line reason&gt;</code>
+<code>Flag: none &mdash; &lt;one-line reason&gt;</code> (non-feature changes only, such as a breaking `fix!` or `refactor!`)
 
-Do not substitute other field names or omit the default, owner, or removal date for a temporary flag. A no-flag decision includes a concise reason.
+A `feat` MR/PR names a real flag; `Flag: none` is not valid for it. Do not retype a feature as `fix` or `chore` to avoid the flag. Do not substitute other field names or omit the default, owner, or removal date for a temporary flag. A no-flag decision includes a concise reason.
 
 ## Lifecycle and testing
 

@@ -31,6 +31,8 @@ describe("decideMrAdvisory create and merge hints", () => {
 		expect(fromFile.join(" ")).toContain("review file/editor-provided text manually");
 		expect(advise("gh pr create -t 'feat: new feature'").join(" ")).toContain("Flag:");
 		expect(advise("gh pr create -t 'feat: new feature' --body 'Flag: new_ui (default off; owner x; remove by 2026-12-31)'")).toEqual([]);
+		expect(advise("gh pr create -t 'feat: new feature' --body 'Flag: none — tiny'").join(" ")).toContain("only for non-feature changes");
+		expect(advise("gh pr create -t 'feat(api)!: replace API' --body 'Flag: none — x'").join(" ")).toContain("only for non-feature changes");
 	});
 
 	test("advises forge merges without squash only in release repos", () => {

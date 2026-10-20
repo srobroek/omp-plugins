@@ -6,6 +6,7 @@ import { commandInvocations, type Invocation, isReleaseRepository, parseGitInvoc
 const GIT_TIMEOUT_MS = 2_000;
 const CONVENTIONAL_TITLE = /^[a-z]+(?:\([^)\r\n]+\))?!?: .+$/;
 const FLAG_LINE = /^Flag:\s*\S/m;
+const NO_FLAG_LINE = /^Flag:\s*none\b/im;
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 type GitRunner = (args: readonly string[], cwd: string) => string | null;
@@ -144,10 +145,17 @@ export function decideMrAdvisory(command: string, cwd: string, options: Advisory
 				}
 				const body = optionValue(forge.args, new Set(["--description", "--body", "-d", "-b"]));
 				if (title.value !== undefined && titleNeedsFlag(title.value)) {
+					const isFeature = titleParts(title.value)?.type === "feat";
 					if (body.fromFile || body.value === undefined || body.missing) {
-						advisories.push("CICD: add a `Flag:` decision line to the MR/PR description (or record why no flag is needed); review file/editor-provided text manually.");
+						advisories.push(isFeature
+							? "CICD: every `feat` MR/PR ships behind a feature flag; add a `Flag: <name> (default off; owner <alias>; remove by YYYY-MM-DD)` line, and review file/editor-provided text manually."
+							: "CICD: add a `Flag:` decision line to the MR/PR description (or `Flag: none — reason`); review file/editor-provided text manually.");
 					} else if (!FLAG_LINE.test(body.value)) {
-						advisories.push("CICD: this feature or breaking MR/PR needs a `Flag:` decision line in its description (for example `Flag: none — reason`).");
+						advisories.push(isFeature
+							? "CICD: every `feat` MR/PR ships behind a feature flag; add a `Flag: <name> (default off; owner <alias>; remove by YYYY-MM-DD)` line."
+							: "CICD: this breaking MR/PR needs a `Flag:` decision line in its description (for example `Flag: none — reason`).");
+					} else if (isFeature && NO_FLAG_LINE.test(body.value)) {
+						advisories.push("CICD: `Flag: none` is only for non-feature changes; gate this `feat` behind a default-off flag, or retype the change truthfully (`fix`, `refactor`, `chore`).");
 					}
 				}
 			}

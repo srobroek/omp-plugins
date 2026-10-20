@@ -21,6 +21,6 @@ The extensions are best-effort, early local guardrails for parsed command forms,
 
 - Protect the default branch. Developers and maintainers cannot push directly; changes merge only through an MR/PR with a required passing pipeline (`Pipelines must succeed` on GitLab or required status checks on GitHub). Require squash merge, or at minimum strongly encourage it and validate the squash title. The semantic-release token's bot identity must be the only identity permitted to push the release commit and tags; otherwise branch or tag protection will block the automated release.
 - Fail the MR/PR pipeline when its title (the future squash subject) is not a Conventional Commit. For example, run commitlint against `$CI_MERGE_REQUEST_TITLE` on GitLab or the pull-request title on GitHub.
-- Optionally fail the pipeline when a `feat` MR/PR description lacks a `Flag:` decision line.
+- Fail the pipeline when a `feat` MR/PR description lacks a named `Flag:` line or uses `Flag: none`.
 
 These server-side checks make the policy enforceable; local guidance and extensions complement them.
