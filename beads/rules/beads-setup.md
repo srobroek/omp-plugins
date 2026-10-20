@@ -33,7 +33,8 @@ replaces it.
 can exit 0 and push nothing without a remote; exit status is not proof.
 # VERIFY
 Run `bd where`, `bd dolt status`, and `bd dolt remote list`. Run
-`bd hooks install --beads` only when the project owns its git-hook bundle.
+`bd hooks install --beads` only when the project owns its git-hook bundle and
+the hooks directory contains no binary executable; otherwise retain those hooks.
 # NEVER
 NEVER use `bd init --reinit-local`, `--force`, `--discard-remote`,
 `--destroy-token`, or `--from-jsonl` without explicit user direction. NEVER use

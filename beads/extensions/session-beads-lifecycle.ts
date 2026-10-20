@@ -26,7 +26,6 @@ import type {
 	ToolCallEvent,
 	ToolResultEvent,
 } from "@oh-my-pi/pi-coding-agent";
-
 import {
 	actorValues,
 	agentActor,
@@ -43,6 +42,7 @@ import {
 import { embeddedWriteTargets, withEmbeddedWriteLock, writesStore } from "./bd-embedded-write-lock.ts";
 import { claimedIds, claimedTextIds, claimResultOutput } from "./bd-lease-gate.ts";
 import { repoIdentity, sessionPinFor } from "./beads-store.ts";
+import { binaryHooksRepairAdvisory } from "./binary-hooks.ts";
 import {
 	type CommandPosition,
 	closeInvocations,
@@ -1613,6 +1613,8 @@ export default function sessionBeadsLifecycle(pi: ExtensionAPI): void {
 		}
 		try {
 			const cwd = ctx?.cwd ?? process.cwd();
+			const hookAdvisory = binaryHooksRepairAdvisory(cwd);
+			if (hookAdvisory !== undefined) advise(hookAdvisory);
 			const pin = autoPinBeadsDir(cwd, key, (id) => sessions.has(id));
 			state.repo = identityFor(state, cwd);
 			state.pin = sessionPinAfter(pin, cwd);

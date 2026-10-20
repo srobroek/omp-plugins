@@ -1,7 +1,7 @@
 // @bun
 // extensions/session-beads-lifecycle.ts
-import { existsSync as existsSync2, readFileSync as readFileSync2, realpathSync as realpathSync3, rmSync, statSync as statSync3 } from "fs";
-import { dirname as dirname3, isAbsolute as isAbsolute3, join as join2, resolve as resolve5 } from "path";
+import { existsSync as existsSync3, readFileSync as readFileSync3, realpathSync as realpathSync3, rmSync, statSync as statSync4 } from "fs";
+import { dirname as dirname3, isAbsolute as isAbsolute4, join as join3, resolve as resolve6 } from "path";
 
 // extensions/bd-actor-gate.ts
 import { basename, relative, resolve as resolve2, sep } from "path";
@@ -1645,6 +1645,88 @@ function claimResultOutput(event) {
 `);
 }
 
+// extensions/binary-hooks.ts
+import { spawnSync as spawnSync3 } from "child_process";
+import { closeSync as closeSync2, existsSync as existsSync2, openSync as openSync2, readdirSync as readdirSync2, readFileSync as readFileSync2, readSync, statSync as statSync3 } from "fs";
+import { isAbsolute as isAbsolute3, join as join2, resolve as resolve5, sep as sep2 } from "path";
+var BINARY_MAGICS = [
+  [254, 237, 250, 206],
+  [206, 250, 237, 254],
+  [254, 237, 250, 207],
+  [207, 250, 237, 254],
+  [202, 254, 186, 190],
+  [190, 186, 254, 202],
+  [202, 254, 186, 191],
+  [191, 186, 254, 202],
+  [127, 69, 76, 70]
+];
+var SAMPLE_BYTES = 4096;
+var GLOBAL_VALUE_FLAGS = new Set(["--actor", "--database", "--db", "-C", "--directory", "--dolt-auto-commit", "--mem-profile"]);
+var SEPARATORS2 = new Set([";", "&", "|", "&&", "||", "(", ")", "{", "}", `
+`]);
+function runGit(cwd, args) {
+  const result = spawnSync3("git", ["-C", cwd, ...args], { encoding: "utf8", timeout: 1000 });
+  if (result.error)
+    throw result.error;
+  return { status: result.status, stdout: result.stdout.trim() };
+}
+function fileHasMarker(path, magicsOnly = false) {
+  const fd = openSync2(path, "r");
+  try {
+    const bytes = Buffer.alloc(SAMPLE_BYTES);
+    const count = readSync(fd, bytes, 0, bytes.length, 0);
+    const sample = bytes.subarray(0, count);
+    if (!magicsOnly && sample.includes(0))
+      return true;
+    return BINARY_MAGICS.some((magic) => sample.length >= magic.length && magic.every((byte, index) => sample[index] === byte));
+  } finally {
+    closeSync2(fd);
+  }
+}
+function localHookDirectory(cwd, git) {
+  const configured = git(cwd, ["config", "--local", "--get", "core.hooksPath"]);
+  if (configured.status !== 0 || configured.stdout === "")
+    return;
+  const root = git(cwd, ["rev-parse", "--show-toplevel"]);
+  if (root.status !== 0 || root.stdout === "")
+    return;
+  return isAbsolute3(configured.stdout) ? configured.stdout : resolve5(root.stdout, configured.stdout);
+}
+function isInside(path, directory) {
+  const target = resolve5(path);
+  const base = resolve5(directory);
+  return target === base || target.startsWith(`${base}${sep2}`);
+}
+function binaryHooksRepairAdvisory(cwd, git = runGit) {
+  try {
+    const directory = localHookDirectory(cwd, git);
+    if (directory === undefined)
+      return;
+    const root = git(cwd, ["rev-parse", "--show-toplevel"]);
+    if (root.status !== 0 || root.stdout === "")
+      return;
+    const beadsHooks = join2(root.stdout, ".beads", "hooks");
+    if (!isInside(directory, beadsHooks))
+      return;
+    for (const entry of readdirSync2(directory, { withFileTypes: true })) {
+      if (!entry.isFile() || !entry.name.endsWith(".backup"))
+        continue;
+      const backupPath = join2(directory, entry.name);
+      const hookPath = join2(directory, entry.name.slice(0, -".backup".length));
+      try {
+        if (!statSync3(hookPath).isFile() || !fileHasMarker(backupPath, true))
+          continue;
+        if (!readFileSync2(backupPath).equals(readFileSync2(hookPath))) {
+          return "Beads appears to have modified a binary Git hook. Repair it manually with `git config --local --unset core.hooksPath` to restore the system/global hooks; optionally run `bd hooks uninstall` to remove the Beads-managed hooks. No repair was run automatically.";
+        }
+      } catch {}
+    }
+    return;
+  } catch {
+    return;
+  }
+}
+
 // extensions/session-beads-lifecycle.ts
 var EMBEDDED_PIN_ENV = { BEADS_DOLT_SHARED_SERVER: "" };
 function boundedBdEnvironment(base) {
@@ -1667,9 +1749,9 @@ function lifecycleBdEnvironment(cwd, base = process.env) {
 }
 function bdStoreDir(cwd, env) {
   const selected = env.BEADS_DIR;
-  const dir = selected ? isAbsolute3(selected) ? selected : resolve5(cwd, selected) : join2(cwd, ".beads");
+  const dir = selected ? isAbsolute4(selected) ? selected : resolve6(cwd, selected) : join3(cwd, ".beads");
   try {
-    return statSync3(dir).isDirectory() ? resolve5(dir) : undefined;
+    return statSync4(dir).isDirectory() ? resolve6(dir) : undefined;
   } catch {
     return;
   }
@@ -1923,7 +2005,7 @@ function bashCallCwd(input, fallback) {
   if (input === null || typeof input !== "object")
     return fallback;
   const cwd = input.cwd;
-  return typeof cwd === "string" && cwd !== "" ? resolve5(fallback, cwd) : fallback;
+  return typeof cwd === "string" && cwd !== "" ? resolve6(fallback, cwd) : fallback;
 }
 function sessionKey(ctx) {
   return ctx?.sessionManager?.getSessionId?.() ?? "default";
@@ -1931,7 +2013,7 @@ function sessionKey(ctx) {
 function sessionFileOf(ctx, which) {
   try {
     const file = which === "own" ? ctx?.sessionManager?.getSessionFile?.() : ctx?.sessionManager?.getHeader?.()?.parentSession;
-    return typeof file === "string" && file !== "" ? resolve5(file) : undefined;
+    return typeof file === "string" && file !== "" ? resolve6(file) : undefined;
   } catch {
     return;
   }
@@ -1986,9 +2068,9 @@ function releaseAutoPin(env = process.env, state = autoPinState) {
 var autoPinState = {};
 function beadsDir(cwd) {
   const pin = process.env.BEADS_DIR;
-  const dir = pin ? isAbsolute3(pin) ? pin : resolve5(cwd, pin) : join2(cwd, ".beads");
+  const dir = pin ? isAbsolute4(pin) ? pin : resolve6(cwd, pin) : join3(cwd, ".beads");
   try {
-    return statSync3(dir).isDirectory() ? dir : undefined;
+    return statSync4(dir).isDirectory() ? dir : undefined;
   } catch {
     return;
   }
@@ -2192,7 +2274,7 @@ function canonicalStore2(path) {
   try {
     return realpathSync3(path);
   } catch {
-    return resolve5(path);
+    return resolve6(path);
   }
 }
 function bdStoreForInvocation(invocation, cwd, env) {
@@ -2200,18 +2282,18 @@ function bdStoreForInvocation(invocation, cwd, env) {
     return;
   const directory = globalValue(invocation.globals, ["-C", "--directory"]);
   const db = globalValue(invocation.globals, ["--db"]);
-  const base = directory === undefined ? cwd : resolve5(cwd, directory);
+  const base = directory === undefined ? cwd : resolve6(cwd, directory);
   if (db !== undefined) {
-    const target = resolve5(base, db);
-    if (!existsSync2(target))
+    const target = resolve6(base, db);
+    if (!existsSync3(target))
       return;
-    return canonicalStore2(statSync3(target).isDirectory() ? target : dirname3(target));
+    return canonicalStore2(statSync4(target).isDirectory() ? target : dirname3(target));
   }
   if (directory !== undefined)
-    return canonicalStore2(sessionPinFor(base) ?? join2(base, ".beads"));
+    return canonicalStore2(sessionPinFor(base) ?? join3(base, ".beads"));
   const local = invocation.prefix.findLast((token) => token.startsWith("BEADS_DIR="))?.slice("BEADS_DIR=".length);
   const pinned = local ?? env.BEADS_DIR;
-  return canonicalStore2(pinned === undefined || pinned === "" ? sessionPinFor(cwd) ?? join2(cwd, ".beads") : isAbsolute3(pinned) ? pinned : resolve5(cwd, pinned));
+  return canonicalStore2(pinned === undefined || pinned === "" ? sessionPinFor(cwd) ?? join3(cwd, ".beads") : isAbsolute4(pinned) ? pinned : resolve6(cwd, pinned));
 }
 function bdInvocationUsesExternalStore(invocation) {
   return flagEnabled(invocation.globals, ["--global", "--database"]);
@@ -2222,14 +2304,14 @@ function claimTarget(invocation, cwd, env) {
   const database = globalValue(invocation.globals, ["--database"]);
   const db = globalValue(invocation.globals, ["--db"]);
   const directory = globalValue(invocation.globals, ["-C", "--directory"]);
-  const base = directory === undefined ? cwd : resolve5(cwd, directory);
-  const selector = global ? ["global"] : database !== undefined ? ["database", database] : db !== undefined ? ["db", resolve5(base, db)] : directory !== undefined ? ["directory", base] : undefined;
+  const base = directory === undefined ? cwd : resolve6(cwd, directory);
+  const selector = global ? ["global"] : database !== undefined ? ["database", database] : db !== undefined ? ["db", resolve6(base, db)] : directory !== undefined ? ["directory", base] : undefined;
   const store = bdStoreForInvocation(invocation, cwd, env);
   if (selector !== undefined)
     return { key: `external:${JSON.stringify(selector)}`, store };
   if (store !== undefined)
     return { key: store, store };
-  return { key: `external:${JSON.stringify(["beadsDir", localStore === undefined ? undefined : resolve5(cwd, localStore)])}`, store: undefined };
+  return { key: `external:${JSON.stringify(["beadsDir", localStore === undefined ? undefined : resolve6(cwd, localStore)])}`, store: undefined };
 }
 function trackedClaimKey(target, id) {
   return `${target.key}\x00${id}`;
@@ -2687,12 +2769,12 @@ async function spawnBd(cwd, args, deadline, env) {
   }
 }
 function consumeLastPush(dir) {
-  const log = join2(dir, "last-push.log");
-  if (!existsSync2(log))
+  const log = join3(dir, "last-push.log");
+  if (!existsSync3(log))
     return;
   let notice;
   try {
-    notice = lastPushNotice(readFileSync2(log, "utf8"));
+    notice = lastPushNotice(readFileSync3(log, "utf8"));
   } catch {
     notice = undefined;
   }
@@ -2776,7 +2858,7 @@ async function admitBeadsWork(ctx, cwd = ctx?.cwd ?? process.cwd(), env = lifecy
   const gateAdmitter = lifecycleBridge().gateAdmitter;
   if (gateAdmitter === undefined)
     return;
-  return await gateAdmitter(resolve5(cwd), boundedBdEnvironment(env), ctx, refresh, deadline);
+  return await gateAdmitter(resolve6(cwd), boundedBdEnvironment(env), ctx, refresh, deadline);
 }
 async function admitBdMutation(input, ctx, targetEnabled, deadline = Date.now() + GATE_ADMISSION_MS) {
   const command = commandFromInput(input ?? {});
@@ -2820,7 +2902,7 @@ function sessionBeadsLifecycle(pi) {
     return state;
   }
   function identityFor(state, cwd) {
-    const key = resolve5(cwd);
+    const key = resolve6(cwd);
     const cached = state.repos.get(key);
     if (cached !== undefined)
       return cached;
@@ -2832,10 +2914,10 @@ function sessionBeadsLifecycle(pi) {
     pi.sendMessage({ customType: "com.srobroek.beads.session-lifecycle", content, display: true, attribution: "user" }, { triggerTurn: false });
   };
   lifecycleBridge().sessionPinGetter = (cwd, ctx) => {
-    const localStore = join2(resolve5(cwd), ".beads");
+    const localStore = join3(resolve6(cwd), ".beads");
     const local = (() => {
       try {
-        return statSync3(localStore).isDirectory() ? realpathSync3(localStore) : undefined;
+        return statSync4(localStore).isDirectory() ? realpathSync3(localStore) : undefined;
       } catch {
         return;
       }
@@ -2845,7 +2927,7 @@ function sessionBeadsLifecycle(pi) {
       if (state.repo !== undefined && identityFor(state, cwd) !== state.repo)
         return;
       const inherited = process.env.BEADS_DIR;
-      const nonRepository = state.repo === resolve5(cwd);
+      const nonRepository = state.repo === resolve6(cwd);
       if (nonRepository && local !== undefined && state.pin === inherited && local !== inherited)
         return local;
       return state.pin ?? sessionPinFor(cwd) ?? local;
@@ -2891,11 +2973,14 @@ function sessionBeadsLifecycle(pi) {
     }
     try {
       const cwd = ctx?.cwd ?? process.cwd();
+      const hookAdvisory = binaryHooksRepairAdvisory(cwd);
+      if (hookAdvisory !== undefined)
+        advise(hookAdvisory);
       const pin = autoPinBeadsDir(cwd, key, (id) => sessions.has(id));
       state.repo = identityFor(state, cwd);
       state.pin = sessionPinAfter(pin, cwd);
       if (state.repo === undefined) {
-        if (existsSync2(join2(cwd, ".beads")))
+        if (existsSync3(join3(cwd, ".beads")))
           advise("Beads session-start unverified: repository identity unknown; gate verification was skipped.");
         return;
       }
