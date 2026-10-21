@@ -1,6 +1,6 @@
 {
   "name": "@srobroek/supervisor",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Keep an orchestrating session moving after it dispatches background task work.",
   "private": true,
   "omp": {
