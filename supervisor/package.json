@@ -1,0 +1,11 @@
+{
+  "name": "@srobroek/supervisor",
+  "version": "0.1.0",
+  "description": "Keep an orchestrating session moving after it dispatches background task work.",
+  "private": true,
+  "omp": {
+    "extensions": [
+      "./extensions/task-batch-supervisor.ts"
+    ]
+  }
+}
