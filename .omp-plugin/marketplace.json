@@ -156,6 +156,13 @@
       "category": "development"
     },
     {
+      "name": "supervisor",
+      "description": "Keep orchestrating sessions moving after dispatching background task work.",
+      "source": "./supervisor",
+      "version": "0.1.0",
+      "category": "productivity"
+    },
+    {
       "name": "toolchain",
       "description": "Toolchain defaults, backend services, infrastructure, and operations.",
       "source": "./toolchain",

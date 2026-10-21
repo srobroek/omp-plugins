@@ -20,6 +20,7 @@
   "safety": "0.9.1",
   "session": "1.5.0",
   "speckit": "0.10.4",
+  "supervisor": "0.1.0",
   "toolchain": "1.0.2",
   "trunk-dev": "0.2.0",
   "typescript": "0.3.12",

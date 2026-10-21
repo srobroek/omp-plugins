@@ -112,9 +112,9 @@ Three generators own the files below, so do not hand-edit them. CI fails when a 
 
 Each plugin owns its version in `<plugin>/.omp-plugin/plugin.json`. The release tool bumps only the
 files its config names. OMP, meanwhile, compares `plugins[].version` in the single top-level
-catalog, so a release assembles that catalog from the 26 manifests.
+catalog, so a release assembles that catalog from the 27 manifests.
 
-The catalog carries 27 entries: the 26 plugins here, plus 1 third-party plugin from
+The catalog carries 28 entries: the 27 plugins here, plus 1 third-party plugin from
 `scripts/third-party-plugins.json`: `sniff`.
 Install resolution is package-local.
 `scripts/check-catalog-validation.py` rejects malformed third-party input instead of publishing
