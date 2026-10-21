@@ -398,6 +398,23 @@
         }
       ]
     },
+    "supervisor": {
+      "release-type": "simple",
+      "component": "supervisor",
+      "changelog-path": "CHANGELOG.md",
+      "extra-files": [
+        {
+          "type": "json",
+          "path": ".omp-plugin/plugin.json",
+          "jsonpath": "$.version"
+        },
+        {
+          "type": "json",
+          "path": "package.json",
+          "jsonpath": "$.version"
+        }
+      ]
+    },
     "toolchain": {
       "release-type": "simple",
       "component": "toolchain",
