@@ -1,0 +1,6 @@
+{
+  "name": "supervisor",
+  "description": "Keep an orchestrating session moving after it dispatches background task work.",
+  "version": "0.1.0",
+  "category": "productivity"
+}
